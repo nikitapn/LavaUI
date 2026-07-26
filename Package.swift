@@ -60,5 +60,15 @@ let package = Package(
             name: "HelloWorld",
             dependencies: targetDependencies
         ),
+        // The FBD graph model (blocks/slots/wires) — pure Swift, no
+        // dependency on SwiftCrossUI/CanvasKit/anything else, so it's
+        // testable and reusable on its own.
+        .target(
+            name: "FBDModel"
+        ),
+        .testTarget(
+            name: "FBDModelTests",
+            dependencies: ["FBDModel"]
+        ),
     ]
 )
