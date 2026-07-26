@@ -1,0 +1,32 @@
+# Shader compilation — outputs land in <builddir>/shaders/ matching the
+# relative paths the application uses at runtime (e.g. "shaders/mesh.vert.bin").
+
+fs = import('fs')
+glslc = find_program('glslc')
+
+shader_sources = [
+  meson.project_source_root() / 'src/shaders/2d/text.vert',
+  meson.project_source_root() / 'src/shaders/2d/text.frag',
+  meson.project_source_root() / 'src/shaders/2d/shader.vert',
+  meson.project_source_root() / 'src/shaders/2d/shader.frag',
+  meson.project_source_root() / 'src/shaders/2d/compute/integration.comp',
+  meson.project_source_root() / 'src/shaders/2d/compute/collision_detect.comp',
+  meson.project_source_root() / 'src/shaders/2d/compute/collision_resolve.comp',
+  meson.project_source_root() / 'src/shaders/3d/mesh.vert',
+  meson.project_source_root() / 'src/shaders/3d/mesh.frag',
+  meson.project_source_root() / 'src/shaders/3d/shadow.vert',
+  meson.project_source_root() / 'src/shaders/3d/shadow.frag',
+  meson.project_source_root() / 'src/shaders/3d/line.vert',
+  meson.project_source_root() / 'src/shaders/3d/line.frag',
+]
+
+foreach source : shader_sources
+  shader_name = fs.name(source)
+  custom_target(
+    shader_name,
+    input: files(source),
+    output: shader_name + '.bin',
+    command: [glslc, '-mfmt=bin', '-o', '@OUTPUT@', '@INPUT@'],
+    build_by_default: true,
+  )
+endforeach

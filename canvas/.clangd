@@ -1,0 +1,10 @@
+CompileFlags:
+  CompilationDatabase: .build.Debug
+Index:
+  StandardLibrary: false
+If:
+  PathExclude: third-party/.*
+InlayHints:
+  Enabled: false
+Diagnostics:
+  UnusedIncludes: None

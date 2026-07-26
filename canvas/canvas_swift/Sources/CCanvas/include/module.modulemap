@@ -1,0 +1,4 @@
+module CCanvas {
+    header "canvas_c_api.h"
+    export *
+}

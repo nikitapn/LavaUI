@@ -7,10 +7,31 @@ var dependencies: [Package.Dependency] = [
         url: "https://github.com/moreSwift/swift-cross-ui",
         .upToNextMinor(from: "0.7.0")
     ),
+    .package(
+        url: "https://github.com/stackotter/swift-image-formats",
+        .upToNextMinor(from: "0.5.0")
+    ),
+    .package(path: "canvas/canvas_swift"),
 ]
 var targetDependencies: [Target.Dependency] = [
     .product(name: "SwiftCrossUI", package: "swift-cross-ui"),
     .product(name: "DefaultBackend", package: "swift-cross-ui"),
+    .product(name: "ImageFormats", package: "swift-image-formats"),
+    .product(
+        name: "Gtk",
+        package: "swift-cross-ui",
+        condition: .when(platforms: [.linux])
+    ),
+    .product(
+        name: "GtkBackend",
+        package: "swift-cross-ui",
+        condition: .when(platforms: [.linux])
+    ),
+    .product(
+        name: "CanvasKit",
+        package: "canvas_swift",
+        condition: .when(platforms: [.linux])
+    ),
 ]
 
 // The Swift Bundler runtime (used for hot reloading) requires Swift >=6.0.

@@ -1,0 +1,103 @@
+#version 450
+
+// Local workgroup size
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+// Particle data structure
+struct Particle {
+    vec2 position;
+    vec2 velocity;
+    float mass;
+    float invMass;
+    vec2 force;
+    float padding; // For alignment
+};
+
+// Collision pair structure
+struct CollisionPair {
+    uint particleA;
+    uint particleB;
+    vec2 normal;        // collision normal (from A to B)
+    float penetration;  // overlap distance
+};
+
+// Storage buffers
+layout(std140, binding = 0) restrict buffer ParticleBuffer {
+    Particle particles[];
+};
+
+layout(std430, binding = 1) restrict buffer CollisionPairBuffer {
+    CollisionPair collisionPairs[];
+};
+
+layout(std430, binding = 2) restrict buffer CollisionCountBuffer {
+    uint collisionCount;
+};
+
+// Uniform buffer for simulation parameters
+layout(binding = 3) uniform SimulationParams {
+    vec2 gravity;
+    vec2 worldSize;
+    float deltaTime;
+    float restitution;
+    float particleRadius;
+    uint particleCount;
+    uint maxCollisionPairs;
+    uint substeps;
+    uint currentSubstep;
+};
+
+void main() {
+    uint pairIndex = gl_GlobalInvocationID.x;
+    
+    // Bounds check
+    if (pairIndex >= collisionCount) {
+        return;
+    }
+    
+    CollisionPair pair = collisionPairs[pairIndex];
+    uint idxA = pair.particleA;
+    uint idxB = pair.particleB;
+    vec2 normal = pair.normal;
+    float penetration = pair.penetration;
+    
+    // Load particles - read fresh data each time
+    Particle particleA = particles[idxA];
+    Particle particleB = particles[idxB];
+    
+    // Calculate relative velocity with current particle states
+    vec2 relativeVel = particleB.velocity - particleA.velocity;
+    
+    // Calculate relative velocity along collision normal
+    float velocityAlongNormal = dot(relativeVel, normal);
+    
+    // Do not resolve if velocities are separating
+    if (velocityAlongNormal > 0.0) {
+        return;
+    }
+    
+    // Calculate impulse magnitude (reduce strength to avoid over-correction)
+    float impulseMagnitude = -(1.0 + restitution) * velocityAlongNormal;
+    impulseMagnitude /= (particleA.invMass + particleB.invMass);
+    
+    // Scale down impulse to reduce race condition effects
+    impulseMagnitude *= 0.5; // Apply half the correction per pass
+    
+    // Apply impulse to both particles
+    vec2 impulse = impulseMagnitude * normal;
+    
+    // Update velocities with reduced magnitude
+    particleA.velocity -= impulse * particleA.invMass;
+    particleB.velocity += impulse * particleB.invMass;
+    
+    // Separate overlapping particles (reduced correction to avoid over-separation)
+    vec2 correction = normal * (penetration / (particleA.invMass + particleB.invMass)) * 0.2; // Reduced from 0.8 to 0.2
+    
+    particleA.position -= correction * particleA.invMass;
+    particleB.position += correction * particleB.invMass;
+    
+    // Write back to buffers
+    // Note: Race conditions still possible, but reduced impact due to smaller corrections
+    particles[idxA] = particleA;
+    particles[idxB] = particleB;
+}

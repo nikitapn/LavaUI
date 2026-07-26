@@ -1,0 +1,69 @@
+#include <pch.hpp>
+#include <fstream>
+
+#include "util/util.hpp"
+
+namespace utils {
+
+std::vector<char> readFile(const std::filesystem::path& filepath) {
+  std::ifstream file(filepath, std::ios::binary);
+  if (!file.is_open()) {
+    throw std::runtime_error("Failed to open file: " + filepath.string());
+  }
+  std::vector<char> result;
+  std::copy(std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>(), std::back_inserter(result));
+  return result;
+}
+
+// Global Taskflow executor - initialized with optimal thread count
+tf::Executor& getTaskflowExecutor() {
+  static tf::Executor executor;
+  return executor;
+}
+
+// Wrapper functions for aligned memory allocation
+// There is currently no standard for this in C++ that works across all platforms and vendors, so we abstract this
+void* alignedAlloc(size_t size, size_t alignment)
+{
+	void *data = nullptr;
+#if defined(_MSC_VER) || defined(__MINGW32__)
+	data = _aligned_malloc(size, alignment);
+#else
+	int res = posix_memalign(&data, alignment, size);
+	if (res != 0)
+		data = nullptr;
+#endif
+	return data;
+}
+
+void alignedFree(void* data)
+{
+#if	defined(_MSC_VER) || defined(__MINGW32__)
+	_aligned_free(data);
+#else
+	free(data);
+#endif
+}
+
+namespace utf8 { namespace detail {
+// UTF-8 decoder based on Bjoern Hoehrmann's DFA approach
+// See https://bjoern.hoehrmann.de/utf-8/decoder/dfa/
+unsigned char utf8d[] = {
+  0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0, // 00..1f
+  0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0, // 20..3f
+  0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0, // 40..5f
+  0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0, // 60..7f
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,9,9,9,9,9,9,9,9,9,9,9,9,9,9,9,9, // 80..9f
+  7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7, // a0..bf
+  8,8,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2, // c0..df
+  0xa,0x3,0x3,0x3,0x3,0x3,0x3,0x3,0x3,0x3,0x3,0x3,0x3,0x4,0x3,0x3, // e0..ef
+  0xb,0x6,0x6,0x6,0x5,0x8,0x8,0x8,0x8,0x8,0x8,0x8,0x8,0x8,0x8,0x8, // f0..ff
+  0x0,0x1,0x2,0x3,0x5,0x8,0x7,0x1,0x1,0x1,0x4,0x6,0x1,0x1,0x1,0x1, // s0..s0
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,0,1,1,1,1,1,0,1,0,1,1,1,1,1,1, // s1..s2
+  1,2,1,1,1,1,1,2,1,2,1,1,1,1,1,1,1,1,1,1,1,1,1,2,1,1,1,1,1,1,1,1, // s3..s4
+  1,2,1,1,1,1,1,1,1,2,1,1,1,1,1,1,1,1,1,1,1,1,1,3,1,3,1,1,1,1,1,1, // s5..s6
+  1,3,1,1,1,1,1,3,1,3,1,1,1,1,1,1,1,3,1,1,1,1,1,1,1,1,1,1,1,1,1,1, // s7..s8
+};
+} // namespace detail
+} // namespace utf8
+} // namespace utils

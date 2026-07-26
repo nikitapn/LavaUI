@@ -1,0 +1,155 @@
+#version 450
+
+// Local workgroup size - each workgroup processes this many particles
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+// Particle data structure
+struct Particle {
+    vec2 position;
+    vec2 velocity;
+    float mass;
+    float invMass;
+    vec2 force;
+    float padding; // For alignment
+};
+
+// Storage buffer for particle data
+layout(std140, binding = 0) restrict buffer ParticleBuffer {
+    Particle particles[];
+};
+
+// Uniform buffer for simulation parameters
+layout(binding = 1) uniform SimulationParams {
+    vec2 gravity;
+    vec2 worldSize;
+    float deltaTime;
+    float restitution;
+    float particleRadius;
+    uint particleCount;
+    uint substeps;
+    uint currentSubstep;
+};
+
+// Constants
+const float EPSILON = 1e-6;
+
+void main() {
+    uint index = gl_GlobalInvocationID.x;
+    
+    // Bounds check
+    if (index >= particleCount) {
+        return;
+    }
+    
+    Particle particle = particles[index];
+    
+    // Safety checks
+    if (particle.invMass <= 0.0 || particle.invMass > 1000.0) {
+        return; // Skip invalid particles
+    }
+    
+    // Step 1: Apply forces and integrate
+    // Clear accumulated forces
+    particle.force = vec2(0.0);
+
+    // Apply gravity
+    vec2 totalForce = gravity * particle.mass;
+    
+    // F = ma, so a = F * invMass
+    vec2 acceleration = totalForce * particle.invMass;
+    
+    // Clamp acceleration to prevent explosions
+    float maxAccel = 10000.0; // Reasonable limit
+    if (length(acceleration) > maxAccel) {
+        acceleration = normalize(acceleration) * maxAccel;
+    }
+    
+    // Semi-implicit Euler integration
+    particle.velocity += acceleration * deltaTime;
+    
+    // Clamp velocity to prevent light-speed particles
+    float maxVel = 2000.0; // Reasonable limit
+    if (length(particle.velocity) > maxVel) {
+        particle.velocity = normalize(particle.velocity) * maxVel;
+    }
+    
+    particle.position += particle.velocity * deltaTime;
+    
+    // Step 2: Handle wall collisions
+    // Bottom wall
+    if (particle.position.y - particleRadius <= 0.0) {
+        particle.position.y = particleRadius;
+        if (particle.velocity.y < 0.0) {
+            particle.velocity.y = -particle.velocity.y * restitution;
+        }
+    }
+    // Top wall
+    else if (particle.position.y + particleRadius >= worldSize.y) {
+        particle.position.y = worldSize.y - particleRadius;
+        if (particle.velocity.y > 0.0) {
+            particle.velocity.y = -particle.velocity.y * restitution;
+        }
+    }
+    
+    // Left wall
+    if (particle.position.x - particleRadius <= 0.0) {
+        particle.position.x = particleRadius;
+        if (particle.velocity.x < 0.0) {
+            particle.velocity.x = -particle.velocity.x * restitution;
+        }
+    }
+    // Right wall
+    else if (particle.position.x + particleRadius >= worldSize.x) {
+        particle.position.x = worldSize.x - particleRadius;
+        if (particle.velocity.x > 0.0) {
+            particle.velocity.x = -particle.velocity.x * restitution;
+        }
+    }
+    
+    // Update particle in buffer
+    particles[index] = particle;
+    
+    // Another synchronization before particle-particle collisions
+    barrier();
+    
+    // Step 3: Handle particle-particle collisions
+    // Simple O(n²) approach - each particle checks against all others
+    for (uint i = 0; i < particleCount; i++) {
+        if (i == index) continue;
+        
+        Particle other = particles[i];
+        vec2 relativePos = other.position - particle.position;
+        float distance = length(relativePos);
+        float minDistance = 2.0 * particleRadius;
+        
+        if (distance < minDistance && distance > EPSILON) {
+            // Collision detected
+            vec2 normal = relativePos / distance;
+            
+            // Relative velocity
+            vec2 relativeVel = other.velocity - particle.velocity;
+            
+            // Velocity along collision normal
+            float velocityAlongNormal = dot(relativeVel, normal);
+            
+            // Do not resolve if velocities are separating
+            if (velocityAlongNormal > 0.0) continue;
+            
+            // Calculate impulse magnitude
+            float impulseMagnitude = -(1.0 + restitution) * velocityAlongNormal;
+            impulseMagnitude /= (particle.invMass + other.invMass);
+            
+            // Apply impulse (only to current particle, the other will handle itself)
+            vec2 impulse = impulseMagnitude * normal;
+            particle.velocity -= impulse * particle.invMass;
+            
+            // Separate overlapping particles
+            float penetration = minDistance - distance;
+            vec2 correction = normal * (penetration / (particle.invMass + other.invMass)) * 0.5;
+            particle.position -= correction * particle.invMass;
+        }
+    }
+    
+    // Final update to buffer
+    particles[index] = particle;
+}
