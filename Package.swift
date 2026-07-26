@@ -32,6 +32,7 @@ var targetDependencies: [Target.Dependency] = [
         package: "canvas_swift",
         condition: .when(platforms: [.linux])
     ),
+    "FBDModel",
 ]
 
 // The Swift Bundler runtime (used for hot reloading) requires Swift >=6.0.

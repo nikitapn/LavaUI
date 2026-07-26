@@ -26,8 +26,12 @@ int main(int argc, char *argv[])
     app.init(assetsRoot);
 
     app.addRect(100, 100, 300, 150, 0.8f, 0.2f, 0.2f, 1.0f);
-    app.addRect(500, 300, 200, 200, 0.2f, 0.6f, 0.9f, 1.0f);
+    app.addRoundedRect(500, 300, 200, 200, 0.2f, 0.6f, 0.9f, 1.0f);
     app.addRect(200, 450, 400, 100, 0.3f, 0.8f, 0.3f, 0.8f);
+    app.addCircle(250, 175, 20, 1.0f, 1.0f, 0.2f, 1.0f);
+    app.addCircle(750, 300, 20, 1.0f, 1.0f, 0.2f, 1.0f);
+    app.addLine(250, 175, 600, 400, 1.0f, 1.0f, 1.0f, 1.0f);
+    app.addLabel("FBD smoke test", 100, 650, 1.0f, 1.0f, 1.0f);
 
     std::cout << "Repainting " << repaintCount << " times...\n";
     for (int i = 0; i < repaintCount; ++i) {

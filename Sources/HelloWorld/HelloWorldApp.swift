@@ -59,8 +59,8 @@ let canvasAssetsRoot: String = {
         .path
 }()
 
-let canvasWidth = 240
-let canvasHeight = 240
+let canvasWidth = 830
+let canvasHeight = 340
 
 #if canImport(CanvasKit)
     /// Owns the `CanvasEngine` and runs `repaint`/`readPixels` off the main
@@ -82,7 +82,7 @@ let canvasHeight = 240
     actor CanvasRunner {
         private var engine: CanvasEngine?
 
-        /// Creates the engine (once) and seeds a small starting scene.
+        /// Creates the engine (once) and renders the sample FBD diagram.
         /// Returns the first rendered frame, or nil if this wasn't the
         /// first call or the engine failed to start.
         func ensureStarted(assetsRoot: String, width: Int, height: Int) -> [UInt8]? {
@@ -92,22 +92,7 @@ let canvasHeight = 240
             }
             self.engine = engine
 
-            engine.addRect(x: 20, y: 20, width: 80, height: 50, r: 0.8, g: 0.3, b: 0.3)
-            engine.addRect(x: 130, y: 20, width: 80, height: 50, r: 0.3, g: 0.6, b: 0.9)
-            engine.addRect(x: 60, y: 100, width: 120, height: 60, r: 0.3, g: 0.8, b: 0.4)
-            engine.repaint()
-            return engine.readPixels()
-        }
-
-        /// Adds a small rectangle centered on (x, y) and repaints — the
-        /// click-to-add-a-block half of the retained-mode workflow.
-        func addRectAndRepaint(x: Double, y: Double) -> [UInt8]? {
-            guard let engine else { return nil }
-            engine.addRect(
-                x: x - 15, y: y - 15, width: 30, height: 30,
-                r: .random(in: 0.3...1), g: .random(in: 0.3...1), b: .random(in: 0.3...1)
-            )
-            engine.repaint()
+            renderDiagram(makeSampleDiagram(), into: engine)
             return engine.readPixels()
         }
     }
@@ -140,13 +125,6 @@ struct YourApp: App {
                                 lastPointer = "–"
                             case .mouseDown(let button, let x, let y):
                                 lastPointer = "(\(Int(x)), \(Int(y))) down(\(button))"
-                                #if canImport(CanvasKit)
-                                    Task {
-                                        if let pixels = await canvasRunner.addRectAndRepaint(x: x, y: y) {
-                                            canvasPixels = pixels
-                                        }
-                                    }
-                                #endif
                             case .mouseUp(let button, let x, let y):
                                 lastPointer = "(\(Int(x)), \(Int(y))) up(\(button))"
                             }
@@ -193,6 +171,6 @@ struct YourApp: App {
                 }
             }
         }
-        .defaultSize(width: 700, height: 450)
+        .defaultSize(width: 1230, height: 560)
     }
 }

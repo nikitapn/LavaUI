@@ -48,42 +48,6 @@ struct Application::Impl
   Mesh3D* cubePrimitive = nullptr;
   Mesh3D* spherePrimitive = nullptr;
 
-  struct DebugGeometry {
-    struct Point {
-      mat4 transform;
-      vec4 color;
-    };
-    struct Line {
-      vec3 start;
-      vec3 end;
-      vec4 color;
-    };
-    struct Triangle {
-      vec3 v0;
-      vec3 v1;
-      vec3 v2;
-      vec4 color;
-    };
-
-    std::vector<Point>    points;
-    std::vector<Line>     lines;
-    std::vector<Triangle> triangles;
-
-    void draw(Impl& app) {
-      for (const auto& p : points) {
-        app.mesh3DRenderer.pushMesh(app.spherePrimitive->meshId, p.transform, {p.color});
-      }
-      for (const auto& l : lines) {
-        app.lineRenderer.addLine(l.start, l.end, l.color);
-      }
-      for (const auto& t : triangles) {
-        app.lineRenderer.addLine(t.v0, t.v1, t.color);
-        app.lineRenderer.addLine(t.v1, t.v2, t.color);
-        app.lineRenderer.addLine(t.v2, t.v0, t.color);
-      }
-    }
-  } debugGeometry;
-
   Timer treeTimer;
 
   // FPS/frame bookkeeping — was local to the old run() loop; now needs to
@@ -122,16 +86,47 @@ struct Application::Impl
     bool mouseCaptured = false;
   } inputState;
 
-  // Retained 2D rectangle scene, populated by add/update/removeRect and
+  // Retained 2D shape scene, populated by add/update/removeShape and
   // replayed into the (per-frame-immediate-mode) GeometryRenderer on every
   // repaint(). x/y is the top-left corner (GeometryRenderer::pushScreenObject
-  // itself takes a center point, converted in repaint()).
-  struct RectShape {
+  // itself takes a center point, converted in repaint()). One id space
+  // shared by every GeometryRenderer::Type since removal/clearing doesn't
+  // need to know the kind.
+  struct Shape {
+    GeometryRenderer::Type kind;
     float x, y, width, height;
     float r, g, b, a;
   };
-  std::unordered_map<int, RectShape> rects;
-  int nextRectId = 1;
+  std::unordered_map<int, Shape> shapes;
+  int nextShapeId = 1;
+
+  // Retained 2D line scene (wires), in the same screen-pixel coordinate
+  // system as shapes above. Replayed into LineRenderer every repaint(),
+  // using a screen-space orthographic projection (see screenProjection_)
+  // instead of the 3D camera LineRenderer was originally written for.
+  struct LineShape {
+    float x1, y1, x2, y2;
+    float r, g, b, a;
+  };
+  std::unordered_map<int, LineShape> lines;
+  int nextLineId = 1;
+
+  // Retained 2D text labels (block/slot names etc.), replayed into
+  // TextRenderer every repaint() alongside the FPS/debug overlay text.
+  struct LabelShape {
+    std::string text;
+    float x, y;
+    float r, g, b;
+  };
+  std::unordered_map<int, LabelShape> labels;
+  int nextLabelId = 1;
+
+  // Maps pixel coordinates (0,0 top-left, y-down) straight to clip space —
+  // the same matrix GeometryRenderer builds internally for its own static
+  // UBO (see GeometryRenderer's init()), duplicated here so LineRenderer
+  // (which expects an explicit view/projection pair rather than baking its
+  // own) draws wires in the identical coordinate system as shapes/text.
+  mat4 screenProjection_{1.0f};
 
   // Wall-clock time of the last repaint() call, used only to compute a
   // deltaTime for the FPS counter/Dear ImGui (nullopt on the first call).
@@ -371,6 +366,23 @@ struct Application::Impl
     std::cout << "Line renderer initialized.\n";
     mesh3DRenderer.setNormalDebugRenderer(&lineRenderer);
 
+    // Maps pixel coordinates (0,0 top-left, y-down) directly to clip space.
+    // Note this is *not* the same matrix GeometryRenderer builds internally
+    // for its own static UBO: that one is designed to compose with
+    // pushScreenObject's own "worldY = viewportSize_.y - position.y"
+    // pre-flip (the two flips cancel out to give the expected result), but
+    // LineRenderer::prepare has no such pre-flip step of its own — it feeds
+    // vertex positions straight through — so this matrix has to do the
+    // whole top-left-origin/y-down mapping by itself in one step. (Found by
+    // seeing every wire render mirrored vertically around the canvas's
+    // center line before this fix.)
+    screenProjection_ = mat4{ // column-major
+      2.0f / width, 0.0f, 0.0f, 0.0f,
+      0.0f, 2.0f / height, 0.0f, 0.0f,
+      0.0f,  0.0f, 0.0f, 0.0f,
+      -1.0f, -1.0f, 0.0f, 1.0f
+    };
+
     shadowMapTexture = TextureManager::getInstance().registerTexture("shadowMap",
       vulkan.getShadowImageView(), vulkan.getShadowMapSize(), vulkan.getShadowMapSize());
 
@@ -379,30 +391,83 @@ struct Application::Impl
 
   int addRect(float x, float y, float w, float h, float r, float g, float b, float a)
   {
-    int id = nextRectId++;
-    rects[id] = RectShape{x, y, w, h, r, g, b, a};
+    int id = nextShapeId++;
+    shapes[id] = Shape{GeometryRenderer::Type::Rectangle, x, y, w, h, r, g, b, a};
     return id;
   }
 
   void updateRect(int id, float x, float y, float w, float h, float r, float g, float b, float a)
   {
-    auto it = rects.find(id);
-    if (it != rects.end()) {
-      it->second = RectShape{x, y, w, h, r, g, b, a};
+    auto it = shapes.find(id);
+    if (it != shapes.end()) {
+      it->second = Shape{GeometryRenderer::Type::Rectangle, x, y, w, h, r, g, b, a};
     }
   }
 
-  void removeRect(int id)
+  int addRoundedRect(float x, float y, float w, float h, float r, float g, float b, float a)
   {
-    rects.erase(id);
+    int id = nextShapeId++;
+    shapes[id] = Shape{GeometryRenderer::Type::RoundedRectangle, x, y, w, h, r, g, b, a};
+    return id;
   }
 
-  void clearRects()
+  int addCircle(float centerX, float centerY, float radius, float r, float g, float b, float a)
   {
-    rects.clear();
+    int id = nextShapeId++;
+    float diameter = radius * 2.0f;
+    shapes[id] = Shape{
+      GeometryRenderer::Type::Circle,
+      centerX - radius, centerY - radius, diameter, diameter,
+      r, g, b, a
+    };
+    return id;
   }
 
-  // Renders one frame of the retained scene (currently just `rects`) and
+  void removeShape(int id)
+  {
+    shapes.erase(id);
+  }
+
+  void clearShapes()
+  {
+    shapes.clear();
+  }
+
+  int addLine(float x1, float y1, float x2, float y2, float r, float g, float b, float a)
+  {
+    int id = nextLineId++;
+    lines[id] = LineShape{x1, y1, x2, y2, r, g, b, a};
+    return id;
+  }
+
+  void removeLine(int id)
+  {
+    lines.erase(id);
+  }
+
+  void clearLines()
+  {
+    lines.clear();
+  }
+
+  int addLabel(const std::string &text, float x, float y, float r, float g, float b)
+  {
+    int id = nextLabelId++;
+    labels[id] = LabelShape{text, x, y, r, g, b};
+    return id;
+  }
+
+  void removeLabel(int id)
+  {
+    labels.erase(id);
+  }
+
+  void clearLabels()
+  {
+    labels.clear();
+  }
+
+  // Renders one frame of the retained scene (shapes/lines/labels) and
   // reports it back via readPixels(). There's no fixed-timestep loop driving
   // this anymore — callers (Swift) call it whenever they want a new frame,
   // e.g. right after changing the scene. deltaTime for the FPS counter/Dear
@@ -435,28 +500,44 @@ struct Application::Impl
 
       processContinuousInput(deltaTime);
 
-      // Replay the retained rectangles into the GeometryRenderer, which is
+      // Replay the retained shapes into the GeometryRenderer, which is
       // itself immediate-mode per frame (see GeometryRenderer::draw — it
       // resets its own counts after every draw call). x/y here is the
       // top-left corner; pushScreenObject wants a center point.
-      for (const auto &[id, rect] : rects) {
+      for (const auto &[id, shape] : shapes) {
         renderer.pushScreenObject(
-          GeometryRenderer::Type::Rectangle,
+          shape.kind,
           GeometryRenderer::ScreenParams{
-            {rect.x + rect.width / 2.0f, rect.y + rect.height / 2.0f},
-            {rect.width, rect.height},
-            {rect.r, rect.g, rect.b, rect.a}
+            {shape.x + shape.width / 2.0f, shape.y + shape.height / 2.0f},
+            {shape.width, shape.height},
+            {shape.r, shape.g, shape.b, shape.a}
           }
         );
       }
 
+      // Bottom-left, not top-left: a retained scene's own content (an FBD
+      // diagram, say) most naturally starts near the top-left corner, so
+      // that's the last place a permanent debug overlay should sit.
       textRenderer.beginTextRendering();
-      textRenderer.renderText(std::format("FPS: {:.1f}", currentFPS), {10.0f, 30.0f}, {0.0f, 1.0f, 0.0f});
-      textRenderer.renderText(std::format("Rects: {}", rects.size()), {10.0f, 60.0f}, {1.0f, 1.0f, 1.0f});
-      textRenderer.renderText(std::format("Frame #{}", frameCountTotal), {10.0f, 90.0f}, {1.0f, 1.0f, 0.0f});
+      textRenderer.renderText(std::format("FPS: {:.1f}", currentFPS), {10.0f, height - 70.0f}, {0.0f, 1.0f, 0.0f});
+      textRenderer.renderText(std::format("Shapes: {}", shapes.size()), {10.0f, height - 40.0f}, {1.0f, 1.0f, 1.0f});
+      textRenderer.renderText(std::format("Frame #{}", frameCountTotal), {10.0f, height - 10.0f}, {1.0f, 1.0f, 0.0f});
+      textRenderer.renderText(std::format("Lines: {}", lines.size()), {150.0f, height - 10.0f}, {1.0f, 0.5f, 1.0f});
+      for (const auto &[id, label] : labels) {
+        textRenderer.renderText(label.text, {label.x, label.y}, {label.r, label.g, label.b});
+      }
       textRenderer.endTextRendering();
 
+      // Replay the retained lines (wires) into LineRenderer, in the same
+      // screen-pixel coordinate system as shapes/text above.
       lineRenderer.clear();
+      for (const auto &[id, line] : lines) {
+        lineRenderer.addLine(
+          {line.x1, line.y1, 0.0f}, {line.x2, line.y2, 0.0f},
+          {line.r, line.g, line.b, line.a}
+        );
+      }
+      lineRenderer.prepare(mat4{1.0f}, screenProjection_);
 
       vulkan.renderWithShadows(
         // Shadow pass callback - render depth-only (nothing pushes meshes
@@ -465,13 +546,13 @@ struct Application::Impl
         [&](VkCommandBuffer commandBuffer) {
           mesh3DRenderer.drawShadowPass(commandBuffer);
         },
-        // Main pass callback - render scene with shadows
+        // Main pass callback - render scene with shadows. Lines (wires)
+        // draw first so shapes (blocks/ports) painted afterwards sit on
+        // top of the wire endpoints.
         [&](VkCommandBuffer commandBuffer, u32 imageIndex) {
+          lineRenderer.draw(commandBuffer);
           renderer.draw(commandBuffer, imageIndex);
           mesh3DRenderer.draw(commandBuffer, imageIndex);
-          if (renderOctreeDebug || renderNormalsDebug) {
-            lineRenderer.draw(commandBuffer);
-          }
           textRenderer.draw(commandBuffer, {width, height});
           if (imguiDrawData && imguiDrawData->Valid) {
             ImGui_ImplVulkan_RenderDrawData(imguiDrawData, commandBuffer);
@@ -572,12 +653,44 @@ void Application::updateRect(int id, float x, float y, float w, float h, float r
   impl_->updateRect(id, x, y, w, h, r, g, b, a);
 }
 
-void Application::removeRect(int id) {
-  impl_->removeRect(id);
+int Application::addRoundedRect(float x, float y, float w, float h, float r, float g, float b, float a) {
+  return impl_->addRoundedRect(x, y, w, h, r, g, b, a);
 }
 
-void Application::clearRects() {
-  impl_->clearRects();
+int Application::addCircle(float centerX, float centerY, float radius, float r, float g, float b, float a) {
+  return impl_->addCircle(centerX, centerY, radius, r, g, b, a);
+}
+
+void Application::removeShape(int id) {
+  impl_->removeShape(id);
+}
+
+void Application::clearShapes() {
+  impl_->clearShapes();
+}
+
+int Application::addLine(float x1, float y1, float x2, float y2, float r, float g, float b, float a) {
+  return impl_->addLine(x1, y1, x2, y2, r, g, b, a);
+}
+
+void Application::removeLine(int id) {
+  impl_->removeLine(id);
+}
+
+void Application::clearLines() {
+  impl_->clearLines();
+}
+
+int Application::addLabel(const std::string &text, float x, float y, float r, float g, float b) {
+  return impl_->addLabel(text, x, y, r, g, b);
+}
+
+void Application::removeLabel(int id) {
+  impl_->removeLabel(id);
+}
+
+void Application::clearLabels() {
+  impl_->clearLabels();
 }
 
 void Application::readPixels(uint8_t *dst, size_t dstSize) {

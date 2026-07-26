@@ -1,17 +1,37 @@
 import CCanvas
 
+/// Identifies a shape (rect/rounded rect/circle) previously added with
+/// `CanvasEngine.addRect`/`addRoundedRect`/`addCircle`, for later use with
+/// `updateRect`/`removeShape`. One id space is shared across shape kinds,
+/// same as the C++/C API it wraps.
+public struct ShapeID: Hashable {
+    fileprivate let value: Int32
+}
+
 /// Identifies a rectangle previously added with `CanvasEngine.addRect`, for
-/// later use with `updateRect`/`removeRect`.
-public struct RectID: Hashable {
+/// later use with `updateRect`/`removeShape`. An alias for `ShapeID`— kept
+/// as its own name since `addRect` predates the other shape kinds and
+/// existing call sites spell it this way.
+public typealias RectID = ShapeID
+
+/// Identifies a line (wire) previously added with `CanvasEngine.addLine`,
+/// for later use with `removeLine`.
+public struct LineID: Hashable {
+    fileprivate let value: Int32
+}
+
+/// Identifies a text label previously added with `CanvasEngine.addLabel`,
+/// for later use with `removeLabel`.
+public struct LabelID: Hashable {
     fileprivate let value: Int32
 }
 
 /// Drives the canvas engine's retained 2D scene and reads back rendered
 /// frames as RGBA8 pixel buffers.
 ///
-/// This is retained mode, not immediate mode: shapes you add with
-/// `addRect` stick around across frames until you `updateRect`/`removeRect`
-/// them yourself. Nothing renders until you call `repaint()` — there's no
+/// This is retained mode, not immediate mode: shapes/lines/labels you add
+/// stick around across frames until you remove them yourself. Nothing
+/// renders until you call `repaint()` — there's no
 /// background loop driving frames, so call it whenever you've changed the
 /// scene and want a new frame to read back.
 ///
@@ -83,15 +103,93 @@ public final class CanvasEngine {
         )
     }
 
-    /// Removes a rectangle previously returned by `addRect`. Doesn't take
-    /// effect visually until the next `repaint()`.
-    public func removeRect(_ id: RectID) {
-        canvas_remove_rect(ctx, id.value)
+    /// Adds a retained rounded rectangle. Same conventions as `addRect`.
+    @discardableResult
+    public func addRoundedRect(
+        x: Double, y: Double, width: Double, height: Double,
+        r: Double, g: Double, b: Double, a: Double = 1.0
+    ) -> ShapeID {
+        let id = canvas_add_rounded_rect(
+            ctx,
+            Float(x), Float(y), Float(width), Float(height),
+            Float(r), Float(g), Float(b), Float(a)
+        )
+        return ShapeID(value: id)
     }
 
-    /// Removes every retained rectangle.
-    public func clearRects() {
-        canvas_clear_rects(ctx)
+    /// Adds a retained circle (e.g. an FBD slot/port). Unlike the
+    /// rectangle-shaped kinds, this is centered rather than top-left
+    /// addressed, since that's the natural way to place a port.
+    @discardableResult
+    public func addCircle(
+        centerX: Double, centerY: Double, radius: Double,
+        r: Double, g: Double, b: Double, a: Double = 1.0
+    ) -> ShapeID {
+        let id = canvas_add_circle(
+            ctx,
+            Float(centerX), Float(centerY), Float(radius),
+            Float(r), Float(g), Float(b), Float(a)
+        )
+        return ShapeID(value: id)
+    }
+
+    /// Removes a shape (rect/rounded rect/circle) previously returned by
+    /// `addRect`/`addRoundedRect`/`addCircle`. Doesn't take effect visually
+    /// until the next `repaint()`.
+    public func removeShape(_ id: ShapeID) {
+        canvas_remove_shape(ctx, id.value)
+    }
+
+    /// Removes every retained shape (of any kind).
+    public func clearShapes() {
+        canvas_clear_shapes(ctx)
+    }
+
+    /// Adds a retained line (e.g. an FBD wire), in the same screen-pixel
+    /// coordinate system as shapes. Doesn't take effect visually until the
+    /// next `repaint()`.
+    @discardableResult
+    public func addLine(
+        x1: Double, y1: Double, x2: Double, y2: Double,
+        r: Double, g: Double, b: Double, a: Double = 1.0
+    ) -> LineID {
+        let id = canvas_add_line(
+            ctx,
+            Float(x1), Float(y1), Float(x2), Float(y2),
+            Float(r), Float(g), Float(b), Float(a)
+        )
+        return LineID(value: id)
+    }
+
+    /// Removes a line previously returned by `addLine`.
+    public func removeLine(_ id: LineID) {
+        canvas_remove_line(ctx, id.value)
+    }
+
+    /// Removes every retained line.
+    public func clearLines() {
+        canvas_clear_lines(ctx)
+    }
+
+    /// Adds a retained text label (e.g. a block/slot name). `r`/`g`/`b` are
+    /// 0...1 — there's no alpha channel, matching TextRenderer.
+    @discardableResult
+    public func addLabel(
+        _ text: String, x: Double, y: Double,
+        r: Double, g: Double, b: Double
+    ) -> LabelID {
+        let id = canvas_add_label(ctx, text, Float(x), Float(y), Float(r), Float(g), Float(b))
+        return LabelID(value: id)
+    }
+
+    /// Removes a label previously returned by `addLabel`.
+    public func removeLabel(_ id: LabelID) {
+        canvas_remove_label(ctx, id.value)
+    }
+
+    /// Removes every retained label.
+    public func clearLabels() {
+        canvas_clear_labels(ctx)
     }
 
     /// Returns the frame `repaint()` just rendered, as tightly packed

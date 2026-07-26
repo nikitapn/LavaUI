@@ -33,15 +33,31 @@ class CanvasBridge {
   // boundary since Swift can't catch C++ exceptions).
   bool repaint() noexcept;
 
-  // Retained 2D rectangle scene. x/y is the top-left corner, in pixels;
-  // r/g/b/a are 0-1. addRect returns an id you can later pass to
-  // updateRect/removeRect.
+  // Retained 2D shape scene. x/y is the top-left corner, in pixels; r/g/b/a
+  // are 0-1. Each add* returns an id you can later pass to
+  // updateRect/removeShape (removal/clearing is shared across shape kinds).
   int addRect(float x, float y, float width, float height,
               float r, float g, float b, float a) noexcept;
   void updateRect(int id, float x, float y, float width, float height,
                    float r, float g, float b, float a) noexcept;
-  void removeRect(int id) noexcept;
-  void clearRects() noexcept;
+  int addRoundedRect(float x, float y, float width, float height,
+                      float r, float g, float b, float a) noexcept;
+  int addCircle(float centerX, float centerY, float radius,
+                float r, float g, float b, float a) noexcept;
+  void removeShape(int id) noexcept;
+  void clearShapes() noexcept;
+
+  // Retained 2D line scene (wires), same screen-pixel coordinate system.
+  int addLine(float x1, float y1, float x2, float y2,
+              float r, float g, float b, float a) noexcept;
+  void removeLine(int id) noexcept;
+  void clearLines() noexcept;
+
+  // Retained 2D text labels. r/g/b are 0-1 (no alpha).
+  int addLabel(const std::string &text, float x, float y,
+               float r, float g, float b) noexcept;
+  void removeLabel(int id) noexcept;
+  void clearLabels() noexcept;
 
   // Copies the frame repaint() just rendered (RGBA8, tightly packed,
   // width*height*4 bytes) into dst. dst must be at least dstSize bytes.

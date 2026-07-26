@@ -68,7 +68,6 @@ Mesh2D Primitives::generateRectangle() {
 
 Mesh2D Primitives::generateRoundedRectangle(int cornerSegments) {
   // TODO: Texture coordinates are not ideal yet...
-  // TODO: FIX FOR COUNTER-CLOCKWISE, BEFORE IT WAS CLOCKWISE !!!
 
   Mesh2D r;
 
@@ -121,6 +120,15 @@ Mesh2D Primitives::generateRoundedRectangle(int cornerSegments) {
   // Closing the loop by connecting back to the first edge vertex
   r.vertices.push_back({0.5, -a});
   r.texCoords.push_back({0.5f + a * 0.5f, 0.5f - a * 0.5f});
+
+  // The perimeter above is generated clockwise, opposite of generateCircle's
+  // counter-clockwise winding. With VK_CULL_MODE_BACK_BIT +
+  // VK_FRONT_FACE_COUNTER_CLOCKWISE (see Pipeline's rasterizer state), that
+  // made every triangle in this fan back-facing and invisible — reversing
+  // the perimeter order (but not the center vertex) flips each triangle's
+  // winding without changing the shape.
+  std::reverse(r.vertices.begin() + 1, r.vertices.end());
+  std::reverse(r.texCoords.begin() + 1, r.texCoords.end());
 
   return r;
 }

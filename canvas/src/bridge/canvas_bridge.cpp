@@ -82,25 +82,125 @@ void CanvasBridge::updateRect(int id, float x, float y, float width, float heigh
   }
 }
 
-void CanvasBridge::removeRect(int id) noexcept
+int CanvasBridge::addRoundedRect(float x, float y, float width, float height,
+                                   float r, float g, float b, float a) noexcept
 {
   try {
-    impl_->app.removeRect(id);
+    return impl_->app.addRoundedRect(x, y, width, height, r, g, b, a);
   } catch (const std::exception &ex) {
-    std::cerr << "CanvasBridge::removeRect: " << ex.what() << '\n';
+    std::cerr << "CanvasBridge::addRoundedRect: " << ex.what() << '\n';
+    return -1;
   } catch (...) {
-    std::cerr << "CanvasBridge::removeRect: unknown exception\n";
+    std::cerr << "CanvasBridge::addRoundedRect: unknown exception\n";
+    return -1;
   }
 }
 
-void CanvasBridge::clearRects() noexcept
+int CanvasBridge::addCircle(float centerX, float centerY, float radius,
+                              float r, float g, float b, float a) noexcept
 {
   try {
-    impl_->app.clearRects();
+    return impl_->app.addCircle(centerX, centerY, radius, r, g, b, a);
   } catch (const std::exception &ex) {
-    std::cerr << "CanvasBridge::clearRects: " << ex.what() << '\n';
+    std::cerr << "CanvasBridge::addCircle: " << ex.what() << '\n';
+    return -1;
   } catch (...) {
-    std::cerr << "CanvasBridge::clearRects: unknown exception\n";
+    std::cerr << "CanvasBridge::addCircle: unknown exception\n";
+    return -1;
+  }
+}
+
+void CanvasBridge::removeShape(int id) noexcept
+{
+  try {
+    impl_->app.removeShape(id);
+  } catch (const std::exception &ex) {
+    std::cerr << "CanvasBridge::removeShape: " << ex.what() << '\n';
+  } catch (...) {
+    std::cerr << "CanvasBridge::removeShape: unknown exception\n";
+  }
+}
+
+void CanvasBridge::clearShapes() noexcept
+{
+  try {
+    impl_->app.clearShapes();
+  } catch (const std::exception &ex) {
+    std::cerr << "CanvasBridge::clearShapes: " << ex.what() << '\n';
+  } catch (...) {
+    std::cerr << "CanvasBridge::clearShapes: unknown exception\n";
+  }
+}
+
+int CanvasBridge::addLine(float x1, float y1, float x2, float y2,
+                            float r, float g, float b, float a) noexcept
+{
+  try {
+    return impl_->app.addLine(x1, y1, x2, y2, r, g, b, a);
+  } catch (const std::exception &ex) {
+    std::cerr << "CanvasBridge::addLine: " << ex.what() << '\n';
+    return -1;
+  } catch (...) {
+    std::cerr << "CanvasBridge::addLine: unknown exception\n";
+    return -1;
+  }
+}
+
+void CanvasBridge::removeLine(int id) noexcept
+{
+  try {
+    impl_->app.removeLine(id);
+  } catch (const std::exception &ex) {
+    std::cerr << "CanvasBridge::removeLine: " << ex.what() << '\n';
+  } catch (...) {
+    std::cerr << "CanvasBridge::removeLine: unknown exception\n";
+  }
+}
+
+void CanvasBridge::clearLines() noexcept
+{
+  try {
+    impl_->app.clearLines();
+  } catch (const std::exception &ex) {
+    std::cerr << "CanvasBridge::clearLines: " << ex.what() << '\n';
+  } catch (...) {
+    std::cerr << "CanvasBridge::clearLines: unknown exception\n";
+  }
+}
+
+int CanvasBridge::addLabel(const std::string &text, float x, float y,
+                             float r, float g, float b) noexcept
+{
+  try {
+    return impl_->app.addLabel(text, x, y, r, g, b);
+  } catch (const std::exception &ex) {
+    std::cerr << "CanvasBridge::addLabel: " << ex.what() << '\n';
+    return -1;
+  } catch (...) {
+    std::cerr << "CanvasBridge::addLabel: unknown exception\n";
+    return -1;
+  }
+}
+
+void CanvasBridge::removeLabel(int id) noexcept
+{
+  try {
+    impl_->app.removeLabel(id);
+  } catch (const std::exception &ex) {
+    std::cerr << "CanvasBridge::removeLabel: " << ex.what() << '\n';
+  } catch (...) {
+    std::cerr << "CanvasBridge::removeLabel: unknown exception\n";
+  }
+}
+
+void CanvasBridge::clearLabels() noexcept
+{
+  try {
+    impl_->app.clearLabels();
+  } catch (const std::exception &ex) {
+    std::cerr << "CanvasBridge::clearLabels: " << ex.what() << '\n';
+  } catch (...) {
+    std::cerr << "CanvasBridge::clearLabels: unknown exception\n";
   }
 }
 
