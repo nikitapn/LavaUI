@@ -43,16 +43,64 @@ CanvasBridge::~CanvasBridge()
   }
 }
 
-bool CanvasBridge::tick(double deltaTimeSeconds) noexcept
+bool CanvasBridge::repaint() noexcept
 {
   try {
-    return impl_->app.tick(static_cast<float>(deltaTimeSeconds));
+    return impl_->app.repaint();
   } catch (const std::exception &ex) {
-    std::cerr << "CanvasBridge::tick: " << ex.what() << '\n';
+    std::cerr << "CanvasBridge::repaint: " << ex.what() << '\n';
     return false;
   } catch (...) {
-    std::cerr << "CanvasBridge::tick: unknown exception\n";
+    std::cerr << "CanvasBridge::repaint: unknown exception\n";
     return false;
+  }
+}
+
+int CanvasBridge::addRect(float x, float y, float width, float height,
+                           float r, float g, float b, float a) noexcept
+{
+  try {
+    return impl_->app.addRect(x, y, width, height, r, g, b, a);
+  } catch (const std::exception &ex) {
+    std::cerr << "CanvasBridge::addRect: " << ex.what() << '\n';
+    return -1;
+  } catch (...) {
+    std::cerr << "CanvasBridge::addRect: unknown exception\n";
+    return -1;
+  }
+}
+
+void CanvasBridge::updateRect(int id, float x, float y, float width, float height,
+                               float r, float g, float b, float a) noexcept
+{
+  try {
+    impl_->app.updateRect(id, x, y, width, height, r, g, b, a);
+  } catch (const std::exception &ex) {
+    std::cerr << "CanvasBridge::updateRect: " << ex.what() << '\n';
+  } catch (...) {
+    std::cerr << "CanvasBridge::updateRect: unknown exception\n";
+  }
+}
+
+void CanvasBridge::removeRect(int id) noexcept
+{
+  try {
+    impl_->app.removeRect(id);
+  } catch (const std::exception &ex) {
+    std::cerr << "CanvasBridge::removeRect: " << ex.what() << '\n';
+  } catch (...) {
+    std::cerr << "CanvasBridge::removeRect: unknown exception\n";
+  }
+}
+
+void CanvasBridge::clearRects() noexcept
+{
+  try {
+    impl_->app.clearRects();
+  } catch (const std::exception &ex) {
+    std::cerr << "CanvasBridge::clearRects: " << ex.what() << '\n';
+  } catch (...) {
+    std::cerr << "CanvasBridge::clearRects: unknown exception\n";
   }
 }
 

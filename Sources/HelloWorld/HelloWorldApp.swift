@@ -63,8 +63,8 @@ let canvasWidth = 240
 let canvasHeight = 240
 
 #if canImport(CanvasKit)
-    /// Owns the `CanvasEngine` and runs `tick`/`readPixels` off the main
-    /// actor. This matters a lot in practice: a real Vulkan tick (device
+    /// Owns the `CanvasEngine` and runs `repaint`/`readPixels` off the main
+    /// actor. This matters a lot in practice: a real Vulkan repaint (device
     /// wait + full-frame CPU readback) takes far longer than the cheap
     /// procedural test pattern this replaced, and running it synchronously
     /// on the main actor — where SwiftCrossUI/Gtk's own event loop also
@@ -73,18 +73,41 @@ let canvasHeight = 240
     /// clicks ignored) the first time this ran on the main actor instead of
     /// here. An `actor` (not `@MainActor`) gets its own execution context,
     /// so awaiting into it lets Gtk keep pumping events between frames.
+    ///
+    /// This is retained mode: rectangles added here stick around across
+    /// repaint() calls until removed. There's no per-frame loop anymore —
+    /// each method below adds/updates the scene and repaints once, mirroring
+    /// how the real caller (Swift, driving the scene from user input or FBD
+    /// model changes) is expected to work.
     actor CanvasRunner {
         private var engine: CanvasEngine?
 
-        func ensureStarted(assetsRoot: String, width: Int, height: Int) {
-            if engine == nil {
-                engine = CanvasEngine(assetsRoot: assetsRoot, width: width, height: height)
+        /// Creates the engine (once) and seeds a small starting scene.
+        /// Returns the first rendered frame, or nil if this wasn't the
+        /// first call or the engine failed to start.
+        func ensureStarted(assetsRoot: String, width: Int, height: Int) -> [UInt8]? {
+            guard engine == nil else { return nil }
+            guard let engine = CanvasEngine(assetsRoot: assetsRoot, width: width, height: height) else {
+                return nil
             }
+            self.engine = engine
+
+            engine.addRect(x: 20, y: 20, width: 80, height: 50, r: 0.8, g: 0.3, b: 0.3)
+            engine.addRect(x: 130, y: 20, width: 80, height: 50, r: 0.3, g: 0.6, b: 0.9)
+            engine.addRect(x: 60, y: 100, width: 120, height: 60, r: 0.3, g: 0.8, b: 0.4)
+            engine.repaint()
+            return engine.readPixels()
         }
 
-        func tickAndReadPixels(deltaTime: Double) -> [UInt8]? {
+        /// Adds a small rectangle centered on (x, y) and repaints — the
+        /// click-to-add-a-block half of the retained-mode workflow.
+        func addRectAndRepaint(x: Double, y: Double) -> [UInt8]? {
             guard let engine else { return nil }
-            engine.tick(deltaTime: deltaTime)
+            engine.addRect(
+                x: x - 15, y: y - 15, width: 30, height: 30,
+                r: .random(in: 0.3...1), g: .random(in: 0.3...1), b: .random(in: 0.3...1)
+            )
+            engine.repaint()
             return engine.readPixels()
         }
     }
@@ -117,6 +140,13 @@ struct YourApp: App {
                                 lastPointer = "–"
                             case .mouseDown(let button, let x, let y):
                                 lastPointer = "(\(Int(x)), \(Int(y))) down(\(button))"
+                                #if canImport(CanvasKit)
+                                    Task {
+                                        if let pixels = await canvasRunner.addRectAndRepaint(x: x, y: y) {
+                                            canvasPixels = pixels
+                                        }
+                                    }
+                                #endif
                             case .mouseUp(let button, let x, let y):
                                 lastPointer = "(\(Int(x)), \(Int(y))) up(\(button))"
                             }
@@ -152,16 +182,12 @@ struct YourApp: App {
                 .background(Color(red: 0.10, green: 0.11, blue: 0.15))
                 .task {
                     #if canImport(CanvasKit)
-                        await canvasRunner.ensureStarted(
+                        if let pixels = await canvasRunner.ensureStarted(
                             assetsRoot: canvasAssetsRoot,
                             width: canvasWidth,
                             height: canvasHeight
-                        )
-                        while !Task.isCancelled {
-                            if let pixels = await canvasRunner.tickAndReadPixels(deltaTime: 1.0 / 30.0) {
-                                canvasPixels = pixels
-                            }
-                            try? await Task.sleep(nanoseconds: 33_000_000)
+                        ) {
+                            canvasPixels = pixels
                         }
                     #endif
                 }

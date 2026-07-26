@@ -5,11 +5,12 @@
 #include <memory>
 #include <string>
 
-// Swift-facing surface for the canvas engine. Deliberately hides every
-// engine/Vulkan type behind the pimpl — the only types that cross this
-// boundary (std::string, uint32_t, double, bool, uint8_t*, size_t) are all
-// trivially importable by Swift's C++ interop, so nothing here needs
-// forward declarations the way a bridge exposing real engine types would.
+// C++-side convenience wrapper around Application, used internally by
+// canvas_c_api.cpp. Not imported by Swift directly (see the note in
+// canvas_swift's Package.swift for why: Swift's C++ interop mode is viral
+// and conflicts with also needing swift-cross-ui's GtkCHelpers), but kept
+// as a real class since it's still handy to build/test against from C++
+// (see canvas_test in meson.build).
 class CanvasBridge {
   struct Impl;
   std::unique_ptr<Impl> impl_;
@@ -27,12 +28,22 @@ class CanvasBridge {
   CanvasBridge &operator=(CanvasBridge &&) noexcept;
   ~CanvasBridge();
 
-  // Advances and renders one frame. Returns false if the engine hit an
+  // Renders the current retained scene. Returns false if the engine hit an
   // unrecoverable error (logged internally — exceptions never cross this
   // boundary since Swift can't catch C++ exceptions).
-  bool tick(double deltaTimeSeconds) noexcept;
+  bool repaint() noexcept;
 
-  // Copies the frame tick() just rendered (RGBA8, tightly packed,
+  // Retained 2D rectangle scene. x/y is the top-left corner, in pixels;
+  // r/g/b/a are 0-1. addRect returns an id you can later pass to
+  // updateRect/removeRect.
+  int addRect(float x, float y, float width, float height,
+              float r, float g, float b, float a) noexcept;
+  void updateRect(int id, float x, float y, float width, float height,
+                   float r, float g, float b, float a) noexcept;
+  void removeRect(int id) noexcept;
+  void clearRects() noexcept;
+
+  // Copies the frame repaint() just rendered (RGBA8, tightly packed,
   // width*height*4 bytes) into dst. dst must be at least dstSize bytes.
   void readPixels(uint8_t *dst, size_t dstSize) noexcept;
 };

@@ -32,10 +32,40 @@ void canvas_destroy(CanvasContext *ctx)
   delete ctx;
 }
 
-bool canvas_tick(CanvasContext *ctx, double delta_time_seconds)
+bool canvas_repaint(CanvasContext *ctx)
 {
   if (!ctx) return false;
-  return ctx->bridge.tick(delta_time_seconds);
+  return ctx->bridge.repaint();
+}
+
+int canvas_add_rect(
+  CanvasContext *ctx,
+  float x, float y, float width, float height,
+  float r, float g, float b, float a)
+{
+  if (!ctx) return -1;
+  return ctx->bridge.addRect(x, y, width, height, r, g, b, a);
+}
+
+void canvas_update_rect(
+  CanvasContext *ctx, int id,
+  float x, float y, float width, float height,
+  float r, float g, float b, float a)
+{
+  if (!ctx) return;
+  ctx->bridge.updateRect(id, x, y, width, height, r, g, b, a);
+}
+
+void canvas_remove_rect(CanvasContext *ctx, int id)
+{
+  if (!ctx) return;
+  ctx->bridge.removeRect(id);
+}
+
+void canvas_clear_rects(CanvasContext *ctx)
+{
+  if (!ctx) return;
+  ctx->bridge.clearRects();
 }
 
 void canvas_read_pixels(CanvasContext *ctx, uint8_t *dst, size_t dst_size)

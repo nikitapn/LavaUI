@@ -1,15 +1,15 @@
 #include <pch.hpp>
 
-#include <random>
+#include <chrono>
 #include <format>
 #include <algorithm>
+#include <optional>
 
 #include "application.hpp"
 
 #include "util/constants.hpp"
 #include "util/key_codes.hpp"
 #include "render/vulkan.hpp"
-#include "render/compute_physics.hpp"
 #include "render/text_renderer.hpp"
 #include "render/primitives.hpp"
 #include "render/camera.hpp"
@@ -18,11 +18,8 @@
 #include "render/texture_manager.hpp"
 #include "render/line_renderer.hpp"
 
-
 #include "imgui.h"
 #include "imgui_impl_vulkan.h"
-
-#include <entt/entt.hpp>
 
 #define GLM_ENABLE_EXPERIMENTAL
 #include <glm/gtx/string_cast.hpp>
@@ -30,124 +27,6 @@
 std::ostream& operator<<(std::ostream& out, const vec2& v2) { return out << glm::to_string(v2); }
 std::ostream& operator<<(std::ostream& out, const vec3& v3) { return out << glm::to_string(v3); }
 std::ostream& operator<<(std::ostream& out, const vec4& v4) { return out << glm::to_string(v4); }
-
-// Enable or disable the GPU-based physics system
-#define VULKAN_PHYSICS 0
-
-/*
- * Physics System Implementation:
- * 
- * 1. Forces and Impulses:
- *    - Forces are accumulated each frame and applied continuously (e.g., gravity, wind)
- *    - Impulses are applied instantaneously to change momentum (e.g., collisions)
- *    - F = ma, so acceleration = F * invMass
- * 
- * 2. Collision Resolution:
- *    - Uses impulse-based collision response
- *    - Considers mass of both objects in collisions
- *    - Separates overlapping objects to prevent penetration
- *    - Applies restitution coefficient for realistic bouncing
- * 
- * 3. Integration:
- *    - Semi-implicit Euler integration (velocity then position)
- *    - Subdivided timesteps for stability
- */
-
-struct Position {
-  vec2 position;
-};
-
-struct Velocity {
-  vec2 velocity;
-};
-
-struct Mass {
-  float mass;
-  float invMass; // 1/mass, useful for calculations (0 for immovable objects)
-};
-
-struct Force {
-  vec2 force;
-};
-
-struct Renderable {
-  mat4 world;
-};
-
-struct Circle {
-  vec2  position;
-  float radius;
-};
-
-struct Ray {
-  vec2 origin;
-  vec2 direction;
-};
-
-struct Wall {
-  Ray  ray;
-  vec2 normal;
-};
-
-/*
- 0 - no intersection
- 1 - tangent
- 2 - intersection
- */
-int rayCircleIntersection(const Ray &ray, const Circle &circle, vec2 result[2])
-{
-  vec2  oc = ray.origin - circle.position;
-  float a  = glm::dot(ray.direction, ray.direction);
-  float b  = 2.0f * glm::dot(oc, ray.direction);
-  float c  = glm::dot(oc, oc) - circle.radius * circle.radius;
-  float d  = b * b - 4 * a * c;
-
-  if (d < 0) return 0;
-
-  if (std::abs(d) < 1e-3) {
-    float t   = -b / (2.0f * a);
-    result[0] = ray.origin + t * ray.direction;
-    return 1;
-  }
-
-  float t1  = (-b + sqrt(d)) / (2.0f * a);
-  float t2  = (-b - sqrt(d)) / (2.0f * a);
-  result[0] = ray.origin + t1 * ray.direction;
-  result[1] = ray.origin + t2 * ray.direction;
-
-  return 2;
-}
-
-/*
- 0 - no intersection
- 1 - tangent
- 2 - intersection
- */
-int cirleCircleIntersection(const Circle &c1, const Circle &c2, vec2 result[2])
-{
-  vec2  a         = c2.position - c1.position;
-  float r         = c1.radius + c2.radius;
-  float d_squared = glm::dot(a, a);
-  float d         = sqrt(d_squared);
-
-  if (d > r) return 0;
-
-  if (std::abs(r - d) < 0.001f) {
-    return 0;
-    result[0] = c1.position + d * (c1.radius / d);
-    return 1;
-  }
-
-  float l =
-    (c1.radius * c1.radius - c2.radius * c2.radius + d_squared) / (2.0f * d);
-  float h = sqrt(c1.radius * c1.radius - l * l);
-
-  vec2 p    = c1.position + l / d * a;
-  result[0] = p + h * vec2 {a.y, -a.x} / d;
-  result[1] = p - h * vec2 {a.y, -a.x} / d;
-
-  return 2;
-}
 
 class Timer {
   float currentTime = 0.0f;
@@ -164,8 +43,6 @@ struct Application::Impl
   Mesh3DRenderer   mesh3DRenderer;
   TextRenderer     textRenderer;
   LineRenderer     lineRenderer;
-  ComputePhysics   computePhysics;
-  entt::registry   registry;
   Camera           camera;
 
   Mesh3D* cubePrimitive = nullptr;
@@ -216,9 +93,6 @@ struct Application::Impl
   float fpsTimer = 0.0f;
   float currentFPS = 0.0f;
 
-  std::random_device randomDevice;
-
-  TextureHandle circleTexture;
   TextureHandle shadowMapTexture;
 
   bool renderShadowDebug    = false;
@@ -238,12 +112,6 @@ struct Application::Impl
   ImVec4 normalDebugColor = ImVec4(0.0f, 0.6f, 1.0f, 1.0f);
   bool   showImGuiDemo = false;
 
-  // Physics parameters
-  constexpr static int maxObjects = 40;
-  constexpr static float restitution = 0.8f; // Bounciness factor (0 = perfectly inelastic, 1 = perfectly elastic)
-  constexpr static float radius = 24.0f;
-  vec2 gravity = {0.0f, -400.8f};
-
   // Input state tracking
   struct InputState {
     bool keys[KEY_LAST] = {false};
@@ -254,15 +122,20 @@ struct Application::Impl
     bool mouseCaptured = false;
   } inputState;
 
-  // GPU particle data
-  std::vector<GPUParticle> gpuParticles;
-
-  Wall walls[4] = {
-    {{{0.0f, 0.0f}, {1.0f, 0.0f}}, {0.0f, 1.0f}},       // bottom
-    {{{width, 0.0f}, {0.0f, 1.0f}}, {-1.0f, 0.0f}},     // right
-    {{{width, height}, {-1.0f, 0.0f}}, {0.0f, -1.0f}},  // top
-    {{{0.0f, height}, {0.0f, -1.0f}}, {1.0f, 0.0f}},    // left
+  // Retained 2D rectangle scene, populated by add/update/removeRect and
+  // replayed into the (per-frame-immediate-mode) GeometryRenderer on every
+  // repaint(). x/y is the top-left corner (GeometryRenderer::pushScreenObject
+  // itself takes a center point, converted in repaint()).
+  struct RectShape {
+    float x, y, width, height;
+    float r, g, b, a;
   };
+  std::unordered_map<int, RectShape> rects;
+  int nextRectId = 1;
+
+  // Wall-clock time of the last repaint() call, used only to compute a
+  // deltaTime for the FPS counter/Dear ImGui (nullopt on the first call).
+  std::optional<std::chrono::steady_clock::time_point> lastRepaintTime;
 
  public:
   Impl(int w, int h)
@@ -271,7 +144,6 @@ struct Application::Impl
     , renderer(vulkan)
     , mesh3DRenderer(vulkan, camera)
     , textRenderer(vulkan, "assets/LiberationSerif-Regular.ttf", 36)
-    , computePhysics(vulkan)
     {
 
     }
@@ -412,397 +284,6 @@ struct Application::Impl
     }
   }
 
-  void initEntities()
-  {
-    std::uniform_real_distribution<float> w(100.0f, width - 100.f);
-    std::uniform_real_distribution<float> h(100.0f, height - 100.f);
-    std::uniform_real_distribution<float> vv(-400.f, 400.f);
-    std::uniform_real_distribution<float> mass_dist(10.0f, 50.0f);
-
-    auto v = [&]() { return vv(randomDevice); };
-
-#if VULKAN_PHYSICS
-    gpuParticles.clear();
-    gpuParticles.reserve(maxObjects);
-
-    // Create random particles
-    for (int i = 0; i < maxObjects; ++i) {
-      GPUParticle particle;
-      particle.position = {w(randomDevice), h(randomDevice)};
-      particle.velocity = {v(), v()};
-      particle.mass = mass_dist(randomDevice);
-      particle.invMass = 1.0f / particle.mass;
-      particle.force = {0.0f, 0.0f};
-      particle.padding = 0.0f;
-
-      gpuParticles.push_back(particle);
-
-      // Also create entity for rendering
-      auto entity = registry.create();
-      registry.emplace<Position>(entity, particle.position);
-      registry.emplace<Renderable>(entity, glm::identity<mat4>());
-    }
-#else
-    for (int i = 0; i < maxObjects; ++i) {
-      auto entity   = registry.create();
-      vec2 position = {w(randomDevice), h(randomDevice)};
-      vec2 velocity = {v(), v()};
-      float mass = mass_dist(randomDevice);
-
-      registry.emplace<Position>(entity, position);
-      registry.emplace<Velocity>(entity, velocity);
-      registry.emplace<Mass>(entity, mass, 1.0f / mass);
-      registry.emplace<Force>(entity, vec2{0.0f, 0.0f});
-      registry.emplace<Renderable>(entity, glm::identity<mat4>());
-    }
-
-    // Very heavy ball falling on very light ball
-    // {
-    //   auto entity = registry.create();
-
-    //   vec2 position = {200.f, 100.f};
-    //   vec2 velocity = {0.f, 0.f};
-    //   float mass = 100.f;
-
-    //   registry.emplace<Position>(entity, position);
-    //   registry.emplace<Velocity>(entity, velocity);
-    //   registry.emplace<Mass>(entity, mass, 1.0f / mass);
-    //   registry.emplace<Force>(entity, vec2{0.0f, 0.0f});
-    //   registry.emplace<Renderable>(entity, glm::identity<mat4>());
-    // }
-    // {
-    //   auto entity = registry.create();
-
-    //   vec2 position = {200.f, 400.f};
-    //   vec2 velocity = {0.f, 0.f};
-    //   float mass = 100000000.f;
-
-    //   registry.emplace<Position>(entity, position);
-    //   registry.emplace<Velocity>(entity, velocity);
-    //   registry.emplace<Mass>(entity, mass, 1.0f / mass);
-    //   registry.emplace<Force>(entity, vec2{0.0f, 0.0f});
-    //   registry.emplace<Renderable>(entity, glm::identity<mat4>());
-    // }
-#endif
-  }
-
-#if VULKAN_PHYSICS
-  void doComputePhysics(float dt)
-  {
-    // Clamp dt to prevent huge timesteps that cause instability
-    dt = std::min(dt, 0.016f); // Max 16ms timestep
-
-    // Debug output (only occasionally to avoid spam)
-    static int debugCounter = 0;
-    if (0 && debugCounter++ % 60 == 0) { // Every 60 frames
-      std::cout << "Physics Debug - dt: " << dt 
-                << ", gravity: (" << gravity.x << ", " << gravity.y << ")"
-                << ", particles: " << gpuParticles.size() << std::endl;
-
-      // Check first few particles for anomalies
-      for (size_t i = 0; i < std::min(size_t(3), gpuParticles.size()); ++i) {
-        const auto& p = gpuParticles[i];
-        std::cout << "  Particle " << i << ": pos(" << p.position.x << ", " << p.position.y 
-                  << "), vel(" << p.velocity.x << ", " << p.velocity.y 
-                  << "), mass: " << p.mass << ", invMass: " << p.invMass << std::endl;
-      }
-    }
-
-    constexpr uint32_t substeps = 1;
-    // Update simulation parameters
-    SimulationParams params;
-    params.gravity = gravity;
-    params.worldSize = {width, height};
-    params.deltaTime = dt / static_cast<float>(substeps);
-    params.restitution = restitution;
-    params.particleRadius = radius;
-    params.particleCount = static_cast<uint32_t>(gpuParticles.size());
-    params.maxCollisionPairs = static_cast<uint32_t>(gpuParticles.size()) * 8; // Same as in ComputePhysics::Initialize
-    params.substeps = substeps;
-    params.currentSubstep = 0;
-
-    computePhysics.updateSimulationParams(params);
-
-    for (uint32_t step = 0; step < substeps; ++step) {
-      // params.currentSubstep = step;
-      // computePhysics.updateSimulationParams(params);
-
-      // Upload current particle data to GPU
-      // computePhysics.setParticles(gpuParticles);
-
-      // Run the compute shader to perform physics step
-      // computePhysics.computeStep();
-
-      // Read back results
-      // gpuParticles.clear();
-      // computePhysics.readParticles(gpuParticles);
-    }
-
-    // Run compute physics once
-    computePhysics.computeStep();
-
-    // Read back results
-    gpuParticles.clear();
-    computePhysics.readParticles(gpuParticles);
-
-    // Update entity positions for rendering
-    auto view = registry.view<Position>();
-    size_t i = 0;
-    view.each([&](auto entity, Position& pos) {
-      if (i < gpuParticles.size()) {
-        pos.position = gpuParticles[i].position;
-        i++;
-      }
-    });
-  }
-#else
-  void doPhysics(float dt)
-  {
-    auto const N    = 4;
-    auto const step = dt / static_cast<float>(N);
-
-    auto view = registry.view<Position, Velocity, Mass, Force>();
-
-    for (int i = 0; i < N; ++i) {
-      // Apply gravity and accumulated forces, then integrate position
-      view.each([&](auto entity, Position& pos, Velocity& vel, Mass& mass, Force& force) {
-        // Apply gravity
-        vec2 totalForce = gravity * mass.mass;
-
-        // Add accumulated forces
-        totalForce += force.force;
-
-        // F = ma, so a = F/m = F * invMass
-        vec2 acceleration = totalForce * mass.invMass;
-
-        // Integrate velocity and position
-        vel.velocity += acceleration * step;
-        pos.position += vel.velocity * step;
-
-        // Clear accumulated forces for next frame
-        force.force = vec2{0.0f, 0.0f};
-      });
-
-      // Handle wall collisions
-      view.each([&](auto entity, Position& pos, Velocity& vel, Mass& mass, Force& force) {
-        for (auto &wall : walls) {
-          // moving away from the wall
-          if (glm::dot(vel.velocity, wall.normal) > 0.0f) {
-            continue;
-          }
-
-          vec2 result[2];
-          int n = rayCircleIntersection(wall.ray, {pos.position, radius}, result);
-          if (n > 0) {
-            // Reflect velocity with restitution
-            float velocityAlongNormal = glm::dot(vel.velocity, wall.normal);
-            if (velocityAlongNormal < 0) { // Only resolve if moving towards wall
-              vec2 impulse = -(1 + restitution) * velocityAlongNormal * wall.normal;
-              vel.velocity += impulse;
-
-              // Move circle out of wall to prevent penetration
-              float penetration = radius - glm::dot(pos.position - wall.ray.origin, wall.normal);
-              if (penetration > 0) {
-                pos.position += wall.normal * penetration;
-              }
-            }
-          }
-        }
-      });
-
-      // Handle circle-circle collisions
-      std::vector<entt::entity> entities;
-      view.each([&entities](auto entity, const Position&, const Velocity&, const Mass&, const Force&) {
-        entities.push_back(entity);
-      });
-
-      for (size_t i = 0; i < entities.size(); ++i) {
-        auto entity1 = entities[i];
-        auto& pos1 = view.get<Position>(entity1);
-        auto& vel1 = view.get<Velocity>(entity1);
-        auto& mass1 = view.get<Mass>(entity1);
-
-        for (size_t j = i + 1; j < entities.size(); ++j) {
-          auto entity2 = entities[j];
-          auto& pos2 = view.get<Position>(entity2);
-          auto& vel2 = view.get<Velocity>(entity2);
-          auto& mass2 = view.get<Mass>(entity2);
-
-          vec2 relativePos = pos2.position - pos1.position;
-          float distance = glm::length(relativePos);
-          float minDistance = 2.0f * radius;
-
-          if (distance < minDistance && distance > 0.0f) {
-            // Collision normal
-            vec2 normal = relativePos / distance;
-
-            // Relative velocity
-            vec2 relativeVel = vel2.velocity - vel1.velocity;
-
-            // Velocity along collision normal
-            float velocityAlongNormal = glm::dot(relativeVel, normal);
-
-            // Do not resolve if velocities are separating
-            if (velocityAlongNormal > 0) continue;
-
-            // Calculate impulse magnitude
-            float impulseMagnitude = -(1 + restitution) * velocityAlongNormal;
-            impulseMagnitude /= (mass1.invMass + mass2.invMass);
-
-            // Apply impulse
-            vec2 impulse = impulseMagnitude * normal;
-            vel1.velocity -= impulse * mass1.invMass;
-            vel2.velocity += impulse * mass2.invMass;
-
-            // Separate overlapping circles
-            float penetration = minDistance - distance;
-            vec2 correction = normal * (penetration / (mass1.invMass + mass2.invMass)) * 0.5f;
-            pos1.position -= correction * mass1.invMass;
-            pos2.position += correction * mass2.invMass;
-          }
-        }
-      }
-    }
-  }
-
-  // Utility function to apply a force to an entity
-  void applyForce(entt::entity entity, const vec2& force) {
-    if (registry.all_of<Force>(entity)) {
-      auto& forceComponent = registry.get<Force>(entity);
-      forceComponent.force += force;
-    }
-  }
-
-  // Apply an impulse (instantaneous change in momentum) to an entity
-  void applyImpulse(entt::entity entity, const vec2& impulse) {
-    if (registry.all_of<Velocity, Mass>(entity)) {
-      auto& vel = registry.get<Velocity>(entity);
-      auto& mass = registry.get<Mass>(entity);
-      vel.velocity += impulse * mass.invMass;
-    }
-  }
-#endif
-
-  void update2DRenderables()
-  {
-    auto view = registry.view<Position, Renderable>();
-    view.each([&](auto entity, Position& pos, Renderable& renderable) {
-      mat4 t = glm::translate(mat4(1.0f), vec3 {pos.position.x, pos.position.y, 0.0f});
-      mat4 s = glm::scale(glm::identity<mat4>(), vec3 {radius*2.0f, radius*2.0f, 0});
-      renderable.world = t * s;
-    });
-  }
-
-  void render2DEntities()
-  {
-    // Render physics balls as circles
-    auto view = registry.view<Renderable>();
-    view.each([&](auto entity, Renderable& renderable) {
-      renderer.pushObject(
-        GeometryRenderer::Type::Circle,
-        renderable.world,
-        GeometryRenderer::RenderParamsTextured{
-          .color = {1.0f, 1.0f, 1.0f, 1.0f},
-          .texture = circleTexture,
-        }
-      );
-    });
-
-    // Render shadow map quad
-    if (renderShadowDebug) {
-      const auto shadowQuadSize = 300.0f;
-      auto world = glm::translate(mat4(1.0f), vec3{width - shadowQuadSize / 2.0f, height - shadowQuadSize / 2.0f, 0.0f}) *
-                  glm::scale(mat4(1.0f), vec3{shadowQuadSize,shadowQuadSize, 1.0f});
-
-      renderer.pushObject(
-        GeometryRenderer::Type::Rectangle,
-        world,
-        GeometryRenderer::RenderParamsTextured{
-          .color = {1.0f, 1.0f, 1.0f, 1.0f},
-          .texture = shadowMapTexture,
-        }
-      );
-    }
-    // Test different geometry types with UI-like elements
-    // renderGeometryTestElements();
-  }
-
-  void renderGeometryTestElements()
-  {
-    // === UI ELEMENTS USING SCREEN cOORDINATES(consistent with TextRenderer) ===
-
-    // Create a background panel for the "Geometry Test:" text (width - 200, 10)
-    {
-      GeometryRenderer::ScreenParams panelParams;
-      panelParams.position = {0, 50.0f};    // Just behind the text
-      panelParams.size = {200.0f, 30.0f};
-      panelParams.color = {0.2f, 0.2f, 0.2f, 0.7f};    // Dark semi-transparent
-      renderer.pushScreenObject(GeometryRenderer::Type::Rectangle, panelParams);
-    }
-
-    // Create UI buttons aligned with text elements
-    {
-      GeometryRenderer::ScreenParams buttonParams;
-      buttonParams.position = {width - 210.0f, 35.0f};  // Aligned with "Rectangle" text
-      buttonParams.size = {80.0f, 25.0f};
-      buttonParams.color = {1.0f, 0.0f, 0.0f, 0.8f};   // Red button
-      renderer.pushScreenObject(GeometryRenderer::Type::Rectangle, buttonParams);
-    }
-
-    // Create a rounded rectangle button panel
-    {
-      GeometryRenderer::ScreenParams roundedParams;
-      roundedParams.position = {width - 190.0f, 70.0f};
-      roundedParams.size = {120.0f, 35.0f};
-      roundedParams.color = {0.2f, 0.7f, 0.3f, 0.9f};  // Green panel
-      renderer.pushScreenObject(GeometryRenderer::Type::RoundedRectangle, roundedParams);
-    }
-
-    // Create small circles as UI indicators near the FPS text
-    for (int i = 0; i < 3; ++i) {
-      GeometryRenderer::ScreenParams circleParams;
-      circleParams.position = {5.0f, 30.0f + i * 35.0f}; // Left margin, aligned with text lines
-      circleParams.size = {8.0f, 8.0f};                   // Small UI indicators
-      circleParams.color = {0.8f, 0.8f, 0.2f, 1.0f};     // Yellow indicators
-      renderer.pushScreenObject(GeometryRenderer::Type::Circle, circleParams);
-    }
-
-    // Create a rounded rectangle debug
-    {
-      GeometryRenderer::ScreenParams roundedParams;
-      roundedParams.position = {width / 2.0f, height / 2.0f};
-      roundedParams.size = {100.0f, 100.0f};
-      roundedParams.color = {1.0f, 0.7f, 0.3f, 1.0f};  // Green panel
-      renderer.pushScreenObject(GeometryRenderer::Type::RoundedRectangle, roundedParams);
-    }
-
-    // === WORLD COORDINATE eLEMENTS(for comparison and physics objects) ===
-
-    // Keep some elements in world coordinates to show the difference
-    // These will be positioned relative to world center (0,0)
-    // {
-    //   mat4 translation = glm::translate(mat4(1.0f), vec3{-200.0f, -150.0f, 0.0f});
-    //   mat4 scale = glm::scale(mat4(1.0f), vec3{60.0f, 30.0f, 1.0f});
-    //   mat4 transform = translation * scale;
-    //   renderer.pushObject(GeometryRenderer::Type::Rectangle, transform);
-    // }
-
-    // Test animated elements - pulsating rounded rectangle using screen coordinates
-    static float time = 0.0f;
-    time += 0.016f; // Assume 60 FPS
-
-    float pulseScale = 1.0f + 0.1f * sin(time * 3.0f);
-    {
-      GeometryRenderer::ScreenParams pulseParams;
-      pulseParams.position = {width - 100.0f, height - 50.0f}; // Bottom-right corner
-      pulseParams.size = {40.0f * pulseScale, 20.0f * pulseScale};
-      pulseParams.color = {1.0f, 0.2f, 0.8f, 0.7f + 0.3f * sin(time * 2.0f)}; // Pulsating alpha
-      renderer.pushScreenObject(GeometryRenderer::Type::RoundedRectangle, pulseParams);
-    }
-  }
-  float lightTheta = PI_F / 2.0f;
-  float lightAlpha = 0.0f;
-  float lightRadius = 300.0f;
 
   // Process continuous input (called every frame)
   void processContinuousInput(float deltaTime)
@@ -853,44 +334,6 @@ struct Application::Impl
     if (inputState.keys[KEY_RIGHT]) {
       camera.rotateYaw(frameRotate);
     }
-    if (inputState.keys[KEY_UP]) {
-      lightRadius += 10.0f;
-    }
-    if (inputState.keys[KEY_DOWN]) {
-      lightRadius -= 10.0f;
-    }
-  }
-
-  void doSomethingWith2D(float dt)
-  {
-    // Process input every frame for smooth movement
-    // Example: Apply a random wind force occasionally
-    // static float windTimer = 0.0f;
-    // windTimer += dt;
-    // if (windTimer > 2.0f) { // Every 2 seconds
-    //   windTimer = 0.0f;
-    //   std::uniform_real_distribution<float> windForce(-500.0f, 500.0f);
-    //   vec2 wind = {windForce(rd_), windForce(rd_) * 0.2f}; // Mostly horizontal wind
-    //   for (auto& particle : gpuParticles) {
-    //     particle.force += wind;
-    //   }
-    // }
-
-#if VULKAN_PHYSICS
-      // Apply wind to GPU particles
-      // Update particles in compute buffer
-      computePhysics.setParticles(gpuParticles);
-      DoComputePhysics(dt);
-#else
-      // auto view = registry.view<Force>();
-      // view.each([&](auto entity, Force& force) {
-      //   applyForce(entity, wind);
-      // });
-      doPhysics(dt);
-#endif
-
-    update2DRenderables();
-    render2DEntities();
   }
 
   void init(const std::string &assetsRoot)
@@ -903,8 +346,6 @@ struct Application::Impl
     if (!assetsRoot.empty()) {
       std::filesystem::current_path(assetsRoot);
     }
-
-    initEntities();
 
     vulkan.init("2d shenanigans!", static_cast<int>(width), static_cast<int>(height));
     std::cout << "Vulkan initialized.\n";
@@ -930,31 +371,52 @@ struct Application::Impl
     std::cout << "Line renderer initialized.\n";
     mesh3DRenderer.setNormalDebugRenderer(&lineRenderer);
 
-    cubePrimitive = Primitives::generateCube(vulkan);
-    spherePrimitive = Primitives::generateSphere(vulkan, 6, 12);
-    circleTexture = TextureManager::getInstance().loadTexture("assets/football-157930.svg_128.png");
-
     shadowMapTexture = TextureManager::getInstance().registerTexture("shadowMap",
       vulkan.getShadowImageView(), vulkan.getShadowMapSize(), vulkan.getShadowMapSize());
-
-#if VULKAN_PHYSICS
-    // Initialize compute physics
-    computePhysics.initialize(static_cast<uint32_t>(gpuParticles.size()));
-    computePhysics.setParticles(gpuParticles);
-    std::cout << "Compute physics initialized.\n";
-#endif
 
     std::cout << "Init complete.\n";
   }
 
-  // Advances and renders one frame. deltaTime is supplied by the caller
-  // (previously computed internally from glfwGetTime()/chrono against the
-  // last iteration of an internal while(!glfwWindowShouldClose) loop; now
-  // there's no window to loop against, so the caller drives timing).
-  bool tick(float deltaTime)
+  int addRect(float x, float y, float w, float h, float r, float g, float b, float a)
+  {
+    int id = nextRectId++;
+    rects[id] = RectShape{x, y, w, h, r, g, b, a};
+    return id;
+  }
+
+  void updateRect(int id, float x, float y, float w, float h, float r, float g, float b, float a)
+  {
+    auto it = rects.find(id);
+    if (it != rects.end()) {
+      it->second = RectShape{x, y, w, h, r, g, b, a};
+    }
+  }
+
+  void removeRect(int id)
+  {
+    rects.erase(id);
+  }
+
+  void clearRects()
+  {
+    rects.clear();
+  }
+
+  // Renders one frame of the retained scene (currently just `rects`) and
+  // reports it back via readPixels(). There's no fixed-timestep loop driving
+  // this anymore — callers (Swift) call it whenever they want a new frame,
+  // e.g. right after changing the scene. deltaTime for the FPS counter/Dear
+  // ImGui is computed from wall-clock time between calls instead of being
+  // passed in.
+  bool repaint()
   {
     try {
-      // Update timers
+      auto now = std::chrono::steady_clock::now();
+      float deltaTime = lastRepaintTime
+        ? std::chrono::duration<float>(now - *lastRepaintTime).count()
+        : 1.0f / 60.0f;
+      lastRepaintTime = now;
+
       treeTimer.update(deltaTime);
 
       // FPS calculation
@@ -973,67 +435,33 @@ struct Application::Impl
 
       processContinuousInput(deltaTime);
 
-      // 2D physics and rendering
-      doSomethingWith2D(deltaTime);
-
-      auto camPos = camera.position();
-      auto camLook = camera.forward();
-
-      auto angleRad = glm::dot(glm::normalize(-camPos), camLook);
-      auto angle = acos(angleRad) * 180.0f / PI_F;
+      // Replay the retained rectangles into the GeometryRenderer, which is
+      // itself immediate-mode per frame (see GeometryRenderer::draw — it
+      // resets its own counts after every draw call). x/y here is the
+      // top-left corner; pushScreenObject wants a center point.
+      for (const auto &[id, rect] : rects) {
+        renderer.pushScreenObject(
+          GeometryRenderer::Type::Rectangle,
+          GeometryRenderer::ScreenParams{
+            {rect.x + rect.width / 2.0f, rect.y + rect.height / 2.0f},
+            {rect.width, rect.height},
+            {rect.r, rect.g, rect.b, rect.a}
+          }
+        );
+      }
 
       textRenderer.beginTextRendering();
-
-      textRenderer.renderText("Balls: " + std::to_string(maxObjects), {10.0f, 30.0f}, {1.0f, 1.0f, 1.0f});
-      textRenderer.renderText(std::format("FPS: {}", currentFPS), {10.0f, 60.0f}, {0.0f, 1.0f, 0.0f});
-      textRenderer.renderText(std::format("Camera: ({:.1f}, {:.1f}, {:.1f}), speed: {:.1f}", camPos.x, camPos.y, camPos.z, moveSpeed),
-        {10.0f, 90.0f}, {0.0f, 1.0f, 1.0f});
-      textRenderer.renderText(std::format("Angle: {:.2f}", angle),
-        {10.0f, 120.0f}, {0.0f, 1.0f, 1.0f});
-      textRenderer.renderText(std::format("Frame #{}", frameCountTotal), {10.0f, 150.0f}, {1.0f, 1.0f, 0.0f});
-
+      textRenderer.renderText(std::format("FPS: {:.1f}", currentFPS), {10.0f, 30.0f}, {0.0f, 1.0f, 0.0f});
+      textRenderer.renderText(std::format("Rects: {}", rects.size()), {10.0f, 60.0f}, {1.0f, 1.0f, 1.0f});
+      textRenderer.renderText(std::format("Frame #{}", frameCountTotal), {10.0f, 90.0f}, {1.0f, 1.0f, 0.0f});
       textRenderer.endTextRendering();
 
       lineRenderer.clear();
 
-      // Convert light position from spherical to Cartesian
-      lightTheta += 0.3f * deltaTime; // Rotate light around Y axis
-      // lightAlpha += 0.1f * deltaTime; // Slowly change elevation
-      float lightX = lightRadius * cos(lightAlpha) * cos(lightTheta);
-      float lightZ = lightRadius * cos(lightAlpha) * sin(lightTheta);
-      float lightY = lightRadius * sin(lightAlpha) + 200.0f;
-
-      mesh3DRenderer.setLighting(vec3{lightX, lightY, lightZ}, vec3{1.0f, 1.0f, 1.0f});
-
-      using RP = Mesh3DRenderer::RenderParams;
-      {
-        // Platform cube
-        auto cubeTranslation = glm::translate(glm::identity<mat4>(), vec3{0.0f, -55.0f, 0.0f});
-        auto cubeScale = glm::scale(glm::identity<mat4>(), vec3{1000.0f, 10.0f, 1000.0f});
-        auto cubeMatrix = cubeTranslation * cubeScale;
-        if (cubePrimitive) {
-          mesh3DRenderer.pushMesh(cubePrimitive->meshId, cubeMatrix, RP {
-          .color = {0.7f, 0.7f, 0.7f, 1.0f},
-          .useTexture = false,
-          .castsShadows = false,
-        });
-        }
-      }
-      {
-        auto cubeTranslation = glm::translate(glm::identity<mat4>(), vec3{300.0f, 0.0f, 0.0f});
-        auto cubeScale = glm::scale(glm::identity<mat4>(), vec3{50.0f, 100.0f, 100.0f});
-        auto cubeMatrix = cubeTranslation * cubeScale;
-        if (cubePrimitive) {
-          mesh3DRenderer.pushMesh(cubePrimitive->meshId, cubeMatrix, RP {
-            .color = {.3f, 1.f, 0.3f, 1.0f},
-            .useTexture = false,
-            .castsShadows = true
-          });
-        }
-      }
-
       vulkan.renderWithShadows(
-        // Shadow pass callback - render depth-only
+        // Shadow pass callback - render depth-only (nothing pushes meshes
+        // into mesh3DRenderer right now, so this is a no-op; kept so the
+        // shadow-mapping infrastructure stays available for later).
         [&](VkCommandBuffer commandBuffer) {
           mesh3DRenderer.drawShadowPass(commandBuffer);
         },
@@ -1041,7 +469,7 @@ struct Application::Impl
         [&](VkCommandBuffer commandBuffer, u32 imageIndex) {
           renderer.draw(commandBuffer, imageIndex);
           mesh3DRenderer.draw(commandBuffer, imageIndex);
-          if (true || renderOctreeDebug || renderNormalsDebug) {
+          if (renderOctreeDebug || renderNormalsDebug) {
             lineRenderer.draw(commandBuffer);
           }
           textRenderer.draw(commandBuffer, {width, height});
@@ -1117,7 +545,6 @@ struct Application::Impl
 
   void shutdown()
   {
-    computePhysics.cleanup();
     renderer.cleanUp();
     mesh3DRenderer.cleanUp();
     textRenderer.cleanUp();
@@ -1133,8 +560,24 @@ void Application::init(const std::string &assetsRoot) {
   impl_->init(assetsRoot);
 }
 
-bool Application::tick(float deltaTime) {
-  return impl_->tick(deltaTime);
+bool Application::repaint() {
+  return impl_->repaint();
+}
+
+int Application::addRect(float x, float y, float w, float h, float r, float g, float b, float a) {
+  return impl_->addRect(x, y, w, h, r, g, b, a);
+}
+
+void Application::updateRect(int id, float x, float y, float w, float h, float r, float g, float b, float a) {
+  impl_->updateRect(id, x, y, w, h, r, g, b, a);
+}
+
+void Application::removeRect(int id) {
+  impl_->removeRect(id);
+}
+
+void Application::clearRects() {
+  impl_->clearRects();
 }
 
 void Application::readPixels(uint8_t *dst, size_t dstSize) {

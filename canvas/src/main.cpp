@@ -5,15 +5,15 @@
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #include "stb_image_write.h"
 
-// Headless smoke test: ticks the engine offscreen for a fixed number of
-// frames (no window, no GLFW) and writes the last frame out as a PNG, so the
-// Vulkan/offscreen-readback path can be sanity-checked visually without
-// going through Swift. This replaces the old GLFW-windowed main loop.
+// Headless smoke test: adds a few retained rectangles, repaints the engine
+// offscreen a handful of times (no window, no GLFW), and writes the last
+// frame out as a PNG, so the Vulkan/offscreen-readback/retained-scene path
+// can be sanity-checked visually without going through Swift.
 int main(int argc, char *argv[])
 {
   const int width = 1280;
   const int height = 720;
-  const int frameCount = 120;
+  const int repaintCount = 5;
 
   std::string assetsRoot =
     std::filesystem::path(argv[0]).parent_path().string();
@@ -25,10 +25,14 @@ int main(int argc, char *argv[])
     std::cout << "Initializing...\n";
     app.init(assetsRoot);
 
-    std::cout << "Ticking " << frameCount << " frames...\n";
-    for (int i = 0; i < frameCount; ++i) {
-      if (!app.tick(1.0f / 60.0f)) {
-        std::cerr << "tick() reported failure at frame " << i << '\n';
+    app.addRect(100, 100, 300, 150, 0.8f, 0.2f, 0.2f, 1.0f);
+    app.addRect(500, 300, 200, 200, 0.2f, 0.6f, 0.9f, 1.0f);
+    app.addRect(200, 450, 400, 100, 0.3f, 0.8f, 0.3f, 0.8f);
+
+    std::cout << "Repainting " << repaintCount << " times...\n";
+    for (int i = 0; i < repaintCount; ++i) {
+      if (!app.repaint()) {
+        std::cerr << "repaint() reported failure at frame " << i << '\n';
         break;
       }
     }
