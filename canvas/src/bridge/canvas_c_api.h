@@ -137,6 +137,33 @@ void canvas_remove_text_widget(CanvasContext *ctx, int id);
 // after scene/input changes.
 bool canvas_wants_animation(CanvasContext *ctx);
 
+// ─── Shell model (tree + properties from FBDModel) ──────────────────────────
+
+typedef struct CanvasTreeItem {
+  const char *id;
+  const char *label;
+  int depth;
+  bool selected;
+} CanvasTreeItem;
+
+typedef struct CanvasPropertyItem {
+  const char *key;
+  const char *value;
+} CanvasPropertyItem;
+
+void canvas_set_project_tree(
+  CanvasContext *ctx, const CanvasTreeItem *items, int count);
+
+void canvas_set_properties(
+  CanvasContext *ctx, const CanvasPropertyItem *items, int count);
+
+// Writes selected tree id into out (NUL-terminated). Returns length excl. NUL.
+int canvas_selected_tree_id(CanvasContext *ctx, char *out, size_t cap);
+
+// Diagram panel rect (window pixels) from Yoga layout.
+void canvas_diagram_viewport(
+  CanvasContext *ctx, float *x, float *y, float *w, float *h);
+
 // ─── Input bridge (canvas-local pixels; GLFW-style key codes) ───────────────
 
 void canvas_pointer_move(CanvasContext *ctx, float x, float y);

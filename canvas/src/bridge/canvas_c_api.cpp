@@ -1,6 +1,7 @@
 #include "canvas_c_api.h"
 #include "canvas_bridge.hpp"
 #include "application.hpp"
+#include "shell/model.hpp"
 #include "window/canvas_window.hpp"
 
 #include <cstring>
@@ -351,6 +352,72 @@ bool canvas_wants_animation(CanvasContext *ctx)
 {
   if (!ctx) return false;
   return ctx->withApp([&](Application &app) { return app.wantsAnimation(); });
+}
+
+void canvas_set_project_tree(
+  CanvasContext *ctx, const CanvasTreeItem *items, int count)
+{
+  if (!ctx) return;
+  std::vector<canvas::TreeItem> converted;
+  if (items && count > 0) {
+    converted.reserve(static_cast<size_t>(count));
+    for (int i = 0; i < count; ++i) {
+      canvas::TreeItem t;
+      t.id = items[i].id ? items[i].id : "";
+      t.label = items[i].label ? items[i].label : "";
+      t.depth = items[i].depth;
+      t.selected = items[i].selected;
+      converted.push_back(std::move(t));
+    }
+  }
+  ctx->withApp([&](Application &app) {
+    app.setProjectTree(std::move(converted));
+  });
+}
+
+void canvas_set_properties(
+  CanvasContext *ctx, const CanvasPropertyItem *items, int count)
+{
+  if (!ctx) return;
+  std::vector<canvas::PropertyItem> converted;
+  if (items && count > 0) {
+    converted.reserve(static_cast<size_t>(count));
+    for (int i = 0; i < count; ++i) {
+      canvas::PropertyItem p;
+      p.key = items[i].key ? items[i].key : "";
+      p.value = items[i].value ? items[i].value : "";
+      converted.push_back(std::move(p));
+    }
+  }
+  ctx->withApp([&](Application &app) {
+    app.setProperties(std::move(converted));
+  });
+}
+
+int canvas_selected_tree_id(CanvasContext *ctx, char *out, size_t cap)
+{
+  if (!ctx) return 0;
+  std::string id = ctx->withApp(
+    [](Application &app) { return app.selectedTreeId(); });
+  if (out && cap > 0) {
+    size_t n = id.size();
+    size_t copy = n < (cap - 1) ? n : (cap - 1);
+    if (copy > 0) std::memcpy(out, id.data(), copy);
+    out[copy] = '\0';
+  }
+  return static_cast<int>(id.size());
+}
+
+void canvas_diagram_viewport(
+  CanvasContext *ctx, float *x, float *y, float *w, float *h)
+{
+  if (!ctx) return;
+  shell::Rect r = ctx->withApp(
+    [](Application &app) { return app.diagramViewport(); });
+  if (x) *x = r.x;
+  if (y) *y = r.y;
+  if (w) *w = r.w;
+  if (h) *h = r.h;
 }
 
 void canvas_pointer_move(CanvasContext *ctx, float x, float y)

@@ -109,9 +109,9 @@ void CanvasWindowHost::renderLoop(std::string assetsRoot, uint32_t width,
       app_.reset();
       return;
     }
-    // Match initial host request: start hidden until Swift settles a frame.
-    app_->setWindowVisible(false);
-    wantVisible_.store(false, std::memory_order_release);
+    // Single-window app: show immediately (no Gtk overlay host).
+    app_->setWindowVisible(true);
+    wantVisible_.store(true, std::memory_order_release);
   }
 
   running_.store(true, std::memory_order_release);

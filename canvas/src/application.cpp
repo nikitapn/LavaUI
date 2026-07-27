@@ -22,6 +22,9 @@
 #include "imgui_impl_vulkan.h"
 #include "imgui_impl_glfw.h"
 #include "render/text_widget.hpp"
+#include "shell/layout.hpp"
+#include "shell/model.hpp"
+#include "shell/widget.hpp"
 
 #define GLFW_INCLUDE_VULKAN
 #include <GLFW/glfw3.h>
@@ -711,10 +714,24 @@ struct Application::Impl
       io.AddMouseButtonEvent(button, pressed);
     }
 
-    // Primary button drives text-widget focus/caret. Do not auto-capture
-    // the mouse for 3D camera look — that path is legacy standalone only.
+    // Primary button: declarative UI hits first, then text-widget focus/caret.
     if (button == MOUSE_BUTTON_1) {
       if (pressed) {
+        if (uiTree_.hasRoot()) {
+          const float localY = y - uiBodyOriginY_;
+          const int uiHit = uiTree_.hitTest(x, localY);
+          if (uiHit > 0) {
+            uiTree_.enqueueClick(uiHit);
+            // Click consumed by chrome; blur text editors.
+            if (focusedTextWidgetId >= 0) {
+              auto it = textWidgets.find(focusedTextWidgetId);
+              if (it != textWidgets.end()) it->second.focused = false;
+              focusedTextWidgetId = -1;
+            }
+            return;
+          }
+        }
+
         int hitId = -1;
         for (auto &[id, w] : textWidgets) {
           if (w.hitTest(x, y)) {
@@ -810,62 +827,113 @@ struct Application::Impl
 
       processContinuousInput(deltaTime);
 
-      // Replay the retained shapes into the GeometryRenderer, which is
-      // itself immediate-mode per frame (see GeometryRenderer::draw — it
-      // resets its own counts after every draw call). x/y here is the
-      // top-left corner; pushScreenObject wants a center point.
+      // Diagram content is authored in viewport-local coordinates (0,0 =
+      // top-left of the diagram panel). Offset into window space for draw.
+      const float ox = diagramViewport_.x;
+      const float oy = diagramViewport_.y;
+
       for (const auto &[id, shape] : shapes) {
+        (void)id;
         renderer.pushScreenObject(
           shape.kind,
           GeometryRenderer::ScreenParams{
-            {shape.x + shape.width / 2.0f, shape.y + shape.height / 2.0f},
+            {shape.x + ox + shape.width / 2.0f, shape.y + oy + shape.height / 2.0f},
             {shape.width, shape.height},
             {shape.r, shape.g, shape.b, shape.a}
           }
         );
       }
 
-      // Retained scene labels only — no FPS/debug overlay. That overlay used
-      // a 36px FreeType face near the bottom edge and routinely spilled past
-      // the framebuffer (and looked like text "escaping" the canvas in the
-      // host UI). Keep the canvas surface clean for the FBD editor.
+      // FreeType text: diagram labels (panel-local) + declarative UI Text.
       textRenderer.beginTextRendering();
       for (const auto &[id, label] : labels) {
-        textRenderer.renderText(label.text, {label.x, label.y}, {label.r, label.g, label.b});
+        (void)id;
+        textRenderer.renderText(
+          label.text, {label.x + ox, label.y + oy}, {label.r, label.g, label.b});
+      }
+      {
+        const float lineH = textRenderer.getLineHeight();
+        for (const auto &n : uiTree_.nodes()) {
+          if (n.kind != shell::WidgetKind::Text || n.text.empty()) continue;
+          const float tx = n.rect.x + 4.f;
+          const float ty = n.rect.y + uiBodyOriginY_ + lineH * 0.85f;
+          textRenderer.renderText(n.text, {tx, ty}, {n.r, n.g, n.b});
+        }
       }
       textRenderer.endTextRendering();
 
-      // Replay the retained lines (wires) into LineRenderer, in the same
-      // screen-pixel coordinate system as shapes/text above.
       lineRenderer.clear();
       for (const auto &[id, line] : lines) {
+        (void)id;
         lineRenderer.addLine(
-          {line.x1, line.y1, 0.0f}, {line.x2, line.y2, 0.0f},
+          {line.x1 + ox, line.y1 + oy, 0.0f},
+          {line.x2 + ox, line.y2 + oy, 0.0f},
           {line.r, line.g, line.b, line.a}
         );
       }
       lineRenderer.prepare(mat4{1.0f}, screenProjection_);
 
+      // Text widgets: also offset if they use diagram-local coords. Keep
+      // absolute for now by not offsetting widget positions here — Swift
+      // can place them in diagram-local space and we offset at draw time.
+      for (auto &[id, widget] : textWidgets) {
+        (void)id;
+        widget.x += ox;
+        widget.y += oy;
+      }
+
       vulkan.renderWithShadows(
-        // Shadow pass callback - render depth-only (nothing pushes meshes
-        // into mesh3DRenderer right now, so this is a no-op; kept so the
-        // shadow-mapping infrastructure stays available for later).
         [&](VkCommandBuffer commandBuffer) {
           mesh3DRenderer.drawShadowPass(commandBuffer);
         },
-        // Main pass callback - render scene with shadows. Lines (wires)
-        // draw first so shapes (blocks/ports) painted afterwards sit on
-        // top of the wire endpoints.
         [&](VkCommandBuffer commandBuffer, u32 imageIndex) {
+          const auto extent = vulkan.getExtent();
+          VkViewport fullVp {
+            .x = 0.f, .y = 0.f,
+            .width = static_cast<float>(extent.width),
+            .height = static_cast<float>(extent.height),
+            .minDepth = 0.f, .maxDepth = 1.f,
+          };
+          vkCmdSetViewport(commandBuffer, 0, 1, &fullVp);
+
+          // Scissor diagram content to the Yoga center panel.
+          VkRect2D scissor {
+            .offset = {
+              static_cast<int32_t>(std::max(0.f, diagramViewport_.x)),
+              static_cast<int32_t>(std::max(0.f, diagramViewport_.y))
+            },
+            .extent = {
+              static_cast<uint32_t>(std::max(1.f, diagramViewport_.w)),
+              static_cast<uint32_t>(std::max(1.f, diagramViewport_.h))
+            },
+          };
+          vkCmdSetScissor(commandBuffer, 0, 1, &scissor);
+
           lineRenderer.draw(commandBuffer);
           renderer.draw(commandBuffer, imageIndex);
           mesh3DRenderer.draw(commandBuffer, imageIndex);
-          textRenderer.draw(commandBuffer, {width, height});
+
+          // Full-window scissor: FreeType text (diagram labels + UI Text)
+          // and ImGui chrome.
+          VkRect2D fullScissor {.offset = {0, 0}, .extent = extent};
+          vkCmdSetScissor(commandBuffer, 0, 1, &fullScissor);
+
+          textRenderer.draw(
+            commandBuffer,
+            {static_cast<float>(extent.width), static_cast<float>(extent.height)});
+
           if (imguiDrawData && imguiDrawData->Valid) {
             ImGui_ImplVulkan_RenderDrawData(imguiDrawData, commandBuffer);
           }
         }
       );
+
+      // Undo temporary widget offset so next frame's layout is stable.
+      for (auto &[id, widget] : textWidgets) {
+        (void)id;
+        widget.x -= ox;
+        widget.y -= oy;
+      }
 
       return true;
     } catch (std::exception &ex) {
@@ -879,10 +947,245 @@ struct Application::Impl
     vulkan.readPixels(dst, dstSize);
   }
 
-  // ImGui frame for in-canvas text widgets only. The old "Debug Controls"
-  // panel (shadow map / octree / wireframe toggles) was a standalone-demo
-  // leftover and is no longer drawn — it sat in the framebuffer and
-  // spilled over the embedded canvas view.
+  float shellLeftWidth_ = 220.f;
+  float shellRightWidth_ = 260.f;
+  shell::Rect diagramViewport_{0, 0, 800, 600};
+  shell::Node workspaceRoot_ =
+    shell::defaultWorkspace(shellLeftWidth_, shellRightWidth_);
+
+  // Declarative Swift UI tree (replaces ImGui side panels when present).
+  shell::WidgetBuilder uiBuilder_;
+  shell::WidgetTree uiTree_;
+  float uiBodyOriginY_ = 0.f; // menu bar height; body layout is below
+
+  std::vector<canvas::TreeItem> projectTree_;
+  std::vector<canvas::PropertyItem> properties_;
+  std::string selectedTreeId_;
+
+  void setProjectTree(std::vector<canvas::TreeItem> items)
+  {
+    projectTree_ = std::move(items);
+    // Keep selection if still present.
+    bool found = false;
+    for (const auto &it : projectTree_) {
+      if (it.id == selectedTreeId_) {
+        found = true;
+        break;
+      }
+    }
+    if (!found) {
+      selectedTreeId_.clear();
+      for (const auto &it : projectTree_) {
+        if (it.selected) {
+          selectedTreeId_ = it.id;
+          break;
+        }
+      }
+      if (selectedTreeId_.empty() && !projectTree_.empty()) {
+        selectedTreeId_ = projectTree_.front().id;
+      }
+    }
+  }
+
+  void setProperties(std::vector<canvas::PropertyItem> items)
+  {
+    properties_ = std::move(items);
+  }
+
+  std::string selectedTreeId() const { return selectedTreeId_; }
+  shell::Rect diagramViewport() const { return diagramViewport_; }
+
+  void setWorkspaceLayout(shell::Node root)
+  {
+    workspaceRoot_ = std::move(root);
+  }
+
+  void setWorkspaceColumns(shell::PanelKind left, shell::PanelKind center,
+                           shell::PanelKind right,
+                           float leftWidth, float rightWidth)
+  {
+    shellLeftWidth_ = leftWidth;
+    shellRightWidth_ = rightWidth;
+    workspaceRoot_ = shell::columns(left, center, right, leftWidth, rightWidth);
+  }
+
+  void layoutDeclarativeUI(float ew, float bodyH, float menuH)
+  {
+    uiBodyOriginY_ = menuH;
+    auto measure = [this](const std::string &text, float &outW, float &outH) {
+      const auto m = textRenderer.getTextMetrics(text);
+      outW = static_cast<float>(std::max(m.w, 1));
+      outH = std::max(static_cast<float>(m.h), textRenderer.getLineHeight());
+    };
+    uiTree_.layout(ew, bodyH, measure);
+    if (auto d = uiTree_.diagramHostRect()) {
+      diagramViewport_ = {d->x, d->y + menuH, d->w, d->h};
+    }
+  }
+
+  void drawAppShell(float ew, float eh)
+  {
+    const float menuH = ImGui::GetFrameHeight();
+    const float bodyH = std::max(1.f, eh - menuH);
+
+    ImGuiWindowFlags hostFlags =
+      ImGuiWindowFlags_NoDecoration |
+      ImGuiWindowFlags_NoMove |
+      ImGuiWindowFlags_NoResize |
+      ImGuiWindowFlags_NoBringToFrontOnFocus |
+      ImGuiWindowFlags_NoNavFocus |
+      ImGuiWindowFlags_MenuBar |
+      ImGuiWindowFlags_NoBackground;
+
+    ImGui::SetNextWindowPos(ImVec2(0, 0));
+    ImGui::SetNextWindowSize(ImVec2(ew, eh));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
+    ImGui::Begin("##ShellHost", nullptr, hostFlags);
+    ImGui::PopStyleVar(2);
+
+    if (ImGui::BeginMenuBar()) {
+      if (ImGui::BeginMenu("File")) {
+        ImGui::MenuItem("New diagram", nullptr, false, false);
+        ImGui::MenuItem("Open…", nullptr, false, false);
+        ImGui::MenuItem("Save", nullptr, false, false);
+        ImGui::Separator();
+        if (ImGui::MenuItem("Quit")) {
+          if (auto *w = vulkan.window()) {
+            glfwSetWindowShouldClose(w, GLFW_TRUE);
+          }
+        }
+        ImGui::EndMenu();
+      }
+      if (ImGui::BeginMenu("View")) {
+        if (!uiTree_.hasRoot()) {
+          if (ImGui::SliderFloat("Left panel", &shellLeftWidth_, 140.f, 400.f) ||
+              ImGui::SliderFloat("Right panel", &shellRightWidth_, 160.f, 480.f)) {
+            workspaceRoot_ = shell::columns(
+              shell::PanelKind::ProjectTree, shell::PanelKind::Diagram,
+              shell::PanelKind::Properties, shellLeftWidth_, shellRightWidth_);
+          }
+        } else {
+          ImGui::TextDisabled("Layout driven by Swift UI tree");
+        }
+        ImGui::EndMenu();
+      }
+      ImGui::TextDisabled(
+        uiTree_.hasRoot()
+          ? "  FBD Editor  ·  Swift UI + Yoga  ·  TextRenderer"
+          : "  FBD Editor  ·  Yoga + ImGui  ·  C++/Swift");
+      ImGui::EndMenuBar();
+    }
+
+    // Prefer declarative Swift tree when committed.
+    if (uiTree_.hasRoot()) {
+      layoutDeclarativeUI(ew, bodyH, menuH);
+      ImGui::End();
+      return;
+    }
+
+    // Legacy ImGui chrome (project tree | diagram hole | properties).
+    auto placements = shell::calculateLayout(workspaceRoot_, ew, bodyH);
+
+    shell::Rect leftR{0, menuH, shellLeftWidth_, bodyH};
+    shell::Rect centerR{shellLeftWidth_, menuH, ew - shellLeftWidth_ - shellRightWidth_, bodyH};
+    shell::Rect rightR{ew - shellRightWidth_, menuH, shellRightWidth_, bodyH};
+    for (const auto &p : placements) {
+      shell::Rect r = p.rect;
+      r.y += menuH;
+      switch (p.panel) {
+      case shell::PanelKind::ProjectTree: leftR = r; break;
+      case shell::PanelKind::Diagram: centerR = r; break;
+      case shell::PanelKind::Properties: rightR = r; break;
+      default: break;
+      }
+    }
+    diagramViewport_ = centerR;
+    uiBodyOriginY_ = menuH;
+
+    auto panelChild = [&](const char *id, const shell::Rect &r, bool border) {
+      ImGui::SetCursorScreenPos(ImVec2(r.x, r.y));
+      ImGui::BeginChild(id, ImVec2(r.w, r.h), border,
+                        border ? 0 : ImGuiWindowFlags_NoBackground);
+    };
+
+    panelChild("##Left", leftR, true);
+    ImGui::TextUnformatted("Project");
+    ImGui::Separator();
+    if (projectTree_.empty()) {
+      ImGui::TextDisabled("(no items — push from Swift)");
+    } else {
+      for (auto &it : projectTree_) {
+        ImGui::Dummy(ImVec2(static_cast<float>(it.depth) * 12.f, 0));
+        ImGui::SameLine(0, 0);
+        const bool sel = (it.id == selectedTreeId_);
+        if (ImGui::Selectable(it.label.c_str(), sel)) {
+          selectedTreeId_ = it.id;
+        }
+      }
+    }
+    ImGui::EndChild();
+
+    panelChild("##Center", centerR, false);
+    ImGui::EndChild();
+
+    panelChild("##Right", rightR, true);
+    ImGui::TextUnformatted("Properties");
+    ImGui::Separator();
+    if (!selectedTreeId_.empty()) {
+      ImGui::Text("Selected: %s", selectedTreeId_.c_str());
+    } else {
+      ImGui::TextDisabled("No selection");
+    }
+    ImGui::Spacing();
+    if (properties_.empty()) {
+      ImGui::TextDisabled("(no properties)");
+    } else {
+      for (const auto &p : properties_) {
+        ImGui::Text("%s", p.key.c_str());
+        ImGui::SameLine(rightR.w * 0.45f);
+        ImGui::TextUnformatted(p.value.c_str());
+      }
+    }
+    ImGui::EndChild();
+
+    ImGui::End();
+  }
+
+  // ─── Declarative UI builder (Swift interop) ─────────────────────────────
+
+  void uiReset() { uiBuilder_.reset(); }
+
+  void uiBegin(int kind, int id, float flexGrow, float flexShrink,
+               float width, float height, float padding)
+  {
+    uiBuilder_.begin(static_cast<shell::WidgetKind>(kind), id,
+                     flexGrow, flexShrink, width, height, padding);
+  }
+
+  void uiText(int id, const char *text, float r, float g, float b, bool clickable)
+  {
+    uiBuilder_.text(id, text, r, g, b, clickable);
+  }
+
+  void uiEnd() { uiBuilder_.end(); }
+
+  void uiCommit()
+  {
+    uiTree_.setRoot(uiBuilder_.takeRoot());
+    uiBuilder_.reset();
+  }
+
+  bool uiPollEvent(int &outWidgetId, int &outKind)
+  {
+    shell::UIEvent e;
+    if (!uiTree_.pollEvent(e)) return false;
+    outWidgetId = e.widgetId;
+    outKind = static_cast<int>(e.kind);
+    return true;
+  }
+
+  // ImGui frame: app shell (windowed) + text widgets.
   ImDrawData* renderImGuiOverlay(float /*currentFPS*/, float deltaTime)
   {
     if (vulkan.isWindowed()) {
@@ -893,13 +1196,15 @@ struct Application::Impl
     const float ew = static_cast<float>(vulkan.getExtent().width);
     const float eh = static_cast<float>(vulkan.getExtent().height);
     io.DisplaySize = ImVec2(ew, eh);
-    io.DeltaTime = std::max(deltaTime, 0.0001f); // Dear ImGui asserts DeltaTime > 0.
-    // Don't persist window layout from the old debug UI (imgui.ini).
+    io.DeltaTime = std::max(deltaTime, 0.0001f);
     io.IniFilename = nullptr;
     ImGui::NewFrame();
 
-    // Text widgets share ImGui's font atlas / Vulkan backend and are drawn
-    // into the foreground list so they sit above the retained scene.
+    if (vulkan.isWindowed()) {
+      drawAppShell(ew, eh);
+    }
+
+    // Text widgets share ImGui's font atlas / Vulkan backend.
     ImDrawList *fg = ImGui::GetForegroundDrawList();
     ImFont *font = ImGui::GetFont();
     const float fontSize = ImGui::GetFontSize();
@@ -951,6 +1256,56 @@ void Application::setWindowFrame(int x, int y, int width, int height) {
 
 void Application::setWindowVisible(bool visible) {
   impl_->setWindowVisible(visible);
+}
+
+void Application::setProjectTree(std::vector<canvas::TreeItem> items) {
+  impl_->setProjectTree(std::move(items));
+}
+
+void Application::setProperties(std::vector<canvas::PropertyItem> items) {
+  impl_->setProperties(std::move(items));
+}
+
+std::string Application::selectedTreeId() const {
+  return impl_->selectedTreeId();
+}
+
+shell::Rect Application::diagramViewport() const {
+  return impl_->diagramViewport();
+}
+
+void Application::setWorkspaceLayout(shell::Node root) {
+  impl_->setWorkspaceLayout(std::move(root));
+}
+
+void Application::setWorkspaceColumns(
+  shell::PanelKind left, shell::PanelKind center, shell::PanelKind right,
+  float leftWidth, float rightWidth)
+{
+  impl_->setWorkspaceColumns(left, center, right, leftWidth, rightWidth);
+}
+
+void Application::uiReset() { impl_->uiReset(); }
+
+void Application::uiBegin(int kind, int id, float flexGrow, float flexShrink,
+                          float width, float height, float padding)
+{
+  impl_->uiBegin(kind, id, flexGrow, flexShrink, width, height, padding);
+}
+
+void Application::uiText(int id, const char *text, float r, float g, float b,
+                         bool clickable)
+{
+  impl_->uiText(id, text, r, g, b, clickable);
+}
+
+void Application::uiEnd() { impl_->uiEnd(); }
+
+void Application::uiCommit() { impl_->uiCommit(); }
+
+bool Application::uiPollEvent(int &outWidgetId, int &outKind)
+{
+  return impl_->uiPollEvent(outWidgetId, outKind);
 }
 
 bool Application::repaint() {

@@ -1,5 +1,7 @@
 format_version = 2
 
+# Note: interactive UI is the Vulkan/GLFW canvas (no SwiftCrossUI).
+# Bundler may still run the thin HelloWorld launcher if configured.
 [apps.HelloWorld]
 identifier = 'com.example.HelloWorld'
 product = 'HelloWorld'

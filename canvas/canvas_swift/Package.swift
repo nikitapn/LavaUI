@@ -22,22 +22,13 @@ let package = Package(
         .macOS(.v13)  // For Linux, this is ignored.
     ],
     products: [
-        .library(
-            name: "CanvasKit",
-            targets: ["CanvasKit"])
+        .library(name: "CanvasKit", targets: ["CanvasKit"]),
+        // C++ interop surface (no Gtk). Use from targets with
+        // interoperabilityMode(.Cxx). Implementation is still libcanvas.so.
+        .library(name: "CxxCanvas", targets: ["CxxCanvas"]),
     ],
     targets: [
-        // Plain C bridge module — exposes canvas_c_api.h to Swift as an
-        // ordinary C module (no C++, no Swift C++-interop mode). That's
-        // deliberate: a Swift C++-interop-enabled module can't be imported
-        // from a target that also needs swift-cross-ui's GtkCHelpers (a
-        // plain C module with constructs, like uninitialized `const`
-        // globals, that are legal C but not legal C++ — Clang parses all C
-        // imports as C++ once interop mode is on for a target). Going
-        // through a plain `extern "C"` API here avoids that fight entirely.
-        // Header-only: the actual implementation (canvas_c_api.cpp,
-        // canvas_bridge.cpp) is compiled by Meson into libcanvas.so, not by
-        // SwiftPM.
+        // Plain C bridge — still used by CanvasKit for a stable Swift API.
         .target(
             name: "CCanvas",
             dependencies: [],
@@ -46,21 +37,32 @@ let package = Package(
             linkerSettings: [
                 .linkedLibrary("canvas"),
                 .unsafeFlags(["-L", buildPath]),
-                // NOTE: must be absolute paths, not $ORIGIN-relative. The
-                // Swift toolchain injects its own rpath entry ahead of ours,
-                // and once the dynamic linker misses on that entry it
-                // silently skips any subsequent $ORIGIN-relative rpath
-                // entries instead of continuing to search them. (Same
-                // gotcha already hit and documented in nprpc_swift.)
                 .unsafeFlags(["-Xlinker", "-rpath", "-Xlinker", buildPath]),
             ]
         ),
 
-        // Swift-facing wrapper.
+        // Swift-facing wrapper (C API).
         .target(
             name: "CanvasKit",
             dependencies: ["CCanvas"],
             path: "Sources/CanvasKit"
+        ),
+
+        // C++ interop: import `canvas::Engine` etc. Header-only target;
+        // symbols come from libcanvas.so.
+        .target(
+            name: "CxxCanvas",
+            dependencies: [],
+            path: "Sources/CxxCanvas",
+            publicHeadersPath: "include",
+            cxxSettings: [
+                .unsafeFlags(["-std=c++23"]),
+            ],
+            linkerSettings: [
+                .linkedLibrary("canvas"),
+                .unsafeFlags(["-L", buildPath]),
+                .unsafeFlags(["-Xlinker", "-rpath", "-Xlinker", buildPath]),
+            ]
         ),
     ]
 )

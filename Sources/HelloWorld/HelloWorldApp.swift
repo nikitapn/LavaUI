@@ -1,290 +1,159 @@
-import SwiftCrossUI
-import DefaultBackend
 import Foundation
+import FBDModel
 
-#if canImport(SwiftBundlerRuntime)
-    import SwiftBundlerRuntime
-#endif
+#if canImport(CxxCanvas)
 
-#if canImport(CanvasKit)
-    import CanvasKit
-#endif
+/// C++ interop app: Swift owns FBDModel + declarative UI tree;
+/// C++ owns Vulkan / Yoga / TextRenderer / hit-test.
+@main
+struct HelloWorldApp {
+    static func main() {
+        let assets = assetsRoot()
+        FileHandle.standardError.write(Data("assets: \(assets)\n".utf8))
 
-struct FileNode: Identifiable {
-    let id = UUID()
-    var name: String
-    var children: [FileNode]?
-}
-
-let sampleFileTree: [FileNode] = [
-    FileNode(
-        name: "Documents",
-        children: [
-            FileNode(name: "Resume.pdf", children: nil),
-            FileNode(
-                name: "Projects",
-                children: [
-                    FileNode(
-                        name: "HelloWorld",
-                        children: [
-                            FileNode(name: "HelloWorldApp.swift", children: nil),
-                            FileNode(name: "TreeView.swift", children: nil),
-                        ]
-                    ),
-                    FileNode(name: "Notes.txt", children: nil),
-                ]
-            ),
-        ]
-    ),
-    FileNode(
-        name: "Photos",
-        children: [
-            FileNode(name: "Vacation", children: []),
-            FileNode(name: "Family.png", children: nil),
-        ]
-    ),
-]
-
-let canvasAssetsRoot: String = {
-    URL(fileURLWithPath: #filePath)
-        .deletingLastPathComponent()
-        .deletingLastPathComponent()
-        .deletingLastPathComponent()
-        .appendingPathComponent("canvas/.build.Debug")
-        .path
-}()
-
-#if canImport(CanvasKit)
-    /// Owns the windowed canvas. Strategy while the Gtk host moves/resizes:
-    /// hide the GLFW surface immediately (Swift slot placeholder shows),
-    /// then after a short settle delay re-place and show it. Minimized host
-    /// keeps the canvas hidden until restored.
-    actor CanvasRunner {
-        private var engine: CanvasEngine?
-        private var editorID: TextWidgetID?
-
-        private var pendingFrame: ScreenRect?
-        private var lastAppliedFrame: ScreenRect?
-        private var hostActive = true
-        private var settleTask: Task<Void, Never>?
-
-        /// How long the host geometry must be stable before we show again.
-        private let settleDelayMs: UInt64 = 150
-
-        func ensureStarted(assetsRoot: String) -> Bool {
-            guard engine == nil else { return engine?.isWindowOpen ?? false }
-            guard let engine = CanvasEngine.openWindow(
-                assetsRoot: assetsRoot,
-                width: 640,
-                height: 360,
-                title: "FBD Canvas"
-            ) else {
-                return false
-            }
-            self.engine = engine
-            // Start hidden until first settled layout frame arrives.
-            engine.setWindowVisible(false)
-
-            engine.addRect(x: 16, y: 16, width: 200, height: 48, r: 0.25, g: 0.28, b: 0.35)
-            engine.addRect(x: 40, y: 90, width: 560, height: 220, r: 0.18, g: 0.20, b: 0.26)
-
-            let editor = engine.addTextWidget(
-                x: 56, y: 120, width: 528, height: 160,
-                text: """
-                // FUNCTION expression (demo ST)
-                IF speed > 10.0 THEN
-                  out := TRUE;
-                ELSE
-                  out := FALSE;
-                END_IF
-                """,
-                multiline: true
-            )
-            _ = engine.setTextWidgetHighlightRules(editor, HighlightPresets.structuredText)
-            engine.setTextWidgetFocused(editor, true)
-            editorID = editor
-            return true
+        guard let editor = Editor.open(
+            assetsRoot: assets,
+            width: 1280,
+            height: 800,
+            title: "FBD Editor"
+        ) else {
+            FileHandle.standardError.write(Data("failed to open editor window\n".utf8))
+            exit(1)
         }
 
-        func isWindowOpen() -> Bool {
-            engine?.isWindowOpen ?? false
-        }
+        let diagram = makeSampleDiagram()
+        renderDiagram(diagram, into: editor)
 
-        func isCanvasVisible() -> Bool {
-            engine?.isWindowVisible ?? false
-        }
+        let ui = UI()
+        var selectedBlockId: String? = nil
+        var clickCount = 0
 
-        func handleSlotEvent(_ event: CanvasSlotEvent) {
-            switch event {
-            case .hostActive(let active):
-                let wasActive = hostActive
-                hostActive = active
-                if !active {
-                    settleTask?.cancel()
-                    settleTask = nil
-                    hideCanvas()
-                } else if !wasActive {
-                    // Restored from minimize — reattach once we have a frame.
-                    scheduleSettleAndShow()
+        func rebuildChrome() {
+            ui.beginCommit()
+            let blocks = diagram.blocks.values.sorted { $0.name < $1.name }
+            let sel = selectedBlockId ?? blocks.first.map { String($0.id.rawValue) }
+
+            let root = ui.HStack(flexGrow: 1, padding: 4) {
+                // Left: project tree as Text labels
+                ui.VStack(width: 220, padding: 8) {
+                    ui.Text("Project", r: 0.7, g: 0.75, b: 0.9)
+                    ui.Text("Diagrams", r: 0.55, g: 0.55, b: 0.6)
+                    ui.Text("  Main", r: 0.85, g: 0.85, b: 0.85)
+                    for b in blocks {
+                        let id = String(b.id.rawValue)
+                        let selected = (id == sel)
+                        ui.Text(
+                            "  \(b.name)",
+                            r: selected ? 1.0 : 0.8,
+                            g: selected ? 0.85 : 0.8,
+                            b: selected ? 0.4 : 0.8,
+                            onClick: {
+                                selectedBlockId = id
+                                clickCount += 1
+                                FileHandle.standardError.write(
+                                    Data("click: \(b.name) (#\(clickCount))\n".utf8)
+                                )
+                            }
+                        )
+                    }
+                    ui.Spacer()
+                    ui.Text(
+                        "clicks: \(clickCount)",
+                        r: 0.5, g: 0.6, b: 0.5
+                    )
                 }
 
-            case .frameChanged(let frame):
-                guard frame.width > 1, frame.height > 1 else { return }
-                pendingFrame = frame
-                // During continuous move/resize: hide immediately so the user
-                // sees the Swift placeholder instead of a lagging overlay.
-                hideCanvas()
-                scheduleSettleAndShow()
+                // Center: FBD diagram host (Yoga flex-grow)
+                ui.DiagramHost()
+
+                // Right: properties for selection
+                ui.VStack(width: 260, padding: 8) {
+                    ui.Text("Properties", r: 0.7, g: 0.75, b: 0.9)
+                    if let sel, let bid = Int(sel),
+                       let block = diagram.blocks[BlockID(bid)]
+                    {
+                        ui.Text("Name: \(block.name)")
+                        ui.Text("Kind: \(block.kind.displayName)")
+                        ui.Text("In: \(block.inputs.count)  Out: \(block.outputs.count)")
+                        for (k, v) in block.properties.sorted(by: { $0.key < $1.key }) {
+                            ui.Text("\(k): \(v.description)", r: 0.75, g: 0.75, b: 0.75)
+                        }
+                    } else {
+                        ui.Text("(nothing selected)", r: 0.5, g: 0.5, b: 0.5)
+                    }
+                    ui.Spacer()
+                    ui.Text(
+                        "Hot-update: re-commit tree",
+                        r: 0.45, g: 0.55, b: 0.5
+                    )
+                }
             }
+
+            editor.commitUI(root, ui: ui)
         }
 
-        private func hideCanvas() {
-            guard let engine, engine.isWindowOpen else { return }
-            // Always post hide — render thread applies it (GLFW-thread-safe).
-            engine.setWindowVisible(false)
-        }
+        rebuildChrome()
 
-        private func scheduleSettleAndShow() {
-            settleTask?.cancel()
-            let delay = settleDelayMs
-            settleTask = Task {
-                try? await Task.sleep(for: .milliseconds(delay))
-                guard !Task.isCancelled else { return }
-                await self.applySettledFrameAndShow()
+        // ST editor sits in diagram-local coords (offset/scissor by C++).
+        let editorId = editor.addTextWidget(
+            x: 24, y: 360, w: 420, h: 120,
+            text: """
+            // FUNCTION expression
+            IF speed > 10.0 THEN
+              out := TRUE;
+            END_IF
+            """,
+            multiline: true
+        )
+        _ = editor.addTextHighlight(
+            id: editorId, pattern: #"//[^\n]*"#,
+            r: 0.40, g: 0.70, b: 0.40, priority: 10
+        )
+        _ = editor.addTextHighlight(
+            id: editorId,
+            pattern: #"\b(IF|THEN|ELSE|END_IF|TRUE|FALSE)\b"#,
+            r: 0.75, g: 0.55, b: 1.0, priority: 5
+        )
+        editor.setTextWidgetFocused(editorId, true)
+
+        var lastSelected = selectedBlockId
+        var lastClicks = clickCount
+        while editor.isOpen {
+            editor.dispatchUIEvents(ui: ui)
+            // Structural hot update: re-commit tree when Swift state changes.
+            // (Cheap for small trees; this is the "hot reload of the tree" path.)
+            if selectedBlockId != lastSelected || clickCount != lastClicks {
+                lastSelected = selectedBlockId
+                lastClicks = clickCount
+                rebuildChrome()
             }
-        }
-
-        private func applySettledFrameAndShow() {
-            guard let engine, engine.isWindowOpen else { return }
-            guard hostActive else { return }
-            guard let frame = pendingFrame, frame.width > 1, frame.height > 1 else { return }
-
-            // Always re-apply frame + show. Even if the rect is unchanged we
-            // may have been hidden during the drag; skipping setWindowFrame
-            // when equal was fine, but we must always setVisible(true).
-            lastAppliedFrame = frame
-            engine.setWindowFrame(
-                x: frame.x, y: frame.y,
-                width: frame.width, height: frame.height
-            )
-            engine.setWindowVisible(true)
-        }
-
-        func pollEditorPreview() -> String? {
-            guard let engine, let editorID else { return nil }
-            _ = engine.textWidgetChanged(editorID)
-            return engine.textWidgetText(editorID)
+            Thread.sleep(forTimeInterval: 0.016)
         }
     }
-#endif
+
+    static func assetsRoot() -> String {
+        if let env = ProcessInfo.processInfo.environment["CANVAS_ASSETS_ROOT"], !env.isEmpty {
+            return env
+        }
+        return URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("canvas/.build.Debug")
+            .path
+    }
+}
+
+#else
 
 @main
-@HotReloadable
-struct YourApp: App {
-    @State var count = 0
-    @State var canvasStatus = "Canvas: starting…"
-    @State var editorPreview = "(edit text in the canvas slot)"
-    @State var slotLabel = "slot: –"
-    #if canImport(CanvasKit)
-        @State var canvasRunner = CanvasRunner()
-    #endif
-
-    var body: some Scene {
-        WindowGroup("YourApp") {
-            #hotReloadable {
-                HStack(alignment: .top, spacing: 0) {
-                    VStack(alignment: .leading, spacing: 10) {
-                        Text("SwiftCrossUI chrome")
-                        Text(canvasStatus)
-                        Text(slotLabel)
-                        Text(
-                            "During move/resize/minimize the live canvas hides "
-                                + "and the slot placeholder shows. After ~150ms "
-                                + "idle it reattaches."
-                        )
-                        .frame(maxWidth: 280, alignment: .leading)
-
-                        Divider()
-
-                        Text("Editor buffer:")
-                        Text(editorPreview)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-
-                        Spacer()
-                    }
-                    .padding()
-                    .frame(width: 300)
-
-                    Divider()
-
-                    VStack(spacing: 0) {
-                        CanvasLayoutSlot(minWidth: 400, minHeight: 280) { event in
-                            switch event {
-                            case .frameChanged(let frame):
-                                slotLabel =
-                                    "slot: \(frame.width)×\(frame.height) @ (\(frame.x),\(frame.y))"
-                            case .hostActive(let active):
-                                if !active {
-                                    slotLabel = "slot: host inactive (minimized)"
-                                }
-                            }
-                            #if canImport(CanvasKit)
-                                Task {
-                                    await canvasRunner.handleSlotEvent(event)
-                                }
-                            #endif
-                        }
-                    }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-
-                    Divider()
-
-                    VStack {
-                        HStack {
-                            Button("-") { count -= 1 }
-                            Text("Count: \(count)")
-                            Button("+") { count += 1 }
-                        }.padding()
-
-                        Divider()
-
-                        ScrollView {
-                            TreeView(sampleFileTree, children: \.children) { node in
-                                Text(node.name)
-                            }
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                        }
-                        .frame(width: 260)
-                        .background(Color(red: 1.0, green: 1.0, blue: 1.0))
-                        .padding()
-                    }
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(Color(red: 0.10, green: 0.11, blue: 0.15))
-                .task {
-                    #if canImport(CanvasKit)
-                        let ok = await canvasRunner.ensureStarted(assetsRoot: canvasAssetsRoot)
-                        canvasStatus = ok
-                            ? "Canvas: ready (hide-on-move)"
-                            : "Canvas: failed to open (see stderr)"
-
-                        while !Task.isCancelled {
-                            if let text = await canvasRunner.pollEditorPreview() {
-                                editorPreview = text
-                            }
-                            if !(await canvasRunner.isWindowOpen()) {
-                                canvasStatus = "Canvas: closed"
-                            } else if await canvasRunner.isCanvasVisible() {
-                                canvasStatus = "Canvas: live"
-                            } else {
-                                canvasStatus = "Canvas: paused (placeholder)"
-                            }
-                            try? await Task.sleep(for: .milliseconds(250))
-                        }
-                    #endif
-                }
-            }
-        }
-        .defaultSize(width: 1200, height: 700)
+struct HelloWorldApp {
+    static func main() {
+        FileHandle.standardError.write(
+            Data("HelloWorld: CxxCanvas requires Linux + libcanvas.\n".utf8)
+        )
+        exit(1)
     }
 }
+
+#endif

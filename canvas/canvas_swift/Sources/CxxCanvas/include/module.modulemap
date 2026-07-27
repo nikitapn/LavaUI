@@ -1,0 +1,8 @@
+// C++ interop entry for the canvas engine (no Gtk — safe to enable .Cxx).
+// Implementation lives in libcanvas.so (Meson).
+module CxxCanvas {
+  header "CanvasEngine.hpp"
+  link "canvas"
+  export *
+  requires cplusplus
+}

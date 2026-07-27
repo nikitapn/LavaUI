@@ -386,6 +386,83 @@ public final class CanvasEngine: @unchecked Sendable {
         canvas_wants_animation(ctx)
     }
 
+    // MARK: - Shell model (project tree + properties)
+
+    public struct TreeItem: Sendable {
+        public var id: String
+        public var label: String
+        public var depth: Int
+        public var selected: Bool
+        public init(id: String, label: String, depth: Int = 0, selected: Bool = false) {
+            self.id = id
+            self.label = label
+            self.depth = depth
+            self.selected = selected
+        }
+    }
+
+    public struct PropertyItem: Sendable {
+        public var key: String
+        public var value: String
+        public init(key: String, value: String) {
+            self.key = key
+            self.value = value
+        }
+    }
+
+    public func setProjectTree(_ items: [TreeItem]) {
+        var owned: [UnsafeMutablePointer<CChar>] = []
+        defer { owned.forEach { free($0) } }
+        var finalItems: [CanvasTreeItem] = []
+        finalItems.reserveCapacity(items.count)
+        for item in items {
+            let idp = strdup(item.id)!
+            let lp = strdup(item.label)!
+            owned.append(idp)
+            owned.append(lp)
+            finalItems.append(
+                CanvasTreeItem(
+                    id: idp, label: lp,
+                    depth: Int32(item.depth), selected: item.selected
+                )
+            )
+        }
+        finalItems.withUnsafeBufferPointer { buf in
+            canvas_set_project_tree(ctx, buf.baseAddress, Int32(buf.count))
+        }
+    }
+
+    public func setProperties(_ items: [PropertyItem]) {
+        var owned: [UnsafeMutablePointer<CChar>] = []
+        defer { owned.forEach { free($0) } }
+        var finalItems: [CanvasPropertyItem] = []
+        for item in items {
+            let kp = strdup(item.key)!
+            let vp = strdup(item.value)!
+            owned.append(kp)
+            owned.append(vp)
+            finalItems.append(CanvasPropertyItem(key: kp, value: vp))
+        }
+        finalItems.withUnsafeBufferPointer { buf in
+            canvas_set_properties(ctx, buf.baseAddress, Int32(buf.count))
+        }
+    }
+
+    public func selectedTreeId() -> String {
+        let len = canvas_selected_tree_id(ctx, nil, 0)
+        guard len > 0 else { return "" }
+        var buffer = [CChar](repeating: 0, count: Int(len) + 1)
+        _ = canvas_selected_tree_id(ctx, &buffer, buffer.count)
+        let bytes = buffer.prefix(while: { $0 != 0 }).map { UInt8(bitPattern: $0) }
+        return String(decoding: bytes, as: UTF8.self)
+    }
+
+    public func diagramViewport() -> (x: Double, y: Double, w: Double, h: Double) {
+        var x: Float = 0, y: Float = 0, w: Float = 0, h: Float = 0
+        canvas_diagram_viewport(ctx, &x, &y, &w, &h)
+        return (Double(x), Double(y), Double(w), Double(h))
+    }
+
     // MARK: - Input
 
     public func pointerMove(x: Double, y: Double) {

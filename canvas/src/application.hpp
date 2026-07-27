@@ -7,6 +7,8 @@
 #include <vector>
 
 #include "render/text_widget.hpp"
+#include "shell/layout.hpp"
+#include "shell/model.hpp"
 #include "util/result.hpp"
 
 class Application {
@@ -88,6 +90,32 @@ public:
   /// (~60 Hz) — currently: any text widget has focus (caret blink, smooth
   /// selection drag). False means repaint-on-change is enough.
   bool wantsAnimation() const;
+
+  // ─── Shell model (tree + properties, driven from Swift FBDModel) ───────
+  void setProjectTree(std::vector<canvas::TreeItem> items);
+  void setProperties(std::vector<canvas::PropertyItem> items);
+  std::string selectedTreeId() const;
+  /// Diagram panel rect in window pixels (from Yoga layout).
+  shell::Rect diagramViewport() const;
+
+  /// Replace the Yoga workspace tree (e.g. columns from Swift).
+  void setWorkspaceLayout(shell::Node root);
+  /// Convenience: three columns with fixed side widths.
+  void setWorkspaceColumns(shell::PanelKind left, shell::PanelKind center,
+                           shell::PanelKind right,
+                           float leftWidth, float rightWidth);
+
+  // ─── Declarative UI tree (SwiftUI-style, Yoga + TextRenderer) ───────────
+  // Builder: uiReset → uiBegin/uiText… → uiEnd → uiCommit.
+  // Kind: 0=Row, 1=Column, 2=Text (use uiText), 3=Spacer, 4=DiagramHost.
+  // width/height < 0 means auto. Events: uiPollEvent → widgetId + kind (0=Click).
+  void uiReset();
+  void uiBegin(int kind, int id, float flexGrow, float flexShrink,
+               float width, float height, float padding);
+  void uiText(int id, const char *text, float r, float g, float b, bool clickable);
+  void uiEnd();
+  void uiCommit();
+  bool uiPollEvent(int &outWidgetId, int &outKind);
 
   // ─── Input bridge (canvas-local coords, GLFW-style key codes) ───────────
 

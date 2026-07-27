@@ -1921,20 +1921,20 @@ void Vulkan::initWithWindow(
     throw std::runtime_error("glfwInit failed");
   }
   glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
-  glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);
+  glfwWindowHint(GLFW_RESIZABLE, GLFW_TRUE);
   // Tool-style canvas surface: no title bar / system menu / border chrome.
   // (Drag-to-move can be added later via a custom hit region.)
-  glfwWindowHint(GLFW_DECORATED, GLFW_FALSE);
+  // glfwWindowHint(GLFW_DECORATED, GLFW_FALSE);
   // Stay above the Gtk chrome window so the layout-slot overlay isn't buried.
-  glfwWindowHint(GLFW_FLOATING, GLFW_TRUE);
+  // glfwWindowHint(GLFW_FLOATING, GLFW_TRUE);
   // Prefer not stealing focus from the Swift chrome window on open.
   glfwWindowHint(GLFW_FOCUS_ON_SHOW, GLFW_FALSE);
   // Wayland: share app_id with the host if possible so the compositor may
   // group surfaces (does not hide from dock — see window_platform.cpp).
-  glfwWindowHintString(GLFW_WAYLAND_APP_ID, "com.example.HelloWorld");
+  // glfwWindowHintString(GLFW_WAYLAND_APP_ID, "com.example.HelloWorld");
   // X11: fixed WM_CLASS so the surface is identifiable / not a random title.
-  glfwWindowHintString(GLFW_X11_CLASS_NAME, "HelloWorldCanvas");
-  glfwWindowHintString(GLFW_X11_INSTANCE_NAME, "helloworld-canvas");
+  // glfwWindowHintString(GLFW_X11_CLASS_NAME, "HelloWorldCanvas");
+  // glfwWindowHintString(GLFW_X11_INSTANCE_NAME, "helloworld-canvas");
 
   window_ = glfwCreateWindow(width, height, title ? title : "Canvas", nullptr, nullptr);
   if (!window_) {

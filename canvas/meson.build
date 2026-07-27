@@ -95,12 +95,16 @@ engine_sources = [
   'src/render/mesh3d_renderer.cpp',
   'src/render/line_renderer.cpp',
   'src/render/text_widget.cpp',
+  'src/shell/layout.cpp',
+  'src/shell/widget.cpp',
   'src/window/canvas_window.cpp',
   'src/window/window_platform.cpp',
   'src/util/util.cpp',
   'src/util/cout_ext.cpp',
   'src/bridge/canvas_bridge.cpp',
   'src/bridge/canvas_c_api.cpp',
+  'src/bridge/canvas_engine.cpp',
+  'src/bridge/swift_editor.cpp',
 ]
 
 main_inc = include_directories(
@@ -112,6 +116,7 @@ main_inc = include_directories(
   'third-party/freetype/include',
   'third-party/stb',
   'third-party/taskflow',
+  'third-party/yoga',
 )
 
 common_cpp_args = ['-DGLM_FORCE_DEPTH_ZERO_TO_ONE'] + (cpp.get_id() == 'clang' ? ['-stdlib=libc++'] : [])
@@ -120,7 +125,41 @@ if x11_dep.found()
 endif
 common_link_args = cpp.get_id() == 'clang' ? ['-stdlib=libc++'] : []
 
-canvas_deps = [vulkan_dep, freetype_dep, glfw_dep, imgui_dep]
+# ——— Yoga (flexbox layout for app chrome) ———
+yoga_inc = include_directories('third-party/yoga')
+yoga_sources = [
+  'third-party/yoga/yoga/YGConfig.cpp',
+  'third-party/yoga/yoga/YGEnums.cpp',
+  'third-party/yoga/yoga/YGNode.cpp',
+  'third-party/yoga/yoga/YGNodeLayout.cpp',
+  'third-party/yoga/yoga/YGNodeStyle.cpp',
+  'third-party/yoga/yoga/YGPixelGrid.cpp',
+  'third-party/yoga/yoga/YGValue.cpp',
+  'third-party/yoga/yoga/algorithm/AbsoluteLayout.cpp',
+  'third-party/yoga/yoga/algorithm/Baseline.cpp',
+  'third-party/yoga/yoga/algorithm/Cache.cpp',
+  'third-party/yoga/yoga/algorithm/CalculateLayout.cpp',
+  'third-party/yoga/yoga/algorithm/FlexLine.cpp',
+  'third-party/yoga/yoga/algorithm/PixelGrid.cpp',
+  'third-party/yoga/yoga/config/Config.cpp',
+  'third-party/yoga/yoga/debug/AssertFatal.cpp',
+  'third-party/yoga/yoga/debug/Log.cpp',
+  'third-party/yoga/yoga/event/event.cpp',
+  'third-party/yoga/yoga/node/LayoutResults.cpp',
+  'third-party/yoga/yoga/node/Node.cpp',
+]
+yoga_lib = static_library('yoga',
+  sources: yoga_sources,
+  include_directories: yoga_inc,
+  cpp_args: common_cpp_args,
+  link_args: common_link_args,
+)
+yoga_dep = declare_dependency(
+  link_with: yoga_lib,
+  include_directories: yoga_inc,
+)
+
+canvas_deps = [vulkan_dep, freetype_dep, glfw_dep, imgui_dep, yoga_dep]
 if x11_dep.found()
   canvas_deps += [x11_dep]
 endif
