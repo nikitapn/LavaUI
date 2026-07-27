@@ -8,6 +8,11 @@
 #include "util/result.hpp"
 #include "util/types.hpp"
 
+// Not canvas::TextMetrics (render/font.hpp) — that one's float
+// width/height/ascent/descent for Yoga; this is TextRenderer's own
+// pre-existing int w/h public contract, kept as-is so callers (e.g.
+// Application::uiCommit's label sizing) don't need to change. Both are
+// computed from the same canvas::Font now, just rounded differently.
 struct TextMetrics {
   int w, h;
 };

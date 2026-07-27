@@ -20,9 +20,10 @@ cpp = meson.get_compiler('cpp')
 # to diverge from the platform default here.
 
 # ——— System dependencies ———
-vulkan_dep  = dependency('vulkan')
+vulkan_dep   = dependency('vulkan')
 freetype_dep = dependency('freetype2')
-glfw_dep    = dependency('glfw3')
+harfbuzz_dep = dependency('harfbuzz')
+glfw_dep     = dependency('glfw3')
 # Optional: X11 native hints so the canvas can skip the taskbar/dock.
 x11_dep     = dependency('x11', required: false)
 
@@ -97,6 +98,7 @@ engine_sources = [
   'src/render/texture_manager.cpp',
   'src/render/compute_physics.cpp',
   'src/render/text_renderer.cpp',
+  'src/render/font.cpp',
   'src/render/geometry_renderer.cpp',
   'src/render/mesh3d_renderer.cpp',
   'src/render/line_renderer.cpp',
@@ -164,7 +166,7 @@ yoga_dep = declare_dependency(
   include_directories: yoga_inc,
 )
 
-canvas_deps = [vulkan_dep, freetype_dep, glfw_dep, imgui_dep, yoga_dep]
+canvas_deps = [vulkan_dep, freetype_dep, harfbuzz_dep, glfw_dep, imgui_dep, yoga_dep]
 if x11_dep.found()
   canvas_deps += [x11_dep]
 endif

@@ -6,12 +6,9 @@
 #include <stdexcept>
 #include <unordered_map>
 
-#include <ft2build.h>
-#include FT_FREETYPE_H
-
 #include <glm/gtc/matrix_transform.hpp>
 
-#include "util/util.hpp"
+#include "render/font.hpp"
 #include "render/vulkan.hpp"
 #include "render/shaders.hpp"
 #include "render/text_renderer.hpp"
@@ -26,11 +23,14 @@ struct TextInstance {
   vec4 color;          // Text color with alpha (16 bytes, offset 32) - padded to vec4 for alignment
 };
 
+// Keyed by glyph index (canvas::PositionedGlyph::glyphId), not Unicode
+// codepoint — a glyph index is what Font::rasterize() wants, and what lets
+// a ligature (several codepoints, one substituted glyph) cache and draw
+// correctly instead of only ever being reachable by codepoint.
 struct GlyphInfo {
-  vec2  atlasUV[2];  // Top-left and bottom-right UV coordinates
-  vec2  size;        // Glyph dimensions in pixels
-  vec2  bearing;     // Glyph bearing (offset from baseline)
-  float advance;     // Horizontal advance
+  vec2 atlasUV[2];  // Top-left and bottom-right UV coordinates
+  vec2 size;        // Glyph dimensions in pixels
+  vec2 bearing;     // Glyph bearing (offset from baseline)
 };
 
 }
@@ -40,9 +40,11 @@ struct TextRenderer::Impl {
   Vulkan& vulkan_;
   Shaders shaders_;
 
-  // Font/Atlas data
-  FT_Library                              library_;
-  FT_Face                                 face_;
+  // Font/Atlas data. Shaping (HarfBuzz) and rasterization (FreeType) both
+  // live behind canvas::Font now — this class only caches rasterized
+  // bitmaps into its own Vulkan atlas and never touches FreeType/HarfBuzz
+  // directly.
+  canvas::Font                            font_;
   std::unordered_map<uint32_t, GlyphInfo> glyphMap_;
 
   // Vulkan resources
@@ -77,8 +79,6 @@ struct TextRenderer::Impl {
   Impl(Vulkan& vulkan)
       : vulkan_(vulkan),
         shaders_(vulkan),
-        library_(nullptr),
-        face_(nullptr),
         atlasTexture_(VK_NULL_HANDLE),
         atlasTextureMemory_(VK_NULL_HANDLE),
         atlasTextureView_(VK_NULL_HANDLE),
@@ -107,56 +107,72 @@ struct TextRenderer::Impl {
     createRenderingPipeline();
   }
 
+  // Idempotent on purpose: called explicitly from Application::shutdown()
+  // (before vulkan.cleanUp() destroys the VkDevice) *and* implicitly from
+  // ~Impl() below (whenever this object itself is destroyed, which happens
+  // later, after the device is already gone). Every handle is reset to
+  // VK_NULL_HANDLE after destruction so the second call's guards all see
+  // null and skip — otherwise that second call tries to destroy already-
+  // destroyed handles against an already-destroyed device. Same pattern
+  // LineRenderer::destroy() already uses.
   void cleanUp() {
     VkDevice device = vulkan_.getDevice();
 
     // Cleanup Shaders
     shaders_.cleanUp();
 
-    // Cleanup FreeType
-    if (face_) {
-      FT_Done_Face(face_);
-    }
-    if (library_) {
-      FT_Done_FreeType(library_);
-    }
+    // font_ (FreeType/HarfBuzz) has no Vulkan dependency, so its own
+    // destructor (whenever Impl is destroyed) is sufficient — no explicit
+    // teardown needed here the way the Vulkan resources below require.
 
     // Cleanup Vulkan resources
     if (instanceBuffer_ != VK_NULL_HANDLE) {
       vkDestroyBuffer(device, instanceBuffer_, nullptr);
+      instanceBuffer_ = VK_NULL_HANDLE;
     }
     if (instanceBufferMemory_ != VK_NULL_HANDLE) {
       vkFreeMemory(device, instanceBufferMemory_, nullptr);
+      instanceBufferMemory_ = VK_NULL_HANDLE;
     }
     if (quadVertexBuffer_ != VK_NULL_HANDLE) {
       vkDestroyBuffer(device, quadVertexBuffer_, nullptr);
+      quadVertexBuffer_ = VK_NULL_HANDLE;
     }
     if (quadVertexBufferMemory_ != VK_NULL_HANDLE) {
       vkFreeMemory(device, quadVertexBufferMemory_, nullptr);
+      quadVertexBufferMemory_ = VK_NULL_HANDLE;
     }
     if (renderPipeline_ != VK_NULL_HANDLE) {
       vkDestroyPipeline(device, renderPipeline_, nullptr);
+      renderPipeline_ = VK_NULL_HANDLE;
     }
     if (pipelineLayout_ != VK_NULL_HANDLE) {
       vkDestroyPipelineLayout(device, pipelineLayout_, nullptr);
+      pipelineLayout_ = VK_NULL_HANDLE;
     }
     if (descriptorPool_ != VK_NULL_HANDLE) {
       vkDestroyDescriptorPool(device, descriptorPool_, nullptr);
+      descriptorPool_ = VK_NULL_HANDLE;
     }
     if (descriptorSetLayout_ != VK_NULL_HANDLE) {
       vkDestroyDescriptorSetLayout(device, descriptorSetLayout_, nullptr);
+      descriptorSetLayout_ = VK_NULL_HANDLE;
     }
     if (atlasSampler_ != VK_NULL_HANDLE) {
       vkDestroySampler(device, atlasSampler_, nullptr);
+      atlasSampler_ = VK_NULL_HANDLE;
     }
     if (atlasTextureView_ != VK_NULL_HANDLE) {
       vkDestroyImageView(device, atlasTextureView_, nullptr);
+      atlasTextureView_ = VK_NULL_HANDLE;
     }
     if (atlasTexture_ != VK_NULL_HANDLE) {
       vkDestroyImage(device, atlasTexture_, nullptr);
+      atlasTexture_ = VK_NULL_HANDLE;
     }
     if (atlasTextureMemory_ != VK_NULL_HANDLE) {
       vkFreeMemory(device, atlasTextureMemory_, nullptr);
+      atlasTextureMemory_ = VK_NULL_HANDLE;
     }
   }
 
@@ -164,33 +180,18 @@ struct TextRenderer::Impl {
     cleanUp();
   }
 
-  canvas::VoidResult initializeFreeType(const std::string& fontPath, int fontSize) {
-    if (library_) {
-      // Reload: tear down previous face/library.
-      if (face_) {
-        FT_Done_Face(face_);
-        face_ = nullptr;
-      }
-      FT_Done_FreeType(library_);
-      library_ = nullptr;
+  canvas::VoidResult loadFont(const std::string& fontPath, int fontSize) {
+    // font_.load() itself handles reload (tears down any previously loaded
+    // FreeType/HarfBuzz state before loading the new one).
+    auto result = font_.load(fontPath, static_cast<float>(fontSize));
+    if (!result) {
+      return result;
     }
 
-    FT_Error error = FT_Init_FreeType(&library_);
-    if (error) {
-      return canvas::fail("Failed to initialize FreeType");
-    }
-
-    error = FT_New_Face(library_, fontPath.c_str(), 0, &face_);
-    if (error) {
-      FT_Done_FreeType(library_);
-      library_ = nullptr;
-      return canvas::fail("Failed to load font: " + fontPath);
-    }
-
-    FT_Set_Pixel_Sizes(face_, 0, fontSize);
-
-    lineHeight_ = static_cast<int>(
-      (face_->size->metrics.ascender - face_->size->metrics.descender) / 64);
+    // Cached locally (rather than calling font_.lineHeight() from the
+    // atlas-packing code below) since that code runs in a tight loop and
+    // this value never changes without a reload.
+    lineHeight_ = static_cast<int>(font_.lineHeight());
     return canvas::ok();
   }
 
@@ -551,30 +552,17 @@ struct TextRenderer::Impl {
        "Failed to create text graphics pipeline");
   }
 
-  GlyphInfo& getOrCreateGlyph(uint32_t codepoint) {
-    auto it = glyphMap_.find(codepoint);
+  GlyphInfo& getOrCreateGlyph(uint32_t glyphId) {
+    auto it = glyphMap_.find(glyphId);
     if (it != glyphMap_.end()) {
       return it->second;
     }
 
-    if (!face_) {
+    if (!font_.isLoaded()) {
       throw std::runtime_error("No font loaded for glyph rendering");
     }
 
-    // Load glyph
-    FT_UInt  glyphIndex = FT_Get_Char_Index(face_, codepoint);
-    FT_Error error      = FT_Load_Glyph(face_, glyphIndex, FT_LOAD_DEFAULT);
-    if (error) {
-      throw std::runtime_error("Failed to load glyph");
-    }
-
-    error = FT_Render_Glyph(face_->glyph, FT_RENDER_MODE_NORMAL);
-    if (error) {
-      throw std::runtime_error("Failed to render glyph");
-    }
-
-    FT_GlyphSlot slot   = face_->glyph;
-    FT_Bitmap&   bitmap = slot->bitmap;
+    canvas::GlyphBitmap bitmap = font_.rasterize(glyphId);
 
     // Check if glyph fits in current line
     if (currentX_ + bitmap.width > atlasWidth_) {
@@ -588,7 +576,7 @@ struct TextRenderer::Impl {
     }
 
     // Upload glyph to atlas
-    if (bitmap.width > 0 && bitmap.rows > 0) {
+    if (bitmap.width > 0 && bitmap.height > 0) {
       updateAtlasTexture(bitmap, currentX_, currentY_);
     }
 
@@ -598,58 +586,19 @@ struct TextRenderer::Impl {
                         static_cast<float>(currentY_) / atlasHeight_};
     glyph.atlasUV[1] = {
       static_cast<float>(currentX_ + bitmap.width) / atlasWidth_,
-      static_cast<float>(currentY_ + bitmap.rows) / atlasHeight_};
+      static_cast<float>(currentY_ + bitmap.height) / atlasHeight_};
     glyph.size    = {static_cast<float>(bitmap.width),
-                     static_cast<float>(bitmap.rows)};
-    glyph.bearing = {static_cast<float>(slot->bitmap_left),
-                     static_cast<float>(slot->bitmap_top)};
-    glyph.advance = static_cast<float>(slot->advance.x / 64);
+                     static_cast<float>(bitmap.height)};
+    glyph.bearing = {bitmap.bearingX, bitmap.bearingY};
 
     currentX_ += bitmap.width + 1;  // Add 1 pixel padding
 
-    return glyphMap_[codepoint] = glyph;
+    return glyphMap_[glyphId] = glyph;
   }
 
-  // Get kerning adjustment between two characters
-  float getKerning(uint32_t leftChar, uint32_t rightChar) {
-    if (!face_ || !FT_HAS_KERNING(face_)) {
-      return 0.0f;  // Font doesn't support kerning
-    }
-
-    FT_UInt leftIndex = FT_Get_Char_Index(face_, leftChar);
-    FT_UInt rightIndex = FT_Get_Char_Index(face_, rightChar);
-
-    if (leftIndex == 0 || rightIndex == 0) {
-      return 0.0f;  // One of the characters not found
-    }
-
-    FT_Vector kerning;
-    FT_Error error = FT_Get_Kerning(face_, leftIndex, rightIndex, FT_KERNING_DEFAULT, &kerning);
-    
-    if (error) {
-      return 0.0f;  // Error getting kerning
-    }
-
-    // Convert from 26.6 fractional pixels to regular pixels
-    float kernOffset = static_cast<float>(kerning.x / 64.0f);
-    
-#if TEXT_RENDERER_DEBUG
-    // Debug output for significant kerning adjustments
-    if (std::abs(kernOffset) > 0.5f) {
-      static int debugCounter = 0;
-      if (debugCounter++ % 60 == 0) {  // Print occasionally to avoid spam
-        std::cout << "Kerning: '" << static_cast<char>(leftChar) 
-                  << "' + '" << static_cast<char>(rightChar) 
-                  << "' = " << kernOffset << " pixels" << std::endl;
-      }
-    }
-#endif
-    return kernOffset;
-  }
-
-  void updateAtlasTexture(const FT_Bitmap& bitmap, int x, int y) {
+  void updateAtlasTexture(const canvas::GlyphBitmap& bitmap, int x, int y) {
     // Create staging buffer
-    VkDeviceSize bufferSize = bitmap.width * bitmap.rows;
+    VkDeviceSize bufferSize = static_cast<VkDeviceSize>(bitmap.width) * bitmap.height;
     if (bufferSize == 0) return;
 
     VkBuffer       stagingBuffer;
@@ -666,7 +615,7 @@ struct TextRenderer::Impl {
     void*    data;
     VkDevice device = vulkan_.getDevice();
     vkMapMemory(device, stagingBufferMemory, 0, bufferSize, 0, &data);
-    memcpy(data, bitmap.buffer, bufferSize);
+    memcpy(data, bitmap.pixels.data(), bufferSize);
     vkUnmapMemory(device, stagingBufferMemory);
 
     // Copy from staging buffer to texture
@@ -717,7 +666,7 @@ struct TextRenderer::Impl {
         },
       .imageOffset = {x, y, 0},
       .imageExtent = {static_cast<uint32_t>(bitmap.width),
-                      static_cast<uint32_t>(bitmap.rows),
+                      static_cast<uint32_t>(bitmap.height),
                       1},
     };
 
@@ -765,7 +714,7 @@ TextRenderer& TextRenderer::operator=(TextRenderer&& other) noexcept = default;
 void TextRenderer::init() { impl_->init(); }
 
 canvas::VoidResult TextRenderer::loadFont(const std::string& fontPath, int fontSize) {
-  return impl_->initializeFreeType(fontPath, fontSize);
+  return impl_->loadFont(fontPath, fontSize);
 }
 
 void TextRenderer::cleanUp() { impl_->cleanUp(); }
@@ -774,7 +723,7 @@ void TextRenderer::beginTextRendering() {
 }
 
 void TextRenderer::renderText(const std::string& text, vec2 position, vec3 color, TextAlign align) {
-    if (!impl_->face_) {
+    if (!impl_->font_.isLoaded()) {
         thread_local static int frameCointer = 0;
         if (frameCointer++ % 1000 == 0)
           std::cerr << "No font loaded, cannot render text." << std::endl;
@@ -794,36 +743,22 @@ void TextRenderer::renderText(const std::string& text, vec2 position, vec3 color
         }
     }
 
-    // Process each character using UTF-8 decoder
-    uint32_t previousChar = 0;  // Track previous character for kerning
-    utils::utf8::read(text, [&](uint32_t codepoint) {
-        if (codepoint == ' ') {
-            x += static_cast<float>(impl_->face_->size->metrics.max_advance / 64) * 0.5f;
-            previousChar = codepoint;
-            return;
-        }
+    // font_.shape() (HarfBuzz) already resolved codepoints to glyph
+    // indices and baked in every advance/kerning adjustment — no more
+    // manual UTF-8 walk, no more per-pair getKerning() calls, no more
+    // special-casing space.
+    for (const canvas::PositionedGlyph& g : impl_->font_.shape(text)) {
+        GlyphInfo& glyph = impl_->getOrCreateGlyph(g.glyphId);
 
-        // Apply kerning if we have a previous character
-        if (previousChar != 0) {
-            float kerningOffset = impl_->getKerning(previousChar, codepoint);
-            x += kerningOffset;
-        }
-
-        GlyphInfo& glyph = impl_->getOrCreateGlyph(codepoint);
-
-        // Create text instance
         TextInstance instance;
-        instance.position      = {x + glyph.bearing.x, y - glyph.bearing.y};
+        instance.position      = {x + g.x + glyph.bearing.x, y + g.y - glyph.bearing.y};
         instance.uvTopLeft     = glyph.atlasUV[0];
         instance.uvBottomRight = glyph.atlasUV[1];
         instance.size          = glyph.size;
         instance.color         = {color.x, color.y, color.z, 1.0f}; // Convert vec3 to vec4 with alpha
 
         impl_->instanceData_.push_back(instance);
-
-        x += glyph.advance;
-        previousChar = codepoint;  // Update previous character
-    });
+    }
 }
 
 void TextRenderer::endTextRendering() {
@@ -870,32 +805,14 @@ void TextRenderer::draw(VkCommandBuffer commandBuffer, vec2 viewportSize) {
 }
 
 TextMetrics TextRenderer::getTextMetrics(const std::string& text) {
-    if (!impl_->face_) return {0, 0};
+    if (!impl_->font_.isLoaded()) return {0, 0};
 
-    TextMetrics metrics = {0, impl_->lineHeight_};
-    float       width   = 0.0f;
-
-    uint32_t previousChar = 0;  // Track previous character for kerning
-    utils::utf8::read(text, [&](uint32_t codepoint) {
-        if (codepoint == ' ') {
-            width += static_cast<float>(impl_->face_->size->metrics.max_advance / 64) * 0.5f;
-            previousChar = codepoint;
-            return;
-        }
-
-        // Apply kerning if we have a previous character
-        if (previousChar != 0) {
-            float kerningOffset = impl_->getKerning(previousChar, codepoint);
-            width += kerningOffset;
-        }
-
-        GlyphInfo& glyph = impl_->getOrCreateGlyph(codepoint);
-        width += glyph.advance;
-        previousChar = codepoint;
-    });
-
-    metrics.w = static_cast<int>(width);
-    return metrics;
+    // Pure shaping — same measurement canvas::Font gives Swift for Yoga
+    // sizing, and (unlike the old walk, which called getOrCreateGlyph and
+    // so rasterized/uploaded every glyph as a side effect) this never
+    // touches the atlas: measuring text no longer implicitly renders it.
+    canvas::TextMetrics m = impl_->font_.measure(text);
+    return TextMetrics{static_cast<int>(m.width), static_cast<int>(m.height)};
 }
 
 float TextRenderer::getLineHeight() const {

@@ -19,6 +19,26 @@
       "target": "HelloWorld",
       "configuration": "release",
       "preLaunchTask": "swift: Build Release HelloWorld"
+    },
+    {
+      "type": "swift",
+      "request": "launch",
+      "args": [],
+      "cwd": "${workspaceFolder:HelloWorld}",
+      "name": "Debug Phase0Spikes",
+      "target": "Phase0Spikes",
+      "configuration": "debug",
+      "preLaunchTask": "swift: Build Debug Phase0Spikes"
+    },
+    {
+      "type": "swift",
+      "request": "launch",
+      "args": [],
+      "cwd": "${workspaceFolder:HelloWorld}",
+      "name": "Release Phase0Spikes",
+      "target": "Phase0Spikes",
+      "configuration": "release",
+      "preLaunchTask": "swift: Build Release Phase0Spikes"
     }
   ]
 }

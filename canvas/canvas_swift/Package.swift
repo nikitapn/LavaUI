@@ -26,6 +26,8 @@ let package = Package(
         // C++ interop surface (no Gtk). Use from targets with
         // interoperabilityMode(.Cxx). Implementation is still libcanvas.so.
         .library(name: "CxxCanvas", targets: ["CxxCanvas"]),
+        // Yoga's C API, compiled standalone by SwiftPM (no libcanvas.so)
+        .library(name: "CYoga", targets: ["CYoga"]),
     ],
     targets: [
         // Plain C bridge — still used by CanvasKit for a stable Swift API.
@@ -62,6 +64,19 @@ let package = Package(
                 .linkedLibrary("canvas"),
                 .unsafeFlags(["-L", buildPath]),
                 .unsafeFlags(["-Xlinker", "-rpath", "-Xlinker", buildPath]),
+            ]
+        ),
+
+        .target(
+            name: "CYoga",
+            dependencies: [],
+            path: "Sources/CYoga",
+            publicHeadersPath: "include",
+            cxxSettings: [
+                .unsafeFlags(["-std=c++20"]),
+            ],
+            linkerSettings: [
+                .linkedLibrary("m"),
             ]
         ),
     ]

@@ -1,0 +1,5 @@
+// Yoga's public API (yoga/Yoga.h and what it includes) is a plain C API
+module CYoga {
+  header "Yoga.h"
+  export *
+}

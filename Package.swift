@@ -8,6 +8,8 @@ let package = Package(
     platforms: [.macOS(.v13)],
     products: [
         .executable(name: "HelloWorld", targets: ["HelloWorld"]),
+        // Throwaway Phase 0 spikes (docs/declarative-ui-plan.md) — delete after Phase 1.
+        .executable(name: "Phase0Spikes", targets: ["Phase0Spikes"]),
         .library(name: "FBDModel", targets: ["FBDModel"]),
     ],
     dependencies: [
@@ -23,6 +25,11 @@ let package = Package(
                     package: "canvas_swift",
                     condition: .when(platforms: [.linux])
                 ),
+                .product(
+                    name: "CYoga",
+                    package: "canvas_swift",
+                    condition: .when(platforms: [.linux])
+                ),
             ],
             swiftSettings: [
                 .interoperabilityMode(.Cxx),
@@ -31,6 +38,28 @@ let package = Package(
                 // under an older default C++ standard and chokes on
                 // std::unexpected.
                 .unsafeFlags(["-Xcc", "-std=c++23"]),
+            ]
+        ),
+        // Phase 0 prep: parameter packs, Yoga measure, Font::measure.
+        .executableTarget(
+            name: "Phase0Spikes",
+            dependencies: [
+                .product(
+                    name: "CxxCanvas",
+                    package: "canvas_swift",
+                    condition: .when(platforms: [.linux])
+                ),
+                .product(
+                    name: "CYoga",
+                    package: "canvas_swift",
+                    condition: .when(platforms: [.linux])
+                ),
+            ],
+            swiftSettings: [
+                .interoperabilityMode(.Cxx),
+                .unsafeFlags(["-Xcc", "-std=c++23"]),
+                // C++ interop modules sometimes force script mode; keep @main.
+                .unsafeFlags(["-parse-as-library"]),
             ]
         ),
         .target(name: "FBDModel"),
