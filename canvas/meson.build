@@ -16,11 +16,13 @@ cpp = meson.get_compiler('cpp')
 # ——— System dependencies ———
 vulkan_dep  = dependency('vulkan')
 freetype_dep = dependency('freetype2')
+glfw_dep    = dependency('glfw3')
+# Optional: X11 native hints so the canvas can skip the taskbar/dock.
+x11_dep     = dependency('x11', required: false)
 
 # ——— ImGui (built from vendored source) ———
-# No imgui_impl_glfw.cpp: this is now an offscreen/headless renderer, so
-# there's no GLFW window for a platform backend to attach to. Only the
-# Vulkan render backend is needed.
+# Vulkan render backend + optional GLFW platform backend for the windowed
+# canvas (two-window embed: Swift chrome + GLFW canvas).
 imgui_inc = include_directories(
   'third-party/imgui',
   'third-party/imgui/backends',
@@ -34,9 +36,10 @@ imgui_lib = static_library('imgui',
     'third-party/imgui/imgui_tables.cpp',
     'third-party/imgui/imgui_demo.cpp',
     'third-party/imgui/backends/imgui_impl_vulkan.cpp',
+    'third-party/imgui/backends/imgui_impl_glfw.cpp',
   ],
   include_directories: imgui_inc,
-  dependencies: [vulkan_dep],
+  dependencies: [vulkan_dep, glfw_dep],
   cpp_args: ['-DIMGUI_IMPL_VULKAN_LOADER'],
 )
 
@@ -91,6 +94,9 @@ engine_sources = [
   'src/render/geometry_renderer.cpp',
   'src/render/mesh3d_renderer.cpp',
   'src/render/line_renderer.cpp',
+  'src/render/text_widget.cpp',
+  'src/window/canvas_window.cpp',
+  'src/window/window_platform.cpp',
   'src/util/util.cpp',
   'src/util/cout_ext.cpp',
   'src/bridge/canvas_bridge.cpp',
@@ -109,7 +115,15 @@ main_inc = include_directories(
 )
 
 common_cpp_args = ['-DGLM_FORCE_DEPTH_ZERO_TO_ONE'] + (cpp.get_id() == 'clang' ? ['-stdlib=libc++'] : [])
+if x11_dep.found()
+  common_cpp_args += ['-DCANVAS_HAVE_X11']
+endif
 common_link_args = cpp.get_id() == 'clang' ? ['-stdlib=libc++'] : []
+
+canvas_deps = [vulkan_dep, freetype_dep, glfw_dep, imgui_dep]
+if x11_dep.found()
+  canvas_deps += [x11_dep]
+endif
 
 # ——— Embeddable library ———
 # This is what Swift (or anything else) links against. canvas_bridge.hpp/.cpp
@@ -117,7 +131,7 @@ common_link_args = cpp.get_id() == 'clang' ? ['-stdlib=libc++'] : []
 canvas_lib = shared_library('canvas',
   sources: engine_sources,
   include_directories: main_inc,
-  dependencies: [vulkan_dep, freetype_dep, imgui_dep],
+  dependencies: canvas_deps,
   cpp_args: common_cpp_args,
   link_args: common_link_args,
   cpp_pch: 'src/pch.hpp',

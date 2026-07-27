@@ -4,21 +4,37 @@
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <vector>
+
+#include "render/text_widget.hpp"
+#include "util/result.hpp"
 
 class Application {
   struct Impl;
   std::unique_ptr<Impl> impl_;
 public:
-  // Sets up Vulkan/rendering. assetsRoot is the directory assets/shaders are
-  // loaded from (previously this was inferred from argv[0]'s parent dir,
-  // which doesn't make sense once this is embedded in another process).
-  void init(const std::string &assetsRoot);
+  // Sets up Vulkan/rendering. assetsRoot is the directory that contains the
+  // `assets/` and `shaders/` folders (e.g. canvas/.build.Debug). Prefer
+  // absolute paths; do not rely on process cwd.
+  // Offscreen path (readPixels / smoke tests).
+  [[nodiscard]] canvas::VoidResult init(const std::string &assetsRoot);
 
-  // Renders the current retained scene (see add/update/removeShape below) to
-  // the offscreen target. Call this whenever you want a new frame — after
-  // changing the scene, or on whatever cadence you like; there's no
-  // fixed-timestep loop driving it. Returns false if the engine hit an
-  // unrecoverable error.
+  // Opens a GLFW window and presents via swapchain (no readback on the hot
+  // path). Input is delivered through GLFW callbacks into the engine.
+  [[nodiscard]] canvas::VoidResult initWithWindow(
+    const std::string &assetsRoot, const std::string &title);
+
+  bool windowShouldClose() const;
+
+  /// Place the GLFW window over a layout slot (screen coordinates, pixels).
+  /// Size changes rebuild the Vulkan framebuffer on the next ensure/repaint.
+  void setWindowFrame(int x, int y, int width, int height);
+
+  /// Show or hide the GLFW window (does not destroy it).
+  void setWindowVisible(bool visible);
+
+  // Renders the current retained scene. Offscreen: to the readback target.
+  // Windowed: blit to swapchain and present. Returns false on error.
   bool repaint();
 
   // Retained 2D shape scene. x/y is the top-left corner, in pixels; r/g/b/a
@@ -52,6 +68,33 @@ public:
                float r, float g, float b);
   void removeLabel(int id);
   void clearLabels();
+
+  // ─── Text widgets (ImGui-frame editor with optional regex highlighting) ─
+
+  /// Places a retained text field. `multiline` allows Enter to insert newlines.
+  int addTextWidget(float x, float y, float width, float height,
+                    const std::string &text, bool multiline);
+  void setTextWidgetRect(int id, float x, float y, float width, float height);
+  void setTextWidgetText(int id, const std::string &text);
+  std::string getTextWidgetText(int id) const;
+  bool setTextWidgetHighlightRules(int id, const std::vector<TextHighlightRule> &rules);
+  void setTextWidgetFocused(int id, bool focused);
+  bool isTextWidgetFocused(int id) const;
+  /// True if the buffer changed since the last consume (or creation).
+  bool textWidgetChanged(int id);
+  void removeTextWidget(int id);
+
+  /// True when the host should run a continuous present/readback loop
+  /// (~60 Hz) — currently: any text widget has focus (caret blink, smooth
+  /// selection drag). False means repaint-on-change is enough.
+  bool wantsAnimation() const;
+
+  // ─── Input bridge (canvas-local coords, GLFW-style key codes) ───────────
+
+  void pointerMove(float x, float y);
+  void pointerButton(int button, bool pressed, float x, float y);
+  void keyEvent(int key, int action, int mods);
+  void textInput(const std::string &utf8);
 
   // Copies the frame repaint() just rendered (RGBA8) into dst. dst must be
   // at least width*height*4 bytes.

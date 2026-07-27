@@ -14,19 +14,23 @@
 
 #include <vulkan/vulkan_core.h>
 
+#define GLFW_INCLUDE_VULKAN
+#include <GLFW/glfw3.h>
+
 #include "imgui_impl_vulkan.h"
+#include "imgui_impl_glfw.h"
 
 #include "util/util.hpp"
 #include "render/shaders.hpp"
 #include "render/vulkan.hpp"
 #include "render/texture_manager.hpp"
+#include "window/window_platform.hpp"
 
 #define DEBUG_PRINT 0
 
 bool g_ValidationFromResult = false;
 
-// No swapchain anymore (this is an offscreen renderer), so no device
-// extensions are required.
+// Filled before createLogicalDevice: empty for offscreen, swapchain for windowed.
 std::vector<const char *> deviceExtensions = {};
 
 VKAPI_ATTR VkBool32 VKAPI_CALL Vulkan::debugCallback(
@@ -151,9 +155,18 @@ void Vulkan::createVkInstance(
     .pApplicationInfo = &appInfo,
   };
 
-  // Offscreen renderer: no VK_KHR_surface/platform surface extensions needed,
-  // since there's no window to present to.
   auto instanceExtensions = std::vector<const char *>();
+
+  if (windowed_) {
+    uint32_t glfwExtCount = 0;
+    const char **glfwExts = glfwGetRequiredInstanceExtensions(&glfwExtCount);
+    if (!glfwExts || glfwExtCount == 0) {
+      throw std::runtime_error("glfwGetRequiredInstanceExtensions failed");
+    }
+    for (uint32_t i = 0; i < glfwExtCount; ++i) {
+      instanceExtensions.push_back(glfwExts[i]);
+    }
+  }
 
   if (enableValidationLayers_)
     instanceExtensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
@@ -293,15 +306,19 @@ void Vulkan::createLogicalDevice()
   vkGetPhysicalDeviceQueueFamilyProperties(
     physicalDevice_, &count, properties.data());
 
-  // Vulkan requires an implementation to expose at least
-  // one queue family with graphics
+  // Prefer a queue family that can do both graphics and present.
   graphicsAndPresentationQueueFamilyIdx_ = -1;
 
   for (uint32_t i = 0; i < count; i++) {
-    if ((properties[i].queueFlags & VK_QUEUE_GRAPHICS_BIT) != 0) {
-      graphicsAndPresentationQueueFamilyIdx_ = i;
-      break;
+    if ((properties[i].queueFlags & VK_QUEUE_GRAPHICS_BIT) == 0) continue;
+    if (windowed_ && surface_ != VK_NULL_HANDLE) {
+      VkBool32 presentSupport = VK_FALSE;
+      vkGetPhysicalDeviceSurfaceSupportKHR(
+        physicalDevice_, i, surface_, &presentSupport);
+      if (!presentSupport) continue;
     }
+    graphicsAndPresentationQueueFamilyIdx_ = i;
+    break;
   }
 
   if (graphicsAndPresentationQueueFamilyIdx_ == -1) {
@@ -999,15 +1016,130 @@ void Vulkan::createCommandBuffer()
 
 void Vulkan::createSyncObjects()
 {
-  // No swapchain, so no image-available/render-finished semaphores needed —
-  // there's nothing to acquire from or present to. The fence still guards
-  // command buffer reuse across ticks.
   VkFenceCreateInfo fenceInfo {
     .sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO,
     .flags = VK_FENCE_CREATE_SIGNALED_BIT,
   };
   VR(vkCreateFence(device_, &fenceInfo, nullptr, &inFlightFence_),
      "vkCreateFence failed.");
+}
+
+void Vulkan::createPresentSyncObjects()
+{
+  VkSemaphoreCreateInfo semInfo {VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
+  VR(vkCreateSemaphore(device_, &semInfo, nullptr, &imageAvailableSemaphore_),
+     "imageAvailable semaphore");
+  VR(vkCreateSemaphore(device_, &semInfo, nullptr, &renderFinishedSemaphore_),
+     "renderFinished semaphore");
+}
+
+void Vulkan::createWindowSurface()
+{
+  VR(glfwCreateWindowSurface(instance_, window_, nullptr, &surface_),
+     "failed to create window surface");
+}
+
+void Vulkan::createSwapchain()
+{
+  VkSurfaceCapabilitiesKHR caps {};
+  vkGetPhysicalDeviceSurfaceCapabilitiesKHR(physicalDevice_, surface_, &caps);
+
+  uint32_t formatCount = 0;
+  vkGetPhysicalDeviceSurfaceFormatsKHR(physicalDevice_, surface_, &formatCount, nullptr);
+  std::vector<VkSurfaceFormatKHR> formats(formatCount);
+  vkGetPhysicalDeviceSurfaceFormatsKHR(
+    physicalDevice_, surface_, &formatCount, formats.data());
+
+  VkSurfaceFormatKHR chosen = formats[0];
+  for (const auto &f : formats) {
+    if (f.format == VK_FORMAT_B8G8R8A8_SRGB &&
+        f.colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR) {
+      chosen = f;
+      break;
+    }
+  }
+  swapchainImageFormat_ = chosen.format;
+
+  if (caps.currentExtent.width != UINT32_MAX) {
+    swapchainExtent_ = caps.currentExtent;
+  } else {
+    int fbW = 0, fbH = 0;
+    glfwGetFramebufferSize(window_, &fbW, &fbH);
+    swapchainExtent_.width = std::clamp(
+      static_cast<uint32_t>(fbW), caps.minImageExtent.width, caps.maxImageExtent.width);
+    swapchainExtent_.height = std::clamp(
+      static_cast<uint32_t>(fbH), caps.minImageExtent.height, caps.maxImageExtent.height);
+  }
+
+  // Keep offscreen target size in sync with the window framebuffer.
+  extent_ = swapchainExtent_;
+
+  uint32_t imageCount = caps.minImageCount + 1;
+  if (caps.maxImageCount > 0 && imageCount > caps.maxImageCount) {
+    imageCount = caps.maxImageCount;
+  }
+
+  uint32_t presentModeCount = 0;
+  vkGetPhysicalDeviceSurfacePresentModesKHR(
+    physicalDevice_, surface_, &presentModeCount, nullptr);
+  std::vector<VkPresentModeKHR> presentModes(presentModeCount);
+  vkGetPhysicalDeviceSurfacePresentModesKHR(
+    physicalDevice_, surface_, &presentModeCount, presentModes.data());
+
+  VkPresentModeKHR presentMode = VK_PRESENT_MODE_FIFO_KHR; // always available
+  for (auto m : presentModes) {
+    if (m == VK_PRESENT_MODE_MAILBOX_KHR) {
+      presentMode = m;
+      break;
+    }
+  }
+
+  VkSwapchainCreateInfoKHR sci {
+    .sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR,
+    .surface = surface_,
+    .minImageCount = imageCount,
+    .imageFormat = swapchainImageFormat_,
+    .imageColorSpace = chosen.colorSpace,
+    .imageExtent = swapchainExtent_,
+    .imageArrayLayers = 1,
+    .imageUsage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
+    .imageSharingMode = VK_SHARING_MODE_EXCLUSIVE,
+    .preTransform = caps.currentTransform,
+    .compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR,
+    .presentMode = presentMode,
+    .clipped = VK_TRUE,
+    .oldSwapchain = VK_NULL_HANDLE,
+  };
+
+  VR(vkCreateSwapchainKHR(device_, &sci, nullptr, &swapchain_),
+     "failed to create swapchain");
+
+  uint32_t actualCount = 0;
+  vkGetSwapchainImagesKHR(device_, swapchain_, &actualCount, nullptr);
+  swapchainImages_.resize(actualCount);
+  vkGetSwapchainImagesKHR(device_, swapchain_, &actualCount, swapchainImages_.data());
+
+  swapchainImageViews_.resize(actualCount);
+  for (uint32_t i = 0; i < actualCount; ++i) {
+    swapchainImageViews_[i] = createImageView(
+      swapchainImages_[i], swapchainImageFormat_, VK_IMAGE_ASPECT_COLOR_BIT, 1);
+  }
+
+  std::cout << "Swapchain: " << swapchainExtent_.width << "x"
+            << swapchainExtent_.height << " (" << actualCount << " images)\n";
+}
+
+void Vulkan::cleanupSwapchain()
+{
+  for (auto view : swapchainImageViews_) {
+    if (view != VK_NULL_HANDLE) vkDestroyImageView(device_, view, nullptr);
+  }
+  swapchainImageViews_.clear();
+  swapchainImages_.clear();
+  if (swapchain_ != VK_NULL_HANDLE) {
+    vkDestroySwapchainKHR(device_, swapchain_, nullptr);
+    swapchain_ = VK_NULL_HANDLE;
+  }
 }
 
 void Vulkan::beginMainRenderPass(
@@ -1206,7 +1338,14 @@ void Vulkan::copyBufferToImage(
 
 void Vulkan::cleanUp()
 {
+  if (device_ != VK_NULL_HANDLE) {
+    vkDeviceWaitIdle(device_);
+  }
+
   if (imguiInitialized_) {
+    if (windowed_) {
+      ImGui_ImplGlfw_Shutdown();
+    }
     ImGui_ImplVulkan_Shutdown();
     ImGui::DestroyContext();
     imguiInitialized_ = false;
@@ -1217,51 +1356,146 @@ void Vulkan::cleanUp()
     imguiDescriptorPool_ = VK_NULL_HANDLE;
   }
 
-  vkDestroyFence(device_, inFlightFence_, nullptr);
+  if (imageAvailableSemaphore_ != VK_NULL_HANDLE) {
+    vkDestroySemaphore(device_, imageAvailableSemaphore_, nullptr);
+    imageAvailableSemaphore_ = VK_NULL_HANDLE;
+  }
+  if (renderFinishedSemaphore_ != VK_NULL_HANDLE) {
+    vkDestroySemaphore(device_, renderFinishedSemaphore_, nullptr);
+    renderFinishedSemaphore_ = VK_NULL_HANDLE;
+  }
 
-  vkDestroyCommandPool(device_, commandPool_, nullptr);
-  vkDestroyFramebuffer(device_, framebuffer_, nullptr);
+  if (inFlightFence_ != VK_NULL_HANDLE) {
+    vkDestroyFence(device_, inFlightFence_, nullptr);
+    inFlightFence_ = VK_NULL_HANDLE;
+  }
+
+  if (commandPool_ != VK_NULL_HANDLE) {
+    vkDestroyCommandPool(device_, commandPool_, nullptr);
+    commandPool_ = VK_NULL_HANDLE;
+  }
+  if (framebuffer_ != VK_NULL_HANDLE) {
+    vkDestroyFramebuffer(device_, framebuffer_, nullptr);
+    framebuffer_ = VK_NULL_HANDLE;
+  }
+
+  cleanupSwapchain();
 
   if (stagingBufferMapped_) {
     vkUnmapMemory(device_, stagingBufferMemory_);
+    stagingBufferMapped_ = nullptr;
   }
-  vkDestroyBuffer(device_, stagingBuffer_, nullptr);
-  vkFreeMemory(device_, stagingBufferMemory_, nullptr);
+  if (stagingBuffer_ != VK_NULL_HANDLE) {
+    vkDestroyBuffer(device_, stagingBuffer_, nullptr);
+    stagingBuffer_ = VK_NULL_HANDLE;
+  }
+  if (stagingBufferMemory_ != VK_NULL_HANDLE) {
+    vkFreeMemory(device_, stagingBufferMemory_, nullptr);
+    stagingBufferMemory_ = VK_NULL_HANDLE;
+  }
 
-  vkDestroyImageView(device_, resolveImageView_, nullptr);
-  vkDestroyImage(device_, resolveImage_, nullptr);
-  vkFreeMemory(device_, resolveImageMemory_, nullptr);
+  if (resolveImageView_ != VK_NULL_HANDLE) {
+    vkDestroyImageView(device_, resolveImageView_, nullptr);
+    resolveImageView_ = VK_NULL_HANDLE;
+  }
+  if (resolveImage_ != VK_NULL_HANDLE) {
+    vkDestroyImage(device_, resolveImage_, nullptr);
+    resolveImage_ = VK_NULL_HANDLE;
+  }
+  if (resolveImageMemory_ != VK_NULL_HANDLE) {
+    vkFreeMemory(device_, resolveImageMemory_, nullptr);
+    resolveImageMemory_ = VK_NULL_HANDLE;
+  }
 
   // MSAA
-  vkDestroyImageView(device_, colorImageView_, nullptr);
-  vkDestroyImage(device_, colorImage_, nullptr);
-  vkFreeMemory(device_, colorImageMemory_, nullptr);
+  if (colorImageView_ != VK_NULL_HANDLE) {
+    vkDestroyImageView(device_, colorImageView_, nullptr);
+    colorImageView_ = VK_NULL_HANDLE;
+  }
+  if (colorImage_ != VK_NULL_HANDLE) {
+    vkDestroyImage(device_, colorImage_, nullptr);
+    colorImage_ = VK_NULL_HANDLE;
+  }
+  if (colorImageMemory_ != VK_NULL_HANDLE) {
+    vkFreeMemory(device_, colorImageMemory_, nullptr);
+    colorImageMemory_ = VK_NULL_HANDLE;
+  }
 
   // Depth buffer
-  vkDestroyImageView(device_, depthImageView_, nullptr);
-  vkDestroyImage(device_, depthImage_, nullptr);
-  vkFreeMemory(device_, depthImageMemory_, nullptr);
+  if (depthImageView_ != VK_NULL_HANDLE) {
+    vkDestroyImageView(device_, depthImageView_, nullptr);
+    depthImageView_ = VK_NULL_HANDLE;
+  }
+  if (depthImage_ != VK_NULL_HANDLE) {
+    vkDestroyImage(device_, depthImage_, nullptr);
+    depthImage_ = VK_NULL_HANDLE;
+  }
+  if (depthImageMemory_ != VK_NULL_HANDLE) {
+    vkFreeMemory(device_, depthImageMemory_, nullptr);
+    depthImageMemory_ = VK_NULL_HANDLE;
+  }
 
   // Shadow mapping
-  vkDestroySampler(device_, shadowSampler_, nullptr);
-  vkDestroyFramebuffer(device_, shadowFramebuffer_, nullptr);
-  vkDestroyImageView(device_, shadowImageView_, nullptr);
-  vkDestroyImage(device_, shadowImage_, nullptr);
-  vkFreeMemory(device_, shadowImageMemory_, nullptr);
-  vkDestroyRenderPass(device_, shadowRenderPass_, nullptr);
+  if (shadowSampler_ != VK_NULL_HANDLE) {
+    vkDestroySampler(device_, shadowSampler_, nullptr);
+    shadowSampler_ = VK_NULL_HANDLE;
+  }
+  if (shadowFramebuffer_ != VK_NULL_HANDLE) {
+    vkDestroyFramebuffer(device_, shadowFramebuffer_, nullptr);
+    shadowFramebuffer_ = VK_NULL_HANDLE;
+  }
+  if (shadowImageView_ != VK_NULL_HANDLE) {
+    vkDestroyImageView(device_, shadowImageView_, nullptr);
+    shadowImageView_ = VK_NULL_HANDLE;
+  }
+  if (shadowImage_ != VK_NULL_HANDLE) {
+    vkDestroyImage(device_, shadowImage_, nullptr);
+    shadowImage_ = VK_NULL_HANDLE;
+  }
+  if (shadowImageMemory_ != VK_NULL_HANDLE) {
+    vkFreeMemory(device_, shadowImageMemory_, nullptr);
+    shadowImageMemory_ = VK_NULL_HANDLE;
+  }
+  if (shadowRenderPass_ != VK_NULL_HANDLE) {
+    vkDestroyRenderPass(device_, shadowRenderPass_, nullptr);
+    shadowRenderPass_ = VK_NULL_HANDLE;
+  }
 
-  vkDestroyRenderPass(device_, renderPass_, nullptr);
+  if (renderPass_ != VK_NULL_HANDLE) {
+    vkDestroyRenderPass(device_, renderPass_, nullptr);
+    renderPass_ = VK_NULL_HANDLE;
+  }
 
   auto &shaders = getShaders();
   shaders.cleanUp();
 
-  vkDestroyDevice(device_, nullptr);
-
-  if (enableValidationLayers_) {
-    destroyDebugUtilsMessengerEXT(instance_, debugMessenger_, nullptr);
+  if (device_ != VK_NULL_HANDLE) {
+    vkDestroyDevice(device_, nullptr);
+    device_ = VK_NULL_HANDLE;
   }
 
-  vkDestroyInstance(instance_, nullptr);
+  if (surface_ != VK_NULL_HANDLE) {
+    vkDestroySurfaceKHR(instance_, surface_, nullptr);
+    surface_ = VK_NULL_HANDLE;
+  }
+
+  if (enableValidationLayers_ && debugMessenger_ != VK_NULL_HANDLE) {
+    destroyDebugUtilsMessengerEXT(instance_, debugMessenger_, nullptr);
+    debugMessenger_ = VK_NULL_HANDLE;
+  }
+
+  if (instance_ != VK_NULL_HANDLE) {
+    vkDestroyInstance(instance_, nullptr);
+    instance_ = VK_NULL_HANDLE;
+  }
+
+  if (ownsWindow_ && window_) {
+    glfwDestroyWindow(window_);
+    window_ = nullptr;
+    ownsWindow_ = false;
+    glfwTerminate();
+  }
+  windowed_ = false;
 }
 
 void Vulkan::renderWithShadows(
@@ -1272,13 +1506,23 @@ void Vulkan::renderWithShadows(
   vkWaitForFences(device_, 1, &inFlightFence_, VK_TRUE, UINT64_MAX);
   vkResetFences(device_, 1, &inFlightFence_);
 
-  // No swapchain to acquire from — there's only ever one target
-  // (framebuffer_/resolveImage_), so there's no image index to pick.
-  const u32 imageIndex = 0;
+  uint32_t swapImageIndex = 0;
+  if (windowed_) {
+    VkResult acq = vkAcquireNextImageKHR(
+      device_, swapchain_, UINT64_MAX, imageAvailableSemaphore_,
+      VK_NULL_HANDLE, &swapImageIndex);
+    if (acq == VK_ERROR_OUT_OF_DATE_KHR) {
+      return; // resize not handled yet (window is fixed-size)
+    }
+    if (acq != VK_SUCCESS && acq != VK_SUBOPTIMAL_KHR) {
+      VR(acq, "vkAcquireNextImageKHR failed");
+    }
+  }
+
+  const u32 imageIndex = 0; // offscreen framebuffer index (single target)
 
   vkResetCommandBuffer(commandBuffer_, 0);
 
-  // Begin command buffer
   VkCommandBufferBeginInfo beginInfo {
     VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO
   };
@@ -1286,60 +1530,134 @@ void Vulkan::renderWithShadows(
   VR(vkBeginCommandBuffer(commandBuffer_, &beginInfo),
      "failed to begin recording command buffer!");
 
-  // 1. Shadow Pass - render depth-only to shadow map
+  // 1. Shadow Pass
   beginShadowPass(commandBuffer_);
   shadowCallback(commandBuffer_);
   vkCmdEndRenderPass(commandBuffer_);
 
-  // 2. Main Pass - render scene with shadows
+  // 2. Main Pass → resolveImage_ (TRANSFER_SRC_OPTIMAL at end)
   beginMainRenderPass(commandBuffer_, imageIndex);
   mainCallback(commandBuffer_, imageIndex);
-  vkCmdEndRenderPass(commandBuffer_); // End main render pass manually
+  vkCmdEndRenderPass(commandBuffer_);
 
-  // 3. Copy the resolved frame out for readPixels(). Safe to record
-  // immediately: the render pass's VkSubpassDependency (see
-  // createRenderPass) already guarantees the color write is visible to this
-  // transfer read, and the render pass's finalLayout already transitioned
-  // resolveImage_ to TRANSFER_SRC_OPTIMAL for us.
-  VkBufferImageCopy copyRegion {
-    .bufferOffset      = 0,
-    .bufferRowLength    = 0,
-    .bufferImageHeight = 0,
-    .imageSubresource =
-      {
-        .aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT,
-        .mipLevel       = 0,
-        .baseArrayLayer = 0,
-        .layerCount     = 1,
-      },
-    .imageOffset = {0, 0, 0},
-    .imageExtent = {extent_.width, extent_.height, 1},
-  };
+  if (windowed_) {
+    // 3a. Blit offscreen resolve → swapchain image, then present.
+    VkImage swapImage = swapchainImages_[swapImageIndex];
 
-  vkCmdCopyImageToBuffer(commandBuffer_,
-                        resolveImage_,
-                        VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                        stagingBuffer_,
-                        1,
-                        &copyRegion);
+    // Undefined → TRANSFER_DST for the swapchain image
+    VkImageMemoryBarrier toDst {
+      .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+      .srcAccessMask = 0,
+      .dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
+      .oldLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+      .newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+      .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+      .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+      .image = swapImage,
+      .subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1},
+    };
+    vkCmdPipelineBarrier(
+      commandBuffer_,
+      VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+      VK_PIPELINE_STAGE_TRANSFER_BIT,
+      0, 0, nullptr, 0, nullptr, 1, &toDst);
 
-  // End command buffer recording (only once!)
+    VkImageBlit blit {
+      .srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
+      .srcOffsets = {{0, 0, 0},
+                     {static_cast<int32_t>(extent_.width),
+                      static_cast<int32_t>(extent_.height), 1}},
+      .dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
+      .dstOffsets = {{0, 0, 0},
+                     {static_cast<int32_t>(swapchainExtent_.width),
+                      static_cast<int32_t>(swapchainExtent_.height), 1}},
+    };
+    vkCmdBlitImage(
+      commandBuffer_,
+      resolveImage_, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+      swapImage, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+      1, &blit, VK_FILTER_LINEAR);
+
+    VkImageMemoryBarrier toPresent {
+      .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+      .srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
+      .dstAccessMask = 0,
+      .oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+      .newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
+      .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+      .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+      .image = swapImage,
+      .subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1},
+    };
+    vkCmdPipelineBarrier(
+      commandBuffer_,
+      VK_PIPELINE_STAGE_TRANSFER_BIT,
+      VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
+      0, 0, nullptr, 0, nullptr, 1, &toPresent);
+  } else {
+    // 3b. Offscreen: copy resolve → staging for readPixels().
+    VkBufferImageCopy copyRegion {
+      .bufferOffset      = 0,
+      .bufferRowLength    = 0,
+      .bufferImageHeight = 0,
+      .imageSubresource =
+        {
+          .aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT,
+          .mipLevel       = 0,
+          .baseArrayLayer = 0,
+          .layerCount     = 1,
+        },
+      .imageOffset = {0, 0, 0},
+      .imageExtent = {extent_.width, extent_.height, 1},
+    };
+
+    vkCmdCopyImageToBuffer(commandBuffer_,
+                          resolveImage_,
+                          VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                          stagingBuffer_,
+                          1,
+                          &copyRegion);
+  }
+
   VR(vkEndCommandBuffer(commandBuffer_), "failed to record command buffer!");
 
-  // Submit — nothing to wait on or signal, there's no acquire/present to
-  // synchronize with anymore.
   VkSubmitInfo submitInfo {
     .sType              = VK_STRUCTURE_TYPE_SUBMIT_INFO,
     .commandBufferCount = 1,
     .pCommandBuffers    = &commandBuffer_,
   };
 
+  VkPipelineStageFlags waitStage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+  if (windowed_) {
+    submitInfo.waitSemaphoreCount = 1;
+    submitInfo.pWaitSemaphores = &imageAvailableSemaphore_;
+    submitInfo.pWaitDstStageMask = &waitStage;
+    submitInfo.signalSemaphoreCount = 1;
+    submitInfo.pSignalSemaphores = &renderFinishedSemaphore_;
+  }
+
   VR(vkQueueSubmit(graphicsQueue_, 1, &submitInfo, inFlightFence_),
      "failed to submit draw command buffer!");
 
-  // Wait for the frame (and thus the copy) to complete before readPixels()
-  // can safely memcpy from the (HOST_COHERENT) mapped staging buffer.
-  vkDeviceWaitIdle(device_);
+  if (windowed_) {
+    VkPresentInfoKHR presentInfo {
+      .sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
+      .waitSemaphoreCount = 1,
+      .pWaitSemaphores = &renderFinishedSemaphore_,
+      .swapchainCount = 1,
+      .pSwapchains = &swapchain_,
+      .pImageIndices = &swapImageIndex,
+    };
+    VkResult pr = vkQueuePresentKHR(graphicsQueue_, &presentInfo);
+    if (pr != VK_SUCCESS && pr != VK_SUBOPTIMAL_KHR &&
+        pr != VK_ERROR_OUT_OF_DATE_KHR) {
+      VR(pr, "vkQueuePresentKHR failed");
+    }
+    // Do NOT deviceWaitIdle — fence wait at next frame start is enough.
+  } else {
+    // Offscreen readback needs the staging copy finished.
+    vkDeviceWaitIdle(device_);
+  }
 }
 
 void Vulkan::readPixels(uint8_t *dst, size_t dstSize)
@@ -1559,13 +1877,19 @@ void Vulkan::initImGui()
   ImGui_ImplVulkan_CreateFontsTexture();
   ImGui_ImplVulkan_DestroyFontsTexture();
 
+  // GLFW platform backend is installed by Application after it registers
+  // its own input callbacks (ImGui will chain onto those when
+  // install_callbacks=true). See Application::initWithWindow.
   imguiInitialized_ = true;
 }
 
 void Vulkan::init(const char *applicationName, int width, int height)
 {
+  windowed_ = false;
+  window_ = nullptr;
   extent_      = {static_cast<uint32_t>(width), static_cast<uint32_t>(height)};
   colorFormat_ = VK_FORMAT_R8G8B8A8_SRGB;
+  deviceExtensions.clear();
 
   createVkInstance(applicationName);
   setupDebugMessenger();
@@ -1585,4 +1909,179 @@ void Vulkan::init(const char *applicationName, int width, int height)
   createCommandBuffer();
   createSyncObjects();
   initImGui();
+}
+
+void Vulkan::initWithWindow(
+  const char *applicationName, int width, int height, const char *title)
+{
+  windowed_ = true;
+  deviceExtensions = {VK_KHR_SWAPCHAIN_EXTENSION_NAME};
+
+  if (!glfwInit()) {
+    throw std::runtime_error("glfwInit failed");
+  }
+  glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
+  glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);
+  // Tool-style canvas surface: no title bar / system menu / border chrome.
+  // (Drag-to-move can be added later via a custom hit region.)
+  glfwWindowHint(GLFW_DECORATED, GLFW_FALSE);
+  // Stay above the Gtk chrome window so the layout-slot overlay isn't buried.
+  glfwWindowHint(GLFW_FLOATING, GLFW_TRUE);
+  // Prefer not stealing focus from the Swift chrome window on open.
+  glfwWindowHint(GLFW_FOCUS_ON_SHOW, GLFW_FALSE);
+  // Wayland: share app_id with the host if possible so the compositor may
+  // group surfaces (does not hide from dock — see window_platform.cpp).
+  glfwWindowHintString(GLFW_WAYLAND_APP_ID, "com.example.HelloWorld");
+  // X11: fixed WM_CLASS so the surface is identifiable / not a random title.
+  glfwWindowHintString(GLFW_X11_CLASS_NAME, "HelloWorldCanvas");
+  glfwWindowHintString(GLFW_X11_INSTANCE_NAME, "helloworld-canvas");
+
+  window_ = glfwCreateWindow(width, height, title ? title : "Canvas", nullptr, nullptr);
+  if (!window_) {
+    glfwTerminate();
+    throw std::runtime_error("glfwCreateWindow failed");
+  }
+  ownsWindow_ = true;
+
+  // Skip taskbar/pager (X11) / tool-window style (Win32). Must run after create.
+  canvasApplyToolWindowHints(window_);
+
+  extent_      = {static_cast<uint32_t>(width), static_cast<uint32_t>(height)};
+  colorFormat_ = VK_FORMAT_R8G8B8A8_SRGB;
+
+  createVkInstance(applicationName);
+  setupDebugMessenger();
+  createWindowSurface();
+  selectSupportedGraphicsCard();
+  createLogicalDevice();
+  createSwapchain(); // may adjust extent_ to framebuffer size
+  createCommandPool();
+  createColorResources();
+  createResolveResources();
+  // Staging still created so readPixels remains available if needed, but
+  // the present path does not copy into it every frame.
+  createStagingBuffer();
+  createDepthResources();
+  createRenderPass();
+  createShadowResources();
+  createShadowRenderPass();
+  createShadowFramebuffer();
+  createFramebuffer();
+  createCommandBuffer();
+  createSyncObjects();
+  createPresentSyncObjects();
+  initImGui();
+}
+
+bool Vulkan::windowShouldClose() const
+{
+  return window_ && glfwWindowShouldClose(window_);
+}
+
+void Vulkan::initImGuiGlfwBackend()
+{
+  if (windowed_ && window_ && imguiInitialized_) {
+    ImGui_ImplGlfw_InitForVulkan(window_, true);
+  }
+}
+
+namespace {
+
+void destroyImage(VkDevice device, VkImage &image, VkDeviceMemory &memory, VkImageView &view)
+{
+  if (view != VK_NULL_HANDLE) {
+    vkDestroyImageView(device, view, nullptr);
+    view = VK_NULL_HANDLE;
+  }
+  if (image != VK_NULL_HANDLE) {
+    vkDestroyImage(device, image, nullptr);
+    image = VK_NULL_HANDLE;
+  }
+  if (memory != VK_NULL_HANDLE) {
+    vkFreeMemory(device, memory, nullptr);
+    memory = VK_NULL_HANDLE;
+  }
+}
+
+} // namespace
+
+void Vulkan::setWindowFrame(int x, int y, int width, int height)
+{
+  if (!windowed_ || !window_) return;
+  if (width < 1) width = 1;
+  if (height < 1) height = 1;
+
+  glfwSetWindowPos(window_, x, y);
+
+  int curW = 0, curH = 0;
+  glfwGetWindowSize(window_, &curW, &curH);
+  if (curW != width || curH != height) {
+    glfwSetWindowSize(window_, width, height);
+  }
+  // Framebuffer size may lag a frame; ensureFramebufferSize() in the render
+  // loop rebuilds swapchain/targets when it changes.
+}
+
+void Vulkan::setWindowVisible(bool visible)
+{
+  if (!windowed_ || !window_) return;
+  if (visible) {
+    glfwShowWindow(window_);
+  } else {
+    glfwHideWindow(window_);
+  }
+}
+
+bool Vulkan::ensureFramebufferSize()
+{
+  if (!windowed_ || !window_) return false;
+
+  int fbW = 0, fbH = 0;
+  glfwGetFramebufferSize(window_, &fbW, &fbH);
+  if (fbW < 1 || fbH < 1) return false;
+
+  if (static_cast<uint32_t>(fbW) == extent_.width &&
+      static_cast<uint32_t>(fbH) == extent_.height &&
+      static_cast<uint32_t>(fbW) == swapchainExtent_.width &&
+      static_cast<uint32_t>(fbH) == swapchainExtent_.height) {
+    return false;
+  }
+
+  vkDeviceWaitIdle(device_);
+
+  // Tear down size-dependent resources (keep pipelines/render pass).
+  if (framebuffer_ != VK_NULL_HANDLE) {
+    vkDestroyFramebuffer(device_, framebuffer_, nullptr);
+    framebuffer_ = VK_NULL_HANDLE;
+  }
+  cleanupSwapchain();
+
+  if (stagingBufferMapped_) {
+    vkUnmapMemory(device_, stagingBufferMemory_);
+    stagingBufferMapped_ = nullptr;
+  }
+  if (stagingBuffer_ != VK_NULL_HANDLE) {
+    vkDestroyBuffer(device_, stagingBuffer_, nullptr);
+    stagingBuffer_ = VK_NULL_HANDLE;
+  }
+  if (stagingBufferMemory_ != VK_NULL_HANDLE) {
+    vkFreeMemory(device_, stagingBufferMemory_, nullptr);
+    stagingBufferMemory_ = VK_NULL_HANDLE;
+  }
+
+  destroyImage(device_, colorImage_, colorImageMemory_, colorImageView_);
+  destroyImage(device_, resolveImage_, resolveImageMemory_, resolveImageView_);
+  destroyImage(device_, depthImage_, depthImageMemory_, depthImageView_);
+
+  extent_ = {static_cast<uint32_t>(fbW), static_cast<uint32_t>(fbH)};
+
+  createSwapchain();
+  createColorResources();
+  createResolveResources();
+  createStagingBuffer();
+  createDepthResources();
+  createFramebuffer();
+
+  std::cout << "Framebuffer resized to " << extent_.width << "x" << extent_.height << '\n';
+  return true;
 }

@@ -30,7 +30,13 @@ CanvasBridge::CanvasBridge(
   }
 
   impl_ = std::make_unique<Impl>(width, height);
-  impl_->app.init(assetsRoot);
+  if (auto r = impl_->app.init(assetsRoot); !r) {
+    // Constructor cannot return Result — log and leave engine unusable.
+    // Callers that care should use canvas_create_window / check create result.
+    // For the C API, we throw only here so canvas_create can return NULL
+    // (kept until create is refactored to a factory Result).
+    throw std::runtime_error(r.error());
+  }
 }
 
 CanvasBridge::CanvasBridge(CanvasBridge &&) noexcept = default;
@@ -204,6 +210,162 @@ void CanvasBridge::clearLabels() noexcept
   }
 }
 
+int CanvasBridge::addTextWidget(float x, float y, float width, float height,
+                                const std::string &text, bool multiline) noexcept
+{
+  try {
+    return impl_->app.addTextWidget(x, y, width, height, text, multiline);
+  } catch (const std::exception &ex) {
+    std::cerr << "CanvasBridge::addTextWidget: " << ex.what() << '\n';
+    return -1;
+  } catch (...) {
+    std::cerr << "CanvasBridge::addTextWidget: unknown exception\n";
+    return -1;
+  }
+}
+
+void CanvasBridge::setTextWidgetRect(int id, float x, float y, float width, float height) noexcept
+{
+  try {
+    impl_->app.setTextWidgetRect(id, x, y, width, height);
+  } catch (const std::exception &ex) {
+    std::cerr << "CanvasBridge::setTextWidgetRect: " << ex.what() << '\n';
+  } catch (...) {
+    std::cerr << "CanvasBridge::setTextWidgetRect: unknown exception\n";
+  }
+}
+
+void CanvasBridge::setTextWidgetText(int id, const std::string &text) noexcept
+{
+  try {
+    impl_->app.setTextWidgetText(id, text);
+  } catch (const std::exception &ex) {
+    std::cerr << "CanvasBridge::setTextWidgetText: " << ex.what() << '\n';
+  } catch (...) {
+    std::cerr << "CanvasBridge::setTextWidgetText: unknown exception\n";
+  }
+}
+
+std::string CanvasBridge::getTextWidgetText(int id) noexcept
+{
+  try {
+    return impl_->app.getTextWidgetText(id);
+  } catch (const std::exception &ex) {
+    std::cerr << "CanvasBridge::getTextWidgetText: " << ex.what() << '\n';
+    return {};
+  } catch (...) {
+    std::cerr << "CanvasBridge::getTextWidgetText: unknown exception\n";
+    return {};
+  }
+}
+
+bool CanvasBridge::setTextWidgetHighlightRules(
+  int id, const std::vector<TextHighlightRule> &rules) noexcept
+{
+  try {
+    return impl_->app.setTextWidgetHighlightRules(id, rules);
+  } catch (const std::exception &ex) {
+    std::cerr << "CanvasBridge::setTextWidgetHighlightRules: " << ex.what() << '\n';
+    return false;
+  } catch (...) {
+    std::cerr << "CanvasBridge::setTextWidgetHighlightRules: unknown exception\n";
+    return false;
+  }
+}
+
+void CanvasBridge::setTextWidgetFocused(int id, bool focused) noexcept
+{
+  try {
+    impl_->app.setTextWidgetFocused(id, focused);
+  } catch (const std::exception &ex) {
+    std::cerr << "CanvasBridge::setTextWidgetFocused: " << ex.what() << '\n';
+  } catch (...) {
+    std::cerr << "CanvasBridge::setTextWidgetFocused: unknown exception\n";
+  }
+}
+
+bool CanvasBridge::isTextWidgetFocused(int id) noexcept
+{
+  try {
+    return impl_->app.isTextWidgetFocused(id);
+  } catch (...) {
+    return false;
+  }
+}
+
+bool CanvasBridge::textWidgetChanged(int id) noexcept
+{
+  try {
+    return impl_->app.textWidgetChanged(id);
+  } catch (...) {
+    return false;
+  }
+}
+
+void CanvasBridge::removeTextWidget(int id) noexcept
+{
+  try {
+    impl_->app.removeTextWidget(id);
+  } catch (const std::exception &ex) {
+    std::cerr << "CanvasBridge::removeTextWidget: " << ex.what() << '\n';
+  } catch (...) {
+    std::cerr << "CanvasBridge::removeTextWidget: unknown exception\n";
+  }
+}
+
+bool CanvasBridge::wantsAnimation() noexcept
+{
+  try {
+    return impl_->app.wantsAnimation();
+  } catch (...) {
+    return false;
+  }
+}
+
+void CanvasBridge::pointerMove(float x, float y) noexcept
+{
+  try {
+    impl_->app.pointerMove(x, y);
+  } catch (const std::exception &ex) {
+    std::cerr << "CanvasBridge::pointerMove: " << ex.what() << '\n';
+  } catch (...) {
+    std::cerr << "CanvasBridge::pointerMove: unknown exception\n";
+  }
+}
+
+void CanvasBridge::pointerButton(int button, bool pressed, float x, float y) noexcept
+{
+  try {
+    impl_->app.pointerButton(button, pressed, x, y);
+  } catch (const std::exception &ex) {
+    std::cerr << "CanvasBridge::pointerButton: " << ex.what() << '\n';
+  } catch (...) {
+    std::cerr << "CanvasBridge::pointerButton: unknown exception\n";
+  }
+}
+
+void CanvasBridge::keyEvent(int key, int action, int mods) noexcept
+{
+  try {
+    impl_->app.keyEvent(key, action, mods);
+  } catch (const std::exception &ex) {
+    std::cerr << "CanvasBridge::keyEvent: " << ex.what() << '\n';
+  } catch (...) {
+    std::cerr << "CanvasBridge::keyEvent: unknown exception\n";
+  }
+}
+
+void CanvasBridge::textInput(const std::string &utf8) noexcept
+{
+  try {
+    impl_->app.textInput(utf8);
+  } catch (const std::exception &ex) {
+    std::cerr << "CanvasBridge::textInput: " << ex.what() << '\n';
+  } catch (...) {
+    std::cerr << "CanvasBridge::textInput: unknown exception\n";
+  }
+}
+
 void CanvasBridge::readPixels(uint8_t *dst, size_t dstSize) noexcept
 {
   try {
@@ -213,4 +375,9 @@ void CanvasBridge::readPixels(uint8_t *dst, size_t dstSize) noexcept
   } catch (...) {
     std::cerr << "CanvasBridge::readPixels: unknown exception\n";
   }
+}
+
+Application &CanvasBridge::rawApp() noexcept
+{
+  return impl_->app;
 }

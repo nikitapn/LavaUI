@@ -23,7 +23,10 @@ int main(int argc, char *argv[])
 
   try {
     std::cout << "Initializing...\n";
-    app.init(assetsRoot);
+    if (auto r = app.init(assetsRoot); !r) {
+      std::cerr << "init failed: " << r.error() << '\n';
+      return 1;
+    }
 
     app.addRect(100, 100, 300, 150, 0.8f, 0.2f, 0.2f, 1.0f);
     app.addRoundedRect(500, 300, 200, 200, 0.2f, 0.6f, 0.9f, 1.0f);
@@ -32,6 +35,18 @@ int main(int argc, char *argv[])
     app.addCircle(750, 300, 20, 1.0f, 1.0f, 0.2f, 1.0f);
     app.addLine(250, 175, 600, 400, 1.0f, 1.0f, 1.0f, 1.0f);
     app.addLabel("FBD smoke test", 100, 650, 1.0f, 1.0f, 1.0f);
+
+    int editor = app.addTextWidget(
+      100, 500, 480, 120,
+      "// sample ST\nIF x > 0 THEN\n  y := 1;\nEND_IF",
+      true);
+    std::vector<TextHighlightRule> rules = {
+      {"//[^\\n]*", 0.4f, 0.7f, 0.4f, 1.f, 10, 0},
+      {"\\b(IF|THEN|ELSE|END_IF|AND|OR|NOT|TRUE|FALSE)\\b", 0.75f, 0.55f, 1.f, 1.f, 5, 0},
+      {"\\b\\d+(\\.\\d+)?\\b", 0.9f, 0.7f, 0.3f, 1.f, 3, 0},
+    };
+    app.setTextWidgetHighlightRules(editor, rules);
+    app.setTextWidgetFocused(editor, true);
 
     std::cout << "Repainting " << repaintCount << " times...\n";
     for (int i = 0; i < repaintCount; ++i) {

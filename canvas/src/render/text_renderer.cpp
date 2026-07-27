@@ -74,7 +74,7 @@ struct TextRenderer::Impl {
   int currentY_;
   int lineHeight_;
 
-  Impl(Vulkan& vulkan, const std::string& fontPath, int fontSize)
+  Impl(Vulkan& vulkan)
       : vulkan_(vulkan),
         shaders_(vulkan),
         library_(nullptr),
@@ -98,10 +98,6 @@ struct TextRenderer::Impl {
         currentY_(0),
         lineHeight_(0)
   {
-    // Initialize FreeType
-    if (!fontPath.empty()) {
-      initializeFreeType(fontPath, fontSize);
-    }
   }
 
   void init() {
@@ -168,22 +164,34 @@ struct TextRenderer::Impl {
     cleanUp();
   }
 
-  void initializeFreeType(const std::string& fontPath, int fontSize) {
+  canvas::VoidResult initializeFreeType(const std::string& fontPath, int fontSize) {
+    if (library_) {
+      // Reload: tear down previous face/library.
+      if (face_) {
+        FT_Done_Face(face_);
+        face_ = nullptr;
+      }
+      FT_Done_FreeType(library_);
+      library_ = nullptr;
+    }
+
     FT_Error error = FT_Init_FreeType(&library_);
     if (error) {
-      throw std::runtime_error("Failed to initialize FreeType");
+      return canvas::fail("Failed to initialize FreeType");
     }
 
     error = FT_New_Face(library_, fontPath.c_str(), 0, &face_);
     if (error) {
-      throw std::runtime_error("Failed to load font: " + fontPath);
+      FT_Done_FreeType(library_);
+      library_ = nullptr;
+      return canvas::fail("Failed to load font: " + fontPath);
     }
 
     FT_Set_Pixel_Sizes(face_, 0, fontSize);
 
-    // Calculate line height
     lineHeight_ = static_cast<int>(
       (face_->size->metrics.ascender - face_->size->metrics.descender) / 64);
+    return canvas::ok();
   }
 
   void createAtlasTexture() {
@@ -746,8 +754,8 @@ struct TextRenderer::Impl {
 };
 
 // TextRenderer public interface implementation
-TextRenderer::TextRenderer(Vulkan& vulkan, const std::string& fontPath, int fontSize)
-    : impl_(std::make_unique<TextRenderer::Impl>(vulkan, fontPath, fontSize)) {}
+TextRenderer::TextRenderer(Vulkan& vulkan)
+    : impl_(std::make_unique<TextRenderer::Impl>(vulkan)) {}
 
 TextRenderer::~TextRenderer() = default;
 
@@ -755,6 +763,11 @@ TextRenderer::TextRenderer(TextRenderer&& other) noexcept = default;
 TextRenderer& TextRenderer::operator=(TextRenderer&& other) noexcept = default;
 
 void TextRenderer::init() { impl_->init(); }
+
+canvas::VoidResult TextRenderer::loadFont(const std::string& fontPath, int fontSize) {
+  return impl_->initializeFreeType(fontPath, fontSize);
+}
+
 void TextRenderer::cleanUp() { impl_->cleanUp(); }
 void TextRenderer::beginTextRendering() { 
     impl_->instanceData_.clear(); 

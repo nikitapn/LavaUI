@@ -2,11 +2,14 @@
 
 #include <iostream>
 #include <stdexcept>
+#include <vector>
 
 #include <boost/stacktrace.hpp>
 
 #include <vulkan/vulkan.h>
 #include <vulkan/vulkan_core.h>
+
+struct GLFWwindow;
 
 #include "util/types.hpp"
 #include "util/cout_ext.hpp"
@@ -58,10 +61,26 @@ class Vulkan
   VkPhysicalDeviceProperties physicalDeviceProperties_;
   // Logical device
   VkDevice device_ = VK_NULL_HANDLE;
-  // Main graphics queue (also used for the one-off offscreen "present")
+  // Main graphics queue (also used for present when windowed)
   u32     graphicsAndPresentationQueueFamilyIdx_ = -1;
   VkQueue graphicsQueue_ = VK_NULL_HANDLE;
-  // Offscreen render target stuff (replaces the old swapchain)
+
+  // Optional GLFW window present path. When window_ is non-null we create a
+  // swapchain and blit the offscreen resolve target into it each frame —
+  // no GPU→CPU readback on the hot path.
+  bool        windowed_ = false;
+  GLFWwindow *window_ = nullptr;
+  bool        ownsWindow_ = false; // we called glfwCreateWindow
+  VkSurfaceKHR surface_ = VK_NULL_HANDLE;
+  VkSwapchainKHR swapchain_ = VK_NULL_HANDLE;
+  std::vector<VkImage> swapchainImages_;
+  std::vector<VkImageView> swapchainImageViews_;
+  VkFormat   swapchainImageFormat_ = VK_FORMAT_B8G8R8A8_SRGB;
+  VkExtent2D swapchainExtent_{};
+  VkSemaphore imageAvailableSemaphore_ = VK_NULL_HANDLE;
+  VkSemaphore renderFinishedSemaphore_ = VK_NULL_HANDLE;
+
+  // Offscreen render target (always used as the scene render target)
   VkFormat   colorFormat_;
   VkExtent2D extent_;
 
@@ -185,15 +204,46 @@ class Vulkan
   void createDescriptorSet();
   void createCommandBuffer();
   void initImGui();
+
+  void createSwapchain();
+  void cleanupSwapchain();
+  void createWindowSurface();
+  void createPresentSyncObjects();
+
  public:
+  /// Headless / offscreen (smoke tests, optional Image embed).
   void init(const char *applicationName, int width, int height);
+
+  /// Creates a GLFW window and presents into its swapchain each frame.
+  void initWithWindow(const char *applicationName, int width, int height,
+                      const char *title);
+
   void renderWithShadows(
     std::function<void(VkCommandBuffer)> shadowCallback,
     std::function<void(VkCommandBuffer, u32)> mainCallback);
   void cleanUp();
 
+  bool isWindowed() const { return windowed_; }
+  GLFWwindow *window() const { return window_; }
+  bool windowShouldClose() const;
+
+  /// Call after installing app-level GLFW callbacks so ImGui can chain.
+  void initImGuiGlfwBackend();
+
+  /// Move/resize the GLFW window (screen coordinates). If size changes,
+  /// recreates swapchain + offscreen targets to match the framebuffer.
+  /// No-op when not windowed.
+  void setWindowFrame(int x, int y, int width, int height);
+
+  void setWindowVisible(bool visible);
+
+  /// If the framebuffer size drifted (e.g. after setWindowFrame), rebuild
+  /// present/render targets. Returns true if a rebuild happened.
+  bool ensureFramebufferSize();
+
   // Copies the last-rendered frame (RGBA8) into dst. dst must be at least
-  // extent_.width * extent_.height * 4 bytes.
+  // extent_.width * extent_.height * 4 bytes. Only valid after a repaint in
+  // offscreen mode (windowed mode skips the staging copy).
   void readPixels(uint8_t *dst, size_t dstSize);
 
   VkShaderModule createShaderModule(const std::vector<char> &code);

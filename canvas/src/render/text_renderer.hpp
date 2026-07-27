@@ -5,6 +5,7 @@
 
 #include <vulkan/vulkan.h>
 
+#include "util/result.hpp"
 #include "util/types.hpp"
 
 struct TextMetrics {
@@ -20,7 +21,10 @@ class TextRenderer {
   std::unique_ptr<Impl> impl_;
   
 public:
-  TextRenderer(Vulkan& vulkan, const std::string& fontPath, int fontSize);
+  /// Does not load a font — call loadFont() after construction once the
+  /// absolute path under assetsRoot is known (Application ctor runs before
+  /// cwd/assetsRoot is set).
+  explicit TextRenderer(Vulkan& vulkan);
   ~TextRenderer();
   
   // Non-copyable
@@ -33,6 +37,8 @@ public:
 
   // Main interface
   void init();
+  /// Load FreeType face from an absolute (or process-cwd-relative) path.
+  canvas::VoidResult loadFont(const std::string& fontPath, int fontSize);
   void beginTextRendering();
   void renderText(const std::string& text, vec2 position, vec3 color, TextAlign align = TextAlign::Left);
   void endTextRendering();
