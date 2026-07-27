@@ -6,6 +6,7 @@
 
 #include <mutex>
 #include <type_traits>
+#include <unordered_map>
 
 namespace canvas {
 
@@ -13,6 +14,14 @@ struct Engine::Impl {
   enum class Mode { None, Offscreen, Windowed } mode = Mode::None;
   std::unique_ptr<Application> offscreen;
   std::unique_ptr<CanvasWindowHost> window;
+
+  // Staging buffers for the incremental builders below — exist purely so
+  // Swift (which as of this toolchain can't construct std::vector<T>
+  // itself; see the note on Editor.swift) can build these up one call at a
+  // time instead of handing over a whole std::vector.
+  std::vector<TreeItem> pendingTree;
+  std::vector<PropertyItem> pendingProperties;
+  std::unordered_map<int, std::vector<TextHighlightRule>> highlightRules;
 
   Application *app()
   {
@@ -127,6 +136,33 @@ std::string Engine::selectedTreeId() const
   // const_cast for withApp non-const Application API
   return const_cast<Engine *>(this)->impl_->withApp(
     [](Application &app) { return app.selectedTreeId(); });
+}
+
+void Engine::clearProjectTreeBuilder() { impl_->pendingTree.clear(); }
+
+void Engine::addTreeItem(const std::string &id, const std::string &label,
+                         int depth, bool selected)
+{
+  impl_->pendingTree.push_back(TreeItem{id, label, depth, selected});
+}
+
+void Engine::commitProjectTree()
+{
+  setProjectTree(std::move(impl_->pendingTree));
+  impl_->pendingTree.clear();
+}
+
+void Engine::clearPropertiesBuilder() { impl_->pendingProperties.clear(); }
+
+void Engine::addPropertyItem(const std::string &key, const std::string &value)
+{
+  impl_->pendingProperties.push_back(PropertyItem{key, value});
+}
+
+void Engine::commitProperties()
+{
+  setProperties(std::move(impl_->pendingProperties));
+  impl_->pendingProperties.clear();
 }
 
 void Engine::setWorkspaceLayout(shell::Node root)
@@ -286,6 +322,15 @@ bool Engine::setTextWidgetHighlightRules(
   return impl_->withApp([&](Application &app) {
     return app.setTextWidgetHighlightRules(id, rules);
   });
+}
+
+bool Engine::addTextWidgetHighlightRule(int id, const std::string &pattern,
+                                        float r, float g, float b, float a,
+                                        int priority)
+{
+  auto &rules = impl_->highlightRules[id];
+  rules.push_back(TextHighlightRule{pattern, r, g, b, a, priority, 0});
+  return setTextWidgetHighlightRules(id, rules);
 }
 
 void Engine::setTextWidgetFocused(int id, bool focused)

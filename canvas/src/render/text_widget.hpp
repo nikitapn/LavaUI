@@ -4,18 +4,10 @@
 #include <string>
 #include <vector>
 
+#include "text_highlight_rule.hpp"
+
 struct ImDrawList;
 struct ImFont;
-
-/// One syntax-highlight rule, supplied from outside (Swift/C API).
-/// Patterns use ECMAScript syntax (`std::regex::ECMAScript`).
-struct TextHighlightRule {
-  std::string pattern;
-  float r = 1.f, g = 1.f, b = 1.f, a = 1.f;
-  int priority = 0;
-  /// 0 = whole match; >0 = that capture group only.
-  int capture_group = 0;
-};
 
 /// In-canvas multiline text field: stb_textedit for editing, ImDrawList for
 /// painting (including per-run regex colors). Lives in the ImGui frame so it

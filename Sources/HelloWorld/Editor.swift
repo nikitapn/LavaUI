@@ -2,18 +2,31 @@
 import CxxCanvas
 import Foundation
 
-/// Swift wrapper over `canvas::swiftEditor*` free functions (C++ interop).
+/// Swift wrapper over `canvas::Engine` — direct C++ interop, no C shim.
 ///
-/// The C++ `struct SwiftEditor` is incomplete in the public header, so Swift
-/// imports `SwiftEditor*` as `OpaquePointer`. We pass that handle straight
-/// through — no typed pointer casts.
+/// This used to wrap a flat `canvas::swiftEditor*` free-function API (a
+/// `SwiftEditor*` opaque handle passed to every call) because Swift's C++
+/// interop wouldn't import `Engine` as a class at the time. That's no longer
+/// true: `Engine` has a proper move constructor (pimpl'd, non-copyable) and
+/// imports cleanly, so this now just holds one and calls its methods
+/// directly — no `OpaquePointer`, no `strdup`/`free`, no manually building
+/// `char**` arrays for tree/property lists.
+///
+/// Two things `Engine`'s C++ API asks of callers that don't fit Swift
+/// directly, both worked around here rather than in `Engine` itself:
+///  - `std::vector<T>` can't be constructed from Swift source in this
+///    toolchain (a ClangImporter limitation around `<vector>`'s `bool`
+///    specialization — see canvas_engine.hpp's clear/add/commit builders).
+///    `setProjectTree`/`setProperties` use those incremental builders here.
+///  - `std::expected<void, Error>` (`VoidResult`)'s `.error()` accessor
+///    returns a reference, which Swift's interop won't call (possible
+///    dangling pointer) — so failures are surfaced as `nil`/`false` here,
+///    not with the underlying message. Check stderr (Engine logs failures
+///    internally) if you need to know why something failed to open.
 public final class Editor: @unchecked Sendable {
-    /// Opaque `canvas::SwiftEditor*`.
-    private let handle: OpaquePointer
+    private var engine = canvas.Engine()
 
-    private init(handle: OpaquePointer) {
-        self.handle = handle
-    }
+    private init() {}
 
     public static func open(
         assetsRoot: String,
@@ -21,31 +34,26 @@ public final class Editor: @unchecked Sendable {
         height: Int32 = 800,
         title: String = "FBD Editor"
     ) -> Editor? {
-        let p = assetsRoot.withCString { a in
-            title.withCString { t in
-                canvas.swiftEditorCreate(a, width, height, t)
-            }
-        }
-        guard let p else { return nil }
-        return Editor(handle: p)
+        let editor = Editor()
+        let opened = editor.engine.openWindow(
+            std.string(assetsRoot), UInt32(width), UInt32(height), std.string(title)
+        ).has_value()
+        guard opened else { return nil }
+        editor.engine.setWindowVisible(true)
+        return editor
     }
 
-    deinit {
-        canvas.swiftEditorDestroy(handle)
-    }
-
-    public var isOpen: Bool { canvas.swiftEditorIsOpen(handle) }
+    public var isOpen: Bool { engine.isOpen() }
 
     public func setVisible(_ v: Bool) {
-        canvas.swiftEditorSetVisible(handle, v)
+        engine.setWindowVisible(v)
     }
 
     public func setWorkspace(_ layout: WorkspaceLayout) {
-        canvas.swiftEditorSetWorkspaceColumns(
-            handle,
-            layout.left.rawValue,
-            layout.center.rawValue,
-            layout.right.rawValue,
+        engine.setWorkspaceColumns(
+            layout.left.panelKind,
+            layout.center.panelKind,
+            layout.right.panelKind,
             layout.leftWidth,
             layout.rightWidth
         )
@@ -57,87 +65,36 @@ public final class Editor: @unchecked Sendable {
         precondition(ids.count == labels.count
             && ids.count == depths.count
             && ids.count == selected.count)
-        var idOwned: [UnsafeMutablePointer<CChar>] = []
-        var labelOwned: [UnsafeMutablePointer<CChar>] = []
-        defer {
-            idOwned.forEach { free($0) }
-            labelOwned.forEach { free($0) }
-        }
-        var idPtrs: [UnsafePointer<CChar>?] = []
-        var labelPtrs: [UnsafePointer<CChar>?] = []
+        engine.clearProjectTreeBuilder()
         for i in ids.indices {
-            let ip = strdup(ids[i])!
-            let lp = strdup(labels[i])!
-            idOwned.append(ip)
-            labelOwned.append(lp)
-            idPtrs.append(UnsafePointer(ip))
-            labelPtrs.append(UnsafePointer(lp))
+            engine.addTreeItem(std.string(ids[i]), std.string(labels[i]), depths[i], selected[i])
         }
-        var d = depths
-        var s = selected
-        idPtrs.withUnsafeMutableBufferPointer { idBuf in
-            labelPtrs.withUnsafeMutableBufferPointer { labBuf in
-                d.withUnsafeMutableBufferPointer { dBuf in
-                    s.withUnsafeMutableBufferPointer { sBuf in
-                        canvas.swiftEditorSetProjectTree(
-                            handle,
-                            idBuf.baseAddress,
-                            labBuf.baseAddress,
-                            dBuf.baseAddress,
-                            sBuf.baseAddress,
-                            Int32(ids.count)
-                        )
-                    }
-                }
-            }
-        }
+        engine.commitProjectTree()
     }
 
     public func setProperties(keys: [String], values: [String]) {
         precondition(keys.count == values.count)
-        var kOwned: [UnsafeMutablePointer<CChar>] = []
-        var vOwned: [UnsafeMutablePointer<CChar>] = []
-        defer {
-            kOwned.forEach { free($0) }
-            vOwned.forEach { free($0) }
-        }
-        var kPtrs: [UnsafePointer<CChar>?] = []
-        var vPtrs: [UnsafePointer<CChar>?] = []
+        engine.clearPropertiesBuilder()
         for i in keys.indices {
-            let k = strdup(keys[i])!
-            let v = strdup(values[i])!
-            kOwned.append(k)
-            vOwned.append(v)
-            kPtrs.append(UnsafePointer(k))
-            vPtrs.append(UnsafePointer(v))
+            engine.addPropertyItem(std.string(keys[i]), std.string(values[i]))
         }
-        kPtrs.withUnsafeMutableBufferPointer { kb in
-            vPtrs.withUnsafeMutableBufferPointer { vb in
-                canvas.swiftEditorSetProperties(
-                    handle, kb.baseAddress, vb.baseAddress, Int32(keys.count)
-                )
-            }
-        }
+        engine.commitProperties()
     }
 
     public func selectedTreeId() -> String {
-        var buf = [CChar](repeating: 0, count: 256)
-        let n = canvas.swiftEditorSelectedTreeId(handle, &buf, 256)
-        guard n > 0 else { return "" }
-        let bytes = buf.prefix(while: { $0 != 0 }).map { UInt8(bitPattern: $0) }
-        return String(decoding: bytes, as: UTF8.self)
+        String(engine.selectedTreeId())
     }
 
-    public func clearShapes() { canvas.swiftEditorClearShapes(handle) }
-    public func clearLines() { canvas.swiftEditorClearLines(handle) }
-    public func clearLabels() { canvas.swiftEditorClearLabels(handle) }
+    public func clearShapes() { engine.clearShapes() }
+    public func clearLines() { engine.clearLines() }
+    public func clearLabels() { engine.clearLabels() }
 
     @discardableResult
     public func addRoundedRect(
         x: Float, y: Float, w: Float, h: Float,
         r: Float, g: Float, b: Float, a: Float = 1
     ) -> Int32 {
-        canvas.swiftEditorAddRoundedRect(handle, x, y, w, h, r, g, b, a)
+        engine.addRoundedRect(x, y, w, h, r, g, b, a)
     }
 
     @discardableResult
@@ -145,7 +102,7 @@ public final class Editor: @unchecked Sendable {
         cx: Float, cy: Float, radius: Float,
         r: Float, g: Float, b: Float, a: Float = 1
     ) -> Int32 {
-        canvas.swiftEditorAddCircle(handle, cx, cy, radius, r, g, b, a)
+        engine.addCircle(cx, cy, radius, r, g, b, a)
     }
 
     @discardableResult
@@ -153,7 +110,7 @@ public final class Editor: @unchecked Sendable {
         x1: Float, y1: Float, x2: Float, y2: Float,
         r: Float, g: Float, b: Float, a: Float = 1
     ) -> Int32 {
-        canvas.swiftEditorAddLine(handle, x1, y1, x2, y2, r, g, b, a)
+        engine.addLine(x1, y1, x2, y2, r, g, b, a)
     }
 
     @discardableResult
@@ -161,7 +118,7 @@ public final class Editor: @unchecked Sendable {
         _ text: String, x: Float, y: Float,
         r: Float, g: Float, b: Float
     ) -> Int32 {
-        text.withCString { canvas.swiftEditorAddLabel(handle, $0, x, y, r, g, b) }
+        engine.addLabel(std.string(text), x, y, r, g, b)
     }
 
     @discardableResult
@@ -169,13 +126,11 @@ public final class Editor: @unchecked Sendable {
         x: Float, y: Float, w: Float, h: Float,
         text: String, multiline: Bool
     ) -> Int32 {
-        text.withCString {
-            canvas.swiftEditorAddTextWidget(handle, x, y, w, h, $0, multiline)
-        }
+        engine.addTextWidget(x, y, w, h, std.string(text), multiline)
     }
 
     public func setTextWidgetFocused(_ id: Int32, _ focused: Bool) {
-        canvas.swiftEditorSetTextWidgetFocused(handle, id, focused)
+        engine.setTextWidgetFocused(id, focused)
     }
 
     @discardableResult
@@ -183,23 +138,19 @@ public final class Editor: @unchecked Sendable {
         id: Int32, pattern: String,
         r: Float, g: Float, b: Float, a: Float = 1, priority: Int32 = 0
     ) -> Bool {
-        pattern.withCString {
-            canvas.swiftEditorAddTextHighlight(handle, id, $0, r, g, b, a, priority)
-        }
+        engine.addTextWidgetHighlightRule(id, std.string(pattern), r, g, b, a, priority)
     }
 
     // ─── Declarative UI ──────────────────────────────────────────────────
 
-    public func uiReset() { canvas.swiftEditorUiReset(handle) }
+    public func uiReset() { engine.uiReset() }
 
     public func uiBegin(
         kind: UIKind, id: Int32 = 0,
         flexGrow: Float = 0, flexShrink: Float = 1,
         width: Float = -1, height: Float = -1, padding: Float = 0
     ) {
-        canvas.swiftEditorUiBegin(
-            handle, kind.rawValue, id, flexGrow, flexShrink, width, height, padding
-        )
+        engine.uiBegin(kind.rawValue, id, flexGrow, flexShrink, width, height, padding)
     }
 
     public func uiText(
@@ -207,19 +158,19 @@ public final class Editor: @unchecked Sendable {
         r: Float, g: Float, b: Float, clickable: Bool
     ) {
         text.withCString {
-            canvas.swiftEditorUiText(handle, id, $0, r, g, b, clickable)
+            engine.uiText(id, $0, r, g, b, clickable)
         }
     }
 
-    public func uiEnd() { canvas.swiftEditorUiEnd(handle) }
-    public func uiCommit() { canvas.swiftEditorUiCommit(handle) }
+    public func uiEnd() { engine.uiEnd() }
+    public func uiCommit() { engine.uiCommit() }
 
     /// Drain click (and future) events. Returns widget id + kind (0=Click).
     public func uiPollEvent() -> (widgetId: Int32, kind: Int32)? {
         var id: Int32 = 0
         var kind: Int32 = 0
-        let ok = canvas.swiftEditorUiPollEvent(handle, &id, &kind)
-        return ok != 0 ? (id, kind) : nil
+        let ok = engine.uiPollEvent(&id, &kind)
+        return ok ? (id, kind) : nil
     }
 
     /// Push a full tree and swap it in (structural hot update).

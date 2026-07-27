@@ -1,19 +1,5 @@
 #pragma once
 
-#include <string>
-
-namespace canvas {
-
-struct TreeItem {
-  std::string id;
-  std::string label;
-  int depth = 0;
-  bool selected = false;
-};
-
-struct PropertyItem {
-  std::string key;
-  std::string value;
-};
-
-} // namespace canvas
+// Shim so the real header (canvas/src/shell/model.hpp) stays the single
+// source of truth instead of being duplicated (and drifting) here.
+#include "../../../../../src/shell/model.hpp"

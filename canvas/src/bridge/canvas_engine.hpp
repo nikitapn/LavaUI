@@ -4,16 +4,21 @@
 // when calling from C++ or Swift C++ interop. The C API in canvas_c_api.h
 // is a thin wrapper for targets that still need plain C.
 
-#include "shell/layout.hpp"
-#include "shell/model.hpp"
-#include "util/result.hpp"
+// Directory-relative (not "shell/layout.hpp"-from-include-root) so this
+// header resolves standalone via quote-include's current-file-relative
+// search, without needing an extra -I search path — canvas_swift's
+// CxxCanvas shim includes this file directly and SwiftPM's header search
+// path setting refuses paths outside the package root.
+#include "../shell/layout.hpp"
+#include "../shell/model.hpp"
+#include "../util/result.hpp"
+#include "../render/text_highlight_rule.hpp"
 
 #include <cstdint>
 #include <memory>
 #include <string>
 #include <vector>
 
-struct TextHighlightRule;
 class Application;
 
 namespace canvas {
@@ -50,6 +55,21 @@ class Engine {
   void setProperties(std::vector<PropertyItem> items);
   /// Currently selected tree id (empty if none).
   std::string selectedTreeId() const;
+
+  // Incremental builders equivalent to setProjectTree/setProperties above,
+  // for callers that can't construct std::vector<T> directly (Swift's C++
+  // interop can call this API perfectly well, but as of this toolchain
+  // can't spell `std.vector<T>` itself to build the argument — see the
+  // note on Editor.swift). clear*/add*/commit* stages into Engine's own
+  // buffer; commit* is what actually calls setProjectTree/setProperties.
+  void clearProjectTreeBuilder();
+  void addTreeItem(const std::string &id, const std::string &label,
+                   int depth, bool selected);
+  void commitProjectTree();
+
+  void clearPropertiesBuilder();
+  void addPropertyItem(const std::string &key, const std::string &value);
+  void commitProperties();
 
   void setWorkspaceLayout(shell::Node root);
   void setWorkspaceColumns(shell::PanelKind left, shell::PanelKind center,
@@ -93,6 +113,15 @@ class Engine {
   void setTextWidgetText(int id, const std::string &text);
   std::string textWidgetText(int id) const;
   bool setTextWidgetHighlightRules(int id, const std::vector<TextHighlightRule> &rules);
+  /// Swift-friendly single-rule form of setTextWidgetHighlightRules (same
+  /// std::vector-construction reason as the project tree/properties
+  /// builders above). Replaces every existing rule on this widget with
+  /// just this one — call once per pattern you want, in priority order,
+  /// if you need more than one active rule at a time you'll want the
+  /// batch overload from C++ instead.
+  bool addTextWidgetHighlightRule(int id, const std::string &pattern,
+                                  float r, float g, float b, float a,
+                                  int priority);
   void setTextWidgetFocused(int id, bool focused);
   bool textWidgetChanged(int id);
 

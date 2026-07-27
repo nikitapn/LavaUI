@@ -1,4 +1,5 @@
 #if canImport(CxxCanvas)
+import CxxCanvas
 
 /// Panel roles for the Yoga workspace (must match shell::PanelKind).
 public enum WorkspacePanel: Int32, Sendable {
@@ -6,6 +7,15 @@ public enum WorkspacePanel: Int32, Sendable {
     case diagram = 1
     case properties = 2
     case log = 3
+
+    var panelKind: shell.PanelKind {
+        switch self {
+        case .projectTree: return .ProjectTree
+        case .diagram: return .Diagram
+        case .properties: return .Properties
+        case .log: return .Log
+        }
+    }
 }
 
 /// Declarative chrome layout — SwiftUI-inspired, not SwiftUI.

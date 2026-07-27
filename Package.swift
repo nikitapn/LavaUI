@@ -26,6 +26,11 @@ let package = Package(
             ],
             swiftSettings: [
                 .interoperabilityMode(.Cxx),
+                // Must match CxxCanvas's own -std=c++23 (canvas_engine.hpp
+                // uses std::expected/VoidResult) or ClangImporter parses it
+                // under an older default C++ standard and chokes on
+                // std::unexpected.
+                .unsafeFlags(["-Xcc", "-std=c++23"]),
             ]
         ),
         .target(name: "FBDModel"),

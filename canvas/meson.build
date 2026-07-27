@@ -10,8 +10,14 @@ project('2d', 'cpp',
 fs = import('fs')
 cpp = meson.get_compiler('cpp')
 
-# libc++ is applied per-target (main exe only) to match the original CMake setup;
-# using it project-wide would cause ABI mismatches with the system GTest build.
+# Historically libc++ was forced under clang (see common_cpp_args/
+# common_link_args below) to match an older CMake setup. That's now actively
+# harmful: canvas_lib is also what Swift's C++ interop links against
+# (canvas_swift/Sources/CxxCanvas), and Swift's Linux toolchain is built
+# against libstdc++ — its own interop shim (libcxxstdlibshim.h) doesn't even
+# parse under -stdlib=libc++. Since this system's libstdc++ (gcc 16) already
+# has full C++23 support (<expected> included), there's no remaining reason
+# to diverge from the platform default here.
 
 # ——— System dependencies ———
 vulkan_dep  = dependency('vulkan')
@@ -104,7 +110,6 @@ engine_sources = [
   'src/bridge/canvas_bridge.cpp',
   'src/bridge/canvas_c_api.cpp',
   'src/bridge/canvas_engine.cpp',
-  'src/bridge/swift_editor.cpp',
 ]
 
 main_inc = include_directories(
@@ -119,11 +124,11 @@ main_inc = include_directories(
   'third-party/yoga',
 )
 
-common_cpp_args = ['-DGLM_FORCE_DEPTH_ZERO_TO_ONE'] + (cpp.get_id() == 'clang' ? ['-stdlib=libc++'] : [])
+common_cpp_args = ['-DGLM_FORCE_DEPTH_ZERO_TO_ONE']
 if x11_dep.found()
   common_cpp_args += ['-DCANVAS_HAVE_X11']
 endif
-common_link_args = cpp.get_id() == 'clang' ? ['-stdlib=libc++'] : []
+common_link_args = []
 
 # ——— Yoga (flexbox layout for app chrome) ———
 yoga_inc = include_directories('third-party/yoga')
