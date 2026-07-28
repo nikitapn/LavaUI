@@ -55,6 +55,9 @@ enum class InputEventKind : uint32_t {
   MouseMove = 3,
   /// Framebuffer / swapchain size changed. `x`/`y` hold new width/height.
   Resize = 4,
+  /// Keyboard. `button` = key (GLFW), `x` = action (1 press/repeat, 0 release),
+  /// `y` = mods bitfield (GLFW: shift=1, control=2, alt=4, super=8).
+  Key = 5,
 };
 
 struct InputEvent {

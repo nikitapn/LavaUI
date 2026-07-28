@@ -53,6 +53,10 @@ public:
   /// Current swapchain / framebuffer size in pixels (after last ensure).
   void framebufferSize(float &outW, float &outH) const;
 
+  /// Whole-window camera: layout stays in window pixels; renderer zooms/pans.
+  /// `zoom` must be > 0 (clamped to 1 if not). Pan is in layout pixels.
+  void setViewTransform(float zoom, float panX, float panY);
+
   /// Load the face TextRenderer uses for draw-list text. Swift is the only
   /// caller (FontStore); Application does not pick a default path.
   [[nodiscard]] canvas::VoidResult loadFont(const std::string &path, float pixelSize);

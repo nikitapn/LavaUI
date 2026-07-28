@@ -16,7 +16,8 @@ private enum FBDLayout {
 }
 
 /// Emit FBD geometry into a draw list in **window** coordinates
-/// (diagram-local + host origin).
+/// (diagram-local + host origin). Diagram camera zoom is intentionally
+/// out of scope here — UI scale is discrete font size via `FontStore`.
 func emitDiagram(
     _ diagram: Diagram,
     into list: DrawList,

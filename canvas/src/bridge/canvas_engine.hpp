@@ -77,6 +77,9 @@ class Engine {
   /// Current swapchain extent in pixels.
   void framebufferSize(float &outW, float &outH) const;
 
+  /// Whole-window camera (vertex push constants). Layout/hit-test stay unscaled.
+  void setViewTransform(float zoom, float panX, float panY);
+
   /// Diagram panel origin in window pixels (for coordinate transforms).
   shell::Rect diagramViewport() const;
 

@@ -524,21 +524,53 @@ public final class LayoutHost {
 
         let w = max(1, width)
         let h = max(1, height)
+        let sizeChanged =
+            !layoutValid
+            || abs(w - lastLayoutWidth) > 0.5
+            || abs(h - lastLayoutHeight) > 0.5
+
+        // Full-window root: exact size so flexGrow children receive free space.
+        // Re-apply every pass — reconcile's applyStyle may have reset auto.
         YGNodeStyleSetWidth(yogaRoot, w)
         YGNodeStyleSetHeight(yogaRoot, h)
+        // Min size tracks the viewport so a stale content-sized layout cannot
+        // "win" against a larger window if Yoga skips a dirty path.
+        YGNodeStyleSetMinWidth(yogaRoot, w)
+        YGNodeStyleSetMinHeight(yogaRoot, h)
+
+        if sizeChanged {
+            // Measure leaves cache by constraint; force remeasure when the
+            // viewport changes (panel AtMost widths can change with chrome).
+            markAllMeasureLeavesDirty(root)
+        }
+
         YGNodeCalculateLayout(yogaRoot, w, h, YGDirectionLTR)
 
         var frames: [LayoutFrame] = []
-        if boxes.count == 1 {
-            boxes[0].collectFrames(originX: 0, originY: 0, into: &frames)
-        } else {
-            boxes[0].collectFrames(originX: 0, originY: 0, into: &frames)
-        }
+        boxes[0].collectFrames(originX: 0, originY: 0, into: &frames)
         lastFrames = frames
         lastLayoutWidth = w
         lastLayoutHeight = h
         layoutValid = true
         return frames
+    }
+
+    private func markAllMeasureLeavesDirty(_ node: any AnyViewNode) {
+        if let leaf = node as? LeafNode {
+            leaf.markMeasureDirty()
+        }
+        for child in node.childNodes {
+            markAllMeasureLeavesDirty(child)
+        }
+    }
+
+    /// After `FontStore` content-scale change: force every text leaf to
+    /// re-measure on the next `calculateLayout` (library helper).
+    public func invalidateTextMetrics() {
+        layoutValid = false
+        if let root {
+            markAllMeasureLeavesDirty(root)
+        }
     }
 
     public func dumpFrames(width: Float, height: Float) {

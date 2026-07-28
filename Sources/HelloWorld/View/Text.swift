@@ -46,6 +46,7 @@ public struct Text: PrimitiveView {
 
     public func reconcilePrimitive(_ node: any AnyViewNode) -> any AnyViewNode {
         if let leaf = node as? LeafNode, leaf.kind == .text {
+            let prevFontId = leaf.font?.identity
             leaf.update(
                 label: "Text \"\(shortLabel)\"",
                 width: .auto,
@@ -58,7 +59,12 @@ public struct Text: PrimitiveView {
             if !leaf.usesTextMeasure {
                 leaf.installTextMeasure()
             } else {
+                // Always dirty: content scale swaps `FontStore.default` without
+                // changing the string, and Yoga must re-measure with the new face.
                 leaf.markMeasureDirty()
+                if prevFontId != leaf.font?.identity {
+                    leaf.cachedLines = []
+                }
             }
             return leaf
         }

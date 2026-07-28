@@ -175,6 +175,13 @@ void Engine::framebufferSize(float &outW, float &outH) const
   });
 }
 
+void Engine::setViewTransform(float zoom, float panX, float panY)
+{
+  impl_->withApp([&](Application &app) {
+    app.setViewTransform(zoom, panX, panY);
+  });
+}
+
 void Engine::setDiagramViewport(float x, float y, float w, float h)
 {
   impl_->withApp([&](Application &app) {

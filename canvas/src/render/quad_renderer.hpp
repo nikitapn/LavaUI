@@ -76,6 +76,10 @@ class QuadRenderer {
 
   void end();
 
+  /// Camera transform applied at draw time (layout pixels → screen).
+  /// Zoom is about the viewport center; pan is in layout pixels.
+  void setViewTransform(float zoom, float panX, float panY);
+
   /// Records every batch, in order, into `commandBuffer`.
   void draw(VkCommandBuffer commandBuffer);
 
@@ -137,4 +141,7 @@ class QuadRenderer {
   uint32_t              batchStartIndex_ = 0;
 
   vec2 viewportSize_{800.0f, 600.0f};
+  float viewZoom_ = 1.0f;
+  float viewPanX_ = 0.0f;
+  float viewPanY_ = 0.0f;
 };

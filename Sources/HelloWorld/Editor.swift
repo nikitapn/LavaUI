@@ -79,7 +79,8 @@ public final class Editor: @unchecked Sendable {
         return id >= 0 ? UInt32(id) : nil
     }
 
-    /// Raw input: mouse, resize (kind 4 → x/y = new width/height).
+    /// Raw input: mouse, resize (kind 4 → x/y = new width/height),
+    /// key (kind 5 → button=key, x=action, y=mods).
     public func pollInputEvent() -> (kind: UInt32, x: Float, y: Float, button: Int32)? {
         var ev = canvas.InputEvent()
         guard engine.pollInputEvent(&ev) else { return nil }
@@ -92,6 +93,12 @@ public final class Editor: @unchecked Sendable {
         var h: Float = 0
         engine.framebufferSize(&w, &h)
         return (w, h)
+    }
+
+    /// Whole-window camera. Layout and Yoga stay at zoom=1; the quad shader
+    /// applies center-zoom then pan. Hit-tests must unproject first.
+    public func setViewTransform(zoom: Float, panX: Float = 0, panY: Float = 0) {
+        engine.setViewTransform(zoom, panX, panY)
     }
 }
 #endif

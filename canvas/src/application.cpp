@@ -361,7 +361,10 @@ struct Application::Impl
       ev.x = x;
       ev.y = y;
       ev.button = button;
-      inputEvents_.push_back(ev);
+      {
+        std::lock_guard lock(inputMu_);
+        inputEvents_.push_back(ev);
+      }
     }
 
   }
@@ -377,7 +380,28 @@ struct Application::Impl
       }
     }
 
+    // Forward to Swift (zoom, shortcuts). Use full GLFW key range.
+    if (action == ACTION_PRESS || action == ACTION_REPEAT || action == ACTION_RELEASE) {
+      canvas::InputEvent ev;
+      ev.kind = static_cast<uint32_t>(canvas::InputEventKind::Key);
+      ev.button = key;
+      ev.x = static_cast<float>(action);
+      ev.y = static_cast<float>(mods);
+      {
+        std::lock_guard lock(inputMu_);
+        inputEvents_.push_back(ev);
+      }
+    }
+
     handleKeyInput(key, 0, action, mods);
+  }
+
+  void setViewTransform(float zoom, float panX, float panY)
+  {
+    viewZoom_ = zoom > 0.f ? zoom : 1.f;
+    viewPanX_ = panX;
+    viewPanY_ = panY;
+    quadRenderer.setViewTransform(viewZoom_, viewPanX_, viewPanY_);
   }
 
   void bridgeTextInput(const std::string &utf8)
@@ -404,7 +428,10 @@ struct Application::Impl
         ev.x = static_cast<float>(vulkan.getExtent().width);
         ev.y = static_cast<float>(vulkan.getExtent().height);
         ev.button = 0;
-        inputEvents_.push_back(ev);
+        {
+          std::lock_guard lock(inputMu_);
+          inputEvents_.push_back(ev);
+        }
       }
 
       auto now = std::chrono::steady_clock::now();
@@ -577,7 +604,15 @@ struct Application::Impl
   std::vector<canvas::DrawCommand> drawCmds_;
   std::vector<canvas::GlyphInstance> drawGlyphs_;
   bool drawListActive_ = false; // explicit; empty list must not fall back to legacy
+  // GLFW callbacks (render thread, outside window mutex) vs Swift poll (under
+  // window mutex) — protect the queue so Resize/Key/Mouse are not lost.
+  std::mutex inputMu_;
   std::deque<canvas::InputEvent> inputEvents_;
+
+  // Whole-window camera (layout stays at zoom=1; vertex shader applies this).
+  float viewZoom_ = 1.f;
+  float viewPanX_ = 0.f;
+  float viewPanY_ = 0.f;
 
   shell::Rect diagramViewport() const { return diagramViewport_; }
 
@@ -591,6 +626,7 @@ struct Application::Impl
 
   bool pollInputEvent(canvas::InputEvent &out)
   {
+    std::lock_guard lock(inputMu_);
     if (inputEvents_.empty()) return false;
     out = inputEvents_.front();
     inputEvents_.pop_front();
@@ -680,6 +716,11 @@ void Application::setDiagramViewport(float x, float y, float w, float h)
 void Application::framebufferSize(float &outW, float &outH) const
 {
   impl_->framebufferSize(outW, outH);
+}
+
+void Application::setViewTransform(float zoom, float panX, float panY)
+{
+  impl_->setViewTransform(zoom, panX, panY);
 }
 
 canvas::VoidResult Application::loadFont(const std::string &path, float pixelSize)

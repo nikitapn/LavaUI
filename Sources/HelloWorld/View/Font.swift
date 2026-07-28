@@ -130,14 +130,94 @@ public final class UIFont: @unchecked Sendable {
     }
 }
 
+// MARK: - Discrete content scale (library-facing)
+
+/// Discrete UI text scale — bitmap fonts re-raster at fixed pixel sizes so
+/// Yoga measure and FreeType glyphs stay pixel-aligned (no GPU scale of
+/// atlas coverage).
+///
+/// Intended as a reusable policy object for a future declarative-UI package:
+/// apps bind shortcuts to `zoomIn` / `zoomOut`; layout hosts re-run after
+/// `FontStore.apply`.
+public struct ContentScale: Equatable, Sendable {
+    /// Multipliers of the bootstrap base size (e.g. 16 → 12…32).
+    public static let defaultMultipliers: [Float] = [0.75, 1.0, 1.25, 1.5, 1.75, 2.0]
+
+    public let multipliers: [Float]
+    /// Index into `multipliers` (clamped).
+    public private(set) var index: Int
+    /// Face size at multiplier 1.0.
+    public let basePixelSize: Float
+
+    public init(
+        basePixelSize: Float = 16,
+        multipliers: [Float] = ContentScale.defaultMultipliers,
+        index: Int? = nil
+    ) {
+        self.basePixelSize = max(1, basePixelSize)
+        let m = multipliers.isEmpty ? ContentScale.defaultMultipliers : multipliers
+        self.multipliers = m
+        if let index {
+            self.index = min(max(0, index), m.count - 1)
+        } else {
+            // Prefer exact 1.0 step when present.
+            self.index = m.firstIndex(where: { abs($0 - 1) < 0.001 }) ?? (m.count / 2)
+        }
+    }
+
+    public var multiplier: Float { multipliers[index] }
+
+    /// Integer FT pixel size for the active step (min 1).
+    public var pixelSize: Float {
+        max(1, (basePixelSize * multiplier).rounded())
+    }
+
+    public var canZoomIn: Bool { index < multipliers.count - 1 }
+    public var canZoomOut: Bool { index > 0 }
+
+    @discardableResult
+    public mutating func zoomIn() -> Bool {
+        guard canZoomIn else { return false }
+        index += 1
+        return true
+    }
+
+    @discardableResult
+    public mutating func zoomOut() -> Bool {
+        guard canZoomOut else { return false }
+        index -= 1
+        return true
+    }
+
+    @discardableResult
+    public mutating func reset() -> Bool {
+        let one = multipliers.firstIndex(where: { abs($0 - 1) < 0.001 }) ?? 0
+        guard index != one else { return false }
+        index = one
+        return true
+    }
+}
+
 /// Default UI font when `Text` does not specify one.
 ///
-/// **Swift owns font policy** (which face/size). After loading for measure/
-/// Yoga, the same path is pushed to C++ via `Editor.loadFont` so draw-list
-/// `TextRenderer` paints with matching metrics. C++ never picks a default.
+/// **Swift owns font policy** (face + discrete pixel size). The same
+/// `(path, pixelSize)` is registered with the engine so measure and draw
+/// share one FreeType face. C++ never picks a default.
+///
+/// Scale changes re-load/register a face, clear layout caches, and require
+/// the app to re-`setRoot` + Yoga (library: call `apply` then dirty layout).
 public enum FontStore {
     /// Global default — UI thread only. Used by `Text` when `font == nil`.
     nonisolated(unsafe) public static var `default`: UIFont?
+
+    /// Active discrete scale (library state).
+    nonisolated(unsafe) public static var scale = ContentScale()
+
+    /// Assets root last used by `bootstrap` / `apply` (needed to reload sizes).
+    nonisolated(unsafe) public static var assetsRoot: String?
+
+    /// Faces already loaded for this process, keyed by rounded pixel size.
+    nonisolated(unsafe) private static var faceCache: [Int: UIFont] = [:]
 
     /// Back-compat alias.
     nonisolated(unsafe) public static var ui: UIFont? {
@@ -145,29 +225,74 @@ public enum FontStore {
         set { `default` = newValue }
     }
 
-    /// Load default face under `assetsRoot` and install on the engine for draw.
+    /// Load default face under `assetsRoot` and register with the engine.
     @discardableResult
     public static func bootstrap(
         assetsRoot: String,
         pixelSize: Float = 16,
         into editor: Editor? = nil
     ) -> UIFont? {
-        if let existing = `default` {
-            // Still push to engine if we re-open a window. registerFont is
-            // idempotent per (path, size), so this returns the same id.
-            if let editor {
-                existing.registerWithEngine(editor)
-            }
-            return existing
+        self.assetsRoot = assetsRoot
+        scale = ContentScale(basePixelSize: pixelSize)
+        return apply(scale: scale, into: editor)
+    }
+
+    /// Install `scale`'s pixel size as `FontStore.default`, register with the
+    /// engine, and drop measure/shape caches that referenced the old size.
+    /// Returns the new default face, or nil on load failure (keeps previous).
+    @discardableResult
+    public static func apply(scale newScale: ContentScale, into editor: Editor?) -> UIFont? {
+        scale = newScale
+        let px = newScale.pixelSize
+        let key = Int(px.rounded())
+
+        let font: UIFont?
+        if let cached = faceCache[key] {
+            font = cached
+        } else if let root = assetsRoot, let loaded = UIFont.loadUI(assetsRoot: root, pixelSize: px) {
+            faceCache[key] = loaded
+            font = loaded
+        } else if let path = `default`?.path, let loaded = UIFont(path: path, pixelSize: px) {
+            faceCache[key] = loaded
+            font = loaded
+        } else {
+            font = nil
         }
-        guard let font = UIFont.loadUI(assetsRoot: assetsRoot, pixelSize: pixelSize) else {
-            return nil
-        }
-        `default` = font
+
+        guard let font else { return nil }
+
         if let editor {
             font.registerWithEngine(editor)
         }
+        `default` = font
+        // Old size's shape cache dies with the old UIFont when unreferenced;
+        // shared measure cache keys include font identity — clear to free RAM.
+        TextLayoutCache.shared.clear()
         return font
+    }
+
+    /// Step up one discrete size. `true` if the scale (and face) changed.
+    @discardableResult
+    public static func zoomIn(into editor: Editor?) -> Bool {
+        var s = scale
+        guard s.zoomIn() else { return false }
+        return apply(scale: s, into: editor) != nil
+    }
+
+    /// Step down one discrete size. `true` if the scale (and face) changed.
+    @discardableResult
+    public static func zoomOut(into editor: Editor?) -> Bool {
+        var s = scale
+        guard s.zoomOut() else { return false }
+        return apply(scale: s, into: editor) != nil
+    }
+
+    /// Return to multiplier 1.0. `true` if the scale (and face) changed.
+    @discardableResult
+    public static func resetScale(into editor: Editor?) -> Bool {
+        var s = scale
+        guard s.reset() else { return false }
+        return apply(scale: s, into: editor) != nil
     }
 }
 

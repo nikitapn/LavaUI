@@ -43,6 +43,7 @@ struct HelloWorldApp {
         var selectedBlockId: String? = nil
         var clickCount = 0
         var dirty = true
+        var lastLoggedLayout: (w: Float, h: Float) = (0, 0)
 
         func makeChrome() -> EditorChrome {
             let blocks = diagram.blocks.values.sorted { $0.name < $1.name }
@@ -82,6 +83,15 @@ struct HelloWorldApp {
                     FileHandle.standardError.write(Data(msg.utf8))
                 }
             }
+            if abs(bodyW - lastLoggedLayout.w) > 0.5 || abs(bodyH - lastLoggedLayout.h) > 0.5,
+               let dh = frames.first(where: { $0.label == "DiagramHost" })
+            {
+                lastLoggedLayout = (bodyW, bodyH)
+                let msg =
+                    "layout: \(Int(bodyW))×\(Int(bodyH)) DiagramHost "
+                    + "\(Int(dh.w))×\(Int(dh.h)) @ (\(Int(dh.x)),\(Int(dh.y)))\n"
+                FileHandle.standardError.write(Data(msg.utf8))
+            }
 
             guard let root = host.rootNode else { return }
 
@@ -118,6 +128,18 @@ struct HelloWorldApp {
 
         renderFrame()
 
+        // GLFW key / mod codes (match canvas key_codes + glfw3.h).
+        let keyEqual: Int32 = 61
+        let keyMinus: Int32 = 45
+        let keyKpAdd: Int32 = 334
+        let keyKpSub: Int32 = 333
+        let key0: Int32 = 48
+        let keyKp0: Int32 = 320
+        let modShift: Int32 = 0x0001
+        let modControl: Int32 = 0x0002
+        let actionPress: Float = 1
+        let actionRepeat: Float = 2
+
         while editor.isOpen {
             while let ev = editor.pollInputEvent() {
                 switch ev.kind {
@@ -138,6 +160,35 @@ struct HelloWorldApp {
                         FileHandle.standardError.write(
                             Data("layout resize → \(Int(nw))×\(Int(nh))\n".utf8)
                         )
+                    }
+                case 5: // Key — button=key, x=action, y=mods
+                    // Discrete UI scale: re-font → re-measure → Yoga reflow.
+                    let key = ev.button
+                    let action = ev.x
+                    let mods = Int32(ev.y)
+                    let isDown = action == actionPress || action == actionRepeat
+                    guard isDown else { break }
+                    let ctrlShift = (mods & modControl) != 0 && (mods & modShift) != 0
+                    guard ctrlShift else { break }
+                    let changed: Bool
+                    if key == keyEqual || key == keyKpAdd {
+                        changed = FontStore.zoomIn(into: editor)
+                    } else if key == keyMinus || key == keyKpSub {
+                        changed = FontStore.zoomOut(into: editor)
+                    } else if key == key0 || key == keyKp0 {
+                        changed = FontStore.resetScale(into: editor)
+                    } else {
+                        changed = false
+                    }
+                    if changed {
+                        host.invalidateTextMetrics()
+                        dirty = true
+                        let s = FontStore.scale
+                        let msg = String(
+                            format: "ui scale → %.2fx (%dpx)\n",
+                            s.multiplier, Int(s.pixelSize)
+                        )
+                        FileHandle.standardError.write(Data(msg.utf8))
                     }
                 default:
                     break

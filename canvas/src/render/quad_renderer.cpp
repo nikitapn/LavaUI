@@ -277,10 +277,19 @@ void QuadRenderer::createPipeline() {
     .pDynamicStates    = dynamicStates.data(),
   };
 
+  // Must match quad.vert Push { vec2 viewport; vec2 pan; float zoom; float pad; }
+  struct ViewPush {
+    float viewport[2];
+    float pan[2];
+    float zoom;
+    float pad;
+  };
+  static_assert(sizeof(ViewPush) == 24, "ViewPush must match shader std140");
+
   VkPushConstantRange pushRange{
     .stageFlags = VK_SHADER_STAGE_VERTEX_BIT,
     .offset     = 0,
-    .size       = sizeof(vec2),
+    .size       = sizeof(ViewPush),
   };
 
   VkDescriptorSetLayout    setLayout = descriptorSetLayout_;
@@ -538,6 +547,13 @@ void QuadRenderer::end() {
   std::memcpy(indexMapped_, indices_.data(), indices_.size() * sizeof(uint32_t));
 }
 
+void QuadRenderer::setViewTransform(float zoom, float panX, float panY)
+{
+  viewZoom_ = zoom > 0.f ? zoom : 1.f;
+  viewPanX_ = panX;
+  viewPanY_ = panY;
+}
+
 void QuadRenderer::draw(VkCommandBuffer commandBuffer) {
   if (batches_.empty() || vertices_.empty()) {
     return;
@@ -546,8 +562,21 @@ void QuadRenderer::draw(VkCommandBuffer commandBuffer) {
   vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_);
   vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
                           pipelineLayout_, 0, 1, &descriptorSet_, 0, nullptr);
+
+  struct ViewPush {
+    float viewport[2];
+    float pan[2];
+    float zoom;
+    float pad;
+  };
+  ViewPush pc{
+    {viewportSize_.x, viewportSize_.y},
+    {viewPanX_, viewPanY_},
+    viewZoom_,
+    0.f,
+  };
   vkCmdPushConstants(commandBuffer, pipelineLayout_, VK_SHADER_STAGE_VERTEX_BIT,
-                     0, sizeof(vec2), &viewportSize_);
+                     0, sizeof(ViewPush), &pc);
 
   VkViewport viewport{
     .x = 0.0f, .y = 0.0f,
@@ -561,11 +590,43 @@ void QuadRenderer::draw(VkCommandBuffer commandBuffer) {
   vkCmdBindVertexBuffers(commandBuffer, 0, 1, &vb, &offset);
   vkCmdBindIndexBuffer(commandBuffer, indexBuffer_, 0, VK_INDEX_TYPE_UINT32);
 
+  // Scissors were recorded in layout space; map them through the same
+  // center-zoom + pan used by the vertex shader.
+  const float cx = viewportSize_.x * 0.5f;
+  const float cy = viewportSize_.y * 0.5f;
+  const float z  = viewZoom_;
+  auto mapScissor = [&](VkRect2D s) -> VkRect2D {
+    const float x0 = (static_cast<float>(s.offset.x) - cx) * z + cx + viewPanX_;
+    const float y0 = (static_cast<float>(s.offset.y) - cy) * z + cy + viewPanY_;
+    const float x1 = (static_cast<float>(s.offset.x + static_cast<int32_t>(s.extent.width)) - cx) * z
+                     + cx + viewPanX_;
+    const float y1 = (static_cast<float>(s.offset.y + static_cast<int32_t>(s.extent.height)) - cy) * z
+                     + cy + viewPanY_;
+    const int32_t ix0 = static_cast<int32_t>(std::floor(std::min(x0, x1)));
+    const int32_t iy0 = static_cast<int32_t>(std::floor(std::min(y0, y1)));
+    const int32_t ix1 = static_cast<int32_t>(std::ceil(std::max(x0, x1)));
+    const int32_t iy1 = static_cast<int32_t>(std::ceil(std::max(y0, y1)));
+    // Clip to framebuffer.
+    const int32_t cx0 = std::max(0, ix0);
+    const int32_t cy0 = std::max(0, iy0);
+    const int32_t cx1 = std::min(static_cast<int32_t>(viewportSize_.x), ix1);
+    const int32_t cy1 = std::min(static_cast<int32_t>(viewportSize_.y), iy1);
+    return VkRect2D{
+      {cx0, cy0},
+      {static_cast<uint32_t>(std::max(0, cx1 - cx0)),
+       static_cast<uint32_t>(std::max(0, cy1 - cy0))},
+    };
+  };
+
   for (const auto &batch : batches_) {
     if (batch.scissor.extent.width == 0 || batch.scissor.extent.height == 0) {
       continue;  // fully clipped away
     }
-    vkCmdSetScissor(commandBuffer, 0, 1, &batch.scissor);
+    VkRect2D sc = (z == 1.f && viewPanX_ == 0.f && viewPanY_ == 0.f)
+                    ? batch.scissor
+                    : mapScissor(batch.scissor);
+    if (sc.extent.width == 0 || sc.extent.height == 0) continue;
+    vkCmdSetScissor(commandBuffer, 0, 1, &sc);
     vkCmdDrawIndexed(commandBuffer, batch.indexCount, 1, batch.firstIndex, 0, 0);
   }
 }

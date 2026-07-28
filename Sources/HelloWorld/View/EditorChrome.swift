@@ -24,8 +24,11 @@ public struct EditorChrome: View {
     public var body: some View {
         let sel = selectedId ?? blocks.first.map { String($0.id.rawValue) }
 
+        // Root fills the window via LayoutHost (exact width/height). flexGrow
+        // on the row is a no-op as yoga root but documents intent; DiagramHost
+        // takes remaining main-axis space, columns stretch on the cross axis.
         return HStack(flexGrow: 1, padding: 4) {
-            VStack(width: .pt(220), padding: 8) {
+            VStack(flexGrow: 0, width: .pt(220), height: .auto, padding: 8) {
                 Text("Project", color: .accent)
                 Text("Diagrams", color: .secondary)
                 Text("  Main", color: .primary)
@@ -43,9 +46,9 @@ public struct EditorChrome: View {
                 Text("clicks: \(clickCount)", color: .muted)
             }
 
-            DiagramHost()
+            DiagramHost(flexGrow: 1)
 
-            VStack(width: .pt(260), padding: 8) {
+            VStack(flexGrow: 0, width: .pt(260), height: .auto, padding: 8) {
                 Text("Properties", color: .accent)
                 if let sel, let bid = Int(sel),
                    let block = blocks.first(where: { $0.id.rawValue == bid })
@@ -172,6 +175,33 @@ enum Phase2LayoutDump {
             )
             ok = false
         }
+
+        // Resize reflow: same retained tree, larger viewport → DiagramHost grows.
+        let mid1 = frames.first(where: { $0.label == "DiagramHost" })?.w ?? 0
+        let wideW = width + 400
+        let wideH = height + 200
+        _ = host.calculateLayout(width: wideW, height: wideH)
+        let mid2 = host.lastFrames.first(where: { $0.label == "DiagramHost" })?.w ?? 0
+        let root2 = host.lastFrames.first(where: { $0.label == "HStack" })
+        if abs((root2?.w ?? 0) - wideW) > 2 || abs((root2?.h ?? 0) - wideH) > 2 {
+            let msg =
+                "Phase2Dump: root did not fill resized viewport "
+                + "(\(Int(root2?.w ?? 0))×\(Int(root2?.h ?? 0)) vs \(Int(wideW))×\(Int(wideH)))\n"
+            FileHandle.standardError.write(Data(msg.utf8))
+            ok = false
+        }
+        if mid2 <= mid1 + 50 {
+            let msg =
+                "Phase2Dump: DiagramHost did not grow on resize "
+                + "(\(Int(mid1)) → \(Int(mid2)))\n"
+            FileHandle.standardError.write(Data(msg.utf8))
+            ok = false
+        } else {
+            let msg =
+                "Phase2Dump: resize reflow DiagramHost \(Int(mid1)) → \(Int(mid2))\n"
+            FileHandle.standardError.write(Data(msg.utf8))
+        }
+
         FileHandle.standardError.write(
             Data(ok ? "Phase2Dump: PASS\n".utf8 : "Phase2Dump: FAIL\n".utf8)
         )
