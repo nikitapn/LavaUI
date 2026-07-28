@@ -1,6 +1,7 @@
 #if canImport(CYoga)
 import CYoga
 import Foundation
+import Observation
 
 // Retained view nodes + Yoga mirror.
 //
@@ -352,19 +353,44 @@ final class CompositeNode<V: View>: FragmentNode {
 
     init(_ view: V) {
         self.view = view
-        super.init(label: String(describing: V.self), children: [ViewGraph.mount(view.body)])
+        super.init(label: String(describing: V.self))
+        childNodes = [ViewGraph.mount(computeBody())]
     }
 
     func update(_ newView: V) {
+        // The parent handed us a freshly built struct, so its `@State` is new.
+        // Re-attach the storage the old copy owned before anything reads it —
+        // reading `newView.body` first would observe reset state.
+        StateTransfer.adopt(into: newView, from: view)
         view = newView
+
         needsBodyRecompute = true
-        let body = newView.body
+        let body = computeBody()
         if let existing = childNodes.first {
             childNodes = [ViewGraph.reconcile(existing, with: body)]
         } else {
             childNodes = [ViewGraph.mount(body)]
         }
         needsBodyRecompute = false
+    }
+
+    /// Evaluates `body` while recording which observable properties it read.
+    ///
+    /// Two things about `withObservationTracking` that shape this:
+    ///
+    /// - `onChange` fires *before* the new value is written, so it must never
+    ///   read state. Setting a dirty flag is all it does.
+    /// - It fires at most once per registration. Re-registration happens
+    ///   implicitly here, because every re-render recomputes bodies. A path
+    ///   that skips `computeBody()` would silently unsubscribe that node.
+    private func computeBody() -> V.Body {
+        var body: V.Body!
+        withObservationTracking {
+            body = view.body
+        } onChange: {
+            ViewInvalidation.markDirty()
+        }
+        return body
     }
 }
 

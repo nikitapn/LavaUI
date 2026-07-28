@@ -40,26 +40,14 @@ struct HelloWorldApp {
         let host = LayoutHost()
         let drawList = DrawList()
 
-        var selectedBlockId: String? = nil
-        var clickCount = 0
+        // Selection and click count now live in EditorChrome's @State. The
+        // run loop no longer mirrors view state, and `dirty` only tracks the
+        // things Observation cannot see: window size and font scale.
         var dirty = true
         var lastLoggedLayout: (w: Float, h: Float) = (0, 0)
 
         func makeChrome() -> EditorChrome {
-            let blocks = diagram.blocks.values.sorted { $0.name < $1.name }
-            return EditorChrome(
-                blocks: blocks,
-                selectedId: selectedBlockId,
-                clickCount: clickCount,
-                onSelect: { id, name in
-                    selectedBlockId = id
-                    clickCount += 1
-                    dirty = true
-                    FileHandle.standardError.write(
-                        Data("click: \(name) (#\(clickCount))\n".utf8)
-                    )
-                }
-            )
+            EditorChrome(blocks: diagram.blocks.values.sorted { $0.name < $1.name })
         }
 
         func renderFrame() {
@@ -122,6 +110,7 @@ struct HelloWorldApp {
         let chrome0 = makeChrome()
         Phase1Dump.run(chrome: chrome0)
         Phase2LayoutDump.run(chrome: chrome0, width: windowW, height: windowH - menuH)
+        Phase5StateDump.run()
         Phase4TextDump.run(chrome: chrome0, width: windowW, height: windowH - menuH)
 
         renderFrame()
@@ -167,6 +156,12 @@ struct HelloWorldApp {
             if fb.w >= 1, fb.h >= 1, fb.w != windowW || fb.h != windowH {
                 windowW = fb.w
                 windowH = fb.h
+                dirty = true
+            }
+
+            // A body read something that changed (a click mutating @State, say).
+            // Observation set the flag; the loop decides when to act on it.
+            if ViewInvalidation.consume() {
                 dirty = true
             }
 

@@ -16,20 +16,19 @@ started from has been deleted end to end.
 
 | Piece | Today | File |
 |---|---|---|
-| Description | `View` protocol + `@ViewBuilder`, parameter packs (no gyb) | `Sources/HelloWorld/View/` |
-| Identity | Retained `ViewNode` tree, `NodeID`, structural reconciliation | `View/LayoutNode.swift` |
+| Description | `View` protocol + `@ViewBuilder`, parameter packs (no gyb) | `Sources/LavaUI/` |
+| Identity | Retained `ViewNode` tree, `NodeID`, structural reconciliation | `LavaUI/LayoutNode.swift` |
 | Layout | Yoga, Swift side via `CYoga`; fragments add no flex boxes | same |
-| Text layout | `Font::measure`/`wrapLines` + `TextLayoutCache` | `View/Font.swift` |
+| Text layout | `Font::measure`/`wrapLines` + `TextLayoutCache` | `LavaUI/Font.swift` |
 | Text shaping | **Swift only** — shaped runs cached per line on `UIFont` | same |
 | Rendering | One ordered `QuadRenderer` pass; rounded-box SDF + glyph atlas | `canvas/src/render/quad_renderer.cpp` |
 | Glyph atlas | `TextRenderer` as glyph cache; keyed `(fontId, glyphId)`, grows | `canvas/src/render/text_renderer.cpp` |
-| Hit test | **Swift**, reverse-z over laid-out node frames | `View/LayoutNode.swift` |
-| Events | Raw `pollInputEvent`; handlers live on the node | `Editor.swift` |
-| Reactivity | **Still manual** — `lastSelected`/`lastClicks` in the run loop | `HelloWorldApp.swift` |
+| Hit test | **Swift**, reverse-z over laid-out node frames | `LavaUI/LayoutNode.swift` |
+| Events | Raw `pollInputEvent`; handlers live on the node | `LavaUI/Editor.swift` |
+| Reactivity | `@State` + `Observation`; `ViewInvalidation` flag drives the frame | `LavaUI/State.swift` |
 
-The last row is the whole of Phase 5, and it is the only remaining piece of the
-original premise: everything else that "nothing persists between commits"
-implied has been fixed.
+The original premise — "nothing persists between commits" — is now fully
+addressed. The library is `LavaUI`; `HelloWorld` is just the app on top of it.
 
 Deleted along the way: `GeometryRenderer`, `LineRenderer`, `Mesh3DRenderer`,
 `Camera`, the 3D shaders, the retained shape/label/line stores, the
@@ -617,12 +616,23 @@ rate is >90% on a static frame.
 
 ---
 
-### Phase 5 — State and reactivity ⬅ NEXT
+### Phase 5 — State and reactivity ✅ DONE
 
-Everything this depends on is in place: node identity, `needsBodyRecompute`,
-and reconciliation all landed in Phase 2. What remains is the last row of the
-status table — `HelloWorldApp` still diffs `lastSelected`/`lastClicks` by hand
-every frame, which is precisely what `withObservationTracking` deletes.
+Landed as designed: `Mirror`-based transplant for ownership, `Observation` for
+change tracking. `EditorChrome` now owns selection and click count as `@State`,
+and the run loop no longer mirrors or diffs view state — `dirty` tracks only
+what Observation cannot see (window size, font scale).
+
+`ViewInvalidation` is a bare flag rather than a per-node dirty set: a mutation
+marks it, the frame loop consumes it. That keeps the design frame-driven — a
+state change never synchronously walks the graph. It also means invalidation is
+currently whole-tree; per-node granularity is a later optimisation, not a
+correctness gap, because `setRoot` reconciles from the root every frame anyway.
+
+Verified: `Phase5StateDump` (storage survives rebuild, mutation invalidates)
+plus a driven three-click UI test, which matters because
+`withObservationTracking` fires `onChange` exactly once — the second and third
+clicks are what prove re-registration works.
 
 Two *separate* concerns that SwiftCrossUI conflates into one mechanism.
 

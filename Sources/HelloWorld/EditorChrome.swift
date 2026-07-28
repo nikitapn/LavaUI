@@ -5,20 +5,15 @@ import LavaUI
 /// App chrome: project tree + diagram host + properties (uses `LavaUI` views).
 public struct EditorChrome: View {
     public var blocks: [Block]
-    public var selectedId: String?
-    public var clickCount: Int
-    public var onSelect: (String, String) -> Void
 
-    public init(
-        blocks: [Block],
-        selectedId: String?,
-        clickCount: Int,
-        onSelect: @escaping (String, String) -> Void
-    ) {
+    /// Owned here, not by the app. The struct is rebuilt every frame; the
+    /// storage behind these survives via StateTransfer, so the run loop no
+    /// longer has to track selection/clicks and diff them by hand.
+    @State private var selectedId: String?
+    @State private var clickCount: Int = 0
+
+    public init(blocks: [Block]) {
         self.blocks = blocks
-        self.selectedId = selectedId
-        self.clickCount = clickCount
-        self.onSelect = onSelect
     }
 
     public var body: some View {
@@ -39,7 +34,10 @@ public struct EditorChrome: View {
                     Text(
                         "  \(name)",
                         color: selected ? .selected : .primary,
-                        onClick: { onSelect(id, name) }
+                        onClick: {
+                            selectedId = id
+                            clickCount += 1
+                        }
                     )
                 }
                 Spacer()
@@ -288,5 +286,57 @@ enum Phase4TextDump {
         FileHandle.standardError.write(
             Data(ok ? "Phase4Dump: PASS\n".utf8 : "Phase4Dump: FAIL\n".utf8)
         )
+    }
+}
+
+/// Phase 5 self-check, through public API only: storage must survive the view
+/// struct being rebuilt, and mutating it must invalidate.
+enum Phase5StateDump {
+    /// Reports its current state and hands back a mutator each time `body`
+    /// runs. A side-effecting body is fine for a probe and keeps the check
+    /// from needing access to LavaUI internals.
+    struct Probe: View {
+        @State var count = 0
+        var report: (Int, @escaping () -> Void) -> Void
+
+        var body: some View {
+            report(count, { count += 1 })
+            return Text("count: \(count)")
+        }
+    }
+
+    static func run() {
+        var ok = true
+        func require(_ cond: Bool, _ what: String) {
+            if !cond {
+                FileHandle.standardError.write(Data("Phase5: FAIL \(what)\n".utf8))
+                ok = false
+            }
+        }
+
+        var seen = 0
+        var mutate: () -> Void = {}
+        let probe = Probe { value, bump in
+            seen = value
+            mutate = bump
+        }
+
+        let host = LayoutHost()
+        host.setRoot(probe)
+        require(seen == 0, "initial state (got \(seen))")
+
+        _ = ViewInvalidation.consume()   // clear the mount-time flag
+        mutate()
+        require(ViewInvalidation.isDirty, "mutation did not invalidate")
+
+        // Parent rebuild: a brand-new struct with brand-new @State storage,
+        // which must be replaced by the storage the node already owned.
+        host.setRoot(Probe { value, bump in
+            seen = value
+            mutate = bump
+        })
+        require(seen == 1, "state lost across rebuild (got \(seen))")
+
+        FileHandle.standardError.write(Data(ok ? "Phase5: PASS\n".utf8 : "Phase5: FAIL\n".utf8))
     }
 }
