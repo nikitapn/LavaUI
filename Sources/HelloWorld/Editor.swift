@@ -47,50 +47,6 @@ public final class Editor: @unchecked Sendable {
 
     // ─── Declarative UI ──────────────────────────────────────────────────
 
-    public func uiReset() { engine.uiReset() }
-
-    public func uiBegin(
-        kind: UIKind, id: Int32 = 0,
-        flexGrow: Float = 0, flexShrink: Float = 1,
-        width: Float = -1, height: Float = -1, padding: Float = 0
-    ) {
-        engine.uiBegin(kind.rawValue, id, flexGrow, flexShrink, width, height, padding)
-    }
-
-    public func uiText(
-        id: Int32, text: String,
-        r: Float, g: Float, b: Float, clickable: Bool
-    ) {
-        text.withCString {
-            engine.uiText(id, $0, r, g, b, clickable)
-        }
-    }
-
-    public func uiEnd() { engine.uiEnd() }
-    public func uiCommit() { engine.uiCommit() }
-
-    /// Drain click (and future) events. Returns widget id + kind (0=Click).
-    public func uiPollEvent() -> (widgetId: Int32, kind: Int32)? {
-        var id: Int32 = 0
-        var kind: Int32 = 0
-        let ok = engine.uiPollEvent(&id, &kind)
-        return ok ? (id, kind) : nil
-    }
-
-    /// Push a full tree and swap it in (structural hot update).
-    public func commitUI(_ root: UINode, ui: UI) {
-        uiReset()
-        ui.push(root, into: self)
-        uiCommit()
-    }
-
-    /// Poll C++ hit-test events and invoke Swift `onClick` handlers.
-    public func dispatchUIEvents(ui: UI) {
-        while let e = uiPollEvent() {
-            if e.kind == 0 { ui.dispatch(widgetId: e.widgetId) }
-        }
-    }
-
     // ─── Phase 3 draw list ───────────────────────────────────────────────
 
     public func submitDrawList(_ list: DrawList) {
@@ -123,11 +79,19 @@ public final class Editor: @unchecked Sendable {
         return id >= 0 ? UInt32(id) : nil
     }
 
-    /// Raw mouse events for Swift hit-testing.
+    /// Raw input: mouse, resize (kind 4 → x/y = new width/height).
     public func pollInputEvent() -> (kind: UInt32, x: Float, y: Float, button: Int32)? {
         var ev = canvas.InputEvent()
         guard engine.pollInputEvent(&ev) else { return nil }
         return (ev.kind, ev.x, ev.y, ev.button)
+    }
+
+    /// Current swapchain / framebuffer size in pixels.
+    public func framebufferSize() -> (w: Float, h: Float) {
+        var w: Float = 0
+        var h: Float = 0
+        engine.framebufferSize(&w, &h)
+        return (w, h)
     }
 }
 #endif

@@ -21,7 +21,6 @@
 #include "render/draw_command.hpp"
 #include "shell/layout.hpp"
 #include "shell/model.hpp"
-#include "shell/widget.hpp"
 
 #include <deque>
 #include <mutex>
@@ -365,19 +364,6 @@ struct Application::Impl
       inputEvents_.push_back(ev);
     }
 
-    // Primary button: legacy C++ UI hits first, then text-widget focus/caret.
-    if (button == MOUSE_BUTTON_1) {
-      if (pressed) {
-        if (uiTree_.hasRoot()) {
-          const float localY = y - uiBodyOriginY_;
-          const int uiHit = uiTree_.hitTest(x, localY);
-          if (uiHit > 0) {
-            uiTree_.enqueueClick(uiHit);
-            return;
-          }
-        }
-      }
-    }
   }
 
   void bridgeKeyEvent(int key, int action, int mods)
@@ -410,6 +396,15 @@ struct Application::Impl
     try {
       if (vulkan.isWindowed() && vulkan.ensureFramebufferSize()) {
         syncProjectionToExtent();
+        // Notify Swift so it re-runs Yoga + resubmits the draw list.
+        // Without this, C++ presents the old fixed-size command list into
+        // the larger framebuffer (layout stuck at open size).
+        canvas::InputEvent ev;
+        ev.kind = static_cast<uint32_t>(canvas::InputEventKind::Resize);
+        ev.x = static_cast<float>(vulkan.getExtent().width);
+        ev.y = static_cast<float>(vulkan.getExtent().height);
+        ev.button = 0;
+        inputEvents_.push_back(ev);
       }
 
       auto now = std::chrono::steady_clock::now();
@@ -574,16 +569,9 @@ struct Application::Impl
     vulkan.readPixels(dst, dstSize);
   }
 
-  float shellLeftWidth_ = 220.f;
-  float shellRightWidth_ = 260.f;
   shell::Rect diagramViewport_{0, 0, 800, 600};
-  shell::Node workspaceRoot_ =
-    shell::defaultWorkspace(shellLeftWidth_, shellRightWidth_);
 
   // Declarative Swift UI tree (replaces ImGui side panels when present).
-  shell::WidgetBuilder uiBuilder_;
-  shell::WidgetTree uiTree_;
-  float uiBodyOriginY_ = 0.f; // menu bar height; body layout is below
 
   // Immediate draw list (Phase 3) — authored by Swift each dirty frame.
   std::vector<canvas::DrawCommand> drawCmds_;
@@ -592,67 +580,6 @@ struct Application::Impl
   std::deque<canvas::InputEvent> inputEvents_;
 
   shell::Rect diagramViewport() const { return diagramViewport_; }
-
-  void setWorkspaceLayout(shell::Node root)
-  {
-    workspaceRoot_ = std::move(root);
-  }
-
-  void setWorkspaceColumns(shell::PanelKind left, shell::PanelKind center,
-                           shell::PanelKind right,
-                           float leftWidth, float rightWidth)
-  {
-    shellLeftWidth_ = leftWidth;
-    shellRightWidth_ = rightWidth;
-    workspaceRoot_ = shell::columns(left, center, right, leftWidth, rightWidth);
-  }
-
-  void layoutDeclarativeUI(float ew, float bodyH, float menuH)
-  {
-    uiBodyOriginY_ = menuH;
-    auto measure = [this](const std::string &text, float &outW, float &outH) {
-      const auto m = textRenderer.getTextMetrics(text);
-      outW = static_cast<float>(std::max(m.w, 1));
-      outH = std::max(static_cast<float>(m.h), textRenderer.getLineHeight());
-    };
-    uiTree_.layout(ew, bodyH, measure);
-    if (auto d = uiTree_.diagramHostRect()) {
-      diagramViewport_ = {d->x, d->y + menuH, d->w, d->h};
-    }
-  }
-
-  // ─── Declarative UI builder (Swift interop) ─────────────────────────────
-
-  void uiReset() { uiBuilder_.reset(); }
-
-  void uiBegin(int kind, int id, float flexGrow, float flexShrink,
-               float width, float height, float padding)
-  {
-    uiBuilder_.begin(static_cast<shell::WidgetKind>(kind), id,
-                     flexGrow, flexShrink, width, height, padding);
-  }
-
-  void uiText(int id, const char *text, float r, float g, float b, bool clickable)
-  {
-    uiBuilder_.text(id, text, r, g, b, clickable);
-  }
-
-  void uiEnd() { uiBuilder_.end(); }
-
-  void uiCommit()
-  {
-    uiTree_.setRoot(uiBuilder_.takeRoot());
-    uiBuilder_.reset();
-  }
-
-  bool uiPollEvent(int &outWidgetId, int &outKind)
-  {
-    shell::UIEvent e;
-    if (!uiTree_.pollEvent(e)) return false;
-    outWidgetId = e.widgetId;
-    outKind = static_cast<int>(e.kind);
-    return true;
-  }
 
   void submitDrawList(const canvas::DrawCommand *cmds, size_t cmdCount,
                       const canvas::GlyphInstance *glyphs, size_t glyphCount)
@@ -673,6 +600,13 @@ struct Application::Impl
   void setDiagramViewport(float x, float y, float w, float h)
   {
     diagramViewport_ = {x, y, w, h};
+  }
+
+  void framebufferSize(float &outW, float &outH) const
+  {
+    const auto e = vulkan.getExtent();
+    outW = static_cast<float>(e.width);
+    outH = static_cast<float>(e.height);
   }
 
   int registerFont(const std::string &path, float pixelSize)
@@ -721,39 +655,10 @@ shell::Rect Application::diagramViewport() const {
   return impl_->diagramViewport();
 }
 
-void Application::setWorkspaceLayout(shell::Node root) {
-  impl_->setWorkspaceLayout(std::move(root));
-}
 
-void Application::setWorkspaceColumns(
-  shell::PanelKind left, shell::PanelKind center, shell::PanelKind right,
-  float leftWidth, float rightWidth)
-{
-  impl_->setWorkspaceColumns(left, center, right, leftWidth, rightWidth);
-}
 
-void Application::uiReset() { impl_->uiReset(); }
 
-void Application::uiBegin(int kind, int id, float flexGrow, float flexShrink,
-                          float width, float height, float padding)
-{
-  impl_->uiBegin(kind, id, flexGrow, flexShrink, width, height, padding);
-}
 
-void Application::uiText(int id, const char *text, float r, float g, float b,
-                         bool clickable)
-{
-  impl_->uiText(id, text, r, g, b, clickable);
-}
-
-void Application::uiEnd() { impl_->uiEnd(); }
-
-void Application::uiCommit() { impl_->uiCommit(); }
-
-bool Application::uiPollEvent(int &outWidgetId, int &outKind)
-{
-  return impl_->uiPollEvent(outWidgetId, outKind);
-}
 
 void Application::submitDrawList(const canvas::DrawCommand *cmds, size_t cmdCount,
                                  const canvas::GlyphInstance *glyphs,
@@ -770,6 +675,11 @@ bool Application::pollInputEvent(canvas::InputEvent &out)
 void Application::setDiagramViewport(float x, float y, float w, float h)
 {
   impl_->setDiagramViewport(x, y, w, h);
+}
+
+void Application::framebufferSize(float &outW, float &outH) const
+{
+  impl_->framebufferSize(outW, outH);
 }
 
 canvas::VoidResult Application::loadFont(const std::string &path, float pixelSize)

@@ -53,6 +53,8 @@ enum class InputEventKind : uint32_t {
   MouseDown = 1,
   MouseUp = 2,
   MouseMove = 3,
+  /// Framebuffer / swapchain size changed. `x`/`y` hold new width/height.
+  Resize = 4,
 };
 
 struct InputEvent {

@@ -461,19 +461,5 @@ canvas::VoidResult TextRenderer::loadFont(const std::string& fontPath, int fontS
 }
 
 void TextRenderer::cleanUp() { impl_->cleanUp(); }
-TextMetrics TextRenderer::getTextMetrics(const std::string& text) {
-    if (impl_->fonts_.empty() || !impl_->fonts_[0].isLoaded()) return {0, 0};
 
-    // Pure shaping — same measurement canvas::Font gives Swift for Yoga
-    // sizing, and (unlike the old walk, which called getOrCreateGlyph and
-    // so rasterized/uploaded every glyph as a side effect) this never
-    // touches the atlas: measuring text no longer implicitly renders it.
-    canvas::TextMetrics m = impl_->fonts_[0].measure(text);
-    return TextMetrics{static_cast<int>(m.width), static_cast<int>(m.height)};
-}
-
-float TextRenderer::getLineHeight() const {
-    if (impl_->fonts_.empty()) return 0.f;
-    return impl_->fonts_[0].lineHeight();
-}
 

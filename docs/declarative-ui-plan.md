@@ -1,8 +1,8 @@
 # Declarative UI: migration to a retained view graph
 
-Plan for evolving `Sources/HelloWorld/UI.swift` from its current immediate-mode
-form into a SwiftUI-shaped framework with persistent node identity, view-local
-state, and incremental layout.
+Plan for evolving the editor chrome from an immediate-mode `UINode` tree into a
+SwiftUI-shaped framework with persistent node identity, view-local state, and
+incremental layout.
 
 This is a **migration** plan, not a greenfield one. It assumes the existing
 `canvas` engine, `CxxCanvas`/`CYoga` interop, and `canvas::Font`.
@@ -11,26 +11,30 @@ This is a **migration** plan, not a greenfield one. It assumes the existing
 
 ## Where we are today
 
+Phases 0–4 and 3.5 are done. The legacy `UINode`/`uiTree_` path this plan
+started from has been deleted end to end.
+
 | Piece | Today | File |
 |---|---|---|
-| Description | `UINode` enum tree, no identity | `Sources/HelloWorld/UI.swift` |
-| Builder | `@UIBuilder` → `[UINode]` | same |
-| Ids / handlers | `UI` class; `nextId` resets each commit | same |
-| Commit | Flatten to `uiBegin`/`uiText`/`uiEnd`, atomic swap | `Editor.commitUI` |
-| Layout | Yoga, **Swift side** via `CYoga` (C++ no longer uses Yoga) | — |
-| Text | `canvas::Font` (FreeType + HarfBuzz, pimpl) | `canvas/src/render/font.hpp` |
-| Hit test | Moving to **Swift**, against laid-out node frames | — |
-| Events | Id-keyed queue → `handlers[id]?()` — **must become raw input** | `Editor.dispatchUIEvents` |
-| Reactivity | **Manual** — `lastSelected`/`lastClicks` compared in the run loop | `HelloWorldApp.swift:119-131` |
+| Description | `View` protocol + `@ViewBuilder`, parameter packs (no gyb) | `Sources/HelloWorld/View/` |
+| Identity | Retained `ViewNode` tree, `NodeID`, structural reconciliation | `View/LayoutNode.swift` |
+| Layout | Yoga, Swift side via `CYoga`; fragments add no flex boxes | same |
+| Text layout | `Font::measure`/`wrapLines` + `TextLayoutCache` | `View/Font.swift` |
+| Text shaping | **Swift only** — shaped runs cached per line on `UIFont` | same |
+| Rendering | One ordered `QuadRenderer` pass; rounded-box SDF + glyph atlas | `canvas/src/render/quad_renderer.cpp` |
+| Glyph atlas | `TextRenderer` as glyph cache; keyed `(fontId, glyphId)`, grows | `canvas/src/render/text_renderer.cpp` |
+| Hit test | **Swift**, reverse-z over laid-out node frames | `View/LayoutNode.swift` |
+| Events | Raw `pollInputEvent`; handlers live on the node | `Editor.swift` |
+| Reactivity | **Still manual** — `lastSelected`/`lastClicks` in the run loop | `HelloWorldApp.swift` |
 
-The description layer is genuinely pure, the event model already avoids sending
-Swift closures across the boundary, and `Font` already routes measure and draw
-through one shaping call. Those three are good and survive the migration intact.
+The last row is the whole of Phase 5, and it is the only remaining piece of the
+original premise: everything else that "nothing persists between commits"
+implied has been fixed.
 
-What's missing is the middle layer: **nothing persists between commits.** Every
-state change rebuilds the whole tree and swaps it wholesale. That's fine at the
-current scale (tens of nodes) and it's why `HelloWorldApp` has to diff its own
-state by hand.
+Deleted along the way: `GeometryRenderer`, `LineRenderer`, `Mesh3DRenderer`,
+`Camera`, the 3D shaders, the retained shape/label/line stores, the
+`uiBegin`/`uiText`/`uiEnd`/`uiCommit` builder, `shell::WidgetTree`, and
+`TextRenderer`'s entire draw path.
 
 ---
 
@@ -113,7 +117,8 @@ hit testing**, against its own laid-out node frames. C++ receives **draw command
 only** and knows nothing about widgets.
 
 `ARCHITECTURE.md` still describes the old split (Yoga + widget tree + hit test in
-C++) and is stale. It should be rewritten or deleted.
+C++) and is stale. It should be rewritten or deleted — nothing it documents
+exists any more.
 
 That does *not* make C++ stateless. The rule:
 
@@ -125,7 +130,7 @@ That does *not* make C++ stateless. The rule:
 | Glyph atlas (rasterized bitmaps → texture) | `LabelShape` map + `nextLabelId` |
 | Vulkan pipelines, buffers, descriptor sets, swapchain | `addRect`/`addRoundedRect`/`addCircle`/`addLine` stores |
 | `Font` shaping (FreeType + HarfBuzz) | `setProjectTree` / `setProperties` / `setWorkspaceLayout` |
-| ST editor text model (for now — see Phase 7) | The whole `uiBegin`/`uiText`/`uiEnd`/`uiCommit` path |
+| ST editor text model (for now — see Phase 7) | The whole `uiBegin`/`uiText`/`uiEnd`/`uiCommit` path ✅ deleted |
 
 The node tree *is* the retained scene. Nothing needs a second copy of it.
 
@@ -478,7 +483,7 @@ by Yoga, driven from `View` structs, with the retained-shape API deleted.
 
 ---
 
-### Phase 3.5 — Unified quad renderer
+### Phase 3.5 — Unified quad renderer ✅ DONE
 
 **The problem.** `application.cpp` draws with three accumulate-then-flush
 renderers at fixed z-levels:
@@ -597,7 +602,7 @@ list order, a rect emitted after text covers it, and clip regions scissor.
 
 ---
 
-### Phase 4 — Text ✅ DONE (v1)
+### Phase 4 — Text ✅ DONE
 
 - `UIFont` wraps `canvas::Font`; `FontStore.bootstrap` at startup (16px, same as
   C++ TextRenderer)
@@ -612,7 +617,12 @@ rate is >90% on a static frame.
 
 ---
 
-### Phase 5 — State and reactivity
+### Phase 5 — State and reactivity ⬅ NEXT
+
+Everything this depends on is in place: node identity, `needsBodyRecompute`,
+and reconciliation all landed in Phase 2. What remains is the last row of the
+status table — `HelloWorldApp` still diffs `lastSelected`/`lastClicks` by hand
+every frame, which is precisely what `withObservationTracking` deletes.
 
 Two *separate* concerns that SwiftCrossUI conflates into one mechanism.
 
@@ -671,7 +681,7 @@ manual state comparison anywhere in `HelloWorldApp`.
 
 ---
 
-### Phase 6 — Input routing
+### Phase 6 — Input routing ✅ MOSTLY DONE (landed early, out of order)
 
 Hit testing moves to Swift, against the node frames Yoga computed. C++ no longer
 knows what a widget is, so it **cannot resolve widget ids** — this is a signature
@@ -696,6 +706,12 @@ Swift side:
 This also retires the `handlers[id]` registry in `UI`: handlers live on the node
 (`node.onClick`), reached directly by the hit test. The Phase 2 id hazard
 dissolves rather than needing a fix — there is no id to keep stable.
+
+**Landed early**, because Phase 2 needed it: leaving `handlers[id]` in place
+while nodes became persistent would have meant building a `[NodeID: ViewNode]`
+bridge only to delete it. Done: raw `pollInputEvent`, reverse-z hit walk,
+`node.onClick`, dirty-flag-on-mutation. Still open: pointer capture, focus ring
+and tab order, keyboard routing — all of which Phase 7 needs anyway.
 
 ---
 

@@ -101,7 +101,6 @@ engine_sources = [
   'src/render/quad_renderer.cpp',
   'src/render/text_widget.cpp',
   'src/shell/layout.cpp',
-  'src/shell/widget.cpp',
   'src/window/canvas_window.cpp',
   'src/window/window_platform.cpp',
   'src/util/util.cpp',

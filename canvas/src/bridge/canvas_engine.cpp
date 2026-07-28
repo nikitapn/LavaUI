@@ -129,59 +129,13 @@ void Engine::addTreeItem(const std::string &id, const std::string &label,
   impl_->pendingTree.push_back(TreeItem{id, label, depth, selected});
 }
 
-void Engine::setWorkspaceLayout(shell::Node root)
-{
-  impl_->withApp([&](Application &app) {
-    app.setWorkspaceLayout(std::move(root));
-  });
-}
 
-void Engine::setWorkspaceColumns(shell::PanelKind left, shell::PanelKind center,
-                                 shell::PanelKind right,
-                                 float leftWidth, float rightWidth)
-{
-  impl_->withApp([&](Application &app) {
-    app.setWorkspaceColumns(left, center, right, leftWidth, rightWidth);
-  });
-}
 
-void Engine::uiReset()
-{
-  impl_->withApp([](Application &app) { app.uiReset(); });
-}
 
-void Engine::uiBegin(int kind, int id, float flexGrow, float flexShrink,
-                     float width, float height, float padding)
-{
-  impl_->withApp([&](Application &app) {
-    app.uiBegin(kind, id, flexGrow, flexShrink, width, height, padding);
-  });
-}
 
-void Engine::uiText(int id, const char *text, float r, float g, float b,
-                    bool clickable)
-{
-  impl_->withApp([&](Application &app) {
-    app.uiText(id, text, r, g, b, clickable);
-  });
-}
 
-void Engine::uiEnd()
-{
-  impl_->withApp([](Application &app) { app.uiEnd(); });
-}
 
-void Engine::uiCommit()
-{
-  impl_->withApp([](Application &app) { app.uiCommit(); });
-}
 
-bool Engine::uiPollEvent(int &outWidgetId, int &outKind)
-{
-  return impl_->withApp([&](Application &app) {
-    return app.uiPollEvent(outWidgetId, outKind);
-  });
-}
 
 bool Engine::repaint()
 {
@@ -211,6 +165,13 @@ bool Engine::pollInputEvent(InputEvent &out)
 {
   return impl_->withApp([&](Application &app) {
     return app.pollInputEvent(out);
+  });
+}
+
+void Engine::framebufferSize(float &outW, float &outH) const
+{
+  const_cast<Engine *>(this)->impl_->withApp([&](Application &app) {
+    app.framebufferSize(outW, outH);
   });
 }
 

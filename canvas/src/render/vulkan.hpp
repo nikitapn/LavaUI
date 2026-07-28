@@ -283,7 +283,7 @@ class Vulkan
   VkImageView                       getShadowImageView() { return shadowImageView_; }
   VkSampler                         getShadowSampler() { return shadowSampler_; }
   uint32_t                          getShadowMapSize() { return shadowMapSize_; }
-  const VkExtent2D                 &getExtent() { return extent_; }
+  const VkExtent2D                 &getExtent() const { return extent_; }
   const VkPhysicalDeviceProperties &getDeviceProperties()
   {
     return physicalDeviceProperties_;

@@ -43,30 +43,15 @@ public:
   /// Diagram panel rect in window pixels (from Yoga layout).
   shell::Rect diagramViewport() const;
 
-  /// Replace the Yoga workspace tree (e.g. columns from Swift).
-  void setWorkspaceLayout(shell::Node root);
-  /// Convenience: three columns with fixed side widths.
-  void setWorkspaceColumns(shell::PanelKind left, shell::PanelKind center,
-                           shell::PanelKind right,
-                           float leftWidth, float rightWidth);
-
-  // ─── Declarative UI tree (SwiftUI-style, Yoga + TextRenderer) ───────────
-  // Builder: uiReset → uiBegin/uiText… → uiEnd → uiCommit.
-  // Kind: 0=Row, 1=Column, 2=Text (use uiText), 3=Spacer, 4=DiagramHost.
-  // width/height < 0 means auto. Events: uiPollEvent → widgetId + kind (0=Click).
-  void uiReset();
-  void uiBegin(int kind, int id, float flexGrow, float flexShrink,
-               float width, float height, float padding);
-  void uiText(int id, const char *text, float r, float g, float b, bool clickable);
-  void uiEnd();
-  void uiCommit();
-  bool uiPollEvent(int &outWidgetId, int &outKind);
 
   /// Immediate draw list from Swift (copied). See Engine::submitDrawList.
   void submitDrawList(const canvas::DrawCommand *cmds, size_t cmdCount,
                       const canvas::GlyphInstance *glyphs, size_t glyphCount);
   bool pollInputEvent(canvas::InputEvent &out);
   void setDiagramViewport(float x, float y, float w, float h);
+
+  /// Current swapchain / framebuffer size in pixels (after last ensure).
+  void framebufferSize(float &outW, float &outH) const;
 
   /// Load the face TextRenderer uses for draw-list text. Swift is the only
   /// caller (FontStore); Application does not pick a default path.

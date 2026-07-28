@@ -60,21 +60,8 @@ class Engine {
   void addPropertyItem(const std::string &key, const std::string &value);
   void commitProperties();
 
-  void setWorkspaceLayout(shell::Node root);
-  void setWorkspaceColumns(shell::PanelKind left, shell::PanelKind center,
-                           shell::PanelKind right,
-                           float leftWidth, float rightWidth);
 
   // ─── Declarative UI (Swift tree → Yoga + TextRenderer) ────────────────
-  void uiReset();
-  void uiBegin(int kind, int id, float flexGrow, float flexShrink,
-               float width, float height, float padding);
-  void uiText(int id, const char *text, float r, float g, float b, bool clickable);
-  void uiEnd();
-  void uiCommit();
-  /// Returns false if queue empty. kind: 0 = Click.
-  bool uiPollEvent(int &outWidgetId, int &outKind);
-
   bool repaint();
   void readPixels(uint8_t *dst, size_t dstSize);
 
@@ -84,8 +71,11 @@ class Engine {
   void submitDrawList(const DrawCommand *cmds, size_t cmdCount,
                       const GlyphInstance *glyphs, size_t glyphCount);
 
-  /// Pop one raw input event (mouse). Returns false if empty.
+  /// Pop one raw input event (mouse / resize). Returns false if empty.
   bool pollInputEvent(InputEvent &out);
+
+  /// Current swapchain extent in pixels.
+  void framebufferSize(float &outW, float &outH) const;
 
   /// Diagram panel origin in window pixels (for coordinate transforms).
   shell::Rect diagramViewport() const;

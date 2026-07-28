@@ -10,8 +10,8 @@ struct HelloWorldApp {
         let assets = assetsRoot()
         FileHandle.standardError.write(Data("assets: \(assets)\n".utf8))
 
-        let windowW: Float = 1280
-        let windowH: Float = 800
+        var windowW: Float = 1280
+        var windowH: Float = 800
         let menuH: Float = 0
 
         guard let editor = Editor.open(
@@ -22,6 +22,13 @@ struct HelloWorldApp {
         ) else {
             FileHandle.standardError.write(Data("failed to open editor window\n".utf8))
             exit(1)
+        }
+
+        // Sync to actual framebuffer (may differ from requested on HiDPI / WM).
+        let fb0 = editor.framebufferSize()
+        if fb0.w >= 1, fb0.h >= 1 {
+            windowW = fb0.w
+            windowH = fb0.h
         }
 
         // Swift owns font policy: load default + push same face to C++ draw.
@@ -56,7 +63,7 @@ struct HelloWorldApp {
 
         func renderFrame() {
             let bodyW = windowW
-            let bodyH = windowH - menuH
+            let bodyH = max(1, windowH - menuH)
             let chrome = makeChrome()
             host.setRoot(chrome)
             _ = host.calculateLayout(width: bodyW, height: bodyH)
@@ -98,14 +105,36 @@ struct HelloWorldApp {
 
         while editor.isOpen {
             while let ev = editor.pollInputEvent() {
-                if ev.kind == 1 {
+                switch ev.kind {
+                case 1: // MouseDown
                     if let action = host.hitTestClick(
                         x: ev.x, y: ev.y,
                         originX: 0, originY: menuH
                     ) {
                         action()
                     }
+                case 4: // Resize — x/y are new framebuffer width/height
+                    let nw = max(1, ev.x)
+                    let nh = max(1, ev.y)
+                    if nw != windowW || nh != windowH {
+                        windowW = nw
+                        windowH = nh
+                        dirty = true
+                        FileHandle.standardError.write(
+                            Data("layout resize → \(Int(nw))×\(Int(nh))\n".utf8)
+                        )
+                    }
+                default:
+                    break
                 }
+            }
+
+            // Safety net if a resize event was coalesced away.
+            let fb = editor.framebufferSize()
+            if fb.w >= 1, fb.h >= 1, fb.w != windowW || fb.h != windowH {
+                windowW = fb.w
+                windowH = fb.h
+                dirty = true
             }
 
             if dirty {
