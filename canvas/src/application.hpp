@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "render/text_widget.hpp"
+#include "render/draw_command.hpp"
 #include "shell/layout.hpp"
 #include "shell/model.hpp"
 #include "util/result.hpp"
@@ -116,6 +117,13 @@ public:
   void uiEnd();
   void uiCommit();
   bool uiPollEvent(int &outWidgetId, int &outKind);
+
+  /// Immediate draw list from Swift (copied). See Engine::submitDrawList.
+  void submitDrawList(const canvas::DrawCommand *cmds, size_t cmdCount,
+                      const uint8_t *stringBlob, size_t blobSize,
+                      const uint32_t *stringOffsets, size_t stringCount);
+  bool pollInputEvent(canvas::InputEvent &out);
+  void setDiagramViewport(float x, float y, float w, float h);
 
   // ─── Input bridge (canvas-local coords, GLFW-style key codes) ───────────
 

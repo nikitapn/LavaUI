@@ -20,12 +20,16 @@ public struct Text: PrimitiveView {
     }
 
     public func mountPrimitive() -> any AnyViewNode {
-        LeafNode(
+        let leaf = LeafNode(
             kind: .text,
             label: "Text \"\(string)\"",
             width: .point(approxWidth),
             height: .point(24)
         )
+        leaf.text = string
+        leaf.color = color
+        leaf.onClick = onClick
+        return leaf
     }
 
     public func reconcilePrimitive(_ node: any AnyViewNode) -> any AnyViewNode {
@@ -33,14 +37,19 @@ public struct Text: PrimitiveView {
             leaf.update(
                 label: "Text \"\(string)\"",
                 width: .point(approxWidth),
-                height: .point(24)
+                height: .point(24),
+                text: string,
+                color: color,
+                onClick: onClick
             )
             return leaf
         }
         return mountPrimitive()
     }
 
-    /// Grapheheme-cluster count (Phase 4 replaces with Font::measure).
+    /// Grapheheme-cluster estimate — **not** real glyph bounds.
+    /// Hit-testing trusts this box until Phase 4 (`Font::measure`); clicks near
+    /// the trailing edge can mismatch what TextRenderer paints.
     private var approxWidth: Float {
         max(8, Float(string.count) * 8 + 8)
     }

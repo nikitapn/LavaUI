@@ -324,7 +324,18 @@ frames from `YGNodeCalculateLayout`, printed to stderr. No rendering.
 
 ---
 
-### Phase 3 — Draw list
+### Phase 3 — Draw list ✅ DONE (v1)
+
+**Live path:** `HelloWorldApp` → `LayoutHost` + `DrawList.emitTree` +
+`Editor.submitDrawList` — no legacy `UI`/`uiBegin` chrome. FBD diagram emits
+into the same list (window coords + host origin). Raw `pollInputEvent` + Swift
+hit-test drives `Text.onClick`.
+
+**C++:** `canvas::DrawCommand` (32B POD), `submitDrawList`, `pollInputEvent`,
+`setDiagramViewport`. Repaint executes the list (rects/circles/lines/text).
+
+**Still open:** glyph-level text (Phase 4), full clip stack in Vulkan, engine
+API collapse (delete retained-shape methods), frame-idle gate (no spin sleep).
 
 **Define the command struct in the C++ header and import it.** Swift's struct
 layout isn't C-ABI-guaranteed even when frozen; let C++ stay authoritative.

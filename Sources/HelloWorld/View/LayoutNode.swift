@@ -144,6 +144,11 @@ enum LeafKind: Equatable {
 
 final class LeafNode: YogaBoxNode {
     let kind: LeafKind
+    /// Phase 3 draw / hit-test payload (text leaves).
+    var text: String = ""
+    var color: Color = .primary
+    var onClick: (() -> Void)?
+    var fillColor: Color?
 
     init(
         kind: LeafKind,
@@ -159,6 +164,9 @@ final class LeafNode: YogaBoxNode {
         self.height = height
         self.flexGrow = flexGrow
         self.minWidth = minWidth
+        if kind == .diagramHost {
+            fillColor = Color(r: 0.12, g: 0.13, b: 0.16)
+        }
         applyStyle()
     }
 
@@ -167,13 +175,19 @@ final class LeafNode: YogaBoxNode {
         width: Dimension,
         height: Dimension,
         flexGrow: Float = 0,
-        minWidth: Float = 0
+        minWidth: Float = 0,
+        text: String = "",
+        color: Color = .primary,
+        onClick: (() -> Void)? = nil
     ) {
         self.label = label
         self.width = width
         self.height = height
         self.flexGrow = flexGrow
         self.minWidth = minWidth
+        self.text = text
+        self.color = color
+        self.onClick = onClick
         applyStyle()
     }
 }
@@ -183,6 +197,8 @@ final class LeafNode: YogaBoxNode {
 final class StackNode: YogaBoxNode {
     private(set) var contentNode: any AnyViewNode
     let direction: FlexDirection
+    /// Panel background (Phase 3 draw list).
+    var fillColor: Color?
 
     /// Yoga children currently inserted (flattened leaves under content).
     private var insertedLeaves: [any AnyViewNode] = []
@@ -191,6 +207,10 @@ final class StackNode: YogaBoxNode {
         self.direction = direction
         self.contentNode = content
         super.init(label: label)
+        // Side columns get a solid panel fill; main HStack stays transparent.
+        if direction == .column, case .point = style.width {
+            fillColor = Color(r: 0.14, g: 0.15, b: 0.18)
+        }
         YGNodeStyleSetFlexDirection(yogaStorage, direction.yoga)
         YGNodeStyleSetAlignItems(yogaStorage, YGAlignStretch)
         apply(style)
@@ -389,6 +409,12 @@ public final class LayoutHost {
     public private(set) var reconcileCount = 0
     public private(set) var mountCount = 0
 
+    /// Committed layout from the last `calculateLayout` (hit-test / queries read this).
+    public private(set) var lastFrames: [LayoutFrame] = []
+    public private(set) var lastLayoutWidth: Float = 0
+    public private(set) var lastLayoutHeight: Float = 0
+    private var layoutValid = false
+
     public init() {}
 
     public var rootID: NodeID? { root?.id }
@@ -401,29 +427,39 @@ public final class LayoutHost {
             root = ViewGraph.mount(view)
             mountCount += 1
         }
+        // Structure/style may have changed — next hit-test must not use stale frames
+        // until the frame loop lays out again.
+        layoutValid = false
     }
 
     /// Layout at available size. Does **not** overwrite the root node's style.
+    /// Caches frames for hit-test and diagramHostFrame (do not re-layout there).
     @discardableResult
     public func calculateLayout(width: Float, height: Float) -> [LayoutFrame] {
-        guard let root else { return [] }
+        guard let root else {
+            lastFrames = []
+            layoutValid = false
+            return []
+        }
         let boxes = root.flattenedLayoutNodes()
-        guard let yogaRoot = boxes.first?.yoga else { return [] }
+        guard let yogaRoot = boxes.first?.yoga else {
+            lastFrames = []
+            layoutValid = false
+            return []
+        }
 
-        // Available size is the CalculateLayout argument — do not clobber
-        // an explicit width/height the view set on the root.
         YGNodeCalculateLayout(yogaRoot, width, height, YGDirectionLTR)
 
         var frames: [LayoutFrame] = []
-        // If root is a fragment, frames start from its layout children at 0,0
-        // after yoga laid out the first box as root… When root is Composite →
-        // HStack, flattened first box is HStack and is the yoga root.
         if boxes.count == 1 {
             boxes[0].collectFrames(originX: 0, originY: 0, into: &frames)
         } else {
-            // Multi-root: lay out first only for now (chrome is always one stack).
             boxes[0].collectFrames(originX: 0, originY: 0, into: &frames)
         }
+        lastFrames = frames
+        lastLayoutWidth = width
+        lastLayoutHeight = height
+        layoutValid = true
         return frames
     }
 
@@ -442,6 +478,51 @@ public final class LayoutHost {
             FileHandle.standardError.write(Data((f.description + "\n").utf8))
         }
         FileHandle.standardError.write(Data("--- end layout ---\n".utf8))
+    }
+
+    public var rootNode: (any AnyViewNode)? { root }
+
+    /// Diagram host from **committed** layout — does not re-run Yoga.
+    public func diagramHostFrame() -> LayoutFrame? {
+        guard layoutValid else { return nil }
+        return lastFrames.first(where: { $0.label == "DiagramHost" })
+    }
+
+    /// Reverse-z hit test against **committed** Yoga geometry (no re-layout).
+    /// `originY` matches emit offset (menu bar). Window-pixel coordinates.
+    public func hitTestClick(
+        x: Float, y: Float,
+        originX: Float = 0, originY: Float = 0
+    ) -> (() -> Void)? {
+        guard layoutValid, let root else { return nil }
+        return hitWalk(root, x: x, y: y, ox: originX, oy: originY)
+    }
+
+    private func hitWalk(
+        _ node: any AnyViewNode,
+        x: Float, y: Float,
+        ox: Float, oy: Float
+    ) -> (() -> Void)? {
+        if let box = node as? YogaBoxNode, let yref = box.yoga {
+            let nx = ox + YGNodeLayoutGetLeft(yref)
+            let ny = oy + YGNodeLayoutGetTop(yref)
+            let nw = YGNodeLayoutGetWidth(yref)
+            let nh = YGNodeLayoutGetHeight(yref)
+            // Children front-to-back.
+            for child in node.childNodes.reversed() {
+                if let h = hitWalk(child, x: x, y: y, ox: nx, oy: ny) { return h }
+            }
+            if let leaf = node as? LeafNode, let click = leaf.onClick, leaf.kind == .text {
+                if x >= nx && x < nx + nw && y >= ny && y < ny + nh {
+                    return click
+                }
+            }
+            return nil
+        }
+        for child in node.childNodes.reversed() {
+            if let h = hitWalk(child, x: x, y: y, ox: ox, oy: oy) { return h }
+        }
+        return nil
     }
 }
 
@@ -470,12 +551,16 @@ public final class LayoutHost {
     public private(set) var reconcileCount = 0
     public private(set) var mountCount = 0
     public var rootID: NodeID? { nil }
+    public var rootNode: (any AnyViewNode)? { nil }
     public init() {}
     public func setRoot<V: View>(_ view: V) {}
     public func calculateLayout(width: Float, height: Float) -> [LayoutFrame] { [] }
     public func dumpFrames(width: Float, height: Float) {
         FileHandle.standardError.write(Data("Phase 2: CYoga unavailable\n".utf8))
     }
+    public private(set) var lastFrames: [LayoutFrame] = []
+    public func diagramHostFrame() -> LayoutFrame? { nil }
+    public func hitTestClick(x: Float, y: Float, originX: Float = 0, originY: Float = 0) -> (() -> Void)? { nil }
 }
 
 // Minimal stubs so primitives compile without CYoga.
@@ -486,13 +571,20 @@ final class LeafNode: AnyViewNode {
     let kind: LeafKind
     var label: String
     var needsBodyRecompute = false
+    var text = ""
+    var color = Color.primary
+    var onClick: (() -> Void)?
+    var fillColor: Color?
     var childNodes: [any AnyViewNode] { [] }
     init(kind: LeafKind, label: String, width: Dimension, height: Dimension, flexGrow: Float = 0, minWidth: Float = 0) {
         self.kind = kind
         self.label = label
     }
-    func update(label: String, width: Dimension, height: Dimension, flexGrow: Float = 0, minWidth: Float = 0) {
+    func update(label: String, width: Dimension, height: Dimension, flexGrow: Float = 0, minWidth: Float = 0, text: String = "", color: Color = .primary, onClick: (() -> Void)? = nil) {
         self.label = label
+        self.text = text
+        self.color = color
+        self.onClick = onClick
     }
     func collectFrames(originX: Float, originY: Float, into frames: inout [LayoutFrame]) {}
     func flattenedLayoutNodes() -> [any AnyViewNode] { [self] }
@@ -502,9 +594,12 @@ final class StackNode: AnyViewNode {
     let id = NodeID.generate()
     var label: String
     var needsBodyRecompute = false
+    var fillColor: Color?
+    let direction: FlexDirection
     var childNodes: [any AnyViewNode]
     init(label: String, direction: FlexDirection, style: StackStyle, content: any AnyViewNode) {
         self.label = label
+        self.direction = direction
         self.childNodes = [content]
     }
     func update(style: StackStyle, contentView: some View) {}

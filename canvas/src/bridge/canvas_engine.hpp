@@ -13,6 +13,7 @@
 #include "../shell/model.hpp"
 #include "../util/result.hpp"
 #include "../render/text_highlight_rule.hpp"
+#include "../render/draw_command.hpp"
 
 #include <cstdint>
 #include <memory>
@@ -128,8 +129,21 @@ class Engine {
   bool repaint();
   void readPixels(uint8_t *dst, size_t dstSize);
 
+  /// Replace the retained immediate draw list (copied under the engine mutex).
+  /// Text commands use `param` as an index into `stringOffsets`; each string is
+  /// a NUL-terminated UTF-8 slice starting at `stringBlob + stringOffsets[i]`.
+  void submitDrawList(const DrawCommand *cmds, size_t cmdCount,
+                      const uint8_t *stringBlob, size_t blobSize,
+                      const uint32_t *stringOffsets, size_t stringCount);
+
+  /// Pop one raw input event (mouse). Returns false if empty.
+  bool pollInputEvent(InputEvent &out);
+
   /// Diagram panel origin in window pixels (for coordinate transforms).
   shell::Rect diagramViewport() const;
+
+  /// Tell the engine where the diagram host lives (window pixels).
+  void setDiagramViewport(float x, float y, float w, float h);
 
   /// Low-level access for advanced use; may be null if closed.
   Application *application();

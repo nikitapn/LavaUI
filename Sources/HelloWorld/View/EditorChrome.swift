@@ -117,9 +117,9 @@ enum Phase2LayoutDump {
         host.setRoot(chrome)
         let id2 = host.rootID
 
-        // dumpFrames runs layout once (do not double-calculate).
+        // dumpFrames lays out once and caches; re-read committed frames.
         host.dumpFrames(width: width, height: height)
-        let frames = host.calculateLayout(width: width, height: height)
+        let frames = host.lastFrames
 
         var ok = true
         if id1 == nil || id1 != id2 {

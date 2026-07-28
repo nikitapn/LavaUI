@@ -22,9 +22,13 @@
 #include "imgui_impl_vulkan.h"
 #include "imgui_impl_glfw.h"
 #include "render/text_widget.hpp"
+#include "render/draw_command.hpp"
 #include "shell/layout.hpp"
 #include "shell/model.hpp"
 #include "shell/widget.hpp"
+
+#include <deque>
+#include <mutex>
 
 #define GLFW_INCLUDE_VULKAN
 #include <GLFW/glfw3.h>
@@ -714,7 +718,19 @@ struct Application::Impl
       io.AddMouseButtonEvent(button, pressed);
     }
 
-    // Primary button: declarative UI hits first, then text-widget focus/caret.
+    // Queue raw input for Swift hit-testing (Phase 3+).
+    if (button == MOUSE_BUTTON_1) {
+      canvas::InputEvent ev;
+      ev.kind = static_cast<uint32_t>(
+        pressed ? canvas::InputEventKind::MouseDown
+                : canvas::InputEventKind::MouseUp);
+      ev.x = x;
+      ev.y = y;
+      ev.button = button;
+      inputEvents_.push_back(ev);
+    }
+
+    // Primary button: legacy C++ UI hits first, then text-widget focus/caret.
     if (button == MOUSE_BUTTON_1) {
       if (pressed) {
         if (uiTree_.hasRoot()) {
@@ -832,44 +848,200 @@ struct Application::Impl
       const float ox = diagramViewport_.x;
       const float oy = diagramViewport_.y;
 
-      for (const auto &[id, shape] : shapes) {
-        (void)id;
-        renderer.pushScreenObject(
-          shape.kind,
-          GeometryRenderer::ScreenParams{
-            {shape.x + ox + shape.width / 2.0f, shape.y + oy + shape.height / 2.0f},
-            {shape.width, shape.height},
-            {shape.r, shape.g, shape.b, shape.a}
+      const bool useDrawList = drawListActive_;
+
+      // Clip stack for draw-list (window pixels). Intersect geometry against
+      // the current clip so pushClip/popClip actually discard content even
+      // though GeometryRenderer is a single batch (GPU multi-scissor later).
+      struct ClipRect { float x, y, w, h; };
+      std::vector<ClipRect> clipStack;
+      auto currentClip = [&]() -> std::optional<ClipRect> {
+        if (clipStack.empty()) return std::nullopt;
+        return clipStack.back();
+      };
+      auto intersects = [](const ClipRect &c, float x, float y, float w, float h) {
+        return !(x + w <= c.x || y + h <= c.y || x >= c.x + c.w || y >= c.y + c.h);
+      };
+      auto intersectRect = [](const ClipRect &c, float &x, float &y, float &w, float &h) {
+        const float x1 = std::max(c.x, x);
+        const float y1 = std::max(c.y, y);
+        const float x2 = std::min(c.x + c.w, x + w);
+        const float y2 = std::min(c.y + c.h, y + h);
+        x = x1; y = y1; w = std::max(0.f, x2 - x1); h = std::max(0.f, y2 - y1);
+      };
+
+      auto unpackColor = [](uint32_t c) {
+        return std::array<float, 4>{
+          float(c & 0xff) / 255.f,
+          float((c >> 8) & 0xff) / 255.f,
+          float((c >> 16) & 0xff) / 255.f,
+          float((c >> 24) & 0xff) / 255.f,
+        };
+      };
+
+      if (!useDrawList) {
+        for (const auto &[id, shape] : shapes) {
+          (void)id;
+          renderer.pushScreenObject(
+            shape.kind,
+            GeometryRenderer::ScreenParams{
+              {shape.x + ox + shape.width / 2.0f, shape.y + oy + shape.height / 2.0f},
+              {shape.width, shape.height},
+              {shape.r, shape.g, shape.b, shape.a}
+            }
+          );
+        }
+      } else {
+        for (const auto &cmd : drawCmds_) {
+          const auto kind = static_cast<canvas::DrawCommandKind>(cmd.kind);
+          if (kind == canvas::DrawCommandKind::PushClip) {
+            ClipRect r{cmd.x, cmd.y, cmd.w, cmd.h};
+            if (auto cur = currentClip()) {
+              intersectRect(*cur, r.x, r.y, r.w, r.h);
+            }
+            clipStack.push_back(r);
+            continue;
           }
-        );
+          if (kind == canvas::DrawCommandKind::PopClip) {
+            if (!clipStack.empty()) clipStack.pop_back();
+            continue;
+          }
+
+          const auto rgba = unpackColor(cmd.color);
+          switch (kind) {
+          case canvas::DrawCommandKind::Rect:
+          case canvas::DrawCommandKind::RoundedRect: {
+            float x = cmd.x, y = cmd.y, w = cmd.w, h = cmd.h;
+            if (auto c = currentClip()) {
+              if (!intersects(*c, x, y, w, h)) break;
+              intersectRect(*c, x, y, w, h);
+              if (w <= 0.f || h <= 0.f) break;
+            }
+            renderer.pushScreenObject(
+              kind == canvas::DrawCommandKind::RoundedRect
+                ? GeometryRenderer::Type::RoundedRectangle
+                : GeometryRenderer::Type::Rectangle,
+              GeometryRenderer::ScreenParams{
+                {x + w / 2.f, y + h / 2.f},
+                {w, h},
+                {rgba[0], rgba[1], rgba[2], rgba[3]}
+              }
+            );
+            break;
+          }
+          case canvas::DrawCommandKind::Circle: {
+            const float r = cmd.aux;
+            if (auto c = currentClip()) {
+              if (!intersects(*c, cmd.x - r, cmd.y - r, r * 2.f, r * 2.f)) break;
+            }
+            renderer.pushScreenObject(
+              GeometryRenderer::Type::Circle,
+              GeometryRenderer::ScreenParams{
+                {cmd.x, cmd.y},
+                {r * 2.f, r * 2.f},
+                {rgba[0], rgba[1], rgba[2], rgba[3]}
+              }
+            );
+            break;
+          }
+          default:
+            break;
+          }
+        }
       }
 
-      // FreeType text: diagram labels (panel-local) + declarative UI Text.
+      // FreeType text
       textRenderer.beginTextRendering();
-      for (const auto &[id, label] : labels) {
-        (void)id;
-        textRenderer.renderText(
-          label.text, {label.x + ox, label.y + oy}, {label.r, label.g, label.b});
-      }
-      {
+      if (!useDrawList) {
+        for (const auto &[id, label] : labels) {
+          (void)id;
+          textRenderer.renderText(
+            label.text, {label.x + ox, label.y + oy}, {label.r, label.g, label.b});
+        }
+        {
+          const float lineH = textRenderer.getLineHeight();
+          for (const auto &n : uiTree_.nodes()) {
+            if (n.kind != shell::WidgetKind::Text || n.text.empty()) continue;
+            const float tx = n.rect.x + 4.f;
+            const float ty = n.rect.y + uiBodyOriginY_ + lineH * 0.85f;
+            textRenderer.renderText(n.text, {tx, ty}, {n.r, n.g, n.b});
+          }
+        }
+      } else {
         const float lineH = textRenderer.getLineHeight();
-        for (const auto &n : uiTree_.nodes()) {
-          if (n.kind != shell::WidgetKind::Text || n.text.empty()) continue;
-          const float tx = n.rect.x + 4.f;
-          const float ty = n.rect.y + uiBodyOriginY_ + lineH * 0.85f;
-          textRenderer.renderText(n.text, {tx, ty}, {n.r, n.g, n.b});
+        clipStack.clear();
+        for (const auto &cmd : drawCmds_) {
+          const auto kind = static_cast<canvas::DrawCommandKind>(cmd.kind);
+          if (kind == canvas::DrawCommandKind::PushClip) {
+            ClipRect r{cmd.x, cmd.y, cmd.w, cmd.h};
+            if (auto cur = currentClip()) {
+              intersectRect(*cur, r.x, r.y, r.w, r.h);
+            }
+            clipStack.push_back(r);
+            continue;
+          }
+          if (kind == canvas::DrawCommandKind::PopClip) {
+            if (!clipStack.empty()) clipStack.pop_back();
+            continue;
+          }
+          if (kind != canvas::DrawCommandKind::Text) continue;
+          if (cmd.param >= drawStrings_.size()) continue;
+          // Approximate text box for clip test (glyph extent is Phase 4).
+          if (auto c = currentClip()) {
+            if (!intersects(*c, cmd.x, cmd.y, cmd.w, cmd.h)) continue;
+          }
+          const auto rgba = std::array<float, 3>{
+            float(cmd.color & 0xff) / 255.f,
+            float((cmd.color >> 8) & 0xff) / 255.f,
+            float((cmd.color >> 16) & 0xff) / 255.f,
+          };
+          const float tx = cmd.x + 4.f;
+          const float ty = cmd.y + lineH * 0.85f;
+          textRenderer.renderText(drawStrings_[cmd.param], {tx, ty},
+                                  {rgba[0], rgba[1], rgba[2]});
         }
       }
       textRenderer.endTextRendering();
 
       lineRenderer.clear();
-      for (const auto &[id, line] : lines) {
-        (void)id;
-        lineRenderer.addLine(
-          {line.x1 + ox, line.y1 + oy, 0.0f},
-          {line.x2 + ox, line.y2 + oy, 0.0f},
-          {line.r, line.g, line.b, line.a}
-        );
+      if (!useDrawList) {
+        for (const auto &[id, line] : lines) {
+          (void)id;
+          lineRenderer.addLine(
+            {line.x1 + ox, line.y1 + oy, 0.0f},
+            {line.x2 + ox, line.y2 + oy, 0.0f},
+            {line.r, line.g, line.b, line.a}
+          );
+        }
+      } else {
+        clipStack.clear();
+        for (const auto &cmd : drawCmds_) {
+          const auto kind = static_cast<canvas::DrawCommandKind>(cmd.kind);
+          if (kind == canvas::DrawCommandKind::PushClip) {
+            ClipRect r{cmd.x, cmd.y, cmd.w, cmd.h};
+            if (auto cur = currentClip()) {
+              intersectRect(*cur, r.x, r.y, r.w, r.h);
+            }
+            clipStack.push_back(r);
+            continue;
+          }
+          if (kind == canvas::DrawCommandKind::PopClip) {
+            if (!clipStack.empty()) clipStack.pop_back();
+            continue;
+          }
+          if (kind != canvas::DrawCommandKind::Line) continue;
+          // Drop line if both endpoints outside (rough).
+          if (auto c = currentClip()) {
+            const bool aIn = intersects(*c, cmd.x, cmd.y, 1.f, 1.f);
+            const bool bIn = intersects(*c, cmd.w, cmd.h, 1.f, 1.f);
+            if (!aIn && !bIn) continue;
+          }
+          const auto rgba = unpackColor(cmd.color);
+          lineRenderer.addLine(
+            {cmd.x, cmd.y, 0.f}, {cmd.w, cmd.h, 0.f},
+            {rgba[0], rgba[1], rgba[2], rgba[3]}
+          );
+        }
       }
       lineRenderer.prepare(mat4{1.0f}, screenProjection_);
 
@@ -896,26 +1068,30 @@ struct Application::Impl
           };
           vkCmdSetViewport(commandBuffer, 0, 1, &fullVp);
 
-          // Scissor diagram content to the Yoga center panel.
-          VkRect2D scissor {
-            .offset = {
-              static_cast<int32_t>(std::max(0.f, diagramViewport_.x)),
-              static_cast<int32_t>(std::max(0.f, diagramViewport_.y))
-            },
-            .extent = {
-              static_cast<uint32_t>(std::max(1.f, diagramViewport_.w)),
-              static_cast<uint32_t>(std::max(1.f, diagramViewport_.h))
-            },
-          };
-          vkCmdSetScissor(commandBuffer, 0, 1, &scissor);
+          // Draw-list commands are already window-absolute (Phase 3). Legacy
+          // shapes stay scissored to the diagram panel.
+          VkRect2D fullScissor {.offset = {0, 0}, .extent = extent};
+          if (useDrawList) {
+            vkCmdSetScissor(commandBuffer, 0, 1, &fullScissor);
+          } else {
+            VkRect2D scissor {
+              .offset = {
+                static_cast<int32_t>(std::max(0.f, diagramViewport_.x)),
+                static_cast<int32_t>(std::max(0.f, diagramViewport_.y))
+              },
+              .extent = {
+                static_cast<uint32_t>(std::max(1.f, diagramViewport_.w)),
+                static_cast<uint32_t>(std::max(1.f, diagramViewport_.h))
+              },
+            };
+            vkCmdSetScissor(commandBuffer, 0, 1, &scissor);
+          }
 
           lineRenderer.draw(commandBuffer);
           renderer.draw(commandBuffer, imageIndex);
           mesh3DRenderer.draw(commandBuffer, imageIndex);
 
-          // Full-window scissor: FreeType text (diagram labels + UI Text)
-          // and ImGui chrome.
-          VkRect2D fullScissor {.offset = {0, 0}, .extent = extent};
+          // Full-window scissor for FreeType text + ImGui chrome.
           vkCmdSetScissor(commandBuffer, 0, 1, &fullScissor);
 
           textRenderer.draw(
@@ -957,6 +1133,12 @@ struct Application::Impl
   shell::WidgetBuilder uiBuilder_;
   shell::WidgetTree uiTree_;
   float uiBodyOriginY_ = 0.f; // menu bar height; body layout is below
+
+  // Immediate draw list (Phase 3) — authored by Swift each dirty frame.
+  std::vector<canvas::DrawCommand> drawCmds_;
+  std::vector<std::string> drawStrings_;
+  bool drawListActive_ = false; // explicit; empty list must not fall back to legacy
+  std::deque<canvas::InputEvent> inputEvents_;
 
   std::vector<canvas::TreeItem> projectTree_;
   std::vector<canvas::PropertyItem> properties_;
@@ -1077,7 +1259,14 @@ struct Application::Impl
       ImGui::EndMenuBar();
     }
 
-    // Prefer declarative Swift tree when committed.
+    // Draw-list shell (Phase 3): menu only — chrome is painted by submitDrawList.
+    if (drawListActive_) {
+      uiBodyOriginY_ = menuH;
+      ImGui::End();
+      return;
+    }
+
+    // Prefer legacy declarative C++ UI tree when committed.
     if (uiTree_.hasRoot()) {
       layoutDeclarativeUI(ew, bodyH, menuH);
       ImGui::End();
@@ -1183,6 +1372,39 @@ struct Application::Impl
     outWidgetId = e.widgetId;
     outKind = static_cast<int>(e.kind);
     return true;
+  }
+
+  void submitDrawList(const canvas::DrawCommand *cmds, size_t cmdCount,
+                      const uint8_t *stringBlob, size_t blobSize,
+                      const uint32_t *stringOffsets, size_t stringCount)
+  {
+    drawListActive_ = true;
+    drawCmds_.assign(cmds, cmds + cmdCount);
+    drawStrings_.clear();
+    drawStrings_.reserve(stringCount);
+    for (size_t i = 0; i < stringCount; ++i) {
+      const uint32_t off = stringOffsets[i];
+      if (!stringBlob || off >= blobSize) {
+        drawStrings_.emplace_back();
+        continue;
+      }
+      // NUL-terminated slices packed by Swift.
+      drawStrings_.emplace_back(
+        reinterpret_cast<const char *>(stringBlob + off));
+    }
+  }
+
+  bool pollInputEvent(canvas::InputEvent &out)
+  {
+    if (inputEvents_.empty()) return false;
+    out = inputEvents_.front();
+    inputEvents_.pop_front();
+    return true;
+  }
+
+  void setDiagramViewport(float x, float y, float w, float h)
+  {
+    diagramViewport_ = {x, y, w, h};
   }
 
   // ImGui frame: app shell (windowed) + text widgets.
@@ -1306,6 +1528,24 @@ void Application::uiCommit() { impl_->uiCommit(); }
 bool Application::uiPollEvent(int &outWidgetId, int &outKind)
 {
   return impl_->uiPollEvent(outWidgetId, outKind);
+}
+
+void Application::submitDrawList(const canvas::DrawCommand *cmds, size_t cmdCount,
+                                 const uint8_t *stringBlob, size_t blobSize,
+                                 const uint32_t *stringOffsets, size_t stringCount)
+{
+  impl_->submitDrawList(cmds, cmdCount, stringBlob, blobSize, stringOffsets,
+                        stringCount);
+}
+
+bool Application::pollInputEvent(canvas::InputEvent &out)
+{
+  return impl_->pollInputEvent(out);
+}
+
+void Application::setDiagramViewport(float x, float y, float w, float h)
+{
+  impl_->setDiagramViewport(x, y, w, h);
 }
 
 bool Application::repaint() {

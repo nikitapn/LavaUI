@@ -3,16 +3,22 @@ import FBDModel
 
 #if canImport(CxxCanvas)
 
+/// Single window driven entirely by the View DSL + draw list (Phase 3).
 @main
 struct HelloWorldApp {
     static func main() {
         let assets = assetsRoot()
         FileHandle.standardError.write(Data("assets: \(assets)\n".utf8))
 
+        let windowW: Float = 1280
+        let windowH: Float = 800
+        /// ImGui menu bar — body lays out below this.
+        let menuH: Float = 24
+
         guard let editor = Editor.open(
             assetsRoot: assets,
-            width: 1280,
-            height: 800,
+            width: Int32(windowW),
+            height: Int32(windowH),
             title: "FBD Editor"
         ) else {
             FileHandle.standardError.write(Data("failed to open editor window\n".utf8))
@@ -20,13 +26,14 @@ struct HelloWorldApp {
         }
 
         let diagram = makeSampleDiagram()
-        renderDiagram(diagram, into: editor)
+        let host = LayoutHost()
+        let drawList = DrawList()
 
-        let ui = UI()
         var selectedBlockId: String? = nil
         var clickCount = 0
+        var dirty = true
+        var stEditorId: Int32 = -1
 
-        /// View description of the chrome (structure dump + Yoga layout).
         func makeChrome() -> EditorChrome {
             let blocks = diagram.blocks.values.sorted { $0.name < $1.name }
             return EditorChrome(
@@ -36,6 +43,7 @@ struct HelloWorldApp {
                 onSelect: { id, name in
                     selectedBlockId = id
                     clickCount += 1
+                    dirty = true
                     FileHandle.standardError.write(
                         Data("click: \(name) (#\(clickCount))\n".utf8)
                     )
@@ -43,106 +51,90 @@ struct HelloWorldApp {
             )
         }
 
-        /// Legacy UINode commit (still drives the live window until Phase 2+).
-        func rebuildChrome() {
-            ui.beginCommit()
-            let blocks = diagram.blocks.values.sorted { $0.name < $1.name }
-            let sel = selectedBlockId ?? blocks.first.map { String($0.id.rawValue) }
+        func renderFrame() {
+            let bodyW = windowW
+            let bodyH = windowH - menuH
+            let chrome = makeChrome()
+            host.setRoot(chrome)
+            _ = host.calculateLayout(width: bodyW, height: bodyH)
 
-            let root = ui.HStack(flexGrow: 1, padding: 4) {
-                ui.VStack(width: 220, padding: 8) {
-                    ui.Text("Project", r: 0.7, g: 0.75, b: 0.9)
-                    ui.Text("Diagrams", r: 0.55, g: 0.55, b: 0.6)
-                    ui.Text("  Main", r: 0.85, g: 0.85, b: 0.85)
-                    for b in blocks {
-                        let id = String(b.id.rawValue)
-                        let selected = (id == sel)
-                        ui.Text(
-                            "  \(b.name)",
-                            r: selected ? 1.0 : 0.8,
-                            g: selected ? 0.85 : 0.8,
-                            b: selected ? 0.4 : 0.8,
-                            onClick: {
-                                selectedBlockId = id
-                                clickCount += 1
-                                FileHandle.standardError.write(
-                                    Data("click: \(b.name) (#\(clickCount))\n".utf8)
-                                )
-                            }
-                        )
-                    }
-                    ui.Spacer()
-                    ui.Text(
-                        "clicks: \(clickCount)",
-                        r: 0.5, g: 0.6, b: 0.5
+            guard let root = host.rootNode else { return }
+
+            drawList.clear()
+            // Window background
+            drawList.rect(
+                x: 0, y: 0, w: windowW, h: windowH,
+                color: Color(r: 0.10, g: 0.11, b: 0.13)
+            )
+            drawList.emitTree(
+                root,
+                originX: 0,
+                originY: menuH,
+                viewportW: windowW,
+                viewportH: windowH
+            )
+
+            // Diagram host from committed layout (no second Yoga pass).
+            if let dh = host.diagramHostFrame() {
+                let hx = dh.x
+                let hy = dh.y + menuH
+                editor.setDiagramViewport(x: hx, y: hy, w: dh.w, h: dh.h)
+                // Clip exercises pushClip/popClip (CPU scissor in C++).
+                drawList.pushClip(x: hx, y: hy, w: dh.w, h: dh.h)
+                emitDiagram(diagram, into: drawList, hostX: hx, hostY: hy)
+                drawList.popClip()
+
+                if stEditorId < 0 {
+                    stEditorId = editor.addTextWidget(
+                        x: hx + 24, y: hy + 360, w: 420, h: 120,
+                        text: """
+                        // FUNCTION expression
+                        IF speed > 10.0 THEN
+                          out := TRUE;
+                        END_IF
+                        """,
+                        multiline: true
                     )
-                }
-
-                ui.DiagramHost()
-
-                ui.VStack(width: 260, padding: 8) {
-                    ui.Text("Properties", r: 0.7, g: 0.75, b: 0.9)
-                    if let sel, let bid = Int(sel),
-                       let block = diagram.blocks[BlockID(bid)]
-                    {
-                        ui.Text("Name: \(block.name)")
-                        ui.Text("Kind: \(block.kind.displayName)")
-                        ui.Text("In: \(block.inputs.count)  Out: \(block.outputs.count)")
-                        for (k, v) in block.properties.sorted(by: { $0.key < $1.key }) {
-                            ui.Text("\(k): \(v.description)", r: 0.75, g: 0.75, b: 0.75)
-                        }
-                    } else {
-                        ui.Text("(nothing selected)", r: 0.5, g: 0.5, b: 0.5)
-                    }
-                    ui.Spacer()
-                    ui.Text(
-                        "Hot-update: re-commit tree",
-                        r: 0.45, g: 0.55, b: 0.5
+                    _ = editor.addTextHighlight(
+                        id: stEditorId, pattern: #"//[^\n]*"#,
+                        r: 0.40, g: 0.70, b: 0.40, priority: 10
                     )
+                    _ = editor.addTextHighlight(
+                        id: stEditorId,
+                        pattern: #"\b(IF|THEN|ELSE|END_IF|TRUE|FALSE)\b"#,
+                        r: 0.75, g: 0.55, b: 1.0, priority: 5
+                    )
+                    editor.setTextWidgetFocused(stEditorId, true)
                 }
             }
 
-            editor.commitUI(root, ui: ui)
+            editor.submitDrawList(drawList)
+            dirty = false
         }
 
-        let chrome = makeChrome()
-        Phase1Dump.run(chrome: chrome)
-        Phase2LayoutDump.run(chrome: chrome, width: 1280, height: 800)
+        // One-shot dumps (structure + retained layout identity).
+        let chrome0 = makeChrome()
+        Phase1Dump.run(chrome: chrome0)
+        Phase2LayoutDump.run(chrome: chrome0, width: windowW, height: windowH - menuH)
 
-        rebuildChrome()
+        renderFrame()
 
-        // ST editor sits in diagram-local coords (offset/scissor by C++).
-        let editorId = editor.addTextWidget(
-            x: 24, y: 360, w: 420, h: 120,
-            text: """
-            // FUNCTION expression
-            IF speed > 10.0 THEN
-              out := TRUE;
-            END_IF
-            """,
-            multiline: true
-        )
-        _ = editor.addTextHighlight(
-            id: editorId, pattern: #"//[^\n]*"#,
-            r: 0.40, g: 0.70, b: 0.40, priority: 10
-        )
-        _ = editor.addTextHighlight(
-            id: editorId,
-            pattern: #"\b(IF|THEN|ELSE|END_IF|TRUE|FALSE)\b"#,
-            r: 0.75, g: 0.55, b: 1.0, priority: 5
-        )
-        editor.setTextWidgetFocused(editorId, true)
-
-        var lastSelected = selectedBlockId
-        var lastClicks = clickCount
         while editor.isOpen {
-            editor.dispatchUIEvents(ui: ui)
-            // Structural hot update: re-commit tree when Swift state changes.
-            // (Cheap for small trees; this is the "hot reload of the tree" path.)
-            if selectedBlockId != lastSelected || clickCount != lastClicks {
-                lastSelected = selectedBlockId
-                lastClicks = clickCount
-                rebuildChrome()
+            // Raw mouse → Swift hit-test on text leaves.
+            while let ev = editor.pollInputEvent() {
+                if ev.kind == 1 { // MouseDown
+                    // Hit-test committed layout only (never re-runs Yoga).
+                    if let action = host.hitTestClick(
+                        x: ev.x, y: ev.y,
+                        originX: 0, originY: menuH
+                    ) {
+                        action()
+                    }
+                }
+            }
+
+            if dirty {
+                renderFrame()
             }
             Thread.sleep(forTimeInterval: 0.016)
         }

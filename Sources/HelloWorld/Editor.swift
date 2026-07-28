@@ -186,5 +186,36 @@ public final class Editor: @unchecked Sendable {
             if e.kind == 0 { ui.dispatch(widgetId: e.widgetId) }
         }
     }
+
+    // ─── Phase 3 draw list ───────────────────────────────────────────────
+
+    public func submitDrawList(_ list: DrawList) {
+        // One contiguous string blob + offset table — no per-string strdup.
+        list.commands.withUnsafeBufferPointer { cmdBuf in
+            list.stringBlob.withUnsafeBufferPointer { blobBuf in
+                list.stringOffsets.withUnsafeBufferPointer { offBuf in
+                    engine.submitDrawList(
+                        cmdBuf.baseAddress,
+                        cmdBuf.count,
+                        blobBuf.baseAddress,
+                        blobBuf.count,
+                        offBuf.baseAddress,
+                        offBuf.count
+                    )
+                }
+            }
+        }
+    }
+
+    public func setDiagramViewport(x: Float, y: Float, w: Float, h: Float) {
+        engine.setDiagramViewport(x, y, w, h)
+    }
+
+    /// Raw mouse events for Swift hit-testing.
+    public func pollInputEvent() -> (kind: UInt32, x: Float, y: Float, button: Int32)? {
+        var ev = canvas.InputEvent()
+        guard engine.pollInputEvent(&ev) else { return nil }
+        return (ev.kind, ev.x, ev.y, ev.button)
+    }
 }
 #endif

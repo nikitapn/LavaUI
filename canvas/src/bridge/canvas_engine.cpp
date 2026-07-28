@@ -359,6 +359,30 @@ shell::Rect Engine::diagramViewport() const
     [](Application &app) { return app.diagramViewport(); });
 }
 
+void Engine::submitDrawList(const DrawCommand *cmds, size_t cmdCount,
+                            const uint8_t *stringBlob, size_t blobSize,
+                            const uint32_t *stringOffsets, size_t stringCount)
+{
+  impl_->withApp([&](Application &app) {
+    app.submitDrawList(cmds, cmdCount, stringBlob, blobSize, stringOffsets,
+                       stringCount);
+  });
+}
+
+bool Engine::pollInputEvent(InputEvent &out)
+{
+  return impl_->withApp([&](Application &app) {
+    return app.pollInputEvent(out);
+  });
+}
+
+void Engine::setDiagramViewport(float x, float y, float w, float h)
+{
+  impl_->withApp([&](Application &app) {
+    app.setDiagramViewport(x, y, w, h);
+  });
+}
+
 Application *Engine::application() { return impl_->app(); }
 
 } // namespace canvas
