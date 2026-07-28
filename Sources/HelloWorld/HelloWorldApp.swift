@@ -62,11 +62,26 @@ struct HelloWorldApp {
         }
 
         func renderFrame() {
+            // Always trust live framebuffer size (resize events can lag mid-drag).
+            let fb = editor.framebufferSize()
+            if fb.w >= 1, fb.h >= 1 {
+                windowW = fb.w
+                windowH = fb.h
+            }
             let bodyW = windowW
             let bodyH = max(1, windowH - menuH)
             let chrome = makeChrome()
             host.setRoot(chrome)
-            _ = host.calculateLayout(width: bodyW, height: bodyH)
+            let frames = host.calculateLayout(width: bodyW, height: bodyH)
+            if let rootFrame = frames.first(where: { $0.label == "HStack" }) {
+                // Sanity: root must fill the body (within 1px rounding).
+                if abs(rootFrame.w - bodyW) > 2 || abs(rootFrame.h - bodyH) > 2 {
+                    let msg =
+                        "layout warn: HStack \(Int(rootFrame.w))×\(Int(rootFrame.h)) "
+                        + "!= body \(Int(bodyW))×\(Int(bodyH))\n"
+                    FileHandle.standardError.write(Data(msg.utf8))
+                }
+            }
 
             guard let root = host.rootNode else { return }
 

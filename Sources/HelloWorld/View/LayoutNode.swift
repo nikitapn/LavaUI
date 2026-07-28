@@ -501,8 +501,13 @@ public final class LayoutHost {
         layoutValid = false
     }
 
-    /// Layout at available size. Does **not** overwrite the root node's style.
-    /// Caches frames for hit-test and diagramHostFrame (do not re-layout there).
+    /// Layout into a definite viewport size (window / body pixels).
+    ///
+    /// The root Yoga node is given an **exact** width/height matching the
+    /// viewport. With `width: auto` alone, Yoga sizes the root to its content
+    /// and `flexGrow` children never receive free space — so after a window
+    /// resize the UI stayed content-sized (black empty region). Setting
+    /// definite root dimensions is the standard full-window Yoga pattern.
     @discardableResult
     public func calculateLayout(width: Float, height: Float) -> [LayoutFrame] {
         guard let root else {
@@ -517,7 +522,11 @@ public final class LayoutHost {
             return []
         }
 
-        YGNodeCalculateLayout(yogaRoot, width, height, YGDirectionLTR)
+        let w = max(1, width)
+        let h = max(1, height)
+        YGNodeStyleSetWidth(yogaRoot, w)
+        YGNodeStyleSetHeight(yogaRoot, h)
+        YGNodeCalculateLayout(yogaRoot, w, h, YGDirectionLTR)
 
         var frames: [LayoutFrame] = []
         if boxes.count == 1 {
@@ -526,8 +535,8 @@ public final class LayoutHost {
             boxes[0].collectFrames(originX: 0, originY: 0, into: &frames)
         }
         lastFrames = frames
-        lastLayoutWidth = width
-        lastLayoutHeight = height
+        lastLayoutWidth = w
+        lastLayoutHeight = h
         layoutValid = true
         return frames
     }

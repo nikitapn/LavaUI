@@ -1511,9 +1511,13 @@ void Vulkan::renderWithShadows(
   std::function<void(VkCommandBuffer)> shadowCallback,
   std::function<void(VkCommandBuffer, u32)> mainCallback)
 {
-  // Wait for previous frame to complete and reset fence
+  // Wait for the previous frame. The fence is reset only once we know this
+  // frame will actually submit: an early return between reset and submit
+  // leaves the fence unsignalled forever, so the *next* call blocks here on
+  // UINT64_MAX. During a drag-resize that is exactly what happened — acquire
+  // returns OUT_OF_DATE, we bail, and the render thread wedges while holding
+  // the engine mutex, which freezes every Swift call behind it.
   vkWaitForFences(device_, 1, &inFlightFence_, VK_TRUE, UINT64_MAX);
-  vkResetFences(device_, 1, &inFlightFence_);
 
   uint32_t swapImageIndex = 0;
   if (windowed_) {
@@ -1521,12 +1525,16 @@ void Vulkan::renderWithShadows(
       device_, swapchain_, UINT64_MAX, imageAvailableSemaphore_,
       VK_NULL_HANDLE, &swapImageIndex);
     if (acq == VK_ERROR_OUT_OF_DATE_KHR) {
-      return; // resize not handled yet (window is fixed-size)
+      // Swapchain is stale; ensureFramebufferSize() rebuilds it before the
+      // next frame. Fence is still signalled, so that frame proceeds.
+      return;
     }
     if (acq != VK_SUCCESS && acq != VK_SUBOPTIMAL_KHR) {
       VR(acq, "vkAcquireNextImageKHR failed");
     }
   }
+
+  vkResetFences(device_, 1, &inFlightFence_);
 
   const u32 imageIndex = 0; // offscreen framebuffer index (single target)
 
