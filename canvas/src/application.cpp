@@ -98,46 +98,6 @@ struct Application::Impl
     bool mouseCaptured = false;
   } inputState;
 
-  // Retained 2D shape scene, populated by add/update/removeShape and
-  // replayed into the (per-frame-immediate-mode) GeometryRenderer on every
-  // repaint(). x/y is the top-left corner (GeometryRenderer::pushScreenObject
-  // itself takes a center point, converted in repaint()). One id space
-  // shared by every GeometryRenderer::Type since removal/clearing doesn't
-  // need to know the kind.
-  struct Shape {
-    GeometryRenderer::Type kind;
-    float x, y, width, height;
-    float r, g, b, a;
-  };
-  std::unordered_map<int, Shape> shapes;
-  int nextShapeId = 1;
-
-  // Retained 2D line scene (wires), in the same screen-pixel coordinate
-  // system as shapes above. Replayed into LineRenderer every repaint(),
-  // using a screen-space orthographic projection (see screenProjection_)
-  // instead of the 3D camera LineRenderer was originally written for.
-  struct LineShape {
-    float x1, y1, x2, y2;
-    float r, g, b, a;
-  };
-  std::unordered_map<int, LineShape> lines;
-  int nextLineId = 1;
-
-  // Retained 2D text labels (block/slot names etc.), replayed into
-  // TextRenderer every repaint() alongside the FPS/debug overlay text.
-  struct LabelShape {
-    std::string text;
-    float x, y;
-    float r, g, b;
-  };
-  std::unordered_map<int, LabelShape> labels;
-  int nextLabelId = 1;
-
-  // Retained ImGui-frame text editors (syntax-highlighted fields).
-  std::unordered_map<int, CanvasTextWidget> textWidgets;
-  int nextTextWidgetId = 1;
-  int focusedTextWidgetId = -1;
-
   // Maps pixel coordinates (0,0 top-left, y-down) straight to clip space —
   // the same matrix GeometryRenderer builds internally for its own static
   // UBO (see GeometryRenderer's init()), duplicated here so LineRenderer
@@ -445,7 +405,7 @@ struct Application::Impl
         buf[1] = static_cast<char>(0x80 | ((codepoint >> 6) & 0x3F));
         buf[2] = static_cast<char>(0x80 | (codepoint & 0x3F));
       }
-      self->bridgeTextInput(buf);
+      // self->bridgeTextInput(buf);
     });
   }
 
@@ -522,195 +482,15 @@ struct Application::Impl
     };
   }
 
-  int addRect(float x, float y, float w, float h, float r, float g, float b, float a)
-  {
-    int id = nextShapeId++;
-    shapes[id] = Shape{GeometryRenderer::Type::Rectangle, x, y, w, h, r, g, b, a};
-    return id;
-  }
-
-  void updateRect(int id, float x, float y, float w, float h, float r, float g, float b, float a)
-  {
-    auto it = shapes.find(id);
-    if (it != shapes.end()) {
-      it->second = Shape{GeometryRenderer::Type::Rectangle, x, y, w, h, r, g, b, a};
-    }
-  }
-
-  int addRoundedRect(float x, float y, float w, float h, float r, float g, float b, float a)
-  {
-    int id = nextShapeId++;
-    shapes[id] = Shape{GeometryRenderer::Type::RoundedRectangle, x, y, w, h, r, g, b, a};
-    return id;
-  }
-
-  int addCircle(float centerX, float centerY, float radius, float r, float g, float b, float a)
-  {
-    int id = nextShapeId++;
-    float diameter = radius * 2.0f;
-    shapes[id] = Shape{
-      GeometryRenderer::Type::Circle,
-      centerX - radius, centerY - radius, diameter, diameter,
-      r, g, b, a
-    };
-    return id;
-  }
-
-  void removeShape(int id)
-  {
-    shapes.erase(id);
-  }
-
-  void clearShapes()
-  {
-    shapes.clear();
-  }
-
-  int addLine(float x1, float y1, float x2, float y2, float r, float g, float b, float a)
-  {
-    int id = nextLineId++;
-    lines[id] = LineShape{x1, y1, x2, y2, r, g, b, a};
-    return id;
-  }
-
-  void removeLine(int id)
-  {
-    lines.erase(id);
-  }
-
-  void clearLines()
-  {
-    lines.clear();
-  }
-
-  int addLabel(const std::string &text, float x, float y, float r, float g, float b)
-  {
-    int id = nextLabelId++;
-    labels[id] = LabelShape{text, x, y, r, g, b};
-    return id;
-  }
-
-  void removeLabel(int id)
-  {
-    labels.erase(id);
-  }
-
-  void clearLabels()
-  {
-    labels.clear();
-  }
-
-  int addTextWidget(float x, float y, float width, float height,
-                    const std::string &text, bool multiline)
-  {
-    int id = nextTextWidgetId++;
-    CanvasTextWidget widget;
-    widget.x = x;
-    widget.y = y;
-    widget.w = width;
-    widget.h = height;
-    widget.multiline = multiline;
-    widget.setText(text);
-    textWidgets.emplace(id, std::move(widget));
-    return id;
-  }
-
-  void setTextWidgetRect(int id, float x, float y, float width, float height)
-  {
-    auto it = textWidgets.find(id);
-    if (it == textWidgets.end()) return;
-    it->second.x = x;
-    it->second.y = y;
-    it->second.w = width;
-    it->second.h = height;
-  }
-
-  void setTextWidgetText(int id, const std::string &text)
-  {
-    auto it = textWidgets.find(id);
-    if (it == textWidgets.end()) return;
-    it->second.setText(text);
-  }
-
-  std::string getTextWidgetText(int id) const
-  {
-    auto it = textWidgets.find(id);
-    if (it == textWidgets.end()) return {};
-    return it->second.text();
-  }
-
-  bool setTextWidgetHighlightRules(int id, const std::vector<TextHighlightRule> &rules)
-  {
-    auto it = textWidgets.find(id);
-    if (it == textWidgets.end()) return false;
-    return it->second.setHighlightRules(rules);
-  }
-
-  void setTextWidgetFocused(int id, bool focused)
-  {
-    if (focused) {
-      for (auto &[wid, w] : textWidgets) {
-        w.focused = (wid == id);
-      }
-      focusedTextWidgetId = textWidgets.count(id) ? id : -1;
-    } else {
-      auto it = textWidgets.find(id);
-      if (it != textWidgets.end()) it->second.focused = false;
-      if (focusedTextWidgetId == id) focusedTextWidgetId = -1;
-    }
-  }
-
-  bool isTextWidgetFocused(int id) const
-  {
-    auto it = textWidgets.find(id);
-    return it != textWidgets.end() && it->second.focused;
-  }
-
-  bool textWidgetChanged(int id)
-  {
-    auto it = textWidgets.find(id);
-    if (it == textWidgets.end()) return false;
-    return it->second.consumeChanged();
-  }
-
-  void removeTextWidget(int id)
-  {
-    textWidgets.erase(id);
-    if (focusedTextWidgetId == id) focusedTextWidgetId = -1;
-  }
-
-  bool wantsAnimation() const
-  {
-    // Focused text fields need continuous frames for caret blink (and
-    // selection drag while the pointer moves — still focused).
-    if (focusedTextWidgetId >= 0) {
-      auto it = textWidgets.find(focusedTextWidgetId);
-      if (it != textWidgets.end() && it->second.focused) return true;
-    }
-    for (const auto &[id, w] : textWidgets) {
-      (void)id;
-      if (w.focused) return true;
-    }
-    return false;
-  }
-
   void bridgePointerMove(float x, float y)
   {
     inputState.mouseX = x;
     inputState.mouseY = y;
     ImGuiIO &io = ImGui::GetIO();
     io.AddMousePosEvent(x, y);
-
-    if (focusedTextWidgetId >= 0) {
-      auto it = textWidgets.find(focusedTextWidgetId);
-      if (it != textWidgets.end()) {
-        it->second.onMouseDrag(x, y);
-      }
-    }
   }
 
-  void bridgePointerButton(int button, bool pressed, float x, float y)
-  {
+  void bridgePointerButton(int button, bool pressed, float x, float y) {
     inputState.mouseX = x;
     inputState.mouseY = y;
     ImGuiIO &io = ImGui::GetIO();
@@ -721,9 +501,9 @@ struct Application::Impl
     // Queue raw input for Swift hit-testing (Phase 3+).
     if (button == MOUSE_BUTTON_1) {
       canvas::InputEvent ev;
-      ev.kind = static_cast<uint32_t>(
-        pressed ? canvas::InputEventKind::MouseDown
-                : canvas::InputEventKind::MouseUp);
+      ev.kind =
+          static_cast<uint32_t>(pressed ? canvas::InputEventKind::MouseDown
+                                        : canvas::InputEventKind::MouseUp);
       ev.x = x;
       ev.y = y;
       ev.button = button;
@@ -738,35 +518,8 @@ struct Application::Impl
           const int uiHit = uiTree_.hitTest(x, localY);
           if (uiHit > 0) {
             uiTree_.enqueueClick(uiHit);
-            // Click consumed by chrome; blur text editors.
-            if (focusedTextWidgetId >= 0) {
-              auto it = textWidgets.find(focusedTextWidgetId);
-              if (it != textWidgets.end()) it->second.focused = false;
-              focusedTextWidgetId = -1;
-            }
             return;
           }
-        }
-
-        int hitId = -1;
-        for (auto &[id, w] : textWidgets) {
-          if (w.hitTest(x, y)) {
-            hitId = id;
-            break;
-          }
-        }
-        for (auto &[id, w] : textWidgets) {
-          if (id == hitId) {
-            w.onMouseDown(x, y);
-          } else {
-            w.focused = false;
-          }
-        }
-        focusedTextWidgetId = hitId;
-      } else if (focusedTextWidgetId >= 0) {
-        auto it = textWidgets.find(focusedTextWidgetId);
-        if (it != textWidgets.end()) {
-          it->second.onMouseUp(x, y);
         }
       }
     }
@@ -783,27 +536,12 @@ struct Application::Impl
       }
     }
 
-    if (focusedTextWidgetId >= 0) {
-      auto it = textWidgets.find(focusedTextWidgetId);
-      if (it != textWidgets.end() && it->second.focused) {
-        it->second.onKey(key, action, mods);
-        if (!it->second.focused) {
-          focusedTextWidgetId = -1;
-        }
-        return;
-      }
-    }
-
-    // Fall through to debug toggles when no text field is focused.
     handleKeyInput(key, 0, action, mods);
   }
 
   void bridgeTextInput(const std::string &utf8)
   {
-    if (focusedTextWidgetId < 0) return;
-    auto it = textWidgets.find(focusedTextWidgetId);
-    if (it == textWidgets.end() || !it->second.focused) return;
-    it->second.onTextInput(utf8.c_str());
+    // todo: queue for Swift text-widget handling (Phase 3+).
   }
 
   // Renders one frame of the retained scene (shapes/lines/labels) and
@@ -839,14 +577,7 @@ struct Application::Impl
         fpsTimer = 0.0f;
       }
 
-      ImDrawData* imguiDrawData = renderImGuiOverlay(currentFPS, deltaTime);
-
       processContinuousInput(deltaTime);
-
-      // Diagram content is authored in viewport-local coordinates (0,0 =
-      // top-left of the diagram panel). Offset into window space for draw.
-      const float ox = diagramViewport_.x;
-      const float oy = diagramViewport_.y;
 
       const bool useDrawList = drawListActive_;
 
@@ -879,237 +610,179 @@ struct Application::Impl
         };
       };
 
-      if (!useDrawList) {
-        for (const auto &[id, shape] : shapes) {
-          (void)id;
-          renderer.pushScreenObject(
-            shape.kind,
-            GeometryRenderer::ScreenParams{
-              {shape.x + ox + shape.width / 2.0f, shape.y + oy + shape.height / 2.0f},
-              {shape.width, shape.height},
-              {shape.r, shape.g, shape.b, shape.a}
-            }
-          );
+      for (const auto &cmd : drawCmds_) {
+        const auto kind = static_cast<canvas::DrawCommandKind>(cmd.kind);
+        if (kind == canvas::DrawCommandKind::PushClip) {
+          ClipRect r{cmd.x, cmd.y, cmd.w, cmd.h};
+          if (auto cur = currentClip()) {
+            intersectRect(*cur, r.x, r.y, r.w, r.h);
+          }
+          clipStack.push_back(r);
+          continue;
         }
-      } else {
-        for (const auto &cmd : drawCmds_) {
-          const auto kind = static_cast<canvas::DrawCommandKind>(cmd.kind);
-          if (kind == canvas::DrawCommandKind::PushClip) {
-            ClipRect r{cmd.x, cmd.y, cmd.w, cmd.h};
-            if (auto cur = currentClip()) {
-              intersectRect(*cur, r.x, r.y, r.w, r.h);
-            }
-            clipStack.push_back(r);
-            continue;
-          }
-          if (kind == canvas::DrawCommandKind::PopClip) {
-            if (!clipStack.empty()) clipStack.pop_back();
-            continue;
-          }
+        if (kind == canvas::DrawCommandKind::PopClip) {
+          if (!clipStack.empty())
+            clipStack.pop_back();
+          continue;
+        }
 
-          const auto rgba = unpackColor(cmd.color);
-          switch (kind) {
-          case canvas::DrawCommandKind::Rect:
-          case canvas::DrawCommandKind::RoundedRect: {
-            float x = cmd.x, y = cmd.y, w = cmd.w, h = cmd.h;
-            if (auto c = currentClip()) {
-              if (!intersects(*c, x, y, w, h)) break;
-              intersectRect(*c, x, y, w, h);
-              if (w <= 0.f || h <= 0.f) break;
-            }
-            renderer.pushScreenObject(
+        const auto rgba = unpackColor(cmd.color);
+        switch (kind) {
+        case canvas::DrawCommandKind::Rect:
+        case canvas::DrawCommandKind::RoundedRect: {
+          float x = cmd.x, y = cmd.y, w = cmd.w, h = cmd.h;
+          if (auto c = currentClip()) {
+            if (!intersects(*c, x, y, w, h))
+              break;
+            intersectRect(*c, x, y, w, h);
+            if (w <= 0.f || h <= 0.f)
+              break;
+          }
+          renderer.pushScreenObject(
               kind == canvas::DrawCommandKind::RoundedRect
-                ? GeometryRenderer::Type::RoundedRectangle
-                : GeometryRenderer::Type::Rectangle,
+                  ? GeometryRenderer::Type::RoundedRectangle
+                  : GeometryRenderer::Type::Rectangle,
               GeometryRenderer::ScreenParams{
-                {x + w / 2.f, y + h / 2.f},
-                {w, h},
-                {rgba[0], rgba[1], rgba[2], rgba[3]}
-              }
-            );
-            break;
+                  {x + w / 2.f, y + h / 2.f},
+                  {w, h},
+                  {rgba[0], rgba[1], rgba[2], rgba[3]}});
+          break;
+        }
+        case canvas::DrawCommandKind::Circle: {
+          const float r = cmd.aux;
+          if (auto c = currentClip()) {
+            if (!intersects(*c, cmd.x - r, cmd.y - r, r * 2.f, r * 2.f))
+              break;
           }
-          case canvas::DrawCommandKind::Circle: {
-            const float r = cmd.aux;
-            if (auto c = currentClip()) {
-              if (!intersects(*c, cmd.x - r, cmd.y - r, r * 2.f, r * 2.f)) break;
-            }
-            renderer.pushScreenObject(
-              GeometryRenderer::Type::Circle,
-              GeometryRenderer::ScreenParams{
-                {cmd.x, cmd.y},
-                {r * 2.f, r * 2.f},
-                {rgba[0], rgba[1], rgba[2], rgba[3]}
-              }
-            );
-            break;
-          }
-          default:
-            break;
-          }
+          renderer.pushScreenObject(GeometryRenderer::Type::Circle,
+                                    GeometryRenderer::ScreenParams{
+                                        {cmd.x, cmd.y},
+                                        {r * 2.f, r * 2.f},
+                                        {rgba[0], rgba[1], rgba[2], rgba[3]}});
+          break;
+        }
+        default:
+          break;
         }
       }
 
       // FreeType text
       textRenderer.beginTextRendering();
-      if (!useDrawList) {
-        for (const auto &[id, label] : labels) {
-          (void)id;
-          textRenderer.renderText(
-            label.text, {label.x + ox, label.y + oy}, {label.r, label.g, label.b});
+      const float lineH = textRenderer.getLineHeight();
+      clipStack.clear();
+      for (const auto &cmd : drawCmds_) {
+        const auto kind = static_cast<canvas::DrawCommandKind>(cmd.kind);
+        if (kind == canvas::DrawCommandKind::PushClip) {
+          ClipRect r{cmd.x, cmd.y, cmd.w, cmd.h};
+          if (auto cur = currentClip()) {
+            intersectRect(*cur, r.x, r.y, r.w, r.h);
+          }
+          clipStack.push_back(r);
+          continue;
         }
-        {
-          const float lineH = textRenderer.getLineHeight();
-          for (const auto &n : uiTree_.nodes()) {
-            if (n.kind != shell::WidgetKind::Text || n.text.empty()) continue;
-            const float tx = n.rect.x + 4.f;
-            const float ty = n.rect.y + uiBodyOriginY_ + lineH * 0.85f;
-            textRenderer.renderText(n.text, {tx, ty}, {n.r, n.g, n.b});
-          }
+        if (kind == canvas::DrawCommandKind::PopClip) {
+          if (!clipStack.empty())
+            clipStack.pop_back();
+          continue;
         }
-      } else {
-        const float lineH = textRenderer.getLineHeight();
-        clipStack.clear();
-        for (const auto &cmd : drawCmds_) {
-          const auto kind = static_cast<canvas::DrawCommandKind>(cmd.kind);
-          if (kind == canvas::DrawCommandKind::PushClip) {
-            ClipRect r{cmd.x, cmd.y, cmd.w, cmd.h};
-            if (auto cur = currentClip()) {
-              intersectRect(*cur, r.x, r.y, r.w, r.h);
-            }
-            clipStack.push_back(r);
+        if (kind != canvas::DrawCommandKind::Text)
+          continue;
+        if (cmd.param >= drawStrings_.size())
+          continue;
+        // Approximate text box for clip test (glyph extent is Phase 4).
+        if (auto c = currentClip()) {
+          if (!intersects(*c, cmd.x, cmd.y, cmd.w, cmd.h))
             continue;
-          }
-          if (kind == canvas::DrawCommandKind::PopClip) {
-            if (!clipStack.empty()) clipStack.pop_back();
-            continue;
-          }
-          if (kind != canvas::DrawCommandKind::Text) continue;
-          if (cmd.param >= drawStrings_.size()) continue;
-          // Approximate text box for clip test (glyph extent is Phase 4).
-          if (auto c = currentClip()) {
-            if (!intersects(*c, cmd.x, cmd.y, cmd.w, cmd.h)) continue;
-          }
-          const auto rgba = std::array<float, 3>{
+        }
+        const auto rgba = std::array<float, 3>{
             float(cmd.color & 0xff) / 255.f,
             float((cmd.color >> 8) & 0xff) / 255.f,
             float((cmd.color >> 16) & 0xff) / 255.f,
-          };
-          const float tx = cmd.x + 4.f;
-          const float ty = cmd.y + lineH * 0.85f;
-          textRenderer.renderText(drawStrings_[cmd.param], {tx, ty},
-                                  {rgba[0], rgba[1], rgba[2]});
-        }
+        };
+        const float tx = cmd.x + 4.f;
+        const float ty = cmd.y + lineH * 0.85f;
+        textRenderer.renderText(drawStrings_[cmd.param], {tx, ty},
+                                {rgba[0], rgba[1], rgba[2]});
       }
       textRenderer.endTextRendering();
 
       lineRenderer.clear();
-      if (!useDrawList) {
-        for (const auto &[id, line] : lines) {
-          (void)id;
-          lineRenderer.addLine(
-            {line.x1 + ox, line.y1 + oy, 0.0f},
-            {line.x2 + ox, line.y2 + oy, 0.0f},
-            {line.r, line.g, line.b, line.a}
-          );
+      clipStack.clear();
+      for (const auto &cmd : drawCmds_) {
+        const auto kind = static_cast<canvas::DrawCommandKind>(cmd.kind);
+        if (kind == canvas::DrawCommandKind::PushClip) {
+          ClipRect r{cmd.x, cmd.y, cmd.w, cmd.h};
+          if (auto cur = currentClip()) {
+            intersectRect(*cur, r.x, r.y, r.w, r.h);
+          }
+          clipStack.push_back(r);
+          continue;
         }
-      } else {
-        clipStack.clear();
-        for (const auto &cmd : drawCmds_) {
-          const auto kind = static_cast<canvas::DrawCommandKind>(cmd.kind);
-          if (kind == canvas::DrawCommandKind::PushClip) {
-            ClipRect r{cmd.x, cmd.y, cmd.w, cmd.h};
-            if (auto cur = currentClip()) {
-              intersectRect(*cur, r.x, r.y, r.w, r.h);
-            }
-            clipStack.push_back(r);
-            continue;
-          }
-          if (kind == canvas::DrawCommandKind::PopClip) {
-            if (!clipStack.empty()) clipStack.pop_back();
-            continue;
-          }
-          if (kind != canvas::DrawCommandKind::Line) continue;
-          // Drop line if both endpoints outside (rough).
-          if (auto c = currentClip()) {
-            const bool aIn = intersects(*c, cmd.x, cmd.y, 1.f, 1.f);
-            const bool bIn = intersects(*c, cmd.w, cmd.h, 1.f, 1.f);
-            if (!aIn && !bIn) continue;
-          }
-          const auto rgba = unpackColor(cmd.color);
-          lineRenderer.addLine(
-            {cmd.x, cmd.y, 0.f}, {cmd.w, cmd.h, 0.f},
-            {rgba[0], rgba[1], rgba[2], rgba[3]}
-          );
+        if (kind == canvas::DrawCommandKind::PopClip) {
+          if (!clipStack.empty())
+            clipStack.pop_back();
+          continue;
         }
+        if (kind != canvas::DrawCommandKind::Line)
+          continue;
+        // Drop line if both endpoints outside (rough).
+        if (auto c = currentClip()) {
+          const bool aIn = intersects(*c, cmd.x, cmd.y, 1.f, 1.f);
+          const bool bIn = intersects(*c, cmd.w, cmd.h, 1.f, 1.f);
+          if (!aIn && !bIn)
+            continue;
+        }
+        const auto rgba = unpackColor(cmd.color);
+        lineRenderer.addLine({cmd.x, cmd.y, 0.f}, {cmd.w, cmd.h, 0.f},
+                             {rgba[0], rgba[1], rgba[2], rgba[3]});
       }
       lineRenderer.prepare(mat4{1.0f}, screenProjection_);
 
-      // Text widgets: also offset if they use diagram-local coords. Keep
-      // absolute for now by not offsetting widget positions here — Swift
-      // can place them in diagram-local space and we offset at draw time.
-      for (auto &[id, widget] : textWidgets) {
-        (void)id;
-        widget.x += ox;
-        widget.y += oy;
-      }
-
       vulkan.renderWithShadows(
-        [&](VkCommandBuffer commandBuffer) {
-          mesh3DRenderer.drawShadowPass(commandBuffer);
-        },
-        [&](VkCommandBuffer commandBuffer, u32 imageIndex) {
-          const auto extent = vulkan.getExtent();
-          VkViewport fullVp {
-            .x = 0.f, .y = 0.f,
-            .width = static_cast<float>(extent.width),
-            .height = static_cast<float>(extent.height),
-            .minDepth = 0.f, .maxDepth = 1.f,
-          };
-          vkCmdSetViewport(commandBuffer, 0, 1, &fullVp);
-
-          // Draw-list commands are already window-absolute (Phase 3). Legacy
-          // shapes stay scissored to the diagram panel.
-          VkRect2D fullScissor {.offset = {0, 0}, .extent = extent};
-          if (useDrawList) {
-            vkCmdSetScissor(commandBuffer, 0, 1, &fullScissor);
-          } else {
-            VkRect2D scissor {
-              .offset = {
-                static_cast<int32_t>(std::max(0.f, diagramViewport_.x)),
-                static_cast<int32_t>(std::max(0.f, diagramViewport_.y))
-              },
-              .extent = {
-                static_cast<uint32_t>(std::max(1.f, diagramViewport_.w)),
-                static_cast<uint32_t>(std::max(1.f, diagramViewport_.h))
-              },
+          [&](VkCommandBuffer commandBuffer) {
+            mesh3DRenderer.drawShadowPass(commandBuffer);
+          },
+          [&](VkCommandBuffer commandBuffer, u32 imageIndex) {
+            const auto extent = vulkan.getExtent();
+            VkViewport fullVp{
+                .x = 0.f,
+                .y = 0.f,
+                .width = static_cast<float>(extent.width),
+                .height = static_cast<float>(extent.height),
+                .minDepth = 0.f,
+                .maxDepth = 1.f,
             };
-            vkCmdSetScissor(commandBuffer, 0, 1, &scissor);
-          }
+            vkCmdSetViewport(commandBuffer, 0, 1, &fullVp);
 
-          lineRenderer.draw(commandBuffer);
-          renderer.draw(commandBuffer, imageIndex);
-          mesh3DRenderer.draw(commandBuffer, imageIndex);
+            // Draw-list commands are already window-absolute (Phase 3). Legacy
+            // shapes stay scissored to the diagram panel.
+            VkRect2D fullScissor{.offset = {0, 0}, .extent = extent};
+            if (useDrawList) {
+              vkCmdSetScissor(commandBuffer, 0, 1, &fullScissor);
+            } else {
+              VkRect2D scissor{
+                  .offset =
+                      {static_cast<int32_t>(std::max(0.f, diagramViewport_.x)),
+                       static_cast<int32_t>(std::max(0.f, diagramViewport_.y))},
+                  .extent = {static_cast<uint32_t>(
+                                 std::max(1.f, diagramViewport_.w)),
+                             static_cast<uint32_t>(
+                                 std::max(1.f, diagramViewport_.h))},
+              };
+              vkCmdSetScissor(commandBuffer, 0, 1, &scissor);
+            }
 
-          // Full-window scissor for FreeType text + ImGui chrome.
-          vkCmdSetScissor(commandBuffer, 0, 1, &fullScissor);
+            lineRenderer.draw(commandBuffer);
+            renderer.draw(commandBuffer, imageIndex);
+            mesh3DRenderer.draw(commandBuffer, imageIndex);
 
-          textRenderer.draw(
-            commandBuffer,
-            {static_cast<float>(extent.width), static_cast<float>(extent.height)});
+            // Full-window scissor for FreeType text + ImGui chrome.
+            vkCmdSetScissor(commandBuffer, 0, 1, &fullScissor);
 
-          if (imguiDrawData && imguiDrawData->Valid) {
-            ImGui_ImplVulkan_RenderDrawData(imguiDrawData, commandBuffer);
-          }
-        }
-      );
-
-      // Undo temporary widget offset so next frame's layout is stable.
-      for (auto &[id, widget] : textWidgets) {
-        (void)id;
-        widget.x -= ox;
-        widget.y -= oy;
-      }
+            textRenderer.draw(commandBuffer,
+                              {static_cast<float>(extent.width),
+                               static_cast<float>(extent.height)});
+          });
 
       return true;
     } catch (std::exception &ex) {
@@ -1140,41 +813,6 @@ struct Application::Impl
   bool drawListActive_ = false; // explicit; empty list must not fall back to legacy
   std::deque<canvas::InputEvent> inputEvents_;
 
-  std::vector<canvas::TreeItem> projectTree_;
-  std::vector<canvas::PropertyItem> properties_;
-  std::string selectedTreeId_;
-
-  void setProjectTree(std::vector<canvas::TreeItem> items)
-  {
-    projectTree_ = std::move(items);
-    // Keep selection if still present.
-    bool found = false;
-    for (const auto &it : projectTree_) {
-      if (it.id == selectedTreeId_) {
-        found = true;
-        break;
-      }
-    }
-    if (!found) {
-      selectedTreeId_.clear();
-      for (const auto &it : projectTree_) {
-        if (it.selected) {
-          selectedTreeId_ = it.id;
-          break;
-        }
-      }
-      if (selectedTreeId_.empty() && !projectTree_.empty()) {
-        selectedTreeId_ = projectTree_.front().id;
-      }
-    }
-  }
-
-  void setProperties(std::vector<canvas::PropertyItem> items)
-  {
-    properties_ = std::move(items);
-  }
-
-  std::string selectedTreeId() const { return selectedTreeId_; }
   shell::Rect diagramViewport() const { return diagramViewport_; }
 
   void setWorkspaceLayout(shell::Node root)
@@ -1203,142 +841,6 @@ struct Application::Impl
     if (auto d = uiTree_.diagramHostRect()) {
       diagramViewport_ = {d->x, d->y + menuH, d->w, d->h};
     }
-  }
-
-  void drawAppShell(float ew, float eh)
-  {
-    const float menuH = ImGui::GetFrameHeight();
-    const float bodyH = std::max(1.f, eh - menuH);
-
-    ImGuiWindowFlags hostFlags =
-      ImGuiWindowFlags_NoDecoration |
-      ImGuiWindowFlags_NoMove |
-      ImGuiWindowFlags_NoResize |
-      ImGuiWindowFlags_NoBringToFrontOnFocus |
-      ImGuiWindowFlags_NoNavFocus |
-      ImGuiWindowFlags_MenuBar |
-      ImGuiWindowFlags_NoBackground;
-
-    ImGui::SetNextWindowPos(ImVec2(0, 0));
-    ImGui::SetNextWindowSize(ImVec2(ew, eh));
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.f);
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
-    ImGui::Begin("##ShellHost", nullptr, hostFlags);
-    ImGui::PopStyleVar(2);
-
-    if (ImGui::BeginMenuBar()) {
-      if (ImGui::BeginMenu("File")) {
-        ImGui::MenuItem("New diagram", nullptr, false, false);
-        ImGui::MenuItem("Open…", nullptr, false, false);
-        ImGui::MenuItem("Save", nullptr, false, false);
-        ImGui::Separator();
-        if (ImGui::MenuItem("Quit")) {
-          if (auto *w = vulkan.window()) {
-            glfwSetWindowShouldClose(w, GLFW_TRUE);
-          }
-        }
-        ImGui::EndMenu();
-      }
-      if (ImGui::BeginMenu("View")) {
-        if (!uiTree_.hasRoot()) {
-          if (ImGui::SliderFloat("Left panel", &shellLeftWidth_, 140.f, 400.f) ||
-              ImGui::SliderFloat("Right panel", &shellRightWidth_, 160.f, 480.f)) {
-            workspaceRoot_ = shell::columns(
-              shell::PanelKind::ProjectTree, shell::PanelKind::Diagram,
-              shell::PanelKind::Properties, shellLeftWidth_, shellRightWidth_);
-          }
-        } else {
-          ImGui::TextDisabled("Layout driven by Swift UI tree");
-        }
-        ImGui::EndMenu();
-      }
-      ImGui::TextDisabled(
-        uiTree_.hasRoot()
-          ? "  FBD Editor  ·  Swift UI + Yoga  ·  TextRenderer"
-          : "  FBD Editor  ·  Yoga + ImGui  ·  C++/Swift");
-      ImGui::EndMenuBar();
-    }
-
-    // Draw-list shell (Phase 3): menu only — chrome is painted by submitDrawList.
-    if (drawListActive_) {
-      uiBodyOriginY_ = menuH;
-      ImGui::End();
-      return;
-    }
-
-    // Prefer legacy declarative C++ UI tree when committed.
-    if (uiTree_.hasRoot()) {
-      layoutDeclarativeUI(ew, bodyH, menuH);
-      ImGui::End();
-      return;
-    }
-
-    // Legacy ImGui chrome (project tree | diagram hole | properties).
-    auto placements = shell::calculateLayout(workspaceRoot_, ew, bodyH);
-
-    shell::Rect leftR{0, menuH, shellLeftWidth_, bodyH};
-    shell::Rect centerR{shellLeftWidth_, menuH, ew - shellLeftWidth_ - shellRightWidth_, bodyH};
-    shell::Rect rightR{ew - shellRightWidth_, menuH, shellRightWidth_, bodyH};
-    for (const auto &p : placements) {
-      shell::Rect r = p.rect;
-      r.y += menuH;
-      switch (p.panel) {
-      case shell::PanelKind::ProjectTree: leftR = r; break;
-      case shell::PanelKind::Diagram: centerR = r; break;
-      case shell::PanelKind::Properties: rightR = r; break;
-      default: break;
-      }
-    }
-    diagramViewport_ = centerR;
-    uiBodyOriginY_ = menuH;
-
-    auto panelChild = [&](const char *id, const shell::Rect &r, bool border) {
-      ImGui::SetCursorScreenPos(ImVec2(r.x, r.y));
-      ImGui::BeginChild(id, ImVec2(r.w, r.h), border,
-                        border ? 0 : ImGuiWindowFlags_NoBackground);
-    };
-
-    panelChild("##Left", leftR, true);
-    ImGui::TextUnformatted("Project");
-    ImGui::Separator();
-    if (projectTree_.empty()) {
-      ImGui::TextDisabled("(no items — push from Swift)");
-    } else {
-      for (auto &it : projectTree_) {
-        ImGui::Dummy(ImVec2(static_cast<float>(it.depth) * 12.f, 0));
-        ImGui::SameLine(0, 0);
-        const bool sel = (it.id == selectedTreeId_);
-        if (ImGui::Selectable(it.label.c_str(), sel)) {
-          selectedTreeId_ = it.id;
-        }
-      }
-    }
-    ImGui::EndChild();
-
-    panelChild("##Center", centerR, false);
-    ImGui::EndChild();
-
-    panelChild("##Right", rightR, true);
-    ImGui::TextUnformatted("Properties");
-    ImGui::Separator();
-    if (!selectedTreeId_.empty()) {
-      ImGui::Text("Selected: %s", selectedTreeId_.c_str());
-    } else {
-      ImGui::TextDisabled("No selection");
-    }
-    ImGui::Spacing();
-    if (properties_.empty()) {
-      ImGui::TextDisabled("(no properties)");
-    } else {
-      for (const auto &p : properties_) {
-        ImGui::Text("%s", p.key.c_str());
-        ImGui::SameLine(rightR.w * 0.45f);
-        ImGui::TextUnformatted(p.value.c_str());
-      }
-    }
-    ImGui::EndChild();
-
-    ImGui::End();
   }
 
   // ─── Declarative UI builder (Swift interop) ─────────────────────────────
@@ -1407,44 +909,6 @@ struct Application::Impl
     diagramViewport_ = {x, y, w, h};
   }
 
-  // ImGui frame: app shell (windowed) + text widgets.
-  ImDrawData* renderImGuiOverlay(float /*currentFPS*/, float deltaTime)
-  {
-    if (vulkan.isWindowed()) {
-      ImGui_ImplGlfw_NewFrame();
-    }
-    ImGui_ImplVulkan_NewFrame();
-    ImGuiIO &io = ImGui::GetIO();
-    const float ew = static_cast<float>(vulkan.getExtent().width);
-    const float eh = static_cast<float>(vulkan.getExtent().height);
-    io.DisplaySize = ImVec2(ew, eh);
-    io.DeltaTime = std::max(deltaTime, 0.0001f);
-    io.IniFilename = nullptr;
-    ImGui::NewFrame();
-
-    if (vulkan.isWindowed()) {
-      drawAppShell(ew, eh);
-    }
-
-    // Text widgets share ImGui's font atlas / Vulkan backend.
-    ImDrawList *fg = ImGui::GetForegroundDrawList();
-    ImFont *font = ImGui::GetFont();
-    const float fontSize = ImGui::GetFontSize();
-    for (auto &[id, widget] : textWidgets) {
-      (void)id;
-      widget.draw(fg, font, fontSize, deltaTime);
-    }
-
-    mesh3DRenderer.setDrawNormals(renderNormalsDebug);
-    mesh3DRenderer.setNormalDebugLength(normalDebugLength);
-    mesh3DRenderer.setNormalDebugSampleStep(static_cast<u32>(std::max(normalDebugSampleStride, 1)));
-    mesh3DRenderer.setNormalDebugColor(vec4(normalDebugColor.x, normalDebugColor.y, normalDebugColor.z, normalDebugColor.w));
-    mesh3DRenderer.setWireframe(renderWireframeDebug);
-
-    ImGui::Render();
-    return ImGui::GetDrawData();
-  }
-
   void shutdown()
   {
     renderer.cleanUp();
@@ -1478,18 +942,6 @@ void Application::setWindowFrame(int x, int y, int width, int height) {
 
 void Application::setWindowVisible(bool visible) {
   impl_->setWindowVisible(visible);
-}
-
-void Application::setProjectTree(std::vector<canvas::TreeItem> items) {
-  impl_->setProjectTree(std::move(items));
-}
-
-void Application::setProperties(std::vector<canvas::PropertyItem> items) {
-  impl_->setProperties(std::move(items));
-}
-
-std::string Application::selectedTreeId() const {
-  return impl_->selectedTreeId();
 }
 
 shell::Rect Application::diagramViewport() const {
@@ -1550,97 +1002,6 @@ void Application::setDiagramViewport(float x, float y, float w, float h)
 
 bool Application::repaint() {
   return impl_->repaint();
-}
-
-int Application::addRect(float x, float y, float w, float h, float r, float g, float b, float a) {
-  return impl_->addRect(x, y, w, h, r, g, b, a);
-}
-
-void Application::updateRect(int id, float x, float y, float w, float h, float r, float g, float b, float a) {
-  impl_->updateRect(id, x, y, w, h, r, g, b, a);
-}
-
-int Application::addRoundedRect(float x, float y, float w, float h, float r, float g, float b, float a) {
-  return impl_->addRoundedRect(x, y, w, h, r, g, b, a);
-}
-
-int Application::addCircle(float centerX, float centerY, float radius, float r, float g, float b, float a) {
-  return impl_->addCircle(centerX, centerY, radius, r, g, b, a);
-}
-
-void Application::removeShape(int id) {
-  impl_->removeShape(id);
-}
-
-void Application::clearShapes() {
-  impl_->clearShapes();
-}
-
-int Application::addLine(float x1, float y1, float x2, float y2, float r, float g, float b, float a) {
-  return impl_->addLine(x1, y1, x2, y2, r, g, b, a);
-}
-
-void Application::removeLine(int id) {
-  impl_->removeLine(id);
-}
-
-void Application::clearLines() {
-  impl_->clearLines();
-}
-
-int Application::addLabel(const std::string &text, float x, float y, float r, float g, float b) {
-  return impl_->addLabel(text, x, y, r, g, b);
-}
-
-void Application::removeLabel(int id) {
-  impl_->removeLabel(id);
-}
-
-void Application::clearLabels() {
-  impl_->clearLabels();
-}
-
-int Application::addTextWidget(float x, float y, float width, float height,
-                               const std::string &text, bool multiline) {
-  return impl_->addTextWidget(x, y, width, height, text, multiline);
-}
-
-void Application::setTextWidgetRect(int id, float x, float y, float width, float height) {
-  impl_->setTextWidgetRect(id, x, y, width, height);
-}
-
-void Application::setTextWidgetText(int id, const std::string &text) {
-  impl_->setTextWidgetText(id, text);
-}
-
-std::string Application::getTextWidgetText(int id) const {
-  return impl_->getTextWidgetText(id);
-}
-
-bool Application::setTextWidgetHighlightRules(
-  int id, const std::vector<TextHighlightRule> &rules)
-{
-  return impl_->setTextWidgetHighlightRules(id, rules);
-}
-
-void Application::setTextWidgetFocused(int id, bool focused) {
-  impl_->setTextWidgetFocused(id, focused);
-}
-
-bool Application::isTextWidgetFocused(int id) const {
-  return impl_->isTextWidgetFocused(id);
-}
-
-bool Application::textWidgetChanged(int id) {
-  return impl_->textWidgetChanged(id);
-}
-
-void Application::removeTextWidget(int id) {
-  impl_->removeTextWidget(id);
-}
-
-bool Application::wantsAnimation() const {
-  return impl_->wantsAnimation();
 }
 
 void Application::pointerMove(float x, float y) {

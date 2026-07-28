@@ -110,7 +110,6 @@ engine_sources = [
   'src/util/util.cpp',
   'src/util/cout_ext.cpp',
   'src/bridge/canvas_bridge.cpp',
-  'src/bridge/canvas_c_api.cpp',
   'src/bridge/canvas_engine.cpp',
 ]
 
@@ -189,7 +188,7 @@ canvas_dep = declare_dependency(
   include_directories: include_directories('src/bridge'),
 )
 
-install_headers('src/bridge/canvas_bridge.hpp', 'src/bridge/canvas_c_api.h')
+install_headers('src/bridge/canvas_bridge.hpp')
 
 # ——— Headless smoke-test executable ———
 # No window, no GLFW: ticks the engine offscreen and writes a PNG. Exercises

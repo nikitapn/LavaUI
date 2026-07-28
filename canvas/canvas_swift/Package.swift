@@ -22,7 +22,6 @@ let package = Package(
         .macOS(.v13)  // For Linux, this is ignored.
     ],
     products: [
-        .library(name: "CanvasKit", targets: ["CanvasKit"]),
         // C++ interop surface (no Gtk). Use from targets with
         // interoperabilityMode(.Cxx). Implementation is still libcanvas.so.
         .library(name: "CxxCanvas", targets: ["CxxCanvas"]),
@@ -30,26 +29,6 @@ let package = Package(
         .library(name: "CYoga", targets: ["CYoga"]),
     ],
     targets: [
-        // Plain C bridge — still used by CanvasKit for a stable Swift API.
-        .target(
-            name: "CCanvas",
-            dependencies: [],
-            path: "Sources/CCanvas",
-            publicHeadersPath: "include",
-            linkerSettings: [
-                .linkedLibrary("canvas"),
-                .unsafeFlags(["-L", buildPath]),
-                .unsafeFlags(["-Xlinker", "-rpath", "-Xlinker", buildPath]),
-            ]
-        ),
-
-        // Swift-facing wrapper (C API).
-        .target(
-            name: "CanvasKit",
-            dependencies: ["CCanvas"],
-            path: "Sources/CanvasKit"
-        ),
-
         // C++ interop: import `canvas::Engine` etc. Header-only target;
         // symbols come from libcanvas.so.
         .target(

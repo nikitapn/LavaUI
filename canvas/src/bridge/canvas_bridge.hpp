@@ -38,45 +38,6 @@ class CanvasBridge {
   // boundary since Swift can't catch C++ exceptions).
   bool repaint() noexcept;
 
-  // Retained 2D shape scene. x/y is the top-left corner, in pixels; r/g/b/a
-  // are 0-1. Each add* returns an id you can later pass to
-  // updateRect/removeShape (removal/clearing is shared across shape kinds).
-  int addRect(float x, float y, float width, float height,
-              float r, float g, float b, float a) noexcept;
-  void updateRect(int id, float x, float y, float width, float height,
-                   float r, float g, float b, float a) noexcept;
-  int addRoundedRect(float x, float y, float width, float height,
-                      float r, float g, float b, float a) noexcept;
-  int addCircle(float centerX, float centerY, float radius,
-                float r, float g, float b, float a) noexcept;
-  void removeShape(int id) noexcept;
-  void clearShapes() noexcept;
-
-  // Retained 2D line scene (wires), same screen-pixel coordinate system.
-  int addLine(float x1, float y1, float x2, float y2,
-              float r, float g, float b, float a) noexcept;
-  void removeLine(int id) noexcept;
-  void clearLines() noexcept;
-
-  // Retained 2D text labels. r/g/b are 0-1 (no alpha).
-  int addLabel(const std::string &text, float x, float y,
-               float r, float g, float b) noexcept;
-  void removeLabel(int id) noexcept;
-  void clearLabels() noexcept;
-
-  // Text widgets (editable, optional regex highlighting).
-  int addTextWidget(float x, float y, float width, float height,
-                    const std::string &text, bool multiline) noexcept;
-  void setTextWidgetRect(int id, float x, float y, float width, float height) noexcept;
-  void setTextWidgetText(int id, const std::string &text) noexcept;
-  std::string getTextWidgetText(int id) noexcept;
-  bool setTextWidgetHighlightRules(int id, const std::vector<TextHighlightRule> &rules) noexcept;
-  void setTextWidgetFocused(int id, bool focused) noexcept;
-  bool isTextWidgetFocused(int id) noexcept;
-  bool textWidgetChanged(int id) noexcept;
-  void removeTextWidget(int id) noexcept;
-  bool wantsAnimation() noexcept;
-
   // Input bridge (canvas-local pixels; GLFW-style key codes).
   void pointerMove(float x, float y) noexcept;
   void pointerButton(int button, bool pressed, float x, float y) noexcept;

@@ -121,48 +121,12 @@ bool Engine::isWindowVisible() const
   return impl_->window ? impl_->window->isVisible() : false;
 }
 
-void Engine::setProjectTree(std::vector<TreeItem> items)
-{
-  impl_->withApp([&](Application &app) { app.setProjectTree(std::move(items)); });
-}
-
-void Engine::setProperties(std::vector<PropertyItem> items)
-{
-  impl_->withApp([&](Application &app) { app.setProperties(std::move(items)); });
-}
-
-std::string Engine::selectedTreeId() const
-{
-  // const_cast for withApp non-const Application API
-  return const_cast<Engine *>(this)->impl_->withApp(
-    [](Application &app) { return app.selectedTreeId(); });
-}
-
 void Engine::clearProjectTreeBuilder() { impl_->pendingTree.clear(); }
 
 void Engine::addTreeItem(const std::string &id, const std::string &label,
                          int depth, bool selected)
 {
   impl_->pendingTree.push_back(TreeItem{id, label, depth, selected});
-}
-
-void Engine::commitProjectTree()
-{
-  setProjectTree(std::move(impl_->pendingTree));
-  impl_->pendingTree.clear();
-}
-
-void Engine::clearPropertiesBuilder() { impl_->pendingProperties.clear(); }
-
-void Engine::addPropertyItem(const std::string &key, const std::string &value)
-{
-  impl_->pendingProperties.push_back(PropertyItem{key, value});
-}
-
-void Engine::commitProperties()
-{
-  setProperties(std::move(impl_->pendingProperties));
-  impl_->pendingProperties.clear();
 }
 
 void Engine::setWorkspaceLayout(shell::Node root)
@@ -217,130 +181,6 @@ bool Engine::uiPollEvent(int &outWidgetId, int &outKind)
   return impl_->withApp([&](Application &app) {
     return app.uiPollEvent(outWidgetId, outKind);
   });
-}
-
-int Engine::addRect(float x, float y, float w, float h,
-                    float r, float g, float b, float a)
-{
-  return impl_->withApp([&](Application &app) {
-    return app.addRect(x, y, w, h, r, g, b, a);
-  });
-}
-
-void Engine::updateRect(int id, float x, float y, float w, float h,
-                        float r, float g, float b, float a)
-{
-  impl_->withApp([&](Application &app) {
-    app.updateRect(id, x, y, w, h, r, g, b, a);
-  });
-}
-
-int Engine::addRoundedRect(float x, float y, float w, float h,
-                           float r, float g, float b, float a)
-{
-  return impl_->withApp([&](Application &app) {
-    return app.addRoundedRect(x, y, w, h, r, g, b, a);
-  });
-}
-
-int Engine::addCircle(float cx, float cy, float radius,
-                      float r, float g, float b, float a)
-{
-  return impl_->withApp([&](Application &app) {
-    return app.addCircle(cx, cy, radius, r, g, b, a);
-  });
-}
-
-void Engine::removeShape(int id)
-{
-  impl_->withApp([&](Application &app) { app.removeShape(id); });
-}
-
-void Engine::clearShapes()
-{
-  impl_->withApp([&](Application &app) { app.clearShapes(); });
-}
-
-int Engine::addLine(float x1, float y1, float x2, float y2,
-                    float r, float g, float b, float a)
-{
-  return impl_->withApp([&](Application &app) {
-    return app.addLine(x1, y1, x2, y2, r, g, b, a);
-  });
-}
-
-void Engine::removeLine(int id)
-{
-  impl_->withApp([&](Application &app) { app.removeLine(id); });
-}
-
-void Engine::clearLines()
-{
-  impl_->withApp([&](Application &app) { app.clearLines(); });
-}
-
-int Engine::addLabel(const std::string &text, float x, float y,
-                     float r, float g, float b)
-{
-  return impl_->withApp([&](Application &app) {
-    return app.addLabel(text, x, y, r, g, b);
-  });
-}
-
-void Engine::removeLabel(int id)
-{
-  impl_->withApp([&](Application &app) { app.removeLabel(id); });
-}
-
-void Engine::clearLabels()
-{
-  impl_->withApp([&](Application &app) { app.clearLabels(); });
-}
-
-int Engine::addTextWidget(float x, float y, float w, float h,
-                          const std::string &text, bool multiline)
-{
-  return impl_->withApp([&](Application &app) {
-    return app.addTextWidget(x, y, w, h, text, multiline);
-  });
-}
-
-void Engine::setTextWidgetText(int id, const std::string &text)
-{
-  impl_->withApp([&](Application &app) { app.setTextWidgetText(id, text); });
-}
-
-std::string Engine::textWidgetText(int id) const
-{
-  return const_cast<Engine *>(this)->impl_->withApp(
-    [&](Application &app) { return app.getTextWidgetText(id); });
-}
-
-bool Engine::setTextWidgetHighlightRules(
-  int id, const std::vector<TextHighlightRule> &rules)
-{
-  return impl_->withApp([&](Application &app) {
-    return app.setTextWidgetHighlightRules(id, rules);
-  });
-}
-
-bool Engine::addTextWidgetHighlightRule(int id, const std::string &pattern,
-                                        float r, float g, float b, float a,
-                                        int priority)
-{
-  auto &rules = impl_->highlightRules[id];
-  rules.push_back(TextHighlightRule{pattern, r, g, b, a, priority, 0});
-  return setTextWidgetHighlightRules(id, rules);
-}
-
-void Engine::setTextWidgetFocused(int id, bool focused)
-{
-  impl_->withApp([&](Application &app) { app.setTextWidgetFocused(id, focused); });
-}
-
-bool Engine::textWidgetChanged(int id)
-{
-  return impl_->withApp([&](Application &app) { return app.textWidgetChanged(id); });
 }
 
 bool Engine::repaint()

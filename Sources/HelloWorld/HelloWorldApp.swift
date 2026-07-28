@@ -32,7 +32,6 @@ struct HelloWorldApp {
         var selectedBlockId: String? = nil
         var clickCount = 0
         var dirty = true
-        var stEditorId: Int32 = -1
 
         func makeChrome() -> EditorChrome {
             let blocks = diagram.blocks.values.sorted { $0.name < $1.name }
@@ -83,29 +82,6 @@ struct HelloWorldApp {
                 drawList.pushClip(x: hx, y: hy, w: dh.w, h: dh.h)
                 emitDiagram(diagram, into: drawList, hostX: hx, hostY: hy)
                 drawList.popClip()
-
-                if stEditorId < 0 {
-                    stEditorId = editor.addTextWidget(
-                        x: hx + 24, y: hy + 360, w: 420, h: 120,
-                        text: """
-                        // FUNCTION expression
-                        IF speed > 10.0 THEN
-                          out := TRUE;
-                        END_IF
-                        """,
-                        multiline: true
-                    )
-                    _ = editor.addTextHighlight(
-                        id: stEditorId, pattern: #"//[^\n]*"#,
-                        r: 0.40, g: 0.70, b: 0.40, priority: 10
-                    )
-                    _ = editor.addTextHighlight(
-                        id: stEditorId,
-                        pattern: #"\b(IF|THEN|ELSE|END_IF|TRUE|FALSE)\b"#,
-                        r: 0.75, g: 0.55, b: 1.0, priority: 5
-                    )
-                    editor.setTextWidgetFocused(stEditorId, true)
-                }
             }
 
             editor.submitDrawList(drawList)
