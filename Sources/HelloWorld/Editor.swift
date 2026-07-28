@@ -115,6 +115,12 @@ public final class Editor: @unchecked Sendable {
         engine.setDiagramViewport(x, y, w, h)
     }
 
+    /// Install face for draw-list text (must match UIFont used for measure).
+    @discardableResult
+    public func loadFont(path: String, pixelSize: Float) -> Bool {
+        engine.loadFont(std.string(path), pixelSize).has_value()
+    }
+
     /// Raw mouse events for Swift hit-testing.
     public func pollInputEvent() -> (kind: UInt32, x: Float, y: Float, button: Int32)? {
         var ev = canvas.InputEvent()

@@ -331,15 +331,9 @@ struct Application::Impl
     std::cout << "Renderer initialized.\n";
 
     textRenderer.init();
-    {
-      // Font must load after assetsRoot is known — Application's member
-      // constructors run long before init*, so the path cannot live there.
-      const auto font = assetPath(assetsRoot, "LiberationSerif-Regular.ttf");
-      if (auto r = textRenderer.loadFont(font.string(), 36); !r) {
-        return r;
-      }
-    }
-    std::cout << "Text renderer initialized.\n";
+    // No default face here — Swift owns font policy (FontStore) and calls
+    // loadFont(path, size) after open so measure and draw use the same choice.
+    std::cout << "Text renderer initialized (font pending from Swift).\n";
 
     mesh3DRenderer.init();
     std::cout << "3D Mesh renderer initialized.\n";
@@ -909,6 +903,11 @@ struct Application::Impl
     diagramViewport_ = {x, y, w, h};
   }
 
+  canvas::VoidResult loadFont(const std::string &path, float pixelSize)
+  {
+    return textRenderer.loadFont(path, static_cast<int>(pixelSize));
+  }
+
   void shutdown()
   {
     renderer.cleanUp();
@@ -998,6 +997,11 @@ bool Application::pollInputEvent(canvas::InputEvent &out)
 void Application::setDiagramViewport(float x, float y, float w, float h)
 {
   impl_->setDiagramViewport(x, y, w, h);
+}
+
+canvas::VoidResult Application::loadFont(const std::string &path, float pixelSize)
+{
+  return impl_->loadFont(path, pixelSize);
 }
 
 bool Application::repaint() {

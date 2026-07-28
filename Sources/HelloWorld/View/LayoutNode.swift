@@ -144,11 +144,16 @@ enum LeafKind: Equatable {
 
 final class LeafNode: YogaBoxNode {
     let kind: LeafKind
-    /// Phase 3 draw / hit-test payload (text leaves).
+    /// Phase 3/4 draw / hit-test payload (text leaves).
     var text: String = ""
     var color: Color = .primary
     var onClick: (() -> Void)?
     var fillColor: Color?
+    /// Explicit face, or nil → `FontStore.default` at measure time.
+    var font: UIFont?
+    /// Last layout lines from Font measure cache (for multi-line emit).
+    var cachedLines: [String] = []
+    var usesTextMeasure = false
 
     init(
         kind: LeafKind,
@@ -180,6 +185,7 @@ final class LeafNode: YogaBoxNode {
         color: Color = .primary,
         onClick: (() -> Void)? = nil
     ) {
+        let textChanged = self.text != text
         self.label = label
         self.width = width
         self.height = height
@@ -189,7 +195,70 @@ final class LeafNode: YogaBoxNode {
         self.color = color
         self.onClick = onClick
         applyStyle()
+        if usesTextMeasure {
+            // Content change invalidates Yoga's measure cache for this leaf.
+            if textChanged {
+                YGNodeMarkDirty(yogaStorage)
+            }
+        }
     }
+
+    /// Install Yoga measure callback (Phase 4). Width/height become auto;
+    /// intrinsic size comes from `Font::measure` via `TextLayoutCache`.
+    func installTextMeasure() {
+        usesTextMeasure = true
+        width = .auto
+        height = .auto
+        applyStyle()
+        YGNodeSetContext(yogaStorage, Unmanaged.passUnretained(self).toOpaque())
+        YGNodeSetMeasureFunc(yogaStorage, leafTextMeasure)
+        YGNodeMarkDirty(yogaStorage)
+    }
+
+    func measureForYoga(width: Float, widthMode: YGMeasureMode) -> YGSize {
+        guard let font = font ?? FontStore.default else {
+            // Fallback estimate if font not bootstrapped yet.
+            let w = max(8, Float(text.count) * 8 + 8)
+            return YGSize(width: w, height: 22)
+        }
+        let mode: Int
+        switch widthMode {
+        case YGMeasureModeUndefined: mode = 0
+        case YGMeasureModeExactly: mode = 1
+        case YGMeasureModeAtMost: mode = 2
+        default: mode = 0
+        }
+        let entry = TextLayoutCache.shared.layout(
+            font: font,
+            text: text,
+            availWidth: width,
+            mode: mode
+        )
+        cachedLines = entry.lines
+        // Padding keeps a slightly larger hit target.
+        return YGSize(width: entry.width + 8, height: max(entry.height, font.lineHeight) + 4)
+    }
+
+    func markMeasureDirty() {
+        if usesTextMeasure {
+            YGNodeMarkDirty(yogaStorage)
+        }
+    }
+}
+
+/// No-capture C function pointer for Yoga (Phase 0b pattern).
+private func leafTextMeasure(
+    _ node: YGNodeConstRef?,
+    _ width: Float,
+    _ widthMode: YGMeasureMode,
+    _ height: Float,
+    _ heightMode: YGMeasureMode
+) -> YGSize {
+    guard let node, let ctx = YGNodeGetContext(node) else {
+        return YGSize(width: 0, height: 0)
+    }
+    let leaf = Unmanaged<LeafNode>.fromOpaque(ctx).takeUnretainedValue()
+    return leaf.measureForYoga(width: width, widthMode: widthMode)
 }
 
 // MARK: - Stack container (HStack / VStack only)

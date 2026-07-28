@@ -94,6 +94,10 @@ class Engine {
   /// Tell the engine where the diagram host lives (window pixels).
   void setDiagramViewport(float x, float y, float w, float h);
 
+  /// Load TextRenderer face for draw-list text. Called from Swift FontStore
+  /// after open — C++ does not choose a default path.
+  [[nodiscard]] VoidResult loadFont(const std::string &path, float pixelSize);
+
   /// Low-level access for advanced use; may be null if closed.
   Application *application();
 

@@ -223,6 +223,13 @@ void Engine::setDiagramViewport(float x, float y, float w, float h)
   });
 }
 
+VoidResult Engine::loadFont(const std::string &path, float pixelSize)
+{
+  return impl_->withApp([&](Application &app) {
+    return app.loadFont(path, pixelSize);
+  });
+}
+
 Application *Engine::application() { return impl_->app(); }
 
 } // namespace canvas

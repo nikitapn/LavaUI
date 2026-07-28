@@ -61,6 +61,13 @@ public struct EditorChrome: View {
                     ) { row in
                         Text("\(row.key): \(row.value)", color: Color(r: 0.75, g: 0.75, b: 0.75))
                     }
+                    // Phase 4: wrap inside fixed-width panel (Yoga AtMost measure).
+                    Text(
+                        "Help: This paragraph is measured with Font::measure "
+                            + "and wraps to the panel width. Hit-test boxes "
+                            + "match glyph metrics.",
+                        color: .secondary
+                    )
                 } else {
                     Text("(nothing selected)", color: .secondary)
                 }
@@ -168,5 +175,98 @@ enum Phase2LayoutDump {
         FileHandle.standardError.write(
             Data(ok ? "Phase2Dump: PASS\n".utf8 : "Phase2Dump: FAIL\n".utf8)
         )
+    }
+}
+
+enum Phase4TextDump {
+    /// Font measure + cache: direct re-measure hits cache; tree shows multi-line wrap.
+    static func run(chrome: some View, width: Float, height: Float) {
+        guard let font = FontStore.default else {
+            FileHandle.standardError.write(Data("Phase4Dump: FAIL (no default UIFont)\n".utf8))
+            return
+        }
+
+        let cache = TextLayoutCache.shared
+        cache.clear()
+
+        // Direct cache exercise (Yoga won't remeasure clean leaves).
+        let sample =
+            "Help: This paragraph is measured with Font::measure "
+            + "and wraps to the panel width. Hit-test boxes "
+            + "match glyph metrics."
+        let panelInner: Float = 260 - 16 // VStack width minus padding
+        _ = cache.layout(font: font, text: sample, availWidth: panelInner, mode: 2)
+        _ = cache.layout(font: font, text: sample, availWidth: panelInner, mode: 2)
+        _ = cache.layout(font: font, text: sample, availWidth: panelInner, mode: 2)
+        _ = cache.layout(font: font, text: sample, availWidth: panelInner, mode: 1)
+
+        // Tree layout warms the cache (misses expected).
+        let host = LayoutHost()
+        host.setRoot(chrome)
+        _ = host.calculateLayout(width: width, height: height)
+
+        // Static remesure thrash — count only these for the hit-rate gate.
+        cache.resetStats()
+        for _ in 0..<5 {
+            markTextDirty(host.rootNode)
+            _ = host.calculateLayout(width: width, height: height)
+        }
+
+        let rate = cache.hitRate
+        FileHandle.standardError.write(
+            Data(
+                String(
+                    format: "Phase4 cache (static remesure): hits=%d misses=%d rate=%.1f%%\n",
+                    cache.hits, cache.misses, rate * 100
+                ).utf8
+            )
+        )
+
+        let entry = cache.layout(font: font, text: sample, availWidth: panelInner, mode: 2)
+        FileHandle.standardError.write(
+            Data(
+                "Phase4 wrap: lines=\(entry.lines.count) size=\(entry.width)×\(entry.height)\n"
+                    .utf8
+            )
+        )
+
+        let frames = host.lastFrames
+        let multiLineFrame = frames.contains { f in
+            f.label.hasPrefix("Text") && f.h > font.lineHeight * 1.8
+        }
+
+        var ok = true
+        // After warmup + remesure thrash, hits should dominate (plan: >90% static).
+        if rate < 0.9 {
+            FileHandle.standardError.write(
+                Data("Phase4Dump: expected cache hit rate >= 90% on static remesure\n".utf8)
+            )
+            ok = false
+        }
+        if entry.lines.count < 2 {
+            FileHandle.standardError.write(
+                Data("Phase4Dump: expected wrapped paragraph (>=2 lines)\n".utf8)
+            )
+            ok = false
+        }
+        if !multiLineFrame {
+            FileHandle.standardError.write(
+                Data("Phase4Dump: expected multi-line Text frame in tree layout\n".utf8)
+            )
+            ok = false
+        }
+        FileHandle.standardError.write(
+            Data(ok ? "Phase4Dump: PASS\n".utf8 : "Phase4Dump: FAIL\n".utf8)
+        )
+    }
+
+    private static func markTextDirty(_ node: (any AnyViewNode)?) {
+        guard let node else { return }
+        if let leaf = node as? LeafNode {
+            leaf.markMeasureDirty()
+        }
+        for c in node.childNodes {
+            markTextDirty(c)
+        }
     }
 }

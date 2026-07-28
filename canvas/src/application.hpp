@@ -69,6 +69,10 @@ public:
   bool pollInputEvent(canvas::InputEvent &out);
   void setDiagramViewport(float x, float y, float w, float h);
 
+  /// Load the face TextRenderer uses for draw-list text. Swift is the only
+  /// caller (FontStore); Application does not pick a default path.
+  [[nodiscard]] canvas::VoidResult loadFont(const std::string &path, float pixelSize);
+
   // ─── Input bridge (canvas-local coords, GLFW-style key codes) ───────────
 
   void pointerMove(float x, float y);

@@ -478,16 +478,15 @@ by Yoga, driven from `View` structs, with the retained-shape API deleted.
 
 ---
 
-### Phase 4 — Text
+### Phase 4 — Text ✅ DONE (v1)
 
-- `Font` handle wrapping `canvas::Font`, `Hashable` for cache keys
-- `Text` as a primitive view whose node carries a Yoga measure function
-- **Shaped-run cache** keyed on `(text, font, width, mode)` — the single biggest
-  perf lever. Yoga calls measure repeatedly per pass with different modes, and
-  each uncached call crosses into C++ and reshapes via HarfBuzz.
-- Cache entries hold the run handle so emission references it instead of
-  remeasuring
-- Invalidate + `YGNodeMarkDirty` when string or font changes
+- `UIFont` wraps `canvas::Font`; `FontStore.bootstrap` at startup (16px, same as
+  C++ TextRenderer)
+- `Text` leaves install `YGMeasureFunc` → `Font::measure(text, avail, mode)`
+- **`TextLayoutCache`** keyed on `(text, fontId, widthQ, mode)`; hit rate dumped
+  at startup (`Phase4Dump`)
+- `Font::prepareWrap` / `wrapLineAt` for multi-line emit matching measure breaks
+- `YGNodeMarkDirty` when text changes; draw emits one command per wrapped line
 
 **Done when:** a paragraph wraps correctly inside a resizing panel, and cache hit
 rate is >90% on a static frame.

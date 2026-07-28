@@ -146,8 +146,14 @@ public final class DrawList {
                     rect(x: x, y: y, w: w, h: h, color: fill)
                 }
                 if leaf.kind == .text, !leaf.text.isEmpty {
-                    // Hit-test uses estimated text bounds until Phase 4 Font::measure.
-                    text(leaf.text, x: x, y: y, w: w, h: h, color: leaf.color)
+                    // Multi-line: emit one command per wrapped line (same breaks
+                    // as Yoga measure via TextLayoutCache / Font::wrapLines).
+                    let lineH = (leaf.font ?? FontStore.default)?.lineHeight ?? 18
+                    let lines = leaf.cachedLines.isEmpty ? [leaf.text] : leaf.cachedLines
+                    for (i, line) in lines.enumerated() {
+                        let ly = y + Float(i) * lineH
+                        text(line, x: x, y: ly, w: w, h: lineH, color: leaf.color)
+                    }
                 }
                 return
             }

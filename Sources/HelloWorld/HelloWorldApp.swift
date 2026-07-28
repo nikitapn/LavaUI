@@ -3,7 +3,7 @@ import FBDModel
 
 #if canImport(CxxCanvas)
 
-/// Single window driven entirely by the View DSL + draw list (Phase 3).
+/// Single window: View DSL + Yoga + draw list (Phases 1–4).
 @main
 struct HelloWorldApp {
     static func main() {
@@ -12,8 +12,7 @@ struct HelloWorldApp {
 
         let windowW: Float = 1280
         let windowH: Float = 800
-        /// ImGui menu bar — body lays out below this.
-        let menuH: Float = 24
+        let menuH: Float = 0
 
         guard let editor = Editor.open(
             assetsRoot: assets,
@@ -23,6 +22,11 @@ struct HelloWorldApp {
         ) else {
             FileHandle.standardError.write(Data("failed to open editor window\n".utf8))
             exit(1)
+        }
+
+        // Swift owns font policy: load default + push same face to C++ draw.
+        if FontStore.bootstrap(assetsRoot: assets, pixelSize: 16, into: editor) == nil {
+            FileHandle.standardError.write(Data("warning: default UIFont failed to load\n".utf8))
         }
 
         let diagram = makeSampleDiagram()
@@ -60,7 +64,6 @@ struct HelloWorldApp {
             guard let root = host.rootNode else { return }
 
             drawList.clear()
-            // Window background
             drawList.rect(
                 x: 0, y: 0, w: windowW, h: windowH,
                 color: Color(r: 0.10, g: 0.11, b: 0.13)
@@ -73,12 +76,10 @@ struct HelloWorldApp {
                 viewportH: windowH
             )
 
-            // Diagram host from committed layout (no second Yoga pass).
             if let dh = host.diagramHostFrame() {
                 let hx = dh.x
                 let hy = dh.y + menuH
                 editor.setDiagramViewport(x: hx, y: hy, w: dh.w, h: dh.h)
-                // Clip exercises pushClip/popClip (CPU scissor in C++).
                 drawList.pushClip(x: hx, y: hy, w: dh.w, h: dh.h)
                 emitDiagram(diagram, into: drawList, hostX: hx, hostY: hy)
                 drawList.popClip()
@@ -88,18 +89,16 @@ struct HelloWorldApp {
             dirty = false
         }
 
-        // One-shot dumps (structure + retained layout identity).
         let chrome0 = makeChrome()
         Phase1Dump.run(chrome: chrome0)
         Phase2LayoutDump.run(chrome: chrome0, width: windowW, height: windowH - menuH)
+        Phase4TextDump.run(chrome: chrome0, width: windowW, height: windowH - menuH)
 
         renderFrame()
 
         while editor.isOpen {
-            // Raw mouse → Swift hit-test on text leaves.
             while let ev = editor.pollInputEvent() {
-                if ev.kind == 1 { // MouseDown
-                    // Hit-test committed layout only (never re-runs Yoga).
+                if ev.kind == 1 {
                     if let action = host.hitTestClick(
                         x: ev.x, y: ev.y,
                         originX: 0, originY: menuH

@@ -10,6 +10,8 @@
 #include <cctype>
 #include <cstdlib>
 #include <cstring>
+#include <string>
+#include <vector>
 
 namespace canvas {
 
@@ -25,6 +27,9 @@ struct Font::Impl {
   float ascent = 0.f;
   float descent = 0.f;
   float lineHeight = 0.f;
+
+  /// Last prepareWrap result (for wrapLineAt).
+  std::vector<std::string> wrapCache;
 
   ~Impl() { unload(); }
 
@@ -90,16 +95,24 @@ float shapedWidth(hb_font_t *font, const std::string &text) {
 // kerning — standard for line-breaking; kerning isn't a thing across a
 // break opportunity in real text engines either). Always returns at least
 // one (possibly zero-width) line.
-std::vector<float> wrapLineWidths(hb_font_t *font, const std::string &text, float availWidth) {
-  std::vector<float> lineWidths;
+//
+// When `outLines` is non-null, also records the text of each line (same
+// break points as the widths) so draw can match measure.
+void wrapLinesImpl(hb_font_t *font, const std::string &text, float availWidth,
+                   std::vector<float> *outWidths,
+                   std::vector<std::string> *outLines)
+{
   const float spaceWidth = shapedWidth(font, " ");
 
   float currentLineWidth = 0.f;
+  std::string currentLine;
   bool lineHasContent = false;
 
   auto endLine = [&] {
-    lineWidths.push_back(currentLineWidth);
+    if (outWidths) outWidths->push_back(currentLineWidth);
+    if (outLines) outLines->push_back(currentLine);
     currentLineWidth = 0.f;
+    currentLine.clear();
     lineHasContent = false;
   };
 
@@ -119,23 +132,35 @@ std::vector<float> wrapLineWidths(hb_font_t *font, const std::string &text, floa
     while (pos < text.size() && !std::isspace(static_cast<unsigned char>(text[pos]))) {
       ++pos;
     }
-    const float wordWidth = shapedWidth(font, text.substr(wordStart, pos - wordStart));
+    const std::string word = text.substr(wordStart, pos - wordStart);
+    const float wordWidth = shapedWidth(font, word);
 
     const float advanceIfAppended = (lineHasContent ? spaceWidth : 0.f) + wordWidth;
     if (lineHasContent && currentLineWidth + advanceIfAppended > availWidth) {
       endLine();
       currentLineWidth = wordWidth;
+      currentLine = word;
       lineHasContent = true;
     } else {
+      if (lineHasContent) currentLine.push_back(' ');
+      currentLine += word;
       currentLineWidth += advanceIfAppended;
       lineHasContent = true;
     }
   }
 
-  if (lineHasContent || lineWidths.empty()) {
-    lineWidths.push_back(currentLineWidth);
+  if (lineHasContent || (outWidths && outWidths->empty()) ||
+      (outLines && outLines->empty())) {
+    if (outWidths) outWidths->push_back(currentLineWidth);
+    if (outLines) outLines->push_back(currentLine);
   }
+}
 
+std::vector<float> wrapLineWidths(hb_font_t *font, const std::string &text,
+                                  float availWidth)
+{
+  std::vector<float> lineWidths;
+  wrapLinesImpl(font, text, availWidth, &lineWidths, nullptr);
   return lineWidths;
 }
 
@@ -245,6 +270,36 @@ TextMetrics Font::measure(const std::string &text, float availWidth, int mode) c
     impl_->ascent,
     impl_->descent,
   };
+}
+
+int Font::prepareWrap(const std::string &text, float availWidth)
+{
+  impl_->wrapCache.clear();
+  if (!impl_->isLoaded() || text.empty()) {
+    impl_->wrapCache.emplace_back();
+    return 1;
+  }
+  wrapLinesImpl(impl_->hbFont, text, availWidth, nullptr, &impl_->wrapCache);
+  if (impl_->wrapCache.empty()) {
+    impl_->wrapCache.emplace_back();
+  }
+  return static_cast<int>(impl_->wrapCache.size());
+}
+
+bool Font::wrapLineAt(int index, char *buf, int cap) const
+{
+  if (!buf || cap <= 0) return false;
+  if (index < 0 || static_cast<size_t>(index) >= impl_->wrapCache.size()) {
+    return false;
+  }
+  const auto &line = impl_->wrapCache[static_cast<size_t>(index)];
+  const int n = static_cast<int>(line.size());
+  const int copy = n < cap - 1 ? n : cap - 1;
+  if (copy > 0) {
+    std::memcpy(buf, line.data(), static_cast<size_t>(copy));
+  }
+  buf[copy] = '\0';
+  return true;
 }
 
 std::vector<PositionedGlyph> Font::shape(const std::string &text) const {

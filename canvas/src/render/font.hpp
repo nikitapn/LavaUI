@@ -132,6 +132,15 @@ class Font {
   // width/mode overload.
   TextMetrics measure(const std::string &text, float availWidth, int mode) const;
 
+  /// Same wrap as `measure(..., AtMost)`. Stores lines on the Font until the
+  /// next prepareWrap (Swift interop — no std::vector / big C arrays).
+  /// Returns line count.
+  int prepareWrap(const std::string &text, float availWidth);
+
+  /// Copy line `index` from the last prepareWrap into `buf` (NUL-terminated).
+  /// Returns false if index is out of range.
+  bool wrapLineAt(int index, char *buf, int cap) const;
+
   // Shapes `text` and returns each glyph's pen position — the exact same
   // shaping call measure() makes, so a run's drawn width always matches
   // what measure() reported for it. This is primarily a C++-internal
