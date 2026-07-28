@@ -181,6 +181,9 @@ public final class DrawList {
                         )
                     }
                 }
+                if leaf.kind == .textField {
+                    emitTextField(leaf, x: x, y: y, w: w, h: h)
+                }
                 if leaf.kind == .image, let img = leaf.image {
                     let dest = imageDestRect(
                         boxX: x, boxY: y, boxW: w, boxH: h,
@@ -233,6 +236,64 @@ public final class DrawList {
             let dw = srcW * s
             let dh = srcH * s
             return (boxX + (boxW - dw) * 0.5, boxY + (boxH - dh) * 0.5, dw, dh)
+        }
+    }
+}
+
+extension DrawList {
+    /// Draws a field as: selection rects, then glyphs, then caret.
+    ///
+    /// That order is the whole point of the unified pipeline — under the old
+    /// three-renderer split the caret was geometry and text always drew last,
+    /// so a caret could never appear over its own glyphs.
+    fileprivate func emitTextField(
+        _ leaf: LeafNode, x: Float, y: Float, w: Float, h: Float
+    ) {
+        guard let font = leaf.font ?? FontStore.default else { return }
+        let inset = LeafNode.textInset
+        let lineH = font.lineHeight
+        let baselineTop = y + max(0, (h - lineH) / 2)
+        let focused = FocusManager.isFocused(leaf.id)
+        let state = leaf.editing
+
+        if focused {
+            // Focus ring, drawn before content so it reads as a border.
+            rect(x: x, y: y, w: w, h: 1, color: .accent)
+            rect(x: x, y: y + h - 1, w: w, h: 1, color: .accent)
+        }
+
+        let run = font.shapedRun(state.text)
+
+        if state.hasSelection {
+            let range = state.selectedRange
+            let x0 = run.caretX(for: range.lowerBound)
+            let x1 = run.caretX(for: range.upperBound)
+            rect(
+                x: x + inset + x0, y: baselineTop,
+                w: max(1, x1 - x0), h: lineH,
+                color: Color(r: 0.25, g: 0.40, b: 0.65)
+            )
+        }
+
+        if state.text.isEmpty {
+            if !leaf.placeholder.isEmpty {
+                text(
+                    leaf.placeholder, x: x + inset - 4, y: baselineTop,
+                    w: w, h: lineH, color: .muted, font: font
+                )
+            }
+        } else {
+            // `text(...)` applies its own 4px pen inset; subtract it so glyph
+            // positions line up with the caret maths above.
+            text(
+                state.text, x: x + inset - 4, y: baselineTop,
+                w: w, h: lineH, color: leaf.color, font: font
+            )
+        }
+
+        if focused, !state.hasSelection, CaretBlink.isVisible {
+            let caretX = x + inset + run.caretX(for: state.focus)
+            rect(x: caretX, y: baselineTop, w: 1.5, h: lineH, color: .primary)
         }
     }
 }

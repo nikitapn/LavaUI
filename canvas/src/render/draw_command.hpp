@@ -60,6 +60,10 @@ enum class InputEventKind : uint32_t {
   /// Keyboard. `button` = key (GLFW), `x` = action (1 press/repeat, 0 release),
   /// `y` = mods bitfield (GLFW: shift=1, control=2, alt=4, super=8).
   Key = 5,
+  /// A committed character. `button` holds the Unicode scalar. Distinct from
+  /// Key because key codes are physical: they say nothing about layout, dead
+  /// keys or shift state, so only the char callback knows what was typed.
+  Text = 6,
 };
 
 struct InputEvent {

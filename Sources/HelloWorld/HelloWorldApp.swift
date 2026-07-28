@@ -46,6 +46,9 @@ struct HelloWorldApp {
         }
 
         let diagram = makeSampleDiagram()
+        ClipboardBridge.reader = { editor.clipboardText }
+        ClipboardBridge.writer = { editor.clipboardText = $0 }
+
         let host = LayoutHost()
         let drawList = DrawList()
 
@@ -148,7 +151,22 @@ struct HelloWorldApp {
                             Data("layout resize → \(Int(nw))×\(Int(nh))\n".utf8)
                         )
                     }
+                case .text:
+                    // A committed character: only the char callback knows what
+                    // was actually typed (layout, dead keys, shift).
+                    if let scalar = Unicode.Scalar(UInt32(bitPattern: ev.button)) {
+                        _ = FocusManager.handle(character: Character(scalar))
+                    }
                 case .key:
+                    // Focused field first; global shortcuts only if unconsumed.
+                    let isPress = ev.x > 0
+                    if isPress,
+                       FocusManager.handle(
+                           KeyEvent(key: ev.button, mods: Int32(ev.y), isRepeat: ev.x > 1)
+                       )
+                    {
+                        break
+                    }
                     if ContentScaleShortcuts.handle(ev, editor: editor) {
                         host.invalidateTextMetrics()
                         dirty = true
@@ -174,6 +192,11 @@ struct HelloWorldApp {
             // A body read something that changed (a click mutating @State, say).
             // Observation set the flag; the loop decides when to act on it.
             if ViewInvalidation.consume() {
+                dirty = true
+            }
+            // The only thing that redraws an otherwise idle app: the caret.
+            // Gated on focus so an unfocused window still sleeps properly.
+            if FocusManager.focusedID != nil, CaretBlink.phaseChanged() {
                 dirty = true
             }
 

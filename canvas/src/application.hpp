@@ -62,6 +62,10 @@ public:
   [[nodiscard]] canvas::VoidResult loadFont(const std::string &path, float pixelSize);
   int registerFont(const std::string &path, float pixelSize);
 
+  /// System clipboard (GLFW-backed; empty when headless).
+  std::string clipboardText() const;
+  void setClipboardText(const std::string &text);
+
   /// Load a PNG/JPEG (stb) for draw-list `Image` commands. Returns texture id
   /// (>0) or -1. Idempotent per absolute path (refcounted in TextureManager).
   int loadTexture(const std::string &path);

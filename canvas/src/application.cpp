@@ -249,19 +249,7 @@ struct Application::Impl
     glfwSetCharCallback(win, [](GLFWwindow *w, unsigned int codepoint) {
       auto *self = static_cast<Impl *>(glfwGetWindowUserPointer(w));
       if (!self) return;
-      // Encode as UTF-8 (BMP only for simplicity; enough for ST).
-      char buf[5] = {};
-      if (codepoint < 0x80) {
-        buf[0] = static_cast<char>(codepoint);
-      } else if (codepoint < 0x800) {
-        buf[0] = static_cast<char>(0xC0 | (codepoint >> 6));
-        buf[1] = static_cast<char>(0x80 | (codepoint & 0x3F));
-      } else {
-        buf[0] = static_cast<char>(0xE0 | (codepoint >> 12));
-        buf[1] = static_cast<char>(0x80 | ((codepoint >> 6) & 0x3F));
-        buf[2] = static_cast<char>(0x80 | (codepoint & 0x3F));
-      }
-      // self->bridgeTextInput(buf);
+      self->bridgeCharInput(codepoint);
     });
   }
 
@@ -406,7 +394,36 @@ struct Application::Impl
 
   void bridgeTextInput(const std::string &utf8)
   {
-    // todo: queue for Swift text-widget handling (Phase 3+).
+    // Retained for the old bridge signature; character input now goes through
+    // bridgeCharInput, which keeps the scalar rather than round-tripping UTF-8.
+    (void)utf8;
+  }
+
+  /// Queues one committed character for Swift. This is the only reliable
+  /// source of "what did the user type": key codes are physical and say
+  /// nothing about layout, dead keys, or shift state.
+  void bridgeCharInput(unsigned int codepoint)
+  {
+    canvas::InputEvent ev;
+    ev.kind = static_cast<uint32_t>(canvas::InputEventKind::Text);
+    ev.button = static_cast<int32_t>(codepoint);
+    {
+      std::lock_guard lock(inputMu_);
+      inputEvents_.push_back(ev);
+    }
+  }
+
+  std::string clipboardText() const
+  {
+    if (!vulkan.isWindowed() || !vulkan.window()) return {};
+    const char *s = glfwGetClipboardString(vulkan.window());
+    return s ? std::string(s) : std::string{};
+  }
+
+  void setClipboardText(const std::string &text)
+  {
+    if (!vulkan.isWindowed() || !vulkan.window()) return;
+    glfwSetClipboardString(vulkan.window(), text.c_str());
   }
 
   // Renders one frame of the retained scene (shapes/lines/labels) and
@@ -749,6 +766,13 @@ void Application::setViewTransform(float zoom, float panX, float panY)
 canvas::VoidResult Application::loadFont(const std::string &path, float pixelSize)
 {
   return impl_->loadFont(path, pixelSize);
+}
+
+std::string Application::clipboardText() const { return impl_->clipboardText(); }
+
+void Application::setClipboardText(const std::string &text)
+{
+  impl_->setClipboardText(text);
 }
 
 int Application::registerFont(const std::string &path, float pixelSize)

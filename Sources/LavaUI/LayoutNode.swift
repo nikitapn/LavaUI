@@ -142,6 +142,7 @@ enum LeafKind: Equatable {
     case diagramHost
     case empty
     case image
+    case textField
 }
 
 final class LeafNode: YogaBoxNode {
@@ -156,6 +157,15 @@ final class LeafNode: YogaBoxNode {
     /// Last layout lines from Font measure cache (for multi-line emit).
     var cachedLines: [String] = []
     var usesTextMeasure = false
+    /// Editable payload (textField leaves). Lives on the node because a
+    /// PrimitiveView has no body, so it never goes through CompositeNode's
+    /// @State transplant — the node's own lifetime is the persistence.
+    var editing = TextEditingState("")
+    var placeholder: String = ""
+    /// Click handler that receives node-local coordinates, which a caret needs
+    /// and the plain `onClick` cannot provide.
+    var onClickLocal: ((Float, Float) -> Void)?
+
     /// Raster image leaf payload.
     var image: UIImage?
     var imageTint: Color = Color(r: 1, g: 1, b: 1)
@@ -653,10 +663,15 @@ public final class LayoutHost {
             for child in node.childNodes.reversed() {
                 if let h = hitWalk(child, x: x, y: y, ox: nx, oy: ny) { return h }
             }
-            if let leaf = node as? LeafNode, let click = leaf.onClick,
-               leaf.kind == .text || leaf.kind == .image
+            if let leaf = node as? LeafNode,
+               x >= nx, x < nx + nw, y >= ny, y < ny + nh
             {
-                if x >= nx && x < nx + nw && y >= ny && y < ny + nh {
+                if let local = leaf.onClickLocal {
+                    let lx = x - nx
+                    let ly = y - ny
+                    return { local(lx, ly) }
+                }
+                if let click = leaf.onClick, leaf.kind == .text || leaf.kind == .image {
                     return click
                 }
             }
@@ -707,7 +722,7 @@ public final class LayoutHost {
 }
 
 // Minimal stubs so primitives compile without CYoga.
-enum LeafKind: Equatable { case text, spacer, diagramHost, empty, image }
+enum LeafKind: Equatable { case text, spacer, diagramHost, empty, image, textField }
 
 final class LeafNode: AnyViewNode {
     let id = NodeID.generate()
@@ -717,6 +732,9 @@ final class LeafNode: AnyViewNode {
     var text = ""
     var color = Color.primary
     var onClick: (() -> Void)?
+    var onClickLocal: ((Float, Float) -> Void)?
+    var editing = TextEditingState("")
+    var placeholder = ""
     var fillColor: Color?
     var childNodes: [any AnyViewNode] { [] }
     init(kind: LeafKind, label: String, width: Dimension, height: Dimension, flexGrow: Float = 0, minWidth: Float = 0) {

@@ -196,6 +196,18 @@ VoidResult Engine::loadFont(const std::string &path, float pixelSize)
   });
 }
 
+std::string Engine::clipboardText() const
+{
+  std::string out;
+  impl_->withApp([&](Application &app) { out = app.clipboardText(); });
+  return out;
+}
+
+void Engine::setClipboardText(const std::string &text)
+{
+  impl_->withApp([&](Application &app) { app.setClipboardText(text); });
+}
+
 int Engine::registerFont(const std::string &path, float pixelSize)
 {
   int id = -1;

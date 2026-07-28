@@ -13,10 +13,18 @@ public struct EditorChrome: View {
     /// longer has to track selection/clicks and diff them by hand.
     @State private var selectedId: String?
     @State private var clickCount: Int = 0
+    @State private var filter: String = ""
 
     public init(blocks: [Block], brandImage: UIImage? = nil) {
         self.blocks = blocks
         self.brandImage = brandImage
+    }
+
+    /// Blocks matching the filter field (case-insensitive substring).
+    private var visibleBlocks: [Block] {
+        let needle = filter.trimmingCharacters(in: .whitespaces).lowercased()
+        guard !needle.isEmpty else { return blocks }
+        return blocks.filter { $0.name.lowercased().contains(needle) }
     }
 
     public var body: some View {
@@ -31,9 +39,10 @@ public struct EditorChrome: View {
                     Image(brandImage, width: .pt(48), height: .pt(48), contentMode: .fit)
                 }
                 Text("Project", color: .accent)
+                TextField(text: $filter, placeholder: "filter…")
                 Text("Diagrams", color: .secondary)
                 Text("  Main", color: .primary)
-                ForEach(blocks, id: \.id) { b in
+                ForEach(visibleBlocks, id: \.id) { b in
                     let id = String(b.id.rawValue)
                     let selected = (id == sel)
                     let name = b.name

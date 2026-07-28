@@ -76,6 +76,12 @@ public final class Editor: @unchecked Sendable {
 
     /// Registers a face for glyph lookup; returns its id, or nil on failure.
     /// Idempotent per (path, pixelSize).
+    /// System clipboard. Empty when headless.
+    public var clipboardText: String {
+        get { String(engine.clipboardText()) }
+        set { engine.setClipboardText(std.string(newValue)) }
+    }
+
     public func registerFont(path: String, pixelSize: Float) -> UInt32? {
         let id = engine.registerFont(std.string(path), pixelSize)
         return id >= 0 ? UInt32(id) : nil

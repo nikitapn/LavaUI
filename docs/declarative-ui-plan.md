@@ -747,8 +747,24 @@ Landed so far — step 1's foundation:
 - 18 unit tests covering grapheme movement, selection ordering, word
   boundaries, and multi-byte insertion.
 
-Still to do for step 1: focus handling, a `TextField` view, caret/selection
-rendering, and clipboard.
+Step 1 now also has: `FocusManager` (focus keyed by `NodeID`, since the view
+struct is rebuilt while the node persists), a `TextField` primitive view,
+caret + selection + focus-ring rendering, clipboard via GLFW, and a `Text`
+input event carrying committed characters (key codes are physical and say
+nothing about layout or dead keys).
+
+Caret blink decision, per the warning above: blink only while focused, solid
+for 500ms after any edit so it never blinks mid-typing, and the frame loop
+redraws only when the blink *phase flips* — 2 frames/sec while focused, zero
+when not. That keeps idle gating intact.
+
+Verified interactively: click focuses and places the caret, typed characters
+reach the buffer, the binding propagates out to `@State` and re-filters a
+`ForEach`. **Unverified: Ctrl+A selection rendering** — the key path reaches
+the field but no selection rect appeared; needs a look.
+
+Remaining for step 1: shift-click / drag selection, and confirming the
+clipboard round-trip.
 
 **Correction to the note below**: Foundation's
 `enumerateSubstrings(options: .byWords)` is *unavailable* in

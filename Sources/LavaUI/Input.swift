@@ -15,6 +15,9 @@ public enum KeyCode {
     public static let key1: Int32 = 49
     public static let equal: Int32 = 61
     public static let a: Int32 = 65
+    public static let c: Int32 = 67
+    public static let v: Int32 = 86
+    public static let x: Int32 = 88
     public static let d: Int32 = 68
     public static let s: Int32 = 83
     public static let w: Int32 = 87
@@ -22,6 +25,9 @@ public enum KeyCode {
     public static let enter: Int32 = 257
     public static let tab: Int32 = 258
     public static let backspace: Int32 = 259
+    public static let delete: Int32 = 261
+    public static let end: Int32 = 269
+    public static let home: Int32 = 268
     public static let right: Int32 = 262
     public static let left: Int32 = 263
     public static let down: Int32 = 264
@@ -71,6 +77,9 @@ public enum InputEventKind: UInt32, Sendable, Equatable {
     case resize = 4
     /// Keyboard; `button` = key, `x` = action, `y` = mods.
     case key = 5
+    /// A committed character; `button` holds the Unicode scalar. Distinct from
+    /// `key`, which is physical and says nothing about layout or dead keys.
+    case text = 6
 }
 
 /// One polled event from `Editor.pollInputEvent`.

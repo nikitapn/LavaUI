@@ -95,6 +95,10 @@ class Engine {
   /// GlyphInstance so the renderer resolves ids against the right face.
   int registerFont(const std::string &path, float pixelSize);
 
+  /// System clipboard (GLFW-backed; empty when headless).
+  std::string clipboardText() const;
+  void setClipboardText(const std::string &text);
+
   /// Load PNG/JPEG for `Image` draw commands. Returns texture id (>0) or -1.
   int loadTexture(const std::string &path);
   bool textureSize(uint32_t textureId, float &outW, float &outH) const;
