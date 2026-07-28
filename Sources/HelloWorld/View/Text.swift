@@ -1,28 +1,47 @@
-/// Text label primitive (Phase 1: description only; no draw / hit-test yet).
 public struct Text: PrimitiveView {
     public var string: String
-    public var r: Float
-    public var g: Float
-    public var b: Float
-    /// Stored for later phases; not invoked by dump.
+    public var color: Color
+    /// Closures break value equality (SwiftUI wart) — fine until Phase 5 skip-recompute.
     public var onClick: (() -> Void)?
 
     public init(
         _ string: String,
-        r: Float = 0.90,
-        g: Float = 0.90,
-        b: Float = 0.90,
+        color: Color = .primary,
         onClick: (() -> Void)? = nil
     ) {
         self.string = string
-        self.r = r
-        self.g = g
-        self.b = b
+        self.color = color
         self.onClick = onClick
     }
 
     public var dumpDetail: String {
         let click = onClick == nil ? "" : " onClick"
         return "\"\(string)\"\(click)"
+    }
+
+    public func mountPrimitive() -> any AnyViewNode {
+        LeafNode(
+            kind: .text,
+            label: "Text \"\(string)\"",
+            width: .point(approxWidth),
+            height: .point(24)
+        )
+    }
+
+    public func reconcilePrimitive(_ node: any AnyViewNode) -> any AnyViewNode {
+        if let leaf = node as? LeafNode, leaf.kind == .text {
+            leaf.update(
+                label: "Text \"\(string)\"",
+                width: .point(approxWidth),
+                height: .point(24)
+            )
+            return leaf
+        }
+        return mountPrimitive()
+    }
+
+    /// Grapheheme-cluster count (Phase 4 replaces with Font::measure).
+    private var approxWidth: Float {
+        max(8, Float(string.count) * 8 + 8)
     }
 }

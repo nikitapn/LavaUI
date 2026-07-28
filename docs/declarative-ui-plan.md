@@ -250,12 +250,13 @@ Replace the `UINode` enum with a real protocol layer. No nodes, no rendering yet
 
 - `View` with `associatedtype Body: View`, `var body: Body`
 - `@ViewBuilder`: pack `buildBlock`, `buildEither`, `buildOptional`,
-  `buildExpression`, `buildArray` (for-in)
-- `EmptyView`, `TupleView<each>`, `EitherView`, `OptionalView`, `ArrayView`
-- `PrimitiveView` (`Body == Never`): `Text`, `Spacer`, `DiagramHost`, stacks
-- SCUI trick (`View.swift:137`): defaults *forward to `body`*; primitives
-  override `structureLines` and never touch `body`
-- `EditorChrome: View` rewrites `rebuildChrome()` description
+  `buildExpression` — **no `buildArray`** (use `ForEach(_:id:)`)
+- `EmptyView`, `TupleView<each>`, `EitherView`, `OptionalView`, `ForEach`
+- `PrimitiveView` + `PrimitiveViewBuilder.buildNodeGroup()` (**no default** —
+  compile-time safety for layout)
+- `Color` (RGBA), `Dimension` (undefined / auto / point)
+- SCUI trick: defaults *forward to `body`*; primitives never touch `body`
+- `EditorChrome: View` rewrites chrome description
 
 **Done when:** the existing `rebuildChrome()` body can be rewritten as `View`
 structs and you can recursively `dump()` the resulting type structure. `if/else`
@@ -263,7 +264,23 @@ produces `EitherView`; two statements produce `TupleView`.
 
 ---
 
-### Phase 2 — Node tree + Yoga mirror
+### Phase 2 — Retained node tree + Yoga mirror ✅ DONE
+
+**Sources:** `LayoutNode.swift`, `ViewGraph.mount` / `reconcile`, `LayoutHost`.
+Startup: `Phase2Dump` checks **root identity** (`mounts=1`, `reconciles≥1`, same
+`NodeID`) and layout frames (no fragment boxes).
+
+- **Retained nodes**: `setRoot` reconciles in place; Yoga nodes live with ARC
+  (`deinit { YGNodeFree }`), not freeTree rebuild
+- **Fragments** (no Yoga box — splice into parent): `TupleView`, `EitherView`,
+  `OptionalView`, `ForEach`, `CompositeNode`
+- **Yoga boxes**: `StackNode` (H/V only), `LeafNode` (Text / Spacer / DiagramHost)
+- **ForEach**: keyed recon by `id` key path
+- **EitherView**: reuses branch node when case stays; remounts on flip
+- `YGNodeCalculateLayout(w,h)` only — does not clobber root style
+
+**Still open:** Font-backed measure (Phase 4), per-node dirty flags for the
+frame loop, `@State` storage on nodes (Phase 5).
 
 The load-bearing phase. Node identity is **structural** — types encode tree
 shape, so there is no general diffing.

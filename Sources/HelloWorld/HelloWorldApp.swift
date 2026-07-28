@@ -25,9 +25,8 @@ struct HelloWorldApp {
         let ui = UI()
         var selectedBlockId: String? = nil
         var clickCount = 0
-        var didDumpPhase1 = false
 
-        /// Phase 1 View description of the chrome (type structure / dump).
+        /// View description of the chrome (structure dump + Yoga layout).
         func makeChrome() -> EditorChrome {
             let blocks = diagram.blocks.values.sorted { $0.name < $1.name }
             return EditorChrome(
@@ -106,12 +105,9 @@ struct HelloWorldApp {
             editor.commitUI(root, ui: ui)
         }
 
-        // Phase 1: dump View type tree once (EditorChrome body).
         let chrome = makeChrome()
-        if !didDumpPhase1 {
-            Phase1Dump.run(chrome: chrome)
-            didDumpPhase1 = true
-        }
+        Phase1Dump.run(chrome: chrome)
+        Phase2LayoutDump.run(chrome: chrome, width: 1280, height: 800)
 
         rebuildChrome()
 

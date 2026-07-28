@@ -1,67 +1,112 @@
-/// Horizontal flex row. Stores `Content` directly (`Body == Never`).
-public struct HStack<Content: View>: PrimitiveView {
+public struct StackStyle: Equatable, Sendable {
     public var flexGrow: Float
-    public var width: Float
-    public var height: Float
+    public var width: Dimension
+    public var height: Dimension
     public var padding: Float
-    public var content: Content
 
     public init(
         flexGrow: Float = 0,
-        width: Float = -1,
-        height: Float = -1,
-        padding: Float = 0,
-        @ViewBuilder content: () -> Content
+        width: Dimension = .auto,
+        height: Dimension = .auto,
+        padding: Float = 0
     ) {
         self.flexGrow = flexGrow
         self.width = width
         self.height = height
         self.padding = padding
-        self.content = content()
     }
 
-    public var dumpDetail: String {
+    var dumpDetail: String {
         "flexGrow=\(flexGrow) w=\(width) h=\(height) pad=\(padding)"
-    }
-
-    public func structureLines(indent: Int = 0) -> [String] {
-        let pad = String(repeating: "  ", count: indent)
-        var lines = ["\(pad)HStack \(dumpDetail)"]
-        lines += content.structureLines(indent: indent + 1)
-        return lines
     }
 }
 
-/// Vertical flex column. Stores `Content` directly (`Body == Never`).
-public struct VStack<Content: View>: PrimitiveView {
-    public var flexGrow: Float
-    public var width: Float
-    public var height: Float
-    public var padding: Float
+public struct HStack<Content: View>: PrimitiveView {
+    public var style: StackStyle
     public var content: Content
 
     public init(
         flexGrow: Float = 0,
-        width: Float = -1,
-        height: Float = -1,
+        width: Dimension = .auto,
+        height: Dimension = .auto,
         padding: Float = 0,
         @ViewBuilder content: () -> Content
     ) {
-        self.flexGrow = flexGrow
-        self.width = width
-        self.height = height
-        self.padding = padding
+        self.style = StackStyle(
+            flexGrow: flexGrow, width: width, height: height, padding: padding
+        )
         self.content = content()
     }
 
-    public var dumpDetail: String {
-        "flexGrow=\(flexGrow) w=\(width) h=\(height) pad=\(padding)"
-    }
+    public var dumpDetail: String { style.dumpDetail }
 
     public func structureLines(indent: Int = 0) -> [String] {
-        let pad = String(repeating: "  ", count: indent)
-        var lines = ["\(pad)VStack \(dumpDetail)"]
-        lines += content.structureLines(indent: indent + 1)
-        return lines
+        Dump.structureLines(
+            indent: indent,
+            label: "HStack \(dumpDetail)",
+            childLines: [content.structureLines(indent: indent + 1)]
+        )
+    }
+
+    public func mountPrimitive() -> any AnyViewNode {
+        StackNode(
+            label: "HStack",
+            direction: .row,
+            style: style,
+            content: ViewGraph.mount(content)
+        )
+    }
+
+    public func reconcilePrimitive(_ node: any AnyViewNode) -> any AnyViewNode {
+        if let stack = node as? StackNode, stack.direction == .row {
+            stack.update(style: style, contentView: content)
+            return stack
+        }
+        return mountPrimitive()
+    }
+}
+
+public struct VStack<Content: View>: PrimitiveView {
+    public var style: StackStyle
+    public var content: Content
+
+    public init(
+        flexGrow: Float = 0,
+        width: Dimension = .auto,
+        height: Dimension = .auto,
+        padding: Float = 0,
+        @ViewBuilder content: () -> Content
+    ) {
+        self.style = StackStyle(
+            flexGrow: flexGrow, width: width, height: height, padding: padding
+        )
+        self.content = content()
+    }
+
+    public var dumpDetail: String { style.dumpDetail }
+
+    public func structureLines(indent: Int = 0) -> [String] {
+        Dump.structureLines(
+            indent: indent,
+            label: "VStack \(dumpDetail)",
+            childLines: [content.structureLines(indent: indent + 1)]
+        )
+    }
+
+    public func mountPrimitive() -> any AnyViewNode {
+        StackNode(
+            label: "VStack",
+            direction: .column,
+            style: style,
+            content: ViewGraph.mount(content)
+        )
+    }
+
+    public func reconcilePrimitive(_ node: any AnyViewNode) -> any AnyViewNode {
+        if let stack = node as? StackNode, stack.direction == .column {
+            stack.update(style: style, contentView: content)
+            return stack
+        }
+        return mountPrimitive()
     }
 }

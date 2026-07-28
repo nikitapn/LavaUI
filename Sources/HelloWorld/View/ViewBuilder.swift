@@ -1,4 +1,4 @@
-// Phase 1 — @ViewBuilder with parameter packs (Phase 0a proved packs work).
+// @ViewBuilder — no buildArray (index identity trap). Use ForEach(_:id:).
 
 @resultBuilder
 public enum ViewBuilder {
@@ -36,13 +36,6 @@ public enum ViewBuilder {
         second: FalseContent
     ) -> EitherView<TrueContent, FalseContent> {
         EitherView(second: second)
-    }
-
-    /// `for … in` loops in a builder.
-    public static func buildArray<Content: View>(
-        _ views: [Content]
-    ) -> ArrayView<Content> {
-        ArrayView(views: views)
     }
 
     public static func buildLimitedAvailability<Content: View>(

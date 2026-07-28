@@ -50,7 +50,7 @@ struct Buffer {
 
 class Vulkan
 {
-  bool enableValidationLayers_ = true;
+  bool enableValidationLayers_ = false;
   // Vulkan instance
   VkInstance instance_ = VK_NULL_HANDLE;
   // Debug handle

@@ -1,4 +1,4 @@
-/// Non-exhaustive `if` (no else) from `@ViewBuilder.buildOptional`.
+/// Non-exhaustive `if` — fragment (no flex wrapper).
 public struct OptionalView<Content: View>: PrimitiveView {
     public var content: Content?
 
@@ -7,12 +7,35 @@ public struct OptionalView<Content: View>: PrimitiveView {
     }
 
     public func structureLines(indent: Int = 0) -> [String] {
-        let pad = String(repeating: "  ", count: indent)
         if let content {
-            var lines = ["\(pad)OptionalView.some"]
-            lines += content.structureLines(indent: indent + 1)
-            return lines
+            return Dump.structureLines(
+                indent: indent,
+                label: "OptionalView.some",
+                childLines: [content.structureLines(indent: indent + 1)]
+            )
         }
-        return ["\(pad)OptionalView.none"]
+        return [Dump.line(indent, "OptionalView.none")]
+    }
+
+    public func mountPrimitive() -> any AnyViewNode {
+        let node = OptionalFragmentNode()
+        if let content {
+            node.updateSome(content)
+        } else {
+            node.updateNone()
+        }
+        return node
+    }
+
+    public func reconcilePrimitive(_ node: any AnyViewNode) -> any AnyViewNode {
+        guard let opt = node as? OptionalFragmentNode else {
+            return mountPrimitive()
+        }
+        if let content {
+            opt.updateSome(content)
+        } else {
+            opt.updateNone()
+        }
+        return opt
     }
 }
