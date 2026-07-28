@@ -1,14 +1,13 @@
 #version 450
 
-// See quad.vert. Two coverage paths:
-//   kind 0 — rounded-box SDF, which subsumes rect (r=0), rounded rect,
-//            circle (halfSize = (r,r), radius = r) and stroked line
-//            (a capsule is a rounded box in the segment's local frame).
-//   kind 1 — glyph coverage sampled from the R8 atlas.
+// See quad.vert. Coverage / sample paths:
+//   kind 0 — rounded-box SDF (rect / round-rect / circle / stroked line).
+//   kind 1 — glyph coverage from the R8 atlas (`.r` * tint).
+//   kind 2 — full-color image (RGBA sample * tint). Descriptor is rebound
+//            per batch to the image view; scissor + texture both break batches.
 //
-// Solid shapes still sample the atlas descriptor (a reserved white texel), so
-// there is one descriptor set for everything and scissor is the only batch
-// break.
+// Solid shapes still sample the bound texture (usually a white texel), so one
+// descriptor set is enough.
 
 layout(location = 0) in vec2      vLocal;
 layout(location = 1) in vec2      vHalfSize;
@@ -27,8 +26,15 @@ float sdRoundBox(vec2 p, vec2 b, float r) {
 }
 
 void main() {
-  float cov;
+  if (vKind == 2u) {
+    // Image: vLocal holds UV; multiply by vertex color as tint.
+    vec4 tex = texture(uAtlas, vLocal);
+    outColor = tex * vColor;
+    if (outColor.a <= 0.001) discard;
+    return;
+  }
 
+  float cov;
   if (vKind == 1u) {
     cov = texture(uAtlas, vLocal).r;
   } else {

@@ -586,6 +586,14 @@ struct Application::Impl
         }
         break;
       }
+      case canvas::DrawCommandKind::Image: {
+        const uint32_t texId = cmd.param;
+        VkImageView view = TextureManager::getInstance().getTextureView(texId);
+        if (view == VK_NULL_HANDLE) break;
+        quadRenderer.pushImage({cmd.x, cmd.y}, {cmd.w, cmd.h},
+                               {0.f, 0.f}, {1.f, 1.f}, cmd.color, view);
+        break;
+      }
       }
     }
     quadRenderer.end();
@@ -653,6 +661,21 @@ struct Application::Impl
   canvas::VoidResult loadFont(const std::string &path, float pixelSize)
   {
     return textRenderer.loadFont(path, static_cast<int>(pixelSize));
+  }
+
+  int loadTexture(const std::string &path)
+  {
+    auto h = TextureManager::getInstance().loadTexture(path);
+    return h.isValid() ? static_cast<int>(h.id) : -1;
+  }
+
+  bool textureSize(uint32_t textureId, float &outW, float &outH) const
+  {
+    auto [w, h] = TextureManager::getInstance().getTextureDimensions(textureId);
+    if (w == 0 || h == 0) return false;
+    outW = static_cast<float>(w);
+    outH = static_cast<float>(h);
+    return true;
   }
 
   void shutdown()
@@ -731,6 +754,16 @@ canvas::VoidResult Application::loadFont(const std::string &path, float pixelSiz
 int Application::registerFont(const std::string &path, float pixelSize)
 {
   return impl_->registerFont(path, pixelSize);
+}
+
+int Application::loadTexture(const std::string &path)
+{
+  return impl_->loadTexture(path);
+}
+
+bool Application::textureSize(uint32_t textureId, float &outW, float &outH) const
+{
+  return impl_->textureSize(textureId, outW, outH);
 }
 
 bool Application::repaint() {

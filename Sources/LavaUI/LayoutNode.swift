@@ -141,6 +141,7 @@ enum LeafKind: Equatable {
     case spacer
     case diagramHost
     case empty
+    case image
 }
 
 final class LeafNode: YogaBoxNode {
@@ -155,6 +156,10 @@ final class LeafNode: YogaBoxNode {
     /// Last layout lines from Font measure cache (for multi-line emit).
     var cachedLines: [String] = []
     var usesTextMeasure = false
+    /// Raster image leaf payload.
+    var image: UIImage?
+    var imageTint: Color = Color(r: 1, g: 1, b: 1)
+    var imageContentMode: ImageContentMode = .stretch
 
     init(
         kind: LeafKind,
@@ -648,7 +653,9 @@ public final class LayoutHost {
             for child in node.childNodes.reversed() {
                 if let h = hitWalk(child, x: x, y: y, ox: nx, oy: ny) { return h }
             }
-            if let leaf = node as? LeafNode, let click = leaf.onClick, leaf.kind == .text {
+            if let leaf = node as? LeafNode, let click = leaf.onClick,
+               leaf.kind == .text || leaf.kind == .image
+            {
                 if x >= nx && x < nx + nw && y >= ny && y < ny + nh {
                     return click
                 }
@@ -700,7 +707,7 @@ public final class LayoutHost {
 }
 
 // Minimal stubs so primitives compile without CYoga.
-enum LeafKind: Equatable { case text, spacer, diagramHost, empty }
+enum LeafKind: Equatable { case text, spacer, diagramHost, empty, image }
 
 final class LeafNode: AnyViewNode {
     let id = NodeID.generate()

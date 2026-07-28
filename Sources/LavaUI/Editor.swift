@@ -81,6 +81,19 @@ public final class Editor: @unchecked Sendable {
         return id >= 0 ? UInt32(id) : nil
     }
 
+    /// Load a PNG/JPEG for `Image` views. Returns a handle or nil on failure.
+    /// Idempotent per absolute path.
+    public func loadImage(path: String) -> UIImage? {
+        let id = engine.loadTexture(std.string(path))
+        guard id > 0 else { return nil }
+        var w: Float = 0
+        var h: Float = 0
+        guard engine.textureSize(UInt32(id), &w, &h), w >= 1, h >= 1 else {
+            return nil
+        }
+        return UIImage(path: path, textureId: UInt32(id), pixelWidth: w, pixelHeight: h)
+    }
+
     /// Raw input: mouse, resize, key (see `InputEventKind`).
     public func pollInputEvent() -> InputEvent? {
         var ev = canvas.InputEvent()

@@ -5,6 +5,8 @@ import LavaUI
 /// App chrome: project tree + diagram host + properties (uses `LavaUI` views).
 public struct EditorChrome: View {
     public var blocks: [Block]
+    /// Optional decorative icon (e.g. loaded football PNG) in the project panel.
+    public var brandImage: UIImage?
 
     /// Owned here, not by the app. The struct is rebuilt every frame; the
     /// storage behind these survives via StateTransfer, so the run loop no
@@ -12,8 +14,9 @@ public struct EditorChrome: View {
     @State private var selectedId: String?
     @State private var clickCount: Int = 0
 
-    public init(blocks: [Block]) {
+    public init(blocks: [Block], brandImage: UIImage? = nil) {
         self.blocks = blocks
+        self.brandImage = brandImage
     }
 
     public var body: some View {
@@ -24,6 +27,9 @@ public struct EditorChrome: View {
         // takes remaining main-axis space, columns stretch on the cross axis.
         return HStack(flexGrow: 1, padding: 4) {
             VStack(flexGrow: 0, width: .pt(220), height: .auto, padding: 8) {
+                if let brandImage {
+                    Image(brandImage, width: .pt(48), height: .pt(48), contentMode: .fit)
+                }
                 Text("Project", color: .accent)
                 Text("Diagrams", color: .secondary)
                 Text("  Main", color: .primary)

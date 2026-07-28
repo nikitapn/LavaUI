@@ -36,6 +36,15 @@ struct HelloWorldApp {
             FileHandle.standardError.write(Data("warning: default UIFont failed to load\n".utf8))
         }
 
+        let brandImage = ImageStore.loadAsset(
+            named: "football-157930.svg_64.png",
+            assetsRoot: assets,
+            into: editor
+        )
+        if brandImage == nil {
+            FileHandle.standardError.write(Data("warning: brand image failed to load\n".utf8))
+        }
+
         let diagram = makeSampleDiagram()
         let host = LayoutHost()
         let drawList = DrawList()
@@ -47,7 +56,10 @@ struct HelloWorldApp {
         var lastLoggedLayout: (w: Float, h: Float) = (0, 0)
 
         func makeChrome() -> EditorChrome {
-            EditorChrome(blocks: diagram.blocks.values.sorted { $0.name < $1.name })
+            EditorChrome(
+                blocks: diagram.blocks.values.sorted { $0.name < $1.name },
+                brandImage: brandImage
+            )
         }
 
         func renderFrame() {

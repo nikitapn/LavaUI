@@ -156,8 +156,12 @@ void QuadRenderer::setupDescriptors() {
 }
 
 void QuadRenderer::setAtlas(VkImageView view, VkSampler sampler) {
+  glyphAtlasView_    = view;
+  glyphAtlasSampler_ = sampler != VK_NULL_HANDLE ? sampler : sampler_;
+  currentBatchTexture_ = glyphAtlasView_;
+
   VkDescriptorImageInfo imageInfo{
-    .sampler     = sampler,
+    .sampler     = glyphAtlasSampler_,
     .imageView   = view,
     .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
   };
@@ -379,6 +383,9 @@ void QuadRenderer::begin(vec2 viewportSize) {
     {0, 0},
     {static_cast<uint32_t>(viewportSize.x), static_cast<uint32_t>(viewportSize.y)},
   };
+  // Default open batch samples the glyph atlas (SDF ignores it).
+  currentBatchTexture_ =
+    glyphAtlasView_ != VK_NULL_HANDLE ? glyphAtlasView_ : whiteImageView_;
 }
 
 void QuadRenderer::appendQuad(const vec2 corners[4], const vec2 locals[4],
@@ -404,10 +411,22 @@ void QuadRenderer::appendQuad(const vec2 corners[4], const vec2 locals[4],
   indices_.push_back(base + 3);
 }
 
+void QuadRenderer::ensureBatchTexture(VkImageView view)
+{
+  if (view == VK_NULL_HANDLE) {
+    view = glyphAtlasView_ != VK_NULL_HANDLE ? glyphAtlasView_ : whiteImageView_;
+  }
+  if (view != currentBatchTexture_) {
+    flushBatch();
+    currentBatchTexture_ = view;
+  }
+}
+
 void QuadRenderer::pushBox(vec2 topLeft, vec2 size, uint32_t rgba, float radius) {
   if (size.x <= 0.0f || size.y <= 0.0f) {
     return;
   }
+  ensureBatchTexture(glyphAtlasView_);
   // One pixel of bleed so the SDF has room to antialias the outer edge instead
   // of it being clipped by the quad boundary.
   constexpr float kPad = 1.0f;
@@ -435,6 +454,7 @@ void QuadRenderer::pushCircle(vec2 center, float radius, uint32_t rgba) {
 }
 
 void QuadRenderer::pushLine(vec2 p0, vec2 p1, float width, uint32_t rgba) {
+  ensureBatchTexture(glyphAtlasView_);
   const float dx  = p1.x - p0.x;
   const float dy  = p1.y - p0.y;
   const float len = std::sqrt(dx * dx + dy * dy);
@@ -474,6 +494,7 @@ void QuadRenderer::pushGlyph(vec2 topLeft, vec2 size, vec2 uv0, vec2 uv1,
   if (size.x <= 0.0f || size.y <= 0.0f) {
     return;
   }
+  ensureBatchTexture(glyphAtlasView_);
   const vec2 corners[4] = {
     {topLeft.x, topLeft.y},
     {topLeft.x + size.x, topLeft.y},
@@ -487,13 +508,33 @@ void QuadRenderer::pushGlyph(vec2 topLeft, vec2 size, vec2 uv0, vec2 uv1,
   appendQuad(corners, locals, {0.0f, 0.0f}, 0.0f, rgba, Kind::Glyph);
 }
 
+void QuadRenderer::pushImage(vec2 topLeft, vec2 size, vec2 uv0, vec2 uv1,
+                             uint32_t rgba, VkImageView textureView)
+{
+  if (size.x <= 0.0f || size.y <= 0.0f || textureView == VK_NULL_HANDLE) {
+    return;
+  }
+  ensureBatchTexture(textureView);
+  const vec2 corners[4] = {
+    {topLeft.x, topLeft.y},
+    {topLeft.x + size.x, topLeft.y},
+    {topLeft.x + size.x, topLeft.y + size.y},
+    {topLeft.x, topLeft.y + size.y},
+  };
+  const vec2 locals[4] = {
+    {uv0.x, uv0.y}, {uv1.x, uv0.y}, {uv1.x, uv1.y}, {uv0.x, uv1.y},
+  };
+  appendQuad(corners, locals, {0.0f, 0.0f}, 0.0f, rgba, Kind::Image);
+}
+
 void QuadRenderer::flushBatch() {
   const uint32_t end = static_cast<uint32_t>(indices_.size());
   if (end > batchStartIndex_) {
     batches_.push_back(Batch{
-      .firstIndex = batchStartIndex_,
-      .indexCount = end - batchStartIndex_,
-      .scissor    = currentScissor_,
+      .firstIndex   = batchStartIndex_,
+      .indexCount   = end - batchStartIndex_,
+      .scissor      = currentScissor_,
+      .textureView  = currentBatchTexture_,
     });
   }
   batchStartIndex_ = end;
@@ -560,8 +601,6 @@ void QuadRenderer::draw(VkCommandBuffer commandBuffer) {
   }
 
   vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_);
-  vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                          pipelineLayout_, 0, 1, &descriptorSet_, 0, nullptr);
 
   struct ViewPush {
     float viewport[2];
@@ -618,6 +657,34 @@ void QuadRenderer::draw(VkCommandBuffer commandBuffer) {
     };
   };
 
+  VkImageView boundView = VK_NULL_HANDLE;
+  auto bindTexture = [&](VkImageView view) {
+    if (view == VK_NULL_HANDLE) {
+      view = glyphAtlasView_ != VK_NULL_HANDLE ? glyphAtlasView_ : whiteImageView_;
+    }
+    if (view == boundView) return;
+    boundView = view;
+    VkSampler samp = (view == glyphAtlasView_ && glyphAtlasSampler_ != VK_NULL_HANDLE)
+                       ? glyphAtlasSampler_
+                       : sampler_;
+    VkDescriptorImageInfo imageInfo{
+      .sampler     = samp,
+      .imageView   = view,
+      .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+    };
+    VkWriteDescriptorSet write{
+      .sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+      .dstSet          = descriptorSet_,
+      .dstBinding      = 0,
+      .descriptorCount = 1,
+      .descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+      .pImageInfo      = &imageInfo,
+    };
+    vkUpdateDescriptorSets(vulkan_.getDevice(), 1, &write, 0, nullptr);
+    vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                            pipelineLayout_, 0, 1, &descriptorSet_, 0, nullptr);
+  };
+
   for (const auto &batch : batches_) {
     if (batch.scissor.extent.width == 0 || batch.scissor.extent.height == 0) {
       continue;  // fully clipped away
@@ -626,6 +693,7 @@ void QuadRenderer::draw(VkCommandBuffer commandBuffer) {
                     ? batch.scissor
                     : mapScissor(batch.scissor);
     if (sc.extent.width == 0 || sc.extent.height == 0) continue;
+    bindTexture(batch.textureView);
     vkCmdSetScissor(commandBuffer, 0, 1, &sc);
     vkCmdDrawIndexed(commandBuffer, batch.indexCount, 1, batch.firstIndex, 0, 0);
   }

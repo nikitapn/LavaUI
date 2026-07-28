@@ -17,6 +17,8 @@ enum class DrawCommandKind : uint32_t {
   Line = 4,       // x,y = p0; w,h = p1
   PushClip = 5,   // x,y,w,h = scissor rect
   PopClip = 6,
+  /// Textured quad. param = TextureManager id; x,y,w,h = dest rect; color = tint.
+  Image = 7,
 };
 
 /// One shaped glyph, positioned in absolute window pixels by Swift. Ships in

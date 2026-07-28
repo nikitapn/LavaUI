@@ -62,6 +62,12 @@ public:
   [[nodiscard]] canvas::VoidResult loadFont(const std::string &path, float pixelSize);
   int registerFont(const std::string &path, float pixelSize);
 
+  /// Load a PNG/JPEG (stb) for draw-list `Image` commands. Returns texture id
+  /// (>0) or -1. Idempotent per absolute path (refcounted in TextureManager).
+  int loadTexture(const std::string &path);
+  /// Pixel size of a loaded texture; returns false if id unknown.
+  bool textureSize(uint32_t textureId, float &outW, float &outH) const;
+
   // ─── Input bridge (canvas-local coords, GLFW-style key codes) ───────────
 
   void pointerMove(float x, float y);

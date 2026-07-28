@@ -27,7 +27,7 @@ class Vulkan;
 
 class QuadRenderer {
  public:
-  enum class Kind : uint32_t { Sdf = 0, Glyph = 1 };
+  enum class Kind : uint32_t { Sdf = 0, Glyph = 1, Image = 2 };
 
   // Must match the vertex input layout in quad.vert.
   struct Vertex {
@@ -69,6 +69,12 @@ class QuadRenderer {
   /// One glyph quad. `uv0`/`uv1` are the atlas rect for this glyph.
   void pushGlyph(vec2 topLeft, vec2 size, vec2 uv0, vec2 uv1, uint32_t rgba);
 
+  /// Full-color textured quad. `textureView` is sampled as RGBA; `uv0`/`uv1`
+  /// are the source rect (usually (0,0)-(1,1)). Flushes the batch when the
+  /// bound texture changes.
+  void pushImage(vec2 topLeft, vec2 size, vec2 uv0, vec2 uv1, uint32_t rgba,
+                 VkImageView textureView);
+
   /// Ends the current batch and records a scissor change. Rect is in pixels;
   /// a null rect (w or h <= 0) restores the full viewport.
   void pushScissor(vec2 topLeft, vec2 size);
@@ -87,11 +93,12 @@ class QuadRenderer {
   size_t batchCount() const { return batches_.size(); }
 
  private:
-  /// A contiguous run of quads sharing one scissor rect.
+  /// A contiguous run of quads sharing one scissor + one sampled texture.
   struct Batch {
     uint32_t firstIndex = 0;
     uint32_t indexCount = 0;
     VkRect2D scissor{};
+    VkImageView textureView = VK_NULL_HANDLE;  // null → use glyphAtlasView_
   };
 
   void createPipeline();
@@ -99,6 +106,8 @@ class QuadRenderer {
   void createWhiteTexture();
   void ensureBufferCapacity(size_t vertexCount);
   void flushBatch();
+  /// Switch the texture used by subsequent quads (flushes if it changes).
+  void ensureBatchTexture(VkImageView view);
 
   /// Appends 4 vertices + 6 indices. All four share the shape parameters; only
   /// `pos`/`local` differ per corner.
@@ -120,6 +129,11 @@ class QuadRenderer {
   VkDeviceMemory whiteImageMemory_ = VK_NULL_HANDLE;
   VkImageView    whiteImageView_   = VK_NULL_HANDLE;
   VkSampler      sampler_          = VK_NULL_HANDLE;
+  /// Last view passed to setAtlas (glyph atlas). Default for non-image batches.
+  VkImageView    glyphAtlasView_   = VK_NULL_HANDLE;
+  VkSampler      glyphAtlasSampler_ = VK_NULL_HANDLE;
+  /// Texture for the open batch (glyphs/SDF use glyph atlas).
+  VkImageView    currentBatchTexture_ = VK_NULL_HANDLE;
 
   // Host-visible and rewritten every frame. Safe as a single buffer because
   // Vulkan::drawFrame waits on inFlightFence_ before recording, so the previous

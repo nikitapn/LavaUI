@@ -13,6 +13,7 @@ public enum DrawKind: UInt32 {
     case line = 4
     case pushClip = 5
     case popClip = 6
+    case image = 7
 }
 
 /// Reused arena: draw commands plus the shaped glyphs they reference.
@@ -109,6 +110,19 @@ public final class DrawList {
         append(kind: .popClip, x: 0, y: 0, w: 0, h: 0, color: .primary)
     }
 
+    /// Textured quad. `param` = engine texture id; `color` = RGBA tint.
+    public func image(
+        textureId: UInt32,
+        x: Float, y: Float, w: Float, h: Float,
+        tint: Color = Color(r: 1, g: 1, b: 1)
+    ) {
+        guard w > 0, h > 0, textureId > 0 else { return }
+        append(
+            kind: .image, x: x, y: y, w: w, h: h,
+            color: tint, param: textureId
+        )
+    }
+
     // MARK: - Tree emission (pre-order DFS = paint order)
 
     /// Emit chrome from a laid-out retained tree.
@@ -167,6 +181,18 @@ public final class DrawList {
                         )
                     }
                 }
+                if leaf.kind == .image, let img = leaf.image {
+                    let dest = imageDestRect(
+                        boxX: x, boxY: y, boxW: w, boxH: h,
+                        srcW: img.pixelWidth, srcH: img.pixelHeight,
+                        mode: leaf.imageContentMode
+                    )
+                    self.image(
+                        textureId: img.textureId,
+                        x: dest.x, y: dest.y, w: dest.w, h: dest.h,
+                        tint: leaf.imageTint
+                    )
+                }
                 return
             }
 
@@ -178,6 +204,35 @@ public final class DrawList {
 
         for c in node.childNodes {
             emitNode(c, ox: ox, oy: oy, vpW: vpW, vpH: vpH)
+        }
+    }
+
+    /// Layout box → dest rect for the bitmap under `contentMode`.
+    private func imageDestRect(
+        boxX: Float, boxY: Float, boxW: Float, boxH: Float,
+        srcW: Float, srcH: Float,
+        mode: ImageContentMode
+    ) -> (x: Float, y: Float, w: Float, h: Float) {
+        guard srcW > 0, srcH > 0, boxW > 0, boxH > 0 else {
+            return (boxX, boxY, boxW, boxH)
+        }
+        switch mode {
+        case .stretch:
+            return (boxX, boxY, boxW, boxH)
+        case .fit:
+            let sx = boxW / srcW
+            let sy = boxH / srcH
+            let s = min(sx, sy)
+            let dw = srcW * s
+            let dh = srcH * s
+            return (boxX + (boxW - dw) * 0.5, boxY + (boxH - dh) * 0.5, dw, dh)
+        case .fill:
+            let sx = boxW / srcW
+            let sy = boxH / srcH
+            let s = max(sx, sy)
+            let dw = srcW * s
+            let dh = srcH * s
+            return (boxX + (boxW - dw) * 0.5, boxY + (boxH - dh) * 0.5, dw, dh)
         }
     }
 }

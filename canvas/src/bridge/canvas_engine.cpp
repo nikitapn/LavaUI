@@ -203,6 +203,22 @@ int Engine::registerFont(const std::string &path, float pixelSize)
   return id;
 }
 
+int Engine::loadTexture(const std::string &path)
+{
+  int id = -1;
+  impl_->withApp([&](Application &app) { id = app.loadTexture(path); });
+  return id;
+}
+
+bool Engine::textureSize(uint32_t textureId, float &outW, float &outH) const
+{
+  bool ok = false;
+  const_cast<Engine *>(this)->impl_->withApp([&](Application &app) {
+    ok = app.textureSize(textureId, outW, outH);
+  });
+  return ok;
+}
+
 Application *Engine::application() { return impl_->app(); }
 
 } // namespace canvas
