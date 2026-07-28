@@ -3,23 +3,25 @@
 import PackageDescription
 
 // Post-SwiftCrossUI: C++ interop (CxxCanvas) + FBDModel. No Gtk.
+// LavaUI = declarative View DSL + Yoga + draw list + engine bridge.
 let package = Package(
     name: "HelloWorld",
     platforms: [.macOS(.v13)],
     products: [
         .executable(name: "HelloWorld", targets: ["HelloWorld"]),
+        .library(name: "LavaUI", targets: ["LavaUI"]),
+        .library(name: "FBDModel", targets: ["FBDModel"]),
         // Throwaway Phase 0 spikes (docs/declarative-ui-plan.md) — delete after Phase 1.
         .executable(name: "Phase0Spikes", targets: ["Phase0Spikes"]),
-        .library(name: "FBDModel", targets: ["FBDModel"]),
     ],
     dependencies: [
         .package(path: "canvas/canvas_swift"),
     ],
     targets: [
-        .executableTarget(
-            name: "HelloWorld",
+        // Declarative UI library (View DSL, Yoga layout, fonts, draw list, Editor).
+        .target(
+            name: "LavaUI",
             dependencies: [
-                "FBDModel",
                 .product(
                     name: "CxxCanvas",
                     package: "canvas_swift",
@@ -37,6 +39,20 @@ let package = Package(
                 // uses std::expected/VoidResult) or ClangImporter parses it
                 // under an older default C++ standard and chokes on
                 // std::unexpected.
+                .unsafeFlags(["-Xcc", "-std=c++23"]),
+            ]
+        ),
+        .executableTarget(
+            name: "HelloWorld",
+            dependencies: [
+                "LavaUI",
+                "FBDModel",
+            ],
+            swiftSettings: [
+                // App only needs interop if LavaUI's public API re-exports C++
+                // types into app code. Keep C++ mode so #if canImport(CxxCanvas)
+                // paths in HelloWorld still see the module on Linux.
+                .interoperabilityMode(.Cxx),
                 .unsafeFlags(["-Xcc", "-std=c++23"]),
             ]
         ),

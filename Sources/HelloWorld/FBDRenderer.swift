@@ -1,4 +1,5 @@
 import FBDModel
+import LavaUI
 
 #if canImport(CxxCanvas)
 

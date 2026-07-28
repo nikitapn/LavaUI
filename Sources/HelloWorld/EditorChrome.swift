@@ -1,8 +1,8 @@
 import FBDModel
 import Foundation
+import LavaUI
 
-/// Chrome description as a composite `View`.
-/// Live window still uses legacy `UI` commit until Phase 3 cutover.
+/// App chrome: project tree + diagram host + properties (uses `LavaUI` views).
 public struct EditorChrome: View {
     public var blocks: [Block]
     public var selectedId: String?
@@ -238,7 +238,7 @@ enum Phase4TextDump {
         // Static remesure thrash — count only these for the hit-rate gate.
         cache.resetStats()
         for _ in 0..<5 {
-            markTextDirty(host.rootNode)
+            host.invalidateTextMetrics()
             _ = host.calculateLayout(width: width, height: height)
         }
 
@@ -288,15 +288,5 @@ enum Phase4TextDump {
         FileHandle.standardError.write(
             Data(ok ? "Phase4Dump: PASS\n".utf8 : "Phase4Dump: FAIL\n".utf8)
         )
-    }
-
-    private static func markTextDirty(_ node: (any AnyViewNode)?) {
-        guard let node else { return }
-        if let leaf = node as? LeafNode {
-            leaf.markMeasureDirty()
-        }
-        for c in node.childNodes {
-            markTextDirty(c)
-        }
     }
 }

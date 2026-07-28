@@ -1,9 +1,10 @@
 import Foundation
 import FBDModel
+import LavaUI
 
 #if canImport(CxxCanvas)
 
-/// Single window: View DSL + Yoga + draw list (Phases 1–4).
+/// FBD editor app: LavaUI chrome + diagram host.
 @main
 struct HelloWorldApp {
     static func main() {
@@ -31,7 +32,6 @@ struct HelloWorldApp {
             windowH = fb0.h
         }
 
-        // Swift owns font policy: load default + push same face to C++ draw.
         if FontStore.bootstrap(assetsRoot: assets, pixelSize: 16, into: editor) == nil {
             FileHandle.standardError.write(Data("warning: default UIFont failed to load\n".utf8))
         }
@@ -63,7 +63,6 @@ struct HelloWorldApp {
         }
 
         func renderFrame() {
-            // Always trust live framebuffer size (resize events can lag mid-drag).
             let fb = editor.framebufferSize()
             if fb.w >= 1, fb.h >= 1 {
                 windowW = fb.w
@@ -75,7 +74,6 @@ struct HelloWorldApp {
             host.setRoot(chrome)
             let frames = host.calculateLayout(width: bodyW, height: bodyH)
             if let rootFrame = frames.first(where: { $0.label == "HStack" }) {
-                // Sanity: root must fill the body (within 1px rounding).
                 if abs(rootFrame.w - bodyW) > 2 || abs(rootFrame.h - bodyH) > 2 {
                     let msg =
                         "layout warn: HStack \(Int(rootFrame.w))×\(Int(rootFrame.h)) "
@@ -128,29 +126,17 @@ struct HelloWorldApp {
 
         renderFrame()
 
-        // GLFW key / mod codes (match canvas key_codes + glfw3.h).
-        let keyEqual: Int32 = 61
-        let keyMinus: Int32 = 45
-        let keyKpAdd: Int32 = 334
-        let keyKpSub: Int32 = 333
-        let key0: Int32 = 48
-        let keyKp0: Int32 = 320
-        let modShift: Int32 = 0x0001
-        let modControl: Int32 = 0x0002
-        let actionPress: Float = 1
-        let actionRepeat: Float = 2
-
         while editor.isOpen {
             while let ev = editor.pollInputEvent() {
                 switch ev.kind {
-                case 1: // MouseDown
+                case .mouseDown:
                     if let action = host.hitTestClick(
                         x: ev.x, y: ev.y,
                         originX: 0, originY: menuH
                     ) {
                         action()
                     }
-                case 4: // Resize — x/y are new framebuffer width/height
+                case .resize:
                     let nw = max(1, ev.x)
                     let nh = max(1, ev.y)
                     if nw != windowW || nh != windowH {
@@ -161,26 +147,8 @@ struct HelloWorldApp {
                             Data("layout resize → \(Int(nw))×\(Int(nh))\n".utf8)
                         )
                     }
-                case 5: // Key — button=key, x=action, y=mods
-                    // Discrete UI scale: re-font → re-measure → Yoga reflow.
-                    let key = ev.button
-                    let action = ev.x
-                    let mods = Int32(ev.y)
-                    let isDown = action == actionPress || action == actionRepeat
-                    guard isDown else { break }
-                    let ctrlShift = (mods & modControl) != 0 && (mods & modShift) != 0
-                    guard ctrlShift else { break }
-                    let changed: Bool
-                    if key == keyEqual || key == keyKpAdd {
-                        changed = FontStore.zoomIn(into: editor)
-                    } else if key == keyMinus || key == keyKpSub {
-                        changed = FontStore.zoomOut(into: editor)
-                    } else if key == key0 || key == keyKp0 {
-                        changed = FontStore.resetScale(into: editor)
-                    } else {
-                        changed = false
-                    }
-                    if changed {
+                case .key:
+                    if ContentScaleShortcuts.handle(ev, editor: editor) {
                         host.invalidateTextMetrics()
                         dirty = true
                         let s = FontStore.scale
@@ -195,7 +163,6 @@ struct HelloWorldApp {
                 }
             }
 
-            // Safety net if a resize event was coalesced away.
             let fb = editor.framebufferSize()
             if fb.w >= 1, fb.h >= 1, fb.w != windowW || fb.h != windowH {
                 windowW = fb.w
@@ -214,6 +181,7 @@ struct HelloWorldApp {
         if let env = ProcessInfo.processInfo.environment["CANVAS_ASSETS_ROOT"], !env.isEmpty {
             return env
         }
+        // Sources/HelloWorld/HelloWorldApp.swift → repo root → canvas/.build.Debug
         return URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
             .deletingLastPathComponent()
@@ -229,7 +197,7 @@ struct HelloWorldApp {
 struct HelloWorldApp {
     static func main() {
         FileHandle.standardError.write(
-            Data("HelloWorld: CxxCanvas requires Linux + libcanvas.\n".utf8)
+            Data("HelloWorld: LavaUI requires Linux + libcanvas (CxxCanvas).\n".utf8)
         )
         exit(1)
     }

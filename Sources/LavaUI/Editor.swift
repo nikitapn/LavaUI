@@ -2,7 +2,9 @@
 import CxxCanvas
 import Foundation
 
-/// Swift wrapper over `canvas::Engine` — direct C++ interop, no C shim.
+// LavaUI — declarative UI + canvas engine bridge.
+//
+// Swift wrapper over `canvas::Engine` — direct C++ interop, no C shim.
 ///
 /// This used to wrap a flat `canvas::swiftEditor*` free-function API (a
 /// `SwiftEditor*` opaque handle passed to every call) because Swift's C++
@@ -79,12 +81,12 @@ public final class Editor: @unchecked Sendable {
         return id >= 0 ? UInt32(id) : nil
     }
 
-    /// Raw input: mouse, resize (kind 4 → x/y = new width/height),
-    /// key (kind 5 → button=key, x=action, y=mods).
-    public func pollInputEvent() -> (kind: UInt32, x: Float, y: Float, button: Int32)? {
+    /// Raw input: mouse, resize, key (see `InputEventKind`).
+    public func pollInputEvent() -> InputEvent? {
         var ev = canvas.InputEvent()
         guard engine.pollInputEvent(&ev) else { return nil }
-        return (ev.kind, ev.x, ev.y, ev.button)
+        let kind = InputEventKind(rawValue: ev.kind) ?? .none
+        return InputEvent(kind: kind, x: ev.x, y: ev.y, button: ev.button)
     }
 
     /// Current swapchain / framebuffer size in pixels.
