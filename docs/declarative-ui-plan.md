@@ -169,7 +169,7 @@ Multi-line also means `shape()` needs to return per-line runs (or take the same
 width/mode) so drawn output matches what was measured — the invariant `font.hpp`
 is explicitly built to protect.
 
-### 2b — `PositionedGlyph` needs a cluster
+### 2b — `PositionedGlyph` needs a cluster ✅ DONE
 
 ```cpp
 // current — cannot support a text cursor
@@ -184,8 +184,12 @@ string that each glyph originated from. It is the *only* way to map a click x to
 cursor position, or a cursor position to a caret x. Ligatures and combining marks
 make the naive "one glyph per character" assumption wrong immediately.
 
-Without this, Phase 7 cannot start. With it, both mappings are a binary search
-over the run.
+Without this, Phase 7 cannot start. With it, both mappings are a walk over the
+run (`ShapedRun.caretX(for:)` / `ShapedRun.index(atX:)`).
+
+Shipped with an `advance` field alongside it: the caret midpoint test needs
+per-glyph advance, and it is *not* `next.x - x`, because `x` also carries
+GPOS/kerning offsets.
 
 ---
 
@@ -725,13 +729,32 @@ and tab order, keyboard routing — all of which Phase 7 needs anyway.
 
 ---
 
-### Phase 7 — Text editing
+### Phase 7 — Text editing ⬅ IN PROGRESS
 
 The largest single chunk of work in the whole plan, and the only place where
 dropping ImGui costs more than it looks. Budget accordingly.
 
-**Blocked on a `font.hpp` change** — see Decision 2. Without glyph clusters there
-is no click→cursor or cursor→caret mapping, and nothing below is possible.
+**Unblocked**: `PositionedGlyph` carries `cluster` + `advance` (Decision 2b).
+
+Landed so far — step 1's foundation:
+
+- `LavaText` — a separate, dependency-free target holding `TextEditingState`.
+  Splitting it out makes "testable headlessly" a property of the build graph
+  rather than of discipline; it also sidestepped SwiftPM refusing to propagate
+  C++ interop settings into a test target.
+- `ShapedRun` (in `LavaUI`, needs the shaper) — `caretX(for:)` and
+  `index(atX:)`, both via HarfBuzz clusters, snapped to grapheme boundaries.
+- 18 unit tests covering grapheme movement, selection ordering, word
+  boundaries, and multi-byte insertion.
+
+Still to do for step 1: focus handling, a `TextField` view, caret/selection
+rendering, and clipboard.
+
+**Correction to the note below**: Foundation's
+`enumerateSubstrings(options: .byWords)` is *unavailable* in
+swift-corelibs-foundation, so word boundaries are hand-rolled from Character
+classification (letters, digits, underscore). That is also the right unit for a
+code editor, which is where this ends up.
 
 #### Swift does the hard part for you
 

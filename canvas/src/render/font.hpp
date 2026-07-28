@@ -49,8 +49,17 @@ struct TextMetrics {
 /// baked in) — what the renderer walks to actually draw a shaped run.
 struct PositionedGlyph {
   uint32_t glyphId = 0;
+  /// Byte offset into the shaped string this glyph came from (HarfBuzz
+  /// cluster). Without it there is no way to map a click x to a cursor
+  /// position or a cursor position back to a caret x: shaping is not
+  /// one-glyph-per-character, so ligatures and combining marks break any
+  /// positional guess. Text editing is impossible without this field.
+  uint32_t cluster = 0;
   float x = 0.f;
   float y = 0.f;
+  /// Horizontal advance. Needed for the caret midpoint test; it is *not*
+  /// `next.x - x`, because `x` also carries GPOS/kerning offsets.
+  float advance = 0.f;
 };
 
 /// One rasterized glyph — 8-bit grayscale coverage, row-major, no padding

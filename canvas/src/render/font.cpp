@@ -341,12 +341,15 @@ std::vector<PositionedGlyph> Font::shape(const std::string &text) const {
     // FT_Load_Glyph wants, and what lets a ligature (several codepoints,
     // one glyph) come through correctly instead of the old per-codepoint
     // FT_Get_Char_Index walk.
+    const float advance = static_cast<float>(positions[i].x_advance) / 64.f;
     result.push_back(PositionedGlyph{
       infos[i].codepoint,
+      infos[i].cluster,
       penX + static_cast<float>(positions[i].x_offset) / 64.f,
       penY - static_cast<float>(positions[i].y_offset) / 64.f,
+      advance,
     });
-    penX += static_cast<float>(positions[i].x_advance) / 64.f;
+    penX += advance;
     penY += static_cast<float>(positions[i].y_advance) / 64.f;
   }
 

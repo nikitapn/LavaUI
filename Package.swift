@@ -10,6 +10,7 @@ let package = Package(
     products: [
         .executable(name: "HelloWorld", targets: ["HelloWorld"]),
         .library(name: "LavaUI", targets: ["LavaUI"]),
+        .library(name: "LavaText", targets: ["LavaText"]),
         .library(name: "FBDModel", targets: ["FBDModel"]),
         // Throwaway Phase 0 spikes (docs/declarative-ui-plan.md) — delete after Phase 1.
         .executable(name: "Phase0Spikes", targets: ["Phase0Spikes"]),
@@ -19,9 +20,15 @@ let package = Package(
     ],
     targets: [
         // Declarative UI library (View DSL, Yoga layout, fonts, draw list, Editor).
+        // Pure text-editing logic: no C++ interop, no Vulkan, no Foundation
+        // beyond String. Kept a separate target so "testable headlessly" is
+        // enforced by the build graph rather than by discipline.
+        .target(name: "LavaText"),
+
         .target(
             name: "LavaUI",
             dependencies: [
+                "LavaText",
                 .product(
                     name: "CxxCanvas",
                     package: "canvas_swift",
@@ -79,6 +86,10 @@ let package = Package(
             ]
         ),
         .target(name: "FBDModel"),
+        .testTarget(
+            name: "LavaTextTests",
+            dependencies: ["LavaText"]
+        ),
         .testTarget(
             name: "FBDModelTests",
             dependencies: ["FBDModel"]
