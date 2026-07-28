@@ -3,8 +3,6 @@ import FBDModel
 
 #if canImport(CxxCanvas)
 
-/// C++ interop app: Swift owns FBDModel + declarative UI tree;
-/// C++ owns Vulkan / Yoga / TextRenderer / hit-test.
 @main
 struct HelloWorldApp {
     static func main() {
@@ -27,14 +25,32 @@ struct HelloWorldApp {
         let ui = UI()
         var selectedBlockId: String? = nil
         var clickCount = 0
+        var didDumpPhase1 = false
 
+        /// Phase 1 View description of the chrome (type structure / dump).
+        func makeChrome() -> EditorChrome {
+            let blocks = diagram.blocks.values.sorted { $0.name < $1.name }
+            return EditorChrome(
+                blocks: blocks,
+                selectedId: selectedBlockId,
+                clickCount: clickCount,
+                onSelect: { id, name in
+                    selectedBlockId = id
+                    clickCount += 1
+                    FileHandle.standardError.write(
+                        Data("click: \(name) (#\(clickCount))\n".utf8)
+                    )
+                }
+            )
+        }
+
+        /// Legacy UINode commit (still drives the live window until Phase 2+).
         func rebuildChrome() {
             ui.beginCommit()
             let blocks = diagram.blocks.values.sorted { $0.name < $1.name }
             let sel = selectedBlockId ?? blocks.first.map { String($0.id.rawValue) }
 
             let root = ui.HStack(flexGrow: 1, padding: 4) {
-                // Left: project tree as Text labels
                 ui.VStack(width: 220, padding: 8) {
                     ui.Text("Project", r: 0.7, g: 0.75, b: 0.9)
                     ui.Text("Diagrams", r: 0.55, g: 0.55, b: 0.6)
@@ -63,10 +79,8 @@ struct HelloWorldApp {
                     )
                 }
 
-                // Center: FBD diagram host (Yoga flex-grow)
                 ui.DiagramHost()
 
-                // Right: properties for selection
                 ui.VStack(width: 260, padding: 8) {
                     ui.Text("Properties", r: 0.7, g: 0.75, b: 0.9)
                     if let sel, let bid = Int(sel),
@@ -90,6 +104,13 @@ struct HelloWorldApp {
             }
 
             editor.commitUI(root, ui: ui)
+        }
+
+        // Phase 1: dump View type tree once (EditorChrome body).
+        let chrome = makeChrome()
+        if !didDumpPhase1 {
+            Phase1Dump.run(chrome: chrome)
+            didDumpPhase1 = true
         }
 
         rebuildChrome()
