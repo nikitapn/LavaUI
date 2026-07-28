@@ -478,6 +478,125 @@ by Yoga, driven from `View` structs, with the retained-shape API deleted.
 
 ---
 
+### Phase 3.5 — Unified quad renderer
+
+**The problem.** `application.cpp` draws with three accumulate-then-flush
+renderers at fixed z-levels:
+
+```cpp
+lineRenderer.draw(commandBuffer);
+renderer.draw(commandBuffer, imageIndex);   // geometry
+textRenderer.draw(commandBuffer, ...);
+```
+
+Paint order is therefore **lines < geometry < text, globally**, and the draw
+list's index ordering is discarded at replay. It looks right today only by
+coincidence: panel fills are geometry and labels are text, so text lands on top.
+
+What breaks: a caret is a rect, so it can never draw over its own glyphs
+(Phase 7); a dropdown, tooltip, or modal can never cover a label; an FBD wire
+can never cross over a block.
+
+**Nothing on the Swift side changes.** `DrawCommand` and emission are already
+correct — index order *is* paint order. This is purely a replay-side rewrite.
+
+#### Not the depth buffer
+
+Deriving depth from command index fails here: a UI is almost entirely
+alpha-blended (antialiased glyph coverage, rounded-corner SDFs, translucent
+panels), and transparent fragments writing depth punch holes behind them. You'd
+still need an ordered transparent pass.
+
+#### One rounded-box SDF covers four kinds
+
+| Kind | Rounded box params |
+|---|---|
+| Rect | `radius = 0` |
+| RoundedRect | `radius = aux` |
+| Circle | `halfSize = (r, r)`, `radius = r` |
+| Line | rotate to segment-local space → `halfSize = (len/2, w/2)`, `radius = w/2` |
+
+A stroked line with round caps *is* a capsule, and a capsule is a rounded box in
+the segment's local frame — so `Line` needs no shader special case. The CPU emits
+a rotated quad carrying local coordinates.
+
+SDF also gives free antialiasing, which `GeometryRenderer` does not have:
+
+```glsl
+float d  = sdRoundBox(vLocal, vHalfSize, vRadius);
+float aa = fwidth(d);
+float cov = 1.0 - smoothstep(-aa, aa, d);
+```
+
+#### Text stays a texture sample
+
+Do **not** go to MSDF to unify further. FreeType R8 coverage is sharper at UI
+point sizes, and MSDF generation is a pipeline of its own. One `flat uint kind`
+branch in the fragment shader is enough, and batches cluster into runs of glyphs
+or runs of shapes, so warp divergence is negligible.
+
+#### White texel in the glyph atlas
+
+If solid shapes and glyphs use different descriptor sets, every text↔shape
+transition breaks a batch. Reserve one texel of the glyph atlas as opaque white
+and have solid quads sample it: **one descriptor set for everything**, leaving
+scissor as the only batch break.
+
+```
+for cmd in drawList:            // index order preserved
+    if pushClip / popClip: flushBatch(); setScissor(...)
+    else:                  appendQuad(cmd)
+flushBatch()
+```
+
+Draw calls per frame = clip regions + 1. A typical frame is one.
+
+#### Vertex format
+
+```c
+struct QuadVertex {
+    float    pos[2];       // screen pixels
+    float    local[2];     // SDF space, or atlas UV when glyph
+    float    halfSize[2];
+    float    radius;
+    uint32_t color;        // RGBA8, fetched as R8G8B8A8_UNORM → vec4
+    uint32_t kind;         // 0 = sdf, 1 = glyph
+};
+```
+
+Line rotation is baked CPU-side (four corners in screen space plus matching local
+coords), keeping the vertex shader a pass-through. Projection is a `vec2 viewport`
+push constant — pixels → NDC in the vertex shader, no UBO or extra descriptor.
+
+#### Scope
+
+**Delete:** `GeometryRenderer`, `LineRenderer`, and `TextRenderer`'s
+pipeline/draw path.
+
+**Keep:** `TextRenderer`'s glyph atlas — rasterization, packing, upload. Phase 4
+already reduces it to that, which is exactly "retain in C++ what is expensive and
+keyed by content".
+
+**Boundary:** ImGui has its own pipeline and is a hard batch break. Draw it after
+the unified pass as a top overlay; it stays above everything, which is fine while
+it's chrome being deleted anyway.
+
+#### Staging
+
+1. `QuadRenderer` behind a runtime flag, old path still default.
+2. Port kinds in order: `Rect` → `RoundedRect` → `Circle` → `Line` → `Text`.
+3. Compare against the old path with `readPixels`, so "at parity" is an assertion.
+4. Flip the default, then delete `GeometryRenderer`/`LineRenderer`.
+
+Two details that bite otherwise: offset positions by half a pixel for crisp 1px
+lines and rect edges, and grow the vertex buffer rather than reallocating per
+frame — same arena discipline as the Swift side.
+
+**Done when:** chrome, diagram, and text all render through one pipeline in draw
+list order, a rect emitted after text covers it, and clip regions scissor.
+
+---
+
 ### Phase 4 — Text ✅ DONE (v1)
 
 - `UIFont` wraps `canvas::Font`; `FontStore.bootstrap` at startup (16px, same as

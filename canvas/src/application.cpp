@@ -11,12 +11,8 @@
 #include "util/key_codes.hpp"
 #include "render/vulkan.hpp"
 #include "render/text_renderer.hpp"
-#include "render/primitives.hpp"
-#include "render/camera.hpp"
-#include "render/geometry_renderer.hpp"
-#include "render/mesh3d_renderer.hpp"
+#include "render/quad_renderer.hpp"
 #include "render/texture_manager.hpp"
-#include "render/line_renderer.hpp"
 
 #include "imgui.h"
 #include "imgui_impl_vulkan.h"
@@ -51,14 +47,9 @@ public:
 struct Application::Impl
 {
   Vulkan           vulkan;
-  GeometryRenderer renderer;
-  Mesh3DRenderer   mesh3DRenderer;
   TextRenderer     textRenderer;
-  LineRenderer     lineRenderer;
-  Camera           camera;
+  QuadRenderer     quadRenderer;
 
-  Mesh3D* cubePrimitive = nullptr;
-  Mesh3D* spherePrimitive = nullptr;
 
   Timer treeTimer;
 
@@ -98,11 +89,9 @@ struct Application::Impl
     bool mouseCaptured = false;
   } inputState;
 
-  // Maps pixel coordinates (0,0 top-left, y-down) straight to clip space —
-  // the same matrix GeometryRenderer builds internally for its own static
-  // UBO (see GeometryRenderer's init()), duplicated here so LineRenderer
-  // (which expects an explicit view/projection pair rather than baking its
-  // own) draws wires in the identical coordinate system as shapes/text.
+  // Maps pixel coordinates (0,0 top-left, y-down) straight to clip space.
+  // LineRenderer expects an explicit view/projection pair rather than baking
+  // its own; QuadRenderer does the same mapping from a push constant.
   mat4 screenProjection_{1.0f};
 
   // Wall-clock time of the last repaint() call, used only to compute a
@@ -113,9 +102,8 @@ struct Application::Impl
   Impl(int w, int h)
     : width{static_cast<float>(w)}
     , height{static_cast<float>(h)}
-    , renderer(vulkan)
-    , mesh3DRenderer(vulkan, camera)
     , textRenderer(vulkan)
+    , quadRenderer(vulkan)
     {
 
     }
@@ -143,37 +131,6 @@ struct Application::Impl
       return;
     }
 
-    // Handle one-time key presses (toggles, etc.)
-    if (action == ACTION_PRESS) {
-      switch (key) {
-        case KEY_V:
-          renderer.toggleWireframe();
-          break;
-        case KEY_1:
-          renderShadowDebug = !renderShadowDebug;
-          break;
-        case KEY_2:
-          renderOctreeDebug = !renderOctreeDebug;
-          break;
-        case KEY_3:
-          renderBricksDebug = !renderBricksDebug;
-          break;
-        case KEY_4:
-          renderNormalsDebug = !renderNormalsDebug;
-          break;
-        case KEY_5:
-          renderWireframeDebug = !renderWireframeDebug;
-          break;
-        case KEY_TAB:
-          toggleMouseCapture();
-          break;
-        case KEY_ESCAPE:
-          if (inputState.mouseCaptured) {
-            toggleMouseCapture();
-          }
-          break;
-      }
-    }
   }
 
   // Mouse button handler
@@ -183,11 +140,6 @@ struct Application::Impl
     if (button >= 0 && button < MOUSE_BUTTON_LAST) {
       if (action == ACTION_PRESS) {
         inputState.mouseButtons[button] = true;
-
-        // Capture mouse on first click if not already captured
-        if (!inputState.mouseCaptured && !io.WantCaptureMouse) {
-          toggleMouseCapture();
-        }
       } else if (action == ACTION_RELEASE) {
         inputState.mouseButtons[button] = false;
       }
@@ -209,24 +161,6 @@ struct Application::Impl
       return;
     }
 
-    if (inputState.mouseCaptured) {
-      if (inputState.firstMouse) {
-        inputState.lastMouseX = xpos;
-        inputState.lastMouseY = ypos;
-        inputState.firstMouse = false;
-      }
-
-      double deltaX = xpos - inputState.lastMouseX;
-      double deltaY = inputState.lastMouseY - ypos; // Y is flipped
-
-      inputState.lastMouseX = xpos;
-      inputState.lastMouseY = ypos;
-
-      // Mouse sensitivity
-      const float sensitivity = 0.002f; // Adjust as needed
-      camera.rotateYaw(static_cast<float>(-deltaX * sensitivity));
-      camera.rotatePitch(static_cast<float>(deltaY * sensitivity));
-    }
   }
 
   // Scroll handler (for zoom/FOV)
@@ -239,73 +173,6 @@ struct Application::Impl
     // Camera move speed adjustment
     const float sensitivity = inputState.keys[KEY_LEFT_ALT] ? 50.f : 5.f;
     moveSpeed = std::clamp(moveSpeed + static_cast<float>(yoffset) * sensitivity, 1.f, 1000.f);
-  }
-
-  // Toggle mouse capture for camera control
-  void toggleMouseCapture()
-  {
-    // No real cursor to hide/show headlessly — a future input bridge decides
-    // what "captured" (relative-mouse-look) mode means on its end.
-    inputState.mouseCaptured = !inputState.mouseCaptured;
-
-    if (inputState.mouseCaptured) {
-      inputState.firstMouse = true;
-      std::cout << "Mouse captured for camera control (TAB to release)\n";
-    } else {
-      std::cout << "Mouse released\n";
-    }
-  }
-
-
-  // Process continuous input (called every frame)
-  void processContinuousInput(float deltaTime)
-  {
-    // Camera movement speed (units per second)
-    const float rotateSpeed = 2.0f;
-
-    const float speedMultiplier = inputState.keys[KEY_LEFT_SHIFT] ? 5.0f : 1.0f; 
-
-    // Calculate movement amount for this frame
-    float frameMove = speedMultiplier * moveSpeed * deltaTime;
-    float frameRotate = rotateSpeed * deltaTime;
-
-    // WASD movement (smooth, frame-rate independent)
-    if (inputState.keys[KEY_W]) {
-      camera.moveForward(frameMove);
-    }
-    if (inputState.keys[KEY_S]) {
-      camera.moveForward(-frameMove);
-    }
-    if (inputState.keys[KEY_A]) {
-      camera.moveRight(-frameMove);
-    }
-    if (inputState.keys[KEY_D]) {
-      camera.moveRight(frameMove);
-    }
-
-    // Vertical movement
-    if (inputState.keys[KEY_SPACE]) {
-      camera.moveUp(frameMove);
-    }
-    if (inputState.keys[KEY_LEFT_CONTROL]) {
-      camera.moveUp(-frameMove);
-    }
-
-    // Rotation with Q/E keys
-    if (inputState.keys[KEY_Q]) {
-      camera.rotateRoll(-frameRotate);
-    }
-    if (inputState.keys[KEY_E]) {
-      camera.rotateRoll(frameRotate);
-    }
-
-    // Arrow keys for additional camera control
-    if (inputState.keys[KEY_LEFT]) {
-      camera.rotateYaw(-frameRotate);
-    }
-    if (inputState.keys[KEY_RIGHT]) {
-      camera.rotateYaw(frameRotate);
-    }
   }
 
   /// Resolve `<assetsRoot>/assets/<file>` without depending on process cwd.
@@ -324,23 +191,16 @@ struct Application::Impl
     TextureManager::getInstance().initialize(vulkan);
     std::cout << "TextureManager initialized.\n";
 
-    camera.setAspectRatio(ew / eh);
-
-    renderer.init();
-    renderer.setViewportSize({ew, eh});
-    std::cout << "Renderer initialized.\n";
 
     textRenderer.init();
     // No default face here — Swift owns font policy (FontStore) and calls
     // loadFont(path, size) after open so measure and draw use the same choice.
     std::cout << "Text renderer initialized (font pending from Swift).\n";
 
-    mesh3DRenderer.init();
-    std::cout << "3D Mesh renderer initialized.\n";
-
-    lineRenderer.initialize(vulkan);
-    std::cout << "Line renderer initialized.\n";
-    mesh3DRenderer.setNormalDebugRenderer(&lineRenderer);
+    // Sole 2D pipeline: replays the draw list in index order, so paint order
+    // is emission order rather than the old lines < geometry < text z-split.
+    quadRenderer.init();
+    std::cout << "Quad renderer initialized.\n";
 
     screenProjection_ = mat4{ // column-major, top-left origin, y-down
       2.0f / ew, 0.0f, 0.0f, 0.0f,
@@ -466,8 +326,6 @@ struct Application::Impl
     const float ew = static_cast<float>(vulkan.getExtent().width);
     const float eh = static_cast<float>(vulkan.getExtent().height);
     if (ew < 1.f || eh < 1.f) return;
-    renderer.setViewportSize({ew, eh});
-    camera.setAspectRatio(ew / eh);
     screenProjection_ = mat4{
       2.0f / ew, 0.0f, 0.0f, 0.0f,
       0.0f, 2.0f / eh, 0.0f, 0.0f,
@@ -571,7 +429,6 @@ struct Application::Impl
         fpsTimer = 0.0f;
       }
 
-      processContinuousInput(deltaTime);
 
       const bool useDrawList = drawListActive_;
 
@@ -594,71 +451,6 @@ struct Application::Impl
         const float y2 = std::min(c.y + c.h, y + h);
         x = x1; y = y1; w = std::max(0.f, x2 - x1); h = std::max(0.f, y2 - y1);
       };
-
-      auto unpackColor = [](uint32_t c) {
-        return std::array<float, 4>{
-          float(c & 0xff) / 255.f,
-          float((c >> 8) & 0xff) / 255.f,
-          float((c >> 16) & 0xff) / 255.f,
-          float((c >> 24) & 0xff) / 255.f,
-        };
-      };
-
-      for (const auto &cmd : drawCmds_) {
-        const auto kind = static_cast<canvas::DrawCommandKind>(cmd.kind);
-        if (kind == canvas::DrawCommandKind::PushClip) {
-          ClipRect r{cmd.x, cmd.y, cmd.w, cmd.h};
-          if (auto cur = currentClip()) {
-            intersectRect(*cur, r.x, r.y, r.w, r.h);
-          }
-          clipStack.push_back(r);
-          continue;
-        }
-        if (kind == canvas::DrawCommandKind::PopClip) {
-          if (!clipStack.empty())
-            clipStack.pop_back();
-          continue;
-        }
-
-        const auto rgba = unpackColor(cmd.color);
-        switch (kind) {
-        case canvas::DrawCommandKind::Rect:
-        case canvas::DrawCommandKind::RoundedRect: {
-          float x = cmd.x, y = cmd.y, w = cmd.w, h = cmd.h;
-          if (auto c = currentClip()) {
-            if (!intersects(*c, x, y, w, h))
-              break;
-            intersectRect(*c, x, y, w, h);
-            if (w <= 0.f || h <= 0.f)
-              break;
-          }
-          renderer.pushScreenObject(
-              kind == canvas::DrawCommandKind::RoundedRect
-                  ? GeometryRenderer::Type::RoundedRectangle
-                  : GeometryRenderer::Type::Rectangle,
-              GeometryRenderer::ScreenParams{
-                  {x + w / 2.f, y + h / 2.f},
-                  {w, h},
-                  {rgba[0], rgba[1], rgba[2], rgba[3]}});
-          break;
-        }
-        case canvas::DrawCommandKind::Circle: {
-          const float r = cmd.aux;
-          if (auto c = currentClip()) {
-            if (!intersects(*c, cmd.x - r, cmd.y - r, r * 2.f, r * 2.f))
-              break;
-          }
-          renderer.pushScreenObject(GeometryRenderer::Type::Circle,
-                                    GeometryRenderer::ScreenParams{
-                                        {cmd.x, cmd.y},
-                                        {r * 2.f, r * 2.f},
-                                        {rgba[0], rgba[1], rgba[2], rgba[3]}});
-          break;
-        }
-        default:
-          break;
-        }
-      }
 
       // FreeType text
       textRenderer.beginTextRendering();
@@ -700,42 +492,17 @@ struct Application::Impl
       }
       textRenderer.endTextRendering();
 
-      lineRenderer.clear();
       clipStack.clear();
-      for (const auto &cmd : drawCmds_) {
-        const auto kind = static_cast<canvas::DrawCommandKind>(cmd.kind);
-        if (kind == canvas::DrawCommandKind::PushClip) {
-          ClipRect r{cmd.x, cmd.y, cmd.w, cmd.h};
-          if (auto cur = currentClip()) {
-            intersectRect(*cur, r.x, r.y, r.w, r.h);
-          }
-          clipStack.push_back(r);
-          continue;
-        }
-        if (kind == canvas::DrawCommandKind::PopClip) {
-          if (!clipStack.empty())
-            clipStack.pop_back();
-          continue;
-        }
-        if (kind != canvas::DrawCommandKind::Line)
-          continue;
-        // Drop line if both endpoints outside (rough).
-        if (auto c = currentClip()) {
-          const bool aIn = intersects(*c, cmd.x, cmd.y, 1.f, 1.f);
-          const bool bIn = intersects(*c, cmd.w, cmd.h, 1.f, 1.f);
-          if (!aIn && !bIn)
-            continue;
-        }
-        const auto rgba = unpackColor(cmd.color);
-        lineRenderer.addLine({cmd.x, cmd.y, 0.f}, {cmd.w, cmd.h, 0.f},
-                             {rgba[0], rgba[1], rgba[2], rgba[3]});
+      if (useDrawList) {
+        const auto ext = vulkan.getExtent();
+        replayDrawListUnified(static_cast<float>(ext.width),
+                              static_cast<float>(ext.height));
       }
-      lineRenderer.prepare(mat4{1.0f}, screenProjection_);
 
       vulkan.renderWithShadows(
-          [&](VkCommandBuffer commandBuffer) {
-            mesh3DRenderer.drawShadowPass(commandBuffer);
-          },
+          // Shadow pass kept only because renderWithShadows is Vulkan's sole
+          // render entry point; nothing 3D draws into it any more.
+          [&](VkCommandBuffer) {},
           [&](VkCommandBuffer commandBuffer, u32 imageIndex) {
             const auto extent = vulkan.getExtent();
             VkViewport fullVp{
@@ -766,9 +533,8 @@ struct Application::Impl
               vkCmdSetScissor(commandBuffer, 0, 1, &scissor);
             }
 
-            lineRenderer.draw(commandBuffer);
-            renderer.draw(commandBuffer, imageIndex);
-            mesh3DRenderer.draw(commandBuffer, imageIndex);
+            // Single ordered 2D pass — the whole scene.
+            quadRenderer.draw(commandBuffer);
 
             // Full-window scissor for FreeType text + ImGui chrome.
             vkCmdSetScissor(commandBuffer, 0, 1, &fullScissor);
@@ -783,6 +549,47 @@ struct Application::Impl
       std::cerr << ex.what() << '\n';
       return false;
     }
+  }
+
+  /// Phase 3.5 — replays the draw list through the unified quad pipeline in
+  /// *index order*, so a rect emitted after another shape actually covers it.
+  ///
+  /// Text is deliberately not handled here yet: glyph quads need the atlas UVs
+  /// that TextRenderer owns, so it stays on its own pass (still drawn last,
+  /// i.e. always on top) until the atlas is shared. Shapes and lines already
+  /// interleave correctly, which is the ordering the three-renderer split
+  /// could not express at all.
+  void replayDrawListUnified(float viewW, float viewH)
+  {
+    quadRenderer.begin({viewW, viewH});
+    for (const auto &cmd : drawCmds_) {
+      switch (static_cast<canvas::DrawCommandKind>(cmd.kind)) {
+      case canvas::DrawCommandKind::Rect:
+        quadRenderer.pushBox({cmd.x, cmd.y}, {cmd.w, cmd.h}, cmd.color, 0.f);
+        break;
+      case canvas::DrawCommandKind::RoundedRect:
+        quadRenderer.pushBox({cmd.x, cmd.y}, {cmd.w, cmd.h}, cmd.color, cmd.aux);
+        break;
+      case canvas::DrawCommandKind::Circle:
+        quadRenderer.pushCircle({cmd.x, cmd.y}, cmd.aux, cmd.color);
+        break;
+      case canvas::DrawCommandKind::Line:
+        // x,y = p0 and w,h = p1 (see draw_command.hpp). aux carries stroke
+        // width when the emitter sets it; 1.5px is the wire default.
+        quadRenderer.pushLine({cmd.x, cmd.y}, {cmd.w, cmd.h},
+                              cmd.aux > 0.f ? cmd.aux : 1.5f, cmd.color);
+        break;
+      case canvas::DrawCommandKind::PushClip:
+        quadRenderer.pushScissor({cmd.x, cmd.y}, {cmd.w, cmd.h});
+        break;
+      case canvas::DrawCommandKind::PopClip:
+        quadRenderer.popScissor();
+        break;
+      case canvas::DrawCommandKind::Text:
+        break;  // see comment above
+      }
+    }
+    quadRenderer.end();
   }
 
   void readPixels(uint8_t *dst, size_t dstSize)
@@ -910,11 +717,8 @@ struct Application::Impl
 
   void shutdown()
   {
-    renderer.cleanUp();
-    mesh3DRenderer.cleanUp();
+    quadRenderer.cleanUp();
     textRenderer.cleanUp();
-    lineRenderer.destroy();
-    Mesh3DRegistry::getInstance().cleanUp(vulkan.getDevice());
     TextureManager::getInstance().cleanUp();
     vulkan.cleanUp();
   }

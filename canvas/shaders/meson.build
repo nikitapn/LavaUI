@@ -9,15 +9,11 @@ shader_sources = [
   meson.project_source_root() / 'src/shaders/2d/text.frag',
   meson.project_source_root() / 'src/shaders/2d/shader.vert',
   meson.project_source_root() / 'src/shaders/2d/shader.frag',
+  meson.project_source_root() / 'src/shaders/2d/quad.vert',
+  meson.project_source_root() / 'src/shaders/2d/quad.frag',
   meson.project_source_root() / 'src/shaders/2d/compute/integration.comp',
   meson.project_source_root() / 'src/shaders/2d/compute/collision_detect.comp',
   meson.project_source_root() / 'src/shaders/2d/compute/collision_resolve.comp',
-  meson.project_source_root() / 'src/shaders/3d/mesh.vert',
-  meson.project_source_root() / 'src/shaders/3d/mesh.frag',
-  meson.project_source_root() / 'src/shaders/3d/shadow.vert',
-  meson.project_source_root() / 'src/shaders/3d/shadow.frag',
-  meson.project_source_root() / 'src/shaders/3d/line.vert',
-  meson.project_source_root() / 'src/shaders/3d/line.frag',
 ]
 
 foreach source : shader_sources
