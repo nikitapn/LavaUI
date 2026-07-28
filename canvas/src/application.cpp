@@ -200,6 +200,9 @@ struct Application::Impl
     // Sole 2D pipeline: replays the draw list in index order, so paint order
     // is emission order rather than the old lines < geometry < text z-split.
     quadRenderer.init();
+    // Glyphs and shapes share one descriptor set, so scissor is the only
+    // thing that can break a batch.
+    quadRenderer.setAtlas(textRenderer.atlasView(), textRenderer.atlasSampler());
     std::cout << "Quad renderer initialized.\n";
 
     screenProjection_ = mat4{ // column-major, top-left origin, y-down
@@ -452,48 +455,14 @@ struct Application::Impl
         x = x1; y = y1; w = std::max(0.f, x2 - x1); h = std::max(0.f, y2 - y1);
       };
 
-      // FreeType text
-      textRenderer.beginTextRendering();
-      const float lineH = textRenderer.getLineHeight();
-      clipStack.clear();
-      for (const auto &cmd : drawCmds_) {
-        const auto kind = static_cast<canvas::DrawCommandKind>(cmd.kind);
-        if (kind == canvas::DrawCommandKind::PushClip) {
-          ClipRect r{cmd.x, cmd.y, cmd.w, cmd.h};
-          if (auto cur = currentClip()) {
-            intersectRect(*cur, r.x, r.y, r.w, r.h);
-          }
-          clipStack.push_back(r);
-          continue;
-        }
-        if (kind == canvas::DrawCommandKind::PopClip) {
-          if (!clipStack.empty())
-            clipStack.pop_back();
-          continue;
-        }
-        if (kind != canvas::DrawCommandKind::Text)
-          continue;
-        if (cmd.param >= drawStrings_.size())
-          continue;
-        // Approximate text box for clip test (glyph extent is Phase 4).
-        if (auto c = currentClip()) {
-          if (!intersects(*c, cmd.x, cmd.y, cmd.w, cmd.h))
-            continue;
-        }
-        const auto rgba = std::array<float, 3>{
-            float(cmd.color & 0xff) / 255.f,
-            float((cmd.color >> 8) & 0xff) / 255.f,
-            float((cmd.color >> 16) & 0xff) / 255.f,
-        };
-        const float tx = cmd.x + 4.f;
-        const float ty = cmd.y + lineH * 0.85f;
-        textRenderer.renderText(drawStrings_[cmd.param], {tx, ty},
-                                {rgba[0], rgba[1], rgba[2]});
-      }
-      textRenderer.endTextRendering();
-
       clipStack.clear();
       if (useDrawList) {
+        // Grow before replay, never during: growAtlasIfNeeded replaces the
+        // image view QuadRenderer's descriptor points at.
+        if (textRenderer.growAtlasIfNeeded()) {
+          quadRenderer.setAtlas(textRenderer.atlasView(),
+                                textRenderer.atlasSampler());
+        }
         const auto ext = vulkan.getExtent();
         replayDrawListUnified(static_cast<float>(ext.width),
                               static_cast<float>(ext.height));
@@ -536,12 +505,9 @@ struct Application::Impl
             // Single ordered 2D pass — the whole scene.
             quadRenderer.draw(commandBuffer);
 
-            // Full-window scissor for FreeType text + ImGui chrome.
+            // Full-window scissor for the ImGui chrome that follows.
             vkCmdSetScissor(commandBuffer, 0, 1, &fullScissor);
 
-            textRenderer.draw(commandBuffer,
-                              {static_cast<float>(extent.width),
-                               static_cast<float>(extent.height)});
           });
 
       return true;
@@ -554,11 +520,6 @@ struct Application::Impl
   /// Phase 3.5 — replays the draw list through the unified quad pipeline in
   /// *index order*, so a rect emitted after another shape actually covers it.
   ///
-  /// Text is deliberately not handled here yet: glyph quads need the atlas UVs
-  /// that TextRenderer owns, so it stays on its own pass (still drawn last,
-  /// i.e. always on top) until the atlas is shared. Shapes and lines already
-  /// interleave correctly, which is the ordering the three-renderer split
-  /// could not express at all.
   void replayDrawListUnified(float viewW, float viewH)
   {
     quadRenderer.begin({viewW, viewH});
@@ -585,8 +546,24 @@ struct Application::Impl
       case canvas::DrawCommandKind::PopClip:
         quadRenderer.popScissor();
         break;
-      case canvas::DrawCommandKind::Text:
-        break;  // see comment above
+      case canvas::DrawCommandKind::Text: {
+        // Swift shaped this run and positioned every glyph; all the renderer
+        // does is resolve glyph ids to atlas rects. No shaping here means a
+        // drawn run cannot drift from the run that was measured for layout.
+        const uint32_t first = cmd.param;
+        const uint32_t count = static_cast<uint32_t>(cmd.w);
+        for (uint32_t g = 0; g < count; ++g) {
+          const size_t idx = first + g;
+          if (idx >= drawGlyphs_.size()) break;
+          const auto &gi = drawGlyphs_[idx];
+          TextRenderer::GlyphQuad q;
+          if (!textRenderer.glyphQuad(gi.fontId, gi.glyphId, q)) continue;
+          if (q.size.x <= 0.f || q.size.y <= 0.f) continue;  // e.g. space
+          quadRenderer.pushGlyph({gi.x + q.bearing.x, gi.y - q.bearing.y},
+                                 q.size, q.uv0, q.uv1, cmd.color);
+        }
+        break;
+      }
       }
     }
     quadRenderer.end();
@@ -610,7 +587,7 @@ struct Application::Impl
 
   // Immediate draw list (Phase 3) — authored by Swift each dirty frame.
   std::vector<canvas::DrawCommand> drawCmds_;
-  std::vector<std::string> drawStrings_;
+  std::vector<canvas::GlyphInstance> drawGlyphs_;
   bool drawListActive_ = false; // explicit; empty list must not fall back to legacy
   std::deque<canvas::InputEvent> inputEvents_;
 
@@ -678,23 +655,11 @@ struct Application::Impl
   }
 
   void submitDrawList(const canvas::DrawCommand *cmds, size_t cmdCount,
-                      const uint8_t *stringBlob, size_t blobSize,
-                      const uint32_t *stringOffsets, size_t stringCount)
+                      const canvas::GlyphInstance *glyphs, size_t glyphCount)
   {
     drawListActive_ = true;
     drawCmds_.assign(cmds, cmds + cmdCount);
-    drawStrings_.clear();
-    drawStrings_.reserve(stringCount);
-    for (size_t i = 0; i < stringCount; ++i) {
-      const uint32_t off = stringOffsets[i];
-      if (!stringBlob || off >= blobSize) {
-        drawStrings_.emplace_back();
-        continue;
-      }
-      // NUL-terminated slices packed by Swift.
-      drawStrings_.emplace_back(
-        reinterpret_cast<const char *>(stringBlob + off));
-    }
+    drawGlyphs_.assign(glyphs, glyphs + glyphCount);
   }
 
   bool pollInputEvent(canvas::InputEvent &out)
@@ -708,6 +673,11 @@ struct Application::Impl
   void setDiagramViewport(float x, float y, float w, float h)
   {
     diagramViewport_ = {x, y, w, h};
+  }
+
+  int registerFont(const std::string &path, float pixelSize)
+  {
+    return textRenderer.registerFont(path, pixelSize);
   }
 
   canvas::VoidResult loadFont(const std::string &path, float pixelSize)
@@ -786,11 +756,10 @@ bool Application::uiPollEvent(int &outWidgetId, int &outKind)
 }
 
 void Application::submitDrawList(const canvas::DrawCommand *cmds, size_t cmdCount,
-                                 const uint8_t *stringBlob, size_t blobSize,
-                                 const uint32_t *stringOffsets, size_t stringCount)
+                                 const canvas::GlyphInstance *glyphs,
+                                 size_t glyphCount)
 {
-  impl_->submitDrawList(cmds, cmdCount, stringBlob, blobSize, stringOffsets,
-                        stringCount);
+  impl_->submitDrawList(cmds, cmdCount, glyphs, glyphCount);
 }
 
 bool Application::pollInputEvent(canvas::InputEvent &out)
@@ -806,6 +775,11 @@ void Application::setDiagramViewport(float x, float y, float w, float h)
 canvas::VoidResult Application::loadFont(const std::string &path, float pixelSize)
 {
   return impl_->loadFont(path, pixelSize);
+}
+
+int Application::registerFont(const std::string &path, float pixelSize)
+{
+  return impl_->registerFont(path, pixelSize);
 }
 
 bool Application::repaint() {

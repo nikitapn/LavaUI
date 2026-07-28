@@ -79,11 +79,10 @@ class Engine {
   void readPixels(uint8_t *dst, size_t dstSize);
 
   /// Replace the retained immediate draw list (copied under the engine mutex).
-  /// Text commands use `param` as an index into `stringOffsets`; each string is
-  /// a NUL-terminated UTF-8 slice starting at `stringBlob + stringOffsets[i]`.
+  /// Text commands carry `param` = first glyph index and `w` = glyph count
+  /// into `glyphs`. Swift shapes; the renderer only looks up atlas entries.
   void submitDrawList(const DrawCommand *cmds, size_t cmdCount,
-                      const uint8_t *stringBlob, size_t blobSize,
-                      const uint32_t *stringOffsets, size_t stringCount);
+                      const GlyphInstance *glyphs, size_t glyphCount);
 
   /// Pop one raw input event (mouse). Returns false if empty.
   bool pollInputEvent(InputEvent &out);
@@ -97,6 +96,11 @@ class Engine {
   /// Load TextRenderer face for draw-list text. Called from Swift FontStore
   /// after open — C++ does not choose a default path.
   [[nodiscard]] VoidResult loadFont(const std::string &path, float pixelSize);
+
+  /// Registers a face for draw-list glyph lookup and returns its id, or -1.
+  /// Idempotent per (path, pixelSize). Swift stamps this id into every
+  /// GlyphInstance so the renderer resolves ids against the right face.
+  int registerFont(const std::string &path, float pixelSize);
 
   /// Low-level access for advanced use; may be null if closed.
   Application *application();

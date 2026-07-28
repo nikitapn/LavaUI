@@ -16,6 +16,15 @@ public final class UIFont: @unchecked Sendable {
     public private(set) var ascent: Float = 12
     public private(set) var descent: Float = 4
 
+    /// Id of this face in the engine's font registry. Stamped into every
+    /// `GlyphInstance` so the renderer resolves face-relative glyph ids
+    /// against the face they were actually shaped with.
+    public internal(set) var engineId: UInt32 = 0
+
+    /// Shaped runs keyed by line text. Shaping is the expensive part of text,
+    /// so this is what keeps re-emission cheap.
+    private var shapeCache: [String: [canvas.PositionedGlyph]] = [:]
+
     public init?(path: String, pixelSize: Float = 16) {
         self.path = path
         self.pixelSize = pixelSize
@@ -62,6 +71,47 @@ public final class UIFont: @unchecked Sendable {
         return (m.width, m.height)
     }
 
+    /// Shaped run for one line, cached per string. Positions are relative to
+    /// the run origin (pen at the baseline); the caller offsets them.
+    ///
+    /// Swift is now the only place text gets shaped: the same run feeds Yoga
+    /// measurement and the draw list, so drawn output cannot drift from what
+    /// was laid out — and the renderer never calls HarfBuzz.
+    public func shape(_ text: String) -> [canvas.PositionedGlyph] {
+        if let hit = shapeCache[text] { return hit }
+        let n = Int(raw.prepareShape(std.string(text)))
+        var glyphs = [canvas.PositionedGlyph](
+            repeating: canvas.PositionedGlyph(), count: max(n, 0)
+        )
+        if n > 0 {
+            let written = glyphs.withUnsafeMutableBufferPointer {
+                Int(raw.copyShapedGlyphs($0.baseAddress, Int32(n)))
+            }
+            if written < n { glyphs.removeLast(n - written) }
+        }
+        shapeCache[text] = glyphs
+        return glyphs
+    }
+
+    /// Registers this face with the engine and records the returned id.
+    /// Must happen before any glyph from this face reaches the draw list —
+    /// otherwise the renderer resolves its ids against the wrong face.
+    @discardableResult
+    public func registerWithEngine(_ editor: Editor) -> Bool {
+        guard let id = editor.registerFont(path: path, pixelSize: pixelSize) else {
+            FileHandle.standardError.write(
+                Data("UIFont: engine registerFont failed for \(path)\n".utf8)
+            )
+            return false
+        }
+        engineId = id
+        return true
+    }
+
+    /// Drops cached shaped runs. Call if the cache grows unbounded; entries
+    /// are keyed by string only, since a `UIFont` is one face at one size.
+    public func clearShapeCache() { shapeCache.removeAll(keepingCapacity: true) }
+
     /// Lines matching `measure(..., AtMost/Exactly)` wrap breaks.
     public func wrapLines(_ text: String, availWidth: Float) -> [String] {
         let n = Int(raw.prepareWrap(std.string(text), availWidth))
@@ -103,9 +153,10 @@ public enum FontStore {
         into editor: Editor? = nil
     ) -> UIFont? {
         if let existing = `default` {
-            // Still push to engine if we re-open a window.
+            // Still push to engine if we re-open a window. registerFont is
+            // idempotent per (path, size), so this returns the same id.
             if let editor {
-                _ = editor.loadFont(path: existing.path, pixelSize: existing.pixelSize)
+                existing.registerWithEngine(editor)
             }
             return existing
         }
@@ -114,12 +165,7 @@ public enum FontStore {
         }
         `default` = font
         if let editor {
-            let ok = editor.loadFont(path: font.path, pixelSize: font.pixelSize)
-            if !ok {
-                FileHandle.standardError.write(
-                    Data("FontStore: engine loadFont failed for \(font.path)\n".utf8)
-                )
-            }
+            font.registerWithEngine(editor)
         }
         return font
     }

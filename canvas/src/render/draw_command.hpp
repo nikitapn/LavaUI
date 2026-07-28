@@ -12,12 +12,27 @@ namespace canvas {
 enum class DrawCommandKind : uint32_t {
   Rect = 0,
   RoundedRect = 1,
-  Text = 2,       // param = index into parallel string table
+  Text = 2,       // param = first glyph index, w = glyph count
   Circle = 3,     // aux = radius; x,y = center
   Line = 4,       // x,y = p0; w,h = p1
   PushClip = 5,   // x,y,w,h = scissor rect
   PopClip = 6,
 };
+
+/// One shaped glyph, positioned in absolute window pixels by Swift. Ships in
+/// a side buffer parallel to the command list — the same pattern the string
+/// table used, except the renderer no longer has to shape anything.
+struct GlyphInstance {
+  uint32_t glyphId = 0;
+  /// Which registered face this id belongs to. Glyph ids are face-relative,
+  /// so shipping the id alone would draw the wrong glyph as soon as a second
+  /// face or size exists.
+  uint32_t fontId = 0;
+  float    x = 0.f;  // pen position (baseline origin), window pixels
+  float    y = 0.f;
+};
+
+static_assert(sizeof(GlyphInstance) == 16, "GlyphInstance must stay packed");
 
 struct DrawCommand {
   uint32_t kind = 0;

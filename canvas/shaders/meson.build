@@ -5,8 +5,6 @@ fs = import('fs')
 glslc = find_program('glslc')
 
 shader_sources = [
-  meson.project_source_root() / 'src/shaders/2d/text.vert',
-  meson.project_source_root() / 'src/shaders/2d/text.frag',
   meson.project_source_root() / 'src/shaders/2d/shader.vert',
   meson.project_source_root() / 'src/shaders/2d/shader.frag',
   meson.project_source_root() / 'src/shaders/2d/quad.vert',

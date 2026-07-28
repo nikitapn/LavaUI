@@ -15,13 +15,6 @@
 
 namespace {
 
-struct TextInstance {
-  vec2 position;       // World position (8 bytes, offset 0)
-  vec2 uvTopLeft;      // Atlas UV coordinates (8 bytes, offset 8)  
-  vec2 uvBottomRight;  // Atlas UV bottom-right (8 bytes, offset 16)
-  vec2 size;           // Glyph size (8 bytes, offset 24)
-  vec4 color;          // Text color with alpha (16 bytes, offset 32) - padded to vec4 for alignment
-};
 
 // Keyed by glyph index (canvas::PositionedGlyph::glyphId), not Unicode
 // codepoint — a glyph index is what Font::rasterize() wants, and what lets
@@ -44,8 +37,16 @@ struct TextRenderer::Impl {
   // live behind canvas::Font now — this class only caches rasterized
   // bitmaps into its own Vulkan atlas and never touches FreeType/HarfBuzz
   // directly.
-  canvas::Font                            font_;
-  std::unordered_map<uint32_t, GlyphInfo> glyphMap_;
+  // One entry per registered (path, pixelSize). Glyph ids are *face-relative*,
+  // so the atlas must be keyed by (fontId, glyphId) — keying by glyphId alone
+  // silently draws the wrong glyph as soon as a second face or size exists.
+  std::vector<canvas::Font>               fonts_;
+  std::vector<std::pair<std::string, float>> fontKeys_;
+  std::unordered_map<uint64_t, GlyphInfo> glyphMap_;
+
+  static uint64_t glyphKey(uint32_t fontId, uint32_t glyphId) {
+    return (static_cast<uint64_t>(fontId) << 32) | glyphId;
+  }
 
   // Vulkan resources
   VkImage        atlasTexture_;
@@ -54,27 +55,22 @@ struct TextRenderer::Impl {
   VkSampler      atlasSampler_;
 
   // Rendering pipeline
-  VkDescriptorSetLayout descriptorSetLayout_;
-  VkPipelineLayout      pipelineLayout_;
-  VkPipeline            renderPipeline_;
-  VkDescriptorPool      descriptorPool_;
-  VkDescriptorSet       descriptorSet_;
 
   // Instance data
-  VkBuffer                  instanceBuffer_;
-  VkDeviceMemory            instanceBufferMemory_;
-  std::vector<TextInstance> instanceData_;
   
   // Quad vertex buffer for instanced rendering
-  VkBuffer       quadVertexBuffer_;
-  VkDeviceMemory quadVertexBufferMemory_;
 
   // Atlas management
   int atlasWidth_;
   int atlasHeight_;
   int currentX_;
   int currentY_;
-  int lineHeight_;
+  int shelfHeight_;   // tallest glyph on the current shelf
+  /// Bumped whenever the atlas image is replaced, so QuadRenderer knows to
+  /// re-point its descriptor at the new view.
+  uint32_t atlasGeneration_ = 0;
+  /// Set when a glyph did not fit; the atlas grows before the next replay.
+  bool needsGrow_ = false;
 
   Impl(Vulkan& vulkan)
       : vulkan_(vulkan),
@@ -83,28 +79,18 @@ struct TextRenderer::Impl {
         atlasTextureMemory_(VK_NULL_HANDLE),
         atlasTextureView_(VK_NULL_HANDLE),
         atlasSampler_(VK_NULL_HANDLE),
-        descriptorSetLayout_(VK_NULL_HANDLE),
-        pipelineLayout_(VK_NULL_HANDLE),
-        renderPipeline_(VK_NULL_HANDLE),
-        descriptorPool_(VK_NULL_HANDLE),
-        descriptorSet_(VK_NULL_HANDLE),
-        instanceBuffer_(VK_NULL_HANDLE),
-        instanceBufferMemory_(VK_NULL_HANDLE),
-        quadVertexBuffer_(VK_NULL_HANDLE),
-        quadVertexBufferMemory_(VK_NULL_HANDLE),
         atlasWidth_(512),
         atlasHeight_(512),
         currentX_(0),
         currentY_(0),
-        lineHeight_(0)
+        shelfHeight_(0)
   {
   }
 
   void init() {
-    // Create Vulkan resources
+    // Atlas only. Drawing belongs to QuadRenderer, which samples this atlas
+    // through its own descriptor set — TextRenderer owns no pipeline.
     createAtlasTexture();
-    createQuadVertexBuffer();
-    createRenderingPipeline();
   }
 
   // Idempotent on purpose: called explicitly from Application::shutdown()
@@ -126,38 +112,6 @@ struct TextRenderer::Impl {
     // teardown needed here the way the Vulkan resources below require.
 
     // Cleanup Vulkan resources
-    if (instanceBuffer_ != VK_NULL_HANDLE) {
-      vkDestroyBuffer(device, instanceBuffer_, nullptr);
-      instanceBuffer_ = VK_NULL_HANDLE;
-    }
-    if (instanceBufferMemory_ != VK_NULL_HANDLE) {
-      vkFreeMemory(device, instanceBufferMemory_, nullptr);
-      instanceBufferMemory_ = VK_NULL_HANDLE;
-    }
-    if (quadVertexBuffer_ != VK_NULL_HANDLE) {
-      vkDestroyBuffer(device, quadVertexBuffer_, nullptr);
-      quadVertexBuffer_ = VK_NULL_HANDLE;
-    }
-    if (quadVertexBufferMemory_ != VK_NULL_HANDLE) {
-      vkFreeMemory(device, quadVertexBufferMemory_, nullptr);
-      quadVertexBufferMemory_ = VK_NULL_HANDLE;
-    }
-    if (renderPipeline_ != VK_NULL_HANDLE) {
-      vkDestroyPipeline(device, renderPipeline_, nullptr);
-      renderPipeline_ = VK_NULL_HANDLE;
-    }
-    if (pipelineLayout_ != VK_NULL_HANDLE) {
-      vkDestroyPipelineLayout(device, pipelineLayout_, nullptr);
-      pipelineLayout_ = VK_NULL_HANDLE;
-    }
-    if (descriptorPool_ != VK_NULL_HANDLE) {
-      vkDestroyDescriptorPool(device, descriptorPool_, nullptr);
-      descriptorPool_ = VK_NULL_HANDLE;
-    }
-    if (descriptorSetLayout_ != VK_NULL_HANDLE) {
-      vkDestroyDescriptorSetLayout(device, descriptorSetLayout_, nullptr);
-      descriptorSetLayout_ = VK_NULL_HANDLE;
-    }
     if (atlasSampler_ != VK_NULL_HANDLE) {
       vkDestroySampler(device, atlasSampler_, nullptr);
       atlasSampler_ = VK_NULL_HANDLE;
@@ -180,20 +134,25 @@ struct TextRenderer::Impl {
     cleanUp();
   }
 
-  canvas::VoidResult loadFont(const std::string& fontPath, int fontSize) {
-    // font_.load() itself handles reload (tears down any previously loaded
-    // FreeType/HarfBuzz state before loading the new one).
-    auto result = font_.load(fontPath, static_cast<float>(fontSize));
-    if (!result) {
-      return result;
+  /// Registers a face and returns its id, or -1 on failure. Ids are stable
+  /// for the process; re-registering the same (path, size) returns the
+  /// existing id so Swift can call this idempotently.
+  int registerFont(const std::string& fontPath, float pixelSize) {
+    for (size_t i = 0; i < fontKeys_.size(); ++i) {
+      if (fontKeys_[i].first == fontPath && fontKeys_[i].second == pixelSize) {
+        return static_cast<int>(i);
+      }
     }
-
-    // Cached locally (rather than calling font_.lineHeight() from the
-    // atlas-packing code below) since that code runs in a tight loop and
-    // this value never changes without a reload.
-    lineHeight_ = static_cast<int>(font_.lineHeight());
-    return canvas::ok();
+    canvas::Font font;
+    if (!font.load(fontPath, pixelSize)) {
+      return -1;
+    }
+    fonts_.push_back(std::move(font));
+    fontKeys_.emplace_back(fontPath, pixelSize);
+    return static_cast<int>(fonts_.size() - 1);
   }
+
+
 
   void createAtlasTexture() {
     VkDevice device = vulkan_.getDevice();
@@ -225,362 +184,43 @@ struct TextRenderer::Impl {
     atlasSampler_ = vulkan_.createTextureSampler();
   }
 
-  void createQuadVertexBuffer() {
-    // Define quad vertices in normalized coordinates (0,0 to 1,1)
-    // This will be scaled by instance data
-    struct QuadVertex {
-      vec2 position;
-    };
-    
-    std::vector<QuadVertex> quadVertices = {
-      {{0.0f, 0.0f}}, // Top-left
-      {{1.0f, 0.0f}}, // Top-right
-      {{0.0f, 1.0f}}, // Bottom-left
-      {{0.0f, 1.0f}}, // Bottom-left
-      {{1.0f, 0.0f}}, // Top-right
-      {{1.0f, 1.0f}}  // Bottom-right
-    };
-    
-    VkDeviceSize bufferSize = sizeof(QuadVertex) * quadVertices.size();
-    
-    // Create staging buffer
-    VkBuffer stagingBuffer;
-    VkDeviceMemory stagingBufferMemory;
-    vulkan_.createBuffer(bufferSize,
-                         VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-                         VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-                         stagingBuffer,
-                         stagingBufferMemory);
 
-    // Copy vertex data to staging buffer
-    void* data;
-    VkDevice device = vulkan_.getDevice();
-    vkMapMemory(device, stagingBufferMemory, 0, bufferSize, 0, &data);
-    memcpy(data, quadVertices.data(), bufferSize);
-    vkUnmapMemory(device, stagingBufferMemory);
 
-    // Create vertex buffer
-    vulkan_.createBuffer(bufferSize,
-                         VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
-                         VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
-                         quadVertexBuffer_,
-                         quadVertexBufferMemory_);
 
-    // Copy from staging buffer to vertex buffer
-    VkCommandBuffer commandBuffer = vulkan_.beginSingleTimeCommands();
-    
-    VkBufferCopy copyRegion{};
-    copyRegion.size = bufferSize;
-    vkCmdCopyBuffer(commandBuffer, stagingBuffer, quadVertexBuffer_, 1, &copyRegion);
-    
-    vulkan_.endSingleTimeCommands(commandBuffer);
 
-    // Cleanup staging buffer
-    vkDestroyBuffer(device, stagingBuffer, nullptr);
-    vkFreeMemory(device, stagingBufferMemory, nullptr);
-  }
 
-  void createRenderingPipeline() {
-    VkDevice device = vulkan_.getDevice();
 
-    // Create descriptor set layout
-    VkDescriptorSetLayoutBinding samplerBinding {
-      .binding         = 0,
-      .descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-      .descriptorCount = 1,
-      .stageFlags      = VK_SHADER_STAGE_FRAGMENT_BIT,
-    };
-
-    VkDescriptorSetLayoutCreateInfo layoutInfo {
-      .sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
-      .bindingCount = 1,
-      .pBindings    = &samplerBinding,
-    };
-
-    VR(vkCreateDescriptorSetLayout(
-         device, &layoutInfo, nullptr, &descriptorSetLayout_),
-       "Failed to create text descriptor set layout");
-
-    // Create descriptor pool
-    VkDescriptorPoolSize poolSize {
-      .type            = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-      .descriptorCount = 1,
-    };
-
-    VkDescriptorPoolCreateInfo poolInfo {
-      .sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
-      .maxSets       = 1,
-      .poolSizeCount = 1,
-      .pPoolSizes    = &poolSize,
-    };
-
-    VR(vkCreateDescriptorPool(device, &poolInfo, nullptr, &descriptorPool_),
-       "Failed to create text descriptor pool");
-
-    // Allocate descriptor set
-    VkDescriptorSetAllocateInfo allocInfo {
-      .sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
-      .descriptorPool     = descriptorPool_,
-      .descriptorSetCount = 1,
-      .pSetLayouts        = &descriptorSetLayout_,
-    };
-
-    VR(vkAllocateDescriptorSets(device, &allocInfo, &descriptorSet_),
-       "Failed to allocate text descriptor set");
-
-    // Update descriptor set
-    VkDescriptorImageInfo imageInfo {
-      .sampler     = atlasSampler_,
-      .imageView   = atlasTextureView_,
-      .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-    };
-
-    VkWriteDescriptorSet descriptorWrite {
-      .sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-      .dstSet          = descriptorSet_,
-      .dstBinding      = 0,
-      .dstArrayElement = 0,
-      .descriptorCount = 1,
-      .descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-      .pImageInfo      = &imageInfo,
-    };
-
-    vkUpdateDescriptorSets(device, 1, &descriptorWrite, 0, nullptr);
-
-    // Create push constant range for projection matrix and viewport size
-    VkPushConstantRange pushConstantRange{
-      .stageFlags = VK_SHADER_STAGE_VERTEX_BIT,
-      .offset     = 0,
-      .size       = sizeof(glm::mat4) + sizeof(glm::vec2)  // projection matrix + viewport size
-    };
-
-    // Create pipeline layout
-    VkPipelineLayoutCreateInfo pipelineLayoutInfo{
-      .sType                  = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
-      .setLayoutCount         = 1,
-      .pSetLayouts            = &descriptorSetLayout_,
-      .pushConstantRangeCount = 1,
-      .pPushConstantRanges    = &pushConstantRange,
-    };
-
-    VR(vkCreatePipelineLayout(device, &pipelineLayoutInfo, nullptr, &pipelineLayout_),
-       "Failed to create text pipeline layout");
-
-    // Create instance buffer (initially small, will grow as needed)
-    const VkDeviceSize bufferSize =
-      sizeof(TextInstance) * 1000;  // Start with space for 1000 glyphs
-
-    vulkan_.createBuffer(
-      bufferSize,
-      VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-      VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
-        VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-      instanceBuffer_,
-      instanceBufferMemory_);
-
-    // Now create the actual graphics pipeline
-    createTextGraphicsPipeline();
-  }
-
-  void createTextGraphicsPipeline() {
-    VkDevice device = vulkan_.getDevice();
-
-    // Load shaders
-    VkShaderModule vertShaderModule = shaders_.loadShader("shaders/text.vert.bin");
-    VkShaderModule fragShaderModule = shaders_.loadShader("shaders/text.frag.bin");
-
-    VkPipelineShaderStageCreateInfo vertShaderStageInfo{
-      .sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
-      .stage  = VK_SHADER_STAGE_VERTEX_BIT,
-      .module = vertShaderModule,
-      .pName  = "main",
-    };
-
-    VkPipelineShaderStageCreateInfo fragShaderStageInfo{
-      .sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
-      .stage  = VK_SHADER_STAGE_FRAGMENT_BIT,
-      .module = fragShaderModule,
-      .pName  = "main",
-    };
-
-    VkPipelineShaderStageCreateInfo shaderStages[] = {vertShaderStageInfo, fragShaderStageInfo};
-
-    // Vertex input for quad vertices
-    VkVertexInputBindingDescription quadBinding{
-      .binding   = 0,
-      .stride    = sizeof(vec2),
-      .inputRate = VK_VERTEX_INPUT_RATE_VERTEX,
-    };
-
-    VkVertexInputAttributeDescription quadAttribute{
-      .location = 0,
-      .binding  = 0,
-      .format   = VK_FORMAT_R32G32_SFLOAT,
-      .offset   = 0,
-    };
-
-    // Instance input for text instance data
-    VkVertexInputBindingDescription instanceBinding{
-      .binding   = 1,
-      .stride    = sizeof(TextInstance),
-      .inputRate = VK_VERTEX_INPUT_RATE_INSTANCE,
-    };
-
-    std::array<VkVertexInputAttributeDescription, 5> instanceAttributes = {
-      VkVertexInputAttributeDescription{
-        .location = 1,
-        .binding  = 1,
-        .format   = VK_FORMAT_R32G32_SFLOAT,
-        .offset   = offsetof(TextInstance, position),
-      },
-      VkVertexInputAttributeDescription{
-        .location = 2,
-        .binding  = 1,
-        .format   = VK_FORMAT_R32G32_SFLOAT,
-        .offset   = offsetof(TextInstance, uvTopLeft),
-      },
-      VkVertexInputAttributeDescription{
-        .location = 3,
-        .binding  = 1,
-        .format   = VK_FORMAT_R32G32_SFLOAT,
-        .offset   = offsetof(TextInstance, uvBottomRight),
-      },
-      VkVertexInputAttributeDescription{
-        .location = 4,
-        .binding  = 1,
-        .format   = VK_FORMAT_R32G32_SFLOAT,
-        .offset   = offsetof(TextInstance, size),
-      },
-      VkVertexInputAttributeDescription{
-        .location = 5,
-        .binding  = 1,
-        .format   = VK_FORMAT_R32G32B32A32_SFLOAT,  // Changed to vec4 format
-        .offset   = offsetof(TextInstance, color),
-      }
-    };
-
-    std::array<VkVertexInputBindingDescription, 2> bindings = {quadBinding, instanceBinding};
-    std::array<VkVertexInputAttributeDescription, 6> attributes = {quadAttribute, 
-      instanceAttributes[0], instanceAttributes[1], instanceAttributes[2], 
-      instanceAttributes[3], instanceAttributes[4]};
-
-    VkPipelineVertexInputStateCreateInfo vertexInputInfo{
-      .sType                           = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
-      .vertexBindingDescriptionCount   = static_cast<uint32_t>(bindings.size()),
-      .pVertexBindingDescriptions      = bindings.data(),
-      .vertexAttributeDescriptionCount = static_cast<uint32_t>(attributes.size()),
-      .pVertexAttributeDescriptions    = attributes.data(),
-    };
-
-    VkPipelineInputAssemblyStateCreateInfo inputAssembly{
-      .sType                  = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
-      .topology               = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,
-      .primitiveRestartEnable = VK_FALSE,
-    };
-
-    // We'll set viewport and scissor dynamically
-    VkPipelineViewportStateCreateInfo viewportState{
-      .sType         = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO,
-      .viewportCount = 1,
-      .scissorCount  = 1,
-    };
-
-    VkPipelineRasterizationStateCreateInfo rasterizer{
-      .sType                   = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
-      .depthClampEnable        = VK_FALSE,
-      .rasterizerDiscardEnable = VK_FALSE,
-      .polygonMode             = VK_POLYGON_MODE_FILL,
-      .cullMode                = VK_CULL_MODE_BACK_BIT,
-      .frontFace               = VK_FRONT_FACE_CLOCKWISE,
-      .depthBiasEnable         = VK_FALSE,
-      .lineWidth               = 1.0f,
-    };
-
-    VkPipelineMultisampleStateCreateInfo multisampling{
-      .sType                = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO,
-      .rasterizationSamples = vulkan_.getMSAASamples(),
-      .sampleShadingEnable  = VK_FALSE,
-    };
-
-    VkPipelineColorBlendAttachmentState colorBlendAttachment{
-      .blendEnable         = VK_TRUE,
-      .srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA,
-      .dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA,
-      .colorBlendOp        = VK_BLEND_OP_ADD,
-      .srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE,
-      .dstAlphaBlendFactor = VK_BLEND_FACTOR_ZERO,
-      .alphaBlendOp        = VK_BLEND_OP_ADD,
-      .colorWriteMask      = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | 
-                             VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT,
-    };
-
-    VkPipelineColorBlendStateCreateInfo colorBlending{
-      .sType           = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO,
-      .logicOpEnable   = VK_FALSE,
-      .attachmentCount = 1,
-      .pAttachments    = &colorBlendAttachment,
-    };
-
-    std::array<VkDynamicState, 2> dynamicStates = {
-      VK_DYNAMIC_STATE_VIEWPORT,
-      VK_DYNAMIC_STATE_SCISSOR
-    };
-
-    VkPipelineDynamicStateCreateInfo dynamicState{
-      .sType             = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO,
-      .dynamicStateCount = static_cast<uint32_t>(dynamicStates.size()),
-      .pDynamicStates    = dynamicStates.data(),
-    };
-
-    VkGraphicsPipelineCreateInfo pipelineInfo{
-      .sType               = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
-      .stageCount          = 2,
-      .pStages             = shaderStages,
-      .pVertexInputState   = &vertexInputInfo,
-      .pInputAssemblyState = &inputAssembly,
-      .pViewportState      = &viewportState,
-      .pRasterizationState = &rasterizer,
-      .pMultisampleState   = &multisampling,
-      .pColorBlendState    = &colorBlending,
-      .pDynamicState       = &dynamicState,
-      .layout              = pipelineLayout_,
-      .renderPass          = vulkan_.getRenderPass(),
-      .subpass             = 0,
-    };
-
-    VR(vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &renderPipeline_),
-       "Failed to create text graphics pipeline");
-  }
-
-  GlyphInfo& getOrCreateGlyph(uint32_t glyphId) {
-    auto it = glyphMap_.find(glyphId);
+  /// Rasterizes and packs on first use. Returns nullptr when the glyph does
+  /// not fit; the caller drops it for this frame and the atlas grows before
+  /// the next replay (see growAtlasIfNeeded).
+  const GlyphInfo* getOrCreateGlyph(uint32_t fontId, uint32_t glyphId) {
+    const uint64_t key = glyphKey(fontId, glyphId);
+    auto it = glyphMap_.find(key);
     if (it != glyphMap_.end()) {
-      return it->second;
+      return &it->second;
+    }
+    if (fontId >= fonts_.size() || !fonts_[fontId].isLoaded()) {
+      return nullptr;
     }
 
-    if (!font_.isLoaded()) {
-      throw std::runtime_error("No font loaded for glyph rendering");
-    }
+    canvas::GlyphBitmap bitmap = fonts_[fontId].rasterize(glyphId);
 
-    canvas::GlyphBitmap bitmap = font_.rasterize(glyphId);
-
-    // Check if glyph fits in current line
+    // Shelf packing with a per-shelf height: a period no longer reserves a
+    // full line-height row, which is most of the vertical waste.
     if (currentX_ + bitmap.width > atlasWidth_) {
       currentX_ = 0;
-      currentY_ += lineHeight_;
-
-      if (currentY_ + lineHeight_ > atlasHeight_) {
-        throw std::runtime_error(
-          "Atlas texture is full - need to implement dynamic resizing");
-      }
+      currentY_ += shelfHeight_;
+      shelfHeight_ = 0;
+    }
+    if (currentY_ + bitmap.height > atlasHeight_) {
+      needsGrow_ = true;
+      return nullptr;  // dropped for one frame, then re-rasterized
     }
 
-    // Upload glyph to atlas
     if (bitmap.width > 0 && bitmap.height > 0) {
       updateAtlasTexture(bitmap, currentX_, currentY_);
     }
 
-    // Create glyph info
     GlyphInfo glyph;
     glyph.atlasUV[0] = {static_cast<float>(currentX_) / atlasWidth_,
                         static_cast<float>(currentY_) / atlasHeight_};
@@ -591,9 +231,86 @@ struct TextRenderer::Impl {
                      static_cast<float>(bitmap.height)};
     glyph.bearing = {bitmap.bearingX, bitmap.bearingY};
 
-    currentX_ += bitmap.width + 1;  // Add 1 pixel padding
+    currentX_ += bitmap.width + 1;  // 1px padding avoids bilinear bleed
+    shelfHeight_ = std::max(shelfHeight_, bitmap.height + 1);
 
-    return glyphMap_[glyphId] = glyph;
+    return &(glyphMap_[key] = glyph);
+  }
+
+  /// Doubles the atlas when a glyph did not fit. Existing glyphs are copied
+  /// at their current pixel positions, so packing state stays valid and only
+  /// the normalised UVs need rescaling — no re-rasterisation, no bitmap
+  /// retention. Call between frames: it replaces the image view that
+  /// QuadRenderer's descriptor points at.
+  bool growAtlasIfNeeded() {
+    if (!needsGrow_) return false;
+    needsGrow_ = false;
+
+    const int newW = atlasWidth_ * 2;
+    const int newH = atlasHeight_ * 2;
+    const int maxDim = static_cast<int>(
+      vulkan_.getDeviceProperties().limits.maxImageDimension2D);
+    if (newW > maxDim || newH > maxDim) {
+      std::cerr << "TextRenderer: atlas at device maximum (" << atlasWidth_
+                << "); further glyphs will be dropped\n";
+      return false;
+    }
+
+    VkDevice device = vulkan_.getDevice();
+    VkImage        newImage{};
+    VkDeviceMemory newMemory{};
+    vulkan_.createImage(newW, newH, 1, VK_SAMPLE_COUNT_1_BIT, VK_FORMAT_R8_UNORM,
+                        VK_IMAGE_TILING_OPTIMAL,
+                        VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+                        VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, newImage, newMemory);
+
+    vulkan_.transitionImageLayout(newImage, VK_FORMAT_R8_UNORM,
+                                  VK_IMAGE_LAYOUT_UNDEFINED,
+                                  VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+    vulkan_.transitionImageLayout(atlasTexture_, VK_FORMAT_R8_UNORM,
+                                  VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                                  VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+
+    VkCommandBuffer cmd = vulkan_.beginSingleTimeCommands();
+    VkImageCopy region{
+      .srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
+      .srcOffset      = {0, 0, 0},
+      .dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
+      .dstOffset      = {0, 0, 0},
+      .extent         = {static_cast<uint32_t>(atlasWidth_),
+                         static_cast<uint32_t>(atlasHeight_), 1},
+    };
+    vkCmdCopyImage(cmd, atlasTexture_, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                   newImage, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+    vulkan_.endSingleTimeCommands(cmd);
+
+    vulkan_.transitionImageLayout(newImage, VK_FORMAT_R8_UNORM,
+                                  VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                                  VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+
+    vkDestroyImageView(device, atlasTextureView_, nullptr);
+    vkDestroyImage(device, atlasTexture_, nullptr);
+    vkFreeMemory(device, atlasTextureMemory_, nullptr);
+
+    atlasTexture_       = newImage;
+    atlasTextureMemory_ = newMemory;
+    atlasTextureView_   = vulkan_.createImageView(
+      atlasTexture_, VK_FORMAT_R8_UNORM, VK_IMAGE_ASPECT_COLOR_BIT, 1);
+
+    // Pixel positions are unchanged; only the normalisation denominator grew.
+    const float sx = static_cast<float>(atlasWidth_) / newW;
+    const float sy = static_cast<float>(atlasHeight_) / newH;
+    for (auto& [key, g] : glyphMap_) {
+      (void)key;
+      g.atlasUV[0] = {g.atlasUV[0].x * sx, g.atlasUV[0].y * sy};
+      g.atlasUV[1] = {g.atlasUV[1].x * sx, g.atlasUV[1].y * sy};
+    }
+
+    atlasWidth_  = newW;
+    atlasHeight_ = newH;
+    ++atlasGeneration_;
+    std::cerr << "TextRenderer: atlas grown to " << newW << "x" << newH << '\n';
+    return true;
   }
 
   void updateAtlasTexture(const canvas::GlyphBitmap& bitmap, int x, int y) {
@@ -713,119 +430,50 @@ TextRenderer& TextRenderer::operator=(TextRenderer&& other) noexcept = default;
 
 void TextRenderer::init() { impl_->init(); }
 
+bool TextRenderer::glyphQuad(uint32_t fontId, uint32_t glyphId, GlyphQuad &out) {
+  // Rasterizes + packs on first use. Must be called during draw-list replay,
+  // never inside a command-buffer callback: the atlas upload path submits and
+  // waits on its own single-time command buffer.
+  const GlyphInfo *g = impl_->getOrCreateGlyph(fontId, glyphId);
+  if (!g) return false;  // didn't fit; atlas grows before the next frame
+  out.uv0     = g->atlasUV[0];
+  out.uv1     = g->atlasUV[1];
+  out.size    = g->size;
+  out.bearing = g->bearing;
+  return true;
+}
+
+int  TextRenderer::registerFont(const std::string &path, float pixelSize) {
+  return impl_->registerFont(path, pixelSize);
+}
+bool TextRenderer::growAtlasIfNeeded() { return impl_->growAtlasIfNeeded(); }
+uint32_t TextRenderer::atlasGeneration() const { return impl_->atlasGeneration_; }
+
+VkImageView TextRenderer::atlasView() const { return impl_->atlasTextureView_; }
+VkSampler   TextRenderer::atlasSampler() const { return impl_->atlasSampler_; }
+
 canvas::VoidResult TextRenderer::loadFont(const std::string& fontPath, int fontSize) {
-  return impl_->loadFont(fontPath, fontSize);
+  // Back-compat shim: registers as font 0 (the default face).
+  return impl_->registerFont(fontPath, static_cast<float>(fontSize)) >= 0
+           ? canvas::ok()
+           : canvas::VoidResult(std::unexpected(
+               canvas::Error{"failed to load font: " + fontPath}));
 }
 
 void TextRenderer::cleanUp() { impl_->cleanUp(); }
-void TextRenderer::beginTextRendering() { 
-    impl_->instanceData_.clear(); 
-}
-
-void TextRenderer::renderText(const std::string& text, vec2 position, vec3 color, TextAlign align) {
-    if (!impl_->font_.isLoaded()) {
-        thread_local static int frameCointer = 0;
-        if (frameCointer++ % 1000 == 0)
-          std::cerr << "No font loaded, cannot render text." << std::endl;
-        return;
-    }
-
-    float x = position.x;
-    float y = position.y;
-
-    // Handle text alignment
-    if (align != TextAlign::Left) {
-        TextMetrics metrics = getTextMetrics(text);
-        if (align == TextAlign::Center) {
-            x -= metrics.w * 0.5f;
-        } else if (align == TextAlign::Right) {
-            x -= static_cast<float>(metrics.w);
-        }
-    }
-
-    // font_.shape() (HarfBuzz) already resolved codepoints to glyph
-    // indices and baked in every advance/kerning adjustment — no more
-    // manual UTF-8 walk, no more per-pair getKerning() calls, no more
-    // special-casing space.
-    for (const canvas::PositionedGlyph& g : impl_->font_.shape(text)) {
-        GlyphInfo& glyph = impl_->getOrCreateGlyph(g.glyphId);
-
-        TextInstance instance;
-        instance.position      = {x + g.x + glyph.bearing.x, y + g.y - glyph.bearing.y};
-        instance.uvTopLeft     = glyph.atlasUV[0];
-        instance.uvBottomRight = glyph.atlasUV[1];
-        instance.size          = glyph.size;
-        instance.color         = {color.x, color.y, color.z, 1.0f}; // Convert vec3 to vec4 with alpha
-
-        impl_->instanceData_.push_back(instance);
-    }
-}
-
-void TextRenderer::endTextRendering() {
-    if (impl_->instanceData_.empty()) return;
-
-    // Upload instance data to GPU
-    VkDeviceSize dataSize = impl_->instanceData_.size() * sizeof(TextInstance);
-
-    void*    mappedMemory;
-    VkDevice device = impl_->vulkan_.getDevice();
-    vkMapMemory(device, impl_->instanceBufferMemory_, 0, dataSize, 0, &mappedMemory);
-    memcpy(mappedMemory, impl_->instanceData_.data(), dataSize);
-    vkUnmapMemory(device, impl_->instanceBufferMemory_);
-}
-
-void TextRenderer::draw(VkCommandBuffer commandBuffer, vec2 viewportSize) {
-    if (impl_->instanceData_.empty()) return;
-    
-    // Bind the text rendering pipeline
-    vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, impl_->renderPipeline_);
-
-    // Bind descriptor sets (atlas texture)
-    bindDescriptorSet(commandBuffer);
-
-    // Set push constants (projection matrix and viewport size)
-    struct {
-        glm::mat4 projection;
-        glm::vec2 viewportSize;
-    } pushConstants;
-    
-    pushConstants.viewportSize = glm::vec2(viewportSize.x, viewportSize.y);
-    pushConstants.projection = glm::ortho(0.0f, viewportSize.x, 0.0f, viewportSize.y, -1.0f, 1.0f);
-    
-    vkCmdPushConstants(commandBuffer, impl_->pipelineLayout_, VK_SHADER_STAGE_VERTEX_BIT,
-                       0, sizeof(pushConstants), &pushConstants);
-
-    // Bind vertex buffers
-    VkBuffer vertexBuffers[] = { impl_->quadVertexBuffer_, impl_->instanceBuffer_ };
-    VkDeviceSize offsets[] = { 0, 0 };
-    vkCmdBindVertexBuffers(commandBuffer, 0, 2, vertexBuffers, offsets);
-
-    // Draw instanced quads (6 vertices per quad)
-    vkCmdDraw(commandBuffer, 6, static_cast<uint32_t>(impl_->instanceData_.size()), 0, 0);
-}
-
 TextMetrics TextRenderer::getTextMetrics(const std::string& text) {
-    if (!impl_->font_.isLoaded()) return {0, 0};
+    if (impl_->fonts_.empty() || !impl_->fonts_[0].isLoaded()) return {0, 0};
 
     // Pure shaping — same measurement canvas::Font gives Swift for Yoga
     // sizing, and (unlike the old walk, which called getOrCreateGlyph and
     // so rasterized/uploaded every glyph as a side effect) this never
     // touches the atlas: measuring text no longer implicitly renders it.
-    canvas::TextMetrics m = impl_->font_.measure(text);
+    canvas::TextMetrics m = impl_->fonts_[0].measure(text);
     return TextMetrics{static_cast<int>(m.width), static_cast<int>(m.height)};
 }
 
 float TextRenderer::getLineHeight() const {
-    return static_cast<float>(impl_->lineHeight_);
+    if (impl_->fonts_.empty()) return 0.f;
+    return impl_->fonts_[0].lineHeight();
 }
 
-void TextRenderer::bindDescriptorSet(VkCommandBuffer commandBuffer) {
-    vkCmdBindDescriptorSets(commandBuffer,
-                            VK_PIPELINE_BIND_POINT_GRAPHICS,
-                            impl_->pipelineLayout_,
-                            0,
-                            1,
-                            &impl_->descriptorSet_,
-                            0,
-                            nullptr);
-}

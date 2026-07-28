@@ -94,19 +94,14 @@ public final class Editor: @unchecked Sendable {
     // ─── Phase 3 draw list ───────────────────────────────────────────────
 
     public func submitDrawList(_ list: DrawList) {
-        // One contiguous string blob + offset table — no per-string strdup.
         list.commands.withUnsafeBufferPointer { cmdBuf in
-            list.stringBlob.withUnsafeBufferPointer { blobBuf in
-                list.stringOffsets.withUnsafeBufferPointer { offBuf in
-                    engine.submitDrawList(
-                        cmdBuf.baseAddress,
-                        cmdBuf.count,
-                        blobBuf.baseAddress,
-                        blobBuf.count,
-                        offBuf.baseAddress,
-                        offBuf.count
-                    )
-                }
+            list.glyphs.withUnsafeBufferPointer { glyphBuf in
+                engine.submitDrawList(
+                    cmdBuf.baseAddress,
+                    cmdBuf.count,
+                    glyphBuf.baseAddress,
+                    glyphBuf.count
+                )
             }
         }
     }
@@ -119,6 +114,13 @@ public final class Editor: @unchecked Sendable {
     @discardableResult
     public func loadFont(path: String, pixelSize: Float) -> Bool {
         engine.loadFont(std.string(path), pixelSize).has_value()
+    }
+
+    /// Registers a face for glyph lookup; returns its id, or nil on failure.
+    /// Idempotent per (path, pixelSize).
+    public func registerFont(path: String, pixelSize: Float) -> UInt32? {
+        let id = engine.registerFont(std.string(path), pixelSize)
+        return id >= 0 ? UInt32(id) : nil
     }
 
     /// Raw mouse events for Swift hit-testing.

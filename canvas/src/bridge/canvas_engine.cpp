@@ -200,12 +200,10 @@ shell::Rect Engine::diagramViewport() const
 }
 
 void Engine::submitDrawList(const DrawCommand *cmds, size_t cmdCount,
-                            const uint8_t *stringBlob, size_t blobSize,
-                            const uint32_t *stringOffsets, size_t stringCount)
+                            const GlyphInstance *glyphs, size_t glyphCount)
 {
   impl_->withApp([&](Application &app) {
-    app.submitDrawList(cmds, cmdCount, stringBlob, blobSize, stringOffsets,
-                       stringCount);
+    app.submitDrawList(cmds, cmdCount, glyphs, glyphCount);
   });
 }
 
@@ -228,6 +226,13 @@ VoidResult Engine::loadFont(const std::string &path, float pixelSize)
   return impl_->withApp([&](Application &app) {
     return app.loadFont(path, pixelSize);
   });
+}
+
+int Engine::registerFont(const std::string &path, float pixelSize)
+{
+  int id = -1;
+  impl_->withApp([&](Application &app) { id = app.registerFont(path, pixelSize); });
+  return id;
 }
 
 Application *Engine::application() { return impl_->app(); }

@@ -31,6 +31,9 @@ struct Font::Impl {
   /// Last prepareWrap result (for wrapLineAt).
   std::vector<std::string> wrapCache;
 
+  /// Last prepareShape() run (for copyShapedGlyphs).
+  std::vector<PositionedGlyph> shapeCache;
+
   ~Impl() { unload(); }
 
   bool isLoaded() const { return hbFont != nullptr && ftFace != nullptr; }
@@ -284,6 +287,22 @@ int Font::prepareWrap(const std::string &text, float availWidth)
     impl_->wrapCache.emplace_back();
   }
   return static_cast<int>(impl_->wrapCache.size());
+}
+
+int Font::prepareShape(const std::string &text)
+{
+  impl_->shapeCache = shape(text);
+  return static_cast<int>(impl_->shapeCache.size());
+}
+
+int Font::copyShapedGlyphs(PositionedGlyph *dst, int maxCount) const
+{
+  if (!dst || maxCount <= 0) return 0;
+  const int n = static_cast<int>(impl_->shapeCache.size());
+  const int copy = n < maxCount ? n : maxCount;
+  std::memcpy(dst, impl_->shapeCache.data(),
+              static_cast<size_t>(copy) * sizeof(PositionedGlyph));
+  return copy;
 }
 
 bool Font::wrapLineAt(int index, char *buf, int cap) const

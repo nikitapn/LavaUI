@@ -141,6 +141,20 @@ class Font {
   /// Returns false if index is out of range.
   bool wrapLineAt(int index, char *buf, int cap) const;
 
+  /// Shapes `text` and retains the run until the next prepareShape().
+  /// Two-phase like prepareWrap/wrapLineAt so no std::vector crosses the
+  /// Swift boundary. Returns the glyph count.
+  ///
+  /// This is what makes Swift the single shaping site: Swift shapes once per
+  /// unique (text, font), caches the run, and ships glyph ids + pen positions
+  /// in the draw list. The renderer never re-shapes, so a drawn run cannot
+  /// drift from the run that was measured for layout.
+  int prepareShape(const std::string &text);
+
+  /// Bulk-copy the last prepareShape() run into a caller-owned buffer.
+  /// Returns the number of glyphs written (<= maxCount).
+  int copyShapedGlyphs(PositionedGlyph *dst, int maxCount) const;
+
   // Shapes `text` and returns each glyph's pen position — the exact same
   // shaping call measure() makes, so a run's drawn width always matches
   // what measure() reported for it. This is primarily a C++-internal

@@ -64,14 +64,14 @@ public:
 
   /// Immediate draw list from Swift (copied). See Engine::submitDrawList.
   void submitDrawList(const canvas::DrawCommand *cmds, size_t cmdCount,
-                      const uint8_t *stringBlob, size_t blobSize,
-                      const uint32_t *stringOffsets, size_t stringCount);
+                      const canvas::GlyphInstance *glyphs, size_t glyphCount);
   bool pollInputEvent(canvas::InputEvent &out);
   void setDiagramViewport(float x, float y, float w, float h);
 
   /// Load the face TextRenderer uses for draw-list text. Swift is the only
   /// caller (FontStore); Application does not pick a default path.
   [[nodiscard]] canvas::VoidResult loadFont(const std::string &path, float pixelSize);
+  int registerFont(const std::string &path, float pixelSize);
 
   // ─── Input bridge (canvas-local coords, GLFW-style key codes) ───────────
 

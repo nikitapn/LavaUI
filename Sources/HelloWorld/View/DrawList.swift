@@ -15,39 +15,24 @@ public enum DrawKind: UInt32 {
     case popClip = 6
 }
 
-/// Reused arena: commands + packed null-terminated UTF-8 string blob.
-/// Strings are truly interned within a frame (`internMap`).
+/// Reused arena: draw commands plus the shaped glyphs they reference.
+/// Shaping itself is cached per line on `UIFont`, so re-emission is cheap.
 public final class DrawList {
     public private(set) var commands: [canvas.DrawCommand] = []
 
-    /// Contiguous UTF-8 + NUL. Text `param` indexes `stringOffsets`.
-    public private(set) var stringBlob: [UInt8] = []
-    public private(set) var stringOffsets: [UInt32] = []
-    private var internMap: [String: UInt32] = [:]
+    /// Shaped glyphs in absolute window pixels; `Text` commands index this.
+    /// Replaces the old string blob — the renderer no longer shapes anything,
+    /// so strings never cross the boundary.
+    public private(set) var glyphs: [canvas.GlyphInstance] = []
 
     public init() {
         commands.reserveCapacity(256)
-        stringBlob.reserveCapacity(4096)
-        stringOffsets.reserveCapacity(64)
+        glyphs.reserveCapacity(2048)
     }
 
     public func clear() {
         commands.removeAll(keepingCapacity: true)
-        stringBlob.removeAll(keepingCapacity: true)
-        stringOffsets.removeAll(keepingCapacity: true)
-        internMap.removeAll(keepingCapacity: true)
-    }
-
-    /// Dedup within this frame. Returns index into `stringOffsets`.
-    @discardableResult
-    private func intern(_ s: String) -> UInt32 {
-        if let existing = internMap[s] { return existing }
-        let index = UInt32(stringOffsets.count)
-        stringOffsets.append(UInt32(stringBlob.count))
-        stringBlob.append(contentsOf: s.utf8)
-        stringBlob.append(0)
-        internMap[s] = index
-        return index
+        glyphs.removeAll(keepingCapacity: true)
     }
 
     private func append(
@@ -79,9 +64,33 @@ public final class DrawList {
         append(kind: .roundedRect, x: x, y: y, w: w, h: h, color: color, aux: radius)
     }
 
-    public func text(_ string: String, x: Float, y: Float, w: Float, h: Float, color: Color) {
-        let idx = intern(string)
-        append(kind: .text, x: x, y: y, w: w, h: h, color: color, param: idx)
+    /// Shapes `string` (cached on the font) and appends its glyphs at
+    /// absolute positions. `y` is the line box top; the pen sits at the
+    /// baseline, i.e. `y + ascent`.
+    public func text(
+        _ string: String, x: Float, y: Float, w: Float, h: Float,
+        color: Color, font: UIFont? = nil
+    ) {
+        guard let font = font ?? FontStore.default, !string.isEmpty else { return }
+        let run = font.shape(string)
+        guard !run.isEmpty else { return }
+
+        let first = UInt32(glyphs.count)
+        let penX = x + 4  // matches the inset the old renderText path used
+        let penY = y + font.ascent
+        for g in run {
+            var inst = canvas.GlyphInstance()
+            inst.glyphId = g.glyphId
+            inst.fontId = font.engineId
+            inst.x = penX + g.x
+            inst.y = penY + g.y
+            glyphs.append(inst)
+        }
+        // `w` carries the glyph count for Text (see draw_command.hpp).
+        append(
+            kind: .text, x: x, y: y, w: Float(run.count), h: h,
+            color: color, param: first
+        )
     }
 
     public func circle(cx: Float, cy: Float, radius: Float, color: Color) {
@@ -152,7 +161,10 @@ public final class DrawList {
                     let lines = leaf.cachedLines.isEmpty ? [leaf.text] : leaf.cachedLines
                     for (i, line) in lines.enumerated() {
                         let ly = y + Float(i) * lineH
-                        text(line, x: x, y: ly, w: w, h: lineH, color: leaf.color)
+                        text(
+                            line, x: x, y: ly, w: w, h: lineH,
+                            color: leaf.color, font: leaf.font
+                        )
                     }
                 }
                 return
