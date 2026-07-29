@@ -47,6 +47,15 @@ class Engine {
   void close();
   bool isOpen() const;
 
+  /// Drive the window from the caller's thread. `timeoutSeconds`: negative
+  /// blocks until an event arrives, 0 polls, positive waits up to that long.
+  /// Blocking is what keeps an idle UI at zero CPU while still waking on
+  /// input immediately.
+  void pumpEvents(double timeoutSeconds);
+
+  /// Render and present one frame.
+  bool renderFrame();
+
   void setWindowFrame(int x, int y, int width, int height);
   void setWindowVisible(bool visible);
   bool isWindowVisible() const;

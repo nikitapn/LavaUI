@@ -47,6 +47,15 @@ public final class Editor: @unchecked Sendable {
 
     public var isOpen: Bool { engine.isOpen() }
 
+    /// Drive the window from this thread. `timeout` < 0 blocks until an event
+    /// arrives, 0 polls, > 0 waits at most that long. Blocking is what keeps
+    /// an idle UI at zero CPU while still waking immediately on input.
+    public func pumpEvents(timeout: Double) { engine.pumpEvents(timeout) }
+
+    /// Render and present one frame.
+    @discardableResult
+    public func renderFrame() -> Bool { engine.renderFrame() }
+
     // ─── Declarative UI ──────────────────────────────────────────────────
 
     // ─── Phase 3 draw list ───────────────────────────────────────────────

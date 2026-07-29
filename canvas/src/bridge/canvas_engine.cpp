@@ -38,7 +38,10 @@ struct Engine::Impl {
         if constexpr (std::is_void_v<R>) return;
         else return R{};
       }
-      std::lock_guard lock(window->mutex());
+      // No lock: the window host is caller-driven and single-threaded now,
+      // so there is nothing to serialise against. This lock used to be held
+      // by the render thread across a whole vsync-blocked frame, which cost
+      // every call here ~17ms median and up to 200ms.
       Application *a = window->app();
       if (!a) {
         if constexpr (std::is_void_v<R>) return;
@@ -97,6 +100,16 @@ void Engine::close()
     impl_->offscreen.reset();
   }
   impl_->mode = Impl::Mode::None;
+}
+
+void Engine::pumpEvents(double timeoutSeconds)
+{
+  if (impl_->window) impl_->window->pumpEvents(timeoutSeconds);
+}
+
+bool Engine::renderFrame()
+{
+  return impl_->window ? impl_->window->renderFrame() : false;
 }
 
 bool Engine::isOpen() const

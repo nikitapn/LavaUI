@@ -1,21 +1,25 @@
 #pragma once
 
-#include <atomic>
 #include <cstdint>
 #include <memory>
-#include <mutex>
-#include <optional>
 #include <string>
-#include <thread>
 
 class Application;
 
-/// Owns a GLFW + Vulkan present window and a background render loop.
+/// Owns a GLFW + Vulkan present window, driven by whoever calls it.
 ///
-/// Important: all glfw* window calls (show/hide/pos/size) run on the render
-/// thread. Swift/host only posts desired frame/visibility; the loop applies
-/// them. Calling GLFW from the Swift actor is not thread-safe and was
-/// breaking re-show after hide.
+/// This used to run its own render thread with a mutex guarding the
+/// Application, which every host call had to take. Because the loop held that
+/// mutex across the whole of repaint() — including a FIFO present that blocks
+/// to vsync — every host call queued behind a full frame. Measured cost of
+/// acquiring it was ~17ms median and up to 200ms, which is what made hover
+/// feel laggy despite the GPU being idle. The same lock also turned a resize
+/// that left a fence unsignalled into a whole-app hang.
+///
+/// So the thread is gone. The caller (Swift) owns the loop: it pumps events
+/// and asks for frames on its own thread, which is also the thread that
+/// created the window — the arrangement GLFW wants anyway. With one thread
+/// there is nothing to serialise, so there is no mutex at all.
 class CanvasWindowHost {
  public:
   CanvasWindowHost();
@@ -24,43 +28,35 @@ class CanvasWindowHost {
   CanvasWindowHost(const CanvasWindowHost&) = delete;
   CanvasWindowHost& operator=(const CanvasWindowHost&) = delete;
 
+  /// Creates the window and engine on the *calling* thread. Every subsequent
+  /// call must come from that same thread.
   bool open(const std::string& assetsRoot, uint32_t width, uint32_t height,
             const std::string& title);
 
   void close();
 
-  bool isOpen() const { return running_.load(std::memory_order_acquire); }
+  /// False once the window has been asked to close.
+  bool isOpen() const;
 
-  Application* app();
-  std::mutex& mutex() { return mutex_; }
+  Application* app() { return app_.get(); }
 
-  /// Post desired screen-space frame (applied on the render thread).
+  /// Processes pending OS events, blocking until one arrives or `timeout`
+  /// seconds elapse. Zero polls without blocking; negative blocks until an
+  /// event arrives.
+  ///
+  /// Blocking is the point: an idle UI should cost nothing, and input should
+  /// wake the loop immediately rather than after a fixed poll interval.
+  void pumpEvents(double timeout);
+
+  /// Renders and presents one frame. False if the frame failed.
+  bool renderFrame();
+
   void setFrame(int x, int y, int width, int height);
-
-  /// Post desired visibility (applied on the render thread).
   void setVisible(bool visible);
   bool isVisible() const;
 
  private:
-  void renderLoop(std::string assetsRoot, uint32_t width, uint32_t height,
-                  std::string title);
-
-  /// Apply any pending setFrame/setVisible under mutex; GLFW calls only.
-  void applyPendingWindowCommands();
-
-  struct Frame {
-    int x = 0, y = 0, w = 0, h = 0;
-  };
-
   std::unique_ptr<Application> app_;
-  std::mutex mutex_;
-  std::thread thread_;
-  std::atomic<bool> running_{false};
-  std::atomic<bool> stopRequested_{false};
-
-  // Desired state from the host (Swift). Render thread is the sole consumer
-  // that touches GLFW for these.
-  std::optional<Frame> pendingFrame_;
-  std::optional<bool> pendingVisible_;
-  std::atomic<bool> wantVisible_{true};
+  bool open_ = false;
+  bool visible_ = true;
 };

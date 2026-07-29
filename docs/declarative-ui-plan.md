@@ -97,10 +97,28 @@ mechanism, composes cleanly, no over-waking. With `VK_PRESENT_MODE_FIFO_KHR`
 present already blocks to vsync, so animation pacing is free — don't add a manual
 sleep on top or you get judder.
 
-**Single-threaded.** Yoga is not thread-safe per tree and nodes are `@MainActor`,
-so a plain `Bool` suffices for dirty tracking. A separate render thread would buy
-little and cost double-buffered draw-list arenas, thread-confinement discipline,
-and cross-thread ARC traffic.
+**Single-threaded.** ✅ Done — the render thread is gone. It cost more than the
+predicted double-buffering and ARC traffic: it held one mutex across a whole
+vsync-blocked `repaint()`, and `Engine::withApp` took that same mutex for every
+Swift call. Measured cost of a call that does nothing but acquire it:
+
+| | avg | p50 | max |
+|---|---|---|---|
+| with render thread | 43.33ms | 16.75ms | 200.09ms |
+| caller-driven | 0.001ms | 0.001ms | 0.003ms |
+
+A p50 of exactly one vsync interval is the signature. That single lock produced
+three separate symptoms: the resize deadlock (a fence left unsignalled while
+the lock was held hung the whole app), the `inputMu_` question, and visibly
+laggy hover. Swift now owns the loop and blocks in `glfwWaitEvents`, so idle
+costs nothing and input wakes the loop immediately instead of after a 16ms
+poll.
+
+**Frames in flight.** There is one fence and no overlap: the CPU waits for the
+GPU before recording the next frame. For UI that is close to free — GPU work
+is sub-millisecond, and with FIFO the wait *is* the frame pacer. It only starts
+to matter when GPU work grows enough that CPU/GPU overlap is worth having, so
+it is a scene-complexity concern rather than a UI one.
 
 The flags cascade — body → layout → emit → present — and are not one flag. A
 window resize needs layout but not body recompute; an opacity animation needs

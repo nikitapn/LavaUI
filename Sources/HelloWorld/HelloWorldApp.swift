@@ -131,6 +131,13 @@ struct HelloWorldApp {
         renderFrame()
 
         while editor.isOpen {
+            // Block until something happens. A focused caret needs a periodic
+            // wake to blink; otherwise sleep until input arrives. This replaces
+            // a fixed 16ms poll, which cost up to a frame of latency on every
+            // event for nothing.
+            let wake: Double = FocusManager.focusedID != nil ? CaretBlink.period / 4 : -1
+            editor.pumpEvents(timeout: wake)
+
             while let ev = editor.pollInputEvent() {
                 switch ev.kind {
                 case .mouseDown:
@@ -215,8 +222,8 @@ struct HelloWorldApp {
 
             if dirty {
                 renderFrame()
+                editor.renderFrame()
             }
-            Thread.sleep(forTimeInterval: 0.016)
         }
     }
 
