@@ -1008,9 +1008,9 @@ void Vulkan::createCommandBuffer()
     .sType              = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
     .commandPool        = commandPool_,
     .level              = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
-    .commandBufferCount = 1,
+    .commandBufferCount = kMaxFramesInFlight,
   };
-  VR(vkAllocateCommandBuffers(device_, &allocInfo, &commandBuffer_),
+  VR(vkAllocateCommandBuffers(device_, &allocInfo, commandBuffers_),
      "failed to allocate command buffers!");
 }
 
@@ -1018,19 +1018,24 @@ void Vulkan::createSyncObjects()
 {
   VkFenceCreateInfo fenceInfo {
     .sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO,
-    .flags = VK_FENCE_CREATE_SIGNALED_BIT,
+    .flags = VK_FENCE_CREATE_SIGNALED_BIT,  // first use of each slot is free
   };
-  VR(vkCreateFence(device_, &fenceInfo, nullptr, &inFlightFence_),
-     "vkCreateFence failed.");
+  for (uint32_t i = 0; i < kMaxFramesInFlight; ++i) {
+    VR(vkCreateFence(device_, &fenceInfo, nullptr, &inFlightFences_[i]),
+       "vkCreateFence failed.");
+  }
+  currentFrame_ = 0;
 }
 
 void Vulkan::createPresentSyncObjects()
 {
   VkSemaphoreCreateInfo semInfo {VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
-  VR(vkCreateSemaphore(device_, &semInfo, nullptr, &imageAvailableSemaphore_),
-     "imageAvailable semaphore");
-  VR(vkCreateSemaphore(device_, &semInfo, nullptr, &renderFinishedSemaphore_),
-     "renderFinished semaphore");
+  for (uint32_t i = 0; i < kMaxFramesInFlight; ++i) {
+    VR(vkCreateSemaphore(device_, &semInfo, nullptr, &imageAvailableSemaphores_[i]),
+       "imageAvailable semaphore");
+    VR(vkCreateSemaphore(device_, &semInfo, nullptr, &renderFinishedSemaphores_[i]),
+       "renderFinished semaphore");
+  }
 }
 
 void Vulkan::createWindowSurface()
@@ -1086,13 +1091,13 @@ void Vulkan::createSwapchain()
   vkGetPhysicalDeviceSurfacePresentModesKHR(
     physicalDevice_, surface_, &presentModeCount, presentModes.data());
 
-  VkPresentModeKHR presentMode = VK_PRESENT_MODE_FIFO_KHR; // always available
-  for (auto m : presentModes) {
-    if (m == VK_PRESENT_MODE_MAILBOX_KHR) {
-      presentMode = m;
-      break;
-    }
-  }
+  // FIFO = classic vsync (always available). Prefer this for UI: MAILBOX is
+  // also non-tearing but can present mid-compositor-frame and looks "flickery"
+  // under rapid full-frame redraws (selection drag, list spam-click). Never
+  // IMMEDIATE — that tears.
+  VkPresentModeKHR presentMode = VK_PRESENT_MODE_FIFO_KHR;
+  const char *presentName = "FIFO";
+  (void)presentModes; // listed for diagnostics only
 
   VkSwapchainCreateInfoKHR sci {
     .sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR,
@@ -1126,7 +1131,9 @@ void Vulkan::createSwapchain()
   }
 
   std::cout << "Swapchain: " << swapchainExtent_.width << "x"
-            << swapchainExtent_.height << " (" << actualCount << " images)\n";
+            << swapchainExtent_.height << " (" << actualCount
+            << " images, present=" << presentName
+            << ", framesInFlight=" << kMaxFramesInFlight << ")\n";
 }
 
 void Vulkan::cleanupSwapchain()
@@ -1365,18 +1372,20 @@ void Vulkan::cleanUp()
     imguiDescriptorPool_ = VK_NULL_HANDLE;
   }
 
-  if (imageAvailableSemaphore_ != VK_NULL_HANDLE) {
-    vkDestroySemaphore(device_, imageAvailableSemaphore_, nullptr);
-    imageAvailableSemaphore_ = VK_NULL_HANDLE;
-  }
-  if (renderFinishedSemaphore_ != VK_NULL_HANDLE) {
-    vkDestroySemaphore(device_, renderFinishedSemaphore_, nullptr);
-    renderFinishedSemaphore_ = VK_NULL_HANDLE;
-  }
-
-  if (inFlightFence_ != VK_NULL_HANDLE) {
-    vkDestroyFence(device_, inFlightFence_, nullptr);
-    inFlightFence_ = VK_NULL_HANDLE;
+  for (uint32_t i = 0; i < kMaxFramesInFlight; ++i) {
+    if (imageAvailableSemaphores_[i] != VK_NULL_HANDLE) {
+      vkDestroySemaphore(device_, imageAvailableSemaphores_[i], nullptr);
+      imageAvailableSemaphores_[i] = VK_NULL_HANDLE;
+    }
+    if (renderFinishedSemaphores_[i] != VK_NULL_HANDLE) {
+      vkDestroySemaphore(device_, renderFinishedSemaphores_[i], nullptr);
+      renderFinishedSemaphores_[i] = VK_NULL_HANDLE;
+    }
+    if (inFlightFences_[i] != VK_NULL_HANDLE) {
+      vkDestroyFence(device_, inFlightFences_[i], nullptr);
+      inFlightFences_[i] = VK_NULL_HANDLE;
+    }
+    commandBuffers_[i] = VK_NULL_HANDLE;  // freed with command pool
   }
 
   if (commandPool_ != VK_NULL_HANDLE) {
@@ -1507,26 +1516,51 @@ void Vulkan::cleanUp()
   windowed_ = false;
 }
 
+void Vulkan::waitForInFlightFrame()
+{
+  if (inFlightFences_[currentFrame_] == VK_NULL_HANDLE) return;
+  vkWaitForFences(device_, 1, &inFlightFences_[currentFrame_], VK_TRUE,
+                  UINT64_MAX);
+}
+
+void Vulkan::waitForAllFramesInFlight()
+{
+  // Gather non-null fences (init order may leave some unset during teardown).
+  VkFence fences[kMaxFramesInFlight];
+  uint32_t n = 0;
+  for (uint32_t i = 0; i < kMaxFramesInFlight; ++i) {
+    if (inFlightFences_[i] != VK_NULL_HANDLE) {
+      fences[n++] = inFlightFences_[i];
+    }
+  }
+  if (n == 0) return;
+  vkWaitForFences(device_, n, fences, VK_TRUE, UINT64_MAX);
+}
+
 void Vulkan::renderWithShadows(
   std::function<void(VkCommandBuffer)> shadowCallback,
   std::function<void(VkCommandBuffer, u32)> mainCallback)
 {
-  // Wait for the previous frame. The fence is reset only once we know this
-  // frame will actually submit: an early return between reset and submit
-  // leaves the fence unsignalled forever, so the *next* call blocks here on
-  // UINT64_MAX. During a drag-resize that is exactly what happened — acquire
-  // returns OUT_OF_DATE, we bail, and the render thread wedges while holding
-  // the engine mutex, which freezes every Swift call behind it.
-  vkWaitForFences(device_, 1, &inFlightFence_, VK_TRUE, UINT64_MAX);
+  // Wait only for *this* slot. The other slot may still be on the GPU — that
+  // is the whole point of frames-in-flight. Application should already have
+  // waited this slot before rewriting its host-visible buffers.
+  //
+  // Fence is reset only after we know we will submit: an early return with a
+  // reset fence leaves the slot stuck unsignalled forever.
+  waitForInFlightFrame();
+
+  const uint32_t frame = currentFrame_;
+  VkCommandBuffer cmd = commandBuffers_[frame];
+  VkFence fence = inFlightFences_[frame];
 
   uint32_t swapImageIndex = 0;
   if (windowed_) {
     VkResult acq = vkAcquireNextImageKHR(
-      device_, swapchain_, UINT64_MAX, imageAvailableSemaphore_,
+      device_, swapchain_, UINT64_MAX, imageAvailableSemaphores_[frame],
       VK_NULL_HANDLE, &swapImageIndex);
     if (acq == VK_ERROR_OUT_OF_DATE_KHR) {
-      // Swapchain is stale; ensureFramebufferSize() rebuilds it before the
-      // next frame. Fence is still signalled, so that frame proceeds.
+      // Swapchain is stale; ensureFramebufferSize() rebuilds it. Fence stays
+      // signalled so the next attempt on this slot is free.
       return;
     }
     if (acq != VK_SUCCESS && acq != VK_SUBOPTIMAL_KHR) {
@@ -1534,34 +1568,33 @@ void Vulkan::renderWithShadows(
     }
   }
 
-  vkResetFences(device_, 1, &inFlightFence_);
+  vkResetFences(device_, 1, &fence);
 
   const u32 imageIndex = 0; // offscreen framebuffer index (single target)
 
-  vkResetCommandBuffer(commandBuffer_, 0);
+  vkResetCommandBuffer(cmd, 0);
 
   VkCommandBufferBeginInfo beginInfo {
     VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO
   };
 
-  VR(vkBeginCommandBuffer(commandBuffer_, &beginInfo),
+  VR(vkBeginCommandBuffer(cmd, &beginInfo),
      "failed to begin recording command buffer!");
 
   // 1. Shadow Pass
-  beginShadowPass(commandBuffer_);
-  shadowCallback(commandBuffer_);
-  vkCmdEndRenderPass(commandBuffer_);
+  beginShadowPass(cmd);
+  shadowCallback(cmd);
+  vkCmdEndRenderPass(cmd);
 
   // 2. Main Pass → resolveImage_ (TRANSFER_SRC_OPTIMAL at end)
-  beginMainRenderPass(commandBuffer_, imageIndex);
-  mainCallback(commandBuffer_, imageIndex);
-  vkCmdEndRenderPass(commandBuffer_);
+  beginMainRenderPass(cmd, imageIndex);
+  mainCallback(cmd, imageIndex);
+  vkCmdEndRenderPass(cmd);
 
   if (windowed_) {
     // 3a. Blit offscreen resolve → swapchain image, then present.
     VkImage swapImage = swapchainImages_[swapImageIndex];
 
-    // Undefined → TRANSFER_DST for the swapchain image
     VkImageMemoryBarrier toDst {
       .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
       .srcAccessMask = 0,
@@ -1574,7 +1607,7 @@ void Vulkan::renderWithShadows(
       .subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1},
     };
     vkCmdPipelineBarrier(
-      commandBuffer_,
+      cmd,
       VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
       VK_PIPELINE_STAGE_TRANSFER_BIT,
       0, 0, nullptr, 0, nullptr, 1, &toDst);
@@ -1590,7 +1623,7 @@ void Vulkan::renderWithShadows(
                       static_cast<int32_t>(swapchainExtent_.height), 1}},
     };
     vkCmdBlitImage(
-      commandBuffer_,
+      cmd,
       resolveImage_, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
       swapImage, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
       1, &blit, VK_FILTER_LINEAR);
@@ -1607,7 +1640,7 @@ void Vulkan::renderWithShadows(
       .subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1},
     };
     vkCmdPipelineBarrier(
-      commandBuffer_,
+      cmd,
       VK_PIPELINE_STAGE_TRANSFER_BIT,
       VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
       0, 0, nullptr, 0, nullptr, 1, &toPresent);
@@ -1628,7 +1661,7 @@ void Vulkan::renderWithShadows(
       .imageExtent = {extent_.width, extent_.height, 1},
     };
 
-    vkCmdCopyImageToBuffer(commandBuffer_,
+    vkCmdCopyImageToBuffer(cmd,
                           resolveImage_,
                           VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                           stagingBuffer_,
@@ -1636,31 +1669,31 @@ void Vulkan::renderWithShadows(
                           &copyRegion);
   }
 
-  VR(vkEndCommandBuffer(commandBuffer_), "failed to record command buffer!");
+  VR(vkEndCommandBuffer(cmd), "failed to record command buffer!");
 
   VkSubmitInfo submitInfo {
     .sType              = VK_STRUCTURE_TYPE_SUBMIT_INFO,
     .commandBufferCount = 1,
-    .pCommandBuffers    = &commandBuffer_,
+    .pCommandBuffers    = &cmd,
   };
 
   VkPipelineStageFlags waitStage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
   if (windowed_) {
     submitInfo.waitSemaphoreCount = 1;
-    submitInfo.pWaitSemaphores = &imageAvailableSemaphore_;
+    submitInfo.pWaitSemaphores = &imageAvailableSemaphores_[frame];
     submitInfo.pWaitDstStageMask = &waitStage;
     submitInfo.signalSemaphoreCount = 1;
-    submitInfo.pSignalSemaphores = &renderFinishedSemaphore_;
+    submitInfo.pSignalSemaphores = &renderFinishedSemaphores_[frame];
   }
 
-  VR(vkQueueSubmit(graphicsQueue_, 1, &submitInfo, inFlightFence_),
+  VR(vkQueueSubmit(graphicsQueue_, 1, &submitInfo, fence),
      "failed to submit draw command buffer!");
 
   if (windowed_) {
     VkPresentInfoKHR presentInfo {
       .sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
       .waitSemaphoreCount = 1,
-      .pWaitSemaphores = &renderFinishedSemaphore_,
+      .pWaitSemaphores = &renderFinishedSemaphores_[frame],
       .swapchainCount = 1,
       .pSwapchains = &swapchain_,
       .pImageIndices = &swapImageIndex,
@@ -1670,11 +1703,13 @@ void Vulkan::renderWithShadows(
         pr != VK_ERROR_OUT_OF_DATE_KHR) {
       VR(pr, "vkQueuePresentKHR failed");
     }
-    // Do NOT deviceWaitIdle — fence wait at next frame start is enough.
   } else {
     // Offscreen readback needs the staging copy finished.
     vkDeviceWaitIdle(device_);
   }
+
+  // Next record/submit uses the other slot (CPU can overlap with this GPU work).
+  currentFrame_ = (currentFrame_ + 1) % kMaxFramesInFlight;
 }
 
 void Vulkan::readPixels(uint8_t *dst, size_t dstSize)

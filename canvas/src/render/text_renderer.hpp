@@ -48,6 +48,10 @@ public:
   /// font it was shaped with.
   int registerFont(const std::string &path, float pixelSize);
 
+  /// True if a glyph failed to pack and growAtlasIfNeeded() will replace the
+  /// atlas image. Caller should wait for all in-flight frames first.
+  bool atlasNeedsGrow() const;
+
   /// Doubles the atlas if a glyph failed to fit. Call between frames — it
   /// replaces the image view, so re-bind via atlasView() when it returns true.
   bool growAtlasIfNeeded();

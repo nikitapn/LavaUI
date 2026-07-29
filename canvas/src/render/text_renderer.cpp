@@ -446,6 +446,7 @@ bool TextRenderer::glyphQuad(uint32_t fontId, uint32_t glyphId, GlyphQuad &out) 
 int  TextRenderer::registerFont(const std::string &path, float pixelSize) {
   return impl_->registerFont(path, pixelSize);
 }
+bool TextRenderer::atlasNeedsGrow() const { return impl_->needsGrow_; }
 bool TextRenderer::growAtlasIfNeeded() { return impl_->growAtlasIfNeeded(); }
 uint32_t TextRenderer::atlasGeneration() const { return impl_->atlasGeneration_; }
 

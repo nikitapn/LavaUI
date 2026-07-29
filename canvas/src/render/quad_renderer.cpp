@@ -24,28 +24,37 @@ void QuadRenderer::init() {
   ensureBufferCapacity(kInitialVertexCapacity);
 }
 
+void QuadRenderer::destroyFrameBuffers(FrameResources &fr) {
+  VkDevice device = vulkan_.getDevice();
+  if (fr.vertexMapped != nullptr) {
+    vkUnmapMemory(device, fr.vertexBufferMemory);
+    fr.vertexMapped = nullptr;
+  }
+  if (fr.indexMapped != nullptr) {
+    vkUnmapMemory(device, fr.indexBufferMemory);
+    fr.indexMapped = nullptr;
+  }
+  if (fr.vertexBuffer != VK_NULL_HANDLE) {
+    vkDestroyBuffer(device, fr.vertexBuffer, nullptr);
+    vkFreeMemory(device, fr.vertexBufferMemory, nullptr);
+    fr.vertexBuffer = VK_NULL_HANDLE;
+    fr.vertexBufferMemory = VK_NULL_HANDLE;
+  }
+  if (fr.indexBuffer != VK_NULL_HANDLE) {
+    vkDestroyBuffer(device, fr.indexBuffer, nullptr);
+    vkFreeMemory(device, fr.indexBufferMemory, nullptr);
+    fr.indexBuffer = VK_NULL_HANDLE;
+    fr.indexBufferMemory = VK_NULL_HANDLE;
+  }
+  fr.capacity = 0;
+}
+
 void QuadRenderer::cleanUp() {
   VkDevice device = vulkan_.getDevice();
 
-  if (vertexMapped_ != nullptr) {
-    vkUnmapMemory(device, vertexBufferMemory_);
-    vertexMapped_ = nullptr;
-  }
-  if (indexMapped_ != nullptr) {
-    vkUnmapMemory(device, indexBufferMemory_);
-    indexMapped_ = nullptr;
-  }
-  if (vertexBuffer_ != VK_NULL_HANDLE) {
-    vkDestroyBuffer(device, vertexBuffer_, nullptr);
-    vkFreeMemory(device, vertexBufferMemory_, nullptr);
-    vertexBuffer_       = VK_NULL_HANDLE;
-    vertexBufferMemory_ = VK_NULL_HANDLE;
-  }
-  if (indexBuffer_ != VK_NULL_HANDLE) {
-    vkDestroyBuffer(device, indexBuffer_, nullptr);
-    vkFreeMemory(device, indexBufferMemory_, nullptr);
-    indexBuffer_       = VK_NULL_HANDLE;
-    indexBufferMemory_ = VK_NULL_HANDLE;
+  for (auto &fr : frames_) {
+    destroyFrameBuffers(fr);
+    fr.descriptorSets.clear();
   }
 
   if (whiteImageView_ != VK_NULL_HANDLE) {
@@ -67,6 +76,10 @@ void QuadRenderer::cleanUp() {
   pipelineLayout_.destroy(device);
   descriptorPool_.destroy(device);
   descriptorSetLayout_.destroy(device);
+}
+
+QuadRenderer::FrameResources &QuadRenderer::activeFrame() {
+  return frames_[activeFrameSlot_];
 }
 
 // ─── Setup ─────────────────────────────────────────────────────────────────
@@ -129,28 +142,37 @@ void QuadRenderer::setupDescriptors() {
                                  &descriptorSetLayout_),
      "Failed to create quad descriptor set layout");
 
+  const uint32_t totalSets = kMaxFramesInFlight * kMaxDescriptorSetsPerFrame;
   VkDescriptorPoolSize poolSize{
     .type            = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-    .descriptorCount = 1,
+    .descriptorCount = totalSets,
   };
   VkDescriptorPoolCreateInfo poolInfo{
     .sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
-    .maxSets       = 1,
+    .maxSets       = totalSets,
     .poolSizeCount = 1,
     .pPoolSizes    = &poolSize,
   };
   VR(vkCreateDescriptorPool(device, &poolInfo, nullptr, &descriptorPool_),
      "Failed to create quad descriptor pool");
 
-  VkDescriptorSetLayout    setLayout = descriptorSetLayout_;
-  VkDescriptorSetAllocateInfo allocInfo{
-    .sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
-    .descriptorPool     = descriptorPool_,
-    .descriptorSetCount = 1,
-    .pSetLayouts        = &setLayout,
-  };
-  VR(vkAllocateDescriptorSets(device, &allocInfo, &descriptorSet_),
-     "Failed to allocate quad descriptor set");
+  // One ring of sets per frame slot so in-flight frames never rewrite each
+  // other's descriptors.
+  for (uint32_t f = 0; f < kMaxFramesInFlight; ++f) {
+    auto &fr = frames_[f];
+    fr.descriptorSets.resize(kMaxDescriptorSetsPerFrame);
+    std::vector<VkDescriptorSetLayout> layouts(kMaxDescriptorSetsPerFrame,
+                                               descriptorSetLayout_);
+    VkDescriptorSetAllocateInfo allocInfo{
+      .sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
+      .descriptorPool     = descriptorPool_,
+      .descriptorSetCount = kMaxDescriptorSetsPerFrame,
+      .pSetLayouts        = layouts.data(),
+    };
+    VR(vkAllocateDescriptorSets(device, &allocInfo, fr.descriptorSets.data()),
+       "Failed to allocate quad descriptor sets");
+    fr.descriptorWriteIndex = 0;
+  }
 
   setAtlas(whiteImageView_, sampler_);
 }
@@ -159,21 +181,6 @@ void QuadRenderer::setAtlas(VkImageView view, VkSampler sampler) {
   glyphAtlasView_    = view;
   glyphAtlasSampler_ = sampler != VK_NULL_HANDLE ? sampler : sampler_;
   currentBatchTexture_ = glyphAtlasView_;
-
-  VkDescriptorImageInfo imageInfo{
-    .sampler     = glyphAtlasSampler_,
-    .imageView   = view,
-    .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-  };
-  VkWriteDescriptorSet write{
-    .sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-    .dstSet          = descriptorSet_,
-    .dstBinding      = 0,
-    .descriptorCount = 1,
-    .descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-    .pImageInfo      = &imageInfo,
-  };
-  vkUpdateDescriptorSets(vulkan_.getDevice(), 1, &write, 0, nullptr);
 }
 
 void QuadRenderer::createPipeline() {
@@ -328,51 +335,55 @@ void QuadRenderer::createPipeline() {
 }
 
 void QuadRenderer::ensureBufferCapacity(size_t vertexCount) {
-  if (vertexCount <= bufferCapacity_) {
+  auto &fr = activeFrame();
+  if (vertexCount <= fr.capacity) {
     return;
   }
 
-  VkDevice device = vulkan_.getDevice();
-  vkDeviceWaitIdle(device);
+  // Growing destroys mapped buffers; both slots may need the same capacity
+  // later, and any in-flight use of the *other* slot is unrelated — but this
+  // slot was waited on before begin(). Still wait all if we ever grow shared
+  // pipeline resources; for this buffer only this slot is rewritten.
+  vulkan_.waitForAllFramesInFlight();
 
-  size_t newCapacity = bufferCapacity_ == 0 ? kInitialVertexCapacity : bufferCapacity_;
+  size_t newCapacity = fr.capacity == 0 ? kInitialVertexCapacity : fr.capacity;
   while (newCapacity < vertexCount) {
     newCapacity *= 2;
   }
 
-  if (vertexMapped_ != nullptr) {
-    vkUnmapMemory(device, vertexBufferMemory_);
-    vkDestroyBuffer(device, vertexBuffer_, nullptr);
-    vkFreeMemory(device, vertexBufferMemory_, nullptr);
+  // Grow every frame slot to the same size so slot switches stay cheap.
+  for (uint32_t s = 0; s < kMaxFramesInFlight; ++s) {
+    auto &slot = frames_[s];
+    if (slot.capacity >= newCapacity) continue;
+
+    destroyFrameBuffers(slot);
+
+    const VkDeviceSize vertexBytes = newCapacity * sizeof(Vertex);
+    const VkDeviceSize indexBytes  = (newCapacity / 4) * 6 * sizeof(uint32_t);
+
+    vulkan_.createBuffer(vertexBytes, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+                         VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+                           VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                         slot.vertexBuffer, slot.vertexBufferMemory);
+    vulkan_.createBuffer(indexBytes, VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
+                         VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+                           VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                         slot.indexBuffer, slot.indexBufferMemory);
+
+    vkMapMemory(vulkan_.getDevice(), slot.vertexBufferMemory, 0, vertexBytes, 0,
+                &slot.vertexMapped);
+    vkMapMemory(vulkan_.getDevice(), slot.indexBufferMemory, 0, indexBytes, 0,
+                &slot.indexMapped);
+    slot.capacity = newCapacity;
   }
-  if (indexMapped_ != nullptr) {
-    vkUnmapMemory(device, indexBufferMemory_);
-    vkDestroyBuffer(device, indexBuffer_, nullptr);
-    vkFreeMemory(device, indexBufferMemory_, nullptr);
-  }
-
-  const VkDeviceSize vertexBytes = newCapacity * sizeof(Vertex);
-  // 6 indices per 4 vertices.
-  const VkDeviceSize indexBytes = (newCapacity / 4) * 6 * sizeof(uint32_t);
-
-  vulkan_.createBuffer(vertexBytes, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
-                       VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
-                         VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-                       vertexBuffer_, vertexBufferMemory_);
-  vulkan_.createBuffer(indexBytes, VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
-                       VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
-                         VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-                       indexBuffer_, indexBufferMemory_);
-
-  vkMapMemory(device, vertexBufferMemory_, 0, vertexBytes, 0, &vertexMapped_);
-  vkMapMemory(device, indexBufferMemory_, 0, indexBytes, 0, &indexMapped_);
-
-  bufferCapacity_ = newCapacity;
 }
 
 // ─── Frame recording ───────────────────────────────────────────────────────
 
-void QuadRenderer::begin(vec2 viewportSize) {
+void QuadRenderer::begin(vec2 viewportSize, uint32_t frameSlot) {
+  activeFrameSlot_ = frameSlot % kMaxFramesInFlight;
+  activeFrame().descriptorWriteIndex = 0;
+
   viewportSize_ = viewportSize;
   vertices_.clear();
   indices_.clear();
@@ -584,8 +595,11 @@ void QuadRenderer::end() {
   }
   ensureBufferCapacity(vertices_.size());
 
-  std::memcpy(vertexMapped_, vertices_.data(), vertices_.size() * sizeof(Vertex));
-  std::memcpy(indexMapped_, indices_.data(), indices_.size() * sizeof(uint32_t));
+  auto &fr = activeFrame();
+  std::memcpy(fr.vertexMapped, vertices_.data(),
+              vertices_.size() * sizeof(Vertex));
+  std::memcpy(fr.indexMapped, indices_.data(),
+              indices_.size() * sizeof(uint32_t));
 }
 
 void QuadRenderer::setViewTransform(float zoom, float panX, float panY)
@@ -599,6 +613,8 @@ void QuadRenderer::draw(VkCommandBuffer commandBuffer) {
   if (batches_.empty() || vertices_.empty()) {
     return;
   }
+
+  auto &fr = activeFrame();
 
   vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_);
 
@@ -625,9 +641,9 @@ void QuadRenderer::draw(VkCommandBuffer commandBuffer) {
   vkCmdSetViewport(commandBuffer, 0, 1, &viewport);
 
   VkDeviceSize offset = 0;
-  VkBuffer     vb     = vertexBuffer_;
+  VkBuffer     vb     = fr.vertexBuffer;
   vkCmdBindVertexBuffers(commandBuffer, 0, 1, &vb, &offset);
-  vkCmdBindIndexBuffer(commandBuffer, indexBuffer_, 0, VK_INDEX_TYPE_UINT32);
+  vkCmdBindIndexBuffer(commandBuffer, fr.indexBuffer, 0, VK_INDEX_TYPE_UINT32);
 
   // Scissors were recorded in layout space; map them through the same
   // center-zoom + pan used by the vertex shader.
@@ -645,7 +661,6 @@ void QuadRenderer::draw(VkCommandBuffer commandBuffer) {
     const int32_t iy0 = static_cast<int32_t>(std::floor(std::min(y0, y1)));
     const int32_t ix1 = static_cast<int32_t>(std::ceil(std::max(x0, x1)));
     const int32_t iy1 = static_cast<int32_t>(std::ceil(std::max(y0, y1)));
-    // Clip to framebuffer.
     const int32_t cx0 = std::max(0, ix0);
     const int32_t cy0 = std::max(0, iy0);
     const int32_t cx1 = std::min(static_cast<int32_t>(viewportSize_.x), ix1);
@@ -657,13 +672,21 @@ void QuadRenderer::draw(VkCommandBuffer commandBuffer) {
     };
   };
 
+  fr.descriptorWriteIndex = 0;
   VkImageView boundView = VK_NULL_HANDLE;
+  VkDescriptorSet boundSet = VK_NULL_HANDLE;
+
   auto bindTexture = [&](VkImageView view) {
     if (view == VK_NULL_HANDLE) {
       view = glyphAtlasView_ != VK_NULL_HANDLE ? glyphAtlasView_ : whiteImageView_;
     }
-    if (view == boundView) return;
+    if (view == boundView && boundSet != VK_NULL_HANDLE) return;
     boundView = view;
+
+    if (fr.descriptorWriteIndex >= kMaxDescriptorSetsPerFrame) {
+      fr.descriptorWriteIndex = kMaxDescriptorSetsPerFrame - 1;
+    }
+    VkDescriptorSet set = fr.descriptorSets[fr.descriptorWriteIndex++];
     VkSampler samp = (view == glyphAtlasView_ && glyphAtlasSampler_ != VK_NULL_HANDLE)
                        ? glyphAtlasSampler_
                        : sampler_;
@@ -674,7 +697,7 @@ void QuadRenderer::draw(VkCommandBuffer commandBuffer) {
     };
     VkWriteDescriptorSet write{
       .sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-      .dstSet          = descriptorSet_,
+      .dstSet          = set,
       .dstBinding      = 0,
       .descriptorCount = 1,
       .descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
@@ -682,12 +705,13 @@ void QuadRenderer::draw(VkCommandBuffer commandBuffer) {
     };
     vkUpdateDescriptorSets(vulkan_.getDevice(), 1, &write, 0, nullptr);
     vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                            pipelineLayout_, 0, 1, &descriptorSet_, 0, nullptr);
+                            pipelineLayout_, 0, 1, &set, 0, nullptr);
+    boundSet = set;
   };
 
   for (const auto &batch : batches_) {
     if (batch.scissor.extent.width == 0 || batch.scissor.extent.height == 0) {
-      continue;  // fully clipped away
+      continue;
     }
     VkRect2D sc = (z == 1.f && viewPanX_ == 0.f && viewPanY_ == 0.f)
                     ? batch.scissor

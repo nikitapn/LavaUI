@@ -550,8 +550,14 @@ struct Application::Impl
 
       clipStack.clear();
       if (useDrawList) {
-        // Grow before replay, never during: growAtlasIfNeeded replaces the
-        // image view QuadRenderer's descriptor points at.
+        // Wait for *this* frame slot only (2-in-flight). The other slot may
+        // still be on the GPU while we fill host-visible buffers for this one.
+        vulkan.waitForInFlightFrame();
+
+        // Atlas is shared — wait every slot before replacing the image.
+        if (textRenderer.atlasNeedsGrow()) {
+          vulkan.waitForAllFramesInFlight();
+        }
         if (textRenderer.growAtlasIfNeeded()) {
           quadRenderer.setAtlas(textRenderer.atlasView(),
                                 textRenderer.atlasSampler());
@@ -615,7 +621,8 @@ struct Application::Impl
   ///
   void replayDrawListUnified(float viewW, float viewH)
   {
-    quadRenderer.begin({viewW, viewH});
+    // Must match the slot waitForInFlightFrame() just freed / submit will use.
+    quadRenderer.begin({viewW, viewH}, vulkan.currentFrameSlot());
     for (const auto &cmd : drawCmds_) {
       switch (static_cast<canvas::DrawCommandKind>(cmd.kind)) {
       case canvas::DrawCommandKind::Rect:

@@ -77,8 +77,14 @@ class Vulkan
   std::vector<VkImageView> swapchainImageViews_;
   VkFormat   swapchainImageFormat_ = VK_FORMAT_B8G8R8A8_SRGB;
   VkExtent2D swapchainExtent_{};
-  VkSemaphore imageAvailableSemaphore_ = VK_NULL_HANDLE;
-  VkSemaphore renderFinishedSemaphore_ = VK_NULL_HANDLE;
+
+  /// CPU/GPU overlap: while the GPU draws slot N, the CPU builds slot N+1.
+  static constexpr uint32_t kMaxFramesInFlight = 2;
+  VkSemaphore imageAvailableSemaphores_[kMaxFramesInFlight]{};
+  VkSemaphore renderFinishedSemaphores_[kMaxFramesInFlight]{};
+  VkCommandBuffer commandBuffers_[kMaxFramesInFlight]{};
+  VkFence inFlightFences_[kMaxFramesInFlight]{};
+  uint32_t currentFrame_ = 0;
 
   // Offscreen render target (always used as the scene render target)
   VkFormat   colorFormat_;
@@ -87,9 +93,7 @@ class Vulkan
   VkPhysicalDeviceMemoryProperties deviceMemoryProperties_;
   VkRenderPass                     renderPass_ = VK_NULL_HANDLE;
   VkFramebuffer                    framebuffer_ = VK_NULL_HANDLE;
-  VkCommandBuffer                  commandBuffer_ = VK_NULL_HANDLE;
   VkCommandPool                    commandPool_ = VK_NULL_HANDLE;
-  VkFence                          inFlightFence_ = VK_NULL_HANDLE;
 
   // MSAA sampling stuff
   VkSampleCountFlagBits msaaSamples_ = VK_SAMPLE_COUNT_1_BIT;
@@ -221,6 +225,20 @@ class Vulkan
   void renderWithShadows(
     std::function<void(VkCommandBuffer)> shadowCallback,
     std::function<void(VkCommandBuffer, u32)> mainCallback);
+
+  /// Block until the *current* frame slot is free (GPU finished its last use).
+  /// With 2 frames in flight this does not wait for the other slot, so the CPU
+  /// can prepare frame N+1 while the GPU still paints N.
+  void waitForInFlightFrame();
+
+  /// Block until every in-flight frame is done. Required before destroying or
+  /// replacing shared GPU resources (glyph atlas grow, buffer recreate).
+  void waitForAllFramesInFlight();
+
+  /// Slot the next `waitForInFlightFrame` / record / submit will use (0 or 1).
+  uint32_t currentFrameSlot() const { return currentFrame_; }
+  static constexpr uint32_t framesInFlight() { return kMaxFramesInFlight; }
+
   void cleanUp();
 
   bool isWindowed() const { return windowed_; }

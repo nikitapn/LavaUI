@@ -14,6 +14,10 @@
 // the segment's local frame); glyphs sample the R8 atlas. Solid shapes sample a
 // reserved white texel from the same descriptor, so scissor changes are the
 // only thing that breaks a batch.
+//
+// Frames-in-flight: host-visible VB/IB and descriptor sets are duplicated per
+// frame slot (see Vulkan::kMaxFramesInFlight). begin()/end()/draw() use the
+// slot passed to begin(); Application waits that slot before writing.
 
 #include <cstdint>
 #include <vector>
@@ -53,9 +57,10 @@ class QuadRenderer {
   void setAtlas(VkImageView view, VkSampler sampler);
 
   // ─── Frame recording ─────────────────────────────────────────────────────
-  // begin() -> push*() in draw-list order -> end() -> draw().
+  // begin(slot) -> push*() in draw-list order -> end() -> draw().
+  // `frameSlot` must match Vulkan::currentFrameSlot() for this submit.
 
-  void begin(vec2 viewportSize);
+  void begin(vec2 viewportSize, uint32_t frameSlot = 0);
 
   /// Axis-aligned box. radius 0 gives a hard rect; w/2 == h/2 == radius gives a
   /// circle. Coordinates are the box's top-left corner and size, in pixels.
@@ -101,10 +106,24 @@ class QuadRenderer {
     VkImageView textureView = VK_NULL_HANDLE;  // null → use glyphAtlasView_
   };
 
+  /// Per-frame-slot GPU resources (not shared across in-flight frames).
+  struct FrameResources {
+    VkBuffer       vertexBuffer       = VK_NULL_HANDLE;
+    VkDeviceMemory vertexBufferMemory = VK_NULL_HANDLE;
+    void          *vertexMapped       = nullptr;
+    VkBuffer       indexBuffer        = VK_NULL_HANDLE;
+    VkDeviceMemory indexBufferMemory  = VK_NULL_HANDLE;
+    void          *indexMapped        = nullptr;
+    size_t         capacity           = 0;  // vertices
+    std::vector<VkDescriptorSet> descriptorSets;
+    uint32_t descriptorWriteIndex = 0;
+  };
+
   void createPipeline();
   void setupDescriptors();
   void createWhiteTexture();
   void ensureBufferCapacity(size_t vertexCount);
+  void destroyFrameBuffers(FrameResources &fr);
   void flushBatch();
   /// Switch the texture used by subsequent quads (flushes if it changes).
   void ensureBatchTexture(VkImageView view);
@@ -114,38 +133,31 @@ class QuadRenderer {
   void appendQuad(const vec2 corners[4], const vec2 locals[4], vec2 halfSize,
                   float radius, uint32_t rgba, Kind kind);
 
+  FrameResources &activeFrame();
+
   Vulkan &vulkan_;
 
   vk::Handle<VkPipeline>            pipeline_;
   vk::Handle<VkPipelineLayout>      pipelineLayout_;
   vk::Handle<VkDescriptorPool>      descriptorPool_;
   vk::Handle<VkDescriptorSetLayout> descriptorSetLayout_;
-  VkDescriptorSet                   descriptorSet_ = VK_NULL_HANDLE;  // freed with pool
 
-  // 1x1 opaque white, bound until setAtlas() supplies the glyph atlas. Solid
-  // shapes never sample it (the SDF path ignores the texture), but the
-  // descriptor must still point at something valid.
+  /// Sets per texture bind within one frame slot (never rewritten while bound).
+  static constexpr uint32_t kMaxDescriptorSetsPerFrame = 64;
+  static constexpr uint32_t kMaxFramesInFlight = 2;
+  FrameResources frames_[kMaxFramesInFlight]{};
+  uint32_t activeFrameSlot_ = 0;
+
+  // 1x1 opaque white, bound until setAtlas() supplies the glyph atlas.
   VkImage        whiteImage_       = VK_NULL_HANDLE;
   VkDeviceMemory whiteImageMemory_ = VK_NULL_HANDLE;
   VkImageView    whiteImageView_   = VK_NULL_HANDLE;
   VkSampler      sampler_          = VK_NULL_HANDLE;
-  /// Last view passed to setAtlas (glyph atlas). Default for non-image batches.
   VkImageView    glyphAtlasView_   = VK_NULL_HANDLE;
   VkSampler      glyphAtlasSampler_ = VK_NULL_HANDLE;
-  /// Texture for the open batch (glyphs/SDF use glyph atlas).
   VkImageView    currentBatchTexture_ = VK_NULL_HANDLE;
 
-  // Host-visible and rewritten every frame. Safe as a single buffer because
-  // Vulkan::drawFrame waits on inFlightFence_ before recording, so the previous
-  // frame has completed by the time we write.
-  VkBuffer       vertexBuffer_       = VK_NULL_HANDLE;
-  VkDeviceMemory vertexBufferMemory_ = VK_NULL_HANDLE;
-  void          *vertexMapped_       = nullptr;
-  VkBuffer       indexBuffer_        = VK_NULL_HANDLE;
-  VkDeviceMemory indexBufferMemory_  = VK_NULL_HANDLE;
-  void          *indexMapped_        = nullptr;
-  size_t         bufferCapacity_     = 0;  // in vertices
-
+  // CPU-side build arena (copied into frames_[slot] on end()).
   std::vector<Vertex>   vertices_;
   std::vector<uint32_t> indices_;
   std::vector<Batch>    batches_;
