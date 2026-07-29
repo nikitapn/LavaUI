@@ -46,6 +46,18 @@ swift test                             # 90 tests, no GPU needed
 Linux only today. `CxxCanvas`/`CYoga` are gated on it, and the engine is
 GLFW + Vulkan.
 
+The demo prints one line per rendered frame on stdout — idle frames print
+nothing, because idle frames are not rendered:
+
+```
+frame redraw body= 0.00 layout= 0.00 emit= 0.55 present= 0.73 total= 1.31 ms
+frame body   body= 1.41 layout= 5.88 emit= 0.65 present= 0.85 total= 8.83 ms
+```
+
+The first word is how much of body → layout → emit ran. Seeing `body` where
+a drag or an animation should be `redraw` means something over-invalidated,
+which is a lag bug before it is a throughput one. `LAVAUI_DEBUG=0` silences it.
+
 ## How it works
 
 **The view tree is retained; the draw list is immediate.**

@@ -54,6 +54,20 @@ struct HelloWorldApp {
         var lastPointer: (x: Float, y: Float) = (0, 0)
         var lastLoggedLayout: (w: Float, h: Float) = (0, 0)
 
+        // Per-frame timing, one line per rendered frame on stdout. Idle frames
+        // print nothing, because idle frames are not rendered.
+        //
+        // Kept because the cost that mattered was invisible: a slider drag
+        // spent 4.3ms in Yoga per pointer move and only *looked* like the knob
+        // lagging. No test catches that — the output was correct, just late.
+        // `layout` on a drag or an animation tick is the tell.
+        //
+        // Set LAVAUI_DEBUG=0 to silence without rebuilding.
+        let enableDebug = ProcessInfo.processInfo.environment["LAVAUI_DEBUG"] != "0"
+        var probeBody = 0.0
+        var probeLayout = 0.0
+        var probeEmit = 0.0
+
         func makeRoot() -> DemoExample {
             DemoExample(brandImage: brandImage)
         }
@@ -69,12 +83,22 @@ struct HelloWorldApp {
             }
             let bodyW = windowW
             let bodyH = max(1, windowH - menuH)
+            let t0 = enableDebug ? FrameScheduler.now() : 0
             if level >= .body {
                 host.setRoot(makeRoot())
             }
+            let t1 = enableDebug ? FrameScheduler.now() : 0
             let frames = level >= .layout
                 ? host.calculateLayout(width: bodyW, height: bodyH)
                 : host.lastLayoutFrames
+            let t2 = enableDebug ? FrameScheduler.now() : 0
+            if enableDebug {
+                probeBody = (t1 - t0) * 1000
+                probeLayout = (t2 - t1) * 1000
+                // Overwritten below unless the guard on `rootNode` returns
+                // first, in which case there was no emit to time.
+                probeEmit = 0
+            }
 
             if abs(bodyW - lastLoggedLayout.w) > 0.5 || abs(bodyH - lastLoggedLayout.h) > 0.5 {
                 lastLoggedLayout = (bodyW, bodyH)
@@ -106,6 +130,7 @@ struct HelloWorldApp {
             )
 
             editor.submitDrawList(drawList)
+            if enableDebug { probeEmit = (FrameScheduler.now() - t2) * 1000 }
             dirty = false
         }
 
@@ -218,8 +243,26 @@ struct HelloWorldApp {
             dirty = false
 
             if work > .none {
+                let p0 = enableDebug ? FrameScheduler.now() : 0
                 renderFrame(work)
+                let p1 = enableDebug ? FrameScheduler.now() : 0
                 editor.renderFrame()
+                if enableDebug {
+                    let now = FrameScheduler.now()
+                    let label = work.probeName
+                        .padding(toLength: 6, withPad: " ", startingAt: 0)
+                    let line = "frame \(label) " + String(
+                        format:
+                            "body=%5.2f layout=%5.2f emit=%5.2f "
+                            + "present=%5.2f total=%5.2f ms\n",
+                        probeBody, probeLayout, probeEmit,
+                        (now - p1) * 1000, (now - p0) * 1000
+                    )
+                    // Written rather than `print`: stdout is block-buffered
+                    // when redirected, so piping to a file would show nothing
+                    // until the app exits.
+                    FileHandle.standardOutput.write(Data(line.utf8))
+                }
             }
         }
     }
@@ -234,6 +277,18 @@ struct HelloWorldApp {
             .deletingLastPathComponent()
             .appendingPathComponent("canvas/.build.Debug")
             .path
+    }
+}
+
+extension InvalidationLevel {
+    /// How much of body → layout → emit this frame ran, for the timing line.
+    var probeName: String {
+        switch self {
+        case .none: return "none"
+        case .redraw: return "redraw"
+        case .layout: return "layout"
+        case .body: return "body"
+        }
     }
 }
 
