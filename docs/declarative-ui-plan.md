@@ -1011,3 +1011,56 @@ in mind.
   `.when(platforms: [.linux])`. Is macOS a real target or vestigial?
 - `ARCHITECTURE.md` is stale (describes Yoga + widget tree + hit test in C++).
   Rewrite or delete.
+
+---
+
+## Modifier spike — results
+
+Run with `swift run ModifierSpike` (`Sources/ModifierSpike/`, delete once the
+design lands).
+
+**Question:** can `.padding(8)` apply style to the child's *existing* node
+instead of introducing a Yoga box? Extra boxes are not free here — the
+`EitherView`/`ForEach` wrappers had to be removed in Phase 2 precisely because
+an interposed flex container swallowed `flexGrow` and forced a direction on its
+children. A chain like `.padding().background().cornerRadius()` would add three
+such boxes per view.
+
+| Case | Result |
+|---|---|
+| Three chained modifiers on a single-node view | **1 box** — all styles land on the existing node |
+| Modifier on a fragment (`TupleView`, `ForEach`) | 1 wrapper box, unavoidable |
+| `flexGrow` on a styled single node | survives |
+| `flexGrow` through a materialised wrapper | survives **only** because the wrapper forwards it explicitly |
+
+**Verdict: hybrid.** Apply style to the child when it is a single box;
+materialise one wrapper only for fragments, and have that wrapper forward flex
+properties from its children. The common case costs nothing, and the one case
+that costs a box is the one where there is genuinely nothing to style.
+
+### The tradeoff worth accepting deliberately
+
+Collapsing style onto one node means **modifier order is not expressible**.
+In SwiftUI these differ:
+
+```swift
+Text("x").padding(8).background(.red)   // background covers the padding
+Text("x").background(.red).padding(8)   // background covers only the text
+```
+
+With one node carrying both `padding` and `fill`, only the first is
+representable — which is also what people want most of the time. SwiftUI buys
+ordering by *always* wrapping, and pays a box per modifier for it.
+
+Recommendation: take the zero-cost version, and if an order-sensitive case
+turns up later, let that specific modifier opt into materialising a box. Do not
+pay for ordering everywhere on the chance it is needed somewhere.
+
+### Also settled by the spike
+
+- Style merging must be per-field (`padding ?? inherited.padding`), not
+  whole-struct replacement, or the last modifier in a chain silently clears the
+  others.
+- Any materialised wrapper must forward `flexGrow`/`flexShrink` from what it
+  wraps. This is the exact Phase 2 regression, and it will return the moment a
+  wrapper is added without it.

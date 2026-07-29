@@ -39,6 +39,26 @@
       "target": "Phase0Spikes",
       "configuration": "release",
       "preLaunchTask": "swift: Build Release Phase0Spikes"
+    },
+    {
+      "type": "swift",
+      "request": "launch",
+      "args": [],
+      "cwd": "${workspaceFolder:HelloWorld}",
+      "name": "Debug ModifierSpike",
+      "target": "ModifierSpike",
+      "configuration": "debug",
+      "preLaunchTask": "swift: Build Debug ModifierSpike"
+    },
+    {
+      "type": "swift",
+      "request": "launch",
+      "args": [],
+      "cwd": "${workspaceFolder:HelloWorld}",
+      "name": "Release ModifierSpike",
+      "target": "ModifierSpike",
+      "configuration": "release",
+      "preLaunchTask": "swift: Build Release ModifierSpike"
     }
   ]
 }

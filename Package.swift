@@ -24,6 +24,15 @@ let package = Package(
         // beyond String. Kept a separate target so "testable headlessly" is
         // enforced by the build graph rather than by discipline.
         .target(name: "LavaText"),
+        // Throwaway modifier spike; delete once the design is chosen.
+        .executableTarget(
+            name: "ModifierSpike",
+            dependencies: ["LavaUI"],
+            swiftSettings: [
+                .interoperabilityMode(.Cxx),
+                .unsafeFlags(["-Xcc", "-std=c++23"]),
+            ]
+        ),
 
         .target(
             name: "LavaUI",
