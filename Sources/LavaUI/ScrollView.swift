@@ -92,6 +92,10 @@ final class ScrollNode: YogaBoxNode {
 
     override var childNodes: [any AnyViewNode] { [contentNode] }
 
+    override var childOffset: (x: Float, y: Float) {
+        axis == .horizontal ? (scrollOffset, 0) : (0, scrollOffset)
+    }
+
     func updateContent(_ node: any AnyViewNode) {
         contentNode = node
         relink()

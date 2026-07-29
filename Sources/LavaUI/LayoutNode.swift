@@ -80,6 +80,15 @@ class YogaBoxNode: AnyViewNode {
     /// Set by any box that accepts the wheel.
     var isScrollable = false
 
+    /// How far this node's children are drawn from its own origin.
+    ///
+    /// A scroll container shifts its content; every traversal — emit, hit test,
+    /// hover, frame collection — has to apply the *same* shift or they disagree.
+    /// They did disagree once: the emitter offset children while the hit walks
+    /// did not, so clicks in a scrolled view landed off by the scroll amount.
+    /// Overriding this in one place is what keeps them in step.
+    var childOffset: (x: Float, y: Float) { (0, 0) }
+
     var yoga: YGNodeRef? { yogaStorage }
     var childNodes: [any AnyViewNode] { [] }
 
@@ -133,7 +142,8 @@ class YogaBoxNode: AnyViewNode {
         let w = YGNodeLayoutGetWidth(yogaStorage)
         let h = YGNodeLayoutGetHeight(yogaStorage)
         frames.append(LayoutFrame(label: label, x: x, y: y, w: w, h: h))
-        collectChildFrames(originX: x, originY: y, into: &frames)
+        let shift = childOffset
+        collectChildFrames(originX: x - shift.x, originY: y - shift.y, into: &frames)
     }
 
     func collectChildFrames(originX: Float, originY: Float, into frames: inout [LayoutFrame]) {}
@@ -845,7 +855,10 @@ public final class LayoutHost {
             let nw = YGNodeLayoutGetWidth(yref)
             let nh = YGNodeLayoutGetHeight(yref)
             for child in node.childNodes.reversed() {
-                if let h = hoverWalk(child, x: x, y: y, ox: nx, oy: ny) { return h }
+                let shift = box.childOffset
+                if let h = hoverWalk(
+                    child, x: x, y: y, ox: nx - shift.x, oy: ny - shift.y
+                ) { return h }
             }
             // Scrollables count as hover targets too: the wheel routes by what
             // is under the pointer, and neither an editor nor a ScrollView has
@@ -879,7 +892,10 @@ public final class LayoutHost {
             let nh = YGNodeLayoutGetHeight(yref)
             // Children front-to-back.
             for child in node.childNodes.reversed() {
-                if let h = hitWalk(child, x: x, y: y, ox: nx, oy: ny) { return h }
+                let shift = box.childOffset
+                if let h = hitWalk(
+                    child, x: x, y: y, ox: nx - shift.x, oy: ny - shift.y
+                ) { return h }
             }
             if let leaf = node as? LeafNode,
                x >= nx, x < nx + nw, y >= ny, y < ny + nh

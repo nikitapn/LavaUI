@@ -157,10 +157,9 @@ public final class DrawList {
                 scroll.scrollBy(0)
 
                 pushClip(x: x, y: y, w: w, h: h)
-                let dx = scroll.axis == .horizontal ? scroll.scrollOffset : 0
-                let dy = scroll.axis == .vertical ? scroll.scrollOffset : 0
+                let shift = scroll.childOffset
                 for c in scroll.childNodes {
-                    emitNode(c, ox: x - dx, oy: y - dy, vpW: vpW, vpH: vpH)
+                    emitNode(c, ox: x - shift.x, oy: y - shift.y, vpW: vpW, vpH: vpH)
                 }
                 popClip()
 
