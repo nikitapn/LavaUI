@@ -1,8 +1,8 @@
-#include <pch.hpp>
-
 #include <array>
+#include <mutex>
 #include <vector>
 #include <iostream>
+#include <cstring>
 #include <stdexcept>
 #include <unordered_map>
 
@@ -155,8 +155,6 @@ struct TextRenderer::Impl {
 
 
   void createAtlasTexture() {
-    VkDevice device = vulkan_.getDevice();
-
     // Create atlas texture
     vulkan_.createImage(
       atlasWidth_,

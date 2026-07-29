@@ -357,8 +357,8 @@ frames from `YGNodeCalculateLayout`, printed to stderr. No rendering.
 into the same list (window coords + host origin). Raw `pollInputEvent` + Swift
 hit-test drives `Text.onClick`.
 
-**C++:** `canvas::DrawCommand` (32B POD), `submitDrawList`, `pollInputEvent`,
-`setDiagramViewport`. Repaint executes the list (rects/circles/lines/text).
+**C++:** `canvas::DrawCommand` (32B POD), `submitDrawList`, `pollInputEvent`.
+Repaint executes the list (rects/circles/lines/text).
 
 **Still open:** glyph-level text (Phase 4), full clip stack in Vulkan, engine
 API collapse (delete retained-shape methods), frame-idle gate (no spin sleep).

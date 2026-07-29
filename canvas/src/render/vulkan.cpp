@@ -1,11 +1,10 @@
-#include <pch.hpp>
-
 #include <set>
 #include <cassert>
 #include <cstring>
 #include <iostream>
 #include <stdexcept>
 #include <algorithm>
+#include <filesystem>
 
 #define BOOST_STACKTRACE_DYN_LINK
 #define BOOST_STACKTRACE_USE_BACKTRACE
@@ -17,8 +16,10 @@
 #define GLFW_INCLUDE_VULKAN
 #include <GLFW/glfw3.h>
 
-#include "imgui_impl_vulkan.h"
-#include "imgui_impl_glfw.h"
+#ifdef INCLUDE_IMGUI
+# include "imgui_impl_vulkan.h"
+# include "imgui_impl_glfw.h"
+#endif
 
 #include "util/util.hpp"
 #include "render/shaders.hpp"
@@ -307,7 +308,7 @@ void Vulkan::createLogicalDevice()
     physicalDevice_, &count, properties.data());
 
   // Prefer a queue family that can do both graphics and present.
-  graphicsAndPresentationQueueFamilyIdx_ = -1;
+  graphicsAndPresentationQueueFamilyIdx_ = std::numeric_limits<u32>::max();
 
   for (uint32_t i = 0; i < count; i++) {
     if ((properties[i].queueFlags & VK_QUEUE_GRAPHICS_BIT) == 0) continue;
@@ -321,7 +322,7 @@ void Vulkan::createLogicalDevice()
     break;
   }
 
-  if (graphicsAndPresentationQueueFamilyIdx_ == -1) {
+  if (graphicsAndPresentationQueueFamilyIdx_ == std::numeric_limits<u32>::max()) {
     throw std::runtime_error("No suitable queue was found");
   }
 
@@ -495,7 +496,7 @@ std::tuple<VkBuffer, VkDeviceMemory> Vulkan::createUniformBuffer(
     uniformBuffer,
     uniformBufferMemory);
 
-  return MT(uniformBuffer, uniformBufferMemory);
+  return std::make_tuple(uniformBuffer, uniformBufferMemory);
 }
 
 void Vulkan::createImage(
@@ -901,10 +902,6 @@ void Vulkan::createRenderPass()
     },
   };
 
-  auto &colorAttachment        = attachments[0];
-  auto &depthAttachment        = attachments[1];
-  auto &colorAttachmentResolve = attachments[2];
-
   VkAttachmentReference colorAttachmentRef {
     .attachment = 0,
     .layout     = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
@@ -976,7 +973,7 @@ void Vulkan::createFramebuffer()
 
 void Vulkan::createCommandPool()
 {
-  assert(graphicsAndPresentationQueueFamilyIdx_ != -1 && "queue family index not set");
+  assert(graphicsAndPresentationQueueFamilyIdx_ != std::numeric_limits<u32>::max() && "queue family index not set");
   VkCommandPoolCreateInfo poolInfo {
     .sType            = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
     .flags            = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT,
@@ -1153,7 +1150,7 @@ void Vulkan::beginMainRenderPass(
   VkCommandBuffer commandBuffer, u32 imageIndex)
 {
   std::array<VkClearValue, 2> clearValues {};
-  clearValues[0].color = {0.0f, 0.0f, 0.0f, 1.0f};
+  clearValues[0].color = {{0.0f, 0.0f, 0.0f, 1.0f}};
   clearValues[1].depthStencil = {1.0f, 0};
 
   VkRenderPassBeginInfo renderPassInfo {
@@ -1358,6 +1355,7 @@ void Vulkan::cleanUp()
     vkDeviceWaitIdle(device_);
   }
 
+#ifdef INCLUDE_IMGUI
   if (imguiInitialized_) {
     if (windowed_) {
       ImGui_ImplGlfw_Shutdown();
@@ -1371,6 +1369,7 @@ void Vulkan::cleanUp()
     vkDestroyDescriptorPool(device_, imguiDescriptorPool_, nullptr);
     imguiDescriptorPool_ = VK_NULL_HANDLE;
   }
+#endif
 
   for (uint32_t i = 0; i < kMaxFramesInFlight; ++i) {
     if (imageAvailableSemaphores_[i] != VK_NULL_HANDLE) {
@@ -1852,6 +1851,7 @@ void Vulkan::dispatchCompute(VkCommandBuffer commandBuffer, VkPipeline pipeline,
   vkCmdDispatch(commandBuffer, groupCountX, groupCountY, groupCountZ);
 }
 
+#ifdef INCLUDE_IMGUI
 void Vulkan::initImGui()
 {
   // Setup ImGui context
@@ -1934,6 +1934,7 @@ void Vulkan::initImGui()
   // install_callbacks=true). See Application::initWithWindow.
   imguiInitialized_ = true;
 }
+#endif
 
 void Vulkan::init(const char *applicationName, int width, int height)
 {
@@ -1960,7 +1961,9 @@ void Vulkan::init(const char *applicationName, int width, int height)
   createFramebuffer();
   createCommandBuffer();
   createSyncObjects();
+#ifdef INCLUDE_IMGUI
   initImGui();
+#endif
 }
 
 void Vulkan::initWithWindow(
@@ -2022,7 +2025,9 @@ void Vulkan::initWithWindow(
   createCommandBuffer();
   createSyncObjects();
   createPresentSyncObjects();
+#ifdef INCLUDE_IMGUI
   initImGui();
+#endif
 }
 
 bool Vulkan::windowShouldClose() const
@@ -2030,12 +2035,14 @@ bool Vulkan::windowShouldClose() const
   return window_ && glfwWindowShouldClose(window_);
 }
 
+#ifdef INCLUDE_IMGUI
 void Vulkan::initImGuiGlfwBackend()
 {
   if (windowed_ && window_ && imguiInitialized_) {
     ImGui_ImplGlfw_InitForVulkan(window_, true);
   }
 }
+#endif
 
 namespace {
 

@@ -27,35 +27,6 @@ glfw_dep     = dependency('glfw3')
 # Optional: X11 native hints so the canvas can skip the taskbar/dock.
 x11_dep     = dependency('x11', required: false)
 
-# ——— ImGui (built from vendored source) ———
-# Vulkan render backend + optional GLFW platform backend for the windowed
-# canvas (two-window embed: Swift chrome + GLFW canvas).
-imgui_inc = include_directories(
-  'third-party/imgui',
-  'third-party/imgui/backends',
-)
-
-imgui_lib = static_library('imgui',
-  sources: [
-    'third-party/imgui/imgui.cpp',
-    'third-party/imgui/imgui_draw.cpp',
-    'third-party/imgui/imgui_widgets.cpp',
-    'third-party/imgui/imgui_tables.cpp',
-    'third-party/imgui/imgui_demo.cpp',
-    'third-party/imgui/backends/imgui_impl_vulkan.cpp',
-    'third-party/imgui/backends/imgui_impl_glfw.cpp',
-  ],
-  include_directories: imgui_inc,
-  dependencies: [vulkan_dep, glfw_dep],
-  cpp_args: ['-DIMGUI_IMPL_VULKAN_LOADER'],
-)
-
-imgui_dep = declare_dependency(
-  link_with: imgui_lib,
-  include_directories: imgui_inc,
-  compile_args: ['-DIMGUI_IMPL_VULKAN_LOADER'],
-)
-
 # ——— Shaders (compiled to <builddir>/shaders/) ———
 subdir('shaders')
 
@@ -99,8 +70,6 @@ engine_sources = [
   'src/render/text_renderer.cpp',
   'src/render/font.cpp',
   'src/render/quad_renderer.cpp',
-  'src/render/text_widget.cpp',
-  'src/shell/layout.cpp',
   'src/window/canvas_window.cpp',
   'src/window/window_platform.cpp',
   'src/util/util.cpp',
@@ -161,7 +130,7 @@ yoga_dep = declare_dependency(
   include_directories: yoga_inc,
 )
 
-canvas_deps = [vulkan_dep, freetype_dep, harfbuzz_dep, glfw_dep, imgui_dep, yoga_dep]
+canvas_deps = [vulkan_dep, freetype_dep, harfbuzz_dep, glfw_dep, yoga_dep]
 if x11_dep.found()
   canvas_deps += [x11_dep]
 endif
@@ -175,7 +144,6 @@ canvas_lib = shared_library('canvas',
   dependencies: canvas_deps,
   cpp_args: common_cpp_args,
   link_args: common_link_args,
-  cpp_pch: 'src/pch.hpp',
   install: true,
 )
 
@@ -195,5 +163,4 @@ exe = executable('2d',
   dependencies: [canvas_dep],
   cpp_args: common_cpp_args,
   link_args: common_link_args,
-  cpp_pch: 'src/pch.hpp',
 )

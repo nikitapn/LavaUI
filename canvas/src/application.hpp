@@ -6,10 +6,7 @@
 #include <string>
 #include <vector>
 
-#include "render/text_widget.hpp"
 #include "render/draw_command.hpp"
-#include "shell/layout.hpp"
-#include "shell/model.hpp"
 #include "util/result.hpp"
 
 class Application {
@@ -40,15 +37,10 @@ public:
   // Windowed: blit to swapchain and present. Returns false on error.
   bool repaint();
 
-  /// Diagram panel rect in window pixels (from Yoga layout).
-  shell::Rect diagramViewport() const;
-
-
   /// Immediate draw list from Swift (copied). See Engine::submitDrawList.
   void submitDrawList(const canvas::DrawCommand *cmds, size_t cmdCount,
                       const canvas::GlyphInstance *glyphs, size_t glyphCount);
   bool pollInputEvent(canvas::InputEvent &out);
-  void setDiagramViewport(float x, float y, float w, float h);
 
   /// Current swapchain / framebuffer size in pixels (after last ensure).
   void framebufferSize(float &outW, float &outH) const;

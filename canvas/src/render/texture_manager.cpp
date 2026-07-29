@@ -1,5 +1,3 @@
-#include <pch.hpp>
-
 #include <iostream>
 #include <cstring>
 

@@ -1,7 +1,6 @@
 #include "bridge/canvas_engine.hpp"
 
 #include "application.hpp"
-#include "render/text_widget.hpp"
 #include "window/canvas_window.hpp"
 
 #include <mutex>
@@ -14,14 +13,6 @@ struct Engine::Impl {
   enum class Mode { None, Offscreen, Windowed } mode = Mode::None;
   std::unique_ptr<Application> offscreen;
   std::unique_ptr<CanvasWindowHost> window;
-
-  // Staging buffers for the incremental builders below — exist purely so
-  // Swift (which as of this toolchain can't construct std::vector<T>
-  // itself; see the note on Editor.swift) can build these up one call at a
-  // time instead of handing over a whole std::vector.
-  std::vector<TreeItem> pendingTree;
-  std::vector<PropertyItem> pendingProperties;
-  std::unordered_map<int, std::vector<TextHighlightRule>> highlightRules;
 
   Application *app()
   {
@@ -134,22 +125,6 @@ bool Engine::isWindowVisible() const
   return impl_->window ? impl_->window->isVisible() : false;
 }
 
-void Engine::clearProjectTreeBuilder() { impl_->pendingTree.clear(); }
-
-void Engine::addTreeItem(const std::string &id, const std::string &label,
-                         int depth, bool selected)
-{
-  impl_->pendingTree.push_back(TreeItem{id, label, depth, selected});
-}
-
-
-
-
-
-
-
-
-
 bool Engine::repaint()
 {
   return impl_->withApp([](Application &app) { return app.repaint(); });
@@ -158,12 +133,6 @@ bool Engine::repaint()
 void Engine::readPixels(uint8_t *dst, size_t dstSize)
 {
   impl_->withApp([&](Application &app) { app.readPixels(dst, dstSize); });
-}
-
-shell::Rect Engine::diagramViewport() const
-{
-  return const_cast<Engine *>(this)->impl_->withApp(
-    [](Application &app) { return app.diagramViewport(); });
 }
 
 void Engine::submitDrawList(const DrawCommand *cmds, size_t cmdCount,
@@ -192,13 +161,6 @@ void Engine::setViewTransform(float zoom, float panX, float panY)
 {
   impl_->withApp([&](Application &app) {
     app.setViewTransform(zoom, panX, panY);
-  });
-}
-
-void Engine::setDiagramViewport(float x, float y, float w, float h)
-{
-  impl_->withApp([&](Application &app) {
-    app.setDiagramViewport(x, y, w, h);
   });
 }
 

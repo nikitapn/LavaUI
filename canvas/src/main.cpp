@@ -1,5 +1,3 @@
-#include "pch.hpp"
-
 #include "application.hpp"
 
 #define STB_IMAGE_WRITE_IMPLEMENTATION

@@ -1,8 +1,7 @@
-#include <pch.hpp>
-
 #include <array>
 #include <cmath>
 #include <cstring>
+#include <mutex>
 
 #include "render/quad_renderer.hpp"
 #include "render/shaders.hpp"

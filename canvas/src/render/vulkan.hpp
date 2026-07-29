@@ -129,9 +129,11 @@ class Vulkan
   VkFramebuffer  shadowFramebuffer_ = VK_NULL_HANDLE;
   uint32_t       shadowMapSize_ = 2048; // Shadow map resolution
 
+#ifdef INCLUDE_IMGUI
   // ImGui
   VkDescriptorPool imguiDescriptorPool_ = VK_NULL_HANDLE;
   bool             imguiInitialized_ = false;
+#endif
 
   // Step 0: Enable validation layers
   static VKAPI_ATTR VkBool32 VKAPI_CALL
@@ -207,7 +209,9 @@ class Vulkan
   void createDescriptorPool();
   void createDescriptorSet();
   void createCommandBuffer();
+#ifdef INCLUDE_IMGUI
   void initImGui();
+#endif
 
   void createSwapchain();
   void cleanupSwapchain();
@@ -245,8 +249,10 @@ class Vulkan
   GLFWwindow *window() const { return window_; }
   bool windowShouldClose() const;
 
+#ifdef INCLUDE_IMGUI
   /// Call after installing app-level GLFW callbacks so ImGui can chain.
   void initImGuiGlfwBackend();
+#endif
 
   /// Move/resize the GLFW window (screen coordinates). If size changes,
   /// recreates swapchain + offscreen targets to match the framebuffer.

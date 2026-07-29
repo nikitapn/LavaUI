@@ -1,5 +1,3 @@
-#include <pch.hpp>
-
 #include "cout_ext.hpp"
 
 #ifdef _WIN32

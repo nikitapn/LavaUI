@@ -73,10 +73,6 @@ public final class Editor: @unchecked Sendable {
         }
     }
 
-    public func setDiagramViewport(x: Float, y: Float, w: Float, h: Float) {
-        engine.setDiagramViewport(x, y, w, h)
-    }
-
     /// Install face for draw-list text (must match UIFont used for measure).
     @discardableResult
     public func loadFont(path: String, pixelSize: Float) -> Bool {

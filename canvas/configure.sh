@@ -1,7 +1,8 @@
 
 #!/bin/bash
 
-. ./common.shi
+BUILD_TYPE=${BUILD_TYPE:-Debug}
+BUILD_DIR=".build.${BUILD_TYPE}"
 
 # Map common CMake build type names to Meson equivalents
 case "$BUILD_TYPE" in

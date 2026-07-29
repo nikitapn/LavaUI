@@ -105,11 +105,6 @@ struct HelloWorldApp {
                 viewportH: windowH
             )
 
-            // Demo has a DiagramHost but no FBD scene — leave the host fill as-is.
-            if let dh = host.diagramHostFrame() {
-                editor.setDiagramViewport(x: dh.x, y: dh.y + menuH, w: dh.w, h: dh.h)
-            }
-
             editor.submitDrawList(drawList)
             dirty = false
         }

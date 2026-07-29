@@ -1,9 +1,9 @@
-#include <pch.hpp>
 
 #include <chrono>
 #include <format>
 #include <algorithm>
 #include <optional>
+#include <filesystem>
 
 #include "application.hpp"
 
@@ -14,13 +14,7 @@
 #include "render/quad_renderer.hpp"
 #include "render/texture_manager.hpp"
 
-#include "imgui.h"
-#include "imgui_impl_vulkan.h"
-#include "imgui_impl_glfw.h"
-#include "render/text_widget.hpp"
 #include "render/draw_command.hpp"
-#include "shell/layout.hpp"
-#include "shell/model.hpp"
 
 #include <deque>
 #include <mutex>
@@ -45,6 +39,9 @@ public:
 
 struct Application::Impl
 {
+  const float width;
+  const float height;
+
   Vulkan           vulkan;
   TextRenderer     textRenderer;
   QuadRenderer     quadRenderer;
@@ -67,17 +64,6 @@ struct Application::Impl
   bool renderNormalsDebug   = false;
   bool renderWireframeDebug = false;
 
-  // Camera control
-  float moveSpeed = 100.0f;
-
-  const float width;
-  const float height;
-
-  float  normalDebugLength = 15.0f;
-  int    normalDebugSampleStride = 1;
-  ImVec4 normalDebugColor = ImVec4(0.0f, 0.6f, 1.0f, 1.0f);
-  bool   showImGuiDemo = false;
-
   // Input state tracking
   struct InputState {
     bool keys[KEY_LAST] = {false};
@@ -94,7 +80,7 @@ struct Application::Impl
   mat4 screenProjection_{1.0f};
 
   // Wall-clock time of the last repaint() call, used only to compute a
-  // deltaTime for the FPS counter/Dear ImGui (nullopt on the first call).
+  // deltaTime for the FPS counter (nullopt on the first call).
   std::optional<std::chrono::steady_clock::time_point> lastRepaintTime;
 
  public:
@@ -116,7 +102,6 @@ struct Application::Impl
   // Instance method to handle key input
   void handleKeyInput(int key, int scancode, int action, int mods)
   {
-    ImGuiIO& io = ImGui::GetIO();
     // Update key state tracking
     if (key >= 0 && key < KEY_LAST) {
       if (action == ACTION_PRESS) {
@@ -125,17 +110,11 @@ struct Application::Impl
         inputState.keys[key] = false;
       }
     }
-
-    if (io.WantCaptureKeyboard) {
-      return;
-    }
-
   }
 
   // Mouse button handler
   void handleMouseButton(int button, int action, int mods)
   {
-    ImGuiIO& io = ImGui::GetIO();
     if (button >= 0 && button < MOUSE_BUTTON_LAST) {
       if (action == ACTION_PRESS) {
         inputState.mouseButtons[button] = true;
@@ -143,35 +122,18 @@ struct Application::Impl
         inputState.mouseButtons[button] = false;
       }
     }
-
-    if (io.WantCaptureMouse) {
-      return;
-    }
   }
 
   // Mouse movement handler  
   void handleMouseMove(double xpos, double ypos)
   {
-    ImGuiIO& io = ImGui::GetIO();
     inputState.mouseX = xpos;
     inputState.mouseY = ypos;
-
-    if (io.WantCaptureMouse || !inputState.mouseCaptured) {
-      return;
-    }
-
   }
 
   // Scroll handler (for zoom/FOV)
   void handleScroll(double xoffset, double yoffset)
   {
-    ImGuiIO& io = ImGui::GetIO();
-    if (io.WantCaptureMouse)
-      return;
-
-    // Camera move speed adjustment
-    const float sensitivity = inputState.keys[KEY_LEFT_ALT] ? 50.f : 5.f;
-    moveSpeed = std::clamp(moveSpeed + static_cast<float>(yoffset) * sensitivity, 1.f, 1000.f);
   }
 
   /// Resolve `<assetsRoot>/assets/<file>` without depending on process cwd.
@@ -189,7 +151,6 @@ struct Application::Impl
 
     TextureManager::getInstance().initialize(vulkan);
     std::cout << "TextureManager initialized.\n";
-
 
     textRenderer.init();
     // No default face here — Swift owns font policy (FontStore) and calls
@@ -291,9 +252,7 @@ struct Application::Impl
       if (auto r = finishInitCommon(assetsRoot); !r) {
         return r;
       }
-      // App callbacks first, then ImGui chains on top (install_callbacks=true).
       installGlfwCallbacks();
-      vulkan.initImGuiGlfwBackend();
       return canvas::ok();
     } catch (const std::exception &ex) {
       return canvas::fail(std::string("Application::initWithWindow: ") + ex.what());
@@ -334,9 +293,6 @@ struct Application::Impl
   {
     inputState.mouseX = x;
     inputState.mouseY = y;
-    ImGuiIO &io = ImGui::GetIO();
-    io.AddMousePosEvent(x, y);
-
     // Hover highlighting needs free motion too, not just drags — but motion
     // arrives per pixel and the queue is unbounded. Coalescing keeps at most
     // one pending move: consumers only ever want the latest position, and a
@@ -361,11 +317,6 @@ struct Application::Impl
   void bridgePointerButton(int button, bool pressed, float x, float y) {
     inputState.mouseX = x;
     inputState.mouseY = y;
-    ImGuiIO &io = ImGui::GetIO();
-    if (button >= 0 && button < 5) {
-      io.AddMouseButtonEvent(button, pressed);
-    }
-
     // Queue raw input for Swift hit-testing (Phase 3+).
     if (button == MOUSE_BUTTON_1) {
       pointerDown_ = pressed;
@@ -480,12 +431,6 @@ struct Application::Impl
     glfwSetClipboardString(vulkan.window(), text.c_str());
   }
 
-  // Renders one frame of the retained scene (shapes/lines/labels) and
-  // reports it back via readPixels(). There's no fixed-timestep loop driving
-  // this anymore — callers (Swift) call it whenever they want a new frame,
-  // e.g. right after changing the scene. deltaTime for the FPS counter/Dear
-  // ImGui is computed from wall-clock time between calls instead of being
-  // passed in.
   bool repaint()
   {
     try {
@@ -525,47 +470,21 @@ struct Application::Impl
         fpsTimer = 0.0f;
       }
 
+      // Wait for *this* frame slot only (2-in-flight). The other slot may
+      // still be on the GPU while we fill host-visible buffers for this one.
+      vulkan.waitForInFlightFrame();
 
-      const bool useDrawList = drawListActive_;
-
-      // Clip stack for draw-list (window pixels). Intersect geometry against
-      // the current clip so pushClip/popClip actually discard content even
-      // though GeometryRenderer is a single batch (GPU multi-scissor later).
-      struct ClipRect { float x, y, w, h; };
-      std::vector<ClipRect> clipStack;
-      auto currentClip = [&]() -> std::optional<ClipRect> {
-        if (clipStack.empty()) return std::nullopt;
-        return clipStack.back();
-      };
-      auto intersects = [](const ClipRect &c, float x, float y, float w, float h) {
-        return !(x + w <= c.x || y + h <= c.y || x >= c.x + c.w || y >= c.y + c.h);
-      };
-      auto intersectRect = [](const ClipRect &c, float &x, float &y, float &w, float &h) {
-        const float x1 = std::max(c.x, x);
-        const float y1 = std::max(c.y, y);
-        const float x2 = std::min(c.x + c.w, x + w);
-        const float y2 = std::min(c.y + c.h, y + h);
-        x = x1; y = y1; w = std::max(0.f, x2 - x1); h = std::max(0.f, y2 - y1);
-      };
-
-      clipStack.clear();
-      if (useDrawList) {
-        // Wait for *this* frame slot only (2-in-flight). The other slot may
-        // still be on the GPU while we fill host-visible buffers for this one.
-        vulkan.waitForInFlightFrame();
-
-        // Atlas is shared — wait every slot before replacing the image.
-        if (textRenderer.atlasNeedsGrow()) {
-          vulkan.waitForAllFramesInFlight();
-        }
-        if (textRenderer.growAtlasIfNeeded()) {
-          quadRenderer.setAtlas(textRenderer.atlasView(),
-                                textRenderer.atlasSampler());
-        }
-        const auto ext = vulkan.getExtent();
-        replayDrawListUnified(static_cast<float>(ext.width),
-                              static_cast<float>(ext.height));
+      // Atlas is shared — wait every slot before replacing the image.
+      if (textRenderer.atlasNeedsGrow()) {
+        vulkan.waitForAllFramesInFlight();
       }
+      if (textRenderer.growAtlasIfNeeded()) {
+        quadRenderer.setAtlas(textRenderer.atlasView(),
+                              textRenderer.atlasSampler());
+      }
+      const auto ext = vulkan.getExtent();
+      replayDrawListUnified(static_cast<float>(ext.width),
+                            static_cast<float>(ext.height));
 
       vulkan.renderWithShadows(
           // Shadow pass kept only because renderWithShadows is Vulkan's sole
@@ -586,25 +505,13 @@ struct Application::Impl
             // Draw-list commands are already window-absolute (Phase 3). Legacy
             // shapes stay scissored to the diagram panel.
             VkRect2D fullScissor{.offset = {0, 0}, .extent = extent};
-            if (useDrawList) {
-              vkCmdSetScissor(commandBuffer, 0, 1, &fullScissor);
-            } else {
-              VkRect2D scissor{
-                  .offset =
-                      {static_cast<int32_t>(std::max(0.f, diagramViewport_.x)),
-                       static_cast<int32_t>(std::max(0.f, diagramViewport_.y))},
-                  .extent = {static_cast<uint32_t>(
-                                 std::max(1.f, diagramViewport_.w)),
-                             static_cast<uint32_t>(
-                                 std::max(1.f, diagramViewport_.h))},
-              };
-              vkCmdSetScissor(commandBuffer, 0, 1, &scissor);
-            }
+            vkCmdSetScissor(commandBuffer, 0, 1, &fullScissor);
+
 
             // Single ordered 2D pass — the whole scene.
             quadRenderer.draw(commandBuffer);
 
-            // Full-window scissor for the ImGui chrome that follows.
+            // Full-window scissor
             vkCmdSetScissor(commandBuffer, 0, 1, &fullScissor);
 
           });
@@ -682,14 +589,9 @@ struct Application::Impl
     vulkan.readPixels(dst, dstSize);
   }
 
-  shell::Rect diagramViewport_{0, 0, 800, 600};
-
-  // Declarative Swift UI tree (replaces ImGui side panels when present).
-
   // Immediate draw list (Phase 3) — authored by Swift each dirty frame.
   std::vector<canvas::DrawCommand> drawCmds_;
   std::vector<canvas::GlyphInstance> drawGlyphs_;
-  bool drawListActive_ = false; // explicit; empty list must not fall back to legacy
   // GLFW callbacks (render thread, outside window mutex) vs Swift poll (under
   // window mutex) — protect the queue so Resize/Key/Mouse are not lost.
   bool pointerDown_ = false;  // gates MouseMove queueing
@@ -701,12 +603,9 @@ struct Application::Impl
   float viewPanX_ = 0.f;
   float viewPanY_ = 0.f;
 
-  shell::Rect diagramViewport() const { return diagramViewport_; }
-
   void submitDrawList(const canvas::DrawCommand *cmds, size_t cmdCount,
                       const canvas::GlyphInstance *glyphs, size_t glyphCount)
   {
-    drawListActive_ = true;
     drawCmds_.assign(cmds, cmds + cmdCount);
     drawGlyphs_.assign(glyphs, glyphs + glyphCount);
   }
@@ -718,11 +617,6 @@ struct Application::Impl
     out = inputEvents_.front();
     inputEvents_.pop_front();
     return true;
-  }
-
-  void setDiagramViewport(float x, float y, float w, float h)
-  {
-    diagramViewport_ = {x, y, w, h};
   }
 
   void framebufferSize(float &outW, float &outH) const
@@ -789,15 +683,6 @@ void Application::setWindowVisible(bool visible) {
   impl_->setWindowVisible(visible);
 }
 
-shell::Rect Application::diagramViewport() const {
-  return impl_->diagramViewport();
-}
-
-
-
-
-
-
 void Application::submitDrawList(const canvas::DrawCommand *cmds, size_t cmdCount,
                                  const canvas::GlyphInstance *glyphs,
                                  size_t glyphCount)
@@ -808,11 +693,6 @@ void Application::submitDrawList(const canvas::DrawCommand *cmds, size_t cmdCoun
 bool Application::pollInputEvent(canvas::InputEvent &out)
 {
   return impl_->pollInputEvent(out);
-}
-
-void Application::setDiagramViewport(float x, float y, float w, float h)
-{
-  impl_->setDiagramViewport(x, y, w, h);
 }
 
 void Application::framebufferSize(float &outW, float &outH) const

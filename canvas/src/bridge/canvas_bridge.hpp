@@ -6,8 +6,6 @@
 #include <string>
 #include <vector>
 
-#include "render/text_widget.hpp"
-
 class Application;
 
 // C++-side convenience wrapper around Application, used internally by
