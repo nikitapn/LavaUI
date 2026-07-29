@@ -148,6 +148,28 @@ public final class DrawList {
             let w = YGNodeLayoutGetWidth(yref)
             let h = YGNodeLayoutGetHeight(yref)
 
+            if let scroll = node as? ScrollNode {
+                // Record what Yoga granted; clamping against the requested size
+                // would let content scroll out of reach.
+                scroll.viewportLength = scroll.axis == .vertical ? h : w
+                scroll.contentLength = scroll.measureContentLength()
+                // Re-clamp in case content shrank since the last wheel event.
+                scroll.scrollBy(0)
+
+                pushClip(x: x, y: y, w: w, h: h)
+                let dx = scroll.axis == .horizontal ? scroll.scrollOffset : 0
+                let dy = scroll.axis == .vertical ? scroll.scrollOffset : 0
+                for c in scroll.childNodes {
+                    emitNode(c, ox: x - dx, oy: y - dy, vpW: vpW, vpH: vpH)
+                }
+                popClip()
+
+                if scroll.showsIndicator, scroll.maxOffset > 0 {
+                    emitScrollIndicator(scroll, x: x, y: y, w: w, h: h)
+                }
+                return
+            }
+
             if let styled = node as? StyleBoxNode {
                 // Same rule as a stack: never cull a container, since Yoga does
                 // not clip and an overflowing child may still be on screen.
@@ -551,6 +573,42 @@ extension DrawList {
             text(
                 slice(cursor..<line.count), x: x + xFor(cursor) - 4, y: y,
                 w: 10_000, h: h, color: style.text, font: font
+            )
+        }
+    }
+}
+
+extension DrawList {
+    /// A thin position indicator, drawn outside the clip so it is never
+    /// scrolled away with the content it describes.
+    fileprivate func emitScrollIndicator(
+        _ scroll: ScrollNode, x: Float, y: Float, w: Float, h: Float
+    ) {
+        let thickness: Float = 4
+        let track = scroll.viewportLength
+        guard track > 0, scroll.contentLength > 0 else { return }
+
+        let ratio = min(1, track / scroll.contentLength)
+        let thumb = max(24, track * ratio)
+        let travel = track - thumb
+        let progress = scroll.maxOffset > 0 ? scroll.scrollOffset / scroll.maxOffset : 0
+        let along = travel * min(1, max(0, progress))
+
+        let color = Color(
+            r: Theme.current.textSecondary.r,
+            g: Theme.current.textSecondary.g,
+            b: Theme.current.textSecondary.b,
+            a: 0.55
+        )
+        if scroll.axis == .vertical {
+            roundedRect(
+                x: x + w - thickness - 2, y: y + along,
+                w: thickness, h: thumb, color: color, radius: thickness / 2
+            )
+        } else {
+            roundedRect(
+                x: x + along, y: y + h - thickness - 2,
+                w: thumb, h: thickness, color: color, radius: thickness / 2
             )
         }
     }

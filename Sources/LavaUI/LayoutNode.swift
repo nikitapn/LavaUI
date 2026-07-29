@@ -77,6 +77,8 @@ class YogaBoxNode: AnyViewNode {
     /// The node's own settings, captured before any modifier touched it, so a
     /// removed modifier does not leave its effect behind.
     var styleBaseline: ViewStyle?
+    /// Set by any box that accepts the wheel.
+    var isScrollable = false
 
     var yoga: YGNodeRef? { yogaStorage }
     var childNodes: [any AnyViewNode] { [] }
@@ -175,8 +177,6 @@ final class LeafNode: YogaBoxNode {
     var showsGutter = false
     var gutterWidth: Float = 0
     var search = TextSearch()
-    /// Set by views that accept the wheel.
-    var isScrollable = false
     /// Vertical scroll offset in pixels. Positive scrolls content up.
     var scrollY: Float = 0
     /// Horizontal offset in pixels. The gutter does not move with it.
@@ -847,13 +847,17 @@ public final class LayoutHost {
             for child in node.childNodes.reversed() {
                 if let h = hoverWalk(child, x: x, y: y, ox: nx, oy: ny) { return h }
             }
-            // Scrollables count as hover targets too: the wheel is routed by
-            // what is under the pointer, and an editor has no hover fill.
-            if let leaf = node as? LeafNode,
-               leaf.hoverFill != nil || leaf.onHover != nil || leaf.isScrollable,
-               x >= nx, x < nx + nw, y >= ny, y < ny + nh
-            {
-                return leaf.id
+            // Scrollables count as hover targets too: the wheel routes by what
+            // is under the pointer, and neither an editor nor a ScrollView has
+            // a hover fill. Checked on the box, not the leaf, so containers
+            // qualify — but only *after* children, so an inner scrollable wins.
+            if x >= nx, x < nx + nw, y >= ny, y < ny + nh {
+                if let leaf = node as? LeafNode,
+                   leaf.hoverFill != nil || leaf.onHover != nil
+                {
+                    return leaf.id
+                }
+                if box.isScrollable { return box.id }
             }
             return nil
         }

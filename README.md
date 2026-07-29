@@ -86,8 +86,8 @@ expensive to build and keyed by content* (the glyph atlas, Vulkan objects);
 
 ## What exists
 
-**Containers** `HStack` `VStack` `Spacer` `ForEach` — flexbox via Yoga, with
-`if`/`else` and optionals handled by the view builder.
+**Containers** `HStack` `VStack` `Spacer` `ForEach` `ScrollView` — flexbox via
+Yoga, with `if`/`else` and optionals handled by the view builder.
 
 **Content** `Text` (hover, click, wrapping) · `Image` · `DiagramHost`
 
@@ -113,8 +113,6 @@ what is measured cannot drift from what is drawn.
 
 Honest list, roughly in the order it hurts:
 
-- **`ScrollView`** — a general scrollable container. `EditorView` scrolls
-  itself, but arbitrary content cannot.
 - **Controls** — `Button` (there is only `Text(onClick:)`), `Toggle`,
   `Slider`, `Divider`.
 - **Overlays** — menus, dropdowns and tooltips need to draw above everything,

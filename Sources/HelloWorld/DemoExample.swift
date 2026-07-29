@@ -221,7 +221,15 @@ public struct DemoExample: View {
 
     @ViewBuilder
     private var centerColumn: some View {
-        VStack(flexGrow: 1, padding: 8) {
+        // The column's content has outgrown the window for a while; this is
+        // what a general ScrollView is for.
+        ScrollView {
+            centerContent
+        }
+    }
+
+    private var centerContent: some View {
+        VStack(padding: 8) {
             Text("Dynamic flex row", color: .accent)
             Text(
                 "Each chip has flexGrow=1 — resize the window or change slot count.",
