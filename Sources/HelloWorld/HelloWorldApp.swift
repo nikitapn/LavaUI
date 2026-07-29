@@ -152,9 +152,15 @@ struct HelloWorldApp {
                         )
                     }
                 case .mouseMove:
-                    // Only queued while a button is held, so this is a drag.
                     if PointerCapture.isActive {
                         PointerCapture.move(x: ev.x, y: ev.y - menuH)
+                    } else {
+                        // Free motion: hover only. HoverState invalidates just
+                        // on change, so per-pixel moves cost a hit test, not a
+                        // frame.
+                        HoverState.set(
+                            host.hitTestHover(x: ev.x, y: ev.y, originY: menuH)
+                        )
                     }
                 case .mouseUp:
                     PointerCapture.release()

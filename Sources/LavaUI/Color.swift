@@ -21,10 +21,6 @@ public struct Color: Equatable, Sendable, Hashable {
         return R | (G << 8) | (B << 16) | (A << 24)
     }
 
-    public static let primary = Color(r: 0.90, g: 0.90, b: 0.90)
-    public static let secondary = Color(r: 0.55, g: 0.55, b: 0.60)
-    public static let accent = Color(r: 0.70, g: 0.75, b: 0.90)
-    public static let selected = Color(r: 1.0, g: 0.85, b: 0.40)
-    public static let muted = Color(r: 0.50, g: 0.60, b: 0.50)
-    public static let dim = Color(r: 0.45, g: 0.55, b: 0.50)
+    // Semantic tokens live in Theme.swift so they resolve through
+    // `Theme.current` rather than being frozen here.
 }

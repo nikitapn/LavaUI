@@ -331,17 +331,24 @@ struct Application::Impl
     ImGuiIO &io = ImGui::GetIO();
     io.AddMousePosEvent(x, y);
 
-    // Only queued while button 1 is held: drag-select needs the stream, but
-    // free-hover motion would flood an unbounded queue for nothing.
-    if (!pointerDown_) return;
+    // Hover highlighting needs free motion too, not just drags — but motion
+    // arrives per pixel and the queue is unbounded. Coalescing keeps at most
+    // one pending move: consumers only ever want the latest position, and a
+    // superseded one carries no information.
     canvas::InputEvent ev;
     ev.kind = static_cast<uint32_t>(canvas::InputEventKind::MouseMove);
     ev.x = x;
     ev.y = y;
-    ev.button = 0;
+    ev.button = pointerDown_ ? 1 : 0;  // so Swift can tell drag from hover
     {
       std::lock_guard lock(inputMu_);
-      inputEvents_.push_back(ev);
+      if (!inputEvents_.empty() &&
+          inputEvents_.back().kind ==
+            static_cast<uint32_t>(canvas::InputEventKind::MouseMove)) {
+        inputEvents_.back() = ev;
+      } else {
+        inputEvents_.push_back(ev);
+      }
     }
   }
 

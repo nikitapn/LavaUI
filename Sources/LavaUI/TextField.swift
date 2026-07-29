@@ -60,7 +60,8 @@ public struct TextField: PrimitiveView {
         leaf.font = resolvedFont
         leaf.color = .primary
         leaf.placeholder = placeholder
-        leaf.fillColor = Color(r: 0.10, g: 0.11, b: 0.14)
+        leaf.fillColor = Theme.current.inset
+        leaf.cornerRadius = Theme.current.cornerRadius
         // Measure against the placeholder when empty so an empty field still
         // reserves a sensible line box.
         leaf.text = leaf.editing.text.isEmpty ? placeholder : leaf.editing.text
@@ -104,7 +105,7 @@ public struct TextField: PrimitiveView {
 
 extension LeafNode {
     /// Horizontal padding inside a field, matching the draw-side inset.
-    static let textInset: Float = 4
+    static var textInset: Float { Theme.current.controlPadding }
 
     /// Shapes the current buffer for caret/selection maths. Cached on `UIFont`,
     /// so this is a dictionary hit on all but the first call per string.

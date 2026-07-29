@@ -165,8 +165,19 @@ public final class DrawList {
                 if x + w < 0 || y + h < 0 || x > vpW || y > vpH {
                     return
                 }
-                if let fill = leaf.fillColor {
-                    rect(x: x, y: y, w: w, h: h, color: fill)
+                // Hover wins over the base fill; both honour the radius.
+                let leafFill = HoverState.isHovered(leaf.id)
+                    ? (leaf.hoverFill ?? leaf.fillColor)
+                    : leaf.fillColor
+                if let fill = leafFill {
+                    if leaf.cornerRadius > 0 {
+                        roundedRect(
+                            x: x, y: y, w: w, h: h,
+                            color: fill, radius: leaf.cornerRadius
+                        )
+                    } else {
+                        rect(x: x, y: y, w: w, h: h, color: fill)
+                    }
                 }
                 if leaf.kind == .text, !leaf.text.isEmpty {
                     // Multi-line: emit one command per wrapped line (same breaks
@@ -271,7 +282,7 @@ extension DrawList {
             rect(
                 x: x + inset + x0, y: baselineTop,
                 w: max(1, x1 - x0), h: lineH,
-                color: Color(r: 0.25, g: 0.40, b: 0.65)
+                color: Theme.current.selectionFill
             )
         }
 
@@ -293,7 +304,7 @@ extension DrawList {
 
         if focused, !state.hasSelection, CaretBlink.isVisible {
             let caretX = x + inset + run.caretX(for: state.focus)
-            rect(x: caretX, y: baselineTop, w: 1.5, h: lineH, color: .primary)
+            rect(x: caretX, y: baselineTop, w: Theme.current.caretWidth, h: lineH, color: .primary)
         }
     }
 }

@@ -168,6 +168,13 @@ final class LeafNode: YogaBoxNode {
     /// test that knew where this node was.
     var onClickLocal: ((_ localX: Float, _ localY: Float,
                         _ originX: Float, _ originY: Float) -> Void)?
+    /// Called when hover enters/leaves, for views wanting more than a fill.
+    var onHover: ((Bool) -> Void)?
+
+    /// Fill drawn when the pointer is over this leaf (nil = no hover effect).
+    var hoverFill: Color?
+    /// Corner radius for `fillColor`/`hoverFill`.
+    var cornerRadius: Float = 0
 
     /// Raster image leaf payload.
     var image: UIImage?
@@ -189,7 +196,7 @@ final class LeafNode: YogaBoxNode {
         self.flexGrow = flexGrow
         self.minWidth = minWidth
         if kind == .diagramHost {
-            fillColor = Color(r: 0.12, g: 0.13, b: 0.16)
+            fillColor = Theme.current.canvas
         }
         applyStyle()
     }
@@ -652,6 +659,39 @@ public final class LayoutHost {
         return hitWalk(root, x: x, y: y, ox: originX, oy: originY)
     }
 
+    /// Topmost interactive node under the pointer, for hover highlighting.
+    public func hitTestHover(
+        x: Float, y: Float, originX: Float = 0, originY: Float = 0
+    ) -> NodeID? {
+        guard layoutValid, let root else { return nil }
+        return hoverWalk(root, x: x, y: y, ox: originX, oy: originY)
+    }
+
+    private func hoverWalk(
+        _ node: any AnyViewNode, x: Float, y: Float, ox: Float, oy: Float
+    ) -> NodeID? {
+        if let box = node as? YogaBoxNode, let yref = box.yoga {
+            let nx = ox + YGNodeLayoutGetLeft(yref)
+            let ny = oy + YGNodeLayoutGetTop(yref)
+            let nw = YGNodeLayoutGetWidth(yref)
+            let nh = YGNodeLayoutGetHeight(yref)
+            for child in node.childNodes.reversed() {
+                if let h = hoverWalk(child, x: x, y: y, ox: nx, oy: ny) { return h }
+            }
+            if let leaf = node as? LeafNode,
+               leaf.hoverFill != nil || leaf.onHover != nil,
+               x >= nx, x < nx + nw, y >= ny, y < ny + nh
+            {
+                return leaf.id
+            }
+            return nil
+        }
+        for child in node.childNodes.reversed() {
+            if let h = hoverWalk(child, x: x, y: y, ox: ox, oy: oy) { return h }
+        }
+        return nil
+    }
+
     private func hitWalk(
         _ node: any AnyViewNode,
         x: Float, y: Float,
@@ -738,6 +778,9 @@ final class LeafNode: AnyViewNode {
     var onClickLocal: ((Float, Float, Float, Float) -> Void)?
     var editing = TextEditingState("")
     var placeholder = ""
+    var hoverFill: Color?
+    var cornerRadius: Float = 0
+    var onHover: ((Bool) -> Void)?
     var fillColor: Color?
     var childNodes: [any AnyViewNode] { [] }
     init(kind: LeafKind, label: String, width: Dimension, height: Dimension, flexGrow: Float = 0, minWidth: Float = 0) {

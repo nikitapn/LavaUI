@@ -770,6 +770,35 @@ drag-select highlights a sub-range, and double-click selects a word.
 
 Remaining for step 1: confirming the clipboard round-trip.
 
+---
+
+### Theming and hover
+
+`Theme` holds semantic tokens (text roles, surfaces, border colour/width,
+corner radius, control padding, caret width) with `Theme.current` as the active
+one. `Color.primary` and friends now *resolve through it* instead of being
+frozen constants, so the migration changed no call sites and the shipped
+palette (`.dark`) is pixel-identical to what preceded it. A `.light` theme
+exists to prove the swap works.
+
+Global for the same reason `FontStore.default` is: one window, no environment
+propagation yet. **When LavaUI grows an environment, `Theme.current` should
+become its default value rather than the only way to set a theme** — that is
+the natural next step, along with per-view style overrides, which today are
+explicit init parameters rather than chained modifiers.
+
+Hover is a style state, not a separate mechanism: `HoverState` tracks a single
+hovered `NodeID`, and a leaf draws `hoverFill` in place of `fillColor` while
+under the pointer. Free pointer motion is now emitted (it previously was not),
+with two safeguards, because motion arrives per pixel:
+
+- **Coalesced in C++** — a pending `MouseMove` at the back of the queue is
+  replaced rather than appended. Consumers only want the latest position, so a
+  superseded one carries no information, and the unbounded queue stays bounded.
+- **Invalidates only on change** — `HoverState.set` marks dirty only when the
+  hovered node actually differs, so pixel-level motion costs a hit test, not a
+  frame.
+
 **Correction to the note below**: Foundation's
 `enumerateSubstrings(options: .byWords)` is *unavailable* in
 swift-corelibs-foundation, so word boundaries are hand-rolled from Character

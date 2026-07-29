@@ -168,3 +168,25 @@ public enum ClickCounter {
         return streak
     }
 }
+
+/// Which node the pointer is over.
+///
+/// Tracked as a single id rather than per-node flags so a move only ever
+/// invalidates when the *hovered node changes* — pointer motion arrives per
+/// pixel, and redrawing on every one of those would undo the frame gating.
+public enum HoverState {
+    nonisolated(unsafe) private static var hovered: NodeID?
+
+    public static func isHovered(_ id: NodeID) -> Bool { hovered == id }
+
+    /// Returns true when the hovered node actually changed.
+    @discardableResult
+    public static func set(_ id: NodeID?) -> Bool {
+        guard hovered != id else { return false }
+        hovered = id
+        ViewInvalidation.markDirty()
+        return true
+    }
+
+    public static func clear() { set(nil) }
+}

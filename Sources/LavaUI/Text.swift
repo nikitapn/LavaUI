@@ -6,17 +6,26 @@ public struct Text: PrimitiveView {
     public var font: UIFont?
     /// Closures break value equality (SwiftUI wart) — fine until Phase 5 skip-recompute.
     public var onClick: (() -> Void)?
+    /// Row highlight under the pointer. Defaults to the theme's hover surface
+    /// for clickable text, since an unclickable label highlighting on hover
+    /// would be lying about being interactive.
+    public var hoverFill: Color?
+    public var cornerRadius: Float
 
     public init(
         _ string: String,
         color: Color = .primary,
         font: UIFont? = nil,
+        hoverFill: Color? = nil,
+        cornerRadius: Float = 0,
         onClick: (() -> Void)? = nil
     ) {
         self.string = string
         self.color = color
         self.font = font
         self.onClick = onClick
+        self.hoverFill = onClick == nil ? hoverFill : (hoverFill ?? Theme.current.hover)
+        self.cornerRadius = cornerRadius
     }
 
     /// Resolved face for measure (explicit or store default).
@@ -38,6 +47,8 @@ public struct Text: PrimitiveView {
         leaf.text = string
         leaf.color = color
         leaf.onClick = onClick
+        leaf.hoverFill = hoverFill
+        leaf.cornerRadius = cornerRadius
         leaf.font = resolvedFont
         leaf.label = "Text \"\(shortLabel)\""
         leaf.installTextMeasure()
@@ -55,6 +66,8 @@ public struct Text: PrimitiveView {
                 color: color,
                 onClick: onClick
             )
+            leaf.hoverFill = hoverFill
+            leaf.cornerRadius = cornerRadius
             leaf.font = resolvedFont
             if !leaf.usesTextMeasure {
                 leaf.installTextMeasure()
