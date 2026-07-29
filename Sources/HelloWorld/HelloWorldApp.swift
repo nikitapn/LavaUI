@@ -58,7 +58,10 @@ struct HelloWorldApp {
             DemoExample(brandImage: brandImage)
         }
 
-        func renderFrame() {
+        /// Does only as much of the pipeline as `level` requires. A pure
+        /// redraw — an animation tick, a caret blink — skips body recompute
+        /// and layout entirely, which is what keeps animation cheap.
+        func renderFrame(_ level: InvalidationLevel) {
             let fb = editor.framebufferSize()
             if fb.w >= 1, fb.h >= 1 {
                 windowW = fb.w
@@ -66,8 +69,12 @@ struct HelloWorldApp {
             }
             let bodyW = windowW
             let bodyH = max(1, windowH - menuH)
-            host.setRoot(makeRoot())
-            let frames = host.calculateLayout(width: bodyW, height: bodyH)
+            if level >= .body {
+                host.setRoot(makeRoot())
+            }
+            let frames = level >= .layout
+                ? host.calculateLayout(width: bodyW, height: bodyH)
+                : host.lastLayoutFrames
 
             if abs(bodyW - lastLoggedLayout.w) > 0.5 || abs(bodyH - lastLoggedLayout.h) > 0.5 {
                 lastLoggedLayout = (bodyW, bodyH)
@@ -115,11 +122,12 @@ struct HelloWorldApp {
         }
         FileHandle.standardError.write(Data("--- end structure ---\n".utf8))
 
-        renderFrame()
+        renderFrame(.body)
 
         while editor.isOpen {
-            let wake: Double = FocusManager.focusedID != nil ? CaretBlink.period / 4 : -1
-            editor.pumpEvents(timeout: wake)
+            // One scheduler for every periodic thing: caret blink, animations,
+            // and later tooltips. Negative blocks until input arrives.
+            editor.pumpEvents(timeout: FrameScheduler.timeoutUntilNextWake())
 
             while let ev = editor.pollInputEvent() {
                 switch ev.kind {
@@ -191,18 +199,27 @@ struct HelloWorldApp {
             if fb.w >= 1, fb.h >= 1, fb.w != windowW || fb.h != windowH {
                 windowW = fb.w
                 windowH = fb.h
-                dirty = true
+                ViewInvalidation.markNeedsLayout()
             }
 
-            if ViewInvalidation.consume() {
-                dirty = true
-            }
-            if FocusManager.focusedID != nil, CaretBlink.phaseChanged() {
-                dirty = true
+            // Animations step before the level is read, so a still-running one
+            // raises the flag for this frame rather than the next.
+            AnimationDriver.tick()
+
+            if FocusManager.focusedID != nil {
+                // A blinking caret is a pure redraw, and it keeps asking to be
+                // woken for as long as something is focused.
+                if CaretBlink.phaseChanged() { ViewInvalidation.markNeedsRedraw() }
+                FrameScheduler.requestWake(in: CaretBlink.period / 4)
             }
 
-            if dirty {
-                renderFrame()
+            let level = ViewInvalidation.consume()
+            if dirty { ViewInvalidation.markNeedsBody() }
+            let work = dirty ? InvalidationLevel.body : level
+            dirty = false
+
+            if work > .none {
+                renderFrame(work)
                 editor.renderFrame()
             }
         }

@@ -159,6 +159,7 @@ enum LeafKind: Equatable {
     case image
     case textField
     case editor
+    case button
 }
 
 final class LeafNode: YogaBoxNode {
@@ -181,6 +182,12 @@ final class LeafNode: YogaBoxNode {
     var isMultiline = false
     var maxLines = 8
     var wraps = false
+    /// Button-only payload.
+    var buttonFill: Animated<Color>?
+    var buttonStyle: ButtonStyle?
+    var isPressed = false
+    var isEnabled = true
+
     /// Editor-only payload.
     var highlighter: SyntaxHighlighter?
     var codeStyle: CodeStyle?
@@ -822,6 +829,9 @@ public final class LayoutHost {
 
     public var rootNode: (any AnyViewNode)? { root }
 
+    /// Frames from the most recent layout, for frames that only redraw.
+    public var lastLayoutFrames: [LayoutFrame] { lastFrames }
+
     /// Diagram host from **committed** layout — does not re-run Yoga.
     public func diagramHostFrame() -> LayoutFrame? {
         guard layoutValid else { return nil }
@@ -956,7 +966,7 @@ public final class LayoutHost {
 }
 
 // Minimal stubs so primitives compile without CYoga.
-enum LeafKind: Equatable { case text, spacer, diagramHost, empty, image, textField, editor }
+enum LeafKind: Equatable { case text, spacer, diagramHost, empty, image, textField, editor, button }
 
 final class LeafNode: AnyViewNode {
     let id = NodeID.generate()

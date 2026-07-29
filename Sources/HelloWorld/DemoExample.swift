@@ -305,6 +305,14 @@ public struct DemoExample: View {
                 Spacer()
             }
 
+            Text("Button · animated press + hover", color: .accent)
+            HStack(padding: 2) {
+                Button("Add item") { addItem() }
+                Button("Remove last") { removeLast() }
+                Button("Disabled", isEnabled: false) {}
+                Spacer()
+            }
+
             Text("EditorView · gutter, rules, find", color: .accent)
             HStack(padding: 2) {
                 TextField(

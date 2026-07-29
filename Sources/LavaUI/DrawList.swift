@@ -232,6 +232,29 @@ public final class DrawList {
                         )
                     }
                 }
+                if leaf.kind == .button {
+                    // The animated fill, not the static one — this is the only
+                    // thing a press changes, and it changes without any body
+                    // recompute behind it.
+                    let fill = leaf.buttonFill?.current
+                        ?? leaf.buttonStyle?.background ?? Theme.current.panel
+                    roundedRect(
+                        x: x, y: y, w: w, h: h,
+                        color: fill, radius: leaf.cornerRadius
+                    )
+                    if !leaf.text.isEmpty, let f = leaf.font ?? FontStore.default {
+                        let lineH = f.lineHeight
+                        let labelW = f.shapedRun(leaf.text).width
+                        text(
+                            leaf.text,
+                            x: x + (w - labelW) / 2 - 4,
+                            y: y + max(0, (h - lineH) / 2),
+                            w: w, h: lineH, color: leaf.color, font: f
+                        )
+                    }
+                    return
+                }
+
                 if leaf.kind == .textField {
                     emitTextField(leaf, x: x, y: y, w: w, h: h)
                 }

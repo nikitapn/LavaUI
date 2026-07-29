@@ -122,26 +122,91 @@ enum StateTransfer {
 
 // MARK: - Invalidation
 
-/// "Something a body read has changed; render again."
+/// How much of the pipeline a change actually invalidates.
 ///
-/// Deliberately just a flag. The frame loop decides *when* to act on it, which
-/// is what keeps the design frame-driven rather than event-driven — a state
-/// change never synchronously walks the graph.
+/// Levels are ordered and inclusive: `body` implies `layout` implies `redraw`.
+/// The distinction earns its keep with animation — a colour fade must not
+/// re-run every `body` and every `Mirror`-based state transplant sixty times a
+/// second just to change a pixel value.
+public enum InvalidationLevel: Int, Comparable, Sendable {
+    case none = 0
+    /// Re-emit the draw list. Layout and view values are unchanged.
+    case redraw = 1
+    /// Re-run Yoga, then emit.
+    case layout = 2
+    /// Recompute bodies, reconcile, lay out, emit.
+    case body = 3
+
+    public static func < (a: Self, b: Self) -> Bool { a.rawValue < b.rawValue }
+}
+
+/// "Something changed; do at least this much work again."
 ///
-/// Single-window assumption: one global flag. Per-window hosts would need this
-/// scoped to a `LayoutHost`.
+/// Deliberately just a level. The frame loop decides *when* to act on it, which
+/// is what keeps the design frame-driven — a state change never synchronously
+/// walks the graph.
+///
+/// Single-window assumption, like `FocusManager`. Per-window hosts would need
+/// this scoped to a `LayoutHost`.
 public enum ViewInvalidation {
-    nonisolated(unsafe) private static var dirty = true
+    nonisolated(unsafe) private static var pending: InvalidationLevel = .body
 
     /// Called from `withObservationTracking`'s `onChange`, i.e. *before* the
-    /// new value is written. Setting a flag is safe there; reading state is not.
-    public static func markDirty() { dirty = true }
+    /// new value is written. Raising a level is safe there; reading state is not.
+    public static func markDirty() { raise(.body) }
 
-    /// Returns whether a re-render is needed, clearing the flag.
-    public static func consume() -> Bool {
-        defer { dirty = false }
-        return dirty
+    /// A view value changed: bodies must run again.
+    public static func markNeedsBody() { raise(.body) }
+
+    /// Geometry changed but no view value did — a resize, a font swap.
+    public static func markNeedsLayout() { raise(.layout) }
+
+    /// Only pixels changed: an animation tick, a caret blink, a hover fill.
+    /// The cheapest level, and the reason the cascade exists.
+    public static func markNeedsRedraw() { raise(.redraw) }
+
+    private static func raise(_ level: InvalidationLevel) {
+        if level > pending { pending = level }
     }
 
-    public static var isDirty: Bool { dirty }
+    /// Returns the work required, clearing the flag.
+    public static func consume() -> InvalidationLevel {
+        defer { pending = .none }
+        return pending
+    }
+
+    public static var isDirty: Bool { pending != .none }
+    public static var level: InvalidationLevel { pending }
+}
+
+/// When the frame loop should next wake up.
+///
+/// Replaces the caret's special case in the run loop. A `Bool` cannot express
+/// this: two things animating at once, and whichever finishes first clears the
+/// flag for both. Storing the *earliest requested instant* composes — a spring
+/// asks for ~16ms, a caret for 500ms, a delayed tooltip for 800ms, and the loop
+/// sleeps until the soonest of them.
+public enum FrameScheduler {
+    nonisolated(unsafe) private static var deadline: Double?
+
+    public static func now() -> Double {
+        Double(DispatchTime.now().uptimeNanoseconds) / 1_000_000_000
+    }
+
+    /// Requests a wake no later than `seconds` from now. Earliest wins.
+    public static func requestWake(in seconds: Double) {
+        let at = now() + max(0, seconds)
+        if let existing = deadline, existing <= at { return }
+        deadline = at
+    }
+
+    /// Seconds the loop may block for: negative means "until input arrives".
+    /// Consumes the request, so a repeating animation must ask again each frame.
+    public static func timeoutUntilNextWake() -> Double {
+        guard let at = deadline else { return -1 }
+        deadline = nil
+        return max(0, at - now())
+    }
+
+    public static var hasPendingWake: Bool { deadline != nil }
 }

@@ -203,15 +203,28 @@ public enum ClickCounter {
 /// pixel, and redrawing on every one of those would undo the frame gating.
 public enum HoverState {
     nonisolated(unsafe) private static var hovered: NodeID?
+    /// Nodes wanting more than a fill swap — a button retargeting its
+    /// animation, say — register here.
+    nonisolated(unsafe) private static var handlers: [NodeID: (Bool) -> Void] = [:]
 
     public static func isHovered(_ id: NodeID) -> Bool { hovered == id }
+
+    public static func register(_ id: NodeID, handler: @escaping (Bool) -> Void) {
+        handlers[id] = handler
+    }
+
+    public static func unregister(_ id: NodeID) { handlers[id] = nil }
 
     /// Returns true when the hovered node actually changed.
     @discardableResult
     public static func set(_ id: NodeID?) -> Bool {
         guard hovered != id else { return false }
+        let previous = hovered
         hovered = id
-        ViewInvalidation.markDirty()
+        if let previous { handlers[previous]?(false) }
+        if let id { handlers[id]?(true) }
+        // Hover only changes pixels, never view values — the cheapest level.
+        ViewInvalidation.markNeedsRedraw()
         return true
     }
 

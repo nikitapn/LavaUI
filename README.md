@@ -90,6 +90,7 @@ expensive to build and keyed by content* (the glyph atlas, Vulkan objects);
 Yoga, with `if`/`else` and optionals handled by the view builder.
 
 **Content** `Text` (hover, click, wrapping) · `Image` · `DiagramHost`
+· `Button` (animated press and hover)
 
 **Input** `TextField` (single and multi-line, soft wrap, selection, clipboard,
 undo) · `EditorView` (line-number gutter, syntax rules, current-line highlight,
@@ -98,6 +99,11 @@ find, vertical and horizontal scrolling)
 **Modifiers** `.padding()` `.background()` `.cornerRadius()` `.frame()`
 `.flexGrow()` — chains collapse onto the content's own node, so styling costs
 no extra layout boxes unless the content is a fragment.
+
+**Animation** `Animated<T>` interpolates on the *node*, so a press or hover
+costs a draw-list re-emit and no `body` recompute. `FrameScheduler` holds the
+earliest wake any component asked for; `InvalidationLevel` decides how much of
+body → layout → emit actually has to run.
 
 **System** `@State` + `@Binding` with `Observation` · `Theme` (semantic tokens,
 light and dark) · focus, hover, pointer capture, click counting · content
@@ -113,8 +119,11 @@ what is measured cannot drift from what is drawn.
 
 Honest list, roughly in the order it hurts:
 
-- **Controls** — `Button` (there is only `Text(onClick:)`), `Toggle`,
-  `Slider`, `Divider`.
+- **Controls** — `Toggle`, `Slider`, `Divider`. (`Button` exists.)
+- **Transitions** — animating a view *appearing* or *disappearing*. Value
+  animation exists; transitions need removed nodes to outlive their removal,
+  which touches the three reconcilers that drop nodes (`EitherView`, `ForEach`,
+  `OptionalView`).
 - **Overlays** — menus, dropdowns and tooltips need to draw above everything,
   which means appending to the draw list after the main tree walk.
 - **Environment** — `Theme.current` and `FontStore.default` are globals. They
