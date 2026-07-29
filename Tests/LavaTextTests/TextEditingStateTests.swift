@@ -164,3 +164,49 @@ final class TextEditingStateTests: XCTestCase {
         XCTAssertEqual(offset(s), 2, "cursor clamped into the shorter buffer")
     }
 }
+
+// MARK: - Word selection (double-click)
+
+extension TextEditingStateTests {
+    private func index(_ s: TextEditingState, _ n: Int) -> String.Index {
+        s.text.index(s.text.startIndex, offsetBy: n)
+    }
+
+    func testSelectWordFromInsideWord() {
+        var s = TextEditingState("foo bar baz")
+        s.selectWord(at: index(s, 5))  // inside "bar"
+        XCTAssertEqual(s.selectedText, "bar")
+    }
+
+    func testSelectWordAtWordStart() {
+        var s = TextEditingState("foo bar")
+        s.selectWord(at: index(s, 4))
+        XCTAssertEqual(s.selectedText, "bar")
+    }
+
+    /// Double-clicking a gap selects the gap, not a neighbouring word — the
+    /// selection must never silently jump somewhere the user didn't click.
+    func testSelectWordOnSeparatorRunSelectsTheRun() {
+        var s = TextEditingState("foo   bar")
+        s.selectWord(at: index(s, 4))
+        XCTAssertEqual(s.selectedText, "   ")
+    }
+
+    func testSelectWordKeepsIdentifiersWhole() {
+        var s = TextEditingState("call snake_case_1 now")
+        s.selectWord(at: index(s, 8))
+        XCTAssertEqual(s.selectedText, "snake_case_1")
+    }
+
+    func testSelectWordAtEndOfBuffer() {
+        var s = TextEditingState("foo bar")
+        s.selectWord(at: s.text.endIndex)
+        XCTAssertEqual(s.selectedText, "bar", "end index has no char under it; look left")
+    }
+
+    func testSelectWordOnEmptyBufferIsEmpty() {
+        var s = TextEditingState("")
+        s.selectWord(at: s.text.startIndex)
+        XCTAssertFalse(s.hasSelection)
+    }
+}

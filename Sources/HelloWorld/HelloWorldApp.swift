@@ -151,6 +151,13 @@ struct HelloWorldApp {
                             Data("layout resize → \(Int(nw))×\(Int(nh))\n".utf8)
                         )
                     }
+                case .mouseMove:
+                    // Only queued while a button is held, so this is a drag.
+                    if PointerCapture.isActive {
+                        PointerCapture.move(x: ev.x, y: ev.y - menuH)
+                    }
+                case .mouseUp:
+                    PointerCapture.release()
                 case .text:
                     // A committed character: only the char callback knows what
                     // was actually typed (layout, dead keys, shift).

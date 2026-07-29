@@ -108,3 +108,63 @@ public enum CaretBlink {
         Double(DispatchTime.now().uptimeNanoseconds) / 1_000_000_000
     }
 }
+
+/// Routes pointer motion to whichever node started a drag.
+///
+/// Without capture, a drag that leaves the field's bounds would stop extending
+/// the selection — the hit test would simply miss. Capture is what makes
+/// "press inside, drag anywhere" behave the way every text control does.
+public enum PointerCapture {
+    nonisolated(unsafe) private static var owner: NodeID?
+    nonisolated(unsafe) private static var moveHandler: ((Float, Float) -> Void)?
+    nonisolated(unsafe) private static var upHandler: (() -> Void)?
+
+    public static var isActive: Bool { owner != nil }
+
+    public static func capture(
+        _ id: NodeID,
+        onMove: @escaping (Float, Float) -> Void,
+        onUp: @escaping () -> Void = {}
+    ) {
+        owner = id
+        moveHandler = onMove
+        upHandler = onUp
+    }
+
+    /// Window coordinates; the owner converts to its own space.
+    public static func move(x: Float, y: Float) {
+        moveHandler?(x, y)
+    }
+
+    public static func release() {
+        upHandler?()
+        owner = nil
+        moveHandler = nil
+        upHandler = nil
+    }
+}
+
+/// Multi-click detection. Kept here rather than in the field so any control
+/// can share one notion of what counts as a double click.
+public enum ClickCounter {
+    /// Generous enough for a deliberate double click, tight enough that two
+    /// separate clicks on the same spot are not merged.
+    public static let interval: Double = 0.4
+    public static let slop: Float = 4
+
+    nonisolated(unsafe) private static var lastAt: Double = 0
+    nonisolated(unsafe) private static var lastX: Float = 0
+    nonisolated(unsafe) private static var lastY: Float = 0
+    nonisolated(unsafe) private static var streak: Int = 0
+
+    /// Returns how many clicks this one continues (1 = single, 2 = double…).
+    public static func register(x: Float, y: Float) -> Int {
+        let t = Double(DispatchTime.now().uptimeNanoseconds) / 1_000_000_000
+        let near = abs(x - lastX) <= slop && abs(y - lastY) <= slop
+        streak = (t - lastAt <= interval && near) ? streak + 1 : 1
+        lastAt = t
+        lastX = x
+        lastY = y
+        return streak
+    }
+}

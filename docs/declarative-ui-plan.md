@@ -758,13 +758,17 @@ for 500ms after any edit so it never blinks mid-typing, and the frame loop
 redraws only when the blink *phase flips* — 2 frames/sec while focused, zero
 when not. That keeps idle gating intact.
 
-Verified interactively: click focuses and places the caret, typed characters
-reach the buffer, the binding propagates out to `@State` and re-filters a
-`ForEach`. **Unverified: Ctrl+A selection rendering** — the key path reaches
-the field but no selection rect appeared; needs a look.
+Also landed: drag-select via `PointerCapture` (a drag that leaves the field
+must keep extending, which the hit test alone cannot do), and double-click
+word selection via `ClickCounter`. `MouseMove` is now emitted by the engine
+but **only while button 1 is held** — free hover motion would flood the
+unbounded input queue for nothing.
 
-Remaining for step 1: shift-click / drag selection, and confirming the
-clipboard round-trip.
+Verified interactively: click focuses and places the caret, typing reaches the
+buffer and re-filters a `ForEach` through the binding, Ctrl+A selects all,
+drag-select highlights a sub-range, and double-click selects a word.
+
+Remaining for step 1: confirming the clipboard round-trip.
 
 **Correction to the note below**: Foundation's
 `enumerateSubstrings(options: .byWords)` is *unavailable* in

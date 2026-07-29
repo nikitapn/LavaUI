@@ -69,12 +69,32 @@ public struct TextField: PrimitiveView {
         let binding = _text
         let submit = onSubmit
 
-        // Click: focus, and place the caret where the pointer landed.
-        leaf.onClickLocal = { [weak leaf] localX, _ in
-            guard let leaf else { return }
+        // Press: focus, place the caret, and start a drag session.
+        leaf.onClickLocal = { [weak leaf] localX, localY, originX, originY in
+            guard let leaf, let run = leaf.shapedRun() else { return }
             leaf.focusSelf(binding: binding, onSubmit: submit)
-            if let run = leaf.shapedRun() {
-                leaf.editing.setCursor(run.index(atX: localX - LeafNode.textInset))
+
+            let hit = run.index(atX: localX - LeafNode.textInset)
+            let clicks = ClickCounter.register(x: originX + localX, y: originY + localY)
+
+            if clicks >= 2 {
+                // Double click selects the word; a third would select all, but
+                // that is left out until it is asked for.
+                leaf.editing.selectWord(at: hit)
+            } else {
+                leaf.editing.setCursor(hit)
+                // Capture so the selection keeps extending once the pointer
+                // leaves the field — otherwise the hit test simply misses.
+                PointerCapture.capture(
+                    leaf.id,
+                    onMove: { [weak leaf] wx, _ in
+                        guard let leaf, let run = leaf.shapedRun() else { return }
+                        let lx = wx - originX - LeafNode.textInset
+                        leaf.editing.setCursor(run.index(atX: lx), extending: true)
+                        CaretBlink.noteEdit()
+                        ViewInvalidation.markDirty()
+                    }
+                )
             }
             CaretBlink.noteEdit()
             ViewInvalidation.markDirty()

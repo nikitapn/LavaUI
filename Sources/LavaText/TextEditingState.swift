@@ -38,6 +38,40 @@ public struct TextEditingState: Equatable {
 
     public var selectedText: String { String(text[selectedRange]) }
 
+    /// Selects the word containing `index` — what a double-click should do.
+    /// Falls back to the run of separators when the click lands between words,
+    /// so a double-click on whitespace still selects something coherent.
+    public mutating func selectWord(at index: String.Index) {
+        let range = wordRange(at: clamp(index))
+        anchor = range.lowerBound
+        focus = range.upperBound
+    }
+
+    /// The word-ish run around `index`, using the same classification as
+    /// Ctrl+arrow so double-click and word movement agree.
+    public func wordRange(at index: String.Index) -> Range<String.Index> {
+        guard !text.isEmpty else { return text.startIndex..<text.startIndex }
+
+        // A caret at the very end has no character under it; look left.
+        var probe = index
+        if probe >= text.endIndex { probe = text.index(before: text.endIndex) }
+
+        let wordish = Self.isWordCharacter(text[probe])
+
+        var lower = probe
+        while lower > text.startIndex {
+            let prev = text.index(before: lower)
+            if Self.isWordCharacter(text[prev]) != wordish { break }
+            lower = prev
+        }
+
+        var upper = probe
+        while upper < text.endIndex, Self.isWordCharacter(text[upper]) == wordish {
+            upper = text.index(after: upper)
+        }
+        return lower..<upper
+    }
+
     public mutating func selectAll() {
         anchor = text.startIndex
         focus = text.endIndex

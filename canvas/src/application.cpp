@@ -330,6 +330,19 @@ struct Application::Impl
     inputState.mouseY = y;
     ImGuiIO &io = ImGui::GetIO();
     io.AddMousePosEvent(x, y);
+
+    // Only queued while button 1 is held: drag-select needs the stream, but
+    // free-hover motion would flood an unbounded queue for nothing.
+    if (!pointerDown_) return;
+    canvas::InputEvent ev;
+    ev.kind = static_cast<uint32_t>(canvas::InputEventKind::MouseMove);
+    ev.x = x;
+    ev.y = y;
+    ev.button = 0;
+    {
+      std::lock_guard lock(inputMu_);
+      inputEvents_.push_back(ev);
+    }
   }
 
   void bridgePointerButton(int button, bool pressed, float x, float y) {
@@ -342,6 +355,7 @@ struct Application::Impl
 
     // Queue raw input for Swift hit-testing (Phase 3+).
     if (button == MOUSE_BUTTON_1) {
+      pointerDown_ = pressed;
       canvas::InputEvent ev;
       ev.kind =
           static_cast<uint32_t>(pressed ? canvas::InputEventKind::MouseDown
@@ -631,6 +645,7 @@ struct Application::Impl
   bool drawListActive_ = false; // explicit; empty list must not fall back to legacy
   // GLFW callbacks (render thread, outside window mutex) vs Swift poll (under
   // window mutex) — protect the queue so Resize/Key/Mouse are not lost.
+  bool pointerDown_ = false;  // gates MouseMove queueing
   std::mutex inputMu_;
   std::deque<canvas::InputEvent> inputEvents_;
 

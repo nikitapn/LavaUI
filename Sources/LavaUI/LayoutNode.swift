@@ -162,9 +162,12 @@ final class LeafNode: YogaBoxNode {
     /// @State transplant — the node's own lifetime is the persistence.
     var editing = TextEditingState("")
     var placeholder: String = ""
-    /// Click handler that receives node-local coordinates, which a caret needs
-    /// and the plain `onClick` cannot provide.
-    var onClickLocal: ((Float, Float) -> Void)?
+    /// Click handler receiving node-local coordinates *and* the node's
+    /// absolute origin. The caret needs the former; a drag needs the latter,
+    /// because pointer capture delivers window coordinates long after the hit
+    /// test that knew where this node was.
+    var onClickLocal: ((_ localX: Float, _ localY: Float,
+                        _ originX: Float, _ originY: Float) -> Void)?
 
     /// Raster image leaf payload.
     var image: UIImage?
@@ -669,7 +672,7 @@ public final class LayoutHost {
                 if let local = leaf.onClickLocal {
                     let lx = x - nx
                     let ly = y - ny
-                    return { local(lx, ly) }
+                    return { local(lx, ly, nx, ny) }
                 }
                 if let click = leaf.onClick, leaf.kind == .text || leaf.kind == .image {
                     return click
@@ -732,7 +735,7 @@ final class LeafNode: AnyViewNode {
     var text = ""
     var color = Color.primary
     var onClick: (() -> Void)?
-    var onClickLocal: ((Float, Float) -> Void)?
+    var onClickLocal: ((Float, Float, Float, Float) -> Void)?
     var editing = TextEditingState("")
     var placeholder = ""
     var fillColor: Color?
