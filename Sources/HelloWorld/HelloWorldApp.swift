@@ -50,6 +50,8 @@ struct HelloWorldApp {
         let drawList = DrawList()
 
         var dirty = true
+        // The wheel event carries no position, so remember the last one.
+        var lastPointer: (x: Float, y: Float) = (0, 0)
         var lastLoggedLayout: (w: Float, h: Float) = (0, 0)
 
         func makeRoot() -> DemoExample {
@@ -140,6 +142,7 @@ struct HelloWorldApp {
                         )
                     }
                 case .mouseMove:
+                    lastPointer = (ev.x, ev.y)
                     if PointerCapture.isActive {
                         PointerCapture.move(x: ev.x, y: ev.y - menuH)
                     } else {
@@ -149,6 +152,13 @@ struct HelloWorldApp {
                     }
                 case .mouseUp:
                     PointerCapture.release()
+                case .scroll:
+                    // Wheel goes to whatever is under the pointer, focused or
+                    // not, so scrolling a panel never steals focus.
+                    ScrollRouter.deliver(
+                        to: host.hitTestHover(x: lastPointer.x, y: lastPointer.y, originY: menuH),
+                        dx: ev.x, dy: ev.y
+                    )
                 case .text:
                     if let scalar = Unicode.Scalar(UInt32(bitPattern: ev.button)) {
                         _ = FocusManager.handle(character: Character(scalar))

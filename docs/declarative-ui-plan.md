@@ -940,8 +940,24 @@ The trap is replacing the ST editor first because it's the visible one. Invert:
      across a token boundary. Every token-colouring editor makes this trade;
      it only shows where a ligature straddles two token types.
 
-   Still to port from ImGui: scrolling/viewport (the editor currently sizes to
-   `visibleLines`), and replacing `addTextWidget` at the call sites.
+   **Scroll viewport** ✅ — and it is the first thing in this codebase that
+   actually needed `pushClip`/`popClip`, which the draw list has carried unused
+   since Phase 3.5. The editor clips to its box, emits only the rows
+   intersecting the viewport, and keeps the caret on screen after every key
+   (an offscreen caret reads as a frozen editor).
+
+   Wheel events are new: GLFW's scroll callback was removed along with the
+   camera and never replaced. They coalesce in C++ like `MouseMove` does, and
+   route to whatever is under the pointer rather than to the focused node, so
+   scrolling a panel never steals focus.
+
+   The viewport height comes from the box Yoga *granted*, recorded at emit
+   time, not the height that was requested — Yoga shrinks these boxes when a
+   column overflows, and clamping against the requested height would let the
+   caret scroll out of view.
+
+   Still to port from ImGui: horizontal scrolling for long lines, and replacing
+   `addTextWidget` at the call sites.
 
 `addTextWidget` and the highlight-rule API stay untouched through 1–3. That is
 what makes this a migration rather than a rewrite.

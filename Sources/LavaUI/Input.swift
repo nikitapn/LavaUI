@@ -82,6 +82,8 @@ public enum InputEventKind: UInt32, Sendable, Equatable {
     /// A committed character; `button` holds the Unicode scalar. Distinct from
     /// `key`, which is physical and says nothing about layout or dead keys.
     case text = 6
+    /// Wheel / trackpad; `x`/`y` are deltas in notches, `button` holds mods.
+    case scroll = 7
 }
 
 /// One polled event from `Editor.pollInputEvent`.

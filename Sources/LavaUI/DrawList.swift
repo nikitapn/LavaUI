@@ -378,7 +378,10 @@ extension DrawList {
         let state = leaf.editing
         let rows = state.layout.rows
         let textX = x + leaf.gutterWidth + inset
-        let top = y + inset
+        // Content is drawn shifted up by the scroll offset and clipped to the
+        // box, which is the first thing in this codebase to actually need the
+        // scissor path the draw list has carried since the unified pipeline.
+        let top = y + inset - leaf.scrollY
 
         if leaf.showsGutter, leaf.gutterWidth > 0 {
             rect(x: x, y: y, w: leaf.gutterWidth, h: h, color: style.gutterBackground)
@@ -389,13 +392,21 @@ extension DrawList {
         )
         let selection = state.hasSelection ? state.selectedRange : nil
 
-        for (row, range) in rows.enumerated() {
+        // Yoga may have shrunk the box below the measured height; the clamp
+        // and the row window must use what was granted, not what was asked.
+        leaf.viewportHeight = h
+        pushClip(x: x, y: y, w: w, h: h)
+        defer { popClip() }
+
+        // Only rows intersecting the viewport are emitted: a long buffer costs
+        // a screenful of quads, not a file's worth.
+        let firstRow = max(0, Int(leaf.scrollY / lineH))
+        let lastRow = min(rows.count - 1, Int((leaf.scrollY + h) / lineH) + 1)
+        guard firstRow <= lastRow else { return }
+
+        for row in firstRow...lastRow {
+            let range = rows[row]
             let rowTop = top + Float(row) * lineH
-            // A row must fit *entirely*: Yoga can shrink this box below its
-            // measured height when the column overflows, and a half-drawn row
-            // spills over whatever follows. Real clipping arrives with the
-            // scroll viewport; until then, stop at the last row that fits.
-            if rowTop + lineH > y + h { break }
 
             let lo = state.index(atOffset: range.lowerBound)
             let hi = state.index(atOffset: range.upperBound)

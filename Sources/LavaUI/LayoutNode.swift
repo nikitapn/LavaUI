@@ -172,6 +172,54 @@ final class LeafNode: YogaBoxNode {
     var showsGutter = false
     var gutterWidth: Float = 0
     var search = TextSearch()
+    /// Set by views that accept the wheel.
+    var isScrollable = false
+    /// Vertical scroll offset in pixels. Positive scrolls content up.
+    var scrollY: Float = 0
+    /// Box height from the last layout, needed to clamp scrolling and to
+    /// decide how many rows fit.
+    var viewportHeight: Float = 0
+
+    /// Rows that fit in the viewport, at least one.
+    func visibleRowCount(lineHeight: Float) -> Int {
+        max(1, Int((viewportHeight - LeafNode.textInset * 2) / lineHeight))
+    }
+
+    /// Largest legal scroll offset for the current content.
+    func maxScrollY(lineHeight: Float) -> Float {
+        let content = Float(editing.layout.count) * lineHeight
+        let visible = viewportHeight - LeafNode.textInset * 2
+        return max(0, content - visible)
+    }
+
+    func scrollBy(_ delta: Float, lineHeight: Float) {
+        let next = min(max(0, scrollY + delta), maxScrollY(lineHeight: lineHeight))
+        if next != scrollY {
+            scrollY = next
+            ViewInvalidation.markDirty()
+        }
+    }
+
+    /// Keeps the caret on screen after a move or an edit.
+    ///
+    /// Without this, typing past the last visible row silently moves the caret
+    /// somewhere the user cannot see, which reads as the editor being frozen.
+    func scrollToCaret(lineHeight: Float) {
+        guard viewportHeight > 0 else { return }
+        let row = editing.layout.rowIndex(
+            ofOffset: editing.offset(of: editing.focus), affinity: editing.affinity
+        )
+        let rowTop = Float(row) * lineHeight
+        let visible = viewportHeight - LeafNode.textInset * 2
+        if rowTop < scrollY {
+            scrollY = rowTop
+            ViewInvalidation.markDirty()
+        } else if rowTop + lineHeight > scrollY + visible {
+            scrollY = rowTop + lineHeight - visible
+            ViewInvalidation.markDirty()
+        }
+        scrollY = min(max(0, scrollY), maxScrollY(lineHeight: lineHeight))
+    }
     /// Last width Yoga gave this leaf, used to wrap on the next pass.
     var lastMeasuredWidth: Float = 0
     /// Click handler receiving node-local coordinates *and* the node's
@@ -287,6 +335,9 @@ final class LeafNode: YogaBoxNode {
                 // the editor's last line spill past its own box.
                 let shown = min(max(editing.layout.count, 1), max(1, maxLines))
                 let height = Float(shown) * font.lineHeight + LeafNode.textInset * 2
+                // Seed the viewport; the emitter corrects it from the box Yoga
+                // actually granted, which can be smaller.
+                if viewportHeight <= 0 { viewportHeight = height }
                 let widest = editing.layout.rows.reduce(Float(0)) { acc, r in
                     let lo = editing.index(atOffset: r.lowerBound)
                     let hi = editing.index(atOffset: r.upperBound)
@@ -731,8 +782,10 @@ public final class LayoutHost {
             for child in node.childNodes.reversed() {
                 if let h = hoverWalk(child, x: x, y: y, ox: nx, oy: ny) { return h }
             }
+            // Scrollables count as hover targets too: the wheel is routed by
+            // what is under the pointer, and an editor has no hover fill.
             if let leaf = node as? LeafNode,
-               leaf.hoverFill != nil || leaf.onHover != nil,
+               leaf.hoverFill != nil || leaf.onHover != nil || leaf.isScrollable,
                x >= nx, x < nx + nw, y >= ny, y < ny + nh
             {
                 return leaf.id

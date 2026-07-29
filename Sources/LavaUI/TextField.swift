@@ -206,6 +206,12 @@ extension LeafNode {
         )
     }
 
+    /// Called after any key: an offscreen caret reads as a frozen editor.
+    func followCaret() {
+        guard let f = font ?? FontStore.default else { return }
+        scrollToCaret(lineHeight: f.lineHeight)
+    }
+
     private func afterEdit() {
         text = editing.text.isEmpty ? placeholder : editing.text
         markMeasureDirty()
@@ -277,6 +283,7 @@ extension LeafNode {
         }
 
         if editing.text != before { binding.wrappedValue = editing.text }
+        followCaret()
         afterEdit()
         return true
     }

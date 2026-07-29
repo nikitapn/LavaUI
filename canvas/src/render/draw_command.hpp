@@ -64,6 +64,9 @@ enum class InputEventKind : uint32_t {
   /// Key because key codes are physical: they say nothing about layout, dead
   /// keys or shift state, so only the char callback knows what was typed.
   Text = 6,
+  /// Wheel / trackpad. `x`/`y` are scroll deltas in notches; `button` holds
+  /// the modifier bitfield so Ctrl+wheel can mean zoom.
+  Scroll = 7,
 };
 
 struct InputEvent {

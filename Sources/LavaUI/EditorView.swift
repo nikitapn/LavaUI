@@ -118,6 +118,13 @@ public struct EditorView: PrimitiveView {
             leaf.gutterWidth = showLineNumbers ? leaf.measuredGutterWidth(font: f) : 0
         }
 
+        leaf.isScrollable = true
+        // Wheel scrolls three rows a notch, the usual desktop feel.
+        ScrollRouter.register(leaf.id) { [weak leaf] _, dy in
+            guard let leaf, let f = leaf.font ?? FontStore.default else { return }
+            leaf.scrollBy(-dy * f.lineHeight * 3, lineHeight: f.lineHeight)
+        }
+
         let binding = _text
         leaf.onClickLocal = { [weak leaf] localX, localY, originX, originY in
             guard let leaf else { return }
@@ -126,7 +133,9 @@ public struct EditorView: PrimitiveView {
             // editor with one.
             if leaf.showsGutter, localX < leaf.gutterWidth {
                 leaf.selectRow(atLocalY: localY)
-            } else if let hit = leaf.index(atLocalX: localX - leaf.gutterWidth, localY: localY) {
+            } else if let hit = leaf.index(
+                atLocalX: localX - leaf.gutterWidth, localY: localY + leaf.scrollY
+            ) {
                 let clicks = ClickCounter.register(x: originX + localX, y: originY + localY)
                 if clicks >= 2 {
                     leaf.editing.selectWord(at: hit)
@@ -137,7 +146,7 @@ public struct EditorView: PrimitiveView {
                         onMove: { [weak leaf] wx, wy in
                             guard let leaf else { return }
                             let lx = wx - originX - leaf.gutterWidth
-                            let ly = wy - originY
+                            let ly = wy - originY + leaf.scrollY
                             if let target = leaf.index(atLocalX: lx, localY: ly) {
                                 leaf.editing.setCursor(target, extending: true)
                                 ViewInvalidation.markDirty()
@@ -162,7 +171,8 @@ extension LeafNode {
     }
 
     /// Selects the whole visual row under `localY` — the gutter-click gesture.
-    func selectRow(atLocalY y: Float) {
+    func selectRow(atLocalY localY: Float) {
+        let y = localY + scrollY
         guard let f = font ?? FontStore.default else { return }
         let rows = editing.layout.rows
         let row = max(0, min(rows.count - 1, Int((y - LeafNode.textInset) / f.lineHeight)))

@@ -144,6 +144,27 @@ public enum PointerCapture {
     }
 }
 
+/// Wheel routing. The node under the pointer receives the wheel, focused or
+/// not — that is what every desktop app does, and it means scrolling a panel
+/// does not steal focus from a field.
+public enum ScrollRouter {
+    nonisolated(unsafe) private static var handlers: [NodeID: (Float, Float) -> Void] = [:]
+
+    public static func register(_ id: NodeID, handler: @escaping (Float, Float) -> Void) {
+        handlers[id] = handler
+    }
+
+    public static func unregister(_ id: NodeID) { handlers[id] = nil }
+
+    /// Delivers to `target` if it is scrollable. Returns true if consumed.
+    @discardableResult
+    public static func deliver(to target: NodeID?, dx: Float, dy: Float) -> Bool {
+        guard let target, let handler = handlers[target] else { return false }
+        handler(dx, dy)
+        return true
+    }
+}
+
 /// Multi-click detection. Kept here rather than in the field so any control
 /// can share one notion of what counts as a double click.
 public enum ClickCounter {

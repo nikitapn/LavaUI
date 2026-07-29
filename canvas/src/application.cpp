@@ -246,6 +246,12 @@ struct Application::Impl
       self->bridgeKeyEvent(key, action, mods);
     });
 
+    glfwSetScrollCallback(win, [](GLFWwindow *w, double dx, double dy) {
+      auto *self = static_cast<Impl *>(glfwGetWindowUserPointer(w));
+      if (!self) return;
+      self->bridgeScroll(static_cast<float>(dx), static_cast<float>(dy));
+    });
+
     glfwSetCharCallback(win, [](GLFWwindow *w, unsigned int codepoint) {
       auto *self = static_cast<Impl *>(glfwGetWindowUserPointer(w));
       if (!self) return;
@@ -418,6 +424,33 @@ struct Application::Impl
     // Retained for the old bridge signature; character input now goes through
     // bridgeCharInput, which keeps the scalar rather than round-tripping UTF-8.
     (void)utf8;
+  }
+
+  void bridgeScroll(float dx, float dy)
+  {
+    canvas::InputEvent ev;
+    ev.kind = static_cast<uint32_t>(canvas::InputEventKind::Scroll);
+    ev.x = dx;
+    ev.y = dy;
+    // Modifiers travel with the event so Ctrl+wheel can be distinguished
+    // without Swift tracking key state itself.
+    int mods = 0;
+    if (inputState.keys[KEY_LEFT_SHIFT]) mods |= 0x0001;
+    if (inputState.keys[KEY_LEFT_CONTROL]) mods |= 0x0002;
+    ev.button = mods;
+    {
+      std::lock_guard lock(inputMu_);
+      // Coalesce: only the accumulated delta matters, and a wheel can emit
+      // faster than the frame loop consumes.
+      if (!inputEvents_.empty() &&
+          inputEvents_.back().kind ==
+            static_cast<uint32_t>(canvas::InputEventKind::Scroll)) {
+        inputEvents_.back().x += ev.x;
+        inputEvents_.back().y += ev.y;
+      } else {
+        inputEvents_.push_back(ev);
+      }
+    }
   }
 
   /// Queues one committed character for Swift. This is the only reliable
