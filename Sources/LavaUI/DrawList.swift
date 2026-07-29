@@ -295,19 +295,21 @@ extension DrawList {
         // Single-line stays vertically centred in its box; multi-line starts
         // at the top inset and stacks.
         let firstTop = leaf.isMultiline ? y + inset : y + max(0, (h - lineH) / 2)
-        let lines = state.lines
+        let rows = state.layout.rows
         let selection = state.hasSelection ? state.selectedRange : nil
-        let caretLine = state.lineIndex(of: state.focus)
+        let caretRow = state.layout.rowIndex(
+            ofOffset: state.offset(of: state.focus), affinity: state.affinity
+        )
 
-        for (row, line) in lines.enumerated() {
+        for (row, rowRange) in rows.enumerated() {
             let lineTop = firstTop + Float(row) * lineH
             // Cheap vertical cull: a tall buffer in a short box.
             if lineTop + lineH < y || lineTop > y + h { continue }
 
-            let lineText = String(line)
+            let lineStart = state.index(atOffset: rowRange.lowerBound)
+            let lineEnd = state.index(atOffset: rowRange.upperBound)
+            let lineText = String(state.text[lineStart..<lineEnd])
             let run = font.shapedRun(lineText)
-            let lineStart = state.index(line: row, column: 0)
-            let lineEnd = state.lineRange(at: lineStart).upperBound
 
             // Selection is a range over the whole buffer; clip it to this line
             // so each row draws only its own share.
@@ -333,7 +335,7 @@ extension DrawList {
                 )
             }
 
-            if focused, !state.hasSelection, CaretBlink.isVisible, row == caretLine {
+            if focused, !state.hasSelection, CaretBlink.isVisible, row == caretRow {
                 let local = localIndex(
                     in: lineText, matching: state.focus, lineStart: lineStart, state: state
                 )

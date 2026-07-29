@@ -893,10 +893,19 @@ The trap is replacing the ST editor first because it's the visible one. Invert:
    meant line splits and joins are already recorded operations. That was the
    argument for doing undo first, and it held.
 
-   **Soft wrap is deliberately not done.** With wrapping, a visual line stops
-   being a logical line and every index mapping (caret, hit test, selection
-   clipping, vertical movement) has to distinguish the two. That is a separate
-   step, not a flag.
+   **Soft wrap** ✅ landed as `TextField(wraps: true)`. `SoftWrap.rows` is pure
+   — it takes *measured advances* rather than measuring, so break rules are
+   tested with synthetic uniform widths and no font at all. `VisualLayout` then
+   carries row ranges, and caret, hit test, selection clipping, vertical
+   movement, Home/End and box height all read it instead of newline positions.
+
+   The subtlety worth recording: at a wrap boundary one offset is **both** the
+   end of a row and the start of the next, and no rule based on the offset
+   alone can pick. Carets therefore carry a **`CaretAffinity`** — upstream
+   after a vertical move whose column clamped to a row end, downstream after a
+   click or Home. Without it, either Home/End acts on the wrong row or a
+   clamped Down strands the caret; the failing test that surfaced this was
+   exactly that pair pulling in opposite directions.
 3. **Undo/redo.** ✅ Done — and deliberately taken *before* multi-line, because
    the retrofit cost only grows. `TextEditingState` mutated its buffer in six
    places; every one now funnels through a single `replace(_:with:)` that

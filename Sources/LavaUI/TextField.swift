@@ -20,8 +20,10 @@ public struct TextField: PrimitiveView {
     /// separate step, because a wrapped visual line is no longer a logical one
     /// and every index mapping has to account for that.
     public var isMultiline: Bool
-    /// Height cap in lines when multi-line; the box grows up to this.
+    /// Height cap in rows when multi-line; the box grows up to this.
     public var maxLines: Int
+    /// Wrap long lines to the field width instead of letting them overflow.
+    public var wraps: Bool
 
     public init(
         text: Binding<String>,
@@ -29,6 +31,7 @@ public struct TextField: PrimitiveView {
         font: UIFont? = nil,
         multiline: Bool = false,
         maxLines: Int = 8,
+        wraps: Bool = false,
         onSubmit: (() -> Void)? = nil
     ) {
         self._text = text
@@ -36,6 +39,7 @@ public struct TextField: PrimitiveView {
         self.font = font
         self.isMultiline = multiline
         self.maxLines = maxLines
+        self.wraps = wraps
         self.onSubmit = onSubmit
     }
 
@@ -79,9 +83,14 @@ public struct TextField: PrimitiveView {
         leaf.minWidth = 80
         leaf.isMultiline = isMultiline
         leaf.maxLines = maxLines
+        leaf.wraps = wraps && isMultiline
+        // Width is not known until Yoga has run, so wrap against the last
+        // measured width; a resize re-runs this on the following pass.
+        leaf.refreshVisualRows(availableWidth: leaf.lastMeasuredWidth)
         if isMultiline, let f = resolvedFont {
-            // Hard-wrapped: height follows the line count directly.
-            let shown = min(max(leaf.editing.lines.count, 1), maxLines)
+            // Row count, not line count: with wrapping one logical line can
+            // occupy several rows, and the box has to fit what is drawn.
+            let shown = min(max(leaf.rowCount(), 1), maxLines)
             leaf.height = .pt(Float(shown) * f.lineHeight + Theme.current.controlPadding * 2)
         }
 
@@ -135,18 +144,55 @@ extension LeafNode {
         return font.shapedRun(editing.text)
     }
 
-    /// Index under a point in node-local coordinates, resolving the line
+    /// Recomputes wrapped rows for the current text and width, and installs
+    /// them on the editing state so navigation follows what is drawn.
+    ///
+    /// Called from layout rather than from draw: `moveUp`/`moveDown` consult
+    /// these, so they have to exist before a key is handled, not just before
+    /// pixels are produced.
+    func refreshVisualRows(availableWidth: Float) {
+        guard wraps, let f = font ?? FontStore.default, availableWidth > 0 else {
+            editing.setVisualRows(nil)
+            return
+        }
+        let inner = max(8, availableWidth - LeafNode.textInset * 2)
+        var rows: [Range<Int>] = []
+        var base = 0
+        for line in editing.lines {
+            let s = String(line)
+            let advances = f.shapedRun(s).characterAdvances
+            for r in SoftWrap.rows(text: s, advances: advances, maxWidth: inner) {
+                rows.append((base + r.lowerBound)..<(base + r.upperBound))
+            }
+            base += s.count + 1  // + the newline that separated them
+        }
+        editing.setVisualRows(rows)
+    }
+
+    /// Visual rows currently drawn.
+    func rowCount() -> Int { editing.layout.count }
+
+    /// Text of visual row `n`.
+    func rowText(_ n: Int) -> String {
+        let rows = editing.layout.rows
+        guard n >= 0, n < rows.count else { return "" }
+        let r = rows[n]
+        let lo = editing.index(atOffset: r.lowerBound)
+        let hi = editing.index(atOffset: r.upperBound)
+        return String(editing.text[lo..<hi])
+    }
+
+    /// Index under a point in node-local coordinates, resolving the visual row
     /// first. Nil when there is no font to shape with.
     func index(atLocalX x: Float, localY y: Float) -> String.Index? {
         guard let f = font ?? FontStore.default else { return nil }
         let inset = LeafNode.textInset
-        let lineList = editing.lines
-        let row = max(0, min(lineList.count - 1, Int((y - inset) / f.lineHeight)))
-        let column = f.shapedRun(String(lineList[row])).index(atX: x - inset)
-        let columnOffset = String(lineList[row]).distance(
-            from: String(lineList[row]).startIndex, to: column
-        )
-        return editing.index(line: row, column: columnOffset)
+        let rows = editing.layout.rows
+        let row = max(0, min(rows.count - 1, Int((y - inset) / f.lineHeight)))
+        let line = rowText(row)
+        let local = f.shapedRun(line).index(atX: x - inset)
+        let column = line.distance(from: line.startIndex, to: local)
+        return editing.index(atOffset: editing.layout.offset(row: row, column: column))
     }
 
     func focusSelf(binding: Binding<String>, onSubmit: (() -> Void)?) {

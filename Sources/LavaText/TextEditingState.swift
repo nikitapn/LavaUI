@@ -33,6 +33,27 @@ public struct TextEditingState: Equatable {
     /// shortest line it passed through.
     internal var desiredColumn: Int?
 
+    /// Visual rows, when the view has wrapped the buffer. Nil means one row
+    /// per logical line. Vertical movement and Home/End follow *these* — with
+    /// wrapping, a visual row is not a logical line, and navigating by
+    /// newlines would skip whole wrapped rows.
+    public internal(set) var visualRows: [Range<Int>]?
+
+    /// Which side of a wrap boundary the caret sits on. Only meaningful when
+    /// the caret is exactly at one; see `CaretAffinity`.
+    public internal(set) var affinity: CaretAffinity = .downstream
+
+    /// Installed by the view after each wrap pass.
+    public mutating func setVisualRows(_ rows: [Range<Int>]?) {
+        visualRows = rows
+    }
+
+    /// Row structure currently in effect.
+    public var layout: VisualLayout {
+        if let visualRows { return VisualLayout(rows: visualRows) }
+        return .logical(text)
+    }
+
     public init(_ text: String = "") {
         self.text = text
         self.anchor = text.startIndex
@@ -58,6 +79,7 @@ public struct TextEditingState: Equatable {
         anchor = range.lowerBound
         focus = range.upperBound
         desiredColumn = nil
+        affinity = .downstream
     }
 
     /// The word-ish run around `index`, using the same classification as
@@ -89,6 +111,7 @@ public struct TextEditingState: Equatable {
         anchor = text.startIndex
         focus = text.endIndex
         desiredColumn = nil
+        affinity = .downstream
     }
 
     /// Collapses to the caret end, as typing or a plain arrow key should.
@@ -98,6 +121,7 @@ public struct TextEditingState: Equatable {
         focus = clamp(index)
         if !extending { anchor = focus }
         desiredColumn = nil
+        affinity = .downstream
     }
 
     // MARK: Movement
@@ -115,6 +139,7 @@ public struct TextEditingState: Equatable {
         }
         if !extending { anchor = focus }
         desiredColumn = nil
+        affinity = .downstream
     }
 
     public mutating func moveRight(extending: Bool = false) {
@@ -128,30 +153,35 @@ public struct TextEditingState: Equatable {
         }
         if !extending { anchor = focus }
         desiredColumn = nil
+        affinity = .downstream
     }
 
     public mutating func moveToStart(extending: Bool = false) {
         focus = text.startIndex
         if !extending { anchor = focus }
         desiredColumn = nil
+        affinity = .downstream
     }
 
     public mutating func moveToEnd(extending: Bool = false) {
         focus = text.endIndex
         if !extending { anchor = focus }
         desiredColumn = nil
+        affinity = .downstream
     }
 
     public mutating func moveWordLeft(extending: Bool = false) {
         focus = wordBoundary(before: focus)
         if !extending { anchor = focus }
         desiredColumn = nil
+        affinity = .downstream
     }
 
     public mutating func moveWordRight(extending: Bool = false) {
         focus = wordBoundary(after: focus)
         if !extending { anchor = focus }
         desiredColumn = nil
+        affinity = .downstream
     }
 
     // MARK: The one mutation path
@@ -184,6 +214,7 @@ public struct TextEditingState: Equatable {
         focus = caret
         anchor = caret
         desiredColumn = nil
+        affinity = .downstream
     }
 
     // MARK: Undo / redo
@@ -279,11 +310,11 @@ public struct TextEditingState: Equatable {
 
     /// Character offset of an index. Characters, not bytes, so the value
     /// stays meaningful across graphemes of differing byte length.
-    func offset(of index: String.Index) -> Int {
+    public func offset(of index: String.Index) -> Int {
         text.distance(from: text.startIndex, to: index)
     }
 
-    func index(atOffset offset: Int) -> String.Index {
+    public func index(atOffset offset: Int) -> String.Index {
         let clamped = max(0, min(offset, text.count))
         return text.index(text.startIndex, offsetBy: clamped)
     }
@@ -419,16 +450,26 @@ extension TextEditingState {
 
     // MARK: Home / End are per-line once there is more than one
 
+    /// Home/End act on the *visual* row, matching what the user sees. When
+    /// nothing is wrapped this is the same as the logical line.
     public mutating func moveToLineStart(extending: Bool = false) {
-        focus = lineRange(at: focus).lowerBound
+        let l = layout
+        let row = l.rows[l.rowIndex(ofOffset: offset(of: focus), affinity: affinity)]
+        focus = index(atOffset: row.lowerBound)
+        affinity = .downstream
         if !extending { anchor = focus }
         desiredColumn = nil
+        affinity = .downstream
     }
 
     public mutating func moveToLineEnd(extending: Bool = false) {
-        focus = lineRange(at: focus).upperBound
+        let l = layout
+        let row = l.rows[l.rowIndex(ofOffset: offset(of: focus), affinity: affinity)]
+        focus = index(atOffset: row.upperBound)
+        affinity = .upstream
         if !extending { anchor = focus }
         desiredColumn = nil
+        affinity = .downstream
     }
 
     // MARK: Vertical
@@ -440,29 +481,37 @@ extension TextEditingState {
     /// end instead of returning to the original column — the classic
     /// multi-line caret bug, and invisible until someone navigates ragged text.
     public mutating func moveUp(extending: Bool = false) {
-        let line = lineIndex(of: focus)
-        guard line > 0 else {
-            // Already on the first line: go to its start, like every editor.
+        let l = layout
+        let here = offset(of: focus)
+        let row = l.rowIndex(ofOffset: here, affinity: affinity)
+        guard row > 0 else {
             focus = text.startIndex
             if !extending { anchor = focus }
             return
         }
-        let target = desiredColumn ?? column(of: focus)
-        focus = index(line: line - 1, column: target)
+        let target = desiredColumn ?? l.column(ofOffset: here, affinity: affinity)
+        let landed = l.offset(row: row - 1, column: target)
+        // Clamped to the row's end: stay on that row rather than jumping to
+        // the start of the next one, which is the same offset.
+        affinity = landed == l.rows[row - 1].upperBound ? .upstream : .downstream
+        focus = index(atOffset: landed)
         if !extending { anchor = focus }
         desiredColumn = target
     }
 
     public mutating func moveDown(extending: Bool = false) {
-        let line = lineIndex(of: focus)
-        let lastLine = lines.count - 1
-        guard line < lastLine else {
+        let l = layout
+        let here = offset(of: focus)
+        let row = l.rowIndex(ofOffset: here, affinity: affinity)
+        guard row < l.count - 1 else {
             focus = text.endIndex
             if !extending { anchor = focus }
             return
         }
-        let target = desiredColumn ?? column(of: focus)
-        focus = index(line: line + 1, column: target)
+        let target = desiredColumn ?? l.column(ofOffset: here, affinity: affinity)
+        let landed = l.offset(row: row + 1, column: target)
+        affinity = landed == l.rows[row + 1].upperBound ? .upstream : .downstream
+        focus = index(atOffset: landed)
         if !extending { anchor = focus }
         desiredColumn = target
     }

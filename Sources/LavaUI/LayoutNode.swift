@@ -164,6 +164,9 @@ final class LeafNode: YogaBoxNode {
     var placeholder: String = ""
     var isMultiline = false
     var maxLines = 8
+    var wraps = false
+    /// Last width Yoga gave this leaf, used to wrap on the next pass.
+    var lastMeasuredWidth: Float = 0
     /// Click handler receiving node-local coordinates *and* the node's
     /// absolute origin. The caret needs the former; a drag needs the latter,
     /// because pointer capture delivers window coordinates long after the hit
@@ -231,6 +234,13 @@ final class LeafNode: YogaBoxNode {
         }
     }
 
+    /// Re-wrap before measuring: row count drives the box height, and
+    /// navigation consults the same rows.
+    func prepareWrap(availableWidth: Float) {
+        guard kind == .textField else { return }
+        refreshVisualRows(availableWidth: availableWidth)
+    }
+
     /// Install Yoga measure callback (Phase 4). Width/height become auto;
     /// intrinsic size comes from `Font::measure` via `TextLayoutCache`.
     func installTextMeasure() {
@@ -244,6 +254,12 @@ final class LeafNode: YogaBoxNode {
     }
 
     func measureForYoga(width: Float, widthMode: YGMeasureMode) -> YGSize {
+        // Yoga tells us the width here and nowhere else, so this is where a
+        // wrapping field learns how wide it may be.
+        if kind == .textField, wraps, width > 0, width != lastMeasuredWidth {
+            lastMeasuredWidth = width
+            refreshVisualRows(availableWidth: width)
+        }
         guard let font = font ?? FontStore.default else {
             // Fallback estimate if font not bootstrapped yet.
             let w = max(8, Float(text.count) * 8 + 8)
@@ -782,6 +798,9 @@ final class LeafNode: AnyViewNode {
     var placeholder = ""
     var isMultiline = false
     var maxLines = 8
+    var wraps = false
+    /// Last width Yoga gave this leaf, used to wrap on the next pass.
+    var lastMeasuredWidth: Float = 0
     var hoverFill: Color?
     var cornerRadius: Float = 0
     var onHover: ((Bool) -> Void)?

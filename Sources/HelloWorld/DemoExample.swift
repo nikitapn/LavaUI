@@ -49,7 +49,7 @@ public struct DemoExample: View {
     @State private var items: [DemoItem] = DemoExample.seedItems
     @State private var selectedId: Int? = 1
     @State private var draft: String = ""
-    @State private var notes: String = "Multi-line field.\nEnter adds a line.\nUp/Down keep their column."
+    @State private var notes: String = "Multi-line with soft wrap. This sentence is long enough that it has to wrap onto several visual rows inside the panel.\nEnter still adds a hard line.\nUp/Down step visual rows."
     @State private var showSidebar = true
     @State private var showInspector = true
     @State private var flexSlots = 3
@@ -210,7 +210,10 @@ public struct DemoExample: View {
                 onSubmit: { addItem() }
             )
             Text("Multi-line TextField", color: .accent)
-            TextField(text: $notes, placeholder: "Notes…", multiline: true, maxLines: 6)
+            TextField(
+                text: $notes, placeholder: "Notes…",
+                multiline: true, maxLines: 8, wraps: true
+            )
 
             HStack(padding: 2) {
                 Text(

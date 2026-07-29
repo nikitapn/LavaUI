@@ -81,6 +81,27 @@ public struct ShapedRun {
         return text.endIndex
     }
 
+    /// One advance per Character, which is what `SoftWrap` consumes.
+    ///
+    /// Glyphs are not characters: a ligature is one glyph spanning several,
+    /// and a combining mark is a glyph with no advance of its own. Summing by
+    /// cluster is what keeps the two aligned.
+    public var characterAdvances: [Float] {
+        guard !text.isEmpty else { return [] }
+        var result = [Float](repeating: 0, count: text.count)
+        // Character index for each UTF-8 offset where a character starts.
+        var charOfUTF8: [Int: Int] = [:]
+        for (n, entry) in boundaries.enumerated() where n < text.count {
+            charOfUTF8[entry.utf8] = n
+        }
+        var current = 0
+        for glyph in glyphs {
+            if let mapped = charOfUTF8[Int(glyph.cluster)] { current = mapped }
+            if current < result.count { result[current] += glyph.advance }
+        }
+        return result
+    }
+
     // MARK: Helpers
 
     private func utf8Offset(of index: String.Index) -> Int {
