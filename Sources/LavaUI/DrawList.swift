@@ -29,6 +29,10 @@ public final class DrawList {
     /// Overlays found during the current walk, emitted once it finishes.
     private var pendingOverlays: [PendingOverlay] = []
 
+    /// Fade applied to everything appended, for transitions. A multiplier
+    /// rather than a value so nested transitions compose.
+    private var alphaMultiplier: Float = 1
+
     public init() {
         commands.reserveCapacity(256)
         glyphs.reserveCapacity(2048)
@@ -52,7 +56,15 @@ public final class DrawList {
         cmd.y = y
         cmd.w = w
         cmd.h = h
-        cmd.color = color.rgba8
+        // The single choke point every primitive goes through, which is why
+        // the fade lives here rather than in each of them.
+        if alphaMultiplier < 1 {
+            var faded = color
+            faded.a *= alphaMultiplier
+            cmd.color = faded.rgba8
+        } else {
+            cmd.color = color.rgba8
+        }
         cmd.param = param
         cmd.aux = aux
         commands.append(cmd)
@@ -178,6 +190,28 @@ public final class DrawList {
     }
 
     private func emitNode(
+        _ node: any AnyViewNode,
+        ox: Float, oy: Float,
+        vpW: Float, vpH: Float
+    ) {
+        // A transitioning subtree is drawn faded and displaced. Wrapping the
+        // whole walk means every primitive underneath inherits it without
+        // knowing anything about transitions, and nesting multiplies.
+        if let box = node as? YogaBoxNode,
+           let transition = box.transitionState,
+           transition.isTransitioning
+        {
+            let saved = alphaMultiplier
+            alphaMultiplier *= transition.alpha
+            let shift = transition.translation
+            emitNodeBody(node, ox: ox + shift.x, oy: oy + shift.y, vpW: vpW, vpH: vpH)
+            alphaMultiplier = saved
+            return
+        }
+        emitNodeBody(node, ox: ox, oy: oy, vpW: vpW, vpH: vpH)
+    }
+
+    private func emitNodeBody(
         _ node: any AnyViewNode,
         ox: Float, oy: Float,
         vpW: Float, vpH: Float

@@ -79,6 +79,8 @@ class YogaBoxNode: AnyViewNode {
     var styleBaseline: ViewStyle?
     /// Set by any box that accepts the wheel.
     var isScrollable = false
+    /// Appear/disappear animation, if `.transition()` was applied.
+    var transitionState: TransitionState?
 
     /// How far this node's children are drawn from its own origin.
     ///
@@ -630,14 +632,54 @@ class FragmentNode: AnyViewNode {
     let id: NodeID
     var label: String
     var needsBodyRecompute = false
-    var childNodes: [any AnyViewNode] = []
+
+    /// Children the view tree currently describes.
+    private(set) var liveChildren: [any AnyViewNode] = []
+    /// Children removed from the view tree but still animating out.
+    private(set) var departingChildren: [any AnyViewNode] = []
+
+    /// Both, so layout, emit and frame collection see a departing child
+    /// without any of them needing to know it is departing. Keeping it in the
+    /// flow is deliberate: dropping it from layout the instant it starts
+    /// fading makes the content jump, which is the thing the animation exists
+    /// to avoid.
+    var childNodes: [any AnyViewNode] {
+        departingChildren.isEmpty ? liveChildren : liveChildren + departingChildren
+    }
 
     var yoga: YGNodeRef? { nil }
 
     init(label: String, children: [any AnyViewNode] = []) {
         self.id = .generate()
         self.label = label
-        self.childNodes = children
+        self.liveChildren = children
+    }
+
+    /// Replaces the children, animating whatever arrived or left.
+    ///
+    /// Every reconciler that can insert or remove a child routes through here,
+    /// so the transition rules exist once rather than three times in
+    /// `EitherView`, `OptionalView` and `ForEach`.
+    func setChildren(_ next: [any AnyViewNode]) {
+        let nextIDs = Set(next.map(\.id))
+        let oldIDs = Set(liveChildren.map(\.id))
+
+        for old in liveChildren where !nextIDs.contains(old.id) {
+            guard let box = old as? YogaBoxNode,
+                  let transition = box.transitionState
+            else { continue }  // no transition: dropped now, ARC frees it
+            departingChildren.append(old)
+            transition.leave { [weak self, weak old] in
+                guard let self, let old else { return }
+                self.departingChildren.removeAll { $0.id == old.id }
+            }
+        }
+
+        for child in next where !oldIDs.contains(child.id) {
+            (child as? YogaBoxNode)?.transitionState?.enter()
+        }
+
+        liveChildren = next
     }
 
     func collectFrames(originX: Float, originY: Float, into frames: inout [LayoutFrame]) {
@@ -655,7 +697,7 @@ final class CompositeNode<V: View>: FragmentNode {
     init(_ view: V) {
         self.view = view
         super.init(label: String(describing: V.self))
-        childNodes = [ViewGraph.mount(computeBody())]
+        setChildren([ViewGraph.mount(computeBody())])
     }
 
     func update(_ newView: V) {
@@ -667,10 +709,10 @@ final class CompositeNode<V: View>: FragmentNode {
 
         needsBodyRecompute = true
         let body = computeBody()
-        if let existing = childNodes.first {
-            childNodes = [ViewGraph.reconcile(existing, with: body)]
+        if let existing = liveChildren.first {
+            setChildren([ViewGraph.reconcile(existing, with: body)])
         } else {
-            childNodes = [ViewGraph.mount(body)]
+            setChildren([ViewGraph.mount(body)])
         }
         needsBodyRecompute = false
     }
@@ -720,11 +762,11 @@ final class EitherFragmentNode: FragmentNode {
         if case .first(let node) = active {
             let n = ViewGraph.reconcile(node, with: view)
             active = .first(n)
-            childNodes = [n]
+            setChildren([n])
         } else {
             let n = ViewGraph.mount(view)
             active = .first(n)
-            childNodes = [n]
+            setChildren([n])
         }
     }
 
@@ -733,11 +775,11 @@ final class EitherFragmentNode: FragmentNode {
         if case .second(let node) = active {
             let n = ViewGraph.reconcile(node, with: view)
             active = .second(n)
-            childNodes = [n]
+            setChildren([n])
         } else {
             let n = ViewGraph.mount(view)
             active = .second(n)
-            childNodes = [n]
+            setChildren([n])
         }
     }
 }
@@ -750,16 +792,16 @@ final class OptionalFragmentNode: FragmentNode {
 
     func updateSome<V: View>(_ view: V) {
         label = "OptionalView.some"
-        if let existing = childNodes.first {
-            childNodes = [ViewGraph.reconcile(existing, with: view)]
+        if let existing = liveChildren.first {
+            setChildren([ViewGraph.reconcile(existing, with: view)])
         } else {
-            childNodes = [ViewGraph.mount(view)]
+            setChildren([ViewGraph.mount(view)])
         }
     }
 
     func updateNone() {
         label = "OptionalView.none"
-        childNodes = []
+        setChildren([])
     }
 }
 
@@ -791,7 +833,7 @@ final class ForEachFragmentNode<ID: Hashable>: FragmentNode {
         }
         // Remaining oldMap entries drop out of `keyed` → ARC frees nodes.
         keyed = next
-        childNodes = next.map(\.node)
+        setChildren(next.map(\.node))
         label = "ForEach[\(next.count)]"
     }
 }
@@ -995,6 +1037,11 @@ public final class LayoutHost {
     private func hoverWalk(
         _ node: any AnyViewNode, x: Float, y: Float, ox: Float, oy: Float
     ) -> NodeID? {
+        // A departing subtree is still drawn but is no longer part of the view
+        // tree, so it must not answer for input on the way out.
+        if let box = node as? YogaBoxNode, box.transitionState?.isLeaving == true {
+            return nil
+        }
         if let box = node as? YogaBoxNode, let yref = box.yoga {
             let nx = ox + YGNodeLayoutGetLeft(yref)
             let ny = oy + YGNodeLayoutGetTop(yref)
@@ -1031,6 +1078,11 @@ public final class LayoutHost {
         x: Float, y: Float,
         ox: Float, oy: Float
     ) -> (() -> Void)? {
+        // Clicking something that is fading out would run an action the view
+        // tree no longer describes.
+        if let box = node as? YogaBoxNode, box.transitionState?.isLeaving == true {
+            return nil
+        }
         if let box = node as? YogaBoxNode, let yref = box.yoga {
             let nx = ox + YGNodeLayoutGetLeft(yref)
             let ny = oy + YGNodeLayoutGetTop(yref)

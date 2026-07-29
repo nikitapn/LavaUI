@@ -76,6 +76,7 @@ public struct DemoExample: View {
     @State private var nextId = 10
     @State private var gauge: Float = 0.35
     @State private var showMenu = false
+    @State private var showBanner = true
     @State private var lightTheme = false
     @State private var status = "Click a list row, edit the field, resize the window."
     @State private var actionCount = 0
@@ -204,6 +205,9 @@ public struct DemoExample: View {
         VStack(width: .pt(200), padding: 8) {
             Text("Navigation", color: .accent)
             Text("ForEach + selection", color: .dim)
+            // Rows slide in from the left as they are added and fade out where
+            // they stood when removed — a keyed ForEach is the case that most
+            // needs it, since a row can leave from the middle of the list.
             ForEach(items, id: \.id) { item in
                 let selected = item.id == selectedId
                 Text(
@@ -214,6 +218,7 @@ public struct DemoExample: View {
                         bump("selected \(item.title)")
                     }
                 )
+                .transition(.slide(dx: -14, dy: 0))
             }
             Spacer()
             Text(
@@ -363,6 +368,21 @@ public struct DemoExample: View {
                     }
                 Text("(Esc or a click outside closes it)", color: .dim)
                 Spacer()
+            }
+
+            Text("Transition · appear / disappear", color: .accent)
+            HStack(padding: 2) {
+                Toggle("Show banner", isOn: $showBanner)
+                Spacer()
+            }
+            // An `if` is one of the three places a node can actually be
+            // inserted or removed, so this is where a transition means anything.
+            if showBanner {
+                Text("  This panel slides down and fades as it comes and goes.  ")
+                    .padding(8)
+                    .background(Color(r: 0.24, g: 0.30, b: 0.42))
+                    .cornerRadius(6)
+                    .transition(.slide(dy: -12))
             }
 
             Text("Slider · drag, step, readout", color: .accent)

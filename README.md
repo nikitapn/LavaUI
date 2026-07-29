@@ -127,6 +127,13 @@ costs a draw-list re-emit and no `body` recompute. `FrameScheduler` holds the
 earliest wake any component asked for; `InvalidationLevel` decides how much of
 body → layout → emit actually has to run.
 
+**Transitions** `.transition(.slide(dy: -12))` animates a view appearing and
+disappearing, wherever a reconciler can insert or remove one — an `if`, an
+optional, a `ForEach` row. Leaving is the hard direction: the view describing
+the node is already gone, so the node outlives its own removal in the
+fragment's `departingChildren`, staying in the layout and the draw walk while
+it fades, and inert to input the whole time.
+
 **System** `@State` + `@Binding` with `Observation` · `Theme` (semantic tokens,
 light and dark) · focus, hover, pointer capture, click counting · content
 scaling
@@ -141,10 +148,10 @@ what is measured cannot drift from what is drawn.
 
 Honest list, roughly in the order it hurts:
 
-- **Transitions** — animating a view *appearing* or *disappearing*. Value
-  animation exists; transitions need removed nodes to outlive their removal,
-  which touches the three reconcilers that drop nodes (`EitherView`, `ForEach`,
-  `OptionalView`).
+- **Animated layout** — a transition fades and offsets, but the space a
+  removed view held collapses in one step at the end rather than shrinking with
+  it. Smooth collapse needs the departing node's Yoga size animated and its
+  content clipped while it shrinks.
 - **Environment** — `Theme.current` and `FontStore.default` are globals. They
   should be environment defaults, not the only way to set a value.
 - **Per-node invalidation** — a change re-runs the whole tree. Correct, but

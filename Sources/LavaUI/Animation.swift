@@ -111,6 +111,13 @@ public enum AnimationDriver {
 
     public static func register(_ id: NodeID, step: @escaping () -> Bool) {
         active[id] = step
+        // Registering has to ask for the next frame itself, because `tick()`
+        // runs before `renderFrame` in the loop — anything that starts an
+        // animation during mount or reconcile, which is where transitions
+        // start, has already missed this frame's tick. Without this the loop
+        // blocks in `pumpEvents` and the animation stays frozen at its first
+        // value until some unrelated input happens to wake it.
+        FrameScheduler.requestWake(in: 1.0 / 60.0)
     }
 
     public static func unregister(_ id: NodeID) { active[id] = nil }

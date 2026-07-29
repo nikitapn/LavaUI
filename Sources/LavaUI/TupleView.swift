@@ -39,7 +39,7 @@ public struct TupleView<each Content: View>: PrimitiveView {
             }
             index += 1
         }
-        tuple.childNodes = next
+        tuple.setChildren(next)
         return tuple
     }
 }
