@@ -1,10 +1,9 @@
 import Foundation
-import FBDModel
 import LavaUI
 
 #if canImport(CxxCanvas)
 
-/// FBD editor app: LavaUI chrome + diagram host.
+/// Runs the LavaUI widget playground (`DemoExample`).
 @main
 struct HelloWorldApp {
     static func main() {
@@ -19,13 +18,12 @@ struct HelloWorldApp {
             assetsRoot: assets,
             width: Int32(windowW),
             height: Int32(windowH),
-            title: "FBD Editor"
+            title: "LavaUI · DemoExample"
         ) else {
             FileHandle.standardError.write(Data("failed to open editor window\n".utf8))
             exit(1)
         }
 
-        // Sync to actual framebuffer (may differ from requested on HiDPI / WM).
         let fb0 = editor.framebufferSize()
         if fb0.w >= 1, fb0.h >= 1 {
             windowW = fb0.w
@@ -45,24 +43,17 @@ struct HelloWorldApp {
             FileHandle.standardError.write(Data("warning: brand image failed to load\n".utf8))
         }
 
-        let diagram = makeSampleDiagram()
         ClipboardBridge.reader = { editor.clipboardText }
         ClipboardBridge.writer = { editor.clipboardText = $0 }
 
         let host = LayoutHost()
         let drawList = DrawList()
 
-        // Selection and click count now live in EditorChrome's @State. The
-        // run loop no longer mirrors view state, and `dirty` only tracks the
-        // things Observation cannot see: window size and font scale.
         var dirty = true
         var lastLoggedLayout: (w: Float, h: Float) = (0, 0)
 
-        func makeChrome() -> EditorChrome {
-            EditorChrome(
-                blocks: diagram.blocks.values.sorted { $0.name < $1.name },
-                brandImage: brandImage
-            )
+        func makeRoot() -> DemoExample {
+            DemoExample(brandImage: brandImage)
         }
 
         func renderFrame() {
@@ -73,24 +64,20 @@ struct HelloWorldApp {
             }
             let bodyW = windowW
             let bodyH = max(1, windowH - menuH)
-            let chrome = makeChrome()
-            host.setRoot(chrome)
+            host.setRoot(makeRoot())
             let frames = host.calculateLayout(width: bodyW, height: bodyH)
-            if let rootFrame = frames.first(where: { $0.label == "HStack" }) {
-                if abs(rootFrame.w - bodyW) > 2 || abs(rootFrame.h - bodyH) > 2 {
-                    let msg =
-                        "layout warn: HStack \(Int(rootFrame.w))×\(Int(rootFrame.h)) "
-                        + "!= body \(Int(bodyW))×\(Int(bodyH))\n"
-                    FileHandle.standardError.write(Data(msg.utf8))
-                }
-            }
-            if abs(bodyW - lastLoggedLayout.w) > 0.5 || abs(bodyH - lastLoggedLayout.h) > 0.5,
-               let dh = frames.first(where: { $0.label == "DiagramHost" })
-            {
+
+            if abs(bodyW - lastLoggedLayout.w) > 0.5 || abs(bodyH - lastLoggedLayout.h) > 0.5 {
                 lastLoggedLayout = (bodyW, bodyH)
-                let msg =
-                    "layout: \(Int(bodyW))×\(Int(bodyH)) DiagramHost "
-                    + "\(Int(dh.w))×\(Int(dh.h)) @ (\(Int(dh.x)),\(Int(dh.y)))\n"
+                let hostFrame = frames.first(where: { $0.label == "DiagramHost" })
+                let msg: String
+                if let dh = hostFrame {
+                    msg =
+                        "layout: \(Int(bodyW))×\(Int(bodyH)) DiagramHost "
+                        + "\(Int(dh.w))×\(Int(dh.h))\n"
+                } else {
+                    msg = "layout: \(Int(bodyW))×\(Int(bodyH))\n"
+                }
                 FileHandle.standardError.write(Data(msg.utf8))
             }
 
@@ -99,7 +86,7 @@ struct HelloWorldApp {
             drawList.clear()
             drawList.rect(
                 x: 0, y: 0, w: windowW, h: windowH,
-                color: Color(r: 0.10, g: 0.11, b: 0.13)
+                color: Theme.current.background
             )
             drawList.emitTree(
                 root,
@@ -109,32 +96,26 @@ struct HelloWorldApp {
                 viewportH: windowH
             )
 
+            // Demo has a DiagramHost but no FBD scene — leave the host fill as-is.
             if let dh = host.diagramHostFrame() {
-                let hx = dh.x
-                let hy = dh.y + menuH
-                editor.setDiagramViewport(x: hx, y: hy, w: dh.w, h: dh.h)
-                drawList.pushClip(x: hx, y: hy, w: dh.w, h: dh.h)
-                emitDiagram(diagram, into: drawList, hostX: hx, hostY: hy)
-                drawList.popClip()
+                editor.setDiagramViewport(x: dh.x, y: dh.y + menuH, w: dh.w, h: dh.h)
             }
 
             editor.submitDrawList(drawList)
             dirty = false
         }
 
-        let chrome0 = makeChrome()
-        Phase1Dump.run(chrome: chrome0)
-        Phase2LayoutDump.run(chrome: chrome0, width: windowW, height: windowH - menuH)
-        Phase5StateDump.run()
-        Phase4TextDump.run(chrome: chrome0, width: windowW, height: windowH - menuH)
+        // Lightweight structure dump (no FBD chrome phases).
+        let demo0 = makeRoot()
+        FileHandle.standardError.write(Data("--- DemoExample structure ---\n".utf8))
+        for line in demo0.structureLines() {
+            FileHandle.standardError.write(Data((line + "\n").utf8))
+        }
+        FileHandle.standardError.write(Data("--- end structure ---\n".utf8))
 
         renderFrame()
 
         while editor.isOpen {
-            // Block until something happens. A focused caret needs a periodic
-            // wake to blink; otherwise sleep until input arrives. This replaces
-            // a fixed 16ms poll, which cost up to a frame of latency on every
-            // event for nothing.
             let wake: Double = FocusManager.focusedID != nil ? CaretBlink.period / 4 : -1
             editor.pumpEvents(timeout: wake)
 
@@ -162,9 +143,6 @@ struct HelloWorldApp {
                     if PointerCapture.isActive {
                         PointerCapture.move(x: ev.x, y: ev.y - menuH)
                     } else {
-                        // Free motion: hover only. HoverState invalidates just
-                        // on change, so per-pixel moves cost a hit test, not a
-                        // frame.
                         HoverState.set(
                             host.hitTestHover(x: ev.x, y: ev.y, originY: menuH)
                         )
@@ -172,13 +150,10 @@ struct HelloWorldApp {
                 case .mouseUp:
                     PointerCapture.release()
                 case .text:
-                    // A committed character: only the char callback knows what
-                    // was actually typed (layout, dead keys, shift).
                     if let scalar = Unicode.Scalar(UInt32(bitPattern: ev.button)) {
                         _ = FocusManager.handle(character: Character(scalar))
                     }
                 case .key:
-                    // Focused field first; global shortcuts only if unconsumed.
                     let isPress = ev.x > 0
                     if isPress,
                        FocusManager.handle(
@@ -209,13 +184,9 @@ struct HelloWorldApp {
                 dirty = true
             }
 
-            // A body read something that changed (a click mutating @State, say).
-            // Observation set the flag; the loop decides when to act on it.
             if ViewInvalidation.consume() {
                 dirty = true
             }
-            // The only thing that redraws an otherwise idle app: the caret.
-            // Gated on focus so an unfocused window still sleeps properly.
             if FocusManager.focusedID != nil, CaretBlink.phaseChanged() {
                 dirty = true
             }
@@ -231,7 +202,6 @@ struct HelloWorldApp {
         if let env = ProcessInfo.processInfo.environment["CANVAS_ASSETS_ROOT"], !env.isEmpty {
             return env
         }
-        // Sources/HelloWorld/HelloWorldApp.swift → repo root → canvas/.build.Debug
         return URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
             .deletingLastPathComponent()

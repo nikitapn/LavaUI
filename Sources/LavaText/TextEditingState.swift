@@ -21,6 +21,11 @@ public struct TextEditingState: Equatable {
     public private(set) var anchor: String.Index
     public private(set) var focus: String.Index
 
+    /// Edit history. Every mutation funnels through `replace(...)`, which is
+    /// what makes undo possible without auditing each operation separately —
+    /// the thing the plan warned becomes painful to retrofit.
+    public private(set) var undoStack = UndoStack()
+
     public init(_ text: String = "") {
         self.text = text
         self.anchor = text.startIndex
@@ -133,23 +138,75 @@ public struct TextEditingState: Equatable {
         if !extending { anchor = focus }
     }
 
+    // MARK: The one mutation path
+
+    /// Replaces `range` with `replacement`, records it for undo, and leaves
+    /// the caret after the inserted text.
+    ///
+    /// Every editing operation goes through here. That is the whole point:
+    /// undo cannot be bolted onto a type that mutates its buffer in eight
+    /// places, and this type used to.
+    private mutating func replace(
+        _ range: Range<String.Index>, with replacement: String, record: Bool = true
+    ) {
+        let start = offset(of: range.lowerBound)
+        let removed = String(text[range])
+        guard !(removed.isEmpty && replacement.isEmpty) else { return }
+
+        if record {
+            undoStack.record(TextEdit(
+                offset: start,
+                removed: removed,
+                inserted: replacement,
+                anchorBefore: offset(of: anchor),
+                focusBefore: offset(of: focus)
+            ))
+        }
+
+        text.replaceSubrange(range, with: replacement)
+        let caret = index(atOffset: start + replacement.count)
+        focus = caret
+        anchor = caret
+    }
+
+    // MARK: Undo / redo
+
+    public var canUndo: Bool { undoStack.canUndo }
+    public var canRedo: Bool { undoStack.canRedo }
+
+    @discardableResult
+    public mutating func undo() -> Bool {
+        guard let edit = undoStack.popUndo() else { return false }
+        apply(edit.inverted)
+        // Restore where the user was, not just what the text was.
+        anchor = index(atOffset: edit.anchorBefore)
+        focus = index(atOffset: edit.focusBefore)
+        return true
+    }
+
+    @discardableResult
+    public mutating func redo() -> Bool {
+        guard let edit = undoStack.popRedo() else { return false }
+        apply(edit)
+        return true
+    }
+
+    /// Applies an edit without recording it — used by undo/redo, which must
+    /// not push new history while walking the existing history.
+    private mutating func apply(_ edit: TextEdit) {
+        let lower = index(atOffset: edit.offset)
+        let upper = index(atOffset: edit.offset + edit.removed.count)
+        text.replaceSubrange(lower..<upper, with: edit.inserted)
+        let caret = index(atOffset: edit.offset + edit.inserted.count)
+        focus = caret
+        anchor = caret
+    }
+
     // MARK: Editing
 
     public mutating func insert(_ string: String) {
         guard !string.isEmpty || hasSelection else { return }
-        let range = selectedRange
-        text.replaceSubrange(range, with: string)
-        // replaceSubrange invalidates indices; recompute from the offset the
-        // edit started at plus what we inserted.
-        let start = text.utf8.index(
-            text.utf8.startIndex, offsetBy: text.utf8.distance(
-                from: text.utf8.startIndex, to: range.lowerBound.samePosition(in: text.utf8)!
-            )
-        )
-        let inserted = string.utf8.count
-        let end = text.utf8.index(start, offsetBy: inserted)
-        focus = snapToCharacterBoundary(String.Index(end, within: text) ?? text.endIndex)
-        anchor = focus
+        replace(selectedRange, with: string)
     }
 
     public mutating func deleteBackward() {
@@ -160,10 +217,7 @@ public struct TextEditingState: Equatable {
         guard focus > text.startIndex else { return }
         // index(before:) steps a whole grapheme, so one press removes one
         // user-perceived character rather than half an emoji.
-        let from = text.index(before: focus)
-        text.removeSubrange(from..<focus)
-        focus = from
-        anchor = from
+        replace(text.index(before: focus)..<focus, with: "")
     }
 
     public mutating func deleteForward() {
@@ -172,9 +226,7 @@ public struct TextEditingState: Equatable {
             return
         }
         guard focus < text.endIndex else { return }
-        let to = text.index(after: focus)
-        text.removeSubrange(focus..<to)
-        anchor = focus
+        replace(focus..<text.index(after: focus), with: "")
     }
 
     public mutating func deleteWordBackward() {
@@ -184,17 +236,13 @@ public struct TextEditingState: Equatable {
         }
         let from = wordBoundary(before: focus)
         guard from < focus else { return }
-        text.removeSubrange(from..<focus)
-        focus = from
-        anchor = from
+        replace(from..<focus, with: "")
     }
 
     private mutating func deleteSelection() {
         let range = selectedRange
         guard !range.isEmpty else { return }
-        text.removeSubrange(range)
-        focus = range.lowerBound
-        anchor = focus
+        replace(range, with: "")
     }
 
     /// Replaces the whole buffer, e.g. when the bound value changed elsewhere.
@@ -203,6 +251,7 @@ public struct TextEditingState: Equatable {
             ? text.utf8.distance(from: text.utf8.startIndex, to: focus.samePosition(in: text.utf8)!)
             : new.utf8.count
         text = new
+        undoStack.clear()
         let clamped = min(offset, new.utf8.count)
         let byteIndex = new.utf8.index(new.utf8.startIndex, offsetBy: clamped)
         focus = snapToCharacterBoundary(String.Index(byteIndex, within: new) ?? new.endIndex)
@@ -210,6 +259,17 @@ public struct TextEditingState: Equatable {
     }
 
     // MARK: Helpers
+
+    /// Character offset of an index. Characters, not bytes, so the value
+    /// stays meaningful across graphemes of differing byte length.
+    func offset(of index: String.Index) -> Int {
+        text.distance(from: text.startIndex, to: index)
+    }
+
+    func index(atOffset offset: Int) -> String.Index {
+        let clamped = max(0, min(offset, text.count))
+        return text.index(text.startIndex, offsetBy: clamped)
+    }
 
     private func clamp(_ index: String.Index) -> String.Index {
         if index < text.startIndex { return text.startIndex }

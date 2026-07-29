@@ -165,6 +165,13 @@ extension LeafNode {
             FocusManager.resignFocus(id)
         case KeyCode.a where event.control:
             editing.selectAll()
+        case KeyCode.z where event.control && event.shift:
+            editing.redo()
+        case KeyCode.z where event.control:
+            editing.undo()
+        // Ctrl+Y is the Windows-style redo; both are common enough to accept.
+        case KeyCode.y where event.control:
+            editing.redo()
         case KeyCode.c where event.control:
             if editing.hasSelection { ClipboardBridge.write(editing.selectedText) }
         case KeyCode.x where event.control:

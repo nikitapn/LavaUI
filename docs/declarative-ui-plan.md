@@ -878,10 +878,25 @@ The trap is replacing the ST editor first because it's the visible one. Invert:
 1. **Single-line, Latin, no IME.** Property-panel edits. Selection, caret,
    click-to-place, shift-select, clipboard via `glfwGet`/`SetClipboardString`.
    Covers most of the UI; a few days.
-2. **Multi-line.** Soft wrap reusing Phase 4's wrapping. Vertical caret movement
-   needs "desired x" memory across lines — a classic bug source.
-3. **Undo/redo.** Structure edits as operations *from the start*; painful to
-   retrofit once the string is mutated in a dozen places.
+2. **Multi-line.** ⬅ NEXT. Soft wrap reusing Phase 4's wrapping. Vertical caret
+   movement needs "desired x" memory across lines — a classic bug source, and
+   cheap to cover headlessly in `LavaText`.
+3. **Undo/redo.** ✅ Done — and deliberately taken *before* multi-line, because
+   the retrofit cost only grows. `TextEditingState` mutated its buffer in six
+   places; every one now funnels through a single `replace(_:with:)` that
+   records a `TextEdit`. Multi-line editing therefore inherits undo rather than
+   having to be untangled for it later.
+
+   `TextEdit` stores **character offsets**, not `String.Index` (invalidated by
+   the very mutation being recorded) and not bytes (would break grapheme
+   correctness). Undo restores the selection as well as the text; restoring
+   text alone feels broken.
+
+   Coalescing is **time-free**. A timer makes split points depend on typing
+   speed, which is untestable and surprising to the user. Runs break on a
+   whitespace boundary, a caret jump, or a direction change instead — so
+   "hello world" undoes as "world" then "hello ", which is where a user
+   expects the boundary. 14 tests, all deterministic.
 4. **Port the ST editor.** Only once 1–3 handle everything it needs, including
    syntax-highlight ranges.
 
