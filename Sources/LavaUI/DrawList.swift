@@ -377,32 +377,61 @@ extension DrawList {
         let focused = FocusManager.isFocused(leaf.id)
         let state = leaf.editing
         let rows = state.layout.rows
-        let textX = x + leaf.gutterWidth + inset
-        // Content is drawn shifted up by the scroll offset and clipped to the
-        // box, which is the first thing in this codebase to actually need the
-        // scissor path the draw list has carried since the unified pipeline.
-        let top = y + inset - leaf.scrollY
 
-        if leaf.showsGutter, leaf.gutterWidth > 0 {
-            rect(x: x, y: y, w: leaf.gutterWidth, h: h, color: style.gutterBackground)
-        }
+        // Yoga may have shrunk the box below the measured height; the clamp
+        // and the row window must use what was granted, not what was asked.
+        leaf.viewportHeight = h
+        leaf.textViewportWidth = max(0, w - leaf.gutterWidth - inset * 2)
+
+        let textX = x + leaf.gutterWidth + inset - leaf.scrollX
+        let top = y + inset - leaf.scrollY
 
         let caretRow = state.layout.rowIndex(
             ofOffset: state.offset(of: state.focus), affinity: state.affinity
         )
         let selection = state.hasSelection ? state.selectedRange : nil
 
-        // Yoga may have shrunk the box below the measured height; the clamp
-        // and the row window must use what was granted, not what was asked.
-        leaf.viewportHeight = h
-        pushClip(x: x, y: y, w: w, h: h)
-        defer { popClip() }
-
         // Only rows intersecting the viewport are emitted: a long buffer costs
         // a screenful of quads, not a file's worth.
         let firstRow = max(0, Int(leaf.scrollY / lineH))
         let lastRow = min(rows.count - 1, Int((leaf.scrollY + h) / lineH) + 1)
         guard firstRow <= lastRow else { return }
+
+        // Pass 1 — chrome that must not scroll horizontally. The gutter stays
+        // pinned while text moves under it, which is the whole reason this is
+        // two clip regions instead of one.
+        pushClip(x: x, y: y, w: w, h: h)
+        if leaf.showsGutter, leaf.gutterWidth > 0 {
+            rect(x: x, y: y, w: leaf.gutterWidth, h: h, color: style.gutterBackground)
+        }
+        for row in firstRow...lastRow {
+            let rowTop = top + Float(row) * lineH
+            if focused, row == caretRow, selection == nil {
+                rect(
+                    x: x + leaf.gutterWidth, y: rowTop,
+                    w: w - leaf.gutterWidth, h: lineH, color: style.currentLine
+                )
+            }
+            if leaf.showsGutter, leaf.gutterWidth > 0 {
+                // Right-aligned so numbers stay in a column as they widen.
+                let label = String(row + 1)
+                let labelW = font.shapedRun(label).width
+                text(
+                    label, x: x + leaf.gutterWidth - inset - labelW - 4, y: rowTop,
+                    w: leaf.gutterWidth, h: lineH,
+                    color: style.gutterText, font: font
+                )
+            }
+        }
+        popClip()
+
+        // Pass 2 — everything that scrolls, clipped to the text area so a
+        // horizontally scrolled line cannot draw over the gutter.
+        pushClip(
+            x: x + leaf.gutterWidth, y: y,
+            w: max(0, w - leaf.gutterWidth), h: h
+        )
+        defer { popClip() }
 
         for row in firstRow...lastRow {
             let range = rows[row]
@@ -415,20 +444,9 @@ extension DrawList {
 
             func columnX(_ column: Int) -> Float {
                 let clamped = max(0, min(column, lineText.count))
-                let idx = lineText.index(lineText.startIndex, offsetBy: clamped)
-                return run.caretX(for: idx)
+                return run.caretX(for: lineText.index(lineText.startIndex, offsetBy: clamped))
             }
 
-            // Current line: only when nothing is selected, so it does not
-            // fight the selection colour.
-            if focused, row == caretRow, selection == nil {
-                rect(
-                    x: x + leaf.gutterWidth, y: rowTop,
-                    w: w - leaf.gutterWidth, h: lineH, color: style.currentLine
-                )
-            }
-
-            // Search matches under everything else so text stays readable.
             for (i, match) in leaf.search.matches.enumerated() {
                 guard match.lowerBound < range.upperBound,
                       match.upperBound > range.lowerBound else { continue }
@@ -441,9 +459,7 @@ extension DrawList {
                 )
             }
 
-            if let sel = selection,
-               sel.lowerBound < hi, sel.upperBound > lo
-            {
+            if let sel = selection, sel.lowerBound < hi, sel.upperBound > lo {
                 let from = max(state.offset(of: sel.lowerBound), range.lowerBound)
                 let to = min(state.offset(of: sel.upperBound), range.upperBound)
                 let a = columnX(from - range.lowerBound)
@@ -453,17 +469,6 @@ extension DrawList {
                     x: textX + a, y: rowTop,
                     w: max(spansNewline ? 4 : 1, b - a), h: lineH,
                     color: Theme.current.selectionFill
-                )
-            }
-
-            if leaf.showsGutter, leaf.gutterWidth > 0 {
-                // Right-aligned, so the numbers stay in a column as they widen.
-                let label = String(row + 1)
-                let labelW = font.shapedRun(label).width
-                text(
-                    label, x: x + leaf.gutterWidth - inset - labelW - 4, y: rowTop,
-                    w: leaf.gutterWidth, h: lineH,
-                    color: style.gutterText, font: font
                 )
             }
 

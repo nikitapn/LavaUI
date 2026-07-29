@@ -120,9 +120,16 @@ public struct EditorView: PrimitiveView {
 
         leaf.isScrollable = true
         // Wheel scrolls three rows a notch, the usual desktop feel.
-        ScrollRouter.register(leaf.id) { [weak leaf] _, dy in
+        ScrollRouter.register(leaf.id) { [weak leaf] dx, dy in
             guard let leaf, let f = leaf.font ?? FontStore.default else { return }
-            leaf.scrollBy(-dy * f.lineHeight * 3, lineHeight: f.lineHeight)
+            // Shift+wheel scrolls horizontally, the desktop convention for a
+            // mouse with no horizontal axis. A trackpad supplies dx directly.
+            if ScrollRouter.shiftHeld, dx == 0 {
+                leaf.scrollByX(-dy * f.lineHeight * 3, font: f)
+            } else {
+                if dx != 0 { leaf.scrollByX(-dx * f.lineHeight * 3, font: f) }
+                if dy != 0 { leaf.scrollBy(-dy * f.lineHeight * 3, lineHeight: f.lineHeight) }
+            }
         }
 
         let binding = _text
@@ -134,7 +141,8 @@ public struct EditorView: PrimitiveView {
             if leaf.showsGutter, localX < leaf.gutterWidth {
                 leaf.selectRow(atLocalY: localY)
             } else if let hit = leaf.index(
-                atLocalX: localX - leaf.gutterWidth, localY: localY + leaf.scrollY
+                atLocalX: localX - leaf.gutterWidth + leaf.scrollX,
+                localY: localY + leaf.scrollY
             ) {
                 let clicks = ClickCounter.register(x: originX + localX, y: originY + localY)
                 if clicks >= 2 {
@@ -145,7 +153,7 @@ public struct EditorView: PrimitiveView {
                         leaf.id,
                         onMove: { [weak leaf] wx, wy in
                             guard let leaf else { return }
-                            let lx = wx - originX - leaf.gutterWidth
+                            let lx = wx - originX - leaf.gutterWidth + leaf.scrollX
                             let ly = wy - originY + leaf.scrollY
                             if let target = leaf.index(atLocalX: lx, localY: ly) {
                                 leaf.editing.setCursor(target, extending: true)

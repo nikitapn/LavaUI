@@ -956,8 +956,19 @@ The trap is replacing the ST editor first because it's the visible one. Invert:
    column overflows, and clamping against the requested height would let the
    caret scroll out of view.
 
-   Still to port from ImGui: horizontal scrolling for long lines, and replacing
-   `addTextWidget` at the call sites.
+   **Horizontal scrolling** ✅ — shift+wheel, or a trackpad's `dx` directly.
+   The gutter stays pinned while text moves under it, which is why the emitter
+   uses **two clip regions** rather than one: chrome that must not scroll
+   (gutter background, line numbers, current-line wash) in the first, and
+   everything that does scroll in a region starting at the gutter's right
+   edge. One region would let a scrolled line draw over the numbers.
+
+   The caret follows horizontally too, with a margin so it never sits flush
+   against the edge it just crossed. Widest-row width is cached per
+   (font, text) — clamping the scroll would otherwise reshape every line in
+   the buffer on every frame.
+
+   Still to port from ImGui: replacing `addTextWidget` at the call sites.
 
 `addTextWidget` and the highlight-rule API stay untouched through 1–3. That is
 what makes this a migration rather than a rewrite.

@@ -149,6 +149,9 @@ public enum PointerCapture {
 /// does not steal focus from a field.
 public enum ScrollRouter {
     nonisolated(unsafe) private static var handlers: [NodeID: (Float, Float) -> Void] = [:]
+    /// Modifier state carried on the scroll event, so handlers do not have to
+    /// track key state themselves.
+    nonisolated(unsafe) public private(set) static var shiftHeld = false
 
     public static func register(_ id: NodeID, handler: @escaping (Float, Float) -> Void) {
         handlers[id] = handler
@@ -158,7 +161,10 @@ public enum ScrollRouter {
 
     /// Delivers to `target` if it is scrollable. Returns true if consumed.
     @discardableResult
-    public static func deliver(to target: NodeID?, dx: Float, dy: Float) -> Bool {
+    public static func deliver(
+        to target: NodeID?, dx: Float, dy: Float, mods: Int32 = 0
+    ) -> Bool {
+        shiftHeld = KeyMods.contains(mods, KeyMods.shift)
         guard let target, let handler = handlers[target] else { return false }
         handler(dx, dy)
         return true

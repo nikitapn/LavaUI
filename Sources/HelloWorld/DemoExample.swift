@@ -62,6 +62,9 @@ public struct DemoExample: View {
     ELSE
       running := FALSE;
     END_IF
+
+    // A deliberately long line to exercise horizontal scrolling: shift+wheel moves the text while the gutter stays pinned in place.
+    total := speed * 2.0 + offset * 3.0 - correction * 0.5 + trim;
     """
     @State private var findQuery: String = ""
     @State private var search = TextSearch()

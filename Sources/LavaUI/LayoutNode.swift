@@ -176,6 +176,68 @@ final class LeafNode: YogaBoxNode {
     var isScrollable = false
     /// Vertical scroll offset in pixels. Positive scrolls content up.
     var scrollY: Float = 0
+    /// Horizontal offset in pixels. The gutter does not move with it.
+    var scrollX: Float = 0
+    /// Width of the text area (box minus gutter and padding), from the last
+    /// emit. Needed to clamp horizontal scrolling against something real.
+    var textViewportWidth: Float = 0
+    /// Widest row in pixels, cached per (text, font) so a wide buffer does not
+    /// reshape every line on every frame just to clamp a scrollbar.
+    private var widestRowCache: (key: String, width: Float)?
+
+    func widestRowWidth(font: UIFont) -> Float {
+        let key = "\(font.identity)|\(editing.text.count)|\(editing.layout.count)"
+        if let c = widestRowCache, c.key == key { return c.width }
+        var widest: Float = 0
+        for r in editing.layout.rows {
+            let lo = editing.index(atOffset: r.lowerBound)
+            let hi = editing.index(atOffset: r.upperBound)
+            widest = max(widest, font.shapedRun(String(editing.text[lo..<hi])).width)
+        }
+        widestRowCache = (key, widest)
+        return widest
+    }
+
+    func maxScrollX(font: UIFont) -> Float {
+        max(0, widestRowWidth(font: font) - textViewportWidth)
+    }
+
+    func scrollByX(_ delta: Float, font: UIFont) {
+        let next = min(max(0, scrollX + delta), maxScrollX(font: font))
+        if next != scrollX {
+            scrollX = next
+            ViewInvalidation.markDirty()
+        }
+    }
+
+    /// Keeps the caret horizontally visible, with a small margin so it never
+    /// sits flush against the edge it just crossed.
+    func scrollToCaretX(font: UIFont) {
+        guard textViewportWidth > 0 else { return }
+        let rows = editing.layout.rows
+        let row = editing.layout.rowIndex(
+            ofOffset: editing.offset(of: editing.focus), affinity: editing.affinity
+        )
+        guard row < rows.count else { return }
+        let r = rows[row]
+        let lo = editing.index(atOffset: r.lowerBound)
+        let hi = editing.index(atOffset: r.upperBound)
+        let line = String(editing.text[lo..<hi])
+        let column = editing.offset(of: editing.focus) - r.lowerBound
+        let clamped = max(0, min(column, line.count))
+        let caretX = font.shapedRun(line)
+            .caretX(for: line.index(line.startIndex, offsetBy: clamped))
+
+        let margin: Float = 24
+        if caretX < scrollX + margin {
+            scrollX = max(0, caretX - margin)
+            ViewInvalidation.markDirty()
+        } else if caretX > scrollX + textViewportWidth - margin {
+            scrollX = caretX - textViewportWidth + margin
+            ViewInvalidation.markDirty()
+        }
+        scrollX = min(max(0, scrollX), maxScrollX(font: font))
+    }
     /// Box height from the last layout, needed to clamp scrolling and to
     /// decide how many rows fit.
     var viewportHeight: Float = 0

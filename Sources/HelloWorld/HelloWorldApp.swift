@@ -157,7 +157,7 @@ struct HelloWorldApp {
                     // not, so scrolling a panel never steals focus.
                     ScrollRouter.deliver(
                         to: host.hitTestHover(x: lastPointer.x, y: lastPointer.y, originY: menuH),
-                        dx: ev.x, dy: ev.y
+                        dx: ev.x, dy: ev.y, mods: ev.button
                     )
                 case .text:
                     if let scalar = Unicode.Scalar(UInt32(bitPattern: ev.button)) {

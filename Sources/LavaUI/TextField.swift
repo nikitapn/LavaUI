@@ -210,6 +210,7 @@ extension LeafNode {
     func followCaret() {
         guard let f = font ?? FontStore.default else { return }
         scrollToCaret(lineHeight: f.lineHeight)
+        scrollToCaretX(font: f)
     }
 
     private func afterEdit() {
