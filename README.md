@@ -91,6 +91,7 @@ Yoga, with `if`/`else` and optionals handled by the view builder.
 
 **Content** `Text` (hover, click, wrapping) · `Image` · `DiagramHost`
 · `Button` (animated press and hover) · `Toggle` (animated knob, bound value)
+· `Slider` (drag, optional step and readout)
 
 **Input** `TextField` (single and multi-line, soft wrap, selection, clipboard,
 undo) · `EditorView` (line-number gutter, syntax rules, current-line highlight,
@@ -119,7 +120,7 @@ what is measured cannot drift from what is drawn.
 
 Honest list, roughly in the order it hurts:
 
-- **Controls** — `Slider`, `Divider`. (`Button` and `Toggle` exist.)
+- **Controls** — `Divider`. (`Button`, `Toggle` and `Slider` exist.)
 - **Transitions** — animating a view *appearing* or *disappearing*. Value
   animation exists; transitions need removed nodes to outlive their removal,
   which touches the three reconcilers that drop nodes (`EitherView`, `ForEach`,

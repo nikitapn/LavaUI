@@ -74,6 +74,7 @@ public struct DemoExample: View {
     @State private var showInspector = true
     @State private var flexSlots = 3
     @State private var nextId = 10
+    @State private var gauge: Float = 0.35
     @State private var lightTheme = false
     @State private var status = "Click a list row, edit the field, resize the window."
     @State private var actionCount = 0
@@ -320,6 +321,24 @@ public struct DemoExample: View {
                 Toggle("Nav", isOn: $showSidebar)
                 Toggle("Inspector", isOn: $showInspector)
                 Toggle("Locked", isOn: .constant(true), isEnabled: false)
+                Spacer()
+            }
+
+            Text("Slider · drag, step, readout", color: .accent)
+            HStack(padding: 2) {
+                Text("slots", color: .secondary)
+                // An Int driven through a Float binding — the flex row above
+                // reflows as this is dragged.
+                Slider(
+                    value: Binding(
+                        get: { Float(flexSlots) },
+                        set: { flexSlots = Int($0) }
+                    ),
+                    in: 1...6, step: 1, format: { String(Int($0)) }
+                )
+                Text("gauge", color: .secondary)
+                Slider(value: $gauge, in: 0...1, format: { String(format: "%.2f", $0) })
+                Slider(value: .constant(0.5), isEnabled: false)
                 Spacer()
             }
 

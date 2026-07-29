@@ -260,6 +260,11 @@ public final class DrawList {
                     return
                 }
 
+                if leaf.kind == .slider {
+                    emitSlider(leaf, x: x, y: y, w: w, h: h)
+                    return
+                }
+
                 if leaf.kind == .textField {
                     emitTextField(leaf, x: x, y: y, w: w, h: h)
                 }
@@ -366,6 +371,63 @@ extension DrawList {
                 x: trackX + style.trackWidth + style.labelGap - 4,
                 y: y + max(0, (h - lineH) / 2),
                 w: w, h: lineH, color: leaf.color, font: font
+            )
+        }
+    }
+
+    /// Draws a slider as: inactive track, active track, knob, then readout.
+    ///
+    /// This is also where the drag geometry is recorded. Deriving it here
+    /// rather than in the drag handler is what keeps the knob under the
+    /// pointer: the numbers that convert a click back to a value are, by
+    /// construction, the same ones that drew the track.
+    fileprivate func emitSlider(
+        _ leaf: LeafNode, x: Float, y: Float, w: Float, h: Float
+    ) {
+        guard let style = leaf.sliderStyle else { return }
+        let readoutW = leaf.text.isEmpty ? 0 : style.valueGap + style.valueWidth
+        let knobR = style.knobRadius
+        // The +4/-8 mirror the padding `measureForYoga` added.
+        let trackX = x + 4
+        let trackW = max(0, w - 8 - readoutW)
+        let cy = y + h / 2
+
+        // The knob's centre never reaches the track ends, so travel is shorter
+        // than the track by one diameter.
+        leaf.sliderInset = 4 + knobR
+        leaf.sliderTravel = max(0, trackW - knobR * 2)
+
+        let enabled = leaf.isEnabled
+        let thickness = style.trackThickness
+        roundedRect(
+            x: trackX, y: cy - thickness / 2, w: trackW, h: thickness,
+            color: enabled ? style.inactiveTrack : style.disabledTrack,
+            radius: thickness / 2
+        )
+
+        let cx = trackX + knobR + leaf.sliderTravel * leaf.sliderFraction
+        let filled = cx - trackX
+        if filled > 0, enabled {
+            roundedRect(
+                x: trackX, y: cy - thickness / 2, w: filled, h: thickness,
+                color: style.activeTrack, radius: thickness / 2
+            )
+        }
+
+        circle(
+            cx: cx, cy: cy,
+            radius: knobR * (leaf.sliderKnobScale?.current ?? 1),
+            color: enabled ? style.knob : style.disabledKnob
+        )
+
+        if !leaf.text.isEmpty, let font = leaf.font ?? FontStore.default {
+            text(
+                leaf.text,
+                // -4 cancels the pen inset `text(_:)` applies.
+                x: trackX + trackW + style.valueGap - 4,
+                y: cy - font.lineHeight / 2,
+                w: style.valueWidth, h: font.lineHeight,
+                color: leaf.color, font: font
             )
         }
     }

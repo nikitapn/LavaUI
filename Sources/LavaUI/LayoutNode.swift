@@ -161,6 +161,7 @@ enum LeafKind: Equatable {
     case editor
     case button
     case toggle
+    case slider
 }
 
 final class LeafNode: YogaBoxNode {
@@ -200,6 +201,19 @@ final class LeafNode: YogaBoxNode {
     /// would be a visible pop.
     var toggleKnobColor: Animated<Color>?
     var isOn = false
+
+    /// Slider-only payload.
+    ///
+    /// The knob *position* is deliberately not animated: during a drag it must
+    /// sit under the pointer, and any interpolation there reads as lag. Only
+    /// the knob's size responds to hover and press.
+    var sliderStyle: SliderStyle?
+    var sliderFraction: Float = 0
+    var sliderKnobScale: Animated<Float>?
+    /// Geometry recorded at emit, so a drag converts pointer position through
+    /// exactly the numbers that drew the track rather than recomputing them.
+    var sliderInset: Float = 0
+    var sliderTravel: Float = 0
 
     /// Editor-only payload.
     var highlighter: SyntaxHighlighter?
@@ -444,6 +458,21 @@ final class LeafNode: YogaBoxNode {
                 let w = (wraps && width > 0) ? width : contentWidth
                 return YGSize(width: w, height: height)
             }
+        }
+
+        if kind == .slider, let style = sliderStyle {
+            // The readout is given a *reserved* width rather than its measured
+            // one: a number whose width changes as it is dragged would resize
+            // the track under the pointer, and the knob would drift away from
+            // the finger holding it.
+            let readout = text.isEmpty ? 0 : style.valueGap + style.valueWidth
+            let natural = style.trackWidth + readout + 8
+            // Honour an exact width so `.flexGrow(1)` and `.frame(width:)`
+            // stretch the track; otherwise take the natural size.
+            let w = (widthMode == YGMeasureModeExactly && width > 0) ? width : natural
+            // Tall enough for the knob at its hover size, or it clips.
+            let knobExtent = style.knobRadius * 2 * style.knobHoverScale
+            return YGSize(width: w, height: max(knobExtent, font.lineHeight) + 4)
         }
 
         if kind == .toggle, let style = toggleStyle {
@@ -996,7 +1025,7 @@ public final class LayoutHost {
 }
 
 // Minimal stubs so primitives compile without CYoga.
-enum LeafKind: Equatable { case text, spacer, diagramHost, empty, image, textField, editor, button, toggle }
+enum LeafKind: Equatable { case text, spacer, diagramHost, empty, image, textField, editor, button, toggle, slider }
 
 final class LeafNode: AnyViewNode {
     let id = NodeID.generate()

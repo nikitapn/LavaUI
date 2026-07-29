@@ -75,7 +75,21 @@ public struct Binding<Value> {
 
     public var wrappedValue: Value {
         get { get() }
-        nonmutating set { set(newValue) }
+        nonmutating set {
+            set(newValue)
+            // Observation alone is not enough here. Only `view.body` runs
+            // inside `withObservationTracking`, and a body that merely passes
+            // `$value` to a control never *reads* through the binding — so no
+            // dependency is registered and the write notifies nobody. A
+            // `Slider` bound to state nothing else displayed moved its knob and
+            // repainted nothing at all.
+            //
+            // A binding write is by definition a user-visible state change, so
+            // invalidating unconditionally is right. Controls are expected to
+            // skip no-op writes (a drag that lands on the same quantised value)
+            // rather than have this second-guess them.
+            ViewInvalidation.markNeedsBody()
+        }
     }
 
     public var projectedValue: Binding<Value> { self }
