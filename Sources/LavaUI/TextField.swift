@@ -84,15 +84,9 @@ public struct TextField: PrimitiveView {
         leaf.isMultiline = isMultiline
         leaf.maxLines = maxLines
         leaf.wraps = wraps && isMultiline
-        // Width is not known until Yoga has run, so wrap against the last
-        // measured width; a resize re-runs this on the following pass.
-        leaf.refreshVisualRows(availableWidth: leaf.lastMeasuredWidth)
-        if isMultiline, let f = resolvedFont {
-            // Row count, not line count: with wrapping one logical line can
-            // occupy several rows, and the box has to fit what is drawn.
-            let shown = min(max(leaf.rowCount(), 1), maxLines)
-            leaf.height = .pt(Float(shown) * f.lineHeight + Theme.current.controlPadding * 2)
-        }
+        // No wrapping or sizing here: only the Yoga measure callback knows
+        // the resolved width, and setting `height` after installTextMeasure()
+        // has forced it to .auto never reached Yoga anyway.
 
         let binding = _text
         let submit = onSubmit

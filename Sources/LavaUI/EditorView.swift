@@ -111,9 +111,10 @@ public struct EditorView: PrimitiveView {
         leaf.text = leaf.editing.text
         leaf.minWidth = 160
 
+        // Height is decided by the measure callback from the row count, so
+        // the box always matches what is drawn.
+        leaf.maxLines = visibleLines
         if let f = resolvedFont {
-            let rows = min(max(leaf.editing.layout.count, 1), visibleLines)
-            leaf.height = .pt(Float(rows) * f.lineHeight + Theme.current.controlPadding * 2)
             leaf.gutterWidth = showLineNumbers ? leaf.measuredGutterWidth(font: f) : 0
         }
 

@@ -261,17 +261,45 @@ final class LeafNode: YogaBoxNode {
     }
 
     func measureForYoga(width: Float, widthMode: YGMeasureMode) -> YGSize {
-        // Yoga tells us the width here and nowhere else, so this is where a
-        // wrapping field learns how wide it may be.
-        if kind == .textField || kind == .editor, wraps, width > 0, width != lastMeasuredWidth {
-            lastMeasuredWidth = width
-            refreshVisualRows(availableWidth: width)
-        }
         guard let font = font ?? FontStore.default else {
             // Fallback estimate if font not bootstrapped yet.
             let w = max(8, Float(text.count) * 8 + 8)
             return YGSize(width: w, height: 22)
         }
+
+        if kind == .textField || kind == .editor {
+            // Yoga calls measure several times per pass: AtMost with whatever
+            // space the parent *could* offer, and Exactly with the width the
+            // box actually resolved to. Only the Exactly pass is real. Adopting
+            // an AtMost probe (which can be the whole window) wraps the text
+            // for a box that does not exist, and the text then overflows.
+            if wraps, width > 0, widthMode == YGMeasureModeExactly,
+               width != lastMeasuredWidth
+            {
+                lastMeasuredWidth = width
+                refreshVisualRows(availableWidth: width)
+            }
+
+            if isMultiline {
+                // Height comes from the rows we will actually draw, so the box
+                // and its contents cannot disagree. Deriving it from
+                // Font::measure instead let the two drift, which is what made
+                // the editor's last line spill past its own box.
+                let shown = min(max(editing.layout.count, 1), max(1, maxLines))
+                let height = Float(shown) * font.lineHeight + LeafNode.textInset * 2
+                let widest = editing.layout.rows.reduce(Float(0)) { acc, r in
+                    let lo = editing.index(atOffset: r.lowerBound)
+                    let hi = editing.index(atOffset: r.upperBound)
+                    return max(acc, font.shapedRun(String(editing.text[lo..<hi])).width)
+                }
+                let contentWidth = widest + gutterWidth + LeafNode.textInset * 2
+                // A wrapping field takes the width it is given; a scrolling one
+                // asks for its content and is clipped by the parent.
+                let w = (wraps && width > 0) ? width : contentWidth
+                return YGSize(width: w, height: height)
+            }
+        }
+
         let mode: Int
         switch widthMode {
         case YGMeasureModeUndefined: mode = 0

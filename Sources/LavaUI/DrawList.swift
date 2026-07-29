@@ -306,8 +306,9 @@ extension DrawList {
 
         for (row, rowRange) in rows.enumerated() {
             let lineTop = firstTop + Float(row) * lineH
-            // Cheap vertical cull: a tall buffer in a short box.
-            if lineTop + lineH < y || lineTop > y + h { continue }
+            // Same rule as the editor: draw only rows that fully fit, so a
+            // shrunk box cannot spill text onto its neighbours.
+            if lineTop + lineH > y + h { break }
 
             let lineStart = state.index(atOffset: rowRange.lowerBound)
             let lineEnd = state.index(atOffset: rowRange.upperBound)
@@ -390,7 +391,11 @@ extension DrawList {
 
         for (row, range) in rows.enumerated() {
             let rowTop = top + Float(row) * lineH
-            if rowTop + lineH < y || rowTop > y + h { continue }
+            // A row must fit *entirely*: Yoga can shrink this box below its
+            // measured height when the column overflows, and a half-drawn row
+            // spills over whatever follows. Real clipping arrives with the
+            // scroll viewport; until then, stop at the last row that fits.
+            if rowTop + lineH > y + h { break }
 
             let lo = state.index(atOffset: range.lowerBound)
             let hi = state.index(atOffset: range.upperBound)
