@@ -111,7 +111,7 @@ undo) · `EditorView` (line-number gutter, syntax rules, current-line highlight,
 find, vertical and horizontal scrolling)
 
 **Modifiers** `.padding()` `.background()` `.cornerRadius()` `.frame()`
-`.flexGrow()` — chains collapse onto the content's own node, so styling costs
+`.flexGrow()` `.blur()` — chains collapse onto the content's own node, so styling costs
 no extra layout boxes unless the content is a fragment.
 
 **Overlays** `.overlay(isPresented:) { … }` anchors content above everything —
@@ -121,6 +121,18 @@ rect. Input runs the other way round: overlays are hit-tested first, a click
 inside never falls through, and a click outside dismisses instead of
 activating what it landed on. Placement flips to the other side of the anchor
 when there is no room.
+
+**Backdrop blur** `.blur(radius:)` frosts whatever is already painted behind a
+view. The draw list emits a barrier rather than a shape: the engine ends the
+main pass there, downsamples the resolved frame, runs one separable Gaussian
+over it, then reopens the pass with `LOAD` and composites the result under the
+view's own fill. Width comes from the *downscale*, never from wider tap spacing
+— the kernel is nine fixed taps, so stretching them over forty pixels does not
+blur, it stamps nine offset copies of the UI. The downscale therefore tracks the
+radius, holding it at about two texels: too little and the taps have to reach
+too far, too much and the bilinear upsample shows its own grid. On an overlay
+the scope is hoisted above the panel's chrome, so the glass frosts the window
+and not its own outline.
 
 **Animation** `Animated<T>` interpolates on the *node*, so a press or hover
 costs a draw-list re-emit and no `body` recompute. `FrameScheduler` holds the
@@ -152,6 +164,11 @@ Honest list, roughly in the order it hurts:
   removed view held collapses in one step at the end rather than shrinking with
   it. Smooth collapse needs the departing node's Yoga size animated and its
   content clipped while it shrinks.
+- **Stroked shapes** — the SDF pipeline fills, it does not stroke, so an outline
+  is faked with a filled plate behind an opaque panel. That fake has no answer
+  for a translucent one: a frosted overlay currently gets no border at all,
+  because the plate would show through the glass as a flat wash. One stroke
+  width on the quad vertex would fix it.
 - **Environment** — `Theme.current` and `FontStore.default` are globals. They
   should be environment defaults, not the only way to set a value.
 - **Per-node invalidation** — a change re-runs the whole tree. Correct, but

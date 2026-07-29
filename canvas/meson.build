@@ -70,6 +70,7 @@ engine_sources = [
   'src/render/text_renderer.cpp',
   'src/render/font.cpp',
   'src/render/quad_renderer.cpp',
+  'src/render/blur_pass.cpp',
   'src/window/canvas_window.cpp',
   'src/window/window_platform.cpp',
   'src/util/util.cpp',

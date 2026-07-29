@@ -614,8 +614,10 @@ void Vulkan::createColorResources()
               msaaSamples_,
               colorFormat_,
               VK_IMAGE_TILING_OPTIMAL,
-              VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT |
-                VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
+              // Not TRANSIENT any more: a backdrop blur ends the main pass and
+              // reopens it with LOAD_OP_LOAD, and the contents of a transient
+              // attachment are undefined between render pass instances.
+              VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
               VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
               colorImage_,
               colorImageMemory_);
@@ -628,7 +630,8 @@ void Vulkan::createResolveResources()
 {
   // Single-sample target the MSAA color attachment resolves into. Unlike
   // colorImage_ (TRANSIENT_ATTACHMENT_BIT, MSAA scratch), this one needs
-  // TRANSFER_SRC_BIT since it's what readPixels() copies out of.
+  // TRANSFER_SRC (readPixels / present blit / blur capture) and TRANSFER_DST
+  // (composite blurred region back under glass panels).
   createImage(extent_.width,
               extent_.height,
               1,
@@ -636,7 +639,8 @@ void Vulkan::createResolveResources()
               colorFormat_,
               VK_IMAGE_TILING_OPTIMAL,
               VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT |
-                VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
+                VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
+                VK_IMAGE_USAGE_TRANSFER_DST_BIT,
               VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
               resolveImage_,
               resolveImageMemory_);
@@ -864,111 +868,115 @@ void Vulkan::beginShadowPass(VkCommandBuffer commandBuffer)
 
 void Vulkan::createRenderPass()
 {
-  std::array<VkAttachmentDescription, 3> attachments {
-    // colorAttachment
-    VkAttachmentDescription {
-      .format         = colorFormat_,
-      .samples        = msaaSamples_,
-      .loadOp         = VK_ATTACHMENT_LOAD_OP_CLEAR,
-      .storeOp        = VK_ATTACHMENT_STORE_OP_STORE,
-      .stencilLoadOp  = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
-      .stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
-      .initialLayout  = VK_IMAGE_LAYOUT_UNDEFINED,
-      .finalLayout    = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-    },
-    // depthAttachment
-    VkAttachmentDescription {
-      .format         = findDepthFormat(),
-      .samples        = msaaSamples_,
-      .loadOp         = VK_ATTACHMENT_LOAD_OP_CLEAR,
-      .storeOp        = VK_ATTACHMENT_STORE_OP_DONT_CARE,
-      .stencilLoadOp  = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
-      .stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
-      .initialLayout  = VK_IMAGE_LAYOUT_UNDEFINED,
-      .finalLayout    = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
-    },
-    // colorAttachmentResolve — this is what readPixels() copies out of, so
-    // the render pass transitions it straight to TRANSFER_SRC_OPTIMAL at
-    // subpass end instead of PRESENT_SRC_KHR (no swapchain to present to).
-    VkAttachmentDescription {
-      .format         = colorFormat_,
-      .samples        = VK_SAMPLE_COUNT_1_BIT,
-      .loadOp         = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
-      .storeOp        = VK_ATTACHMENT_STORE_OP_STORE,
-      .stencilLoadOp  = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
-      .stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
-      .initialLayout  = VK_IMAGE_LAYOUT_UNDEFINED,
-      .finalLayout    = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-    },
+  auto makePass = [&](bool clear, VkRenderPass *out) {
+    std::array<VkAttachmentDescription, 3> attachments {
+      // colorAttachment (MSAA)
+      VkAttachmentDescription {
+        .format         = colorFormat_,
+        .samples        = msaaSamples_,
+        .loadOp         = clear ? VK_ATTACHMENT_LOAD_OP_CLEAR
+                                : VK_ATTACHMENT_LOAD_OP_LOAD,
+        .storeOp        = VK_ATTACHMENT_STORE_OP_STORE,
+        .stencilLoadOp  = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
+        .stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
+        .initialLayout  = clear ? VK_IMAGE_LAYOUT_UNDEFINED
+                                : VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+        .finalLayout    = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+      },
+      // depthAttachment
+      VkAttachmentDescription {
+        .format         = findDepthFormat(),
+        .samples        = msaaSamples_,
+        .loadOp         = VK_ATTACHMENT_LOAD_OP_CLEAR,
+        .storeOp        = VK_ATTACHMENT_STORE_OP_DONT_CARE,
+        .stencilLoadOp  = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
+        .stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
+        .initialLayout  = VK_IMAGE_LAYOUT_UNDEFINED,
+        .finalLayout    = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+      },
+      // resolve — sampleable / transferable after the pass
+      VkAttachmentDescription {
+        .format         = colorFormat_,
+        .samples        = VK_SAMPLE_COUNT_1_BIT,
+        .loadOp         = clear ? VK_ATTACHMENT_LOAD_OP_DONT_CARE
+                                : VK_ATTACHMENT_LOAD_OP_LOAD,
+        .storeOp        = VK_ATTACHMENT_STORE_OP_STORE,
+        .stencilLoadOp  = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
+        .stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
+        .initialLayout  = clear ? VK_IMAGE_LAYOUT_UNDEFINED
+                                : VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+        .finalLayout    = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+      },
+    };
+
+    VkAttachmentReference colorAttachmentRef {
+      .attachment = 0,
+      .layout     = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+    };
+    VkAttachmentReference depthAttachmentRef {
+      .attachment = 1,
+      .layout     = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+    };
+    VkAttachmentReference colorAttachmentResolveRef {
+      .attachment = 2,
+      .layout     = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+    };
+
+    VkSubpassDescription subpass {
+      .pipelineBindPoint       = VK_PIPELINE_BIND_POINT_GRAPHICS,
+      .colorAttachmentCount    = 1,
+      .pColorAttachments       = &colorAttachmentRef,
+      .pResolveAttachments     = &colorAttachmentResolveRef,
+      .pDepthStencilAttachment = &depthAttachmentRef,
+    };
+
+    VkSubpassDependency dependency {
+      .srcSubpass    = 0,
+      .dstSubpass    = VK_SUBPASS_EXTERNAL,
+      .srcStageMask  = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+      .dstStageMask  = VK_PIPELINE_STAGE_TRANSFER_BIT,
+      .srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+      .dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT,
+    };
+
+    VkRenderPassCreateInfo renderPassInfo {
+      .sType           = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO,
+      .attachmentCount = 3,
+      .pAttachments    = attachments.data(),
+      .subpassCount    = 1,
+      .pSubpasses      = &subpass,
+      .dependencyCount = 1,
+      .pDependencies   = &dependency,
+    };
+
+    const char *msg = clear ? "failed to create render pass!"
+                            : "failed to create continue render pass!";
+    VR(vkCreateRenderPass(device_, &renderPassInfo, nullptr, out), msg);
   };
 
-  VkAttachmentReference colorAttachmentRef {
-    .attachment = 0,
-    .layout     = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-  };
-
-  VkAttachmentReference depthAttachmentRef {
-    .attachment = 1,
-    .layout     = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
-  };
-
-  VkAttachmentReference colorAttachmentResolveRef {
-    .attachment = 2,
-    .layout     = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-  };
-
-  VkSubpassDescription subpass {
-    .pipelineBindPoint       = VK_PIPELINE_BIND_POINT_GRAPHICS,
-    .colorAttachmentCount    = 1,
-    .pColorAttachments       = &colorAttachmentRef,
-    .pResolveAttachments     = &colorAttachmentResolveRef,
-    .pDepthStencilAttachment = &depthAttachmentRef,
-  };
-
-  // Without this, there's no synchronization guaranteeing the color/resolve
-  // write is visible before readPixels()'s vkCmdCopyImageToBuffer (recorded
-  // right after this pass ends) reads it. Previously masked by the fact that
-  // the only consumer of finalLayout was vkQueuePresentKHR, externally
-  // synchronized via a semaphore.
-  VkSubpassDependency dependency {
-    .srcSubpass    = 0,
-    .dstSubpass    = VK_SUBPASS_EXTERNAL,
-    .srcStageMask  = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
-    .dstStageMask  = VK_PIPELINE_STAGE_TRANSFER_BIT,
-    .srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
-    .dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT,
-  };
-
-  VkRenderPassCreateInfo renderPassInfo {
-    .sType           = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO,
-    .attachmentCount = 3,
-    .pAttachments    = attachments.data(),
-    .subpassCount    = 1,
-    .pSubpasses      = &subpass,
-    .dependencyCount = 1,
-    .pDependencies   = &dependency,
-  };
-
-  VR(vkCreateRenderPass(device_, &renderPassInfo, nullptr, &renderPass_),
-     "failed to create render pass!");
+  makePass(true, &renderPass_);
+  makePass(false, &renderPassContinue_);
 }
 
 void Vulkan::createFramebuffer()
 {
   VkImageView attachments[] = {colorImageView_, depthImageView_, resolveImageView_};
 
-  VkFramebufferCreateInfo framebufferInfo {
-    .sType           = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO,
-    .renderPass      = renderPass_,
-    .attachmentCount = 3,
-    .pAttachments    = attachments,
-    .width           = extent_.width,
-    .height          = extent_.height,
-    .layers          = 1,
+  auto makeFb = [&](VkRenderPass rp, VkFramebuffer *out) {
+    VkFramebufferCreateInfo framebufferInfo {
+      .sType           = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO,
+      .renderPass      = rp,
+      .attachmentCount = 3,
+      .pAttachments    = attachments,
+      .width           = extent_.width,
+      .height          = extent_.height,
+      .layers          = 1,
+    };
+    VR(vkCreateFramebuffer(device_, &framebufferInfo, nullptr, out),
+       "failed to create framebuffer!");
   };
-
-  VR(vkCreateFramebuffer(device_, &framebufferInfo, nullptr, &framebuffer_),
-     "failed to create framebuffer!");
+  makeFb(renderPass_, &framebuffer_);
+  makeFb(renderPassContinue_, &framebufferContinue_);
 }
 
 void Vulkan::createCommandPool()
@@ -1146,17 +1154,40 @@ void Vulkan::cleanupSwapchain()
   }
 }
 
-void Vulkan::beginMainRenderPass(
-  VkCommandBuffer commandBuffer, u32 imageIndex)
+void Vulkan::beginMainRenderPass(VkCommandBuffer commandBuffer, bool clear)
 {
+  if (!clear) {
+    // After a blur segment, resolve is TRANSFER_SRC; continue pass needs it
+    // as a color attachment with LOAD.
+    VkImageMemoryBarrier toColor{
+      .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+      .srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT | VK_ACCESS_SHADER_READ_BIT,
+      .dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_READ_BIT |
+                       VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+      .oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+      .newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+      .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+      .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+      .image = resolveImage_,
+      .subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1},
+    };
+    // Both source stages, since the resolve was read by the capture blit
+    // (TRANSFER) and SHADER_READ is in the access mask.
+    vkCmdPipelineBarrier(
+      commandBuffer,
+      VK_PIPELINE_STAGE_TRANSFER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+      VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, 0, 0, nullptr, 0, nullptr,
+      1, &toColor);
+  }
+
   std::array<VkClearValue, 2> clearValues {};
   clearValues[0].color = {{0.0f, 0.0f, 0.0f, 1.0f}};
   clearValues[1].depthStencil = {1.0f, 0};
 
   VkRenderPassBeginInfo renderPassInfo {
     .sType           = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
-    .renderPass      = renderPass_,
-    .framebuffer     = framebuffer_,
+    .renderPass      = clear ? renderPass_ : renderPassContinue_,
+    .framebuffer     = clear ? framebuffer_ : framebufferContinue_,
     .renderArea      = {.offset = {0, 0}, .extent = extent_},
     .clearValueCount = static_cast<uint32_t>(clearValues.size()),
     .pClearValues    = clearValues.data(),
@@ -1182,6 +1213,11 @@ void Vulkan::beginMainRenderPass(
   };
 
   vkCmdSetScissor(commandBuffer, 0, 1, &scissor);
+}
+
+void Vulkan::endMainRenderPass(VkCommandBuffer commandBuffer)
+{
+  vkCmdEndRenderPass(commandBuffer);
 }
 
 VkCommandBuffer Vulkan::beginSingleTimeCommands()
@@ -1395,6 +1431,10 @@ void Vulkan::cleanUp()
     vkDestroyFramebuffer(device_, framebuffer_, nullptr);
     framebuffer_ = VK_NULL_HANDLE;
   }
+  if (framebufferContinue_ != VK_NULL_HANDLE) {
+    vkDestroyFramebuffer(device_, framebufferContinue_, nullptr);
+    framebufferContinue_ = VK_NULL_HANDLE;
+  }
 
   cleanupSwapchain();
 
@@ -1481,6 +1521,10 @@ void Vulkan::cleanUp()
   if (renderPass_ != VK_NULL_HANDLE) {
     vkDestroyRenderPass(device_, renderPass_, nullptr);
     renderPass_ = VK_NULL_HANDLE;
+  }
+  if (renderPassContinue_ != VK_NULL_HANDLE) {
+    vkDestroyRenderPass(device_, renderPassContinue_, nullptr);
+    renderPassContinue_ = VK_NULL_HANDLE;
   }
 
   auto &shaders = getShaders();
@@ -1585,10 +1629,8 @@ void Vulkan::renderWithShadows(
   shadowCallback(cmd);
   vkCmdEndRenderPass(cmd);
 
-  // 2. Main Pass → resolveImage_ (TRANSFER_SRC_OPTIMAL at end)
-  beginMainRenderPass(cmd, imageIndex);
+  // 2. Main UI — callback owns begin/end of main pass(es) for blur interrupts.
   mainCallback(cmd, imageIndex);
-  vkCmdEndRenderPass(cmd);
 
   if (windowed_) {
     // 3a. Blit offscreen resolve → swapchain image, then present.
@@ -2109,6 +2151,10 @@ bool Vulkan::ensureFramebufferSize()
   if (framebuffer_ != VK_NULL_HANDLE) {
     vkDestroyFramebuffer(device_, framebuffer_, nullptr);
     framebuffer_ = VK_NULL_HANDLE;
+  }
+  if (framebufferContinue_ != VK_NULL_HANDLE) {
+    vkDestroyFramebuffer(device_, framebufferContinue_, nullptr);
+    framebufferContinue_ = VK_NULL_HANDLE;
   }
   cleanupSwapchain();
 

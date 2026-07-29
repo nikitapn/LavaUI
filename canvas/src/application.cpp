@@ -13,6 +13,7 @@
 #include "render/text_renderer.hpp"
 #include "render/quad_renderer.hpp"
 #include "render/texture_manager.hpp"
+#include "render/blur_pass.hpp"
 
 #include "render/draw_command.hpp"
 
@@ -45,6 +46,7 @@ struct Application::Impl
   Vulkan           vulkan;
   TextRenderer     textRenderer;
   QuadRenderer     quadRenderer;
+  BlurPass         blurPass;
 
 
   Timer treeTimer;
@@ -89,6 +91,7 @@ struct Application::Impl
     , height{static_cast<float>(h)}
     , textRenderer(vulkan)
     , quadRenderer(vulkan)
+    , blurPass(vulkan)
     {
 
     }
@@ -164,6 +167,9 @@ struct Application::Impl
     // thing that can break a batch.
     quadRenderer.setAtlas(textRenderer.atlasView(), textRenderer.atlasSampler());
     std::cout << "Quad renderer initialized.\n";
+
+    blurPass.init();
+    std::cout << "Blur pass initialized.\n";
 
     screenProjection_ = mat4{ // column-major, top-left origin, y-down
       2.0f / ew, 0.0f, 0.0f, 0.0f,
@@ -541,37 +547,63 @@ struct Application::Impl
                               textRenderer.atlasSampler());
       }
       const auto ext = vulkan.getExtent();
+      // Each BeginBackdropBlur: radius + glass rect. Segment i is drawn, then
+      // we capture/blur and bind the result; segment i+1 starts with a
+      // composite Image quad over the glass rect, then sharp fill/children.
+      // (Must composite into MSAA — blitting only the resolve is wiped by the
+      // next pass's MSAA resolve.)
+      std::vector<BlurOp> blurOps;
       replayDrawListUnified(static_cast<float>(ext.width),
-                            static_cast<float>(ext.height));
+                            static_cast<float>(ext.height), blurOps);
+
+      if (!blurOps.empty()) {
+        // The blur image resolution follows the radius, so it has to be sized
+        // before recording — reallocating it waits on every frame in flight.
+        float maxRadius = 0.f;
+        for (const auto &op : blurOps) maxRadius = std::max(maxRadius, op.radius);
+        blurPass.ensureSize(ext.width, ext.height, maxRadius);
+      }
 
       vulkan.renderWithShadows(
           // Shadow pass kept only because renderWithShadows is Vulkan's sole
           // render entry point; nothing 3D draws into it any more.
           [&](VkCommandBuffer) {},
-          [&](VkCommandBuffer commandBuffer, u32 imageIndex) {
+          [&](VkCommandBuffer commandBuffer, u32 /*imageIndex*/) {
             const auto extent = vulkan.getExtent();
-            VkViewport fullVp{
-                .x = 0.f,
-                .y = 0.f,
-                .width = static_cast<float>(extent.width),
-                .height = static_cast<float>(extent.height),
-                .minDepth = 0.f,
-                .maxDepth = 1.f,
-            };
-            vkCmdSetViewport(commandBuffer, 0, 1, &fullVp);
+            const uint32_t segments = quadRenderer.segmentCount();
+            const uint32_t blurCount =
+              static_cast<uint32_t>(blurOps.size());
 
-            // Draw-list commands are already window-absolute (Phase 3). Legacy
-            // shapes stay scissored to the diagram panel.
+            // Always open the clear pass so an empty first segment still
+            // clears the framebuffer before a leading blur.
+            vulkan.beginMainRenderPass(commandBuffer, /*clear=*/true);
+            if (segments > 0) {
+              quadRenderer.drawSegment(commandBuffer, 0);
+            }
+
+            for (uint32_t bi = 0; bi < blurCount; ++bi) {
+              vulkan.endMainRenderPass(commandBuffer);
+
+              if (blurPass.ready()) {
+                blurPass.captureAndBlur(
+                  commandBuffer, vulkan.resolveImage(),
+                  VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, blurOps[bi].radius);
+                quadRenderer.setBackdropBlurView(blurPass.resultView(),
+                                                blurPass.sampler());
+              }
+
+              vulkan.beginMainRenderPass(commandBuffer, /*clear=*/false);
+              if (bi + 1 < segments) {
+                quadRenderer.drawSegment(commandBuffer, bi + 1);
+              }
+            }
+
+            vulkan.endMainRenderPass(commandBuffer);
+
+            // Full-window scissor restored for anything that might follow
+            // (present blit path does not need it, but keep consistent).
             VkRect2D fullScissor{.offset = {0, 0}, .extent = extent};
             vkCmdSetScissor(commandBuffer, 0, 1, &fullScissor);
-
-
-            // Single ordered 2D pass — the whole scene.
-            quadRenderer.draw(commandBuffer);
-
-            // Full-window scissor
-            vkCmdSetScissor(commandBuffer, 0, 1, &fullScissor);
-
           });
 
       return true;
@@ -581,11 +613,22 @@ struct Application::Impl
     }
   }
 
+  /// One glass region from BeginBackdropBlur.
+  struct BlurOp {
+    float radius = 8.f;
+    float x = 0.f, y = 0.f, w = 0.f, h = 0.f;
+  };
+
   /// Phase 3.5 — replays the draw list through the unified quad pipeline in
   /// *index order*, so a rect emitted after another shape actually covers it.
   ///
-  void replayDrawListUnified(float viewW, float viewH)
+  /// BeginBackdropBlur closes the current segment, records the glass rect, and
+  /// starts the next segment with a composite Image of the blurred region.
+  /// Capture/blur runs between segments in repaint's mainCallback.
+  void replayDrawListUnified(float viewW, float viewH,
+                             std::vector<BlurOp> &outBlurOps)
   {
+    outBlurOps.clear();
     // Must match the slot waitForInFlightFrame() just freed / submit will use.
     quadRenderer.begin({viewW, viewH}, vulkan.currentFrameSlot());
     for (const auto &cmd : drawCmds_) {
@@ -637,6 +680,29 @@ struct Application::Impl
                                {0.f, 0.f}, {1.f, 1.f}, cmd.color, view);
         break;
       }
+      case canvas::DrawCommandKind::BeginBackdropBlur: {
+        // Split so GPU can end pass → blur → continue. Next segment opens with
+        // a full-frame-UV composite of the glass rect (bound at draw time).
+        quadRenderer.closeSegment();
+        BlurOp op;
+        op.radius = cmd.aux > 0.f ? cmd.aux : 8.f;
+        op.x = cmd.x;
+        op.y = cmd.y;
+        op.w = cmd.w;
+        op.h = cmd.h;
+        outBlurOps.push_back(op);
+
+        const float u0 = viewW > 0.f ? cmd.x / viewW : 0.f;
+        const float v0 = viewH > 0.f ? cmd.y / viewH : 0.f;
+        const float u1 = viewW > 0.f ? (cmd.x + cmd.w) / viewW : 1.f;
+        const float v1 = viewH > 0.f ? (cmd.y + cmd.h) / viewH : 1.f;
+        quadRenderer.pushBackdropBlurImage(
+          {cmd.x, cmd.y}, {cmd.w, cmd.h}, {u0, v0}, {u1, v1}, 0xffffffffu);
+        break;
+      }
+      case canvas::DrawCommandKind::EndBackdropBlur:
+        // Bookkeeping / future nesting — no GPU work.
+        break;
       }
     }
     quadRenderer.end();
@@ -722,6 +788,7 @@ struct Application::Impl
 
   void shutdown()
   {
+    blurPass.cleanUp();
     quadRenderer.cleanUp();
     textRenderer.cleanUp();
     TextureManager::getInstance().cleanUp();

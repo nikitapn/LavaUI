@@ -19,6 +19,12 @@ enum class DrawCommandKind : uint32_t {
   PopClip = 6,
   /// Textured quad. param = TextureManager id; x,y,w,h = dest rect; color = tint.
   Image = 7,
+  /// Backdrop blur barrier. Flushes UI drawn so far, captures the main target
+  /// in x,y,w,h, blurs it, and composites the result. Children/chrome after
+  /// this draw sharp on top. `aux` = blur radius in pixels (clamped in engine).
+  BeginBackdropBlur = 8,
+  /// Closes a blur scope (bookkeeping / future nesting). No GPU work yet.
+  EndBackdropBlur = 9,
 };
 
 /// One shaped glyph, positioned in absolute window pixels by Swift. Ships in

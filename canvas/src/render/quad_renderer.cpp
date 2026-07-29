@@ -387,8 +387,11 @@ void QuadRenderer::begin(vec2 viewportSize, uint32_t frameSlot) {
   vertices_.clear();
   indices_.clear();
   batches_.clear();
+  segmentEnds_.clear();
   scissorStack_.clear();
   batchStartIndex_ = 0;
+  backdropBlurView_ = VK_NULL_HANDLE;
+  backdropBlurSampler_ = VK_NULL_HANDLE;
   currentScissor_  = VkRect2D{
     {0, 0},
     {static_cast<uint32_t>(viewportSize.x), static_cast<uint32_t>(viewportSize.y)},
@@ -541,13 +544,48 @@ void QuadRenderer::flushBatch() {
   const uint32_t end = static_cast<uint32_t>(indices_.size());
   if (end > batchStartIndex_) {
     batches_.push_back(Batch{
-      .firstIndex   = batchStartIndex_,
-      .indexCount   = end - batchStartIndex_,
-      .scissor      = currentScissor_,
-      .textureView  = currentBatchTexture_,
+      .firstIndex          = batchStartIndex_,
+      .indexCount          = end - batchStartIndex_,
+      .scissor             = currentScissor_,
+      .textureView         = currentBatchTexture_,
+      .sampleBackdropBlur  = false,
     });
   }
   batchStartIndex_ = end;
+}
+
+void QuadRenderer::closeSegment() {
+  flushBatch();
+  segmentEnds_.push_back(static_cast<uint32_t>(batches_.size()));
+}
+
+void QuadRenderer::pushBackdropBlurImage(vec2 topLeft, vec2 size, vec2 uv0,
+                                         vec2 uv1, uint32_t rgba)
+{
+  if (size.x <= 0.0f || size.y <= 0.0f) {
+    return;
+  }
+  // Force a dedicated batch so we can flip sampleBackdropBlur without mixing
+  // atlas/SDF geometry into the same descriptor bind.
+  flushBatch();
+  currentBatchTexture_ = whiteImageView_;  // unused when sampleBackdropBlur
+  const vec2 corners[4] = {
+    {topLeft.x, topLeft.y},
+    {topLeft.x + size.x, topLeft.y},
+    {topLeft.x + size.x, topLeft.y + size.y},
+    {topLeft.x, topLeft.y + size.y},
+  };
+  const vec2 locals[4] = {
+    {uv0.x, uv0.y}, {uv1.x, uv0.y}, {uv1.x, uv1.y}, {uv0.x, uv1.y},
+  };
+  appendQuad(corners, locals, {0.0f, 0.0f}, 0.0f, rgba, Kind::Image);
+  flushBatch();
+  if (!batches_.empty()) {
+    batches_.back().sampleBackdropBlur = true;
+    batches_.back().textureView = VK_NULL_HANDLE;
+  }
+  currentBatchTexture_ =
+    glyphAtlasView_ != VK_NULL_HANDLE ? glyphAtlasView_ : whiteImageView_;
 }
 
 void QuadRenderer::pushScissor(vec2 topLeft, vec2 size) {
@@ -588,6 +626,10 @@ void QuadRenderer::popScissor() {
 
 void QuadRenderer::end() {
   flushBatch();
+  // Close the trailing open segment so multiphase always has a range.
+  if (segmentEnds_.empty() || segmentEnds_.back() != batches_.size()) {
+    segmentEnds_.push_back(static_cast<uint32_t>(batches_.size()));
+  }
 
   if (vertices_.empty()) {
     return;
@@ -609,9 +651,26 @@ void QuadRenderer::setViewTransform(float zoom, float panX, float panY)
 }
 
 void QuadRenderer::draw(VkCommandBuffer commandBuffer) {
-  if (batches_.empty() || vertices_.empty()) {
+  drawBatchRange(commandBuffer, 0, static_cast<uint32_t>(batches_.size()));
+}
+
+void QuadRenderer::drawSegment(VkCommandBuffer commandBuffer,
+                               uint32_t segmentIndex) {
+  if (segmentIndex >= segmentEnds_.size()) return;
+  const uint32_t end = segmentEnds_[segmentIndex];
+  const uint32_t start =
+    segmentIndex == 0 ? 0u : segmentEnds_[segmentIndex - 1];
+  if (end <= start) return;
+  drawBatchRange(commandBuffer, start, end - start);
+}
+
+void QuadRenderer::drawBatchRange(VkCommandBuffer commandBuffer,
+                                  uint32_t firstBatch, uint32_t batchCount) {
+  if (batchCount == 0 || vertices_.empty() || firstBatch >= batches_.size()) {
     return;
   }
+  const uint32_t last =
+    std::min(firstBatch + batchCount, static_cast<uint32_t>(batches_.size()));
 
   auto &fr = activeFrame();
 
@@ -671,24 +730,31 @@ void QuadRenderer::draw(VkCommandBuffer commandBuffer) {
     };
   };
 
-  fr.descriptorWriteIndex = 0;
+  // Do not reset descriptorWriteIndex here — multiphase drawSegment calls
+  // share one begin() and must not rewrite sets already bound earlier in the CB.
   VkImageView boundView = VK_NULL_HANDLE;
+  VkSampler boundSampler = VK_NULL_HANDLE;
   VkDescriptorSet boundSet = VK_NULL_HANDLE;
 
-  auto bindTexture = [&](VkImageView view) {
+  auto bindTexture = [&](VkImageView view, VkSampler overrideSamp) {
     if (view == VK_NULL_HANDLE) {
       view = glyphAtlasView_ != VK_NULL_HANDLE ? glyphAtlasView_ : whiteImageView_;
     }
-    if (view == boundView && boundSet != VK_NULL_HANDLE) return;
+    VkSampler samp = overrideSamp;
+    if (samp == VK_NULL_HANDLE) {
+      samp = (view == glyphAtlasView_ && glyphAtlasSampler_ != VK_NULL_HANDLE)
+               ? glyphAtlasSampler_
+               : sampler_;
+    }
+    if (view == boundView && samp == boundSampler && boundSet != VK_NULL_HANDLE)
+      return;
     boundView = view;
+    boundSampler = samp;
 
     if (fr.descriptorWriteIndex >= kMaxDescriptorSetsPerFrame) {
       fr.descriptorWriteIndex = kMaxDescriptorSetsPerFrame - 1;
     }
     VkDescriptorSet set = fr.descriptorSets[fr.descriptorWriteIndex++];
-    VkSampler samp = (view == glyphAtlasView_ && glyphAtlasSampler_ != VK_NULL_HANDLE)
-                       ? glyphAtlasSampler_
-                       : sampler_;
     VkDescriptorImageInfo imageInfo{
       .sampler     = samp,
       .imageView   = view,
@@ -708,7 +774,8 @@ void QuadRenderer::draw(VkCommandBuffer commandBuffer) {
     boundSet = set;
   };
 
-  for (const auto &batch : batches_) {
+  for (uint32_t bi = firstBatch; bi < last; ++bi) {
+    const auto &batch = batches_[bi];
     if (batch.scissor.extent.width == 0 || batch.scissor.extent.height == 0) {
       continue;
     }
@@ -716,7 +783,12 @@ void QuadRenderer::draw(VkCommandBuffer commandBuffer) {
                     ? batch.scissor
                     : mapScissor(batch.scissor);
     if (sc.extent.width == 0 || sc.extent.height == 0) continue;
-    bindTexture(batch.textureView);
+    if (batch.sampleBackdropBlur) {
+      if (backdropBlurView_ == VK_NULL_HANDLE) continue;
+      bindTexture(backdropBlurView_, backdropBlurSampler_);
+    } else {
+      bindTexture(batch.textureView, VK_NULL_HANDLE);
+    }
     vkCmdSetScissor(commandBuffer, 0, 1, &sc);
     vkCmdDrawIndexed(commandBuffer, batch.indexCount, 1, batch.firstIndex, 0, 0);
   }

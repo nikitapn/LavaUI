@@ -9,6 +9,8 @@ shader_sources = [
   meson.project_source_root() / 'src/shaders/2d/shader.frag',
   meson.project_source_root() / 'src/shaders/2d/quad.vert',
   meson.project_source_root() / 'src/shaders/2d/quad.frag',
+  meson.project_source_root() / 'src/shaders/2d/blur.vert',
+  meson.project_source_root() / 'src/shaders/2d/blur.frag',
   meson.project_source_root() / 'src/shaders/2d/compute/integration.comp',
   meson.project_source_root() / 'src/shaders/2d/compute/collision_detect.comp',
   meson.project_source_root() / 'src/shaders/2d/compute/collision_resolve.comp',

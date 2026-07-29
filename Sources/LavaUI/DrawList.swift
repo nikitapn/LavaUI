@@ -14,6 +14,10 @@ public enum DrawKind: UInt32 {
     case pushClip = 5
     case popClip = 6
     case image = 7
+    /// Flush UI so far, blur the resolve under x,y,w,h (`aux` = radius px).
+    case beginBackdropBlur = 8
+    /// Closes a blur scope (bookkeeping; engine no-ops today).
+    case endBackdropBlur = 9
 }
 
 /// Reused arena: draw commands plus the shaped glyphs they reference.
@@ -32,6 +36,9 @@ public final class DrawList {
     /// Fade applied to everything appended, for transitions. A multiplier
     /// rather than a value so nested transitions compose.
     private var alphaMultiplier: Float = 1
+
+    /// True between Begin/EndBackdropBlur. See `withBackdropBlur`.
+    private var insideBlurScope = false
 
     public init() {
         commands.reserveCapacity(256)
@@ -138,6 +145,47 @@ public final class DrawList {
         )
     }
 
+    /// Barrier: engine flushes UI drawn so far, blurs under this rect, composites.
+    /// `color` is unused by the engine (tint the glass with a following fill).
+    public func beginBackdropBlur(
+        x: Float, y: Float, w: Float, h: Float, radius: Float
+    ) {
+        guard w > 0, h > 0, radius > 0 else { return }
+        append(
+            kind: .beginBackdropBlur, x: x, y: y, w: w, h: h,
+            color: Color(r: 1, g: 1, b: 1), aux: radius
+        )
+    }
+
+    public func endBackdropBlur() {
+        append(
+            kind: .endBackdropBlur, x: 0, y: 0, w: 0, h: 0,
+            color: Color(r: 1, g: 1, b: 1)
+        )
+    }
+
+    /// Run `body` inside optional Begin/End backdrop-blur bookends.
+    ///
+    /// Scopes do not nest: an inner capture would read back the glass the outer
+    /// one just composited and frost it a second time. The outermost wins,
+    /// which is also what lets an overlay hoist its content's `.blur()` up over
+    /// the panel's own chrome.
+    private func withBackdropBlur(
+        radius: Float?,
+        x: Float, y: Float, w: Float, h: Float,
+        body: () -> Void
+    ) {
+        if let radius, radius > 0, w > 0, h > 0, !insideBlurScope {
+            insideBlurScope = true
+            beginBackdropBlur(x: x, y: y, w: w, h: h, radius: radius)
+            body()
+            endBackdropBlur()
+            insideBlurScope = false
+        } else {
+            body()
+        }
+    }
+
     // MARK: - Tree emission (pre-order DFS = paint order)
 
     /// Emit chrome from a laid-out retained tree.
@@ -163,20 +211,41 @@ public final class DrawList {
                 viewportW: viewportW, viewportH: viewportH
             )
             guard let overlayRoot = att.root else { continue }
-            // Outline first, one pixel proud on every side, so the panel's own
-            // fill covers the middle of it.
-            if let border = att.border {
-                roundedRect(
-                    x: att.origin.x - 1, y: att.origin.y - 1,
-                    w: att.size.w + 2, h: att.size.h + 2,
-                    color: border, radius: att.cornerRadius + 1
+
+            // A glass overlay must frost what is *behind* the panel, not the
+            // panel's own chrome, so the capture has to happen before any of it.
+            // Hoisting the scope up here does that; `withBackdropBlur` then
+            // no-ops the scope the content node would have opened.
+            //
+            // One level down is where a collapsed `.blur()` lands, because the
+            // shell wraps exactly one mounted content node. Behind a fragment
+            // (a tuple, an `if`) it stays where it was.
+            let glassRadius =
+                (overlayRoot.childNodes.first as? YogaBoxNode)?.backdropBlurRadius
+            withBackdropBlur(
+                radius: glassRadius,
+                x: att.origin.x, y: att.origin.y, w: att.size.w, h: att.size.h
+            ) {
+                // Outline first, one pixel proud on every side, so the panel's
+                // own fill covers the middle of it — which is exactly why a
+                // glass panel gets none. A plate is not a stroke: under a
+                // translucent fill its middle shows through as a flat wash, and
+                // it would be the only thing the blur had to capture. Until the
+                // SDF pipeline can stroke a rounded rect, a frosted panel's
+                // edge comes from its own fill and corner radius.
+                if let border = att.border, glassRadius == nil {
+                    roundedRect(
+                        x: att.origin.x - 1, y: att.origin.y - 1,
+                        w: att.size.w + 2, h: att.size.h + 2,
+                        color: border, radius: att.cornerRadius + 1
+                    )
+                }
+                emitNode(
+                    overlayRoot,
+                    ox: att.origin.x, oy: att.origin.y,
+                    vpW: viewportW, vpH: viewportH
                 )
             }
-            emitNode(
-                overlayRoot,
-                ox: att.origin.x, oy: att.origin.y,
-                vpW: viewportW, vpH: viewportH
-            )
         }
         pendingOverlays.removeAll(keepingCapacity: true)
     }
@@ -255,18 +324,22 @@ public final class DrawList {
             if let styled = node as? StyleBoxNode {
                 // Same rule as a stack: never cull a container, since Yoga does
                 // not clip and an overflowing child may still be on screen.
-                if let fill = styled.fillColor {
-                    if styled.cornerRadius > 0 {
-                        roundedRect(
-                            x: x, y: y, w: w, h: h,
-                            color: fill, radius: styled.cornerRadius
-                        )
-                    } else {
-                        rect(x: x, y: y, w: w, h: h, color: fill)
+                withBackdropBlur(
+                    radius: styled.backdropBlurRadius, x: x, y: y, w: w, h: h
+                ) {
+                    if let fill = styled.fillColor {
+                        if styled.cornerRadius > 0 {
+                            roundedRect(
+                                x: x, y: y, w: w, h: h,
+                                color: fill, radius: styled.cornerRadius
+                            )
+                        } else {
+                            rect(x: x, y: y, w: w, h: h, color: fill)
+                        }
                     }
-                }
-                for c in styled.childNodes {
-                    emitNode(c, ox: x, oy: y, vpW: vpW, vpH: vpH)
+                    for c in styled.childNodes {
+                        emitNode(c, ox: x, oy: y, vpW: vpW, vpH: vpH)
+                    }
                 }
                 return
             }
@@ -274,11 +347,15 @@ public final class DrawList {
             if let stack = node as? StackNode {
                 // Never cull containers — Yoga does not clip children by default,
                 // so an overflowing child of an offscreen parent can still be visible.
-                if let fill = stack.fillColor {
-                    rect(x: x, y: y, w: w, h: h, color: fill)
-                }
-                for c in stack.childNodes {
-                    emitNode(c, ox: x, oy: y, vpW: vpW, vpH: vpH)
+                withBackdropBlur(
+                    radius: stack.backdropBlurRadius, x: x, y: y, w: w, h: h
+                ) {
+                    if let fill = stack.fillColor {
+                        rect(x: x, y: y, w: w, h: h, color: fill)
+                    }
+                    for c in stack.childNodes {
+                        emitNode(c, ox: x, oy: y, vpW: vpW, vpH: vpH)
+                    }
                 }
                 return
             }
@@ -288,102 +365,10 @@ public final class DrawList {
                 if x + w < 0 || y + h < 0 || x > vpW || y > vpH {
                     return
                 }
-                // Hover wins over the base fill; both honour the radius.
-                let leafFill = HoverState.isHovered(leaf.id)
-                    ? (leaf.hoverFill ?? leaf.fillColor)
-                    : leaf.fillColor
-                if let fill = leafFill {
-                    if leaf.cornerRadius > 0 {
-                        roundedRect(
-                            x: x, y: y, w: w, h: h,
-                            color: fill, radius: leaf.cornerRadius
-                        )
-                    } else {
-                        rect(x: x, y: y, w: w, h: h, color: fill)
-                    }
-                }
-                if leaf.kind == .text, !leaf.text.isEmpty {
-                    // Multi-line: emit one command per wrapped line (same breaks
-                    // as Yoga measure via TextLayoutCache / Font::wrapLines).
-                    let lineH = (leaf.font ?? FontStore.default)?.lineHeight ?? 18
-                    let lines = leaf.cachedLines.isEmpty ? [leaf.text] : leaf.cachedLines
-                    for (i, line) in lines.enumerated() {
-                        let ly = y + Float(i) * lineH
-                        text(
-                            line, x: x, y: ly, w: w, h: lineH,
-                            color: leaf.color, font: leaf.font
-                        )
-                    }
-                }
-                if leaf.kind == .button {
-                    // The animated fill, not the static one — this is the only
-                    // thing a press changes, and it changes without any body
-                    // recompute behind it.
-                    let fill = leaf.buttonFill?.current
-                        ?? leaf.buttonStyle?.background ?? Theme.current.panel
-                    roundedRect(
-                        x: x, y: y, w: w, h: h,
-                        color: fill, radius: leaf.cornerRadius
-                    )
-                    if !leaf.text.isEmpty, let f = leaf.font ?? FontStore.default {
-                        let lineH = f.lineHeight
-                        let labelW = f.shapedRun(leaf.text).width
-                        text(
-                            leaf.text,
-                            x: x + (w - labelW) / 2 - 4,
-                            y: y + max(0, (h - lineH) / 2),
-                            w: w, h: lineH, color: leaf.color, font: f
-                        )
-                    }
-                    return
-                }
-
-                if leaf.kind == .toggle {
-                    emitToggle(leaf, x: x, y: y, w: w, h: h)
-                    return
-                }
-
-                if leaf.kind == .slider {
-                    emitSlider(leaf, x: x, y: y, w: w, h: h)
-                    return
-                }
-
-                if leaf.kind == .divider, let style = leaf.dividerStyle {
-                    let t = max(1, style.thickness)
-                    // Rounded to a whole pixel: a 1px rule landing on a half
-                    // pixel is smeared across two rows by the SDF and reads as
-                    // a smudge rather than a line.
-                    if leaf.isVerticalDivider {
-                        rect(
-                            x: (x + (w - t) / 2).rounded(), y: y,
-                            w: t, h: h, color: style.color
-                        )
-                    } else {
-                        rect(
-                            x: x, y: (y + (h - t) / 2).rounded(),
-                            w: w, h: t, color: style.color
-                        )
-                    }
-                    return
-                }
-
-                if leaf.kind == .textField {
-                    emitTextField(leaf, x: x, y: y, w: w, h: h)
-                }
-                if leaf.kind == .editor {
-                    emitEditor(leaf, x: x, y: y, w: w, h: h)
-                }
-                if leaf.kind == .image, let img = leaf.image {
-                    let dest = imageDestRect(
-                        boxX: x, boxY: y, boxW: w, boxH: h,
-                        srcW: img.pixelWidth, srcH: img.pixelHeight,
-                        mode: leaf.imageContentMode
-                    )
-                    self.image(
-                        textureId: img.textureId,
-                        x: dest.x, y: dest.y, w: dest.w, h: dest.h,
-                        tint: leaf.imageTint
-                    )
+                withBackdropBlur(
+                    radius: leaf.backdropBlurRadius, x: x, y: y, w: w, h: h
+                ) {
+                    emitLeafContents(leaf, x: x, y: y, w: w, h: h)
                 }
                 return
             }
@@ -396,6 +381,109 @@ public final class DrawList {
 
         for c in node.childNodes {
             emitNode(c, ox: ox, oy: oy, vpW: vpW, vpH: vpH)
+        }
+    }
+
+    /// Paint for a leaf inside an optional backdrop-blur scope.
+    private func emitLeafContents(
+        _ leaf: LeafNode, x: Float, y: Float, w: Float, h: Float
+    ) {
+        // Hover wins over the base fill; both honour the radius.
+        let leafFill = HoverState.isHovered(leaf.id)
+            ? (leaf.hoverFill ?? leaf.fillColor)
+            : leaf.fillColor
+        if let fill = leafFill {
+            if leaf.cornerRadius > 0 {
+                roundedRect(
+                    x: x, y: y, w: w, h: h,
+                    color: fill, radius: leaf.cornerRadius
+                )
+            } else {
+                rect(x: x, y: y, w: w, h: h, color: fill)
+            }
+        }
+        if leaf.kind == .text, !leaf.text.isEmpty {
+            // Multi-line: emit one command per wrapped line (same breaks
+            // as Yoga measure via TextLayoutCache / Font::wrapLines).
+            let lineH = (leaf.font ?? FontStore.default)?.lineHeight ?? 18
+            let lines = leaf.cachedLines.isEmpty ? [leaf.text] : leaf.cachedLines
+            for (i, line) in lines.enumerated() {
+                let ly = y + Float(i) * lineH
+                text(
+                    line, x: x, y: ly, w: w, h: lineH,
+                    color: leaf.color, font: leaf.font
+                )
+            }
+        }
+        if leaf.kind == .button {
+            // The animated fill, not the static one — this is the only
+            // thing a press changes, and it changes without any body
+            // recompute behind it.
+            let fill = leaf.buttonFill?.current
+                ?? leaf.buttonStyle?.background ?? Theme.current.panel
+            roundedRect(
+                x: x, y: y, w: w, h: h,
+                color: fill, radius: leaf.cornerRadius
+            )
+            if !leaf.text.isEmpty, let f = leaf.font ?? FontStore.default {
+                let lineH = f.lineHeight
+                let labelW = f.shapedRun(leaf.text).width
+                text(
+                    leaf.text,
+                    x: x + (w - labelW) / 2 - 4,
+                    y: y + max(0, (h - lineH) / 2),
+                    w: w, h: lineH, color: leaf.color, font: f
+                )
+            }
+            return
+        }
+
+        if leaf.kind == .toggle {
+            emitToggle(leaf, x: x, y: y, w: w, h: h)
+            return
+        }
+
+        if leaf.kind == .slider {
+            emitSlider(leaf, x: x, y: y, w: w, h: h)
+            return
+        }
+
+        if leaf.kind == .divider, let style = leaf.dividerStyle {
+            let t = max(1, style.thickness)
+            // Rounded to a whole pixel: a 1px rule landing on a half
+            // pixel is smeared across two rows by the SDF and reads as
+            // a smudge rather than a line.
+            if leaf.isVerticalDivider {
+                rect(
+                    x: (x + (w - t) / 2).rounded(), y: y,
+                    w: t, h: h, color: style.color
+                )
+            } else {
+                rect(
+                    x: x, y: (y + (h - t) / 2).rounded(),
+                    w: w, h: t, color: style.color
+                )
+            }
+            return
+        }
+
+        if leaf.kind == .textField {
+            emitTextField(leaf, x: x, y: y, w: w, h: h)
+        }
+        if leaf.kind == .editor {
+            emitEditor(leaf, x: x, y: y, w: w, h: h)
+        }
+        if leaf.kind == .image, let img = leaf.image {
+            let dest = imageDestRect(
+                boxX: x, boxY: y, boxW: w, boxH: h,
+                srcW: img.pixelWidth, srcH: img.pixelHeight,
+                mode: leaf.imageContentMode
+            )
+            self.image(
+                textureId: img.textureId,
+                x: dest.x, y: dest.y, w: dest.w, h: dest.h,
+                tint: leaf.imageTint
+            )
         }
     }
 

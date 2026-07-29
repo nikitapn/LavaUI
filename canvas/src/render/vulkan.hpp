@@ -92,7 +92,11 @@ class Vulkan
 
   VkPhysicalDeviceMemoryProperties deviceMemoryProperties_;
   VkRenderPass                     renderPass_ = VK_NULL_HANDLE;
+  /// Same attachments as renderPass_ but LOAD (continue after backdrop blur).
+  VkRenderPass                     renderPassContinue_ = VK_NULL_HANDLE;
   VkFramebuffer                    framebuffer_ = VK_NULL_HANDLE;
+  /// Framebuffer for continue pass (same images; different render pass object).
+  VkFramebuffer                    framebufferContinue_ = VK_NULL_HANDLE;
   VkCommandPool                    commandPool_ = VK_NULL_HANDLE;
 
   // MSAA sampling stuff
@@ -171,8 +175,6 @@ class Vulkan
   void createLogicalDevice();
   void createSyncObjects();
 
-  void beginMainRenderPass(VkCommandBuffer commandBuffer, u32 imageIndex);
-
   uint32_t findMemoryProperties(uint32_t              memoryTypeBitsRequirement,
                                 VkMemoryPropertyFlags requiredProperties);
 
@@ -203,6 +205,7 @@ class Vulkan
   void beginShadowPass(VkCommandBuffer commandBuffer);
 
   // Step 3: Create render pass, framebuffer, command pool, command buffer
+  /// Clear pass (first UI segment) + continue pass (LOAD after blur).
   void createRenderPass();
   void createFramebuffer();
   void createCommandPool();
@@ -226,9 +229,20 @@ class Vulkan
   void initWithWindow(const char *applicationName, int width, int height,
                       const char *title);
 
+  /// Records shadow + caller-owned main content, then presents.
+  /// `mainCallback` owns begin/end of the main UI render pass(es) so it can
+  /// interrupt for backdrop blur (end → capture/blur → begin LOAD → continue).
   void renderWithShadows(
     std::function<void(VkCommandBuffer)> shadowCallback,
     std::function<void(VkCommandBuffer, u32)> mainCallback);
+
+  void beginMainRenderPass(VkCommandBuffer commandBuffer, bool clear);
+  void endMainRenderPass(VkCommandBuffer commandBuffer);
+
+  VkImage     resolveImage() const { return resolveImage_; }
+  VkImageView resolveImageView() const { return resolveImageView_; }
+  VkFormat    colorFormat() const { return colorFormat_; }
+  VkFramebuffer mainFramebuffer() const { return framebuffer_; }
 
   /// Block until the *current* frame slot is free (GPU finished its last use).
   /// With 2 frames in flight this does not wait for the other slot, so the CPU

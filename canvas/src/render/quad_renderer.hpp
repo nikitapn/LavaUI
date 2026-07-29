@@ -85,14 +85,40 @@ class QuadRenderer {
   void pushScissor(vec2 topLeft, vec2 size);
   void popScissor();
 
+  /// Marks the end of a draw segment for backdrop-blur multipass. Call when the
+  /// draw list hits BeginBackdropBlur so later `drawSegment` can stop before
+  /// the next pass. Vertices stay in one buffer; scissor state is preserved.
+  void closeSegment();
+
+  /// Full-color quad that samples the backdrop blur result (bound at draw time
+  /// via `setBackdropBlurView`). `uv0`/`uv1` select the region of the full-frame
+  /// blur texture (usually rect/viewport). Used after captureAndBlur.
+  void pushBackdropBlurImage(vec2 topLeft, vec2 size, vec2 uv0, vec2 uv1,
+                             uint32_t rgba = 0xffffffffu);
+
   void end();
 
   /// Camera transform applied at draw time (layout pixels → screen).
   /// Zoom is about the viewport center; pan is in layout pixels.
   void setViewTransform(float zoom, float panX, float panY);
 
+  /// Bind the BlurPass result for batches created with pushBackdropBlurImage.
+  /// Optional sampler (e.g. clamp-to-edge from BlurPass); null → default.
+  void setBackdropBlurView(VkImageView view, VkSampler sampler = VK_NULL_HANDLE)
+  {
+    backdropBlurView_ = view;
+    backdropBlurSampler_ = sampler;
+  }
+
   /// Records every batch, in order, into `commandBuffer`.
   void draw(VkCommandBuffer commandBuffer);
+
+  /// Number of segments closed via closeSegment() (+ final open tail after end).
+  uint32_t segmentCount() const { return static_cast<uint32_t>(segmentEnds_.size()); }
+
+  /// Draw batches belonging to segment `segmentIndex` (0-based).
+  /// Descriptor write cursor continues across calls within one begin/end frame.
+  void drawSegment(VkCommandBuffer commandBuffer, uint32_t segmentIndex);
 
   size_t quadCount() const { return vertices_.size() / 4; }
   size_t batchCount() const { return batches_.size(); }
@@ -104,6 +130,7 @@ class QuadRenderer {
     uint32_t indexCount = 0;
     VkRect2D scissor{};
     VkImageView textureView = VK_NULL_HANDLE;  // null → use glyphAtlasView_
+    bool sampleBackdropBlur = false;           // bind backdropBlurView_ at draw
   };
 
   /// Per-frame-slot GPU resources (not shared across in-flight frames).
@@ -161,13 +188,21 @@ class QuadRenderer {
   std::vector<Vertex>   vertices_;
   std::vector<uint32_t> indices_;
   std::vector<Batch>    batches_;
+  /// Exclusive batch-end indices for each closeSegment() (+ final in end()).
+  std::vector<uint32_t> segmentEnds_;
 
   std::vector<VkRect2D> scissorStack_;
   VkRect2D              currentScissor_{};
   uint32_t              batchStartIndex_ = 0;
 
+  VkImageView backdropBlurView_ = VK_NULL_HANDLE;
+  VkSampler   backdropBlurSampler_ = VK_NULL_HANDLE;
+
   vec2 viewportSize_{800.0f, 600.0f};
   float viewZoom_ = 1.0f;
   float viewPanX_ = 0.0f;
   float viewPanY_ = 0.0f;
+
+  void drawBatchRange(VkCommandBuffer commandBuffer, uint32_t firstBatch,
+                      uint32_t batchCount);
 };

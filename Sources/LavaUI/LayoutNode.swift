@@ -81,6 +81,9 @@ class YogaBoxNode: AnyViewNode {
     var isScrollable = false
     /// Appear/disappear animation, if `.transition()` was applied.
     var transitionState: TransitionState?
+    /// Backdrop blur radius from `.blur(radius:)`. Emitted as Begin/End
+    /// BackdropBlur around this node's paint (see DrawList).
+    var backdropBlurRadius: Float?
 
     /// How far this node's children are drawn from its own origin.
     ///

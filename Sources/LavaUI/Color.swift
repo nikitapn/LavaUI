@@ -35,6 +35,12 @@ public struct Color: Equatable, Sendable, Hashable {
         )
     }
 
+    /// Returns a copy with alpha replaced (0…1). Useful for glass tints on
+    /// top of `.blur()`.
+    public func opacity(_ alpha: Float) -> Color {
+        Color(r: r, g: g, b: b, a: alpha)
+    }
+
     /// Perceived brightness, 0…1 (Rec. 601 weights). For deciding whether a
     /// foreground drawn *on* this colour should be light or dark.
     public var luminance: Float { 0.299 * r + 0.587 * g + 0.114 * b }

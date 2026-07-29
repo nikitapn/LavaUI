@@ -18,6 +18,10 @@ public struct ViewStyle: Equatable {
     public var minHeight: Float?
     public var flexGrow: Float?
     public var flexShrink: Float?
+    /// Backdrop blur radius in pixels under this node's rect. `nil` = off.
+    /// Emits `BeginBackdropBlur` / `EndBackdropBlur` around the node's paint
+    /// so earlier UI is frosted and this node's fill + children stay sharp.
+    public var backdropBlurRadius: Float?
 
     public init() {}
 
@@ -34,6 +38,7 @@ public struct ViewStyle: Equatable {
         out.minHeight = minHeight ?? base.minHeight
         out.flexGrow = flexGrow ?? base.flexGrow
         out.flexShrink = flexShrink ?? base.flexShrink
+        out.backdropBlurRadius = backdropBlurRadius ?? base.backdropBlurRadius
         return out
     }
 }
@@ -116,6 +121,7 @@ extension YogaBoxNode {
             base.minHeight = minHeight
             base.flexGrow = flexGrow
             base.flexShrink = flexShrink
+            base.backdropBlurRadius = backdropBlurRadius
             styleBaseline = base
         }
         let base = styleBaseline ?? ViewStyle()
@@ -127,6 +133,9 @@ extension YogaBoxNode {
         minHeight = style.minHeight ?? base.minHeight ?? 0
         flexGrow = style.flexGrow ?? base.flexGrow ?? 0
         flexShrink = style.flexShrink ?? base.flexShrink ?? 1
+        // Unlike fill (set-if-present), blur clears when the modifier is gone:
+        // fall back through the baseline so removing `.blur()` actually turns it off.
+        backdropBlurRadius = style.backdropBlurRadius ?? base.backdropBlurRadius
 
         if let leaf = self as? LeafNode {
             if let fill = style.fill { leaf.fillColor = fill }
@@ -243,6 +252,16 @@ extension View {
     public func flexShrink(_ value: Float) -> ModifiedView<Self> {
         styled { $0.flexShrink = value }
     }
+
+    /// Frosted-glass backdrop under this view's layout rect.
+    ///
+    /// Captures UI already painted behind the rect, blurs it, composites the
+    /// result, then draws this view's fill and children sharp on top. Typical
+    /// use: `.background(Color(...).opacity(0.15)).blur(radius: 6)` on a panel
+    /// or overlay so chrome reads as glass.
+    public func blur(radius: Float = 8) -> ModifiedView<Self> {
+        styled { $0.backdropBlurRadius = max(0.5, radius) }
+    }
 }
 
 // MARK: - Collapsing a chain
@@ -296,6 +315,10 @@ extension ModifiedView {
 
     public func flexShrink(_ value: Float) -> ModifiedView<Content> {
         adding { $0.flexShrink = value }
+    }
+
+    public func blur(radius: Float = 8) -> ModifiedView<Content> {
+        adding { $0.backdropBlurRadius = max(0.5, radius) }
     }
 }
 

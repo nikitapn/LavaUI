@@ -76,6 +76,7 @@ public struct DemoExample: View {
     @State private var nextId = 10
     @State private var gauge: Float = 0.35
     @State private var showMenu = false
+    @State private var showGlass = false
     @State private var showBanner = true
     @State private var lightTheme = false
     @State private var status = "Click a list row, edit the field, resize the window."
@@ -323,6 +324,57 @@ public struct DemoExample: View {
                 .background(Color(r: 0.28, g: 0.30, b: 0.45))
                 .cornerRadius(6)
                 Spacer()
+            }
+
+            Text("Backdrop blur · .blur() glass", color: .accent)
+            Text(
+                "Captures UI already painted under the panel, blurs it, draws chrome sharp on top.",
+                color: .secondary
+            )
+            // Saturated strip so frost is obvious; glass overlay anchors here.
+            HStack(height: .pt(72), padding: 4) {
+                ForEach(Array(DemoPalette.swatches.enumerated()), id: \.offset) { i, c in
+                    VStack(flexGrow: 1, padding: 4) {
+                        Text("\(i + 1)", color: .primary)
+                    }
+                    .background(c)
+                    .cornerRadius(6)
+                }
+            }
+            HStack(padding: 2) {
+                Button(showGlass ? "Hide glass" : "Show glass") {
+                    showGlass.toggle()
+                    bump(showGlass ? "glass on" : "glass off")
+                }
+
+                Text("(glass opens on the colour strip)", color: .dim)
+                Spacer()
+            }
+            .overlay(
+                isPresented: $showGlass,
+                alignment: .above,
+                // Transparent shell — glass fill + blur live on the content below.
+                style: OverlayStyle(
+                    background: Color(r: 0, g: 0, b: 0, a: 0),
+                    border: Color(r: 0.85, g: 0.88, b: 0.95).opacity(0.4),
+                    cornerRadius: 24,
+                    padding: 0,
+                    minWidth: 400
+                )
+            ) {
+                VStack(padding: 4) {
+                    Text("Frosted panel", color: .primary)
+                    Text("backdrop blur · radius 10", color: .secondary)
+                    Text("Close", color: .accent, onClick: {
+                        showGlass = false
+                        bump("glass off")
+                    })
+                }
+                .padding(14)
+                // Stronger tint so glass reads even when the blur is subtle.
+                .background(Color(r: 0.95, g: 0.96, b: 1.0).opacity(0.28))
+                .cornerRadius(12)
+                .blur(radius: 10)
             }
 
             Text("Button · animated press + hover", color: .accent)
