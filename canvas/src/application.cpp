@@ -218,6 +218,31 @@ struct Application::Impl
       if (!self) return;
       self->bridgeCharInput(codepoint);
     });
+
+    // Live drag-resize: notify Swift on every framebuffer change. Without this,
+    // Resize was only enqueued inside repaint()→ensureFramebufferSize(), so the
+    // idle loop (wait for events, no work → no repaint) never saw size changes
+    // until something else dirtied the frame.
+    glfwSetFramebufferSizeCallback(win, [](GLFWwindow *w, int width, int height) {
+      auto *self = static_cast<Impl *>(glfwGetWindowUserPointer(w));
+      if (!self || width < 1 || height < 1) return;
+      canvas::InputEvent ev;
+      ev.kind = static_cast<uint32_t>(canvas::InputEventKind::Resize);
+      ev.x = static_cast<float>(width);
+      ev.y = static_cast<float>(height);
+      ev.button = 0;
+      {
+        std::lock_guard lock(self->inputMu_);
+        // Coalesce: keep only the latest size if several arrive before poll.
+        if (!self->inputEvents_.empty() &&
+            self->inputEvents_.back().kind ==
+              static_cast<uint32_t>(canvas::InputEventKind::Resize)) {
+          self->inputEvents_.back() = ev;
+        } else {
+          self->inputEvents_.push_back(ev);
+        }
+      }
+    });
   }
 
   canvas::VoidResult init(const std::string &assetsRoot)
@@ -621,6 +646,17 @@ struct Application::Impl
 
   void framebufferSize(float &outW, float &outH) const
   {
+    // Prefer the *live* GLFW size so the Swift safety net sees drag-resize
+    // before ensureFramebufferSize() updates the swapchain extent.
+    if (vulkan.isWindowed() && vulkan.window()) {
+      int fbW = 0, fbH = 0;
+      glfwGetFramebufferSize(vulkan.window(), &fbW, &fbH);
+      if (fbW >= 1 && fbH >= 1) {
+        outW = static_cast<float>(fbW);
+        outH = static_cast<float>(fbH);
+        return;
+      }
+    }
     const auto e = vulkan.getExtent();
     outW = static_cast<float>(e.width);
     outH = static_cast<float>(e.height);

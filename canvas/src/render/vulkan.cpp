@@ -1998,9 +1998,6 @@ void Vulkan::initWithWindow(
   }
   ownsWindow_ = true;
 
-  // Skip taskbar/pager (X11) / tool-window style (Win32). Must run after create.
-  canvasApplyToolWindowHints(window_);
-
   extent_      = {static_cast<uint32_t>(width), static_cast<uint32_t>(height)};
   colorFormat_ = VK_FORMAT_R8G8B8A8_SRGB;
 

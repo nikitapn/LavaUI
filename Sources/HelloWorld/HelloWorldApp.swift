@@ -134,12 +134,14 @@ struct HelloWorldApp {
                         action()
                     }
                 case .resize:
+                    // GLFW framebuffer callback (live drag). Layout only — view
+                    // structure is unchanged; Yoga needs the new root size.
                     let nw = max(1, ev.x)
                     let nh = max(1, ev.y)
                     if nw != windowW || nh != windowH {
                         windowW = nw
                         windowH = nh
-                        dirty = true
+                        ViewInvalidation.markNeedsLayout()
                         FileHandle.standardError.write(
                             Data("layout resize → \(Int(nw))×\(Int(nh))\n".utf8)
                         )
@@ -190,6 +192,8 @@ struct HelloWorldApp {
                 }
             }
 
+            // Live size from GLFW (not only post-swapchain). Covers any resize
+            // that arrived without a Resize event still in the queue.
             let fb = editor.framebufferSize()
             if fb.w >= 1, fb.h >= 1, fb.w != windowW || fb.h != windowH {
                 windowW = fb.w
