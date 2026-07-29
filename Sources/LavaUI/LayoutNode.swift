@@ -162,6 +162,7 @@ enum LeafKind: Equatable {
     case button
     case toggle
     case slider
+    case divider
 }
 
 final class LeafNode: YogaBoxNode {
@@ -214,6 +215,24 @@ final class LeafNode: YogaBoxNode {
     /// exactly the numbers that drew the track rather than recomputing them.
     var sliderInset: Float = 0
     var sliderTravel: Float = 0
+
+    /// Divider-only payload. `dividerAxis` is an explicit override; nil infers
+    /// the orientation from whatever container this ended up in.
+    var dividerStyle: DividerStyle?
+    var dividerAxis: DividerAxis?
+
+    /// True when the container runs horizontally, so the rule runs vertically.
+    ///
+    /// Read from the Yoga owner rather than passed down: the owner is not set
+    /// until the parent inserts this node, which happens after mount, so there
+    /// is no moment during construction when the answer is known. Measure and
+    /// emit both run after insertion, and both ask here.
+    var isVerticalDivider: Bool {
+        if let dividerAxis { return dividerAxis == .vertical }
+        guard let owner = YGNodeGetOwner(yogaStorage) else { return false }
+        let direction = YGNodeStyleGetFlexDirection(owner)
+        return direction == YGFlexDirectionRow || direction == YGFlexDirectionRowReverse
+    }
 
     /// Editor-only payload.
     var highlighter: SyntaxHighlighter?
@@ -418,6 +437,18 @@ final class LeafNode: YogaBoxNode {
     }
 
     func measureForYoga(width: Float, widthMode: YGMeasureMode) -> YGSize {
+        // Before the font guard: a rule is the one leaf with no text in it.
+        if kind == .divider, let style = dividerStyle {
+            let extent = style.thickness + style.spacing * 2
+            // Only the main axis is claimed. The cross axis is left at zero and
+            // filled by `alignItems: stretch`, which every container here sets
+            // — a divider is *defined* as spanning its container, so taking the
+            // measurement would just be guessing at what stretch already knows.
+            return isVerticalDivider
+                ? YGSize(width: extent, height: 0)
+                : YGSize(width: 0, height: extent)
+        }
+
         guard let font = font ?? FontStore.default else {
             // Fallback estimate if font not bootstrapped yet.
             let w = max(8, Float(text.count) * 8 + 8)
@@ -1025,7 +1056,7 @@ public final class LayoutHost {
 }
 
 // Minimal stubs so primitives compile without CYoga.
-enum LeafKind: Equatable { case text, spacer, diagramHost, empty, image, textField, editor, button, toggle, slider }
+enum LeafKind: Equatable { case text, spacer, diagramHost, empty, image, textField, editor, button, toggle, slider, divider }
 
 final class LeafNode: AnyViewNode {
     let id = NodeID.generate()

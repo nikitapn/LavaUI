@@ -319,10 +319,16 @@ public struct DemoExample: View {
                 // Bound to the same state the toolbar drives, so flipping it
                 // from up there animates these too.
                 Toggle("Nav", isOn: $showSidebar)
+                Divider()
                 Toggle("Inspector", isOn: $showInspector)
+                Divider()
                 Toggle("Locked", isOn: .constant(true), isEnabled: false)
                 Spacer()
             }
+
+            // No axis given: horizontal here in the VStack, vertical in the
+            // HStack below, from the same call.
+            Divider()
 
             Text("Slider · drag, step, readout", color: .accent)
             HStack(padding: 2) {

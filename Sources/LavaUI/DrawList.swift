@@ -265,6 +265,25 @@ public final class DrawList {
                     return
                 }
 
+                if leaf.kind == .divider, let style = leaf.dividerStyle {
+                    let t = max(1, style.thickness)
+                    // Rounded to a whole pixel: a 1px rule landing on a half
+                    // pixel is smeared across two rows by the SDF and reads as
+                    // a smudge rather than a line.
+                    if leaf.isVerticalDivider {
+                        rect(
+                            x: (x + (w - t) / 2).rounded(), y: y,
+                            w: t, h: h, color: style.color
+                        )
+                    } else {
+                        rect(
+                            x: x, y: (y + (h - t) / 2).rounded(),
+                            w: w, h: t, color: style.color
+                        )
+                    }
+                    return
+                }
+
                 if leaf.kind == .textField {
                     emitTextField(leaf, x: x, y: y, w: w, h: h)
                 }

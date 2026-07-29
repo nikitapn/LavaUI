@@ -98,8 +98,9 @@ expensive to build and keyed by content* (the glyph atlas, Vulkan objects);
 
 ## What exists
 
-**Containers** `HStack` `VStack` `Spacer` `ForEach` `ScrollView` — flexbox via
-Yoga, with `if`/`else` and optionals handled by the view builder.
+**Containers** `HStack` `VStack` `Spacer` `Divider` `ForEach` `ScrollView` —
+flexbox via Yoga, with `if`/`else` and optionals handled by the view builder.
+`Divider()` takes its orientation from the container it lands in.
 
 **Content** `Text` (hover, click, wrapping) · `Image` · `DiagramHost`
 · `Button` (animated press and hover) · `Toggle` (animated knob, bound value)
@@ -132,7 +133,6 @@ what is measured cannot drift from what is drawn.
 
 Honest list, roughly in the order it hurts:
 
-- **Controls** — `Divider`. (`Button`, `Toggle` and `Slider` exist.)
 - **Transitions** — animating a view *appearing* or *disappearing*. Value
   animation exists; transitions need removed nodes to outlive their removal,
   which touches the three reconcilers that drop nodes (`EitherView`, `ForEach`,
