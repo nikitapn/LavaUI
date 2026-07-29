@@ -350,8 +350,10 @@ final class LeafNode: YogaBoxNode {
         }
         scrollY = min(max(0, scrollY), maxScrollY(lineHeight: lineHeight))
     }
-    /// Last width Yoga gave this leaf, used to wrap on the next pass.
+    /// Last width we soft-wrapped against (Yoga measure / post-layout).
     var lastMeasuredWidth: Float = 0
+    /// Buffer at last wrap — text edits must re-wrap even if width is unchanged.
+    var lastWrappedText: String = ""
     /// Click handler receiving node-local coordinates *and* the node's
     /// absolute origin. The caret needs the former; a drag needs the latter,
     /// because pointer capture delivers window coordinates long after the hit
@@ -458,16 +460,21 @@ final class LeafNode: YogaBoxNode {
         }
 
         if kind == .textField || kind == .editor {
-            // Yoga calls measure several times per pass: AtMost with whatever
-            // space the parent *could* offer, and Exactly with the width the
-            // box actually resolved to. Only the Exactly pass is real. Adopting
-            // an AtMost probe (which can be the whole window) wraps the text
-            // for a box that does not exist, and the text then overflows.
-            if wraps, width > 0, widthMode == YGMeasureModeExactly,
-               width != lastMeasuredWidth
+            // Soft-wrap needs a *finite* offered width. Yoga probes with AtMost
+            // (parent free space) and Exactly (resolved box). We used to wrap
+            // only on Exactly, but stretch/auto fields often size from the
+            // AtMost result alone — so the long first line never broke and the
+            // field grew (or overflowed) as one visual row. Wrap on any
+            // constrained mode; Undefined stays unwrapped (intrinsic width).
+            if wraps, width > 0,
+               widthMode == YGMeasureModeExactly || widthMode == YGMeasureModeAtMost
             {
-                lastMeasuredWidth = width
-                refreshVisualRows(availableWidth: width)
+                let textNow = editing.text
+                if abs(width - lastMeasuredWidth) > 0.5 || textNow != lastWrappedText {
+                    lastMeasuredWidth = width
+                    lastWrappedText = textNow
+                    refreshVisualRows(availableWidth: width)
+                }
             }
 
             if isMultiline {
@@ -486,9 +493,16 @@ final class LeafNode: YogaBoxNode {
                     return max(acc, font.shapedRun(String(editing.text[lo..<hi])).width)
                 }
                 let contentWidth = widest + gutterWidth + LeafNode.textInset * 2
-                // A wrapping field takes the width it is given; a scrolling one
-                // asks for its content and is clipped by the parent.
-                let w = (wraps && width > 0) ? width : contentWidth
+                // A wrapping field fills the offered width so Yoga does not
+                // expand the box to the unwrapped line length.
+                let w: Float
+                if wraps, width > 0,
+                   widthMode == YGMeasureModeExactly || widthMode == YGMeasureModeAtMost
+                {
+                    w = width
+                } else {
+                    w = contentWidth
+                }
                 return YGSize(width: w, height: height)
             }
         }

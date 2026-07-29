@@ -215,6 +215,9 @@ extension LeafNode {
 
     private func afterEdit() {
         text = editing.text.isEmpty ? placeholder : editing.text
+        // Force soft-wrap to recompute even when the box width is unchanged.
+        lastMeasuredWidth = -1
+        lastWrappedText = ""
         markMeasureDirty()
         CaretBlink.noteEdit()
         ViewInvalidation.markDirty()
