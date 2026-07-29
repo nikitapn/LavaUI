@@ -40,7 +40,7 @@ rather than by discipline.
 cd canvas && ninja -C .build.Debug     # C++ engine
 cd .. && swift build                   # Swift
 swift run HelloWorld                   # demo
-swift test                             # 82 tests, no GPU needed
+swift test                             # 90 tests, no GPU needed
 ```
 
 Linux only today. `CxxCanvas`/`CYoga` are gated on it, and the engine is
@@ -90,7 +90,7 @@ expensive to build and keyed by content* (the glyph atlas, Vulkan objects);
 Yoga, with `if`/`else` and optionals handled by the view builder.
 
 **Content** `Text` (hover, click, wrapping) · `Image` · `DiagramHost`
-· `Button` (animated press and hover)
+· `Button` (animated press and hover) · `Toggle` (animated knob, bound value)
 
 **Input** `TextField` (single and multi-line, soft wrap, selection, clipboard,
 undo) · `EditorView` (line-number gutter, syntax rules, current-line highlight,
@@ -119,7 +119,7 @@ what is measured cannot drift from what is drawn.
 
 Honest list, roughly in the order it hurts:
 
-- **Controls** — `Toggle`, `Slider`, `Divider`. (`Button` exists.)
+- **Controls** — `Slider`, `Divider`. (`Button` and `Toggle` exist.)
 - **Transitions** — animating a view *appearing* or *disappearing*. Value
   animation exists; transitions need removed nodes to outlive their removal,
   which touches the three reconcilers that drop nodes (`EitherView`, `ForEach`,

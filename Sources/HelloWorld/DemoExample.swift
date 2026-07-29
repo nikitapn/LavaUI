@@ -313,6 +313,16 @@ public struct DemoExample: View {
                 Spacer()
             }
 
+            Text("Toggle · animated knob", color: .accent)
+            HStack(padding: 2) {
+                // Bound to the same state the toolbar drives, so flipping it
+                // from up there animates these too.
+                Toggle("Nav", isOn: $showSidebar)
+                Toggle("Inspector", isOn: $showInspector)
+                Toggle("Locked", isOn: .constant(true), isEnabled: false)
+                Spacer()
+            }
+
             Text("EditorView · gutter, rules, find", color: .accent)
             HStack(padding: 2) {
                 TextField(

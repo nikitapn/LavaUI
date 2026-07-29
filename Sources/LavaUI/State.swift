@@ -79,6 +79,13 @@ public struct Binding<Value> {
     }
 
     public var projectedValue: Binding<Value> { self }
+
+    /// A binding that never changes. For previews and for controls that are
+    /// shown in a fixed state — a disabled toggle has to display *something*,
+    /// and inventing a throwaway `@State` for it is worse.
+    public static func constant(_ value: Value) -> Binding<Value> {
+        Binding(get: { value }, set: { _ in })
+    }
 }
 
 // MARK: - Transplanting storage across rebuilds

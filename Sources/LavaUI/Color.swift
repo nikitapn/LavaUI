@@ -21,6 +21,24 @@ public struct Color: Equatable, Sendable, Hashable {
         return R | (G << 8) | (B << 16) | (A << 24)
     }
 
+    /// Moves toward white by `amount` (0…1), keeping alpha.
+    ///
+    /// For deriving a hover or pressed variant from a semantic token, so a
+    /// control does not have to hard-code a second colour that a theme swap
+    /// would then fail to update.
+    public func lightened(_ amount: Float) -> Color {
+        Color(
+            r: r + (1 - r) * amount,
+            g: g + (1 - g) * amount,
+            b: b + (1 - b) * amount,
+            a: a
+        )
+    }
+
+    /// Perceived brightness, 0…1 (Rec. 601 weights). For deciding whether a
+    /// foreground drawn *on* this colour should be light or dark.
+    public var luminance: Float { 0.299 * r + 0.587 * g + 0.114 * b }
+
     // Semantic tokens live in Theme.swift so they resolve through
     // `Theme.current` rather than being frozen here.
 }

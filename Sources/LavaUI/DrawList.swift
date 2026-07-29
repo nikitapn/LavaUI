@@ -255,6 +255,11 @@ public final class DrawList {
                     return
                 }
 
+                if leaf.kind == .toggle {
+                    emitToggle(leaf, x: x, y: y, w: w, h: h)
+                    return
+                }
+
                 if leaf.kind == .textField {
                     emitTextField(leaf, x: x, y: y, w: w, h: h)
                 }
@@ -318,6 +323,53 @@ public final class DrawList {
 }
 
 extension DrawList {
+    /// Draws a toggle as: capsule track, knob, then label.
+    ///
+    /// The knob position comes from the animation, never from `isOn` directly —
+    /// reading the boolean would snap it, which is the whole thing the
+    /// animation exists to avoid. `isOn` is only the fallback for a node that
+    /// somehow has no animation yet.
+    fileprivate func emitToggle(
+        _ leaf: LeafNode, x: Float, y: Float, w: Float, h: Float
+    ) {
+        guard let style = leaf.toggleStyle else { return }
+        let trackH = style.trackHeight
+        // The +4 mirrors the horizontal half of the padding `measureForYoga`
+        // added, so the track sits where the box was sized for it.
+        let trackX = x + 4
+        let trackY = y + (h - trackH) / 2
+        let track = leaf.toggleTrack?.current
+            ?? style.track(on: leaf.isOn, hovered: false, enabled: leaf.isEnabled)
+        roundedRect(
+            x: trackX, y: trackY, w: style.trackWidth, h: trackH,
+            color: track, radius: trackH / 2
+        )
+
+        let t = leaf.toggleKnob?.current ?? (leaf.isOn ? 1 : 0)
+        let radius = trackH / 2 - style.knobInset
+        // Travel is measured centre-to-centre, so the knob stays inset at both
+        // ends regardless of how wide the track is.
+        let travel = style.trackWidth - trackH
+        circle(
+            cx: trackX + trackH / 2 + travel * t,
+            cy: trackY + trackH / 2,
+            radius: radius,
+            color: leaf.toggleKnobColor?.current
+                ?? style.knobColor(over: track, enabled: leaf.isEnabled)
+        )
+
+        if !leaf.text.isEmpty, let font = leaf.font ?? FontStore.default {
+            let lineH = font.lineHeight
+            text(
+                leaf.text,
+                // -4 cancels the pen inset `text(_:)` applies.
+                x: trackX + style.trackWidth + style.labelGap - 4,
+                y: y + max(0, (h - lineH) / 2),
+                w: w, h: lineH, color: leaf.color, font: font
+            )
+        }
+    }
+
     /// Draws a field as: selection rects, then glyphs, then caret.
     ///
     /// That order is the whole point of the unified pipeline — under the old

@@ -160,6 +160,7 @@ enum LeafKind: Equatable {
     case textField
     case editor
     case button
+    case toggle
 }
 
 final class LeafNode: YogaBoxNode {
@@ -187,6 +188,18 @@ final class LeafNode: YogaBoxNode {
     var buttonStyle: ButtonStyle?
     var isPressed = false
     var isEnabled = true
+
+    /// Toggle-only payload. `toggleKnob` runs 0…1 across the track, so the
+    /// knob and the track colour can be interpolated independently — a flick
+    /// looks wrong if the colour lands before the knob does.
+    var toggleStyle: ToggleStyle?
+    var toggleKnob: Animated<Float>?
+    var toggleTrack: Animated<Color>?
+    /// Animated separately rather than recomputed from the current track: the
+    /// knob's contrast colour flips at a luminance threshold, which mid-slide
+    /// would be a visible pop.
+    var toggleKnobColor: Animated<Color>?
+    var isOn = false
 
     /// Editor-only payload.
     var highlighter: SyntaxHighlighter?
@@ -431,6 +444,23 @@ final class LeafNode: YogaBoxNode {
                 let w = (wraps && width > 0) ? width : contentWidth
                 return YGSize(width: w, height: height)
             }
+        }
+
+        if kind == .toggle, let style = toggleStyle {
+            // The track is fixed; only the label is measured, and it is
+            // measured unconstrained (mode 0) because a control label that
+            // wraps mid-word is worse than one that overflows its row.
+            var contentW = style.trackWidth
+            var contentH = max(style.trackHeight, font.lineHeight)
+            if !text.isEmpty {
+                let entry = TextLayoutCache.shared.layout(
+                    font: font, text: text, availWidth: 0, mode: 0
+                )
+                cachedLines = entry.lines
+                contentW += style.labelGap + entry.width
+                contentH = max(contentH, entry.height)
+            }
+            return YGSize(width: contentW + 8, height: contentH + 4)
         }
 
         let mode: Int
@@ -966,7 +996,7 @@ public final class LayoutHost {
 }
 
 // Minimal stubs so primitives compile without CYoga.
-enum LeafKind: Equatable { case text, spacer, diagramHost, empty, image, textField, editor, button }
+enum LeafKind: Equatable { case text, spacer, diagramHost, empty, image, textField, editor, button, toggle }
 
 final class LeafNode: AnyViewNode {
     let id = NodeID.generate()
