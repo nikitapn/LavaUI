@@ -26,6 +26,13 @@ public struct TextEditingState: Equatable {
     /// the thing the plan warned becomes painful to retrofit.
     public private(set) var undoStack = UndoStack()
 
+    /// Column to aim for during vertical movement, in characters.
+    ///
+    /// Held across consecutive up/down presses and cleared by anything else,
+    /// so a run of Down/Up returns to where it began rather than tracking the
+    /// shortest line it passed through.
+    internal var desiredColumn: Int?
+
     public init(_ text: String = "") {
         self.text = text
         self.anchor = text.startIndex
@@ -50,6 +57,7 @@ public struct TextEditingState: Equatable {
         let range = wordRange(at: clamp(index))
         anchor = range.lowerBound
         focus = range.upperBound
+        desiredColumn = nil
     }
 
     /// The word-ish run around `index`, using the same classification as
@@ -80,6 +88,7 @@ public struct TextEditingState: Equatable {
     public mutating func selectAll() {
         anchor = text.startIndex
         focus = text.endIndex
+        desiredColumn = nil
     }
 
     /// Collapses to the caret end, as typing or a plain arrow key should.
@@ -88,6 +97,7 @@ public struct TextEditingState: Equatable {
     public mutating func setCursor(_ index: String.Index, extending: Bool = false) {
         focus = clamp(index)
         if !extending { anchor = focus }
+        desiredColumn = nil
     }
 
     // MARK: Movement
@@ -104,6 +114,7 @@ public struct TextEditingState: Equatable {
             focus = text.index(before: focus)
         }
         if !extending { anchor = focus }
+        desiredColumn = nil
     }
 
     public mutating func moveRight(extending: Bool = false) {
@@ -116,26 +127,31 @@ public struct TextEditingState: Equatable {
             focus = text.index(after: focus)
         }
         if !extending { anchor = focus }
+        desiredColumn = nil
     }
 
     public mutating func moveToStart(extending: Bool = false) {
         focus = text.startIndex
         if !extending { anchor = focus }
+        desiredColumn = nil
     }
 
     public mutating func moveToEnd(extending: Bool = false) {
         focus = text.endIndex
         if !extending { anchor = focus }
+        desiredColumn = nil
     }
 
     public mutating func moveWordLeft(extending: Bool = false) {
         focus = wordBoundary(before: focus)
         if !extending { anchor = focus }
+        desiredColumn = nil
     }
 
     public mutating func moveWordRight(extending: Bool = false) {
         focus = wordBoundary(after: focus)
         if !extending { anchor = focus }
+        desiredColumn = nil
     }
 
     // MARK: The one mutation path
@@ -167,6 +183,7 @@ public struct TextEditingState: Equatable {
         let caret = index(atOffset: start + replacement.count)
         focus = caret
         anchor = caret
+        desiredColumn = nil
     }
 
     // MARK: Undo / redo
@@ -328,5 +345,125 @@ public struct TextEditingState: Equatable {
             i = text.index(after: i)
         }
         return i
+    }
+}
+
+// MARK: - Lines and vertical movement
+
+extension TextEditingState {
+    /// Whether the buffer contains any hard line break.
+    public var isMultiline: Bool { text.contains("\n") }
+
+    /// Logical lines, split on "\n". A trailing newline yields a final empty
+    /// line, which is correct: the caret can sit there.
+    public var lines: [Substring] {
+        text.split(separator: "\n", omittingEmptySubsequences: false)
+    }
+
+    /// Range of the line containing `index`, excluding its terminator.
+    public func lineRange(at index: String.Index) -> Range<String.Index> {
+        var start = index
+        while start > text.startIndex {
+            let prev = text.index(before: start)
+            if text[prev] == "\n" { break }
+            start = prev
+        }
+        var end = index
+        while end < text.endIndex, text[end] != "\n" {
+            end = text.index(after: end)
+        }
+        return start..<end
+    }
+
+    /// Zero-based logical line number of `index`.
+    public func lineIndex(of index: String.Index) -> Int {
+        var count = 0
+        var i = text.startIndex
+        while i < index, i < text.endIndex {
+            if text[i] == "\n" { count += 1 }
+            i = text.index(after: i)
+        }
+        return count
+    }
+
+    /// Character offset of `index` within its own line.
+    public func column(of index: String.Index) -> Int {
+        text.distance(from: lineRange(at: index).lowerBound, to: index)
+    }
+
+    /// Start index of line `n`, or `endIndex` if `n` is past the last line.
+    public func startOfLine(_ n: Int) -> String.Index {
+        guard n > 0 else { return text.startIndex }
+        var seen = 0
+        var i = text.startIndex
+        while i < text.endIndex {
+            if text[i] == "\n" {
+                seen += 1
+                let next = text.index(after: i)
+                if seen == n { return next }
+                i = next
+            } else {
+                i = text.index(after: i)
+            }
+        }
+        return text.endIndex
+    }
+
+    /// Index at `line`/`column`, clamped to that line's length.
+    public func index(line: Int, column: Int) -> String.Index {
+        let start = startOfLine(line)
+        let end = lineRange(at: start).upperBound
+        let available = text.distance(from: start, to: end)
+        return text.index(start, offsetBy: min(max(0, column), available))
+    }
+
+    // MARK: Home / End are per-line once there is more than one
+
+    public mutating func moveToLineStart(extending: Bool = false) {
+        focus = lineRange(at: focus).lowerBound
+        if !extending { anchor = focus }
+        desiredColumn = nil
+    }
+
+    public mutating func moveToLineEnd(extending: Bool = false) {
+        focus = lineRange(at: focus).upperBound
+        if !extending { anchor = focus }
+        desiredColumn = nil
+    }
+
+    // MARK: Vertical
+
+    /// Moves up one line, preserving the column the user *started* from.
+    ///
+    /// The remembered column is the whole point. Without it, stepping down
+    /// through a short line and back up strands the caret at that short line's
+    /// end instead of returning to the original column — the classic
+    /// multi-line caret bug, and invisible until someone navigates ragged text.
+    public mutating func moveUp(extending: Bool = false) {
+        let line = lineIndex(of: focus)
+        guard line > 0 else {
+            // Already on the first line: go to its start, like every editor.
+            focus = text.startIndex
+            if !extending { anchor = focus }
+            return
+        }
+        let target = desiredColumn ?? column(of: focus)
+        focus = index(line: line - 1, column: target)
+        if !extending { anchor = focus }
+        desiredColumn = target
+    }
+
+    public mutating func moveDown(extending: Bool = false) {
+        let line = lineIndex(of: focus)
+        let lastLine = lines.count - 1
+        guard line < lastLine else {
+            focus = text.endIndex
+            if !extending { anchor = focus }
+            return
+        }
+        let target = desiredColumn ?? column(of: focus)
+        focus = index(line: line + 1, column: target)
+        if !extending { anchor = focus }
+        desiredColumn = target
     }
 }

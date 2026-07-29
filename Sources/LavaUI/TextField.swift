@@ -15,16 +15,27 @@ public struct TextField: PrimitiveView {
     public var placeholder: String
     public var font: UIFont?
     public var onSubmit: (() -> Void)?
+    /// When true, Enter inserts a newline instead of submitting, and the box
+    /// grows to fit its lines. Hard line breaks only for now — soft wrap is a
+    /// separate step, because a wrapped visual line is no longer a logical one
+    /// and every index mapping has to account for that.
+    public var isMultiline: Bool
+    /// Height cap in lines when multi-line; the box grows up to this.
+    public var maxLines: Int
 
     public init(
         text: Binding<String>,
         placeholder: String = "",
         font: UIFont? = nil,
+        multiline: Bool = false,
+        maxLines: Int = 8,
         onSubmit: (() -> Void)? = nil
     ) {
         self._text = text
         self.placeholder = placeholder
         self.font = font
+        self.isMultiline = multiline
+        self.maxLines = maxLines
         self.onSubmit = onSubmit
     }
 
@@ -66,6 +77,13 @@ public struct TextField: PrimitiveView {
         // reserves a sensible line box.
         leaf.text = leaf.editing.text.isEmpty ? placeholder : leaf.editing.text
         leaf.minWidth = 80
+        leaf.isMultiline = isMultiline
+        leaf.maxLines = maxLines
+        if isMultiline, let f = resolvedFont {
+            // Hard-wrapped: height follows the line count directly.
+            let shown = min(max(leaf.editing.lines.count, 1), maxLines)
+            leaf.height = .pt(Float(shown) * f.lineHeight + Theme.current.controlPadding * 2)
+        }
 
         let binding = _text
         let submit = onSubmit
@@ -75,7 +93,7 @@ public struct TextField: PrimitiveView {
             guard let leaf, let run = leaf.shapedRun() else { return }
             leaf.focusSelf(binding: binding, onSubmit: submit)
 
-            let hit = run.index(atX: localX - LeafNode.textInset)
+            let hit = leaf.index(atLocalX: localX, localY: localY) ?? run.index(atX: localX - LeafNode.textInset)
             let clicks = ClickCounter.register(x: originX + localX, y: originY + localY)
 
             if clicks >= 2 {
@@ -88,10 +106,13 @@ public struct TextField: PrimitiveView {
                 // leaves the field — otherwise the hit test simply misses.
                 PointerCapture.capture(
                     leaf.id,
-                    onMove: { [weak leaf] wx, _ in
+                    onMove: { [weak leaf] wx, wy in
                         guard let leaf, let run = leaf.shapedRun() else { return }
-                        let lx = wx - originX - LeafNode.textInset
-                        leaf.editing.setCursor(run.index(atX: lx), extending: true)
+                        let lx = wx - originX
+                        let ly = wy - originY
+                        let target = leaf.index(atLocalX: lx, localY: ly)
+                            ?? run.index(atX: lx - LeafNode.textInset)
+                        leaf.editing.setCursor(target, extending: true)
                         CaretBlink.noteEdit()
                         ViewInvalidation.markDirty()
                     }
@@ -112,6 +133,20 @@ extension LeafNode {
     func shapedRun() -> ShapedRun? {
         guard let font = font ?? FontStore.default else { return nil }
         return font.shapedRun(editing.text)
+    }
+
+    /// Index under a point in node-local coordinates, resolving the line
+    /// first. Nil when there is no font to shape with.
+    func index(atLocalX x: Float, localY y: Float) -> String.Index? {
+        guard let f = font ?? FontStore.default else { return nil }
+        let inset = LeafNode.textInset
+        let lineList = editing.lines
+        let row = max(0, min(lineList.count - 1, Int((y - inset) / f.lineHeight)))
+        let column = f.shapedRun(String(lineList[row])).index(atX: x - inset)
+        let columnOffset = String(lineList[row]).distance(
+            from: String(lineList[row]).startIndex, to: column
+        )
+        return editing.index(line: row, column: columnOffset)
     }
 
     func focusSelf(binding: Binding<String>, onSubmit: (() -> Void)?) {
@@ -151,16 +186,28 @@ extension LeafNode {
         case KeyCode.right:
             event.control ? editing.moveWordRight(extending: shift)
                           : editing.moveRight(extending: shift)
+        case KeyCode.up:
+            editing.moveUp(extending: shift)
+        case KeyCode.down:
+            editing.moveDown(extending: shift)
         case KeyCode.home:
-            editing.moveToStart(extending: shift)
+            // Ctrl+Home is buffer start; bare Home is line start, which only
+            // differ once there is more than one line.
+            event.control ? editing.moveToStart(extending: shift)
+                          : editing.moveToLineStart(extending: shift)
         case KeyCode.end:
-            editing.moveToEnd(extending: shift)
+            event.control ? editing.moveToEnd(extending: shift)
+                          : editing.moveToLineEnd(extending: shift)
         case KeyCode.backspace:
             event.control ? editing.deleteWordBackward() : editing.deleteBackward()
         case KeyCode.delete:
             editing.deleteForward()
         case KeyCode.enter:
-            onSubmit?()
+            if isMultiline, !event.control {
+                editing.insert("\n")
+            } else {
+                onSubmit?()
+            }
         case KeyCode.escape:
             FocusManager.resignFocus(id)
         case KeyCode.a where event.control:

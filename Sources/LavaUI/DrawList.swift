@@ -263,49 +263,97 @@ extension DrawList {
         guard let font = leaf.font ?? FontStore.default else { return }
         let inset = LeafNode.textInset
         let lineH = font.lineHeight
-        let baselineTop = y + max(0, (h - lineH) / 2)
         let focused = FocusManager.isFocused(leaf.id)
         let state = leaf.editing
 
         if focused {
-            // Focus ring, drawn before content so it reads as a border.
-            rect(x: x, y: y, w: w, h: 1, color: .accent)
-            rect(x: x, y: y + h - 1, w: w, h: 1, color: .accent)
-        }
-
-        let run = font.shapedRun(state.text)
-
-        if state.hasSelection {
-            let range = state.selectedRange
-            let x0 = run.caretX(for: range.lowerBound)
-            let x1 = run.caretX(for: range.upperBound)
+            rect(x: x, y: y, w: w, h: Theme.current.borderWidth, color: .accent)
             rect(
-                x: x + inset + x0, y: baselineTop,
-                w: max(1, x1 - x0), h: lineH,
-                color: Theme.current.selectionFill
+                x: x, y: y + h - Theme.current.borderWidth,
+                w: w, h: Theme.current.borderWidth, color: .accent
             )
         }
 
         if state.text.isEmpty {
             if !leaf.placeholder.isEmpty {
+                let top = leaf.isMultiline ? y + inset : y + max(0, (h - lineH) / 2)
                 text(
-                    leaf.placeholder, x: x + inset - 4, y: baselineTop,
+                    leaf.placeholder, x: x + inset - 4, y: top,
                     w: w, h: lineH, color: .muted, font: font
                 )
             }
-        } else {
-            // `text(...)` applies its own 4px pen inset; subtract it so glyph
-            // positions line up with the caret maths above.
-            text(
-                state.text, x: x + inset - 4, y: baselineTop,
-                w: w, h: lineH, color: leaf.color, font: font
-            )
+            if focused, CaretBlink.isVisible {
+                let top = leaf.isMultiline ? y + inset : y + max(0, (h - lineH) / 2)
+                rect(
+                    x: x + inset, y: top,
+                    w: Theme.current.caretWidth, h: lineH, color: .primary
+                )
+            }
+            return
         }
 
-        if focused, !state.hasSelection, CaretBlink.isVisible {
-            let caretX = x + inset + run.caretX(for: state.focus)
-            rect(x: caretX, y: baselineTop, w: Theme.current.caretWidth, h: lineH, color: .primary)
+        // Single-line stays vertically centred in its box; multi-line starts
+        // at the top inset and stacks.
+        let firstTop = leaf.isMultiline ? y + inset : y + max(0, (h - lineH) / 2)
+        let lines = state.lines
+        let selection = state.hasSelection ? state.selectedRange : nil
+        let caretLine = state.lineIndex(of: state.focus)
+
+        for (row, line) in lines.enumerated() {
+            let lineTop = firstTop + Float(row) * lineH
+            // Cheap vertical cull: a tall buffer in a short box.
+            if lineTop + lineH < y || lineTop > y + h { continue }
+
+            let lineText = String(line)
+            let run = font.shapedRun(lineText)
+            let lineStart = state.index(line: row, column: 0)
+            let lineEnd = state.lineRange(at: lineStart).upperBound
+
+            // Selection is a range over the whole buffer; clip it to this line
+            // so each row draws only its own share.
+            if let sel = selection, sel.lowerBound < lineEnd, sel.upperBound > lineStart {
+                let from = max(sel.lowerBound, lineStart)
+                let to = min(sel.upperBound, lineEnd)
+                let x0 = run.caretX(for: localIndex(in: lineText, matching: from, lineStart: lineStart, state: state))
+                let x1 = run.caretX(for: localIndex(in: lineText, matching: to, lineStart: lineStart, state: state))
+                // A selection crossing a newline should show the break, so an
+                // empty tail still paints a sliver.
+                let spansNewline = sel.upperBound > lineEnd
+                rect(
+                    x: x + inset + x0, y: lineTop,
+                    w: max(spansNewline ? 4 : 1, x1 - x0), h: lineH,
+                    color: Theme.current.selectionFill
+                )
+            }
+
+            if !lineText.isEmpty {
+                text(
+                    lineText, x: x + inset - 4, y: lineTop,
+                    w: w, h: lineH, color: leaf.color, font: font
+                )
+            }
+
+            if focused, !state.hasSelection, CaretBlink.isVisible, row == caretLine {
+                let local = localIndex(
+                    in: lineText, matching: state.focus, lineStart: lineStart, state: state
+                )
+                rect(
+                    x: x + inset + run.caretX(for: local), y: lineTop,
+                    w: Theme.current.caretWidth, h: lineH, color: .primary
+                )
+            }
         }
+    }
+
+    /// Buffer index → index into a single line's own string, which is what
+    /// `ShapedRun` (shaped per line) expects.
+    fileprivate func localIndex(
+        in lineText: String, matching index: String.Index,
+        lineStart: String.Index, state: TextEditingState
+    ) -> String.Index {
+        let column = state.text.distance(from: lineStart, to: index)
+        let clamped = max(0, min(column, lineText.count))
+        return lineText.index(lineText.startIndex, offsetBy: clamped)
     }
 }
 

@@ -49,6 +49,7 @@ public struct DemoExample: View {
     @State private var items: [DemoItem] = DemoExample.seedItems
     @State private var selectedId: Int? = 1
     @State private var draft: String = ""
+    @State private var notes: String = "Multi-line field.\nEnter adds a line.\nUp/Down keep their column."
     @State private var showSidebar = true
     @State private var showInspector = true
     @State private var flexSlots = 3
@@ -208,6 +209,9 @@ public struct DemoExample: View {
                 placeholder: "Type a name, then Add…",
                 onSubmit: { addItem() }
             )
+            Text("Multi-line TextField", color: .accent)
+            TextField(text: $notes, placeholder: "Notes…", multiline: true, maxLines: 6)
+
             HStack(padding: 2) {
                 Text(
                     "[ Add from field ]",

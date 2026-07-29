@@ -162,6 +162,8 @@ final class LeafNode: YogaBoxNode {
     /// @State transplant — the node's own lifetime is the persistence.
     var editing = TextEditingState("")
     var placeholder: String = ""
+    var isMultiline = false
+    var maxLines = 8
     /// Click handler receiving node-local coordinates *and* the node's
     /// absolute origin. The caret needs the former; a drag needs the latter,
     /// because pointer capture delivers window coordinates long after the hit
@@ -778,6 +780,8 @@ final class LeafNode: AnyViewNode {
     var onClickLocal: ((Float, Float, Float, Float) -> Void)?
     var editing = TextEditingState("")
     var placeholder = ""
+    var isMultiline = false
+    var maxLines = 8
     var hoverFill: Color?
     var cornerRadius: Float = 0
     var onHover: ((Bool) -> Void)?

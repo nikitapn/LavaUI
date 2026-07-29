@@ -878,9 +878,25 @@ The trap is replacing the ST editor first because it's the visible one. Invert:
 1. **Single-line, Latin, no IME.** Property-panel edits. Selection, caret,
    click-to-place, shift-select, clipboard via `glfwGet`/`SetClipboardString`.
    Covers most of the UI; a few days.
-2. **Multi-line.** ⬅ NEXT. Soft wrap reusing Phase 4's wrapping. Vertical caret
-   movement needs "desired x" memory across lines — a classic bug source, and
-   cheap to cover headlessly in `LavaText`.
+2. **Multi-line.** ✅ Done for **hard line breaks**. `TextField(multiline: true)`
+   grows to its line count (capped by `maxLines`), Enter inserts a newline
+   instead of submitting, Home/End act per line (Ctrl+Home/End for the buffer),
+   Up/Down navigate, and selection/caret render per line.
+
+   Desired-column memory is implemented and is the bulk of the 14 new tests:
+   stepping down through a short line and back up returns to the *original*
+   column, and any horizontal move or edit drops the memory. That is the bug
+   the plan singled out, and it is invisible until someone navigates ragged
+   text.
+
+   Undo came for free — the previous step's single `replace(_:with:)` funnel
+   meant line splits and joins are already recorded operations. That was the
+   argument for doing undo first, and it held.
+
+   **Soft wrap is deliberately not done.** With wrapping, a visual line stops
+   being a logical line and every index mapping (caret, hit test, selection
+   clipping, vertical movement) has to distinguish the two. That is a separate
+   step, not a flag.
 3. **Undo/redo.** ✅ Done — and deliberately taken *before* multi-line, because
    the retrofit cost only grows. `TextEditingState` mutated its buffer in six
    places; every one now funnels through a single `replace(_:with:)` that
