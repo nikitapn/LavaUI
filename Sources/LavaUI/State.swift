@@ -84,11 +84,14 @@ public struct Binding<Value> {
             // `Slider` bound to state nothing else displayed moved its knob and
             // repainted nothing at all.
             //
-            // A binding write is by definition a user-visible state change, so
-            // invalidating unconditionally is right. Controls are expected to
-            // skip no-op writes (a drag that lands on the same quantised value)
-            // rather than have this second-guess them.
-            ViewInvalidation.markNeedsBody()
+            // `redraw`, not `body`, is the right floor. If a body did read the
+            // value, `onChange` raises `body` on its own and this is harmless;
+            // if nothing read it, the only thing that can have changed is what
+            // the control itself draws, and it maintains that on its node. The
+            // difference is not academic: `body` implies a full Yoga pass, and
+            // forcing one per pointer pixel put ~5ms between a drag and the
+            // pixels, which is exactly the lag it looks like.
+            ViewInvalidation.markNeedsRedraw()
         }
     }
 

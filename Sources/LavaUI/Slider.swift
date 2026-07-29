@@ -126,6 +126,10 @@ public struct Slider: PrimitiveView {
         let lo = range.lowerBound
         let hi = range.upperBound
         let step = self.step
+        // Captured so a drag can refresh the readout without a body recompute.
+        // The reserved `valueWidth` is what makes this safe: the string changes
+        // but the node's measured size cannot, so no re-layout is owed.
+        let format = self.format
         return { leaf, localX in
             guard leaf.sliderTravel > 0, hi > lo else { return }
             let f = min(max(0, (localX - leaf.sliderInset) / leaf.sliderTravel), 1)
@@ -134,12 +138,16 @@ public struct Slider: PrimitiveView {
                 v = lo + ((v - lo) / step).rounded() * step
             }
             v = min(max(lo, v), hi)
-            // A write invalidates at `.body`; skipping the no-op keeps a
-            // continuous drag from rebuilding the tree once per pixel when the
-            // step quantises several pixels onto the same value.
+            // Skipping the no-op matters most for a stepped slider, where many
+            // pixels quantise onto the same value and each write would
+            // otherwise notify whatever observes it.
             guard v != binding.wrappedValue else { return }
             binding.wrappedValue = v
+            // Both updated here rather than waiting for `configure`: if nothing
+            // observes the bound value there is no body pass to wait for, and
+            // these are the only two things a drag changes.
             leaf.sliderFraction = (v - lo) / (hi - lo)
+            leaf.text = format?(v) ?? ""
         }
     }
 }
