@@ -148,6 +148,25 @@ public final class DrawList {
             let w = YGNodeLayoutGetWidth(yref)
             let h = YGNodeLayoutGetHeight(yref)
 
+            if let styled = node as? StyleBoxNode {
+                // Same rule as a stack: never cull a container, since Yoga does
+                // not clip and an overflowing child may still be on screen.
+                if let fill = styled.fillColor {
+                    if styled.cornerRadius > 0 {
+                        roundedRect(
+                            x: x, y: y, w: w, h: h,
+                            color: fill, radius: styled.cornerRadius
+                        )
+                    } else {
+                        rect(x: x, y: y, w: w, h: h, color: fill)
+                    }
+                }
+                for c in styled.childNodes {
+                    emitNode(c, ox: x, oy: y, vpW: vpW, vpH: vpH)
+                }
+                return
+            }
+
             if let stack = node as? StackNode {
                 // Never cull containers — Yoga does not clip children by default,
                 // so an overflowing child of an offscreen parent can still be visible.

@@ -95,6 +95,10 @@ expensive to build and keyed by content* (the glyph atlas, Vulkan objects);
 undo) · `EditorView` (line-number gutter, syntax rules, current-line highlight,
 find, vertical and horizontal scrolling)
 
+**Modifiers** `.padding()` `.background()` `.cornerRadius()` `.frame()`
+`.flexGrow()` — chains collapse onto the content's own node, so styling costs
+no extra layout boxes unless the content is a fragment.
+
 **System** `@State` + `@Binding` with `Observation` · `Theme` (semantic tokens,
 light and dark) · focus, hover, pointer capture, click counting · content
 scaling
@@ -111,9 +115,6 @@ Honest list, roughly in the order it hurts:
 
 - **`ScrollView`** — a general scrollable container. `EditorView` scrolls
   itself, but arbitrary content cannot.
-- **Modifiers** — styling is init parameters (`VStack(padding: 8)`), not
-  chained (`.padding(8)`). This shapes every component's API, so it gets more
-  expensive to change the longer it waits.
 - **Controls** — `Button` (there is only `Text(onClick:)`), `Toggle`,
   `Slider`, `Divider`.
 - **Overlays** — menus, dropdowns and tooltips need to draw above everything,

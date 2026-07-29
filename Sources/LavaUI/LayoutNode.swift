@@ -74,6 +74,9 @@ class YogaBoxNode: AnyViewNode {
     var padding: Float = 0
     var minWidth: Float = 0
     var minHeight: Float = 0
+    /// The node's own settings, captured before any modifier touched it, so a
+    /// removed modifier does not leave its effect behind.
+    var styleBaseline: ViewStyle?
 
     var yoga: YGNodeRef? { yogaStorage }
     var childNodes: [any AnyViewNode] { [] }

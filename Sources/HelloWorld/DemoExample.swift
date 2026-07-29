@@ -266,6 +266,37 @@ public struct DemoExample: View {
                 placeholder: "Type a name, then Add…",
                 onSubmit: { addItem() }
             )
+            // Modifier chain on a single node: no extra Yoga boxes.
+            Text("Modifiers · .padding().background().cornerRadius()", color: .accent)
+            HStack(padding: 2) {
+                Text("chip", color: .primary)
+                    .padding(6)
+                    .background(Color(r: 0.30, g: 0.35, b: 0.50))
+                    .cornerRadius(6)
+                Text("wide", color: .primary)
+                    .padding(6)
+                    .background(Color(r: 0.20, g: 0.40, b: 0.35))
+                    .cornerRadius(6)
+                    .frame(width: .pt(120))
+                // Fragment content: this one legitimately materialises a box.
+                VStack(padding: 0) {
+                    Text("two", color: .secondary)
+                    Text("rows", color: .secondary)
+                }
+                .padding(6)
+                .background(Color(r: 0.40, g: 0.28, b: 0.28))
+                .cornerRadius(6)
+                // A bare ForEach is a *fragment* — no node of its own — so this
+                // is the one case that materialises a wrapper box.
+                ForEach(items.prefix(2), id: \.id) { item in
+                    Text(item.title, color: .secondary)
+                }
+                .padding(6)
+                .background(Color(r: 0.28, g: 0.30, b: 0.45))
+                .cornerRadius(6)
+                Spacer()
+            }
+
             Text("EditorView · gutter, rules, find", color: .accent)
             HStack(padding: 2) {
                 TextField(
