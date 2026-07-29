@@ -144,7 +144,11 @@ extension YogaBoxNode {
 
 /// The one box a modifier ever creates: for fragments, which have no single
 /// node of their own to carry style.
-final class StyleBoxNode: YogaBoxNode {
+///
+/// Not `final` so `OverlayBoxNode` can inherit it — an overlay presenter needs
+/// exactly this (one box wrapping content, relinked on update) plus a detached
+/// subtree, and the emitter's `as? StyleBoxNode` branch then covers both.
+class StyleBoxNode: YogaBoxNode {
     private(set) var contentNode: any AnyViewNode
     var fillColor: Color?
     var cornerRadius: Float = 0

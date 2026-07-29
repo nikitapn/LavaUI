@@ -171,6 +171,17 @@ struct HelloWorldApp {
                             Data("layout resize → \(Int(nw))×\(Int(nh))\n".utf8)
                         )
                     }
+                case .refresh:
+                    // Un-minimize / expose / compositor damage: re-present.
+                    // Size may have changed while hidden — prefer layout if so.
+                    let fb = editor.framebufferSize()
+                    if fb.w >= 1, fb.h >= 1, fb.w != windowW || fb.h != windowH {
+                        windowW = fb.w
+                        windowH = fb.h
+                        ViewInvalidation.markNeedsLayout()
+                    } else {
+                        ViewInvalidation.markNeedsRedraw()
+                    }
                 case .mouseMove:
                     lastPointer = (ev.x, ev.y)
                     if PointerCapture.isActive {
@@ -195,6 +206,11 @@ struct HelloWorldApp {
                     }
                 case .key:
                     let isPress = ev.x > 0
+                    // Before focus: Escape closes a menu rather than being
+                    // eaten by whatever text field happens to be focused.
+                    if isPress, ev.button == KeyCode.escape, host.dismissOverlays() {
+                        break
+                    }
                     if isPress,
                        FocusManager.handle(
                            KeyEvent(key: ev.button, mods: Int32(ev.y), isRepeat: ev.x > 1)

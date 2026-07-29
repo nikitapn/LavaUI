@@ -75,6 +75,7 @@ public struct DemoExample: View {
     @State private var flexSlots = 3
     @State private var nextId = 10
     @State private var gauge: Float = 0.35
+    @State private var showMenu = false
     @State private var lightTheme = false
     @State private var status = "Click a list row, edit the field, resize the window."
     @State private var actionCount = 0
@@ -125,6 +126,19 @@ public struct DemoExample: View {
         guard search.count > 0 else { return "no matches" }
         let n = (search.currentIndex ?? 0) + 1
         return "match \(n)/\(search.count)"
+    }
+
+    /// A menu row: hover highlight, click, and it closes the menu after acting.
+    /// Dismissing here rather than in the framework keeps the overlay unopinionated
+    /// about whether picking something should close it — a checklist would not.
+    private func menuItem(_ title: String, action: @escaping () -> Void) -> some View {
+        Text(title, color: .primary, onClick: {
+            action()
+            showMenu = false
+        })
+        .padding(4)
+        .hoverBackground(Theme.current.hover)
+        .cornerRadius(3)
     }
 
     public var body: some View {
@@ -329,6 +343,27 @@ public struct DemoExample: View {
             // No axis given: horizontal here in the VStack, vertical in the
             // HStack below, from the same call.
             Divider()
+
+            Text("Overlay · menu above everything", color: .accent)
+            HStack(padding: 2) {
+                // The menu is composed from primitives that already existed —
+                // Text with a hover fill and an onClick. Nothing about it is
+                // menu-specific except where it draws.
+                Button("Actions") { showMenu.toggle() }
+                    .overlay(isPresented: $showMenu, style: OverlayStyle(minWidth: 150)) {
+                        VStack {
+                            menuItem("Add item") { addItem() }
+                            menuItem("Remove last") { removeLast() }
+                            Divider()
+                            menuItem("Reset list") {
+                                items = DemoExample.seedItems
+                                bump("list reset")
+                            }
+                        }
+                    }
+                Text("(Esc or a click outside closes it)", color: .dim)
+                Spacer()
+            }
 
             Text("Slider · drag, step, readout", color: .accent)
             HStack(padding: 2) {

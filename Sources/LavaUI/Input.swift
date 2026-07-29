@@ -84,6 +84,8 @@ public enum InputEventKind: UInt32, Sendable, Equatable {
     case text = 6
     /// Wheel / trackpad; `x`/`y` are deltas in notches, `button` holds mods.
     case scroll = 7
+    /// Window needs a redraw (expose, un-minimize, compositor damage).
+    case refresh = 8
 }
 
 /// One polled event from `Editor.pollInputEvent`.

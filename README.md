@@ -114,6 +114,14 @@ find, vertical and horizontal scrolling)
 `.flexGrow()` — chains collapse onto the content's own node, so styling costs
 no extra layout boxes unless the content is a fragment.
 
+**Overlays** `.overlay(isPresented:) { … }` anchors content above everything —
+menus, dropdowns, tooltips. Collected during the tree walk and emitted after
+it, so a popup paints over later siblings and escapes any ancestor's scissor
+rect. Input runs the other way round: overlays are hit-tested first, a click
+inside never falls through, and a click outside dismisses instead of
+activating what it landed on. Placement flips to the other side of the anchor
+when there is no room.
+
 **Animation** `Animated<T>` interpolates on the *node*, so a press or hover
 costs a draw-list re-emit and no `body` recompute. `FrameScheduler` holds the
 earliest wake any component asked for; `InvalidationLevel` decides how much of
@@ -137,8 +145,6 @@ Honest list, roughly in the order it hurts:
   animation exists; transitions need removed nodes to outlive their removal,
   which touches the three reconcilers that drop nodes (`EitherView`, `ForEach`,
   `OptionalView`).
-- **Overlays** — menus, dropdowns and tooltips need to draw above everything,
-  which means appending to the draw list after the main tree walk.
 - **Environment** — `Theme.current` and `FontStore.default` are globals. They
   should be environment defaults, not the only way to set a value.
 - **Per-node invalidation** — a change re-runs the whole tree. Correct, but

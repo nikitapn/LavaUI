@@ -26,6 +26,9 @@ public final class DrawList {
     /// so strings never cross the boundary.
     public private(set) var glyphs: [canvas.GlyphInstance] = []
 
+    /// Overlays found during the current walk, emitted once it finishes.
+    private var pendingOverlays: [PendingOverlay] = []
+
     public init() {
         commands.reserveCapacity(256)
         glyphs.reserveCapacity(2048)
@@ -134,7 +137,44 @@ public final class DrawList {
         viewportW: Float,
         viewportH: Float
     ) {
+        pendingOverlays.removeAll(keepingCapacity: true)
         emitNode(root, ox: originX, oy: originY, vpW: viewportW, vpH: viewportH)
+
+        // After the main walk, so overlays paint above everything and — because
+        // the clip stack is balanced by now — are not scissored by whatever
+        // ancestor the presenter happened to sit inside.
+        for pending in pendingOverlays {
+            let att = pending.attachment
+            att.layoutAndPlace(
+                anchorX: pending.x, anchorY: pending.y,
+                anchorW: pending.w, anchorH: pending.h,
+                viewportW: viewportW, viewportH: viewportH
+            )
+            guard let overlayRoot = att.root else { continue }
+            // Outline first, one pixel proud on every side, so the panel's own
+            // fill covers the middle of it.
+            if let border = att.border {
+                roundedRect(
+                    x: att.origin.x - 1, y: att.origin.y - 1,
+                    w: att.size.w + 2, h: att.size.h + 2,
+                    color: border, radius: att.cornerRadius + 1
+                )
+            }
+            emitNode(
+                overlayRoot,
+                ox: att.origin.x, oy: att.origin.y,
+                vpW: viewportW, vpH: viewportH
+            )
+        }
+        pendingOverlays.removeAll(keepingCapacity: true)
+    }
+
+    private struct PendingOverlay {
+        let attachment: OverlayAttachment
+        let x: Float
+        let y: Float
+        let w: Float
+        let h: Float
     }
 
     private func emitNode(
@@ -147,6 +187,15 @@ public final class DrawList {
             let y = oy + YGNodeLayoutGetTop(yref)
             let w = YGNodeLayoutGetWidth(yref)
             let h = YGNodeLayoutGetHeight(yref)
+
+            // Recorded here rather than emitted here: this is the one place
+            // that knows the presenter's absolute rect, but drawing at this
+            // point would put the popup underneath every later sibling.
+            if let presenter = node as? OverlayBoxNode, presenter.attachment.presented {
+                pendingOverlays.append(
+                    PendingOverlay(attachment: presenter.attachment, x: x, y: y, w: w, h: h)
+                )
+            }
 
             if let scroll = node as? ScrollNode {
                 // Record what Yoga granted; clamping against the requested size

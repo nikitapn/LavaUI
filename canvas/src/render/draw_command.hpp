@@ -67,6 +67,9 @@ enum class InputEventKind : uint32_t {
   /// Wheel / trackpad. `x`/`y` are scroll deltas in notches; `button` holds
   /// the modifier bitfield so Ctrl+wheel can mean zoom.
   Scroll = 7,
+  /// Window content needs a redraw (expose / un-minimize / compositor damage).
+  /// No payload in x/y/button.
+  Refresh = 8,
 };
 
 struct InputEvent {

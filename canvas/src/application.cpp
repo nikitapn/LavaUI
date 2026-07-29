@@ -243,6 +243,39 @@ struct Application::Impl
         }
       }
     });
+
+    // Damage / expose: compositor asks for a redraw (also fires after some
+    // un-minimize paths). Pure redraw — swapchain size is unchanged.
+    glfwSetWindowRefreshCallback(win, [](GLFWwindow *w) {
+      auto *self = static_cast<Impl *>(glfwGetWindowUserPointer(w));
+      if (!self) return;
+      self->queueRefreshEvent();
+    });
+
+    // Minimize → restore: always force a present. Refresh alone is not
+    // reliable on every WM; iconify(false) is the definitive un-minimize signal.
+    glfwSetWindowIconifyCallback(win, [](GLFWwindow *w, int iconified) {
+      auto *self = static_cast<Impl *>(glfwGetWindowUserPointer(w));
+      if (!self || iconified) return;  // ignore going to tray
+      self->queueRefreshEvent();
+    });
+  }
+
+  void queueRefreshEvent()
+  {
+    canvas::InputEvent ev;
+    ev.kind = static_cast<uint32_t>(canvas::InputEventKind::Refresh);
+    ev.x = 0.f;
+    ev.y = 0.f;
+    ev.button = 0;
+    std::lock_guard lock(inputMu_);
+    // One is enough until the app paints again.
+    if (!inputEvents_.empty() &&
+        inputEvents_.back().kind ==
+          static_cast<uint32_t>(canvas::InputEventKind::Refresh)) {
+      return;
+    }
+    inputEvents_.push_back(ev);
   }
 
   canvas::VoidResult init(const std::string &assetsRoot)

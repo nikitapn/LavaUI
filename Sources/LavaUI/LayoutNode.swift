@@ -935,6 +935,28 @@ public final class LayoutHost {
         originX: Float = 0, originY: Float = 0
     ) -> (() -> Void)? {
         guard layoutValid, let root else { return nil }
+
+        // Overlays first, topmost down. Two rules a menu has to obey and the
+        // main tree cannot express: a click on the popup must not fall through
+        // to whatever it covers, and a click outside must dismiss it rather
+        // than activate what it landed on.
+        let overlays = OverlayScan.presented(in: root)
+        if !overlays.isEmpty {
+            for att in overlays.reversed() {
+                guard let overlayRoot = att.root else { continue }
+                if let hit = hitWalk(
+                    overlayRoot, x: x, y: y,
+                    ox: originX + att.origin.x, oy: originY + att.origin.y
+                ) {
+                    return hit
+                }
+                // Inside the panel but on an inert part: swallow, so the click
+                // neither dismisses nor reaches the content below.
+                if att.contains(x - originX, y - originY) { return {} }
+            }
+            return { for att in overlays { att.dismiss() } }
+        }
+
         return hitWalk(root, x: x, y: y, ox: originX, oy: originY)
     }
 
@@ -943,7 +965,31 @@ public final class LayoutHost {
         x: Float, y: Float, originX: Float = 0, originY: Float = 0
     ) -> NodeID? {
         guard layoutValid, let root else { return nil }
+
+        for att in OverlayScan.presented(in: root).reversed() {
+            guard let overlayRoot = att.root else { continue }
+            if let id = hoverWalk(
+                overlayRoot, x: x, y: y,
+                ox: originX + att.origin.x, oy: originY + att.origin.y
+            ) {
+                return id
+            }
+            // Hovering the panel must not highlight what is underneath it.
+            if att.contains(x - originX, y - originY) { return nil }
+        }
+
         return hoverWalk(root, x: x, y: y, ox: originX, oy: originY)
+    }
+
+    /// Dismisses everything presented. Returns true if anything was showing,
+    /// so a key handler can tell whether it consumed the event.
+    @discardableResult
+    public func dismissOverlays() -> Bool {
+        guard let root else { return false }
+        let overlays = OverlayScan.presented(in: root)
+        guard !overlays.isEmpty else { return false }
+        for att in overlays { att.dismiss() }
+        return true
     }
 
     private func hoverWalk(
