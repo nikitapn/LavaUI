@@ -49,6 +49,23 @@ public struct DemoExample: View {
     @State private var items: [DemoItem] = DemoExample.seedItems
     @State private var selectedId: Int? = 1
     @State private var draft: String = ""
+    @State private var code: String = """
+    // ST-ish sample for EditorView
+    FUNCTION_BLOCK Motor
+    VAR
+      speed : REAL := 0.0;
+      running : BOOL := FALSE;
+    END_VAR
+
+    IF speed > 10.0 THEN
+      running := TRUE;
+    ELSE
+      running := FALSE;
+    END_IF
+    """
+    @State private var findQuery: String = ""
+    @State private var search = TextSearch()
+
     @State private var notes: String = "Multi-line with soft wrap. This sentence is long enough that it has to wrap onto several visual rows inside the panel.\nEnter still adds a hard line.\nUp/Down step visual rows."
     @State private var showSidebar = true
     @State private var showInspector = true
@@ -68,6 +85,43 @@ public struct DemoExample: View {
         DemoItem(id: 3, title: "Charlie", hue: 2),
         DemoItem(id: 4, title: "Delta", hue: 3),
     ]
+
+    /// Style indices are arbitrary but must match `codeStyle.palette`.
+    private var stRules: [HighlightRule] {
+        [
+            HighlightRule(pattern: #"//[^\n]*"#, styleIndex: 0, priority: 100),
+            HighlightRule(
+                pattern: #"\b(IF|THEN|ELSE|END_IF|VAR|END_VAR|FUNCTION_BLOCK)\b"#,
+                styleIndex: 1, priority: 50
+            ),
+            HighlightRule(pattern: #"\b(REAL|BOOL|INT)\b"#, styleIndex: 2, priority: 40),
+            HighlightRule(pattern: #"\b(TRUE|FALSE)\b"#, styleIndex: 3, priority: 40),
+            HighlightRule(pattern: #"\b\d+(\.\d+)?\b"#, styleIndex: 4, priority: 30),
+        ]
+    }
+
+    private var codeStyle: CodeStyle {
+        CodeStyle(palette: [
+            Color(r: 0.45, g: 0.62, b: 0.45),   // comment
+            Color(r: 0.78, g: 0.58, b: 0.95),   // keyword
+            Color(r: 0.45, g: 0.75, b: 0.95),   // type
+            Color(r: 0.95, g: 0.62, b: 0.45),   // literal
+            Color(r: 0.85, g: 0.80, b: 0.50),   // number
+        ])
+    }
+
+    private func runSearch() {
+        search.find(findQuery, in: code)
+        status = searchStatus()
+        actionCount += 1
+    }
+
+    private func searchStatus() -> String {
+        guard search.isActive else { return "no search" }
+        guard search.count > 0 else { return "no matches" }
+        let n = (search.currentIndex ?? 0) + 1
+        return "match \(n)/\(search.count)"
+    }
 
     public var body: some View {
         VStack(flexGrow: 1, padding: 0) {
@@ -209,6 +263,24 @@ public struct DemoExample: View {
                 placeholder: "Type a name, then Add…",
                 onSubmit: { addItem() }
             )
+            Text("EditorView · gutter, rules, find", color: .accent)
+            HStack(padding: 2) {
+                TextField(
+                    text: $findQuery, placeholder: "find…",
+                    onSubmit: { runSearch() }
+                )
+                Text("[ find ]", color: .accent, onClick: { runSearch() })
+                Text("[ next ]", color: .accent, onClick: {
+                    search.next()
+                    status = searchStatus()
+                })
+                Text(searchStatus(), color: .dim)
+            }
+            EditorView(
+                text: $code, rules: stRules, style: codeStyle,
+                visibleLines: 12, search: search
+            )
+
             Text("Multi-line TextField", color: .accent)
             TextField(
                 text: $notes, placeholder: "Notes…",

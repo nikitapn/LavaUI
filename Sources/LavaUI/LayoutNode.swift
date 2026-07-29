@@ -143,6 +143,7 @@ enum LeafKind: Equatable {
     case empty
     case image
     case textField
+    case editor
 }
 
 final class LeafNode: YogaBoxNode {
@@ -165,6 +166,12 @@ final class LeafNode: YogaBoxNode {
     var isMultiline = false
     var maxLines = 8
     var wraps = false
+    /// Editor-only payload.
+    var highlighter: SyntaxHighlighter?
+    var codeStyle: CodeStyle?
+    var showsGutter = false
+    var gutterWidth: Float = 0
+    var search = TextSearch()
     /// Last width Yoga gave this leaf, used to wrap on the next pass.
     var lastMeasuredWidth: Float = 0
     /// Click handler receiving node-local coordinates *and* the node's
@@ -237,7 +244,7 @@ final class LeafNode: YogaBoxNode {
     /// Re-wrap before measuring: row count drives the box height, and
     /// navigation consults the same rows.
     func prepareWrap(availableWidth: Float) {
-        guard kind == .textField else { return }
+        guard kind == .textField || kind == .editor else { return }
         refreshVisualRows(availableWidth: availableWidth)
     }
 
@@ -256,7 +263,7 @@ final class LeafNode: YogaBoxNode {
     func measureForYoga(width: Float, widthMode: YGMeasureMode) -> YGSize {
         // Yoga tells us the width here and nowhere else, so this is where a
         // wrapping field learns how wide it may be.
-        if kind == .textField, wraps, width > 0, width != lastMeasuredWidth {
+        if kind == .textField || kind == .editor, wraps, width > 0, width != lastMeasuredWidth {
             lastMeasuredWidth = width
             refreshVisualRows(availableWidth: width)
         }
@@ -783,7 +790,7 @@ public final class LayoutHost {
 }
 
 // Minimal stubs so primitives compile without CYoga.
-enum LeafKind: Equatable { case text, spacer, diagramHost, empty, image, textField }
+enum LeafKind: Equatable { case text, spacer, diagramHost, empty, image, textField, editor }
 
 final class LeafNode: AnyViewNode {
     let id = NodeID.generate()

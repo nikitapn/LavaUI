@@ -1,0 +1,176 @@
+#if canImport(CxxCanvas)
+import Foundation
+
+/// Style palette for `EditorView`. Rules carry style *indices*; this maps them
+/// to colours, so a theme change restyles code without touching any rule.
+public struct CodeStyle {
+    public var text: Color
+    public var gutterText: Color
+    public var gutterBackground: Color
+    public var currentLine: Color
+    public var searchMatch: Color
+    public var currentSearchMatch: Color
+    /// Indexed by `HighlightRule.styleIndex`; out-of-range falls back to `text`.
+    public var palette: [Color]
+
+    public init(
+        text: Color = .primary,
+        gutterText: Color? = nil,
+        gutterBackground: Color? = nil,
+        currentLine: Color? = nil,
+        searchMatch: Color? = nil,
+        currentSearchMatch: Color? = nil,
+        palette: [Color] = []
+    ) {
+        let theme = Theme.current
+        self.text = text
+        self.gutterText = gutterText ?? theme.textSecondary
+        self.gutterBackground = gutterBackground ?? theme.panel
+        self.currentLine = currentLine ?? theme.hover
+        self.searchMatch = searchMatch ?? Color(r: 0.45, g: 0.40, b: 0.15)
+        self.currentSearchMatch = currentSearchMatch ?? Color(r: 0.70, g: 0.55, b: 0.15)
+        self.palette = palette
+    }
+
+    func color(for styleIndex: Int) -> Color {
+        palette.indices.contains(styleIndex) ? palette[styleIndex] : text
+    }
+}
+
+/// A code editor: line-number gutter, current-line highlight, rule-based
+/// syntax colouring, and find-match highlighting.
+///
+/// Everything about the *buffer* — cursor, selection, undo, wrapping, grapheme
+/// correctness — is `TextEditingState`, unchanged and already tested. This
+/// type is presentation plus a gutter, which is why it is a component rather
+/// than a rewrite of `TextField`.
+public struct EditorView: PrimitiveView {
+    @Binding public var text: String
+    public var rules: [HighlightRule]
+    public var style: CodeStyle
+    public var font: UIFont?
+    public var showLineNumbers: Bool
+    public var visibleLines: Int
+    public var search: TextSearch
+
+    public init(
+        text: Binding<String>,
+        rules: [HighlightRule] = [],
+        style: CodeStyle = CodeStyle(),
+        font: UIFont? = nil,
+        showLineNumbers: Bool = true,
+        visibleLines: Int = 12,
+        search: TextSearch = TextSearch()
+    ) {
+        self._text = text
+        self.rules = rules
+        self.style = style
+        self.font = font
+        self.showLineNumbers = showLineNumbers
+        self.visibleLines = visibleLines
+        self.search = search
+    }
+
+    public var resolvedFont: UIFont? { font ?? FontStore.default }
+
+    public var dumpDetail: String {
+        "\(text.split(separator: "\n").count) lines, \(rules.count) rules"
+    }
+
+    public func mountPrimitive() -> any AnyViewNode {
+        let leaf = LeafNode(kind: .editor, label: "EditorView", width: .auto, height: .auto)
+        leaf.editing = TextEditingState(text)
+        configure(leaf)
+        leaf.installTextMeasure()
+        return leaf
+    }
+
+    public func reconcilePrimitive(_ node: any AnyViewNode) -> any AnyViewNode {
+        guard let leaf = node as? LeafNode, leaf.kind == .editor else {
+            return mountPrimitive()
+        }
+        if leaf.editing.text != text {
+            leaf.editing.setText(text, keepingCursor: true)
+        }
+        configure(leaf)
+        if !leaf.usesTextMeasure { leaf.installTextMeasure() }
+        leaf.markMeasureDirty()
+        return leaf
+    }
+
+    private func configure(_ leaf: LeafNode) {
+        leaf.font = resolvedFont
+        leaf.color = style.text
+        leaf.fillColor = Theme.current.inset
+        leaf.isMultiline = true
+        leaf.wraps = false          // code editors scroll horizontally, not wrap
+        leaf.highlighter = SyntaxHighlighter(rules: rules)
+        leaf.codeStyle = style
+        leaf.showsGutter = showLineNumbers
+        leaf.search = search
+        leaf.text = leaf.editing.text
+        leaf.minWidth = 160
+
+        if let f = resolvedFont {
+            let rows = min(max(leaf.editing.layout.count, 1), visibleLines)
+            leaf.height = .pt(Float(rows) * f.lineHeight + Theme.current.controlPadding * 2)
+            leaf.gutterWidth = showLineNumbers ? leaf.measuredGutterWidth(font: f) : 0
+        }
+
+        let binding = _text
+        leaf.onClickLocal = { [weak leaf] localX, localY, originX, originY in
+            guard let leaf else { return }
+            leaf.focusSelf(binding: binding, onSubmit: nil)
+            // Clicks in the gutter select the whole line, as they do in every
+            // editor with one.
+            if leaf.showsGutter, localX < leaf.gutterWidth {
+                leaf.selectRow(atLocalY: localY)
+            } else if let hit = leaf.index(atLocalX: localX - leaf.gutterWidth, localY: localY) {
+                let clicks = ClickCounter.register(x: originX + localX, y: originY + localY)
+                if clicks >= 2 {
+                    leaf.editing.selectWord(at: hit)
+                } else {
+                    leaf.editing.setCursor(hit)
+                    PointerCapture.capture(
+                        leaf.id,
+                        onMove: { [weak leaf] wx, wy in
+                            guard let leaf else { return }
+                            let lx = wx - originX - leaf.gutterWidth
+                            let ly = wy - originY
+                            if let target = leaf.index(atLocalX: lx, localY: ly) {
+                                leaf.editing.setCursor(target, extending: true)
+                                ViewInvalidation.markDirty()
+                            }
+                        }
+                    )
+                }
+            }
+            CaretBlink.noteEdit()
+            ViewInvalidation.markDirty()
+        }
+    }
+}
+
+extension LeafNode {
+    /// Gutter wide enough for the highest line number, plus breathing room.
+    /// Sized from the digit count so it does not jitter as the caret moves.
+    func measuredGutterWidth(font: UIFont) -> Float {
+        let digits = max(2, String(max(1, editing.lines.count)).count)
+        let sample = String(repeating: "0", count: digits)
+        return font.shapedRun(sample).width + LeafNode.textInset * 3
+    }
+
+    /// Selects the whole visual row under `localY` — the gutter-click gesture.
+    func selectRow(atLocalY y: Float) {
+        guard let f = font ?? FontStore.default else { return }
+        let rows = editing.layout.rows
+        let row = max(0, min(rows.count - 1, Int((y - LeafNode.textInset) / f.lineHeight)))
+        let r = rows[row]
+        editing.setCursor(editing.index(atOffset: r.lowerBound))
+        // Include the newline so a pasted replacement keeps the line structure.
+        let end = min(r.upperBound + 1, editing.text.count)
+        editing.setCursor(editing.index(atOffset: end), extending: true)
+    }
+}
+
+#endif

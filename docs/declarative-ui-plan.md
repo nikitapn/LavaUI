@@ -922,8 +922,26 @@ The trap is replacing the ST editor first because it's the visible one. Invert:
    whitespace boundary, a caret jump, or a direction change instead — so
    "hello world" undoes as "world" then "hello ", which is where a user
    expects the boundary. 14 tests, all deterministic.
-4. **Port the ST editor.** Only once 1–3 handle everything it needs, including
-   syntax-highlight ranges.
+4. **Port the ST editor.** ⬅ IN PROGRESS. `EditorView` now exists as its own
+   component rather than a flag on `TextField`: line-number gutter, current-line
+   highlight, priority-resolved rule highlighting, and find-match highlighting.
+
+   It reuses `TextEditingState` wholesale — buffer, cursor, selection, undo,
+   grapheme correctness — which is why it is presentation plus a gutter rather
+   than a second editor. `SyntaxHighlighter` and `TextSearch` are pure
+   `LavaText`, tested without a font.
+
+   Two limits worth stating rather than discovering:
+
+   - Highlighting is **line-at-a-time**, so constructs spanning lines (block
+     comments, multi-line strings) cannot be expressed. That is the point at
+     which a rule list has to become a stateful lexer.
+   - Coloured segments are shaped **per span**, so shaping does not carry
+     across a token boundary. Every token-colouring editor makes this trade;
+     it only shows where a ligature straddles two token types.
+
+   Still to port from ImGui: scrolling/viewport (the editor currently sizes to
+   `visibleLines`), and replacing `addTextWidget` at the call sites.
 
 `addTextWidget` and the highlight-rule API stay untouched through 1–3. That is
 what makes this a migration rather than a rewrite.

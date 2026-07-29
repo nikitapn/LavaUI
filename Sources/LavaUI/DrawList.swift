@@ -195,6 +195,9 @@ public final class DrawList {
                 if leaf.kind == .textField {
                     emitTextField(leaf, x: x, y: y, w: w, h: h)
                 }
+                if leaf.kind == .editor {
+                    emitEditor(leaf, x: x, y: y, w: w, h: h)
+                }
                 if leaf.kind == .image, let img = leaf.image {
                     let dest = imageDestRect(
                         boxX: x, boxY: y, boxW: w, boxH: h,
@@ -356,6 +359,160 @@ extension DrawList {
         let column = state.text.distance(from: lineStart, to: index)
         let clamped = max(0, min(column, lineText.count))
         return lineText.index(lineText.startIndex, offsetBy: clamped)
+    }
+}
+
+extension DrawList {
+    /// Draw order per row: current-line wash, search matches, selection,
+    /// syntax-coloured text, caret. Backgrounds before glyphs, caret after —
+    /// the ordering the unified pipeline made expressible.
+    fileprivate func emitEditor(
+        _ leaf: LeafNode, x: Float, y: Float, w: Float, h: Float
+    ) {
+        guard let font = leaf.font ?? FontStore.default else { return }
+        let style = leaf.codeStyle ?? CodeStyle()
+        let inset = LeafNode.textInset
+        let lineH = font.lineHeight
+        let focused = FocusManager.isFocused(leaf.id)
+        let state = leaf.editing
+        let rows = state.layout.rows
+        let textX = x + leaf.gutterWidth + inset
+        let top = y + inset
+
+        if leaf.showsGutter, leaf.gutterWidth > 0 {
+            rect(x: x, y: y, w: leaf.gutterWidth, h: h, color: style.gutterBackground)
+        }
+
+        let caretRow = state.layout.rowIndex(
+            ofOffset: state.offset(of: state.focus), affinity: state.affinity
+        )
+        let selection = state.hasSelection ? state.selectedRange : nil
+
+        for (row, range) in rows.enumerated() {
+            let rowTop = top + Float(row) * lineH
+            if rowTop + lineH < y || rowTop > y + h { continue }
+
+            let lo = state.index(atOffset: range.lowerBound)
+            let hi = state.index(atOffset: range.upperBound)
+            let lineText = String(state.text[lo..<hi])
+            let run = font.shapedRun(lineText)
+
+            func columnX(_ column: Int) -> Float {
+                let clamped = max(0, min(column, lineText.count))
+                let idx = lineText.index(lineText.startIndex, offsetBy: clamped)
+                return run.caretX(for: idx)
+            }
+
+            // Current line: only when nothing is selected, so it does not
+            // fight the selection colour.
+            if focused, row == caretRow, selection == nil {
+                rect(
+                    x: x + leaf.gutterWidth, y: rowTop,
+                    w: w - leaf.gutterWidth, h: lineH, color: style.currentLine
+                )
+            }
+
+            // Search matches under everything else so text stays readable.
+            for (i, match) in leaf.search.matches.enumerated() {
+                guard match.lowerBound < range.upperBound,
+                      match.upperBound > range.lowerBound else { continue }
+                let a = columnX(match.lowerBound - range.lowerBound)
+                let b = columnX(match.upperBound - range.lowerBound)
+                let isCurrent = leaf.search.currentIndex == i
+                rect(
+                    x: textX + a, y: rowTop, w: max(2, b - a), h: lineH,
+                    color: isCurrent ? style.currentSearchMatch : style.searchMatch
+                )
+            }
+
+            if let sel = selection,
+               sel.lowerBound < hi, sel.upperBound > lo
+            {
+                let from = max(state.offset(of: sel.lowerBound), range.lowerBound)
+                let to = min(state.offset(of: sel.upperBound), range.upperBound)
+                let a = columnX(from - range.lowerBound)
+                let b = columnX(to - range.lowerBound)
+                let spansNewline = state.offset(of: sel.upperBound) > range.upperBound
+                rect(
+                    x: textX + a, y: rowTop,
+                    w: max(spansNewline ? 4 : 1, b - a), h: lineH,
+                    color: Theme.current.selectionFill
+                )
+            }
+
+            if leaf.showsGutter, leaf.gutterWidth > 0 {
+                // Right-aligned, so the numbers stay in a column as they widen.
+                let label = String(row + 1)
+                let labelW = font.shapedRun(label).width
+                text(
+                    label, x: x + leaf.gutterWidth - inset - labelW - 4, y: rowTop,
+                    w: leaf.gutterWidth, h: lineH,
+                    color: style.gutterText, font: font
+                )
+            }
+
+            emitCodeLine(
+                lineText, spans: leaf.highlighter?.spans(in: lineText) ?? [],
+                style: style, run: run, font: font, x: textX, y: rowTop, h: lineH
+            )
+
+            if focused, !state.hasSelection, CaretBlink.isVisible, row == caretRow {
+                let column = state.offset(of: state.focus) - range.lowerBound
+                rect(
+                    x: textX + columnX(column), y: rowTop,
+                    w: Theme.current.caretWidth, h: lineH, color: .primary
+                )
+            }
+        }
+    }
+
+    /// Emits one line as coloured segments.
+    ///
+    /// Each segment is shaped on its own, so shaping does not carry across a
+    /// span boundary — a ligature spanning a keyword edge would break. That is
+    /// the same trade every token-colouring editor makes, and it only shows on
+    /// text where a ligature straddles two token types.
+    private func emitCodeLine(
+        _ line: String, spans: [HighlightSpan], style: CodeStyle,
+        run: ShapedRun, font: UIFont, x: Float, y: Float, h: Float
+    ) {
+        guard !line.isEmpty else { return }
+        guard !spans.isEmpty else {
+            text(line, x: x - 4, y: y, w: 10_000, h: h, color: style.text, font: font)
+            return
+        }
+
+        func slice(_ r: Range<Int>) -> String {
+            let a = line.index(line.startIndex, offsetBy: max(0, min(r.lowerBound, line.count)))
+            let b = line.index(line.startIndex, offsetBy: max(0, min(r.upperBound, line.count)))
+            return String(line[a..<b])
+        }
+        func xFor(_ column: Int) -> Float {
+            let c = max(0, min(column, line.count))
+            return run.caretX(for: line.index(line.startIndex, offsetBy: c))
+        }
+
+        var cursor = 0
+        for span in spans.sorted(by: { $0.range.lowerBound < $1.range.lowerBound }) {
+            if span.range.lowerBound > cursor {
+                let plain = slice(cursor..<span.range.lowerBound)
+                text(
+                    plain, x: x + xFor(cursor) - 4, y: y, w: 10_000, h: h,
+                    color: style.text, font: font
+                )
+            }
+            text(
+                slice(span.range), x: x + xFor(span.range.lowerBound) - 4, y: y,
+                w: 10_000, h: h, color: style.color(for: span.styleIndex), font: font
+            )
+            cursor = max(cursor, span.range.upperBound)
+        }
+        if cursor < line.count {
+            text(
+                slice(cursor..<line.count), x: x + xFor(cursor) - 4, y: y,
+                w: 10_000, h: h, color: style.text, font: font
+            )
+        }
     }
 }
 
