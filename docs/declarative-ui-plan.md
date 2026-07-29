@@ -968,11 +968,6 @@ The trap is replacing the ST editor first because it's the visible one. Invert:
    (font, text) — clamping the scroll would otherwise reshape every line in
    the buffer on every frame.
 
-   Still to port from ImGui: replacing `addTextWidget` at the call sites.
-
-`addTextWidget` and the highlight-rule API stay untouched through 1–3. That is
-what makes this a migration rather than a rewrite.
-
 #### Decide explicitly, don't drift
 
 - **IME** — CJK, plus dead keys / compose on Linux. Check what GLFW actually
