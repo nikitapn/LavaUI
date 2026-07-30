@@ -23,6 +23,10 @@ public enum DrawKind: UInt32 {
     /// alpha (`aux` = radius px).
     case beginContentBlur = 10
     case endContentBlur = 11
+    /// Filled arbitrary polygon. `param`/`w` index into `meshVertices`
+    /// (first index, count); `aux` 0 fans around vertex 0, 1 triangulates
+    /// alternating inner/outer pairs as a ring strip.
+    case mesh = 12
 }
 
 /// Reused arena: draw commands plus the shaped glyphs they reference.
@@ -34,6 +38,10 @@ public final class DrawList {
     /// Replaces the old string blob — the renderer no longer shapes anything,
     /// so strings never cross the boundary.
     public private(set) var glyphs: [canvas.GlyphInstance] = []
+
+    /// Polygon vertices in absolute window pixels; `Mesh` commands index this
+    /// the same way `Text` indexes `glyphs`.
+    public private(set) var meshVertices: [canvas.MeshVertex] = []
 
     /// Overlays found during the current walk, emitted once it finishes.
     private var pendingOverlays: [PendingOverlay] = []
@@ -53,11 +61,13 @@ public final class DrawList {
     public init() {
         commands.reserveCapacity(256)
         glyphs.reserveCapacity(2048)
+        meshVertices.reserveCapacity(256)
     }
 
     public func clear() {
         commands.removeAll(keepingCapacity: true)
         glyphs.removeAll(keepingCapacity: true)
+        meshVertices.removeAll(keepingCapacity: true)
         cullStack.removeAll(keepingCapacity: true)
     }
 
@@ -161,8 +171,89 @@ public final class DrawList {
         append(kind: .circle, x: cx, y: cy, w: 0, h: 0, color: color, aux: radius)
     }
 
-    public func line(x1: Float, y1: Float, x2: Float, y2: Float, color: Color) {
-        append(kind: .line, x: x1, y: y1, w: x2, h: y2, color: color)
+    /// Stroke from (x1,y1) to (x2,y2). `width` is in pixels (capsule).
+    public func line(
+        x1: Float, y1: Float, x2: Float, y2: Float, color: Color, width: Float = 1.5
+    ) {
+        append(kind: .line, x: x1, y: y1, w: x2, h: y2, color: color, aux: max(0.5, width))
+    }
+
+    /// Fills a custom region fanned from its first point. Correct for any
+    /// convex polygon, or any shape star-shaped from `points[0]` (able to
+    /// see its whole boundary from there) — a wedge fanned from its centre,
+    /// for instance. Concave shapes that are *not* star-shaped from the
+    /// first point will self-intersect; that triangulation isn't supported.
+    public func polygon(_ points: [(x: Float, y: Float)], color: Color) {
+        guard points.count >= 3 else { return }
+        emitMesh(points, color: color, isRing: false)
+    }
+
+    /// Fills a ring segment (annulus sector) between two arcs of equal point
+    /// count — the shape a donut-chart wedge needs, where a hole in the
+    /// middle means no single point can fan to the whole boundary.
+    public func ring(
+        inner: [(x: Float, y: Float)], outer: [(x: Float, y: Float)], color: Color
+    ) {
+        guard inner.count == outer.count, inner.count >= 2 else { return }
+        var points: [(x: Float, y: Float)] = []
+        points.reserveCapacity(inner.count * 2)
+        for i in 0..<inner.count {
+            points.append(inner[i])
+            points.append(outer[i])
+        }
+        emitMesh(points, color: color, isRing: true)
+    }
+
+    /// Filled pie or donut wedge. `innerRadius <= 0` draws a solid slice
+    /// (fanned from the centre); `innerRadius > 0` draws a ring segment.
+    /// `segments` defaults to a density that keeps the arc looking smooth
+    /// without over-tessellating short spans.
+    public func pieSlice(
+        cx: Float, cy: Float,
+        innerRadius: Float, outerRadius: Float,
+        startAngle: Float, endAngle: Float,
+        color: Color, segments: Int? = nil
+    ) {
+        let span = abs(endAngle - startAngle)
+        guard span > 0.0001, outerRadius > 0 else { return }
+        let n = segments ?? max(3, min(96, Int(span / 0.026)))
+        if innerRadius <= 0 {
+            var points: [(x: Float, y: Float)] = [(cx, cy)]
+            points.reserveCapacity(n + 2)
+            for i in 0...n {
+                let a = startAngle + (endAngle - startAngle) * (Float(i) / Float(n))
+                points.append((cx + cos(a) * outerRadius, cy + sin(a) * outerRadius))
+            }
+            polygon(points, color: color)
+        } else {
+            var inner: [(x: Float, y: Float)] = []
+            var outer: [(x: Float, y: Float)] = []
+            inner.reserveCapacity(n + 1)
+            outer.reserveCapacity(n + 1)
+            for i in 0...n {
+                let a = startAngle + (endAngle - startAngle) * (Float(i) / Float(n))
+                let c = cos(a)
+                let s = sin(a)
+                inner.append((cx + c * innerRadius, cy + s * innerRadius))
+                outer.append((cx + c * outerRadius, cy + s * outerRadius))
+            }
+            ring(inner: inner, outer: outer, color: color)
+        }
+    }
+
+    private func emitMesh(_ points: [(x: Float, y: Float)], color: Color, isRing: Bool) {
+        let first = UInt32(meshVertices.count)
+        meshVertices.reserveCapacity(meshVertices.count + points.count)
+        for p in points {
+            var v = canvas.MeshVertex()
+            v.x = p.x
+            v.y = p.y
+            meshVertices.append(v)
+        }
+        append(
+            kind: .mesh, x: 0, y: 0, w: Float(points.count), h: 0,
+            color: color, param: first, aux: isRing ? 1 : 0
+        )
     }
 
     public func pushClip(x: Float, y: Float, w: Float, h: Float) {

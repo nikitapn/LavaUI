@@ -5,6 +5,9 @@
 //   kind 1 — glyph coverage from the R8 atlas (`.r` * tint).
 //   kind 2 — full-color image (RGBA sample * tint). Descriptor is rebound
 //            per batch to the image view; scissor + texture both break batches.
+//   kind 3 — flat-filled mesh (arbitrary polygon). The triangle boundary
+//            already *is* the shape's edge, so there is no distance function
+//            to evaluate — full coverage everywhere the rasterizer covers.
 //
 // Solid shapes still sample the bound texture (usually a white texel), so one
 // descriptor set is enough.
@@ -39,6 +42,11 @@ void main() {
   if (vKind == 2u) {
     // Image: vLocal holds UV; multiply by vertex color as tint.
     c = texture(uAtlas, vLocal) * vColor;
+    if (c.a <= 0.001) {
+      discard;
+    }
+  } else if (vKind == 3u) {
+    c = vColor;
     if (c.a <= 0.001) {
       discard;
     }

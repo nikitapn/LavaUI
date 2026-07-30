@@ -31,6 +31,15 @@ enum class DrawCommandKind : uint32_t {
   /// frosts what is *behind* a view, this softens the view itself.
   BeginContentBlur = 10,
   EndContentBlur = 11,
+  /// Filled arbitrary polygon (custom region — pie/donut wedges, etc.).
+  /// param = first vertex index, w = vertex count, into the mesh-vertex side
+  /// buffer (same pattern as Text/GlyphInstance). aux = 0 fans the vertices
+  /// around vertex 0 (a solid wedge/star-convex shape); aux = 1 treats them
+  /// as alternating inner/outer pairs and triangulates a ring strip between
+  /// them (an annulus sector — the shape a donut chart needs, since a hole
+  /// in the middle means there is no single point the whole boundary fans
+  /// from).
+  Mesh = 12,
 };
 
 /// One shaped glyph, positioned in absolute window pixels by Swift. Ships in
@@ -47,6 +56,17 @@ struct GlyphInstance {
 };
 
 static_assert(sizeof(GlyphInstance) == 16, "GlyphInstance must stay packed");
+
+/// One polygon vertex (window pixels), for a `Mesh` command's fill. Ships in
+/// a side buffer parallel to the command list — the same pattern as
+/// `GlyphInstance`, since a fixed 32-byte `DrawCommand` cannot hold a
+/// variable-length vertex list itself.
+struct MeshVertex {
+  float x = 0.f;
+  float y = 0.f;
+};
+
+static_assert(sizeof(MeshVertex) == 8, "MeshVertex must stay packed");
 
 struct DrawCommand {
   uint32_t kind = 0;

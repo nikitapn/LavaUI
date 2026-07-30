@@ -768,6 +768,22 @@ struct Application::Impl
         }
         break;
       }
+      case canvas::DrawCommandKind::Mesh: {
+        // Swift laid out every vertex (fan pivot, or inner/outer ring pairs);
+        // the renderer only converts and triangulates. See draw_command.hpp.
+        const uint32_t first = cmd.param;
+        const uint32_t count = static_cast<uint32_t>(cmd.w);
+        if (first + count > drawMeshVerts_.size()) break;
+        meshPointScratch_.clear();
+        meshPointScratch_.reserve(count);
+        for (uint32_t i = 0; i < count; ++i) {
+          const auto &mv = drawMeshVerts_[first + i];
+          meshPointScratch_.push_back({mv.x, mv.y});
+        }
+        quadRenderer.pushMesh(meshPointScratch_.data(), count, cmd.color,
+                              cmd.aux > 0.f);
+        break;
+      }
       case canvas::DrawCommandKind::Image: {
         const uint32_t texId = cmd.param;
         VkImageView view = TextureManager::getInstance().getTextureView(texId);
@@ -831,6 +847,11 @@ struct Application::Impl
   // Immediate draw list (Phase 3) — authored by Swift each dirty frame.
   std::vector<canvas::DrawCommand> drawCmds_;
   std::vector<canvas::GlyphInstance> drawGlyphs_;
+  std::vector<canvas::MeshVertex> drawMeshVerts_;
+  /// Reused across Mesh commands to convert `MeshVertex` (Swift-facing POD)
+  /// to `vec2` (the engine's internal type) without a fresh allocation
+  /// every wedge, every frame.
+  std::vector<vec2> meshPointScratch_;
   // GLFW callbacks (render thread, outside window mutex) vs Swift poll (under
   // window mutex) — protect the queue so Resize/Key/Mouse are not lost.
   bool pointerDown_ = false;  // gates MouseMove queueing
@@ -843,10 +864,12 @@ struct Application::Impl
   float viewPanY_ = 0.f;
 
   void submitDrawList(const canvas::DrawCommand *cmds, size_t cmdCount,
-                      const canvas::GlyphInstance *glyphs, size_t glyphCount)
+                      const canvas::GlyphInstance *glyphs, size_t glyphCount,
+                      const canvas::MeshVertex *meshVerts, size_t meshVertCount)
   {
     drawCmds_.assign(cmds, cmds + cmdCount);
     drawGlyphs_.assign(glyphs, glyphs + glyphCount);
+    drawMeshVerts_.assign(meshVerts, meshVerts + meshVertCount);
   }
 
   bool pollInputEvent(canvas::InputEvent &out)
@@ -936,9 +959,11 @@ void Application::setWindowVisible(bool visible) {
 
 void Application::submitDrawList(const canvas::DrawCommand *cmds, size_t cmdCount,
                                  const canvas::GlyphInstance *glyphs,
-                                 size_t glyphCount)
+                                 size_t glyphCount,
+                                 const canvas::MeshVertex *meshVerts,
+                                 size_t meshVertCount)
 {
-  impl_->submitDrawList(cmds, cmdCount, glyphs, glyphCount);
+  impl_->submitDrawList(cmds, cmdCount, glyphs, glyphCount, meshVerts, meshVertCount);
 }
 
 bool Application::pollInputEvent(canvas::InputEvent &out)

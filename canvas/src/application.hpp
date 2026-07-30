@@ -39,7 +39,8 @@ public:
 
   /// Immediate draw list from Swift (copied). See Engine::submitDrawList.
   void submitDrawList(const canvas::DrawCommand *cmds, size_t cmdCount,
-                      const canvas::GlyphInstance *glyphs, size_t glyphCount);
+                      const canvas::GlyphInstance *glyphs, size_t glyphCount,
+                      const canvas::MeshVertex *meshVerts, size_t meshVertCount);
   bool pollInputEvent(canvas::InputEvent &out);
 
   /// Current swapchain / framebuffer size in pixels (after last ensure).

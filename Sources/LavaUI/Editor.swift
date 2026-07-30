@@ -66,12 +66,16 @@ public final class Editor: @unchecked Sendable {
     public func submitDrawList(_ list: DrawList) {
         list.commands.withUnsafeBufferPointer { cmdBuf in
             list.glyphs.withUnsafeBufferPointer { glyphBuf in
-                engine.submitDrawList(
-                    cmdBuf.baseAddress,
-                    cmdBuf.count,
-                    glyphBuf.baseAddress,
-                    glyphBuf.count
-                )
+                list.meshVertices.withUnsafeBufferPointer { meshBuf in
+                    engine.submitDrawList(
+                        cmdBuf.baseAddress,
+                        cmdBuf.count,
+                        glyphBuf.baseAddress,
+                        glyphBuf.count,
+                        meshBuf.baseAddress,
+                        meshBuf.count
+                    )
+                }
             }
         }
     }

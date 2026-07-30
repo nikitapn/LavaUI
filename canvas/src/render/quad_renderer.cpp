@@ -549,6 +549,50 @@ void QuadRenderer::pushImage(vec2 topLeft, vec2 size, vec2 uv0, vec2 uv1,
   appendQuad(corners, locals, {0.0f, 0.0f}, 0.0f, rgba, Kind::Image);
 }
 
+void QuadRenderer::pushMesh(const vec2 *points, uint32_t count, uint32_t rgba,
+                            bool isRing) {
+  if (points == nullptr) {
+    return;
+  }
+  // Ring needs an even count (inner/outer pairs) and at least two pairs to
+  // form one quad; fan needs at least a triangle.
+  if (isRing ? (count < 4 || (count % 2) != 0) : count < 3) {
+    return;
+  }
+  ensureBatchTexture(glyphAtlasView_);
+  const uint32_t base = static_cast<uint32_t>(vertices_.size());
+  for (uint32_t i = 0; i < count; ++i) {
+    vertices_.push_back(Vertex{
+      .pos      = points[i],
+      .local    = {0.0f, 0.0f},
+      .halfSize = {0.0f, 0.0f},
+      .radius   = 0.0f,
+      .color    = rgba,
+      .kind     = static_cast<uint32_t>(Kind::Mesh),
+    });
+  }
+  if (isRing) {
+    // Alternating inner[i], outer[i]: two triangles per step, the usual
+    // zig-zag strip-to-list expansion.
+    for (uint32_t i = 0; i + 3 < count; i += 2) {
+      indices_.push_back(base + i);
+      indices_.push_back(base + i + 1);
+      indices_.push_back(base + i + 2);
+      indices_.push_back(base + i + 1);
+      indices_.push_back(base + i + 3);
+      indices_.push_back(base + i + 2);
+    }
+  } else {
+    // Fan around vertex 0 — correct wherever the shape is star-shaped from
+    // its first point (any convex polygon, or a wedge fanned from centre).
+    for (uint32_t i = 1; i + 1 < count; ++i) {
+      indices_.push_back(base);
+      indices_.push_back(base + i);
+      indices_.push_back(base + i + 1);
+    }
+  }
+}
+
 void QuadRenderer::flushBatch() {
   const uint32_t end = static_cast<uint32_t>(indices_.size());
   if (end > batchStartIndex_) {

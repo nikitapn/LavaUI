@@ -32,7 +32,7 @@ class Vulkan;
 
 class QuadRenderer {
  public:
-  enum class Kind : uint32_t { Sdf = 0, Glyph = 1, Image = 2 };
+  enum class Kind : uint32_t { Sdf = 0, Glyph = 1, Image = 2, Mesh = 3 };
 
   // Must match the vertex input layout in quad.vert.
   struct Vertex {
@@ -80,6 +80,15 @@ class QuadRenderer {
   /// bound texture changes.
   void pushImage(vec2 topLeft, vec2 size, vec2 uv0, vec2 uv1, uint32_t rgba,
                  VkImageView textureView);
+
+  /// Filled arbitrary polygon, flat-shaded (no SDF distance calc — the mesh
+  /// boundary *is* the edge). `points` are absolute pixel positions.
+  /// `isRing == false` fans the points around `points[0]`, correct for any
+  /// solid star-convex shape (a pie wedge, a simple convex polygon). `isRing
+  /// == true` reads `points` as alternating inner/outer pairs and
+  /// triangulates a strip between them — an annulus sector (donut wedge),
+  /// which has no single point the whole boundary can fan from.
+  void pushMesh(const vec2 *points, uint32_t count, uint32_t rgba, bool isRing);
 
   /// Ends the current batch and records a scissor change. Rect is in pixels;
   /// a null rect (w or h <= 0) restores the full viewport.

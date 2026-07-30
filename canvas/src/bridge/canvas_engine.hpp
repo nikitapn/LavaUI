@@ -90,9 +90,11 @@ class Engine {
 
   /// Replace the retained immediate draw list (copied under the engine mutex).
   /// Text commands carry `param` = first glyph index and `w` = glyph count
-  /// into `glyphs`. Swift shapes; the renderer only looks up atlas entries.
+  /// into `glyphs`. Mesh commands carry the same pair into `meshVerts`. Swift
+  /// shapes; the renderer only looks up atlas entries / triangulates.
   void submitDrawList(const DrawCommand *cmds, size_t cmdCount,
-                      const GlyphInstance *glyphs, size_t glyphCount);
+                      const GlyphInstance *glyphs, size_t glyphCount,
+                      const MeshVertex *meshVerts, size_t meshVertCount);
 
   /// Pop one raw input event (mouse / resize). Returns false if empty.
   bool pollInputEvent(InputEvent &out);

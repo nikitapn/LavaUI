@@ -182,10 +182,11 @@ void Engine::textInput(const std::string &utf8)
 }
 
 void Engine::submitDrawList(const DrawCommand *cmds, size_t cmdCount,
-                            const GlyphInstance *glyphs, size_t glyphCount)
+                            const GlyphInstance *glyphs, size_t glyphCount,
+                            const MeshVertex *meshVerts, size_t meshVertCount)
 {
   impl_->withApp([&](Application &app) {
-    app.submitDrawList(cmds, cmdCount, glyphs, glyphCount);
+    app.submitDrawList(cmds, cmdCount, glyphs, glyphCount, meshVerts, meshVertCount);
   });
 }
 
