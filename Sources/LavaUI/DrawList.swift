@@ -45,6 +45,11 @@ public final class DrawList {
     /// True inside any blur scope, of either kind. See `withBlurScope`.
     private var insideBlurScope = false
 
+    /// Axis-aligned cull region in window pixels. Starts as the framebuffer;
+    /// each `ScrollView` intersects it with its scissor so off-screen scroll
+    /// content is skipped before any draw commands are issued.
+    private var cullStack: [CullRect] = []
+
     public init() {
         commands.reserveCapacity(256)
         glyphs.reserveCapacity(2048)
@@ -53,6 +58,37 @@ public final class DrawList {
     public func clear() {
         commands.removeAll(keepingCapacity: true)
         glyphs.removeAll(keepingCapacity: true)
+        cullStack.removeAll(keepingCapacity: true)
+    }
+
+    /// Inclusive-exclusive AABB (x0 ≤ x < x1).
+    private struct CullRect {
+        var x0: Float
+        var y0: Float
+        var x1: Float
+        var y1: Float
+
+        static let empty = CullRect(x0: 0, y0: 0, x1: 0, y1: 0)
+
+        var isEmpty: Bool { x1 <= x0 || y1 <= y0 }
+
+        func intersects(x: Float, y: Float, w: Float, h: Float) -> Bool {
+            // One-pixel pad so subpixel/scissor edges do not pop.
+            let pad: Float = 1
+            return x < x1 + pad && x + w > x0 - pad
+                && y < y1 + pad && y + h > y0 - pad
+        }
+
+        func intersection(_ o: CullRect) -> CullRect {
+            CullRect(
+                x0: max(x0, o.x0), y0: max(y0, o.y0),
+                x1: min(x1, o.x1), y1: min(y1, o.y1)
+            )
+        }
+    }
+
+    private var cull: CullRect {
+        cullStack.last ?? CullRect(x0: 0, y0: 0, x1: 1e9, y1: 1e9)
     }
 
     private func append(
@@ -228,7 +264,9 @@ public final class DrawList {
     // MARK: - Tree emission (pre-order DFS = paint order)
 
     /// Emit chrome from a laid-out retained tree.
-    /// `originX/Y` shift the tree (e.g. below ImGui menu). Viewport for leaf culling.
+    /// `originX/Y` shift the tree (e.g. below ImGui menu). Viewport seeds the
+    /// cull stack; `ScrollView` further intersects so long lists skip off-screen
+    /// subtrees entirely (not only leaves).
     public func emitTree(
         _ root: any AnyViewNode,
         originX: Float = 0,
@@ -237,7 +275,9 @@ public final class DrawList {
         viewportH: Float
     ) {
         pendingOverlays.removeAll(keepingCapacity: true)
-        emitNode(root, ox: originX, oy: originY, vpW: viewportW, vpH: viewportH)
+        cullStack.removeAll(keepingCapacity: true)
+        cullStack.append(CullRect(x0: 0, y0: 0, x1: viewportW, y1: viewportH))
+        emitNode(root, ox: originX, oy: originY)
 
         // After the main walk, so overlays paint above everything and — because
         // the clip stack is balanced by now — are not scissored by whatever
@@ -279,14 +319,20 @@ public final class DrawList {
                         color: border, radius: att.cornerRadius + 1
                     )
                 }
+                // Overlays get a fresh cull of the full viewport so a popup
+                // is not discarded just because its anchor was inside a
+                // scrolled-away region that tightened the main-walk cull.
+                let savedCull = cullStack
+                cullStack = [CullRect(x0: 0, y0: 0, x1: viewportW, y1: viewportH)]
                 emitNode(
                     overlayRoot,
-                    ox: att.origin.x, oy: att.origin.y,
-                    vpW: viewportW, vpH: viewportH
+                    ox: att.origin.x, oy: att.origin.y
                 )
+                cullStack = savedCull
             }
         }
         pendingOverlays.removeAll(keepingCapacity: true)
+        cullStack.removeAll(keepingCapacity: true)
     }
 
     private struct PendingOverlay {
@@ -299,8 +345,7 @@ public final class DrawList {
 
     private func emitNode(
         _ node: any AnyViewNode,
-        ox: Float, oy: Float,
-        vpW: Float, vpH: Float
+        ox: Float, oy: Float
     ) {
         // A transitioning subtree is drawn faded and displaced. Wrapping the
         // whole walk means every primitive underneath inherits it without
@@ -312,17 +357,16 @@ public final class DrawList {
             let saved = alphaMultiplier
             alphaMultiplier *= transition.alpha
             let shift = transition.translation
-            emitNodeBody(node, ox: ox + shift.x, oy: oy + shift.y, vpW: vpW, vpH: vpH)
+            emitNodeBody(node, ox: ox + shift.x, oy: oy + shift.y)
             alphaMultiplier = saved
             return
         }
-        emitNodeBody(node, ox: ox, oy: oy, vpW: vpW, vpH: vpH)
+        emitNodeBody(node, ox: ox, oy: oy)
     }
 
     private func emitNodeBody(
         _ node: any AnyViewNode,
-        ox: Float, oy: Float,
-        vpW: Float, vpH: Float
+        ox: Float, oy: Float
     ) {
         if let box = node as? YogaBoxNode, let yref = box.yoga {
             let x = ox + YGNodeLayoutGetLeft(yref)
@@ -333,6 +377,8 @@ public final class DrawList {
             // Recorded here rather than emitted here: this is the one place
             // that knows the presenter's absolute rect, but drawing at this
             // point would put the popup underneath every later sibling.
+            // Always register, even if the anchor is culled — the popup may
+            // still sit on-screen after placement.
             if let presenter = node as? OverlayBoxNode, presenter.attachment.presented {
                 pendingOverlays.append(
                     PendingOverlay(attachment: presenter.attachment, x: x, y: y, w: w, h: h)
@@ -347,11 +393,19 @@ public final class DrawList {
                 // Re-clamp in case content shrank since the last wheel event.
                 scroll.scrollBy(0)
 
+                // Scroll establishes a scissor: content outside this rect is
+                // invisible, so the cull stack can drop whole off-screen rows.
+                let viewCull = CullRect(x0: x, y0: y, x1: x + w, y1: y + h)
+                let nextCull = cull.intersection(viewCull)
+                if nextCull.isEmpty { return }
+
                 pushClip(x: x, y: y, w: w, h: h)
+                cullStack.append(nextCull)
                 let shift = scroll.childOffset
                 for c in scroll.childNodes {
-                    emitNode(c, ox: x - shift.x, oy: y - shift.y, vpW: vpW, vpH: vpH)
+                    emitNode(c, ox: x - shift.x, oy: y - shift.y)
                 }
+                cullStack.removeLast()
                 popClip()
 
                 if scroll.showsIndicator, scroll.maxOffset > 0 {
@@ -360,9 +414,14 @@ public final class DrawList {
                 return
             }
 
+            // Subtree skip: if this box misses the current cull rect, nothing
+            // under it can paint (scroll content is already under a tight cull;
+            // window-level stacks rarely overflow their Yoga frame in paint).
+            if !cull.intersects(x: x, y: y, w: w, h: h) {
+                return
+            }
+
             if let styled = node as? StyleBoxNode {
-                // Same rule as a stack: never cull a container, since Yoga does
-                // not clip and an overflowing child may still be on screen.
                 withBlurScope(
                     content: styled.contentBlurRadius,
                     backdrop: styled.backdropBlurRadius,
@@ -379,15 +438,13 @@ public final class DrawList {
                         }
                     }
                     for c in styled.childNodes {
-                        emitNode(c, ox: x, oy: y, vpW: vpW, vpH: vpH)
+                        emitNode(c, ox: x, oy: y)
                     }
                 }
                 return
             }
 
             if let stack = node as? StackNode {
-                // Never cull containers — Yoga does not clip children by default,
-                // so an overflowing child of an offscreen parent can still be visible.
                 withBlurScope(
                     content: stack.contentBlurRadius,
                     backdrop: stack.backdropBlurRadius,
@@ -397,17 +454,13 @@ public final class DrawList {
                         rect(x: x, y: y, w: w, h: h, color: fill)
                     }
                     for c in stack.childNodes {
-                        emitNode(c, ox: x, oy: y, vpW: vpW, vpH: vpH)
+                        emitNode(c, ox: x, oy: y)
                     }
                 }
                 return
             }
 
             if let leaf = node as? LeafNode {
-                // Cull leaves only.
-                if x + w < 0 || y + h < 0 || x > vpW || y > vpH {
-                    return
-                }
                 withBlurScope(
                     content: leaf.contentBlurRadius,
                     backdrop: leaf.backdropBlurRadius,
@@ -419,13 +472,14 @@ public final class DrawList {
             }
 
             for c in node.childNodes {
-                emitNode(c, ox: x, oy: y, vpW: vpW, vpH: vpH)
+                emitNode(c, ox: x, oy: y)
             }
             return
         }
 
+        // Fragments have no box of their own — always walk children.
         for c in node.childNodes {
-            emitNode(c, ox: ox, oy: oy, vpW: vpW, vpH: vpH)
+            emitNode(c, ox: ox, oy: oy)
         }
     }
 
