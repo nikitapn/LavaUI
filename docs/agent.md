@@ -128,7 +128,7 @@ Architecture (two processes):
 
 ```
 Grok Build or Claude Code
-    │  MCP stdio (Content-Length JSON-RPC)
+    │  MCP stdio (newline-delimited JSON-RPC)
     ▼
 python3 tools/lava_agent_mcp.py     ← spawned by the IDE/agent
     │  TCP localhost:9876
@@ -235,7 +235,7 @@ confirm `lava-ui` is connected.
 | MCP tools error / connection refused | App not running, or wrong `LAVA_AGENT_PORT` |
 | Server starts but tools hang | Wait for `AgentServer: listening` on stderr; check firewall (should be localhost only) |
 | Grok/Claude never lists tools | Run from repo root so `args` path resolves; `grok mcp doctor lava-ui` / Claude `/mcp` |
-| Old framing errors | Use current `tools/lava_agent_mcp.py` (Content-Length stdio, not bare NDJSON) |
+| Old framing errors | Use current `tools/lava_agent_mcp.py` — MCP stdio is newline-delimited JSON, **not** `Content-Length` (LSP-style) framing; an earlier version of this file used the latter by mistake, which hangs every client |
 
 Env for the MCP process (not the app): `LAVA_AGENT_HOST`, `LAVA_AGENT_PORT`.
 
