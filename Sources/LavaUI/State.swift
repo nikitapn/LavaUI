@@ -164,23 +164,57 @@ public enum InvalidationLevel: Int, Comparable, Sendable {
     public static func < (a: Self, b: Self) -> Bool { a.rawValue < b.rawValue }
 }
 
+/// A retained node that can re-evaluate its own `body` in place, using
+/// whatever `view` value it already holds — no new value from a parent is
+/// needed, because nothing about *that value* changed; only some
+/// `@State`/`@Observable` property it reads did, and that storage is a
+/// reference type living outside the struct, so it is already current.
+/// `CompositeNode` is the only conformer; the protocol exists so
+/// `ViewInvalidation` can hold a dirty node without depending on its
+/// generic view type.
+public protocol BodyRecomputable: AnyObject {
+    func recomputeBody()
+}
+
 /// "Something changed; do at least this much work again."
 ///
-/// Deliberately just a level. The frame loop decides *when* to act on it, which
-/// is what keeps the design frame-driven — a state change never synchronously
-/// walks the graph.
+/// The frame loop decides *when* to act on it, which is what keeps the
+/// design frame-driven — a state change never synchronously walks the
+/// graph. `.body` additionally tracks *which* composite nodes actually need
+/// to run again (`markBodyDirty`), so a change three levels deep does not
+/// force every unrelated node's body to recompute along with it — only
+/// wherever `.body` was raised without naming a node (the first frame, or
+/// state that lives outside the View-body-observation system entirely,
+/// like a `TextField`'s own buffer) falls back to rebuilding the whole tree,
+/// which is always correct, just coarser than it has to be.
 ///
 /// Single-window assumption, like `FocusManager`. Per-window hosts would need
 /// this scoped to a `LayoutHost`.
 public enum ViewInvalidation {
     nonisolated(unsafe) private static var pending: InvalidationLevel = .body
 
+    /// True until the first frame consumes it. Nothing has named a specific
+    /// dirty node yet, and there is no root to reconcile a targeted change
+    /// into, so the first `.body` pass must build the whole tree regardless
+    /// — the same reason `pending` itself defaults to `.body`.
+    nonisolated(unsafe) private static var coarseBodyDirty = true
+
+    /// Composite nodes whose own body needs to run again, keyed by identity
+    /// so the same node marking itself dirty twice in one frame is one
+    /// entry, not two.
+    nonisolated(unsafe) private static var dirtyBodyNodes:
+        [ObjectIdentifier: any BodyRecomputable] = [:]
+
     /// Called from `withObservationTracking`'s `onChange`, i.e. *before* the
     /// new value is written. Raising a level is safe there; reading state is not.
-    public static func markDirty() { raise(.body) }
+    ///
+    /// No node identity here, so this forces a full rebuild from the root —
+    /// prefer `markBodyDirty(_:)` wherever a specific node is in scope.
+    public static func markDirty() { raiseCoarse() }
 
-    /// A view value changed: bodies must run again.
-    public static func markNeedsBody() { raise(.body) }
+    /// A view value changed: bodies must run again. Same "no specific node"
+    /// caveat as `markDirty()`.
+    public static func markNeedsBody() { raiseCoarse() }
 
     /// Geometry changed but no view value did — a resize, a font swap.
     public static func markNeedsLayout() { raise(.layout) }
@@ -188,6 +222,19 @@ public enum ViewInvalidation {
     /// Only pixels changed: an animation tick, a caret blink, a hover fill.
     /// The cheapest level, and the reason the cascade exists.
     public static func markNeedsRedraw() { raise(.redraw) }
+
+    /// `node`'s own tracked state changed. Unlike `markDirty()`, this does
+    /// not force every other composite node's body to run again this frame
+    /// — only `node`'s, once `consumeDirtyBodyNodes()` processes it.
+    public static func markBodyDirty(_ node: some BodyRecomputable) {
+        dirtyBodyNodes[ObjectIdentifier(node)] = node
+        raise(.body)
+    }
+
+    private static func raiseCoarse() {
+        coarseBodyDirty = true
+        raise(.body)
+    }
 
     private static func raise(_ level: InvalidationLevel) {
         if level > pending { pending = level }
@@ -197,6 +244,19 @@ public enum ViewInvalidation {
     public static func consume() -> InvalidationLevel {
         defer { pending = .none }
         return pending
+    }
+
+    /// Drains the set of nodes to recompute individually. `nil` means the
+    /// caller should rebuild the whole tree from the root instead — either
+    /// nothing has been targeted yet (first frame) or `.body` was raised by
+    /// something that could not name the node responsible.
+    public static func consumeDirtyBodyNodes() -> [any BodyRecomputable]? {
+        defer {
+            coarseBodyDirty = false
+            dirtyBodyNodes.removeAll()
+        }
+        guard !coarseBodyDirty else { return nil }
+        return Array(dirtyBodyNodes.values)
     }
 
     public static var isDirty: Bool { pending != .none }

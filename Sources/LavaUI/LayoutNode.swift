@@ -767,7 +767,11 @@ class FragmentNode: AnyViewNode {
 }
 
 /// Composite user view (`EditorChrome`): forwards to `body` node.
-final class CompositeNode<V: View>: FragmentNode {
+///
+/// `@unchecked Sendable` so `computeBody()` can weak-capture `self` in
+/// `withObservationTracking`'s `@Sendable onChange` — UI construction is
+/// single-threaded (frame loop), same as `Editor`.
+final class CompositeNode<V: View>: FragmentNode, BodyRecomputable, @unchecked Sendable {
     var view: V
 
     init(_ view: V) {
@@ -782,7 +786,21 @@ final class CompositeNode<V: View>: FragmentNode {
         // reading `newView.body` first would observe reset state.
         StateTransfer.adopt(into: newView, from: view)
         view = newView
+        reconcileBody()
+    }
 
+    /// Re-evaluates `body` against the `view` already stored — no new value
+    /// from a parent, because nothing about *it* changed; only some
+    /// `@State`/`@Observable` property it reads did, and that storage is a
+    /// reference type living outside the struct, so it's already current.
+    /// Called when `ViewInvalidation` tracked this node specifically as
+    /// dirty, so a change here does not force every unrelated node's body
+    /// to run again too.
+    func recomputeBody() {
+        reconcileBody()
+    }
+
+    private func reconcileBody() {
         needsBodyRecompute = true
         let body = computeBody()
         if let existing = liveChildren.first {
@@ -798,7 +816,7 @@ final class CompositeNode<V: View>: FragmentNode {
     /// Two things about `withObservationTracking` that shape this:
     ///
     /// - `onChange` fires *before* the new value is written, so it must never
-    ///   read state. Setting a dirty flag is all it does.
+    ///   read state. Marking this node dirty is all it does.
     /// - It fires at most once per registration. Re-registration happens
     ///   implicitly here, because every re-render recomputes bodies. A path
     ///   that skips `computeBody()` would silently unsubscribe that node.
@@ -806,8 +824,9 @@ final class CompositeNode<V: View>: FragmentNode {
         var body: V.Body!
         withObservationTracking {
             body = view.body
-        } onChange: {
-            ViewInvalidation.markDirty()
+        } onChange: { [weak self] in
+            guard let self else { return }
+            ViewInvalidation.markBodyDirty(self)
         }
         return body
     }

@@ -94,7 +94,17 @@ struct HelloWorldApp {
             let bodyH = max(1, windowH - menuH)
             let t0 = enableDebug ? FrameScheduler.now() : 0
             if level >= .body {
-                host.setRoot(makeRoot())
+                // Per-node invalidation: a change tracked to specific
+                // composite nodes recomputes just those, instead of every
+                // node in the tree via a fresh root value. `nil` means
+                // something raised `.body` without naming a node (first
+                // frame, or state outside the observation system), which
+                // still needs the full rebuild.
+                if let dirty = ViewInvalidation.consumeDirtyBodyNodes() {
+                    for node in dirty { node.recomputeBody() }
+                } else {
+                    host.setRoot(makeRoot())
+                }
             }
             let t1 = enableDebug ? FrameScheduler.now() : 0
             let frames = level >= .layout
@@ -152,6 +162,12 @@ struct HelloWorldApp {
         FileHandle.standardError.write(Data("--- end structure ---\n".utf8))
 
         renderFrame(.body)
+        // Keep `pending` in sync with the dirty-node state `renderFrame` just
+        // drained via `consumeDirtyBodyNodes()` — this call bypasses the
+        // normal `consume()`-driven loop below, so without this the level
+        // scalar would sit stale at its initial default and the loop's first
+        // real `consume()` would see `.body` with nothing left to act on.
+        _ = ViewInvalidation.consume()
         editor.renderFrame()
 
         func processInputEvent(_ ev: InputEvent) {
