@@ -652,10 +652,6 @@ final class StackNode: YogaBoxNode {
         self.direction = direction
         self.contentNode = content
         super.init(label: label)
-        // Side columns get a solid panel fill; main HStack stays transparent.
-        if direction == .column, case .point = style.width {
-            fillColor = Color(r: 0.14, g: 0.15, b: 0.18)
-        }
         YGNodeStyleSetFlexDirection(yogaStorage, direction.yoga)
         YGNodeStyleSetAlignItems(yogaStorage, YGAlignStretch)
         apply(style)
@@ -675,6 +671,12 @@ final class StackNode: YogaBoxNode {
         width = style.width
         height = style.height
         padding = style.padding
+        // Side columns get a solid panel fill; main HStack stays transparent.
+        // Re-evaluated every apply (not just at construction) so a theme
+        // swap — or a `.theme(_:)` override — reaches it on reconcile too.
+        if direction == .column, case .point = style.width {
+            fillColor = Environment.current.theme.panel
+        }
         applyStyle()
     }
 

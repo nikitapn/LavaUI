@@ -74,6 +74,10 @@ public struct Button: PrimitiveView {
             leaf?.onHover?(inside)
         }
 
+        // Also catches a value changed from outside this control — a theme
+        // swap, say — which touches `buttonStyle` but fires no hover event.
+        leaf.retargetFill(hovered: HoverState.isHovered(leaf.id), pressed: leaf.isPressed)
+
         let act = action
         leaf.onClickLocal = { [weak leaf] _, _, _, _ in
             guard let leaf, leaf.isEnabled else { return }
