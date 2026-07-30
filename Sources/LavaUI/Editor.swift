@@ -52,6 +52,9 @@ public final class Editor: @unchecked Sendable {
     /// an idle UI at zero CPU while still waking immediately on input.
     public func pumpEvents(timeout: Double) { engine.pumpEvents(timeout) }
 
+    /// Unblock a waiting `pumpEvents` from any thread (agent socket watcher).
+    public func wakeEventLoop() { engine.wakeEventLoop() }
+
     /// Render and present one frame.
     @discardableResult
     public func renderFrame() -> Bool { engine.renderFrame() }
@@ -125,6 +128,35 @@ public final class Editor: @unchecked Sendable {
     /// applies center-zoom then pan. Hit-tests must unproject first.
     public func setViewTransform(zoom: Float, panX: Float = 0, panY: Float = 0) {
         engine.setViewTransform(zoom, panX, panY)
+    }
+
+    // ─── Agent / automation ──────────────────────────────────────────────
+
+    /// Inject pointer motion into the same queue as GLFW (layout pixels).
+    public func injectPointerMove(x: Float, y: Float) {
+        engine.pointerMove(x, y)
+    }
+
+    /// Inject mouse button. `button` is GLFW-style (0 = left).
+    public func injectPointerButton(button: Int32, pressed: Bool, x: Float, y: Float) {
+        engine.pointerButton(button, pressed, x, y)
+    }
+
+    /// Inject a key event. `action`: 0 release, 1 press, 2 repeat (GLFW).
+    public func injectKey(key: Int32, action: Int32 = 1, mods: Int32 = 0) {
+        engine.keyEvent(key, action, mods)
+    }
+
+    /// Inject UTF-8 text as character events (focused text field path).
+    public func injectText(_ utf8: String) {
+        engine.textInput(std.string(utf8))
+    }
+
+    /// Capture the resolve target as PNG (base64). Region in framebuffer
+    /// pixels; omit or pass w/h ≤ 0 for the full frame.
+    public func capturePngBase64(x: Int32 = 0, y: Int32 = 0, w: Int32 = 0, h: Int32 = 0) -> String? {
+        let s = String(engine.capturePngBase64(x, y, w, h))
+        return s.isEmpty ? nil : s
     }
 }
 #endif

@@ -45,6 +45,10 @@ class Engine {
   /// input immediately.
   void pumpEvents(double timeoutSeconds);
 
+  /// Thread-safe: unblock a waiting `pumpEvents` (GLFW empty event).
+  /// Used by the agent socket watcher so TCP requests don't wait on a mouse tick.
+  void wakeEventLoop();
+
   /// Render and present one frame.
   bool renderFrame();
 
@@ -65,6 +69,19 @@ class Engine {
   // ─── Declarative UI (Swift tree → Yoga + TextRenderer) ────────────────
   bool repaint();
   void readPixels(uint8_t *dst, size_t dstSize);
+
+  /// Agent/automation: capture resolve as PNG (base64). Empty on failure.
+  /// Region in framebuffer pixels; w or h <= 0 → full frame.
+  std::string capturePngBase64(int x, int y, int w, int h);
+
+  /// Inject synthetic pointer events (same queue as GLFW callbacks).
+  void pointerMove(float x, float y);
+  void pointerButton(int button, bool pressed, float x, float y);
+
+  /// Inject keyboard / text (GLFW key codes; action 0/1/2 = release/press/repeat).
+  void keyEvent(int key, int action, int mods);
+  /// UTF-8 string → one Text event per Unicode scalar (focused field path).
+  void textInput(const std::string &utf8);
 
   /// Replace the retained immediate draw list (copied under the engine mutex).
   /// Text commands carry `param` = first glyph index and `w` = glyph count

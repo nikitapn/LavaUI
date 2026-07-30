@@ -180,6 +180,7 @@ public struct DemoExample: View {
                     bump("theme → \(lightTheme ? "light" : "dark")")
                 }
             )
+            .agentId("theme-toggle")
             Text(
                 showSidebar ? "[ Hide nav ]" : "[ Show nav ]",
                 color: .muted,
@@ -188,6 +189,7 @@ public struct DemoExample: View {
                     bump(showSidebar ? "sidebar on" : "sidebar off")
                 }
             )
+            .agentId("sidebar-toggle")
             Text(
                 showInspector ? "[ Hide inspector ]" : "[ Show inspector ]",
                 color: .muted,
@@ -196,6 +198,7 @@ public struct DemoExample: View {
                     bump(showInspector ? "inspector on" : "inspector off")
                 }
             )
+            .agentId("inspector-toggle")
         }
     }
 

@@ -3,6 +3,9 @@
 #include "application.hpp"
 #include "window/canvas_window.hpp"
 
+#define GLFW_INCLUDE_NONE
+#include <GLFW/glfw3.h>
+
 #include <mutex>
 #include <type_traits>
 #include <unordered_map>
@@ -98,6 +101,12 @@ void Engine::pumpEvents(double timeoutSeconds)
   if (impl_->window) impl_->window->pumpEvents(timeoutSeconds);
 }
 
+void Engine::wakeEventLoop()
+{
+  // Documented thread-safe; unblocks glfwWaitEvents / glfwWaitEventsTimeout.
+  glfwPostEmptyEvent();
+}
+
 bool Engine::renderFrame()
 {
   return impl_->window ? impl_->window->renderFrame() : false;
@@ -133,6 +142,37 @@ bool Engine::repaint()
 void Engine::readPixels(uint8_t *dst, size_t dstSize)
 {
   impl_->withApp([&](Application &app) { app.readPixels(dst, dstSize); });
+}
+
+std::string Engine::capturePngBase64(int x, int y, int w, int h)
+{
+  std::string out;
+  impl_->withApp([&](Application &app) {
+    out = app.capturePngBase64(x, y, w, h);
+  });
+  return out;
+}
+
+void Engine::pointerMove(float x, float y)
+{
+  impl_->withApp([&](Application &app) { app.pointerMove(x, y); });
+}
+
+void Engine::pointerButton(int button, bool pressed, float x, float y)
+{
+  impl_->withApp([&](Application &app) {
+    app.pointerButton(button, pressed, x, y);
+  });
+}
+
+void Engine::keyEvent(int key, int action, int mods)
+{
+  impl_->withApp([&](Application &app) { app.keyEvent(key, action, mods); });
+}
+
+void Engine::textInput(const std::string &utf8)
+{
+  impl_->withApp([&](Application &app) { app.textInput(utf8); });
 }
 
 void Engine::submitDrawList(const DrawCommand *cmds, size_t cmdCount,

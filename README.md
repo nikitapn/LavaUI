@@ -111,9 +111,10 @@ undo) · `EditorView` (line-number gutter, syntax rules, current-line highlight,
 find, vertical and horizontal scrolling)
 
 **Modifiers** `.padding()` `.background()` `.cornerRadius()` `.frame()`
-`.flexGrow()` `.blur()` `.backdropBlur()` — chains collapse onto the content's
-own node, so styling costs no extra layout boxes unless the content is a
-fragment.
+`.flexGrow()` `.blur()` `.backdropBlur()` `.agentId("…")` — chains collapse
+onto the content's own node, so styling costs no extra layout boxes unless the
+content is a fragment. `.agentId` stamps a stable automation id for the agent
+control plane (see [docs/agent.md](docs/agent.md)).
 
 **Overlays** `.overlay(isPresented:) { … }` anchors content above everything —
 menus, dropdowns, tooltips. Collected during the tree walk and emitted after
@@ -156,6 +157,24 @@ chrome, so the glass frosts the window and not its own outline.
 costs a draw-list re-emit and no `body` recompute. `FrameScheduler` holds the
 earliest wake any component asked for; `InvalidationLevel` decides how much of
 body → layout → emit actually has to run.
+
+## Agent control plane
+
+Optional localhost TCP API for automation: Yoga layout dump, region screenshots,
+and synthetic pointer/keyboard input. Handlers run on the UI thread; a socket
+watcher wakes `glfwWaitEvents` so requests do not wait on a mouse tick.
+
+```bash
+LAVA_AGENT_PORT=9876 swift run HelloWorld
+
+python3 tools/lava_agent_cli.py find --query theme-toggle
+python3 tools/lava_agent_cli.py click --sid theme-toggle
+python3 tools/lava_agent_cli.py screenshot_node --sid theme-toggle -o t.png
+```
+
+Stable targets use `.agentId("kebab-name")` (exported as `sid`); untagged nodes
+get a structural path. Full protocol, commands, and MCP wrapper:
+**[docs/agent.md](docs/agent.md)**.
 
 **Transitions** `.transition(.slide(dy: -12))` animates a view appearing and
 disappearing, wherever a reconciler can insert or remove one — an `if`, an

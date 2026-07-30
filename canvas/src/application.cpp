@@ -439,9 +439,37 @@ struct Application::Impl
 
   void bridgeTextInput(const std::string &utf8)
   {
-    // Retained for the old bridge signature; character input now goes through
-    // bridgeCharInput, which keeps the scalar rather than round-tripping UTF-8.
-    (void)utf8;
+    // Agent / synthetic path: expand UTF-8 into one Text event per codepoint
+    // (same queue as GLFW char callback → bridgeCharInput).
+    size_t i = 0;
+    while (i < utf8.size()) {
+      unsigned char c = static_cast<unsigned char>(utf8[i]);
+      uint32_t cp = 0;
+      size_t n = 0;
+      if (c < 0x80) {
+        cp = c;
+        n = 1;
+      } else if ((c & 0xE0) == 0xC0 && i + 1 < utf8.size()) {
+        cp = (c & 0x1F) << 6 | (static_cast<unsigned char>(utf8[i + 1]) & 0x3F);
+        n = 2;
+      } else if ((c & 0xF0) == 0xE0 && i + 2 < utf8.size()) {
+        cp = (c & 0x0F) << 12 |
+             (static_cast<unsigned char>(utf8[i + 1]) & 0x3F) << 6 |
+             (static_cast<unsigned char>(utf8[i + 2]) & 0x3F);
+        n = 3;
+      } else if ((c & 0xF8) == 0xF0 && i + 3 < utf8.size()) {
+        cp = (c & 0x07) << 18 |
+             (static_cast<unsigned char>(utf8[i + 1]) & 0x3F) << 12 |
+             (static_cast<unsigned char>(utf8[i + 2]) & 0x3F) << 6 |
+             (static_cast<unsigned char>(utf8[i + 3]) & 0x3F);
+        n = 4;
+      } else {
+        ++i;
+        continue;
+      }
+      bridgeCharInput(cp);
+      i += n;
+    }
   }
 
   void bridgeScroll(float dx, float dy)
@@ -977,6 +1005,52 @@ void Application::textInput(const std::string &utf8) {
 
 void Application::readPixels(uint8_t *dst, size_t dstSize) {
   impl_->readPixels(dst, dstSize);
+}
+
+void Application::captureFrame(uint8_t *dst, size_t dstSize) {
+  impl_->vulkan.captureFrame(dst, dstSize);
+}
+
+bool Application::capturePng(std::vector<uint8_t> &outPng, int x, int y, int w,
+                             int h) {
+  return impl_->vulkan.capturePng(outPng, x, y, w, h);
+}
+
+std::string Application::capturePngBase64(int x, int y, int w, int h) {
+  std::vector<uint8_t> png;
+  if (!capturePng(png, x, y, w, h) || png.empty()) return {};
+  // Local base64 (same table as vulkan.cpp helper).
+  static constexpr char kTable[] =
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+  std::string out;
+  out.reserve(((png.size() + 2) / 3) * 4);
+  size_t i = 0;
+  const uint8_t *data = png.data();
+  const size_t len = png.size();
+  while (i + 2 < len) {
+    const uint32_t n = (uint32_t(data[i]) << 16) | (uint32_t(data[i + 1]) << 8) |
+                       uint32_t(data[i + 2]);
+    out.push_back(kTable[(n >> 18) & 63]);
+    out.push_back(kTable[(n >> 12) & 63]);
+    out.push_back(kTable[(n >> 6) & 63]);
+    out.push_back(kTable[n & 63]);
+    i += 3;
+  }
+  if (i < len) {
+    uint32_t n = uint32_t(data[i]) << 16;
+    out.push_back(kTable[(n >> 18) & 63]);
+    if (i + 1 < len) {
+      n |= uint32_t(data[i + 1]) << 8;
+      out.push_back(kTable[(n >> 12) & 63]);
+      out.push_back(kTable[(n >> 6) & 63]);
+      out.push_back('=');
+    } else {
+      out.push_back(kTable[(n >> 12) & 63]);
+      out.push_back('=');
+      out.push_back('=');
+    }
+  }
+  return out;
 }
 
 void Application::shutdown() {

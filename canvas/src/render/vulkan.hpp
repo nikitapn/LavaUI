@@ -125,6 +125,13 @@ class Vulkan
   void         *stagingBufferMapped_ = nullptr;
   VkDeviceSize  stagingBufferSize_ = 0;
 
+  /// Host RGBA of the last `captureFrame` — lets multiple region PNGs share one
+  /// GPU readback within the same settled frame.
+  std::vector<uint8_t> captureCache_;
+  uint32_t             captureCacheW_ = 0;
+  uint32_t             captureCacheH_ = 0;
+  bool                 captureCacheValid_ = false;
+
   // Depth buffer stuff
   VkImage       depthImage_ = VK_NULL_HANDLE;
   VmaAllocation depthImageAlloc_ = VK_NULL_HANDLE;
@@ -288,9 +295,23 @@ class Vulkan
   bool ensureFramebufferSize();
 
   // Copies the last-rendered frame (RGBA8) into dst. dst must be at least
-  // extent_.width * extent_.height * 4 bytes. Only valid after a repaint in
-  // offscreen mode (windowed mode skips the staging copy).
+  // extent_.width * extent_.height * 4 bytes. Prefer `captureFrame` in windowed
+  // mode — the present path does not always fill staging every frame.
   void readPixels(uint8_t *dst, size_t dstSize);
+
+  /// Wait for GPU, copy resolve → staging, then `readPixels` into `dst`.
+  /// Works in windowed and offscreen modes. `dst` size as for `readPixels`.
+  /// Also refreshes the capture cache used by `capturePng`.
+  void captureFrame(uint8_t *dst, size_t dstSize);
+
+  /// Drop the host capture cache (call after presenting a new frame).
+  void invalidateCaptureCache() { captureCacheValid_ = false; }
+
+  /// Encode a (sub)region of the current resolve as PNG bytes.
+  /// `x,y,w,h` in framebuffer pixels; `w` or `h` <= 0 means full frame.
+  /// Reuses the capture cache when still valid (cheap multi-crop).
+  /// Returns false on empty/invalid region or encode failure.
+  bool capturePng(std::vector<uint8_t> &outPng, int x, int y, int w, int h);
 
   VkShaderModule createShaderModule(const std::vector<char> &code);
 

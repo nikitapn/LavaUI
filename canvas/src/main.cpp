@@ -1,15 +1,9 @@
 #include "application.hpp"
 
-#define STB_IMAGE_WRITE_IMPLEMENTATION
-#include "stb_image_write.h"
-
-// Headless smoke test: adds a few retained rectangles, repaints the engine
-// offscreen a handful of times (no window, no GLFW), and writes the last
-// frame out as a PNG, so the Vulkan/offscreen-readback/retained-scene path
-// can be sanity-checked visually without going through Swift.
+// Headless smoke test stub (PNG encode lives in vulkan.cpp via stb_image_write).
 int main(int argc, char *argv[])
 {
-
-
+  (void)argc;
+  (void)argv;
   return 0;
 }

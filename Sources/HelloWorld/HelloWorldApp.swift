@@ -143,98 +143,187 @@ struct HelloWorldApp {
         FileHandle.standardError.write(Data("--- end structure ---\n".utf8))
 
         renderFrame(.body)
+        editor.renderFrame()
 
-        while editor.isOpen {
-            // One scheduler for every periodic thing: caret blink, animations,
-            // and later tooltips. Negative blocks until input arrives.
-            editor.pumpEvents(timeout: FrameScheduler.timeoutUntilNextWake())
-
-            while let ev = editor.pollInputEvent() {
-                switch ev.kind {
-                case .mouseDown:
-                    if let action = host.hitTestClick(
-                        x: ev.x, y: ev.y,
-                        originX: 0, originY: menuH
-                    ) {
-                        action()
-                    }
-                case .resize:
-                    // GLFW framebuffer callback (live drag). Layout only — view
-                    // structure is unchanged; Yoga needs the new root size.
-                    let nw = max(1, ev.x)
-                    let nh = max(1, ev.y)
-                    if nw != windowW || nh != windowH {
-                        windowW = nw
-                        windowH = nh
-                        ViewInvalidation.markNeedsLayout()
-                        FileHandle.standardError.write(
-                            Data("layout resize → \(Int(nw))×\(Int(nh))\n".utf8)
-                        )
-                    }
-                case .refresh:
-                    // Un-minimize / expose / compositor damage: re-present.
-                    // Size may have changed while hidden — prefer layout if so.
-                    let fb = editor.framebufferSize()
-                    if fb.w >= 1, fb.h >= 1, fb.w != windowW || fb.h != windowH {
-                        windowW = fb.w
-                        windowH = fb.h
-                        ViewInvalidation.markNeedsLayout()
-                    } else {
-                        ViewInvalidation.markNeedsRedraw()
-                    }
-                case .mouseMove:
-                    lastPointer = (ev.x, ev.y)
-                    if PointerCapture.isActive {
-                        PointerCapture.move(x: ev.x, y: ev.y - menuH)
-                    } else {
-                        HoverState.set(
-                            host.hitTestHover(x: ev.x, y: ev.y, originY: menuH)
-                        )
-                    }
-                case .mouseUp:
-                    PointerCapture.release()
-                case .scroll:
-                    // Wheel goes to whatever is under the pointer, focused or
-                    // not, so scrolling a panel never steals focus.
-                    ScrollRouter.deliver(
-                        to: host.hitTestHover(x: lastPointer.x, y: lastPointer.y, originY: menuH),
-                        dx: ev.x, dy: ev.y, mods: ev.button
+        func processInputEvent(_ ev: InputEvent) {
+            switch ev.kind {
+            case .mouseDown:
+                if let action = host.hitTestClick(
+                    x: ev.x, y: ev.y,
+                    originX: 0, originY: menuH
+                ) {
+                    action()
+                }
+            case .resize:
+                let nw = max(1, ev.x)
+                let nh = max(1, ev.y)
+                if nw != windowW || nh != windowH {
+                    windowW = nw
+                    windowH = nh
+                    ViewInvalidation.markNeedsLayout()
+                    FileHandle.standardError.write(
+                        Data("layout resize → \(Int(nw))×\(Int(nh))\n".utf8)
                     )
-                case .text:
-                    if let scalar = Unicode.Scalar(UInt32(bitPattern: ev.button)) {
-                        _ = FocusManager.handle(character: Character(scalar))
-                    }
-                case .key:
-                    let isPress = ev.x > 0
-                    // Before focus: Escape closes a menu rather than being
-                    // eaten by whatever text field happens to be focused.
-                    if isPress, ev.button == KeyCode.escape, host.dismissOverlays() {
-                        break
-                    }
-                    if isPress,
-                       FocusManager.handle(
-                           KeyEvent(key: ev.button, mods: Int32(ev.y), isRepeat: ev.x > 1)
-                       )
-                    {
-                        break
-                    }
-                    if ContentScaleShortcuts.handle(ev, editor: editor) {
-                        host.invalidateTextMetrics()
-                        dirty = true
-                        let s = FontStore.scale
-                        let msg = String(
-                            format: "ui scale → %.2fx (%dpx)\n",
-                            s.multiplier, Int(s.pixelSize)
-                        )
-                        FileHandle.standardError.write(Data(msg.utf8))
-                    }
-                default:
+                }
+            case .refresh:
+                let fb = editor.framebufferSize()
+                if fb.w >= 1, fb.h >= 1, fb.w != windowW || fb.h != windowH {
+                    windowW = fb.w
+                    windowH = fb.h
+                    ViewInvalidation.markNeedsLayout()
+                } else {
+                    ViewInvalidation.markNeedsRedraw()
+                }
+            case .mouseMove:
+                lastPointer = (ev.x, ev.y)
+                if PointerCapture.isActive {
+                    PointerCapture.move(x: ev.x, y: ev.y - menuH)
+                } else {
+                    HoverState.set(
+                        host.hitTestHover(x: ev.x, y: ev.y, originY: menuH)
+                    )
+                }
+            case .mouseUp:
+                PointerCapture.release()
+            case .scroll:
+                ScrollRouter.deliver(
+                    to: host.hitTestHover(x: lastPointer.x, y: lastPointer.y, originY: menuH),
+                    dx: ev.x, dy: ev.y, mods: ev.button
+                )
+            case .text:
+                if let scalar = Unicode.Scalar(UInt32(bitPattern: ev.button)) {
+                    _ = FocusManager.handle(character: Character(scalar))
+                }
+            case .key:
+                let isPress = ev.x > 0
+                if isPress, ev.button == KeyCode.escape, host.dismissOverlays() {
                     break
                 }
+                if isPress,
+                   FocusManager.handle(
+                       KeyEvent(key: ev.button, mods: Int32(ev.y), isRepeat: ev.x > 1)
+                   )
+                {
+                    break
+                }
+                if ContentScaleShortcuts.handle(ev, editor: editor) {
+                    host.invalidateTextMetrics()
+                    dirty = true
+                    let s = FontStore.scale
+                    let msg = String(
+                        format: "ui scale → %.2fx (%dpx)\n",
+                        s.multiplier, Int(s.pixelSize)
+                    )
+                    FileHandle.standardError.write(Data(msg.utf8))
+                }
+            default:
+                break
+            }
+        }
+
+        /// Drain input queue, run invalidation pipeline, present.
+        func settleFrame() {
+            while let ev = editor.pollInputEvent() {
+                processInputEvent(ev)
+            }
+            let fb = editor.framebufferSize()
+            if fb.w >= 1, fb.h >= 1, fb.w != windowW || fb.h != windowH {
+                windowW = fb.w
+                windowH = fb.h
+                ViewInvalidation.markNeedsLayout()
+            }
+            AnimationDriver.tick()
+            let level = ViewInvalidation.consume()
+            if dirty { ViewInvalidation.markNeedsBody() }
+            let work = dirty ? InvalidationLevel.body : max(level, .redraw)
+            dirty = false
+            renderFrame(work)
+            editor.renderFrame()
+        }
+
+        // Agent control plane (optional). LAVA_AGENT_PORT=9876
+        let agentPort: UInt16 = {
+            guard let s = ProcessInfo.processInfo.environment["LAVA_AGENT_PORT"],
+                  let p = UInt16(s), p > 0 else { return 0 }
+            return p
+        }()
+        let agentServer: AgentServer? = {
+            guard agentPort > 0 else { return nil }
+            let agentHost = AgentHost(
+                framebufferSize: { editor.framebufferSize() },
+                settle: { settleFrame() },
+                layoutTreeJSON: { depth in
+                    host.agentLayoutTreeJSON(originY: menuH, maxDepth: depth)
+                },
+                hitLabel: { x, y in host.agentHitLabel(x: x, y: y, originY: menuH) },
+                resolveFrame: { sid, label, id, query in
+                    if let sid, !sid.isEmpty, let f = host.agentFrame(sid: sid, originY: menuH) {
+                        return (f.label, sid, f.x, f.y, f.w, f.h)
+                    }
+                    if let id, let f = host.agentFrame(id: id, originY: menuH) {
+                        return (f.label, "id:\(id)", f.x, f.y, f.w, f.h)
+                    }
+                    if let label, let f = host.agentFrame(label: label, originY: menuH) {
+                        return (f.label, label, f.x, f.y, f.w, f.h)
+                    }
+                    if let query, !query.isEmpty {
+                        let hits = host.agentFind(query: query, originY: menuH, limit: 1)
+                        if let h0 = hits.first {
+                            let x = (h0["x"] as? NSNumber)?.floatValue ?? (h0["x"] as? Float)
+                            let y = (h0["y"] as? NSNumber)?.floatValue ?? (h0["y"] as? Float)
+                            let w = (h0["w"] as? NSNumber)?.floatValue ?? (h0["w"] as? Float)
+                            let h = (h0["h"] as? NSNumber)?.floatValue ?? (h0["h"] as? Float)
+                            if let x, let y, let w, let h {
+                                let lab = (h0["label"] as? String) ?? query
+                                let s = (h0["sid"] as? String) ?? lab
+                                return (lab, s, x, y, w, h)
+                            }
+                        }
+                    }
+                    return nil
+                },
+                find: { query, limit in
+                    host.agentFind(query: query, originY: menuH, limit: limit)
+                },
+                injectMove: { x, y in editor.injectPointerMove(x: x, y: y) },
+                injectClick: { x, y, button in
+                    editor.injectPointerMove(x: x, y: y)
+                    editor.injectPointerButton(button: button, pressed: true, x: x, y: y)
+                    editor.injectPointerButton(button: button, pressed: false, x: x, y: y)
+                },
+                injectKey: { key, action, mods in
+                    editor.injectKey(key: key, action: action, mods: mods)
+                },
+                injectText: { text in editor.injectText(text) },
+                screenshotBase64: { x, y, w, h in
+                    editor.capturePngBase64(x: x, y: y, w: w, h: h)
+                }
+            )
+            // Unblock pumpEvents the moment the agent socket is readable
+            // (watcher thread → glfwPostEmptyEvent). Do not use min(wake, 0.05)
+            // when wake is -1 ("block forever") — min(-1, 0.05) stays -1.
+            return AgentServer(
+                host: agentHost,
+                port: agentPort,
+                wakeMainLoop: { [editor] in editor.wakeEventLoop() }
+            )
+        }()
+
+        while editor.isOpen {
+            // Agent wake posts an empty GLFW event, so we can still block
+            // forever when idle (zero CPU) and still answer TCP immediately.
+            let wake = FrameScheduler.timeoutUntilNextWake()
+            editor.pumpEvents(timeout: wake)
+
+            // After wake (input, animation, or agent socket), service the agent
+            // before processing the rest of the frame so injects land this tick.
+            agentServer?.poll()
+
+            while let ev = editor.pollInputEvent() {
+                processInputEvent(ev)
             }
 
-            // Live size from GLFW (not only post-swapchain). Covers any resize
-            // that arrived without a Resize event still in the queue.
+            // Live size from GLFW (not only post-swapchain).
             let fb = editor.framebufferSize()
             if fb.w >= 1, fb.h >= 1, fb.w != windowW || fb.h != windowH {
                 windowW = fb.w
@@ -242,13 +331,9 @@ struct HelloWorldApp {
                 ViewInvalidation.markNeedsLayout()
             }
 
-            // Animations step before the level is read, so a still-running one
-            // raises the flag for this frame rather than the next.
             AnimationDriver.tick()
 
             if FocusManager.focusedID != nil {
-                // A blinking caret is a pure redraw, and it keeps asking to be
-                // woken for as long as something is focused.
                 if CaretBlink.phaseChanged() { ViewInvalidation.markNeedsRedraw() }
                 FrameScheduler.requestWake(in: CaretBlink.period / 4)
             }
@@ -274,13 +359,12 @@ struct HelloWorldApp {
                         probeBody, probeLayout, probeEmit,
                         (now - p1) * 1000, (now - p0) * 1000
                     )
-                    // Written rather than `print`: stdout is block-buffered
-                    // when redirected, so piping to a file would show nothing
-                    // until the app exits.
                     FileHandle.standardOutput.write(Data(line.utf8))
                 }
             }
         }
+
+        agentServer?.close()
     }
 
     static func assetsRoot() -> String {

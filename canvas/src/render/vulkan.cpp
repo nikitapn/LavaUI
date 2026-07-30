@@ -1813,12 +1813,138 @@ void Vulkan::renderWithShadows(
 
   // Next record/submit uses the other slot (CPU can overlap with this GPU work).
   currentFrame_ = (currentFrame_ + 1) % kMaxFramesInFlight;
+
+  // Presented content changed — any prior capture cache is stale.
+  invalidateCaptureCache();
 }
 
 void Vulkan::readPixels(uint8_t *dst, size_t dstSize)
 {
   size_t n = std::min(dstSize, static_cast<size_t>(stagingBufferSize_));
   memcpy(dst, stagingBufferMapped_, n);
+}
+
+void Vulkan::captureFrame(uint8_t *dst, size_t dstSize)
+{
+  assert(resolveImage_ != VK_NULL_HANDLE);
+  assert(stagingBuffer_ != VK_NULL_HANDLE);
+  assert(stagingBufferMapped_ != nullptr);
+
+  // Main pass finalLayout leaves resolve as TRANSFER_SRC (also the present blit source).
+  waitForAllFramesInFlight();
+
+  VkCommandBuffer cmd = beginSingleTimeCommands();
+
+  VkBufferImageCopy copyRegion{
+    .bufferOffset = 0,
+    .bufferRowLength = 0,
+    .bufferImageHeight = 0,
+    .imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
+    .imageOffset = {0, 0, 0},
+    .imageExtent = {extent_.width, extent_.height, 1},
+  };
+  vkCmdCopyImageToBuffer(cmd, resolveImage_,
+                         VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, stagingBuffer_, 1,
+                         &copyRegion);
+
+  VkBufferMemoryBarrier bufBarrier{
+    .sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER,
+    .srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
+    .dstAccessMask = VK_ACCESS_HOST_READ_BIT,
+    .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+    .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+    .buffer = stagingBuffer_,
+    .offset = 0,
+    .size = VK_WHOLE_SIZE,
+  };
+  vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                       VK_PIPELINE_STAGE_HOST_BIT, 0, 0, nullptr, 1,
+                       &bufBarrier, 0, nullptr);
+
+  endSingleTimeCommands(cmd);
+  readPixels(dst, dstSize);
+
+  // Refresh shared cache for subsequent region crops.
+  const size_t need =
+    static_cast<size_t>(extent_.width) * extent_.height * 4;
+  if (dstSize >= need) {
+    captureCache_.assign(dst, dst + need);
+    captureCacheW_ = extent_.width;
+    captureCacheH_ = extent_.height;
+    captureCacheValid_ = true;
+  } else {
+    captureCacheValid_ = false;
+  }
+}
+
+namespace {
+
+struct PngWriteCtx {
+  std::vector<uint8_t> *out = nullptr;
+};
+
+void pngWriteFunc(void *context, void *data, int size)
+{
+  auto *ctx = static_cast<PngWriteCtx *>(context);
+  auto *bytes = static_cast<const uint8_t *>(data);
+  ctx->out->insert(ctx->out->end(), bytes, bytes + size);
+}
+
+}  // namespace
+
+#define STB_IMAGE_WRITE_IMPLEMENTATION
+#include "stb_image_write.h"
+
+bool Vulkan::capturePng(std::vector<uint8_t> &outPng, int x, int y, int w, int h)
+{
+  const int fullW = static_cast<int>(extent_.width);
+  const int fullH = static_cast<int>(extent_.height);
+  if (fullW < 1 || fullH < 1) return false;
+
+  if (w <= 0 || h <= 0) {
+    x = 0;
+    y = 0;
+    w = fullW;
+    h = fullH;
+  }
+
+  // Clamp to framebuffer.
+  if (x < 0) {
+    w += x;
+    x = 0;
+  }
+  if (y < 0) {
+    h += y;
+    y = 0;
+  }
+  if (x >= fullW || y >= fullH) return false;
+  w = std::min(w, fullW - x);
+  h = std::min(h, fullH - y);
+  if (w < 1 || h < 1) return false;
+
+  // One GPU readback per settled frame; further crops are pure CPU.
+  if (!captureCacheValid_ || captureCacheW_ != extent_.width ||
+      captureCacheH_ != extent_.height ||
+      captureCache_.size() !=
+        static_cast<size_t>(fullW) * static_cast<size_t>(fullH) * 4) {
+    captureCache_.resize(static_cast<size_t>(fullW) * static_cast<size_t>(fullH) *
+                         4);
+    captureFrame(captureCache_.data(), captureCache_.size());
+  }
+
+  std::vector<uint8_t> region(static_cast<size_t>(w) * static_cast<size_t>(h) * 4);
+  for (int row = 0; row < h; ++row) {
+    const uint8_t *src =
+      captureCache_.data() + (static_cast<size_t>(y + row) * fullW + x) * 4;
+    uint8_t *dst = region.data() + static_cast<size_t>(row) * w * 4;
+    std::memcpy(dst, src, static_cast<size_t>(w) * 4);
+  }
+
+  outPng.clear();
+  PngWriteCtx ctx{&outPng};
+  const int ok = stbi_write_png_to_func(pngWriteFunc, &ctx, w, h, 4, region.data(),
+                                       w * 4);
+  return ok != 0 && !outPng.empty();
 }
 
 Shaders &Vulkan::getShaders()

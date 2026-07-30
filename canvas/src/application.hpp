@@ -75,6 +75,15 @@ public:
   // at least width*height*4 bytes.
   void readPixels(uint8_t *dst, size_t dstSize);
 
+  /// GPU→CPU capture of the resolve target (works windowed). See Vulkan::captureFrame.
+  void captureFrame(uint8_t *dst, size_t dstSize);
+
+  /// Capture resolve as PNG (optional crop). `w`/`h` <= 0 → full frame.
+  bool capturePng(std::vector<uint8_t> &outPng, int x, int y, int w, int h);
+
+  /// Same as capturePng, base64-encoded (empty string on failure).
+  std::string capturePngBase64(int x, int y, int w, int h);
+
   void shutdown();
 
   Application(int width = 1280, int height = 720);

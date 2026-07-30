@@ -45,6 +45,14 @@ public protocol AnyViewNode: AnyObject {
     var childNodes: [any AnyViewNode] { get }
     var needsBodyRecompute: Bool { get set }
 
+    /// Author-assigned agent id (`.agentId("…")`). Stable across process runs.
+    /// Prefer this over process-local `id` when scripting the UI.
+    var agentId: String? { get set }
+
+    /// Path segment override (e.g. ForEach element key). Used when building
+    /// structural `sid` fallbacks for untagged nodes.
+    var structuralKey: String? { get set }
+
     func collectFrames(originX: Float, originY: Float, into: inout [LayoutFrame])
 }
 
@@ -65,6 +73,8 @@ class YogaBoxNode: AnyViewNode {
     let id: NodeID
     let yogaStorage: YGNodeRef
     var label: String
+    var agentId: String?
+    var structuralKey: String?
     var needsBodyRecompute = false
 
     var flexGrow: Float = 0
@@ -680,6 +690,8 @@ final class StackNode: YogaBoxNode {
 class FragmentNode: AnyViewNode {
     let id: NodeID
     var label: String
+    var agentId: String?
+    var structuralKey: String?
     var needsBodyRecompute = false
 
     /// Children the view tree currently describes.
@@ -874,11 +886,16 @@ final class ForEachFragmentNode<ID: Hashable>: FragmentNode {
         for element in data {
             let key = element[keyPath: idKeyPath]
             let childView = content(element)
+            let childNode: any AnyViewNode
             if let existing = oldMap.removeValue(forKey: key) {
-                next.append((key, ViewGraph.reconcile(existing, with: childView)))
+                childNode = ViewGraph.reconcile(existing, with: childView)
             } else {
-                next.append((key, ViewGraph.mount(childView)))
+                childNode = ViewGraph.mount(childView)
             }
+            // Structural path uses the ForEach key so list order changes do not
+            // rename other rows (and agents can target `…/item-3/…`).
+            childNode.structuralKey = "k:\(key)"
+            next.append((key, childNode))
         }
         // Remaining oldMap entries drop out of `keyed` → ARC frees nodes.
         keyed = next
@@ -1182,6 +1199,8 @@ public protocol AnyViewNode: AnyObject {
     var label: String { get }
     var childNodes: [any AnyViewNode] { get }
     var needsBodyRecompute: Bool { get set }
+    var agentId: String? { get set }
+    var structuralKey: String? { get set }
     func collectFrames(originX: Float, originY: Float, into: inout [LayoutFrame])
     func flattenedLayoutNodes() -> [any AnyViewNode]
 }
@@ -1209,6 +1228,8 @@ final class LeafNode: AnyViewNode {
     let id = NodeID.generate()
     let kind: LeafKind
     var label: String
+    var agentId: String?
+    var structuralKey: String?
     var needsBodyRecompute = false
     var text = ""
     var color = Color.primary
@@ -1243,6 +1264,8 @@ final class LeafNode: AnyViewNode {
 final class StackNode: AnyViewNode {
     let id = NodeID.generate()
     var label: String
+    var agentId: String?
+    var structuralKey: String?
     var needsBodyRecompute = false
     var fillColor: Color?
     let direction: FlexDirection
@@ -1260,6 +1283,8 @@ final class StackNode: AnyViewNode {
 final class CompositeNode<V: View>: AnyViewNode {
     let id = NodeID.generate()
     var label: String { String(describing: V.self) }
+    var agentId: String?
+    var structuralKey: String?
     var needsBodyRecompute = false
     var childNodes: [any AnyViewNode] = []
     init(_ view: V) {}
@@ -1271,6 +1296,8 @@ final class CompositeNode<V: View>: AnyViewNode {
 final class TupleFragmentNode: AnyViewNode {
     let id = NodeID.generate()
     var label = "TupleView"
+    var agentId: String?
+    var structuralKey: String?
     var needsBodyRecompute = false
     var childNodes: [any AnyViewNode]
     init(children: [any AnyViewNode]) { self.childNodes = children }
@@ -1281,6 +1308,8 @@ final class TupleFragmentNode: AnyViewNode {
 final class EitherFragmentNode: AnyViewNode {
     let id = NodeID.generate()
     var label = "EitherView"
+    var agentId: String?
+    var structuralKey: String?
     var needsBodyRecompute = false
     var childNodes: [any AnyViewNode] = []
     func updateFirst<A: View>(_ view: A) {}
@@ -1292,6 +1321,8 @@ final class EitherFragmentNode: AnyViewNode {
 final class OptionalFragmentNode: AnyViewNode {
     let id = NodeID.generate()
     var label = "OptionalView"
+    var agentId: String?
+    var structuralKey: String?
     var needsBodyRecompute = false
     var childNodes: [any AnyViewNode] = []
     func updateSome<V: View>(_ view: V) {}
@@ -1303,6 +1334,8 @@ final class OptionalFragmentNode: AnyViewNode {
 final class ForEachFragmentNode<ID: Hashable>: AnyViewNode {
     let id = NodeID.generate()
     var label = "ForEach"
+    var agentId: String?
+    var structuralKey: String?
     var needsBodyRecompute = false
     var childNodes: [any AnyViewNode] = []
     func update<Data: RandomAccessCollection, Content: View>(
