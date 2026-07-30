@@ -1003,6 +1003,10 @@ void Application::textInput(const std::string &utf8) {
   impl_->bridgeTextInput(utf8);
 }
 
+void Application::scroll(float dx, float dy) {
+  impl_->bridgeScroll(dx, dy);
+}
+
 void Application::readPixels(uint8_t *dst, size_t dstSize) {
   impl_->readPixels(dst, dstSize);
 }

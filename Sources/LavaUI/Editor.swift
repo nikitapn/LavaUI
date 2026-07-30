@@ -142,6 +142,11 @@ public final class Editor: @unchecked Sendable {
         engine.pointerButton(button, pressed, x, y)
     }
 
+    /// Inject wheel/trackpad delta (notches), same coalescing queue as real scroll.
+    public func injectScroll(dx: Float, dy: Float) {
+        engine.pointerScroll(dx, dy)
+    }
+
     /// Inject a key event. `action`: 0 release, 1 press, 2 repeat (GLFW).
     public func injectKey(key: Int32, action: Int32 = 1, mods: Int32 = 0) {
         engine.keyEvent(key, action, mods)

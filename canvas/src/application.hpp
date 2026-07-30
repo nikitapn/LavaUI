@@ -70,6 +70,8 @@ public:
   void pointerButton(int button, bool pressed, float x, float y);
   void keyEvent(int key, int action, int mods);
   void textInput(const std::string &utf8);
+  /// Synthetic wheel/trackpad delta; same coalescing queue as hardware scroll.
+  void scroll(float dx, float dy);
 
   // Copies the frame repaint() just rendered (RGBA8) into dst. dst must be
   // at least width*height*4 bytes.

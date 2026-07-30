@@ -166,6 +166,11 @@ void Engine::pointerButton(int button, bool pressed, float x, float y)
   });
 }
 
+void Engine::pointerScroll(float dx, float dy)
+{
+  impl_->withApp([&](Application &app) { app.scroll(dx, dy); });
+}
+
 void Engine::keyEvent(int key, int action, int mods)
 {
   impl_->withApp([&](Application &app) { app.keyEvent(key, action, mods); });

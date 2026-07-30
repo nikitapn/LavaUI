@@ -57,13 +57,14 @@ pixels.
 | `hit_test` | Label under `x`,`y` |
 | `move` | Pointer move |
 | `click` | Click at `x`,`y` **or** center of `sid`/`label`/`id`/`query` |
+| `scroll` | Wheel/trackpad `dx`,`dy`; moves to `x`,`y` or center of `sid`/`label`/`id`/`query` first if given, else uses the last pointer position |
 | `key` | GLFW key (`key`, `action` 0/1/2, `mods`); press+release by default |
 | `type_text` | UTF-8 string → character events (focused field path) |
 | `screenshot` | PNG base64; optional region `x,y,w,h` (`w`/`h` ≤ 0 = full); optional `max_side` |
 | `screenshot_node` | Crop around a node (`sid` / … + optional `pad`, `max_side`) |
 
-`click`, `key`, `type_text`, and screenshot commands call **settle** so the
-response reflects the post-action frame.
+`click`, `scroll`, `key`, `type_text`, and screenshot commands call **settle**
+so the response reflects the post-action frame.
 
 ## Stable ids (`sid`)
 
@@ -118,6 +119,7 @@ python3 tools/lava_agent_cli.py layout_tree --max-depth 4
 python3 tools/lava_agent_cli.py find --query Theme
 python3 tools/lava_agent_cli.py screenshot --w 200 --h 100 -o crop.png
 python3 tools/lava_agent_cli.py click --sid theme-toggle
+python3 tools/lava_agent_cli.py scroll --sid content-list --dy -20
 ```
 
 ## Wire to Grok Build / Claude Code

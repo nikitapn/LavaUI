@@ -89,6 +89,17 @@ def handle_tool(name: str, arguments: dict[str, Any]) -> dict:
             if "id" in arguments:
                 p["id"] = int(arguments["id"])
             r = agent_call("click", p)
+        elif name == "scroll":
+            p = {"dx": float(arguments.get("dx", 0.0)), "dy": float(arguments["dy"])}
+            for k in ("x", "y"):
+                if k in arguments:
+                    p[k] = float(arguments[k])
+            for k in ("sid", "label", "query"):
+                if k in arguments:
+                    p[k] = str(arguments[k])
+            if "id" in arguments:
+                p["id"] = int(arguments["id"])
+            r = agent_call("scroll", p)
         elif name == "key":
             r = agent_call(
                 "key",
@@ -202,6 +213,27 @@ TOOLS = [
                 "query": {"type": "string"},
                 "button": {"type": "integer", "default": 0},
             },
+        },
+    },
+    {
+        "name": "scroll",
+        "description": (
+            "Wheel/trackpad delta (notches). Applies at x/y or center of "
+            "sid/label/id/query if given, else wherever the pointer last was."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "dx": {"type": "number", "default": 0},
+                "dy": {"type": "number"},
+                "x": {"type": "number"},
+                "y": {"type": "number"},
+                "sid": {"type": "string"},
+                "label": {"type": "string"},
+                "id": {"type": "integer"},
+                "query": {"type": "string"},
+            },
+            "required": ["dy"],
         },
     },
     {

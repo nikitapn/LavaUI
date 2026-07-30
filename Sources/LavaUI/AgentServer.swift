@@ -30,6 +30,7 @@ public struct AgentHost {
     public var find: (_ query: String, _ limit: Int) -> [[String: Any]]
     public var injectMove: (_ x: Float, _ y: Float) -> Void
     public var injectClick: (_ x: Float, _ y: Float, _ button: Int32) -> Void
+    public var injectScroll: (_ dx: Float, _ dy: Float) -> Void
     public var injectKey: (_ key: Int32, _ action: Int32, _ mods: Int32) -> Void
     public var injectText: (_ text: String) -> Void
     /// Capture pixels only (caller settles when needed).
@@ -49,6 +50,7 @@ public struct AgentHost {
         find: @escaping (_ query: String, _ limit: Int) -> [[String: Any]],
         injectMove: @escaping (_ x: Float, _ y: Float) -> Void,
         injectClick: @escaping (_ x: Float, _ y: Float, _ button: Int32) -> Void,
+        injectScroll: @escaping (_ dx: Float, _ dy: Float) -> Void,
         injectKey: @escaping (_ key: Int32, _ action: Int32, _ mods: Int32) -> Void,
         injectText: @escaping (_ text: String) -> Void,
         screenshotBase64: @escaping (
@@ -63,6 +65,7 @@ public struct AgentHost {
         self.find = find
         self.injectMove = injectMove
         self.injectClick = injectClick
+        self.injectScroll = injectScroll
         self.injectKey = injectKey
         self.injectText = injectText
         self.screenshotBase64 = screenshotBase64
@@ -398,6 +401,24 @@ public final class AgentServer: @unchecked Sendable {
             host.injectClick(x, y, button)
             host.settle()
             return ["x": x, "y": y, "button": button]
+
+        case "scroll":
+            // Delta applies wherever the pointer last was (matches real
+            // trackpad/wheel routing), so move first when a target is given.
+            var moved: (x: Float, y: Float)?
+            if let f = resolveOptionalFrame(params) {
+                moved = (f.x + f.w * 0.5, f.y + f.h * 0.5)
+            } else if params["x"] != nil || params["y"] != nil {
+                moved = (floatParam(params, "x"), floatParam(params, "y"))
+            }
+            if let moved {
+                host.injectMove(moved.x, moved.y)
+            }
+            let dx = floatParam(params, "dx")
+            let dy = floatParam(params, "dy")
+            host.injectScroll(dx, dy)
+            host.settle()
+            return ["dx": dx, "dy": dy, "x": moved?.x as Any, "y": moved?.y as Any]
 
         case "key":
             let key = Int32(intParam(params, "key", default: -1))

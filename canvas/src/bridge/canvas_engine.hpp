@@ -80,6 +80,8 @@ class Engine {
   /// Inject synthetic pointer events (same queue as GLFW callbacks).
   void pointerMove(float x, float y);
   void pointerButton(int button, bool pressed, float x, float y);
+  /// Inject wheel/trackpad delta (notches), coalesced with real scroll input.
+  void pointerScroll(float dx, float dy);
 
   /// Inject keyboard / text (GLFW key codes; action 0/1/2 = release/press/repeat).
   void keyEvent(int key, int action, int mods);

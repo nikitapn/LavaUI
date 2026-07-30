@@ -69,6 +69,15 @@ def main() -> int:
     cl.add_argument("--id", type=int)
     cl.add_argument("--query")
     cl.add_argument("--button", type=int, default=0)
+    sr = sub.add_parser("scroll")
+    sr.add_argument("--dx", type=float, default=0.0)
+    sr.add_argument("--dy", type=float, required=True)
+    sr.add_argument("--x", type=float)
+    sr.add_argument("--y", type=float)
+    sr.add_argument("--sid", help="stable agent id (preferred)")
+    sr.add_argument("--label")
+    sr.add_argument("--id", type=int)
+    sr.add_argument("--query")
     ky = sub.add_parser("key")
     ky.add_argument("--key", type=int, required=True, help="GLFW key code")
     ky.add_argument("--action", type=int, default=1, help="0=release 1=press 2=repeat")
@@ -138,6 +147,21 @@ def main() -> int:
         if args.y is not None:
             payload["y"] = args.y
         payload["button"] = args.button
+    elif args.cmd == "scroll":
+        if args.sid:
+            payload["sid"] = args.sid
+        if args.label:
+            payload["label"] = args.label
+        if args.id is not None:
+            payload["id"] = args.id
+        if args.query:
+            payload["query"] = args.query
+        if args.x is not None:
+            payload["x"] = args.x
+        if args.y is not None:
+            payload["y"] = args.y
+        payload["dx"] = args.dx
+        payload["dy"] = args.dy
     elif args.cmd == "key":
         payload["key"] = args.key
         payload["action"] = args.action
