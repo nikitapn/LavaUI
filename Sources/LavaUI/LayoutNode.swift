@@ -77,9 +77,26 @@ class YogaBoxNode: AnyViewNode {
     /// absorbed its share of the deficit — and a size a distant sibling can
     /// quietly renegotiate is not a size.
     ///
-    /// Yoga defaults it to 0 for that reason. Anything that really should give
-    /// way says so instead: `ScrollNode` sets 1 on itself.
-    var flexShrink: Float = 0
+    /// Yoga defaults it to 0 for that reason, and so does this — see
+    /// `effectiveFlexShrink` for the one case that opts back in.
+    ///
+    /// `nil` means nobody has stated a value, which is why this is optional: an
+    /// explicit 0 and an unset 0 have to be told apart.
+    var flexShrink: Float?
+
+    /// What actually reaches Yoga.
+    ///
+    /// Unset, a box shrinks only if it asked to grow. `flexGrow > 0` says *this*
+    /// is the flexible box on its line, and something that takes the leftover
+    /// space should be able to give it back — a column that fills the window is
+    /// also the one that must yield when the window is too small for it.
+    /// Without that, a ScrollView inside such a column is laid out at its full
+    /// content height, its viewport equals its content, and it has nothing left
+    /// to scroll.
+    ///
+    /// A box with a stated size and no `flexGrow` is not making that offer, and
+    /// is what the 0 default protects.
+    var effectiveFlexShrink: Float { flexShrink ?? (flexGrow > 0 ? 1 : 0) }
     var width: Dimension = .auto
     var height: Dimension = .auto
     var padding: Float = 0
@@ -125,7 +142,7 @@ class YogaBoxNode: AnyViewNode {
 
     func applyStyle() {
         YGNodeStyleSetFlexGrow(yogaStorage, flexGrow)
-        YGNodeStyleSetFlexShrink(yogaStorage, flexShrink)
+        YGNodeStyleSetFlexShrink(yogaStorage, effectiveFlexShrink)
         applyDimension(width, setPoint: YGNodeStyleSetWidth, setAuto: YGNodeStyleSetWidthAuto)
         applyDimension(height, setPoint: YGNodeStyleSetHeight, setAuto: YGNodeStyleSetHeightAuto)
         YGNodeStyleSetPadding(yogaStorage, YGEdgeAll, padding)

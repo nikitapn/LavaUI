@@ -137,7 +137,7 @@ extension YogaBoxNode {
         minWidth = style.minWidth ?? base.minWidth ?? 0
         minHeight = style.minHeight ?? base.minHeight ?? 0
         flexGrow = style.flexGrow ?? base.flexGrow ?? 0
-        flexShrink = style.flexShrink ?? base.flexShrink ?? 0
+        flexShrink = style.flexShrink ?? base.flexShrink
         // Unlike fill (set-if-present), blur clears when the modifier is gone:
         // fall back through the baseline so removing `.blur()` actually turns it off.
         backdropBlurRadius = style.backdropBlurRadius ?? base.backdropBlurRadius
@@ -195,7 +195,10 @@ class StyleBoxNode: YogaBoxNode {
     private func inheritFlex(from node: any AnyViewNode) {
         let leaves = node.flattenedLayoutNodes().compactMap { $0 as? YogaBoxNode }
         flexGrow = leaves.map(\.flexGrow).max() ?? 0
-        flexShrink = leaves.map(\.flexShrink).min() ?? 0
+        // Effective, not raw: an unset child still reports the value Yoga
+        // would have seen, so the wrapper does not become more rigid than
+        // what it wraps.
+        flexShrink = leaves.map(\.effectiveFlexShrink).min()
     }
 
     private func relink() {
