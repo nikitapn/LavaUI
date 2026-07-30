@@ -493,6 +493,12 @@ public final class DrawList {
             return
         }
 
+        if leaf.kind == .canvas {
+            // App owns every command for this box (background, glyphs, bars…).
+            leaf.canvasPaint?(self, CanvasFrame(x: x, y: y, w: w, h: h))
+            return
+        }
+
         if leaf.kind == .divider, let style = leaf.dividerStyle {
             let t = max(1, style.thickness)
             // Rounded to a whole pixel: a 1px rule landing on a half

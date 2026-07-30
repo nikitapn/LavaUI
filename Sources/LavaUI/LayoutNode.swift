@@ -210,6 +210,8 @@ enum LeafKind: Equatable {
     case toggle
     case slider
     case divider
+    /// App-supplied paint via `Canvas` / `canvasPaint` (no built-in chrome).
+    case canvas
 }
 
 final class LeafNode: YogaBoxNode {
@@ -262,6 +264,11 @@ final class LeafNode: YogaBoxNode {
     /// exactly the numbers that drew the track rather than recomputing them.
     var sliderInset: Float = 0
     var sliderTravel: Float = 0
+
+    /// Custom `Canvas` paint (absolute frame). Nil for non-canvas leaves.
+    var canvasPaint: ((DrawList, CanvasFrame) -> Void)?
+    /// When true, `AnimationDriver` keeps requesting redraws for this leaf.
+    var continuousRedraw: Bool = false
 
     /// Divider-only payload. `dividerAxis` is an explicit override; nil infers
     /// the orientation from whatever container this ended up in.
@@ -1222,7 +1229,7 @@ public final class LayoutHost {
 }
 
 // Minimal stubs so primitives compile without CYoga.
-enum LeafKind: Equatable { case text, spacer, diagramHost, empty, image, textField, editor, button, toggle, slider, divider }
+enum LeafKind: Equatable { case text, spacer, diagramHost, empty, image, textField, editor, button, toggle, slider, divider, canvas }
 
 final class LeafNode: AnyViewNode {
     let id = NodeID.generate()

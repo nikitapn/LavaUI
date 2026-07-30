@@ -78,6 +78,8 @@ public struct DemoExample: View {
     @State private var showMenu = false
     @State private var showGlass = false
     @State private var showBanner = true
+    /// Neon EQ showcase — continuous animation while true.
+    @State private var pulsePlaying = true
     @State private var lightTheme = false
     @State private var status = "Click a list row, edit the field, resize the window."
     @State private var actionCount = 0
@@ -254,6 +256,20 @@ public struct DemoExample: View {
 
     private var centerContent: some View {
         VStack(padding: 8) {
+            Text("PulseMeter · neon EQ", color: .accent)
+            Text(
+                "Continuous AnimationDriver redraw — click the meter to pause/play.",
+                color: .secondary
+            )
+            // Product widget: HelloWorld/PulseMeter.swift on LavaUI `Canvas`.
+            PulseMeter(isPlaying: $pulsePlaying, barCount: 16)
+            HStack(padding: 2) {
+                Toggle("Pulse", isOn: $pulsePlaying)
+                    .agentId("pulse-toggle")
+                Text(pulsePlaying ? "live" : "paused", color: .dim)
+                Spacer()
+            }
+
             Text("Dynamic flex row", color: .accent)
             Text(
                 "Each chip has flexGrow=1 — resize the window or change slot count.",

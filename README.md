@@ -105,6 +105,7 @@ flexbox via Yoga, with `if`/`else` and optionals handled by the view builder.
 **Content** `Text` (hover, click, wrapping) · `Image` · `DiagramHost`
 · `Button` (animated press and hover) · `Toggle` (animated knob, bound value)
 · `Slider` (drag, optional step and readout)
+· `Canvas` (app-owned paint: Yoga sizes a box, you emit into `DrawList`)
 
 **Input** `TextField` (single and multi-line, soft wrap, selection, clipboard,
 undo) · `EditorView` (line-number gutter, syntax rules, current-line highlight,

@@ -42,7 +42,52 @@ public final class UIFont: @unchecked Sendable {
 
     /// Prefer OpenSans, fall back to LiberationSerif (matches Application assetPath).
     public static func loadUI(assetsRoot: String, pixelSize: Float = 16) -> UIFont? {
-        let names = ["OpenSans-Regular.ttf", "LiberationSerif-Regular.ttf"]
+        loadFirstExisting(
+            pixelSize: pixelSize,
+            relativeTo: assetsRoot,
+            names: ["OpenSans-Regular.ttf", "LiberationSerif-Regular.ttf"]
+        )
+    }
+
+    /// Symbol / icon face for media glyphs (▶ ⏸ etc.).
+    ///
+    /// Prefers **Noto Sans Symbols 2** (has Geometric Shapes + media controls).
+    /// Plain "Noto Sans Symbols" does *not* include U+25B6 / U+23F8 — that is
+    /// why the second file is required for play/pause.
+    public static func loadSymbols(assetsRoot: String?, pixelSize: Float = 16) -> UIFont? {
+        var paths: [String] = []
+        if let root = assetsRoot {
+            let r = root as NSString
+            for name in [
+                "NotoSansSymbols2-Regular.ttf",
+                "NotoSansSymbols-Regular.ttf",
+            ] {
+                paths.append(r.appendingPathComponent("assets").appendingPathComponent(name))
+                paths.append(r.appendingPathComponent(name))
+            }
+        }
+        // System Noto (Arch/Fedora/Debian paths).
+        paths += [
+            "/usr/share/fonts/noto/NotoSansSymbols2-Regular.ttf",
+            "/usr/share/fonts/noto/NotoSansSymbols-Regular.ttf",
+            "/usr/share/fonts/truetype/noto/NotoSansSymbols2-Regular.ttf",
+            "/usr/share/fonts/truetype/noto/NotoSansSymbols-Regular.ttf",
+        ]
+        for p in paths {
+            if FileManager.default.fileExists(atPath: p),
+               let font = UIFont(path: p, pixelSize: pixelSize)
+            {
+                return font
+            }
+        }
+        return nil
+    }
+
+    private static func loadFirstExisting(
+        pixelSize: Float,
+        relativeTo assetsRoot: String,
+        names: [String]
+    ) -> UIFont? {
         let root = assetsRoot as NSString
         for name in names {
             let candidates = [
@@ -210,6 +255,10 @@ public enum FontStore {
     /// Global default — UI thread only. Used by `Text` when `font == nil`.
     nonisolated(unsafe) public static var `default`: UIFont?
 
+    /// Symbol face for media / geometric glyphs (▶ ⏸ …). Prefer this over
+    /// `default` for icon labels; OpenSans does not cover those codepoints.
+    nonisolated(unsafe) public static var symbols: UIFont?
+
     /// Active discrete scale (library state).
     nonisolated(unsafe) public static var scale = ContentScale()
 
@@ -218,6 +267,7 @@ public enum FontStore {
 
     /// Faces already loaded for this process, keyed by rounded pixel size.
     nonisolated(unsafe) private static var faceCache: [Int: UIFont] = [:]
+    nonisolated(unsafe) private static var symbolsCache: [Int: UIFont] = [:]
 
     /// Back-compat alias.
     nonisolated(unsafe) public static var ui: UIFont? {
@@ -225,7 +275,7 @@ public enum FontStore {
         set { `default` = newValue }
     }
 
-    /// Load default face under `assetsRoot` and register with the engine.
+    /// Load default + symbols faces under `assetsRoot` and register with the engine.
     @discardableResult
     public static func bootstrap(
         assetsRoot: String,
@@ -239,6 +289,7 @@ public enum FontStore {
 
     /// Install `scale`'s pixel size as `FontStore.default`, register with the
     /// engine, and drop measure/shape caches that referenced the old size.
+    /// Also reloads `symbols` at the same pixel size.
     /// Returns the new default face, or nil on load failure (keeps previous).
     @discardableResult
     public static func apply(scale newScale: ContentScale, into editor: Editor?) -> UIFont? {
@@ -257,6 +308,21 @@ public enum FontStore {
             font = loaded
         } else {
             font = nil
+        }
+
+        // Symbols face (Noto Sans Symbols 2 preferred) — independent of UI success.
+        if let cached = symbolsCache[key] {
+            symbols = cached
+        } else if let loaded = UIFont.loadSymbols(assetsRoot: assetsRoot, pixelSize: px) {
+            symbolsCache[key] = loaded
+            symbols = loaded
+        } else if let path = symbols?.path, let loaded = UIFont(path: path, pixelSize: px) {
+            symbolsCache[key] = loaded
+            symbols = loaded
+        }
+
+        if let editor, let symbols {
+            symbols.registerWithEngine(editor)
         }
 
         guard let font else { return nil }

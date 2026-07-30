@@ -33,6 +33,15 @@ struct HelloWorldApp {
         if FontStore.bootstrap(assetsRoot: assets, pixelSize: 16, into: editor) == nil {
             FileHandle.standardError.write(Data("warning: default UIFont failed to load\n".utf8))
         }
+        if FontStore.symbols == nil {
+            FileHandle.standardError.write(
+                Data("warning: symbol font missing (Noto Sans Symbols 2) — play/pause may tofu\n".utf8)
+            )
+        } else {
+            FileHandle.standardError.write(
+                Data("symbols font: \(FontStore.symbols!.path)\n".utf8)
+            )
+        }
 
         let brandImage = ImageStore.loadAsset(
             named: "football-157930.svg_64.png",

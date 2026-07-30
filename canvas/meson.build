@@ -37,6 +37,8 @@ asset_sources = [
   'assets/images/football-157930.svg_128.png',
   'assets/fonts/OpenSans-Regular.ttf',
   'assets/fonts/LiberationSerif-Regular.ttf',
+  # Media/geometric symbols (▶ ⏸) for PulseMeter; Symbols *2* has the glyphs.
+  'assets/fonts/NotoSansSymbols2-Regular.ttf',
 ]
 
 copy_assets = custom_target('copy_assets',
