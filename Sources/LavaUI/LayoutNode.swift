@@ -68,7 +68,18 @@ class YogaBoxNode: AnyViewNode {
     var needsBodyRecompute = false
 
     var flexGrow: Float = 0
-    var flexShrink: Float = 1
+    /// Yoga's default, not CSS's.
+    ///
+    /// CSS defaults this to 1, which makes every box negotiable: one sibling
+    /// whose content overflows shrinks *everything* on the line in proportion,
+    /// boxes that stated an explicit size included. A `height: .pt(56)` toolbar
+    /// beside a ScrollView holding 1483pt of content came out at 29pt, having
+    /// absorbed its share of the deficit — and a size a distant sibling can
+    /// quietly renegotiate is not a size.
+    ///
+    /// Yoga defaults it to 0 for that reason. Anything that really should give
+    /// way says so instead: `ScrollNode` sets 1 on itself.
+    var flexShrink: Float = 0
     var width: Dimension = .auto
     var height: Dimension = .auto
     var padding: Float = 0
