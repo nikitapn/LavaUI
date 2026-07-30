@@ -37,6 +37,7 @@ public struct Divider: PrimitiveView {
     }
 
     private func configure(_ leaf: LeafNode) {
+        leaf.theme = Environment.current.theme
         leaf.dividerStyle = style
         leaf.dividerAxis = axis
         // A rule that shrank would vanish, which is worse than overflowing.
@@ -58,7 +59,7 @@ public struct DividerStyle {
     public var color: Color
 
     public init(thickness: Float? = nil, spacing: Float = 4, color: Color? = nil) {
-        let theme = Theme.current
+        let theme = Environment.current.theme
         self.thickness = thickness ?? theme.borderWidth
         self.spacing = spacing
         self.color = color ?? theme.border

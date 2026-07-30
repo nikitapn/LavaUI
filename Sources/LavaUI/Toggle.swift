@@ -29,7 +29,7 @@ public struct Toggle: PrimitiveView {
         self.isEnabled = isEnabled
     }
 
-    public var resolvedFont: UIFont? { font ?? FontStore.default }
+    public var resolvedFont: UIFont? { font ?? Environment.current.font }
 
     public var dumpDetail: String {
         "\"\(label)\" \(isOn.wrappedValue ? "on" : "off")\(isEnabled ? "" : " disabled")"
@@ -63,6 +63,7 @@ public struct Toggle: PrimitiveView {
     }
 
     private func configure(_ leaf: LeafNode) {
+        leaf.theme = Environment.current.theme
         leaf.text = label
         leaf.font = resolvedFont
         leaf.color = isEnabled ? style.foreground : style.disabledForeground
@@ -139,7 +140,7 @@ public struct ToggleStyle {
         labelGap: Float = 8,
         duration: Double = 0.14
     ) {
-        let theme = Theme.current
+        let theme = Environment.current.theme
         self.trackWidth = trackWidth
         self.trackHeight = trackHeight
         self.knobInset = knobInset

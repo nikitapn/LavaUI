@@ -141,7 +141,7 @@ public struct DemoExample: View {
             showMenu = false
         })
         .padding(4)
-        .hoverBackground(Theme.current.hover)
+        .hoverBackground(Environment.current.theme.hover)
         .cornerRadius(3)
     }
 

@@ -102,10 +102,10 @@ public struct Theme: Equatable, Sendable {
         border: Color(r: 0.75, g: 0.76, b: 0.80)
     )
 
-    /// Active theme. A global for the same reason `FontStore.default` is one:
-    /// there is a single window, and no environment propagation yet. When
-    /// LavaUI grows an environment, this becomes its default value rather than
-    /// the only way to set a theme.
+    /// App-wide default theme. `Environment.current.theme` falls through to
+    /// this wherever no `.theme(_:)` override is in scope, so setting it still
+    /// reaches everything that never opted out — but a subtree wearing
+    /// `.theme(_:)` no longer has to go through here at all.
     nonisolated(unsafe) public static var current: Theme = .dark {
         didSet {
             if current != oldValue { ViewInvalidation.markDirty() }
@@ -114,12 +114,13 @@ public struct Theme: Equatable, Sendable {
 }
 
 extension Color {
-    // Resolved through the active theme, so these stay valid names at call
-    // sites while becoming swappable.
-    public static var primary: Color { Theme.current.textPrimary }
-    public static var secondary: Color { Theme.current.textSecondary }
-    public static var accent: Color { Theme.current.accent }
-    public static var selected: Color { Theme.current.selected }
-    public static var muted: Color { Theme.current.textMuted }
-    public static var dim: Color { Theme.current.textDim }
+    // Resolved through the environment's theme, so these stay valid names at
+    // call sites while becoming swappable — globally via `Theme.current`, or
+    // per subtree via `.theme(_:)`.
+    public static var primary: Color { Environment.current.theme.textPrimary }
+    public static var secondary: Color { Environment.current.theme.textSecondary }
+    public static var accent: Color { Environment.current.theme.accent }
+    public static var selected: Color { Environment.current.theme.selected }
+    public static var muted: Color { Environment.current.theme.textMuted }
+    public static var dim: Color { Environment.current.theme.textDim }
 }

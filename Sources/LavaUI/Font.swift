@@ -252,7 +252,8 @@ public struct ContentScale: Equatable, Sendable {
 /// Scale changes re-load/register a face, clear layout caches, and require
 /// the app to re-`setRoot` + Yoga (library: call `apply` then dirty layout).
 public enum FontStore {
-    /// Global default — UI thread only. Used by `Text` when `font == nil`.
+    /// App-wide default face — UI thread only. `Environment.current.font`
+    /// falls through to this wherever no `.font(_:)` override is in scope.
     nonisolated(unsafe) public static var `default`: UIFont?
 
     /// Symbol face for media / geometric glyphs (▶ ⏸ …). Prefer this over

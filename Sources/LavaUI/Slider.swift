@@ -41,7 +41,7 @@ public struct Slider: PrimitiveView {
         self.isEnabled = isEnabled
     }
 
-    public var resolvedFont: UIFont? { font ?? FontStore.default }
+    public var resolvedFont: UIFont? { font ?? Environment.current.font }
 
     public var dumpDetail: String {
         "\(value.wrappedValue) in \(range.lowerBound)...\(range.upperBound)"
@@ -73,6 +73,7 @@ public struct Slider: PrimitiveView {
     }
 
     private func configure(_ leaf: LeafNode) {
+        leaf.theme = Environment.current.theme
         leaf.font = resolvedFont
         leaf.color = isEnabled ? style.foreground : style.disabledForeground
         leaf.sliderStyle = style
@@ -189,7 +190,7 @@ public struct SliderStyle {
         valueWidth: Float = 44,
         duration: Double = 0.1
     ) {
-        let theme = Theme.current
+        let theme = Environment.current.theme
         self.trackWidth = trackWidth
         self.trackThickness = trackThickness
         self.knobRadius = knobRadius

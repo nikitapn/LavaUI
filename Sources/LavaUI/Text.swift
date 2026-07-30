@@ -24,12 +24,12 @@ public struct Text: PrimitiveView {
         self.color = color
         self.font = font
         self.onClick = onClick
-        self.hoverFill = onClick == nil ? hoverFill : (hoverFill ?? Theme.current.hover)
+        self.hoverFill = onClick == nil ? hoverFill : (hoverFill ?? Environment.current.theme.hover)
         self.cornerRadius = cornerRadius
     }
 
-    /// Resolved face for measure (explicit or store default).
-    public var resolvedFont: UIFont? { font ?? FontStore.default }
+    /// Resolved face for measure (explicit or environment default).
+    public var resolvedFont: UIFont? { font ?? Environment.current.font }
 
     public var dumpDetail: String {
         let click = onClick == nil ? "" : " onClick"

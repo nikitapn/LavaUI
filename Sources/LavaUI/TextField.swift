@@ -43,7 +43,7 @@ public struct TextField: PrimitiveView {
         self.onSubmit = onSubmit
     }
 
-    public var resolvedFont: UIFont? { font ?? FontStore.default }
+    public var resolvedFont: UIFont? { font ?? Environment.current.font }
 
     public var dumpDetail: String { "\"\(text)\"" }
 
@@ -72,11 +72,13 @@ public struct TextField: PrimitiveView {
     }
 
     private func configure(_ leaf: LeafNode) {
+        let theme = Environment.current.theme
+        leaf.theme = theme
         leaf.font = resolvedFont
         leaf.color = .primary
         leaf.placeholder = placeholder
-        leaf.fillColor = Theme.current.inset
-        leaf.cornerRadius = Theme.current.cornerRadius
+        leaf.fillColor = theme.inset
+        leaf.cornerRadius = theme.cornerRadius
         // Measure against the placeholder when empty so an empty field still
         // reserves a sensible line box.
         leaf.text = leaf.editing.text.isEmpty ? placeholder : leaf.editing.text
@@ -96,7 +98,7 @@ public struct TextField: PrimitiveView {
             guard let leaf, let run = leaf.shapedRun() else { return }
             leaf.focusSelf(binding: binding, onSubmit: submit)
 
-            let hit = leaf.index(atLocalX: localX, localY: localY) ?? run.index(atX: localX - LeafNode.textInset)
+            let hit = leaf.index(atLocalX: localX, localY: localY) ?? run.index(atX: localX - leaf.textInset)
             let clicks = ClickCounter.register(x: originX + localX, y: originY + localY)
 
             if clicks >= 2 {
@@ -114,7 +116,7 @@ public struct TextField: PrimitiveView {
                         let lx = wx - originX
                         let ly = wy - originY
                         let target = leaf.index(atLocalX: lx, localY: ly)
-                            ?? run.index(atX: lx - LeafNode.textInset)
+                            ?? run.index(atX: lx - leaf.textInset)
                         leaf.editing.setCursor(target, extending: true)
                         CaretBlink.noteEdit()
                         ViewInvalidation.markDirty()
@@ -129,7 +131,7 @@ public struct TextField: PrimitiveView {
 
 extension LeafNode {
     /// Horizontal padding inside a field, matching the draw-side inset.
-    static var textInset: Float { Theme.current.controlPadding }
+    var textInset: Float { theme.controlPadding }
 
     /// Shapes the current buffer for caret/selection maths. Cached on `UIFont`,
     /// so this is a dictionary hit on all but the first call per string.
@@ -149,7 +151,7 @@ extension LeafNode {
             editing.setVisualRows(nil)
             return
         }
-        let inner = max(8, availableWidth - LeafNode.textInset * 2)
+        let inner = max(8, availableWidth - textInset * 2)
         var rows: [Range<Int>] = []
         var base = 0
         for line in editing.lines {
@@ -180,7 +182,7 @@ extension LeafNode {
     /// first. Nil when there is no font to shape with.
     func index(atLocalX x: Float, localY y: Float) -> String.Index? {
         guard let f = font ?? FontStore.default else { return nil }
-        let inset = LeafNode.textInset
+        let inset = textInset
         let rows = editing.layout.rows
         let row = max(0, min(rows.count - 1, Int((y - inset) / f.lineHeight)))
         let line = rowText(row)

@@ -18,7 +18,7 @@ struct PulseMeter: View {
         var padding: Float = 10
         var cornerRadius: Float = 10
         var background: Color = Color(r: 0.06, g: 0.07, b: 0.12).opacity(0.92)
-        var labelColor: Color = Theme.current.textSecondary
+        var labelColor: Color = Environment.current.theme.textSecondary
         var colorA: Color = Color(r: 0.20, g: 0.95, b: 0.85)
         var colorB: Color = Color(r: 0.45, g: 0.55, b: 1.0)
         var colorC: Color = Color(r: 0.95, g: 0.35, b: 0.85)

@@ -223,6 +223,10 @@ final class LeafNode: YogaBoxNode {
     var fillColor: Color?
     /// Explicit face, or nil → `FontStore.default` at measure time.
     var font: UIFont?
+    /// Captured from `Environment.current.theme` at mount/reconcile — measure
+    /// and draw-list emit run later, as separate passes with no environment
+    /// scope active, so they read this instead of `Theme.current` directly.
+    var theme: Theme = Theme.current
     /// Last layout lines from Font measure cache (for multi-line emit).
     var cachedLines: [String] = []
     var usesTextMeasure = false
@@ -364,13 +368,13 @@ final class LeafNode: YogaBoxNode {
 
     /// Rows that fit in the viewport, at least one.
     func visibleRowCount(lineHeight: Float) -> Int {
-        max(1, Int((viewportHeight - LeafNode.textInset * 2) / lineHeight))
+        max(1, Int((viewportHeight - textInset * 2) / lineHeight))
     }
 
     /// Largest legal scroll offset for the current content.
     func maxScrollY(lineHeight: Float) -> Float {
         let content = Float(editing.layout.count) * lineHeight
-        let visible = viewportHeight - LeafNode.textInset * 2
+        let visible = viewportHeight - textInset * 2
         return max(0, content - visible)
     }
 
@@ -392,7 +396,7 @@ final class LeafNode: YogaBoxNode {
             ofOffset: editing.offset(of: editing.focus), affinity: editing.affinity
         )
         let rowTop = Float(row) * lineHeight
-        let visible = viewportHeight - LeafNode.textInset * 2
+        let visible = viewportHeight - textInset * 2
         if rowTop < scrollY {
             scrollY = rowTop
             ViewInvalidation.markDirty()
@@ -439,8 +443,9 @@ final class LeafNode: YogaBoxNode {
         self.height = height
         self.flexGrow = flexGrow
         self.minWidth = minWidth
+        theme = Environment.current.theme
         if kind == .diagramHost {
-            fillColor = Theme.current.canvas
+            fillColor = theme.canvas
         }
         applyStyle()
     }
@@ -464,6 +469,7 @@ final class LeafNode: YogaBoxNode {
         self.text = text
         self.color = color
         self.onClick = onClick
+        theme = Environment.current.theme
         applyStyle()
         if usesTextMeasure {
             // Content change invalidates Yoga's measure cache for this leaf.
@@ -535,7 +541,7 @@ final class LeafNode: YogaBoxNode {
                 // Font::measure instead let the two drift, which is what made
                 // the editor's last line spill past its own box.
                 let shown = min(max(editing.layout.count, 1), max(1, maxLines))
-                let height = Float(shown) * font.lineHeight + LeafNode.textInset * 2
+                let height = Float(shown) * font.lineHeight + textInset * 2
                 // Seed the viewport; the emitter corrects it from the box Yoga
                 // actually granted, which can be smaller.
                 if viewportHeight <= 0 { viewportHeight = height }
@@ -544,7 +550,7 @@ final class LeafNode: YogaBoxNode {
                     let hi = editing.index(atOffset: r.upperBound)
                     return max(acc, font.shapedRun(String(editing.text[lo..<hi])).width)
                 }
-                let contentWidth = widest + gutterWidth + LeafNode.textInset * 2
+                let contentWidth = widest + gutterWidth + textInset * 2
                 // A wrapping field fills the offered width so Yoga does not
                 // expand the box to the unwrapped line length.
                 let w: Float

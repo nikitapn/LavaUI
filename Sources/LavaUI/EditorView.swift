@@ -22,7 +22,7 @@ public struct CodeStyle {
         currentSearchMatch: Color? = nil,
         palette: [Color] = []
     ) {
-        let theme = Theme.current
+        let theme = Environment.current.theme
         self.text = text
         self.gutterText = gutterText ?? theme.textSecondary
         self.gutterBackground = gutterBackground ?? theme.panel
@@ -71,7 +71,7 @@ public struct EditorView: PrimitiveView {
         self.search = search
     }
 
-    public var resolvedFont: UIFont? { font ?? FontStore.default }
+    public var resolvedFont: UIFont? { font ?? Environment.current.font }
 
     public var dumpDetail: String {
         "\(text.split(separator: "\n").count) lines, \(rules.count) rules"
@@ -99,9 +99,11 @@ public struct EditorView: PrimitiveView {
     }
 
     private func configure(_ leaf: LeafNode) {
+        let theme = Environment.current.theme
+        leaf.theme = theme
         leaf.font = resolvedFont
         leaf.color = style.text
-        leaf.fillColor = Theme.current.inset
+        leaf.fillColor = theme.inset
         leaf.isMultiline = true
         leaf.wraps = false          // code editors scroll horizontally, not wrap
         leaf.highlighter = SyntaxHighlighter(rules: rules)
@@ -175,7 +177,7 @@ extension LeafNode {
     func measuredGutterWidth(font: UIFont) -> Float {
         let digits = max(2, String(max(1, editing.lines.count)).count)
         let sample = String(repeating: "0", count: digits)
-        return font.shapedRun(sample).width + LeafNode.textInset * 3
+        return font.shapedRun(sample).width + textInset * 3
     }
 
     /// Selects the whole visual row under `localY` — the gutter-click gesture.
@@ -183,7 +185,7 @@ extension LeafNode {
         let y = localY + scrollY
         guard let f = font ?? FontStore.default else { return }
         let rows = editing.layout.rows
-        let row = max(0, min(rows.count - 1, Int((y - LeafNode.textInset) / f.lineHeight)))
+        let row = max(0, min(rows.count - 1, Int((y - textInset) / f.lineHeight)))
         let r = rows[row]
         editing.setCursor(editing.index(atOffset: r.lowerBound))
         // Include the newline so a pasted replacement keeps the line structure.

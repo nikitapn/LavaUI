@@ -207,7 +207,7 @@ public struct OverlayStyle {
         padding: Float = 4,
         minWidth: Float = 0
     ) {
-        let theme = Theme.current
+        let theme = Environment.current.theme
         self.background = background ?? theme.panel
         self.border = border ?? theme.border
         self.cornerRadius = cornerRadius ?? theme.cornerRadius

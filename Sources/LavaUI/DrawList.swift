@@ -465,7 +465,7 @@ public final class DrawList {
             // thing a press changes, and it changes without any body
             // recompute behind it.
             let fill = leaf.buttonFill?.current
-                ?? leaf.buttonStyle?.background ?? Theme.current.panel
+                ?? leaf.buttonStyle?.background ?? leaf.theme.panel
             roundedRect(
                 x: x, y: y, w: w, h: h,
                 color: fill, radius: leaf.cornerRadius
@@ -682,16 +682,17 @@ extension DrawList {
         _ leaf: LeafNode, x: Float, y: Float, w: Float, h: Float
     ) {
         guard let font = leaf.font ?? FontStore.default else { return }
-        let inset = LeafNode.textInset
+        let inset = leaf.textInset
         let lineH = font.lineHeight
         let focused = FocusManager.isFocused(leaf.id)
         let state = leaf.editing
+        let theme = leaf.theme
 
         if focused {
-            rect(x: x, y: y, w: w, h: Theme.current.borderWidth, color: .accent)
+            rect(x: x, y: y, w: w, h: theme.borderWidth, color: theme.accent)
             rect(
-                x: x, y: y + h - Theme.current.borderWidth,
-                w: w, h: Theme.current.borderWidth, color: .accent
+                x: x, y: y + h - theme.borderWidth,
+                w: w, h: theme.borderWidth, color: theme.accent
             )
         }
 
@@ -700,14 +701,14 @@ extension DrawList {
                 let top = leaf.isMultiline ? y + inset : y + max(0, (h - lineH) / 2)
                 text(
                     leaf.placeholder, x: x + inset - 4, y: top,
-                    w: w, h: lineH, color: .muted, font: font
+                    w: w, h: lineH, color: theme.textMuted, font: font
                 )
             }
             if focused, CaretBlink.isVisible {
                 let top = leaf.isMultiline ? y + inset : y + max(0, (h - lineH) / 2)
                 rect(
                     x: x + inset, y: top,
-                    w: Theme.current.caretWidth, h: lineH, color: .primary
+                    w: theme.caretWidth, h: lineH, color: theme.textPrimary
                 )
             }
             return
@@ -746,7 +747,7 @@ extension DrawList {
                 rect(
                     x: x + inset + x0, y: lineTop,
                     w: max(spansNewline ? 4 : 1, x1 - x0), h: lineH,
-                    color: Theme.current.selectionFill
+                    color: theme.selectionFill
                 )
             }
 
@@ -763,7 +764,7 @@ extension DrawList {
                 )
                 rect(
                     x: x + inset + run.caretX(for: local), y: lineTop,
-                    w: Theme.current.caretWidth, h: lineH, color: .primary
+                    w: theme.caretWidth, h: lineH, color: theme.textPrimary
                 )
             }
         }
@@ -790,7 +791,7 @@ extension DrawList {
     ) {
         guard let font = leaf.font ?? FontStore.default else { return }
         let style = leaf.codeStyle ?? CodeStyle()
-        let inset = LeafNode.textInset
+        let inset = leaf.textInset
         let lineH = font.lineHeight
         let focused = FocusManager.isFocused(leaf.id)
         let state = leaf.editing
@@ -886,7 +887,7 @@ extension DrawList {
                 rect(
                     x: textX + a, y: rowTop,
                     w: max(spansNewline ? 4 : 1, b - a), h: lineH,
-                    color: Theme.current.selectionFill
+                    color: leaf.theme.selectionFill
                 )
             }
 
@@ -899,7 +900,7 @@ extension DrawList {
                 let column = state.offset(of: state.focus) - range.lowerBound
                 rect(
                     x: textX + columnX(column), y: rowTop,
-                    w: Theme.current.caretWidth, h: lineH, color: .primary
+                    w: leaf.theme.caretWidth, h: lineH, color: leaf.theme.textPrimary
                 )
             }
         }
@@ -972,9 +973,9 @@ extension DrawList {
         let along = travel * min(1, max(0, progress))
 
         let color = Color(
-            r: Theme.current.textSecondary.r,
-            g: Theme.current.textSecondary.g,
-            b: Theme.current.textSecondary.b,
+            r: scroll.theme.textSecondary.r,
+            g: scroll.theme.textSecondary.g,
+            b: scroll.theme.textSecondary.b,
             a: 0.55
         )
         if scroll.axis == .vertical {

@@ -64,6 +64,11 @@ final class ScrollNode: YogaBoxNode {
     private(set) var contentNode: any AnyViewNode
     var showsIndicator = true
 
+    /// Captured from `Environment.current.theme` at mount/reconcile — the
+    /// scroll-indicator paint runs later, as a separate pass with no
+    /// environment scope active, so it reads this instead of `Theme.current`.
+    var theme: Theme = Theme.current
+
     var scrollOffset: Float = 0
     /// Box size from the last emit. Clamping has to use what Yoga granted, not
     /// what was asked for — the same lesson the editor's viewport learned.
@@ -75,6 +80,7 @@ final class ScrollNode: YogaBoxNode {
     init(axis: ScrollAxis, content: any AnyViewNode) {
         self.axis = axis
         self.contentNode = content
+        self.theme = Environment.current.theme
         super.init(label: "ScrollView")
         YGNodeStyleSetFlexDirection(
             yogaStorage, axis == .vertical ? YGFlexDirectionColumn : YGFlexDirectionRow
@@ -98,6 +104,7 @@ final class ScrollNode: YogaBoxNode {
 
     func updateContent(_ node: any AnyViewNode) {
         contentNode = node
+        theme = Environment.current.theme
         relink()
     }
 

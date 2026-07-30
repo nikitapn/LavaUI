@@ -28,7 +28,7 @@ public struct Button: PrimitiveView {
         self.action = action
     }
 
-    public var resolvedFont: UIFont? { font ?? FontStore.default }
+    public var resolvedFont: UIFont? { font ?? Environment.current.font }
 
     public var dumpDetail: String { "\"\(title)\"\(isEnabled ? "" : " disabled")" }
 
@@ -51,6 +51,7 @@ public struct Button: PrimitiveView {
     }
 
     private func configure(_ leaf: LeafNode) {
+        leaf.theme = Environment.current.theme
         leaf.text = title
         leaf.font = resolvedFont
         leaf.color = isEnabled ? style.foreground : style.disabledForeground
@@ -122,7 +123,7 @@ public struct ButtonStyle {
         padding: Float = 8,
         duration: Double = 0.12
     ) {
-        let theme = Theme.current
+        let theme = Environment.current.theme
         self.background = background ?? theme.panel
         self.hover = hover ?? theme.hover
         self.pressed = pressed ?? theme.accent
