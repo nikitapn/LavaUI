@@ -173,8 +173,11 @@ python3 tools/lava_agent_cli.py screenshot_node --sid theme-toggle -o t.png
 ```
 
 Stable targets use `.agentId("kebab-name")` (exported as `sid`); untagged nodes
-get a structural path. Full protocol, commands, and MCP wrapper:
-**[docs/agent.md](docs/agent.md)**.
+get a structural path.
+
+**Wire to Grok Build / Claude Code:** start the demo with `LAVA_AGENT_PORT=9876`,
+then use the project MCP configs (`.grok/config.toml`, `.mcp.json`). Details:
+**[docs/agent.md](docs/agent.md#wire-to-grok-build--claude-code)**.
 
 **Transitions** `.transition(.slide(dy: -12))` animates a view appearing and
 disappearing, wherever a reconciler can insert or remove one — an `if`, an

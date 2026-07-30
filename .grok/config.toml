@@ -1,0 +1,11 @@
+# Project-scoped Grok Build config (HelloWorld).
+# MCP servers here are only loaded when you run Grok from this repo.
+
+[mcp_servers.lava-ui]
+command = "python3"
+args = ["tools/lava_agent_mcp.py"]
+# Point at the running app's agent TCP port (must match LAVA_AGENT_PORT).
+env = { LAVA_AGENT_HOST = "127.0.0.1", LAVA_AGENT_PORT = "9876" }
+enabled = true
+# Screenshots can take a moment (settle + GPU readback).
+tool_timeout_sec = 120

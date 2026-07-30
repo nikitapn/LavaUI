@@ -144,11 +144,12 @@ void Engine::readPixels(uint8_t *dst, size_t dstSize)
   impl_->withApp([&](Application &app) { app.readPixels(dst, dstSize); });
 }
 
-std::string Engine::capturePngBase64(int x, int y, int w, int h)
+std::string Engine::capturePngBase64(int x, int y, int w, int h, int maxSide,
+                                     int *outW, int *outH)
 {
   std::string out;
   impl_->withApp([&](Application &app) {
-    out = app.capturePngBase64(x, y, w, h);
+    out = app.capturePngBase64(x, y, w, h, maxSide, outW, outH);
   });
   return out;
 }

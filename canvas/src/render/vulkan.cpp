@@ -1895,7 +1895,8 @@ void pngWriteFunc(void *context, void *data, int size)
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #include "stb_image_write.h"
 
-bool Vulkan::capturePng(std::vector<uint8_t> &outPng, int x, int y, int w, int h)
+bool Vulkan::capturePng(std::vector<uint8_t> &outPng, int x, int y, int w, int h,
+                        int maxSide, int *outW, int *outH)
 {
   const int fullW = static_cast<int>(extent_.width);
   const int fullH = static_cast<int>(extent_.height);
@@ -1940,11 +1941,62 @@ bool Vulkan::capturePng(std::vector<uint8_t> &outPng, int x, int y, int w, int h
     std::memcpy(dst, src, static_cast<size_t>(w) * 4);
   }
 
+  // Optional box downsample: longer side ≤ maxSide (agent overview budget).
+  int encW = w;
+  int encH = h;
+  const uint8_t *pngPixels = region.data();
+  std::vector<uint8_t> scaled;
+  if (maxSide > 0) {
+    const int longSide = std::max(w, h);
+    if (longSide > maxSide) {
+      encW = std::max(1, (w * maxSide + longSide / 2) / longSide);
+      encH = std::max(1, (h * maxSide + longSide / 2) / longSide);
+      scaled.resize(static_cast<size_t>(encW) * static_cast<size_t>(encH) * 4);
+      // Box filter: average each dest pixel's source footprint.
+      for (int dy = 0; dy < encH; ++dy) {
+        const int y0 = dy * h / encH;
+        const int y1 = std::max(y0 + 1, (dy + 1) * h / encH);
+        for (int dx = 0; dx < encW; ++dx) {
+          const int x0 = dx * w / encW;
+          const int x1 = std::max(x0 + 1, (dx + 1) * w / encW);
+          uint32_t sum[4] = {0, 0, 0, 0};
+          uint32_t count = 0;
+          for (int sy = y0; sy < y1; ++sy) {
+            const uint8_t *row =
+              region.data() + (static_cast<size_t>(sy) * w + x0) * 4;
+            for (int sx = x0; sx < x1; ++sx) {
+              sum[0] += row[0];
+              sum[1] += row[1];
+              sum[2] += row[2];
+              sum[3] += row[3];
+              row += 4;
+              ++count;
+            }
+          }
+          uint8_t *out =
+            scaled.data() + (static_cast<size_t>(dy) * encW + dx) * 4;
+          if (count == 0) {
+            out[0] = out[1] = out[2] = out[3] = 0;
+          } else {
+            out[0] = static_cast<uint8_t>(sum[0] / count);
+            out[1] = static_cast<uint8_t>(sum[1] / count);
+            out[2] = static_cast<uint8_t>(sum[2] / count);
+            out[3] = static_cast<uint8_t>(sum[3] / count);
+          }
+        }
+      }
+      pngPixels = scaled.data();
+    }
+  }
+
   outPng.clear();
   PngWriteCtx ctx{&outPng};
-  const int ok = stbi_write_png_to_func(pngWriteFunc, &ctx, w, h, 4, region.data(),
-                                       w * 4);
-  return ok != 0 && !outPng.empty();
+  const int ok =
+    stbi_write_png_to_func(pngWriteFunc, &ctx, encW, encH, 4, pngPixels, encW * 4);
+  if (ok == 0 || outPng.empty()) return false;
+  if (outW) *outW = encW;
+  if (outH) *outH = encH;
+  return true;
 }
 
 Shaders &Vulkan::getShaders()

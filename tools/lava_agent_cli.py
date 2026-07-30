@@ -80,6 +80,12 @@ def main() -> int:
     sc.add_argument("--y", type=int, default=0)
     sc.add_argument("--w", type=int, default=0)
     sc.add_argument("--h", type=int, default=0)
+    sc.add_argument(
+        "--max-side",
+        type=int,
+        default=0,
+        help="box-downsample so longer side ≤ this (0 = full res)",
+    )
     sc.add_argument("-o", "--output", help="write PNG to path")
     sn = sub.add_parser("screenshot_node")
     sn.add_argument("--sid", help="stable agent id or structural path")
@@ -87,6 +93,12 @@ def main() -> int:
     sn.add_argument("--id", type=int)
     sn.add_argument("--query")
     sn.add_argument("--pad", type=float, default=2.0)
+    sn.add_argument(
+        "--max-side",
+        type=int,
+        default=0,
+        help="box-downsample so longer side ≤ this (0 = full res)",
+    )
     sn.add_argument("-o", "--output", help="write PNG to path")
 
     args = p.parse_args()
@@ -134,6 +146,8 @@ def main() -> int:
         payload["text"] = args.text
     elif args.cmd == "screenshot":
         payload.update(x=args.x, y=args.y, w=args.w, h=args.h)
+        if args.max_side:
+            payload["max_side"] = args.max_side
     elif args.cmd == "screenshot_node":
         if args.sid:
             payload["sid"] = args.sid
@@ -144,6 +158,8 @@ def main() -> int:
         if args.query:
             payload["query"] = args.query
         payload["pad"] = args.pad
+        if args.max_side:
+            payload["max_side"] = args.max_side
 
     resp = request(args.host, args.port, payload)
     if not resp.get("ok"):

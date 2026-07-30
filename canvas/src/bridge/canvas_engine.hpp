@@ -72,7 +72,10 @@ class Engine {
 
   /// Agent/automation: capture resolve as PNG (base64). Empty on failure.
   /// Region in framebuffer pixels; w or h <= 0 → full frame.
-  std::string capturePngBase64(int x, int y, int w, int h);
+  /// maxSide > 0 downsamples so the longer encoded side is ≤ maxSide.
+  /// outW/outH receive the encoded size when non-null.
+  std::string capturePngBase64(int x, int y, int w, int h, int maxSide = 0,
+                               int *outW = nullptr, int *outH = nullptr);
 
   /// Inject synthetic pointer events (same queue as GLFW callbacks).
   void pointerMove(float x, float y);

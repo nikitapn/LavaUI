@@ -1012,13 +1012,15 @@ void Application::captureFrame(uint8_t *dst, size_t dstSize) {
 }
 
 bool Application::capturePng(std::vector<uint8_t> &outPng, int x, int y, int w,
-                             int h) {
-  return impl_->vulkan.capturePng(outPng, x, y, w, h);
+                             int h, int maxSide, int *outW, int *outH) {
+  return impl_->vulkan.capturePng(outPng, x, y, w, h, maxSide, outW, outH);
 }
 
-std::string Application::capturePngBase64(int x, int y, int w, int h) {
+std::string Application::capturePngBase64(int x, int y, int w, int h,
+                                          int maxSide, int *outW, int *outH) {
   std::vector<uint8_t> png;
-  if (!capturePng(png, x, y, w, h) || png.empty()) return {};
+  if (!capturePng(png, x, y, w, h, maxSide, outW, outH) || png.empty())
+    return {};
   // Local base64 (same table as vulkan.cpp helper).
   static constexpr char kTable[] =
     "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";

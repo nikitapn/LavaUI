@@ -102,15 +102,15 @@ def handle_tool(name: str, arguments: dict[str, Any]) -> dict:
             r = agent_call("type_text", {"text": str(arguments["text"])})
         elif name in ("screenshot", "screenshot_node"):
             if name == "screenshot":
-                r = agent_call(
-                    "screenshot",
-                    {
-                        "x": int(arguments.get("x", 0)),
-                        "y": int(arguments.get("y", 0)),
-                        "w": int(arguments.get("w", 0)),
-                        "h": int(arguments.get("h", 0)),
-                    },
-                )
+                p = {
+                    "x": int(arguments.get("x", 0)),
+                    "y": int(arguments.get("y", 0)),
+                    "w": int(arguments.get("w", 0)),
+                    "h": int(arguments.get("h", 0)),
+                }
+                if "max_side" in arguments:
+                    p["max_side"] = int(arguments["max_side"])
+                r = agent_call("screenshot", p)
             else:
                 p = {"pad": float(arguments.get("pad", 2))}
                 for k in ("sid", "label", "query"):
@@ -118,6 +118,8 @@ def handle_tool(name: str, arguments: dict[str, Any]) -> dict:
                         p[k] = str(arguments[k])
                 if "id" in arguments:
                     p["id"] = int(arguments["id"])
+                if "max_side" in arguments:
+                    p["max_side"] = int(arguments["max_side"])
                 r = agent_call("screenshot_node", p)
             if r.get("ok") and isinstance(r.get("result"), dict):
                 b64 = r["result"].get("png_base64")
@@ -226,7 +228,10 @@ TOOLS = [
     },
     {
         "name": "screenshot",
-        "description": "PNG capture; optional region x,y,w,h (0 w/h = full). Prefer small regions.",
+        "description": (
+            "PNG capture; optional region x,y,w,h (0 w/h = full). "
+            "max_side box-downsamples so longer side ≤ that (good for overviews)."
+        ),
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -234,12 +239,20 @@ TOOLS = [
                 "y": {"type": "integer", "default": 0},
                 "w": {"type": "integer", "default": 0},
                 "h": {"type": "integer", "default": 0},
+                "max_side": {
+                    "type": "integer",
+                    "default": 0,
+                    "description": "0 = full res; e.g. 512 for a cheap overview",
+                },
             },
         },
     },
     {
         "name": "screenshot_node",
-        "description": "PNG crop of a node by sid, label, id, or query (+ optional pad).",
+        "description": (
+            "PNG crop of a node by sid, label, id, or query (+ optional pad). "
+            "max_side optionally downsamples the crop."
+        ),
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -248,6 +261,7 @@ TOOLS = [
                 "id": {"type": "integer"},
                 "query": {"type": "string"},
                 "pad": {"type": "number", "default": 2},
+                "max_side": {"type": "integer", "default": 0},
             },
         },
     },
@@ -255,19 +269,28 @@ TOOLS = [
 
 
 def send(msg: dict) -> None:
-    sys.stdout.write(json.dumps(msg) + "\n")
-    sys.stdout.flush()
+    """MCP stdio transport: one JSON object per line (newline-delimited), no headers."""
+    line = json.dumps(msg, separators=(",", ":")) + "\n"
+    sys.stdout.buffer.write(line.encode("utf-8"))
+    sys.stdout.buffer.flush()
+
+
+def read_message() -> dict | None:
+    """Read one newline-delimited JSON-RPC message from stdin. None on EOF."""
+    line = sys.stdin.buffer.readline()
+    if not line:
+        return None
+    return json.loads(line.decode("utf-8"))
 
 
 def main() -> None:
-    for raw in sys.stdin:
-        raw = raw.strip()
-        if not raw:
-            continue
+    while True:
         try:
-            msg = json.loads(raw)
+            msg = read_message()
         except json.JSONDecodeError:
             continue
+        if msg is None:
+            break
 
         mid = msg.get("id")
         method = msg.get("method")
@@ -281,7 +304,7 @@ def main() -> None:
                     "result": {
                         "protocolVersion": "2024-11-05",
                         "capabilities": {"tools": {}},
-                        "serverInfo": {"name": "lava-ui-agent", "version": "0.2.0"},
+                        "serverInfo": {"name": "lava-ui-agent", "version": "0.3.0"},
                     },
                 }
             )
@@ -302,7 +325,10 @@ def main() -> None:
                     {
                         "jsonrpc": "2.0",
                         "id": mid,
-                        "error": {"code": -32601, "message": f"Method not found: {method}"},
+                        "error": {
+                            "code": -32601,
+                            "message": f"Method not found: {method}",
+                        },
                     }
                 )
 

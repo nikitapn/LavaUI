@@ -59,8 +59,8 @@ pixels.
 | `click` | Click at `x`,`y` **or** center of `sid`/`label`/`id`/`query` |
 | `key` | GLFW key (`key`, `action` 0/1/2, `mods`); press+release by default |
 | `type_text` | UTF-8 string → character events (focused field path) |
-| `screenshot` | PNG base64; optional region `x,y,w,h` (`w`/`h` ≤ 0 = full) |
-| `screenshot_node` | Crop around a node (`sid` / … + optional `pad`) |
+| `screenshot` | PNG base64; optional region `x,y,w,h` (`w`/`h` ≤ 0 = full); optional `max_side` |
+| `screenshot_node` | Crop around a node (`sid` / … + optional `pad`, `max_side`) |
 
 `click`, `key`, `type_text`, and screenshot commands call **settle** so the
 response reflects the post-action frame.
@@ -92,24 +92,150 @@ Demo tags: `theme-toggle`, `sidebar-toggle`, `inspector-toggle`.
 ## Screenshots
 
 - Prefer **region** or **`screenshot_node`** over full-frame (cheaper for VLM/token budgets).
+- **`max_side`** (optional, pixels): if the longer side of the crop exceeds this,
+  the image is **box-downsampled** so `max(w,h) ≤ max_side`. Use e.g. `512` for a
+  cheap full-window overview; omit or `0` for 1:1 pixels. Response includes
+  `src_w`/`src_h` (pre-scale) and `w`/`h` (encoded size).
 - After each present, the host capture cache is invalidated. Within one settled
-  frame, multiple crops share a **single GPU readback**.
+  frame, multiple crops share a **single GPU readback** (downsample is CPU-only
+  on that cache).
 - Windowed mode uses a one-shot resolve → staging copy (not the present path).
+
+```bash
+# Full window, long side 512px
+python3 tools/lava_agent_cli.py screenshot --max-side 512 -o overview.png
+
+# Node crop at full res
+python3 tools/lava_agent_cli.py screenshot_node --sid theme-toggle -o t.png
+```
 
 ## Tools
 
 ```bash
-# CLI
+# CLI (talks TCP → app directly)
 python3 tools/lava_agent_cli.py ping
 python3 tools/lava_agent_cli.py layout_tree --max-depth 4
 python3 tools/lava_agent_cli.py find --query Theme
 python3 tools/lava_agent_cli.py screenshot --w 200 --h 100 -o crop.png
 python3 tools/lava_agent_cli.py click --sid theme-toggle
-
-# MCP (stdio JSON-RPC → same TCP port)
-python3 tools/lava_agent_mcp.py
-# env: LAVA_AGENT_HOST, LAVA_AGENT_PORT
 ```
+
+## Wire to Grok Build / Claude Code
+
+Architecture (two processes):
+
+```
+Grok Build or Claude Code
+    │  MCP stdio (Content-Length JSON-RPC)
+    ▼
+python3 tools/lava_agent_mcp.py     ← spawned by the IDE/agent
+    │  TCP localhost:9876
+    ▼
+HelloWorld  (LAVA_AGENT_PORT=9876)  ← you start this yourself
+```
+
+The app must be **running with the agent port** before MCP tools work. The MCP
+process only forwards; it does not start the UI.
+
+### 1. Start the demo with the agent port
+
+```bash
+export CANVAS_ASSETS_ROOT=$PWD/canvas/.build.Debug
+export LD_LIBRARY_PATH=$PWD/canvas/.build.Debug
+export LAVA_AGENT_PORT=9876
+swift run HelloWorld
+# stderr: AgentServer: listening on 127.0.0.1:9876
+```
+
+Sanity-check without an IDE:
+
+```bash
+python3 tools/lava_agent_cli.py ping
+```
+
+### 2. Grok Build
+
+This repo already ships a project config:
+
+```toml
+# .grok/config.toml
+[mcp_servers.lava-ui]
+command = "python3"
+args = ["tools/lava_agent_mcp.py"]
+env = { LAVA_AGENT_HOST = "127.0.0.1", LAVA_AGENT_PORT = "9876" }
+enabled = true
+tool_timeout_sec = 120
+```
+
+From the **repo root**:
+
+```bash
+grok mcp list          # should show lava-ui (project)
+grok mcp doctor lava-ui
+# or open /mcps in the TUI and press r to refresh
+```
+
+Optional one-liner (user scope instead of project):
+
+```bash
+grok mcp add lava-ui \
+  -e LAVA_AGENT_HOST=127.0.0.1 \
+  -e LAVA_AGENT_PORT=9876 \
+  -- python3 /absolute/path/to/HelloWorld/tools/lava_agent_mcp.py
+```
+
+Tools appear as `lava-ui__click`, `lava-ui__screenshot`, etc. Grok discovers
+them via `search_tool` / `use_tool`.
+
+### 3. Claude Code
+
+Project file (also in repo):
+
+```json
+// .mcp.json
+{
+  "mcpServers": {
+    "lava-ui": {
+      "command": "python3",
+      "args": ["tools/lava_agent_mcp.py"],
+      "env": {
+        "LAVA_AGENT_HOST": "127.0.0.1",
+        "LAVA_AGENT_PORT": "9876"
+      }
+    }
+  }
+}
+```
+
+Or install for the user globally:
+
+```bash
+claude mcp add lava-ui -- \
+  env LAVA_AGENT_HOST=127.0.0.1 LAVA_AGENT_PORT=9876 \
+  python3 /absolute/path/to/HelloWorld/tools/lava_agent_mcp.py
+```
+
+(Exact `claude mcp` flags vary by version — `claude mcp add --help` if needed.)
+
+Then restart Claude Code / open this project so it reloads MCP. Use `/mcp` to
+confirm `lava-ui` is connected.
+
+### 4. Typical agent prompt
+
+> Start by calling `fb_size` and `layout_tree`. Prefer `find` / `click --sid`
+> over coordinates. Use `screenshot` with `max_side: 512` for overviews and
+> `screenshot_node` with a `sid` for small crops.
+
+### Troubleshooting
+
+| Symptom | Fix |
+|---------|-----|
+| MCP tools error / connection refused | App not running, or wrong `LAVA_AGENT_PORT` |
+| Server starts but tools hang | Wait for `AgentServer: listening` on stderr; check firewall (should be localhost only) |
+| Grok/Claude never lists tools | Run from repo root so `args` path resolves; `grok mcp doctor lava-ui` / Claude `/mcp` |
+| Old framing errors | Use current `tools/lava_agent_mcp.py` (Content-Length stdio, not bare NDJSON) |
+
+Env for the MCP process (not the app): `LAVA_AGENT_HOST`, `LAVA_AGENT_PORT`.
 
 ## Implementation map
 

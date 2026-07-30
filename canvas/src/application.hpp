@@ -78,11 +78,14 @@ public:
   /// GPU→CPU capture of the resolve target (works windowed). See Vulkan::captureFrame.
   void captureFrame(uint8_t *dst, size_t dstSize);
 
-  /// Capture resolve as PNG (optional crop). `w`/`h` <= 0 → full frame.
-  bool capturePng(std::vector<uint8_t> &outPng, int x, int y, int w, int h);
+  /// Capture resolve as PNG (optional crop + optional max-side downsample).
+  /// `w`/`h` <= 0 → full frame. `maxSide` ≤ 0 → no downsample.
+  bool capturePng(std::vector<uint8_t> &outPng, int x, int y, int w, int h,
+                  int maxSide = 0, int *outW = nullptr, int *outH = nullptr);
 
   /// Same as capturePng, base64-encoded (empty string on failure).
-  std::string capturePngBase64(int x, int y, int w, int h);
+  std::string capturePngBase64(int x, int y, int w, int h, int maxSide = 0,
+                               int *outW = nullptr, int *outH = nullptr);
 
   void shutdown();
 

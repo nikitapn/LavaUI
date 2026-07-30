@@ -295,8 +295,8 @@ struct HelloWorldApp {
                     editor.injectKey(key: key, action: action, mods: mods)
                 },
                 injectText: { text in editor.injectText(text) },
-                screenshotBase64: { x, y, w, h in
-                    editor.capturePngBase64(x: x, y: y, w: w, h: h)
+                screenshotBase64: { x, y, w, h, maxSide in
+                    editor.capturePngBase64(x: x, y: y, w: w, h: h, maxSide: maxSide)
                 }
             )
             // Unblock pumpEvents the moment the agent socket is readable

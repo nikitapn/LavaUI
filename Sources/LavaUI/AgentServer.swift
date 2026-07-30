@@ -33,7 +33,10 @@ public struct AgentHost {
     public var injectKey: (_ key: Int32, _ action: Int32, _ mods: Int32) -> Void
     public var injectText: (_ text: String) -> Void
     /// Capture pixels only (caller settles when needed).
-    public var screenshotBase64: (_ x: Int32, _ y: Int32, _ w: Int32, _ h: Int32) -> String?
+    /// Returns base64 PNG plus encoded size (after optional downsample).
+    public var screenshotBase64: (
+        _ x: Int32, _ y: Int32, _ w: Int32, _ h: Int32, _ maxSide: Int32
+    ) -> (b64: String, w: Int32, h: Int32)?
 
     public init(
         framebufferSize: @escaping () -> (w: Float, h: Float),
@@ -48,7 +51,9 @@ public struct AgentHost {
         injectClick: @escaping (_ x: Float, _ y: Float, _ button: Int32) -> Void,
         injectKey: @escaping (_ key: Int32, _ action: Int32, _ mods: Int32) -> Void,
         injectText: @escaping (_ text: String) -> Void,
-        screenshotBase64: @escaping (_ x: Int32, _ y: Int32, _ w: Int32, _ h: Int32) -> String?
+        screenshotBase64: @escaping (
+            _ x: Int32, _ y: Int32, _ w: Int32, _ h: Int32, _ maxSide: Int32
+        ) -> (b64: String, w: Int32, h: Int32)?
     ) {
         self.framebufferSize = framebufferSize
         self.settle = settle
@@ -423,16 +428,22 @@ public final class AgentServer: @unchecked Sendable {
             let y = Int32(intParam(params, "y", default: 0))
             let w = Int32(intParam(params, "w", default: 0))
             let h = Int32(intParam(params, "h", default: 0))
-            guard let b64 = host.screenshotBase64(x, y, w, h) else {
+            let maxSide = Int32(intParam(params, "max_side", default: 0))
+            guard let cap = host.screenshotBase64(x, y, w, h, maxSide) else {
                 throw AgentError.failed("capture_failed")
             }
             let fb = host.framebufferSize()
-            return [
+            let srcW = w <= 0 ? Int(fb.w) : Int(w)
+            let srcH = h <= 0 ? Int(fb.h) : Int(h)
+            var result: [String: Any] = [
                 "x": x, "y": y,
-                "w": w <= 0 ? Int(fb.w) : Int(w),
-                "h": h <= 0 ? Int(fb.h) : Int(h),
-                "png_base64": b64,
+                "src_w": srcW, "src_h": srcH,
+                "w": Int(cap.w > 0 ? cap.w : Int32(srcW)),
+                "h": Int(cap.h > 0 ? cap.h : Int32(srcH)),
+                "png_base64": cap.b64,
             ]
+            if maxSide > 0 { result["max_side"] = maxSide }
+            return result
 
         case "screenshot_node":
             // Settle first so layout matches what we paint.
@@ -441,20 +452,26 @@ public final class AgentServer: @unchecked Sendable {
                 throw AgentError.badParams("sid, label, id, or query required")
             }
             let pad = floatParam(params, "pad")
+            let maxSide = Int32(intParam(params, "max_side", default: 0))
             let x = Int32(floor(f.x - pad))
             let y = Int32(floor(f.y - pad))
             let w = Int32(ceil(f.w + pad * 2))
             let h = Int32(ceil(f.h + pad * 2))
-            guard let b64 = host.screenshotBase64(x, y, w, h) else {
+            guard let cap = host.screenshotBase64(x, y, w, h, maxSide) else {
                 throw AgentError.failed("capture_failed")
             }
-            return [
+            var result: [String: Any] = [
                 "sid": f.sid,
                 "label": f.label,
-                "x": x, "y": y, "w": w, "h": h,
+                "x": x, "y": y,
+                "src_w": Int(w), "src_h": Int(h),
+                "w": Int(cap.w > 0 ? cap.w : w),
+                "h": Int(cap.h > 0 ? cap.h : h),
                 "frame": ["x": f.x, "y": f.y, "w": f.w, "h": f.h],
-                "png_base64": b64,
+                "png_base64": cap.b64,
             ]
+            if maxSide > 0 { result["max_side"] = maxSide }
+            return result
 
         default:
             throw AgentError.unknownCmd(cmd)

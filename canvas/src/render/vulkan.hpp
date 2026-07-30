@@ -309,9 +309,13 @@ class Vulkan
 
   /// Encode a (sub)region of the current resolve as PNG bytes.
   /// `x,y,w,h` in framebuffer pixels; `w` or `h` <= 0 means full frame.
+  /// If `maxSide` > 0 and the longer side exceeds it, box-downsamples so
+  /// max(outW, outH) <= maxSide (agent overview / token budget).
   /// Reuses the capture cache when still valid (cheap multi-crop).
+  /// On success, `outW`/`outH` are the encoded pixel size (after downsample).
   /// Returns false on empty/invalid region or encode failure.
-  bool capturePng(std::vector<uint8_t> &outPng, int x, int y, int w, int h);
+  bool capturePng(std::vector<uint8_t> &outPng, int x, int y, int w, int h,
+                  int maxSide = 0, int *outW = nullptr, int *outH = nullptr);
 
   VkShaderModule createShaderModule(const std::vector<char> &code);
 

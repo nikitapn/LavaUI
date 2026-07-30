@@ -154,9 +154,20 @@ public final class Editor: @unchecked Sendable {
 
     /// Capture the resolve target as PNG (base64). Region in framebuffer
     /// pixels; omit or pass w/h ≤ 0 for the full frame.
-    public func capturePngBase64(x: Int32 = 0, y: Int32 = 0, w: Int32 = 0, h: Int32 = 0) -> String? {
-        let s = String(engine.capturePngBase64(x, y, w, h))
-        return s.isEmpty ? nil : s
+    /// `maxSide` > 0 box-downsamples so the longer encoded side ≤ maxSide.
+    /// Returns `(base64, encodedWidth, encodedHeight)` or nil on failure.
+    public func capturePngBase64(
+        x: Int32 = 0, y: Int32 = 0, w: Int32 = 0, h: Int32 = 0,
+        maxSide: Int32 = 0
+    ) -> (b64: String, w: Int32, h: Int32)? {
+        var outW: Int32 = 0
+        var outH: Int32 = 0
+        let s = String(engine.capturePngBase64(x, y, w, h, maxSide, &outW, &outH))
+        guard !s.isEmpty else { return nil }
+        // If out params were not filled (old path), fall back to request size.
+        if outW < 1 { outW = w > 0 ? w : 0 }
+        if outH < 1 { outH = h > 0 ? h : 0 }
+        return (s, outW, outH)
     }
 }
 #endif
