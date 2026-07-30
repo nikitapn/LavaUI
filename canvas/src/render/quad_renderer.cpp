@@ -19,7 +19,8 @@ constexpr size_t kInitialVertexCapacity = 4096;  // 1024 quads
 void QuadRenderer::init() {
   createWhiteTexture();
   setupDescriptors();
-  createPipeline();
+  createPipelineLayout();
+  createPipeline(vulkan_.getRenderPass(), vulkan_.getMSAASamples(), pipeline_);
   ensureBufferCapacity(kInitialVertexCapacity);
 }
 
@@ -72,6 +73,7 @@ void QuadRenderer::cleanUp() {
   }
 
   pipeline_.destroy(device);
+  pipelineScene_.destroy(device);
   pipelineLayout_.destroy(device);
   descriptorPool_.destroy(device);
   descriptorSetLayout_.destroy(device);
@@ -182,7 +184,16 @@ void QuadRenderer::setAtlas(VkImageView view, VkSampler sampler) {
   currentBatchTexture_ = glyphAtlasView_;
 }
 
-void QuadRenderer::createPipeline() {
+void QuadRenderer::createSceneTargetPipeline(VkRenderPass sceneRenderPass) {
+  if (sceneRenderPass == VK_NULL_HANDLE) return;
+  // Single sample: the result is about to be blurred, so MSAA would only buy a
+  // resolve attachment and the coverage it recovers is gone a pass later.
+  createPipeline(sceneRenderPass, VK_SAMPLE_COUNT_1_BIT, pipelineScene_);
+}
+
+void QuadRenderer::createPipeline(VkRenderPass renderPass,
+                                  VkSampleCountFlagBits samples,
+                                  vk::Handle<VkPipeline> &out) {
   VkDevice device = vulkan_.getDevice();
   Shaders &shaders = vulkan_.getShaders();
 
@@ -258,12 +269,16 @@ void QuadRenderer::createPipeline() {
 
   VkPipelineMultisampleStateCreateInfo multisampling{
     .sType                = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO,
-    .rasterizationSamples = vulkan_.getMSAASamples(),
+    .rasterizationSamples = samples,
   };
 
+  // Premultiplied source (see quad.frag): ONE rather than SRC_ALPHA. Over an
+  // opaque target this is the same image as straight alpha; over the
+  // transparent target that content blur renders into, it is the only form the
+  // Gaussian can then average without dragging transparent black into edges.
   VkPipelineColorBlendAttachmentState blendAttachment{
     .blendEnable         = VK_TRUE,
-    .srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA,
+    .srcColorBlendFactor = VK_BLEND_FACTOR_ONE,
     .dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA,
     .colorBlendOp        = VK_BLEND_OP_ADD,
     .srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE,
@@ -287,6 +302,27 @@ void QuadRenderer::createPipeline() {
     .pDynamicStates    = dynamicStates.data(),
   };
 
+  VkGraphicsPipelineCreateInfo pipelineInfo{
+    .sType               = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
+    .stageCount          = static_cast<uint32_t>(stages.size()),
+    .pStages             = stages.data(),
+    .pVertexInputState   = &vertexInput,
+    .pInputAssemblyState = &inputAssembly,
+    .pViewportState      = &viewportState,
+    .pRasterizationState = &rasterizer,
+    .pMultisampleState   = &multisampling,
+    .pColorBlendState    = &colorBlending,
+    .pDynamicState       = &dynamicState,
+    .layout              = pipelineLayout_,
+    .renderPass          = renderPass,
+    .subpass             = 0,
+  };
+  VR(vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr,
+                               &out),
+     "Failed to create quad pipeline");
+}
+
+void QuadRenderer::createPipelineLayout() {
   // Must match quad.vert Push { vec2 viewport; vec2 pan; float zoom; float pad; }
   struct ViewPush {
     float viewport[2];
@@ -302,7 +338,7 @@ void QuadRenderer::createPipeline() {
     .size       = sizeof(ViewPush),
   };
 
-  VkDescriptorSetLayout    setLayout = descriptorSetLayout_;
+  VkDescriptorSetLayout      setLayout = descriptorSetLayout_;
   VkPipelineLayoutCreateInfo layoutInfo{
     .sType                  = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
     .setLayoutCount         = 1,
@@ -310,27 +346,9 @@ void QuadRenderer::createPipeline() {
     .pushConstantRangeCount = 1,
     .pPushConstantRanges    = &pushRange,
   };
-  VR(vkCreatePipelineLayout(device, &layoutInfo, nullptr, &pipelineLayout_),
+  VR(vkCreatePipelineLayout(vulkan_.getDevice(), &layoutInfo, nullptr,
+                            &pipelineLayout_),
      "Failed to create quad pipeline layout");
-
-  VkGraphicsPipelineCreateInfo pipelineInfo{
-    .sType               = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
-    .stageCount          = static_cast<uint32_t>(stages.size()),
-    .pStages             = stages.data(),
-    .pVertexInputState   = &vertexInput,
-    .pInputAssemblyState = &inputAssembly,
-    .pViewportState      = &viewportState,
-    .pRasterizationState = &rasterizer,
-    .pMultisampleState   = &multisampling,
-    .pColorBlendState    = &colorBlending,
-    .pDynamicState       = &dynamicState,
-    .layout              = pipelineLayout_,
-    .renderPass          = vulkan_.getRenderPass(),
-    .subpass             = 0,
-  };
-  VR(vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr,
-                               &pipeline_),
-     "Failed to create quad pipeline");
 }
 
 void QuadRenderer::ensureBufferCapacity(size_t vertexCount) {
@@ -390,8 +408,8 @@ void QuadRenderer::begin(vec2 viewportSize, uint32_t frameSlot) {
   segmentEnds_.clear();
   scissorStack_.clear();
   batchStartIndex_ = 0;
-  backdropBlurView_ = VK_NULL_HANDLE;
-  backdropBlurSampler_ = VK_NULL_HANDLE;
+  blurResultView_ = VK_NULL_HANDLE;
+  blurResultSampler_ = VK_NULL_HANDLE;
   currentScissor_  = VkRect2D{
     {0, 0},
     {static_cast<uint32_t>(viewportSize.x), static_cast<uint32_t>(viewportSize.y)},
@@ -548,7 +566,7 @@ void QuadRenderer::flushBatch() {
       .indexCount          = end - batchStartIndex_,
       .scissor             = currentScissor_,
       .textureView         = currentBatchTexture_,
-      .sampleBackdropBlur  = false,
+      .sampleBlurResult  = false,
     });
   }
   batchStartIndex_ = end;
@@ -559,16 +577,16 @@ void QuadRenderer::closeSegment() {
   segmentEnds_.push_back(static_cast<uint32_t>(batches_.size()));
 }
 
-void QuadRenderer::pushBackdropBlurImage(vec2 topLeft, vec2 size, vec2 uv0,
+void QuadRenderer::pushBlurResultImage(vec2 topLeft, vec2 size, vec2 uv0,
                                          vec2 uv1, uint32_t rgba)
 {
   if (size.x <= 0.0f || size.y <= 0.0f) {
     return;
   }
-  // Force a dedicated batch so we can flip sampleBackdropBlur without mixing
+  // Force a dedicated batch so we can flip sampleBlurResult without mixing
   // atlas/SDF geometry into the same descriptor bind.
   flushBatch();
-  currentBatchTexture_ = whiteImageView_;  // unused when sampleBackdropBlur
+  currentBatchTexture_ = whiteImageView_;  // unused when sampleBlurResult
   const vec2 corners[4] = {
     {topLeft.x, topLeft.y},
     {topLeft.x + size.x, topLeft.y},
@@ -581,7 +599,7 @@ void QuadRenderer::pushBackdropBlurImage(vec2 topLeft, vec2 size, vec2 uv0,
   appendQuad(corners, locals, {0.0f, 0.0f}, 0.0f, rgba, Kind::Image);
   flushBatch();
   if (!batches_.empty()) {
-    batches_.back().sampleBackdropBlur = true;
+    batches_.back().sampleBlurResult = true;
     batches_.back().textureView = VK_NULL_HANDLE;
   }
   currentBatchTexture_ =
@@ -651,21 +669,22 @@ void QuadRenderer::setViewTransform(float zoom, float panX, float panY)
 }
 
 void QuadRenderer::draw(VkCommandBuffer commandBuffer) {
-  drawBatchRange(commandBuffer, 0, static_cast<uint32_t>(batches_.size()));
+  drawBatchRange(commandBuffer, 0, static_cast<uint32_t>(batches_.size()), false);
 }
 
 void QuadRenderer::drawSegment(VkCommandBuffer commandBuffer,
-                               uint32_t segmentIndex) {
+                               uint32_t segmentIndex, bool intoSceneTarget) {
   if (segmentIndex >= segmentEnds_.size()) return;
   const uint32_t end = segmentEnds_[segmentIndex];
   const uint32_t start =
     segmentIndex == 0 ? 0u : segmentEnds_[segmentIndex - 1];
   if (end <= start) return;
-  drawBatchRange(commandBuffer, start, end - start);
+  drawBatchRange(commandBuffer, start, end - start, intoSceneTarget);
 }
 
 void QuadRenderer::drawBatchRange(VkCommandBuffer commandBuffer,
-                                  uint32_t firstBatch, uint32_t batchCount) {
+                                  uint32_t firstBatch, uint32_t batchCount,
+                                  bool intoSceneTarget) {
   if (batchCount == 0 || vertices_.empty() || firstBatch >= batches_.size()) {
     return;
   }
@@ -674,7 +693,9 @@ void QuadRenderer::drawBatchRange(VkCommandBuffer commandBuffer,
 
   auto &fr = activeFrame();
 
-  vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_);
+  VkPipeline bound = intoSceneTarget ? pipelineScene_ : pipeline_;
+  if (bound == VK_NULL_HANDLE) return;
+  vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, bound);
 
   struct ViewPush {
     float viewport[2];
@@ -783,9 +804,9 @@ void QuadRenderer::drawBatchRange(VkCommandBuffer commandBuffer,
                     ? batch.scissor
                     : mapScissor(batch.scissor);
     if (sc.extent.width == 0 || sc.extent.height == 0) continue;
-    if (batch.sampleBackdropBlur) {
-      if (backdropBlurView_ == VK_NULL_HANDLE) continue;
-      bindTexture(backdropBlurView_, backdropBlurSampler_);
+    if (batch.sampleBlurResult) {
+      if (blurResultView_ == VK_NULL_HANDLE) continue;
+      bindTexture(blurResultView_, blurResultSampler_);
     } else {
       bindTexture(batch.textureView, VK_NULL_HANDLE);
     }

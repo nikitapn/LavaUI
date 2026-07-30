@@ -85,16 +85,18 @@ class QuadRenderer {
   void pushScissor(vec2 topLeft, vec2 size);
   void popScissor();
 
-  /// Marks the end of a draw segment for backdrop-blur multipass. Call when the
-  /// draw list hits BeginBackdropBlur so later `drawSegment` can stop before
-  /// the next pass. Vertices stay in one buffer; scissor state is preserved.
+  /// Marks the end of a draw segment for the blur multipass. Call wherever the
+  /// draw list needs the GPU to interrupt the main pass, so a later
+  /// `drawSegment` can stop before it. Vertices stay in one buffer; scissor
+  /// state is preserved.
   void closeSegment();
 
-  /// Full-color quad that samples the backdrop blur result (bound at draw time
-  /// via `setBackdropBlurView`). `uv0`/`uv1` select the region of the full-frame
-  /// blur texture (usually rect/viewport). Used after captureAndBlur.
-  void pushBackdropBlurImage(vec2 topLeft, vec2 size, vec2 uv0, vec2 uv1,
-                             uint32_t rgba = 0xffffffffu);
+  /// Full-color quad that samples the blur result (bound at draw time via
+  /// `setBlurResultView`). `uv0`/`uv1` select the region of the full-frame blur
+  /// texture. Serves both blur kinds: the backdrop composite is opaque because
+  /// its source was, the content composite carries the subtree's own alpha.
+  void pushBlurResultImage(vec2 topLeft, vec2 size, vec2 uv0, vec2 uv1,
+                           uint32_t rgba = 0xffffffffu);
 
   void end();
 
@@ -102,12 +104,12 @@ class QuadRenderer {
   /// Zoom is about the viewport center; pan is in layout pixels.
   void setViewTransform(float zoom, float panX, float panY);
 
-  /// Bind the BlurPass result for batches created with pushBackdropBlurImage.
+  /// Bind the BlurPass result for batches created with pushBlurResultImage.
   /// Optional sampler (e.g. clamp-to-edge from BlurPass); null → default.
-  void setBackdropBlurView(VkImageView view, VkSampler sampler = VK_NULL_HANDLE)
+  void setBlurResultView(VkImageView view, VkSampler sampler = VK_NULL_HANDLE)
   {
-    backdropBlurView_ = view;
-    backdropBlurSampler_ = sampler;
+    blurResultView_ = view;
+    blurResultSampler_ = sampler;
   }
 
   /// Records every batch, in order, into `commandBuffer`.
@@ -116,9 +118,15 @@ class QuadRenderer {
   /// Number of segments closed via closeSegment() (+ final open tail after end).
   uint32_t segmentCount() const { return static_cast<uint32_t>(segmentEnds_.size()); }
 
+  /// Build the pipeline variant targeting the content-blur scene pass. Separate
+  /// from init() because BlurPass owns that render pass and is set up later.
+  void createSceneTargetPipeline(VkRenderPass sceneRenderPass);
+
   /// Draw batches belonging to segment `segmentIndex` (0-based).
   /// Descriptor write cursor continues across calls within one begin/end frame.
-  void drawSegment(VkCommandBuffer commandBuffer, uint32_t segmentIndex);
+  /// `intoSceneTarget` picks the pipeline built for the content-blur pass.
+  void drawSegment(VkCommandBuffer commandBuffer, uint32_t segmentIndex,
+                   bool intoSceneTarget = false);
 
   size_t quadCount() const { return vertices_.size() / 4; }
   size_t batchCount() const { return batches_.size(); }
@@ -130,7 +138,7 @@ class QuadRenderer {
     uint32_t indexCount = 0;
     VkRect2D scissor{};
     VkImageView textureView = VK_NULL_HANDLE;  // null → use glyphAtlasView_
-    bool sampleBackdropBlur = false;           // bind backdropBlurView_ at draw
+    bool sampleBlurResult = false;             // bind blurResultView_ at draw
   };
 
   /// Per-frame-slot GPU resources (not shared across in-flight frames).
@@ -146,7 +154,9 @@ class QuadRenderer {
     uint32_t descriptorWriteIndex = 0;
   };
 
-  void createPipeline();
+  void createPipelineLayout();
+  void createPipeline(VkRenderPass renderPass, VkSampleCountFlagBits samples,
+                      vk::Handle<VkPipeline> &out);
   void setupDescriptors();
   void createWhiteTexture();
   void ensureBufferCapacity(size_t vertexCount);
@@ -165,6 +175,11 @@ class QuadRenderer {
   Vulkan &vulkan_;
 
   vk::Handle<VkPipeline>            pipeline_;
+  /// Same shaders and layout against the content-blur scene pass: one colour
+  /// attachment, no depth, single sample. A pipeline is tied to a
+  /// render-pass-compatible pass, so drawing the same geometry into a different
+  /// target needs its own object rather than a state change.
+  vk::Handle<VkPipeline>            pipelineScene_;
   vk::Handle<VkPipelineLayout>      pipelineLayout_;
   vk::Handle<VkDescriptorPool>      descriptorPool_;
   vk::Handle<VkDescriptorSetLayout> descriptorSetLayout_;
@@ -195,8 +210,8 @@ class QuadRenderer {
   VkRect2D              currentScissor_{};
   uint32_t              batchStartIndex_ = 0;
 
-  VkImageView backdropBlurView_ = VK_NULL_HANDLE;
-  VkSampler   backdropBlurSampler_ = VK_NULL_HANDLE;
+  VkImageView blurResultView_ = VK_NULL_HANDLE;
+  VkSampler   blurResultSampler_ = VK_NULL_HANDLE;
 
   vec2 viewportSize_{800.0f, 600.0f};
   float viewZoom_ = 1.0f;
@@ -204,5 +219,5 @@ class QuadRenderer {
   float viewPanY_ = 0.0f;
 
   void drawBatchRange(VkCommandBuffer commandBuffer, uint32_t firstBatch,
-                      uint32_t batchCount);
+                      uint32_t batchCount, bool intoSceneTarget);
 };

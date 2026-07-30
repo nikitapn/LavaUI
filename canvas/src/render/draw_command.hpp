@@ -25,6 +25,12 @@ enum class DrawCommandKind : uint32_t {
   BeginBackdropBlur = 8,
   /// Closes a blur scope (bookkeeping / future nesting). No GPU work yet.
   EndBackdropBlur = 9,
+  /// Content blur. Everything between Begin and End is drawn into an offscreen
+  /// target instead of the frame, blurred, and composited back over the rect in
+  /// x,y,w,h with its own alpha. `aux` = radius in pixels. Where backdrop blur
+  /// frosts what is *behind* a view, this softens the view itself.
+  BeginContentBlur = 10,
+  EndContentBlur = 11,
 };
 
 /// One shaped glyph, positioned in absolute window pixels by Swift. Ships in

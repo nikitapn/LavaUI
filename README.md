@@ -111,8 +111,9 @@ undo) · `EditorView` (line-number gutter, syntax rules, current-line highlight,
 find, vertical and horizontal scrolling)
 
 **Modifiers** `.padding()` `.background()` `.cornerRadius()` `.frame()`
-`.flexGrow()` `.blur()` — chains collapse onto the content's own node, so styling costs
-no extra layout boxes unless the content is a fragment.
+`.flexGrow()` `.blur()` `.backdropBlur()` — chains collapse onto the content's
+own node, so styling costs no extra layout boxes unless the content is a
+fragment.
 
 **Overlays** `.overlay(isPresented:) { … }` anchors content above everything —
 menus, dropdowns, tooltips. Collected during the tree walk and emitted after
@@ -122,17 +123,34 @@ inside never falls through, and a click outside dismisses instead of
 activating what it landed on. Placement flips to the other side of the anchor
 when there is no room.
 
-**Backdrop blur** `.blur(radius:)` frosts whatever is already painted behind a
-view. The draw list emits a barrier rather than a shape: the engine ends the
-main pass there, downsamples the resolved frame, runs one separable Gaussian
-over it, then reopens the pass with `LOAD` and composites the result under the
-view's own fill. Width comes from the *downscale*, never from wider tap spacing
-— the kernel is nine fixed taps, so stretching them over forty pixels does not
-blur, it stamps nine offset copies of the UI. The downscale therefore tracks the
-radius, holding it at about two texels: too little and the taps have to reach
-too far, too much and the bilinear upsample shows its own grid. On an overlay
-the scope is hoisted above the panel's chrome, so the glass frosts the window
-and not its own outline.
+**Blur** comes in two kinds, because "blur this view" and "frost what is behind
+this view" are opposite operations that happen to share a Gaussian.
+`.blur(radius:)` softens the view and its children, the way SwiftUI's does;
+`.backdropBlur(radius:)` leaves the view sharp and frosts the window under it,
+which is what glass is made of.
+
+Both emit a barrier into the draw list rather than a shape, and the engine
+interrupts the frame there. Backdrop blur ends the main pass, reads the resolved
+frame, and composites the result *under* the view's own fill. Content blur
+instead draws the subtree — only the subtree — into an offscreen target cleared
+to transparent, blurs that, and composites it back with its own alpha, so a
+blurred view has a genuinely soft edge and whatever sits behind it shows through
+untouched. That path is why the whole pipeline emits premultiplied alpha: a
+Gaussian over straight alpha averages the colour of fully transparent texels
+into every edge, which reads as a dark halo around everything blurred.
+
+Width comes from the *downscale*, never from wider tap spacing — the kernel is
+nine fixed taps, so stretching them over forty pixels does not blur, it stamps
+nine offset copies. The downscale tracks the radius, holding it at about two
+texels: too little and the taps have to reach too far, too much and the bilinear
+upsample shows its own grid. Radii do not share a grid either — one allocation
+is sized for the finest radius in the frame and each blur takes the sub-region it
+needs, so a two-pixel softening and a ten-pixel frost in the same frame are both
+right instead of both being dragged onto the coarser one.
+
+Scopes do not nest, in either kind: an inner one would blur what the outer one
+just composited. On an overlay the backdrop scope is hoisted above the panel's
+chrome, so the glass frosts the window and not its own outline.
 
 **Animation** `Animated<T>` interpolates on the *node*, so a press or hover
 costs a draw-list re-emit and no `body` recompute. `FrameScheduler` holds the

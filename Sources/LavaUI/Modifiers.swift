@@ -22,6 +22,9 @@ public struct ViewStyle: Equatable {
     /// Emits `BeginBackdropBlur` / `EndBackdropBlur` around the node's paint
     /// so earlier UI is frosted and this node's fill + children stay sharp.
     public var backdropBlurRadius: Float?
+    /// Content blur radius in pixels. `nil` = off. Blurs this node's own paint,
+    /// the way SwiftUI's `.blur()` does, rather than what is behind it.
+    public var contentBlurRadius: Float?
 
     public init() {}
 
@@ -39,6 +42,7 @@ public struct ViewStyle: Equatable {
         out.flexGrow = flexGrow ?? base.flexGrow
         out.flexShrink = flexShrink ?? base.flexShrink
         out.backdropBlurRadius = backdropBlurRadius ?? base.backdropBlurRadius
+        out.contentBlurRadius = contentBlurRadius ?? base.contentBlurRadius
         return out
     }
 }
@@ -122,6 +126,7 @@ extension YogaBoxNode {
             base.flexGrow = flexGrow
             base.flexShrink = flexShrink
             base.backdropBlurRadius = backdropBlurRadius
+            base.contentBlurRadius = contentBlurRadius
             styleBaseline = base
         }
         let base = styleBaseline ?? ViewStyle()
@@ -136,6 +141,7 @@ extension YogaBoxNode {
         // Unlike fill (set-if-present), blur clears when the modifier is gone:
         // fall back through the baseline so removing `.blur()` actually turns it off.
         backdropBlurRadius = style.backdropBlurRadius ?? base.backdropBlurRadius
+        contentBlurRadius = style.contentBlurRadius ?? base.contentBlurRadius
 
         if let leaf = self as? LeafNode {
             if let fill = style.fill { leaf.fillColor = fill }
@@ -253,13 +259,24 @@ extension View {
         styled { $0.flexShrink = value }
     }
 
+    /// Softens this view and its children.
+    ///
+    /// The subtree is drawn into an offscreen target of its own, blurred, and
+    /// composited back with its own alpha — so a blurred view has a genuinely
+    /// soft edge and whatever sits behind it shows through unchanged. This is
+    /// the SwiftUI meaning of `.blur()`; for frosted glass, where what is
+    /// *behind* the view is what should soften, use `backdropBlur(radius:)`.
+    public func blur(radius: Float = 8) -> ModifiedView<Self> {
+        styled { $0.contentBlurRadius = max(0.5, radius) }
+    }
+
     /// Frosted-glass backdrop under this view's layout rect.
     ///
     /// Captures UI already painted behind the rect, blurs it, composites the
     /// result, then draws this view's fill and children sharp on top. Typical
-    /// use: `.background(Color(...).opacity(0.15)).blur(radius: 6)` on a panel
-    /// or overlay so chrome reads as glass.
-    public func blur(radius: Float = 8) -> ModifiedView<Self> {
+    /// use: `.background(Color(...).opacity(0.15)).backdropBlur(radius: 6)` on
+    /// a panel or overlay so chrome reads as glass.
+    public func backdropBlur(radius: Float = 8) -> ModifiedView<Self> {
         styled { $0.backdropBlurRadius = max(0.5, radius) }
     }
 }
@@ -318,6 +335,10 @@ extension ModifiedView {
     }
 
     public func blur(radius: Float = 8) -> ModifiedView<Content> {
+        adding { $0.contentBlurRadius = max(0.5, radius) }
+    }
+
+    public func backdropBlur(radius: Float = 8) -> ModifiedView<Content> {
         adding { $0.backdropBlurRadius = max(0.5, radius) }
     }
 }

@@ -340,7 +340,7 @@ public struct DemoExample: View {
                     .background(c)
                     .cornerRadius(6)
                 }
-            }
+            }.blur(radius: 5)
             HStack(padding: 2) {
                 Button(showGlass ? "Hide glass" : "Show glass") {
                     showGlass.toggle()
@@ -374,7 +374,7 @@ public struct DemoExample: View {
                 // Stronger tint so glass reads even when the blur is subtle.
                 .background(Color(r: 0.95, g: 0.96, b: 1.0).opacity(0.28))
                 .cornerRadius(12)
-                .blur(radius: 10)
+                .backdropBlur(radius: 10)
             }
 
             Text("Button · animated press + hover", color: .accent)

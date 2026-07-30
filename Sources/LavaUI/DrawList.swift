@@ -18,6 +18,11 @@ public enum DrawKind: UInt32 {
     case beginBackdropBlur = 8
     /// Closes a blur scope (bookkeeping; engine no-ops today).
     case endBackdropBlur = 9
+    /// Draw everything up to the matching End into an offscreen target instead
+    /// of the frame, blur it, and composite it back over x,y,w,h with its own
+    /// alpha (`aux` = radius px).
+    case beginContentBlur = 10
+    case endContentBlur = 11
 }
 
 /// Reused arena: draw commands plus the shaped glyphs they reference.
@@ -37,7 +42,7 @@ public final class DrawList {
     /// rather than a value so nested transitions compose.
     private var alphaMultiplier: Float = 1
 
-    /// True between Begin/EndBackdropBlur. See `withBackdropBlur`.
+    /// True inside any blur scope, of either kind. See `withBlurScope`.
     private var insideBlurScope = false
 
     public init() {
@@ -164,18 +169,52 @@ public final class DrawList {
         )
     }
 
-    /// Run `body` inside optional Begin/End backdrop-blur bookends.
+    /// Barrier: engine draws everything until `endContentBlur` into an offscreen
+    /// target, blurs it, and composites it back over this rect.
+    public func beginContentBlur(
+        x: Float, y: Float, w: Float, h: Float, radius: Float
+    ) {
+        guard w > 0, h > 0, radius > 0 else { return }
+        append(
+            kind: .beginContentBlur, x: x, y: y, w: w, h: h,
+            color: Color(r: 1, g: 1, b: 1), aux: radius
+        )
+    }
+
+    public func endContentBlur() {
+        append(
+            kind: .endContentBlur, x: 0, y: 0, w: 0, h: 0,
+            color: Color(r: 1, g: 1, b: 1)
+        )
+    }
+
+    /// Run `body` inside optional blur bookends, of whichever kind the node asked
+    /// for.
     ///
-    /// Scopes do not nest: an inner capture would read back the glass the outer
-    /// one just composited and frost it a second time. The outermost wins,
-    /// which is also what lets an overlay hoist its content's `.blur()` up over
-    /// the panel's own chrome.
-    private func withBackdropBlur(
-        radius: Float?,
+    /// Scopes do not nest, in either kind or across them. Each one costs a
+    /// render-target switch and reads back what the previous one composited, so
+    /// an inner scope would blur the outer one's output a second time. The
+    /// outermost wins — which is also what lets an overlay hoist its content's
+    /// backdrop scope up over the panel's own chrome.
+    ///
+    /// Content wins over backdrop on the same node: `.blur()` is a statement
+    /// about this view, and a frosted backdrop under a view that is itself
+    /// being softened is not something you can see.
+    private func withBlurScope(
+        content contentRadius: Float?,
+        backdrop backdropRadius: Float?,
         x: Float, y: Float, w: Float, h: Float,
         body: () -> Void
     ) {
-        if let radius, radius > 0, w > 0, h > 0, !insideBlurScope {
+        guard w > 0, h > 0, !insideBlurScope else { return body() }
+
+        if let radius = contentRadius, radius > 0 {
+            insideBlurScope = true
+            beginContentBlur(x: x, y: y, w: w, h: h, radius: radius)
+            body()
+            endContentBlur()
+            insideBlurScope = false
+        } else if let radius = backdropRadius, radius > 0 {
             insideBlurScope = true
             beginBackdropBlur(x: x, y: y, w: w, h: h, radius: radius)
             body()
@@ -214,7 +253,7 @@ public final class DrawList {
 
             // A glass overlay must frost what is *behind* the panel, not the
             // panel's own chrome, so the capture has to happen before any of it.
-            // Hoisting the scope up here does that; `withBackdropBlur` then
+            // Hoisting the scope up here does that; `withBlurScope` then
             // no-ops the scope the content node would have opened.
             //
             // One level down is where a collapsed `.blur()` lands, because the
@@ -222,8 +261,8 @@ public final class DrawList {
             // (a tuple, an `if`) it stays where it was.
             let glassRadius =
                 (overlayRoot.childNodes.first as? YogaBoxNode)?.backdropBlurRadius
-            withBackdropBlur(
-                radius: glassRadius,
+            withBlurScope(
+                content: nil, backdrop: glassRadius,
                 x: att.origin.x, y: att.origin.y, w: att.size.w, h: att.size.h
             ) {
                 // Outline first, one pixel proud on every side, so the panel's
@@ -324,8 +363,10 @@ public final class DrawList {
             if let styled = node as? StyleBoxNode {
                 // Same rule as a stack: never cull a container, since Yoga does
                 // not clip and an overflowing child may still be on screen.
-                withBackdropBlur(
-                    radius: styled.backdropBlurRadius, x: x, y: y, w: w, h: h
+                withBlurScope(
+                    content: styled.contentBlurRadius,
+                    backdrop: styled.backdropBlurRadius,
+                    x: x, y: y, w: w, h: h
                 ) {
                     if let fill = styled.fillColor {
                         if styled.cornerRadius > 0 {
@@ -347,8 +388,10 @@ public final class DrawList {
             if let stack = node as? StackNode {
                 // Never cull containers — Yoga does not clip children by default,
                 // so an overflowing child of an offscreen parent can still be visible.
-                withBackdropBlur(
-                    radius: stack.backdropBlurRadius, x: x, y: y, w: w, h: h
+                withBlurScope(
+                    content: stack.contentBlurRadius,
+                    backdrop: stack.backdropBlurRadius,
+                    x: x, y: y, w: w, h: h
                 ) {
                     if let fill = stack.fillColor {
                         rect(x: x, y: y, w: w, h: h, color: fill)
@@ -365,8 +408,10 @@ public final class DrawList {
                 if x + w < 0 || y + h < 0 || x > vpW || y > vpH {
                     return
                 }
-                withBackdropBlur(
-                    radius: leaf.backdropBlurRadius, x: x, y: y, w: w, h: h
+                withBlurScope(
+                    content: leaf.contentBlurRadius,
+                    backdrop: leaf.backdropBlurRadius,
+                    x: x, y: y, w: w, h: h
                 ) {
                     emitLeafContents(leaf, x: x, y: y, w: w, h: h)
                 }

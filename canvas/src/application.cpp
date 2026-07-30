@@ -169,6 +169,9 @@ struct Application::Impl
     std::cout << "Quad renderer initialized.\n";
 
     blurPass.init();
+    // Needs BlurPass's scene render pass, hence after its init rather than
+    // inside quadRenderer.init().
+    quadRenderer.createSceneTargetPipeline(blurPass.sceneRenderPass());
     std::cout << "Blur pass initialized.\n";
 
     screenProjection_ = mat4{ // column-major, top-left origin, y-down
@@ -547,22 +550,37 @@ struct Application::Impl
                               textRenderer.atlasSampler());
       }
       const auto ext = vulkan.getExtent();
-      // Each BeginBackdropBlur: radius + glass rect. Segment i is drawn, then
-      // we capture/blur and bind the result; segment i+1 starts with a
-      // composite Image quad over the glass rect, then sharp fill/children.
-      // (Must composite into MSAA — blitting only the resolve is wiped by the
-      // next pass's MSAA resolve.)
-      std::vector<BlurOp> blurOps;
-      replayDrawListUnified(static_cast<float>(ext.width),
-                            static_cast<float>(ext.height), blurOps);
-
-      if (!blurOps.empty()) {
-        // The blur image resolution follows the radius, so it has to be sized
-        // before recording — reallocating it waits on every frame in flight.
-        float maxRadius = 0.f;
-        for (const auto &op : blurOps) maxRadius = std::max(maxRadius, op.radius);
-        blurPass.ensureSize(ext.width, ext.height, maxRadius);
+      // Each boundary is a point where the GPU has to stop drawing the frame
+      // and do something else. Segment i is drawn, boundaries[i] runs, then
+      // segment i+1 — whose first quad is usually the composite of whatever the
+      // boundary produced. (Backdrop compositing must land in MSAA, not just the
+      // resolve, or the next pass's resolve wipes it.)
+      // Sizing has to happen *before* replay, not after: replay bakes the
+      // composite quads' UVs, and those depend on the allocation. Reallocating
+      // also waits on every frame in flight, so it cannot happen mid-recording
+      // either. Hence a cheap pre-scan for the radii.
+      //
+      // The *finest* radius drives the allocation, since that is the one needing
+      // the most resolution; wider blurs then take a sub-region at their own
+      // coarser grid rather than forcing the fine one down to theirs.
+      float finestRadius = BlurPass::kMaxRadius;
+      bool anyBlur = false;
+      for (const auto &cmd : drawCmds_) {
+        const auto kind = static_cast<canvas::DrawCommandKind>(cmd.kind);
+        if (kind != canvas::DrawCommandKind::BeginBackdropBlur &&
+            kind != canvas::DrawCommandKind::BeginContentBlur) {
+          continue;
+        }
+        anyBlur = true;
+        finestRadius = std::min(finestRadius, cmd.aux > 0.f ? cmd.aux : 8.f);
       }
+      if (anyBlur) {
+        blurPass.ensureSize(ext.width, ext.height, finestRadius);
+      }
+
+      std::vector<Boundary> boundaries;
+      replayDrawListUnified(static_cast<float>(ext.width),
+                            static_cast<float>(ext.height), boundaries);
 
       vulkan.renderWithShadows(
           // Shadow pass kept only because renderWithShadows is Vulkan's sole
@@ -570,31 +588,55 @@ struct Application::Impl
           [&](VkCommandBuffer) {},
           [&](VkCommandBuffer commandBuffer, u32 /*imageIndex*/) {
             const auto extent = vulkan.getExtent();
-            const uint32_t segments = quadRenderer.segmentCount();
-            const uint32_t blurCount =
-              static_cast<uint32_t>(blurOps.size());
 
             // Always open the clear pass so an empty first segment still
             // clears the framebuffer before a leading blur.
             vulkan.beginMainRenderPass(commandBuffer, /*clear=*/true);
-            if (segments > 0) {
-              quadRenderer.drawSegment(commandBuffer, 0);
-            }
+            quadRenderer.drawSegment(commandBuffer, 0);
 
-            for (uint32_t bi = 0; bi < blurCount; ++bi) {
-              vulkan.endMainRenderPass(commandBuffer);
-
-              if (blurPass.ready()) {
-                blurPass.captureAndBlur(
-                  commandBuffer, vulkan.resolveImage(),
-                  VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, blurOps[bi].radius);
-                quadRenderer.setBackdropBlurView(blurPass.resultView(),
-                                                blurPass.sampler());
+            uint32_t segment = 0;
+            for (const auto &b : boundaries) {
+              ++segment;
+              if (!blurPass.ready() || !blurPass.sceneReady()) {
+                // No blur resources: draw the segment unblurred rather than
+                // half-executing a boundary and leaving passes unbalanced.
+                quadRenderer.drawSegment(commandBuffer, segment);
+                continue;
               }
 
-              vulkan.beginMainRenderPass(commandBuffer, /*clear=*/false);
-              if (bi + 1 < segments) {
-                quadRenderer.drawSegment(commandBuffer, bi + 1);
+              switch (b.kind) {
+              case Boundary::Kind::Backdrop:
+                // The frame so far *is* the source, so it has to be resolved
+                // before it can be read.
+                vulkan.endMainRenderPass(commandBuffer);
+                blurPass.captureAndBlur(
+                  commandBuffer, vulkan.resolveImage(),
+                  VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, b.radius);
+                quadRenderer.setBlurResultView(blurPass.resultView(),
+                                               blurPass.sampler());
+                vulkan.beginMainRenderPass(commandBuffer, /*clear=*/false);
+                quadRenderer.drawSegment(commandBuffer, segment);
+                break;
+
+              case Boundary::Kind::ContentBegin:
+                // The subtree is the source, so it is drawn on its own into a
+                // cleared target rather than on top of the frame.
+                vulkan.endMainRenderPass(commandBuffer);
+                blurPass.beginSceneCapture(commandBuffer);
+                quadRenderer.drawSegment(commandBuffer, segment,
+                                         /*intoSceneTarget=*/true);
+                break;
+
+              case Boundary::Kind::ContentEnd:
+                blurPass.endSceneCapture(commandBuffer);
+                blurPass.captureAndBlur(
+                  commandBuffer, blurPass.sceneImage(),
+                  VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, b.radius);
+                quadRenderer.setBlurResultView(blurPass.resultView(),
+                                               blurPass.sampler());
+                vulkan.beginMainRenderPass(commandBuffer, /*clear=*/false);
+                quadRenderer.drawSegment(commandBuffer, segment);
+                break;
               }
             }
 
@@ -613,22 +655,48 @@ struct Application::Impl
     }
   }
 
-  /// One glass region from BeginBackdropBlur.
-  struct BlurOp {
+  /// A point where the frame's recording has to be interrupted.
+  ///
+  /// `boundaries[i]` sits between segment i and segment i+1. Only the radius
+  /// travels with it — the rect is already baked into the composite quad that
+  /// opens the following segment.
+  struct Boundary {
+    enum class Kind { Backdrop, ContentBegin, ContentEnd };
+    Kind kind = Kind::Backdrop;
     float radius = 8.f;
-    float x = 0.f, y = 0.f, w = 0.f, h = 0.f;
   };
+
+  /// Quad that samples the blur result over `x,y,w,h`.
+  ///
+  /// UVs are the rect's own window position over the viewport, which makes the
+  /// interpolated coordinate at any pixel equal that pixel's position — so the
+  /// blur image lines up one-to-one with the frame whatever the rect is. Scaled
+  /// by the fraction of the image this radius occupies, since each blur gets its
+  /// own resolution out of one allocation.
+  void pushBlurComposite(float x, float y, float w, float h, float viewW,
+                         float viewH, float radius)
+  {
+    if (w <= 0.f || h <= 0.f || viewW <= 0.f || viewH <= 0.f) return;
+    const vec2 uv = blurPass.uvScaleFor(radius);
+    quadRenderer.pushBlurResultImage(
+      {x, y}, {w, h},
+      {x / viewW * uv.x, y / viewH * uv.y},
+      {(x + w) / viewW * uv.x, (y + h) / viewH * uv.y}, 0xffffffffu);
+  }
 
   /// Phase 3.5 — replays the draw list through the unified quad pipeline in
   /// *index order*, so a rect emitted after another shape actually covers it.
   ///
-  /// BeginBackdropBlur closes the current segment, records the glass rect, and
-  /// starts the next segment with a composite Image of the blurred region.
-  /// Capture/blur runs between segments in repaint's mainCallback.
+  /// Blur commands close the current segment and record a boundary; the GPU work
+  /// between segments happens in repaint's mainCallback.
   void replayDrawListUnified(float viewW, float viewH,
-                             std::vector<BlurOp> &outBlurOps)
+                             std::vector<Boundary> &outBoundaries)
   {
-    outBlurOps.clear();
+    outBoundaries.clear();
+    // Rect + radius of each open content-blur scope, so End knows what region
+    // to composite. A stack even though DrawList forbids nesting today, because
+    // an unbalanced End must not pop something that was never pushed.
+    std::vector<canvas::DrawCommand> contentScopes;
     // Must match the slot waitForInFlightFrame() just freed / submit will use.
     quadRenderer.begin({viewW, viewH}, vulkan.currentFrameSlot());
     for (const auto &cmd : drawCmds_) {
@@ -684,25 +752,44 @@ struct Application::Impl
         // Split so GPU can end pass → blur → continue. Next segment opens with
         // a full-frame-UV composite of the glass rect (bound at draw time).
         quadRenderer.closeSegment();
-        BlurOp op;
-        op.radius = cmd.aux > 0.f ? cmd.aux : 8.f;
-        op.x = cmd.x;
-        op.y = cmd.y;
-        op.w = cmd.w;
-        op.h = cmd.h;
-        outBlurOps.push_back(op);
-
-        const float u0 = viewW > 0.f ? cmd.x / viewW : 0.f;
-        const float v0 = viewH > 0.f ? cmd.y / viewH : 0.f;
-        const float u1 = viewW > 0.f ? (cmd.x + cmd.w) / viewW : 1.f;
-        const float v1 = viewH > 0.f ? (cmd.y + cmd.h) / viewH : 1.f;
-        quadRenderer.pushBackdropBlurImage(
-          {cmd.x, cmd.y}, {cmd.w, cmd.h}, {u0, v0}, {u1, v1}, 0xffffffffu);
+        const float radius = cmd.aux > 0.f ? cmd.aux : 8.f;
+        outBoundaries.push_back({Boundary::Kind::Backdrop, radius});
+        pushBlurComposite(cmd.x, cmd.y, cmd.w, cmd.h, viewW, viewH, radius);
         break;
       }
       case canvas::DrawCommandKind::EndBackdropBlur:
         // Bookkeeping / future nesting — no GPU work.
         break;
+
+      case canvas::DrawCommandKind::BeginContentBlur: {
+        // The subtree lands in its own segment, drawn into the offscreen target
+        // rather than the frame, so nothing is composited here.
+        quadRenderer.closeSegment();
+        outBoundaries.push_back(
+          {Boundary::Kind::ContentBegin, cmd.aux > 0.f ? cmd.aux : 8.f});
+        contentScopes.push_back(cmd);
+        break;
+      }
+      case canvas::DrawCommandKind::EndContentBlur: {
+        if (contentScopes.empty()) break;
+        const canvas::DrawCommand open = contentScopes.back();
+        contentScopes.pop_back();
+        quadRenderer.closeSegment();
+        const float radius = open.aux > 0.f ? open.aux : 8.f;
+        outBoundaries.push_back({Boundary::Kind::ContentEnd, radius});
+
+        // Grown by three sigma on every side: a blurred view's edge fades
+        // *outward*, and clipping the composite to the layout rect would slice
+        // that falloff off square, which is the one artefact that makes a blur
+        // read as a bug rather than as softness.
+        const float pad = std::ceil(radius * 3.f);
+        const float x0 = std::max(0.f, open.x - pad);
+        const float y0 = std::max(0.f, open.y - pad);
+        const float x1 = std::min(viewW, open.x + open.w + pad);
+        const float y1 = std::min(viewH, open.y + open.h + pad);
+        pushBlurComposite(x0, y0, x1 - x0, y1 - y0, viewW, viewH, radius);
+        break;
+      }
       }
     }
     quadRenderer.end();
