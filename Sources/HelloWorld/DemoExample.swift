@@ -80,6 +80,10 @@ public struct DemoExample: View {
     @State private var showBanner = true
     /// Neon EQ showcase — continuous animation while true.
     @State private var pulsePlaying = true
+    /// Selected donut wedge (`nil` = show title in the hole).
+    @State private var pieSelected: Int? = 1
+    /// Live telemetry overlay on the line chart.
+    @State private var chartLive = true
     @State private var lightTheme = false
     @State private var status = "Click a list row, edit the field, resize the window."
     @State private var actionCount = 0
@@ -268,6 +272,34 @@ public struct DemoExample: View {
                     .agentId("pulse-toggle")
                 Text(pulsePlaying ? "live" : "paused", color: .dim)
                 Spacer()
+            }
+
+            Text("Charts · Canvas pie + line", color: .accent)
+            Text(
+                "Donut tap cycles slices · line chart can stream a live series.",
+                color: .secondary
+            )
+            HStack(padding: 6) {
+                PieChart(
+                    slices: pieSlices,
+                    selectedId: $pieSelected,
+                    size: 168,
+                    title: "Mix"
+                )
+                VStack(flexGrow: 1, padding: 0) {
+                    LineChart(
+                        series: lineSeries,
+                        width: 360,
+                        height: 168,
+                        live: chartLive,
+                        title: "Signals"
+                    )
+                    HStack(padding: 2) {
+                        Toggle("Live wave", isOn: $chartLive)
+                            .agentId("chart-live-toggle")
+                        Spacer()
+                    }
+                }
             }
 
             Text("Dynamic flex row", color: .accent)
@@ -555,6 +587,7 @@ public struct DemoExample: View {
             Text("· ForEach (keyed list)", color: .primary)
             Text("· if / else branches", color: .primary)
             Text("· DiagramHost flexGrow", color: .primary)
+            Text("· Canvas charts / pulse", color: .primary)
             Text("· @State + Theme", color: .primary)
 
             Spacer()
@@ -585,6 +618,51 @@ public struct DemoExample: View {
                 }
             )
         }
+    }
+
+    // MARK: - Chart data
+
+    /// Donut slices — list composition + a few fixed “channels”.
+    private var pieSlices: [PieSlice] {
+        var out: [PieSlice] = [
+            PieSlice(id: 100, label: "UI", value: 3 + Float(flexSlots),
+                     color: Color(r: 0.35, g: 0.65, b: 1.0)),
+            PieSlice(id: 101, label: "GPU", value: 2 + gauge * 4,
+                     color: Color(r: 0.95, g: 0.45, b: 0.75)),
+            PieSlice(id: 102, label: "I/O", value: 1.5 + Float(actionCount % 5) * 0.35,
+                     color: Color(r: 0.35, g: 0.9, b: 0.7)),
+        ]
+        // One wedge per nav item so the list and chart stay coupled.
+        for item in items.prefix(4) {
+            out.append(
+                PieSlice(
+                    id: item.id,
+                    label: item.title,
+                    value: 1 + Float(item.hue % 3) * 0.4,
+                    color: DemoPalette.color(at: item.hue)
+                )
+            )
+        }
+        return out
+    }
+
+    /// Static series for the line chart (live wave is synthetic in paint).
+    private var lineSeries: [LineSeries] {
+        let n = 40
+        let g = gauge
+        let slots = Float(flexSlots)
+        let base: [Float] = (0..<n).map { i in
+            let x = Float(i) / Float(n - 1)
+            return 0.3 + 0.15 * sin(x * 8 + slots) + g * 0.35 * x
+        }
+        let load: [Float] = (0..<n).map { i in
+            let x = Float(i) / Float(n - 1)
+            return 0.2 + 0.5 * x * x + 0.1 * sin(x * 12 + Float(actionCount) * 0.1)
+        }
+        return [
+            LineSeries(name: "base", color: Color(r: 0.55, g: 0.7, b: 1.0), samples: base),
+            LineSeries(name: "load", color: Color(r: 1.0, g: 0.55, b: 0.4), samples: load),
+        ]
     }
 
     // MARK: - Mutations
