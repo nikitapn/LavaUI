@@ -63,6 +63,7 @@ copy_assets = custom_target('copy_assets',
 engine_sources = [
   'src/application.cpp',
   'src/render/vulkan.cpp',
+  'src/render/vma_impl.cpp',
   'src/render/pipeline.cpp',
   'src/render/shaders.cpp',
   'src/render/texture_manager.cpp',
@@ -89,6 +90,7 @@ main_inc = include_directories(
   'third-party/stb',
   'third-party/taskflow',
   'third-party/yoga',
+  'third-party/vma',
 )
 
 common_cpp_args = ['-DGLM_FORCE_DEPTH_ZERO_TO_ONE']

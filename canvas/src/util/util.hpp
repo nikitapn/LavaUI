@@ -10,6 +10,12 @@ std::vector<char> readFile(const std::filesystem::path& filepath);
 void*             alignedAlloc(size_t size, size_t alignment);
 void              alignedFree(void* data);
 
+/// Portable env flag via `std::getenv`
+/// Unset / empty → `defaultValue`.
+/// Truthy: 1, true, yes, on (case-insensitive).
+/// Falsy:  0, false, no, off.
+bool envFlag(const char *name, bool defaultValue = false);
+
 // Global Taskflow executor for parallel operations
 tf::Executor& getTaskflowExecutor();
 

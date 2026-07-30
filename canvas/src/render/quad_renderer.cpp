@@ -25,27 +25,16 @@ void QuadRenderer::init() {
 }
 
 void QuadRenderer::destroyFrameBuffers(FrameResources &fr) {
-  VkDevice device = vulkan_.getDevice();
   if (fr.vertexMapped != nullptr) {
-    vkUnmapMemory(device, fr.vertexBufferMemory);
+    if (fr.vertexAlloc != VK_NULL_HANDLE) vulkan_.unmapBuffer(fr.vertexAlloc);
     fr.vertexMapped = nullptr;
   }
   if (fr.indexMapped != nullptr) {
-    vkUnmapMemory(device, fr.indexBufferMemory);
+    if (fr.indexAlloc != VK_NULL_HANDLE) vulkan_.unmapBuffer(fr.indexAlloc);
     fr.indexMapped = nullptr;
   }
-  if (fr.vertexBuffer != VK_NULL_HANDLE) {
-    vkDestroyBuffer(device, fr.vertexBuffer, nullptr);
-    vkFreeMemory(device, fr.vertexBufferMemory, nullptr);
-    fr.vertexBuffer = VK_NULL_HANDLE;
-    fr.vertexBufferMemory = VK_NULL_HANDLE;
-  }
-  if (fr.indexBuffer != VK_NULL_HANDLE) {
-    vkDestroyBuffer(device, fr.indexBuffer, nullptr);
-    vkFreeMemory(device, fr.indexBufferMemory, nullptr);
-    fr.indexBuffer = VK_NULL_HANDLE;
-    fr.indexBufferMemory = VK_NULL_HANDLE;
-  }
+  vulkan_.destroyBuffer(fr.vertexBuffer, fr.vertexAlloc);
+  vulkan_.destroyBuffer(fr.indexBuffer, fr.indexAlloc);
   fr.capacity = 0;
 }
 
@@ -61,12 +50,7 @@ void QuadRenderer::cleanUp() {
     vkDestroyImageView(device, whiteImageView_, nullptr);
     whiteImageView_ = VK_NULL_HANDLE;
   }
-  if (whiteImage_ != VK_NULL_HANDLE) {
-    vkDestroyImage(device, whiteImage_, nullptr);
-    vkFreeMemory(device, whiteImageMemory_, nullptr);
-    whiteImage_       = VK_NULL_HANDLE;
-    whiteImageMemory_ = VK_NULL_HANDLE;
-  }
+  vulkan_.destroyImage(whiteImage_, whiteImageAlloc_);
   if (sampler_ != VK_NULL_HANDLE) {
     vkDestroySampler(device, sampler_, nullptr);
     sampler_ = VK_NULL_HANDLE;
@@ -86,26 +70,23 @@ QuadRenderer::FrameResources &QuadRenderer::activeFrame() {
 // ─── Setup ─────────────────────────────────────────────────────────────────
 
 void QuadRenderer::createWhiteTexture() {
-  VkDevice device = vulkan_.getDevice();
-
   vulkan_.createImage(1, 1, 1, VK_SAMPLE_COUNT_1_BIT, VK_FORMAT_R8_UNORM,
                       VK_IMAGE_TILING_OPTIMAL,
                       VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
                       VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, whiteImage_,
-                      whiteImageMemory_);
+                      whiteImageAlloc_);
 
   const uint8_t white = 0xff;
-  VkBuffer       staging{};
-  VkDeviceMemory stagingMemory{};
+  VkBuffer      staging{};
+  VmaAllocation stagingAlloc{};
   vulkan_.createBuffer(sizeof(white), VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
                        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
                          VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-                       staging, stagingMemory);
+                       staging, stagingAlloc);
 
-  void *mapped = nullptr;
-  vkMapMemory(device, stagingMemory, 0, sizeof(white), 0, &mapped);
+  void *mapped = vulkan_.mapBuffer(stagingAlloc);
   std::memcpy(mapped, &white, sizeof(white));
-  vkUnmapMemory(device, stagingMemory);
+  vulkan_.unmapBuffer(stagingAlloc);
 
   vulkan_.transitionImageLayout(whiteImage_, VK_FORMAT_R8_UNORM,
                                 VK_IMAGE_LAYOUT_UNDEFINED,
@@ -115,8 +96,7 @@ void QuadRenderer::createWhiteTexture() {
                                 VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                                 VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
 
-  vkDestroyBuffer(device, staging, nullptr);
-  vkFreeMemory(device, stagingMemory, nullptr);
+  vulkan_.destroyBuffer(staging, stagingAlloc);
 
   whiteImageView_ =
     vulkan_.createImageView(whiteImage_, VK_FORMAT_R8_UNORM,
@@ -381,16 +361,14 @@ void QuadRenderer::ensureBufferCapacity(size_t vertexCount) {
     vulkan_.createBuffer(vertexBytes, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
                          VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
                            VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-                         slot.vertexBuffer, slot.vertexBufferMemory);
+                         slot.vertexBuffer, slot.vertexAlloc);
     vulkan_.createBuffer(indexBytes, VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
                          VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
                            VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-                         slot.indexBuffer, slot.indexBufferMemory);
+                         slot.indexBuffer, slot.indexAlloc);
 
-    vkMapMemory(vulkan_.getDevice(), slot.vertexBufferMemory, 0, vertexBytes, 0,
-                &slot.vertexMapped);
-    vkMapMemory(vulkan_.getDevice(), slot.indexBufferMemory, 0, indexBytes, 0,
-                &slot.indexMapped);
+    slot.vertexMapped = vulkan_.mapBuffer(slot.vertexAlloc);
+    slot.indexMapped = vulkan_.mapBuffer(slot.indexAlloc);
     slot.capacity = newCapacity;
   }
 }

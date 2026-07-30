@@ -9,6 +9,8 @@
 #include <vulkan/vulkan.h>
 #include <vulkan/vulkan_core.h>
 
+#include "vk_mem_alloc.h"
+
 struct GLFWwindow;
 
 #include "util/types.hpp"
@@ -33,17 +35,14 @@ class Shaders;
 
 namespace vk {
 
+/// GPU buffer owned through Vulkan/VMA. Prefer `Vulkan::destroyBuffer` over
+/// freeing memory by hand — VMA suballocates and raw `vkFreeMemory` is wrong.
 struct Buffer {
-  vk::Handle<VkBuffer>       buffer;
-  vk::Handle<VkDeviceMemory> memory;
-  u32                        size;
+  VkBuffer      buffer     = VK_NULL_HANDLE;
+  VmaAllocation allocation = VK_NULL_HANDLE;
+  u32           size       = 0;
 
-  operator bool() const noexcept { return buffer.operator bool(); }
-
-  void destroy(VkDevice device) {
-    buffer.destroy(device);
-    memory.destroy(device);
-  }
+  operator bool() const noexcept { return buffer != VK_NULL_HANDLE; }
 };
 
 };
@@ -61,6 +60,9 @@ class Vulkan
   VkPhysicalDeviceProperties physicalDeviceProperties_;
   // Logical device
   VkDevice device_ = VK_NULL_HANDLE;
+  // GPUOpen VMA — all createBuffer/createImage go through this.
+  // Allocations live next to their VkBuffer/VkImage at each call site.
+  VmaAllocator allocator_ = VK_NULL_HANDLE;
   // Main graphics queue (also used for present when windowed)
   u32     graphicsAndPresentationQueueFamilyIdx_ = -1;
   VkQueue graphicsQueue_ = VK_NULL_HANDLE;
@@ -102,32 +104,32 @@ class Vulkan
   // MSAA sampling stuff
   VkSampleCountFlagBits msaaSamples_ = VK_SAMPLE_COUNT_1_BIT;
   VkImage               colorImage_ = VK_NULL_HANDLE;
-  VkDeviceMemory        colorImageMemory_ = VK_NULL_HANDLE;
+  VmaAllocation         colorImageAlloc_ = VK_NULL_HANDLE;
   VkImageView           colorImageView_ = VK_NULL_HANDLE;
 
   // Single-sample resolve target: what the MSAA color attachment resolves
   // into, and what gets copied out for readback. Not the same image as
   // colorImage_ above (that one is TRANSIENT_ATTACHMENT_BIT and MSAA-only).
-  VkImage        resolveImage_ = VK_NULL_HANDLE;
-  VkDeviceMemory resolveImageMemory_ = VK_NULL_HANDLE;
-  VkImageView    resolveImageView_ = VK_NULL_HANDLE;
+  VkImage       resolveImage_ = VK_NULL_HANDLE;
+  VmaAllocation resolveImageAlloc_ = VK_NULL_HANDLE;
+  VkImageView   resolveImageView_ = VK_NULL_HANDLE;
 
   // Host-visible staging buffer that resolveImage_ gets copied into every
   // frame, for CPU readback via readPixels().
-  VkBuffer       stagingBuffer_ = VK_NULL_HANDLE;
-  VkDeviceMemory stagingBufferMemory_ = VK_NULL_HANDLE;
-  void          *stagingBufferMapped_ = nullptr;
-  VkDeviceSize   stagingBufferSize_ = 0;
+  VkBuffer      stagingBuffer_ = VK_NULL_HANDLE;
+  VmaAllocation stagingBufferAlloc_ = VK_NULL_HANDLE;
+  void         *stagingBufferMapped_ = nullptr;
+  VkDeviceSize  stagingBufferSize_ = 0;
 
   // Depth buffer stuff
-  VkImage        depthImage_ = VK_NULL_HANDLE;
-  VkDeviceMemory depthImageMemory_ = VK_NULL_HANDLE;
-  VkImageView    depthImageView_ = VK_NULL_HANDLE;
+  VkImage       depthImage_ = VK_NULL_HANDLE;
+  VmaAllocation depthImageAlloc_ = VK_NULL_HANDLE;
+  VkImageView   depthImageView_ = VK_NULL_HANDLE;
 
   // Shadow mapping stuff
-  VkImage        shadowImage_ = VK_NULL_HANDLE;
-  VkDeviceMemory shadowImageMemory_ = VK_NULL_HANDLE;
-  VkImageView    shadowImageView_ = VK_NULL_HANDLE;
+  VkImage       shadowImage_ = VK_NULL_HANDLE;
+  VmaAllocation shadowImageAlloc_ = VK_NULL_HANDLE;
+  VkImageView   shadowImageView_ = VK_NULL_HANDLE;
   VkSampler      shadowSampler_ = VK_NULL_HANDLE;
   VkRenderPass   shadowRenderPass_ = VK_NULL_HANDLE;
   VkFramebuffer  shadowFramebuffer_ = VK_NULL_HANDLE;
@@ -173,6 +175,8 @@ class Vulkan
 
   // Step 2: Creates logical device and one graphics queue
   void createLogicalDevice();
+  void createAllocator();
+  void destroyAllocator();
   void createSyncObjects();
 
   uint32_t findMemoryProperties(uint32_t              memoryTypeBitsRequirement,
@@ -301,11 +305,18 @@ class Vulkan
                     VkBufferUsageFlags    usage,
                     VkMemoryPropertyFlags properties,
                     VkBuffer             &buffer,
-                    VkDeviceMemory       &bufferMemory);
+                    VmaAllocation        &allocation);
+
+  /// Destroy a buffer created with `createBuffer` (VMA-owned). Nulls both.
+  void destroyBuffer(VkBuffer &buffer, VmaAllocation &allocation);
+
+  /// Map/unmap host-visible buffers created with `createBuffer`.
+  void *mapBuffer(VmaAllocation allocation);
+  void  unmapBuffer(VmaAllocation allocation);
 
   void copyBuffer(VkBuffer srcBuffer, VkBuffer dstBuffer, VkDeviceSize size);
 
-  std::tuple<VkBuffer, VkDeviceMemory> createUniformBuffer(
+  std::tuple<VkBuffer, VmaAllocation> createUniformBuffer(
     VkDeviceSize bufferSize);
 
   VkCommandBuffer beginSingleTimeCommands();
@@ -314,6 +325,7 @@ class Vulkan
   void endSingleTimeCommands(VkCommandBuffer commandBuffer);
 
   VkDevice                          getDevice() { return device_; }
+  VmaAllocator                      getAllocator() { return allocator_; }
   VkCommandPool                     getCommandPool() { return commandPool_; }
   VkRenderPass                      getRenderPass() { return renderPass_; }
   VkRenderPass                      getShadowRenderPass() { return shadowRenderPass_; }
@@ -340,7 +352,11 @@ class Vulkan
                    VkImageUsageFlags     usage,
                    VkMemoryPropertyFlags properties,
                    VkImage              &image,
-                   VkDeviceMemory       &imageMemory);
+                   VmaAllocation        &allocation);
+
+  /// Destroy an image created with `createImage` (VMA-owned). Nulls both.
+  /// Does not destroy image views — caller frees views first.
+  void destroyImage(VkImage &image, VmaAllocation &allocation);
 
   void transitionImageLayout(VkImage               image,
                              VkFormat              format,

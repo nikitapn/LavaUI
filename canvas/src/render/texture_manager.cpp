@@ -19,10 +19,12 @@ void TextureManager::cleanUp() {
     
     // Clean up all textures
     for (auto& [path, textureData] : textures_) {
-        if (textureData && vulkan_) {
-            textureData->view.destroy(vulkan_->getDevice());
-            textureData->image.destroy(vulkan_->getDevice());
-            textureData->memory.destroy(vulkan_->getDevice());
+        if (textureData && vulkan_ && textureData->ownsImage) {
+            if (textureData->view != VK_NULL_HANDLE) {
+                vkDestroyImageView(vulkan_->getDevice(), textureData->view, nullptr);
+                textureData->view = VK_NULL_HANDLE;
+            }
+            vulkan_->destroyImage(textureData->image, textureData->allocation);
         }
     }
     
@@ -67,29 +69,28 @@ TextureHandle TextureManager::loadTexture(const std::string& path) {
 
     // Create staging buffer
     VkBuffer stagingBuffer;
-    VkDeviceMemory stagingBufferMemory;
+    VmaAllocation stagingAlloc;
     vulkan_->createBuffer(
         imageSize,
         VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
         VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
         stagingBuffer,
-        stagingBufferMemory);
+        stagingAlloc);
 
-    void* data;
-    vkMapMemory(vulkan_->getDevice(), stagingBufferMemory, 0, imageSize, 0, &data);
+    void *data = vulkan_->mapBuffer(stagingAlloc);
     memcpy(data, pixels, static_cast<size_t>(imageSize));
-    vkUnmapMemory(vulkan_->getDevice(), stagingBufferMemory);
+    vulkan_->unmapBuffer(stagingAlloc);
 
     stbi_image_free(pixels);
 
     // Create texture image
     VkImage textureImage;
-    VkDeviceMemory textureImageMemory;
+    VmaAllocation textureAlloc;
     vulkan_->createImage(texWidth, texHeight, 1, VK_SAMPLE_COUNT_1_BIT,
                         VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_TILING_OPTIMAL,
                         VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
                         VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
-                        textureImage, textureImageMemory);
+                        textureImage, textureAlloc);
 
     // Transition image layout and copy from staging buffer
     vulkan_->transitionImageLayout(textureImage, VK_FORMAT_R8G8B8A8_SRGB,
@@ -98,9 +99,7 @@ TextureHandle TextureManager::loadTexture(const std::string& path) {
     vulkan_->transitionImageLayout(textureImage, VK_FORMAT_R8G8B8A8_SRGB,
                                   VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
 
-    // Clean up staging buffer
-    vkDestroyBuffer(vulkan_->getDevice(), stagingBuffer, nullptr);
-    vkFreeMemory(vulkan_->getDevice(), stagingBufferMemory, nullptr);
+    vulkan_->destroyBuffer(stagingBuffer, stagingAlloc);
 
     // Create image view
     VkImageView textureImageView = vulkan_->createImageView(textureImage, VK_FORMAT_R8G8B8A8_SRGB, 
@@ -109,12 +108,13 @@ TextureHandle TextureManager::loadTexture(const std::string& path) {
     // Create texture data entry
     auto textureData = std::make_unique<TextureData>();
     textureData->image = textureImage;
-    textureData->memory = textureImageMemory;
+    textureData->allocation = textureAlloc;
     textureData->view = textureImageView;
     textureData->path = path;
     textureData->refCount = 1;
     textureData->width = texWidth;
     textureData->height = texHeight;
+    textureData->ownsImage = true;
 
     uint32_t textureId = nextId_++;
     textureById_[textureId] = textureData.get();
@@ -157,6 +157,7 @@ TextureHandle TextureManager::registerTexture(const std::string& name,
     textureData->width = width;
     textureData->height = height;
     // Note: image and memory are not owned by TextureManager for external textures
+    textureData->ownsImage = false;
 
     uint32_t textureId = nextId_++;
     textureById_[textureId] = textureData.get();
@@ -186,10 +187,12 @@ void TextureManager::unloadTexture(const std::string& path) {
         }
 
         // Clean up Vulkan resources (only if we own them)
-        if (vulkan_ && it->second->image) {
-            it->second->view.destroy(vulkan_->getDevice());
-            it->second->image.destroy(vulkan_->getDevice());
-            it->second->memory.destroy(vulkan_->getDevice());
+        if (vulkan_ && it->second->ownsImage) {
+            if (it->second->view != VK_NULL_HANDLE) {
+                vkDestroyImageView(vulkan_->getDevice(), it->second->view, nullptr);
+                it->second->view = VK_NULL_HANDLE;
+            }
+            vulkan_->destroyImage(it->second->image, it->second->allocation);
         }
 
         textures_.erase(it);

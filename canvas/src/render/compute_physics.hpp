@@ -1,6 +1,7 @@
 #pragma once
 
 #include <vulkan/vulkan.h>
+#include "vk_mem_alloc.h"
 
 #include "util/types.hpp"
 
@@ -72,15 +73,15 @@ private:
     
     // Buffers
     VkBuffer particleBuffer_ = VK_NULL_HANDLE;
-    VkDeviceMemory particleBufferMemory_ = VK_NULL_HANDLE;
+    VmaAllocation particleAlloc_ = VK_NULL_HANDLE;
     VkBuffer uniformBuffer_ = VK_NULL_HANDLE;
-    VkDeviceMemory uniformBufferMemory_ = VK_NULL_HANDLE;
+    VmaAllocation uniformAlloc_ = VK_NULL_HANDLE;
     
     // Collision detection buffers
     VkBuffer collisionPairBuffer_ = VK_NULL_HANDLE;
-    VkDeviceMemory collisionPairBufferMemory_ = VK_NULL_HANDLE;
+    VmaAllocation collisionPairAlloc_ = VK_NULL_HANDLE;
     VkBuffer collisionCountBuffer_ = VK_NULL_HANDLE;
-    VkDeviceMemory collisionCountBufferMemory_ = VK_NULL_HANDLE;
+    VmaAllocation collisionCountAlloc_ = VK_NULL_HANDLE;
     
     uint32_t maxParticles_ = 0;
     uint32_t particleCount_ = 0;

@@ -109,14 +109,7 @@ void BlurPass::destroySceneTarget()
     vkDestroyImageView(device, sceneView_, nullptr);
     sceneView_ = VK_NULL_HANDLE;
   }
-  if (sceneImage_ != VK_NULL_HANDLE) {
-    vkDestroyImage(device, sceneImage_, nullptr);
-    sceneImage_ = VK_NULL_HANDLE;
-  }
-  if (sceneMemory_ != VK_NULL_HANDLE) {
-    vkFreeMemory(device, sceneMemory_, nullptr);
-    sceneMemory_ = VK_NULL_HANDLE;
-  }
+  vulkan_.destroyImage(sceneImage_, sceneAlloc_);
 }
 
 void BlurPass::createSceneTarget(uint32_t width, uint32_t height)
@@ -125,7 +118,7 @@ void BlurPass::createSceneTarget(uint32_t width, uint32_t height)
   vulkan_.createImage(
     width, height, 1, VK_SAMPLE_COUNT_1_BIT, format_, VK_IMAGE_TILING_OPTIMAL,
     VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
-    VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, sceneImage_, sceneMemory_);
+    VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, sceneImage_, sceneAlloc_);
   sceneView_ =
     vulkan_.createImageView(sceneImage_, format_, VK_IMAGE_ASPECT_COLOR_BIT, 1);
 
@@ -236,7 +229,7 @@ void BlurPass::destroyImages()
 {
   VkDevice device = vulkan_.getDevice();
   auto kill = [&](VkFramebuffer &fb, VkImageView &v, VkImage &img,
-                  VkDeviceMemory &mem) {
+                  VmaAllocation &alloc) {
     if (fb != VK_NULL_HANDLE) {
       vkDestroyFramebuffer(device, fb, nullptr);
       fb = VK_NULL_HANDLE;
@@ -245,17 +238,10 @@ void BlurPass::destroyImages()
       vkDestroyImageView(device, v, nullptr);
       v = VK_NULL_HANDLE;
     }
-    if (img != VK_NULL_HANDLE) {
-      vkDestroyImage(device, img, nullptr);
-      img = VK_NULL_HANDLE;
-    }
-    if (mem != VK_NULL_HANDLE) {
-      vkFreeMemory(device, mem, nullptr);
-      mem = VK_NULL_HANDLE;
-    }
+    vulkan_.destroyImage(img, alloc);
   };
-  kill(fbA_, viewA_, imageA_, memoryA_);
-  kill(fbB_, viewB_, imageB_, memoryB_);
+  kill(fbA_, viewA_, imageA_, allocA_);
+  kill(fbB_, viewB_, imageB_, allocB_);
   width_ = height_ = 0;
 }
 
@@ -265,13 +251,13 @@ void BlurPass::createImages(uint32_t width, uint32_t height)
   width_ = width;
   height_ = height;
 
-  auto make = [&](VkImage &img, VkDeviceMemory &mem, VkImageView &view,
+  auto make = [&](VkImage &img, VmaAllocation &alloc, VkImageView &view,
                   VkFramebuffer &fb) {
     vulkan_.createImage(
       width, height, 1, VK_SAMPLE_COUNT_1_BIT, format_, VK_IMAGE_TILING_OPTIMAL,
       VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT |
         VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
-      VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, img, mem);
+      VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, img, alloc);
     view = vulkan_.createImageView(img, format_, VK_IMAGE_ASPECT_COLOR_BIT, 1);
 
     VkFramebufferCreateInfo fbi{
@@ -287,8 +273,8 @@ void BlurPass::createImages(uint32_t width, uint32_t height)
        "blur framebuffer");
   };
 
-  make(imageA_, memoryA_, viewA_, fbA_);
-  make(imageB_, memoryB_, viewB_, fbB_);
+  make(imageA_, allocA_, viewA_, fbA_);
+  make(imageB_, allocB_, viewB_, fbB_);
 
   auto writeSet = [&](VkDescriptorSet set, VkImageView view) {
     VkDescriptorImageInfo ii{

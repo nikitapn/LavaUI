@@ -49,10 +49,10 @@ struct TextRenderer::Impl {
   }
 
   // Vulkan resources
-  VkImage        atlasTexture_;
-  VkDeviceMemory atlasTextureMemory_;
-  VkImageView    atlasTextureView_;
-  VkSampler      atlasSampler_;
+  VkImage       atlasTexture_;
+  VmaAllocation atlasTextureAlloc_;
+  VkImageView   atlasTextureView_;
+  VkSampler     atlasSampler_;
 
   // Rendering pipeline
 
@@ -76,7 +76,7 @@ struct TextRenderer::Impl {
       : vulkan_(vulkan),
         shaders_(vulkan),
         atlasTexture_(VK_NULL_HANDLE),
-        atlasTextureMemory_(VK_NULL_HANDLE),
+        atlasTextureAlloc_(VK_NULL_HANDLE),
         atlasTextureView_(VK_NULL_HANDLE),
         atlasSampler_(VK_NULL_HANDLE),
         atlasWidth_(512),
@@ -120,14 +120,7 @@ struct TextRenderer::Impl {
       vkDestroyImageView(device, atlasTextureView_, nullptr);
       atlasTextureView_ = VK_NULL_HANDLE;
     }
-    if (atlasTexture_ != VK_NULL_HANDLE) {
-      vkDestroyImage(device, atlasTexture_, nullptr);
-      atlasTexture_ = VK_NULL_HANDLE;
-    }
-    if (atlasTextureMemory_ != VK_NULL_HANDLE) {
-      vkFreeMemory(device, atlasTextureMemory_, nullptr);
-      atlasTextureMemory_ = VK_NULL_HANDLE;
-    }
+    vulkan_.destroyImage(atlasTexture_, atlasTextureAlloc_);
   }
 
   ~Impl() {
@@ -166,7 +159,7 @@ struct TextRenderer::Impl {
       VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
       VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
       atlasTexture_,
-      atlasTextureMemory_);
+      atlasTextureAlloc_);
 
     // Transition to optimal layout
     vulkan_.transitionImageLayout(atlasTexture_,
@@ -255,12 +248,12 @@ struct TextRenderer::Impl {
     }
 
     VkDevice device = vulkan_.getDevice();
-    VkImage        newImage{};
-    VkDeviceMemory newMemory{};
+    VkImage       newImage{};
+    VmaAllocation newAlloc{};
     vulkan_.createImage(newW, newH, 1, VK_SAMPLE_COUNT_1_BIT, VK_FORMAT_R8_UNORM,
                         VK_IMAGE_TILING_OPTIMAL,
                         VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
-                        VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, newImage, newMemory);
+                        VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, newImage, newAlloc);
 
     vulkan_.transitionImageLayout(newImage, VK_FORMAT_R8_UNORM,
                                   VK_IMAGE_LAYOUT_UNDEFINED,
@@ -287,12 +280,12 @@ struct TextRenderer::Impl {
                                   VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
 
     vkDestroyImageView(device, atlasTextureView_, nullptr);
-    vkDestroyImage(device, atlasTexture_, nullptr);
-    vkFreeMemory(device, atlasTextureMemory_, nullptr);
+    atlasTextureView_ = VK_NULL_HANDLE;
+    vulkan_.destroyImage(atlasTexture_, atlasTextureAlloc_);
 
-    atlasTexture_       = newImage;
-    atlasTextureMemory_ = newMemory;
-    atlasTextureView_   = vulkan_.createImageView(
+    atlasTexture_      = newImage;
+    atlasTextureAlloc_ = newAlloc;
+    atlasTextureView_  = vulkan_.createImageView(
       atlasTexture_, VK_FORMAT_R8_UNORM, VK_IMAGE_ASPECT_COLOR_BIT, 1);
 
     // Pixel positions are unchanged; only the normalisation denominator grew.
@@ -316,22 +309,20 @@ struct TextRenderer::Impl {
     VkDeviceSize bufferSize = static_cast<VkDeviceSize>(bitmap.width) * bitmap.height;
     if (bufferSize == 0) return;
 
-    VkBuffer       stagingBuffer;
-    VkDeviceMemory stagingBufferMemory;
+    VkBuffer      stagingBuffer;
+    VmaAllocation stagingAlloc;
 
     vulkan_.createBuffer(bufferSize,
                          VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
                          VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
                            VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
                          stagingBuffer,
-                         stagingBufferMemory);
+                         stagingAlloc);
 
     // Copy bitmap data to staging buffer
-    void*    data;
-    VkDevice device = vulkan_.getDevice();
-    vkMapMemory(device, stagingBufferMemory, 0, bufferSize, 0, &data);
+    void *data = vulkan_.mapBuffer(stagingAlloc);
     memcpy(data, bitmap.pixels.data(), bufferSize);
-    vkUnmapMemory(device, stagingBufferMemory);
+    vulkan_.unmapBuffer(stagingAlloc);
 
     // Copy from staging buffer to texture
     VkCommandBuffer commandBuffer = vulkan_.beginSingleTimeCommands();
@@ -411,9 +402,7 @@ struct TextRenderer::Impl {
 
     vulkan_.endSingleTimeCommands(commandBuffer);
 
-    // Cleanup staging buffer
-    vkDestroyBuffer(device, stagingBuffer, nullptr);
-    vkFreeMemory(device, stagingBufferMemory, nullptr);
+    vulkan_.destroyBuffer(stagingBuffer, stagingAlloc);
   }
 };
 

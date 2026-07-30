@@ -5,9 +5,9 @@
 #include <string>
 
 #include <vulkan/vulkan.h>
+#include "vk_mem_alloc.h"
 
 #include "util/types.hpp"
-#include "render/vulkan_ptr.hpp"
 
 class Vulkan;
 
@@ -23,13 +23,15 @@ struct TextureHandle {
 class TextureManager {
 private:
     struct TextureData {
-        vk::Handle<VkImage> image;
-        vk::Handle<VkDeviceMemory> memory;
-        vk::Handle<VkImageView> view;
+        VkImage image = VK_NULL_HANDLE;
+        VmaAllocation allocation = VK_NULL_HANDLE;
+        VkImageView view = VK_NULL_HANDLE;
         std::string path;
         uint32_t refCount = 0;
         uint32_t width = 0;
         uint32_t height = 0;
+        /// False for external views (e.g. shadow map) we do not own.
+        bool ownsImage = true;
     };
 
     std::unordered_map<std::string, std::unique_ptr<TextureData>> textures_;

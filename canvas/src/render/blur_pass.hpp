@@ -20,6 +20,7 @@
 
 #include <cstdint>
 #include <vulkan/vulkan.h>
+#include "vk_mem_alloc.h"
 
 #include "util/types.hpp"
 
@@ -113,20 +114,20 @@ class BlurPass {
 
   Vulkan &vulkan_;
 
-  VkImage        imageA_ = VK_NULL_HANDLE;
-  VkDeviceMemory memoryA_ = VK_NULL_HANDLE;
-  VkImageView    viewA_ = VK_NULL_HANDLE;
+  VkImage       imageA_ = VK_NULL_HANDLE;
+  VmaAllocation allocA_ = VK_NULL_HANDLE;
+  VkImageView   viewA_ = VK_NULL_HANDLE;
 
-  VkImage        imageB_ = VK_NULL_HANDLE;
-  VkDeviceMemory memoryB_ = VK_NULL_HANDLE;
-  VkImageView    viewB_ = VK_NULL_HANDLE;
+  VkImage       imageB_ = VK_NULL_HANDLE;
+  VmaAllocation allocB_ = VK_NULL_HANDLE;
+  VkImageView   viewB_ = VK_NULL_HANDLE;
 
   VkSampler sampler_ = VK_NULL_HANDLE;
 
   /// Window-sized, single-sample target a subtree renders into for content blur.
-  VkImage        sceneImage_ = VK_NULL_HANDLE;
-  VkDeviceMemory sceneMemory_ = VK_NULL_HANDLE;
-  VkImageView    sceneView_ = VK_NULL_HANDLE;
+  VkImage       sceneImage_ = VK_NULL_HANDLE;
+  VmaAllocation sceneAlloc_ = VK_NULL_HANDLE;
+  VkImageView   sceneView_ = VK_NULL_HANDLE;
   VkFramebuffer  sceneFb_ = VK_NULL_HANDLE;
   VkRenderPass   sceneRenderPass_ = VK_NULL_HANDLE;
 

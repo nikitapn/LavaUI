@@ -68,7 +68,7 @@ void ComputePhysics::createBuffers() {
         VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
         VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
         particleBuffer_,
-        particleBufferMemory_
+        particleAlloc_
     );
     
     // Create collision pair buffer
@@ -77,7 +77,7 @@ void ComputePhysics::createBuffers() {
         VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
         VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
         collisionPairBuffer_,
-        collisionPairBufferMemory_
+        collisionPairAlloc_
     );
     
     // Create collision count buffer  
@@ -86,13 +86,13 @@ void ComputePhysics::createBuffers() {
         VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
         VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
         collisionCountBuffer_,
-        collisionCountBufferMemory_
+        collisionCountAlloc_
     );
     
     // Create uniform buffer
-    auto [uniformBuffer, uniformBufferMemory] = vulkan_.createUniformBuffer(uniformBufferSize);
+    auto [uniformBuffer, uniformAlloc] = vulkan_.createUniformBuffer(uniformBufferSize);
     uniformBuffer_ = uniformBuffer;
-    uniformBufferMemory_ = uniformBufferMemory;
+    uniformAlloc_ = uniformAlloc;
 }
 
 void ComputePhysics::updateDescriptorSet() {
@@ -178,38 +178,28 @@ void ComputePhysics::setParticles(const std::vector<GPUParticle>& particles) {
     // Create staging buffer
     VkDeviceSize bufferSize = sizeof(GPUParticle) * particleCount_;
     VkBuffer stagingBuffer;
-    VkDeviceMemory stagingBufferMemory;
+    VmaAllocation stagingAlloc;
     
     vulkan_.createBuffer(
         bufferSize,
         VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
         VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
         stagingBuffer,
-        stagingBufferMemory
+        stagingAlloc
     );
     
-    // Copy data to staging buffer
-    void* data;
-    VkDevice device = vulkan_.getDevice();
-    vkMapMemory(device, stagingBufferMemory, 0, bufferSize, 0, &data);
+    void* data = vulkan_.mapBuffer(stagingAlloc);
     memcpy(data, particles.data(), static_cast<size_t>(bufferSize));
-    vkUnmapMemory(device, stagingBufferMemory);
+    vulkan_.unmapBuffer(stagingAlloc);
     
-    // Copy from staging to device buffer
     vulkan_.copyBuffer(stagingBuffer, particleBuffer_, bufferSize);
-    
-    // Cleanup staging buffer
-    vkDestroyBuffer(device, stagingBuffer, nullptr);
-    vkFreeMemory(device, stagingBufferMemory, nullptr);
+    vulkan_.destroyBuffer(stagingBuffer, stagingAlloc);
 }
 
 void ComputePhysics::updateSimulationParams(const SimulationParams& params) {
-    VkDevice device = vulkan_.getDevice();
-    
-    void* data;
-    vkMapMemory(device, uniformBufferMemory_, 0, sizeof(SimulationParams), 0, &data);
+    void* data = vulkan_.mapBuffer(uniformAlloc_);
     memcpy(data, &params, sizeof(SimulationParams));
-    vkUnmapMemory(device, uniformBufferMemory_);
+    vulkan_.unmapBuffer(uniformAlloc_);
 }
 
 void ComputePhysics::computeStep() {
@@ -277,29 +267,24 @@ void ComputePhysics::readParticles(std::vector<GPUParticle>& outParticles) {
     
     VkDeviceSize bufferSize = sizeof(GPUParticle) * particleCount_;
     VkBuffer stagingBuffer;
-    VkDeviceMemory stagingBufferMemory;
+    VmaAllocation stagingAlloc;
     
     vulkan_.createBuffer(
         bufferSize,
         VK_BUFFER_USAGE_TRANSFER_DST_BIT,
         VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
         stagingBuffer,
-        stagingBufferMemory
+        stagingAlloc
     );
     
     // Copy from device buffer to staging
     vulkan_.copyBuffer(particleBuffer_, stagingBuffer, bufferSize);
     
-    // Map and read data
-    void* data;
-    VkDevice device = vulkan_.getDevice();
-    vkMapMemory(device, stagingBufferMemory, 0, bufferSize, 0, &data);
+    void* data = vulkan_.mapBuffer(stagingAlloc);
     memcpy(outParticles.data(), data, static_cast<size_t>(bufferSize));
-    vkUnmapMemory(device, stagingBufferMemory);
+    vulkan_.unmapBuffer(stagingAlloc);
     
-    // Cleanup
-    vkDestroyBuffer(device, stagingBuffer, nullptr);
-    vkFreeMemory(device, stagingBufferMemory, nullptr);
+    vulkan_.destroyBuffer(stagingBuffer, stagingAlloc);
 }
 
 void ComputePhysics::clearCollisionCount() {
@@ -307,29 +292,24 @@ void ComputePhysics::clearCollisionCount() {
     
     // Create staging buffer
     VkBuffer stagingBuffer;
-    VkDeviceMemory stagingBufferMemory;
+    VmaAllocation stagingAlloc;
     
     vulkan_.createBuffer(
         sizeof(uint32_t),
         VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
         VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
         stagingBuffer,
-        stagingBufferMemory
+        stagingAlloc
     );
     
-    // Copy zero to staging buffer
-    void* data;
-    VkDevice device = vulkan_.getDevice();
-    vkMapMemory(device, stagingBufferMemory, 0, sizeof(uint32_t), 0, &data);
+    void* data = vulkan_.mapBuffer(stagingAlloc);
     memcpy(data, &zero, sizeof(uint32_t));
-    vkUnmapMemory(device, stagingBufferMemory);
+    vulkan_.unmapBuffer(stagingAlloc);
     
     // Copy to collision count buffer
     vulkan_.copyBuffer(stagingBuffer, collisionCountBuffer_, sizeof(uint32_t));
     
-    // Cleanup
-    vkDestroyBuffer(device, stagingBuffer, nullptr);
-    vkFreeMemory(device, stagingBufferMemory, nullptr);
+    vulkan_.destroyBuffer(stagingBuffer, stagingAlloc);
 }
 
 uint32_t ComputePhysics::readCollisionCount() {
@@ -337,29 +317,24 @@ uint32_t ComputePhysics::readCollisionCount() {
     
     // Create staging buffer
     VkBuffer stagingBuffer;
-    VkDeviceMemory stagingBufferMemory;
+    VmaAllocation stagingAlloc;
     
     vulkan_.createBuffer(
         sizeof(uint32_t),
         VK_BUFFER_USAGE_TRANSFER_DST_BIT,
         VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
         stagingBuffer,
-        stagingBufferMemory
+        stagingAlloc
     );
     
     // Copy from collision count buffer to staging
     vulkan_.copyBuffer(collisionCountBuffer_, stagingBuffer, sizeof(uint32_t));
     
-    // Read data
-    void* data;
-    VkDevice device = vulkan_.getDevice();
-    vkMapMemory(device, stagingBufferMemory, 0, sizeof(uint32_t), 0, &data);
+    void* data = vulkan_.mapBuffer(stagingAlloc);
     memcpy(&count, data, sizeof(uint32_t));
-    vkUnmapMemory(device, stagingBufferMemory);
+    vulkan_.unmapBuffer(stagingAlloc);
     
-    // Cleanup
-    vkDestroyBuffer(device, stagingBuffer, nullptr);
-    vkFreeMemory(device, stagingBufferMemory, nullptr);
+    vulkan_.destroyBuffer(stagingBuffer, stagingAlloc);
     
     return count;
 }
@@ -367,45 +342,10 @@ uint32_t ComputePhysics::readCollisionCount() {
 void ComputePhysics::cleanup() {
     VkDevice device = vulkan_.getDevice();
     
-    if (particleBuffer_ != VK_NULL_HANDLE) {
-        vkDestroyBuffer(device, particleBuffer_, nullptr);
-        particleBuffer_ = VK_NULL_HANDLE;
-    }
-    
-    if (particleBufferMemory_ != VK_NULL_HANDLE) {
-        vkFreeMemory(device, particleBufferMemory_, nullptr);
-        particleBufferMemory_ = VK_NULL_HANDLE;
-    }
-    
-    if (uniformBuffer_ != VK_NULL_HANDLE) {
-        vkDestroyBuffer(device, uniformBuffer_, nullptr);
-        uniformBuffer_ = VK_NULL_HANDLE;
-    }
-    
-    if (uniformBufferMemory_ != VK_NULL_HANDLE) {
-        vkFreeMemory(device, uniformBufferMemory_, nullptr);
-        uniformBufferMemory_ = VK_NULL_HANDLE;
-    }
-    
-    if (collisionPairBuffer_ != VK_NULL_HANDLE) {
-        vkDestroyBuffer(device, collisionPairBuffer_, nullptr);
-        collisionPairBuffer_ = VK_NULL_HANDLE;
-    }
-    
-    if (collisionPairBufferMemory_ != VK_NULL_HANDLE) {
-        vkFreeMemory(device, collisionPairBufferMemory_, nullptr);
-        collisionPairBufferMemory_ = VK_NULL_HANDLE;
-    }
-    
-    if (collisionCountBuffer_ != VK_NULL_HANDLE) {
-        vkDestroyBuffer(device, collisionCountBuffer_, nullptr);
-        collisionCountBuffer_ = VK_NULL_HANDLE;
-    }
-    
-    if (collisionCountBufferMemory_ != VK_NULL_HANDLE) {
-        vkFreeMemory(device, collisionCountBufferMemory_, nullptr);
-        collisionCountBufferMemory_ = VK_NULL_HANDLE;
-    }
+    vulkan_.destroyBuffer(particleBuffer_, particleAlloc_);
+    vulkan_.destroyBuffer(uniformBuffer_, uniformAlloc_);
+    vulkan_.destroyBuffer(collisionPairBuffer_, collisionPairAlloc_);
+    vulkan_.destroyBuffer(collisionCountBuffer_, collisionCountAlloc_);
     
     if (integrationPipeline_ != VK_NULL_HANDLE) {
         vkDestroyPipeline(device, integrationPipeline_, nullptr);

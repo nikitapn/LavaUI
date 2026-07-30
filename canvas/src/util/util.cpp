@@ -1,9 +1,39 @@
+#include <cctype>
+#include <cstdlib>
+#include <cstring>
 #include <fstream>
 #include <filesystem>
+#include <string_view>
 
 #include "util/util.hpp"
 
 namespace utils {
+
+bool envFlag(const char *name, bool defaultValue)
+{
+  const char *raw = std::getenv(name);
+  if (raw == nullptr || raw[0] == '\0') return defaultValue;
+
+  // Strip leading/trailing whitespace without allocating.
+  while (*raw != '\0' && std::isspace(static_cast<unsigned char>(*raw)))
+    ++raw;
+  if (*raw == '\0') return defaultValue;
+
+  char buf[16]{};
+  size_t n = 0;
+  for (const char *p = raw; *p != '\0' && n + 1 < sizeof(buf); ++p) {
+    if (std::isspace(static_cast<unsigned char>(*p))) break;
+    buf[n++] = static_cast<char>(std::tolower(static_cast<unsigned char>(*p)));
+  }
+  buf[n] = '\0';
+  const std::string_view v{buf, n};
+
+  if (v == "0" || v == "false" || v == "no" || v == "off") return false;
+  if (v == "1" || v == "true" || v == "yes" || v == "on") return true;
+
+  // Any other non-empty value: treat as on (e.g. CANVAS_VK_VALIDATION=layers).
+  return true;
+}
 
 std::vector<char> readFile(const std::filesystem::path& filepath) {
   std::ifstream file(filepath, std::ios::binary);

@@ -23,6 +23,7 @@
 #include <vector>
 
 #include <vulkan/vulkan.h>
+#include "vk_mem_alloc.h"
 
 #include "render/vulkan_ptr.hpp"
 #include "util/types.hpp"
@@ -143,13 +144,13 @@ class QuadRenderer {
 
   /// Per-frame-slot GPU resources (not shared across in-flight frames).
   struct FrameResources {
-    VkBuffer       vertexBuffer       = VK_NULL_HANDLE;
-    VkDeviceMemory vertexBufferMemory = VK_NULL_HANDLE;
-    void          *vertexMapped       = nullptr;
-    VkBuffer       indexBuffer        = VK_NULL_HANDLE;
-    VkDeviceMemory indexBufferMemory  = VK_NULL_HANDLE;
-    void          *indexMapped        = nullptr;
-    size_t         capacity           = 0;  // vertices
+    VkBuffer      vertexBuffer = VK_NULL_HANDLE;
+    VmaAllocation vertexAlloc  = VK_NULL_HANDLE;
+    void         *vertexMapped = nullptr;
+    VkBuffer      indexBuffer  = VK_NULL_HANDLE;
+    VmaAllocation indexAlloc   = VK_NULL_HANDLE;
+    void         *indexMapped  = nullptr;
+    size_t        capacity     = 0;  // vertices
     std::vector<VkDescriptorSet> descriptorSets;
     uint32_t descriptorWriteIndex = 0;
   };
@@ -191,9 +192,9 @@ class QuadRenderer {
   uint32_t activeFrameSlot_ = 0;
 
   // 1x1 opaque white, bound until setAtlas() supplies the glyph atlas.
-  VkImage        whiteImage_       = VK_NULL_HANDLE;
-  VkDeviceMemory whiteImageMemory_ = VK_NULL_HANDLE;
-  VkImageView    whiteImageView_   = VK_NULL_HANDLE;
+  VkImage       whiteImage_      = VK_NULL_HANDLE;
+  VmaAllocation whiteImageAlloc_ = VK_NULL_HANDLE;
+  VkImageView   whiteImageView_  = VK_NULL_HANDLE;
   VkSampler      sampler_          = VK_NULL_HANDLE;
   VkImageView    glyphAtlasView_   = VK_NULL_HANDLE;
   VkSampler      glyphAtlasSampler_ = VK_NULL_HANDLE;
