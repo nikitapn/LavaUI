@@ -1110,12 +1110,13 @@ void Vulkan::createSyncObjects()
 
 void Vulkan::createPresentSyncObjects()
 {
+  // Acquire semaphores are per frames-in-flight (safe: tied to the frame fence).
+  // Present-wait (renderFinished) semaphores live with the swapchain images —
+  // see createSwapchain / cleanupSwapchain.
   VkSemaphoreCreateInfo semInfo {VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
   for (uint32_t i = 0; i < kMaxFramesInFlight; ++i) {
     VR(vkCreateSemaphore(device_, &semInfo, nullptr, &imageAvailableSemaphores_[i]),
        "imageAvailable semaphore");
-    VR(vkCreateSemaphore(device_, &semInfo, nullptr, &renderFinishedSemaphores_[i]),
-       "renderFinished semaphore");
   }
 }
 
@@ -1211,6 +1212,16 @@ void Vulkan::createSwapchain()
       swapchainImages_[i], swapchainImageFormat_, VK_IMAGE_ASPECT_COLOR_BIT, 1);
   }
 
+  // One present-wait semaphore per swapchain image. Index by acquired image
+  // index so a semaphore is only reused after that image is re-acquired
+  // (which means the previous present that waited on it has finished).
+  VkSemaphoreCreateInfo semInfo {VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
+  renderFinishedSemaphores_.assign(actualCount, VK_NULL_HANDLE);
+  for (uint32_t i = 0; i < actualCount; ++i) {
+    VR(vkCreateSemaphore(device_, &semInfo, nullptr, &renderFinishedSemaphores_[i]),
+       "renderFinished semaphore");
+  }
+
   std::cout << "Swapchain: " << swapchainExtent_.width << "x"
             << swapchainExtent_.height << " (" << actualCount
             << " images, present=" << presentName
@@ -1219,6 +1230,11 @@ void Vulkan::createSwapchain()
 
 void Vulkan::cleanupSwapchain()
 {
+  for (auto sem : renderFinishedSemaphores_) {
+    if (sem != VK_NULL_HANDLE) vkDestroySemaphore(device_, sem, nullptr);
+  }
+  renderFinishedSemaphores_.clear();
+
   for (auto view : swapchainImageViews_) {
     if (view != VK_NULL_HANDLE) vkDestroyImageView(device_, view, nullptr);
   }
@@ -1488,16 +1504,13 @@ void Vulkan::cleanUp()
       vkDestroySemaphore(device_, imageAvailableSemaphores_[i], nullptr);
       imageAvailableSemaphores_[i] = VK_NULL_HANDLE;
     }
-    if (renderFinishedSemaphores_[i] != VK_NULL_HANDLE) {
-      vkDestroySemaphore(device_, renderFinishedSemaphores_[i], nullptr);
-      renderFinishedSemaphores_[i] = VK_NULL_HANDLE;
-    }
     if (inFlightFences_[i] != VK_NULL_HANDLE) {
       vkDestroyFence(device_, inFlightFences_[i], nullptr);
       inFlightFences_[i] = VK_NULL_HANDLE;
     }
     commandBuffers_[i] = VK_NULL_HANDLE;  // freed with command pool
   }
+  // renderFinishedSemaphores_ are destroyed in cleanupSwapchain().
 
   if (commandPool_ != VK_NULL_HANDLE) {
     vkDestroyCommandPool(device_, commandPool_, nullptr);
@@ -1764,12 +1777,16 @@ void Vulkan::renderWithShadows(
   };
 
   VkPipelineStageFlags waitStage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+  // Present-wait semaphore is keyed by swapchain image index, not frame slot.
+  VkSemaphore renderFinished = VK_NULL_HANDLE;
   if (windowed_) {
+    assert(swapImageIndex < renderFinishedSemaphores_.size());
+    renderFinished = renderFinishedSemaphores_[swapImageIndex];
     submitInfo.waitSemaphoreCount = 1;
     submitInfo.pWaitSemaphores = &imageAvailableSemaphores_[frame];
     submitInfo.pWaitDstStageMask = &waitStage;
     submitInfo.signalSemaphoreCount = 1;
-    submitInfo.pSignalSemaphores = &renderFinishedSemaphores_[frame];
+    submitInfo.pSignalSemaphores = &renderFinished;
   }
 
   VR(vkQueueSubmit(graphicsQueue_, 1, &submitInfo, fence),
@@ -1779,7 +1796,7 @@ void Vulkan::renderWithShadows(
     VkPresentInfoKHR presentInfo {
       .sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
       .waitSemaphoreCount = 1,
-      .pWaitSemaphores = &renderFinishedSemaphores_[frame],
+      .pWaitSemaphores = &renderFinished,
       .swapchainCount = 1,
       .pSwapchains = &swapchain_,
       .pImageIndices = &swapImageIndex,

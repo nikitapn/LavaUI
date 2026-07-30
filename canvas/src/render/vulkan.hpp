@@ -82,8 +82,12 @@ class Vulkan
 
   /// CPU/GPU overlap: while the GPU draws slot N, the CPU builds slot N+1.
   static constexpr uint32_t kMaxFramesInFlight = 2;
+  /// Per in-flight frame: signals that the acquired image is ready to use.
   VkSemaphore imageAvailableSemaphores_[kMaxFramesInFlight]{};
-  VkSemaphore renderFinishedSemaphores_[kMaxFramesInFlight]{};
+  /// Per *swapchain image* (not frame slot): submit → present wait. Reusing a
+  /// frame-slot semaphore is illegal until that image is re-acquired; see
+  /// https://docs.vulkan.org/guide/latest/swapchain_semaphore_reuse.html
+  std::vector<VkSemaphore> renderFinishedSemaphores_;
   VkCommandBuffer commandBuffers_[kMaxFramesInFlight]{};
   VkFence inFlightFences_[kMaxFramesInFlight]{};
   uint32_t currentFrame_ = 0;

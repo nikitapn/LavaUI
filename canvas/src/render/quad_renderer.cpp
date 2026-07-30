@@ -252,6 +252,18 @@ void QuadRenderer::createPipeline(VkRenderPass renderPass,
     .rasterizationSamples = samples,
   };
 
+  // Main UI render pass has a depth attachment, so the spec requires a valid
+  // pDepthStencilState even though 2D UI paints in draw-list order and never
+  // tests or writes depth. Required by VUID-VkGraphicsPipelineCreateInfo-renderPass-09028.
+  VkPipelineDepthStencilStateCreateInfo depthStencil{
+    .sType                 = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO,
+    .depthTestEnable       = VK_FALSE,
+    .depthWriteEnable      = VK_FALSE,
+    .depthCompareOp        = VK_COMPARE_OP_ALWAYS,
+    .depthBoundsTestEnable = VK_FALSE,
+    .stencilTestEnable     = VK_FALSE,
+  };
+
   // Premultiplied source (see quad.frag): ONE rather than SRC_ALPHA. Over an
   // opaque target this is the same image as straight alpha; over the
   // transparent target that content blur renders into, it is the only form the
@@ -291,6 +303,7 @@ void QuadRenderer::createPipeline(VkRenderPass renderPass,
     .pViewportState      = &viewportState,
     .pRasterizationState = &rasterizer,
     .pMultisampleState   = &multisampling,
+    .pDepthStencilState  = &depthStencil,
     .pColorBlendState    = &colorBlending,
     .pDynamicState       = &dynamicState,
     .layout              = pipelineLayout_,
