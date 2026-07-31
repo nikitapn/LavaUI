@@ -9,7 +9,7 @@ let package = Package(
     platforms: [.macOS(.v13)],
     products: [
         .executable(name: "HelloWorld", targets: ["HelloWorld"]),
-        .executable(name: "TraceLoom", targets: ["HelloWorld"]),
+        .executable(name: "TraceLoom", targets: ["TraceLoomApp"]),
         .library(name: "LavaUI", targets: ["LavaUI"]),
         .library(name: "LavaText", targets: ["LavaText"]),
         .library(name: "TraceLoomCore", targets: ["TraceLoomCore"]),
@@ -66,12 +66,22 @@ let package = Package(
             dependencies: [
                 "LavaUI",
                 "FBDModel",
-                "TraceLoomCore",
             ],
             swiftSettings: [
                 // App only needs interop if LavaUI's public API re-exports C++
                 // types into app code. Keep C++ mode so #if canImport(CxxCanvas)
                 // paths in HelloWorld still see the module on Linux.
+                .interoperabilityMode(.Cxx),
+                .unsafeFlags(["-Xcc", "-std=c++23"]),
+            ]
+        ),
+        .executableTarget(
+            name: "TraceLoomApp",
+            dependencies: [
+                "LavaUI",
+                "TraceLoomCore",
+            ],
+            swiftSettings: [
                 .interoperabilityMode(.Cxx),
                 .unsafeFlags(["-Xcc", "-std=c++23"]),
             ]

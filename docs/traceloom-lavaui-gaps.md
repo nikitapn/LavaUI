@@ -36,13 +36,17 @@ Suggested framework shape: editor decorations keyed by source range, with gutter
 
 TraceLoom impact: diagnostics identify the rule or log line in a separate status panel.
 
-## 5. No app lifecycle abstraction
+## 5. No app lifecycle abstraction — RESOLVED
 
 Creating a second LavaUI executable currently requires duplicating the complete window, frame, input, invalidation, font, clipboard, and agent-server loop from `HelloWorldApp`.
 
 Suggested framework shape: a small public application host that accepts a window configuration and root-view factory while retaining hooks for app-level raw key handling.
 
 TraceLoom impact: the package exposes `TraceLoom` as a new executable product backed by the existing executable target, avoiding a second copy of the loop.
+
+Fixed: the loop now lives in `LavaUI.LavaApp` — `open(title:assetsRoot:width:height:)` (window + font bootstrap + clipboard) and `run(editor:onRawKey:makeRoot:)` (the full input/invalidation/render/agent-server loop, generic over `some View`), with `onRawKey` as the app-level raw-key hook. Split in two rather than one call because asset loading an app owns (TraceLoom has none; `DemoExample`'s brand image) has to happen once against an opened `Editor`, before `run`'s hot path — `LavaApp.resolveAssetsRoot(_:)` is exposed so a caller's own loading agrees with what `open` used internally.
+
+This also undid a workaround from `TraceLoom`'s original landing: both executable products had pointed at the *same* target/`@main`, so `DemoExample` and `TraceLoom` could never run at the same time and `DemoExample` was unreachable dead code. `TraceLoomApp` is now its own target (`Sources/TraceLoomApp/`, ~20 lines) alongside `HelloWorld`'s own (~25 lines); both call `LavaApp` and both run independently again.
 
 ## 6. Proportional dimensions are missing — RESOLVED
 
