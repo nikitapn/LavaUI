@@ -86,6 +86,16 @@ public struct VisualLayout: Equatable {
 
     /// One row per logical line — the no-wrapping case.
     public static func logical(_ text: String) -> VisualLayout {
+        VisualLayout(rows: logicalRows(text))
+    }
+
+    /// Row boundaries for `logical(_:)`, exposed separately so a caller (an
+    /// editor leaf with wrapping off) can cache the result via
+    /// `TextEditingState.setVisualRows` instead of recomputing this O(length)
+    /// scan on every `layout` access — which, left uncached, is what a large
+    /// buffer felt: every caret draw, hit test, and gutter row rescanned the
+    /// whole document.
+    public static func logicalRows(_ text: String) -> [Range<Int>] {
         var rows: [Range<Int>] = []
         var start = 0
         var offset = 0
@@ -97,7 +107,7 @@ public struct VisualLayout: Equatable {
             offset += 1
         }
         rows.append(start..<offset)
-        return VisualLayout(rows: rows)
+        return rows
     }
 
     public var count: Int { rows.count }

@@ -123,7 +123,11 @@ final class ScrollNode: YogaBoxNode {
         let next = min(max(0, scrollOffset + delta), maxOffset)
         if next != scrollOffset {
             scrollOffset = next
-            ViewInvalidation.markDirty()
+            // Paint state on the retained node — `emitNodeBody`'s ScrollNode
+            // branch reads `childOffset` fresh every emit regardless of
+            // level. `markDirty` (a full `.body` rebuild) here meant every
+            // wheel notch over a long list re-ran whatever built its rows.
+            ViewInvalidation.markNeedsRedraw()
         }
     }
 

@@ -334,18 +334,39 @@ final class LeafNode: YogaBoxNode {
     var textViewportWidth: Float = 0
     /// Widest row in pixels, cached per (text, font) so a wide buffer does not
     /// reshape every line on every frame just to clamp a scrollbar.
-    private var widestRowCache: (key: String, width: Float)?
+    ///
+    /// Keyed on `editing.text` directly rather than `.count` (an O(length)
+    /// grapheme count, paid on every call, hit or miss) — `String` equality
+    /// short-circuits on shared storage when nothing changed, which is the
+    /// common case here, so this is the one comparison that's actually free
+    /// when it matters.
+    private var widestRowCache: (fontIdentity: String, text: String, width: Float)?
 
+    /// Also used by `measureForYoga`'s intrinsic-width case — one
+    /// computation, one cache, instead of the measure pass silently
+    /// reshaping every line again right after this already did.
     func widestRowWidth(font: UIFont) -> Float {
-        let key = "\(font.identity)|\(editing.text.count)|\(editing.layout.count)"
-        if let c = widestRowCache, c.key == key { return c.width }
-        var widest: Float = 0
-        for r in editing.layout.rows {
-            let lo = editing.index(atOffset: r.lowerBound)
-            let hi = editing.index(atOffset: r.upperBound)
-            widest = max(widest, font.shapedRun(String(editing.text[lo..<hi])).width)
+        if let c = widestRowCache, c.fontIdentity == font.identity, c.text == editing.text {
+            return c.width
         }
-        widestRowCache = (key, widest)
+        let widest: Float
+        if wraps {
+            widest = editing.layout.rows.reduce(Float(0)) { acc, r in
+                let lo = editing.index(atOffset: r.lowerBound)
+                let hi = editing.index(atOffset: r.upperBound)
+                return max(acc, font.shapedRun(String(editing.text[lo..<hi])).width)
+            }
+        } else {
+            // One row per logical line — `editing.lines` already carries
+            // real `Substring` indices from a single split, so this skips
+            // the `index(atOffset:)` walk the wrapped branch needs (each
+            // call walks from the start of the buffer; doing that once per
+            // row, of possibly thousands, is what made this quadratic).
+            widest = editing.lines.reduce(Float(0)) { acc, line in
+                max(acc, font.shapedRun(String(line)).width)
+            }
+        }
+        widestRowCache = (font.identity, editing.text, widest)
         return widest
     }
 
@@ -357,7 +378,12 @@ final class LeafNode: YogaBoxNode {
         let next = min(max(0, scrollX + delta), maxScrollX(font: font))
         if next != scrollX {
             scrollX = next
-            ViewInvalidation.markDirty()
+            // Paint state on a retained node, not a view value — `emitEditor`
+            // reads `scrollX` fresh every emit regardless of level. `markDirty`
+            // (a full `.body` rebuild — for `EditorView`, re-running whatever
+            // parses/highlights the bound text) here meant every wheel notch
+            // over a large buffer repeated all of that just to move pixels.
+            ViewInvalidation.markNeedsRedraw()
         }
     }
 
@@ -409,8 +435,48 @@ final class LeafNode: YogaBoxNode {
         let next = min(max(0, scrollY + delta), maxScrollY(lineHeight: lineHeight))
         if next != scrollY {
             scrollY = next
-            ViewInvalidation.markDirty()
+            // See `scrollByX` — same paint-only state, same reason `.body`
+            // is the wrong (and, for a large buffer, ruinously expensive)
+            // level for it.
+            ViewInvalidation.markNeedsRedraw()
         }
+    }
+
+    /// Last computed `(offset(of: focus), layout.rowIndex(of that offset))`,
+    /// keyed on the exact `focus`/`affinity` they were computed from.
+    private var cachedFocusPosition: (
+        index: String.Index, affinity: CaretAffinity, offset: Int, row: Int
+    )?
+
+    /// `editing.offset(of: editing.focus)`, cached against the last `focus`
+    /// this was computed for. `offset(of:)` walks the buffer from its start;
+    /// a caret that hasn't moved — a blink, or any unrelated redraw while
+    /// focused — would otherwise pay that walk again every single frame,
+    /// which for a caret sitting deep in a large file is most of the cost
+    /// a "nothing is happening" redraw had.
+    func focusOffset() -> Int { focusPosition().offset }
+
+    /// `editing.layout.rowIndex(ofOffset:affinity:)` for the caret, cached
+    /// the same way and for the same reason — it is itself an O(rows) scan
+    /// (rows are not random-access by offset), so on a large file this was
+    /// the next-largest per-redraw cost once `focusOffset()` stopped being
+    /// the dominant one. Deliberately memoized rather than made O(log rows):
+    /// `rowIndex`'s affinity handling at a wrap boundary is subtle enough
+    /// that reimplementing it as a binary search risks a caret-position
+    /// regression for a cost that is already gone whenever the caret is not
+    /// actually moving, which is almost always.
+    func focusRow() -> Int { focusPosition().row }
+
+    private func focusPosition() -> (offset: Int, row: Int) {
+        if let cached = cachedFocusPosition,
+           cached.index == editing.focus, cached.affinity == editing.affinity
+        {
+            return (cached.offset, cached.row)
+        }
+        let offset = editing.offset(of: editing.focus)
+        let row = editing.layout.rowIndex(ofOffset: offset, affinity: editing.affinity)
+        cachedFocusPosition = (editing.focus, editing.affinity, offset, row)
+        return (offset, row)
     }
 
     /// Keeps the caret on screen after a move or an edit.
@@ -437,6 +503,11 @@ final class LeafNode: YogaBoxNode {
     var lastMeasuredWidth: Float = 0
     /// Buffer at last wrap — text edits must re-wrap even if width is unchanged.
     var lastWrappedText: String = ""
+    /// Buffer at last *no-wrap* row rebuild — nil so the very first measure
+    /// always builds. Separate from `lastWrappedText`: `wraps` is fixed per
+    /// leaf, but keeping these apart means one can't accidentally satisfy
+    /// the other's staleness check.
+    var lastLogicalRowsText: String?
     /// Click handler receiving node-local coordinates *and* the node's
     /// absolute origin. The caret needs the former; a drag needs the latter,
     /// because pointer capture delivers window coordinates long after the hit
@@ -554,16 +625,10 @@ final class LeafNode: YogaBoxNode {
             // AtMost result alone — so the long first line never broke and the
             // field grew (or overflowed) as one visual row. Wrap on any
             // constrained mode; Undefined stays unwrapped (intrinsic width).
-            if wraps, width > 0,
-               widthMode == YGMeasureModeExactly || widthMode == YGMeasureModeAtMost
-            {
-                let textNow = editing.text
-                if abs(width - lastMeasuredWidth) > 0.5 || textNow != lastWrappedText {
-                    lastMeasuredWidth = width
-                    lastWrappedText = textNow
-                    refreshVisualRows(availableWidth: width)
-                }
-            }
+            // Called unconditionally (not just while wrapping): it caches
+            // row boundaries for the no-wrap case too, and does its own
+            // text/width staleness check either way.
+            refreshVisualRows(availableWidth: width)
 
             if isMultiline {
                 // Height comes from the rows we will actually draw, so the box
@@ -575,11 +640,10 @@ final class LeafNode: YogaBoxNode {
                 // Seed the viewport; the emitter corrects it from the box Yoga
                 // actually granted, which can be smaller.
                 if viewportHeight <= 0 { viewportHeight = height }
-                let widest = editing.layout.rows.reduce(Float(0)) { acc, r in
-                    let lo = editing.index(atOffset: r.lowerBound)
-                    let hi = editing.index(atOffset: r.upperBound)
-                    return max(acc, font.shapedRun(String(editing.text[lo..<hi])).width)
-                }
+                // Cached on (text, font) — see `widestRowWidth` — so a
+                // measure pass right after a `maxScrollX` call (or vice
+                // versa) doesn't reshape every line a second time.
+                let widest = widestRowWidth(font: font)
                 let contentWidth = widest + gutterWidth + textInset * 2
                 // A wrapping field fills the offered width so Yoga does not
                 // expand the box to the unwrapped line length.

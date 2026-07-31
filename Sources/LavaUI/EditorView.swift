@@ -252,14 +252,20 @@ public struct EditorView: PrimitiveView {
                             let ly = wy - originY + leaf.scrollY
                             if let target = leaf.index(atLocalX: lx, localY: ly) {
                                 leaf.editing.setCursor(target, extending: true)
-                                ViewInvalidation.markDirty()
+                                // Selection lives on the retained node, not
+                                // the bound text — `.body` here meant every
+                                // pointer-move of a drag-select re-ran
+                                // whatever the bound text drives (for
+                                // TraceLoom, a full reparse of the buffer
+                                // being selected *from*).
+                                ViewInvalidation.markNeedsRedraw()
                             }
                         }
                     )
                 }
             }
             CaretBlink.noteEdit()
-            ViewInvalidation.markDirty()
+            ViewInvalidation.markNeedsRedraw()
         }
     }
 }

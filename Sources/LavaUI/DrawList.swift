@@ -957,7 +957,12 @@ extension DrawList {
         // ("code editors scroll horizontally, not wrap"), so indexing the
         // cache by the same `row` used for `rows[row]` below is safe. A
         // wrapping editor would need this keyed by logical line instead.
-        if let highlighter = leaf.highlighter {
+        //
+        // Gated on isStateful so the common rule-list (or no-highlighter)
+        // case never pays for `state.lines` — a fresh O(length) split — on
+        // every single emit. The cache itself no-ops for that case anyway;
+        // this is what stops it from even trying every frame.
+        if let highlighter = leaf.highlighter, highlighter.isStateful {
             leaf.highlightCache.update(lines: state.lines, with: highlighter)
         }
 
@@ -969,10 +974,19 @@ extension DrawList {
         let textX = x + leaf.gutterWidth + inset - leaf.scrollX
         let top = y + inset - leaf.scrollY
 
-        let caretRow = state.layout.rowIndex(
-            ofOffset: state.offset(of: state.focus), affinity: state.affinity
-        )
+        // Both cached on `leaf` against the exact `focus`/`affinity` they
+        // were computed from — see `LeafNode.focusOffset()`/`focusRow()`.
+        // `offset(of:)` walks the buffer from its start and `rowIndex` scans
+        // every row; without this, a caret that hasn't moved still paid
+        // both on every redraw a blink caused, indefinitely, for as long as
+        // the editor stayed focused.
+        let caretOffset = leaf.focusOffset()
+        let caretRow = leaf.focusRow()
         let selection = state.hasSelection ? state.selectedRange : nil
+        // Also once, not once per row a selection happens to span — the
+        // value is the same every time.
+        let selFromOffset = selection.map { state.offset(of: $0.lowerBound) }
+        let selToOffset = selection.map { state.offset(of: $0.upperBound) }
 
         // Only rows intersecting the viewport are emitted: a long buffer costs
         // a screenful of quads, not a file's worth.
@@ -1031,12 +1045,31 @@ extension DrawList {
         )
         defer { popClip() }
 
+        // A running cursor, advanced by *relative* offset row to row, instead
+        // of `state.index(atOffset:)` per row: that walks from the start of
+        // the whole buffer every single call, so on a large file scrolled
+        // any distance in, converting each visible row's bounds independently
+        // cost the distance scrolled once *per row* — the difference between
+        // one ~200ms stall and a few dozen microseconds, every redraw
+        // (including just a blinking caret) for as long as the editor stayed
+        // focused. Paying that walk once, to reach the first visible row,
+        // and advancing by each row's own length from there, is the standard
+        // fix for sequential `String.Index` access.
+        var cursor = state.index(atOffset: rows[firstRow].lowerBound)
+        var cursorOffset = rows[firstRow].lowerBound
+
         for row in firstRow...lastRow {
             let range = rows[row]
             let rowTop = top + Float(row) * lineH
 
-            let lo = state.index(atOffset: range.lowerBound)
-            let hi = state.index(atOffset: range.upperBound)
+            if range.lowerBound > cursorOffset {
+                cursor = state.text.index(cursor, offsetBy: range.lowerBound - cursorOffset)
+            }
+            let lo = cursor
+            let hi = state.text.index(lo, offsetBy: range.upperBound - range.lowerBound)
+            cursor = hi
+            cursorOffset = range.upperBound
+
             let lineText = String(state.text[lo..<hi])
             let run = font.shapedRun(lineText)
 
@@ -1057,12 +1090,14 @@ extension DrawList {
                 )
             }
 
-            if let sel = selection, sel.lowerBound < hi, sel.upperBound > lo {
-                let from = max(state.offset(of: sel.lowerBound), range.lowerBound)
-                let to = min(state.offset(of: sel.upperBound), range.upperBound)
+            if let sel = selection, let selFromOffset, let selToOffset,
+               sel.lowerBound < hi, sel.upperBound > lo
+            {
+                let from = max(selFromOffset, range.lowerBound)
+                let to = min(selToOffset, range.upperBound)
                 let a = columnX(from - range.lowerBound)
                 let b = columnX(to - range.lowerBound)
-                let spansNewline = state.offset(of: sel.upperBound) > range.upperBound
+                let spansNewline = selToOffset > range.upperBound
                 rect(
                     x: textX + a, y: rowTop,
                     w: max(spansNewline ? 4 : 1, b - a), h: lineH,
@@ -1096,7 +1131,7 @@ extension DrawList {
             }
 
             if focused, !state.hasSelection, CaretBlink.isVisible, row == caretRow {
-                let column = state.offset(of: state.focus) - range.lowerBound
+                let column = caretOffset - range.lowerBound
                 rect(
                     x: textX + columnX(column), y: rowTop,
                     w: leaf.theme.caretWidth, h: lineH, color: leaf.theme.textPrimary

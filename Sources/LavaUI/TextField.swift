@@ -119,12 +119,14 @@ public struct TextField: PrimitiveView {
                             ?? run.index(atX: lx - leaf.textInset)
                         leaf.editing.setCursor(target, extending: true)
                         CaretBlink.noteEdit()
-                        ViewInvalidation.markDirty()
+                        // Selection lives on the retained node, not the bound
+                        // text — see the identical note in EditorView.
+                        ViewInvalidation.markNeedsRedraw()
                     }
                 )
             }
             CaretBlink.noteEdit()
-            ViewInvalidation.markDirty()
+            ViewInvalidation.markNeedsRedraw()
         }
     }
 }
@@ -140,29 +142,45 @@ extension LeafNode {
         return font.shapedRun(editing.text)
     }
 
-    /// Recomputes wrapped rows for the current text and width, and installs
-    /// them on the editing state so navigation follows what is drawn.
+    /// Recomputes row boundaries for the current text (and, while wrapping,
+    /// width) and installs them on the editing state so navigation follows
+    /// what is drawn.
     ///
     /// Called from layout rather than from draw: `moveUp`/`moveDown` consult
     /// these, so they have to exist before a key is handled, not just before
-    /// pixels are produced.
+    /// pixels are produced. Guarded on text/width identity in both branches —
+    /// `editing.layout` is read many times per frame (caret, hit test,
+    /// gutter, decorations), and without this, "no wrap" meant `layout`
+    /// fell back to rescanning the whole buffer character by character on
+    /// *every* one of those reads, not just when it actually changed.
     func refreshVisualRows(availableWidth: Float) {
-        guard wraps, let f = font ?? FontStore.default, availableWidth > 0 else {
-            editing.setVisualRows(nil)
+        if wraps, let f = font ?? FontStore.default, availableWidth > 0 {
+            let textNow = editing.text
+            guard abs(availableWidth - lastMeasuredWidth) > 0.5 || textNow != lastWrappedText else {
+                return
+            }
+            lastMeasuredWidth = availableWidth
+            lastWrappedText = textNow
+
+            let inner = max(8, availableWidth - textInset * 2)
+            var rows: [Range<Int>] = []
+            var base = 0
+            for line in editing.lines {
+                let s = String(line)
+                let advances = f.shapedRun(s).characterAdvances
+                for r in SoftWrap.rows(text: s, advances: advances, maxWidth: inner) {
+                    rows.append((base + r.lowerBound)..<(base + r.upperBound))
+                }
+                base += s.count + 1  // + the newline that separated them
+            }
+            editing.setVisualRows(rows)
             return
         }
-        let inner = max(8, availableWidth - textInset * 2)
-        var rows: [Range<Int>] = []
-        var base = 0
-        for line in editing.lines {
-            let s = String(line)
-            let advances = f.shapedRun(s).characterAdvances
-            for r in SoftWrap.rows(text: s, advances: advances, maxWidth: inner) {
-                rows.append((base + r.lowerBound)..<(base + r.upperBound))
-            }
-            base += s.count + 1  // + the newline that separated them
-        }
-        editing.setVisualRows(rows)
+
+        // No wrapping: one row per logical line, cached the same way.
+        guard editing.text != lastLogicalRowsText else { return }
+        lastLogicalRowsText = editing.text
+        editing.setVisualRows(VisualLayout.logicalRows(editing.text))
     }
 
     /// Visual rows currently drawn.
