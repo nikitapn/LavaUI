@@ -135,7 +135,7 @@ public struct EditorView: PrimitiveView {
         }
 
         let binding = _text
-        leaf.onClickLocal = { [weak leaf] localX, localY, originX, originY in
+        leaf.onClickLocal = { [weak leaf] localX, localY, originX, originY, _ in
             guard let leaf else { return }
             leaf.focusSelf(binding: binding, onSubmit: nil)
             // Clicks in the gutter select the whole line, as they do in every

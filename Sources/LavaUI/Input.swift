@@ -72,6 +72,8 @@ public enum KeyAction {
 /// Mirrors `canvas::InputEventKind`.
 public enum InputEventKind: UInt32, Sendable, Equatable {
     case none = 0
+    /// `x`/`y` = window position, `button` = which button, `mods` = held
+    /// modifier keys (see `InputEvent.mods`).
     case mouseDown = 1
     case mouseUp = 2
     case mouseMove = 3
@@ -94,12 +96,17 @@ public struct InputEvent: Sendable, Equatable {
     public var x: Float
     public var y: Float
     public var button: Int32
+    /// GLFW modifier bitfield (see `KeyMods`). Only populated for
+    /// `.mouseDown`/`.mouseUp` — `.scroll` already carries mods in `button`,
+    /// `.key` carries them in `y`.
+    public var mods: Int32
 
-    public init(kind: InputEventKind, x: Float, y: Float, button: Int32) {
+    public init(kind: InputEventKind, x: Float, y: Float, button: Int32, mods: Int32 = 0) {
         self.kind = kind
         self.x = x
         self.y = y
         self.button = button
+        self.mods = mods
     }
 
     public var keyCode: Int32 { button }

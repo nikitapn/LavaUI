@@ -2,13 +2,15 @@
 
 This file records framework limitations encountered while building TraceLoom. The product does not work around these by reaching into LavaUI internals.
 
-## 1. Canvas pointer events do not include coordinates or drag phases
+## 1. Canvas pointer events do not include coordinates or drag phases — RESOLVED
 
 `Canvas` exposes `onTap: (() -> Void)?`. A timeline needs node-local pointer coordinates and at least down/move/up phases to support a synchronized inspection cursor, drag-to-zoom, and range selection. Pointer capture exists internally, but an app-owned canvas cannot use it through public `Canvas` API.
 
 Suggested framework shape: a typed canvas gesture event carrying local and window coordinates, button/modifiers, phase, and a supported pointer-capture lifecycle. Scroll events with local coordinates are also needed for wheel zoom.
 
 TraceLoom impact: charts render on a unified timeline, but cursor inspection and direct manipulation are intentionally not implemented.
+
+Fixed: `Canvas` gained `onGesture: ((CanvasGesture) -> Void)?` (`.began`/`.moved`/`.ended`, local + window coordinates, modifiers from the press) built on the existing internal `PointerCapture`, and `onWheel: ((dx, dy, localX, localY) -> Void)?` built on `ScrollRouter` plus a new `PointerState` (window-space pointer position, since a wheel notch carries none of its own) and a `LeafNode.lastCanvasFrame` cache. Mouse-button events now carry real GLFW modifiers end to end (`InputEvent.mods`, threaded through `hitTestClick`/`onClickLocal`); previously only left-button down/up existed and modifiers were discarded entirely. TraceLoom's unified timeline now has a synchronized inspection cursor built on `onGesture`; drag-to-zoom/range-select are left to the app, the API no longer blocks them.
 
 ## 2. No native file-open or drop surface
 

@@ -282,6 +282,11 @@ final class LeafNode: YogaBoxNode {
     var canvasPaint: ((DrawList, CanvasFrame) -> Void)?
     /// When true, `AnimationDriver` keeps requesting redraws for this leaf.
     var continuousRedraw: Bool = false
+    /// Absolute frame from the most recent `emitLeafContents` — the same
+    /// rect `canvasPaint` was just handed. A wheel event carries no position
+    /// of its own (see `PointerState`); this is what turns that window
+    /// position into a coordinate local to the canvas.
+    var lastCanvasFrame: CanvasFrame = CanvasFrame(x: 0, y: 0, w: 0, h: 0)
 
     /// Divider-only payload. `dividerAxis` is an explicit override; nil infers
     /// the orientation from whatever container this ended up in.
@@ -422,9 +427,12 @@ final class LeafNode: YogaBoxNode {
     /// Click handler receiving node-local coordinates *and* the node's
     /// absolute origin. The caret needs the former; a drag needs the latter,
     /// because pointer capture delivers window coordinates long after the hit
-    /// test that knew where this node was.
+    /// test that knew where this node was. `mods` is whatever was held at the
+    /// moment of the press — a drag can't ask again mid-flight, only a fresh
+    /// press reflects current modifier state.
     var onClickLocal: ((_ localX: Float, _ localY: Float,
-                        _ originX: Float, _ originY: Float) -> Void)?
+                        _ originX: Float, _ originY: Float,
+                        _ mods: Int32) -> Void)?
     /// Called when hover enters/leaves, for views wanting more than a fill.
     var onHover: ((Bool) -> Void)?
 
@@ -1091,7 +1099,8 @@ public final class LayoutHost {
     /// `originY` matches emit offset (menu bar). Window-pixel coordinates.
     public func hitTestClick(
         x: Float, y: Float,
-        originX: Float = 0, originY: Float = 0
+        originX: Float = 0, originY: Float = 0,
+        mods: Int32 = 0
     ) -> (() -> Void)? {
         guard layoutValid, let root else { return nil }
 
@@ -1105,7 +1114,7 @@ public final class LayoutHost {
                 guard let overlayRoot = att.root else { continue }
                 if let hit = hitWalk(
                     overlayRoot, x: x, y: y,
-                    ox: originX + att.origin.x, oy: originY + att.origin.y
+                    ox: originX + att.origin.x, oy: originY + att.origin.y, mods: mods
                 ) {
                     return hit
                 }
@@ -1116,7 +1125,7 @@ public final class LayoutHost {
             return { for att in overlays { att.dismiss() } }
         }
 
-        return hitWalk(root, x: x, y: y, ox: originX, oy: originY)
+        return hitWalk(root, x: x, y: y, ox: originX, oy: originY, mods: mods)
     }
 
     /// Topmost interactive node under the pointer, for hover highlighting.
@@ -1193,7 +1202,8 @@ public final class LayoutHost {
     private func hitWalk(
         _ node: any AnyViewNode,
         x: Float, y: Float,
-        ox: Float, oy: Float
+        ox: Float, oy: Float,
+        mods: Int32
     ) -> (() -> Void)? {
         // Clicking something that is fading out would run an action the view
         // tree no longer describes.
@@ -1209,7 +1219,7 @@ public final class LayoutHost {
             for child in node.childNodes.reversed() {
                 let shift = box.childOffset
                 if let h = hitWalk(
-                    child, x: x, y: y, ox: nx - shift.x, oy: ny - shift.y
+                    child, x: x, y: y, ox: nx - shift.x, oy: ny - shift.y, mods: mods
                 ) { return h }
             }
             if let leaf = node as? LeafNode,
@@ -1218,7 +1228,7 @@ public final class LayoutHost {
                 if let local = leaf.onClickLocal {
                     let lx = x - nx
                     let ly = y - ny
-                    return { local(lx, ly, nx, ny) }
+                    return { local(lx, ly, nx, ny, mods) }
                 }
                 if let click = leaf.onClick, leaf.kind == .text || leaf.kind == .image {
                     return click
@@ -1227,7 +1237,7 @@ public final class LayoutHost {
             return nil
         }
         for child in node.childNodes.reversed() {
-            if let h = hitWalk(child, x: x, y: y, ox: ox, oy: oy) { return h }
+            if let h = hitWalk(child, x: x, y: y, ox: ox, oy: oy, mods: mods) { return h }
         }
         return nil
     }

@@ -179,7 +179,7 @@ struct HelloWorldApp {
             case .mouseDown:
                 if let action = host.hitTestClick(
                     x: ev.x, y: ev.y,
-                    originX: 0, originY: menuH
+                    originX: 0, originY: menuH, mods: ev.mods
                 ) {
                     action()
                 }
@@ -205,6 +205,7 @@ struct HelloWorldApp {
                 }
             case .mouseMove:
                 lastPointer = (ev.x, ev.y)
+                PointerState.set(x: ev.x, y: ev.y)
                 if PointerCapture.isActive {
                     PointerCapture.move(x: ev.x, y: ev.y - menuH)
                 } else {

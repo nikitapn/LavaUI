@@ -79,7 +79,7 @@ public struct Button: PrimitiveView {
         leaf.retargetFill(hovered: HoverState.isHovered(leaf.id), pressed: leaf.isPressed)
 
         let act = action
-        leaf.onClickLocal = { [weak leaf] _, _, _, _ in
+        leaf.onClickLocal = { [weak leaf] _, _, _, _, _ in
             guard let leaf, leaf.isEnabled else { return }
             leaf.isPressed = true
             leaf.retargetFill(hovered: true, pressed: true)

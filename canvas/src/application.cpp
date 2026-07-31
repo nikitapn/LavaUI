@@ -200,13 +200,13 @@ struct Application::Impl
       self->bridgePointerMove(static_cast<float>(x), static_cast<float>(y));
     });
 
-    glfwSetMouseButtonCallback(win, [](GLFWwindow *w, int button, int action, int /*mods*/) {
+    glfwSetMouseButtonCallback(win, [](GLFWwindow *w, int button, int action, int mods) {
       auto *self = static_cast<Impl *>(glfwGetWindowUserPointer(w));
       if (!self) return;
       double x = 0, y = 0;
       glfwGetCursorPos(w, &x, &y);
       self->bridgePointerButton(
-        button, action == GLFW_PRESS, static_cast<float>(x), static_cast<float>(y));
+        button, action == GLFW_PRESS, static_cast<float>(x), static_cast<float>(y), mods);
     });
 
     glfwSetKeyCallback(win, [](GLFWwindow *w, int key, int /*scancode*/, int action, int mods) {
@@ -381,7 +381,10 @@ struct Application::Impl
     }
   }
 
-  void bridgePointerButton(int button, bool pressed, float x, float y) {
+  // mods is only ever non-zero from the live GLFW callback below — injected
+  // clicks (Application::pointerButton, used by Swift/agent input) have no
+  // modifier source and keep the 0 default.
+  void bridgePointerButton(int button, bool pressed, float x, float y, int mods = 0) {
     inputState.mouseX = x;
     inputState.mouseY = y;
     // Queue raw input for Swift hit-testing (Phase 3+).
@@ -394,6 +397,7 @@ struct Application::Impl
       ev.x = x;
       ev.y = y;
       ev.button = button;
+      ev.mods = mods;
       {
         std::lock_guard lock(inputMu_);
         inputEvents_.push_back(ev);

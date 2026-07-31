@@ -117,7 +117,7 @@ public final class Editor: @unchecked Sendable {
         var ev = canvas.InputEvent()
         guard engine.pollInputEvent(&ev) else { return nil }
         let kind = InputEventKind(rawValue: ev.kind) ?? .none
-        return InputEvent(kind: kind, x: ev.x, y: ev.y, button: ev.button)
+        return InputEvent(kind: kind, x: ev.x, y: ev.y, button: ev.button, mods: ev.mods)
     }
 
     /// False while minimized/occluded. The frame loop gates continuous

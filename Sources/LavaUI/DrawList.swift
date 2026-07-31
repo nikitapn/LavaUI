@@ -649,8 +649,10 @@ public final class DrawList {
         }
 
         if leaf.kind == .canvas {
+            let frame = CanvasFrame(x: x, y: y, w: w, h: h)
+            leaf.lastCanvasFrame = frame
             // App owns every command for this box (background, glyphs, bars…).
-            leaf.canvasPaint?(self, CanvasFrame(x: x, y: y, w: w, h: h))
+            leaf.canvasPaint?(self, frame)
             return
         }
 

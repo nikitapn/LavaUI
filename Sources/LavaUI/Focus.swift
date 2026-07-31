@@ -109,6 +109,20 @@ public enum CaretBlink {
     }
 }
 
+/// Last known window-space pointer position, updated on every `.mouseMove`.
+///
+/// Exists because `.scroll` events carry no position of their own (a wheel
+/// notch has no coordinates) — a handler that wants to know *where* the
+/// wheel happened, to zoom a chart around the cursor rather than its center,
+/// has nowhere else to ask. One frame stale at worst, same as any
+/// event-driven position cache.
+public enum PointerState {
+    nonisolated(unsafe) private static var last: (x: Float, y: Float) = (0, 0)
+
+    public static func set(x: Float, y: Float) { last = (x, y) }
+    public static var window: (x: Float, y: Float) { last }
+}
+
 /// Routes pointer motion to whichever node started a drag.
 ///
 /// Without capture, a drag that leaves the field's bounds would stop extending

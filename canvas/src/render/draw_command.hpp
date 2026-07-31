@@ -109,6 +109,9 @@ struct InputEvent {
   float x = 0.f;
   float y = 0.f;
   int32_t button = 0;
+  /// GLFW modifier bitfield. Only populated for MouseDown/MouseUp — Scroll
+  /// already repurposes `button` for this, and Key carries it in `y`.
+  int32_t mods = 0;
 };
 
 } // namespace canvas

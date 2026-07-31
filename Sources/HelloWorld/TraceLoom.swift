@@ -11,6 +11,10 @@ private struct DisplaySeries: Identifiable {
 public struct TraceLoom: View {
     @State private var rules = TraceLoom.sampleRules
     @State private var log = TraceLoom.sampleLog
+    /// Pointer position inside the timeline canvas while a gesture is live —
+    /// nil once released. Local coordinates only; `timeline(_:)` maps back
+    /// to a time value using the same axis it drew.
+    @State private var cursorLocalX: Float?
 
     public init() {}
 
@@ -119,12 +123,21 @@ public struct TraceLoom: View {
         let rawMax = allPoints.map(\.time).max() ?? 1
         let tMax = rawMax > tMin ? rawMax : tMin + 1
         let groupedRanges = yRanges(traces)
+        let cursorX = cursorLocalX
 
         return Canvas(
             label: "UnifiedTimeline",
             height: .auto,
             flexGrow: 1,
-            minHeight: 300
+            minHeight: 300,
+            onGesture: { gesture in
+                switch gesture.phase {
+                case .began, .moved:
+                    cursorLocalX = gesture.localX
+                case .ended:
+                    cursorLocalX = nil
+                }
+            }
         ) { draw, frame in
             let left: Float = 116
             let right: Float = 18
@@ -184,6 +197,19 @@ public struct TraceLoom: View {
                         draw.circle(cx: x, cy: yTop + 9, radius: 3.5, color: item.color)
                     }
                 }
+            }
+
+            // Synchronized inspection cursor — a crosshair at the pointer's
+            // own x, with the time it maps to on the shared axis.
+            if let cx = cursorX, cx >= left, cx <= frame.w - right {
+                let x = frame.x + cx
+                draw.line(x1: x, y1: frame.y + top, x2: x, y2: frame.y + min(plotBottom, frame.h - bottom), color: theme.textSecondary.opacity(0.8), width: 1)
+                let time = tMin + Double((cx - left) / plotW) * (tMax - tMin)
+                let label = formatTime(time)
+                let labelW: Float = 74
+                let labelX = min(max(frame.x + left, x - labelW / 2), frame.x + frame.w - right - labelW)
+                draw.roundedRect(x: labelX, y: frame.y + 2, w: labelW, h: 16, color: theme.panel, radius: 4)
+                draw.text(label, x: labelX, y: frame.y + 3, w: labelW, h: 14, color: theme.textSecondary)
             }
         }
     }

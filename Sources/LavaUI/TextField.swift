@@ -94,7 +94,7 @@ public struct TextField: PrimitiveView {
         let submit = onSubmit
 
         // Press: focus, place the caret, and start a drag session.
-        leaf.onClickLocal = { [weak leaf] localX, localY, originX, originY in
+        leaf.onClickLocal = { [weak leaf] localX, localY, originX, originY, _ in
             guard let leaf, let run = leaf.shapedRun() else { return }
             leaf.focusSelf(binding: binding, onSubmit: submit)
 

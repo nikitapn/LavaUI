@@ -16,6 +16,33 @@ public struct CanvasFrame: Sendable, Equatable {
     }
 }
 
+/// A phase in a `Canvas` pointer gesture — a press, its drag, and its release.
+public enum CanvasGesturePhase: Sendable, Equatable {
+    /// The hit test that starts the gesture and captures the pointer.
+    case began
+    /// Delivered on every move after `.began`, even once the pointer has
+    /// left the canvas's own bounds — the same capture lifecycle
+    /// `Slider`/`TextField` get from `PointerCapture`, just surfaced.
+    case moved
+    /// Button released. Always paired with a `.began`.
+    case ended
+}
+
+/// One pointer event delivered to a `Canvas`'s `onGesture`.
+public struct CanvasGesture: Sendable, Equatable {
+    public var phase: CanvasGesturePhase
+    /// Relative to the canvas's own top-left, matching `CanvasFrame`. Can go
+    /// negative, or past `w`/`h`, once a drag leaves the box.
+    public var localX: Float
+    public var localY: Float
+    public var windowX: Float
+    public var windowY: Float
+    /// Modifiers held at `.began` (see `KeyMods`). Not re-read for
+    /// `.moved`/`.ended` — a drag can't ask again mid-flight, only a fresh
+    /// press reflects current state, so this stays whatever `.began` saw.
+    public var mods: Int32
+}
+
 /// Custom-drawn control: Yoga sizes the box; the app emits draw commands.
 ///
 /// Use this for product-specific widgets (meters, charts, diagram chrome) that
@@ -24,6 +51,10 @@ public struct CanvasFrame: Sendable, Equatable {
 ///
 /// - `continuousRedraw`: register with `AnimationDriver` so the frame loop
 ///   keeps painting while true (e.g. a live equalizer). Flip false when idle.
+/// - `onGesture`: down/move/up with local + window coordinates, for a
+///   synchronized inspection cursor, drag-to-zoom, or range selection.
+/// - `onWheel`: deltas plus the pointer's position local to this canvas, for
+///   zooming around the cursor rather than the center.
 public struct Canvas: PrimitiveView {
     public var label: String
     public var width: Dimension
@@ -34,6 +65,8 @@ public struct Canvas: PrimitiveView {
     /// When true, this leaf asks for ~60fps redraws via `AnimationDriver`.
     public var continuousRedraw: Bool
     public var onTap: (() -> Void)?
+    public var onGesture: ((CanvasGesture) -> Void)?
+    public var onWheel: ((_ dx: Float, _ dy: Float, _ localX: Float, _ localY: Float) -> Void)?
     public var paint: (DrawList, CanvasFrame) -> Void
 
     public init(
@@ -45,6 +78,8 @@ public struct Canvas: PrimitiveView {
         minHeight: Float = 0,
         continuousRedraw: Bool = false,
         onTap: (() -> Void)? = nil,
+        onGesture: ((CanvasGesture) -> Void)? = nil,
+        onWheel: ((_ dx: Float, _ dy: Float, _ localX: Float, _ localY: Float) -> Void)? = nil,
         paint: @escaping (DrawList, CanvasFrame) -> Void
     ) {
         self.label = label
@@ -55,6 +90,8 @@ public struct Canvas: PrimitiveView {
         self.minHeight = minHeight
         self.continuousRedraw = continuousRedraw
         self.onTap = onTap
+        self.onGesture = onGesture
+        self.onWheel = onWheel
         self.paint = paint
     }
 
@@ -97,11 +134,59 @@ public struct Canvas: PrimitiveView {
     private func configure(_ leaf: LeafNode) {
         leaf.canvasPaint = paint
         leaf.continuousRedraw = continuousRedraw
+
         let tap = onTap
-        leaf.onClickLocal = tap == nil
+        let gesture = onGesture
+        leaf.onClickLocal = (tap == nil && gesture == nil)
             ? nil
-            : { _, _, _, _ in tap?() }
+            : { [weak leaf] localX, localY, originX, originY, mods in
+                tap?()
+                guard let gesture else { return }
+                // Reused by `.ended` below: `PointerCapture`'s `onUp` carries
+                // no position of its own, and re-deriving it from `originX`/Y
+                // plus whatever the *last* `.moved` reported is simpler and
+                // more obviously correct than reaching for a separate global.
+                var lastWindow = (x: originX + localX, y: originY + localY)
+                gesture(CanvasGesture(
+                    phase: .began, localX: localX, localY: localY,
+                    windowX: lastWindow.x, windowY: lastWindow.y, mods: mods
+                ))
+                guard let leaf else { return }
+                PointerCapture.capture(
+                    leaf.id,
+                    onMove: { windowX, windowY in
+                        lastWindow = (windowX, windowY)
+                        gesture(CanvasGesture(
+                            phase: .moved,
+                            localX: windowX - originX, localY: windowY - originY,
+                            windowX: windowX, windowY: windowY, mods: mods
+                        ))
+                    },
+                    onUp: {
+                        gesture(CanvasGesture(
+                            phase: .ended,
+                            localX: lastWindow.x - originX, localY: lastWindow.y - originY,
+                            windowX: lastWindow.x, windowY: lastWindow.y, mods: mods
+                        ))
+                    }
+                )
+            }
         leaf.onClick = nil
+
+        if let wheel = onWheel {
+            // Wheel routing only considers hover targets (see `hoverWalk`), so
+            // a canvas with no hover fill of its own needs *some* signal that
+            // it wants pointer traffic — an empty handler is that signal.
+            if leaf.onHover == nil { leaf.onHover = { _ in } }
+            ScrollRouter.register(leaf.id) { [weak leaf] dx, dy in
+                guard let leaf else { return }
+                let p = PointerState.window
+                wheel(dx, dy, p.x - leaf.lastCanvasFrame.x, p.y - leaf.lastCanvasFrame.y)
+            }
+        } else {
+            ScrollRouter.unregister(leaf.id)
+        }
+
         leaf.syncContinuousRedraw()
     }
 }
