@@ -1177,8 +1177,8 @@ void Vulkan::createSwapchain()
   // also non-tearing but can present mid-compositor-frame and looks "flickery"
   // under rapid full-frame redraws (selection drag, list spam-click). Never
   // IMMEDIATE — that tears.
-  VkPresentModeKHR presentMode = VK_PRESENT_MODE_FIFO_KHR;
-  const char *presentName = "FIFO";
+  VkPresentModeKHR presentMode = VK_PRESENT_MODE_IMMEDIATE_KHR;
+  const char *presentName = "IMMEDIATE";
   (void)presentModes; // listed for diagnostics only
 
   VkSwapchainCreateInfoKHR sci {

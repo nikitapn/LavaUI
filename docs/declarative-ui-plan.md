@@ -60,7 +60,7 @@ loop:
   if needsBodyRecompute { recomputeDirtyBodies() }              // Swift
   if needsLayout        { YGNodeCalculateLayout(root, w, h, LTR) }
   emitDrawList()                                                // → POD buffer
-  acquire → record → submit → present                           // C++, FIFO-paced
+  acquire → record → submit → present                           // C++, present-mode paced
   dirty = false
 ```
 
@@ -93,9 +93,11 @@ var wakeDeadline: ContinuousClock.Instant?   // nil = sleep indefinitely
 ```
 
 A spring registers ~16ms out, caret blink 500ms, a delayed tooltip 800ms. One
-mechanism, composes cleanly, no over-waking. With `VK_PRESENT_MODE_FIFO_KHR`
-present already blocks to vsync, so animation pacing is free — don't add a manual
-sleep on top or you get judder.
+mechanism, composes cleanly, no over-waking. With `VK_PRESENT_MODE_FIFO_KHR`,
+presentation is synchronized to vsync, so don't add an unconditional manual
+sleep on top or you get judder. Do not assume that the host duration of
+`vkQueuePresentKHR` measures this wait; actual presentation is asynchronous and
+may happen considerably later.
 
 **Single-threaded.** ✅ Done — the render thread is gone. It cost more than the
 predicted double-buffering and ARC traffic: it held one mutex across a whole
@@ -114,11 +116,56 @@ laggy hover. Swift now owns the loop and blocks in `glfwWaitEvents`, so idle
 costs nothing and input wakes the loop immediately instead of after a 16ms
 poll.
 
-**Frames in flight.** There is one fence and no overlap: the CPU waits for the
-GPU before recording the next frame. For UI that is close to free — GPU work
-is sub-millisecond, and with FIFO the wait *is* the frame pacer. It only starts
-to matter when GPU work grows enough that CPU/GPU overlap is worth having, so
-it is a scene-complexity concern rather than a UI one.
+**Frames in flight.** The renderer currently allows two frames in flight. This
+overlaps CPU and GPU work, but it also allows presentation to get ahead of the
+display. That tradeoff is not free for direct-manipulation UI; see the present
+mode note below.
+
+### Present modes: throughput, latency, and tearing
+
+`vkQueuePresentKHR` queues an image for presentation. Its host execution time
+does **not** include the time the image spends waiting in the presentation
+engine or compositor, so a `present=1ms` frame measurement does not mean the
+pixels became visible one millisecond later.
+
+`VK_PRESENT_MODE_FIFO_KHR` is classic tear-free vsync and is guaranteed to be
+available. Every ready image is appended to a queue, and the presentation
+engine removes the oldest image at a vertical blank. This is predictable and
+smooth, but with multiple frames in flight it can display stale input: at 60 Hz,
+each queued image is another potential 16.7 ms behind the pointer. This was
+observed directly in TraceLoom: selection rendering and event handling took
+about 2.3 ms, yet the dragged boundary visibly trailed the cursor.
+
+`VK_PRESENT_MODE_IMMEDIATE_KHR` does not wait for vertical blank and does not
+need a presentation queue. Switching TraceLoom to IMMEDIATE removed the visible
+drag latency, confirming that the delay was in FIFO presentation rather than
+mouse delivery, body evaluation, or draw-list emission. Its catch is tearing:
+the display may start scanning a new image partway through the previous one.
+Tearing may be hard to notice for this UI because most pixels are unchanged,
+the moving boundary is narrow, and a desktop compositor or variable-refresh
+display may hide or reduce it. That observation is environment-specific and is
+not a guarantee that IMMEDIATE is tear-free.
+
+`VK_PRESENT_MODE_MAILBOX_KHR`, when supported, is the usual tear-free,
+lower-latency compromise. It still presents on vertical blank, but a newer ready
+image replaces an older pending one instead of waiting behind it. It can consume
+more GPU power if the application renders continuously, so LavaUI should remain
+dirty-driven and avoid producing frames when nothing changed.
+
+Practical policy for LavaUI:
+
+- Prefer IMMEDIATE for the lowest latency when tearing is acceptable.
+- Prefer MAILBOX for interactive UI when it is supported and tearing is not
+  acceptable.
+- Use FIFO as the universal fallback, but keep the effective queue depth small
+  for pointer-driven interaction; reducing frames in flight to one is a useful
+  diagnostic and may be the right low-latency policy.
+- Log the selected mode and frame count. Measure input-to-visible latency or
+  presentation timing, not only CPU time around `vkQueuePresentKHR`.
+
+Do not render once per raw pointer event. Coalescing motion to the latest sample
+and rendering once per frame is correct; the important part is ensuring that a
+freshly rendered frame does not wait behind obsolete frames afterward.
 
 The flags cascade — body → layout → emit → present — and are not one flag. A
 window resize needs layout but not body recompute; an opacity animation needs
