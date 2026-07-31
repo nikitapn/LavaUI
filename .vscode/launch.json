@@ -59,6 +59,26 @@
       "target": "ModifierSpike",
       "configuration": "release",
       "preLaunchTask": "swift: Build Release ModifierSpike"
+    },
+    {
+      "type": "swift",
+      "request": "launch",
+      "args": [],
+      "cwd": "${workspaceFolder:HelloWorld}",
+      "name": "Debug TraceLoom",
+      "target": "TraceLoom",
+      "configuration": "debug",
+      "preLaunchTask": "swift: Build Debug TraceLoom"
+    },
+    {
+      "type": "swift",
+      "request": "launch",
+      "args": [],
+      "cwd": "${workspaceFolder:HelloWorld}",
+      "name": "Release TraceLoom",
+      "target": "TraceLoom",
+      "configuration": "release",
+      "preLaunchTask": "swift: Build Release TraceLoom"
     }
   ]
 }

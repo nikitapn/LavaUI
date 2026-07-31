@@ -149,6 +149,7 @@ extension YogaBoxNode {
             if let radius = style.cornerRadius { leaf.cornerRadius = radius }
         } else if let stack = self as? StackNode {
             if let fill = style.fill { stack.fillColor = fill }
+            if let radius = style.cornerRadius { stack.cornerRadius = radius }
         } else if let box = self as? StyleBoxNode {
             if let fill = style.fill { box.fillColor = fill }
             if let radius = style.cornerRadius { box.cornerRadius = radius }

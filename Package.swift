@@ -9,8 +9,10 @@ let package = Package(
     platforms: [.macOS(.v13)],
     products: [
         .executable(name: "HelloWorld", targets: ["HelloWorld"]),
+        .executable(name: "TraceLoom", targets: ["HelloWorld"]),
         .library(name: "LavaUI", targets: ["LavaUI"]),
         .library(name: "LavaText", targets: ["LavaText"]),
+        .library(name: "TraceLoomCore", targets: ["TraceLoomCore"]),
         .library(name: "FBDModel", targets: ["FBDModel"]),
         // Throwaway Phase 0 spikes (docs/declarative-ui-plan.md) — delete after Phase 1.
         .executable(name: "Phase0Spikes", targets: ["Phase0Spikes"]),
@@ -24,6 +26,7 @@ let package = Package(
         // beyond String. Kept a separate target so "testable headlessly" is
         // enforced by the build graph rather than by discipline.
         .target(name: "LavaText"),
+        .target(name: "TraceLoomCore"),
         // Throwaway modifier spike; delete once the design is chosen.
         .executableTarget(
             name: "ModifierSpike",
@@ -63,6 +66,7 @@ let package = Package(
             dependencies: [
                 "LavaUI",
                 "FBDModel",
+                "TraceLoomCore",
             ],
             swiftSettings: [
                 // App only needs interop if LavaUI's public API re-exports C++
@@ -102,6 +106,10 @@ let package = Package(
         .testTarget(
             name: "FBDModelTests",
             dependencies: ["FBDModel"]
+        ),
+        .testTarget(
+            name: "TraceLoomCoreTests",
+            dependencies: ["TraceLoomCore"]
         ),
     ]
 )

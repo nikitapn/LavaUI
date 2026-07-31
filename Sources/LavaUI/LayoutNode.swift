@@ -644,6 +644,8 @@ final class StackNode: YogaBoxNode {
     let direction: FlexDirection
     /// Panel background (Phase 3 draw list).
     var fillColor: Color?
+    /// Corner radius for `fillColor`. Set via `.cornerRadius()` modifiers.
+    var cornerRadius: Float = 0
 
     /// Yoga children currently inserted (flattened leaves under content).
     private var insertedLeaves: [any AnyViewNode] = []

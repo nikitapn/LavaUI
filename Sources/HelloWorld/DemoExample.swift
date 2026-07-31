@@ -82,8 +82,10 @@ public struct DemoExample: View {
     @State private var pulsePlaying = true
     /// Selected donut wedge (`nil` = show title in the hole).
     @State private var pieSelected: Int? = 1
-    /// Live telemetry overlay on the line chart.
+    /// Live telemetry overlay on the line chart (only while the lab is open).
     @State private var chartLive = true
+    /// Expand disclosure for the live lab; collapsed so AnimationDriver is idle.
+    @State private var showLiveLab = false
     @State private var lightTheme = false
     @State private var status = "Click a list row, edit the field, resize the window."
     @State private var actionCount = 0
@@ -260,33 +262,36 @@ public struct DemoExample: View {
 
     private var centerContent: some View {
         VStack(padding: 8) {
-            Text("PulseMeter · neon EQ", color: .accent)
+            Text("Charts · pie (static Canvas)", color: .accent)
             Text(
-                "Continuous AnimationDriver redraw — click the meter to pause/play.",
+                "Donut tap cycles slices. Live widgets live in the collapsible lab below.",
                 color: .secondary
             )
-            // Product widget: HelloWorld/PulseMeter.swift on LavaUI `Canvas`.
-            PulseMeter(isPlaying: $pulsePlaying, barCount: 16)
-            HStack(padding: 2) {
-                Toggle("Pulse", isOn: $pulsePlaying)
-                    .agentId("pulse-toggle")
-                Text(pulsePlaying ? "live" : "paused", color: .dim)
-                Spacer()
-            }
+            PieChart(
+                slices: pieSlices,
+                selectedId: $pieSelected,
+                size: 168,
+                title: "Mix"
+            )
 
-            Text("Charts · Canvas pie + line", color: .accent)
-            Text(
-                "Donut tap cycles slices · line chart can stream a live series.",
-                color: .secondary
-            )
-            HStack(padding: 6) {
-                PieChart(
-                    slices: pieSlices,
-                    selectedId: $pieSelected,
-                    size: 168,
-                    title: "Mix"
-                )
-                VStack(flexGrow: 1, padding: 0) {
+            // Constant AnimationDriver work (pulse + live line) is gated here so
+            // a long scroll is not paying 60fps redraws while the lab is closed.
+            Expand("Live lab", isExpanded: $showLiveLab) {
+                VStack(padding: 6) {
+                    Text("PulseMeter · neon EQ", color: .accent)
+                    Text(
+                        "Continuous redraw while playing — click the meter to pause.",
+                        color: .secondary
+                    )
+                    PulseMeter(isPlaying: $pulsePlaying, barCount: 16)
+                    HStack(padding: 2) {
+                        Toggle("Pulse", isOn: $pulsePlaying)
+                            .agentId("pulse-toggle")
+                        Text(pulsePlaying ? "live" : "paused", color: .dim)
+                        Spacer()
+                    }
+
+                    Text("Line chart · live series", color: .accent)
                     LineChart(
                         series: lineSeries,
                         width: 360,
@@ -301,6 +306,7 @@ public struct DemoExample: View {
                     }
                 }
             }
+            .agentId("live-lab")
 
             Text("Dynamic flex row", color: .accent)
             Text(

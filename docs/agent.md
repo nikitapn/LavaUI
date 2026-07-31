@@ -2,8 +2,7 @@
 
 An optional localhost TCP server lets an external agent (or CLI / MCP wrapper)
 inspect layout, capture screenshots, and inject input without OS-level
-accessibility hooks. Handlers run on the **UI thread**; Yoga and Vulkan are
-never touched from the watcher thread.
+accessibility hooks.
 
 ## Enable
 
@@ -23,7 +22,7 @@ pixels.
 
 ## Stable ids (`sid`)
 
-Process-local `NodeID` (`id` in the tree) changes every launch. Agents should
+Process-local `NodeID` (`id` in the tree) changes every launch. Agents could
 use **`sid`**:
 
 1. **Explicit** — `.agentId("theme-toggle")` on a view (preferred).

@@ -3,7 +3,7 @@ import LavaUI
 
 #if canImport(CxxCanvas)
 
-/// Runs the LavaUI widget playground (`DemoExample`).
+/// Runs TraceLoom, a pattern-driven log timeline product built with LavaUI.
 @main
 struct HelloWorldApp {
     static func main() {
@@ -18,7 +18,7 @@ struct HelloWorldApp {
             assetsRoot: assets,
             width: Int32(windowW),
             height: Int32(windowH),
-            title: "LavaUI · DemoExample"
+            title: "TraceLoom · Log Timeline Studio"
         ) else {
             FileHandle.standardError.write(Data("failed to open editor window\n".utf8))
             exit(1)
@@ -77,8 +77,8 @@ struct HelloWorldApp {
         var probeLayout = 0.0
         var probeEmit = 0.0
 
-        func makeRoot() -> DemoExample {
-            DemoExample(brandImage: brandImage)
+        func makeRoot() -> TraceLoom {
+            TraceLoom()
         }
 
         /// Does only as much of the pipeline as `level` requires. A pure
@@ -159,7 +159,7 @@ struct HelloWorldApp {
 
         // Lightweight structure dump (no FBD chrome phases).
         let demo0 = makeRoot()
-        FileHandle.standardError.write(Data("--- DemoExample structure ---\n".utf8))
+        FileHandle.standardError.write(Data("--- TraceLoom structure ---\n".utf8))
         for line in demo0.structureLines() {
             FileHandle.standardError.write(Data((line + "\n").utf8))
         }
