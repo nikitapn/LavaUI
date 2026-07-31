@@ -120,6 +120,14 @@ public final class Editor: @unchecked Sendable {
         return InputEvent(kind: kind, x: ev.x, y: ev.y, button: ev.button, mods: ev.mods)
     }
 
+    /// Paths from the most recent `.fileDrop` event. Valid only while
+    /// handling that event — the next drop overwrites them.
+    public func droppedFiles() -> [String] {
+        let count = Int(engine.pendingDroppedFileCount())
+        guard count > 0 else { return [] }
+        return (0..<count).map { String(engine.pendingDroppedFile(Int32($0))) }
+    }
+
     /// False while minimized/occluded. The frame loop gates continuous
     /// (animation-driven) redraw work on this, since Yoga/cull-rect
     /// visibility has no idea the whole window is off-screen.

@@ -1203,6 +1203,10 @@ public final class LayoutHost {
                     return leaf.id
                 }
                 if box.isScrollable { return box.id }
+                // A `.onDrop()` target has no visual hover feedback of its
+                // own — this is the only thing that makes it resolvable at
+                // drop time at all, on a container as much as a leaf.
+                if DropRouter.hasHandler(box.id) { return box.id }
             }
             return nil
         }

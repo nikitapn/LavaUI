@@ -99,6 +99,11 @@ class Engine {
   /// Pop one raw input event (mouse / resize). Returns false if empty.
   bool pollInputEvent(InputEvent &out);
 
+  /// Paths from the most recent FileDrop event, pulled by index — see the
+  /// note on `canvas::InputEventKind::FileDrop`. Valid until the next drop.
+  int pendingDroppedFileCount();
+  std::string pendingDroppedFile(int index);
+
   /// Current swapchain extent in pixels.
   void framebufferSize(float &outW, float &outH) const;
 

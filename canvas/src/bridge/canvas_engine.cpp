@@ -197,6 +197,20 @@ bool Engine::pollInputEvent(InputEvent &out)
   });
 }
 
+int Engine::pendingDroppedFileCount()
+{
+  return impl_->withApp([&](Application &app) {
+    return app.pendingDroppedFileCount();
+  });
+}
+
+std::string Engine::pendingDroppedFile(int index)
+{
+  return impl_->withApp([&](Application &app) {
+    return app.pendingDroppedFile(index);
+  });
+}
+
 void Engine::framebufferSize(float &outW, float &outH) const
 {
   const_cast<Engine *>(this)->impl_->withApp([&](Application &app) {

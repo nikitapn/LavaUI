@@ -48,6 +48,11 @@ public:
                       const canvas::MeshVertex *meshVerts, size_t meshVertCount);
   bool pollInputEvent(canvas::InputEvent &out);
 
+  /// Paths from the most recent FileDrop event, pulled by index — see the
+  /// note on `canvas::InputEventKind::FileDrop`. Valid until the next drop.
+  int pendingDroppedFileCount();
+  std::string pendingDroppedFile(int index);
+
   /// Current swapchain / framebuffer size in pixels (after last ensure).
   void framebufferSize(float &outW, float &outH) const;
 

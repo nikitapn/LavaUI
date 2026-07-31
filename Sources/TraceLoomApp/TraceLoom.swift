@@ -47,6 +47,22 @@ public struct TraceLoom: View {
         }
     }
 
+    private func loadLogFile() {
+        guard let url = FileDialog.openFile(
+            title: "Open Log File",
+            filters: [FileDialog.Filter(name: "Log/text files", extensions: ["log", "txt"])]
+        ) else { return }
+        loadLog(from: [url])
+    }
+
+    /// Shared by the file-dialog button and `.onDrop` — whichever way a log
+    /// file arrives, only its content matters. Ignores anything past the
+    /// first path: TraceLoom parses one buffer, not a multi-file batch.
+    private func loadLog(from urls: [URL]) {
+        guard let url = urls.first, let contents = try? String(contentsOf: url, encoding: .utf8) else { return }
+        log = contents
+    }
+
     private var displayed: [DisplaySeries] {
         let colors = TraceLoom.palette
         return result.series.enumerated().map {
@@ -91,7 +107,15 @@ public struct TraceLoom: View {
                         onDecorationTap: { tappedDiagnostic = $0.message }
                     )
                     .agentId("rules-editor")
-                    Text("LOG INPUT", color: .secondary).padding(2)
+                    HStack(padding: 2) {
+                        Text("LOG INPUT", color: .secondary)
+                        Spacer()
+                        Text(
+                            "Load file…", color: .accent,
+                            onClick: { loadLogFile() }
+                        )
+                        .agentId("load-log-file")
+                    }
                     EditorView(
                         text: $log,
                         visibleLines: 15,
@@ -99,6 +123,7 @@ public struct TraceLoom: View {
                         onDecorationTap: { tappedDiagnostic = $0.message }
                     )
                     .agentId("log-editor")
+                    .onDrop { urls in loadLog(from: urls) }
                     if let tappedDiagnostic {
                         Text("⚑ \(tappedDiagnostic)", color: .selected)
                             .agentId("tapped-diagnostic")

@@ -268,6 +268,26 @@ struct Application::Impl
       if (!self || iconified) return;  // ignore going to tray
       self->queueRefreshEvent();
     });
+
+    glfwSetDropCallback(win, [](GLFWwindow *w, int count, const char **paths) {
+      auto *self = static_cast<Impl *>(glfwGetWindowUserPointer(w));
+      if (!self || count <= 0) return;
+      double x = 0, y = 0;
+      glfwGetCursorPos(w, &x, &y);
+      canvas::InputEvent ev;
+      ev.kind = static_cast<uint32_t>(canvas::InputEventKind::FileDrop);
+      ev.x = static_cast<float>(x);
+      ev.y = static_cast<float>(y);
+      ev.button = count;
+      {
+        std::lock_guard lock(self->inputMu_);
+        // Overwritten by the next drop, same as every other "pull the
+        // payload while handling this event" queue in this file — nothing
+        // needs more than one pending drop at a time.
+        self->droppedPaths_.assign(paths, paths + count);
+        self->inputEvents_.push_back(ev);
+      }
+    });
   }
 
   void queueRefreshEvent()
@@ -861,6 +881,10 @@ struct Application::Impl
   bool pointerDown_ = false;  // gates MouseMove queueing
   std::mutex inputMu_;
   std::deque<canvas::InputEvent> inputEvents_;
+  // Paths from the most recent drop, pulled by index while handling the
+  // FileDrop InputEvent it was queued alongside — see the note on
+  // InputEventKind::FileDrop for why this doesn't fit the event itself.
+  std::vector<std::string> droppedPaths_;
 
   // Whole-window camera (layout stays at zoom=1; vertex shader applies this).
   float viewZoom_ = 1.f;
@@ -883,6 +907,19 @@ struct Application::Impl
     out = inputEvents_.front();
     inputEvents_.pop_front();
     return true;
+  }
+
+  int pendingDroppedFileCount()
+  {
+    std::lock_guard lock(inputMu_);
+    return static_cast<int>(droppedPaths_.size());
+  }
+
+  std::string pendingDroppedFile(int index)
+  {
+    std::lock_guard lock(inputMu_);
+    if (index < 0 || static_cast<size_t>(index) >= droppedPaths_.size()) return {};
+    return droppedPaths_[index];
   }
 
   void framebufferSize(float &outW, float &outH) const
@@ -973,6 +1010,16 @@ void Application::submitDrawList(const canvas::DrawCommand *cmds, size_t cmdCoun
 bool Application::pollInputEvent(canvas::InputEvent &out)
 {
   return impl_->pollInputEvent(out);
+}
+
+int Application::pendingDroppedFileCount()
+{
+  return impl_->pendingDroppedFileCount();
+}
+
+std::string Application::pendingDroppedFile(int index)
+{
+  return impl_->pendingDroppedFile(index);
 }
 
 void Application::framebufferSize(float &outW, float &outH) const

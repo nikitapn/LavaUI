@@ -12,13 +12,24 @@ TraceLoom impact: charts render on a unified timeline, but cursor inspection and
 
 Fixed: `Canvas` gained `onGesture: ((CanvasGesture) -> Void)?` (`.began`/`.moved`/`.ended`, local + window coordinates, modifiers from the press) built on the existing internal `PointerCapture`, and `onWheel: ((dx, dy, localX, localY) -> Void)?` built on `ScrollRouter` plus a new `PointerState` (window-space pointer position, since a wheel notch carries none of its own) and a `LeafNode.lastCanvasFrame` cache. Mouse-button events now carry real GLFW modifiers end to end (`InputEvent.mods`, threaded through `hitTestClick`/`onClickLocal`); previously only left-button down/up existed and modifiers were discarded entirely. TraceLoom's unified timeline now has a synchronized inspection cursor built on `onGesture`; drag-to-zoom/range-select are left to the app, the API no longer blocks them.
 
-## 2. No native file-open or drop surface
+## 2. No native file-open or drop surface — RESOLVED (Linux)
 
 The old browser tool used a file input. LavaUI currently exposes clipboard plumbing for editors but no file picker and no drag-and-drop/file-drop view event.
 
 Suggested framework shape: a platform file dialog service plus file-drop events on views. The dialog should return URLs and leave reading/decoding to the app.
 
 TraceLoom impact: log input is pasted or typed into the built-in editor.
+
+Fixed, Linux only:
+
+- **`FileDialog`** (`Sources/LavaUI/FileDialog.swift`) — `openFile`/`openFiles`/`saveFile`, backed by `zenity` (GTK's file chooser) as a subprocess rather than linking GTK into a GLFW/Vulkan app that has no GTK event loop to host a real widget in. Blocks the calling thread until the user picks or cancels, like any native modal — call between frames, not from a paint closure. Returns `nil`/`[]` uniformly for "cancelled", "zenity not installed", and "not on Linux" — callers shouldn't need to tell those apart.
+- **File drop** — `glfwSetDropCallback` wired in `application.cpp`, a new `InputEventKind::FileDrop` (cursor position + path count; the paths themselves are pulled by index via `Engine::pendingDroppedFile`, the same "fetch the payload while handling this event" pattern already used elsewhere, since a fixed-size `InputEvent` struct can't hold a variable string list). `Editor.droppedFiles()` surfaces them to Swift. `View.onDrop(perform:)` registers a handler through a new `DropRouter` (mirrors `ScrollRouter`'s exact shape), resolved via the same `hitTestHover` walk hover uses — extended to recognize a drop-registered box as a valid target even with no visual hover feedback of its own, since that registration is the only signal it has.
+
+TraceLoom's log editor now has a "Load file…" button (`FileDialog.openFile`) and `.onDrop` on the same editor, both loading straight into the bound `log` text.
+
+Verified live: the file dialog end to end, including driving the actual `zenity` window with `xdotool` (open it, type a path, confirm) and watching the app parse the loaded file. OS drag-and-drop was not: GLFW's XDND implementation itself is exercised by every app that uses it and wasn't re-verified here, but synthesizing a real X11 drag gesture from this environment to exercise *this* code's consumption path (the `FileDrop` event → `Editor.droppedFiles()` → `DropRouter` → `.onDrop`) wasn't practical — that path is confirmed by clean compilation and design review, following `ScrollRouter`'s already-tested shape, not by a live drop.
+
+Not done: macOS/Windows backends (`NSOpenPanel` / `IFileDialog`) — this codebase only builds and runs on Linux today, so there was nothing to target.
 
 ## 3. Editor highlighting cannot carry state between lines — RESOLVED
 

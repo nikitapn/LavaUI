@@ -262,6 +262,11 @@ public enum LavaApp {
                     to: host.hitTestHover(x: lastPointer.x, y: lastPointer.y, originY: menuH),
                     dx: ev.x, dy: ev.y, mods: ev.button
                 )
+            case .fileDrop:
+                DropRouter.deliver(
+                    to: host.hitTestHover(x: ev.x, y: ev.y, originY: menuH),
+                    paths: editor.droppedFiles()
+                )
             case .text:
                 if let scalar = Unicode.Scalar(UInt32(bitPattern: ev.button)) {
                     _ = FocusManager.handle(character: Character(scalar))

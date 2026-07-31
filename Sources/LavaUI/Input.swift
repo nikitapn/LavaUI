@@ -88,6 +88,10 @@ public enum InputEventKind: UInt32, Sendable, Equatable {
     case scroll = 7
     /// Window needs a redraw (expose, un-minimize, compositor damage).
     case refresh = 8
+    /// Files dropped on the window. `x`/`y` = cursor position, `button` =
+    /// path count; the paths themselves come from `Editor.droppedFile(at:)`
+    /// while handling this event — the next drop overwrites them.
+    case fileDrop = 9
 }
 
 /// One polled event from `Editor.pollInputEvent`.

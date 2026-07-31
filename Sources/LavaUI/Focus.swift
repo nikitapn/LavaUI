@@ -185,6 +185,35 @@ public enum ScrollRouter {
     }
 }
 
+/// Routes an OS drag-and-drop to whichever node it landed on. The node
+/// under the drop point is resolved the same way hover is (`hitTestHover`);
+/// unlike hover, this is a one-shot lookup at the moment the drop event
+/// arrives, not a continuously tracked position.
+public enum DropRouter {
+    nonisolated(unsafe) private static var handlers: [NodeID: ([String]) -> Void] = [:]
+
+    public static func register(_ id: NodeID, handler: @escaping ([String]) -> Void) {
+        handlers[id] = handler
+    }
+
+    public static func unregister(_ id: NodeID) { handlers[id] = nil }
+
+    /// So hit-testing can treat a drop-registered box as a valid target even
+    /// though it carries no visual hover feedback of its own (see
+    /// `LayoutHost.hoverWalk`).
+    public static func hasHandler(_ id: NodeID) -> Bool { handlers[id] != nil }
+
+    /// Delivers to `target` if it has a registered handler. Returns true if
+    /// consumed — a caller can use this to decide whether to fall back to
+    /// some other drop behavior (or none).
+    @discardableResult
+    public static func deliver(to target: NodeID?, paths: [String]) -> Bool {
+        guard let target, let handler = handlers[target] else { return false }
+        handler(paths)
+        return true
+    }
+}
+
 /// Multi-click detection. Kept here rather than in the field so any control
 /// can share one notion of what counts as a double click.
 public enum ClickCounter {
