@@ -163,12 +163,15 @@ public struct TraceLoom: View {
                 let points = item.series.points
                 switch item.series.rule.kind {
                 case .line:
-                    for index in 1..<points.count {
+                    // `1..<points.count` crashes (lowerBound > upperBound)
+                    // when a rule matches 0 or 1 lines — routine mid-edit,
+                    // not an edge case.
+                    for index in points.indices.dropFirst() {
                         draw.line(x1: px(points[index - 1].time), y1: py(points[index - 1].value), x2: px(points[index].time), y2: py(points[index].value), color: item.color, width: 2)
                     }
                     for point in points { draw.circle(cx: px(point.time), cy: py(point.value), radius: 2.5, color: item.color) }
                 case .step:
-                    for index in 1..<points.count {
+                    for index in points.indices.dropFirst() {
                         let previous = points[index - 1]
                         let current = points[index]
                         draw.line(x1: px(previous.time), y1: py(previous.value), x2: px(current.time), y2: py(previous.value), color: item.color, width: 2)
