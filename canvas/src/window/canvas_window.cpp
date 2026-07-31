@@ -88,5 +88,5 @@ void CanvasWindowHost::setVisible(bool visible)
 
 bool CanvasWindowHost::isVisible() const
 {
-  return visible_;
+  return visible_ && (!app_ || !app_->isIconified());
 }

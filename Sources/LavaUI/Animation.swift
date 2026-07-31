@@ -100,6 +100,32 @@ public struct Animated<T: Animatable> {
     }
 }
 
+/// Which nodes actually painted on the most recent `DrawList.emitTree()`
+/// pass — the source of truth `AnimationDriver` consults to stop paying for
+/// nodes nobody can currently see: scrolled out of a `ScrollView`, behind a
+/// collapsed `Expand`, or covered by an overlay.
+///
+/// Rebuilt from scratch every `emitTree()` rather than written as a flag on
+/// the node itself, because the cheap subtree-skip in `DrawList` (a
+/// container failing its cull check returns before visiting any of its
+/// children) means a culled node's descendants are never visited at all
+/// that frame — a flag only ever written by visited nodes would stay stale
+/// at whatever it last saw, exactly the case this exists to catch. Absence
+/// this frame *is* "not visible", not "unknown".
+enum NodeVisibility {
+    nonisolated(unsafe) private static var visible: Set<NodeID> = []
+
+    static func beginFrame() { visible.removeAll(keepingCapacity: true) }
+    static func mark(_ id: NodeID) { visible.insert(id) }
+
+    /// One frame stale by construction: `AnimationDriver.tick()` runs before
+    /// `emitTree()` in the loop, so this reflects the previous frame's cull
+    /// result, not the one about to be drawn. Harmless — worst case a node
+    /// ticks one extra frame after leaving the screen, or resumes one frame
+    /// late after returning to it.
+    static func isVisible(_ id: NodeID) -> Bool { visible.contains(id) }
+}
+
 /// Steps every node with animation in flight, once per frame.
 ///
 /// A registry rather than a tree walk: only animating nodes are visited, so an
@@ -124,26 +150,55 @@ public enum AnimationDriver {
 
     public static var isAnimating: Bool { !active.isEmpty }
 
-    /// Advances every registered animation. Anything still running asks for a
-    /// wake and marks a **redraw** — not a body recompute, which is the whole
-    /// point of the invalidation cascade.
+    /// Call once after a frame has emitted, i.e. after `NodeVisibility` was
+    /// just refreshed. `tick()` reads visibility captured *before* that same
+    /// frame's `emitTree` — one iteration stale by design — so a node whose
+    /// box just scrolled, resized, or expanded into view has no wake queued
+    /// yet: the `tick()` earlier this same iteration still saw it as
+    /// off-screen and correctly asked for nothing. Without this, such a node
+    /// stays frozen until some unrelated input happens to wake the loop,
+    /// rather than resuming on its own next frame. A no-op once nothing is
+    /// registered, and otherwise just re-arms the same 60fps wake `tick()`
+    /// would have asked for had it seen current visibility — it does not
+    /// step or mark redraw itself, so an actually-still-invisible node costs
+    /// nothing beyond one harmless extra wake that `tick()` immediately
+    /// suppresses again.
+    public static func requestRevisibilityCheck() {
+        guard !active.isEmpty else { return }
+        FrameScheduler.requestWake(in: 1.0 / 60.0)
+    }
+
+    /// Advances every registered animation. Everything still gets stepped —
+    /// cheap, and it is what lets a `[weak self]` stepper on a since-deallocated
+    /// node reap itself out of `active` even while its node was invisible — but
+    /// only a *visible* node's progress justifies a redraw and another 60fps
+    /// wake. A `Canvas(continuousRedraw: true)` scrolled out of view, or
+    /// collapsed behind an `Expand`, otherwise never stops asking for one:
+    /// its own stepper has no notion of "am I on screen", only of the state
+    /// the widget handed it (playing/not playing).
     public static func tick() {
         guard !active.isEmpty else { return }
         var finished: [NodeID] = []
+        var visibleActive = false
         var stillRunning = false
 
         for (id, step) in active {
+            let visible = NodeVisibility.isVisible(id)
+            if visible { visibleActive = true }
             if step() {
-                stillRunning = true
+                if visible { stillRunning = true }
             } else {
                 finished.append(id)
             }
         }
         for id in finished { active[id] = nil }
 
-        ViewInvalidation.markNeedsRedraw()
+        if visibleActive {
+            ViewInvalidation.markNeedsRedraw()
+        }
         if stillRunning {
-            // ~60fps while something is in flight; the loop sleeps otherwise.
+            // ~60fps while something visible is in flight; the loop sleeps
+            // otherwise — including while every registrant is off-screen.
             FrameScheduler.requestWake(in: 1.0 / 60.0)
         }
     }

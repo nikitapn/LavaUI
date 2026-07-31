@@ -120,6 +120,11 @@ public final class Editor: @unchecked Sendable {
         return InputEvent(kind: kind, x: ev.x, y: ev.y, button: ev.button)
     }
 
+    /// False while minimized/occluded. The frame loop gates continuous
+    /// (animation-driven) redraw work on this, since Yoga/cull-rect
+    /// visibility has no idea the whole window is off-screen.
+    public var isWindowVisible: Bool { engine.isWindowVisible() }
+
     /// Current swapchain / framebuffer size in pixels.
     public func framebufferSize() -> (w: Float, h: Float) {
         var w: Float = 0

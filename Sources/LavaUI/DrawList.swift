@@ -368,6 +368,7 @@ public final class DrawList {
         pendingOverlays.removeAll(keepingCapacity: true)
         cullStack.removeAll(keepingCapacity: true)
         cullStack.append(CullRect(x0: 0, y0: 0, x1: viewportW, y1: viewportH))
+        NodeVisibility.beginFrame()
         emitNode(root, ox: originX, oy: originY)
 
         // After the main walk, so overlays paint above everything and — because
@@ -489,6 +490,7 @@ public final class DrawList {
                 let viewCull = CullRect(x0: x, y0: y, x1: x + w, y1: y + h)
                 let nextCull = cull.intersection(viewCull)
                 if nextCull.isEmpty { return }
+                NodeVisibility.mark(scroll.id)
 
                 pushClip(x: x, y: y, w: w, h: h)
                 cullStack.append(nextCull)
@@ -511,6 +513,7 @@ public final class DrawList {
             if !cull.intersects(x: x, y: y, w: w, h: h) {
                 return
             }
+            NodeVisibility.mark(box.id)
 
             if let styled = node as? StyleBoxNode {
                 withBlurScope(
@@ -542,7 +545,14 @@ public final class DrawList {
                     x: x, y: y, w: w, h: h
                 ) {
                     if let fill = stack.fillColor {
-                        rect(x: x, y: y, w: w, h: h, color: fill)
+                        if stack.cornerRadius > 0 {
+                            roundedRect(
+                                x: x, y: y, w: w, h: h,
+                                color: fill, radius: stack.cornerRadius
+                            )
+                        } else {
+                            rect(x: x, y: y, w: w, h: h, color: fill)
+                        }
                     }
                     for c in stack.childNodes {
                         emitNode(c, ox: x, oy: y)

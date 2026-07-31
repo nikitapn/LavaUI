@@ -147,6 +147,10 @@ struct HelloWorldApp {
                 viewportW: windowW,
                 viewportH: windowH
             )
+            // This frame's NodeVisibility is now current; give any node that
+            // just scrolled/resized/expanded into view a queued wake so it
+            // resumes on its own next iteration (see doc comment).
+            AnimationDriver.requestRevisibilityCheck()
 
             editor.submitDrawList(drawList)
             if enableDebug { probeEmit = (FrameScheduler.now() - t2) * 1000 }
@@ -257,7 +261,14 @@ struct HelloWorldApp {
                 windowH = fb.h
                 ViewInvalidation.markNeedsLayout()
             }
-            AnimationDriver.tick()
+            // Minimized/occluded: Yoga's cull rect has no idea the whole
+            // window is off-screen, so this is the one gate that has to live
+            // outside `NodeVisibility` — skipping the tick here is what stops
+            // a playing `PulseMeter` from still asking for 60fps while nobody
+            // can see the window at all.
+            if editor.isWindowVisible {
+                AnimationDriver.tick()
+            }
             let level = ViewInvalidation.consume()
             if dirty { ViewInvalidation.markNeedsBody() }
             let work = dirty ? InvalidationLevel.body : max(level, .redraw)
@@ -357,7 +368,9 @@ struct HelloWorldApp {
                 ViewInvalidation.markNeedsLayout()
             }
 
-            AnimationDriver.tick()
+            if editor.isWindowVisible {
+                AnimationDriver.tick()
+            }
 
             if FocusManager.focusedID != nil {
                 if CaretBlink.phaseChanged() { ViewInvalidation.markNeedsRedraw() }

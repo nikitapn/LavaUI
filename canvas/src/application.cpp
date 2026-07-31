@@ -1012,6 +1012,11 @@ bool Application::repaint() {
   return impl_->repaint();
 }
 
+bool Application::isIconified() const {
+  GLFWwindow *win = impl_->vulkan.window();
+  return win && glfwGetWindowAttrib(win, GLFW_ICONIFIED) != 0;
+}
+
 void Application::pointerMove(float x, float y) {
   impl_->bridgePointerMove(x, y);
 }

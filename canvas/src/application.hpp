@@ -33,6 +33,11 @@ public:
   /// Show or hide the GLFW window (does not destroy it).
   void setWindowVisible(bool visible);
 
+  /// True while minimized. A live GLFW query, not a cached flag — WM
+  /// minimize/restore doesn't route through `setWindowVisible`, so caching
+  /// would need its own callback wiring to stay correct.
+  bool isIconified() const;
+
   // Renders the current retained scene. Offscreen: to the readback target.
   // Windowed: blit to swapchain and present. Returns false on error.
   bool repaint();
