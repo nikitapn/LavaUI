@@ -369,6 +369,7 @@ public final class DrawList {
         cullStack.removeAll(keepingCapacity: true)
         cullStack.append(CullRect(x0: 0, y0: 0, x1: viewportW, y1: viewportH))
         NodeVisibility.beginFrame()
+        WidgetProfiler.beginFrame()
         emitNode(root, ox: originX, oy: originY)
 
         // After the main walk, so overlays paint above everything and — because
@@ -425,6 +426,7 @@ public final class DrawList {
         }
         pendingOverlays.removeAll(keepingCapacity: true)
         cullStack.removeAll(keepingCapacity: true)
+        WidgetProfiler.endFrame()
     }
 
     private struct PendingOverlay {
@@ -567,7 +569,9 @@ public final class DrawList {
                     backdrop: leaf.backdropBlurRadius,
                     x: x, y: y, w: w, h: h
                 ) {
-                    emitLeafContents(leaf, x: x, y: y, w: w, h: h)
+                    WidgetProfiler.measure(leaf.agentId ?? leaf.label) {
+                        emitLeafContents(leaf, x: x, y: y, w: w, h: h)
+                    }
                 }
                 return
             }

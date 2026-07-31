@@ -36,3 +36,19 @@ path when an explicit id is set).
 Text("[ Theme: Dark ]", onClick: { … })
   .agentId("theme-toggle")
 ```
+
+## Per-widget paint profiling
+
+```bash
+export LAVAUI_PROFILE=1   # in addition to the env above
+swift run HelloWorld
+```
+
+With this set, the `profile` command (also `tools/lava_agent_cli.py profile`)
+settles a frame and returns the most recent frame's paint cost per widget —
+`[{"label", "ms", "count"}]`, worst first, `label` being a view's `.agentId`
+if it has one, else its structural kind (`"Canvas"`, `"EditorView"`, …).
+Timed per widget's whole paint, not per draw primitive, so it points at
+*which* widget is expensive without the timing calls themselves swamping the
+cost they're measuring. `LAVAUI_DEBUG` (on by default) also prints the top 5
+each frame on stdout when this is set, prefixed `  top:`.

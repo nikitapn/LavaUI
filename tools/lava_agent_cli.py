@@ -8,6 +8,7 @@
   python3 tools/lava_agent_cli.py click --query Theme
   python3 tools/lava_agent_cli.py type_text --text hello
   python3 tools/lava_agent_cli.py key --key 256   # Escape
+  LAVAUI_PROFILE=1 ./HelloWorld &  python3 tools/lava_agent_cli.py profile
 """
 
 from __future__ import annotations
@@ -45,6 +46,7 @@ def main() -> int:
     sub.add_parser("ping")
     sub.add_parser("fb_size")
     sub.add_parser("settle")
+    sub.add_parser("profile", help="per-widget paint cost (needs LAVAUI_PROFILE=1)")
     lt = sub.add_parser("layout_tree")
     lt.add_argument("--max-depth", type=int, default=12)
     ht = sub.add_parser("hit_test")

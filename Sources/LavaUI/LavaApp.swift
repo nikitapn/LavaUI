@@ -448,6 +448,14 @@ public enum LavaApp {
                         (now - p1) * 1000, (now - p0) * 1000
                     )
                     FileHandle.standardOutput.write(Data(line.utf8))
+                    if WidgetProfiler.isEnabled {
+                        let top = WidgetProfiler.snapshot().prefix(5)
+                            .map { String(format: "%@=%.2fms(%d)", $0.label, $0.ms, $0.count) }
+                            .joined(separator: " ")
+                        if !top.isEmpty {
+                            FileHandle.standardOutput.write(Data("  top: \(top)\n".utf8))
+                        }
+                    }
                 }
             }
         }

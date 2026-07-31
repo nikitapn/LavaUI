@@ -56,6 +56,8 @@ def handle_tool(name: str, arguments: dict[str, Any]) -> dict:
             r = agent_call("fb_size")
         elif name == "settle":
             r = agent_call("settle")
+        elif name == "profile":
+            r = agent_call("profile")
         elif name == "layout_tree":
             r = agent_call("layout_tree", {"max_depth": int(arguments.get("max_depth", 12))})
         elif name == "hit_test":
@@ -151,6 +153,14 @@ TOOLS = [
     {"name": "ping", "description": "Health check.", "inputSchema": {"type": "object", "properties": {}}},
     {"name": "fb_size", "description": "Framebuffer size.", "inputSchema": {"type": "object", "properties": {}}},
     {"name": "settle", "description": "Drain input + re-layout + present.", "inputSchema": {"type": "object", "properties": {}}},
+    {
+        "name": "profile",
+        "description": (
+            "Per-widget paint cost for the most recent frame (label, ms, count), worst first. "
+            "Requires the app launched with LAVAUI_PROFILE=1."
+        ),
+        "inputSchema": {"type": "object", "properties": {}},
+    },
     {
         "name": "layout_tree",
         "description": "Yoga layout tree (id, label, frames, interactive, text).",

@@ -335,6 +335,18 @@ public final class AgentServer: @unchecked Sendable {
             host.settle()
             return ["settled": true]
 
+        case "profile":
+            guard WidgetProfiler.isEnabled else {
+                throw AgentError.badParams(
+                    "profiling is off — set LAVAUI_PROFILE=1 before launching the app"
+                )
+            }
+            host.settle()
+            let rows = WidgetProfiler.snapshot().map {
+                ["label": $0.label, "ms": $0.ms, "count": $0.count] as [String: Any]
+            }
+            return ["widgets": rows]
+
         case "layout_tree":
             let depth = intParam(params, "max_depth", default: 12)
             let json = host.layoutTreeJSON(depth)
