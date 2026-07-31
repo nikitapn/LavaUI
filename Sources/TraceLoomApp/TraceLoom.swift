@@ -15,6 +15,14 @@ public struct TraceLoom: View {
     /// nil once released. Local coordinates only; `timeline(_:)` maps back
     /// to a time value using the same axis it drew.
     @State private var cursorLocalX: Float?
+    /// Active drag selection in canvas-local coordinates. The selected time
+    /// range is committed only when the pointer is released.
+    @State private var dragStartLocalX: Float?
+    @State private var dragCurrentLocalX: Float?
+    /// User-selected timeline domain. Nil means fit all parsed data.
+    @State private var zoomStart: Double?
+    @State private var zoomEnd: Double?
+    @State private var showLog = false
     /// Set by tapping a decorated gutter row — `EditorView` has no built-in
     /// tooltip, it just tells the app which decoration was tapped.
     @State private var tappedDiagnostic: String?
@@ -96,34 +104,17 @@ public struct TraceLoom: View {
             header(parsed)
             Divider()
             HStack(flexGrow: 1, padding: 8) {
-                VStack(width: .percent(38), padding: 6) {
+                VStack(width: .percent(32), padding: 6) {
                     sectionTitle("PARSING RULES", detail: "type | name | regex | time | value | group")
                     EditorView(
                         text: $rules,
                         rules: ruleHighlighting,
                         style: ruleStyle,
-                        visibleLines: 13,
+                        visibleLines: 20,
                         decorations: decorations(prefix: "Rule ", severity: .error, in: rules),
                         onDecorationTap: { tappedDiagnostic = $0.message }
                     )
                     .agentId("rules-editor")
-                    HStack(padding: 2) {
-                        Text("LOG INPUT", color: .secondary)
-                        Spacer()
-                        Text(
-                            "Load file…", color: .accent,
-                            onClick: { loadLogFile() }
-                        )
-                        .agentId("load-log-file")
-                    }
-                    EditorView(
-                        text: $log,
-                        visibleLines: 15,
-                        decorations: decorations(prefix: "Log ", severity: .warning, in: log),
-                        onDecorationTap: { tappedDiagnostic = $0.message }
-                    )
-                    .agentId("log-editor")
-                    .onDrop { urls in loadLog(from: urls) }
                     if let tappedDiagnostic {
                         Text("⚑ \(tappedDiagnostic)", color: .selected)
                             .agentId("tapped-diagnostic")
@@ -136,6 +127,13 @@ public struct TraceLoom: View {
                     HStack {
                         sectionTitle("UNIFIED TIMELINE", detail: timelineDetail(traces))
                         Spacer()
+                        if zoomStart != nil {
+                            Text("Reset zoom", color: .accent, onClick: { resetZoom() })
+                                .padding(4)
+                                .hoverBackground(Environment.current.theme.hover)
+                                .cornerRadius(4)
+                                .agentId("reset-zoom")
+                        }
                         Text("live parse", color: .muted)
                     }
                     timeline(traces)
@@ -144,7 +142,39 @@ public struct TraceLoom: View {
                     diagnostics(parsed)
                 }
             }
+            Expand("Log input · \(logLineCount) lines", isExpanded: $showLog) {
+                VStack {
+                    HStack(padding: 2) {
+                        Text("Paste, edit, drop a file here, or", color: .dim)
+                        Text("Load file…", color: .accent, onClick: { loadLogFile() })
+                            .agentId("load-log-file")
+                        Spacer()
+                    }
+                    EditorView(
+                        text: $log,
+                        visibleLines: 8,
+                        decorations: decorations(prefix: "Log ", severity: .warning, in: log),
+                        onDecorationTap: { tappedDiagnostic = $0.message }
+                    )
+                    .agentId("log-editor")
+                    .onDrop { urls in loadLog(from: urls) }
+                }
+            }
+            .padding(8)
+            .agentId("log-disclosure")
         }
+    }
+
+    private var logLineCount: Int {
+        log.split(separator: "\n", omittingEmptySubsequences: false).count
+    }
+
+    private func resetZoom() {
+        zoomStart = nil
+        zoomEnd = nil
+        dragStartLocalX = nil
+        dragCurrentLocalX = nil
+        cursorLocalX = nil
     }
 
     private func header(_ parsed: TraceParseResult) -> some View {
@@ -174,17 +204,31 @@ public struct TraceLoom: View {
         guard let lo = points.map(\.time).min(), let hi = points.map(\.time).max() else {
             return "waiting for matching log lines"
         }
+        if let zoomStart, let zoomEnd {
+            return "\(formatTime(zoomStart)) — \(formatTime(zoomEnd)) · zoomed"
+        }
         return "\(formatTime(lo)) — \(formatTime(hi)) · shared X axis"
     }
 
     private func timeline(_ traces: [DisplaySeries]) -> some View {
         let theme = Environment.current.theme
         let allPoints = traces.flatMap(\.series.points)
-        let tMin = allPoints.map(\.time).min() ?? 0
-        let rawMax = allPoints.map(\.time).max() ?? 1
-        let tMax = rawMax > tMin ? rawMax : tMin + 1
+        let fullMin = allPoints.map(\.time).min() ?? 0
+        let rawFullMax = allPoints.map(\.time).max() ?? 1
+        let fullMax = rawFullMax > fullMin ? rawFullMax : fullMin + 1
+        let requestedMin = zoomStart ?? fullMin
+        let requestedMax = zoomEnd ?? fullMax
+        let clampedMin = max(fullMin, min(requestedMin, fullMax))
+        let clampedMax = min(fullMax, max(requestedMax, fullMin))
+        let hasValidZoom = clampedMax > clampedMin
+        let tMin = hasValidZoom ? clampedMin : fullMin
+        let tMax = hasValidZoom ? clampedMax : fullMax
         let groupedRanges = yRanges(traces)
         let cursorX = cursorLocalX
+        let selectionStart = dragStartLocalX
+        let selectionCurrent = dragCurrentLocalX
+        let plotLeft: Float = 116
+        let plotRight: Float = 18
 
         return Canvas(
             label: "UnifiedTimeline",
@@ -193,15 +237,28 @@ public struct TraceLoom: View {
             minHeight: 300,
             onGesture: { gesture in
                 switch gesture.phase {
-                case .began, .moved:
-                    cursorLocalX = gesture.localX
+                case .began:
+                    let x = max(plotLeft, gesture.localX)
+                    dragStartLocalX = x
+                    dragCurrentLocalX = x
+                    cursorLocalX = x
+                case .moved:
+                    let x = max(plotLeft, gesture.localX)
+                    dragCurrentLocalX = x
+                    cursorLocalX = x
                 case .ended:
+                    // Committing this selection needs the canvas width to map
+                    // local X through the same plot rectangle used by paint.
+                    // CanvasGesture does not currently expose that geometry;
+                    // see gap 7 in docs/traceloom-lavaui-gaps.md.
+                    dragStartLocalX = nil
+                    dragCurrentLocalX = nil
                     cursorLocalX = nil
                 }
             }
         ) { draw, frame in
-            let left: Float = 116
-            let right: Float = 18
+            let left = plotLeft
+            let right = plotRight
             let top: Float = 16
             let bottom: Float = 30
             let plotW = max(1, frame.w - left - right)
@@ -218,6 +275,10 @@ public struct TraceLoom: View {
                 draw.text(formatTime(value), x: x - 29, y: frame.y + frame.h - bottom + 5, w: 70, h: 18, color: theme.textDim)
             }
 
+            draw.pushClip(
+                x: frame.x + left, y: frame.y + top,
+                w: plotW, h: min(plotBottom, frame.h - bottom) - top
+            )
             for item in traces {
                 let lane = item.id
                 let yTop = frame.y + top + Float(lane) * laneH
@@ -258,6 +319,23 @@ public struct TraceLoom: View {
                         draw.circle(cx: x, cy: yTop + 9, radius: 3.5, color: item.color)
                     }
                 }
+            }
+            draw.popClip()
+
+            // Range selection remains transient until button-up. Highlight the
+            // entire chosen interval and give both boundaries a crisp edge.
+            if let start = selectionStart, let current = selectionCurrent {
+                let lo = min(max(left, start), frame.w - right)
+                let hi = min(max(left, current), frame.w - right)
+                let x0 = frame.x + min(lo, hi)
+                let x1 = frame.x + max(lo, hi)
+                draw.rect(
+                    x: x0, y: frame.y + top,
+                    w: max(1, x1 - x0), h: min(plotBottom, frame.h - bottom) - top,
+                    color: theme.accent.opacity(0.16)
+                )
+                draw.line(x1: x0, y1: frame.y + top, x2: x0, y2: frame.y + min(plotBottom, frame.h - bottom), color: theme.accent, width: 2)
+                draw.line(x1: x1, y1: frame.y + top, x2: x1, y2: frame.y + min(plotBottom, frame.h - bottom), color: theme.accent, width: 2)
             }
 
             // Synchronized inspection cursor — a crosshair at the pointer's

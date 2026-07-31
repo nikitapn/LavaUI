@@ -76,3 +76,21 @@ Suggested framework shape: percentage dimensions backed by Yoga's percent width/
 TraceLoom impact: the rule/log pane is fixed at 440 points rather than scaling with the window.
 
 Fixed: `Dimension.percent(Float)` (`.pct(_:)`), backed by `YGNodeStyleSetWidthPercent`/`HeightPercent`. `StackNode`'s side-column panel fill now also keys off `.percent`, not just `.point`. TraceLoom's rule/log pane uses `width: .percent(38)`; existing `minWidth`/`minHeight` still apply underneath it unchanged.
+
+## 7. Canvas gestures do not expose canvas geometry — OPEN
+
+`CanvasGesture.localX/localY` identify the pointer relative to the canvas, but the event does not include the canvas width/height or the `CanvasFrame` used by `paint`. TraceLoom can draw a drag selection because `paint` has the frame, but on `.ended` it cannot convert the selected boundary into a time value: that conversion needs `(localX - plotLeft) / (canvasWidth - plotLeft - plotRight)`.
+
+Caching the last paint frame in app-owned mutable state would couple event correctness to a prior paint and mutate data from a rendering closure, so TraceLoom intentionally does not use that workaround.
+
+Suggested framework shape: add `canvasWidth` and `canvasHeight` to `CanvasGesture`, or include the full current `CanvasFrame`. Normalized local coordinates would also solve the mapping, though the full frame is more generally useful.
+
+TraceLoom impact: click-hold-drag highlights the selected interval and its boundaries, but button-up cannot commit the interval as the new timeline domain until this geometry is available.
+
+## 8. Agent automation cannot inject a drag — OPEN
+
+The agent server exposes `move` and an atomic `click` that injects press and release together. It cannot hold a mouse button while sending one or more moves, so captured gestures such as timeline range selection cannot be tested through the LavaUI MCP/control plane.
+
+Suggested framework shape: expose separate `pointer_down` and `pointer_up` methods, or a `drag` method accepting start/end and optionally intermediate points. Separate phases are more general and match the engine's existing `injectPointerButton` API.
+
+TraceLoom impact: the redesigned layout and canvas can be inspected live, but the range-selection gesture currently requires manual testing.
