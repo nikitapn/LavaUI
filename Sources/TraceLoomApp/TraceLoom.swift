@@ -5,7 +5,26 @@ import TraceLoomCore
 private struct DisplaySeries: Identifiable {
     let id: Int
     let series: TraceSeries
+    let pyramid: TracePyramid
     let color: Color
+}
+
+private final class TraceDataCache {
+    private var rules = ""
+    private var log = ""
+    private var result: TraceParseResult?
+    private var pyramids: [TracePyramid] = []
+
+    func resolve(log newLog: String, rules newRules: String) -> (TraceParseResult, [TracePyramid]) {
+        if result == nil || newLog != log || newRules != rules {
+            log = newLog
+            rules = newRules
+            let parsed = TraceParser.parse(log: newLog, rulesSource: newRules)
+            result = parsed
+            pyramids = parsed.series.map { TracePyramid(points: $0.points) }
+        }
+        return (result!, pyramids)
+    }
 }
 
 public struct TraceLoom: View {
@@ -23,6 +42,9 @@ public struct TraceLoom: View {
     @State private var zoomStart: Double?
     @State private var zoomEnd: Double?
     @State private var showLog = false
+    /// Parsing and pyramid construction are tied to source edits, not cursor
+    /// motion or other view-state changes that recompute this body.
+    @State private var dataCache = TraceDataCache()
     /// Set by tapping a decorated gutter row — `EditorView` has no built-in
     /// tooltip, it just tells the app which decoration was tapped.
     @State private var tappedDiagnostic: String?
@@ -30,7 +52,7 @@ public struct TraceLoom: View {
     public init() {}
 
     private var result: TraceParseResult {
-        TraceParser.parse(log: log, rulesSource: rules)
+        dataCache.resolve(log: log, rules: rules).0
     }
 
     /// `TraceParser` reports diagnostics as prefixed strings ("Rule 3: …",
@@ -73,8 +95,13 @@ public struct TraceLoom: View {
 
     private var displayed: [DisplaySeries] {
         let colors = TraceLoom.palette
-        return result.series.enumerated().map {
-            DisplaySeries(id: $0.offset, series: $0.element, color: colors[$0.offset % colors.count])
+        let resolved = dataCache.resolve(log: log, rules: rules)
+        return resolved.0.series.enumerated().map {
+            DisplaySeries(
+                id: $0.offset, series: $0.element,
+                pyramid: resolved.1[$0.offset],
+                color: colors[$0.offset % colors.count]
+            )
         }
     }
 
@@ -200,8 +227,9 @@ public struct TraceLoom: View {
     }
 
     private func timelineDetail(_ traces: [DisplaySeries]) -> String {
-        let points = traces.flatMap(\.series.points)
-        guard let lo = points.map(\.time).min(), let hi = points.map(\.time).max() else {
+        let lo = traces.compactMap { $0.series.points.first?.time }.min()
+        let hi = traces.compactMap { $0.series.points.last?.time }.max()
+        guard let lo, let hi else {
             return "waiting for matching log lines"
         }
         if let zoomStart, let zoomEnd {
@@ -212,9 +240,8 @@ public struct TraceLoom: View {
 
     private func timeline(_ traces: [DisplaySeries]) -> some View {
         let theme = Environment.current.theme
-        let allPoints = traces.flatMap(\.series.points)
-        let fullMin = allPoints.map(\.time).min() ?? 0
-        let rawFullMax = allPoints.map(\.time).max() ?? 1
+        let fullMin = traces.compactMap { $0.series.points.first?.time }.min() ?? 0
+        let rawFullMax = traces.compactMap { $0.series.points.last?.time }.max() ?? 1
         let fullMax = rawFullMax > fullMin ? rawFullMax : fullMin + 1
         let requestedMin = zoomStart ?? fullMin
         let requestedMax = zoomEnd ?? fullMax
@@ -295,10 +322,12 @@ public struct TraceLoom: View {
                     yBottom - 7 - Float((value - range.min) / ySpan) * max(1, laneH - 18)
                 }
 
-                let points = item.series.points
                 switch item.series.rule.kind {
                 case .line:
-                    let visible = points.filter { $0.time >= tMin && $0.time <= tMax }
+                    let visible = item.pyramid.sampled(
+                        in: tMin...tMax,
+                        targetBucketCount: max(1, Int(plotW.rounded(.down)))
+                    )
                     draw.polyline(
                         visible.map { (x: px($0.time), y: py($0.value)) },
                         color: item.color
@@ -312,7 +341,10 @@ public struct TraceLoom: View {
                         }
                     }
                 case .step:
-                    let visible = points.filter { $0.time >= tMin && $0.time <= tMax }
+                    let visible = item.pyramid.sampled(
+                        in: tMin...tMax,
+                        targetBucketCount: max(1, Int(plotW.rounded(.down)))
+                    )
                     var strip: [(x: Float, y: Float)] = []
                     if let first = visible.first {
                         strip.append((px(first.time), py(first.value)))
@@ -325,7 +357,11 @@ public struct TraceLoom: View {
                     }
                     draw.polyline(strip, color: item.color)
                 case .event:
-                    for point in points {
+                    let visible = item.pyramid.sampled(
+                        in: tMin...tMax,
+                        targetBucketCount: max(1, Int(plotW.rounded(.down)))
+                    )
+                    for point in visible {
                         let x = px(point.time)
                         draw.line(x1: x, y1: yTop + 7, x2: x, y2: yBottom - 7, color: item.color, width: 3)
                         draw.circle(cx: x, cy: yTop + 9, radius: 3.5, color: item.color)
@@ -399,12 +435,14 @@ public struct TraceLoom: View {
         var ranges: [String: (min: Double, max: Double)] = [:]
         for item in traces where item.series.rule.kind != .event {
             let key = item.series.rule.scaleGroup ?? "@\(item.id)"
-            for point in item.series.points {
-                if let old = ranges[key] {
-                    ranges[key] = (min(old.min, point.value), max(old.max, point.value))
-                } else {
-                    ranges[key] = (point.value, point.value)
-                }
+            guard let valueRange = item.pyramid.valueRange else { continue }
+            if let old = ranges[key] {
+                ranges[key] = (
+                    min(old.min, valueRange.lowerBound),
+                    max(old.max, valueRange.upperBound)
+                )
+            } else {
+                ranges[key] = (valueRange.lowerBound, valueRange.upperBound)
             }
         }
         return ranges
