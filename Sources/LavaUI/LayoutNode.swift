@@ -308,6 +308,11 @@ final class LeafNode: YogaBoxNode {
 
     /// Editor-only payload.
     var highlighter: SyntaxHighlighter?
+    /// Only actually used (and updated) when `highlighter.isStateful` — see
+    /// `SyntaxHighlighter.Cache`. Harmless to carry around otherwise: `update`
+    /// clears it to empty for a stateless highlighter, so a stale cache from
+    /// a prior stateful one can't leak through if `highlighter` is swapped.
+    var highlightCache = SyntaxHighlighter.Cache()
     var codeStyle: CodeStyle?
     var showsGutter = false
     var gutterWidth: Float = 0

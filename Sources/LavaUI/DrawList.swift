@@ -953,6 +953,13 @@ extension DrawList {
         let focused = FocusManager.isFocused(leaf.id)
         let state = leaf.editing
         let rows = state.layout.rows
+        // Row == logical line here: EditorView always sets `wraps = false`
+        // ("code editors scroll horizontally, not wrap"), so indexing the
+        // cache by the same `row` used for `rows[row]` below is safe. A
+        // wrapping editor would need this keyed by logical line instead.
+        if let highlighter = leaf.highlighter {
+            leaf.highlightCache.update(lines: state.lines, with: highlighter)
+        }
 
         // Yoga may have shrunk the box below the measured height; the clamp
         // and the row window must use what was granted, not what was asked.
@@ -1063,8 +1070,16 @@ extension DrawList {
                 )
             }
 
+            let lineSpans: [HighlightSpan]
+            if let highlighter = leaf.highlighter {
+                lineSpans = highlighter.isStateful
+                    ? leaf.highlightCache.spans(atRow: row)
+                    : highlighter.spans(in: lineText)
+            } else {
+                lineSpans = []
+            }
             emitCodeLine(
-                lineText, spans: leaf.highlighter?.spans(in: lineText) ?? [],
+                lineText, spans: lineSpans,
                 style: style, run: run, font: font, x: textX, y: rowTop, h: lineH
             )
 

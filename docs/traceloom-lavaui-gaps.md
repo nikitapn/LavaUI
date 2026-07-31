@@ -20,13 +20,17 @@ Suggested framework shape: a platform file dialog service plus file-drop events 
 
 TraceLoom impact: log input is pasted or typed into the built-in editor.
 
-## 3. Editor highlighting cannot carry state between lines
+## 3. Editor highlighting cannot carry state between lines — RESOLVED
 
 `SyntaxHighlighter` applies regular-expression rules independently per line. A richer rule language eventually needs multi-line strings or comments, and possibly lexer state for embedded regular expressions.
 
 Suggested framework shape: an incremental stateful lexer protocol whose state output for line N keys the cached highlighting of line N+1. Keep the existing rule list as the simple adapter.
 
 TraceLoom impact: the current pipe-delimited rule DSL is deliberately line-oriented, so its useful syntax highlighting works within the existing API.
+
+Fixed: `StatefulLexer` (`LavaText/Highlighting.swift`) — `associatedtype State: Hashable`, `highlight(_:state:) -> (spans:, nextState:)`. `SyntaxHighlighter` now either wraps a `[HighlightRule]` list (unchanged, `isStateful == false`) or a type-erased `StatefulLexer`; `SyntaxHighlighter.Cache` re-lexes incrementally — a common unchanged prefix is skipped outright, and re-lexing past an edit stops the moment a line's recomputed start-state and text both match what was cached there before (everything downstream is provably unaffected). `DrawList.emitEditor` drives the cache once per emit and reads per-row spans from it when `isStateful`.
+
+No TraceLoom consumer: its rule DSL stays deliberately line-oriented (per the impact note above), so there's nothing in the product itself that needs cross-line state. Verified with unit tests in `LavaTextTests/StatefulLexerTests.swift` instead — a `/* */` block-comment lexer spanning lines, and an instrumented lexer asserting the cache actually skips unaffected lines (an edit mid-file re-lexes exactly one line when nothing downstream depends on it) rather than just checking the output is correct.
 
 ## 4. Editor validation markers are not expressible — PARTIALLY RESOLVED
 

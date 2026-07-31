@@ -30,16 +30,65 @@ public struct HighlightSpan: Equatable, Sendable {
     }
 }
 
-/// Applies rules to a line and resolves overlaps by priority.
+/// A lexer whose highlighting for line N depends on what came before it — the
+/// gap a per-line `HighlightRule` list cannot close: a block comment or a
+/// string that opens on one line and closes on another.
 ///
-/// Line-at-a-time on purpose: it keeps highlighting incremental (only visible
-/// rows need work) and independent of scroll position. The cost is that
-/// constructs spanning lines — a block comment, a multi-line string — cannot
-/// be expressed. That is a real limit, and the point at which this needs to
-/// grow into a stateful lexer rather than a rule list.
+/// `State` is the lexer's own notion of context ("inside a `/* */` comment",
+/// "inside a string opened with `"""`, unterminated"); `initialState` is what
+/// an empty document — or the very first line — starts with. `highlight`
+/// takes the state the *previous* line ended in and returns both this line's
+/// spans and the state the *next* line should start with. Chaining that
+/// output forward, line after line, is what lets a construct span lines at
+/// all; `SyntaxHighlighter`'s cache (see `EditorView`/`DrawList.emitEditor`)
+/// is what keeps re-chaining it on every keystroke from costing the whole
+/// file instead of just the lines a change actually invalidated.
+public protocol StatefulLexer {
+    associatedtype State: Hashable
+    static var initialState: State { get }
+    func highlight(_ line: String, state: State) -> (spans: [HighlightSpan], nextState: State)
+}
+
+/// Placeholder state for the rule-list form of `SyntaxHighlighter`, which
+/// has no real state — every value is equal to every other, so a cache
+/// comparing states across it always finds them unchanged (correct: nothing
+/// about a rule-list line depends on anything above it).
+private struct EmptyLexerState: Hashable {}
+
+/// Type-erased wrapper so a lexer's own `State` type doesn't have to leak
+/// into `SyntaxHighlighter`, which one `EditorView`/`LeafNode` holds
+/// regardless of which kind of highlighting strategy backs it.
+private struct AnyStatefulLexer {
+    let initialState: AnyHashable
+    let highlight: (String, AnyHashable) -> (spans: [HighlightSpan], nextState: AnyHashable)
+
+    init<L: StatefulLexer>(_ lexer: L) {
+        self.initialState = AnyHashable(L.initialState)
+        self.highlight = { line, state in
+            // Always reachable with a same-typed state in practice: callers
+            // only ever seed with this same `initialState` or a value this
+            // closure itself returned. Falling back to `initialState` rather
+            // than trapping means a caller that got this wrong loses its
+            // place in the lexer, not the whole editor.
+            let typed = (state.base as? L.State) ?? L.initialState
+            let (spans, next) = lexer.highlight(line, state: typed)
+            return (spans, AnyHashable(next))
+        }
+    }
+}
+
+/// Applies rules to a line and resolves overlaps by priority — or, if built
+/// from a `StatefulLexer` instead, threads that lexer's state line to line.
+///
+/// The rule-list form stays exactly what it was: independent of scroll
+/// position, correct one line at a time, no notion of state at all. Most
+/// syntax highlighting is that simple and should stay that simple —
+/// `isStateful` is `false` for it, and every stateful-only entry point
+/// degrades to the obvious single-line answer when called on it anyway.
 public struct SyntaxHighlighter {
     public var rules: [HighlightRule]
     private let compiled: [(regex: NSRegularExpression, rule: HighlightRule)]
+    private let lexer: AnyStatefulLexer?
 
     public init(rules: [HighlightRule]) {
         self.rules = rules
@@ -51,10 +100,44 @@ public struct SyntaxHighlighter {
             }
             return (re, rule)
         }
+        self.lexer = nil
     }
 
-    /// Spans for `line`, sorted by position, non-overlapping.
+    public init<L: StatefulLexer>(lexer: L) {
+        self.rules = []
+        self.compiled = []
+        self.lexer = AnyStatefulLexer(lexer)
+    }
+
+    public var isStateful: Bool { lexer != nil }
+
+    /// `AnyHashable(())` for the rule-list form — it has no real state, but
+    /// giving every highlighter *a* value here means a cache can seed the
+    /// first line uniformly without special-casing which kind it holds.
+    public var initialState: AnyHashable { lexer?.initialState ?? AnyHashable(EmptyLexerState()) }
+
+    /// Spans for `line` alone, sorted by position, non-overlapping. For a
+    /// stateful lexer this uses `initialState` regardless of what actually
+    /// precedes `line` — correct only for a line with nothing meaningful
+    /// above it. Real multi-line callers want `highlight(_:state:)`, chained
+    /// through `SyntaxHighlighter.Cache` — see `EditorView`.
     public func spans(in line: String) -> [HighlightSpan] {
+        if let lexer { return lexer.highlight(line, lexer.initialState).spans }
+        return ruleSpans(in: line)
+    }
+
+    /// `state` is whatever the previous line's `nextState` was. The
+    /// rule-list form ignores it and hands it back unchanged, so a caller
+    /// that always goes through this entry point does not need to know
+    /// which kind of highlighter it has.
+    public func highlight(
+        _ line: String, state: AnyHashable
+    ) -> (spans: [HighlightSpan], nextState: AnyHashable) {
+        if let lexer { return lexer.highlight(line, state) }
+        return (ruleSpans(in: line), state)
+    }
+
+    private func ruleSpans(in line: String) -> [HighlightSpan] {
         guard !line.isEmpty, !compiled.isEmpty else { return [] }
 
         let ns = line as NSString
@@ -118,5 +201,83 @@ public struct SyntaxHighlighter {
             return nil
         }
         return line.distance(from: line.startIndex, to: idx)
+    }
+
+    /// Per-line spans plus the state each line started in, updated
+    /// incrementally as the buffer edits rather than re-lexed whole on every
+    /// keystroke — the property a stateful lexer needs and a rule list
+    /// already got for free from being stateless.
+    ///
+    /// Rebuilding is a two-part diff against what is cached:
+    ///  - a common *prefix* of unchanged lines needs no work, and fixes the
+    ///    state the first changed line starts from (it is whatever was
+    ///    already cached there — nothing above it could have changed);
+    ///  - re-lexing then stops the moment a line's *recomputed* start state
+    ///    and text both match what was cached there before, because from
+    ///    that point on every line downstream would recompute to exactly
+    ///    what it already has.
+    /// The second check only fires when the line count hasn't changed — an
+    /// inserted or deleted line shifts every index below it, so comparing
+    /// old and new content at the same index would compare the wrong lines.
+    /// Missing that convergence in the insert/delete case just means
+    /// re-lexing to the end of the file instead of stopping early: slower,
+    /// never wrong.
+    public struct Cache {
+        private var lines: [Substring] = []
+        private var startStates: [AnyHashable] = []
+        private var lineSpans: [[HighlightSpan]] = []
+
+        public init() {}
+
+        /// Spans for `row`, valid only immediately after `update(lines:with:)`
+        /// with the same `row` in range.
+        public func spans(atRow row: Int) -> [HighlightSpan] {
+            lineSpans.indices.contains(row) ? lineSpans[row] : []
+        }
+
+        public mutating func update(lines newLines: [Substring], with highlighter: SyntaxHighlighter) {
+            guard highlighter.isStateful else {
+                // The rule-list form doesn't need this cache — spans(in:) is
+                // already O(that line) and independent of everything else.
+                // Clearing rather than leaving stale data avoids a lexer ->
+                // rule-list swap on the same EditorView reading old spans.
+                self = Cache()
+                return
+            }
+
+            let sameCount = newLines.count == lines.count
+            var prefix = 0
+            while prefix < newLines.count, prefix < lines.count,
+                  newLines[prefix] == lines[prefix]
+            {
+                prefix += 1
+            }
+            if sameCount, prefix == newLines.count { return }
+
+            var state = prefix < startStates.count ? startStates[prefix] : highlighter.initialState
+            var nextStartStates = Array(startStates.prefix(prefix))
+            var nextSpans = Array(lineSpans.prefix(prefix))
+
+            var i = prefix
+            while i < newLines.count {
+                if sameCount, i < lines.count, i < startStates.count,
+                   lines[i] == newLines[i], startStates[i] == state
+                {
+                    nextStartStates.append(contentsOf: startStates[i...])
+                    nextSpans.append(contentsOf: lineSpans[i...])
+                    i = newLines.count
+                    break
+                }
+                nextStartStates.append(state)
+                let (spans, next) = highlighter.highlight(String(newLines[i]), state: state)
+                nextSpans.append(spans)
+                state = next
+                i += 1
+            }
+
+            lines = newLines
+            startStates = nextStartStates
+            lineSpans = nextSpans
+        }
     }
 }
