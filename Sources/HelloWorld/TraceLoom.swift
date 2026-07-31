@@ -51,7 +51,7 @@ public struct TraceLoom: View {
             header(parsed)
             Divider()
             HStack(flexGrow: 1, padding: 8) {
-                VStack(width: .pt(440), padding: 6) {
+                VStack(width: .percent(38), padding: 6) {
                     sectionTitle("PARSING RULES", detail: "type | name | regex | time | value | group")
                     EditorView(
                         text: $rules,

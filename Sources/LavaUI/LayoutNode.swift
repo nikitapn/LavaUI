@@ -153,8 +153,14 @@ class YogaBoxNode: AnyViewNode {
     func applyStyle() {
         YGNodeStyleSetFlexGrow(yogaStorage, flexGrow)
         YGNodeStyleSetFlexShrink(yogaStorage, effectiveFlexShrink)
-        applyDimension(width, setPoint: YGNodeStyleSetWidth, setAuto: YGNodeStyleSetWidthAuto)
-        applyDimension(height, setPoint: YGNodeStyleSetHeight, setAuto: YGNodeStyleSetHeightAuto)
+        applyDimension(
+            width, setPoint: YGNodeStyleSetWidth, setAuto: YGNodeStyleSetWidthAuto,
+            setPercent: YGNodeStyleSetWidthPercent
+        )
+        applyDimension(
+            height, setPoint: YGNodeStyleSetHeight, setAuto: YGNodeStyleSetHeightAuto,
+            setPercent: YGNodeStyleSetHeightPercent
+        )
         YGNodeStyleSetPadding(yogaStorage, YGEdgeAll, padding)
         if minWidth > 0 {
             YGNodeStyleSetMinWidth(yogaStorage, minWidth)
@@ -171,7 +177,8 @@ class YogaBoxNode: AnyViewNode {
     private func applyDimension(
         _ dim: Dimension,
         setPoint: (YGNodeRef?, Float) -> Void,
-        setAuto: (YGNodeRef?) -> Void
+        setAuto: (YGNodeRef?) -> Void,
+        setPercent: (YGNodeRef?, Float) -> Void
     ) {
         switch dim {
         case .undefined:
@@ -180,6 +187,8 @@ class YogaBoxNode: AnyViewNode {
             setAuto(yogaStorage)
         case .point(let v):
             setPoint(yogaStorage, v)
+        case .percent(let v):
+            setPercent(yogaStorage, v)
         }
     }
 
@@ -676,8 +685,14 @@ final class StackNode: YogaBoxNode {
         // Side columns get a solid panel fill; main HStack stays transparent.
         // Re-evaluated every apply (not just at construction) so a theme
         // swap — or a `.theme(_:)` override — reaches it on reconcile too.
-        if direction == .column, case .point = style.width {
+        // `.percent` counts as "a side column with a stated width" exactly
+        // like `.point` — a proportional panel is still a panel, just one
+        // that scales with the window instead of staying fixed.
+        switch (direction, style.width) {
+        case (.column, .point), (.column, .percent):
             fillColor = Environment.current.theme.panel
+        default:
+            break
         }
         applyStyle()
     }

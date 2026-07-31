@@ -42,10 +42,12 @@ Suggested framework shape: a small public application host that accepts a window
 
 TraceLoom impact: the package exposes `TraceLoom` as a new executable product backed by the existing executable target, avoiding a second copy of the loop.
 
-## 6. Proportional dimensions are missing
+## 6. Proportional dimensions are missing — RESOLVED
 
 `Dimension` exposes only `undefined`, `auto`, and fixed points. A desktop split workspace needs a proportional panel width (for example 38/62) while still respecting minimum sizes.
 
 Suggested framework shape: percentage dimensions backed by Yoga's percent width/height APIs, or a fraction/flex-basis abstraction with min/max constraints.
 
 TraceLoom impact: the rule/log pane is fixed at 440 points rather than scaling with the window.
+
+Fixed: `Dimension.percent(Float)` (`.pct(_:)`), backed by `YGNodeStyleSetWidthPercent`/`HeightPercent`. `StackNode`'s side-column panel fill now also keys off `.percent`, not just `.point`. TraceLoom's rule/log pane uses `width: .percent(38)`; existing `minWidth`/`minHeight` still apply underneath it unchanged.
