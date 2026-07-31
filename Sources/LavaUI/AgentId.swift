@@ -34,14 +34,27 @@ public struct AgentIdentifiedView<Content: View>: PrimitiveView {
     }
 
     public func reconcilePrimitive(_ node: any AnyViewNode) -> any AnyViewNode {
-        // Wrapper created for fragment content.
-        if let box = node as? StyleBoxNode, box.agentId != nil || box.label == "AgentId" {
+        // Wrapper *we* created for fragment content — `label` is only ever
+        // "AgentId" via `stamp`'s wrap branch below, so this can't fire for
+        // a box some other modifier owns (see the crash this replaced).
+        if let box = node as? StyleBoxNode, box.label == "AgentId" {
             box.updateContent(ViewGraph.reconcile(box.contentNode, with: content))
             box.agentId = agentId
-            box.label = "AgentId"
             return box
         }
-        // Content was a single box we stamped last time.
+        // Content was a single box last time — possibly one we merely
+        // stamped an id onto (not wrapped), which another modifier (say,
+        // `.padding(_:)`'s `ModifiedView`) still owns the reconciliation
+        // contract for. `agentId != nil` alone used to be treated as proof
+        // *we* owned it, which was true only when we had also wrapped it;
+        // stamped-not-wrapped boxes have a non-nil `agentId` too, and
+        // reconciling `box.contentNode` directly against our `content` (one
+        // layer higher than what that box actually holds) fed the wrong
+        // view into the wrong node — `ModifiedView`, still expecting to
+        // reconcile its own box, saw a stranger and wrapped it again,
+        // inserting an already-parented Yoga child into a second parent.
+        // Going through `ViewGraph.reconcile` here instead lets whichever
+        // type actually owns `node` handle it correctly.
         let next = ViewGraph.reconcile(node, with: content)
         return stamp(next)
     }

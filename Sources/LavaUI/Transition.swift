@@ -125,7 +125,13 @@ public struct TransitionView<Content: View>: PrimitiveView {
     }
 
     public func reconcilePrimitive(_ node: any AnyViewNode) -> any AnyViewNode {
-        if let box = node as? StyleBoxNode, box.transitionState != nil {
+        // Wrapper *we* created for fragment content — `label` is only ever
+        // "Transition" via `attach`'s wrap branch below, so this can't fire
+        // for a box some other modifier owns. `transitionState != nil` alone
+        // used to be treated as proof we owned the box, which also holds for
+        // one we merely attached state to without wrapping (still someone
+        // else's box) — see the identical bug and fix in `AgentId.swift`.
+        if let box = node as? StyleBoxNode, box.label == "Transition" {
             box.updateContent(ViewGraph.reconcile(box.contentNode, with: content))
             return box
         }
@@ -133,13 +139,19 @@ public struct TransitionView<Content: View>: PrimitiveView {
     }
 
     private func attach(to node: any AnyViewNode) -> any AnyViewNode {
-        let box = (node as? YogaBoxNode) ?? StyleBoxNode(content: node)
-        // Only on first sight. Re-creating it every reconcile would restart the
-        // animation on every frame, which reads as the view never arriving.
-        if box.transitionState == nil {
-            box.transitionState = TransitionState(spec: transition, nodeID: box.id)
+        if let box = node as? YogaBoxNode {
+            // Only on first sight. Re-creating it every reconcile would
+            // restart the animation on every frame, which reads as the view
+            // never arriving.
+            if box.transitionState == nil {
+                box.transitionState = TransitionState(spec: transition, nodeID: box.id)
+            }
+            return box
         }
-        return box
+        let wrapper = StyleBoxNode(content: node)
+        wrapper.transitionState = TransitionState(spec: transition, nodeID: wrapper.id)
+        wrapper.label = "Transition"
+        return wrapper
     }
 }
 
