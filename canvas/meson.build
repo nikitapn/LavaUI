@@ -78,7 +78,6 @@ engine_sources = [
   'src/window/window_platform.cpp',
   'src/util/util.cpp',
   'src/util/cout_ext.cpp',
-  'src/bridge/canvas_bridge.cpp',
   'src/bridge/canvas_engine.cpp',
 ]
 
@@ -141,8 +140,7 @@ if x11_dep.found()
 endif
 
 # ——— Embeddable library ———
-# This is what Swift (or anything else) links against. canvas_bridge.hpp/.cpp
-# is the only public surface — Vulkan/engine internals never leave this lib.
+# This is what Swift (or anything else) links against.
 canvas_lib = shared_library('canvas',
   sources: engine_sources,
   include_directories: main_inc,
@@ -156,8 +154,6 @@ canvas_dep = declare_dependency(
   link_with: canvas_lib,
   include_directories: include_directories('src/bridge'),
 )
-
-install_headers('src/bridge/canvas_bridge.hpp')
 
 # ——— Headless smoke-test executable ———
 # No window, no GLFW: ticks the engine offscreen and writes a PNG. Exercises

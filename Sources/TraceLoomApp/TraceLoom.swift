@@ -130,44 +130,43 @@ public struct TraceLoom: View {
         VStack(flexGrow: 1) {
             header(parsed)
             Divider()
-            HStack(flexGrow: 1, padding: 8) {
-                VStack(width: .percent(32), padding: 6) {
-                    sectionTitle("PARSING RULES", detail: "type | name | regex | time | value | group")
-                    EditorView(
-                        text: $rules,
-                        rules: ruleHighlighting,
-                        style: ruleStyle,
-                        visibleLines: 20,
-                        decorations: decorations(prefix: "Rule ", severity: .error, in: rules),
-                        onDecorationTap: { tappedDiagnostic = $0.message }
-                    )
-                    .agentId("rules-editor")
-                    if let tappedDiagnostic {
-                        Text("⚑ \(tappedDiagnostic)", color: .selected)
-                            .agentId("tapped-diagnostic")
-                    }
+            VStack(padding: 6) {
+                sectionTitle("PARSING RULES", detail: "type | name | regex | time | value | group")
+                EditorView(
+                    text: $rules,
+                    rules: ruleHighlighting,
+                    style: ruleStyle,
+                    visibleLines: 20,
+                    decorations: decorations(prefix: "Rule ", severity: .error, in: rules),
+                    onDecorationTap: { tappedDiagnostic = $0.message }
+                )
+                .agentId("rules-editor")
+                if let tappedDiagnostic {
+                    Text("⚑ \(tappedDiagnostic)", color: .selected)
+                        .agentId("tapped-diagnostic")
                 }
-                .background(Environment.current.theme.panel)
-                .cornerRadius(7)
+            }
+            .background(Environment.current.theme.panel)
+            .cornerRadius(7)
 
-                VStack(flexGrow: 1, padding: 6) {
-                    HStack {
-                        sectionTitle("UNIFIED TIMELINE", detail: timelineDetail(traces))
-                        Spacer()
-                        if zoomStart != nil {
-                            Text("Reset zoom", color: .accent, onClick: { resetZoom() })
-                                .padding(4)
-                                .hoverBackground(Environment.current.theme.hover)
-                                .cornerRadius(4)
-                                .agentId("reset-zoom")
-                        }
-                        Text("live parse", color: .muted)
+            Divider()
+            VStack(flexGrow: 1, padding: 6) {
+                HStack {
+                    sectionTitle("UNIFIED TIMELINE", detail: timelineDetail(traces))
+                    Spacer()
+                    if zoomStart != nil {
+                        Text("Reset zoom", color: .accent, onClick: { resetZoom() })
+                            .padding(4)
+                            .hoverBackground(Environment.current.theme.hover)
+                            .cornerRadius(4)
+                            .agentId("reset-zoom")
                     }
-                    timeline(traces)
-                        .agentId("unified-timeline")
-                    legend(traces)
-                    diagnostics(parsed)
+                    Text("live parse", color: .muted)
                 }
+                timeline(traces)
+                    .agentId("unified-timeline")
+                legend(traces)
+                diagnostics(parsed)
             }
             Expand("Log input · \(logLineCount) lines", isExpanded: $showLog) {
                 VStack {

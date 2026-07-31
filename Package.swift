@@ -14,8 +14,6 @@ let package = Package(
         .library(name: "LavaText", targets: ["LavaText"]),
         .library(name: "TraceLoomCore", targets: ["TraceLoomCore"]),
         .library(name: "FBDModel", targets: ["FBDModel"]),
-        // Throwaway Phase 0 spikes (docs/declarative-ui-plan.md) — delete after Phase 1.
-        .executable(name: "Phase0Spikes", targets: ["Phase0Spikes"]),
     ],
     dependencies: [
         .package(path: "canvas/canvas_swift"),
@@ -27,7 +25,7 @@ let package = Package(
         // enforced by the build graph rather than by discipline.
         .target(name: "LavaText"),
         .target(name: "TraceLoomCore"),
-        // Throwaway modifier spike; delete once the design is chosen.
+        // Throwaway modifier spike; delete once the design is chosen. We keep for now. 01/08/2026
         .executableTarget(
             name: "ModifierSpike",
             dependencies: ["LavaUI"],
@@ -84,28 +82,6 @@ let package = Package(
             swiftSettings: [
                 .interoperabilityMode(.Cxx),
                 .unsafeFlags(["-Xcc", "-std=c++23"]),
-            ]
-        ),
-        // Phase 0 prep: parameter packs, Yoga measure, Font::measure.
-        .executableTarget(
-            name: "Phase0Spikes",
-            dependencies: [
-                .product(
-                    name: "CxxCanvas",
-                    package: "canvas_swift",
-                    condition: .when(platforms: [.linux])
-                ),
-                .product(
-                    name: "CYoga",
-                    package: "canvas_swift",
-                    condition: .when(platforms: [.linux])
-                ),
-            ],
-            swiftSettings: [
-                .interoperabilityMode(.Cxx),
-                .unsafeFlags(["-Xcc", "-std=c++23"]),
-                // C++ interop modules sometimes force script mode; keep @main.
-                .unsafeFlags(["-parse-as-library"]),
             ]
         ),
         .target(name: "FBDModel"),
