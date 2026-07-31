@@ -28,13 +28,17 @@ Suggested framework shape: an incremental stateful lexer protocol whose state ou
 
 TraceLoom impact: the current pipe-delimited rule DSL is deliberately line-oriented, so its useful syntax highlighting works within the existing API.
 
-## 4. Editor validation markers are not expressible
+## 4. Editor validation markers are not expressible — PARTIALLY RESOLVED
 
 Parser diagnostics can be shown below the editor, but `EditorView` has no public API for line diagnostics, gutter markers, underlines, or hover messages.
 
 Suggested framework shape: editor decorations keyed by source range, with gutter icon/color, underline style, severity, and tooltip text.
 
 TraceLoom impact: diagnostics identify the rule or log line in a separate status panel.
+
+Fixed: `EditorView` gained `decorations: [EditorDecoration]` (character range, `DiagnosticSeverity` with default color/gutter glyph, `DecorationUnderline` straight/wavy/none, message) and `onDecorationTap: ((EditorDecoration) -> Void)?`. TraceLoom's rule/log editors now underline the exact line a diagnostic points at with a gutter marker, tap-through to the message.
+
+Not done: **hover**, specifically. Nothing in the input pipeline feeds a leaf a continuous pointer position outside an active drag (`PointerCapture`) or a discrete click (`onClickLocal`) — `HoverState` only reports enter/leave, not a moving position. `onDecorationTap` (click the gutter icon) is the interaction this shipped with instead; a real hover tooltip needs a continuous-position hook generalizing what `Canvas.onGesture`'s `.moved` phase already proves is possible, scoped to non-dragging movement too.
 
 ## 5. No app lifecycle abstraction — RESOLVED
 

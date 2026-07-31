@@ -15,11 +15,36 @@ public struct TraceLoom: View {
     /// nil once released. Local coordinates only; `timeline(_:)` maps back
     /// to a time value using the same axis it drew.
     @State private var cursorLocalX: Float?
+    /// Set by tapping a decorated gutter row — `EditorView` has no built-in
+    /// tooltip, it just tells the app which decoration was tapped.
+    @State private var tappedDiagnostic: String?
 
     public init() {}
 
     private var result: TraceParseResult {
         TraceParser.parse(log: log, rulesSource: rules)
+    }
+
+    /// `TraceParser` reports diagnostics as prefixed strings ("Rule 3: …",
+    /// "Log 5, Inbound: …") rather than a structured line/range — parsing the
+    /// prefix back out here, instead of widening `TraceParseResult`'s public
+    /// shape, keeps this a presentation concern local to the one thing that
+    /// wants ranges.
+    private func lineRange(in text: String, line: Int) -> Range<Int>? {
+        let lines = text.split(separator: "\n", omittingEmptySubsequences: false)
+        guard line >= 1, line <= lines.count else { return nil }
+        var offset = 0
+        for i in 0..<(line - 1) { offset += lines[i].count + 1 }
+        return offset..<(offset + max(1, lines[line - 1].count))
+    }
+
+    private func decorations(prefix: String, severity: DiagnosticSeverity, in text: String) -> [EditorDecoration] {
+        result.diagnostics.compactMap { message in
+            guard message.hasPrefix(prefix) else { return nil }
+            let digits = message.dropFirst(prefix.count).prefix { $0.isNumber }
+            guard let line = Int(digits), let range = lineRange(in: text, line: line) else { return nil }
+            return EditorDecoration(range: range, severity: severity, message: message)
+        }
     }
 
     private var displayed: [DisplaySeries] {
@@ -61,12 +86,23 @@ public struct TraceLoom: View {
                         text: $rules,
                         rules: ruleHighlighting,
                         style: ruleStyle,
-                        visibleLines: 13
+                        visibleLines: 13,
+                        decorations: decorations(prefix: "Rule ", severity: .error, in: rules),
+                        onDecorationTap: { tappedDiagnostic = $0.message }
                     )
                     .agentId("rules-editor")
                     Text("LOG INPUT", color: .secondary).padding(2)
-                    EditorView(text: $log, visibleLines: 15)
-                        .agentId("log-editor")
+                    EditorView(
+                        text: $log,
+                        visibleLines: 15,
+                        decorations: decorations(prefix: "Log ", severity: .warning, in: log),
+                        onDecorationTap: { tappedDiagnostic = $0.message }
+                    )
+                    .agentId("log-editor")
+                    if let tappedDiagnostic {
+                        Text("⚑ \(tappedDiagnostic)", color: .selected)
+                            .agentId("tapped-diagnostic")
+                    }
                 }
                 .background(Environment.current.theme.panel)
                 .cornerRadius(7)

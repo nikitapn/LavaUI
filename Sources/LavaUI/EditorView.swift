@@ -37,6 +37,84 @@ public struct CodeStyle {
     }
 }
 
+/// How urgently an `EditorDecoration` should read — supplies a default color
+/// and gutter glyph so a caller can skip both and just say what kind of
+/// thing this is.
+public enum DiagnosticSeverity: Sendable, Equatable {
+    case error, warning, info, hint
+
+    var defaultColor: Color {
+        switch self {
+        case .error: return Color(r: 0.92, g: 0.35, b: 0.35)
+        case .warning: return Color(r: 0.92, g: 0.72, b: 0.30)
+        case .info: return Color(r: 0.40, g: 0.68, b: 0.95)
+        case .hint: return Color(r: 0.60, g: 0.62, b: 0.68)
+        }
+    }
+
+    var defaultGutterIcon: String {
+        switch self {
+        case .error: return "●"
+        case .warning: return "▲"
+        case .info: return "●"
+        case .hint: return "·"
+        }
+    }
+
+    /// Lower ranks first — the marker a row shows when more than one
+    /// decoration lands on it.
+    var rank: Int {
+        switch self {
+        case .error: return 0
+        case .warning: return 1
+        case .info: return 2
+        case .hint: return 3
+        }
+    }
+}
+
+/// Underline drawn beneath a decorated range. `wavy` is built from short
+/// zigzag segments — there is no dedicated curve primitive, and a handful of
+/// `line()` calls per decorated span is cheap enough not to need one.
+public enum DecorationUnderline: Sendable, Equatable {
+    case none
+    case straight
+    case wavy
+}
+
+/// A diagnostic attached to a range of `EditorView`'s bound text.
+///
+/// `range` is character offsets (matching `TextEditingState`'s own indexing),
+/// not `String.Index` — indices aren't `Sendable` or stable across edits,
+/// offsets from a fresh parse always are.
+public struct EditorDecoration: Sendable, Equatable {
+    public var range: Range<Int>
+    public var severity: DiagnosticSeverity
+    public var underline: DecorationUnderline
+    public var gutterIcon: String?
+    public var color: Color?
+    public var message: String?
+
+    public init(
+        range: Range<Int>,
+        severity: DiagnosticSeverity = .error,
+        underline: DecorationUnderline = .wavy,
+        gutterIcon: String? = nil,
+        color: Color? = nil,
+        message: String? = nil
+    ) {
+        self.range = range
+        self.severity = severity
+        self.underline = underline
+        self.gutterIcon = gutterIcon
+        self.color = color
+        self.message = message
+    }
+
+    var resolvedColor: Color { color ?? severity.defaultColor }
+    var resolvedGutterIcon: String { gutterIcon ?? severity.defaultGutterIcon }
+}
+
 /// A code editor: line-number gutter, current-line highlight, rule-based
 /// syntax colouring, and find-match highlighting.
 ///
@@ -52,6 +130,10 @@ public struct EditorView: PrimitiveView {
     public var showLineNumbers: Bool
     public var visibleLines: Int
     public var search: TextSearch
+    public var decorations: [EditorDecoration]
+    /// Fired when the user clicks a decorated row's gutter icon, instead of
+    /// the default "select the whole row" gutter click.
+    public var onDecorationTap: ((EditorDecoration) -> Void)?
 
     public init(
         text: Binding<String>,
@@ -60,7 +142,9 @@ public struct EditorView: PrimitiveView {
         font: UIFont? = nil,
         showLineNumbers: Bool = true,
         visibleLines: Int = 12,
-        search: TextSearch = TextSearch()
+        search: TextSearch = TextSearch(),
+        decorations: [EditorDecoration] = [],
+        onDecorationTap: ((EditorDecoration) -> Void)? = nil
     ) {
         self._text = text
         self.rules = rules
@@ -69,6 +153,8 @@ public struct EditorView: PrimitiveView {
         self.showLineNumbers = showLineNumbers
         self.visibleLines = visibleLines
         self.search = search
+        self.decorations = decorations
+        self.onDecorationTap = onDecorationTap
     }
 
     public var resolvedFont: UIFont? { font ?? Environment.current.font }
@@ -112,6 +198,8 @@ public struct EditorView: PrimitiveView {
         leaf.search = search
         leaf.text = leaf.editing.text
         leaf.minWidth = 160
+        leaf.decorations = decorations
+        leaf.onDecorationTap = onDecorationTap
 
         // Height is decided by the measure callback from the row count, so
         // the box always matches what is drawn.
@@ -139,9 +227,14 @@ public struct EditorView: PrimitiveView {
             guard let leaf else { return }
             leaf.focusSelf(binding: binding, onSubmit: nil)
             // Clicks in the gutter select the whole line, as they do in every
-            // editor with one.
+            // editor with one — unless the row is decorated and the app
+            // wants to hear about that instead.
             if leaf.showsGutter, localX < leaf.gutterWidth {
-                leaf.selectRow(atLocalY: localY)
+                if let deco = leaf.decoration(atLocalY: localY), let onTap = leaf.onDecorationTap {
+                    onTap(deco)
+                } else {
+                    leaf.selectRow(atLocalY: localY)
+                }
             } else if let hit = leaf.index(
                 atLocalX: localX - leaf.gutterWidth + leaf.scrollX,
                 localY: localY + leaf.scrollY
@@ -191,6 +284,19 @@ extension LeafNode {
         // Include the newline so a pasted replacement keeps the line structure.
         let end = min(r.upperBound + 1, editing.text.count)
         editing.setCursor(editing.index(atOffset: end), extending: true)
+    }
+
+    /// The decoration whose row is under `localY`, if any — same row math as
+    /// `selectRow`, so a gutter click resolves to the same line either way.
+    func decoration(atLocalY localY: Float) -> EditorDecoration? {
+        guard !decorations.isEmpty else { return nil }
+        let y = localY + scrollY
+        guard let f = font ?? FontStore.default else { return nil }
+        let rows = editing.layout.rows
+        guard !rows.isEmpty else { return nil }
+        let row = max(0, min(rows.count - 1, Int((y - textInset) / f.lineHeight)))
+        let range = rows[row]
+        return decorations.first { $0.range.overlaps(range) }
     }
 }
 

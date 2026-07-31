@@ -997,6 +997,21 @@ extension DrawList {
                     w: leaf.gutterWidth, h: lineH,
                     color: style.gutterText, font: font
                 )
+                if !leaf.decorations.isEmpty {
+                    let rowRange = rows[row]
+                    // Worst severity wins the gutter glyph when a row has more
+                    // than one — matches how IDEs collapse multiple markers.
+                    if let deco = leaf.decorations
+                        .filter({ $0.range.overlaps(rowRange) })
+                        .min(by: { $0.severity.rank < $1.severity.rank })
+                    {
+                        text(
+                            deco.resolvedGutterIcon, x: x + 2, y: rowTop,
+                            w: inset * 2, h: lineH,
+                            color: deco.resolvedColor, font: font
+                        )
+                    }
+                }
             }
         }
         popClip()
@@ -1053,12 +1068,53 @@ extension DrawList {
                 style: style, run: run, font: font, x: textX, y: rowTop, h: lineH
             )
 
+            for deco in leaf.decorations where deco.underline != .none && deco.range.overlaps(range) {
+                let from = max(deco.range.lowerBound, range.lowerBound)
+                let to = min(deco.range.upperBound, range.upperBound)
+                guard from < to else { continue }
+                emitUnderline(
+                    deco.underline, color: deco.resolvedColor,
+                    x0: textX + columnX(from - range.lowerBound),
+                    x1: textX + columnX(to - range.lowerBound),
+                    y: rowTop + lineH - 2
+                )
+            }
+
             if focused, !state.hasSelection, CaretBlink.isVisible, row == caretRow {
                 let column = state.offset(of: state.focus) - range.lowerBound
                 rect(
                     x: textX + columnX(column), y: rowTop,
                     w: leaf.theme.caretWidth, h: lineH, color: leaf.theme.textPrimary
                 )
+            }
+        }
+    }
+
+    /// Underline beneath a decorated span. `wavy` has no dedicated curve
+    /// primitive — it is a handful of short `line()` zigzags, cheap enough
+    /// per decorated span not to need one.
+    private func emitUnderline(
+        _ style: DecorationUnderline, color: Color, x0: Float, x1: Float, y: Float
+    ) {
+        switch style {
+        case .none:
+            return
+        case .straight:
+            line(x1: x0, y1: y, x2: x1, y2: y, color: color, width: 1.5)
+        case .wavy:
+            let period: Float = 4
+            let amplitude: Float = 1.5
+            var x = x0
+            var up = true
+            while x < x1 {
+                let nx = min(x1, x + period)
+                line(
+                    x1: x, y1: y + (up ? 0 : amplitude),
+                    x2: nx, y2: y + (up ? amplitude : 0),
+                    color: color, width: 1
+                )
+                x = nx
+                up.toggle()
             }
         }
     }

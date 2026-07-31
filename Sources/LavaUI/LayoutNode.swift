@@ -312,6 +312,14 @@ final class LeafNode: YogaBoxNode {
     var showsGutter = false
     var gutterWidth: Float = 0
     var search = TextSearch()
+    /// Diagnostics keyed by character range — gutter icon, underline, and
+    /// (via `onDecorationTap`) a click-through to whatever message the app
+    /// wants to show. Not hover-tracked: nothing in the input pipeline feeds
+    /// a leaf continuous pointer position outside an active drag/capture, so
+    /// "click the gutter icon" is the interaction this offers, not "hover
+    /// the underline" — see `docs/traceloom-lavaui-gaps.md` #4.
+    var decorations: [EditorDecoration] = []
+    var onDecorationTap: ((EditorDecoration) -> Void)?
     /// Vertical scroll offset in pixels. Positive scrolls content up.
     var scrollY: Float = 0
     /// Horizontal offset in pixels. The gutter does not move with it.
