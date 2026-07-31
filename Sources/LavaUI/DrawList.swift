@@ -27,6 +27,8 @@ public enum DrawKind: UInt32 {
     /// (first index, count); `aux` 0 fans around vertex 0, 1 triangulates
     /// alternating inner/outer pairs as a ring strip.
     case mesh = 12
+    /// Connected 1px line strip. `param`/`w` index into `meshVertices`.
+    case polyline = 13
 }
 
 /// Reused arena: draw commands plus the shaped glyphs they reference.
@@ -176,6 +178,27 @@ public final class DrawList {
         x1: Float, y1: Float, x2: Float, y2: Float, color: Color, width: Float = 1.5
     ) {
         append(kind: .line, x: x1, y: y1, w: x2, h: y2, color: color, aux: max(0.5, width))
+    }
+
+    /// Draws connected points with one non-indexed `LINE_STRIP` GPU draw.
+    ///
+    /// This is intentionally 1px: portable Vulkan does not guarantee wide
+    /// native lines. A future thick-polyline API should expand joins/caps into
+    /// triangles rather than depend on the optional `wideLines` device feature.
+    public func polyline(_ points: [(x: Float, y: Float)], color: Color) {
+        guard points.count >= 2 else { return }
+        let first = UInt32(meshVertices.count)
+        meshVertices.reserveCapacity(meshVertices.count + points.count)
+        for point in points {
+            var vertex = canvas.MeshVertex()
+            vertex.x = point.x
+            vertex.y = point.y
+            meshVertices.append(vertex)
+        }
+        append(
+            kind: .polyline, x: 0, y: 0, w: Float(points.count), h: 0,
+            color: color, param: first
+        )
     }
 
     /// Fills a custom region fanned from its first point. Correct for any

@@ -21,6 +21,8 @@ void QuadRenderer::init() {
   setupDescriptors();
   createPipelineLayout();
   createPipeline(vulkan_.getRenderPass(), vulkan_.getMSAASamples(), pipeline_);
+  createLinePipeline(vulkan_.getRenderPass(), vulkan_.getMSAASamples(),
+                     linePipeline_);
   ensureBufferCapacity(kInitialVertexCapacity);
 }
 
@@ -58,6 +60,8 @@ void QuadRenderer::cleanUp() {
 
   pipeline_.destroy(device);
   pipelineScene_.destroy(device);
+  linePipeline_.destroy(device);
+  linePipelineScene_.destroy(device);
   pipelineLayout_.destroy(device);
   descriptorPool_.destroy(device);
   descriptorSetLayout_.destroy(device);
@@ -169,6 +173,79 @@ void QuadRenderer::createSceneTargetPipeline(VkRenderPass sceneRenderPass) {
   // Single sample: the result is about to be blurred, so MSAA would only buy a
   // resolve attachment and the coverage it recovers is gone a pass later.
   createPipeline(sceneRenderPass, VK_SAMPLE_COUNT_1_BIT, pipelineScene_);
+  createLinePipeline(sceneRenderPass, VK_SAMPLE_COUNT_1_BIT,
+                     linePipelineScene_);
+}
+
+void QuadRenderer::createLinePipeline(VkRenderPass renderPass,
+                                      VkSampleCountFlagBits samples,
+                                      vk::Handle<VkPipeline> &out) {
+  VkDevice device = vulkan_.getDevice();
+  Shaders &shaders = vulkan_.getShaders();
+  VkShaderModule vertModule = shaders.loadShader("shaders/polyline.vert.bin");
+  VkShaderModule fragModule = shaders.loadShader("shaders/polyline.frag.bin");
+  std::array<VkPipelineShaderStageCreateInfo, 2> stages{
+    VkPipelineShaderStageCreateInfo{.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+      .stage = VK_SHADER_STAGE_VERTEX_BIT, .module = vertModule, .pName = "main"},
+    VkPipelineShaderStageCreateInfo{.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+      .stage = VK_SHADER_STAGE_FRAGMENT_BIT, .module = fragModule, .pName = "main"},
+  };
+  VkVertexInputBindingDescription binding{.binding = 0, .stride = sizeof(Vertex),
+                                           .inputRate = VK_VERTEX_INPUT_RATE_VERTEX};
+  std::array<VkVertexInputAttributeDescription, 2> attributes{
+    VkVertexInputAttributeDescription{0, 0, VK_FORMAT_R32G32_SFLOAT, offsetof(Vertex, pos)},
+    VkVertexInputAttributeDescription{1, 0, VK_FORMAT_R8G8B8A8_UNORM, offsetof(Vertex, color)},
+  };
+  VkPipelineVertexInputStateCreateInfo vertexInput{
+    .sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
+    .vertexBindingDescriptionCount = 1, .pVertexBindingDescriptions = &binding,
+    .vertexAttributeDescriptionCount = static_cast<uint32_t>(attributes.size()),
+    .pVertexAttributeDescriptions = attributes.data()};
+  VkPipelineInputAssemblyStateCreateInfo inputAssembly{
+    .sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
+    .topology = VK_PRIMITIVE_TOPOLOGY_LINE_STRIP,
+    .primitiveRestartEnable = VK_FALSE};
+  VkPipelineViewportStateCreateInfo viewportState{
+    .sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO,
+    .viewportCount = 1, .scissorCount = 1};
+  VkPipelineRasterizationStateCreateInfo rasterizer{
+    .sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
+    .polygonMode = VK_POLYGON_MODE_FILL, .cullMode = VK_CULL_MODE_NONE,
+    .frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE, .lineWidth = 1.0f};
+  VkPipelineMultisampleStateCreateInfo multisampling{
+    .sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO,
+    .rasterizationSamples = samples};
+  VkPipelineDepthStencilStateCreateInfo depthStencil{
+    .sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO,
+    .depthTestEnable = VK_FALSE, .depthWriteEnable = VK_FALSE,
+    .depthCompareOp = VK_COMPARE_OP_ALWAYS};
+  VkPipelineColorBlendAttachmentState blendAttachment{
+    .blendEnable = VK_TRUE, .srcColorBlendFactor = VK_BLEND_FACTOR_ONE,
+    .dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA,
+    .colorBlendOp = VK_BLEND_OP_ADD, .srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE,
+    .dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA,
+    .alphaBlendOp = VK_BLEND_OP_ADD,
+    .colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
+                      VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT};
+  VkPipelineColorBlendStateCreateInfo colorBlending{
+    .sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO,
+    .attachmentCount = 1, .pAttachments = &blendAttachment};
+  std::array<VkDynamicState, 2> dynamicStates{VK_DYNAMIC_STATE_VIEWPORT,
+                                              VK_DYNAMIC_STATE_SCISSOR};
+  VkPipelineDynamicStateCreateInfo dynamicState{
+    .sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO,
+    .dynamicStateCount = static_cast<uint32_t>(dynamicStates.size()),
+    .pDynamicStates = dynamicStates.data()};
+  VkGraphicsPipelineCreateInfo info{
+    .sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
+    .stageCount = static_cast<uint32_t>(stages.size()), .pStages = stages.data(),
+    .pVertexInputState = &vertexInput, .pInputAssemblyState = &inputAssembly,
+    .pViewportState = &viewportState, .pRasterizationState = &rasterizer,
+    .pMultisampleState = &multisampling, .pDepthStencilState = &depthStencil,
+    .pColorBlendState = &colorBlending, .pDynamicState = &dynamicState,
+    .layout = pipelineLayout_, .renderPass = renderPass, .subpass = 0};
+  VR(vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &info, nullptr, &out),
+     "Failed to create polyline pipeline");
 }
 
 void QuadRenderer::createPipeline(VkRenderPass renderPass,
@@ -511,6 +588,22 @@ void QuadRenderer::pushLine(vec2 p0, vec2 p1, float width, uint32_t rgba) {
   appendQuad(corners, locals, {halfL, halfW}, halfW, rgba, Kind::Sdf);
 }
 
+void QuadRenderer::pushPolyline(const vec2 *points, uint32_t count,
+                                uint32_t rgba) {
+  if (points == nullptr || count < 2) return;
+  // A direct-draw batch must sit between the indexed batches on either side.
+  flushBatch();
+  const uint32_t first = static_cast<uint32_t>(vertices_.size());
+  vertices_.reserve(vertices_.size() + count);
+  for (uint32_t i = 0; i < count; ++i) {
+    vertices_.push_back(Vertex{.pos = points[i], .local = {0.f, 0.f},
+      .halfSize = {0.f, 0.f}, .radius = 0.f, .color = rgba,
+      .kind = static_cast<uint32_t>(Kind::Mesh)});
+  }
+  batches_.push_back(Batch{.geometry = Batch::Geometry::LineStrip,
+    .firstVertex = first, .vertexCount = count, .scissor = currentScissor_});
+}
+
 void QuadRenderer::pushGlyph(vec2 topLeft, vec2 size, vec2 uv0, vec2 uv1,
                              uint32_t rgba) {
   if (size.x <= 0.0f || size.y <= 0.0f) {
@@ -597,6 +690,7 @@ void QuadRenderer::flushBatch() {
   const uint32_t end = static_cast<uint32_t>(indices_.size());
   if (end > batchStartIndex_) {
     batches_.push_back(Batch{
+      .geometry            = Batch::Geometry::Quads,
       .firstIndex          = batchStartIndex_,
       .indexCount          = end - batchStartIndex_,
       .scissor             = currentScissor_,
@@ -692,8 +786,10 @@ void QuadRenderer::end() {
   auto &fr = activeFrame();
   std::memcpy(fr.vertexMapped, vertices_.data(),
               vertices_.size() * sizeof(Vertex));
-  std::memcpy(fr.indexMapped, indices_.data(),
-              indices_.size() * sizeof(uint32_t));
+  if (!indices_.empty()) {
+    std::memcpy(fr.indexMapped, indices_.data(),
+                indices_.size() * sizeof(uint32_t));
+  }
 }
 
 void QuadRenderer::setViewTransform(float zoom, float panX, float panY)
@@ -728,9 +824,7 @@ void QuadRenderer::drawBatchRange(VkCommandBuffer commandBuffer,
 
   auto &fr = activeFrame();
 
-  VkPipeline bound = intoSceneTarget ? pipelineScene_ : pipeline_;
-  if (bound == VK_NULL_HANDLE) return;
-  vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, bound);
+  VkPipeline bound = VK_NULL_HANDLE;
 
   struct ViewPush {
     float viewport[2];
@@ -839,13 +933,29 @@ void QuadRenderer::drawBatchRange(VkCommandBuffer commandBuffer,
                     ? batch.scissor
                     : mapScissor(batch.scissor);
     if (sc.extent.width == 0 || sc.extent.height == 0) continue;
-    if (batch.sampleBlurResult) {
-      if (blurResultView_ == VK_NULL_HANDLE) continue;
-      bindTexture(blurResultView_, blurResultSampler_);
-    } else {
-      bindTexture(batch.textureView, VK_NULL_HANDLE);
+    const VkPipeline wanted = batch.geometry == Batch::Geometry::LineStrip
+      ? (intoSceneTarget ? linePipelineScene_ : linePipeline_)
+      : (intoSceneTarget ? pipelineScene_ : pipeline_);
+    if (wanted == VK_NULL_HANDLE) continue;
+    if (wanted != bound) {
+      bound = wanted;
+      vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, bound);
+      vkCmdPushConstants(commandBuffer, pipelineLayout_, VK_SHADER_STAGE_VERTEX_BIT,
+                         0, sizeof(ViewPush), &pc);
+    }
+    if (batch.geometry == Batch::Geometry::Quads) {
+      if (batch.sampleBlurResult) {
+        if (blurResultView_ == VK_NULL_HANDLE) continue;
+        bindTexture(blurResultView_, blurResultSampler_);
+      } else {
+        bindTexture(batch.textureView, VK_NULL_HANDLE);
+      }
     }
     vkCmdSetScissor(commandBuffer, 0, 1, &sc);
-    vkCmdDrawIndexed(commandBuffer, batch.indexCount, 1, batch.firstIndex, 0, 0);
+    if (batch.geometry == Batch::Geometry::LineStrip) {
+      vkCmdDraw(commandBuffer, batch.vertexCount, 1, batch.firstVertex, 0);
+    } else {
+      vkCmdDrawIndexed(commandBuffer, batch.indexCount, 1, batch.firstIndex, 0, 0);
+    }
   }
 }

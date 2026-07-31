@@ -160,8 +160,9 @@ struct Application::Impl
     // loadFont(path, size) after open so measure and draw use the same choice.
     std::cout << "Text renderer initialized (font pending from Swift).\n";
 
-    // Sole 2D pipeline: replays the draw list in index order, so paint order
-    // is emission order rather than the old lines < geometry < text z-split.
+    // Ordered 2D renderer: replays the draw list in index order across its quad
+    // and line-strip pipelines, so paint order is emission order rather than
+    // the old lines < geometry < text z-split.
     quadRenderer.init();
     // Glyphs and shapes share one descriptor set, so scissor is the only
     // thing that can break a batch.
@@ -736,8 +737,8 @@ struct Application::Impl
       {(x + w) / viewW * uv.x, (y + h) / viewH * uv.y}, 0xffffffffu);
   }
 
-  /// Phase 3.5 — replays the draw list through the unified quad pipeline in
-  /// *index order*, so a rect emitted after another shape actually covers it.
+  /// Phase 3.5 — replays the draw list through one ordered batch stream in
+  /// *index order*, switching specialized pipelines without changing paint order.
   ///
   /// Blur commands close the current segment and record a boundary; the GPU work
   /// between segments happens in repaint's mainCallback.
@@ -806,6 +807,19 @@ struct Application::Impl
         }
         quadRenderer.pushMesh(meshPointScratch_.data(), count, cmd.color,
                               cmd.aux > 0.f);
+        break;
+      }
+      case canvas::DrawCommandKind::Polyline: {
+        const uint32_t first = cmd.param;
+        const uint32_t count = static_cast<uint32_t>(cmd.w);
+        if (count < 2 || first + count > drawMeshVerts_.size()) break;
+        meshPointScratch_.clear();
+        meshPointScratch_.reserve(count);
+        for (uint32_t i = 0; i < count; ++i) {
+          const auto &mv = drawMeshVerts_[first + i];
+          meshPointScratch_.push_back({mv.x, mv.y});
+        }
+        quadRenderer.pushPolyline(meshPointScratch_.data(), count, cmd.color);
         break;
       }
       case canvas::DrawCommandKind::Image: {

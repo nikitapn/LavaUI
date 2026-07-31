@@ -40,6 +40,9 @@ enum class DrawCommandKind : uint32_t {
   /// in the middle means there is no single point the whole boundary fans
   /// from).
   Mesh = 12,
+  /// Connected 1px line strip. param = first vertex index, w = vertex count,
+  /// into the same MeshVertex side buffer used by Mesh.
+  Polyline = 13,
 };
 
 /// One shaped glyph, positioned in absolute window pixels by Swift. Ships in

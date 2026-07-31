@@ -3,17 +3,18 @@
 // Phase 3.5 — unified quad renderer.
 //
 // Replaces GeometryRenderer + LineRenderer + TextRenderer's draw path with a
-// single pipeline so the draw list replays in *index order*. The old renderers
+// one ordered batch stream so the draw list replays in *index order*. The old renderers
 // each accumulated a whole frame and flushed separately, which pinned paint
 // order to lines < geometry < text regardless of emission order; a caret (a
 // rect) could never cover its own glyphs, and a popup could never cover a
 // label.
 //
-// Every primitive is four vertices of QuadVertex. Shapes use a rounded-box SDF
+// Most primitives are four vertices of QuadVertex. Shapes use a rounded-box SDF
 // (rect = radius 0, circle = square with radius w/2, stroked line = capsule in
 // the segment's local frame); glyphs sample the R8 atlas. Solid shapes sample a
-// reserved white texel from the same descriptor, so scissor changes are the
-// only thing that breaks a batch.
+// reserved white texel from the same descriptor. Native polylines share the
+// vertex buffer but switch to a dedicated LINE_STRIP pipeline; the batch stream
+// preserves paint order across that switch.
 //
 // Frames-in-flight: host-visible VB/IB and descriptor sets are duplicated per
 // frame slot (see Vulkan::kMaxFramesInFlight). begin()/end()/draw() use the
@@ -71,6 +72,10 @@ class QuadRenderer {
 
   /// Stroked segment with round caps, emitted as a rotated capsule quad.
   void pushLine(vec2 p0, vec2 p1, float width, uint32_t rgba);
+
+  /// Connected native 1px line strip. A dedicated pipeline is required
+  /// because primitive topology is baked into a Vulkan graphics pipeline.
+  void pushPolyline(const vec2 *points, uint32_t count, uint32_t rgba);
 
   /// One glyph quad. `uv0`/`uv1` are the atlas rect for this glyph.
   void pushGlyph(vec2 topLeft, vec2 size, vec2 uv0, vec2 uv1, uint32_t rgba);
@@ -144,8 +149,12 @@ class QuadRenderer {
  private:
   /// A contiguous run of quads sharing one scissor + one sampled texture.
   struct Batch {
+    enum class Geometry : uint8_t { Quads, LineStrip };
+    Geometry geometry = Geometry::Quads;
     uint32_t firstIndex = 0;
     uint32_t indexCount = 0;
+    uint32_t firstVertex = 0;
+    uint32_t vertexCount = 0;
     VkRect2D scissor{};
     VkImageView textureView = VK_NULL_HANDLE;  // null → use glyphAtlasView_
     bool sampleBlurResult = false;             // bind blurResultView_ at draw
@@ -167,6 +176,8 @@ class QuadRenderer {
   void createPipelineLayout();
   void createPipeline(VkRenderPass renderPass, VkSampleCountFlagBits samples,
                       vk::Handle<VkPipeline> &out);
+  void createLinePipeline(VkRenderPass renderPass, VkSampleCountFlagBits samples,
+                          vk::Handle<VkPipeline> &out);
   void setupDescriptors();
   void createWhiteTexture();
   void ensureBufferCapacity(size_t vertexCount);
@@ -190,6 +201,8 @@ class QuadRenderer {
   /// render-pass-compatible pass, so drawing the same geometry into a different
   /// target needs its own object rather than a state change.
   vk::Handle<VkPipeline>            pipelineScene_;
+  vk::Handle<VkPipeline>            linePipeline_;
+  vk::Handle<VkPipeline>            linePipelineScene_;
   vk::Handle<VkPipelineLayout>      pipelineLayout_;
   vk::Handle<VkDescriptorPool>      descriptorPool_;
   vk::Handle<VkDescriptorSetLayout> descriptorSetLayout_;

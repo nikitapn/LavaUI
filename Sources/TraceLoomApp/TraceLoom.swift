@@ -298,20 +298,32 @@ public struct TraceLoom: View {
                 let points = item.series.points
                 switch item.series.rule.kind {
                 case .line:
-                    // `1..<points.count` crashes (lowerBound > upperBound)
-                    // when a rule matches 0 or 1 lines — routine mid-edit,
-                    // not an edge case.
-                    for index in points.indices.dropFirst() {
-                        draw.line(x1: px(points[index - 1].time), y1: py(points[index - 1].value), x2: px(points[index].time), y2: py(points[index].value), color: item.color, width: 2)
+                    let visible = points.filter { $0.time >= tMin && $0.time <= tMax }
+                    draw.polyline(
+                        visible.map { (x: px($0.time), y: py($0.value)) },
+                        color: item.color
+                    )
+                    // Markers help sparse series but defeat the point of one
+                    // draw for dense data, so stop emitting them once the line
+                    // is visually continuous.
+                    if visible.count <= 200 {
+                        for point in visible {
+                            draw.circle(cx: px(point.time), cy: py(point.value), radius: 2.5, color: item.color)
+                        }
                     }
-                    for point in points { draw.circle(cx: px(point.time), cy: py(point.value), radius: 2.5, color: item.color) }
                 case .step:
-                    for index in points.indices.dropFirst() {
-                        let previous = points[index - 1]
-                        let current = points[index]
-                        draw.line(x1: px(previous.time), y1: py(previous.value), x2: px(current.time), y2: py(previous.value), color: item.color, width: 2)
-                        draw.line(x1: px(current.time), y1: py(previous.value), x2: px(current.time), y2: py(current.value), color: item.color, width: 2)
+                    let visible = points.filter { $0.time >= tMin && $0.time <= tMax }
+                    var strip: [(x: Float, y: Float)] = []
+                    if let first = visible.first {
+                        strip.append((px(first.time), py(first.value)))
                     }
+                    for index in visible.indices.dropFirst() {
+                        let previous = visible[index - 1]
+                        let current = visible[index]
+                        strip.append((px(current.time), py(previous.value)))
+                        strip.append((px(current.time), py(current.value)))
+                    }
+                    draw.polyline(strip, color: item.color)
                 case .event:
                     for point in points {
                         let x = px(point.time)

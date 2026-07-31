@@ -84,11 +84,13 @@ body recompute (only nodes whose observed state changed)
 flag; nothing walks the graph synchronously. The loop blocks in
 `glfwWaitEvents` until input arrives, so an idle window costs nothing.
 
-**Everything draws through one pipeline.** Rectangles, rounded rectangles,
-circles, stroked lines and glyphs are all quads: shapes use a rounded-box
-signed distance field, glyphs sample an R8 atlas. Because there is one pass,
-paint order *is* emission order — a caret can cover its own glyphs, a popup can
-cover a label. Batches break only on scissor changes.
+**Everything draws through one ordered batch stream.** Rectangles, rounded
+rectangles, circles, stroked segments and glyphs share the quad pipeline:
+shapes use a rounded-box signed distance field and glyphs sample an R8 atlas.
+Large connected polylines switch to a dedicated `LINE_STRIP` pipeline and then
+switch back without leaving the stream. Paint order remains emission order — a
+caret can cover its own glyphs and a popup can cover a chart. Batches break on
+scissor, texture, or pipeline changes.
 
 **Swift owns everything above the pixels.** Layout, hit testing, text shaping,
 and input routing are Swift. C++ receives a draw command buffer and knows
