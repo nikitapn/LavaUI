@@ -118,6 +118,17 @@ public final class Editor: @unchecked Sendable {
         }
         return UIImage(path: path, textureId: UInt32(id), pixelWidth: w, pixelHeight: h)
     }
+    /// Drops one reference to a loaded image.
+    ///
+    /// The GPU memory is not freed here. Vulkan releases it only once every
+    /// frame that could still sample it has retired, so calling this on an
+    /// image that is on screen right now is safe — see
+    /// `Vulkan::destroyImageDeferred`. An atlased image returns its cell to
+    /// the page instead, and the page stays.
+    public func unloadImage(path: String) {
+        engine.unloadTexture(std.string(path))
+    }
+
 
     /// Raw input: mouse, resize, key (see `InputEventKind`).
     public func pollInputEvent() -> InputEvent? {

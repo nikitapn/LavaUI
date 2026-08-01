@@ -11,6 +11,7 @@
 
 void TextureManager::initialize(Vulkan& vulkan) {
     vulkan_ = &vulkan;
+    atlas_.initialize(vulkan);
     std::cout << "TextureManager initialized\n";
 }
 
@@ -28,6 +29,7 @@ void TextureManager::cleanUp() {
         }
     }
     
+    atlas_.cleanUp();
     textures_.clear();
     textureById_.clear();
     vulkan_ = nullptr;
@@ -53,7 +55,7 @@ TextureHandle TextureManager::loadTexture(const std::string& path) {
                 break;
             }
         }
-        return {it->second->view, foundId};
+        return {it->second->view, foundId, it->second->uv0, it->second->uv1};
     }
 
     // Load image from file
@@ -63,6 +65,36 @@ TextureHandle TextureManager::loadTexture(const std::string& path) {
     if (!pixels) {
         std::cerr << "Failed to load texture: " << path << "\n";
         return {VK_NULL_HANDLE, 0};
+    }
+
+    // Small enough to pack? A wall of covers then costs one descriptor bind
+    // and one draw rather than one each, which is the difference between a
+    // scrolling grid working and silently drawing the wrong art past the
+    // per-frame descriptor limit.
+    if (ImageAtlas::Region r = atlas_.add(pixels, texWidth, texHeight); r.valid) {
+        stbi_image_free(pixels);
+
+        auto atlasData = std::make_unique<TextureData>();
+        atlasData->view = atlas_.pageView(r.page);
+        atlasData->path = path;
+        atlasData->refCount = 1;
+        atlasData->width = texWidth;
+        atlasData->height = texHeight;
+        atlasData->ownsImage = false;   // the page owns the memory
+        atlasData->atlased = true;
+        atlasData->atlasPage = r.page;
+        atlasData->atlasSlot = r.slot;
+        atlasData->uv0 = r.uv0;
+        atlasData->uv1 = r.uv1;
+
+        uint32_t atlasId = nextId_++;
+        textureById_[atlasId] = atlasData.get();
+        textures_[path] = std::move(atlasData);
+
+        std::cout << "Atlased texture '" << path << "' (" << texWidth << "x"
+                  << texHeight << ") page " << r.page << " slot " << r.slot
+                  << " ID " << atlasId << "\n";
+        return {atlas_.pageView(r.page), atlasId, r.uv0, r.uv1};
     }
 
     VkDeviceSize imageSize = texWidth * texHeight * 4;
@@ -186,13 +218,16 @@ void TextureManager::unloadTexture(const std::string& path) {
             }
         }
 
-        // Clean up Vulkan resources (only if we own them)
+        if (it->second->atlased) {
+            atlas_.freeSlot(it->second->atlasPage, it->second->atlasSlot);
+        }
+        // Deferred: a frame submitted moments ago may still sample this
+        // texture. Destroying it here is a use-after-free that surfaces as a
+        // crash somewhere unrelated.
         if (vulkan_ && it->second->ownsImage) {
-            if (it->second->view != VK_NULL_HANDLE) {
-                vkDestroyImageView(vulkan_->getDevice(), it->second->view, nullptr);
-                it->second->view = VK_NULL_HANDLE;
-            }
-            vulkan_->destroyImage(it->second->image, it->second->allocation);
+            vulkan_->destroyImageDeferred(it->second->image,
+                                          it->second->allocation,
+                                          it->second->view);
         }
 
         textures_.erase(it);
@@ -204,6 +239,17 @@ void TextureManager::unloadTexture(uint32_t textureId) {
     if (it != textureById_.end()) {
         unloadTexture(it->second->path);
     }
+}
+
+void TextureManager::getTextureUV(uint32_t textureId, vec2 &uv0, vec2 &uv1) const {
+    auto it = textureById_.find(textureId);
+    if (it == textureById_.end()) {
+        uv0 = {0.f, 0.f};
+        uv1 = {1.f, 1.f};
+        return;
+    }
+    uv0 = it->second->uv0;
+    uv1 = it->second->uv1;
 }
 
 VkImageView TextureManager::getTextureView(uint32_t textureId) const {

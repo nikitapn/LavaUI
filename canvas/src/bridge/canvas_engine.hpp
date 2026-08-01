@@ -151,6 +151,11 @@ class Engine {
 
   /// Load PNG/JPEG for `Image` draw commands. Returns texture id (>0) or -1.
   int loadTexture(const std::string &path);
+
+  /// Releases one reference to a texture. The GPU memory is freed only after
+  /// every in-flight frame that could reference it has retired — see
+  /// `Vulkan::destroyImageDeferred`. Atlased images return their cell instead.
+  void unloadTexture(const std::string &path);
   bool textureSize(uint32_t textureId, float &outW, float &outH) const;
 
   /// Low-level access for advanced use; may be null if closed.

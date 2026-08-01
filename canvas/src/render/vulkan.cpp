@@ -614,6 +614,39 @@ void Vulkan::createImage(
      "failed to create image (VMA)!");
 }
 
+void Vulkan::destroyImageDeferred(VkImage &image, VmaAllocation &allocation,
+                                  VkImageView &view)
+{
+  if (image == VK_NULL_HANDLE && view == VK_NULL_HANDLE) return;
+  // +1 because the frame currently being recorded has not been counted yet:
+  // it can still name this image, so it has to retire too.
+  trash_.push_back({image, allocation, view,
+                    frameCounter_ + kMaxFramesInFlight + 1});
+  image      = VK_NULL_HANDLE;
+  allocation = VK_NULL_HANDLE;
+  view       = VK_NULL_HANDLE;
+}
+
+void Vulkan::collectGarbage()
+{
+  if (trash_.empty()) return;
+  size_t keep = 0;
+  for (size_t i = 0; i < trash_.size(); ++i) {
+    auto &t = trash_[i];
+    if (frameCounter_ < t.retireAt) {
+      trash_[keep++] = t;
+      continue;
+    }
+    if (t.view != VK_NULL_HANDLE) {
+      vkDestroyImageView(device_, t.view, nullptr);
+    }
+    if (t.image != VK_NULL_HANDLE) {
+      vmaDestroyImage(allocator_, t.image, t.allocation);
+    }
+  }
+  trash_.resize(keep);
+}
+
 void Vulkan::destroyImage(VkImage &image, VmaAllocation &allocation)
 {
   if (image == VK_NULL_HANDLE) {
@@ -1412,6 +1445,17 @@ void Vulkan::transitionImageLayout(
 
     sourceStage      = VK_PIPELINE_STAGE_TRANSFER_BIT;
     destinationStage = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+  } else if (oldLayout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL &&
+             newLayout == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL) {
+    // Re-uploading into an image already being sampled: an atlas page takes a
+    // new cell while the rest of it is live. Without this the helper throws,
+    // and a C++ exception crossing back into Swift aborts the process rather
+    // than surfacing as an error.
+    barrier.srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    barrier.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+
+    sourceStage      = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+    destinationStage = VK_PIPELINE_STAGE_TRANSFER_BIT;
   } else if (oldLayout == VK_IMAGE_LAYOUT_UNDEFINED &&
              newLayout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL) {
     // Direct transition for images that don't need initial data upload
@@ -1443,6 +1487,37 @@ void Vulkan::transitionImageLayout(
                        nullptr,
                        1,
                        &barrier);
+
+  endSingleTimeCommands(commandBuffer);
+}
+
+void Vulkan::copyBufferToImageRegion(
+  VkBuffer buffer, VkImage image, int32_t dstX, int32_t dstY,
+  uint32_t width, uint32_t height)
+{
+  VkCommandBuffer commandBuffer = beginSingleTimeCommands();
+
+  VkBufferImageCopy region {
+    .bufferOffset      = 0,
+    .bufferRowLength   = 0,
+    .bufferImageHeight = 0,
+    .imageSubresource =
+      {
+        .aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT,
+        .mipLevel       = 0,
+        .baseArrayLayer = 0,
+        .layerCount     = 1,
+      },
+    .imageOffset = {dstX, dstY, 0},
+    .imageExtent = {width, height, 1},
+  };
+
+  vkCmdCopyBufferToImage(commandBuffer,
+                         buffer,
+                         image,
+                         VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                         1,
+                         &region);
 
   endSingleTimeCommands(commandBuffer);
 }
@@ -1482,6 +1557,14 @@ void Vulkan::cleanUp()
   if (device_ != VK_NULL_HANDLE) {
     vkDeviceWaitIdle(device_);
   }
+
+  // The wait above means nothing in the trash can still be referenced, so
+  // everything queued is releasable regardless of its retire frame.
+  for (auto &t : trash_) {
+    if (t.view != VK_NULL_HANDLE) vkDestroyImageView(device_, t.view, nullptr);
+    if (t.image != VK_NULL_HANDLE) vmaDestroyImage(allocator_, t.image, t.allocation);
+  }
+  trash_.clear();
 
 #ifdef INCLUDE_IMGUI
   if (imguiInitialized_) {
@@ -1813,6 +1896,8 @@ void Vulkan::renderWithShadows(
 
   // Next record/submit uses the other slot (CPU can overlap with this GPU work).
   currentFrame_ = (currentFrame_ + 1) % kMaxFramesInFlight;
+  ++frameCounter_;
+  collectGarbage();
 
   // Presented content changed — any prior capture cache is stale.
   invalidateCaptureCache();

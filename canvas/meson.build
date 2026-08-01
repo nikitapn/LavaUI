@@ -72,6 +72,7 @@ engine_sources = [
   'src/render/pipeline.cpp',
   'src/render/shaders.cpp',
   'src/render/texture_manager.cpp',
+  'src/render/image_atlas.cpp',
   'src/render/compute_physics.cpp',
   'src/render/text_renderer.cpp',
   'src/render/font.cpp',

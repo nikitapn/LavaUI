@@ -87,6 +87,8 @@ public:
   /// Load a PNG/JPEG (stb) for draw-list `Image` commands. Returns texture id
   /// (>0) or -1. Idempotent per absolute path (refcounted in TextureManager).
   int loadTexture(const std::string &path);
+  /// Drops one reference; frees only once no in-flight frame can name it.
+  void unloadTexture(const std::string &path);
   /// Pixel size of a loaded texture; returns false if id unknown.
   bool textureSize(uint32_t textureId, float &outW, float &outH) const;
 

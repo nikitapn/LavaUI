@@ -91,6 +91,17 @@ class Vulkan
   VkCommandBuffer commandBuffers_[kMaxFramesInFlight]{};
   VkFence inFlightFences_[kMaxFramesInFlight]{};
   uint32_t currentFrame_ = 0;
+  /// Monotonic frame count, for ageing out deferred destructions.
+  uint64_t frameCounter_ = 0;
+
+  /// GPU resources waiting for the frames that might reference them to retire.
+  struct PendingDestroy {
+    VkImage       image      = VK_NULL_HANDLE;
+    VmaAllocation allocation = VK_NULL_HANDLE;
+    VkImageView   view       = VK_NULL_HANDLE;
+    uint64_t      retireAt   = 0;
+  };
+  std::vector<PendingDestroy> trash_;
 
   // Offscreen render target (always used as the scene render target)
   VkFormat   colorFormat_;
@@ -272,6 +283,29 @@ class Vulkan
   uint32_t currentFrameSlot() const { return currentFrame_; }
   static constexpr uint32_t framesInFlight() { return kMaxFramesInFlight; }
 
+  /// Destroys an image once no in-flight frame can still reference it.
+  ///
+  /// The immediate `destroyImage` is only safe for something the GPU has
+  /// provably finished with. Anything that was drawn recently — a texture the
+  /// app just stopped using, an atlas page being retired — may still be
+  /// referenced by a command buffer that has been submitted and not yet
+  /// completed, and freeing it there is a use-after-free the validation layer
+  /// reports as a crash somewhere else entirely.
+  ///
+  /// Queued here instead and released by `collectGarbage()` after
+  /// `kMaxFramesInFlight` frames have been presented, which is the point every
+  /// command buffer that could name it has retired. Handles are nulled so the
+  /// caller cannot use them again.
+  void destroyImageDeferred(VkImage &image, VmaAllocation &allocation,
+                            VkImageView &view);
+
+  /// Releases anything queued by `destroyImageDeferred` that has aged out.
+  /// Called once per presented frame.
+  void collectGarbage();
+
+  /// Frames presented since start. Monotonic, unlike `currentFrameSlot()`.
+  uint64_t frameCounter() const { return frameCounter_; }
+
   void cleanUp();
 
   bool isWindowed() const { return windowed_; }
@@ -398,6 +432,14 @@ class Vulkan
                          VkImage  image,
                          uint32_t width,
                          uint32_t height);
+
+  /// Copies into a sub-rect, for packing many images into one atlas page.
+  void copyBufferToImageRegion(VkBuffer buffer,
+                               VkImage  image,
+                               int32_t  dstX,
+                               int32_t  dstY,
+                               uint32_t width,
+                               uint32_t height);
 
   VkImageView createImageView(VkImage            image,
                               VkFormat           format,

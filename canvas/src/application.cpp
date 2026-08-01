@@ -832,10 +832,15 @@ struct Application::Impl
       }
       case canvas::DrawCommandKind::Image: {
         const uint32_t texId = cmd.param;
-        VkImageView view = TextureManager::getInstance().getTextureView(texId);
+        auto &tm = TextureManager::getInstance();
+        VkImageView view = tm.getTextureView(texId);
         if (view == VK_NULL_HANDLE) break;
+        // UVs from the manager, not [0,1]: an atlased image is a cell inside a
+        // shared page, and sampling the whole page would draw the neighbours.
+        vec2 uv0, uv1;
+        tm.getTextureUV(texId, uv0, uv1);
         quadRenderer.pushImage({cmd.x, cmd.y}, {cmd.w, cmd.h},
-                               {0.f, 0.f}, {1.f, 1.f}, cmd.color, view);
+                               uv0, uv1, cmd.color, view);
         break;
       }
       case canvas::DrawCommandKind::BeginBackdropBlur: {
@@ -1001,6 +1006,11 @@ struct Application::Impl
     return h.isValid() ? static_cast<int>(h.id) : -1;
   }
 
+  void unloadTexture(const std::string &path)
+  {
+    TextureManager::getInstance().unloadTexture(path);
+  }
+
   bool textureSize(uint32_t textureId, float &outW, float &outH) const
   {
     auto [w, h] = TextureManager::getInstance().getTextureDimensions(textureId);
@@ -1121,6 +1131,11 @@ int Application::registerFont(const std::string &path, float pixelSize)
 int Application::loadTexture(const std::string &path)
 {
   return impl_->loadTexture(path);
+}
+
+void Application::unloadTexture(const std::string &path)
+{
+  impl_->unloadTexture(path);
 }
 
 bool Application::textureSize(uint32_t textureId, float &outW, float &outH) const

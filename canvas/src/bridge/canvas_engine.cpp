@@ -315,6 +315,11 @@ int Engine::loadTexture(const std::string &path)
   return id;
 }
 
+void Engine::unloadTexture(const std::string &path)
+{
+  impl_->withApp([&](Application &app) { app.unloadTexture(path); });
+}
+
 bool Engine::textureSize(uint32_t textureId, float &outW, float &outH) const
 {
   bool ok = false;

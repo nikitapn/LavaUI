@@ -8,12 +8,17 @@
 #include "vk_mem_alloc.h"
 
 #include "util/types.hpp"
+#include "render/image_atlas.hpp"
 
 class Vulkan;
 
 struct TextureHandle {
   VkImageView view;
   uint32_t id;
+  /// Sub-rect to sample. Full [0,1] unless the texture was packed into an
+  /// atlas page, in which case `view` is the page and this is its cell.
+  vec2 uv0{0.f, 0.f};
+  vec2 uv1{1.f, 1.f};
   bool isValid() const { return view != VK_NULL_HANDLE && id != 0; }
   bool operator!=(const TextureHandle& other) const {
     return view != other.view || id != other.id;
@@ -32,12 +37,21 @@ private:
         uint32_t height = 0;
         /// False for external views (e.g. shadow map) we do not own.
         bool ownsImage = true;
+        /// Set when the pixels live in an atlas page rather than an image of
+        /// their own — then `image`/`allocation` are null and releasing means
+        /// returning the cell, not destroying anything.
+        bool atlased = false;
+        uint32_t atlasPage = 0;
+        uint32_t atlasSlot = 0;
+        vec2 uv0{0.f, 0.f};
+        vec2 uv1{1.f, 1.f};
     };
 
     std::unordered_map<std::string, std::unique_ptr<TextureData>> textures_;
     std::unordered_map<uint32_t, TextureData*> textureById_;
     Vulkan* vulkan_ = nullptr;
     uint32_t nextId_ = 1; // Start from 1, 0 means invalid
+    ImageAtlas atlas_;
 
 public:
     // Singleton access
@@ -65,6 +79,15 @@ public:
     
     // Get texture dimensions
     std::pair<uint32_t, uint32_t> getTextureDimensions(uint32_t textureId) const;
+
+    /// Sub-rect for a texture id — full [0,1] for a standalone image, the cell
+    /// for an atlased one. Callers must pass this to the renderer instead of
+    /// assuming the whole view.
+    void getTextureUV(uint32_t textureId, vec2 &uv0, vec2 &uv1) const;
+
+    /// Atlas used for images small enough to pack. Exposed so the app can
+    /// report occupancy; adding entries goes through `loadTexture`.
+    ImageAtlas &atlas() { return atlas_; }
 
 private:
     TextureManager() = default;
