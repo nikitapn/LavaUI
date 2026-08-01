@@ -33,11 +33,11 @@ public struct TraceLoom: View {
     /// Pointer position inside the timeline canvas while a gesture is live —
     /// nil once released. Local coordinates only; `timeline(_:)` maps back
     /// to a time value using the same axis it drew.
-    @State private var cursorLocalX: Float?
+    @DrawState private var cursorLocalX: Float?
     /// Active drag selection in canvas-local coordinates. The selected time
     /// range is committed only when the pointer is released.
-    @State private var dragStartLocalX: Float?
-    @State private var dragCurrentLocalX: Float?
+    @DrawState private var dragStartLocalX: Float?
+    @DrawState private var dragCurrentLocalX: Float?
     /// User-selected timeline domain. Nil means fit all parsed data.
     @State private var zoomStart: Double?
     @State private var zoomEnd: Double?
@@ -250,9 +250,6 @@ public struct TraceLoom: View {
         let tMin = hasValidZoom ? clampedMin : fullMin
         let tMax = hasValidZoom ? clampedMax : fullMax
         let groupedRanges = yRanges(traces)
-        let cursorX = cursorLocalX
-        let selectionStart = dragStartLocalX
-        let selectionCurrent = dragCurrentLocalX
         let plotLeft: Float = 116
         let plotRight: Float = 18
 
@@ -371,7 +368,7 @@ public struct TraceLoom: View {
 
             // Range selection remains transient until button-up. Highlight the
             // entire chosen interval and give both boundaries a crisp edge.
-            if let start = selectionStart, let current = selectionCurrent {
+            if let start = dragStartLocalX, let current = dragCurrentLocalX {
                 let lo = min(max(left, start), frame.w - right)
                 let hi = min(max(left, current), frame.w - right)
                 let x0 = frame.x + min(lo, hi)
@@ -387,7 +384,7 @@ public struct TraceLoom: View {
 
             // Synchronized inspection cursor — a crosshair at the pointer's
             // own x, with the time it maps to on the shared axis.
-            if let cx = cursorX, cx >= left, cx <= frame.w - right {
+            if let cx = cursorLocalX, cx >= left, cx <= frame.w - right {
                 let x = frame.x + cx
                 draw.line(x1: x, y1: frame.y + top, x2: x, y2: frame.y + min(plotBottom, frame.h - bottom), color: theme.textSecondary.opacity(0.8), width: 1)
                 let time = tMin + Double((cx - left) / plotW) * (tMax - tMin)

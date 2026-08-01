@@ -62,6 +62,41 @@ public struct State<Value> {
     }
 }
 
+/// View-local state whose changes only require re-emitting pixels.
+///
+/// Use this for transient values consumed by an already-retained paint closure:
+/// a canvas cursor, drag boundary, hover position, or animation phase. Unlike
+/// `State`, reads deliberately do not participate in body observation, and a
+/// write raises only `.redraw`. The storage still survives view reconstruction.
+///
+/// Do not use `DrawState` for values that change view structure, text outside
+/// the paint closure, or layout; those require ordinary `State`.
+@propertyWrapper
+public struct DrawState<Value> {
+    final class Storage {
+        var value: Value
+        init(_ value: Value) { self.value = value }
+    }
+    final class Box {
+        var storage: Storage
+        init(_ storage: Storage) { self.storage = storage }
+    }
+
+    let box: Box
+
+    public init(wrappedValue: Value) {
+        box = Box(Storage(wrappedValue))
+    }
+
+    public var wrappedValue: Value {
+        get { box.storage.value }
+        nonmutating set {
+            box.storage.value = newValue
+            ViewInvalidation.markNeedsRedraw()
+        }
+    }
+}
+
 /// A two-way reference to a value owned somewhere else.
 @propertyWrapper
 public struct Binding<Value> {
@@ -117,6 +152,13 @@ protocol StateProperty {
 extension State: StateProperty {
     func adoptStorage(from other: Any) {
         guard let previous = other as? State<Value> else { return }
+        box.storage = previous.box.storage
+    }
+}
+
+extension DrawState: StateProperty {
+    func adoptStorage(from other: Any) {
+        guard let previous = other as? DrawState<Value> else { return }
         box.storage = previous.box.storage
     }
 }

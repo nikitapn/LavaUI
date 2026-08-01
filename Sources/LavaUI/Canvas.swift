@@ -53,6 +53,8 @@ public struct CanvasGesture: Sendable, Equatable {
 ///   keeps painting while true (e.g. a live equalizer). Flip false when idle.
 /// - `onGesture`: down/move/up with local + window coordinates, for a
 ///   synchronized inspection cursor, drag-to-zoom, or range selection.
+///   Store paint-only interaction values in `@DrawState`; ordinary `@State`
+///   intentionally recomputes the owning body on every change.
 /// - `onWheel`: deltas plus the pointer's position local to this canvas, for
 ///   zooming around the cursor rather than the center.
 public struct Canvas: PrimitiveView {
