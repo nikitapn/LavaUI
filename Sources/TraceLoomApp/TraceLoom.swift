@@ -469,8 +469,13 @@ public struct TraceLoom: View {
         // needed the composition overlay.
         .overlay(
             isPresented: binding,
-            alignment: .above,
-            style: OverlayStyle(padding: 10, minWidth: 520)
+            placement: .viewport(inset: 28),
+            style: OverlayStyle(
+                background: Environment.current.theme.panel.opacity(0.88),
+                cornerRadius: 14,
+                padding: 18,
+                backdropBlurRadius: 12
+            )
         ) {
             assistantPanel()
         }

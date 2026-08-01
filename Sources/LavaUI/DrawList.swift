@@ -473,8 +473,8 @@ public final class DrawList {
             // One level down is where a collapsed `.blur()` lands, because the
             // shell wraps exactly one mounted content node. Behind a fragment
             // (a tuple, an `if`) it stays where it was.
-            let glassRadius =
-                (overlayRoot.childNodes.first as? YogaBoxNode)?.backdropBlurRadius
+            let glassRadius = overlayRoot.backdropBlurRadius
+                ?? (overlayRoot.childNodes.first as? YogaBoxNode)?.backdropBlurRadius
             withBlurScope(
                 content: nil, backdrop: glassRadius,
                 x: att.origin.x, y: att.origin.y, w: att.size.w, h: att.size.h

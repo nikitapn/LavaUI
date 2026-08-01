@@ -23,6 +23,57 @@ public enum OverlayAlignment: Equatable, Sendable {
     case above
 }
 
+/// Geometry available when placing a detached overlay.
+public struct OverlayPlacementContext: Sendable {
+    public var anchor: OverlayFrame
+    public var viewport: OverlayFrame
+    /// Natural size measured from the overlay's content before placement.
+    public var idealSize: (width: Float, height: Float)
+}
+
+/// A detached overlay's resolved frame in window coordinates.
+public struct OverlayFrame: Equatable, Sendable {
+    public var x: Float
+    public var y: Float
+    public var width: Float
+    public var height: Float
+
+    public init(x: Float, y: Float, width: Float, height: Float) {
+        self.x = x
+        self.y = y
+        self.width = width
+        self.height = height
+    }
+}
+
+/// Placement policy for a detached overlay.
+///
+/// The callback receives the presenter, viewport, and content's natural size,
+/// and returns the window-space frame the overlay should occupy. The result is
+/// clamped to the viewport before layout.
+public struct OverlayPlacement: @unchecked Sendable {
+    let resolve: @Sendable (OverlayPlacementContext) -> OverlayFrame
+
+    public init(
+        _ resolve: @escaping @Sendable (OverlayPlacementContext) -> OverlayFrame
+    ) {
+        self.resolve = resolve
+    }
+
+    /// Fill the viewport while leaving an even margin around the surface.
+    public static func viewport(inset: Float = 0) -> OverlayPlacement {
+        OverlayPlacement { context in
+            let gap = max(0, inset)
+            return OverlayFrame(
+                x: gap,
+                y: gap,
+                width: max(1, context.viewport.width - gap * 2),
+                height: max(1, context.viewport.height - gap * 2)
+            )
+        }
+    }
+}
+
 /// The detached subtree and where it ended up.
 ///
 /// `isPresented` is a closure over the binding rather than a copied `Bool`, and
@@ -35,6 +86,7 @@ final class OverlayAttachment {
     var isPresented: () -> Bool = { false }
     var dismiss: () -> Void = {}
     var alignment: OverlayAlignment = .below
+    var customPlacement: OverlayPlacement?
 
     /// Outline drawn just outside the panel. A floating surface needs an edge:
     /// `panel` over `background` is a two-percent luminance step, which reads
@@ -67,10 +119,41 @@ final class OverlayAttachment {
         guard let root, let y = root.yoga else { return }
 
         // Natural size, capped so a long menu cannot exceed the window.
+        // A previous custom placement may have assigned an exact frame; clear
+        // it before measuring the current content's ideal size again.
+        YGNodeStyleSetWidthAuto(y)
+        YGNodeStyleSetHeightAuto(y)
         YGNodeStyleSetMaxWidth(y, max(1, viewportW))
         YGNodeStyleSetMaxHeight(y, max(1, viewportH))
         YGNodeCalculateLayout(y, .nan, .nan, YGDirectionLTR)
         size = (YGNodeLayoutGetWidth(y), YGNodeLayoutGetHeight(y))
+
+        if let customPlacement {
+            let requested = customPlacement.resolve(
+                OverlayPlacementContext(
+                    anchor: OverlayFrame(
+                        x: anchorX, y: anchorY, width: anchorW, height: anchorH
+                    ),
+                    viewport: OverlayFrame(
+                        x: 0, y: 0, width: viewportW, height: viewportH
+                    ),
+                    idealSize: (size.w, size.h)
+                )
+            )
+            let ox = max(0, min(requested.x, max(0, viewportW - 1)))
+            let oy = max(0, min(requested.y, max(0, viewportH - 1)))
+            let width = max(1, min(requested.width, viewportW - ox))
+            let height = max(1, min(requested.height, viewportH - oy))
+            origin = (ox, oy)
+            size = (width, height)
+            // Available dimensions do not force an auto-sized Yoga root to
+            // fill them. The placement callback returned a frame, not merely
+            // a constraint, so make its dimensions explicit.
+            YGNodeStyleSetWidth(y, width)
+            YGNodeStyleSetHeight(y, height)
+            YGNodeCalculateLayout(y, width, height, YGDirectionLTR)
+            return
+        }
 
         let below = anchorY + anchorH
         let above = anchorY - size.h
@@ -104,6 +187,7 @@ public struct OverlayView<Content: View, OverlayContent: View>: PrimitiveView {
     public var overlayContent: OverlayContent
     public var isPresented: Binding<Bool>
     public var alignment: OverlayAlignment
+    public var placement: OverlayPlacement?
     /// Panel styling for the floating surface itself.
     public var style: OverlayStyle
 
@@ -111,6 +195,7 @@ public struct OverlayView<Content: View, OverlayContent: View>: PrimitiveView {
         content: Content,
         isPresented: Binding<Bool>,
         alignment: OverlayAlignment,
+        placement: OverlayPlacement? = nil,
         style: OverlayStyle,
         overlayContent: OverlayContent
     ) {
@@ -118,6 +203,7 @@ public struct OverlayView<Content: View, OverlayContent: View>: PrimitiveView {
         self.overlayContent = overlayContent
         self.isPresented = isPresented
         self.alignment = alignment
+        self.placement = placement
         self.style = style
     }
 
@@ -167,6 +253,7 @@ public struct OverlayView<Content: View, OverlayContent: View>: PrimitiveView {
     private func configure(_ box: OverlayBoxNode, root: StyleBoxNode) {
         let att = box.attachment
         att.alignment = alignment
+        att.customPlacement = placement
         let binding = isPresented
         att.isPresented = { binding.wrappedValue }
         att.dismiss = {
@@ -178,6 +265,7 @@ public struct OverlayView<Content: View, OverlayContent: View>: PrimitiveView {
         att.cornerRadius = style.cornerRadius
         root.fillColor = style.background
         root.cornerRadius = style.cornerRadius
+        root.backdropBlurRadius = style.backdropBlurRadius
         root.padding = style.padding
         // A floating panel sizes to its content; growing would be meaningless
         // with no parent to grow inside, and `inheritFlex` copies it from the
@@ -199,13 +287,16 @@ public struct OverlayStyle {
     public var cornerRadius: Float
     public var padding: Float
     public var minWidth: Float
+    /// Blur applied to everything behind the complete resolved popup frame.
+    public var backdropBlurRadius: Float?
 
     public init(
         background: Color? = nil,
         border: Color? = nil,
         cornerRadius: Float? = nil,
         padding: Float = 4,
-        minWidth: Float = 0
+        minWidth: Float = 0,
+        backdropBlurRadius: Float? = nil
     ) {
         let theme = Environment.current.theme
         self.background = background ?? theme.panel
@@ -213,6 +304,7 @@ public struct OverlayStyle {
         self.cornerRadius = cornerRadius ?? theme.cornerRadius
         self.padding = padding
         self.minWidth = minWidth
+        self.backdropBlurRadius = backdropBlurRadius
     }
 }
 
@@ -228,6 +320,24 @@ extension View {
             content: self,
             isPresented: isPresented,
             alignment: alignment,
+            placement: nil,
+            style: style,
+            overlayContent: content()
+        )
+    }
+
+    /// Presents `content` above everything using a caller-defined frame.
+    public func overlay<OverlayContent: View>(
+        isPresented: Binding<Bool>,
+        placement: OverlayPlacement,
+        style: OverlayStyle = OverlayStyle(),
+        @ViewBuilder content: () -> OverlayContent
+    ) -> OverlayView<Self, OverlayContent> {
+        OverlayView(
+            content: self,
+            isPresented: isPresented,
+            alignment: .below,
+            placement: placement,
             style: style,
             overlayContent: content()
         )

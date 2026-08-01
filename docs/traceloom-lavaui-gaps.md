@@ -116,7 +116,7 @@ Verified live against TraceLoom with `pointer_down` at `(300, 450)`, moves to
 `19:16:16.821 — 19:16:22.017 · zoomed`, confirming both the automation phases
 and the canvas-frame mapping end to end.
 
-## 9. A view cannot place non-modal content over its own bounds — RESOLVED
+## 9. Overlay positioning — RESOLVED
 
 LavaUI's `overlay(isPresented:alignment:)` is currently a popup/menu primitive:
 it detaches a subtree, places it above or below an anchor, gives it input
@@ -168,3 +168,19 @@ bottom-trailing corner with `inset: 8`, and the layout row it was using is
 gone. Clicking the editor beneath the overlay still focuses it and places a
 caret at the right character; the assistant *panel* stays a popup, because it
 is on-demand and an outside click should dismiss it — which it still does.
+
+The initial resolution only covered composition overlays. Popup overlays still
+had a second, related limitation: they could only place their natural-size panel
+above or below the presenting element. That made a large assistant workspace
+impossible without pretending its small launcher was the desired anchor.
+
+Fixed: the popup overload now accepts an `OverlayPlacement`, a callback given
+the presenter frame, viewport frame, and naturally measured content size. It
+returns the popup's window-space frame; LavaUI clamps that frame to the viewport
+and lays the subtree out at the resolved size. The existing `.above`/`.below`
+API remains unchanged. `.viewport(inset:)` covers the common large-sheet case.
+
+TraceLoom uses `.viewport(inset: 28)`, with a translucent rounded surface and
+12-point backdrop blur. The assistant therefore occupies nearly the whole
+window, remains independent of its bottom-right launcher, and still retains
+popup input priority, outside-click dismissal, and Escape dismissal.
