@@ -192,25 +192,45 @@ public struct TraceLoom: View {
 
     private var result: TraceParseResult { parseOutput.result }
 
+    /// Most gutter markers put on one editor.
+    ///
+    /// A rule whose capture group does not exist produces one diagnostic per
+    /// matching line — ~126,000 on a 12 MB log. Nothing downstream has any use
+    /// for that many: the reader scrolls past the first few, and building the
+    /// array at all costs more than reading it ever saves.
+    private static let maxDecorations = 500
+
     /// `TraceParser` reports diagnostics as prefixed strings ("Rule 3: …",
     /// "Log 5, Inbound: …") rather than a structured line/range — parsing the
     /// prefix back out here, instead of widening `TraceParseResult`'s public
     /// shape, keeps this a presentation concern local to the one thing that
     /// wants ranges.
-    private func lineRange(in text: String, line: Int) -> Range<Int>? {
-        let lines = text.split(separator: "\n", omittingEmptySubsequences: false)
-        guard line >= 1, line <= lines.count else { return nil }
-        var offset = 0
-        for i in 0..<(line - 1) { offset += lines[i].count + 1 }
-        return offset..<(offset + max(1, lines[line - 1].count))
-    }
-
-    private func decorations(prefix: String, severity: DiagnosticSeverity, in text: String) -> [EditorDecoration] {
-        result.diagnostics.compactMap { message in
-            guard message.hasPrefix(prefix) else { return nil }
+    private func decorations(
+        prefix: String, severity: DiagnosticSeverity, in text: String
+    ) -> [EditorDecoration] {
+        // Lazily filtered, so a run of 126,000 diagnostics stops being scanned
+        // once the cap is met rather than being walked in full.
+        let matching = Array(
+            result.diagnostics.lazy
+                .filter { $0.hasPrefix(prefix) }
+                .prefix(Self.maxDecorations)
+        )
+        let numbered = matching.compactMap { message -> (line: Int, message: String)? in
             let digits = message.dropFirst(prefix.count).prefix { $0.isNumber }
-            guard let line = Int(digits), let range = lineRange(in: text, line: line) else { return nil }
-            return EditorDecoration(range: range, severity: severity, message: message)
+            guard let line = Int(digits) else { return nil }
+            return (line, message)
+        }
+        guard let deepest = numbered.map(\.line).max() else { return [] }
+
+        // One shared pass, bounded by the deepest line anything asks about.
+        // This used to be a `lineRange(in:line:)` call per diagnostic, each of
+        // which re-split the whole text and re-summed the prefix — O(diagnostics
+        // x text). With the numbers above that is ~126,000 full splits of 12 MB
+        // per body evaluation, and the window stopped responding outright.
+        let index = LineIndex(text, upTo: deepest)
+        return numbered.compactMap { entry in
+            guard let range = index.range(ofLine: entry.line) else { return nil }
+            return EditorDecoration(range: range, severity: severity, message: entry.message)
         }
     }
 
@@ -405,7 +425,7 @@ public struct TraceLoom: View {
             // user knows it is stale.
             Text("Parsing on a background thread…", color: .accent)
                 .padding(6)
-                .agentId("parse-status")
+                .agentId("parse-progress")
         } else if let notice {
             // ASCII prefixes on purpose: the symbol font has no warning sign,
             // and a tofu box is worse than no marker at all.
@@ -627,6 +647,19 @@ public struct TraceLoom: View {
             } else {
                 ForEach(Array(parsed.diagnostics.prefix(3).enumerated()).map { Diagnostic(id: $0.offset, text: $0.element) }) { diagnostic in
                     Text(diagnostic.text, color: Color(r: 0.95, g: 0.48, b: 0.42))
+                }
+                // Three of 126,000 looked exactly like three of three. The
+                // count is also the tell that a rule is wrong for every line
+                // rather than a few.
+                if parsed.diagnostics.count > 3 {
+                    Text(
+                        "+\(parsed.diagnostics.count - 3) more"
+                            + (parsed.diagnostics.count > Self.maxDecorations
+                                ? " · first \(Self.maxDecorations) marked in the gutter"
+                                : ""),
+                        color: .muted
+                    )
+                    .agentId("diagnostic-overflow")
                 }
             }
         }

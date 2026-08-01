@@ -248,8 +248,31 @@ rather than stale.
 - The `split` in `TraceParser.parse` materialises every line before the loop
   can poll `shouldContinue` once, so a superseded worker still pays ~2s at
   57 MB before noticing. Skipping the regex pass is the other ~90%.
-- `TraceLoom.lineRange(in:line:)` splits the full log once *per diagnostic*
-  when decorating the log editor. Harmless at zero or a few diagnostics, and
-  quadratic on a log that produces many.
 - Reading the file is still synchronous on the main thread (~86ms at 57 MB),
   covered by the `FrameTasks` status frame rather than moved off.
+
+### Follow-up: quadratic decoration ranges
+
+`TraceLoom.lineRange(in:line:)` re-split the whole log and re-summed the
+prefix for *every* diagnostic it decorated — O(diagnostics x text). Not a
+slow path: a hang. A rule naming a capture group that does not exist emits one
+diagnostic per matching line (125,716 on the 12 MB fixture), so a body
+evaluation meant ~126,000 full splits of 12 MB. `Expand` builds its content
+eagerly (`Expand.swift:24`), so this ran whether or not the log disclosure was
+open. Reproduced: the main loop gave no answer for 75s while burning two
+cores, against a worst round-trip of **150ms** after the fix.
+
+`LineIndex` (in `TraceLoomCore`, so the off-by-ones are testable) computes all
+line offsets in one pass, bounded by the deepest line anything asks about, so
+decorating a few early lines of a large log does not index the rest of it.
+Decorations are also capped at 500 — nothing downstream can use 126,000 gutter
+markers, and building the array cost more than reading it ever saved.
+
+Truncation is stated rather than silent: the diagnostics panel showed three of
+125,716 exactly as it showed three of three, and now reports
+"+125713 more · first 500 marked in the gutter". The count is also the tell
+that a rule is wrong for every line rather than a few.
+
+Coverage: 7 tests in `Tests/TraceLoomCoreTests/LineIndexTests.swift`, checked
+against the original `split`-based implementation as an oracle across empty
+text, trailing newlines, blank lines, and multibyte characters.
