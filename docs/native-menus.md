@@ -91,6 +91,55 @@ row.contextMenu {
 Those still share the same IR and hosts; only placement differs (popup at
 pointer vs menubar).
 
+### Connecting menu actions to view state
+
+The menubar is built outside the view tree (`LavaApp.run(menu:)`), so it
+cannot close over a view’s `@State` — those wrappers are value copies that
+die with the builder call. Share an **`@Observable` class** instead:
+
+```swift
+@Observable
+final class MySession {
+    var document = ""
+    var showSettings = false
+    func openFile() { … }
+}
+
+let session = MySession()
+LavaApp.run(editor: editor, menu: {
+    MenuBar {
+        Menu("File") {
+            MenuItem("Open…") { session.openFile() }
+            MenuItem("Settings…") { session.showSettings = true }
+        }
+    }
+}) {
+    MyRoot(session: session)  // body reads session.* → Observation invalidates
+}
+```
+
+TraceLoom uses this as `TraceLoomSession`.
+
+#### Why the model write reaches the screen
+
+Observation only notices a write if some `body` **read** that property while
+`withObservationTracking` was recording. Most controls do read: `Expand`
+evaluates `isExpanded.wrappedValue` in its own body, so a menu toggling
+`session.showLog` invalidates correctly.
+
+`overlay(isPresented:)` deliberately does not — it holds a live closure and
+reads it at emit time, so presentation costs a redraw instead of a body pass.
+That means an `@Observable` write which *only* an overlay reads registers no
+dependency and invalidates nothing.
+
+Handlers therefore request a redraw themselves: `LavaApp` marks one after a
+click action, and `MenuHost` after a menu activation. `.redraw` is the floor,
+not `.body` — anything that genuinely changed the tree has already raised
+`.body` through observation. Menu activations especially need this, because
+panel clicks arrive from `poll()` outside any input event: on an idle window
+nothing else would ask for a frame, and the action would sit unpainted until
+the user happened to move the mouse.
+
 ### Types
 
 ```text

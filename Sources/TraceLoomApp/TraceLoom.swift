@@ -2,14 +2,6 @@ import Foundation
 import LavaUI
 import TraceLoomCore
 
-/// What the last load has to say for itself. Errors keep the previous
-/// document; warnings mean the file loaded but something about it is worth
-/// knowing (so far: bytes that were not valid UTF-8).
-private struct Notice {
-    var text: String
-    var isError: Bool
-}
-
 private struct DisplaySeries: Identifiable {
     let id: Int
     let series: TraceSeries
@@ -161,8 +153,9 @@ private final class TraceDataCache: @unchecked Sendable {
 }
 
 public struct TraceLoom: View {
-    @State private var rules = TraceLoom.sampleRules
-    @State private var log = TraceLoom.sampleLog
+    /// Shared with `LavaApp.run(menu:)` — see `TraceLoomSession`.
+    var session: TraceLoomSession
+
     /// Pointer position inside the timeline canvas while a gesture is live —
     /// nil once released. Local coordinates only; `timeline(_:)` maps back
     /// to a time value using the same axis it drew.
@@ -171,30 +164,41 @@ public struct TraceLoom: View {
     /// range is committed only when the pointer is released.
     @DrawState private var dragStartLocalX: Float?
     @DrawState private var dragCurrentLocalX: Float?
-    /// User-selected timeline domain. Nil means fit all parsed data.
-    @State private var zoomStart: Double?
-    @State private var zoomEnd: Double?
-    @State private var showLog = false
     /// Parsing and pyramid construction are tied to source edits, not cursor
     /// motion or other view-state changes that recompute this body.
     @State private var dataCache = TraceDataCache()
     /// Set by tapping a decorated gutter row — `EditorView` has no built-in
     /// tooltip, it just tells the app which decoration was tapped.
     @State private var tappedDiagnostic: String?
-    /// Non-nil while a file load is in flight. The frame showing it is
-    /// presented before the read/parse runs — see `loadLog(from:)`.
-    @State private var loadingPath: String?
-    /// Outcome of the last load, kept on screen until the next one starts.
-    @State private var notice: Notice?
     /// Rule assistant: the log line the user wants parsed, and the run itself.
     @State private var assistantExample = ""
     @State private var showAssistant = false
     @State private var assistant = AssistantSession()
 
-    public init() {}
+    init(session: TraceLoomSession) {
+        self.session = session
+    }
+
+    /// Bindings into the shared session so `EditorView` / `Expand` / menus all
+    /// touch the same storage (and Observation wakes the body).
+    private var rulesBinding: Binding<String> {
+        Binding(get: { session.rules }, set: { session.rules = $0 })
+    }
+
+    private var logBinding: Binding<String> {
+        Binding(get: { session.log }, set: { session.log = $0 })
+    }
+
+    private var showLogBinding: Binding<Bool> {
+        Binding(get: { session.showLog }, set: { session.showLog = $0 })
+    }
+
+    private var showSettingsBinding: Binding<Bool> {
+        Binding(get: { session.showSettings }, set: { session.showSettings = $0 })
+    }
 
     private var parseOutput: ParseOutput {
-        dataCache.resolve(log: log, rules: rules)
+        dataCache.resolve(log: session.log, rules: session.rules)
     }
 
     private var result: TraceParseResult { parseOutput.result }
@@ -241,54 +245,6 @@ public struct TraceLoom: View {
         }
     }
 
-    private func loadLogFile() {
-        guard let url = FileDialog.openFile(
-            title: "Open Log File",
-            filters: [FileDialog.Filter(name: "Log/text files", extensions: ["log", "txt"])]
-        ) else { return }
-        loadLog(from: [url])
-    }
-
-    /// Shared by the file-dialog button and `.onDrop` — whichever way a log
-    /// file arrives, only its content matters. Ignores anything past the
-    /// first path: TraceLoom parses one buffer, not a multi-file batch.
-    ///
-    /// Split across two frames on purpose. Reading is cheap but reparsing is
-    /// linear in file size and runs on this thread — seconds for a log of a
-    /// few tens of MB — so setting the status and doing the work inline would
-    /// put both in one frame and paint neither until the stall ended. Setting
-    /// the status here and deferring the rest to `FrameTasks` gets "Loading
-    /// x.log…" on screen first, which is the difference between a slow load
-    /// and an app that looks dead.
-    private func loadLog(from urls: [URL]) {
-        guard let url = urls.first else { return }
-        notice = nil
-        loadingPath = url.path
-        FrameTasks.after { completeLoad(url) }
-    }
-
-    private func completeLoad(_ url: URL) {
-        defer { loadingPath = nil }
-        do {
-            let loaded = try LogFile.read(at: url)
-            log = loaded.text
-            resetZoom()
-            if let warning = loaded.warning {
-                notice = Notice(text: warning, isError: false)
-                report(warning)
-            }
-        } catch {
-            // The previous document stays exactly as it was — a failed load
-            // must not also cost the user what they were already looking at.
-            notice = Notice(text: "\(error)", isError: true)
-            report("\(error)")
-        }
-    }
-
-    private func report(_ message: String) {
-        FileHandle.standardError.write(Data("TraceLoom: \(message)\n".utf8))
-    }
-
     private var displayed: [DisplaySeries] {
         let colors = TraceLoom.palette
         let resolved = parseOutput
@@ -329,11 +285,13 @@ public struct TraceLoom: View {
             VStack(padding: 6) {
                 sectionTitle("PARSING RULES", detail: "type | name | regex | time | value | group")
                 EditorView(
-                    text: $rules,
+                    text: rulesBinding,
                     rules: ruleHighlighting,
                     style: ruleStyle,
                     visibleLines: 20,
-                    decorations: decorations(prefix: "Rule ", severity: .error, in: rules),
+                    decorations: decorations(
+                        prefix: "Rule ", severity: .error, in: session.rules
+                    ),
                     onDecorationTap: { tappedDiagnostic = $0.message }
                 )
                 .agentId("rules-editor")
@@ -358,7 +316,7 @@ public struct TraceLoom: View {
                 HStack(alignment: .center) {
                     sectionTitle("UNIFIED TIMELINE", detail: timelineDetail(traces))
                     Spacer()
-                    if zoomStart != nil {
+                    if session.zoomStart != nil {
                         Text("Reset zoom", color: .accent, onClick: { resetZoom() })
                             .padding(4)
                             .hoverBackground(Environment.current.theme.hover)
@@ -372,12 +330,14 @@ public struct TraceLoom: View {
                 legend(traces)
                 diagnostics(parsed)
             }
-            Expand("Log input · \(logLineCount) lines", isExpanded: $showLog) {
+            Expand("Log input · \(logLineCount) lines", isExpanded: showLogBinding) {
                 VStack {
                     EditorView(
-                        text: $log,
+                        text: logBinding,
                         visibleLines: 8,
-                        decorations: decorations(prefix: "Log ", severity: .warning, in: log),
+                        decorations: decorations(
+                            prefix: "Log ", severity: .warning, in: session.log
+                        ),
                         onDecorationTap: { tappedDiagnostic = $0.message }
                     )
                     .agentId("log-editor")
@@ -386,14 +346,26 @@ public struct TraceLoom: View {
             .padding(8)
             .agentId("log-disclosure")
         }
-        .onDrop { urls in loadLog(from: urls) }
+        .onDrop { urls in session.loadLog(from: urls) }
+        .overlay(
+            isPresented: showSettingsBinding,
+            placement: .viewport(inset: 48),
+            style: OverlayStyle(
+                background: Environment.current.theme.panel.opacity(0.94),
+                cornerRadius: 12,
+                padding: 16,
+                minWidth: 320,
+                backdropBlurRadius: 10
+            )
+        ) {
+            settingsPanel
+        }
     }
 
     private var logLineCount: Int { parseOutput.logLineCount }
 
     private func resetZoom() {
-        zoomStart = nil
-        zoomEnd = nil
+        session.resetZoom()
         dragStartLocalX = nil
         dragCurrentLocalX = nil
         cursorLocalX = nil
@@ -412,8 +384,10 @@ public struct TraceLoom: View {
 
                 HStack() {
                     Text("Paste, edit, drop a file here, or", color: .dim)
-                    Text("Load file…", color: .accent, onClick: { loadLogFile() })
+                    Text("Load file…", color: .accent, onClick: { session.openLogFile() })
                         .agentId("load-log-file")
+                    Text("Settings", color: .muted, onClick: { session.openSettings() })
+                        .agentId("open-settings")
                 }
             }
             loadStatus()
@@ -427,7 +401,7 @@ public struct TraceLoom: View {
     /// timeline that did not change.
     @ViewBuilder
     private func loadStatus() -> some View {
-        if let loadingPath {
+        if let loadingPath = session.loadingPath {
             Text(
                 "Loading \(URL(fileURLWithPath: loadingPath).lastPathComponent)…",
                 color: .accent
@@ -441,7 +415,7 @@ public struct TraceLoom: View {
             Text("Parsing on a background thread…", color: .accent)
                 .padding(6)
                 .agentId("parse-progress")
-        } else if let notice {
+        } else if let notice = session.notice {
             // ASCII prefixes on purpose: the symbol font has no warning sign,
             // and a tofu box is worse than no marker at all.
             Text(
@@ -451,6 +425,37 @@ public struct TraceLoom: View {
             .padding(6)
             .agentId("load-notice")
         }
+    }
+
+    private var settingsPanel: some View {
+        let session = session
+        return VStack(padding: 4) {
+            Text("Settings", color: .accent)
+            Divider()
+            Toggle(
+                "Show log editor",
+                isOn: Binding(get: { session.showLog }, set: { session.showLog = $0 })
+            )
+            .agentId("settings-show-log")
+            Toggle(
+                "Light theme",
+                isOn: Binding(
+                    get: { Theme.current == .light },
+                    set: { Theme.current = $0 ? .light : .dark }
+                )
+            )
+            .agentId("settings-theme")
+            Divider()
+            HStack {
+                Spacer()
+                Text("Close", color: .accent, onClick: { session.showSettings = false })
+                    .padding(6)
+                    .hoverBackground(Environment.current.theme.hover)
+                    .cornerRadius(4)
+                    .agentId("settings-close")
+            }
+        }
+        .agentId("settings-panel")
     }
 
     // MARK: - Rule assistant
@@ -572,13 +577,14 @@ public struct TraceLoom: View {
         assistant.start(
             example: assistantExample.isEmpty ? firstLogLine() : assistantExample,
             sampleLines: sampleLogLines(),
-            existingRules: rules
+            existingRules: session.rules
         )
     }
 
     private func acceptSuggestion() {
         guard let suggestion = assistant.snapshot.suggestion else { return }
-        rules = rules.hasSuffix("\n") || rules.isEmpty
+        let rules = session.rules
+        session.rules = rules.hasSuffix("\n") || rules.isEmpty
             ? rules + suggestion + "\n"
             : rules + "\n" + suggestion + "\n"
         assistant.clearSuggestion()
@@ -588,7 +594,7 @@ public struct TraceLoom: View {
     /// runs on the main thread from a click. A bounded prefix is all the
     /// assistant needs — it caps the lines it checks against anyway.
     private func sampleLogLines(limit: Int = 30) -> [String] {
-        log.prefix(20_000)
+        session.log.prefix(20_000)
             .split(separator: "\n", omittingEmptySubsequences: true)
             .prefix(limit)
             .map { $0.trimmingCharacters(in: .whitespaces) }
@@ -611,7 +617,7 @@ public struct TraceLoom: View {
         guard let lo, let hi else {
             return "waiting for matching log lines"
         }
-        if let zoomStart, let zoomEnd {
+        if let zoomStart = session.zoomStart, let zoomEnd = session.zoomEnd {
             return "\(formatTime(zoomStart)) — \(formatTime(zoomEnd)) · zoomed"
         }
         return "\(formatTime(lo)) — \(formatTime(hi)) · shared X axis"
@@ -619,11 +625,12 @@ public struct TraceLoom: View {
 
     private func timeline(_ traces: [DisplaySeries]) -> some View {
         let theme = Environment.current.theme
+        let session = session
         let fullMin = traces.compactMap { $0.series.points.first?.time }.min() ?? 0
         let rawFullMax = traces.compactMap { $0.series.points.last?.time }.max() ?? 1
         let fullMax = rawFullMax > fullMin ? rawFullMax : fullMin + 1
-        let requestedMin = zoomStart ?? fullMin
-        let requestedMax = zoomEnd ?? fullMax
+        let requestedMin = session.zoomStart ?? fullMin
+        let requestedMax = session.zoomEnd ?? fullMax
         let clampedMin = max(fullMin, min(requestedMin, fullMax))
         let clampedMax = min(fullMax, max(requestedMax, fullMin))
         let hasValidZoom = clampedMax > clampedMin
@@ -662,8 +669,8 @@ public struct TraceLoom: View {
                             let rb = Double((b - plotLeft) / plotWidth)
                             let selectedA = tMin + ra * (tMax - tMin)
                             let selectedB = tMin + rb * (tMax - tMin)
-                            zoomStart = min(selectedA, selectedB)
-                            zoomEnd = max(selectedA, selectedB)
+                            session.zoomStart = min(selectedA, selectedB)
+                            session.zoomEnd = max(selectedA, selectedB)
                         }
                     }
                     dragStartLocalX = nil
@@ -866,7 +873,8 @@ public struct TraceLoom: View {
         Color(r: 0.72, g: 0.52, b: 0.96),
     ]
 
-    private static let sampleRules = #"""
+    /// Seed document for a fresh session / File → Reload Sample.
+    static let sampleRules = #"""
     # type | name | regex | time capture | value capture | shared scale
     line  | Inbound    | ^(\d\d:\d\d:\d\d\.\d+).*inboundKbps:(\d+)  | 1 | 2 | traffic
     line  | Outbound   | ^(\d\d:\d\d:\d\d\.\d+).*outboundKbps:(\d+) | 1 | 2 | traffic
@@ -874,7 +882,7 @@ public struct TraceLoom: View {
     event | Config     | ^(\d\d:\d\d:\d\d\.\d+).*CONFIG_RELOAD       | 1 | - |
     """#
 
-    private static let sampleLog = """
+    static let sampleLog = """
     19:16:15.280 NetworkMetrics inboundKbps:8400 outboundKbps:3200
     19:16:16.140 ClusterScaler replicas=3
     19:16:17.010 NetworkMetrics inboundKbps:7900 outboundKbps:3500

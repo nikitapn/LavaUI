@@ -290,6 +290,19 @@ public enum LavaApp {
                     originX: 0, originY: menuH, mods: ev.mods
                 ) {
                     action()
+                    // A handler exists to change something, so a click is a
+                    // repaint request. `@State` writes invalidate themselves
+                    // through `Binding.set`, but a handler that mutates an
+                    // `@Observable` model reaches the screen only if some body
+                    // *read* that property — and a live-read presenter like
+                    // `overlay(isPresented:)` never does. Without this, opening
+                    // a panel from a click showed nothing until an unrelated
+                    // event (a hover) happened to repaint.
+                    //
+                    // `.redraw` is the right floor, the same reasoning
+                    // `Binding.set` documents: anything that genuinely changed
+                    // the tree has already raised `.body` via observation.
+                    ViewInvalidation.markNeedsRedraw()
                 }
             case .resize:
                 let nw = max(1, ev.x)

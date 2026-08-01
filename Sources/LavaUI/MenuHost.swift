@@ -78,10 +78,10 @@ public final class MenuHost {
     @discardableResult
     public func activate(_ id: MenuID) -> Bool {
         guard let item = controller.model.item(id: id) else {
-            return controller.activate(id)
+            return invalidating(controller.activate(id))
         }
         guard item.isEnabled else { return false }
-        return controller.activate(id)
+        return invalidating(controller.activate(id))
     }
 
     @discardableResult
@@ -89,7 +89,18 @@ public final class MenuHost {
         matchingKey key: Int32,
         mods: Int32
     ) -> Bool {
-        controller.activate(matchingKey: key, mods: mods)
+        invalidating(controller.activate(matchingKey: key, mods: mods))
+    }
+
+    /// A menu action is a repaint request, for the same reason a click is: the
+    /// handler exists to change something, and a handler that mutates an
+    /// `@Observable` model invalidates nothing by itself unless some body read
+    /// that property. Panel activations arrive from `poll()`, outside any input
+    /// event, so without this a global-menu action could sit unpainted
+    /// indefinitely — the window is idle and nothing else asks for a frame.
+    private func invalidating(_ activated: Bool) -> Bool {
+        if activated { ViewInvalidation.markNeedsRedraw() }
+        return activated
     }
 
     /// Pump GLib/DBus and run any panel activations. Call once per frame.
