@@ -20,6 +20,11 @@ struct HelloWorldApp {
             FileHandle.standardError.write(Data("warning: brand image failed to load\n".utf8))
         }
 
+        // Chrome the menubar and the demo's own header both drive. Menu
+        // closures capture this reference; the view reads the same
+        // `@Observable` object — see `DemoSession`.
+        let session = DemoSession()
+
         // First top-level menu is the *application* menu (Chrome: "Google Chrome").
         // Global panels show it next to the window icon; leaving it out looks like
         // a blank clickable slot before View/Help.
@@ -28,12 +33,8 @@ struct HelloWorldApp {
             menu: {
                 MenuBar {
                     Menu("LavaUI", id: "app") {
-                        MenuItem(
-                            "New",
-                            id: "app.new",
-                            shortcut: KeyShortcut(KeyCode.n, .primary)
-                        ) {
-                            FileHandle.standardError.write(Data("menu: New\n".utf8))
+                        MenuItem("Reset Demo Chrome", id: "app.reset") {
+                            session.resetChrome()
                         }
                         MenuSeparator()
                         MenuItem(
@@ -44,23 +45,60 @@ struct HelloWorldApp {
                             editor.requestClose()
                         }
                     }
-                    Menu("View") {
+                    Menu("View", id: "view") {
+                        // Checkmarks come from the same properties the header
+                        // toggles write, so the panel reflects the window
+                        // whichever one you used last.
                         MenuItem(
-                            "Toggle theme",
+                            "Show Navigation",
+                            id: "view.nav",
+                            isChecked: session.showSidebar
+                        ) {
+                            session.showSidebar.toggle()
+                        }
+                        MenuItem(
+                            "Show Inspector",
+                            id: "view.inspector",
+                            isChecked: session.showInspector
+                        ) {
+                            session.showInspector.toggle()
+                        }
+                        MenuItem(
+                            "Show Banner",
+                            id: "view.banner",
+                            isChecked: session.showBanner
+                        ) {
+                            session.showBanner.toggle()
+                        }
+                        MenuSeparator()
+                        MenuItem(
+                            "Toggle Theme",
                             id: "view.theme",
                             shortcut: KeyShortcut(KeyCode.t, .primary)
                         ) {
-                            Theme.current = (Theme.current == .dark) ? .light : .dark
+                            // Through the session, not `Theme.current`
+                            // directly: the header label reads `lightTheme`,
+                            // and writing the theme behind its back is what
+                            // used to leave it saying "Dark" on a light window.
+                            session.toggleTheme()
                         }
                         MenuSeparator()
-                        MenuItem("Zoom in", id: "view.zoom-in") {
-                            FileHandle.standardError.write(Data("menu: Zoom in\n".utf8))
+                        // No shortcuts here on purpose. Ctrl+Shift+± / 0 are
+                        // already handled by `ContentScaleShortcuts`, and menu
+                        // matching runs *first* and consumes the event — so
+                        // binding the same chord would shadow that path rather
+                        // than duplicate it.
+                        MenuItem("Zoom In", id: "view.zoom-in") {
+                            FontStore.zoomIn(into: editor)
                         }
-                        MenuItem("Zoom out", id: "view.zoom-out") {
-                            FileHandle.standardError.write(Data("menu: Zoom out\n".utf8))
+                        MenuItem("Zoom Out", id: "view.zoom-out") {
+                            FontStore.zoomOut(into: editor)
+                        }
+                        MenuItem("Actual Size", id: "view.zoom-reset") {
+                            FontStore.resetScale(into: editor)
                         }
                     }
-                    Menu("Help") {
+                    Menu("Help", id: "help") {
                         MenuItem("About LavaUI", id: "help.about") {
                             FileHandle.standardError.write(
                                 Data("LavaUI demo — native menu (AppMenu / Vulkan)\n".utf8)
@@ -70,7 +108,7 @@ struct HelloWorldApp {
                 }
             }
         ) {
-            DemoExample(brandImage: brandImage)
+            DemoExample(session: session, brandImage: brandImage)
         }
     }
 }

@@ -46,6 +46,10 @@ enum DemoPalette {
 public struct DemoExample: View {
     public var brandImage: UIImage?
 
+    /// Shared with `LavaApp.run(menu:)` — see `DemoSession`. `@Bindable` so
+    /// `$session.showSidebar` projects a binding the way `$state` does.
+    @Bindable var session: DemoSession
+
     @State private var items: [DemoItem] = DemoExample.seedItems
     @State private var selectedId: Int? = 1
     @State private var draft: String = ""
@@ -70,14 +74,11 @@ public struct DemoExample: View {
     @State private var search = TextSearch()
 
     @State private var notes: String = "Multi-line with soft wrap. This sentence is long enough that it has to wrap onto several visual rows inside the panel.\nEnter still adds a hard line.\nUp/Down step visual rows."
-    @State private var showSidebar = true
-    @State private var showInspector = true
     @State private var flexSlots = 3
     @State private var nextId = 10
     @State private var gauge: Float = 0.35
     @State private var showMenu = false
     @State private var showGlass = false
-    @State private var showBanner = true
     /// Neon EQ showcase — continuous animation while true.
     @State private var pulsePlaying = true
     /// Selected donut wedge (`nil` = show title in the hole).
@@ -86,11 +87,11 @@ public struct DemoExample: View {
     @State private var chartLive = true
     /// Expand disclosure for the live lab; collapsed so AnimationDriver is idle.
     @State private var showLiveLab = false
-    @State private var lightTheme = false
     @State private var status = "Click a list row, edit the field, resize the window."
     @State private var actionCount = 0
 
-    public init(brandImage: UIImage? = nil) {
+    init(session: DemoSession, brandImage: UIImage? = nil) {
+        self.session = session
         self.brandImage = brandImage
     }
 
@@ -155,11 +156,11 @@ public struct DemoExample: View {
         VStack(flexGrow: 1, padding: 0) {
             toolbar
             HStack(flexGrow: 1, padding: 4) {
-                if showSidebar {
+                if session.showSidebar {
                     sidebar
                 }
                 centerColumn
-                if showInspector {
+                if session.showInspector {
                     inspector
                 }
             }
@@ -180,30 +181,29 @@ public struct DemoExample: View {
             }
             Spacer()
             Text(
-                lightTheme ? "[ Theme: Light ]" : "[ Theme: Dark ]",
+                session.lightTheme ? "[ Theme: Light ]" : "[ Theme: Dark ]",
                 color: .muted,
                 onClick: {
-                    lightTheme.toggle()
-                    Theme.current = lightTheme ? .light : .dark
-                    bump("theme → \(lightTheme ? "light" : "dark")")
+                    session.toggleTheme()
+                    bump("theme → \(session.lightTheme ? "light" : "dark")")
                 }
             )
             .agentId("theme-toggle")
             Text(
-                showSidebar ? "[ Hide nav ]" : "[ Show nav ]",
+                session.showSidebar ? "[ Hide nav ]" : "[ Show nav ]",
                 color: .muted,
                 onClick: {
-                    showSidebar.toggle()
-                    bump(showSidebar ? "sidebar on" : "sidebar off")
+                    session.showSidebar.toggle()
+                    bump(session.showSidebar ? "sidebar on" : "sidebar off")
                 }
             )
             .agentId("sidebar-toggle")
             Text(
-                showInspector ? "[ Hide inspector ]" : "[ Show inspector ]",
+                session.showInspector ? "[ Hide inspector ]" : "[ Show inspector ]",
                 color: .muted,
                 onClick: {
-                    showInspector.toggle()
-                    bump(showInspector ? "inspector on" : "inspector off")
+                    session.showInspector.toggle()
+                    bump(session.showInspector ? "inspector on" : "inspector off")
                 }
             )
             .agentId("inspector-toggle")
@@ -446,9 +446,9 @@ public struct DemoExample: View {
             HStack(padding: 2) {
                 // Bound to the same state the toolbar drives, so flipping it
                 // from up there animates these too.
-                Toggle("Nav", isOn: $showSidebar)
+                Toggle("Nav", isOn: $session.showSidebar)
                 Divider()
-                Toggle("Inspector", isOn: $showInspector)
+                Toggle("Inspector", isOn: $session.showInspector)
                 Divider()
                 Toggle("Locked", isOn: .constant(true), isEnabled: false)
                 Spacer()
@@ -481,12 +481,12 @@ public struct DemoExample: View {
 
             Text("Transition · appear / disappear", color: .accent)
             HStack(padding: 2) {
-                Toggle("Show banner", isOn: $showBanner)
+                Toggle("Show banner", isOn: $session.showBanner)
                 Spacer()
             }
             // An `if` is one of the three places a node can actually be
             // inserted or removed, so this is where a transition means anything.
-            if showBanner {
+            if session.showBanner {
                 Text("  This panel slides down and fades as it comes and goes.  ")
                     .padding(8)
                     .background(Color(r: 0.24, g: 0.30, b: 0.42))

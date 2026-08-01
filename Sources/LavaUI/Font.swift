@@ -505,6 +505,18 @@ public enum FontStore {
     /// machine has one. Never the primary — see `loadSystemFallback`.
     nonisolated(unsafe) public static var system: UIFont?
 
+    /// Bumped whenever the active face changes size, so the run loop knows the
+    /// text measurements Yoga cached are stale.
+    ///
+    /// A counter rather than a callback because the fix has to work for *any*
+    /// caller. Invalidating text metrics needs the `LayoutHost`, which only
+    /// `LavaApp.run` has — so before this, the one key handler that knew to
+    /// call `host.invalidateTextMetrics()` was the only place zoom worked
+    /// correctly. A menu item, a button, or an agent script calling
+    /// `zoomIn(into:)` changed the font and left the layout measured for the
+    /// old one.
+    nonisolated(unsafe) public private(set) static var metricsGeneration: UInt64 = 0
+
     /// Faces already loaded for this process, keyed by rounded pixel size.
     nonisolated(unsafe) private static var faceCache: [Int: UIFont] = [:]
     nonisolated(unsafe) private static var symbolsCache: [Int: UIFont] = [:]
@@ -592,6 +604,7 @@ public enum FontStore {
         // Old size's shape cache dies with the old UIFont when unreferenced;
         // shared measure cache keys include font identity — clear to free RAM.
         TextLayoutCache.shared.clear()
+        metricsGeneration &+= 1
         return font
     }
 

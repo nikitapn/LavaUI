@@ -124,6 +124,24 @@ public enum LavaApp {
         // Previous iteration's window visibility, so the loop can tell a
         // minimize/restore edge from a steady state and redraw exactly once.
         var wasWindowVisible = editor.isWindowVisible
+        // Last seen font-metrics generation. Anything that changes the UI
+        // scale — the zoom chord, a menu item, an agent script — bumps
+        // `FontStore.metricsGeneration`, and this is the one place that turns
+        // that into the Yoga re-measure it needs. Centralised because the
+        // `LayoutHost` is reachable only from here.
+        var lastMetricsGeneration = FontStore.metricsGeneration
+
+        /// Re-measures text if the active face changed size since last check.
+        func syncTextMetrics() {
+            guard FontStore.metricsGeneration != lastMetricsGeneration else { return }
+            lastMetricsGeneration = FontStore.metricsGeneration
+            host.invalidateTextMetrics()
+            dirty = true
+            let s = FontStore.scale
+            FileHandle.standardError.write(Data(String(
+                format: "ui scale → %.2fx (%dpx)\n", s.multiplier, Int(s.pixelSize)
+            ).utf8))
+        }
 
         // Per-frame timing, one line per rendered frame on stdout. Idle frames
         // print nothing, because idle frames are not rendered.
@@ -374,16 +392,10 @@ public enum LavaApp {
                 {
                     break
                 }
-                if ContentScaleShortcuts.handle(ev, editor: editor) {
-                    host.invalidateTextMetrics()
-                    dirty = true
-                    let s = FontStore.scale
-                    let msg = String(
-                        format: "ui scale → %.2fx (%dpx)\n",
-                        s.multiplier, Int(s.pixelSize)
-                    )
-                    FileHandle.standardError.write(Data(msg.utf8))
-                }
+                // Metrics invalidation is handled centrally off
+                // `FontStore.metricsGeneration`, so this no longer has to —
+                // and neither does any other caller that changes the scale.
+                ContentScaleShortcuts.handle(ev, editor: editor)
             default:
                 break
             }
@@ -392,6 +404,7 @@ public enum LavaApp {
         /// Drain input queue, run invalidation pipeline, present.
         func settleFrame() {
             MainQueue.drain()
+            syncTextMetrics()
             menuHost?.poll()
             while let ev = editor.pollInputEvent() {
                 processInputEvent(ev)
@@ -528,6 +541,10 @@ public enum LavaApp {
             while let ev = editor.pollInputEvent() {
                 processInputEvent(ev)
             }
+
+            // After input and after menu activations, so a scale change from
+            // any of them re-measures before this frame lays out.
+            syncTextMetrics()
 
             // Live size from GLFW (not only post-swapchain).
             let fb = editor.framebufferSize()
