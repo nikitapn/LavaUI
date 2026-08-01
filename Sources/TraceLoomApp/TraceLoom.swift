@@ -270,10 +270,22 @@ public struct TraceLoom: View {
                     dragCurrentLocalX = x
                     cursorLocalX = x
                 case .ended:
-                    // Committing this selection needs the canvas width to map
-                    // local X through the same plot rectangle used by paint.
-                    // CanvasGesture does not currently expose that geometry;
-                    // see gap 7 in docs/traceloom-lavaui-gaps.md.
+                    let end = max(plotLeft, gesture.localX)
+                    if let start = dragStartLocalX {
+                        let plotWidth = max(1, gesture.frame.w - plotLeft - plotRight)
+                        let a = min(max(plotLeft, start), gesture.frame.w - plotRight)
+                        let b = min(max(plotLeft, end), gesture.frame.w - plotRight)
+                        // Treat a tiny movement as inspection rather than a
+                        // destructive near-zero zoom.
+                        if abs(b - a) >= 4 {
+                            let ra = Double((a - plotLeft) / plotWidth)
+                            let rb = Double((b - plotLeft) / plotWidth)
+                            let selectedA = tMin + ra * (tMax - tMin)
+                            let selectedB = tMin + rb * (tMax - tMin)
+                            zoomStart = min(selectedA, selectedB)
+                            zoomEnd = max(selectedA, selectedB)
+                        }
+                    }
                     dragStartLocalX = nil
                     dragCurrentLocalX = nil
                     cursorLocalX = nil

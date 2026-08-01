@@ -37,6 +37,10 @@ public struct CanvasGesture: Sendable, Equatable {
     public var localY: Float
     public var windowX: Float
     public var windowY: Float
+    /// Current absolute canvas geometry, identical to the frame passed to
+    /// `paint`. This makes local coordinates reversible without app-owned
+    /// frame caches (for example, committing a drag range to chart values).
+    public var frame: CanvasFrame
     /// Modifiers held at `.began` (see `KeyMods`). Not re-read for
     /// `.moved`/`.ended` — a drag can't ask again mid-flight, only a fresh
     /// press reflects current state, so this stays whatever `.began` saw.
@@ -144,31 +148,38 @@ public struct Canvas: PrimitiveView {
             : { [weak leaf] localX, localY, originX, originY, mods in
                 tap?()
                 guard let gesture else { return }
+                guard let leaf else { return }
                 // Reused by `.ended` below: `PointerCapture`'s `onUp` carries
                 // no position of its own, and re-deriving it from `originX`/Y
                 // plus whatever the *last* `.moved` reported is simpler and
                 // more obviously correct than reaching for a separate global.
                 var lastWindow = (x: originX + localX, y: originY + localY)
+                let beganFrame = leaf.lastCanvasFrame
                 gesture(CanvasGesture(
                     phase: .began, localX: localX, localY: localY,
-                    windowX: lastWindow.x, windowY: lastWindow.y, mods: mods
+                    windowX: lastWindow.x, windowY: lastWindow.y,
+                    frame: beganFrame, mods: mods
                 ))
-                guard let leaf else { return }
                 PointerCapture.capture(
                     leaf.id,
                     onMove: { windowX, windowY in
                         lastWindow = (windowX, windowY)
+                        let frame = leaf.lastCanvasFrame
                         gesture(CanvasGesture(
                             phase: .moved,
-                            localX: windowX - originX, localY: windowY - originY,
-                            windowX: windowX, windowY: windowY, mods: mods
+                            localX: windowX - frame.x, localY: windowY - frame.y,
+                            windowX: windowX, windowY: windowY,
+                            frame: frame, mods: mods
                         ))
                     },
                     onUp: {
+                        let frame = leaf.lastCanvasFrame
                         gesture(CanvasGesture(
                             phase: .ended,
-                            localX: lastWindow.x - originX, localY: lastWindow.y - originY,
-                            windowX: lastWindow.x, windowY: lastWindow.y, mods: mods
+                            localX: lastWindow.x - frame.x,
+                            localY: lastWindow.y - frame.y,
+                            windowX: lastWindow.x, windowY: lastWindow.y,
+                            frame: frame, mods: mods
                         ))
                     }
                 )

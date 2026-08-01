@@ -20,6 +20,20 @@ Coordinates are **layout / framebuffer pixels** (top-left origin), matching
 Yoga and hit-testing. With the demo’s menu height of 0 they are also window
 pixels.
 
+Captured drags use independent button phases with any number of moves between
+them:
+
+```bash
+python3 tools/lava_agent_cli.py pointer_down --x 300 --y 450
+python3 tools/lava_agent_cli.py move --x 600 --y 450
+python3 tools/lava_agent_cli.py move --x 900 --y 450
+python3 tools/lava_agent_cli.py pointer_up --x 900 --y 450
+```
+
+`pointer_down` and `pointer_up` also accept `--sid`, `--label`, `--id`, or
+`--query` and use the resolved node center, like `click`. The MCP server exposes
+the same two operations.
+
 ## Stable ids (`sid`)
 
 Process-local `NodeID` (`id` in the tree) changes every launch. Agents could

@@ -376,6 +376,11 @@ public enum LavaApp {
                     editor.injectPointerButton(button: button, pressed: true, x: x, y: y)
                     editor.injectPointerButton(button: button, pressed: false, x: x, y: y)
                 },
+                injectPointerButton: { x, y, button, pressed in
+                    editor.injectPointerButton(
+                        button: button, pressed: pressed, x: x, y: y
+                    )
+                },
                 injectScroll: { dx, dy in editor.injectScroll(dx: dx, dy: dy) },
                 injectKey: { key, action, mods in
                     editor.injectKey(key: key, action: action, mods: mods)

@@ -80,7 +80,7 @@ def handle_tool(name: str, arguments: dict[str, Any]) -> dict:
             )
         elif name == "move":
             r = agent_call("move", {"x": float(arguments["x"]), "y": float(arguments["y"])})
-        elif name == "click":
+        elif name in ("click", "pointer_down", "pointer_up"):
             p = {"button": int(arguments.get("button", 0))}
             for k in ("x", "y"):
                 if k in arguments:
@@ -90,7 +90,7 @@ def handle_tool(name: str, arguments: dict[str, Any]) -> dict:
                     p[k] = str(arguments[k])
             if "id" in arguments:
                 p["id"] = int(arguments["id"])
-            r = agent_call("click", p)
+            r = agent_call(name, p)
         elif name == "scroll":
             p = {"dx": float(arguments.get("dx", 0.0)), "dy": float(arguments["dy"])}
             for k in ("x", "y"):
@@ -212,6 +212,44 @@ TOOLS = [
     {
         "name": "click",
         "description": "Click at x/y or center of sid/label/id/query target, then settle.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "x": {"type": "number"},
+                "y": {"type": "number"},
+                "sid": {"type": "string"},
+                "label": {"type": "string"},
+                "id": {"type": "integer"},
+                "query": {"type": "string"},
+                "button": {"type": "integer", "default": 0},
+            },
+        },
+    },
+    {
+        "name": "pointer_down",
+        "description": (
+            "Press and hold a pointer button at x/y or the center of a target. "
+            "Use move calls followed by pointer_up to automate a captured drag."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "x": {"type": "number"},
+                "y": {"type": "number"},
+                "sid": {"type": "string"},
+                "label": {"type": "string"},
+                "id": {"type": "integer"},
+                "query": {"type": "string"},
+                "button": {"type": "integer", "default": 0},
+            },
+        },
+    },
+    {
+        "name": "pointer_up",
+        "description": (
+            "Release a held pointer button at x/y or the center of a target, "
+            "then settle."
+        ),
         "inputSchema": {
             "type": "object",
             "properties": {

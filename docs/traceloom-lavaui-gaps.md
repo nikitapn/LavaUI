@@ -77,7 +77,7 @@ TraceLoom impact: the rule/log pane is fixed at 440 points rather than scaling w
 
 Fixed: `Dimension.percent(Float)` (`.pct(_:)`), backed by `YGNodeStyleSetWidthPercent`/`HeightPercent`. `StackNode`'s side-column panel fill now also keys off `.percent`, not just `.point`. TraceLoom's rule/log pane uses `width: .percent(38)`; existing `minWidth`/`minHeight` still apply underneath it unchanged.
 
-## 7. Canvas gestures do not expose canvas geometry — OPEN
+## 7. Canvas gestures do not expose canvas geometry — RESOLVED
 
 `CanvasGesture.localX/localY` identify the pointer relative to the canvas, but the event does not include the canvas width/height or the `CanvasFrame` used by `paint`. TraceLoom can draw a drag selection because `paint` has the frame, but on `.ended` it cannot convert the selected boundary into a time value: that conversion needs `(localX - plotLeft) / (canvasWidth - plotLeft - plotRight)`.
 
@@ -87,10 +87,31 @@ Suggested framework shape: add `canvasWidth` and `canvasHeight` to `CanvasGestur
 
 TraceLoom impact: click-hold-drag highlights the selected interval and its boundaries, but button-up cannot commit the interval as the new timeline domain until this geometry is available.
 
-## 8. Agent automation cannot inject a drag — OPEN
+Fixed: `CanvasGesture` now carries `frame: CanvasFrame`, the current absolute
+geometry also passed to `Canvas.paint`. Captured move/up events derive their
+local coordinates from that current frame rather than the origin cached when
+the press began, so the values remain coherent if layout changes during a
+gesture. TraceLoom maps the two local boundaries through the plot rectangle on
+`.ended`, commits them to `zoomStart`/`zoomEnd`, and ignores movements below four
+pixels as inspection clicks rather than creating a near-zero domain.
+
+## 8. Agent automation cannot inject a drag — RESOLVED
 
 The agent server exposes `move` and an atomic `click` that injects press and release together. It cannot hold a mouse button while sending one or more moves, so captured gestures such as timeline range selection cannot be tested through the LavaUI MCP/control plane.
 
 Suggested framework shape: expose separate `pointer_down` and `pointer_up` methods, or a `drag` method accepting start/end and optionally intermediate points. Separate phases are more general and match the engine's existing `injectPointerButton` API.
 
 TraceLoom impact: the redesigned layout and canvas can be inspected live, but the range-selection gesture currently requires manual testing.
+
+Fixed: the agent protocol, CLI, and MCP surface now expose `pointer_down` and
+`pointer_up` independently. Both accept coordinates or the same
+`sid`/`label`/`id`/`query` targeting as `click`; each moves to the requested
+position before changing the button so injected button coordinates and
+`PointerCapture`'s last position agree. Arbitrarily many existing `move` calls
+can run between the phases, exercising the real capture path rather than a
+special synthetic-drag implementation.
+
+Verified live against TraceLoom with `pointer_down` at `(300, 450)`, moves to
+`(600, 450)` and `(900, 450)`, then `pointer_up`. The timeline committed
+`19:16:16.821 — 19:16:22.017 · zoomed`, confirming both the automation phases
+and the canvas-frame mapping end to end.

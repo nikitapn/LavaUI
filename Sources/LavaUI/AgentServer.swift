@@ -30,6 +30,9 @@ public struct AgentHost {
     public var find: (_ query: String, _ limit: Int) -> [[String: Any]]
     public var injectMove: (_ x: Float, _ y: Float) -> Void
     public var injectClick: (_ x: Float, _ y: Float, _ button: Int32) -> Void
+    public var injectPointerButton: (
+        _ x: Float, _ y: Float, _ button: Int32, _ pressed: Bool
+    ) -> Void
     public var injectScroll: (_ dx: Float, _ dy: Float) -> Void
     public var injectKey: (_ key: Int32, _ action: Int32, _ mods: Int32) -> Void
     public var injectText: (_ text: String) -> Void
@@ -50,6 +53,9 @@ public struct AgentHost {
         find: @escaping (_ query: String, _ limit: Int) -> [[String: Any]],
         injectMove: @escaping (_ x: Float, _ y: Float) -> Void,
         injectClick: @escaping (_ x: Float, _ y: Float, _ button: Int32) -> Void,
+        injectPointerButton: @escaping (
+            _ x: Float, _ y: Float, _ button: Int32, _ pressed: Bool
+        ) -> Void,
         injectScroll: @escaping (_ dx: Float, _ dy: Float) -> Void,
         injectKey: @escaping (_ key: Int32, _ action: Int32, _ mods: Int32) -> Void,
         injectText: @escaping (_ text: String) -> Void,
@@ -65,6 +71,7 @@ public struct AgentHost {
         self.find = find
         self.injectMove = injectMove
         self.injectClick = injectClick
+        self.injectPointerButton = injectPointerButton
         self.injectScroll = injectScroll
         self.injectKey = injectKey
         self.injectText = injectText
@@ -413,6 +420,34 @@ public final class AgentServer: @unchecked Sendable {
             host.injectClick(x, y, button)
             host.settle()
             return ["x": x, "y": y, "button": button]
+
+        case "pointer_down", "pointer_up":
+            let point: (x: Float, y: Float, target: [String: Any]?)
+            if let f = resolveOptionalFrame(params) {
+                point = (
+                    f.x + f.w * 0.5, f.y + f.h * 0.5,
+                    ["sid": f.sid, "label": f.label,
+                     "x": f.x, "y": f.y, "w": f.w, "h": f.h]
+                )
+            } else {
+                guard params["x"] != nil, params["y"] != nil else {
+                    throw AgentError.badParams(
+                        "x/y or a sid/label/id/query target is required"
+                    )
+                }
+                point = (floatParam(params, "x"), floatParam(params, "y"), nil)
+            }
+            let button = Int32(intParam(params, "button", default: 0))
+            let pressed = cmd == "pointer_down"
+            // Moving first makes button coordinates and PointerCapture's last
+            // position agree for both real and injected input.
+            host.injectMove(point.x, point.y)
+            host.injectPointerButton(point.x, point.y, button, pressed)
+            host.settle()
+            return [
+                "x": point.x, "y": point.y, "button": button,
+                "pressed": pressed, "target": point.target as Any,
+            ]
 
         case "scroll":
             // Delta applies wherever the pointer last was (matches real

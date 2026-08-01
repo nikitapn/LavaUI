@@ -71,6 +71,15 @@ def main() -> int:
     cl.add_argument("--id", type=int)
     cl.add_argument("--query")
     cl.add_argument("--button", type=int, default=0)
+    for phase in ("pointer_down", "pointer_up"):
+        pp = sub.add_parser(phase)
+        pp.add_argument("--x", type=float)
+        pp.add_argument("--y", type=float)
+        pp.add_argument("--sid", help="stable agent id (preferred)")
+        pp.add_argument("--label")
+        pp.add_argument("--id", type=int)
+        pp.add_argument("--query")
+        pp.add_argument("--button", type=int, default=0)
     sr = sub.add_parser("scroll")
     sr.add_argument("--dx", type=float, default=0.0)
     sr.add_argument("--dy", type=float, required=True)
@@ -135,7 +144,7 @@ def main() -> int:
     elif args.cmd == "move":
         payload["x"] = args.x
         payload["y"] = args.y
-    elif args.cmd == "click":
+    elif args.cmd in ("click", "pointer_down", "pointer_up"):
         if args.sid:
             payload["sid"] = args.sid
         if args.label:
