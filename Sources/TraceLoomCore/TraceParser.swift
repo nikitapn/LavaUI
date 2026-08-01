@@ -136,32 +136,131 @@ public enum TraceParser {
     /// parse per keystroke, and on a large log each is seconds of work nobody
     /// is waiting for any more.
     ///
-    /// The floor on wasted work is the `split` below, not the parse: it
-    /// materialises every line before the loop can poll once, so a superseded
-    /// worker still pays for it (~2s at 57 MB) before noticing. That is the
-    /// ~10% case; the regex pass it skips is the other ~90%. Driving the
-    /// cancellation check into line-splitting would mean iterating byte ranges
-    /// here instead, which is a bigger change to the hot path than it is worth
-    /// until a profile says otherwise.
+    /// The floor on wasted work is the `split` below, not the matching: it
+    /// materialises every line before any chunk can poll once, so a superseded
+    /// parse still pays for it (~2s at 57 MB) before noticing.
+    ///
+    /// Above `minLinesPerChunk * 2` the line range is divided across cores and
+    /// matched concurrently. Every line is independent, which is what makes
+    /// this legal: the only shared state was `matchedLines`, and lines within a
+    /// chunk are disjoint from every other chunk's, so a per-chunk count sums
+    /// exactly. Chunk outputs are concatenated *in chunk order*, so the
+    /// pre-sort array is identical to the one the serial path built and the
+    /// sorted result matches regardless of whether the sort is stable.
     public static func parse(
-        log: String, rulesSource: String, shouldContinue: (() -> Bool)?
+        log: String, rulesSource: String, shouldContinue: (@Sendable () -> Bool)?
+    ) -> TraceParseResult? {
+        parse(log: log, rulesSource: rulesSource, shouldContinue: shouldContinue, chunkCount: nil)
+    }
+
+    /// `chunkCount` nil means "decide from the input". Tests pin it to run the
+    /// serial and parallel paths over identical input and compare.
+    static func parse(
+        log: String,
+        rulesSource: String,
+        shouldContinue: (@Sendable () -> Bool)?,
+        chunkCount forcedChunkCount: Int?
     ) -> TraceParseResult? {
         let parsed = parseRules(rulesSource)
-        var buckets = [[TracePoint]](repeating: [], count: parsed.rules.count)
-        var diagnostics = parsed.diagnostics
-        let compiled = parsed.rules.map { try? NSRegularExpression(pattern: $0.pattern) }
-        var matchedLines = Set<Int>()
+        let lines = log.split(separator: "\n", omittingEmptySubsequences: false)
+        let chunkCount = forcedChunkCount ?? Self.chunkCount(forLines: lines.count)
 
-        for (lineOffset, raw) in log.split(separator: "\n", omittingEmptySubsequences: false).enumerated() {
-            if let shouldContinue, lineOffset % cancelCheckInterval == 0, !shouldContinue() {
+        let chunks: [ChunkOutput]
+        if chunkCount <= 1 {
+            guard let single = parseChunk(
+                lines: lines, range: 0..<lines.count,
+                rules: parsed.rules, shouldContinue: shouldContinue
+            ) else { return nil }
+            chunks = [single]
+        } else {
+            guard let parallel = parseChunksConcurrently(
+                lines: lines, rules: parsed.rules,
+                chunkCount: chunkCount, shouldContinue: shouldContinue
+            ) else { return nil }
+            chunks = parallel
+        }
+
+        return merge(rules: parsed.rules, ruleDiagnostics: parsed.diagnostics, chunks: chunks)
+    }
+
+    /// Fewest lines worth handing to a core of its own. Below this the dispatch
+    /// and the per-chunk regex compilation cost more than the matching saved.
+    private static let minLinesPerChunk = 20_000
+
+    private static func chunkCount(forLines lines: Int) -> Int {
+        guard lines >= minLinesPerChunk * 2 else { return 1 }
+        return min(lines / minLinesPerChunk, ProcessInfo.processInfo.activeProcessorCount)
+    }
+
+    /// One chunk's share of the work. Kept separate from the merge so the
+    /// serial path is the same code with one chunk, not a second
+    /// implementation that can drift from it.
+    private struct ChunkOutput: Sendable {
+        var buckets: [[TracePoint]]
+        var diagnostics: [String]
+        var matchedLineCount: Int
+    }
+
+    private static func parseChunksConcurrently(
+        lines: [Substring],
+        rules: [TraceRule],
+        chunkCount: Int,
+        shouldContinue: (@Sendable () -> Bool)?
+    ) -> [ChunkOutput]? {
+        let sink = ChunkSink(count: chunkCount)
+        let total = lines.count
+        DispatchQueue.concurrentPerform(iterations: chunkCount) { chunk in
+            // Proportional split rather than a fixed stride, so the last chunk
+            // does not absorb the remainder of a ragged division.
+            let lower = total * chunk / chunkCount
+            let upper = total * (chunk + 1) / chunkCount
+            sink.store(
+                parseChunk(
+                    lines: lines, range: lower..<upper,
+                    rules: rules, shouldContinue: shouldContinue
+                ),
+                at: chunk
+            )
+        }
+        return sink.ordered()
+    }
+
+    private static func parseChunk(
+        lines: [Substring],
+        range: Range<Int>,
+        rules: [TraceRule],
+        shouldContinue: (@Sendable () -> Bool)?
+    ) -> ChunkOutput? {
+        // Compiled per chunk rather than shared across them. `NSRegularExpression`
+        // is documented immutable and safe for concurrent matching on Darwin,
+        // but that is not the same as having verified it in
+        // swift-corelibs-foundation — and compiling a handful of patterns per
+        // chunk is microseconds against seconds of matching, so the question
+        // is cheaper to avoid than to answer.
+        let compiled = rules.map { try? NSRegularExpression(pattern: $0.pattern) }
+        var buckets = [[TracePoint]](repeating: [], count: rules.count)
+        var diagnostics: [String] = []
+        var matchedLineCount = 0
+        // Replaces the serial version's `Set<Int>`. Lines are visited in order,
+        // so every rule that matches one line does so consecutively — a single
+        // "have I already counted this line" marker is exact, and skips
+        // building a set with an entry per matched line.
+        var lastMatchedLine = -1
+
+        for lineOffset in range {
+            if let shouldContinue,
+               (lineOffset - range.lowerBound) % cancelCheckInterval == 0,
+               !shouldContinue()
+            {
                 return nil
             }
-            let line = String(raw)
+            let line = String(lines[lineOffset])
             let ns = line as NSString
             let whole = NSRange(location: 0, length: ns.length)
-            for index in parsed.rules.indices {
-                guard let regex = compiled[index], let match = regex.firstMatch(in: line, range: whole) else { continue }
-                let rule = parsed.rules[index]
+            for index in rules.indices {
+                guard let regex = compiled[index],
+                      let match = regex.firstMatch(in: line, range: whole) else { continue }
+                let rule = rules[index]
                 guard let timeText = capture(rule.timeGroup, match: match, text: ns),
                       let time = parseTime(timeText)
                 else {
@@ -181,14 +280,76 @@ public enum TraceParser {
                     value = 1
                 }
                 buckets[index].append(TracePoint(time: time, value: value))
-                matchedLines.insert(lineOffset)
+                if lastMatchedLine != lineOffset {
+                    matchedLineCount += 1
+                    lastMatchedLine = lineOffset
+                }
             }
         }
 
-        let series = zip(parsed.rules, buckets).map { rule, points in
+        return ChunkOutput(
+            buckets: buckets, diagnostics: diagnostics, matchedLineCount: matchedLineCount
+        )
+    }
+
+    private static func merge(
+        rules: [TraceRule], ruleDiagnostics: [String], chunks: [ChunkOutput]
+    ) -> TraceParseResult {
+        var buckets = [[TracePoint]](repeating: [], count: rules.count)
+        var diagnostics = ruleDiagnostics
+        var matchedLineCount = 0
+
+        // Chunk order is line order, so diagnostics come out in the same
+        // sequence the serial path emitted them and points reach the sort in
+        // the same arrangement.
+        for chunk in chunks {
+            for index in rules.indices {
+                buckets[index].append(contentsOf: chunk.buckets[index])
+            }
+            diagnostics.append(contentsOf: chunk.diagnostics)
+            matchedLineCount += chunk.matchedLineCount
+        }
+
+        let series = zip(rules, buckets).map { rule, points in
             TraceSeries(rule: rule, points: points.sorted { $0.time < $1.time })
         }
-        return TraceParseResult(series: series, diagnostics: diagnostics, matchedLineCount: matchedLines.count)
+        return TraceParseResult(
+            series: series, diagnostics: diagnostics, matchedLineCount: matchedLineCount
+        )
+    }
+
+    /// Per-chunk results, one slot per chunk written exactly once.
+    ///
+    /// A lock rather than an unsafe buffer pointer: it is acquired once per
+    /// chunk — a few dozen times for a whole parse — so the contention is
+    /// nil and the safety is not an argument anyone has to have.
+    private final class ChunkSink: @unchecked Sendable {
+        private let lock = NSLock()
+        private var storage: [ChunkOutput?]
+
+        init(count: Int) {
+            storage = Array(repeating: nil, count: count)
+        }
+
+        func store(_ value: ChunkOutput?, at index: Int) {
+            lock.lock()
+            storage[index] = value
+            lock.unlock()
+        }
+
+        /// Nil if any chunk cancelled — a partial set of chunks is not a
+        /// partial result, it is a wrong one.
+        func ordered() -> [ChunkOutput]? {
+            lock.lock()
+            defer { lock.unlock() }
+            var result: [ChunkOutput] = []
+            result.reserveCapacity(storage.count)
+            for slot in storage {
+                guard let slot else { return nil }
+                result.append(slot)
+            }
+            return result
+        }
     }
 
     public static func parseTime(_ source: String) -> Double? {

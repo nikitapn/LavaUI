@@ -139,8 +139,11 @@ private final class TraceDataCache: @unchecked Sendable {
         ViewInvalidation.markNeedsBody()
     }
 
+    /// `shouldContinue` is `@Sendable` because the parse now polls it from
+    /// several chunk threads at once. `CancelFlag` is lock-protected, which is
+    /// what makes that safe.
     private static func compute(
-        _ input: ParseInput, shouldContinue: (() -> Bool)?
+        _ input: ParseInput, shouldContinue: (@Sendable () -> Bool)?
     ) -> ParseOutput? {
         guard let result = TraceParser.parse(
             log: input.log, rulesSource: input.rules, shouldContinue: shouldContinue

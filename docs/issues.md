@@ -239,17 +239,59 @@ abandoned rather than run to completion.
 used to and defeated the whole exercise.
 
 Measured with the 57 MB log loaded, typing into the rules editor: worst
-main-loop round-trip **20.7ms** across 277 samples, against ~16s per keystroke
+main-loop round-trip **56ms** across 234 samples, against ~16s per keystroke
 before. Threads return to baseline afterwards, and the final render is correct
 rather than stale.
 
+(Measure agent latency by reading whole JSON objects, not lines. `AgentServer`
+pretty-prints its replies, so a `readline()` client desyncs after the first
+multi-line response and reports latencies far below the real ones.)
+
+### Follow-up: parsing parallelised by line range
+
+Every log line is independent, so the line range divides across cores. The only
+shared state was `matchedLines`, a `Set<Int>` — and since chunks hold disjoint
+line ranges, a per-chunk count sums exactly. It is now a single
+"already counted this line" marker per chunk, which also drops the set with an
+entry per matched line.
+
+Chunk outputs are concatenated **in chunk order**, so the pre-sort array is
+identical to the one the serial path built and the sorted result matches
+regardless of whether `sorted(by:)` is stable. Diagnostics come out in the same
+order for the same reason.
+
+Regexes are compiled per chunk rather than shared. `NSRegularExpression` is
+documented immutable and safe for concurrent matching on Darwin, but that is
+not the same as having verified it in swift-corelibs-foundation, and compiling
+a handful of patterns per chunk is microseconds against seconds of matching —
+cheaper to avoid the question than to answer it.
+
+Below 40,000 lines it stays serial: dispatch and per-chunk compilation cost
+more than they save. Above that it uses `lines / 20000` chunks, capped at
+`activeProcessorCount`.
+
+Measured on 16 cores, debug build, output verified identical to serial:
+
+| fixture | serial | parallel | speedup |
+| --- | --- | --- | --- |
+| 12 MB / 220k lines | 3,037ms | 811ms | 3.74x |
+| 57 MB / 1.1M lines | 15,254ms | 3,870ms | 3.94x |
+
+Short of linear because the `split` ahead of the chunking is still serial —
+~2s of the 57 MB figure, which caps the achievable speedup near 5x by Amdahl.
+Chunking by byte range instead would recover it, at the cost of finding line
+boundaries by hand.
+
 ### Not addressed
 
-- The `split` in `TraceParser.parse` materialises every line before the loop
-  can poll `shouldContinue` once, so a superseded worker still pays ~2s at
-  57 MB before noticing. Skipping the regex pass is the other ~90%.
+- The `split` in `TraceParser.parse` is serial and materialises every line
+  before any chunk can poll `shouldContinue` once, so a superseded parse still
+  pays ~2s at 57 MB before noticing, and it bounds the parallel speedup.
 - Reading the file is still synchronous on the main thread (~86ms at 57 MB),
   covered by the `FrameTasks` status frame rather than moved off.
+- Pyramid construction is still serial. It is ~2% of the pipeline (337ms of
+  16.9s at 57 MB), so parallelising it is worth about 1.02x overall. The
+  per-series pyramids are already independent if that ever changes.
 
 ### Follow-up: quadratic decoration ranges
 
@@ -260,7 +302,8 @@ diagnostic per matching line (125,716 on the 12 MB fixture), so a body
 evaluation meant ~126,000 full splits of 12 MB. `Expand` builds its content
 eagerly (`Expand.swift:24`), so this ran whether or not the log disclosure was
 open. Reproduced: the main loop gave no answer for 75s while burning two
-cores, against a worst round-trip of **150ms** after the fix.
+cores. After the fix the same scenario settles to a worst round-trip of
+**1.5ms**.
 
 `LineIndex` (in `TraceLoomCore`, so the off-by-ones are testable) computes all
 line offsets in one pass, bounded by the deepest line anything asks about, so
