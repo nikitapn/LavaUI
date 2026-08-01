@@ -25,6 +25,8 @@ public struct ViewStyle: Equatable {
     /// Content blur radius in pixels. `nil` = off. Blurs this node's own paint,
     /// the way SwiftUI's `.blur()` does, rather than what is behind it.
     public var contentBlurRadius: Float?
+    /// Scissor paint to this node's layout rect (SwiftUI `.clipped()`).
+    public var clipsContent: Bool?
 
     public init() {}
 
@@ -43,6 +45,7 @@ public struct ViewStyle: Equatable {
         out.flexShrink = flexShrink ?? base.flexShrink
         out.backdropBlurRadius = backdropBlurRadius ?? base.backdropBlurRadius
         out.contentBlurRadius = contentBlurRadius ?? base.contentBlurRadius
+        out.clipsContent = clipsContent ?? base.clipsContent
         return out
     }
 }
@@ -127,6 +130,7 @@ extension YogaBoxNode {
             base.flexShrink = flexShrink
             base.backdropBlurRadius = backdropBlurRadius
             base.contentBlurRadius = contentBlurRadius
+            base.clipsContent = clipsContent
             styleBaseline = base
         }
         let base = styleBaseline ?? ViewStyle()
@@ -142,6 +146,7 @@ extension YogaBoxNode {
         // fall back through the baseline so removing `.blur()` actually turns it off.
         backdropBlurRadius = style.backdropBlurRadius ?? base.backdropBlurRadius
         contentBlurRadius = style.contentBlurRadius ?? base.contentBlurRadius
+        clipsContent = style.clipsContent ?? base.clipsContent ?? false
 
         if let leaf = self as? LeafNode {
             if let fill = style.fill { leaf.fillColor = fill }
@@ -283,6 +288,14 @@ extension View {
     public func backdropBlur(radius: Float = 8) -> ModifiedView<Self> {
         styled { $0.backdropBlurRadius = max(0.5, radius) }
     }
+
+    /// Scissor this view's paint (and its children's) to its layout rect.
+    ///
+    /// Yoga still sizes children freely; only drawing is clipped. Use on fixed
+    /// chrome such as a menubar so hover fills cannot spill into content.
+    public func clipped() -> ModifiedView<Self> {
+        styled { $0.clipsContent = true }
+    }
 }
 
 // MARK: - Collapsing a chain
@@ -316,6 +329,10 @@ extension ModifiedView {
 
     public func cornerRadius(_ radius: Float) -> ModifiedView<Content> {
         adding { $0.cornerRadius = radius }
+    }
+
+    public func clipped() -> ModifiedView<Content> {
+        adding { $0.clipsContent = true }
     }
 
     public func frame(

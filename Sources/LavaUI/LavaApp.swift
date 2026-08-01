@@ -84,15 +84,23 @@ public enum LavaApp {
     ///   `ViewInvalidation.consumeDirtyBodyNodes`) — keep it cheap, an app's
     ///   own one-time setup belongs before this call, against the `Editor`
     ///   `open` already returned.
+    /// - `menu`: optional application menubar. Phase 2 draws it in-window with
+    ///   Vulkan (see `MenuChromeRoot`). Rebuilt on every full body pass so
+    ///   labels/`isEnabled` stay in sync with captured state. Prefer an
+    ///   `@Observable` model shared with the root when menu actions need view
+    ///   state. Menu shortcuts are matched after `onRawKey`.
     /// - `onRawKey`: first look at every key event, ahead of focus/overlay/
     ///   content-scale handling. Return `true` to consume it.
     public static func run<V: View>(
         editor: Editor,
+        menu: (() -> MenuBar)? = nil,
         onRawKey: ((InputEvent) -> Bool)? = nil,
         makeRoot: @escaping () -> V
     ) {
         var windowW: Float = 1280
         var windowH: Float = 800
+        // Menu strip lives inside the view tree (`MenuChromeRoot`), so content
+        // is not offset by a separate chrome height (menuH stays 0).
         let menuH: Float = 0
         let fb0 = editor.framebufferSize()
         if fb0.w >= 1, fb0.h >= 1 {
@@ -102,6 +110,7 @@ public enum LavaApp {
 
         let host = LayoutHost()
         let drawList = DrawList(editor: editor)
+        let menuHost: MenuHost? = menu != nil ? MenuHost() : nil
 
         // Lets a worker thread unblock `pumpEvents` the moment it has a result,
         // the same way the agent socket does.
@@ -148,7 +157,13 @@ public enum LavaApp {
                 // something raised `.body` without naming a node (first
                 // frame, or state outside the observation system), which
                 // still needs the full rebuild.
-                if let dirty = ViewInvalidation.consumeDirtyBodyNodes() {
+                //
+                // With a menubar, always rebuild the root: `menu` is a
+                // free closure (not a mounted node), so per-node recompute
+                // would leave the strip's `MenuModel` stale.
+                if menuHost != nil {
+                    installRoot()
+                } else if let dirty = ViewInvalidation.consumeDirtyBodyNodes() {
                     for node in dirty { node.recomputeBody() }
                 } else {
                     host.setRoot(makeRoot())
@@ -205,9 +220,41 @@ public enum LavaApp {
             dirty = false
         }
 
+        /// Mount / remount the retained tree. Updates the menubar IR first when
+        /// a `menu` builder was provided.
+        func installRoot() {
+            if let menu, let menuHost {
+                menuHost.update(menu())
+                let hostRef = menuHost
+                host.setRoot(
+                    MenuChromeRoot(
+                        model: hostRef.model,
+                        onActivate: { hostRef.activate($0) },
+                        content: makeRoot()
+                    )
+                )
+            } else {
+                host.setRoot(makeRoot())
+            }
+        }
+
         // Lightweight structure dump (no FBD chrome phases).
-        let demo0 = makeRoot()
-        let rootLabel = String(describing: V.self)
+        if let menu {
+            menuHost?.update(menu())
+        }
+        let demo0: any View = {
+            if let menuHost, !menuHost.isEmpty {
+                return MenuChromeRoot(
+                    model: menuHost.model,
+                    onActivate: { _ in },
+                    content: makeRoot()
+                )
+            }
+            return makeRoot()
+        }()
+        let rootLabel = menu != nil
+            ? "MenuChromeRoot<\(V.self)>"
+            : String(describing: V.self)
         FileHandle.standardError.write(Data("--- \(rootLabel) structure ---\n".utf8))
         for line in demo0.structureLines() {
             FileHandle.standardError.write(Data((line + "\n").utf8))
@@ -287,6 +334,12 @@ public enum LavaApp {
                 if onRawKey?(ev) == true { break }
                 let isPress = ev.x > 0
                 if isPress, ev.button == KeyCode.escape, host.dismissOverlays() {
+                    break
+                }
+                if isPress,
+                   let menuHost,
+                   menuHost.activate(matchingKey: ev.button, mods: Int32(ev.y))
+                {
                     break
                 }
                 if isPress,

@@ -433,6 +433,28 @@ public final class DrawList {
         }
     }
 
+    /// Scissor children to a box (`.clipped()`). Overlays collected during the
+    /// walk still emit after the tree with an empty clip stack, so a menubar
+    /// dropdown is not trapped inside the strip.
+    private func withContentClip(
+        _ enabled: Bool,
+        x: Float, y: Float, w: Float, h: Float,
+        body: () -> Void
+    ) {
+        guard enabled, w > 0, h > 0 else {
+            body()
+            return
+        }
+        let viewCull = CullRect(x0: x, y0: y, x1: x + w, y1: y + h)
+        let nextCull = cull.intersection(viewCull)
+        if nextCull.isEmpty { return }
+        pushClip(x: x, y: y, w: w, h: h)
+        cullStack.append(nextCull)
+        body()
+        cullStack.removeLast()
+        popClip()
+    }
+
     // MARK: - Tree emission (pre-order DFS = paint order)
 
     /// Emit chrome from a laid-out retained tree.
@@ -614,8 +636,10 @@ public final class DrawList {
                             rect(x: x, y: y, w: w, h: h, color: fill)
                         }
                     }
-                    for c in styled.childNodes {
-                        emitNode(c, ox: x, oy: y)
+                    withContentClip(styled.clipsContent, x: x, y: y, w: w, h: h) {
+                        for c in styled.childNodes {
+                            emitNode(c, ox: x, oy: y)
+                        }
                     }
                 }
                 return
@@ -637,8 +661,10 @@ public final class DrawList {
                             rect(x: x, y: y, w: w, h: h, color: fill)
                         }
                     }
-                    for c in stack.childNodes {
-                        emitNode(c, ox: x, oy: y)
+                    withContentClip(stack.clipsContent, x: x, y: y, w: w, h: h) {
+                        for c in stack.childNodes {
+                            emitNode(c, ox: x, oy: y)
+                        }
                     }
                 }
                 return

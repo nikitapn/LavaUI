@@ -137,6 +137,10 @@ class YogaBoxNode: AnyViewNode {
     /// subject: the engine renders this node's own paint offscreen and blurs
     /// that, rather than blurring what was already behind it.
     var contentBlurRadius: Float?
+    /// When true, paint (and children) is scissored to this box's layout rect.
+    /// Yoga still allows overflow for measure; we clip at emit only — used by
+    /// the menubar strip so a title's hover fill cannot paint over content.
+    var clipsContent: Bool = false
 
     /// How far this node's children are drawn from its own origin.
     ///

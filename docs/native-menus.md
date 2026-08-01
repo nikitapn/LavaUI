@@ -322,18 +322,19 @@ Sources/LavaMenu/          // pure IR + DSL (no C++ / GPU)
   Menu.swift               // MenuBar, Menu, MenuItem, MenuModel, MenuController
 
 Sources/LavaUI/
-  MenuHost.swift           // backend selection; wraps MenuController + apply
-  MenuBarView.swift        // Vulkan strip + overlay menus (Linux fallback)
+  MenuHost.swift           // backend selection; wraps MenuController + activate
+  MenuBarView.swift        // MenuChromeRoot, MenuBarStrip, MenuDropdownPanel
+  LavaApp.swift            // run(..., menu: { MenuBar { … } })
 
-canvas/src/menu/           // or adjacent to window_platform
-  menu_host.hpp/cpp        // C ABI: apply model blob / clear / poll activations
+canvas/src/menu/           // phase 3+ (DBus / Win32 / Cocoa)
+  menu_host.hpp/cpp
   menu_cocoa.mm
   menu_win32.cpp
-  menu_linux_dbus.cpp      // optional at link time
+  menu_linux_dbus.cpp
 ```
 
-`LavaMenu` owns IR and policy; later C++ owns OS objects and native handles
-(same split as clipboard and tool-window hints).
+`LavaMenu` owns IR and policy; Vulkan chrome is pure LavaUI views; later C++
+owns OS menu objects (same split as clipboard and tool-window hints).
 
 ## Dependencies
 
@@ -364,8 +365,11 @@ fallback. No hard GTK dependency.
    `@_exported import`s `LavaMenu`. Types: `MenuBar` / `Menu` / `MenuItem` /
    `MenuSeparator`, `MenuModel` IR, `MenuActionTable`, `MenuController`,
    `KeyShortcut`.
-2. **VulkanMenuHost** — Linux always works; proves `menuH`, overlay menus,
-   shortcuts, integration with `LavaApp`.
+2. **VulkanMenuHost** — Linux always works; proves overlay menus, shortcuts,
+   integration with `LavaApp`.
+   **Done** (`MenuHost`, `MenuBarView` / `MenuChromeRoot`, `LavaApp.run(menu:)`):
+   in-window strip + `Overlay` dropdowns; shortcuts via `MenuHost.activate(matchingKey:)`.
+   The strip is **inside** the view tree (not a separate `menuH` client offset).
 3. **Linux DBusMenuHost** — probe Registrar; export tree; fall back to (2).
 4. **Win32** when Windows is a real target.
 5. **Cocoa** when macOS is a real target.
@@ -385,7 +389,7 @@ exists**; global panel integration is an enhancement when the DE provides it.
 | GTK widgets in-process | No |
 | Wayland global menu | Not required for v1; use Vulkan fallback |
 | Overlay vs native | Overlay only for fallback and in-canvas UI; command menus prefer OS |
-| `menuH` | Non-zero only for Win32 native bar and Linux Vulkan fallback |
+| `menuH` | Non-zero for Win32 native bar only; Vulkan fallback embeds the strip in the view tree (`menuH` stays 0) |
 
 ## Open questions
 

@@ -20,7 +20,39 @@ struct HelloWorldApp {
             FileHandle.standardError.write(Data("warning: brand image failed to load\n".utf8))
         }
 
-        LavaApp.run(editor: editor) {
+        // Phase 2: in-window Vulkan menubar (same IR as future DBusMenu host).
+        LavaApp.run(
+            editor: editor,
+            menu: {
+                MenuBar {
+                    Menu("View") {
+                        MenuItem(
+                            "Toggle theme",
+                            id: "view.theme",
+                            shortcut: KeyShortcut(KeyCode.t, .primary)
+                        ) {
+                            Theme.current = (Theme.current == .dark) ? .light : .dark
+                        }
+                        MenuSeparator()
+                        MenuItem("Zoom in", id: "view.zoom-in") {
+                            // Content scale is handled by Ctrl+= in the loop;
+                            // this is a visible menu target for agents/demos.
+                            FileHandle.standardError.write(Data("menu: Zoom in\n".utf8))
+                        }
+                        MenuItem("Zoom out", id: "view.zoom-out") {
+                            FileHandle.standardError.write(Data("menu: Zoom out\n".utf8))
+                        }
+                    }
+                    Menu("Help") {
+                        MenuItem("About LavaUI", id: "help.about") {
+                            FileHandle.standardError.write(
+                                Data("LavaUI demo — native menu phase 2 (Vulkan bar)\n".utf8)
+                            )
+                        }
+                    }
+                }
+            }
+        ) {
             DemoExample(brandImage: brandImage)
         }
     }
