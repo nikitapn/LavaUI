@@ -187,9 +187,11 @@ public struct Canvas: PrimitiveView {
         leaf.onClick = nil
 
         if let wheel = onWheel {
-            // Wheel routing only considers hover targets (see `hoverWalk`), so
-            // a canvas with no hover fill of its own needs *some* signal that
-            // it wants pointer traffic — an empty handler is that signal.
+            // Keeps the canvas resolvable as the hover target despite having
+            // no hover fill of its own — an empty handler is that signal (see
+            // `hoverWalk`). Wheel routing no longer depends on this, since
+            // `hitTestScrollChain` collects boxes rather than hover targets,
+            // but hover and capture still do.
             if leaf.onHover == nil { leaf.onHover = { _ in } }
             ScrollRouter.register(leaf.id) { [weak leaf] dx, dy in
                 guard let leaf else { return }

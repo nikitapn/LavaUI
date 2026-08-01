@@ -110,17 +110,39 @@ final class ScrollNode: YogaBoxNode {
 
     func registerScrolling() {
         isScrollable = true
-        ScrollRouter.register(id) { [weak self] dx, dy in
+        ScrollRouter.register(
+            id,
+            canScroll: { [weak self] dx, dy in
+                self?.canScroll(dx: dx, dy: dy) ?? false
+            }
+        ) { [weak self] dx, dy in
             guard let self else { return }
-            // A vertical container still responds to a horizontal trackpad
-            // gesture, and vice versa, rather than swallowing it silently.
-            let delta = self.axis == .vertical ? dy : (dx != 0 ? dx : dy)
-            self.scrollBy(-delta * 48)
+            self.scrollBy(self.wheelDelta(dx: dx, dy: dy))
         }
     }
 
+    /// Offset change one wheel notch asks for.
+    ///
+    /// A vertical container still responds to a horizontal trackpad gesture,
+    /// and vice versa, rather than swallowing it silently.
+    func wheelDelta(dx: Float, dy: Float) -> Float {
+        let raw = axis == .vertical ? dy : (dx != 0 ? dx : dy)
+        return -raw * 48
+    }
+
+    /// Whether that notch would actually move anything. `ScrollRouter` asks
+    /// before delivering, so a container already pinned at top or bottom passes
+    /// the wheel out to an enclosing scroll view instead of eating it.
+    func canScroll(dx: Float, dy: Float) -> Bool {
+        clamped(scrollOffset + wheelDelta(dx: dx, dy: dy)) != scrollOffset
+    }
+
+    private func clamped(_ offset: Float) -> Float {
+        min(max(0, offset), maxOffset)
+    }
+
     func scrollBy(_ delta: Float) {
-        let next = min(max(0, scrollOffset + delta), maxOffset)
+        let next = clamped(scrollOffset + delta)
         if next != scrollOffset {
             scrollOffset = next
             // Paint state on the retained node — `emitNodeBody`'s ScrollNode

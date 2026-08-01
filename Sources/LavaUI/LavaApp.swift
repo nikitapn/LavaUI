@@ -107,6 +107,9 @@ public enum LavaApp {
         // The wheel event carries no position, so remember the last one.
         var lastPointer: (x: Float, y: Float) = (0, 0)
         var lastLoggedLayout: (w: Float, h: Float) = (0, 0)
+        // Previous iteration's window visibility, so the loop can tell a
+        // minimize/restore edge from a steady state and redraw exactly once.
+        var wasWindowVisible = editor.isWindowVisible
 
         // Per-frame timing, one line per rendered frame on stdout. Idle frames
         // print nothing, because idle frames are not rendered.
@@ -258,8 +261,13 @@ public enum LavaApp {
             case .mouseUp:
                 PointerCapture.release()
             case .scroll:
+                // Chain, not the single hover target: the wheel bubbles past a
+                // button or field that happens to be topmost to the nearest
+                // scroll-capable ancestor.
                 ScrollRouter.deliver(
-                    to: host.hitTestHover(x: lastPointer.x, y: lastPointer.y, originY: menuH),
+                    to: host.hitTestScrollChain(
+                        x: lastPointer.x, y: lastPointer.y, originY: menuH
+                    ),
                     dx: ev.x, dy: ev.y, mods: ev.button
                 )
             case .fileDrop:
@@ -422,13 +430,29 @@ public enum LavaApp {
                 ViewInvalidation.markNeedsLayout()
             }
 
-            if editor.isWindowVisible {
+            let windowVisible = editor.isWindowVisible
+            if windowVisible {
                 AnimationDriver.tick()
             }
 
-            if FocusManager.focusedID != nil {
+            // A blinking caret is the other thing that keeps an idle app awake
+            // forever, and unlike an animation it does not need `NodeVisibility`
+            // to know it is pointless: nobody can see a minimized window's
+            // caret, so it must not schedule wakes or dirty frames there.
+            if windowVisible, FocusManager.focusedID != nil {
                 if CaretBlink.phaseChanged() { ViewInvalidation.markNeedsRedraw() }
                 FrameScheduler.requestWake(in: CaretBlink.period / 4)
+            }
+
+            if windowVisible != wasWindowVisible {
+                wasWindowVisible = windowVisible
+                // On restore the caret has to come back without waiting for the
+                // user to type or click: the suspended blink left `lastPhase`
+                // stale, so adopt the live phase and paint one frame with it.
+                if windowVisible {
+                    CaretBlink.resync()
+                    ViewInvalidation.markNeedsRedraw()
+                }
             }
 
             let level = ViewInvalidation.consume()

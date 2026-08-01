@@ -6,8 +6,20 @@ for behavior that is incorrect or surprising across applications.
 
 ## 1. Focused caret keeps scheduling repaints while the window is minimized
 
-**Status:** Open
+**Status:** Fixed
 **Area:** frame scheduling / window visibility / text input
+
+### Resolution
+
+The focused-caret block in `LavaApp.run` moved inside the `isWindowVisible`
+gate, so a minimized window neither calls `CaretBlink.phaseChanged()` nor
+queues a caret wake. The loop also tracks the previous iteration's visibility;
+on the invisible → visible edge it calls the new `CaretBlink.resync()` (adopts
+the live phase, whose `lastPhase` went stale while suspended) and marks one
+redraw, so the caret returns without keyboard or pointer input.
+
+Verified against `HelloWorld` with a focused `TextField`: 8 caret redraws in 4s
+while visible, 0 in 5s while iconified, and blinking resumes on restore.
 
 ### Observed
 
@@ -39,8 +51,27 @@ whenever `FocusManager.focusedID` is non-nil.
 
 ## 2. Interactive descendants prevent wheel scrolling of an ancestor
 
-**Status:** Open
+**Status:** Fixed
 **Area:** hit testing / wheel-event routing / `ScrollView`
+
+### Resolution
+
+Wheel routing now bubbles. `LayoutHost.hitTestScrollChain` is a new walk that
+keeps the whole ancestor path under the pointer (innermost first) instead of
+the single topmost hit, and `ScrollRouter.deliver` takes that chain and gives
+the notch to the first handler willing to take it. `hitTestHover` and
+`hitTestClick` are untouched, so hover and click targeting are unchanged.
+
+Nested scroll containers use an eligibility predicate registered alongside the
+handler: `ScrollNode` and `EditorView` report whether the notch would actually
+move them, so one already pinned at its end passes the event out to the next
+eligible ancestor. Omitting the predicate (as `Canvas(onWheel:)` does) means
+consume unconditionally, which is how a widget with its own wheel behavior
+keeps it.
+
+Verified against `HelloWorld`: a wheel over the "Live lab" header and over a
+focused `TextField`, both inside the center `ScrollView`, scroll the container
+by exactly one notch step each; clicking the same header still toggles it.
 
 ### Observed
 

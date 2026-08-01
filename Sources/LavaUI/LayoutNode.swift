@@ -453,6 +453,25 @@ final class LeafNode: YogaBoxNode {
         }
     }
 
+    /// Whether a wheel notch of `dx`/`dy` would move this editor at all, which
+    /// is what `ScrollRouter` asks before delivering. An editor whose buffer
+    /// already fits — or one scrolled to its end — hands the notch to the
+    /// enclosing scroll container instead of swallowing it.
+    func editorCanScroll(dx: Float, dy: Float) -> Bool {
+        guard let f = font ?? FontStore.default else { return false }
+        let step = f.lineHeight * 3
+        func movesX(_ delta: Float) -> Bool {
+            min(max(0, scrollX + delta), maxScrollX(font: f)) != scrollX
+        }
+        func movesY(_ delta: Float) -> Bool {
+            min(max(0, scrollY + delta), maxScrollY(lineHeight: f.lineHeight)) != scrollY
+        }
+        // Mirrors the axis choice the handler makes, so eligibility and effect
+        // never disagree.
+        if ScrollRouter.shiftHeld, dx == 0 { return movesX(-dy * step) }
+        return (dx != 0 && movesX(-dx * step)) || (dy != 0 && movesY(-dy * step))
+    }
+
     /// Last computed `(offset(of: focus), layout.rowIndex(of that offset))`,
     /// keyed on the exact `focus`/`affinity` they were computed from.
     private var cachedFocusPosition: (
@@ -1237,6 +1256,39 @@ public final class LayoutHost {
         return hoverWalk(root, x: x, y: y, ox: originX, oy: originY)
     }
 
+    /// Every node under the pointer that a wheel event may be offered to,
+    /// innermost first.
+    ///
+    /// Hover resolves exactly *one* node, which is right for highlighting and
+    /// wrong for the wheel: a button, text field, or canvas sitting inside a
+    /// `ScrollView` is the topmost hit, so routing by hover alone let it mask
+    /// the container and a notch over it scrolled nothing. This keeps the whole
+    /// ancestor path instead so `ScrollRouter` can bubble. Deliberately a
+    /// separate walk — hover and click targeting stay exactly as they were.
+    public func hitTestScrollChain(
+        x: Float, y: Float, originX: Float = 0, originY: Float = 0
+    ) -> [NodeID] {
+        guard layoutValid, let root else { return [] }
+        var chain: [NodeID] = []
+
+        for att in OverlayScan.presented(in: root).reversed() {
+            guard let overlayRoot = att.root else { continue }
+            if scrollChainWalk(
+                overlayRoot, x: x, y: y,
+                ox: originX + att.origin.x, oy: originY + att.origin.y,
+                into: &chain
+            ) {
+                return chain
+            }
+            // A wheel over the panel must not scroll what is underneath it,
+            // same rule hover follows.
+            if att.contains(x - originX, y - originY) { return [] }
+        }
+
+        _ = scrollChainWalk(root, x: x, y: y, ox: originX, oy: originY, into: &chain)
+        return chain
+    }
+
     /// Dismisses everything presented. Returns true if anything was showing,
     /// so a key handler can tell whether it consumed the event.
     @discardableResult
@@ -1289,6 +1341,52 @@ public final class LayoutHost {
             if let h = hoverWalk(child, x: x, y: y, ox: ox, oy: oy) { return h }
         }
         return nil
+    }
+
+    /// Appends the hit node and then each of its ancestors, so `chain` comes
+    /// out innermost-first. Returns whether this subtree claimed the point.
+    ///
+    /// Mirrors `hoverWalk`'s geometry exactly — children before self, shifted
+    /// by `childOffset` — but has no interest in whether a node is an
+    /// interactive target: an inert `VStack` between a button and its
+    /// `ScrollView` still has to appear so the walk can reach the container.
+    private func scrollChainWalk(
+        _ node: any AnyViewNode, x: Float, y: Float, ox: Float, oy: Float,
+        into chain: inout [NodeID]
+    ) -> Bool {
+        if let box = node as? YogaBoxNode, box.transitionState?.isLeaving == true {
+            return false
+        }
+        if let box = node as? YogaBoxNode, let yref = box.yoga {
+            let nx = ox + YGNodeLayoutGetLeft(yref)
+            let ny = oy + YGNodeLayoutGetTop(yref)
+            let nw = YGNodeLayoutGetWidth(yref)
+            let nh = YGNodeLayoutGetHeight(yref)
+            var hit = false
+            for child in node.childNodes.reversed() {
+                let shift = box.childOffset
+                if scrollChainWalk(
+                    child, x: x, y: y, ox: nx - shift.x, oy: ny - shift.y, into: &chain
+                ) {
+                    hit = true
+                    break
+                }
+            }
+            // An ancestor of a hit child belongs in the chain whether or not
+            // the point is inside its own box — overflowing scroll content is
+            // the whole reason a child can be hit outside its container.
+            if hit || (x >= nx && x < nx + nw && y >= ny && y < ny + nh) {
+                chain.append(box.id)
+                return true
+            }
+            return false
+        }
+        for child in node.childNodes.reversed() {
+            if scrollChainWalk(child, x: x, y: y, ox: ox, oy: oy, into: &chain) {
+                return true
+            }
+        }
+        return false
     }
 
     private func hitWalk(

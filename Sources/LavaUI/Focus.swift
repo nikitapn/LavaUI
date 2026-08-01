@@ -104,6 +104,14 @@ public enum CaretBlink {
         return visible != lastPhase
     }
 
+    /// Adopts the current phase without reporting a change. The blink is
+    /// suspended while the window is invisible, so `lastPhase` is stale by an
+    /// arbitrary number of periods on restore; the caller redraws once anyway
+    /// and only wants the *next* `phaseChanged()` to be meaningful.
+    public static func resync() {
+        lastPhase = isVisible
+    }
+
     private static func now() -> Double {
         Double(DispatchTime.now().uptimeNanoseconds) / 1_000_000_000
     }
@@ -161,27 +169,63 @@ public enum PointerCapture {
 /// Wheel routing. The node under the pointer receives the wheel, focused or
 /// not — that is what every desktop app does, and it means scrolling a panel
 /// does not steal focus from a field.
+///
+/// Unlike hover and click, delivery **bubbles**: the caller supplies the whole
+/// ancestor chain under the pointer (`LayoutHost.hitTestScrollChain`) and the
+/// first eligible handler wins. Routing to the single topmost hit instead meant
+/// any interactive child — a button, a text field — silently swallowed the
+/// wheel for the `ScrollView` around it.
 public enum ScrollRouter {
-    nonisolated(unsafe) private static var handlers: [NodeID: (Float, Float) -> Void] = [:]
+    private struct Entry {
+        let handler: (Float, Float) -> Void
+        /// nil means "always takes it": a widget with wheel behavior of its own
+        /// consumes deliberately rather than leaking notches to an ancestor.
+        let canScroll: ((Float, Float) -> Bool)?
+    }
+
+    nonisolated(unsafe) private static var handlers: [NodeID: Entry] = [:]
     /// Modifier state carried on the scroll event, so handlers do not have to
     /// track key state themselves.
     nonisolated(unsafe) public private(set) static var shiftHeld = false
 
-    public static func register(_ id: NodeID, handler: @escaping (Float, Float) -> Void) {
-        handlers[id] = handler
+    /// `canScroll` is the nested-scroll policy: a container already pinned at
+    /// its end reports false and the notch continues out to the next eligible
+    /// ancestor, so an inner list that cannot scroll farther does not deadlock
+    /// the outer one. Omit it to consume unconditionally.
+    public static func register(
+        _ id: NodeID,
+        canScroll: ((Float, Float) -> Bool)? = nil,
+        handler: @escaping (Float, Float) -> Void
+    ) {
+        handlers[id] = Entry(handler: handler, canScroll: canScroll)
     }
 
     public static func unregister(_ id: NodeID) { handlers[id] = nil }
 
-    /// Delivers to `target` if it is scrollable. Returns true if consumed.
+    /// Delivers to the innermost node in `chain` that has a handler willing to
+    /// take this notch. Returns true if consumed.
+    @discardableResult
+    public static func deliver(
+        to chain: [NodeID], dx: Float, dy: Float, mods: Int32 = 0
+    ) -> Bool {
+        shiftHeld = KeyMods.contains(mods, KeyMods.shift)
+        for id in chain {
+            guard let entry = handlers[id] else { continue }
+            // Evaluated after `shiftHeld` is published, since eligibility can
+            // depend on which axis the notch will end up moving.
+            if let canScroll = entry.canScroll, !canScroll(dx, dy) { continue }
+            entry.handler(dx, dy)
+            return true
+        }
+        return false
+    }
+
+    /// Single-node delivery, for callers that resolved one target themselves.
     @discardableResult
     public static func deliver(
         to target: NodeID?, dx: Float, dy: Float, mods: Int32 = 0
     ) -> Bool {
-        shiftHeld = KeyMods.contains(mods, KeyMods.shift)
-        guard let target, let handler = handlers[target] else { return false }
-        handler(dx, dy)
-        return true
+        deliver(to: target.map { [$0] } ?? [], dx: dx, dy: dy, mods: mods)
     }
 }
 

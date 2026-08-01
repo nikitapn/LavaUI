@@ -210,7 +210,12 @@ public struct EditorView: PrimitiveView {
 
         leaf.isScrollable = true
         // Wheel scrolls three rows a notch, the usual desktop feel.
-        ScrollRouter.register(leaf.id) { [weak leaf] dx, dy in
+        ScrollRouter.register(
+            leaf.id,
+            canScroll: { [weak leaf] dx, dy in
+                leaf?.editorCanScroll(dx: dx, dy: dy) ?? false
+            }
+        ) { [weak leaf] dx, dy in
             guard let leaf, let f = leaf.font ?? FontStore.default else { return }
             // Shift+wheel scrolls horizontally, the desktop convention for a
             // mouse with no horizontal axis. A trackpad supplies dx directly.
