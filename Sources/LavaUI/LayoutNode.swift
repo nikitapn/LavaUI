@@ -353,32 +353,81 @@ final class LeafNode: YogaBoxNode {
     /// when it matters.
     private var widestRowCache: (fontIdentity: String, text: String, width: Float)?
 
+    /// How many of the longest-by-bytes rows get shaped for real.
+    ///
+    /// More than one because byte length is only a proxy: with a proportional
+    /// face a long run of `i` can out-count a shorter run of `W`. A dozen
+    /// candidates makes that miss vanishingly unlikely, and this is a scroll
+    /// bound and an intrinsic width — not a layout invariant — so being a few
+    /// pixels shy on a pathological buffer costs nothing that matters.
+    private static let widestRowCandidates = 12
+
     /// Also used by `measureForYoga`'s intrinsic-width case — one
     /// computation, one cache, instead of the measure pass silently
     /// reshaping every line again right after this already did.
+    ///
+    /// Shapes only the longest few rows, not all of them. Shaping every row to
+    /// find the widest is O(buffer) in the slowest operation text has, *and*
+    /// leaves an entry per row in the shape cache: on a 23 MB Android log
+    /// (166,636 lines) opening the editor pegged a core and grew the process
+    /// past 9 GB before it was killed. Ranking by `utf8.count` is O(1) per row
+    /// on a `Substring`, so the scan is effectively free and only the
+    /// candidates cost a shaping.
     func widestRowWidth(font: UIFont) -> Float {
         if let c = widestRowCache, c.fontIdentity == font.identity, c.text == editing.text {
             return c.width
         }
         let widest: Float
         if wraps {
-            widest = editing.layout.rows.reduce(Float(0)) { acc, r in
-                let lo = editing.index(atOffset: r.lowerBound)
-                let hi = editing.index(atOffset: r.upperBound)
+            let rows = editing.layout.rows
+            // Ranked on the row ranges, so the `index(atOffset:)` walk — which
+            // starts from the beginning of the buffer every call, and was
+            // quadratic when done for every row — runs only for the candidates.
+            let picks = Self.longestIndices(count: rows.count, limit: Self.widestRowCandidates) {
+                rows[$0].count
+            }
+            widest = picks.reduce(Float(0)) { acc, i in
+                let lo = editing.index(atOffset: rows[i].lowerBound)
+                let hi = editing.index(atOffset: rows[i].upperBound)
                 return max(acc, font.shapedRun(String(editing.text[lo..<hi])).width)
             }
         } else {
-            // One row per logical line — `editing.lines` already carries
-            // real `Substring` indices from a single split, so this skips
-            // the `index(atOffset:)` walk the wrapped branch needs (each
-            // call walks from the start of the buffer; doing that once per
-            // row, of possibly thousands, is what made this quadratic).
-            widest = editing.lines.reduce(Float(0)) { acc, line in
-                max(acc, font.shapedRun(String(line)).width)
+            // One row per logical line — `editing.lines` already carries real
+            // `Substring` indices from a single split, and `utf8.count` on one
+            // is the length of a byte range, not a walk.
+            let lines = editing.lines
+            let picks = Self.longestIndices(count: lines.count, limit: Self.widestRowCandidates) {
+                lines[$0].utf8.count
+            }
+            widest = picks.reduce(Float(0)) { acc, i in
+                max(acc, font.shapedRun(String(lines[i])).width)
             }
         }
         widestRowCache = (font.identity, editing.text, widest)
         return widest
+    }
+
+    /// Indices of the `limit` longest items, in one pass.
+    ///
+    /// The `n <= shortest` guard is what keeps this linear in practice: after
+    /// the first few rows almost every line fails it on the first comparison,
+    /// so the insertion path is cold.
+    private static func longestIndices(
+        count: Int, limit: Int, length: (Int) -> Int
+    ) -> [Int] {
+        guard count > limit else { return Array(0..<count) }
+        var best: [(index: Int, length: Int)] = []
+        best.reserveCapacity(limit + 1)
+        var shortest = Int.min
+        for i in 0..<count {
+            let n = length(i)
+            if best.count == limit && n <= shortest { continue }
+            let at = best.firstIndex { n > $0.length } ?? best.count
+            best.insert((index: i, length: n), at: at)
+            if best.count > limit { best.removeLast() }
+            shortest = best.count == limit ? best[best.count - 1].length : Int.min
+        }
+        return best.map(\.index)
     }
 
     func maxScrollX(font: UIFont) -> Float {

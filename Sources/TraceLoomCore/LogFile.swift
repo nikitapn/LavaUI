@@ -68,7 +68,7 @@ public enum LogFile {
         }
 
         if let text = String(data: data, encoding: .utf8) {
-            return Load(text: text)
+            return Load(text: normalizingNewlines(text))
         }
 
         // One stray byte — a Latin-1 accent, a truncated multibyte sequence, a
@@ -77,7 +77,7 @@ public enum LogFile {
         // lossily keeps every valid sequence intact and substitutes U+FFFD for
         // the rest, so the log still opens; the warning is what keeps that
         // from being another silent surprise.
-        let text = String(decoding: data, as: UTF8.self)
+        let text = normalizingNewlines(String(decoding: data, as: UTF8.self))
         let warning: String
         if let offset = firstInvalidUTF8Offset(in: data) {
             warning = "\(path): not valid UTF-8 at byte \(offset) "
@@ -87,6 +87,46 @@ public enum LogFile {
             warning = "\(path): not valid UTF-8; decoded with replacement characters"
         }
         return Load(text: text, warning: warning)
+    }
+
+    /// Rewrites CRLF and lone CR to LF.
+    ///
+    /// Not cosmetic — load-bearing. Swift treats `"\r\n"` as a *single*
+    /// grapheme cluster which is not equal to `Character("\n")`, so
+    /// `split(separator: "\n")` finds nothing in a CRLF file and reports the
+    /// whole buffer as one line. A 23 MB Android log taken off a Windows box
+    /// therefore became a single 23-million-character line: the editor tried
+    /// to shape it as one run, and the process grew past 9 GB before it was
+    /// killed. Parsing degenerated the same way, silently, into a timeline
+    /// with one point.
+    ///
+    /// Normalising here rather than teaching every consumer about CRLF: the
+    /// alternative is making caret arithmetic, wrapping, parsing and line
+    /// indexing each handle a two-byte terminator, and any one of them
+    /// forgetting reintroduces this.
+    ///
+    /// Fast path first — the scan is a byte compare and the overwhelming
+    /// majority of logs have no CR at all, so they pay one pass and no copy.
+    public static func normalizingNewlines(_ text: String) -> String {
+        guard text.utf8.contains(0x0D) else { return text }
+        var out = [UInt8]()
+        out.reserveCapacity(text.utf8.count)
+        var previousWasCR = false
+        for byte in text.utf8 {
+            if byte == 0x0D {
+                out.append(0x0A)
+                previousWasCR = true
+                continue
+            }
+            // The LF of a CRLF pair was already emitted by the CR above.
+            if byte == 0x0A, previousWasCR {
+                previousWasCR = false
+                continue
+            }
+            previousWasCR = false
+            out.append(byte)
+        }
+        return String(decoding: out, as: UTF8.self)
     }
 
     /// Byte offset of the first invalid UTF-8 sequence, or nil if the buffer

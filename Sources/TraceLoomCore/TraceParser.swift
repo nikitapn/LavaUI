@@ -192,7 +192,11 @@ public enum TraceParser {
         chunkCount forcedChunkCount: Int?
     ) -> TraceParseResult? {
         let parsed = parseRules(rulesSource)
-        let lines = log.split(separator: "\n", omittingEmptySubsequences: false)
+        // CRLF-tolerant: `split(separator: "\n")` sees `"\r\n"` as one
+        // grapheme that is not `"\n"`, so a Windows-terminated log would come
+        // back as a single line and quietly parse to almost no points. Files
+        // are normalised on load, but pasted text is not.
+        let lines = splitLines(log)
         let chunkCount = forcedChunkCount ?? Self.chunkCount(forLines: lines.count)
 
         let chunks: [ChunkOutput]
@@ -211,6 +215,24 @@ public enum TraceParser {
         }
 
         return merge(rules: parsed.rules, ruleDiagnostics: parsed.diagnostics, chunks: chunks)
+    }
+
+    /// Splits on LF, CRLF, or a lone CR, dropping the terminator.
+    ///
+    /// The trailing `\r` has to go, not just the split point: a rule ending in
+    /// `(\d+)$` or `\bDONE$` would stop matching with a carriage return sitting
+    /// at the end of every line, which looks exactly like a wrong regex.
+    static func splitLines(_ text: String) -> [Substring] {
+        // Fast path: no carriage return anywhere, which is almost every log,
+        // and the one-Character separator lets `split` take its own fast path.
+        guard text.utf8.contains(0x0D) else {
+            return text.split(separator: "\n", omittingEmptySubsequences: false)
+        }
+        // `"\r\n"` is one grapheme, so it has to be named explicitly — testing
+        // only `"\n"` matches nothing in a CRLF buffer and yields one line.
+        return text.split(omittingEmptySubsequences: false) {
+            $0 == "\n" || $0 == "\r\n" || $0 == "\r"
+        }
     }
 
     /// Fewest lines worth handing to a core of its own. Below this the dispatch

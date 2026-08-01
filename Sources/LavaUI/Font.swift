@@ -212,9 +212,21 @@ public final class UIFont: @unchecked Sendable {
     public func shape(_ text: String) -> [ShapedGlyph] {
         if let hit = shapeCache[text] { return hit }
         let glyphs = shapeWithFallbacks(text)
+        // Bounded, because this cache is keyed by line text and used to grow
+        // without limit: every distinct line ever shaped stayed in it forever.
+        // Scrolling a 166,636-line Android log put an entry per line here and
+        // took the process past 9 GB. The live working set is the visible
+        // window — tens of lines — so a cap in the low thousands never evicts
+        // anything still on screen, and dropping the whole table beats
+        // maintaining LRU metadata for an eviction that almost never fires.
+        if shapeCache.count >= Self.shapeCacheLimit {
+            shapeCache.removeAll(keepingCapacity: true)
+        }
         shapeCache[text] = glyphs
         return glyphs
     }
+
+    private static let shapeCacheLimit = 4096
 
     /// Raw shaping against this face alone. `glyphId == 0` is HarfBuzz's
     /// `.notdef` — the character is not in this face's cmap, and rendering it

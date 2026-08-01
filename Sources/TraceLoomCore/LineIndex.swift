@@ -28,7 +28,12 @@ public struct LineIndex {
         var stoppedEarly = false
 
         for character in text {
-            if character == "\n" {
+            // `"\r\n"` is one grapheme cluster in Swift and is *not* equal to
+            // `"\n"`, so testing only for the latter reports a CRLF buffer as a
+            // single line — which is how a 23 MB log once became one line and
+            // took the process past 9 GB. Both terminators count as one
+            // character here, matching the offsets `text` itself uses.
+            if character == "\n" || character == "\r\n" || character == "\r" {
                 starts.append(lineStart)
                 lengths.append(offset - lineStart)
                 lineStart = offset + 1
