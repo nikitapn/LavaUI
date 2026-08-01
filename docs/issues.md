@@ -105,7 +105,7 @@ a topmost interactive child masks the enclosing `ScrollView`.
 
 ## 3. Loading a large log file fails silently
 
-**Status:** Open
+**Status:** Fixed
 **Area:** TraceLoom file ingestion / state update / parsing
 
 ### Observed
@@ -145,3 +145,64 @@ update, parsing, pyramid construction, and editor reconciliation.
 - The application remains responsive, or presents explicit progress, during a
   large load.
 - Add regression coverage around the confirmed boundary and failure mode.
+
+### Findings
+
+**There is no size threshold.** A valid UTF-8 log well past the observed
+boundary loads and renders completely — confirmed in the running app at 12 MB
+(220,000 lines, 345,716 points) and at 57 MB (1,099,996 lines, 1,728,572
+points). Measured on a 12 MB / 57 MB fixture pair, debug build:
+
+| stage | 12 MB | 57 MB |
+| --- | --- | --- |
+| read | 15ms | 86ms |
+| split into lines | 402ms | 2,049ms |
+| parse | 3,273ms | 16,479ms |
+| pyramid build | 47ms | 337ms |
+| emit/present | ~17ms | ~17ms |
+
+Parsing dominates and is linear with no cliff; reading is never the cost;
+pyramid construction and rendering are negligible, because `visibleLines` caps
+what the log `EditorView` ever lays out regardless of buffer size.
+
+**The real cause was the decode, not the size.** `try? String(contentsOf:
+encoding: .utf8)` returns nil for the whole file over a single non-UTF-8 byte,
+and `loadLog` then returned without a word. Size correlated only statistically:
+a bigger real-world log is likelier to contain one stray byte from a mis-encoded
+line or a rotation artifact. Reproduced exactly — the 12 MB fixture loads, and
+the same fixture with one `0xE9` inserted mid-file produces no visible result
+and no stderr.
+
+### Resolution
+
+`LogFile.read(at:)` in `TraceLoomCore` replaces the inline `try?`, so the error
+paths are testable without a window:
+
+- Invalid UTF-8 no longer costs the file. It decodes lossily — every valid
+  sequence intact, U+FFFD for the rest — and reports the path, the byte offset,
+  and the line number of the first bad sequence (`firstInvalidUTF8Offset`, which
+  also rejects overlongs and surrogates).
+- Read failures throw with the path and the underlying reason
+  (`localizedDescription`, not the NSError dump). The previous document is kept.
+- Files over a documented 256 MB limit report a resource error instead of
+  attempting the allocation; the check runs off file metadata.
+
+Both outcomes go to stderr and to a banner under the header that persists until
+the next load.
+
+For progress, `FrameTasks.after` (new, in LavaUI) defers work until after the
+current frame is presented. `loadLog` sets "Loading x.log…" and hands the read
+and reparse to it, so the status is on screen before the thread blocks —
+verified with an external window capture 4s into the 57 MB load. The work still
+runs on the main thread; what changed is that the user is told which file is
+blocking it.
+
+Coverage: 7 tests in `Tests/TraceLoomCoreTests/LogFileTests.swift`, including
+the one-bad-byte case, a >12 MB end-to-end load and parse, the size limit, and
+UTF-8 validator edge cases.
+
+### Not addressed
+
+Parsing still blocks the UI thread — 3s at 12 MB, 16s at 57 MB. Moving it off
+the main thread, or chunking it across frames, is a real change to how
+`TraceDataCache` and `@State` feed the view and is not attempted here.

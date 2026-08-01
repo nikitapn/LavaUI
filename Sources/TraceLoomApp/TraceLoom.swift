@@ -2,6 +2,14 @@ import Foundation
 import LavaUI
 import TraceLoomCore
 
+/// What the last load has to say for itself. Errors keep the previous
+/// document; warnings mean the file loaded but something about it is worth
+/// knowing (so far: bytes that were not valid UTF-8).
+private struct Notice {
+    var text: String
+    var isError: Bool
+}
+
 private struct DisplaySeries: Identifiable {
     let id: Int
     let series: TraceSeries
@@ -48,6 +56,11 @@ public struct TraceLoom: View {
     /// Set by tapping a decorated gutter row — `EditorView` has no built-in
     /// tooltip, it just tells the app which decoration was tapped.
     @State private var tappedDiagnostic: String?
+    /// Non-nil while a file load is in flight. The frame showing it is
+    /// presented before the read/parse runs — see `loadLog(from:)`.
+    @State private var loadingPath: String?
+    /// Outcome of the last load, kept on screen until the next one starts.
+    @State private var notice: Notice?
 
     public init() {}
 
@@ -88,9 +101,41 @@ public struct TraceLoom: View {
     /// Shared by the file-dialog button and `.onDrop` — whichever way a log
     /// file arrives, only its content matters. Ignores anything past the
     /// first path: TraceLoom parses one buffer, not a multi-file batch.
+    ///
+    /// Split across two frames on purpose. Reading is cheap but reparsing is
+    /// linear in file size and runs on this thread — seconds for a log of a
+    /// few tens of MB — so setting the status and doing the work inline would
+    /// put both in one frame and paint neither until the stall ended. Setting
+    /// the status here and deferring the rest to `FrameTasks` gets "Loading
+    /// x.log…" on screen first, which is the difference between a slow load
+    /// and an app that looks dead.
     private func loadLog(from urls: [URL]) {
-        guard let url = urls.first, let contents = try? String(contentsOf: url, encoding: .utf8) else { return }
-        log = contents
+        guard let url = urls.first else { return }
+        notice = nil
+        loadingPath = url.path
+        FrameTasks.after { completeLoad(url) }
+    }
+
+    private func completeLoad(_ url: URL) {
+        defer { loadingPath = nil }
+        do {
+            let loaded = try LogFile.read(at: url)
+            log = loaded.text
+            resetZoom()
+            if let warning = loaded.warning {
+                notice = Notice(text: warning, isError: false)
+                report(warning)
+            }
+        } catch {
+            // The previous document stays exactly as it was — a failed load
+            // must not also cost the user what they were already looking at.
+            notice = Notice(text: "\(error)", isError: true)
+            report("\(error)")
+        }
+    }
+
+    private func report(_ message: String) {
+        FileHandle.standardError.write(Data("TraceLoom: \(message)\n".utf8))
     }
 
     private var displayed: [DisplaySeries] {
@@ -198,22 +243,50 @@ public struct TraceLoom: View {
     }
 
     private func header(_ parsed: TraceParseResult) -> some View {
-        HStack(padding: 10) {
-            HStack() {
-                Text("\(parsed.series.count) rules", color: .secondary)
-                Text("\(parsed.matchedLineCount) matched lines", color: .secondary)
-                Text("\(parsed.series.reduce(0) { $0 + $1.points.count }) points", color: .selected)
-            }
+        VStack {
+            HStack(padding: 10) {
+                HStack() {
+                    Text("\(parsed.series.count) rules", color: .secondary)
+                    Text("\(parsed.matchedLineCount) matched lines", color: .secondary)
+                    Text("\(parsed.series.reduce(0) { $0 + $1.points.count }) points", color: .selected)
+                }
 
-            Spacer()
+                Spacer()
 
-            HStack() {
-                Text("Paste, edit, drop a file here, or", color: .dim)
-                Text("Load file…", color: .accent, onClick: { loadLogFile() })
-                    .agentId("load-log-file")
+                HStack() {
+                    Text("Paste, edit, drop a file here, or", color: .dim)
+                    Text("Load file…", color: .accent, onClick: { loadLogFile() })
+                        .agentId("load-log-file")
+                }
             }
+            loadStatus()
         }
         .background(Environment.current.theme.panel)
+    }
+
+    /// One line under the header for whichever of the two states is live.
+    /// Deliberately not a transient toast: a load that failed should still be
+    /// readable a minute later, when the user finally looks away from the
+    /// timeline that did not change.
+    @ViewBuilder
+    private func loadStatus() -> some View {
+        if let loadingPath {
+            Text(
+                "Loading \(URL(fileURLWithPath: loadingPath).lastPathComponent)…",
+                color: .accent
+            )
+            .padding(6)
+            .agentId("load-status")
+        } else if let notice {
+            // ASCII prefixes on purpose: the symbol font has no warning sign,
+            // and a tofu box is worse than no marker at all.
+            Text(
+                (notice.isError ? "Load failed · " : "Note · ") + notice.text,
+                color: notice.isError ? .selected : .muted
+            )
+            .padding(6)
+            .agentId("load-notice")
+        }
     }
 
     private func sectionTitle(_ title: String, detail: String) -> some View {

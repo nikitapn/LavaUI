@@ -332,6 +332,7 @@ public enum LavaApp {
             dirty = false
             renderFrame(work)
             editor.renderFrame()
+            FrameTasks.drain()
         }
 
         // Agent control plane (optional). LAVA_AGENT_PORT=9876
@@ -487,6 +488,10 @@ public enum LavaApp {
                     }
                 }
             }
+
+            // After present, so anything queued from an input handler this
+            // iteration got its "before" frame on screen first.
+            FrameTasks.drain()
         }
 
         agentServer?.close()

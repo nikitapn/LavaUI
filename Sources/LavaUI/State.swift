@@ -336,3 +336,39 @@ public enum FrameScheduler {
 
     public static var hasPendingWake: Bool { deadline != nil }
 }
+
+/// Work deferred until the current frame is on screen.
+///
+/// Exists for the one thing a synchronous UI thread cannot otherwise express:
+/// a visible "before". A click handler about to spend seconds reading and
+/// parsing a large file can set its status text, hand the actual work to
+/// `after`, and return — the loop paints "Loading…", presents it, *then* runs
+/// the work. Doing both inline instead puts the state change and the stall in
+/// the same frame, so the status is never drawn and the window simply freezes
+/// with stale content, which is indistinguishable from nothing happening.
+///
+/// Not a thread pool and not a substitute for one: the work still runs on the
+/// main thread and still blocks it. What it buys is that the user is told what
+/// is blocking, and which file, before it starts.
+public enum FrameTasks {
+    nonisolated(unsafe) private static var queue: [() -> Void] = []
+
+    public static func after(_ work: @escaping () -> Void) {
+        queue.append(work)
+        // The loop may be about to block forever in `pumpEvents`; without this
+        // the deferred work would wait for unrelated input to wake it.
+        FrameScheduler.requestWake(in: 0)
+    }
+
+    /// Drained by `LavaApp.run` right after present. Swaps the queue out first,
+    /// so work that enqueues more work lands on the *next* frame rather than
+    /// extending this stall.
+    public static func drain() {
+        guard !queue.isEmpty else { return }
+        let pending = queue
+        queue.removeAll()
+        for work in pending { work() }
+    }
+
+    public static var hasPending: Bool { !queue.isEmpty }
+}
