@@ -184,3 +184,98 @@ TraceLoom uses `.viewport(inset: 28)`, with a translucent rounded surface and
 12-point backdrop blur. The assistant therefore occupies nearly the whole
 window, remains independent of its bottom-right launcher, and still retains
 popup input priority, outside-click dismissal, and Escape dismissal.
+
+## 10. No ergonomic binding into an `@Observable` model — RESOLVED
+
+Gap 9's `TraceLoomSession` is the right shape for state two surfaces mutate —
+the menubar lives outside the view tree, so `@State` cannot reach it. But every
+control that wants a `Binding` now needs one written by hand:
+
+```swift
+private var rulesBinding: Binding<String> {
+    Binding(get: { session.rules }, set: { session.rules = $0 })
+}
+```
+
+TraceLoom carries five of these (`rules`, `log`, `showLog`, `showSettings`, and
+another `showLog` inline in the settings panel), plus two `let session = session`
+shadows so the escaping getter/setter closures capture the object rather than
+`self`. Each is mechanical, each names the property three times, and each is a
+place to typo one of the three into a different property.
+
+### The half that is not ergonomics
+
+A `Binding` built this way is *constructed* during `body` but not necessarily
+**read** there, and Observation only registers a dependency on a property some
+body actually read while `withObservationTracking` was recording.
+
+Most controls read: `Expand` evaluates `isExpanded.wrappedValue` in its own
+body, so a menu toggling `session.showLog` invalidates correctly.
+`overlay(isPresented:)` does not — it keeps a live closure and reads it at emit
+time, which is what makes presentation cost a redraw rather than a body pass.
+So a model write that *only* an overlay observes registered nothing and
+invalidated nothing: clicking Settings opened the panel in the model and
+painted no frame, and it appeared when an unrelated hover happened to repaint.
+
+That specific symptom is fixed — `LavaApp` marks a redraw after a click action
+and `MenuHost` after a menu activation — but the sharp edge is still there for
+any future control that only live-reads its binding.
+
+### Suggested framework shape
+
+A keypath initialiser, and ideally a `@Bindable`-alike so `$session.rules`
+works the way `$state` does:
+
+```swift
+Binding(session, \.rules)          // instead of get:/set: by hand
+$session.rules                     // if a @Bindable-alike lands
+```
+
+The keypath form can also close the correctness half: constructed inside
+`body`, it can read the value once as it is built, which registers the
+Observation dependency for whatever it is handed to. That would have made the
+Settings overlay invalidate on its own, at the source, rather than relying on
+every event path to request a redraw defensively.
+
+SwiftUI has exactly this split — `@State` for view-local, `@Bindable` for an
+`@Observable` model — and it exists because the model case is otherwise this
+much boilerplate.
+
+TraceLoom impact: cosmetic today, five hand-written bindings and two shadows.
+The reason to fix it is that the hand-written form is silently
+invalidation-fragile in a way the keypath form need not be.
+
+Fixed: `Binding(_ root:_ keyPath:)` plus a `@Bindable` property wrapper, so a
+model property projects a binding the way `@State` does.
+
+```swift
+@Bindable var session: TraceLoomSession
+…
+EditorView(text: $session.rules)
+Expand("Log input", isExpanded: $session.showLog) { … }
+Toggle("Show log editor", isOn: $session.showLog)
+```
+
+`Bindable` is `@dynamicMemberLookup` over `ReferenceWritableKeyPath`, and each
+projection goes through the keypath initialiser, so there is one place that
+knows how to read and write a model property rather than one per call site.
+It owns no storage and adopts none, so `StateTransfer` skips it — the model
+outlives the view struct by being a class, which is the whole reason it exists.
+
+The correctness half is closed at the source. The keypath initialiser reads the
+property once as it builds, and because it runs inside `body` that registers the
+Observation dependency for whatever the binding is handed to — including
+`overlay(isPresented:)`, which otherwise only reads its binding at emit time and
+so registered nothing.
+
+Verified by disabling the defensive redraw in `LavaApp`'s click path and
+clicking Settings with a real mouse without moving afterwards: the panel still
+appeared immediately, which it could only do if the model write invalidated on
+its own. The defensive redraw stays anyway — it is still the right floor for a
+handler that mutates something no binding covers.
+
+TraceLoom went from five hand-written `Binding(get:set:)` pairs and two
+`let session = session` shadows to none of either. Checked live: `Ctrl+,`
+opens Settings, `Ctrl+T` switches theme, editing a rule reparses (header to
+"1 rules"), and clicking View → Show Log Editor through the real DBusMenu
+`Event` call toggles the disclosure.

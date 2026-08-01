@@ -153,8 +153,9 @@ private final class TraceDataCache: @unchecked Sendable {
 }
 
 public struct TraceLoom: View {
-    /// Shared with `LavaApp.run(menu:)` — see `TraceLoomSession`.
-    var session: TraceLoomSession
+    /// Shared with `LavaApp.run(menu:)` — see `TraceLoomSession`. `@Bindable`
+    /// so `$session.rules` projects a binding the way `$state` does.
+    @Bindable var session: TraceLoomSession
 
     /// Pointer position inside the timeline canvas while a gesture is live —
     /// nil once released. Local coordinates only; `timeline(_:)` maps back
@@ -177,24 +178,6 @@ public struct TraceLoom: View {
 
     init(session: TraceLoomSession) {
         self.session = session
-    }
-
-    /// Bindings into the shared session so `EditorView` / `Expand` / menus all
-    /// touch the same storage (and Observation wakes the body).
-    private var rulesBinding: Binding<String> {
-        Binding(get: { session.rules }, set: { session.rules = $0 })
-    }
-
-    private var logBinding: Binding<String> {
-        Binding(get: { session.log }, set: { session.log = $0 })
-    }
-
-    private var showLogBinding: Binding<Bool> {
-        Binding(get: { session.showLog }, set: { session.showLog = $0 })
-    }
-
-    private var showSettingsBinding: Binding<Bool> {
-        Binding(get: { session.showSettings }, set: { session.showSettings = $0 })
     }
 
     private var parseOutput: ParseOutput {
@@ -285,7 +268,7 @@ public struct TraceLoom: View {
             VStack(padding: 6) {
                 sectionTitle("PARSING RULES", detail: "type | name | regex | time | value | group")
                 EditorView(
-                    text: rulesBinding,
+                    text: $session.rules,
                     rules: ruleHighlighting,
                     style: ruleStyle,
                     visibleLines: 20,
@@ -330,10 +313,10 @@ public struct TraceLoom: View {
                 legend(traces)
                 diagnostics(parsed)
             }
-            Expand("Log input · \(logLineCount) lines", isExpanded: showLogBinding) {
+            Expand("Log input · \(logLineCount) lines", isExpanded: $session.showLog) {
                 VStack {
                     EditorView(
-                        text: logBinding,
+                        text: $session.log,
                         visibleLines: 8,
                         decorations: decorations(
                             prefix: "Log ", severity: .warning, in: session.log
@@ -348,7 +331,7 @@ public struct TraceLoom: View {
         }
         .onDrop { urls in session.loadLog(from: urls) }
         .overlay(
-            isPresented: showSettingsBinding,
+            isPresented: $session.showSettings,
             placement: .viewport(inset: 48),
             style: OverlayStyle(
                 background: Environment.current.theme.panel.opacity(0.94),
@@ -428,13 +411,12 @@ public struct TraceLoom: View {
     }
 
     private var settingsPanel: some View {
-        let session = session
-        return VStack(padding: 4) {
+        VStack(padding: 4) {
             Text("Settings", color: .accent)
             Divider()
             Toggle(
                 "Show log editor",
-                isOn: Binding(get: { session.showLog }, set: { session.showLog = $0 })
+                isOn: $session.showLog
             )
             .agentId("settings-show-log")
             Toggle(
@@ -625,7 +607,6 @@ public struct TraceLoom: View {
 
     private func timeline(_ traces: [DisplaySeries]) -> some View {
         let theme = Environment.current.theme
-        let session = session
         let fullMin = traces.compactMap { $0.series.points.first?.time }.min() ?? 0
         let rawFullMax = traces.compactMap { $0.series.points.last?.time }.max() ?? 1
         let fullMax = rawFullMax > fullMin ? rawFullMax : fullMin + 1
