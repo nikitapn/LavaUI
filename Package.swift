@@ -10,10 +10,12 @@ let package = Package(
     products: [
         .executable(name: "HelloWorld", targets: ["HelloWorld"]),
         .executable(name: "TraceLoom", targets: ["TraceLoomApp"]),
+        .executable(name: "Spotify", targets: ["SpotifyApp"]),
         .library(name: "LavaUI", targets: ["LavaUI"]),
         .library(name: "LavaText", targets: ["LavaText"]),
         .library(name: "LavaMenu", targets: ["LavaMenu"]),
         .library(name: "TraceLoomCore", targets: ["TraceLoomCore"]),
+        .library(name: "SpotifyCore", targets: ["SpotifyCore"]),
         .library(name: "FBDModel", targets: ["FBDModel"]),
     ],
     dependencies: [
@@ -29,6 +31,9 @@ let package = Package(
         // headless-test rule as LavaText (see docs/native-menus.md).
         .target(name: "LavaMenu"),
         .target(name: "TraceLoomCore"),
+        // Spotify Web API + cover download. No LavaUI — same headless rule as
+        // TraceLoomCore so catalog/auth can be tested without a window.
+        .target(name: "SpotifyCore"),
         // Throwaway modifier spike; delete once the design is chosen. We keep for now. 01/08/2026
         .executableTarget(
             name: "ModifierSpike",
@@ -83,6 +88,17 @@ let package = Package(
             dependencies: [
                 "LavaUI",
                 "TraceLoomCore",
+            ],
+            swiftSettings: [
+                .interoperabilityMode(.Cxx),
+                .unsafeFlags(["-Xcc", "-std=c++23"]),
+            ]
+        ),
+        .executableTarget(
+            name: "SpotifyApp",
+            dependencies: [
+                "LavaUI",
+                "SpotifyCore",
             ],
             swiftSettings: [
                 .interoperabilityMode(.Cxx),

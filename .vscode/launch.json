@@ -79,6 +79,26 @@
       "target": "TraceLoom",
       "configuration": "release",
       "preLaunchTask": "swift: Build Release TraceLoom"
+    },
+    {
+      "type": "swift",
+      "request": "launch",
+      "args": [],
+      "cwd": "${workspaceFolder:HelloWorld}",
+      "name": "Debug Spotify",
+      "target": "Spotify",
+      "configuration": "debug",
+      "preLaunchTask": "swift: Build Debug Spotify"
+    },
+    {
+      "type": "swift",
+      "request": "launch",
+      "args": [],
+      "cwd": "${workspaceFolder:HelloWorld}",
+      "name": "Release Spotify",
+      "target": "Spotify",
+      "configuration": "release",
+      "preLaunchTask": "swift: Build Release Spotify"
     }
   ]
 }

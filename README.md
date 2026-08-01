@@ -28,6 +28,8 @@ struct Counter: View {
 | `LavaMenu` | Application menu IR + declarative DSL (`MenuBar` / `MenuItem`); no drawing | nothing |
 | `LavaUI` | Views, Yoga layout, draw list, fonts, input, theming | `LavaText`, `LavaMenu`, `CxxCanvas`, `CYoga` |
 | `HelloWorld` | Demo app (`DemoExample`) and an FBD diagram editor | `LavaUI`, `FBDModel` |
+| `Spotify` / `SpotifyApp` | LavaSpotify UI + Connect control of spotifyd | `LavaUI`, `SpotifyCore` |
+| `SpotifyCore` | Spotify Web API, OAuth, cover download (no Vulkan) | nothing |
 | `canvas/` | C++ engine: Vulkan, glyph atlas, windowing | — |
 
 `LavaText` and `LavaMenu` having **no dependencies at all** is deliberate:
@@ -41,8 +43,13 @@ is enforced by the build graph rather than by discipline.
 cd canvas && ninja -C .build.Debug     # C++ engine
 cd .. && swift build                   # Swift
 swift run HelloWorld                   # demo
+swift run Spotify                      # LavaSpotify (see docs/lavaspotify.md)
 swift test                             # 90 tests, no GPU needed
 ```
+
+LavaSpotify + spotifyd (PulseAudio, two logins, Connect playback):
+**[docs/lavaspotify.md](docs/lavaspotify.md)**.
+
 
 Linux only today. `CxxCanvas`/`CYoga` are gated on it, and the engine is
 GLFW + Vulkan.
