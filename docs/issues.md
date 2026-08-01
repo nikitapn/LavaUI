@@ -319,3 +319,67 @@ that a rule is wrong for every line rather than a few.
 Coverage: 7 tests in `Tests/TraceLoomCoreTests/LineIndexTests.swift`, checked
 against the original `split`-based implementation as an oracle across empty
 text, trailing newlines, blank lines, and multibyte characters.
+
+## 4. A single very long line is rendered in full, every frame
+
+**Status:** Open
+**Area:** `EditorView` / text shaping / draw-list emission
+
+### Observed
+
+One enormously long line — minified JS, a one-line JSON payload, a log line
+with an embedded blob — is shaped and emitted in its entirety, however little
+of it is on screen. Measured in TraceLoom, expanding the log editor on a file
+whose longest line is the given length:
+
+| longest line | RSS delta | one-off CPU | cost of *each* redraw frame |
+| --- | --- | --- | --- |
+| 500,000 chars | +390 MB | ~0.7s | — |
+| 2,000,000 chars | +1,160 MB | ~3.1s | `emit=295ms present=739ms total=1034ms` |
+
+Roughly 600 bytes and 1.5µs per character of the longest line, linear.
+
+The steady-state number is the serious one. At 2M characters every redraw
+costs about a second, so a blinking caret alone makes the window unusable, and
+a 5 MB minified file would be ~3 GB and ~2.5s per frame. It does not hang or
+crash at these sizes — it degrades until it may as well have.
+
+Note this is *not* the CRLF fault from issue 3. That made a whole buffer
+report itself as one line; this is a line that genuinely is that long, and it
+survives the fix.
+
+### Expected
+
+Cost should track what is visible, not what exists. VS Code's answer is to
+stop rendering past a column budget and offer "[show more]", which is a
+product decision as much as a technical one — the alternative is horizontal
+culling, which keeps the line fully scrollable and needs no affordance.
+
+### Likely location
+
+Three places each walk the whole line:
+
+- `LeafNode.widestRowWidth` shapes the longest row to size the horizontal
+  scroll extent. Candidate selection (issue 3) means only a dozen rows are
+  shaped, but if one of them *is* the two-million-character line, that shaping
+  still happens and its glyph array stays in `UIFont.shapeCache`.
+- `DrawList.text` emits a `GlyphInstance` for every glyph of a visible row
+  with no horizontal viewport test, so glyphs scrolled far off either side are
+  still built and uploaded. This is what makes it a per-frame cost rather than
+  a one-off, and it is the highest-value thing to fix.
+- `UIFont.shape` builds and caches a `[ShapedGlyph]` for the whole line;
+  `shapeCacheLimit` bounds the *number* of entries, not their size.
+
+### Acceptance criteria
+
+- Emission is bounded by the horizontal viewport: a redraw with a
+  two-million-character line on screen costs about what a screen-width line
+  costs.
+- Shaping is bounded too, or the shaped run for an over-long line is not
+  retained — a viewport-sized slice is enough to draw and to hit-test.
+- Caret placement, selection, and click-to-index stay correct for offsets
+  beyond whatever bound is chosen, or the bound is a visible truncation the
+  user can act on rather than a silent one.
+- A decision is recorded on truncate-with-affordance versus cull-and-scroll;
+  they imply different editing semantics for the hidden tail.
+- Regression coverage at a line length well past the bound.
