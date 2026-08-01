@@ -17,21 +17,143 @@ private struct DisplaySeries: Identifiable {
     let color: Color
 }
 
-private final class TraceDataCache {
-    private var rules = ""
-    private var log = ""
-    private var result: TraceParseResult?
-    private var pyramids: [TracePyramid] = []
+private struct ParseInput: Equatable, Sendable {
+    var log: String
+    var rules: String
+}
 
-    func resolve(log newLog: String, rules newRules: String) -> (TraceParseResult, [TracePyramid]) {
-        if result == nil || newLog != log || newRules != rules {
-            log = newLog
-            rules = newRules
-            let parsed = TraceParser.parse(log: newLog, rulesSource: newRules)
-            result = parsed
-            pyramids = parsed.series.map { TracePyramid(points: $0.points) }
+private struct ParseOutput: Sendable {
+    var result: TraceParseResult
+    var pyramids: [TracePyramid]
+    /// Counted here rather than in the view. `log.split(...).count` on the
+    /// string itself is ~2s at 57 MB, and the disclosure title that wanted it
+    /// ran on every body — which would have kept the main thread blocked for
+    /// exactly as long as parsing used to, defeating the point of moving the
+    /// parse off it.
+    var logLineCount: Int
+
+    static let empty = ParseOutput(
+        result: TraceParseResult(series: [], diagnostics: [], matchedLineCount: 0),
+        pyramids: [],
+        logLineCount: 0
+    )
+}
+
+/// Whether a worker's parse is still wanted. One flag per dispatched parse;
+/// superseding one means cancelling its flag and making a new one.
+private final class CancelFlag: @unchecked Sendable {
+    private let lock = NSLock()
+    private var cancelled = false
+
+    func cancel() {
+        lock.lock()
+        cancelled = true
+        lock.unlock()
+    }
+
+    func isLive() -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return !cancelled
+    }
+}
+
+/// Parse results for the current log and rules, computed off the main thread
+/// when that is worth doing.
+///
+/// Stale-while-revalidating: `resolve` always returns something renderable
+/// immediately — the previous parse while a new one runs — because it is
+/// called from `body`, and a body that blocks is a frame that never ships.
+/// The old version parsed inline there, which is why editing one character of
+/// a rule froze the window for as long as a whole reparse took.
+///
+/// Every field is main-thread-only. The single cross-thread hop is the
+/// `MainQueue.async` closure a worker posts on completion, and that runs on
+/// the main thread like everything else here — hence `@unchecked Sendable`,
+/// the same bargain `AgentServer` and `Editor` make.
+private final class TraceDataCache: @unchecked Sendable {
+    /// Under this, parsing inline beats a thread hop: it costs well under a
+    /// frame, and going async would blank the timeline for one frame on every
+    /// edit — including for the built-in sample log, which would flash on the
+    /// very first frame.
+    private static let syncByteLimit = 256 * 1024
+
+    private var current: (input: ParseInput, output: ParseOutput)?
+    private var inFlight: ParseInput?
+    private var activeCancel: CancelFlag?
+    /// Bumped per request. A worker's result is dropped unless its stamp is
+    /// still the newest, so a slow parse finishing after a faster later one
+    /// cannot overwrite it.
+    private var generation: UInt64 = 0
+
+    /// True while a worker is running — the view shows this rather than
+    /// pretending the displayed data is current.
+    var isParsing: Bool { inFlight != nil }
+
+    func resolve(log: String, rules: String) -> ParseOutput {
+        let input = ParseInput(log: log, rules: rules)
+        if let current, current.input == input { return current.output }
+
+        if input.log.utf8.count <= Self.syncByteLimit {
+            supersedeInFlight()
+            let output = Self.compute(input, shouldContinue: nil)!
+            current = (input, output)
+            return output
         }
-        return (result!, pyramids)
+
+        if inFlight != input { start(input) }
+        // The previous document keeps rendering. Only a first-ever parse of a
+        // large log has nothing to show, and the view marks that as pending.
+        return current?.output ?? .empty
+    }
+
+    private func start(_ input: ParseInput) {
+        supersedeInFlight()
+        let flag = CancelFlag()
+        activeCancel = flag
+        inFlight = input
+        let stamp = generation
+        Thread.detachNewThread { [self] in
+            guard let output = Self.compute(input, shouldContinue: flag.isLive) else { return }
+            MainQueue.async { self.commit(stamp: stamp, input: input, output: output) }
+        }
+    }
+
+    /// Invalidates whatever is running: its flag stops it at the next check,
+    /// and the generation bump makes its result unwelcome even if it finishes
+    /// between the two.
+    private func supersedeInFlight() {
+        activeCancel?.cancel()
+        activeCancel = nil
+        inFlight = nil
+        generation &+= 1
+    }
+
+    private func commit(stamp: UInt64, input: ParseInput, output: ParseOutput) {
+        guard stamp == generation else { return }
+        current = (input, output)
+        inFlight = nil
+        activeCancel = nil
+        // A plain class, so nothing observed this change — the frame that
+        // shows it has to be asked for explicitly.
+        ViewInvalidation.markNeedsBody()
+    }
+
+    private static func compute(
+        _ input: ParseInput, shouldContinue: (() -> Bool)?
+    ) -> ParseOutput? {
+        guard let result = TraceParser.parse(
+            log: input.log, rulesSource: input.rules, shouldContinue: shouldContinue
+        ) else { return nil }
+        // Pyramid building is not itself cancellable, but it is ~2% of a
+        // parse; checking once on the way out is enough to drop a result that
+        // went stale during it.
+        guard shouldContinue?() ?? true else { return nil }
+        return ParseOutput(
+            result: result,
+            pyramids: result.series.map { TracePyramid(points: $0.points) },
+            logLineCount: input.log.utf8.reduce(1) { $1 == 0x0A ? $0 + 1 : $0 }
+        )
     }
 }
 
@@ -64,9 +186,11 @@ public struct TraceLoom: View {
 
     public init() {}
 
-    private var result: TraceParseResult {
-        dataCache.resolve(log: log, rules: rules).0
+    private var parseOutput: ParseOutput {
+        dataCache.resolve(log: log, rules: rules)
     }
+
+    private var result: TraceParseResult { parseOutput.result }
 
     /// `TraceParser` reports diagnostics as prefixed strings ("Rule 3: …",
     /// "Log 5, Inbound: …") rather than a structured line/range — parsing the
@@ -140,11 +264,11 @@ public struct TraceLoom: View {
 
     private var displayed: [DisplaySeries] {
         let colors = TraceLoom.palette
-        let resolved = dataCache.resolve(log: log, rules: rules)
-        return resolved.0.series.enumerated().map {
+        let resolved = parseOutput
+        return resolved.result.series.enumerated().map {
             DisplaySeries(
                 id: $0.offset, series: $0.element,
-                pyramid: resolved.1[$0.offset],
+                pyramid: resolved.pyramids[$0.offset],
                 color: colors[$0.offset % colors.count]
             )
         }
@@ -230,9 +354,7 @@ public struct TraceLoom: View {
         .onDrop { urls in loadLog(from: urls) }
     }
 
-    private var logLineCount: Int {
-        log.split(separator: "\n", omittingEmptySubsequences: false).count
-    }
+    private var logLineCount: Int { parseOutput.logLineCount }
 
     private func resetZoom() {
         zoomStart = nil
@@ -277,6 +399,13 @@ public struct TraceLoom: View {
             )
             .padding(6)
             .agentId("load-status")
+        } else if dataCache.isParsing {
+            // Says so rather than letting the previous timeline pass for
+            // current — the whole point of rendering stale data is that the
+            // user knows it is stale.
+            Text("Parsing on a background thread…", color: .accent)
+                .padding(6)
+                .agentId("parse-status")
         } else if let notice {
             // ASCII prefixes on purpose: the symbol font has no warning sign,
             // and a tofu box is worse than no marker at all.

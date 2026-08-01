@@ -103,6 +103,10 @@ public enum LavaApp {
         let host = LayoutHost()
         let drawList = DrawList(editor: editor)
 
+        // Lets a worker thread unblock `pumpEvents` the moment it has a result,
+        // the same way the agent socket does.
+        MainQueue.install(wake: { [editor] in editor.wakeEventLoop() })
+
         var dirty = true
         // The wheel event carries no position, so remember the last one.
         var lastPointer: (x: Float, y: Float) = (0, 0)
@@ -309,6 +313,7 @@ public enum LavaApp {
 
         /// Drain input queue, run invalidation pipeline, present.
         func settleFrame() {
+            MainQueue.drain()
             while let ev = editor.pollInputEvent() {
                 processInputEvent(ev)
             }
@@ -418,6 +423,11 @@ public enum LavaApp {
             // After wake (input, animation, or agent socket), service the agent
             // before processing the rest of the frame so injects land this tick.
             agentServer?.poll()
+
+            // Before input and before invalidation is consumed: a worker
+            // result delivered while the loop was parked belongs to the frame
+            // about to be built, not the one after it.
+            MainQueue.drain()
 
             while let ev = editor.pollInputEvent() {
                 processInputEvent(ev)

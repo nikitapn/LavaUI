@@ -372,3 +372,58 @@ public enum FrameTasks {
 
     public static var hasPending: Bool { !queue.isEmpty }
 }
+
+/// Work handed *to* the main thread from another one.
+///
+/// The reason this has to exist, rather than a worker simply writing `@State`
+/// when it finishes: `StateStorage` is `@Observable`, and
+/// `withObservationTracking`'s `onChange` fires synchronously on whichever
+/// thread performed the write. A background write would therefore run
+/// `ViewInvalidation.markBodyDirty` on that thread — and `ViewInvalidation`,
+/// `FrameScheduler` and `FrameTasks` are all single-threaded statics the run
+/// loop reads every iteration. The race is real, not theoretical.
+///
+/// So the division is: a worker computes pure `Sendable` values and posts the
+/// *application* of them here. `async` is the only member safe to call from
+/// another thread, and everything it enqueues runs on the main thread.
+///
+/// `AgentServer` already had the shape of this — watcher thread, lock, wake
+/// the loop, do the work on the main thread — but kept it private and
+/// specific to its socket.
+public enum MainQueue {
+    private static let lock = NSLock()
+    nonisolated(unsafe) private static var pending: [@Sendable () -> Void] = []
+    nonisolated(unsafe) private static var wake: (@Sendable () -> Void)?
+
+    /// Installed once by `LavaApp.run`. Without it posts still arrive, but
+    /// cannot unblock a loop parked in `pumpEvents` — they would wait for
+    /// unrelated input, which for an idle window can be arbitrarily long.
+    public static func install(wake: @escaping @Sendable () -> Void) {
+        lock.lock()
+        Self.wake = wake
+        lock.unlock()
+    }
+
+    /// Safe from any thread.
+    public static func async(_ work: @escaping @Sendable () -> Void) {
+        lock.lock()
+        pending.append(work)
+        let wake = Self.wake
+        lock.unlock()
+        // Outside the lock: the wake reaches into GLFW, and holding a lock
+        // across it would let a worker block on whatever the main thread is
+        // doing with the same lock.
+        wake?()
+    }
+
+    /// Drained by `LavaApp.run` before invalidation is consumed, so a result
+    /// a worker delivered while the loop was parked lands in *this* frame
+    /// rather than the next one.
+    public static func drain() {
+        lock.lock()
+        let work = pending
+        pending.removeAll()
+        lock.unlock()
+        for item in work { item() }
+    }
+}

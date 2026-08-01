@@ -201,8 +201,55 @@ Coverage: 7 tests in `Tests/TraceLoomCoreTests/LogFileTests.swift`, including
 the one-bad-byte case, a >12 MB end-to-end load and parse, the size limit, and
 UTF-8 validator edge cases.
 
+### Follow-up: parsing moved off the main thread
+
+The above left parsing synchronous — 3s at 12 MB, 16s at 57 MB. Worse, the
+blocking call was not in `loadLog` at all: `body` called
+`dataCache.resolve(log:rules:)` directly, so *every keystroke* in the rules
+editor reparsed the whole log. The header advertised "live parse"; on a large
+log it was a 16s freeze per character.
+
+**Why a worker cannot just write `@State`.** `StateStorage` is `@Observable`,
+and `withObservationTracking`'s `onChange` fires synchronously on whichever
+thread performed the write. A background write would run
+`ViewInvalidation.markBodyDirty` on that thread, racing the run loop's
+`consume()` against `pending` and `dirtyBodyNodes` — all single-threaded
+statics. So workers compute pure `Sendable` values and nothing else;
+only the main thread writes state.
+
+`MainQueue` (LavaUI) is the handoff: `async` is safe from any thread, takes a
+lock, and calls `editor.wakeEventLoop()` (`glfwPostEmptyEvent`, documented
+thread-safe) so a result can unblock a loop parked in `pumpEvents`. It drains
+at the *top* of the loop, before invalidation is consumed — the opposite slot
+from `FrameTasks`, which drains after present. `AgentServer` already had this
+shape privately; this generalises it.
+
+`TraceDataCache` became stale-while-revalidating: it keeps the last completed
+parse, dispatches at most one worker, stamps each request with a generation so
+an out-of-order finish cannot overwrite a newer one, and returns the previous
+output immediately so `body` never blocks. Below 256 KB it still parses inline
+— a thread hop there would blank the timeline for a frame on every edit,
+including for the built-in sample. `TraceParser.parse` gained a
+`shouldContinue` variant polled every 4096 lines, so a superseded parse is
+abandoned rather than run to completion.
+
+`logLineCount` moved into the parse output as well. It was
+`log.split(...).count` evaluated in `body` for the disclosure title — ~2s at
+57 MB, which would have kept the main thread blocked for as long as parsing
+used to and defeated the whole exercise.
+
+Measured with the 57 MB log loaded, typing into the rules editor: worst
+main-loop round-trip **20.7ms** across 277 samples, against ~16s per keystroke
+before. Threads return to baseline afterwards, and the final render is correct
+rather than stale.
+
 ### Not addressed
 
-Parsing still blocks the UI thread — 3s at 12 MB, 16s at 57 MB. Moving it off
-the main thread, or chunking it across frames, is a real change to how
-`TraceDataCache` and `@State` feed the view and is not attempted here.
+- The `split` in `TraceParser.parse` materialises every line before the loop
+  can poll `shouldContinue` once, so a superseded worker still pays ~2s at
+  57 MB before noticing. Skipping the regex pass is the other ~90%.
+- `TraceLoom.lineRange(in:line:)` splits the full log once *per diagnostic*
+  when decorating the log editor. Harmless at zero or a few diagnostics, and
+  quadratic on a log that produces many.
+- Reading the file is still synchronous on the main thread (~86ms at 57 MB),
+  covered by the `FrameTasks` status frame rather than moved off.
