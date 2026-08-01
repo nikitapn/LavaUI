@@ -22,6 +22,17 @@ public enum FlexDirection {
     }
 }
 
+extension StackAlignment {
+    var yoga: YGAlign {
+        switch self {
+        case .start: return YGAlignFlexStart
+        case .center: return YGAlignCenter
+        case .end: return YGAlignFlexEnd
+        case .stretch: return YGAlignStretch
+        }
+    }
+}
+
 public struct LayoutFrame: Sendable, Equatable {
     public var label: String
     public var x: Float
@@ -749,7 +760,6 @@ final class StackNode: YogaBoxNode {
         self.contentNode = content
         super.init(label: label)
         YGNodeStyleSetFlexDirection(yogaStorage, direction.yoga)
-        YGNodeStyleSetAlignItems(yogaStorage, YGAlignStretch)
         apply(style)
         relinkYogaChildren()
     }
@@ -767,6 +777,7 @@ final class StackNode: YogaBoxNode {
         width = style.width
         height = style.height
         padding = style.padding
+        YGNodeStyleSetAlignItems(yogaStorage, style.alignment.yoga)
         // Side columns get a solid panel fill; main HStack stays transparent.
         // Re-evaluated every apply (not just at construction) so a theme
         // swap — or a `.theme(_:)` override — reaches it on reconcile too.

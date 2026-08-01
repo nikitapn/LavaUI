@@ -151,7 +151,7 @@ public struct TraceLoom: View {
 
             Divider()
             VStack(flexGrow: 1, padding: 6) {
-                HStack {
+                HStack(alignment: .center) {
                     sectionTitle("UNIFIED TIMELINE", detail: timelineDetail(traces))
                     Spacer()
                     if zoomStart != nil {
@@ -170,12 +170,6 @@ public struct TraceLoom: View {
             }
             Expand("Log input · \(logLineCount) lines", isExpanded: $showLog) {
                 VStack {
-                    HStack(padding: 2) {
-                        Text("Paste, edit, drop a file here, or", color: .dim)
-                        Text("Load file…", color: .accent, onClick: { loadLogFile() })
-                            .agentId("load-log-file")
-                        Spacer()
-                    }
                     EditorView(
                         text: $log,
                         visibleLines: 8,
@@ -183,12 +177,12 @@ public struct TraceLoom: View {
                         onDecorationTap: { tappedDiagnostic = $0.message }
                     )
                     .agentId("log-editor")
-                    .onDrop { urls in loadLog(from: urls) }
                 }
             }
             .padding(8)
             .agentId("log-disclosure")
         }
+        .onDrop { urls in loadLog(from: urls) }
     }
 
     private var logLineCount: Int {
@@ -205,14 +199,19 @@ public struct TraceLoom: View {
 
     private func header(_ parsed: TraceParseResult) -> some View {
         HStack(padding: 10) {
-            VStack {
-                Text("TRACELOOM", color: .accent)
-                Text("Pattern-driven log timelines", color: .secondary)
+            HStack() {
+                Text("\(parsed.series.count) rules", color: .secondary)
+                Text("\(parsed.matchedLineCount) matched lines", color: .secondary)
+                Text("\(parsed.series.reduce(0) { $0 + $1.points.count }) points", color: .selected)
             }
+
             Spacer()
-            Text("\(parsed.series.count) rules", color: .secondary)
-            Text("\(parsed.matchedLineCount) matched lines", color: .secondary)
-            Text("\(parsed.series.reduce(0) { $0 + $1.points.count }) points", color: .selected)
+
+            HStack() {
+                Text("Paste, edit, drop a file here, or", color: .dim)
+                Text("Load file…", color: .accent, onClick: { loadLogFile() })
+                    .agentId("load-log-file")
+            }
         }
         .background(Environment.current.theme.panel)
     }

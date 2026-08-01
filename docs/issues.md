@@ -71,3 +71,46 @@ a topmost interactive child masks the enclosing `ScrollView`.
 - Nested scroll views use a defined policy, preferably nearest eligible
   ancestor first with bubbling when it cannot scroll farther.
 - Hover and click targeting remain unchanged.
+
+## 3. Loading a large log file fails silently
+
+**Status:** Open
+**Area:** TraceLoom file ingestion / state update / parsing
+
+### Observed
+
+Selecting a larger log file (observed above approximately 10 MB) produces no
+visible result. The existing log remains unchanged and nothing is written to
+stderr, so the user cannot distinguish a rejected file, read failure, long parse,
+or stalled UI update.
+
+The approximate size boundary is an observation, not yet a confirmed framework
+limit. Smaller files load through the same file dialog successfully.
+
+### Expected
+
+A selected readable text file should load regardless of this size. If loading or
+parsing cannot complete, TraceLoom should retain the previous document and show
+an actionable error instead of silently doing nothing. Large synchronous work
+should also provide visible progress or move off the UI thread if it can block a
+frame for a noticeable duration.
+
+### Likely location
+
+`TraceLoom.loadLog(from:)` currently reads with
+`try? String(contentsOf:encoding:)` and returns immediately on failure. This
+suppresses the underlying filesystem or UTF-8 decoding error and explains the
+lack of stderr, though it does not by itself establish why size correlates with
+the failure. If the read succeeds, the next suspects are the synchronous state
+update, parsing, pyramid construction, and editor reconciliation.
+
+### Acceptance criteria
+
+- Reproduce with a saved fixture around the observed threshold and identify
+  whether time is spent reading, parsing, reconciling, or rendering.
+- Loading a valid UTF-8 log substantially larger than 10 MB either completes or
+  reports a clear supported-size/resource error.
+- File and decoding errors include the path and underlying error in diagnostics.
+- The application remains responsive, or presents explicit progress, during a
+  large load.
+- Add regression coverage around the confirmed boundary and failure mode.

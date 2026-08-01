@@ -688,12 +688,19 @@ public final class DrawList {
         if leaf.kind == .text, !leaf.text.isEmpty {
             // Multi-line: emit one command per wrapped line (same breaks
             // as Yoga measure via TextLayoutCache / Font::wrapLines).
+            // `measureForYoga` reserves a built-in 4px horizontal / 2px
+            // vertical inset, and Yoga adds modifier padding around that
+            // measured content. Painting must apply the same offsets; using
+            // the outer box origin put glyphs at its top-left and left all
+            // padding on the bottom/right (most visible on hover fills).
             let lineH = (leaf.font ?? FontStore.default)?.lineHeight ?? 18
             let lines = leaf.cachedLines.isEmpty ? [leaf.text] : leaf.cachedLines
+            let textX = x + leaf.padding
+            let textY = y + leaf.padding + 2
             for (i, line) in lines.enumerated() {
-                let ly = y + Float(i) * lineH
+                let ly = textY + Float(i) * lineH
                 text(
-                    line, x: x, y: ly, w: w, h: lineH,
+                    line, x: textX, y: ly, w: w, h: lineH,
                     color: leaf.color, font: leaf.font
                 )
             }

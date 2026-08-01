@@ -1,23 +1,35 @@
+/// Cross-axis placement of children in an `HStack` or `VStack`.
+public enum StackAlignment: String, Equatable, Sendable {
+    case start
+    case center
+    case end
+    /// Expand children across the stack's cross axis when their size is auto.
+    case stretch
+}
+
 public struct StackStyle: Equatable, Sendable {
     public var flexGrow: Float
     public var width: Dimension
     public var height: Dimension
     public var padding: Float
+    public var alignment: StackAlignment
 
     public init(
         flexGrow: Float = 0,
         width: Dimension = .auto,
         height: Dimension = .auto,
-        padding: Float = 0
+        padding: Float = 0,
+        alignment: StackAlignment = .stretch
     ) {
         self.flexGrow = flexGrow
         self.width = width
         self.height = height
         self.padding = padding
+        self.alignment = alignment
     }
 
     var dumpDetail: String {
-        "flexGrow=\(flexGrow) w=\(width) h=\(height) pad=\(padding)"
+        "flexGrow=\(flexGrow) w=\(width) h=\(height) pad=\(padding) align=\(alignment.rawValue)"
     }
 }
 
@@ -30,10 +42,12 @@ public struct HStack<Content: View>: PrimitiveView {
         width: Dimension = .auto,
         height: Dimension = .auto,
         padding: Float = 0,
+        alignment: StackAlignment = .stretch,
         @ViewBuilder content: () -> Content
     ) {
         self.style = StackStyle(
-            flexGrow: flexGrow, width: width, height: height, padding: padding
+            flexGrow: flexGrow, width: width, height: height, padding: padding,
+            alignment: alignment
         )
         self.content = content()
     }
@@ -75,10 +89,12 @@ public struct VStack<Content: View>: PrimitiveView {
         width: Dimension = .auto,
         height: Dimension = .auto,
         padding: Float = 0,
+        alignment: StackAlignment = .stretch,
         @ViewBuilder content: () -> Content
     ) {
         self.style = StackStyle(
-            flexGrow: flexGrow, width: width, height: height, padding: padding
+            flexGrow: flexGrow, width: width, height: height, padding: padding,
+            alignment: alignment
         )
         self.content = content()
     }
