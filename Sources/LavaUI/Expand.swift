@@ -74,7 +74,11 @@ public struct ExpandStyle {
 
     public init(
         collapsedChevron: String = "›",
-        expandedChevron: String = "˅",
+        // U+02C7 caron, not U+02C5 down arrowhead: the latter is absent from
+        // OpenSans and text shaping has no per-glyph fallback to the symbol
+        // face, so every *open* disclosure in every LavaUI app was drawing a
+        // tofu box. Both of these are in OpenSans and read as a chevron pair.
+        expandedChevron: String = "ˇ",
         titleColor: Color? = nil,
         background: Color? = nil,
         border: Color? = nil,

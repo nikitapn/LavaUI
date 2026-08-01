@@ -51,6 +51,36 @@ public struct TraceSeries: Sendable {
     }
 }
 
+/// Outcome of applying one rule to one line, with enough detail to say *why*
+/// it did not work. See `TraceParser.explain(rule:line:)`.
+public struct RuleMatch: Sendable, Equatable {
+    public var matched: Bool
+    public var timeText: String?
+    public var time: Double?
+    public var valueText: String?
+    public var value: Double?
+    /// Nil when the rule produced a usable point from this line.
+    public var problem: String?
+
+    public init(
+        matched: Bool,
+        timeText: String? = nil,
+        time: Double? = nil,
+        valueText: String? = nil,
+        value: Double? = nil,
+        problem: String? = nil
+    ) {
+        self.matched = matched
+        self.timeText = timeText
+        self.time = time
+        self.valueText = valueText
+        self.value = value
+        self.problem = problem
+    }
+
+    public var isUsable: Bool { matched && problem == nil }
+}
+
 public struct TraceParseResult: Sendable {
     public var series: [TraceSeries]
     public var diagnostics: [String]
@@ -350,6 +380,60 @@ public enum TraceParser {
             }
             return result
         }
+    }
+
+    /// What one rule extracts from one line, including the raw capture text.
+    ///
+    /// `parse` only needs to know whether extraction succeeded. Anything
+    /// *diagnosing* a rule needs to see what it actually grabbed: "matched,
+    /// but the time group caught `NetworkMetrics`" is the sentence that tells
+    /// you the group index is off by one, and "invalid time capture" is not.
+    public static func explain(rule: TraceRule, line: String) -> RuleMatch {
+        guard let regex = try? NSRegularExpression(pattern: rule.pattern) else {
+            return RuleMatch(matched: false, problem: "the regular expression does not compile")
+        }
+        let ns = line as NSString
+        let whole = NSRange(location: 0, length: ns.length)
+        guard let match = regex.firstMatch(in: line, range: whole) else {
+            return RuleMatch(matched: false, problem: "the regular expression does not match this line")
+        }
+
+        let timeText = capture(rule.timeGroup, match: match, text: ns)
+        let time = timeText.flatMap(parseTime)
+        guard let timeText else {
+            return RuleMatch(
+                matched: true,
+                problem: "matched, but there is no capture group \(rule.timeGroup) to take the time from"
+            )
+        }
+        guard let time else {
+            return RuleMatch(
+                matched: true, timeText: timeText,
+                problem: "matched, but the time group captured \"\(timeText)\", "
+                    + "which is neither a number of milliseconds nor HH:MM:SS.mmm"
+            )
+        }
+
+        guard let valueGroup = rule.valueGroup else {
+            // Event rules carry no value; every occurrence counts as 1.
+            return RuleMatch(matched: true, timeText: timeText, time: time, value: 1)
+        }
+        let valueText = capture(valueGroup, match: match, text: ns)
+        guard let valueText else {
+            return RuleMatch(
+                matched: true, timeText: timeText, time: time,
+                problem: "matched, but there is no capture group \(valueGroup) to take the value from"
+            )
+        }
+        guard let value = Double(valueText) else {
+            return RuleMatch(
+                matched: true, timeText: timeText, time: time, valueText: valueText,
+                problem: "matched, but the value group captured \"\(valueText)\", which is not a number"
+            )
+        }
+        return RuleMatch(
+            matched: true, timeText: timeText, time: time, valueText: valueText, value: value
+        )
     }
 
     public static func parseTime(_ source: String) -> Double? {

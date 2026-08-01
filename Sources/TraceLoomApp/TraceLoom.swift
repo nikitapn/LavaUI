@@ -186,6 +186,10 @@ public struct TraceLoom: View {
     @State private var loadingPath: String?
     /// Outcome of the last load, kept on screen until the next one starts.
     @State private var notice: Notice?
+    /// Rule assistant: the log line the user wants parsed, and the run itself.
+    @State private var assistantExample = ""
+    @State private var showAssistant = false
+    @State private var assistant = AssistantSession()
 
     public init() {}
 
@@ -337,6 +341,7 @@ public struct TraceLoom: View {
                     Text("⚑ \(tappedDiagnostic)", color: .selected)
                         .agentId("tapped-diagnostic")
                 }
+                assistantPane()
             }
             .background(Environment.current.theme.panel)
             .cornerRadius(7)
@@ -440,6 +445,117 @@ public struct TraceLoom: View {
             .agentId("load-notice")
         }
     }
+
+    // MARK: - Rule assistant
+
+    private func assistantPane() -> some View {
+        let state = assistant.snapshot
+        return Expand(
+            "Rule assistant · \(assistant.model)",
+            isExpanded: $showAssistant
+        ) {
+            VStack(padding: 4) {
+                Text(
+                    "Paste a log line you want charted. The assistant writes a rule, "
+                    + "tests it against your log, and fixes it until it works.",
+                    color: .secondary
+                )
+                TextField(
+                    text: $assistantExample,
+                    placeholder: "e.g. 19:16:15.280 NetworkMetrics inboundKbps:8400"
+                )
+                .agentId("assistant-example")
+
+                HStack(padding: 4) {
+                    Text(
+                        state.isRunning ? "Working…" : "Suggest rule",
+                        color: state.isRunning ? .dim : .accent,
+                        onClick: { startAssistant() }
+                    )
+                    .padding(4)
+                    .hoverBackground(Environment.current.theme.hover)
+                    .cornerRadius(4)
+                    .agentId("assistant-run")
+
+                    if !state.status.isEmpty {
+                        Text(
+                            state.isRunning
+                                ? "\(state.status)  \(Int(state.elapsed))s"
+                                : state.status,
+                            color: .muted
+                        )
+                        .agentId("assistant-status")
+                    }
+                }
+
+                // Reasoning models are silent in `content` for a long time, so
+                // the tail of the think is the only sign anything is happening.
+                if state.isRunning, !state.thinkingTail.isEmpty {
+                    Text("… \(state.thinkingTail)", color: .dim)
+                        .agentId("assistant-thinking")
+                }
+
+                ForEach(
+                    Array(state.activity.suffix(6).enumerated())
+                        .map { Diagnostic(id: $0.offset, text: $0.element) }
+                ) { entry in
+                    Text(entry.text, color: .secondary)
+                }
+
+                if let suggestion = state.suggestion {
+                    Text(suggestion, color: .accent)
+                        .agentId("assistant-suggestion")
+                    HStack(padding: 4) {
+                        Text("Add to rules", color: .accent, onClick: { acceptSuggestion() })
+                            .padding(4)
+                            .hoverBackground(Environment.current.theme.hover)
+                            .cornerRadius(4)
+                            .agentId("assistant-accept")
+                        Text("Discard", color: .muted, onClick: { assistant.clearSuggestion() })
+                            .padding(4)
+                            .hoverBackground(Environment.current.theme.hover)
+                            .cornerRadius(4)
+                            .agentId("assistant-discard")
+                    }
+                }
+                if let problem = state.problem {
+                    Text(problem, color: .selected)
+                        .agentId("assistant-problem")
+                }
+            }
+        }
+        .agentId("assistant-pane")
+    }
+
+    private func startAssistant() {
+        guard !assistant.isRunning else { return }
+        assistant.start(
+            example: assistantExample.isEmpty ? firstLogLine() : assistantExample,
+            sampleLines: sampleLogLines(),
+            existingRules: rules
+        )
+    }
+
+    private func acceptSuggestion() {
+        guard let suggestion = assistant.snapshot.suggestion else { return }
+        rules = rules.hasSuffix("\n") || rules.isEmpty
+            ? rules + suggestion + "\n"
+            : rules + "\n" + suggestion + "\n"
+        assistant.clearSuggestion()
+    }
+
+    /// Cheap on purpose: `log.split(...)` over a 57 MB buffer is ~2s, and this
+    /// runs on the main thread from a click. A bounded prefix is all the
+    /// assistant needs — it caps the lines it checks against anyway.
+    private func sampleLogLines(limit: Int = 30) -> [String] {
+        log.prefix(20_000)
+            .split(separator: "\n", omittingEmptySubsequences: true)
+            .prefix(limit)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+    }
+
+    private func firstLogLine() -> String { sampleLogLines(limit: 1).first ?? "" }
 
     private func sectionTitle(_ title: String, detail: String) -> some View {
         VStack {
