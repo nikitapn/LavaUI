@@ -104,7 +104,8 @@ expensive to build and keyed by content* (the glyph atlas, Vulkan objects);
 flexbox via Yoga, with `if`/`else` and optionals handled by the view builder.
 `Divider()` takes its orientation from the container it lands in.
 
-**Content** `Text` (hover, click, wrapping) · `Image` · `DiagramHost`
+**Content** `Text` (hover, click, wrapping) · `MarkdownView` (headings, emphasis,
+strong text, code, links, quotes, lists, and fenced code) · `Image` · `DiagramHost`
 · `Button` (animated press and hover) · `Toggle` (animated knob, bound value)
 · `Slider` (drag, optional step and readout)
 · `Canvas` (app-owned paint: Yoga sizes a box, you emit into `DrawList`)

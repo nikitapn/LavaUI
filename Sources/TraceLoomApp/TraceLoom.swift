@@ -532,7 +532,7 @@ public struct TraceLoom: View {
             // Reasoning models are silent in `content` for a long time, so
             // the tail of the think is the only sign anything is happening.
             if state.isRunning, !state.thinkingTail.isEmpty {
-                Text("… \(state.thinkingTail)", color: .dim)
+                MarkdownView("> \(state.thinkingTail)")
                     .agentId("assistant-thinking")
             }
 
@@ -560,7 +560,7 @@ public struct TraceLoom: View {
                 }
             }
             if let problem = state.problem {
-                Text(problem, color: .selected)
+                MarkdownView(problem, style: MarkdownStyle(text: .selected))
                     .agentId("assistant-problem")
             }
         }

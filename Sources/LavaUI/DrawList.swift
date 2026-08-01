@@ -687,7 +687,7 @@ public final class DrawList {
                 rect(x: x, y: y, w: w, h: h, color: fill)
             }
         }
-        if leaf.kind == .text, !leaf.text.isEmpty {
+        if (leaf.kind == .text || leaf.kind == .markdown), !leaf.text.isEmpty {
             // Multi-line: emit one command per wrapped line (same breaks
             // as Yoga measure via TextLayoutCache / Font::wrapLines).
             // `measureForYoga` reserves a built-in 4px horizontal / 2px
@@ -699,12 +699,24 @@ public final class DrawList {
             let lines = leaf.cachedLines.isEmpty ? [leaf.text] : leaf.cachedLines
             let textX = x + leaf.padding
             let textY = y + leaf.padding + 2
+            var searchStart = leaf.text.startIndex
             for (i, line) in lines.enumerated() {
                 let ly = textY + Float(i) * lineH
-                text(
-                    line, x: textX, y: ly, w: w, h: lineH,
-                    color: leaf.color, font: leaf.font
-                )
+                if leaf.kind == .markdown, let style = leaf.markdownStyle,
+                   let range = leaf.text.range(of: line, range: searchStart..<leaf.text.endIndex)
+                {
+                    let offset = leaf.text.distance(from: leaf.text.startIndex, to: range.lowerBound)
+                    emitMarkdownLine(
+                        line, documentOffset: offset, spans: leaf.markdownSpans,
+                        style: style, font: leaf.font, x: textX, y: ly, h: lineH
+                    )
+                    searchStart = range.upperBound
+                } else {
+                    text(
+                        line, x: textX, y: ly, w: w, h: lineH,
+                        color: leaf.color, font: leaf.font
+                    )
+                }
             }
         }
         if leaf.kind == .button {
@@ -1306,6 +1318,52 @@ extension DrawList {
             text(
                 slice(cursor..<line.count), x: x + xFor(cursor) - 4, y: y,
                 w: 10_000, h: h, color: style.text, font: font
+            )
+        }
+    }
+
+    /// Emits a wrapped Markdown row using document-relative character spans.
+    private func emitMarkdownLine(
+        _ line: String, documentOffset: Int, spans: [MarkdownSpan],
+        style: MarkdownStyle, font explicitFont: UIFont?,
+        x: Float, y: Float, h: Float
+    ) {
+        guard let font = explicitFont ?? FontStore.default, !line.isEmpty else { return }
+        let run = font.shapedRun(line)
+        let lineRange = documentOffset..<(documentOffset + line.count)
+
+        func slice(_ range: Range<Int>) -> String {
+            let lo = line.index(line.startIndex, offsetBy: max(0, min(range.lowerBound, line.count)))
+            let hi = line.index(line.startIndex, offsetBy: max(0, min(range.upperBound, line.count)))
+            return String(line[lo..<hi])
+        }
+        func xFor(_ column: Int) -> Float {
+            let index = line.index(line.startIndex, offsetBy: max(0, min(column, line.count)))
+            return run.caretX(for: index)
+        }
+
+        var cursor = 0
+        for span in spans {
+            let lo = max(span.range.lowerBound, lineRange.lowerBound)
+            let hi = min(span.range.upperBound, lineRange.upperBound)
+            guard lo < hi else { continue }
+            let local = (lo - documentOffset)..<(hi - documentOffset)
+            if local.lowerBound > cursor {
+                text(
+                    slice(cursor..<local.lowerBound), x: x + xFor(cursor) - 4,
+                    y: y, w: 10_000, h: h, color: style.text, font: font
+                )
+            }
+            text(
+                slice(local), x: x + xFor(local.lowerBound) - 4,
+                y: y, w: 10_000, h: h, color: style.color(for: span.style), font: font
+            )
+            cursor = max(cursor, local.upperBound)
+        }
+        if cursor < line.count {
+            text(
+                slice(cursor..<line.count), x: x + xFor(cursor) - 4,
+                y: y, w: 10_000, h: h, color: style.text, font: font
             )
         }
     }

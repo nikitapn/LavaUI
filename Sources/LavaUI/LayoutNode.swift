@@ -220,6 +220,7 @@ class YogaBoxNode: AnyViewNode {
 
 enum LeafKind: Equatable {
     case text
+    case markdown
     case spacer
     case diagramHost
     case empty
@@ -249,6 +250,8 @@ final class LeafNode: YogaBoxNode {
     var theme: Theme = Theme.current
     /// Last layout lines from Font measure cache (for multi-line emit).
     var cachedLines: [String] = []
+    var markdownSpans: [MarkdownSpan] = []
+    var markdownStyle: MarkdownStyle?
     var usesTextMeasure = false
     /// Editable payload (textField leaves). Lives on the node because a
     /// PrimitiveView has no body, so it never goes through CompositeNode's
