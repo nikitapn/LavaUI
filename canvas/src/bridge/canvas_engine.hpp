@@ -156,6 +156,26 @@ class Engine {
   /// every in-flight frame that could reference it has retired — see
   /// `Vulkan::destroyImageDeferred`. Atlased images return their cell instead.
   void unloadTexture(const std::string &path);
+
+  /// Decodes an image file to RGBA8 **without touching Vulkan**, so it is safe
+  /// to call from a worker thread. Returns false if the file will not decode.
+  /// This is the expensive half of loading; `uploadTexture` is the half that
+  /// must stay on the device thread.
+  /// Returns a malloc'd RGBA8 buffer the caller must release with
+  /// `decodeImageFree`, or nullptr. A raw pointer rather than a container
+  /// because this crosses into Swift, where `std::vector` does not map
+  /// cleanly.
+  static uint8_t *decodeImageAlloc(const std::string &path,
+                                   uint32_t &outWidth,
+                                   uint32_t &outHeight);
+  static void decodeImageFree(uint8_t *pixels);
+
+  /// Uploads pre-decoded pixels under `key`. Device thread only.
+  int uploadTexture(const std::string &key, const uint8_t *rgba,
+                    uint32_t width, uint32_t height);
+
+  /// Whether `key` is already resident, so a caller can skip decoding.
+  bool hasTexture(const std::string &key) const;
   bool textureSize(uint32_t textureId, float &outW, float &outH) const;
 
   /// Low-level access for advanced use; may be null if closed.

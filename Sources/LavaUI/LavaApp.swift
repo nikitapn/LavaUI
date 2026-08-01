@@ -610,6 +610,11 @@ public enum LavaApp {
                         }
                     }
                 }
+                // Only after a frame was actually emitted. Advancing the image
+                // clock on an idle iteration would mean "nothing was drawn",
+                // which makes every cached image look unused — including the
+                // ones on screen — and evicts them straight into a reload.
+                ImageStore.endFrame(into: editor)
             }
 
             // After present, so anything queued from an input handler this

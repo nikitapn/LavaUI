@@ -118,6 +118,45 @@ public final class Editor: @unchecked Sendable {
         }
         return UIImage(path: path, textureId: UInt32(id), pixelWidth: w, pixelHeight: h)
     }
+    /// Decodes an image file to RGBA8 without touching the GPU.
+    ///
+    /// Safe to call from a worker thread — that is the whole point. Decoding a
+    /// JPEG is tens of milliseconds and does not need the device; only the
+    /// upload does. Returns nil if the file will not decode.
+    public nonisolated static func decodeImage(
+        path: String
+    ) -> (pixels: [UInt8], width: UInt32, height: UInt32)? {
+        var w: UInt32 = 0
+        var h: UInt32 = 0
+        guard let raw = canvas.Engine.decodeImageAlloc(std.string(path), &w, &h),
+              w > 0, h > 0
+        else { return nil }
+        defer { canvas.Engine.decodeImageFree(raw) }
+        let count = Int(w) * Int(h) * 4
+        let pixels = [UInt8](UnsafeBufferPointer(start: raw, count: count))
+        return (pixels, w, h)
+    }
+
+    /// Uploads pre-decoded pixels. Main thread only — it touches the device.
+    public func uploadImage(
+        key: String, pixels: [UInt8], width: UInt32, height: UInt32
+    ) -> UIImage? {
+        let id: Int32 = pixels.withUnsafeBufferPointer { buf in
+            guard let base = buf.baseAddress else { return -1 }
+            return engine.uploadTexture(std.string(key), base, width, height)
+        }
+        guard id > 0 else { return nil }
+        return UIImage(
+            path: key, textureId: UInt32(id),
+            pixelWidth: Float(width), pixelHeight: Float(height)
+        )
+    }
+
+    /// Whether the engine already has this key resident.
+    public func hasImage(key: String) -> Bool {
+        engine.hasTexture(std.string(key))
+    }
+
     /// Drops one reference to a loaded image.
     ///
     /// The GPU memory is not freed here. Vulkan releases it only once every

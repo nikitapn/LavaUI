@@ -89,6 +89,10 @@ public:
   int loadTexture(const std::string &path);
   /// Drops one reference; frees only once no in-flight frame can name it.
   void unloadTexture(const std::string &path);
+  /// Uploads pre-decoded RGBA8. Must run on the thread owning the device.
+  int uploadTexture(const std::string &key, const uint8_t *rgba,
+                    uint32_t width, uint32_t height);
+  bool hasTexture(const std::string &key) const;
   /// Pixel size of a loaded texture; returns false if id unknown.
   bool textureSize(uint32_t textureId, float &outW, float &outH) const;
 

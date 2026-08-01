@@ -812,6 +812,10 @@ public final class DrawList {
             emitEditor(leaf, x: x, y: y, w: w, h: h)
         }
         if leaf.kind == .image, let img = leaf.image {
+            // Least-recently-*drawn*, not least-recently-requested: an image
+            // held by a view that is scrolled away should age out, and one
+            // being painted every frame must not.
+            ImageStore.touch(img)
             let dest = imageDestRect(
                 boxX: x, boxY: y, boxW: w, boxH: h,
                 srcW: img.pixelWidth, srcH: img.pixelHeight,

@@ -65,6 +65,17 @@ public:
 
     // Load texture from file
     TextureHandle loadTexture(const std::string& path);
+
+    /// Uploads already-decoded RGBA8 pixels under `key`.
+    ///
+    /// Split from `loadTexture` so decoding — the slow, purely-CPU half — can
+    /// run on a worker while only this half, which touches Vulkan, stays on
+    /// the thread that owns the device.
+    TextureHandle uploadTexture(const std::string& key, const uint8_t* rgba,
+                                uint32_t width, uint32_t height);
+
+    /// True if `key` is already resident, so a caller can skip decoding.
+    bool hasTexture(const std::string& key) const;
     
     // Register external texture (like shadow map)
     TextureHandle registerTexture(const std::string& name, VkImageView imageView, 

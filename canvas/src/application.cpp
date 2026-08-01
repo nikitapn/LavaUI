@@ -1011,6 +1011,18 @@ struct Application::Impl
     TextureManager::getInstance().unloadTexture(path);
   }
 
+  int uploadTexture(const std::string &key, const uint8_t *rgba,
+                    uint32_t width, uint32_t height)
+  {
+    auto h = TextureManager::getInstance().uploadTexture(key, rgba, width, height);
+    return h.isValid() ? static_cast<int>(h.id) : -1;
+  }
+
+  bool hasTexture(const std::string &key) const
+  {
+    return TextureManager::getInstance().hasTexture(key);
+  }
+
   bool textureSize(uint32_t textureId, float &outW, float &outH) const
   {
     auto [w, h] = TextureManager::getInstance().getTextureDimensions(textureId);
@@ -1136,6 +1148,17 @@ int Application::loadTexture(const std::string &path)
 void Application::unloadTexture(const std::string &path)
 {
   impl_->unloadTexture(path);
+}
+
+int Application::uploadTexture(const std::string &key, const uint8_t *rgba,
+                               uint32_t width, uint32_t height)
+{
+  return impl_->uploadTexture(key, rgba, width, height);
+}
+
+bool Application::hasTexture(const std::string &key) const
+{
+  return impl_->hasTexture(key);
 }
 
 bool Application::textureSize(uint32_t textureId, float &outW, float &outH) const

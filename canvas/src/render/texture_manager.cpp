@@ -35,6 +35,93 @@ void TextureManager::cleanUp() {
     vulkan_ = nullptr;
 }
 
+bool TextureManager::hasTexture(const std::string& key) const {
+    return textures_.find(key) != textures_.end();
+}
+
+TextureHandle TextureManager::uploadTexture(const std::string& key,
+                                            const uint8_t* rgba,
+                                            uint32_t width, uint32_t height) {
+    if (!vulkan_ || rgba == nullptr || width == 0 || height == 0) {
+        return {VK_NULL_HANDLE, 0};
+    }
+
+    auto existing = textures_.find(key);
+    if (existing != textures_.end()) {
+        existing->second->refCount++;
+        uint32_t foundId = 0;
+        for (const auto& [id, data] : textureById_) {
+            if (data == existing->second.get()) { foundId = id; break; }
+        }
+        return {existing->second->view, foundId,
+                existing->second->uv0, existing->second->uv1};
+    }
+
+    if (ImageAtlas::Region r = atlas_.add(rgba, width, height); r.valid) {
+        auto atlasData = std::make_unique<TextureData>();
+        atlasData->view = atlas_.pageView(r.page);
+        atlasData->path = key;
+        atlasData->refCount = 1;
+        atlasData->width = width;
+        atlasData->height = height;
+        atlasData->ownsImage = false;
+        atlasData->atlased = true;
+        atlasData->atlasPage = r.page;
+        atlasData->atlasSlot = r.slot;
+        atlasData->uv0 = r.uv0;
+        atlasData->uv1 = r.uv1;
+
+        uint32_t atlasId = nextId_++;
+        textureById_[atlasId] = atlasData.get();
+        textures_[key] = std::move(atlasData);
+        return {atlas_.pageView(r.page), atlasId, r.uv0, r.uv1};
+    }
+
+    const VkDeviceSize imageSize = static_cast<VkDeviceSize>(width) * height * 4;
+    VkBuffer stagingBuffer;
+    VmaAllocation stagingAlloc;
+    vulkan_->createBuffer(imageSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+                          VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT
+                            | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                          stagingBuffer, stagingAlloc);
+    void* data = vulkan_->mapBuffer(stagingAlloc);
+    memcpy(data, rgba, static_cast<size_t>(imageSize));
+    vulkan_->unmapBuffer(stagingAlloc);
+
+    VkImage textureImage;
+    VmaAllocation textureAlloc;
+    vulkan_->createImage(width, height, 1, VK_SAMPLE_COUNT_1_BIT,
+                         VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_TILING_OPTIMAL,
+                         VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+                         VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+                         textureImage, textureAlloc);
+    vulkan_->transitionImageLayout(textureImage, VK_FORMAT_R8G8B8A8_SRGB,
+                                   VK_IMAGE_LAYOUT_UNDEFINED,
+                                   VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+    vulkan_->copyBufferToImage(stagingBuffer, textureImage, width, height);
+    vulkan_->transitionImageLayout(textureImage, VK_FORMAT_R8G8B8A8_SRGB,
+                                   VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                                   VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    vulkan_->destroyBuffer(stagingBuffer, stagingAlloc);
+
+    VkImageView view = vulkan_->createImageView(textureImage, VK_FORMAT_R8G8B8A8_SRGB,
+                                                VK_IMAGE_ASPECT_COLOR_BIT, 1);
+    auto textureData = std::make_unique<TextureData>();
+    textureData->image = textureImage;
+    textureData->allocation = textureAlloc;
+    textureData->view = view;
+    textureData->path = key;
+    textureData->refCount = 1;
+    textureData->width = width;
+    textureData->height = height;
+    textureData->ownsImage = true;
+
+    uint32_t textureId = nextId_++;
+    textureById_[textureId] = textureData.get();
+    textures_[key] = std::move(textureData);
+    return {view, textureId};
+}
+
 TextureHandle TextureManager::loadTexture(const std::string& path) {
     if (!vulkan_) {
         std::cerr << "TextureManager not initialized!\n";

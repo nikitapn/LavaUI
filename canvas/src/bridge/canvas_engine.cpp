@@ -1,5 +1,7 @@
 #include "bridge/canvas_engine.hpp"
 
+#include <stb_image.h>
+
 #include "application.hpp"
 #include "menu/app_menu.hpp"
 #include "window/canvas_window.hpp"
@@ -318,6 +320,46 @@ int Engine::loadTexture(const std::string &path)
 void Engine::unloadTexture(const std::string &path)
 {
   impl_->withApp([&](Application &app) { app.unloadTexture(path); });
+}
+
+uint8_t *Engine::decodeImageAlloc(const std::string &path,
+                                  uint32_t &outWidth,
+                                  uint32_t &outHeight)
+{
+  int w = 0, h = 0, channels = 0;
+  // stbi_load is reentrant and touches no shared state, which is what makes
+  // this callable off the device thread.
+  stbi_uc *pixels = stbi_load(path.c_str(), &w, &h, &channels, 4);
+  if (pixels == nullptr || w <= 0 || h <= 0) {
+    if (pixels) stbi_image_free(pixels);
+    outWidth = outHeight = 0;
+    return nullptr;
+  }
+  outWidth  = static_cast<uint32_t>(w);
+  outHeight = static_cast<uint32_t>(h);
+  return pixels;
+}
+
+void Engine::decodeImageFree(uint8_t *pixels)
+{
+  if (pixels) stbi_image_free(pixels);
+}
+
+int Engine::uploadTexture(const std::string &key, const uint8_t *rgba,
+                          uint32_t width, uint32_t height)
+{
+  int id = -1;
+  impl_->withApp([&](Application &app) {
+    id = app.uploadTexture(key, rgba, width, height);
+  });
+  return id;
+}
+
+bool Engine::hasTexture(const std::string &key) const
+{
+  bool found = false;
+  impl_->withApp([&](Application &app) { found = app.hasTexture(key); });
+  return found;
 }
 
 bool Engine::textureSize(uint32_t textureId, float &outW, float &outH) const
