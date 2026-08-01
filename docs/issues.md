@@ -383,3 +383,58 @@ Three places each walk the whole line:
 - A decision is recorded on truncate-with-affordance versus cull-and-scroll;
   they imply different editing semantics for the hidden tail.
 - Regression coverage at a line length well past the bound.
+
+## 5. Changing the UI scale only re-measured text from one key handler
+
+**Status:** Fixed
+**Area:** content scale / text metrics / layout invalidation
+
+### Observed
+
+`FontStore.zoomIn(into:)`, `zoomOut(into:)` and `resetScale(into:)` swapped the
+active face and cleared the shared measure cache, but did not cause Yoga to
+re-measure anything. Only one caller made it work: the `Ctrl+Shift+±`/`0`
+handler in `LavaApp.run`, which followed up with
+`host.invalidateTextMetrics()` and `dirty = true`.
+
+Every other caller got a silently wrong layout — the new font drawn into boxes
+sized for the old one. Reached from a menu item, a button, or an agent script,
+zoom looked broken in a way that pointed nowhere near the font code.
+
+The asymmetry was invisible from the call site. `zoomIn(into:)` returns `Bool`
+and reads like a complete operation; nothing in its signature suggests the
+caller still owes the layout an invalidation, and nothing could discharge that
+debt anyway — `invalidateTextMetrics()` needs the `LayoutHost`, which only
+`LavaApp.run` holds.
+
+### Expected
+
+Changing the scale should re-measure, whoever asked for it. A framework API
+that requires a follow-up call the caller cannot make is not usable outside the
+one place that already has the internals.
+
+### Resolution
+
+`FontStore.metricsGeneration` is bumped by `apply(scale:into:)` — the single
+funnel every zoom helper already goes through. The run loop records the last
+value it saw and calls `host.invalidateTextMetrics()` when it moves, once per
+iteration, after input and menu activations so a change from any of them
+re-measures before the frame lays out.
+
+A counter rather than a callback because the fix has to hold for callers the
+framework has never heard of. The key handler's special case is gone; it now
+just calls `ContentScaleShortcuts.handle` and lets the central path do the
+invalidating, so there is one implementation instead of one plus a rule to
+remember.
+
+Verified in HelloWorld by driving **View → Zoom In** twice through the real
+DBusMenu: `ui scale → 1.25x` then `1.50x`, with the toolbar visibly re-laid out
+at the larger size rather than clipped into old boxes. The keyboard chord still
+works after losing its inline invalidation.
+
+### Note for callers
+
+Menu items that change scale should carry no shortcut. Menu matching runs
+before `ContentScaleShortcuts` and consumes the event, so binding
+`Ctrl+Shift+=` to a "Zoom In" item shadows the built-in handler rather than
+duplicating it.
