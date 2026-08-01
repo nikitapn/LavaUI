@@ -337,11 +337,18 @@ public struct TraceLoom: View {
                     onDecorationTap: { tappedDiagnostic = $0.message }
                 )
                 .agentId("rules-editor")
+                // Floats over the editor's own corner instead of taking a
+                // layout row of its own. Composition overlay, not the popup
+                // one: the button is always there, and popup semantics would
+                // make every click elsewhere in the window an outside-click
+                // dismissal.
+                .overlay(alignment: .bottomTrailing, inset: 8) {
+                    assistantLauncher()
+                }
                 if let tappedDiagnostic {
                     Text("⚑ \(tappedDiagnostic)", color: .selected)
                         .agentId("tapped-diagnostic")
                 }
-                assistantPane()
             }
             .background(Environment.current.theme.panel)
             .cornerRadius(7)
@@ -448,80 +455,108 @@ public struct TraceLoom: View {
 
     // MARK: - Rule assistant
 
-    private func assistantPane() -> some View {
-        let state = assistant.snapshot
-        return Expand(
-            "Rule assistant · \(assistant.model)",
-            isExpanded: $showAssistant
+    /// Compact launcher at the quiet edge of the rules workspace. The assistant
+    /// itself is detached from layout, so opening it does not push the editor,
+    /// timeline, or log around.
+    private func assistantLauncher() -> some View {
+        let binding = $showAssistant
+        return Button(showAssistant ? "Close AI assistant" : "AI assistant") {
+            binding.wrappedValue.toggle()
+        }
+        .agentId("assistant-toggle")
+        // The panel itself stays a popup: it *is* modal-ish — it appears on
+        // demand and an outside click should put it away. Only the launcher
+        // needed the composition overlay.
+        .overlay(
+            isPresented: binding,
+            alignment: .above,
+            style: OverlayStyle(padding: 10, minWidth: 520)
         ) {
-            VStack(padding: 4) {
-                Text(
-                    "Paste a log line you want charted. The assistant writes a rule, "
-                    + "tests it against your log, and fixes it until it works.",
-                    color: .secondary
-                )
-                TextField(
-                    text: $assistantExample,
-                    placeholder: "e.g. 19:16:15.280 NetworkMetrics inboundKbps:8400"
-                )
-                .agentId("assistant-example")
+            assistantPanel()
+        }
+        .agentId("assistant-launcher")
+    }
 
-                HStack(padding: 4) {
-                    Text(
-                        state.isRunning ? "Working…" : "Suggest rule",
-                        color: state.isRunning ? .dim : .accent,
-                        onClick: { startAssistant() }
-                    )
+    private func assistantPanel() -> some View {
+        let state = assistant.snapshot
+        return VStack(padding: 6) {
+            HStack(alignment: .center) {
+                Text("RULE ASSISTANT", color: .accent)
+                Text(assistant.model, color: .dim)
+                Spacer()
+                Text("Close", color: .muted, onClick: { showAssistant = false })
                     .padding(4)
                     .hoverBackground(Environment.current.theme.hover)
                     .cornerRadius(4)
-                    .agentId("assistant-run")
+                    .agentId("assistant-close")
+            }
+            Divider()
+            Text(
+                "Paste a log line you want charted. The assistant writes a rule, "
+                + "tests it against your log, and fixes it until it works.",
+                color: .secondary
+            )
+            TextField(
+                text: $assistantExample,
+                placeholder: "e.g. 19:16:15.280 NetworkMetrics inboundKbps:8400"
+            )
+            .agentId("assistant-example")
 
-                    if !state.status.isEmpty {
-                        Text(
-                            state.isRunning
-                                ? "\(state.status)  \(Int(state.elapsed))s"
-                                : state.status,
-                            color: .muted
-                        )
-                        .agentId("assistant-status")
-                    }
-                }
+            HStack(padding: 4) {
+                Text(
+                    state.isRunning ? "Working…" : "Suggest rule",
+                    color: state.isRunning ? .dim : .accent,
+                    onClick: { startAssistant() }
+                )
+                .padding(4)
+                .hoverBackground(Environment.current.theme.hover)
+                .cornerRadius(4)
+                .agentId("assistant-run")
 
-                // Reasoning models are silent in `content` for a long time, so
-                // the tail of the think is the only sign anything is happening.
-                if state.isRunning, !state.thinkingTail.isEmpty {
-                    Text("… \(state.thinkingTail)", color: .dim)
-                        .agentId("assistant-thinking")
+                if !state.status.isEmpty {
+                    Text(
+                        state.isRunning
+                            ? "\(state.status)  \(Int(state.elapsed))s"
+                            : state.status,
+                        color: .muted
+                    )
+                    .agentId("assistant-status")
                 }
+            }
 
-                ForEach(
-                    Array(state.activity.suffix(6).enumerated())
-                        .map { Diagnostic(id: $0.offset, text: $0.element) }
-                ) { entry in
-                    Text(entry.text, color: .secondary)
-                }
+            // Reasoning models are silent in `content` for a long time, so
+            // the tail of the think is the only sign anything is happening.
+            if state.isRunning, !state.thinkingTail.isEmpty {
+                Text("… \(state.thinkingTail)", color: .dim)
+                    .agentId("assistant-thinking")
+            }
 
-                if let suggestion = state.suggestion {
-                    Text(suggestion, color: .accent)
-                        .agentId("assistant-suggestion")
-                    HStack(padding: 4) {
-                        Text("Add to rules", color: .accent, onClick: { acceptSuggestion() })
-                            .padding(4)
-                            .hoverBackground(Environment.current.theme.hover)
-                            .cornerRadius(4)
-                            .agentId("assistant-accept")
-                        Text("Discard", color: .muted, onClick: { assistant.clearSuggestion() })
-                            .padding(4)
-                            .hoverBackground(Environment.current.theme.hover)
-                            .cornerRadius(4)
-                            .agentId("assistant-discard")
-                    }
+            ForEach(
+                Array(state.activity.suffix(6).enumerated())
+                    .map { Diagnostic(id: $0.offset, text: $0.element) }
+            ) { entry in
+                Text(entry.text, color: .secondary)
+            }
+
+            if let suggestion = state.suggestion {
+                Text(suggestion, color: .accent)
+                    .agentId("assistant-suggestion")
+                HStack(padding: 4) {
+                    Text("Add to rules", color: .accent, onClick: { acceptSuggestion() })
+                        .padding(4)
+                        .hoverBackground(Environment.current.theme.hover)
+                        .cornerRadius(4)
+                        .agentId("assistant-accept")
+                    Text("Discard", color: .muted, onClick: { assistant.clearSuggestion() })
+                        .padding(4)
+                        .hoverBackground(Environment.current.theme.hover)
+                        .cornerRadius(4)
+                        .agentId("assistant-discard")
                 }
-                if let problem = state.problem {
-                    Text(problem, color: .selected)
-                        .agentId("assistant-problem")
-                }
+            }
+            if let problem = state.problem {
+                Text(problem, color: .selected)
+                    .agentId("assistant-problem")
             }
         }
         .agentId("assistant-pane")

@@ -158,8 +158,11 @@ final class AssistantSession: @unchecked Sendable {
     }
 
     private static func tail(of text: String, limit: Int = 160) -> String {
-        let flat = text.replacingOccurrences(of: "\n", with: " ")
-        return flat.count <= limit ? flat : String(flat.suffix(limit))
+        // Preserve the model's paragraph/list structure. Flattening newlines
+        // made even well-formatted reasoning appear as one unreadable sentence
+        // in the assistant panel.
+        guard text.count > limit else { return text }
+        return String(text.suffix(limit))
     }
 
     private static func firstLine(of text: String) -> String {

@@ -115,3 +115,56 @@ Verified live against TraceLoom with `pointer_down` at `(300, 450)`, moves to
 `(600, 450)` and `(900, 450)`, then `pointer_up`. The timeline committed
 `19:16:16.821 — 19:16:22.017 · zoomed`, confirming both the automation phases
 and the canvas-frame mapping end to end.
+
+## 9. A view cannot place non-modal content over its own bounds — RESOLVED
+
+LavaUI's `overlay(isPresented:alignment:)` is currently a popup/menu primitive:
+it detaches a subtree, places it above or below an anchor, gives it input
+priority, and dismisses it when the user clicks outside. There is no SwiftUI-like
+composition overlay that keeps normal interaction underneath and aligns content
+to a parent corner (`.bottomTrailing`, for example).
+
+TraceLoom wants its AI-assistant launcher to float over the bottom-right corner
+of the rules editor without consuming a layout row. Using a trailing `HStack`
+places it correctly but still changes layout; using the popup API for an
+always-present button would make the whole window behave like a modal menu and
+swallow outside clicks. TraceLoom intentionally uses the small layout row until
+the framework can express the real design.
+
+Suggested framework shape: a compositional `overlay(alignment:)` whose content
+is measured and painted above the base view, does not contribute to the base
+view's Yoga size, and participates in ordinary hit testing without imposing
+popup dismissal semantics. Corner/edge alignment plus an offset or inset is
+enough for floating action buttons, badges, and in-canvas controls. Keep the
+existing binding-based API as the modal popup/presentation variant.
+
+Fixed: `overlay(alignment:inset:)` is the composition variant, distinct from the
+existing `overlay(isPresented:)` popup, which keeps its detach/priority/dismiss
+semantics unchanged.
+
+It is an absolutely positioned Yoga child, so all four required behaviours come
+from the layout engine rather than from special cases: an absolute child is out
+of the flex flow (no layout contribution), it is declared second so emission
+order paints it above the base, it is a real node with real geometry so hit
+testing is ordinary, and Yoga edge insets keep it anchored across resizes.
+
+Nine anchors — the corners, the edge midpoints, and the centre — plus an
+`inset` that applies to pinned edges and is ignored on a centred axis.
+
+One thing had to be found by measuring rather than reasoning: Yoga will not
+centre an absolutely positioned node. Auto margins on one leave it pinned to
+the leading edge. The fix is an absolute container pinned to all four edges of
+the base, which exactly covers it, with the overlay placed inside by *ordinary*
+`justifyContent`/`alignItems`. That container is a plain style box with no fill
+or handlers, so despite covering the base it never claims a hit — verified by
+hit-testing through it.
+
+Verified with a probe carrying all nine anchors on a 200x120 box: an identical
+bare box measured 200x120 too (no layout contribution), every anchor landed
+within a pixel of its expected gaps, and the base stayed clickable underneath.
+
+TraceLoom now floats its assistant launcher over the rules editor's
+bottom-trailing corner with `inset: 8`, and the layout row it was using is
+gone. Clicking the editor beneath the overlay still focuses it and places a
+caret at the right character; the assistant *panel* stays a popup, because it
+is on-demand and an outside click should dismiss it — which it still does.
