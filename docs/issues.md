@@ -438,3 +438,101 @@ Menu items that change scale should carry no shortcut. Menu matching runs
 before `ContentScaleShortcuts` and consumes the event, so binding
 `Ctrl+Shift+=` to a "Zoom In" item shadows the built-in handler rather than
 duplicating it.
+
+## 6. Images were never batched, never released, and unsafe to release
+
+**Status:** Fixed
+**Area:** texture management / draw batching / GPU lifetime
+
+### Observed
+
+Four separate defects, found while costing out a client that shows a wall of
+album covers. Any one of them makes that screen impossible.
+
+**Every distinct texture broke the batch, and past 64 the wrong one drew.**
+The quad shader has a single `sampler2D`, so each image ended the batch and
+started a new draw. Worse, a frame has only `kMaxDescriptorSetsPerFrame` (64)
+descriptor sets; at `quad_renderer.cpp:904` the write index was clamped to the
+last slot and *reused*, overwriting a descriptor an earlier batch had already
+bound. Past 64 images the result was not an error or a dropped draw — it was
+the wrong picture, silently.
+
+**Nothing was ever released.** `ImageStore` cached by path and never evicted;
+`UIImage`'s own doc said the texture id "is stable for the process lifetime".
+`TextureManager::unloadTexture` existed in C++ but was not bridged to Swift at
+all, so there was no way to free anything. Scrolling 2,000 covers at 300×300
+RGBA pins ~700 MB that never comes back.
+
+**Releasing would have crashed anyway.** `unloadTexture` called
+`vmaDestroyImage` immediately, with no fence and no deferred queue. Freeing a
+texture an in-flight frame still references is a use-after-free.
+
+**Decoding blocked the UI thread.** `loadTexture` did `stbi_load` and the GPU
+upload together — the same shape as the synchronous log parse in issue 3.
+
+### Resolution
+
+`ImageAtlas` packs images into 2048² RGBA pages, so a hundred covers cost one
+descriptor bind and one draw. Slots rather than the shelf packing the glyph
+atlas uses: glyphs vary wildly and are never individually freed, while cover
+art is uniform and very much needs freeing, and a fixed cell grid makes the
+free list trivial where tight packing would need compaction. Images larger
+than a cell stay standalone. UVs cover only the pixels written, so a smaller
+image cannot sample its neighbour. `TextureHandle` carries `uv0`/`uv1` and
+`application.cpp` passes them to `pushImage`, which already accepted UVs and
+was hardcoding `[0,1]`.
+
+`Vulkan::destroyImageDeferred`/`collectGarbage` retire resources
+`kMaxFramesInFlight + 1` frames later — the `+1` because the frame being
+recorded has not been counted yet and can still name the image — drained per
+present and again after the device wait in `cleanUp`. `Editor.unloadImage`
+bridges it, so the path is reachable rather than dead code.
+
+Decode split from upload: `Engine::decodeImageAlloc` touches no Vulkan and is
+safe from a worker; `uploadTexture` stays on the device thread.
+`ImageStore.imageIfLoaded` decodes on a worker, posts the upload through
+`MainQueue`, and returns nil meanwhile so the caller draws a placeholder.
+
+Eviction is by byte budget, not visibility. Dropping a poster when it scrolls
+off thrashes — reverse direction and everything just discarded must be decoded
+again. Visibility belongs in *priority*, a budget in *lifetime*. Nothing is
+evicted on a frame it was drawn, so a visible set larger than the budget stays
+over budget rather than painting holes. `touch()` is called from the draw list
+*after* the cull test that skips whole subtrees, so least-recently-used means
+least recently **drawn**.
+
+### Found on the way
+
+`transitionImageLayout` had no `SHADER_READ_ONLY → TRANSFER_DST` case, which
+is exactly what uploading a new cell into a page already being sampled needs.
+It `throw`s on an unsupported transition, and a C++ exception crossing into
+Swift aborts the process — so the first atlas run died with SIGABRT rather
+than reporting an error. Any transition added later has the same trap.
+
+### Verified
+
+100 distinct 200px posters plus the demo logo landed in **2 pages, zero
+standalone**, rendering distinctly with no cell bleed; previously 101 textures
+would have silently drawn wrong art past 64. Unloading them while on screen
+survived, as did unloading 8 standalone 512px textures — the path that
+actually exercises deferred destruction, since atlased images only return a
+cell. With a 4 MB budget over 16 MB of posters the settled cache went from
+15641 KB / 101 images to **6562 KB / 42**.
+
+Two bugs in the eviction policy itself were only found by instrumenting it:
+it ran on insert alone, so the cache sat over budget once loading stopped; and
+`endFrame` ran on every loop iteration including idle ones that render
+nothing, which looks like "nothing was drawn" and evicted the on-screen images
+straight into a reload.
+
+### Not addressed
+
+- The silent descriptor clamp at `quad_renderer.cpp:904` is *mitigated*, not
+  fixed. The atlas keeps ordinary UI well under 64 binds, but a screen with
+  more than 64 images too large to atlas still draws the wrong ones without
+  saying so. It should at least warn.
+- Request windowing is the app's job. A view that asks for every image on
+  every body — regardless of which rows are on screen — churns, because the
+  budget evicts what is never drawn and the next body asks again. The
+  framework cannot infer which images are about to matter.
+- No mipmaps, so a cover drawn much smaller than its source aliases.
