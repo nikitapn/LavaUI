@@ -259,10 +259,12 @@ LavaSpotify requests (user token):
 Playback calls:
 
 - `GET /v1/me/player/devices`
-- `PUT /v1/me/player/play` (uris or album `context_uri` + offset)
+- `PUT /v1/me/player/play` — prefer **album `context_uri` + offset** so the
+  Connect device advances to the next track when one ends (a lone
+  `uris: [one track]` stops after that song)
 - `PUT /v1/me/player/pause`
 - `POST /v1/me/player/next` / `previous`
-- `GET /v1/me/player` (poll)
+- `GET /v1/me/player` (poll; updates now-playing when the device advances)
 
 Catalog (client credentials or user token):
 

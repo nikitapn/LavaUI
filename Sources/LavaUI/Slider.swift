@@ -132,7 +132,15 @@ public struct Slider: PrimitiveView {
         // but the node's measured size cannot, so no re-layout is owed.
         let format = self.format
         return { leaf, localX in
-            guard leaf.sliderTravel > 0, hi > lo else { return }
+            guard hi > lo else { return }
+            // `sliderTravel` is normally stamped during emit. A press can land
+            // before the first emit of a newly laid-out (e.g. flex-grown) track
+            // — HelloWorld's fixed-width sliders almost always had a prior
+            // emit, but a stretchy progress bar in a player chrome often does
+            // not. Derive travel from Yoga when missing so a plain click
+            // still jumps, same as a drag after the first frame.
+            ensureSliderGeometry(leaf)
+            guard leaf.sliderTravel > 0 else { return }
             let f = min(max(0, (localX - leaf.sliderInset) / leaf.sliderTravel), 1)
             var v = lo + f * (hi - lo)
             if let step, step > 0 {
@@ -152,6 +160,32 @@ public struct Slider: PrimitiveView {
         }
     }
 }
+
+#if canImport(CYoga)
+import CYoga
+
+/// Fills `sliderInset` / `sliderTravel` from the laid-out box when emit has not
+/// run yet. Mirrors the geometry `emitSlider` records so hit-testing and
+/// drawing stay one formula.
+private func ensureSliderGeometry(_ leaf: LeafNode) {
+    if leaf.sliderTravel > 0 { return }
+    guard let style = leaf.sliderStyle else { return }
+    let knobR = style.knobRadius
+    let readoutW = leaf.text.isEmpty ? 0 : style.valueGap + style.valueWidth
+    let laidOut: Float = {
+        if let yref = leaf.yoga {
+            let w = YGNodeLayoutGetWidth(yref)
+            if w > 0 { return w }
+        }
+        return style.trackWidth + readoutW + 8
+    }()
+    let trackW = max(0, laidOut - 8 - readoutW)
+    leaf.sliderInset = 4 + knobR
+    leaf.sliderTravel = max(0, trackW - knobR * 2)
+}
+#else
+private func ensureSliderGeometry(_ leaf: LeafNode) {}
+#endif
 
 /// Colours and metrics for a `Slider`.
 public struct SliderStyle {

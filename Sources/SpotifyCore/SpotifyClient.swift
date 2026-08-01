@@ -119,6 +119,21 @@ public final class SpotifyClient: @unchecked Sendable {
         }
     }
 
+    public func searchTracks(query: String, limit: Int = 8) throws -> [Track] {
+        let q = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !q.isEmpty, hasCredentials || isUserLoggedIn else { return [] }
+        let capped = min(max(1, limit), Self.searchLimitMax)
+        let data = try apiGet(
+            path: "/v1/search",
+            query: ["q": q, "type": "track", "limit": "\(capped)"],
+            userRequired: false
+        )
+        let decoded = try JSONDecoder().decode(SearchResponse.self, from: data)
+        return decoded.tracks?.items.enumerated().map { index, track in
+            track.asSearchTrack(fallbackNumber: index + 1)
+        } ?? []
+    }
+
     public func albumDetail(id: String) throws -> (album: Album, tracks: [Track]) {
         if hasCredentials || isUserLoggedIn {
             return try fetchAlbum(id: id)
@@ -187,10 +202,16 @@ public final class SpotifyClient: @unchecked Sendable {
 
     /// Start a track on a Connect device (spotifyd when available).
     ///
-    /// Prefer a real track URI; otherwise play the album context at the track's
-    /// position (seed catalog track ids are not valid Spotify ids).
+    /// **Album context first.** A single-element `uris` list stops after that
+    /// track; `context_uri` + offset keeps the album (or other context) as the
+    /// queue so the next song starts when the current one ends — the Connect
+    /// device advances, we only refresh the UI from `GET /me/player`.
+    ///
+    /// `queue` is a fallback when there is no album: remaining playable track
+    /// URIs from the current index onward (e.g. a search hit list).
     public func play(
         track: Track,
+        queue: [Track] = [],
         deviceId: String? = nil
     ) throws {
         let device = try deviceId.map { id in
@@ -199,23 +220,55 @@ public final class SpotifyClient: @unchecked Sendable {
             )
         } ?? resolvePlaybackDevice()
 
-        var body: [String: Any] = [:]
-        if let uri = track.uri {
-            body["uris"] = [uri]
-        } else if let album = track.album {
-            body["context_uri"] = album.uri
-            body["offset"] = ["position": max(0, track.trackNumber - 1)]
-        } else {
-            throw SpotifyError("Track has no playable Spotify id or album context")
-        }
-        body["position_ms"] = 0
-
+        let body = try playBody(track: track, queue: queue)
         try apiPut(
             path: "/v1/me/player/play",
             query: ["device_id": device.id],
             json: body,
             userRequired: true
         )
+    }
+
+    /// JSON body for `PUT /me/player/play` (exposed for tests / diagnostics).
+    func playBody(track: Track, queue: [Track] = []) throws -> [String: Any] {
+        var body: [String: Any] = ["position_ms": 0]
+
+        // 1) Album (or any parent) context — continuous play through the disc.
+        if let album = track.album, !album.id.isEmpty, Track.looksLikeSpotifyId(album.id) {
+            body["context_uri"] = album.uri
+            if let uri = track.uri {
+                body["offset"] = ["uri": uri]
+            } else {
+                body["offset"] = ["position": max(0, track.trackNumber - 1)]
+            }
+            return body
+        }
+
+        // 2) Explicit queue of track URIs from this track forward.
+        let fromQueue: [String] = {
+            if let idx = queue.firstIndex(where: { $0.id == track.id }) {
+                return queue[idx...].compactMap(\.uri)
+            }
+            var uris = [String]()
+            if let uri = track.uri { uris.append(uri) }
+            for t in queue {
+                guard let u = t.uri, u != track.uri else { continue }
+                uris.append(u)
+            }
+            return uris
+        }()
+        if !fromQueue.isEmpty {
+            body["uris"] = fromQueue
+            return body
+        }
+
+        // 3) Lone track — will not auto-advance (nothing follows).
+        if let uri = track.uri {
+            body["uris"] = [uri]
+            return body
+        }
+
+        throw SpotifyError("Track has no playable Spotify id or album context")
     }
 
     public func playAlbum(_ album: Album, deviceId: String? = nil) throws {
@@ -244,6 +297,20 @@ public final class SpotifyClient: @unchecked Sendable {
 
     public func skipPrevious() throws {
         try apiPost(path: "/v1/me/player/previous", query: [:], userRequired: true)
+    }
+
+    /// Seek within the current track (Connect / spotifyd).
+    public func seek(positionMs: Int, deviceId: String? = nil) throws {
+        var query: [String: String] = [
+            "position_ms": "\(max(0, positionMs))",
+        ]
+        if let deviceId { query["device_id"] = deviceId }
+        try apiPut(
+            path: "/v1/me/player/seek",
+            query: query,
+            json: nil,
+            userRequired: true
+        )
     }
 
     public func transferPlayback(to deviceId: String, play: Bool = false) throws {
@@ -454,6 +521,7 @@ private struct AppTokenResponse: Decodable {
 
 private struct SearchResponse: Decodable {
     var albums: APIAlbumPage?
+    var tracks: APITrackPage?
 }
 
 private struct APIAlbumPage: Decodable {
@@ -530,6 +598,7 @@ private struct APITrack: Decodable {
     var artists: [APIArtist]?
     var duration_ms: Int?
     var track_number: Int?
+    var album: APIAlbum?
 
     func asTrack(trackNumber: Int, album: Album) -> Track {
         Track(
@@ -541,6 +610,20 @@ private struct APITrack: Decodable {
             durationMs: duration_ms ?? 0,
             trackNumber: trackNumber,
             album: album
+        )
+    }
+
+    func asSearchTrack(fallbackNumber: Int) -> Track {
+        let parent = album?.asAlbum()
+        return Track(
+            id: id ?? "search-\(fallbackNumber)-\(name)",
+            name: name,
+            artists: (artists ?? []).map {
+                ArtistRef(id: $0.id ?? $0.name, name: $0.name)
+            },
+            durationMs: duration_ms ?? 0,
+            trackNumber: track_number ?? fallbackNumber,
+            album: parent
         )
     }
 }

@@ -651,7 +651,10 @@ public final class DrawList {
                     backdrop: stack.backdropBlurRadius,
                     x: x, y: y, w: w, h: h
                 ) {
-                    if let fill = stack.fillColor {
+                    let fill = HoverState.isHovered(stack.id)
+                        ? (stack.hoverFill ?? stack.fillColor)
+                        : stack.fillColor
+                    if let fill {
                         if stack.cornerRadius > 0 {
                             roundedRect(
                                 x: x, y: y, w: w, h: h,

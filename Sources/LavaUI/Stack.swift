@@ -36,6 +36,7 @@ public struct StackStyle: Equatable, Sendable {
 public struct HStack<Content: View>: PrimitiveView {
     public var style: StackStyle
     public var content: Content
+    public var onClick: (() -> Void)?
 
     public init(
         flexGrow: Float = 0,
@@ -43,12 +44,14 @@ public struct HStack<Content: View>: PrimitiveView {
         height: Dimension = .auto,
         padding: Float = 0,
         alignment: StackAlignment = .stretch,
+        onClick: (() -> Void)? = nil,
         @ViewBuilder content: () -> Content
     ) {
         self.style = StackStyle(
             flexGrow: flexGrow, width: width, height: height, padding: padding,
             alignment: alignment
         )
+        self.onClick = onClick
         self.content = content()
     }
 
@@ -67,13 +70,14 @@ public struct HStack<Content: View>: PrimitiveView {
             label: "HStack",
             direction: .row,
             style: style,
-            content: ViewGraph.mount(content)
+            content: ViewGraph.mount(content),
+            onClick: onClick
         )
     }
 
     public func reconcilePrimitive(_ node: any AnyViewNode) -> any AnyViewNode {
         if let stack = node as? StackNode, stack.direction == .row {
-            stack.update(style: style, contentView: content)
+            stack.update(style: style, contentView: content, onClick: onClick)
             return stack
         }
         return mountPrimitive()
@@ -83,6 +87,7 @@ public struct HStack<Content: View>: PrimitiveView {
 public struct VStack<Content: View>: PrimitiveView {
     public var style: StackStyle
     public var content: Content
+    public var onClick: (() -> Void)?
 
     public init(
         flexGrow: Float = 0,
@@ -90,12 +95,14 @@ public struct VStack<Content: View>: PrimitiveView {
         height: Dimension = .auto,
         padding: Float = 0,
         alignment: StackAlignment = .stretch,
+        onClick: (() -> Void)? = nil,
         @ViewBuilder content: () -> Content
     ) {
         self.style = StackStyle(
             flexGrow: flexGrow, width: width, height: height, padding: padding,
             alignment: alignment
         )
+        self.onClick = onClick
         self.content = content()
     }
 
@@ -114,13 +121,14 @@ public struct VStack<Content: View>: PrimitiveView {
             label: "VStack",
             direction: .column,
             style: style,
-            content: ViewGraph.mount(content)
+            content: ViewGraph.mount(content),
+            onClick: onClick
         )
     }
 
     public func reconcilePrimitive(_ node: any AnyViewNode) -> any AnyViewNode {
         if let stack = node as? StackNode, stack.direction == .column {
-            stack.update(style: style, contentView: content)
+            stack.update(style: style, contentView: content, onClick: onClick)
             return stack
         }
         return mountPrimitive()

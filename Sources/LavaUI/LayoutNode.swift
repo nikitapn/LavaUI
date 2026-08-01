@@ -824,15 +824,21 @@ final class StackNode: YogaBoxNode {
     let direction: FlexDirection
     /// Panel background (Phase 3 draw list).
     var fillColor: Color?
+    var hoverFill: Color?
+    var onClick: (() -> Void)?
     /// Corner radius for `fillColor`. Set via `.cornerRadius()` modifiers.
     var cornerRadius: Float = 0
 
     /// Yoga children currently inserted (flattened leaves under content).
     private var insertedLeaves: [any AnyViewNode] = []
 
-    init(label: String, direction: FlexDirection, style: StackStyle, content: any AnyViewNode) {
+    init(
+        label: String, direction: FlexDirection, style: StackStyle,
+        content: any AnyViewNode, onClick: (() -> Void)?
+    ) {
         self.direction = direction
         self.contentNode = content
+        self.onClick = onClick
         super.init(label: label)
         YGNodeStyleSetFlexDirection(yogaStorage, direction.yoga)
         apply(style)
@@ -841,8 +847,9 @@ final class StackNode: YogaBoxNode {
 
     override var childNodes: [any AnyViewNode] { [contentNode] }
 
-    func update(style: StackStyle, contentView: some View) {
+    func update(style: StackStyle, contentView: some View, onClick: (() -> Void)?) {
         apply(style)
+        self.onClick = onClick
         contentNode = ViewGraph.reconcile(contentNode, with: contentView)
         relinkYogaChildren()
     }
@@ -1385,6 +1392,9 @@ public final class LayoutHost {
                 {
                     return leaf.id
                 }
+                if let stack = node as? StackNode, stack.hoverFill != nil {
+                    return stack.id
+                }
                 if box.isScrollable { return box.id }
                 // A `.onDrop()` target has no visual hover feedback of its
                 // own — this is the only thing that makes it resolvable at
@@ -1479,6 +1489,11 @@ public final class LayoutHost {
                 if let click = leaf.onClick, leaf.kind == .text || leaf.kind == .image {
                     return click
                 }
+            }
+            if let stack = node as? StackNode, let click = stack.onClick,
+               x >= nx, x < nx + nw, y >= ny, y < ny + nh
+            {
+                return click
             }
             return nil
         }

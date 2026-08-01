@@ -121,6 +121,7 @@ struct Spotify: View {
     @ViewBuilder
     private var homeView: some View {
         VStack(flexGrow: 1, padding: 12) {
+            quickSearch
             Text(greeting, color: .primary)
                 .padding(4)
                 .agentId("greeting")
@@ -140,6 +141,76 @@ struct Spotify: View {
         }
     }
 
+    @ViewBuilder
+    private var quickSearch: some View {
+        let presented = Binding(
+            get: { session.isQuickSearching || !session.quickSearchResults.isEmpty },
+            set: { if !$0 { session.dismissQuickSearch() } }
+        )
+        HStack(height: .pt(48), padding: 6, alignment: .center) {
+            Text("Search", color: .accent)
+            TextField(
+                text: Binding(
+                    get: { session.searchQuery },
+                    set: { session.updateQuickSearch($0) }
+                ),
+                placeholder: "Search songs, artists, albums…"
+            )
+            .flexGrow(1)
+            .agentId("home-search-field")
+            if !session.searchQuery.isEmpty {
+                Text("Clear", color: .muted, onClick: {
+                    session.updateQuickSearch("")
+                })
+                .agentId("home-search-clear")
+            }
+        }
+        .background(SpotifyTheme.theme.inset)
+        .cornerRadius(10)
+        .overlay(
+            isPresented: presented,
+            alignment: .below,
+            style: OverlayStyle(padding: 6, minWidth: 680)
+        ) {
+            VStack(width: .pt(680), padding: 2) {
+                if session.isQuickSearching && session.quickSearchResults.isEmpty {
+                    Text("Searching Spotify…", color: .muted)
+                        .padding(10)
+                }
+                ForEach(session.quickSearchResults) { track in
+                    quickSearchRow(track)
+                }
+            }
+        }
+        .agentId("home-search")
+    }
+
+    @ViewBuilder
+    private func quickSearchRow(_ track: Track) -> some View {
+        // Transparent outer padding is the row gap; keeping it outside the
+        // interactive HStack prevents adjacent hover surfaces from touching.
+        VStack(padding: 3) {
+            HStack(height: .pt(62), padding: 7, alignment: .center, onClick: {
+                session.selectQuickSearchResult(track)
+            }) {
+                CoverArt(
+                    track.album?.preferredCover,
+                    size: 48,
+                    cornerRadius: 5,
+                    editor: session.editor
+                )
+                VStack(flexGrow: 1, padding: 2) {
+                    Text(compact(track.name, limit: 56), color: .primary)
+                    Text(track.artistLine, color: .secondary)
+                }
+                Text(track.durationLabel, color: .dim)
+            }
+            .hoverBackground(SpotifyTheme.cardHover)
+            .cornerRadius(7)
+            .agentId("search-track-\(track.id)")
+        }
+    }
+
     private var greeting: String {
         let hour = Calendar.current.component(.hour, from: Date())
         if hour < 12 { return "Good morning" }
@@ -155,9 +226,9 @@ struct Spotify: View {
                 .agentId("section-\(section.id)")
 
             ScrollView(.horizontal, showsIndicator: false) {
-                HStack(padding: 6) {
+                HStack(padding: 6, alignment: .start) {
                     ForEach(section.albums) { album in
-                        albumCard(album, size: 140)
+                        spacedAlbumCard(album, size: 140)
                     }
                 }
             }
@@ -166,16 +237,19 @@ struct Spotify: View {
 
     @ViewBuilder
     private func albumCard(_ album: Album, size: Float) -> some View {
-        VStack(width: .pt(size + 12), padding: 6) {
+        VStack(
+            width: .pt(size + 12), height: .pt(size + 93), padding: 6,
+            onClick: { session.openAlbum(album) }
+        ) {
             CoverArt(
                 album.preferredCover,
                 size: size,
                 cornerRadius: 6,
                 editor: session.editor,
-                onClick: { session.openAlbum(album) }
+                onClick: nil
             )
-            Text(album.name, color: .primary, onClick: { session.openAlbum(album) })
-            Text(album.artistLine, color: .secondary)
+            Text(compact(album.name, limit: 26), color: .primary)
+            Text(compact(album.artistLine, limit: 24), color: .secondary)
         }
         .background(SpotifyTheme.theme.panel)
         .hoverBackground(SpotifyTheme.cardHover)
@@ -183,14 +257,24 @@ struct Spotify: View {
         .agentId("album-\(album.id)")
     }
 
+    @ViewBuilder
+    private func spacedAlbumCard(_ album: Album, size: Float) -> some View {
+        // Stack padding is inside its background. This transparent wrapper is
+        // intentional: it creates real breathing room between card surfaces.
+        VStack(padding: 4) {
+            albumCard(album, size: size)
+        }
+    }
+
     // MARK: Search
 
     @ViewBuilder
     private var searchView: some View {
         VStack(flexGrow: 1, padding: 12) {
-            HStack(padding: 6) {
+            HStack(padding: 6, alignment: .center) {
                 Text("Search", color: .primary)
                 TextField(text: $session.searchQuery, placeholder: "Albums, artists…")
+                    .flexGrow(1)
                     .agentId("search-field")
                 Button("Go") { session.runSearch() }
                     .agentId("search-go")
@@ -225,9 +309,9 @@ struct Spotify: View {
         let perRow = 5
         VStack(padding: 6) {
             ForEach(gridRows(albums, perRow: perRow)) { row in
-                HStack(padding: 6) {
+                HStack(padding: 6, alignment: .start) {
                     ForEach(row.albums) { album in
-                        albumCard(album, size: size)
+                        spacedAlbumCard(album, size: size)
                     }
                     Spacer()
                 }
@@ -256,14 +340,14 @@ struct Spotify: View {
     @ViewBuilder
     private var albumDetailView: some View {
         VStack(flexGrow: 1, padding: 12) {
-            HStack(padding: 8) {
+            HStack(padding: 8, alignment: .center) {
                 Text("← Back", color: .accent, onClick: { session.goHome() })
                     .agentId("back")
                 Spacer()
             }
 
             if let album = session.detailAlbum {
-                HStack(padding: 12) {
+                HStack(padding: 12, alignment: .center) {
                     CoverArt(
                         album.preferredCover,
                         size: 200,
@@ -303,7 +387,7 @@ struct Spotify: View {
     @ViewBuilder
     private func trackRow(_ track: Track) -> some View {
         let selected = session.nowPlaying?.id == track.id
-        HStack(padding: 6) {
+        HStack(padding: 6, alignment: .center) {
             Text(String(format: "%2d", track.trackNumber), color: .dim)
                 .frame(width: .pt(28))
             Text(
@@ -311,7 +395,7 @@ struct Spotify: View {
                 color: selected ? .accent : .primary,
                 onClick: { session.selectTrack(track) }
             )
-            Spacer()
+            .flexGrow(1)
             Text(track.durationLabel, color: .dim)
         }
         .hoverBackground(SpotifyTheme.cardHover)
@@ -323,13 +407,13 @@ struct Spotify: View {
 
     @ViewBuilder
     private var playerBar: some View {
-        HStack(height: .pt(72), padding: 10) {
+        HStack(height: .pt(112), padding: 10, alignment: .center) {
             // Now playing
-            HStack(width: .pt(280), padding: 4) {
+            HStack(width: .pt(280), padding: 4, alignment: .center) {
                 if let track = session.nowPlaying {
                     CoverArt(
                         track.album?.preferredCover ?? session.detailAlbum?.preferredCover,
-                        size: 48,
+                        size: 52,
                         cornerRadius: 4,
                         editor: session.editor
                     )
@@ -345,9 +429,9 @@ struct Spotify: View {
                 Spacer()
             }
 
-            // Transport
+            // Transport + seek
             VStack(flexGrow: 1, padding: 4) {
-                HStack(padding: 6) {
+                HStack(padding: 4, alignment: .center) {
                     Spacer()
                     Text("⏮", color: .secondary, onClick: { session.playPrevious() })
                         .agentId("prev")
@@ -364,16 +448,20 @@ struct Spotify: View {
                         .agentId("next")
                     Spacer()
                 }
-                HStack(padding: 2) {
-                    Text(progressLabel, color: .dim)
-                    Text(progressBar, color: .muted)
-                    Text(session.nowPlaying?.durationLabel ?? "0:00", color: .dim)
+                HStack(padding: 2, alignment: .center) {
+                    Text(formatMs(session.progressMs), color: .dim)
+                        .frame(width: .pt(40))
+                        .agentId("progress-elapsed")
+                    progressSlider
+                    Text(formatMs(session.durationMs), color: .dim)
+                        .frame(width: .pt(40))
+                        .agentId("progress-duration")
                 }
                 Text(deviceFooter, color: .dim)
                     .agentId("player-footer")
             }
 
-            HStack(width: .pt(160), padding: 4) {
+            HStack(width: .pt(160), padding: 4, alignment: .center) {
                 Spacer()
                 Text("🔊  ────●──", color: .secondary)
             }
@@ -382,19 +470,48 @@ struct Spotify: View {
         .agentId("player-bar")
     }
 
-    private var progressLabel: String {
-        let total = max(0, session.progressMs / 1000)
+    @ViewBuilder
+    private var progressSlider: some View {
+        // Same interaction model as DemoExample's gauge: press anywhere on the
+        // track jumps (mouse button / agent click), drag moves continuously.
+        // Bind 0…1 like the demo — ms ranges are fine numerically, but the
+        // unit interval matches how every other LavaUI slider is written.
+        let hasTrack = session.nowPlaying != nil
+        let duration = max(1, session.durationMs)
+        Slider(
+            value: Binding(
+                get: {
+                    min(1, max(0, Float(session.progressMs) / Float(duration)))
+                },
+                set: { frac in
+                    let ms = Int((min(1, max(0, frac)) * Float(duration)).rounded())
+                    session.scrub(toMs: ms)
+                }
+            ),
+            in: 0...1,
+            style: SliderStyle(
+                trackWidth: 220,
+                trackThickness: 4,
+                knobRadius: 6,
+                activeTrack: SpotifyTheme.green,
+                inactiveTrack: Color(r: 0.28, g: 0.28, b: 0.28),
+                knob: Color(r: 1, g: 1, b: 1),
+                valueWidth: 0
+            ),
+            isEnabled: hasTrack && session.isLoggedIn
+        )
+        .flexGrow(1)
+        .agentId("progress-slider")
+    }
+
+    private func formatMs(_ ms: Int) -> String {
+        let total = max(0, ms / 1000)
         return String(format: "%d:%02d", total / 60, total % 60)
     }
 
-    private var progressBar: String {
-        let dur = max(1, session.nowPlaying?.durationMs ?? 1)
-        let frac = min(1.0, Double(session.progressMs) / Double(dur))
-        let width = 28
-        let filled = Int((frac * Double(width)).rounded())
-        let left = String(repeating: "─", count: max(0, filled))
-        let right = String(repeating: "─", count: max(0, width - filled))
-        return left + "●" + right
+    private func compact(_ text: String, limit: Int) -> String {
+        guard text.count > limit else { return text }
+        return String(text.prefix(max(1, limit - 1))).trimmingCharacters(in: .whitespaces) + "…"
     }
 
     private var deviceFooter: String {
