@@ -84,11 +84,12 @@ public enum LavaApp {
     ///   `ViewInvalidation.consumeDirtyBodyNodes`) — keep it cheap, an app's
     ///   own one-time setup belongs before this call, against the `Editor`
     ///   `open` already returned.
-    /// - `menu`: optional application menubar. Phase 2 draws it in-window with
-    ///   Vulkan (see `MenuChromeRoot`). Rebuilt on every full body pass so
-    ///   labels/`isEnabled` stay in sync with captured state. Prefer an
-    ///   `@Observable` model shared with the root when menu actions need view
-    ///   state. Menu shortcuts are matched after `onRawKey`.
+    /// - `menu`: optional application menubar. When a global-menu registrar is
+    ///   available (Vala Panel / Plasma appmenu / …), the tree is exported via
+    ///   DBusMenu and no in-window strip is drawn. Otherwise `MenuChromeRoot`
+    ///   draws it with Vulkan. Override with `LAVA_MENU=vulkan` or `dbus`.
+    ///   Rebuilt on every full body pass so labels/`isEnabled` stay in sync.
+    ///   Menu shortcuts are matched after `onRawKey` (both backends).
     /// - `onRawKey`: first look at every key event, ahead of focus/overlay/
     ///   content-scale handling. Return `true` to consume it.
     public static func run<V: View>(
@@ -99,8 +100,8 @@ public enum LavaApp {
     ) {
         var windowW: Float = 1280
         var windowH: Float = 800
-        // Menu strip lives inside the view tree (`MenuChromeRoot`), so content
-        // is not offset by a separate chrome height (menuH stays 0).
+        // In-window strip is composed inside the view tree when used; DBus
+        // global menu needs no client offset either. menuH stays 0.
         let menuH: Float = 0
         let fb0 = editor.framebufferSize()
         if fb0.w >= 1, fb0.h >= 1 {
@@ -110,7 +111,7 @@ public enum LavaApp {
 
         let host = LayoutHost()
         let drawList = DrawList(editor: editor)
-        let menuHost: MenuHost? = menu != nil ? MenuHost() : nil
+        let menuHost: MenuHost? = menu != nil ? MenuHost(editor: editor) : nil
 
         // Lets a worker thread unblock `pumpEvents` the moment it has a result,
         // the same way the agent socket does.
@@ -226,13 +227,18 @@ public enum LavaApp {
             if let menu, let menuHost {
                 menuHost.update(menu())
                 let hostRef = menuHost
-                host.setRoot(
-                    MenuChromeRoot(
-                        model: hostRef.model,
-                        onActivate: { hostRef.activate($0) },
-                        content: makeRoot()
+                if hostRef.showsInWindowChrome {
+                    host.setRoot(
+                        MenuChromeRoot(
+                            model: hostRef.model,
+                            onActivate: { hostRef.activate($0) },
+                            content: makeRoot()
+                        )
                     )
-                )
+                } else {
+                    // DBus global menu (or empty model): app content only.
+                    host.setRoot(makeRoot())
+                }
             } else {
                 host.setRoot(makeRoot())
             }
@@ -243,7 +249,7 @@ public enum LavaApp {
             menuHost?.update(menu())
         }
         let demo0: any View = {
-            if let menuHost, !menuHost.isEmpty {
+            if let menuHost, menuHost.showsInWindowChrome {
                 return MenuChromeRoot(
                     model: menuHost.model,
                     onActivate: { _ in },
@@ -252,9 +258,15 @@ public enum LavaApp {
             }
             return makeRoot()
         }()
-        let rootLabel = menu != nil
-            ? "MenuChromeRoot<\(V.self)>"
-            : String(describing: V.self)
+        let rootLabel: String = {
+            if menuHost?.showsInWindowChrome == true {
+                return "MenuChromeRoot<\(V.self)>"
+            }
+            if menuHost?.backend == .dbusMenu {
+                return "\(V.self)+AppMenu"
+            }
+            return String(describing: V.self)
+        }()
         FileHandle.standardError.write(Data("--- \(rootLabel) structure ---\n".utf8))
         for line in demo0.structureLines() {
             FileHandle.standardError.write(Data((line + "\n").utf8))
@@ -367,6 +379,7 @@ public enum LavaApp {
         /// Drain input queue, run invalidation pipeline, present.
         func settleFrame() {
             MainQueue.drain()
+            menuHost?.poll()
             while let ev = editor.pollInputEvent() {
                 processInputEvent(ev)
             }
@@ -470,17 +483,34 @@ public enum LavaApp {
         while editor.isOpen {
             // Agent wake posts an empty GLFW event, so we can still block
             // forever when idle (zero CPU) and still answer TCP immediately.
-            let wake = FrameScheduler.timeoutUntilNextWake()
+            //
+            // Exception: DBusMenu. The panel issues synchronous D-Bus calls
+            // (GetLayout / AboutToShow) on the session bus; those only complete
+            // when we iterate GLib. Blocking forever in glfwWaitEvents with no
+            // other wake source freezes the whole panel/session. Cap the wait
+            // and pump GLib on both sides of the wait.
+            var wake = FrameScheduler.timeoutUntilNextWake()
+            if menuHost?.needsDBusPump == true {
+                let cap = MenuHost.dbusPumpInterval
+                if wake < 0 || wake > cap { wake = cap }
+            }
+            // Clear any D-Bus work already queued before parking in GLFW.
+            menuHost?.poll()
             editor.pumpEvents(timeout: wake)
 
-            // After wake (input, animation, or agent socket), service the agent
-            // before processing the rest of the frame so injects land this tick.
+            // After wake (input, animation, agent, or D-Bus pump interval),
+            // service the agent before the rest of the frame so injects land
+            // this tick.
             agentServer?.poll()
 
             // Before input and before invalidation is consumed: a worker
             // result delivered while the loop was parked belongs to the frame
             // about to be built, not the one after it.
             MainQueue.drain()
+
+            // Global-menu: process GetLayout / activations that arrived during
+            // the wait (and any more that show up while dispatching).
+            menuHost?.poll()
 
             while let ev = editor.pollInputEvent() {
                 processInputEvent(ev)

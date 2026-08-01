@@ -48,6 +48,9 @@ class Engine {
   void close();
   bool isOpen() const;
 
+  /// Signal the window to close; the app loop exits on the next iteration.
+  void requestClose();
+
   /// Drive the window from the caller's thread. `timeoutSeconds`: negative
   /// blocks until an event arrives, 0 polls, positive waits up to that long.
   /// Blocking is what keeps an idle UI at zero CPU while still waking on
@@ -152,6 +155,33 @@ class Engine {
 
   /// Low-level access for advanced use; may be null if closed.
   Application *application();
+
+  // ─── App menu (Linux DBusMenu / global panel) ───────────────────────────
+
+  /// X11 window id for the GLFW surface, or 0 if not X11 / no window.
+  uint32_t x11WindowId() const;
+
+  /// True if a global-menu registrar is on the session bus (and lib linked).
+  static bool appMenuRegistrarAvailable();
+
+  /// Attach DBusMenu server + RegisterWindow. No-op / false without deps.
+  bool appMenuAttach();
+
+  void appMenuDetach();
+  bool appMenuIsAttached() const;
+  void appMenuPoll();
+
+  void appMenuBeginUpdate();
+  void appMenuBeginMenu(const std::string &id, const std::string &title);
+  void appMenuEndMenu();
+  /// checked: -1 none, 0 unchecked, 1 checked.
+  void appMenuAddItem(const std::string &id, const std::string &title,
+                      bool enabled, int checked);
+  void appMenuAddSeparator();
+  void appMenuCommitUpdate();
+
+  /// Pop panel activation (MenuID string). Empty string if none.
+  std::string appMenuPopActivation();
 
  private:
   struct Impl;

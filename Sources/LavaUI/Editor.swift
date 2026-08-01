@@ -47,6 +47,9 @@ public final class Editor: @unchecked Sendable {
 
     public var isOpen: Bool { engine.isOpen() }
 
+    /// Ask the frame loop to exit (GLFW should-close). Safe from menu actions.
+    public func requestClose() { engine.requestClose() }
+
     /// Drive the window from this thread. `timeout` < 0 blocks until an event
     /// arrives, 0 polls, > 0 waits at most that long. Blocking is what keeps
     /// an idle UI at zero CPU while still waking immediately on input.
@@ -194,6 +197,45 @@ public final class Editor: @unchecked Sendable {
         if outW < 1 { outW = w > 0 ? w : 0 }
         if outH < 1 { outH = h > 0 ? h : 0 }
         return (s, outW, outH)
+    }
+
+    // ─── App menu (Linux DBusMenu / global panel) ────────────────────────
+
+    /// True if `com.canonical.AppMenu.Registrar` is on the session bus and
+    /// canvas was built with libdbusmenu-glib.
+    public static func appMenuRegistrarAvailable() -> Bool {
+        canvas.Engine.appMenuRegistrarAvailable()
+    }
+
+    /// Register this window's menu with the session AppMenu registrar.
+    @discardableResult
+    public func appMenuAttach() -> Bool { engine.appMenuAttach() }
+
+    public func appMenuDetach() { engine.appMenuDetach() }
+
+    public var appMenuIsAttached: Bool { engine.appMenuIsAttached() }
+
+    public func appMenuPoll() { engine.appMenuPoll() }
+
+    public func appMenuBeginUpdate() { engine.appMenuBeginUpdate() }
+
+    public func appMenuBeginMenu(id: String, title: String) {
+        engine.appMenuBeginMenu(std.string(id), std.string(title))
+    }
+
+    public func appMenuEndMenu() { engine.appMenuEndMenu() }
+
+    public func appMenuAddItem(id: String, title: String, enabled: Bool, checked: Int32) {
+        engine.appMenuAddItem(std.string(id), std.string(title), enabled, Int32(checked))
+    }
+
+    public func appMenuAddSeparator() { engine.appMenuAddSeparator() }
+
+    public func appMenuCommitUpdate() { engine.appMenuCommitUpdate() }
+
+    /// Panel-activated MenuID raw string, or empty if the queue is empty.
+    public func appMenuPopActivation() -> String {
+        String(engine.appMenuPopActivation())
     }
 }
 #endif

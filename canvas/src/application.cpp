@@ -22,6 +22,10 @@
 
 #define GLFW_INCLUDE_VULKAN
 #include <GLFW/glfw3.h>
+#if defined(CANVAS_HAVE_X11)
+#define GLFW_EXPOSE_NATIVE_X11
+#include <GLFW/glfw3native.h>
+#endif
 
 #define GLM_ENABLE_EXPERIMENTAL
 #include <glm/gtx/string_cast.hpp>
@@ -353,6 +357,8 @@ struct Application::Impl
   {
     return vulkan.windowShouldClose();
   }
+
+  void requestClose() { vulkan.requestClose(); }
 
   void setWindowFrame(int x, int y, int width, int height)
   {
@@ -1029,6 +1035,10 @@ bool Application::windowShouldClose() const {
   return impl_->windowShouldClose();
 }
 
+void Application::requestClose() {
+  impl_->requestClose();
+}
+
 void Application::setWindowFrame(int x, int y, int width, int height) {
   impl_->setWindowFrame(x, y, width, height);
 }
@@ -1125,6 +1135,18 @@ bool Application::repaint() {
 bool Application::isIconified() const {
   GLFWwindow *win = impl_->vulkan.window();
   return win && glfwGetWindowAttrib(win, GLFW_ICONIFIED) != 0;
+}
+
+uint32_t Application::x11WindowId() const
+{
+#if defined(CANVAS_HAVE_X11)
+  GLFWwindow *win = impl_->vulkan.window();
+  if (!win) return 0;
+  if (glfwGetPlatform() != GLFW_PLATFORM_X11) return 0;
+  return static_cast<uint32_t>(glfwGetX11Window(win));
+#else
+  return 0;
+#endif
 }
 
 void Application::pointerMove(float x, float y) {

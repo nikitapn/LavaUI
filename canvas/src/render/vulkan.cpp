@@ -2318,6 +2318,11 @@ bool Vulkan::windowShouldClose() const
   return window_ && glfwWindowShouldClose(window_);
 }
 
+void Vulkan::requestClose()
+{
+  if (window_) glfwSetWindowShouldClose(window_, GLFW_TRUE);
+}
+
 #ifdef INCLUDE_IMGUI
 void Vulkan::initImGuiGlfwBackend()
 {

@@ -55,16 +55,24 @@ LavaApp.run(
     editor: editor,
     menu: {
         MenuBar {
+            // First top-level menu = application menu (Chrome: "Google Chrome").
+            // Global panels put it beside the window icon; omit it and that
+            // slot looks empty/invisible.
+            Menu("MyApp") {
+                MenuItem("New", shortcut: KeyShortcut(KeyCode.n, .primary)) { newDoc() }
+                MenuSeparator()
+                MenuItem("Quit", shortcut: KeyShortcut(KeyCode.q, .primary)) {
+                    editor.requestClose()
+                }
+            }
             Menu("File") {
-                MenuItem("Open…", shortcut: .init(.o, .primary)) { open() }
-                MenuItem("Save", shortcut: .init(.s, .primary), isEnabled: canSave) {
+                MenuItem("Open…", shortcut: KeyShortcut(KeyCode.o, .primary)) { open() }
+                MenuItem("Save", shortcut: KeyShortcut(KeyCode.s, .primary), isEnabled: canSave) {
                     save()
                 }
-                MenuSeparator()
-                MenuItem("Quit", shortcut: .init(.q, .primary)) { quit() }
             }
             Menu("Edit") {
-                MenuItem("Copy", shortcut: .init(.c, .primary)) { copy() }
+                MenuItem("Copy", shortcut: KeyShortcut(KeyCode.c, .primary)) { copy() }
             }
         }
     },
@@ -319,22 +327,16 @@ Primary modifier: Command on macOS, Control on Linux/Windows (or a single
 
 ```text
 Sources/LavaMenu/          // pure IR + DSL (no C++ / GPU)
-  Menu.swift               // MenuBar, Menu, MenuItem, MenuModel, MenuController
+  Menu.swift
 
 Sources/LavaUI/
-  MenuHost.swift           // backend selection; wraps MenuController + activate
-  MenuBarView.swift        // MenuChromeRoot, MenuBarStrip, MenuDropdownPanel
+  MenuHost.swift           // vulkan | dbusMenu selection, export, poll
+  MenuBarView.swift        // Vulkan strip + overlays
   LavaApp.swift            // run(..., menu: { MenuBar { … } })
 
-canvas/src/menu/           // phase 3+ (DBus / Win32 / Cocoa)
-  menu_host.hpp/cpp
-  menu_cocoa.mm
-  menu_win32.cpp
-  menu_linux_dbus.cpp
+canvas/src/menu/
+  app_menu.hpp/cpp         // DBusMenu server + AppMenu Registrar (optional)
 ```
-
-`LavaMenu` owns IR and policy; Vulkan chrome is pure LavaUI views; later C++
-owns OS menu objects (same split as clipboard and tool-window hints).
 
 ## Dependencies
 
@@ -371,13 +373,21 @@ fallback. No hard GTK dependency.
    in-window strip + `Overlay` dropdowns; shortcuts via `MenuHost.activate(matchingKey:)`.
    The strip is **inside** the view tree (not a separate `menuH` client offset).
 3. **Linux DBusMenuHost** — probe Registrar; export tree; fall back to (2).
+   **Done** (`canvas/src/menu/app_menu.*`, `MenuHost` backend selection):
+   - Optional build dep `dbusmenu-glib-0.4` + `gio-2.0` (`CANVAS_HAVE_DBUSMENU`)
+   - `com.canonical.AppMenu.Registrar` + X11 window id
+   - `LAVA_MENU=vulkan|dbus|auto` override
+   - GLib pump before/after `pumpEvents`; idle wait capped (~20ms) while DBus
+     is active so panel GetLayout/AboutToShow always get replies (unbounded
+     `glfwWaitEvents` freezes XFCE/the panel). Activations also
+     `glfwPostEmptyEvent`.
 4. **Win32** when Windows is a real target.
 5. **Cocoa** when macOS is a real target.
 6. **Context menus** sharing IR (Overlay and/or `TrackPopupMenu` /
    `popUpContextMenu`).
 
-Shipping (2) before (3) matches the product rule: **a menu bar always
-exists**; global panel integration is an enhancement when the DE provides it.
+Default on Linux: try global menu, else Vulkan strip — **a menu bar always
+exists**.
 
 ## Decisions
 

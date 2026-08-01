@@ -26,6 +26,9 @@ harfbuzz_dep = dependency('harfbuzz')
 glfw_dep     = dependency('glfw3')
 # Optional: X11 native hints so the canvas can skip the taskbar/dock.
 x11_dep     = dependency('x11', required: false)
+# Optional: global menu export for Vala Panel / Plasma appmenu (DBusMenu).
+dbusmenu_dep = dependency('dbusmenu-glib-0.4', required: false)
+gio_dep      = dependency('gio-2.0', required: false)
 
 # ——— Shaders (compiled to <builddir>/shaders/) ———
 subdir('shaders')
@@ -76,6 +79,7 @@ engine_sources = [
   'src/render/blur_pass.cpp',
   'src/window/canvas_window.cpp',
   'src/window/window_platform.cpp',
+  'src/menu/app_menu.cpp',
   'src/util/util.cpp',
   'src/util/cout_ext.cpp',
   'src/bridge/canvas_engine.cpp',
@@ -97,6 +101,12 @@ main_inc = include_directories(
 common_cpp_args = ['-DGLM_FORCE_DEPTH_ZERO_TO_ONE']
 if x11_dep.found()
   common_cpp_args += ['-DCANVAS_HAVE_X11']
+endif
+if dbusmenu_dep.found() and gio_dep.found()
+  common_cpp_args += ['-DCANVAS_HAVE_DBUSMENU']
+  message('AppMenu / DBusMenu support: enabled')
+else
+  message('AppMenu / DBusMenu support: disabled (install libdbusmenu-glib + gio)')
 endif
 common_link_args = []
 
@@ -137,6 +147,9 @@ yoga_dep = declare_dependency(
 canvas_deps = [vulkan_dep, freetype_dep, harfbuzz_dep, glfw_dep, yoga_dep]
 if x11_dep.found()
   canvas_deps += [x11_dep]
+endif
+if dbusmenu_dep.found() and gio_dep.found()
+  canvas_deps += [dbusmenu_dep, gio_dep]
 endif
 
 # ——— Embeddable library ———

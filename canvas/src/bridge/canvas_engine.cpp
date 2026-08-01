@@ -1,6 +1,7 @@
 #include "bridge/canvas_engine.hpp"
 
 #include "application.hpp"
+#include "menu/app_menu.hpp"
 #include "window/canvas_window.hpp"
 
 #define GLFW_INCLUDE_NONE
@@ -16,6 +17,7 @@ struct Engine::Impl {
   enum class Mode { None, Offscreen, Windowed } mode = Mode::None;
   std::unique_ptr<Application> offscreen;
   std::unique_ptr<CanvasWindowHost> window;
+  AppMenuHost appMenu;
 
   Application *app()
   {
@@ -85,6 +87,7 @@ VoidResult Engine::openOffscreen(const std::string &assetsRoot, uint32_t width,
 
 void Engine::close()
 {
+  impl_->appMenu.detach();
   if (impl_->window) {
     impl_->window->close();
     impl_->window.reset();
@@ -117,6 +120,11 @@ bool Engine::isOpen() const
   if (impl_->mode == Impl::Mode::Windowed)
     return impl_->window && impl_->window->isOpen();
   return impl_->mode == Impl::Mode::Offscreen && impl_->offscreen != nullptr;
+}
+
+void Engine::requestClose()
+{
+  impl_->withApp([&](Application &app) { app.requestClose(); });
 }
 
 void Engine::setWindowFrame(int x, int y, int width, int height)
@@ -317,5 +325,58 @@ bool Engine::textureSize(uint32_t textureId, float &outW, float &outH) const
 }
 
 Application *Engine::application() { return impl_->app(); }
+
+uint32_t Engine::x11WindowId() const
+{
+  uint32_t id = 0;
+  const_cast<Engine *>(this)->impl_->withApp([&](Application &app) {
+    id = app.x11WindowId();
+  });
+  return id;
+}
+
+bool Engine::appMenuRegistrarAvailable()
+{
+  return AppMenuHost::registrarAvailable();
+}
+
+bool Engine::appMenuAttach()
+{
+  const uint32_t xid = x11WindowId();
+  if (xid == 0) return false;
+  return impl_->appMenu.attach(xid);
+}
+
+void Engine::appMenuDetach() { impl_->appMenu.detach(); }
+
+bool Engine::appMenuIsAttached() const { return impl_->appMenu.isAttached(); }
+
+void Engine::appMenuPoll() { impl_->appMenu.poll(); }
+
+void Engine::appMenuBeginUpdate() { impl_->appMenu.beginUpdate(); }
+
+void Engine::appMenuBeginMenu(const std::string &id, const std::string &title)
+{
+  impl_->appMenu.beginMenu(id, title);
+}
+
+void Engine::appMenuEndMenu() { impl_->appMenu.endMenu(); }
+
+void Engine::appMenuAddItem(const std::string &id, const std::string &title,
+                            bool enabled, int checked)
+{
+  impl_->appMenu.addItem(id, title, enabled, checked);
+}
+
+void Engine::appMenuAddSeparator() { impl_->appMenu.addSeparator(); }
+
+void Engine::appMenuCommitUpdate() { impl_->appMenu.commitUpdate(); }
+
+std::string Engine::appMenuPopActivation()
+{
+  std::string id;
+  if (impl_->appMenu.popActivation(id)) return id;
+  return {};
+}
 
 } // namespace canvas

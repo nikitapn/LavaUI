@@ -277,6 +277,8 @@ class Vulkan
   bool isWindowed() const { return windowed_; }
   GLFWwindow *window() const { return window_; }
   bool windowShouldClose() const;
+  /// Ask the main loop to exit (sets GLFW should-close).
+  void requestClose();
 
 #ifdef INCLUDE_IMGUI
   /// Call after installing app-level GLFW callbacks so ImGui can chain.

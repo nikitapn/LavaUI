@@ -25,6 +25,7 @@ public:
     const std::string &assetsRoot, const std::string &title);
 
   bool windowShouldClose() const;
+  void requestClose();
 
   /// Place the GLFW window over a layout slot (screen coordinates, pixels).
   /// Size changes rebuild the Vulkan framebuffer on the next ensure/repaint.
@@ -37,6 +38,9 @@ public:
   /// minimize/restore doesn't route through `setWindowVisible`, so caching
   /// would need its own callback wiring to stay correct.
   bool isIconified() const;
+
+  /// X11 Window id for AppMenu Registrar, or 0 if not X11 / no window.
+  uint32_t x11WindowId() const;
 
   // Renders the current retained scene. Offscreen: to the readback target.
   // Windowed: blit to swapchain and present. Returns false on error.

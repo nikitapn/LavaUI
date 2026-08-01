@@ -20,11 +20,30 @@ struct HelloWorldApp {
             FileHandle.standardError.write(Data("warning: brand image failed to load\n".utf8))
         }
 
-        // Phase 2: in-window Vulkan menubar (same IR as future DBusMenu host).
+        // First top-level menu is the *application* menu (Chrome: "Google Chrome").
+        // Global panels show it next to the window icon; leaving it out looks like
+        // a blank clickable slot before View/Help.
         LavaApp.run(
             editor: editor,
             menu: {
                 MenuBar {
+                    Menu("LavaUI", id: "app") {
+                        MenuItem(
+                            "New",
+                            id: "app.new",
+                            shortcut: KeyShortcut(KeyCode.n, .primary)
+                        ) {
+                            FileHandle.standardError.write(Data("menu: New\n".utf8))
+                        }
+                        MenuSeparator()
+                        MenuItem(
+                            "Quit",
+                            id: "app.quit",
+                            shortcut: KeyShortcut(KeyCode.q, .primary)
+                        ) {
+                            editor.requestClose()
+                        }
+                    }
                     Menu("View") {
                         MenuItem(
                             "Toggle theme",
@@ -35,8 +54,6 @@ struct HelloWorldApp {
                         }
                         MenuSeparator()
                         MenuItem("Zoom in", id: "view.zoom-in") {
-                            // Content scale is handled by Ctrl+= in the loop;
-                            // this is a visible menu target for agents/demos.
                             FileHandle.standardError.write(Data("menu: Zoom in\n".utf8))
                         }
                         MenuItem("Zoom out", id: "view.zoom-out") {
@@ -46,7 +63,7 @@ struct HelloWorldApp {
                     Menu("Help") {
                         MenuItem("About LavaUI", id: "help.about") {
                             FileHandle.standardError.write(
-                                Data("LavaUI demo — native menu phase 2 (Vulkan bar)\n".utf8)
+                                Data("LavaUI demo — native menu (AppMenu / Vulkan)\n".utf8)
                             )
                         }
                     }
