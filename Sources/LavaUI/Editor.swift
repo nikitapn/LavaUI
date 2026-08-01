@@ -63,21 +63,25 @@ public final class Editor: @unchecked Sendable {
 
     // ─── Phase 3 draw list ───────────────────────────────────────────────
 
+    func ensureDrawListCapacity(commands: Int, glyphs: Int, meshVertices: Int) {
+        engine.ensureDrawListCapacity(commands, glyphs, meshVertices)
+    }
+
+    func drawListStorage() -> (
+        commands: UnsafeMutablePointer<canvas.DrawCommand>, commandCapacity: Int,
+        glyphs: UnsafeMutablePointer<canvas.GlyphInstance>, glyphCapacity: Int,
+        meshVertices: UnsafeMutablePointer<canvas.MeshVertex>, meshVertexCapacity: Int
+    ) {
+        (
+            engine.drawCommandData(), engine.drawCommandCapacity(),
+            engine.drawGlyphData(), engine.drawGlyphCapacity(),
+            engine.drawMeshVertexData(), engine.drawMeshVertexCapacity()
+        )
+    }
+
     public func submitDrawList(_ list: DrawList) {
-        list.commands.withUnsafeBufferPointer { cmdBuf in
-            list.glyphs.withUnsafeBufferPointer { glyphBuf in
-                list.meshVertices.withUnsafeBufferPointer { meshBuf in
-                    engine.submitDrawList(
-                        cmdBuf.baseAddress,
-                        cmdBuf.count,
-                        glyphBuf.baseAddress,
-                        glyphBuf.count,
-                        meshBuf.baseAddress,
-                        meshBuf.count
-                    )
-                }
-            }
-        }
+        precondition(list.editor === self, "a DrawList belongs to its creating Editor")
+        engine.commitDrawList(list.commandCount, list.glyphCount, list.meshVertexCount)
     }
 
     /// Install face for draw-list text (must match UIFont used for measure).

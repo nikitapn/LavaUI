@@ -34,16 +34,23 @@ public enum DrawKind: UInt32 {
 /// Reused arena: draw commands plus the shaped glyphs they reference.
 /// Shaping itself is cached per line on `UIFont`, so re-emission is cheap.
 public final class DrawList {
-    public private(set) var commands: [canvas.DrawCommand] = []
+    unowned let editor: Editor
+    private var commandStorage: UnsafeMutablePointer<canvas.DrawCommand>
+    private var commandCapacity: Int
+    private(set) var commandCount = 0
 
     /// Shaped glyphs in absolute window pixels; `Text` commands index this.
     /// Replaces the old string blob — the renderer no longer shapes anything,
     /// so strings never cross the boundary.
-    public private(set) var glyphs: [canvas.GlyphInstance] = []
+    private var glyphStorage: UnsafeMutablePointer<canvas.GlyphInstance>
+    private var glyphCapacity: Int
+    private(set) var glyphCount = 0
 
     /// Polygon vertices in absolute window pixels; `Mesh` commands index this
     /// the same way `Text` indexes `glyphs`.
-    public private(set) var meshVertices: [canvas.MeshVertex] = []
+    private var meshVertexStorage: UnsafeMutablePointer<canvas.MeshVertex>
+    private var meshVertexCapacity: Int
+    private(set) var meshVertexCount = 0
 
     /// Overlays found during the current walk, emitted once it finishes.
     private var pendingOverlays: [PendingOverlay] = []
@@ -60,17 +67,62 @@ public final class DrawList {
     /// content is skipped before any draw commands are issued.
     private var cullStack: [CullRect] = []
 
-    public init() {
-        commands.reserveCapacity(256)
-        glyphs.reserveCapacity(2048)
-        meshVertices.reserveCapacity(256)
+    init(editor: Editor) {
+        self.editor = editor
+        editor.ensureDrawListCapacity(commands: 256, glyphs: 2048, meshVertices: 256)
+        let storage = editor.drawListStorage()
+        commandStorage = storage.commands
+        commandCapacity = storage.commandCapacity
+        glyphStorage = storage.glyphs
+        glyphCapacity = storage.glyphCapacity
+        meshVertexStorage = storage.meshVertices
+        meshVertexCapacity = storage.meshVertexCapacity
     }
 
     public func clear() {
-        commands.removeAll(keepingCapacity: true)
-        glyphs.removeAll(keepingCapacity: true)
-        meshVertices.removeAll(keepingCapacity: true)
+        commandCount = 0
+        glyphCount = 0
+        meshVertexCount = 0
         cullStack.removeAll(keepingCapacity: true)
+    }
+
+    private func grow(commands: Int = 0, glyphs: Int = 0, meshVertices: Int = 0) {
+        let nextCommands = commands > commandCapacity
+            ? max(commands, max(256, commandCapacity * 2)) : commandCapacity
+        let nextGlyphs = glyphs > glyphCapacity
+            ? max(glyphs, max(2048, glyphCapacity * 2)) : glyphCapacity
+        let nextMesh = meshVertices > meshVertexCapacity
+            ? max(meshVertices, max(256, meshVertexCapacity * 2)) : meshVertexCapacity
+        editor.ensureDrawListCapacity(
+            commands: nextCommands, glyphs: nextGlyphs, meshVertices: nextMesh
+        )
+        let storage = editor.drawListStorage()
+        commandStorage = storage.commands
+        commandCapacity = storage.commandCapacity
+        glyphStorage = storage.glyphs
+        glyphCapacity = storage.glyphCapacity
+        meshVertexStorage = storage.meshVertices
+        meshVertexCapacity = storage.meshVertexCapacity
+    }
+
+    private func appendCommand(_ command: canvas.DrawCommand) {
+        if commandCount == commandCapacity { grow(commands: commandCount + 1) }
+        commandStorage[commandCount] = command
+        commandCount += 1
+    }
+
+    private func appendGlyph(_ glyph: canvas.GlyphInstance) {
+        if glyphCount == glyphCapacity { grow(glyphs: glyphCount + 1) }
+        glyphStorage[glyphCount] = glyph
+        glyphCount += 1
+    }
+
+    private func appendMeshVertex(_ vertex: canvas.MeshVertex) {
+        if meshVertexCount == meshVertexCapacity {
+            grow(meshVertices: meshVertexCount + 1)
+        }
+        meshVertexStorage[meshVertexCount] = vertex
+        meshVertexCount += 1
     }
 
     /// Inclusive-exclusive AABB (x0 ≤ x < x1).
@@ -127,7 +179,7 @@ public final class DrawList {
         }
         cmd.param = param
         cmd.aux = aux
-        commands.append(cmd)
+        appendCommand(cmd)
     }
 
     public func rect(x: Float, y: Float, w: Float, h: Float, color: Color) {
@@ -151,7 +203,7 @@ public final class DrawList {
         let run = font.shape(string)
         guard !run.isEmpty else { return }
 
-        let first = UInt32(glyphs.count)
+        let first = UInt32(glyphCount)
         let penX = x + 4  // matches the inset the old renderText path used
         let penY = y + font.ascent
         for g in run {
@@ -160,7 +212,7 @@ public final class DrawList {
             inst.fontId = font.engineId
             inst.x = penX + g.x
             inst.y = penY + g.y
-            glyphs.append(inst)
+            appendGlyph(inst)
         }
         // `w` carries the glyph count for Text (see draw_command.hpp).
         append(
@@ -187,13 +239,15 @@ public final class DrawList {
     /// triangles rather than depend on the optional `wideLines` device feature.
     public func polyline(_ points: [(x: Float, y: Float)], color: Color) {
         guard points.count >= 2 else { return }
-        let first = UInt32(meshVertices.count)
-        meshVertices.reserveCapacity(meshVertices.count + points.count)
+        let first = UInt32(meshVertexCount)
+        if meshVertexCount + points.count > meshVertexCapacity {
+            grow(meshVertices: meshVertexCount + points.count)
+        }
         for point in points {
             var vertex = canvas.MeshVertex()
             vertex.x = point.x
             vertex.y = point.y
-            meshVertices.append(vertex)
+            appendMeshVertex(vertex)
         }
         append(
             kind: .polyline, x: 0, y: 0, w: Float(points.count), h: 0,
@@ -265,13 +319,15 @@ public final class DrawList {
     }
 
     private func emitMesh(_ points: [(x: Float, y: Float)], color: Color, isRing: Bool) {
-        let first = UInt32(meshVertices.count)
-        meshVertices.reserveCapacity(meshVertices.count + points.count)
+        let first = UInt32(meshVertexCount)
+        if meshVertexCount + points.count > meshVertexCapacity {
+            grow(meshVertices: meshVertexCount + points.count)
+        }
         for p in points {
             var v = canvas.MeshVertex()
             v.x = p.x
             v.y = p.y
-            meshVertices.append(v)
+            appendMeshVertex(v)
         }
         append(
             kind: .mesh, x: 0, y: 0, w: Float(points.count), h: 0,

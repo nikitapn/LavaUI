@@ -618,7 +618,8 @@ struct Application::Impl
       // coarser grid rather than forcing the fine one down to theirs.
       float finestRadius = BlurPass::kMaxRadius;
       bool anyBlur = false;
-      for (const auto &cmd : drawCmds_) {
+      for (size_t cmdIndex = 0; cmdIndex < drawCmdCount_; ++cmdIndex) {
+        const auto &cmd = drawCmds_[cmdIndex];
         const auto kind = static_cast<canvas::DrawCommandKind>(cmd.kind);
         if (kind != canvas::DrawCommandKind::BeginBackdropBlur &&
             kind != canvas::DrawCommandKind::BeginContentBlur) {
@@ -752,7 +753,8 @@ struct Application::Impl
     std::vector<canvas::DrawCommand> contentScopes;
     // Must match the slot waitForInFlightFrame() just freed / submit will use.
     quadRenderer.begin({viewW, viewH}, vulkan.currentFrameSlot());
-    for (const auto &cmd : drawCmds_) {
+    for (size_t cmdIndex = 0; cmdIndex < drawCmdCount_; ++cmdIndex) {
+      const auto &cmd = drawCmds_[cmdIndex];
       switch (static_cast<canvas::DrawCommandKind>(cmd.kind)) {
       case canvas::DrawCommandKind::Rect:
         quadRenderer.pushBox({cmd.x, cmd.y}, {cmd.w, cmd.h}, cmd.color, 0.f);
@@ -783,7 +785,7 @@ struct Application::Impl
         const uint32_t count = static_cast<uint32_t>(cmd.w);
         for (uint32_t g = 0; g < count; ++g) {
           const size_t idx = first + g;
-          if (idx >= drawGlyphs_.size()) break;
+          if (idx >= drawGlyphCount_) break;
           const auto &gi = drawGlyphs_[idx];
           TextRenderer::GlyphQuad q;
           if (!textRenderer.glyphQuad(gi.fontId, gi.glyphId, q)) continue;
@@ -798,7 +800,7 @@ struct Application::Impl
         // the renderer only converts and triangulates. See draw_command.hpp.
         const uint32_t first = cmd.param;
         const uint32_t count = static_cast<uint32_t>(cmd.w);
-        if (first + count > drawMeshVerts_.size()) break;
+        if (first + count > drawMeshVertCount_) break;
         meshPointScratch_.clear();
         meshPointScratch_.reserve(count);
         for (uint32_t i = 0; i < count; ++i) {
@@ -812,7 +814,7 @@ struct Application::Impl
       case canvas::DrawCommandKind::Polyline: {
         const uint32_t first = cmd.param;
         const uint32_t count = static_cast<uint32_t>(cmd.w);
-        if (count < 2 || first + count > drawMeshVerts_.size()) break;
+        if (count < 2 || first + count > drawMeshVertCount_) break;
         meshPointScratch_.clear();
         meshPointScratch_.reserve(count);
         for (uint32_t i = 0; i < count; ++i) {
@@ -886,6 +888,9 @@ struct Application::Impl
   std::vector<canvas::DrawCommand> drawCmds_;
   std::vector<canvas::GlyphInstance> drawGlyphs_;
   std::vector<canvas::MeshVertex> drawMeshVerts_;
+  size_t drawCmdCount_ = 0;
+  size_t drawGlyphCount_ = 0;
+  size_t drawMeshVertCount_ = 0;
   /// Reused across Mesh commands to convert `MeshVertex` (Swift-facing POD)
   /// to `vec2` (the engine's internal type) without a fresh allocation
   /// every wedge, every frame.
@@ -912,6 +917,26 @@ struct Application::Impl
     drawCmds_.assign(cmds, cmds + cmdCount);
     drawGlyphs_.assign(glyphs, glyphs + glyphCount);
     drawMeshVerts_.assign(meshVerts, meshVerts + meshVertCount);
+    drawCmdCount_ = cmdCount;
+    drawGlyphCount_ = glyphCount;
+    drawMeshVertCount_ = meshVertCount;
+  }
+
+  void ensureDrawListCapacity(size_t cmdCapacity, size_t glyphCapacity,
+                              size_t meshVertCapacity)
+  {
+    if (drawCmds_.size() < cmdCapacity) drawCmds_.resize(cmdCapacity);
+    if (drawGlyphs_.size() < glyphCapacity) drawGlyphs_.resize(glyphCapacity);
+    if (drawMeshVerts_.size() < meshVertCapacity) {
+      drawMeshVerts_.resize(meshVertCapacity);
+    }
+  }
+
+  void commitDrawList(size_t cmdCount, size_t glyphCount, size_t meshVertCount)
+  {
+    drawCmdCount_ = std::min(cmdCount, drawCmds_.size());
+    drawGlyphCount_ = std::min(glyphCount, drawGlyphs_.size());
+    drawMeshVertCount_ = std::min(meshVertCount, drawMeshVerts_.size());
   }
 
   bool pollInputEvent(canvas::InputEvent &out)
@@ -1019,6 +1044,26 @@ void Application::submitDrawList(const canvas::DrawCommand *cmds, size_t cmdCoun
                                  size_t meshVertCount)
 {
   impl_->submitDrawList(cmds, cmdCount, glyphs, glyphCount, meshVerts, meshVertCount);
+}
+
+void Application::ensureDrawListCapacity(size_t cmdCapacity,
+                                         size_t glyphCapacity,
+                                         size_t meshVertCapacity)
+{
+  impl_->ensureDrawListCapacity(cmdCapacity, glyphCapacity, meshVertCapacity);
+}
+
+canvas::DrawCommand *Application::drawCommandData() { return impl_->drawCmds_.data(); }
+canvas::GlyphInstance *Application::drawGlyphData() { return impl_->drawGlyphs_.data(); }
+canvas::MeshVertex *Application::drawMeshVertexData() { return impl_->drawMeshVerts_.data(); }
+size_t Application::drawCommandCapacity() const { return impl_->drawCmds_.size(); }
+size_t Application::drawGlyphCapacity() const { return impl_->drawGlyphs_.size(); }
+size_t Application::drawMeshVertexCapacity() const { return impl_->drawMeshVerts_.size(); }
+
+void Application::commitDrawList(size_t cmdCount, size_t glyphCount,
+                                 size_t meshVertCount)
+{
+  impl_->commitDrawList(cmdCount, glyphCount, meshVertCount);
 }
 
 bool Application::pollInputEvent(canvas::InputEvent &out)

@@ -42,10 +42,21 @@ public:
   // Windowed: blit to swapchain and present. Returns false on error.
   bool repaint();
 
-  /// Immediate draw list from Swift (copied). See Engine::submitDrawList.
+  /// Legacy copied submission path. New Swift code writes directly into the
+  /// reusable buffers below and commits only the used element counts.
   void submitDrawList(const canvas::DrawCommand *cmds, size_t cmdCount,
                       const canvas::GlyphInstance *glyphs, size_t glyphCount,
                       const canvas::MeshVertex *meshVerts, size_t meshVertCount);
+  void ensureDrawListCapacity(size_t cmdCapacity, size_t glyphCapacity,
+                              size_t meshVertCapacity);
+  canvas::DrawCommand *drawCommandData();
+  canvas::GlyphInstance *drawGlyphData();
+  canvas::MeshVertex *drawMeshVertexData();
+  size_t drawCommandCapacity() const;
+  size_t drawGlyphCapacity() const;
+  size_t drawMeshVertexCapacity() const;
+  void commitDrawList(size_t cmdCount, size_t glyphCount,
+                      size_t meshVertCount);
   bool pollInputEvent(canvas::InputEvent &out);
 
   /// Paths from the most recent FileDrop event, pulled by index — see the

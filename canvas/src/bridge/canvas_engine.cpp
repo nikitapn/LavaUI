@@ -190,6 +190,55 @@ void Engine::submitDrawList(const DrawCommand *cmds, size_t cmdCount,
   });
 }
 
+void Engine::ensureDrawListCapacity(size_t cmdCapacity, size_t glyphCapacity,
+                                    size_t meshVertCapacity)
+{
+  impl_->withApp([&](Application &app) {
+    app.ensureDrawListCapacity(cmdCapacity, glyphCapacity, meshVertCapacity);
+  });
+}
+
+DrawCommand *Engine::drawCommandData()
+{
+  return impl_->withApp([](Application &app) { return app.drawCommandData(); });
+}
+
+GlyphInstance *Engine::drawGlyphData()
+{
+  return impl_->withApp([](Application &app) { return app.drawGlyphData(); });
+}
+
+MeshVertex *Engine::drawMeshVertexData()
+{
+  return impl_->withApp([](Application &app) { return app.drawMeshVertexData(); });
+}
+
+size_t Engine::drawCommandCapacity() const
+{
+  return const_cast<Engine *>(this)->impl_->withApp(
+    [](Application &app) { return app.drawCommandCapacity(); });
+}
+
+size_t Engine::drawGlyphCapacity() const
+{
+  return const_cast<Engine *>(this)->impl_->withApp(
+    [](Application &app) { return app.drawGlyphCapacity(); });
+}
+
+size_t Engine::drawMeshVertexCapacity() const
+{
+  return const_cast<Engine *>(this)->impl_->withApp(
+    [](Application &app) { return app.drawMeshVertexCapacity(); });
+}
+
+void Engine::commitDrawList(size_t cmdCount, size_t glyphCount,
+                            size_t meshVertCount)
+{
+  impl_->withApp([&](Application &app) {
+    app.commitDrawList(cmdCount, glyphCount, meshVertCount);
+  });
+}
+
 bool Engine::pollInputEvent(InputEvent &out)
 {
   return impl_->withApp([&](Application &app) {

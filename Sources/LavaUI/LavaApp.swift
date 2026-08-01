@@ -101,7 +101,7 @@ public enum LavaApp {
         }
 
         let host = LayoutHost()
-        let drawList = DrawList()
+        let drawList = DrawList(editor: editor)
 
         var dirty = true
         // The wheel event carries no position, so remember the last one.

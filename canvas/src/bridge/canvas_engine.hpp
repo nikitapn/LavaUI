@@ -12,6 +12,15 @@
 #include <string>
 #include <vector>
 
+// Equivalent to SWIFT_RETURNS_INDEPENDENT_VALUE from <swift/bridging>. Keep it
+// local because the SwiftPM Clang importer does not add Swift's C++ header
+// directory to this package's include search path.
+#if defined(__has_attribute) && __has_attribute(swift_attr)
+#define CANVAS_SWIFT_UNSAFE_POINTER __attribute__((swift_attr("import_unsafe")))
+#else
+#define CANVAS_SWIFT_UNSAFE_POINTER
+#endif
+
 class Application;
 
 namespace canvas {
@@ -88,13 +97,27 @@ class Engine {
   /// UTF-8 string → one Text event per Unicode scalar (focused field path).
   void textInput(const std::string &utf8);
 
-  /// Replace the retained immediate draw list (copied under the engine mutex).
+  /// Legacy copied submission path.
   /// Text commands carry `param` = first glyph index and `w` = glyph count
   /// into `glyphs`. Mesh commands carry the same pair into `meshVerts`. Swift
   /// shapes; the renderer only looks up atlas entries / triangulates.
   void submitDrawList(const DrawCommand *cmds, size_t cmdCount,
                       const GlyphInstance *glyphs, size_t glyphCount,
                       const MeshVertex *meshVerts, size_t meshVertCount);
+
+  /// C++-owned reusable frame arena. Swift may write to these pointers until
+  /// the next ensure call (which may reallocate) or Engine destruction. Commit
+  /// publishes only the initialized prefixes; it performs no element copy.
+  void ensureDrawListCapacity(size_t cmdCapacity, size_t glyphCapacity,
+                              size_t meshVertCapacity);
+  DrawCommand *drawCommandData() CANVAS_SWIFT_UNSAFE_POINTER;
+  GlyphInstance *drawGlyphData() CANVAS_SWIFT_UNSAFE_POINTER;
+  MeshVertex *drawMeshVertexData() CANVAS_SWIFT_UNSAFE_POINTER;
+  size_t drawCommandCapacity() const;
+  size_t drawGlyphCapacity() const;
+  size_t drawMeshVertexCapacity() const;
+  void commitDrawList(size_t cmdCount, size_t glyphCount,
+                      size_t meshVertCount);
 
   /// Pop one raw input event (mouse / resize). Returns false if empty.
   bool pollInputEvent(InputEvent &out);
