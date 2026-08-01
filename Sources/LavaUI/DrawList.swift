@@ -209,7 +209,9 @@ public final class DrawList {
         for g in run {
             var inst = canvas.GlyphInstance()
             inst.glyphId = g.glyphId
-            inst.fontId = font.engineId
+            // Per glyph, not per run: a fallback substitution puts glyphs from
+            // another face in this same run, and ids are face-relative.
+            inst.fontId = g.fontId
             inst.x = penX + g.x
             inst.y = penY + g.y
             appendGlyph(inst)
