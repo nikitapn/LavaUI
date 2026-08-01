@@ -25,14 +25,15 @@ struct Counter: View {
 | Target | Contains | Depends on |
 |---|---|---|
 | `LavaText` | Editing logic: cursors, selection, undo, word/line navigation, soft wrap, syntax rules, search | nothing |
-| `LavaUI` | Views, Yoga layout, draw list, fonts, input, theming | `LavaText`, `CxxCanvas`, `CYoga` |
+| `LavaMenu` | Application menu IR + declarative DSL (`MenuBar` / `MenuItem`); no drawing | nothing |
+| `LavaUI` | Views, Yoga layout, draw list, fonts, input, theming | `LavaText`, `LavaMenu`, `CxxCanvas`, `CYoga` |
 | `HelloWorld` | Demo app (`DemoExample`) and an FBD diagram editor | `LavaUI`, `FBDModel` |
 | `canvas/` | C++ engine: Vulkan, glyph atlas, windowing | — |
 
-`LavaText` having **no dependencies at all** is deliberate: editing logic is
-where the fiddly correctness lives, and keeping it out of reach of Vulkan and
-C++ interop means it is tested headlessly. That is enforced by the build graph
-rather than by discipline.
+`LavaText` and `LavaMenu` having **no dependencies at all** is deliberate:
+editing logic and menu IR are where fiddly correctness lives, and keeping them
+out of reach of Vulkan and C++ interop means they are tested headlessly. That
+is enforced by the build graph rather than by discipline.
 
 ## Building
 

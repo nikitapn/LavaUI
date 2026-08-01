@@ -1,4 +1,5 @@
 @_exported import LavaText
+@_exported import LavaMenu
 import Foundation
 
 // View protocol + retained-tree mount/reconcile.

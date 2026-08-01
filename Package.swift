@@ -12,6 +12,7 @@ let package = Package(
         .executable(name: "TraceLoom", targets: ["TraceLoomApp"]),
         .library(name: "LavaUI", targets: ["LavaUI"]),
         .library(name: "LavaText", targets: ["LavaText"]),
+        .library(name: "LavaMenu", targets: ["LavaMenu"]),
         .library(name: "TraceLoomCore", targets: ["TraceLoomCore"]),
         .library(name: "FBDModel", targets: ["FBDModel"]),
     ],
@@ -24,6 +25,9 @@ let package = Package(
         // beyond String. Kept a separate target so "testable headlessly" is
         // enforced by the build graph rather than by discipline.
         .target(name: "LavaText"),
+        // Application menu IR + DSL. No Yoga, no Vulkan, no C++ — same
+        // headless-test rule as LavaText (see docs/native-menus.md).
+        .target(name: "LavaMenu"),
         .target(name: "TraceLoomCore"),
         // Throwaway modifier spike; delete once the design is chosen. We keep for now. 01/08/2026
         .executableTarget(
@@ -39,6 +43,7 @@ let package = Package(
             name: "LavaUI",
             dependencies: [
                 "LavaText",
+                "LavaMenu",
                 .product(
                     name: "CxxCanvas",
                     package: "canvas_swift",
@@ -88,6 +93,10 @@ let package = Package(
         .testTarget(
             name: "LavaTextTests",
             dependencies: ["LavaText"]
+        ),
+        .testTarget(
+            name: "LavaMenuTests",
+            dependencies: ["LavaMenu"]
         ),
         .testTarget(
             name: "FBDModelTests",
