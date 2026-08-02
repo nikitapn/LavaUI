@@ -1,6 +1,7 @@
 #include "bridge/canvas_engine.hpp"
 
 #include <stb_image.h>
+#include <stb_image_resize2.h>
 
 #include "application.hpp"
 #include "menu/app_menu.hpp"
@@ -324,7 +325,8 @@ void Engine::unloadTexture(const std::string &path)
 
 uint8_t *Engine::decodeImageAlloc(const std::string &path,
                                   uint32_t &outWidth,
-                                  uint32_t &outHeight)
+                                  uint32_t &outHeight,
+                                  uint32_t maxPixelSize)
 {
   int w = 0, h = 0, channels = 0;
   // stbi_load is reentrant and touches no shared state, which is what makes
@@ -335,6 +337,34 @@ uint8_t *Engine::decodeImageAlloc(const std::string &path,
     outWidth = outHeight = 0;
     return nullptr;
   }
+
+  const uint32_t longEdge = static_cast<uint32_t>(w > h ? w : h);
+  if (maxPixelSize > 0 && longEdge > maxPixelSize) {
+    const double scale = static_cast<double>(maxPixelSize) / longEdge;
+    // At least one pixel each way: a 1x1 destination is silly but a 0x0 one
+    // fails the upload and loses the image entirely.
+    int dw = static_cast<int>(w * scale + 0.5);
+    int dh = static_cast<int>(h * scale + 0.5);
+    if (dw < 1) dw = 1;
+    if (dh < 1) dh = 1;
+
+    // The texture format is R8G8B8A8_**SRGB**, so the filter has to average in
+    // linear light. Resizing the encoded bytes directly darkens every
+    // downscale — the classic sRGB resampling bug, and very visible on album
+    // art. STBIR_RGBA (not _PM) because stb_image hands back straight,
+    // non-premultiplied alpha.
+    uint8_t *scaled = stbir_resize_uint8_srgb(
+      pixels, w, h, 0, nullptr, dw, dh, 0, STBIR_RGBA);
+    if (scaled != nullptr) {
+      stbi_image_free(pixels);
+      outWidth  = static_cast<uint32_t>(dw);
+      outHeight = static_cast<uint32_t>(dh);
+      return scaled;
+    }
+    // Resize failed (allocation): fall through with the full-size decode
+    // rather than dropping the image.
+  }
+
   outWidth  = static_cast<uint32_t>(w);
   outHeight = static_cast<uint32_t>(h);
   return pixels;

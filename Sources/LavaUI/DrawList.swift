@@ -827,7 +827,33 @@ public final class DrawList {
         if leaf.kind == .editor {
             emitEditor(leaf, x: x, y: y, w: w, h: h)
         }
-        if leaf.kind == .image, let img = leaf.image {
+        if leaf.kind == .image {
+            // A path-backed image resolves here rather than in `body`. Two
+            // things fall out of that, both wanted: an image that arrives later
+            // needs only a redraw, and — because this runs *after* the cull
+            // test — only images the frame actually draws are ever requested,
+            // so viewport gating is automatic instead of the app's job.
+            var resolved = leaf.image
+            if resolved == nil, let path = leaf.imagePath {
+                resolved = ImageStore.imageIfLoaded(
+                    path: path,
+                    maxPixelSize: leaf.imageDecodePixels,
+                    into: editor
+                )
+            }
+            guard let img = resolved else {
+                if let placeholder = leaf.imagePlaceholder {
+                    if leaf.imagePlaceholderRadius > 0 {
+                        roundedRect(
+                            x: x, y: y, w: w, h: h,
+                            color: placeholder, radius: leaf.imagePlaceholderRadius
+                        )
+                    } else {
+                        rect(x: x, y: y, w: w, h: h, color: placeholder)
+                    }
+                }
+                return
+            }
             // Least-recently-*drawn*, not least-recently-requested: an image
             // held by a view that is scrolled away should age out, and one
             // being painted every frame must not.

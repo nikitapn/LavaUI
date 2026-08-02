@@ -165,9 +165,17 @@ class Engine {
   /// `decodeImageFree`, or nullptr. A raw pointer rather than a container
   /// because this crosses into Swift, where `std::vector` does not map
   /// cleanly.
+  ///
+  /// `maxPixelSize` (0 = native) caps the longer edge, preserving aspect. Pass
+  /// the size the image will actually be *drawn* at: a 300px cover rendered
+  /// into a 140pt box costs 4.5x the pixels for no visible gain, and — because
+  /// `ImageAtlas` refuses anything wider than one cell — is what pushes every
+  /// such image out of the atlas and onto its own descriptor binding.
+  /// `outWidth`/`outHeight` report the size after any downscale.
   static uint8_t *decodeImageAlloc(const std::string &path,
                                    uint32_t &outWidth,
-                                   uint32_t &outHeight);
+                                   uint32_t &outHeight,
+                                   uint32_t maxPixelSize = 0);
   static void decodeImageFree(uint8_t *pixels);
 
   /// Uploads pre-decoded pixels under `key`. Device thread only.

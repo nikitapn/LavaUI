@@ -1,6 +1,7 @@
 #include <array>
 #include <cmath>
 #include <cstring>
+#include <iostream>
 #include <mutex>
 
 #include "render/quad_renderer.hpp"
@@ -902,6 +903,24 @@ void QuadRenderer::drawBatchRange(VkCommandBuffer commandBuffer,
     boundSampler = samp;
 
     if (fr.descriptorWriteIndex >= kMaxDescriptorSetsPerFrame) {
+      // Past the limit every further bind rewrites the *same* set, so all of
+      // them end up sampling whichever texture was written last: the visible
+      // result is the wrong picture, not a missing one. Nothing else in the
+      // pipeline reports this — no Vulkan error, no dropped draw — so say it
+      // out loud, once, or it reads as a mysterious content bug.
+      //
+      // Each texture *change* costs a set, and batches are emitted in tree
+      // order with no sorting, so an image grid alternating art and labels
+      // burns roughly two per card. Atlasing is the fix: images sharing a page
+      // share one binding. See ImageAtlas and `decodeImageAlloc`'s size cap.
+      static bool warned = false;
+      if (!warned) {
+        warned = true;
+        std::cerr << "QuadRenderer: more than " << kMaxDescriptorSetsPerFrame
+                  << " texture binds in one frame; further textures will draw "
+                     "the wrong image. Reduce distinct textures per frame or "
+                     "make them small enough to atlas.\n";
+      }
       fr.descriptorWriteIndex = kMaxDescriptorSetsPerFrame - 1;
     }
     VkDescriptorSet set = fr.descriptorSets[fr.descriptorWriteIndex++];

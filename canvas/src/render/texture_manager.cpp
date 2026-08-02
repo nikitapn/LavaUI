@@ -7,6 +7,12 @@
 #define STB_IMAGE_IMPLEMENTATION
 #include <stb_image.h>
 
+// Single translation unit for both stb implementations. `decodeImageAlloc`
+// (canvas_engine.cpp) is the only caller of the resizer; it includes the
+// header for declarations and links against the definitions emitted here.
+#define STB_IMAGE_RESIZE_IMPLEMENTATION
+#include <stb_image_resize2.h>
+
 #define STBI_rgb_alpha 4
 
 void TextureManager::initialize(Vulkan& vulkan) {

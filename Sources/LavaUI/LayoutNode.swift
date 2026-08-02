@@ -624,6 +624,15 @@ final class LeafNode: YogaBoxNode {
     var image: UIImage?
     var imageTint: Color = Color(r: 1, g: 1, b: 1)
     var imageContentMode: ImageContentMode = .stretch
+    /// Set instead of `image` by `Image(path:)`: the texture is resolved at
+    /// *emit*, not when the body ran, so an image arriving later needs only a
+    /// redraw and never changes the shape of the tree.
+    var imagePath: String?
+    /// Longer-edge cap for the decode, derived from the layout box.
+    var imageDecodePixels: UInt32 = 0
+    /// Drawn in place of the bitmap until it resolves.
+    var imagePlaceholder: Color?
+    var imagePlaceholderRadius: Float = 0
 
     init(
         kind: LeafKind,

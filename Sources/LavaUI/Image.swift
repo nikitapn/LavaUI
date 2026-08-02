@@ -10,13 +10,27 @@ import Foundation
 /// absolute path; the engine texture id is stable for the process lifetime of
 /// that path (TextureManager refcounts).
 public final class UIImage: @unchecked Sendable {
+    /// File this was decoded from.
     public let path: String
+    /// Cache and engine-texture identity: `path` plus the decode size.
+    ///
+    /// Not the same thing as `path`, because the same file decoded for a 48pt
+    /// avatar and for a 200pt hero are two different textures and must not
+    /// evict or alias each other.
+    public let cacheKey: String
     public let textureId: UInt32
     public let pixelWidth: Float
     public let pixelHeight: Float
 
-    public init(path: String, textureId: UInt32, pixelWidth: Float, pixelHeight: Float) {
+    public init(
+        path: String,
+        cacheKey: String? = nil,
+        textureId: UInt32,
+        pixelWidth: Float,
+        pixelHeight: Float
+    ) {
         self.path = path
+        self.cacheKey = cacheKey ?? path
         self.textureId = textureId
         self.pixelWidth = pixelWidth
         self.pixelHeight = pixelHeight
@@ -82,10 +96,16 @@ public enum ImageStore {
     /// is what makes "least recently used" mean "least recently *drawn*"
     /// rather than least recently asked for.
     public static func touch(_ image: UIImage) {
-        guard let entry = cache[image.path] else { return }
+        guard let entry = cache[image.cacheKey] else { return }
         useCounter &+= 1
         entry.lastUsedFrame = frame
         entry.lastUsedOrder = useCounter
+    }
+
+    /// Cache identity for a file decoded at a given cap. `0` is the native
+    /// decode and keys on the bare path, so existing callers keep their key.
+    static func key(path: String, maxPixelSize: UInt32) -> String {
+        maxPixelSize == 0 ? path : "\(path)@\(maxPixelSize)"
     }
 
     /// Cached image, loaded synchronously. Kept for assets an app needs before
@@ -105,32 +125,52 @@ public enum ImageStore {
     /// Cached image, or nil while it loads.
     ///
     /// Returns nil the first time and decodes on a worker; when the pixels
-    /// arrive they are uploaded on the main thread and the view is marked
-    /// dirty, so the next frame gets the image. Callers draw a placeholder for
-    /// the nil case — which they need anyway, because a real client is waiting
-    /// on the network too.
+    /// arrive they are uploaded on the main thread and a redraw is requested,
+    /// so the next frame gets the image. Callers draw a placeholder for the nil
+    /// case — which they need anyway, because a real client is waiting on the
+    /// network too.
+    ///
+    /// `maxPixelSize` caps the longer edge at decode time (0 = native). Pass
+    /// the size it will be drawn at. Two reasons, and the second is the one
+    /// that bites: the pixels you don't decode cost nothing to hold, *and*
+    /// `ImageAtlas` refuses anything wider than one cell, so an oversized
+    /// decode silently costs a whole texture binding per image.
     @discardableResult
-    public static func imageIfLoaded(path: String, into editor: Editor) -> UIImage? {
-        if let hit = cache[path] {
+    public static func imageIfLoaded(
+        path: String,
+        maxPixelSize: UInt32 = 0,
+        into editor: Editor
+    ) -> UIImage? {
+        let cacheKey = key(path: path, maxPixelSize: maxPixelSize)
+        if let hit = cache[cacheKey] {
             touch(hit.image)
             return hit.image
         }
-        guard !inFlight.contains(path) else { return nil }
-        inFlight.insert(path)
+        guard !inFlight.contains(cacheKey) else { return nil }
+        inFlight.insert(cacheKey)
 
         Thread.detachNewThread {
-            let decoded = Editor.decodeImage(path: path)
+            let decoded = Editor.decodeImage(path: path, maxPixelSize: maxPixelSize)
             MainQueue.async {
-                inFlight.remove(path)
+                inFlight.remove(cacheKey)
                 guard let decoded else { return }
                 guard let img = editor.uploadImage(
-                    key: path, pixels: decoded.pixels,
+                    key: cacheKey, path: path, pixels: decoded.pixels,
                     width: decoded.width, height: decoded.height
                 ) else { return }
                 insert(img, into: editor)
-                // Nothing observed this: the cache is a plain store, so the
-                // frame that shows the image has to be asked for.
-                ViewInvalidation.markNeedsBody()
+                // `.redraw`, not `.body`. Nothing observed this — the cache is
+                // a plain store — so the frame has to be asked for explicitly.
+                // But asking for `body` rebuilds the whole view tree (~46ms on
+                // a large grid, and with a menubar there is no per-node path),
+                // once per arriving image, to change one leaf's texture. The
+                // image leaf resolves its own texture at emit, so re-emitting
+                // is all that is actually required.
+                //
+                // A caller whose view *structure* depends on the image being
+                // ready still needs `.body` — that is why `Image(path:)`
+                // exists, so it doesn't.
+                ViewInvalidation.markNeedsRedraw()
             }
         }
         return nil
@@ -139,7 +179,7 @@ public enum ImageStore {
     private static func insert(_ image: UIImage, into editor: Editor) {
         let bytes = Int(image.pixelWidth) * Int(image.pixelHeight) * 4
         useCounter &+= 1
-        cache[image.path] = Entry(
+        cache[image.cacheKey] = Entry(
             image: image, bytes: bytes, frame: frame, order: useCounter
         )
         residentBytes += bytes
@@ -158,8 +198,8 @@ public enum ImageStore {
             .sorted { $0.lastUsedOrder < $1.lastUsedOrder }
         for entry in candidates {
             guard residentBytes > budgetBytes else { break }
-            editor.unloadImage(path: entry.image.path)
-            cache.removeValue(forKey: entry.image.path)
+            editor.unloadImage(path: entry.image.cacheKey)
+            cache.removeValue(forKey: entry.image.cacheKey)
             residentBytes -= entry.bytes
         }
     }
@@ -214,7 +254,11 @@ public enum ImageContentMode: Equatable, Sendable {
 /// Image(icon)  // intrinsic pixel size
 /// ```
 public struct Image: PrimitiveView {
-    public var image: UIImage
+    public var image: UIImage?
+    /// Set instead of `image` by the path initialiser — see its doc comment.
+    public var path: String?
+    public var placeholder: Color?
+    public var placeholderCornerRadius: Float = 0
     public var width: Dimension
     public var height: Dimension
     /// Multiplied with sample RGBA (white = no tint).
@@ -238,9 +282,61 @@ public struct Image: PrimitiveView {
         self.onClick = onClick
     }
 
+    /// An image identified by file path, loaded on demand and drawn when ready.
+    ///
+    /// Prefer this to branching on `ImageStore.imageIfLoaded` in a body. Writing
+    /// it as `if let img = …imageIfLoaded(…) { Image(img) } else { placeholder }`
+    /// makes the *shape of the view tree* depend on whether a decode has
+    /// finished, so every arriving image has to invalidate `body` and rebuild
+    /// the tree. Here the leaf is the same leaf either way; it resolves its own
+    /// texture at emit, and an arriving image costs one redraw.
+    ///
+    /// `width`/`height` must be definite for the decode cap to be derived from
+    /// them — with `.auto` there is no box to size against yet, and the file
+    /// decodes at native resolution. Pass `decodePixels` to override.
+    public init(
+        path: String,
+        width: Dimension,
+        height: Dimension,
+        placeholder: Color? = nil,
+        placeholderCornerRadius: Float = 0,
+        decodePixels: UInt32? = nil,
+        tint: Color = Color(r: 1, g: 1, b: 1),
+        contentMode: ImageContentMode = .stretch,
+        onClick: (() -> Void)? = nil
+    ) {
+        self.image = nil
+        self.path = path
+        self.placeholder = placeholder
+        self.placeholderCornerRadius = placeholderCornerRadius
+        self.width = width
+        self.height = height
+        self.tint = tint
+        self.contentMode = contentMode
+        self.onClick = onClick
+        self.explicitDecodePixels = decodePixels
+    }
+
+    private var explicitDecodePixels: UInt32?
+
+    /// Longer edge to decode at: the box in physical pixels, so a HiDPI or
+    /// zoomed UI still gets the resolution it draws at rather than a soft
+    /// upscale of a smaller decode.
+    var decodePixels: UInt32 {
+        if let explicitDecodePixels { return explicitDecodePixels }
+        guard case .point(let w) = width, case .point(let h) = height else { return 0 }
+        let longEdge = max(w, h) * FontStore.scale.multiplier
+        guard longEdge >= 1 else { return 0 }
+        return UInt32(longEdge.rounded(.up))
+    }
+
     public var dumpDetail: String {
-        let name = (image.path as NSString).lastPathComponent
-        return "\"\(name)\" \(Int(image.pixelWidth))×\(Int(image.pixelHeight))"
+        if let image {
+            let name = (image.path as NSString).lastPathComponent
+            return "\"\(name)\" \(Int(image.pixelWidth))×\(Int(image.pixelHeight))"
+        }
+        let name = ((path ?? "") as NSString).lastPathComponent
+        return "\"\(name)\" →\(decodePixels)px"
     }
 
     public func mountPrimitive() -> any AnyViewNode {
@@ -250,9 +346,7 @@ public struct Image: PrimitiveView {
             width: resolvedWidth,
             height: resolvedHeight
         )
-        leaf.image = image
-        leaf.imageTint = tint
-        leaf.imageContentMode = contentMode
+        apply(to: leaf)
         leaf.onClick = onClick
         leaf.color = tint
         return leaf
@@ -267,22 +361,33 @@ public struct Image: PrimitiveView {
                 color: tint,
                 onClick: onClick
             )
-            leaf.image = image
-            leaf.imageTint = tint
-            leaf.imageContentMode = contentMode
+            apply(to: leaf)
             return leaf
         }
         return mountPrimitive()
     }
 
-    /// Auto → intrinsic pixel size so Yoga has a definite box.
+    private func apply(to leaf: LeafNode) {
+        leaf.image = image
+        leaf.imagePath = path
+        leaf.imageDecodePixels = path == nil ? 0 : decodePixels
+        leaf.imagePlaceholder = placeholder
+        leaf.imagePlaceholderRadius = placeholderCornerRadius
+        leaf.imageTint = tint
+        leaf.imageContentMode = contentMode
+    }
+
+    /// Auto → intrinsic pixel size so Yoga has a definite box. A path-backed
+    /// image has no intrinsic size to fall back on until it decodes, so `.auto`
+    /// there collapses to zero — which is why the path initialiser demands
+    /// definite dimensions.
     private var resolvedWidth: Dimension {
-        if case .auto = width { return .point(image.pixelWidth) }
+        if case .auto = width, let image { return .point(image.pixelWidth) }
         return width
     }
 
     private var resolvedHeight: Dimension {
-        if case .auto = height { return .point(image.pixelHeight) }
+        if case .auto = height, let image { return .point(image.pixelHeight) }
         return height
     }
 }

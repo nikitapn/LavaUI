@@ -177,15 +177,24 @@ public enum LavaApp {
                 // frame, or state outside the observation system), which
                 // still needs the full rebuild.
                 //
-                // With a menubar, always rebuild the root: `menu` is a
-                // free closure (not a mounted node), so per-node recompute
-                // would leave the strip's `MenuModel` stale.
-                if menuHost != nil {
+                // `menu` is a free closure, not a mounted node, so nothing
+                // recomputes it — the IR has to be rebuilt here or a label,
+                // check mark or enablement goes stale. That is cheap: it
+                // builds a menu *description*, not a view tree.
+                //
+                // What is not cheap is remounting the root, which this used to
+                // do unconditionally whenever a menubar existed — and since
+                // every app has one, the per-node path below was dead code in
+                // every real program. `update` already reports whether the
+                // platform-facing model actually changed, so pay for the root
+                // only then.
+                let menuChanged = refreshMenuModel()
+                if menuChanged {
                     installRoot()
                 } else if let dirty = ViewInvalidation.consumeDirtyBodyNodes() {
                     for node in dirty { node.recomputeBody() }
                 } else {
-                    host.setRoot(makeRoot())
+                    installRoot()
                 }
             }
             let t1 = enableDebug ? FrameScheduler.now() : 0
@@ -239,11 +248,23 @@ public enum LavaApp {
             dirty = false
         }
 
-        /// Mount / remount the retained tree. Updates the menubar IR first when
-        /// a `menu` builder was provided.
+        /// Rebuilds the menubar IR from the app's builder. Returns whether the
+        /// platform-facing model changed — i.e. whether the in-window strip has
+        /// to be remounted, or the global menu re-exported.
+        ///
+        /// Always safe to call: `MenuController.update` re-stores the item
+        /// actions regardless, so a menu whose labels are unchanged but whose
+        /// closures captured newer state still activates against the new ones.
+        @discardableResult
+        func refreshMenuModel() -> Bool {
+            guard let menu, let menuHost else { return false }
+            return menuHost.update(menu())
+        }
+
+        /// Mount / remount the retained tree. Assumes the menubar IR is already
+        /// current — `refreshMenuModel` owns that.
         func installRoot() {
-            if let menu, let menuHost {
-                menuHost.update(menu())
+            if menu != nil, let menuHost {
                 let hostRef = menuHost
                 if hostRef.showsInWindowChrome {
                     host.setRoot(
@@ -263,9 +284,7 @@ public enum LavaApp {
         }
 
         // Lightweight structure dump (no FBD chrome phases).
-        if let menu {
-            menuHost?.update(menu())
-        }
+        refreshMenuModel()
         let demo0: any View = {
             if let menuHost, menuHost.showsInWindowChrome {
                 return MenuChromeRoot(

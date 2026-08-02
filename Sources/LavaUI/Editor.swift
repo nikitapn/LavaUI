@@ -123,12 +123,19 @@ public final class Editor: @unchecked Sendable {
     /// Safe to call from a worker thread — that is the whole point. Decoding a
     /// JPEG is tens of milliseconds and does not need the device; only the
     /// upload does. Returns nil if the file will not decode.
+    ///
+    /// `maxPixelSize` (0 = native) caps the longer edge. Returned `width` and
+    /// `height` are the size after any downscale, so the caller sizes its
+    /// texture from these rather than from what the file claimed.
     public nonisolated static func decodeImage(
-        path: String
+        path: String,
+        maxPixelSize: UInt32 = 0
     ) -> (pixels: [UInt8], width: UInt32, height: UInt32)? {
         var w: UInt32 = 0
         var h: UInt32 = 0
-        guard let raw = canvas.Engine.decodeImageAlloc(std.string(path), &w, &h),
+        guard let raw = canvas.Engine.decodeImageAlloc(
+                  std.string(path), &w, &h, maxPixelSize
+              ),
               w > 0, h > 0
         else { return nil }
         defer { canvas.Engine.decodeImageFree(raw) }
@@ -138,8 +145,13 @@ public final class Editor: @unchecked Sendable {
     }
 
     /// Uploads pre-decoded pixels. Main thread only — it touches the device.
+    ///
+    /// `key` is the texture identity (see `UIImage.cacheKey`); `path` is the
+    /// file it came from, and defaults to `key` for callers that decode at
+    /// native size and need no distinction.
     public func uploadImage(
-        key: String, pixels: [UInt8], width: UInt32, height: UInt32
+        key: String, path: String? = nil,
+        pixels: [UInt8], width: UInt32, height: UInt32
     ) -> UIImage? {
         let id: Int32 = pixels.withUnsafeBufferPointer { buf in
             guard let base = buf.baseAddress else { return -1 }
@@ -147,7 +159,7 @@ public final class Editor: @unchecked Sendable {
         }
         guard id > 0 else { return nil }
         return UIImage(
-            path: key, textureId: UInt32(id),
+            path: path ?? key, cacheKey: key, textureId: UInt32(id),
             pixelWidth: Float(width), pixelHeight: Float(height)
         )
     }

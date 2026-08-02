@@ -7,9 +7,11 @@ import SpotifyCore
 /// Async cover: network (`CoverCache`) then decode (`ImageStore`), placeholder
 /// while either is outstanding.
 ///
-/// Request only the covers that appear in the current view tree — the image
-/// cache doc is explicit that request windowing is the app's job. A home shelf
-/// of ~12 albums is fine; a library of thousands would need viewport gating.
+/// Only the *download* boundary is a body-level change now: `Image(path:)`
+/// resolves the texture at emit, so the decode finishing costs a redraw rather
+/// than a rebuild of the whole tree, and only covers the frame actually draws
+/// are ever requested — viewport gating comes for free from the draw-list cull
+/// instead of being this view's problem.
 struct CoverArt: View {
     var image: CoverImage?
     var size: Float
@@ -35,15 +37,27 @@ struct CoverArt: View {
         let box = size
         if let url = image?.url,
            let path = CoverCache.pathIfReady(for: url, onReady: {
+               // Still `body`: until the file exists there is no path to hand
+               // the leaf, so this boundary really does change the view.
                MainQueue.async { ViewInvalidation.markNeedsBody() }
-           }),
-           let ui = ImageStore.imageIfLoaded(path: path, into: editor)
+           })
         {
-            Image(ui, width: .pt(box), height: .pt(box), contentMode: .fill, onClick: onClick)
-                .cornerRadius(cornerRadius)
-                .frame(width: .pt(box), height: .pt(box))
+            // Decoded to the box size, not the file's 300px. That is what lets
+            // covers live in the shared atlas: anything wider than one cell
+            // becomes its own texture and its own descriptor binding.
+            Image(
+                path: path,
+                width: .pt(box),
+                height: .pt(box),
+                placeholder: SpotifyTheme.coverPlaceholder,
+                placeholderCornerRadius: cornerRadius,
+                contentMode: .fill,
+                onClick: onClick
+            )
+            .cornerRadius(cornerRadius)
+            .frame(width: .pt(box), height: .pt(box))
         } else {
-            // Placeholder while download/decode run.
+            // Placeholder while the download runs.
             Text(" ", color: .dim, onClick: onClick)
                 .frame(width: .pt(box), height: .pt(box))
                 .background(SpotifyTheme.coverPlaceholder)
