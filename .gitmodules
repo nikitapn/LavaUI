@@ -1,0 +1,12 @@
+[submodule "canvas/third-party/freetype"]
+	path = canvas/third-party/freetype
+	url = git@github.com:freetype/freetype.git
+[submodule "canvas/third-party/stb"]
+	path = canvas/third-party/stb
+	url = git@github.com:nothings/stb.git
+[submodule "canvas/third-party/vma"]
+	path = canvas/third-party/vma
+	url = git@github.com:GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator.git
+[submodule "canvas/third-party/yoga"]
+	path = canvas/third-party/yoga
+	url = git@github.com:facebook/yoga.git

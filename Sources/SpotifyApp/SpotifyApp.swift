@@ -140,7 +140,7 @@ struct SpotifyApp {
 struct SpotifyApp {
     static func main() {
         FileHandle.standardError.write(
-            Data("LavaSpotify: LavaUI requires Linux + libcanvas (CxxCanvas).\n".utf8)
+            Data("LavaSpotify: LavaUI requires Linux + CxxCanvas (Vulkan engine).\n".utf8)
         )
         exit(1)
     }

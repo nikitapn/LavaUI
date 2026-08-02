@@ -14,7 +14,8 @@ class Application {
   std::unique_ptr<Impl> impl_;
 public:
   // Sets up Vulkan/rendering. assetsRoot is the directory that contains the
-  // `assets/` and `shaders/` folders (e.g. canvas/.build.Debug). Prefer
+  // `shaders/` folder (Swift passes CanvasResources.engineRoot — the SPM
+  // resource bundle). Fonts and app images are not resolved here. Prefer
   // absolute paths; do not rely on process cwd.
   // Offscreen path (readPixels / smoke tests).
   [[nodiscard]] canvas::VoidResult init(const std::string &assetsRoot);

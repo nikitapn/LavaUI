@@ -104,8 +104,7 @@ needs the user login in step 5.
 From the repo root (same as other LavaUI apps):
 
 ```bash
-cd canvas && ninja -C .build.Debug   # if the engine is not built yet
-cd .. && swift build --product Spotify
+swift build --product Spotify   # SwiftPM builds the C++ engine too
 swift run Spotify
 ```
 

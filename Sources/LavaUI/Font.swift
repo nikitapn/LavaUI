@@ -82,7 +82,10 @@ public final class UIFont: @unchecked Sendable {
         self.descent = m.descent
     }
 
-    /// Prefer OpenSans, fall back to LiberationSerif (matches Application assetPath).
+    /// Prefer OpenSans, fall back to LiberationSerif.
+    ///
+    /// Looks under `assetsRoot/fonts/`, then legacy `assets/`, then the root
+    /// itself — SPM packs defaults as `Resources/fonts` → bundle `fonts/`.
     public static func loadUI(assetsRoot: String, pixelSize: Float = 16) -> UIFont? {
         loadFirstExisting(
             pixelSize: pixelSize,
@@ -104,6 +107,8 @@ public final class UIFont: @unchecked Sendable {
                 "NotoSansSymbols2-Regular.ttf",
                 "NotoSansSymbols-Regular.ttf",
             ] {
+                paths.append(r.appendingPathComponent("fonts").appendingPathComponent(name))
+                paths.append(r.appendingPathComponent("assets").appendingPathComponent("fonts").appendingPathComponent(name))
                 paths.append(r.appendingPathComponent("assets").appendingPathComponent(name))
                 paths.append(r.appendingPathComponent(name))
             }
@@ -179,6 +184,8 @@ public final class UIFont: @unchecked Sendable {
         let root = assetsRoot as NSString
         for name in names {
             let candidates = [
+                root.appendingPathComponent("fonts").appendingPathComponent(name),
+                root.appendingPathComponent("assets").appendingPathComponent("fonts").appendingPathComponent(name),
                 root.appendingPathComponent("assets").appendingPathComponent(name),
                 root.appendingPathComponent(name),
             ]

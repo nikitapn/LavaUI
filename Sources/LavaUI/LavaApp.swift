@@ -1,5 +1,6 @@
 #if canImport(CxxCanvas)
 import Foundation
+import CanvasResources
 
 /// Reusable window/input/invalidation/render loop, so a second LavaUI
 /// executable is a `main.swift` of a dozen lines instead of a copy of
@@ -13,24 +14,30 @@ import Foundation
 ///
 /// ```swift
 /// guard let editor = LavaApp.open(title: "My App") else { exit(1) }
-/// let icon = ImageStore.loadAsset(named: "icon.png", assetsRoot: ..., into: editor)
+/// let icon = ImageStore.loadAsset(
+///     named: "icon.png", bundle: .module, into: editor)
 /// LavaApp.run(editor: editor) { MyRootView(icon: icon) }
 /// ```
 public enum LavaApp {
     /// Opens the window and does one-time framework setup: default font
     /// bootstrap, clipboard bridge. Logs and returns `nil` if the window
     /// failed to open — the caller should `exit(1)`.
+    ///
+    /// - Parameter assetsRoot: Engine resource root (directory with
+    ///   `shaders/`). Default is the SwiftPM `CanvasResources` bundle.
+    ///   Fonts always load from LavaUI's own resource bundle.
     public static func open(
         title: String,
         assetsRoot: String? = nil,
         width: Float = 1280,
         height: Float = 800
     ) -> Editor? {
-        let assets = Self.resolveAssetsRoot(assetsRoot)
-        FileHandle.standardError.write(Data("assets: \(assets)\n".utf8))
+        let engineRoot = Self.resolveEngineAssetsRoot(assetsRoot)
+        FileHandle.standardError.write(Data("engine assets: \(engineRoot)\n".utf8))
+        FileHandle.standardError.write(Data("lava fonts: \(LavaResources.fontsDirectory)\n".utf8))
 
         guard let editor = Editor.open(
-            assetsRoot: assets,
+            assetsRoot: engineRoot,
             width: Int32(width),
             height: Int32(height),
             title: title
@@ -39,7 +46,12 @@ public enum LavaApp {
             return nil
         }
 
-        if FontStore.bootstrap(assetsRoot: assets, pixelSize: 16, into: editor) == nil {
+        // Framework fonts from LavaUI's SPM resources — not the engine tree.
+        if FontStore.bootstrap(
+            assetsRoot: LavaResources.root,
+            pixelSize: 16,
+            into: editor
+        ) == nil {
             FileHandle.standardError.write(Data("warning: default UIFont failed to load\n".utf8))
         }
         if FontStore.symbols == nil {
@@ -54,26 +66,17 @@ public enum LavaApp {
         return editor
     }
 
-    /// `override` if given, else `CANVAS_ASSETS_ROOT` if set, else
-    /// `canvas/.build.Debug` relative to this file — which only resolves
-    /// correctly because every executable target lives one level under
-    /// `Sources/`, the same depth as this file. Pass `override` (or
-    /// `assetsRoot` to `open`) if that stops being true for some target.
-    ///
-    /// Public so a caller's own one-time asset loading — between `open` and
-    /// `run` — can resolve the same root `open` used, without duplicating
-    /// this logic or re-deriving it from `#filePath` in its own module.
-    public static func resolveAssetsRoot(_ override: String? = nil) -> String {
+    /// Engine assets root: `override`, else `CANVAS_ASSETS_ROOT`, else the
+    /// `CanvasResources` SwiftPM bundle (checked-in SPIR-V under `shaders/`).
+    public static func resolveEngineAssetsRoot(_ override: String? = nil) -> String {
         if let override { return override }
-        if let env = ProcessInfo.processInfo.environment["CANVAS_ASSETS_ROOT"], !env.isEmpty {
-            return env
-        }
-        return URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .appendingPathComponent("canvas/.build.Debug")
-            .path
+        return CanvasResources.engineRoot
+    }
+
+    /// Back-compat alias — engine root only. App images should use
+    /// `ImageStore.loadAsset(named:bundle:into:)` with the **app** bundle.
+    public static func resolveAssetsRoot(_ override: String? = nil) -> String {
+        resolveEngineAssetsRoot(override)
     }
 
     /// Runs the full input/invalidation/render/agent-server loop until the

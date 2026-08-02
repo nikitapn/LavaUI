@@ -1,6 +1,7 @@
 #pragma once
 
-#include <taskflow/taskflow.hpp>
+#include <iostream>
+#include <filesystem>
 
 #include "util/types.hpp"
 
@@ -15,9 +16,6 @@ void              alignedFree(void* data);
 /// Truthy: 1, true, yes, on (case-insensitive).
 /// Falsy:  0, false, no, off.
 bool envFlag(const char *name, bool defaultValue = false);
-
-// Global Taskflow executor for parallel operations
-tf::Executor& getTaskflowExecutor();
 
 namespace utf8 { namespace detail {
 extern unsigned char utf8d[];
@@ -52,7 +50,7 @@ inline void read(
       fn(codepoint);
 
   if (state != detail::UTF8_ACCEPT)
-    std::cerr << "The string is not well-formed\n";
+    std::cerr << "The string is ill-formed\n";
 }
 
 }}  // namespace utils::utf8

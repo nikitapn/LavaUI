@@ -7,10 +7,10 @@ accessibility hooks.
 ## Enable
 
 ```bash
-export CANVAS_ASSETS_ROOT=$PWD/canvas/.build.Debug
 export LAVA_AGENT_PORT=9876          # any port > 0; unset = off
-export LD_LIBRARY_PATH=$PWD/canvas/.build.Debug
 export CANVAS_VK_VALIDATION=1        # optional Vulkan validation layers
+# Optional override for engine shaders (default: CanvasResources SPM bundle):
+# export CANVAS_ASSETS_ROOT=...
 
 swift run HelloWorld
 # stderr: AgentServer: listening on 127.0.0.1:9876

@@ -30,7 +30,7 @@ struct Counter: View {
 | `HelloWorld` | Demo app (`DemoExample`) and an FBD diagram editor | `LavaUI`, `FBDModel` |
 | `Spotify` / `SpotifyApp` | LavaSpotify UI + Connect control of spotifyd | `LavaUI`, `SpotifyCore` |
 | `SpotifyCore` | Spotify Web API, OAuth, cover download (no Vulkan) | nothing |
-| `canvas/` | C++ engine: Vulkan, glyph atlas, windowing | — |
+| `canvas/` (package) | C++ engine (`CxxCanvas`) + Yoga (`CYoga`), built by SwiftPM | system Vulkan/GLFW/FreeType/HarfBuzz |
 
 `LavaText` and `LavaMenu` having **no dependencies at all** is deliberate:
 editing logic and menu IR are where fiddly correctness lives, and keeping them
@@ -40,19 +40,190 @@ is enforced by the build graph rather than by discipline.
 ## Building
 
 ```bash
-cd canvas && ninja -C .build.Debug     # C++ engine
-cd .. && swift build                   # Swift
-swift run HelloWorld                   # demo
-swift run Spotify                      # LavaSpotify (see docs/lavaspotify.md)
-swift test                             # 90 tests, no GPU needed
+swift build                   # Swift + C++ canvas engine (SwiftPM compiles both)
+swift run HelloWorld          # demo
+swift run Spotify             # LavaSpotify (see docs/lavaspotify.md)
+swift test                    # headless tests, no GPU needed
 ```
+
+The Vulkan engine lives under `canvas/` and is a normal SwiftPM C++ target
+(`CxxCanvas`). **Resources are split by owner** and packed by SwiftPM:
+
+| Asset | Target | Location |
+|---|---|---|
+| SPIR-V shaders | `CanvasResources` | `canvas/Sources/CanvasResources/shaders/` |
+| Default fonts | `LavaUI` | `Sources/LavaUI/Resources/fonts/` |
+| Demo images | `HelloWorld` | `Sources/HelloWorld/Resources/` |
+
+System packages: Vulkan, GLFW, FreeType, HarfBuzz (and on Linux for global
+menus: GLib + libdbusmenu-glib). No Meson/Ninja — SwiftPM builds the C++
+engine. SPIR-V is checked in; after editing GLSL run
+`canvas/scripts/compile_shaders.sh` (needs `glslc`).
 
 LavaSpotify + spotifyd (PulseAudio, two logins, Connect playback):
 **[docs/lavaspotify.md](docs/lavaspotify.md)**.
 
-
 Linux only today. `CxxCanvas`/`CYoga` are gated on it, and the engine is
 GLFW + Vulkan.
+
+## Using LavaUI in a new project
+
+LavaUI is a normal SwiftPM product of this repo. SwiftPM also builds the nested
+`canvas` package (C++ engine + shader resources) from the same checkout — you
+only declare a dependency on **this** repository.
+
+### 1. System packages (Linux)
+
+```bash
+# Arch
+sudo pacman -S vulkan-icd-loader vulkan-headers glfw freetype2 harfbuzz \
+  libdbusmenu-glib
+
+# Debian / Ubuntu
+sudo apt install libvulkan-dev libglfw3-dev libfreetype-dev libharfbuzz-dev \
+  libdbusmenu-glib-dev libglib2.0-dev
+```
+
+You also need a working Vulkan ICD (e.g. `vulkan-radeon`, `nvidia-utils`,
+`vulkan-intel`) and a Swift 6 toolchain.
+
+### 2. Scaffold an executable package
+
+```bash
+mkdir MyApp && cd MyApp
+swift package init --type executable
+```
+
+### 3. Depend on LavaUI from GitHub
+
+Edit `Package.swift`:
+
+```swift
+// swift-tools-version: 6.0
+import PackageDescription
+
+let package = Package(
+    name: "MyApp",
+    platforms: [.macOS(.v13)], // ignored on Linux; keeps the manifest valid
+    products: [
+        .executable(name: "MyApp", targets: ["MyApp"]),
+    ],
+    dependencies: [
+        // Prefer a tag once you pin releases:
+        // .package(url: "https://github.com/nikitapn/LavaUI.git", from: "0.1.0"),
+        .package(url: "https://github.com/nikitapn/LavaUI.git", branch: "main"),
+    ],
+    targets: [
+        .executableTarget(
+            name: "MyApp",
+            dependencies: [
+                // Package identity = last path component of the URL ("LavaUI").
+                .product(name: "LavaUI", package: "LavaUI"),
+            ],
+            swiftSettings: [
+                // Required: LavaUI talks to the C++ engine via C++ interop.
+                .interoperabilityMode(.Cxx),
+            ]
+        ),
+    ],
+    // Match the engine (std::expected / C++23).
+    cxxLanguageStandard: .gnucxx2b
+)
+```
+
+Local clone instead of GitHub:
+
+```swift
+.package(path: "../LavaUI"),  // folder name becomes the package id
+// then: .product(name: "LavaUI", package: "LavaUI")
+```
+
+### 4. Minimal `main`
+
+Replace the generated source with something like
+`Sources/MyApp/MyApp.swift`:
+
+```swift
+import Foundation
+import LavaUI
+
+#if canImport(CxxCanvas)
+
+@main
+struct MyApp {
+    static func main() {
+        guard let editor = LavaApp.open(title: "My App") else {
+            exit(1)
+        }
+        LavaApp.run(editor: editor) {
+            VStack(padding: 12) {
+                Text("hello from LavaUI", color: .accent)
+            }
+        }
+    }
+}
+
+#else
+
+@main
+struct MyApp {
+    static func main() {
+        FileHandle.standardError.write(
+            Data("MyApp: LavaUI requires Linux + CxxCanvas (Vulkan).\n".utf8)
+        )
+        exit(1)
+    }
+}
+
+#endif
+```
+
+### 5. Build and run
+
+```bash
+swift build
+swift run MyApp
+```
+
+SwiftPM will fetch this repo (including `canvas/`), compile Yoga + the Vulkan
+engine, pack checked-in SPIR-V and default fonts, and link system libraries via
+pkg-config. You do **not** need Meson, Ninja, or a prebuilt `libcanvas`.
+
+### App-owned assets
+
+Framework fonts and engine shaders ship with LavaUI / canvas. **Your** images
+belong on your executable:
+
+```swift
+// Package.swift — on the MyApp target:
+resources: [
+    .process("Resources"),
+],
+
+// Load at runtime:
+let icon = ImageStore.loadAsset(
+    named: "icon.png",
+    bundle: .module,
+    into: editor
+)
+```
+
+Put files under `Sources/MyApp/Resources/`.
+
+### Optional products
+
+The same package also exports headless libraries if you need them without a
+window:
+
+| Product | Use |
+|---|---|
+| `LavaUI` | Full UI (what almost every app wants) |
+| `LavaText` | Text editing logic only |
+| `LavaMenu` | Menu IR / DSL only |
+
+```swift
+.product(name: "LavaText", package: "LavaUI"),
+```
 
 The demo prints one line per rendered frame on stdout — idle frames print
 nothing, because idle frames are not rendered:

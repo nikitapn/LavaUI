@@ -1,0 +1,5 @@
+module CDbusMenu [system] {
+  header "shim.h"
+  link "dbusmenu-glib"
+  export *
+}

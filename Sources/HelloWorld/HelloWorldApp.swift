@@ -11,9 +11,10 @@ struct HelloWorldApp {
             exit(1)
         }
 
+        // Demo art is HelloWorld's own SPM resources, not the engine/LavaUI.
         let brandImage = ImageStore.loadAsset(
             named: "football-157930.svg_64.png",
-            assetsRoot: LavaApp.resolveAssetsRoot(),
+            bundle: .module,
             into: editor
         )
         if brandImage == nil {
@@ -119,7 +120,7 @@ struct HelloWorldApp {
 struct HelloWorldApp {
     static func main() {
         FileHandle.standardError.write(
-            Data("HelloWorld: LavaUI requires Linux + libcanvas (CxxCanvas).\n".utf8)
+            Data("HelloWorld: LavaUI requires Linux + CxxCanvas (Vulkan engine).\n".utf8)
         )
         exit(1)
     }

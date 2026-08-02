@@ -1,6 +1,2 @@
-.build.*
+.build*
 .cache
-vids
-proto
-third-party
-canvas_swift/.build

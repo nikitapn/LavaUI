@@ -113,7 +113,7 @@ struct TraceLoomApp {
 struct TraceLoomApp {
     static func main() {
         FileHandle.standardError.write(
-            Data("TraceLoom: LavaUI requires Linux + libcanvas (CxxCanvas).\n".utf8)
+            Data("TraceLoom: LavaUI requires Linux + CxxCanvas (Vulkan engine).\n".utf8)
         )
         exit(1)
     }

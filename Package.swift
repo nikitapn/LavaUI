@@ -4,6 +4,7 @@ import PackageDescription
 
 // Post-SwiftCrossUI: C++ interop (CxxCanvas) + FBDModel. No Gtk.
 // LavaUI = declarative View DSL + Yoga + draw list + engine bridge.
+// Canvas engine is built by SwiftPM via the `canvas` package (CxxCanvas).
 let package = Package(
     name: "HelloWorld",
     platforms: [.macOS(.v13)],
@@ -19,7 +20,7 @@ let package = Package(
         .library(name: "FBDModel", targets: ["FBDModel"]),
     ],
     dependencies: [
-        .package(path: "canvas/canvas_swift"),
+        .package(path: "canvas"),
     ],
     targets: [
         // Declarative UI library (View DSL, Yoga layout, fonts, draw list, Editor).
@@ -40,7 +41,6 @@ let package = Package(
             dependencies: ["LavaUI"],
             swiftSettings: [
                 .interoperabilityMode(.Cxx),
-                .unsafeFlags(["-Xcc", "-std=c++23"]),
             ]
         ),
 
@@ -51,22 +51,29 @@ let package = Package(
                 "LavaMenu",
                 .product(
                     name: "CxxCanvas",
-                    package: "canvas_swift",
+                    package: "canvas",
                     condition: .when(platforms: [.linux])
                 ),
                 .product(
                     name: "CYoga",
-                    package: "canvas_swift",
+                    package: "canvas",
+                    condition: .when(platforms: [.linux])
+                ),
+                .product(
+                    name: "CanvasResources",
+                    package: "canvas",
                     condition: .when(platforms: [.linux])
                 ),
             ],
+            resources: [
+                // Default UI + symbol fonts. App images live on app targets.
+                .copy("Resources/fonts"),
+            ],
             swiftSettings: [
+                // C++ interop with CxxCanvas. Package cxxLanguageStandard
+                // (.gnucxx23) must match canvas headers (std::expected).
+                // No unsafeFlags — those block LavaUI as a GitHub dependency.
                 .interoperabilityMode(.Cxx),
-                // Must match CxxCanvas's own -std=c++23 (canvas_engine.hpp
-                // uses std::expected/VoidResult) or ClangImporter parses it
-                // under an older default C++ standard and chokes on
-                // std::unexpected.
-                .unsafeFlags(["-Xcc", "-std=c++23"]),
             ]
         ),
         .executableTarget(
@@ -75,12 +82,15 @@ let package = Package(
                 "LavaUI",
                 "FBDModel",
             ],
+            resources: [
+                // Demo brand art (not framework assets).
+                .process("Resources"),
+            ],
             swiftSettings: [
                 // App only needs interop if LavaUI's public API re-exports C++
                 // types into app code. Keep C++ mode so #if canImport(CxxCanvas)
                 // paths in HelloWorld still see the module on Linux.
                 .interoperabilityMode(.Cxx),
-                .unsafeFlags(["-Xcc", "-std=c++23"]),
             ]
         ),
         .executableTarget(
@@ -91,7 +101,6 @@ let package = Package(
             ],
             swiftSettings: [
                 .interoperabilityMode(.Cxx),
-                .unsafeFlags(["-Xcc", "-std=c++23"]),
             ]
         ),
         .executableTarget(
@@ -102,7 +111,6 @@ let package = Package(
             ],
             swiftSettings: [
                 .interoperabilityMode(.Cxx),
-                .unsafeFlags(["-Xcc", "-std=c++23"]),
             ]
         ),
         .target(name: "FBDModel"),
@@ -122,5 +130,9 @@ let package = Package(
             name: "TraceLoomCoreTests",
             dependencies: ["TraceLoomCore"]
         ),
-    ]
+    ],
+    // Same C++23 as canvas_swift so interop headers parse consistently.
+    // C++23 draft name still used by PackageDescription on this toolchain.
+    cxxLanguageStandard: .gnucxx2b
 )
+

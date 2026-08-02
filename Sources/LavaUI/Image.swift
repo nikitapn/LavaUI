@@ -204,7 +204,7 @@ public enum ImageStore {
         }
     }
 
-    /// Resolve a file under `assetsRoot` (checks `assets/` then root).
+    /// Resolve a file under `assetsRoot` (`fonts/` / `assets/` / root).
     public static func loadAsset(
         named name: String,
         assetsRoot: String,
@@ -212,13 +212,37 @@ public enum ImageStore {
     ) -> UIImage? {
         let root = assetsRoot as NSString
         let candidates = [
-            root.appendingPathComponent("assets").appendingPathComponent(name),
             root.appendingPathComponent(name),
+            root.appendingPathComponent("assets").appendingPathComponent(name),
+            root.appendingPathComponent("images").appendingPathComponent(name),
+            root.appendingPathComponent("assets").appendingPathComponent("images").appendingPathComponent(name),
         ]
         for p in candidates {
             if FileManager.default.fileExists(atPath: p) {
                 return load(path: p, into: editor)
             }
+        }
+        return nil
+    }
+
+    /// Load a resource from a SwiftPM / app `Bundle` (prefer the app's
+    /// `Bundle.module` for brand art — not the engine or LavaUI bundles).
+    public static func loadAsset(
+        named name: String,
+        bundle: Bundle,
+        into editor: Editor
+    ) -> UIImage? {
+        let ns = name as NSString
+        let base = ns.deletingPathExtension
+        let ext = ns.pathExtension
+        if !ext.isEmpty,
+           let url = bundle.url(forResource: base, withExtension: ext)
+        {
+            return load(path: url.path, into: editor)
+        }
+        // Nested or process() layouts: search the resource directory tree.
+        if let root = bundle.resourcePath {
+            return loadAsset(named: name, assetsRoot: root, into: editor)
         }
         return nil
     }

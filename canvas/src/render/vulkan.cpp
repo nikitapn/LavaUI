@@ -8,8 +8,14 @@
 #include <algorithm>
 #include <filesystem>
 
+// Prefer a widely-packaged backend: many distros ship
+// libboost_stacktrace_basic but not libbacktrace.
 #define BOOST_STACKTRACE_DYN_LINK
-#define BOOST_STACKTRACE_USE_BACKTRACE
+#if !defined(BOOST_STACKTRACE_USE_BACKTRACE) \
+    && !defined(BOOST_STACKTRACE_USE_ADDR2LINE) \
+    && !defined(BOOST_STACKTRACE_USE_NOOP)
+#define BOOST_STACKTRACE_USE_BASIC
+#endif
 #include <boost/stacktrace.hpp>
 #include <boost/stacktrace/stacktrace.hpp>
 
