@@ -119,4 +119,58 @@ final class TextSearchTests: XCTestCase {
         s.find("x", in: "éé x")
         XCTAssertEqual(s.matches.first, 3..<4)
     }
+
+    // Matching runs over UTF-8 bytes and offsets are reported in characters,
+    // so every case below is one where the two disagree. See `locate`.
+
+    func testMultiByteNeedleReportsCharacterOffsets() {
+        var s = TextSearch()
+        s.find("日本", in: "aé日本語日本", caseSensitive: true)
+        XCTAssertEqual(s.matches, [2..<4, 5..<7])
+    }
+
+    func testEmojiNeedleIsOneMatchNotSeveral() {
+        var s = TextSearch()
+        s.find("👩‍👩‍👧‍👦", in: "a 👩‍👩‍👧‍👦 b 👩‍👩‍👧‍👦", caseSensitive: true)
+        XCTAssertEqual(s.count, 2)
+        XCTAssertEqual(s.matches.first, 2..<3, "a ZWJ sequence is one character")
+        XCTAssertEqual(s.matches.last, 6..<7)
+    }
+
+    /// `"\r\n"` is two bytes and one grapheme, so a CRLF buffer is the case
+    /// where the all-ASCII shortcut must not be taken.
+    func testCRLFBufferReportsCharacterOffsets() {
+        var s = TextSearch()
+        s.find("b", in: "a\r\nb\r\nb", caseSensitive: true)
+        XCTAssertEqual(s.matches, [2..<3, 4..<5])
+    }
+
+    func testNeedleAtTheVeryStartAndEnd() {
+        var s = TextSearch()
+        s.find("é", in: "édé", caseSensitive: true)
+        XCTAssertEqual(s.matches, [0..<1, 2..<3])
+    }
+
+    /// The needle's bytes occur inside a multi-byte character but not at a
+    /// character boundary — reporting it would hand the editor a range it
+    /// cannot select.
+    func testByteMatchInsideACharacterIsNotAMatch() {
+        // U+65E5 日 is E6 97 A5; U+E5 å is C3 A5. The trailing A5 byte is
+        // shared, and a naive byte scan would find "å" inside "日".
+        var s = TextSearch()
+        s.find("å", in: "日", caseSensitive: true)
+        XCTAssertEqual(s.count, 0)
+    }
+
+    func testManyMatchesInALargeBufferStayLinear() {
+        // Not a timing assertion — it is a shape assertion. The previous
+        // implementation measured from `startIndex` per match, so this input
+        // (50,000 matches) did not finish rather than finishing slowly.
+        let text = String(repeating: "ERROR line of ordinary length here\n", count: 50_000)
+        var s = TextSearch()
+        s.find("ERROR", in: text, caseSensitive: true)
+        XCTAssertEqual(s.count, 50_000)
+        XCTAssertEqual(s.matches.first, 0..<5)
+        XCTAssertEqual(s.matches.last, (text.count - 35)..<(text.count - 30))
+    }
 }
