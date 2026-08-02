@@ -34,10 +34,14 @@ public struct TraceRule: Sendable {
 public struct TracePoint: Equatable, Sendable {
     public var time: Double
     public var value: Double
+    /// One-based physical line in the source log, when the point came from a
+    /// parser. Synthetic points may leave this nil.
+    public var sourceLine: Int?
 
-    public init(time: Double, value: Double) {
+    public init(time: Double, value: Double, sourceLine: Int? = nil) {
         self.time = time
         self.value = value
+        self.sourceLine = sourceLine
     }
 }
 
@@ -331,7 +335,9 @@ public enum TraceParser {
                 } else {
                     value = 1
                 }
-                buckets[index].append(TracePoint(time: time, value: value))
+                buckets[index].append(TracePoint(
+                    time: time, value: value, sourceLine: lineOffset + 1
+                ))
                 if lastMatchedLine != lineOffset {
                     matchedLineCount += 1
                     lastMatchedLine = lineOffset

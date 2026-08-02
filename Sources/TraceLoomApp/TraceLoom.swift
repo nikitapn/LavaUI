@@ -161,6 +161,9 @@ public struct TraceLoom: View {
     /// nil once released. Local coordinates only; `timeline(_:)` maps back
     /// to a time value using the same axis it drew.
     @DrawState private var cursorLocalX: Float?
+    /// Timestamp retained after a click so inspection survives button-up.
+    /// Time rather than local X keeps the probe stable across resizes.
+    @DrawState private var probeTime: Double?
     /// Active drag selection in canvas-local coordinates. The selected time
     /// range is committed only when the pointer is released.
     @DrawState private var dragStartLocalX: Float?
@@ -168,6 +171,7 @@ public struct TraceLoom: View {
     /// Parsing and pyramid construction are tied to source edits, not cursor
     /// motion or other view-state changes that recompute this body.
     @State private var dataCache = TraceDataCache()
+    @State private var logEditorController = EditorController()
     /// Set by tapping a decorated gutter row — `EditorView` has no built-in
     /// tooltip, it just tells the app which decoration was tapped.
     @State private var tappedDiagnostic: String?
@@ -321,7 +325,8 @@ public struct TraceLoom: View {
                         decorations: decorations(
                             prefix: "Log ", severity: .warning, in: session.log
                         ),
-                        onDecorationTap: { tappedDiagnostic = $0.message }
+                        onDecorationTap: { tappedDiagnostic = $0.message },
+                        controller: logEditorController
                     )
                     .agentId("log-editor")
                 }
@@ -629,16 +634,16 @@ public struct TraceLoom: View {
             onGesture: { gesture in
                 switch gesture.phase {
                 case .began:
-                    let x = max(plotLeft, gesture.localX)
+                    let x = min(max(plotLeft, gesture.localX), gesture.frame.w - plotRight)
                     dragStartLocalX = x
                     dragCurrentLocalX = x
                     cursorLocalX = x
                 case .moved:
-                    let x = max(plotLeft, gesture.localX)
+                    let x = min(max(plotLeft, gesture.localX), gesture.frame.w - plotRight)
                     dragCurrentLocalX = x
                     cursorLocalX = x
                 case .ended:
-                    let end = max(plotLeft, gesture.localX)
+                    let end = min(max(plotLeft, gesture.localX), gesture.frame.w - plotRight)
                     if let start = dragStartLocalX {
                         let plotWidth = max(1, gesture.frame.w - plotLeft - plotRight)
                         let a = min(max(plotLeft, start), gesture.frame.w - plotRight)
@@ -652,6 +657,30 @@ public struct TraceLoom: View {
                             let selectedB = tMin + rb * (tMax - tMin)
                             session.zoomStart = min(selectedA, selectedB)
                             session.zoomEnd = max(selectedA, selectedB)
+                            probeTime = nil
+                        } else {
+                            let ratio = Double((b - plotLeft) / plotWidth)
+                            let selectedTime = tMin + ratio * (tMax - tMin)
+                            if let point = hitTestPoint(
+                                traces: traces,
+                                ranges: groupedRanges,
+                                time: selectedTime,
+                                localX: b,
+                                localY: gesture.localY,
+                                frame: gesture.frame,
+                                tMin: tMin,
+                                tMax: tMax,
+                                plotLeft: plotLeft,
+                                plotRight: plotRight
+                            ) {
+                                probeTime = point.time
+                                if let line = point.sourceLine {
+                                    session.showLog = true
+                                    logEditorController.reveal(line: line)
+                                }
+                            } else {
+                                probeTime = selectedTime
+                            }
                         }
                     }
                     dragStartLocalX = nil
@@ -668,6 +697,12 @@ public struct TraceLoom: View {
             let lanes = max(1, traces.count)
             let laneH = max(42, (frame.h - top - bottom) / Float(lanes))
             let plotBottom = top + laneH * Float(lanes)
+            let activeProbeTime: Double? = {
+                if let cx = cursorLocalX, cx >= left, cx <= frame.w - right {
+                    return tMin + Double((cx - left) / plotW) * (tMax - tMin)
+                }
+                return probeTime
+            }()
 
             draw.roundedRect(x: frame.x, y: frame.y, w: frame.w, h: frame.h, color: theme.canvas, radius: 6)
             for tick in 0...5 {
@@ -762,19 +797,116 @@ public struct TraceLoom: View {
                 draw.line(x1: x1, y1: frame.y + top, x2: x1, y2: frame.y + min(plotBottom, frame.h - bottom), color: theme.accent, width: 2)
             }
 
-            // Synchronized inspection cursor — a crosshair at the pointer's
-            // own x, with the time it maps to on the shared axis.
-            if let cx = cursorLocalX, cx >= left, cx <= frame.w - right {
-                let x = frame.x + cx
+            // Synchronized inspection cursor. It follows the pointer while
+            // pressed and remains at the selected timestamp after a click.
+            if let time = activeProbeTime, time >= tMin, time <= tMax {
+                let x = frame.x + left + Float((time - tMin) / (tMax - tMin)) * plotW
                 draw.line(x1: x, y1: frame.y + top, x2: x, y2: frame.y + min(plotBottom, frame.h - bottom), color: theme.textSecondary.opacity(0.8), width: 1)
-                let time = tMin + Double((cx - left) / plotW) * (tMax - tMin)
                 let label = formatTime(time)
                 let labelW: Float = 74
                 let labelX = min(max(frame.x + left, x - labelW / 2), frame.x + frame.w - right - labelW)
                 draw.roundedRect(x: labelX, y: frame.y + 2, w: labelW, h: 16, color: theme.panel, radius: 4)
                 draw.text(label, x: labelX, y: frame.y + 3, w: labelW, h: 14, color: theme.textSecondary)
+
+                // Use the original series rather than the display pyramid:
+                // downsampling must never change which value inspection finds.
+                for item in traces {
+                    guard let point = nearestPoint(in: item.series.points, to: time),
+                          point.time >= tMin, point.time <= tMax
+                    else { continue }
+                    let lane = item.id
+                    let yTop = frame.y + top + Float(lane) * laneH
+                    let yBottom = min(frame.y + frame.h - bottom, yTop + laneH)
+                    let group = item.series.rule.scaleGroup ?? "@\(item.id)"
+                    let range = groupedRanges[group] ?? (0, 1)
+                    let ySpan = range.max > range.min ? range.max - range.min : 1
+                    let pointX = frame.x + left
+                        + Float((point.time - tMin) / (tMax - tMin)) * plotW
+                    let pointY = yBottom - 7
+                        - Float((point.value - range.min) / ySpan) * max(1, laneH - 18)
+
+                    // Two filled circles make a crisp outline without adding
+                    // another shape primitive to LavaUI.
+                    draw.circle(cx: pointX, cy: pointY, radius: 6, color: theme.textPrimary)
+                    draw.circle(cx: pointX, cy: pointY, radius: 3.5, color: item.color)
+
+                    let value = formatProbeValue(point.value)
+                    let valueW: Float = 86
+                    let preferRight = pointX + 8 + valueW <= frame.x + frame.w - right
+                    let valueX = preferRight ? pointX + 8 : pointX - valueW - 8
+                    let valueY = min(max(yTop + 2, pointY - 9), yBottom - 20)
+                    // draw.roundedRect(
+                    //     x: valueX, y: valueY, w: valueW, h: 18,
+                    //     color: theme.panel.opacity(0.94), radius: 4
+                    // )
+                    draw.text(
+                        value, x: valueX, y: valueY + 2, w: valueW, h: 14,
+                        color: item.color
+                    )
+                }
             }
         }
+    }
+
+    /// O(log n) inspection on the full-resolution, time-sorted series.
+    private func nearestPoint(in points: [TracePoint], to time: Double) -> TracePoint? {
+        guard !points.isEmpty else { return nil }
+        var low = 0
+        var high = points.count
+        while low < high {
+            let mid = low + (high - low) / 2
+            if points[mid].time < time {
+                low = mid + 1
+            } else {
+                high = mid
+            }
+        }
+        if low == 0 { return points[0] }
+        if low == points.count { return points[points.count - 1] }
+        let before = points[low - 1]
+        let after = points[low]
+        return time - before.time <= after.time - time ? before : after
+    }
+
+    private func formatProbeValue(_ value: Double) -> String {
+        String(format: "%.6g", value)
+    }
+
+    /// Resolves only the clicked lane, then binary-searches that series. Dense
+    /// timelines therefore remain just as cheap to click as sparse ones.
+    private func hitTestPoint(
+        traces: [DisplaySeries],
+        ranges: [String: (min: Double, max: Double)],
+        time: Double,
+        localX: Float,
+        localY: Float,
+        frame: CanvasFrame,
+        tMin: Double,
+        tMax: Double,
+        plotLeft: Float,
+        plotRight: Float
+    ) -> TracePoint? {
+        let top: Float = 16
+        let bottom: Float = 30
+        let plotW = max(1, frame.w - plotLeft - plotRight)
+        let laneH = max(42, (frame.h - top - bottom) / Float(max(1, traces.count)))
+        let lane = Int((localY - top) / laneH)
+        guard lane >= 0, let item = traces.first(where: { $0.id == lane }),
+              let point = nearestPoint(in: item.series.points, to: time),
+              point.time >= tMin, point.time <= tMax
+        else { return nil }
+
+        let yTop = top + Float(lane) * laneH
+        let yBottom = min(frame.h - bottom, yTop + laneH)
+        let group = item.series.rule.scaleGroup ?? "@\(item.id)"
+        let range = ranges[group] ?? (0, 1)
+        let span = range.max > range.min ? range.max - range.min : 1
+        let pointX = plotLeft + Float((point.time - tMin) / (tMax - tMin)) * plotW
+        let pointY = yBottom - 7
+            - Float((point.value - range.min) / span) * max(1, laneH - 18)
+        let dx = localX - pointX
+        let dy = localY - pointY
+        return dx * dx + dy * dy <= 10 * 10 ? point : nil
     }
 
     private func legend(_ traces: [DisplaySeries]) -> some View {

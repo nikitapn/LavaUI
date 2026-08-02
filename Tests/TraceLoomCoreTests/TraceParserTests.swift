@@ -168,5 +168,5 @@ private final class PollCounter: @unchecked Sendable {
     let result = TraceParser.parse(log: "100,42", rulesSource: rules)
     #expect(result.diagnostics.count == 1)
     #expect(result.series.count == 1)
-    #expect(result.series[0].points == [TracePoint(time: 100, value: 42)])
+    #expect(result.series[0].points == [TracePoint(time: 100, value: 42, sourceLine: 1)])
 }

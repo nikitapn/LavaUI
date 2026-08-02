@@ -122,6 +122,32 @@ public struct EditorDecoration: Sendable, Equatable {
 /// correctness — is `TextEditingState`, unchanged and already tested. This
 /// type is presentation plus a gutter, which is why it is a component rather
 /// than a rewrite of `TextField`.
+public final class EditorController {
+    private var revealAction: ((Int) -> Bool)?
+    private var pendingLine: Int?
+
+    public init() {}
+
+    /// Select and reveal a one-based physical line. If the editor is not
+    /// mounted yet (for example inside a collapsed disclosure), the request is
+    /// retained and consumed when it mounts.
+    public func reveal(line: Int) {
+        let requested = max(1, line)
+        if revealAction?(requested) == true {
+            pendingLine = nil
+        } else {
+            pendingLine = requested
+        }
+    }
+
+    fileprivate func install(_ action: @escaping (Int) -> Bool) {
+        revealAction = action
+        if let pendingLine, action(pendingLine) {
+            self.pendingLine = nil
+        }
+    }
+}
+
 public struct EditorView: PrimitiveView {
     @Binding public var text: String
     public var rules: [HighlightRule]
@@ -134,6 +160,7 @@ public struct EditorView: PrimitiveView {
     /// Fired when the user clicks a decorated row's gutter icon, instead of
     /// the default "select the whole row" gutter click.
     public var onDecorationTap: ((EditorDecoration) -> Void)?
+    public var controller: EditorController?
 
     public init(
         text: Binding<String>,
@@ -144,7 +171,8 @@ public struct EditorView: PrimitiveView {
         visibleLines: Int = 12,
         search: TextSearch = TextSearch(),
         decorations: [EditorDecoration] = [],
-        onDecorationTap: ((EditorDecoration) -> Void)? = nil
+        onDecorationTap: ((EditorDecoration) -> Void)? = nil,
+        controller: EditorController? = nil
     ) {
         self._text = text
         self.rules = rules
@@ -155,6 +183,7 @@ public struct EditorView: PrimitiveView {
         self.search = search
         self.decorations = decorations
         self.onDecorationTap = onDecorationTap
+        self.controller = controller
     }
 
     public var resolvedFont: UIFont? { font ?? Environment.current.font }
@@ -206,6 +235,16 @@ public struct EditorView: PrimitiveView {
         leaf.decorations = decorations
         leaf.onDecorationTap = onDecorationTap
 
+        let binding = _text
+        controller?.install { [weak leaf] line in
+            guard let leaf, let font = leaf.font ?? FontStore.default else { return false }
+            leaf.revealPhysicalLine(line, font: font)
+            leaf.focusSelf(binding: binding, onSubmit: nil)
+            CaretBlink.noteEdit()
+            ViewInvalidation.markNeedsRedraw()
+            return true
+        }
+
         // Height is decided by the measure callback from the row count, so
         // the box always matches what is drawn.
         leaf.maxLines = visibleLines
@@ -232,7 +271,6 @@ public struct EditorView: PrimitiveView {
             }
         }
 
-        let binding = _text
         leaf.onClickLocal = { [weak leaf] localX, localY, originX, originY, _ in
             guard let leaf else { return }
             leaf.focusSelf(binding: binding, onSubmit: nil)
@@ -281,6 +319,26 @@ public struct EditorView: PrimitiveView {
 }
 
 extension LeafNode {
+    /// Selects and centers a one-based physical line in a non-wrapping editor.
+    func revealPhysicalLine(_ line: Int, font: UIFont) {
+        let rows = editing.layout.rows
+        guard !rows.isEmpty else { return }
+        let row = max(0, min(rows.count - 1, line - 1))
+        let range = rows[row]
+        editing.setCursor(editing.index(atOffset: range.lowerBound))
+        let end = min(range.upperBound + 1, editing.text.count)
+        editing.setCursor(editing.index(atOffset: end), extending: true)
+
+        let visibleHeight = viewportHeight > 0
+            ? max(font.lineHeight, viewportHeight - textInset * 2)
+            : Float(max(1, maxLines)) * font.lineHeight
+        let target = Float(row) * font.lineHeight
+            - max(0, (visibleHeight - font.lineHeight) / 2)
+        let contentHeight = Float(rows.count) * font.lineHeight
+        scrollY = min(max(0, target), max(0, contentHeight - visibleHeight))
+        scrollX = 0
+    }
+
     /// Gutter wide enough for the highest line number, plus breathing room.
     /// Sized from the digit count so it does not jitter as the caret moves.
     ///

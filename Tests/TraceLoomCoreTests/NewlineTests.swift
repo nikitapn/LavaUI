@@ -70,7 +70,7 @@ import Testing
     let rules = #"line | A | ^(\d+),(\d+)$ | 1 | 2 |"#
     let result = TraceParser.parse(log: "100,42\r\n200,43\r\n", rulesSource: rules)
     #expect(result.series[0].points.count == 2)
-    #expect(result.series[0].points.first == TracePoint(time: 100, value: 42))
+    #expect(result.series[0].points.first == TracePoint(time: 100, value: 42, sourceLine: 1))
 }
 
 @Test func crlfSplitAgreesWithLFSplitOnLineCount() {
