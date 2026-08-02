@@ -2,6 +2,9 @@
 
 A declarative UI framework in Swift, rendering through Vulkan.
 
+The current application-facing API is documented in
+**[docs/api.md](docs/api.md)**.
+
 Views are described the way SwiftUI describes them — a `body` returning nested
 value types — but the whole stack underneath is here: layout via Yoga, text via
 HarfBuzz and FreeType, and a single Vulkan pipeline that draws everything. No
