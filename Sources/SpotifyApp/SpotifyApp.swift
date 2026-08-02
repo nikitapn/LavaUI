@@ -11,6 +11,9 @@ import SpotifyCore
 @main
 struct SpotifyApp {
     static func main() {
+        // Shared config root: ~/.config/LavaSpotify/settings.json (Linux).
+        AppSettings.configure(appName: "LavaSpotify")
+        SpotifyTheme.restore()
         Theme.current = SpotifyTheme.theme
 
         guard let editor = LavaApp.open(

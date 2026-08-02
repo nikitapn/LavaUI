@@ -120,7 +120,13 @@ User tokens are stored at:
 ~/.config/LavaSpotify/tokens.json    # mode 0600
 ```
 
-Log out from **Account → Log out** to delete them.
+Non-secret preferences (theme palette id, …) use LavaUI `AppSettings`:
+
+```
+~/.config/LavaSpotify/settings.json
+```
+
+Log out from **Account → Log out** to delete tokens only; settings stay.
 
 ## 4. Install and configure spotifyd (PulseAudio)
 

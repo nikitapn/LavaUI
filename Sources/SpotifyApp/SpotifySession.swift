@@ -107,7 +107,8 @@ final class SpotifySession: @unchecked Sendable {
     func previewTheme(_ index: Int) {
         guard SpotifyTheme.palettes.indices.contains(index) else { return }
         themePickerSelection = index
-        SpotifyTheme.apply(index)
+        // Live preview only — do not write settings until the user commits.
+        SpotifyTheme.apply(index, persist: false)
     }
 
     func moveThemeSelection(_ delta: Int) {
@@ -117,7 +118,9 @@ final class SpotifySession: @unchecked Sendable {
     }
 
     func chooseTheme(_ index: Int) {
-        previewTheme(index)
+        guard SpotifyTheme.palettes.indices.contains(index) else { return }
+        themePickerSelection = index
+        SpotifyTheme.apply(index, persist: true)
         isThemePickerPresented = false
     }
 

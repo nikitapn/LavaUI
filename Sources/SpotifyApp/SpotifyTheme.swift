@@ -19,7 +19,17 @@ struct SpotifyPalette: Identifiable, Sendable {
 /// Product palettes plus Spotify-specific chrome that is not represented by
 /// LavaUI's general semantic theme tokens.
 enum SpotifyTheme {
+    private static let themeKey = "theme.id"
+
     nonisolated(unsafe) private(set) static var selectedIndex = 0
+
+    /// Restores the last chosen palette from `AppSettings` (no-op if unset).
+    static func restore() {
+        guard let id = AppSettings.string(forKey: themeKey),
+              let index = palettes.firstIndex(where: { $0.id == id })
+        else { return }
+        apply(index, persist: false)
+    }
 
     static let palettes: [SpotifyPalette] = [
         SpotifyPalette(
@@ -157,9 +167,12 @@ enum SpotifyTheme {
     static var sidebar: Color { palette.sidebar }
     static var cardHover: Color { palette.cardHover }
 
-    static func apply(_ index: Int) {
+    static func apply(_ index: Int, persist: Bool = true) {
         guard !palettes.isEmpty else { return }
         selectedIndex = min(max(0, index), palettes.count - 1)
         Theme.current = palettes[selectedIndex].theme
+        if persist {
+            AppSettings.set(palettes[selectedIndex].id, forKey: themeKey)
+        }
     }
 }
