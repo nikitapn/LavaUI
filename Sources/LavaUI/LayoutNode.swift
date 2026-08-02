@@ -764,6 +764,7 @@ final class LeafNode: YogaBoxNode {
     }
 
     func measureForYoga(width: Float, widthMode: YGMeasureMode) -> YGSize {
+        PerfCounters.yogaMeasures &+= 1
         // Before the font guard: a rule is the one leaf with no text in it.
         if kind == .divider, let style = dividerStyle {
             let extent = style.thickness + style.spacing * 2
@@ -1286,6 +1287,7 @@ public final class LayoutHost {
             layoutValid = false
             return []
         }
+        PerfCounters.layoutPasses &+= 1
         let boxes = root.flattenedLayoutNodes()
         guard let yogaRoot = boxes.first?.yoga else {
             lastFrames = []

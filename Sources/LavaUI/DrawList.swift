@@ -37,20 +37,23 @@ public final class DrawList {
     unowned let editor: Editor
     private var commandStorage: UnsafeMutablePointer<canvas.DrawCommand>
     private var commandCapacity: Int
-    private(set) var commandCount = 0
+    /// Public so a harness outside LavaUI (`LavaBench`) can assert on the
+    /// *shape* of a frame — command/glyph counts are exact where timings are
+    /// noisy. See `PerfCounters`.
+    public private(set) var commandCount = 0
 
     /// Shaped glyphs in absolute window pixels; `Text` commands index this.
     /// Replaces the old string blob — the renderer no longer shapes anything,
     /// so strings never cross the boundary.
     private var glyphStorage: UnsafeMutablePointer<canvas.GlyphInstance>
     private var glyphCapacity: Int
-    private(set) var glyphCount = 0
+    public private(set) var glyphCount = 0
 
     /// Polygon vertices in absolute window pixels; `Mesh` commands index this
     /// the same way `Text` indexes `glyphs`.
     private var meshVertexStorage: UnsafeMutablePointer<canvas.MeshVertex>
     private var meshVertexCapacity: Int
-    private(set) var meshVertexCount = 0
+    public private(set) var meshVertexCount = 0
 
     /// Overlays found during the current walk, emitted once it finishes.
     private var pendingOverlays: [PendingOverlay] = []
@@ -67,7 +70,7 @@ public final class DrawList {
     /// content is skipped before any draw commands are issued.
     private var cullStack: [CullRect] = []
 
-    init(editor: Editor) {
+    public init(editor: Editor) {
         self.editor = editor
         editor.ensureDrawListCapacity(commands: 256, glyphs: 2048, meshVertices: 256)
         let storage = editor.drawListStorage()

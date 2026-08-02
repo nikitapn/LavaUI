@@ -12,6 +12,7 @@ let package = Package(
         .executable(name: "HelloWorld", targets: ["HelloWorld"]),
         .executable(name: "TraceLoom", targets: ["TraceLoomApp"]),
         .executable(name: "Spotify", targets: ["SpotifyApp"]),
+        .executable(name: "LavaBench", targets: ["LavaBench"]),
         .library(name: "LavaUI", targets: ["LavaUI"]),
         .library(name: "LavaText", targets: ["LavaText"]),
         .library(name: "LavaMenu", targets: ["LavaMenu"]),
@@ -114,6 +115,21 @@ let package = Package(
             ]
         ),
         .target(name: "FBDModel"),
+        // Performance suite. Not a test target: it opens a window (text
+        // measurement needs the engine) and it must run `-c release` to mean
+        // anything, neither of which belongs in `swift test`.
+        // See docs/performance.md.
+        .executableTarget(
+            name: "LavaBench",
+            dependencies: [
+                "LavaUI",
+                "LavaText",
+                "TraceLoomCore",
+            ],
+            swiftSettings: [
+                .interoperabilityMode(.Cxx),
+            ]
+        ),
         .testTarget(
             name: "LavaTextTests",
             dependencies: ["LavaText"]

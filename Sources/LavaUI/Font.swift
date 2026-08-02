@@ -230,7 +230,11 @@ public final class UIFont: @unchecked Sendable {
     /// Characters this face lacks are re-shaped through `fallbacks` — see
     /// `shapeWithFallbacks`.
     public func shape(_ text: String) -> [ShapedGlyph] {
-        if let hit = shapeCache[text] { return hit }
+        if let hit = shapeCache[text] {
+            PerfCounters.textShapeHits &+= 1
+            return hit
+        }
+        PerfCounters.textShapes &+= 1
         let glyphs = shapeWithFallbacks(text)
         // Bounded, because this cache is keyed by line text and used to grow
         // without limit: every distinct line ever shaped stayed in it forever.

@@ -99,6 +99,26 @@
       "target": "Spotify",
       "configuration": "release",
       "preLaunchTask": "swift: Build Release Spotify"
+    },
+    {
+      "type": "swift",
+      "request": "launch",
+      "args": [],
+      "cwd": "${workspaceFolder:HelloWorld}",
+      "name": "Debug LavaBench",
+      "target": "LavaBench",
+      "configuration": "debug",
+      "preLaunchTask": "swift: Build Debug LavaBench"
+    },
+    {
+      "type": "swift",
+      "request": "launch",
+      "args": [],
+      "cwd": "${workspaceFolder:HelloWorld}",
+      "name": "Release LavaBench",
+      "target": "LavaBench",
+      "configuration": "release",
+      "preLaunchTask": "swift: Build Release LavaBench"
     }
   ]
 }

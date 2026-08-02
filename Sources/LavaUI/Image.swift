@@ -118,6 +118,7 @@ public enum ImageStore {
             return hit.image
         }
         guard let img = editor.loadImage(path: path) else { return nil }
+        PerfCounters.imageDecodes &+= 1
         insert(img, into: editor)
         return img
     }
@@ -158,6 +159,7 @@ public enum ImageStore {
                     key: cacheKey, path: path, pixels: decoded.pixels,
                     width: decoded.width, height: decoded.height
                 ) else { return }
+                PerfCounters.imageDecodes &+= 1
                 insert(img, into: editor)
                 // `.redraw`, not `.body`. Nothing observed this — the cache is
                 // a plain store — so the frame has to be asked for explicitly.
@@ -201,6 +203,7 @@ public enum ImageStore {
             editor.unloadImage(path: entry.image.cacheKey)
             cache.removeValue(forKey: entry.image.cacheKey)
             residentBytes -= entry.bytes
+            PerfCounters.imageEvictions &+= 1
         }
     }
 

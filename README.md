@@ -46,6 +46,17 @@ swift run Spotify             # LavaSpotify (see docs/lavaspotify.md)
 swift test                    # headless tests, no GPU needed
 ```
 
+Performance is checked separately, against a committed baseline — a correctness
+suite cannot catch a frame that got 40x slower while still drawing the right
+thing:
+
+```bash
+swift build -c release && ./.build/release/LavaBench   # exit 1 on a regression
+```
+
+See **[docs/performance.md](docs/performance.md)** for what it measures, why it
+gates on work *counts* rather than milliseconds, and how to add a scenario.
+
 The Vulkan engine lives under `canvas/` and is a normal SwiftPM C++ target
 (`CxxCanvas`). **Resources are split by owner** and packed by SwiftPM:
 

@@ -1,0 +1,207 @@
+{
+  "notes" : "Arch Linux, x86_64, release build, idle machine. Recorded 2026-08-02, after moving the edit path and undo history to UTF-8 offsets.",
+  "recordedAt" : "2026-08-02T21:20:19Z",
+  "scenarios" : {
+    "editor.open-10mb" : {
+      "counters" : {
+        "bufferKB" : 10385,
+        "layouts" : 1,
+        "measures" : 1,
+        "shapeHits" : 53
+      },
+      "stages" : {
+        "body" : 9.38,
+        "emit" : 0.038,
+        "layout" : 20.228
+      }
+    },
+    "editor.open-10mb-decorated" : {
+      "counters" : {
+        "decorations" : 500,
+        "layouts" : 1,
+        "measures" : 1,
+        "shapeHits" : 54
+      },
+      "stages" : {
+        "body" : 9.339,
+        "emit" : 0.066,
+        "layout" : 20.329
+      }
+    },
+    "editor.open-1mb" : {
+      "counters" : {
+        "bufferKB" : 1039,
+        "layouts" : 1,
+        "measures" : 1,
+        "shapeHits" : 53
+      },
+      "stages" : {
+        "body" : 0.921,
+        "emit" : 0.028,
+        "layout" : 3.389
+      }
+    },
+    "editor.open-200-lines" : {
+      "counters" : {
+        "layouts" : 1,
+        "measures" : 1,
+        "shapeHits" : 53
+      },
+      "stages" : {
+        "body" : 0.015,
+        "emit" : 0.025,
+        "layout" : 0.088
+      }
+    },
+    "editor.redraw-10mb" : {
+      "counters" : {
+        "layouts" : 1,
+        "measures" : 1,
+        "shapeHits" : 93
+      },
+      "stages" : {
+        "emit" : 0.024
+      }
+    },
+    "editor.replace-buffer-10mb" : {
+      "counters" : {
+        "layouts" : 2,
+        "measures" : 2,
+        "shapeHits" : 66
+      },
+      "stages" : {
+        "body" : 11.409,
+        "emit" : 0.042,
+        "layout" : 41.661
+      }
+    },
+    "image.poster-cache-hit" : {
+      "counters" : {
+
+      },
+      "stages" : {
+        "lookup" : 0.014
+      }
+    },
+    "image.poster-decode-cold" : {
+      "counters" : {
+        "decodes" : 96,
+        "resident" : 96,
+        "residentMB" : 13
+      },
+      "stages" : {
+        "decode" : 38.626
+      }
+    },
+    "image.poster-scroll-thrash" : {
+      "counters" : {
+        "cellVisits" : 624,
+        "decodes" : 162,
+        "evictions" : 130,
+        "frames" : 26,
+        "resident" : 32
+      },
+      "stages" : {
+        "scroll" : 0.28
+      }
+    },
+    "list.lazy-grid-500" : {
+      "counters" : {
+        "drawCommands" : 2794,
+        "laidOutNodes" : 146,
+        "layouts" : 1,
+        "measures" : 48,
+        "shapeHits" : 96
+      },
+      "stages" : {
+        "body" : 0.003,
+        "emit" : 0.031,
+        "layout" : 0.249
+      }
+    },
+    "list.lazy-grid-5000" : {
+      "counters" : {
+        "drawCommands" : 3289,
+        "laidOutNodes" : 146,
+        "layouts" : 1,
+        "measures" : 48,
+        "shapeHits" : 96
+      },
+      "stages" : {
+        "body" : 0.002,
+        "emit" : 0.029,
+        "layout" : 0.249
+      }
+    },
+    "text.delete-selection-mid-buffer" : {
+      "counters" : {
+        "rows" : 132955
+      },
+      "stages" : {
+        "delete" : 1.031,
+        "reseed" : 8.052,
+        "select" : 0.001
+      }
+    },
+    "text.load-10mb" : {
+      "counters" : {
+        "rows" : 147687
+      },
+      "stages" : {
+        "init" : 0.001,
+        "rows" : 9.316
+      }
+    },
+    "text.logical-rows-10mb" : {
+      "counters" : {
+        "rows" : 147687
+      },
+      "stages" : {
+        "rows" : 9.261
+      }
+    },
+    "text.logical-rows-10mb-unicode" : {
+      "counters" : {
+        "rows" : 147688
+      },
+      "stages" : {
+        "rows" : 153.129
+      }
+    },
+    "text.search-10mb" : {
+      "counters" : {
+        "matches" : 29370
+      },
+      "stages" : {
+        "find" : 42.797
+      }
+    },
+    "text.select-all-delete-10mb" : {
+      "counters" : {
+
+      },
+      "stages" : {
+        "delete" : 0.003,
+        "selectAll" : 0.001,
+        "undo" : 1.542
+      }
+    },
+    "text.type-at-end-10mb" : {
+      "counters" : {
+        "chars" : 200
+      },
+      "stages" : {
+        "type" : 1.193
+      }
+    },
+    "traceloom.parse-10mb" : {
+      "counters" : {
+        "matchedLines" : 147686,
+        "series" : 3
+      },
+      "stages" : {
+        "parse" : 450.191
+      }
+    }
+  }
+}
