@@ -257,17 +257,16 @@ bool Engine::pollInputEvent(InputEvent &out)
   });
 }
 
-int Engine::pendingDroppedFileCount()
+StringVector Engine::pendingDroppedFiles()
 {
   return impl_->withApp([&](Application &app) {
-    return app.pendingDroppedFileCount();
-  });
-}
-
-std::string Engine::pendingDroppedFile(int index)
-{
-  return impl_->withApp([&](Application &app) {
-    return app.pendingDroppedFile(index);
+    StringVector out;
+    const int n = app.pendingDroppedFileCount();
+    out.reserve(static_cast<size_t>(n > 0 ? n : 0));
+    for (int i = 0; i < n; ++i) {
+      out.push_back(app.pendingDroppedFile(i));
+    }
+    return out;
   });
 }
 
@@ -323,20 +322,25 @@ void Engine::unloadTexture(const std::string &path)
   impl_->withApp([&](Application &app) { app.unloadTexture(path); });
 }
 
-uint8_t *Engine::decodeImageAlloc(const std::string &path,
-                                  uint32_t &outWidth,
-                                  uint32_t &outHeight,
-                                  uint32_t maxPixelSize)
+DecodedImage Engine::decodeImage(const std::string &path, uint32_t maxPixelSize)
 {
+  DecodedImage out;
   int w = 0, h = 0, channels = 0;
   // stbi_load is reentrant and touches no shared state, which is what makes
   // this callable off the device thread.
   stbi_uc *pixels = stbi_load(path.c_str(), &w, &h, &channels, 4);
   if (pixels == nullptr || w <= 0 || h <= 0) {
     if (pixels) stbi_image_free(pixels);
-    outWidth = outHeight = 0;
-    return nullptr;
+    return out;
   }
+
+  auto adopt = [&](uint8_t *p, int ww, int hh) {
+    const size_t n = static_cast<size_t>(ww) * static_cast<size_t>(hh) * 4;
+    out.pixels.assign(p, p + n);
+    out.width = static_cast<uint32_t>(ww);
+    out.height = static_cast<uint32_t>(hh);
+    stbi_image_free(p);
+  };
 
   const uint32_t longEdge = static_cast<uint32_t>(w > h ? w : h);
   if (maxPixelSize > 0 && longEdge > maxPixelSize) {
@@ -357,22 +361,15 @@ uint8_t *Engine::decodeImageAlloc(const std::string &path,
       pixels, w, h, 0, nullptr, dw, dh, 0, STBIR_RGBA);
     if (scaled != nullptr) {
       stbi_image_free(pixels);
-      outWidth  = static_cast<uint32_t>(dw);
-      outHeight = static_cast<uint32_t>(dh);
-      return scaled;
+      adopt(scaled, dw, dh);
+      return out;
     }
     // Resize failed (allocation): fall through with the full-size decode
     // rather than dropping the image.
   }
 
-  outWidth  = static_cast<uint32_t>(w);
-  outHeight = static_cast<uint32_t>(h);
-  return pixels;
-}
-
-void Engine::decodeImageFree(uint8_t *pixels)
-{
-  if (pixels) stbi_image_free(pixels);
+  adopt(pixels, w, h);
+  return out;
 }
 
 int Engine::uploadTexture(const std::string &key, const uint8_t *rgba,
@@ -383,6 +380,13 @@ int Engine::uploadTexture(const std::string &key, const uint8_t *rgba,
     id = app.uploadTexture(key, rgba, width, height);
   });
   return id;
+}
+
+int Engine::uploadTexture(const std::string &key, const U8Vector &rgba,
+                          uint32_t width, uint32_t height)
+{
+  if (rgba.empty()) return -1;
+  return uploadTexture(key, rgba.data(), width, height);
 }
 
 bool Engine::hasTexture(const std::string &key) const

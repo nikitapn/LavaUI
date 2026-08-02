@@ -7,7 +7,7 @@
 #define STB_IMAGE_IMPLEMENTATION
 #include <stb_image.h>
 
-// Single translation unit for both stb implementations. `decodeImageAlloc`
+// Single translation unit for both stb implementations. `Engine::decodeImage`
 // (canvas_engine.cpp) is the only caller of the resizer; it includes the
 // header for declarations and links against the definitions emitted here.
 #define STB_IMAGE_RESIZE_IMPLEMENTATION

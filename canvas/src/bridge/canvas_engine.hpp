@@ -25,6 +25,26 @@ class Application;
 
 namespace canvas {
 
+// Named specializations so Swift can import/construct them. The primary
+// `std::vector<T>` template is unavailable to Swift (ClangImporter +
+// libstdc++ `vector<bool>`), but a `using` alias of a concrete
+// specialization imports cleanly — construct, push_back, iterate, return.
+using U8Vector = std::vector<std::uint8_t>;
+using StringVector = std::vector<std::string>;
+
+/// CPU-side decode result for `Engine::decodeImage` (no Vulkan).
+struct DecodedImage {
+  U8Vector pixels; // RGBA8, size == width * height * 4 when valid
+  std::uint32_t width = 0;
+  std::uint32_t height = 0;
+
+  bool valid() const
+  {
+    return width > 0 && height > 0
+           && pixels.size() == static_cast<size_t>(width) * height * 4;
+  }
+};
+
 /// Owns the windowed (or offscreen) Application and optional present thread.
 class Engine {
  public:
@@ -67,16 +87,6 @@ class Engine {
   void setWindowFrame(int x, int y, int width, int height);
   void setWindowVisible(bool visible);
   bool isWindowVisible() const;
-
-  void clearProjectTreeBuilder();
-  void addTreeItem(const std::string &id, const std::string &label,
-                   int depth, bool selected);
-  void commitProjectTree();
-
-  void clearPropertiesBuilder();
-  void addPropertyItem(const std::string &key, const std::string &value);
-  void commitProperties();
-
 
   // ─── Declarative UI (Swift tree → Yoga + TextRenderer) ────────────────
   bool repaint();
@@ -125,10 +135,9 @@ class Engine {
   /// Pop one raw input event (mouse / resize). Returns false if empty.
   bool pollInputEvent(InputEvent &out);
 
-  /// Paths from the most recent FileDrop event, pulled by index — see the
-  /// note on `canvas::InputEventKind::FileDrop`. Valid until the next drop.
-  int pendingDroppedFileCount();
-  std::string pendingDroppedFile(int index);
+  /// Paths from the most recent FileDrop event — see
+  /// `canvas::InputEventKind::FileDrop`. Valid until the next drop.
+  StringVector pendingDroppedFiles();
 
   /// Current swapchain extent in pixels.
   void framebufferSize(float &outW, float &outH) const;
@@ -158,28 +167,22 @@ class Engine {
   void unloadTexture(const std::string &path);
 
   /// Decodes an image file to RGBA8 **without touching Vulkan**, so it is safe
-  /// to call from a worker thread. Returns false if the file will not decode.
-  /// This is the expensive half of loading; `uploadTexture` is the half that
-  /// must stay on the device thread.
-  /// Returns a malloc'd RGBA8 buffer the caller must release with
-  /// `decodeImageFree`, or nullptr. A raw pointer rather than a container
-  /// because this crosses into Swift, where `std::vector` does not map
-  /// cleanly.
+  /// to call from a worker thread. Empty/`valid()==false` if the file will not
+  /// decode. This is the expensive half of loading; `uploadTexture` is the
+  /// half that must stay on the device thread.
   ///
   /// `maxPixelSize` (0 = native) caps the longer edge, preserving aspect. Pass
   /// the size the image will actually be *drawn* at: a 300px cover rendered
-  /// into a 140pt box costs 4.5x the pixels for no visible gain, and — because
+  /// into a 140pt box costs 4.5× the pixels for no visible gain, and — because
   /// `ImageAtlas` refuses anything wider than one cell — is what pushes every
   /// such image out of the atlas and onto its own descriptor binding.
-  /// `outWidth`/`outHeight` report the size after any downscale.
-  static uint8_t *decodeImageAlloc(const std::string &path,
-                                   uint32_t &outWidth,
-                                   uint32_t &outHeight,
-                                   uint32_t maxPixelSize = 0);
-  static void decodeImageFree(uint8_t *pixels);
+  static DecodedImage decodeImage(const std::string &path,
+                                  uint32_t maxPixelSize = 0);
 
   /// Uploads pre-decoded pixels under `key`. Device thread only.
   int uploadTexture(const std::string &key, const uint8_t *rgba,
+                    uint32_t width, uint32_t height);
+  int uploadTexture(const std::string &key, const U8Vector &rgba,
                     uint32_t width, uint32_t height);
 
   /// Whether `key` is already resident, so a caller can skip decoding.

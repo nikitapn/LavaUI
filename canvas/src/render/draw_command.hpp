@@ -107,7 +107,7 @@ enum class InputEventKind : uint32_t {
   Refresh = 8,
   /// Files dropped on the window. `x`/`y` = cursor position, `button` =
   /// path count. The paths themselves don't fit a fixed-size struct — pull
-  /// them via `Engine::pendingDroppedFile(index)` while handling this event;
+  /// them via `Engine::pendingDroppedFiles()` while handling this event;
   /// the next drop overwrites them.
   FileDrop = 9,
 };

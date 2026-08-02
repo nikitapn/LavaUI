@@ -14,17 +14,13 @@ import Foundation
 /// directly — no `OpaquePointer`, no `strdup`/`free`, no manually building
 /// `char**` arrays for tree/property lists.
 ///
-/// Two things `Engine`'s C++ API asks of callers that don't fit Swift
-/// directly, both worked around here rather than in `Engine` itself:
-///  - `std::vector<T>` can't be constructed from Swift source in this
-///    toolchain (a ClangImporter limitation around `<vector>`'s `bool`
-///    specialization — see canvas_engine.hpp's clear/add/commit builders).
-///    `setProjectTree`/`setProperties` use those incremental builders here.
-///  - `std::expected<void, Error>` (`VoidResult`)'s `.error()` accessor
-///    returns a reference, which Swift's interop won't call (possible
-///    dangling pointer) — so failures are surfaced as `nil`/`false` here,
-///    not with the underlying message. Check stderr (Engine logs failures
-///    internally) if you need to know why something failed to open.
+/// C++ containers: use the named specializations in `canvas` (`U8Vector`,
+/// `StringVector`, …). Bare `std.vector<T>` is still unavailable to Swift
+/// (ClangImporter + libstdc++ `vector<bool>`); the `using` aliases import.
+///
+/// `VoidResult` (std::expected) `.error()` returns a reference that Swift
+/// interop won't call, so open failures surface as `nil`/`false` — check
+/// stderr if you need the message (Engine logs it).
 public final class Editor: @unchecked Sendable {
     private var engine = canvas.Engine()
 
@@ -131,17 +127,15 @@ public final class Editor: @unchecked Sendable {
         path: String,
         maxPixelSize: UInt32 = 0
     ) -> (pixels: [UInt8], width: UInt32, height: UInt32)? {
-        var w: UInt32 = 0
-        var h: UInt32 = 0
-        guard let raw = canvas.Engine.decodeImageAlloc(
-                  std.string(path), &w, &h, maxPixelSize
-              ),
-              w > 0, h > 0
-        else { return nil }
-        defer { canvas.Engine.decodeImageFree(raw) }
-        let count = Int(w) * Int(h) * 4
-        let pixels = [UInt8](UnsafeBufferPointer(start: raw, count: count))
-        return (pixels, w, h)
+        let decoded = canvas.Engine.decodeImage(std.string(path), maxPixelSize)
+        guard decoded.valid() else { return nil }
+        let n = Int(decoded.pixels.size())
+        var pixels = [UInt8]()
+        pixels.reserveCapacity(n)
+        for i in 0..<n {
+            pixels.append(decoded.pixels[i])
+        }
+        return (pixels, decoded.width, decoded.height)
     }
 
     /// Uploads pre-decoded pixels. Main thread only — it touches the device.
@@ -153,6 +147,8 @@ public final class Editor: @unchecked Sendable {
         key: String, path: String? = nil,
         pixels: [UInt8], width: UInt32, height: UInt32
     ) -> UIImage? {
+        // Pointer overload: avoids copying [UInt8] into a U8Vector just to
+        // hand bytes to Vulkan. (U8Vector overload exists for C++ callers.)
         let id: Int32 = pixels.withUnsafeBufferPointer { buf in
             guard let base = buf.baseAddress else { return -1 }
             return engine.uploadTexture(std.string(key), base, width, height)
@@ -192,9 +188,13 @@ public final class Editor: @unchecked Sendable {
     /// Paths from the most recent `.fileDrop` event. Valid only while
     /// handling that event — the next drop overwrites them.
     public func droppedFiles() -> [String] {
-        let count = Int(engine.pendingDroppedFileCount())
-        guard count > 0 else { return [] }
-        return (0..<count).map { String(engine.pendingDroppedFile(Int32($0))) }
+        let paths = engine.pendingDroppedFiles()
+        var out: [String] = []
+        out.reserveCapacity(Int(paths.size()))
+        for i in 0..<paths.size() {
+            out.append(String(paths[i]))
+        }
+        return out
     }
 
     /// False while minimized/occluded. The frame loop gates continuous

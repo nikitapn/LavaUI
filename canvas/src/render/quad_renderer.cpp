@@ -912,7 +912,7 @@ void QuadRenderer::drawBatchRange(VkCommandBuffer commandBuffer,
       // Each texture *change* costs a set, and batches are emitted in tree
       // order with no sorting, so an image grid alternating art and labels
       // burns roughly two per card. Atlasing is the fix: images sharing a page
-      // share one binding. See ImageAtlas and `decodeImageAlloc`'s size cap.
+      // share one binding. See ImageAtlas and `Engine::decodeImage`'s size cap.
       static bool warned = false;
       if (!warned) {
         warned = true;
