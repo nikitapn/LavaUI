@@ -314,9 +314,16 @@ public struct TextEditingState: Equatable {
         text.distance(from: text.startIndex, to: index)
     }
 
+    /// Clamped with `limitedBy:` rather than against `text.count`, because
+    /// `String.count` is a full grapheme-break walk of the buffer — O(length)
+    /// regardless of how small `offset` is. The draw path calls this once per
+    /// emit to reach the first visible row, so on a 10 MB log that single
+    /// clamp cost ~12ms of *every* redraw, including ones that only moved a
+    /// caret. `limitedBy:` costs O(min(offset, length)) and stops at the end.
     public func index(atOffset offset: Int) -> String.Index {
-        let clamped = max(0, min(offset, text.count))
-        return text.index(text.startIndex, offsetBy: clamped)
+        guard offset > 0 else { return text.startIndex }
+        return text.index(text.startIndex, offsetBy: offset, limitedBy: text.endIndex)
+            ?? text.endIndex
     }
 
     private func clamp(_ index: String.Index) -> String.Index {

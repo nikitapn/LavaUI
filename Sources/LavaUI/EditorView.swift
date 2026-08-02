@@ -166,6 +166,7 @@ public struct EditorView: PrimitiveView {
     public func mountPrimitive() -> any AnyViewNode {
         let leaf = LeafNode(kind: .editor, label: "EditorView", width: .auto, height: .auto)
         leaf.editing = TextEditingState(text)
+        leaf.seedLogicalRows()
         configure(leaf)
         leaf.installTextMeasure()
         return leaf
@@ -177,6 +178,10 @@ public struct EditorView: PrimitiveView {
         }
         if leaf.editing.text != text {
             leaf.editing.setText(text, keepingCursor: true)
+            // Before `configure` reads the row count for the gutter, not after
+            // the next layout pass — otherwise a buffer that just grew from 99
+            // to 100 lines measures its gutter one digit short for a frame.
+            leaf.seedLogicalRows()
         }
         configure(leaf)
         if !leaf.usesTextMeasure { leaf.installTextMeasure() }
@@ -278,8 +283,15 @@ public struct EditorView: PrimitiveView {
 extension LeafNode {
     /// Gutter wide enough for the highest line number, plus breathing room.
     /// Sized from the digit count so it does not jitter as the caret moves.
+    ///
+    /// Counted off the row table rather than `editing.lines`: the gutter
+    /// numbers *are* the rows, and `lines` re-splits the whole buffer on every
+    /// access. `configure` calls this on every mount and reconcile, so on a
+    /// 10 MB log that split was ~200ms of the body pass each time the editor
+    /// appeared. `seedLogicalRows` is what guarantees the table exists here,
+    /// on the mount that runs before any layout pass.
     func measuredGutterWidth(font: UIFont) -> Float {
-        let digits = max(2, String(max(1, editing.lines.count)).count)
+        let digits = max(2, String(max(1, editing.layout.count)).count)
         let sample = String(repeating: "0", count: digits)
         return font.shapedRun(sample).width + textInset * 3
     }

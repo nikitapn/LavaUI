@@ -260,7 +260,23 @@ final class LeafNode: YogaBoxNode {
     /// Editable payload (textField leaves). Lives on the node because a
     /// PrimitiveView has no body, so it never goes through CompositeNode's
     /// @State transplant — the node's own lifetime is the persistence.
-    var editing = TextEditingState("")
+    var editing = TextEditingState("") {
+        // Any write invalidates the offset anchor below. Deliberately every
+        // write, not just text edits: a cursor move cannot invalidate it, but
+        // paying a nil-out on those is nothing next to the cost of getting
+        // this wrong, which is glyphs drawn from the wrong part of the buffer.
+        didSet { indexAnchor = nil }
+    }
+    /// Last character offset resolved to a `String.Index` in this buffer.
+    ///
+    /// `TextEditingState.index(atOffset:)` walks from `startIndex` on every
+    /// call. The draw path needs the first visible row's index once per
+    /// redraw, so an editor scrolled to the end of a 10 MB log paid a
+    /// full-buffer walk per frame — including every frame a blinking caret
+    /// causes, at ~25ms each. Scrolling moves that offset by a few rows, so
+    /// resolving from the previous answer makes the steady state a few
+    /// characters instead.
+    private var indexAnchor: (offset: Int, index: String.Index)?
     var placeholder: String = ""
     var isMultiline = false
     var maxLines = 8
@@ -388,34 +404,64 @@ final class LeafNode: YogaBoxNode {
         if let c = widestRowCache, c.fontIdentity == font.identity, c.text == editing.text {
             return c.width
         }
-        let widest: Float
-        if wraps {
-            let rows = editing.layout.rows
-            // Ranked on the row ranges, so the `index(atOffset:)` walk — which
-            // starts from the beginning of the buffer every call, and was
-            // quadratic when done for every row — runs only for the candidates.
-            let picks = Self.longestIndices(count: rows.count, limit: Self.widestRowCandidates) {
-                rows[$0].count
-            }
-            widest = picks.reduce(Float(0)) { acc, i in
-                let lo = editing.index(atOffset: rows[i].lowerBound)
-                let hi = editing.index(atOffset: rows[i].upperBound)
-                return max(acc, font.shapedRun(String(editing.text[lo..<hi])).width)
-            }
-        } else {
-            // One row per logical line — `editing.lines` already carries real
-            // `Substring` indices from a single split, and `utf8.count` on one
-            // is the length of a byte range, not a walk.
-            let lines = editing.lines
-            let picks = Self.longestIndices(count: lines.count, limit: Self.widestRowCandidates) {
-                lines[$0].utf8.count
-            }
-            widest = picks.reduce(Float(0)) { acc, i in
-                max(acc, font.shapedRun(String(lines[i])).width)
-            }
+        // Both cases rank on the row table layout has already built and
+        // cached. The no-wrap case used to rank on `editing.lines` instead,
+        // and that property re-splits the entire buffer on every access — a
+        // 10 MB log paid a fresh 200,000-substring split here on each measure
+        // pass, which was most of what opening the editor on one cost.
+        let rows = editing.layout.rows
+        let picks = Self.longestIndices(count: rows.count, limit: Self.widestRowCandidates) {
+            rows[$0].count
+        }
+        let widest = rowTexts(at: picks, rows: rows).reduce(Float(0)) {
+            max($0, font.shapedRun($1).width)
         }
         widestRowCache = (font.identity, editing.text, widest)
         return widest
+    }
+
+    /// `String.Index` for a character offset, resolved relative to the last
+    /// offset this leaf resolved — see `indexAnchor`.
+    func textIndex(atOffset offset: Int) -> String.Index {
+        let text = editing.text
+        if let anchor = indexAnchor {
+            let delta = offset - anchor.offset
+            if delta == 0 { return anchor.index }
+            let limit = delta > 0 ? text.endIndex : text.startIndex
+            if let moved = text.index(anchor.index, offsetBy: delta, limitedBy: limit) {
+                indexAnchor = (offset, moved)
+                return moved
+            }
+        }
+        let resolved = editing.index(atOffset: offset)
+        indexAnchor = (offset, resolved)
+        return resolved
+    }
+
+    /// Text of the given rows, extracted in a single forward pass.
+    ///
+    /// `index(atOffset:)` walks from the start of the buffer on every call, so
+    /// a dozen candidate rows near the end of a large file walked it a dozen
+    /// times. Sorting the candidates and carrying a cursor makes it one walk —
+    /// the same trick `emitEditor` uses for the visible window.
+    private func rowTexts(at indices: [Int], rows: [Range<Int>]) -> [String] {
+        let text = editing.text
+        var cursor = text.startIndex
+        var cursorOffset = 0
+        var out: [String] = []
+        out.reserveCapacity(indices.count)
+        for i in indices.sorted() {
+            let row = rows[i]
+            if row.lowerBound > cursorOffset {
+                cursor = text.index(cursor, offsetBy: row.lowerBound - cursorOffset)
+                cursorOffset = row.lowerBound
+            }
+            let hi = text.index(cursor, offsetBy: row.upperBound - row.lowerBound)
+            out.append(String(text[cursor..<hi]))
+            cursor = hi
+            cursorOffset = row.upperBound
+        }
+        return out
     }
 
     /// Indices of the `limit` longest items, in one pass.

@@ -96,6 +96,8 @@ public struct VisualLayout: Equatable {
     /// buffer felt: every caret draw, hit test, and gutter row rescanned the
     /// whole document.
     public static func logicalRows(_ text: String) -> [Range<Int>] {
+        if let rows = asciiLogicalRows(text) { return rows }
+
         var rows: [Range<Int>] = []
         var start = 0
         var offset = 0
@@ -108,6 +110,38 @@ public struct VisualLayout: Equatable {
         }
         rows.append(start..<offset)
         return rows
+    }
+
+    /// The same scan over raw UTF-8, valid only when every byte is ASCII —
+    /// then a character offset *is* a byte offset and no grapheme breaking is
+    /// needed. Nil when that does not hold, so the caller falls back.
+    ///
+    /// Worth the special case because the `for ch in text` walk above
+    /// materialises a `Character` per position, and each one is a small
+    /// allocation and a bridge-object release. On a 10 MB log that is ~130ms
+    /// every time the editor mounts; the byte scan is a few. Logs, source
+    /// files and config are overwhelmingly ASCII, and anything else still gets
+    /// the correct answer from the walk.
+    ///
+    /// CR bails out as well as non-ASCII: Swift treats "\r\n" as one grapheme
+    /// cluster, so a buffer that still has CRLF in it breaks the offset
+    /// identity this depends on even though every byte is ASCII.
+    private static func asciiLogicalRows(_ text: String) -> [Range<Int>]? {
+        let scanned: [Range<Int>]?? = text.utf8.withContiguousStorageIfAvailable { bytes in
+            var rows: [Range<Int>] = []
+            var start = 0
+            for i in 0..<bytes.count {
+                let byte = bytes[i]
+                if byte >= 0x80 || byte == 0x0D { return nil }
+                if byte == 0x0A {
+                    rows.append(start..<i)
+                    start = i + 1
+                }
+            }
+            rows.append(start..<bytes.count)
+            return rows
+        }
+        return scanned ?? nil
     }
 
     public var count: Int { rows.count }

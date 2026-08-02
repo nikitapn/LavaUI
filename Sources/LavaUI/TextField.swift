@@ -196,6 +196,16 @@ extension LeafNode {
 
         // No wrapping: one row per logical line, cached the same way.
         guard editing.text != lastLogicalRowsText else { return }
+        seedLogicalRows()
+    }
+
+    /// Installs one row per logical line and marks the cache current.
+    ///
+    /// Called at mount as well as from layout, because `configure` reads the
+    /// row count for the gutter width *before* the first measure pass. Without
+    /// a table there, `editing.layout` falls back to rescanning the buffer on
+    /// each access and throws the result away.
+    func seedLogicalRows() {
         lastLogicalRowsText = editing.text
         editing.setVisualRows(VisualLayout.logicalRows(editing.text))
     }

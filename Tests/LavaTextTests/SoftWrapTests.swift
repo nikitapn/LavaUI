@@ -64,6 +64,50 @@ final class SoftWrapTests: XCTestCase {
         XCTAssertEqual(l.count, 3, "a trailing newline leaves an empty last row")
     }
 
+    /// `logicalRows` has a byte-scan fast path that only applies when every
+    /// byte is ASCII and no CR is present. It has to agree with the
+    /// grapheme walk exactly, including on the buffers that disqualify it —
+    /// a wrong row table means glyphs drawn from the wrong offsets.
+    func testLogicalRowsMatchGraphemeWalk() {
+        func reference(_ text: String) -> [Range<Int>] {
+            var rows: [Range<Int>] = []
+            var start = 0
+            var offset = 0
+            for ch in text {
+                if ch == "\n" {
+                    rows.append(start..<offset)
+                    start = offset + 1
+                }
+                offset += 1
+            }
+            rows.append(start..<offset)
+            return rows
+        }
+
+        let cases = [
+            "",
+            "\n",
+            "one line",
+            "ab\ncd\n",
+            "\n\n\n",
+            // Disqualifies the fast path: multi-byte scalars make a character
+            // offset differ from a byte offset.
+            "héllo\nwörld\n",
+            "emoji 👩‍👩‍👧‍👦 here\nnext\n",
+            "combining e\u{0301}\nnext",
+            // CRLF is one grapheme cluster, so byte offsets are wrong even
+            // though every byte is ASCII.
+            "a\r\nb\r\nc",
+            "trailing cr\r",
+        ]
+        for text in cases {
+            XCTAssertEqual(
+                VisualLayout.logicalRows(text), reference(text),
+                "row table disagrees for \(text.debugDescription)"
+            )
+        }
+    }
+
     func testRowIndexAndColumn() {
         let l = VisualLayout(rows: [0..<3, 3..<7])
         XCTAssertEqual(l.rowIndex(ofOffset: 0), 0)

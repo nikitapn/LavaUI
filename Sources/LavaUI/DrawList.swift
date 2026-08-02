@@ -1274,7 +1274,7 @@ extension DrawList {
         // focused. Paying that walk once, to reach the first visible row,
         // and advancing by each row's own length from there, is the standard
         // fix for sequential `String.Index` access.
-        var cursor = state.index(atOffset: rows[firstRow].lowerBound)
+        var cursor = leaf.textIndex(atOffset: rows[firstRow].lowerBound)
         var cursorOffset = rows[firstRow].lowerBound
 
         for row in firstRow...lastRow {
