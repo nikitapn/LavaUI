@@ -60,6 +60,10 @@ class Vulkan
   VkPhysicalDeviceProperties physicalDeviceProperties_;
   // Logical device
   VkDevice device_ = VK_NULL_HANDLE;
+  // Whether VK_KHR_present_mode_fifo_latest_ready was found and enabled at
+  // device creation. The present mode it unlocks may only be requested when
+  // this is true — see createSwapchain.
+  bool fifoLatestReadyEnabled_ = false;
   // GPUOpen VMA — all createBuffer/createImage go through this.
   // Allocations live next to their VkBuffer/VkImage at each call site.
   VmaAllocator allocator_ = VK_NULL_HANDLE;

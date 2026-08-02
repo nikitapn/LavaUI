@@ -130,24 +130,74 @@ sorted-batch design rather than a bigger constant. It now warns once on stderr
 instead of failing silently, which is the part that mattered: a silent clamp
 turns a renderer limit into what looks like an application data bug.
 
-### D3. The swapchain runs IMMEDIATE — deliberately
+### D3. The present mode was hard-coded, and MAILBOX is not available here **[fixed]**
 
-`vulkan.cpp:1209` sets `VK_PRESENT_MODE_IMMEDIATE_KHR` directly beneath a
-comment ending "Never IMMEDIATE — that tears", and discards the queried
-present-mode list. I first read that as an unreverted experiment. It is not:
-IMMEDIATE was chosen on purpose, because FIFO put visible lag into interactive
-pointer work — dragging a boundary in TraceLoom (button down + move) is the case
-that drove it — and no tearing has actually been observed in practice.
+The swapchain named a present-mode constant and threw the queried list away
+(`(void)presentModes; // listed for diagnostics only`). Three modes were tried
+over time — IMMEDIATE for a long stretch, then MAILBOX — by editing that
+constant.
 
-So this is a latency/tearing trade that has been made knowingly, and the only
-real defect is that **the comment now contradicts the code** and will mislead
-the next reader into "fixing" it back.
+The trade behind it is real and was made knowingly, so it is recorded in the
+code now rather than contradicted by a stale comment:
 
-`VK_PRESENT_MODE_MAILBOX_KHR` is the untried middle option: non-tearing like
-FIFO, but it replaces the queued image instead of blocking on vsync, so a drag
-should not acquire the lag that pushed us off FIFO. Worth measuring against a
-TraceLoom boundary drag before changing anything. Until then the comment should
-be rewritten to record the trade rather than forbid the choice that was made.
+| | tearing | latency |
+| --- | --- | --- |
+| FIFO | none | blocks on vsync — the lag that made a TraceLoom boundary drag trail the cursor |
+| IMMEDIATE | possible | lowest; ran here for a long time without tearing being observed |
+| MAILBOX | none | no queue buildup — the one we actually want |
+
+**But this surface does not support MAILBOX.** Confirmed twice, independently:
+
+```
+$ vulkaninfo | grep -A4 'Present Modes'
+    Present Modes: count = 4
+        PRESENT_MODE_FIFO_KHR
+        PRESENT_MODE_FIFO_RELAXED_KHR
+        PRESENT_MODE_IMMEDIATE_KHR
+        PRESENT_MODE_FIFO_LATEST_READY_KHR
+```
+
+and by forcing the old hard-coded value with validation layers on:
+
+```
+VUID-VkSwapchainCreateInfoKHR-presentMode-01281
+vkCreateSwapchainKHR(): pCreateInfo->presentMode (VK_PRESENT_MODE_MAILBOX_KHR)
+is not supported
+```
+
+So requesting MAILBOX was a spec violation the NVIDIA driver happened to
+tolerate. Whatever it substituted is undefined — which means any impression
+formed while "running MAILBOX" was formed on something else.
+
+`VK_PRESENT_MODE_FIFO_LATEST_READY` *is* available, and it is MAILBOX's
+behaviour under another name: present the most recently finished image at the
+next refresh and discard the ones it overtook. Non-tearing, no latency buildup.
+It needs the `VK_KHR_present_mode_fifo_latest_ready` device extension plus its
+feature flag, both requested only when the device advertises them — adding the
+extension to the suitability list up front would make a GPU without it fail to
+qualify as a device at all.
+
+Selection is now `MAILBOX → FIFO_LATEST_READY → IMMEDIATE → FIFO`, chosen from
+what the surface actually reports. IMMEDIATE ranks above plain FIFO on purpose:
+FIFO's blocking present is the lag this app moved away from, and a surface
+offering neither of the first two leaves it as the only low-latency option.
+FIFO is the guaranteed floor.
+
+This machine now runs `present=FIFO_LATEST_READY` with zero validation errors,
+and it has been confirmed by hand on the case that started all of this — a
+TraceLoom boundary drag, which no longer trails the cursor. So the mode does
+deliver what MAILBOX was being reached for, and does it legitimately.
+
+`LAVA_PRESENT_MODE=fifo|mailbox|immediate|latest` forces one for A/B'ing the
+latency by feel, falling back with a message rather than tripping the same VUID.
+Worth keeping: the drag latency this trade is about is not visible in the frame
+log. The app renders only on input, so presents are sparse enough that FIFO
+rarely blocks and every mode times about the same — measuring `present=` says
+nothing, and the only reliable instrument is a hand on the mouse.
+
+The portability question that prompted this — whether macOS/MoltenVK exposes
+MAILBOX — no longer needs an answer. The code asks the surface instead of
+assuming, so a platform without it degrades through the chain on its own.
 
 ---
 
@@ -321,14 +371,11 @@ Ordered by how hard each is to add later.
 
 Every performance item in this document is now closed. What remains:
 
-1. **Measure MAILBOX against a TraceLoom boundary drag** (D3), and either adopt
-   it or rewrite the stale comment to record why IMMEDIATE stays. Small, and it
-   removes a live trap for the next reader.
-2. **Variable-height virtualization**, when something needs it. The fixed-stride
+1. **Variable-height virtualization**, when something needs it. The fixed-stride
    container covers every list these apps have; wrapped log lines would not fit
    it, and that is the next real design problem rather than a tuning exercise.
-3. **Mipmaps** (P3), once something draws images well below their decode cap.
-4. The feature table above, by need. Accessibility is the one that gets harder
+2. **Mipmaps** (P3), once something draws images well below their decode cap.
+3. The feature table above, by need. Accessibility is the one that gets harder
    the longer it waits, because it constrains the node model itself.
 
 Worth stating plainly: after this pass the framework's cost model is no longer

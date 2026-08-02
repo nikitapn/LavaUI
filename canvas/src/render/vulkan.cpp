@@ -1,8 +1,10 @@
 #include <set>
 #include <cassert>
+#include <cstdlib>
 #include <cstring>
 #include <iostream>
 #include <stdexcept>
+#include <string>
 #include <algorithm>
 #include <filesystem>
 
@@ -336,8 +338,42 @@ void Vulkan::createLogicalDevice()
 
   VkPhysicalDeviceFeatures deviceFeatures {};
 
+  // Optional, windowed only: VK_PRESENT_MODE_FIFO_LATEST_READY is MAILBOX's
+  // behaviour — present the most recently finished image at the next refresh
+  // and discard the ones it overtook — so it is non-tearing without letting
+  // latency build up behind a queue. On surfaces that offer it but not MAILBOX
+  // (this machine is one) it is the mode we actually want.
+  //
+  // Requested here rather than in the suitability check on purpose: adding it
+  // to `deviceExtensions` up front would make a GPU that lacks it fail to
+  // qualify as a device at all.
+  if (windowed_) {
+    uint32_t extCount = 0;
+    vkEnumerateDeviceExtensionProperties(physicalDevice_, nullptr, &extCount, nullptr);
+    std::vector<VkExtensionProperties> available(extCount);
+    vkEnumerateDeviceExtensionProperties(
+      physicalDevice_, nullptr, &extCount, available.data());
+    for (const auto &ext : available) {
+      if (std::strcmp(ext.extensionName,
+                      VK_KHR_PRESENT_MODE_FIFO_LATEST_READY_EXTENSION_NAME) == 0) {
+        fifoLatestReadyEnabled_ = true;
+        deviceExtensions.push_back(
+          VK_KHR_PRESENT_MODE_FIFO_LATEST_READY_EXTENSION_NAME);
+        break;
+      }
+    }
+  }
+
+  // Must outlive vkCreateDevice: it is referenced through pNext.
+  VkPhysicalDevicePresentModeFifoLatestReadyFeaturesKHR fifoLatestReady {
+    .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PRESENT_MODE_FIFO_LATEST_READY_FEATURES_KHR,
+    .pNext = nullptr,
+    .presentModeFifoLatestReady = VK_TRUE,
+  };
+
   VkDeviceCreateInfo deviceCreateInfo = {
     .sType                   = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
+    .pNext                   = fifoLatestReadyEnabled_ ? &fifoLatestReady : nullptr,
     .queueCreateInfoCount    = 1,
     .pQueueCreateInfos       = &queueCreateInfo,
     .enabledExtensionCount   = static_cast<uint32_t>(deviceExtensions.size()),
@@ -1206,13 +1242,99 @@ void Vulkan::createSwapchain()
   vkGetPhysicalDeviceSurfacePresentModesKHR(
     physicalDevice_, surface_, &presentModeCount, presentModes.data());
 
-  // FIFO = classic vsync (always available). Prefer this for UI: MAILBOX is
-  // also non-tearing but can present mid-compositor-frame and looks "flickery"
-  // under rapid full-frame redraws (selection drag, list spam-click). Never
-  // IMMEDIATE — that tears.
-  VkPresentModeKHR presentMode = VK_PRESENT_MODE_IMMEDIATE_KHR;
-  const char *presentName = "IMMEDIATE";
-  (void)presentModes; // listed for diagnostics only
+  // MAILBOX preferred, FIFO as the fallback.
+  //
+  // The history is worth keeping, because two of these were tried in anger:
+  //
+  //   FIFO      classic vsync, the only mode the spec guarantees. Correct and
+  //             non-tearing, but presenting blocks until the next refresh, and
+  //             that latency is felt directly in pointer work — dragging a
+  //             boundary in TraceLoom (button down + move) visibly trailed the
+  //             cursor. That is what drove us off it.
+  //   IMMEDIATE no blocking and no queue, so the lowest latency available, at
+  //             the cost of tearing. Ran this for a while; no tearing was
+  //             actually observed, but it is a real risk we were simply
+  //             getting away with.
+  //   MAILBOX   non-tearing like FIFO, but present replaces the queued image
+  //             instead of blocking, so a drag does not acquire FIFO's lag.
+  //             Best of both, and where we settled.
+  //
+  // Only FIFO is guaranteed by the spec, and asking for a mode the surface did
+  // not report is a validation error (VUID-VkSwapchainCreateInfoKHR-
+  // presentMode-01281), not a silent downgrade — so this picks from what was
+  // actually queried rather than naming a constant and hoping. That is what
+  // makes the code portable to a driver without MAILBOX (MoltenVK being the
+  // obvious question mark) without anyone having to know in advance.
+  //
+  // LAVA_PRESENT_MODE=fifo|mailbox|immediate forces one, for measuring the
+  // latency trade above without a rebuild. An unsupported request still falls
+  // back rather than crashing.
+  auto hasMode = [&presentModes](VkPresentModeKHR m) {
+    return std::find(presentModes.begin(), presentModes.end(), m) != presentModes.end();
+  };
+
+  // FIFO is the guaranteed floor; each branch below is an upgrade on it,
+  // preferred in order.
+  VkPresentModeKHR presentMode = VK_PRESENT_MODE_FIFO_KHR;
+  const char *presentName = "FIFO";
+  if (hasMode(VK_PRESENT_MODE_MAILBOX_KHR)) {
+    presentMode = VK_PRESENT_MODE_MAILBOX_KHR;
+    presentName = "MAILBOX";
+  } else if (fifoLatestReadyEnabled_ && hasMode(VK_PRESENT_MODE_FIFO_LATEST_READY_KHR)) {
+    // Same guarantee as MAILBOX, different spelling.
+    presentMode = VK_PRESENT_MODE_FIFO_LATEST_READY_KHR;
+    presentName = "FIFO_LATEST_READY";
+  } else if (hasMode(VK_PRESENT_MODE_IMMEDIATE_KHR)) {
+    // Ranked above plain FIFO deliberately. FIFO's blocking present is the
+    // lag that drove this app off it for pointer work, and IMMEDIATE ran for
+    // a long stretch here without tearing being observed. A surface offering
+    // neither MAILBOX nor latest-ready leaves this as the only low-latency
+    // option, and latency is the property this UI cares about most.
+    presentMode = VK_PRESENT_MODE_IMMEDIATE_KHR;
+    presentName = "IMMEDIATE";
+  }
+
+  if (const char *forced = std::getenv("LAVA_PRESENT_MODE")) {
+    const std::string want(forced);
+    VkPresentModeKHR requested = presentMode;
+    const char *requestedName = nullptr;
+    if (want == "fifo") {
+      requested = VK_PRESENT_MODE_FIFO_KHR;
+      requestedName = "FIFO";
+    } else if (want == "mailbox") {
+      requested = VK_PRESENT_MODE_MAILBOX_KHR;
+      requestedName = "MAILBOX";
+    } else if (want == "immediate") {
+      requested = VK_PRESENT_MODE_IMMEDIATE_KHR;
+      requestedName = "IMMEDIATE";
+    } else if (want == "latest") {
+      requested = VK_PRESENT_MODE_FIFO_LATEST_READY_KHR;
+      requestedName = "FIFO_LATEST_READY";
+    }
+    if (requestedName != nullptr) {
+      if (requested == VK_PRESENT_MODE_FIFO_LATEST_READY_KHR
+          && !fifoLatestReadyEnabled_) {
+        std::cout << "Present mode FIFO_LATEST_READY needs "
+                  << VK_KHR_PRESENT_MODE_FIFO_LATEST_READY_EXTENSION_NAME
+                  << ", which this device does not expose; using " << presentName << "\n";
+      } else if (hasMode(requested)) {
+        presentMode = requested;
+        presentName = requestedName;
+      } else {
+        std::cout << "Present mode " << requestedName
+                  << " not supported by this surface; using " << presentName << "\n";
+      }
+    }
+  }
+
+  // MAILBOX needs a spare image to swap in, or it degrades to FIFO's pacing
+  // with none of the latency benefit that is the whole reason for choosing it.
+  if (presentMode == VK_PRESENT_MODE_MAILBOX_KHR && imageCount < 3) {
+    imageCount = 3;
+    if (caps.maxImageCount > 0 && imageCount > caps.maxImageCount) {
+      imageCount = caps.maxImageCount;
+    }
+  }
 
   VkSwapchainCreateInfoKHR sci {
     .sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR,
