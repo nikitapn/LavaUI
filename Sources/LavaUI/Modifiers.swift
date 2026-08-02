@@ -57,18 +57,23 @@ public struct ViewStyle: Equatable {
 /// nodes. Only a fragment — a `TupleView`, `ForEach` or conditional, which has
 /// no single node to style — materialises a wrapper.
 ///
-/// The consequence, accepted deliberately: because the style collapses onto one
-/// node, **modifier order is not expressible**. `.padding().background()` and
-/// `.background().padding()` differ in SwiftUI; here both mean "background
-/// covers the padding", which is the common intent. SwiftUI buys the
-/// distinction by always wrapping and pays a box per modifier for it.
+/// Modifier order is preserved where it changes layout: padding applied after
+/// an existing modifier materialises one outer box. Paint-only modifiers on
+/// the same side of that boundary still collapse, avoiding SwiftUI's cost of a
+/// wrapper for every modifier.
 public struct ModifiedView<Content: View>: PrimitiveView {
     public var content: Content
     public var style: ViewStyle
+    /// Some modifier boundaries are layout-significant. In particular,
+    /// `.frame(...).padding(...)` needs an outer Yoga box: putting both values
+    /// on one node makes the fixed frame consume the padding instead of
+    /// surrounding it.
+    var forceWrapper: Bool
 
-    public init(content: Content, style: ViewStyle) {
+    public init(content: Content, style: ViewStyle, forceWrapper: Bool = false) {
         self.content = content
         self.style = style
+        self.forceWrapper = forceWrapper
     }
 
     public var dumpDetail: String { "styled" }
@@ -98,7 +103,7 @@ public struct ModifiedView<Content: View>: PrimitiveView {
 
     /// Style the node if it is a single box; otherwise wrap it once.
     private func attach(_ style: ViewStyle, to node: any AnyViewNode) -> any AnyViewNode {
-        if let box = node as? YogaBoxNode {
+        if !forceWrapper, let box = node as? YogaBoxNode {
             box.applyViewStyle(style)
             return box
         }
@@ -301,7 +306,9 @@ extension View {
 
 // MARK: - Collapsing a chain
 
-/// Chained modifiers merge into **one** `ModifiedView` rather than nesting.
+/// Chained modifiers merge into **one** `ModifiedView` when they describe the
+/// same visual box. Padding applied after another modifier is the exception:
+/// it creates an outer layout boundary so modifier order remains meaningful.
 ///
 /// Nesting looks harmless but is not: each `ModifiedView` applies its own style
 /// to the node independently, and a style with `padding == nil` resets padding
@@ -313,11 +320,22 @@ extension ModifiedView {
     private func adding(_ mutate: (inout ViewStyle) -> Void) -> ModifiedView<Content> {
         var next = ViewStyle()
         mutate(&next)
-        return ModifiedView(content: content, style: next.merged(over: style))
+        return ModifiedView(
+            content: content,
+            style: next.merged(over: style),
+            forceWrapper: forceWrapper
+        )
     }
 
-    public func padding(_ amount: Float) -> ModifiedView<Content> {
-        adding { $0.padding = amount }
+    /// Padding after an existing modifier belongs to a distinct outer box.
+    /// This preserves the SwiftUI distinction between
+    /// `.padding().frame(...)` and `.frame(...).padding()`.
+    public func padding(_ amount: Float) -> ModifiedView<ModifiedView<Content>> {
+        var outer = ViewStyle()
+        outer.padding = amount
+        return ModifiedView<ModifiedView<Content>>(
+            content: self, style: outer, forceWrapper: true
+        )
     }
 
     public func background(_ color: Color) -> ModifiedView<Content> {

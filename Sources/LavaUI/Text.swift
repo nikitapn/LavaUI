@@ -10,22 +10,30 @@ public struct Text: PrimitiveView {
     /// for clickable text, since an unclickable label highlighting on hover
     /// would be lying about being interactive.
     public var hoverFill: Color?
+    public var hoverColor: Color?
     public var cornerRadius: Float
+    public var lineLimit: Int?
 
     public init(
         _ string: String,
         color: Color = .primary,
         font: UIFont? = nil,
         hoverFill: Color? = nil,
+        hoverColor: Color? = nil,
         cornerRadius: Float = 0,
+        lineLimit: Int? = nil,
         onClick: (() -> Void)? = nil
     ) {
         self.string = string
         self.color = color
         self.font = font
         self.onClick = onClick
-        self.hoverFill = onClick == nil ? hoverFill : (hoverFill ?? Environment.current.theme.hover)
+        self.hoverColor = hoverColor
+        self.hoverFill = onClick == nil || hoverColor != nil
+            ? hoverFill
+            : (hoverFill ?? Environment.current.theme.hover)
         self.cornerRadius = cornerRadius
+        self.lineLimit = lineLimit.map { max(1, $0) }
     }
 
     /// Resolved face for measure (explicit or environment default).
@@ -48,7 +56,9 @@ public struct Text: PrimitiveView {
         leaf.color = color
         leaf.onClick = onClick
         leaf.hoverFill = hoverFill
+        leaf.hoverColor = hoverColor
         leaf.cornerRadius = cornerRadius
+        leaf.textLineLimit = lineLimit
         leaf.font = resolvedFont
         leaf.label = "Text \"\(shortLabel)\""
         leaf.installTextMeasure()
@@ -67,7 +77,9 @@ public struct Text: PrimitiveView {
                 onClick: onClick
             )
             leaf.hoverFill = hoverFill
+            leaf.hoverColor = hoverColor
             leaf.cornerRadius = cornerRadius
+            leaf.textLineLimit = lineLimit
             leaf.font = resolvedFont
             if !leaf.usesTextMeasure {
                 leaf.installTextMeasure()
@@ -86,5 +98,15 @@ public struct Text: PrimitiveView {
 
     private var shortLabel: String {
         string.count > 24 ? String(string.prefix(24)) + "…" : string
+    }
+}
+
+extension Text {
+    /// Limits wrapped rows and truncates the final visible row with an
+    /// ellipsis when additional content exists.
+    public func lineLimit(_ limit: Int?) -> Text {
+        var copy = self
+        copy.lineLimit = limit.map { max(1, $0) }
+        return copy
     }
 }

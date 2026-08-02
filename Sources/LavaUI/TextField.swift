@@ -10,6 +10,10 @@ import Foundation
 /// The buffer lives on the *node*, not in `@State`, because a `PrimitiveView`
 /// has no body and so never goes through `CompositeNode`'s state transplant.
 /// The node persists across rebuilds, which is the same guarantee.
+///
+/// Focus chrome comes from `Theme.focusRingStyle` by default (a full rounded
+/// outline). Pass `focusRing:` / `focusRingWidth:` / `focusRingColor:` to
+/// override per field — e.g. `.underline` for the historical top+bottom bars.
 public struct TextField: PrimitiveView {
     @Binding public var text: String
     public var placeholder: String
@@ -24,6 +28,10 @@ public struct TextField: PrimitiveView {
     public var maxLines: Int
     /// Wrap long lines to the field width instead of letting them overflow.
     public var wraps: Bool
+    /// Overrides `Theme.focusRingStyle` when set.
+    public var focusRing: FocusRingStyle?
+    public var focusRingWidth: Float?
+    public var focusRingColor: Color?
 
     public init(
         text: Binding<String>,
@@ -32,6 +40,9 @@ public struct TextField: PrimitiveView {
         multiline: Bool = false,
         maxLines: Int = 8,
         wraps: Bool = false,
+        focusRing: FocusRingStyle? = nil,
+        focusRingWidth: Float? = nil,
+        focusRingColor: Color? = nil,
         onSubmit: (() -> Void)? = nil
     ) {
         self._text = text
@@ -40,6 +51,9 @@ public struct TextField: PrimitiveView {
         self.isMultiline = multiline
         self.maxLines = maxLines
         self.wraps = wraps
+        self.focusRing = focusRing
+        self.focusRingWidth = focusRingWidth
+        self.focusRingColor = focusRingColor
         self.onSubmit = onSubmit
     }
 
@@ -79,6 +93,9 @@ public struct TextField: PrimitiveView {
         leaf.placeholder = placeholder
         leaf.fillColor = theme.inset
         leaf.cornerRadius = theme.cornerRadius
+        leaf.focusRingStyle = focusRing
+        leaf.focusRingWidth = focusRingWidth
+        leaf.focusRingColor = focusRingColor
         // Measure against the placeholder when empty so an empty field still
         // reserves a sensible line box.
         leaf.text = leaf.editing.text.isEmpty ? placeholder : leaf.editing.text

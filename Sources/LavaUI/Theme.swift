@@ -1,5 +1,21 @@
 import Foundation
 
+/// How a focused text field draws its attention ring.
+///
+/// The pipeline has no true stroke primitive — rounded rings use a filled
+/// outer plate with the field fill punched back on top (same trick overlays
+/// use for borders). Hard rectangles use four edge plates.
+public enum FocusRingStyle: Equatable, Sendable {
+    /// No focus chrome (caret only).
+    case none
+    /// Legacy: accent bars on the top and bottom edges only.
+    case underline
+    /// Full axis-aligned box (four edges).
+    case rectangle
+    /// Full outline honouring the field's corner radius (default).
+    case rounded
+}
+
 /// Semantic styling tokens.
 ///
 /// The point of naming tokens by *role* rather than by appearance is that a
@@ -40,6 +56,12 @@ public struct Theme: Equatable, Sendable {
     /// Inner padding for controls such as text fields.
     public var controlPadding: Float
     public var caretWidth: Float
+    /// Shape of the focused-field chrome. Defaults to a full rounded outline.
+    public var focusRingStyle: FocusRingStyle
+    /// Stroke thickness for the focus ring (also used by `.underline`).
+    public var focusRingWidth: Float
+    /// Focus ring colour. `nil` uses `accent`.
+    public var focusRingColor: Color?
 
     public init(
         textPrimary: Color, textSecondary: Color, textMuted: Color, textDim: Color,
@@ -47,7 +69,10 @@ public struct Theme: Equatable, Sendable {
         background: Color, panel: Color, inset: Color, canvas: Color,
         hover: Color, selectionFill: Color,
         border: Color, borderWidth: Float = 1,
-        cornerRadius: Float = 4, controlPadding: Float = 4, caretWidth: Float = 1.5
+        cornerRadius: Float = 4, controlPadding: Float = 4, caretWidth: Float = 1.5,
+        focusRingStyle: FocusRingStyle = .rounded,
+        focusRingWidth: Float = 1.5,
+        focusRingColor: Color? = nil
     ) {
         self.textPrimary = textPrimary
         self.textSecondary = textSecondary
@@ -66,6 +91,9 @@ public struct Theme: Equatable, Sendable {
         self.cornerRadius = cornerRadius
         self.controlPadding = controlPadding
         self.caretWidth = caretWidth
+        self.focusRingStyle = focusRingStyle
+        self.focusRingWidth = focusRingWidth
+        self.focusRingColor = focusRingColor
     }
 
     /// The palette this app shipped with, kept as-is so the theme migration

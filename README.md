@@ -64,7 +64,7 @@ frame body   body= 1.41 layout= 5.88 emit= 0.65 present= 0.85 total= 8.83 ms
 
 The first word is how much of body → layout → emit ran. Seeing `body` where
 a drag or an animation should be `redraw` means something over-invalidated,
-which is a lag bug before it is a throughput one. `LAVAUI_DEBUG=0` silences it.
+which is a lag bug before it is a throughput one. `LAVAUI_DEBUG=1` enables it.
 
 ## How it works
 

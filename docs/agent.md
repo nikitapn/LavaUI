@@ -64,5 +64,5 @@ settles a frame and returns the most recent frame's paint cost per widget —
 if it has one, else its structural kind (`"Canvas"`, `"EditorView"`, …).
 Timed per widget's whole paint, not per draw primitive, so it points at
 *which* widget is expensive without the timing calls themselves swamping the
-cost they're measuring. `LAVAUI_DEBUG` (on by default) also prints the top 5
+cost they're measuring. `LAVAUI_DEBUG` (off by default) also prints the top 5
 each frame on stdout when this is set, prefixed `  top:`.

@@ -28,6 +28,7 @@ public final class SpotifyClient: @unchecked Sendable {
     private let lock = NSLock()
     private var appAccessToken: String?
     private var appTokenExpiresAt: Date = .distantPast
+    private var rateLimitUntil: Date = .distantPast
 
     public var hasCredentials: Bool {
         guard let id = clientId, let secret = clientSecret else { return false }
@@ -140,6 +141,37 @@ public final class SpotifyClient: @unchecked Sendable {
         }
         let album = try SeedCatalog.resolveAlbum(id: id)
         return (album, SeedCatalog.tracks(for: id, album: album))
+    }
+
+    public func artistDetail(id: String, fallbackName: String = "Artist") throws
+        -> (artist: Artist, albums: [Album])
+    {
+        guard hasCredentials || isUserLoggedIn else {
+            let albums = try seedHome().flatMap(\.albums).filter {
+                $0.artists.contains(where: { $0.id == id })
+            }
+            return (Artist(id: id, name: fallbackName), albums)
+        }
+
+        // Artist links already carry the identity. Spending a quota unit on
+        // profile enrichment before loading the useful releases is wasteful.
+        let artist = Artist(id: id, name: fallbackName)
+        var seen = Set<String>()
+        var albums: [Album] = []
+        let albumsData = try apiGet(
+            path: "/v1/artists/\(id)/albums",
+            query: [
+                "include_groups": "album,single",
+                "limit": "\(Self.searchLimitMax)",
+                "offset": "0",
+            ],
+            userRequired: false
+        )
+        let page = try JSONDecoder().decode(ArtistAlbumsResponse.self, from: albumsData)
+        albums.append(contentsOf: page.items.map { $0.asAlbum() }.filter {
+            seen.insert($0.id).inserted
+        })
+        return (artist, albums)
     }
 
     // MARK: - Player (Connect / spotifyd)
@@ -313,6 +345,20 @@ public final class SpotifyClient: @unchecked Sendable {
         )
     }
 
+    /// Set the active Connect device's volume, clamped to Spotify's 0…100 range.
+    public func setVolume(percent: Int, deviceId: String? = nil) throws {
+        var query: [String: String] = [
+            "volume_percent": "\(min(100, max(0, percent)))",
+        ]
+        if let deviceId { query["device_id"] = deviceId }
+        try apiPut(
+            path: "/v1/me/player/volume",
+            query: query,
+            json: nil,
+            userRequired: true
+        )
+    }
+
     public func transferPlayback(to deviceId: String, play: Bool = false) throws {
         try apiPut(
             path: "/v1/me/player",
@@ -324,13 +370,14 @@ public final class SpotifyClient: @unchecked Sendable {
 
     /// Current playback; `nil` when nothing is active (204).
     public func currentPlayback() throws -> PlaybackSnapshot? {
-        let (data, status) = try apiRequest(
+        let response = try apiRequest(
             method: "GET",
             path: "/v1/me/player",
             query: [:],
             json: nil,
             userRequired: true
         )
+        let (data, status) = (response.data, response.status)
         if status == 204 || data.isEmpty { return nil }
         let decoded = try JSONDecoder().decode(PlaybackResponse.self, from: data)
         return decoded.asSnapshot()
@@ -424,12 +471,35 @@ public final class SpotifyClient: @unchecked Sendable {
         query: [String: String],
         userRequired: Bool
     ) throws -> Data {
-        let (data, status) = try apiRequest(
+        // Player/device reads are live state and must never be cached. Catalog
+        // reads are safe to retain locally and include poster URLs, which makes
+        // revisiting album and artist pages immediate.
+        let cacheKey = userRequired ? nil : CatalogCache.key(path: path, query: query)
+        if let cacheKey, let cached = CatalogCache.value(for: cacheKey) {
+            print("SpotifyClient cache hit \(path) query=\(query)")
+            return cached
+        }
+        if !userRequired {
+            lock.lock()
+            let retryAt = rateLimitUntil
+            lock.unlock()
+            if retryAt > Date() {
+                let seconds = max(1, Int(retryAt.timeIntervalSinceNow.rounded(.up)))
+                throw SpotifyError("Spotify catalog rate limit active; retry in \(seconds)s")
+            }
+        }
+        print("SpotifyClient GET \(path) query=\(query) userRequired=\(userRequired)")
+        let response = try apiRequest(
             method: "GET", path: path, query: query, json: nil, userRequired: userRequired
         )
+        let (data, status) = (response.data, response.status)
+        if status == 429, !userRequired { recordRateLimit(response) }
         guard (200...299).contains(status) else {
             let body = String(data: data, encoding: .utf8) ?? ""
             throw SpotifyError("HTTP \(status) \(path): \(body.prefix(200))")
+        }
+        if let cacheKey {
+            CatalogCache.store(data, for: cacheKey)
         }
         return data
     }
@@ -440,9 +510,10 @@ public final class SpotifyClient: @unchecked Sendable {
         json: [String: Any]?,
         userRequired: Bool
     ) throws {
-        let (data, status) = try apiRequest(
+        let response = try apiRequest(
             method: "PUT", path: path, query: query, json: json, userRequired: userRequired
         )
+        let (data, status) = (response.data, response.status)
         // 202 = accepted but no active device yet; treat as soft failure message.
         guard status == 204 || status == 200 || status == 202 else {
             let body = String(data: data, encoding: .utf8) ?? ""
@@ -455,9 +526,10 @@ public final class SpotifyClient: @unchecked Sendable {
         query: [String: String],
         userRequired: Bool
     ) throws {
-        let (data, status) = try apiRequest(
+        let response = try apiRequest(
             method: "POST", path: path, query: query, json: nil, userRequired: userRequired
         )
+        let (data, status) = (response.data, response.status)
         guard status == 204 || status == 200 else {
             let body = String(data: data, encoding: .utf8) ?? ""
             throw SpotifyError("HTTP \(status) \(path): \(body.prefix(200))")
@@ -470,7 +542,7 @@ public final class SpotifyClient: @unchecked Sendable {
         query: [String: String],
         json: [String: Any]?,
         userRequired: Bool
-    ) throws -> (Data, Int) {
+    ) throws -> HTTP.Response {
         let token = try bearerToken(userRequired: userRequired)
         var components = URLComponents(string: "https://api.spotify.com\(path)")!
         if !query.isEmpty {
@@ -486,7 +558,14 @@ public final class SpotifyClient: @unchecked Sendable {
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
             request.httpBody = try HTTP.jsonBody(json)
         }
-        return try HTTP.data(for: request)
+        return try HTTP.response(for: request)
+    }
+
+    private func recordRateLimit(_ response: HTTP.Response) {
+        let delay = response.header("Retry-After").flatMap(TimeInterval.init) ?? 30
+        lock.lock()
+        rateLimitUntil = max(rateLimitUntil, Date().addingTimeInterval(max(1, delay)))
+        lock.unlock()
     }
 
     // MARK: - Seed
@@ -537,6 +616,30 @@ private struct APIImage: Decodable {
 private struct APIArtist: Decodable {
     var id: String?
     var name: String
+    var images: [APIImage]?
+    var genres: [String]?
+    var followers: APIFollowers?
+
+    func asArtist() -> Artist {
+        Artist(
+            id: id ?? name,
+            name: name,
+            images: (images ?? []).map {
+                CoverImage(url: $0.url, width: $0.width, height: $0.height)
+            },
+            genres: genres ?? [],
+            followerCount: followers?.total
+        )
+    }
+}
+
+private struct APIFollowers: Decodable {
+    var total: Int?
+}
+
+private struct ArtistAlbumsResponse: Decodable {
+    var items: [APIAlbum]
+    var next: String?
 }
 
 private struct APIAlbum: Decodable {

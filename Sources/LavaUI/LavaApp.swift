@@ -152,7 +152,7 @@ public enum LavaApp {
         // `layout` on a drag or an animation tick is the tell.
         //
         // Set LAVAUI_DEBUG=0 to silence without rebuilding.
-        let enableDebug = ProcessInfo.processInfo.environment["LAVAUI_DEBUG"] != "0"
+        let enableDebug = ProcessInfo.processInfo.environment["LAVAUI_DEBUG"] == "1"
         var probeBody = 0.0
         var probeLayout = 0.0
         var probeEmit = 0.0
@@ -285,11 +285,14 @@ public enum LavaApp {
             }
             return String(describing: V.self)
         }()
-        FileHandle.standardError.write(Data("--- \(rootLabel) structure ---\n".utf8))
-        for line in demo0.structureLines() {
-            FileHandle.standardError.write(Data((line + "\n").utf8))
+
+        if enableDebug {
+            FileHandle.standardError.write(Data("--- \(rootLabel) structure ---\n".utf8))
+            for line in demo0.structureLines() {
+                FileHandle.standardError.write(Data((line + "\n").utf8))
+            }
+            FileHandle.standardError.write(Data("--- end structure ---\n".utf8))
         }
-        FileHandle.standardError.write(Data("--- end structure ---\n".utf8))
 
         renderFrame(.body)
         // Keep `pending` in sync with the dirty-node state `renderFrame` just

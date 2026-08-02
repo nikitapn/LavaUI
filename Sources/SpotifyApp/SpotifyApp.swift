@@ -76,6 +76,14 @@ struct SpotifyApp {
                         MenuItem("Search", id: "view.search") { session.goSearch() }
                         MenuItem("Library", id: "view.library") { session.goLibrary() }
                         MenuSeparator()
+                        MenuItem(
+                            "Choose Theme…",
+                            id: "view.theme",
+                            shortcut: KeyShortcut(KeyCode.t, .primary)
+                        ) {
+                            session.showThemePicker()
+                        }
+                        MenuSeparator()
                         MenuItem("Zoom In", id: "view.zoom-in") {
                             FontStore.zoomIn(into: editor)
                         }
@@ -115,7 +123,8 @@ struct SpotifyApp {
                         }
                     }
                 }
-            }
+            },
+            onRawKey: { session.handleThemeKey($0) }
         ) {
             Spotify(session: session)
         }

@@ -26,6 +26,32 @@ public struct ArtistRef: Hashable, Identifiable, Sendable, Codable {
     }
 }
 
+public struct Artist: Hashable, Identifiable, Sendable, Codable {
+    public var id: String
+    public var name: String
+    public var images: [CoverImage]
+    public var genres: [String]
+    public var followerCount: Int?
+
+    public init(
+        id: String, name: String, images: [CoverImage] = [],
+        genres: [String] = [], followerCount: Int? = nil
+    ) {
+        self.id = id
+        self.name = name
+        self.images = images
+        self.genres = genres
+        self.followerCount = followerCount
+    }
+
+    public var preferredImage: CoverImage? {
+        guard !images.isEmpty else { return nil }
+        return images.min {
+            abs(($0.width ?? 0) - 300) < abs(($1.width ?? 0) - 300)
+        }
+    }
+}
+
 public struct Album: Hashable, Identifiable, Sendable, Codable {
     public var id: String
     public var name: String
@@ -160,6 +186,7 @@ public enum SpotifyNav: Hashable, Sendable {
     case search
     case library
     case album(String)
+    case artist(String)
 }
 
 /// A Spotify Connect device — spotifyd, desktop app, phone, Web Playback SDK, …

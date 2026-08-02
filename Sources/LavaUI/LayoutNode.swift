@@ -265,6 +265,10 @@ final class LeafNode: YogaBoxNode {
     var isMultiline = false
     var maxLines = 8
     var wraps = false
+    /// Per-field focus chrome override; nil falls through to `theme.focusRing*`.
+    var focusRingStyle: FocusRingStyle?
+    var focusRingWidth: Float?
+    var focusRingColor: Color?
     /// Button-only payload.
     var buttonFill: Animated<Color>?
     var buttonStyle: ButtonStyle?
@@ -608,8 +612,13 @@ final class LeafNode: YogaBoxNode {
 
     /// Fill drawn when the pointer is over this leaf (nil = no hover effect).
     var hoverFill: Color?
+    /// Optional foreground used while a text leaf is hovered.
+    var hoverColor: Color?
     /// Corner radius for `fillColor`/`hoverFill`.
     var cornerRadius: Float = 0
+    /// Maximum painted/measured rows for a read-only text leaf. `nil` means
+    /// all wrapped rows; TextField has its separate `maxLines` policy.
+    var textLineLimit: Int?
 
     /// Raster image leaf payload.
     var image: UIImage?
@@ -790,6 +799,17 @@ final class LeafNode: YogaBoxNode {
             availWidth: width,
             mode: mode
         )
+        if kind == .text, let limit = textLineLimit, entry.lines.count > limit {
+            var visible = Array(entry.lines.prefix(limit))
+            if let last = visible.indices.last {
+                visible[last] = font.ellipsized(visible[last], availWidth: max(0, width))
+            }
+            cachedLines = visible
+            return YGSize(
+                width: entry.width + 8,
+                height: font.lineHeight * Float(visible.count) + 4
+            )
+        }
         cachedLines = entry.lines
         // Padding keeps a slightly larger hit target.
         return YGSize(width: entry.width + 8, height: max(entry.height, font.lineHeight) + 4)
@@ -826,6 +846,7 @@ final class StackNode: YogaBoxNode {
     var fillColor: Color?
     var hoverFill: Color?
     var onClick: (() -> Void)?
+    var onHover: ((Bool) -> Void)?
     /// Corner radius for `fillColor`. Set via `.cornerRadius()` modifiers.
     var cornerRadius: Float = 0
 
@@ -834,24 +855,40 @@ final class StackNode: YogaBoxNode {
 
     init(
         label: String, direction: FlexDirection, style: StackStyle,
-        content: any AnyViewNode, onClick: (() -> Void)?
+        content: any AnyViewNode, onClick: (() -> Void)?,
+        onHover: ((Bool) -> Void)?
     ) {
         self.direction = direction
         self.contentNode = content
         self.onClick = onClick
+        self.onHover = onHover
         super.init(label: label)
         YGNodeStyleSetFlexDirection(yogaStorage, direction.yoga)
         apply(style)
+        configureHover()
         relinkYogaChildren()
     }
 
     override var childNodes: [any AnyViewNode] { [contentNode] }
 
-    func update(style: StackStyle, contentView: some View, onClick: (() -> Void)?) {
+    func update(
+        style: StackStyle, contentView: some View,
+        onClick: (() -> Void)?, onHover: ((Bool) -> Void)?
+    ) {
         apply(style)
         self.onClick = onClick
+        self.onHover = onHover
+        configureHover()
         contentNode = ViewGraph.reconcile(contentNode, with: contentView)
         relinkYogaChildren()
+    }
+
+    private func configureHover() {
+        guard let onHover else {
+            HoverState.unregister(id)
+            return
+        }
+        HoverState.register(id) { inside in onHover(inside) }
     }
 
     private func apply(_ style: StackStyle) {
@@ -860,6 +897,7 @@ final class StackNode: YogaBoxNode {
         height = style.height
         padding = style.padding
         YGNodeStyleSetAlignItems(yogaStorage, style.alignment.yoga)
+        YGNodeStyleSetFlexWrap(yogaStorage, style.wraps ? YGWrapWrap : YGWrapNoWrap)
         // Side columns get a solid panel fill; main HStack stays transparent.
         // Re-evaluated every apply (not just at construction) so a theme
         // swap — or a `.theme(_:)` override — reaches it on reconcile too.
@@ -1388,11 +1426,13 @@ public final class LayoutHost {
             // qualify — but only *after* children, so an inner scrollable wins.
             if x >= nx, x < nx + nw, y >= ny, y < ny + nh {
                 if let leaf = node as? LeafNode,
-                   leaf.hoverFill != nil || leaf.onHover != nil
+                   leaf.hoverFill != nil || leaf.hoverColor != nil || leaf.onHover != nil
                 {
                     return leaf.id
                 }
-                if let stack = node as? StackNode, stack.hoverFill != nil {
+                if let stack = node as? StackNode,
+                   stack.hoverFill != nil || stack.onHover != nil
+                {
                     return stack.id
                 }
                 if box.isScrollable { return box.id }

@@ -3,6 +3,14 @@ import LavaUI
 import Observation
 import SpotifyCore
 
+private enum SpotifyHistoryDestination {
+    case home
+    case search
+    case library
+    case album(Album, tracks: [Track])
+    case artist(Artist, albums: [Album])
+}
+
 /// Shared navigation + catalog + Connect playback state for LavaSpotify.
 ///
 /// Playback targets Spotify Connect devices (spotifyd when present) via the
@@ -17,9 +25,13 @@ final class SpotifySession: @unchecked Sendable {
     var quickSearchResults: [Track] = []
     var isQuickSearching = false
     var libraryAlbums: [Album] = []
+    var isThemePickerPresented = false
+    var themePickerSelection = SpotifyTheme.selectedIndex
 
     var detailAlbum: Album?
     var detailTracks: [Track] = []
+    var detailArtist: Artist?
+    var artistAlbums: [Album] = []
 
     var nowPlaying: Track?
     var isPlaying: Bool = false
@@ -27,6 +39,9 @@ final class SpotifySession: @unchecked Sendable {
     var progressMs: Int = 0
     /// True while the user is dragging the seek slider (or a seek is in flight).
     var isScrubbing: Bool = false
+    /// Active Connect-device volume. Updated immediately while dragging.
+    var volumePercent: Int = 50
+    var isAdjustingVolume: Bool = false
     var activeDeviceName: String?
 
     var devices: [SpotifyDevice] = []
@@ -39,17 +54,34 @@ final class SpotifySession: @unchecked Sendable {
 
     let client = SpotifyClient()
     let editor: Editor
+    /// A larger instance of the media-symbol face for compact player chrome.
+    let playerControlFont: UIFont?
 
     private var pollStop = false
     /// Bumped on every scrub so only the latest seek request is sent.
     private var seekGeneration: UInt64 = 0
+    /// Bumped for every slider tick so remote volume writes are coalesced.
+    private var volumeGeneration: UInt64 = 0
+    /// Latest value sent to Connect. Poll snapshots remain stale for a short
+    /// window after the PUT, so they must not overwrite the slider until the
+    /// device acknowledges this value (or the guard times out).
+    private var pendingVolumePercent: Int?
     private var searchGeneration: UInt64 = 0
     /// Wall time of last Connect snapshot (for local progress extrapolation).
     private var progressAnchor: Date = .distantPast
     private var progressAnchorMs: Int = 0
+    private var navigationHistory: [SpotifyHistoryDestination] = []
 
     init(editor: Editor) {
         self.editor = editor
+        if let path = FontStore.symbols?.path,
+           let font = UIFont(path: path, pixelSize: 20),
+           font.registerWithEngine(editor)
+        {
+            self.playerControlFont = font
+        } else {
+            self.playerControlFont = FontStore.symbols
+        }
         self.isLoggedIn = client.isUserLoggedIn
     }
 
@@ -62,6 +94,59 @@ final class SpotifySession: @unchecked Sendable {
     var progressSliderValue: Float {
         get { Float(min(progressMs, durationMs)) }
         set { scrub(toMs: Int(newValue.rounded())) }
+    }
+
+    // MARK: - Themes
+
+    func showThemePicker() {
+        themePickerSelection = SpotifyTheme.selectedIndex
+        isThemePickerPresented = true
+        FocusManager.clear()
+    }
+
+    func previewTheme(_ index: Int) {
+        guard SpotifyTheme.palettes.indices.contains(index) else { return }
+        themePickerSelection = index
+        SpotifyTheme.apply(index)
+    }
+
+    func moveThemeSelection(_ delta: Int) {
+        let count = SpotifyTheme.palettes.count
+        guard count > 0 else { return }
+        previewTheme((themePickerSelection + delta + count) % count)
+    }
+
+    func chooseTheme(_ index: Int) {
+        previewTheme(index)
+        isThemePickerPresented = false
+    }
+
+    func handleThemeKey(_ event: InputEvent) -> Bool {
+        guard event.kind == .key, KeyAction.isDown(event.keyAction) else { return false }
+        if event.keyCode == KeyCode.t,
+           KeyMods.contains(event.keyMods, KeyMods.control)
+        {
+            if isThemePickerPresented {
+                isThemePickerPresented = false
+            } else {
+                showThemePicker()
+            }
+            return true
+        }
+        guard isThemePickerPresented else { return false }
+        switch event.keyCode {
+        case KeyCode.up:
+            moveThemeSelection(-1)
+            return true
+        case KeyCode.down:
+            moveThemeSelection(1)
+            return true
+        case KeyCode.enter:
+            chooseTheme(themePickerSelection)
+            return true
+        default:
+            return false
+        }
     }
 
     // MARK: - Bootstrap
@@ -216,26 +301,45 @@ final class SpotifySession: @unchecked Sendable {
     // MARK: - Navigation
 
     func goHome() {
+        guard nav != .home else { return }
+        rememberCurrentDestination()
+        showHome()
+    }
+
+    private func showHome() {
         nav = .home
         detailAlbum = nil
         detailTracks = []
+        detailArtist = nil
+        artistAlbums = []
     }
 
     func goSearch() {
+        guard nav != .search else { return }
+        rememberCurrentDestination()
         nav = .search
         detailAlbum = nil
         detailTracks = []
+        detailArtist = nil
+        artistAlbums = []
     }
 
     func goLibrary() {
+        guard nav != .library else { return }
+        rememberCurrentDestination()
         nav = .library
         detailAlbum = nil
         detailTracks = []
+        detailArtist = nil
+        artistAlbums = []
     }
 
-    func openAlbum(_ album: Album) {
+    func openAlbum(_ album: Album, rememberingCurrent: Bool = true) {
+        if rememberingCurrent { rememberCurrentDestination() }
         nav = .album(album.id)
         detailAlbum = album
+        detailArtist = nil
+        artistAlbums = []
         if !client.hasCredentials && !isLoggedIn {
             detailTracks = SeedCatalog.tracks(for: album.id, album: album)
             isLoading = false
@@ -250,7 +354,7 @@ final class SpotifySession: @unchecked Sendable {
             do {
                 let (full, tracks) = try client.albumDetail(id: id)
                 MainQueue.async { [weak self] in
-                    guard let self else { return }
+                    guard let self, self.nav == .album(id) else { return }
                     self.detailAlbum = full
                     self.detailTracks = tracks
                     self.isLoading = false
@@ -258,13 +362,121 @@ final class SpotifySession: @unchecked Sendable {
                 }
             } catch {
                 MainQueue.async { [weak self] in
-                    guard let self else { return }
+                    guard let self, self.nav == .album(id) else { return }
                     self.isLoading = false
                     self.notice = "\(error)"
                     self.status = "Could not open album"
                     self.report("\(error)")
                 }
             }
+        }
+    }
+
+    func openArtist(_ artist: ArtistRef, rememberingCurrent: Bool = true) {
+        dismissQuickSearch()
+        if rememberingCurrent { rememberCurrentDestination() }
+        nav = .artist(artist.id)
+        detailAlbum = nil
+        detailTracks = []
+        detailArtist = Artist(id: artist.id, name: artist.name)
+        artistAlbums = []
+        status = "Loading \(artist.name)…"
+        isLoading = true
+        let id = artist.id
+        Thread.detachNewThread { [client] in
+            do {
+                let result = try client.artistDetail(id: id, fallbackName: artist.name)
+                MainQueue.async { [weak self] in
+                    guard let self, self.nav == .artist(id) else { return }
+                    self.detailArtist = result.artist
+                    self.artistAlbums = result.albums
+                    self.isLoading = false
+                    self.status = "\(result.artist.name) · \(result.albums.count) releases"
+                }
+            } catch {
+                MainQueue.async { [weak self] in
+                    guard let self, self.nav == .artist(id) else { return }
+                    self.isLoading = false
+                    self.notice = "\(error)"
+                    self.status = "Could not open artist"
+                    self.report("artist: \(error)")
+                }
+            }
+        }
+    }
+
+    func goBack() {
+        guard let destination = navigationHistory.popLast() else {
+            showHome()
+            return
+        }
+        switch destination {
+        case .home:
+            showHome()
+        case .search:
+            nav = .search
+            detailAlbum = nil
+            detailTracks = []
+            detailArtist = nil
+            artistAlbums = []
+        case .library:
+            nav = .library
+            detailAlbum = nil
+            detailTracks = []
+            detailArtist = nil
+            artistAlbums = []
+        case .album(let album, let tracks):
+            nav = .album(album.id)
+            detailAlbum = album
+            detailTracks = tracks
+            detailArtist = nil
+            artistAlbums = []
+            isLoading = false
+            status = "\(album.name) · \(tracks.count) tracks"
+        case .artist(let artist, let albums):
+            nav = .artist(artist.id)
+            detailAlbum = nil
+            detailTracks = []
+            detailArtist = artist
+            artistAlbums = albums
+            isLoading = false
+            status = "\(artist.name) · \(albums.count) releases"
+        }
+    }
+
+    private func rememberCurrentDestination() {
+        let destination: SpotifyHistoryDestination?
+        switch nav {
+        case .home:
+            destination = .home
+        case .search:
+            destination = .search
+        case .library:
+            destination = .library
+        case .album(let id):
+            let album = detailAlbum
+                ?? Album(id: id, name: "Album", artists: [], images: [])
+            destination = .album(album, tracks: detailTracks)
+        case .artist(let id):
+            let artist = detailArtist ?? Artist(id: id, name: "Artist")
+            destination = .artist(artist, albums: artistAlbums)
+        }
+        if let destination { navigationHistory.append(destination) }
+    }
+
+    /// Opens the album represented by the player footer. Locally selected
+    /// tracks may inherit their album from the current detail page; remote
+    /// Connect snapshots normally carry the album directly.
+    func openNowPlayingAlbum() {
+        guard let track = nowPlaying else { return }
+        if let album = track.album {
+            openAlbum(album)
+            return
+        }
+        if let album = detailAlbum,
+           detailTracks.contains(where: { $0.id == track.id })
+        {
+            openAlbum(album)
         }
     }
 
@@ -566,6 +778,54 @@ final class SpotifySession: @unchecked Sendable {
         }
     }
 
+    // MARK: - Volume
+
+    /// Updates the local control immediately and coalesces a drag into the
+    /// latest Spotify Connect volume request.
+    func setVolume(to percent: Int) {
+        let clamped = min(100, max(0, percent))
+        volumePercent = clamped
+        isAdjustingVolume = true
+        pendingVolumePercent = clamped
+        volumeGeneration &+= 1
+        let gen = volumeGeneration
+        let deviceId = selectedDeviceId
+        guard isLoggedIn else {
+            pendingVolumePercent = nil
+            isAdjustingVolume = false
+            return
+        }
+
+        Thread.detachNewThread { [client, weak self] in
+            Thread.sleep(forTimeInterval: 0.10)
+            guard let self, gen == self.volumeGeneration else { return }
+            do {
+                try client.setVolume(percent: clamped, deviceId: deviceId)
+                MainQueue.async { [weak self] in
+                    guard let self, gen == self.volumeGeneration else { return }
+                    self.volumePercent = clamped
+                }
+                // A Player snapshot may already be in flight with the old
+                // volume. Keep the optimistic value authoritative long enough
+                // for a subsequent poll to observe spotifyd's new value.
+                Thread.sleep(forTimeInterval: 2.0)
+                MainQueue.async { [weak self] in
+                    guard let self, gen == self.volumeGeneration else { return }
+                    self.pendingVolumePercent = nil
+                    self.isAdjustingVolume = false
+                }
+            } catch {
+                MainQueue.async { [weak self] in
+                    guard let self, gen == self.volumeGeneration else { return }
+                    self.pendingVolumePercent = nil
+                    self.isAdjustingVolume = false
+                    self.notice = "\(error)"
+                    self.report("volume: \(error)")
+                }
+            }
+        }
+    }
+
     // MARK: - Poll Connect state
 
     private func startPlaybackPolling() {
@@ -624,6 +884,20 @@ final class SpotifySession: @unchecked Sendable {
                             if let d = snap.device {
                                 self.activeDeviceName = d.name
                                 self.selectedDeviceId = d.id
+                                if let volume = d.volumePercent {
+                                    if let pending = self.pendingVolumePercent {
+                                        // Ignore stale snapshots, but release
+                                        // the guard as soon as Connect echoes
+                                        // the value we most recently sent.
+                                        if volume == pending {
+                                            self.volumePercent = volume
+                                            self.pendingVolumePercent = nil
+                                            self.isAdjustingVolume = false
+                                        }
+                                    } else if !self.isAdjustingVolume {
+                                        self.volumePercent = volume
+                                    }
+                                }
                             }
                         }
                     }

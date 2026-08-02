@@ -31,6 +31,18 @@ public struct ShapedGlyph: Equatable, Sendable {
     }
 }
 
+/// Visible bitmap bounds of a shaped run, relative to its baseline pen.
+/// Unlike advance/line metrics, these exclude the font's invisible bearings.
+struct TextInkBounds: Sendable {
+    var minX: Float
+    var minY: Float
+    var maxX: Float
+    var maxY: Float
+
+    var width: Float { maxX - minX }
+    var height: Float { maxY - minY }
+}
+
 /// Swift-facing typeface handle. Wraps `canvas::Font` (FreeType + HarfBuzz).
 /// Identity for cache keys is `(path, pixelSize)` — not the C++ object.
 public final class UIFont: @unchecked Sendable {
@@ -53,6 +65,7 @@ public final class UIFont: @unchecked Sendable {
     /// Shaped runs keyed by line text. Shaping is the expensive part of text,
     /// so this is what keeps re-emission cheap.
     private var shapeCache: [String: [ShapedGlyph]] = [:]
+    private var inkBoundsCache: [String: TextInkBounds] = [:]
 
     public init?(path: String, pixelSize: Float = 16) {
         self.path = path
@@ -390,7 +403,40 @@ public final class UIFont: @unchecked Sendable {
 
     /// Drops cached shaped runs. Call if the cache grows unbounded; entries
     /// are keyed by string only, since a `UIFont` is one face at one size.
-    public func clearShapeCache() { shapeCache.removeAll(keepingCapacity: true) }
+    public func clearShapeCache() {
+        shapeCache.removeAll(keepingCapacity: true)
+        inkBoundsCache.removeAll(keepingCapacity: true)
+    }
+
+    /// Bounds of the pixels a run actually draws, relative to the baseline.
+    /// Used by compact icon buttons, where centering the typographic line box
+    /// looks wrong because symbol fonts often have asymmetric blank space.
+    func inkBounds(_ text: String) -> TextInkBounds? {
+        if let cached = inkBoundsCache[text] { return cached }
+        let run = shape(text)
+        guard !run.isEmpty, run.allSatisfy({ $0.fontId == engineId }) else { return nil }
+
+        var bounds: TextInkBounds?
+        for glyph in run {
+            let bitmap = raw.rasterize(glyph.glyphId)
+            guard bitmap.width > 0, bitmap.height > 0 else { continue }
+            let left = glyph.x + bitmap.bearingX
+            let top = glyph.y - bitmap.bearingY
+            let right = left + Float(bitmap.width)
+            let bottom = top + Float(bitmap.height)
+            if var current = bounds {
+                current.minX = min(current.minX, left)
+                current.minY = min(current.minY, top)
+                current.maxX = max(current.maxX, right)
+                current.maxY = max(current.maxY, bottom)
+                bounds = current
+            } else {
+                bounds = TextInkBounds(minX: left, minY: top, maxX: right, maxY: bottom)
+            }
+        }
+        if let bounds { inkBoundsCache[text] = bounds }
+        return bounds
+    }
 
     /// Lines matching `measure(..., AtMost/Exactly)` wrap breaks.
     public func wrapLines(_ text: String, availWidth: Float) -> [String] {
@@ -407,6 +453,21 @@ public final class UIFont: @unchecked Sendable {
         }
         if lines.isEmpty { lines = [""] }
         return lines
+    }
+
+    /// Adds an ellipsis while keeping the visible line within `availWidth`.
+    /// Shaped widths are cached, so repeated layout of unchanged labels is
+    /// cheap despite trimming by grapheme cluster.
+    func ellipsized(_ text: String, availWidth: Float) -> String {
+        let suffix = "…"
+        guard shapedRun(text + suffix).width > availWidth else { return text + suffix }
+        var candidate = text.trimmingCharacters(in: .whitespaces)
+        while !candidate.isEmpty {
+            candidate.removeLast()
+            let result = candidate.trimmingCharacters(in: .whitespaces) + suffix
+            if shapedRun(result).width <= availWidth { return result }
+        }
+        return suffix
     }
 }
 

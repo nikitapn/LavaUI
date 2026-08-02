@@ -717,6 +717,9 @@ public final class DrawList {
             }
         }
         if (leaf.kind == .text || leaf.kind == .markdown), !leaf.text.isEmpty {
+            let textColor = HoverState.isHovered(leaf.id)
+                ? (leaf.hoverColor ?? leaf.color)
+                : leaf.color
             // Multi-line: emit one command per wrapped line (same breaks
             // as Yoga measure via TextLayoutCache / Font::wrapLines).
             // `measureForYoga` reserves a built-in 4px horizontal / 2px
@@ -743,7 +746,7 @@ public final class DrawList {
                 } else {
                     text(
                         line, x: textX, y: ly, w: w, h: lineH,
-                        color: leaf.color, font: leaf.font
+                        color: textColor, font: leaf.font
                     )
                 }
             }
@@ -761,10 +764,20 @@ public final class DrawList {
             if !leaf.text.isEmpty, let f = leaf.font ?? FontStore.default {
                 let lineH = f.lineHeight
                 let labelW = f.shapedRun(leaf.text).width
+                let ink = f.inkBounds(leaf.text)
+                // `text()` adds its historical 4px pen inset. Prefer the
+                // visible bitmap bounds for compact symbols; ordinary/fallback
+                // text retains typographic line-box centering.
+                let labelX = ink.map {
+                    x + (w - $0.width) / 2 - $0.minX - 4
+                } ?? (x + (w - labelW) / 2 - 4)
+                let labelY = ink.map {
+                    y + (h - $0.height) / 2 - f.ascent - $0.minY
+                } ?? (y + max(0, (h - lineH) / 2))
                 text(
                     leaf.text,
-                    x: x + (w - labelW) / 2 - 4,
-                    y: y + max(0, (h - lineH) / 2),
+                    x: labelX,
+                    y: labelY,
                     w: w, h: lineH, color: leaf.color, font: f
                 )
             }
@@ -967,6 +980,53 @@ extension DrawList {
         }
     }
 
+    /// Focus chrome for a text field. The pipeline cannot stroke a rounded
+    /// rect, so `.rounded` draws an outer plate in the ring colour and punches
+    /// the field fill back on top — the same approach overlay borders use.
+    fileprivate func emitFocusRing(
+        _ leaf: LeafNode, x: Float, y: Float, w: Float, h: Float
+    ) {
+        let theme = leaf.theme
+        let style = leaf.focusRingStyle ?? theme.focusRingStyle
+        let bw = max(0.5, leaf.focusRingWidth ?? theme.focusRingWidth)
+        let color = leaf.focusRingColor ?? theme.focusRingColor ?? theme.accent
+        let fill = leaf.fillColor ?? theme.inset
+        let radius = leaf.cornerRadius
+
+        switch style {
+        case .none:
+            return
+        case .underline:
+            // Historical look: accent bars on the top and bottom edges only.
+            rect(x: x, y: y, w: w, h: bw, color: color)
+            rect(x: x, y: y + h - bw, w: w, h: bw, color: color)
+        case .rectangle:
+            rect(x: x, y: y, w: w, h: bw, color: color)
+            rect(x: x, y: y + h - bw, w: w, h: bw, color: color)
+            rect(x: x, y: y, w: bw, h: h, color: color)
+            rect(x: x + w - bw, y: y, w: bw, h: h, color: color)
+        case .rounded:
+            if radius > 0 {
+                roundedRect(x: x, y: y, w: w, h: h, color: color, radius: radius)
+                let innerR = max(0, radius - bw)
+                let iw = max(0, w - bw * 2)
+                let ih = max(0, h - bw * 2)
+                if iw > 0, ih > 0 {
+                    roundedRect(
+                        x: x + bw, y: y + bw, w: iw, h: ih,
+                        color: fill, radius: innerR
+                    )
+                }
+            } else {
+                // Degenerate to a hard rectangle when the field is square.
+                rect(x: x, y: y, w: w, h: bw, color: color)
+                rect(x: x, y: y + h - bw, w: w, h: bw, color: color)
+                rect(x: x, y: y, w: bw, h: h, color: color)
+                rect(x: x + w - bw, y: y, w: bw, h: h, color: color)
+            }
+        }
+    }
+
     /// Draws a field as: selection rects, then glyphs, then caret.
     ///
     /// That order is the whole point of the unified pipeline — under the old
@@ -983,11 +1043,7 @@ extension DrawList {
         let theme = leaf.theme
 
         if focused {
-            rect(x: x, y: y, w: w, h: theme.borderWidth, color: theme.accent)
-            rect(
-                x: x, y: y + h - theme.borderWidth,
-                w: w, h: theme.borderWidth, color: theme.accent
-            )
+            emitFocusRing(leaf, x: x, y: y, w: w, h: h)
         }
 
         if state.text.isEmpty {

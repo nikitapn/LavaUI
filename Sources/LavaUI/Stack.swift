@@ -13,30 +13,8 @@ public struct StackStyle: Equatable, Sendable {
     public var height: Dimension
     public var padding: Float
     public var alignment: StackAlignment
-
-    public init(
-        flexGrow: Float = 0,
-        width: Dimension = .auto,
-        height: Dimension = .auto,
-        padding: Float = 0,
-        alignment: StackAlignment = .stretch
-    ) {
-        self.flexGrow = flexGrow
-        self.width = width
-        self.height = height
-        self.padding = padding
-        self.alignment = alignment
-    }
-
-    var dumpDetail: String {
-        "flexGrow=\(flexGrow) w=\(width) h=\(height) pad=\(padding) align=\(alignment.rawValue)"
-    }
-}
-
-public struct HStack<Content: View>: PrimitiveView {
-    public var style: StackStyle
-    public var content: Content
-    public var onClick: (() -> Void)?
+    /// Continue children onto additional flex lines when the main axis fills.
+    public var wraps: Bool
 
     public init(
         flexGrow: Float = 0,
@@ -44,14 +22,45 @@ public struct HStack<Content: View>: PrimitiveView {
         height: Dimension = .auto,
         padding: Float = 0,
         alignment: StackAlignment = .stretch,
+        wraps: Bool = false
+    ) {
+        self.flexGrow = flexGrow
+        self.width = width
+        self.height = height
+        self.padding = padding
+        self.alignment = alignment
+        self.wraps = wraps
+    }
+
+    var dumpDetail: String {
+        "flexGrow=\(flexGrow) w=\(width) h=\(height) pad=\(padding) "
+            + "align=\(alignment.rawValue)\(wraps ? " wrap" : "")"
+    }
+}
+
+public struct HStack<Content: View>: PrimitiveView {
+    public var style: StackStyle
+    public var content: Content
+    public var onClick: (() -> Void)?
+    public var onHover: ((Bool) -> Void)?
+
+    public init(
+        flexGrow: Float = 0,
+        width: Dimension = .auto,
+        height: Dimension = .auto,
+        padding: Float = 0,
+        alignment: StackAlignment = .stretch,
+        wraps: Bool = false,
         onClick: (() -> Void)? = nil,
+        onHover: ((Bool) -> Void)? = nil,
         @ViewBuilder content: () -> Content
     ) {
         self.style = StackStyle(
             flexGrow: flexGrow, width: width, height: height, padding: padding,
-            alignment: alignment
+            alignment: alignment, wraps: wraps
         )
         self.onClick = onClick
+        self.onHover = onHover
         self.content = content()
     }
 
@@ -71,13 +80,17 @@ public struct HStack<Content: View>: PrimitiveView {
             direction: .row,
             style: style,
             content: ViewGraph.mount(content),
-            onClick: onClick
+            onClick: onClick,
+            onHover: onHover
         )
     }
 
     public func reconcilePrimitive(_ node: any AnyViewNode) -> any AnyViewNode {
         if let stack = node as? StackNode, stack.direction == .row {
-            stack.update(style: style, contentView: content, onClick: onClick)
+            stack.update(
+                style: style, contentView: content,
+                onClick: onClick, onHover: onHover
+            )
             return stack
         }
         return mountPrimitive()
@@ -88,6 +101,7 @@ public struct VStack<Content: View>: PrimitiveView {
     public var style: StackStyle
     public var content: Content
     public var onClick: (() -> Void)?
+    public var onHover: ((Bool) -> Void)?
 
     public init(
         flexGrow: Float = 0,
@@ -95,14 +109,17 @@ public struct VStack<Content: View>: PrimitiveView {
         height: Dimension = .auto,
         padding: Float = 0,
         alignment: StackAlignment = .stretch,
+        wraps: Bool = false,
         onClick: (() -> Void)? = nil,
+        onHover: ((Bool) -> Void)? = nil,
         @ViewBuilder content: () -> Content
     ) {
         self.style = StackStyle(
             flexGrow: flexGrow, width: width, height: height, padding: padding,
-            alignment: alignment
+            alignment: alignment, wraps: wraps
         )
         self.onClick = onClick
+        self.onHover = onHover
         self.content = content()
     }
 
@@ -122,13 +139,17 @@ public struct VStack<Content: View>: PrimitiveView {
             direction: .column,
             style: style,
             content: ViewGraph.mount(content),
-            onClick: onClick
+            onClick: onClick,
+            onHover: onHover
         )
     }
 
     public func reconcilePrimitive(_ node: any AnyViewNode) -> any AnyViewNode {
         if let stack = node as? StackNode, stack.direction == .column {
-            stack.update(style: style, contentView: content, onClick: onClick)
+            stack.update(
+                style: style, contentView: content,
+                onClick: onClick, onHover: onHover
+            )
             return stack
         }
         return mountPrimitive()
