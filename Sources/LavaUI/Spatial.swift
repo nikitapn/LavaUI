@@ -1,0 +1,426 @@
+#if canImport(CxxCanvas)
+import Foundation
+
+public struct Vector3: Equatable, Sendable, Animatable,
+    ExpressibleByArrayLiteral
+{
+    public var x: Float
+    public var y: Float
+    public var z: Float
+
+    public init(_ x: Float = 0, _ y: Float = 0, _ z: Float = 0) {
+        self.x = x; self.y = y; self.z = z
+    }
+
+    public init(arrayLiteral elements: Float...) {
+        self.init(
+            elements.indices.contains(0) ? elements[0] : 0,
+            elements.indices.contains(1) ? elements[1] : 0,
+            elements.indices.contains(2) ? elements[2] : 0
+        )
+    }
+
+    public static func interpolate(_ from: Vector3, _ to: Vector3, _ t: Float) -> Vector3 {
+        Vector3(
+            Float.interpolate(from.x, to.x, t),
+            Float.interpolate(from.y, to.y, t),
+            Float.interpolate(from.z, to.z, t)
+        )
+    }
+}
+
+public struct Angle3D: Equatable, Sendable {
+    public var radians: Float
+    public static let zero = Angle3D(radians: 0)
+    public static func radians(_ value: Float) -> Angle3D { Angle3D(radians: value) }
+    public static func degrees(_ value: Float) -> Angle3D {
+        Angle3D(radians: value * .pi / 180)
+    }
+}
+
+public struct Transform3D: Equatable, Sendable {
+    public var position: Vector3
+    public var rotation: Vector3
+    public var scale: Vector3
+
+    public init(
+        position: Vector3 = Vector3(0, 0, 0),
+        rotation: Vector3 = Vector3(0, 0, 0),
+        scale: Vector3 = [1, 1, 1]
+    ) {
+        self.position = position; self.rotation = rotation; self.scale = scale
+    }
+}
+
+public struct Camera3D: Equatable, Sendable {
+    public var position: Vector3
+    public var target: Vector3
+    public var fieldOfView: Angle3D
+    public var near: Float
+    public var far: Float
+
+    public static func perspective(
+        position: Vector3 = [0, 0, 7], target: Vector3 = [0, 0, 0],
+        fieldOfView: Angle3D = .degrees(42), near: Float = 0.05, far: Float = 100
+    ) -> Camera3D {
+        Camera3D(
+            position: position, target: target, fieldOfView: fieldOfView,
+            near: near, far: far
+        )
+    }
+}
+
+public struct SpatialAnimation: Equatable, Sendable {
+    public var duration: Double
+    public var curve: AnimationCurve
+
+    public init(duration: Double = 0.22, curve: AnimationCurve = .easeOut) {
+        self.duration = duration; self.curve = curve
+    }
+
+    public static func smooth(
+        duration: Double = 0.22, curve: AnimationCurve = .easeOut
+    ) -> SpatialAnimation {
+        SpatialAnimation(duration: duration, curve: curve)
+    }
+}
+
+public protocol View3D {
+    func spatialElements() -> [SpatialElement]
+}
+
+@resultBuilder
+public enum View3DBuilder {
+    public static func buildExpression<V: View3D>(_ value: V) -> [SpatialElement] {
+        value.spatialElements()
+    }
+    public static func buildBlock(_ components: [SpatialElement]...) -> [SpatialElement] {
+        components.flatMap { $0 }
+    }
+    public static func buildOptional(_ component: [SpatialElement]?) -> [SpatialElement] {
+        component ?? []
+    }
+    public static func buildEither(first: [SpatialElement]) -> [SpatialElement] { first }
+    public static func buildEither(second: [SpatialElement]) -> [SpatialElement] { second }
+    public static func buildArray(_ components: [[SpatialElement]]) -> [SpatialElement] {
+        components.flatMap { $0 }
+    }
+}
+
+public struct SpatialElement: View3D {
+    enum Geometry: Equatable {
+        case plane(width: Float, height: Float)
+        case box(Vector3)
+    }
+    var id: AnyHashable
+    var geometry: Geometry
+    var color: Color
+    var transform = Transform3D()
+    var animation: SpatialAnimation?
+    var onHover: ((Bool) -> Void)?
+    var onTap: (() -> Void)?
+
+    public func spatialElements() -> [SpatialElement] { [self] }
+}
+
+public struct Plane3D: View3D {
+    private var element: SpatialElement
+    public init<ID: Hashable>(
+        id: ID, width: Float = 1, height: Float = 1, color: Color = .accent
+    ) {
+        element = SpatialElement(
+            id: AnyHashable(id), geometry: .plane(width: width, height: height),
+            color: color
+        )
+    }
+    public func spatialElements() -> [SpatialElement] { [element] }
+}
+
+public struct Box3D: View3D {
+    private var element: SpatialElement
+    public init<ID: Hashable>(
+        id: ID, width: Float = 1, height: Float = 1, depth: Float = 0.08,
+        color: Color = .accent
+    ) {
+        element = SpatialElement(
+            id: AnyHashable(id), geometry: .box([width, height, depth]), color: color
+        )
+    }
+    public func spatialElements() -> [SpatialElement] { [element] }
+}
+
+private struct ModifiedView3D<Base: View3D>: View3D {
+    var base: Base
+    var modify: (inout SpatialElement) -> Void
+    func spatialElements() -> [SpatialElement] {
+        base.spatialElements().map { value in var copy = value; modify(&copy); return copy }
+    }
+}
+
+extension View3D {
+    public func position(_ value: Vector3) -> some View3D {
+        ModifiedView3D(base: self) { $0.transform.position = value }
+    }
+    public func offset3D(x: Float = 0, y: Float = 0, z: Float = 0) -> some View3D {
+        ModifiedView3D(base: self) {
+            $0.transform.position.x += x; $0.transform.position.y += y
+            $0.transform.position.z += z
+        }
+    }
+    public func scale3D(_ value: Float) -> some View3D {
+        ModifiedView3D(base: self) { $0.transform.scale = [value, value, value] }
+    }
+    public func scale3D(_ value: Vector3) -> some View3D {
+        ModifiedView3D(base: self) { $0.transform.scale = value }
+    }
+    public func rotation3D(angle: Angle3D, axis: Vector3) -> some View3D {
+        ModifiedView3D(base: self) {
+            $0.transform.rotation = [axis.x * angle.radians, axis.y * angle.radians,
+                                     axis.z * angle.radians]
+        }
+    }
+    public func animation3D(_ animation: SpatialAnimation = .smooth()) -> some View3D {
+        ModifiedView3D(base: self) { $0.animation = animation }
+    }
+    public func onHover3D(_ action: @escaping (Bool) -> Void) -> some View3D {
+        ModifiedView3D(base: self) { $0.onHover = action }
+    }
+    public func onTap3D(_ action: @escaping () -> Void) -> some View3D {
+        ModifiedView3D(base: self) { $0.onTap = action }
+    }
+}
+
+public struct ForEach3D<Data: RandomAccessCollection, ID: Hashable, Content: View3D>: View3D {
+    public var data: Data
+    public var id: KeyPath<Data.Element, ID>
+    public var content: (Data.Element) -> Content
+
+    public init(
+        _ data: Data, id: KeyPath<Data.Element, ID>,
+        @View3DBuilder content: @escaping (Data.Element) -> [SpatialElement]
+    ) where Content == SpatialGroup3D {
+        self.data = data; self.id = id
+        self.content = { SpatialGroup3D(content($0)) }
+    }
+
+    public func spatialElements() -> [SpatialElement] {
+        data.flatMap { content($0).spatialElements() }
+    }
+}
+
+public struct SpatialGroup3D: View3D {
+    var elements: [SpatialElement]
+    public init(@View3DBuilder content: () -> [SpatialElement]) { elements = content() }
+    init(_ elements: [SpatialElement]) { self.elements = elements }
+    public func spatialElements() -> [SpatialElement] { elements }
+}
+
+struct SpatialProjectedVertex { var x, y, depth: Float; var color: Color }
+
+public struct Scene3D: PrimitiveView {
+    public var camera: Camera3D
+    public var width: Dimension
+    public var height: Dimension
+    public var flexGrow: Float
+    var elements: [SpatialElement]
+
+    public init(
+        camera: Camera3D = .perspective(), width: Dimension = .auto,
+        height: Dimension = .auto, flexGrow: Float = 0,
+        @View3DBuilder content: () -> [SpatialElement]
+    ) {
+        self.camera = camera; self.width = width; self.height = height
+        self.flexGrow = flexGrow; self.elements = content()
+    }
+
+    public var dumpDetail: String { "\(elements.count) objects" }
+
+    public func mountPrimitive() -> any AnyViewNode {
+        let leaf = LeafNode(
+            kind: .scene3D, label: "Scene3D", width: width, height: height,
+            flexGrow: flexGrow
+        )
+        configure(leaf)
+        return leaf
+    }
+
+    public func reconcilePrimitive(_ node: any AnyViewNode) -> any AnyViewNode {
+        guard let leaf = node as? LeafNode, leaf.kind == .scene3D else {
+            return mountPrimitive()
+        }
+        leaf.width = width; leaf.height = height; leaf.flexGrow = flexGrow
+        leaf.applyStyle(); configure(leaf)
+        return leaf
+    }
+
+    private func configure(_ leaf: LeafNode) {
+        let runtime = leaf.spatialRuntime ?? SpatialRuntime(nodeID: leaf.id)
+        leaf.spatialRuntime = runtime
+        runtime.update(camera: camera, elements: elements)
+        leaf.onClickLocal = { [weak runtime] x, y, _, _, _ in runtime?.tap(x: x, y: y) }
+        leaf.onPointerHoverLocal = { [weak runtime] x, y in runtime?.hover(x: x, y: y) }
+        leaf.onHover = { [weak runtime] inside in if !inside { runtime?.leave() } }
+        HoverState.register(leaf.id) { [weak leaf] inside in leaf?.onHover?(inside) }
+    }
+}
+
+final class SpatialRuntime {
+    struct Motion {
+        var position: Animated<Vector3>; var rotation: Animated<Vector3>; var scale: Animated<Vector3>
+    }
+    let nodeID: NodeID
+    var camera: Camera3D = .perspective()
+    var elements: [SpatialElement] = []
+    var motion: [AnyHashable: Motion] = [:]
+    var projected: [(element: SpatialElement, triangles: [SpatialProjectedVertex])] = []
+    var hovered: AnyHashable?
+    /// Projection emits window-space vertices because that is what DrawList
+    /// consumes, while leaf input handlers deliberately receive coordinates
+    /// local to their Yoga box. Keep the exact frame used for projection so
+    /// picking crosses that boundary once, in one obvious place.
+    var lastFrame = CanvasFrame(x: 0, y: 0, w: 0, h: 0)
+
+    init(nodeID: NodeID) { self.nodeID = nodeID }
+
+    func update(camera: Camera3D, elements: [SpatialElement]) {
+        self.camera = camera; self.elements = elements
+        var animating = false
+        for e in elements {
+            if var m = motion[e.id] {
+                if m.position.target != e.transform.position || m.rotation.target != e.transform.rotation
+                    || m.scale.target != e.transform.scale {
+                    if let a = e.animation {
+                        m.position.animate(to: e.transform.position, duration: a.duration, curve: a.curve)
+                        m.rotation.animate(to: e.transform.rotation, duration: a.duration, curve: a.curve)
+                        m.scale.animate(to: e.transform.scale, duration: a.duration, curve: a.curve)
+                        animating = true
+                    } else {
+                        m.position.snap(to: e.transform.position); m.rotation.snap(to: e.transform.rotation)
+                        m.scale.snap(to: e.transform.scale)
+                    }
+                    motion[e.id] = m
+                }
+            } else {
+                motion[e.id] = Motion(position: Animated(e.transform.position),
+                    rotation: Animated(e.transform.rotation), scale: Animated(e.transform.scale))
+            }
+        }
+        if animating { installAnimation() }
+    }
+
+    private func installAnimation() {
+        AnimationDriver.register(nodeID) { [weak self] in self?.step() ?? false }
+    }
+
+    private func step() -> Bool {
+        let now = FrameScheduler.now()
+        var active = false
+        for key in Array(motion.keys) {
+            guard var m = motion[key] else { continue }
+            active = m.position.step(now) || active
+            active = m.rotation.step(now) || active
+            active = m.scale.step(now) || active
+            motion[key] = m
+        }
+        return active
+    }
+
+    func emit(_ draw: DrawList, frame: CanvasFrame) {
+        lastFrame = frame
+        draw.beginSpatialScene(frame)
+        projected = elements.map { e in
+            let t = motion[e.id].map {
+                Transform3D(position: $0.position.current, rotation: $0.rotation.current,
+                            scale: $0.scale.current)
+            } ?? e.transform
+            return (e, project(element: e, transform: t, frame: frame))
+        }
+        for item in projected { draw.spatialTriangles(item.triangles) }
+    }
+
+    func hover(x: Float, y: Float) {
+        let hit = hitID(x: x, y: y)
+        guard hit != hovered else { return }
+        if let old = hovered, let e = elements.first(where: { $0.id == old }) { e.onHover?(false) }
+        hovered = hit
+        if let hit, let e = elements.first(where: { $0.id == hit }) { e.onHover?(true) }
+        ViewInvalidation.markNeedsRedraw()
+    }
+    func leave() { hover(x: -.greatestFiniteMagnitude, y: -.greatestFiniteMagnitude) }
+    func tap(x: Float, y: Float) {
+        guard let id = hitID(x: x, y: y) else { return }
+        elements.first(where: { $0.id == id })?.onTap?()
+    }
+
+    private func hitID(x: Float, y: Float) -> AnyHashable? {
+        let windowX = x + lastFrame.x
+        let windowY = y + lastFrame.y
+        var best: (AnyHashable, Float)?
+        for item in projected where item.element.onHover != nil || item.element.onTap != nil {
+            for i in stride(from: 0, to: item.triangles.count, by: 3) {
+                let a = item.triangles[i], b = item.triangles[i+1], c = item.triangles[i+2]
+                guard pointInTriangle(windowX, windowY, a, b, c) else { continue }
+                let depth = min(a.depth, min(b.depth, c.depth))
+                if best == nil || depth < best!.1 { best = (item.element.id, depth) }
+            }
+        }
+        return best?.0
+    }
+
+    private func project(
+        element: SpatialElement, transform: Transform3D, frame: CanvasFrame
+    ) -> [SpatialProjectedVertex] {
+        let vertices: [Vector3]
+        let indices: [Int]
+        switch element.geometry {
+        case .plane(let w, let h):
+            vertices = [[-w/2,-h/2,0],[w/2,-h/2,0],[w/2,h/2,0],[-w/2,h/2,0]]
+            indices = [0,2,1,0,3,2]
+        case .box(let s):
+            let x=s.x/2, y=s.y/2, z=s.z/2
+            vertices = [[-x,-y,-z],[x,-y,-z],[x,y,-z],[-x,y,-z],[-x,-y,z],[x,-y,z],[x,y,z],[-x,y,z]]
+            indices = [4,6,5,4,7,6, 1,2,0,0,2,3, 0,3,4,4,3,7,
+                       5,6,1,1,6,2, 3,2,7,7,2,6, 0,4,1,1,4,5]
+        }
+        return indices.compactMap { index in
+            let world = apply(transform, vertices[index])
+            return project(world, frame: frame).map {
+                SpatialProjectedVertex(x: $0.x, y: $0.y, depth: $0.z, color: element.color)
+            }
+        }
+    }
+
+    private func apply(_ t: Transform3D, _ input: Vector3) -> Vector3 {
+        var v = Vector3(input.x*t.scale.x,input.y*t.scale.y,input.z*t.scale.z)
+        let cx=cos(t.rotation.x), sx=sin(t.rotation.x); v = [v.x,v.y*cx-v.z*sx,v.y*sx+v.z*cx]
+        let cy=cos(t.rotation.y), sy=sin(t.rotation.y); v = [v.x*cy+v.z*sy,v.y,-v.x*sy+v.z*cy]
+        let cz=cos(t.rotation.z), sz=sin(t.rotation.z); v = [v.x*cz-v.y*sz,v.x*sz+v.y*cz,v.z]
+        return [v.x+t.position.x,v.y+t.position.y,v.z+t.position.z]
+    }
+
+    private func project(_ p: Vector3, frame: CanvasFrame) -> Vector3? {
+        let forward = normalized(camera.target - camera.position)
+        let right = normalized(cross(forward, [0,1,0]))
+        let up = cross(right, forward)
+        let delta = p - camera.position
+        let z = dot(delta, forward)
+        guard z > camera.near else { return nil }
+        let focal = frame.h * 0.5 / tan(camera.fieldOfView.radians * 0.5)
+        return [frame.x + frame.w*0.5 + dot(delta,right)*focal/z,
+                frame.y + frame.h*0.5 - dot(delta,up)*focal/z,
+                min(1, max(0, (z-camera.near)/(camera.far-camera.near)))]
+    }
+}
+
+private func +(a: Vector3,b: Vector3)->Vector3 { [a.x+b.x,a.y+b.y,a.z+b.z] }
+private func -(a: Vector3,b: Vector3)->Vector3 { [a.x-b.x,a.y-b.y,a.z-b.z] }
+private func dot(_ a: Vector3,_ b: Vector3)->Float { a.x*b.x+a.y*b.y+a.z*b.z }
+private func cross(_ a: Vector3,_ b: Vector3)->Vector3 { [a.y*b.z-a.z*b.y,a.z*b.x-a.x*b.z,a.x*b.y-a.y*b.x] }
+private func normalized(_ v: Vector3)->Vector3 { let l=max(0.0001,sqrt(dot(v,v))); return [v.x/l,v.y/l,v.z/l] }
+private func pointInTriangle(_ x:Float,_ y:Float,_ a:SpatialProjectedVertex,_ b:SpatialProjectedVertex,_ c:SpatialProjectedVertex)->Bool {
+    let d1=(x-b.x)*(a.y-b.y)-(a.x-b.x)*(y-b.y)
+    let d2=(x-c.x)*(b.y-c.y)-(b.x-c.x)*(y-c.y)
+    let d3=(x-a.x)*(c.y-a.y)-(c.x-a.x)*(y-a.y)
+    return !((d1 < 0 || d2 < 0 || d3 < 0) && (d1 > 0 || d2 > 0 || d3 > 0))
+}
+#endif

@@ -194,18 +194,21 @@ void Engine::textInput(const std::string &utf8)
 
 void Engine::submitDrawList(const DrawCommand *cmds, size_t cmdCount,
                             const GlyphInstance *glyphs, size_t glyphCount,
-                            const MeshVertex *meshVerts, size_t meshVertCount)
+                            const MeshVertex *meshVerts, size_t meshVertCount,
+                            const SpatialVertex *spatialVerts, size_t spatialVertCount)
 {
   impl_->withApp([&](Application &app) {
-    app.submitDrawList(cmds, cmdCount, glyphs, glyphCount, meshVerts, meshVertCount);
+    app.submitDrawList(cmds, cmdCount, glyphs, glyphCount, meshVerts, meshVertCount,
+                       spatialVerts, spatialVertCount);
   });
 }
 
 void Engine::ensureDrawListCapacity(size_t cmdCapacity, size_t glyphCapacity,
-                                    size_t meshVertCapacity)
+                                    size_t meshVertCapacity, size_t spatialVertCapacity)
 {
   impl_->withApp([&](Application &app) {
-    app.ensureDrawListCapacity(cmdCapacity, glyphCapacity, meshVertCapacity);
+    app.ensureDrawListCapacity(cmdCapacity, glyphCapacity, meshVertCapacity,
+                               spatialVertCapacity);
   });
 }
 
@@ -222,6 +225,11 @@ GlyphInstance *Engine::drawGlyphData()
 MeshVertex *Engine::drawMeshVertexData()
 {
   return impl_->withApp([](Application &app) { return app.drawMeshVertexData(); });
+}
+
+SpatialVertex *Engine::drawSpatialVertexData()
+{
+  return impl_->withApp([](Application &app) { return app.drawSpatialVertexData(); });
 }
 
 size_t Engine::drawCommandCapacity() const
@@ -242,11 +250,17 @@ size_t Engine::drawMeshVertexCapacity() const
     [](Application &app) { return app.drawMeshVertexCapacity(); });
 }
 
+size_t Engine::drawSpatialVertexCapacity() const
+{
+  return const_cast<Engine *>(this)->impl_->withApp(
+    [](Application &app) { return app.drawSpatialVertexCapacity(); });
+}
+
 void Engine::commitDrawList(size_t cmdCount, size_t glyphCount,
-                            size_t meshVertCount)
+                            size_t meshVertCount, size_t spatialVertCount)
 {
   impl_->withApp([&](Application &app) {
-    app.commitDrawList(cmdCount, glyphCount, meshVertCount);
+    app.commitDrawList(cmdCount, glyphCount, meshVertCount, spatialVertCount);
   });
 }
 

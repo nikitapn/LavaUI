@@ -29,6 +29,8 @@ public enum DrawKind: UInt32 {
     case mesh = 12
     /// Connected 1px line strip. `param`/`w` index into `meshVertices`.
     case polyline = 13
+    case spatialTriangles = 14
+    case spatialBegin = 15
 }
 
 /// Reused arena: draw commands plus the shaped glyphs they reference.
@@ -54,6 +56,9 @@ public final class DrawList {
     private var meshVertexStorage: UnsafeMutablePointer<canvas.MeshVertex>
     private var meshVertexCapacity: Int
     public private(set) var meshVertexCount = 0
+    private var spatialVertexStorage: UnsafeMutablePointer<canvas.SpatialVertex>
+    private var spatialVertexCapacity: Int
+    public private(set) var spatialVertexCount = 0
 
     /// Overlays found during the current walk, emitted once it finishes.
     private var pendingOverlays: [PendingOverlay] = []
@@ -72,32 +77,8 @@ public final class DrawList {
 
     public init(editor: Editor) {
         self.editor = editor
-        editor.ensureDrawListCapacity(commands: 256, glyphs: 2048, meshVertices: 256)
-        let storage = editor.drawListStorage()
-        commandStorage = storage.commands
-        commandCapacity = storage.commandCapacity
-        glyphStorage = storage.glyphs
-        glyphCapacity = storage.glyphCapacity
-        meshVertexStorage = storage.meshVertices
-        meshVertexCapacity = storage.meshVertexCapacity
-    }
-
-    public func clear() {
-        commandCount = 0
-        glyphCount = 0
-        meshVertexCount = 0
-        cullStack.removeAll(keepingCapacity: true)
-    }
-
-    private func grow(commands: Int = 0, glyphs: Int = 0, meshVertices: Int = 0) {
-        let nextCommands = commands > commandCapacity
-            ? max(commands, max(256, commandCapacity * 2)) : commandCapacity
-        let nextGlyphs = glyphs > glyphCapacity
-            ? max(glyphs, max(2048, glyphCapacity * 2)) : glyphCapacity
-        let nextMesh = meshVertices > meshVertexCapacity
-            ? max(meshVertices, max(256, meshVertexCapacity * 2)) : meshVertexCapacity
         editor.ensureDrawListCapacity(
-            commands: nextCommands, glyphs: nextGlyphs, meshVertices: nextMesh
+            commands: 256, glyphs: 2048, meshVertices: 256, spatialVertices: 256
         )
         let storage = editor.drawListStorage()
         commandStorage = storage.commands
@@ -106,6 +87,43 @@ public final class DrawList {
         glyphCapacity = storage.glyphCapacity
         meshVertexStorage = storage.meshVertices
         meshVertexCapacity = storage.meshVertexCapacity
+        spatialVertexStorage = storage.spatialVertices
+        spatialVertexCapacity = storage.spatialVertexCapacity
+    }
+
+    public func clear() {
+        commandCount = 0
+        glyphCount = 0
+        meshVertexCount = 0
+        spatialVertexCount = 0
+        cullStack.removeAll(keepingCapacity: true)
+    }
+
+    private func grow(
+        commands: Int = 0, glyphs: Int = 0, meshVertices: Int = 0,
+        spatialVertices: Int = 0
+    ) {
+        let nextCommands = commands > commandCapacity
+            ? max(commands, max(256, commandCapacity * 2)) : commandCapacity
+        let nextGlyphs = glyphs > glyphCapacity
+            ? max(glyphs, max(2048, glyphCapacity * 2)) : glyphCapacity
+        let nextMesh = meshVertices > meshVertexCapacity
+            ? max(meshVertices, max(256, meshVertexCapacity * 2)) : meshVertexCapacity
+        let nextSpatial = spatialVertices > spatialVertexCapacity
+            ? max(spatialVertices, max(256, spatialVertexCapacity * 2)) : spatialVertexCapacity
+        editor.ensureDrawListCapacity(
+            commands: nextCommands, glyphs: nextGlyphs, meshVertices: nextMesh,
+            spatialVertices: nextSpatial
+        )
+        let storage = editor.drawListStorage()
+        commandStorage = storage.commands
+        commandCapacity = storage.commandCapacity
+        glyphStorage = storage.glyphs
+        glyphCapacity = storage.glyphCapacity
+        meshVertexStorage = storage.meshVertices
+        meshVertexCapacity = storage.meshVertexCapacity
+        spatialVertexStorage = storage.spatialVertices
+        spatialVertexCapacity = storage.spatialVertexCapacity
     }
 
     private func appendCommand(_ command: canvas.DrawCommand) {
@@ -126,6 +144,38 @@ public final class DrawList {
         }
         meshVertexStorage[meshVertexCount] = vertex
         meshVertexCount += 1
+    }
+
+    private func appendSpatialVertex(_ vertex: canvas.SpatialVertex) {
+        if spatialVertexCount == spatialVertexCapacity {
+            grow(spatialVertices: spatialVertexCount + 1)
+        }
+        spatialVertexStorage[spatialVertexCount] = vertex
+        spatialVertexCount += 1
+    }
+
+    func spatialTriangles(_ vertices: [SpatialProjectedVertex]) {
+        guard vertices.count >= 3, vertices.count.isMultiple(of: 3) else { return }
+        let first = spatialVertexCount
+        for point in vertices {
+            var vertex = canvas.SpatialVertex()
+            vertex.x = point.x
+            vertex.y = point.y
+            vertex.z = point.depth
+            vertex.color = point.color.rgba8
+            appendSpatialVertex(vertex)
+        }
+        append(
+            kind: .spatialTriangles, x: 0, y: 0, w: Float(vertices.count), h: 0,
+            color: Color(r: 1, g: 1, b: 1), param: UInt32(first)
+        )
+    }
+
+    func beginSpatialScene(_ frame: CanvasFrame) {
+        append(
+            kind: .spatialBegin, x: frame.x, y: frame.y, w: frame.w, h: frame.h,
+            color: Color(r: 1, g: 1, b: 1)
+        )
     }
 
     /// Inclusive-exclusive AABB (x0 ≤ x < x1).
@@ -802,6 +852,12 @@ public final class DrawList {
             leaf.lastCanvasFrame = frame
             // App owns every command for this box (background, glyphs, bars…).
             leaf.canvasPaint?(self, frame)
+            return
+        }
+
+        if leaf.kind == .scene3D {
+            let frame = CanvasFrame(x: x, y: y, w: w, h: h)
+            leaf.spatialRuntime?.emit(self, frame: frame)
             return
         }
 

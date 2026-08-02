@@ -27,6 +27,7 @@
 #include "vk_mem_alloc.h"
 
 #include "render/vulkan_ptr.hpp"
+#include "render/draw_command.hpp"
 #include "util/types.hpp"
 
 class Vulkan;
@@ -76,6 +77,11 @@ class QuadRenderer {
   /// Connected native 1px line strip. A dedicated pipeline is required
   /// because primitive topology is baked into a Vulkan graphics pipeline.
   void pushPolyline(const vec2 *points, uint32_t count, uint32_t rgba);
+
+  /// Already projected window-space triangles with Vulkan depth in 0...1.
+  /// Uses a dedicated depth-tested pipeline while remaining in batch order.
+  void pushSpatialTriangles(const canvas::SpatialVertex *vertices, uint32_t count);
+  void pushSpatialBegin(vec2 topLeft, vec2 size);
 
   /// One glyph quad. `uv0`/`uv1` are the atlas rect for this glyph.
   void pushGlyph(vec2 topLeft, vec2 size, vec2 uv0, vec2 uv1, uint32_t rgba);
@@ -149,7 +155,7 @@ class QuadRenderer {
  private:
   /// A contiguous run of quads sharing one scissor + one sampled texture.
   struct Batch {
-    enum class Geometry : uint8_t { Quads, LineStrip };
+    enum class Geometry : uint8_t { Quads, LineStrip, SpatialTriangles, SpatialBegin };
     Geometry geometry = Geometry::Quads;
     uint32_t firstIndex = 0;
     uint32_t indexCount = 0;
@@ -178,6 +184,8 @@ class QuadRenderer {
                       vk::Handle<VkPipeline> &out);
   void createLinePipeline(VkRenderPass renderPass, VkSampleCountFlagBits samples,
                           vk::Handle<VkPipeline> &out);
+  void createSpatialPipeline(VkRenderPass renderPass, VkSampleCountFlagBits samples,
+                             vk::Handle<VkPipeline> &out);
   void setupDescriptors();
   void createWhiteTexture();
   void ensureBufferCapacity(size_t vertexCount);
@@ -203,6 +211,7 @@ class QuadRenderer {
   vk::Handle<VkPipeline>            pipelineScene_;
   vk::Handle<VkPipeline>            linePipeline_;
   vk::Handle<VkPipeline>            linePipelineScene_;
+  vk::Handle<VkPipeline>            spatialPipeline_;
   vk::Handle<VkPipelineLayout>      pipelineLayout_;
   vk::Handle<VkDescriptorPool>      descriptorPool_;
   vk::Handle<VkDescriptorSetLayout> descriptorSetLayout_;

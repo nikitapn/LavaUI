@@ -43,6 +43,11 @@ enum class DrawCommandKind : uint32_t {
   /// Connected 1px line strip. param = first vertex index, w = vertex count,
   /// into the same MeshVertex side buffer used by Mesh.
   Polyline = 13,
+  /// Depth-tested triangles emitted by a LavaUI Scene3D. param = first
+  /// SpatialVertex and w = vertex count (a multiple of three).
+  SpatialTriangles = 14,
+  /// Clears depth inside one Scene3D viewport before its triangles.
+  SpatialBegin = 15,
 };
 
 /// One shaped glyph, positioned in absolute window pixels by Swift. Ships in
@@ -70,6 +75,17 @@ struct MeshVertex {
 };
 
 static_assert(sizeof(MeshVertex) == 8, "MeshVertex must stay packed");
+
+/// One already-projected spatial vertex. x/y are window pixels and z is
+/// Vulkan depth in 0...1. Projection stays in the UI scene layer for now;
+/// the dedicated GPU pipeline owns depth testing and ordered composition.
+struct SpatialVertex {
+  float x = 0.f;
+  float y = 0.f;
+  float z = 0.f;
+  uint32_t color = 0xffffffffu;
+};
+static_assert(sizeof(SpatialVertex) == 16, "SpatialVertex must stay packed");
 
 struct DrawCommand {
   uint32_t kind = 0;

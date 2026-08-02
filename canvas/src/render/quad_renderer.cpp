@@ -24,6 +24,8 @@ void QuadRenderer::init() {
   createPipeline(vulkan_.getRenderPass(), vulkan_.getMSAASamples(), pipeline_);
   createLinePipeline(vulkan_.getRenderPass(), vulkan_.getMSAASamples(),
                      linePipeline_);
+  createSpatialPipeline(vulkan_.getRenderPass(), vulkan_.getMSAASamples(),
+                        spatialPipeline_);
   ensureBufferCapacity(kInitialVertexCapacity);
 }
 
@@ -63,6 +65,7 @@ void QuadRenderer::cleanUp() {
   pipelineScene_.destroy(device);
   linePipeline_.destroy(device);
   linePipelineScene_.destroy(device);
+  spatialPipeline_.destroy(device);
   pipelineLayout_.destroy(device);
   descriptorPool_.destroy(device);
   descriptorSetLayout_.destroy(device);
@@ -247,6 +250,55 @@ void QuadRenderer::createLinePipeline(VkRenderPass renderPass,
     .layout = pipelineLayout_, .renderPass = renderPass, .subpass = 0};
   VR(vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &info, nullptr, &out),
      "Failed to create polyline pipeline");
+}
+
+void QuadRenderer::createSpatialPipeline(VkRenderPass renderPass,
+                                         VkSampleCountFlagBits samples,
+                                         vk::Handle<VkPipeline> &out) {
+  VkDevice device = vulkan_.getDevice();
+  Shaders &shaders = vulkan_.getShaders();
+  VkShaderModule vert = shaders.loadShader("shaders/spatial.vert.bin");
+  VkShaderModule frag = shaders.loadShader("shaders/spatial.frag.bin");
+  std::array<VkPipelineShaderStageCreateInfo, 2> stages{
+    VkPipelineShaderStageCreateInfo{.sType=VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+      .stage=VK_SHADER_STAGE_VERTEX_BIT,.module=vert,.pName="main"},
+    VkPipelineShaderStageCreateInfo{.sType=VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+      .stage=VK_SHADER_STAGE_FRAGMENT_BIT,.module=frag,.pName="main"}};
+  VkVertexInputBindingDescription binding{0, sizeof(Vertex), VK_VERTEX_INPUT_RATE_VERTEX};
+  std::array<VkVertexInputAttributeDescription, 3> attrs{
+    VkVertexInputAttributeDescription{0,0,VK_FORMAT_R32G32_SFLOAT,offsetof(Vertex,pos)},
+    VkVertexInputAttributeDescription{1,0,VK_FORMAT_R32G32_SFLOAT,offsetof(Vertex,local)},
+    VkVertexInputAttributeDescription{2,0,VK_FORMAT_R8G8B8A8_UNORM,offsetof(Vertex,color)}};
+  VkPipelineVertexInputStateCreateInfo vi{.sType=VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
+    .vertexBindingDescriptionCount=1,.pVertexBindingDescriptions=&binding,
+    .vertexAttributeDescriptionCount=static_cast<uint32_t>(attrs.size()),.pVertexAttributeDescriptions=attrs.data()};
+  VkPipelineInputAssemblyStateCreateInfo ia{.sType=VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
+    .topology=VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST};
+  VkPipelineViewportStateCreateInfo vp{.sType=VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO,
+    .viewportCount=1,.scissorCount=1};
+  VkPipelineRasterizationStateCreateInfo rs{.sType=VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
+    .polygonMode=VK_POLYGON_MODE_FILL,.cullMode=VK_CULL_MODE_NONE,
+    .frontFace=VK_FRONT_FACE_COUNTER_CLOCKWISE,.lineWidth=1.f};
+  VkPipelineMultisampleStateCreateInfo ms{.sType=VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO,
+    .rasterizationSamples=samples};
+  VkPipelineDepthStencilStateCreateInfo ds{.sType=VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO,
+    .depthTestEnable=VK_TRUE,.depthWriteEnable=VK_TRUE,.depthCompareOp=VK_COMPARE_OP_LESS_OR_EQUAL};
+  VkPipelineColorBlendAttachmentState ba{.blendEnable=VK_TRUE,
+    .srcColorBlendFactor=VK_BLEND_FACTOR_SRC_ALPHA,.dstColorBlendFactor=VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA,
+    .colorBlendOp=VK_BLEND_OP_ADD,.srcAlphaBlendFactor=VK_BLEND_FACTOR_ONE,
+    .dstAlphaBlendFactor=VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA,.alphaBlendOp=VK_BLEND_OP_ADD,
+    .colorWriteMask=VK_COLOR_COMPONENT_R_BIT|VK_COLOR_COMPONENT_G_BIT|VK_COLOR_COMPONENT_B_BIT|VK_COLOR_COMPONENT_A_BIT};
+  VkPipelineColorBlendStateCreateInfo cb{.sType=VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO,
+    .attachmentCount=1,.pAttachments=&ba};
+  std::array<VkDynamicState,2> dyns{VK_DYNAMIC_STATE_VIEWPORT,VK_DYNAMIC_STATE_SCISSOR};
+  VkPipelineDynamicStateCreateInfo dyn{.sType=VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO,
+    .dynamicStateCount=2,.pDynamicStates=dyns.data()};
+  VkGraphicsPipelineCreateInfo info{.sType=VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
+    .stageCount=2,.pStages=stages.data(),.pVertexInputState=&vi,.pInputAssemblyState=&ia,
+    .pViewportState=&vp,.pRasterizationState=&rs,.pMultisampleState=&ms,.pDepthStencilState=&ds,
+    .pColorBlendState=&cb,.pDynamicState=&dyn,.layout=pipelineLayout_,.renderPass=renderPass,.subpass=0};
+  VR(vkCreateGraphicsPipelines(device,VK_NULL_HANDLE,1,&info,nullptr,&out),
+     "Failed to create spatial pipeline");
 }
 
 void QuadRenderer::createPipeline(VkRenderPass renderPass,
@@ -605,6 +657,31 @@ void QuadRenderer::pushPolyline(const vec2 *points, uint32_t count,
     .firstVertex = first, .vertexCount = count, .scissor = currentScissor_});
 }
 
+void QuadRenderer::pushSpatialTriangles(const canvas::SpatialVertex *points,
+                                        uint32_t count) {
+  if (points == nullptr || count < 3 || count % 3 != 0) return;
+  flushBatch();
+  const uint32_t first = static_cast<uint32_t>(vertices_.size());
+  vertices_.reserve(vertices_.size() + count);
+  for (uint32_t i = 0; i < count; ++i) {
+    vertices_.push_back(Vertex{.pos={points[i].x,points[i].y},
+      .local={points[i].z,0.f},.halfSize={0.f,0.f},.radius=0.f,
+      .color=points[i].color,.kind=static_cast<uint32_t>(Kind::Mesh)});
+  }
+  batches_.push_back(Batch{.geometry=Batch::Geometry::SpatialTriangles,
+    .firstVertex=first,.vertexCount=count,.scissor=currentScissor_});
+}
+
+void QuadRenderer::pushSpatialBegin(vec2 topLeft, vec2 size) {
+  flushBatch();
+  const int32_t x = std::max(0, static_cast<int32_t>(topLeft.x));
+  const int32_t y = std::max(0, static_cast<int32_t>(topLeft.y));
+  const uint32_t w = static_cast<uint32_t>(std::max(0.f, size.x));
+  const uint32_t h = static_cast<uint32_t>(std::max(0.f, size.y));
+  batches_.push_back(Batch{.geometry=Batch::Geometry::SpatialBegin,
+    .scissor=VkRect2D{{x,y},{w,h}}});
+}
+
 void QuadRenderer::pushGlyph(vec2 topLeft, vec2 size, vec2 uv0, vec2 uv1,
                              uint32_t rgba) {
   if (size.x <= 0.0f || size.y <= 0.0f) {
@@ -952,9 +1029,24 @@ void QuadRenderer::drawBatchRange(VkCommandBuffer commandBuffer,
                     ? batch.scissor
                     : mapScissor(batch.scissor);
     if (sc.extent.width == 0 || sc.extent.height == 0) continue;
-    const VkPipeline wanted = batch.geometry == Batch::Geometry::LineStrip
-      ? (intoSceneTarget ? linePipelineScene_ : linePipeline_)
-      : (intoSceneTarget ? pipelineScene_ : pipeline_);
+    if (batch.geometry == Batch::Geometry::SpatialBegin) {
+      VkClearAttachment attachment{.aspectMask=VK_IMAGE_ASPECT_DEPTH_BIT,
+        .colorAttachment=0,.clearValue={.depthStencil={1.f,0}}};
+      VkClearRect rect{.rect=sc,.baseArrayLayer=0,.layerCount=1};
+      vkCmdClearAttachments(commandBuffer,1,&attachment,1,&rect);
+      continue;
+    }
+    VkPipeline wanted = VK_NULL_HANDLE;
+    if (batch.geometry == Batch::Geometry::LineStrip) {
+      wanted = intoSceneTarget ? static_cast<VkPipeline>(linePipelineScene_)
+                               : static_cast<VkPipeline>(linePipeline_);
+    } else if (batch.geometry == Batch::Geometry::SpatialTriangles) {
+      wanted = intoSceneTarget ? VK_NULL_HANDLE
+                               : static_cast<VkPipeline>(spatialPipeline_);
+    } else {
+      wanted = intoSceneTarget ? static_cast<VkPipeline>(pipelineScene_)
+                               : static_cast<VkPipeline>(pipeline_);
+    }
     if (wanted == VK_NULL_HANDLE) continue;
     if (wanted != bound) {
       bound = wanted;
@@ -971,7 +1063,7 @@ void QuadRenderer::drawBatchRange(VkCommandBuffer commandBuffer,
       }
     }
     vkCmdSetScissor(commandBuffer, 0, 1, &sc);
-    if (batch.geometry == Batch::Geometry::LineStrip) {
+    if (batch.geometry != Batch::Geometry::Quads) {
       vkCmdDraw(commandBuffer, batch.vertexCount, 1, batch.firstVertex, 0);
     } else {
       vkCmdDrawIndexed(commandBuffer, batch.indexCount, 1, batch.firstIndex, 0, 0);

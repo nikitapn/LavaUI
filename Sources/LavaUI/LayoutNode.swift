@@ -237,6 +237,7 @@ enum LeafKind: Equatable {
     case divider
     /// App-supplied paint via `Canvas` / `canvasPaint` (no built-in chrome).
     case canvas
+    case scene3D
 }
 
 final class LeafNode: YogaBoxNode {
@@ -318,6 +319,8 @@ final class LeafNode: YogaBoxNode {
 
     /// Custom `Canvas` paint (absolute frame). Nil for non-canvas leaves.
     var canvasPaint: ((DrawList, CanvasFrame) -> Void)?
+    var spatialRuntime: SpatialRuntime?
+    var onPointerHoverLocal: ((_ localX: Float, _ localY: Float) -> Void)?
     /// When true, `AnimationDriver` keeps requesting redraws for this leaf.
     var continuousRedraw: Bool = false
     /// Absolute frame from the most recent `emitLeafContents` — the same
@@ -1527,6 +1530,7 @@ public final class LayoutHost {
                 if let leaf = node as? LeafNode,
                    leaf.hoverFill != nil || leaf.hoverColor != nil || leaf.onHover != nil
                 {
+                    leaf.onPointerHoverLocal?(x - nx, y - ny)
                     return leaf.id
                 }
                 if let stack = node as? StackNode,
@@ -1683,7 +1687,7 @@ public final class LayoutHost {
 }
 
 // Minimal stubs so primitives compile without CYoga.
-enum LeafKind: Equatable { case text, spacer, diagramHost, empty, image, textField, editor, button, toggle, slider, divider, canvas }
+enum LeafKind: Equatable { case text, spacer, diagramHost, empty, image, textField, editor, button, toggle, slider, divider, canvas, scene3D }
 
 final class LeafNode: AnyViewNode {
     let id = NodeID.generate()

@@ -830,6 +830,16 @@ struct Application::Impl
         quadRenderer.pushPolyline(meshPointScratch_.data(), count, cmd.color);
         break;
       }
+      case canvas::DrawCommandKind::SpatialTriangles: {
+        const uint32_t first = cmd.param;
+        const uint32_t count = static_cast<uint32_t>(cmd.w);
+        if (count < 3 || first + count > drawSpatialVertCount_) break;
+        quadRenderer.pushSpatialTriangles(drawSpatialVerts_.data() + first, count);
+        break;
+      }
+      case canvas::DrawCommandKind::SpatialBegin:
+        quadRenderer.pushSpatialBegin({cmd.x,cmd.y},{cmd.w,cmd.h});
+        break;
       case canvas::DrawCommandKind::Image: {
         const uint32_t texId = cmd.param;
         auto &tm = TextureManager::getInstance();
@@ -899,9 +909,11 @@ struct Application::Impl
   std::vector<canvas::DrawCommand> drawCmds_;
   std::vector<canvas::GlyphInstance> drawGlyphs_;
   std::vector<canvas::MeshVertex> drawMeshVerts_;
+  std::vector<canvas::SpatialVertex> drawSpatialVerts_;
   size_t drawCmdCount_ = 0;
   size_t drawGlyphCount_ = 0;
   size_t drawMeshVertCount_ = 0;
+  size_t drawSpatialVertCount_ = 0;
   /// Reused across Mesh commands to convert `MeshVertex` (Swift-facing POD)
   /// to `vec2` (the engine's internal type) without a fresh allocation
   /// every wedge, every frame.
@@ -923,31 +935,39 @@ struct Application::Impl
 
   void submitDrawList(const canvas::DrawCommand *cmds, size_t cmdCount,
                       const canvas::GlyphInstance *glyphs, size_t glyphCount,
-                      const canvas::MeshVertex *meshVerts, size_t meshVertCount)
+                      const canvas::MeshVertex *meshVerts, size_t meshVertCount,
+                      const canvas::SpatialVertex *spatialVerts, size_t spatialVertCount)
   {
     drawCmds_.assign(cmds, cmds + cmdCount);
     drawGlyphs_.assign(glyphs, glyphs + glyphCount);
     drawMeshVerts_.assign(meshVerts, meshVerts + meshVertCount);
+    drawSpatialVerts_.assign(spatialVerts, spatialVerts + spatialVertCount);
     drawCmdCount_ = cmdCount;
     drawGlyphCount_ = glyphCount;
     drawMeshVertCount_ = meshVertCount;
+    drawSpatialVertCount_ = spatialVertCount;
   }
 
   void ensureDrawListCapacity(size_t cmdCapacity, size_t glyphCapacity,
-                              size_t meshVertCapacity)
+                              size_t meshVertCapacity, size_t spatialVertCapacity)
   {
     if (drawCmds_.size() < cmdCapacity) drawCmds_.resize(cmdCapacity);
     if (drawGlyphs_.size() < glyphCapacity) drawGlyphs_.resize(glyphCapacity);
     if (drawMeshVerts_.size() < meshVertCapacity) {
       drawMeshVerts_.resize(meshVertCapacity);
     }
+    if (drawSpatialVerts_.size() < spatialVertCapacity) {
+      drawSpatialVerts_.resize(spatialVertCapacity);
+    }
   }
 
-  void commitDrawList(size_t cmdCount, size_t glyphCount, size_t meshVertCount)
+  void commitDrawList(size_t cmdCount, size_t glyphCount, size_t meshVertCount,
+                      size_t spatialVertCount)
   {
     drawCmdCount_ = std::min(cmdCount, drawCmds_.size());
     drawGlyphCount_ = std::min(glyphCount, drawGlyphs_.size());
     drawMeshVertCount_ = std::min(meshVertCount, drawMeshVerts_.size());
+    drawSpatialVertCount_ = std::min(spatialVertCount, drawSpatialVerts_.size());
   }
 
   bool pollInputEvent(canvas::InputEvent &out)
@@ -1073,29 +1093,36 @@ void Application::submitDrawList(const canvas::DrawCommand *cmds, size_t cmdCoun
                                  const canvas::GlyphInstance *glyphs,
                                  size_t glyphCount,
                                  const canvas::MeshVertex *meshVerts,
-                                 size_t meshVertCount)
+                                 size_t meshVertCount,
+                                 const canvas::SpatialVertex *spatialVerts,
+                                 size_t spatialVertCount)
 {
-  impl_->submitDrawList(cmds, cmdCount, glyphs, glyphCount, meshVerts, meshVertCount);
+  impl_->submitDrawList(cmds, cmdCount, glyphs, glyphCount, meshVerts, meshVertCount,
+                        spatialVerts, spatialVertCount);
 }
 
 void Application::ensureDrawListCapacity(size_t cmdCapacity,
                                          size_t glyphCapacity,
-                                         size_t meshVertCapacity)
+                                         size_t meshVertCapacity,
+                                         size_t spatialVertCapacity)
 {
-  impl_->ensureDrawListCapacity(cmdCapacity, glyphCapacity, meshVertCapacity);
+  impl_->ensureDrawListCapacity(cmdCapacity, glyphCapacity, meshVertCapacity,
+                                spatialVertCapacity);
 }
 
 canvas::DrawCommand *Application::drawCommandData() { return impl_->drawCmds_.data(); }
 canvas::GlyphInstance *Application::drawGlyphData() { return impl_->drawGlyphs_.data(); }
 canvas::MeshVertex *Application::drawMeshVertexData() { return impl_->drawMeshVerts_.data(); }
+canvas::SpatialVertex *Application::drawSpatialVertexData() { return impl_->drawSpatialVerts_.data(); }
 size_t Application::drawCommandCapacity() const { return impl_->drawCmds_.size(); }
 size_t Application::drawGlyphCapacity() const { return impl_->drawGlyphs_.size(); }
 size_t Application::drawMeshVertexCapacity() const { return impl_->drawMeshVerts_.size(); }
+size_t Application::drawSpatialVertexCapacity() const { return impl_->drawSpatialVerts_.size(); }
 
 void Application::commitDrawList(size_t cmdCount, size_t glyphCount,
-                                 size_t meshVertCount)
+                                 size_t meshVertCount, size_t spatialVertCount)
 {
-  impl_->commitDrawList(cmdCount, glyphCount, meshVertCount);
+  impl_->commitDrawList(cmdCount, glyphCount, meshVertCount, spatialVertCount);
 }
 
 bool Application::pollInputEvent(canvas::InputEvent &out)

@@ -437,6 +437,58 @@ Coordinates passed to `DrawList` are window coordinates. Prefer `polyline` for
 large connected series: it emits one line-strip command and a contiguous
 vertex range rather than one command per segment.
 
+## Spatial UI with `Scene3D`
+
+`Scene3D` is a Yoga leaf whose contents use a separate depth-tested graphics
+pipeline. Normal LavaUI views before and after it retain their draw-list order,
+and each scene clears depth only inside its own viewport.
+
+```swift
+@State private var hovered: Int?
+
+Scene3D(
+    camera: .perspective(
+        position: [0, 0, 7], target: [0, 0, 0],
+        fieldOfView: .degrees(42)
+    ),
+    height: .pt(320),
+    flexGrow: 1
+) {
+    ForEach3D(albums, id: \.id) { album in
+        Box3D(
+            id: album.id, width: 1.25, height: 1.25, depth: 0.08,
+            color: .accent
+        )
+        .position(catalogPosition(album))
+        .rotation3D(
+            angle: .degrees(hovered == album.id ? 12 : 0),
+            axis: [0, 1, 0]
+        )
+        .offset3D(z: hovered == album.id ? 0.45 : 0)
+        .scale3D(hovered == album.id ? 1.12 : 1)
+        .animation3D(.smooth(duration: 0.24))
+        .onHover3D { inside in hovered = inside ? album.id : nil }
+        .onTap3D { open(album) }
+    }
+}
+.cornerRadius(8)
+.clipped()
+```
+
+The initial predefined geometry is `Plane3D` and `Box3D`. Spatial modifiers
+include `position`, `offset3D`, uniform/vector `scale3D`, axis-angle
+`rotation3D`, `animation3D`, `onHover3D`, and `onTap3D`. Object identifiers
+must be stable: retained transform animation and hit dispatch are keyed by id.
+
+`Camera3D.perspective` accepts position, target, field of view, and near/far
+planes. Pointer picking tests the projected triangles and selects the nearest
+depth, matching visible overlap. Transform interpolation lives on the retained
+scene node, so animation frames request redraw without recomputing `body`.
+
+The first spatial slice is intentionally small: flat-color geometry is
+implemented; textured materials, lighting, shadows, and imported meshes are
+future layers on the same scene command path.
+
 ## Theme, fonts, and animation
 
 `Theme` contains semantic text colors, accent/selection colors, surfaces,

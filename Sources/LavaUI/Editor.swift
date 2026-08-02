@@ -62,25 +62,32 @@ public final class Editor: @unchecked Sendable {
 
     // ─── Phase 3 draw list ───────────────────────────────────────────────
 
-    func ensureDrawListCapacity(commands: Int, glyphs: Int, meshVertices: Int) {
-        engine.ensureDrawListCapacity(commands, glyphs, meshVertices)
+    func ensureDrawListCapacity(
+        commands: Int, glyphs: Int, meshVertices: Int, spatialVertices: Int
+    ) {
+        engine.ensureDrawListCapacity(commands, glyphs, meshVertices, spatialVertices)
     }
 
     func drawListStorage() -> (
         commands: UnsafeMutablePointer<canvas.DrawCommand>, commandCapacity: Int,
         glyphs: UnsafeMutablePointer<canvas.GlyphInstance>, glyphCapacity: Int,
-        meshVertices: UnsafeMutablePointer<canvas.MeshVertex>, meshVertexCapacity: Int
+        meshVertices: UnsafeMutablePointer<canvas.MeshVertex>, meshVertexCapacity: Int,
+        spatialVertices: UnsafeMutablePointer<canvas.SpatialVertex>, spatialVertexCapacity: Int
     ) {
         (
             engine.drawCommandData(), engine.drawCommandCapacity(),
             engine.drawGlyphData(), engine.drawGlyphCapacity(),
-            engine.drawMeshVertexData(), engine.drawMeshVertexCapacity()
+            engine.drawMeshVertexData(), engine.drawMeshVertexCapacity(),
+            engine.drawSpatialVertexData(), engine.drawSpatialVertexCapacity()
         )
     }
 
     public func submitDrawList(_ list: DrawList) {
         precondition(list.editor === self, "a DrawList belongs to its creating Editor")
-        engine.commitDrawList(list.commandCount, list.glyphCount, list.meshVertexCount)
+        engine.commitDrawList(
+            list.commandCount, list.glyphCount, list.meshVertexCount,
+            list.spatialVertexCount
+        )
     }
 
     /// Install face for draw-list text (must match UIFont used for measure).

@@ -116,21 +116,24 @@ class Engine {
   /// shapes; the renderer only looks up atlas entries / triangulates.
   void submitDrawList(const DrawCommand *cmds, size_t cmdCount,
                       const GlyphInstance *glyphs, size_t glyphCount,
-                      const MeshVertex *meshVerts, size_t meshVertCount);
+                      const MeshVertex *meshVerts, size_t meshVertCount,
+                      const SpatialVertex *spatialVerts, size_t spatialVertCount);
 
   /// C++-owned reusable frame arena. Swift may write to these pointers until
   /// the next ensure call (which may reallocate) or Engine destruction. Commit
   /// publishes only the initialized prefixes; it performs no element copy.
   void ensureDrawListCapacity(size_t cmdCapacity, size_t glyphCapacity,
-                              size_t meshVertCapacity);
+                              size_t meshVertCapacity, size_t spatialVertCapacity);
   DrawCommand *drawCommandData() CANVAS_SWIFT_UNSAFE_POINTER;
   GlyphInstance *drawGlyphData() CANVAS_SWIFT_UNSAFE_POINTER;
   MeshVertex *drawMeshVertexData() CANVAS_SWIFT_UNSAFE_POINTER;
+  SpatialVertex *drawSpatialVertexData() CANVAS_SWIFT_UNSAFE_POINTER;
   size_t drawCommandCapacity() const;
   size_t drawGlyphCapacity() const;
   size_t drawMeshVertexCapacity() const;
+  size_t drawSpatialVertexCapacity() const;
   void commitDrawList(size_t cmdCount, size_t glyphCount,
-                      size_t meshVertCount);
+                      size_t meshVertCount, size_t spatialVertCount);
 
   /// Pop one raw input event (mouse / resize). Returns false if empty.
   bool pollInputEvent(InputEvent &out);

@@ -26,6 +26,8 @@ shaders=(
   quad.frag
   polyline.vert
   polyline.frag
+  spatial.vert
+  spatial.frag
   blur.vert
   blur.frag
   compute/integration.comp

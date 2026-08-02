@@ -51,17 +51,20 @@ public:
   /// reusable buffers below and commits only the used element counts.
   void submitDrawList(const canvas::DrawCommand *cmds, size_t cmdCount,
                       const canvas::GlyphInstance *glyphs, size_t glyphCount,
-                      const canvas::MeshVertex *meshVerts, size_t meshVertCount);
+                      const canvas::MeshVertex *meshVerts, size_t meshVertCount,
+                      const canvas::SpatialVertex *spatialVerts, size_t spatialVertCount);
   void ensureDrawListCapacity(size_t cmdCapacity, size_t glyphCapacity,
-                              size_t meshVertCapacity);
+                              size_t meshVertCapacity, size_t spatialVertCapacity);
   canvas::DrawCommand *drawCommandData();
   canvas::GlyphInstance *drawGlyphData();
   canvas::MeshVertex *drawMeshVertexData();
+  canvas::SpatialVertex *drawSpatialVertexData();
   size_t drawCommandCapacity() const;
   size_t drawGlyphCapacity() const;
   size_t drawMeshVertexCapacity() const;
+  size_t drawSpatialVertexCapacity() const;
   void commitDrawList(size_t cmdCount, size_t glyphCount,
-                      size_t meshVertCount);
+                      size_t meshVertCount, size_t spatialVertCount);
   bool pollInputEvent(canvas::InputEvent &out);
 
   /// Paths from the most recent FileDrop event, pulled by index — see the
