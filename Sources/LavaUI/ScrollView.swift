@@ -76,6 +76,9 @@ final class ScrollNode: YogaBoxNode {
     var contentLength: Float = 0
 
     private var insertedLeaves: [any AnyViewNode] = []
+    /// Virtualized containers below this node, which need its offset and
+    /// height to decide what to mount. Rebuilt on every relink.
+    private(set) var lazyContent: [LazyGridNode] = []
 
     init(axis: ScrollAxis, content: any AnyViewNode) {
         self.axis = axis
@@ -145,11 +148,19 @@ final class ScrollNode: YogaBoxNode {
         let next = clamped(scrollOffset + delta)
         if next != scrollOffset {
             scrollOffset = next
-            // Paint state on the retained node — `emitNodeBody`'s ScrollNode
-            // branch reads `childOffset` fresh every emit regardless of
-            // level. `markDirty` (a full `.body` rebuild) here meant every
-            // wheel notch over a long list re-ran whatever built its rows.
-            ViewInvalidation.markNeedsRedraw()
+            if lazyContent.isEmpty {
+                // Paint state on the retained node — `emitNodeBody`'s ScrollNode
+                // branch reads `childOffset` fresh every emit regardless of
+                // level. `markDirty` (a full `.body` rebuild) here meant every
+                // wheel notch over a long list re-ran whatever built its rows.
+                ViewInvalidation.markNeedsRedraw()
+            } else {
+                // A virtualized child has to re-window before this frame is
+                // emitted, and that means mounting nodes and re-running Yoga.
+                // `.layout` is still far short of `.body`: it rebuilds a
+                // screenful of cells, not the tree.
+                ViewInvalidation.markNeedsLayout()
+            }
         }
     }
 
@@ -173,6 +184,12 @@ final class ScrollNode: YogaBoxNode {
 
     private func relink() {
         YGNodeRemoveAllChildren(yogaStorage)
+        // Adopt any virtualized container underneath: it cannot work out what
+        // is visible without this node's offset and height.
+        lazyContent = LazyGrid.nodes(in: contentNode, stopAtScroll: true)
+        for grid in lazyContent {
+            grid.scrollNode = self
+        }
         insertedLeaves = contentNode.flattenedLayoutNodes()
         for (i, leaf) in insertedLeaves.enumerated() {
             guard let y = leaf.yoga else { continue }

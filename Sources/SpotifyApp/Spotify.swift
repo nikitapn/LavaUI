@@ -399,13 +399,17 @@ struct Spotify: View {
 
     @ViewBuilder
     private func albumGrid(_ albums: [Album], size: Float) -> some View {
-        HStack(
-            width: .percent(100), padding: 6,
-            alignment: .start, wraps: true
-        ) {
-            ForEach(albums) { album in
-                spacedAlbumCard(album, size: size)
-            }
+        // Virtualized, not a wrapping HStack. A library of a few thousand
+        // albums built every card on every body pass — ~46ms for a frame that
+        // then drew in 0.2ms, because the draw list culls and the mount/layout
+        // path did not. Cell size mirrors `albumCard` (size + 12 wide,
+        // size + 93 tall) plus `spacedAlbumCard`'s 4pt of surrounding gap.
+        LazyVGrid(
+            albums,
+            cellWidth: size + 20,
+            cellHeight: size + 101
+        ) { album in
+            spacedAlbumCard(album, size: size)
         }
     }
 

@@ -1257,6 +1257,24 @@ public final class LayoutHost {
 
         YGNodeCalculateLayout(yogaRoot, w, h, YGDirectionLTR)
 
+        // Virtualized containers can only size themselves and choose a window
+        // once they have a real width, a real position, and their scroll
+        // container's height — none of which exist until Yoga has run. So they
+        // settle afterwards, and settling can change geometry (a new column
+        // count, a new content height, newly mounted cells), which needs
+        // another pass.
+        //
+        // This converges rather than oscillating: the second pass changes the
+        // window only if the first pass's own geometry change moved it, and
+        // that is a fixed point. The bound is a safety net, not the mechanism —
+        // if it is ever hit, something is genuinely thrashing and a stale
+        // window for one frame is better than a hang.
+        var settlePasses = 0
+        while settleLazyWindows(root), settlePasses < 3 {
+            YGNodeCalculateLayout(yogaRoot, w, h, YGDirectionLTR)
+            settlePasses += 1
+        }
+
         var frames: [LayoutFrame] = []
         boxes[0].collectFrames(originX: 0, originY: 0, into: &frames)
         lastFrames = frames
@@ -1264,6 +1282,16 @@ public final class LayoutHost {
         lastLayoutHeight = h
         layoutValid = true
         return frames
+    }
+
+    /// Lets every virtualized container re-window against fresh geometry.
+    /// Returns whether any of them changed something layout depends on.
+    private func settleLazyWindows(_ node: any AnyViewNode) -> Bool {
+        var changed = false
+        for grid in LazyGrid.nodes(in: node) {
+            if grid.settleWindow() { changed = true }
+        }
+        return changed
     }
 
     private func markAllMeasureLeavesDirty(_ node: any AnyViewNode) {

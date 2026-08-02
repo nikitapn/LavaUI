@@ -153,9 +153,9 @@ be rewritten to record the trade rather than forbid the choice that was made.
 
 ## Performance gaps
 
-### P1. Body and layout are O(whole tree); there is no list virtualization
+### P1. Body and layout were O(whole tree) **[fixed]**
 
-The emit path culls; the body and layout paths do not. Measured, release build,
+The emit path culls; the body and layout paths did not. Measured, release build,
 same window, clicking between views:
 
 | View | Nodes | body | layout | total frame |
@@ -164,14 +164,48 @@ same window, clicking between views:
 | Home | 171 | 4.1 ms | 0.5 ms | 5.5 ms |
 | Library (1320 albums) | 6643 | **32–34 ms** | **12–14 ms** | **45–49 ms** |
 
-So any `.body` invalidation on a large list costs ~46ms — 21fps for a single
-state change, on a tree the same frame draws in 0.2ms.
+So any `.body` invalidation on a large list cost ~46ms — 21fps for a single
+state change, on a tree the same frame drew in 0.2ms.
 
-Switching views legitimately pays that: the tree really did change. What was not
-legitimate was paying it repeatedly for a tree that did not change, which is
-what P2 and P5 were. **This entry remains open**: a virtualizing container that
-mounts only what the viewport can show is still the missing piece, and it is the
-one architectural item in this document.
+`LazyVGrid` / `LazyVStack` (`LazyGrid.swift`) close it. The container reserves
+the full scroll extent as its own height, so the scrollbar and wheel clamping
+still see the real content size, but mounts only the cells the viewport can show
+(plus two rows of overscan). Same library, same window:
+
+| | nodes | switch to library | scroll |
+| --- | ---: | ---: | ---: |
+| wrapping `HStack` | 6643 | 45–49 ms | ~1 ms (redraw) |
+| `LazyVGrid` | **253** | **2.3–3.5 ms** | ~1 ms (layout) |
+
+Three design points worth keeping:
+
+- **Fixed cell size is deliberate.** Variable heights need either a measure pass
+  over every item — the exact cost being avoided — or estimate-and-correct,
+  which makes the scrollbar jitter as estimates are replaced by truth. A fixed
+  stride makes offset→index exact and O(1), and every list these apps have
+  (cards, track rows, log lines) is uniform.
+- **Windows settle after Yoga, not before.** A container cannot pick a window
+  until it knows its own width (for the column count), its position inside the
+  scrolled content, and its scroll container's height. None exist until layout
+  has run, so `LayoutHost.calculateLayout` settles lazy windows afterwards and
+  re-runs Yoga if that changed anything, bounded to three passes. The viewport
+  height is read from the scroll node's Yoga box rather than
+  `ScrollNode.viewportLength`, which is only assigned during *emit* — using it
+  would mount an empty window on the first frame and flash a blank list.
+- **Scrolling raises `.layout`, not `.redraw`,** but only when the scroll view
+  actually contains a lazy container; ordinary scroll views keep the cheaper
+  path. `LazyGridNode` also keeps a live count so an app with no lazy content
+  never pays for the tree walk that looks for them.
+
+Verified beyond the timings: hit-testing is correct at a scroll offset (clicking
+a card 320px down the scrolled grid opened that album, not its unscrolled
+neighbour), and the end of the list renders the right partial row — 1320 albums
+at 7 columns is 188 full rows plus 4, which is what draws.
+
+Cell state does not survive scrolling: a cell leaving the window is unmounted
+and its `@State` is gone when it returns. That is standard for virtualization
+and is documented on the type, but it is a real behavioural difference from the
+eager containers.
 
 ### P2. An app with a menu got no per-node body invalidation at all **[fixed]**
 
@@ -278,18 +312,25 @@ Ordered by how hard each is to add later.
 | **Keyboard focus traversal** | Absent | `FocusManager` tracks a focused node but has no next/previous. No Tab navigation — a keyboard-only user cannot reach most controls. |
 | **Multi-window** | Single-window by construction | `FocusManager`, `ViewInvalidation`, `ScrollRouter`, `CaretBlink` are all global statics; `ViewInvalidation` documents the assumption. |
 | **Text selection outside the editor** | Absent | `Text` has no selection or copy. Selecting a track title or an error message is impossible; only `EditorView` supports it. |
-| **List virtualization** | No `LazyVStack` equivalent | See P1 — the container that would fix it does not exist yet. |
+| **Variable-height virtualization** | Fixed cell size only | `LazyVGrid`/`LazyVStack` exist (P1) but need a uniform stride. A virtualized list of wrapped log lines or chat bubbles still has no answer. |
+| **Horizontal virtualization** | Absent | `LazyVGrid` is vertical-only. Home's shelves are horizontal `ScrollView`s and stay eager — fine at ~12 albums, not at 1000. |
 
 ---
 
 ## What to do next
 
-Everything cheap is done. What remains, in order:
+Every performance item in this document is now closed. What remains:
 
-1. **A virtualizing container** (P1). The real fix for large lists and the only
-   architectural piece still missing. Nothing above blocks starting it.
-2. **Measure MAILBOX against a TraceLoom boundary drag** (D3), and either adopt
-   it or rewrite the stale comment to record why IMMEDIATE stays.
+1. **Measure MAILBOX against a TraceLoom boundary drag** (D3), and either adopt
+   it or rewrite the stale comment to record why IMMEDIATE stays. Small, and it
+   removes a live trap for the next reader.
+2. **Variable-height virtualization**, when something needs it. The fixed-stride
+   container covers every list these apps have; wrapped log lines would not fit
+   it, and that is the next real design problem rather than a tuning exercise.
 3. **Mipmaps** (P3), once something draws images well below their decode cap.
 4. The feature table above, by need. Accessibility is the one that gets harder
    the longer it waits, because it constrains the node model itself.
+
+Worth stating plainly: after this pass the framework's cost model is no longer
+dominated by anything structural. A 1320-item library builds in 2.5ms, scrolls
+in 1ms, and draws in 0.2ms. The remaining gaps are features, not scaling.
