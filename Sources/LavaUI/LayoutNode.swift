@@ -446,20 +446,34 @@ final class LeafNode: YogaBoxNode {
     /// the same trick `emitEditor` uses for the visible window.
     private func rowTexts(at indices: [Int], rows: [Range<Int>]) -> [String] {
         let text = editing.text
+        let endOffset = text.count
         var cursor = text.startIndex
         var cursorOffset = 0
         var out: [String] = []
         out.reserveCapacity(indices.count)
         for i in indices.sorted() {
             let row = rows[i]
-            if row.lowerBound > cursorOffset {
-                cursor = text.index(cursor, offsetBy: row.lowerBound - cursorOffset)
-                cursorOffset = row.lowerBound
+            // Stale visual rows (edit before the next wrap/seed) can overshoot
+            // the buffer; clamp rather than trap in `index(_:offsetBy:)`.
+            let lo = min(max(0, row.lowerBound), endOffset)
+            let hiOff = min(max(lo, row.upperBound), endOffset)
+            if lo > cursorOffset {
+                cursor = text.index(cursor, offsetBy: lo - cursorOffset, limitedBy: text.endIndex)
+                    ?? text.endIndex
+                cursorOffset = lo
+            } else if lo < cursorOffset {
+                // Sorted picks can still land before the cursor if earlier
+                // rows were clamped; re-anchor from the start.
+                cursor = text.index(text.startIndex, offsetBy: lo, limitedBy: text.endIndex)
+                    ?? text.endIndex
+                cursorOffset = lo
             }
-            let hi = text.index(cursor, offsetBy: row.upperBound - row.lowerBound)
+            let span = hiOff - lo
+            let hi = text.index(cursor, offsetBy: span, limitedBy: text.endIndex)
+                ?? text.endIndex
             out.append(String(text[cursor..<hi]))
             cursor = hi
-            cursorOffset = row.upperBound
+            cursorOffset = hiOff
         }
         return out
     }

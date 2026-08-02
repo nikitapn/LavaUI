@@ -265,6 +265,10 @@ extension LeafNode {
         // Force soft-wrap to recompute even when the box width is unchanged.
         lastMeasuredWidth = -1
         lastWrappedText = ""
+        lastLogicalRowsText = nil
+        // Immediate logical-row table so followCaret / measure do not rescan
+        // the buffer on every layout access while wrap is pending.
+        seedLogicalRows()
         markMeasureDirty()
         CaretBlink.noteEdit()
         ViewInvalidation.markDirty()
@@ -334,8 +338,11 @@ extension LeafNode {
         }
 
         if editing.text != before { binding.wrappedValue = editing.text }
-        followCaret()
+        // Refresh row cache *before* followCaret: deletion leaves visualRows
+        // nil (see TextEditingState.replace), and scroll clamping shapes the
+        // widest rows from `layout`.
         afterEdit()
+        followCaret()
         return true
     }
 }

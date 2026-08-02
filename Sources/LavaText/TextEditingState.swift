@@ -195,22 +195,31 @@ public struct TextEditingState: Equatable {
     private mutating func replace(
         _ range: Range<String.Index>, with replacement: String, record: Bool = true
     ) {
-        let start = offset(of: range.lowerBound)
         let removed = String(text[range])
         guard !(removed.isEmpty && replacement.isEmpty) else { return }
+        // UTF-8 offsets, not character offsets: this runs once per keystroke,
+        // and `offset(of:)` walks the whole prefix by grapheme. See `TextEdit`.
+        let start = utf8Offset(of: range.lowerBound)
 
         if record {
             undoStack.record(TextEdit(
                 offset: start,
                 removed: removed,
                 inserted: replacement,
-                anchorBefore: offset(of: anchor),
-                focusBefore: offset(of: focus)
+                anchorBefore: utf8Offset(of: anchor),
+                focusBefore: utf8Offset(of: focus)
             ))
         }
 
         text.replaceSubrange(range, with: replacement)
-        let caret = index(atOffset: start + replacement.count)
+        // Row ranges are character offsets into `text`. Leaving them installed
+        // after a delete (or any length-changing edit) makes every consumer of
+        // `layout` — `rowTexts`, `scrollToCaretX`, hit-testing — walk past
+        // `endIndex` and trap in `String.index(_:offsetBy:)`. Nil means
+        // `layout` falls back to a live `.logical(text)` until the view's
+        // next wrap/seed pass reinstalls a table.
+        visualRows = nil
+        let caret = index(atUTF8Offset: start + replacement.utf8.count)
         focus = caret
         anchor = caret
         desiredColumn = nil
@@ -227,8 +236,8 @@ public struct TextEditingState: Equatable {
         guard let edit = undoStack.popUndo() else { return false }
         apply(edit.inverted)
         // Restore where the user was, not just what the text was.
-        anchor = index(atOffset: edit.anchorBefore)
-        focus = index(atOffset: edit.focusBefore)
+        anchor = index(atUTF8Offset: edit.anchorBefore)
+        focus = index(atUTF8Offset: edit.focusBefore)
         return true
     }
 
@@ -242,10 +251,11 @@ public struct TextEditingState: Equatable {
     /// Applies an edit without recording it — used by undo/redo, which must
     /// not push new history while walking the existing history.
     private mutating func apply(_ edit: TextEdit) {
-        let lower = index(atOffset: edit.offset)
-        let upper = index(atOffset: edit.offset + edit.removed.count)
+        let lower = index(atUTF8Offset: edit.offset)
+        let upper = index(atUTF8Offset: edit.offset + edit.removed.utf8.count)
         text.replaceSubrange(lower..<upper, with: edit.inserted)
-        let caret = index(atOffset: edit.offset + edit.inserted.count)
+        visualRows = nil
+        let caret = index(atUTF8Offset: edit.offset + edit.inserted.utf8.count)
         focus = caret
         anchor = caret
     }
@@ -299,10 +309,16 @@ public struct TextEditingState: Equatable {
             ? text.utf8.distance(from: text.utf8.startIndex, to: focus.samePosition(in: text.utf8)!)
             : new.utf8.count
         text = new
+        // Same reason as `replace`: rows are character offsets into the old
+        // buffer and describe nothing once it is gone. The view layer usually
+        // reseeds immediately afterwards, but "usually" is not an invariant —
+        // anything that reads `layout` in between walks past `endIndex`.
+        visualRows = nil
         undoStack.clear()
-        let clamped = min(offset, new.utf8.count)
-        let byteIndex = new.utf8.index(new.utf8.startIndex, offsetBy: clamped)
-        focus = snapToCharacterBoundary(String.Index(byteIndex, within: new) ?? new.endIndex)
+        // Reads `text`, so it has to run after the assignment above. Clamping
+        // and boundary-snapping both live in `index(atUTF8Offset:)`; doing them
+        // here used to mean a full walk of the new buffer on every reload.
+        focus = index(atUTF8Offset: offset)
         anchor = focus
     }
 
@@ -332,14 +348,35 @@ public struct TextEditingState: Equatable {
         return index
     }
 
-    /// A UTF-8 offset can land inside a grapheme; a caret never should.
-    private func snapToCharacterBoundary(_ index: String.Index) -> String.Index {
-        var i = text.startIndex
-        while i < text.endIndex {
-            if i >= index { return i }
-            i = text.index(after: i)
+    /// UTF-8 offset of an index — O(1), because `String.Index` already stores
+    /// its encoded byte offset and `UTF8View.distance` is a subtraction.
+    ///
+    /// This is the whole reason the edit path and the undo history speak
+    /// bytes: the character-offset equivalent above walks the buffer. See
+    /// `TextEdit`.
+    func utf8Offset(of index: String.Index) -> Int {
+        text.utf8.distance(from: text.utf8.startIndex, to: index)
+    }
+
+    /// Index at a UTF-8 offset, clamped to the buffer and snapped **down** to
+    /// a character boundary.
+    ///
+    /// Snapping down rather than up matters for deletion: an offset landing
+    /// inside a grapheme means the caret belongs at the start of the character
+    /// containing it, not past it. The backwards walk is bounded by one
+    /// grapheme cluster — two bytes for `"\r\n"`, a couple of dozen for the
+    /// longest ZWJ emoji — and does not run at all on the ASCII path, where
+    /// every byte is already a boundary.
+    func index(atUTF8Offset offset: Int) -> String.Index {
+        let utf8 = text.utf8
+        guard offset > 0 else { return text.startIndex }
+        guard offset < utf8.count else { return text.endIndex }
+        var byteIndex = utf8.index(utf8.startIndex, offsetBy: offset)
+        while byteIndex > utf8.startIndex {
+            if let boundary = String.Index(byteIndex, within: text) { return boundary }
+            byteIndex = utf8.index(before: byteIndex)
         }
-        return text.endIndex
+        return text.startIndex
     }
 
     /// Word classification, hand-rolled on purpose: Foundation's

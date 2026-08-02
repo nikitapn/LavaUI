@@ -1,13 +1,28 @@
 import Foundation
 
-/// One reversible edit: replace a character range with new text.
+/// One reversible edit: replace a range of the buffer with new text.
 ///
-/// Offsets are **character** counts, not `String.Index` and not bytes. Indices
-/// are invalidated by the very mutation being recorded, so they cannot survive
-/// in a history; character offsets stay grapheme-correct, which byte offsets
-/// would not.
+/// Offsets are **UTF-8 byte** offsets, not `String.Index` and not characters.
+/// Indices are invalidated by the very mutation being recorded, so they cannot
+/// survive in a history — but the choice between bytes and characters is a
+/// performance one, and it is the difference between a usable editor and an
+/// unusable one on a large file.
+///
+/// A character offset costs `String.distance(from: startIndex, to:)` to
+/// produce and the same to consume: a full grapheme-break walk of everything
+/// before the edit. Recording one keystroke needs three of them (the edit
+/// position, the anchor, the focus) and restoring the caret needs a fourth, so
+/// typing at the end of a 10 MB buffer cost ~64 ms *per keypress*. A UTF-8
+/// offset is O(1) in both directions — `String.Index` stores the encoded byte
+/// offset, so producing one is a subtraction.
+///
+/// Bytes are no less grapheme-correct here, because every offset stored is
+/// produced from a real `String.Index`, which is always on a character
+/// boundary. Converting back snaps down (see `index(atUTF8Offset:)`) so a
+/// buffer edited into a different shape can never leave a caret inside a
+/// `"\r\n"` or a ZWJ sequence.
 public struct TextEdit: Equatable {
-    /// Character offset where the replacement begins.
+    /// UTF-8 offset where the replacement begins.
     public var offset: Int
     /// What used to be there — this is what makes the edit reversible.
     public var removed: String
@@ -90,7 +105,7 @@ public struct UndoStack: Equatable {
     static func coalesce(_ previous: TextEdit, _ next: TextEdit) -> TextEdit? {
         if previous.isPureInsertion, next.isPureInsertion {
             // Must continue exactly where the last one ended.
-            guard next.offset == previous.offset + previous.inserted.count else {
+            guard next.offset == previous.offset + previous.inserted.utf8.count else {
                 return nil
             }
             // Break *after* whitespace so "hello " and "world" are separate
@@ -109,7 +124,7 @@ public struct UndoStack: Equatable {
 
         if previous.isPureDeletion, next.isPureDeletion {
             // Backspace runs leftward: each deletion ends where the next begins.
-            guard next.offset + next.removed.count == previous.offset else {
+            guard next.offset + next.removed.utf8.count == previous.offset else {
                 return nil
             }
             guard let head = previous.removed.first, !head.isWhitespace else {

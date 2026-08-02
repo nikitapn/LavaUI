@@ -118,6 +118,53 @@ final class TextEditingStateTests: XCTestCase {
         XCTAssertEqual(s.text, "ab")
     }
 
+    /// Stale visual rows after a length-changing edit used to survive and make
+    /// UI code (`rowTexts` / `scrollToCaretX`) walk past `endIndex`.
+    func testReplaceInvalidatesVisualRows() {
+        var s = TextEditingState("hello world")
+        s.setVisualRows([0..<5, 6..<11])
+        XCTAssertNotNil(s.visualRows)
+
+        s.selectAll()
+        s.deleteBackward()
+        XCTAssertEqual(s.text, "")
+        XCTAssertNil(s.visualRows, "must fall back to live .logical(text)")
+        // layout still answers without trapping
+        XCTAssertEqual(s.layout.count, 1)
+        XCTAssertEqual(s.layout.rows[0], 0..<0)
+    }
+
+    func testDeleteSelectionInvalidatesVisualRowsAndLayoutFitsText() {
+        var s = TextEditingState("line one\nline two\nline three")
+        s.setVisualRows(VisualLayout.logicalRows(s.text))
+        XCTAssertEqual(s.layout.count, 3)
+
+        // Select "line two\n"
+        s.setCursor(s.index(atOffset: 9))
+        s.setCursor(s.index(atOffset: 18), extending: true)
+        s.deleteBackward()
+
+        XCTAssertNil(s.visualRows)
+        let live = s.layout
+        let end = s.text.count
+        for row in live.rows {
+            XCTAssertLessThanOrEqual(row.upperBound, end)
+            XCTAssertGreaterThanOrEqual(row.lowerBound, 0)
+        }
+    }
+
+    func testUndoAlsoInvalidatesVisualRows() {
+        var s = TextEditingState("abc")
+        s.setVisualRows([0..<3])
+        s.moveToEnd()
+        s.insert("d")
+        XCTAssertNil(s.visualRows)
+        s.setVisualRows([0..<4])
+        XCTAssertTrue(s.undo())
+        XCTAssertNil(s.visualRows)
+        XCTAssertEqual(s.text, "abc")
+    }
+
     // MARK: Word movement
 
     func testWordRightStopsAtWordEnds() {
