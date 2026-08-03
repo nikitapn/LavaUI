@@ -5,6 +5,7 @@
 //
 // Fixed 32-byte stride for a simple pointer+count boundary.
 
+#include <cstddef>
 #include <cstdint>
 
 namespace canvas {
@@ -139,6 +140,25 @@ struct InputEvent {
   /// GLFW modifier bitfield. Only populated for MouseDown/MouseUp — Scroll
   /// already repurposes `button` for this, and Key carries it in `y`.
   int32_t mods = 0;
+};
+
+/// One frame's worth of drawing: the command stream plus the payload arrays
+/// its commands index into (Text names a glyph range, Mesh a vertex range).
+///
+/// A **view**, not an owner. The storage belongs to whoever filled it and only
+/// has to outlive the `RenderWindow::render` call — which is what lets the
+/// producer keep a reusable arena and hand the renderer a prefix of it without
+/// copying, and what would let the same struct describe a mapped region of
+/// shared memory written by another process.
+struct DrawList {
+  const DrawCommand   *commands           = nullptr;
+  size_t               commandCount       = 0;
+  const GlyphInstance *glyphs             = nullptr;
+  size_t               glyphCount         = 0;
+  const MeshVertex    *meshVertices       = nullptr;
+  size_t               meshVertexCount    = 0;
+  const SpatialVertex *spatialVertices    = nullptr;
+  size_t               spatialVertexCount = 0;
 };
 
 } // namespace canvas

@@ -33,6 +33,7 @@
 #include "render/shaders.hpp"
 #include "render/render_device.hpp"
 #include "render/render_window.hpp"
+#include "render/text_renderer.hpp"
 #include "render/texture_manager.hpp"
 #include "window/window_platform.hpp"
 
@@ -1315,6 +1316,11 @@ void RenderDevice::cleanUp()
   }
 #endif
 
+  if (text_) {
+    text_->cleanUp();
+    text_.reset();
+  }
+
   if (commandPool_ != VK_NULL_HANDLE) {
     vkDestroyCommandPool(device_, commandPool_, nullptr);
     commandPool_ = VK_NULL_HANDLE;
@@ -1653,6 +1659,7 @@ void RenderDevice::init(const char *applicationName, bool presentCapable)
 
   createCommandPool();
   createRenderPass();
+  text_ = std::make_unique<TextRenderer>(*this);
   createShadowResources();
   createShadowRenderPass();
   createShadowFramebuffer();
@@ -1661,10 +1668,34 @@ void RenderDevice::init(const char *applicationName, bool presentCapable)
 #endif
 }
 
+TextRenderer &RenderDevice::textRenderer()
+{
+  assert(text_ && "textRenderer() before init() / after cleanUp()");
+  return *text_;
+}
+
+void RenderDevice::syncGlyphAtlas()
+{
+  if (!text_) return;
+  // Replacing the image is only safe once nothing can still sample the old
+  // one — and "nothing" spans every window, not just the one about to draw.
+  if (text_->atlasNeedsGrow()) {
+    waitForAllFramesInFlight();
+  }
+  if (text_->growAtlasIfNeeded()) {
+    for (RenderWindow *w : windows_) {
+      w->setGlyphAtlas(text_->atlasView(), text_->atlasSampler());
+    }
+  }
+}
+
 void RenderDevice::registerWindow(RenderWindow *window)
 {
   if (!window) return;
   windows_.push_back(window);
+  // A window opened after the atlas already has content must not start out
+  // bound to QuadRenderer's 1x1 white placeholder.
+  if (text_) window->setGlyphAtlas(text_->atlasView(), text_->atlasSampler());
 }
 
 void RenderDevice::unregisterWindow(RenderWindow *window)

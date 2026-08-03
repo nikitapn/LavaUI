@@ -56,9 +56,6 @@ struct Application::Impl
   /// Owned by us, not by RenderWindow: the surface is the renderer's business,
   /// the GLFW window is the platform's.
   GLFWwindow      *glfwWindow = nullptr;
-  TextRenderer     textRenderer;
-  QuadRenderer     quadRenderer;
-  BlurPass         blurPass;
 
 
   Timer treeTimer;
@@ -101,9 +98,6 @@ struct Application::Impl
   Impl(int w, int h)
     : width{static_cast<float>(w)}
     , height{static_cast<float>(h)}
-    , textRenderer(device)
-    , quadRenderer(device)
-    , blurPass(device)
     {
 
     }
@@ -167,25 +161,18 @@ struct Application::Impl
     TextureManager::getInstance().initialize(device);
     std::cout << "TextureManager initialized.\n";
 
-    textRenderer.init();
+    device.textRenderer().init();
     // No default face here — Swift owns font policy (FontStore) and calls
     // loadFont(path, size) after open so measure and draw use the same choice.
     std::cout << "Text renderer initialized (font pending from Swift).\n";
 
-    // Ordered 2D renderer: replays the draw list in index order across its quad
-    // and line-strip pipelines, so paint order is emission order rather than
-    // the old lines < geometry < text z-split.
-    quadRenderer.init();
-    // Glyphs and shapes share one descriptor set, so scissor is the only
-    // thing that can break a batch.
-    quadRenderer.setAtlas(textRenderer.atlasView(), textRenderer.atlasSampler());
-    std::cout << "Quad renderer initialized.\n";
-
-    blurPass.init();
-    // Needs BlurPass's scene render pass, hence after its init rather than
-    // inside quadRenderer.init().
-    quadRenderer.createSceneTargetPipeline(blurPass.sceneRenderPass());
-    std::cout << "Blur pass initialized.\n";
+    // The window owns its renderers (quads + blur); this is where they get
+    // their pipelines. Glyphs and shapes share one descriptor set, so scissor
+    // is the only thing that can break a batch.
+    window->initRenderers();
+    window->setGlyphAtlas(device.textRenderer().atlasView(),
+                          device.textRenderer().atlasSampler());
+    std::cout << "Window renderers initialized.\n";
 
     screenProjection_ = mat4{ // column-major, top-left origin, y-down
       2.0f / ew, 0.0f, 0.0f, 0.0f,
@@ -491,7 +478,7 @@ struct Application::Impl
     viewZoom_ = zoom > 0.f ? zoom : 1.f;
     viewPanX_ = panX;
     viewPanY_ = panY;
-    quadRenderer.setViewTransform(viewZoom_, viewPanX_, viewPanY_);
+    window->setViewTransform(viewZoom_, viewPanX_, viewPanY_);
   }
 
   void bridgeTextInput(const std::string &utf8)
@@ -622,117 +609,10 @@ struct Application::Impl
         fpsTimer = 0.0f;
       }
 
-      // Wait for *this* frame slot only (2-in-flight). The other slot may
-      // still be on the GPU while we fill host-visible buffers for this one.
-      window->waitForInFlightFrame();
-
-      // Atlas is shared — wait every slot before replacing the image.
-      if (textRenderer.atlasNeedsGrow()) {
-        device.waitForAllFramesInFlight();
-      }
-      if (textRenderer.growAtlasIfNeeded()) {
-        quadRenderer.setAtlas(textRenderer.atlasView(),
-                              textRenderer.atlasSampler());
-      }
-      const auto ext = window->getExtent();
-      // Each boundary is a point where the GPU has to stop drawing the frame
-      // and do something else. Segment i is drawn, boundaries[i] runs, then
-      // segment i+1 — whose first quad is usually the composite of whatever the
-      // boundary produced. (Backdrop compositing must land in MSAA, not just the
-      // resolve, or the next pass's resolve wipes it.)
-      // Sizing has to happen *before* replay, not after: replay bakes the
-      // composite quads' UVs, and those depend on the allocation. Reallocating
-      // also waits on every frame in flight, so it cannot happen mid-recording
-      // either. Hence a cheap pre-scan for the radii.
-      //
-      // The *finest* radius drives the allocation, since that is the one needing
-      // the most resolution; wider blurs then take a sub-region at their own
-      // coarser grid rather than forcing the fine one down to theirs.
-      float finestRadius = BlurPass::kMaxRadius;
-      bool anyBlur = false;
-      for (size_t cmdIndex = 0; cmdIndex < drawCmdCount_; ++cmdIndex) {
-        const auto &cmd = drawCmds_[cmdIndex];
-        const auto kind = static_cast<canvas::DrawCommandKind>(cmd.kind);
-        if (kind != canvas::DrawCommandKind::BeginBackdropBlur &&
-            kind != canvas::DrawCommandKind::BeginContentBlur) {
-          continue;
-        }
-        anyBlur = true;
-        finestRadius = std::min(finestRadius, cmd.aux > 0.f ? cmd.aux : 8.f);
-      }
-      if (anyBlur) {
-        blurPass.ensureSize(ext.width, ext.height, finestRadius);
-      }
-
-      std::vector<Boundary> boundaries;
-      replayDrawListUnified(static_cast<float>(ext.width),
-                            static_cast<float>(ext.height), boundaries);
-
-      window->render(
-          // Shadow pass kept only because renderWithShadows is Vulkan's sole
-          // render entry point; nothing 3D draws into it any more.
-          [&](VkCommandBuffer) {},
-          [&](VkCommandBuffer commandBuffer, u32 /*imageIndex*/) {
-            const auto extent = window->getExtent();
-
-            // Always open the clear pass so an empty first segment still
-            // clears the framebuffer before a leading blur.
-            window->beginMainRenderPass(commandBuffer, /*clear=*/true);
-            quadRenderer.drawSegment(commandBuffer, 0);
-
-            uint32_t segment = 0;
-            for (const auto &b : boundaries) {
-              ++segment;
-              if (!blurPass.ready() || !blurPass.sceneReady()) {
-                // No blur resources: draw the segment unblurred rather than
-                // half-executing a boundary and leaving passes unbalanced.
-                quadRenderer.drawSegment(commandBuffer, segment);
-                continue;
-              }
-
-              switch (b.kind) {
-              case Boundary::Kind::Backdrop:
-                // The frame so far *is* the source, so it has to be resolved
-                // before it can be read.
-                window->endMainRenderPass(commandBuffer);
-                blurPass.captureAndBlur(
-                  commandBuffer, window->resolveImage(),
-                  VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, b.radius);
-                quadRenderer.setBlurResultView(blurPass.resultView(),
-                                               blurPass.sampler());
-                window->beginMainRenderPass(commandBuffer, /*clear=*/false);
-                quadRenderer.drawSegment(commandBuffer, segment);
-                break;
-
-              case Boundary::Kind::ContentBegin:
-                // The subtree is the source, so it is drawn on its own into a
-                // cleared target rather than on top of the frame.
-                window->endMainRenderPass(commandBuffer);
-                blurPass.beginSceneCapture(commandBuffer);
-                quadRenderer.drawSegment(commandBuffer, segment,
-                                         /*intoSceneTarget=*/true);
-                break;
-
-              case Boundary::Kind::ContentEnd:
-                blurPass.endSceneCapture(commandBuffer);
-                blurPass.captureAndBlur(
-                  commandBuffer, blurPass.sceneImage(),
-                  VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, b.radius);
-                quadRenderer.setBlurResultView(blurPass.resultView(),
-                                               blurPass.sampler());
-                window->beginMainRenderPass(commandBuffer, /*clear=*/false);
-                quadRenderer.drawSegment(commandBuffer, segment);
-                break;
-              }
-            }
-
-            window->endMainRenderPass(commandBuffer);
-
-            // Full-window scissor restored for anything that might follow
-            // (present blit path does not need it, but keep consistent).
-            VkRect2D fullScissor{.offset = {0, 0}, .extent = extent};
-            vkCmdSetScissor(commandBuffer, 0, 1, &fullScissor);
-          });
+      // Everything from here to the swapchain belongs to the window: replay,
+      // blur segmentation, submit, present. Application's remaining job is to
+      // own the arena those commands were written into.
+      window->render(currentDrawList());
 
       return true;
     } catch (std::exception &ex) {
@@ -741,198 +621,19 @@ struct Application::Impl
     }
   }
 
-  /// A point where the frame's recording has to be interrupted.
-  ///
-  /// `boundaries[i]` sits between segment i and segment i+1. Only the radius
-  /// travels with it — the rect is already baked into the composite quad that
-  /// opens the following segment.
-  struct Boundary {
-    enum class Kind { Backdrop, ContentBegin, ContentEnd };
-    Kind kind = Kind::Backdrop;
-    float radius = 8.f;
-  };
-
-  /// Quad that samples the blur result over `x,y,w,h`.
-  ///
-  /// UVs are the rect's own window position over the viewport, which makes the
-  /// interpolated coordinate at any pixel equal that pixel's position — so the
-  /// blur image lines up one-to-one with the frame whatever the rect is. Scaled
-  /// by the fraction of the image this radius occupies, since each blur gets its
-  /// own resolution out of one allocation.
-  void pushBlurComposite(float x, float y, float w, float h, float viewW,
-                         float viewH, float radius)
+  /// A view over the arena Swift last committed into.
+  canvas::DrawList currentDrawList() const
   {
-    if (w <= 0.f || h <= 0.f || viewW <= 0.f || viewH <= 0.f) return;
-    const vec2 uv = blurPass.uvScaleFor(radius);
-    quadRenderer.pushBlurResultImage(
-      {x, y}, {w, h},
-      {x / viewW * uv.x, y / viewH * uv.y},
-      {(x + w) / viewW * uv.x, (y + h) / viewH * uv.y}, 0xffffffffu);
-  }
-
-  /// Phase 3.5 — replays the draw list through one ordered batch stream in
-  /// *index order*, switching specialized pipelines without changing paint order.
-  ///
-  /// Blur commands close the current segment and record a boundary; the GPU work
-  /// between segments happens in repaint's mainCallback.
-  void replayDrawListUnified(float viewW, float viewH,
-                             std::vector<Boundary> &outBoundaries)
-  {
-    outBoundaries.clear();
-    // Rect + radius of each open content-blur scope, so End knows what region
-    // to composite. A stack even though DrawList forbids nesting today, because
-    // an unbalanced End must not pop something that was never pushed.
-    std::vector<canvas::DrawCommand> contentScopes;
-    // Must match the slot waitForInFlightFrame() just freed / submit will use.
-    quadRenderer.begin({viewW, viewH}, window->currentFrameSlot());
-    for (size_t cmdIndex = 0; cmdIndex < drawCmdCount_; ++cmdIndex) {
-      const auto &cmd = drawCmds_[cmdIndex];
-      switch (static_cast<canvas::DrawCommandKind>(cmd.kind)) {
-      case canvas::DrawCommandKind::Rect:
-        quadRenderer.pushBox({cmd.x, cmd.y}, {cmd.w, cmd.h}, cmd.color, 0.f);
-        break;
-      case canvas::DrawCommandKind::RoundedRect:
-        quadRenderer.pushBox({cmd.x, cmd.y}, {cmd.w, cmd.h}, cmd.color, cmd.aux);
-        break;
-      case canvas::DrawCommandKind::Circle:
-        quadRenderer.pushCircle({cmd.x, cmd.y}, cmd.aux, cmd.color);
-        break;
-      case canvas::DrawCommandKind::Line:
-        // x,y = p0 and w,h = p1 (see draw_command.hpp). aux carries stroke
-        // width when the emitter sets it; 1.5px is the wire default.
-        quadRenderer.pushLine({cmd.x, cmd.y}, {cmd.w, cmd.h},
-                              cmd.aux > 0.f ? cmd.aux : 1.5f, cmd.color);
-        break;
-      case canvas::DrawCommandKind::PushClip:
-        quadRenderer.pushScissor({cmd.x, cmd.y}, {cmd.w, cmd.h});
-        break;
-      case canvas::DrawCommandKind::PopClip:
-        quadRenderer.popScissor();
-        break;
-      case canvas::DrawCommandKind::Text: {
-        // Swift shaped this run and positioned every glyph; all the renderer
-        // does is resolve glyph ids to atlas rects. No shaping here means a
-        // drawn run cannot drift from the run that was measured for layout.
-        const uint32_t first = cmd.param;
-        const uint32_t count = static_cast<uint32_t>(cmd.w);
-        for (uint32_t g = 0; g < count; ++g) {
-          const size_t idx = first + g;
-          if (idx >= drawGlyphCount_) break;
-          const auto &gi = drawGlyphs_[idx];
-          TextRenderer::GlyphQuad q;
-          if (!textRenderer.glyphQuad(gi.fontId, gi.glyphId, q)) continue;
-          if (q.size.x <= 0.f || q.size.y <= 0.f) continue;  // e.g. space
-          quadRenderer.pushGlyph({gi.x + q.bearing.x, gi.y - q.bearing.y},
-                                 q.size, q.uv0, q.uv1, cmd.color);
-        }
-        break;
-      }
-      case canvas::DrawCommandKind::Mesh: {
-        // Swift laid out every vertex (fan pivot, or inner/outer ring pairs);
-        // the renderer only converts and triangulates. See draw_command.hpp.
-        const uint32_t first = cmd.param;
-        const uint32_t count = static_cast<uint32_t>(cmd.w);
-        if (first + count > drawMeshVertCount_) break;
-        meshPointScratch_.clear();
-        meshPointScratch_.reserve(count);
-        for (uint32_t i = 0; i < count; ++i) {
-          const auto &mv = drawMeshVerts_[first + i];
-          meshPointScratch_.push_back({mv.x, mv.y});
-        }
-        quadRenderer.pushMesh(meshPointScratch_.data(), count, cmd.color,
-                              cmd.aux > 0.f);
-        break;
-      }
-      case canvas::DrawCommandKind::Polyline: {
-        const uint32_t first = cmd.param;
-        const uint32_t count = static_cast<uint32_t>(cmd.w);
-        if (count < 2 || first + count > drawMeshVertCount_) break;
-        meshPointScratch_.clear();
-        meshPointScratch_.reserve(count);
-        for (uint32_t i = 0; i < count; ++i) {
-          const auto &mv = drawMeshVerts_[first + i];
-          meshPointScratch_.push_back({mv.x, mv.y});
-        }
-        quadRenderer.pushPolyline(meshPointScratch_.data(), count, cmd.color);
-        break;
-      }
-      case canvas::DrawCommandKind::SpatialTriangles: {
-        const uint32_t first = cmd.param;
-        const uint32_t count = static_cast<uint32_t>(cmd.w);
-        if (count < 3 || first + count > drawSpatialVertCount_) break;
-        VkImageView texture = VK_NULL_HANDLE;
-        vec2 uv0{0.f,0.f}, uv1{1.f,1.f};
-        if (cmd.x >= 1.f) {
-          auto &tm = TextureManager::getInstance();
-          const auto id = static_cast<uint32_t>(cmd.x);
-          texture = tm.getTextureView(id);
-          tm.getTextureUV(id, uv0, uv1);
-        }
-        quadRenderer.pushSpatialTriangles(drawSpatialVerts_.data() + first, count,
-                                          texture, uv0, uv1);
-        break;
-      }
-      case canvas::DrawCommandKind::SpatialBegin:
-        quadRenderer.pushSpatialBegin({cmd.x,cmd.y},{cmd.w,cmd.h});
-        break;
-      case canvas::DrawCommandKind::Image: {
-        const uint32_t texId = cmd.param;
-        auto &tm = TextureManager::getInstance();
-        VkImageView view = tm.getTextureView(texId);
-        if (view == VK_NULL_HANDLE) break;
-        // UVs from the manager, not [0,1]: an atlased image is a cell inside a
-        // shared page, and sampling the whole page would draw the neighbours.
-        vec2 uv0, uv1;
-        tm.getTextureUV(texId, uv0, uv1);
-        quadRenderer.pushImage({cmd.x, cmd.y}, {cmd.w, cmd.h},
-                               uv0, uv1, cmd.color, view);
-        break;
-      }
-      case canvas::DrawCommandKind::BeginBackdropBlur: {
-        // Split so GPU can end pass → blur → continue. Next segment opens with
-        // a full-frame-UV composite of the glass rect (bound at draw time).
-        quadRenderer.closeSegment();
-        const float radius = cmd.aux > 0.f ? cmd.aux : 8.f;
-        outBoundaries.push_back({Boundary::Kind::Backdrop, radius});
-        pushBlurComposite(cmd.x, cmd.y, cmd.w, cmd.h, viewW, viewH, radius);
-        break;
-      }
-      case canvas::DrawCommandKind::EndBackdropBlur:
-        // Bookkeeping / future nesting — no GPU work.
-        break;
-
-      case canvas::DrawCommandKind::BeginContentBlur: {
-        // The subtree lands in its own segment, drawn into the offscreen target
-        // rather than the frame, so nothing is composited here.
-        quadRenderer.closeSegment();
-        outBoundaries.push_back(
-          {Boundary::Kind::ContentBegin, cmd.aux > 0.f ? cmd.aux : 8.f});
-        contentScopes.push_back(cmd);
-        break;
-      }
-      case canvas::DrawCommandKind::EndContentBlur: {
-        if (contentScopes.empty()) break;
-        const canvas::DrawCommand open = contentScopes.back();
-        contentScopes.pop_back();
-        quadRenderer.closeSegment();
-        const float radius = open.aux > 0.f ? open.aux : 8.f;
-        outBoundaries.push_back({Boundary::Kind::ContentEnd, radius});
-
-        // Grown by three sigma on every side: a blurred view's edge fades
-        // *outward*, and clipping the composite to the layout rect would slice
-        // that falloff off square, which is the one artefact that makes a blur
-        // read as a bug rather than as softness.
-        const float pad = std::ceil(radius * 3.f);
-        const float x0 = std::max(0.f, open.x - pad);
-        const float y0 = std::max(0.f, open.y - pad);
-        const float x1 = std::min(viewW, open.x + open.w + pad);
-        const float y1 = std::min(viewH, open.y + open.h + pad);
-        pushBlurComposite(x0, y0, x1 - x0, y1 - y0, viewW, viewH, radius);
-        break;
-      }
-      }
-    }
-    quadRenderer.end();
+    return canvas::DrawList{
+      .commands           = drawCmds_.data(),
+      .commandCount       = drawCmdCount_,
+      .glyphs             = drawGlyphs_.data(),
+      .glyphCount         = drawGlyphCount_,
+      .meshVertices       = drawMeshVerts_.data(),
+      .meshVertexCount    = drawMeshVertCount_,
+      .spatialVertices    = drawSpatialVerts_.data(),
+      .spatialVertexCount = drawSpatialVertCount_,
+    };
   }
 
   void readPixels(uint8_t *dst, size_t dstSize)
@@ -952,7 +653,6 @@ struct Application::Impl
   /// Reused across Mesh commands to convert `MeshVertex` (Swift-facing POD)
   /// to `vec2` (the engine's internal type) without a fresh allocation
   /// every wedge, every frame.
-  std::vector<vec2> meshPointScratch_;
   // GLFW callbacks (render thread, outside window mutex) vs Swift poll (under
   // window mutex) — protect the queue so Resize/Key/Mouse are not lost.
   bool pointerDown_ = false;  // gates MouseMove queueing
@@ -1047,12 +747,12 @@ struct Application::Impl
 
   int registerFont(const std::string &path, float pixelSize)
   {
-    return textRenderer.registerFont(path, pixelSize);
+    return device.textRenderer().registerFont(path, pixelSize);
   }
 
   canvas::VoidResult loadFont(const std::string &path, float pixelSize)
   {
-    return textRenderer.loadFont(path, static_cast<int>(pixelSize));
+    return device.textRenderer().loadFont(path, static_cast<int>(pixelSize));
   }
 
   int loadTexture(const std::string &path)
@@ -1089,9 +789,6 @@ struct Application::Impl
 
   void shutdown()
   {
-    blurPass.cleanUp();
-    quadRenderer.cleanUp();
-    textRenderer.cleanUp();
     TextureManager::getInstance().cleanUp();
     // Windows before the device: they hold attachments and sync objects made
     // from resources cleanUp is about to destroy, and the device asserts on

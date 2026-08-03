@@ -2,6 +2,7 @@
 
 #include <iostream>
 #include <stdexcept>
+#include <memory>
 #include <vector>
 
 #include <boost/stacktrace.hpp>
@@ -32,6 +33,7 @@ extern bool g_ValidationFromResult;
   }
 
 class Shaders;
+class TextRenderer;
 
 namespace vk {
 
@@ -94,6 +96,11 @@ class RenderDevice
   /// Live only during `init`: the throwaway surface present support is tested
   /// against, since no real window exists yet. See `init`.
   VkSurfaceKHR probeSurface_ = VK_NULL_HANDLE;
+
+  /// The glyph atlas and font faces, shared by every window. This is the
+  /// cache multi-window exists to reuse: a second window drawing the same
+  /// text rasterizes nothing new.
+  std::unique_ptr<TextRenderer> text_;
 
   /// Every open window, so device-wide questions ("is anything still using
   /// this?", "wait for all GPU work") can be answered without a window having
@@ -329,6 +336,19 @@ class RenderDevice
 
   auto     getMSAASamples() const noexcept { return msaaSamples_; }
   Shaders &getShaders();
+
+  /// Shared glyph atlas and font registry. Valid between `init` and `cleanUp`.
+  TextRenderer &textRenderer();
+
+  /// Grows the glyph atlas if the frame about to be recorded needs more room,
+  /// and rebinds it in every window.
+  ///
+  /// Both halves have to be device-wide. Growing replaces the atlas image, so
+  /// it must wait on every window's frames, not just the one about to draw —
+  /// another window's submitted command buffer samples the same image. And the
+  /// descriptor each window holds points at the old view, so every one of them
+  /// needs rebinding or it samples freed memory.
+  void syncGlyphAtlas();
 
   /// Depth format the render passes were built with. Windows need it to make
   /// a matching attachment.

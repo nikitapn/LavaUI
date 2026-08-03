@@ -8,6 +8,9 @@
 
 #include "vk_mem_alloc.h"
 
+#include "render/blur_pass.hpp"
+#include "render/draw_command.hpp"
+#include "render/quad_renderer.hpp"
 #include "util/types.hpp"
 
 struct GLFWwindow;
@@ -53,18 +56,33 @@ class RenderWindow {
   RenderWindow(const RenderWindow &)            = delete;
   RenderWindow &operator=(const RenderWindow &) = delete;
 
+  /// One-time setup of the renderers this window owns. Separate from the
+  /// constructor because it is the expensive half — pipelines, descriptor
+  /// pools, the blur render pass — and because a caller may want the window
+  /// (and so its surface and size) before paying for it.
+  void initRenderers();
+
   // ─── Frame ───────────────────────────────────────────────────────────────
 
-  /// Records shadow + caller-owned main content, then presents (windowed) or
-  /// copies out (offscreen).
+  /// Replays `list` into this window's batch stream and presents the result.
   ///
-  /// `mainCallback` owns begin/end of the main UI render pass(es) so it can
-  /// interrupt for backdrop blur (end → capture/blur → begin LOAD → continue).
-  void render(std::function<void(VkCommandBuffer)>      shadowCallback,
-              std::function<void(VkCommandBuffer, u32)> mainCallback);
+  /// Everything between here and the swapchain belongs to the window: the
+  /// vertex arena for this frame slot, the blur scratch targets, the segment
+  /// boundaries a backdrop blur splits the frame into. The caller supplies
+  /// commands and nothing else, which is what makes a second window a second
+  /// `render` call rather than a second renderer.
+  ///
+  /// `list` only has to stay alive for the duration of the call.
+  void render(const canvas::DrawList &list);
 
-  void beginMainRenderPass(VkCommandBuffer commandBuffer, bool clear);
-  void endMainRenderPass(VkCommandBuffer commandBuffer);
+  /// Rebinds the glyph atlas this window's batches sample. The atlas belongs
+  /// to the shared `TextRenderer`, so growing it invalidates the binding in
+  /// *every* window and each has to be told.
+  void setGlyphAtlas(VkImageView view, VkSampler sampler);
+
+  /// Whole-window camera applied at draw time (layout pixels → screen).
+  /// Per window: two views of the same document can sit at different zooms.
+  void setViewTransform(float zoom, float panX, float panY);
 
   /// Block until *this* slot is free (the GPU finished its last use). With 2
   /// frames in flight this does not wait on the other slot, so the CPU can
@@ -142,6 +160,46 @@ class RenderWindow {
                   int maxSide = 0, int *outW = nullptr, int *outH = nullptr);
 
  private:
+  /// A point where the frame's recording has to be interrupted.
+  ///
+  /// `boundaries[i]` sits between segment i and segment i+1. Only the radius
+  /// travels with it — the rect is already baked into the composite quad that
+  /// opens the following segment.
+  struct Boundary {
+    enum class Kind { Backdrop, ContentBegin, ContentEnd };
+    Kind  kind   = Kind::Backdrop;
+    float radius = 8.f;
+  };
+
+  /// Records shadow + caller-owned main content, then presents (windowed) or
+  /// copies out (offscreen).
+  ///
+  /// `mainCallback` owns begin/end of the main UI render pass(es) so it can
+  /// interrupt for backdrop blur (end → capture/blur → begin LOAD → continue).
+  void submitFrame(std::function<void(VkCommandBuffer)>      shadowCallback,
+                   std::function<void(VkCommandBuffer, u32)> mainCallback);
+
+  void beginMainRenderPass(VkCommandBuffer commandBuffer, bool clear);
+  void endMainRenderPass(VkCommandBuffer commandBuffer);
+
+  /// Replays the draw list into one ordered batch stream in *index order*,
+  /// switching specialized pipelines without changing paint order.
+  ///
+  /// Blur commands close the current segment and record a boundary; the GPU
+  /// work between segments happens in `render`'s main callback.
+  void replayDrawList(const canvas::DrawList &list, float viewW, float viewH,
+                      std::vector<Boundary> &outBoundaries);
+
+  /// Quad that samples the blur result over `x,y,w,h`.
+  ///
+  /// UVs are the rect's own window position over the viewport, which makes the
+  /// interpolated coordinate at any pixel equal that pixel's position — so the
+  /// blur image lines up one-to-one with the frame whatever the rect is.
+  /// Scaled by the fraction of the image this radius occupies, since each blur
+  /// gets its own resolution out of one allocation.
+  void pushBlurComposite(float x, float y, float w, float h, float viewW,
+                         float viewH, float radius);
+
   void createWindowSurface();
   void createSwapchain();
   void cleanupSwapchain();
@@ -159,6 +217,23 @@ class RenderWindow {
   void destroySizedResources();
 
   RenderDevice &dev_;
+
+  /// The two renderers that write into this window's attachments.
+  ///
+  /// Per window rather than shared, because each holds a frame's worth of
+  /// state that is only meaningful against one target: `QuadRenderer` a
+  /// host-visible vertex arena per frame slot and the batch list built from
+  /// this window's draw list, `BlurPass` scratch images sized to this
+  /// window's extent. Their *pipelines* are window-independent — they compile
+  /// against the device's render passes — and could be hoisted to the device
+  /// later if a compositor with many surfaces makes the duplication matter.
+  QuadRenderer quads_;
+  BlurPass     blur_;
+  bool         renderersReady_ = false;
+
+  /// Reused across Mesh/Polyline commands so replaying a frame full of charts
+  /// does not allocate per command.
+  std::vector<vec2> meshPointScratch_;
 
   bool        windowed_ = false;
   GLFWwindow *window_   = nullptr;
