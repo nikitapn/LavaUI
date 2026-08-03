@@ -1130,6 +1130,46 @@ void RenderWindow::pushBlurComposite(float x, float y, float w, float h,
     {(x + w) / viewW * uv.x, (y + h) / viewH * uv.y}, 0xffffffffu);
 }
 
+namespace {
+
+/// Resolves a command's `(param, w)` side-buffer range against the array it
+/// indexes. False means the command is malformed and must be dropped.
+///
+/// Deliberately paranoid about two things that cannot happen while the
+/// producer is LavaUI in this process, and become reachable the moment a draw
+/// list is authored somewhere the renderer does not control:
+///
+///   - `first + count` evaluated in 32 bits wraps, so a large `first` with a
+///     small `count` passes a plain `first + count > size` test and then
+///     indexes far outside the array. Compared in 64 bits here.
+///   - `w` is a float. Converting one that is negative, NaN, or larger than
+///     `UINT32_MAX` to an unsigned integer is undefined behaviour, not a big
+///     number — so the value is range-checked *before* the cast. NaN fails
+///     every comparison, which is exactly the answer wanted.
+///
+/// Uniform across every side-buffer command on purpose: "is this range
+/// valid" should have one answer and one implementation, not a slightly
+/// different hand-rolled test per case.
+bool sideBufferRange(const canvas::DrawCommand &cmd, size_t available,
+                     uint32_t minCount, uint32_t &first, uint32_t &count)
+{
+  if (!(cmd.w >= static_cast<float>(minCount))) return false;
+  if (!(cmd.w <= static_cast<float>(UINT32_MAX))) return false;
+  first = cmd.param;
+  count = static_cast<uint32_t>(cmd.w);
+  return static_cast<uint64_t>(first) + count <= available;
+}
+
+/// A texture id carried in a float field, with the same cast guard.
+/// Returns 0 — never a valid id — for anything out of range.
+uint32_t textureIdFromFloat(float v)
+{
+  if (!(v >= 1.f) || !(v <= static_cast<float>(UINT32_MAX))) return 0;
+  return static_cast<uint32_t>(v);
+}
+
+} // namespace
+
 void RenderWindow::replayDrawList(const canvas::DrawList &list, float viewW,
                                   float viewH,
                                   std::vector<Boundary> &outBoundaries)
@@ -1170,12 +1210,10 @@ void RenderWindow::replayDrawList(const canvas::DrawList &list, float viewW,
       // The producer shaped this run and positioned every glyph; all the
       // renderer does is resolve glyph ids to atlas rects. No shaping here
       // means a drawn run cannot drift from the run measured for layout.
-      const uint32_t first = cmd.param;
-      const uint32_t count = static_cast<uint32_t>(cmd.w);
+      uint32_t first = 0, count = 0;
+      if (!sideBufferRange(cmd, list.glyphCount, 0, first, count)) break;
       for (uint32_t g = 0; g < count; ++g) {
-        const size_t idx = first + g;
-        if (idx >= list.glyphCount) break;
-        const auto &gi = list.glyphs[idx];
+        const auto &gi = list.glyphs[first + g];
         TextRenderer::GlyphQuad q;
         if (!dev_.textRenderer().glyphQuad(gi.fontId, gi.glyphId, q)) continue;
         if (q.size.x <= 0.f || q.size.y <= 0.f) continue;  // e.g. space
@@ -1187,9 +1225,8 @@ void RenderWindow::replayDrawList(const canvas::DrawList &list, float viewW,
     case canvas::DrawCommandKind::Mesh: {
       // The producer laid out every vertex (fan pivot, or inner/outer ring
       // pairs); the renderer only converts and triangulates.
-      const uint32_t first = cmd.param;
-      const uint32_t count = static_cast<uint32_t>(cmd.w);
-      if (first + count > list.meshVertexCount) break;
+      uint32_t first = 0, count = 0;
+      if (!sideBufferRange(cmd, list.meshVertexCount, 0, first, count)) break;
       meshPointScratch_.clear();
       meshPointScratch_.reserve(count);
       for (uint32_t i = 0; i < count; ++i) {
@@ -1200,9 +1237,8 @@ void RenderWindow::replayDrawList(const canvas::DrawList &list, float viewW,
       break;
     }
     case canvas::DrawCommandKind::Polyline: {
-      const uint32_t first = cmd.param;
-      const uint32_t count = static_cast<uint32_t>(cmd.w);
-      if (count < 2 || first + count > list.meshVertexCount) break;
+      uint32_t first = 0, count = 0;
+      if (!sideBufferRange(cmd, list.meshVertexCount, 2, first, count)) break;
       meshPointScratch_.clear();
       meshPointScratch_.reserve(count);
       for (uint32_t i = 0; i < count; ++i) {
@@ -1213,14 +1249,12 @@ void RenderWindow::replayDrawList(const canvas::DrawList &list, float viewW,
       break;
     }
     case canvas::DrawCommandKind::SpatialTriangles: {
-      const uint32_t first = cmd.param;
-      const uint32_t count = static_cast<uint32_t>(cmd.w);
-      if (count < 3 || first + count > list.spatialVertexCount) break;
+      uint32_t first = 0, count = 0;
+      if (!sideBufferRange(cmd, list.spatialVertexCount, 3, first, count)) break;
       VkImageView texture = VK_NULL_HANDLE;
       vec2 uv0{0.f, 0.f}, uv1{1.f, 1.f};
-      if (cmd.x >= 1.f) {
+      if (const uint32_t id = textureIdFromFloat(cmd.x)) {
         auto &tm = TextureManager::getInstance();
-        const auto id = static_cast<uint32_t>(cmd.x);
         texture = tm.getTextureView(id);
         tm.getTextureUV(id, uv0, uv1);
       }
