@@ -80,7 +80,9 @@ class QuadRenderer {
 
   /// Already projected window-space triangles with Vulkan depth in 0...1.
   /// Uses a dedicated depth-tested pipeline while remaining in batch order.
-  void pushSpatialTriangles(const canvas::SpatialVertex *vertices, uint32_t count);
+  void pushSpatialTriangles(const canvas::SpatialVertex *vertices, uint32_t count,
+                            VkImageView textureView, vec2 uv0 = {0.f,0.f},
+                            vec2 uv1 = {1.f,1.f});
   void pushSpatialBegin(vec2 topLeft, vec2 size);
 
   /// One glyph quad. `uv0`/`uv1` are the atlas rect for this glyph.

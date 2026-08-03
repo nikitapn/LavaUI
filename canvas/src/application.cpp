@@ -834,7 +834,16 @@ struct Application::Impl
         const uint32_t first = cmd.param;
         const uint32_t count = static_cast<uint32_t>(cmd.w);
         if (count < 3 || first + count > drawSpatialVertCount_) break;
-        quadRenderer.pushSpatialTriangles(drawSpatialVerts_.data() + first, count);
+        VkImageView texture = VK_NULL_HANDLE;
+        vec2 uv0{0.f,0.f}, uv1{1.f,1.f};
+        if (cmd.x >= 1.f) {
+          auto &tm = TextureManager::getInstance();
+          const auto id = static_cast<uint32_t>(cmd.x);
+          texture = tm.getTextureView(id);
+          tm.getTextureUV(id, uv0, uv1);
+        }
+        quadRenderer.pushSpatialTriangles(drawSpatialVerts_.data() + first, count,
+                                          texture, uv0, uv1);
         break;
       }
       case canvas::DrawCommandKind::SpatialBegin:

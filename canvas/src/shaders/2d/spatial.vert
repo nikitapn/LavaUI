@@ -3,6 +3,7 @@
 layout(location = 0) in vec2 inPos;
 layout(location = 1) in vec2 inDepth;
 layout(location = 2) in vec4 inColor;
+layout(location = 3) in vec2 inAux;
 
 layout(push_constant) uniform Push {
   vec2 viewport;
@@ -12,9 +13,13 @@ layout(push_constant) uniform Push {
 } pc;
 
 layout(location = 0) out vec4 vColor;
+layout(location = 1) out vec2 vUV;
+layout(location = 2) flat out float vTextured;
 
 void main() {
   vColor = inColor;
+  vUV = vec2(inDepth.y, inAux.y);
+  vTextured = inAux.x;
   vec2 center = pc.viewport * 0.5;
   float z = pc.zoom > 0.0 ? pc.zoom : 1.0;
   vec2 screen = (inPos - center) * z + center + pc.pan;

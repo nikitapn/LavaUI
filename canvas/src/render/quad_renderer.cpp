@@ -265,10 +265,11 @@ void QuadRenderer::createSpatialPipeline(VkRenderPass renderPass,
     VkPipelineShaderStageCreateInfo{.sType=VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
       .stage=VK_SHADER_STAGE_FRAGMENT_BIT,.module=frag,.pName="main"}};
   VkVertexInputBindingDescription binding{0, sizeof(Vertex), VK_VERTEX_INPUT_RATE_VERTEX};
-  std::array<VkVertexInputAttributeDescription, 3> attrs{
+  std::array<VkVertexInputAttributeDescription, 4> attrs{
     VkVertexInputAttributeDescription{0,0,VK_FORMAT_R32G32_SFLOAT,offsetof(Vertex,pos)},
     VkVertexInputAttributeDescription{1,0,VK_FORMAT_R32G32_SFLOAT,offsetof(Vertex,local)},
-    VkVertexInputAttributeDescription{2,0,VK_FORMAT_R8G8B8A8_UNORM,offsetof(Vertex,color)}};
+    VkVertexInputAttributeDescription{2,0,VK_FORMAT_R8G8B8A8_UNORM,offsetof(Vertex,color)},
+    VkVertexInputAttributeDescription{3,0,VK_FORMAT_R32G32_SFLOAT,offsetof(Vertex,halfSize)}};
   VkPipelineVertexInputStateCreateInfo vi{.sType=VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
     .vertexBindingDescriptionCount=1,.pVertexBindingDescriptions=&binding,
     .vertexAttributeDescriptionCount=static_cast<uint32_t>(attrs.size()),.pVertexAttributeDescriptions=attrs.data()};
@@ -658,18 +659,21 @@ void QuadRenderer::pushPolyline(const vec2 *points, uint32_t count,
 }
 
 void QuadRenderer::pushSpatialTriangles(const canvas::SpatialVertex *points,
-                                        uint32_t count) {
+                                        uint32_t count, VkImageView textureView,
+                                        vec2 uv0, vec2 uv1) {
   if (points == nullptr || count < 3 || count % 3 != 0) return;
   flushBatch();
   const uint32_t first = static_cast<uint32_t>(vertices_.size());
   vertices_.reserve(vertices_.size() + count);
   for (uint32_t i = 0; i < count; ++i) {
     vertices_.push_back(Vertex{.pos={points[i].x,points[i].y},
-      .local={points[i].z,0.f},.halfSize={0.f,0.f},.radius=0.f,
+      .local={points[i].z,uv0.x+points[i].u*(uv1.x-uv0.x)},
+      .halfSize={points[i].textured,uv0.y+points[i].v*(uv1.y-uv0.y)},.radius=0.f,
       .color=points[i].color,.kind=static_cast<uint32_t>(Kind::Mesh)});
   }
   batches_.push_back(Batch{.geometry=Batch::Geometry::SpatialTriangles,
-    .firstVertex=first,.vertexCount=count,.scissor=currentScissor_});
+    .firstVertex=first,.vertexCount=count,.scissor=currentScissor_,
+    .textureView=textureView});
 }
 
 void QuadRenderer::pushSpatialBegin(vec2 topLeft, vec2 size) {
@@ -1061,6 +1065,8 @@ void QuadRenderer::drawBatchRange(VkCommandBuffer commandBuffer,
       } else {
         bindTexture(batch.textureView, VK_NULL_HANDLE);
       }
+    } else if (batch.geometry == Batch::Geometry::SpatialTriangles) {
+      bindTexture(batch.textureView, VK_NULL_HANDLE);
     }
     vkCmdSetScissor(commandBuffer, 0, 1, &sc);
     if (batch.geometry != Batch::Geometry::Quads) {

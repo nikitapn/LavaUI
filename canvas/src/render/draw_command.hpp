@@ -83,9 +83,12 @@ struct SpatialVertex {
   float x = 0.f;
   float y = 0.f;
   float z = 0.f;
+  float u = 0.f;
+  float v = 0.f;
   uint32_t color = 0xffffffffu;
+  float textured = 0.f;
 };
-static_assert(sizeof(SpatialVertex) == 16, "SpatialVertex must stay packed");
+static_assert(sizeof(SpatialVertex) == 28, "SpatialVertex must stay packed");
 
 struct DrawCommand {
   uint32_t kind = 0;

@@ -90,9 +90,12 @@ public struct DemoExample: View {
     @State private var status = "Click a list row, edit the field, resize the window."
     @State private var actionCount = 0
 
-    init(session: DemoSession, brandImage: UIImage? = nil) {
+    private let posters: [UIImage]
+
+    init(session: DemoSession, brandImage: UIImage? = nil, posters: [UIImage]) {
         self.session = session
         self.brandImage = brandImage
+        self.posters = posters
     }
 
     private static let seedItems: [DemoItem] = [
@@ -266,12 +269,15 @@ public struct DemoExample: View {
     private var centerContent: some View {
         VStack(padding: 8) {
             Scene3D(height: .pt(320), flexGrow: 1) {
-                ForEach3D(Array(0..<5), id: \.self) { index in
+                AmbientLight3D(intensity: 0.28)
+                DirectionalLight3D(direction: [-0.35, -0.6, -1], intensity: 1.05)
+                ForEach3D(Array(posters.enumerated()), id: \.offset) { index, poster in
                     Box3D(
-                        id: index, width: 1.25, height: 1.25, depth: 0.08,
+                        id: index, width: 1.45, height: 1.45, depth: 0.08,
                         color: selected == index ? .selected : DemoPalette.color(at: index)
                     )
-                    .position([Float(index - 2) * 1.4, 0, 0])
+                    .material3D(.albumCover(front: poster))
+                    .position([Float(index - 3) * 1.6, 0, 0])
                     .rotation3D(
                         angle: .degrees(hovered == index ? 12 : 0), axis: [0, 1, 0]
                     )

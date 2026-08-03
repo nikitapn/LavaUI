@@ -454,11 +454,14 @@ Scene3D(
     height: .pt(320),
     flexGrow: 1
 ) {
+    AmbientLight3D(intensity: 0.28)
+    DirectionalLight3D(direction: [-0.35, -0.6, -1], intensity: 1.05)
     ForEach3D(albums, id: \.id) { album in
         Box3D(
             id: album.id, width: 1.25, height: 1.25, depth: 0.08,
             color: .accent
         )
+        .material3D(.albumCover(front: album.cover, edgeColor: .dim))
         .position(catalogPosition(album))
         .rotation3D(
             angle: .degrees(hovered == album.id ? 12 : 0),
@@ -475,7 +478,12 @@ Scene3D(
 .clipped()
 ```
 
-The initial predefined geometry is `Plane3D` and `Box3D`. Spatial modifiers
+The initial predefined geometry is `Plane3D` and `Box3D`. `Material3D` supports
+a color or a textured front surface; `.albumCover(front:edgeColor:)` puts a
+cover texture on the front of a thin box and gives its remaining faces a
+separate edge color. Atlas-backed `UIImage` UVs are handled automatically.
+`AmbientLight3D` and `DirectionalLight3D` illuminate transformed face normals;
+scenes without explicit lights receive a neutral default rig. Spatial modifiers
 include `position`, `offset3D`, uniform/vector `scale3D`, axis-angle
 `rotation3D`, `animation3D`, `onHover3D`, and `onTap3D`. Object identifiers
 must be stable: retained transform animation and hit dispatch are keyed by id.
@@ -485,8 +493,7 @@ planes. Pointer picking tests the projected triangles and selects the nearest
 depth, matching visible overlap. Transform interpolation lives on the retained
 scene node, so animation frames request redraw without recomputing `body`.
 
-The first spatial slice is intentionally small: flat-color geometry is
-implemented; textured materials, lighting, shadows, and imported meshes are
+Shadows, physically based material parameters, and imported meshes remain
 future layers on the same scene command path.
 
 ## Theme, fonts, and animation

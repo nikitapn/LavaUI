@@ -85,6 +85,28 @@ public struct SpatialAnimation: Equatable, Sendable {
     }
 }
 
+public struct Material3D: Sendable {
+    public var color: Color
+    public var frontTexture: UIImage?
+    public var edgeColor: Color
+
+    public init(
+        color: Color = Color(r: 1, g: 1, b: 1),
+        texture: UIImage? = nil,
+        edgeColor: Color? = nil
+    ) {
+        self.color = color
+        self.frontTexture = texture
+        self.edgeColor = edgeColor ?? color
+    }
+
+    public static func albumCover(
+        front: UIImage, edgeColor: Color = Color(r: 0.12, g: 0.12, b: 0.14)
+    ) -> Material3D {
+        Material3D(texture: front, edgeColor: edgeColor)
+    }
+}
+
 public protocol View3D {
     func spatialElements() -> [SpatialElement]
 }
@@ -111,16 +133,45 @@ public struct SpatialElement: View3D {
     enum Geometry: Equatable {
         case plane(width: Float, height: Float)
         case box(Vector3)
+        case ambientLight(intensity: Float)
+        case directionalLight(direction: Vector3, intensity: Float)
     }
     var id: AnyHashable
     var geometry: Geometry
     var color: Color
+    var material: Material3D?
     var transform = Transform3D()
     var animation: SpatialAnimation?
     var onHover: ((Bool) -> Void)?
     var onTap: (() -> Void)?
 
     public func spatialElements() -> [SpatialElement] { [self] }
+}
+
+public struct AmbientLight3D: View3D {
+    private var element: SpatialElement
+    public init(color: Color = Color(r: 1, g: 1, b: 1), intensity: Float = 0.3) {
+        element = SpatialElement(
+            id: AnyHashable("lavaui.ambient-light"),
+            geometry: .ambientLight(intensity: max(0, intensity)), color: color
+        )
+    }
+    public func spatialElements() -> [SpatialElement] { [element] }
+}
+
+public struct DirectionalLight3D: View3D {
+    private var element: SpatialElement
+    public init(
+        direction: Vector3 = [-0.4, -0.7, -1],
+        color: Color = Color(r: 1, g: 1, b: 1), intensity: Float = 0.9
+    ) {
+        element = SpatialElement(
+            id: AnyHashable("lavaui.directional-light"),
+            geometry: .directionalLight(direction: direction, intensity: max(0, intensity)),
+            color: color
+        )
+    }
+    public func spatialElements() -> [SpatialElement] { [element] }
 }
 
 public struct Plane3D: View3D {
@@ -182,6 +233,9 @@ extension View3D {
     public func animation3D(_ animation: SpatialAnimation = .smooth()) -> some View3D {
         ModifiedView3D(base: self) { $0.animation = animation }
     }
+    public func material3D(_ material: Material3D) -> some View3D {
+        ModifiedView3D(base: self) { $0.material = material }
+    }
     public func onHover3D(_ action: @escaping (Bool) -> Void) -> some View3D {
         ModifiedView3D(base: self) { $0.onHover = action }
     }
@@ -215,7 +269,24 @@ public struct SpatialGroup3D: View3D {
     public func spatialElements() -> [SpatialElement] { elements }
 }
 
-struct SpatialProjectedVertex { var x, y, depth: Float; var color: Color }
+struct SpatialProjectedVertex {
+    var x, y, depth: Float
+    var u: Float = 0
+    var v: Float = 0
+    var textured = false
+    var color: Color
+}
+
+private struct SpatialBatch {
+    var triangles: [SpatialProjectedVertex]
+    var texture: UIImage?
+}
+
+private struct SpatialProjectedObject {
+    var element: SpatialElement
+    var batches: [SpatialBatch]
+    var triangles: [SpatialProjectedVertex] { batches.flatMap(\.triangles) }
+}
 
 public struct Scene3D: PrimitiveView {
     public var camera: Camera3D
@@ -272,7 +343,7 @@ final class SpatialRuntime {
     var camera: Camera3D = .perspective()
     var elements: [SpatialElement] = []
     var motion: [AnyHashable: Motion] = [:]
-    var projected: [(element: SpatialElement, triangles: [SpatialProjectedVertex])] = []
+    private var projected: [SpatialProjectedObject] = []
     var hovered: AnyHashable?
     /// Projection emits window-space vertices because that is what DrawList
     /// consumes, while leaf input handlers deliberately receive coordinates
@@ -333,9 +404,15 @@ final class SpatialRuntime {
                 Transform3D(position: $0.position.current, rotation: $0.rotation.current,
                             scale: $0.scale.current)
             } ?? e.transform
-            return (e, project(element: e, transform: t, frame: frame))
+            return SpatialProjectedObject(
+                element: e, batches: project(element: e, transform: t, frame: frame)
+            )
         }
-        for item in projected { draw.spatialTriangles(item.triangles) }
+        for item in projected {
+            for batch in item.batches {
+                draw.spatialTriangles(batch.triangles, texture: batch.texture)
+            }
+        }
     }
 
     func hover(x: Float, y: Float) {
@@ -369,25 +446,83 @@ final class SpatialRuntime {
 
     private func project(
         element: SpatialElement, transform: Transform3D, frame: CanvasFrame
-    ) -> [SpatialProjectedVertex] {
-        let vertices: [Vector3]
-        let indices: [Int]
+    ) -> [SpatialBatch] {
+        struct Face {
+            var corners: [Vector3]
+            var normal: Vector3
+            var texture: UIImage?
+            var color: Color
+        }
+        let material = element.material
+        let base = material?.color ?? element.color
+        let edge = material?.edgeColor ?? element.color
+        let faces: [Face]
         switch element.geometry {
         case .plane(let w, let h):
-            vertices = [[-w/2,-h/2,0],[w/2,-h/2,0],[w/2,h/2,0],[-w/2,h/2,0]]
-            indices = [0,2,1,0,3,2]
+            faces = [Face(corners: [[-w/2,-h/2,0],[w/2,-h/2,0],
+                                    [w/2,h/2,0],[-w/2,h/2,0]],
+                          normal: [0,0,1], texture: material?.frontTexture, color: base)]
         case .box(let s):
             let x=s.x/2, y=s.y/2, z=s.z/2
-            vertices = [[-x,-y,-z],[x,-y,-z],[x,y,-z],[-x,y,-z],[-x,-y,z],[x,-y,z],[x,y,z],[-x,y,z]]
-            indices = [4,6,5,4,7,6, 1,2,0,0,2,3, 0,3,4,4,3,7,
-                       5,6,1,1,6,2, 3,2,7,7,2,6, 0,4,1,1,4,5]
+            faces = [
+                Face(corners:[[-x,-y,z],[x,-y,z],[x,y,z],[-x,y,z]], normal:[0,0,1],
+                     texture:material?.frontTexture,color:base),
+                Face(corners:[[x,-y,-z],[-x,-y,-z],[-x,y,-z],[x,y,-z]], normal:[0,0,-1],texture:nil,color:edge),
+                Face(corners:[[-x,-y,-z],[-x,-y,z],[-x,y,z],[-x,y,-z]], normal:[-1,0,0],texture:nil,color:edge),
+                Face(corners:[[x,-y,z],[x,-y,-z],[x,y,-z],[x,y,z]], normal:[1,0,0],texture:nil,color:edge),
+                Face(corners:[[-x,y,z],[x,y,z],[x,y,-z],[-x,y,-z]], normal:[0,1,0],texture:nil,color:edge),
+                Face(corners:[[-x,-y,-z],[x,-y,-z],[x,-y,z],[-x,-y,z]], normal:[0,-1,0],texture:nil,color:edge),
+            ]
+        case .ambientLight, .directionalLight:
+            return []
         }
-        return indices.compactMap { index in
-            let world = apply(transform, vertices[index])
-            return project(world, frame: frame).map {
-                SpatialProjectedVertex(x: $0.x, y: $0.y, depth: $0.z, color: element.color)
+
+        let order = [0,2,1,0,3,2]
+        let uv: [(Float,Float)] = [(0,1),(1,1),(1,0),(0,0)]
+        return faces.compactMap { face in
+            let lit = litColor(face.color, normal: rotate(transform, face.normal))
+            let vertices = order.compactMap { index -> SpatialProjectedVertex? in
+                guard let p = project(apply(transform, face.corners[index]), frame: frame) else {
+                    return nil
+                }
+                return SpatialProjectedVertex(
+                    x: p.x, y: p.y, depth: p.z, u: uv[index].0, v: uv[index].1,
+                    textured: face.texture != nil, color: lit
+                )
             }
+            guard vertices.count == 6 else { return nil }
+            // Keep one cover descriptor bound for the whole object. Edge
+            // vertices disable sampling themselves, avoiding cover→white→cover
+            // descriptor churn for every album in a large catalog.
+            return SpatialBatch(
+                triangles: vertices, texture: material?.frontTexture ?? face.texture
+            )
         }
+    }
+
+    private func litColor(_ base: Color, normal: Vector3) -> Color {
+        let ambientLights = elements.compactMap { e -> (Color,Float)? in
+            if case .ambientLight(let intensity) = e.geometry { return (e.color,intensity) }
+            return nil
+        }
+        let directionalLights = elements.compactMap { e -> (Vector3,Color,Float)? in
+            if case .directionalLight(let direction, let intensity) = e.geometry {
+                return (direction,e.color,intensity)
+            }
+            return nil
+        }
+        let ambients = ambientLights.isEmpty ? [(Color(r:1,g:1,b:1),Float(0.3))] : ambientLights
+        let directionals = directionalLights.isEmpty
+            ? [([-0.4,-0.7,-1] as Vector3,Color(r:1,g:1,b:1),Float(0.9))] : directionalLights
+        var lr:Float=0, lg:Float=0, lb:Float=0
+        for (c,i) in ambients { lr += c.r*i; lg += c.g*i; lb += c.b*i }
+        let n = normalized(normal)
+        for (direction,c,i) in directionals {
+            let d = normalized([-direction.x,-direction.y,-direction.z])
+            let amount = max(0,dot(n,d))*i
+            lr += c.r*amount; lg += c.g*amount; lb += c.b*amount
+        }
+        return Color(r:min(1,base.r*lr),g:min(1,base.g*lg),b:min(1,base.b*lb),a:base.a)
     }
 
     private func apply(_ t: Transform3D, _ input: Vector3) -> Vector3 {
@@ -396,6 +531,11 @@ final class SpatialRuntime {
         let cy=cos(t.rotation.y), sy=sin(t.rotation.y); v = [v.x*cy+v.z*sy,v.y,-v.x*sy+v.z*cy]
         let cz=cos(t.rotation.z), sz=sin(t.rotation.z); v = [v.x*cz-v.y*sz,v.x*sz+v.y*cz,v.z]
         return [v.x+t.position.x,v.y+t.position.y,v.z+t.position.z]
+    }
+
+    private func rotate(_ t: Transform3D, _ input: Vector3) -> Vector3 {
+        var copy = t; copy.position = [0,0,0]; copy.scale = [1,1,1]
+        return apply(copy,input)
     }
 
     private func project(_ p: Vector3, frame: CanvasFrame) -> Vector3? {

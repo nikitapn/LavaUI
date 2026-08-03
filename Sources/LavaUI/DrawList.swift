@@ -154,19 +154,24 @@ public final class DrawList {
         spatialVertexCount += 1
     }
 
-    func spatialTriangles(_ vertices: [SpatialProjectedVertex]) {
+    func spatialTriangles(_ vertices: [SpatialProjectedVertex], texture: UIImage?) {
         guard vertices.count >= 3, vertices.count.isMultiple(of: 3) else { return }
+        if let texture { ImageStore.touch(texture) }
         let first = spatialVertexCount
         for point in vertices {
             var vertex = canvas.SpatialVertex()
             vertex.x = point.x
             vertex.y = point.y
             vertex.z = point.depth
+            vertex.u = point.u
+            vertex.v = point.v
             vertex.color = point.color.rgba8
+            vertex.textured = point.textured ? 1 : 0
             appendSpatialVertex(vertex)
         }
         append(
-            kind: .spatialTriangles, x: 0, y: 0, w: Float(vertices.count), h: 0,
+            kind: .spatialTriangles, x: Float(texture?.textureId ?? 0), y: 0,
+            w: Float(vertices.count), h: 0,
             color: Color(r: 1, g: 1, b: 1), param: UInt32(first)
         )
     }

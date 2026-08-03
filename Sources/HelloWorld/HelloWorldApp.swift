@@ -21,6 +21,19 @@ struct HelloWorldApp {
             FileHandle.standardError.write(Data("warning: brand image failed to load\n".utf8))
         }
 
+        let posters = ["1.jpg", "2.jpg", "3.jpg", "4.jpg", "5.jpg", "6.jpg", "7.jpg"]
+            .compactMap { name -> UIImage? in
+                ImageStore.loadAsset(
+                    named: name,
+                    bundle: .module,
+                    into: editor
+                ) ?? {
+                    FileHandle.standardError.write(
+                        Data("warning: poster image failed to load: \(name)\n".utf8)
+                    )
+                    return nil }()
+                }
+
         // Chrome the menubar and the demo's own header both drive. Menu
         // closures capture this reference; the view reads the same
         // `@Observable` object — see `DemoSession`.
@@ -109,7 +122,7 @@ struct HelloWorldApp {
                 }
             }
         ) {
-            DemoExample(session: session, brandImage: brandImage)
+            DemoExample(session: session, brandImage: brandImage, posters: posters)
         }
     }
 }
