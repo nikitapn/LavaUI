@@ -194,6 +194,89 @@ public struct Shadow3DStyle: Equatable, Sendable {
     }
 }
 
+public struct CatalogPose3D: Equatable, Sendable {
+    public var transform: Transform3D
+
+    public init(transform: Transform3D = Transform3D()) {
+        self.transform = transform
+    }
+}
+
+/// A reusable album/poster shelf that adds depth and fans neighboring items
+/// around a focused cover while keeping the unfocused catalog in one row.
+public struct CatalogLayout3D: Equatable, Sendable {
+    public var spacing: Float
+    public var focusDepth: Float
+    public var focusScale: Float
+    public var neighborSpread: Float
+    public var neighborDepthStep: Float
+    public var fanAngle: Angle3D
+
+    public init(
+        spacing: Float = 1.6,
+        focusDepth: Float = 0.55,
+        focusScale: Float = 1.12,
+        neighborSpread: Float = 0.28,
+        neighborDepthStep: Float = 0.08,
+        fanAngle: Angle3D = .degrees(10)
+    ) {
+        self.spacing = max(0, spacing)
+        self.focusDepth = focusDepth
+        self.focusScale = max(0.01, focusScale)
+        self.neighborSpread = max(0, neighborSpread)
+        self.neighborDepthStep = max(0, neighborDepthStep)
+        self.fanAngle = fanAngle
+    }
+
+    public static func focusedShelf(
+        spacing: Float = 1.6,
+        focusDepth: Float = 0.55,
+        focusScale: Float = 1.12,
+        fanAngle: Angle3D = .degrees(10)
+    ) -> CatalogLayout3D {
+        CatalogLayout3D(
+            spacing: spacing, focusDepth: focusDepth,
+            focusScale: focusScale, fanAngle: fanAngle
+        )
+    }
+
+    public func pose(
+        at index: Int, itemCount: Int, focusedIndex: Int?
+    ) -> CatalogPose3D {
+        let count = max(0, itemCount)
+        let centered = Float(index) - Float(max(0, count - 1)) * 0.5
+        var transform = Transform3D(position: [centered * spacing, 0, 0])
+        guard let focusedIndex, focusedIndex >= 0, focusedIndex < count else {
+            return CatalogPose3D(transform: transform)
+        }
+        let distance = index - focusedIndex
+        if distance == 0 {
+            transform.position.z = focusDepth
+            transform.scale = [focusScale, focusScale, focusScale]
+        } else {
+            let side: Float = distance < 0 ? -1 : 1
+            transform.position.x += side * neighborSpread
+            transform.position.z = -Float(min(abs(distance), 4)) * neighborDepthStep
+            // Neighbors turn gently toward the focused cover.
+            transform.rotation.y = -side * fanAngle.radians
+        }
+        return CatalogPose3D(transform: transform)
+    }
+
+    /// Conservative orbit radius that keeps the camera outside this shelf.
+    public func recommendedMinimumCameraDistance(
+        itemCount: Int, itemWidth: Float, itemHeight: Float,
+        clearance: Float = 2
+    ) -> Float {
+        let halfWidth = Float(max(0, itemCount - 1)) * spacing * 0.5
+            + max(0, itemWidth) * focusScale * 0.5 + neighborSpread
+        let halfHeight = max(0, itemHeight) * focusScale * 0.5
+        let depth = abs(focusDepth) + neighborDepthStep * 4
+        return sqrt(halfWidth * halfWidth + halfHeight * halfHeight + depth * depth)
+            + max(0, clearance)
+    }
+}
+
 public protocol View3D {
     func spatialElements() -> [SpatialElement]
 }
@@ -297,6 +380,17 @@ private struct ModifiedView3D<Base: View3D>: View3D {
 }
 
 extension View3D {
+    public func transform3D(_ value: Transform3D) -> some View3D {
+        ModifiedView3D(base: self) { $0.transform = value }
+    }
+    public func catalog3D(
+        index: Int, itemCount: Int, focusedIndex: Int?,
+        layout: CatalogLayout3D = .focusedShelf()
+    ) -> some View3D {
+        transform3D(layout.pose(
+            at: index, itemCount: itemCount, focusedIndex: focusedIndex
+        ).transform)
+    }
     public func position(_ value: Vector3) -> some View3D {
         ModifiedView3D(base: self) { $0.transform.position = value }
     }
@@ -565,6 +659,16 @@ final class SpatialRuntime {
         orbitDistance = max(0.0001, length(offset))
         orbitYaw = atan2(offset.x, offset.z)
         orbitPitch = asin(min(1, max(-1, offset.y / orbitDistance)))
+        if let controls {
+            orbitDistance = min(
+                controls.maximumDistance, max(controls.minimumDistance, orbitDistance)
+            )
+            orbitPitch = min(
+                controls.maximumPitch.radians,
+                max(controls.minimumPitch.radians, orbitPitch)
+            )
+            rebuildCamera()
+        }
     }
 
     private func rebuildCamera() {

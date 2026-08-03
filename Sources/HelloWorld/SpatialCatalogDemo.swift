@@ -12,10 +12,17 @@ struct SpatialCatalogDemo: View {
     }
 
     var body: some View {
+        let layout = CatalogLayout3D.focusedShelf()
+        let minimumDistance = layout.recommendedMinimumCameraDistance(
+            itemCount: posters.count, itemWidth: 1.45, itemHeight: 1.45
+        )
 
         Scene3D(
             height: .pt(320), flexGrow: 1,
-            cameraControls: .orbit(minimumDistance: 4, maximumDistance: 12)
+            cameraControls: .orbit(
+                minimumDistance: minimumDistance,
+                maximumDistance: minimumDistance * 1.8
+            )
         ) {
             AmbientLight3D(intensity: 0.28)
             DirectionalLight3D(direction: [-0.35, -0.6, -1], intensity: 1.05)
@@ -26,12 +33,10 @@ struct SpatialCatalogDemo: View {
                 )
                 .material3D(.albumCover(front: poster))
                 .shadow3D(radius: 15, offsetX: 7, offsetY: 11, opacity: 0.7)
-                .position([Float(index - 3) * 1.6, 0, 0])
-                .rotation3D(
-                    angle: .degrees(hovered == index ? 12 : 0), axis: [0, 1, 0]
+                .catalog3D(
+                    index: index, itemCount: posters.count,
+                    focusedIndex: hovered, layout: layout
                 )
-                .offset3D(z: hovered == index ? 0.45 : 0)
-                .scale3D(hovered == index ? 1.12 : 1)
                 .animation3D(.spring(response: 0.3, dampingFraction: 0.7))
                 .onHover3D { inside in hovered = inside ? index : nil }
                 .onTap3D { selected = index }

@@ -445,6 +445,7 @@ and each scene clears depth only inside its own viewport.
 
 ```swift
 @State private var hovered: Int?
+let catalogLayout = CatalogLayout3D.focusedShelf()
 
 Scene3D(
     camera: .perspective(
@@ -453,26 +454,28 @@ Scene3D(
     ),
     height: .pt(320),
     flexGrow: 1,
-    cameraControls: .orbit(minimumDistance: 4, maximumDistance: 12)
+    cameraControls: .orbit(
+        minimumDistance: catalogLayout.recommendedMinimumCameraDistance(
+            itemCount: albums.count, itemWidth: 1.25, itemHeight: 1.25
+        ),
+        maximumDistance: 14
+    )
 ) {
     AmbientLight3D(intensity: 0.28)
     DirectionalLight3D(direction: [-0.35, -0.6, -1], intensity: 1.05)
-    ForEach3D(albums, id: \.id) { album in
+    ForEach3D(Array(albums.enumerated()), id: \.element.id) { index, album in
         Box3D(
             id: album.id, width: 1.25, height: 1.25, depth: 0.08,
             color: .accent
         )
         .material3D(.albumCover(front: album.cover, edgeColor: .dim))
         .shadow3D(radius: 15, offsetX: 7, offsetY: 11, opacity: 0.3)
-        .position(catalogPosition(album))
-        .rotation3D(
-            angle: .degrees(hovered == album.id ? 12 : 0),
-            axis: [0, 1, 0]
+        .catalog3D(
+            index: index, itemCount: albums.count,
+            focusedIndex: hovered, layout: catalogLayout
         )
-        .offset3D(z: hovered == album.id ? 0.45 : 0)
-        .scale3D(hovered == album.id ? 1.12 : 1)
         .animation3D(.spring(response: 0.3, dampingFraction: 0.7))
-        .onHover3D { inside in hovered = inside ? album.id : nil }
+        .onHover3D { inside in hovered = inside ? index : nil }
         .onTap3D { open(album) }
     }
 }
@@ -493,6 +496,12 @@ Use `.animation3D(.spring(response:dampingFraction:))` for responsive hover
 motion. A shorter response reacts faster; a damping fraction below `1` adds
 overshoot, `1` is critically damped, and values above `1` settle without
 bouncing. `.smooth(duration:curve:)` remains available for time-based motion.
+
+`CatalogLayout3D.focusedShelf()` provides a depth-aware album/poster layout.
+Apply it with `.catalog3D(index:itemCount:focusedIndex:layout:)`; the focused
+item lifts and scales while its neighbors spread, recede, and fan toward it.
+`recommendedMinimumCameraDistance(...)` returns a conservative orbit radius
+from the shelf and item dimensions, keeping the camera outside the catalog.
 
 `.shadow3D(...)` projects the transformed card silhouette into a shared
 offscreen mask and Gaussian-blurs it. Radius and offset are expressed in screen
