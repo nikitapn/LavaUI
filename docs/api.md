@@ -452,7 +452,8 @@ Scene3D(
         fieldOfView: .degrees(42)
     ),
     height: .pt(320),
-    flexGrow: 1
+    flexGrow: 1,
+    cameraControls: .orbit(minimumDistance: 4, maximumDistance: 12)
 ) {
     AmbientLight3D(intensity: 0.28)
     DirectionalLight3D(direction: [-0.35, -0.6, -1], intensity: 1.05)
@@ -506,7 +507,13 @@ planes. Pointer picking tests the projected triangles and selects the nearest
 depth, matching visible overlap. Transform interpolation lives on the retained
 scene node, so animation frames request redraw without recomputing `body`.
 
-Shadows, physically based material parameters, and imported meshes remain
+Pass `cameraControls: .orbit(...)` to enable retained scene navigation. Drag
+to orbit, Shift-drag to pan, and use the wheel or trackpad to zoom. Distance
+and pitch limits, input sensitivity, inertia, and deceleration are configurable
+through `CameraControls3D`; omit it for a fixed camera. A drag is distinguished
+from a click on release, so moving the camera does not activate a 3D object.
+
+Physically based material parameters and imported meshes remain
 future layers on the same scene command path.
 
 ## Theme, fonts, and animation

@@ -70,6 +70,52 @@ public struct Camera3D: Equatable, Sendable {
     }
 }
 
+public struct CameraControls3D: Equatable, Sendable {
+    public var orbitSensitivity: Float
+    public var panSensitivity: Float
+    public var zoomSensitivity: Float
+    public var minimumDistance: Float
+    public var maximumDistance: Float
+    public var minimumPitch: Angle3D
+    public var maximumPitch: Angle3D
+    public var inertia: Bool
+    /// Fraction of drag velocity retained per 60 Hz frame.
+    public var deceleration: Float
+
+    public init(
+        orbitSensitivity: Float = 0.006,
+        panSensitivity: Float = 0.0018,
+        zoomSensitivity: Float = 0.12,
+        minimumDistance: Float = 2,
+        maximumDistance: Float = 20,
+        minimumPitch: Angle3D = .degrees(-75),
+        maximumPitch: Angle3D = .degrees(75),
+        inertia: Bool = true,
+        deceleration: Float = 0.88
+    ) {
+        self.orbitSensitivity = max(0, orbitSensitivity)
+        self.panSensitivity = max(0, panSensitivity)
+        self.zoomSensitivity = max(0, zoomSensitivity)
+        self.minimumDistance = max(0.01, minimumDistance)
+        self.maximumDistance = max(self.minimumDistance, maximumDistance)
+        self.minimumPitch = Angle3D(radians: min(minimumPitch.radians, maximumPitch.radians))
+        self.maximumPitch = Angle3D(radians: max(minimumPitch.radians, maximumPitch.radians))
+        self.inertia = inertia
+        self.deceleration = min(0.999, max(0, deceleration))
+    }
+
+    public static func orbit(
+        minimumDistance: Float = 2, maximumDistance: Float = 20,
+        inertia: Bool = true
+    ) -> CameraControls3D {
+        CameraControls3D(
+            minimumDistance: minimumDistance,
+            maximumDistance: maximumDistance,
+            inertia: inertia
+        )
+    }
+}
+
 public struct SpatialAnimation: Equatable, Sendable {
     public var duration: Double
     public var curve: AnimationCurve
@@ -346,6 +392,7 @@ private struct SpatialProjectedObject {
 
 public struct Scene3D: PrimitiveView {
     public var camera: Camera3D
+    public var cameraControls: CameraControls3D?
     public var width: Dimension
     public var height: Dimension
     public var flexGrow: Float
@@ -354,10 +401,12 @@ public struct Scene3D: PrimitiveView {
     public init(
         camera: Camera3D = .perspective(), width: Dimension = .auto,
         height: Dimension = .auto, flexGrow: Float = 0,
+        cameraControls: CameraControls3D? = nil,
         @View3DBuilder content: () -> [SpatialElement]
     ) {
         self.camera = camera; self.width = width; self.height = height
-        self.flexGrow = flexGrow; self.elements = content()
+        self.flexGrow = flexGrow; self.cameraControls = cameraControls
+        self.elements = content()
     }
 
     public var dumpDetail: String { "\(elements.count) objects" }
@@ -383,11 +432,31 @@ public struct Scene3D: PrimitiveView {
     private func configure(_ leaf: LeafNode) {
         let runtime = leaf.spatialRuntime ?? SpatialRuntime(nodeID: leaf.id)
         leaf.spatialRuntime = runtime
-        runtime.update(camera: camera, elements: elements)
-        leaf.onClickLocal = { [weak runtime] x, y, _, _, _ in runtime?.tap(x: x, y: y) }
+        runtime.update(camera: camera, controls: cameraControls, elements: elements)
+        leaf.onClickLocal = { [weak leaf, weak runtime] x, y, _, _, mods in
+            guard let leaf, let runtime else { return }
+            guard runtime.controls != nil else { runtime.tap(x: x, y: y); return }
+            runtime.beginCameraGesture(x: x, y: y, mods: mods)
+            PointerCapture.capture(
+                leaf.id,
+                onMove: { [weak runtime] windowX, windowY in
+                    guard let runtime else { return }
+                    runtime.moveCameraGesture(
+                        x: windowX - runtime.lastFrame.x,
+                        y: windowY - runtime.lastFrame.y
+                    )
+                },
+                onUp: { [weak runtime] in runtime?.endCameraGesture() }
+            )
+        }
         leaf.onPointerHoverLocal = { [weak runtime] x, y in runtime?.hover(x: x, y: y) }
         leaf.onHover = { [weak runtime] inside in if !inside { runtime?.leave() } }
         HoverState.register(leaf.id) { [weak leaf] inside in leaf?.onHover?(inside) }
+        if cameraControls != nil {
+            ScrollRouter.register(leaf.id) { [weak runtime] _, dy in runtime?.zoomCamera(by: dy) }
+        } else {
+            ScrollRouter.unregister(leaf.id)
+        }
     }
 }
 
@@ -397,6 +466,15 @@ final class SpatialRuntime {
     }
     let nodeID: NodeID
     var camera: Camera3D = .perspective()
+    var controls: CameraControls3D?
+    private var configuredCamera: Camera3D?
+    private var orbitYaw: Float = 0
+    private var orbitPitch: Float = 0
+    private var orbitDistance: Float = 1
+    private var gesture: CameraGestureState?
+    private var orbitVelocity = Vector3(0, 0, 0)
+    private var panVelocity = Vector3(0, 0, 0)
+    private var cameraStepAt: Double?
     var elements: [SpatialElement] = []
     var motion: [AnyHashable: Motion] = [:]
     private var projected: [SpatialProjectedObject] = []
@@ -407,10 +485,39 @@ final class SpatialRuntime {
     /// picking crosses that boundary once, in one obvious place.
     var lastFrame = CanvasFrame(x: 0, y: 0, w: 0, h: 0)
 
+    private struct CameraGestureState {
+        var lastX: Float
+        var lastY: Float
+        var lastAt: Double
+        var startX: Float
+        var startY: Float
+        var pan: Bool
+    }
+
     init(nodeID: NodeID) { self.nodeID = nodeID }
 
-    func update(camera: Camera3D, elements: [SpatialElement]) {
-        self.camera = camera; self.elements = elements
+    func update(
+        camera: Camera3D, controls: CameraControls3D?, elements: [SpatialElement]
+    ) {
+        let controlsChanged = self.controls != controls
+        self.controls = controls
+        if configuredCamera != camera {
+            configuredCamera = camera
+            self.camera = camera
+            adoptCameraOrbit()
+        } else if controlsChanged, let controls {
+            orbitDistance = min(
+                controls.maximumDistance, max(controls.minimumDistance, orbitDistance)
+            )
+            orbitPitch = min(
+                controls.maximumPitch.radians,
+                max(controls.minimumPitch.radians, orbitPitch)
+            )
+            rebuildCamera()
+        } else if controlsChanged {
+            gesture = nil; cameraStepAt = nil
+        }
+        self.elements = elements
         var animating = false
         for e in elements {
             if var m = motion[e.id] {
@@ -449,7 +556,111 @@ final class SpatialRuntime {
             active = m.scale.step(now) || active
             motion[key] = m
         }
+        active = stepCamera(now: now) || active
         return active
+    }
+
+    private func adoptCameraOrbit() {
+        let offset = camera.position - camera.target
+        orbitDistance = max(0.0001, length(offset))
+        orbitYaw = atan2(offset.x, offset.z)
+        orbitPitch = asin(min(1, max(-1, offset.y / orbitDistance)))
+    }
+
+    private func rebuildCamera() {
+        let cp = cos(orbitPitch)
+        let offset = Vector3(
+            sin(orbitYaw) * cp * orbitDistance,
+            sin(orbitPitch) * orbitDistance,
+            cos(orbitYaw) * cp * orbitDistance
+        )
+        camera.position = camera.target + offset
+        ViewInvalidation.markNeedsRedraw()
+    }
+
+    func beginCameraGesture(x: Float, y: Float, mods: Int32) {
+        let now = FrameScheduler.now()
+        gesture = CameraGestureState(
+            lastX: x, lastY: y, lastAt: now, startX: x, startY: y,
+            pan: KeyMods.contains(mods, KeyMods.shift)
+        )
+        orbitVelocity = Vector3(0, 0, 0); panVelocity = Vector3(0, 0, 0)
+        cameraStepAt = nil
+    }
+
+    func moveCameraGesture(x: Float, y: Float) {
+        guard let controls, var gesture else { return }
+        let now = FrameScheduler.now()
+        let dx = x - gesture.lastX, dy = y - gesture.lastY
+        let dt = Float(max(1.0 / 240.0, now - gesture.lastAt))
+        if gesture.pan {
+            let forward = normalized(camera.target - camera.position)
+            let right = normalized(cross(forward, [0, 1, 0]))
+            let up = cross(right, forward)
+            let scale = orbitDistance * controls.panSensitivity
+            let delta = right * (-dx * scale) + up * (dy * scale)
+            camera.target = camera.target + delta
+            let measured = limited(delta * (1 / dt), to: orbitDistance * 1.5)
+            panVelocity = panVelocity * 0.35 + measured * 0.65
+        } else {
+            let yawDelta = -dx * controls.orbitSensitivity
+            let pitchDelta = -dy * controls.orbitSensitivity
+            orbitYaw += yawDelta
+            orbitPitch = min(
+                controls.maximumPitch.radians,
+                max(controls.minimumPitch.radians, orbitPitch + pitchDelta)
+            )
+            let measured = limited([yawDelta / dt, pitchDelta / dt, 0], to: 4)
+            orbitVelocity = orbitVelocity * 0.35 + measured * 0.65
+        }
+        gesture.lastX = x; gesture.lastY = y; gesture.lastAt = now
+        self.gesture = gesture
+        rebuildCamera()
+    }
+
+    func endCameraGesture() {
+        guard let gesture else { return }
+        self.gesture = nil
+        let moved = hypot(gesture.lastX - gesture.startX, gesture.lastY - gesture.startY)
+        if moved < 4 { tap(x: gesture.startX, y: gesture.startY) }
+        guard controls?.inertia == true,
+              length(orbitVelocity) > 0.01 || length(panVelocity) > 0.01 else { return }
+        cameraStepAt = FrameScheduler.now()
+        installAnimation()
+    }
+
+    func zoomCamera(by wheelDelta: Float) {
+        guard let controls else { return }
+        let factor = exp(-wheelDelta * controls.zoomSensitivity)
+        orbitDistance = min(
+            controls.maximumDistance,
+            max(controls.minimumDistance, orbitDistance * factor)
+        )
+        orbitVelocity = Vector3(0, 0, 0); panVelocity = Vector3(0, 0, 0)
+        cameraStepAt = nil
+        rebuildCamera()
+    }
+
+    private func stepCamera(now: Double) -> Bool {
+        guard gesture == nil, let controls, let previous = cameraStepAt else { return false }
+        let dt = Float(min(1.0 / 15.0, max(0, now - previous)))
+        cameraStepAt = now
+        orbitYaw += orbitVelocity.x * dt
+        orbitPitch = min(
+            controls.maximumPitch.radians,
+            max(controls.minimumPitch.radians, orbitPitch + orbitVelocity.y * dt)
+        )
+        camera.target = camera.target + panVelocity * dt
+        let decay = pow(controls.deceleration, dt * 60)
+        orbitVelocity = orbitVelocity * decay
+        panVelocity = panVelocity * decay
+        rebuildCamera()
+        if length(orbitVelocity) < 0.01 && length(panVelocity) < 0.01 {
+            orbitVelocity = Vector3(0, 0, 0); panVelocity = Vector3(0, 0, 0)
+            cameraStepAt = nil
+            return false
+        }
+        return true
     }
 
     func emit(_ draw: DrawList, frame: CanvasFrame) {
@@ -650,8 +861,14 @@ final class SpatialRuntime {
 
 private func +(a: Vector3,b: Vector3)->Vector3 { [a.x+b.x,a.y+b.y,a.z+b.z] }
 private func -(a: Vector3,b: Vector3)->Vector3 { [a.x-b.x,a.y-b.y,a.z-b.z] }
+private func *(a: Vector3,b: Float)->Vector3 { [a.x*b,a.y*b,a.z*b] }
 private func dot(_ a: Vector3,_ b: Vector3)->Float { a.x*b.x+a.y*b.y+a.z*b.z }
 private func cross(_ a: Vector3,_ b: Vector3)->Vector3 { [a.y*b.z-a.z*b.y,a.z*b.x-a.x*b.z,a.x*b.y-a.y*b.x] }
+private func length(_ v: Vector3)->Float { sqrt(dot(v,v)) }
+private func limited(_ v: Vector3, to maximum: Float)->Vector3 {
+    let magnitude = length(v)
+    return magnitude > maximum ? v * (maximum / magnitude) : v
+}
 private func normalized(_ v: Vector3)->Vector3 { let l=max(0.0001,sqrt(dot(v,v))); return [v.x/l,v.y/l,v.z/l] }
 private func pointInTriangle(_ x:Float,_ y:Float,_ a:SpatialProjectedVertex,_ b:SpatialProjectedVertex,_ c:SpatialProjectedVertex)->Bool {
     let d1=(x-b.x)*(a.y-b.y)-(a.x-b.x)*(y-b.y)

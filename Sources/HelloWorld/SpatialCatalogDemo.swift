@@ -13,7 +13,10 @@ struct SpatialCatalogDemo: View {
 
     var body: some View {
 
-        Scene3D(height: .pt(320), flexGrow: 1) {
+        Scene3D(
+            height: .pt(320), flexGrow: 1,
+            cameraControls: .orbit(minimumDistance: 4, maximumDistance: 12)
+        ) {
             AmbientLight3D(intensity: 0.28)
             DirectionalLight3D(direction: [-0.35, -0.6, -1], intensity: 1.05)
             ForEach3D(Array(posters.enumerated()), id: \.offset) { index, poster in
