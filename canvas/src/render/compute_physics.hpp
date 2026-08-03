@@ -5,11 +5,11 @@
 
 #include "util/types.hpp"
 
-class Vulkan;
+class RenderDevice;
 
 // Using std140 layout rules for alignment
 // vector types are aligned to vec4 size (vec2/vec3/vec4 = 16 bytes)
-// https://docs.vulkan.org/guide/latest/shader_memory_layout.html
+// https://docs.device.org/guide/latest/shader_memory_layout.html
 
 // GPU particle structure (must match shader struct)
 struct alignas(16) GPUParticle {
@@ -44,7 +44,7 @@ struct alignas(16) SimulationParams {
 
 class ComputePhysics {
 public:
-    ComputePhysics(Vulkan& vulkan);
+    ComputePhysics(RenderDevice& device);
     ~ComputePhysics();
 
     void initialize(uint32_t maxParticles);
@@ -57,7 +57,7 @@ public:
     uint32_t getParticleCount() const { return particleCount_; }
 
 private:
-    Vulkan& vulkan_;
+    RenderDevice& device_;
     
     // Compute pipeline resources
     VkDescriptorSetLayout descriptorSetLayout_ = VK_NULL_HANDLE;

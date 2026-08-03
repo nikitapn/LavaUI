@@ -6,17 +6,17 @@
 
 #include <vulkan/vulkan.h>
 
-class Vulkan;
+class RenderDevice;
 class Shaders
 {
-  Vulkan                                         &vulkan_;
+  RenderDevice                                         &device_;
   std::unordered_map<std::string, VkShaderModule> shaderModules_;
   std::mutex                                      mutex_;
 
  public:
   Shaders(
-    Vulkan &vulkan)
-      : vulkan_(vulkan)
+    RenderDevice &device)
+      : device_(device)
   {
   }
 

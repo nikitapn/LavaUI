@@ -6,7 +6,7 @@
 
 #include "render/quad_renderer.hpp"
 #include "render/shaders.hpp"
-#include "render/vulkan.hpp"
+#include "render/render_device.hpp"
 
 namespace {
 
@@ -21,30 +21,30 @@ void QuadRenderer::init() {
   createWhiteTexture();
   setupDescriptors();
   createPipelineLayout();
-  createPipeline(vulkan_.getRenderPass(), vulkan_.getMSAASamples(), pipeline_);
-  createLinePipeline(vulkan_.getRenderPass(), vulkan_.getMSAASamples(),
+  createPipeline(device_.getRenderPass(), device_.getMSAASamples(), pipeline_);
+  createLinePipeline(device_.getRenderPass(), device_.getMSAASamples(),
                      linePipeline_);
-  createSpatialPipeline(vulkan_.getRenderPass(), vulkan_.getMSAASamples(),
+  createSpatialPipeline(device_.getRenderPass(), device_.getMSAASamples(),
                         spatialPipeline_, true);
   ensureBufferCapacity(kInitialVertexCapacity);
 }
 
 void QuadRenderer::destroyFrameBuffers(FrameResources &fr) {
   if (fr.vertexMapped != nullptr) {
-    if (fr.vertexAlloc != VK_NULL_HANDLE) vulkan_.unmapBuffer(fr.vertexAlloc);
+    if (fr.vertexAlloc != VK_NULL_HANDLE) device_.unmapBuffer(fr.vertexAlloc);
     fr.vertexMapped = nullptr;
   }
   if (fr.indexMapped != nullptr) {
-    if (fr.indexAlloc != VK_NULL_HANDLE) vulkan_.unmapBuffer(fr.indexAlloc);
+    if (fr.indexAlloc != VK_NULL_HANDLE) device_.unmapBuffer(fr.indexAlloc);
     fr.indexMapped = nullptr;
   }
-  vulkan_.destroyBuffer(fr.vertexBuffer, fr.vertexAlloc);
-  vulkan_.destroyBuffer(fr.indexBuffer, fr.indexAlloc);
+  device_.destroyBuffer(fr.vertexBuffer, fr.vertexAlloc);
+  device_.destroyBuffer(fr.indexBuffer, fr.indexAlloc);
   fr.capacity = 0;
 }
 
 void QuadRenderer::cleanUp() {
-  VkDevice device = vulkan_.getDevice();
+  VkDevice device = device_.getDevice();
 
   for (auto &fr : frames_) {
     destroyFrameBuffers(fr);
@@ -55,7 +55,7 @@ void QuadRenderer::cleanUp() {
     vkDestroyImageView(device, whiteImageView_, nullptr);
     whiteImageView_ = VK_NULL_HANDLE;
   }
-  vulkan_.destroyImage(whiteImage_, whiteImageAlloc_);
+  device_.destroyImage(whiteImage_, whiteImageAlloc_);
   if (sampler_ != VK_NULL_HANDLE) {
     vkDestroySampler(device, sampler_, nullptr);
     sampler_ = VK_NULL_HANDLE;
@@ -79,7 +79,7 @@ QuadRenderer::FrameResources &QuadRenderer::activeFrame() {
 // ─── Setup ─────────────────────────────────────────────────────────────────
 
 void QuadRenderer::createWhiteTexture() {
-  vulkan_.createImage(1, 1, 1, VK_SAMPLE_COUNT_1_BIT, VK_FORMAT_R8_UNORM,
+  device_.createImage(1, 1, 1, VK_SAMPLE_COUNT_1_BIT, VK_FORMAT_R8_UNORM,
                       VK_IMAGE_TILING_OPTIMAL,
                       VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
                       VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, whiteImage_,
@@ -88,33 +88,33 @@ void QuadRenderer::createWhiteTexture() {
   const uint8_t white = 0xff;
   VkBuffer      staging{};
   VmaAllocation stagingAlloc{};
-  vulkan_.createBuffer(sizeof(white), VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+  device_.createBuffer(sizeof(white), VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
                        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
                          VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
                        staging, stagingAlloc);
 
-  void *mapped = vulkan_.mapBuffer(stagingAlloc);
+  void *mapped = device_.mapBuffer(stagingAlloc);
   std::memcpy(mapped, &white, sizeof(white));
-  vulkan_.unmapBuffer(stagingAlloc);
+  device_.unmapBuffer(stagingAlloc);
 
-  vulkan_.transitionImageLayout(whiteImage_, VK_FORMAT_R8_UNORM,
+  device_.transitionImageLayout(whiteImage_, VK_FORMAT_R8_UNORM,
                                 VK_IMAGE_LAYOUT_UNDEFINED,
                                 VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
-  vulkan_.copyBufferToImage(staging, whiteImage_, 1, 1);
-  vulkan_.transitionImageLayout(whiteImage_, VK_FORMAT_R8_UNORM,
+  device_.copyBufferToImage(staging, whiteImage_, 1, 1);
+  device_.transitionImageLayout(whiteImage_, VK_FORMAT_R8_UNORM,
                                 VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                                 VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
 
-  vulkan_.destroyBuffer(staging, stagingAlloc);
+  device_.destroyBuffer(staging, stagingAlloc);
 
   whiteImageView_ =
-    vulkan_.createImageView(whiteImage_, VK_FORMAT_R8_UNORM,
+    device_.createImageView(whiteImage_, VK_FORMAT_R8_UNORM,
                             VK_IMAGE_ASPECT_COLOR_BIT, 1);
-  sampler_ = vulkan_.createTextureSampler();
+  sampler_ = device_.createTextureSampler();
 }
 
 void QuadRenderer::setupDescriptors() {
-  VkDevice device = vulkan_.getDevice();
+  VkDevice device = device_.getDevice();
 
   VkDescriptorSetLayoutBinding samplerBinding{
     .binding         = 0,
@@ -187,8 +187,8 @@ void QuadRenderer::createSceneTargetPipeline(VkRenderPass sceneRenderPass) {
 void QuadRenderer::createLinePipeline(VkRenderPass renderPass,
                                       VkSampleCountFlagBits samples,
                                       vk::Handle<VkPipeline> &out) {
-  VkDevice device = vulkan_.getDevice();
-  Shaders &shaders = vulkan_.getShaders();
+  VkDevice device = device_.getDevice();
+  Shaders &shaders = device_.getShaders();
   VkShaderModule vertModule = shaders.loadShader("shaders/polyline.vert.bin");
   VkShaderModule fragModule = shaders.loadShader("shaders/polyline.frag.bin");
   std::array<VkPipelineShaderStageCreateInfo, 2> stages{
@@ -259,8 +259,8 @@ void QuadRenderer::createSpatialPipeline(VkRenderPass renderPass,
                                          VkSampleCountFlagBits samples,
                                          vk::Handle<VkPipeline> &out,
                                          bool depthEnabled) {
-  VkDevice device = vulkan_.getDevice();
-  Shaders &shaders = vulkan_.getShaders();
+  VkDevice device = device_.getDevice();
+  Shaders &shaders = device_.getShaders();
   VkShaderModule vert = shaders.loadShader("shaders/spatial.vert.bin");
   VkShaderModule frag = shaders.loadShader("shaders/spatial.frag.bin");
   std::array<VkPipelineShaderStageCreateInfo, 2> stages{
@@ -311,8 +311,8 @@ void QuadRenderer::createSpatialPipeline(VkRenderPass renderPass,
 void QuadRenderer::createPipeline(VkRenderPass renderPass,
                                   VkSampleCountFlagBits samples,
                                   vk::Handle<VkPipeline> &out) {
-  VkDevice device = vulkan_.getDevice();
-  Shaders &shaders = vulkan_.getShaders();
+  VkDevice device = device_.getDevice();
+  Shaders &shaders = device_.getShaders();
 
   VkShaderModule vertModule = shaders.loadShader("shaders/quad.vert.bin");
   VkShaderModule fragModule = shaders.loadShader("shaders/quad.frag.bin");
@@ -476,7 +476,7 @@ void QuadRenderer::createPipelineLayout() {
     .pushConstantRangeCount = 1,
     .pPushConstantRanges    = &pushRange,
   };
-  VR(vkCreatePipelineLayout(vulkan_.getDevice(), &layoutInfo, nullptr,
+  VR(vkCreatePipelineLayout(device_.getDevice(), &layoutInfo, nullptr,
                             &pipelineLayout_),
      "Failed to create quad pipeline layout");
 }
@@ -491,7 +491,7 @@ void QuadRenderer::ensureBufferCapacity(size_t vertexCount) {
   // later, and any in-flight use of the *other* slot is unrelated — but this
   // slot was waited on before begin(). Still wait all if we ever grow shared
   // pipeline resources; for this buffer only this slot is rewritten.
-  vulkan_.waitForAllFramesInFlight();
+  device_.waitForAllFramesInFlight();
 
   size_t newCapacity = fr.capacity == 0 ? kInitialVertexCapacity : fr.capacity;
   while (newCapacity < vertexCount) {
@@ -508,17 +508,17 @@ void QuadRenderer::ensureBufferCapacity(size_t vertexCount) {
     const VkDeviceSize vertexBytes = newCapacity * sizeof(Vertex);
     const VkDeviceSize indexBytes  = (newCapacity / 4) * 6 * sizeof(uint32_t);
 
-    vulkan_.createBuffer(vertexBytes, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+    device_.createBuffer(vertexBytes, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
                          VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
                            VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
                          slot.vertexBuffer, slot.vertexAlloc);
-    vulkan_.createBuffer(indexBytes, VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
+    device_.createBuffer(indexBytes, VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
                          VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
                            VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
                          slot.indexBuffer, slot.indexAlloc);
 
-    slot.vertexMapped = vulkan_.mapBuffer(slot.vertexAlloc);
-    slot.indexMapped = vulkan_.mapBuffer(slot.indexAlloc);
+    slot.vertexMapped = device_.mapBuffer(slot.vertexAlloc);
+    slot.indexMapped = device_.mapBuffer(slot.indexAlloc);
     slot.capacity = newCapacity;
   }
 }
@@ -1024,7 +1024,7 @@ void QuadRenderer::drawBatchRange(VkCommandBuffer commandBuffer,
       .descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
       .pImageInfo      = &imageInfo,
     };
-    vkUpdateDescriptorSets(vulkan_.getDevice(), 1, &write, 0, nullptr);
+    vkUpdateDescriptorSets(device_.getDevice(), 1, &write, 0, nullptr);
     vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
                             pipelineLayout_, 0, 1, &set, 0, nullptr);
     boundSet = set;

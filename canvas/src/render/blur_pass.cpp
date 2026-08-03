@@ -8,7 +8,7 @@
 
 #include "render/blur_pass.hpp"
 #include "render/shaders.hpp"
-#include "render/vulkan.hpp"
+#include "render/render_device.hpp"
 
 namespace {
 
@@ -36,7 +36,7 @@ void BlurPass::init()
 {
   // Match the main resolve format so blit/composite never hit a format-class
   // edge case (SRGB resolve ↔ UNORM blur looked like garbage on some paths).
-  format_ = vulkan_.colorFormat();
+  format_ = device_.colorFormat();
   createPipeline();
   createSampler();
   createSceneRenderPass();
@@ -94,13 +94,13 @@ void BlurPass::createSceneRenderPass()
     .dependencyCount = static_cast<uint32_t>(deps.size()),
     .pDependencies = deps.data(),
   };
-  VR(vkCreateRenderPass(vulkan_.getDevice(), &rp, nullptr, &sceneRenderPass_),
+  VR(vkCreateRenderPass(device_.getDevice(), &rp, nullptr, &sceneRenderPass_),
      "content blur scene render pass");
 }
 
 void BlurPass::destroySceneTarget()
 {
-  VkDevice device = vulkan_.getDevice();
+  VkDevice device = device_.getDevice();
   if (sceneFb_ != VK_NULL_HANDLE) {
     vkDestroyFramebuffer(device, sceneFb_, nullptr);
     sceneFb_ = VK_NULL_HANDLE;
@@ -109,18 +109,18 @@ void BlurPass::destroySceneTarget()
     vkDestroyImageView(device, sceneView_, nullptr);
     sceneView_ = VK_NULL_HANDLE;
   }
-  vulkan_.destroyImage(sceneImage_, sceneAlloc_);
+  device_.destroyImage(sceneImage_, sceneAlloc_);
 }
 
 void BlurPass::createSceneTarget(uint32_t width, uint32_t height)
 {
   destroySceneTarget();
-  vulkan_.createImage(
+  device_.createImage(
     width, height, 1, VK_SAMPLE_COUNT_1_BIT, format_, VK_IMAGE_TILING_OPTIMAL,
     VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
     VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, sceneImage_, sceneAlloc_);
   sceneView_ =
-    vulkan_.createImageView(sceneImage_, format_, VK_IMAGE_ASPECT_COLOR_BIT, 1);
+    device_.createImageView(sceneImage_, format_, VK_IMAGE_ASPECT_COLOR_BIT, 1);
 
   VkFramebufferCreateInfo fbi{
     .sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO,
@@ -131,7 +131,7 @@ void BlurPass::createSceneTarget(uint32_t width, uint32_t height)
     .height = height,
     .layers = 1,
   };
-  VR(vkCreateFramebuffer(vulkan_.getDevice(), &fbi, nullptr, &sceneFb_),
+  VR(vkCreateFramebuffer(device_.getDevice(), &fbi, nullptr, &sceneFb_),
      "content blur scene framebuffer");
 }
 
@@ -185,7 +185,7 @@ void BlurPass::createSampler()
     .borderColor = VK_BORDER_COLOR_FLOAT_OPAQUE_BLACK,
     .unnormalizedCoordinates = VK_FALSE,
   };
-  VR(vkCreateSampler(vulkan_.getDevice(), &si, nullptr, &sampler_),
+  VR(vkCreateSampler(device_.getDevice(), &si, nullptr, &sampler_),
      "blur sampler");
 }
 
@@ -193,7 +193,7 @@ void BlurPass::cleanUp()
 {
   destroyImages();
   destroySceneTarget();
-  VkDevice device = vulkan_.getDevice();
+  VkDevice device = device_.getDevice();
   if (sceneRenderPass_ != VK_NULL_HANDLE) {
     vkDestroyRenderPass(device, sceneRenderPass_, nullptr);
     sceneRenderPass_ = VK_NULL_HANDLE;
@@ -227,7 +227,7 @@ void BlurPass::cleanUp()
 
 void BlurPass::destroyImages()
 {
-  VkDevice device = vulkan_.getDevice();
+  VkDevice device = device_.getDevice();
   auto kill = [&](VkFramebuffer &fb, VkImageView &v, VkImage &img,
                   VmaAllocation &alloc) {
     if (fb != VK_NULL_HANDLE) {
@@ -238,7 +238,7 @@ void BlurPass::destroyImages()
       vkDestroyImageView(device, v, nullptr);
       v = VK_NULL_HANDLE;
     }
-    vulkan_.destroyImage(img, alloc);
+    device_.destroyImage(img, alloc);
   };
   kill(fbA_, viewA_, imageA_, allocA_);
   kill(fbB_, viewB_, imageB_, allocB_);
@@ -253,12 +253,12 @@ void BlurPass::createImages(uint32_t width, uint32_t height)
 
   auto make = [&](VkImage &img, VmaAllocation &alloc, VkImageView &view,
                   VkFramebuffer &fb) {
-    vulkan_.createImage(
+    device_.createImage(
       width, height, 1, VK_SAMPLE_COUNT_1_BIT, format_, VK_IMAGE_TILING_OPTIMAL,
       VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT |
         VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
       VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, img, alloc);
-    view = vulkan_.createImageView(img, format_, VK_IMAGE_ASPECT_COLOR_BIT, 1);
+    view = device_.createImageView(img, format_, VK_IMAGE_ASPECT_COLOR_BIT, 1);
 
     VkFramebufferCreateInfo fbi{
       .sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO,
@@ -269,7 +269,7 @@ void BlurPass::createImages(uint32_t width, uint32_t height)
       .height = height,
       .layers = 1,
     };
-    VR(vkCreateFramebuffer(vulkan_.getDevice(), &fbi, nullptr, &fb),
+    VR(vkCreateFramebuffer(device_.getDevice(), &fbi, nullptr, &fb),
        "blur framebuffer");
   };
 
@@ -290,7 +290,7 @@ void BlurPass::createImages(uint32_t width, uint32_t height)
       .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
       .pImageInfo = &ii,
     };
-    vkUpdateDescriptorSets(vulkan_.getDevice(), 1, &w, 0, nullptr);
+    vkUpdateDescriptorSets(device_.getDevice(), 1, &w, 0, nullptr);
   };
   writeSet(setA_, viewA_);
   writeSet(setB_, viewB_);
@@ -341,7 +341,7 @@ void BlurPass::ensureSize(uint32_t width, uint32_t height, float finestRadius)
       height == fullHeight_ && imageA_ != VK_NULL_HANDLE) {
     return;
   }
-  vulkan_.waitForAllFramesInFlight();
+  device_.waitForAllFramesInFlight();
   const bool extentChanged = width != fullWidth_ || height != fullHeight_;
   fullWidth_ = width;
   fullHeight_ = height;
@@ -356,7 +356,7 @@ void BlurPass::ensureSize(uint32_t width, uint32_t height, float finestRadius)
 
 void BlurPass::createPipeline()
 {
-  VkDevice device = vulkan_.getDevice();
+  VkDevice device = device_.getDevice();
 
   VkAttachmentDescription att{
     .format = format_,
@@ -469,7 +469,7 @@ void BlurPass::createPipeline()
   VR(vkCreatePipelineLayout(device, &pli, nullptr, &pipelineLayout_),
      "blur pipeline layout");
 
-  Shaders &shaders = vulkan_.getShaders();
+  Shaders &shaders = device_.getShaders();
   VkShaderModule vert = shaders.loadShader("shaders/blur.vert.bin");
   VkShaderModule frag = shaders.loadShader("shaders/blur.frag.bin");
   std::array<VkPipelineShaderStageCreateInfo, 2> stages{{

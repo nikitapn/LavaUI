@@ -5,7 +5,7 @@
 // sampleable so the quad pipeline can composite it.
 //
 // The two kinds differ only in what they hand over as the source:
-//   BeginBackdropBlur — Vulkan::resolveImage(), the frame as painted so far.
+//   BeginBackdropBlur — RenderDevice::resolveImage(), the frame as painted so far.
 //   BeginContentBlur  — sceneImage(), a subtree drawn on its own against
 //                       transparent black (see beginSceneCapture).
 //
@@ -24,11 +24,11 @@
 
 #include "util/types.hpp"
 
-class Vulkan;
+class RenderDevice;
 
 class BlurPass {
  public:
-  explicit BlurPass(Vulkan &vulkan) : vulkan_{vulkan} {}
+  explicit BlurPass(RenderDevice &device) : device_{device} {}
   ~BlurPass() { cleanUp(); }
 
   BlurPass(const BlurPass &) = delete;
@@ -112,7 +112,7 @@ class BlurPass {
   };
   Sub subFor(float radius) const;
 
-  Vulkan &vulkan_;
+  RenderDevice &device_;
 
   VkImage       imageA_ = VK_NULL_HANDLE;
   VmaAllocation allocA_ = VK_NULL_HANDLE;

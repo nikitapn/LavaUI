@@ -2,7 +2,7 @@
 
 #include "util/util.hpp"
 #include "render/shaders.hpp"
-#include "render/vulkan.hpp"
+#include "render/render_device.hpp"
 
 VkShaderModule Shaders::loadShader(
   const std::string &filename)
@@ -15,7 +15,7 @@ VkShaderModule Shaders::loadShader(
   }
 
   auto code = utils::readFile(filename);
-  VkShaderModule shaderModule = vulkan_.createShaderModule(code);
+  VkShaderModule shaderModule = device_.createShaderModule(code);
   shaderModules_.emplace(filename, shaderModule);
 
   return shaderModule;
@@ -24,7 +24,7 @@ VkShaderModule Shaders::loadShader(
 void Shaders::cleanUp()
 {
   for (auto &shaderModule : shaderModules_) {
-    vkDestroyShaderModule(vulkan_.getDevice(), shaderModule.second, nullptr);
+    vkDestroyShaderModule(device_.getDevice(), shaderModule.second, nullptr);
   }
   shaderModules_.clear();
 }

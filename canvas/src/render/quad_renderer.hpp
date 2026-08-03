@@ -17,7 +17,7 @@
 // preserves paint order across that switch.
 //
 // Frames-in-flight: host-visible VB/IB and descriptor sets are duplicated per
-// frame slot (see Vulkan::kMaxFramesInFlight). begin()/end()/draw() use the
+// frame slot (see RenderDevice::kMaxFramesInFlight). begin()/end()/draw() use the
 // slot passed to begin(); Application waits that slot before writing.
 
 #include <cstdint>
@@ -30,7 +30,7 @@
 #include "render/draw_command.hpp"
 #include "util/types.hpp"
 
-class Vulkan;
+class RenderDevice;
 
 class QuadRenderer {
  public:
@@ -47,7 +47,7 @@ class QuadRenderer {
   };
   static_assert(sizeof(Vertex) == 36, "QuadVertex must stay tightly packed");
 
-  explicit QuadRenderer(Vulkan &vulkan) : vulkan_{vulkan} {}
+  explicit QuadRenderer(RenderDevice &device) : device_{device} {}
 
   QuadRenderer(const QuadRenderer &)            = delete;
   QuadRenderer &operator=(const QuadRenderer &) = delete;
@@ -61,7 +61,7 @@ class QuadRenderer {
 
   // ─── Frame recording ─────────────────────────────────────────────────────
   // begin(slot) -> push*() in draw-list order -> end() -> draw().
-  // `frameSlot` must match Vulkan::currentFrameSlot() for this submit.
+  // `frameSlot` must match RenderDevice::currentFrameSlot() for this submit.
 
   void begin(vec2 viewportSize, uint32_t frameSlot = 0);
 
@@ -203,7 +203,7 @@ class QuadRenderer {
 
   FrameResources &activeFrame();
 
-  Vulkan &vulkan_;
+  RenderDevice &device_;
 
   vk::Handle<VkPipeline>            pipeline_;
   /// Same shaders and layout against the content-blur scene pass: one colour

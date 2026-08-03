@@ -1,7 +1,7 @@
 #include <iostream>
 #include <cstring>
 
-#include "render/vulkan.hpp"
+#include "render/render_device.hpp"
 #include "render/texture_manager.hpp"
 
 #define STB_IMAGE_IMPLEMENTATION
@@ -15,9 +15,9 @@
 
 #define STBI_rgb_alpha 4
 
-void TextureManager::initialize(Vulkan& vulkan) {
-    vulkan_ = &vulkan;
-    atlas_.initialize(vulkan);
+void TextureManager::initialize(RenderDevice& device) {
+    device_ = &device;
+    atlas_.initialize(device);
     std::cout << "TextureManager initialized\n";
 }
 
@@ -26,19 +26,19 @@ void TextureManager::cleanUp() {
     
     // Clean up all textures
     for (auto& [path, textureData] : textures_) {
-        if (textureData && vulkan_ && textureData->ownsImage) {
+        if (textureData && device_ && textureData->ownsImage) {
             if (textureData->view != VK_NULL_HANDLE) {
-                vkDestroyImageView(vulkan_->getDevice(), textureData->view, nullptr);
+                vkDestroyImageView(device_->getDevice(), textureData->view, nullptr);
                 textureData->view = VK_NULL_HANDLE;
             }
-            vulkan_->destroyImage(textureData->image, textureData->allocation);
+            device_->destroyImage(textureData->image, textureData->allocation);
         }
     }
     
     atlas_.cleanUp();
     textures_.clear();
     textureById_.clear();
-    vulkan_ = nullptr;
+    device_ = nullptr;
 }
 
 bool TextureManager::hasTexture(const std::string& key) const {
@@ -48,7 +48,7 @@ bool TextureManager::hasTexture(const std::string& key) const {
 TextureHandle TextureManager::uploadTexture(const std::string& key,
                                             const uint8_t* rgba,
                                             uint32_t width, uint32_t height) {
-    if (!vulkan_ || rgba == nullptr || width == 0 || height == 0) {
+    if (!device_ || rgba == nullptr || width == 0 || height == 0) {
         return {VK_NULL_HANDLE, 0};
     }
 
@@ -86,31 +86,31 @@ TextureHandle TextureManager::uploadTexture(const std::string& key,
     const VkDeviceSize imageSize = static_cast<VkDeviceSize>(width) * height * 4;
     VkBuffer stagingBuffer;
     VmaAllocation stagingAlloc;
-    vulkan_->createBuffer(imageSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+    device_->createBuffer(imageSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
                           VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT
                             | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
                           stagingBuffer, stagingAlloc);
-    void* data = vulkan_->mapBuffer(stagingAlloc);
+    void* data = device_->mapBuffer(stagingAlloc);
     memcpy(data, rgba, static_cast<size_t>(imageSize));
-    vulkan_->unmapBuffer(stagingAlloc);
+    device_->unmapBuffer(stagingAlloc);
 
     VkImage textureImage;
     VmaAllocation textureAlloc;
-    vulkan_->createImage(width, height, 1, VK_SAMPLE_COUNT_1_BIT,
+    device_->createImage(width, height, 1, VK_SAMPLE_COUNT_1_BIT,
                          VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_TILING_OPTIMAL,
                          VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
                          VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
                          textureImage, textureAlloc);
-    vulkan_->transitionImageLayout(textureImage, VK_FORMAT_R8G8B8A8_SRGB,
+    device_->transitionImageLayout(textureImage, VK_FORMAT_R8G8B8A8_SRGB,
                                    VK_IMAGE_LAYOUT_UNDEFINED,
                                    VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
-    vulkan_->copyBufferToImage(stagingBuffer, textureImage, width, height);
-    vulkan_->transitionImageLayout(textureImage, VK_FORMAT_R8G8B8A8_SRGB,
+    device_->copyBufferToImage(stagingBuffer, textureImage, width, height);
+    device_->transitionImageLayout(textureImage, VK_FORMAT_R8G8B8A8_SRGB,
                                    VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                                    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-    vulkan_->destroyBuffer(stagingBuffer, stagingAlloc);
+    device_->destroyBuffer(stagingBuffer, stagingAlloc);
 
-    VkImageView view = vulkan_->createImageView(textureImage, VK_FORMAT_R8G8B8A8_SRGB,
+    VkImageView view = device_->createImageView(textureImage, VK_FORMAT_R8G8B8A8_SRGB,
                                                 VK_IMAGE_ASPECT_COLOR_BIT, 1);
     auto textureData = std::make_unique<TextureData>();
     textureData->image = textureImage;
@@ -129,7 +129,7 @@ TextureHandle TextureManager::uploadTexture(const std::string& key,
 }
 
 TextureHandle TextureManager::loadTexture(const std::string& path) {
-    if (!vulkan_) {
+    if (!device_) {
         std::cerr << "TextureManager not initialized!\n";
         return {VK_NULL_HANDLE, 0};
     }
@@ -195,39 +195,39 @@ TextureHandle TextureManager::loadTexture(const std::string& path) {
     // Create staging buffer
     VkBuffer stagingBuffer;
     VmaAllocation stagingAlloc;
-    vulkan_->createBuffer(
+    device_->createBuffer(
         imageSize,
         VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
         VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
         stagingBuffer,
         stagingAlloc);
 
-    void *data = vulkan_->mapBuffer(stagingAlloc);
+    void *data = device_->mapBuffer(stagingAlloc);
     memcpy(data, pixels, static_cast<size_t>(imageSize));
-    vulkan_->unmapBuffer(stagingAlloc);
+    device_->unmapBuffer(stagingAlloc);
 
     stbi_image_free(pixels);
 
     // Create texture image
     VkImage textureImage;
     VmaAllocation textureAlloc;
-    vulkan_->createImage(texWidth, texHeight, 1, VK_SAMPLE_COUNT_1_BIT,
+    device_->createImage(texWidth, texHeight, 1, VK_SAMPLE_COUNT_1_BIT,
                         VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_TILING_OPTIMAL,
                         VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
                         VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
                         textureImage, textureAlloc);
 
     // Transition image layout and copy from staging buffer
-    vulkan_->transitionImageLayout(textureImage, VK_FORMAT_R8G8B8A8_SRGB,
+    device_->transitionImageLayout(textureImage, VK_FORMAT_R8G8B8A8_SRGB,
                                   VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
-    vulkan_->copyBufferToImage(stagingBuffer, textureImage, texWidth, texHeight);
-    vulkan_->transitionImageLayout(textureImage, VK_FORMAT_R8G8B8A8_SRGB,
+    device_->copyBufferToImage(stagingBuffer, textureImage, texWidth, texHeight);
+    device_->transitionImageLayout(textureImage, VK_FORMAT_R8G8B8A8_SRGB,
                                   VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
 
-    vulkan_->destroyBuffer(stagingBuffer, stagingAlloc);
+    device_->destroyBuffer(stagingBuffer, stagingAlloc);
 
     // Create image view
-    VkImageView textureImageView = vulkan_->createImageView(textureImage, VK_FORMAT_R8G8B8A8_SRGB, 
+    VkImageView textureImageView = device_->createImageView(textureImage, VK_FORMAT_R8G8B8A8_SRGB, 
                                                            VK_IMAGE_ASPECT_COLOR_BIT, 1);
 
     // Create texture data entry
@@ -254,7 +254,7 @@ TextureHandle TextureManager::loadTexture(const std::string& path) {
 TextureHandle TextureManager::registerTexture(const std::string& name, 
                                                              VkImageView imageView,
                                                              uint32_t width, uint32_t height) {
-    if (!vulkan_) {
+    if (!device_) {
         std::cerr << "TextureManager not initialized!\n";
         return {VK_NULL_HANDLE, 0};
     }
@@ -317,8 +317,8 @@ void TextureManager::unloadTexture(const std::string& path) {
         // Deferred: a frame submitted moments ago may still sample this
         // texture. Destroying it here is a use-after-free that surfaces as a
         // crash somewhere unrelated.
-        if (vulkan_ && it->second->ownsImage) {
-            vulkan_->destroyImageDeferred(it->second->image,
+        if (device_ && it->second->ownsImage) {
+            device_->destroyImageDeferred(it->second->image,
                                           it->second->allocation,
                                           it->second->view);
         }

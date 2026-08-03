@@ -42,7 +42,7 @@ let engineSources: [String] = [
     "src/render/text_renderer.cpp",
     "src/render/texture_manager.cpp",
     "src/render/vma_impl.cpp",
-    "src/render/vulkan.cpp",
+    "src/render/render_device.cpp",
     "src/util/cout_ext.cpp",
     "src/util/util.cpp",
     "src/window/canvas_window.cpp",

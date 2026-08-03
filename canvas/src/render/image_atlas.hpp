@@ -9,7 +9,7 @@
 
 #include "util/types.hpp"
 
-class Vulkan;
+class RenderDevice;
 
 /// Packs same-ish-sized images into a few large pages so a wall of them costs
 /// one descriptor bind instead of one each.
@@ -52,7 +52,7 @@ public:
   /// `cellSize` is the largest image that can be atlased; `pageSize` must be a
   /// multiple of it. Defaults hold 64 covers of up to 256px per 2048² page,
   /// which is 16 MB of VRAM for a screenful and then some.
-  void initialize(Vulkan &vulkan, uint32_t cellSize = 256,
+  void initialize(RenderDevice &device, uint32_t cellSize = 256,
                   uint32_t pageSize = 2048, uint32_t maxPages = 8);
   void cleanUp();
 
@@ -90,7 +90,7 @@ private:
   uint32_t slotsPerPage() const { return cellsPerRow_ * cellsPerRow_; }
   bool     addPage();
 
-  Vulkan  *vulkan_     = nullptr;
+  RenderDevice  *device_     = nullptr;
   uint32_t cellSize_   = 256;
   uint32_t pageSize_   = 2048;
   uint32_t cellsPerRow_ = 8;

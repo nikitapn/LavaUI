@@ -7,13 +7,13 @@
 
 #include "render/vulkan_ptr.hpp"
 
-class Vulkan;
+class RenderDevice;
 
 struct Pipeline {
   vk::Handle<VkPipeline>       pipeline;
   vk::Handle<VkPipelineLayout> layout;
 
-  void destroy(Vulkan& vulkan);
+  void destroy(RenderDevice& device);
 };
 
 class PipelineBuilder
@@ -49,5 +49,5 @@ class PipelineBuilder
 
   PipelineBuilder& setShadowPipeline(bool isShadow = true);
 
-  Pipeline build(Vulkan& vulkan, std::string_view debugName = "unnamed_pipeline");
+  Pipeline build(RenderDevice& device, std::string_view debugName = "unnamed_pipeline");
 };

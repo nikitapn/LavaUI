@@ -35,7 +35,7 @@ class Shaders;
 
 namespace vk {
 
-/// GPU buffer owned through Vulkan/VMA. Prefer `Vulkan::destroyBuffer` over
+/// GPU buffer owned through Vulkan/VMA. Prefer `RenderDevice::destroyBuffer` over
 /// freeing memory by hand — VMA suballocates and raw `vkFreeMemory` is wrong.
 struct Buffer {
   VkBuffer      buffer     = VK_NULL_HANDLE;
@@ -47,7 +47,7 @@ struct Buffer {
 
 };
 
-class Vulkan
+class RenderDevice
 {
   bool enableValidationLayers_ = false;
   // Vulkan instance

@@ -9,7 +9,7 @@
 #include <glm/gtc/matrix_transform.hpp>
 
 #include "render/font.hpp"
-#include "render/vulkan.hpp"
+#include "render/render_device.hpp"
 #include "render/shaders.hpp"
 #include "render/text_renderer.hpp"
 
@@ -30,7 +30,7 @@ struct GlyphInfo {
 
 // Implementation class - hidden from header
 struct TextRenderer::Impl {
-  Vulkan& vulkan_;
+  RenderDevice& device_;
   Shaders shaders_;
 
   // Font/Atlas data. Shaping (HarfBuzz) and rasterization (FreeType) both
@@ -72,9 +72,9 @@ struct TextRenderer::Impl {
   /// Set when a glyph did not fit; the atlas grows before the next replay.
   bool needsGrow_ = false;
 
-  Impl(Vulkan& vulkan)
-      : vulkan_(vulkan),
-        shaders_(vulkan),
+  Impl(RenderDevice& device)
+      : device_(device),
+        shaders_(device),
         atlasTexture_(VK_NULL_HANDLE),
         atlasTextureAlloc_(VK_NULL_HANDLE),
         atlasTextureView_(VK_NULL_HANDLE),
@@ -94,7 +94,7 @@ struct TextRenderer::Impl {
   }
 
   // Idempotent on purpose: called explicitly from Application::shutdown()
-  // (before vulkan.cleanUp() destroys the VkDevice) *and* implicitly from
+  // (before device.cleanUp() destroys the VkDevice) *and* implicitly from
   // ~Impl() below (whenever this object itself is destroyed, which happens
   // later, after the device is already gone). Every handle is reset to
   // VK_NULL_HANDLE after destruction so the second call's guards all see
@@ -102,7 +102,7 @@ struct TextRenderer::Impl {
   // destroyed handles against an already-destroyed device. Same pattern
   // LineRenderer::destroy() already uses.
   void cleanUp() {
-    VkDevice device = vulkan_.getDevice();
+    VkDevice device = device_.getDevice();
 
     // Cleanup Shaders
     shaders_.cleanUp();
@@ -120,7 +120,7 @@ struct TextRenderer::Impl {
       vkDestroyImageView(device, atlasTextureView_, nullptr);
       atlasTextureView_ = VK_NULL_HANDLE;
     }
-    vulkan_.destroyImage(atlasTexture_, atlasTextureAlloc_);
+    device_.destroyImage(atlasTexture_, atlasTextureAlloc_);
   }
 
   ~Impl() {
@@ -149,7 +149,7 @@ struct TextRenderer::Impl {
 
   void createAtlasTexture() {
     // Create atlas texture
-    vulkan_.createImage(
+    device_.createImage(
       atlasWidth_,
       atlasHeight_,
       1,
@@ -162,17 +162,17 @@ struct TextRenderer::Impl {
       atlasTextureAlloc_);
 
     // Transition to optimal layout
-    vulkan_.transitionImageLayout(atlasTexture_,
+    device_.transitionImageLayout(atlasTexture_,
                                   VK_FORMAT_R8_UNORM,
                                   VK_IMAGE_LAYOUT_UNDEFINED,
                                   VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
 
     // Create image view
-    atlasTextureView_ = vulkan_.createImageView(
+    atlasTextureView_ = device_.createImageView(
       atlasTexture_, VK_FORMAT_R8_UNORM, VK_IMAGE_ASPECT_COLOR_BIT, 1);
 
     // Create sampler
-    atlasSampler_ = vulkan_.createTextureSampler();
+    atlasSampler_ = device_.createTextureSampler();
   }
 
 
@@ -240,29 +240,29 @@ struct TextRenderer::Impl {
     const int newW = atlasWidth_ * 2;
     const int newH = atlasHeight_ * 2;
     const int maxDim = static_cast<int>(
-      vulkan_.getDeviceProperties().limits.maxImageDimension2D);
+      device_.getDeviceProperties().limits.maxImageDimension2D);
     if (newW > maxDim || newH > maxDim) {
       std::cerr << "TextRenderer: atlas at device maximum (" << atlasWidth_
                 << "); further glyphs will be dropped\n";
       return false;
     }
 
-    VkDevice device = vulkan_.getDevice();
+    VkDevice device = device_.getDevice();
     VkImage       newImage{};
     VmaAllocation newAlloc{};
-    vulkan_.createImage(newW, newH, 1, VK_SAMPLE_COUNT_1_BIT, VK_FORMAT_R8_UNORM,
+    device_.createImage(newW, newH, 1, VK_SAMPLE_COUNT_1_BIT, VK_FORMAT_R8_UNORM,
                         VK_IMAGE_TILING_OPTIMAL,
                         VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
                         VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, newImage, newAlloc);
 
-    vulkan_.transitionImageLayout(newImage, VK_FORMAT_R8_UNORM,
+    device_.transitionImageLayout(newImage, VK_FORMAT_R8_UNORM,
                                   VK_IMAGE_LAYOUT_UNDEFINED,
                                   VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
-    vulkan_.transitionImageLayout(atlasTexture_, VK_FORMAT_R8_UNORM,
+    device_.transitionImageLayout(atlasTexture_, VK_FORMAT_R8_UNORM,
                                   VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                                   VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
 
-    VkCommandBuffer cmd = vulkan_.beginSingleTimeCommands();
+    VkCommandBuffer cmd = device_.beginSingleTimeCommands();
     VkImageCopy region{
       .srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
       .srcOffset      = {0, 0, 0},
@@ -273,19 +273,19 @@ struct TextRenderer::Impl {
     };
     vkCmdCopyImage(cmd, atlasTexture_, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                    newImage, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
-    vulkan_.endSingleTimeCommands(cmd);
+    device_.endSingleTimeCommands(cmd);
 
-    vulkan_.transitionImageLayout(newImage, VK_FORMAT_R8_UNORM,
+    device_.transitionImageLayout(newImage, VK_FORMAT_R8_UNORM,
                                   VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                                   VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
 
     vkDestroyImageView(device, atlasTextureView_, nullptr);
     atlasTextureView_ = VK_NULL_HANDLE;
-    vulkan_.destroyImage(atlasTexture_, atlasTextureAlloc_);
+    device_.destroyImage(atlasTexture_, atlasTextureAlloc_);
 
     atlasTexture_      = newImage;
     atlasTextureAlloc_ = newAlloc;
-    atlasTextureView_  = vulkan_.createImageView(
+    atlasTextureView_  = device_.createImageView(
       atlasTexture_, VK_FORMAT_R8_UNORM, VK_IMAGE_ASPECT_COLOR_BIT, 1);
 
     // Pixel positions are unchanged; only the normalisation denominator grew.
@@ -312,7 +312,7 @@ struct TextRenderer::Impl {
     VkBuffer      stagingBuffer;
     VmaAllocation stagingAlloc;
 
-    vulkan_.createBuffer(bufferSize,
+    device_.createBuffer(bufferSize,
                          VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
                          VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
                            VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
@@ -320,12 +320,12 @@ struct TextRenderer::Impl {
                          stagingAlloc);
 
     // Copy bitmap data to staging buffer
-    void *data = vulkan_.mapBuffer(stagingAlloc);
+    void *data = device_.mapBuffer(stagingAlloc);
     memcpy(data, bitmap.pixels.data(), bufferSize);
-    vulkan_.unmapBuffer(stagingAlloc);
+    device_.unmapBuffer(stagingAlloc);
 
     // Copy from staging buffer to texture
-    VkCommandBuffer commandBuffer = vulkan_.beginSingleTimeCommands();
+    VkCommandBuffer commandBuffer = device_.beginSingleTimeCommands();
 
     // Transition image layout for transfer
     VkImageMemoryBarrier barrier {
@@ -400,15 +400,15 @@ struct TextRenderer::Impl {
                          1,
                          &barrier);
 
-    vulkan_.endSingleTimeCommands(commandBuffer);
+    device_.endSingleTimeCommands(commandBuffer);
 
-    vulkan_.destroyBuffer(stagingBuffer, stagingAlloc);
+    device_.destroyBuffer(stagingBuffer, stagingAlloc);
   }
 };
 
 // TextRenderer public interface implementation
-TextRenderer::TextRenderer(Vulkan& vulkan)
-    : impl_(std::make_unique<TextRenderer::Impl>(vulkan)) {}
+TextRenderer::TextRenderer(RenderDevice& device)
+    : impl_(std::make_unique<TextRenderer::Impl>(device)) {}
 
 TextRenderer::~TextRenderer() = default;
 

@@ -10,7 +10,7 @@
 #include "util/types.hpp"
 #include "render/image_atlas.hpp"
 
-class Vulkan;
+class RenderDevice;
 
 struct TextureHandle {
   VkImageView view;
@@ -49,7 +49,7 @@ private:
 
     std::unordered_map<std::string, std::unique_ptr<TextureData>> textures_;
     std::unordered_map<uint32_t, TextureData*> textureById_;
-    Vulkan* vulkan_ = nullptr;
+    RenderDevice* device_ = nullptr;
     uint32_t nextId_ = 1; // Start from 1, 0 means invalid
     ImageAtlas atlas_;
 
@@ -60,7 +60,7 @@ public:
         return instance;
     }
 
-    void initialize(Vulkan& vulkan);
+    void initialize(RenderDevice& device);
     void cleanUp();
 
     // Load texture from file

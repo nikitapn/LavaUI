@@ -3,11 +3,11 @@
 #include <filesystem>
 
 #include "util/util.hpp"
-#include "render/vulkan.hpp"
+#include "render/render_device.hpp"
 #include "render/compute_physics.hpp"
 
-ComputePhysics::ComputePhysics(Vulkan& vulkan) 
-    : vulkan_(vulkan) {}
+ComputePhysics::ComputePhysics(RenderDevice& device) 
+    : device_(device) {}
 
 ComputePhysics::~ComputePhysics() {
     cleanup();
@@ -31,23 +31,23 @@ void ComputePhysics::initialize(uint32_t maxParticles) {
         .pBindings = bindings.data(),
     };
     
-    VkDevice device = vulkan_.getDevice();
+    VkDevice device = device_.getDevice();
     VR(vkCreateDescriptorSetLayout(device, &layoutInfo, nullptr, &descriptorSetLayout_),
        "Failed to create compute descriptor set layout");
     
     // Create pipeline layout
-    pipelineLayout_ = vulkan_.createComputePipelineLayout(descriptorSetLayout_);
+    pipelineLayout_ = device_.createComputePipelineLayout(descriptorSetLayout_);
     
     // Create compute pipelines
-    integrationPipeline_ = vulkan_.createComputePipeline(pipelineLayout_, "shaders/integration.comp.bin");
-    collisionDetectPipeline_ = vulkan_.createComputePipeline(pipelineLayout_, "shaders/collision_detect.comp.bin");
-    collisionResolvePipeline_ = vulkan_.createComputePipeline(pipelineLayout_, "shaders/collision_resolve.comp.bin");
+    integrationPipeline_ = device_.createComputePipeline(pipelineLayout_, "shaders/integration.comp.bin");
+    collisionDetectPipeline_ = device_.createComputePipeline(pipelineLayout_, "shaders/collision_detect.comp.bin");
+    collisionResolvePipeline_ = device_.createComputePipeline(pipelineLayout_, "shaders/collision_resolve.comp.bin");
     
     // Create descriptor pool (needs more descriptors now)
-    descriptorPool_ = vulkan_.createComputeDescriptorPool(4);
+    descriptorPool_ = device_.createComputeDescriptorPool(4);
     
     // Allocate descriptor set
-    descriptorSet_ = vulkan_.allocateComputeDescriptorSet(descriptorPool_, descriptorSetLayout_);
+    descriptorSet_ = device_.allocateComputeDescriptorSet(descriptorPool_, descriptorSetLayout_);
     
     // Create buffers
     createBuffers();
@@ -63,7 +63,7 @@ void ComputePhysics::createBuffers() {
     VkDeviceSize collisionCountBufferSize = sizeof(uint32_t);
     
     // Create particle storage buffer
-    vulkan_.createBuffer(
+    device_.createBuffer(
         particleBufferSize,
         VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
         VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
@@ -72,7 +72,7 @@ void ComputePhysics::createBuffers() {
     );
     
     // Create collision pair buffer
-    vulkan_.createBuffer(
+    device_.createBuffer(
         collisionPairBufferSize,
         VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
         VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
@@ -81,7 +81,7 @@ void ComputePhysics::createBuffers() {
     );
     
     // Create collision count buffer  
-    vulkan_.createBuffer(
+    device_.createBuffer(
         collisionCountBufferSize,
         VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
         VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
@@ -90,13 +90,13 @@ void ComputePhysics::createBuffers() {
     );
     
     // Create uniform buffer
-    auto [uniformBuffer, uniformAlloc] = vulkan_.createUniformBuffer(uniformBufferSize);
+    auto [uniformBuffer, uniformAlloc] = device_.createUniformBuffer(uniformBufferSize);
     uniformBuffer_ = uniformBuffer;
     uniformAlloc_ = uniformAlloc;
 }
 
 void ComputePhysics::updateDescriptorSet() {
-    VkDevice device = vulkan_.getDevice();
+    VkDevice device = device_.getDevice();
     
     // Particle buffer descriptor (binding 0)
     VkDescriptorBufferInfo particleBufferInfo {
@@ -180,7 +180,7 @@ void ComputePhysics::setParticles(const std::vector<GPUParticle>& particles) {
     VkBuffer stagingBuffer;
     VmaAllocation stagingAlloc;
     
-    vulkan_.createBuffer(
+    device_.createBuffer(
         bufferSize,
         VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
         VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
@@ -188,32 +188,32 @@ void ComputePhysics::setParticles(const std::vector<GPUParticle>& particles) {
         stagingAlloc
     );
     
-    void* data = vulkan_.mapBuffer(stagingAlloc);
+    void* data = device_.mapBuffer(stagingAlloc);
     memcpy(data, particles.data(), static_cast<size_t>(bufferSize));
-    vulkan_.unmapBuffer(stagingAlloc);
+    device_.unmapBuffer(stagingAlloc);
     
-    vulkan_.copyBuffer(stagingBuffer, particleBuffer_, bufferSize);
-    vulkan_.destroyBuffer(stagingBuffer, stagingAlloc);
+    device_.copyBuffer(stagingBuffer, particleBuffer_, bufferSize);
+    device_.destroyBuffer(stagingBuffer, stagingAlloc);
 }
 
 void ComputePhysics::updateSimulationParams(const SimulationParams& params) {
-    void* data = vulkan_.mapBuffer(uniformAlloc_);
+    void* data = device_.mapBuffer(uniformAlloc_);
     memcpy(data, &params, sizeof(SimulationParams));
-    vulkan_.unmapBuffer(uniformAlloc_);
+    device_.unmapBuffer(uniformAlloc_);
 }
 
 void ComputePhysics::computeStep() {
     // Step 1: Clear collision count
     clearCollisionCount();
     
-    VkCommandBuffer commandBuffer = vulkan_.beginSingleTimeCommands();
+    VkCommandBuffer commandBuffer = device_.beginSingleTimeCommands();
     
     // Calculate number of workgroups (64 threads per workgroup as defined in shader)
     uint32_t workgroupSize = 64;
     uint32_t particleWorkgroups = (particleCount_ + workgroupSize - 1) / workgroupSize;
     
     // Pass 1: Integration and wall collisions
-    vulkan_.dispatchCompute(commandBuffer, integrationPipeline_, pipelineLayout_, descriptorSet_, particleWorkgroups);
+    device_.dispatchCompute(commandBuffer, integrationPipeline_, pipelineLayout_, descriptorSet_, particleWorkgroups);
 
     // Memory barrier to ensure integration is complete before collision detection
     VkMemoryBarrier memoryBarrier {
@@ -230,7 +230,7 @@ void ComputePhysics::computeStep() {
     );
     
     // Pass 2: Collision detection
-    vulkan_.dispatchCompute(commandBuffer, collisionDetectPipeline_, pipelineLayout_, descriptorSet_, particleWorkgroups);
+    device_.dispatchCompute(commandBuffer, collisionDetectPipeline_, pipelineLayout_, descriptorSet_, particleWorkgroups);
     
     // Another memory barrier before collision resolution
     vkCmdPipelineBarrier(
@@ -240,7 +240,7 @@ void ComputePhysics::computeStep() {
         0, 1, &memoryBarrier, 0, nullptr, 0, nullptr
     );
     
-    vulkan_.endSingleTimeCommands(commandBuffer);
+    device_.endSingleTimeCommands(commandBuffer);
     
     // Step 3: Read collision count and iteratively resolve collisions
     uint32_t collisionCount = readCollisionCount();
@@ -254,9 +254,9 @@ void ComputePhysics::computeStep() {
         const int resolutionIterations = 3; // Adjust this for quality vs performance
         
         for (int iter = 0; iter < resolutionIterations; ++iter) {
-            VkCommandBuffer resolveCommandBuffer = vulkan_.beginSingleTimeCommands();
-            vulkan_.dispatchCompute(resolveCommandBuffer, collisionResolvePipeline_, pipelineLayout_, descriptorSet_, collisionWorkgroups);
-            vulkan_.endSingleTimeCommands(resolveCommandBuffer);
+            VkCommandBuffer resolveCommandBuffer = device_.beginSingleTimeCommands();
+            device_.dispatchCompute(resolveCommandBuffer, collisionResolvePipeline_, pipelineLayout_, descriptorSet_, collisionWorkgroups);
+            device_.endSingleTimeCommands(resolveCommandBuffer);
             // No sleep needed - endSingleTimeCommands() already waits for GPU completion
         }
     }
@@ -269,7 +269,7 @@ void ComputePhysics::readParticles(std::vector<GPUParticle>& outParticles) {
     VkBuffer stagingBuffer;
     VmaAllocation stagingAlloc;
     
-    vulkan_.createBuffer(
+    device_.createBuffer(
         bufferSize,
         VK_BUFFER_USAGE_TRANSFER_DST_BIT,
         VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
@@ -278,13 +278,13 @@ void ComputePhysics::readParticles(std::vector<GPUParticle>& outParticles) {
     );
     
     // Copy from device buffer to staging
-    vulkan_.copyBuffer(particleBuffer_, stagingBuffer, bufferSize);
+    device_.copyBuffer(particleBuffer_, stagingBuffer, bufferSize);
     
-    void* data = vulkan_.mapBuffer(stagingAlloc);
+    void* data = device_.mapBuffer(stagingAlloc);
     memcpy(outParticles.data(), data, static_cast<size_t>(bufferSize));
-    vulkan_.unmapBuffer(stagingAlloc);
+    device_.unmapBuffer(stagingAlloc);
     
-    vulkan_.destroyBuffer(stagingBuffer, stagingAlloc);
+    device_.destroyBuffer(stagingBuffer, stagingAlloc);
 }
 
 void ComputePhysics::clearCollisionCount() {
@@ -294,7 +294,7 @@ void ComputePhysics::clearCollisionCount() {
     VkBuffer stagingBuffer;
     VmaAllocation stagingAlloc;
     
-    vulkan_.createBuffer(
+    device_.createBuffer(
         sizeof(uint32_t),
         VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
         VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
@@ -302,14 +302,14 @@ void ComputePhysics::clearCollisionCount() {
         stagingAlloc
     );
     
-    void* data = vulkan_.mapBuffer(stagingAlloc);
+    void* data = device_.mapBuffer(stagingAlloc);
     memcpy(data, &zero, sizeof(uint32_t));
-    vulkan_.unmapBuffer(stagingAlloc);
+    device_.unmapBuffer(stagingAlloc);
     
     // Copy to collision count buffer
-    vulkan_.copyBuffer(stagingBuffer, collisionCountBuffer_, sizeof(uint32_t));
+    device_.copyBuffer(stagingBuffer, collisionCountBuffer_, sizeof(uint32_t));
     
-    vulkan_.destroyBuffer(stagingBuffer, stagingAlloc);
+    device_.destroyBuffer(stagingBuffer, stagingAlloc);
 }
 
 uint32_t ComputePhysics::readCollisionCount() {
@@ -319,7 +319,7 @@ uint32_t ComputePhysics::readCollisionCount() {
     VkBuffer stagingBuffer;
     VmaAllocation stagingAlloc;
     
-    vulkan_.createBuffer(
+    device_.createBuffer(
         sizeof(uint32_t),
         VK_BUFFER_USAGE_TRANSFER_DST_BIT,
         VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
@@ -328,24 +328,24 @@ uint32_t ComputePhysics::readCollisionCount() {
     );
     
     // Copy from collision count buffer to staging
-    vulkan_.copyBuffer(collisionCountBuffer_, stagingBuffer, sizeof(uint32_t));
+    device_.copyBuffer(collisionCountBuffer_, stagingBuffer, sizeof(uint32_t));
     
-    void* data = vulkan_.mapBuffer(stagingAlloc);
+    void* data = device_.mapBuffer(stagingAlloc);
     memcpy(&count, data, sizeof(uint32_t));
-    vulkan_.unmapBuffer(stagingAlloc);
+    device_.unmapBuffer(stagingAlloc);
     
-    vulkan_.destroyBuffer(stagingBuffer, stagingAlloc);
+    device_.destroyBuffer(stagingBuffer, stagingAlloc);
     
     return count;
 }
 
 void ComputePhysics::cleanup() {
-    VkDevice device = vulkan_.getDevice();
+    VkDevice device = device_.getDevice();
     
-    vulkan_.destroyBuffer(particleBuffer_, particleAlloc_);
-    vulkan_.destroyBuffer(uniformBuffer_, uniformAlloc_);
-    vulkan_.destroyBuffer(collisionPairBuffer_, collisionPairAlloc_);
-    vulkan_.destroyBuffer(collisionCountBuffer_, collisionCountAlloc_);
+    device_.destroyBuffer(particleBuffer_, particleAlloc_);
+    device_.destroyBuffer(uniformBuffer_, uniformAlloc_);
+    device_.destroyBuffer(collisionPairBuffer_, collisionPairAlloc_);
+    device_.destroyBuffer(collisionCountBuffer_, collisionCountAlloc_);
     
     if (integrationPipeline_ != VK_NULL_HANDLE) {
         vkDestroyPipeline(device, integrationPipeline_, nullptr);

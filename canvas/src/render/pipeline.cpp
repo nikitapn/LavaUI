@@ -1,7 +1,7 @@
 #include <iostream>
 
 #include "render/pipeline.hpp"
-#include "render/vulkan.hpp"
+#include "render/render_device.hpp"
 
 /* 
 Some notes about pipelines:
@@ -96,7 +96,7 @@ PipelineBuilder& PipelineBuilder::setShadowPipeline(bool isShadow)
 }
 
 Pipeline PipelineBuilder::build(
-  Vulkan& vulkan, std::string_view debugName)
+  RenderDevice& device, std::string_view debugName)
 {
   std::vector<VkDynamicState> dynamicStates = {VK_DYNAMIC_STATE_VIEWPORT,
                                                VK_DYNAMIC_STATE_SCISSOR};
@@ -110,9 +110,9 @@ Pipeline PipelineBuilder::build(
   // Use shadow map size for shadow pipelines, swapchain extent for regular pipelines
   uint32_t pipelineWidth, pipelineHeight;
   if (isShadowPipeline_) {
-    pipelineWidth = pipelineHeight = vulkan.getShadowMapSize();
+    pipelineWidth = pipelineHeight = device.getShadowMapSize();
   } else {
-    const auto& extent = vulkan.getExtent();
+    const auto& extent = device.getExtent();
     pipelineWidth = extent.width;
     pipelineHeight = extent.height;
   }
@@ -154,7 +154,7 @@ Pipeline PipelineBuilder::build(
 
   VkPipelineMultisampleStateCreateInfo multisampling {
     .sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO,
-    .rasterizationSamples  = isShadowPipeline_ ? VK_SAMPLE_COUNT_1_BIT : vulkan.getMSAASamples(),
+    .rasterizationSamples  = isShadowPipeline_ ? VK_SAMPLE_COUNT_1_BIT : device.getMSAASamples(),
     .sampleShadingEnable   = VK_FALSE,
     .minSampleShading      = 1.0f,      // Optional
     .pSampleMask           = nullptr,   // Optional
@@ -230,20 +230,20 @@ Pipeline PipelineBuilder::build(
   VkPipeline       pipeline;
 
   VR(vkCreatePipelineLayout(
-       vulkan.getDevice(), &pipelineLayoutInfo_, nullptr, &pipelineLayout),
+       device.getDevice(), &pipelineLayoutInfo_, nullptr, &pipelineLayout),
      "failed to create pipeline layout!");
 
   pipelineInfo.layout             = pipelineLayout;
   pipelineInfo.renderPass         = customRenderPass_ != VK_NULL_HANDLE 
                                       ? customRenderPass_ 
-                                      : vulkan.getRenderPass();
+                                      : device.getRenderPass();
   pipelineInfo.subpass            = 0;
   pipelineInfo.basePipelineHandle = VK_NULL_HANDLE;  // Optional
   pipelineInfo.basePipelineIndex  = -1;              // Optional
 
   VR(
     vkCreateGraphicsPipelines(
-      vulkan.getDevice(), VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &pipeline),
+      device.getDevice(), VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &pipeline),
     "failed to create graphics pipeline!");
 
   std::cout << "Created pipeline '" << debugName << "' with handle " << pipeline
@@ -252,8 +252,8 @@ Pipeline PipelineBuilder::build(
   return {pipeline, pipelineLayout};
 }
 
-void Pipeline::destroy(Vulkan& vulkan)
+void Pipeline::destroy(RenderDevice& device)
 {
-  pipeline.destroy(vulkan.getDevice());
-  layout.destroy(vulkan.getDevice());
+  pipeline.destroy(device.getDevice());
+  layout.destroy(device.getDevice());
 }

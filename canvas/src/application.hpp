@@ -113,7 +113,7 @@ public:
   // at least width*height*4 bytes.
   void readPixels(uint8_t *dst, size_t dstSize);
 
-  /// GPU→CPU capture of the resolve target (works windowed). See Vulkan::captureFrame.
+  /// GPU→CPU capture of the resolve target (works windowed). See RenderDevice::captureFrame.
   void captureFrame(uint8_t *dst, size_t dstSize);
 
   /// Capture resolve as PNG (optional crop + optional max-side downsample).

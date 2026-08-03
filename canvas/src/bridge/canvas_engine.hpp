@@ -166,10 +166,10 @@ class Engine {
 
   /// Releases one reference to a texture. The GPU memory is freed only after
   /// every in-flight frame that could reference it has retired — see
-  /// `Vulkan::destroyImageDeferred`. Atlased images return their cell instead.
+  /// `RenderDevice::destroyImageDeferred`. Atlased images return their cell instead.
   void unloadTexture(const std::string &path);
 
-  /// Decodes an image file to RGBA8 **without touching Vulkan**, so it is safe
+  /// Decodes an image file to RGBA8 **without touching RenderDevice**, so it is safe
   /// to call from a worker thread. Empty/`valid()==false` if the file will not
   /// decode. This is the expensive half of loading; `uploadTexture` is the
   /// half that must stay on the device thread.

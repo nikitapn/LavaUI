@@ -8,7 +8,7 @@
 #include "util/result.hpp"
 #include "util/types.hpp"
 
-class Vulkan;
+class RenderDevice;
 
 /// Glyph cache, not a renderer: owns the FreeType/HarfBuzz face and the
 /// Vulkan atlas, and hands atlas rects to QuadRenderer. It has no pipeline of
@@ -21,7 +21,7 @@ public:
   /// Does not load a font — call loadFont() after construction once the
   /// absolute path under assetsRoot is known (Application ctor runs before
   /// cwd/assetsRoot is set).
-  explicit TextRenderer(Vulkan& vulkan);
+  explicit TextRenderer(RenderDevice& device);
   ~TextRenderer();
   
   // Non-copyable
