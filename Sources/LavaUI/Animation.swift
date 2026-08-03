@@ -29,12 +29,40 @@ public enum AnimationCurve: Equatable, Sendable {
     /// the response should feel immediate and the settle should not.
     case easeOut
     case easeInOut
+    /// A damped harmonic response. `response` is the undamped period in
+    /// seconds; lower values react faster. Values below one for
+    /// `dampingFraction` overshoot, one is critically damped, and values above
+    /// one settle without overshoot.
+    case spring(response: Double, dampingFraction: Double)
 
-    func apply(_ t: Float) -> Float {
+    func apply(_ t: Float, duration: Double = 1) -> Float {
         switch self {
         case .linear: return t
         case .easeOut: return 1 - (1 - t) * (1 - t)
         case .easeInOut: return t < 0.5 ? 2 * t * t : 1 - 2 * (1 - t) * (1 - t)
+        case .spring(let response, let dampingFraction):
+            let response = max(0.01, response)
+            let damping = max(0.01, dampingFraction)
+            let elapsed = Double(t) * duration
+            let omega = 2 * Double.pi / response
+            if damping < 1 {
+                let root = sqrt(1 - damping * damping)
+                let phase = omega * root * elapsed
+                let envelope = exp(-damping * omega * elapsed)
+                return Float(1 - envelope * (
+                    cos(phase) + damping / root * sin(phase)
+                ))
+            }
+            if damping == 1 {
+                return Float(1 - exp(-omega * elapsed) * (1 + omega * elapsed))
+            }
+            let root = sqrt(damping * damping - 1)
+            let slow = -omega * (damping - root)
+            let fast = -omega * (damping + root)
+            let slowWeight = (damping + root) / (2 * root)
+            let fastWeight = -(damping - root) / (2 * root)
+            return Float(1 - slowWeight * exp(slow * elapsed)
+                - fastWeight * exp(fast * elapsed))
         }
     }
 }
@@ -94,7 +122,7 @@ public struct Animated<T: Animatable> {
             duration = 0
             return false
         }
-        let t = curve.apply(Float(max(0, elapsed / duration)))
+        let t = curve.apply(Float(max(0, elapsed / duration)), duration: duration)
         current = T.interpolate(origin, target, t)
         return true
     }

@@ -470,7 +470,7 @@ Scene3D(
         )
         .offset3D(z: hovered == album.id ? 0.45 : 0)
         .scale3D(hovered == album.id ? 1.12 : 1)
-        .animation3D(.smooth(duration: 0.24))
+        .animation3D(.spring(response: 0.3, dampingFraction: 0.7))
         .onHover3D { inside in hovered = inside ? album.id : nil }
         .onTap3D { open(album) }
     }
@@ -488,6 +488,11 @@ scenes without explicit lights receive a neutral default rig. Spatial modifiers
 include `position`, `offset3D`, uniform/vector `scale3D`, axis-angle
 `rotation3D`, `animation3D`, `onHover3D`, and `onTap3D`. Object identifiers
 must be stable: retained transform animation and hit dispatch are keyed by id.
+
+Use `.animation3D(.spring(response:dampingFraction:))` for responsive hover
+motion. A shorter response reacts faster; a damping fraction below `1` adds
+overshoot, `1` is critically damped, and values above `1` settle without
+bouncing. `.smooth(duration:curve:)` remains available for time-based motion.
 
 `.shadow3D(...)` projects the transformed card silhouette into a shared
 offscreen mask and Gaussian-blurs it. Radius and offset are expressed in screen

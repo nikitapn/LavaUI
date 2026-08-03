@@ -83,6 +83,28 @@ public struct SpatialAnimation: Equatable, Sendable {
     ) -> SpatialAnimation {
         SpatialAnimation(duration: duration, curve: curve)
     }
+
+    /// A physically shaped hover/selection transition. `response` controls
+    /// how quickly the spring reacts; `dampingFraction` controls its bounce.
+    public static func spring(
+        response: Double = 0.32, dampingFraction: Double = 0.72
+    ) -> SpatialAnimation {
+        let response = max(0.01, response)
+        let damping = max(0.01, dampingFraction)
+        let omega = 2 * Double.pi / response
+        let threshold = 0.002
+        let duration: Double
+        if damping <= 1 {
+            duration = -log(threshold) / (damping * omega)
+        } else {
+            let slowRate = omega * (damping - sqrt(damping * damping - 1))
+            duration = -log(threshold) / slowRate
+        }
+        return SpatialAnimation(
+            duration: max(response, min(duration, response * 10)),
+            curve: .spring(response: response, dampingFraction: damping)
+        )
+    }
 }
 
 public struct Material3D: Sendable {

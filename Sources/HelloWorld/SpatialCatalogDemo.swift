@@ -29,7 +29,7 @@ struct SpatialCatalogDemo: View {
                 )
                 .offset3D(z: hovered == index ? 0.45 : 0)
                 .scale3D(hovered == index ? 1.12 : 1)
-                .animation3D(.smooth(duration: 0.24))
+                .animation3D(.spring(response: 0.3, dampingFraction: 0.7))
                 .onHover3D { inside in hovered = inside ? index : nil }
                 .onTap3D { selected = index }
             }
