@@ -14,6 +14,7 @@ let package = Package(
         .executable(name: "Spotify", targets: ["SpotifyApp"]),
         .executable(name: "LavaBench", targets: ["LavaBench"]),
         .executable(name: "TwoWindows", targets: ["TwoWindows"]),
+        .executable(name: "ArenaDemo", targets: ["ArenaDemo"]),
         .library(name: "LavaUI", targets: ["LavaUI"]),
         .library(name: "LavaText", targets: ["LavaText"]),
         .library(name: "LavaMenu", targets: ["LavaMenu"]),
@@ -42,6 +43,20 @@ let package = Package(
         // share the font atlas and texture cache.
         .executableTarget(
             name: "TwoWindows",
+            dependencies: ["LavaUI"],
+            swiftSettings: [
+                .interoperabilityMode(.Cxx),
+            ]
+        ),
+
+        // One renderer process, one app process, one shared-memory draw arena.
+        // Both halves in one binary (`ArenaDemo host` / `ArenaDemo produce`)
+        // so the two sides cannot drift out of sync while the wire format is
+        // still moving. The producer links the engine but never opens a
+        // device: shaping is CPU-only, which is the property that makes this
+        // split possible at all.
+        .executableTarget(
+            name: "ArenaDemo",
             dependencies: ["LavaUI"],
             swiftSettings: [
                 .interoperabilityMode(.Cxx),

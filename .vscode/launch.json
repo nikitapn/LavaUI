@@ -139,6 +139,26 @@
       "target": "TwoWindows",
       "configuration": "release",
       "preLaunchTask": "swift: Build Release TwoWindows"
+    },
+    {
+      "type": "swift",
+      "request": "launch",
+      "args": [],
+      "cwd": "${workspaceFolder:HelloWorld}",
+      "name": "Debug ArenaDemo",
+      "target": "ArenaDemo",
+      "configuration": "debug",
+      "preLaunchTask": "swift: Build Debug ArenaDemo"
+    },
+    {
+      "type": "swift",
+      "request": "launch",
+      "args": [],
+      "cwd": "${workspaceFolder:HelloWorld}",
+      "name": "Release ArenaDemo",
+      "target": "ArenaDemo",
+      "configuration": "release",
+      "preLaunchTask": "swift: Build Release ArenaDemo"
     }
   ]
 }

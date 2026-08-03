@@ -110,6 +110,23 @@ public final class Editor: @unchecked Sendable {
         engine.renderFrame(window.raw)
     }
 
+    // ─── Shared-memory arena ─────────────────────────────────────────────
+
+    /// Drives this window from a draw arena another process writes, instead
+    /// of from a `DrawList` submitted in this one.
+    ///
+    /// The producer creates the arena and this attaches to it, so the order
+    /// is producer-then-renderer. Returns false if it is missing or its
+    /// header does not check out.
+    @discardableResult
+    public func attachDrawArena(id: String, window: WindowID = .main) -> Bool {
+        engine.attachDrawArena(std.string(id), window.raw)
+    }
+
+    public func detachDrawArena(window: WindowID = .main) {
+        engine.detachDrawArena(window.raw)
+    }
+
     // ─── Declarative UI ──────────────────────────────────────────────────
 
     // ─── Phase 3 draw list ───────────────────────────────────────────────

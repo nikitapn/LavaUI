@@ -334,6 +334,17 @@ bool Application::repaint(uint32_t windowId) {
   return w && w->repaint();
 }
 
+bool Application::attachDrawArena(const std::string &id, uint32_t windowId)
+{
+  AppWindow *w = impl_->win(windowId);
+  return w && w->attachDrawArena(id);
+}
+
+void Application::detachDrawArena(uint32_t windowId)
+{
+  if (AppWindow *w = impl_->win(windowId)) w->detachDrawArena();
+}
+
 void Application::submitDrawList(const canvas::DrawCommand *cmds, size_t cmdCount,
                                  const canvas::GlyphInstance *glyphs,
                                  size_t glyphCount,

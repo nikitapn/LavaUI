@@ -67,6 +67,11 @@ public:
   // Windowed: blit to swapchain and present. Returns false on error.
   bool repaint(uint32_t windowId = 0);
 
+  /// Drives this window from a shared-memory draw arena another process
+  /// writes, instead of from a draw list submitted in-process.
+  bool attachDrawArena(const std::string &id, uint32_t windowId = 0);
+  void detachDrawArena(uint32_t windowId = 0);
+
   /// Legacy copied submission path. New Swift code writes directly into the
   /// reusable buffers below and commits only the used element counts.
   void submitDrawList(const canvas::DrawCommand *cmds, size_t cmdCount,

@@ -31,6 +31,7 @@ let yogaSources: [String] = [
 let engineSources: [String] = [
     "src/application.cpp",
     "src/bridge/canvas_engine.cpp",
+    "src/ipc/draw_arena.cpp",
     "src/menu/app_menu.cpp",
     "src/render/blur_pass.cpp",
     "src/render/compute_physics.cpp",

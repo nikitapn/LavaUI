@@ -7,6 +7,7 @@
 #include <string>
 #include <vector>
 
+#include "ipc/draw_arena.hpp"
 #include "render/draw_command.hpp"
 
 struct GLFWwindow;
@@ -78,6 +79,19 @@ class AppWindow {
                       const canvas::SpatialVertex *spatialVerts,
                       size_t spatialVertCount);
 
+  // ─── Shared-memory arena ─────────────────────────────────────────────
+
+  /// Renders whatever another process publishes into the arena named `id`,
+  /// instead of this window's own arena.
+  ///
+  /// The two are mutually exclusive by construction rather than by rule: once
+  /// attached, `repaint()` reads the arena and never looks at the local
+  /// vectors, so a producer in this process and one in another cannot fight
+  /// over the same window.
+  bool attachDrawArena(const std::string &id);
+  void detachDrawArena();
+  bool hasDrawArena() const { return arena_ != nullptr; }
+
   // ─── Input ───────────────────────────────────────────────────────────────
 
   bool pollInputEvent(canvas::InputEvent &out);
@@ -124,6 +138,17 @@ class AppWindow {
   GLFWwindow  *glfw_ = nullptr;
   std::unique_ptr<RenderWindow> render_;
   bool visible_ = false;
+
+  /// Set when this window is driven by another process. Held by pointer so
+  /// the common case costs nothing and `draw_arena.hpp` stays out of the
+  /// header's required includes.
+  std::unique_ptr<canvas::ipc::DrawArena> arena_;
+  /// The last frame acquired from the arena, kept mapped between publishes.
+  /// A resize repaints, and the producer has usually said nothing new by
+  /// then — re-presenting the frame we already hold is what stops that from
+  /// flashing an empty window.
+  canvas::DrawList arenaFrame_{};
+  bool             arenaHasFrame_ = false;
 
   // Immediate draw list, authored by the producer each dirty frame.
   std::vector<canvas::DrawCommand>   drawCmds_;

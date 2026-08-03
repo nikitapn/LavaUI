@@ -114,6 +114,15 @@ class Engine {
   /// Render and present one frame.
   bool renderFrame(uint32_t windowId = 0);
 
+  /// Renders this window from a shared-memory draw arena written by another
+  /// process (`canvas::ipc::DrawArena`), instead of from a draw list
+  /// submitted through `commitDrawList`.
+  ///
+  /// The arena has to exist already — the producer creates it, the renderer
+  /// attaches. Returns false if it is missing or malformed.
+  bool attachDrawArena(const std::string &id, uint32_t windowId = 0);
+  void detachDrawArena(uint32_t windowId = 0);
+
   void setWindowFrame(int x, int y, int width, int height, uint32_t windowId = 0);
   void setWindowVisible(bool visible, uint32_t windowId = 0);
   bool isWindowVisible(uint32_t windowId = 0) const;

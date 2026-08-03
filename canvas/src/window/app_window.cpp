@@ -97,12 +97,45 @@ bool AppWindow::repaint()
       inputEvents_.push_back(ev);
     }
 
+    if (arena_) {
+      // A producer that has published nothing since the last repaint leaves
+      // `arenaFrame_` alone, so a resize or an expose still redraws the frame
+      // we are holding rather than an empty one.
+      if (arena_->acquireFrame(arenaFrame_)) arenaHasFrame_ = true;
+      if (!arenaHasFrame_) return true;
+      render_->render(arenaFrame_);
+      return true;
+    }
+
     render_->render(currentDrawList());
     return true;
   } catch (std::exception &ex) {
     std::cerr << ex.what() << '\n';
     return false;
   }
+}
+
+bool AppWindow::attachDrawArena(const std::string &id)
+{
+  auto arena = std::make_unique<canvas::ipc::DrawArena>();
+  if (!arena->open(id)) return false;
+  arena_         = std::move(arena);
+  arenaHasFrame_ = false;
+  arenaFrame_    = {};
+  std::cout << "Window " << id_ << " attached to draw arena '" << id
+            << "' (generation " << arena_->generation() << ", "
+            << arena_->mappedBytes() / 1024 << " KiB)\n";
+  return true;
+}
+
+void AppWindow::detachDrawArena()
+{
+  if (!arena_) return;
+  // The renderer may be one frame from presenting what this points into, so
+  // drop the view before the mapping it refers to goes away.
+  arenaFrame_    = {};
+  arenaHasFrame_ = false;
+  arena_.reset();
 }
 
 bool AppWindow::windowShouldClose() const

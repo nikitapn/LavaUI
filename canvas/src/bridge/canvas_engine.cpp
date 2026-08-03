@@ -120,6 +120,17 @@ bool Engine::renderFrame(uint32_t windowId)
   return impl_->withApp([&](Application &app) { return app.repaint(windowId); });
 }
 
+bool Engine::attachDrawArena(const std::string &id, uint32_t windowId)
+{
+  return impl_->withApp(
+    [&](Application &app) { return app.attachDrawArena(id, windowId); });
+}
+
+void Engine::detachDrawArena(uint32_t windowId)
+{
+  impl_->withApp([&](Application &app) { app.detachDrawArena(windowId); });
+}
+
 uint32_t Engine::openWindow(uint32_t width, uint32_t height,
                             const std::string &title)
 {
