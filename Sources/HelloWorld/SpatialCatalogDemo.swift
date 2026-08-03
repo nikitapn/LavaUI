@@ -39,6 +39,5 @@ struct SpatialCatalogDemo: View {
         }
         .background(Environment.current.theme.canvas)
         .cornerRadius(8)
-        .clipped()
     }
 }

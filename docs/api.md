@@ -477,7 +477,6 @@ Scene3D(
     }
 }
 .cornerRadius(8)
-.clipped()
 ```
 
 The initial predefined geometry is `Plane3D` and `Box3D`. `Material3D` supports
@@ -512,6 +511,9 @@ to orbit, Shift-drag to pan, and use the wheel or trackpad to zoom. Distance
 and pitch limits, input sensitivity, inertia, and deceleration are configurable
 through `CameraControls3D`; omit it for a fixed camera. A drag is distinguished
 from a click on release, so moving the camera does not activate a 3D object.
+`Scene3D` always emits a scissor matching its layout box, so projected objects
+and blurred shadows cannot paint outside the scene viewport; `.clipped()` is
+not required for this.
 
 Physically based material parameters and imported meshes remain
 future layers on the same scene command path.

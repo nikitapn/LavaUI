@@ -664,7 +664,14 @@ final class SpatialRuntime {
     }
 
     func emit(_ draw: DrawList, frame: CanvasFrame) {
+        guard frame.w > 0, frame.h > 0 else { return }
         lastFrame = frame
+        // A projected object can extend well beyond its Yoga box after camera
+        // orbit, zoom, or hover lift. Scene3D is a viewport by definition, so
+        // establish its scissor itself rather than requiring every caller to
+        // remember `.clipped()`. The renderer intersects nested clips.
+        draw.pushClip(x: frame.x, y: frame.y, w: frame.w, h: frame.h)
+        defer { draw.popClip() }
         draw.beginSpatialScene(frame)
         projected = elements.map { e in
             let t = motion[e.id].map {
