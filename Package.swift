@@ -13,6 +13,7 @@ let package = Package(
         .executable(name: "TraceLoom", targets: ["TraceLoomApp"]),
         .executable(name: "Spotify", targets: ["SpotifyApp"]),
         .executable(name: "LavaBench", targets: ["LavaBench"]),
+        .executable(name: "TwoWindows", targets: ["TwoWindows"]),
         .library(name: "LavaUI", targets: ["LavaUI"]),
         .library(name: "LavaText", targets: ["LavaText"]),
         .library(name: "LavaMenu", targets: ["LavaMenu"]),
@@ -36,6 +37,17 @@ let package = Package(
         // Spotify Web API + cover download. No LavaUI — same headless rule as
         // TraceLoomCore so catalog/auth can be tested without a window.
         .target(name: "SpotifyCore"),
+        // Two windows, one process, one GPU. The smallest program that proves
+        // the device/window split: both surfaces render from one loop and
+        // share the font atlas and texture cache.
+        .executableTarget(
+            name: "TwoWindows",
+            dependencies: ["LavaUI"],
+            swiftSettings: [
+                .interoperabilityMode(.Cxx),
+            ]
+        ),
+
         // Throwaway modifier spike; delete once the design is chosen. We keep for now. 01/08/2026
         .executableTarget(
             name: "ModifierSpike",

@@ -113,9 +113,41 @@ void Engine::wakeEventLoop()
   glfwPostEmptyEvent();
 }
 
-bool Engine::renderFrame()
+bool Engine::renderFrame(uint32_t windowId)
 {
-  return impl_->window ? impl_->window->renderFrame() : false;
+  // Straight to the Application rather than through CanvasWindowHost: the host
+  // only ever knew about one window, and a frame is per window.
+  return impl_->withApp([&](Application &app) { return app.repaint(windowId); });
+}
+
+uint32_t Engine::openWindow(uint32_t width, uint32_t height,
+                            const std::string &title)
+{
+  return impl_->withApp([&](Application &app) {
+    return app.openWindow(static_cast<int>(width), static_cast<int>(height),
+                          title);
+  });
+}
+
+void Engine::closeWindow(uint32_t windowId)
+{
+  impl_->withApp([&](Application &app) { app.closeWindow(windowId); });
+}
+
+size_t Engine::windowCount() const
+{
+  return impl_->withApp([](Application &app) { return app.windowCount(); });
+}
+
+uint32_t Engine::windowIdAt(size_t index) const
+{
+  return impl_->withApp([&](Application &app) { return app.windowIdAt(index); });
+}
+
+bool Engine::windowShouldClose(uint32_t windowId) const
+{
+  return impl_->withApp(
+    [&](Application &app) { return app.windowShouldClose(windowId); });
 }
 
 bool Engine::isOpen() const
@@ -130,24 +162,30 @@ void Engine::requestClose()
   impl_->withApp([&](Application &app) { app.requestClose(); });
 }
 
-void Engine::setWindowFrame(int x, int y, int width, int height)
+void Engine::setWindowFrame(int x, int y, int width, int height, uint32_t windowId)
 {
-  if (impl_->window) impl_->window->setFrame(x, y, width, height);
+  impl_->withApp([&](Application &app) {
+    app.setWindowFrame(x, y, width, height, windowId);
+  });
 }
 
-void Engine::setWindowVisible(bool visible)
+void Engine::setWindowVisible(bool visible, uint32_t windowId)
 {
-  if (impl_->window) impl_->window->setVisible(visible);
+  impl_->withApp([&](Application &app) { app.setWindowVisible(visible, windowId); });
+  // Keep the host's own flag in step for the main window, which is what
+  // `Engine::isOpen` and the legacy single-window path still read.
+  if (windowId == 0 && impl_->window) impl_->window->setVisible(visible);
 }
 
-bool Engine::isWindowVisible() const
+bool Engine::isWindowVisible(uint32_t windowId) const
 {
-  return impl_->window ? impl_->window->isVisible() : false;
+  return impl_->withApp(
+    [&](Application &app) { return !app.isIconified(windowId); });
 }
 
-bool Engine::repaint()
+bool Engine::repaint(uint32_t windowId)
 {
-  return impl_->withApp([](Application &app) { return app.repaint(); });
+  return impl_->withApp([&](Application &app) { return app.repaint(windowId); });
 }
 
 void Engine::readPixels(uint8_t *dst, size_t dstSize)
@@ -156,145 +194,149 @@ void Engine::readPixels(uint8_t *dst, size_t dstSize)
 }
 
 std::string Engine::capturePngBase64(int x, int y, int w, int h, int maxSide,
-                                     int *outW, int *outH)
+                                     int *outW, int *outH, uint32_t windowId)
 {
   std::string out;
   impl_->withApp([&](Application &app) {
-    out = app.capturePngBase64(x, y, w, h, maxSide, outW, outH);
+    out = app.capturePngBase64(x, y, w, h, maxSide, outW, outH, windowId);
   });
   return out;
 }
 
-void Engine::pointerMove(float x, float y)
+void Engine::pointerMove(float x, float y, uint32_t windowId)
 {
-  impl_->withApp([&](Application &app) { app.pointerMove(x, y); });
+  impl_->withApp([&](Application &app) { app.pointerMove(x, y, windowId); });
 }
 
-void Engine::pointerButton(int button, bool pressed, float x, float y)
+void Engine::pointerButton(int button, bool pressed, float x, float y, uint32_t windowId)
 {
   impl_->withApp([&](Application &app) {
-    app.pointerButton(button, pressed, x, y);
+    app.pointerButton(button, pressed, x, y, windowId);
   });
 }
 
-void Engine::pointerScroll(float dx, float dy)
+void Engine::pointerScroll(float dx, float dy, uint32_t windowId)
 {
-  impl_->withApp([&](Application &app) { app.scroll(dx, dy); });
+  impl_->withApp([&](Application &app) { app.scroll(dx, dy, windowId); });
 }
 
-void Engine::keyEvent(int key, int action, int mods)
+void Engine::keyEvent(int key, int action, int mods, uint32_t windowId)
 {
-  impl_->withApp([&](Application &app) { app.keyEvent(key, action, mods); });
+  impl_->withApp([&](Application &app) { app.keyEvent(key, action, mods, windowId); });
 }
 
-void Engine::textInput(const std::string &utf8)
+void Engine::textInput(const std::string &utf8, uint32_t windowId)
 {
-  impl_->withApp([&](Application &app) { app.textInput(utf8); });
+  impl_->withApp([&](Application &app) { app.textInput(utf8, windowId); });
 }
 
 void Engine::submitDrawList(const DrawCommand *cmds, size_t cmdCount,
                             const GlyphInstance *glyphs, size_t glyphCount,
                             const MeshVertex *meshVerts, size_t meshVertCount,
-                            const SpatialVertex *spatialVerts, size_t spatialVertCount)
+                            const SpatialVertex *spatialVerts, size_t spatialVertCount,
+                            uint32_t windowId)
 {
   impl_->withApp([&](Application &app) {
     app.submitDrawList(cmds, cmdCount, glyphs, glyphCount, meshVerts, meshVertCount,
-                       spatialVerts, spatialVertCount);
+                       spatialVerts, spatialVertCount, windowId);
   });
 }
 
 void Engine::ensureDrawListCapacity(size_t cmdCapacity, size_t glyphCapacity,
-                                    size_t meshVertCapacity, size_t spatialVertCapacity)
+                                    size_t meshVertCapacity, size_t spatialVertCapacity,
+                                    uint32_t windowId)
 {
   impl_->withApp([&](Application &app) {
     app.ensureDrawListCapacity(cmdCapacity, glyphCapacity, meshVertCapacity,
-                               spatialVertCapacity);
+                               spatialVertCapacity, windowId);
   });
 }
 
-DrawCommand *Engine::drawCommandData()
+DrawCommand *Engine::drawCommandData(uint32_t windowId)
 {
-  return impl_->withApp([](Application &app) { return app.drawCommandData(); });
+  return impl_->withApp([&](Application &app) { return app.drawCommandData(windowId); });
 }
 
-GlyphInstance *Engine::drawGlyphData()
+GlyphInstance *Engine::drawGlyphData(uint32_t windowId)
 {
-  return impl_->withApp([](Application &app) { return app.drawGlyphData(); });
+  return impl_->withApp([&](Application &app) { return app.drawGlyphData(windowId); });
 }
 
-MeshVertex *Engine::drawMeshVertexData()
+MeshVertex *Engine::drawMeshVertexData(uint32_t windowId)
 {
-  return impl_->withApp([](Application &app) { return app.drawMeshVertexData(); });
+  return impl_->withApp([&](Application &app) { return app.drawMeshVertexData(windowId); });
 }
 
-SpatialVertex *Engine::drawSpatialVertexData()
+SpatialVertex *Engine::drawSpatialVertexData(uint32_t windowId)
 {
-  return impl_->withApp([](Application &app) { return app.drawSpatialVertexData(); });
+  return impl_->withApp([&](Application &app) { return app.drawSpatialVertexData(windowId); });
 }
 
-size_t Engine::drawCommandCapacity() const
+size_t Engine::drawCommandCapacity(uint32_t windowId) const
 {
   return const_cast<Engine *>(this)->impl_->withApp(
-    [](Application &app) { return app.drawCommandCapacity(); });
+    [&](Application &app) { return app.drawCommandCapacity(windowId); });
 }
 
-size_t Engine::drawGlyphCapacity() const
+size_t Engine::drawGlyphCapacity(uint32_t windowId) const
 {
   return const_cast<Engine *>(this)->impl_->withApp(
-    [](Application &app) { return app.drawGlyphCapacity(); });
+    [&](Application &app) { return app.drawGlyphCapacity(windowId); });
 }
 
-size_t Engine::drawMeshVertexCapacity() const
+size_t Engine::drawMeshVertexCapacity(uint32_t windowId) const
 {
   return const_cast<Engine *>(this)->impl_->withApp(
-    [](Application &app) { return app.drawMeshVertexCapacity(); });
+    [&](Application &app) { return app.drawMeshVertexCapacity(windowId); });
 }
 
-size_t Engine::drawSpatialVertexCapacity() const
+size_t Engine::drawSpatialVertexCapacity(uint32_t windowId) const
 {
   return const_cast<Engine *>(this)->impl_->withApp(
-    [](Application &app) { return app.drawSpatialVertexCapacity(); });
+    [&](Application &app) { return app.drawSpatialVertexCapacity(windowId); });
 }
 
 void Engine::commitDrawList(size_t cmdCount, size_t glyphCount,
-                            size_t meshVertCount, size_t spatialVertCount)
+                            size_t meshVertCount, size_t spatialVertCount,
+                            uint32_t windowId)
 {
   impl_->withApp([&](Application &app) {
-    app.commitDrawList(cmdCount, glyphCount, meshVertCount, spatialVertCount);
+    app.commitDrawList(cmdCount, glyphCount, meshVertCount, spatialVertCount,
+                       windowId);
   });
 }
 
-bool Engine::pollInputEvent(InputEvent &out)
+bool Engine::pollInputEvent(InputEvent &out, uint32_t windowId)
 {
   return impl_->withApp([&](Application &app) {
-    return app.pollInputEvent(out);
+    return app.pollInputEvent(out, windowId);
   });
 }
 
-StringVector Engine::pendingDroppedFiles()
+StringVector Engine::pendingDroppedFiles(uint32_t windowId)
 {
   return impl_->withApp([&](Application &app) {
     StringVector out;
-    const int n = app.pendingDroppedFileCount();
+    const int n = app.pendingDroppedFileCount(windowId);
     out.reserve(static_cast<size_t>(n > 0 ? n : 0));
     for (int i = 0; i < n; ++i) {
-      out.push_back(app.pendingDroppedFile(i));
+      out.push_back(app.pendingDroppedFile(i, windowId));
     }
     return out;
   });
 }
 
-void Engine::framebufferSize(float &outW, float &outH) const
+void Engine::framebufferSize(float &outW, float &outH, uint32_t windowId) const
 {
   const_cast<Engine *>(this)->impl_->withApp([&](Application &app) {
-    app.framebufferSize(outW, outH);
+    app.framebufferSize(outW, outH, windowId);
   });
 }
 
-void Engine::setViewTransform(float zoom, float panX, float panY)
+void Engine::setViewTransform(float zoom, float panX, float panY, uint32_t windowId)
 {
   impl_->withApp([&](Application &app) {
-    app.setViewTransform(zoom, panX, panY);
+    app.setViewTransform(zoom, panX, panY, windowId);
   });
 }
 

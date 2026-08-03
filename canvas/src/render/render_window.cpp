@@ -84,9 +84,24 @@ RenderWindow::~RenderWindow()
   const VkDevice dev = dev_.getDevice();
   if (dev == VK_NULL_HANDLE) return;
 
-  // The window's own frames must be done before its sync objects and
-  // attachments go. Anything *shared* it referenced is the device's problem.
-  waitForAllFrames();
+  // A device-wide idle, not this window's fences.
+  //
+  // `waitForAllFrames()` waits on the frame fences, which signal when a
+  // *submission* completes. The last present is not covered by them: it waits
+  // on `renderFinishedSemaphores_` and hands the image to the presentation
+  // engine, which is still using both the semaphore and the swapchain image
+  // when the fence goes green. Destroying either there is what the validation
+  // layer reports as VUID-vkDestroySemaphore-semaphore-05149 and
+  // VUID-vkDestroySwapchainKHR-swapchain-01282 — and closing one window of
+  // several is exactly when it happens, because the app carries on rather than
+  // exiting straight afterwards.
+  //
+  // Device-wide rather than queue-wide because a sibling window may have work
+  // queued against the same queue right now. This is rare and slow and both of
+  // those are fine: a window closes once.
+  if (dev_.getDevice() != VK_NULL_HANDLE) {
+    vkDeviceWaitIdle(dev_.getDevice());
+  }
 
   // Renderers first: their vertex buffers and blur targets are this window's,
   // and the attachments below are what they were drawing into.

@@ -81,15 +81,45 @@ class Engine {
   /// Used by the agent socket watcher so TCP requests don't wait on a mouse tick.
   void wakeEventLoop();
 
-  /// Render and present one frame.
-  bool renderFrame();
+  // ─── Windows ─────────────────────────────────────────────────────────────
+  //
+  // Per-window calls take a trailing `windowId`; 0 means the first window, so
+  // single-window callers never mention it. Ids come from `openWindow` and are
+  // never reused, so a handle to a closed window fails to resolve rather than
+  // addressing whatever opened after it.
 
-  void setWindowFrame(int x, int y, int width, int height);
-  void setWindowVisible(bool visible);
-  bool isWindowVisible() const;
+  /// Opens an additional window on the same device — one GPU, one font atlas,
+  /// one texture cache, however many surfaces. Returns its id, or 0.
+  ///
+  /// Starts hidden: showing a window before a frame has been drawn into it
+  /// presents an undefined swapchain image. Call `setWindowVisible` after the
+  /// first `renderFrame`.
+  uint32_t openWindow(uint32_t width, uint32_t height, const std::string &title);
+
+  /// Closes one window. The device, and every other window, survive.
+  void closeWindow(uint32_t windowId);
+
+  size_t windowCount() const;
+  /// Id of the window at `index` in creation order, or 0 if out of range.
+  uint32_t windowIdAt(size_t index) const;
+
+  /// Whether this window has been asked to close (its titlebar X, a WM
+  /// request). Closing the last one is what ends an app; closing any other is
+  /// just `closeWindow`.
+  ///
+  /// False for a window that is already gone — "asked to close" and "does not
+  /// exist" are different questions, and `windowCount` answers the second.
+  bool windowShouldClose(uint32_t windowId = 0) const;
+
+  /// Render and present one frame.
+  bool renderFrame(uint32_t windowId = 0);
+
+  void setWindowFrame(int x, int y, int width, int height, uint32_t windowId = 0);
+  void setWindowVisible(bool visible, uint32_t windowId = 0);
+  bool isWindowVisible(uint32_t windowId = 0) const;
 
   // ─── Declarative UI (Swift tree → Yoga + TextRenderer) ────────────────
-  bool repaint();
+  bool repaint(uint32_t windowId = 0);
   void readPixels(uint8_t *dst, size_t dstSize);
 
   /// Agent/automation: capture resolve as PNG (base64). Empty on failure.
@@ -97,18 +127,19 @@ class Engine {
   /// maxSide > 0 downsamples so the longer encoded side is ≤ maxSide.
   /// outW/outH receive the encoded size when non-null.
   std::string capturePngBase64(int x, int y, int w, int h, int maxSide = 0,
-                               int *outW = nullptr, int *outH = nullptr);
+                               int *outW = nullptr, int *outH = nullptr,
+                               uint32_t windowId = 0);
 
   /// Inject synthetic pointer events (same queue as GLFW callbacks).
-  void pointerMove(float x, float y);
-  void pointerButton(int button, bool pressed, float x, float y);
+  void pointerMove(float x, float y, uint32_t windowId = 0);
+  void pointerButton(int button, bool pressed, float x, float y, uint32_t windowId = 0);
   /// Inject wheel/trackpad delta (notches), coalesced with real scroll input.
-  void pointerScroll(float dx, float dy);
+  void pointerScroll(float dx, float dy, uint32_t windowId = 0);
 
   /// Inject keyboard / text (GLFW key codes; action 0/1/2 = release/press/repeat).
-  void keyEvent(int key, int action, int mods);
+  void keyEvent(int key, int action, int mods, uint32_t windowId = 0);
   /// UTF-8 string → one Text event per Unicode scalar (focused field path).
-  void textInput(const std::string &utf8);
+  void textInput(const std::string &utf8, uint32_t windowId = 0);
 
   /// Legacy copied submission path.
   /// Text commands carry `param` = first glyph index and `w` = glyph count
@@ -117,36 +148,39 @@ class Engine {
   void submitDrawList(const DrawCommand *cmds, size_t cmdCount,
                       const GlyphInstance *glyphs, size_t glyphCount,
                       const MeshVertex *meshVerts, size_t meshVertCount,
-                      const SpatialVertex *spatialVerts, size_t spatialVertCount);
+                      const SpatialVertex *spatialVerts, size_t spatialVertCount,
+                      uint32_t windowId = 0);
 
   /// C++-owned reusable frame arena. Swift may write to these pointers until
   /// the next ensure call (which may reallocate) or Engine destruction. Commit
   /// publishes only the initialized prefixes; it performs no element copy.
   void ensureDrawListCapacity(size_t cmdCapacity, size_t glyphCapacity,
-                              size_t meshVertCapacity, size_t spatialVertCapacity);
-  DrawCommand *drawCommandData() CANVAS_SWIFT_UNSAFE_POINTER;
-  GlyphInstance *drawGlyphData() CANVAS_SWIFT_UNSAFE_POINTER;
-  MeshVertex *drawMeshVertexData() CANVAS_SWIFT_UNSAFE_POINTER;
-  SpatialVertex *drawSpatialVertexData() CANVAS_SWIFT_UNSAFE_POINTER;
-  size_t drawCommandCapacity() const;
-  size_t drawGlyphCapacity() const;
-  size_t drawMeshVertexCapacity() const;
-  size_t drawSpatialVertexCapacity() const;
+                              size_t meshVertCapacity, size_t spatialVertCapacity,
+                              uint32_t windowId = 0);
+  DrawCommand *drawCommandData(uint32_t windowId = 0) CANVAS_SWIFT_UNSAFE_POINTER;
+  GlyphInstance *drawGlyphData(uint32_t windowId = 0) CANVAS_SWIFT_UNSAFE_POINTER;
+  MeshVertex *drawMeshVertexData(uint32_t windowId = 0) CANVAS_SWIFT_UNSAFE_POINTER;
+  SpatialVertex *drawSpatialVertexData(uint32_t windowId = 0) CANVAS_SWIFT_UNSAFE_POINTER;
+  size_t drawCommandCapacity(uint32_t windowId = 0) const;
+  size_t drawGlyphCapacity(uint32_t windowId = 0) const;
+  size_t drawMeshVertexCapacity(uint32_t windowId = 0) const;
+  size_t drawSpatialVertexCapacity(uint32_t windowId = 0) const;
   void commitDrawList(size_t cmdCount, size_t glyphCount,
-                      size_t meshVertCount, size_t spatialVertCount);
+                      size_t meshVertCount, size_t spatialVertCount,
+                      uint32_t windowId = 0);
 
   /// Pop one raw input event (mouse / resize). Returns false if empty.
-  bool pollInputEvent(InputEvent &out);
+  bool pollInputEvent(InputEvent &out, uint32_t windowId = 0);
 
   /// Paths from the most recent FileDrop event — see
   /// `canvas::InputEventKind::FileDrop`. Valid until the next drop.
-  StringVector pendingDroppedFiles();
+  StringVector pendingDroppedFiles(uint32_t windowId = 0);
 
   /// Current swapchain extent in pixels.
-  void framebufferSize(float &outW, float &outH) const;
+  void framebufferSize(float &outW, float &outH, uint32_t windowId = 0) const;
 
   /// Whole-window camera (vertex push constants). Layout/hit-test stay unscaled.
-  void setViewTransform(float zoom, float panX, float panY);
+  void setViewTransform(float zoom, float panX, float panY, uint32_t windowId = 0);
 
   /// Load TextRenderer face for draw-list text. Called from Swift FontStore
   /// after open — C++ does not choose a default path.

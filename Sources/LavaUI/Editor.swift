@@ -54,31 +54,87 @@ public final class Editor: @unchecked Sendable {
     /// Unblock a waiting `pumpEvents` from any thread (agent socket watcher).
     public func wakeEventLoop() { engine.wakeEventLoop() }
 
+    // ─── Windows ─────────────────────────────────────────────────────────
+    //
+    // Every per-window call takes a `window:` that defaults to `.main`, so
+    // single-window code never mentions it. All windows share one GPU, one
+    // font atlas and one texture cache — that sharing is the reason a second
+    // window is cheap.
+
+    /// Opens an additional window. Returns its id, or `nil` on failure.
+    ///
+    /// It starts hidden. Draw a frame into it, then `setVisible(true, window:)`
+    /// — showing a window before its first frame presents an undefined
+    /// swapchain image, which looks like a flash of garbage.
+    public func openWindow(
+        width: Float = 800, height: Float = 600, title: String
+    ) -> WindowID? {
+        let id = engine.openWindow(UInt32(width), UInt32(height), std.string(title))
+        return id == 0 ? nil : WindowID(raw: id)
+    }
+
+    /// Closes one window. Every other window, and the device, survive it.
+    public func closeWindow(_ window: WindowID) {
+        engine.closeWindow(window.raw)
+    }
+
+    /// Number of open windows. Zero is how an app knows to exit.
+    public var windowCount: Int { Int(engine.windowCount()) }
+
+    /// Ids of the open windows, in creation order.
+    public var windowIDs: [WindowID] {
+        (0..<engine.windowCount()).compactMap {
+            let id = engine.windowIdAt($0)
+            return id == 0 ? nil : WindowID(raw: id)
+        }
+    }
+
+    /// Whether this window has been asked to close (its titlebar X, a WM
+    /// request). The caller decides what that means — closing the last window
+    /// usually ends the app, closing any other is just `closeWindow`.
+    ///
+    /// False for a window that is already closed: "asked to close" and "does
+    /// not exist" are different questions, and `windowCount` answers the
+    /// second.
+    public func windowShouldClose(_ window: WindowID = .main) -> Bool {
+        engine.windowShouldClose(window.raw)
+    }
+
+    public func setVisible(_ visible: Bool, window: WindowID = .main) {
+        engine.setWindowVisible(visible, window.raw)
+    }
+
     /// Render and present one frame.
     @discardableResult
-    public func renderFrame() -> Bool { engine.renderFrame() }
+    public func renderFrame(window: WindowID = .main) -> Bool {
+        engine.renderFrame(window.raw)
+    }
 
     // ─── Declarative UI ──────────────────────────────────────────────────
 
     // ─── Phase 3 draw list ───────────────────────────────────────────────
 
     func ensureDrawListCapacity(
-        commands: Int, glyphs: Int, meshVertices: Int, spatialVertices: Int
+        commands: Int, glyphs: Int, meshVertices: Int, spatialVertices: Int,
+        window: WindowID = .main
     ) {
-        engine.ensureDrawListCapacity(commands, glyphs, meshVertices, spatialVertices)
+        engine.ensureDrawListCapacity(
+            commands, glyphs, meshVertices, spatialVertices, window.raw
+        )
     }
 
-    func drawListStorage() -> (
+    func drawListStorage(window: WindowID = .main) -> (
         commands: UnsafeMutablePointer<canvas.DrawCommand>, commandCapacity: Int,
         glyphs: UnsafeMutablePointer<canvas.GlyphInstance>, glyphCapacity: Int,
         meshVertices: UnsafeMutablePointer<canvas.MeshVertex>, meshVertexCapacity: Int,
         spatialVertices: UnsafeMutablePointer<canvas.SpatialVertex>, spatialVertexCapacity: Int
     ) {
         (
-            engine.drawCommandData(), engine.drawCommandCapacity(),
-            engine.drawGlyphData(), engine.drawGlyphCapacity(),
-            engine.drawMeshVertexData(), engine.drawMeshVertexCapacity(),
-            engine.drawSpatialVertexData(), engine.drawSpatialVertexCapacity()
+            engine.drawCommandData(window.raw), engine.drawCommandCapacity(window.raw),
+            engine.drawGlyphData(window.raw), engine.drawGlyphCapacity(window.raw),
+            engine.drawMeshVertexData(window.raw), engine.drawMeshVertexCapacity(window.raw),
+            engine.drawSpatialVertexData(window.raw),
+            engine.drawSpatialVertexCapacity(window.raw)
         )
     }
 
@@ -86,7 +142,7 @@ public final class Editor: @unchecked Sendable {
         precondition(list.editor === self, "a DrawList belongs to its creating Editor")
         engine.commitDrawList(
             list.commandCount, list.glyphCount, list.meshVertexCount,
-            list.spatialVertexCount
+            list.spatialVertexCount, list.window.raw
         )
     }
 
@@ -185,17 +241,17 @@ public final class Editor: @unchecked Sendable {
 
 
     /// Raw input: mouse, resize, key (see `InputEventKind`).
-    public func pollInputEvent() -> InputEvent? {
+    public func pollInputEvent(window: WindowID = .main) -> InputEvent? {
         var ev = canvas.InputEvent()
-        guard engine.pollInputEvent(&ev) else { return nil }
+        guard engine.pollInputEvent(&ev, window.raw) else { return nil }
         let kind = InputEventKind(rawValue: ev.kind) ?? .none
         return InputEvent(kind: kind, x: ev.x, y: ev.y, button: ev.button, mods: ev.mods)
     }
 
     /// Paths from the most recent `.fileDrop` event. Valid only while
     /// handling that event — the next drop overwrites them.
-    public func droppedFiles() -> [String] {
-        let paths = engine.pendingDroppedFiles()
+    public func droppedFiles(window: WindowID = .main) -> [String] {
+        let paths = engine.pendingDroppedFiles(window.raw)
         var out: [String] = []
         out.reserveCapacity(Int(paths.size()))
         for i in 0..<paths.size() {
@@ -207,20 +263,27 @@ public final class Editor: @unchecked Sendable {
     /// False while minimized/occluded. The frame loop gates continuous
     /// (animation-driven) redraw work on this, since Yoga/cull-rect
     /// visibility has no idea the whole window is off-screen.
-    public var isWindowVisible: Bool { engine.isWindowVisible() }
+    public var isWindowVisible: Bool { engine.isWindowVisible(0) }
+
+    /// False while this window is minimized/occluded.
+    public func isVisible(window: WindowID) -> Bool {
+        engine.isWindowVisible(window.raw)
+    }
 
     /// Current swapchain / framebuffer size in pixels.
-    public func framebufferSize() -> (w: Float, h: Float) {
+    public func framebufferSize(window: WindowID = .main) -> (w: Float, h: Float) {
         var w: Float = 0
         var h: Float = 0
-        engine.framebufferSize(&w, &h)
+        engine.framebufferSize(&w, &h, window.raw)
         return (w, h)
     }
 
     /// Whole-window camera. Layout and Yoga stay at zoom=1; the quad shader
     /// applies center-zoom then pan. Hit-tests must unproject first.
-    public func setViewTransform(zoom: Float, panX: Float = 0, panY: Float = 0) {
-        engine.setViewTransform(zoom, panX, panY)
+    public func setViewTransform(
+        zoom: Float, panX: Float = 0, panY: Float = 0, window: WindowID = .main
+    ) {
+        engine.setViewTransform(zoom, panX, panY, window.raw)
     }
 
     // ─── Agent / automation ──────────────────────────────────────────────
@@ -308,3 +371,19 @@ public final class Editor: @unchecked Sendable {
     }
 }
 #endif
+
+/// Identifies one window of an `Editor`.
+///
+/// A value, not a reference: it stays valid to hold after the window closes,
+/// where every call taking it becomes a no-op rather than a crash. Ids are
+/// never reused, so a stale handle can never address a window that opened
+/// later — which is the failure a raw index would have.
+public struct WindowID: Hashable, Sendable {
+    let raw: UInt32
+
+    init(raw: UInt32) { self.raw = raw }
+
+    /// The window an app opens with, and what every `window:` parameter
+    /// defaults to.
+    public static let main = WindowID(raw: 0)
+}

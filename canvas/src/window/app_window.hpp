@@ -1,0 +1,156 @@
+#pragma once
+
+#include <cstdint>
+#include <deque>
+#include <memory>
+#include <mutex>
+#include <string>
+#include <vector>
+
+#include "render/draw_command.hpp"
+
+struct GLFWwindow;
+class RenderDevice;
+class RenderWindow;
+
+/// One application window: a platform window, the renderer that draws into it,
+/// the draw-list arena its frames are written into, and its input queue.
+///
+/// Everything here is per window and nothing is shared, which is the whole
+/// point — `Application` holds a list of these against one `RenderDevice`, so
+/// a second window costs a surface, a swapchain and an arena rather than a
+/// second copy of the GPU, the font atlas or the texture cache.
+///
+/// The arena is deliberately not a queue. A window has exactly one frame in
+/// preparation at a time: the producer asks for capacity, writes straight into
+/// engine memory, and commits the prefix it filled. That is what keeps
+/// submission copy-free, and it is the same shape a mapped shared-memory
+/// region would have if the producer were another process.
+///
+/// Not thread-safe except for the input queue, which GLFW callbacks and the
+/// consuming loop genuinely do touch from different places.
+class AppWindow {
+ public:
+  /// Creates the platform window and its renderer. Throws on failure, so a
+  /// half-built window never escapes.
+  AppWindow(RenderDevice &device, uint32_t id, int width, int height,
+            const std::string &title);
+
+  /// Offscreen: no platform window, no present. Everything else — the arena,
+  /// the event queue, `repaint()` — behaves the same, so the headless path is
+  /// the windowed path with `glfwWindow() == nullptr` rather than a parallel
+  /// branch through the whole class.
+  AppWindow(RenderDevice &device, uint32_t id, int width, int height);
+  ~AppWindow();
+
+  AppWindow(const AppWindow &)            = delete;
+  AppWindow &operator=(const AppWindow &) = delete;
+
+  uint32_t id() const { return id_; }
+  GLFWwindow *glfwWindow() const { return glfw_; }
+  RenderWindow &renderWindow() { return *render_; }
+
+  /// Compiles this window's pipelines. Separate from the constructor for the
+  /// same reason `RenderWindow::initRenderers` is.
+  void initRenderers();
+
+  /// Draws and presents whatever was last committed to the arena.
+  bool repaint();
+
+  // ─── Draw-list arena ─────────────────────────────────────────────────────
+
+  void ensureDrawListCapacity(size_t cmdCapacity, size_t glyphCapacity,
+                              size_t meshVertCapacity, size_t spatialVertCapacity);
+  canvas::DrawCommand   *drawCommandData()       { return drawCmds_.data(); }
+  canvas::GlyphInstance *drawGlyphData()         { return drawGlyphs_.data(); }
+  canvas::MeshVertex    *drawMeshVertexData()    { return drawMeshVerts_.data(); }
+  canvas::SpatialVertex *drawSpatialVertexData() { return drawSpatialVerts_.data(); }
+  size_t drawCommandCapacity() const      { return drawCmds_.size(); }
+  size_t drawGlyphCapacity() const        { return drawGlyphs_.size(); }
+  size_t drawMeshVertexCapacity() const   { return drawMeshVerts_.size(); }
+  size_t drawSpatialVertexCapacity() const { return drawSpatialVerts_.size(); }
+  void commitDrawList(size_t cmdCount, size_t glyphCount, size_t meshVertCount,
+                      size_t spatialVertCount);
+  /// Legacy copying path.
+  void submitDrawList(const canvas::DrawCommand *cmds, size_t cmdCount,
+                      const canvas::GlyphInstance *glyphs, size_t glyphCount,
+                      const canvas::MeshVertex *meshVerts, size_t meshVertCount,
+                      const canvas::SpatialVertex *spatialVerts,
+                      size_t spatialVertCount);
+
+  // ─── Input ───────────────────────────────────────────────────────────────
+
+  bool pollInputEvent(canvas::InputEvent &out);
+  int  pendingDroppedFileCount();
+  std::string pendingDroppedFile(int index);
+
+  void pointerMove(float x, float y);
+  void pointerButton(int button, bool pressed, float x, float y, int mods = 0);
+  void keyEvent(int key, int action, int mods);
+  void textInput(const std::string &utf8);
+  void charInput(unsigned int codepoint);
+  void scroll(float dx, float dy);
+
+  // ─── Window ──────────────────────────────────────────────────────────────
+
+  bool windowShouldClose() const;
+  void requestClose();
+  void setWindowFrame(int x, int y, int width, int height);
+  void setWindowVisible(bool visible);
+  bool isVisible() const { return visible_; }
+  bool isIconified() const;
+  void framebufferSize(float &outW, float &outH) const;
+  uint32_t x11WindowId() const;
+
+  void setViewTransform(float zoom, float panX, float panY);
+
+  std::string clipboardText() const;
+  void setClipboardText(const std::string &text);
+
+  // ─── Readback ────────────────────────────────────────────────────────────
+
+  void readPixels(uint8_t *dst, size_t dstSize);
+  void captureFrame(uint8_t *dst, size_t dstSize);
+  bool capturePng(std::vector<uint8_t> &outPng, int x, int y, int w, int h,
+                  int maxSide, int *outW, int *outH);
+
+ private:
+  void installGlfwCallbacks();
+  void queueRefreshEvent();
+  /// A view over whatever the producer last committed.
+  canvas::DrawList currentDrawList() const;
+
+  uint32_t     id_ = 0;
+  GLFWwindow  *glfw_ = nullptr;
+  std::unique_ptr<RenderWindow> render_;
+  bool visible_ = false;
+
+  // Immediate draw list, authored by the producer each dirty frame.
+  std::vector<canvas::DrawCommand>   drawCmds_;
+  std::vector<canvas::GlyphInstance> drawGlyphs_;
+  std::vector<canvas::MeshVertex>    drawMeshVerts_;
+  std::vector<canvas::SpatialVertex> drawSpatialVerts_;
+  size_t drawCmdCount_ = 0;
+  size_t drawGlyphCount_ = 0;
+  size_t drawMeshVertCount_ = 0;
+  size_t drawSpatialVertCount_ = 0;
+
+  // GLFW callbacks vs the consuming loop — protect the queue so Resize / Key /
+  // Mouse are not lost.
+  mutable std::mutex             inputMu_;
+  std::deque<canvas::InputEvent> inputEvents_;
+  /// Paths from the most recent drop, pulled by index while handling the
+  /// FileDrop event they were queued alongside.
+  std::vector<std::string> droppedPaths_;
+  bool pointerDown_ = false;  // gates MouseMove queueing
+
+  /// Modifier state, tracked per window because each window gets its own key
+  /// callback and only the focused one is receiving them.
+  bool shiftDown_ = false;
+  bool ctrlDown_  = false;
+
+  // Whole-window camera (layout stays at zoom=1; the vertex shader applies it).
+  float viewZoom_ = 1.f;
+  float viewPanX_ = 0.f;
+  float viewPanY_ = 0.f;
+};

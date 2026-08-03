@@ -25,59 +25,82 @@ public:
   [[nodiscard]] canvas::VoidResult initWithWindow(
     const std::string &assetsRoot, const std::string &title);
 
-  bool windowShouldClose() const;
-  void requestClose();
+  // ─── Windows ─────────────────────────────────────────────────────────────
+  //
+  // Every call below that concerns one window takes a trailing `windowId`.
+  // Zero means "the first window", so single-window callers never mention it.
+  // Ids are handed out by openWindow and never reused.
+
+  /// Opens an additional window on the same device — same font atlas, same
+  /// texture cache, same GPU. Returns its id, or 0 on failure.
+  ///
+  /// It starts hidden. Show it with `setWindowVisible` once a frame has been
+  /// drawn into it, or the compositor presents an undefined swapchain image.
+  uint32_t openWindow(int width, int height, const std::string &title);
+
+  /// Closes one window; the device and every other window survive.
+  void closeWindow(uint32_t windowId);
+
+  size_t windowCount() const;
+  /// Id of the window at `index` in creation order, or 0 if out of range.
+  uint32_t windowIdAt(size_t index) const;
+
+  bool windowShouldClose(uint32_t windowId = 0) const;
+  void requestClose(uint32_t windowId = 0);
 
   /// Place the GLFW window over a layout slot (screen coordinates, pixels).
   /// Size changes rebuild the Vulkan framebuffer on the next ensure/repaint.
-  void setWindowFrame(int x, int y, int width, int height);
+  void setWindowFrame(int x, int y, int width, int height, uint32_t windowId = 0);
 
   /// Show or hide the GLFW window (does not destroy it).
-  void setWindowVisible(bool visible);
+  void setWindowVisible(bool visible, uint32_t windowId = 0);
 
   /// True while minimized. A live GLFW query, not a cached flag — WM
   /// minimize/restore doesn't route through `setWindowVisible`, so caching
   /// would need its own callback wiring to stay correct.
-  bool isIconified() const;
+  bool isIconified(uint32_t windowId = 0) const;
 
   /// X11 Window id for AppMenu Registrar, or 0 if not X11 / no window.
-  uint32_t x11WindowId() const;
+  uint32_t x11WindowId(uint32_t windowId = 0) const;
 
   // Renders the current retained scene. Offscreen: to the readback target.
   // Windowed: blit to swapchain and present. Returns false on error.
-  bool repaint();
+  bool repaint(uint32_t windowId = 0);
 
   /// Legacy copied submission path. New Swift code writes directly into the
   /// reusable buffers below and commits only the used element counts.
   void submitDrawList(const canvas::DrawCommand *cmds, size_t cmdCount,
                       const canvas::GlyphInstance *glyphs, size_t glyphCount,
                       const canvas::MeshVertex *meshVerts, size_t meshVertCount,
-                      const canvas::SpatialVertex *spatialVerts, size_t spatialVertCount);
+                      const canvas::SpatialVertex *spatialVerts, size_t spatialVertCount,
+                      uint32_t windowId = 0);
   void ensureDrawListCapacity(size_t cmdCapacity, size_t glyphCapacity,
-                              size_t meshVertCapacity, size_t spatialVertCapacity);
-  canvas::DrawCommand *drawCommandData();
-  canvas::GlyphInstance *drawGlyphData();
-  canvas::MeshVertex *drawMeshVertexData();
-  canvas::SpatialVertex *drawSpatialVertexData();
-  size_t drawCommandCapacity() const;
-  size_t drawGlyphCapacity() const;
-  size_t drawMeshVertexCapacity() const;
-  size_t drawSpatialVertexCapacity() const;
+                              size_t meshVertCapacity, size_t spatialVertCapacity,
+                              uint32_t windowId = 0);
+  canvas::DrawCommand *drawCommandData(uint32_t windowId = 0);
+  canvas::GlyphInstance *drawGlyphData(uint32_t windowId = 0);
+  canvas::MeshVertex *drawMeshVertexData(uint32_t windowId = 0);
+  canvas::SpatialVertex *drawSpatialVertexData(uint32_t windowId = 0);
+  size_t drawCommandCapacity(uint32_t windowId = 0) const;
+  size_t drawGlyphCapacity(uint32_t windowId = 0) const;
+  size_t drawMeshVertexCapacity(uint32_t windowId = 0) const;
+  size_t drawSpatialVertexCapacity(uint32_t windowId = 0) const;
   void commitDrawList(size_t cmdCount, size_t glyphCount,
-                      size_t meshVertCount, size_t spatialVertCount);
-  bool pollInputEvent(canvas::InputEvent &out);
+                      size_t meshVertCount, size_t spatialVertCount,
+                      uint32_t windowId = 0);
+  bool pollInputEvent(canvas::InputEvent &out, uint32_t windowId = 0);
 
   /// Paths from the most recent FileDrop event, pulled by index — see the
   /// note on `canvas::InputEventKind::FileDrop`. Valid until the next drop.
-  int pendingDroppedFileCount();
-  std::string pendingDroppedFile(int index);
+  int pendingDroppedFileCount(uint32_t windowId = 0);
+  std::string pendingDroppedFile(int index, uint32_t windowId = 0);
 
   /// Current swapchain / framebuffer size in pixels (after last ensure).
-  void framebufferSize(float &outW, float &outH) const;
+  void framebufferSize(float &outW, float &outH, uint32_t windowId = 0) const;
 
   /// Whole-window camera: layout stays in window pixels; renderer zooms/pans.
   /// `zoom` must be > 0 (clamped to 1 if not). Pan is in layout pixels.
-  void setViewTransform(float zoom, float panX, float panY);
+  void setViewTransform(float zoom, float panX, float panY, uint32_t windowId = 0);
 
   /// Load the face TextRenderer uses for draw-list text. Swift is the only
   /// caller (FontStore); Application does not pick a default path.
@@ -102,28 +125,30 @@ public:
 
   // ─── Input bridge (canvas-local coords, GLFW-style key codes) ───────────
 
-  void pointerMove(float x, float y);
-  void pointerButton(int button, bool pressed, float x, float y);
-  void keyEvent(int key, int action, int mods);
-  void textInput(const std::string &utf8);
+  void pointerMove(float x, float y, uint32_t windowId = 0);
+  void pointerButton(int button, bool pressed, float x, float y, uint32_t windowId = 0);
+  void keyEvent(int key, int action, int mods, uint32_t windowId = 0);
+  void textInput(const std::string &utf8, uint32_t windowId = 0);
   /// Synthetic wheel/trackpad delta; same coalescing queue as hardware scroll.
-  void scroll(float dx, float dy);
+  void scroll(float dx, float dy, uint32_t windowId = 0);
 
   // Copies the frame repaint() just rendered (RGBA8) into dst. dst must be
   // at least width*height*4 bytes.
-  void readPixels(uint8_t *dst, size_t dstSize);
+  void readPixels(uint8_t *dst, size_t dstSize, uint32_t windowId = 0);
 
   /// GPU→CPU capture of the resolve target (works windowed). See RenderDevice::captureFrame.
-  void captureFrame(uint8_t *dst, size_t dstSize);
+  void captureFrame(uint8_t *dst, size_t dstSize, uint32_t windowId = 0);
 
   /// Capture resolve as PNG (optional crop + optional max-side downsample).
   /// `w`/`h` <= 0 → full frame. `maxSide` ≤ 0 → no downsample.
   bool capturePng(std::vector<uint8_t> &outPng, int x, int y, int w, int h,
-                  int maxSide = 0, int *outW = nullptr, int *outH = nullptr);
+                  int maxSide = 0, int *outW = nullptr, int *outH = nullptr,
+                  uint32_t windowId = 0);
 
   /// Same as capturePng, base64-encoded (empty string on failure).
   std::string capturePngBase64(int x, int y, int w, int h, int maxSide = 0,
-                               int *outW = nullptr, int *outH = nullptr);
+                               int *outW = nullptr, int *outH = nullptr,
+                               uint32_t windowId = 0);
 
   void shutdown();
 

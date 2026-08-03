@@ -37,6 +37,10 @@ public enum DrawKind: UInt32 {
 /// Shaping itself is cached per line on `UIFont`, so re-emission is cheap.
 public final class DrawList {
     unowned let editor: Editor
+    /// Which window's arena this list writes into. One list per window: the
+    /// storage pointers below are that window's, and a frame is committed to
+    /// the window it was built for.
+    let window: WindowID
     private var commandStorage: UnsafeMutablePointer<canvas.DrawCommand>
     private var commandCapacity: Int
     /// Public so a harness outside LavaUI (`LavaBench`) can assert on the
@@ -75,12 +79,14 @@ public final class DrawList {
     /// content is skipped before any draw commands are issued.
     private var cullStack: [CullRect] = []
 
-    public init(editor: Editor) {
+    public init(editor: Editor, window: WindowID = .main) {
         self.editor = editor
+        self.window = window
         editor.ensureDrawListCapacity(
-            commands: 256, glyphs: 2048, meshVertices: 256, spatialVertices: 256
+            commands: 256, glyphs: 2048, meshVertices: 256, spatialVertices: 256,
+            window: window
         )
-        let storage = editor.drawListStorage()
+        let storage = editor.drawListStorage(window: window)
         commandStorage = storage.commands
         commandCapacity = storage.commandCapacity
         glyphStorage = storage.glyphs
@@ -113,9 +119,9 @@ public final class DrawList {
             ? max(spatialVertices, max(256, spatialVertexCapacity * 2)) : spatialVertexCapacity
         editor.ensureDrawListCapacity(
             commands: nextCommands, glyphs: nextGlyphs, meshVertices: nextMesh,
-            spatialVertices: nextSpatial
+            spatialVertices: nextSpatial, window: window
         )
-        let storage = editor.drawListStorage()
+        let storage = editor.drawListStorage(window: window)
         commandStorage = storage.commands
         commandCapacity = storage.commandCapacity
         glyphStorage = storage.glyphs

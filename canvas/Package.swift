@@ -46,6 +46,7 @@ let engineSources: [String] = [
     "src/render/render_window.cpp",
     "src/util/cout_ext.cpp",
     "src/util/util.cpp",
+    "src/window/app_window.cpp",
     "src/window/canvas_window.cpp",
     "src/window/window_platform.cpp",
 ]
