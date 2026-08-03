@@ -158,6 +158,18 @@ let package = Package(
             name: "TraceLoomCoreTests",
             dependencies: ["TraceLoomCore"]
         ),
+        // The one exception to the headless rule above. Multi-window routing
+        // — which window an invalidation, a focus change or a visibility set
+        // belongs to — is pure Swift, but it *is* `ViewInvalidation` and
+        // `FocusManager`, so it cannot be lifted into a window-free target
+        // without dragging the framework with it. Linking LavaUI links the
+        // engine; these tests must never open a window, load a font or touch
+        // an `Editor`, and there is nothing here that would.
+        .testTarget(
+            name: "LavaUITests",
+            dependencies: ["LavaUI"],
+            swiftSettings: [.interoperabilityMode(.Cxx)]
+        ),
     ],
     // Same C++23 as canvas_swift so interop headers parse consistently.
     // C++23 draft name still used by PackageDescription on this toolchain.

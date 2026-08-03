@@ -119,6 +119,26 @@
       "target": "LavaBench",
       "configuration": "release",
       "preLaunchTask": "swift: Build Release LavaBench"
+    },
+    {
+      "type": "swift",
+      "request": "launch",
+      "args": [],
+      "cwd": "${workspaceFolder:HelloWorld}",
+      "name": "Debug TwoWindows",
+      "target": "TwoWindows",
+      "configuration": "debug",
+      "preLaunchTask": "swift: Build Debug TwoWindows"
+    },
+    {
+      "type": "swift",
+      "request": "launch",
+      "args": [],
+      "cwd": "${workspaceFolder:HelloWorld}",
+      "name": "Release TwoWindows",
+      "target": "TwoWindows",
+      "configuration": "release",
+      "preLaunchTask": "swift: Build Release TwoWindows"
     }
   ]
 }

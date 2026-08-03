@@ -6,53 +6,52 @@ import Foundation
 /// struct is rebuilt every frame while the node persists — the same reason
 /// `@State` storage lives on the node side.
 ///
-/// Single-window assumption, like `ViewInvalidation`. Per-window focus would
-/// need this scoped to a `LayoutHost`.
+/// Per window (state lives on `WindowScope`), which is both what the OS does
+/// and what users expect: clicking into another window and back leaves the
+/// field you were editing still focused. A single process-wide focus would
+/// also mean a key event delivered to one window reaching a field in another.
 public enum FocusManager {
-    nonisolated(unsafe) private static var focused: NodeID?
+    public static var focusedID: NodeID? { WindowScope.currentOrMain.focused }
 
-    /// Set by the focused node at mount/reconcile so key events can reach it
-    /// without the app knowing what a text field is.
-    nonisolated(unsafe) private static var keyHandler: ((KeyEvent) -> Bool)?
-    nonisolated(unsafe) private static var charHandler: ((Character) -> Bool)?
-
-    public static var focusedID: NodeID? { focused }
-
-    public static func isFocused(_ id: NodeID) -> Bool { focused == id }
+    public static func isFocused(_ id: NodeID) -> Bool {
+        WindowScope.currentOrMain.focused == id
+    }
 
     public static func focus(
         _ id: NodeID,
         onKey: @escaping (KeyEvent) -> Bool,
         onChar: @escaping (Character) -> Bool
     ) {
-        if focused != id { ViewInvalidation.markDirty() }
-        focused = id
-        keyHandler = onKey
-        charHandler = onChar
+        let scope = WindowScope.currentOrMain
+        if scope.focused != id { ViewInvalidation.markDirty() }
+        scope.focused = id
+        scope.keyHandler = onKey
+        scope.charHandler = onChar
     }
 
     public static func resignFocus(_ id: NodeID) {
-        guard focused == id else { return }
+        guard WindowScope.currentOrMain.focused == id else { return }
         clear()
     }
 
     public static func clear() {
-        if focused != nil { ViewInvalidation.markDirty() }
-        focused = nil
-        keyHandler = nil
-        charHandler = nil
+        let scope = WindowScope.currentOrMain
+        if scope.focused != nil { ViewInvalidation.markDirty() }
+        scope.focused = nil
+        scope.keyHandler = nil
+        scope.charHandler = nil
     }
 
     /// Routes a key to the focused node. Returns true if it was consumed, so
     /// the app can fall through to global shortcuts otherwise.
     @discardableResult
     public static func handle(_ event: KeyEvent) -> Bool {
-        keyHandler?(event) ?? false
+        WindowScope.currentOrMain.keyHandler?(event) ?? false
     }
 
     @discardableResult
     public static func handle(character: Character) -> Bool {
-        charHandler?(character) ?? false
+        WindowScope.currentOrMain.charHandler?(character) ?? false
     }
 }
 
@@ -79,14 +78,18 @@ public struct KeyEvent {
 /// thing that defeats idle frame-gating. The compromise here is to blink only
 /// while focused, and to hold the caret solid for a moment after any edit so
 /// it never blinks mid-typing.
+///
+/// The phase is a pure function of the clock, so it is shared; what is per
+/// window (`WindowScope.caretLastPhase`) is the *last phase this window
+/// drew*, since two windows both showing a caret would otherwise consume each
+/// other's flips and one of them would stop blinking.
 public enum CaretBlink {
     public static let period: Double = 1.0
     nonisolated(unsafe) private static var lastEditAt: Double = 0
-    nonisolated(unsafe) private static var lastPhase: Bool = true
 
     public static func noteEdit() {
         lastEditAt = now()
-        lastPhase = true
+        WindowScope.currentOrMain.caretLastPhase = true
     }
 
     public static var isVisible: Bool {
@@ -99,9 +102,10 @@ public enum CaretBlink {
     /// Call once per frame while a field is focused: reports whether the blink
     /// phase flipped, which is the only reason an idle app needs to redraw.
     public static func phaseChanged() -> Bool {
+        let scope = WindowScope.currentOrMain
         let visible = isVisible
-        defer { lastPhase = visible }
-        return visible != lastPhase
+        defer { scope.caretLastPhase = visible }
+        return visible != scope.caretLastPhase
     }
 
     /// Adopts the current phase without reporting a change. The blink is
@@ -109,7 +113,7 @@ public enum CaretBlink {
     /// arbitrary number of periods on restore; the caller redraws once anyway
     /// and only wants the *next* `phaseChanged()` to be meaningful.
     public static func resync() {
-        lastPhase = isVisible
+        WindowScope.currentOrMain.caretLastPhase = isVisible
     }
 
     private static func now() -> Double {
@@ -151,6 +155,15 @@ public enum PointerCapture {
         owner = id
         moveHandler = onMove
         upHandler = onUp
+    }
+
+    /// Drops a capture held by a node that is going away, without running its
+    /// `onUp` — the drag is not finishing, its window is closing under it.
+    static func discard(ids: Set<NodeID>) {
+        guard let owner, ids.contains(owner) else { return }
+        self.owner = nil
+        moveHandler = nil
+        upHandler = nil
     }
 
     /// Window coordinates; the owner converts to its own space.
@@ -202,6 +215,10 @@ public enum ScrollRouter {
 
     public static func unregister(_ id: NodeID) { handlers[id] = nil }
 
+    static func unregisterAll(ids: Set<NodeID>) {
+        for id in ids { handlers[id] = nil }
+    }
+
     /// Delivers to the innermost node in `chain` that has a handler willing to
     /// take this notch. Returns true if consumed.
     @discardableResult
@@ -241,6 +258,10 @@ public enum DropRouter {
     }
 
     public static func unregister(_ id: NodeID) { handlers[id] = nil }
+
+    static func unregisterAll(ids: Set<NodeID>) {
+        for id in ids { handlers[id] = nil }
+    }
 
     /// So hit-testing can treat a drop-registered box as a valid target even
     /// though it carries no visual hover feedback of its own (see
@@ -288,10 +309,22 @@ public enum ClickCounter {
 /// Tracked as a single id rather than per-node flags so a move only ever
 /// invalidates when the *hovered node changes* — pointer motion arrives per
 /// pixel, and redrawing on every one of those would undo the frame gating.
+///
+/// One id for the whole process, not one per window, because the pointer is
+/// one thing: moving from window A into window B has to un-hover A's button,
+/// and nothing else reliably reports that. GLFW's cursor-leave would, but only
+/// for the window the pointer left — a pointer that jumps straight from one
+/// window to another still needs the arrival to do the work. So the *scope*
+/// that was current when the hover was set is remembered alongside it, and a
+/// cross-window move repaints both windows.
 public enum HoverState {
     nonisolated(unsafe) private static var hovered: NodeID?
+    /// Which window `hovered` is in, so it can be repainted when the pointer
+    /// leaves it for another one.
+    nonisolated(unsafe) private static var hoveredScope: WindowScope?
     /// Nodes wanting more than a fill swap — a button retargeting its
-    /// animation, say — register here.
+    /// animation, say — register here. Keyed by `NodeID`, which is unique
+    /// process-wide, so one map serves every window.
     nonisolated(unsafe) private static var handlers: [NodeID: (Bool) -> Void] = [:]
 
     public static func isHovered(_ id: NodeID) -> Bool { hovered == id }
@@ -302,16 +335,34 @@ public enum HoverState {
 
     public static func unregister(_ id: NodeID) { handlers[id] = nil }
 
+    /// Forgets a closing window's nodes. Clears the hover outright if it was
+    /// one of them, so a node that no longer exists cannot stay "hovered" and
+    /// block the next real hover from registering as a change.
+    static func unregisterAll(ids: Set<NodeID>) {
+        for id in ids { handlers[id] = nil }
+        if let hovered, ids.contains(hovered) {
+            self.hovered = nil
+            hoveredScope = nil
+        }
+    }
+
     /// Returns true when the hovered node actually changed.
     @discardableResult
     public static func set(_ id: NodeID?) -> Bool {
         guard hovered != id else { return false }
         let previous = hovered
+        let previousScope = hoveredScope
         hovered = id
+        hoveredScope = id == nil ? nil : WindowScope.currentOrMain
         if let previous { handlers[previous]?(false) }
         if let id { handlers[id]?(true) }
         // Hover only changes pixels, never view values — the cheapest level.
         ViewInvalidation.markNeedsRedraw()
+        // The window being left has to drop its highlight too, and it is not
+        // the one currently being processed.
+        if let previousScope, previousScope !== hoveredScope {
+            previousScope.raise(.redraw)
+        }
         return true
     }
 

@@ -140,18 +140,35 @@ public struct Animated<T: Animatable> {
 /// that frame — a flag only ever written by visited nodes would stay stale
 /// at whatever it last saw, exactly the case this exists to catch. Absence
 /// this frame *is* "not visible", not "unknown".
+///
+/// Per window (`WindowScope.visibleNodes`) for the same reason: "rebuilt from
+/// scratch every frame" and "one set for the process" cannot both hold once
+/// two windows emit — whichever drew last would have cleared the other's
+/// nodes, and every animation in the window that did not just draw would stop.
 enum NodeVisibility {
-    nonisolated(unsafe) private static var visible: Set<NodeID> = []
+    static func beginFrame() {
+        WindowScope.currentOrMain.visibleNodes.removeAll(keepingCapacity: true)
+    }
 
-    static func beginFrame() { visible.removeAll(keepingCapacity: true) }
-    static func mark(_ id: NodeID) { visible.insert(id) }
+    static func mark(_ id: NodeID) {
+        WindowScope.currentOrMain.visibleNodes.insert(id)
+    }
 
     /// One frame stale by construction: `AnimationDriver.tick()` runs before
     /// `emitTree()` in the loop, so this reflects the previous frame's cull
     /// result, not the one about to be drawn. Harmless — worst case a node
     /// ticks one extra frame after leaving the screen, or resumes one frame
     /// late after returning to it.
-    static func isVisible(_ id: NodeID) -> Bool { visible.contains(id) }
+    static func isVisible(_ id: NodeID) -> Bool {
+        isVisible(id, in: WindowScope.currentOrMain)
+    }
+
+    /// The window is named explicitly by `AnimationDriver`, which ticks every
+    /// registrant in one pass and so has no single ambient scope to fall back
+    /// on.
+    static func isVisible(_ id: NodeID, in scope: WindowScope) -> Bool {
+        scope.visibleNodes.contains(id)
+    }
 }
 
 /// Steps every node with animation in flight, once per frame.
@@ -160,11 +177,21 @@ enum NodeVisibility {
 /// idle window does no work at all and a single animating button does not cost
 /// a traversal of the whole tree.
 public enum AnimationDriver {
+    /// A stepper plus the window it animates in. One registry for the whole
+    /// process — `NodeID` is unique process-wide, so there is nothing to
+    /// separate — but each entry remembers its window, because "is this node
+    /// on screen" and "which window should redraw" are both per-window
+    /// questions and `tick()` answers them for every registrant in one pass.
+    private struct Entry {
+        let step: () -> Bool
+        let scope: WindowScope
+    }
+
     /// Steppers keyed by node, returning whether that node is still animating.
-    nonisolated(unsafe) private static var active: [NodeID: () -> Bool] = [:]
+    nonisolated(unsafe) private static var active: [NodeID: Entry] = [:]
 
     public static func register(_ id: NodeID, step: @escaping () -> Bool) {
-        active[id] = step
+        active[id] = Entry(step: step, scope: .currentOrMain)
         // Registering has to ask for the next frame itself, because `tick()`
         // runs before `renderFrame` in the loop — anything that starts an
         // animation during mount or reconcile, which is where transitions
@@ -175,6 +202,13 @@ public enum AnimationDriver {
     }
 
     public static func unregister(_ id: NodeID) { active[id] = nil }
+
+    /// Drops every animation belonging to a closing window. By scope rather
+    /// than by node id, since the entries already know which window they are
+    /// in and nothing else has to walk the tree to find out.
+    static func unregisterAll(in scope: WindowScope) {
+        active = active.filter { $0.value.scope !== scope }
+    }
 
     public static var isAnimating: Bool { !active.isEmpty }
 
@@ -204,16 +238,26 @@ public enum AnimationDriver {
     /// collapsed behind an `Expand`, otherwise never stops asking for one:
     /// its own stepper has no notion of "am I on screen", only of the state
     /// the widget handed it (playing/not playing).
+    /// A minimized window's registrants are stepped but never counted as
+    /// visible, which is the per-window form of the gate the frame loop used
+    /// to apply to `tick()` as a whole. That gate could only say "no window is
+    /// visible"; with two windows it would have let a minimized one keep
+    /// asking for 60fps as long as the other was up.
     public static func tick() {
         guard !active.isEmpty else { return }
         var finished: [NodeID] = []
-        var visibleActive = false
+        /// Windows with a visible animating node, so each gets its own redraw
+        /// rather than every window repainting because one of them animated.
+        var needsRedraw: [WindowScope] = []
         var stillRunning = false
 
-        for (id, step) in active {
-            let visible = NodeVisibility.isVisible(id)
-            if visible { visibleActive = true }
-            if step() {
+        for (id, entry) in active {
+            let visible = entry.scope.windowVisible
+                && NodeVisibility.isVisible(id, in: entry.scope)
+            if visible, !needsRedraw.contains(where: { $0 === entry.scope }) {
+                needsRedraw.append(entry.scope)
+            }
+            if entry.step() {
                 if visible { stillRunning = true }
             } else {
                 finished.append(id)
@@ -221,9 +265,7 @@ public enum AnimationDriver {
         }
         for id in finished { active[id] = nil }
 
-        if visibleActive {
-            ViewInvalidation.markNeedsRedraw()
-        }
+        for scope in needsRedraw { scope.raise(.redraw) }
         if stillRunning {
             // ~60fps while something visible is in flight; the loop sleeps
             // otherwise — including while every registrant is off-screen.

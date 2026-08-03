@@ -1080,8 +1080,16 @@ class FragmentNode: AnyViewNode {
 final class CompositeNode<V: View>: FragmentNode, BodyRecomputable, @unchecked Sendable {
     var view: V
 
+    /// The window this node was mounted into. Captured here rather than read
+    /// at invalidation time because the write that dirties this node can come
+    /// from any window — see `BodyRecomputable.invalidationScope`. Mounting
+    /// always happens inside the owning window's frame phase, so the ambient
+    /// scope is correct exactly once: now.
+    let invalidationScope: WindowScope?
+
     init(_ view: V) {
         self.view = view
+        self.invalidationScope = WindowScope.currentOrMain
         super.init(label: String(describing: V.self))
         setChildren([ViewGraph.mount(computeBody())])
     }

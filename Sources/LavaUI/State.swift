@@ -216,6 +216,20 @@ public enum InvalidationLevel: Int, Comparable, Sendable {
 /// generic view type.
 public protocol BodyRecomputable: AnyObject {
     func recomputeBody()
+
+    /// Which window this node's tree belongs to, captured when it mounted.
+    ///
+    /// Needed because the node, not the caller, decides where a targeted
+    /// `.body` invalidation goes: an `@Observable` model mutated from window
+    /// A's click handler can be observed by a node in window B, and B is the
+    /// one that has to recompute. The ambient scope at the moment of the
+    /// *write* is therefore the wrong answer; the one at the moment of the
+    /// *mount* is the right one. `nil` falls back to ambient.
+    var invalidationScope: WindowScope? { get }
+}
+
+extension BodyRecomputable {
+    public var invalidationScope: WindowScope? { nil }
 }
 
 /// "Something changed; do at least this much work again."
@@ -230,23 +244,11 @@ public protocol BodyRecomputable: AnyObject {
 /// like a `TextField`'s own buffer) falls back to rebuilding the whole tree,
 /// which is always correct, just coarser than it has to be.
 ///
-/// Single-window assumption, like `FocusManager`. Per-window hosts would need
-/// this scoped to a `LayoutHost`.
+/// State lives per window on `WindowScope`; every method here resolves to one.
+/// A coarse mark goes to the window whose frame is being processed, or to all
+/// of them when that is nobody — see `WindowScope` for why those are the only
+/// two answers that are ever right.
 public enum ViewInvalidation {
-    nonisolated(unsafe) private static var pending: InvalidationLevel = .body
-
-    /// True until the first frame consumes it. Nothing has named a specific
-    /// dirty node yet, and there is no root to reconcile a targeted change
-    /// into, so the first `.body` pass must build the whole tree regardless
-    /// — the same reason `pending` itself defaults to `.body`.
-    nonisolated(unsafe) private static var coarseBodyDirty = true
-
-    /// Composite nodes whose own body needs to run again, keyed by identity
-    /// so the same node marking itself dirty twice in one frame is one
-    /// entry, not two.
-    nonisolated(unsafe) private static var dirtyBodyNodes:
-        [ObjectIdentifier: any BodyRecomputable] = [:]
-
     /// Called from `withObservationTracking`'s `onChange`, i.e. *before* the
     /// new value is written. Raising a level is safe there; reading state is not.
     ///
@@ -268,24 +270,42 @@ public enum ViewInvalidation {
     /// `node`'s own tracked state changed. Unlike `markDirty()`, this does
     /// not force every other composite node's body to run again this frame
     /// — only `node`'s, once `consumeDirtyBodyNodes()` processes it.
+    ///
+    /// Routed by the node rather than by the ambient scope, because the write
+    /// that triggered this can come from any window (or none).
     public static func markBodyDirty(_ node: some BodyRecomputable) {
-        dirtyBodyNodes[ObjectIdentifier(node)] = node
-        raise(.body)
+        let scope = node.invalidationScope ?? WindowScope.currentOrMain
+        scope.dirtyBodyNodes[ObjectIdentifier(node)] = node
+        scope.raise(.body)
+    }
+
+    /// Raises `level` on the current window, or on every window when there is
+    /// no current one.
+    private static func raise(_ level: InvalidationLevel) {
+        if let scope = WindowScope.current {
+            scope.raise(level)
+            return
+        }
+        for scope in WindowScope.broadcastTargets { scope.raise(level) }
     }
 
     private static func raiseCoarse() {
-        coarseBodyDirty = true
-        raise(.body)
+        if let scope = WindowScope.current {
+            scope.coarseBodyDirty = true
+            scope.raise(.body)
+            return
+        }
+        for scope in WindowScope.broadcastTargets {
+            scope.coarseBodyDirty = true
+            scope.raise(.body)
+        }
     }
 
-    private static func raise(_ level: InvalidationLevel) {
-        if level > pending { pending = level }
-    }
-
-    /// Returns the work required, clearing the flag.
+    /// Returns the work required for the current window, clearing its flag.
     public static func consume() -> InvalidationLevel {
-        defer { pending = .none }
-        return pending
+        let scope = WindowScope.currentOrMain
+        defer { scope.pending = .none }
+        return scope.pending
     }
 
     /// Drains the set of nodes to recompute individually. `nil` means the
@@ -293,16 +313,17 @@ public enum ViewInvalidation {
     /// nothing has been targeted yet (first frame) or `.body` was raised by
     /// something that could not name the node responsible.
     public static func consumeDirtyBodyNodes() -> [any BodyRecomputable]? {
+        let scope = WindowScope.currentOrMain
         defer {
-            coarseBodyDirty = false
-            dirtyBodyNodes.removeAll()
+            scope.coarseBodyDirty = false
+            scope.dirtyBodyNodes.removeAll()
         }
-        guard !coarseBodyDirty else { return nil }
-        return Array(dirtyBodyNodes.values)
+        guard !scope.coarseBodyDirty else { return nil }
+        return Array(scope.dirtyBodyNodes.values)
     }
 
-    public static var isDirty: Bool { pending != .none }
-    public static var level: InvalidationLevel { pending }
+    public static var isDirty: Bool { WindowScope.currentOrMain.pending != .none }
+    public static var level: InvalidationLevel { WindowScope.currentOrMain.pending }
 }
 
 /// When the frame loop should next wake up.
