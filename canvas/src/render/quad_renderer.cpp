@@ -25,7 +25,7 @@ void QuadRenderer::init() {
   createLinePipeline(vulkan_.getRenderPass(), vulkan_.getMSAASamples(),
                      linePipeline_);
   createSpatialPipeline(vulkan_.getRenderPass(), vulkan_.getMSAASamples(),
-                        spatialPipeline_);
+                        spatialPipeline_, true);
   ensureBufferCapacity(kInitialVertexCapacity);
 }
 
@@ -66,6 +66,7 @@ void QuadRenderer::cleanUp() {
   linePipeline_.destroy(device);
   linePipelineScene_.destroy(device);
   spatialPipeline_.destroy(device);
+  spatialPipelineScene_.destroy(device);
   pipelineLayout_.destroy(device);
   descriptorPool_.destroy(device);
   descriptorSetLayout_.destroy(device);
@@ -179,6 +180,8 @@ void QuadRenderer::createSceneTargetPipeline(VkRenderPass sceneRenderPass) {
   createPipeline(sceneRenderPass, VK_SAMPLE_COUNT_1_BIT, pipelineScene_);
   createLinePipeline(sceneRenderPass, VK_SAMPLE_COUNT_1_BIT,
                      linePipelineScene_);
+  createSpatialPipeline(sceneRenderPass, VK_SAMPLE_COUNT_1_BIT,
+                        spatialPipelineScene_, false);
 }
 
 void QuadRenderer::createLinePipeline(VkRenderPass renderPass,
@@ -254,7 +257,8 @@ void QuadRenderer::createLinePipeline(VkRenderPass renderPass,
 
 void QuadRenderer::createSpatialPipeline(VkRenderPass renderPass,
                                          VkSampleCountFlagBits samples,
-                                         vk::Handle<VkPipeline> &out) {
+                                         vk::Handle<VkPipeline> &out,
+                                         bool depthEnabled) {
   VkDevice device = vulkan_.getDevice();
   Shaders &shaders = vulkan_.getShaders();
   VkShaderModule vert = shaders.loadShader("shaders/spatial.vert.bin");
@@ -283,7 +287,9 @@ void QuadRenderer::createSpatialPipeline(VkRenderPass renderPass,
   VkPipelineMultisampleStateCreateInfo ms{.sType=VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO,
     .rasterizationSamples=samples};
   VkPipelineDepthStencilStateCreateInfo ds{.sType=VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO,
-    .depthTestEnable=VK_TRUE,.depthWriteEnable=VK_TRUE,.depthCompareOp=VK_COMPARE_OP_LESS_OR_EQUAL};
+    .depthTestEnable=depthEnabled ? VK_TRUE : VK_FALSE,
+    .depthWriteEnable=depthEnabled ? VK_TRUE : VK_FALSE,
+    .depthCompareOp=depthEnabled ? VK_COMPARE_OP_LESS_OR_EQUAL : VK_COMPARE_OP_ALWAYS};
   VkPipelineColorBlendAttachmentState ba{.blendEnable=VK_TRUE,
     .srcColorBlendFactor=VK_BLEND_FACTOR_SRC_ALPHA,.dstColorBlendFactor=VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA,
     .colorBlendOp=VK_BLEND_OP_ADD,.srcAlphaBlendFactor=VK_BLEND_FACTOR_ONE,
@@ -1045,7 +1051,7 @@ void QuadRenderer::drawBatchRange(VkCommandBuffer commandBuffer,
       wanted = intoSceneTarget ? static_cast<VkPipeline>(linePipelineScene_)
                                : static_cast<VkPipeline>(linePipeline_);
     } else if (batch.geometry == Batch::Geometry::SpatialTriangles) {
-      wanted = intoSceneTarget ? VK_NULL_HANDLE
+      wanted = intoSceneTarget ? static_cast<VkPipeline>(spatialPipelineScene_)
                                : static_cast<VkPipeline>(spatialPipeline_);
     } else {
       wanted = intoSceneTarget ? static_cast<VkPipeline>(pipelineScene_)

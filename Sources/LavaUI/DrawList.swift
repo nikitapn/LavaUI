@@ -166,7 +166,7 @@ public final class DrawList {
             vertex.u = point.u
             vertex.v = point.v
             vertex.color = point.color.rgba8
-            vertex.textured = point.textured ? 1 : 0
+            vertex.textured = point.sampleMode
             appendSpatialVertex(vertex)
         }
         append(
@@ -452,6 +452,20 @@ public final class DrawList {
             kind: .endContentBlur, x: 0, y: 0, w: 0, h: 0,
             color: Color(r: 1, g: 1, b: 1)
         )
+    }
+
+    /// One offscreen Gaussian pass for a Scene3D's projected shadow mask.
+    /// Avoid nested blur targets: if an ancestor already blurs the whole scene,
+    /// the mask is emitted into that target and participates in its blur.
+    func withSpatialShadowBlur(
+        frame: CanvasFrame, radius: Float, body: () -> Void
+    ) {
+        guard radius > 0, !insideBlurScope else { body(); return }
+        beginContentBlur(
+            x: frame.x, y: frame.y, w: frame.w, h: frame.h, radius: radius
+        )
+        body()
+        endContentBlur()
     }
 
     /// Run `body` inside optional blur bookends, of whichever kind the node asked

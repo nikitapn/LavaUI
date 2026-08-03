@@ -187,7 +187,7 @@ class QuadRenderer {
   void createLinePipeline(VkRenderPass renderPass, VkSampleCountFlagBits samples,
                           vk::Handle<VkPipeline> &out);
   void createSpatialPipeline(VkRenderPass renderPass, VkSampleCountFlagBits samples,
-                             vk::Handle<VkPipeline> &out);
+                             vk::Handle<VkPipeline> &out, bool depthEnabled);
   void setupDescriptors();
   void createWhiteTexture();
   void ensureBufferCapacity(size_t vertexCount);
@@ -214,6 +214,7 @@ class QuadRenderer {
   vk::Handle<VkPipeline>            linePipeline_;
   vk::Handle<VkPipeline>            linePipelineScene_;
   vk::Handle<VkPipeline>            spatialPipeline_;
+  vk::Handle<VkPipeline>            spatialPipelineScene_;
   vk::Handle<VkPipelineLayout>      pipelineLayout_;
   vk::Handle<VkDescriptorPool>      descriptorPool_;
   vk::Handle<VkDescriptorSetLayout> descriptorSetLayout_;

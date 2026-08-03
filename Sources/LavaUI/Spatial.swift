@@ -107,6 +107,25 @@ public struct Material3D: Sendable {
     }
 }
 
+public struct Shadow3DStyle: Equatable, Sendable {
+    public var color: Color
+    public var radius: Float
+    public var offsetX: Float
+    public var offsetY: Float
+    public var opacity: Float
+
+    public init(
+        color: Color = Color(r: 0, g: 0, b: 0), radius: Float = 16,
+        offsetX: Float = 7, offsetY: Float = 11, opacity: Float = 0.32
+    ) {
+        self.color = color
+        self.radius = max(0, radius)
+        self.offsetX = offsetX
+        self.offsetY = offsetY
+        self.opacity = min(1, max(0, opacity))
+    }
+}
+
 public protocol View3D {
     func spatialElements() -> [SpatialElement]
 }
@@ -140,6 +159,7 @@ public struct SpatialElement: View3D {
     var geometry: Geometry
     var color: Color
     var material: Material3D?
+    var shadow: Shadow3DStyle?
     var transform = Transform3D()
     var animation: SpatialAnimation?
     var onHover: ((Bool) -> Void)?
@@ -236,6 +256,18 @@ extension View3D {
     public func material3D(_ material: Material3D) -> some View3D {
         ModifiedView3D(base: self) { $0.material = material }
     }
+    public func shadow3D(_ style: Shadow3DStyle = Shadow3DStyle()) -> some View3D {
+        ModifiedView3D(base: self) { $0.shadow = style }
+    }
+    public func shadow3D(
+        color: Color = Color(r: 0, g: 0, b: 0), radius: Float = 16,
+        offsetX: Float = 7, offsetY: Float = 11, opacity: Float = 0.32
+    ) -> some View3D {
+        shadow3D(Shadow3DStyle(
+            color: color, radius: radius, offsetX: offsetX,
+            offsetY: offsetY, opacity: opacity
+        ))
+    }
     public func onHover3D(_ action: @escaping (Bool) -> Void) -> some View3D {
         ModifiedView3D(base: self) { $0.onHover = action }
     }
@@ -273,7 +305,8 @@ struct SpatialProjectedVertex {
     var x, y, depth: Float
     var u: Float = 0
     var v: Float = 0
-    var textured = false
+    /// 0 = flat color, 1 = sampled texture.
+    var sampleMode: Float = 0
     var color: Color
 }
 
@@ -285,6 +318,7 @@ private struct SpatialBatch {
 private struct SpatialProjectedObject {
     var element: SpatialElement
     var batches: [SpatialBatch]
+    var shadows: [SpatialBatch]
     var triangles: [SpatialProjectedVertex] { batches.flatMap(\.triangles) }
 }
 
@@ -405,14 +439,54 @@ final class SpatialRuntime {
                             scale: $0.scale.current)
             } ?? e.transform
             return SpatialProjectedObject(
-                element: e, batches: project(element: e, transform: t, frame: frame)
+                element: e,
+                batches: project(element: e, transform: t, frame: frame),
+                shadows: projectShadow(element: e, transform: t, frame: frame)
             )
+        }
+        let shadowRadius = elements.compactMap(\.shadow?.radius).max() ?? 0
+        draw.withSpatialShadowBlur(frame: frame, radius: shadowRadius) {
+            for item in projected {
+                for batch in item.shadows {
+                    draw.spatialTriangles(batch.triangles, texture: nil)
+                }
+            }
         }
         for item in projected {
             for batch in item.batches {
                 draw.spatialTriangles(batch.triangles, texture: batch.texture)
             }
         }
+    }
+
+    private func projectShadow(
+        element: SpatialElement, transform: Transform3D, frame: CanvasFrame
+    ) -> [SpatialBatch] {
+        guard let style = element.shadow, style.opacity > 0 else { return [] }
+        let w: Float, h: Float, z: Float
+        switch element.geometry {
+        case .plane(let width, let height):
+            w = width; h = height; z = 0
+        case .box(let size):
+            w = size.x; h = size.y; z = size.z / 2
+        case .ambientLight, .directionalLight:
+            return []
+        }
+        let local: [Vector3] = [[-w/2,-h/2,z],[w/2,-h/2,z],[w/2,h/2,z],[-w/2,h/2,z]]
+        let projectedCorners = local.compactMap { project(apply(transform,$0),frame:frame) }
+        guard projectedCorners.count == 4 else { return [] }
+        let order = [0,2,1,0,3,2]
+        let uv: [(Float,Float)] = [(0,1),(1,1),(1,0),(0,0)]
+        let vertices = order.map { index -> SpatialProjectedVertex in
+            let p = projectedCorners[index]
+            return SpatialProjectedVertex(
+                x:p.x + style.offsetX,
+                y:p.y + style.offsetY,
+                depth:min(1,p.z + 0.0005),u:uv[index].0,v:uv[index].1,
+                sampleMode:0,color:style.color.opacity(style.opacity)
+            )
+        }
+        return [SpatialBatch(triangles:vertices,texture:nil)]
     }
 
     func hover(x: Float, y: Float) {
@@ -487,7 +561,7 @@ final class SpatialRuntime {
                 }
                 return SpatialProjectedVertex(
                     x: p.x, y: p.y, depth: p.z, u: uv[index].0, v: uv[index].1,
-                    textured: face.texture != nil, color: lit
+                    sampleMode: face.texture == nil ? 0 : 1, color: lit
                 )
             }
             guard vertices.count == 6 else { return nil }

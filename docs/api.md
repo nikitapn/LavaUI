@@ -462,6 +462,7 @@ Scene3D(
             color: .accent
         )
         .material3D(.albumCover(front: album.cover, edgeColor: .dim))
+        .shadow3D(radius: 15, offsetX: 7, offsetY: 11, opacity: 0.3)
         .position(catalogPosition(album))
         .rotation3D(
             angle: .degrees(hovered == album.id ? 12 : 0),
@@ -487,6 +488,13 @@ scenes without explicit lights receive a neutral default rig. Spatial modifiers
 include `position`, `offset3D`, uniform/vector `scale3D`, axis-angle
 `rotation3D`, `animation3D`, `onHover3D`, and `onTap3D`. Object identifiers
 must be stable: retained transform animation and hit dispatch are keyed by id.
+
+`.shadow3D(...)` projects the transformed card silhouette into a shared
+offscreen mask and Gaussian-blurs it. Radius and offset are expressed in screen
+pixels, so the shadow remains visually consistent while the cover moves in
+depth. `Shadow3DStyle` can also be passed when the same configuration is shared
+by many objects. This is a scene-local spatial UI effect, not a general mesh
+shadow map.
 
 `Camera3D.perspective` accepts position, target, field of view, and near/far
 planes. Pointer picking tests the projected triangles and selects the nearest
