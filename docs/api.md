@@ -470,6 +470,10 @@ Scene3D(
         )
         .material3D(.albumCover(front: album.cover, edgeColor: .dim))
         .shadow3D(radius: 15, offsetX: 7, offsetY: 11, opacity: 0.3)
+        .reflection3D(
+            planeY: -0.63, opacity: 0.28,
+            fadeDistance: 1.4, blurRadius: 1.25
+        )
         .catalog3D(
             index: index, itemCount: albums.count,
             focusedIndex: hovered, layout: catalogLayout
@@ -509,6 +513,13 @@ pixels, so the shadow remains visually consistent while the cover moves in
 depth. `Shadow3DStyle` can also be passed when the same configuration is shared
 by many objects. This is a scene-local spatial UI effect, not a general mesh
 shadow map.
+
+`.reflection3D(...)` mirrors the fully transformed object across a horizontal
+world-space plane. The reflection preserves textures, fades with distance from
+the plane, and can use a small shared Gaussian blur for a polished glass-floor
+look. `planeY` should align with the lower edge of objects at rest. Reflections
+are a lightweight planar UI effect rather than a second scene render, so they
+do not reflect arbitrary surrounding geometry.
 
 `Camera3D.perspective` accepts position, target, field of view, and near/far
 planes. Pointer picking tests the projected triangles and selects the nearest

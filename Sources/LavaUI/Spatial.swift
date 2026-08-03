@@ -194,6 +194,24 @@ public struct Shadow3DStyle: Equatable, Sendable {
     }
 }
 
+public struct Reflection3DStyle: Equatable, Sendable {
+    /// Horizontal world-space plane across which geometry is mirrored.
+    public var planeY: Float
+    public var opacity: Float
+    public var fadeDistance: Float
+    public var blurRadius: Float
+
+    public init(
+        planeY: Float = -0.75, opacity: Float = 0.3,
+        fadeDistance: Float = 1.6, blurRadius: Float = 1.5
+    ) {
+        self.planeY = planeY
+        self.opacity = min(1, max(0, opacity))
+        self.fadeDistance = max(0.01, fadeDistance)
+        self.blurRadius = max(0, blurRadius)
+    }
+}
+
 public struct CatalogPose3D: Equatable, Sendable {
     public var transform: Transform3D
 
@@ -207,6 +225,7 @@ public struct CatalogPose3D: Equatable, Sendable {
 public struct CatalogLayout3D: Equatable, Sendable {
     public var spacing: Float
     public var focusDepth: Float
+    public var focusLift: Float
     public var focusScale: Float
     public var neighborSpread: Float
     public var neighborDepthStep: Float
@@ -215,6 +234,7 @@ public struct CatalogLayout3D: Equatable, Sendable {
     public init(
         spacing: Float = 1.6,
         focusDepth: Float = 0.55,
+        focusLift: Float = 0.08,
         focusScale: Float = 1.12,
         neighborSpread: Float = 0.28,
         neighborDepthStep: Float = 0.08,
@@ -222,6 +242,7 @@ public struct CatalogLayout3D: Equatable, Sendable {
     ) {
         self.spacing = max(0, spacing)
         self.focusDepth = focusDepth
+        self.focusLift = focusLift
         self.focusScale = max(0.01, focusScale)
         self.neighborSpread = max(0, neighborSpread)
         self.neighborDepthStep = max(0, neighborDepthStep)
@@ -231,12 +252,13 @@ public struct CatalogLayout3D: Equatable, Sendable {
     public static func focusedShelf(
         spacing: Float = 1.6,
         focusDepth: Float = 0.55,
+        focusLift: Float = 0.08,
         focusScale: Float = 1.12,
         fanAngle: Angle3D = .degrees(10)
     ) -> CatalogLayout3D {
         CatalogLayout3D(
             spacing: spacing, focusDepth: focusDepth,
-            focusScale: focusScale, fanAngle: fanAngle
+            focusLift: focusLift, focusScale: focusScale, fanAngle: fanAngle
         )
     }
 
@@ -252,6 +274,7 @@ public struct CatalogLayout3D: Equatable, Sendable {
         let distance = index - focusedIndex
         if distance == 0 {
             transform.position.z = focusDepth
+            transform.position.y = focusLift
             transform.scale = [focusScale, focusScale, focusScale]
         } else {
             let side: Float = distance < 0 ? -1 : 1
@@ -311,6 +334,7 @@ public struct SpatialElement: View3D {
     var color: Color
     var material: Material3D?
     var shadow: Shadow3DStyle?
+    var reflection: Reflection3DStyle?
     var transform = Transform3D()
     var animation: SpatialAnimation?
     var onHover: ((Bool) -> Void)?
@@ -430,6 +454,20 @@ extension View3D {
             offsetY: offsetY, opacity: opacity
         ))
     }
+    public func reflection3D(
+        _ style: Reflection3DStyle = Reflection3DStyle()
+    ) -> some View3D {
+        ModifiedView3D(base: self) { $0.reflection = style }
+    }
+    public func reflection3D(
+        planeY: Float = -0.75, opacity: Float = 0.3,
+        fadeDistance: Float = 1.6, blurRadius: Float = 1.5
+    ) -> some View3D {
+        reflection3D(Reflection3DStyle(
+            planeY: planeY, opacity: opacity,
+            fadeDistance: fadeDistance, blurRadius: blurRadius
+        ))
+    }
     public func onHover3D(_ action: @escaping (Bool) -> Void) -> some View3D {
         ModifiedView3D(base: self) { $0.onHover = action }
     }
@@ -481,6 +519,7 @@ private struct SpatialProjectedObject {
     var element: SpatialElement
     var batches: [SpatialBatch]
     var shadows: [SpatialBatch]
+    var reflections: [SpatialBatch]
     var triangles: [SpatialProjectedVertex] { batches.flatMap(\.triangles) }
 }
 
@@ -785,14 +824,27 @@ final class SpatialRuntime {
             return SpatialProjectedObject(
                 element: e,
                 batches: project(element: e, transform: t, frame: frame),
-                shadows: projectShadow(element: e, transform: t, frame: frame)
+                shadows: projectShadow(element: e, transform: t, frame: frame),
+                reflections: e.reflection.map {
+                    project(
+                        element: e, transform: t, frame: frame, reflection: $0
+                    )
+                } ?? []
             )
         }
         let shadowRadius = elements.compactMap(\.shadow?.radius).max() ?? 0
-        draw.withSpatialShadowBlur(frame: frame, radius: shadowRadius) {
+        draw.withSpatialBlur(frame: frame, radius: shadowRadius) {
             for item in projected {
                 for batch in item.shadows {
                     draw.spatialTriangles(batch.triangles, texture: nil)
+                }
+            }
+        }
+        let reflectionRadius = elements.compactMap(\.reflection?.blurRadius).max() ?? 0
+        draw.withSpatialBlur(frame: frame, radius: reflectionRadius) {
+            for item in projected {
+                for batch in item.reflections {
+                    draw.spatialTriangles(batch.triangles, texture: batch.texture)
                 }
             }
         }
@@ -863,7 +915,8 @@ final class SpatialRuntime {
     }
 
     private func project(
-        element: SpatialElement, transform: Transform3D, frame: CanvasFrame
+        element: SpatialElement, transform: Transform3D, frame: CanvasFrame,
+        reflection: Reflection3DStyle? = nil
     ) -> [SpatialBatch] {
         struct Face {
             var corners: [Vector3]
@@ -898,14 +951,24 @@ final class SpatialRuntime {
         let order = [0,2,1,0,3,2]
         let uv: [(Float,Float)] = [(0,1),(1,1),(1,0),(0,0)]
         return faces.compactMap { face in
-            let lit = litColor(face.color, normal: rotate(transform, face.normal))
+            var normal = rotate(transform, face.normal)
+            if reflection != nil { normal.y = -normal.y }
+            let lit = litColor(face.color, normal: normal)
             let vertices = order.compactMap { index -> SpatialProjectedVertex? in
-                guard let p = project(apply(transform, face.corners[index]), frame: frame) else {
+                var world = apply(transform, face.corners[index])
+                var color = lit
+                if let reflection {
+                    world.y = 2 * reflection.planeY - world.y
+                    let distance = max(0, reflection.planeY - world.y)
+                    let fade = max(0, 1 - distance / reflection.fadeDistance)
+                    color = color.opacity(reflection.opacity * fade)
+                }
+                guard let p = project(world, frame: frame) else {
                     return nil
                 }
                 return SpatialProjectedVertex(
                     x: p.x, y: p.y, depth: p.z, u: uv[index].0, v: uv[index].1,
-                    sampleMode: face.texture == nil ? 0 : 1, color: lit
+                    sampleMode: face.texture == nil ? 0 : 1, color: color
                 )
             }
             guard vertices.count == 6 else { return nil }

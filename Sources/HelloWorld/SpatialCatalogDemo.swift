@@ -33,6 +33,10 @@ struct SpatialCatalogDemo: View {
                 )
                 .material3D(.albumCover(front: poster))
                 .shadow3D(radius: 15, offsetX: 7, offsetY: 11, opacity: 0.7)
+                .reflection3D(
+                    planeY: -0.73, opacity: 0.28,
+                    fadeDistance: 1.5, blurRadius: 1.25
+                )
                 .catalog3D(
                     index: index, itemCount: posters.count,
                     focusedIndex: hovered, layout: layout
