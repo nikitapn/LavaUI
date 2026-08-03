@@ -1,0 +1,65 @@
+// LavaUI compositor control plane.
+//
+// The split is deliberate and it is the whole design: **this interface never
+// carries pixels**. Draw lists go through `canvas::ipc::DrawArena`, a shared
+// mapping the app writes once and the renderer reads in place. What is left
+// over — naming resources, wiring an arena up, saying "a frame is ready" — is
+// small, request/response shaped, and happens at human rates rather than at
+// vertex rates. That is what RPC is good at, and shared-memory NPRPC does a
+// round trip in ~7 µs, which against a 16.7 ms frame is not a cost worth
+// designing around.
+//
+// Routing a draw list through here instead would mean copying it (1 MB is
+// 0.3 ms, 2% of a frame, for something that should cost nothing) and would
+// throw away the property the arena exists to provide.
+
+module lava;
+
+exception FontNotFound {
+  path: string;
+}
+
+exception ArenaNotFound {
+  arenaId: string;
+}
+
+interface Compositor {
+  // ─── Resources ─────────────────────────────────────────────────────────
+  //
+  // The renderer owns the GPU, so it owns every id that names something on
+  // it. An app can shape text without a device — `canvas::Font` is FreeType
+  // and HarfBuzz and nothing else — but the *number* it puts in a
+  // `GlyphInstance` has to be one the renderer will resolve to the same face.
+  // This is that number, and it is the reason this interface had to exist
+  // before anything else: without it the two processes agree on font ids by
+  // convention, which works exactly until there are two clients.
+
+  /// Registers a face and returns the id to put in `GlyphInstance.fontId`.
+  /// Idempotent per (path, pixelSize) — asking twice gets the same id, so a
+  /// client may call it whenever rather than caching carefully.
+  u32 RegisterFont(path: in string, pixelSize: in f32) raises(FontNotFound);
+
+  // ─── Surfaces ──────────────────────────────────────────────────────────
+
+  /// Points a window at the shared-memory arena this client publishes frames
+  /// into. Until this lands the window has nothing to draw.
+  ///
+  /// The arena must already exist: the client creates it, the renderer
+  /// attaches. That ordering is what makes the arena's capacity and geometry
+  /// the producer's business alone.
+  void AttachArena(arenaId: in string) raises(ArenaNotFound);
+
+  /// "A frame is committed; come and get it."
+  ///
+  /// `[unreliable]` — no reply, no ack, no round trip. Correct rather than
+  /// merely cheap: the arena's `published` sequence is already the authority
+  /// on what is current, so this call carries no information that could be
+  /// lost. Dropping one costs a frame of latency, never a frame of content,
+  /// and the renderer would coalesce two of them anyway.
+  ///
+  /// It exists because a shared-memory store wakes nobody. Without it the
+  /// renderer has to poll, which is a busy loop pretending to be a frame
+  /// clock; with it the renderer blocks until a client actually has
+  /// something to show.
+  [unreliable] void Present();
+}

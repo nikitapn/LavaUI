@@ -1,6 +1,30 @@
 // swift-tools-version: 6.0
 
+import Foundation
 import PackageDescription
+
+// ── Optional control plane (NPRPC) ────────────────────────────────────────
+//
+// The compositor's control plane — naming fonts and textures, attaching a
+// window to a client's draw arena — is RPC-shaped, and NPRPC does a
+// shared-memory round trip in ~7 µs. But `nprpc_swift` builds with
+// `.unsafeFlags`, which SwiftPM permits only for path dependencies, and which
+// propagate to anything depending on it. So it is wired in here rather than
+// under LavaUI: LavaUI must stay free of unsafe flags to remain usable as a
+// GitHub dependency (see canvas/Package.swift), and the control plane belongs
+// above the UI framework anyway.
+//
+// Detected rather than required, because HelloWorld itself does not need it.
+// Without nprpc checked out, everything still builds; `ArenaDemo` simply
+// falls back to agreeing on ids out of band, which is what it did before this
+// existed.
+let nprpcPath = ProcessInfo.processInfo.environment["NPRPC_SWIFT_PATH"]
+    ?? URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+        .appendingPathComponent("nprpc/nprpc_swift")
+        .path
+let haveNprpc = FileManager.default.fileExists(atPath: nprpcPath + "/Package.swift")
 
 // Post-SwiftCrossUI: C++ interop (CxxCanvas) + FBDModel. No Gtk.
 // LavaUI = declarative View DSL + Yoga + draw list + engine bridge.
@@ -24,7 +48,7 @@ let package = Package(
     ],
     dependencies: [
         .package(path: "canvas"),
-    ],
+    ] + (haveNprpc ? [Package.Dependency.package(path: nprpcPath)] : []),
     targets: [
         // Declarative UI library (View DSL, Yoga layout, fonts, draw list, Editor).
         // Pure text-editing logic: no C++ interop, no Vulkan, no Foundation
@@ -57,10 +81,18 @@ let package = Package(
         // split possible at all.
         .executableTarget(
             name: "ArenaDemo",
-            dependencies: ["LavaUI"],
+            dependencies: ["LavaUI"] + (haveNprpc ? [Target.Dependency("LavaIDL")] : []),
             swiftSettings: [
                 .interoperabilityMode(.Cxx),
-            ]
+            ],
+            // Boost.Asio's SSL support is header-only, and nprpc's public
+            // `common.hpp` includes `<boost/asio/ssl/context.hpp>` — so the
+            // error-category definitions get compiled into *this* target and
+            // leave undefined OpenSSL symbols here, not in libnprpc. Nothing
+            // in this demo speaks TLS; these two just satisfy the linker.
+            linkerSettings: haveNprpc
+                ? [.linkedLibrary("ssl"), .linkedLibrary("crypto")]
+                : []
         ),
 
         // Throwaway modifier spike; delete once the design is chosen. We keep for now. 01/08/2026
@@ -185,7 +217,18 @@ let package = Package(
             dependencies: ["LavaUI"],
             swiftSettings: [.interoperabilityMode(.Cxx)]
         ),
-    ],
+    ] + (haveNprpc ? [
+        // Generated NPRPC stubs for idl/lava.npidl. A module of its own so
+        // callers `import LavaIDL` explicitly and regeneration never touches
+        // hand-written code — the same split nscalc uses.
+        //
+        // Regenerate with: scripts/gen_stubs.sh
+        Target.target(
+            name: "LavaIDL",
+            dependencies: [.product(name: "NPRPC", package: "nprpc_swift")],
+            swiftSettings: [.interoperabilityMode(.Cxx)]
+        ),
+    ] : []),
     // Same C++23 as canvas_swift so interop headers parse consistently.
     // C++23 draft name still used by PackageDescription on this toolchain.
     cxxLanguageStandard: .gnucxx2b

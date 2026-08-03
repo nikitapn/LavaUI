@@ -3,6 +3,10 @@ import CxxCanvas
 import CanvasResources
 import Foundation
 import LavaUI
+#if canImport(LavaIDL)
+import LavaIDL
+import NPRPC
+#endif
 
 // One renderer process, one app process, one shared arena between them.
 //
@@ -16,21 +20,30 @@ import LavaUI
 // side of the boundary: the bytes the producer writes are the bytes the
 // renderer reads.
 //
-// What this slice does *not* have yet is a control plane, and the seam shows
-// in exactly one place: both processes have to agree on a font id. The
-// renderer registers the face first so it gets id 0, and the producer assumes
-// that. Everything else — geometry, colour, glyph positions — is carried in
-// the arena itself.
+// The control plane is NPRPC over shared memory (`idl/lava.npidl`): the app
+// asks the renderer to name a font, hands it the arena to read, and tells it
+// when a frame is ready. That last call is `[unreliable]` — fire and forget —
+// which is what lets the renderer *block* instead of polling: a shared-memory
+// store wakes nobody, so without a nudge the renderer has no way to learn a
+// frame arrived.
+//
+// Built without nprpc checked out, both halves still run: the font id falls
+// back to a convention and the renderer polls. That fallback is what this
+// looked like before the control plane existed.
 
 let mode = CommandLine.arguments.dropFirst().first ?? "host"
 let arenaID = "demo"
 
-/// The one thing the two processes agree on out of band. A `registerFont`
-/// round trip over the control plane replaces this.
 let fontPath = (LavaResources.fontsDirectory as NSString)
     .appendingPathComponent("OpenSans-Regular.ttf")
 let fontPixelSize: Float = 20
-let sharedFontID: UInt32 = 0
+
+/// Font id the producer stamps into every `GlyphInstance`.
+///
+/// Answered by `Compositor.RegisterFont` when the control plane is available.
+/// The fallback is the convention this demo used before that existed: the
+/// renderer registers this face first, so it lands at 0.
+nonisolated(unsafe) var sharedFontID: UInt32 = 0
 
 // ─── Renderer ────────────────────────────────────────────────────────────────
 
@@ -44,9 +57,39 @@ func runHost() {
         exit(1)
     }
 
-    // First registration, so this face is id 0 — the number the producer
-    // assumes. The renderer rasterizes and atlases these glyphs on demand;
-    // the producer only ever names them.
+#if canImport(LavaIDL)
+    // Both the font id and the arena now arrive over RPC, so the renderer
+    // registers nothing up front and waits to be told.
+    LoopQueue.wake = { [editor] in editor.wakeEventLoop() }
+    do {
+        rpcRuntime = try startCompositorService(editor: editor)
+    } catch {
+        FileHandle.standardError.write(Data("control plane failed: \(error)\n".utf8))
+        exit(1)
+    }
+
+    while editor.isOpen {
+        // Blocks until something happens: input, or a client's `Present`
+        // waking us through `LoopQueue`/`wakeEventLoop`. No frame clock, no
+        // poll — an idle desktop costs nothing.
+        editor.pumpEvents(timeout: -1)
+
+        // Servant work first: a `RegisterFont` that arrived while we were
+        // parked belongs to the frame about to be drawn.
+        LoopQueue.drain()
+
+        // Drain input so the window stays responsive even though nothing here
+        // acts on it — forwarding these to the client is the next piece.
+        while editor.pollInputEvent() != nil {}
+
+        // Repaint on a published frame, and also on any other wake, since a
+        // resize or expose has to redraw what the arena already holds.
+        _ = CompositorImpl.takeFrameReady()
+        editor.renderFrame()
+    }
+#else
+    // No control plane: the pre-RPC behaviour. Register the face first so it
+    // lands at the id the producer assumes, and poll for the arena.
     guard let id = editor.registerFont(path: fontPath, pixelSize: fontPixelSize) else {
         FileHandle.standardError.write(Data("failed to register \(fontPath)\n".utf8))
         exit(1)
@@ -56,38 +99,18 @@ func runHost() {
             Data("warning: font registered as \(id), producer assumes \(sharedFontID)\n".utf8)
         )
     }
-
-    // The producer has to have created the arena first — attaching is the
-    // side that opens, not the side that makes.
     var attached = editor.attachDrawArena(id: arenaID)
-    if !attached {
-        FileHandle.standardError.write(
-            Data("waiting for a producer on arena '\(arenaID)'…\n".utf8)
-        )
-    }
-
     var lastAttempt = Date.distantPast
     while editor.isOpen {
-        // Poll rather than block: the producer's publish is a shared-memory
-        // store, and nothing about it wakes GLFW. A frame-paced tick is the
-        // honest placeholder until the control plane can carry a wakeup.
         editor.pumpEvents(timeout: 1.0 / 120.0)
-
         if !attached, Date().timeIntervalSince(lastAttempt) > 0.5 {
             lastAttempt = Date()
             attached = editor.attachDrawArena(id: arenaID)
-            if attached {
-                FileHandle.standardError.write(Data("producer attached\n".utf8))
-            }
         }
-
-        // Drain input so the window stays responsive even though nothing here
-        // acts on it — the reverse channel that would forward these to the
-        // producer is the next piece of work.
         while editor.pollInputEvent() != nil {}
-
         editor.renderFrame()
     }
+#endif
 }
 
 // ─── App ─────────────────────────────────────────────────────────────────────
@@ -97,6 +120,16 @@ func runHost() {
 /// struct a pointer to a local would outlive the local it points at.
 nonisolated(unsafe) var arena = canvas.ipc.DrawArena()
 nonisolated(unsafe) var font = canvas.Font()
+
+#if canImport(LavaIDL)
+/// The `Rpc` owns the transport — the shared-memory listener, its ring
+/// buffers, the worker threads. Held at file scope because ARC releases a
+/// local at its *last use*, not at end of scope, so binding it to `_` inside a
+/// function tears the whole runtime down immediately: the listener stops, the
+/// ring buffers are unlinked, and the next call through a proxy that outlived
+/// it segfaults.
+nonisolated(unsafe) var rpcRuntime: Rpc?
+#endif
 
 func runProducer() {
     guard font.load(std.string(fontPath), fontPixelSize).has_value() else {
@@ -121,6 +154,31 @@ func runProducer() {
     FileHandle.standardError.write(
         Data("arena '\(arenaID)' created (\(arena.mappedBytes() / 1024) KiB)\n".utf8)
     )
+
+#if canImport(LavaIDL)
+    // Order matters: the arena has to exist before `AttachArena`, because the
+    // renderer opens what the producer made. Registering the font first is
+    // free either way and gets the id every glyph below is stamped with.
+    var compositorOpt: Compositor?
+    do {
+        let (compositor, rpc) = try connectToCompositor()
+        rpcRuntime = rpc
+        sharedFontID = try blockingCall {
+            try await compositor.registerFont(path: fontPath, pixelSize: fontPixelSize)
+        }
+        try blockingCall { try await compositor.attachArena(arenaId: arenaID) }
+        compositorOpt = compositor
+        FileHandle.standardError.write(
+            Data("control plane up — font id \(sharedFontID)\n".utf8)
+        )
+    } catch {
+        FileHandle.standardError.write(
+            Data("no compositor (\(error)) — is the host running?\n".utf8)
+        )
+        exit(1)
+    }
+    let compositor = compositorOpt
+#endif
 
     let start = Date()
     var frame = 0
@@ -149,6 +207,16 @@ func runProducer() {
         writer.text("this process has no GPU and no window", x: 40, y: 124)
 
         writer.commit()
+#if canImport(LavaIDL)
+        // Fire and forget. The arena's published sequence already says what is
+        // current, so a dropped nudge costs a frame of latency and never a
+        // frame of content — which is exactly what `[unreliable]` is for.
+        if let compositor {
+            // Not awaited: `[unreliable]` has no reply to wait for, and a
+            // frame loop should not pay a scheduling round trip to say "go".
+            Task.detached { await compositor.present() }
+        }
+#endif
         frame += 1
         if frame % 120 == 0 {
             let line = "frame \(frame): generation \(arena.generation()), "
