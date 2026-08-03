@@ -107,15 +107,13 @@ Pipeline PipelineBuilder::build(
     .pDynamicStates    = dynamicStates.data(),
   };
 
-  // Use shadow map size for shadow pipelines, swapchain extent for regular pipelines
-  uint32_t pipelineWidth, pipelineHeight;
-  if (isShadowPipeline_) {
-    pipelineWidth = pipelineHeight = device.getShadowMapSize();
-  } else {
-    const auto& extent = device.getExtent();
-    pipelineWidth = extent.width;
-    pipelineHeight = extent.height;
-  }
+  // Both viewport and scissor are dynamic state (see above), so what is baked
+  // in here is overwritten by vkCmdSetViewport/Scissor before every draw and
+  // only has to be non-degenerate. It used to read the window's extent, which
+  // is not something a pipeline can know now that a device serves several
+  // windows of different sizes — and never actually mattered.
+  uint32_t pipelineWidth  = isShadowPipeline_ ? device.getShadowMapSize() : 1;
+  uint32_t pipelineHeight = pipelineWidth;
 
   VkViewport viewport {
     .x        = 0.0f,

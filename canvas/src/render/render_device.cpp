@@ -32,6 +32,7 @@
 #include "util/util.hpp"
 #include "render/shaders.hpp"
 #include "render/render_device.hpp"
+#include "render/render_window.hpp"
 #include "render/texture_manager.hpp"
 #include "window/window_platform.hpp"
 
@@ -166,7 +167,7 @@ void RenderDevice::createVkInstance(
 
   auto instanceExtensions = std::vector<const char *>();
 
-  if (windowed_) {
+  if (presentCapable_) {
     uint32_t glfwExtCount = 0;
     const char **glfwExts = glfwGetRequiredInstanceExtensions(&glfwExtCount);
     if (!glfwExts || glfwExtCount == 0) {
@@ -320,10 +321,10 @@ void RenderDevice::createLogicalDevice()
 
   for (uint32_t i = 0; i < count; i++) {
     if ((properties[i].queueFlags & VK_QUEUE_GRAPHICS_BIT) == 0) continue;
-    if (windowed_ && surface_ != VK_NULL_HANDLE) {
+    if (presentCapable_ && probeSurface_ != VK_NULL_HANDLE) {
       VkBool32 presentSupport = VK_FALSE;
       vkGetPhysicalDeviceSurfaceSupportKHR(
-        physicalDevice_, i, surface_, &presentSupport);
+        physicalDevice_, i, probeSurface_, &presentSupport);
       if (!presentSupport) continue;
     }
     graphicsAndPresentationQueueFamilyIdx_ = i;
@@ -353,7 +354,7 @@ void RenderDevice::createLogicalDevice()
   // Requested here rather than in the suitability check on purpose: adding it
   // to `deviceExtensions` up front would make a GPU that lacks it fail to
   // qualify as a device at all.
-  if (windowed_) {
+  if (presentCapable_) {
     uint32_t extCount = 0;
     vkEnumerateDeviceExtensionProperties(physicalDevice_, nullptr, &extCount, nullptr);
     std::vector<VkExtensionProperties> available(extCount);
@@ -660,10 +661,10 @@ void RenderDevice::destroyImageDeferred(VkImage &image, VmaAllocation &allocatio
                                   VkImageView &view)
 {
   if (image == VK_NULL_HANDLE && view == VK_NULL_HANDLE) return;
-  // +1 because the frame currently being recorded has not been counted yet:
-  // it can still name this image, so it has to retire too.
-  trash_.push_back({image, allocation, view,
-                    frameCounter_ + kMaxFramesInFlight + 1});
+  // The index the *next* submission will take. Every submission from here on
+  // is recorded after these handles were nulled, so none of them can name the
+  // resource; only submissions already claimed might.
+  trash_.push_back({image, allocation, view, nextSubmission_});
   image      = VK_NULL_HANDLE;
   allocation = VK_NULL_HANDLE;
   view       = VK_NULL_HANDLE;
@@ -672,10 +673,27 @@ void RenderDevice::destroyImageDeferred(VkImage &image, VmaAllocation &allocatio
 void RenderDevice::collectGarbage()
 {
   if (trash_.empty()) return;
+
+  // The oldest submission still running anywhere. A resource queued before
+  // that point may still be named by it; anything queued at or after it is
+  // provably unreferenced.
+  //
+  // This has to span every window, and that is the whole reason the retire
+  // clock is a submission index rather than a frame count. With one window
+  // "three frames have passed" was a fine proxy for "the GPU is done with it".
+  // With two it is not: window A presenting twice says nothing about whether
+  // window B's frame — which sampled the same atlas page — has retired, and
+  // freeing on A's count alone is a use-after-free that surfaces as a crash in
+  // whatever unrelated draw happens to reuse the memory.
+  uint64_t safe = UINT64_MAX;
+  for (const RenderWindow *w : windows_) {
+    safe = std::min(safe, w->oldestUnretiredSubmission());
+  }
+
   size_t keep = 0;
   for (size_t i = 0; i < trash_.size(); ++i) {
     auto &t = trash_[i];
-    if (frameCounter_ < t.retireAt) {
+    if (t.queuedAt > safe) {
       trash_[keep++] = t;
       continue;
     }
@@ -757,67 +775,6 @@ VkSampler RenderDevice::createTextureSampler()
   return sampler;
 }
 
-void RenderDevice::createColorResources()
-{
-  createImage(extent_.width,
-              extent_.height,
-              1,
-              msaaSamples_,
-              colorFormat_,
-              VK_IMAGE_TILING_OPTIMAL,
-              // Not TRANSIENT any more: a backdrop blur ends the main pass and
-              // reopens it with LOAD_OP_LOAD, and the contents of a transient
-              // attachment are undefined between render pass instances.
-              VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
-              VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
-              colorImage_,
-              colorImageAlloc_);
-
-  colorImageView_ = createImageView(
-    colorImage_, colorFormat_, VK_IMAGE_ASPECT_COLOR_BIT, 1);
-}
-
-void RenderDevice::createResolveResources()
-{
-  // Single-sample target the MSAA color attachment resolves into. Unlike
-  // colorImage_ (TRANSIENT_ATTACHMENT_BIT, MSAA scratch), this one needs
-  // TRANSFER_SRC (readPixels / present blit / blur capture) and TRANSFER_DST
-  // (composite blurred region back under glass panels).
-  createImage(extent_.width,
-              extent_.height,
-              1,
-              VK_SAMPLE_COUNT_1_BIT,
-              colorFormat_,
-              VK_IMAGE_TILING_OPTIMAL,
-              VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT |
-                VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
-                VK_IMAGE_USAGE_TRANSFER_DST_BIT,
-              VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
-              resolveImage_,
-              resolveImageAlloc_);
-
-  resolveImageView_ = createImageView(
-    resolveImage_, colorFormat_, VK_IMAGE_ASPECT_COLOR_BIT, 1);
-}
-
-void RenderDevice::createStagingBuffer()
-{
-  stagingBufferSize_ =
-    static_cast<VkDeviceSize>(extent_.width) * extent_.height * 4;
-
-  createBuffer(stagingBufferSize_,
-               VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-               VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
-                 VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-               stagingBuffer_,
-               stagingBufferAlloc_);
-
-  stagingBufferMapped_ = mapBuffer(stagingBufferAlloc_);
-  if (!stagingBufferMapped_) {
-    throw std::runtime_error("failed to map staging buffer memory!");
-  }
-}
-
 VkFormat RenderDevice::findSupportedFormat(const std::vector<VkFormat>& candidates, VkImageTiling tiling, VkFormatFeatureFlags features)
 {
   for (VkFormat format : candidates) {
@@ -846,27 +803,6 @@ VkFormat RenderDevice::findDepthFormat()
 bool RenderDevice::hasStencilComponent(VkFormat format)
 {
   return format == VK_FORMAT_D32_SFLOAT_S8_UINT || format == VK_FORMAT_D24_UNORM_S8_UINT;
-}
-
-void RenderDevice::createDepthResources()
-{
-  VkFormat depthFormat = findDepthFormat();
-
-  createImage(extent_.width,
-              extent_.height,
-              1,
-              msaaSamples_,
-              depthFormat,
-              VK_IMAGE_TILING_OPTIMAL,
-              VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,
-              VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
-              depthImage_,
-              depthImageAlloc_);
-
-  depthImageView_ = createImageView(depthImage_, depthFormat, VK_IMAGE_ASPECT_DEPTH_BIT, 1);
-
-  // Transition depth image to depth-stencil attachment optimal layout
-  transitionImageLayout(depthImage_, depthFormat, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
 }
 
 void RenderDevice::createShadowResources()
@@ -1109,27 +1045,6 @@ void RenderDevice::createRenderPass()
   makePass(false, &renderPassContinue_);
 }
 
-void RenderDevice::createFramebuffer()
-{
-  VkImageView attachments[] = {colorImageView_, depthImageView_, resolveImageView_};
-
-  auto makeFb = [&](VkRenderPass rp, VkFramebuffer *out) {
-    VkFramebufferCreateInfo framebufferInfo {
-      .sType           = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO,
-      .renderPass      = rp,
-      .attachmentCount = 3,
-      .pAttachments    = attachments,
-      .width           = extent_.width,
-      .height          = extent_.height,
-      .layers          = 1,
-    };
-    VR(vkCreateFramebuffer(device_, &framebufferInfo, nullptr, out),
-       "failed to create framebuffer!");
-  };
-  makeFb(renderPass_, &framebuffer_);
-  makeFb(renderPassContinue_, &framebufferContinue_);
-}
-
 void RenderDevice::createCommandPool()
 {
   assert(graphicsAndPresentationQueueFamilyIdx_ != std::numeric_limits<u32>::max() && "queue family index not set");
@@ -1156,321 +1071,6 @@ VkShaderModule RenderDevice::createShaderModule(
      "failed to create shader module!");
 
   return shaderModule;
-}
-
-void RenderDevice::createCommandBuffer()
-{
-  VkCommandBufferAllocateInfo allocInfo {
-    .sType              = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
-    .commandPool        = commandPool_,
-    .level              = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
-    .commandBufferCount = kMaxFramesInFlight,
-  };
-  VR(vkAllocateCommandBuffers(device_, &allocInfo, commandBuffers_),
-     "failed to allocate command buffers!");
-}
-
-void RenderDevice::createSyncObjects()
-{
-  VkFenceCreateInfo fenceInfo {
-    .sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO,
-    .flags = VK_FENCE_CREATE_SIGNALED_BIT,  // first use of each slot is free
-  };
-  for (uint32_t i = 0; i < kMaxFramesInFlight; ++i) {
-    VR(vkCreateFence(device_, &fenceInfo, nullptr, &inFlightFences_[i]),
-       "vkCreateFence failed.");
-  }
-  currentFrame_ = 0;
-}
-
-void RenderDevice::createPresentSyncObjects()
-{
-  // Acquire semaphores are per frames-in-flight (safe: tied to the frame fence).
-  // Present-wait (renderFinished) semaphores live with the swapchain images —
-  // see createSwapchain / cleanupSwapchain.
-  VkSemaphoreCreateInfo semInfo {VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
-  for (uint32_t i = 0; i < kMaxFramesInFlight; ++i) {
-    VR(vkCreateSemaphore(device_, &semInfo, nullptr, &imageAvailableSemaphores_[i]),
-       "imageAvailable semaphore");
-  }
-}
-
-void RenderDevice::createWindowSurface()
-{
-  VR(glfwCreateWindowSurface(instance_, window_, nullptr, &surface_),
-     "failed to create window surface");
-}
-
-void RenderDevice::createSwapchain()
-{
-  VkSurfaceCapabilitiesKHR caps {};
-  vkGetPhysicalDeviceSurfaceCapabilitiesKHR(physicalDevice_, surface_, &caps);
-
-  uint32_t formatCount = 0;
-  vkGetPhysicalDeviceSurfaceFormatsKHR(physicalDevice_, surface_, &formatCount, nullptr);
-  std::vector<VkSurfaceFormatKHR> formats(formatCount);
-  vkGetPhysicalDeviceSurfaceFormatsKHR(
-    physicalDevice_, surface_, &formatCount, formats.data());
-
-  VkSurfaceFormatKHR chosen = formats[0];
-  for (const auto &f : formats) {
-    if (f.format == VK_FORMAT_B8G8R8A8_SRGB &&
-        f.colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR) {
-      chosen = f;
-      break;
-    }
-  }
-  swapchainImageFormat_ = chosen.format;
-
-  if (caps.currentExtent.width != UINT32_MAX) {
-    swapchainExtent_ = caps.currentExtent;
-  } else {
-    int fbW = 0, fbH = 0;
-    glfwGetFramebufferSize(window_, &fbW, &fbH);
-    swapchainExtent_.width = std::clamp(
-      static_cast<uint32_t>(fbW), caps.minImageExtent.width, caps.maxImageExtent.width);
-    swapchainExtent_.height = std::clamp(
-      static_cast<uint32_t>(fbH), caps.minImageExtent.height, caps.maxImageExtent.height);
-  }
-
-  // Keep offscreen target size in sync with the window framebuffer.
-  extent_ = swapchainExtent_;
-
-  uint32_t imageCount = caps.minImageCount + 1;
-  if (caps.maxImageCount > 0 && imageCount > caps.maxImageCount) {
-    imageCount = caps.maxImageCount;
-  }
-
-  uint32_t presentModeCount = 0;
-  vkGetPhysicalDeviceSurfacePresentModesKHR(
-    physicalDevice_, surface_, &presentModeCount, nullptr);
-  std::vector<VkPresentModeKHR> presentModes(presentModeCount);
-  vkGetPhysicalDeviceSurfacePresentModesKHR(
-    physicalDevice_, surface_, &presentModeCount, presentModes.data());
-
-  // MAILBOX preferred, FIFO as the fallback.
-  //
-  // The history is worth keeping, because two of these were tried in anger:
-  //
-  //   FIFO      classic vsync, the only mode the spec guarantees. Correct and
-  //             non-tearing, but presenting blocks until the next refresh, and
-  //             that latency is felt directly in pointer work — dragging a
-  //             boundary in TraceLoom (button down + move) visibly trailed the
-  //             cursor. That is what drove us off it.
-  //   IMMEDIATE no blocking and no queue, so the lowest latency available, at
-  //             the cost of tearing. Ran this for a while; no tearing was
-  //             actually observed, but it is a real risk we were simply
-  //             getting away with.
-  //   MAILBOX   non-tearing like FIFO, but present replaces the queued image
-  //             instead of blocking, so a drag does not acquire FIFO's lag.
-  //             Best of both, and where we settled.
-  //
-  // Only FIFO is guaranteed by the spec, and asking for a mode the surface did
-  // not report is a validation error (VUID-VkSwapchainCreateInfoKHR-
-  // presentMode-01281), not a silent downgrade — so this picks from what was
-  // actually queried rather than naming a constant and hoping. That is what
-  // makes the code portable to a driver without MAILBOX (MoltenVK being the
-  // obvious question mark) without anyone having to know in advance.
-  //
-  // LAVA_PRESENT_MODE=fifo|mailbox|immediate forces one, for measuring the
-  // latency trade above without a rebuild. An unsupported request still falls
-  // back rather than crashing.
-  auto hasMode = [&presentModes](VkPresentModeKHR m) {
-    return std::find(presentModes.begin(), presentModes.end(), m) != presentModes.end();
-  };
-
-  // FIFO is the guaranteed floor; each branch below is an upgrade on it,
-  // preferred in order.
-  VkPresentModeKHR presentMode = VK_PRESENT_MODE_FIFO_KHR;
-  const char *presentName = "FIFO";
-  if (hasMode(VK_PRESENT_MODE_MAILBOX_KHR)) {
-    presentMode = VK_PRESENT_MODE_MAILBOX_KHR;
-    presentName = "MAILBOX";
-  } else if (fifoLatestReadyEnabled_ && hasMode(VK_PRESENT_MODE_FIFO_LATEST_READY_KHR)) {
-    // Same guarantee as MAILBOX, different spelling.
-    presentMode = VK_PRESENT_MODE_FIFO_LATEST_READY_KHR;
-    presentName = "FIFO_LATEST_READY";
-  } else if (hasMode(VK_PRESENT_MODE_IMMEDIATE_KHR)) {
-    // Ranked above plain FIFO deliberately. FIFO's blocking present is the
-    // lag that drove this app off it for pointer work, and IMMEDIATE ran for
-    // a long stretch here without tearing being observed. A surface offering
-    // neither MAILBOX nor latest-ready leaves this as the only low-latency
-    // option, and latency is the property this UI cares about most.
-    presentMode = VK_PRESENT_MODE_IMMEDIATE_KHR;
-    presentName = "IMMEDIATE";
-  }
-
-  if (const char *forced = std::getenv("LAVA_PRESENT_MODE")) {
-    const std::string want(forced);
-    VkPresentModeKHR requested = presentMode;
-    const char *requestedName = nullptr;
-    if (want == "fifo") {
-      requested = VK_PRESENT_MODE_FIFO_KHR;
-      requestedName = "FIFO";
-    } else if (want == "mailbox") {
-      requested = VK_PRESENT_MODE_MAILBOX_KHR;
-      requestedName = "MAILBOX";
-    } else if (want == "immediate") {
-      requested = VK_PRESENT_MODE_IMMEDIATE_KHR;
-      requestedName = "IMMEDIATE";
-    } else if (want == "latest") {
-      requested = VK_PRESENT_MODE_FIFO_LATEST_READY_KHR;
-      requestedName = "FIFO_LATEST_READY";
-    }
-    if (requestedName != nullptr) {
-      if (requested == VK_PRESENT_MODE_FIFO_LATEST_READY_KHR
-          && !fifoLatestReadyEnabled_) {
-        std::cout << "Present mode FIFO_LATEST_READY needs "
-                  << VK_KHR_PRESENT_MODE_FIFO_LATEST_READY_EXTENSION_NAME
-                  << ", which this device does not expose; using " << presentName << "\n";
-      } else if (hasMode(requested)) {
-        presentMode = requested;
-        presentName = requestedName;
-      } else {
-        std::cout << "Present mode " << requestedName
-                  << " not supported by this surface; using " << presentName << "\n";
-      }
-    }
-  }
-
-  // MAILBOX needs a spare image to swap in, or it degrades to FIFO's pacing
-  // with none of the latency benefit that is the whole reason for choosing it.
-  if (presentMode == VK_PRESENT_MODE_MAILBOX_KHR && imageCount < 3) {
-    imageCount = 3;
-    if (caps.maxImageCount > 0 && imageCount > caps.maxImageCount) {
-      imageCount = caps.maxImageCount;
-    }
-  }
-
-  VkSwapchainCreateInfoKHR sci {
-    .sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR,
-    .surface = surface_,
-    .minImageCount = imageCount,
-    .imageFormat = swapchainImageFormat_,
-    .imageColorSpace = chosen.colorSpace,
-    .imageExtent = swapchainExtent_,
-    .imageArrayLayers = 1,
-    .imageUsage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
-    .imageSharingMode = VK_SHARING_MODE_EXCLUSIVE,
-    .preTransform = caps.currentTransform,
-    .compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR,
-    .presentMode = presentMode,
-    .clipped = VK_TRUE,
-    .oldSwapchain = VK_NULL_HANDLE,
-  };
-
-  VR(vkCreateSwapchainKHR(device_, &sci, nullptr, &swapchain_),
-     "failed to create swapchain");
-
-  uint32_t actualCount = 0;
-  vkGetSwapchainImagesKHR(device_, swapchain_, &actualCount, nullptr);
-  swapchainImages_.resize(actualCount);
-  vkGetSwapchainImagesKHR(device_, swapchain_, &actualCount, swapchainImages_.data());
-
-  swapchainImageViews_.resize(actualCount);
-  for (uint32_t i = 0; i < actualCount; ++i) {
-    swapchainImageViews_[i] = createImageView(
-      swapchainImages_[i], swapchainImageFormat_, VK_IMAGE_ASPECT_COLOR_BIT, 1);
-  }
-
-  // One present-wait semaphore per swapchain image. Index by acquired image
-  // index so a semaphore is only reused after that image is re-acquired
-  // (which means the previous present that waited on it has finished).
-  VkSemaphoreCreateInfo semInfo {VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
-  renderFinishedSemaphores_.assign(actualCount, VK_NULL_HANDLE);
-  for (uint32_t i = 0; i < actualCount; ++i) {
-    VR(vkCreateSemaphore(device_, &semInfo, nullptr, &renderFinishedSemaphores_[i]),
-       "renderFinished semaphore");
-  }
-
-  std::cout << "Swapchain: " << swapchainExtent_.width << "x"
-            << swapchainExtent_.height << " (" << actualCount
-            << " images, present=" << presentName
-            << ", framesInFlight=" << kMaxFramesInFlight << ")\n";
-}
-
-void RenderDevice::cleanupSwapchain()
-{
-  for (auto sem : renderFinishedSemaphores_) {
-    if (sem != VK_NULL_HANDLE) vkDestroySemaphore(device_, sem, nullptr);
-  }
-  renderFinishedSemaphores_.clear();
-
-  for (auto view : swapchainImageViews_) {
-    if (view != VK_NULL_HANDLE) vkDestroyImageView(device_, view, nullptr);
-  }
-  swapchainImageViews_.clear();
-  swapchainImages_.clear();
-  if (swapchain_ != VK_NULL_HANDLE) {
-    vkDestroySwapchainKHR(device_, swapchain_, nullptr);
-    swapchain_ = VK_NULL_HANDLE;
-  }
-}
-
-void RenderDevice::beginMainRenderPass(VkCommandBuffer commandBuffer, bool clear)
-{
-  if (!clear) {
-    // After a blur segment, resolve is TRANSFER_SRC; continue pass needs it
-    // as a color attachment with LOAD.
-    VkImageMemoryBarrier toColor{
-      .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
-      .srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT | VK_ACCESS_SHADER_READ_BIT,
-      .dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_READ_BIT |
-                       VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
-      .oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-      .newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-      .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-      .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-      .image = resolveImage_,
-      .subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1},
-    };
-    // Both source stages, since the resolve was read by the capture blit
-    // (TRANSFER) and SHADER_READ is in the access mask.
-    vkCmdPipelineBarrier(
-      commandBuffer,
-      VK_PIPELINE_STAGE_TRANSFER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
-      VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, 0, 0, nullptr, 0, nullptr,
-      1, &toColor);
-  }
-
-  std::array<VkClearValue, 2> clearValues {};
-  clearValues[0].color = {{0.0f, 0.0f, 0.0f, 1.0f}};
-  clearValues[1].depthStencil = {1.0f, 0};
-
-  VkRenderPassBeginInfo renderPassInfo {
-    .sType           = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
-    .renderPass      = clear ? renderPass_ : renderPassContinue_,
-    .framebuffer     = clear ? framebuffer_ : framebufferContinue_,
-    .renderArea      = {.offset = {0, 0}, .extent = extent_},
-    .clearValueCount = static_cast<uint32_t>(clearValues.size()),
-    .pClearValues    = clearValues.data(),
-  };
-
-  vkCmdBeginRenderPass(
-    commandBuffer, &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
-
-  VkViewport viewport {
-    .x        = 0.0f,
-    .y        = 0.0f,
-    .width    = static_cast<float>(extent_.width),
-    .height   = static_cast<float>(extent_.height),
-    .minDepth = 0.0f,
-    .maxDepth = 1.0f,
-  };
-
-  vkCmdSetViewport(commandBuffer, 0, 1, &viewport);
-
-  VkRect2D scissor {
-    .offset = {0, 0},
-    .extent = extent_,
-  };
-
-  vkCmdSetScissor(commandBuffer, 0, 1, &scissor);
-}
-
-void RenderDevice::endMainRenderPass(VkCommandBuffer commandBuffer)
-{
-  vkCmdEndRenderPass(commandBuffer);
 }
 
 VkCommandBuffer RenderDevice::beginSingleTimeCommands()
@@ -1686,8 +1286,13 @@ void RenderDevice::cleanUp()
     vkDeviceWaitIdle(device_);
   }
 
+  // Windows own their own teardown and must be gone before this runs; if one
+  // is still registered it holds attachments and sync objects allocated from
+  // resources about to be destroyed.
+  assert(windows_.empty() && "destroy every RenderWindow before the device");
+
   // The wait above means nothing in the trash can still be referenced, so
-  // everything queued is releasable regardless of its retire frame.
+  // everything queued is releasable regardless of its submission index.
   for (auto &t : trash_) {
     if (t.view != VK_NULL_HANDLE) vkDestroyImageView(device_, t.view, nullptr);
     if (t.image != VK_NULL_HANDLE) vmaDestroyImage(allocator_, t.image, t.allocation);
@@ -1696,7 +1301,7 @@ void RenderDevice::cleanUp()
 
 #ifdef INCLUDE_IMGUI
   if (imguiInitialized_) {
-    if (windowed_) {
+    if (presentCapable_) {
       ImGui_ImplGlfw_Shutdown();
     }
     ImGui_ImplVulkan_Shutdown();
@@ -1710,59 +1315,10 @@ void RenderDevice::cleanUp()
   }
 #endif
 
-  for (uint32_t i = 0; i < kMaxFramesInFlight; ++i) {
-    if (imageAvailableSemaphores_[i] != VK_NULL_HANDLE) {
-      vkDestroySemaphore(device_, imageAvailableSemaphores_[i], nullptr);
-      imageAvailableSemaphores_[i] = VK_NULL_HANDLE;
-    }
-    if (inFlightFences_[i] != VK_NULL_HANDLE) {
-      vkDestroyFence(device_, inFlightFences_[i], nullptr);
-      inFlightFences_[i] = VK_NULL_HANDLE;
-    }
-    commandBuffers_[i] = VK_NULL_HANDLE;  // freed with command pool
-  }
-  // renderFinishedSemaphores_ are destroyed in cleanupSwapchain().
-
   if (commandPool_ != VK_NULL_HANDLE) {
     vkDestroyCommandPool(device_, commandPool_, nullptr);
     commandPool_ = VK_NULL_HANDLE;
   }
-  if (framebuffer_ != VK_NULL_HANDLE) {
-    vkDestroyFramebuffer(device_, framebuffer_, nullptr);
-    framebuffer_ = VK_NULL_HANDLE;
-  }
-  if (framebufferContinue_ != VK_NULL_HANDLE) {
-    vkDestroyFramebuffer(device_, framebufferContinue_, nullptr);
-    framebufferContinue_ = VK_NULL_HANDLE;
-  }
-
-  cleanupSwapchain();
-
-  if (stagingBufferMapped_) {
-    if (stagingBufferAlloc_ != VK_NULL_HANDLE) unmapBuffer(stagingBufferAlloc_);
-    stagingBufferMapped_ = nullptr;
-  }
-  destroyBuffer(stagingBuffer_, stagingBufferAlloc_);
-
-  if (resolveImageView_ != VK_NULL_HANDLE) {
-    vkDestroyImageView(device_, resolveImageView_, nullptr);
-    resolveImageView_ = VK_NULL_HANDLE;
-  }
-  destroyImage(resolveImage_, resolveImageAlloc_);
-
-  // MSAA
-  if (colorImageView_ != VK_NULL_HANDLE) {
-    vkDestroyImageView(device_, colorImageView_, nullptr);
-    colorImageView_ = VK_NULL_HANDLE;
-  }
-  destroyImage(colorImage_, colorImageAlloc_);
-
-  // Depth buffer
-  if (depthImageView_ != VK_NULL_HANDLE) {
-    vkDestroyImageView(device_, depthImageView_, nullptr);
-    depthImageView_ = VK_NULL_HANDLE;
-  }
-  destroyImage(depthImage_, depthImageAlloc_);
 
   // Shadow mapping
   if (shadowSampler_ != VK_NULL_HANDLE) {
@@ -1804,11 +1360,6 @@ void RenderDevice::cleanUp()
     device_ = VK_NULL_HANDLE;
   }
 
-  if (surface_ != VK_NULL_HANDLE) {
-    vkDestroySurfaceKHR(instance_, surface_, nullptr);
-    surface_ = VK_NULL_HANDLE;
-  }
-
   if (enableValidationLayers_ && debugMessenger_ != VK_NULL_HANDLE) {
     destroyDebugUtilsMessengerEXT(instance_, debugMessenger_, nullptr);
     debugMessenger_ = VK_NULL_HANDLE;
@@ -1819,397 +1370,11 @@ void RenderDevice::cleanUp()
     instance_ = VK_NULL_HANDLE;
   }
 
-  if (ownsWindow_ && window_) {
-    glfwDestroyWindow(window_);
-    window_ = nullptr;
-    ownsWindow_ = false;
+  // GLFW was ours to start (see init) and no window is left to need it.
+  if (presentCapable_) {
     glfwTerminate();
+    presentCapable_ = false;
   }
-  windowed_ = false;
-}
-
-void RenderDevice::waitForInFlightFrame()
-{
-  if (inFlightFences_[currentFrame_] == VK_NULL_HANDLE) return;
-  vkWaitForFences(device_, 1, &inFlightFences_[currentFrame_], VK_TRUE,
-                  UINT64_MAX);
-}
-
-void RenderDevice::waitForAllFramesInFlight()
-{
-  // Gather non-null fences (init order may leave some unset during teardown).
-  VkFence fences[kMaxFramesInFlight];
-  uint32_t n = 0;
-  for (uint32_t i = 0; i < kMaxFramesInFlight; ++i) {
-    if (inFlightFences_[i] != VK_NULL_HANDLE) {
-      fences[n++] = inFlightFences_[i];
-    }
-  }
-  if (n == 0) return;
-  vkWaitForFences(device_, n, fences, VK_TRUE, UINT64_MAX);
-}
-
-void RenderDevice::renderWithShadows(
-  std::function<void(VkCommandBuffer)> shadowCallback,
-  std::function<void(VkCommandBuffer, u32)> mainCallback)
-{
-  // Wait only for *this* slot. The other slot may still be on the GPU — that
-  // is the whole point of frames-in-flight. Application should already have
-  // waited this slot before rewriting its host-visible buffers.
-  //
-  // Fence is reset only after we know we will submit: an early return with a
-  // reset fence leaves the slot stuck unsignalled forever.
-  waitForInFlightFrame();
-
-  const uint32_t frame = currentFrame_;
-  VkCommandBuffer cmd = commandBuffers_[frame];
-  VkFence fence = inFlightFences_[frame];
-
-  uint32_t swapImageIndex = 0;
-  if (windowed_) {
-    VkResult acq = vkAcquireNextImageKHR(
-      device_, swapchain_, UINT64_MAX, imageAvailableSemaphores_[frame],
-      VK_NULL_HANDLE, &swapImageIndex);
-    if (acq == VK_ERROR_OUT_OF_DATE_KHR) {
-      // Swapchain is stale; ensureFramebufferSize() rebuilds it. Fence stays
-      // signalled so the next attempt on this slot is free.
-      return;
-    }
-    if (acq != VK_SUCCESS && acq != VK_SUBOPTIMAL_KHR) {
-      VR(acq, "vkAcquireNextImageKHR failed");
-    }
-  }
-
-  vkResetFences(device_, 1, &fence);
-
-  const u32 imageIndex = 0; // offscreen framebuffer index (single target)
-
-  vkResetCommandBuffer(cmd, 0);
-
-  VkCommandBufferBeginInfo beginInfo {
-    VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO
-  };
-
-  VR(vkBeginCommandBuffer(cmd, &beginInfo),
-     "failed to begin recording command buffer!");
-
-  // 1. Shadow Pass
-  beginShadowPass(cmd);
-  shadowCallback(cmd);
-  vkCmdEndRenderPass(cmd);
-
-  // 2. Main UI — callback owns begin/end of main pass(es) for blur interrupts.
-  mainCallback(cmd, imageIndex);
-
-  if (windowed_) {
-    // 3a. Blit offscreen resolve → swapchain image, then present.
-    VkImage swapImage = swapchainImages_[swapImageIndex];
-
-    VkImageMemoryBarrier toDst {
-      .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
-      .srcAccessMask = 0,
-      .dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
-      .oldLayout = VK_IMAGE_LAYOUT_UNDEFINED,
-      .newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-      .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-      .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-      .image = swapImage,
-      .subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1},
-    };
-    vkCmdPipelineBarrier(
-      cmd,
-      VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
-      VK_PIPELINE_STAGE_TRANSFER_BIT,
-      0, 0, nullptr, 0, nullptr, 1, &toDst);
-
-    VkImageBlit blit {
-      .srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
-      .srcOffsets = {{0, 0, 0},
-                     {static_cast<int32_t>(extent_.width),
-                      static_cast<int32_t>(extent_.height), 1}},
-      .dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
-      .dstOffsets = {{0, 0, 0},
-                     {static_cast<int32_t>(swapchainExtent_.width),
-                      static_cast<int32_t>(swapchainExtent_.height), 1}},
-    };
-    vkCmdBlitImage(
-      cmd,
-      resolveImage_, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-      swapImage, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-      1, &blit, VK_FILTER_LINEAR);
-
-    VkImageMemoryBarrier toPresent {
-      .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
-      .srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
-      .dstAccessMask = 0,
-      .oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-      .newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
-      .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-      .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-      .image = swapImage,
-      .subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1},
-    };
-    vkCmdPipelineBarrier(
-      cmd,
-      VK_PIPELINE_STAGE_TRANSFER_BIT,
-      VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
-      0, 0, nullptr, 0, nullptr, 1, &toPresent);
-  } else {
-    // 3b. Offscreen: copy resolve → staging for readPixels().
-    VkBufferImageCopy copyRegion {
-      .bufferOffset      = 0,
-      .bufferRowLength    = 0,
-      .bufferImageHeight = 0,
-      .imageSubresource =
-        {
-          .aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT,
-          .mipLevel       = 0,
-          .baseArrayLayer = 0,
-          .layerCount     = 1,
-        },
-      .imageOffset = {0, 0, 0},
-      .imageExtent = {extent_.width, extent_.height, 1},
-    };
-
-    vkCmdCopyImageToBuffer(cmd,
-                          resolveImage_,
-                          VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                          stagingBuffer_,
-                          1,
-                          &copyRegion);
-  }
-
-  VR(vkEndCommandBuffer(cmd), "failed to record command buffer!");
-
-  VkSubmitInfo submitInfo {
-    .sType              = VK_STRUCTURE_TYPE_SUBMIT_INFO,
-    .commandBufferCount = 1,
-    .pCommandBuffers    = &cmd,
-  };
-
-  VkPipelineStageFlags waitStage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-  // Present-wait semaphore is keyed by swapchain image index, not frame slot.
-  VkSemaphore renderFinished = VK_NULL_HANDLE;
-  if (windowed_) {
-    assert(swapImageIndex < renderFinishedSemaphores_.size());
-    renderFinished = renderFinishedSemaphores_[swapImageIndex];
-    submitInfo.waitSemaphoreCount = 1;
-    submitInfo.pWaitSemaphores = &imageAvailableSemaphores_[frame];
-    submitInfo.pWaitDstStageMask = &waitStage;
-    submitInfo.signalSemaphoreCount = 1;
-    submitInfo.pSignalSemaphores = &renderFinished;
-  }
-
-  VR(vkQueueSubmit(graphicsQueue_, 1, &submitInfo, fence),
-     "failed to submit draw command buffer!");
-
-  if (windowed_) {
-    VkPresentInfoKHR presentInfo {
-      .sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
-      .waitSemaphoreCount = 1,
-      .pWaitSemaphores = &renderFinished,
-      .swapchainCount = 1,
-      .pSwapchains = &swapchain_,
-      .pImageIndices = &swapImageIndex,
-    };
-    VkResult pr = vkQueuePresentKHR(graphicsQueue_, &presentInfo);
-    if (pr != VK_SUCCESS && pr != VK_SUBOPTIMAL_KHR &&
-        pr != VK_ERROR_OUT_OF_DATE_KHR) {
-      VR(pr, "vkQueuePresentKHR failed");
-    }
-  } else {
-    // Offscreen readback needs the staging copy finished.
-    vkDeviceWaitIdle(device_);
-  }
-
-  // Next record/submit uses the other slot (CPU can overlap with this GPU work).
-  currentFrame_ = (currentFrame_ + 1) % kMaxFramesInFlight;
-  ++frameCounter_;
-  collectGarbage();
-
-  // Presented content changed — any prior capture cache is stale.
-  invalidateCaptureCache();
-}
-
-void RenderDevice::readPixels(uint8_t *dst, size_t dstSize)
-{
-  size_t n = std::min(dstSize, static_cast<size_t>(stagingBufferSize_));
-  memcpy(dst, stagingBufferMapped_, n);
-}
-
-void RenderDevice::captureFrame(uint8_t *dst, size_t dstSize)
-{
-  assert(resolveImage_ != VK_NULL_HANDLE);
-  assert(stagingBuffer_ != VK_NULL_HANDLE);
-  assert(stagingBufferMapped_ != nullptr);
-
-  // Main pass finalLayout leaves resolve as TRANSFER_SRC (also the present blit source).
-  waitForAllFramesInFlight();
-
-  VkCommandBuffer cmd = beginSingleTimeCommands();
-
-  VkBufferImageCopy copyRegion{
-    .bufferOffset = 0,
-    .bufferRowLength = 0,
-    .bufferImageHeight = 0,
-    .imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
-    .imageOffset = {0, 0, 0},
-    .imageExtent = {extent_.width, extent_.height, 1},
-  };
-  vkCmdCopyImageToBuffer(cmd, resolveImage_,
-                         VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, stagingBuffer_, 1,
-                         &copyRegion);
-
-  VkBufferMemoryBarrier bufBarrier{
-    .sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER,
-    .srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
-    .dstAccessMask = VK_ACCESS_HOST_READ_BIT,
-    .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-    .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-    .buffer = stagingBuffer_,
-    .offset = 0,
-    .size = VK_WHOLE_SIZE,
-  };
-  vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
-                       VK_PIPELINE_STAGE_HOST_BIT, 0, 0, nullptr, 1,
-                       &bufBarrier, 0, nullptr);
-
-  endSingleTimeCommands(cmd);
-  readPixels(dst, dstSize);
-
-  // Refresh shared cache for subsequent region crops.
-  const size_t need =
-    static_cast<size_t>(extent_.width) * extent_.height * 4;
-  if (dstSize >= need) {
-    captureCache_.assign(dst, dst + need);
-    captureCacheW_ = extent_.width;
-    captureCacheH_ = extent_.height;
-    captureCacheValid_ = true;
-  } else {
-    captureCacheValid_ = false;
-  }
-}
-
-namespace {
-
-struct PngWriteCtx {
-  std::vector<uint8_t> *out = nullptr;
-};
-
-void pngWriteFunc(void *context, void *data, int size)
-{
-  auto *ctx = static_cast<PngWriteCtx *>(context);
-  auto *bytes = static_cast<const uint8_t *>(data);
-  ctx->out->insert(ctx->out->end(), bytes, bytes + size);
-}
-
-}  // namespace
-
-#define STB_IMAGE_WRITE_IMPLEMENTATION
-#include "stb_image_write.h"
-
-bool RenderDevice::capturePng(std::vector<uint8_t> &outPng, int x, int y, int w, int h,
-                        int maxSide, int *outW, int *outH)
-{
-  const int fullW = static_cast<int>(extent_.width);
-  const int fullH = static_cast<int>(extent_.height);
-  if (fullW < 1 || fullH < 1) return false;
-
-  if (w <= 0 || h <= 0) {
-    x = 0;
-    y = 0;
-    w = fullW;
-    h = fullH;
-  }
-
-  // Clamp to framebuffer.
-  if (x < 0) {
-    w += x;
-    x = 0;
-  }
-  if (y < 0) {
-    h += y;
-    y = 0;
-  }
-  if (x >= fullW || y >= fullH) return false;
-  w = std::min(w, fullW - x);
-  h = std::min(h, fullH - y);
-  if (w < 1 || h < 1) return false;
-
-  // One GPU readback per settled frame; further crops are pure CPU.
-  if (!captureCacheValid_ || captureCacheW_ != extent_.width ||
-      captureCacheH_ != extent_.height ||
-      captureCache_.size() !=
-        static_cast<size_t>(fullW) * static_cast<size_t>(fullH) * 4) {
-    captureCache_.resize(static_cast<size_t>(fullW) * static_cast<size_t>(fullH) *
-                         4);
-    captureFrame(captureCache_.data(), captureCache_.size());
-  }
-
-  std::vector<uint8_t> region(static_cast<size_t>(w) * static_cast<size_t>(h) * 4);
-  for (int row = 0; row < h; ++row) {
-    const uint8_t *src =
-      captureCache_.data() + (static_cast<size_t>(y + row) * fullW + x) * 4;
-    uint8_t *dst = region.data() + static_cast<size_t>(row) * w * 4;
-    std::memcpy(dst, src, static_cast<size_t>(w) * 4);
-  }
-
-  // Optional box downsample: longer side ≤ maxSide (agent overview budget).
-  int encW = w;
-  int encH = h;
-  const uint8_t *pngPixels = region.data();
-  std::vector<uint8_t> scaled;
-  if (maxSide > 0) {
-    const int longSide = std::max(w, h);
-    if (longSide > maxSide) {
-      encW = std::max(1, (w * maxSide + longSide / 2) / longSide);
-      encH = std::max(1, (h * maxSide + longSide / 2) / longSide);
-      scaled.resize(static_cast<size_t>(encW) * static_cast<size_t>(encH) * 4);
-      // Box filter: average each dest pixel's source footprint.
-      for (int dy = 0; dy < encH; ++dy) {
-        const int y0 = dy * h / encH;
-        const int y1 = std::max(y0 + 1, (dy + 1) * h / encH);
-        for (int dx = 0; dx < encW; ++dx) {
-          const int x0 = dx * w / encW;
-          const int x1 = std::max(x0 + 1, (dx + 1) * w / encW);
-          uint32_t sum[4] = {0, 0, 0, 0};
-          uint32_t count = 0;
-          for (int sy = y0; sy < y1; ++sy) {
-            const uint8_t *row =
-              region.data() + (static_cast<size_t>(sy) * w + x0) * 4;
-            for (int sx = x0; sx < x1; ++sx) {
-              sum[0] += row[0];
-              sum[1] += row[1];
-              sum[2] += row[2];
-              sum[3] += row[3];
-              row += 4;
-              ++count;
-            }
-          }
-          uint8_t *out =
-            scaled.data() + (static_cast<size_t>(dy) * encW + dx) * 4;
-          if (count == 0) {
-            out[0] = out[1] = out[2] = out[3] = 0;
-          } else {
-            out[0] = static_cast<uint8_t>(sum[0] / count);
-            out[1] = static_cast<uint8_t>(sum[1] / count);
-            out[2] = static_cast<uint8_t>(sum[2] / count);
-            out[3] = static_cast<uint8_t>(sum[3] / count);
-          }
-        }
-      }
-      pngPixels = scaled.data();
-    }
-  }
-
-  outPng.clear();
-  PngWriteCtx ctx{&outPng};
-  const int ok =
-    stbi_write_png_to_func(pngWriteFunc, &ctx, encW, encH, 4, pngPixels, encW * 4);
-  if (ok == 0 || outPng.empty()) return false;
-  if (outW) *outW = encW;
-  if (outH) *outH = encH;
-  return true;
 }
 
 Shaders &RenderDevice::getShaders()
@@ -2431,206 +1596,84 @@ void RenderDevice::initImGui()
 }
 #endif
 
-void RenderDevice::init(const char *applicationName, int width, int height)
+/// Brings up everything shared: instance, GPU, logical device, allocator,
+/// command pool, render passes, shadow map.
+///
+/// Note what is *not* here any more — no swapchain, no attachments, no
+/// framebuffer, no per-frame sync. Those belong to a `RenderWindow`, and this
+/// runs to completion before the first one is constructed.
+void RenderDevice::init(const char *applicationName, bool presentCapable)
 {
-  windowed_ = false;
-  window_ = nullptr;
-  extent_      = {static_cast<uint32_t>(width), static_cast<uint32_t>(height)};
-  colorFormat_ = VK_FORMAT_R8G8B8A8_SRGB;
   deviceExtensions.clear();
+  if (presentCapable) {
+    deviceExtensions = {VK_KHR_SWAPCHAIN_EXTENSION_NAME};
+    if (!glfwInit()) {
+      throw std::runtime_error("glfwInit failed");
+    }
+  }
 
   enableValidationLayers_ = utils::envFlag("CANVAS_VK_VALIDATION", false);
+  presentCapable_ = presentCapable;
 
   createVkInstance(applicationName);
   setupDebugMessenger();
 
+  // Present support is a property of (physical device, queue family, surface),
+  // so choosing a device that can present needs a surface — and there is no
+  // real window yet, by design. A hidden 1x1 window supplies one for the
+  // question and is gone before anything else runs.
+  //
+  // The alternative is what this used to do: create the device *from* the
+  // first window, which makes the device's lifetime hostage to that window's
+  // and leaves every window after it hoping the queue family it inherited
+  // happens to fit. `RenderWindow` re-checks each surface anyway; this just
+  // makes the answer be yes.
+  GLFWwindow *probeWindow = nullptr;
+  VkSurfaceKHR probeSurface = VK_NULL_HANDLE;
+  if (presentCapable) {
+    glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
+    glfwWindowHint(GLFW_VISIBLE, GLFW_FALSE);
+    probeWindow = glfwCreateWindow(1, 1, "", nullptr, nullptr);
+    if (!probeWindow) {
+      throw std::runtime_error("glfwCreateWindow failed (present probe)");
+    }
+    VR(glfwCreateWindowSurface(instance_, probeWindow, nullptr, &probeSurface),
+       "failed to create probe surface");
+  }
+  probeSurface_ = probeSurface;
+
   selectSupportedGraphicsCard();
   createLogicalDevice();
+
+  if (probeSurface != VK_NULL_HANDLE) {
+    vkDestroySurfaceKHR(instance_, probeSurface, nullptr);
+    probeSurface_ = VK_NULL_HANDLE;
+  }
+  if (probeWindow) glfwDestroyWindow(probeWindow);
+
   createCommandPool();
-  createColorResources();
-  createResolveResources();
-  createStagingBuffer();
-  createDepthResources();
   createRenderPass();
   createShadowResources();
   createShadowRenderPass();
   createShadowFramebuffer();
-  createFramebuffer();
-  createCommandBuffer();
-  createSyncObjects();
 #ifdef INCLUDE_IMGUI
   initImGui();
 #endif
 }
 
-void RenderDevice::initWithWindow(
-  const char *applicationName, int width, int height, const char *title)
+void RenderDevice::registerWindow(RenderWindow *window)
 {
-  windowed_ = true;
-  deviceExtensions = {VK_KHR_SWAPCHAIN_EXTENSION_NAME};
-
-  enableValidationLayers_ = utils::envFlag("CANVAS_VK_VALIDATION", false);
-
-  if (!glfwInit()) {
-    throw std::runtime_error("glfwInit failed");
-  }
-  glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
-  glfwWindowHint(GLFW_RESIZABLE, GLFW_TRUE);
-  // Tool-style canvas surface: no title bar / system menu / border chrome.
-  // (Drag-to-move can be added later via a custom hit region.)
-  // glfwWindowHint(GLFW_DECORATED, GLFW_FALSE);
-  // Stay above the Gtk chrome window so the layout-slot overlay isn't buried.
-  // glfwWindowHint(GLFW_FLOATING, GLFW_TRUE);
-  // Prefer not stealing focus from the Swift chrome window on open.
-  glfwWindowHint(GLFW_FOCUS_ON_SHOW, GLFW_FALSE);
-  // Wayland: share app_id with the host if possible so the compositor may
-  // group surfaces (does not hide from dock — see window_platform.cpp).
-  // glfwWindowHintString(GLFW_WAYLAND_APP_ID, "com.example.HelloWorld");
-  // X11: fixed WM_CLASS so the surface is identifiable / not a random title.
-  // glfwWindowHintString(GLFW_X11_CLASS_NAME, "HelloWorldCanvas");
-  // glfwWindowHintString(GLFW_X11_INSTANCE_NAME, "helloworld-canvas");
-
-  window_ = glfwCreateWindow(width, height, title ? title : "Canvas", nullptr, nullptr);
-  if (!window_) {
-    glfwTerminate();
-    throw std::runtime_error("glfwCreateWindow failed");
-  }
-  ownsWindow_ = true;
-
-  extent_      = {static_cast<uint32_t>(width), static_cast<uint32_t>(height)};
-  colorFormat_ = VK_FORMAT_R8G8B8A8_SRGB;
-
-  createVkInstance(applicationName);
-  setupDebugMessenger();
-  createWindowSurface();
-  selectSupportedGraphicsCard();
-  createLogicalDevice();
-  createSwapchain(); // may adjust extent_ to framebuffer size
-  createCommandPool();
-  createColorResources();
-  createResolveResources();
-  // Staging still created so readPixels remains available if needed, but
-  // the present path does not copy into it every frame.
-  createStagingBuffer();
-  createDepthResources();
-  createRenderPass();
-  createShadowResources();
-  createShadowRenderPass();
-  createShadowFramebuffer();
-  createFramebuffer();
-  createCommandBuffer();
-  createSyncObjects();
-  createPresentSyncObjects();
-#ifdef INCLUDE_IMGUI
-  initImGui();
-#endif
+  if (!window) return;
+  windows_.push_back(window);
 }
 
-bool RenderDevice::windowShouldClose() const
+void RenderDevice::unregisterWindow(RenderWindow *window)
 {
-  return window_ && glfwWindowShouldClose(window_);
+  windows_.erase(std::remove(windows_.begin(), windows_.end(), window),
+                 windows_.end());
 }
 
-void RenderDevice::requestClose()
+void RenderDevice::waitForAllFramesInFlight()
 {
-  if (window_) glfwSetWindowShouldClose(window_, GLFW_TRUE);
-}
-
-#ifdef INCLUDE_IMGUI
-void RenderDevice::initImGuiGlfwBackend()
-{
-  if (windowed_ && window_ && imguiInitialized_) {
-    ImGui_ImplGlfw_InitForVulkan(window_, true);
-  }
-}
-#endif
-
-void RenderDevice::setWindowFrame(int x, int y, int width, int height)
-{
-  if (!windowed_ || !window_) return;
-  if (width < 1) width = 1;
-  if (height < 1) height = 1;
-
-  glfwSetWindowPos(window_, x, y);
-
-  int curW = 0, curH = 0;
-  glfwGetWindowSize(window_, &curW, &curH);
-  if (curW != width || curH != height) {
-    glfwSetWindowSize(window_, width, height);
-  }
-  // Framebuffer size may lag a frame; ensureFramebufferSize() in the render
-  // loop rebuilds swapchain/targets when it changes.
-}
-
-void RenderDevice::setWindowVisible(bool visible)
-{
-  if (!windowed_ || !window_) return;
-  if (visible) {
-    glfwShowWindow(window_);
-  } else {
-    glfwHideWindow(window_);
-  }
-}
-
-bool RenderDevice::ensureFramebufferSize()
-{
-  if (!windowed_ || !window_) return false;
-
-  int fbW = 0, fbH = 0;
-  glfwGetFramebufferSize(window_, &fbW, &fbH);
-  if (fbW < 1 || fbH < 1) return false;
-
-  if (static_cast<uint32_t>(fbW) == extent_.width &&
-      static_cast<uint32_t>(fbH) == extent_.height &&
-      static_cast<uint32_t>(fbW) == swapchainExtent_.width &&
-      static_cast<uint32_t>(fbH) == swapchainExtent_.height) {
-    return false;
-  }
-
-  vkDeviceWaitIdle(device_);
-
-  // Tear down size-dependent resources (keep pipelines/render pass).
-  if (framebuffer_ != VK_NULL_HANDLE) {
-    vkDestroyFramebuffer(device_, framebuffer_, nullptr);
-    framebuffer_ = VK_NULL_HANDLE;
-  }
-  if (framebufferContinue_ != VK_NULL_HANDLE) {
-    vkDestroyFramebuffer(device_, framebufferContinue_, nullptr);
-    framebufferContinue_ = VK_NULL_HANDLE;
-  }
-  cleanupSwapchain();
-
-  if (stagingBufferMapped_) {
-    if (stagingBufferAlloc_ != VK_NULL_HANDLE) unmapBuffer(stagingBufferAlloc_);
-    stagingBufferMapped_ = nullptr;
-  }
-  destroyBuffer(stagingBuffer_, stagingBufferAlloc_);
-
-  if (colorImageView_ != VK_NULL_HANDLE) {
-    vkDestroyImageView(device_, colorImageView_, nullptr);
-    colorImageView_ = VK_NULL_HANDLE;
-  }
-  destroyImage(colorImage_, colorImageAlloc_);
-  if (resolveImageView_ != VK_NULL_HANDLE) {
-    vkDestroyImageView(device_, resolveImageView_, nullptr);
-    resolveImageView_ = VK_NULL_HANDLE;
-  }
-  destroyImage(resolveImage_, resolveImageAlloc_);
-  if (depthImageView_ != VK_NULL_HANDLE) {
-    vkDestroyImageView(device_, depthImageView_, nullptr);
-    depthImageView_ = VK_NULL_HANDLE;
-  }
-  destroyImage(depthImage_, depthImageAlloc_);
-
-  extent_ = {static_cast<uint32_t>(fbW), static_cast<uint32_t>(fbH)};
-
-  createSwapchain();
-  createColorResources();
-  createResolveResources();
-  createStagingBuffer();
-  createDepthResources();
-  createFramebuffer();
-
-  std::cout << "Framebuffer resized to " << extent_.width << "x" << extent_.height << '\n';
-  return true;
+  for (RenderWindow *w : windows_) w->waitForAllFrames();
 }

@@ -47,6 +47,22 @@ struct Buffer {
 
 };
 
+class RenderWindow;
+
+/// The GPU, and everything on it that outlives any one window.
+///
+/// Instance, physical and logical device, allocator, queue, command pool,
+/// render passes, and the buffer/image helpers every renderer calls. Windows
+/// attach to it (`RenderWindow`) and share all of it: the glyph atlas, the
+/// texture manager and the pipeline set are created once no matter how many
+/// surfaces are open. That sharing is the point — a second window should cost
+/// its attachments, not a second copy of every font it draws.
+///
+/// The device is created before any window exists. Picking a physical device
+/// needs a surface to test present support against, so `init(presentCapable)`
+/// makes a throwaway hidden window, probes it, and destroys it. Without that,
+/// device creation is chained to the first window's lifetime and the second
+/// window has to hope the queue family it inherited happens to fit.
 class RenderDevice
 {
   bool enableValidationLayers_ = false;
@@ -71,86 +87,51 @@ class RenderDevice
   u32     graphicsAndPresentationQueueFamilyIdx_ = -1;
   VkQueue graphicsQueue_ = VK_NULL_HANDLE;
 
-  // Optional GLFW window present path. When window_ is non-null we create a
-  // swapchain and blit the offscreen resolve target into it each frame —
-  // no GPU→CPU readback on the hot path.
-  bool        windowed_ = false;
-  GLFWwindow *window_ = nullptr;
-  bool        ownsWindow_ = false; // we called glfwCreateWindow
-  VkSurfaceKHR surface_ = VK_NULL_HANDLE;
-  VkSwapchainKHR swapchain_ = VK_NULL_HANDLE;
-  std::vector<VkImage> swapchainImages_;
-  std::vector<VkImageView> swapchainImageViews_;
-  VkFormat   swapchainImageFormat_ = VK_FORMAT_B8G8R8A8_SRGB;
-  VkExtent2D swapchainExtent_{};
+  /// Whether the device was brought up able to present. Drives the instance
+  /// and device extension sets, and whether a queue family has to prove it can
+  /// present before being chosen.
+  bool presentCapable_ = false;
+  /// Live only during `init`: the throwaway surface present support is tested
+  /// against, since no real window exists yet. See `init`.
+  VkSurfaceKHR probeSurface_ = VK_NULL_HANDLE;
 
-  /// CPU/GPU overlap: while the GPU draws slot N, the CPU builds slot N+1.
-  static constexpr uint32_t kMaxFramesInFlight = 2;
-  /// Per in-flight frame: signals that the acquired image is ready to use.
-  VkSemaphore imageAvailableSemaphores_[kMaxFramesInFlight]{};
-  /// Per *swapchain image* (not frame slot): submit → present wait. Reusing a
-  /// frame-slot semaphore is illegal until that image is re-acquired; see
-  /// https://docs.vulkan.org/guide/latest/swapchain_semaphore_reuse.html
-  std::vector<VkSemaphore> renderFinishedSemaphores_;
-  VkCommandBuffer commandBuffers_[kMaxFramesInFlight]{};
-  VkFence inFlightFences_[kMaxFramesInFlight]{};
-  uint32_t currentFrame_ = 0;
-  /// Monotonic frame count, for ageing out deferred destructions.
-  uint64_t frameCounter_ = 0;
+  /// Every open window, so device-wide questions ("is anything still using
+  /// this?", "wait for all GPU work") can be answered without a window having
+  /// to volunteer itself. Windows register in their constructor.
+  std::vector<RenderWindow *> windows_;
 
-  /// GPU resources waiting for the frames that might reference them to retire.
+  /// Monotonically increasing, one per queue submission across all windows.
+  /// This is the clock deferred destruction is measured on — a frame counter
+  /// cannot be, because with two windows "three frames have passed" says
+  /// nothing about whether the *other* window's frame has retired.
+  uint64_t nextSubmission_ = 1;
+
+  /// GPU resources waiting for every submission that might reference them.
   struct PendingDestroy {
     VkImage       image      = VK_NULL_HANDLE;
     VmaAllocation allocation = VK_NULL_HANDLE;
     VkImageView   view       = VK_NULL_HANDLE;
-    uint64_t      retireAt   = 0;
+    /// Submission index at the moment of the request. Anything submitted at
+    /// or after this point was recorded after the handle was nulled, so it
+    /// cannot name the resource.
+    uint64_t      queuedAt   = 0;
   };
   std::vector<PendingDestroy> trash_;
 
-  // Offscreen render target (always used as the scene render target)
-  VkFormat   colorFormat_;
-  VkExtent2D extent_;
+  /// Format every window renders into. Fixed, and deliberately not the
+  /// swapchain's: the swapchain is a blit destination, so surfaces disagreeing
+  /// about their preferred format costs a blit, not a second render pass.
+  VkFormat colorFormat_ = VK_FORMAT_R8G8B8A8_SRGB;
 
   VkPhysicalDeviceMemoryProperties deviceMemoryProperties_;
   VkRenderPass                     renderPass_ = VK_NULL_HANDLE;
   /// Same attachments as renderPass_ but LOAD (continue after backdrop blur).
   VkRenderPass                     renderPassContinue_ = VK_NULL_HANDLE;
-  VkFramebuffer                    framebuffer_ = VK_NULL_HANDLE;
-  /// Framebuffer for continue pass (same images; different render pass object).
-  VkFramebuffer                    framebufferContinue_ = VK_NULL_HANDLE;
   VkCommandPool                    commandPool_ = VK_NULL_HANDLE;
 
-  // MSAA sampling stuff
+  /// Sample count every render pass and pipeline is built for. Device-wide,
+  /// so every window's attachments must agree with it.
   VkSampleCountFlagBits msaaSamples_ = VK_SAMPLE_COUNT_1_BIT;
-  VkImage               colorImage_ = VK_NULL_HANDLE;
-  VmaAllocation         colorImageAlloc_ = VK_NULL_HANDLE;
-  VkImageView           colorImageView_ = VK_NULL_HANDLE;
-
-  // Single-sample resolve target: what the MSAA color attachment resolves
-  // into, and what gets copied out for readback. Not the same image as
-  // colorImage_ above (that one is TRANSIENT_ATTACHMENT_BIT and MSAA-only).
-  VkImage       resolveImage_ = VK_NULL_HANDLE;
-  VmaAllocation resolveImageAlloc_ = VK_NULL_HANDLE;
-  VkImageView   resolveImageView_ = VK_NULL_HANDLE;
-
-  // Host-visible staging buffer that resolveImage_ gets copied into every
-  // frame, for CPU readback via readPixels().
-  VkBuffer      stagingBuffer_ = VK_NULL_HANDLE;
-  VmaAllocation stagingBufferAlloc_ = VK_NULL_HANDLE;
-  void         *stagingBufferMapped_ = nullptr;
-  VkDeviceSize  stagingBufferSize_ = 0;
-
-  /// Host RGBA of the last `captureFrame` — lets multiple region PNGs share one
-  /// GPU readback within the same settled frame.
-  std::vector<uint8_t> captureCache_;
-  uint32_t             captureCacheW_ = 0;
-  uint32_t             captureCacheH_ = 0;
-  bool                 captureCacheValid_ = false;
-
-  // Depth buffer stuff
-  VkImage       depthImage_ = VK_NULL_HANDLE;
-  VmaAllocation depthImageAlloc_ = VK_NULL_HANDLE;
-  VkImageView   depthImageView_ = VK_NULL_HANDLE;
 
   // Shadow mapping stuff
   VkImage       shadowImage_ = VK_NULL_HANDLE;
@@ -203,28 +184,15 @@ class RenderDevice
   void createLogicalDevice();
   void createAllocator();
   void destroyAllocator();
-  void createSyncObjects();
 
   uint32_t findMemoryProperties(uint32_t              memoryTypeBitsRequirement,
                                 VkMemoryPropertyFlags requiredProperties);
-
-  // Offscreen resolve target + host-visible staging buffer readPixels() reads
-  // from (replaces the old swapchain + present).
-  void createResolveResources();
-  void createStagingBuffer();
 
   vk::Buffer createImmutableBuffer(
     const void           *bufferData,
     VkDeviceSize          bufferSize,
     VkBufferUsageFlagBits usageFlagBits);
 
-
-  // MSAA sampling stuff
-  void createColorResources();
-  
-  // Depth buffer stuff
-  void createDepthResources();
-  VkFormat findDepthFormat();
   VkFormat findSupportedFormat(const std::vector<VkFormat>& candidates, VkImageTiling tiling, VkFormatFeatureFlags features);
   bool hasStencilComponent(VkFormat format);
 
@@ -232,62 +200,50 @@ class RenderDevice
   void createShadowResources();
   void createShadowRenderPass();
   void createShadowFramebuffer();
-  void beginShadowPass(VkCommandBuffer commandBuffer);
 
-  // Step 3: Create render pass, framebuffer, command pool, command buffer
+  // Step 3: Create render pass, command pool
   /// Clear pass (first UI segment) + continue pass (LOAD after blur).
   void createRenderPass();
-  void createFramebuffer();
   void createCommandPool();
   void createDescriptorPool();
   void createDescriptorSet();
-  void createCommandBuffer();
 #ifdef INCLUDE_IMGUI
   void initImGui();
 #endif
 
-  void createSwapchain();
-  void cleanupSwapchain();
-  void createWindowSurface();
-  void createPresentSyncObjects();
-
  public:
-  /// Headless / offscreen (smoke tests, optional Image embed).
-  void init(const char *applicationName, int width, int height);
+  /// Creates instance, picks a GPU, and brings up the device and everything
+  /// shared between windows.
+  ///
+  /// `presentCapable` enables the surface/swapchain extensions and picks a
+  /// queue family that can present — checked against a throwaway hidden GLFW
+  /// window, since present support is a property of a (device, family,
+  /// surface) triple and there is no real surface yet. Pass false for headless
+  /// use (smoke tests, offscreen render).
+  void init(const char *applicationName, bool presentCapable);
 
-  /// Creates a GLFW window and presents into its swapchain each frame.
-  void initWithWindow(const char *applicationName, int width, int height,
-                      const char *title);
+  VkFormat colorFormat() const { return colorFormat_; }
 
-  /// Records shadow + caller-owned main content, then presents.
-  /// `mainCallback` owns begin/end of the main UI render pass(es) so it can
-  /// interrupt for backdrop blur (end → capture/blur → begin LOAD → continue).
-  void renderWithShadows(
-    std::function<void(VkCommandBuffer)> shadowCallback,
-    std::function<void(VkCommandBuffer, u32)> mainCallback);
+  // ─── Windows ─────────────────────────────────────────────────────────────
 
-  void beginMainRenderPass(VkCommandBuffer commandBuffer, bool clear);
-  void endMainRenderPass(VkCommandBuffer commandBuffer);
+  /// Called by `RenderWindow`'s constructor/destructor. Not for general use —
+  /// the device only needs the list to answer questions that span windows.
+  void registerWindow(RenderWindow *window);
+  void unregisterWindow(RenderWindow *window);
 
-  VkImage     resolveImage() const { return resolveImage_; }
-  VkImageView resolveImageView() const { return resolveImageView_; }
-  VkFormat    colorFormat() const { return colorFormat_; }
-  VkFramebuffer mainFramebuffer() const { return framebuffer_; }
+  /// Reserves the next submission index. Called by `RenderWindow::render`
+  /// immediately before `vkQueueSubmit`.
+  uint64_t nextSubmission() { return nextSubmission_++; }
 
-  /// Block until the *current* frame slot is free (GPU finished its last use).
-  /// With 2 frames in flight this does not wait for the other slot, so the CPU
-  /// can prepare frame N+1 while the GPU still paints N.
-  void waitForInFlightFrame();
-
-  /// Block until every in-flight frame is done. Required before destroying or
-  /// replacing shared GPU resources (glyph atlas grow, buffer recreate).
+  /// Block until *every* window has finished every frame it has in flight.
+  /// This is the one to call before destroying or replacing anything shared —
+  /// growing the glyph atlas, recreating a buffer every window samples. A
+  /// single window's `waitForAllFrames()` is not enough: the other window's
+  /// command buffer names the same atlas.
   void waitForAllFramesInFlight();
 
-  /// Slot the next `waitForInFlightFrame` / record / submit will use (0 or 1).
-  uint32_t currentFrameSlot() const { return currentFrame_; }
-  static constexpr uint32_t framesInFlight() { return kMaxFramesInFlight; }
-
-  /// Destroys an image once no in-flight frame can still reference it.
+  /// Destroys an image once no submission that might reference it is still
+  /// running.
   ///
   /// The immediate `destroyImage` is only safe for something the GPU has
   /// provably finished with. Anything that was drawn recently — a texture the
@@ -296,66 +252,20 @@ class RenderDevice
   /// completed, and freeing it there is a use-after-free the validation layer
   /// reports as a crash somewhere else entirely.
   ///
-  /// Queued here instead and released by `collectGarbage()` after
-  /// `kMaxFramesInFlight` frames have been presented, which is the point every
-  /// command buffer that could name it has retired. Handles are nulled so the
-  /// caller cannot use them again.
+  /// Queued here instead and released by `collectGarbage()`. Handles are
+  /// nulled so the caller cannot use them again.
   void destroyImageDeferred(VkImage &image, VmaAllocation &allocation,
                             VkImageView &view);
 
-  /// Releases anything queued by `destroyImageDeferred` that has aged out.
-  /// Called once per presented frame.
+  /// Releases anything queued by `destroyImageDeferred` whose submission has
+  /// retired *in every window*. Called once per presented frame.
   void collectGarbage();
-
-  /// Frames presented since start. Monotonic, unlike `currentFrameSlot()`.
-  uint64_t frameCounter() const { return frameCounter_; }
 
   void cleanUp();
 
-  bool isWindowed() const { return windowed_; }
-  GLFWwindow *window() const { return window_; }
-  bool windowShouldClose() const;
-  /// Ask the main loop to exit (sets GLFW should-close).
-  void requestClose();
-
 #ifdef INCLUDE_IMGUI
-  /// Call after installing app-level GLFW callbacks so ImGui can chain.
-  void initImGuiGlfwBackend();
+  bool imguiInitialized() const { return imguiInitialized_; }
 #endif
-
-  /// Move/resize the GLFW window (screen coordinates). If size changes,
-  /// recreates swapchain + offscreen targets to match the framebuffer.
-  /// No-op when not windowed.
-  void setWindowFrame(int x, int y, int width, int height);
-
-  void setWindowVisible(bool visible);
-
-  /// If the framebuffer size drifted (e.g. after setWindowFrame), rebuild
-  /// present/render targets. Returns true if a rebuild happened.
-  bool ensureFramebufferSize();
-
-  // Copies the last-rendered frame (RGBA8) into dst. dst must be at least
-  // extent_.width * extent_.height * 4 bytes. Prefer `captureFrame` in windowed
-  // mode — the present path does not always fill staging every frame.
-  void readPixels(uint8_t *dst, size_t dstSize);
-
-  /// Wait for GPU, copy resolve → staging, then `readPixels` into `dst`.
-  /// Works in windowed and offscreen modes. `dst` size as for `readPixels`.
-  /// Also refreshes the capture cache used by `capturePng`.
-  void captureFrame(uint8_t *dst, size_t dstSize);
-
-  /// Drop the host capture cache (call after presenting a new frame).
-  void invalidateCaptureCache() { captureCacheValid_ = false; }
-
-  /// Encode a (sub)region of the current resolve as PNG bytes.
-  /// `x,y,w,h` in framebuffer pixels; `w` or `h` <= 0 means full frame.
-  /// If `maxSide` > 0 and the longer side exceeds it, box-downsamples so
-  /// max(outW, outH) <= maxSide (agent overview / token budget).
-  /// Reuses the capture cache when still valid (cheap multi-crop).
-  /// On success, `outW`/`outH` are the encoded pixel size (after downsample).
-  /// Returns false on empty/invalid region or encode failure.
-  bool capturePng(std::vector<uint8_t> &outPng, int x, int y, int w, int h,
-                  int maxSide = 0, int *outW = nullptr, int *outH = nullptr);
 
   VkShaderModule createShaderModule(const std::vector<char> &code);
 
@@ -394,15 +304,24 @@ class RenderDevice
   void endSingleTimeCommands(VkCommandBuffer commandBuffer);
 
   VkDevice                          getDevice() { return device_; }
+  VkInstance                        instance() const { return instance_; }
+  VkPhysicalDevice                  physicalDevice() const { return physicalDevice_; }
+  VkQueue                           graphicsQueue() const { return graphicsQueue_; }
+  uint32_t graphicsQueueFamily() const
+  {
+    return graphicsAndPresentationQueueFamilyIdx_;
+  }
+  bool fifoLatestReadyEnabled() const { return fifoLatestReadyEnabled_; }
+
   VmaAllocator                      getAllocator() { return allocator_; }
   VkCommandPool                     getCommandPool() { return commandPool_; }
   VkRenderPass                      getRenderPass() { return renderPass_; }
+  VkRenderPass                      renderPassContinue() const { return renderPassContinue_; }
   VkRenderPass                      getShadowRenderPass() { return shadowRenderPass_; }
   VkFramebuffer                     getShadowFramebuffer() { return shadowFramebuffer_; }
   VkImageView                       getShadowImageView() { return shadowImageView_; }
   VkSampler                         getShadowSampler() { return shadowSampler_; }
   uint32_t                          getShadowMapSize() { return shadowMapSize_; }
-  const VkExtent2D                 &getExtent() const { return extent_; }
   const VkPhysicalDeviceProperties &getDeviceProperties()
   {
     return physicalDeviceProperties_;
@@ -410,6 +329,14 @@ class RenderDevice
 
   auto     getMSAASamples() const noexcept { return msaaSamples_; }
   Shaders &getShaders();
+
+  /// Depth format the render passes were built with. Windows need it to make
+  /// a matching attachment.
+  VkFormat findDepthFormat();
+
+  /// Records the shadow pass into `commandBuffer`. Device-scope because the
+  /// shadow map is one 2048² image shared by every window.
+  void beginShadowPass(VkCommandBuffer commandBuffer);
 
 
   void createImage(uint32_t              width,

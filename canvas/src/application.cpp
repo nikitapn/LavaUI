@@ -10,6 +10,7 @@
 #include "util/constants.hpp"
 #include "util/key_codes.hpp"
 #include "render/render_device.hpp"
+#include "render/render_window.hpp"
 #include "render/text_renderer.hpp"
 #include "render/quad_renderer.hpp"
 #include "render/texture_manager.hpp"
@@ -47,7 +48,14 @@ struct Application::Impl
   const float width;
   const float height;
 
-  RenderDevice           device;
+  RenderDevice     device;
+  /// The one window this Application drives. A pointer because the device is
+  /// brought up first and the window attaches to it afterwards — and because
+  /// the next step is for this to become a list.
+  std::unique_ptr<RenderWindow> window;
+  /// Owned by us, not by RenderWindow: the surface is the renderer's business,
+  /// the GLFW window is the platform's.
+  GLFWwindow      *glfwWindow = nullptr;
   TextRenderer     textRenderer;
   QuadRenderer     quadRenderer;
   BlurPass         blurPass;
@@ -153,8 +161,8 @@ struct Application::Impl
   canvas::VoidResult finishInitCommon(const std::string &assetsRoot)
   {
     // Use actual Vulkan extent (may match framebuffer in windowed mode).
-    const float ew = static_cast<float>(device.getExtent().width);
-    const float eh = static_cast<float>(device.getExtent().height);
+    const float ew = static_cast<float>(window->getExtent().width);
+    const float eh = static_cast<float>(window->getExtent().height);
 
     TextureManager::getInstance().initialize(device);
     std::cout << "TextureManager initialized.\n";
@@ -195,7 +203,7 @@ struct Application::Impl
 
   void installGlfwCallbacks()
   {
-    GLFWwindow *win = device.window();
+    GLFWwindow *win = glfwWindow;
     if (!win) return;
     glfwSetWindowUserPointer(win, this);
 
@@ -320,7 +328,9 @@ struct Application::Impl
       if (!assetsRoot.empty()) {
         std::filesystem::current_path(assetsRoot);
       }
-      device.init("2d shenanigans!", static_cast<int>(width), static_cast<int>(height));
+      device.init("2d shenanigans!", /*presentCapable=*/false);
+      window = std::make_unique<RenderWindow>(
+        device, static_cast<uint32_t>(width), static_cast<uint32_t>(height));
       std::cout << "Vulkan initialized (offscreen).\n";
       return finishInitCommon(assetsRoot);
     } catch (const std::exception &ex) {
@@ -337,9 +347,25 @@ struct Application::Impl
       if (!assetsRoot.empty()) {
         std::filesystem::current_path(assetsRoot);
       }
-      device.initWithWindow(
-        "2d shenanigans!", static_cast<int>(width), static_cast<int>(height),
-        title.c_str());
+      device.init("2d shenanigans!", /*presentCapable=*/true);
+
+      // GLFW window creation lives here rather than in RenderWindow: these
+      // hints are app policy (focus behaviour, WM class), and a compositor
+      // handing us a surface from elsewhere should not have to go through
+      // GLFW at all.
+      glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
+      glfwWindowHint(GLFW_RESIZABLE, GLFW_TRUE);
+      // Prefer not stealing focus from the Swift chrome window on open.
+      glfwWindowHint(GLFW_FOCUS_ON_SHOW, GLFW_FALSE);
+      glfwWindowHint(GLFW_VISIBLE, GLFW_TRUE);
+      glfwWindow = glfwCreateWindow(
+        static_cast<int>(width), static_cast<int>(height),
+        title.empty() ? "Canvas" : title.c_str(), nullptr, nullptr);
+      if (!glfwWindow) {
+        return canvas::fail("Application::initWithWindow: glfwCreateWindow failed");
+      }
+
+      window = std::make_unique<RenderWindow>(device, glfwWindow);
       std::cout << "Vulkan initialized (windowed).\n";
       if (auto r = finishInitCommon(assetsRoot); !r) {
         return r;
@@ -355,25 +381,25 @@ struct Application::Impl
 
   bool windowShouldClose() const
   {
-    return device.windowShouldClose();
+    return window->windowShouldClose();
   }
 
-  void requestClose() { device.requestClose(); }
+  void requestClose() { window->requestClose(); }
 
   void setWindowFrame(int x, int y, int width, int height)
   {
-    device.setWindowFrame(x, y, width, height);
+    window->setWindowFrame(x, y, width, height);
   }
 
   void setWindowVisible(bool visible)
   {
-    device.setWindowVisible(visible);
+    window->setWindowVisible(visible);
   }
 
   void syncProjectionToExtent()
   {
-    const float ew = static_cast<float>(device.getExtent().width);
-    const float eh = static_cast<float>(device.getExtent().height);
+    const float ew = static_cast<float>(window->getExtent().width);
+    const float eh = static_cast<float>(window->getExtent().height);
     if (ew < 1.f || eh < 1.f) return;
     screenProjection_ = mat4{
       2.0f / ew, 0.0f, 0.0f, 0.0f,
@@ -546,29 +572,29 @@ struct Application::Impl
 
   std::string clipboardText() const
   {
-    if (!device.isWindowed() || !device.window()) return {};
-    const char *s = glfwGetClipboardString(device.window());
+    if (!window->isWindowed() || !glfwWindow) return {};
+    const char *s = glfwGetClipboardString(glfwWindow);
     return s ? std::string(s) : std::string{};
   }
 
   void setClipboardText(const std::string &text)
   {
-    if (!device.isWindowed() || !device.window()) return;
-    glfwSetClipboardString(device.window(), text.c_str());
+    if (!window->isWindowed() || !glfwWindow) return;
+    glfwSetClipboardString(glfwWindow, text.c_str());
   }
 
   bool repaint()
   {
     try {
-      if (device.isWindowed() && device.ensureFramebufferSize()) {
+      if (window->isWindowed() && window->resize()) {
         syncProjectionToExtent();
         // Notify Swift so it re-runs Yoga + resubmits the draw list.
         // Without this, C++ presents the old fixed-size command list into
         // the larger framebuffer (layout stuck at open size).
         canvas::InputEvent ev;
         ev.kind = static_cast<uint32_t>(canvas::InputEventKind::Resize);
-        ev.x = static_cast<float>(device.getExtent().width);
-        ev.y = static_cast<float>(device.getExtent().height);
+        ev.x = static_cast<float>(window->getExtent().width);
+        ev.y = static_cast<float>(window->getExtent().height);
         ev.button = 0;
         {
           std::lock_guard lock(inputMu_);
@@ -598,7 +624,7 @@ struct Application::Impl
 
       // Wait for *this* frame slot only (2-in-flight). The other slot may
       // still be on the GPU while we fill host-visible buffers for this one.
-      device.waitForInFlightFrame();
+      window->waitForInFlightFrame();
 
       // Atlas is shared — wait every slot before replacing the image.
       if (textRenderer.atlasNeedsGrow()) {
@@ -608,7 +634,7 @@ struct Application::Impl
         quadRenderer.setAtlas(textRenderer.atlasView(),
                               textRenderer.atlasSampler());
       }
-      const auto ext = device.getExtent();
+      const auto ext = window->getExtent();
       // Each boundary is a point where the GPU has to stop drawing the frame
       // and do something else. Segment i is drawn, boundaries[i] runs, then
       // segment i+1 — whose first quad is usually the composite of whatever the
@@ -642,16 +668,16 @@ struct Application::Impl
       replayDrawListUnified(static_cast<float>(ext.width),
                             static_cast<float>(ext.height), boundaries);
 
-      device.renderWithShadows(
+      window->render(
           // Shadow pass kept only because renderWithShadows is Vulkan's sole
           // render entry point; nothing 3D draws into it any more.
           [&](VkCommandBuffer) {},
           [&](VkCommandBuffer commandBuffer, u32 /*imageIndex*/) {
-            const auto extent = device.getExtent();
+            const auto extent = window->getExtent();
 
             // Always open the clear pass so an empty first segment still
             // clears the framebuffer before a leading blur.
-            device.beginMainRenderPass(commandBuffer, /*clear=*/true);
+            window->beginMainRenderPass(commandBuffer, /*clear=*/true);
             quadRenderer.drawSegment(commandBuffer, 0);
 
             uint32_t segment = 0;
@@ -668,20 +694,20 @@ struct Application::Impl
               case Boundary::Kind::Backdrop:
                 // The frame so far *is* the source, so it has to be resolved
                 // before it can be read.
-                device.endMainRenderPass(commandBuffer);
+                window->endMainRenderPass(commandBuffer);
                 blurPass.captureAndBlur(
-                  commandBuffer, device.resolveImage(),
+                  commandBuffer, window->resolveImage(),
                   VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, b.radius);
                 quadRenderer.setBlurResultView(blurPass.resultView(),
                                                blurPass.sampler());
-                device.beginMainRenderPass(commandBuffer, /*clear=*/false);
+                window->beginMainRenderPass(commandBuffer, /*clear=*/false);
                 quadRenderer.drawSegment(commandBuffer, segment);
                 break;
 
               case Boundary::Kind::ContentBegin:
                 // The subtree is the source, so it is drawn on its own into a
                 // cleared target rather than on top of the frame.
-                device.endMainRenderPass(commandBuffer);
+                window->endMainRenderPass(commandBuffer);
                 blurPass.beginSceneCapture(commandBuffer);
                 quadRenderer.drawSegment(commandBuffer, segment,
                                          /*intoSceneTarget=*/true);
@@ -694,13 +720,13 @@ struct Application::Impl
                   VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, b.radius);
                 quadRenderer.setBlurResultView(blurPass.resultView(),
                                                blurPass.sampler());
-                device.beginMainRenderPass(commandBuffer, /*clear=*/false);
+                window->beginMainRenderPass(commandBuffer, /*clear=*/false);
                 quadRenderer.drawSegment(commandBuffer, segment);
                 break;
               }
             }
 
-            device.endMainRenderPass(commandBuffer);
+            window->endMainRenderPass(commandBuffer);
 
             // Full-window scissor restored for anything that might follow
             // (present blit path does not need it, but keep consistent).
@@ -758,7 +784,7 @@ struct Application::Impl
     // an unbalanced End must not pop something that was never pushed.
     std::vector<canvas::DrawCommand> contentScopes;
     // Must match the slot waitForInFlightFrame() just freed / submit will use.
-    quadRenderer.begin({viewW, viewH}, device.currentFrameSlot());
+    quadRenderer.begin({viewW, viewH}, window->currentFrameSlot());
     for (size_t cmdIndex = 0; cmdIndex < drawCmdCount_; ++cmdIndex) {
       const auto &cmd = drawCmds_[cmdIndex];
       switch (static_cast<canvas::DrawCommandKind>(cmd.kind)) {
@@ -911,7 +937,7 @@ struct Application::Impl
 
   void readPixels(uint8_t *dst, size_t dstSize)
   {
-    device.readPixels(dst, dstSize);
+    window->readPixels(dst, dstSize);
   }
 
   // Immediate draw list (Phase 3) — authored by Swift each dirty frame.
@@ -1005,16 +1031,16 @@ struct Application::Impl
   {
     // Prefer the *live* GLFW size so the Swift safety net sees drag-resize
     // before ensureFramebufferSize() updates the swapchain extent.
-    if (device.isWindowed() && device.window()) {
+    if (window->isWindowed() && glfwWindow) {
       int fbW = 0, fbH = 0;
-      glfwGetFramebufferSize(device.window(), &fbW, &fbH);
+      glfwGetFramebufferSize(glfwWindow, &fbW, &fbH);
       if (fbW >= 1 && fbH >= 1) {
         outW = static_cast<float>(fbW);
         outH = static_cast<float>(fbH);
         return;
       }
     }
-    const auto e = device.getExtent();
+    const auto e = window->getExtent();
     outW = static_cast<float>(e.width);
     outH = static_cast<float>(e.height);
   }
@@ -1067,7 +1093,15 @@ struct Application::Impl
     quadRenderer.cleanUp();
     textRenderer.cleanUp();
     TextureManager::getInstance().cleanUp();
+    // Windows before the device: they hold attachments and sync objects made
+    // from resources cleanUp is about to destroy, and the device asserts on
+    // any still registered.
+    window.reset();
     device.cleanUp();
+    // After glfwTerminate() inside device.cleanUp(), which already destroyed
+    // every remaining GLFW window — clear the dangling handle rather than
+    // double-destroying it.
+    glfwWindow = nullptr;
   }
 };
 
@@ -1207,14 +1241,14 @@ bool Application::repaint() {
 }
 
 bool Application::isIconified() const {
-  GLFWwindow *win = impl_->device.window();
+  GLFWwindow *win = impl_->glfwWindow;
   return win && glfwGetWindowAttrib(win, GLFW_ICONIFIED) != 0;
 }
 
 uint32_t Application::x11WindowId() const
 {
 #if defined(CANVAS_HAVE_X11)
-  GLFWwindow *win = impl_->device.window();
+  GLFWwindow *win = impl_->glfwWindow;
   if (!win) return 0;
   if (glfwGetPlatform() != GLFW_PLATFORM_X11) return 0;
   return static_cast<uint32_t>(glfwGetX11Window(win));
@@ -1248,12 +1282,12 @@ void Application::readPixels(uint8_t *dst, size_t dstSize) {
 }
 
 void Application::captureFrame(uint8_t *dst, size_t dstSize) {
-  impl_->device.captureFrame(dst, dstSize);
+  impl_->window->captureFrame(dst, dstSize);
 }
 
 bool Application::capturePng(std::vector<uint8_t> &outPng, int x, int y, int w,
                              int h, int maxSide, int *outW, int *outH) {
-  return impl_->device.capturePng(outPng, x, y, w, h, maxSide, outW, outH);
+  return impl_->window->capturePng(outPng, x, y, w, h, maxSide, outW, outH);
 }
 
 std::string Application::capturePngBase64(int x, int y, int w, int h,
