@@ -319,7 +319,29 @@ final class LeafNode: YogaBoxNode {
     /// Custom `Canvas` paint (absolute frame). Nil for non-canvas leaves.
     var canvasPaint: ((DrawList, CanvasFrame) -> Void)?
     var spatialRuntime: SpatialRuntime?
-    var onPointerHoverLocal: ((_ localX: Float, _ localY: Float) -> Void)?
+    /// Where the pointer is *inside* this leaf, for a widget that does its own
+    /// picking.
+    ///
+    /// The renderer answers which node the pointer is over, which is all a
+    /// tint or an `onHover` needs. It cannot answer where inside one, because
+    /// that means the widget's own geometry — for a `Scene3D`, the projection
+    /// of a 3D scene it has never seen. So this one question comes back to the
+    /// producer, and `LocalHoverTargets` keeps the cost of asking it
+    /// proportional to how many widgets actually care.
+    var onPointerHoverLocal: ((_ localX: Float, _ localY: Float) -> Void)? {
+        didSet {
+            LocalHoverTargets.track(
+                had: oldValue != nil, has: onPointerHoverLocal != nil
+            )
+        }
+    }
+
+    deinit {
+        // A leaf can go away with its handler still installed — an unmount, a
+        // window closing — and the count has to come back down, or the walk
+        // stays switched on for a widget that no longer exists.
+        LocalHoverTargets.track(had: onPointerHoverLocal != nil, has: false)
+    }
     /// When true, `AnimationDriver` keeps requesting redraws for this leaf.
     var continuousRedraw: Bool = false
     /// Absolute frame from the most recent `emitLeafContents` — the same

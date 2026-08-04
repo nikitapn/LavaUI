@@ -428,6 +428,14 @@ public final class LavaWindow {
             PointerState.set(x: ev.x, y: ev.y)
             if PointerCapture.isActive {
                 PointerCapture.move(x: ev.x, y: ev.y - menuH)
+            } else if LocalHoverTargets.isInUse {
+                // Which node is hovered is the renderer's answer, and arrives
+                // as `.nodeHover`. This walk is only here for the part it
+                // cannot answer — where inside a widget the pointer is, in
+                // that widget's own terms. Its return value is deliberately
+                // discarded: two answers to "what is hovered" is a bug
+                // waiting for the frame where they disagree.
+                _ = host.hitTestHover(x: ev.x, y: ev.y, originY: menuH)
             }
         case .mouseUp:
             PointerCapture.release()

@@ -135,6 +135,32 @@ public enum PointerState {
     public static var window: (x: Float, y: Float) { last }
 }
 
+/// How many leaves want to know where the pointer is *inside* them.
+///
+/// Hover identity is the renderer's answer now — it has the pointer and the
+/// node rects, and asking the producer would be a round trip for something
+/// already known. What the renderer cannot answer is where inside a node the
+/// pointer landed in the widget's own terms: a `Scene3D` picks by projecting
+/// its scene, geometry the renderer has never seen.
+///
+/// So that question still costs a tree walk per motion event — and this is
+/// what stops every app paying for it. Nearly none have such a widget, and
+/// those apps do no work on a mouse move at all, which is the property that
+/// made moving hover into the renderer worth doing.
+enum LocalHoverTargets {
+    nonisolated(unsafe) private(set) static var liveCount = 0
+
+    static var isInUse: Bool { liveCount > 0 }
+
+    /// Counts transitions, not assignments: a handler reinstalled on every
+    /// reconcile — which is what `Scene3D.configure` does — must not read as
+    /// another widget each frame.
+    static func track(had: Bool, has: Bool) {
+        guard had != has else { return }
+        liveCount += has ? 1 : -1
+    }
+}
+
 /// Routes pointer motion to whichever node started a drag.
 ///
 /// Without capture, a drag that leaves the field's bounds would stop extending

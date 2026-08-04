@@ -885,15 +885,26 @@ final class SpatialRuntime {
         return [SpatialBatch(triangles:vertices,texture:nil)]
     }
 
-    func hover(x: Float, y: Float) {
-        let hit = hitID(x: x, y: y)
+    func hover(x: Float, y: Float) { adopt(hit: hitID(x: x, y: y)) }
+
+    /// The pointer is no longer over the scene at all.
+    ///
+    /// Not expressed as a hover at some impossibly distant point. "Nowhere" is
+    /// not a position, and the one that used to stand in for it — negative
+    /// `greatestFiniteMagnitude` — overflows the edge products in
+    /// `pointInTriangle` to infinities that all share a sign, which is exactly
+    /// the answer "inside". So leaving the scene picked an element instead of
+    /// clearing one, and it stayed picked, because nothing was coming to
+    /// correct it: the pointer was somewhere else entirely by then.
+    func leave() { adopt(hit: nil) }
+
+    private func adopt(hit: AnyHashable?) {
         guard hit != hovered else { return }
         if let old = hovered, let e = elements.first(where: { $0.id == old }) { e.onHover?(false) }
         hovered = hit
         if let hit, let e = elements.first(where: { $0.id == hit }) { e.onHover?(true) }
         ViewInvalidation.markNeedsRedraw()
     }
-    func leave() { hover(x: -.greatestFiniteMagnitude, y: -.greatestFiniteMagnitude) }
     func tap(x: Float, y: Float) {
         guard let id = hitID(x: x, y: y) else { return }
         elements.first(where: { $0.id == id })?.onTap?()
