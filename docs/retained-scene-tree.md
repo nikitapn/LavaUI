@@ -17,7 +17,8 @@ Two command kinds, not a separate node array:
 
     BeginNode   param = id, x/y = local offset, w/h = viewport,
                 color = SceneNodeFlags
-    EndNode     x/y = content extent, w/h = span actually emitted
+    EndNode     x/y = content extent, w/h = span actually emitted,
+                color = hover tint, param = press tint
 
 The command list already works this way — `PushClip`/`PopClip` and the blur
 scopes are the same bracketing, and a node is those plus a name. A renderer
@@ -121,6 +122,36 @@ Measured: frozen at the edge, rows 131–140 on screen with the panel held at
 y=4320 and the host at ~0.8% of a core. Resumed, it continued to y=5760 —
 the target it had been holding all along.
 
+## Hover and pressed
+
+The most frequent state change in an interface, and pure geometry the
+renderer already has. Recomputing it in the producer costs a round trip and a
+whole re-emit per mouse move to reach an answer that was free over here.
+
+The producer cannot pick the colour from another process, so it declares one:
+`EndNode.color` is drawn over the node while the pointer is inside it, and
+`EndNode.param` while it is also being pressed. Zero means none, so a node
+that says nothing behaves exactly as before. They live on `EndNode` because
+that is where they are *drawn* — an overlay goes on top of the subtree, and
+the subtree ends there.
+
+Three things about the semantics are deliberate:
+
+- **A press is observed, not consumed.** A scroll is intercepted, because
+  moving a subtree is a decision the renderer can make on its own. A press
+  is not: it *means* something, and only the producer knows what. So the
+  renderer paints the feedback and forwards the event unchanged.
+- **The press belongs to the node it started in**, and draws only while the
+  pointer is also still inside — which is what makes "drag off, release
+  elsewhere" read as a cancel, and dragging back read as re-arming.
+- **Hover is re-answered every repaint**, not only on motion. Content
+  scrolling under a stationary pointer changes what is beneath it just as
+  surely as moving the pointer does.
+
+Nodes declaring no tint are skipped by the hit test rather than hovered. A
+scroll container is not a control, and letting it swallow the hover would
+stop the rows inside it from ever lighting up.
+
 ## Robustness
 
 The list is written by another process, so the composer treats a malformed
@@ -153,6 +184,13 @@ one as ordinary input rather than as an error:
 - The panel is virtualized against the read-back: 5000 rows declared, about
   eighteen emitted, three rows of overscan because the offset the producer
   is working from is a frame old.
+- Every row is a node: it lights up under the pointer and brightens when
+  pressed, with the producer told only that a click happened. The click
+  still arrives — the counter increments — because a press is observed
+  rather than consumed.
+- Hover works with the client `kill -STOP`ped, at a frozen frame counter.
+- Hover follows the content: with the pointer held still, one notch at a
+  time moved the lit row 5 → 7 → 9.
 
 ## Not done
 
@@ -167,9 +205,12 @@ one as ordinary input rather than as an error:
   geometry, so routing a click to a node id — rather than shipping
   coordinates and making the client hit-test — is available and not wired.
 - **Only scroll animates.** The machinery is general — a target, a decay, a
-  self-requesting repaint — but nothing else declares one yet. Opacity and
-  transform transitions are the obvious next users, and hover and pressed
-  tints are the highest-frequency ones.
+  self-requesting repaint — but only scroll declares one. Hover and pressed
+  tints snap rather than fading, and opacity and transform transitions have
+  no way to be declared at all.
+- **A tint is a flat overlay** over the node's whole viewport, text
+  included. That is the ordinary highlight look at low alpha, but it cannot
+  express "change this one background colour".
 - **No fling.** A wheel notch is a discrete step, so this eases to a target
   rather than integrating a velocity. Kinetic scrolling from a touchpad
   would want the latter.

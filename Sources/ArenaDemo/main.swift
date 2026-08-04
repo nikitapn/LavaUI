@@ -373,6 +373,9 @@ func runProducer() {
     /// The scrolling panel. Stable across frames because that is what
     /// the renderer keys its retained state on.
     let listNodeID: UInt32 = 1
+    /// Row nodes are numbered from here, well clear of the panel's own
+    /// id and of zero, which the renderer reads as "no node".
+    let rowNodeBase: UInt32 = 1_000
     let rowCount = 5_000
     /// Where the renderer has scrolled the panel to, as reported back
     /// on the input stream. This process never sets it.
@@ -506,11 +509,25 @@ func runProducer() {
             // the renderer adds the node's origin and subtracts wherever it
             // has scrolled to.
             let y = Float(row) * rowPitch
-            writer.rect(x: 0, y: y, w: panelW, h: rowPitch - 4,
+            // Each row is a node of its own, so it can light up under the
+            // pointer without this process being told the pointer moved.
+            // Nested inside the scrolling node, which means its hit rect
+            // follows the scroll for free — the renderer records where a node
+            // actually landed, not where it was declared.
+            //
+            // Offset from one so no id is zero, which the renderer reads as
+            // "no node".
+            writer.beginNode(id: rowNodeBase + UInt32(row), x: 0, y: y,
+                             w: panelW, h: rowPitch - 4, flags: 0)
+            writer.rect(x: 0, y: 0, w: panelW, h: rowPitch - 4,
                         color: row % 2 == 0 ? 0xff2f2f3b : 0xff343442)
-            writer.rect(x: 0, y: y, w: 4, h: rowPitch - 4, color: barColor(row))
-            writer.text("row \(row) — scrolled by the renderer",
-                        x: 16, y: y + 6, color: 0xffd8d8e4)
+            writer.rect(x: 0, y: 0, w: 4, h: rowPitch - 4, color: barColor(row))
+            writer.text("row \(row) — hover and press me",
+                        x: 16, y: 6, color: 0xffd8d8e4)
+            // Declared once. The renderer decides when they apply, and
+            // repaints on its own when the answer changes.
+            writer.endNode(contentW: panelW, contentH: rowPitch - 4,
+                           hoverTint: 0x1cffffff, pressTint: 0x3cffffff)
         }
         // Both: how far this panel can *eventually* scroll, and how far it
         // can scroll with what is in the arena right now. Without the second
@@ -637,7 +654,8 @@ private struct FrameWriter {
     /// drawn. Leaving them zero means "all of it".
     mutating func endNode(
         contentW: Float, contentH: Float,
-        emittedTop: Float = 0, emittedBottom: Float = 0
+        emittedTop: Float = 0, emittedBottom: Float = 0,
+        hoverTint: UInt32 = 0, pressTint: UInt32 = 0
     ) {
         guard reserve(commands: 1, glyphs: 0) else { return }
         var cmd = canvas.DrawCommand()
@@ -646,6 +664,8 @@ private struct FrameWriter {
         cmd.y = contentH
         cmd.w = emittedTop
         cmd.h = emittedBottom
+        cmd.color = hoverTint
+        cmd.param = pressTint
         frame.commands[commands] = cmd
         commands += 1
     }

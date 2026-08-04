@@ -125,6 +125,10 @@ bool AppWindow::repaint()
 void AppWindow::stepSceneAnimations()
 {
   if (!render_) return;
+  // Content scrolling under a stationary pointer changes what is beneath it
+  // just as surely as moving the pointer does, so hover is re-answered every
+  // frame and not only on motion.
+  if (render_->updateSceneHover(pointerX_, pointerY_)) internalRepaint_ = true;
   sceneMovedScratch_.clear();
   const bool animating =
     render_->advanceSceneAnimations(glfwGetTime(), sceneMovedScratch_);
@@ -367,6 +371,11 @@ void AppWindow::pointerMove(float x, float y)
     // scroll means.
     pointerX_ = x;
     pointerY_ = y;
+    // Hover is the renderer's to answer: it has the pointer and the node
+    // geometry, and the producer would only be recomputing what is already
+    // known here — at the cost of a round trip and a whole re-emit per
+    // motion event.
+    if (render_ && render_->updateSceneHover(x, y)) internalRepaint_ = true;
 
     canvas::InputEvent ev;
     ev.kind = static_cast<uint32_t>(canvas::InputEventKind::MouseMove);
@@ -393,6 +402,16 @@ void AppWindow::pointerButton(int button, bool pressed, float x, float y, int mo
     // Queue raw input for Swift hit-testing (Phase 3+).
     if (button == MOUSE_BUTTON_1) {
       pointerDown_ = pressed;
+      // Feedback is drawn here; the event still goes to the producer below.
+      // Unlike a scroll this is not consumed — a press *means* something, and
+      // only the producer knows what. The renderer paints it, it does not
+      // interpret it.
+      pointerX_ = x;
+      pointerY_ = y;
+      if (render_) {
+        if (render_->updateSceneHover(x, y)) internalRepaint_ = true;
+        if (render_->updateScenePress(pressed)) internalRepaint_ = true;
+      }
       canvas::InputEvent ev;
       ev.kind =
           static_cast<uint32_t>(pressed ? canvas::InputEventKind::MouseDown

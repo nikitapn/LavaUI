@@ -452,9 +452,16 @@ public final class DrawList {
     /// a virtualized node that declares more content than it emits. Left at
     /// zero they mean "all of it", which is the truth for anything that draws
     /// its whole content.
+    /// `hoverTint`/`pressTint` are drawn over the node while the pointer is
+    /// inside it, and while it is additionally being pressed. The renderer
+    /// applies them without asking, which is the point: hover is the most
+    /// frequent state change in an interface and recomputing it here would
+    /// cost a round trip per mouse move to reach an answer the renderer
+    /// already had.
     public func endNode(
         contentW: Float, contentH: Float,
-        emittedTop: Float = 0, emittedBottom: Float = 0
+        emittedTop: Float = 0, emittedBottom: Float = 0,
+        hoverTint: Color? = nil, pressTint: Color? = nil
     ) {
         var cmd = canvas.DrawCommand()
         cmd.kind = DrawKind.endNode.rawValue
@@ -462,7 +469,8 @@ public final class DrawList {
         cmd.y = contentH
         cmd.w = emittedTop
         cmd.h = emittedBottom
-        cmd.color = 0
+        cmd.color = hoverTint?.rgba8 ?? 0
+        cmd.param = pressTint?.rgba8 ?? 0
         appendCommand(cmd)
     }
 

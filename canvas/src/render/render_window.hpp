@@ -198,6 +198,25 @@ class RenderWindow {
   bool advanceSceneAnimations(double now,
                               std::vector<canvas::SceneNodeOffset> &outMoved);
 
+  /// Points the scene graph at a new pointer position.
+  ///
+  /// Returns true if the hovered node changed, which is the caller's cue that
+  /// this window looks different now — the *only* cue, since a producer that
+  /// is busy or stopped will not republish, and a hover that waits for the
+  /// producer is the round trip this exists to avoid.
+  ///
+  /// Called on motion and also once per repaint, because content scrolling
+  /// under a stationary pointer changes what is under it just as surely as
+  /// moving the pointer does.
+  bool updateSceneHover(float pointerX, float pointerY);
+
+  /// Records a press against whichever node is under the pointer.
+  ///
+  /// Unlike a scroll, the event is *not* consumed: a press means something to
+  /// the producer, and only the producer knows what. The renderer draws the
+  /// feedback and forwards the event — observing, not intercepting.
+  bool updateScenePress(bool pressed);
+
   /// Forgets every node's retained state.
   ///
   /// Called when a window's producer changes: node ids are a producer's
@@ -231,6 +250,9 @@ class RenderWindow {
     /// Span the last `EndNode` said it had actually drawn.
     float emittedTop = 0.f;
     float emittedBottom = 0.f;
+    /// Tints the last `EndNode` declared.
+    uint32_t hoverTint = 0;
+    uint32_t pressTint = 0;
     bool  extentKnown = false;
   };
 
@@ -239,6 +261,10 @@ class RenderWindow {
   /// surviving the republish is the whole point.
   std::unordered_map<uint32_t, SceneNodeState> sceneState_;
   std::vector<canvas::SceneNodeRect>           sceneNodes_;
+  /// Node under the pointer, and the one a press started in. Zero is "none",
+  /// which is why a producer should number its nodes from one.
+  uint32_t hoveredNode_ = 0;
+  uint32_t pressedNode_ = 0;
   /// Timestamp of the last animation step, so a step covers real elapsed
   /// time rather than assuming a frame rate. Negative until the first step.
   double sceneAnimationTime_ = -1.0;

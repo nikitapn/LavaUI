@@ -1230,6 +1230,8 @@ void RenderWindow::replayDrawList(const canvas::DrawList &list, float viewW,
       float contentH = node.h;
       float emittedTop = 0.f;
       float emittedBottom = node.h;
+      uint32_t hoverTint = 0;
+      uint32_t pressTint = 0;
       if (const auto it = sceneState_.find(node.id); it != sceneState_.end()) {
         // Subtracted: scrolling down moves the content up.
         ox -= it->second.scrollX;
@@ -1239,6 +1241,8 @@ void RenderWindow::replayDrawList(const canvas::DrawList &list, float viewW,
           contentH      = it->second.contentH;
           emittedTop    = it->second.emittedTop;
           emittedBottom = it->second.emittedBottom;
+          hoverTint     = it->second.hoverTint;
+          pressTint     = it->second.pressTint;
         }
       }
 
@@ -1249,7 +1253,8 @@ void RenderWindow::replayDrawList(const canvas::DrawList &list, float viewW,
 
       node.recordIndex = sceneNodes_.size();
       sceneNodes_.push_back({node.id, node.x, node.y, node.w, node.h, contentW,
-                             contentH, emittedTop, emittedBottom, node.flags});
+                             contentH, emittedTop, emittedBottom, hoverTint,
+                             pressTint, node.flags});
       openNodes.push_back(node);
       break;
     }
@@ -1257,6 +1262,22 @@ void RenderWindow::replayDrawList(const canvas::DrawList &list, float viewW,
       if (openNodes.empty()) break;  // unbalanced; ignore rather than corrupt
       const OpenNode node = openNodes.back();
       openNodes.pop_back();
+
+      // Over the subtree, before our own scissor pops — the overlay is the
+      // node's own rect so its own clip changes nothing, but an ancestor's
+      // still has to apply.
+      const uint32_t hoverTint = cmd.color;
+      const uint32_t pressTint = cmd.param;
+      const bool     isPressed =
+        pressedNode_ == node.id && hoveredNode_ == node.id;
+      const uint32_t tint =
+        isPressed && pressTint != 0
+          ? pressTint
+          : (hoveredNode_ == node.id ? hoverTint : 0u);
+      if (tint != 0) {
+        quads_.pushBox({node.x, node.y}, {node.w, node.h}, tint, 0.f);
+      }
+
       if (node.clipped) quads_.popScissor();
       // Content extent arrives here because this is where the producer knows
       // it — see `EndNode` in draw_command.hpp. Recorded against the node's
@@ -1275,6 +1296,10 @@ void RenderWindow::replayDrawList(const canvas::DrawList &list, float viewW,
       state.contentH  = record.contentH;
       state.emittedTop    = record.emittedTop;
       state.emittedBottom = record.emittedBottom;
+      record.hoverTint    = hoverTint;
+      record.pressTint    = pressTint;
+      state.hoverTint     = hoverTint;
+      state.pressTint     = pressTint;
       state.extentKnown = true;
       ox                = node.parentOx;
       oy                = node.parentOy;
@@ -1445,7 +1470,40 @@ void RenderWindow::resetSceneState()
 {
   sceneState_.clear();
   sceneNodes_.clear();
+  hoveredNode_        = 0;
+  pressedNode_        = 0;
   sceneAnimationTime_ = -1.0;
+}
+
+bool RenderWindow::updateSceneHover(float pointerX, float pointerY)
+{
+  // Innermost wins, same as scrolling: `sceneNodes_` is pre-order, so the
+  // last node containing the point is the deepest one. Nodes that declare no
+  // tint are skipped rather than hovered — a scroll container is not a
+  // control, and letting it swallow the hover would stop the rows inside it
+  // from ever lighting up.
+  uint32_t hovered = 0;
+  for (const auto &node : sceneNodes_) {
+    if (node.hoverTint == 0 && node.pressTint == 0) continue;
+    if (pointerX < node.x || pointerX >= node.x + node.w) continue;
+    if (pointerY < node.y || pointerY >= node.y + node.h) continue;
+    hovered = node.id;
+  }
+  if (hovered == hoveredNode_) return false;
+  hoveredNode_ = hovered;
+  return true;
+}
+
+bool RenderWindow::updateScenePress(bool pressed)
+{
+  // The press belongs to the node it started in and stays there until
+  // release, so dragging off a control and back does not hand the press to
+  // whatever the pointer crossed. Whether it *draws* pressed additionally
+  // requires the pointer to still be inside it — which is what makes
+  // "dragged off, released elsewhere" read as a cancel.
+  const uint32_t was = pressedNode_;
+  pressedNode_       = pressed ? hoveredNode_ : 0;
+  return pressedNode_ != was;
 }
 
 bool RenderWindow::scrollSceneNode(float pointerX, float pointerY,

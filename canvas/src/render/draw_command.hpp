@@ -71,9 +71,22 @@ enum class DrawCommandKind : uint32_t {
   BeginNode = 16,
   /// Closes the innermost open node.
   ///
-  ///   x, y = content extent
-  ///   w, h = the vertical span of content actually emitted, in content
-  ///          space. Both zero means "all of it".
+  ///   x, y  = content extent
+  ///   w, h  = the vertical span of content actually emitted, in content
+  ///           space. Both zero means "all of it".
+  ///   color = tint drawn over the node while the pointer is inside it
+  ///   param = tint drawn over it while it is also being pressed
+  ///
+  /// Both tints are RGBA8 and zero means none, so a node that says nothing
+  /// behaves exactly as before. They live on `EndNode` rather than
+  /// `BeginNode` because this is where they are *drawn*: an overlay has to go
+  /// on top of the subtree, and the subtree ends here.
+  ///
+  /// Declaring the appearance once and letting the renderer apply it is the
+  /// point. Hover is the most frequent state change in any interface and is
+  /// pure geometry the renderer already has — recomputing it in the producer
+  /// costs a round trip and a whole re-emit per mouse move, to arrive at an
+  /// answer the renderer could have had for free.
   ///
   /// The extent lives here and not on `BeginNode` because it is not known
   /// there: how big a node's content turns out to be is a *result* of
@@ -121,6 +134,9 @@ struct SceneNodeRect {
   /// Vertical span of content actually drawn, in content space. Equal to
   /// [0, contentH] for a node that emitted everything.
   float    emittedTop = 0.f, emittedBottom = 0.f;
+  /// Overlays for pointer state; zero means the node wants none, which is
+  /// also how the renderer knows not to hit-test it.
+  uint32_t hoverTint = 0, pressTint = 0;
   uint32_t flags = 0;
 };
 
