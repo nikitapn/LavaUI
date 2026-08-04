@@ -135,6 +135,26 @@ that says nothing behaves exactly as before. They live on `EndNode` because
 that is where they are *drawn* — an overlay goes on top of the subtree, and
 the subtree ends there.
 
+They fade rather than switch, on the same machinery the scroll uses. The two
+constants are asymmetric on purpose: **55ms in, 120ms out**. A highlight that
+fades in slowly reads as lag — the pointer is already there and the interface
+has not agreed yet — while one that fades out quickly reads as a flicker when
+the pointer crosses a list. Fast to acknowledge, unhurried to let go.
+
+Press *cross-fades* with hover rather than stacking on it, since the press
+tint is meant to replace the hover one: hover recedes by exactly as much as
+press arrives. Guarded on the press tint existing, so a node that declares
+only a hover tint does not dim itself when pressed. What is interpolated is
+the tint's **alpha**, not a blend toward the background — a tint is an
+overlay, so "half faded in" is the same colour at half the opacity, and that
+stays true over whatever it happens to sit on.
+
+Measured at one pixel inside a row: `#9B9B92` off, rising `9E → A3 → A5 →
+A7 → A9` to `#AAAAA3` hovered, `AD → B1 → B4 → B6` to `#B9B9B4` pressed, and
+back to exactly `#9B9B92` on the way out. It settles rather than creeping —
+the step below one level of 8-bit alpha snaps, because continuing would ask
+for frames that change nothing.
+
 Three things about the semantics are deliberate:
 
 - **A press is observed, not consumed.** A scroll is intercepted, because
@@ -188,7 +208,9 @@ one as ordinary input rather than as an error:
   pressed, with the producer told only that a click happened. The click
   still arrives — the counter increments — because a press is observed
   rather than consumed.
-- Hover works with the client `kill -STOP`ped, at a frozen frame counter.
+- Hover works with the client `kill -STOP`ped, at a frozen frame counter —
+  fade included, and the fade settles there rather than spinning: 5 ticks of
+  CPU over 6 seconds, the same as with the pointer outside the panel.
 - Hover follows the content: with the pointer held still, one notch at a
   time moved the lit row 5 → 7 → 9.
 
@@ -204,10 +226,10 @@ one as ordinary input rather than as an error:
 - **Hit-testing is used for scroll only.** The renderer knows the node
   geometry, so routing a click to a node id — rather than shipping
   coordinates and making the client hit-test — is available and not wired.
-- **Only scroll animates.** The machinery is general — a target, a decay, a
-  self-requesting repaint — but only scroll declares one. Hover and pressed
-  tints snap rather than fading, and opacity and transform transitions have
-  no way to be declared at all.
+- **Only the renderer's own state animates.** Scroll and the tints ease
+  because the renderer owns their targets. A producer still has no way to
+  say "fade this node's opacity" or "move it to here over 200ms" — the
+  machinery would carry it, the wire format has nowhere to put it.
 - **A tint is a flat overlay** over the node's whole viewport, text
   included. That is the ordinary highlight look at low alpha, but it cannot
   express "change this one background colour".

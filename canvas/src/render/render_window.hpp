@@ -253,6 +253,11 @@ class RenderWindow {
     /// Tints the last `EndNode` declared.
     uint32_t hoverTint = 0;
     uint32_t pressTint = 0;
+    /// How far each tint has faded in, 0…1. Eased rather than switched,
+    /// because a highlight that appears between two frames reads as a flicker
+    /// at the speed a pointer actually crosses a list.
+    float hoverAmount = 0.f;
+    float pressAmount = 0.f;
     bool  extentKnown = false;
   };
 

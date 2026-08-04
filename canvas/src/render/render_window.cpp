@@ -1160,6 +1160,19 @@ bool sideBufferRange(const canvas::DrawCommand &cmd, size_t available,
   return static_cast<uint64_t>(first) + count <= available;
 }
 
+/// The same RGBA8 with its alpha multiplied by `k`.
+///
+/// Scaling alpha rather than blending toward the background: a tint is an
+/// overlay, so "half faded in" is the same colour at half the opacity, and
+/// that stays true over whatever it happens to be sitting on.
+uint32_t withScaledAlpha(uint32_t rgba, float k)
+{
+  const uint32_t alpha = (rgba >> 24) & 0xffu;
+  const auto scaled    = static_cast<uint32_t>(
+    static_cast<float>(alpha) * std::clamp(k, 0.f, 1.f) + 0.5f);
+  return (rgba & 0x00ffffffu) | (scaled << 24);
+}
+
 /// A texture id carried in a float field, with the same cast guard.
 /// Returns 0 — never a valid id — for anything out of range.
 uint32_t textureIdFromFloat(float v)
@@ -1268,14 +1281,28 @@ void RenderWindow::replayDrawList(const canvas::DrawList &list, float viewW,
       // still has to apply.
       const uint32_t hoverTint = cmd.color;
       const uint32_t pressTint = cmd.param;
-      const bool     isPressed =
-        pressedNode_ == node.id && hoveredNode_ == node.id;
-      const uint32_t tint =
-        isPressed && pressTint != 0
-          ? pressTint
-          : (hoveredNode_ == node.id ? hoverTint : 0u);
-      if (tint != 0) {
-        quads_.pushBox({node.x, node.y}, {node.w, node.h}, tint, 0.f);
+      if (hoverTint != 0 || pressTint != 0) {
+        float hoverAmount = 0.f;
+        float pressAmount = 0.f;
+        if (const auto it = sceneState_.find(node.id);
+            it != sceneState_.end()) {
+          hoverAmount = it->second.hoverAmount;
+          pressAmount = it->second.pressAmount;
+        }
+        // A cross-fade rather than a stack: the press tint *replaces* the
+        // hover one, so hover recedes by exactly as much as press arrives.
+        // Guarded on the press tint existing, because a node that declares
+        // only a hover tint must not dim itself when pressed.
+        const float pressK = pressTint != 0 ? pressAmount : 0.f;
+        const float hoverK = hoverAmount * (1.f - pressK);
+        if (hoverTint != 0 && hoverK > 0.f) {
+          quads_.pushBox({node.x, node.y}, {node.w, node.h},
+                         withScaledAlpha(hoverTint, hoverK), 0.f);
+        }
+        if (pressK > 0.f) {
+          quads_.pushBox({node.x, node.y}, {node.w, node.h},
+                         withScaledAlpha(pressTint, pressK), 0.f);
+        }
       }
 
       if (node.clipped) quads_.popScissor();
@@ -1573,8 +1600,39 @@ bool RenderWindow::advanceSceneAnimations(
   const float alpha =
     dt > 0.0 ? static_cast<float>(1.0 - std::exp(-dt / kTau)) : 0.f;
 
+  // Asymmetric on purpose. A highlight that fades *in* slowly reads as lag —
+  // the pointer is already there and the interface has not agreed yet —
+  // while one that fades *out* quickly reads as a flicker when the pointer
+  // crosses a list. Fast to acknowledge, unhurried to let go.
+  constexpr double kTintFadeIn  = 0.055;
+  constexpr double kTintFadeOut = 0.12;
+  /// One step of 8-bit alpha. Below this the difference cannot be drawn, so
+  /// continuing to animate would ask for frames that change nothing.
+  constexpr float kTintSnap = 1.f / 255.f;
+
+  const auto easeTint = [&](float &value, float target) {
+    const double tau = target > value ? kTintFadeIn : kTintFadeOut;
+    const float  a =
+      dt > 0.0 ? static_cast<float>(1.0 - std::exp(-dt / tau)) : 0.f;
+    if (std::abs(target - value) < kTintSnap) {
+      const bool moved = value != target;
+      value            = target;
+      return moved;
+    }
+    value += (target - value) * a;
+    return true;
+  };
+
   bool animating = false;
   for (auto &[id, state] : sceneState_) {
+    // Pressed draws only while the pointer is still inside, which is what
+    // makes dragging off a control read as a cancel.
+    const float hoverTarget = hoveredNode_ == id ? 1.f : 0.f;
+    const float pressTarget =
+      pressedNode_ == id && hoveredNode_ == id ? 1.f : 0.f;
+    if (easeTint(state.hoverAmount, hoverTarget)) animating = true;
+    if (easeTint(state.pressAmount, pressTarget)) animating = true;
+
     // How far this node may travel *right now*, given what the producer has
     // actually drawn. Unlimited unless it said otherwise, so a producer that
     // emits its whole content is unaffected.
