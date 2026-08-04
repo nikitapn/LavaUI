@@ -65,6 +65,9 @@ public struct SceneAnimationFlags: OptionSet, Sendable {
 
     public static let opacity = SceneAnimationFlags(rawValue: 1 << 0)
     public static let translate = SceneAnimationFlags(rawValue: 1 << 1)
+    /// Read the time value as a duration rather than a decay constant — see
+    /// `kSceneAnimDuration` in `draw_command.hpp`.
+    public static let duration = SceneAnimationFlags(rawValue: 1 << 2)
 }
 
 /// Reused arena: draw commands plus the shaped glyphs they reference.
@@ -495,14 +498,19 @@ public final class DrawList {
     /// The first frame a node states one it snaps rather than eases: a node
     /// that has just appeared has nothing to have moved from. To animate an
     /// entrance, state the start on one frame and the end on the next.
+    /// Pass `duration` instead of `timeConstant` when several nodes have to
+    /// arrive together: a decay from a longer distance takes visibly longer
+    /// to settle, so a group easing with one time constant lands raggedly,
+    /// while a group sharing a duration lands on one frame.
     public func animateNode(
         opacity: Float? = nil,
         translateX: Float? = nil, translateY: Float? = nil,
-        timeConstant: Float = 0
+        timeConstant: Float = 0, duration: Float? = nil
     ) {
         var flags: SceneAnimationFlags = []
         if opacity != nil { flags.insert(.opacity) }
         if translateX != nil || translateY != nil { flags.insert(.translate) }
+        if duration != nil { flags.insert(.duration) }
         guard !flags.isEmpty else { return }
 
         var cmd = canvas.DrawCommand()
@@ -511,7 +519,7 @@ public final class DrawList {
         cmd.y = translateY ?? 0
         cmd.w = opacity ?? 1
         cmd.color = flags.rawValue
-        cmd.aux = timeConstant
+        cmd.aux = duration ?? timeConstant
         appendCommand(cmd)
     }
 

@@ -272,6 +272,14 @@ class RenderWindow {
     float targetTranslateY = 0.f;
     /// Time constant, seconds. Zero means the renderer's default.
     float animationTau = 0.f;
+    /// Set when `animationTau` is a duration rather than a decay constant.
+    bool  animationTimed = false;
+    /// Where the current timed transition started, and when. Meaningless in
+    /// decay mode, which needs no memory of where it set out from.
+    float startOpacity = 1.f;
+    float startTranslateX = 0.f;
+    float startTranslateY = 0.f;
+    double animationStart = -1.0;
     /// False until the node has declared an animation once. The first
     /// declaration snaps rather than eases — see `NodeAnimate`.
     bool  animationSeen = false;

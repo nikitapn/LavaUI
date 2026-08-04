@@ -108,7 +108,8 @@ enum class DrawCommandKind : uint32_t {
   ///   color = `SceneAnimationFlags`: which properties this states
   ///   x, y  = target translation, added to the node's local offset
   ///   w     = target opacity, 0…1, multiplied through the subtree
-  ///   aux   = time constant in seconds; 0 uses the renderer's default
+  ///   aux   = time constant in seconds, or a duration if
+  ///           `kSceneAnimDuration` is set; 0 uses the renderer's default
   ///
   /// A *target*, not a value, and that is the whole difference. The producer
   /// says where the node should end up and stops thinking about it; the
@@ -138,6 +139,22 @@ enum class DrawCommandKind : uint32_t {
 enum SceneAnimationFlags : uint32_t {
   kSceneAnimOpacity   = 1u << 0,
   kSceneAnimTranslate = 1u << 1,
+  /// Read `aux` as a **duration** rather than a time constant: the node
+  /// leaves where it is, arrives at the target, and takes exactly that long
+  /// doing it.
+  ///
+  /// The difference is not the feel, it is coordination. An exponential
+  /// approach never technically finishes, so two nodes easing with the same
+  /// time constant from different distances stop being visibly in motion at
+  /// different moments — the near one settles while the far one is still
+  /// travelling, and a transition that was meant to read as one movement
+  /// reads as several. A duration is the same for both whatever the
+  /// distance, so a group started on one frame lands on one frame.
+  ///
+  /// Costs what it buys: a timed animation has to remember where it started,
+  /// so retargeting it mid-flight restarts the clock rather than simply
+  /// bending toward the new target the way a decay does.
+  kSceneAnimDuration  = 1u << 2,
 };
 
 /// Bits in `BeginNode.color`.

@@ -1160,6 +1160,20 @@ bool sideBufferRange(const canvas::DrawCommand &cmd, size_t available,
   return static_cast<uint64_t>(first) + count <= available;
 }
 
+/// Symmetric cubic ease, the default a timed transition gets.
+///
+/// Linear motion is the one curve that always looks mechanical, and easing
+/// only the end looks like a stumble. This accelerates and decelerates by the
+/// same amount, which is what makes a group of nodes moving different
+/// distances over the same duration read as one gesture.
+float easeInOutCubic(float t)
+{
+  t = std::clamp(t, 0.f, 1.f);
+  if (t < 0.5f) return 4.f * t * t * t;
+  const float f = -2.f * t + 2.f;
+  return 1.f - (f * f * f) * 0.5f;
+}
+
 /// The same RGBA8 with its alpha multiplied by `k`.
 ///
 /// Scaling alpha rather than blending toward the background: a tint is an
@@ -1297,21 +1311,42 @@ void RenderWindow::replayDrawList(const canvas::DrawList &list, float viewW,
       if (openNodes.empty()) break;  // outside any node; nothing to animate
       auto      &anim  = sceneState_[openNodes.back().id];
       const bool first = !anim.animationSeen;
+
+      bool retargeted = false;
       if (cmd.color & canvas::kSceneAnimOpacity) {
-        anim.targetOpacity = std::clamp(cmd.w, 0.f, 1.f);
+        const float target = std::clamp(cmd.w, 0.f, 1.f);
+        retargeted |= target != anim.targetOpacity;
+        anim.targetOpacity = target;
       }
       if (cmd.color & canvas::kSceneAnimTranslate) {
+        retargeted |= cmd.x != anim.targetTranslateX;
+        retargeted |= cmd.y != anim.targetTranslateY;
         anim.targetTranslateX = cmd.x;
         anim.targetTranslateY = cmd.y;
       }
-      anim.animationTau  = cmd.aux > 0.f ? cmd.aux : 0.f;
-      anim.animationSeen = true;
+      anim.animationTau   = cmd.aux > 0.f ? cmd.aux : 0.f;
+      anim.animationTimed = (cmd.color & canvas::kSceneAnimDuration) != 0;
+      anim.animationSeen  = true;
+
       if (first) {
         // Nothing to have moved from — see `NodeAnimate`. Applied here, not
         // on the next step, so this frame already draws it in place.
         anim.opacity    = anim.targetOpacity;
         anim.translateX = anim.targetTranslateX;
         anim.translateY = anim.targetTranslateY;
+      } else if (retargeted && anim.animationTimed) {
+        // The clock starts where the node actually is, not where the last
+        // transition was aiming — retargeting mid-flight has to continue from
+        // the visible position or it jumps.
+        //
+        // Stamped with the frame's own time rather than read from the clock
+        // here, so every node retargeted in this replay shares one start.
+        // That is the whole coordination guarantee: same start, same
+        // duration, same landing, whatever the distances.
+        anim.startOpacity    = anim.opacity;
+        anim.startTranslateX = anim.translateX;
+        anim.startTranslateY = anim.translateY;
+        anim.animationStart  = sceneAnimationTime_;
       }
       break;
     }
@@ -1661,6 +1696,9 @@ bool RenderWindow::advanceSceneAnimations(
   /// shade them, and a translation that lands as fast as a highlight reads
   /// as a jump.
   constexpr double kDeclaredTau = 0.11;
+  /// What a timed animation gets when it names no duration. Long enough to be
+  /// followed by eye, short enough not to be waited on.
+  constexpr double kDeclaredDuration = 0.28;
 
   const auto easeTint = [&](float &value, float target) {
     const double tau = target > value ? kTintFadeIn : kTintFadeOut;
@@ -1688,7 +1726,32 @@ bool RenderWindow::advanceSceneAnimations(
     // Producer-declared properties. The producer named a destination and
     // stopped thinking about it; getting there is this loop's job, which is
     // why it keeps working while that process is busy or stopped.
-    if (state.animationSeen) {
+    if (state.animationSeen && state.animationTimed) {
+      const double duration =
+        state.animationTau > 0.f ? state.animationTau : kDeclaredDuration;
+      if (state.animationStart >= 0.0) {
+        const auto  elapsed = static_cast<float>(now - state.animationStart);
+        const float t = std::clamp(elapsed / static_cast<float>(duration), 0.f,
+                                   1.f);
+        const float e = easeInOutCubic(t);
+        // Interpolated from the recorded start, never accumulated from the
+        // last frame: an interpolation cannot drift, and it lands on exactly
+        // the target at t = 1 rather than approaching it.
+        state.opacity =
+          state.startOpacity + (state.targetOpacity - state.startOpacity) * e;
+        state.translateX =
+          state.startTranslateX
+          + (state.targetTranslateX - state.startTranslateX) * e;
+        state.translateY =
+          state.startTranslateY
+          + (state.targetTranslateY - state.startTranslateY) * e;
+        if (t < 1.f) {
+          animating = true;
+        } else {
+          state.animationStart = -1.0;  // arrived; stop asking for frames
+        }
+      }
+    } else if (state.animationSeen) {
       const double tau =
         state.animationTau > 0.f ? state.animationTau : kDeclaredTau;
       const float a =

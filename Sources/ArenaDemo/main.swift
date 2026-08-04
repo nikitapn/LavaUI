@@ -452,32 +452,43 @@ func runProducer() {
         // reported, which is the visible proof the reverse channel works:
         // before it existed, resizing the window left black margins because
         // this process had no way to hear about it.
-        // ─── A producer-declared animation ───────────────────────────────
+        // ─── Producer-declared animation ─────────────────────────────────
         //
-        // This process states where the card should be and moves on. It does
+        // This process states where each chip should be and moves on. It does
         // not tween, does not schedule anything, and emits identical frames
-        // while the card is in flight — the two positions are the only ones
-        // it ever describes. Everything between them is the renderer's.
+        // while they are in flight — the two resting states are the only ones
+        // it ever describes. Everything between them is the renderer's, which
+        // is why it still arrives if this process is stopped mid-move.
         //
-        // Which is why it still arrives if this process is stopped mid-move.
-        writer.beginNode(id: cardNodeID, x: 40, y: 206, w: 300, h: 74, flags: 0)
-        writer.animateNode(
-            opacity: cardOpen ? 1.0 : 0.25,
-            translateX: cardOpen ? 0 : 120,
-            translateY: 0
-        )
-        writer.rect(x: 0, y: 0, w: 300, h: 74, color: 0xff3b3b4d)
-        writer.rect(x: 0, y: 0, w: 5, h: 74, color: 0xff7dd3fc)
-        writer.text("space toggles this card", x: 16, y: 12)
-        writer.text(cardOpen ? "state: open" : "state: away",
-                    x: 16, y: 42, color: 0xff9fb4d8)
-        writer.endNode(contentW: 300, contentH: 74)
+        // Three chips travelling 70, 150 and 230 pixels, all given the same
+        // *duration*. That is the point of a duration: under a decay the
+        // near one would visibly settle while the far one was still going,
+        // and one gesture would read as three. Sharing a duration, they leave
+        // together and land together.
+        let chipTravel: [Float] = [70, 150, 230]
+        for (index, travel) in chipTravel.enumerated() {
+            let y = 214 + Float(index) * 38
+            writer.beginNode(id: cardNodeID + UInt32(index), x: 40, y: y,
+                             w: 300, h: 32, flags: 0)
+            writer.animateNode(
+                opacity: cardOpen ? 1.0 : 0.2,
+                translateX: cardOpen ? 0 : travel,
+                translateY: 0,
+                duration: 0.5
+            )
+            writer.rect(x: 0, y: 0, w: 300, h: 32, color: 0xff3b3b4d)
+            writer.rect(x: 0, y: 0, w: 5, h: 32, color: barColor(index))
+            writer.text("chip \(index) — travels \(Int(travel))px", x: 16, y: 5)
+            writer.endNode(contentW: 300, contentH: 32)
+        }
+        writer.text(cardOpen ? "space: chips home" : "space: chips away",
+                    x: 40, y: 330, color: 0xff8ea0c8)
 
         let chartWidth = max(120, viewW * 0.5 - 40)
         let baseline = viewH - 40
         let barPitch: Float = 28
         let barWidth: Float = 20
-        let room = max(60, baseline - 320)
+        let room = max(60, baseline - 400)
         let bars = min(3 + Int(t) % 22, max(1, Int((chartWidth - 40) / barPitch)))
         var hovered = -1
         for i in 0..<bars {
@@ -684,7 +695,7 @@ private struct FrameWriter {
     /// States the enclosing node's animation target. See `NodeAnimate`.
     mutating func animateNode(
         opacity: Float, translateX: Float, translateY: Float,
-        timeConstant: Float = 0
+        timeConstant: Float = 0, duration: Float? = nil
     ) {
         guard reserve(commands: 1, glyphs: 0) else { return }
         var cmd = canvas.DrawCommand()
@@ -692,8 +703,9 @@ private struct FrameWriter {
         cmd.x = translateX
         cmd.y = translateY
         cmd.w = opacity
-        cmd.color = 0b11  // opacity | translate
-        cmd.aux = timeConstant
+        // opacity | translate, plus duration when one is given.
+        cmd.color = duration == nil ? 0b011 : 0b111
+        cmd.aux = duration ?? timeConstant
         frame.commands[commands] = cmd
         commands += 1
     }

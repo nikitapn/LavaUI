@@ -206,10 +206,42 @@ out of arena before reaching the command leaves them alone. The cost of that
 choice: a producer that *stops* declaring a property keeps its last target
 rather than reverting.
 
-Demonstrated by toggling the demo's card with the space bar and stopping the
-client 50ms in, far short of the landing. It arrives anyway — the last two
-frames of the motion were composed from a stopped process's draw list — and
-the window settles at 4 ticks of CPU over 6 seconds.
+Demonstrated by toggling the demo's chips with the space bar and stopping the
+client 50ms in, far short of the landing. They arrive anyway — the last
+frames of the motion composed from a stopped process's draw list — and the
+window settles at 4 ticks of CPU over 6 seconds.
+
+### Decay or duration
+
+`kSceneAnimDuration` reads the time value as a duration instead of a decay
+constant. The difference is not the feel, it is coordination: an exponential
+approach never technically finishes, so two nodes easing with the same time
+constant from different distances stop being visibly in motion at different
+moments, and one gesture reads as several.
+
+Measured on three chips travelling 70, 150 and 230px, sampling the left edge
+of each while they return home:
+
+    duration 0.5s     t2: 100 147 166    t3: 57 58 52    t4: 40 40 40
+    decay    τ=0.16   t2:  64  84  97    t3: 51 61 68    t4: 45 50 53
+                      t7:  40  41  41    t8: 40 40 41    t9: 39 39 40
+
+Under the duration all three converge and land on one sample. Under the decay
+the near chip settles two samples before the far one, after a long stretch
+where all three are nearly home and visibly staggered.
+
+Timed transitions interpolate from a recorded start rather than accumulating
+per frame, so they cannot drift and they land on exactly the target rather
+than approaching it. The start is stamped with the frame's own timestamp, not
+read from the clock at the moment each node is visited, so every node
+retargeted in one replay shares one start — which is the whole guarantee.
+
+The curve is a symmetric cubic ease. Linear motion is the one curve that
+always looks mechanical, and easing only the end looks like a stumble.
+
+What it costs: a timed animation has to remember where it started, so
+retargeting it mid-flight restarts the clock from the visible position rather
+than simply bending toward the new target the way a decay does.
 
 ## Robustness
 
@@ -267,11 +299,8 @@ one as ordinary input rather than as an error:
   coordinates and making the client hit-test — is available and not wired.
 - **No scale, and no rotation.** See above: text is the obstacle, and a
   transform that silently skipped it would be worse than none.
-- **One curve.** Everything eases exponentially toward its target. There is
-  no way to ask for a spring, an overshoot, or a fixed duration — and a
-  fixed duration in particular is what a coordinated multi-node transition
-  needs, since exponentials with the same constant do not finish together
-  when they start from different distances.
+- **Two curves, neither chosen.** Decay or timed cubic; there is no way to
+  ask for a spring, an overshoot, or a different easing.
 - **No completion signal.** A producer that wants to do something when a
   transition lands has no way to hear about it; `NodeScroll` is the only
   thing the renderer reports back.
