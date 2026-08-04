@@ -253,14 +253,15 @@ final class CompositorImpl: CompositorServant, @unchecked Sendable {
     /// another event.
     override func subscribeInput(
         arenaId: String, stream: NPRPCBidiStream<WireInputEvent, InputAck>
-    ) async {
+    ) async throws {
+        // Thrown *before* the stream is touched, which is what makes it a
+        // stream-initialization failure: the client's `subscribeInput` call
+        // itself throws `ArenaNotFound`, rather than the caller discovering
+        // one chunk later that the subscription it just built is dead.
         guard InputBroker.isBound(arenaId) else {
-            // A stream has no reply message to put an exception in, so the
-            // failure has to be the stream's own: the client's `for try await`
-            // throws instead of hanging on a subscription that will never
-            // produce anything.
-            stream.writer.abort()
-            return
+            var ex = ArenaNotFound()
+            ex.arenaId = arenaId
+            throw ex
         }
         let (id, events) = InputBroker.subscribe()
         FileHandle.standardError.write(
@@ -380,7 +381,6 @@ final class InputChannel: @unchecked Sendable {
     private let lock = NSLock()
     private var queue: [WireInputEvent] = []
     private var ended = false
-    private var received = false
     private let acks: AsyncStream<UInt32>.Continuation
 
     init(stream: NPRPCBidiStream<InputAck, WireInputEvent>) {
@@ -416,18 +416,7 @@ final class InputChannel: @unchecked Sendable {
     private func enqueue(_ event: WireInputEvent) {
         lock.lock()
         queue.append(event)
-        received = true
         lock.unlock()
-    }
-
-    /// False if not one event has ever arrived. Worth asking, because the
-    /// difference between "nobody has touched the mouse" and "this transport
-    /// has no route for server-initiated chunks" is otherwise invisible from
-    /// here — the subscription opens either way. See `ControlTransport`.
-    var hasReceivedAnything: Bool {
-        lock.lock()
-        defer { lock.unlock() }
-        return received
     }
 
     private func finish() {

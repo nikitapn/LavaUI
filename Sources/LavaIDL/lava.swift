@@ -198,7 +198,7 @@ public protocol CompositorProtocol {
   func registerFont(path: String, pixelSize: Float) throws -> UInt32
   func attachArena(arenaId: String) throws
   func present()
-  func subscribeInput(arenaId: String, stream: NPRPCBidiStream<InputEvent, InputAck>) async
+  func subscribeInput(arenaId: String, stream: NPRPCBidiStream<InputEvent, InputAck>) async throws
 }
 
 // Client proxy for Compositor
@@ -221,19 +221,19 @@ final public class Compositor: NPRPCObject, @unchecked Sendable {
     let buffer = FlatBuffer()
     buffer.prepare(172)
     buffer.commit(44)
-    guard let data = buffer.data else { throw BufferError(message: "Failed to get buffer data") }
+    guard let bufData = buffer.data else { throw BufferError(message: "Failed to get buffer data") }
 
     // Write message header
-    data.storeBytes(of: UInt32(0), toByteOffset: 0, as: UInt32.self)  // size (set later)
-    data.storeBytes(of: UInt32(0), toByteOffset: 4, as: UInt32.self)  // msg_id: FunctionCall (MessageId enum value 0)
-    data.storeBytes(of: UInt32(0), toByteOffset: 8, as: UInt32.self)  // msg_type: Request
-    data.storeBytes(of: UInt32(0), toByteOffset: 12, as: UInt32.self) // reserved
+    bufData.storeBytes(of: UInt32(0), toByteOffset: 0, as: UInt32.self)  // size (set later)
+    bufData.storeBytes(of: UInt32(0), toByteOffset: 4, as: UInt32.self)  // msg_id: FunctionCall (MessageId enum value 0)
+    bufData.storeBytes(of: UInt32(0), toByteOffset: 8, as: UInt32.self)  // msg_type: Request
+    bufData.storeBytes(of: UInt32(0), toByteOffset: 12, as: UInt32.self) // reserved
 
     // Write call header
-    data.storeBytes(of: poaIdx, toByteOffset: 16, as: UInt16.self)
-    data.storeBytes(of: UInt8(0), toByteOffset: 18, as: UInt8.self)  // interface_idx
-    data.storeBytes(of: UInt8(0), toByteOffset: 19, as: UInt8.self)  // function_idx
-    data.storeBytes(of: objectId, toByteOffset: 24, as: UInt64.self)
+    bufData.storeBytes(of: poaIdx, toByteOffset: 16, as: UInt16.self)
+    bufData.storeBytes(of: UInt8(0), toByteOffset: 18, as: UInt8.self)  // interface_idx
+    bufData.storeBytes(of: UInt8(0), toByteOffset: 19, as: UInt8.self)  // function_idx
+    bufData.storeBytes(of: objectId, toByteOffset: 24, as: UInt64.self)
 
     // Marshal input arguments
     var inArgs = lava_M1()
@@ -263,19 +263,19 @@ final public class Compositor: NPRPCObject, @unchecked Sendable {
     let buffer = FlatBuffer()
     buffer.prepare(168)
     buffer.commit(40)
-    guard let data = buffer.data else { throw BufferError(message: "Failed to get buffer data") }
+    guard let bufData = buffer.data else { throw BufferError(message: "Failed to get buffer data") }
 
     // Write message header
-    data.storeBytes(of: UInt32(0), toByteOffset: 0, as: UInt32.self)  // size (set later)
-    data.storeBytes(of: UInt32(0), toByteOffset: 4, as: UInt32.self)  // msg_id: FunctionCall (MessageId enum value 0)
-    data.storeBytes(of: UInt32(0), toByteOffset: 8, as: UInt32.self)  // msg_type: Request
-    data.storeBytes(of: UInt32(0), toByteOffset: 12, as: UInt32.self) // reserved
+    bufData.storeBytes(of: UInt32(0), toByteOffset: 0, as: UInt32.self)  // size (set later)
+    bufData.storeBytes(of: UInt32(0), toByteOffset: 4, as: UInt32.self)  // msg_id: FunctionCall (MessageId enum value 0)
+    bufData.storeBytes(of: UInt32(0), toByteOffset: 8, as: UInt32.self)  // msg_type: Request
+    bufData.storeBytes(of: UInt32(0), toByteOffset: 12, as: UInt32.self) // reserved
 
     // Write call header
-    data.storeBytes(of: poaIdx, toByteOffset: 16, as: UInt16.self)
-    data.storeBytes(of: UInt8(0), toByteOffset: 18, as: UInt8.self)  // interface_idx
-    data.storeBytes(of: UInt8(1), toByteOffset: 19, as: UInt8.self)  // function_idx
-    data.storeBytes(of: objectId, toByteOffset: 24, as: UInt64.self)
+    bufData.storeBytes(of: poaIdx, toByteOffset: 16, as: UInt16.self)
+    bufData.storeBytes(of: UInt8(0), toByteOffset: 18, as: UInt8.self)  // interface_idx
+    bufData.storeBytes(of: UInt8(1), toByteOffset: 19, as: UInt8.self)  // function_idx
+    bufData.storeBytes(of: objectId, toByteOffset: 24, as: UInt64.self)
 
     // Marshal input arguments
     var inArgs = lava_M3()
@@ -300,19 +300,19 @@ final public class Compositor: NPRPCObject, @unchecked Sendable {
     let buffer = FlatBuffer()
     buffer.prepare(32)
     buffer.commit(32)
-    guard let data = buffer.data else { return  }
+    guard let bufData = buffer.data else { return  }
 
     // Write message header
-    data.storeBytes(of: UInt32(0), toByteOffset: 0, as: UInt32.self)  // size (set later)
-    data.storeBytes(of: UInt32(0), toByteOffset: 4, as: UInt32.self)  // msg_id: FunctionCall (MessageId enum value 0)
-    data.storeBytes(of: UInt32(0), toByteOffset: 8, as: UInt32.self)  // msg_type: Request
-    data.storeBytes(of: UInt32(0), toByteOffset: 12, as: UInt32.self) // reserved
+    bufData.storeBytes(of: UInt32(0), toByteOffset: 0, as: UInt32.self)  // size (set later)
+    bufData.storeBytes(of: UInt32(0), toByteOffset: 4, as: UInt32.self)  // msg_id: FunctionCall (MessageId enum value 0)
+    bufData.storeBytes(of: UInt32(0), toByteOffset: 8, as: UInt32.self)  // msg_type: Request
+    bufData.storeBytes(of: UInt32(0), toByteOffset: 12, as: UInt32.self) // reserved
 
     // Write call header
-    data.storeBytes(of: poaIdx, toByteOffset: 16, as: UInt16.self)
-    data.storeBytes(of: UInt8(0), toByteOffset: 18, as: UInt8.self)  // interface_idx
-    data.storeBytes(of: UInt8(2), toByteOffset: 19, as: UInt8.self)  // function_idx
-    data.storeBytes(of: objectId, toByteOffset: 24, as: UInt64.self)
+    bufData.storeBytes(of: poaIdx, toByteOffset: 16, as: UInt16.self)
+    bufData.storeBytes(of: UInt8(0), toByteOffset: 18, as: UInt8.self)  // interface_idx
+    bufData.storeBytes(of: UInt8(2), toByteOffset: 19, as: UInt8.self)  // function_idx
+    bufData.storeBytes(of: objectId, toByteOffset: 24, as: UInt64.self)
 
     guard let finalData = buffer.data else { return  }
     finalData.storeBytes(of: UInt32(buffer.size), toByteOffset: 0, as: UInt32.self)
@@ -364,6 +364,7 @@ final public class Compositor: NPRPCObject, @unchecked Sendable {
 
     let stream = NPRPC.createStreamManagerBidiStream(streamManager: streamManager, streamId: streamId, buffer: buffer, initialPayloadCapacity: 132, unreliable: false, producerWindow: defaultReaderWindow, serializer: { (buffer: FlatBuffer, offset: Int, value: InputAck) in NPRPC.marshal_stream_struct(buffer: buffer, offset: offset, rootSize: 4, value: value) { buf, off, elem in marshal_InputAck(buffer: buf, offset: off, data: elem) } }, deserializer: { (data: UnsafeRawPointer, _: Int) in unmarshal_InputEvent(buffer: data, offset: 0) })
     let result = nprpc_session_stream_send_init(session, buffer.handle, self.timeout)
+    if result == 1 { throw lava_throwException(buffer: buffer) }
     if result != 0 { throw RuntimeError(message: "StreamInit failed (code: \(result))") }
     return stream
   }
@@ -390,7 +391,7 @@ open class CompositorServant: NPRPCServant, CompositorProtocol, @unchecked Senda
     fatalError("Subclass must implement present")
   }
 
-  open func subscribeInput(arenaId: String, stream: NPRPCBidiStream<InputEvent, InputAck>) async   {
+  open func subscribeInput(arenaId: String, stream: NPRPCBidiStream<InputEvent, InputAck>) async throws   {
     fatalError("Subclass must implement subscribeInput")
   }
 
@@ -418,7 +419,6 @@ open class CompositorServant: NPRPCServant, CompositorProtocol, @unchecked Senda
           // Unmarshal input arguments
           let ia = unmarshal_lava_M3(buffer: data, offset: 48)
 
-          // Get stream_manager for streaming (heap-allocated, survives after dispatch returns)
           guard let sessionCtx = self.sessionContext,
                 let streamManager = nprpc_get_stream_manager(sessionCtx) else {
             makeSimpleAnswer(buffer: buffer, messageId: impl.MessageId.Error_BadInput)
@@ -427,11 +427,31 @@ open class CompositorServant: NPRPCServant, CompositorProtocol, @unchecked Senda
           let initialCredits = data.load(fromByteOffset: 44, as: UInt32.self)
           let stream = NPRPC.createStreamManagerBidiStream(streamManager: streamManager, streamId: streamId, buffer: buffer, initialPayloadCapacity: 152, unreliable: false, initialCredits: initialCredits, serializer: { (buffer: FlatBuffer, offset: Int, value: InputEvent) in NPRPC.marshal_stream_struct(buffer: buffer, offset: offset, rootSize: 24, value: value) { buf, off, elem in marshal_InputEvent(buffer: buf, offset: off, data: elem) } }, deserializer: { (data: UnsafeRawPointer, _: Int) in unmarshal_InputAck(buffer: data, offset: 0) })
           nprpc_stream_manager_defer_stream_start(streamManager, streamId)
-          makeSimpleAnswer(buffer: buffer, messageId: impl.MessageId.Success)
-          Task {
-            await subscribeInput(arenaId: ia._1, stream: stream)
+          switch nprpcProbeStreamInit(
+            body: { [self] in
+              try await self.subscribeInput(arenaId: ia._1, stream: stream)
+            },
+            installFirstAccess: { stream.reader.onFirstAccess = $0 }
+          ) {
+          case .started:
+            makeSimpleAnswer(buffer: buffer, messageId: impl.MessageId.Success)
+          case .initError(let error):
+            do {
+              throw error
+            } catch let e as ArenaNotFound {
+              let obuf = buffer
+              obuf.consume(obuf.size)
+              obuf.prepare(28)
+              obuf.commit(28)
+              guard let exData = obuf.data else { return }
+              marshal_ArenaNotFound(buffer: obuf, offset: 16, data: e)
+              exData.storeBytes(of: UInt32(obuf.size), toByteOffset: 0, as: UInt32.self)
+              exData.storeBytes(of: impl.MessageId.Exception.rawValue, toByteOffset: 4, as: UInt32.self)
+              exData.storeBytes(of: impl.MessageType.Answer.rawValue, toByteOffset: 8, as: UInt32.self)
+            } catch {
+              makeSimpleAnswer(buffer: buffer, messageId: impl.MessageId.Error_Unknown)
+            }
           }
-
         default:
           makeSimpleAnswer(buffer: buffer, messageId: impl.MessageId.Error_UnknownFunctionIdx)
       } // switch streamFuncIdx

@@ -194,7 +194,11 @@ func runProducer() {
         }
         try blockingCall { try await compositor.attachArena(arenaId: arenaID) }
         // Only after `AttachArena`: the renderer accepts a subscription for
-        // an arena it has been pointed at, and this one is now it.
+        // an arena it has been pointed at, and this one is now it. Out of
+        // order, this throws `ArenaNotFound` right here — the servant's guard
+        // runs before it touches the stream, so the failure comes back as a
+        // typed exception at the call instead of as a stream that opens and
+        // then dies.
         //
         // Not `blockingCall`-wrapped — opening a stream is synchronous. What
         // comes back is a pair of endpoints, not an answer, so there is no
@@ -204,10 +208,17 @@ func runProducer() {
         FileHandle.standardError.write(
             Data("control plane up — font id \(sharedFontID)\n".utf8)
         )
-    } catch {
+    } catch let error as ControlPlaneError {
+        // Reaching the compositor at all is the only failure a running host
+        // cannot explain, so it is the only one worth guessing about.
         FileHandle.standardError.write(
             Data("no compositor (\(error)) — is the host running?\n".utf8)
         )
+        exit(1)
+    } catch {
+        // Everything else is a typed exception the renderer chose to send:
+        // FontNotFound, ArenaNotFound. It knows what went wrong, so it says so.
+        FileHandle.standardError.write(Data("refused by the compositor: \(error)\n".utf8))
         exit(1)
     }
     let compositor = compositorOpt

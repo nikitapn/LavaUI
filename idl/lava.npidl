@@ -117,12 +117,15 @@ interface Compositor {
   /// arena a window was attached to, so a client with two windows gets two
   /// subscriptions rather than one multiplexed stream it has to demultiplex.
   ///
-  /// No `raises` clause, for now: npidl accepts one on a streaming method but
-  /// drops it, generating the servant without `throws` — stream initialization
-  /// is getting exception support later. Until then an unknown `arenaId` is
-  /// reported the way every other stream failure is: the renderer aborts the
-  /// stream and the client's `for try await` throws. Worth revisiting when
-  /// `raises` starts working, because "no such arena" is a caller mistake and
-  /// deserves to fail at the call rather than one chunk later.
-  bidi_stream<InputAck, InputEvent> SubscribeInput(arenaId: in string);
+  /// `raises` here is a *stream-initialization* failure, and the distinction
+  /// is the useful part: an unknown `arenaId` is a caller mistake, so it fails
+  /// at the call, with a typed exception, before any stream exists. Aborting
+  /// the stream instead would report the same mistake one chunk later, as a
+  /// throw out of the client's `for try await` — by which point the caller has
+  /// already built a subscription around something that was never going to
+  /// work. The line is drawn at first stream access: throw before touching
+  /// the stream and the client sees `ArenaNotFound`; fail after, and it is a
+  /// stream error like any other.
+  bidi_stream<InputAck, InputEvent> SubscribeInput(arenaId: in string)
+      raises(ArenaNotFound);
 }
