@@ -21,36 +21,6 @@ import NPRPC
 /// out keeps every conversion site saying which side of the boundary it is on.
 typealias WireInputEvent = LavaIDL.InputEvent
 
-/// Transport the control plane runs over.
-///
-/// Shared memory is where this belongs and what it ships on: 7 µs a call
-/// against TCP's 75 µs, nothing reachable from off-box, and access control
-/// that is already the filesystem's.
-///
-/// WebSocket is here for one reason, and it is not deployment. NPRPC only
-/// routes *server-initiated* stream chunks into a client's stream manager
-/// where the client side of the connection is a full `Session` — which today
-/// means WebSocket and QUIC. Over shm (and over TCP) a client connection is a
-/// request/response read loop with no path for a chunk nobody asked for, so
-/// `SubscribeInput` opens, the renderer writes, and the events land nowhere.
-/// See `docs/nprpc-client-stream-gap.md`.
-///
-/// Switching this line is how you tell "the reverse channel is wrong" from
-/// "the reverse channel has no road": on `.webSocket` everything below works
-/// end to end, unchanged.
-enum ControlTransport {
-    case sharedMemory
-    case webSocket
-}
-
-let controlTransport: ControlTransport = .sharedMemory
-
-/// Only read when `controlTransport` is `.webSocket`. The certificates are
-/// nprpc's own test pair — a compositor has no business terminating TLS, and
-/// needing them at all is part of why shm is the destination.
-let webSocketPort: UInt16 = 24243
-let webSocketCertDirectory = "/home/nikita/projects/nprpc/certs/out"
-
 /// Where the renderer publishes its object reference, and the client reads it.
 ///
 /// A file rather than a nameserver: this is one machine, one desktop session,
@@ -350,20 +320,7 @@ final class CompositorImpl: CompositorServant, @unchecked Sendable {
 /// Starts the control plane and publishes the reference. Returns the `Rpc` so
 /// the caller keeps it alive for the process's lifetime.
 func startCompositorService(editor: Editor) throws -> Rpc {
-    // Exactly one listener, whichever `controlTransport` names. Advertising
-    // both would settle nothing: a client offered a choice always takes shm,
-    // so "use WebSocket" has to mean "publish only WebSocket".
-    let rpc: Rpc
-    switch controlTransport {
-    case .sharedMemory:
-        rpc = try RpcBuilder().setLogLevel(.warn).build()
-    case .webSocket:
-        rpc = try RpcBuilder().setLogLevel(.warn).withHostname("localhost")
-            .withHttp(webSocketPort)
-            .ssl(certFile: "\(webSocketCertDirectory)/localhost.crt",
-                 keyFile: "\(webSocketCertDirectory)/localhost.key")
-            .build()
-    }
+    let rpc: Rpc = try RpcBuilder().setLogLevel(.warn).build()
     try rpc.startThreadPool(2)
 
     let poa = try rpc.createPoa(
@@ -372,7 +329,7 @@ func startCompositorService(editor: Editor) throws -> Rpc {
     let servant = CompositorImpl(editor: editor)
     let oid = try poa.activateObjectWithId(
         objectId: 0, servant: servant,
-        flags: controlTransport == .sharedMemory ? [.shm] : [.ws]
+        flags: [.shm]
     )
 
     // The reference as a string: everything a client needs to reach this

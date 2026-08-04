@@ -32,8 +32,7 @@ import NPRPC
 // how a process with neither finds out that the pointer moved or that its
 // surface changed size. The producer below hit-tests its own bars from
 // coordinates it was told — the renderer forwards events and interprets none
-// of them. See `ControlTransport` for why that reverse direction needs
-// `.webSocket` today.
+// of them.
 //
 // Built without nprpc checked out, both halves still run: the font id falls
 // back to a convention and the renderer polls. That fallback is what this
@@ -315,18 +314,7 @@ func runProducer() {
         }
 #endif
         frame += 1
-#if canImport(LavaIDL)
-        // Two seconds in, the renderer has certainly sent the synthetic
-        // Resize it sends every subscriber. Nothing having arrived does not
-        // mean the user is sitting still — it means this transport has no
-        // route for it. Say so once, rather than looking merely idle.
-        if frame == 120, let input, !input.hasReceivedAnything {
-            let line = "no input has arrived — over \(controlTransport) NPRPC has "
-                + "no client-side route for server-initiated stream chunks. "
-                + "See docs/nprpc-client-stream-gap.md.\n"
-            FileHandle.standardError.write(Data(line.utf8))
-        }
-#endif
+
         if frame % 120 == 0 {
             let line = "frame \(frame): generation \(arena.generation()), "
                 + "\(arena.mappedBytes() / 1024) KiB\n"

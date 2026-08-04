@@ -1,4 +1,4 @@
-# NPRPC: no client-side route for server-initiated stream chunks (shm, TCP)
+# NPRPC: no client-side route for server-initiated stream chunks (shm, TCP) — RESOLVED
 
 Swift servant + Swift client, two processes, host toolchain 6.3.3, nprpc
 `.build_relwith_debinfo`.
