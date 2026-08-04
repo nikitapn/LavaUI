@@ -123,6 +123,22 @@ public final class DrawList {
     /// content is skipped before any draw commands are issued.
     private var cullStack: [CullRect] = []
 
+    /// What the renderer will add to the subtree currently being emitted,
+    /// accumulated from the scroll containers around it.
+    ///
+    /// Ordinary commands never need this — the renderer applies it as their
+    /// vertices are built, which is the entire point of a retained node. An
+    /// *overlay* does. It is recorded during the walk but emitted after it,
+    /// outside every node, so nothing is going to move it: its anchor has to
+    /// be stated in the coordinates it will actually be drawn in, or a popup
+    /// opens where its button would have been had the page never scrolled.
+    ///
+    /// Scroll only. A producer-declared translation moves a node too, but
+    /// nothing in LavaUI declares one around an overlay presenter yet, and
+    /// guessing at the arithmetic for a case with no caller would be a second
+    /// thing to keep true.
+    private var retainedShift: (x: Float, y: Float) = (0, 0)
+
     public init(editor: Editor, window: WindowID = .main) {
         self.editor = editor
         self.window = window
@@ -694,6 +710,7 @@ public final class DrawList {
         pendingOverlays.removeAll(keepingCapacity: true)
         cullStack.removeAll(keepingCapacity: true)
         cullStack.append(CullRect(x0: 0, y0: 0, x1: viewportW, y1: viewportH))
+        retainedShift = (0, 0)
         NodeVisibility.beginFrame()
         WidgetProfiler.beginFrame()
         // Here rather than at the loop's `advanceFrame()`: this is the one
@@ -804,8 +821,14 @@ public final class DrawList {
             // Always register, even if the anchor is culled — the popup may
             // still sit on-screen after placement.
             if let presenter = node as? OverlayBoxNode, presenter.attachment.presented {
+                // Anchored where the presenter will be *seen*, not where it is
+                // emitted — see `retainedShift`.
                 pendingOverlays.append(
-                    PendingOverlay(attachment: presenter.attachment, x: x, y: y, w: w, h: h)
+                    PendingOverlay(
+                        attachment: presenter.attachment,
+                        x: x - retainedShift.x, y: y - retainedShift.y,
+                        w: w, h: h
+                    )
                 )
             }
 
@@ -851,9 +874,16 @@ public final class DrawList {
                     : [.clip, .scrollX, .absoluteCoordinates]
                 beginNode(scroll.id, x: x, y: y, w: w, h: h, flags: flags)
                 cullStack.append(viewCull)
+                // The renderer will subtract this from everything below, so
+                // anything recorded here for later emission has to know.
+                let shift = scroll.childOffset
+                retainedShift.x += shift.x
+                retainedShift.y += shift.y
                 for c in scroll.childNodes {
                     emitNode(c, ox: x, oy: y)
                 }
+                retainedShift.x -= shift.x
+                retainedShift.y -= shift.y
                 cullStack.removeLast()
                 // The span goes back with the extent, from the same
                 // computation that culled — see `ScrollNode.paintedSpan`. A
@@ -1128,7 +1158,15 @@ public final class DrawList {
 
         if leaf.kind == .canvas {
             let frame = CanvasFrame(x: x, y: y, w: w, h: h)
-            leaf.lastCanvasFrame = frame
+            // Two different frames, because they answer to two different
+            // coordinate systems. Paint gets the emit frame: the renderer
+            // moves the result, so painting where the node is *declared* is
+            // right. `lastCanvasFrame` is what the gesture and wheel handlers
+            // subtract from a window-space pointer, so it has to be where the
+            // canvas is *seen* — see `retainedShift`.
+            leaf.lastCanvasFrame = CanvasFrame(
+                x: x - retainedShift.x, y: y - retainedShift.y, w: w, h: h
+            )
             // App owns every command for this box (background, glyphs, bars…).
             leaf.canvasPaint?(self, frame)
             return
