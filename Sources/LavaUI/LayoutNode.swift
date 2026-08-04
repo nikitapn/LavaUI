@@ -287,7 +287,6 @@ final class LeafNode: YogaBoxNode {
     var focusRingWidth: Float?
     var focusRingColor: Color?
     /// Button-only payload.
-    var buttonFill: Animated<Color>?
     var buttonStyle: ButtonStyle?
     var isPressed = false
     var isEnabled = true

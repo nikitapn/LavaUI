@@ -55,6 +55,13 @@ public struct SceneNodeFlags: OptionSet, Sendable {
     /// it, or being woken to redraw.
     public static let scrollY = SceneNodeFlags(rawValue: 1 << 1)
     public static let scrollX = SceneNodeFlags(rawValue: 1 << 2)
+    public static let hitTest = SceneNodeFlags(rawValue: 1 << 3)
+    /// Commands inside the node use LavaUI's window-space coordinates. The
+    /// renderer applies only retained transforms, not the node origin again.
+    public static let absoluteCoordinates = SceneNodeFlags(rawValue: 1 << 4)
+    /// This node handles the wheel itself, so the renderer must not scroll an
+    /// enclosing container on its behalf. See `ScrollRouter`.
+    public static let wheel = SceneNodeFlags(rawValue: 1 << 5)
 }
 
 /// Which properties a `animateNode` call is stating. Mirrors
@@ -689,6 +696,10 @@ public final class DrawList {
         cullStack.append(CullRect(x0: 0, y0: 0, x1: viewportW, y1: viewportH))
         NodeVisibility.beginFrame()
         WidgetProfiler.beginFrame()
+        // Here rather than at the loop's `advanceFrame()`: this is the one
+        // place that knows a wake turned into drawing, and scene ids age on
+        // passes that draw. See `SceneNodeIdentity`.
+        SceneNodeIdentity.noteEmitPass()
         emitNode(root, ox: originX, oy: originY)
 
         // After the main walk, so overlays paint above everything and — because
@@ -803,24 +814,57 @@ public final class DrawList {
                 // would let content scroll out of reach.
                 scroll.viewportLength = scroll.axis == .vertical ? h : w
                 scroll.contentLength = scroll.measureContentLength()
-                // Re-clamp in case content shrank since the last wheel event.
-                scroll.scrollBy(0)
-
-                // Scroll establishes a scissor: content outside this rect is
-                // invisible, so the cull stack can drop whole off-screen rows.
-                let viewCull = CullRect(x0: x, y0: y, x1: x + w, y1: y + h)
-                let nextCull = cull.intersection(viewCull)
-                if nextCull.isEmpty { return }
+                // The renderer owns the transform and clip. Swift keeps only
+                // its last reported offset so virtualization/culling can emit
+                // the right content; applying it to commands here as well
+                // would move the subtree twice.
+                //
+                // One consequence: this cull is in the node's *content*
+                // coordinates while every cull above it is in window
+                // coordinates, so the two cannot be intersected and this
+                // replaces the stack rather than narrowing it. Ancestor
+                // clipping is not lost — it moved to the renderer's scissor.
+                let span = scroll.paintedSpan()
+                let viewCull: CullRect
+                switch scroll.axis {
+                case .vertical:
+                    viewCull = CullRect(
+                        x0: x, y0: y + span.top,
+                        x1: x + w, y1: y + span.bottom
+                    )
+                case .horizontal:
+                    // Everything along the scroll axis. `EndNode` carries one
+                    // span and the renderer reads it as vertical, so a
+                    // horizontal container has no way to *say* it drew a
+                    // window — and a claim it cannot make is one it must not
+                    // rely on. Drawing all of it makes the silence true.
+                    viewCull = CullRect(
+                        x0: x, y0: y,
+                        x1: x + max(w, scroll.contentLength), y1: y + h
+                    )
+                }
+                if viewCull.isEmpty { return }
                 NodeVisibility.mark(scroll.id)
 
-                pushClip(x: x, y: y, w: w, h: h)
-                cullStack.append(nextCull)
-                let shift = scroll.childOffset
+                let flags: SceneNodeFlags = scroll.axis == .vertical
+                    ? [.clip, .scrollY, .absoluteCoordinates]
+                    : [.clip, .scrollX, .absoluteCoordinates]
+                beginNode(scroll.id, x: x, y: y, w: w, h: h, flags: flags)
+                cullStack.append(viewCull)
                 for c in scroll.childNodes {
-                    emitNode(c, ox: x - shift.x, oy: y - shift.y)
+                    emitNode(c, ox: x, oy: y)
                 }
                 cullStack.removeLast()
-                popClip()
+                // The span goes back with the extent, from the same
+                // computation that culled — see `ScrollNode.paintedSpan`. A
+                // horizontal container reports nothing, which the wire format
+                // reads as "all of it", which is what it just drew.
+                endNode(
+                    contentW: scroll.axis == .horizontal ? scroll.contentLength : w,
+                    contentH: scroll.axis == .vertical ? scroll.contentLength : h,
+                    emittedTop: scroll.axis == .vertical ? span.top : 0,
+                    emittedBottom: scroll.axis == .vertical ? span.bottom : 0
+                )
 
                 if scroll.showsIndicator, scroll.maxOffset > 0 {
                     emitScrollIndicator(scroll, x: x, y: y, w: w, h: h)
@@ -867,9 +911,12 @@ public final class DrawList {
                     backdrop: stack.backdropBlurRadius,
                     x: x, y: y, w: w, h: h
                 ) {
-                    let fill = HoverState.isHovered(stack.id)
-                        ? (stack.hoverFill ?? stack.fillColor)
-                        : stack.fillColor
+                    let interactive = stack.hoverFill != nil || stack.onHover != nil
+                    let flags = nodeFlags(for: stack.id, interactive: interactive)
+                    if let flags {
+                        beginNode(stack.id, x: x, y: y, w: w, h: h, flags: flags)
+                    }
+                    let fill = stack.fillColor
                     if let fill {
                         if stack.cornerRadius > 0 {
                             roundedRect(
@@ -885,6 +932,10 @@ public final class DrawList {
                             emitNode(c, ox: x, oy: y)
                         }
                     }
+                    if flags != nil {
+                        endNode(contentW: w, contentH: h,
+                                hoverTint: hoverTint(base: fill, target: stack.hoverFill))
+                    }
                 }
                 return
             }
@@ -895,8 +946,17 @@ public final class DrawList {
                     backdrop: leaf.backdropBlurRadius,
                     x: x, y: y, w: w, h: h
                 ) {
+                    let interaction = interactionTints(for: leaf)
+                    let flags = nodeFlags(for: leaf.id, interactive: interaction.isInteractive)
+                    if let flags {
+                        beginNode(leaf.id, x: x, y: y, w: w, h: h, flags: flags)
+                    }
                     WidgetProfiler.measure(leaf.agentId ?? leaf.label) {
                         emitLeafContents(leaf, x: x, y: y, w: w, h: h)
+                    }
+                    if flags != nil {
+                        endNode(contentW: w, contentH: h,
+                                hoverTint: interaction.hover, pressTint: interaction.press)
                     }
                 }
                 return
@@ -915,13 +975,74 @@ public final class DrawList {
     }
 
     /// Paint for a leaf inside an optional backdrop-blur scope.
+    /// Flags for a node worth telling the renderer about, or nil for one that
+    /// is not.
+    ///
+    /// Two unrelated reasons to open a node, which is why they are decided in
+    /// one place: the renderer draws the interaction feedback, and the
+    /// renderer arbitrates the wheel. A widget with wheel behaviour of its own
+    /// needs to be visible to that arbitration even when it paints no tint and
+    /// hover means nothing to it — otherwise the renderer sees only the scroll
+    /// container enclosing it, scrolls that, and the widget's handler never
+    /// runs. A `Scene3D` inside a `ScrollView` is the case that shows it: the
+    /// wheel is supposed to move the camera.
+    private func nodeFlags(for id: NodeID, interactive: Bool) -> SceneNodeFlags? {
+        let claimsWheel = ScrollRouter.claimsWheel(id)
+        guard interactive || claimsWheel else { return nil }
+        var flags: SceneNodeFlags = [.absoluteCoordinates]
+        if interactive { flags.insert(.hitTest) }
+        if claimsWheel { flags.insert(.wheel) }
+        return flags
+    }
+
+    /// Returns the smallest source-over tint that turns a uniform `base` into
+    /// `target`. Keeping its alpha minimal also disturbs foreground glyphs as
+    /// little as possible when the renderer lays the interaction tint over the
+    /// complete retained node.
+    private func interactionTint(from base: Color, to target: Color) -> Color {
+        let channels = [(base.r, target.r), (base.g, target.g), (base.b, target.b)]
+        var alpha: Float = 0
+        for (b, t) in channels {
+            let required = t >= b
+                ? (b < 1 ? (t - b) / (1 - b) : 0)
+                : (b > 0 ? (b - t) / b : 0)
+            alpha = max(alpha, required)
+        }
+        alpha = min(max(alpha, 1 / 255), 1)
+        func source(_ b: Float, _ t: Float) -> Float {
+            min(max(0, (t - (1 - alpha) * b) / alpha), 1)
+        }
+        return Color(
+            r: source(base.r, target.r),
+            g: source(base.g, target.g),
+            b: source(base.b, target.b),
+            a: alpha * target.a
+        )
+    }
+
+    private func hoverTint(base: Color?, target: Color?) -> Color? {
+        guard let target else { return nil }
+        guard let base else { return target.opacity(min(target.a, 0.18)) }
+        return interactionTint(from: base, to: target)
+    }
+
+    private func interactionTints(
+        for leaf: LeafNode
+    ) -> (isInteractive: Bool, hover: Color?, press: Color?) {
+        if leaf.kind == .button, let style = leaf.buttonStyle, leaf.isEnabled {
+            return (true,
+                    interactionTint(from: style.background, to: style.hover),
+                    interactionTint(from: style.background, to: style.pressed))
+        }
+        let interactive = leaf.hoverFill != nil || leaf.hoverColor != nil || leaf.onHover != nil
+        return (interactive, hoverTint(base: leaf.fillColor, target: leaf.hoverFill), nil)
+    }
+
     private func emitLeafContents(
         _ leaf: LeafNode, x: Float, y: Float, w: Float, h: Float
     ) {
         // Hover wins over the base fill; both honour the radius.
-        let leafFill = HoverState.isHovered(leaf.id)
-            ? (leaf.hoverFill ?? leaf.fillColor)
-            : leaf.fillColor
+        let leafFill = leaf.fillColor
         if let fill = leafFill {
             if leaf.cornerRadius > 0 {
                 roundedRect(
@@ -933,9 +1054,7 @@ public final class DrawList {
             }
         }
         if (leaf.kind == .text || leaf.kind == .markdown), !leaf.text.isEmpty {
-            let textColor = HoverState.isHovered(leaf.id)
-                ? (leaf.hoverColor ?? leaf.color)
-                : leaf.color
+            let textColor = leaf.color
             // Multi-line: emit one command per wrapped line (same breaks
             // as Yoga measure via TextLayoutCache / Font::wrapLines).
             // `measureForYoga` reserves a built-in 4px horizontal / 2px
@@ -968,11 +1087,8 @@ public final class DrawList {
             }
         }
         if leaf.kind == .button {
-            // The animated fill, not the static one — this is the only
-            // thing a press changes, and it changes without any body
-            // recompute behind it.
-            let fill = leaf.buttonFill?.current
-                ?? leaf.buttonStyle?.background ?? leaf.theme.panel
+            let style = leaf.buttonStyle ?? ButtonStyle()
+            let fill = leaf.isEnabled ? style.background : style.disabledBackground
             roundedRect(
                 x: x, y: y, w: w, h: h,
                 color: fill, radius: leaf.cornerRadius

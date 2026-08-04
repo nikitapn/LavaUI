@@ -215,6 +215,14 @@ public enum ScrollRouter {
 
     public static func unregister(_ id: NodeID) { handlers[id] = nil }
 
+    /// Whether this node has wheel behaviour of its own.
+    ///
+    /// The emitter asks so it can tell the renderer, which otherwise scrolls
+    /// whatever container encloses the node and never lets the handler run.
+    /// A registration *is* the claim — the widget makes it by the act of
+    /// registering — so there is no second list to keep in step with this one.
+    static func claimsWheel(_ id: NodeID) -> Bool { handlers[id] != nil }
+
     static func unregisterAll(ids: Set<NodeID>) {
         for id in ids { handlers[id] = nil }
     }
@@ -351,18 +359,12 @@ public enum HoverState {
     public static func set(_ id: NodeID?) -> Bool {
         guard hovered != id else { return false }
         let previous = hovered
-        let previousScope = hoveredScope
         hovered = id
         hoveredScope = id == nil ? nil : WindowScope.currentOrMain
         if let previous { handlers[previous]?(false) }
         if let id { handlers[id]?(true) }
-        // Hover only changes pixels, never view values — the cheapest level.
-        ViewInvalidation.markNeedsRedraw()
-        // The window being left has to drop its highlight too, and it is not
-        // the one currently being processed.
-        if let previousScope, previousScope !== hoveredScope {
-            previousScope.raise(.redraw)
-        }
+        // Renderer-owned tints have already repainted. Semantic handlers that
+        // change Swift state are responsible for their normal invalidation.
         return true
     }
 

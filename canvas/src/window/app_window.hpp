@@ -105,6 +105,15 @@ class AppWindow {
   void charInput(unsigned int codepoint);
   void scroll(float dx, float dy);
 
+  /// Scrolls a retained container with a notch the producer did not want.
+  ///
+  /// `scroll` declines outright when a producer-claimed node is under the
+  /// pointer, because only the producer knows whether its widget will take
+  /// that notch. This is the answer coming back: nothing did, so the
+  /// containers around it may have it after all. Returns whether anything
+  /// moved.
+  bool scrollSceneUnclaimed(float dx, float dy);
+
   /// Consumes "this window needs redrawing for a reason of its own".
   ///
   /// Set when the renderer moves a scene node without the producer — a
@@ -147,6 +156,10 @@ class AppWindow {
   /// Steps scene-node animations and queues the resulting `NodeScroll`
   /// events. Once per repaint, before the frame is drawn.
   void stepSceneAnimations();
+
+  /// See the definition: turns "more content arrived" into one more frame for
+  /// a scroll parked at the edge of what had been drawn.
+  void noteSceneResume();
   /// Re-answers which node is under the pointer, repainting and telling the
   /// producer if the answer changed.
   void noteSceneHover(float x, float y);

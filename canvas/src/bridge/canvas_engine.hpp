@@ -119,6 +119,16 @@ class Engine {
   /// third signal.
   bool takeInternalRepaint(uint32_t windowId = 0);
 
+  /// Offers a wheel notch to the retained scroll containers under the pointer,
+  /// after the producer has found nothing of its own that wanted it.
+  ///
+  /// The renderer takes the wheel first and normally keeps it — that is what
+  /// lets a list scroll while this process is busy. It defers only where the
+  /// producer has declared a wheel handler of its own, because whether that
+  /// handler will use *this* notch is a question only the producer can
+  /// answer. This is the answer coming back.
+  bool scrollSceneUnclaimed(float dx, float dy, uint32_t windowId = 0);
+
   /// Render and present one frame.
   bool renderFrame(uint32_t windowId = 0);
 

@@ -167,6 +167,21 @@ enum SceneNodeFlags : uint32_t {
   /// need to be.
   kSceneNodeScrollY = 1u << 1,
   kSceneNodeScrollX = 1u << 2,
+  /// Report hover for semantic callbacks even when the node declares no tint.
+  kSceneNodeHitTest = 1u << 3,
+  /// Descendant commands are already in window coordinates. Apply retained
+  /// transforms, but do not add this node's origin to them a second time.
+  kSceneNodeAbsoluteCoordinates = 1u << 4,
+  /// The producer has its own use for the wheel here — a camera to zoom, a
+  /// document to page — so the renderer must not scroll a container on its
+  /// behalf just because one happens to enclose this node.
+  ///
+  /// Without it every wheel-handling widget inside a retained scroll view is
+  /// unreachable: the enclosing container is under the pointer too, and it is
+  /// the one that scrolls. Declaring the claim is the only way the renderer
+  /// can know the difference between "nothing here wants the wheel" and
+  /// "something here wants it and this process cannot see what".
+  kSceneNodeWheel = 1u << 5,
 };
 
 /// One node's scroll offset, on its way back to the producer.

@@ -11,6 +11,11 @@ renderer keep state of its own against it. Scroll offset is the first such
 state, and it is enough to demonstrate the property the whole idea exists
 for: the renderer redraws without the app.
 
+The wire format defaults to node-local coordinates. LavaUI sets
+`SceneNodeAbsoluteCoordinates` because its existing draw-list emitter uses
+window coordinates; in that mode the renderer adds retained translations and
+scroll offsets but does not add the node's layout origin a second time.
+
 ## Shape
 
 Two command kinds, not a separate node array:
@@ -59,13 +64,37 @@ because node ids are a producer's private numbering and offsets held against
 the old one's ids would apply themselves to whatever reused an id.
 
 A wheel event is offered to the scene graph before it is queued for the
-client. If the innermost scrollable node under the pointer moves, the event
-is consumed and the client is never told: not woken, not waited for.
+client. If a scrollable node under the pointer moves, the event is consumed
+and the client is never told: not woken, not waited for.
 
 That leaves a repaint nobody asked for, which the frame loop has no way to
 learn about — nothing was published and no input was queued. Hence a third
 signal, `Editor.takeInternalRepaint(window:)`, alongside "a producer
 published" and "input arrived".
+
+## Who gets the wheel
+
+Taking the wheel first is what makes scrolling survive a busy producer, and
+it is also the one place the renderer can be confidently wrong. A pointer is
+inside every container that encloses it, so "the node under the pointer" is
+never one node — and picking the scrollable one means a code editor, a
+zoomable camera or a chart nested in a `ScrollView` never sees a notch again.
+The failure is quiet and asymmetric: the widget works fine whenever the
+container around it happens to be at its end, and not otherwise.
+
+The chain is walked from the inside out. A pane already at its limit passes
+the notch outward rather than swallowing it, which is what makes a nested list
+inside a page behave. A node flagged `kSceneNodeWheel` — LavaUI sets it for
+anything registered with `ScrollRouter` — ends the walk *without* consuming,
+because whether that widget will take this particular notch is a question only
+the producer can answer.
+
+So the deference has to be answered rather than assumed. The producer routes
+the event through its own chain, and if nothing wants it, hands it back via
+`scrollSceneUnclaimed`: the same walk minus the deference, now that the
+question it was waiting on has been answered. Two crossings of the boundary,
+but only for events over a widget that claimed the wheel — ordinary content
+still never reaches the producer at all.
 
 ## Animation
 
@@ -120,6 +149,34 @@ at the display rate against a producer that may never draw the next row. And
 the target is kept, so the producer's next publish moves the bound and the
 scroll picks up exactly where it left off.
 
+Settling is a promise not to ask for frames, which makes the publish the only
+thing that can resume the node — so the publish has to be *noticed*. The step
+for a frame runs before the replay that delivers the new span, so a node would
+otherwise be judged against the previous one, find itself already at the edge,
+and stay there: a flick that stopped a third of the way with no reason
+visible anywhere. `takeSceneResume` is that notice. It is set during replay,
+where the rows arrive, and read after it.
+
+## Overscan, and who decides how much
+
+The span is a promise, so a producer that draws exactly one viewport can be
+scrolled exactly nowhere before it has to be consulted again. Drawing beyond
+the visible band is what buys the renderer room, and how much it draws is how
+far a scroll travels while the producer is busy.
+
+LavaUI states that budget once, in `ScrollNode.desiredSpan`, at half a
+viewport each side. Two things read it: the cull, which decides what is
+emitted, and `LazyVGrid`, which decides what is *mounted*. They used to
+choose separately — the grid kept two rows of overscan for its own reasons —
+and the smaller silently won, capping a half-viewport budget at sixty pixels
+without anything reporting a conflict. One statement, two readers, is the
+whole fix.
+
+What is finally reported is `paintedSpan`: the budget narrowed to what is
+really there, because a cell that was never mounted has nothing to draw at any
+cull width. Reporting the budget rather than the paint would put the promise
+back exactly where it started.
+
 Measured: frozen at the edge, rows 131–140 on screen with the panel held at
 y=4320 and the host at ~0.8% of a core. Resumed, it continued to y=5760 —
 the target it had been holding all along.
@@ -170,9 +227,10 @@ Three things about the semantics are deliberate:
   scrolling under a stationary pointer changes what is beneath it just as
   surely as moving the pointer does.
 
-Nodes declaring no tint are skipped by the hit test rather than hovered. A
-scroll container is not a control, and letting it swallow the hover would
-stop the rows inside it from ever lighting up.
+Nodes declaring no tint are skipped by the hit test unless they explicitly set
+`SceneNodeHitTest`. LavaUI uses that flag for semantic `onHover` callbacks that
+do not paint a tint. A scroll container sets neither: it is not a control, and
+letting it swallow hover would stop the rows inside it from ever lighting up.
 
 ## Declared animation
 

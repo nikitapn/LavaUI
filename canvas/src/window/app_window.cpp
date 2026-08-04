@@ -107,10 +107,12 @@ bool AppWindow::repaint()
       if (arena_->acquireFrame(arenaFrame_)) arenaHasFrame_ = true;
       if (!arenaHasFrame_) return true;
       render_->render(arenaFrame_);
+      noteSceneResume();
       return true;
     }
 
     render_->render(currentDrawList());
+    noteSceneResume();
     return true;
   } catch (std::exception &ex) {
     std::cerr << ex.what() << '\n';
@@ -144,6 +146,33 @@ void AppWindow::noteSceneHover(float x, float y)
   } else {
     inputEvents_.push_back(ev);
   }
+}
+
+bool AppWindow::scrollSceneUnclaimed(float dx, float dy)
+{
+  // The producer walked its own chain, found nothing that wanted this notch,
+  // and handed it back. Everything it *might* have used is now known not to
+  // want it, so the deference that made `scroll` decline no longer applies.
+  if (!render_ || !render_->scrollSceneNode(pointerX_, pointerY_, dx, dy,
+                                            /*ignoreWheelClaims=*/true))
+    return false;
+  internalRepaint_ = true;
+  glfwPostEmptyEvent();
+  return true;
+}
+
+/// Asks for one more frame when a publish gave a parked scroll room to move.
+///
+/// After the render, not before: the span that decides this arrives with the
+/// list, and `stepSceneAnimations` has already run for this frame against the
+/// previous one. Skipping the frame would leave the scroll stopped short of a
+/// target the producer has since drawn the content for — which looks exactly
+/// like a scroll that ignored half the flick.
+void AppWindow::noteSceneResume()
+{
+  if (!render_ || !render_->takeSceneResume()) return;
+  internalRepaint_ = true;
+  glfwPostEmptyEvent();
 }
 
 void AppWindow::stepSceneAnimations()

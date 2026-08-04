@@ -24,18 +24,30 @@ final class SceneNodeIdentityTests: XCTestCase {
         super.tearDown()
     }
 
-    /// Advances `count` frames, drawing nothing.
+    /// Advances `count` emit passes that draw something, but not `nodes` —
+    /// what a node scrolled out of a list, or unmounted, looks like from here.
     private func idle(_ count: UInt64) {
-        for _ in 0..<count { SceneNodeIdentity.advanceFrame() }
+        for _ in 0..<count {
+            SceneNodeIdentity.noteEmitPass()
+            SceneNodeIdentity.advanceFrame()
+        }
     }
 
-    /// Advances `count` frames, asking about `nodes` in each — what a view
-    /// that stays on screen looks like from here.
+    /// Advances `count` emit passes, asking about `nodes` in each — what a
+    /// view that stays on screen looks like from here.
     private func drawing(_ nodes: [NodeID], for count: UInt64) {
         for _ in 0..<count {
+            SceneNodeIdentity.noteEmitPass()
             SceneNodeIdentity.advanceFrame()
             for node in nodes { _ = SceneNodeIdentity.id(for: node) }
         }
+    }
+
+    /// Advances `count` loop iterations that draw nothing at all — the app
+    /// woken by input, an animation tick, a D-Bus pump or agent traffic, with
+    /// its windows on screen and unchanged.
+    private func parked(_ count: UInt64) {
+        for _ in 0..<count { SceneNodeIdentity.advanceFrame() }
     }
 
     func testSameNodeKeepsItsIdAcrossFrames() {
@@ -43,6 +55,13 @@ final class SceneNodeIdentityTests: XCTestCase {
         let first = SceneNodeIdentity.id(for: node)
         drawing([node], for: 50)
         XCTAssertEqual(SceneNodeIdentity.id(for: node), first)
+    }
+
+    func testRendererReadbackResolvesToTheOriginalNode() {
+        let node = NodeID.generate()
+        let sceneID = SceneNodeIdentity.id(for: node)
+        XCTAssertEqual(SceneNodeIdentity.node(for: sceneID), node)
+        XCTAssertNil(SceneNodeIdentity.node(for: 0))
     }
 
     func testDifferentNodesNeverShareAnId() {
@@ -108,6 +127,45 @@ final class SceneNodeIdentityTests: XCTestCase {
 
         XCTAssertGreaterThan(SceneNodeIdentity.census.free, 0)
         XCTAssertEqual(SceneNodeIdentity.id(for: NodeID.generate()), releasedID)
+    }
+
+    /// An app that is awake but drawing nothing must not age anything.
+    ///
+    /// The loop wakes far more often than it draws — input, animation ticks,
+    /// D-Bus pumps, agent traffic — and on those wakes no draw list is built,
+    /// so nothing asks about any node. Ageing on them made a window sitting on
+    /// screen unchanged indistinguishable from one whose nodes were all
+    /// unmounted: every live id expired at once and came back re-minted,
+    /// orphaning the renderer's scroll offsets and fades against ids nothing
+    /// referred to any more.
+    func testParkedIterationsDoNotAgeWhatIsStillOnScreen() {
+        let onScreen = NodeID.generate()
+        let issued = SceneNodeIdentity.id(for: onScreen)
+
+        // Far past every deadline, so this fails on the *rule* rather than on
+        // a margin being a few frames short.
+        parked(
+            (SceneNodeIdentity.retentionFrames
+             + SceneNodeIdentity.quarantineFrames) * 3
+        )
+
+        XCTAssertEqual(SceneNodeIdentity.census.assigned, 1, "expired while idle")
+        XCTAssertEqual(SceneNodeIdentity.census.quarantined, 0)
+        XCTAssertEqual(SceneNodeIdentity.census.free, 0)
+        XCTAssertEqual(
+            SceneNodeIdentity.id(for: onScreen), issued,
+            "a node that never left the screen was handed a different id"
+        )
+    }
+
+    /// The flip side: passes that *do* draw still age a node they leave out,
+    /// so the gate cannot be satisfied by simply never ageing anything.
+    func testDrawingPassesStillAgeANodeTheyOmit() {
+        let gone = NodeID.generate()
+        _ = SceneNodeIdentity.id(for: gone)
+        idle(SceneNodeIdentity.retentionFrames + 1)
+        XCTAssertEqual(SceneNodeIdentity.census.assigned, 0)
+        XCTAssertGreaterThan(SceneNodeIdentity.census.quarantined, 0)
     }
 
     /// A node still being drawn is never released, however long it lives.

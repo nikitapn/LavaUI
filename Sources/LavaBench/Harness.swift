@@ -61,6 +61,12 @@ final class Harness {
 
     func emit() {
         guard let root = host.rootNode else { return }
+        // What a frame does before emitting (see `LavaWindow.renderFrame`).
+        // Without it this list is shared by every scenario in the process and
+        // never emptied, so a `drawCommands` counter reads as the running
+        // total of everything benched so far — order-dependent, and moved by
+        // changes to scenarios it has nothing to do with.
+        drawList.clear()
         drawList.emitTree(
             root, originX: 0, originY: 0,
             viewportW: viewportW, viewportH: viewportH

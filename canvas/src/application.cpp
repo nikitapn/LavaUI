@@ -311,6 +311,11 @@ bool Application::takeInternalRepaint(uint32_t windowId) {
   return w && w->takeInternalRepaint();
 }
 
+bool Application::scrollSceneUnclaimed(float dx, float dy, uint32_t windowId) {
+  AppWindow *w = impl_->win(windowId);
+  return w && w->scrollSceneUnclaimed(dx, dy);
+}
+
 void Application::requestClose(uint32_t windowId) {
   if (AppWindow *w = impl_->win(windowId)) w->requestClose();
 }

@@ -113,58 +113,112 @@ final class ScrollNode: YogaBoxNode {
 
     func registerScrolling() {
         isScrollable = true
-        ScrollRouter.register(
-            id,
-            canScroll: { [weak self] dx, dy in
-                self?.canScroll(dx: dx, dy: dy) ?? false
-            }
-        ) { [weak self] dx, dy in
-            guard let self else { return }
-            self.scrollBy(self.wheelDelta(dx: dx, dy: dy))
+    }
+
+    /// Adopts the renderer-owned position. This is read-back, not a second
+    /// scrolling implementation: it exists so hit testing and lazy mounting
+    /// use the same coordinate space as the pixels already on screen.
+    func adoptRendererOffset(x: Float, y: Float) {
+        let next = clamped(axis == .horizontal ? x : y)
+        guard next != scrollOffset else { return }
+        scrollOffset = next
+        if !lazyContent.isEmpty {
+            ViewInvalidation.markNeedsLayout()
+        } else if showsIndicator {
+            // The subtree transform is renderer-owned; the indicator is
+            // producer-drawn chrome derived from the reported position.
+            ViewInvalidation.markNeedsRedraw()
         }
-    }
-
-    /// Offset change one wheel notch asks for.
-    ///
-    /// A vertical container still responds to a horizontal trackpad gesture,
-    /// and vice versa, rather than swallowing it silently.
-    func wheelDelta(dx: Float, dy: Float) -> Float {
-        let raw = axis == .vertical ? dy : (dx != 0 ? dx : dy)
-        return -raw * 48
-    }
-
-    /// Whether that notch would actually move anything. `ScrollRouter` asks
-    /// before delivering, so a container already pinned at top or bottom passes
-    /// the wheel out to an enclosing scroll view instead of eating it.
-    func canScroll(dx: Float, dy: Float) -> Bool {
-        clamped(scrollOffset + wheelDelta(dx: dx, dy: dy)) != scrollOffset
     }
 
     private func clamped(_ offset: Float) -> Float {
         min(max(0, offset), maxOffset)
     }
 
-    func scrollBy(_ delta: Float) {
-        let next = clamped(scrollOffset + delta)
-        if next != scrollOffset {
-            scrollOffset = next
-            if lazyContent.isEmpty {
-                // Paint state on the retained node — `emitNodeBody`'s ScrollNode
-                // branch reads `childOffset` fresh every emit regardless of
-                // level. `markDirty` (a full `.body` rebuild) here meant every
-                // wheel notch over a long list re-ran whatever built its rows.
-                ViewInvalidation.markNeedsRedraw()
-            } else {
-                // A virtualized child has to re-window before this frame is
-                // emitted, and that means mounting nodes and re-running Yoga.
-                // `.layout` is still far short of `.body`: it rebuilds a
-                // screenful of cells, not the tree.
-                ViewInvalidation.markNeedsLayout()
-            }
-        }
+    var maxOffset: Float { max(0, contentLength - viewportLength) }
+
+    /// Content emitted beyond the viewport on each side, as a fraction of it.
+    ///
+    /// This is how far the renderer may travel before it runs out of drawn
+    /// content and has to wait for another emit — which is to say, it is the
+    /// price of the retained tree's whole promise. A scroll that keeps moving
+    /// while the producer is busy can only move across pixels the producer
+    /// already handed over, so "keeps moving" reaches exactly this far and no
+    /// further. Half a viewport roughly doubles the emitted commands and buys
+    /// half a screen of travel against a producer that has stopped dead.
+    private static let overscanFraction: Float = 0.5
+
+    /// Floor for the above, in pixels: four wheel notches at the renderer's
+    /// 48px step. A fraction alone would leave a 100px pane 50px of slack,
+    /// which a single flick outruns.
+    private static let minimumOverscan: Float = 192
+
+    /// The span of content this frame is *trying* to cover, in the same
+    /// coordinates as `scrollOffset`.
+    ///
+    /// One budget with two customers, which is the point of stating it here
+    /// rather than in either of them: the cull emits this much, and a
+    /// virtualized child mounts enough cells to fill it. When they disagreed
+    /// the smaller silently won, and a `LazyVGrid` mounting two rows of
+    /// overscan capped a half-viewport budget at sixty pixels.
+    ///
+    /// Takes the viewport rather than reading `viewportLength`, because
+    /// layout asks this question before emit has assigned it — and a zero
+    /// there would mount an empty window and flash a blank list. For the same
+    /// reason it does not bound the far edge by `contentLength`, which is
+    /// assigned in the same place: a band that runs past the end costs
+    /// nothing, since both callers clamp against something they can see —
+    /// rows for a grid, the real extent for `paintedSpan`.
+    func desiredSpan(viewport: Float) -> (top: Float, bottom: Float) {
+        let overscan = max(
+            viewport * Self.overscanFraction, Self.minimumOverscan
+        )
+        return (
+            max(0, scrollOffset - overscan),
+            scrollOffset + viewport + overscan
+        )
     }
 
-    var maxOffset: Float { max(0, contentLength - viewportLength) }
+    /// The span this frame will actually paint.
+    ///
+    /// `desiredSpan` narrowed to what is really there. Feeds both the cull
+    /// rect and what `endNode` reports, from one computation, because they
+    /// have to be the same band: the renderer clamps the scroll *position* to
+    /// the span the producer claims to have drawn, so a claim wider than the
+    /// paint is not optimism but a promise of pixels that do not exist. It
+    /// cashes out as a panel that goes blank precisely when it is scrolled
+    /// fast enough for the renderer to outrun the producer.
+    ///
+    /// Vertical only. `EndNode` carries one span and the renderer applies it
+    /// to Y, so a horizontal container gets its content emitted whole instead
+    /// — see `DrawList.emitNodeBody`.
+    func paintedSpan() -> (top: Float, bottom: Float) {
+        var (top, bottom) = desiredSpan(viewport: viewportLength)
+        // Emit-time, so the real extent is known here even though it was not
+        // when the band was stated.
+        bottom = min(bottom, max(contentLength, viewportLength))
+
+        // A virtualized child can still fall short of the budget — the data
+        // ran out, or a remount has not caught up with a jump. Culling decides
+        // what is drawn, but a cell that was never mounted has nothing to draw
+        // at any cull width, so the honest extent is the tighter of the two.
+        for grid in lazyContent {
+            guard let mounted = grid.mountedSpan else { continue }
+            top = max(top, mounted.top)
+            bottom = min(bottom, mounted.bottom)
+        }
+
+        // Never claim less than what is on screen right now. A grid's window
+        // can be momentarily narrower than the viewport — the first frame, or
+        // the frame of a resize — and reporting a span that excludes visible
+        // rows would make the renderer clamp the position *backwards* and
+        // yank the view. What is on screen is painted by definition; the next
+        // emit widens the rest.
+        return (
+            min(top, scrollOffset),
+            max(bottom, scrollOffset + viewportLength)
+        )
+    }
 
     /// Natural extent of the content, from the laid-out children rather than a
     /// second measuring pass.

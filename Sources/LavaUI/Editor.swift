@@ -110,6 +110,21 @@ public final class Editor: @unchecked Sendable {
         engine.takeInternalRepaint(window.raw)
     }
 
+    /// Offers a wheel notch to the retained scroll containers under the
+    /// pointer, after nothing in this process wanted it.
+    ///
+    /// The renderer normally keeps the wheel — that is what lets a list scroll
+    /// while this process is busy — and only forwards the event where a node
+    /// declared a handler of its own. Whether that handler takes a given notch
+    /// is a question only this process can answer, so when the answer is no,
+    /// the event goes back. Returns whether anything moved.
+    @discardableResult
+    public func scrollSceneUnclaimed(
+        dx: Float, dy: Float, window: WindowID = .main
+    ) -> Bool {
+        engine.scrollSceneUnclaimed(dx, dy, window.raw)
+    }
+
     public func setVisible(_ visible: Bool, window: WindowID = .main) {
         engine.setWindowVisible(visible, window.raw)
     }

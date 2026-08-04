@@ -206,12 +206,6 @@ final class LazyGridNode: YogaBoxNode {
     /// even if its index range is not, so it has to be rebuilt.
     private var contentDirty = true
 
-    /// Rows mounted beyond the viewport on each side. Scroll raises `.layout`
-    /// so the window is recomputed in the same frame as the offset change,
-    /// which means overscan is not needed for correctness — it is here so a
-    /// fast flick has something to show if a frame is dropped.
-    private static let overscanRows = 2
-
     nonisolated(unsafe) private static var warnedUnscrolled = false
 
     /// How many of these exist anywhere. `LayoutHost` checks it before walking
@@ -330,14 +324,14 @@ final class LazyGridNode: YogaBoxNode {
         // This node's own offset inside the scrolled content: the container
         // need not be the first thing in the ScrollView.
         let myTop = YGNodeLayoutGetTop(yogaStorage)
-        let visibleTop = scroll.scrollOffset - myTop
-        let visibleBottom = visibleTop + viewport
+        // The container states the band once, for the cull and for this, so
+        // the two cannot drift apart — see `ScrollNode.desiredSpan`.
+        let band = scroll.desiredSpan(viewport: viewport)
+        let visibleTop = band.top - myTop
+        let visibleBottom = band.bottom - myTop
 
-        let firstRow = max(0, Int((visibleTop / rowStride).rounded(.down)) - Self.overscanRows)
-        let lastRow = min(
-            rows - 1,
-            Int((visibleBottom / rowStride).rounded(.down)) + Self.overscanRows
-        )
+        let firstRow = max(0, Int((visibleTop / rowStride).rounded(.down)))
+        let lastRow = min(rows - 1, Int((visibleBottom / rowStride).rounded(.down)))
         guard lastRow >= firstRow else { return 0..<0 }
 
         let lower = firstRow * columns
@@ -378,6 +372,27 @@ final class LazyGridNode: YogaBoxNode {
         for cell in childNodes {
             cell.collectFrames(originX: originX, originY: originY, into: &frames)
         }
+    }
+
+    /// Vertical span of the mounted cells, in the enclosing scroll's content
+    /// coordinates. Nil when nothing is mounted.
+    ///
+    /// The enclosing `ScrollNode` needs this to tell the renderer how far the
+    /// content it drew actually reaches. Culling decides what gets *painted*,
+    /// but a cell that was never mounted has nothing to paint at any cull
+    /// width — so the drawn extent is whichever of the two is tighter, and
+    /// this is the half only this node knows.
+    var mountedSpan: (top: Float, bottom: Float)? {
+        guard !mounted.isEmpty, columns > 0 else { return nil }
+        // Same assumption as `visibleRange`: this node's Yoga top is its
+        // offset within the scrolled content.
+        let myTop = YGNodeLayoutGetTop(yogaStorage)
+        let firstRow = mounted.lowerBound / columns
+        let lastRow = (mounted.upperBound - 1) / columns
+        return (
+            myTop + Float(firstRow) * rowStride,
+            myTop + Float(lastRow + 1) * rowStride
+        )
     }
 
     /// Diagnostics: how many cells exist versus how many the data has.

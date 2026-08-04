@@ -167,6 +167,13 @@ bool Engine::takeInternalRepaint(uint32_t windowId)
     [&](Application &app) { return app.takeInternalRepaint(windowId); });
 }
 
+bool Engine::scrollSceneUnclaimed(float dx, float dy, uint32_t windowId)
+{
+  return impl_->withApp([&](Application &app) {
+    return app.scrollSceneUnclaimed(dx, dy, windowId);
+  });
+}
+
 bool Engine::isOpen() const
 {
   if (impl_->mode == Impl::Mode::Windowed)

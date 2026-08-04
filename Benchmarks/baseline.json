@@ -1,6 +1,6 @@
 {
-  "notes" : "Arch Linux, x86_64, release build, idle machine. Recorded 2026-08-02, after moving the edit path and undo history to UTF-8 offsets.",
-  "recordedAt" : "2026-08-02T21:20:19Z",
+  "notes" : "Wheel arbitration: a node with its own wheel handler is declared to the renderer so an enclosing retained ScrollView stops swallowing its notches. Harness.emit now clears the draw list as a real frame does — drawCommands was previously the running total of every scenario benched before it, which is why it drops from thousands to a per-scenario figure.",
+  "recordedAt" : "2026-08-04T18:56:59Z",
   "scenarios" : {
     "editor.open-10mb" : {
       "counters" : {
@@ -10,9 +10,9 @@
         "shapeHits" : 53
       },
       "stages" : {
-        "body" : 9.38,
-        "emit" : 0.038,
-        "layout" : 20.228
+        "body" : 9.32,
+        "emit" : 0.04,
+        "layout" : 19.346
       }
     },
     "editor.open-10mb-decorated" : {
@@ -23,9 +23,9 @@
         "shapeHits" : 54
       },
       "stages" : {
-        "body" : 9.339,
-        "emit" : 0.066,
-        "layout" : 20.329
+        "body" : 8.861,
+        "emit" : 0.063,
+        "layout" : 19.182
       }
     },
     "editor.open-1mb" : {
@@ -36,9 +36,9 @@
         "shapeHits" : 53
       },
       "stages" : {
-        "body" : 0.921,
-        "emit" : 0.028,
-        "layout" : 3.389
+        "body" : 0.907,
+        "emit" : 0.031,
+        "layout" : 3.351
       }
     },
     "editor.open-200-lines" : {
@@ -50,7 +50,7 @@
       "stages" : {
         "body" : 0.015,
         "emit" : 0.025,
-        "layout" : 0.088
+        "layout" : 0.085
       }
     },
     "editor.redraw-10mb" : {
@@ -60,7 +60,7 @@
         "shapeHits" : 93
       },
       "stages" : {
-        "emit" : 0.024
+        "emit" : 0.026
       }
     },
     "editor.replace-buffer-10mb" : {
@@ -70,9 +70,9 @@
         "shapeHits" : 66
       },
       "stages" : {
-        "body" : 11.409,
-        "emit" : 0.042,
-        "layout" : 41.661
+        "body" : 11.154,
+        "emit" : 0.048,
+        "layout" : 40.116
       }
     },
     "image.poster-cache-hit" : {
@@ -80,7 +80,7 @@
 
       },
       "stages" : {
-        "lookup" : 0.014
+        "lookup" : 0.016
       }
     },
     "image.poster-decode-cold" : {
@@ -90,7 +90,7 @@
         "residentMB" : 13
       },
       "stages" : {
-        "decode" : 38.626
+        "decode" : 31.185
       }
     },
     "image.poster-scroll-thrash" : {
@@ -107,30 +107,30 @@
     },
     "list.lazy-grid-500" : {
       "counters" : {
-        "drawCommands" : 2794,
+        "drawCommands" : 147,
         "laidOutNodes" : 146,
         "layouts" : 1,
         "measures" : 48,
-        "shapeHits" : 96
+        "shapeHits" : 144
       },
       "stages" : {
         "body" : 0.003,
-        "emit" : 0.031,
-        "layout" : 0.249
+        "emit" : 0.044,
+        "layout" : 0.244
       }
     },
     "list.lazy-grid-5000" : {
       "counters" : {
-        "drawCommands" : 3289,
+        "drawCommands" : 147,
         "laidOutNodes" : 146,
         "layouts" : 1,
         "measures" : 48,
-        "shapeHits" : 96
+        "shapeHits" : 144
       },
       "stages" : {
-        "body" : 0.002,
-        "emit" : 0.029,
-        "layout" : 0.249
+        "body" : 0.003,
+        "emit" : 0.05,
+        "layout" : 0.242
       }
     },
     "text.delete-selection-mid-buffer" : {
@@ -138,8 +138,8 @@
         "rows" : 132955
       },
       "stages" : {
-        "delete" : 1.031,
-        "reseed" : 8.052,
+        "delete" : 1.133,
+        "reseed" : 7.977,
         "select" : 0.001
       }
     },
@@ -149,7 +149,7 @@
       },
       "stages" : {
         "init" : 0.001,
-        "rows" : 9.316
+        "rows" : 8.762
       }
     },
     "text.logical-rows-10mb" : {
@@ -157,7 +157,7 @@
         "rows" : 147687
       },
       "stages" : {
-        "rows" : 9.261
+        "rows" : 9.046
       }
     },
     "text.logical-rows-10mb-unicode" : {
@@ -165,7 +165,7 @@
         "rows" : 147688
       },
       "stages" : {
-        "rows" : 153.129
+        "rows" : 147.833
       }
     },
     "text.search-10mb" : {
@@ -173,7 +173,7 @@
         "matches" : 29370
       },
       "stages" : {
-        "find" : 42.797
+        "find" : 43.623
       }
     },
     "text.select-all-delete-10mb" : {
@@ -181,9 +181,9 @@
 
       },
       "stages" : {
-        "delete" : 0.003,
+        "delete" : 0.004,
         "selectAll" : 0.001,
-        "undo" : 1.542
+        "undo" : 1.711
       }
     },
     "text.type-at-end-10mb" : {
@@ -191,7 +191,7 @@
         "chars" : 200
       },
       "stages" : {
-        "type" : 1.193
+        "type" : 1.327
       }
     },
     "traceloom.parse-10mb" : {
@@ -200,7 +200,7 @@
         "series" : 3
       },
       "stages" : {
-        "parse" : 450.191
+        "parse" : 437.654
       }
     }
   }

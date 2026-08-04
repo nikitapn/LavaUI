@@ -32,15 +32,32 @@ import Foundation
 /// other reintroduces the hazard**, which is why the relationship is written
 /// down here rather than left to be noticed.
 ///
-/// ## Frames, not seconds
+/// ## Emit passes, not seconds and not loop iterations
 ///
-/// Ages are counted in emit passes rather than wall-clock, because the
-/// renderer counts replays. An idle app that is not drawing is not replaying
-/// either, and both sides must agree on how long "a while" is — under a clock
-/// they would not, and an id could come back up for reuse while a renderer
-/// that has not repainted still held the old state against it.
+/// Ages are counted in emit passes, because that is the only clock on which
+/// "unseen" means anything here: a node is refreshed by being *asked about*,
+/// and it is only asked about while a draw list is being built.
+///
+/// Wall-clock would be wrong because the renderer counts replays, not seconds,
+/// and the two sides must agree on how long "a while" is. Loop iterations
+/// would be wrong for a sharper reason, and were: the loop wakes for input,
+/// animation, agent traffic and D-Bus pumps, and most of those wakes emit
+/// nothing at all. Ageing on them makes a window that is on screen and simply
+/// unchanged look identical to one whose nodes have all been unmounted — so
+/// every live id expires, is re-minted on the next emit, and the renderer's
+/// retained state (a scroll offset, a fade, an animation target) is orphaned
+/// against an id nothing refers to any more. The visible symptom is a panel
+/// that silently loses its scroll position, and a list that then cannot be
+/// scrolled back because the producer and the renderer no longer agree on
+/// where it is.
+///
+/// That is why the counter is not advanced by its caller alone:
+/// `advanceFrame()` is inert unless `noteEmitPass()` has recorded that
+/// something was actually drawn. `ImageStore.endFrame` withholds its own clock
+/// on idle iterations for the same reason — an unused-looking cache entry and
+/// an unseen-looking node are the same mistake about the same silence.
 public enum SceneNodeIdentity {
-    /// Frames an unseen node keeps its id before the id is released.
+    /// Emit passes an unseen node keeps its id before the id is released.
     ///
     /// Matches `kRetainReplays` in `render_window.cpp`. A node absent this
     /// long has already been forgotten by the renderer, so keeping the
@@ -48,12 +65,14 @@ public enum SceneNodeIdentity {
     /// id whose state is gone either way.
     static let retentionFrames: UInt64 = 1800
 
-    /// Further frames a released id waits before it can be handed out again.
+    /// Further emit passes a released id waits before it can be handed out
+    /// again.
     ///
     /// Pure margin. Both sides count the same events, but they do not count
-    /// them at the same instant — the renderer sweeps in batches, and a frame
-    /// that fails to emit still ages an entry here. Reuse is the one mistake
-    /// with no visible symptom until much later, so it gets slack.
+    /// them at the same instant — the renderer sweeps in batches, and it
+    /// replays on its own account (a tint fading, a scroll easing) between
+    /// the producer's emits. Reuse is the one mistake with no visible symptom
+    /// until much later, so it gets slack.
     static let quarantineFrames: UInt64 = 300
 
     private struct Assignment {
@@ -63,6 +82,7 @@ public enum SceneNodeIdentity {
 
     private static let lock = NSLock()
     nonisolated(unsafe) private static var assigned: [NodeID: Assignment] = [:]
+    nonisolated(unsafe) private static var nodesBySceneID: [UInt32: NodeID] = [:]
     /// Released ids and the frame they were released on, oldest first —
     /// append at the back and take from the front, so one look at the front
     /// answers "is anything reusable yet".
@@ -72,6 +92,13 @@ public enum SceneNodeIdentity {
     /// Never issued yet. Starts at 1: the renderer reads 0 as "no node".
     nonisolated(unsafe) private static var nextFresh: UInt32 = 1
     nonisolated(unsafe) private static var frame: UInt64 = 0
+    /// Whether a draw list has been built since the last `advanceFrame()`.
+    ///
+    /// The gate that makes the clock an emit clock. Set by the emitter rather
+    /// than inferred by the loop, because only the emitter knows whether a
+    /// wake turned into drawing — and a caller that has to remember to check
+    /// is a caller that will eventually forget.
+    nonisolated(unsafe) private static var emitted = false
 
     /// The scene id for `node`, minting one if it has none.
     ///
@@ -97,24 +124,48 @@ public enum SceneNodeIdentity {
             return fresh
         }()
         assigned[node] = Assignment(sceneID: sceneID, lastSeen: frame)
+        nodesBySceneID[sceneID] = node
         return sceneID
     }
 
-    /// Advances the frame counter and ages the tables. Call once per emit
-    /// pass, before anything asks for an id.
+    /// Resolves renderer read-back to the view-node identity used by LavaUI.
+    public static func node(for sceneID: UInt32) -> NodeID? {
+        guard sceneID != 0 else { return nil }
+        lock.lock()
+        defer { lock.unlock() }
+        return nodesBySceneID[sceneID]
+    }
+
+    /// Records that a draw list was built. Called once per `emitTree`.
     ///
-    /// Explicit rather than inferred from `DrawList.clear()`, because with two
-    /// windows that would run twice a frame and halve every age here while the
-    /// renderer's own counter — one per window — kept the original rate.
+    /// Several windows emitting in one iteration still only count as one pass:
+    /// scene ids are process-wide, and counting per window would age them at N
+    /// times the rate the renderer retires its own state at.
+    static func noteEmitPass() {
+        lock.lock()
+        defer { lock.unlock() }
+        emitted = true
+    }
+
+    /// Advances the frame counter and ages the tables, if anything has been
+    /// drawn since the last call. Call once per loop iteration, before
+    /// anything asks for an id.
+    ///
+    /// Safe to call on every iteration precisely because it is inert without
+    /// an emit — see the note on emit passes above. Callers do not have to
+    /// know which wakes drew and which did not.
     public static func advanceFrame() {
         lock.lock()
         defer { lock.unlock() }
+        guard emitted else { return }
+        emitted = false
         frame &+= 1
 
         if frame > retentionFrames {
             let cutoff = frame - retentionFrames
             for (node, assignment) in assigned where assignment.lastSeen < cutoff {
                 assigned.removeValue(forKey: node)
+                nodesBySceneID[assignment.sceneID] = nil
                 quarantined.append((assignment.sceneID, frame))
             }
         }
@@ -143,9 +194,11 @@ public enum SceneNodeIdentity {
         lock.lock()
         defer { lock.unlock() }
         assigned.removeAll()
+        nodesBySceneID.removeAll()
         quarantined.removeAll()
         free.removeAll()
         nextFresh = 1
         frame = 0
+        emitted = false
     }
 }

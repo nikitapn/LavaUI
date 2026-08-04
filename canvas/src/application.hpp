@@ -51,6 +51,9 @@ public:
   /// See `AppWindow::takeInternalRepaint`.
   bool takeInternalRepaint(uint32_t windowId = 0);
 
+  /// See `AppWindow::scrollSceneUnclaimed`.
+  bool scrollSceneUnclaimed(float dx, float dy, uint32_t windowId = 0);
+
   /// Place the GLFW window over a layout slot (screen coordinates, pixels).
   /// Size changes rebuild the Vulkan framebuffer on the next ensure/repaint.
   void setWindowFrame(int x, int y, int width, int height, uint32_t windowId = 0);

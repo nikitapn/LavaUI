@@ -1274,8 +1274,16 @@ void RenderWindow::replayDrawList(const canvas::DrawList &list, float viewW,
         }
       }
 
-      ox = node.x;
-      oy = node.y;
+      if (node.flags & canvas::kSceneNodeAbsoluteCoordinates) {
+        // LavaUI emits window-space primitives. Preserve only the transform
+        // inherited from an enclosing retained node plus this node's declared
+        // animation; adding node.x/y would double its layout position.
+        ox = node.parentOx + node.x - (node.parentOx + cmd.x);
+        oy = node.parentOy + node.y - (node.parentOy + cmd.y);
+      } else {
+        ox = node.x;
+        oy = node.y;
+      }
       // Seeded from what this node was last known to be, so a frame whose
       // `EndNode` never arrived leaves the extent alone instead of
       // collapsing it — see `SceneNodeState::contentH`.
@@ -1417,6 +1425,22 @@ void RenderWindow::replayDrawList(const canvas::DrawList &list, float viewW,
       state.pressTint     = pressTint;
       state.extentKnown = true;
       state.lastSeen    = sceneReplayIndex_;
+
+      // This publish may have extended how far the node can travel. It was
+      // parked at the edge of the previous band with a target beyond it —
+      // settled but not arrived — and nothing else will wake it, because
+      // settling is precisely the promise not to ask for frames on its own.
+      // Checked here rather than in the step, since the step for this frame
+      // has already run against the *previous* span; the rows arrive now.
+      if (state.targetY != state.scrollY) {
+        const float limit =
+          std::max(state.emittedTop, state.emittedBottom - node.h);
+        const float reach =
+          std::clamp(state.targetY, state.emittedTop, limit);
+        // Half a pixel, the same threshold the step calls arrival, so a node
+        // that cannot meaningfully move does not ask for a frame to prove it.
+        if (std::abs(reach - state.scrollY) >= 0.5f) sceneResume_ = true;
+      }
       ox                = node.parentOx;
       oy                = node.parentOy;
       opacity           = node.parentOpacity;
@@ -1628,7 +1652,9 @@ bool RenderWindow::updateSceneHover(float pointerX, float pointerY)
   // from ever lighting up.
   uint32_t hovered = 0;
   for (const auto &node : sceneNodes_) {
-    if (node.hoverTint == 0 && node.pressTint == 0) continue;
+    if (node.hoverTint == 0 && node.pressTint == 0 &&
+        (node.flags & canvas::kSceneNodeHitTest) == 0)
+      continue;
     if (pointerX < node.x || pointerX >= node.x + node.w) continue;
     if (pointerY < node.y || pointerY >= node.y + node.h) continue;
     hovered = node.id;
@@ -1651,7 +1677,8 @@ bool RenderWindow::updateScenePress(bool pressed)
 }
 
 bool RenderWindow::scrollSceneNode(float pointerX, float pointerY,
-                                   float deltaX, float deltaY)
+                                   float deltaX, float deltaY,
+                                   bool ignoreWheelClaims)
 {
   // One notch of a wheel. Chosen to match what a line of text costs to read
   // past rather than derived from anything — a scroll that moves by a
@@ -1659,40 +1686,55 @@ bool RenderWindow::scrollSceneNode(float pointerX, float pointerY,
   // like a page key.
   constexpr float kPixelsPerNotch = 48.f;
 
-  // Pre-order, so the last node containing the point is the innermost one.
-  // Scrolling the innermost is what a nested list expects: the wheel over an
-  // inner pane moves the inner pane, not the page behind it.
-  const canvas::SceneNodeRect *target = nullptr;
-  for (const auto &node : sceneNodes_) {
-    if (!(node.flags & (canvas::kSceneNodeScrollX | canvas::kSceneNodeScrollY)))
-      continue;
+  // The chain under the pointer, innermost first. A wheel belongs to the
+  // innermost thing that wants it, and if that thing cannot use it, to the
+  // next one out — an inner pane already at its end must not swallow the
+  // notch and deadlock the page behind it.
+  //
+  // `sceneNodes_` is pre-order, so walking it backwards yields exactly that
+  // order for the nodes containing a point.
+  constexpr uint32_t kScrolls =
+    canvas::kSceneNodeScrollX | canvas::kSceneNodeScrollY;
+  for (auto it = sceneNodes_.rbegin(); it != sceneNodes_.rend(); ++it) {
+    const canvas::SceneNodeRect &node = *it;
+    if (!(node.flags & (kScrolls | canvas::kSceneNodeWheel))) continue;
     if (pointerX < node.x || pointerX >= node.x + node.w) continue;
     if (pointerY < node.y || pointerY >= node.y + node.h) continue;
-    target = &node;
-  }
-  if (target == nullptr) return false;
 
-  auto       &state = sceneState_[target->id];
-  const float wasX = state.targetX, wasY = state.targetY;
+    if (node.flags & canvas::kSceneNodeWheel) {
+      // The producer wants this one. Decline the whole event rather than
+      // looking further out: only the producer knows whether its widget will
+      // actually take the notch, and it walks the same chain from here with
+      // that knowledge. If it declines too it hands the event back with
+      // `ignoreWheelClaims`, which is what skips this branch on the way in.
+      if (!ignoreWheelClaims) return false;
+      continue;
+    }
 
-  // Clamped to what there is to see. `max(0, …)` matters: content smaller
-  // than its viewport has nowhere to go, and without the clamp it would
-  // scroll to a negative extent and drift off the top.
-  //
-  // Applied to the target rather than the position: notches land while the
-  // last one is still easing, and each should extend the journey rather than
-  // restart it from wherever the animation happens to be.
-  if (target->flags & canvas::kSceneNodeScrollY) {
-    const float limit = std::max(0.f, target->contentH - target->h);
-    state.targetY = std::clamp(state.targetY - deltaY * kPixelsPerNotch, 0.f,
-                               limit);
+    auto       &state = sceneState_[node.id];
+    const float wasX = state.targetX, wasY = state.targetY;
+
+    // Clamped to what there is to see. `max(0, …)` matters: content smaller
+    // than its viewport has nowhere to go, and without the clamp it would
+    // scroll to a negative extent and drift off the top.
+    //
+    // Applied to the target rather than the position: notches land while the
+    // last one is still easing, and each should extend the journey rather
+    // than restart it from wherever the animation happens to be.
+    if (node.flags & canvas::kSceneNodeScrollY) {
+      const float limit = std::max(0.f, node.contentH - node.h);
+      state.targetY =
+        std::clamp(state.targetY - deltaY * kPixelsPerNotch, 0.f, limit);
+    }
+    if (node.flags & canvas::kSceneNodeScrollX) {
+      const float limit = std::max(0.f, node.contentW - node.w);
+      state.targetX =
+        std::clamp(state.targetX - deltaX * kPixelsPerNotch, 0.f, limit);
+    }
+    if (state.targetX != wasX || state.targetY != wasY) return true;
+    // Pinned at its end: keep going outward.
   }
-  if (target->flags & canvas::kSceneNodeScrollX) {
-    const float limit = std::max(0.f, target->contentW - target->w);
-    state.targetX = std::clamp(state.targetX - deltaX * kPixelsPerNotch, 0.f,
-                               limit);
-  }
-  return state.targetX != wasX || state.targetY != wasY;
+  return false;
 }
 
 bool RenderWindow::advanceSceneAnimations(

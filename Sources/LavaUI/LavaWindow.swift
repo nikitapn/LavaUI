@@ -56,8 +56,6 @@ public final class LavaWindow {
     /// Forces a full `.body` pass on the next frame regardless of what
     /// invalidation says — the first frame, and nothing else so far.
     private var dirty = true
-    /// The wheel event carries no position, so remember the last one.
-    private var lastPointer: (x: Float, y: Float) = (0, 0)
     private var lastLoggedLayout: (w: Float, h: Float) = (0, 0)
     /// Previous iteration's visibility, so the loop can tell a minimize/restore
     /// edge from a steady state and redraw exactly once.
@@ -222,7 +220,22 @@ public final class LavaWindow {
             if dirty { ViewInvalidation.markNeedsBody() }
             let work = dirty ? InvalidationLevel.body : level
             dirty = false
-            guard work > .none else { return }
+
+            // A frame the renderer wants for itself: a tint still fading, a
+            // scroll still easing, or one parked at the edge of the content
+            // it was handed and freed to continue by the publish that just
+            // widened it. Consumed unconditionally — it is a take.
+            //
+            // None of those change a view value, so there is nothing to
+            // re-emit; the retained list is redrawn as it stands. Without
+            // this the renderer's own motion only reaches the screen when it
+            // happens to move a node far enough to report a new offset, and a
+            // scroll that stops moving stops being drawn.
+            let rendererWantsFrame = editor.takeInternalRepaint(window: id)
+            guard work > .none else {
+                if rendererWantsFrame { editor.renderFrame(window: id) }
+                return
+            }
 
             let p0 = enableDebug ? FrameScheduler.now() : 0
             renderFrame(work)
@@ -412,25 +425,40 @@ public final class LavaWindow {
         case .refresh:
             if !syncFramebufferSize() { ViewInvalidation.markNeedsRedraw() }
         case .mouseMove:
-            lastPointer = (ev.x, ev.y)
             PointerState.set(x: ev.x, y: ev.y)
             if PointerCapture.isActive {
                 PointerCapture.move(x: ev.x, y: ev.y - menuH)
-            } else {
-                HoverState.set(host.hitTestHover(x: ev.x, y: ev.y, originY: menuH))
             }
         case .mouseUp:
             PointerCapture.release()
         case .scroll:
-            // Chain, not the single hover target: the wheel bubbles past a
-            // button or field that happens to be topmost to the nearest
-            // scroll-capable ancestor.
-            ScrollRouter.deliver(
+            // Renderer-owned ScrollViews consume this before it reaches us, so
+            // arriving here means a node under the pointer declared a wheel
+            // handler and the renderer stood aside for it. Chain delivery is
+            // unchanged: the innermost handler willing to take the notch wins.
+            let pointer = PointerState.window
+            let consumed = ScrollRouter.deliver(
                 to: host.hitTestScrollChain(
-                    x: lastPointer.x, y: lastPointer.y, originY: menuH
+                    x: pointer.x, y: pointer.y, originY: menuH
                 ),
                 dx: ev.x, dy: ev.y, mods: ev.button
             )
+            // Every handler declined — an editor already at its last line, a
+            // canvas that only wants Ctrl+wheel. The container around them
+            // should still scroll, which is what the wheel would have done had
+            // none of them been there, so the notch goes back to the renderer.
+            // Without this a pinned inner widget silently eats the event and
+            // the page it sits on refuses to move.
+            if !consumed {
+                editor.scrollSceneUnclaimed(dx: ev.x, dy: ev.y, window: id)
+            }
+        case .nodeHover:
+            HoverState.set(SceneNodeIdentity.node(for: UInt32(bitPattern: ev.button)))
+        case .nodeScroll:
+            guard let nodeID = SceneNodeIdentity.node(for: UInt32(bitPattern: ev.button)),
+                  let scroll = findNode(nodeID, in: host.rootNode) as? ScrollNode
+            else { break }
+            scroll.adoptRendererOffset(x: ev.x, y: ev.y)
         case .fileDrop:
             DropRouter.deliver(
                 to: host.hitTestHover(x: ev.x, y: ev.y, originY: menuH),
@@ -463,6 +491,17 @@ public final class LavaWindow {
         default:
             break
         }
+    }
+
+    private func findNode(
+        _ id: NodeID, in node: (any AnyViewNode)?
+    ) -> (any AnyViewNode)? {
+        guard let node else { return nil }
+        if node.id == id { return node }
+        for child in node.childNodes {
+            if let found = findNode(id, in: child) { return found }
+        }
+        return nil
     }
 
     /// Adopts the live framebuffer size. Returns whether it changed.

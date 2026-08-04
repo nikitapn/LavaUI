@@ -175,17 +175,28 @@ class RenderWindow {
     return sceneNodes_;
   }
 
-  /// Aims the innermost scrollable node under the pointer at a new offset.
+  /// Aims a scrollable node under the pointer at a new offset.
   ///
   /// Moves the node's *target*, not the node: the visible offset eases toward
   /// it in `advanceSceneAnimations`. A wheel notch is a discrete step, and
   /// applying it directly is what makes wheel scrolling feel like a stepper
   /// rather than like scrolling.
   ///
-  /// Returns true if the target changed, which is the caller's signal that
-  /// the event has been consumed and this window needs a repaint.
+  /// Walks the chain under the pointer from the inside out, so a pane already
+  /// at its end passes the notch to whatever encloses it instead of
+  /// swallowing it. A node flagged `kSceneNodeWheel` ends the walk without
+  /// consuming: the producer has its own use for the wheel there, and only
+  /// the producer can say whether its widget will take this particular notch.
+  ///
+  /// `ignoreWheelClaims` is how the producer hands the event back after
+  /// finding nothing that wanted it — the same walk, minus the deference that
+  /// has now been answered. Passing it on the way *in* would scroll a
+  /// container out from under a widget that was about to use the wheel.
+  ///
+  /// Returns true if a target changed, which is the caller's signal that the
+  /// event has been consumed and this window needs a repaint.
   bool scrollSceneNode(float pointerX, float pointerY, float deltaX,
-                       float deltaY);
+                       float deltaY, bool ignoreWheelClaims = false);
 
   /// Steps every in-flight node animation to `now` (seconds, monotonic).
   ///
@@ -201,6 +212,24 @@ class RenderWindow {
   bool advanceSceneAnimations(double now,
                               std::vector<canvas::SceneNodeOffset> &outMoved,
                               std::vector<uint32_t> &outFinished);
+
+  /// Consumes "a node parked at the edge of its drawn content can now move".
+  ///
+  /// A virtualizing producer draws a window of its content and says so; the
+  /// scroll position is held inside that window, so a node with a target
+  /// beyond it stops at the edge and reports *settled* rather than spinning
+  /// for frames against a producer that may never draw the next row.
+  ///
+  /// That makes the next publish the only thing that can resume it, and this
+  /// is how the publish gets noticed. Set during replay — where the rows
+  /// actually arrive — and read after it, because the step that would use the
+  /// new span runs before the replay that delivers it.
+  bool takeSceneResume()
+  {
+    const bool was = sceneResume_;
+    sceneResume_   = false;
+    return was;
+  }
 
   /// Points the scene graph at a new pointer position.
   ///
@@ -316,6 +345,8 @@ class RenderWindow {
   /// been absent rather than by wall-clock time — a window nobody is drawing
   /// should not forget anything.
   uint64_t sceneReplayIndex_ = 0;
+  /// See `takeSceneResume`.
+  bool     sceneResume_      = false;
 
   /// Drops the retained state of nodes that have not been drawn for a while.
   ///

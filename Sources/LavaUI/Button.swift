@@ -1,12 +1,7 @@
 #if canImport(CxxCanvas)
 import Foundation
 
-/// A clickable control with animated press and hover states.
-///
-/// The press feedback is driven entirely on the node: pressing retargets an
-/// `Animated<Color>` and the frame loop interpolates it. No `body` runs, no
-/// reconciliation happens, and the `Mirror`-based state transplant does not
-/// fire — a press costs a draw-list re-emit and nothing else.
+/// A clickable control whose hover and press feedback is owned by the renderer.
 public struct Button: PrimitiveView {
     public var title: String
     public var action: () -> Void
@@ -34,7 +29,6 @@ public struct Button: PrimitiveView {
 
     public func mountPrimitive() -> any AnyViewNode {
         let leaf = LeafNode(kind: .button, label: "Button", width: .auto, height: .auto)
-        leaf.buttonFill = Animated(style.background)
         configure(leaf)
         leaf.installTextMeasure()
         return leaf
@@ -61,28 +55,9 @@ public struct Button: PrimitiveView {
         leaf.isEnabled = isEnabled
         leaf.applyStyle()
 
-        // Hover is a state change like any other; the node retargets and the
-        // driver interpolates.
-        leaf.onHover = { [weak leaf] inside in
-            guard let leaf, leaf.isEnabled else { return }
-            leaf.retargetFill(hovered: inside, pressed: leaf.isPressed)
-        }
-        // Marks the node as a hover-test target. The fill itself is animated,
-        // so this value is never drawn directly.
-        leaf.hoverFill = style.hover
-        HoverState.register(leaf.id) { [weak leaf] inside in
-            leaf?.onHover?(inside)
-        }
-
-        // Also catches a value changed from outside this control — a theme
-        // swap, say — which touches `buttonStyle` but fires no hover event.
-        leaf.retargetFill(hovered: HoverState.isHovered(leaf.id), pressed: leaf.isPressed)
-
         let act = action
         leaf.onClickLocal = { [weak leaf] _, _, _, _, _ in
             guard let leaf, leaf.isEnabled else { return }
-            leaf.isPressed = true
-            leaf.retargetFill(hovered: true, pressed: true)
 
             // Capture so the release is seen even if the pointer leaves, and so
             // the action fires on *release* rather than on press — dragging off
@@ -93,8 +68,6 @@ public struct Button: PrimitiveView {
                 onUp: { [weak leaf] in
                     guard let leaf else { return }
                     let wasInside = HoverState.isHovered(leaf.id)
-                    leaf.isPressed = false
-                    leaf.retargetFill(hovered: wasInside, pressed: false)
                     if wasInside { act() }
                 }
             )
@@ -137,34 +110,6 @@ public struct ButtonStyle {
         self.cornerRadius = cornerRadius ?? theme.cornerRadius
         self.padding = padding
         self.duration = duration
-    }
-}
-
-extension LeafNode {
-    /// Moves the fill toward whatever the current interaction state implies,
-    /// and keeps the node registered with the driver while it is in flight.
-    func retargetFill(hovered: Bool, pressed: Bool) {
-        guard let style = buttonStyle else { return }
-        let destination: Color
-        if !isEnabled {
-            destination = style.disabledBackground
-        } else if pressed {
-            destination = style.pressed
-        } else if hovered {
-            destination = style.hover
-        } else {
-            destination = style.background
-        }
-        guard buttonFill?.target != destination else { return }
-
-        buttonFill?.animate(to: destination, duration: style.duration)
-        let id = self.id
-        AnimationDriver.register(id) { [weak self] in
-            guard let self else { return false }
-            let running = self.buttonFill?.step(FrameScheduler.now()) ?? false
-            return running
-        }
-        ViewInvalidation.markNeedsRedraw()
     }
 }
 
