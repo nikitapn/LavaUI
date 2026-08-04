@@ -50,10 +50,20 @@ buffer, so translating "the command" would mean copying and rewriting the
 glyph array, the largest of the four. Instead the offset is added at
 `pushGlyph`. Nothing is copied, exactly as before.
 
-Spatial triangles are the one exception: a `SpatialVertex` is in the scene's
-own space rather than in window pixels, so a Scene3D inside a scrolling node
-is not supported. Its viewport moves; its geometry does not. Half-moving it
-would be worse than not moving it.
+Spatial triangles follow the same rule, once you notice they can. A
+`SpatialVertex` is already projected — it carries window pixels and a depth,
+the producer having done the projection — so the node's transform is a plain
+translation of the result, and `pushSpatialTriangles` copies every vertex into
+the buffer regardless. Applying the offset in that copy costs nothing. Only
+x/y: `z` is the scene's own ordering, which moving a node across the screen
+does not change. Clipping needed nothing at all, since the triangles already
+take whatever scissor an enclosing node pushed.
+
+This was skipped once, on the belief that those vertices were in the scene's
+own space and a Scene3D inside a scroll view could only be half-moved. The
+belief was wrong — the struct says window pixels — but the caution was sound
+while nothing exercised it, because ArenaDemo never put a scene inside a
+scrolling node. LavaUI's `ScrollView` wraps arbitrary content, so it does.
 
 ## Scroll
 
@@ -244,14 +254,12 @@ producer says the destination and stops thinking about it. It emits identical
 frames while the node is in flight — the two resting states are the only ones
 it ever describes — and the renderer produces everything between.
 
-Two carve-outs, both from the same cause. **Opacity multiplies down the
-tree**, applied as each colour is emitted, so a faded parent fades its
-children without any of them knowing. It does not reach spatial triangles,
-whose colours are per vertex in a buffer the renderer does not own — the same
-place the transform stops, and for the same reason. **There is no scale.**
-A glyph quad's size comes from the atlas at a fixed rasterization, so scaling
-text would mean re-rasterizing or an SDF pipeline; scaling everything except
-the text would be worse than not scaling.
+One carve-out. **Opacity multiplies down the tree**, applied as each colour
+is emitted, so a faded parent fades its children without any of them knowing
+— spatial triangles included, per vertex, in the same copy that translates
+them. **There is no scale.** A glyph quad's size comes from the atlas at a
+fixed rasterization, so scaling text would mean re-rasterizing or an SDF
+pipeline; scaling everything except the text would be worse than not scaling.
 
 The first frame a node declares an animation, the property **snaps** rather
 than easing. A node that has just appeared has nothing to have moved from,

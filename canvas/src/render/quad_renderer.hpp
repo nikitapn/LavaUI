@@ -32,6 +32,23 @@
 
 class RenderDevice;
 
+/// The same RGBA8 with its alpha multiplied by `k`.
+///
+/// Scaling alpha rather than blending toward the background: a tint is an
+/// overlay, so "half faded in" is the same colour at half the opacity, and
+/// that stays true over whatever it happens to be sitting on.
+///
+/// Here rather than beside its callers because both of them are building
+/// vertices — one composing a draw list, one filling the buffer — and a
+/// second copy of this is a second place for the rounding to differ.
+inline uint32_t withScaledAlpha(uint32_t rgba, float k)
+{
+  const uint32_t alpha = (rgba >> 24) & 0xffu;
+  const float    scaled =
+    static_cast<float>(alpha) * (k < 0.f ? 0.f : (k > 1.f ? 1.f : k)) + 0.5f;
+  return (rgba & 0x00ffffffu) | (static_cast<uint32_t>(scaled) << 24);
+}
+
 class QuadRenderer {
  public:
   enum class Kind : uint32_t { Sdf = 0, Glyph = 1, Image = 2, Mesh = 3 };
@@ -80,9 +97,15 @@ class QuadRenderer {
 
   /// Already projected window-space triangles with Vulkan depth in 0...1.
   /// Uses a dedicated depth-tested pipeline while remaining in batch order.
+  ///
+  /// `offset` and `opacity` are the enclosing scene node's retained transform.
+  /// They are applied here, in the copy this call already makes, for the same
+  /// reason every other primitive applies them as its vertices are built: the
+  /// producer's arrays are shared memory and must not be rewritten.
   void pushSpatialTriangles(const canvas::SpatialVertex *vertices, uint32_t count,
                             VkImageView textureView, vec2 uv0 = {0.f,0.f},
-                            vec2 uv1 = {1.f,1.f});
+                            vec2 uv1 = {1.f,1.f}, vec2 offset = {0.f,0.f},
+                            float opacity = 1.f);
   void pushSpatialBegin(vec2 topLeft, vec2 size);
 
   /// One glyph quad. `uv0`/`uv1` are the atlas rect for this glyph.

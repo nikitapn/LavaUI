@@ -666,16 +666,24 @@ void QuadRenderer::pushPolyline(const vec2 *points, uint32_t count,
 
 void QuadRenderer::pushSpatialTriangles(const canvas::SpatialVertex *points,
                                         uint32_t count, VkImageView textureView,
-                                        vec2 uv0, vec2 uv1) {
+                                        vec2 uv0, vec2 uv1, vec2 offset,
+                                        float opacity) {
   if (points == nullptr || count < 3 || count % 3 != 0) return;
   flushBatch();
   const uint32_t first = static_cast<uint32_t>(vertices_.size());
   vertices_.reserve(vertices_.size() + count);
+  // x/y are window pixels — projection happened in the producer — so the
+  // node's transform is a plain translation of the projected result. Only
+  // x/y: `z` is Vulkan depth and belongs to the scene's own ordering, which
+  // moving the node across the screen does not change.
+  const bool faded = opacity < 1.f;
   for (uint32_t i = 0; i < count; ++i) {
-    vertices_.push_back(Vertex{.pos={points[i].x,points[i].y},
+    vertices_.push_back(Vertex{
+      .pos={points[i].x + offset.x, points[i].y + offset.y},
       .local={points[i].z,uv0.x+points[i].u*(uv1.x-uv0.x)},
       .halfSize={points[i].textured,uv0.y+points[i].v*(uv1.y-uv0.y)},.radius=0.f,
-      .color=points[i].color,.kind=static_cast<uint32_t>(Kind::Mesh)});
+      .color=faded ? withScaledAlpha(points[i].color, opacity) : points[i].color,
+      .kind=static_cast<uint32_t>(Kind::Mesh)});
   }
   batches_.push_back(Batch{.geometry=Batch::Geometry::SpatialTriangles,
     .firstVertex=first,.vertexCount=count,.scissor=currentScissor_,

@@ -1174,19 +1174,6 @@ float easeInOutCubic(float t)
   return 1.f - (f * f * f) * 0.5f;
 }
 
-/// The same RGBA8 with its alpha multiplied by `k`.
-///
-/// Scaling alpha rather than blending toward the background: a tint is an
-/// overlay, so "half faded in" is the same colour at half the opacity, and
-/// that stays true over whatever it happens to be sitting on.
-uint32_t withScaledAlpha(uint32_t rgba, float k)
-{
-  const uint32_t alpha = (rgba >> 24) & 0xffu;
-  const auto scaled    = static_cast<uint32_t>(
-    static_cast<float>(alpha) * std::clamp(k, 0.f, 1.f) + 0.5f);
-  return (rgba & 0x00ffffffu) | (scaled << 24);
-}
-
 /// A texture id carried in a float field, with the same cast guard.
 /// Returns 0 — never a valid id — for anything out of range.
 uint32_t textureIdFromFloat(float v)
@@ -1523,15 +1510,15 @@ void RenderWindow::replayDrawList(const canvas::DrawList &list, float viewW,
         tm.getTextureUV(id, uv0, uv1);
       }
       quads_.pushSpatialTriangles(list.spatialVertices + first, count, texture,
-                                  uv0, uv1);
+                                  uv0, uv1, {ox, oy}, opacity);
       break;
     }
     case canvas::DrawCommandKind::SpatialBegin:
-      // The viewport is a 2D rect and moves with its node; the triangles
-      // themselves do not, because a `SpatialVertex` is in the scene's own
-      // space rather than in window pixels. A Scene3D inside a scrolling
-      // node is not supported, and silently half-moving it would be worse
-      // than not moving it at all.
+      // The rect this clears depth over moves with the node, and so do the
+      // triangles drawn into it — a `SpatialVertex` carries window pixels,
+      // the producer having already projected them, so the node's transform
+      // is a translation like any other. Clipping needs nothing special
+      // either: the triangles take the scissor an enclosing node pushed.
       quads_.pushSpatialBegin({cmd.x + ox, cmd.y + oy}, {cmd.w, cmd.h});
       break;
     case canvas::DrawCommandKind::Image: {
