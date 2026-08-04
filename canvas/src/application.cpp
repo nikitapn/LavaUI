@@ -306,6 +306,11 @@ bool Application::windowShouldClose(uint32_t windowId) const {
   return w && w->windowShouldClose();
 }
 
+bool Application::takeInternalRepaint(uint32_t windowId) {
+  AppWindow *w = impl_->win(windowId);
+  return w && w->takeInternalRepaint();
+}
+
 void Application::requestClose(uint32_t windowId) {
   if (AppWindow *w = impl_->win(windowId)) w->requestClose();
 }

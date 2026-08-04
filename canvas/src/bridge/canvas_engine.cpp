@@ -161,6 +161,12 @@ bool Engine::windowShouldClose(uint32_t windowId) const
     [&](Application &app) { return app.windowShouldClose(windowId); });
 }
 
+bool Engine::takeInternalRepaint(uint32_t windowId)
+{
+  return impl_->withApp(
+    [&](Application &app) { return app.takeInternalRepaint(windowId); });
+}
+
 bool Engine::isOpen() const
 {
   if (impl_->mode == Impl::Mode::Windowed)

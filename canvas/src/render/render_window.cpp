@@ -1179,29 +1179,114 @@ void RenderWindow::replayDrawList(const canvas::DrawList &list, float viewW,
   // to composite. A stack even though the draw list forbids nesting today,
   // because an unbalanced End must not pop something that was never pushed.
   std::vector<canvas::DrawCommand> contentScopes;
+
+  // ─── Scene nodes ─────────────────────────────────────────────────────────
+  //
+  // `ox`/`oy` is the accumulated offset of the open nodes: every position
+  // below is emitted through it. Applying the transform *here*, as vertices
+  // are built, is what keeps the shared-memory promise intact — the
+  // alternative, rewriting the command and glyph arrays into a translated
+  // copy, would mean the renderer copying every frame it was handed
+  // precisely so it would not have to.
+  struct OpenNode {
+    uint32_t id       = 0;
+    float    x = 0.f, y = 0.f, w = 0.f, h = 0.f;  // absolute viewport
+    float    parentOx = 0.f, parentOy = 0.f;
+    uint32_t flags     = 0;
+    size_t   recordIndex = 0;
+    bool     clipped   = false;
+  };
+  std::vector<OpenNode> openNodes;
+  float                 ox = 0.f;
+  float                 oy = 0.f;
+  sceneNodes_.clear();
+
   // Must match the slot waitForInFlightFrame() just freed / submit will use.
   quads_.begin({viewW, viewH}, currentFrameSlot());
 
   for (size_t cmdIndex = 0; cmdIndex < list.commandCount; ++cmdIndex) {
     const auto &cmd = list.commands[cmdIndex];
     switch (static_cast<canvas::DrawCommandKind>(cmd.kind)) {
+    case canvas::DrawCommandKind::BeginNode: {
+      OpenNode node;
+      node.id       = cmd.param;
+      node.flags    = cmd.color;
+      node.parentOx = ox;
+      node.parentOy = oy;
+      // The node's own box sits at the parent's offset; only its *children*
+      // are moved by the scroll, which is why the viewport is computed
+      // before the scroll is applied.
+      node.x = ox + cmd.x;
+      node.y = oy + cmd.y;
+      node.w = cmd.w;
+      node.h = cmd.h;
+
+      ox = node.x;
+      oy = node.y;
+      // Seeded from what this node was last known to be, so a frame whose
+      // `EndNode` never arrived leaves the extent alone instead of
+      // collapsing it — see `SceneNodeState::contentH`.
+      float contentW = node.w;
+      float contentH = node.h;
+      if (const auto it = sceneState_.find(node.id); it != sceneState_.end()) {
+        // Subtracted: scrolling down moves the content up.
+        ox -= it->second.scrollX;
+        oy -= it->second.scrollY;
+        if (it->second.extentKnown) {
+          contentW = it->second.contentW;
+          contentH = it->second.contentH;
+        }
+      }
+
+      if (node.flags & canvas::kSceneNodeClip) {
+        quads_.pushScissor({node.x, node.y}, {node.w, node.h});
+        node.clipped = true;
+      }
+
+      node.recordIndex = sceneNodes_.size();
+      sceneNodes_.push_back({node.id, node.x, node.y, node.w, node.h, contentW,
+                             contentH, node.flags});
+      openNodes.push_back(node);
+      break;
+    }
+    case canvas::DrawCommandKind::EndNode: {
+      if (openNodes.empty()) break;  // unbalanced; ignore rather than corrupt
+      const OpenNode node = openNodes.back();
+      openNodes.pop_back();
+      if (node.clipped) quads_.popScissor();
+      // Content extent arrives here because this is where the producer knows
+      // it — see `EndNode` in draw_command.hpp. Recorded against the node's
+      // identity, not just this frame, so the next frame can be short
+      // without the scroll snapping back.
+      auto &record    = sceneNodes_[node.recordIndex];
+      record.contentW = cmd.x > 0.f ? cmd.x : node.w;
+      record.contentH = cmd.y > 0.f ? cmd.y : node.h;
+      auto &state     = sceneState_[node.id];
+      state.contentW  = record.contentW;
+      state.contentH  = record.contentH;
+      state.extentKnown = true;
+      ox                = node.parentOx;
+      oy                = node.parentOy;
+      break;
+    }
     case canvas::DrawCommandKind::Rect:
-      quads_.pushBox({cmd.x, cmd.y}, {cmd.w, cmd.h}, cmd.color, 0.f);
+      quads_.pushBox({cmd.x + ox, cmd.y + oy}, {cmd.w, cmd.h}, cmd.color, 0.f);
       break;
     case canvas::DrawCommandKind::RoundedRect:
-      quads_.pushBox({cmd.x, cmd.y}, {cmd.w, cmd.h}, cmd.color, cmd.aux);
+      quads_.pushBox({cmd.x + ox, cmd.y + oy}, {cmd.w, cmd.h}, cmd.color,
+                     cmd.aux);
       break;
     case canvas::DrawCommandKind::Circle:
-      quads_.pushCircle({cmd.x, cmd.y}, cmd.aux, cmd.color);
+      quads_.pushCircle({cmd.x + ox, cmd.y + oy}, cmd.aux, cmd.color);
       break;
     case canvas::DrawCommandKind::Line:
       // x,y = p0 and w,h = p1 (see draw_command.hpp). aux carries stroke
       // width when the emitter sets it; 1.5px is the wire default.
-      quads_.pushLine({cmd.x, cmd.y}, {cmd.w, cmd.h},
+      quads_.pushLine({cmd.x + ox, cmd.y + oy}, {cmd.w + ox, cmd.h + oy},
                       cmd.aux > 0.f ? cmd.aux : 1.5f, cmd.color);
       break;
     case canvas::DrawCommandKind::PushClip:
-      quads_.pushScissor({cmd.x, cmd.y}, {cmd.w, cmd.h});
+      quads_.pushScissor({cmd.x + ox, cmd.y + oy}, {cmd.w, cmd.h});
       break;
     case canvas::DrawCommandKind::PopClip:
       quads_.popScissor();
@@ -1217,7 +1302,7 @@ void RenderWindow::replayDrawList(const canvas::DrawList &list, float viewW,
         TextRenderer::GlyphQuad q;
         if (!dev_.textRenderer().glyphQuad(gi.fontId, gi.glyphId, q)) continue;
         if (q.size.x <= 0.f || q.size.y <= 0.f) continue;  // e.g. space
-        quads_.pushGlyph({gi.x + q.bearing.x, gi.y - q.bearing.y},
+        quads_.pushGlyph({gi.x + q.bearing.x + ox, gi.y - q.bearing.y + oy},
                          q.size, q.uv0, q.uv1, cmd.color);
       }
       break;
@@ -1231,7 +1316,7 @@ void RenderWindow::replayDrawList(const canvas::DrawList &list, float viewW,
       meshPointScratch_.reserve(count);
       for (uint32_t i = 0; i < count; ++i) {
         const auto &mv = list.meshVertices[first + i];
-        meshPointScratch_.push_back({mv.x, mv.y});
+        meshPointScratch_.push_back({mv.x + ox, mv.y + oy});
       }
       quads_.pushMesh(meshPointScratch_.data(), count, cmd.color, cmd.aux > 0.f);
       break;
@@ -1243,7 +1328,7 @@ void RenderWindow::replayDrawList(const canvas::DrawList &list, float viewW,
       meshPointScratch_.reserve(count);
       for (uint32_t i = 0; i < count; ++i) {
         const auto &mv = list.meshVertices[first + i];
-        meshPointScratch_.push_back({mv.x, mv.y});
+        meshPointScratch_.push_back({mv.x + ox, mv.y + oy});
       }
       quads_.pushPolyline(meshPointScratch_.data(), count, cmd.color);
       break;
@@ -1263,7 +1348,12 @@ void RenderWindow::replayDrawList(const canvas::DrawList &list, float viewW,
       break;
     }
     case canvas::DrawCommandKind::SpatialBegin:
-      quads_.pushSpatialBegin({cmd.x, cmd.y}, {cmd.w, cmd.h});
+      // The viewport is a 2D rect and moves with its node; the triangles
+      // themselves do not, because a `SpatialVertex` is in the scene's own
+      // space rather than in window pixels. A Scene3D inside a scrolling
+      // node is not supported, and silently half-moving it would be worse
+      // than not moving it at all.
+      quads_.pushSpatialBegin({cmd.x + ox, cmd.y + oy}, {cmd.w, cmd.h});
       break;
     case canvas::DrawCommandKind::Image: {
       const uint32_t texId = cmd.param;
@@ -1274,7 +1364,8 @@ void RenderWindow::replayDrawList(const canvas::DrawList &list, float viewW,
       // shared page, and sampling the whole page would draw the neighbours.
       vec2 uv0, uv1;
       tm.getTextureUV(texId, uv0, uv1);
-      quads_.pushImage({cmd.x, cmd.y}, {cmd.w, cmd.h}, uv0, uv1, cmd.color, view);
+      quads_.pushImage({cmd.x + ox, cmd.y + oy}, {cmd.w, cmd.h}, uv0, uv1,
+                       cmd.color, view);
       break;
     }
     case canvas::DrawCommandKind::BeginBackdropBlur: {
@@ -1283,7 +1374,8 @@ void RenderWindow::replayDrawList(const canvas::DrawList &list, float viewW,
       quads_.closeSegment();
       const float radius = cmd.aux > 0.f ? cmd.aux : 8.f;
       outBoundaries.push_back({Boundary::Kind::Backdrop, radius});
-      pushBlurComposite(cmd.x, cmd.y, cmd.w, cmd.h, viewW, viewH, radius);
+      pushBlurComposite(cmd.x + ox, cmd.y + oy, cmd.w, cmd.h, viewW, viewH,
+                        radius);
       break;
     }
     case canvas::DrawCommandKind::EndBackdropBlur:
@@ -1296,7 +1388,12 @@ void RenderWindow::replayDrawList(const canvas::DrawList &list, float viewW,
       quads_.closeSegment();
       outBoundaries.push_back(
         {Boundary::Kind::ContentBegin, cmd.aux > 0.f ? cmd.aux : 8.f});
-      contentScopes.push_back(cmd);
+      // Stored already translated: the matching End composites this rect, and
+      // by then the node offset may have moved on.
+      canvas::DrawCommand scope = cmd;
+      scope.x += ox;
+      scope.y += oy;
+      contentScopes.push_back(scope);
       break;
     }
     case canvas::DrawCommandKind::EndContentBlur: {
@@ -1321,7 +1418,63 @@ void RenderWindow::replayDrawList(const canvas::DrawList &list, float viewW,
     }
     }
   }
+
+  // A list that ends with nodes still open is not a protocol error to punish
+  // — it is what a producer that ran out of arena mid-frame publishes. Close
+  // them here so the scissor stack is balanced whatever arrives, rather than
+  // leaving the next frame clipped to the leftovers of this one.
+  while (!openNodes.empty()) {
+    if (openNodes.back().clipped) quads_.popScissor();
+    openNodes.pop_back();
+  }
   quads_.end();
+}
+
+void RenderWindow::resetSceneState()
+{
+  sceneState_.clear();
+  sceneNodes_.clear();
+}
+
+bool RenderWindow::scrollSceneNode(float pointerX, float pointerY,
+                                   float deltaX, float deltaY)
+{
+  // One notch of a wheel. Chosen to match what a line of text costs to read
+  // past rather than derived from anything — a scroll that moves by a
+  // fraction of a line feels broken, and one that moves by a screen feels
+  // like a page key.
+  constexpr float kPixelsPerNotch = 48.f;
+
+  // Pre-order, so the last node containing the point is the innermost one.
+  // Scrolling the innermost is what a nested list expects: the wheel over an
+  // inner pane moves the inner pane, not the page behind it.
+  const canvas::SceneNodeRect *target = nullptr;
+  for (const auto &node : sceneNodes_) {
+    if (!(node.flags & (canvas::kSceneNodeScrollX | canvas::kSceneNodeScrollY)))
+      continue;
+    if (pointerX < node.x || pointerX >= node.x + node.w) continue;
+    if (pointerY < node.y || pointerY >= node.y + node.h) continue;
+    target = &node;
+  }
+  if (target == nullptr) return false;
+
+  auto       &state = sceneState_[target->id];
+  const float wasX = state.scrollX, wasY = state.scrollY;
+
+  // Clamped to what there is to see. `max(0, …)` matters: content smaller
+  // than its viewport has nowhere to go, and without the clamp it would
+  // scroll to a negative extent and drift off the top.
+  if (target->flags & canvas::kSceneNodeScrollY) {
+    const float limit = std::max(0.f, target->contentH - target->h);
+    state.scrollY = std::clamp(state.scrollY - deltaY * kPixelsPerNotch, 0.f,
+                               limit);
+  }
+  if (target->flags & canvas::kSceneNodeScrollX) {
+    const float limit = std::max(0.f, target->contentW - target->w);
+    state.scrollX = std::clamp(state.scrollX - deltaX * kPixelsPerNotch, 0.f,
+                               limit);
+  }
+  return state.scrollX != wasX || state.scrollY != wasY;
 }
 
 void RenderWindow::render(const canvas::DrawList &list)

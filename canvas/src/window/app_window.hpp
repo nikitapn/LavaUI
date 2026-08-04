@@ -105,6 +105,19 @@ class AppWindow {
   void charInput(unsigned int codepoint);
   void scroll(float dx, float dy);
 
+  /// Consumes "this window needs redrawing for a reason of its own".
+  ///
+  /// Set when the renderer moves a scene node without the producer — a
+  /// scroll today, an animation later. The frame loop has no other way to
+  /// know: nothing was published and no input was queued, because the whole
+  /// point is that the producer was not involved.
+  bool takeInternalRepaint()
+  {
+    const bool was = internalRepaint_;
+    internalRepaint_ = false;
+    return was;
+  }
+
   // ─── Window ──────────────────────────────────────────────────────────────
 
   bool windowShouldClose() const;
@@ -168,6 +181,11 @@ class AppWindow {
   /// FileDrop event they were queued alongside.
   std::vector<std::string> droppedPaths_;
   bool pointerDown_ = false;  // gates MouseMove queueing
+  /// Last known pointer position, for input that carries none of its own.
+  float pointerX_ = -1.f;
+  float pointerY_ = -1.f;
+  /// See `takeInternalRepaint`.
+  bool internalRepaint_ = false;
 
   /// Modifier state, tracked per window because each window gets its own key
   /// callback and only the focused one is receiving them.

@@ -100,6 +100,16 @@ public final class Editor: @unchecked Sendable {
         engine.windowShouldClose(window.raw)
     }
 
+    /// Consumes "this window needs redrawing for a reason of its own".
+    ///
+    /// The third repaint signal, alongside "a producer published" and "input
+    /// arrived": the renderer moves scene nodes itself — a scroll today — and
+    /// when it does, nothing is published and nothing is queued, because the
+    /// point of a retained tree is that the producer is not involved.
+    public func takeInternalRepaint(window: WindowID = .main) -> Bool {
+        engine.takeInternalRepaint(window.raw)
+    }
+
     public func setVisible(_ visible: Bool, window: WindowID = .main) {
         engine.setWindowVisible(visible, window.raw)
     }

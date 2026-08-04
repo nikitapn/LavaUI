@@ -49,6 +49,60 @@ enum class DrawCommandKind : uint32_t {
   SpatialTriangles = 14,
   /// Clears depth inside one Scene3D viewport before its triangles.
   SpatialBegin = 15,
+  /// Opens a **scene node**: a named subtree the renderer can move without
+  /// the producer's help.
+  ///
+  ///   param = node id, assigned by the producer and stable across frames
+  ///   x, y  = local offset from the enclosing node
+  ///   w, h  = viewport: the node's hit rect, and what it clips to when
+  ///           `SceneNodeFlags::Clip` is set
+  ///   color = `SceneNodeFlags` bitfield
+  ///
+  /// Bracketing rather than a separate node array, because the command list
+  /// already works this way — `PushClip`/`PopClip` and the blur scopes are
+  /// the same idea, and a node is those plus an identity. A renderer that
+  /// ignored both kinds would draw exactly what it draws today, since a node
+  /// with no offset is transparent.
+  ///
+  /// What the identity buys is state the *renderer* owns across frames:
+  /// a scroll offset keyed by node id survives the producer republishing the
+  /// list, which is what lets a window scroll while the app that drew it is
+  /// stopped.
+  BeginNode = 16,
+  /// Closes the innermost open node.
+  ///
+  ///   x, y = content extent
+  ///
+  /// The extent lives here and not on `BeginNode` because it is not known
+  /// there: how big a node's content turns out to be is a *result* of
+  /// emitting its children, not an input to it. The renderer needs it to
+  /// clamp scrolling — content minus viewport is exactly how far a node can
+  /// travel.
+  EndNode = 17,
+};
+
+/// Bits in `BeginNode.color`.
+enum SceneNodeFlags : uint32_t {
+  /// Clip children to the node's viewport. Equivalent to bracketing the
+  /// subtree in `PushClip`/`PopClip`, but it moves with the node.
+  kSceneNodeClip = 1u << 0,
+  /// The renderer owns a vertical scroll offset for this node: wheel events
+  /// inside its viewport move it, and the producer is not told and does not
+  /// need to be.
+  kSceneNodeScrollY = 1u << 1,
+  kSceneNodeScrollX = 1u << 2,
+};
+
+/// One node as it was actually laid out, recorded during the last replay.
+///
+/// Absolute, not local: this is what input is hit-tested against, and a hit
+/// test wants the rect the user is looking at rather than one that has to be
+/// re-derived by walking ancestors.
+struct SceneNodeRect {
+  uint32_t id = 0;
+  float    x = 0.f, y = 0.f, w = 0.f, h = 0.f;
+  float    contentW = 0.f, contentH = 0.f;
+  uint32_t flags = 0;
 };
 
 /// One shaped glyph, positioned in absolute window pixels by Swift. Ships in

@@ -122,6 +122,10 @@ bool AppWindow::attachDrawArena(const std::string &id)
   arena_         = std::move(arena);
   arenaHasFrame_ = false;
   arenaFrame_    = {};
+  // Node ids are a producer's private numbering, so the scroll offsets held
+  // against the old producer's ids mean nothing to the new one — and would
+  // otherwise apply themselves to whatever happened to reuse an id.
+  if (render_) render_->resetSceneState();
   std::cout << "Window " << id_ << " attached to draw arena '" << id
             << "' (generation " << arena_->generation() << ", "
             << arena_->mappedBytes() / 1024 << " KiB)\n";
@@ -309,6 +313,12 @@ void AppWindow::pointerMove(float x, float y)
     // arrives per pixel and the queue is unbounded. Coalescing keeps at most
     // one pending move: consumers only ever want the latest position, and a
     // superseded one carries no information.
+    // Kept because a wheel event carries no position of its own, and "which
+    // node is under the pointer" is the only question that decides what a
+    // scroll means.
+    pointerX_ = x;
+    pointerY_ = y;
+
     canvas::InputEvent ev;
     ev.kind = static_cast<uint32_t>(canvas::InputEventKind::MouseMove);
     ev.x = x;
@@ -425,6 +435,16 @@ void AppWindow::textInput(const std::string &utf8)
 
 void AppWindow::scroll(float dx, float dy)
   {
+    // Offered to the scene graph first. If a node took it, the wheel moved a
+    // subtree the renderer owns and the producer is not involved at all —
+    // not told, not woken, not waited for. That is the whole point of a
+    // retained tree: this window can scroll while the process that drew it
+    // is stopped.
+    if (render_ && render_->scrollSceneNode(pointerX_, pointerY_, dx, dy)) {
+      internalRepaint_ = true;
+      return;
+    }
+
     canvas::InputEvent ev;
     ev.kind = static_cast<uint32_t>(canvas::InputEventKind::Scroll);
     ev.x = dx;

@@ -30,7 +30,28 @@ public enum DrawKind: UInt32 {
     /// Connected 1px line strip. `param`/`w` index into `meshVertices`.
     case polyline = 13
     case spatialTriangles = 14
+    /// Opens a scene node: `param` = id, x/y = local offset, w/h = viewport,
+    /// `color` = `SceneNodeFlags`. See `draw_command.hpp` — the renderer owns
+    /// state against the id, which is what a node has and a command does not.
+    case beginNode = 16
+    /// Closes the innermost node; x/y carry the content extent.
+    case endNode = 17
     case spatialBegin = 15
+}
+
+/// Bits in a `beginNode` command's `color` field. Mirrors
+/// `canvas::SceneNodeFlags`.
+public struct SceneNodeFlags: OptionSet, Sendable {
+    public let rawValue: UInt32
+    public init(rawValue: UInt32) { self.rawValue = rawValue }
+
+    /// Clip children to the node's viewport, moving with the node.
+    public static let clip = SceneNodeFlags(rawValue: 1 << 0)
+    /// The renderer owns a vertical scroll offset for this node — wheel
+    /// events inside it move the subtree without the producer hearing about
+    /// it, or being woken to redraw.
+    public static let scrollY = SceneNodeFlags(rawValue: 1 << 1)
+    public static let scrollX = SceneNodeFlags(rawValue: 1 << 2)
 }
 
 /// Reused arena: draw commands plus the shaped glyphs they reference.
@@ -399,6 +420,40 @@ public final class DrawList {
             kind: .mesh, x: 0, y: 0, w: Float(points.count), h: 0,
             color: color, param: first, aux: isRing ? 1 : 0
         )
+    }
+
+    /// Opens a scene node — a subtree the renderer can move on its own.
+    ///
+    /// `id` is yours to assign and must be stable across frames: it is what
+    /// the renderer keys its retained state on, so an id that changes between
+    /// frames scrolls back to the top on every one.
+    /// Not routed through `append`, unlike every primitive: `color` here is a
+    /// flags bitfield, and `append` exists to put a *colour* through the
+    /// opacity multiplier. Fading a node would turn `scrollY` into `clip`.
+    public func beginNode(
+        id: UInt32, x: Float, y: Float, w: Float, h: Float,
+        flags: SceneNodeFlags = []
+    ) {
+        var cmd = canvas.DrawCommand()
+        cmd.kind = DrawKind.beginNode.rawValue
+        cmd.x = x
+        cmd.y = y
+        cmd.w = w
+        cmd.h = h
+        cmd.color = flags.rawValue
+        cmd.param = id
+        appendCommand(cmd)
+    }
+
+    /// Closes the innermost node. `contentW`/`contentH` are how big its
+    /// children turned out to be, which is what bounds a scroll.
+    public func endNode(contentW: Float, contentH: Float) {
+        var cmd = canvas.DrawCommand()
+        cmd.kind = DrawKind.endNode.rawValue
+        cmd.x = contentW
+        cmd.y = contentH
+        cmd.color = 0
+        appendCommand(cmd)
     }
 
     public func pushClip(x: Float, y: Float, w: Float, h: Float) {

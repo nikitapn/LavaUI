@@ -111,6 +111,14 @@ class Engine {
   /// exist" are different questions, and `windowCount` answers the second.
   bool windowShouldClose(uint32_t windowId = 0) const;
 
+  /// Consumes "this window needs redrawing for a reason of its own".
+  ///
+  /// The renderer moves scene nodes on its own — a scroll today — without
+  /// the producer publishing anything or any input being queued, so a frame
+  /// loop driven by those two signals alone would never repaint. This is the
+  /// third signal.
+  bool takeInternalRepaint(uint32_t windowId = 0);
+
   /// Render and present one frame.
   bool renderFrame(uint32_t windowId = 0);
 

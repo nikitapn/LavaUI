@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <functional>
+#include <unordered_map>
 #include <vector>
 
 #include <vulkan/vulkan.h>
@@ -159,7 +160,59 @@ class RenderWindow {
   bool capturePng(std::vector<uint8_t> &outPng, int x, int y, int w, int h,
                   int maxSide = 0, int *outW = nullptr, int *outH = nullptr);
 
+  // ─── Scene nodes ─────────────────────────────────────────────────────────
+  //
+  // The retained half of the draw list. Commands are republished every frame
+  // and own nothing; a *node* has an identity, and the state this window
+  // keeps against that identity outlives any one frame. Scroll offset is the
+  // first such state, and the reason the split is worth having: a wheel event
+  // moves a subtree here, with no round trip to the process that drew it.
+
+  /// Nodes as they were laid out in the last replay, in pre-order — so the
+  /// innermost node containing a point is the *last* one that contains it.
+  const std::vector<canvas::SceneNodeRect> &sceneNodes() const
+  {
+    return sceneNodes_;
+  }
+
+  /// Applies a wheel event to the innermost scrollable node under the
+  /// pointer. Returns true if something moved, which is the caller's signal
+  /// that this window needs a repaint and that the event has been consumed.
+  bool scrollSceneNode(float pointerX, float pointerY, float deltaX,
+                       float deltaY);
+
+  /// Forgets every node's retained state.
+  ///
+  /// Called when a window's producer changes: node ids are a producer's
+  /// private numbering, so the offsets held against the old one's ids mean
+  /// nothing to the new one and would apply themselves to whatever happens
+  /// to reuse an id.
+  void resetSceneState();
+
  private:
+  /// What this window remembers about a node between frames.
+  struct SceneNodeState {
+    float scrollX = 0.f;
+    float scrollY = 0.f;
+    /// Last extent an `EndNode` actually reported.
+    ///
+    /// Retained rather than re-read per frame because the list comes from
+    /// another process and may be truncated: a producer that runs out of
+    /// arena mid-frame drops the commands that did not fit, and if the one
+    /// it drops is this node's `EndNode`, a per-frame extent would collapse
+    /// to the viewport and clamp the scroll back to the top. Remembering the
+    /// last extent that was actually stated makes a short frame merely a
+    /// short frame.
+    float contentW = 0.f;
+    float contentH = 0.f;
+    bool  extentKnown = false;
+  };
+
+  /// Where a scrolled node has been dragged to. Keyed by producer-assigned
+  /// node id, and deliberately *not* cleared when the producer republishes:
+  /// surviving the republish is the whole point.
+  std::unordered_map<uint32_t, SceneNodeState> sceneState_;
+  std::vector<canvas::SceneNodeRect>           sceneNodes_;
   /// A point where the frame's recording has to be interrupted.
   ///
   /// `boundaries[i]` sits between segment i and segment i+1. Only the radius

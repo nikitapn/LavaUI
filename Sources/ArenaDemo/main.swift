@@ -152,6 +152,15 @@ func runHost() {
         // On the compositor's own window it ends the compositor.
         if editor.windowShouldClose(.main) { break }
 
+        // The renderer's own reason to redraw: a scene node it moved without
+        // anyone asking. Nothing was published and no input was queued — a
+        // loop driven by those two alone would sit still while the user
+        // scrolled.
+        for surface in SurfaceRegistry.all
+        where editor.takeInternalRepaint(window: surface.window) {
+            SurfaceRegistry.markDirty(surfaceId: surface.id)
+        }
+
         // Only what changed. This is what naming the surface in `Present`
         // buys: with ten clients on screen, one publishing a frame costs one
         // repaint rather than ten.
@@ -360,6 +369,7 @@ func runProducer() {
     var pointerX: Float = -1
     var pointerY: Float = -1
     var clicks = 0
+    var scrolls = 0
 
     let start = Date()
     var frame = 0
@@ -384,6 +394,13 @@ func runProducer() {
                     pointerY = event.y
                 case .mouseDown:
                     clicks += 1
+                case .scroll:
+                    // Only the ones the renderer did *not* take. A wheel over
+                    // the panel never gets here — that subtree is the
+                    // renderer's to move — so this counter is the visible
+                    // difference between the retained half and the immediate
+                    // one.
+                    scrolls += 1
                 case .key:
                     // GLFW key codes: 256 is Escape, `x` is the action and is
                     // zero on release.
@@ -411,11 +428,12 @@ func runProducer() {
         // reported, which is the visible proof the reverse channel works:
         // before it existed, resizing the window left black margins because
         // this process had no way to hear about it.
-        let baseline = viewH - 80
+        let chartWidth = max(120, viewW * 0.5 - 40)
+        let baseline = viewH - 40
         let barPitch: Float = 28
         let barWidth: Float = 20
-        let room = max(60, baseline - 200)
-        let bars = min(3 + Int(t) % 22, max(1, Int((viewW - 80) / barPitch)))
+        let room = max(60, baseline - 220)
+        let bars = min(3 + Int(t) % 22, max(1, Int((chartWidth - 40) / barPitch)))
         var hovered = -1
         for i in 0..<bars {
             let phase = t * 1.6 + Float(i) * 0.35
@@ -430,6 +448,46 @@ func runProducer() {
                         color: hit ? 0xfff8fafc : barColor(i))
         }
 
+        // ─── The retained half ───────────────────────────────────────────
+        //
+        // Everything above is immediate: republished every frame, owned by
+        // nobody once written. This is a *node*, and the difference is that
+        // the renderer keeps state against its id — where it has been
+        // scrolled to — which survives this process republishing the list.
+        //
+        // So the wheel over this panel never reaches this process. The
+        // renderer moves the subtree and repaints from the frame it already
+        // has. Stop this process with SIGSTOP and the panel still scrolls;
+        // the bars beside it, which need a new frame to move, freeze.
+        let panelX = viewW * 0.52
+        let panelY: Float = 214
+        let panelW = max(80, viewW - panelX - 30)
+        let panelH = max(80, viewH - panelY - 30)
+        let rowPitch: Float = 34
+        let rowCount = 40
+        let contentH = Float(rowCount) * rowPitch
+
+        writer.text("scroll this panel — the renderer moves it, not this process",
+                    x: panelX - 8, y: panelY - 32, color: 0xff8ea0c8)
+        writer.rect(x: panelX - 8, y: panelY - 8, w: panelW + 16, h: panelH + 16,
+                    color: 0xff20202a)
+        writer.beginNode(
+            id: 1, x: panelX, y: panelY, w: panelW, h: panelH,
+            flags: SceneNodeFlags([.clip, .scrollY]).rawValue
+        )
+        for row in 0..<rowCount {
+            // Local to the node: the renderer adds the node's position and
+            // its scroll offset. This process has no idea which rows are
+            // currently on screen, and does not need one.
+            let y = Float(row) * rowPitch
+            writer.rect(x: 0, y: y, w: panelW, h: rowPitch - 4,
+                        color: row % 2 == 0 ? 0xff2f2f3b : 0xff343442)
+            writer.rect(x: 0, y: y, w: 4, h: rowPitch - 4, color: barColor(row))
+            writer.text("row \(row) — scrolled by the renderer",
+                        x: 16, y: y + 6, color: 0xffd8d8e4)
+        }
+        writer.endNode(contentW: panelW, contentH: contentH)
+
         if pointerX >= 0 {
             writer.rect(x: pointerX - 0.5, y: 0, w: 1, h: viewH, color: 0x40ffffff)
             writer.rect(x: 0, y: pointerY - 0.5, w: viewW, h: 1, color: 0x40ffffff)
@@ -441,8 +499,10 @@ func runProducer() {
                     x: 40, y: 92)
         writer.text("surface \(Int(viewW))×\(Int(viewH)), as reported by the renderer",
                     x: 40, y: 124)
-        writer.text(pointerLabel(x: pointerX, y: pointerY, hovered: hovered, clicks: clicks),
-                    x: 40, y: 156)
+        writer.text(
+            pointerLabel(x: pointerX, y: pointerY, hovered: hovered,
+                         clicks: clicks, scrolls: scrolls),
+            x: 40, y: 156)
 
         writer.commit()
 #if canImport(LavaIDL)
@@ -466,10 +526,13 @@ func runProducer() {
     }
 }
 
-private func pointerLabel(x: Float, y: Float, hovered: Int, clicks: Int) -> String {
+private func pointerLabel(
+    x: Float, y: Float, hovered: Int, clicks: Int, scrolls: Int
+) -> String {
     guard x >= 0 else { return "move the pointer over the window" }
     let bar = hovered >= 0 ? "bar \(hovered)" : "—"
-    return "pointer \(Int(x)),\(Int(y)) · \(bar) · \(clicks) clicks"
+    return "pointer \(Int(x)),\(Int(y)) · \(bar) · \(clicks) clicks · "
+        + "\(scrolls) scrolls seen here"
 }
 
 private func barColor(_ i: Int) -> UInt32 {
@@ -510,6 +573,35 @@ private struct FrameWriter {
         written.commands = UInt32(commands)
         written.glyphs = UInt32(glyphs)
         return arena.growFrame(&frame, atLeast, written)
+    }
+
+    /// Opens a scene node. Children are positioned *local* to it — the
+    /// renderer adds the node's own offset, plus whatever it has scrolled the
+    /// node to, when it builds the vertices.
+    mutating func beginNode(
+        id: UInt32, x: Float, y: Float, w: Float, h: Float, flags: UInt32
+    ) {
+        guard reserve(commands: 1, glyphs: 0) else { return }
+        var cmd = canvas.DrawCommand()
+        cmd.kind = 16  // BeginNode
+        cmd.x = x
+        cmd.y = y
+        cmd.w = w
+        cmd.h = h
+        cmd.color = flags
+        cmd.param = id
+        frame.commands[commands] = cmd
+        commands += 1
+    }
+
+    mutating func endNode(contentW: Float, contentH: Float) {
+        guard reserve(commands: 1, glyphs: 0) else { return }
+        var cmd = canvas.DrawCommand()
+        cmd.kind = 17  // EndNode
+        cmd.x = contentW
+        cmd.y = contentH
+        frame.commands[commands] = cmd
+        commands += 1
     }
 
     mutating func rect(x: Float, y: Float, w: Float, h: Float, color: UInt32) {
