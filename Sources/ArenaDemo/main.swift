@@ -376,6 +376,11 @@ func runProducer() {
     /// Row nodes are numbered from here, well clear of the panel's own
     /// id and of zero, which the renderer reads as "no node".
     let rowNodeBase: UInt32 = 1_000
+    let cardNodeID: UInt32 = 2
+    /// Which of two resting places the card should be in. Flipped by
+    /// the space bar; the motion between them is not this process's
+    /// business and never appears in any frame it writes.
+    var cardOpen = true
     let rowCount = 5_000
     /// Where the renderer has scrolled the panel to, as reported back
     /// on the input stream. This process never sets it.
@@ -424,6 +429,9 @@ func runProducer() {
                         releaseSurface()
                         return
                     }
+                    // 32 is space. One flag flip is the entire animation as
+                    // far as this process is concerned.
+                    if event.button == 32, event.x == 1 { cardOpen.toggle() }
                 default:
                     break
                 }
@@ -444,11 +452,32 @@ func runProducer() {
         // reported, which is the visible proof the reverse channel works:
         // before it existed, resizing the window left black margins because
         // this process had no way to hear about it.
+        // ─── A producer-declared animation ───────────────────────────────
+        //
+        // This process states where the card should be and moves on. It does
+        // not tween, does not schedule anything, and emits identical frames
+        // while the card is in flight — the two positions are the only ones
+        // it ever describes. Everything between them is the renderer's.
+        //
+        // Which is why it still arrives if this process is stopped mid-move.
+        writer.beginNode(id: cardNodeID, x: 40, y: 206, w: 300, h: 74, flags: 0)
+        writer.animateNode(
+            opacity: cardOpen ? 1.0 : 0.25,
+            translateX: cardOpen ? 0 : 120,
+            translateY: 0
+        )
+        writer.rect(x: 0, y: 0, w: 300, h: 74, color: 0xff3b3b4d)
+        writer.rect(x: 0, y: 0, w: 5, h: 74, color: 0xff7dd3fc)
+        writer.text("space toggles this card", x: 16, y: 12)
+        writer.text(cardOpen ? "state: open" : "state: away",
+                    x: 16, y: 42, color: 0xff9fb4d8)
+        writer.endNode(contentW: 300, contentH: 74)
+
         let chartWidth = max(120, viewW * 0.5 - 40)
         let baseline = viewH - 40
         let barPitch: Float = 28
         let barWidth: Float = 20
-        let room = max(60, baseline - 220)
+        let room = max(60, baseline - 320)
         let bars = min(3 + Int(t) % 22, max(1, Int((chartWidth - 40) / barPitch)))
         var hovered = -1
         for i in 0..<bars {
@@ -652,6 +681,23 @@ private struct FrameWriter {
 
     /// `emittedTop`/`emittedBottom` say how much of `contentH` was actually
     /// drawn. Leaving them zero means "all of it".
+    /// States the enclosing node's animation target. See `NodeAnimate`.
+    mutating func animateNode(
+        opacity: Float, translateX: Float, translateY: Float,
+        timeConstant: Float = 0
+    ) {
+        guard reserve(commands: 1, glyphs: 0) else { return }
+        var cmd = canvas.DrawCommand()
+        cmd.kind = 18  // NodeAnimate
+        cmd.x = translateX
+        cmd.y = translateY
+        cmd.w = opacity
+        cmd.color = 0b11  // opacity | translate
+        cmd.aux = timeConstant
+        frame.commands[commands] = cmd
+        commands += 1
+    }
+
     mutating func endNode(
         contentW: Float, contentH: Float,
         emittedTop: Float = 0, emittedBottom: Float = 0,

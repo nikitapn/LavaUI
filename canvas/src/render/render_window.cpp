@@ -1205,6 +1205,7 @@ void RenderWindow::replayDrawList(const canvas::DrawList &list, float viewW,
     uint32_t id       = 0;
     float    x = 0.f, y = 0.f, w = 0.f, h = 0.f;  // absolute viewport
     float    parentOx = 0.f, parentOy = 0.f;
+    float    parentOpacity = 1.f;
     uint32_t flags     = 0;
     size_t   recordIndex = 0;
     bool     clipped   = false;
@@ -1212,7 +1213,17 @@ void RenderWindow::replayDrawList(const canvas::DrawList &list, float viewW,
   std::vector<OpenNode> openNodes;
   float                 ox = 0.f;
   float                 oy = 0.f;
+  // Multiplied down the tree, so a faded parent fades its children with it
+  // rather than each having to know what its ancestors are doing.
+  float                 opacity = 1.f;
   sceneNodes_.clear();
+
+  // Every colour the subtree emits goes through this. Same reasoning as the
+  // offset: applied as vertices are built rather than by rewriting the
+  // producer's arrays, so nothing is copied.
+  const auto faded = [&opacity](uint32_t color) {
+    return opacity >= 1.f ? color : withScaledAlpha(color, opacity);
+  };
 
   // Must match the slot waitForInFlightFrame() just freed / submit will use.
   quads_.begin({viewW, viewH}, currentFrameSlot());
@@ -1224,8 +1235,9 @@ void RenderWindow::replayDrawList(const canvas::DrawList &list, float viewW,
       OpenNode node;
       node.id       = cmd.param;
       node.flags    = cmd.color;
-      node.parentOx = ox;
-      node.parentOy = oy;
+      node.parentOx      = ox;
+      node.parentOy      = oy;
+      node.parentOpacity = opacity;
       // The node's own box sits at the parent's offset; only its *children*
       // are moved by the scroll, which is why the viewport is computed
       // before the scroll is applied.
@@ -1233,6 +1245,16 @@ void RenderWindow::replayDrawList(const canvas::DrawList &list, float viewW,
       node.y = oy + cmd.y;
       node.w = cmd.w;
       node.h = cmd.h;
+
+      // The producer-declared animation moves the node itself, so it lands
+      // before the viewport is recorded — a node animated across the screen
+      // must be hit-tested where it is now, not where it started.
+      if (const auto anim = sceneState_.find(node.id);
+          anim != sceneState_.end() && anim->second.animationSeen) {
+        node.x += anim->second.translateX;
+        node.y += anim->second.translateY;
+        opacity *= anim->second.opacity;
+      }
 
       ox = node.x;
       oy = node.y;
@@ -1269,6 +1291,28 @@ void RenderWindow::replayDrawList(const canvas::DrawList &list, float viewW,
                              contentH, emittedTop, emittedBottom, hoverTint,
                              pressTint, node.flags});
       openNodes.push_back(node);
+      break;
+    }
+    case canvas::DrawCommandKind::NodeAnimate: {
+      if (openNodes.empty()) break;  // outside any node; nothing to animate
+      auto      &anim  = sceneState_[openNodes.back().id];
+      const bool first = !anim.animationSeen;
+      if (cmd.color & canvas::kSceneAnimOpacity) {
+        anim.targetOpacity = std::clamp(cmd.w, 0.f, 1.f);
+      }
+      if (cmd.color & canvas::kSceneAnimTranslate) {
+        anim.targetTranslateX = cmd.x;
+        anim.targetTranslateY = cmd.y;
+      }
+      anim.animationTau  = cmd.aux > 0.f ? cmd.aux : 0.f;
+      anim.animationSeen = true;
+      if (first) {
+        // Nothing to have moved from — see `NodeAnimate`. Applied here, not
+        // on the next step, so this frame already draws it in place.
+        anim.opacity    = anim.targetOpacity;
+        anim.translateX = anim.targetTranslateX;
+        anim.translateY = anim.targetTranslateY;
+      }
       break;
     }
     case canvas::DrawCommandKind::EndNode: {
@@ -1330,23 +1374,25 @@ void RenderWindow::replayDrawList(const canvas::DrawList &list, float viewW,
       state.extentKnown = true;
       ox                = node.parentOx;
       oy                = node.parentOy;
+      opacity           = node.parentOpacity;
       break;
     }
     case canvas::DrawCommandKind::Rect:
-      quads_.pushBox({cmd.x + ox, cmd.y + oy}, {cmd.w, cmd.h}, cmd.color, 0.f);
+      quads_.pushBox({cmd.x + ox, cmd.y + oy}, {cmd.w, cmd.h}, faded(cmd.color),
+                     0.f);
       break;
     case canvas::DrawCommandKind::RoundedRect:
-      quads_.pushBox({cmd.x + ox, cmd.y + oy}, {cmd.w, cmd.h}, cmd.color,
+      quads_.pushBox({cmd.x + ox, cmd.y + oy}, {cmd.w, cmd.h}, faded(cmd.color),
                      cmd.aux);
       break;
     case canvas::DrawCommandKind::Circle:
-      quads_.pushCircle({cmd.x + ox, cmd.y + oy}, cmd.aux, cmd.color);
+      quads_.pushCircle({cmd.x + ox, cmd.y + oy}, cmd.aux, faded(cmd.color));
       break;
     case canvas::DrawCommandKind::Line:
       // x,y = p0 and w,h = p1 (see draw_command.hpp). aux carries stroke
       // width when the emitter sets it; 1.5px is the wire default.
       quads_.pushLine({cmd.x + ox, cmd.y + oy}, {cmd.w + ox, cmd.h + oy},
-                      cmd.aux > 0.f ? cmd.aux : 1.5f, cmd.color);
+                      cmd.aux > 0.f ? cmd.aux : 1.5f, faded(cmd.color));
       break;
     case canvas::DrawCommandKind::PushClip:
       quads_.pushScissor({cmd.x + ox, cmd.y + oy}, {cmd.w, cmd.h});
@@ -1366,7 +1412,7 @@ void RenderWindow::replayDrawList(const canvas::DrawList &list, float viewW,
         if (!dev_.textRenderer().glyphQuad(gi.fontId, gi.glyphId, q)) continue;
         if (q.size.x <= 0.f || q.size.y <= 0.f) continue;  // e.g. space
         quads_.pushGlyph({gi.x + q.bearing.x + ox, gi.y - q.bearing.y + oy},
-                         q.size, q.uv0, q.uv1, cmd.color);
+                         q.size, q.uv0, q.uv1, faded(cmd.color));
       }
       break;
     }
@@ -1381,7 +1427,8 @@ void RenderWindow::replayDrawList(const canvas::DrawList &list, float viewW,
         const auto &mv = list.meshVertices[first + i];
         meshPointScratch_.push_back({mv.x + ox, mv.y + oy});
       }
-      quads_.pushMesh(meshPointScratch_.data(), count, cmd.color, cmd.aux > 0.f);
+      quads_.pushMesh(meshPointScratch_.data(), count, faded(cmd.color),
+                      cmd.aux > 0.f);
       break;
     }
     case canvas::DrawCommandKind::Polyline: {
@@ -1393,7 +1440,7 @@ void RenderWindow::replayDrawList(const canvas::DrawList &list, float viewW,
         const auto &mv = list.meshVertices[first + i];
         meshPointScratch_.push_back({mv.x + ox, mv.y + oy});
       }
-      quads_.pushPolyline(meshPointScratch_.data(), count, cmd.color);
+      quads_.pushPolyline(meshPointScratch_.data(), count, faded(cmd.color));
       break;
     }
     case canvas::DrawCommandKind::SpatialTriangles: {
@@ -1428,7 +1475,7 @@ void RenderWindow::replayDrawList(const canvas::DrawList &list, float viewW,
       vec2 uv0, uv1;
       tm.getTextureUV(texId, uv0, uv1);
       quads_.pushImage({cmd.x + ox, cmd.y + oy}, {cmd.w, cmd.h}, uv0, uv1,
-                       cmd.color, view);
+                       faded(cmd.color), view);
       break;
     }
     case canvas::DrawCommandKind::BeginBackdropBlur: {
@@ -1609,6 +1656,11 @@ bool RenderWindow::advanceSceneAnimations(
   /// One step of 8-bit alpha. Below this the difference cannot be drawn, so
   /// continuing to animate would ask for frames that change nothing.
   constexpr float kTintSnap = 1.f / 255.f;
+  /// What a producer gets when it declares an animation without a time
+  /// constant. Slower than a tint because these move things rather than
+  /// shade them, and a translation that lands as fast as a highlight reads
+  /// as a jump.
+  constexpr double kDeclaredTau = 0.11;
 
   const auto easeTint = [&](float &value, float target) {
     const double tau = target > value ? kTintFadeIn : kTintFadeOut;
@@ -1632,6 +1684,37 @@ bool RenderWindow::advanceSceneAnimations(
       pressedNode_ == id && hoveredNode_ == id ? 1.f : 0.f;
     if (easeTint(state.hoverAmount, hoverTarget)) animating = true;
     if (easeTint(state.pressAmount, pressTarget)) animating = true;
+
+    // Producer-declared properties. The producer named a destination and
+    // stopped thinking about it; getting there is this loop's job, which is
+    // why it keeps working while that process is busy or stopped.
+    if (state.animationSeen) {
+      const double tau =
+        state.animationTau > 0.f ? state.animationTau : kDeclaredTau;
+      const float a =
+        dt > 0.0 ? static_cast<float>(1.0 - std::exp(-dt / tau)) : 0.f;
+      const auto ease = [&](float &value, float target, float snap) {
+        if (std::abs(target - value) < snap) {
+          const bool moved = value != target;
+          value            = target;
+          return moved;
+        }
+        value += (target - value) * a;
+        return true;
+      };
+      // Opacity snaps below one step of 8-bit alpha; translation below a
+      // quarter pixel. Both are "no longer drawable", just in their own
+      // units.
+      if (ease(state.opacity, state.targetOpacity, 1.f / 255.f)) {
+        animating = true;
+      }
+      if (ease(state.translateX, state.targetTranslateX, 0.25f)) {
+        animating = true;
+      }
+      if (ease(state.translateY, state.targetTranslateY, 0.25f)) {
+        animating = true;
+      }
+    }
 
     // How far this node may travel *right now*, given what the producer has
     // actually drawn. Unlimited unless it said otherwise, so a producer that

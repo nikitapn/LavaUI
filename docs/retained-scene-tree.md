@@ -19,6 +19,8 @@ Two command kinds, not a separate node array:
                 color = SceneNodeFlags
     EndNode     x/y = content extent, w/h = span actually emitted,
                 color = hover tint, param = press tint
+    NodeAnimate color = which properties, x/y = target translation,
+                w = target opacity, aux = time constant
 
 The command list already works this way — `PushClip`/`PopClip` and the blur
 scopes are the same bracketing, and a node is those plus a name. A renderer
@@ -172,6 +174,43 @@ Nodes declaring no tint are skipped by the hit test rather than hovered. A
 scroll container is not a control, and letting it swallow the hover would
 stop the rows inside it from ever lighting up.
 
+## Declared animation
+
+Scroll and the tints animate because the renderer owns their targets. A
+producer needs to be able to name one too, or every transition it wants costs
+it a frame of its own attention for as long as the transition lasts.
+
+`NodeAnimate`, placed inside a node, states where that node should end up:
+a target opacity, a target translation, and optionally a time constant. The
+producer says the destination and stops thinking about it. It emits identical
+frames while the node is in flight — the two resting states are the only ones
+it ever describes — and the renderer produces everything between.
+
+Two carve-outs, both from the same cause. **Opacity multiplies down the
+tree**, applied as each colour is emitted, so a faded parent fades its
+children without any of them knowing. It does not reach spatial triangles,
+whose colours are per vertex in a buffer the renderer does not own — the same
+place the transform stops, and for the same reason. **There is no scale.**
+A glyph quad's size comes from the atlas at a fixed rasterization, so scaling
+text would mean re-rasterizing or an SDF pipeline; scaling everything except
+the text would be worse than not scaling.
+
+The first frame a node declares an animation, the property **snaps** rather
+than easing. A node that has just appeared has nothing to have moved from,
+and fading in every new node from nothing is not a default anyone asked for.
+To animate an entrance, declare the start on one frame and the end on the
+next.
+
+Targets are retained like everything else about a node, so a frame that ran
+out of arena before reaching the command leaves them alone. The cost of that
+choice: a producer that *stops* declaring a property keeps its last target
+rather than reverting.
+
+Demonstrated by toggling the demo's card with the space bar and stopping the
+client 50ms in, far short of the landing. It arrives anyway — the last two
+frames of the motion were composed from a stopped process's draw list — and
+the window settles at 4 ticks of CPU over 6 seconds.
+
 ## Robustness
 
 The list is written by another process, so the composer treats a malformed
@@ -226,10 +265,16 @@ one as ordinary input rather than as an error:
 - **Hit-testing is used for scroll only.** The renderer knows the node
   geometry, so routing a click to a node id — rather than shipping
   coordinates and making the client hit-test — is available and not wired.
-- **Only the renderer's own state animates.** Scroll and the tints ease
-  because the renderer owns their targets. A producer still has no way to
-  say "fade this node's opacity" or "move it to here over 200ms" — the
-  machinery would carry it, the wire format has nowhere to put it.
+- **No scale, and no rotation.** See above: text is the obstacle, and a
+  transform that silently skipped it would be worse than none.
+- **One curve.** Everything eases exponentially toward its target. There is
+  no way to ask for a spring, an overshoot, or a fixed duration — and a
+  fixed duration in particular is what a coordinated multi-node transition
+  needs, since exponentials with the same constant do not finish together
+  when they start from different distances.
+- **No completion signal.** A producer that wants to do something when a
+  transition lands has no way to hear about it; `NodeScroll` is the only
+  thing the renderer reports back.
 - **A tint is a flat overlay** over the node's whole viewport, text
   included. That is the ordinary highlight look at low alpha, but it cannot
   express "change this one background colour".

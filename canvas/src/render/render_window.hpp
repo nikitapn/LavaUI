@@ -258,6 +258,23 @@ class RenderWindow {
     /// at the speed a pointer actually crosses a list.
     float hoverAmount = 0.f;
     float pressAmount = 0.f;
+
+    // ─── Producer-declared animation ────────────────────────────────────
+    //
+    // Where the producer said this node should end up, and where it has
+    // actually got to. Targets are retained: a frame that never reached the
+    // `NodeAnimate` command leaves them alone.
+    float opacity = 1.f;
+    float targetOpacity = 1.f;
+    float translateX = 0.f;
+    float translateY = 0.f;
+    float targetTranslateX = 0.f;
+    float targetTranslateY = 0.f;
+    /// Time constant, seconds. Zero means the renderer's default.
+    float animationTau = 0.f;
+    /// False until the node has declared an animation once. The first
+    /// declaration snaps rather than eases — see `NodeAnimate`.
+    bool  animationSeen = false;
     bool  extentKnown = false;
   };
 

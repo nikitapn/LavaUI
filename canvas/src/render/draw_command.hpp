@@ -102,6 +102,42 @@ enum class DrawCommandKind : uint32_t {
   /// filled, which is a blank panel — and a producer that is slow, or
   /// stopped, is exactly when it happens.
   EndNode = 17,
+  /// Declares what the enclosing node should be animating *toward*. Ignored
+  /// outside a `BeginNode`/`EndNode` pair.
+  ///
+  ///   color = `SceneAnimationFlags`: which properties this states
+  ///   x, y  = target translation, added to the node's local offset
+  ///   w     = target opacity, 0…1, multiplied through the subtree
+  ///   aux   = time constant in seconds; 0 uses the renderer's default
+  ///
+  /// A *target*, not a value, and that is the whole difference. The producer
+  /// says where the node should end up and stops thinking about it; the
+  /// renderer carries it there at the display rate. A producer that animated
+  /// by republishing a new value every frame would have to be scheduled every
+  /// frame to do it, which is the thing this exists to avoid — and it would
+  /// stop dead the moment that process got busy.
+  ///
+  /// A property is animated only while it is being declared. Retained like
+  /// everything else about a node, so a frame that ran out of arena before
+  /// reaching this command leaves the target alone rather than snapping it
+  /// back — but a producer that *stops* declaring a property keeps its last
+  /// target rather than reverting to a default.
+  ///
+  /// The first frame a node declares one, the property snaps to the target
+  /// instead of animating to it: a node that has only just appeared has no
+  /// previous value to have moved from, and fading every new node in from
+  /// nothing is not a default anyone asked for. To animate an entrance,
+  /// declare the start on one frame and the end on the next.
+  NodeAnimate = 18,
+};
+
+/// Bits in `NodeAnimate.color` — which properties the command states.
+///
+/// A bitfield rather than sentinel values because zero is a meaningful
+/// target for both: fully transparent, and no displacement.
+enum SceneAnimationFlags : uint32_t {
+  kSceneAnimOpacity   = 1u << 0,
+  kSceneAnimTranslate = 1u << 1,
 };
 
 /// Bits in `BeginNode.color`.

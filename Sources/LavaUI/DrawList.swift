@@ -36,6 +36,9 @@ public enum DrawKind: UInt32 {
     case beginNode = 16
     /// Closes the innermost node; x/y carry the content extent.
     case endNode = 17
+    /// Declares what the enclosing node should animate toward. See
+    /// `NodeAnimate` in `draw_command.hpp`.
+    case nodeAnimate = 18
     case spatialBegin = 15
 }
 
@@ -52,6 +55,16 @@ public struct SceneNodeFlags: OptionSet, Sendable {
     /// it, or being woken to redraw.
     public static let scrollY = SceneNodeFlags(rawValue: 1 << 1)
     public static let scrollX = SceneNodeFlags(rawValue: 1 << 2)
+}
+
+/// Which properties a `animateNode` call is stating. Mirrors
+/// `canvas::SceneAnimationFlags`.
+public struct SceneAnimationFlags: OptionSet, Sendable {
+    public let rawValue: UInt32
+    public init(rawValue: UInt32) { self.rawValue = rawValue }
+
+    public static let opacity = SceneAnimationFlags(rawValue: 1 << 0)
+    public static let translate = SceneAnimationFlags(rawValue: 1 << 1)
 }
 
 /// Reused arena: draw commands plus the shaped glyphs they reference.
@@ -471,6 +484,34 @@ public final class DrawList {
         cmd.h = emittedBottom
         cmd.color = hoverTint?.rgba8 ?? 0
         cmd.param = pressTint?.rgba8 ?? 0
+        appendCommand(cmd)
+    }
+
+    /// States where the enclosing node should end up. The renderer takes it
+    /// there — at the display rate, without this process being scheduled
+    /// again, and without stopping if this process gets busy.
+    ///
+    /// A property left `nil` is not stated, and keeps whatever target it had.
+    /// The first frame a node states one it snaps rather than eases: a node
+    /// that has just appeared has nothing to have moved from. To animate an
+    /// entrance, state the start on one frame and the end on the next.
+    public func animateNode(
+        opacity: Float? = nil,
+        translateX: Float? = nil, translateY: Float? = nil,
+        timeConstant: Float = 0
+    ) {
+        var flags: SceneAnimationFlags = []
+        if opacity != nil { flags.insert(.opacity) }
+        if translateX != nil || translateY != nil { flags.insert(.translate) }
+        guard !flags.isEmpty else { return }
+
+        var cmd = canvas.DrawCommand()
+        cmd.kind = DrawKind.nodeAnimate.rawValue
+        cmd.x = translateX ?? 0
+        cmd.y = translateY ?? 0
+        cmd.w = opacity ?? 1
+        cmd.color = flags.rawValue
+        cmd.aux = timeConstant
         appendCommand(cmd)
     }
 
