@@ -27,6 +27,14 @@ import NPRPC
 // store wakes nobody, so without a nudge the renderer has no way to learn a
 // frame arrived.
 //
+// Input comes back the other way, over the same interface: the renderer owns
+// the window, so it owns the mouse and the keyboard, and `SubscribeInput` is
+// how a process with neither finds out that the pointer moved or that its
+// surface changed size. The producer below hit-tests its own bars from
+// coordinates it was told — the renderer forwards events and interprets none
+// of them. See `ControlTransport` for why that reverse direction needs
+// `.webSocket` today.
+//
 // Built without nprpc checked out, both halves still run: the font id falls
 // back to a convention and the renderer polls. That fallback is what this
 // looked like before the control plane existed.
@@ -61,6 +69,10 @@ func runHost() {
     // Both the font id and the arena now arrive over RPC, so the renderer
     // registers nothing up front and waits to be told.
     LoopQueue.wake = { [editor] in editor.wakeEventLoop() }
+    // Before anyone can subscribe, so the first event a client ever sees is
+    // the window's real size rather than a guess.
+    let size = editor.framebufferSize()
+    InputBroker.postCurrentSize(width: size.w, height: size.h)
     do {
         rpcRuntime = try startCompositorService(editor: editor)
     } catch {
@@ -68,6 +80,7 @@ func runHost() {
         exit(1)
     }
 
+    var lastLagReport = Date.distantPast
     while editor.isOpen {
         // Blocks until something happens: input, or a client's `Present`
         // waking us through `LoopQueue`/`wakeEventLoop`. No frame clock, no
@@ -78,14 +91,27 @@ func runHost() {
         // parked belongs to the frame about to be drawn.
         LoopQueue.drain()
 
-        // Drain input so the window stays responsive even though nothing here
-        // acts on it — forwarding these to the client is the next piece.
-        while editor.pollInputEvent() != nil {}
+        // The renderer interprets none of this — it forwards. Which is the
+        // point: the process that owns the window is not the process that
+        // knows what a click means.
+        while let event = editor.pollInputEvent() {
+            InputBroker.post(event)
+        }
 
         // Repaint on a published frame, and also on any other wake, since a
         // resize or expose has to redraw what the arena already holds.
         _ = CompositorImpl.takeFrameReady()
         editor.renderFrame()
+
+        // What the ack direction buys: a client that has stopped reading is
+        // visible from here, and looks nothing like one that is simply idle.
+        let lag = InputBroker.lag
+        if lag > 64, Date().timeIntervalSince(lastLagReport) > 1 {
+            lastLagReport = Date()
+            FileHandle.standardError.write(
+                Data("client is \(lag) input events behind\n".utf8)
+            )
+        }
     }
 #else
     // No control plane: the pre-RPC behaviour. Register the face first so it
@@ -160,6 +186,7 @@ func runProducer() {
     // renderer opens what the producer made. Registering the font first is
     // free either way and gets the id every glyph below is stamped with.
     var compositorOpt: Compositor?
+    var inputOpt: InputChannel?
     do {
         let (compositor, rpc) = try connectToCompositor()
         rpcRuntime = rpc
@@ -167,6 +194,13 @@ func runProducer() {
             try await compositor.registerFont(path: fontPath, pixelSize: fontPixelSize)
         }
         try blockingCall { try await compositor.attachArena(arenaId: arenaID) }
+        // Only after `AttachArena`: the renderer accepts a subscription for
+        // an arena it has been pointed at, and this one is now it.
+        //
+        // Not `blockingCall`-wrapped — opening a stream is synchronous. What
+        // comes back is a pair of endpoints, not an answer, so there is no
+        // reply to wait for and nothing to strand.
+        inputOpt = InputChannel(stream: try compositor.subscribeInput(arenaId: arenaID))
         compositorOpt = compositor
         FileHandle.standardError.write(
             Data("control plane up — font id \(sharedFontID)\n".utf8)
@@ -178,33 +212,96 @@ func runProducer() {
         exit(1)
     }
     let compositor = compositorOpt
+    let input = inputOpt
 #endif
+
+    // What the renderer tells us about its window. The initial values are
+    // only ever used without a control plane; with one, the first event to
+    // arrive is a `Resize` carrying the real size.
+    var viewW: Float = 720
+    var viewH: Float = 480
+    var pointerX: Float = -1
+    var pointerY: Float = -1
+    var clicks = 0
 
     let start = Date()
     var frame = 0
     while true {
+#if canImport(LavaIDL)
+        if let input {
+            // The renderer went away. Frames from here on would go into an
+            // arena nobody is mapping.
+            if input.isClosed { break }
+            for event in input.drain() {
+                // `InputEventKind` is LavaUI's, unchanged: the wire struct is
+                // congruent with `canvas::InputEvent` precisely so that both
+                // processes read the same enum rather than each keeping a
+                // private copy that can drift.
+                switch InputEventKind(rawValue: event.kind) ?? .none {
+                case .resize:
+                    viewW = event.x
+                    viewH = event.y
+                case .mouseMove:
+                    pointerX = event.x
+                    pointerY = event.y
+                case .mouseDown:
+                    clicks += 1
+                case .key:
+                    // GLFW key codes: 256 is Escape, `x` is the action and is
+                    // zero on release.
+                    if event.button == 256, event.x != 0 { return }
+                default:
+                    break
+                }
+            }
+        }
+#endif
+
         let t = Float(Date().timeIntervalSince(start))
         var writer = FrameWriter()
         guard writer.begin() else { break }
 
-        writer.rect(x: 0, y: 0, w: 720, h: 480, color: 0xff2b2b33)
+        writer.rect(x: 0, y: 0, w: viewW, h: viewH, color: 0xff2b2b33)
 
         // A bar chart whose bar count grows with time, so the command count
         // climbs past the initial capacity and forces the arena to grow
         // mid-frame — the case a ring buffer cannot serve, and the reason
-        // this is a mapping.
-        let bars = 3 + Int(t) % 22
+        // this is a mapping. It is also laid out to the size the renderer
+        // reported, which is the visible proof the reverse channel works:
+        // before it existed, resizing the window left black margins because
+        // this process had no way to hear about it.
+        let baseline = viewH - 80
+        let barPitch: Float = 28
+        let barWidth: Float = 20
+        let room = max(60, baseline - 200)
+        let bars = min(3 + Int(t) % 22, max(1, Int((viewW - 80) / barPitch)))
+        var hovered = -1
         for i in 0..<bars {
             let phase = t * 1.6 + Float(i) * 0.35
-            let h = 40 + 120 * (0.5 + 0.5 * sin(phase))
-            let x = 40 + Float(i) * 28
-            writer.rect(x: x, y: 400 - h, w: 20, h: h, color: barColor(i))
+            let h = 30 + (room - 30) * (0.5 + 0.5 * sin(phase))
+            let x = 40 + Float(i) * barPitch
+            // Hit-tested here, in the process that knows what a bar is. The
+            // renderer forwarded a coordinate and nothing more.
+            let hit = pointerX >= x && pointerX < x + barWidth
+                && pointerY >= baseline - h && pointerY < baseline
+            if hit { hovered = i }
+            writer.rect(x: x, y: baseline - h, w: barWidth, h: h,
+                        color: hit ? 0xfff8fafc : barColor(i))
         }
 
-        writer.text("draw list written by pid \(getpid())", x: 40, y: 60)
+        if pointerX >= 0 {
+            writer.rect(x: pointerX - 0.5, y: 0, w: 1, h: viewH, color: 0x40ffffff)
+            writer.rect(x: 0, y: pointerY - 0.5, w: viewW, h: 1, color: 0x40ffffff)
+        }
+
+        writer.text("draw list written by pid \(getpid()) — no GPU, no window",
+                    x: 40, y: 60)
         writer.text("frame \(frame) · \(bars) bars · generation \(arena.generation())",
                     x: 40, y: 92)
-        writer.text("this process has no GPU and no window", x: 40, y: 124)
+        writer.text("surface \(Int(viewW))×\(Int(viewH)), as reported by the renderer",
+                    x: 40, y: 124)
+        writer.text(pointerLabel(x: pointerX, y: pointerY, hovered: hovered, clicks: clicks),
+                    x: 40, y: 156)
 
         writer.commit()
 #if canImport(LavaIDL)
@@ -218,6 +315,18 @@ func runProducer() {
         }
 #endif
         frame += 1
+#if canImport(LavaIDL)
+        // Two seconds in, the renderer has certainly sent the synthetic
+        // Resize it sends every subscriber. Nothing having arrived does not
+        // mean the user is sitting still — it means this transport has no
+        // route for it. Say so once, rather than looking merely idle.
+        if frame == 120, let input, !input.hasReceivedAnything {
+            let line = "no input has arrived — over \(controlTransport) NPRPC has "
+                + "no client-side route for server-initiated stream chunks. "
+                + "See docs/nprpc-client-stream-gap.md.\n"
+            FileHandle.standardError.write(Data(line.utf8))
+        }
+#endif
         if frame % 120 == 0 {
             let line = "frame \(frame): generation \(arena.generation()), "
                 + "\(arena.mappedBytes() / 1024) KiB\n"
@@ -225,6 +334,12 @@ func runProducer() {
         }
         Thread.sleep(forTimeInterval: 1.0 / 60.0)
     }
+}
+
+private func pointerLabel(x: Float, y: Float, hovered: Int, clicks: Int) -> String {
+    guard x >= 0 else { return "move the pointer over the window" }
+    let bar = hovered >= 0 ? "bar \(hovered)" : "—"
+    return "pointer \(Int(x)),\(Int(y)) · \(bar) · \(clicks) clicks"
 }
 
 private func barColor(_ i: Int) -> UInt32 {

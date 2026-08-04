@@ -55,6 +55,72 @@ public func unmarshal_ArenaNotFound(buffer: UnsafeRawPointer, offset: Int) -> Ar
   return result
 }
 
+public struct InputEvent: Codable, Sendable {
+  public var serial: UInt32 = 0
+  public var kind: UInt32 = 0
+  public var x: Float = 0.0
+  public var y: Float = 0.0
+  public var button: Int32 = 0
+  public var mods: Int32 = 0
+
+  public init() {}
+
+  public init(serial: UInt32, kind: UInt32, x: Float, y: Float, button: Int32, mods: Int32)   {
+    self.serial = serial
+    self.kind = kind
+    self.x = x
+    self.y = y
+    self.button = button
+    self.mods = mods
+  }
+}
+
+
+// MARK: - Marshal InputEvent
+public func marshal_InputEvent(buffer: FlatBuffer, offset: Int, data: InputEvent) {
+  buffer.storeBytes(of: data.serial, toByteOffset: offset + 0, as: UInt32.self)
+  buffer.storeBytes(of: data.kind, toByteOffset: offset + 4, as: UInt32.self)
+  buffer.storeBytes(of: data.x, toByteOffset: offset + 8, as: Float.self)
+  buffer.storeBytes(of: data.y, toByteOffset: offset + 12, as: Float.self)
+  buffer.storeBytes(of: data.button, toByteOffset: offset + 16, as: Int32.self)
+  buffer.storeBytes(of: data.mods, toByteOffset: offset + 20, as: Int32.self)
+}
+
+// MARK: - Unmarshal InputEvent
+public func unmarshal_InputEvent(buffer: UnsafeRawPointer, offset: Int) -> InputEvent {
+  var result = InputEvent()
+  result.serial = buffer.load(fromByteOffset: offset + 0, as: UInt32.self)
+  result.kind = buffer.load(fromByteOffset: offset + 4, as: UInt32.self)
+  result.x = buffer.load(fromByteOffset: offset + 8, as: Float.self)
+  result.y = buffer.load(fromByteOffset: offset + 12, as: Float.self)
+  result.button = buffer.load(fromByteOffset: offset + 16, as: Int32.self)
+  result.mods = buffer.load(fromByteOffset: offset + 20, as: Int32.self)
+  return result
+}
+
+public struct InputAck: Codable, Sendable {
+  public var serial: UInt32 = 0
+
+  public init() {}
+
+  public init(serial: UInt32)   {
+    self.serial = serial
+  }
+}
+
+
+// MARK: - Marshal InputAck
+public func marshal_InputAck(buffer: FlatBuffer, offset: Int, data: InputAck) {
+  buffer.storeBytes(of: data.serial, toByteOffset: offset + 0, as: UInt32.self)
+}
+
+// MARK: - Unmarshal InputAck
+public func unmarshal_InputAck(buffer: UnsafeRawPointer, offset: Int) -> InputAck {
+  var result = InputAck()
+  result.serial = buffer.load(fromByteOffset: offset + 0, as: UInt32.self)
+  return result
+}
+
 fileprivate struct lava_M1: Codable, Sendable {
   public var _1: String = ""
   public var _2: Float = 0.0
@@ -132,6 +198,7 @@ public protocol CompositorProtocol {
   func registerFont(path: String, pixelSize: Float) throws -> UInt32
   func attachArena(arenaId: String) throws
   func present()
+  func subscribeInput(arenaId: String, stream: NPRPCBidiStream<InputEvent, InputAck>) async
 }
 
 // Client proxy for Compositor
@@ -258,6 +325,49 @@ final public class Compositor: NPRPCObject, @unchecked Sendable {
     }
   }
 
+  public func subscribeInput(arenaId: String) throws -> NPRPCBidiStream<InputAck, InputEvent>   {
+    let streamId = nprpc_generate_stream_id()
+
+    // Prepare StreamInit buffer
+    let buffer = FlatBuffer()
+    buffer.prepare(184)
+    buffer.commit(56)
+    guard let data = buffer.data else { throw BufferError(message: "Failed to get buffer data") }
+
+    // Write StreamInit message header
+    data.storeBytes(of: UInt32(0), toByteOffset: 0, as: UInt32.self)  // size (set later)
+    data.storeBytes(of: impl.MessageId.StreamInitialization.rawValue, toByteOffset: 4, as: UInt32.self)
+    data.storeBytes(of: impl.MessageType.Request.rawValue, toByteOffset: 8, as: UInt32.self)
+    data.storeBytes(of: UInt32(0), toByteOffset: 12, as: UInt32.self)  // reserved
+
+    // Write StreamInit fields
+    data.storeBytes(of: streamId, toByteOffset: 16, as: UInt64.self)  // offset 0
+    data.storeBytes(of: poaIdx, toByteOffset: 24, as: UInt16.self)  // offset 8
+    data.storeBytes(of: UInt8(0), toByteOffset: 26, as: UInt8.self)  // interface_idx at offset 10
+    data.storeBytes(of: objectId, toByteOffset: 32, as: UInt64.self)  // offset 16 (after 5-byte pad)
+    data.storeBytes(of: UInt8(3), toByteOffset: 40, as: UInt8.self)  // func_idx at offset 24
+    data.storeBytes(of: impl.StreamKind.Bidi.rawValue, toByteOffset: 41, as: UInt8.self)
+    data.storeBytes(of: defaultReaderWindow, toByteOffset: 44, as: UInt32.self)  // initial_credits at offset 28
+
+    // Marshal input arguments
+    var inArgs = lava_M3()
+    inArgs._1 = arenaId
+    marshal_lava_M3(buffer: buffer, offset: 48, data: inArgs)
+
+    guard let finalData = buffer.data else { throw BufferError(message: "Failed to get buffer data") }
+    finalData.storeBytes(of: UInt32(buffer.size), toByteOffset: 0, as: UInt32.self)
+
+    guard let session = nprpc_object_get_session(self.handle),
+          let streamManager = nprpc_session_get_stream_manager(session) else {
+      throw RuntimeError(message: "Failed to get session for stream")
+    }
+
+    let stream = NPRPC.createStreamManagerBidiStream(streamManager: streamManager, streamId: streamId, buffer: buffer, initialPayloadCapacity: 132, unreliable: false, producerWindow: defaultReaderWindow, serializer: { (buffer: FlatBuffer, offset: Int, value: InputAck) in NPRPC.marshal_stream_struct(buffer: buffer, offset: offset, rootSize: 4, value: value) { buf, off, elem in marshal_InputAck(buffer: buf, offset: off, data: elem) } }, deserializer: { (data: UnsafeRawPointer, _: Int) in unmarshal_InputEvent(buffer: data, offset: 0) })
+    let result = nprpc_session_stream_send_init(session, buffer.handle, self.timeout)
+    if result != 0 { throw RuntimeError(message: "StreamInit failed (code: \(result))") }
+    return stream
+  }
+
 }
 
 // Servant base for Compositor
@@ -280,9 +390,53 @@ open class CompositorServant: NPRPCServant, CompositorProtocol, @unchecked Senda
     fatalError("Subclass must implement present")
   }
 
+  open func subscribeInput(arenaId: String, stream: NPRPCBidiStream<InputEvent, InputAck>) async   {
+    fatalError("Subclass must implement subscribeInput")
+  }
+
   // Dispatch incoming RPC calls
   public override func dispatch(buffer: FlatBuffer, remoteEndpoint: NPRPCEndpoint)   {
     guard let data = buffer.data else { return }
+
+    // Check message type to route streaming vs regular calls
+    let msgId = data.load(fromByteOffset: MemoryLayout<NPRPC.impl.Header>.offset(of: \NPRPC.impl.Header.msg_id)!, as: UInt32.self)
+
+    if msgId == impl.MessageId.StreamInitialization.rawValue     {
+      let streamFuncIdx = data.load(fromByteOffset: (16 + MemoryLayout<NPRPC.impl.StreamInit>.offset(of: \NPRPC.impl.StreamInit.func_idx)!), as: UInt8.self)
+      switch streamFuncIdx       {
+        case 3: // SubscribeInput
+          // Streaming method dispatch
+          guard let data = buffer.data else { return }
+          let streamId = data.load(fromByteOffset: (16 + MemoryLayout<NPRPC.impl.StreamInit>.offset(of: \NPRPC.impl.StreamInit.stream_id)!), as: UInt64.self)
+
+          // Validate input buffer for untrusted interface
+          guard check_1S(buffer: data, bufferSize: buffer.size, offset: 48) else           {
+            makeSimpleAnswer(buffer: buffer, messageId: impl.MessageId.Error_BadInput)
+            return
+          }
+
+          // Unmarshal input arguments
+          let ia = unmarshal_lava_M3(buffer: data, offset: 48)
+
+          // Get stream_manager for streaming (heap-allocated, survives after dispatch returns)
+          guard let sessionCtx = self.sessionContext,
+                let streamManager = nprpc_get_stream_manager(sessionCtx) else {
+            makeSimpleAnswer(buffer: buffer, messageId: impl.MessageId.Error_BadInput)
+            return
+          }
+          let initialCredits = data.load(fromByteOffset: 44, as: UInt32.self)
+          let stream = NPRPC.createStreamManagerBidiStream(streamManager: streamManager, streamId: streamId, buffer: buffer, initialPayloadCapacity: 152, unreliable: false, initialCredits: initialCredits, serializer: { (buffer: FlatBuffer, offset: Int, value: InputEvent) in NPRPC.marshal_stream_struct(buffer: buffer, offset: offset, rootSize: 24, value: value) { buf, off, elem in marshal_InputEvent(buffer: buf, offset: off, data: elem) } }, deserializer: { (data: UnsafeRawPointer, _: Int) in unmarshal_InputAck(buffer: data, offset: 0) })
+          nprpc_stream_manager_defer_stream_start(streamManager, streamId)
+          makeSimpleAnswer(buffer: buffer, messageId: impl.MessageId.Success)
+          Task {
+            await subscribeInput(arenaId: ia._1, stream: stream)
+          }
+
+        default:
+          makeSimpleAnswer(buffer: buffer, messageId: impl.MessageId.Error_UnknownFunctionIdx)
+      } // switch streamFuncIdx
+      return
+    }
 
     // Read function index from CallHeader
     let functionIdx = data.load(fromByteOffset: (16 + MemoryLayout<NPRPC.impl.CallHeader>.offset(of: \NPRPC.impl.CallHeader.function_idx)!), as: UInt8.self)

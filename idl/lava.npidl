@@ -23,6 +23,36 @@ exception ArenaNotFound {
   arenaId: string;
 }
 
+/// One raw input event, renderer → app.
+///
+/// Field-for-field the shape of `canvas::InputEvent`, deliberately: the
+/// renderer polls one off GLFW and forwards it without interpreting it. What
+/// `x`, `y`, `button` and `mods` mean depends on `kind` — see
+/// `InputEventKind` in `draw_command.hpp`, which is the authority for both
+/// sides. Keeping the wire struct congruent with the local one is what makes
+/// "forward it" a field copy rather than a protocol.
+///
+/// The one event that does not survive the trip is `FileDrop`: its payload is
+/// a list of paths that lives in a side buffer the next drop overwrites, so
+/// carrying it needs a call of its own rather than a fixed-size struct.
+message InputEvent {
+  /// Monotonic per-subscription. The app echoes it back in `InputAck` to say
+  /// how far it has got, which is the only way the renderer can tell "the app
+  /// is idle" from "the app is behind".
+  serial: u32;
+  kind: u32;
+  x: f32;
+  y: f32;
+  button: i32;
+  mods: i32;
+}
+
+/// App → renderer on the same stream: "I have consumed everything through
+/// `serial`."
+message InputAck {
+  serial: u32;
+}
+
 interface Compositor {
   // ─── Resources ─────────────────────────────────────────────────────────
   //
@@ -62,4 +92,37 @@ interface Compositor {
   /// clock; with it the renderer blocks until a client actually has
   /// something to show.
   [unreliable] void Present();
+
+  // ─── Input ─────────────────────────────────────────────────────────────
+
+  /// The reverse channel: the renderer owns the window, so it owns the mouse
+  /// and the keyboard, and an app that draws into shared memory has no other
+  /// way to learn a pointer moved.
+  ///
+  /// Bidirectional rather than a plain server stream because the two
+  /// directions are one conversation. Events go out; the app's `InputAck`
+  /// comes back on the same stream, in order, so "how far has the app got"
+  /// needs no second channel and no correlation. It also gives NPRPC's
+  /// credit-based flow control something to meter: a client that stops
+  /// reading stops being sent to, instead of accumulating an unbounded queue
+  /// of stale mouse positions in the renderer.
+  ///
+  /// The first event a subscriber receives is always a synthetic `Resize`
+  /// carrying the window's current size. Without it an app could only learn
+  /// its size by waiting for the user to drag a border — it would draw at a
+  /// guessed size until then, which is exactly the black margin this
+  /// interface exists to remove.
+  ///
+  /// `arenaId` names the surface, not the connection: input follows the
+  /// arena a window was attached to, so a client with two windows gets two
+  /// subscriptions rather than one multiplexed stream it has to demultiplex.
+  ///
+  /// No `raises` clause, for now: npidl accepts one on a streaming method but
+  /// drops it, generating the servant without `throws` — stream initialization
+  /// is getting exception support later. Until then an unknown `arenaId` is
+  /// reported the way every other stream failure is: the renderer aborts the
+  /// stream and the client's `for try await` throws. Worth revisiting when
+  /// `raises` starts working, because "no such arena" is a caller mistake and
+  /// deserves to fail at the call rather than one chunk later.
+  bidi_stream<InputAck, InputEvent> SubscribeInput(arenaId: in string);
 }
