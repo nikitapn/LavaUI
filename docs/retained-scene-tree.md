@@ -243,6 +243,36 @@ What it costs: a timed animation has to remember where it started, so
 retargeting it mid-flight restarts the clock from the visible position rather
 than simply bending toward the new target the way a decay does.
 
+### Arrival
+
+Declaring a target and then not thinking about it leaves the producer with no
+idea when the node got there, and sequencing one transition after another is
+the ordinary reason to care. `InputEventKind::NodeAnimationDone` closes that:
+`button` = node id, one per transition, on the frame it lands. A timer in the
+producer would be a second copy of the renderer's clock, running in a process
+that may not be scheduled at the moment it matters.
+
+An edge, not a state, which is what makes the details load-bearing:
+
+- **Not coalesced**, unlike `NodeScroll`. A position is a state and only the
+  newest matters; an arrival dropped is the thing it was for, gone.
+- **Not sent for the first-frame snap**, because nothing moved.
+- **Not sent when a producer restates a target it has already reached** —
+  which it does on every frame, so this is the difference between one event
+  and sixty a second. Verified by leaving the demo settled: the arrival
+  counter reads 3/3 four seconds apart.
+
+Timed transitions assign their end values rather than letting the
+interpolation land on them. `start + (target - start) * 1` is the target only
+up to rounding, and "has it arrived" is answered by comparing against the
+target exactly — this was found the direct way, by the signal never firing.
+In decay mode the equality holds by construction, since the snap below one
+drawable step assigns the target.
+
+The demo sequences a badge off it: three chips move, and only once all three
+have reported does the badge animate in. Nothing in the producer knows how
+long any of that took.
+
 ## Robustness
 
 The list is written by another process, so the composer treats a malformed
@@ -301,9 +331,10 @@ one as ordinary input rather than as an error:
   transform that silently skipped it would be worse than none.
 - **Two curves, neither chosen.** Decay or timed cubic; there is no way to
   ask for a spring, an overshoot, or a different easing.
-- **No completion signal.** A producer that wants to do something when a
-  transition lands has no way to hear about it; `NodeScroll` is the only
-  thing the renderer reports back.
+- **Nothing is reported about hover or press.** A producer can see where a
+  node was scrolled to and when a transition landed, but not which node the
+  pointer is over — so it still hit-tests clicks from coordinates, which
+  the renderer already has the geometry to answer.
 - **A tint is a flat overlay** over the node's whole viewport, text
   included. That is the ordinary highlight look at low alpha, but it cannot
   express "change this one background colour".

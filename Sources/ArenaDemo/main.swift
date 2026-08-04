@@ -381,6 +381,10 @@ func runProducer() {
     /// the space bar; the motion between them is not this process's
     /// business and never appears in any frame it writes.
     var cardOpen = true
+    let badgeNodeID: UInt32 = 10
+    /// How many chips have reported arriving since the last toggle. The
+    /// renderer counts the frames; this only counts the arrivals.
+    var chipsLanded = 0
     let rowCount = 5_000
     /// Where the renderer has scrolled the panel to, as reported back
     /// on the input stream. This process never sets it.
@@ -431,7 +435,16 @@ func runProducer() {
                     }
                     // 32 is space. One flag flip is the entire animation as
                     // far as this process is concerned.
-                    if event.button == 32, event.x == 1 { cardOpen.toggle() }
+                    if event.button == 32, event.x == 1 {
+                        cardOpen.toggle()
+                        chipsLanded = 0
+                    }
+                case .nodeAnimationDone:
+                    // Sequencing without a timer. This process has no idea
+                    // how long the move took and does not need one — it is
+                    // told when the thing it asked for happened.
+                    let id = UInt32(max(0, event.button))
+                    if id >= cardNodeID, id < cardNodeID + 3 { chipsLanded += 1 }
                 default:
                     break
                 }
@@ -481,14 +494,30 @@ func runProducer() {
             writer.text("chip \(index) — travels \(Int(travel))px", x: 16, y: 5)
             writer.endNode(contentW: 300, contentH: 32)
         }
+        // Sequenced off the arrivals, not off a clock. The badge cannot show
+        // up early because this process has no way to know the transition is
+        // nearly done — only that it is, or is not, finished.
+        let badgeIn = chipsLanded >= 3
+        writer.beginNode(id: badgeNodeID, x: 40, y: 332, w: 260, h: 30, flags: 0)
+        writer.animateNode(
+            opacity: badgeIn ? 1.0 : 0.0,
+            translateX: 0, translateY: badgeIn ? 0 : -14,
+            duration: 0.22
+        )
+        writer.rect(x: 0, y: 0, w: 260, h: 30, color: 0xff2f4f3f)
+        writer.text("all three landed", x: 12, y: 4, color: 0xffa7f3c0)
+        writer.endNode(contentW: 260, contentH: 30)
+
         writer.text(cardOpen ? "space: chips home" : "space: chips away",
-                    x: 40, y: 330, color: 0xff8ea0c8)
+                    x: 40, y: 380, color: 0xff8ea0c8)
+        writer.text("arrivals reported: \(chipsLanded)/3",
+                    x: 40, y: 410, color: 0xff8ea0c8)
 
         let chartWidth = max(120, viewW * 0.5 - 40)
         let baseline = viewH - 40
         let barPitch: Float = 28
         let barWidth: Float = 20
-        let room = max(60, baseline - 400)
+        let room = max(60, baseline - 460)
         let bars = min(3 + Int(t) % 22, max(1, Int((chartWidth - 40) / barPitch)))
         var hovered = -1
         for i in 0..<bars {

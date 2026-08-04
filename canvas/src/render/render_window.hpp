@@ -195,8 +195,12 @@ class RenderWindow {
   ///
   /// `outMoved` collects the nodes whose offset actually changed, so the
   /// window can tell the producer where they ended up.
+  /// `outFinished` collects nodes whose declared animation arrived on this
+  /// step, so the window can tell the producer. An edge, not a state: a node
+  /// appears here once per transition.
   bool advanceSceneAnimations(double now,
-                              std::vector<canvas::SceneNodeOffset> &outMoved);
+                              std::vector<canvas::SceneNodeOffset> &outMoved,
+                              std::vector<uint32_t> &outFinished);
 
   /// Points the scene graph at a new pointer position.
   ///
@@ -280,6 +284,10 @@ class RenderWindow {
     float startTranslateX = 0.f;
     float startTranslateY = 0.f;
     double animationStart = -1.0;
+    /// True between a retarget and the arrival it produces. What turns the
+    /// arrival into an edge worth reporting rather than a state that is
+    /// true on every frame afterwards.
+    bool  animationRunning = false;
     /// False until the node has declared an animation once. The first
     /// declaration snaps rather than eases — see `NodeAnimate`.
     bool  animationSeen = false;

@@ -1334,7 +1334,12 @@ void RenderWindow::replayDrawList(const canvas::DrawList &list, float viewW,
         anim.opacity    = anim.targetOpacity;
         anim.translateX = anim.targetTranslateX;
         anim.translateY = anim.targetTranslateY;
-      } else if (retargeted && anim.animationTimed) {
+      } else if (retargeted) {
+        // In flight until it arrives, which is what makes the arrival an
+        // edge rather than a condition that stays true forever after.
+        anim.animationRunning = true;
+      }
+      if (!first && retargeted && anim.animationTimed) {
         // The clock starts where the node actually is, not where the last
         // transition was aiming — retargeting mid-flight has to continue from
         // the visible position or it jumps.
@@ -1661,7 +1666,8 @@ bool RenderWindow::scrollSceneNode(float pointerX, float pointerY,
 }
 
 bool RenderWindow::advanceSceneAnimations(
-  double now, std::vector<canvas::SceneNodeOffset> &outMoved)
+  double now, std::vector<canvas::SceneNodeOffset> &outMoved,
+  std::vector<uint32_t> &outFinished)
 {
   // Time constant of an exponential approach: the remaining distance falls by
   // 1/e every 75ms, so a scroll arrives in about a fifth of a second without
@@ -1726,6 +1732,15 @@ bool RenderWindow::advanceSceneAnimations(
     // Producer-declared properties. The producer named a destination and
     // stopped thinking about it; getting there is this loop's job, which is
     // why it keeps working while that process is busy or stopped.
+    const auto arrived = [&] {
+      if (!state.animationRunning) return;
+      if (state.opacity != state.targetOpacity) return;
+      if (state.translateX != state.targetTranslateX) return;
+      if (state.translateY != state.targetTranslateY) return;
+      state.animationRunning = false;
+      outFinished.push_back(id);
+    };
+
     if (state.animationSeen && state.animationTimed) {
       const double duration =
         state.animationTau > 0.f ? state.animationTau : kDeclaredDuration;
@@ -1748,7 +1763,14 @@ bool RenderWindow::advanceSceneAnimations(
         if (t < 1.f) {
           animating = true;
         } else {
+          // Assigned, not left to the interpolation. `start + (target -
+          // start) * 1` is the target only up to rounding, and "has it
+          // arrived" is answered by comparing against the target exactly.
+          state.opacity        = state.targetOpacity;
+          state.translateX     = state.targetTranslateX;
+          state.translateY     = state.targetTranslateY;
           state.animationStart = -1.0;  // arrived; stop asking for frames
+          arrived();
         }
       }
     } else if (state.animationSeen) {
@@ -1777,6 +1799,9 @@ bool RenderWindow::advanceSceneAnimations(
       if (ease(state.translateY, state.targetTranslateY, 0.25f)) {
         animating = true;
       }
+      // A decay has no moment of arrival of its own; the snap below one
+      // drawable step is what stands in for one.
+      arrived();
     }
 
     // How far this node may travel *right now*, given what the producer has

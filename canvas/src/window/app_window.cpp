@@ -130,8 +130,9 @@ void AppWindow::stepSceneAnimations()
   // frame and not only on motion.
   if (render_->updateSceneHover(pointerX_, pointerY_)) internalRepaint_ = true;
   sceneMovedScratch_.clear();
-  const bool animating =
-    render_->advanceSceneAnimations(glfwGetTime(), sceneMovedScratch_);
+  sceneFinishedScratch_.clear();
+  const bool animating = render_->advanceSceneAnimations(
+    glfwGetTime(), sceneMovedScratch_, sceneFinishedScratch_);
 
   if (!sceneMovedScratch_.empty()) {
     std::lock_guard lock(inputMu_);
@@ -156,6 +157,20 @@ void AppWindow::stepSceneAnimations()
       } else {
         inputEvents_.push_back(ev);
       }
+    }
+  }
+
+  if (!sceneFinishedScratch_.empty()) {
+    std::lock_guard lock(inputMu_);
+    for (const uint32_t id : sceneFinishedScratch_) {
+      canvas::InputEvent ev;
+      ev.kind   = static_cast<uint32_t>(
+        canvas::InputEventKind::NodeAnimationDone);
+      ev.button = static_cast<int32_t>(id);
+      // Not coalesced, unlike `NodeScroll`. A position is a state and only
+      // the newest one matters; an arrival is an event, and dropping it
+      // loses the thing it was for.
+      inputEvents_.push_back(ev);
     }
   }
 

@@ -110,6 +110,16 @@ public enum InputEventKind: UInt32, Sendable, Equatable {
     /// rather than one per step. Ignoring it entirely is fine and obliges
     /// nothing.
     case nodeScroll = 10
+    /// A node finished the animation this process declared for it.
+    /// `button` = node id.
+    ///
+    /// The other half of declaring a target: having said "move there" and
+    /// stopped thinking about it, this is the only way to learn it arrived.
+    /// Sequencing one transition after another is the ordinary reason to
+    /// want that — a timer here would be a second copy of the renderer's
+    /// clock, running in a process that may not be scheduled when it
+    /// matters.
+    case nodeAnimationDone = 11
 }
 
 /// One polled event from `Editor.pollInputEvent`.

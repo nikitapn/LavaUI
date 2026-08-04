@@ -285,6 +285,18 @@ enum class InputEventKind : uint32_t {
   /// A producer that does not care can ignore the kind entirely; nothing
   /// here obliges it to redraw.
   NodeScroll = 10,
+  /// A node finished the animation its producer declared. `button` = node id.
+  ///
+  /// The other half of declaring a target. A producer that says "move there"
+  /// and stops thinking about it has, by construction, no idea when it
+  /// arrived — and sequencing one transition after another is the ordinary
+  /// reason to care. Guessing with a timer would mean duplicating the
+  /// renderer's clock in a process that may not be scheduled when it matters.
+  ///
+  /// One per transition, on the frame it lands. Not sent for the snap a node
+  /// makes the first time it declares an animation, because nothing moved,
+  /// and not sent when a producer restates a target it had already reached.
+  NodeAnimationDone = 11,
 };
 
 struct InputEvent {

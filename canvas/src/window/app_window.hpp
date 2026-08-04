@@ -191,6 +191,7 @@ class AppWindow {
   bool internalRepaint_ = false;
   /// Reused across frames so an animating window allocates nothing.
   std::vector<canvas::SceneNodeOffset> sceneMovedScratch_;
+  std::vector<uint32_t>                sceneFinishedScratch_;
 
   /// Modifier state, tracked per window because each window gets its own key
   /// callback and only the focused one is receiving them.
