@@ -147,6 +147,9 @@ class AppWindow {
   /// Steps scene-node animations and queues the resulting `NodeScroll`
   /// events. Once per repaint, before the frame is drawn.
   void stepSceneAnimations();
+  /// Re-answers which node is under the pointer, repainting and telling the
+  /// producer if the answer changed.
+  void noteSceneHover(float x, float y);
   /// A view over whatever the producer last committed.
   canvas::DrawList currentDrawList() const;
 

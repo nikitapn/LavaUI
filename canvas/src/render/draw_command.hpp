@@ -297,6 +297,23 @@ enum class InputEventKind : uint32_t {
   /// makes the first time it declares an animation, because nothing moved,
   /// and not sent when a producer restates a target it had already reached.
   NodeAnimationDone = 11,
+  /// The node under the pointer changed. `button` = node id, 0 for none.
+  ///
+  /// The renderer hit-tests to draw the tints, so it already knows; without
+  /// this the producer hit-tests the same geometry a second time, from
+  /// coordinates, to reach the same answer. Worse than redundant once nodes
+  /// move: a node the renderer has scrolled or animated is no longer where
+  /// the producer declared it, so the producer's own test is wrong exactly
+  /// when it matters.
+  ///
+  /// A press needs no event of its own. The renderer presses whatever is
+  /// hovered, and this is queued before the `MouseDown` that follows it, so
+  /// "the node this click is for" is the last one reported.
+  ///
+  /// Coalesced only against the back of the queue — a run of hover changes
+  /// collapses, but one separated by a `MouseDown` does not, because that is
+  /// the pairing the ordering above depends on.
+  NodeHover = 12,
 };
 
 struct InputEvent {

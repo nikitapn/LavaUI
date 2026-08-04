@@ -273,6 +273,46 @@ The demo sequences a badge off it: three chips move, and only once all three
 have reported does the badge animate in. Nothing in the producer knows how
 long any of that took.
 
+## Hover read-back and click routing
+
+The renderer hit-tests to draw the tints, so it already knows which node is
+under the pointer. `InputEventKind::NodeHover` says so: `button` = node id,
+0 for none.
+
+Without it the producer hit-tests the same geometry a second time from
+coordinates — and gets it *wrong* for any node the renderer has scrolled or
+animated, because that node is no longer where the producer declared it.
+Wrong exactly when it matters, which is why this is not merely redundant.
+
+A press needs no event of its own. The renderer presses whatever is hovered,
+and the hover is queued immediately before the `MouseDown` that follows, so
+"the node this click is for" is simply the last one reported. That pairing is
+why the coalescing is against the back of the queue only: a run of hover
+changes collapses, one separated by a `MouseDown` does not.
+
+The demo routes row selection this way — click a row, scroll a thousand rows,
+click again, and the right row is selected with no geometry computed on the
+producer's side.
+
+## Reclaiming node state
+
+Node ids come from the producer, so `sceneState_` was append-only for the life
+of a window: a virtualized list left an entry behind for every row ever
+scrolled past, and nothing was ever freed. Individually small, but a
+compositor is a process that runs for weeks.
+
+State is now stamped with the replay it was last drawn in and swept in
+batches, dropping anything absent for 1800 replays — about half a minute at a
+display rate. Generous rather than prompt, because forgetting is visible: a
+node that comes back inside the window keeps where it was scrolled to, and one
+that comes back after it starts again from the top. The hovered and pressed
+nodes are never swept, since they are live even on a frame that happened not
+to draw them.
+
+Verified by the thing that would break first: a panel scrolled to y=38400 and
+left for 40 seconds — past the window — still held its position, because a
+node that is drawn every frame is never absent.
+
 ## Robustness
 
 The list is written by another process, so the composer treats a malformed
@@ -331,10 +371,13 @@ one as ordinary input rather than as an error:
   transform that silently skipped it would be worse than none.
 - **Two curves, neither chosen.** Decay or timed cubic; there is no way to
   ask for a spring, an overshoot, or a different easing.
-- **Nothing is reported about hover or press.** A producer can see where a
-  node was scrolled to and when a transition landed, but not which node the
-  pointer is over — so it still hit-tests clicks from coordinates, which
-  the renderer already has the geometry to answer.
+- **Nothing in LavaUI emits any of this yet.** `DrawList` has the calls;
+  no view uses them. See "Wiring this to LavaUI" below.
+- **Node ids are the producer's to invent, and there is no scheme for it.**
+  The demo hardcodes ranges (1 for the list, 2–4 for the chips, 1000+ for
+  rows). Anything with a dynamic view tree needs identities that are stable
+  across frames and unique across the whole tree, and that is a design
+  problem this API does not answer.
 - **A tint is a flat overlay** over the node's whole viewport, text
   included. That is the ordinary highlight look at low alpha, but it cannot
   express "change this one background colour".
@@ -344,3 +387,31 @@ one as ordinary input rather than as an error:
 - `DrawList.beginNode`/`endNode` exist for the in-process path but nothing
   in LavaUI emits them yet; its scroll views still do their own work in
   Swift.
+
+## Wiring this to LavaUI
+
+The wire format and the renderer are complete enough to build on, and the
+in-process path goes through the same `replayDrawList`, so nodes work there
+without any new plumbing. What is left is not plumbing:
+
+1. **Node identity.** Every other item depends on it. LavaUI's view tree has
+   identity — keyed `ForEach`, focus targets — but nothing that yields a
+   stable `uint32` per node, unique across the tree and unchanged across a
+   re-layout. Get this wrong and scroll positions land on the wrong rows
+   after an insert.
+2. **Deciding who owns each behaviour.** LavaUI already implements scroll,
+   hover and pressed in Swift. Wiring the renderer's versions in means
+   deleting the Swift ones, not running both — two systems with an opinion
+   about a scroll offset is a bug farm. This is the actual work, and it is
+   design work.
+3. **Layout that reads scroll.** Cull rects and any virtualization currently
+   take the scroll offset from LavaUI's own state. They would have to take
+   it from `NodeScroll`, which is a frame behind — the demo covers that with
+   overscan, and LavaUI would need the same.
+4. **A place for tints to come from.** `EndNode` takes two colours; LavaUI
+   has themed hover and pressed states already, so this is mapping rather
+   than invention.
+
+None of that is blocked on the renderer. But "ready to wire" overstates it:
+identity in particular is a problem to solve before the first view is
+converted, not during.

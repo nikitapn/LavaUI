@@ -214,6 +214,9 @@ class RenderWindow {
   /// moving the pointer does.
   bool updateSceneHover(float pointerX, float pointerY);
 
+  /// Node currently under the pointer, or 0.
+  uint32_t hoveredSceneNode() const { return hoveredNode_; }
+
   /// Records a press against whichever node is under the pointer.
   ///
   /// Unlike a scroll, the event is *not* consumed: a press means something to
@@ -288,6 +291,9 @@ class RenderWindow {
     /// arrival into an edge worth reporting rather than a state that is
     /// true on every frame afterwards.
     bool  animationRunning = false;
+    /// Replay index this node was last drawn in, for reclaiming the state of
+    /// nodes that are gone. See `sweepSceneState`.
+    uint64_t lastSeen = 0;
     /// False until the node has declared an animation once. The first
     /// declaration snaps rather than eases — see `NodeAnimate`.
     bool  animationSeen = false;
@@ -306,6 +312,23 @@ class RenderWindow {
   /// Timestamp of the last animation step, so a step covers real elapsed
   /// time rather than assuming a frame rate. Negative until the first step.
   double sceneAnimationTime_ = -1.0;
+  /// Counts replays, so node state can be aged out by how long a node has
+  /// been absent rather than by wall-clock time — a window nobody is drawing
+  /// should not forget anything.
+  uint64_t sceneReplayIndex_ = 0;
+
+  /// Drops the retained state of nodes that have not been drawn for a while.
+  ///
+  /// Without this the map is append-only for the life of the window: node ids
+  /// come from the producer, and one that mints an id per list row leaves an
+  /// entry behind for every row ever scrolled past. Nothing here is large,
+  /// but nothing here is ever freed either, and a compositor is a process
+  /// that runs for weeks.
+  ///
+  /// Generous rather than prompt, because forgetting is visible: a node that
+  /// comes back inside the window keeps where it was scrolled to, and one
+  /// that comes back after it starts again from the top.
+  void sweepSceneState();
   /// A point where the frame's recording has to be interrupted.
   ///
   /// `boundaries[i]` sits between segment i and segment i+1. Only the radius

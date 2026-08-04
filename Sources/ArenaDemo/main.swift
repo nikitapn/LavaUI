@@ -385,6 +385,10 @@ func runProducer() {
     /// How many chips have reported arriving since the last toggle. The
     /// renderer counts the frames; this only counts the arrivals.
     var chipsLanded = 0
+    /// Which node the pointer is over, as reported by the renderer.
+    /// Never computed here — see `.nodeHover`.
+    var hoveredNode: UInt32 = 0
+    var selectedRow = -1
     let rowCount = 5_000
     /// Where the renderer has scrolled the panel to, as reported back
     /// on the input stream. This process never sets it.
@@ -413,6 +417,16 @@ func runProducer() {
                     pointerY = event.y
                 case .mouseDown:
                     clicks += 1
+                    // Routed, not hit-tested. The last `.nodeHover` is the
+                    // node this click is for — and it is right even for rows
+                    // the renderer has scrolled somewhere else, which a
+                    // coordinate test against the declared position would
+                    // get wrong precisely when it mattered.
+                    if hoveredNode >= rowNodeBase {
+                        selectedRow = Int(hoveredNode - rowNodeBase)
+                    }
+                case .nodeHover:
+                    hoveredNode = UInt32(max(0, event.button))
                 case .scroll:
                     // Only the ones the renderer did *not* take. A wheel over
                     // the panel never gets here — that subtree is the
@@ -512,12 +526,17 @@ func runProducer() {
                     x: 40, y: 380, color: 0xff8ea0c8)
         writer.text("arrivals reported: \(chipsLanded)/3",
                     x: 40, y: 410, color: 0xff8ea0c8)
+        writer.text(
+            selectedRow < 0
+                ? "no row selected — click one"
+                : "row \(selectedRow) selected, routed by node id",
+            x: 40, y: 440, color: 0xff8ea0c8)
 
         let chartWidth = max(120, viewW * 0.5 - 40)
         let baseline = viewH - 40
         let barPitch: Float = 28
         let barWidth: Float = 20
-        let room = max(60, baseline - 460)
+        let room = max(60, baseline - 490)
         let bars = min(3 + Int(t) % 22, max(1, Int((chartWidth - 40) / barPitch)))
         var hovered = -1
         for i in 0..<bars {
@@ -590,9 +609,11 @@ func runProducer() {
                              w: panelW, h: rowPitch - 4, flags: 0)
             writer.rect(x: 0, y: 0, w: panelW, h: rowPitch - 4,
                         color: row % 2 == 0 ? 0xff2f2f3b : 0xff343442)
-            writer.rect(x: 0, y: 0, w: 4, h: rowPitch - 4, color: barColor(row))
-            writer.text("row \(row) — hover and press me",
-                        x: 16, y: 6, color: 0xffd8d8e4)
+            let picked = row == selectedRow
+            writer.rect(x: 0, y: 0, w: picked ? 10 : 4, h: rowPitch - 4,
+                        color: picked ? 0xffffffff : barColor(row))
+            writer.text(picked ? "row \(row) — selected" : "row \(row) — click me",
+                        x: 16, y: 6, color: picked ? 0xffffffff : 0xffd8d8e4)
             // Declared once. The renderer decides when they apply, and
             // repaints on its own when the answer changes.
             writer.endNode(contentW: panelW, contentH: rowPitch - 4,

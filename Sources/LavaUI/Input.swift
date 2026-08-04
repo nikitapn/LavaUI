@@ -120,6 +120,15 @@ public enum InputEventKind: UInt32, Sendable, Equatable {
     /// clock, running in a process that may not be scheduled when it
     /// matters.
     case nodeAnimationDone = 11
+    /// The node under the pointer changed. `button` = node id, 0 for none.
+    ///
+    /// The renderer hit-tests to draw its tints, so it already knows. Without
+    /// this the app would hit-test the same geometry again from coordinates —
+    /// and get it wrong for any node the renderer has scrolled or animated,
+    /// since that node is no longer where the app declared it.
+    ///
+    /// A click is this plus the `.mouseDown` queued immediately after it.
+    case nodeHover = 12
 }
 
 /// One polled event from `Editor.pollInputEvent`.

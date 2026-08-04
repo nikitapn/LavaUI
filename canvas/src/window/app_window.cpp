@@ -122,13 +122,37 @@ bool AppWindow::repaint()
 ///
 /// Called once per repaint, before the frame is drawn, so the offsets the
 /// composer reads are the ones this step produced.
+/// Re-answers hover, repaints if it changed, and tells the producer.
+///
+/// One function because the three always go together: the tint the renderer
+/// draws and the node id the producer is told must never be different
+/// answers to the same question.
+void AppWindow::noteSceneHover(float x, float y)
+{
+  if (!render_ || !render_->updateSceneHover(x, y)) return;
+  internalRepaint_ = true;
+
+  canvas::InputEvent ev;
+  ev.kind   = static_cast<uint32_t>(canvas::InputEventKind::NodeHover);
+  ev.button = static_cast<int32_t>(render_->hoveredSceneNode());
+  std::lock_guard lock(inputMu_);
+  // Against the back only. A run of hover changes as the pointer crosses a
+  // list collapses to the newest, but one separated by a MouseDown survives
+  // — that adjacency is what tells the producer which node a click was for.
+  if (!inputEvents_.empty() && inputEvents_.back().kind == ev.kind) {
+    inputEvents_.back() = ev;
+  } else {
+    inputEvents_.push_back(ev);
+  }
+}
+
 void AppWindow::stepSceneAnimations()
 {
   if (!render_) return;
   // Content scrolling under a stationary pointer changes what is beneath it
   // just as surely as moving the pointer does, so hover is re-answered every
   // frame and not only on motion.
-  if (render_->updateSceneHover(pointerX_, pointerY_)) internalRepaint_ = true;
+  noteSceneHover(pointerX_, pointerY_);
   sceneMovedScratch_.clear();
   sceneFinishedScratch_.clear();
   const bool animating = render_->advanceSceneAnimations(
@@ -390,7 +414,7 @@ void AppWindow::pointerMove(float x, float y)
     // geometry, and the producer would only be recomputing what is already
     // known here — at the cost of a round trip and a whole re-emit per
     // motion event.
-    if (render_ && render_->updateSceneHover(x, y)) internalRepaint_ = true;
+    noteSceneHover(x, y);
 
     canvas::InputEvent ev;
     ev.kind = static_cast<uint32_t>(canvas::InputEventKind::MouseMove);
@@ -423,9 +447,11 @@ void AppWindow::pointerButton(int button, bool pressed, float x, float y, int mo
       // interpret it.
       pointerX_ = x;
       pointerY_ = y;
-      if (render_) {
-        if (render_->updateSceneHover(x, y)) internalRepaint_ = true;
-        if (render_->updateScenePress(pressed)) internalRepaint_ = true;
+      // Before the MouseDown is queued below, so the producer reads the two
+      // in the order that pairs them: "this node", then "was clicked".
+      noteSceneHover(x, y);
+      if (render_ && render_->updateScenePress(pressed)) {
+        internalRepaint_ = true;
       }
       canvas::InputEvent ev;
       ev.kind =

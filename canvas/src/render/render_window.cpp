@@ -1225,6 +1225,7 @@ void RenderWindow::replayDrawList(const canvas::DrawList &list, float viewW,
     bool     clipped   = false;
   };
   std::vector<OpenNode> openNodes;
+  ++sceneReplayIndex_;
   float                 ox = 0.f;
   float                 oy = 0.f;
   // Multiplied down the tree, so a faded parent fades its children with it
@@ -1264,10 +1265,13 @@ void RenderWindow::replayDrawList(const canvas::DrawList &list, float viewW,
       // before the viewport is recorded — a node animated across the screen
       // must be hit-tested where it is now, not where it started.
       if (const auto anim = sceneState_.find(node.id);
-          anim != sceneState_.end() && anim->second.animationSeen) {
-        node.x += anim->second.translateX;
-        node.y += anim->second.translateY;
-        opacity *= anim->second.opacity;
+          anim != sceneState_.end()) {
+        anim->second.lastSeen = sceneReplayIndex_;
+        if (anim->second.animationSeen) {
+          node.x += anim->second.translateX;
+          node.y += anim->second.translateY;
+          opacity *= anim->second.opacity;
+        }
       }
 
       ox = node.x;
@@ -1412,6 +1416,7 @@ void RenderWindow::replayDrawList(const canvas::DrawList &list, float viewW,
       state.hoverTint     = hoverTint;
       state.pressTint     = pressTint;
       state.extentKnown = true;
+      state.lastSeen    = sceneReplayIndex_;
       ox                = node.parentOx;
       oy                = node.parentOy;
       opacity           = node.parentOpacity;
@@ -1577,7 +1582,32 @@ void RenderWindow::replayDrawList(const canvas::DrawList &list, float viewW,
     if (openNodes.back().clipped) quads_.popScissor();
     openNodes.pop_back();
   }
+  sweepSceneState();
   quads_.end();
+}
+
+void RenderWindow::sweepSceneState()
+{
+  /// How many replays a node may go undrawn before its state is dropped.
+  /// About half a minute at a display rate — long enough that a hidden panel
+  /// keeps its scroll position across a visit somewhere else, short enough
+  /// that a list scrolled through for hours does not accumulate a row's worth
+  /// of state per row.
+  constexpr uint64_t kRetainReplays = 1800;
+  /// Swept in batches. The map is small and the scan is cheap, but it is on
+  /// the frame path and there is nothing to gain by walking it every frame.
+  constexpr uint64_t kSweepEvery = 300;
+
+  if (sceneReplayIndex_ % kSweepEvery != 0) return;
+  if (sceneReplayIndex_ <= kRetainReplays) return;
+  const uint64_t cutoff = sceneReplayIndex_ - kRetainReplays;
+  for (auto it = sceneState_.begin(); it != sceneState_.end();) {
+    // Never the node under the pointer or the one holding a press: those are
+    // live even on a frame that happened not to draw them.
+    const bool live = it->first == hoveredNode_ || it->first == pressedNode_;
+    it = (!live && it->second.lastSeen < cutoff) ? sceneState_.erase(it)
+                                                 : std::next(it);
+  }
 }
 
 void RenderWindow::resetSceneState()
