@@ -8,10 +8,16 @@ import LavaIDL
 import NPRPC
 #endif
 
-// One renderer process, one app process, one shared arena between them.
+// One renderer process, several app processes, one shared arena each.
 //
 //   terminal 1:  swift run -c release ArenaDemo host
-//   terminal 2:  swift run -c release ArenaDemo produce
+//   terminal 2:  swift run -c release ArenaDemo produce alpha
+//   terminal 3:  swift run -c release ArenaDemo produce beta
+//
+// The host opens one window of its own — the compositor's, listing who is
+// connected — and one more per client that asks for a surface. Each client
+// gets its own window, its own arena and its own input stream; none of them
+// knows the others exist.
 //
 // The producer owns no GPU, no window and no Vulkan. It shapes text with
 // HarfBuzz — which is why `canvas::Font` deliberately "doesn't know Vulkan
@@ -39,7 +45,21 @@ import NPRPC
 // looked like before the control plane existed.
 
 let mode = CommandLine.arguments.dropFirst().first ?? "host"
+
+/// A label for this client, so several running at once are distinguishable —
+/// it titles the window and names the arena.
+let clientName = CommandLine.arguments.dropFirst(2).first ?? "demo"
+
+#if canImport(LavaIDL)
+/// Namespaced by pid, because `DrawArena.create` refuses an id that already
+/// exists — which is the right refusal, and exactly what two clients of the
+/// same compositor would hit if the id were a constant.
+let arenaID = "\(clientName)-\(getpid())"
+#else
+/// Without a control plane the renderer polls for one well-known arena, so
+/// the id has to be the one it is looking for.
 let arenaID = "demo"
+#endif
 
 let fontPath = (LavaResources.fontsDirectory as NSString)
     .appendingPathComponent("OpenSans-Regular.ttf")
@@ -55,10 +75,14 @@ nonisolated(unsafe) var sharedFontID: UInt32 = 0
 // ─── Renderer ────────────────────────────────────────────────────────────────
 
 func runHost() {
+    // The compositor's own window, and the only one it opens for itself. It
+    // outlives every client, which is what keeps the device and the event
+    // loop alive across a desktop where every app has quit — and it gives
+    // "which clients are connected" somewhere to be answered.
     guard let editor = Editor.open(
         assetsRoot: CanvasResources.engineRoot,
-        width: 720, height: 480,
-        title: "ArenaDemo · renderer"
+        width: 560, height: 300,
+        title: "LavaUI compositor"
     ) else {
         FileHandle.standardError.write(Data("failed to open the window\n".utf8))
         exit(1)
@@ -67,11 +91,18 @@ func runHost() {
 #if canImport(LavaIDL)
     // Both the font id and the arena now arrive over RPC, so the renderer
     // registers nothing up front and waits to be told.
+    LoopQueue.loopThread = Thread.current
     LoopQueue.wake = { [editor] in editor.wakeEventLoop() }
-    // Before anyone can subscribe, so the first event a client ever sees is
-    // the window's real size rather than a guess.
-    let size = editor.framebufferSize()
-    InputBroker.postCurrentSize(width: size.w, height: size.h)
+    // LavaUI's own resources, not the engine tree — the compositor's window is
+    // drawn by this process through the ordinary in-process path, so it needs
+    // the same face any LavaUI app would use.
+    if FontStore.bootstrap(assetsRoot: LavaResources.root, pixelSize: 16, into: editor) == nil {
+        FileHandle.standardError.write(
+            Data("warning: no UI face — the compositor window will be blank\n".utf8)
+        )
+    }
+    let rootList = DrawList(editor: editor, window: .main)
+
     do {
         rpcRuntime = try startCompositorService(editor: editor)
     } catch {
@@ -80,36 +111,75 @@ func runHost() {
     }
 
     var lastLagReport = Date.distantPast
+    var lastStatus: [String] = []
     while editor.isOpen {
         // Blocks until something happens: input, or a client's `Present`
         // waking us through `LoopQueue`/`wakeEventLoop`. No frame clock, no
         // poll — an idle desktop costs nothing.
         editor.pumpEvents(timeout: -1)
 
-        // Servant work first: a `RegisterFont` that arrived while we were
+        // Servant work first: a `CreateSurface` that arrived while we were
         // parked belongs to the frame about to be drawn.
         LoopQueue.drain()
 
-        // The renderer interprets none of this — it forwards. Which is the
-        // point: the process that owns the window is not the process that
-        // knows what a click means.
-        while let event = editor.pollInputEvent() {
-            InputBroker.post(event)
+        // Input goes to the client that owns the window it happened in, and
+        // nowhere else. The renderer interprets none of it — it routes and
+        // forwards. Which is the point: the process that owns the window is
+        // not the process that knows what a click means.
+        for window in editor.windowIDs {
+            let surface = SurfaceRegistry.surface(window: window)
+            while let event = editor.pollInputEvent(window: window) {
+                // Drained even for the compositor's own window, which has no
+                // client: an unread queue only grows.
+                guard let surface else { continue }
+                surface.input.post(event)
+                // A resize recreates the swapchain and an expose invalidates
+                // what was on screen, so both need a repaint whether or not
+                // the client publishes a new frame in response.
+                if event.kind == .resize || event.kind == .refresh {
+                    SurfaceRegistry.markDirty(surfaceId: surface.id)
+                }
+            }
         }
 
-        // Repaint on a published frame, and also on any other wake, since a
-        // resize or expose has to redraw what the arena already holds.
-        _ = CompositorImpl.takeFrameReady()
-        editor.renderFrame()
+        // The titlebar X. On a client's window it ends that client's surface
+        // — the input stream stops, which is how the client hears about it.
+        for window in editor.windowIDs where editor.windowShouldClose(window) {
+            if let surface = SurfaceRegistry.surface(window: window) {
+                SurfaceRegistry.destroy(id: surface.id)
+            }
+        }
+        // On the compositor's own window it ends the compositor.
+        if editor.windowShouldClose(.main) { break }
+
+        // Only what changed. This is what naming the surface in `Present`
+        // buys: with ten clients on screen, one publishing a frame costs one
+        // repaint rather than ten.
+        for window in SurfaceRegistry.takeDirty() {
+            editor.renderFrame(window: window)
+            // Shown after its first frame, never before — see `Surface.shown`.
+            if let surface = SurfaceRegistry.surface(window: window), !surface.shown {
+                surface.shown = true
+                editor.setVisible(true, window: window)
+            }
+        }
+
+        let status = compositorStatus()
+        if status != lastStatus {
+            lastStatus = status
+            drawCompositorStatus(editor: editor, list: rootList, lines: status)
+            editor.renderFrame(window: .main)
+        }
 
         // What the ack direction buys: a client that has stopped reading is
         // visible from here, and looks nothing like one that is simply idle.
-        let lag = InputBroker.lag
-        if lag > 64, Date().timeIntervalSince(lastLagReport) > 1 {
-            lastLagReport = Date()
-            FileHandle.standardError.write(
-                Data("client is \(lag) input events behind\n".utf8)
-            )
+        if Date().timeIntervalSince(lastLagReport) > 1 {
+            for surface in SurfaceRegistry.all where surface.input.lag > 64 {
+                lastLagReport = Date()
+                let line = "surface \(surface.id) (\(surface.title)) is "
+                    + "\(surface.input.lag) input events behind\n"
+                FileHandle.standardError.write(Data(line.utf8))
+            }
         }
     }
 #else
@@ -137,6 +207,45 @@ func runHost() {
     }
 #endif
 }
+
+#if canImport(LavaIDL)
+/// What the compositor's own window says. Recomputed every iteration and
+/// compared, so the root repaints when the answer changes and not on every
+/// frame some client happens to publish.
+func compositorStatus() -> [String] {
+    let surfaces = SurfaceRegistry.all
+    guard !surfaces.isEmpty else {
+        return [
+            "LavaUI compositor — no clients",
+            "",
+            "run:  ArenaDemo produce <name>",
+        ]
+    }
+    return ["LavaUI compositor — \(surfaces.count) surface(s)", ""]
+        + surfaces.map { "#\($0.id)  \($0.title)  ·  arena \($0.arenaId)" }
+}
+
+/// Draws the root window from this process, through the ordinary in-process
+/// `DrawList` path — the same renderer, fed from local memory instead of from
+/// a client's arena.
+func drawCompositorStatus(editor: Editor, list: DrawList, lines: [String]) {
+    let size = editor.framebufferSize(window: .main)
+    list.clear()
+    list.rect(x: 0, y: 0, w: size.w, h: size.h,
+              color: Color(r: 0.09, g: 0.09, b: 0.12))
+    var y: Float = 20
+    for (index, line) in lines.enumerated() {
+        list.text(
+            line, x: 20, y: y, w: size.w - 40, h: 22,
+            color: index == 0
+                ? Color(r: 0.95, g: 0.95, b: 0.98)
+                : Color(r: 0.63, g: 0.67, b: 0.78)
+        )
+        y += 26
+    }
+    editor.submitDrawList(list)
+}
+#endif
 
 // ─── App ─────────────────────────────────────────────────────────────────────
 
@@ -181,32 +290,40 @@ func runProducer() {
     )
 
 #if canImport(LavaIDL)
-    // Order matters: the arena has to exist before `AttachArena`, because the
-    // renderer opens what the producer made. Registering the font first is
+    // Order matters: the arena has to exist before `CreateSurface`, because
+    // the renderer opens what the producer made. Registering the font first is
     // free either way and gets the id every glyph below is stamped with.
     var compositorOpt: Compositor?
     var inputOpt: InputChannel?
+    var surfaceIDOpt: UInt32?
     do {
         let (compositor, rpc) = try connectToCompositor()
         rpcRuntime = rpc
         sharedFontID = try blockingCall {
             try await compositor.registerFont(path: fontPath, pixelSize: fontPixelSize)
         }
-        try blockingCall { try await compositor.attachArena(arenaId: arenaID) }
-        // Only after `AttachArena`: the renderer accepts a subscription for
-        // an arena it has been pointed at, and this one is now it. Out of
-        // order, this throws `ArenaNotFound` right here — the servant's guard
-        // runs before it touches the stream, so the failure comes back as a
-        // typed exception at the call instead of as a stream that opens and
-        // then dies.
+        // Longer than the default: this one opens a window and builds a
+        // swapchain, which on a cold device is not a microsecond-scale call
+        // like the rest of this interface.
+        let surfaceID: UInt32 = try blockingCall(timeout: 10) {
+            try await compositor.createSurface(
+                arenaId: arenaID, width: 720, height: 480, title: clientName
+            )
+        }
+        // Only after `CreateSurface`: the id has to exist before it can be
+        // subscribed to. Out of order, this throws `SurfaceNotFound` right
+        // here — the servant's guard runs before it touches the stream, so
+        // the failure comes back as a typed exception at the call instead of
+        // as a stream that opens and then dies.
         //
         // Not `blockingCall`-wrapped — opening a stream is synchronous. What
         // comes back is a pair of endpoints, not an answer, so there is no
         // reply to wait for and nothing to strand.
-        inputOpt = InputChannel(stream: try compositor.subscribeInput(arenaId: arenaID))
+        inputOpt = InputChannel(stream: try compositor.subscribeInput(surfaceId: surfaceID))
         compositorOpt = compositor
+        surfaceIDOpt = surfaceID
         FileHandle.standardError.write(
-            Data("control plane up — font id \(sharedFontID)\n".utf8)
+            Data("control plane up — surface \(surfaceID), font id \(sharedFontID)\n".utf8)
         )
     } catch let error as ControlPlaneError {
         // Reaching the compositor at all is the only failure a running host
@@ -223,6 +340,16 @@ func runProducer() {
     }
     let compositor = compositorOpt
     let input = inputOpt
+    let surfaceID = surfaceIDOpt ?? 0
+
+    /// Hands the surface back on a clean exit. Not required for correctness —
+    /// the input stream ending says the same thing — but a client that knows
+    /// it is finished should say so rather than making the compositor infer
+    /// it from a socket.
+    func releaseSurface() {
+        guard let compositor else { return }
+        try? blockingCall { try await compositor.destroySurface(surfaceId: surfaceID) }
+    }
 #endif
 
     // What the renderer tells us about its window. The initial values are
@@ -239,8 +366,9 @@ func runProducer() {
     while true {
 #if canImport(LavaIDL)
         if let input {
-            // The renderer went away. Frames from here on would go into an
-            // arena nobody is mapping.
+            // The surface is gone — the user closed the window, or the
+            // renderer did. Frames from here on would go into an arena
+            // nobody is mapping.
             if input.isClosed { break }
             for event in input.drain() {
                 // `InputEventKind` is LavaUI's, unchanged: the wire struct is
@@ -259,7 +387,10 @@ func runProducer() {
                 case .key:
                     // GLFW key codes: 256 is Escape, `x` is the action and is
                     // zero on release.
-                    if event.button == 256, event.x != 0 { return }
+                    if event.button == 256, event.x != 0 {
+                        releaseSurface()
+                        return
+                    }
                 default:
                     break
                 }
@@ -321,7 +452,7 @@ func runProducer() {
         if let compositor {
             // Not awaited: `[unreliable]` has no reply to wait for, and a
             // frame loop should not pay a scheduling round trip to say "go".
-            Task.detached { await compositor.present() }
+            Task.detached { await compositor.present(surfaceId: surfaceID) }
         }
 #endif
         frame += 1
@@ -441,7 +572,7 @@ switch mode {
 case "host": runHost()
 case "produce", "producer": runProducer()
 default:
-    FileHandle.standardError.write(Data("usage: ArenaDemo [host|produce]\n".utf8))
+    FileHandle.standardError.write(Data("usage: ArenaDemo [host|produce [name]]\n".utf8))
     exit(2)
 }
 #else

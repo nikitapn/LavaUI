@@ -23,6 +23,18 @@ exception ArenaNotFound {
   arenaId: string;
 }
 
+/// The surface id is not one this compositor handed out, or its client has
+/// already let it go.
+///
+/// Distinct from `ArenaNotFound` because they are different mistakes: a bad
+/// arena id means "you named memory I cannot map", a bad surface id means
+/// "you named a window that is not yours or is not there any more". Only the
+/// second one can arrive because of a race the caller did not lose on
+/// purpose — a window the user closed while a call was in flight.
+exception SurfaceNotFound {
+  surfaceId: u32;
+}
+
 /// One raw input event, renderer → app.
 ///
 /// Field-for-field the shape of `canvas::InputEvent`, deliberately: the
@@ -70,16 +82,40 @@ interface Compositor {
   u32 RegisterFont(path: in string, pixelSize: in f32) raises(FontNotFound);
 
   // ─── Surfaces ──────────────────────────────────────────────────────────
+  //
+  // A surface is one window on the renderer's display, driven by one client's
+  // arena. It is the unit everything below is addressed by, because with more
+  // than one client "the window" stops naming anything: two apps mean two
+  // windows, two arenas, two input streams, and two independent lifetimes.
+  //
+  // The client asks and the compositor grants — it does not open its own
+  // window and hope someone attaches. That is the same direction WebView2 and
+  // Wayland run in, and for the same reason: the process that knows a window
+  // is wanted is the one with something to put in it.
 
-  /// Points a window at the shared-memory arena this client publishes frames
-  /// into. Until this lands the window has nothing to draw.
+  /// Asks for a window driven by `arenaId`, and returns the surface id that
+  /// names it in every later call.
   ///
   /// The arena must already exist: the client creates it, the renderer
   /// attaches. That ordering is what makes the arena's capacity and geometry
   /// the producer's business alone.
-  void AttachArena(arenaId: in string) raises(ArenaNotFound);
+  ///
+  /// `width` and `height` are a request, not a guarantee — the window manager
+  /// has the last word, and the size the client should actually draw at is
+  /// the one that arrives on `SubscribeInput` as the opening `Resize`. A
+  /// client that trusts these numbers instead is a client that draws at the
+  /// wrong size on any tiling WM.
+  u32 CreateSurface(arenaId: in string, width: in u32, height: in u32,
+                    title: in string) raises(ArenaNotFound);
 
-  /// "A frame is committed; come and get it."
+  /// Gives the surface back: the window closes and the arena is released.
+  ///
+  /// Not the only way a surface ends — closing the input stream does it too,
+  /// and so does the user closing the window — but it is the one a client
+  /// that never subscribed to input can use.
+  void DestroySurface(surfaceId: in u32) raises(SurfaceNotFound);
+
+  /// "A frame is committed on this surface; come and get it."
   ///
   /// `[unreliable]` — no reply, no ack, no round trip. Correct rather than
   /// merely cheap: the arena's `published` sequence is already the authority
@@ -91,7 +127,11 @@ interface Compositor {
   /// renderer has to poll, which is a busy loop pretending to be a frame
   /// clock; with it the renderer blocks until a client actually has
   /// something to show.
-  [unreliable] void Present();
+  ///
+  /// Naming the surface is what keeps that property once there is more than
+  /// one client: the renderer redraws the window that published, instead of
+  /// redrawing every window because *somebody* did.
+  [unreliable] void Present(surfaceId: in u32);
 
   // ─── Input ─────────────────────────────────────────────────────────────
 
@@ -113,19 +153,27 @@ interface Compositor {
   /// guessed size until then, which is exactly the black margin this
   /// interface exists to remove.
   ///
-  /// `arenaId` names the surface, not the connection: input follows the
-  /// arena a window was attached to, so a client with two windows gets two
-  /// subscriptions rather than one multiplexed stream it has to demultiplex.
+  /// One subscription per surface, rather than one per client that has to be
+  /// demultiplexed: a client with two windows gets two streams, and each one
+  /// carries coordinates already in the right space. Multiplexing would mean
+  /// stamping every event with a surface id and making every client unpick
+  /// it, to save a stream that costs almost nothing.
+  ///
+  /// The subscription is also the surface's lease. When this stream ends —
+  /// the client closed it, the client died, the user closed the window — the
+  /// surface goes with it. Tying the two together is what stops a crashed
+  /// client from leaving a window on screen that nothing will ever draw into
+  /// again.
   ///
   /// `raises` here is a *stream-initialization* failure, and the distinction
-  /// is the useful part: an unknown `arenaId` is a caller mistake, so it fails
-  /// at the call, with a typed exception, before any stream exists. Aborting
-  /// the stream instead would report the same mistake one chunk later, as a
-  /// throw out of the client's `for try await` — by which point the caller has
-  /// already built a subscription around something that was never going to
-  /// work. The line is drawn at first stream access: throw before touching
-  /// the stream and the client sees `ArenaNotFound`; fail after, and it is a
-  /// stream error like any other.
-  bidi_stream<InputAck, InputEvent> SubscribeInput(arenaId: in string)
-      raises(ArenaNotFound);
+  /// is the useful part: an unknown `surfaceId` is a caller mistake, so it
+  /// fails at the call, with a typed exception, before any stream exists.
+  /// Aborting the stream instead would report the same mistake one chunk
+  /// later, as a throw out of the client's `for try await` — by which point
+  /// the caller has already built a subscription around something that was
+  /// never going to work. The line is drawn at first stream access: throw
+  /// before touching the stream and the client sees `SurfaceNotFound`; fail
+  /// after, and it is a stream error like any other.
+  bidi_stream<InputAck, InputEvent> SubscribeInput(surfaceId: in u32)
+      raises(SurfaceNotFound);
 }

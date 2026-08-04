@@ -59,6 +59,14 @@ Under WebSocket this reported itself on the first write after the client went:
     SubscribeInput(demo) — subscription 1 ended
 
 So a long-running renderer on shm accumulates one leaked servant task,
-`AsyncStream` buffer and broker entry per client that dies. Bounded in
-practice, and the lag counter makes it visible, but it wants the same
+`AsyncStream` buffer and broker entry per client that dies. It wants the same
 "session is gone" signal the other transports have.
+
+Since surfaces landed this is no longer only a leak, because the input stream
+is a surface's lease: the two ways a surface ends properly — the client asking
+and the user closing the window — both work, but `kill -9` on a client leaves
+its window on screen, frozen on its last frame, with nothing left that will
+ever draw into it. The teardown itself is wired and proven; it is only the
+signal that is missing. When a dead shm peer makes `write` fail, the existing
+path (`subscribeInput` returns → `SurfaceRegistry.destroy`) closes the window
+with no further change.
