@@ -98,6 +98,18 @@ public enum InputEventKind: UInt32, Sendable, Equatable {
     /// path count; the paths themselves come from `Editor.droppedFile(at:)`
     /// while handling this event — the next drop overwrites them.
     case fileDrop = 9
+    /// A scene node the renderer owns has moved. `button` = node id, `x`/`y`
+    /// = its scroll offset.
+    ///
+    /// The read path for renderer-owned state: the *decision* to scroll never
+    /// reaches this process, which is what lets it happen while this process
+    /// is stopped, but the *result* comes back — because a list that does not
+    /// know which rows are on screen cannot virtualize.
+    ///
+    /// Coalesced per node, so an animating scroll costs one event per frame
+    /// rather than one per step. Ignoring it entirely is fine and obliges
+    /// nothing.
+    case nodeScroll = 10
 }
 
 /// One polled event from `Editor.pollInputEvent`.

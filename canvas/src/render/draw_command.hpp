@@ -72,12 +72,22 @@ enum class DrawCommandKind : uint32_t {
   /// Closes the innermost open node.
   ///
   ///   x, y = content extent
+  ///   w, h = the vertical span of content actually emitted, in content
+  ///          space. Both zero means "all of it".
   ///
   /// The extent lives here and not on `BeginNode` because it is not known
   /// there: how big a node's content turns out to be is a *result* of
   /// emitting its children, not an input to it. The renderer needs it to
   /// clamp scrolling — content minus viewport is exactly how far a node can
   /// travel.
+  ///
+  /// The emitted span is what makes a *virtualized* node work. A producer
+  /// that declares five thousand rows and draws the twelve on screen has told
+  /// the renderer two different things: how far this node can eventually
+  /// scroll, and how far it can scroll *right now* with what is in the
+  /// arena. Without the second the renderer scrolls into memory nobody
+  /// filled, which is a blank panel — and a producer that is slow, or
+  /// stopped, is exactly when it happens.
   EndNode = 17,
 };
 
@@ -93,6 +103,12 @@ enum SceneNodeFlags : uint32_t {
   kSceneNodeScrollX = 1u << 2,
 };
 
+/// One node's scroll offset, on its way back to the producer.
+struct SceneNodeOffset {
+  uint32_t id = 0;
+  float    x = 0.f, y = 0.f;
+};
+
 /// One node as it was actually laid out, recorded during the last replay.
 ///
 /// Absolute, not local: this is what input is hit-tested against, and a hit
@@ -102,6 +118,9 @@ struct SceneNodeRect {
   uint32_t id = 0;
   float    x = 0.f, y = 0.f, w = 0.f, h = 0.f;
   float    contentW = 0.f, contentH = 0.f;
+  /// Vertical span of content actually drawn, in content space. Equal to
+  /// [0, contentH] for a node that emitted everything.
+  float    emittedTop = 0.f, emittedBottom = 0.f;
   uint32_t flags = 0;
 };
 
@@ -184,6 +203,19 @@ enum class InputEventKind : uint32_t {
   /// them via `Engine::pendingDroppedFiles()` while handling this event;
   /// the next drop overwrites them.
   FileDrop = 9,
+  /// A scene node moved. `button` = node id, `x`/`y` = its scroll offset.
+  ///
+  /// The read path for state the renderer owns. Scrolling a node deliberately
+  /// does not reach the producer — that is what makes it work while the
+  /// producer is stopped — but a producer that never learns where its node
+  /// ended up cannot virtualize a list, because it has no idea which rows are
+  /// on screen. So the *decision* stays here and the *result* goes back.
+  ///
+  /// Coalesced per node in the queue: only the latest position carries any
+  /// information, and an animating scroll produces one of these per frame.
+  /// A producer that does not care can ignore the kind entirely; nothing
+  /// here obliges it to redraw.
+  NodeScroll = 10,
 };
 
 struct InputEvent {

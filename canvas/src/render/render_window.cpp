@@ -1228,13 +1228,17 @@ void RenderWindow::replayDrawList(const canvas::DrawList &list, float viewW,
       // collapsing it — see `SceneNodeState::contentH`.
       float contentW = node.w;
       float contentH = node.h;
+      float emittedTop = 0.f;
+      float emittedBottom = node.h;
       if (const auto it = sceneState_.find(node.id); it != sceneState_.end()) {
         // Subtracted: scrolling down moves the content up.
         ox -= it->second.scrollX;
         oy -= it->second.scrollY;
         if (it->second.extentKnown) {
-          contentW = it->second.contentW;
-          contentH = it->second.contentH;
+          contentW      = it->second.contentW;
+          contentH      = it->second.contentH;
+          emittedTop    = it->second.emittedTop;
+          emittedBottom = it->second.emittedBottom;
         }
       }
 
@@ -1245,7 +1249,7 @@ void RenderWindow::replayDrawList(const canvas::DrawList &list, float viewW,
 
       node.recordIndex = sceneNodes_.size();
       sceneNodes_.push_back({node.id, node.x, node.y, node.w, node.h, contentW,
-                             contentH, node.flags});
+                             contentH, emittedTop, emittedBottom, node.flags});
       openNodes.push_back(node);
       break;
     }
@@ -1261,9 +1265,16 @@ void RenderWindow::replayDrawList(const canvas::DrawList &list, float viewW,
       auto &record    = sceneNodes_[node.recordIndex];
       record.contentW = cmd.x > 0.f ? cmd.x : node.w;
       record.contentH = cmd.y > 0.f ? cmd.y : node.h;
+      // w/h zero means "I drew all of it", which is what a producer that
+      // does not virtualize says by saying nothing.
+      const bool partial = cmd.w > 0.f || cmd.h > 0.f;
+      record.emittedTop    = partial ? cmd.w : 0.f;
+      record.emittedBottom = partial ? cmd.h : record.contentH;
       auto &state     = sceneState_[node.id];
       state.contentW  = record.contentW;
       state.contentH  = record.contentH;
+      state.emittedTop    = record.emittedTop;
+      state.emittedBottom = record.emittedBottom;
       state.extentKnown = true;
       ox                = node.parentOx;
       oy                = node.parentOy;
@@ -1434,6 +1445,7 @@ void RenderWindow::resetSceneState()
 {
   sceneState_.clear();
   sceneNodes_.clear();
+  sceneAnimationTime_ = -1.0;
 }
 
 bool RenderWindow::scrollSceneNode(float pointerX, float pointerY,
@@ -1459,22 +1471,89 @@ bool RenderWindow::scrollSceneNode(float pointerX, float pointerY,
   if (target == nullptr) return false;
 
   auto       &state = sceneState_[target->id];
-  const float wasX = state.scrollX, wasY = state.scrollY;
+  const float wasX = state.targetX, wasY = state.targetY;
 
   // Clamped to what there is to see. `max(0, …)` matters: content smaller
   // than its viewport has nowhere to go, and without the clamp it would
   // scroll to a negative extent and drift off the top.
+  //
+  // Applied to the target rather than the position: notches land while the
+  // last one is still easing, and each should extend the journey rather than
+  // restart it from wherever the animation happens to be.
   if (target->flags & canvas::kSceneNodeScrollY) {
     const float limit = std::max(0.f, target->contentH - target->h);
-    state.scrollY = std::clamp(state.scrollY - deltaY * kPixelsPerNotch, 0.f,
+    state.targetY = std::clamp(state.targetY - deltaY * kPixelsPerNotch, 0.f,
                                limit);
   }
   if (target->flags & canvas::kSceneNodeScrollX) {
     const float limit = std::max(0.f, target->contentW - target->w);
-    state.scrollX = std::clamp(state.scrollX - deltaX * kPixelsPerNotch, 0.f,
+    state.targetX = std::clamp(state.targetX - deltaX * kPixelsPerNotch, 0.f,
                                limit);
   }
-  return state.scrollX != wasX || state.scrollY != wasY;
+  return state.targetX != wasX || state.targetY != wasY;
+}
+
+bool RenderWindow::advanceSceneAnimations(
+  double now, std::vector<canvas::SceneNodeOffset> &outMoved)
+{
+  // Time constant of an exponential approach: the remaining distance falls by
+  // 1/e every 75ms, so a scroll arrives in about a fifth of a second without
+  // ever quite stopping — which is why the snap threshold below exists.
+  //
+  // Framed as a decay rather than a duration on purpose: a new notch mid-flight
+  // moves the target and the same curve keeps running, where a fixed-duration
+  // tween would have to decide whether to restart, extend, or blend.
+  constexpr double kTau = 0.075;
+  /// Below this the animation is over. Half a pixel cannot be seen, and
+  /// chasing the last of an exponential would repaint forever.
+  constexpr float kSnap = 0.5f;
+
+  const double dt = sceneAnimationTime_ < 0.0 ? 0.0 : now - sceneAnimationTime_;
+  sceneAnimationTime_ = now;
+  // Frame-rate independent: the fraction covered depends on elapsed time, not
+  // on how many times this happened to be called.
+  const float alpha =
+    dt > 0.0 ? static_cast<float>(1.0 - std::exp(-dt / kTau)) : 0.f;
+
+  bool animating = false;
+  for (auto &[id, state] : sceneState_) {
+    // How far this node may travel *right now*, given what the producer has
+    // actually drawn. Unlimited unless it said otherwise, so a producer that
+    // emits its whole content is unaffected.
+    float reachable = state.targetY;
+    if (state.extentKnown) {
+      const auto node = std::find_if(
+        sceneNodes_.begin(), sceneNodes_.end(),
+        [&](const canvas::SceneNodeRect &rect) { return rect.id == id; });
+      if (node != sceneNodes_.end()) {
+        reachable = std::clamp(state.targetY, state.emittedTop,
+                               std::max(state.emittedTop,
+                                        state.emittedBottom - node->h));
+      }
+    }
+
+    const float dx = state.targetX - state.scrollX;
+    const float dy = reachable - state.scrollY;
+    if (std::abs(dx) < kSnap && std::abs(dy) < kSnap) {
+      if (dx != 0.f || dy != 0.f) {
+        state.scrollX = state.targetX;
+        state.scrollY = reachable;
+        outMoved.push_back({id, state.scrollX, state.scrollY});
+      }
+      continue;
+    }
+    state.scrollX += dx * alpha;
+    state.scrollY += dy * alpha;
+    outMoved.push_back({id, state.scrollX, state.scrollY});
+    animating = true;
+  }
+  // Note what `reachable` does to this: a node that has caught up to the last
+  // row its producer drew reports *settled*, not animating, even with a
+  // further target outstanding. That matters — claiming to animate would ask
+  // for another frame at the display rate against a producer that may be
+  // stopped and will never draw the next row. Its next publish repaints, the
+  // reachable bound moves, and the scroll picks up where it left off.
+  return animating;
 }
 
 void RenderWindow::render(const canvas::DrawList &list)

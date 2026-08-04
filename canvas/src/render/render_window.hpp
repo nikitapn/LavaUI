@@ -175,11 +175,28 @@ class RenderWindow {
     return sceneNodes_;
   }
 
-  /// Applies a wheel event to the innermost scrollable node under the
-  /// pointer. Returns true if something moved, which is the caller's signal
-  /// that this window needs a repaint and that the event has been consumed.
+  /// Aims the innermost scrollable node under the pointer at a new offset.
+  ///
+  /// Moves the node's *target*, not the node: the visible offset eases toward
+  /// it in `advanceSceneAnimations`. A wheel notch is a discrete step, and
+  /// applying it directly is what makes wheel scrolling feel like a stepper
+  /// rather than like scrolling.
+  ///
+  /// Returns true if the target changed, which is the caller's signal that
+  /// the event has been consumed and this window needs a repaint.
   bool scrollSceneNode(float pointerX, float pointerY, float deltaX,
                        float deltaY);
+
+  /// Steps every in-flight node animation to `now` (seconds, monotonic).
+  ///
+  /// Returns true while anything is still moving — the caller's cue to keep
+  /// the frame loop awake, since an animation is a repaint nobody requested
+  /// and nothing else will ask for the next one.
+  ///
+  /// `outMoved` collects the nodes whose offset actually changed, so the
+  /// window can tell the producer where they ended up.
+  bool advanceSceneAnimations(double now,
+                              std::vector<canvas::SceneNodeOffset> &outMoved);
 
   /// Forgets every node's retained state.
   ///
@@ -192,8 +209,14 @@ class RenderWindow {
  private:
   /// What this window remembers about a node between frames.
   struct SceneNodeState {
+    /// Where the node is drawn.
     float scrollX = 0.f;
     float scrollY = 0.f;
+    /// Where it is heading. Equal to the above when nothing is animating,
+    /// which is also how "is this node animating" is answered — no separate
+    /// flag to keep in step with the numbers it describes.
+    float targetX = 0.f;
+    float targetY = 0.f;
     /// Last extent an `EndNode` actually reported.
     ///
     /// Retained rather than re-read per frame because the list comes from
@@ -205,6 +228,9 @@ class RenderWindow {
     /// short frame.
     float contentW = 0.f;
     float contentH = 0.f;
+    /// Span the last `EndNode` said it had actually drawn.
+    float emittedTop = 0.f;
+    float emittedBottom = 0.f;
     bool  extentKnown = false;
   };
 
@@ -213,6 +239,9 @@ class RenderWindow {
   /// surviving the republish is the whole point.
   std::unordered_map<uint32_t, SceneNodeState> sceneState_;
   std::vector<canvas::SceneNodeRect>           sceneNodes_;
+  /// Timestamp of the last animation step, so a step covers real elapsed
+  /// time rather than assuming a frame rate. Negative until the first step.
+  double sceneAnimationTime_ = -1.0;
   /// A point where the frame's recording has to be interrupted.
   ///
   /// `boundaries[i]` sits between segment i and segment i+1. Only the radius

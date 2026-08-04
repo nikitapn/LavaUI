@@ -447,11 +447,21 @@ public final class DrawList {
 
     /// Closes the innermost node. `contentW`/`contentH` are how big its
     /// children turned out to be, which is what bounds a scroll.
-    public func endNode(contentW: Float, contentH: Float) {
+    ///
+    /// `emittedTop`/`emittedBottom` are the vertical span actually drawn, for
+    /// a virtualized node that declares more content than it emits. Left at
+    /// zero they mean "all of it", which is the truth for anything that draws
+    /// its whole content.
+    public func endNode(
+        contentW: Float, contentH: Float,
+        emittedTop: Float = 0, emittedBottom: Float = 0
+    ) {
         var cmd = canvas.DrawCommand()
         cmd.kind = DrawKind.endNode.rawValue
         cmd.x = contentW
         cmd.y = contentH
+        cmd.w = emittedTop
+        cmd.h = emittedBottom
         cmd.color = 0
         appendCommand(cmd)
     }

@@ -370,6 +370,13 @@ func runProducer() {
     var pointerY: Float = -1
     var clicks = 0
     var scrolls = 0
+    /// The scrolling panel. Stable across frames because that is what
+    /// the renderer keys its retained state on.
+    let listNodeID: UInt32 = 1
+    let rowCount = 5_000
+    /// Where the renderer has scrolled the panel to, as reported back
+    /// on the input stream. This process never sets it.
+    var listScrollY: Float = 0
 
     let start = Date()
     var frame = 0
@@ -401,6 +408,12 @@ func runProducer() {
                     // difference between the retained half and the immediate
                     // one.
                     scrolls += 1
+                case .nodeScroll:
+                    // Where the renderer put our node. We did not decide it
+                    // and could not have — but knowing it is what lets the
+                    // rows below be emitted for the window rather than for
+                    // the whole list.
+                    if event.button == Int32(listNodeID) { listScrollY = event.y }
                 case .key:
                     // GLFW key codes: 256 is Escape, `x` is the action and is
                     // zero on release.
@@ -460,25 +473,38 @@ func runProducer() {
         // has. Stop this process with SIGSTOP and the panel still scrolls;
         // the bars beside it, which need a new frame to move, freeze.
         let panelX = viewW * 0.52
-        let panelY: Float = 214
+        let panelY: Float = 250
         let panelW = max(80, viewW - panelX - 30)
         let panelH = max(80, viewH - panelY - 30)
         let rowPitch: Float = 34
-        let rowCount = 40
         let contentH = Float(rowCount) * rowPitch
+
+        // Virtualized, which is what the read-back is for. Five thousand rows
+        // is 15,000 commands nobody would ever see; emitting the dozen that
+        // are on screen needs `listScrollY`, and the only process that knows
+        // it is the one doing the scrolling.
+        //
+        // Overscanned by three rows because this is a frame behind: the
+        // offset arrived with the last batch of input and the renderer has
+        // been easing onward since. Three rows is more than an ease covers in
+        // a frame, so the edge is never blank.
+        let overscan = 3
+        let firstRow = max(0, Int(listScrollY / rowPitch) - overscan)
+        let lastRow = min(rowCount - 1,
+                          Int((listScrollY + panelH) / rowPitch) + overscan)
 
         writer.text("scroll this panel — the renderer moves it, not this process",
                     x: panelX - 8, y: panelY - 32, color: 0xff8ea0c8)
         writer.rect(x: panelX - 8, y: panelY - 8, w: panelW + 16, h: panelH + 16,
                     color: 0xff20202a)
         writer.beginNode(
-            id: 1, x: panelX, y: panelY, w: panelW, h: panelH,
+            id: listNodeID, x: panelX, y: panelY, w: panelW, h: panelH,
             flags: SceneNodeFlags([.clip, .scrollY]).rawValue
         )
-        for row in 0..<rowCount {
-            // Local to the node: the renderer adds the node's position and
-            // its scroll offset. This process has no idea which rows are
-            // currently on screen, and does not need one.
+        for row in firstRow...max(firstRow, lastRow) {
+            // Positioned in the node's own content space, not the window's:
+            // the renderer adds the node's origin and subtracts wherever it
+            // has scrolled to.
             let y = Float(row) * rowPitch
             writer.rect(x: 0, y: y, w: panelW, h: rowPitch - 4,
                         color: row % 2 == 0 ? 0xff2f2f3b : 0xff343442)
@@ -486,7 +512,16 @@ func runProducer() {
             writer.text("row \(row) — scrolled by the renderer",
                         x: 16, y: y + 6, color: 0xffd8d8e4)
         }
-        writer.endNode(contentW: panelW, contentH: contentH)
+        // Both: how far this panel can *eventually* scroll, and how far it
+        // can scroll with what is in the arena right now. Without the second
+        // the renderer would scroll past the rows this frame drew and show
+        // blank — which is exactly what happens when the producer is slow,
+        // or stopped.
+        writer.endNode(
+            contentW: panelW, contentH: contentH,
+            emittedTop: Float(firstRow) * rowPitch,
+            emittedBottom: Float(lastRow + 1) * rowPitch
+        )
 
         if pointerX >= 0 {
             writer.rect(x: pointerX - 0.5, y: 0, w: 1, h: viewH, color: 0x40ffffff)
@@ -503,6 +538,10 @@ func runProducer() {
             pointerLabel(x: pointerX, y: pointerY, hovered: hovered,
                          clicks: clicks, scrolls: scrolls),
             x: 40, y: 156)
+        writer.text(
+            "rows \(firstRow)–\(lastRow) of \(rowCount) · "
+            + "panel held at y=\(Int(listScrollY))",
+            x: 40, y: 188, color: 0xff8ea0c8)
 
         writer.commit()
 #if canImport(LavaIDL)
@@ -594,12 +633,19 @@ private struct FrameWriter {
         commands += 1
     }
 
-    mutating func endNode(contentW: Float, contentH: Float) {
+    /// `emittedTop`/`emittedBottom` say how much of `contentH` was actually
+    /// drawn. Leaving them zero means "all of it".
+    mutating func endNode(
+        contentW: Float, contentH: Float,
+        emittedTop: Float = 0, emittedBottom: Float = 0
+    ) {
         guard reserve(commands: 1, glyphs: 0) else { return }
         var cmd = canvas.DrawCommand()
         cmd.kind = 17  // EndNode
         cmd.x = contentW
         cmd.y = contentH
+        cmd.w = emittedTop
+        cmd.h = emittedBottom
         frame.commands[commands] = cmd
         commands += 1
     }

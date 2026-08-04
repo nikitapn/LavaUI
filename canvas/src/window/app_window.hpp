@@ -144,6 +144,9 @@ class AppWindow {
  private:
   void installGlfwCallbacks();
   void queueRefreshEvent();
+  /// Steps scene-node animations and queues the resulting `NodeScroll`
+  /// events. Once per repaint, before the frame is drawn.
+  void stepSceneAnimations();
   /// A view over whatever the producer last committed.
   canvas::DrawList currentDrawList() const;
 
@@ -186,6 +189,8 @@ class AppWindow {
   float pointerY_ = -1.f;
   /// See `takeInternalRepaint`.
   bool internalRepaint_ = false;
+  /// Reused across frames so an animating window allocates nothing.
+  std::vector<canvas::SceneNodeOffset> sceneMovedScratch_;
 
   /// Modifier state, tracked per window because each window gets its own key
   /// callback and only the focused one is receiving them.

@@ -1,5 +1,6 @@
 #include "window/app_window.hpp"
 
+#include <algorithm>
 #include <iostream>
 #include <stdexcept>
 
@@ -97,6 +98,8 @@ bool AppWindow::repaint()
       inputEvents_.push_back(ev);
     }
 
+    stepSceneAnimations();
+
     if (arena_) {
       // A producer that has published nothing since the last repaint leaves
       // `arenaFrame_` alone, so a resize or an expose still redraws the frame
@@ -112,6 +115,52 @@ bool AppWindow::repaint()
   } catch (std::exception &ex) {
     std::cerr << ex.what() << '\n';
     return false;
+  }
+}
+
+/// Steps node animations and tells the producer where they got to.
+///
+/// Called once per repaint, before the frame is drawn, so the offsets the
+/// composer reads are the ones this step produced.
+void AppWindow::stepSceneAnimations()
+{
+  if (!render_) return;
+  sceneMovedScratch_.clear();
+  const bool animating =
+    render_->advanceSceneAnimations(glfwGetTime(), sceneMovedScratch_);
+
+  if (!sceneMovedScratch_.empty()) {
+    std::lock_guard lock(inputMu_);
+    for (const auto &moved : sceneMovedScratch_) {
+      canvas::InputEvent ev;
+      ev.kind   = static_cast<uint32_t>(canvas::InputEventKind::NodeScroll);
+      ev.button = static_cast<int32_t>(moved.id);
+      ev.x      = moved.x;
+      ev.y      = moved.y;
+      // Coalesced per node: an animating scroll emits one of these per frame,
+      // and only the newest position says anything the older ones did not.
+      // Scanned rather than compared against the back of the queue, because
+      // two nodes can be animating at once and would otherwise take turns
+      // failing to coalesce.
+      auto existing = std::find_if(
+        inputEvents_.begin(), inputEvents_.end(),
+        [&](const canvas::InputEvent &queued) {
+          return queued.kind == ev.kind && queued.button == ev.button;
+        });
+      if (existing != inputEvents_.end()) {
+        *existing = ev;
+      } else {
+        inputEvents_.push_back(ev);
+      }
+    }
+  }
+
+  if (animating) {
+    // An animation is a repaint nobody asked for, so nothing else will ask
+    // for the next one. The flag makes the frame loop draw it; the empty
+    // event stops the loop parking in `pumpEvents` before it does.
+    internalRepaint_ = true;
+    glfwPostEmptyEvent();
   }
 }
 
