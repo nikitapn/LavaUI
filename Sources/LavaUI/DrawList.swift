@@ -446,6 +446,21 @@ public final class DrawList {
     /// Not routed through `append`, unlike every primitive: `color` here is a
     /// flags bitfield, and `append` exists to put a *colour* through the
     /// opacity multiplier. Fading a node would turn `scrollY` into `clip`.
+    /// Opens a node for a view, taking its scene id from its `NodeID`.
+    ///
+    /// The overload views should use: reconciliation already keeps `NodeID`
+    /// stable across frames, and `SceneNodeIdentity` is what makes the number
+    /// the renderer sees stable *and* safe to hand on when the node is gone.
+    public func beginNode(
+        _ node: NodeID, x: Float, y: Float, w: Float, h: Float,
+        flags: SceneNodeFlags = []
+    ) {
+        beginNode(
+            id: SceneNodeIdentity.id(for: node),
+            x: x, y: y, w: w, h: h, flags: flags
+        )
+    }
+
     public func beginNode(
         id: UInt32, x: Float, y: Float, w: Float, h: Float,
         flags: SceneNodeFlags = []

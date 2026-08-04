@@ -394,11 +394,24 @@ The wire format and the renderer are complete enough to build on, and the
 in-process path goes through the same `replayDrawList`, so nodes work there
 without any new plumbing. What is left is not plumbing:
 
-1. **Node identity.** Every other item depends on it. LavaUI's view tree has
-   identity — keyed `ForEach`, focus targets — but nothing that yields a
-   stable `uint32` per node, unique across the tree and unchanged across a
-   re-layout. Get this wrong and scroll positions land on the wrong rows
-   after an insert.
+1. ~~**Node identity.**~~ Done — `SceneNodeIdentity`. LavaUI already had the
+   hard half: `NodeID` is the identity reconciliation preserves, so a keyed
+   `ForEach` row keeps it across an insert above it. What was missing is a
+   dense `uint32` alongside it, since `NodeID` is a counter that only climbs
+   and truncating it would eventually wrap onto a live node.
+
+   The difficulty is not minting ids, it is **reusing** them. An id released
+   and immediately reissued hands the new node whatever the renderer still
+   remembers about the old one — the symptom is a fresh list that opens
+   already scrolled, and it appears only after a specific amount of churn. So
+   an id waits out `retentionFrames` (matching the renderer's
+   `kRetainReplays`) plus a quarantine before it can be handed out again, and
+   the two constants are documented as a pair because changing one alone
+   reintroduces the hazard.
+
+   Counted in frames rather than seconds, because the renderer counts
+   replays: an idle app is not drawing and its renderer is not replaying, and
+   under a clock the two would disagree about how long "a while" is.
 2. **Deciding who owns each behaviour.** LavaUI already implements scroll,
    hover and pressed in Swift. Wiring the renderer's versions in means
    deleting the Swift ones, not running both — two systems with an opinion
@@ -412,6 +425,17 @@ without any new plumbing. What is left is not plumbing:
    has themed hover and pressed states already, so this is mapping rather
    than invention.
 
-None of that is blocked on the renderer. But "ready to wire" overstates it:
-identity in particular is a problem to solve before the first view is
-converted, not during.
+None of that is blocked on the renderer, and with identity done the next
+piece is (2) — which is a decision about ownership rather than code to write.
+
+## What is *not* retained
+
+Worth stating because the name invites the assumption: **no draw commands are
+cached**. Every frame still walks the whole command list and rebuilds every
+vertex. What is retained is *state* — scroll offsets, tint fades, animation
+targets — and what that buys is that the producer no longer has to be
+scheduled for any of it.
+
+Keeping vertex buffers per node and rebuilding only dirty subtrees is a real
+further step, and node identity is exactly what it would need. It has not
+been taken.

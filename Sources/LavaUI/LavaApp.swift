@@ -160,6 +160,11 @@ public enum LavaApp {
 
             // Input and sizing for every window first, so the animation tick
             // below sees this iteration's visibility rather than last one's.
+            // Once per frame for the whole process, before any window
+            // emits: scene ids are process-wide, and advancing per window
+            // would age them at N times the rate the renderer retires its
+            // own state at. See `SceneNodeIdentity`.
+            SceneNodeIdentity.advanceFrame()
             for window in windows { window.update() }
 
             // Once for the process, not once per window: the registry is
