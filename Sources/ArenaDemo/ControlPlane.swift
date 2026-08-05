@@ -728,10 +728,22 @@ final class InputChannel: @unchecked Sendable {
         }
     }
 
+    /// Called on the NPRPC thread the moment something arrives, for a client
+    /// whose frame loop parks rather than polls.
+    ///
+    /// `ArenaDemo`'s own producer spins a frame clock and calls `drain` when
+    /// it gets to it, so it needs no such thing. A LavaUI client blocks in
+    /// `pumpEvents` until something happens, and an input that only becomes
+    /// visible on the next tick would be an input that arrives when the next
+    /// tick happens to be — which for an idle app is never.
+    var onArrival: (@Sendable () -> Void)?
+
     private func enqueue(_ event: WireInputEvent) {
         lock.lock()
         queue.append(event)
+        let notify = onArrival
         lock.unlock()
+        notify?()
     }
 
     private func finish() {

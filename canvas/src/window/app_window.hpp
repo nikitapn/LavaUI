@@ -117,6 +117,21 @@ class AppWindow {
   int  pendingDroppedFileCount();
   std::string pendingDroppedFile(int index);
 
+  /// Queues an event that arrived already formed, rather than one derived
+  /// from a device here.
+  ///
+  /// What a client needs, and the only way some events can reach it at all:
+  /// `Resize`, `NodeHover`, `NodeScroll` and `NodeAnimationDone` are produced
+  /// by a renderer looking at its own retained scene, and there is no local
+  /// device to synthesize them from. Even for the ones `pointerMove` and
+  /// friends could cover, going through those would re-derive — coalescing
+  /// aside — decisions the renderer has already made.
+  ///
+  /// Coalesced the same way the local paths are, because the reason is the
+  /// same on either side of a boundary: only the newest pointer position or
+  /// node offset says anything the older ones did not.
+  void postInputEvent(uint32_t kind, float x, float y, int32_t button, int32_t mods);
+
   void pointerMove(float x, float y);
   void pointerButton(int button, bool pressed, float x, float y, int mods = 0);
   void keyEvent(int key, int action, int mods);

@@ -40,6 +40,10 @@ public:
   /// See `AppWindow::setClientSize`. No-op on a window that has a renderer.
   void setClientSize(float width, float height, uint32_t windowId = 0);
 
+  /// See `AppWindow::postInputEvent`.
+  void postInputEvent(uint32_t kind, float x, float y, int32_t button,
+                      int32_t mods, uint32_t windowId = 0);
+
   // ─── Windows ─────────────────────────────────────────────────────────────
   //
   // Every call below that concerns one window takes a trailing `windowId`.

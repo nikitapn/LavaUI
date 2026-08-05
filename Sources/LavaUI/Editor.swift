@@ -29,6 +29,9 @@ public final class Editor: @unchecked Sendable {
     /// window; a client under a shared renderer points it at the compositor.
     var remoteResources: (any GPUResourceHost)?
 
+    /// Per-window frame destinations. See `frames(for:)`.
+    private var frameSinks: [WindowID: any FrameSink] = [:]
+
     private init() {}
 
     public static func open(
@@ -81,6 +84,26 @@ public final class Editor: @unchecked Sendable {
     /// measures its own surface instead.
     public func setClientSize(width: Float, height: Float, window: WindowID = .main) {
         engine.setClientSize(width, height, window.raw)
+    }
+
+    /// Queues an event that arrived already formed — from a renderer in
+    /// another process — rather than one derived from a device here.
+    ///
+    /// The only way some events can reach a client at all: `.resize`,
+    /// `.nodeHover`, `.nodeScroll` and `.nodeAnimationDone` are answers a
+    /// renderer produces by looking at its own retained scene, and a client
+    /// has no scene and no device to synthesize them from. A `.resize` is
+    /// also state, not just an event, and updates what `framebufferSize`
+    /// reports from here on.
+    ///
+    /// Thread-safe, like every input entry point — the queue is the one thing
+    /// in a window that has always been touched from more than one thread.
+    /// Callers still have to `wakeEventLoop()` if the loop may be parked.
+    public func postInputEvent(_ event: InputEvent, window: WindowID = .main) {
+        engine.postInputEvent(
+            event.kind.rawValue, event.x, event.y, event.button, event.mods,
+            window.raw
+        )
     }
 
     public var isOpen: Bool { engine.isOpen() }
@@ -224,10 +247,41 @@ public final class Editor: @unchecked Sendable {
 
     public func submitDrawList(_ list: DrawList) {
         precondition(list.editor === self, "a DrawList belongs to its creating Editor")
+        list.publish()
+    }
+
+    /// Hands a finished frame to the engine's own renderer. The in-process
+    /// half of `FrameSink`; a client's frames go to an arena instead.
+    func commitFrame(_ written: FrameCapacity, window: WindowID = .main) {
         engine.commitDrawList(
-            list.commandCount, list.glyphCount, list.meshVertexCount,
-            list.spatialVertexCount, list.window.raw
+            written.commands, written.glyphs, written.meshVertices,
+            written.spatialVertices, window.raw
         )
+    }
+
+    /// Where this window's frames are written and who receives them.
+    ///
+    /// The engine's own buffers unless `publishFrames(to:window:)` said
+    /// otherwise, which is what keeps a windowed app unaware that a `DrawList`
+    /// has a destination at all. Created lazily and kept, because a sink holds
+    /// the buffers between frames.
+    func frames(for window: WindowID) -> any FrameSink {
+        if let existing = frameSinks[window] { return existing }
+        let sink = EngineFrameSink(editor: self, window: window)
+        frameSinks[window] = sink
+        return sink
+    }
+
+    /// Sends this window's frames somewhere other than the engine — a shared
+    /// arena another process renders from.
+    ///
+    /// Takes effect for `DrawList`s built after it, so a client installs the
+    /// sink before `LavaApp.run` rather than during. A list already holding
+    /// the old sink keeps writing to it, which is the safe way round: the
+    /// alternative is swapping the storage out from under a frame that is
+    /// halfway emitted.
+    public func publishFrames(to sink: any FrameSink, window: WindowID = .main) {
+        frameSinks[window] = sink
     }
 
     /// Install face for draw-list text (must match UIFont used for measure).

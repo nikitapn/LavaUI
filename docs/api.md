@@ -131,6 +131,58 @@ decode belongs on a worker and the upload must return to the main thread —
 it touches the device. Remotely the whole call is one round trip that touches
 nothing local, and the protocol's default implementation covers it.
 
+### Where finished frames go
+
+`FrameSink` is the other half: where a `DrawList` writes its frame, and who it
+hands the frame to. Those are one question rather than two, because the
+property worth keeping is that a draw command is written **once**, into the
+memory its consumer reads it from — a sink that only received a finished list
+would have to copy it, and a 1 MB copy is 2% of a frame for something that
+should cost nothing. So a sink hands out buffers first and is told what was
+filled in afterwards.
+
+`EngineFrameSink` is the default: the engine's own per-window buffers.
+`ArenaFrameSink` publishes into a `DrawArena` another process renders from:
+
+```swift
+let sink = ArenaFrameSink(id: arenaID, onPublish: { compositor.present(surfaceID) })
+editor.publishFrames(to: sink!)
+```
+
+`onPublish` exists because a shared-memory store wakes nobody — the arena's
+published sequence is the authority on what is current, but somebody still has
+to say "come and look". That call stays outside LavaUI, which does not know
+what a compositor is.
+
+Install it before `LavaApp.run`. A `DrawList` takes its sink when it is built,
+so swapping one in later would leave the running window on the old one — which
+is the safe way round, since the alternative is changing the storage under a
+frame that is halfway emitted.
+
+### Putting it together
+
+`ArenaDemo lavaui` is a complete client and the shortest description of what
+one is: `LavaApp.run` unmodified, with three installs before it.
+
+```swift
+let editor = LavaApp.openClient(width: 720, height: 560)!   // no window, no GPU
+editor.resources = CompositorResources(compositor)          // ids from the renderer
+editor.publishFrames(to: sink)                              // frames to shared memory
+LavaApp.run(editor: editor) { ClientDemoView() }
+```
+
+Input comes back the other way: the compositor's `SubscribeInput` stream feeds
+`Editor.postInputEvent` through `MainQueue`, which hops it to the loop's thread
+and wakes it out of `pumpEvents` on the way.
+
+What that buys is worth stating plainly, because it is the reason for all of
+it: **`kill -STOP` the client and its list still scrolls.** The renderer owns
+the scroll offset against a scene node id, so moving a subtree it already has
+needs nothing from the process that published it. Resume the client and it
+picks up from where the renderer got to, via `NodeScroll`. How far a stopped
+client can scroll is bounded by what it drew — see the emitted span and
+overscan in [the retained scene tree](retained-scene-tree.md).
+
 The agent server (`LAVA_AGENT_PORT`) works against a client for every verb
 that does not need pixels — `layout_tree`, `find`, `hit_test`, `click`,
 `scroll`, `settle`. That is not a testing affordance bolted on: injection is

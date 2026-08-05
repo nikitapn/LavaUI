@@ -861,8 +861,13 @@ private struct FrameWriter {
 switch mode {
 case "host": runHost()
 case "produce", "producer": runProducer()
+#if canImport(LavaIDL)
+case "lavaui": runLavaUIClient()
+#endif
 default:
-    FileHandle.standardError.write(Data("usage: ArenaDemo [host|produce [name]]\n".utf8))
+    FileHandle.standardError.write(
+        Data("usage: ArenaDemo [host|produce [name]|lavaui [name]]\n".utf8)
+    )
     exit(2)
 }
 #else

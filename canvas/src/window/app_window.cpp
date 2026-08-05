@@ -469,6 +469,58 @@ void AppWindow::queueRefreshEvent()
     inputEvents_.push_back(ev);
   }
 
+void AppWindow::postInputEvent(uint32_t kind, float x, float y, int32_t button,
+                               int32_t mods)
+{
+  using canvas::InputEventKind;
+  const auto k = static_cast<InputEventKind>(kind);
+
+  // A resize is state, not only an event: the size it carries is the answer
+  // to `framebufferSize` from here on, and a client has no other source for
+  // it. `setClientSize` queues the event itself.
+  if (k == InputEventKind::Resize) {
+    setClientSize(x, y);
+    return;
+  }
+
+  // Keep the pointer position current, for the same reason the local path
+  // does: a wheel event carries no position of its own.
+  if (k == InputEventKind::MouseMove) {
+    pointerX_ = x;
+    pointerY_ = y;
+  }
+
+  canvas::InputEvent ev;
+  ev.kind   = kind;
+  ev.x      = x;
+  ev.y      = y;
+  ev.button = button;
+  ev.mods   = mods;
+
+  std::lock_guard lock(inputMu_);
+  // Motion coalesces against the back of the queue; a node offset coalesces
+  // against its own node anywhere in it, because two nodes can be animating
+  // at once and would otherwise take turns failing to coalesce. Both mirror
+  // what the local paths already do.
+  if (k == InputEventKind::MouseMove) {
+    if (!inputEvents_.empty() && inputEvents_.back().kind == kind) {
+      inputEvents_.back() = ev;
+      return;
+    }
+  } else if (k == InputEventKind::NodeScroll) {
+    auto existing = std::find_if(
+      inputEvents_.begin(), inputEvents_.end(),
+      [&](const canvas::InputEvent &queued) {
+        return queued.kind == kind && queued.button == button;
+      });
+    if (existing != inputEvents_.end()) {
+      *existing = ev;
+      return;
+    }
+  }
+  inputEvents_.push_back(ev);
+}
+
 void AppWindow::pointerMove(float x, float y)
   {
     // Hover highlighting needs free motion too, not just drags — but motion

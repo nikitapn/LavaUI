@@ -121,6 +121,14 @@ void Engine::setClientSize(float width, float height, uint32_t windowId)
     [&](Application &app) { app.setClientSize(width, height, windowId); });
 }
 
+void Engine::postInputEvent(uint32_t kind, float x, float y, int32_t button,
+                            int32_t mods, uint32_t windowId)
+{
+  impl_->withApp([&](Application &app) {
+    app.postInputEvent(kind, x, y, button, mods, windowId);
+  });
+}
+
 void Engine::close()
 {
   impl_->appMenu.detach();

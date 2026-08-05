@@ -437,22 +437,22 @@ one as ordinary input rather than as an error:
   transform that silently skipped it would be worse than none.
 - **Two curves, neither chosen.** Decay or timed cubic; there is no way to
   ask for a spring, an overshoot, or a different easing.
-- **Nothing in LavaUI emits any of this yet.** `DrawList` has the calls;
-  no view uses them. See "Wiring this to LavaUI" below.
-- **Node ids are the producer's to invent, and there is no scheme for it.**
-  The demo hardcodes ranges (1 for the list, 2–4 for the chips, 1000+ for
-  rows). Anything with a dynamic view tree needs identities that are stable
-  across frames and unique across the whole tree, and that is a design
-  problem this API does not answer.
+- ~~**Nothing in LavaUI emits any of this yet.**~~ Done. `ScrollView` opens a
+  node, and a whole LavaUI app runs as a compositor client — `ArenaDemo
+  lavaui`. See "Wiring this to LavaUI" below.
+- ~~**Node ids are the producer's to invent, and there is no scheme for it.**~~
+  Done — `SceneNodeIdentity`. `ArenaDemo`'s hand-written producer still
+  hardcodes ranges, because a fixed tree can; anything dynamic gets ids from
+  there.
 - **A tint is a flat overlay** over the node's whole viewport, text
   included. That is the ordinary highlight look at low alpha, but it cannot
   express "change this one background colour".
 - **No fling.** A wheel notch is a discrete step, so this eases to a target
   rather than integrating a velocity. Kinetic scrolling from a touchpad
   would want the latter.
-- `DrawList.beginNode`/`endNode` exist for the in-process path but nothing
-  in LavaUI emits them yet; its scroll views still do their own work in
-  Swift.
+- **A client cannot name a resource it did not get from the renderer.**
+  `GPUResourceHost` covers fonts and image files; an image the client holds
+  only in memory has no way across. See `RegisterImage` in `idl/lava.npidl`.
 
 ## Wiring this to LavaUI
 
@@ -491,8 +491,12 @@ without any new plumbing. What is left is not plumbing:
    has themed hover and pressed states already, so this is mapping rather
    than invention.
 
-None of that is blocked on the renderer, and with identity done the next
-piece is (2) — which is a decision about ownership rather than code to write.
+(2), (3) and (4) are done: `ScrollView` and the hover/press tints are the
+renderer's, `paintedSpan` reports what was drawn so layout and the renderer
+agree about a virtualized node, and `EndNode`'s colours come from the theme.
+
+What is left is the thing none of it was blocked on — the tree is still
+republished in full every frame. See "Not done".
 
 ## What is *not* retained
 

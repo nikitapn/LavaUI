@@ -139,67 +139,123 @@ public final class DrawList {
     /// thing to keep true.
     private var retainedShift: (x: Float, y: Float) = (0, 0)
 
+    /// Where this frame lives and who gets it. The engine's own buffers
+    /// unless the editor was told otherwise — see `Editor.frames`.
+    private let sink: any FrameSink
+
+    /// The first frame's ask. Only a starting point: `grow` doubles from here
+    /// as a tree turns out to be bigger than the last one was.
+    private static let initialCapacity = FrameCapacity(
+        commands: 256, glyphs: 2048, meshVertices: 256, spatialVertices: 256
+    )
+
     public init(editor: Editor, window: WindowID = .main) {
         self.editor = editor
         self.window = window
-        editor.ensureDrawListCapacity(
-            commands: 256, glyphs: 2048, meshVertices: 256, spatialVertices: 256,
-            window: window
-        )
-        let storage = editor.drawListStorage(window: window)
-        commandStorage = storage.commands
-        commandCapacity = storage.commandCapacity
-        glyphStorage = storage.glyphs
-        glyphCapacity = storage.glyphCapacity
-        meshVertexStorage = storage.meshVertices
-        meshVertexCapacity = storage.meshVertexCapacity
-        spatialVertexStorage = storage.spatialVertices
-        spatialVertexCapacity = storage.spatialVertexCapacity
+        self.sink = editor.frames(for: window)
+        let buffers = sink.beginFrame(minimum: Self.initialCapacity)
+        commandStorage = buffers?.commands ?? Self.nowhere()
+        glyphStorage = buffers?.glyphs ?? Self.nowhere()
+        meshVertexStorage = buffers?.meshVertices ?? Self.nowhere()
+        spatialVertexStorage = buffers?.spatialVertices ?? Self.nowhere()
+        commandCapacity = buffers?.capacity.commands ?? 0
+        glyphCapacity = buffers?.capacity.glyphs ?? 0
+        meshVertexCapacity = buffers?.capacity.meshVertices ?? 0
+        spatialVertexCapacity = buffers?.capacity.spatialVertices ?? 0
     }
 
+    /// A one-element buffer for a frame with no storage, so the pointers are
+    /// never null and every append is refused by the capacity check instead.
+    /// Reached only when a sink declines to hand out a slot.
+    private static func nowhere<T>() -> UnsafeMutablePointer<T> {
+        UnsafeMutablePointer<T>.allocate(capacity: 1)
+    }
+
+    /// Starts a frame: resets the counts and claims storage for it.
+    ///
+    /// Claiming here rather than once at init is what a shared arena needs —
+    /// it is triple buffered, so the slot a frame is written into is chosen
+    /// per frame and the pointers move with it. The in-process sink hands back
+    /// the same buffers every time, so nothing changes for a windowed app.
     public func clear() {
         commandCount = 0
         glyphCount = 0
         meshVertexCount = 0
         spatialVertexCount = 0
         cullStack.removeAll(keepingCapacity: true)
+        adopt(sink.beginFrame(minimum: Self.initialCapacity))
+    }
+
+    /// Hands the frame to its sink. Returns whether anything was published —
+    /// false when no storage was claimed, which is a frame skipped rather
+    /// than a failure.
+    @discardableResult
+    public func publish() -> Bool {
+        guard commandCapacity > 0 else { return false }
+        sink.commit(written)
+        return true
+    }
+
+    private var written: FrameCapacity {
+        FrameCapacity(
+            commands: commandCount, glyphs: glyphCount,
+            meshVertices: meshVertexCount, spatialVertices: spatialVertexCount
+        )
+    }
+
+    private func adopt(_ buffers: FrameBuffers?) {
+        guard let buffers else {
+            // Nothing to write into. Zero capacity refuses every append, so
+            // the frame comes out empty rather than landing somewhere else.
+            commandCapacity = 0
+            glyphCapacity = 0
+            meshVertexCapacity = 0
+            spatialVertexCapacity = 0
+            return
+        }
+        commandStorage = buffers.commands
+        glyphStorage = buffers.glyphs
+        meshVertexStorage = buffers.meshVertices
+        spatialVertexStorage = buffers.spatialVertices
+        commandCapacity = buffers.capacity.commands
+        glyphCapacity = buffers.capacity.glyphs
+        meshVertexCapacity = buffers.capacity.meshVertices
+        spatialVertexCapacity = buffers.capacity.spatialVertices
     }
 
     private func grow(
         commands: Int = 0, glyphs: Int = 0, meshVertices: Int = 0,
         spatialVertices: Int = 0
     ) {
-        let nextCommands = commands > commandCapacity
-            ? max(commands, max(256, commandCapacity * 2)) : commandCapacity
-        let nextGlyphs = glyphs > glyphCapacity
-            ? max(glyphs, max(2048, glyphCapacity * 2)) : glyphCapacity
-        let nextMesh = meshVertices > meshVertexCapacity
-            ? max(meshVertices, max(256, meshVertexCapacity * 2)) : meshVertexCapacity
-        let nextSpatial = spatialVertices > spatialVertexCapacity
-            ? max(spatialVertices, max(256, spatialVertexCapacity * 2)) : spatialVertexCapacity
-        editor.ensureDrawListCapacity(
-            commands: nextCommands, glyphs: nextGlyphs, meshVertices: nextMesh,
-            spatialVertices: nextSpatial, window: window
+        let wanted = FrameCapacity(
+            commands: commands > commandCapacity
+                ? max(commands, max(256, commandCapacity * 2)) : commandCapacity,
+            glyphs: glyphs > glyphCapacity
+                ? max(glyphs, max(2048, glyphCapacity * 2)) : glyphCapacity,
+            meshVertices: meshVertices > meshVertexCapacity
+                ? max(meshVertices, max(256, meshVertexCapacity * 2)) : meshVertexCapacity,
+            spatialVertices: spatialVertices > spatialVertexCapacity
+                ? max(spatialVertices, max(256, spatialVertexCapacity * 2))
+                : spatialVertexCapacity
         )
-        let storage = editor.drawListStorage(window: window)
-        commandStorage = storage.commands
-        commandCapacity = storage.commandCapacity
-        glyphStorage = storage.glyphs
-        glyphCapacity = storage.glyphCapacity
-        meshVertexStorage = storage.meshVertices
-        meshVertexCapacity = storage.meshVertexCapacity
-        spatialVertexStorage = storage.spatialVertices
-        spatialVertexCapacity = storage.spatialVertexCapacity
+        // A sink that cannot grow leaves the buffers it already handed out
+        // valid, so the frame finishes smaller rather than being abandoned
+        // partway through emit — which it could not be anyway, since the tree
+        // walk is already halfway down.
+        guard let buffers = sink.grow(to: wanted, written: written) else { return }
+        adopt(buffers)
     }
 
     private func appendCommand(_ command: canvas.DrawCommand) {
         if commandCount == commandCapacity { grow(commands: commandCount + 1) }
+        guard commandCount < commandCapacity else { return }
         commandStorage[commandCount] = command
         commandCount += 1
     }
 
     private func appendGlyph(_ glyph: canvas.GlyphInstance) {
         if glyphCount == glyphCapacity { grow(glyphs: glyphCount + 1) }
+        guard glyphCount < glyphCapacity else { return }
         glyphStorage[glyphCount] = glyph
         glyphCount += 1
     }
@@ -208,6 +264,7 @@ public final class DrawList {
         if meshVertexCount == meshVertexCapacity {
             grow(meshVertices: meshVertexCount + 1)
         }
+        guard meshVertexCount < meshVertexCapacity else { return }
         meshVertexStorage[meshVertexCount] = vertex
         meshVertexCount += 1
     }
@@ -216,6 +273,7 @@ public final class DrawList {
         if spatialVertexCount == spatialVertexCapacity {
             grow(spatialVertices: spatialVertexCount + 1)
         }
+        guard spatialVertexCount < spatialVertexCapacity else { return }
         spatialVertexStorage[spatialVertexCount] = vertex
         spatialVertexCount += 1
     }
