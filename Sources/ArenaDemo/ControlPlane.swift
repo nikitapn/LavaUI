@@ -19,45 +19,38 @@ import NPRPC
 
 /// Work handed to the render loop from an NPRPC worker thread.
 ///
-/// NPRPC dispatches on its own thread pool, and nothing the renderer owns is
-/// thread-safe — the Vulkan device least of all. So a servant method does not
-/// *do* anything; it queues the work, wakes the loop out of `pumpEvents`, and
-/// waits for the answer. This is the same shape as LavaUI's `MainQueue`, which
-/// exists for exactly this hazard, and the reason it has to exist here too is
-/// that `ArenaDemo`'s host runs its own loop rather than `LavaApp.run`.
+/// Nothing the renderer owns is thread-safe — the Vulkan device least of all —
+/// so work that touches it has to reach the loop thread. This is the same
+/// shape as LavaUI's `MainQueue`, and it exists separately here because
+/// `ArenaDemo`'s host runs its own loop rather than `LavaApp.run`.
+///
+/// It is also the POA's dispatch target (see `PoaExecutor` and
+/// `startCompositorService`), which is what makes the servant methods below
+/// plain code: they are *already* on the loop by the time they run, and the
+/// queueing is NPRPC's rather than something each of them has to remember.
+///
+/// Nothing here waits. There used to be a `sync` — enqueue plus a semaphore —
+/// and every caller of it has become either a servant method (already on the
+/// loop) or a teardown that has no reason to watch the window close. Waiting
+/// on the loop from a Task is also the one shape that can deadlock now that
+/// the loop can wait on the concurrency pool; see `SurfaceRegistry.destroy`.
 enum LoopQueue {
     private static let lock = NSLock()
-    nonisolated(unsafe) private static var pending: [() -> Void] = []
+    nonisolated(unsafe) private static var pending: [@Sendable () -> Void] = []
     nonisolated(unsafe) static var wake: (@Sendable () -> Void)?
     /// Set once, by the loop itself. Only read to answer "am I already
-    /// there?" — see `sync`.
+    /// there?" — see `LoopExecutor.isRunningOnExecutor`.
     nonisolated(unsafe) static var loopThread: Thread?
 
-    /// Runs `body` on the loop thread and returns its result. Blocks the
-    /// calling (RPC) thread, never the loop.
-    static func sync<T>(_ body: @escaping () -> T) -> T {
-        // Called *from* the loop, this has to run inline. Queueing would wait
-        // for a drain that cannot happen until we return — a deadlock. It is
-        // reachable for real: destroying a surface takes this path both from
-        // an RPC thread and from the loop, when the user closes the window.
-        if Thread.current === loopThread { return body() }
-
-        let done = DispatchSemaphore(value: 0)
-        // `nonisolated(unsafe)` box: written on the loop thread, read here
-        // after the semaphore, which is the ordering that makes it safe.
-        nonisolated(unsafe) var result: T?
+    /// Enqueues work and wakes the loop to run it.
+    static func post(_ body: @escaping @Sendable () -> Void) {
         lock.lock()
-        pending.append {
-            result = body()
-            done.signal()
-        }
+        pending.append(body)
         let wake = Self.wake
         lock.unlock()
         // Outside the lock: the wake reaches into GLFW, and holding a lock
         // across it would let an RPC thread block on the loop's own use of it.
         wake?()
-        done.wait()
-        return result!
     }
 
     /// Drained once per loop iteration, before anything is rendered.
@@ -68,6 +61,20 @@ enum LoopQueue {
         lock.unlock()
         for item in work { item() }
     }
+}
+
+/// `LoopQueue` as NPRPC sees it.
+///
+/// An object rather than the enum because the POA holds a reference; there is
+/// no state here beyond the identity. See `PoaExecutor` — the contract is
+/// exactly what `LoopQueue` already did for its own callers: enqueue, wake,
+/// and answer honestly whether we are already on the loop.
+final class LoopExecutor: PoaExecutor {
+    static let shared = LoopExecutor()
+    private init() {}
+
+    func post(_ work: @escaping @Sendable () -> Void) { LoopQueue.post(work) }
+    var isRunningOnExecutor: Bool { Thread.current === LoopQueue.loopThread }
 }
 
 /// Fans one window's input out to whoever is subscribed to that surface.
@@ -207,7 +214,8 @@ final class Surface: @unchecked Sendable {
 ///
 /// Bookkeeping only — nothing here touches the engine, so it can be locked
 /// briefly and called from any thread. The engine work (opening a window,
-/// closing one) is `LoopQueue.sync`'d by the callers below.
+/// closing one) happens on the loop: for the servant methods because that is
+/// where they run, and for `destroy` because it posts.
 enum SurfaceRegistry {
     private static let lock = NSLock()
     nonisolated(unsafe) private static var surfaces: [UInt32: Surface] = [:]
@@ -305,8 +313,15 @@ enum SurfaceRegistry {
         // about it: its `for try await` finishes and its frame loop stops.
         surface.input.finishAll()
 
+        // Posted, not waited on. Nobody needs the window gone before this
+        // returns — the bookkeeping above already happened, so the surface is
+        // unreachable and `markDirty` can no longer name it — and one of the
+        // three callers is a Task on the concurrency pool. Blocking a pool
+        // thread on the loop is what would let a busy teardown and a new
+        // `SubscribeInput` wait on each other: stream dispatch parks the loop
+        // until its body starts, and its body needs a pool thread to start on.
         if let editor {
-            LoopQueue.sync {
+            LoopQueue.post {
                 editor.detachDrawArena(window: surface.window)
                 editor.closeWindow(surface.window)
             }
@@ -319,6 +334,15 @@ enum SurfaceRegistry {
 }
 
 /// Serves `lava.Compositor` on behalf of the renderer.
+///
+/// Every method here runs **on the render loop** — that is the POA's dispatch
+/// policy, not a convention (see `startCompositorService`). So the engine can
+/// be called directly, and the thing that used to be easy to get wrong is now
+/// impossible to express.
+///
+/// The cost is stated where it lands, in `registerImage`: work that does *not*
+/// need the device no longer has a thread to go to, because dispatch placement
+/// is a property of the POA and not of the method.
 final class CompositorImpl: CompositorServant, @unchecked Sendable {
     private let editor: Editor
 
@@ -328,9 +352,7 @@ final class CompositorImpl: CompositorServant, @unchecked Sendable {
     }
 
     override func registerFont(path: String, pixelSize: Float) throws -> UInt32 {
-        let id: UInt32? = LoopQueue.sync { [editor] in
-            editor.registerFont(path: path, pixelSize: pixelSize)
-        }
+        let id = editor.registerFont(path: path, pixelSize: pixelSize)
         guard let id else {
             var ex = FontNotFound()
             ex.path = path
@@ -345,10 +367,16 @@ final class CompositorImpl: CompositorServant, @unchecked Sendable {
     /// Opens, decodes and uploads the file itself — the client sends a path
     /// and never a bitmap.
     ///
-    /// On the loop thread because the upload touches the Vulkan device. That
-    /// makes a big first decode a stall in the compositor's frame, which is
-    /// the honest cost of doing it here and is why `ImageStore` asks off the
-    /// client's own critical path.
+    /// The one method that pays for the POA's dispatch policy. A decode is
+    /// 5–17 ms per cover, needs no device, and used to run on the RPC thread
+    /// while the loop kept drawing; now it runs on the loop, because the loop
+    /// is where this method runs and a servant cannot hand part of itself to
+    /// another thread without blocking for the answer anyway.
+    ///
+    /// What keeps that from mattering is the lookup below: a decode happens
+    /// the first time this compositor ever sees an asset, and never again. A
+    /// desktop pays a few dropped frames once per image per boot, and every
+    /// subsequent client — the normal case — gets a dictionary lookup.
     override func registerImage(path: String, maxPixelSize: UInt32) throws -> ImageInfo {
         let key = ImageStore.key(path: path, maxPixelSize: maxPixelSize)
 
@@ -364,12 +392,6 @@ final class CompositorImpl: CompositorServant, @unchecked Sendable {
         }
         imageKeyLock.unlock()
 
-        // Decoded *here*, on the RPC thread, and this is the point of the
-        // split. `decodeImage` is documented thread-safe and touches no
-        // device — it is also nearly all of the cost: measured at 5–17 ms per
-        // cover against a round trip of about 7 µs. Doing it on the loop
-        // meant a connecting client stalling the compositor's own window for
-        // as long as it took to read its art.
         guard let decoded = Editor.decodeImage(path: path, maxPixelSize: maxPixelSize)
         else {
             var ex = ImageNotFound()
@@ -377,13 +399,10 @@ final class CompositorImpl: CompositorServant, @unchecked Sendable {
             throw ex
         }
 
-        // Only the upload needs the device, so only the upload hops.
-        let image: UIImage? = LoopQueue.sync { [editor] in
-            editor.uploadImage(
-                key: key, path: path, pixels: decoded.pixels,
-                width: decoded.width, height: decoded.height
-            )
-        }
+        let image = editor.uploadImage(
+            key: key, path: path, pixels: decoded.pixels,
+            width: decoded.width, height: decoded.height
+        )
         guard let image else {
             var ex = ImageNotFound()
             ex.path = path
@@ -438,12 +457,15 @@ final class CompositorImpl: CompositorServant, @unchecked Sendable {
         infoByKey.removeValue(forKey: key)
         keysByImageID.removeValue(forKey: id)
         imageKeyLock.unlock()
-        LoopQueue.sync { [editor] in editor.releaseImage(key: key) }
+        editor.releaseImage(key: key)
     }
 
-    /// Texture id → the cache key the engine knows it by. Touched from RPC
-    /// threads, so it carries its own lock; the engine calls it guards are
-    /// still made on the loop.
+    /// Texture id → the cache key the engine knows it by.
+    ///
+    /// The lock is uncontended now that both methods that touch these run on
+    /// the loop, and it stays because that is a fact about the POA rather than
+    /// about this class — the day one of them is answered somewhere else, the
+    /// bookkeeping should not be what breaks.
     private let imageKeyLock = NSLock()
     private var keysByImageID: [UInt32: String] = [:]
     /// What has already been registered, and how many clients hold it.
@@ -452,13 +474,13 @@ final class CompositorImpl: CompositorServant, @unchecked Sendable {
 
     /// Opens a window for this client and points it at the client's arena.
     ///
-    /// The window and the attach happen together, under one hop to the loop:
-    /// a window with no arena has nothing to draw, and there is no useful
-    /// state between the two for anyone to observe.
+    /// The window and the attach are one step: a window with no arena has
+    /// nothing to draw, and there is no useful state between the two for
+    /// anyone to observe. Being on the loop is what lets them stay one step.
     override func createSurface(
         arenaId: String, width: UInt32, height: UInt32, title: String
     ) throws -> UInt32 {
-        let opened: WindowID? = LoopQueue.sync { [editor] in
+        let opened: WindowID? = {
             guard let window = editor.openWindow(
                 width: Float(width), height: Float(height), title: title
             ) else { return nil }
@@ -469,7 +491,7 @@ final class CompositorImpl: CompositorServant, @unchecked Sendable {
                 return nil
             }
             return window
-        }
+        }()
         guard let window = opened else {
             var ex = ArenaNotFound()
             ex.arenaId = arenaId
@@ -483,7 +505,7 @@ final class CompositorImpl: CompositorServant, @unchecked Sendable {
         // Seeded before anyone can subscribe, so the first event a client ever
         // sees is its real size rather than the size it asked for — which the
         // window manager was free to ignore.
-        let size = LoopQueue.sync { [editor] in editor.framebufferSize(window: window) }
+        let size = editor.framebufferSize(window: window)
         surface.input.postCurrentSize(width: size.w, height: size.h)
         SurfaceRegistry.add(surface)
 
@@ -501,20 +523,31 @@ final class CompositorImpl: CompositorServant, @unchecked Sendable {
         }
     }
 
-    /// `[unreliable]` — no reply, so this must not block. It only marks a
-    /// window dirty and unblocks the loop, both of which are safe off-thread
-    /// (`wakeEventLoop` is documented thread-safe).
+    /// `[unreliable]` — no reply. Marks a window dirty; the loop renders it
+    /// later in the very iteration this runs in, since servant work is drained
+    /// before anything is drawn.
+    ///
+    /// The wake that used to be here is the executor's now: `post` wakes the
+    /// loop to run this at all, so waking again from inside it would be asking
+    /// twice for the same thing.
     ///
     /// An unknown surface is dropped rather than reported: there is no reply
     /// to report it in, and it is what a client racing its own
     /// `DestroySurface` legitimately produces.
     override func present(surfaceId: UInt32) {
         SurfaceRegistry.markDirty(surfaceId: surfaceId)
-        editor.wakeEventLoop()
     }
 
     /// The reverse channel. Runs for as long as the client keeps the stream
     /// open, on NPRPC's own task, never on the loop.
+    ///
+    /// The *dispatch* is on the loop like everything else here, and unlike
+    /// everything else here that costs something: stream init starts this body
+    /// on the concurrency pool and parks the loop until it either throws or
+    /// first touches the stream, so a frame waits on a task hop. It is
+    /// bounded, and it is why nothing below may wait on the loop in turn —
+    /// that would close the circle. Guaranteed by construction: everything
+    /// this body touches before its first stream access is a lock.
     ///
     /// Both directions have to be serviced concurrently and neither may
     /// outlive the other. Reading is not optional even though the payload is
@@ -598,8 +631,21 @@ func startCompositorService(editor: Editor) throws -> Rpc {
     // streams, which run for as long as their surfaces do.
     try rpc.startThreadPool(4)
 
+    // Servants land on the render loop, not on the shared-memory ring thread.
+    //
+    // Which is the whole of what this compositor's servant code used to do by
+    // hand, and the reason it is worth having as a policy instead: the rule
+    // "anything touching the device runs on the loop" is now a property of the
+    // POA rather than something each method has to remember, and forgetting it
+    // used to mean touching Vulkan from an RPC thread — which fails late,
+    // rarely, and nowhere near the mistake.
+    //
+    // It also frees the ring immediately: `CreateSurface` builds a swapchain
+    // and takes ~86 ms, and that used to be 86 ms during which nothing else
+    // from that client — its input acks included — could be read.
     let poa = try rpc.createPoa(
-        maxObjects: 8, lifetime: .Persistent, idPolicy: .userSupplied
+        maxObjects: 8, lifetime: .Persistent, idPolicy: .userSupplied,
+        dispatch: .loop(LoopExecutor.shared)
     )
     let servant = CompositorImpl(editor: editor)
     let oid = try poa.activateObjectWithId(

@@ -255,6 +255,39 @@ What is left in `layout` (0.5 ms with `body` at 0.02) is the work
 hit-testing and agent queries. That is the next thing to look at if this stage
 matters again.
 
+### Where the compositor's servant work runs
+
+The control plane's servants used to run on the shared-memory ring thread and
+hop to the render loop by hand, once per method, via a `LoopQueue.sync` that
+each of them had to remember. They now run *on the loop* — NPRPC's POA carries
+the placement (`dispatch: .loop(…)`, see nprpc `docs/POA.md`), so touching
+Vulkan from an RPC thread stopped being something you can express.
+
+Measured 2026-08-06, release, launch → the client's "client up" banner:
+
+| | hand-rolled hop | POA dispatch |
+|---|---|---|
+| first client (compositor cold) | 136 ms | 120 ms |
+| later client (assets cached) | 112, 113 ms | 105, 126 ms |
+
+**Parity, which is the result worth having**, because the change moved image
+decoding *onto* the loop and the question was what that costs. It costs nothing
+here: the client is blocked on the reply either way, so which thread decodes
+does not change its critical path.
+
+Where it does land is on *other* clients' frames — a first-ever decode is
+5–17 ms during which the loop is not drawing anything, for anyone. Bounded by
+the servant's own cache: an asset is decoded the first time this compositor
+sees it and never again, so the cost is a few dropped frames per image per
+boot. Two things follow, if that ever matters: the split that avoids it needs
+either a per-method dispatch policy or an interface split, and an interface
+split would be letting the renderer's threading shape the wire.
+
+The ring is also free immediately now, which the old shape could not do:
+`CreateSurface` builds a swapchain and takes ~86 ms, and that used to be 86 ms
+during which nothing else from that client — its input acks included — could be
+read.
+
 ### A harness gap found on the way
 
 Agent-injected clicks do not reach handlers on a client that is *also* fed by a

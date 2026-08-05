@@ -119,7 +119,9 @@ func runHost() {
         // poll — an idle desktop costs nothing.
         editor.pumpEvents(timeout: -1)
 
-        // Servant work first: a `CreateSurface` that arrived while we were
+        // Servant work first, and this is where every control-plane call
+        // actually runs — the POA posts here and the wake above is what got us
+        // out of `pumpEvents`. A `CreateSurface` that arrived while we were
         // parked belongs to the frame about to be drawn.
         LoopQueue.drain()
 
