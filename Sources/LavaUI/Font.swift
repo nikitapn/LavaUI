@@ -397,12 +397,19 @@ public final class UIFont: @unchecked Sendable {
     nonisolated(unsafe) public static var missingGlyphWarnings =
         ProcessInfo.processInfo.environment["LAVAUI_FONT_WARNINGS"] != "0"
 
-    /// Registers this face with the engine and records the returned id.
-    /// Must happen before any glyph from this face reaches the draw list —
-    /// otherwise the renderer resolves its ids against the wrong face.
+    /// Registers this face with whoever owns the glyph atlas and records the
+    /// returned id. Must happen before any glyph from this face reaches the
+    /// draw list — otherwise the renderer resolves its ids against the wrong
+    /// face.
+    ///
+    /// Through `editor.resources` rather than the editor itself, because the
+    /// atlas is not always here: under a shared renderer the id has to be the
+    /// compositor's, and a locally-invented one indexes a face that process
+    /// never loaded. See `GPUResourceHost`.
     @discardableResult
     public func registerWithEngine(_ editor: Editor) -> Bool {
-        guard let id = editor.registerFont(path: path, pixelSize: pixelSize) else {
+        guard let id = editor.resources.registerFont(path: path, pixelSize: pixelSize)
+        else {
             FileHandle.standardError.write(
                 Data("UIFont: engine registerFont failed for \(path)\n".utf8)
             )

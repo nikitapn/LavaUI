@@ -19,6 +19,25 @@ exception FontNotFound {
   path: string;
 }
 
+/// The file does not exist, or is not an image this renderer can decode.
+exception ImageNotFound {
+  path: string;
+}
+
+/// A registered image: the id to put in a draw command, and the size it
+/// actually decoded to.
+///
+/// The size comes back because the client needs it to lay out — an `Image`
+/// view sizes from its texture — and it cannot read the file's header itself
+/// without doing the decode this call exists to avoid. It is the *decoded*
+/// size, not the file's: a `maxPixelSize` cap changes it, and laying out
+/// against the uncapped dimensions would scale every capped image wrongly.
+message ImageInfo {
+  id: u32;
+  width: u32;
+  height: u32;
+}
+
 exception ArenaNotFound {
   arenaId: string;
 }
@@ -80,6 +99,40 @@ interface Compositor {
   /// Idempotent per (path, pixelSize) — asking twice gets the same id, so a
   /// client may call it whenever rather than caching carefully.
   u32 RegisterFont(path: in string, pixelSize: in f32) raises(FontNotFound);
+
+  /// Registers an image and returns the id to put in an image command, with
+  /// the size it decoded to. Idempotent per `(path, maxPixelSize)`.
+  ///
+  /// `maxPixelSize` caps the longer edge (0 = native), and is part of the
+  /// identity rather than a hint: the same file wanted for a 48pt avatar and
+  /// for a 200pt hero is two textures, and aliasing them would either blur
+  /// one or waste the memory of the other.
+  ///
+  /// A **path**, not pixels — the same rule the draw list follows, for a
+  /// different reason. There the objection is cost; here it is ownership.
+  /// The renderer is about to hold this texture for as long as the client
+  /// wants it, so it opens and decodes the file itself rather than trusting a
+  /// buffer it did not produce. It also means a client needs no image codec
+  /// at all, which is most of what "no GPU" was already promising.
+  ///
+  /// The consequence is a real constraint and worth stating: an image the
+  /// client has only in memory — downloaded, generated, decoded from a blob —
+  /// cannot be registered this way, and has to reach a path the renderer can
+  /// open. That is a gap in this interface, not an oversight in the caller.
+  ImageInfo RegisterImage(path: in string, maxPixelSize: in u32)
+      raises(ImageNotFound);
+
+  /// Drops the client's reference to a registered image.
+  ///
+  /// By id, so the two sides never have to derive the same cache key from a
+  /// path and a cap and agree on the spelling. How the renderer names it
+  /// internally stays the renderer's business, which is the point of handing
+  /// out an id in the first place.
+  ///
+  /// Not `raises`: releasing something already gone is how a client that has
+  /// lost track ends up correct, and making that an error would only tempt
+  /// callers to skip it.
+  void ReleaseImage(id: in u32);
 
   // ─── Surfaces ──────────────────────────────────────────────────────────
   //

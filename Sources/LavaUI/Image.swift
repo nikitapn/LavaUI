@@ -104,7 +104,12 @@ public enum ImageStore {
 
     /// Cache identity for a file decoded at a given cap. `0` is the native
     /// decode and keys on the bare path, so existing callers keep their key.
-    static func key(path: String, maxPixelSize: UInt32) -> String {
+    ///
+    /// Public because a `GPUResourceHost` outside this module has to stamp
+    /// the same key into the `UIImage` it returns — this cache looks entries
+    /// up by it, so a host that spelled it differently would register an
+    /// image and then miss it on every subsequent frame.
+    public static func key(path: String, maxPixelSize: UInt32) -> String {
         maxPixelSize == 0 ? path : "\(path)@\(maxPixelSize)"
     }
 
@@ -117,7 +122,8 @@ public enum ImageStore {
             touch(hit.image)
             return hit.image
         }
-        guard let img = editor.loadImage(path: path) else { return nil }
+        guard let img = editor.resources.registerImage(path: path, maxPixelSize: 0)
+        else { return nil }
         PerfCounters.imageDecodes &+= 1
         insert(img, into: editor)
         return img
@@ -150,30 +156,30 @@ public enum ImageStore {
         guard !inFlight.contains(cacheKey) else { return nil }
         inFlight.insert(cacheKey)
 
-        Thread.detachNewThread {
-            let decoded = Editor.decodeImage(path: path, maxPixelSize: maxPixelSize)
-            MainQueue.async {
-                inFlight.remove(cacheKey)
-                guard let decoded else { return }
-                guard let img = editor.uploadImage(
-                    key: cacheKey, path: path, pixels: decoded.pixels,
-                    width: decoded.width, height: decoded.height
-                ) else { return }
-                PerfCounters.imageDecodes &+= 1
-                insert(img, into: editor)
-                // `.redraw`, not `.body`. Nothing observed this — the cache is
-                // a plain store — so the frame has to be asked for explicitly.
-                // But asking for `body` rebuilds the whole view tree (~46ms on
-                // a large grid, and with a menubar there is no per-node path),
-                // once per arriving image, to change one leaf's texture. The
-                // image leaf resolves its own texture at emit, so re-emitting
-                // is all that is actually required.
-                //
-                // A caller whose view *structure* depends on the image being
-                // ready still needs `.body` — that is why `Image(path:)`
-                // exists, so it doesn't.
-                ViewInvalidation.markNeedsRedraw()
-            }
+        // Where the work happens is the host's business, not this cache's: a
+        // local one decodes on a worker and uploads on the main thread, a
+        // remote one does the whole thing in the renderer. Either way the
+        // completion lands on the main queue, which is the only part the
+        // bookkeeping below depends on.
+        editor.resources.registerImageAsync(
+            path: path, maxPixelSize: maxPixelSize
+        ) { image in
+            inFlight.remove(cacheKey)
+            guard let img = image else { return }
+            PerfCounters.imageDecodes &+= 1
+            insert(img, into: editor)
+            // `.redraw`, not `.body`. Nothing observed this — the cache is
+            // a plain store — so the frame has to be asked for explicitly.
+            // But asking for `body` rebuilds the whole view tree (~46ms on
+            // a large grid, and with a menubar there is no per-node path),
+            // once per arriving image, to change one leaf's texture. The
+            // image leaf resolves its own texture at emit, so re-emitting
+            // is all that is actually required.
+            //
+            // A caller whose view *structure* depends on the image being
+            // ready still needs `.body` — that is why `Image(path:)`
+            // exists, so it doesn't.
+            ViewInvalidation.markNeedsRedraw()
         }
         return nil
     }
@@ -200,7 +206,7 @@ public enum ImageStore {
             .sorted { $0.lastUsedOrder < $1.lastUsedOrder }
         for entry in candidates {
             guard residentBytes > budgetBytes else { break }
-            editor.unloadImage(path: entry.image.cacheKey)
+            editor.resources.releaseImage(key: entry.image.cacheKey)
             cache.removeValue(forKey: entry.image.cacheKey)
             residentBytes -= entry.bytes
             PerfCounters.imageEvictions &+= 1

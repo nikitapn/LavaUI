@@ -308,8 +308,32 @@ func runProducer() {
     do {
         let (compositor, rpc) = try connectToCompositor()
         rpcRuntime = rpc
-        sharedFontID = try blockingCall {
-            try await compositor.registerFont(path: fontPath, pixelSize: fontPixelSize)
+        // Through the same `GPUResourceHost` a LavaUI client installs, rather
+        // than calling the interface directly. There is one path from "I need
+        // an id" to "the renderer gave me one", and this producer takes it too
+        // — a second one that happened to work would be a second one to keep
+        // working.
+        let resources = CompositorResources(compositor)
+        guard let fontID = resources.registerFont(path: fontPath, pixelSize: fontPixelSize)
+        else { throw ControlPlaneError.timedOut }
+        sharedFontID = fontID
+
+        // Exercises the image half of the same interface. Opt-in because this
+        // producer hand-writes its commands and has no image command to draw
+        // one with — what is being checked is the round trip and the size that
+        // comes back, which is what a client would lay out against.
+        if let path = ProcessInfo.processInfo.environment["LAVA_DEMO_IMAGE"] {
+            let cap = UInt32(ProcessInfo.processInfo.environment["LAVA_DEMO_IMAGE_MAX"] ?? "")
+                ?? 0
+            if let image = resources.registerImage(path: path, maxPixelSize: cap) {
+                let line = "RegisterImage → texture \(image.textureId) "
+                    + "\(Int(image.pixelWidth))×\(Int(image.pixelHeight))\n"
+                FileHandle.standardError.write(Data(line.utf8))
+            } else {
+                FileHandle.standardError.write(
+                    Data("RegisterImage(\(path)) got nothing back\n".utf8)
+                )
+            }
         }
         // Longer than the default: this one opens a window and builds a
         // swapchain, which on a cold device is not a microsecond-scale call

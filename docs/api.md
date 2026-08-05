@@ -72,24 +72,64 @@ difference. What changes is only what needs a screen:
 | Input | GLFW callbacks | injected (`injectPointerMove`, …) |
 | `renderFrame` | draws and presents | succeeds, draws nowhere |
 | `capturePngBase64` | a PNG | `nil` |
-| `loadImage` | a `UIImage` | `nil` — see below |
+| Font and texture ids | the local device | the resource host (below) |
 | Retained scroll/hover | the renderer answers | nothing answers yet |
 
 Text still shapes normally: shaping is FreeType and HarfBuzz and never needed
 the device — only rasterizing into the glyph atlas does, and that belongs to
 whoever draws.
 
-Two gaps are real rather than incidental, and both are the same gap:
-**a client cannot name a resource that lives in another process.** Images do
-not load, because a texture id is per-process and nothing carries one across.
-`registerFont` hands out ids from a local table, which a renderer elsewhere
-would not recognize. A client also owns no retained scene state, so a wheel
-notch reaches its own `ScrollRouter` handlers and moves nothing else — the
-scroll offsets live wherever the frame is drawn.
-
 Idle costs nothing: with no GLFW to park in, `pumpEvents` blocks on a
 condition variable with the same contract (negative blocks, 0 polls, positive
 waits at most that long), so a client waiting for work uses no CPU.
+
+A client owns no retained scene state, so a wheel notch reaches its own
+`ScrollRouter` handlers and moves nothing else — the scroll offsets live
+wherever the frame is drawn.
+
+### Who names GPU resources
+
+A `GlyphInstance` carries a font id and an image command carries a texture id,
+and both only mean something to the process that owns the atlas they index.
+`GPUResourceHost` is that question, and it is deliberately the whole seam
+between the two modes:
+
+```swift
+public protocol GPUResourceHost: AnyObject, Sendable {
+    func registerFont(path: String, pixelSize: Float) -> UInt32?
+    func registerImage(path: String, maxPixelSize: UInt32) -> UIImage?
+    func registerImageAsync(path: String, maxPixelSize: UInt32,
+                            completion: @escaping @Sendable (UIImage?) -> Void)
+    func releaseImage(key: String)
+}
+```
+
+`Editor.resources` is the host in use, and it is the editor itself unless told
+otherwise — which is why an ordinary app never learns this protocol exists. A
+client under a shared renderer assigns the compositor once, before loading
+anything:
+
+```swift
+guard let editor = LavaApp.openClient() else { exit(1) }
+editor.resources = CompositorResources(compositor)
+```
+
+`FontStore` and `ImageStore` are unchanged above that line: same caches, same
+VRAM budget, same LRU eviction. Only the ids differ, and only the host knows
+them.
+
+Note what does **not** cross: pixels. A host is asked to register a file it
+can open itself, never handed a decoded bitmap — so the process that will hold
+the texture is the one that decodes it, and a client needs no image codec at
+all. The consequence is a real constraint rather than an oversight: an image
+the client has only in memory (downloaded, generated) has to reach a path the
+renderer can open before it can be registered.
+
+The two hosts split the async work differently, which is why
+`registerImageAsync` is a protocol requirement and not a helper. Locally the
+decode belongs on a worker and the upload must return to the main thread —
+it touches the device. Remotely the whole call is one round trip that touches
+nothing local, and the protocol's default implementation covers it.
 
 The agent server (`LAVA_AGENT_PORT`) works against a client for every verb
 that does not need pixels — `layout_tree`, `find`, `hit_test`, `click`,

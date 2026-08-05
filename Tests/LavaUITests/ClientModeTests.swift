@@ -112,13 +112,112 @@ final class ClientModeTests: XCTestCase {
         XCTAssertEqual(seen.y, 64)
     }
 
-    /// The gaps, asserted rather than assumed. Both are scoped work, and both
-    /// fail in a way callers already handle — a missing image file does the
-    /// same thing, and a screenshot of a client is not a thing that exists.
-    func testGpuBoundCallsFailRatherThanPretend() throws {
+    /// A client with nobody to ask still has to answer, and does so from a
+    /// local table — stable ids, and a bad path caught at registration rather
+    /// than as missing text in a frame nobody can debug.
+    func testAClientWithNoHostNamesItsOwnFonts() throws {
         let editor = try openClient()
-        XCTAssertNil(editor.capturePngBase64(), "a client has no pixels to capture")
-        XCTAssertFalse(editor.hasImage(key: "anything"))
+        let face = LavaResources.fontsDirectory + "/OpenSans-Regular.ttf"
+        try XCTSkipUnless(FileManager.default.fileExists(atPath: face), "no UI face on disk")
+
+        let first = try XCTUnwrap(editor.registerFont(path: face, pixelSize: 16))
+        XCTAssertEqual(
+            editor.registerFont(path: face, pixelSize: 16), first,
+            "registration is idempotent per (path, pixelSize)"
+        )
+        XCTAssertNotEqual(
+            editor.registerFont(path: face, pixelSize: 24), first,
+            "a different size is a different face"
+        )
+        XCTAssertNil(
+            editor.registerFont(path: "/nonesuch.ttf", pixelSize: 16),
+            "a face that will not load must not get an id"
+        )
+    }
+
+    /// A client cannot capture pixels it never drew. Failing is the honest
+    /// answer; an empty PNG would look like a black screen.
+    func testCaptureFailsRatherThanPretend() throws {
+        let editor = try openClient()
+        XCTAssertNil(editor.capturePngBase64())
+    }
+
+    // ─── Two modes ───────────────────────────────────────────────────────
+
+    /// Stands in for the compositor: records what it was asked and hands back
+    /// ids nothing local would ever mint, so a call that went to the built-in
+    /// renderer instead is visible rather than merely wrong.
+    private final class StubHost: GPUResourceHost, @unchecked Sendable {
+        var fontAsks: [(path: String, pixelSize: Float)] = []
+        var imageAsks: [(path: String, maxPixelSize: UInt32)] = []
+        var released: [String] = []
+
+        static let fontID: UInt32 = 4242
+        static let textureID: UInt32 = 9001
+
+        func registerFont(path: String, pixelSize: Float) -> UInt32? {
+            fontAsks.append((path, pixelSize))
+            return Self.fontID
+        }
+
+        func registerImage(path: String, maxPixelSize: UInt32) -> UIImage? {
+            imageAsks.append((path, maxPixelSize))
+            return UIImage(
+                path: path,
+                cacheKey: ImageStore.key(path: path, maxPixelSize: maxPixelSize),
+                textureId: Self.textureID, pixelWidth: 64, pixelHeight: 48
+            )
+        }
+
+        func releaseImage(key: String) { released.append(key) }
+    }
+
+    /// The seam: with a host installed, the id stamped into every glyph is
+    /// the host's. Getting this wrong draws the wrong face silently, because
+    /// a stale font id is still a valid index.
+    func testInstalledHostNamesFonts() throws {
+        let editor = try openClient()
+        let host = StubHost()
+        editor.resources = host
+
+        let face = LavaResources.fontsDirectory + "/OpenSans-Regular.ttf"
+        try XCTSkipUnless(FileManager.default.fileExists(atPath: face), "no UI face on disk")
+        let font = try XCTUnwrap(UIFont.loadUI(assetsRoot: LavaResources.root, pixelSize: 16))
+        XCTAssertTrue(font.registerWithEngine(editor))
+
+        XCTAssertEqual(font.engineId, StubHost.fontID, "font id did not come from the host")
+        XCTAssertEqual(host.fontAsks.count, 1)
+        XCTAssertEqual(host.fontAsks.first?.path, face)
+    }
+
+    /// The same seam for images, including the part that is easy to get
+    /// wrong: the handle a host returns has to carry the cache key
+    /// `ImageStore` will look it up by, or every frame after the first misses
+    /// and registers it again.
+    func testInstalledHostNamesImages() throws {
+        let editor = try openClient()
+        let host = StubHost()
+        editor.resources = host
+
+        let image = try XCTUnwrap(ImageStore.load(path: "/pretend/art.png", into: editor))
+        XCTAssertEqual(image.textureId, StubHost.textureID)
+        XCTAssertEqual(image.pixelWidth, 64)
+        XCTAssertEqual(host.imageAsks.count, 1)
+
+        // The second ask is a cache hit, not a second registration.
+        _ = ImageStore.load(path: "/pretend/art.png", into: editor)
+        XCTAssertEqual(host.imageAsks.count, 1, "cache missed its own entry")
+    }
+
+    /// Restoring the default is what a test needs and what a misconfigured
+    /// app needs to be able to do; `resources` must not latch.
+    func testResourcesFallsBackToTheEditor() throws {
+        let editor = try openClient()
+        XCTAssertTrue(editor.resources === editor, "default host is the editor itself")
+        editor.resources = StubHost()
+        XCTAssertFalse(editor.resources === editor)
+        editor.resources = editor
+        XCTAssertTrue(editor.resources === editor, "assigning the editor must not cycle")
     }
 
     /// `renderFrame` succeeding is what lets `LavaWindow` present a client

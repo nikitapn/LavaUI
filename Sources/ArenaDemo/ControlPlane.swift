@@ -361,6 +361,54 @@ final class CompositorImpl: CompositorServant, @unchecked Sendable {
         return id
     }
 
+    /// Opens, decodes and uploads the file itself — the client sends a path
+    /// and never a bitmap.
+    ///
+    /// On the loop thread because the upload touches the Vulkan device. That
+    /// makes a big first decode a stall in the compositor's frame, which is
+    /// the honest cost of doing it here and is why `ImageStore` asks off the
+    /// client's own critical path.
+    override func registerImage(path: String, maxPixelSize: UInt32) throws -> ImageInfo {
+        let image: UIImage? = LoopQueue.sync { [editor] in
+            editor.registerImage(path: path, maxPixelSize: maxPixelSize)
+        }
+        guard let image else {
+            var ex = ImageNotFound()
+            ex.path = path
+            throw ex
+        }
+        // Keyed by the id the client will use, so `ReleaseImage` needs no
+        // agreement between the two sides about how a cache key is spelled.
+        imageKeyLock.lock()
+        keysByImageID[image.textureId] = image.cacheKey
+        imageKeyLock.unlock()
+
+        var info = ImageInfo()
+        info.id = image.textureId
+        info.width = UInt32(image.pixelWidth)
+        info.height = UInt32(image.pixelHeight)
+        let line = "RegisterImage(\(URL(fileURLWithPath: path).lastPathComponent), "
+            + "max \(maxPixelSize)) → \(info.id) \(info.width)×\(info.height)\n"
+        FileHandle.standardError.write(Data(line.utf8))
+        return info
+    }
+
+    override func releaseImage(id: UInt32) {
+        // An id this compositor never handed out, or has already released, is
+        // a client that lost track rather than an error — see the IDL.
+        imageKeyLock.lock()
+        let key = keysByImageID.removeValue(forKey: id)
+        imageKeyLock.unlock()
+        guard let key else { return }
+        LoopQueue.sync { [editor] in editor.releaseImage(key: key) }
+    }
+
+    /// Texture id → the cache key the engine knows it by. Touched from RPC
+    /// threads, so it carries its own lock; the engine calls it guards are
+    /// still made on the loop.
+    private let imageKeyLock = NSLock()
+    private var keysByImageID: [UInt32: String] = [:]
+
     /// Opens a window for this client and points it at the client's arena.
     ///
     /// The window and the attach happen together, under one hop to the loop:
@@ -554,6 +602,88 @@ func connectToCompositor() throws -> (Compositor, Rpc) {
         throw ControlPlaneError.classMismatch
     }
     return (compositor, rpc)
+}
+
+/// The client's end of resource naming: LavaUI asks, the compositor answers.
+///
+/// Install it on the editor once, before anything loads, and every font id and
+/// texture id the app stamps into a frame becomes one the renderer will
+/// resolve to the same thing:
+///
+/// ```swift
+/// guard let editor = LavaApp.openClient() else { exit(1) }
+/// editor.resources = CompositorResources(compositor)
+/// ```
+///
+/// Nothing above this line changes. `FontStore` and `ImageStore` keep their
+/// caches, their budget and their eviction, because none of that was ever
+/// about who owns the GPU — only the ids were, and this is the whole of that
+/// difference. See `GPUResourceHost`.
+final class CompositorResources: GPUResourceHost, @unchecked Sendable {
+    private let compositor: Compositor
+
+    /// Texture id per image, so a release can name what registration returned.
+    /// Small and short-lived; the real cache is `ImageStore`'s, and this only
+    /// exists because `releaseImage` speaks in keys and the wire speaks in ids.
+    private let lock = NSLock()
+    private var idsByKey: [String: UInt32] = [:]
+
+    init(_ compositor: Compositor) { self.compositor = compositor }
+
+    func registerFont(path: String, pixelSize: Float) -> UInt32? {
+        do {
+            return try blockingCall { [compositor] in
+                try await compositor.registerFont(path: path, pixelSize: pixelSize)
+            }
+        } catch {
+            FileHandle.standardError.write(
+                Data("RegisterFont(\(path)) failed: \(error)\n".utf8)
+            )
+            return nil
+        }
+    }
+
+    func registerImage(path: String, maxPixelSize: UInt32) -> UIImage? {
+        let info: ImageInfo
+        do {
+            info = try blockingCall(timeout: 10) { [compositor] in
+                // Longer than the default: this one decodes and uploads a
+                // file on the far side, where `RegisterFont` only opens one.
+                try await compositor.registerImage(
+                    path: path, maxPixelSize: maxPixelSize
+                )
+            }
+        } catch {
+            FileHandle.standardError.write(
+                Data("RegisterImage(\(path)) failed: \(error)\n".utf8)
+            )
+            return nil
+        }
+        let key = ImageStore.key(path: path, maxPixelSize: maxPixelSize)
+        lock.lock()
+        idsByKey[key] = info.id
+        lock.unlock()
+        return UIImage(
+            path: path, cacheKey: key, textureId: info.id,
+            pixelWidth: Float(info.width), pixelHeight: Float(info.height)
+        )
+    }
+
+    func releaseImage(key: String) {
+        lock.lock()
+        let id = idsByKey.removeValue(forKey: key)
+        lock.unlock()
+        guard let id else { return }
+        // Fire and forget. A failed release costs the renderer a texture until
+        // the client exits, which is not worth stalling an eviction over —
+        // and eviction runs inside a frame.
+        Task.detached { [compositor] in try? await compositor.releaseImage(id: id) }
+    }
+
+    // `registerImageAsync` comes from the protocol's default: the call is a
+    // round trip that touches nothing local, so a worker thread and a hop back
+    // to the main queue is the whole of it. The local host overrides that
+    // because its decode and its upload belong on different threads.
 }
 
 /// The app's end of `SubscribeInput`: an async stream on one side, a frame

@@ -24,6 +24,11 @@ import Foundation
 public final class Editor: @unchecked Sendable {
     private var engine = canvas.Engine()
 
+    /// Backing store for `resources` (see `ResourceHost.swift`). Nil means
+    /// "this editor names its own resources", which is every app with a
+    /// window; a client under a shared renderer points it at the compositor.
+    var remoteResources: (any GPUResourceHost)?
+
     private init() {}
 
     public static func open(
