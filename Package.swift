@@ -81,18 +81,13 @@ let package = Package(
         // split possible at all.
         .executableTarget(
             name: "ArenaDemo",
-            dependencies: ["LavaUI"] + (haveNprpc ? [Target.Dependency("LavaIDL")] : []),
+            dependencies: ["LavaUI"]
+                + (haveNprpc
+                    ? [Target.Dependency("LavaIDL"), Target.Dependency("LavaClient")]
+                    : []),
             swiftSettings: [
                 .interoperabilityMode(.Cxx),
-            ],
-            // Boost.Asio's SSL support is header-only, and nprpc's public
-            // `common.hpp` includes `<boost/asio/ssl/context.hpp>` — so the
-            // error-category definitions get compiled into *this* target and
-            // leave undefined OpenSSL symbols here, not in libnprpc. Nothing
-            // in this demo speaks TLS; these two just satisfy the linker.
-            linkerSettings: haveNprpc
-                ? [.linkedLibrary("ssl"), .linkedLibrary("crypto")]
-                : []
+            ]
         ),
 
         // Throwaway modifier spike; delete once the design is chosen. We keep for now. 01/08/2026
@@ -141,7 +136,10 @@ let package = Package(
             dependencies: [
                 "LavaUI",
                 "FBDModel",
-            ],
+            // `LAVA_CLIENT=1` runs the same demo under the compositor. Optional
+            // for the same reason the control plane is: without nprpc checked
+            // out this builds and runs as an ordinary windowed app.
+            ] + (haveNprpc ? [Target.Dependency("LavaClient")] : []),
             resources: [
                 // Demo brand art (not framework assets).
                 .process("Resources"),
@@ -226,6 +224,22 @@ let package = Package(
         Target.target(
             name: "LavaIDL",
             dependencies: [.product(name: "NPRPC", package: "nprpc_swift")],
+            swiftSettings: [.interoperabilityMode(.Cxx)]
+        ),
+        // The app half of the control plane: what any LavaUI app needs to run
+        // as a client of the compositor rather than as its own window.
+        //
+        // Above LavaUI rather than inside it, because NPRPC's `.unsafeFlags`
+        // propagate to every dependent and SwiftPM permits them only for path
+        // dependencies — a LavaUI that linked this could not be used as a
+        // GitHub dependency. Being a client is also genuinely a layer above a
+        // UI framework.
+        Target.target(
+            name: "LavaClient",
+            dependencies: [
+                "LavaUI", "LavaIDL",
+                .product(name: "NPRPC", package: "nprpc_swift"),
+            ],
             swiftSettings: [.interoperabilityMode(.Cxx)]
         ),
     ] : []),

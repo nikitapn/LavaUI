@@ -4,6 +4,7 @@ import CanvasResources
 import Foundation
 import LavaUI
 #if canImport(LavaIDL)
+import LavaClient
 import LavaIDL
 import NPRPC
 #endif

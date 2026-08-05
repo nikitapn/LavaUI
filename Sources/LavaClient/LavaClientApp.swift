@@ -1,0 +1,198 @@
+#if canImport(CxxCanvas) && canImport(LavaIDL)
+import CxxCanvas
+import Foundation
+import LavaIDL
+import LavaMenu
+import LavaUI
+import NPRPC
+
+/// Runs a LavaUI app as a client of the compositor: no window, no GPU, frames
+/// published into shared memory for another process to draw.
+///
+/// The whole of what a client is, in one call. `LavaApp.run` underneath is the
+/// same loop every windowed app uses and is not modified; what this adds is the
+/// three installs that have to happen before it, and the wiring in both
+/// directions that has no home in `LavaUI` because `LavaUI` does not know what
+/// a compositor is:
+///
+///   1. `openClient` instead of `open`   — no window, no GPU
+///   2. `editor.resources = …`           — ids come from whoever draws
+///   3. `editor.publishFrames(to: …)`    — frames go to a shared arena
+///
+/// plus `Present` after each publish, and the compositor's input stream fed
+/// back in through `MainQueue`.
+///
+/// ```swift
+/// guard let editor = LavaClient.open(title: "My App") else { exit(1) }
+/// LavaClient.run(editor: editor) { RootView() }
+/// ```
+///
+/// Does not return: like `LavaApp.run`, it owns the frame loop, and it exits
+/// the process when the surface goes away — the input stream is the surface's
+/// lease, so when the user closes the window or the compositor stops, there is
+/// nothing left to draw into.
+public enum LavaClient {
+    /// - Parameters:
+    ///   - title: names the window the compositor opens, and the arena.
+    ///   - width/height: a *request*. The window manager has the last word,
+    ///     and the size to actually draw at arrives as the opening `Resize` on
+    ///     the input stream. A client that trusts these numbers instead draws
+    ///     at the wrong size on any tiling WM.
+    public static func open(
+        title: String,
+        width: Float = 1280,
+        height: Float = 800
+    ) -> Editor? {
+        Self.title = title
+        Self.requestedWidth = width
+        Self.requestedHeight = height
+        guard let editor = LavaApp.openClient(width: width, height: height) else {
+            fail("client engine failed to open")
+        }
+
+        let compositor: Compositor
+        do {
+            let (proxy, rpc) = try connectToCompositor()
+            compositor = proxy
+            // Held for the process's lifetime: the `Rpc` owns the transport,
+            // and ARC releases a local at its last use, not at end of scope.
+            runtime = rpc
+        } catch {
+            fail("no compositor (\(error)) — is the renderer running?")
+        }
+
+        // Before anything loads a face or an image. Ids already stamped into a
+        // `UIFont` are not revisited, and `openClient` has just bootstrapped
+        // the default one against the local table.
+        editor.resources = CompositorResources(compositor)
+        if FontStore.bootstrap(
+            assetsRoot: LavaResources.root, pixelSize: 16, into: editor
+        ) == nil {
+            fail("no UI face from the compositor")
+        }
+
+        // Namespaced by pid: `DrawArena.create` refuses an id that already
+        // exists, which is the right refusal and exactly what two clients of
+        // the same compositor would hit if the id were a constant.
+        let arenaID = "\(title.replacingOccurrences(of: " ", with: "-"))-\(getpid())"
+
+        // The surface id is only known after `CreateSurface`, which cannot
+        // happen until the arena exists, which is what the sink creates. So
+        // `onPublish` reads it rather than capturing it — the first frame is
+        // published from inside `LavaApp.run`, long after it is filled in.
+        guard let sink = ArenaFrameSink(id: arenaID, onPublish: {
+            guard surfaceID != 0 else { return }
+            // Fire and forget, and correct rather than merely cheap: the
+            // arena's published sequence already says what is current, so a
+            // dropped one costs a frame of latency, never a frame of content.
+            Task.detached { [compositor] in
+                try? await compositor.present(surfaceId: surfaceID)
+            }
+        }) else {
+            fail("failed to create arena '\(arenaID)' — is one already running?")
+        }
+        editor.publishFrames(to: sink)
+        Self.arena = sink
+        Self.arenaID = arenaID
+        Self.compositor = compositor
+        return editor
+    }
+
+    /// Takes a surface, subscribes to its input, and runs the frame loop.
+    ///
+    /// Split from `open` for the reason `LavaApp` splits them: an app's
+    /// one-time asset loading has to happen against an already-open `Editor`
+    /// and before the first frame. `menu` and `onRawKey` mean exactly what
+    /// they mean there.
+    public static func run<V: View>(
+        editor: Editor,
+        menu: (() -> MenuBar)? = nil,
+        onRawKey: ((LavaUI.InputEvent) -> Bool)? = nil,
+        makeRoot: @escaping () -> V
+    ) -> Never {
+        guard let compositor = Self.compositor, let sink = Self.arena else {
+            fail("LavaClient.run before LavaClient.open")
+        }
+        let arenaID = Self.arenaID
+
+        let input: InputChannel
+        do {
+            // Longer than the default: this opens a window and builds a
+            // swapchain on the far side, which on a cold device is not a
+            // microsecond-scale call like the rest of this interface.
+            surfaceID = try blockingCall(timeout: 10) {
+                try await compositor.createSurface(
+                    arenaId: arenaID,
+                    width: UInt32(requestedWidth), height: UInt32(requestedHeight),
+                    title: title
+                )
+            }
+            input = InputChannel(
+                stream: try compositor.subscribeInput(surfaceId: surfaceID)
+            )
+        } catch {
+            fail("surface setup failed: \(error)")
+        }
+
+        // Events arrive on an NPRPC thread and are consumed on the frame
+        // loop's, which is what `MainQueue` is for — it hops the work over and
+        // wakes the loop out of `pumpEvents` on the way. Draining inside that
+        // hop is also the honest moment to ack: the serial then means "the
+        // tree has seen it", not "the socket has".
+        input.onArrival = {
+            MainQueue.async {
+                for event in input.drain() {
+                    editor.postInputEvent(
+                        LavaUI.InputEvent(
+                            kind: InputEventKind(rawValue: event.kind) ?? .none,
+                            x: event.x, y: event.y,
+                            button: event.button, mods: event.mods
+                        )
+                    )
+                }
+                // Input is not a repaint request on its own — the loop
+                // consumes it and then asks invalidation what to do — but the
+                // frame it produces has to be asked for, because nothing in
+                // the queue does it.
+                ViewInvalidation.markNeedsRedraw()
+            }
+        }
+
+        // The stream is the surface's lease. When it ends — the user closed
+        // the window, the compositor went away, the client was evicted — the
+        // surface goes with it and there is nothing left to draw into.
+        Thread.detachNewThread {
+            while !input.isClosed { Thread.sleep(forTimeInterval: 0.25) }
+            FileHandle.standardError.write(Data("surface closed — exiting\n".utf8))
+            exit(0)
+        }
+
+        let banner = "client up — surface \(surfaceID), arena '\(arenaID)' "
+            + "(\(sink.mappedBytes / 1024) KiB)\n"
+        FileHandle.standardError.write(Data(banner.utf8))
+
+        LavaApp.run(editor: editor, menu: menu, onRawKey: onRawKey, makeRoot: makeRoot)
+        exit(0)
+    }
+
+    /// Set once, before the first publish can read it. See `run`.
+    nonisolated(unsafe) private static var surfaceID: UInt32 = 0
+    /// Handed from `open` to `run`. Statics rather than a returned handle so
+    /// the pair reads exactly like `LavaApp.open`/`LavaApp.run`, which an app
+    /// is switching between.
+    nonisolated(unsafe) private static var compositor: Compositor?
+    nonisolated(unsafe) private static var arena: ArenaFrameSink?
+    nonisolated(unsafe) private static var arenaID = ""
+    nonisolated(unsafe) private static var title = ""
+    nonisolated(unsafe) private static var requestedWidth: Float = 1280
+    nonisolated(unsafe) private static var requestedHeight: Float = 800
+    /// The `Rpc` owns the transport — the shared-memory listener, its ring
+    /// buffers, the worker threads — and dropping it tears all of that down.
+    nonisolated(unsafe) private static var runtime: Rpc?
+
+    private static func fail(_ message: String) -> Never {
+        FileHandle.standardError.write(Data((message + "\n").utf8))
+        exit(1)
+    }
+}
+#endif

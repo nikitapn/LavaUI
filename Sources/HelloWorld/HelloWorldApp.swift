@@ -1,5 +1,8 @@
 import Foundation
 import LavaUI
+#if canImport(LavaClient)
+import LavaClient
+#endif
 
 #if canImport(CxxCanvas)
 
@@ -7,22 +10,26 @@ import LavaUI
 @main
 struct HelloWorldApp {
     static func main() {
-        // `LAVA_CLIENT=1` runs the same demo with no window and no GPU,
-        // laying out and emitting frames for another process to draw. The
-        // only difference is which call opens the engine — everything below
-        // is the app it has always been, which is the property worth having.
-        //
-        // Images do not load in that mode (a texture id is per-process and
-        // nothing carries one across yet), so the demo runs without its art.
-        // That is a real gap, not a demo shortcut; it is why the loads below
-        // already warn instead of failing.
+        // `LAVA_CLIENT=1` runs the same demo under the compositor: no window,
+        // no GPU, frames published into shared memory for another process to
+        // draw. Everything between here and `run` is the app it has always
+        // been — the images still load, the menu is still built — which is the
+        // property worth having and the reason this is two calls rather than a
+        // separate program.
         let client = ProcessInfo.processInfo.environment["LAVA_CLIENT"] == "1"
-        guard let editor = client
+        #if canImport(LavaClient)
+        let editorOrNil = client
+            ? LavaClient.open(title: "LavaUI · DemoExample")
+            : LavaApp.open(title: "LavaUI · DemoExample")
+        #else
+        // Without the control plane there is nothing to be a client of. The
+        // windowless engine still exists, so this stays useful for checking
+        // that a tree lays out and emits with no GPU.
+        let editorOrNil = client
             ? LavaApp.openClient()
             : LavaApp.open(title: "LavaUI · DemoExample")
-        else {
-            exit(1)
-        }
+        #endif
+        guard let editor = editorOrNil else { exit(1) }
 
         // Demo art is HelloWorld's own SPM resources, not the engine/LavaUI.
         let brandImage = ImageStore.loadAsset(
@@ -55,9 +62,10 @@ struct HelloWorldApp {
         // First top-level menu is the *application* menu (Chrome: "Google Chrome").
         // Global panels show it next to the window icon; leaving it out looks like
         // a blank clickable slot before View/Help.
-        LavaApp.run(
-            editor: editor,
-            menu: {
+        // One menu and one root, handed to whichever loop is running. The two
+        // take the same arguments deliberately: an app becoming a client is a
+        // change of host, not a change of app.
+        let menu = {
                 MenuBar {
                     Menu("LavaUI", id: "app") {
                         MenuItem("Reset Demo Chrome", id: "app.reset") {
@@ -134,9 +142,15 @@ struct HelloWorldApp {
                     }
                 }
             }
-        ) {
+        let root = {
             DemoExample(session: session, brandImage: brandImage, posters: posters)
         }
+        #if canImport(LavaClient)
+        if client {
+            LavaClient.run(editor: editor, menu: menu, makeRoot: root)
+        }
+        #endif
+        LavaApp.run(editor: editor, menu: menu, makeRoot: root)
     }
 }
 
