@@ -54,6 +54,18 @@ AppWindow::AppWindow(RenderDevice &device, uint32_t id, int width, int height)
     static_cast<uint32_t>(height < 1 ? 1 : height));
 }
 
+AppWindow::AppWindow(uint32_t id, int width, int height)
+  : id_{id}
+  , clientW_{static_cast<float>(width < 1 ? 1 : width)}
+  , clientH_{static_cast<float>(height < 1 ? 1 : height)}
+{
+  // Nothing to build. No GLFW window, no RenderWindow, no device — the arena
+  // and the input queue are default-constructed members and that is the whole
+  // window. A client is visible in the only sense it can be: its producer
+  // should be drawing, and whether anything reaches a screen is not its call.
+  visible_ = true;
+}
+
 AppWindow::~AppWindow()
 {
   // Renderer first: it holds a surface made from this GLFW window.
@@ -66,7 +78,7 @@ AppWindow::~AppWindow()
 
 void AppWindow::initRenderers()
 {
-  render_->initRenderers();
+  if (render_) render_->initRenderers();
 }
 
 canvas::DrawList AppWindow::currentDrawList() const
@@ -85,6 +97,10 @@ canvas::DrawList AppWindow::currentDrawList() const
 
 bool AppWindow::repaint()
 {
+  // A client has nothing to present: its frame is finished the moment it is
+  // committed to the arena, and drawing it is someone else's job. Reported as
+  // success so a producer's frame loop needs no branch of its own.
+  if (!render_) return true;
   try {
     if (render_->resize()) {
       // Tell the producer so it re-lays-out and resubmits. Without this the
@@ -265,19 +281,41 @@ void AppWindow::detachDrawArena()
 
 bool AppWindow::windowShouldClose() const
 {
-  return render_->windowShouldClose();
+  return render_ ? render_->windowShouldClose() : clientClose_;
 }
 
-void AppWindow::requestClose() { render_->requestClose(); }
+void AppWindow::requestClose()
+{
+  if (render_) render_->requestClose();
+  else clientClose_ = true;
+}
+
+void AppWindow::setClientSize(float width, float height)
+{
+  if (render_) return;
+  const float w = width < 1.f ? 1.f : width;
+  const float h = height < 1.f ? 1.f : height;
+  if (w == clientW_ && h == clientH_) return;
+  clientW_ = w;
+  clientH_ = h;
+
+  canvas::InputEvent ev;
+  ev.kind   = static_cast<uint32_t>(canvas::InputEventKind::Resize);
+  ev.x      = w;
+  ev.y      = h;
+  ev.button = 0;
+  std::lock_guard lock(inputMu_);
+  inputEvents_.push_back(ev);
+}
 
 void AppWindow::setWindowFrame(int x, int y, int width, int height)
 {
-  render_->setWindowFrame(x, y, width, height);
+  if (render_) render_->setWindowFrame(x, y, width, height);
 }
 
 void AppWindow::setWindowVisible(bool visible)
 {
-  render_->setWindowVisible(visible);
+  if (render_) render_->setWindowVisible(visible);
   visible_ = visible;
 }
 
@@ -300,12 +338,15 @@ uint32_t AppWindow::x11WindowId() const
 
 void AppWindow::captureFrame(uint8_t *dst, size_t dstSize)
 {
-  render_->captureFrame(dst, dstSize);
+  if (render_) render_->captureFrame(dst, dstSize);
 }
 
 bool AppWindow::capturePng(std::vector<uint8_t> &outPng, int x, int y, int w,
                            int h, int maxSide, int *outW, int *outH)
 {
+  // A client has no pixels to hand back — it never drew any. Failing is the
+  // honest answer; an empty PNG would look like a black screen.
+  if (!render_) return false;
   return render_->capturePng(outPng, x, y, w, h, maxSide, outW, outH);
 }
 
@@ -533,7 +574,7 @@ void AppWindow::setViewTransform(float zoom, float panX, float panY)
     viewZoom_ = zoom > 0.f ? zoom : 1.f;
     viewPanX_ = panX;
     viewPanY_ = panY;
-    render_->setViewTransform(viewZoom_, viewPanX_, viewPanY_);
+    if (render_) render_->setViewTransform(viewZoom_, viewPanX_, viewPanY_);
   }
 
 void AppWindow::textInput(const std::string &utf8)
@@ -624,20 +665,20 @@ void AppWindow::charInput(unsigned int codepoint)
 
 std::string AppWindow::clipboardText() const
   {
-    if (!render_->isWindowed() || !glfw_) return {};
+    if (!render_ || !render_->isWindowed() || !glfw_) return {};
     const char *s = glfwGetClipboardString(glfw_);
     return s ? std::string(s) : std::string{};
   }
 
 void AppWindow::setClipboardText(const std::string &text)
   {
-    if (!render_->isWindowed() || !glfw_) return;
+    if (!render_ || !render_->isWindowed() || !glfw_) return;
     glfwSetClipboardString(glfw_, text.c_str());
   }
 
 void AppWindow::readPixels(uint8_t *dst, size_t dstSize)
   {
-    render_->readPixels(dst, dstSize);
+    if (render_) render_->readPixels(dst, dstSize);
   }
 
 void AppWindow::submitDrawList(const canvas::DrawCommand *cmds, size_t cmdCount,
@@ -701,6 +742,12 @@ std::string AppWindow::pendingDroppedFile(int index)
 
 void AppWindow::framebufferSize(float &outW, float &outH) const
   {
+    // A client is told its size (`setClientSize`) rather than measuring one.
+    if (!render_) {
+      outW = clientW_;
+      outH = clientH_;
+      return;
+    }
     // Prefer the *live* GLFW size so the Swift safety net sees drag-resize
     // before ensureFramebufferSize() updates the swapchain extent.
     if (render_->isWindowed() && glfw_) {

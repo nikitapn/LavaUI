@@ -65,6 +65,24 @@ class Engine {
   [[nodiscard]] VoidResult openOffscreen(const std::string &assetsRoot,
                                          uint32_t width, uint32_t height);
 
+  /// Client: lays out and emits frames for another process to draw. No
+  /// Vulkan, no window, no GPU.
+  ///
+  /// Distinct from `openOffscreen`, which is just as windowless but still
+  /// brings up a device and renders to a readback target. A client renders
+  /// nothing at all — `renderFrame` succeeds and draws nowhere, and the
+  /// frame's actual destination is the draw arena.
+  ///
+  /// Everything a client cannot answer for itself is told to it: its size
+  /// (`setClientSize`) and its input (`pointerMove`, `keyEvent`, … — the same
+  /// entry points the agent server injects through, which is what makes a
+  /// client testable before there is a compositor on the other end).
+  [[nodiscard]] VoidResult openClient(uint32_t width, uint32_t height);
+
+  /// Resizes a client window and queues the `Resize` its producer needs.
+  /// No-op unless this engine was opened with `openClient`.
+  void setClientSize(float width, float height, uint32_t windowId = 0);
+
   void close();
   bool isOpen() const;
 

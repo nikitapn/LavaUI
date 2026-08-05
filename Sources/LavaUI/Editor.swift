@@ -41,6 +41,43 @@ public final class Editor: @unchecked Sendable {
         return editor
     }
 
+    /// Opens an engine that lays out and emits frames for another process to
+    /// draw: no Vulkan, no window, no GPU.
+    ///
+    /// Everything above this — `LavaWindow`, the view tree, layout, emit —
+    /// is unchanged and unaware. That is the point: a client is not a second
+    /// frame loop, it is the same one with the parts that need a screen
+    /// answering honestly that they have none. `renderFrame` succeeds and
+    /// draws nowhere, `capturePngBase64` returns nil, `loadImage` returns nil
+    /// (see below), and the rest behaves exactly as it does in a window.
+    ///
+    /// Two things a client cannot answer for itself and must be told:
+    ///
+    /// - **Size.** There is no surface to measure, so `setClientSize` is the
+    ///   only way it learns one, and the initial `width`/`height` here are a
+    ///   guess until something says otherwise.
+    /// - **Input.** The `inject*` entry points are the whole input path, not
+    ///   a test affordance layered over a real one — which is what lets the
+    ///   agent server drive a client with no compositor on the other end.
+    ///
+    /// Known gaps, both by design and both scoped as later work: images fail
+    /// to load (a texture id is per-process and there is no `RegisterFont`
+    /// equivalent for images yet), and `registerFont` hands out ids from a
+    /// local table that means nothing to a renderer elsewhere.
+    public static func openClient(width: Float = 1280, height: Float = 800) -> Editor? {
+        let editor = Editor()
+        guard editor.engine.openClient(UInt32(width), UInt32(height)).has_value()
+        else { return nil }
+        return editor
+    }
+
+    /// Tells a client window how big it is, queueing the `.resize` its tree
+    /// needs to re-lay-out. No-op on a window that has a renderer, which
+    /// measures its own surface instead.
+    public func setClientSize(width: Float, height: Float, window: WindowID = .main) {
+        engine.setClientSize(width, height, window.raw)
+    }
+
     public var isOpen: Bool { engine.isOpen() }
 
     /// Ask the frame loop to exit (GLFW should-close). Safe from menu actions.

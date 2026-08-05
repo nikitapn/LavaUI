@@ -10,6 +10,8 @@
 #define GLFW_INCLUDE_NONE
 #include <GLFW/glfw3.h>
 
+#include <chrono>
+#include <condition_variable>
 #include <mutex>
 #include <type_traits>
 #include <unordered_map>
@@ -17,10 +19,22 @@
 namespace canvas {
 
 struct Engine::Impl {
-  enum class Mode { None, Offscreen, Windowed } mode = Mode::None;
+  /// `Client` shares the `offscreen` slot with `Offscreen` — both hold an
+  /// `Application` directly rather than through a window host — which is why
+  /// `withApp` needs no branch for it and the ~60 methods below inherit
+  /// client mode for free. What separates the two is only how the
+  /// `Application` was initialized.
+  enum class Mode { None, Offscreen, Windowed, Client } mode = Mode::None;
   std::unique_ptr<Application> offscreen;
   std::unique_ptr<CanvasWindowHost> window;
   AppMenuHost appMenu;
+
+  /// Client-mode event wait. A client has no GLFW to park in, but it still
+  /// has to block — a producer that spins is worse than one that is slow,
+  /// and the frame loop's whole idle story is that waiting costs nothing.
+  std::mutex              wakeMu;
+  std::condition_variable wakeCv;
+  bool                    woken = false;
 
   Application *app()
   {
@@ -88,6 +102,25 @@ VoidResult Engine::openOffscreen(const std::string &assetsRoot, uint32_t width,
   return ok();
 }
 
+VoidResult Engine::openClient(uint32_t width, uint32_t height)
+{
+  close();
+  impl_->offscreen =
+    std::make_unique<Application>(static_cast<int>(width), static_cast<int>(height));
+  if (auto r = impl_->offscreen->initClient(); !r) {
+    impl_->offscreen.reset();
+    return r;
+  }
+  impl_->mode = Impl::Mode::Client;
+  return ok();
+}
+
+void Engine::setClientSize(float width, float height, uint32_t windowId)
+{
+  impl_->withApp(
+    [&](Application &app) { app.setClientSize(width, height, windowId); });
+}
+
 void Engine::close()
 {
   impl_->appMenu.detach();
@@ -104,11 +137,41 @@ void Engine::close()
 
 void Engine::pumpEvents(double timeoutSeconds)
 {
+  if (impl_->mode == Impl::Mode::Client) {
+    // Same contract as the GLFW wait this stands in for: negative blocks
+    // until something happens, 0 polls, positive waits at most that long.
+    // A wake that arrived while the caller was working is not lost — it is
+    // recorded in `woken` and returns immediately here, which is the
+    // difference between a condition variable and a bare sleep.
+    std::unique_lock lock(impl_->wakeMu);
+    if (impl_->woken) {
+      impl_->woken = false;
+      return;
+    }
+    if (timeoutSeconds == 0) return;
+    if (timeoutSeconds < 0) {
+      impl_->wakeCv.wait(lock, [&] { return impl_->woken; });
+    } else {
+      impl_->wakeCv.wait_for(
+        lock, std::chrono::duration<double>(timeoutSeconds),
+        [&] { return impl_->woken; });
+    }
+    impl_->woken = false;
+    return;
+  }
   if (impl_->window) impl_->window->pumpEvents(timeoutSeconds);
 }
 
 void Engine::wakeEventLoop()
 {
+  if (impl_->mode == Impl::Mode::Client) {
+    {
+      std::lock_guard lock(impl_->wakeMu);
+      impl_->woken = true;
+    }
+    impl_->wakeCv.notify_all();
+    return;
+  }
   // Documented thread-safe; unblocks glfwWaitEvents / glfwWaitEventsTimeout.
   glfwPostEmptyEvent();
 }
@@ -178,7 +241,9 @@ bool Engine::isOpen() const
 {
   if (impl_->mode == Impl::Mode::Windowed)
     return impl_->window && impl_->window->isOpen();
-  return impl_->mode == Impl::Mode::Offscreen && impl_->offscreen != nullptr;
+  return (impl_->mode == Impl::Mode::Offscreen
+          || impl_->mode == Impl::Mode::Client)
+         && impl_->offscreen != nullptr;
 }
 
 void Engine::requestClose()

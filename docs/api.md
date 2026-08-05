@@ -51,6 +51,53 @@ overlay, and content-scale handling; return `true` to consume an event.
 The optional `menu` closure builds a `LavaMenu.MenuBar`. See
 [native menus](native-menus.md) for its DSL and Linux backends.
 
+### Running without a window
+
+`LavaApp.openClient(width:height:)` opens the same framework with no window,
+no Vulkan and no GPU. It returns an `Editor` that `LavaApp.run` takes
+unchanged, so a client app's `main.swift` differs from a windowed one's by
+that call and nothing else:
+
+```swift
+guard let editor = LavaApp.openClient() else { exit(1) }
+LavaApp.run(editor: editor) { RootView() }
+```
+
+The view tree, layout, invalidation and emit are all unaware of the
+difference. What changes is only what needs a screen:
+
+| | Windowed | Client |
+|---|---|---|
+| Size | measured from the surface | told, via `Editor.setClientSize` |
+| Input | GLFW callbacks | injected (`injectPointerMove`, …) |
+| `renderFrame` | draws and presents | succeeds, draws nowhere |
+| `capturePngBase64` | a PNG | `nil` |
+| `loadImage` | a `UIImage` | `nil` — see below |
+| Retained scroll/hover | the renderer answers | nothing answers yet |
+
+Text still shapes normally: shaping is FreeType and HarfBuzz and never needed
+the device — only rasterizing into the glyph atlas does, and that belongs to
+whoever draws.
+
+Two gaps are real rather than incidental, and both are the same gap:
+**a client cannot name a resource that lives in another process.** Images do
+not load, because a texture id is per-process and nothing carries one across.
+`registerFont` hands out ids from a local table, which a renderer elsewhere
+would not recognize. A client also owns no retained scene state, so a wheel
+notch reaches its own `ScrollRouter` handlers and moves nothing else — the
+scroll offsets live wherever the frame is drawn.
+
+Idle costs nothing: with no GLFW to park in, `pumpEvents` blocks on a
+condition variable with the same contract (negative blocks, 0 polls, positive
+waits at most that long), so a client waiting for work uses no CPU.
+
+The agent server (`LAVA_AGENT_PORT`) works against a client for every verb
+that does not need pixels — `layout_tree`, `find`, `hit_test`, `click`,
+`scroll`, `settle`. That is not a testing affordance bolted on: injection is
+a client's whole input path, which is what lets one run and be driven with
+nothing on the other end yet. `HelloWorld` takes `LAVA_CLIENT=1` for exactly
+this.
+
 ## View descriptions
 
 Every composite view conforms to `View` and returns another view description

@@ -25,6 +25,21 @@ public:
   [[nodiscard]] canvas::VoidResult initWithWindow(
     const std::string &assetsRoot, const std::string &title);
 
+  /// Client path: no Vulkan, no window, no GPU of any kind.
+  ///
+  /// Brings up one `AppWindow` with an arena and an input queue and stops
+  /// there — enough to run body → layout → emit for a process whose frames
+  /// another process draws. `assetsRoot` is not needed and not taken: nothing
+  /// here compiles a shader or loads a texture.
+  ///
+  /// Text still shapes normally. Shaping is FreeType and HarfBuzz and has
+  /// never needed the device — only rasterizing into the glyph atlas does,
+  /// and that belongs to whoever renders. See `registerFont`.
+  [[nodiscard]] canvas::VoidResult initClient();
+
+  /// See `AppWindow::setClientSize`. No-op on a window that has a renderer.
+  void setClientSize(float width, float height, uint32_t windowId = 0);
+
   // ─── Windows ─────────────────────────────────────────────────────────────
   //
   // Every call below that concerns one window takes a trailing `windowId`.

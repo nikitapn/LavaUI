@@ -7,7 +7,20 @@ import LavaUI
 @main
 struct HelloWorldApp {
     static func main() {
-        guard let editor = LavaApp.open(title: "LavaUI · DemoExample") else {
+        // `LAVA_CLIENT=1` runs the same demo with no window and no GPU,
+        // laying out and emitting frames for another process to draw. The
+        // only difference is which call opens the engine — everything below
+        // is the app it has always been, which is the property worth having.
+        //
+        // Images do not load in that mode (a texture id is per-process and
+        // nothing carries one across yet), so the demo runs without its art.
+        // That is a real gap, not a demo shortcut; it is why the loads below
+        // already warn instead of failing.
+        let client = ProcessInfo.processInfo.environment["LAVA_CLIENT"] == "1"
+        guard let editor = client
+            ? LavaApp.openClient()
+            : LavaApp.open(title: "LavaUI · DemoExample")
+        else {
             exit(1)
         }
 

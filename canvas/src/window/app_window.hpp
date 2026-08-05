@@ -42,6 +42,21 @@ class AppWindow {
   /// the windowed path with `glfwWindow() == nullptr` rather than a parallel
   /// branch through the whole class.
   AppWindow(RenderDevice &device, uint32_t id, int width, int height);
+
+  /// Client: no platform window, no renderer, no GPU at all.
+  ///
+  /// What is left is the arena and the input queue — which is exactly what a
+  /// process that lays out and emits a frame for *someone else* to draw
+  /// needs, and nothing more. A client owns no scene state either: the
+  /// retained tree lives wherever the frame is rendered, so hover, scroll
+  /// offsets and node animations are answers that arrive here rather than
+  /// questions this window can settle.
+  ///
+  /// Follows the same rule the offscreen constructor set — one class with
+  /// null members, not a parallel hierarchy. `glfwWindow() == nullptr` marks
+  /// "no platform window"; `render_ == nullptr` now marks "no GPU", and every
+  /// method that needs one says so instead of assuming it.
+  AppWindow(uint32_t id, int width, int height);
   ~AppWindow();
 
   AppWindow(const AppWindow &)            = delete;
@@ -50,6 +65,10 @@ class AppWindow {
   uint32_t id() const { return id_; }
   GLFWwindow *glfwWindow() const { return glfw_; }
   RenderWindow &renderWindow() { return *render_; }
+
+  /// Whether this window has a renderer. False only for a client window,
+  /// where every GPU-facing call below is a no-op rather than a crash.
+  bool hasRenderer() const { return render_ != nullptr; }
 
   /// Compiles this window's pipelines. Separate from the constructor for the
   /// same reason `RenderWindow::initRenderers` is.
@@ -131,6 +150,16 @@ class AppWindow {
 
   bool windowShouldClose() const;
   void requestClose();
+
+  /// Resizes a client window, queueing the `Resize` its producer needs to
+  /// re-lay-out. Client only — a window with a renderer takes its size from
+  /// the swapchain, and a second source of truth for it is a bug.
+  ///
+  /// This is the seam the compositor drives once the two processes are
+  /// talking: a client has no surface to learn its own size from, so being
+  /// told is the only way it can know.
+  void setClientSize(float width, float height);
+
   void setWindowFrame(int x, int y, int width, int height);
   void setWindowVisible(bool visible);
   bool isVisible() const { return visible_; }
@@ -170,6 +199,13 @@ class AppWindow {
   GLFWwindow  *glfw_ = nullptr;
   std::unique_ptr<RenderWindow> render_;
   bool visible_ = false;
+
+  /// Client-only size and close flag. A rendered window keeps both in the
+  /// renderer — the swapchain extent and GLFW's should-close — and asking two
+  /// places would let them disagree.
+  float clientW_ = 0.f;
+  float clientH_ = 0.f;
+  bool  clientClose_ = false;
 
   /// Set when this window is driven by another process. Held by pointer so
   /// the common case costs nothing and `draw_arena.hpp` stays out of the

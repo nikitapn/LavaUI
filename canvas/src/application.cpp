@@ -12,6 +12,7 @@
 #include "render/render_device.hpp"
 #include "render/render_window.hpp"
 #include "window/app_window.hpp"
+#include "render/font.hpp"
 #include "render/text_renderer.hpp"
 #include "render/quad_renderer.hpp"
 #include "render/texture_manager.hpp"
@@ -51,7 +52,24 @@ struct Application::Impl
 
   /// The GPU, shared by every window. Brought up once, before any window
   /// exists, and outlives all of them.
+  ///
+  /// Default-constructed but only *initialized* by `init`/`initWithWindow`.
+  /// A client never brings it up, which is what `deviceUp` records — tearing
+  /// down a device that was never created is not a no-op, it is a crash.
   RenderDevice device;
+  bool deviceUp = false;
+
+  /// Client-mode font numbering, standing in for the atlas the device would
+  /// own. Same contract as `TextRenderer::registerFont`: an index, stable per
+  /// (path, pixelSize), -1 if the file will not load.
+  ///
+  /// Provisional by construction. These ids are stamped into every
+  /// `GlyphInstance` and mean nothing to a renderer in another process — a
+  /// client's real font ids have to come back from whoever owns the atlas.
+  /// Loading the face anyway is not waste: it fails here, at registration,
+  /// rather than as missing text in a frame nobody can debug.
+  std::vector<std::pair<std::string, float>> clientFontKeys;
+  std::vector<canvas::Font>                  clientFonts;
 
   /// Open windows, in creation order. `windows[0]` is the one every
   /// window-less overload of the public API means, which keeps single-window
@@ -136,6 +154,7 @@ struct Application::Impl
         std::filesystem::current_path(assetsRoot);
       }
       device.init("2d shenanigans!", /*presentCapable=*/false);
+      deviceUp = true;
       std::cout << "Vulkan initialized (offscreen).\n";
       if (auto r = finishInitCommon(assetsRoot); !r) return r;
       auto w = std::make_unique<AppWindow>(
@@ -150,6 +169,23 @@ struct Application::Impl
     }
   }
 
+  canvas::VoidResult initClient()
+  {
+    try {
+      // No chdir either: the only reason the other two do it is to resolve
+      // shaders and textures relatively, and a client loads neither.
+      auto w = std::make_unique<AppWindow>(
+        nextWindowId++, static_cast<int>(width), static_cast<int>(height));
+      windows.push_back(std::move(w));
+      std::cout << "Client mode: no device, no window, no renderer.\n";
+      return canvas::ok();
+    } catch (const std::exception &ex) {
+      return canvas::fail(std::string("Application::initClient: ") + ex.what());
+    } catch (...) {
+      return canvas::fail("Application::initClient: unknown error");
+    }
+  }
+
   canvas::VoidResult initWithWindow(
     const std::string &assetsRoot, const std::string &title)
   {
@@ -158,6 +194,7 @@ struct Application::Impl
         std::filesystem::current_path(assetsRoot);
       }
       device.init("2d shenanigans!", /*presentCapable=*/true);
+      deviceUp = true;
       std::cout << "Vulkan initialized (windowed).\n";
       if (auto r = finishInitCommon(assetsRoot); !r) {
         return r;
@@ -213,22 +250,44 @@ struct Application::Impl
 
   int registerFont(const std::string &path, float pixelSize)
   {
-    return device.textRenderer().registerFont(path, pixelSize);
+    if (deviceUp) return device.textRenderer().registerFont(path, pixelSize);
+
+    for (size_t i = 0; i < clientFontKeys.size(); ++i) {
+      if (clientFontKeys[i].first == path
+          && clientFontKeys[i].second == pixelSize) {
+        return static_cast<int>(i);
+      }
+    }
+    canvas::Font font;
+    if (!font.load(path, pixelSize)) return -1;
+    clientFonts.push_back(std::move(font));
+    clientFontKeys.emplace_back(path, pixelSize);
+    return static_cast<int>(clientFonts.size() - 1);
   }
 
   canvas::VoidResult loadFont(const std::string &path, float pixelSize)
   {
+    if (!deviceUp) {
+      return registerFont(path, pixelSize) >= 0
+               ? canvas::ok()
+               : canvas::fail("Application::loadFont: " + path);
+    }
     return device.textRenderer().loadFont(path, static_cast<int>(pixelSize));
   }
 
   int loadTexture(const std::string &path)
   {
+    // No device, no texture. Callers already handle a failed load (a missing
+    // file does the same thing), so this reads as "that image is not
+    // available here" rather than as a new failure mode.
+    if (!deviceUp) return -1;
     auto h = TextureManager::getInstance().loadTexture(path);
     return h.isValid() ? static_cast<int>(h.id) : -1;
   }
 
   void unloadTexture(const std::string &path)
   {
+    if (!deviceUp) return;
     TextureManager::getInstance().unloadTexture(path);
   }
 
@@ -255,12 +314,20 @@ struct Application::Impl
 
   void shutdown()
   {
+    if (!deviceUp) {
+      // Client: nothing was ever created on the GPU, so there is nothing to
+      // tear down. Calling through would destroy handles that were never
+      // made.
+      windows.clear();
+      return;
+    }
     TextureManager::getInstance().cleanUp();
     // Windows before the device: they hold attachments and sync objects made
     // from resources cleanUp is about to destroy, and the device asserts on
     // any still registered.
     windows.clear();
     device.cleanUp();
+    deviceUp = false;
   }
 };
 
@@ -274,6 +341,13 @@ struct Application::Impl
 
 canvas::VoidResult Application::init(const std::string &assetsRoot) {
   return impl_->init(assetsRoot);
+}
+
+canvas::VoidResult Application::initClient() { return impl_->initClient(); }
+
+void Application::setClientSize(float width, float height, uint32_t windowId)
+{
+  if (AppWindow *w = impl_->win(windowId)) w->setClientSize(width, height);
 }
 
 canvas::VoidResult Application::initWithWindow(
