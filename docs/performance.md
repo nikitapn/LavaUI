@@ -213,9 +213,60 @@ ScrollView = 2249. A second probe compared `YGNodeRef` pointers between passes
 to rule out remounting (`fresh=0`), which is what pointed at re-dirtying in
 place rather than rebuilding.
 
-`body` is now the largest stage at ~3 ms, and it is a different problem: the
-demo's counter and its 560-row list are `@State` on the same view, so any
-change re-runs the whole body. That is view structure, not framework.
+### And then `body` was the view's fault, not the framework's
+
+With layout fixed, `body` was the largest stage at ~3 ms. Two hypotheses, both
+worth recording because the first was wrong and the second was not a framework
+problem at all.
+
+**Wrong:** per-node string work. `Text.reconcilePrimitive` builds a debug label
+by interpolation on every reconcile, and `shortLabel` calls `string.count`,
+which is O(n) on a Swift `String` — 1122 allocations and 1122 grapheme walks
+per frame, for something only structure dumps and agent queries read. Plausible
+and false: a `perf` profile showed no string cost in reconcile at all. It is
+flat Swift-runtime overhead — retain/release ~7%, dynamic casts ~2%, generic
+metadata instantiation ~3%, exclusivity checks ~3% — with no hot spot to
+remove.
+
+**Right, and it is not a cost at all:** `ViewInvalidation` tracks the composite
+node that *read* the value, so which subtree a change recomputes is decided by
+where the state lives. The demo had `@State private var clicks` on the same
+view that built the 560-row list, so pressing a counter recomputed the list.
+Moving the counter into a view of its own:
+
+| pressing the counter, 560 rows | `@State` on the root view | on its own view |
+|---|---|---|
+| `body` | 3.30 ms | **0.02 ms** |
+| whole frame | 4.0 ms | **0.67 ms** |
+
+165× on the stage, and the framework needed no change — per-node body
+invalidation already worked. Together with the layout fix, the same
+interaction went from ~8 ms to 0.67 ms.
+
+The lesson is a real one and nothing announces it: **state placement is a
+performance decision.** A counter sharing a view with a long list makes every
+press cost the list. This is the same rule SwiftUI has and the same way it is
+usually learned, which is an argument for a diagnostic rather than for
+documentation alone.
+
+What is left in `layout` (0.5 ms with `body` at 0.02) is the work
+`calculateLayout` does regardless of what changed: `collectFrames` builds a
+`LayoutFrame` — with a `String` — for all 2249 nodes on every pass, for
+hit-testing and agent queries. That is the next thing to look at if this stage
+matters again.
+
+### A harness gap found on the way
+
+Agent-injected clicks do not reach handlers on a client that is *also* fed by a
+compositor input stream: the hit test finds the node, but the state change
+never lands. Real input through the compositor works, and injection works on a
+standalone client (`LAVA_CLIENT=1 HelloWorld`), so it is specific to a window
+with two input sources. Not chased down.
+
+It matters beyond convenience: the first `perf` profile above was taken while
+driving clicks through the agent, which means it profiled the agent server
+answering rather than the body passes it was supposed to measure. The numbers
+quoted are from a re-run driven with real input.
 
 ### What to measure before revisiting
 

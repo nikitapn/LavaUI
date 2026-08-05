@@ -25,7 +25,6 @@ import NPRPC
 /// What the client draws. Deliberately ordinary — the point is that nothing
 /// here knows it is running in a different process from its pixels.
 struct ClientDemoView: View {
-    @State private var clicks = 0
     @State private var rows = 60
 
     var body: some View {
@@ -37,7 +36,12 @@ struct ClientDemoView: View {
             )
 
             HStack(padding: 8) {
-                Button("Clicked \(clicks)×") { clicks += 1 }
+                // Its own view, so its own `@State`. Which subtree a change
+                // recomputes is decided here, by where the state lives, and
+                // not by the framework: `ViewInvalidation` tracks the
+                // *composite node that read the value*, so a counter sharing a
+                // view with a 560-row list recomputes the list too.
+                ClickCounter()
                 Button("More rows") { rows += 20 }
                 Spacer()
             }
@@ -63,6 +67,15 @@ struct ClientDemoView: View {
             }
             .flexGrow(1)
         }
+    }
+}
+
+/// A counter that owns its own state, so pressing it recomputes only itself.
+struct ClickCounter: View {
+    @State private var clicks = 0
+
+    var body: some View {
+        Button("Clicked \(clicks)×") { clicks += 1 }
     }
 }
 
