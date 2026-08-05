@@ -237,6 +237,11 @@ final class ScrollNode: YogaBoxNode {
     }
 
     private func relink() {
+        let leaves = contentNode.flattenedLayoutNodes()
+        // Same children means the same adoption and the same flexShrink, so
+        // there is nothing below that needs redoing either. See
+        // `yogaChildrenChanged`.
+        guard yogaChildrenChanged(leaves, insertedLeaves) else { return }
         YGNodeRemoveAllChildren(yogaStorage)
         // Adopt any virtualized container underneath: it cannot work out what
         // is visible without this node's offset and height.
@@ -244,7 +249,7 @@ final class ScrollNode: YogaBoxNode {
         for grid in lazyContent {
             grid.scrollNode = self
         }
-        insertedLeaves = contentNode.flattenedLayoutNodes()
+        insertedLeaves = leaves
         for (i, leaf) in insertedLeaves.enumerated() {
             guard let y = leaf.yoga else { continue }
             // Children must keep their natural size; shrinking them to fit is

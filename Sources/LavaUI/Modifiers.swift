@@ -214,8 +214,10 @@ class StyleBoxNode: YogaBoxNode {
     }
 
     private func relink() {
+        let leaves = contentNode.flattenedLayoutNodes()
+        guard yogaChildrenChanged(leaves, insertedLeaves) else { return }
         YGNodeRemoveAllChildren(yogaStorage)
-        insertedLeaves = contentNode.flattenedLayoutNodes()
+        insertedLeaves = leaves
         for (i, leaf) in insertedLeaves.enumerated() {
             guard let y = leaf.yoga else { continue }
             YGNodeInsertChild(yogaStorage, y, i)

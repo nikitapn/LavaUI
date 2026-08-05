@@ -423,12 +423,15 @@ one as ordinary input rather than as an error:
 
 ## Not done
 
-- **The tree is still republished every frame.** The renderer re-composes the
-  last published frame with a new offset, which is what makes scrolling
-  work while the client is stopped — but a client that changes one label
-  still rewrites its whole list. Deltas against a persistent tree are the
-  next step and a much larger one: it means versioning and a change log
-  rather than a triple-buffered slot.
+- **The tree is still republished every frame** — and measurement says leave
+  it that way for now. A client that changes one label does rewrite its whole
+  list, and that rewrite costs 0.08 ms; the same frame spends 9 ms in body and
+  layout. `DrawList` culls as it walks, so what crosses the boundary is bounded
+  by the viewport rather than by the tree: a 60-row list and a 560-row list
+  both published 58 commands. Deltas against a persistent tree — versioning, a
+  change log — would optimize the two cheapest stages in the pipeline. See
+  "Where the frame actually goes" in [performance](performance.md) for the
+  numbers and for what would change the answer.
 - **No damage tracking.** A moved node repaints its whole window.
 - **Hit-testing is used for scroll only.** The renderer knows the node
   geometry, so routing a click to a node id — rather than shipping
@@ -507,5 +510,9 @@ targets — and what that buys is that the producer no longer has to be
 scheduled for any of it.
 
 Keeping vertex buffers per node and rebuilding only dirty subtrees is a real
-further step, and node identity is exactly what it would need. It has not
-been taken.
+further step, and node identity is exactly what it would need. It has not been
+taken, and the measurement above is why: rebuilding *every* vertex of a
+full-screen frame is 0.12 ms, so there is not much there to save. If a renderer
+driving many surfaces turns out not to stay flat, threading it — one `VkQueue`
+per thread — scales with the number of windows, which is the dimension that
+would actually be growing.

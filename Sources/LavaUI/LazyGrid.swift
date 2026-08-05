@@ -173,12 +173,19 @@ final class LazyCellNode: YogaBoxNode {
     }
 
     private func relink() {
+        let leaves = item.flattenedLayoutNodes()
+        guard yogaChildrenChanged(leaves, insertedLeaves) else { return }
         YGNodeRemoveAllChildren(yogaStorage)
-        for (i, leaf) in item.flattenedLayoutNodes().enumerated() {
+        insertedLeaves = leaves
+        for (i, leaf) in leaves.enumerated() {
             guard let y = leaf.yoga else { continue }
             YGNodeInsertChild(yogaStorage, y, i)
         }
     }
+
+    /// What is currently inserted into Yoga, so a relink that would change
+    /// nothing can be skipped. See `yogaChildrenChanged`.
+    private var insertedLeaves: [any AnyViewNode] = []
 
     override func collectChildFrames(
         originX: Float, originY: Float, into frames: inout [LayoutFrame]

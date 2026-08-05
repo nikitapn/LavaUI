@@ -130,6 +130,110 @@ costs that have not been fixed yet — not measurement artifacts.
 - **`traceloom.parse-10mb` — 457 ms.** Already parallel across cores; the
   floor is the `split` that materialises every line.
 
+## Where the frame actually goes
+
+Measured 2026-08-05, release build, one LavaUI client under the `ArenaDemo`
+compositor — so producer and renderer are separate processes and every number
+below crosses a real boundary. The view is a `ForEach` of rows inside a
+`ScrollView`, grown by clicking a button in the running app.
+
+| per frame | 60 rows | 560 rows |
+|---|---|---|
+| `body` | — | **3.3–3.7 ms** |
+| `layout` | — | **4.0–5.5 ms** |
+| `emit` (producer) | 0.04 ms | 0.08 ms |
+| `replay` (renderer) | 0.026 ms | 0.031 ms |
+| commands on the wire | 58 | 58 |
+
+**Fifty-eight commands either way.** That is the number worth remembering: the
+draw list is already bounded by the viewport rather than by the tree, because
+`DrawList` culls as it walks. Growing the tree tenfold changed what crosses the
+boundary not at all, and changed replay by 5 µs.
+
+Corroborating, from the same session: HelloWorld maximized to 3400×1800 is 375
+commands, 2261 glyphs, **0.12 ms** to replay. `editor.open-10mb` in this suite
+is emit 0.05 ms against layout 21.5 ms.
+
+### What this rules out
+
+A **partial draw list** — publishing only changed subtrees against a persistent
+tree in the renderer, with the versioning and change log that implies — would
+optimize the two cheapest stages in the pipeline. Emit plus replay is 0.11 ms
+on a frame where body plus layout is 9 ms. It was planned, and the measurement
+is why it has not been built.
+
+The premise was right and the attribution was wrong. "A client that changes one
+label rewrites its whole list" is true, and that rewrite costs 0.08 ms. What it
+*also* does is re-run `body` for the whole subtree and re-lay-out the whole
+tree, and that is the 9 ms. The problem is real; it is in layout, not on the
+wire.
+
+The one case partial emit would genuinely win is a flat, non-lazy list of tens
+of thousands of children, where the walk visits every node just to cull it
+(~143 ns each). `LazyGrid` already covers that, by not mounting them.
+
+### Where it went instead: Yoga had nothing to skip
+
+Following the 9 ms, on the same 560-row client. Yoga tracks dirty subtrees and
+skips clean ones, so a body pass that changed one label should re-lay-out
+almost nothing. It re-laid-out everything:
+
+| on a frame where one label changed | before | after |
+|---|---|---|
+| dirty Yoga nodes | **2249** of 2813 | **6** of 2813 |
+| measure-function calls | 1124 | **2** |
+| `YGNodeCalculateLayout` | 3.8–4.4 ms | **0.57–0.63 ms** |
+| `layout` stage | 4.0–5.5 ms | **1.1–1.3 ms** |
+| whole frame | 7.5–9.3 ms | **4.3–4.6 ms** |
+
+Three separate things were dirtying the tree, and the first two hid the third:
+
+1. **Every `Text` reconcile marked its leaf dirty unconditionally.** The
+   comment said it was for content-scale changes, which swap the face without
+   changing the string — but that case is already handled centrally by
+   `LavaWindow.syncTextMetrics`, and the same function already computed the
+   font-identity comparison that answers it exactly.
+2. **`calculateLayout` folded `!layoutValid` into `sizeChanged`,** and
+   `setRoot` clears `layoutValid` on every body pass to stop hit-tests running
+   against stale frames. So every body pass took the "the viewport changed,
+   re-measure every leaf" branch. "Layout is stale" and "every measurement is
+   stale" are different claims.
+3. **Every container relinked its Yoga children on every reconcile.**
+   `YGNodeRemoveAllChildren` discards each child's layout and
+   `YGNodeInsertChild` dirties the container and every ancestor — so each of
+   the 561 rows dirtied itself and its chain, every frame. This was the big
+   one, and the fix is one pointer compare per child: reconcile returns the
+   same node objects in the same order unless something was inserted, removed
+   or reordered, which is the entire point of reconciling.
+
+Found by counting rather than reading: a temporary probe printed dirty nodes
+before `YGNodeCalculateLayout`, broken down by node kind, and the counts summed
+exactly — 1122 text + 561 spacer + 561 HStack + 2 VStack + 2 button + 1
+ScrollView = 2249. A second probe compared `YGNodeRef` pointers between passes
+to rule out remounting (`fresh=0`), which is what pointed at re-dirtying in
+place rather than rebuilding.
+
+`body` is now the largest stage at ~3 ms, and it is a different problem: the
+demo's counter and its 560-row list are `@State` on the same view, so any
+change re-runs the whole body. That is view structure, not framework.
+
+### What to measure before revisiting
+
+- **Many clients.** Every number above is one. If a renderer driving 10–20
+  surfaces does not stay flat, partial lists get a real justification. A
+  multi-threaded renderer is the other answer to that question, and probably
+  the better one — Vulkan is built for it, one `VkQueue` per thread, and it
+  scales with windows rather than with what changed inside them.
+- **Content that cannot be culled.** Everything here is bounded by the viewport
+  because it is 2D and rectangular. That is an assumption, not a law.
+
+### Reproducing
+
+Temporary instrumentation, added and removed each time rather than left in:
+`LAVAUI_DEBUG=1` on the producer gives the per-frame `body`/`layout`/`emit`
+line; the replay number came from a `steady_clock` pair around
+`replayDrawList` in `RenderWindow::render`, gated on an env var.
+
 ## Adding a scenario
 
 Scenarios live in `Sources/LavaBench/*Scenarios.swift` and are registered in

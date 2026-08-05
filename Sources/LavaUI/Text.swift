@@ -68,6 +68,7 @@ public struct Text: PrimitiveView {
     public func reconcilePrimitive(_ node: any AnyViewNode) -> any AnyViewNode {
         if let leaf = node as? LeafNode, leaf.kind == .text {
             let prevFontId = leaf.font?.identity
+            let prevLineLimit = leaf.textLineLimit
             leaf.update(
                 label: "Text \"\(shortLabel)\"",
                 width: .auto,
@@ -83,14 +84,25 @@ public struct Text: PrimitiveView {
             leaf.font = resolvedFont
             if !leaf.usesTextMeasure {
                 leaf.installTextMeasure()
-            } else {
-                // Always dirty: content scale swaps `FontStore.default` without
-                // changing the string, and Yoga must re-measure with the new face.
+            } else if prevFontId != leaf.font?.identity {
+                // Content scale swaps `FontStore.default` without changing the
+                // string, and Yoga has to re-measure against the new face.
                 leaf.markMeasureDirty()
-                if prevFontId != leaf.font?.identity {
-                    leaf.cachedLines = []
-                }
+                leaf.cachedLines = []
+            } else if prevLineLimit != leaf.textLineLimit {
+                leaf.markMeasureDirty()
             }
+            // Deliberately *not* dirtied otherwise, and this is the whole
+            // difference between a body pass that re-lays-out one row and one
+            // that re-lays-out the window.
+            //
+            // Marking a text leaf dirty propagates to every ancestor, so doing
+            // it unconditionally meant every body pass dirtied every text node
+            // and every box above it — measured at 2249 of 2813 nodes on a
+            // frame where one label changed, and Yoga then had nothing left to
+            // skip. The three inputs `measureForYoga` actually reads are the
+            // string, the face and the line limit: `update` dirties on the
+            // first, and the two branches above cover the others.
             return leaf
         }
         return mountPrimitive()

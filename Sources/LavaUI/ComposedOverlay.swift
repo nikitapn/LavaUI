@@ -185,8 +185,12 @@ final class ComposedOverlayNode: YogaBoxNode {
     }
 
     private func relink() {
+        let leaves = contentNode.flattenedLayoutNodes()
+        // `alignmentBox` is this node's own and never changes identity, so the
+        // content list alone decides. See `yogaChildrenChanged`.
+        guard yogaChildrenChanged(leaves, insertedLeaves) else { return }
         YGNodeRemoveAllChildren(yogaStorage)
-        insertedLeaves = contentNode.flattenedLayoutNodes()
+        insertedLeaves = leaves
         var index = 0
         for leaf in insertedLeaves {
             guard let y = leaf.yoga else { continue }
