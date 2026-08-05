@@ -200,6 +200,11 @@ class QuadRenderer {
     VmaAllocation indexAlloc   = VK_NULL_HANDLE;
     void         *indexMapped  = nullptr;
     size_t        capacity     = 0;  // vertices
+    /// Indices, tracked separately rather than derived from `capacity`.
+    /// A quad is 6 indices per 4 vertices, but a triangle fan is nearly 3 per
+    /// 1 — so a frame with mesh content needs more than the quad ratio, and
+    /// assuming otherwise overruns the buffer. See `ensureBufferCapacity`.
+    size_t        indexCapacity = 0;
     std::vector<VkDescriptorSet> descriptorSets;
     uint32_t descriptorWriteIndex = 0;
   };
@@ -213,7 +218,7 @@ class QuadRenderer {
                              vk::Handle<VkPipeline> &out, bool depthEnabled);
   void setupDescriptors();
   void createWhiteTexture();
-  void ensureBufferCapacity(size_t vertexCount);
+  void ensureBufferCapacity(size_t vertexCount, size_t indexCount);
   void destroyFrameBuffers(FrameResources &fr);
   void flushBatch();
   /// Switch the texture used by subsequent quads (flushes if it changes).

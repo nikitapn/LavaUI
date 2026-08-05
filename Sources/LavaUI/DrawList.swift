@@ -203,6 +203,23 @@ public final class DrawList {
         )
     }
 
+    /// Says once that a frame is being truncated.
+    ///
+    /// Every append below refuses rather than overruns when its sink would not
+    /// grow, which is right — but silent. Content that is simply missing from
+    /// a frame is one of the most expensive things to debug: no crash, no
+    /// error, and it usually looks like a layout or culling bug rather than a
+    /// capacity one. So it says so.
+    private static func noteTruncated(_ what: String, at count: Int) {
+        guard !truncationWarned else { return }
+        truncationWarned = true
+        let line = "DrawList: out of room for \(what) at \(count); this frame "
+            + "is truncated and content will be missing.\n"
+        FileHandle.standardError.write(Data(line.utf8))
+    }
+
+    nonisolated(unsafe) private static var truncationWarned = false
+
     private func adopt(_ buffers: FrameBuffers?) {
         guard let buffers else {
             // Nothing to write into. Zero capacity refuses every append, so
@@ -248,14 +265,20 @@ public final class DrawList {
 
     private func appendCommand(_ command: canvas.DrawCommand) {
         if commandCount == commandCapacity { grow(commands: commandCount + 1) }
-        guard commandCount < commandCapacity else { return }
+        guard commandCount < commandCapacity else {
+            Self.noteTruncated("commands", at: commandCount)
+            return
+        }
         commandStorage[commandCount] = command
         commandCount += 1
     }
 
     private func appendGlyph(_ glyph: canvas.GlyphInstance) {
         if glyphCount == glyphCapacity { grow(glyphs: glyphCount + 1) }
-        guard glyphCount < glyphCapacity else { return }
+        guard glyphCount < glyphCapacity else {
+            Self.noteTruncated("glyphs", at: glyphCount)
+            return
+        }
         glyphStorage[glyphCount] = glyph
         glyphCount += 1
     }
@@ -264,7 +287,10 @@ public final class DrawList {
         if meshVertexCount == meshVertexCapacity {
             grow(meshVertices: meshVertexCount + 1)
         }
-        guard meshVertexCount < meshVertexCapacity else { return }
+        guard meshVertexCount < meshVertexCapacity else {
+            Self.noteTruncated("mesh vertices", at: meshVertexCount)
+            return
+        }
         meshVertexStorage[meshVertexCount] = vertex
         meshVertexCount += 1
     }
@@ -273,7 +299,10 @@ public final class DrawList {
         if spatialVertexCount == spatialVertexCapacity {
             grow(spatialVertices: spatialVertexCount + 1)
         }
-        guard spatialVertexCount < spatialVertexCapacity else { return }
+        guard spatialVertexCount < spatialVertexCapacity else {
+            Self.noteTruncated("spatial vertices", at: spatialVertexCount)
+            return
+        }
         spatialVertexStorage[spatialVertexCount] = vertex
         spatialVertexCount += 1
     }

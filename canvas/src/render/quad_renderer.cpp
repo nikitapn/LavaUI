@@ -26,7 +26,7 @@ void QuadRenderer::init() {
                      linePipeline_);
   createSpatialPipeline(device_.getRenderPass(), device_.getMSAASamples(),
                         spatialPipeline_, true);
-  ensureBufferCapacity(kInitialVertexCapacity);
+  ensureBufferCapacity(kInitialVertexCapacity, (kInitialVertexCapacity / 4) * 6);
 }
 
 void QuadRenderer::destroyFrameBuffers(FrameResources &fr) {
@@ -41,6 +41,7 @@ void QuadRenderer::destroyFrameBuffers(FrameResources &fr) {
   device_.destroyBuffer(fr.vertexBuffer, fr.vertexAlloc);
   device_.destroyBuffer(fr.indexBuffer, fr.indexAlloc);
   fr.capacity = 0;
+  fr.indexCapacity = 0;
 }
 
 void QuadRenderer::cleanUp() {
@@ -481,9 +482,24 @@ void QuadRenderer::createPipelineLayout() {
      "Failed to create quad pipeline layout");
 }
 
-void QuadRenderer::ensureBufferCapacity(size_t vertexCount) {
+/// Grows this frame slot's vertex and index buffers to hold what was recorded.
+///
+/// The two are sized independently, and that is the whole point. The index
+/// count used to be derived from the vertex count as `vertices / 4 * 6` — the
+/// ratio a quad has, six indices per four vertices. Anything that is not a
+/// quad has a different one: a triangle fan of N vertices needs 3(N-2)
+/// indices, approaching *three* per vertex, and `pushMesh`, `pushPolyline` and
+/// `pushSpatialTriangles` all produce those.
+///
+/// So a frame with enough mesh content overran the index buffer, and the
+/// `memcpy` in `end()` wrote past the mapped allocation. The visible result was
+/// a frame truncated partway through — the last text on screen cut off
+/// mid-word, appearing and disappearing as scrolling brought a chart into
+/// view and took it out again. Nothing reported it: no Vulkan error, no
+/// dropped draw, just missing content.
+void QuadRenderer::ensureBufferCapacity(size_t vertexCount, size_t indexCount) {
   auto &fr = activeFrame();
-  if (vertexCount <= fr.capacity) {
+  if (vertexCount <= fr.capacity && indexCount <= fr.indexCapacity) {
     return;
   }
 
@@ -498,15 +514,25 @@ void QuadRenderer::ensureBufferCapacity(size_t vertexCount) {
     newCapacity *= 2;
   }
 
+  // Never below what that many quads would need, so an all-quad frame still
+  // grows in one step rather than twice.
+  size_t newIndexCapacity = std::max<size_t>(
+    fr.indexCapacity, (newCapacity / 4) * 6);
+  while (newIndexCapacity < indexCount) {
+    newIndexCapacity *= 2;
+  }
+
   // Grow every frame slot to the same size so slot switches stay cheap.
   for (uint32_t s = 0; s < kMaxFramesInFlight; ++s) {
     auto &slot = frames_[s];
-    if (slot.capacity >= newCapacity) continue;
+    if (slot.capacity >= newCapacity && slot.indexCapacity >= newIndexCapacity) {
+      continue;
+    }
 
     destroyFrameBuffers(slot);
 
     const VkDeviceSize vertexBytes = newCapacity * sizeof(Vertex);
-    const VkDeviceSize indexBytes  = (newCapacity / 4) * 6 * sizeof(uint32_t);
+    const VkDeviceSize indexBytes  = newIndexCapacity * sizeof(uint32_t);
 
     device_.createBuffer(vertexBytes, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
                          VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
@@ -520,6 +546,7 @@ void QuadRenderer::ensureBufferCapacity(size_t vertexCount) {
     slot.vertexMapped = device_.mapBuffer(slot.vertexAlloc);
     slot.indexMapped = device_.mapBuffer(slot.indexAlloc);
     slot.capacity = newCapacity;
+    slot.indexCapacity = newIndexCapacity;
   }
 }
 
@@ -877,7 +904,7 @@ void QuadRenderer::end() {
   if (vertices_.empty()) {
     return;
   }
-  ensureBufferCapacity(vertices_.size());
+  ensureBufferCapacity(vertices_.size(), indices_.size());
 
   auto &fr = activeFrame();
   std::memcpy(fr.vertexMapped, vertices_.data(),
