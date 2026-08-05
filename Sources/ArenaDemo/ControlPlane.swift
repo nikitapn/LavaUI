@@ -350,24 +350,59 @@ final class CompositorImpl: CompositorServant, @unchecked Sendable {
     /// the honest cost of doing it here and is why `ImageStore` asks off the
     /// client's own critical path.
     override func registerImage(path: String, maxPixelSize: UInt32) throws -> ImageInfo {
+        let key = ImageStore.key(path: path, maxPixelSize: maxPixelSize)
+
+        // Idempotent per (path, maxPixelSize), answered without a decode or a
+        // hop. That is not just an optimization: a desktop's second client
+        // asking for an asset the first already has is the normal case, and
+        // it should cost a lookup.
+        imageKeyLock.lock()
+        if let known = infoByKey[key] {
+            usersByKey[key, default: 0] += 1
+            imageKeyLock.unlock()
+            return known
+        }
+        imageKeyLock.unlock()
+
+        // Decoded *here*, on the RPC thread, and this is the point of the
+        // split. `decodeImage` is documented thread-safe and touches no
+        // device — it is also nearly all of the cost: measured at 5–17 ms per
+        // cover against a round trip of about 7 µs. Doing it on the loop
+        // meant a connecting client stalling the compositor's own window for
+        // as long as it took to read its art.
+        guard let decoded = Editor.decodeImage(path: path, maxPixelSize: maxPixelSize)
+        else {
+            var ex = ImageNotFound()
+            ex.path = path
+            throw ex
+        }
+
+        // Only the upload needs the device, so only the upload hops.
         let image: UIImage? = LoopQueue.sync { [editor] in
-            editor.registerImage(path: path, maxPixelSize: maxPixelSize)
+            editor.uploadImage(
+                key: key, path: path, pixels: decoded.pixels,
+                width: decoded.width, height: decoded.height
+            )
         }
         guard let image else {
             var ex = ImageNotFound()
             ex.path = path
             throw ex
         }
-        // Keyed by the id the client will use, so `ReleaseImage` needs no
-        // agreement between the two sides about how a cache key is spelled.
-        imageKeyLock.lock()
-        keysByImageID[image.textureId] = image.cacheKey
-        imageKeyLock.unlock()
 
         var info = ImageInfo()
         info.id = image.textureId
         info.width = UInt32(image.pixelWidth)
         info.height = UInt32(image.pixelHeight)
+
+        imageKeyLock.lock()
+        infoByKey[key] = info
+        usersByKey[key, default: 0] += 1
+        // Keyed by the id the client will use, so `ReleaseImage` needs no
+        // agreement between the two sides about how a cache key is spelled.
+        keysByImageID[info.id] = key
+        imageKeyLock.unlock()
+
         let line = "RegisterImage(\(URL(fileURLWithPath: path).lastPathComponent), "
             + "max \(maxPixelSize)) → \(info.id) \(info.width)×\(info.height)\n"
         FileHandle.standardError.write(Data(line.utf8))
@@ -378,9 +413,31 @@ final class CompositorImpl: CompositorServant, @unchecked Sendable {
         // An id this compositor never handed out, or has already released, is
         // a client that lost track rather than an error — see the IDL.
         imageKeyLock.lock()
-        let key = keysByImageID.removeValue(forKey: id)
+        guard let key = keysByImageID[id] else {
+            imageKeyLock.unlock()
+            return
+        }
+        // Counted, because the registration above hands two clients the same
+        // id without uploading twice — so the engine's own refcount saw one
+        // user where there are two, and the first release would free a
+        // texture the second is still drawing. Counting here is where the
+        // policy belongs: sharing between clients is the compositor's
+        // business, not the engine's.
+        //
+        // A client that registers twice and releases once leaks its texture
+        // until it exits. That is the safe direction to be wrong in, and
+        // fixing it properly means per-client accounting, which wants the
+        // surface identity this call does not carry.
+        let remaining = (usersByKey[key] ?? 1) - 1
+        usersByKey[key] = max(0, remaining)
+        guard remaining <= 0 else {
+            imageKeyLock.unlock()
+            return
+        }
+        usersByKey.removeValue(forKey: key)
+        infoByKey.removeValue(forKey: key)
+        keysByImageID.removeValue(forKey: id)
         imageKeyLock.unlock()
-        guard let key else { return }
         LoopQueue.sync { [editor] in editor.releaseImage(key: key) }
     }
 
@@ -389,6 +446,9 @@ final class CompositorImpl: CompositorServant, @unchecked Sendable {
     /// still made on the loop.
     private let imageKeyLock = NSLock()
     private var keysByImageID: [UInt32: String] = [:]
+    /// What has already been registered, and how many clients hold it.
+    private var infoByKey: [String: ImageInfo] = [:]
+    private var usersByKey: [String: Int] = [:]
 
     /// Opens a window for this client and points it at the client's arena.
     ///

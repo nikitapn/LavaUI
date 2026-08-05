@@ -1,0 +1,5 @@
+{
+  "search.exclude": {
+    "**/third-party": true
+  }
+}
