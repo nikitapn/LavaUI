@@ -20,20 +20,41 @@ stopped, which is the property the whole arena exists for.
 
 ## Broken
 
-### 1. A dead client leaves its window on screen forever
+Numbering is kept stable as entries are fixed, so that a reference to "gap 4"
+does not shift under it.
 
-**Reproduced.** `kill -9` the client: no `SurfaceNotFound`, no "surface
-destroyed", no "subscription ended". The window stays mapped, nothing ever
-draws into it again, and the compositor still counts it as a live surface.
+### 1. ~~A dead client leaves its window on screen forever~~ — fixed
 
-The design says the input stream is the surface's lease — "this is the path a
-crashed client takes". It is not: nothing on the shared-memory path notices
-the peer's process died, so the stream never ends and the lease never
-expires. Every other teardown route works, which is what hid this.
+**Was:** `kill -9` the client and nothing happened. No "subscription ended",
+no "surface destroyed". The window stayed mapped, nothing ever drew into it
+again, and the compositor still counted it as a live surface.
 
-This is the one that has to be fixed before any of it is a desktop. It is
-also the one Wayland answers for free — `wl_client` has a destroy signal —
-so it may be worth fixing *there* rather than here.
+The compositor's half was already right — `SubscribeInput` ends by calling
+`SurfaceRegistry.destroy`, on the theory that the input stream is the
+surface's lease. What was missing was underneath it: a shared-memory peer has
+no connection that breaks when it dies, so the stream never ended and the
+lease never expired.
+
+**Fixed in nprpc** by `8144258` and `c92c6ff` (2026-08-06), which give the
+shared-memory transport what a socket gets for free: a `writer_detached` flag
+in the ring header for a peer that disconnects politely, and a probed
+`ProcessIdentity` (pid plus a start-time token, so a recycled pid is not
+mistaken for the peer) for one that does not. The server session polls it and
+cancels the session's streams the way a WebSocket close does.
+
+**Re-verified 2026-08-06** after rebuilding: `kill -9` on the client now
+walks the whole chain in about a second —
+
+```
+SharedMemoryChannel read thread exiting
+SubscribeInput(surface 1) — subscription 1 ended
+surface 1 (LavaUI · DemoExample) destroyed
+Cleaned up ring buffers: /nprpc_…_s2c, /nprpc_…_c2s
+```
+
+— the client's window disappears from the X server, and the compositor stays
+up. The ring segments are unlinked too, which was a second leak: before the
+fix, a run left both 16 MB rings in `/dev/shm` forever.
 
 ### 2. Clipboard is dead
 
@@ -112,11 +133,17 @@ can give the surface back, and that is the whole vocabulary.
 
 ## Against the wlroots plan
 
-Most of the "missing" list and half the "broken" list are things Wayland
-already has an answer for — `wl_data_device` for both clipboard and drag and
-drop, `wl_pointer.set_cursor`, `xdg_toplevel` for window state and for the
-second window, `wl_client`'s destroy signal for the dead-client case. That is
-an argument for not building them twice on `lava.Compositor` first.
+Most of the "missing" list and what is left of the "broken" list are things
+Wayland already has an answer for — `wl_data_device` for both clipboard and
+drag and drop, `wl_pointer.set_cursor`, `xdg_toplevel` for window state and
+for the second window. That is an argument for not building them twice on
+`lava.Compositor` first.
+
+The dead-client case was the exception, and it is worth noting why it was
+right to fix here rather than wait for `wl_client`'s destroy signal: the
+problem was never the window protocol, it was that shared memory has no
+disconnect. A wlroots compositor talking to LavaUI clients over the same
+transport would have had the identical hole, one layer further down.
 
 What does *not* come from Wayland, and stays ours either way: the draw arena
 and its retained scene tree, resource ids (`RegisterFont`/`RegisterImage`),
