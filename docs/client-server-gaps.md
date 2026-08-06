@@ -9,12 +9,23 @@ is missing is no longer obvious from using it. Typing works, scrolling works,
 images work — so the holes are the ones you find by reaching for something
 three weeks later.
 
-**Status, same day.** All six are closed or reduced: the dead-client case by
-nprpc's new shared-memory liveness detection, the other five here. What is
-left is a feature rather than a break (a client's *second* window) and one
-known bug (agent-injected clicks on a client with an input stream). Each
-entry keeps its original description under **Was:** — the point of the list
-is what the shape of the thing was, not just that it is gone.
+**Status, same day.** All eight are closed or reduced — the original six, plus
+two found while closing them. The dead-client case went to nprpc's new
+shared-memory liveness detection; the rest are here. What is left is a feature
+rather than a break: a client's *second* window. Each entry keeps its original
+description under **Was:** — the point of the list is what the shape of the
+thing was, not just that it is gone.
+
+A pattern worth naming, because it predicts the next one. Four of the eight
+were the same mistake in different clothes: a question the renderer answers
+for itself, with no way to ask it across a process boundary. The selection,
+the paths in a drop, the pixels on screen, a wheel notch nobody wanted — each
+worked in one process because it was a function call, and each was silently
+nothing in two. They now share a shape: a `…Bridge` in LavaUI that falls back
+to the local engine when unset, and one call on `lava.Compositor` behind it.
+When something else turns out not to work in client mode, that is the first
+thing to check: what does this ask the renderer, and can it ask from over
+there?
 
 ## Works, verified
 
@@ -180,10 +191,56 @@ does not speak.
 compositor's framebuffer, and the windowed path still captures through the
 same bridge.
 
-**Still open, and the reason this one is not finished:** agent-injected
-clicks do not reach handlers on a client that also has a compositor input
-stream — the hit test finds the node, the state change never lands. The agent
-can now *see* a client; it still cannot fully drive one.
+### 7. ~~Agent-injected clicks do not reach handlers on a client~~ — fixed
+
+**Was:** a click reported success, targeted the right frame, and changed
+nothing. The hit test found the node; the state change had nowhere to land.
+
+Hover is the renderer's answer — it has the pointer and the scene. Injected
+input has no renderer behind it: in a client the move never reaches a scene,
+so no `.nodeHover` is ever produced for it, `HoverState` stays wherever the
+real pointer left it, and every `Button` declines because it fires on
+*release* and only `if wasInside`.
+
+**Fixed:** `LavaWindow.noteInjectedPointer` resolves hover at injection time.
+Not gated on client mode — a renderer's `.nodeHover` is processed afterwards,
+from the queue, and overwrites it, so the renderer keeps the last word where
+it has one and this only fills the silence where it does not.
+
+It has to give the *renderer's* answer, not `hitTestHover`'s. Those differed,
+and only for buttons: a `Button` has no local hover fill because its tint is
+the renderer's job, so a walk keyed on `hoverFill` skipped the one control
+every app is made of. `hitTestSceneHover` mirrors
+`RenderWindow::updateSceneHover` instead, and `isRendererInteractive` is now
+the single definition of that predicate, shared with the `DrawList` code that
+decides whether to emit the node at all. Those two disagreeing *was* the bug.
+
+**Verified:** three injected clicks on a client's `Button` read "Clicked 3×",
+and "More rows" grows the list.
+
+### 8. ~~A declined wheel notch dies in the client~~ — fixed
+
+**Was:** hovering the ST editor pinned the whole page. Reported from the demo,
+and the shape is general: any inner widget that claims the wheel and then
+declines a notch swallowed it.
+
+The hand-back already existed. When a node under the pointer claims the wheel,
+the renderer stands aside and forwards the notch as a `Scroll` event; if the
+producer's chain then declines it, the container *around* those handlers
+should still scroll. In one process that is a call into the engine. In a
+client it was a call into an engine with no renderer, which returns false and
+drops the notch.
+
+**Fixed:** `ScrollUnclaimed` on the control plane, `ScrollBridge` in LavaUI.
+No position on the wire — the renderer still has the pointer, and it is the
+same pointer that produced the `Scroll` being answered. `[unreliable]`, for
+the reason `Present` is: the renderer owns the offset, so this is a nudge
+rather than a fact, and the wheel arrives in bursts that must not each cost
+the frame loop a round trip.
+
+**Verified by A/B:** without it, 30 notches over the editor scroll the editor
+to its last line and the page does not move at all; with it, the editor takes
+what it can and the page carries on from there.
 
 ## Missing rather than broken
 
@@ -213,7 +270,7 @@ is left in "missing rather than broken", and it is why the second window is
 not being plumbed here.
 
 It did not hold for what was *broken*, and the reason is worth keeping. Every
-one of those five was a hole below the window protocol rather than in it: the
+one of those was a hole below the window protocol rather than in it: the
 selection is a display-server resource whichever protocol names it, a drop's
 payload has to reach a process that does not own the pointer either way, an
 image with no path has no path under Wayland either, and a client with no
@@ -222,6 +279,13 @@ speaking to LavaUI clients over shared memory would have inherited all of
 them. The dead-client case makes the point most sharply: `wl_client`'s
 destroy signal would not have helped, because the thing that failed to notice
 was the transport, not the window.
+
+The last two say it louder still, because Wayland has no opinion about either.
+Nothing in `wl_pointer` decides whether a wheel notch an app declined should
+move the page underneath it, and nothing in any protocol tells a test harness
+what a synthetic click is hovering. Those are questions about *this*
+renderer's retained scene, which is the part that was never going to come
+from anywhere else.
 
 So the split is not "wait for Wayland" versus "build it now" — it is whether
 a gap is about *windows*, which Wayland owns, or about the client/renderer
