@@ -367,6 +367,29 @@ fileprivate func unmarshal_lava_M6(buffer: UnsafeRawPointer, offset: Int) -> lav
 }
 
 fileprivate struct lava_M7: Codable, Sendable {
+  public var _1: [String] = []
+
+  public init() {}
+
+  public init(_1: [String])   {
+    self._1 = _1
+  }
+}
+
+
+// MARK: - Marshal lava_M7
+fileprivate func marshal_lava_M7(buffer: FlatBuffer, offset: Int, data: lava_M7) {
+  NPRPC.marshal_string_vector(buffer: buffer, offset: offset + 0, vector: data._1)
+}
+
+// MARK: - Unmarshal lava_M7
+fileprivate func unmarshal_lava_M7(buffer: UnsafeRawPointer, offset: Int) -> lava_M7 {
+  var result = lava_M7()
+  result._1 = NPRPC.unmarshal_string_vector(buffer: buffer, offset: offset + 0)
+  return result
+}
+
+fileprivate struct lava_M8: Codable, Sendable {
   public var _1: String = ""
 
   public init() {}
@@ -377,19 +400,19 @@ fileprivate struct lava_M7: Codable, Sendable {
 }
 
 
-// MARK: - Marshal lava_M7
-fileprivate func marshal_lava_M7(buffer: FlatBuffer, offset: Int, data: lava_M7) {
+// MARK: - Marshal lava_M8
+fileprivate func marshal_lava_M8(buffer: FlatBuffer, offset: Int, data: lava_M8) {
   NPRPC.marshal_string(buffer: buffer, offset: offset + 0, string: data._1)
 }
 
-// MARK: - Unmarshal lava_M7
-fileprivate func unmarshal_lava_M7(buffer: UnsafeRawPointer, offset: Int) -> lava_M7 {
-  var result = lava_M7()
+// MARK: - Unmarshal lava_M8
+fileprivate func unmarshal_lava_M8(buffer: UnsafeRawPointer, offset: Int) -> lava_M8 {
+  var result = lava_M8()
   result._1 = NPRPC.unmarshal_string(buffer: buffer, offset: offset + 0)
   return result
 }
 
-fileprivate struct lava_M8: Codable, Sendable {
+fileprivate struct lava_M9: Codable, Sendable {
   public var _1: UInt32 = 0
   public var _2: String = ""
 
@@ -402,15 +425,15 @@ fileprivate struct lava_M8: Codable, Sendable {
 }
 
 
-// MARK: - Marshal lava_M8
-fileprivate func marshal_lava_M8(buffer: FlatBuffer, offset: Int, data: lava_M8) {
+// MARK: - Marshal lava_M9
+fileprivate func marshal_lava_M9(buffer: FlatBuffer, offset: Int, data: lava_M9) {
   buffer.storeBytes(of: data._1, toByteOffset: offset + 0, as: UInt32.self)
   NPRPC.marshal_string(buffer: buffer, offset: offset + 4, string: data._2)
 }
 
-// MARK: - Unmarshal lava_M8
-fileprivate func unmarshal_lava_M8(buffer: UnsafeRawPointer, offset: Int) -> lava_M8 {
-  var result = lava_M8()
+// MARK: - Unmarshal lava_M9
+fileprivate func unmarshal_lava_M9(buffer: UnsafeRawPointer, offset: Int) -> lava_M9 {
+  var result = lava_M9()
   result._1 = buffer.load(fromByteOffset: offset + 0, as: UInt32.self)
   result._2 = NPRPC.unmarshal_string(buffer: buffer, offset: offset + 4)
   return result
@@ -425,6 +448,7 @@ public protocol CompositorProtocol {
   func destroySurface(surfaceId: UInt32) throws
   func present(surfaceId: UInt32)
   func subscribeInput(surfaceId: UInt32, stream: NPRPCBidiStream<InputEvent, InputAck>) async throws
+  func takeDroppedPaths(surfaceId: UInt32) throws -> [String]
   func getClipboard(surfaceId: UInt32) throws -> String
   func setClipboard(surfaceId: UInt32, text: String) throws
 }
@@ -766,7 +790,7 @@ final public class Compositor: NPRPCObject, @unchecked Sendable {
     return stream
   }
 
-  public func getClipboard(surfaceId: UInt32) async throws -> String   {
+  public func takeDroppedPaths(surfaceId: UInt32) async throws -> [String]   {
     // Prepare buffer
     let buffer = FlatBuffer()
     buffer.prepare(36)
@@ -807,6 +831,47 @@ final public class Compositor: NPRPCObject, @unchecked Sendable {
     return out._1
   }
 
+  public func getClipboard(surfaceId: UInt32) async throws -> String   {
+    // Prepare buffer
+    let buffer = FlatBuffer()
+    buffer.prepare(36)
+    buffer.commit(36)
+    guard let bufData = buffer.data else { throw BufferError(message: "Failed to get buffer data") }
+
+    // Write message header
+    bufData.storeBytes(of: UInt32(0), toByteOffset: 0, as: UInt32.self)  // size (set later)
+    bufData.storeBytes(of: UInt32(0), toByteOffset: 4, as: UInt32.self)  // msg_id: FunctionCall (MessageId enum value 0)
+    bufData.storeBytes(of: UInt32(0), toByteOffset: 8, as: UInt32.self)  // msg_type: Request
+    bufData.storeBytes(of: UInt32(0), toByteOffset: 12, as: UInt32.self) // reserved
+
+    // Write call header
+    bufData.storeBytes(of: poaIdx, toByteOffset: 16, as: UInt16.self)
+    bufData.storeBytes(of: UInt8(0), toByteOffset: 18, as: UInt8.self)  // interface_idx
+    bufData.storeBytes(of: UInt8(9), toByteOffset: 19, as: UInt8.self)  // function_idx
+    bufData.storeBytes(of: objectId, toByteOffset: 24, as: UInt64.self)
+
+    // Marshal input arguments
+    var inArgs = lava_M2()
+    inArgs._1 = surfaceId
+    marshal_lava_M2(buffer: buffer, offset: 32, data: inArgs)
+
+    guard let finalData = buffer.data else { throw BufferError(message: "Failed to get buffer data") }
+    finalData.storeBytes(of: UInt32(buffer.size), toByteOffset: 0, as: UInt32.self)
+
+    // Send and receive
+    try Task.checkCancellation()
+    let responseBuffer = try await sendAsyncReceive(buffer: buffer, timeout: timeout)
+
+    // Handle reply
+    let stdReply = try handleStandardReply(buffer: responseBuffer)
+    if stdReply == 1 { throw lava_throwException(buffer: responseBuffer) }
+    if stdReply != -1 { throw UnexpectedReplyError(message: "Unexpected reply") }
+
+    guard let responseData = responseBuffer.data else { throw BufferError(message: "Failed to get response data") }
+    let out = unmarshal_lava_M8(buffer: responseData, offset: 16)
+    return out._1
+  }
+
   public func setClipboard(surfaceId: UInt32, text: String) async throws   {
     // Prepare buffer
     let buffer = FlatBuffer()
@@ -823,14 +888,14 @@ final public class Compositor: NPRPCObject, @unchecked Sendable {
     // Write call header
     bufData.storeBytes(of: poaIdx, toByteOffset: 16, as: UInt16.self)
     bufData.storeBytes(of: UInt8(0), toByteOffset: 18, as: UInt8.self)  // interface_idx
-    bufData.storeBytes(of: UInt8(9), toByteOffset: 19, as: UInt8.self)  // function_idx
+    bufData.storeBytes(of: UInt8(10), toByteOffset: 19, as: UInt8.self)  // function_idx
     bufData.storeBytes(of: objectId, toByteOffset: 24, as: UInt64.self)
 
     // Marshal input arguments
-    var inArgs = lava_M8()
+    var inArgs = lava_M9()
     inArgs._1 = surfaceId
     inArgs._2 = text
-    marshal_lava_M8(buffer: buffer, offset: 32, data: inArgs)
+    marshal_lava_M9(buffer: buffer, offset: 32, data: inArgs)
 
     guard let finalData = buffer.data else { throw BufferError(message: "Failed to get buffer data") }
     finalData.storeBytes(of: UInt32(buffer.size), toByteOffset: 0, as: UInt32.self)
@@ -885,6 +950,10 @@ open class CompositorServant: NPRPCServant, CompositorProtocol, @unchecked Senda
 
   open func subscribeInput(surfaceId: UInt32, stream: NPRPCBidiStream<InputEvent, InputAck>) async throws   {
     fatalError("Subclass must implement subscribeInput")
+  }
+
+  open func takeDroppedPaths(surfaceId: UInt32) throws -> [String]   {
+    fatalError("Subclass must implement takeDroppedPaths")
   }
 
   open func getClipboard(surfaceId: UInt32) throws -> String   {
@@ -1179,7 +1248,7 @@ open class CompositorServant: NPRPCServant, CompositorProtocol, @unchecked Senda
         let ia = unmarshal_lava_M2(buffer: data, offset: 32)
         
         present(surfaceId: ia._1)
-      case 8: // GetClipboard
+      case 8: // TakeDroppedPaths
         // Validate input buffer for untrusted interface
         guard check_1Fu32(buffer: data, bufferSize: buffer.size, offset: 32) else         {
           makeSimpleAnswer(buffer: buffer, messageId: impl.MessageId.Error_BadInput)
@@ -1195,7 +1264,7 @@ open class CompositorServant: NPRPCServant, CompositorProtocol, @unchecked Senda
         obuf.commit(24)
         
         do {
-          let __ret_val = try getClipboard(surfaceId: ia._1)
+          let __ret_val = try takeDroppedPaths(surfaceId: ia._1)
           // Marshal output arguments
           var out_data = lava_M7()
           out_data._1 = __ret_val
@@ -1220,7 +1289,48 @@ open class CompositorServant: NPRPCServant, CompositorProtocol, @unchecked Senda
         catch {
           makeSimpleAnswer(buffer: buffer, messageId: impl.MessageId.Error_Unknown)
         }
-      case 9: // SetClipboard
+      case 9: // GetClipboard
+        // Validate input buffer for untrusted interface
+        guard check_1Fu32(buffer: data, bufferSize: buffer.size, offset: 32) else         {
+          makeSimpleAnswer(buffer: buffer, messageId: impl.MessageId.Error_BadInput)
+          return
+        }
+
+        // Unmarshal input arguments
+        let ia = unmarshal_lava_M2(buffer: data, offset: 32)
+        // Prepare output buffer
+        let obuf = buffer
+        obuf.consume(obuf.size)
+        obuf.prepare(152)
+        obuf.commit(24)
+        
+        do {
+          let __ret_val = try getClipboard(surfaceId: ia._1)
+          // Marshal output arguments
+          var out_data = lava_M8()
+          out_data._1 = __ret_val
+
+          marshal_lava_M8(buffer: buffer, offset: 16, data: out_data)
+          guard let outData = buffer.data else { return }
+          outData.storeBytes(of: UInt32(buffer.size), toByteOffset: 0, as: UInt32.self)
+          outData.storeBytes(of: impl.MessageId.BlockResponse.rawValue, toByteOffset: 4, as: UInt32.self)
+          outData.storeBytes(of: impl.MessageType.Answer.rawValue, toByteOffset: 8, as: UInt32.self)
+        }
+        catch let e as SurfaceNotFound {
+          let obuf = buffer
+          obuf.consume(obuf.size)
+          obuf.prepare(24)
+          obuf.commit(24)
+          guard let exData = obuf.data else { return }
+          marshal_SurfaceNotFound(buffer: obuf, offset: 16, data: e)
+          exData.storeBytes(of: UInt32(obuf.size), toByteOffset: 0, as: UInt32.self)
+          exData.storeBytes(of: impl.MessageId.Exception.rawValue, toByteOffset: 4, as: UInt32.self)
+          exData.storeBytes(of: impl.MessageType.Answer.rawValue, toByteOffset: 8, as: UInt32.self)
+        }
+        catch {
+          makeSimpleAnswer(buffer: buffer, messageId: impl.MessageId.Error_Unknown)
+        }
+      case 10: // SetClipboard
         // Validate input buffer for untrusted interface
         guard check_1Fu322S(buffer: data, bufferSize: buffer.size, offset: 32) else         {
           makeSimpleAnswer(buffer: buffer, messageId: impl.MessageId.Error_BadInput)
@@ -1228,7 +1338,7 @@ open class CompositorServant: NPRPCServant, CompositorProtocol, @unchecked Senda
         }
 
         // Unmarshal input arguments
-        let ia = unmarshal_lava_M8(buffer: data, offset: 32)
+        let ia = unmarshal_lava_M9(buffer: data, offset: 32)
         
         do {
           try setClipboard(surfaceId: ia._1, text: ia._2)
@@ -1296,7 +1406,7 @@ fileprivate func check_1S2Fu323Fu324S(buffer: UnsafeRawPointer, bufferSize: Int,
 }
 
 
-// Safety check for lava_M8
+// Safety check for lava_M9
 fileprivate func check_1Fu322S(buffer: UnsafeRawPointer, bufferSize: Int, offset: Int) -> Bool {
   guard NPRPC.check_struct_bounds(bufferSize: bufferSize, offset: offset, structSize: 12) else { return false }
   guard NPRPC.check_string_bounds(buffer: buffer, bufferSize: bufferSize, offset: offset + 4) else { return false }

@@ -8,6 +8,25 @@ import Foundation
 
 #if canImport(CYoga)
 
+/// Where the paths for a `.fileDrop` come from.
+///
+/// The same shape as `ClipboardBridge` and for the same reason: a windowed app
+/// asks its own engine, and a client has no window to ask. The event itself
+/// crosses the wire unchanged — it is the variable-length payload that needs
+/// a call of its own, which `LavaClient` installs here.
+///
+/// Unset means windowed, which is why the fallback is the engine rather than
+/// an empty list: an app that never heard of a compositor should not have to
+/// install anything.
+public enum DropBridge {
+    nonisolated(unsafe) public static var provider: (@Sendable (UInt32) -> [String])?
+
+    static func paths(window: WindowID, editor: Editor) -> [String] {
+        if let provider { return provider(window.raw) }
+        return editor.droppedFiles(window: window)
+    }
+}
+
 /// Registers `perform` as the drop handler for the content's root layout box.
 public struct DropTargetView<Content: View>: PrimitiveView {
     public var perform: ([URL]) -> Void

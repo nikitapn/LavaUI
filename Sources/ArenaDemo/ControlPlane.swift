@@ -202,11 +202,83 @@ final class Surface: @unchecked Sendable {
     /// publishes never gets a visible window, which is the right answer too.
     var shown = false
 
+    /// Paths from drops this surface's client has not collected yet, oldest
+    /// first.
+    ///
+    /// Filled on the loop the instant a `FileDrop` is polled, because GLFW's
+    /// own buffer holds one drop and the next one overwrites it — by the time
+    /// a client could ask, the answer could already be a different drop's.
+    /// Drained by `TakeDroppedPaths` on the same loop, so the lock is for the
+    /// shape of the class rather than for contention that exists today.
+    private let dropLock = NSLock()
+    private var drops: [[String]] = []
+
+    func postDrop(paths: [String]) {
+        guard !paths.isEmpty else { return }
+        dropLock.lock()
+        drops.append(paths)
+        // A client that never collects must not grow the compositor without
+        // bound. Dropping the oldest keeps the newest — the one the user just
+        // made and is waiting on — and losing an uncollected drop is a client
+        // that was not listening anyway.
+        if drops.count > 16 { drops.removeFirst(drops.count - 16) }
+        dropLock.unlock()
+    }
+
+    func takeDrop() -> [String] {
+        dropLock.lock()
+        defer { dropLock.unlock() }
+        return drops.isEmpty ? [] : drops.removeFirst()
+    }
+
     init(id: UInt32, window: WindowID, arenaId: String, title: String) {
         self.id = id
         self.window = window
         self.arenaId = arenaId
         self.title = title
+    }
+}
+
+/// A drop the test harness asked for, in place of one from the desktop.
+///
+/// `LAVA_TEST_DROP` names a file the harness writes: a first line `x,y` in
+/// window coordinates, then one path per line. The loop picks it up, feeds it
+/// to every surface as if GLFW had reported a drop there, and deletes it — so
+/// a single write is a single drop.
+///
+/// It exists because XDND is not scriptable: `xdotool` can move a pointer and
+/// press a button, but a drag between two X clients is a protocol conversation
+/// no injected event can start. What this stands in for is precisely the call
+/// to `editor.droppedFiles`; everything downstream is the shipping path.
+///
+/// The position is in the request rather than fixed here because it is the
+/// half of a drop that decides *which view* receives it — a hook that always
+/// aimed at the same pixel could not tell a working hit test from a broken
+/// one.
+enum TestDrop {
+    private static let path = ProcessInfo.processInfo.environment["LAVA_TEST_DROP"]
+
+    struct Request {
+        let x: Float
+        let y: Float
+        let paths: [String]
+    }
+
+    static func take() -> Request? {
+        guard let path else { return nil }
+        guard let text = try? String(contentsOfFile: path, encoding: .utf8) else {
+            return nil
+        }
+        try? FileManager.default.removeItem(atPath: path)
+
+        var lines = text.split(separator: "\n").map(String.init)
+        guard !lines.isEmpty else { return nil }
+        let where_ = lines.removeFirst().split(separator: ",").map(String.init)
+        guard where_.count == 2,
+              let x = Float(where_[0]), let y = Float(where_[1]),
+              !lines.isEmpty
+        else { return nil }
+        return Request(x: x, y: y, paths: lines)
     }
 }
 
@@ -583,6 +655,17 @@ final class CompositorImpl: CompositorServant, @unchecked Sendable {
             ex.surfaceId = surfaceId
             throw ex
         }
+    }
+
+    /// The oldest uncollected drop for this surface — see the IDL for why the
+    /// payload does not ride on the event that announced it.
+    override func takeDroppedPaths(surfaceId: UInt32) throws -> [String] {
+        guard let surface = SurfaceRegistry.surface(id: surfaceId) else {
+            var ex = SurfaceNotFound()
+            ex.surfaceId = surfaceId
+            throw ex
+        }
+        return surface.takeDrop()
     }
 
     /// The display server's selection, read on the loop like everything else.

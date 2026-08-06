@@ -470,7 +470,7 @@ public final class LavaWindow {
         case .fileDrop:
             DropRouter.deliver(
                 to: host.hitTestHover(x: ev.x, y: ev.y, originY: menuH),
-                paths: editor.droppedFiles(window: id)
+                paths: DropBridge.paths(window: id, editor: editor)
             )
         case .text:
             if let scalar = Unicode.Scalar(UInt32(bitPattern: ev.button)) {

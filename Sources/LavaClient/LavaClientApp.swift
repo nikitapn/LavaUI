@@ -169,6 +169,23 @@ public enum LavaClient {
             }
         }
 
+        // Same shape again: the `FileDrop` event crosses on the stream, its
+        // paths do not fit in it, and this is the call that carries them. The
+        // window id is ignored because a client has exactly one surface — the
+        // day it has two, this closure is where that becomes a lookup.
+        DropBridge.provider = { [compositor] _ in
+            do {
+                return try blockingCall {
+                    try await compositor.takeDroppedPaths(surfaceId: surfaceID)
+                }
+            } catch {
+                FileHandle.standardError.write(
+                    Data("TakeDroppedPaths failed: \(error)\n".utf8)
+                )
+                return []
+            }
+        }
+
         // Events arrive on an NPRPC thread and are consumed on the frame
         // loop's, which is what `MainQueue` is for — it hops the work over and
         // wakes the loop out of `pumpEvents` on the way. Draining inside that

@@ -125,6 +125,25 @@ func runHost() {
         // parked belongs to the frame about to be drawn.
         LoopQueue.drain()
 
+        // A synthetic drop, for testing the half of drag-and-drop that a
+        // script can reach. XDND cannot be driven by `xdotool`, and the two
+        // lines it stands in for are the two above the `postDrop` below: ask
+        // GLFW what was dropped, hand it to the surface. Everything after
+        // that — the queue, `TakeDroppedPaths`, the client's `DropBridge`,
+        // `DropRouter`, the handler — is the real path.
+        //
+        // Gated on an env var so it cannot fire in ordinary use.
+        if let drop = TestDrop.take() {
+            for surface in SurfaceRegistry.all {
+                surface.postDrop(paths: drop.paths)
+                surface.input.post(
+                    LavaUI.InputEvent(
+                        kind: .fileDrop, x: drop.x, y: drop.y, button: 0, mods: 0
+                    )
+                )
+            }
+        }
+
         // Input goes to the client that owns the window it happened in, and
         // nowhere else. The renderer interprets none of it — it routes and
         // forwards. Which is the point: the process that owns the window is
@@ -135,6 +154,14 @@ func runHost() {
                 // Drained even for the compositor's own window, which has no
                 // client: an unread queue only grows.
                 guard let surface else { continue }
+                // Before the event goes out, and before the next poll can
+                // bring another drop: GLFW holds exactly one drop's paths and
+                // overwrites them, so this is the only moment they are still
+                // this event's. The client learns where from the event and
+                // what from `TakeDroppedPaths`.
+                if event.kind == .fileDrop {
+                    surface.postDrop(paths: editor.droppedFiles(window: window))
+                }
                 surface.input.post(event)
                 // A resize recreates the swapchain and an expose invalidates
                 // what was on screen, so both need a repaint whether or not

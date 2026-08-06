@@ -63,9 +63,9 @@ exception SurfaceNotFound {
 /// sides. Keeping the wire struct congruent with the local one is what makes
 /// "forward it" a field copy rather than a protocol.
 ///
-/// The one event that does not survive the trip is `FileDrop`: its payload is
-/// a list of paths that lives in a side buffer the next drop overwrites, so
-/// carrying it needs a call of its own rather than a fixed-size struct.
+/// `FileDrop` arrives here like any other event, but its payload does not fit:
+/// the paths are a list, and this struct is fixed-size. The event says a drop
+/// happened and where; `TakeDroppedPaths` says what was in it.
 message InputEvent {
   /// Monotonic per-subscription. The app echoes it back in `InputAck` to say
   /// how far it has got, which is the only way the renderer can tell "the app
@@ -251,6 +251,27 @@ interface Compositor {
   /// after, and it is a stream error like any other.
   bidi_stream<InputAck, InputEvent> SubscribeInput(surfaceId: in u32)
       raises(SurfaceNotFound);
+
+  /// The paths from the oldest drop this surface has not collected yet, and
+  /// removes it from the queue. Empty if there is none.
+  ///
+  /// Called after a `FileDrop` event arrives on the input stream: the event
+  /// carries the position, which is what decides *which view* was dropped on,
+  /// and this carries the payload. Two calls rather than one because the
+  /// payload is a variable-length list and the event stream is a fixed-size
+  /// struct — and because most events are not drops, and should not pay for
+  /// the one that is.
+  ///
+  /// A queue, not a slot. GLFW's own drop buffer is valid only until the next
+  /// drop, so the compositor copies it out the moment it polls the event;
+  /// keeping a queue is what makes two quick drops two drops rather than the
+  /// second one overwriting the first before the client has looked. Ordered,
+  /// so the *n*th `FileDrop` event pairs with the *n*th call.
+  ///
+  /// Take, not get: whoever collects a drop owns it, and a client that asks
+  /// twice for the same drop is a client that would process the files twice.
+  /// The queue is per surface, so a client falling behind delays only itself.
+  vector<string> TakeDroppedPaths(surfaceId: in u32) raises(SurfaceNotFound);
 
   // ─── Clipboard ─────────────────────────────────────────────────────────
   //

@@ -28,6 +28,7 @@ import NPRPC
 struct ClientDemoView: View {
     let editor: Editor
     @State private var rows = 60
+    @State private var dropped: [String] = []
 
     var body: some View {
         VStack(padding: 12) {
@@ -41,6 +42,23 @@ struct ClientDemoView: View {
             // view's own note — it is the one thing here that needed a new
             // call on the control plane rather than an existing one.
             GeneratedImage(editor: editor)
+
+            // The renderer owns the window, so the renderer is what the
+            // desktop drops onto — this process only learns the paths by
+            // asking. `.onDrop` is the same modifier a windowed app uses.
+            VStack(padding: 6) {
+                Text(
+                    dropped.isEmpty
+                        ? "drop files here"
+                        : "dropped \(dropped.count): \(dropped.joined(separator: ", "))",
+                    color: dropped.isEmpty
+                        ? Theme.current.textMuted
+                        : Theme.current.accent
+                )
+            }
+            .onDrop { urls in
+                dropped = urls.map(\.lastPathComponent)
+            }
 
             HStack(padding: 8) {
                 // Its own view, so its own `@State`. Which subtree a change
