@@ -339,6 +339,29 @@ public final class Editor: @unchecked Sendable {
         return (pixels, decoded.width, decoded.height)
     }
 
+    /// The same decode from encoded bytes already in memory, for an image that
+    /// never had a path — downloaded, generated, unpacked from an archive.
+    ///
+    /// `bytes` are the *encoded* file (PNG, JPEG, …), not raw pixels: the
+    /// format is sniffed the way it is for a file.
+    public nonisolated static func decodeImageData(
+        bytes: [UInt8],
+        maxPixelSize: UInt32 = 0
+    ) -> (pixels: [UInt8], width: UInt32, height: UInt32)? {
+        let decoded = bytes.withUnsafeBufferPointer { buf -> canvas.DecodedImage in
+            guard let base = buf.baseAddress else { return canvas.DecodedImage() }
+            return canvas.Engine.decodeImageData(base, buf.count, maxPixelSize)
+        }
+        guard decoded.valid() else { return nil }
+        let n = Int(decoded.pixels.size())
+        var pixels = [UInt8]()
+        pixels.reserveCapacity(n)
+        for i in 0..<n {
+            pixels.append(decoded.pixels[i])
+        }
+        return (pixels, decoded.width, decoded.height)
+    }
+
     /// Uploads pre-decoded pixels. Main thread only — it touches the device.
     ///
     /// `key` is the texture identity (see `UIImage.cacheKey`); `path` is the

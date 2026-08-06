@@ -266,6 +266,13 @@ class Engine {
   static DecodedImage decodeImage(const std::string &path,
                                   uint32_t maxPixelSize = 0);
 
+  /// The same decode, from bytes already in memory — an image that was
+  /// downloaded, generated, or unpacked from an archive and never had a path.
+  /// Encoded bytes (PNG, JPEG, …), not raw pixels: the format is sniffed, the
+  /// way it is for a file.
+  static DecodedImage decodeImageData(const uint8_t *bytes, size_t byteCount,
+                                      uint32_t maxPixelSize = 0);
+
   /// Uploads pre-decoded pixels under `key`. Device thread only.
   int uploadTexture(const std::string &key, const uint8_t *rgba,
                     uint32_t width, uint32_t height);

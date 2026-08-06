@@ -150,6 +150,7 @@ final class ClientModeTests: XCTestCase {
     private final class StubHost: GPUResourceHost, @unchecked Sendable {
         var fontAsks: [(path: String, pixelSize: Float)] = []
         var imageAsks: [(path: String, maxPixelSize: UInt32)] = []
+        var dataAsks: [(byteCount: Int, maxPixelSize: UInt32)] = []
         var released: [String] = []
 
         static let fontID: UInt32 = 4242
@@ -165,6 +166,15 @@ final class ClientModeTests: XCTestCase {
             return UIImage(
                 path: path,
                 cacheKey: ImageStore.key(path: path, maxPixelSize: maxPixelSize),
+                textureId: Self.textureID, pixelWidth: 64, pixelHeight: 48
+            )
+        }
+
+        func registerImage(data: [UInt8], maxPixelSize: UInt32) -> UIImage? {
+            dataAsks.append((data.count, maxPixelSize))
+            let key = ImageStore.contentKey(data: data, maxPixelSize: maxPixelSize)
+            return UIImage(
+                path: key, cacheKey: key,
                 textureId: Self.textureID, pixelWidth: 64, pixelHeight: 48
             )
         }

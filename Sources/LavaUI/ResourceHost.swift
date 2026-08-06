@@ -46,6 +46,18 @@ public protocol GPUResourceHost: AnyObject, Sendable {
         completion: @escaping @Sendable (UIImage?) -> Void
     )
 
+    /// Registers an image from **encoded bytes** (PNG, JPEG, …) rather than a
+    /// path, for one that was downloaded, generated, or unpacked and never
+    /// touched the filesystem.
+    ///
+    /// Identity is the content, so registering the same bytes twice is one
+    /// texture without the caller keeping a key. Prefer `registerImage(path:)`
+    /// whenever there *is* a path: under a compositor this one sends the file
+    /// through shared memory, where a path sends a path.
+    ///
+    /// Blocks, like its sibling.
+    func registerImage(data: [UInt8], maxPixelSize: UInt32) -> UIImage?
+
     /// Drops one reference to a registered image. `key` is the `cacheKey`
     /// from the handle, not the bare path — the same file at two decode sizes
     /// is two textures.
@@ -108,6 +120,21 @@ extension Editor: GPUResourceHost {
                 ))
             }
         }
+    }
+
+    public func registerImage(data: [UInt8], maxPixelSize: UInt32) -> UIImage? {
+        guard let decoded = Editor.decodeImageData(
+            bytes: data, maxPixelSize: maxPixelSize
+        ) else { return nil }
+        // Content-addressed for the same reason the compositor does it: bytes
+        // with no path have no name, and the caller should not have to invent
+        // one to get the second registration deduplicated. Spelled the same
+        // way on both sides so a key means one thing.
+        let key = ImageStore.contentKey(data: data, maxPixelSize: maxPixelSize)
+        return uploadImage(
+            key: key, path: key,
+            pixels: decoded.pixels, width: decoded.width, height: decoded.height
+        )
     }
 
     public func releaseImage(key: String) { unloadImage(path: key) }

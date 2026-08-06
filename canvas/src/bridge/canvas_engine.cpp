@@ -475,13 +475,17 @@ void Engine::unloadTexture(const std::string &path)
   impl_->withApp([&](Application &app) { app.unloadTexture(path); });
 }
 
-DecodedImage Engine::decodeImage(const std::string &path, uint32_t maxPixelSize)
+namespace {
+
+/// Everything `decodeImage` does after stb has handed back RGBA8: the cap, the
+/// sRGB-correct downscale, and taking ownership of the buffer.
+///
+/// Shared by the file and the memory entry points because the two differ in
+/// exactly one call — which file to open versus which bytes to read — and
+/// nothing after it. Takes ownership of `pixels` either way.
+DecodedImage finishDecode(stbi_uc *pixels, int w, int h, uint32_t maxPixelSize)
 {
   DecodedImage out;
-  int w = 0, h = 0, channels = 0;
-  // stbi_load is reentrant and touches no shared state, which is what makes
-  // this callable off the device thread.
-  stbi_uc *pixels = stbi_load(path.c_str(), &w, &h, &channels, 4);
   if (pixels == nullptr || w <= 0 || h <= 0) {
     if (pixels) stbi_image_free(pixels);
     return out;
@@ -523,6 +527,32 @@ DecodedImage Engine::decodeImage(const std::string &path, uint32_t maxPixelSize)
 
   adopt(pixels, w, h);
   return out;
+}
+
+}  // namespace
+
+DecodedImage Engine::decodeImage(const std::string &path, uint32_t maxPixelSize)
+{
+  int w = 0, h = 0, channels = 0;
+  // stbi_load is reentrant and touches no shared state, which is what makes
+  // this callable off the device thread.
+  stbi_uc *pixels = stbi_load(path.c_str(), &w, &h, &channels, 4);
+  return finishDecode(pixels, w, h, maxPixelSize);
+}
+
+DecodedImage Engine::decodeImageData(const uint8_t *bytes, size_t byteCount,
+                                     uint32_t maxPixelSize)
+{
+  if (bytes == nullptr || byteCount == 0) return DecodedImage{};
+  int w = 0, h = 0, channels = 0;
+  // Same decoder, same guarantees — stb does not care whether the bytes came
+  // from a file, and neither does anything downstream of here. What differs is
+  // upstream: these bytes came from another process, so the caller is the one
+  // that has to decide whether to trust them. stb is the same code path an
+  // untrusted *file* already went through, which is the honest baseline.
+  stbi_uc *pixels = stbi_load_from_memory(
+    bytes, static_cast<int>(byteCount), &w, &h, &channels, 4);
+  return finishDecode(pixels, w, h, maxPixelSize);
 }
 
 int Engine::uploadTexture(const std::string &key, const uint8_t *rgba,

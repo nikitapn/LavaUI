@@ -428,6 +428,68 @@ final class CompositorImpl: CompositorServant, @unchecked Sendable {
         return info
     }
 
+    /// The same registration from bytes, for an image that never had a path.
+    ///
+    /// The cache key is a hash of the content rather than a name the client
+    /// chose. Two clients that both call their icon "logo" must not be handed
+    /// each other's texture, and the renderer cannot check a claim about a
+    /// namespace it does not own — but it can check the bytes.
+    ///
+    /// `ImageStore.contentKey` is the one implementation of that identity, and
+    /// is derived here from the bytes that arrived rather than taken from the
+    /// caller — see its own note on why 64 bits of FNV-1a is the right size
+    /// for a desktop and the wrong size for an untrusted store.
+    override func registerImageData(
+        bytes: [UInt8], maxPixelSize: UInt32
+    ) throws -> ImageInfo {
+        let key = ImageStore.contentKey(data: bytes, maxPixelSize: maxPixelSize)
+
+        imageKeyLock.lock()
+        if let known = infoByKey[key] {
+            usersByKey[key, default: 0] += 1
+            imageKeyLock.unlock()
+            return known
+        }
+        imageKeyLock.unlock()
+
+        guard let decoded = Editor.decodeImageData(
+            bytes: bytes, maxPixelSize: maxPixelSize
+        ) else {
+            var ex = ImageNotFound()
+            // No path to name, so name what there is. The client knows which
+            // call it made; what it cannot know is that the bytes were the
+            // problem rather than the transfer.
+            ex.path = "<\(bytes.count) bytes in memory>"
+            throw ex
+        }
+
+        let image = editor.uploadImage(
+            key: key, path: key, pixels: decoded.pixels,
+            width: decoded.width, height: decoded.height
+        )
+        guard let image else {
+            var ex = ImageNotFound()
+            ex.path = key
+            throw ex
+        }
+
+        var info = ImageInfo()
+        info.id = image.textureId
+        info.width = UInt32(image.pixelWidth)
+        info.height = UInt32(image.pixelHeight)
+
+        imageKeyLock.lock()
+        infoByKey[key] = info
+        usersByKey[key, default: 0] += 1
+        keysByImageID[info.id] = key
+        imageKeyLock.unlock()
+
+        let line = "RegisterImageData(\(bytes.count) bytes, max \(maxPixelSize)) "
+            + "→ \(info.id) \(info.width)×\(info.height)\n"
+        FileHandle.standardError.write(Data(line.utf8))
+        return info
+    }
+
     override func releaseImage(id: UInt32) {
         // An id this compositor never handed out, or has already released, is
         // a client that lost track rather than an error — see the IDL.

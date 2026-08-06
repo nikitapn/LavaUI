@@ -126,6 +126,37 @@ public final class CompositorResources: GPUResourceHost, @unchecked Sendable {
         )
     }
 
+    public func registerImage(data: [UInt8], maxPixelSize: UInt32) -> UIImage? {
+        let info: ImageInfo
+        do {
+            info = try blockingCall(timeout: 10) { [compositor] in
+                // Same budget as the path form, and it buys the same thing:
+                // a decode and an upload on the far side. The transfer itself
+                // is a memcpy into a ring the compositor is already mapped to.
+                try await compositor.registerImageData(
+                    bytes: data, maxPixelSize: maxPixelSize
+                )
+            }
+        } catch {
+            FileHandle.standardError.write(
+                Data("RegisterImageData(\(data.count) bytes) failed: \(error)\n".utf8)
+            )
+            return nil
+        }
+        // Derived, not returned: the compositor computes the same key from the
+        // same bytes, so sending it back would be sending something the client
+        // can check. The `UIImage` has to carry it because `ImageStore` looks
+        // entries up by it.
+        let key = ImageStore.contentKey(data: data, maxPixelSize: maxPixelSize)
+        lock.lock()
+        idsByKey[key] = info.id
+        lock.unlock()
+        return UIImage(
+            path: key, cacheKey: key, textureId: info.id,
+            pixelWidth: Float(info.width), pixelHeight: Float(info.height)
+        )
+    }
+
     public func releaseImage(key: String) {
         lock.lock()
         let id = idsByKey.removeValue(forKey: key)

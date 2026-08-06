@@ -113,6 +113,28 @@ public enum ImageStore {
         maxPixelSize == 0 ? path : "\(path)@\(maxPixelSize)"
     }
 
+    /// Cache identity for bytes with no path: a hash of the content, so the
+    /// same image registered twice is one texture and the caller invents no
+    /// name.
+    ///
+    /// Public for the same reason as `key`, and for one more: the compositor
+    /// derives this key independently, from the bytes it received, and a
+    /// client that spelled it differently would be talking about a different
+    /// texture. One implementation, both sides.
+    ///
+    /// FNV-1a with the length mixed in. A collision means two unrelated images
+    /// share a texture, which is worth caring about — and takes roughly 2³²
+    /// distinct images in one session to become likely, which is why 64 bits
+    /// is enough here and would not be for an untrusted store.
+    public static func contentKey(data: [UInt8], maxPixelSize: UInt32) -> String {
+        var hash: UInt64 = 0xcbf2_9ce4_8422_2325
+        for byte in data {
+            hash ^= UInt64(byte)
+            hash &*= 0x0000_0100_0000_01b3
+        }
+        return "mem:\(String(hash, radix: 16))-\(data.count)-\(maxPixelSize)"
+    }
+
     /// Cached image, loaded synchronously. Kept for assets an app needs before
     /// its first frame — an icon, a brand mark — where a placeholder would be
     /// worse than a stall.

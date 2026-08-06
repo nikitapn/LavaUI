@@ -115,11 +115,33 @@ interface Compositor {
   /// buffer it did not produce. It also means a client needs no image codec
   /// at all, which is most of what "no GPU" was already promising.
   ///
-  /// The consequence is a real constraint and worth stating: an image the
-  /// client has only in memory — downloaded, generated, decoded from a blob —
-  /// cannot be registered this way, and has to reach a path the renderer can
-  /// open. That is a gap in this interface, not an oversight in the caller.
+  /// An image the client has only in memory goes through `RegisterImageData`
+  /// below; a client with a file should still use this one, so that two
+  /// clients naming the same asset share a texture without either one having
+  /// to send it.
   ImageInfo RegisterImage(path: in string, maxPixelSize: in u32)
+      raises(ImageNotFound);
+
+  /// Registers an image from **encoded bytes** — a PNG or JPEG that was
+  /// downloaded, generated, or unpacked from an archive and never had a path.
+  ///
+  /// Encoded, not raw pixels, and that is the cheaper choice in both
+  /// directions: a 300×300 cover is ~30 KB as JPEG and 360 KB as RGBA, and
+  /// the renderer already has the codec. The client still needs none.
+  ///
+  /// Idempotent per (content, `maxPixelSize`), where the identity is a hash
+  /// of the bytes the renderer computes itself. It does not take a caller's
+  /// cache key, and that is deliberate: a key is a name from the client's
+  /// namespace, and two clients that both call their icon "logo" would
+  /// otherwise be handed each other's texture. Hashing costs a fraction of
+  /// the decode it usually saves.
+  ///
+  /// The trade against `RegisterImage` is the copy. This sends the file
+  /// through the ring buffer, where a path sends a few dozen bytes and lets
+  /// the renderer open it — so an asset that exists on disk should still go
+  /// the other way, and this one is for the image that has nowhere to be
+  /// opened from.
+  ImageInfo RegisterImageData(bytes: in vector<u8>, maxPixelSize: in u32)
       raises(ImageNotFound);
 
   /// Drops the client's reference to a registered image.
