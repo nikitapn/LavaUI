@@ -431,13 +431,25 @@ public enum LavaApp {
                 find: { query, limit in
                     host.agentFind(query: query, originY: menuH, limit: limit)
                 },
-                injectMove: { x, y in editor.injectPointerMove(x: x, y: y) },
+                // Every entry point that carries a position tells the window
+                // where the pointer now is, because nothing else will: an
+                // injected move reaches no renderer, and a client has none of
+                // its own. See `LavaWindow.noteInjectedPointer`.
+                injectMove: { x, y in
+                    editor.injectPointerMove(x: x, y: y)
+                    main.noteInjectedPointer(x: x, y: y)
+                },
                 injectClick: { x, y, button in
                     editor.injectPointerMove(x: x, y: y)
+                    main.noteInjectedPointer(x: x, y: y)
                     editor.injectPointerButton(button: button, pressed: true, x: x, y: y)
                     editor.injectPointerButton(button: button, pressed: false, x: x, y: y)
                 },
                 injectPointerButton: { x, y, button, pressed in
+                    // A press with no move before it still has to say where it
+                    // is: `pointer_down` at one place and `pointer_up` at
+                    // another is how a drag is spelled.
+                    main.noteInjectedPointer(x: x, y: y)
                     editor.injectPointerButton(
                         button: button, pressed: pressed, x: x, y: y
                     )

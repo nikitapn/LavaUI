@@ -250,6 +250,29 @@ public final class LavaWindow {
         }
     }
 
+    /// Resolves hover for a pointer position that was injected rather than
+    /// observed, so that a control which fires on *release* has something to
+    /// check when the release arrives.
+    ///
+    /// Hover is normally the renderer's answer — it has the pointer and the
+    /// scene, and the producer would only be recomputing what is already known
+    /// there. Injected input has no renderer behind it: in a client the move
+    /// never reaches a scene at all, so no `.nodeHover` is ever produced for
+    /// it, `HoverState` stays wherever the real pointer left it, and every
+    /// `Button` declines to act because `wasInside` is false. That was the
+    /// whole of "agent-injected clicks do not reach handlers".
+    ///
+    /// Deliberately not gated on client mode. This runs at injection time and
+    /// a renderer's `.nodeHover` — if there is a renderer — is processed
+    /// afterwards, from the queue, and overwrites it. So the renderer keeps
+    /// the last word where it has one, and this only fills the silence where
+    /// it does not.
+    func noteInjectedPointer(x: Float, y: Float) {
+        WindowScope.withCurrent(scope) {
+            HoverState.set(host.hitTestSceneHover(x: x, y: y, originY: menuH))
+        }
+    }
+
     /// One full frame, ignoring invalidation. Used by the agent server's
     /// `settle`, which needs the screen current before it screenshots.
     func settle() {

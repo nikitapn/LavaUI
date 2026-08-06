@@ -956,6 +956,29 @@ private func leafTextMeasure(
     return leaf.measureForYoga(width: width, widthMode: widthMode)
 }
 
+// MARK: - What the renderer treats as a control
+
+// One definition of "this node is a thing the pointer can be *on*", used by
+// the two places that must agree about it: `DrawList`, which decides whether
+// to emit a hit-testable scene node, and `hitTestSceneHover`, which answers
+// the same question locally when no renderer is going to.
+//
+// They disagreed before, and only for buttons — a `Button` has no local hover
+// fill because its tint is the renderer's job, so a walk keyed on `hoverFill`
+// skipped the one control every app is made of.
+
+extension LeafNode {
+    /// True when `DrawList` would emit this leaf as a hit-testable node.
+    var isRendererInteractive: Bool {
+        if kind == .button, buttonStyle != nil, isEnabled { return true }
+        return hoverFill != nil || hoverColor != nil || onHover != nil
+    }
+}
+
+extension StackNode {
+    var isRendererInteractive: Bool { hoverFill != nil || onHover != nil }
+}
+
 // MARK: - Stack container (HStack / VStack only)
 
 final class StackNode: YogaBoxNode {
@@ -1531,6 +1554,75 @@ public final class LayoutHost {
         }
 
         return hoverWalk(root, x: x, y: y, ox: originX, oy: originY)
+    }
+
+    /// What the *renderer* would call hovered at this point.
+    ///
+    /// Deliberately not `hitTestHover`. That one answers a local question —
+    /// which node should highlight, which container a wheel notch belongs to,
+    /// what a file was dropped on — and it counts scrollables and drop targets
+    /// as hover targets because those are the things it exists to find. The
+    /// renderer counts something narrower: the nodes it was handed a hit-test
+    /// flag for, which is `isRendererInteractive` and nothing else.
+    ///
+    /// The distinction matters exactly once, and it is enough: an injected
+    /// pointer in a client has no renderer to answer `.nodeHover`, so this is
+    /// what stands in for it, and it has to give the same answer the renderer
+    /// would or a `Button` will not believe the pointer is on it.
+    ///
+    /// Deepest wins, matching `RenderWindow::updateSceneHover`, which walks a
+    /// pre-order list and keeps the last node containing the point.
+    public func hitTestSceneHover(
+        x: Float, y: Float, originX: Float = 0, originY: Float = 0
+    ) -> NodeID? {
+        guard layoutValid, let root else { return nil }
+
+        for att in OverlayScan.presented(in: root).reversed() {
+            guard let overlayRoot = att.root else { continue }
+            if let id = sceneHoverWalk(
+                overlayRoot, x: x, y: y,
+                ox: originX + att.origin.x, oy: originY + att.origin.y
+            ) {
+                return id
+            }
+            if att.contains(x - originX, y - originY) { return nil }
+        }
+
+        return sceneHoverWalk(root, x: x, y: y, ox: originX, oy: originY)
+    }
+
+    private func sceneHoverWalk(
+        _ node: any AnyViewNode, x: Float, y: Float, ox: Float, oy: Float
+    ) -> NodeID? {
+        if let box = node as? YogaBoxNode, box.transitionState?.isLeaving == true {
+            return nil
+        }
+        guard let box = node as? YogaBoxNode, let yref = box.yoga else {
+            for child in node.childNodes.reversed() {
+                if let h = sceneHoverWalk(child, x: x, y: y, ox: ox, oy: oy) {
+                    return h
+                }
+            }
+            return nil
+        }
+
+        let nx = ox + YGNodeLayoutGetLeft(yref)
+        let ny = oy + YGNodeLayoutGetTop(yref)
+        let nw = YGNodeLayoutGetWidth(yref)
+        let nh = YGNodeLayoutGetHeight(yref)
+
+        // Children first: deepest wins, as it does in the renderer.
+        for child in node.childNodes.reversed() {
+            let shift = box.childOffset
+            if let h = sceneHoverWalk(
+                child, x: x, y: y, ox: nx - shift.x, oy: ny - shift.y
+            ) { return h }
+        }
+
+        guard x >= nx, x < nx + nw, y >= ny, y < ny + nh else { return nil }
+        if let leaf = node as? LeafNode, leaf.isRendererInteractive { return leaf.id }
+        if let stack = node as? StackNode, stack.isRendererInteractive { return stack.id }
+        return nil
     }
 
     /// Every node under the pointer that a wheel event may be offered to,

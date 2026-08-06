@@ -1028,8 +1028,9 @@ public final class DrawList {
                     backdrop: stack.backdropBlurRadius,
                     x: x, y: y, w: w, h: h
                 ) {
-                    let interactive = stack.hoverFill != nil || stack.onHover != nil
-                    let flags = nodeFlags(for: stack.id, interactive: interactive)
+                    let flags = nodeFlags(
+                        for: stack.id, interactive: stack.isRendererInteractive
+                    )
                     if let flags {
                         beginNode(stack.id, x: x, y: y, w: w, h: h, flags: flags)
                     }
@@ -1151,8 +1152,11 @@ public final class DrawList {
                     interactionTint(from: style.background, to: style.hover),
                     interactionTint(from: style.background, to: style.pressed))
         }
-        let interactive = leaf.hoverFill != nil || leaf.hoverColor != nil || leaf.onHover != nil
-        return (interactive, hoverTint(base: leaf.fillColor, target: leaf.hoverFill), nil)
+        return (
+            leaf.isRendererInteractive,
+            hoverTint(base: leaf.fillColor, target: leaf.hoverFill),
+            nil
+        )
     }
 
     private func emitLeafContents(
