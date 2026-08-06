@@ -104,8 +104,10 @@ public enum LavaApp {
 
         // Left unset rather than wired to an engine that has no window: the
         // clipboard is the display server's, and a client reaches it through
-        // whoever owns the surface. Reads return "" and writes are dropped,
-        // which is what `ClipboardBridge` already does with no reader.
+        // whoever owns the surface. `LavaClient.run` installs the pair that
+        // asks the compositor once it has a surface to ask about; until then
+        // reads return "" and writes are dropped, which is what
+        // `ClipboardBridge` already does with no reader.
         return editor
     }
 

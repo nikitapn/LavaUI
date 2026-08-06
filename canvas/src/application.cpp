@@ -218,6 +218,20 @@ struct Application::Impl
   /// as a flash of garbage. The caller shows it after the first repaint.
   uint32_t openWindow(int w, int h, const std::string &title)
   {
+    // A client has no device, and every step below needs one: `AppWindow`
+    // builds a real GLFW window and a swapchain, and `bringUpWindow` reaches
+    // straight into `device.textRenderer()`. Without this the call gets far
+    // enough to open a window in the *client's* process before dying on an
+    // uninitialised device — a crash that looks like a renderer bug.
+    //
+    // 0 is what a failed open already means, so callers need no new case.
+    // Opening a second window as a client needs a surface from the
+    // compositor; see docs/client-server-gaps.md.
+    if (!deviceUp) {
+      std::cerr << "Application::openWindow: no device — a client cannot open "
+                   "\"" << title << "\" itself\n";
+      return 0;
+    }
     try {
       auto window = std::make_unique<AppWindow>(device, nextWindowId, w, h, title);
       bringUpWindow(*window);

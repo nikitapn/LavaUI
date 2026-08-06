@@ -134,6 +134,41 @@ public enum LavaClient {
             fail("surface setup failed: \(error)")
         }
 
+        // Now that there is a surface to name, the clipboard has somewhere to
+        // go. `openClient` deliberately left this unwired; this is the other
+        // half. Both run on the frame loop, from a key handler, and both
+        // block it for a round trip — a keystroke's worth of latency, in the
+        // client that pressed the key.
+        //
+        // Failure is silence, not a crash: a compositor that went away is
+        // about to end this process through the input stream anyway, and a
+        // paste that inserts nothing is a better last act than a trap.
+        ClipboardBridge.reader = { [compositor] in
+            do {
+                return try blockingCall {
+                    try await compositor.getClipboard(surfaceId: surfaceID)
+                }
+            } catch {
+                FileHandle.standardError.write(
+                    Data("GetClipboard failed: \(error)\n".utf8)
+                )
+                return ""
+            }
+        }
+        ClipboardBridge.writer = { [compositor] text in
+            do {
+                try blockingCall {
+                    try await compositor.setClipboard(
+                        surfaceId: surfaceID, text: text
+                    )
+                }
+            } catch {
+                FileHandle.standardError.write(
+                    Data("SetClipboard failed: \(error)\n".utf8)
+                )
+            }
+        }
+
         // Events arrive on an NPRPC thread and are consumed on the frame
         // loop's, which is what `MainQueue` is for — it hops the work over and
         // wakes the loop out of `pumpEvents` on the way. Draining inside that

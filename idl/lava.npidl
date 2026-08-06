@@ -229,4 +229,38 @@ interface Compositor {
   /// after, and it is a stream error like any other.
   bidi_stream<InputAck, InputEvent> SubscribeInput(surfaceId: in u32)
       raises(SurfaceNotFound);
+
+  // ─── Clipboard ─────────────────────────────────────────────────────────
+  //
+  // For the same reason input is here: the selection belongs to the display
+  // server, and the process holding it is the one with the window. A client
+  // has neither, so Ctrl+C in a client is a no-op until it can ask.
+  //
+  // Addressed by surface, though neither call needs it to *work*. It is
+  // there because the question "may this client read the selection" has to
+  // be answerable, and the answer depends on which window is focused —
+  // X11 lets anyone read it at any time, Wayland deliberately does not, and
+  // this interface should be able to become the second without a signature
+  // change. Today it only checks the surface exists.
+
+  /// The display server's text selection, or empty if it holds none.
+  ///
+  /// Empty rather than raising: "nothing has been copied" is the ordinary
+  /// state of a fresh session, not a failure, and a paste that finds nothing
+  /// should insert nothing rather than make the caller handle an exception.
+  ///
+  /// Synchronous, and worth being honest about the cost: a paste blocks the
+  /// calling client until the compositor's loop answers, which on X11 can
+  /// mean a round trip to whichever process owns the selection. That is one
+  /// keystroke's worth of latency in the client that asked, and it is why
+  /// this is not something to call per frame.
+  string GetClipboard(surfaceId: in u32) raises(SurfaceNotFound);
+
+  /// Puts text on the display server's selection.
+  ///
+  /// Not `[unreliable]`: a copy that silently did not happen is discovered
+  /// at the paste, in another app, long after the user has stopped believing
+  /// they pressed anything. Worth a round trip.
+  void SetClipboard(surfaceId: in u32, text: in string)
+      raises(SurfaceNotFound);
 }

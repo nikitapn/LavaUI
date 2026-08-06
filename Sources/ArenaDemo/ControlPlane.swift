@@ -523,6 +523,41 @@ final class CompositorImpl: CompositorServant, @unchecked Sendable {
         }
     }
 
+    /// The display server's selection, read on the loop like everything else.
+    ///
+    /// `editor.clipboardText` goes to GLFW, which goes to X11, and on X11 a
+    /// read is a round trip to whichever process owns the selection — so this
+    /// can park the render loop for as long as that process takes to answer.
+    /// Acceptable because a paste is a keystroke, not a frame, and it is the
+    /// reason the IDL says not to call it per frame. If it ever becomes a
+    /// problem the answer is a cached selection updated on focus change, not
+    /// moving this off the loop: GLFW is not thread-safe.
+    override func getClipboard(surfaceId: UInt32) throws -> String {
+        try requireSurface(surfaceId)
+        return editor.clipboardText
+    }
+
+    override func setClipboard(surfaceId: UInt32, text: String) throws {
+        try requireSurface(surfaceId)
+        editor.clipboardText = text
+    }
+
+    /// Checks the caller still owns a surface, for the calls that do not
+    /// otherwise need one.
+    ///
+    /// Not a formality. A client that has lost its surface has lost its
+    /// window, and a windowless process quietly reading the user's selection
+    /// is the thing Wayland changed from X11 specifically to prevent. This is
+    /// where that check goes when it grows teeth — today it only proves the
+    /// surface exists, not that it is focused.
+    private func requireSurface(_ surfaceId: UInt32) throws {
+        guard SurfaceRegistry.surface(id: surfaceId) != nil else {
+            var ex = SurfaceNotFound()
+            ex.surfaceId = surfaceId
+            throw ex
+        }
+    }
+
     /// `[unreliable]` — no reply. Marks a window dirty; the loop renders it
     /// later in the very iteration this runs in, since servant work is drained
     /// before anything is drawn.
