@@ -180,6 +180,15 @@ class Engine {
                                int *outW = nullptr, int *outH = nullptr,
                                uint32_t windowId = 0);
 
+  /// The same capture as PNG bytes, for a caller that is not about to put it
+  /// in JSON. Empty on failure. A compositor capturing a client's window
+  /// wants these — base64 is the agent protocol's business, not the
+  /// renderer's, and encoding it here would cost a third of the bytes on the
+  /// way to a process that only has to decode them again.
+  U8Vector capturePng(int x, int y, int w, int h, int maxSide = 0,
+                      int *outW = nullptr, int *outH = nullptr,
+                      uint32_t windowId = 0);
+
   /// Inject synthetic pointer events (same queue as GLFW callbacks).
   void pointerMove(float x, float y, uint32_t windowId = 0);
   void pointerButton(int button, bool pressed, float x, float y, uint32_t windowId = 0);

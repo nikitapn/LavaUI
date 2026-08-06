@@ -169,6 +169,32 @@ public enum LavaClient {
             }
         }
 
+        // The agent's screenshot, which is the one command that checks what a
+        // user would actually see and the one a client could not answer.
+        // Longer budget than the rest: this is a GPU read-back plus a PNG
+        // encode of a whole window on the far side.
+        ScreenshotBridge.provider = { [compositor] x, y, w, h, maxSide in
+            do {
+                let shot = try blockingCall(timeout: 10) {
+                    try await compositor.captureSurface(
+                        surfaceId: surfaceID, x: x, y: y, w: w, h: h,
+                        maxSide: maxSide
+                    )
+                }
+                // Base64 here rather than on the wire: it is the agent's JSON
+                // that wants text, and the compositor does not speak it.
+                return (
+                    Data(shot.png).base64EncodedString(),
+                    Int32(shot.width), Int32(shot.height)
+                )
+            } catch {
+                FileHandle.standardError.write(
+                    Data("CaptureSurface failed: \(error)\n".utf8)
+                )
+                return nil
+            }
+        }
+
         // Same shape again: the `FileDrop` event crosses on the stream, its
         // paths do not fit in it, and this is the call that carries them. The
         // window id is ignored because a client has exactly one surface — the

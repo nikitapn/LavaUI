@@ -16,6 +16,32 @@ import Darwin
 // socket becomes readable so `pumpEvents` unblocks immediately (via
 // glfwPostEmptyEvent) instead of waiting for a mouse move or timeout.
 
+/// Where a screenshot comes from.
+///
+/// Third of the same shape as `ClipboardBridge` and `DropBridge`: a windowed
+/// app reads back its own framebuffer, a client has none and asks whoever
+/// draws for it. Unset means windowed, so an ordinary app installs nothing.
+///
+/// The agent's protocol is JSON, so it wants base64 — which is why the
+/// encoding happens on this side of the wire even though the compositor
+/// returns bytes. Nothing about a capture is textual; that is the agent's
+/// transport showing through, and the right place for it to show is here.
+public enum ScreenshotBridge {
+    /// Region in framebuffer pixels; returns base64 PNG and its encoded size.
+    public typealias Provider = @Sendable (
+        _ x: Int32, _ y: Int32, _ w: Int32, _ h: Int32, _ maxSide: Int32
+    ) -> (b64: String, w: Int32, h: Int32)?
+
+    nonisolated(unsafe) public static var provider: Provider?
+
+    static func capture(
+        x: Int32, y: Int32, w: Int32, h: Int32, maxSide: Int32, editor: Editor
+    ) -> (b64: String, w: Int32, h: Int32)? {
+        if let provider { return provider(x, y, w, h, maxSide) }
+        return editor.capturePngBase64(x: x, y: y, w: w, h: h, maxSide: maxSide)
+    }
+}
+
 /// Callbacks the host app provides so the server stays UI-framework-agnostic.
 public struct AgentHost {
     public var framebufferSize: () -> (w: Float, h: Float)

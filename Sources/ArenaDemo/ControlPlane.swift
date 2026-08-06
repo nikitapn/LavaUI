@@ -668,6 +668,39 @@ final class CompositorImpl: CompositorServant, @unchecked Sendable {
         return surface.takeDrop()
     }
 
+    /// Reads back the surface's framebuffer.
+    ///
+    /// On the loop because it has to be: a GPU→CPU read-back of the resolve
+    /// target is device work, and it is also the one servant method whose cost
+    /// scales with the window — a 4K capture is milliseconds of copy plus PNG
+    /// encoding, paid by every client's frame. Acceptable because this is an
+    /// automation call: nothing on a user's desktop makes it.
+    override func captureSurface(
+        surfaceId: UInt32, x: Int32, y: Int32, w: Int32, h: Int32, maxSide: Int32
+    ) throws -> Capture {
+        guard let surface = SurfaceRegistry.surface(id: surfaceId) else {
+            var ex = SurfaceNotFound()
+            ex.surfaceId = surfaceId
+            throw ex
+        }
+        // A surface that has never been shown has never been rendered, and
+        // reading it back would return uninitialised memory rather than a
+        // blank window — the same reason windows open hidden.
+        guard surface.shown, let shot = editor.capturePng(
+            x: x, y: y, w: w, h: h, maxSide: maxSide, window: surface.window
+        ) else {
+            var ex = CaptureFailed()
+            ex.surfaceId = surfaceId
+            throw ex
+        }
+
+        var out = Capture()
+        out.width = UInt32(max(0, shot.w))
+        out.height = UInt32(max(0, shot.h))
+        out.png = shot.png
+        return out
+    }
+
     /// The display server's selection, read on the loop like everything else.
     ///
     /// `editor.clipboardText` goes to GLFW, which goes to X11, and on X11 a

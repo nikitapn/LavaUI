@@ -448,7 +448,9 @@ public enum LavaApp {
                 },
                 injectText: { text in editor.injectText(text) },
                 screenshotBase64: { x, y, w, h, maxSide in
-                    editor.capturePngBase64(x: x, y: y, w: w, h: h, maxSide: maxSide)
+                    ScreenshotBridge.capture(
+                        x: x, y: y, w: w, h: h, maxSide: maxSide, editor: editor
+                    )
                 }
             )
             // Unblock pumpEvents the moment the agent socket is readable

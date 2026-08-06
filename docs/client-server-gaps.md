@@ -9,6 +9,13 @@ is missing is no longer obvious from using it. Typing works, scrolling works,
 images work — so the holes are the ones you find by reaching for something
 three weeks later.
 
+**Status, same day.** All six are closed or reduced: the dead-client case by
+nprpc's new shared-memory liveness detection, the other five here. What is
+left is a feature rather than a break (a client's *second* window) and one
+known bug (agent-injected clicks on a client with an input stream). Each
+entry keeps its original description under **Was:** — the point of the list
+is what the shape of the thing was, not just that it is gone.
+
 ## Works, verified
 
 Worth stating first, because it bounds the rest: mouse, wheel, hover, resize
@@ -56,62 +63,127 @@ Cleaned up ring buffers: /nprpc_…_s2c, /nprpc_…_c2s
 up. The ring segments are unlinked too, which was a second leak: before the
 fix, a run left both 16 MB rings in `/dev/shm` forever.
 
-### 2. Clipboard is dead
+### 2. ~~Clipboard is dead~~ — fixed
 
-**Reproduced.** `xclip` something, focus the field, Ctrl+V: nothing.
-
-By construction, and the construction is right as far as it goes —
-`AppWindow::clipboardText` needs a GLFW window, a client has none, and
-`LavaApp.openClient` deliberately leaves `ClipboardBridge` unwired rather
-than pointing it at an engine that cannot answer. What is missing is the
-other half: no `GetClipboard`/`SetClipboard` on the control plane, so a
-client has no route to the display server's selection at all.
-
-Copy *within* one client works — that is `TextEditing`'s own buffer, not the
+**Was:** `xclip` something, focus the field, Ctrl+V, nothing. Copy *within*
+one client worked, because that is `TextEditing`'s own buffer rather than the
 system's.
 
-### 3. File drag-and-drop is dead
+Half of it was already right: `AppWindow::clipboardText` needs a GLFW window,
+a client has none, and `LavaApp.openClient` deliberately left
+`ClipboardBridge` unwired rather than pointing it at an engine that could not
+answer. The missing half was a route — nothing on the control plane could
+reach the display server's selection.
 
-`idl/lava.npidl` says so outright: `FileDrop`'s payload is a path list in a
-side buffer that the next drop overwrites, so it does not fit the fixed-size
-`InputEvent` and is the one event kind not forwarded.
+**Fixed:** `GetClipboard`/`SetClipboard`, addressed by surface, with
+`LavaClient.run` installing the `ClipboardBridge` pair once it has a surface
+to name. Both block the client's frame loop for a round trip, from a key
+handler — a keystroke's worth of latency in the client that pressed the key,
+which is why the IDL says not to call them per frame.
 
-The cost is larger than it sounds: `DropTarget.swift` / `DropRouter` is a
-whole LavaUI feature, and it is unreachable in client mode. Needs a call of
-its own (`TakeDroppedPaths(surfaceId)`), not a wider event.
+Addressed by surface although neither call needs it to work. "May this client
+read the selection" has to be answerable and the answer depends on which
+window is focused; X11 lets anyone read at any time and Wayland deliberately
+does not, and this signature can become the second without changing. Today
+`requireSurface` only proves the surface exists.
 
-### 4. A client cannot open a second window
+**Verified:** `xclip` → Ctrl+V puts the text in a client's field; Ctrl+A,
+Ctrl+C in the client puts the field's text back on the X clipboard.
+
+### 3. ~~File drag-and-drop is dead~~ — fixed
+
+**Was:** the `FileDrop` event crossed, but its payload did not — a path list
+does not fit a fixed-size `InputEvent`. The cost was larger than it sounds:
+`DropTarget.swift` / `DropRouter` is a whole LavaUI feature, unreachable
+under a compositor.
+
+**Fixed:** `TakeDroppedPaths(surfaceId)`, plus `DropBridge` in LavaUI to
+reach it. It stays two things on purpose — the event says a drop happened and
+*where*, which is what picks the view; the call says what was in it. Most
+events are not drops and should not pay for the one that is.
+
+The compositor copies GLFW's buffer the instant it polls the event, because
+that buffer holds one drop and the next overwrites it. What it copies into is
+a queue rather than a slot, so two quick drops are two drops; bounded at 16,
+so a client that never collects cannot grow the compositor.
+
+**Verified with a caveat worth stating.** XDND is not scriptable — a drag
+between two X clients is a protocol conversation no injected event can start
+— so the test synthesizes the drop through `LAVA_TEST_DROP`. That stands in
+for exactly one thing: the call to `editor.droppedFiles`. The queue, the RPC,
+the bridge, the router and the handler are all the shipping path. Two files
+dropped on the target arrive as `dropped 2: alpha.txt, beta.pdf`; a drop
+aimed at empty space reaches no handler.
+
+### 4. A client cannot open a second window — still open, but no longer a crash
 
 `LavaClient` creates exactly one arena and one surface, and `LavaApp.openWindow`
-is worse than unsupported — it is unguarded. It reaches
+*was* worse than unsupported — it was unguarded. It reached
 `Application::openWindow`, which builds a real `AppWindow` (a GLFW window, in
 the *client* process) and then calls `bringUpWindow` → `device.textRenderer()`
 on a device that was never initialised.
 
-Traced, not run. The protocol is already fine with it — a surface per arena,
-one input stream each, and the IDL says a client with two windows gets two
-streams. The plumbing above it is what is absent, plus a `deviceUp` guard so
-the wrong call fails instead of doing that.
+**Half-fixed:** `Application::openWindow` now checks `deviceUp` and returns 0,
+which is what a failed open already meant, so no caller grows a case.
 
-### 5. Images have to be files on disk
+The feature is still missing, and the protocol is already fine with it — a
+surface per arena, one input stream each, and the IDL says a client with two
+windows gets two streams. What is absent is the plumbing above: `LavaClient`
+would have to create a second arena, ask for a second surface, and route a
+second input stream into the right `WindowScope`.
 
-Also stated in the IDL, and repeated here because it is the kind of
-constraint that gets rediscovered by a feature: `RegisterImage` takes a path
-the *renderer* opens. An image the client has only in memory — downloaded,
-generated, decoded from a blob — cannot be registered. Cover art works today
-because `SpotifyCore` writes it to a cache file first.
+### 5. ~~Images have to be files on disk~~ — fixed
 
-### 6. The agent cannot see a client's pixels
+**Was:** `RegisterImage` takes a path the *renderer* opens, so an image the
+client had only in memory — downloaded, generated, decoded from a blob —
+could not be registered at all. Cover art works today because `SpotifyCore`
+writes it to a cache file first.
 
-`AppWindow::capturePng` returns `false` with no renderer, so `screenshot` and
-`screenshot_node` fail against a client. Everything else in the agent server
-works, because it reads the layout tree rather than the framebuffer.
+**Fixed:** `RegisterImageData`, taking encoded bytes (PNG, JPEG, …) rather
+than raw pixels — a 300×300 cover is ~30 KB as JPEG and 360 KB as RGBA, and
+the renderer already owns the codec, which is most of what "a client needs no
+GPU" was already promising.
 
-Compounded by the known one: **agent-injected clicks do not reach handlers on
-a client that also has a compositor input stream** — the hit test finds the
-node, the state change never lands. Both together mean the automation path
-that the rest of this project is tested with does not work in the mode the
-project is moving to.
+Identity is a hash of the content, not a key the caller picks. Two clients
+that both call their icon "logo" must not be handed each other's texture, and
+the renderer cannot check a claim about a namespace it does not own — but it
+can check the bytes. `ImageStore.contentKey` is the single implementation:
+both sides derive it independently and nothing sends it across, so a second
+implementation would silently become a cache miss on one side and a leak on
+the other.
+
+A path should still go through `RegisterImage`. This one copies the file
+through the ring buffer; a path sends a path.
+
+**Verified:** the ArenaDemo client builds a BMP in memory and gets it on
+screen (`RegisterImageData(27702 bytes) → 96×96`); a second client generating
+byte-identical pixels gets the existing texture with no second decode.
+
+### 6. ~~The agent cannot see a client's pixels~~ — fixed
+
+**Was:** `AppWindow::capturePng` returns `false` with no renderer, so
+`screenshot` and `screenshot_node` failed against a client. Everything else
+in the agent server worked, because it reads the layout tree rather than the
+framebuffer — which is precisely why this one mattered: it was the only
+command that checks what the user would actually *see*.
+
+**Fixed:** `CaptureSurface` on the control plane, and `ScreenshotBridge` in
+LavaUI — the third seam of the same shape as `ClipboardBridge` and
+`DropBridge`, and unset means windowed, so an ordinary app installs nothing.
+
+Bytes on the wire, base64 in the client. The agent's protocol is JSON and
+wants text, but that is the client's protocol: encoding in the compositor
+would put a third more bytes on the wire in service of something the renderer
+does not speak.
+
+**Verified:** `screenshot` against a client returns a real 400×311 PNG of the
+compositor's framebuffer, and the windowed path still captures through the
+same bridge.
+
+**Still open, and the reason this one is not finished:** agent-injected
+clicks do not reach handlers on a client that also has a compositor input
+stream — the hit test finds the node, the state change never lands. The agent
+can now *see* a client; it still cannot fully drive one.
 
 ## Missing rather than broken
 
@@ -133,18 +205,29 @@ can give the surface back, and that is the whole vocabulary.
 
 ## Against the wlroots plan
 
-Most of the "missing" list and what is left of the "broken" list are things
-Wayland already has an answer for — `wl_data_device` for both clipboard and
-drag and drop, `wl_pointer.set_cursor`, `xdg_toplevel` for window state and
-for the second window. That is an argument for not building them twice on
-`lava.Compositor` first.
+The original argument was that Wayland already answers most of this —
+`wl_data_device` for clipboard and drag-and-drop, `wl_pointer.set_cursor`,
+`xdg_toplevel` for window state and the second window — so building it twice
+on `lava.Compositor` first would be waste. That argument still holds for what
+is left in "missing rather than broken", and it is why the second window is
+not being plumbed here.
 
-The dead-client case was the exception, and it is worth noting why it was
-right to fix here rather than wait for `wl_client`'s destroy signal: the
-problem was never the window protocol, it was that shared memory has no
-disconnect. A wlroots compositor talking to LavaUI clients over the same
-transport would have had the identical hole, one layer further down.
+It did not hold for what was *broken*, and the reason is worth keeping. Every
+one of those five was a hole below the window protocol rather than in it: the
+selection is a display-server resource whichever protocol names it, a drop's
+payload has to reach a process that does not own the pointer either way, an
+image with no path has no path under Wayland either, and a client with no
+framebuffer is exactly as invisible to the agent. A wlroots compositor
+speaking to LavaUI clients over shared memory would have inherited all of
+them. The dead-client case makes the point most sharply: `wl_client`'s
+destroy signal would not have helped, because the thing that failed to notice
+was the transport, not the window.
+
+So the split is not "wait for Wayland" versus "build it now" — it is whether
+a gap is about *windows*, which Wayland owns, or about the client/renderer
+boundary underneath, which stays ours no matter what protocol sits on top.
 
 What does *not* come from Wayland, and stays ours either way: the draw arena
-and its retained scene tree, resource ids (`RegisterFont`/`RegisterImage`),
-and the agent path. Those are the ones worth investing in on this interface.
+and its retained scene tree, resource ids (`RegisterFont`/`RegisterImage`/
+`RegisterImageData`), and the agent path. Those are the ones worth investing
+in on this interface.

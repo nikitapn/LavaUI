@@ -480,16 +480,41 @@ public final class Editor: @unchecked Sendable {
     /// Returns `(base64, encodedWidth, encodedHeight)` or nil on failure.
     public func capturePngBase64(
         x: Int32 = 0, y: Int32 = 0, w: Int32 = 0, h: Int32 = 0,
-        maxSide: Int32 = 0
+        maxSide: Int32 = 0, window: WindowID = .main
     ) -> (b64: String, w: Int32, h: Int32)? {
         var outW: Int32 = 0
         var outH: Int32 = 0
-        let s = String(engine.capturePngBase64(x, y, w, h, maxSide, &outW, &outH))
+        let s = String(
+            engine.capturePngBase64(x, y, w, h, maxSide, &outW, &outH, window.raw)
+        )
         guard !s.isEmpty else { return nil }
         // If out params were not filled (old path), fall back to request size.
         if outW < 1 { outW = w > 0 ? w : 0 }
         if outH < 1 { outH = h > 0 ? h : 0 }
         return (s, outW, outH)
+    }
+
+    /// The same capture as PNG bytes.
+    ///
+    /// For a caller that is not about to put it in JSON — the compositor
+    /// answering `CaptureSurface` for a client, where base64 would be a third
+    /// more bytes on the wire and a decode at the other end, to satisfy a
+    /// protocol the renderer is not speaking.
+    public func capturePng(
+        x: Int32 = 0, y: Int32 = 0, w: Int32 = 0, h: Int32 = 0,
+        maxSide: Int32 = 0, window: WindowID = .main
+    ) -> (png: [UInt8], w: Int32, h: Int32)? {
+        var outW: Int32 = 0
+        var outH: Int32 = 0
+        let bytes = engine.capturePng(x, y, w, h, maxSide, &outW, &outH, window.raw)
+        let n = Int(bytes.size())
+        guard n > 0 else { return nil }
+        var png = [UInt8]()
+        png.reserveCapacity(n)
+        for i in 0..<n { png.append(bytes[i]) }
+        if outW < 1 { outW = w > 0 ? w : 0 }
+        if outH < 1 { outH = h > 0 ? h : 0 }
+        return (png, outW, outH)
     }
 
     // ─── App menu (Linux DBusMenu / global panel) ────────────────────────

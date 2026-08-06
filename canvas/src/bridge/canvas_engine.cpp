@@ -300,6 +300,18 @@ std::string Engine::capturePngBase64(int x, int y, int w, int h, int maxSide,
   return out;
 }
 
+U8Vector Engine::capturePng(int x, int y, int w, int h, int maxSide,
+                            int *outW, int *outH, uint32_t windowId)
+{
+  U8Vector out;
+  impl_->withApp([&](Application &app) {
+    if (!app.capturePng(out, x, y, w, h, maxSide, outW, outH, windowId)) {
+      out.clear();
+    }
+  });
+  return out;
+}
+
 void Engine::pointerMove(float x, float y, uint32_t windowId)
 {
   impl_->withApp([&](Application &app) { app.pointerMove(x, y, windowId); });

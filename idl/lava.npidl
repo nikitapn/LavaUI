@@ -54,6 +54,27 @@ exception SurfaceNotFound {
   surfaceId: u32;
 }
 
+/// The surface exists but there was nothing to read back — it has not drawn a
+/// frame yet, or the read-back itself failed.
+///
+/// Separate from an empty result so a caller can tell "the window is blank"
+/// from "the capture did not happen", which is exactly the distinction an
+/// automated check needs and cannot make from zero bytes.
+exception CaptureFailed {
+  surfaceId: u32;
+}
+
+/// A PNG and the size it encoded to.
+///
+/// The size is not redundant with the PNG's own header: `maxSide` may have
+/// downsampled it, and a caller that asked for a region wants to know what it
+/// actually got without parsing the image to find out.
+message Capture {
+  width: u32;
+  height: u32;
+  png: vector<u8>;
+}
+
 /// One raw input event, renderer → app.
 ///
 /// Field-for-field the shape of `canvas::InputEvent`, deliberately: the
@@ -272,6 +293,26 @@ interface Compositor {
   /// twice for the same drop is a client that would process the files twice.
   /// The queue is per surface, so a client falling behind delays only itself.
   vector<string> TakeDroppedPaths(surfaceId: in u32) raises(SurfaceNotFound);
+
+  /// A PNG of what is actually on screen for this surface.
+  ///
+  /// For automation, and it closes a hole that mattered more than it looks:
+  /// every LavaUI app is tested through an agent that can read the layout
+  /// tree, click, type — and screenshot. A client has no framebuffer, so the
+  /// one command that checks what the user would *see* was the one that did
+  /// not work in the mode this project is moving to.
+  ///
+  /// Region in framebuffer pixels; `w`/`h` ≤ 0 means the whole surface, and
+  /// `maxSide` > 0 downsamples so the longer encoded edge fits — a full 4K
+  /// window is several megabytes of PNG that no assertion needed.
+  ///
+  /// Bytes, not base64. The agent's protocol is JSON and wants text, but that
+  /// is the client's protocol, not the renderer's: encoding here would put a
+  /// third more bytes on the wire and a decode at the far end in service of
+  /// something the compositor does not speak.
+  Capture CaptureSurface(surfaceId: in u32, x: in i32, y: in i32,
+                         w: in i32, h: in i32, maxSide: in i32)
+      raises(SurfaceNotFound, CaptureFailed);
 
   // ─── Clipboard ─────────────────────────────────────────────────────────
   //
