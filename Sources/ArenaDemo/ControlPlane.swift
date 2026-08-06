@@ -751,6 +751,22 @@ final class CompositorImpl: CompositorServant, @unchecked Sendable {
         SurfaceRegistry.markDirty(surfaceId: surfaceId)
     }
 
+    /// The client walked its chain, nothing wanted the notch, and here it is
+    /// back. `scrollSceneUnclaimed` scrolls the deepest scene node under the
+    /// renderer's own pointer that can still move, ignoring the wheel claims
+    /// that made it stand aside in the first place — every one of them has now
+    /// declined in person.
+    ///
+    /// `[unreliable]` — no reply. An unknown surface is a client racing its own
+    /// teardown, and there is nowhere to report it anyway.
+    override func scrollUnclaimed(surfaceId: UInt32, dx: Float, dy: Float) {
+        guard let surface = SurfaceRegistry.surface(id: surfaceId) else { return }
+        // Marks its own window for an internal repaint when the offset moves,
+        // which the loop collects through `takeInternalRepaint` — the same path
+        // a renderer-owned scroll already takes.
+        _ = editor.scrollSceneUnclaimed(dx: dx, dy: dy, window: surface.window)
+    }
+
     /// The reverse channel. Runs for as long as the client keeps the stream
     /// open, on NPRPC's own task, never on the loop.
     ///

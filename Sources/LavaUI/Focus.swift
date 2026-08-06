@@ -205,6 +205,30 @@ public enum PointerCapture {
     }
 }
 
+/// Where a wheel notch goes when nothing in the view tree wanted it.
+///
+/// The renderer stood aside because a node under the pointer claimed the
+/// wheel; if that node and every ancestor then declines, the container around
+/// them should still scroll — the notch goes back to whoever owns the scene.
+/// In one process that is a call into the engine. Under a compositor the scene
+/// is in another process, and a client's own engine has no renderer to hand it
+/// to, so the notch was simply dropped: an editor inside a scrolling page
+/// pinned the page.
+///
+/// Same shape as `ClipboardBridge`, `DropBridge` and `ScreenshotBridge`, and
+/// unset means windowed.
+public enum ScrollBridge {
+    nonisolated(unsafe) public static var handBack: (@Sendable (Float, Float) -> Void)?
+
+    static func unclaimed(dx: Float, dy: Float, window: WindowID, editor: Editor) {
+        if let handBack {
+            handBack(dx, dy)
+            return
+        }
+        _ = editor.scrollSceneUnclaimed(dx: dx, dy: dy, window: window)
+    }
+}
+
 /// Wheel routing. The node under the pointer receives the wheel, focused or
 /// not — that is what every desktop app does, and it means scrolling a panel
 /// does not steal focus from a field.

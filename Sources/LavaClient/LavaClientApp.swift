@@ -169,6 +169,17 @@ public enum LavaClient {
             }
         }
 
+        // A wheel notch this tree declined, handed back to the scene that
+        // forwarded it. Fire and forget, like `Present` and for the same
+        // reason: the renderer owns the offset, so this is a nudge rather than
+        // a fact, and the wheel arrives in bursts that must not each cost the
+        // frame loop a round trip.
+        ScrollBridge.handBack = { [compositor] dx, dy in
+            Task.detached {
+                await compositor.scrollUnclaimed(surfaceId: surfaceID, dx: dx, dy: dy)
+            }
+        }
+
         // The agent's screenshot, which is the one command that checks what a
         // user would actually see and the one a client could not answer.
         // Longer budget than the rest: this is a GPU read-back plus a PNG

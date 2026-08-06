@@ -481,7 +481,9 @@ public final class LavaWindow {
             // Without this a pinned inner widget silently eats the event and
             // the page it sits on refuses to move.
             if !consumed {
-                editor.scrollSceneUnclaimed(dx: ev.x, dy: ev.y, window: id)
+                ScrollBridge.unclaimed(
+                    dx: ev.x, dy: ev.y, window: id, editor: editor
+                )
             }
         case .nodeHover:
             HoverState.set(SceneNodeIdentity.node(for: UInt32(bitPattern: ev.button)))

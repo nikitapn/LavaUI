@@ -229,6 +229,31 @@ interface Compositor {
   /// redrawing every window because *somebody* did.
   [unreliable] void Present(surfaceId: in u32);
 
+  /// "Nobody in my tree wanted this wheel notch — it is yours again."
+  ///
+  /// The other half of a conversation that already exists. When a node under
+  /// the pointer claims the wheel — a text editor, a canvas that only wants
+  /// Ctrl+wheel — the renderer stands aside and forwards the notch as a
+  /// `Scroll` event instead of scrolling anything itself. If the client then
+  /// walks its own chain and every handler declines, the container *around*
+  /// those handlers should still scroll, which is what the wheel would have
+  /// done had none of them been there.
+  ///
+  /// In one process that hand-back is a function call. Across two it needs
+  /// this, and without it a pinned inner widget silently eats the notch and
+  /// the page it sits on refuses to move — which is exactly what a client
+  /// running an editor inside a scrolling page looked like.
+  ///
+  /// No position: the renderer still has the pointer, and it is the same
+  /// pointer that produced the `Scroll` this answers. Sending coordinates
+  /// back would invite a client to aim a scroll somewhere the user is not.
+  ///
+  /// `[unreliable]`, for the reason `Present` is: the renderer owns the
+  /// scroll offset, this is a nudge rather than a fact, and a dropped notch
+  /// costs a few pixels of travel rather than a wrong position. It also keeps
+  /// the wheel — which arrives in bursts — off the client's blocking path.
+  [unreliable] void ScrollUnclaimed(surfaceId: in u32, dx: in f32, dy: in f32);
+
   // ─── Input ─────────────────────────────────────────────────────────────
 
   /// The reverse channel: the renderer owns the window, so it owns the mouse
