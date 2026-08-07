@@ -55,6 +55,8 @@ public struct Theme: Equatable, Sendable {
     public var cornerRadius: Float
     /// Inner padding for controls such as text fields.
     public var controlPadding: Float
+    /// Default distance between adjacent views in a stack when its spacing is `nil`.
+    public var stackSpacing: Float
     public var caretWidth: Float
     /// Shape of the focused-field chrome. Defaults to a full rounded outline.
     public var focusRingStyle: FocusRingStyle
@@ -69,7 +71,8 @@ public struct Theme: Equatable, Sendable {
         background: Color, panel: Color, inset: Color, canvas: Color,
         hover: Color, selectionFill: Color,
         border: Color, borderWidth: Float = 1,
-        cornerRadius: Float = 4, controlPadding: Float = 4, caretWidth: Float = 1.5,
+        cornerRadius: Float = 4, controlPadding: Float = 4, stackSpacing: Float = 8,
+        caretWidth: Float = 1.5,
         focusRingStyle: FocusRingStyle = .rounded,
         focusRingWidth: Float = 1.5,
         focusRingColor: Color? = nil
@@ -90,6 +93,7 @@ public struct Theme: Equatable, Sendable {
         self.borderWidth = borderWidth
         self.cornerRadius = cornerRadius
         self.controlPadding = controlPadding
+        self.stackSpacing = stackSpacing
         self.caretWidth = caretWidth
         self.focusRingStyle = focusRingStyle
         self.focusRingWidth = focusRingWidth

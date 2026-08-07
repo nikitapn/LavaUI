@@ -13,6 +13,8 @@ public struct StackStyle: Equatable, Sendable {
     public var height: Dimension
     public var padding: Float
     public var alignment: StackAlignment
+    /// Distance between adjacent children. `nil` uses the theme default.
+    public var spacing: Float?
     /// Continue children onto additional flex lines when the main axis fills.
     public var wraps: Bool
 
@@ -22,6 +24,7 @@ public struct StackStyle: Equatable, Sendable {
         height: Dimension = .auto,
         padding: Float = 0,
         alignment: StackAlignment = .stretch,
+        spacing: Float? = nil,
         wraps: Bool = false
     ) {
         self.flexGrow = flexGrow
@@ -29,12 +32,15 @@ public struct StackStyle: Equatable, Sendable {
         self.height = height
         self.padding = padding
         self.alignment = alignment
+        self.spacing = spacing
         self.wraps = wraps
     }
 
     var dumpDetail: String {
-        "flexGrow=\(flexGrow) w=\(width) h=\(height) pad=\(padding) "
-            + "align=\(alignment.rawValue)\(wraps ? " wrap" : "")"
+        let spacingDetail = spacing.map { String($0) } ?? "default"
+        return "flexGrow=\(flexGrow) w=\(width) h=\(height) pad=\(padding) "
+            + "align=\(alignment.rawValue) spacing=\(spacingDetail)"
+            + "\(wraps ? " wrap" : "")"
     }
 }
 
@@ -50,6 +56,7 @@ public struct HStack<Content: View>: PrimitiveView {
         height: Dimension = .auto,
         padding: Float = 0,
         alignment: StackAlignment = .stretch,
+        spacing: Float? = nil,
         wraps: Bool = false,
         onClick: (() -> Void)? = nil,
         onHover: ((Bool) -> Void)? = nil,
@@ -57,7 +64,7 @@ public struct HStack<Content: View>: PrimitiveView {
     ) {
         self.style = StackStyle(
             flexGrow: flexGrow, width: width, height: height, padding: padding,
-            alignment: alignment, wraps: wraps
+            alignment: alignment, spacing: spacing, wraps: wraps
         )
         self.onClick = onClick
         self.onHover = onHover
@@ -109,6 +116,7 @@ public struct VStack<Content: View>: PrimitiveView {
         height: Dimension = .auto,
         padding: Float = 0,
         alignment: StackAlignment = .stretch,
+        spacing: Float? = nil,
         wraps: Bool = false,
         onClick: (() -> Void)? = nil,
         onHover: ((Bool) -> Void)? = nil,
@@ -116,7 +124,7 @@ public struct VStack<Content: View>: PrimitiveView {
     ) {
         self.style = StackStyle(
             flexGrow: flexGrow, width: width, height: height, padding: padding,
-            alignment: alignment, wraps: wraps
+            alignment: alignment, spacing: spacing, wraps: wraps
         )
         self.onClick = onClick
         self.onHover = onHover

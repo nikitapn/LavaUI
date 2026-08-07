@@ -293,6 +293,7 @@ HStack(
     height: .auto,
     padding: 8,
     alignment: .center,
+    spacing: 8,
     wraps: false,
     onClick: { select() },
     onHover: { inside in hovered = inside }
@@ -304,9 +305,9 @@ HStack(
 ```
 
 `StackAlignment` controls the cross axis: `.start`, `.center`, `.end`, or
-`.stretch`. `wraps: true` continues children onto another line when the main
-axis fills. There is currently no stack `spacing` parameter; use padding on
-children where spacing is required.
+`.stretch`. `spacing` is the distance between adjacent children; `nil` uses
+the theme's `stackSpacing` (8 by default), while `0` removes the gap.
+`wraps: true` continues children onto another line when the main axis fills.
 
 `Spacer(flexGrow:)` consumes remaining space. It is the idiomatic way to push
 later content to the trailing or bottom edge.
@@ -721,8 +722,7 @@ The API intentionally resembles SwiftUI, but it is not source-compatible with
 SwiftUI. Notable current boundaries are:
 
 - Linux is the working platform today.
-- Stack main-axis justification and a native `spacing` argument are not yet
-  present; use `Spacer` and child padding.
+- Stack main-axis justification is not yet present; use `Spacer`.
 - Lazy containers require fixed cell/row heights.
 - `FileDialog` currently depends on `zenity`.
 - A plain `for` loop is unavailable in `@ViewBuilder`; identity requires

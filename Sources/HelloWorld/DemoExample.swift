@@ -266,9 +266,36 @@ public struct DemoExample: View {
     @State private var hovered: Int?
     @State private var selected: Int?
 
+    private var bgColor = Color(r: 0.38, g: 0.09, b: 0.1)
+
     private var centerContent: some View {
         VStack(padding: 8) {
             SpatialCatalogDemo(posters)
+
+            Text("Stack spacing", color: .accent)
+            Text(
+                "nil uses the theme default; zero and explicit spacing match SwiftUI.",
+                color: .secondary
+            )
+            VStack(spacing: 6) {
+                HStack(alignment: .center) {
+                    Text("One", color: .primary).padding(3).background(bgColor)
+                    Text("Two", color: .primary).padding(3).background(bgColor)
+                    Text("Three", color: .primary).padding(3).background(bgColor)
+                }.background(Color(r: 0.3, g: 0.5, b: 0.0))
+                HStack(alignment: .center, spacing: 16) {
+                    Text("16 pt", color: .dim).frame(width: .pt(64)).background(bgColor)
+                    Text("One", color: .primary).padding(30).background(bgColor)
+                    Text("Two", color: .primary).padding(30).background(bgColor)
+                    Text("Three", color: .primary).padding(30).background(bgColor)
+                }
+                HStack(alignment: .center, spacing: 0) {
+                    Text("zero", color: .dim).frame(width: .pt(64)).background(bgColor)
+                    Text("One", color: .primary).padding(3).background(bgColor)
+                    Text("Two", color: .primary).padding(3).background(bgColor)
+                    Text("Three", color: .primary).padding(3).background(bgColor)
+                }
+            }
 
             Text("Charts · pie (static Canvas)", color: .accent)
             Text(

@@ -1040,6 +1040,13 @@ final class StackNode: YogaBoxNode {
         padding = style.padding
         YGNodeStyleSetAlignItems(yogaStorage, style.alignment.yoga)
         YGNodeStyleSetFlexWrap(yogaStorage, style.wraps ? YGWrapWrap : YGWrapNoWrap)
+        let spacing = max(0, style.spacing ?? Environment.current.theme.stackSpacing)
+        switch direction {
+        case .row:
+            YGNodeStyleSetGap(yogaStorage, YGGutterColumn, spacing)
+        case .column:
+            YGNodeStyleSetGap(yogaStorage, YGGutterRow, spacing)
+        }
         // Side columns get a solid panel fill; main HStack stays transparent.
         // Re-evaluated every apply (not just at construction) so a theme
         // swap — or a `.theme(_:)` override — reaches it on reconcile too.
@@ -1977,4 +1984,3 @@ final class ForEachFragmentNode<ID: Hashable>: AnyViewNode {
 }
 
 #endif
-
