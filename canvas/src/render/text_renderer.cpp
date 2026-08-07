@@ -1,5 +1,5 @@
 #include <array>
-#include <mutex>
+#include <shared_mutex>
 #include <vector>
 #include <iostream>
 #include <cstring>
@@ -180,6 +180,14 @@ struct TextRenderer::Impl {
 
 
 
+
+  /// Lookup only — no rasterizing, no packing, no upload. This is what the
+  /// shared (reader) path calls; a null means "take the exclusive lock and
+  /// try again", not "no such glyph".
+  const GlyphInfo* findGlyph(uint32_t fontId, uint32_t glyphId) const {
+    auto it = glyphMap_.find(glyphKey(fontId, glyphId));
+    return it == glyphMap_.end() ? nullptr : &it->second;
+  }
 
   /// Rasterizes and packs on first use. Returns nullptr when the glyph does
   /// not fit; the caller drops it for this frame and the atlas grows before
@@ -412,33 +420,70 @@ TextRenderer::TextRenderer(RenderDevice& device)
 
 TextRenderer::~TextRenderer() = default;
 
-TextRenderer::TextRenderer(TextRenderer&& other) noexcept = default;
-TextRenderer& TextRenderer::operator=(TextRenderer&& other) noexcept = default;
-
 void TextRenderer::init() { impl_->init(); }
 
+namespace {
+void fillQuad(const GlyphInfo &g, TextRenderer::GlyphQuad &out) {
+  out.uv0     = g.atlasUV[0];
+  out.uv1     = g.atlasUV[1];
+  out.size    = g.size;
+  out.bearing = g.bearing;
+}
+}  // namespace
+
 bool TextRenderer::glyphQuad(uint32_t fontId, uint32_t glyphId, GlyphQuad &out) {
-  // Rasterizes + packs on first use. Must be called during draw-list replay,
-  // never inside a command-buffer callback: the atlas upload path submits and
-  // waits on its own single-time command buffer.
+  // Hit path first, under the shared lock: text that has been drawn once
+  // costs a map lookup and blocks no other window.
+  {
+    std::shared_lock lock(mutex_);
+    if (const GlyphInfo *g = impl_->findGlyph(fontId, glyphId)) {
+      fillQuad(*g, out);
+      return true;
+    }
+  }
+
+  // Miss. Rasterizes + packs on first use. Must be called during draw-list
+  // replay, never inside a command-buffer callback: the atlas upload path
+  // submits and waits on its own single-time command buffer.
+  //
+  // `getOrCreateGlyph` re-checks the map, which it has to: the lock was
+  // dropped and reacquired above, so another window may have added exactly
+  // this glyph in between.
+  std::unique_lock lock(mutex_);
   const GlyphInfo *g = impl_->getOrCreateGlyph(fontId, glyphId);
   if (!g) return false;  // didn't fit; atlas grows before the next frame
-  out.uv0     = g->atlasUV[0];
-  out.uv1     = g->atlasUV[1];
-  out.size    = g->size;
-  out.bearing = g->bearing;
+  fillQuad(*g, out);
   return true;
 }
 
 int  TextRenderer::registerFont(const std::string &path, float pixelSize) {
+  std::unique_lock lock(mutex_);
   return impl_->registerFont(path, pixelSize);
 }
-bool TextRenderer::atlasNeedsGrow() const { return impl_->needsGrow_; }
-bool TextRenderer::growAtlasIfNeeded() { return impl_->growAtlasIfNeeded(); }
-uint32_t TextRenderer::atlasGeneration() const { return impl_->atlasGeneration_; }
+bool TextRenderer::atlasNeedsGrow() const {
+  std::shared_lock lock(mutex_);
+  return impl_->needsGrow_;
+}
+bool TextRenderer::growAtlasIfNeeded() {
+  std::unique_lock lock(mutex_);
+  return impl_->growAtlasIfNeeded();
+}
+uint32_t TextRenderer::atlasGeneration() const {
+  std::shared_lock lock(mutex_);
+  return impl_->atlasGeneration_;
+}
 
-VkImageView TextRenderer::atlasView() const { return impl_->atlasTextureView_; }
-VkSampler   TextRenderer::atlasSampler() const { return impl_->atlasSampler_; }
+// Locked like every other reader. `growAtlasIfNeeded` replaces both of these
+// under the same mutex, so reading them without it is the classic half-applied
+// lock: the writer is protected from nobody.
+VkImageView TextRenderer::atlasView() const {
+  std::shared_lock lock(mutex_);
+  return impl_->atlasTextureView_;
+}
+VkSampler TextRenderer::atlasSampler() const {
+  std::shared_lock lock(mutex_);
+  return impl_->atlasSampler_;
+}
 
 canvas::VoidResult TextRenderer::loadFont(const std::string& fontPath, int fontSize) {
   // Back-compat shim: registers as font 0 (the default face).
@@ -449,5 +494,3 @@ canvas::VoidResult TextRenderer::loadFont(const std::string& fontPath, int fontS
 }
 
 void TextRenderer::cleanUp() { impl_->cleanUp(); }
-
-

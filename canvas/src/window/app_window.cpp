@@ -95,6 +95,22 @@ canvas::DrawList AppWindow::currentDrawList() const
   };
 }
 
+void AppWindow::prepare()
+{
+  if (!render_) return;
+  if (render_->resize()) {
+    // Tell the producer so it re-lays-out and resubmits. Without this the
+    // old fixed-size command list is presented into the new framebuffer.
+    canvas::InputEvent ev;
+    ev.kind = static_cast<uint32_t>(canvas::InputEventKind::Resize);
+    ev.x = static_cast<float>(render_->getExtent().width);
+    ev.y = static_cast<float>(render_->getExtent().height);
+    ev.button = 0;
+    std::lock_guard lock(inputMu_);
+    inputEvents_.push_back(ev);
+  }
+}
+
 bool AppWindow::repaint()
 {
   // A client has nothing to present: its frame is finished the moment it is
@@ -102,18 +118,6 @@ bool AppWindow::repaint()
   // success so a producer's frame loop needs no branch of its own.
   if (!render_) return true;
   try {
-    if (render_->resize()) {
-      // Tell the producer so it re-lays-out and resubmits. Without this the
-      // old fixed-size command list is presented into the new framebuffer.
-      canvas::InputEvent ev;
-      ev.kind = static_cast<uint32_t>(canvas::InputEventKind::Resize);
-      ev.x = static_cast<float>(render_->getExtent().width);
-      ev.y = static_cast<float>(render_->getExtent().height);
-      ev.button = 0;
-      std::lock_guard lock(inputMu_);
-      inputEvents_.push_back(ev);
-    }
-
     stepSceneAnimations();
 
     if (arena_) {

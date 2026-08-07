@@ -2,6 +2,7 @@
 
 #include <string>
 #include <memory>
+#include <shared_mutex>
 
 #include <vulkan/vulkan.h>
 
@@ -16,21 +17,35 @@ class RenderDevice;
 class TextRenderer {
   struct Impl;
   std::unique_ptr<Impl> impl_;
-  
+  /// Guards the glyph cache and the atlas it packs into.
+  ///
+  /// Shared for the hit path, which is almost every call: several windows
+  /// drawing already-cached text read `glyphMap_` and conflict over nothing.
+  /// Exclusive for a miss, which rasterizes, packs and uploads.
+  ///
+  /// The upload stays inside the exclusive section deliberately. Releasing
+  /// before it would publish a glyph whose UVs name atlas pixels the GPU has
+  /// not received yet, and another window reading the map in that window draws
+  /// garbage. A miss is rare; a wrong frame is not worth the microseconds.
+  mutable std::shared_mutex mutex_;
+
 public:
   /// Does not load a font — call loadFont() after construction once the
   /// absolute path under assetsRoot is known (Application ctor runs before
   /// cwd/assetsRoot is set).
   explicit TextRenderer(RenderDevice& device);
   ~TextRenderer();
-  
+
   // Non-copyable
   TextRenderer(const TextRenderer&) = delete;
   TextRenderer& operator=(const TextRenderer&) = delete;
-  
-  // Moveable
-  TextRenderer(TextRenderer&& other) noexcept;
-  TextRenderer& operator=(TextRenderer&& other) noexcept;
+
+  // Not moveable either. `RenderDevice` owns the one instance through a
+  // `unique_ptr` and never moves it, and a move could not be made safe: it
+  // leaves `impl_` null while every other method dereferences it, so locking
+  // `other.mutex_` inside one only advertises a guarantee it cannot keep.
+  TextRenderer(TextRenderer&&) = delete;
+  TextRenderer& operator=(TextRenderer&&) = delete;
 
   /// Atlas rect + placement for one glyph, rasterizing and packing it on
   /// first use. This is all QuadRenderer needs to draw a glyph; TextRenderer
@@ -65,7 +80,4 @@ public:
   /// Load FreeType face from an absolute (or process-cwd-relative) path.
   canvas::VoidResult loadFont(const std::string& fontPath, int fontSize);
   void cleanUp();
-  
-  // Utilities
 };
-

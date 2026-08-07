@@ -25,10 +25,14 @@
 #include "util/types.hpp"
 
 class RenderDevice;
+class RenderWindow;
 
 class BlurPass {
  public:
   explicit BlurPass(RenderDevice &device) : device_{device} {}
+
+  /// The window these targets are sized to. See `QuadRenderer::setOwner`.
+  void setOwner(RenderWindow *owner) { owner_ = owner; }
   ~BlurPass() { cleanUp(); }
 
   BlurPass(const BlurPass &) = delete;
@@ -113,6 +117,7 @@ class BlurPass {
   Sub subFor(float radius) const;
 
   RenderDevice &device_;
+  RenderWindow *owner_ = nullptr;
 
   VkImage       imageA_ = VK_NULL_HANDLE;
   VmaAllocation allocA_ = VK_NULL_HANDLE;

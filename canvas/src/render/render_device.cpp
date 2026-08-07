@@ -336,7 +336,9 @@ void RenderDevice::createLogicalDevice()
     throw std::runtime_error("No suitable queue was found");
   }
 
-  std::vector<float>      queuePriorities = {1.0f};
+  const uint32_t queueCount = std::max(1u, properties[
+    graphicsAndPresentationQueueFamilyIdx_].queueCount);
+  std::vector<float> queuePriorities(queueCount, 1.0f);
   VkDeviceQueueCreateInfo queueCreateInfo {
     .sType            = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
     .queueFamilyIndex = graphicsAndPresentationQueueFamilyIdx_,
@@ -394,8 +396,22 @@ void RenderDevice::createLogicalDevice()
 
   vkGetDeviceQueue(
     device_, graphicsAndPresentationQueueFamilyIdx_, 0, &graphicsQueue_);
+  graphicsQueues_.reserve(queueCount);
+  for (uint32_t i = 0; i < queueCount; ++i) {
+    auto slot = std::make_unique<QueueSlot>();
+    vkGetDeviceQueue(device_, graphicsAndPresentationQueueFamilyIdx_, i,
+                     &slot->queue);
+    graphicsQueues_.push_back(std::move(slot));
+  }
 
   createAllocator();
+}
+
+RenderDevice::QueueLease RenderDevice::leaseGraphicsQueue()
+{
+  assert(!graphicsQueues_.empty());
+  QueueSlot &slot = *graphicsQueues_[nextQueue_.fetch_add(1) % graphicsQueues_.size()];
+  return {slot.queue, &slot.mutex};
 }
 
 void RenderDevice::createAllocator()
@@ -661,11 +677,12 @@ void RenderDevice::createImage(
 void RenderDevice::destroyImageDeferred(VkImage &image, VmaAllocation &allocation,
                                   VkImageView &view)
 {
+  std::lock_guard lock(sharedStateMutex_);
   if (image == VK_NULL_HANDLE && view == VK_NULL_HANDLE) return;
   // The index the *next* submission will take. Every submission from here on
   // is recorded after these handles were nulled, so none of them can name the
   // resource; only submissions already claimed might.
-  trash_.push_back({image, allocation, view, nextSubmission_});
+  trash_.push_back({image, allocation, view, nextSubmission_.load()});
   image      = VK_NULL_HANDLE;
   allocation = VK_NULL_HANDLE;
   view       = VK_NULL_HANDLE;
@@ -673,6 +690,11 @@ void RenderDevice::destroyImageDeferred(VkImage &image, VmaAllocation &allocatio
 
 void RenderDevice::collectGarbage()
 {
+  // Exclusive: `oldestUnretiredSubmission()` below calls `vkGetFenceStatus` on
+  // every window's fences, and a window submitting on its own thread holds
+  // those exclusively. This is the call the validation layer catches first.
+  std::unique_lock frameLock(frameMutex_);
+  std::lock_guard lock(sharedStateMutex_);
   if (trash_.empty()) return;
 
   // The oldest submission still running anywhere. A resource queued before
@@ -806,154 +828,6 @@ bool RenderDevice::hasStencilComponent(VkFormat format)
   return format == VK_FORMAT_D32_SFLOAT_S8_UINT || format == VK_FORMAT_D24_UNORM_S8_UINT;
 }
 
-void RenderDevice::createShadowResources()
-{
-  VkFormat depthFormat = findDepthFormat();
-
-  // Create shadow map image (depth texture)
-  createImage(shadowMapSize_,
-              shadowMapSize_,
-              1,
-              VK_SAMPLE_COUNT_1_BIT, // No MSAA for shadow maps
-              depthFormat,
-              VK_IMAGE_TILING_OPTIMAL,
-              VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
-              VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
-              shadowImage_,
-              shadowImageAlloc_);
-
-  // Create shadow map image view
-  shadowImageView_ = createImageView(shadowImage_, depthFormat, VK_IMAGE_ASPECT_DEPTH_BIT, 1);
-
-  // Create shadow map sampler
-  VkSamplerCreateInfo samplerInfo {
-    .sType                   = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO,
-    .magFilter               = VK_FILTER_LINEAR,
-    .minFilter               = VK_FILTER_LINEAR,
-    .mipmapMode              = VK_SAMPLER_MIPMAP_MODE_LINEAR,
-    .addressModeU            = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER,
-    .addressModeV            = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER,
-    .addressModeW            = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER,
-    .mipLodBias              = 0.0f,
-    .anisotropyEnable        = VK_FALSE,
-    .maxAnisotropy           = 1.0f,
-    .compareEnable           = VK_TRUE, // Enable depth comparison for PCF
-    .compareOp               = VK_COMPARE_OP_LESS_OR_EQUAL,
-    .minLod                  = 0.0f,
-    .maxLod                  = 1.0f,
-    .borderColor             = VK_BORDER_COLOR_FLOAT_OPAQUE_WHITE, // Outside shadow map = lit
-    .unnormalizedCoordinates = VK_FALSE,
-  };
-
-  VR(vkCreateSampler(device_, &samplerInfo, nullptr, &shadowSampler_),
-     "failed to create shadow sampler!");
-
-  // Don't transition initially - let the render pass handle the transition
-  // The shadow render pass will transition from UNDEFINED to SHADER_READ_ONLY_OPTIMAL
-}
-
-void RenderDevice::createShadowRenderPass()
-{
-  VkAttachmentDescription depthAttachment {
-    .format         = findDepthFormat(),
-    .samples        = VK_SAMPLE_COUNT_1_BIT,
-    .loadOp         = VK_ATTACHMENT_LOAD_OP_CLEAR,
-    .storeOp        = VK_ATTACHMENT_STORE_OP_STORE,
-    .stencilLoadOp  = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
-    .stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
-    .initialLayout  = VK_IMAGE_LAYOUT_UNDEFINED,
-    .finalLayout    = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-  };
-
-  VkAttachmentReference depthAttachmentRef {
-    .attachment = 0,
-    .layout     = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
-  };
-
-  VkSubpassDescription subpass {
-    .pipelineBindPoint       = VK_PIPELINE_BIND_POINT_GRAPHICS,
-    .colorAttachmentCount    = 0, // No color attachments for shadow pass
-    .pColorAttachments       = nullptr,
-    .pDepthStencilAttachment = &depthAttachmentRef,
-  };
-
-  // Subpass dependency for layout transitions
-  VkSubpassDependency dependency {
-    .srcSubpass    = VK_SUBPASS_EXTERNAL,
-    .dstSubpass    = 0,
-    .srcStageMask  = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
-    .dstStageMask  = VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT,
-    .srcAccessMask = VK_ACCESS_SHADER_READ_BIT,
-    .dstAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
-  };
-
-  VkRenderPassCreateInfo renderPassInfo {
-    .sType           = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO,
-    .attachmentCount = 1,
-    .pAttachments    = &depthAttachment,
-    .subpassCount    = 1,
-    .pSubpasses      = &subpass,
-    .dependencyCount = 1,
-    .pDependencies   = &dependency,
-  };
-
-  VR(vkCreateRenderPass(device_, &renderPassInfo, nullptr, &shadowRenderPass_),
-     "failed to create shadow render pass!");
-}
-
-void RenderDevice::createShadowFramebuffer()
-{
-  VkFramebufferCreateInfo framebufferInfo {
-    .sType           = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO,
-    .renderPass      = shadowRenderPass_,
-    .attachmentCount = 1,
-    .pAttachments    = &shadowImageView_,
-    .width           = shadowMapSize_,
-    .height          = shadowMapSize_,
-    .layers          = 1,
-  };
-
-  VR(vkCreateFramebuffer(device_, &framebufferInfo, nullptr, &shadowFramebuffer_),
-     "failed to create shadow framebuffer!");
-}
-
-void RenderDevice::beginShadowPass(VkCommandBuffer commandBuffer)
-{
-  VkClearValue clearDepth {};
-  clearDepth.depthStencil = {1.0f, 0};
-
-  VkRenderPassBeginInfo renderPassInfo {
-    .sType           = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
-    .renderPass      = shadowRenderPass_,
-    .framebuffer     = shadowFramebuffer_,
-    .renderArea      = {.offset = {0, 0}, .extent = {shadowMapSize_, shadowMapSize_}},
-    .clearValueCount = 1,
-    .pClearValues    = &clearDepth,
-  };
-
-  vkCmdBeginRenderPass(
-    commandBuffer, &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
-
-  // Set viewport for shadow map
-  VkViewport viewport {
-    .x        = 0.0f,
-    .y        = 0.0f,
-    .width    = static_cast<float>(shadowMapSize_),
-    .height   = static_cast<float>(shadowMapSize_),
-    .minDepth = 0.0f,
-    .maxDepth = 1.0f,
-  };
-
-  vkCmdSetViewport(commandBuffer, 0, 1, &viewport);
-
-  VkRect2D scissor {
-    .offset = {0, 0},
-    .extent = {shadowMapSize_, shadowMapSize_},
-  };
-
-  vkCmdSetScissor(commandBuffer, 0, 1, &scissor);
-}
-
 void RenderDevice::createRenderPass()
 {
   auto makePass = [&](bool clear, VkRenderPass *out) {
@@ -1079,6 +953,20 @@ VkCommandBuffer RenderDevice::beginSingleTimeCommands()
   assert(device_ != VK_NULL_HANDLE && "device not initialized");
   assert(commandPool_ != VK_NULL_HANDLE && "command pool not initialized");
 
+  // Released by the matching `endSingleTimeCommands`, so the allocate, the
+  // recording and the free are one critical section on `commandPool_`. See
+  // `singleTimeMutex_`. Pairs must not nest — none do; every caller is a
+  // straight-line begin..end.
+  //
+  // Locked bare rather than through a `unique_lock` member. A member would be
+  // shared mutable state between the two threads this exists to separate:
+  // `unique_lock::unlock()` releases the mutex *before* clearing its own
+  // ownership flag, so the next thread in acquires and assigns to the same
+  // member while the leaving thread is still writing it. The losing write
+  // clears ownership of a held mutex and nothing ever unlocks it again — the
+  // renderer stops answering RPCs and every client times out.
+  singleTimeMutex_.lock();
+
   VkCommandBufferAllocateInfo allocInfo {
     .sType              = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
     .commandPool        = commandPool_,
@@ -1110,12 +998,19 @@ void RenderDevice::endSingleTimeCommands(
     .pCommandBuffers    = &commandBuffer,
   };
 
-  VR(vkQueueSubmit(graphicsQueue_, 1, &submitInfo, VK_NULL_HANDLE),
-     "failed to submit single time command buffer!");
+  {
+    // Queue zero may also be leased to a window. Host access to one VkQueue
+    // requires external synchronization even when other queues run in parallel.
+    std::lock_guard queueLock(graphicsQueues_.front()->mutex);
+    VR(vkQueueSubmit(graphicsQueue_, 1, &submitInfo, VK_NULL_HANDLE),
+       "failed to submit single time command buffer!");
 
-  // Wait until the command buffer has finished executing
-  vkQueueWaitIdle(graphicsQueue_);
+    // Wait until the command buffer has finished executing
+    vkQueueWaitIdle(graphicsQueue_);
+  }
   vkFreeCommandBuffers(device_, commandPool_, 1, &commandBuffer);
+  // Balances the acquire in `beginSingleTimeCommands`.
+  singleTimeMutex_.unlock();
 }
 
 void RenderDevice::transitionImageLayout(
@@ -1326,24 +1221,6 @@ void RenderDevice::cleanUp()
     commandPool_ = VK_NULL_HANDLE;
   }
 
-  // Shadow mapping
-  if (shadowSampler_ != VK_NULL_HANDLE) {
-    vkDestroySampler(device_, shadowSampler_, nullptr);
-    shadowSampler_ = VK_NULL_HANDLE;
-  }
-  if (shadowFramebuffer_ != VK_NULL_HANDLE) {
-    vkDestroyFramebuffer(device_, shadowFramebuffer_, nullptr);
-    shadowFramebuffer_ = VK_NULL_HANDLE;
-  }
-  if (shadowImageView_ != VK_NULL_HANDLE) {
-    vkDestroyImageView(device_, shadowImageView_, nullptr);
-    shadowImageView_ = VK_NULL_HANDLE;
-  }
-  destroyImage(shadowImage_, shadowImageAlloc_);
-  if (shadowRenderPass_ != VK_NULL_HANDLE) {
-    vkDestroyRenderPass(device_, shadowRenderPass_, nullptr);
-    shadowRenderPass_ = VK_NULL_HANDLE;
-  }
 
   if (renderPass_ != VK_NULL_HANDLE) {
     vkDestroyRenderPass(device_, renderPass_, nullptr);
@@ -1603,7 +1480,7 @@ void RenderDevice::initImGui()
 #endif
 
 /// Brings up everything shared: instance, GPU, logical device, allocator,
-/// command pool, render passes, shadow map.
+/// command pool, render passes.
 ///
 /// Note what is *not* here any more — no swapchain, no attachments, no
 /// framebuffer, no per-frame sync. Those belong to a `RenderWindow`, and this
@@ -1660,9 +1537,6 @@ void RenderDevice::init(const char *applicationName, bool presentCapable)
   createCommandPool();
   createRenderPass();
   text_ = std::make_unique<TextRenderer>(*this);
-  createShadowResources();
-  createShadowRenderPass();
-  createShadowFramebuffer();
 #ifdef INCLUDE_IMGUI
   initImGui();
 #endif
@@ -1676,6 +1550,11 @@ TextRenderer &RenderDevice::textRenderer()
 
 void RenderDevice::syncGlyphAtlas()
 {
+  // Exclusive, and for a stronger reason than the fences: growing frees the
+  // old atlas image outright and rewrites every window's descriptor set. A
+  // window recording concurrently is naming both.
+  std::unique_lock frameLock(frameMutex_);
+  std::lock_guard lock(sharedStateMutex_);
   if (!text_) return;
   // Replacing the image is only safe once nothing can still sample the old
   // one — and "nothing" spans every window, not just the one about to draw.

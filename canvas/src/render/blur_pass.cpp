@@ -9,6 +9,7 @@
 #include "render/blur_pass.hpp"
 #include "render/shaders.hpp"
 #include "render/render_device.hpp"
+#include "render/render_window.hpp"
 
 namespace {
 
@@ -341,7 +342,10 @@ void BlurPass::ensureSize(uint32_t width, uint32_t height, float finestRadius)
       height == fullHeight_ && imageA_ != VK_NULL_HANDLE) {
     return;
   }
-  device_.waitForAllFramesInFlight();
+  // This window's frames only — these targets belong to the owner, and this
+  // runs mid-frame where another window's fences are not ours to read. See
+  // `QuadRenderer::ensureBufferCapacity`.
+  owner_->waitForAllFrames();
   const bool extentChanged = width != fullWidth_ || height != fullHeight_;
   fullWidth_ = width;
   fullHeight_ = height;

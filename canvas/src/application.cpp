@@ -20,6 +20,7 @@
 
 #include "render/draw_command.hpp"
 
+#include <atomic>
 #include <deque>
 #include <mutex>
 
@@ -59,6 +60,12 @@ struct Application::Impl
   RenderDevice device;
   bool deviceUp = false;
 
+  /// True between `beginFrameGroup` and `endFrameGroup`. Written on the main
+  /// thread while nothing is drawing and read by every render worker, so the
+  /// release/acquire pair is what publishes the prepare step's effects — the
+  /// resized swapchain, the regrown atlas — to the threads about to draw.
+  std::atomic<bool> frameGroup{false};
+
   /// Client-mode font numbering, standing in for the atlas the device would
   /// own. Same contract as `TextRenderer::registerFont`: an index, stable per
   /// (path, pixelSize), -1 if the file will not load.
@@ -78,8 +85,6 @@ struct Application::Impl
   /// Ids are never reused, so a stale handle from a closed window fails to
   /// resolve instead of quietly addressing whatever opened next.
   uint32_t nextWindowId = 1;
-
-  TextureHandle shadowMapTexture;
 
   // Wall-clock time of the last repaint() call, used only to compute a
   // deltaTime for the FPS counter (nullopt on the first call).
@@ -129,9 +134,6 @@ struct Application::Impl
     // No default face here — Swift owns font policy (FontStore) and calls
     // loadFont(path, size) after open so measure and draw use the same choice.
     std::cout << "Text renderer initialized (font pending from Swift).\n";
-
-    shadowMapTexture = TextureManager::getInstance().registerTexture("shadowMap",
-      device.getShadowImageView(), device.getShadowMapSize(), device.getShadowMapSize());
 
     std::cout << "Init complete.\n";
     return canvas::ok();
@@ -435,9 +437,45 @@ uint32_t Application::x11WindowId(uint32_t windowId) const {
   return w ? w->x11WindowId() : 0;
 }
 
+/// The device-wide half of a frame. See `Application::beginFrameGroup`.
+void Application::prepareFrames()
+{
+  // Resize first: growing the atlas waits on frames in flight, and a window
+  // whose swapchain is about to be rebuilt has just had its idled anyway.
+  for (auto &w : impl_->windows) w->prepare();
+  if (impl_->deviceUp) impl_->device.syncGlyphAtlas();
+}
+
+void Application::retireFrames()
+{
+  if (impl_->deviceUp) impl_->device.collectGarbage();
+}
+
+void Application::beginFrameGroup()
+{
+  impl_->frameGroup.store(true, std::memory_order_release);
+  prepareFrames();
+}
+
+void Application::endFrameGroup()
+{
+  retireFrames();
+  impl_->frameGroup.store(false, std::memory_order_release);
+}
+
 bool Application::repaint(uint32_t windowId) {
+  // Inside a group the caller has already prepared, and will retire when
+  // every window is done. Doing either here would be the exact cross-window
+  // reach the group exists to keep out of a running frame.
+  if (impl_->frameGroup.load(std::memory_order_acquire)) {
+    AppWindow *w = impl_->win(windowId);
+    return w && w->repaint();
+  }
+  prepareFrames();
   AppWindow *w = impl_->win(windowId);
-  return w && w->repaint();
+  const bool ok = w && w->repaint();
+  retireFrames();
+  return ok;
 }
 
 bool Application::attachDrawArena(const std::string &id, uint32_t windowId)

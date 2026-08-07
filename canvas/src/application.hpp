@@ -90,7 +90,37 @@ public:
 
   // Renders the current retained scene. Offscreen: to the readback target.
   // Windowed: blit to swapchain and present. Returns false on error.
+  //
+  // Outside a frame group this also runs `prepareFrames`/`retireFrames`
+  // around the draw, so a caller that renders one window at a time — which is
+  // every windowed app — needs to know none of this.
   bool repaint(uint32_t windowId = 0);
+
+  /// Brackets a set of `repaint` calls that may run concurrently, one thread
+  /// per window.
+  ///
+  /// Some of what a frame needs is not the window's but the device's: picking
+  /// up a resize, growing the shared glyph atlas, freeing images no window
+  /// still references. Each of those reaches across every window — reading
+  /// their fences, rewriting their descriptor sets, idling the device — and
+  /// none of it is safe while a window is recording. With one thread that
+  /// distinction did not exist and the work sat inside `repaint`. With a
+  /// worker per window it has to happen either side of them instead.
+  ///
+  /// ```cpp
+  /// app.beginFrameGroup();
+  /// // ... repaint(id) on N threads ...
+  /// app.endFrameGroup();
+  /// ```
+  ///
+  /// Both are main-thread calls, and neither may run while a repaint is in
+  /// flight — that is the contract the group exists to state.
+  void beginFrameGroup();
+  void endFrameGroup();
+
+  /// The two halves of a frame group, also run around a solo `repaint`.
+  void prepareFrames();
+  void retireFrames();
 
   /// Drives this window from a shared-memory draw arena another process
   /// writes, instead of from a draw list submitted in-process.

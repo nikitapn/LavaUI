@@ -3,6 +3,9 @@
 #include <iostream>
 #include <stdexcept>
 #include <memory>
+#include <atomic>
+#include <mutex>
+#include <shared_mutex>
 #include <vector>
 
 #include <boost/stacktrace.hpp>
@@ -85,9 +88,17 @@ class RenderDevice
   // GPUOpen VMA — all createBuffer/createImage go through this.
   // Allocations live next to their VkBuffer/VkImage at each call site.
   VmaAllocator allocator_ = VK_NULL_HANDLE;
-  // Main graphics queue (also used for present when windowed)
+  // Graphics/present queues exposed by the selected family. A RenderWindow
+  // leases one for its lifetime, allowing different windows to submit and
+  // present concurrently without violating VkQueue external synchronization.
   u32     graphicsAndPresentationQueueFamilyIdx_ = -1;
   VkQueue graphicsQueue_ = VK_NULL_HANDLE;
+  struct QueueSlot {
+    VkQueue queue = VK_NULL_HANDLE;
+    std::mutex mutex;
+  };
+  std::vector<std::unique_ptr<QueueSlot>> graphicsQueues_;
+  std::atomic<uint32_t> nextQueue_{0};
 
   /// Whether the device was brought up able to present. Drives the instance
   /// and device extension sets, and whether a queue family has to prove it can
@@ -111,7 +122,41 @@ class RenderDevice
   /// This is the clock deferred destruction is measured on — a frame counter
   /// cannot be, because with two windows "three frames have passed" says
   /// nothing about whether the *other* window's frame has retired.
-  uint64_t nextSubmission_ = 1;
+  std::atomic<uint64_t> nextSubmission_{1};
+  mutable std::recursive_mutex sharedStateMutex_;
+
+  /// Separates "a window drawing a frame" from "something the whole device
+  /// shares changing underneath it".
+  ///
+  /// Shared by every `RenderWindow::render`: two windows drawing at once
+  /// conflict over nothing, because their fences, command pools, descriptor
+  /// sets and buffers are all their own. Exclusive for the operations that
+  /// reach across windows — growing the glyph atlas, collecting garbage,
+  /// resizing a swapchain. Those used to be safe because "no frame in flight"
+  /// also meant "no frame being recorded"; with a worker per window it does
+  /// not, and a fence read or an atlas free lands in the middle of someone
+  /// else's recording.
+  ///
+  /// Never taken exclusively from inside a frame: `std::shared_mutex` does
+  /// not upgrade, and the deadlock is immediate. That is why `syncGlyphAtlas`,
+  /// `collectGarbage` and `resize` moved out of `render()` and into the
+  /// prepare/retire steps either side of it.
+  mutable std::shared_mutex frameMutex_;
+
+  /// Serializes the whole `beginSingleTimeCommands`..`endSingleTimeCommands`
+  /// span, not just its ends.
+  ///
+  /// `commandPool_` below is one object shared by every caller, and Vulkan
+  /// requires external synchronization of a command pool for allocate, free
+  /// *and* for recording into any buffer it owns. Locking only the allocate
+  /// would still let two threads record concurrently. Every caller here is a
+  /// rare, slow path that already blocks on `vkQueueWaitIdle`, so serializing
+  /// them costs nothing worth reclaiming.
+  ///
+  /// Locked and unlocked by hand across that pair, with no lock object between
+  /// them — see `beginSingleTimeCommands` for why a member `unique_lock` is
+  /// actively wrong here.
+  std::mutex singleTimeMutex_;
 
   /// GPU resources waiting for every submission that might reference them.
   struct PendingDestroy {
@@ -140,14 +185,6 @@ class RenderDevice
   /// so every window's attachments must agree with it.
   VkSampleCountFlagBits msaaSamples_ = VK_SAMPLE_COUNT_1_BIT;
 
-  // Shadow mapping stuff
-  VkImage       shadowImage_ = VK_NULL_HANDLE;
-  VmaAllocation shadowImageAlloc_ = VK_NULL_HANDLE;
-  VkImageView   shadowImageView_ = VK_NULL_HANDLE;
-  VkSampler      shadowSampler_ = VK_NULL_HANDLE;
-  VkRenderPass   shadowRenderPass_ = VK_NULL_HANDLE;
-  VkFramebuffer  shadowFramebuffer_ = VK_NULL_HANDLE;
-  uint32_t       shadowMapSize_ = 2048; // Shadow map resolution
 
 #ifdef INCLUDE_IMGUI
   // ImGui
@@ -203,10 +240,6 @@ class RenderDevice
   VkFormat findSupportedFormat(const std::vector<VkFormat>& candidates, VkImageTiling tiling, VkFormatFeatureFlags features);
   bool hasStencilComponent(VkFormat format);
 
-  // Shadow mapping stuff
-  void createShadowResources();
-  void createShadowRenderPass();
-  void createShadowFramebuffer();
 
   // Step 3: Create render pass, command pool
   /// Clear pass (first UI segment) + continue pass (LOAD after blur).
@@ -240,13 +273,31 @@ class RenderDevice
 
   /// Reserves the next submission index. Called by `RenderWindow::render`
   /// immediately before `vkQueueSubmit`.
-  uint64_t nextSubmission() { return nextSubmission_++; }
+  uint64_t nextSubmission() { return nextSubmission_.fetch_add(1); }
+
+  struct QueueLease {
+    VkQueue queue = VK_NULL_HANDLE;
+    std::mutex *mutex = nullptr;
+  };
+  /// Assigns queues round-robin. More windows than hardware queues safely
+  /// share a slot; its mutex supplies Vulkan's required external sync.
+  QueueLease leaseGraphicsQueue();
+
+  using FrameLock = std::shared_lock<std::shared_mutex>;
+  /// Held by a window for the whole of one frame. See `frameMutex_`.
+  [[nodiscard]] FrameLock lockForFrame() { return FrameLock(frameMutex_); }
 
   /// Block until *every* window has finished every frame it has in flight.
   /// This is the one to call before destroying or replacing anything shared —
   /// growing the glyph atlas, recreating a buffer every window samples. A
   /// single window's `waitForAllFrames()` is not enough: the other window's
   /// command buffer names the same atlas.
+  ///
+  /// Reads fences belonging to windows other threads are driving, so it is
+  /// only legal between frames, under the exclusive `frameMutex_`. Anything
+  /// resizing a resource that is merely *per-window* — a quad buffer, a blur
+  /// target — wants that window's own `waitForAllFrames()` instead, which is
+  /// both correct here and a shorter wait.
   void waitForAllFramesInFlight();
 
   /// Destroys an image once no submission that might reference it is still
@@ -265,7 +316,12 @@ class RenderDevice
                             VkImageView &view);
 
   /// Releases anything queued by `destroyImageDeferred` whose submission has
-  /// retired *in every window*. Called once per presented frame.
+  /// retired *in every window*.
+  ///
+  /// Called once per frame group, between frames — not at the end of a
+  /// window's own frame. Asking whether a submission has retired means reading
+  /// every window's fences, and a window that is submitting on another thread
+  /// owns its fence exclusively while it does.
   void collectGarbage();
 
   void cleanUp();
@@ -313,7 +369,9 @@ class RenderDevice
   VkDevice                          getDevice() { return device_; }
   VkInstance                        instance() const { return instance_; }
   VkPhysicalDevice                  physicalDevice() const { return physicalDevice_; }
-  VkQueue                           graphicsQueue() const { return graphicsQueue_; }
+  // No `graphicsQueue()` accessor on purpose. Handing out a bare VkQueue is
+  // how a submit ends up bypassing the lease's mutex, which is the bug this
+  // class exists to make unrepresentable. Take a `leaseGraphicsQueue()`.
   uint32_t graphicsQueueFamily() const
   {
     return graphicsAndPresentationQueueFamilyIdx_;
@@ -324,11 +382,6 @@ class RenderDevice
   VkCommandPool                     getCommandPool() { return commandPool_; }
   VkRenderPass                      getRenderPass() { return renderPass_; }
   VkRenderPass                      renderPassContinue() const { return renderPassContinue_; }
-  VkRenderPass                      getShadowRenderPass() { return shadowRenderPass_; }
-  VkFramebuffer                     getShadowFramebuffer() { return shadowFramebuffer_; }
-  VkImageView                       getShadowImageView() { return shadowImageView_; }
-  VkSampler                         getShadowSampler() { return shadowSampler_; }
-  uint32_t                          getShadowMapSize() { return shadowMapSize_; }
   const VkPhysicalDeviceProperties &getDeviceProperties()
   {
     return physicalDeviceProperties_;
@@ -348,15 +401,18 @@ class RenderDevice
   /// another window's submitted command buffer samples the same image. And the
   /// descriptor each window holds points at the old view, so every one of them
   /// needs rebinding or it samples freed memory.
+  ///
+  /// Both halves are also why this runs *between* frames rather than at the
+  /// top of one. Growing frees the old atlas image immediately and rewrites
+  /// every window's descriptor set; a window recording on another thread is
+  /// naming that image and binding that set. Waiting on frames in flight does
+  /// not cover it — the dangerous frame has not been submitted yet.
   void syncGlyphAtlas();
 
   /// Depth format the render passes were built with. Windows need it to make
   /// a matching attachment.
   VkFormat findDepthFormat();
 
-  /// Records the shadow pass into `commandBuffer`. Device-scope because the
-  /// shadow map is one 2048² image shared by every window.
-  void beginShadowPass(VkCommandBuffer commandBuffer);
 
 
   void createImage(uint32_t              width,

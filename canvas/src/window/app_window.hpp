@@ -74,7 +74,18 @@ class AppWindow {
   /// same reason `RenderWindow::initRenderers` is.
   void initRenderers();
 
+  /// Picks up a window-manager resize, and tells the producer about it.
+  ///
+  /// Split out of `repaint()` because it is neither safe nor legal on a render
+  /// worker: rebuilding the swapchain idles the whole device, and
+  /// `glfwGetFramebufferSize` is a main-thread call. Runs in
+  /// `Application::prepareFrames`, before any window starts drawing.
+  void prepare();
+
   /// Draws and presents whatever was last committed to the arena.
+  ///
+  /// Safe to run concurrently with other windows' `repaint()`; see
+  /// `RenderDevice::frameMutex_` for what that rests on.
   bool repaint();
 
   // ─── Draw-list arena ─────────────────────────────────────────────────────

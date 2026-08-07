@@ -35,7 +35,8 @@ private:
         uint32_t refCount = 0;
         uint32_t width = 0;
         uint32_t height = 0;
-        /// False for external views (e.g. shadow map) we do not own.
+        /// False for external views we do not own — a view created elsewhere
+        /// and registered here only so draw lists can name it.
         bool ownsImage = true;
         /// Set when the pixels live in an atlas page rather than an image of
         /// their own — then `image`/`allocation` are null and releasing means
@@ -77,7 +78,8 @@ public:
     /// True if `key` is already resident, so a caller can skip decoding.
     bool hasTexture(const std::string& key) const;
     
-    // Register external texture (like shadow map)
+    // Register a view created elsewhere. No image is allocated and none is
+    // freed on unload; this only gives an existing view an id.
     TextureHandle registerTexture(const std::string& name, VkImageView imageView, 
                                   uint32_t width = 0, uint32_t height = 0);
     

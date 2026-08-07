@@ -31,6 +31,7 @@
 #include "util/types.hpp"
 
 class RenderDevice;
+class RenderWindow;
 
 /// The same RGBA8 with its alpha multiplied by `k`.
 ///
@@ -65,6 +66,12 @@ class QuadRenderer {
   static_assert(sizeof(Vertex) == 36, "QuadVertex must stay tightly packed");
 
   explicit QuadRenderer(RenderDevice &device) : device_{device} {}
+
+  /// The window whose frame slots these buffers belong to. Set once, at
+  /// construction of the owner. Growing a buffer has to wait for that
+  /// window's frames — and only that window's, since no other one can name
+  /// them.
+  void setOwner(RenderWindow *owner) { owner_ = owner; }
 
   QuadRenderer(const QuadRenderer &)            = delete;
   QuadRenderer &operator=(const QuadRenderer &) = delete;
@@ -232,6 +239,7 @@ class QuadRenderer {
   FrameResources &activeFrame();
 
   RenderDevice &device_;
+  RenderWindow *owner_ = nullptr;
 
   vk::Handle<VkPipeline>            pipeline_;
   /// Same shaders and layout against the content-blur scene pass: one colour

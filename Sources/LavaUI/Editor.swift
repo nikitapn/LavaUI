@@ -200,6 +200,26 @@ public final class Editor: @unchecked Sendable {
         engine.renderFrame(window.raw)
     }
 
+    /// Renders several windows at once, one thread per window.
+    ///
+    /// A frame is mostly the window's own — its command pool, its fences, its
+    /// buffers — but not entirely: picking up a resize, growing the shared
+    /// glyph atlas and freeing images no window references any more all reach
+    /// across every window at once. Those run here, before and after the
+    /// group, because none of them is safe while a window is recording.
+    ///
+    /// Rendering one window at a time needs none of this — `renderFrame`
+    /// brackets itself.
+    public func renderFrames(_ windows: [WindowID]) {
+        guard !windows.isEmpty else { return }
+        engine.beginFrameGroup()
+        // Runs work on this thread too, so a single dirty window costs no hop.
+        DispatchQueue.concurrentPerform(iterations: windows.count) { index in
+            engine.renderFrame(windows[index].raw)
+        }
+        engine.endFrameGroup()
+    }
+
     // ─── Shared-memory arena ─────────────────────────────────────────────
 
     /// Drives this window from a draw arena another process writes, instead
@@ -330,13 +350,7 @@ public final class Editor: @unchecked Sendable {
     ) -> (pixels: [UInt8], width: UInt32, height: UInt32)? {
         let decoded = canvas.Engine.decodeImage(std.string(path), maxPixelSize)
         guard decoded.valid() else { return nil }
-        let n = Int(decoded.pixels.size())
-        var pixels = [UInt8]()
-        pixels.reserveCapacity(n)
-        for i in 0..<n {
-            pixels.append(decoded.pixels[i])
-        }
-        return (pixels, decoded.width, decoded.height)
+        return (Self.copyOut(decoded), decoded.width, decoded.height)
     }
 
     /// The same decode from encoded bytes already in memory, for an image that
@@ -353,13 +367,25 @@ public final class Editor: @unchecked Sendable {
             return canvas.Engine.decodeImageData(base, buf.count, maxPixelSize)
         }
         guard decoded.valid() else { return nil }
+        return (Self.copyOut(decoded), decoded.width, decoded.height)
+    }
+
+    /// Lifts a decoded buffer into a Swift array in one copy.
+    ///
+    /// Subscripting the C++ vector per element is the obvious spelling and the
+    /// wrong one: each `pixels[i]` is its own unspecialized call across the
+    /// interop boundary, so cost scales with *bytes*, not images. A 300×297
+    /// RGBA image is 356,400 of them, which measured at 2.7 s against a 2 ms
+    /// decode — enough to put the compositor's `RegisterImage` past its RPC
+    /// timeout and make every client fail to start.
+    private nonisolated static func copyOut(
+        _ decoded: canvas.DecodedImage
+    ) -> [UInt8] {
         let n = Int(decoded.pixels.size())
-        var pixels = [UInt8]()
-        pixels.reserveCapacity(n)
-        for i in 0..<n {
-            pixels.append(decoded.pixels[i])
+        guard n > 0 else { return [] }
+        return [UInt8](unsafeUninitializedCapacity: n) { buf, written in
+            written = decoded.copyTo(buf.baseAddress, n)
         }
-        return (pixels, decoded.width, decoded.height)
     }
 
     /// Uploads pre-decoded pixels. Main thread only — it touches the device.

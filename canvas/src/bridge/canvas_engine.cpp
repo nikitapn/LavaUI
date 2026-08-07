@@ -51,10 +51,19 @@ struct Engine::Impl {
         if constexpr (std::is_void_v<R>) return;
         else return R{};
       }
-      // No lock: the window host is caller-driven and single-threaded now,
-      // so there is nothing to serialise against. This lock used to be held
-      // by the render thread across a whole vsync-blocked frame, which cost
-      // every call here ~17ms median and up to 200ms.
+      // No lock, and no longer because there is only one thread — there is
+      // not. `renderFrame` runs one worker per window inside a frame group,
+      // and the control plane calls in on RPC threads besides.
+      //
+      // What makes this safe is that the lookup is read-only: the window list
+      // is built and torn down on the frame loop's thread, between groups,
+      // never while a call here is resolving. Serialisation belongs further
+      // down, next to the state that actually changes — `RenderDevice`'s frame
+      // and shared-state mutexes — not around every bridge call.
+      //
+      // A lock here used to be held by the render thread across a whole
+      // vsync-blocked frame, which cost every call ~17ms median and up to
+      // 200ms. That is what it would cost again.
       Application *a = window->app();
       if (!a) {
         if constexpr (std::is_void_v<R>) return;
@@ -189,6 +198,16 @@ bool Engine::renderFrame(uint32_t windowId)
   // Straight to the Application rather than through CanvasWindowHost: the host
   // only ever knew about one window, and a frame is per window.
   return impl_->withApp([&](Application &app) { return app.repaint(windowId); });
+}
+
+void Engine::beginFrameGroup()
+{
+  impl_->withApp([](Application &app) { app.beginFrameGroup(); });
+}
+
+void Engine::endFrameGroup()
+{
+  impl_->withApp([](Application &app) { app.endFrameGroup(); });
 }
 
 bool Engine::attachDrawArena(const std::string &id, uint32_t windowId)

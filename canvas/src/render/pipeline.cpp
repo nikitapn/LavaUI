@@ -15,7 +15,6 @@ When Vulkan detects a pipeline-render pass incompatibility during vkCmdDrawIndex
 Key takeaways:
 - Pipeline-RenderPass compatibility is crucial in Vulkan
 - Validation errors can be misleading - always check pipeline setup when you see synchronization issues
-- Shadow passes need specialized pipelines - not just different shaders
 - Color attachments, MSAA, viewport size all need to match the render pass exactly
 */
 
@@ -27,7 +26,6 @@ PipelineBuilder::PipelineBuilder()
       }
     , polygonMode_(VK_POLYGON_MODE_FILL)  // Default to filled mode
     , customRenderPass_(VK_NULL_HANDLE)   // Default to using Vulkan's main render pass
-    , isShadowPipeline_(false)            // Default to regular pipeline
 {
 }
 
@@ -89,12 +87,6 @@ PipelineBuilder& PipelineBuilder::setRenderPass(VkRenderPass renderPass)
   return *this;
 }
 
-PipelineBuilder& PipelineBuilder::setShadowPipeline(bool isShadow)
-{
-  isShadowPipeline_ = isShadow;
-  return *this;
-}
-
 Pipeline PipelineBuilder::build(
   RenderDevice& device, std::string_view debugName)
 {
@@ -112,8 +104,8 @@ Pipeline PipelineBuilder::build(
   // only has to be non-degenerate. It used to read the window's extent, which
   // is not something a pipeline can know now that a device serves several
   // windows of different sizes — and never actually mattered.
-  uint32_t pipelineWidth  = isShadowPipeline_ ? device.getShadowMapSize() : 1;
-  uint32_t pipelineHeight = pipelineWidth;
+  const uint32_t pipelineWidth  = 1;
+  const uint32_t pipelineHeight = 1;
 
   VkViewport viewport {
     .x        = 0.0f,
@@ -152,7 +144,7 @@ Pipeline PipelineBuilder::build(
 
   VkPipelineMultisampleStateCreateInfo multisampling {
     .sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO,
-    .rasterizationSamples  = isShadowPipeline_ ? VK_SAMPLE_COUNT_1_BIT : device.getMSAASamples(),
+    .rasterizationSamples  = device.getMSAASamples(),
     .sampleShadingEnable   = VK_FALSE,
     .minSampleShading      = 1.0f,      // Optional
     .pSampleMask           = nullptr,   // Optional
@@ -160,42 +152,26 @@ Pipeline PipelineBuilder::build(
     .alphaToOneEnable      = VK_FALSE,  // Optional
   };
 
-  // Shadow pipelines don't need color attachments (depth-only)
-  VkPipelineColorBlendAttachmentState colorBlendAttachment {};
-  VkPipelineColorBlendStateCreateInfo colorBlending {};
-  
-  if (!isShadowPipeline_) {
-    colorBlendAttachment = {
-      .blendEnable         = VK_TRUE,
-      .srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA,
-      .dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA,
-      .colorBlendOp        = VK_BLEND_OP_ADD,
-      .srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE,
-      .dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA,
-      .alphaBlendOp        = VK_BLEND_OP_ADD,
-      .colorWriteMask      = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
-                        VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT,
-    };
+  VkPipelineColorBlendAttachmentState colorBlendAttachment {
+    .blendEnable         = VK_TRUE,
+    .srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA,
+    .dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA,
+    .colorBlendOp        = VK_BLEND_OP_ADD,
+    .srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE,
+    .dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA,
+    .alphaBlendOp        = VK_BLEND_OP_ADD,
+    .colorWriteMask      = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
+                      VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT,
+  };
 
-    colorBlending = {
-      .sType           = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO,
-      .logicOpEnable   = VK_FALSE,
-      .logicOp         = VK_LOGIC_OP_COPY,
-      .attachmentCount = 1,
-      .pAttachments    = &colorBlendAttachment,
-      .blendConstants  = {.0f, .0f, .0f, .0f},
-    };
-  } else {
-    // Shadow pipeline: no color attachments
-    colorBlending = {
-      .sType           = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO,
-      .logicOpEnable   = VK_FALSE,
-      .logicOp         = VK_LOGIC_OP_COPY,
-      .attachmentCount = 0,  // No color attachments for shadow pass
-      .pAttachments    = nullptr,
-      .blendConstants  = {.0f, .0f, .0f, .0f},
-    };
-  }
+  VkPipelineColorBlendStateCreateInfo colorBlending {
+    .sType           = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO,
+    .logicOpEnable   = VK_FALSE,
+    .logicOp         = VK_LOGIC_OP_COPY,
+    .attachmentCount = 1,
+    .pAttachments    = &colorBlendAttachment,
+    .blendConstants  = {.0f, .0f, .0f, .0f},
+  };
 
   VkPipelineDepthStencilStateCreateInfo depthStencil {
     .sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO,

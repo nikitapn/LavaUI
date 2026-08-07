@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <functional>
+#include <mutex>
 #include <unordered_map>
 #include <vector>
 
@@ -36,9 +37,9 @@ class RenderDevice;
 /// or an atlas page is only dead once no window still has a frame that could
 /// name it. See `RenderDevice::destroyImageDeferred`.
 ///
-/// Not thread-safe, and deliberately so. Command pool, queue submission and
-/// present all require external synchronization, and every window is driven
-/// from the one thread that owns the event loop.
+/// A window is driven by one worker at a time. Different windows are safe to
+/// render concurrently: each owns its command pool and leases a device queue;
+/// shared cache/lifetime operations are synchronized by RenderDevice.
 class RenderWindow {
  public:
   /// CPU/GPU overlap: while the GPU draws slot N, the CPU builds slot N+1.
@@ -371,13 +372,12 @@ class RenderWindow {
     float radius = 8.f;
   };
 
-  /// Records shadow + caller-owned main content, then presents (windowed) or
-  /// copies out (offscreen).
+  /// Records caller-owned main content, then presents (windowed) or copies
+  /// out (offscreen).
   ///
   /// `mainCallback` owns begin/end of the main UI render pass(es) so it can
   /// interrupt for backdrop blur (end → capture/blur → begin LOAD → continue).
-  void submitFrame(std::function<void(VkCommandBuffer)>      shadowCallback,
-                   std::function<void(VkCommandBuffer, u32)> mainCallback);
+  void submitFrame(std::function<void(VkCommandBuffer, u32)> mainCallback);
 
   void beginMainRenderPass(VkCommandBuffer commandBuffer, bool clear);
   void endMainRenderPass(VkCommandBuffer commandBuffer);
@@ -457,6 +457,13 @@ class RenderWindow {
   uint64_t slotSubmission_[kMaxFramesInFlight]{};
   uint32_t currentFrame_ = 0;
   uint64_t frameCounter_ = 0;
+
+  /// Submission resources belong to this window, hence to its render worker.
+  /// Command pools are externally synchronized Vulkan objects and cannot be
+  /// shared by concurrently recording windows.
+  VkQueue       queue_ = VK_NULL_HANDLE;
+  std::mutex   *queueMutex_ = nullptr;
+  VkCommandPool commandPool_ = VK_NULL_HANDLE;
 
   /// Scene render target. Sized to the window, format fixed by the device.
   VkExtent2D extent_{};

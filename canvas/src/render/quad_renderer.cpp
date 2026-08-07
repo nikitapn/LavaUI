@@ -7,6 +7,7 @@
 #include "render/quad_renderer.hpp"
 #include "render/shaders.hpp"
 #include "render/render_device.hpp"
+#include "render/render_window.hpp"
 
 namespace {
 
@@ -507,7 +508,12 @@ void QuadRenderer::ensureBufferCapacity(size_t vertexCount, size_t indexCount) {
   // later, and any in-flight use of the *other* slot is unrelated — but this
   // slot was waited on before begin(). Still wait all if we ever grow shared
   // pipeline resources; for this buffer only this slot is rewritten.
-  device_.waitForAllFramesInFlight();
+  //
+  // This window's frames, not the device's. These buffers are the owner's
+  // alone, so no other window's submission can name them — and this runs
+  // mid-frame, where reading another window's fences would collide with the
+  // thread driving it.
+  owner_->waitForAllFrames();
 
   size_t newCapacity = fr.capacity == 0 ? kInitialVertexCapacity : fr.capacity;
   while (newCapacity < vertexCount) {

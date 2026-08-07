@@ -8,6 +8,7 @@
 #include "../render/draw_command.hpp"
 
 #include <cstdint>
+#include <cstring>
 #include <memory>
 #include <string>
 #include <vector>
@@ -42,6 +43,23 @@ struct DecodedImage {
   {
     return width > 0 && height > 0
            && pixels.size() == static_cast<size_t>(width) * height * 4;
+  }
+
+  /// Copies the whole buffer out in one memcpy. Returns bytes written.
+  ///
+  /// Swift can subscript `pixels` directly, but every element crosses the
+  /// interop boundary as its own unspecialized call — a 300x297 RGBA image is
+  /// 356,400 of them, which measured at 2.7s against a 2ms decode and put the
+  /// compositor's `RegisterImage` past its RPC timeout, so no client could
+  /// start. This moves the same bytes as one block.
+  ///
+  /// Written this way round because C++ interop imports pointer *parameters*
+  /// but not pointer *returns*; the caller owns the destination.
+  std::size_t copyTo(std::uint8_t *dst, std::size_t capacity) const
+  {
+    const std::size_t n = pixels.size() < capacity ? pixels.size() : capacity;
+    if (dst != nullptr && n > 0) std::memcpy(dst, pixels.data(), n);
+    return n;
   }
 };
 
@@ -154,6 +172,12 @@ class Engine {
 
   /// Render and present one frame.
   bool renderFrame(uint32_t windowId = 0);
+
+  /// Brackets `renderFrame` calls that run concurrently, one thread per
+  /// window. See `Application::beginFrameGroup` for what this buys and what
+  /// it requires. A caller rendering one window at a time needs neither.
+  void beginFrameGroup();
+  void endFrameGroup();
 
   /// Renders this window from a shared-memory draw arena written by another
   /// process (`canvas::ipc::DrawArena`), instead of from a draw list

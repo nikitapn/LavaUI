@@ -194,8 +194,13 @@ func runHost() {
         // Only what changed. This is what naming the surface in `Present`
         // buys: with ten clients on screen, one publishing a frame costs one
         // repaint rather than ten.
-        for window in SurfaceRegistry.takeDirty() {
-            editor.renderFrame(window: window)
+        //
+        // One thread per dirty window: with ten clients publishing at once,
+        // the ten frames are recorded and submitted alongside each other
+        // rather than one after the last has presented.
+        let dirtyWindows = Array(SurfaceRegistry.takeDirty())
+        editor.renderFrames(dirtyWindows)
+        for window in dirtyWindows {
             // Shown after its first frame, never before — see `Surface.shown`.
             if let surface = SurfaceRegistry.surface(window: window), !surface.shown {
                 surface.shown = true

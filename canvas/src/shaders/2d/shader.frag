@@ -16,11 +16,6 @@ void main() {
     if (pushConstants.useTexture == 1) {
         vec4 texColor = texture(texSampler, texCoord);
         outColor = texColor;
-        // Shadow map visualization (for debugging)
-        // vec4 texColor = texture(texSampler, texCoord);
-        // float depth = texColor.r;
-        // float enhanced = pow(depth, 0.5); // Gamma correction for better visibility
-        // outColor = vec4(enhanced, enhanced, enhanced, 1.0);
     } else {
         // Use solid color from push constants
         outColor = vec4(pushConstants.solidColor, 1.0);

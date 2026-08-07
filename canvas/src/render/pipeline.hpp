@@ -25,7 +25,6 @@ class PipelineBuilder
   VkPipelineLayoutCreateInfo             pipelineLayoutInfo_;
   VkPolygonMode                          polygonMode_;
   VkRenderPass                           customRenderPass_;
-  bool                                   isShadowPipeline_;
 
  public:
   PipelineBuilder();
@@ -47,7 +46,6 @@ class PipelineBuilder
 
   PipelineBuilder& setRenderPass(VkRenderPass renderPass);
 
-  PipelineBuilder& setShadowPipeline(bool isShadow = true);
 
   Pipeline build(RenderDevice& device, std::string_view debugName = "unnamed_pipeline");
 };

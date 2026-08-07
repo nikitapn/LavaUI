@@ -30,6 +30,13 @@ RenderWindow::RenderWindow(RenderDevice &device, GLFWwindow *window)
   , windowed_{true}
   , window_{window}
 {
+  auto lease = dev_.leaseGraphicsQueue();
+  queue_ = lease.queue;
+  queueMutex_ = lease.mutex;
+  // Both grow buffers mid-frame, and both must wait on this window's frames
+  // rather than the device's — see `QuadRenderer::ensureBufferCapacity`.
+  quads_.setOwner(this);
+  blur_.setOwner(this);
   if (!window_) throw std::runtime_error("RenderWindow: null GLFW window");
 
   createWindowSurface();
@@ -68,6 +75,13 @@ RenderWindow::RenderWindow(RenderDevice &device, uint32_t width, uint32_t height
   , blur_{device}
   , windowed_{false}
 {
+  auto lease = dev_.leaseGraphicsQueue();
+  queue_ = lease.queue;
+  queueMutex_ = lease.mutex;
+  // Both grow buffers mid-frame, and both must wait on this window's frames
+  // rather than the device's — see `QuadRenderer::ensureBufferCapacity`.
+  quads_.setOwner(this);
+  blur_.setOwner(this);
   extent_ = {width < 1 ? 1 : width, height < 1 ? 1 : height};
 
   createSizedResources();
@@ -122,9 +136,13 @@ RenderWindow::~RenderWindow()
     }
   }
   if (commandBuffers_[0] != VK_NULL_HANDLE) {
-    vkFreeCommandBuffers(dev, dev_.getCommandPool(), kMaxFramesInFlight,
+    vkFreeCommandBuffers(dev, commandPool_, kMaxFramesInFlight,
                          commandBuffers_);
     for (auto &cb : commandBuffers_) cb = VK_NULL_HANDLE;
+  }
+  if (commandPool_ != VK_NULL_HANDLE) {
+    vkDestroyCommandPool(dev, commandPool_, nullptr);
+    commandPool_ = VK_NULL_HANDLE;
   }
 
   destroySizedResources();
@@ -503,9 +521,16 @@ void RenderWindow::createFramebuffer()
 
 void RenderWindow::createCommandBuffer()
 {
+  VkCommandPoolCreateInfo poolInfo {
+    .sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
+    .flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT,
+    .queueFamilyIndex = dev_.graphicsQueueFamily(),
+  };
+  VR(vkCreateCommandPool(dev_.getDevice(), &poolInfo, nullptr, &commandPool_),
+     "failed to create window command pool!");
   VkCommandBufferAllocateInfo allocInfo {
     .sType              = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
-    .commandPool        = dev_.getCommandPool(),
+    .commandPool        = commandPool_,
     .level              = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
     .commandBufferCount = kMaxFramesInFlight,
   };
@@ -642,7 +667,6 @@ uint64_t RenderWindow::oldestUnretiredSubmission() const
 }
 
 void RenderWindow::submitFrame(
-  std::function<void(VkCommandBuffer)> shadowCallback,
   std::function<void(VkCommandBuffer, u32)> mainCallback)
 {
   // Wait only for *this* slot. The other slot may still be on the GPU — that
@@ -685,16 +709,11 @@ void RenderWindow::submitFrame(
   VR(vkBeginCommandBuffer(cmd, &beginInfo),
      "failed to begin recording command buffer!");
 
-  // 1. Shadow Pass
-  dev_.beginShadowPass(cmd);
-  shadowCallback(cmd);
-  vkCmdEndRenderPass(cmd);
-
-  // 2. Main UI — callback owns begin/end of main pass(es) for blur interrupts.
+  // Main UI — callback owns begin/end of main pass(es) for blur interrupts.
   mainCallback(cmd, imageIndex);
 
   if (windowed_) {
-    // 3a. Blit offscreen resolve → swapchain image, then present.
+    // Blit offscreen resolve → swapchain image, then present.
     VkImage swapImage = swapchainImages_[swapImageIndex];
 
     VkImageMemoryBarrier toDst {
@@ -747,7 +766,7 @@ void RenderWindow::submitFrame(
       VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
       0, 0, nullptr, 0, nullptr, 1, &toPresent);
   } else {
-    // 3b. Offscreen: copy resolve → staging for readPixels().
+    // Offscreen: copy resolve → staging for readPixels().
     VkBufferImageCopy copyRegion {
       .bufferOffset      = 0,
       .bufferRowLength    = 0,
@@ -792,15 +811,15 @@ void RenderWindow::submitFrame(
     submitInfo.pSignalSemaphores = &renderFinished;
   }
 
-  // Claimed before the submit and paired with this slot's fence, so
-  // `oldestUnretiredSubmission()` can tell the device exactly how far this
-  // window's GPU work has got.
-  slotSubmission_[frame] = dev_.nextSubmission();
+  // Index already claimed at the top of `render()`, before a single command
+  // was recorded. See there for why the ordering matters.
 
-  VR(vkQueueSubmit(dev_.graphicsQueue(), 1, &submitInfo, fence),
-     "failed to submit draw command buffer!");
+  {
+    std::lock_guard queueLock(*queueMutex_);
+    VR(vkQueueSubmit(queue_, 1, &submitInfo, fence),
+       "failed to submit draw command buffer!");
 
-  if (windowed_) {
+    if (windowed_) {
     VkPresentInfoKHR presentInfo {
       .sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
       .waitSemaphoreCount = 1,
@@ -809,20 +828,29 @@ void RenderWindow::submitFrame(
       .pSwapchains = &swapchain_,
       .pImageIndices = &swapImageIndex,
     };
-    VkResult pr = vkQueuePresentKHR(dev_.graphicsQueue(), &presentInfo);
+    VkResult pr = vkQueuePresentKHR(queue_, &presentInfo);
     if (pr != VK_SUCCESS && pr != VK_SUBOPTIMAL_KHR &&
         pr != VK_ERROR_OUT_OF_DATE_KHR) {
       VR(pr, "vkQueuePresentKHR failed");
     }
-  } else {
-    // Offscreen readback needs the staging copy finished.
-    vkDeviceWaitIdle(dev_.getDevice());
+    }
+  }
+  if (!windowed_) {
+    // Offscreen readback needs the staging copy finished — this window's copy,
+    // in this window's command buffer, signalling this window's fence. A
+    // `vkDeviceWaitIdle` here would be both broader than needed and illegal:
+    // it requires external synchronization of *every* queue on the device, and
+    // a sibling window is submitting on another one right now.
+    waitForAllFrames();
   }
 
   // Next record/submit uses the other slot (CPU can overlap with this GPU work).
   currentFrame_ = (currentFrame_ + 1) % kMaxFramesInFlight;
   ++frameCounter_;
-  dev_.collectGarbage();
+
+  // Garbage collection used to happen here. It reads every window's fences,
+  // which is a question only answerable between frames — see
+  // `Application::retireFrames`.
 
   // Presented content changed — any prior capture cache is stale.
   invalidateCaptureCache();
@@ -1904,12 +1932,30 @@ bool RenderWindow::advanceSceneAnimations(
 
 void RenderWindow::render(const canvas::DrawList &list)
 {
+  // Held for the whole frame. Shared, so other windows draw alongside this
+  // one; it excludes only the device-wide steps — atlas growth, garbage
+  // collection, resize — which now run between frames rather than inside one.
+  // See `RenderDevice::frameMutex_`.
+  auto frameLock = dev_.lockForFrame();
+
   // Wait for *this* frame slot only (2-in-flight). The other slot may still be
   // on the GPU while we fill host-visible buffers for this one.
   waitForInFlightFrame();
 
-  // The atlas is shared across windows, so growing it is the device's call.
-  dev_.syncGlyphAtlas();
+  // Claim this frame's submission index *before* recording anything, not just
+  // before the submit.
+  //
+  // `destroyImageDeferred` stamps a resource with "the index the next
+  // submission will take" and means by it: every submission from here on was
+  // recorded after these handles were nulled, so none of them can name the
+  // resource. Claiming late broke that. A frame could be half-recorded —
+  // already naming an image — and only pick up its index afterwards, landing
+  // *above* the stamp and so counting as proof the resource was already dead.
+  // `collectGarbage` then freed an image the GPU was about to read.
+  //
+  // Claimed here, a frame that began before the stamp is numbered below it and
+  // holds the resource alive; one that began after cannot name it at all.
+  slotSubmission_[currentFrame_] = dev_.nextSubmission();
 
   const auto ext = getExtent();
   const float viewW = static_cast<float>(ext.width);
@@ -1950,9 +1996,6 @@ void RenderWindow::render(const canvas::DrawList &list)
   replayDrawList(list, viewW, viewH, boundaries);
 
   submitFrame(
-    // Shadow pass kept only because submitFrame is the sole render entry
-    // point; nothing 3D draws into it any more.
-    [&](VkCommandBuffer) {},
     [&](VkCommandBuffer commandBuffer, u32 /*imageIndex*/) {
       const auto extent = getExtent();
 
