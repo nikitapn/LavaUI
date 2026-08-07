@@ -33,6 +33,8 @@ struct Counter: View {
 | `HelloWorld` | Demo app (`DemoExample`) and an FBD diagram editor | `LavaUI`, `FBDModel` |
 | `Spotify` / `SpotifyApp` | LavaSpotify UI + Connect control of spotifyd | `LavaUI`, `SpotifyCore` |
 | `SpotifyCore` | Spotify Web API, OAuth, cover download (no Vulkan) | nothing |
+| `LavaTerm` / `LavaTermApp` | Terminal emulator (PTY + ANSI + Canvas grid) | `LavaUI`, `LavaTermCore` |
+| `LavaTermCore` | VT grid + ANSI parser (headless, unit-tested) | nothing |
 | `canvas/` (package) | C++ engine (`CxxCanvas`) + Yoga (`CYoga`), built by SwiftPM | system Vulkan/GLFW/FreeType/HarfBuzz |
 
 `LavaText` and `LavaMenu` having **no dependencies at all** is deliberate:
@@ -46,7 +48,21 @@ is enforced by the build graph rather than by discipline.
 swift build                   # Swift + C++ canvas engine (SwiftPM compiles both)
 swift run HelloWorld          # demo
 swift run Spotify             # LavaSpotify (see docs/lavaspotify.md)
+swift run LavaTerm            # terminal emulator (click the grid, type)
 swift test                    # headless tests, no GPU needed
+```
+
+**LavaTerm** spawns `$SHELL` on a Linux PTY, parses a useful subset of ANSI/VT
+(SGR colours including 256/truecolour, cursor motion, erase, scroll), and paints
+the cell grid with a monospace `Canvas`. Click the surface once so it takes
+keyboard focus. Paste is Edit → Paste (Ctrl+V).
+
+```bash
+# Windowed (default)
+swift run LavaTerm
+
+# Client of the compositor (same pattern as HelloWorld; needs nprpc + renderer)
+LAVA_CLIENT=1 swift run LavaTerm
 ```
 
 Performance is checked separately, against a committed baseline — a correctness

@@ -159,6 +159,26 @@
       "target": "ArenaDemo",
       "configuration": "release",
       "preLaunchTask": "swift: Build Release ArenaDemo"
+    },
+    {
+      "type": "swift",
+      "request": "launch",
+      "args": [],
+      "cwd": "${workspaceFolder:HelloWorld}",
+      "name": "Debug LavaTerm",
+      "target": "LavaTerm",
+      "configuration": "debug",
+      "preLaunchTask": "swift: Build Debug LavaTerm"
+    },
+    {
+      "type": "swift",
+      "request": "launch",
+      "args": [],
+      "cwd": "${workspaceFolder:HelloWorld}",
+      "name": "Release LavaTerm",
+      "target": "LavaTerm",
+      "configuration": "release",
+      "preLaunchTask": "swift: Build Release LavaTerm"
     }
   ]
 }
