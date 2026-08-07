@@ -9,3 +9,9 @@ DerivedData/
 .netrc
 swift-cross-ui
 .claude
+
+# Compositor (meson). `.vm` is ~1GB of QEMU disk images built by scripts/vm-init
+# and `.cache` is meson's; both are regenerable and neither belongs in git.
+compositor/build/
+compositor/.vm/
+compositor/.cache/

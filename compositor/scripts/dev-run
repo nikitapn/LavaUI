@@ -1,0 +1,113 @@
+#!/usr/bin/env bash
+#
+# Build and run the compositor on the host, without the VM.
+#
+#   scripts/dev-run              auto: Wayland session if there is one, else headless
+#   scripts/dev-run -w           nested in a Wayland window (needs a Wayland session)
+#   scripts/dev-run -H           headless — no window, software rendering
+#   scripts/dev-run -x           nested in an X11 window — see CAVEAT
+#   scripts/dev-run -- <cmd...>  run <cmd> as a client once the socket is up
+#
+# BEST LOOP: log into a Wayland session (Hyprland, Plasma, GNOME) and use the
+# default. The Wayland backend nests this compositor as an ordinary window of
+# the host compositor, which hands it buffers both sides already agree on —
+# none of the cross-GPU trouble below, and you can see the pixels.
+#
+# CAVEAT for -x, and the reason headless is the fallback rather than X11:
+#
+# A wlroots compositor normally nests inside an X11 session via the X11
+# backend, and that is the usual development loop elsewhere. Here it only half
+# works. This laptop has two GPUs — an AMD iGPU (renderD128) and an NVIDIA dGPU
+# (renderD129) — and the X server runs on the NVIDIA one:
+#
+#   * NVIDIA + GLES2: fails outright, "EGLImage not supported", no FBO.
+#   * AMD + GLES2:    window opens, socket works, every frame renders black
+#                     ("GPU reset"), because buffers are allocated on one GPU
+#                     and presented to an X server on the other.
+#   * Vulkan:         renderer initialises, then cannot agree a buffer format
+#                     with the X11 output.
+#
+# So `-x` is useful for checking that a window and socket appear, and useless
+# for looking at pixels. Headless renders in software with no GPU involved at
+# all, which is both dependable and deterministic; the VM (scripts/vm-run) is
+# still the way to see real output, on a virtio GPU that has none of this mess.
+set -euo pipefail
+
+cd "$(dirname "$0")/.."
+
+# Empty means "decide from the environment" just below.
+mode=""
+client=()
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -w) mode=wayland; shift ;;
+    -H) mode=headless; shift ;;
+    -x) mode=x11; shift ;;
+    --) shift; client=("$@"); break ;;
+    *) echo "unknown option: $1" >&2; exit 1 ;;
+  esac
+done
+
+if [[ -z "$mode" ]]; then
+  # A Wayland session is the only environment here where nesting both works and
+  # shows pixels, so prefer it whenever one exists. X11 is never auto-selected:
+  # it would come up looking healthy and render black, which is worse than
+  # headless being honest about having no window.
+  if [[ -n "${WAYLAND_DISPLAY:-}" ]]; then mode=wayland; else mode=headless; fi
+fi
+
+[[ -d build ]] || meson setup build
+ninja -C build
+
+case "$mode" in
+  wayland)
+    if [[ -z "${WAYLAND_DISPLAY:-}" ]]; then
+      echo "-w needs a Wayland session; WAYLAND_DISPLAY is unset" >&2
+      exit 1
+    fi
+    # Renderer left to wlroots: the host compositor already settled which GPU
+    # and format everyone is using, so autodetection has the right answer here
+    # in a way it does not under X11.
+    export WLR_BACKENDS=wayland
+    ;;
+  x11)
+    # renderD128 is the AMD iGPU. Left explicit because the default picks
+    # NVIDIA, which fails earlier and more confusingly. Expect a black window.
+    export WLR_BACKENDS=x11 WLR_RENDERER=gles2
+    export WLR_RENDER_DRM_DEVICE=/dev/dri/renderD128
+    ;;
+  headless)
+    export WLR_BACKENDS=headless WLR_RENDERER=pixman
+    ;;
+esac
+echo "backend: $mode" >&2
+
+if [[ ${#client[@]} -eq 0 ]]; then
+  exec ./build/compositor
+fi
+
+# With a client: start the compositor, wait for the socket it actually chose
+# (wl_display_add_socket_auto picks the first free name, which is not always
+# wayland-0 if something else is already running), then launch into it.
+log="$(mktemp)"
+stdbuf -oL ./build/compositor >"$log" 2>&1 &
+compositor=$!
+trap 'kill "$compositor" 2>/dev/null || true' EXIT
+
+socket=""
+for _ in $(seq 1 40); do
+  socket="$(sed -n 's/^Compositor running on WAYLAND_DISPLAY=//p' "$log" | head -1)"
+  [[ -n "$socket" ]] && break
+  sleep 0.25
+done
+if [[ -z "$socket" ]]; then
+  echo "compositor never reported a socket:" >&2
+  cat "$log" >&2
+  exit 1
+fi
+
+echo "WAYLAND_DISPLAY=$socket"
+WAYLAND_DISPLAY="$socket" "${client[@]}" || true
+kill "$compositor" 2>/dev/null || true
+wait "$compositor" 2>/dev/null || true
+cat "$log"

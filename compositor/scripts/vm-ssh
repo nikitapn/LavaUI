@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+set -euo pipefail
+exec ssh -o StrictHostKeyChecking=accept-new -p 2222 dev@127.0.0.1 "$@"

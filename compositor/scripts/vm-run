@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+project_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+vm_dir="$project_root/.vm"
+disk="$vm_dir/compositor.qcow2"
+seed="$vm_dir/seed.iso"
+
+[[ -f "$disk" && -f "$seed" ]] || { echo "Run scripts/vm-init first" >&2; exit 1; }
+
+accel=tcg
+cpu=max
+if [[ -r /dev/kvm && -w /dev/kvm ]]; then
+  accel=kvm
+  cpu=host
+fi
+
+exec qemu-system-x86_64 \
+  -name compositor-dev \
+  -machine "q35,accel=$accel" \
+  -cpu "$cpu" \
+  -smp "${VM_CPUS:-4}" \
+  -m "${VM_MEMORY:-4096}" \
+  -drive "if=virtio,format=qcow2,file=$disk" \
+  -drive "if=virtio,format=raw,readonly=on,file=$seed" \
+  -virtfs "local,path=$project_root,mount_tag=project,security_model=none,readonly=on" \
+  -device virtio-vga-gl \
+  -display gtk,gl=on \
+  -device virtio-keyboard-pci \
+  -device virtio-mouse-pci \
+  -netdev user,id=net0,hostfwd=tcp:127.0.0.1:2222-:22 \
+  -device virtio-net-pci,netdev=net0 \
+  -serial mon:stdio

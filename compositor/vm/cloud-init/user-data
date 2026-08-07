@@ -1,0 +1,86 @@
+#cloud-config
+users:
+  - default
+  - name: dev
+    groups: [adm, sudo, video, input]
+    shell: /bin/bash
+    sudo: ALL=(ALL) NOPASSWD:ALL
+    lock_passwd: false
+    plain_text_passwd: dev
+ssh_pwauth: true
+package_update: true
+packages:
+  - build-essential
+  - git
+  - meson
+  - ninja-build
+  - pkg-config
+  - rsync
+  - libwayland-dev
+  - wayland-protocols
+  - libdrm-dev
+  - libgbm-dev
+  - libegl1-mesa-dev
+  - libgles2-mesa-dev
+  - libinput-dev
+  - libxkbcommon-dev
+  - libpixman-1-dev
+  - libseat-dev
+  - libudev-dev
+  - libdisplay-info-dev
+  - libliftoff-dev
+  - hwdata
+  - seatd
+  - xwayland
+write_files:
+  - path: /etc/systemd/system/compositor.service
+    permissions: '0644'
+    content: |
+      [Unit]
+      Description=Development wlroots compositor
+      After=seatd.service systemd-user-sessions.service
+      Wants=seatd.service
+      Conflicts=getty@tty1.service
+
+      [Service]
+      Type=simple
+      User=root
+      WorkingDirectory=/root/compositor
+      Environment=XDG_RUNTIME_DIR=/run/compositor
+      Environment=WLR_BACKENDS=drm
+      Environment=WLR_RENDERER=gles2
+      Environment=WLR_LIBINPUT_NO_DEVICES=1
+      Environment=LIBSEAT_BACKEND=seatd
+      ExecStartPre=/usr/bin/mkdir -p /run/compositor
+      ExecStartPre=/usr/bin/chmod 0700 /run/compositor
+      ExecStartPre=/usr/local/sbin/build-compositor
+      ExecStart=/root/compositor/build/compositor
+      Restart=on-failure
+      RestartSec=2
+      StandardOutput=journal+console
+      StandardError=journal+console
+      TTYPath=/dev/tty1
+
+      [Install]
+      WantedBy=multi-user.target
+  - path: /usr/local/sbin/build-compositor
+    permissions: '0755'
+    content: |
+      #!/bin/bash
+      set -euxo pipefail
+      mkdir -p /root/compositor
+      mountpoint -q /mnt/project || mount -t 9p -o trans=virtio,version=9p2000.L,ro project /mnt/project
+      rsync -a --delete --exclude build /mnt/project/ /root/compositor/
+      meson setup --wipe /root/compositor/build /root/compositor
+      ninja -C /root/compositor/build
+runcmd:
+  - mkdir -p /mnt/project /root/src
+  - git clone --branch 0.19.3 --depth 1 https://gitlab.freedesktop.org/wlroots/wlroots.git /root/src/wlroots
+  - meson setup /root/src/wlroots/build /root/src/wlroots -Dexamples=false -Dxwayland=disabled -Dbackends=drm -Drenderers=gles2
+  - ninja -C /root/src/wlroots/build
+  - ninja -C /root/src/wlroots/build install
+  - ldconfig
+  - systemctl daemon-reload
+  - systemctl enable compositor.service
+  - systemctl start --no-block compositor.service
+final_message: "wlroots development VM is ready"
