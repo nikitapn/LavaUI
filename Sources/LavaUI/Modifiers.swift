@@ -8,7 +8,8 @@ import Foundation
 /// replacement would let the last modifier in a chain silently clear the
 /// others, which the spike caught before it could become a bug report.
 public struct ViewStyle: Equatable {
-    public var padding: Float?
+    /// Per-edge inset. `nil` means "leave the node's baseline alone".
+    public var padding: EdgeInsets?
     public var fill: Color?
     public var hoverFill: Color?
     public var cornerRadius: Float?
@@ -140,7 +141,7 @@ extension YogaBoxNode {
         }
         let base = styleBaseline ?? ViewStyle()
 
-        padding = style.padding ?? base.padding ?? 0
+        padding = style.padding ?? base.padding ?? .zero
         width = style.width ?? base.width ?? .auto
         height = style.height ?? base.height ?? .auto
         minWidth = style.minWidth ?? base.minWidth ?? 0
@@ -240,8 +241,24 @@ extension View {
         return ModifiedView(content: self, style: s)
     }
 
+    /// Uniform inset on every edge.
     public func padding(_ amount: Float) -> ModifiedView<Self> {
-        styled { $0.padding = amount }
+        styled { $0.padding = .all(amount) }
+    }
+
+    /// Inset only the listed edges by `amount`.
+    ///
+    /// ```swift
+    /// content.padding(.horizontal, 12)
+    /// content.padding([.top, .leading], 4)
+    /// ```
+    public func padding(_ edges: Edge, _ amount: Float) -> ModifiedView<Self> {
+        styled { $0.padding = EdgeInsets(edges, amount) }
+    }
+
+    /// Fully specified per-edge inset.
+    public func padding(_ insets: EdgeInsets) -> ModifiedView<Self> {
+        styled { $0.padding = insets }
     }
 
     public func background(_ color: Color) -> ModifiedView<Self> {
@@ -333,8 +350,16 @@ extension ModifiedView {
     /// This preserves the SwiftUI distinction between
     /// `.padding().frame(...)` and `.frame(...).padding()`.
     public func padding(_ amount: Float) -> ModifiedView<ModifiedView<Content>> {
+        padding(.all(amount))
+    }
+
+    public func padding(_ edges: Edge, _ amount: Float) -> ModifiedView<ModifiedView<Content>> {
+        padding(EdgeInsets(edges, amount))
+    }
+
+    public func padding(_ insets: EdgeInsets) -> ModifiedView<ModifiedView<Content>> {
         var outer = ViewStyle()
-        outer.padding = amount
+        outer.padding = insets
         return ModifiedView<ModifiedView<Content>>(
             content: self, style: outer, forceWrapper: true
         )

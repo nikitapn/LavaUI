@@ -1185,8 +1185,8 @@ public final class DrawList {
             // padding on the bottom/right (most visible on hover fills).
             let lineH = (leaf.font ?? FontStore.default)?.lineHeight ?? 18
             let lines = leaf.cachedLines.isEmpty ? [leaf.text] : leaf.cachedLines
-            let textX = x + leaf.padding
-            let textY = y + leaf.padding + 2
+            let textX = x + leaf.padding.leading
+            let textY = y + leaf.padding.top + 2
             var searchStart = leaf.text.startIndex
             for (i, line) in lines.enumerated() {
                 let ly = textY + Float(i) * lineH

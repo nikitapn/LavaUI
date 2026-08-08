@@ -164,7 +164,7 @@ final class ComposedOverlayNode: YogaBoxNode {
         // Set through the node, not `YGNodeStyleSetPadding` directly:
         // `applyStyle` below re-asserts padding from this property and would
         // otherwise overwrite a raw call with zero.
-        alignmentBox.padding = inset
+        alignmentBox.padding = .all(inset)
         alignmentBox.flexGrow = 0
         alignmentBox.flexShrink = 0
         alignmentBox.applyStyle()

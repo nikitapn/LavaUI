@@ -285,9 +285,10 @@ public struct DemoExample: View {
                 }.background(Color(r: 0.3, g: 0.5, b: 0.0))
                 HStack(alignment: .center, spacing: 16) {
                     Text("16 pt", color: .dim).frame(width: .pt(64)).background(bgColor)
-                    Text("One", color: .primary).padding(30).background(bgColor)
-                    Text("Two", color: .primary).padding(30).background(bgColor)
-                    Text("Three", color: .primary).padding(30).background(bgColor)
+                    Text("One", color: .primary).padding(.bottom, 10).background(bgColor)
+                    Text("Two", color: .primary).padding(.top, 10).background(bgColor)
+                    Text("Three", color: .primary).padding(.trailing, 10).background(bgColor)
+                    Text("Four", color: .primary).padding(.leading, 10).background(bgColor)
                 }
                 HStack(alignment: .center, spacing: 0) {
                     Text("zero", color: .dim).frame(width: .pt(64)).background(bgColor)

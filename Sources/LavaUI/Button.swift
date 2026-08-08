@@ -50,7 +50,7 @@ public struct Button: PrimitiveView {
         leaf.font = resolvedFont
         leaf.color = isEnabled ? style.foreground : style.disabledForeground
         leaf.cornerRadius = style.cornerRadius
-        leaf.padding = style.padding
+        leaf.padding = .all(style.padding)
         leaf.buttonStyle = style
         leaf.isEnabled = isEnabled
         leaf.applyStyle()

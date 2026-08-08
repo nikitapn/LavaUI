@@ -266,7 +266,7 @@ public struct OverlayView<Content: View, OverlayContent: View>: PrimitiveView {
         root.fillColor = style.background
         root.cornerRadius = style.cornerRadius
         root.backdropBlurRadius = style.backdropBlurRadius
-        root.padding = style.padding
+        root.padding = .all(style.padding)
         // A floating panel sizes to its content; growing would be meaningless
         // with no parent to grow inside, and `inheritFlex` copies it from the
         // content, so it has to be cleared after every update.

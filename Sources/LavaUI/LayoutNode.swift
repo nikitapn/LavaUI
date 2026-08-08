@@ -145,7 +145,7 @@ class YogaBoxNode: AnyViewNode {
     var effectiveFlexShrink: Float { flexShrink ?? (flexGrow > 0 ? 1 : 0) }
     var width: Dimension = .auto
     var height: Dimension = .auto
-    var padding: Float = 0
+    var padding: EdgeInsets = .zero
     var minWidth: Float = 0
     var minHeight: Float = 0
     /// The node's own settings, captured before any modifier touched it, so a
@@ -201,7 +201,26 @@ class YogaBoxNode: AnyViewNode {
             height, setPoint: YGNodeStyleSetHeight, setAuto: YGNodeStyleSetHeightAuto,
             setPercent: YGNodeStyleSetHeightPercent
         )
-        YGNodeStyleSetPadding(yogaStorage, YGEdgeAll, padding)
+        // LTR mapping: leading → left, trailing → right. A future layout-
+        // direction environment remaps here rather than renaming EdgeInsets.
+        // Uniform / axis-paired values collapse to Yoga's grouped edges so the
+        // common `.padding(8)` path stays a single style write.
+        if padding.top == padding.bottom,
+           padding.leading == padding.trailing,
+           padding.top == padding.leading
+        {
+            YGNodeStyleSetPadding(yogaStorage, YGEdgeAll, padding.top)
+        } else if padding.leading == padding.trailing,
+                  padding.top == padding.bottom
+        {
+            YGNodeStyleSetPadding(yogaStorage, YGEdgeHorizontal, padding.leading)
+            YGNodeStyleSetPadding(yogaStorage, YGEdgeVertical, padding.top)
+        } else {
+            YGNodeStyleSetPadding(yogaStorage, YGEdgeTop, padding.top)
+            YGNodeStyleSetPadding(yogaStorage, YGEdgeLeft, padding.leading)
+            YGNodeStyleSetPadding(yogaStorage, YGEdgeBottom, padding.bottom)
+            YGNodeStyleSetPadding(yogaStorage, YGEdgeRight, padding.trailing)
+        }
         if minWidth > 0 {
             YGNodeStyleSetMinWidth(yogaStorage, minWidth)
         } else {
@@ -1037,7 +1056,7 @@ final class StackNode: YogaBoxNode {
         flexGrow = style.flexGrow
         width = style.width
         height = style.height
-        padding = style.padding
+        padding = .all(style.padding)
         YGNodeStyleSetAlignItems(yogaStorage, style.alignment.yoga)
         YGNodeStyleSetFlexWrap(yogaStorage, style.wraps ? YGWrapWrap : YGWrapNoWrap)
         let spacing = max(0, style.spacing ?? Environment.current.theme.stackSpacing)

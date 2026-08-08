@@ -362,7 +362,9 @@ Modifiers apply to any `View`:
 
 | Modifier | Effect |
 |---|---|
-| `.padding(Float)` | Inner spacing; may form an outer box when order requires it |
+| `.padding(Float)` | Uniform inner spacing on every edge |
+| `.padding(Edge, Float)` | Inset listed edges only — e.g. `.padding(.horizontal, 8)` |
+| `.padding(EdgeInsets)` | Fully specified per-edge inset |
 | `.background(Color)` | Box fill |
 | `.hoverBackground(Color)` | Fill while hovered |
 | `.cornerRadius(Float)` | Rounded box corners |
@@ -729,5 +731,7 @@ SwiftUI. Notable current boundaries are:
   `ForEach`.
 - `Canvas` drawing uses absolute window coordinates.
 
-Known bugs and planned framework work are tracked separately in
-[issues.md](issues.md) and the product-specific gap documents.
+The full SwiftUI-shaped gap list, ordered from easy wins (opacity, lifecycle
+hooks, …) through platform work, is in [swiftui-parity.md](swiftui-parity.md).
+Known bugs are in [issues.md](issues.md); product-specific gaps live in their
+own documents.
