@@ -85,23 +85,30 @@ class Engine {
   [[nodiscard]] VoidResult openOffscreen(const std::string &assetsRoot,
                                          uint32_t width, uint32_t height);
 
-  /// Headless, rendering into a buffer another driver reads.
+  /// Headless, able to render surfaces another driver reads.
   ///
-  /// The compositor path: canvas draws a surface and a wlroots scene graph
-  /// shows it, with no copy between them. Same as `openOffscreen` except that
-  /// the GPU is not ours to choose — it has to be the one the consumer already
-  /// renders on — and the frame's destination is a shared image rather than a
-  /// staging buffer. See `Application::initExported`.
+  /// The compositor path: canvas draws a client's window and a wlroots scene
+  /// graph shows it, with no copy between them. Same as `openOffscreen` except
+  /// that the GPU is not ours to choose — it has to be the one the consumer
+  /// already renders on — and a frame's destination is a shared image rather
+  /// than a staging buffer.
+  ///
+  /// Opens no window. One device serves every surface, which is the point:
+  /// a compositor has one GPU and as many surfaces as it has clients, and they
+  /// share a glyph atlas and a texture cache rather than each bringing up a
+  /// device of its own. See `Application::initExported`.
   ///
   /// `drmFd` is the consumer's DRM node (wlroots: `wlr_renderer_get_drm_fd`);
   /// it is read during the call and not owned here.
   [[nodiscard]] VoidResult openExported(
-    const std::string &assetsRoot, uint32_t width, uint32_t height, int drmFd,
+    const std::string &assetsRoot, int drmFd,
     const std::vector<uint64_t> &importableModifiers);
 
-  /// Attributes of the exported buffer, or null unless opened with
-  /// `openExported`.
-  const DmabufImage *exportedImage() const;
+  /// Opens one exported surface. Returns its window id, or 0.
+  uint32_t openExportedWindow(uint32_t width, uint32_t height);
+
+  /// Attributes of a surface's exported buffer, or null.
+  const DmabufImage *exportedImage(uint32_t windowId) const;
 
   /// Client: lays out and emits frames for another process to draw. No
   /// Vulkan, no window, no GPU.

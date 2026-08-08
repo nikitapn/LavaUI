@@ -2,24 +2,30 @@
 
 #include <cstdint>
 #include <memory>
+#include <string>
 #include <vector>
 
 #include "bridge/canvas_engine.hpp"
 
 #include "wlr.hpp"
 
-/// Canvas drawing a surface the compositor shows.
+/// Canvas drawing the surfaces the compositor shows.
 ///
 /// This is the join the whole project points at. LavaUI clients have no GPU:
 /// they publish a draw list and something else draws it. That something else
 /// is canvas, which is Vulkan; the scene graph showing the result is wlroots,
 /// which is not. Neither can see the other's images — but both speak dmabuf,
-/// so canvas renders into a buffer wlroots imports and nothing is copied.
+/// so canvas renders into buffers wlroots imports and nothing is copied.
 ///
-/// Everything hard about that lives in `canvas::DmabufImage`, on the canvas
-/// side, where the Vulkan device is. What is left here is the half that is
-/// genuinely about wlroots: asking the compositor's renderer what it can
-/// import, and dressing the result up as a `wlr_buffer`.
+/// Split in two, because a compositor has one GPU and as many surfaces as it
+/// has clients:
+///
+///   * `CanvasRenderer` owns the device. One per compositor. The glyph atlas,
+///     the texture cache, the pipelines and the font ids all live here, and
+///     they are shared by every surface — which is the point, and is what
+///     stops a second client from costing a second Vulkan device.
+///   * `CanvasSurface` is one client's window: its own attachments, its own
+///     exported image, its own arena. That is what a surface should cost.
 namespace lava {
 
 /// A `canvas::DmabufImage` presented to wlroots as a buffer.
@@ -37,50 +43,61 @@ struct DmabufBuffer {
   static DmabufBuffer *create(const canvas::DmabufImage *image);
 };
 
+class CanvasSurface;
+
+class CanvasRenderer {
+ public:
+  /// Brings canvas up on the GPU `renderer` uses. Null, having said why, if
+  /// any of the agreements a shared buffer needs cannot be reached.
+  static std::unique_ptr<CanvasRenderer> create(wlr_renderer *renderer);
+
+  ~CanvasRenderer();
+
+  CanvasRenderer(const CanvasRenderer &)            = delete;
+  CanvasRenderer &operator=(const CanvasRenderer &) = delete;
+
+  /// Opens a surface. Null if the device could not export one that size.
+  std::unique_ptr<CanvasSurface> createSurface(uint32_t width,
+                                               uint32_t height);
+
+  /// Loads a face into the shared glyph atlas and returns the id a client's
+  /// `GlyphInstance`s must carry, or -1.
+  ///
+  /// Device-wide, not per surface: one atlas serves every window, so a face
+  /// registered for one client is already rasterised for the next.
+  int registerFont(const std::string &path, float pixelSize);
+
+  canvas::Engine &engine() { return engine_; }
+
+ private:
+  CanvasRenderer() = default;
+
+  canvas::Engine engine_;
+};
+
+/// One client's window.
 class CanvasSurface {
  public:
-  /// Brings up canvas on the GPU `renderer` uses and allocates a shared
-  /// buffer of `width` x `height`. Null, having said why, if any of the
-  /// agreements that make a shared buffer possible cannot be reached.
-  static std::unique_ptr<CanvasSurface> create(wlr_renderer *renderer,
-                                               uint32_t width, uint32_t height);
-
+  CanvasSurface(CanvasRenderer &renderer, uint32_t windowId,
+                DmabufBuffer *buffer, uint32_t width, uint32_t height);
   ~CanvasSurface();
 
   CanvasSurface(const CanvasSurface &)            = delete;
   CanvasSurface &operator=(const CanvasSurface &) = delete;
 
-  /// Draws `commands` into the shared buffer and hands it over.
-  bool render(const std::vector<canvas::DrawCommand> &commands);
-
-  /// Renders whatever another process has published into the arena named
-  /// `id`, instead of commands written here.
+  /// Renders whatever another process publishes into the arena named `id`.
   ///
   /// The arena is shared memory the client writes its draw list straight
   /// into, so a frame crosses the process boundary without being copied or
-  /// serialised. The client owns no GPU and no window; this owns both and
-  /// knows nothing about the view tree that produced the commands.
-  ///
-  /// False simply means no arena by that name exists yet, which is the normal
-  /// state before a client starts. Quiet on failure for that reason — the
-  /// caller retries.
+  /// serialised. False simply means no arena by that name exists — normal
+  /// before a client has made one — so this is quiet on failure.
   bool attachArena(const std::string &id);
-
-  /// Loads a face into the shared glyph atlas and returns the id the client's
-  /// `GlyphInstance`s must carry, or -1.
-  ///
-  /// Ids are assigned in registration order, which is the whole of the
-  /// agreement between the two processes about fonts — see the call site in
-  /// `main.cpp` for why that is a stopgap and not a design.
-  int registerFont(const std::string &path, float pixelSize);
 
   /// Draws whatever the arena currently holds.
   ///
   /// True only when a *new* frame was drawn. A producer that has published
-  /// nothing since the last call is not an error and not a frame: the
-  /// previous contents are still correct and still on screen, and reporting
-  /// otherwise would damage the scene sixty times a second to show the same
-  /// pixels.
+  /// nothing since the last call is not an error and not a frame: the previous
+  /// contents are still correct and still on screen.
   bool renderFromArena();
 
   /// Hands a wheel notch back to the scene after the client's own tree
@@ -100,16 +117,15 @@ class CanvasSurface {
   uint32_t height() const { return height_; }
 
  private:
-  CanvasSurface() = default;
-
   /// Writes the resolve target to `$LAVA_CANVAS_DUMP` if it is set.
   void dumpIfRequested();
 
-  canvas::Engine engine_;
-  DmabufBuffer  *buffer_ = nullptr;
-  uint32_t       width_  = 0;
-  uint32_t       height_ = 0;
-  /// Frames drawn as of the last `renderFromArena`, so a tick that found
+  CanvasRenderer &renderer_;
+  uint32_t        windowId_ = 0;
+  DmabufBuffer   *buffer_   = nullptr;
+  uint32_t        width_    = 0;
+  uint32_t        height_   = 0;
+  /// Frames drawn as of the last `renderFromArena`, so a poll that found
   /// nothing published can be told from one that drew.
   uint64_t drawn_ = 0;
 };

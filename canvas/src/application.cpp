@@ -61,13 +61,15 @@ struct Application::Impl
   RenderDevice device;
   bool deviceUp = false;
 
-  /// The buffer another driver reads, when this application renders a surface
-  /// for one. Null in every other mode.
+  /// The buffer another driver reads, per surface. Empty in every other mode.
   ///
   /// Declared here, above `windows`, for its destruction order: members die in
-  /// reverse, so a window that blits into this image is gone before the image
+  /// reverse, so a window that blits into its image is gone before the image
   /// is. Below `device`, for the same reason in the other direction.
-  std::unique_ptr<canvas::DmabufImage> exportImage;
+  std::unordered_map<uint32_t, std::unique_ptr<canvas::DmabufImage>> exportImages;
+  /// What the consumer said it can import. Settled once, at `initExported`,
+  /// because it describes the consumer and not any one surface.
+  std::vector<uint64_t> exportModifiers;
 
   /// True between `beginFrameGroup` and `endFrameGroup`. Written on the main
   /// thread while nothing is drawing and read by every render worker, so the
@@ -180,16 +182,19 @@ struct Application::Impl
     }
   }
 
-  /// Offscreen, but rendering into a buffer another driver reads.
+  /// Offscreen, and able to render into buffers another driver reads.
   ///
-  /// Everything `init` does, plus the two agreements a shared buffer needs:
-  /// the GPU is pinned to the one behind `drmFd` (told to the device *before*
-  /// it is brought up, since it decides which card is chosen), and the image
-  /// is allocated with a modifier the consumer can read.
+  /// Brings up the device and nothing else. Deliberately no window: a
+  /// compositor has one device and as many surfaces as it has clients, and
+  /// creating the first surface at device time would make the device's
+  /// lifetime hostage to a window that may not exist yet — and would leave no
+  /// way to say what the *second* one costs.
   ///
-  /// There is no staging readback here, but the buffer is still created —
-  /// `captureFrame` is how a compositor surface gets tested without a second
-  /// process to look at it.
+  /// The two agreements a shared buffer needs are settled here, because both
+  /// are properties of the consumer rather than of any one surface: the GPU is
+  /// pinned to the one behind `drmFd` (told to the device *before* it comes
+  /// up, since it decides which card is chosen), and the modifiers it may
+  /// export with are the ones the consumer said it can read.
   canvas::VoidResult initExported(const std::string &assetsRoot, int drmFd,
                                   const std::vector<uint64_t> &importable)
   {
@@ -197,30 +202,46 @@ struct Application::Impl
       if (!assetsRoot.empty()) {
         std::filesystem::current_path(assetsRoot);
       }
+      exportModifiers = importable;
       device.exportToDrmDevice(drmFd);
       device.init("2d shenanigans!", /*presentCapable=*/false);
       deviceUp = true;
-      std::cout << "Vulkan initialized (exported surface).\n";
-      if (auto r = finishInitCommon(assetsRoot); !r) return r;
-
-      exportImage = canvas::DmabufImage::create(
-        device, static_cast<uint32_t>(width), static_cast<uint32_t>(height),
-        importable);
-      if (!exportImage) {
-        return canvas::fail(
-          "Application::initExported: could not export a shared image");
-      }
-
-      auto w = std::make_unique<AppWindow>(
-        device, nextWindowId++, static_cast<int>(width), static_cast<int>(height));
-      bringUpWindow(*w);
-      w->renderWindow().setExportTarget(exportImage.get());
-      windows.push_back(std::move(w));
-      return canvas::ok();
+      std::cout << "Vulkan initialized (exported, no surfaces yet).\n";
+      return finishInitCommon(assetsRoot);
     } catch (const std::exception &ex) {
       return canvas::fail(std::string("Application::initExported: ") + ex.what());
     } catch (...) {
       return canvas::fail("Application::initExported: unknown error");
+    }
+  }
+
+  /// Opens one more surface on the device `initExported` brought up.
+  ///
+  /// Everything expensive and shared — the device, the pipelines, the glyph
+  /// atlas, the texture cache — already exists and is not paid for again. A
+  /// second surface costs its own attachments, its own sync objects and its
+  /// own exported image, which is exactly what a second window should cost.
+  uint32_t openExportedWindow(uint32_t w, uint32_t h)
+  {
+    if (!deviceUp) {
+      std::cerr << "openExportedWindow: no device — call initExported first\n";
+      return 0;
+    }
+    try {
+      auto image = canvas::DmabufImage::create(device, w, h, exportModifiers);
+      if (!image) return 0;
+
+      const uint32_t id = nextWindowId++;
+      auto window = std::make_unique<AppWindow>(
+        device, id, static_cast<int>(w), static_cast<int>(h));
+      bringUpWindow(*window);
+      window->renderWindow().setExportTarget(image.get());
+      exportImages.emplace(id, std::move(image));
+      windows.push_back(std::move(window));
+      return id;
+    } catch (const std::exception &ex) {
+      std::cerr << "openExportedWindow: " << ex.what() << '\n';
+      return 0;
     }
   }
 
@@ -313,6 +334,9 @@ struct Application::Impl
       // may be mid-frame against the same queue.
       device.waitForAllFramesInFlight();
       windows.erase(it);
+      // After the window, so nothing is still blitting into it. A no-op for
+      // any window that was not exporting.
+      exportImages.erase(windowId);
       return;
     }
   }
@@ -419,9 +443,15 @@ canvas::VoidResult Application::initExported(
   return impl_->initExported(assetsRoot, drmFd, importableModifiers);
 }
 
-const canvas::DmabufImage *Application::exportedImage() const
+uint32_t Application::openExportedWindow(uint32_t width, uint32_t height)
 {
-  return impl_->exportImage.get();
+  return impl_->openExportedWindow(width, height);
+}
+
+const canvas::DmabufImage *Application::exportedImage(uint32_t windowId) const
+{
+  auto it = impl_->exportImages.find(windowId);
+  return it == impl_->exportImages.end() ? nullptr : it->second.get();
 }
 
 canvas::VoidResult Application::initClient() { return impl_->initClient(); }

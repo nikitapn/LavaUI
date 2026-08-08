@@ -41,20 +41,26 @@ public:
   /// and that belongs to whoever renders. See `registerFont`.
   [[nodiscard]] canvas::VoidResult initClient();
 
-  /// Offscreen, rendering into a buffer another driver reads — a compositor
-  /// surface. See `canvas::DmabufImage`.
+  /// Brings up a device able to render into buffers another driver reads —
+  /// compositor surfaces. See `canvas::DmabufImage`.
   ///
-  /// `drmFd` names the GPU the consumer renders on; this one has to be the
-  /// same, and it is pinned rather than preferred. `importableModifiers` is
-  /// what the consumer said it can read, and an empty list is a request to
-  /// fail rather than a request to guess.
+  /// No window: surfaces come later, one per `openExportedWindow`. `drmFd`
+  /// names the GPU the consumer renders on; this one has to be the same, and
+  /// it is pinned rather than preferred. `importableModifiers` is what the
+  /// consumer said it can read, and an empty list is a request to fail rather
+  /// than a request to guess.
   [[nodiscard]] canvas::VoidResult initExported(
     const std::string &assetsRoot, int drmFd,
     const std::vector<uint64_t> &importableModifiers);
 
-  /// The exported buffer, or null unless opened with `initExported`. Owned
-  /// here; the consumer reads its descriptors and does not take them.
-  const canvas::DmabufImage *exportedImage() const;
+  /// Opens one more exported surface on the device. Returns its window id, or
+  /// 0. Everything shared — pipelines, glyph atlas, texture cache — is already
+  /// paid for; this costs attachments and an image.
+  uint32_t openExportedWindow(uint32_t width, uint32_t height);
+
+  /// A window's exported buffer, or null. Owned here; the consumer reads its
+  /// descriptors and does not take them.
+  const canvas::DmabufImage *exportedImage(uint32_t windowId) const;
 
   /// See `AppWindow::setClientSize`. No-op on a window that has a renderer.
   void setClientSize(float width, float height, uint32_t windowId = 0);

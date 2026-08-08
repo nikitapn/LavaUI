@@ -111,13 +111,13 @@ VoidResult Engine::openOffscreen(const std::string &assetsRoot, uint32_t width,
   return ok();
 }
 
-VoidResult Engine::openExported(const std::string &assetsRoot, uint32_t width,
-                                uint32_t height, int drmFd,
+VoidResult Engine::openExported(const std::string &assetsRoot, int drmFd,
                                 const std::vector<uint64_t> &importableModifiers)
 {
   close();
-  impl_->offscreen =
-    std::make_unique<Application>(static_cast<int>(width), static_cast<int>(height));
+  // No nominal size: every surface is opened with its own, and a device that
+  // has no window has nothing to apply a default to.
+  impl_->offscreen = std::make_unique<Application>(1, 1);
   if (auto r = impl_->offscreen->initExported(assetsRoot, drmFd,
                                               importableModifiers);
       !r) {
@@ -130,9 +130,15 @@ VoidResult Engine::openExported(const std::string &assetsRoot, uint32_t width,
   return ok();
 }
 
-const DmabufImage *Engine::exportedImage() const
+uint32_t Engine::openExportedWindow(uint32_t width, uint32_t height)
 {
-  return impl_->offscreen ? impl_->offscreen->exportedImage() : nullptr;
+  return impl_->offscreen ? impl_->offscreen->openExportedWindow(width, height)
+                          : 0;
+}
+
+const DmabufImage *Engine::exportedImage(uint32_t windowId) const
+{
+  return impl_->offscreen ? impl_->offscreen->exportedImage(windowId) : nullptr;
 }
 
 VoidResult Engine::openClient(uint32_t width, uint32_t height)

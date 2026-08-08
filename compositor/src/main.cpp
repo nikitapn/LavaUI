@@ -219,7 +219,7 @@ struct ClientSurface {
 /// in this class takes a lock, and that is why.
 class SurfaceRegistry : public lava::CompositorHost {
  public:
-  void bind(wlr_renderer *renderer, wlr_scene_tree *tree) {
+  void bind(lava::CanvasRenderer *renderer, wlr_scene_tree *tree) {
     renderer_ = renderer;
     tree_ = tree;
   }
@@ -245,55 +245,24 @@ class SurfaceRegistry : public lava::CompositorHost {
   // ─── CompositorHost ──────────────────────────────────────────────────────
 
   int registerFont(const std::string &path, float pixelSize) override {
-    // Answered from this table, not from a renderer.
-    //
-    // A client registers its faces before it asks for a surface — it has to,
-    // because it shapes text to lay out and cannot do that without ids — so
-    // at this point there is usually no canvas device to ask. Handing out an
-    // index here and replaying the table into each surface as it comes up
-    // makes the id independent of when it was asked for, which is the only
-    // thing the client actually needs it to be.
-    for (size_t i = 0; i < fonts_.size(); ++i) {
-      if (fonts_[i].first == path && fonts_[i].second == pixelSize) {
-        return static_cast<int>(i);
-      }
-    }
-    fonts_.emplace_back(path, pixelSize);
-    const int id = static_cast<int>(fonts_.size()) - 1;
-    // Every existing surface has its own canvas engine and so its own atlas,
-    // and each has to learn the face separately.
-    for (auto &s : surfaces_) {
-      s->canvas->registerFont(path, pixelSize);
-    }
-    return id;
-  }
-
-  /// Teaches a newly created surface every face registered so far.
-  ///
-  /// In id order, so canvas' own sequential numbering reproduces the ids this
-  /// registry already handed out. A mismatch here would draw the wrong glyphs
-  /// rather than none, which is much harder to notice, so it is checked.
-  void replayFonts(lava::CanvasSurface &canvas) {
-    for (size_t i = 0; i < fonts_.size(); ++i) {
-      const int got = canvas.registerFont(fonts_[i].first, fonts_[i].second);
-      if (got != static_cast<int>(i)) {
-        wlr_log(WLR_ERROR, "font '%s' landed at %d but was handed out as %zu",
-                fonts_[i].first.c_str(), got, i);
-      }
-    }
+    // Straight to the device, which exists before any surface does — that is
+    // the whole reason the renderer and the surfaces are separate objects.
+    // The atlas is device-wide, so a face registered by one client is already
+    // rasterised for the next, and the id means the same thing to both.
+    return renderer_ ? renderer_->registerFont(path, pixelSize) : -1;
   }
 
   uint32_t createSurface(const std::string &arenaId, uint32_t width,
                          uint32_t height, const std::string &title) override {
+    if (renderer_ == nullptr) return 0;
     auto surface = std::make_unique<ClientSurface>();
-    surface->canvas = lava::CanvasSurface::create(renderer_, width, height);
+    surface->canvas = renderer_->createSurface(width, height);
     if (!surface->canvas) return 0;
     if (!surface->canvas->attachArena(arenaId)) {
       // The client creates the arena and the compositor attaches, so this
       // means the client asked before it had somewhere to draw.
       return 0;
     }
-    replayFonts(*surface->canvas);
     surface->id = nextId_++;
     surface->width = width;
     surface->height = height;
@@ -369,12 +338,11 @@ class SurfaceRegistry : public lava::CompositorHost {
 
  private:
   std::list<std::unique_ptr<ClientSurface>> surfaces_;
-  wlr_renderer *renderer_ = nullptr;
+  /// The one canvas device. Every surface is a window on it, sharing its
+  /// glyph atlas and texture cache.
+  lava::CanvasRenderer *renderer_ = nullptr;
   wlr_scene_tree *tree_ = nullptr;
   lava::ControlPlane *control_ = nullptr;
-  /// Every face any client has asked for, in the order the ids were handed
-  /// out. See `registerFont`.
-  std::vector<std::pair<std::string, float>> fonts_;
   /// Never reused, so a stale id from a closed surface fails to resolve rather
   /// than quietly addressing whatever opened next.
   uint32_t nextId_ = 1;
@@ -828,29 +796,32 @@ void Server::on_cursor_button(wl_listener *listener, void *data) {
   // A press over a client surface focuses it and is forwarded; a release goes
   // to whichever surface is focused even if the pointer has since left it, so
   // a drag that ends outside still ends.
-  if (server->surfaces != nullptr) {
+  if (server->surfaces != nullptr && server->control != nullptr) {
+    // Left = 0, matching GLFW, which is what the client's event decoding was
+    // written against.
+    const int32_t button = static_cast<int32_t>(event->button - 0x110u);
     double sx = 0, sy = 0;
-    ClientSurface *over =
-        server->surfaces->at(server->cursor->x, server->cursor->y, sx, sy);
-    if (pressed && over != nullptr) {
-      server->focusedSurface = over->id;
-      // Taking the keyboard from any Wayland window: the two focus models are
-      // separate, and leaving both focused would deliver every key twice.
-      wlr_seat_keyboard_notify_clear_focus(server->seat);
-    }
-    const uint32_t kind =
-        static_cast<uint32_t>(pressed ? canvas::InputEventKind::MouseDown
-                                      : canvas::InputEventKind::MouseUp);
-    if (pressed ? over != nullptr : server->focusedSurface != 0) {
-      const uint32_t id = pressed ? over->id : server->focusedSurface;
-      // Left = 0, matching GLFW, which is what the client's event decoding
-      // was written against.
-      const int32_t button = static_cast<int32_t>(event->button - 0x110u);
-      if (!pressed) {
-        server->surfaces->at(server->cursor->x, server->cursor->y, sx, sy);
+    if (pressed) {
+      if (ClientSurface *over =
+              server->surfaces->at(server->cursor->x, server->cursor->y, sx, sy)) {
+        server->focusedSurface = over->id;
+        // Taking the keyboard from any Wayland window: the two focus models
+        // are separate, and leaving both focused would deliver every key twice.
+        wlr_seat_keyboard_notify_clear_focus(server->seat);
+        server->control->postInput(
+            over->id, static_cast<uint32_t>(canvas::InputEventKind::MouseDown),
+            static_cast<float>(sx), static_cast<float>(sy), button, 0);
+        return;
       }
-      server->control->postInput(id, kind, static_cast<float>(sx),
-                                 static_cast<float>(sy), button, 0);
+    } else if (ClientSurface *target =
+                   server->surfaces->find(server->focusedSurface)) {
+      // Recomputed against the focused surface rather than reusing whatever a
+      // hit test left behind: the pointer may be outside it, and `at` only
+      // fills the offsets for surfaces it actually tested.
+      server->control->postInput(
+          target->id, static_cast<uint32_t>(canvas::InputEventKind::MouseUp),
+          static_cast<float>(server->cursor->x - target->x),
+          static_cast<float>(server->cursor->y - target->y), button, 0);
       return;
     }
   }
@@ -992,9 +963,15 @@ int main() {
   // windows. Nothing is copied at either boundary: the bytes the client
   // writes are the bytes canvas reads, and the pixels canvas draws are the
   // pixels wlroots samples.
+  // One canvas device for the whole compositor, brought up before any client
+  // connects. Surfaces are windows on it.
+  auto canvas_renderer = lava::CanvasRenderer::create(server.renderer);
   SurfaceRegistry surfaces;
-  surfaces.bind(server.renderer, &server.scene->tree);
+  surfaces.bind(canvas_renderer.get(), &server.scene->tree);
   server.surfaces = &surfaces;
+  if (!canvas_renderer) {
+    wlr_log(WLR_ERROR, "no canvas device — LavaUI surfaces cannot be drawn");
+  }
 
   auto control = lava::ControlPlane::start(
       wl_display_get_event_loop(server.display), surfaces);
