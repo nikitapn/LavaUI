@@ -51,6 +51,45 @@ T *owner_of(wl_listener *listener) {
 struct Server;
 class SurfaceRegistry;
 
+// ─── Foreign windows ───────────────────────────────────────────────────────
+
+/// A window whose contents the compositor does not draw.
+///
+/// An xdg toplevel and an X11 window are the same shape from the frame's point
+/// of view: something with a scene node, a size it can be asked to take, and a
+/// way to be closed, activated and maximized. Everything around them — the
+/// title bar, the stacking, the workspace, the drag — should not know which it
+/// has, and this interface is what keeps that true. Adding X11 support without
+/// it means writing the window management twice and watching the two copies
+/// drift.
+struct FramedWindow {
+  virtual ~FramedWindow() = default;
+
+  /// The scene node holding its pixels. Moving this moves the window.
+  virtual wlr_scene_node *contentNode() = 0;
+  /// The surface the seat focuses, or null while it is unmapped.
+  virtual wlr_surface *focusSurface() = 0;
+
+  /// "Please be this big." A request, not an instruction — see the frame's
+  /// resize path, which adopts whatever the client actually commits.
+  virtual void requestSize(uint32_t width, uint32_t height) = 0;
+  /// "Please close." The client gets to argue, which killing it does not.
+  virtual void requestClose() = 0;
+  /// Draw yourself focused, or stop.
+  virtual void activate(bool activated) = 0;
+  /// Draw yourself maximized. Cosmetic — the compositor has already moved it.
+  virtual void setMaximized(bool) {}
+  /// Told where it ended up. A Wayland window never learns its own position
+  /// and does not need this; an X11 client keeps its own copy and draws its
+  /// menus against it, so one that is moved without being told puts them in
+  /// the wrong place.
+  virtual void placed(int, int, uint32_t, uint32_t) {}
+
+  /// Which workspace it is on, and its frame, so the two stay in step.
+  uint32_t workspace = 0;
+  uint32_t frameId = 0;
+};
+
 // ─── Workspaces ────────────────────────────────────────────────────────────
 
 /// The desktop's workspaces: one scene tree each, one of them enabled.
@@ -119,18 +158,10 @@ struct Output {
 /// The scene graph owns the pixels: `wlr_scene_xdg_surface_create` builds a
 /// subtree for the surface and its children, and moving that subtree is what
 /// moves the window. Nothing here draws.
-struct Toplevel {
+struct Toplevel : FramedWindow {
   Server *server;
   wlr_xdg_toplevel *xdg_toplevel;
   wlr_scene_tree *scene_tree;
-  /// Which workspace it was opened on. A Wayland client has no say in this and
-  /// no way to ask, which is why the compositor is the only place it lives.
-  uint32_t workspace = 0;
-
-  /// Its frame in the registry, while it is mapped. 0 between an unmap and the
-  /// next map, when the window exists but is not on screen and has no title
-  /// bar to speak of.
-  uint32_t frameId = 0;
 
   Listener<Toplevel> map;
   Listener<Toplevel> unmap;
@@ -148,6 +179,20 @@ struct Toplevel {
   /// those would put the title bar a centimetre away from the window.
   void geometry(uint32_t &width, uint32_t &height) const;
 
+  wlr_scene_node *contentNode() override { return &scene_tree->node; }
+  wlr_surface *focusSurface() override { return xdg_toplevel->base->surface; }
+  void requestSize(uint32_t width, uint32_t height) override {
+    wlr_xdg_toplevel_set_size(xdg_toplevel, static_cast<int32_t>(width),
+                              static_cast<int32_t>(height));
+  }
+  void requestClose() override { wlr_xdg_toplevel_send_close(xdg_toplevel); }
+  void activate(bool activated) override {
+    wlr_xdg_toplevel_set_activated(xdg_toplevel, activated);
+  }
+  void setMaximized(bool maximized) override {
+    wlr_xdg_toplevel_set_maximized(xdg_toplevel, maximized);
+  }
+
   static void on_map(wl_listener *listener, void *data);
   static void on_unmap(wl_listener *listener, void *data);
   static void on_commit(wl_listener *listener, void *data);
@@ -155,6 +200,74 @@ struct Toplevel {
   static void on_set_title(wl_listener *listener, void *data);
   static void on_request_maximize(wl_listener *listener, void *data);
   static void on_request_fullscreen(wl_listener *listener, void *data);
+};
+
+// ─── X11 windows ───────────────────────────────────────────────────────────
+
+/// One X11 window, seen through XWayland.
+///
+/// X11 predates the idea that a window manager owns placement, so these arrive
+/// already knowing where they want to be and how big — and they must be *told*
+/// where they ended up, unlike a Wayland window which never learns its own
+/// position. That is the whole difference in practice: the same frame, plus a
+/// configure back to the client whenever the compositor moves it.
+///
+/// Two kinds arrive. Ordinary windows are framed like anything else.
+/// Override-redirect ones — menus, tooltips, drag icons — have explicitly
+/// asked the window manager to keep out; they are placed exactly where they
+/// say and never decorated. Framing a dropdown menu is a classic way to make
+/// an X11 application unusable.
+struct XwaylandSurface : FramedWindow {
+  Server *server;
+  wlr_xwayland_surface *xsurface;
+  wlr_scene_tree *scene_tree = nullptr;
+
+  Listener<XwaylandSurface> associate;
+  Listener<XwaylandSurface> dissociate;
+  Listener<XwaylandSurface> map;
+  Listener<XwaylandSurface> unmap;
+  Listener<XwaylandSurface> destroy;
+  Listener<XwaylandSurface> request_configure;
+  Listener<XwaylandSurface> set_title;
+  /// Whether `map`/`unmap` are attached. They can only be while a Wayland
+  /// surface exists behind the X11 window, which is not its whole life.
+  bool associated = false;
+
+  XwaylandSurface(Server *server, wlr_xwayland_surface *surface);
+  ~XwaylandSurface();
+
+  bool overrideRedirect() const { return xsurface->override_redirect; }
+
+  wlr_scene_node *contentNode() override { return &scene_tree->node; }
+  wlr_surface *focusSurface() override { return xsurface->surface; }
+  void requestSize(uint32_t width, uint32_t height) override {
+    // X11 configures carry position as well as size, so both go every time —
+    // there is no "resize only" request.
+    wlr_xwayland_surface_configure(
+        xsurface, static_cast<int16_t>(xsurface->x),
+        static_cast<int16_t>(xsurface->y), static_cast<uint16_t>(width),
+        static_cast<uint16_t>(height));
+  }
+  void requestClose() override { wlr_xwayland_surface_close(xsurface); }
+  void activate(bool activated) override {
+    wlr_xwayland_surface_activate(xsurface, activated);
+  }
+  /// Tells the client where it now is. Nothing else will: an X11 client keeps
+  /// its own idea of its position and draws menus against it, so a window
+  /// moved without being told puts its menus in the wrong place.
+  void placed(int x, int y, uint32_t width, uint32_t height) override {
+    wlr_xwayland_surface_configure(
+        xsurface, static_cast<int16_t>(x), static_cast<int16_t>(y),
+        static_cast<uint16_t>(width), static_cast<uint16_t>(height));
+  }
+
+  static void on_associate(wl_listener *listener, void *data);
+  static void on_dissociate(wl_listener *listener, void *data);
+  static void on_map(wl_listener *listener, void *data);
+  static void on_unmap(wl_listener *listener, void *data);
+  static void on_destroy(wl_listener *listener, void *data);
+  static void on_request_configure(wl_listener *listener, void *data);
+  static void on_set_title(wl_listener *listener, void *data);
 };
 
 // ─── Decoration negotiation ────────────────────────────────────────────────
@@ -255,7 +368,7 @@ struct Server {
 
   /// Front is the most recently focused. Focus order and stacking order are
   /// the same thing here, which is why one list serves both.
-  std::list<Toplevel *> toplevels;
+  std::list<FramedWindow *> toplevels;
   /// Kept here because `wlr_seat` does not expose one, and seat capabilities
   /// have to be recomputed whenever a keyboard comes or goes.
   std::list<Keyboard *> keyboards;
@@ -330,11 +443,14 @@ struct Server {
   /// Sends whatever has the keyboard to workspace `index`, and stays put.
   void moveFocusedToWorkspace(uint32_t index);
   /// The front window of a workspace, or null if it has none.
-  Toplevel *frontToplevel(uint32_t workspace);
+  FramedWindow *frontToplevel(uint32_t workspace);
 
   Listener<Server> new_output;
   Listener<Server> new_toplevel;
   Listener<Server> new_decoration;
+  Listener<Server> new_xwayland_surface;
+  Listener<Server> xwayland_ready;
+  wlr_xwayland *xwayland = nullptr;
   Listener<Server> new_input;
   Listener<Server> cursor_motion;
   Listener<Server> cursor_motion_absolute;
@@ -348,6 +464,8 @@ struct Server {
   static void on_new_output(wl_listener *listener, void *data);
   static void on_new_toplevel(wl_listener *listener, void *data);
   static void on_new_decoration(wl_listener *listener, void *data);
+  static void on_new_xwayland_surface(wl_listener *listener, void *data);
+  static void on_xwayland_ready(wl_listener *listener, void *data);
   static void on_new_input(wl_listener *listener, void *data);
   static void on_cursor_motion(wl_listener *listener, void *data);
   static void on_cursor_motion_absolute(wl_listener *listener, void *data);
@@ -364,7 +482,7 @@ struct Server {
   wlr_surface *surface_at(double lx, double ly, double *sx, double *sy,
                           Toplevel **out_toplevel);
 
-  void focus(Toplevel *toplevel);
+  void focus(FramedWindow *window);
   void update_pointer_focus(uint32_t time_msec);
   void update_seat_capabilities();
 
@@ -411,8 +529,8 @@ struct ClientSurface {
   ///
   /// Sharing the frame is the whole point. Two parallel implementations of
   /// dragging a title bar is how the two kinds of window drift apart.
-  Toplevel *toplevel = nullptr;
-  bool isToplevel() const { return toplevel != nullptr; }
+  FramedWindow *window = nullptr;
+  bool isForeign() const { return window != nullptr; }
 
   /// The non-client area. Its own surface, so a title change redraws a strip
   /// rather than the window, and hit testing stays a rectangle comparison.
@@ -577,7 +695,7 @@ class SurfaceRegistry : public lava::CompositorHost {
       // Wayland windows are deliberately absent: their pointer input goes
       // through the seat, to the client's own surface, and routing it here as
       // well would deliver every event twice.
-      if (s->isToplevel()) continue;
+      if (s->isForeign()) continue;
       if (visible(*s) && s->hit(lx, ly, sx, sy)) return s.get();
     }
     return nullptr;
@@ -609,8 +727,8 @@ class SurfaceRegistry : public lava::CompositorHost {
   /// Everything an ordinary application gets from this compositor comes from
   /// here. Without it a toplevel sits at the scene origin forever, because a
   /// Wayland client cannot place its own window and nothing else would.
-  uint32_t adoptToplevel(Toplevel *toplevel, const std::string &title,
-                         uint32_t width, uint32_t height);
+  uint32_t adoptWindow(FramedWindow *window, const std::string &title,
+                       uint32_t width, uint32_t height, bool decorated = true);
 
   /// A Wayland client committed at a new size.
   ///
@@ -641,8 +759,8 @@ class SurfaceRegistry : public lava::CompositorHost {
   /// is decided by order alone.
   void raise(ClientSurface &surface) {
     if (surface.panel) return;  // already above everything, by its own tree
-    if (surface.isToplevel()) {
-      wlr_scene_node_raise_to_top(&surface.toplevel->scene_tree->node);
+    if (surface.isForeign()) {
+      wlr_scene_node_raise_to_top(surface.window->contentNode());
     } else if (surface.node != nullptr) {
       wlr_scene_node_raise_to_top(&surface.node->node);
     }
@@ -666,9 +784,11 @@ class SurfaceRegistry : public lava::CompositorHost {
     if (surface.barNode != nullptr) {
       wlr_scene_node_set_position(&surface.barNode->node, surface.x, surface.y);
     }
-    if (surface.isToplevel()) {
-      wlr_scene_node_set_position(&surface.toplevel->scene_tree->node,
-                                  surface.x, surface.contentY());
+    if (surface.isForeign()) {
+      wlr_scene_node_set_position(surface.window->contentNode(), surface.x,
+                                  surface.contentY());
+      surface.window->placed(surface.x, surface.contentY(), surface.width,
+                             surface.height);
     } else if (surface.node != nullptr) {
       wlr_scene_node_set_position(&surface.node->node, surface.x,
                                   surface.contentY());
@@ -805,15 +925,13 @@ class SurfaceRegistry : public lava::CompositorHost {
     width = width < floor ? floor : width;
     height = height < floor ? floor : height;
 
-    if (surface.isToplevel()) {
-      // Asked, not told. A Wayland client is sent a size and answers with a
+    if (surface.isForeign()) {
+      // Asked, not told. A client is sent a size and answers with a
       // buffer when it is ready — possibly at a different size, if it has a
       // minimum or snaps to a character cell like a terminal does. The frame
       // takes the requested size now so the bar tracks the drag, and adopts
       // whatever the client actually commits.
-      wlr_xdg_toplevel_set_size(surface.toplevel->xdg_toplevel,
-                                static_cast<int32_t>(width),
-                                static_cast<int32_t>(height));
+      surface.window->requestSize(width, height);
       surface.width = width;
       surface.height = height;
       if (surface.bar &&
@@ -884,11 +1002,11 @@ class SurfaceRegistry : public lava::CompositorHost {
       // A Wayland window's contents are not ours to destroy — the scene tree
       // belongs to its `Toplevel`, which outlives the frame across an unmap.
       // Only the decoration we added comes down with it.
-      if (!(*it)->isToplevel() && (*it)->node != nullptr) {
+      if (!(*it)->isForeign() && (*it)->node != nullptr) {
         wlr_scene_node_destroy(&(*it)->node->node);
       }
       if ((*it)->barNode) wlr_scene_node_destroy(&(*it)->barNode->node);
-      if ((*it)->isToplevel()) (*it)->toplevel->frameId = 0;
+      if ((*it)->isForeign()) (*it)->window->frameId = 0;
       surfaces_.erase(it);
       if (control_) control_->surfaceGone(id);
       wlr_log(WLR_INFO, "surface %u: gone", id);
@@ -900,8 +1018,8 @@ class SurfaceRegistry : public lava::CompositorHost {
   /// Politely, for a Wayland window: a client that is asked to close gets to
   /// put up its "save your work?" dialog, which killing it does not.
   void requestClose(ClientSurface &surface) {
-    if (surface.isToplevel()) {
-      wlr_xdg_toplevel_send_close(surface.toplevel->xdg_toplevel);
+    if (surface.isForeign()) {
+      surface.window->requestClose();
       return;
     }
     // A LavaUI client learns its window is gone by its stream ending — see
@@ -1146,17 +1264,17 @@ class SurfaceRegistry : public lava::CompositorHost {
 };
 
 
-uint32_t SurfaceRegistry::adoptToplevel(Toplevel *toplevel,
-                                        const std::string &title,
-                                        uint32_t width, uint32_t height) {
+uint32_t SurfaceRegistry::adoptWindow(FramedWindow *window,
+                                     const std::string &title, uint32_t width,
+                                     uint32_t height, bool decorated) {
   if (workspaces_ == nullptr) return 0;
   auto surface = std::make_unique<ClientSurface>();
   surface->id = nextId_++;
-  surface->toplevel = toplevel;
+  surface->window = window;
   surface->title = title.empty() ? "Untitled" : title;
   surface->width = width < kMinSurface ? kMinSurface : width;
   surface->height = height < kMinSurface ? kMinSurface : height;
-  surface->workspace = toplevel->workspace;
+  surface->workspace = window->workspace;
 
   int peers = 0;
   for (const auto &other : surfaces_) {
@@ -1176,14 +1294,12 @@ uint32_t SurfaceRegistry::adoptToplevel(Toplevel *toplevel,
   if (surface->width > fitW || surface->height > fitH) {
     surface->width = std::min(surface->width, fitW);
     surface->height = std::min(surface->height, fitH);
-    wlr_xdg_toplevel_set_size(toplevel->xdg_toplevel,
-                              static_cast<int32_t>(surface->width),
-                              static_cast<int32_t>(surface->height));
+    window->requestSize(surface->width, surface->height);
   }
 
   // Undecorated if there is no canvas device to draw a bar with. The window
   // still gets a position and a workspace, which is most of what it needed.
-  if (renderer_ != nullptr) {
+  if (renderer_ != nullptr && decorated) {
     surface->bar =
         renderer_->createSurface(surface->width, lava::Decoration::kHeight);
     if (surface->bar) {
@@ -1193,14 +1309,143 @@ uint32_t SurfaceRegistry::adoptToplevel(Toplevel *toplevel,
   }
 
   const uint32_t id = surface->id;
-  toplevel->frameId = id;
+  window->frameId = id;
   place(*surface);
   drawBar(*surface);
   surfaces_.push_front(std::move(surface));
   wlr_log(WLR_INFO, "window %u: '%s' %ux%u on workspace %u", id, title.c_str(),
           surfaces_.front()->width, surfaces_.front()->height,
-          toplevel->workspace + 1);
+          window->workspace + 1);
   return id;
+}
+
+// ─── X11 windows ───────────────────────────────────────────────────────────
+
+XwaylandSurface::XwaylandSurface(Server *server, wlr_xwayland_surface *surface)
+    : server(server), xsurface(surface) {
+  workspace = server->workspaces.current;
+  // An X11 window exists before it has any Wayland surface behind it, and may
+  // outlive several. `associate` is when one appears, and the only point at
+  // which map and unmap can be listened for.
+  associate.attach(&xsurface->events.associate, this, on_associate);
+  dissociate.attach(&xsurface->events.dissociate, this, on_dissociate);
+  destroy.attach(&xsurface->events.destroy, this, on_destroy);
+  request_configure.attach(&xsurface->events.request_configure, this,
+                           on_request_configure);
+  set_title.attach(&xsurface->events.set_title, this, on_set_title);
+}
+
+XwaylandSurface::~XwaylandSurface() {
+  if (associated) on_dissociate(&dissociate.listener, nullptr);
+  associate.detach();
+  dissociate.detach();
+  destroy.detach();
+  request_configure.detach();
+  set_title.detach();
+}
+
+void XwaylandSurface::on_associate(wl_listener *listener, void *) {
+  auto *self = owner_of<XwaylandSurface>(listener);
+  if (self->associated) return;
+  self->map.attach(&self->xsurface->surface->events.map, self, on_map);
+  self->unmap.attach(&self->xsurface->surface->events.unmap, self, on_unmap);
+  self->associated = true;
+}
+
+void XwaylandSurface::on_dissociate(wl_listener *listener, void *) {
+  auto *self = owner_of<XwaylandSurface>(listener);
+  if (!self->associated) return;
+  self->map.detach();
+  self->unmap.detach();
+  self->associated = false;
+}
+
+void XwaylandSurface::on_map(wl_listener *listener, void *) {
+  auto *self = owner_of<XwaylandSurface>(listener);
+  Server *server = self->server;
+  self->workspace = server->workspaces.current;
+  self->scene_tree = wlr_scene_subsurface_tree_create(
+      server->workspaces.currentTree(), self->xsurface->surface);
+  if (self->scene_tree == nullptr) return;
+
+  const char *title = self->xsurface->title;
+
+  if (self->overrideRedirect()) {
+    // A menu, a tooltip, a drag icon. It has asked the window manager to keep
+    // out, and it means it: placed exactly where it says, never framed, and
+    // never given the keyboard by us — the application manages that itself.
+    wlr_scene_node_set_position(&self->scene_tree->node, self->xsurface->x,
+                                self->xsurface->y);
+    wlr_scene_node_raise_to_top(&self->scene_tree->node);
+    return;
+  }
+
+  server->toplevels.push_front(self);
+  if (server->surfaces != nullptr) {
+    const uint32_t width = self->xsurface->width > 0
+                               ? static_cast<uint32_t>(self->xsurface->width)
+                               : 0;
+    const uint32_t height = self->xsurface->height > 0
+                                ? static_cast<uint32_t>(self->xsurface->height)
+                                : 0;
+    const uint32_t id = server->surfaces->adoptWindow(
+        self, title ? title : "", width, height);
+    if (ClientSurface *frame = server->surfaces->find(id)) {
+      server->surfaces->raise(*frame);
+    }
+  }
+  server->focus(self);
+  server->setFocusedSurface(0);
+  wlr_log(WLR_INFO, "x11 window mapped: class=%s title=%s",
+          self->xsurface->xclass ? self->xsurface->xclass : "(none)",
+          title ? title : "(none)");
+}
+
+void XwaylandSurface::on_unmap(wl_listener *listener, void *) {
+  auto *self = owner_of<XwaylandSurface>(listener);
+  Server *server = self->server;
+  server->toplevels.remove(self);
+  if (self->frameId != 0 && server->surfaces != nullptr) {
+    server->surfaces->destroySurface(self->frameId);
+  }
+  if (self->scene_tree != nullptr) {
+    wlr_scene_node_destroy(&self->scene_tree->node);
+    self->scene_tree = nullptr;
+  }
+  server->update_pointer_focus(0);
+}
+
+void XwaylandSurface::on_destroy(wl_listener *listener, void *) {
+  delete owner_of<XwaylandSurface>(listener);
+}
+
+void XwaylandSurface::on_request_configure(wl_listener *listener, void *data) {
+  auto *self = owner_of<XwaylandSurface>(listener);
+  auto *event = static_cast<wlr_xwayland_surface_configure_event *>(data);
+
+  // Before it is framed — or if it never will be — the client's own idea of
+  // where it goes is the only one there is, so it gets exactly what it asked
+  // for. Refusing here is how X11 splash screens end up in the corner.
+  ClientSurface *frame =
+      self->frameId != 0 && self->server->surfaces != nullptr
+          ? self->server->surfaces->find(self->frameId)
+          : nullptr;
+  if (frame == nullptr) {
+    wlr_xwayland_surface_configure(self->xsurface, event->x, event->y,
+                                   event->width, event->height);
+    return;
+  }
+  // Framed: the size is the client's to ask for, the position is not.
+  self->server->surfaces->resizeSurface(*frame, event->width, event->height);
+}
+
+void XwaylandSurface::on_set_title(wl_listener *listener, void *) {
+  auto *self = owner_of<XwaylandSurface>(listener);
+  if (self->frameId == 0 || self->server->surfaces == nullptr) return;
+  if (ClientSurface *frame = self->server->surfaces->find(self->frameId)) {
+    self->server->surfaces->setTitle(
+        *frame, self->xsurface->title ? self->xsurface->title : "Untitled");
+  }
 }
 
 // ─── Output ────────────────────────────────────────────────────────────────
@@ -1380,8 +1625,8 @@ Toplevel::Toplevel(Server *server, wlr_xdg_toplevel *toplevel)
       // all it takes for an ordinary Wayland window to hide and come back with
       // its workspace like a LavaUI one.
       scene_tree(wlr_scene_xdg_surface_create(server->workspaces.currentTree(),
-                                              toplevel->base)),
-      workspace(server->workspaces.current) {
+                                              toplevel->base)) {
+  workspace = server->workspaces.current;
   // The scene node points back here so `surface_at` can get from a hit node to
   // the window that owns it. wlroots walks up to the nearest node with data.
   scene_tree->node.data = this;
@@ -1430,7 +1675,7 @@ void Toplevel::on_map(wl_listener *listener, void *) {
   if (server->surfaces != nullptr) {
     uint32_t width = 0, height = 0;
     toplevel->geometry(width, height);
-    const uint32_t id = server->surfaces->adoptToplevel(
+    const uint32_t id = server->surfaces->adoptWindow(
         toplevel, title ? title : "", width, height);
     if (ClientSurface *frame = server->surfaces->find(id)) {
       server->surfaces->raise(*frame);
@@ -1769,6 +2014,22 @@ void Server::on_new_decoration(wl_listener *, void *data) {
       static_cast<wlr_xdg_toplevel_decoration_v1 *>(data));
 }
 
+void Server::on_new_xwayland_surface(wl_listener *listener, void *data) {
+  auto *server = owner_of<Server>(listener);
+  // Self-owned, like Toplevel: it deletes itself when the X11 window goes.
+  new XwaylandSurface(server, static_cast<wlr_xwayland_surface *>(data));
+}
+
+void Server::on_xwayland_ready(wl_listener *listener, void *) {
+  auto *server = owner_of<Server>(listener);
+  // The seat can only be handed over once the X server is actually up, which
+  // in lazy mode is the moment the first client connects. DISPLAY is set at
+  // creation instead — see below for why it cannot wait for this.
+  wlr_xwayland_set_seat(server->xwayland, server->seat);
+  wlr_log(WLR_INFO, "xwayland: started on DISPLAY=%s",
+          server->xwayland->display_name);
+}
+
 void Server::on_new_input(wl_listener *listener, void *data) {
   auto *server = owner_of<Server>(listener);
   auto *device = static_cast<wlr_input_device *>(data);
@@ -1822,37 +2083,38 @@ wlr_surface *Server::surface_at(double lx, double ly, double *sx, double *sy,
   return scene_surface->surface;
 }
 
-void Server::focus(Toplevel *toplevel) {
-  if (toplevel == nullptr) {
-    return;
-  }
-  wlr_surface *surface = toplevel->xdg_toplevel->base->surface;
+void Server::focus(FramedWindow *window) {
+  if (window == nullptr) return;
+  wlr_surface *surface = window->focusSurface();
+  if (surface == nullptr) return;
   wlr_surface *previous = seat->keyboard_state.focused_surface;
-  if (previous == surface) {
-    return;
-  }
-  if (previous != nullptr) {
-    // Deactivating tells the old window to stop drawing itself as focused —
-    // its caret, its titlebar. Nothing else would ever tell it.
-    if (auto *prev_toplevel = wlr_xdg_toplevel_try_from_wlr_surface(previous)) {
-      wlr_xdg_toplevel_set_activated(prev_toplevel, false);
+  if (previous == surface) return;
+
+  // Deactivating tells the old window to stop drawing itself as focused — its
+  // caret, its titlebar. Nothing else would ever tell it. Found through the
+  // window list rather than by asking the surface what kind it is, so an X11
+  // window is deactivated the same way an xdg one is.
+  for (FramedWindow *other : toplevels) {
+    if (other != window && other->focusSurface() == previous) {
+      other->activate(false);
+      break;
     }
   }
 
   // Through the registry, so the title bar comes up with the window: the two
   // are siblings in one tree and raising only the contents would put a
   // window's own frame behind it.
-  if (surfaces != nullptr && toplevel->frameId != 0) {
-    if (ClientSurface *frame = surfaces->find(toplevel->frameId)) {
+  if (surfaces != nullptr && window->frameId != 0) {
+    if (ClientSurface *frame = surfaces->find(window->frameId)) {
       surfaces->raise(*frame);
       surfaces->setFocused(frame->id);
     }
   } else {
-    wlr_scene_node_raise_to_top(&toplevel->scene_tree->node);
+    wlr_scene_node_raise_to_top(window->contentNode());
   }
-  toplevels.remove(toplevel);
-  toplevels.push_front(toplevel);
-  wlr_xdg_toplevel_set_activated(toplevel->xdg_toplevel, true);
+  toplevels.remove(window);
+  toplevels.push_front(window);
+  window->activate(true);
 
   if (auto *keyboard = wlr_seat_get_keyboard(seat)) {
     wlr_seat_keyboard_notify_enter(seat, surface, keyboard->keycodes,
@@ -1883,9 +2145,9 @@ void Server::reloadConfig() {
   wlr_log(WLR_INFO, "config: reloaded");
 }
 
-Toplevel *Server::frontToplevel(uint32_t workspace) {
-  for (Toplevel *toplevel : toplevels) {
-    if (toplevel->workspace == workspace) return toplevel;
+FramedWindow *Server::frontToplevel(uint32_t workspace) {
+  for (FramedWindow *window : toplevels) {
+    if (window->workspace == workspace) return window;
   }
   return nullptr;
 }
@@ -1934,10 +2196,16 @@ void Server::moveFocusedToWorkspace(uint32_t index) {
 
   // No client surface has the keyboard, so it is a Wayland window's turn — the
   // front one, which is the one the user is looking at.
-  if (Toplevel *toplevel = frontToplevel(workspaces.current)) {
-    toplevel->workspace = index;
-    wlr_scene_node_reparent(&toplevel->scene_tree->node,
-                            workspaces.tree[index]);
+  if (FramedWindow *window = frontToplevel(workspaces.current)) {
+    window->workspace = index;
+    wlr_scene_node_reparent(window->contentNode(), workspaces.tree[index]);
+    // Its frame goes with it, or the title bar stays on this workspace with
+    // nothing underneath.
+    if (surfaces != nullptr && window->frameId != 0) {
+      if (ClientSurface *frame = surfaces->find(window->frameId)) {
+        surfaces->moveToWorkspace(*frame, index);
+      }
+    }
     // Left at the front of the stacking list, which makes it the front window
     // of the workspace it arrived on — nothing else is there to be in front.
     wlr_seat_keyboard_notify_clear_focus(seat);
@@ -2067,12 +2335,12 @@ void Server::on_cursor_button(wl_listener *listener, void *data) {
                                       by)) {
       server->surfaces->setFocused(frame->id);
       server->surfaces->raise(*frame);
-      if (frame->isToplevel()) {
-        // A Wayland window takes the keyboard through the seat, and no client
+      if (frame->isForeign()) {
+        // A foreign window takes the keyboard through the seat, and no client
         // surface may hold it at the same time — both focused would deliver
         // every key twice.
         server->setFocusedSurface(0);
-        server->focus(frame->toplevel);
+        server->focus(frame->window);
       } else {
         server->setFocusedSurface(frame->id);
         wlr_seat_keyboard_notify_clear_focus(server->seat);
@@ -2090,11 +2358,10 @@ void Server::on_cursor_button(wl_listener *listener, void *data) {
           return;
         case lava::DecorationHit::Maximize:
           server->surfaces->toggleMaximize(*frame);
-          if (frame->isToplevel()) {
+          if (frame->isForeign()) {
             // Told, so the client draws itself as maximized — squared corners,
             // a different button in its own menu.
-            wlr_xdg_toplevel_set_maximized(frame->toplevel->xdg_toplevel,
-                                           frame->maximized);
+            frame->window->setMaximized(frame->maximized);
           }
           return;
         case lava::DecorationHit::Bar:
@@ -2303,7 +2570,7 @@ int main() {
   }
 
   wlr_renderer_init_wl_display(server.renderer, server.display);
-  wlr_compositor_create(server.display, 6, server.renderer);
+  auto *compositor = wlr_compositor_create(server.display, 6, server.renderer);
   wlr_subcompositor_create(server.display);
   // The clipboard, and the X11-style middle-click one beside it. Both are
   // only half of what a working selection needs — see `on_request_set_selection`.
@@ -2420,6 +2687,33 @@ int main() {
         return 0;
       },
       &server);
+
+  // X11 applications, through Xwayland. Lazy: the X server is not started
+  // until something actually tries to connect, so a session that never runs an
+  // X11 client never pays for one.
+  //
+  // Not fatal if it fails — a compositor without Xwayland runs every Wayland
+  // client exactly as before, and says so rather than looking healthy while
+  // `DISPLAY` points at nothing.
+  server.xwayland =
+      wlr_xwayland_create(server.display, compositor, /*lazy=*/true);
+  if (server.xwayland != nullptr) {
+    server.new_xwayland_surface.attach(&server.xwayland->events.new_surface,
+                                       &server,
+                                       Server::on_new_xwayland_surface);
+    server.xwayland_ready.attach(&server.xwayland->events.ready, &server,
+                                 Server::on_xwayland_ready);
+    // Now, not on `ready`. The socket is bound when the server object is
+    // created; what lazy mode defers is starting the X server behind it, and
+    // that does not happen until a client connects — which no client will do
+    // while DISPLAY is unset. Waiting for `ready` to publish it is a deadlock
+    // that looks exactly like Xwayland being broken.
+    setenv("DISPLAY", server.xwayland->display_name, 1);
+    wlr_log(WLR_INFO, "xwayland: DISPLAY=%s (starting on first client)",
+            server.xwayland->display_name);
+  } else {
+    wlr_log(WLR_ERROR, "xwayland: unavailable — X11 clients cannot connect");
+  }
 
   const char *socket = wl_display_add_socket_auto(server.display);
   if (!socket || !wlr_backend_start(server.backend)) {

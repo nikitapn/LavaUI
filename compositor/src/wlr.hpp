@@ -70,4 +70,17 @@ extern "C" {
 #include <wlr/types/wlr_scene.h>
 #undef static
 
+// 3. `wlr/xwayland/xwayland.h` names a field `class`, which a C header may do
+//    and a C++ one may not. Same shape of problem as `static` above, same
+//    answer: rename the keyword for the span of this one include. Everything
+//    wlroots and xcb pull in here is C, so `class` cannot appear as anything
+//    but an identifier — but the wlroots headers this needs are included
+//    above, outside the window, so the blast radius stays small.
+//
+//    The field is reached as `xclass` in this program. Re-check with
+//    `grep -n '\bclass\b' wlr/xwayland/*.h` after a wlroots upgrade.
+#define class xclass
+#include <wlr/xwayland.h>
+#undef class
+
 }  // extern "C"
