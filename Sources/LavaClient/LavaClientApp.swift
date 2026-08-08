@@ -86,7 +86,8 @@ public enum LavaClient {
             // arena's published sequence already says what is current, so a
             // dropped one costs a frame of latency, never a frame of content.
             Task.detached { [compositor] in
-                try? await compositor.present(surfaceId: surfaceID)
+                // Unreliable: write and return; no reply waiter (see sendUnreliable).
+                await compositor.present(surfaceId: surfaceID)
             }
         }) else {
             fail("failed to create arena '\(arenaID)' — is one already running?")

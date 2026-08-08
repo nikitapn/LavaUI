@@ -997,11 +997,7 @@ final public class Compositor: NPRPCObject, @unchecked Sendable {
     finalData.storeBytes(of: UInt32(buffer.size), toByteOffset: 0, as: UInt32.self)
 
     // Send unreliable (no reply expected)
-    do {
-      try await sendAsync(buffer: buffer, timeout: timeout)
-    } catch {
-      // Fire-and-forget: ignore communication errors
-    }
+    sendUnreliable(buffer: buffer)
   }
 
   public func scrollUnclaimed(surfaceId: UInt32, dx: Float, dy: Float) async   {
@@ -1034,11 +1030,7 @@ final public class Compositor: NPRPCObject, @unchecked Sendable {
     finalData.storeBytes(of: UInt32(buffer.size), toByteOffset: 0, as: UInt32.self)
 
     // Send unreliable (no reply expected)
-    do {
-      try await sendAsync(buffer: buffer, timeout: timeout)
-    } catch {
-      // Fire-and-forget: ignore communication errors
-    }
+    sendUnreliable(buffer: buffer)
   }
 
   public func subscribeInput(surfaceId: UInt32) throws -> NPRPCBidiStream<InputAck, InputEvent>   {
