@@ -38,6 +38,10 @@ endforeach
 # the environment overrides it for an installed binary.
 canvas_assets = meson.project_source_root() / 'canvas/Sources/CanvasResources'
 
+# The face the compositor draws window titles in. Same files LavaUI clients
+# use, so its own text does not look like a different desktop.
+lava_ui_fonts = meson.project_source_root() / 'Sources/LavaUI/Resources/fonts'
+
 # ── Control plane (NPRPC) ───────────────────────────────────────────────────
 #
 # Detected rather than required, the same way `Package.swift` treats it and for
@@ -91,6 +95,7 @@ executable(
   'compositor',
   'src/main.cpp',
   'src/canvas_surface.cpp',
+  'src/decoration.cpp',
   lava_idl_sources,
   protocol_headers,
   dependencies: [
@@ -115,6 +120,7 @@ executable(
   cpp_args: [
     '-DWLR_USE_UNSTABLE',
     '-DLAVA_CANVAS_ASSETS="' + canvas_assets + '"',
+    '-DLAVA_UI_FONTS="' + lava_ui_fonts + '"',
   ],
   override_options: ['warning_level=3'],
   install: true,

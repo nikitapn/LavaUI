@@ -10,6 +10,7 @@
 #include <list>
 
 #include "canvas_surface.hpp"
+#include "decoration.hpp"
 #include "control_plane.hpp"
 #include "wlr.hpp"
 
@@ -212,21 +213,53 @@ struct Server {
 // Wayland itself runs in, and for the same reason: the process that knows a
 // window is wanted is the one with something to put in it.
 
-/// One client's window.
+/// One client's window: its content, and the frame around it.
+///
+/// `x, y` is the *frame* origin — the top-left of the title bar. The content
+/// sits one bar below it. Everything that moves a window moves both, which is
+/// the only reason they are one struct rather than two surfaces that happen to
+/// be near each other.
 struct ClientSurface {
   uint32_t id = 0;
+  std::string title;
+
   std::unique_ptr<lava::CanvasSurface> canvas;
   wlr_scene_buffer *node = nullptr;
+
+  /// The non-client area. Its own surface, so a title change redraws a strip
+  /// rather than the window, and hit testing stays a rectangle comparison.
+  std::unique_ptr<lava::CanvasSurface> bar;
+  wlr_scene_buffer *barNode = nullptr;
+  lava::DecorationHit hovered = lava::DecorationHit::Bar;
+
   int x = 0;
   int y = 0;
   uint32_t width = 0;
   uint32_t height = 0;
 
-  /// Whether `lx, ly` (layout space) is inside this surface, and where in it.
+  /// Where a maximized window came from, so restoring is exact.
+  bool maximized = false;
+  int restoreX = 0;
+  int restoreY = 0;
+  uint32_t restoreW = 0;
+  uint32_t restoreH = 0;
+
+  /// Where the content starts, below the bar.
+  int contentY() const { return y + lava::Decoration::kHeight; }
+
+  /// Whether `lx, ly` (layout space) is inside the content, and where in it.
   bool hit(double lx, double ly, double &sx, double &sy) const {
     sx = lx - x;
-    sy = ly - y;
+    sy = ly - contentY();
     return sx >= 0 && sy >= 0 && sx < width && sy < height;
+  }
+
+  /// Whether `lx, ly` is on the title bar, and where along it.
+  bool hitBar(double lx, double ly, double &sx, double &sy) const {
+    sx = lx - x;
+    sy = ly - y;
+    return sx >= 0 && sy >= 0 && sx < width &&
+           sy < lava::Decoration::kHeight;
   }
 };
 
@@ -251,6 +284,37 @@ class SurfaceRegistry : public lava::CompositorHost {
   ClientSurface *find(uint32_t id) {
     for (auto &s : surfaces_) {
       if (s->id == id) return s.get();
+    }
+    return nullptr;
+  }
+
+  /// Updates every window's bar hover for a pointer at `lx, ly`.
+  ///
+  /// True when the pointer is over a bar, which is also the caller's signal to
+  /// stop: a title bar is the compositor's and the window under it should not
+  /// also see the motion.
+  bool hoverFrames(double lx, double ly) {
+    bool over = false;
+    for (auto &surface : surfaces_) {
+      double sx = 0, sy = 0;
+      lava::DecorationHit hit = lava::DecorationHit::Bar;
+      const bool on = !over && surface->hitBar(lx, ly, sx, sy);
+      if (on) {
+        hit = lava::Decoration::hitTest(static_cast<float>(sx),
+                                        static_cast<float>(sy), surface->width);
+        over = true;
+      }
+      // Windows the pointer is *not* over have their highlight cleared, which
+      // is what stops a button staying lit after the cursor leaves it.
+      hoverBar(*surface, on ? hit : lava::DecorationHit::Bar);
+    }
+    return over;
+  }
+
+  /// Topmost window whose bar is under a layout-space point.
+  ClientSurface *frameAt(double lx, double ly, double &sx, double &sy) {
+    for (auto &surface : surfaces_) {
+      if (surface->hitBar(lx, ly, sx, sy)) return surface.get();
     }
     return nullptr;
   }
@@ -294,9 +358,15 @@ class SurfaceRegistry : public lava::CompositorHost {
     surface->x = 40 + static_cast<int>(surfaces_.size()) * 40;
     surface->y = 40 + static_cast<int>(surfaces_.size()) * 40;
 
+    surface->title = title;
+    surface->bar = renderer_->createSurface(width, lava::Decoration::kHeight);
+    if (!surface->bar) return 0;
+
     surface->node = wlr_scene_buffer_create(tree_, surface->canvas->buffer());
-    if (surface->node == nullptr) return 0;
-    wlr_scene_node_set_position(&surface->node->node, surface->x, surface->y);
+    surface->barNode = wlr_scene_buffer_create(tree_, surface->bar->buffer());
+    if (surface->node == nullptr || surface->barNode == nullptr) return 0;
+    place(*surface);
+    drawBar(*surface);
 
     const uint32_t id = surface->id;
     surfaces_.push_front(std::move(surface));
@@ -305,11 +375,88 @@ class SurfaceRegistry : public lava::CompositorHost {
     return id;
   }
 
-  /// Moves a surface's window. Position is the scene's, not the surface's.
+  /// Puts both of a window's nodes where its frame origin says they go.
+  void place(ClientSurface &surface) {
+    wlr_scene_node_set_position(&surface.barNode->node, surface.x, surface.y);
+    wlr_scene_node_set_position(&surface.node->node, surface.x,
+                                surface.contentY());
+  }
+
+  /// Moves a window. Both nodes, because a frame and its content are one
+  /// window and only ever move together.
   void moveSurface(ClientSurface &surface, int x, int y) {
     surface.x = x;
     surface.y = y;
-    wlr_scene_node_set_position(&surface.node->node, x, y);
+    place(surface);
+  }
+
+  /// Fills the output, or goes back to where it was.
+  ///
+  /// The previous frame is remembered rather than recomputed, so restoring
+  /// puts a window back exactly where the user left it.
+  void toggleMaximize(ClientSurface &surface) {
+    if (surface.maximized) {
+      moveSurface(surface, surface.restoreX, surface.restoreY);
+      resizeSurface(surface, surface.restoreW, surface.restoreH);
+      surface.maximized = false;
+      return;
+    }
+    if (outputWidth_ == 0 || outputHeight_ == 0) return;
+    surface.restoreX = surface.x;
+    surface.restoreY = surface.y;
+    surface.restoreW = surface.width;
+    surface.restoreH = surface.height;
+    moveSurface(surface, 0, 0);
+    resizeSurface(surface, outputWidth_,
+                  outputHeight_ > lava::Decoration::kHeight
+                      ? outputHeight_ - lava::Decoration::kHeight
+                      : outputHeight_);
+    surface.maximized = true;
+  }
+
+  /// The area a maximized window fills. Told by the output, since a surface
+  /// registry has no other way to know how big the screen is.
+  void setOutputSize(uint32_t width, uint32_t height) {
+    outputWidth_ = width;
+    outputHeight_ = height;
+  }
+
+  /// Redraws the title bar. Cheap — a strip, from commands built here.
+  void drawBar(ClientSurface &surface) {
+    decoration_.build(surface.title, surface.width, surface.hovered,
+                      surface.id == focused_);
+    if (surface.bar->renderList(decoration_.commands(), decoration_.glyphs())) {
+      wlr_scene_buffer_set_buffer_with_damage(surface.barNode,
+                                              surface.bar->buffer(), nullptr);
+    }
+  }
+
+  /// Which window's bar is drawn as active. Not the seat's focus: a client
+  /// surface is not a `wlr_surface` and the seat has no object for it.
+  void setFocused(uint32_t id) {
+    if (focused_ == id) return;
+    const uint32_t previous = focused_;
+    focused_ = id;
+    if (ClientSurface *was = find(previous)) drawBar(*was);
+    if (ClientSurface *now = find(id)) drawBar(*now);
+  }
+
+  /// Lights whichever control is under the pointer. True if it changed.
+  bool hoverBar(ClientSurface &surface, lava::DecorationHit hit) {
+    if (surface.hovered == hit) return false;
+    surface.hovered = hit;
+    drawBar(surface);
+    return true;
+  }
+
+  /// Loads the face titles are drawn in, and registers it for the atlas.
+  void initDecoration(const std::string &fontPath, float pixelSize) {
+    if (!decoration_.loadFont(fontPath, pixelSize)) {
+      wlr_log(WLR_ERROR, "decoration: no title face at '%s'", fontPath.c_str());
+      return;
+    }
+    const int id = registerFont(fontPath, pixelSize);
+    if (id >= 0) decoration_.setFontId(static_cast<uint32_t>(id));
   }
 
   /// Resizes a surface and hands the scene its new buffer.
@@ -325,6 +472,11 @@ class SurfaceRegistry : public lava::CompositorHost {
     surface.width = width;
     surface.height = height;
     wlr_scene_buffer_set_buffer(surface.node, surface.canvas->buffer());
+    // The bar spans the window, so it follows every width change.
+    if (surface.bar->resize(width, lava::Decoration::kHeight)) {
+      wlr_scene_buffer_set_buffer(surface.barNode, surface.bar->buffer());
+    }
+    drawBar(surface);
     // The `Resize` the surface just queued for its client is sitting in the
     // renderer's queue; this is what forwards it, and what redraws the frame
     // already held into the new extent meanwhile.
@@ -336,6 +488,7 @@ class SurfaceRegistry : public lava::CompositorHost {
     for (auto it = surfaces_.begin(); it != surfaces_.end(); ++it) {
       if ((*it)->id != id) continue;
       if ((*it)->node) wlr_scene_node_destroy(&(*it)->node->node);
+      if ((*it)->barNode) wlr_scene_node_destroy(&(*it)->barNode->node);
       surfaces_.erase(it);
       if (control_) control_->surfaceGone(id);
       wlr_log(WLR_INFO, "surface %u: gone", id);
@@ -436,6 +589,11 @@ class SurfaceRegistry : public lava::CompositorHost {
   lava::CanvasRenderer *renderer_ = nullptr;
   wlr_scene_tree *tree_ = nullptr;
   lava::ControlPlane *control_ = nullptr;
+  lava::Decoration decoration_;
+  /// Whose bar is drawn active.
+  uint32_t focused_ = 0;
+  uint32_t outputWidth_ = 0;
+  uint32_t outputHeight_ = 0;
   /// Never reused, so a stale id from a closed surface fails to resolve rather
   /// than quietly addressing whatever opened next.
   uint32_t nextId_ = 1;
@@ -489,6 +647,13 @@ Output::Output(Server *server, wlr_output *output)
   auto *layout_output = wlr_output_layout_add_auto(server->output_layout, wlr);
   wlr_scene_output_layout_add_output(server->scene_layout, layout_output,
                                      scene_output);
+
+  // What a maximized window fills. The registry has no other way to know how
+  // big the screen is, and this is the only place it changes.
+  if (server->surfaces != nullptr) {
+    server->surfaces->setOutputSize(static_cast<uint32_t>(wlr->width),
+                                    static_cast<uint32_t>(wlr->height));
+  }
 }
 
 Output::~Output() {
@@ -868,7 +1033,15 @@ void Server::update_pointer_focus(uint32_t time_msec) {
   // motion to whatever it crossed.
   if (update_drag()) return;
 
-  // Client surfaces first: they sit above the Wayland windows in the scene and
+  // The frame before the content. A title bar belongs to the compositor, so
+  // its hover is answered here and never reaches the client.
+  if (surfaces != nullptr && surfaces->hoverFrames(cursor->x, cursor->y)) {
+    wlr_cursor_set_xcursor(cursor, cursor_mgr, "default");
+    wlr_seat_pointer_clear_focus(seat);
+    return;
+  }
+
+  // Client surfaces next: they sit above the Wayland windows in the scene and
   // are not `wlr_surface`s, so `surface_at` cannot see them at all.
   if (route_pointer(static_cast<uint32_t>(canvas::InputEventKind::MouseMove), 0,
                     0)) {
@@ -962,6 +1135,41 @@ void Server::on_cursor_button(wl_listener *listener, void *data) {
   if (!pressed && server->drag != Server::Drag::None) {
     server->drag = Server::Drag::None;
     return;
+  }
+
+  // The title bar, before anything else. Its buttons are the compositor's and
+  // a press there never reaches a client — which is also what lets a window
+  // whose client has stopped answering still be closed.
+  if (pressed && server->surfaces != nullptr) {
+    double bx = 0, by = 0;
+    if (ClientSurface *frame =
+            server->surfaces->frameAt(server->cursor->x, server->cursor->y, bx,
+                                      by)) {
+      server->surfaces->setFocused(frame->id);
+      server->focusedSurface = frame->id;
+      wlr_seat_keyboard_notify_clear_focus(server->seat);
+      switch (lava::Decoration::hitTest(static_cast<float>(bx),
+                                        static_cast<float>(by),
+                                        frame->width)) {
+        case lava::DecorationHit::Close:
+          // The client's stream ends with its surface, which is how it learns
+          // the window is gone — see `SubscribeInput`.
+          server->surfaces->destroySurface(frame->id);
+          return;
+        case lava::DecorationHit::Maximize:
+          server->surfaces->toggleMaximize(*frame);
+          return;
+        case lava::DecorationHit::Bar:
+          // Bare bar: drag the window, the way a title bar always has.
+          server->drag = Server::Drag::Move;
+          server->dragSurface = frame->id;
+          server->dragStartX = server->cursor->x;
+          server->dragStartY = server->cursor->y;
+          server->dragOriginX = frame->x;
+          server->dragOriginY = frame->y;
+          return;
+      }
+    }
   }
 
   // Alt+drag: left moves, right resizes. Checked before anything is forwarded,
@@ -1171,6 +1379,13 @@ int main() {
     wlr_log(WLR_ERROR, "no canvas device — LavaUI surfaces cannot be drawn");
   }
 
+  // The face titles are drawn in. Same directory LavaUI's clients use, since
+  // the compositor's own text should not look like a different desktop.
+  {
+    const char *root = std::getenv("LAVA_UI_FONTS");
+    const std::string dir = root ? root : LAVA_UI_FONTS;
+    surfaces.initDecoration(dir + "/OpenSans-Regular.ttf", 14.f);
+  }
   surfaces.start(wl_display_get_event_loop(server.display));
 
   auto control = lava::ControlPlane::start(

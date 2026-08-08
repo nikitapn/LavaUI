@@ -92,6 +92,13 @@ class CanvasSurface {
   /// hand `buffer()` to the scene again afterwards. False if nothing changed.
   bool resize(uint32_t width, uint32_t height);
 
+  /// Draws a list built here rather than one published by a client.
+  ///
+  /// What the compositor's own surfaces use — a title bar has no client and no
+  /// arena, and its commands come from `Decoration`.
+  bool renderList(const std::vector<canvas::DrawCommand> &commands,
+                  const std::vector<canvas::GlyphInstance> &glyphs);
+
   /// Renders whatever another process publishes into the arena named `id`.
   ///
   /// The arena is shared memory the client writes its draw list straight

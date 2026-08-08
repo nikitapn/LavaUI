@@ -193,6 +193,17 @@ bool CanvasSurface::resize(uint32_t width, uint32_t height) {
   return true;
 }
 
+bool CanvasSurface::renderList(
+    const std::vector<canvas::DrawCommand> &commands,
+    const std::vector<canvas::GlyphInstance> &glyphs) {
+  renderer_.engine().submitDrawList(commands.data(), commands.size(),
+                                    glyphs.data(), glyphs.size(), nullptr, 0,
+                                    nullptr, 0, windowId_);
+  if (!renderer_.engine().renderFrame(windowId_)) return false;
+  drawn_ = renderer_.engine().frameCounter(windowId_);
+  return true;
+}
+
 bool CanvasSurface::attachArena(const std::string &id) {
   // Failure is not logged: a caller may retry on a timer until a client turns
   // up, and an error line per attempt would bury the one that matters.
