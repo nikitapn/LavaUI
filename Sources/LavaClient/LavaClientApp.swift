@@ -98,6 +98,32 @@ public enum LavaClient {
         return editor
     }
 
+    /// Opens a *panel*: a surface docked to a screen edge.
+    ///
+    /// Everything `open` does, and then `run` asks for a panel instead of a
+    /// window. A panel gets no title bar, is stacked above ordinary windows,
+    /// and does not choose where it is — only how deep.
+    ///
+    /// - Parameters:
+    ///   - thickness: how deep the panel is in the direction it is *not* long:
+    ///     height for a top or bottom panel, width for a left or right one.
+    ///     A request, like a window's size — the real one arrives as the
+    ///     opening `Resize`, which is also how a panel learns its length.
+    ///   - reserve: ask that windows be laid out around this panel rather than
+    ///     under it. What a taskbar wants; an overlay does not.
+    public static func openPanel(
+        title: String,
+        edge: PanelEdge = .top,
+        thickness: Float = 32,
+        reserve: Bool = true
+    ) -> Editor? {
+        Self.panel = (edge, thickness, reserve)
+        // The requested size is only a starting point for layout until the
+        // compositor sends the real one; a panel's length is not its own to
+        // choose, so guessing the screen's width is as good as anything.
+        return open(title: title, width: 1920, height: thickness)
+    }
+
     /// Takes a surface, subscribes to its input, and runs the frame loop.
     ///
     /// Split from `open` for the reason `LavaApp` splits them: an app's
@@ -121,7 +147,19 @@ public enum LavaClient {
             // swapchain on the far side, which on a cold device is not a
             // microsecond-scale call like the rest of this interface.
             surfaceID = try blockingCall(timeout: 10) {
-                try await compositor.createSurface(
+                // The only place `open` and `openPanel` differ. Everything
+                // after this — the input stream, the frame loop, `Present` —
+                // is the same surface id either way, which is why the panel
+                // role is a different way to *create* a surface rather than a
+                // different kind of thing to own.
+                if let panel = Self.panel {
+                    return try await compositor.createPanel(
+                        arenaId: arenaID, edge: panel.edge,
+                        thickness: UInt32(panel.thickness),
+                        reserve: panel.reserve, title: title
+                    )
+                }
+                return try await compositor.createSurface(
                     arenaId: arenaID,
                     width: UInt32(requestedWidth), height: UInt32(requestedHeight),
                     title: title
@@ -275,6 +313,9 @@ public enum LavaClient {
     nonisolated(unsafe) private static var title = ""
     nonisolated(unsafe) private static var requestedWidth: Float = 1280
     nonisolated(unsafe) private static var requestedHeight: Float = 800
+    /// Set by `openPanel`; nil for an ordinary window.
+    nonisolated(unsafe) private static var panel:
+        (edge: PanelEdge, thickness: Float, reserve: Bool)?
     /// The `Rpc` owns the transport — the shared-memory listener, its ring
     /// buffers, the worker threads — and dropping it tears all of that down.
     nonisolated(unsafe) private static var runtime: Rpc?

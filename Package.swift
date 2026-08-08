@@ -44,6 +44,7 @@ var products: [Product] = [
     .executable(name: "TwoWindows", targets: ["TwoWindows"]),
     .executable(name: "ArenaDemo", targets: ["ArenaDemo"]),
     .executable(name: "LavaSurface", targets: ["LavaSurface"]),
+    .executable(name: "LavaTaskbar", targets: ["LavaTaskbar"]),
     .library(name: "LavaUI", targets: ["LavaUI"]),
     .library(name: "LavaText", targets: ["LavaText"]),
     .library(name: "LavaMenu", targets: ["LavaMenu"]),
@@ -82,6 +83,15 @@ var targets: [Target] = [
         name: "LavaSurface",
         dependencies: ["LavaUI"]
             + (haveNprpc ? [Target.Dependency("LavaClient")] : []),
+        swiftSettings: interopCxx
+    ),
+    // The desktop's top panel, as an ordinary LavaUI client — the shell built
+    // out of the same client API an app uses. See Sources/LavaTaskbar.
+    .executableTarget(
+        name: "LavaTaskbar",
+        dependencies: ["LavaUI"]
+            + (haveNprpc ? [Target.Dependency("LavaClient"),
+                            Target.Dependency("LavaIDL")] : []),
         swiftSettings: interopCxx
     ),
     .executableTarget(
