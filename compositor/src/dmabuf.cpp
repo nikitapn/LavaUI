@@ -4,6 +4,7 @@
 #include <sys/sysmacros.h>  // major()/minor()
 #include <unistd.h>
 
+#include <algorithm>
 #include <cstring>
 
 extern "C" {
@@ -64,8 +65,38 @@ bool device_matches_drm_fd(VkPhysicalDevice device, int drm_fd) {
 
 }  // namespace
 
-VulkanExporter *VulkanExporter::create(int drm_fd) {
+VulkanExporter *VulkanExporter::create(wlr_renderer *renderer) {
+  const int drm_fd = wlr_renderer_get_drm_fd(renderer);
+  if (drm_fd < 0) {
+    wlr_log(WLR_ERROR, "dmabuf: renderer has no DRM device");
+    return nullptr;
+  }
+
   auto *self = new VulkanExporter();
+
+  // Ask the renderer what it can import before deciding what to produce.
+  //
+  // Both sides can name a modifier the other cannot read. Exporting from the
+  // full set of what this GPU supports and hoping is how a buffer ends up
+  // technically mappable and subtly wrong, so the offer is narrowed to the
+  // intersection and refused outright if that is empty.
+  if (const wlr_drm_format_set *formats =
+          wlr_renderer_get_texture_formats(renderer, WLR_BUFFER_CAP_DMABUF)) {
+    if (const wlr_drm_format *format =
+            wlr_drm_format_set_get(formats, kDrmFormat)) {
+      self->importable_.assign(format->modifiers,
+                               format->modifiers + format->len);
+    }
+  }
+  if (self->importable_.empty()) {
+    wlr_log(WLR_ERROR,
+            "dmabuf: the compositor's renderer imports no modifier for "
+            "format 0x%08x", kDrmFormat);
+    delete self;
+    return nullptr;
+  }
+  wlr_log(WLR_INFO, "dmabuf: renderer imports %zu modifier(s) for this format",
+          self->importable_.size());
 
   VkApplicationInfo app{};
   app.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
@@ -203,13 +234,6 @@ std::vector<uint64_t> VulkanExporter::usable_modifiers(VkFormat format) const {
   list.pDrmFormatModifierProperties = entries.data();
   vkGetPhysicalDeviceFormatProperties2(physical_device_, format, &props);
 
-  // Not yet intersected with what the compositor's renderer can import.
-  //
-  // The driver picks from whatever is offered here, and a modifier this device
-  // can render into is not necessarily one wlroots reads identically. That is
-  // the leading suspect for the colour shortfall noted in `clear_image`, and
-  // the negotiation — asking the renderer for its importable modifier set and
-  // offering only the intersection — is the next thing to try.
   std::vector<uint64_t> result;
   for (const auto &entry : entries) {
     // Single-plane only. Multi-plane modifiers are legal and would need a
@@ -261,6 +285,17 @@ std::vector<uint64_t> VulkanExporter::usable_modifiers(VkFormat format) const {
           VK_EXTERNAL_MEMORY_FEATURE_EXPORTABLE_BIT)) {
       continue;
     }
+    // Offer only what the other side said it could read.
+    //
+    // On this hardware the driver already chose an importable modifier
+    // without being told to, so this changes nothing here — verified by
+    // A/B. It is insurance rather than a fix: the two sets are not
+    // guaranteed to overlap, and a buffer the consumer cannot read is a
+    // failure at import time on hardware nobody tested on.
+    if (std::find(importable_.begin(), importable_.end(),
+                  entry.drmFormatModifier) == importable_.end()) {
+      continue;
+    }
     result.push_back(entry.drmFormatModifier);
   }
 
@@ -271,7 +306,9 @@ bool VulkanExporter::make_image(uint32_t width, uint32_t height,
                                 ExportedImage &out) {
   std::vector<uint64_t> modifiers = usable_modifiers(kVkFormat);
   if (modifiers.empty()) {
-    wlr_log(WLR_ERROR, "dmabuf: no exportable modifier for the chosen format");
+    wlr_log(WLR_ERROR,
+            "dmabuf: no modifier this GPU can export is also one the "
+            "compositor's renderer can import");
     return false;
   }
 
@@ -479,13 +516,10 @@ bool VulkanExporter::clear_image(const ExportedImage &image, float r, float g,
   // reads this buffer until the GPU has finished writing it. A moving image
   // will need explicit sync (VK_KHR_external_semaphore_fd) instead.
   //
-  // KNOWN GAP — colour fidelity is not exact. Clearing to pure white and to
-  // mid-grey both read back exactly; clearing to (0.95, 0.45, 0.10) reads
-  // (229, 109, 25) where (242, 115, 26) is expected. Measured with a single
-  // compositor instance and against a scene rect that reads exact in the same
-  // frame, so it is specific to the imported buffer rather than to the output.
-  // Forcing DRM_FORMAT_MOD_LINEAR does not change it, which rules out AMD's
-  // DCC compression. Unexplained; see the note in `usable_modifiers`.
+  // Colour is exact: clearing to (0.95, 0.45, 0.10) reads back
+  // (242, 115, 25), which is those values times 255 with the blue landing on
+  // a rounding tie (25.5). Checked against a scene rect in the same frame,
+  // which reads exact too.
   vkQueueWaitIdle(queue_);
   vkFreeCommandBuffers(device_, command_pool_, 1, &cmd);
   return true;

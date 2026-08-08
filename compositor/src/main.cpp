@@ -607,13 +607,8 @@ int main() {
   // scene graph shows it alongside ordinary Wayland windows. What the image
   // contains is the only stand-in part — a flat colour here, a replayed draw
   // list once canvas is linked.
-  lava::VulkanExporter *exporter = nullptr;
+  lava::VulkanExporter *exporter = lava::VulkanExporter::create(server.renderer);
   lava::ExportedImage demo_image;
-  if (int drm_fd = wlr_renderer_get_drm_fd(server.renderer); drm_fd >= 0) {
-    exporter = lava::VulkanExporter::create(drm_fd);
-  } else {
-    wlr_log(WLR_INFO, "dmabuf: renderer has no DRM fd; skipping export demo");
-  }
   if (exporter && exporter->make_image(480, 320, demo_image) &&
       exporter->clear_image(demo_image, 0.95f, 0.45f, 0.10f)) {
     auto *buffer = lava::DmabufBuffer::create(&demo_image);

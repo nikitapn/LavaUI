@@ -52,15 +52,17 @@ class VulkanExporter {
   VulkanExporter(const VulkanExporter &) = delete;
   VulkanExporter &operator=(const VulkanExporter &) = delete;
 
-  /// Brings up Vulkan on the same GPU wlroots is using.
+  /// Brings up Vulkan on the same GPU wlroots is using, and learns what that
+  /// renderer is able to import.
   ///
-  /// `drm_fd` comes from `wlr_renderer_get_drm_fd`. Its device node identifies
-  /// the GPU, and the Vulkan physical device is chosen to match it through
-  /// VK_EXT_physical_device_drm. Returns null if no Vulkan device corresponds
-  /// to that node — which on a hybrid laptop usually means the driver for that
-  /// GPU is not installed, and is worth saying out loud rather than silently
-  /// rendering on the other one.
-  static VulkanExporter *create(int drm_fd);
+  /// Takes the renderer rather than a file descriptor because two things have
+  /// to agree and both come from it: the DRM node picks the physical device
+  /// (via VK_EXT_physical_device_drm), and the renderer's texture formats say
+  /// which modifiers it can actually read. Returns null if no Vulkan device
+  /// corresponds to that node — on a hybrid laptop that usually means the
+  /// driver for that GPU is not installed, which is worth saying out loud
+  /// rather than silently rendering on the other one.
+  static VulkanExporter *create(wlr_renderer *renderer);
 
   /// Allocates an image that can be exported, and exports it.
   bool make_image(uint32_t width, uint32_t height, ExportedImage &out);
@@ -84,8 +86,14 @@ class VulkanExporter {
   PFN_vkGetMemoryFdKHR get_memory_fd_ = nullptr;
   PFN_vkGetImageDrmFormatModifierPropertiesEXT get_modifier_props_ = nullptr;
 
-  /// Modifiers this device can both render into and export, single-plane only.
+  /// Modifiers this device can render into and export, single-plane only,
+  /// intersected with what the compositor's renderer can import.
   std::vector<uint64_t> usable_modifiers(VkFormat format) const;
+
+  /// What the renderer on the other side of the handover accepts. Empty means
+  /// it advertised none for our format, which is a reason to refuse rather
+  /// than to guess.
+  std::vector<uint64_t> importable_;
 };
 
 /// An `ExportedImage` presented to wlroots as a buffer.
