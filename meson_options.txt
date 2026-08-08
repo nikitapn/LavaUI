@@ -1,0 +1,7 @@
+option(
+  'nprpc_root',
+  type: 'string',
+  value: '',
+  description: 'Path to the nprpc repo (default: ../nprpc next to this one). '
+    + 'Supplies the control plane; without it the compositor builds without one.',
+)

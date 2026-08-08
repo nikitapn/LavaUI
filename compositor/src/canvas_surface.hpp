@@ -83,6 +83,15 @@ class CanvasSurface {
   /// pixels.
   bool renderFromArena();
 
+  /// Hands a wheel notch back to the scene after the client's own tree
+  /// declined it. See `ScrollUnclaimed` in the IDL.
+  void scrollUnclaimed(float dx, float dy);
+
+  /// PNG of the last frame, or a region of it. `w`/`h` <= 0 means the whole
+  /// surface; `maxSide` > 0 downsamples so the longer encoded edge fits.
+  bool capturePng(int32_t x, int32_t y, int32_t w, int32_t h, int32_t maxSide,
+                  std::vector<uint8_t> &outPng, uint32_t &outW, uint32_t &outH);
+
   /// The buffer, for `wlr_scene_buffer_create`. Owned here; the scene takes
   /// its own reference.
   wlr_buffer *buffer() { return &buffer_->base; }

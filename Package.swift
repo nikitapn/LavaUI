@@ -76,13 +76,12 @@ var targets: [Target] = [
                 : []),
         swiftSettings: interopCxx
     ),
-    // A LavaUI app with no window and no GPU, drawn by the wlroots compositor.
-    // Deliberately free of the NPRPC control plane: it is the arena half on
-    // its own, so the arena half can be seen working before anything is built
-    // on top of it. See Sources/LavaSurface/main.swift.
+    // A LavaUI app with no window and no GPU, drawn by the wlroots compositor
+    // and driven by input it forwards. See Sources/LavaSurface/main.swift.
     .executableTarget(
         name: "LavaSurface",
-        dependencies: ["LavaUI"],
+        dependencies: ["LavaUI"]
+            + (haveNprpc ? [Target.Dependency("LavaClient")] : []),
         swiftSettings: interopCxx
     ),
     .executableTarget(

@@ -178,6 +178,24 @@ bool CanvasSurface::renderFromArena() {
   return true;
 }
 
+void CanvasSurface::scrollUnclaimed(float dx, float dy) {
+  engine_.scrollSceneUnclaimed(dx, dy);
+}
+
+bool CanvasSurface::capturePng(int32_t x, int32_t y, int32_t w, int32_t h,
+                               int32_t maxSide, std::vector<uint8_t> &outPng,
+                               uint32_t &outW, uint32_t &outH) {
+  int width = 0;
+  int height = 0;
+  const canvas::U8Vector png =
+      engine_.capturePng(x, y, w, h, maxSide, &width, &height);
+  if (png.empty()) return false;
+  outPng.assign(png.begin(), png.end());
+  outW = static_cast<uint32_t>(width);
+  outH = static_cast<uint32_t>(height);
+  return true;
+}
+
 bool CanvasSurface::render(const std::vector<canvas::DrawCommand> &commands) {
   engine_.submitDrawList(commands.data(), commands.size(), nullptr, 0, nullptr,
                          0, nullptr, 0);
