@@ -3,7 +3,8 @@
 A declarative UI framework in Swift, rendering through Vulkan.
 
 The current application-facing API is documented in
-**[docs/api.md](docs/api.md)**.
+**[docs/api.md](docs/api.md)**. Coding agents: start from
+**[AGENTS.md](AGENTS.md)** (architecture, layout, build, conventions).
 
 Views are described the way SwiftUI describes them — a `body` returning nested
 value types — but the whole stack underneath is here: layout via Yoga, text via

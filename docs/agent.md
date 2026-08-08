@@ -1,5 +1,9 @@
 # LavaUI agent control plane
 
+> Project map for coding agents (architecture, build, where to edit): see
+> **[AGENTS.md](../AGENTS.md)** at the repo root. This file is only the
+> **runtime** agent TCP/MCP control plane inside a running LavaUI app.
+
 An optional localhost TCP server lets an external agent (or CLI / MCP wrapper)
 inspect layout, capture screenshots, and inject input without OS-level
 accessibility hooks.
