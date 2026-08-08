@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -38,6 +39,22 @@ struct CompositorHost {
 
   /// Id to stamp into `GlyphInstance.fontId`, or -1 if the face will not load.
   virtual int registerFont(const std::string &path, float pixelSize) = 0;
+
+  /// Id to stamp into an `Image` command's `param`, or -1 if the file will
+  /// not decode. `key` is the caller's name for the entry — the same string
+  /// `releaseImage` is given — and `outWidth`/`outHeight` come back as the
+  /// *decoded* size, which `maxPixelSize` changes.
+  virtual int registerImage(const std::string &key, const std::string &path,
+                            uint32_t maxPixelSize, uint32_t &outWidth,
+                            uint32_t &outHeight) = 0;
+
+  /// The same, from encoded bytes (PNG, JPEG, …) rather than a path.
+  virtual int registerImageData(const std::string &key, const uint8_t *bytes,
+                                size_t byteCount, uint32_t maxPixelSize,
+                                uint32_t &outWidth, uint32_t &outHeight) = 0;
+
+  /// Drops the compositor's reference to `key`.
+  virtual void releaseImage(const std::string &key) = 0;
 
   /// Opens a surface driven by `arenaId`. 0 if the arena does not exist.
   virtual uint32_t createSurface(const std::string &arenaId, uint32_t width,

@@ -67,6 +67,26 @@ class CanvasRenderer {
   /// registered for one client is already rasterised for the next.
   int registerFont(const std::string &path, float pixelSize);
 
+  /// Decodes a file and uploads it as `key`. Texture id (>0), or -1 if the
+  /// file will not decode. `outWidth`/`outHeight` are the *decoded* size,
+  /// which `maxPixelSize` changes — a client lays out against them, so the
+  /// file's own dimensions would be the wrong answer.
+  ///
+  /// Device-wide for the same reason fonts are: two clients naming the same
+  /// asset share one texture, and neither had to send it.
+  int registerImage(const std::string &key, const std::string &path,
+                    uint32_t maxPixelSize, uint32_t &outWidth,
+                    uint32_t &outHeight);
+
+  /// The same, from encoded bytes that never had a file to be opened from.
+  int registerImageData(const std::string &key, const uint8_t *bytes,
+                        size_t byteCount, uint32_t maxPixelSize,
+                        uint32_t &outWidth, uint32_t &outHeight);
+
+  /// Drops the device's reference to `key`. The memory goes back only once
+  /// every in-flight frame that could still name it has retired.
+  void releaseImage(const std::string &key);
+
   canvas::Engine &engine() { return engine_; }
 
  private:

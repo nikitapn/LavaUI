@@ -3,6 +3,7 @@
 #include <sys/eventfd.h>
 #include <unistd.h>
 
+#include <cstdio>
 #include <cstdlib>
 #include <fstream>
 #include <mutex>
@@ -176,6 +177,44 @@ class InputBroker {
   uint32_t serial_ = 0;
 };
 
+/// How the renderer names a file decoded at a given cap.
+///
+/// The same spelling `ImageStore.key` uses on the client, and deliberately so:
+/// the two caches are separate, but a shared spelling is what lets a stall in
+/// one be read against the other without translating.
+std::string image_key(const std::string &path, uint32_t maxPixelSize) {
+  // 0 is the native decode and keys on the bare path, so a caller that never
+  // caps anything gets the path back unchanged.
+  if (maxPixelSize == 0) return path;
+  return path + "@" + std::to_string(maxPixelSize);
+}
+
+/// How bytes with no path are named: a hash of the content.
+///
+/// Derived from the bytes that arrived rather than taken from the caller. A
+/// name is a claim about a namespace the compositor does not own — two clients
+/// that both call their icon "logo" must not be handed each other's texture —
+/// and the bytes are the one part of that claim it can check.
+///
+/// FNV-1a with the length mixed in, matching `ImageStore.contentKey` exactly,
+/// so both sides of the same image agree on what it is called. A collision
+/// means two unrelated images share a texture; it takes on the order of 2³²
+/// distinct images in one session to become likely, which is why 64 bits is
+/// enough for a desktop and would not be for an untrusted store.
+std::string image_content_key(const uint8_t *bytes, size_t count,
+                              uint32_t maxPixelSize) {
+  uint64_t hash = 0xcbf2'9ce4'8422'2325ull;
+  for (size_t i = 0; i < count; ++i) {
+    hash ^= bytes[i];
+    hash *= 0x0000'0100'0000'01b3ull;
+  }
+  char hex[17];
+  std::snprintf(hex, sizeof(hex), "%llx",
+                static_cast<unsigned long long>(hash));
+  return "mem:" + std::string(hex) + "-" + std::to_string(count) + "-" +
+         std::to_string(maxPixelSize);
+}
+
 InputEvent make_event(uint32_t kind, float x, float y, int32_t button,
                       int32_t mods) {
   InputEvent event{};
@@ -201,18 +240,60 @@ class CompositorImpl final : public ICompositor_Servant {
     return static_cast<uint32_t>(id);
   }
 
-  // Images are not wired through yet. Raising is the honest answer — a client
-  // gets a typed refusal at the call rather than a texture id that resolves to
-  // nothing at draw time.
-  ImageInfo RegisterImage(nprpc::flat::Span<char> path, uint32_t) override {
-    throw ImageNotFound(std::string{path});
+  ImageInfo RegisterImage(nprpc::flat::Span<char> path,
+                          uint32_t maxPixelSize) override {
+    const std::string file{path};
+    const std::string key = image_key(file, maxPixelSize);
+    if (const ImageInfo *known = sharedImage(key)) return *known;
+
+    uint32_t width = 0, height = 0;
+    const int id = host_.registerImage(key, file, maxPixelSize, width, height);
+    if (id <= 0) throw ImageNotFound(file);
+    return keepImage(key, static_cast<uint32_t>(id), width, height);
   }
 
-  ImageInfo RegisterImageData(nprpc::flat::Span<uint8_t>, uint32_t) override {
-    throw ImageNotFound("<bytes>");
+  ImageInfo RegisterImageData(nprpc::flat::Span<uint8_t> bytes,
+                              uint32_t maxPixelSize) override {
+    const auto *data = static_cast<const uint8_t *>(bytes.data());
+    const std::string key = image_content_key(data, bytes.size(), maxPixelSize);
+    if (const ImageInfo *known = sharedImage(key)) return *known;
+
+    uint32_t width = 0, height = 0;
+    const int id = host_.registerImageData(key, data, bytes.size(),
+                                           maxPixelSize, width, height);
+    // No path to name, so name what there is: the client knows which call it
+    // made, but not that the bytes rather than the transfer were the problem.
+    if (id <= 0) {
+      throw ImageNotFound("<" + std::to_string(bytes.size()) +
+                          " bytes in memory>");
+    }
+    return keepImage(key, static_cast<uint32_t>(id), width, height);
   }
 
-  void ReleaseImage(uint32_t) override {}
+  void ReleaseImage(uint32_t id) override {
+    // An id this compositor never handed out, or has already released, is a
+    // client that lost track rather than an error — see the IDL.
+    auto keyIt = imageKeys_.find(id);
+    if (keyIt == imageKeys_.end()) return;
+    const std::string key = keyIt->second;
+
+    // Counted here, because the registration above hands two clients the same
+    // id without uploading twice — so the engine's own refcount saw one user
+    // where there are two, and the first release would free a texture the
+    // second is still drawing. Sharing between clients is the compositor's
+    // business, not the engine's, so the count belongs on this side.
+    //
+    // A client that registers twice and releases once leaks its texture until
+    // the session ends. That is the safe direction to be wrong in; fixing it
+    // properly needs per-client accounting, and this call carries no client.
+    auto userIt = imageUsers_.find(key);
+    if (userIt != imageUsers_.end() && --userIt->second > 0) return;
+
+    imageUsers_.erase(key);
+    imageIds_.erase(key);
+    imageKeys_.erase(keyIt);
+    host_.releaseImage(key);
+  }
 
   // ─── Surfaces ────────────────────────────────────────────────────────────
 
@@ -328,9 +409,46 @@ class CompositorImpl final : public ICompositor_Servant {
     loop_.post([this, surfaceId] { host_.destroySurface(surfaceId); });
   }
 
+  /// What `key` was registered as, if anything, counting one more user.
+  ///
+  /// Idempotent per key, answered without a decode and without leaving the
+  /// loop. Not just an optimisation: a desktop's second client asking for an
+  /// asset the first already has is the normal case, and it should cost a
+  /// lookup.
+  const ImageInfo *sharedImage(const std::string &key) {
+    auto it = imageIds_.find(key);
+    if (it == imageIds_.end()) return nullptr;
+    ++imageUsers_[key];
+    return &it->second;
+  }
+
+  /// Records a freshly uploaded texture and returns what the client is told.
+  ImageInfo keepImage(const std::string &key, uint32_t id, uint32_t width,
+                      uint32_t height) {
+    ImageInfo info;
+    info.id = id;
+    info.width = width;
+    info.height = height;
+    imageIds_[key] = info;
+    ++imageUsers_[key];
+    // Keyed by the id the client will use, so `ReleaseImage` needs no
+    // agreement between the two sides about how a cache key is spelled.
+    imageKeys_[id] = key;
+    wlr_log(WLR_INFO, "image %u: %ux%u '%s'", id, width, height, key.c_str());
+    return info;
+  }
+
   CompositorHost &host_;
   LoopQueue &loop_;
   InputBroker &broker_;
+
+  /// Registered images, three ways round: what a key resolves to, how many
+  /// clients hold it, and which key an id came from. No lock, unlike
+  /// `InputBroker` — every method that touches these is dispatched onto the
+  /// loop by the POA, and a lock would suggest otherwise.
+  std::unordered_map<std::string, ImageInfo> imageIds_;
+  std::unordered_map<std::string, uint32_t> imageUsers_;
+  std::unordered_map<uint32_t, std::string> imageKeys_;
 };
 
 class ControlPlaneImpl final : public ControlPlane {

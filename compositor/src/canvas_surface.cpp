@@ -146,6 +146,51 @@ int CanvasRenderer::registerFont(const std::string &path, float pixelSize) {
   return engine_.registerFont(path, pixelSize);
 }
 
+namespace {
+
+/// Uploads an already-decoded image, or -1. Shared by both entry points,
+/// which differ only in where the pixels came from.
+int upload_decoded(canvas::Engine &engine, const std::string &key,
+                   const canvas::DecodedImage &decoded, uint32_t &outWidth,
+                   uint32_t &outHeight) {
+  if (!decoded.valid()) return -1;
+  const int id = engine.uploadTexture(key, decoded.pixels, decoded.width,
+                                      decoded.height);
+  if (id <= 0) return -1;
+  outWidth = decoded.width;
+  outHeight = decoded.height;
+  return id;
+}
+
+}  // namespace
+
+int CanvasRenderer::registerImage(const std::string &key,
+                                  const std::string &path,
+                                  uint32_t maxPixelSize, uint32_t &outWidth,
+                                  uint32_t &outHeight) {
+  // Decoded here rather than in the client, which is the point of the call:
+  // the renderer knows the size it will be drawn at, owns the atlas that
+  // decides whether it fits a cell, and already has the codec. A client that
+  // sent pixels would have to have all three.
+  return upload_decoded(engine_, key,
+                        canvas::Engine::decodeImage(path, maxPixelSize),
+                        outWidth, outHeight);
+}
+
+int CanvasRenderer::registerImageData(const std::string &key,
+                                      const uint8_t *bytes, size_t byteCount,
+                                      uint32_t maxPixelSize,
+                                      uint32_t &outWidth, uint32_t &outHeight) {
+  return upload_decoded(
+      engine_, key,
+      canvas::Engine::decodeImageData(bytes, byteCount, maxPixelSize),
+      outWidth, outHeight);
+}
+
+void CanvasRenderer::releaseImage(const std::string &key) {
+  engine_.unloadTexture(key);
+}
+
 // ─── CanvasSurface ─────────────────────────────────────────────────────────
 
 CanvasSurface::CanvasSurface(CanvasRenderer &renderer, uint32_t windowId,
