@@ -2318,7 +2318,6 @@ void Server::on_cursor_button(wl_listener *listener, void *data) {
   auto *event = static_cast<wlr_pointer_button_event *>(data);
 
   const bool pressed = event->state == WL_POINTER_BUTTON_STATE_PRESSED;
-
   // A release always ends a drag, whatever it is over by then.
   if (!pressed && server->drag != Server::Drag::None) {
     server->drag = Server::Drag::None;
@@ -2426,9 +2425,20 @@ void Server::on_cursor_button(wl_listener *listener, void *data) {
       // Recomputed against the focused surface rather than reusing whatever a
       // hit test left behind: the pointer may be outside it, and `at` only
       // fills the offsets for surfaces it actually tested.
+      // `contentY()`, not `y`. The frame origin is the top of the title bar
+      // and the content starts one bar below it, so subtracting `y` puts every
+      // release 32 pixels below where it happened.
+      //
+      // That offset is why buttons and toggles could not be clicked while
+      // typing into an editor worked. A control fires on *release*, and only
+      // if the pointer is still inside it; the displaced release re-resolved
+      // hover to whatever is 32px lower — usually nothing — which cleared the
+      // hover and cancelled the click, in that order, in the same drain. An
+      // editor does not care: it is tall, it acts on the press, and a release
+      // slightly low still lands inside it.
       target->canvas->pointerButton(
           button, false, static_cast<float>(server->cursor->x - target->x),
-          static_cast<float>(server->cursor->y - target->y), 0);
+          static_cast<float>(server->cursor->y - target->contentY()), 0);
       server->surfaces->pump(*target);
       return;
     }
