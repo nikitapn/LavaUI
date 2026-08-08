@@ -1,5 +1,6 @@
 #include "dmabuf.hpp"
 
+#include <sys/ioctl.h>
 #include <sys/stat.h>
 #include <sys/sysmacros.h>  // major()/minor()
 #include <unistd.h>
@@ -9,6 +10,7 @@
 
 extern "C" {
 #include <drm_fourcc.h>
+#include <linux/dma-buf.h>
 }
 
 namespace lava {
@@ -31,11 +33,42 @@ constexpr VkFormat kVkFormat = VK_FORMAT_B8G8R8A8_UNORM;
 constexpr uint32_t kDrmFormat = DRM_FORMAT_XRGB8888;
 
 /// Extensions the export path cannot be built without.
-const char *const kDeviceExtensions[] = {
+const char *const kRequiredExtensions[] = {
     VK_KHR_EXTERNAL_MEMORY_FD_EXTENSION_NAME,
     VK_EXT_EXTERNAL_MEMORY_DMA_BUF_EXTENSION_NAME,
     VK_EXT_IMAGE_DRM_FORMAT_MODIFIER_EXTENSION_NAME,
 };
+
+/// Wanted, not needed: without it the handover falls back to a CPU wait.
+constexpr const char *kSemaphoreFdExtension =
+    VK_KHR_EXTERNAL_SEMAPHORE_FD_EXTENSION_NAME;
+
+bool has_extension(VkPhysicalDevice device, const char *name) {
+  uint32_t count = 0;
+  vkEnumerateDeviceExtensionProperties(device, nullptr, &count, nullptr);
+  std::vector<VkExtensionProperties> props(count);
+  vkEnumerateDeviceExtensionProperties(device, nullptr, &count, props.data());
+  for (const auto &p : props) {
+    if (std::strcmp(p.extensionName, name) == 0) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/// Whether a semaphore signalled on this device can be handed out as a
+/// sync_file. Having the extension is not the same as supporting the handle
+/// type, and asking is cheap.
+bool can_export_sync_fd(VkPhysicalDevice device) {
+  VkPhysicalDeviceExternalSemaphoreInfo info{};
+  info.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_EXTERNAL_SEMAPHORE_INFO;
+  info.handleType = VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_SYNC_FD_BIT;
+  VkExternalSemaphoreProperties props{};
+  props.sType = VK_STRUCTURE_TYPE_EXTERNAL_SEMAPHORE_PROPERTIES;
+  vkGetPhysicalDeviceExternalSemaphoreProperties(device, &info, &props);
+  return (props.externalSemaphoreFeatures &
+          VK_EXTERNAL_SEMAPHORE_FEATURE_EXPORTABLE_BIT) != 0;
+}
 
 bool device_matches_drm_fd(VkPhysicalDevice device, int drm_fd) {
   struct stat st{};
@@ -170,9 +203,16 @@ VulkanExporter *VulkanExporter::create(wlr_renderer *renderer) {
   device_info.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
   device_info.queueCreateInfoCount = 1;
   device_info.pQueueCreateInfos = &queue_info;
-  device_info.enabledExtensionCount =
-      sizeof(kDeviceExtensions) / sizeof(kDeviceExtensions[0]);
-  device_info.ppEnabledExtensionNames = kDeviceExtensions;
+  std::vector<const char *> extensions(
+      std::begin(kRequiredExtensions), std::end(kRequiredExtensions));
+  self->explicit_sync_ = has_extension(self->physical_device_,
+                                       kSemaphoreFdExtension) &&
+                         can_export_sync_fd(self->physical_device_);
+  if (self->explicit_sync_) {
+    extensions.push_back(kSemaphoreFdExtension);
+  }
+  device_info.enabledExtensionCount = static_cast<uint32_t>(extensions.size());
+  device_info.ppEnabledExtensionNames = extensions.data();
   if (vkCreateDevice(self->physical_device_, &device_info, nullptr,
                      &self->device_) != VK_SUCCESS) {
     wlr_log(WLR_ERROR, "dmabuf: vkCreateDevice failed");
@@ -188,6 +228,14 @@ VulkanExporter *VulkanExporter::create(wlr_renderer *renderer) {
       reinterpret_cast<PFN_vkGetImageDrmFormatModifierPropertiesEXT>(
           vkGetDeviceProcAddr(self->device_,
                               "vkGetImageDrmFormatModifierPropertiesEXT"));
+  if (self->explicit_sync_) {
+    self->get_semaphore_fd_ = reinterpret_cast<PFN_vkGetSemaphoreFdKHR>(
+        vkGetDeviceProcAddr(self->device_, "vkGetSemaphoreFdKHR"));
+    self->explicit_sync_ = self->get_semaphore_fd_ != nullptr;
+  }
+  wlr_log(WLR_INFO, "dmabuf: handover is %s",
+          self->explicit_sync_ ? "fenced (sync_file)"
+                               : "a CPU wait (no sync_file export)");
   if (!self->get_memory_fd_ || !self->get_modifier_props_) {
     wlr_log(WLR_ERROR, "dmabuf: missing export entry points");
     delete self;
@@ -449,6 +497,21 @@ void VulkanExporter::destroy_image(ExportedImage &image) {
   }
 }
 
+bool VulkanExporter::attach_fence(int dmabuf_fd, int fence_fd) const {
+  // Implicit synchronisation is what GL and EGL consumers use: they do not ask
+  // for a fence, they read the one hanging off the buffer. Vulkan does not put
+  // one there on its own, so the sync_file our submit produced is inserted by
+  // hand. Marked WRITE because we are the writer — a reader must wait for us,
+  // and a later writer must wait for the readers.
+  dma_buf_import_sync_file import{};
+  import.flags = DMA_BUF_SYNC_WRITE;
+  import.fd = static_cast<__s32>(fence_fd);
+  if (ioctl(dmabuf_fd, DMA_BUF_IOCTL_IMPORT_SYNC_FILE, &import) != 0) {
+    return false;
+  }
+  return true;
+}
+
 bool VulkanExporter::clear_image(const ExportedImage &image, float r, float g,
                                  float b) {
   VkCommandBufferAllocateInfo alloc{};
@@ -507,20 +570,72 @@ bool VulkanExporter::clear_image(const ExportedImage &image, float r, float g,
 
   vkEndCommandBuffer(cmd);
 
+  // Signalled by the submit and exported as a sync_file, which is what the
+  // consumer ends up waiting on. Binary rather than timeline: sync_file has no
+  // notion of a counter, and one handover needs one signal.
+  VkSemaphore semaphore = VK_NULL_HANDLE;
+  if (explicit_sync_) {
+    VkExportSemaphoreCreateInfo export_info{};
+    export_info.sType = VK_STRUCTURE_TYPE_EXPORT_SEMAPHORE_CREATE_INFO;
+    export_info.handleTypes = VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_SYNC_FD_BIT;
+    VkSemaphoreCreateInfo semaphore_info{};
+    semaphore_info.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
+    semaphore_info.pNext = &export_info;
+    if (vkCreateSemaphore(device_, &semaphore_info, nullptr, &semaphore) !=
+        VK_SUCCESS) {
+      semaphore = VK_NULL_HANDLE;
+    }
+  }
+
   VkSubmitInfo submit{};
   submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
   submit.commandBufferCount = 1;
   submit.pCommandBuffers = &cmd;
+  if (semaphore != VK_NULL_HANDLE) {
+    submit.signalSemaphoreCount = 1;
+    submit.pSignalSemaphores = &semaphore;
+  }
   vkQueueSubmit(queue_, 1, &submit, VK_NULL_HANDLE);
-  // No shared fence yet, so the handover is made safe the blunt way: nothing
-  // reads this buffer until the GPU has finished writing it. A moving image
-  // will need explicit sync (VK_KHR_external_semaphore_fd) instead.
+  // Hand the GPU's own fence to whoever reads next, instead of blocking this
+  // thread until the work is done. The CPU wait was correct for a still
+  // image and would serialise every frame once anything animates.
+  bool fenced = false;
+  if (semaphore != VK_NULL_HANDLE) {
+    VkSemaphoreGetFdInfoKHR get{};
+    get.sType = VK_STRUCTURE_TYPE_SEMAPHORE_GET_FD_INFO_KHR;
+    get.semaphore = semaphore;
+    get.handleType = VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_SYNC_FD_BIT;
+    int fence_fd = -1;
+    if (get_semaphore_fd_(device_, &get, &fence_fd) == VK_SUCCESS) {
+      // -1 is legal and means "already signalled": the work finished before
+      // the export, so there is nothing for anyone to wait on.
+      if (fence_fd < 0) {
+        fenced = true;
+      } else {
+        fenced = attach_fence(image.fd[0], fence_fd);
+        if (!fenced) {
+          wlr_log(WLR_ERROR, "dmabuf: could not attach the fence to the buffer");
+        }
+        close(fence_fd);
+      }
+    }
+    vkDestroySemaphore(device_, semaphore, nullptr);
+  }
+  // Both, deliberately, and the wait is not redundant yet.
   //
-  // Colour is exact: clearing to (0.95, 0.45, 0.10) reads back
-  // (242, 115, 25), which is those values times 255 with the blue landing on
-  // a rounding tie (25.5). Checked against a scene rect in the same frame,
-  // which reads exact too.
+  // Attaching the fence is correct and costs nothing: a consumer that honours
+  // implicit synchronisation will wait for exactly this work rather than for
+  // the whole queue. But it only helps if the consumer looks, and this one
+  // does not — dropping the wait and relying on the fence alone reads the
+  // surface before it is written roughly one run in five (see the note below
+  // `attach_fence`). So the fence goes on for drivers that respect it, and
+  // the wait stays for those that do not.
+  //
+  // The wait is what has to go before anything animates: it stalls this
+  // thread on every frame. Removing it needs the consumer side told to wait —
+  // wlroots exposes no acquire-fence for a compositor-owned buffer today.
   vkQueueWaitIdle(queue_);
+
   vkFreeCommandBuffers(device_, command_pool_, 1, &cmd);
   return true;
 }

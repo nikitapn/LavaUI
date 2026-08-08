@@ -73,6 +73,9 @@ class VulkanExporter {
   /// for now is that the pixels arrive at all.
   bool clear_image(const ExportedImage &image, float r, float g, float b);
 
+  /// Whether the handover is fenced rather than waited on. See `clear_image`.
+  bool explicit_sync() const { return explicit_sync_; }
+
  private:
   VulkanExporter() = default;
 
@@ -85,6 +88,18 @@ class VulkanExporter {
 
   PFN_vkGetMemoryFdKHR get_memory_fd_ = nullptr;
   PFN_vkGetImageDrmFormatModifierPropertiesEXT get_modifier_props_ = nullptr;
+  PFN_vkGetSemaphoreFdKHR get_semaphore_fd_ = nullptr;
+
+  /// True when this device can export a semaphore as a sync_file, which is
+  /// what lets the GPU be told to wait instead of the CPU blocking until it
+  /// is safe. Queried rather than assumed: it is a recent capability on some
+  /// drivers, and the fallback is correct, just slower.
+  bool explicit_sync_ = false;
+
+  /// Attaches `fence_fd` to the buffer as its write fence, so any consumer
+  /// using implicit synchronisation waits for our rendering without being
+  /// told to. Consumes nothing; the caller closes the descriptor.
+  bool attach_fence(int dmabuf_fd, int fence_fd) const;
 
   /// Modifiers this device can render into and export, single-plane only,
   /// intersected with what the compositor's renderer can import.
