@@ -136,6 +136,14 @@ uint32_t Engine::openExportedWindow(uint32_t width, uint32_t height)
                           : 0;
 }
 
+bool Engine::resizeExportedWindow(uint32_t windowId, uint32_t width,
+                                  uint32_t height)
+{
+  return impl_->offscreen
+           ? impl_->offscreen->resizeExportedWindow(windowId, width, height)
+           : false;
+}
+
 const DmabufImage *Engine::exportedImage(uint32_t windowId) const
 {
   return impl_->offscreen ? impl_->offscreen->exportedImage(windowId) : nullptr;

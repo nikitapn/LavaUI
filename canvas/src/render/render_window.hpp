@@ -155,6 +155,17 @@ class RenderWindow {
   /// the swapchain and every sized attachment. True if a rebuild happened.
   bool resize();
 
+  /// Resizes a window that has no surface of its own to measure.
+  ///
+  /// The offscreen and exported counterpart of `resize()`: a windowed one asks
+  /// its swapchain how big it is, and one that is composited elsewhere has to
+  /// be *told*. True if anything was rebuilt.
+  ///
+  /// An export target does not survive this — it was allocated at the old size
+  /// and `setExportTarget` refuses a mismatch. The caller allocates a new one
+  /// and sets it; see `Application::resizeExportedWindow`.
+  bool resizeTo(uint32_t width, uint32_t height);
+
   // ─── Window ──────────────────────────────────────────────────────────────
 
   bool isWindowed() const { return windowed_; }

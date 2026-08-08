@@ -1,6 +1,9 @@
+#include <algorithm>
+#include <cstdio>
 #include <cstddef>
 #include <fstream>
 #include <sys/stat.h>
+#include <linux/input-event-codes.h>  // BTN_RIGHT
 #include <cstdlib>
 #include <ctime>
 #include <iostream>
@@ -137,6 +140,24 @@ struct Server {
   /// has neither, and every use below checks.
   SurfaceRegistry *surfaces = nullptr;
   lava::ControlPlane *control = nullptr;
+  /// An interactive move or resize in progress, and what it started from.
+  ///
+  /// Alt+drag rather than window edges: there are no decorations to grab yet,
+  /// and a modifier drag works anywhere in the window — which is also what
+  /// most compositors offer as the keyboard-friendly alternative. Left moves,
+  /// right resizes.
+  enum class Drag { None, Move, Resize };
+  Drag drag = Drag::None;
+  uint32_t dragSurface = 0;
+  double dragStartX = 0, dragStartY = 0;
+  int dragOriginX = 0, dragOriginY = 0;
+  uint32_t dragOriginW = 0, dragOriginH = 0;
+
+  /// Carries an in-progress drag to the pointer. True if one was live, which
+  /// is the caller's signal that the motion belongs to the drag and not to
+  /// whatever is under the cursor.
+  bool update_drag();
+
   /// Which client surface the keyboard goes to, or 0.
   ///
   /// Separate from `wlr_seat`'s focus because a client surface is not a
@@ -284,6 +305,33 @@ class SurfaceRegistry : public lava::CompositorHost {
     return id;
   }
 
+  /// Moves a surface's window. Position is the scene's, not the surface's.
+  void moveSurface(ClientSurface &surface, int x, int y) {
+    surface.x = x;
+    surface.y = y;
+    wlr_scene_node_set_position(&surface.node->node, x, y);
+  }
+
+  /// Resizes a surface and hands the scene its new buffer.
+  ///
+  /// Always a new buffer: a dmabuf's size and stride are fixed when it is
+  /// allocated, so the scene node has to be pointed at a different one rather
+  /// than told the old one changed shape.
+  void resizeSurface(ClientSurface &surface, uint32_t width, uint32_t height) {
+    // A floor, because zero is not a size and a drag can cross the origin.
+    width = width < kMinSurface ? kMinSurface : width;
+    height = height < kMinSurface ? kMinSurface : height;
+    if (!surface.canvas->resize(width, height)) return;
+    surface.width = width;
+    surface.height = height;
+    wlr_scene_buffer_set_buffer(surface.node, surface.canvas->buffer());
+    // The `Resize` the surface just queued for its client is sitting in the
+    // renderer's queue; this is what forwards it, and what redraws the frame
+    // already held into the new extent meanwhile.
+    pump(surface);
+    if (surface.canvas->redraw()) damage(surface);
+  }
+
   bool destroySurface(uint32_t id) override {
     for (auto it = surfaces_.begin(); it != surfaces_.end(); ++it) {
       if ((*it)->id != id) continue;
@@ -391,6 +439,10 @@ class SurfaceRegistry : public lava::CompositorHost {
   /// Never reused, so a stale id from a closed surface fails to resolve rather
   /// than quietly addressing whatever opened next.
   uint32_t nextId_ = 1;
+
+  /// Smaller than this and a window is not a window — and a drag that crosses
+  /// its own origin would otherwise ask for a zero-sized buffer.
+  static constexpr uint32_t kMinSurface = 120;
 
   /// One frame at ~60Hz, and only while something is actually animating —
   /// re-armed from `on_animation` rather than left running.
@@ -811,6 +863,11 @@ void Server::focus(Toplevel *toplevel) {
 }
 
 void Server::update_pointer_focus(uint32_t time_msec) {
+  // A drag owns the pointer until the button comes back up, wherever it has
+  // got to — otherwise letting the cursor outrun the window would hand the
+  // motion to whatever it crossed.
+  if (update_drag()) return;
+
   // Client surfaces first: they sit above the Wayland windows in the scene and
   // are not `wlr_surface`s, so `surface_at` cannot see them at all.
   if (route_pointer(static_cast<uint32_t>(canvas::InputEventKind::MouseMove), 0,
@@ -834,6 +891,30 @@ void Server::update_pointer_focus(uint32_t time_msec) {
   }
   wlr_seat_pointer_notify_enter(seat, surface, sx, sy);
   wlr_seat_pointer_notify_motion(seat, time_msec, sx, sy);
+}
+
+bool Server::update_drag() {
+  if (drag == Drag::None || surfaces == nullptr) return false;
+  ClientSurface *surface = surfaces->find(dragSurface);
+  if (surface == nullptr) {
+    drag = Drag::None;
+    return false;
+  }
+  const double dx = cursor->x - dragStartX;
+  const double dy = cursor->y - dragStartY;
+  if (drag == Drag::Move) {
+    surfaces->moveSurface(*surface, dragOriginX + static_cast<int>(dx),
+                          dragOriginY + static_cast<int>(dy));
+  } else {
+    // Rebuilding a swapchain-sized set of attachments and re-exporting a
+    // dmabuf on every motion event is not free, and a drag produces one per
+    // pixel. `resizeSurface` is a no-op when the size has not changed, which
+    // the integer truncation above makes true most of the time.
+    surfaces->resizeSurface(
+        *surface, static_cast<uint32_t>(std::max(1.0, dragOriginW + dx)),
+        static_cast<uint32_t>(std::max(1.0, dragOriginH + dy)));
+  }
+  return true;
 }
 
 bool Server::route_pointer(uint32_t kind, int32_t button, int32_t mods) {
@@ -876,6 +957,36 @@ void Server::on_cursor_button(wl_listener *listener, void *data) {
   auto *event = static_cast<wlr_pointer_button_event *>(data);
 
   const bool pressed = event->state == WL_POINTER_BUTTON_STATE_PRESSED;
+
+  // A release always ends a drag, whatever it is over by then.
+  if (!pressed && server->drag != Server::Drag::None) {
+    server->drag = Server::Drag::None;
+    return;
+  }
+
+  // Alt+drag: left moves, right resizes. Checked before anything is forwarded,
+  // because these belong to the compositor and not to the window under them.
+  if (pressed && server->surfaces != nullptr) {
+    const uint32_t modifiers =
+        server->seat->keyboard_state.keyboard != nullptr
+            ? wlr_keyboard_get_modifiers(server->seat->keyboard_state.keyboard)
+            : 0;
+    double sx = 0, sy = 0;
+    ClientSurface *over =
+        server->surfaces->at(server->cursor->x, server->cursor->y, sx, sy);
+    if ((modifiers & WLR_MODIFIER_ALT) && over != nullptr) {
+      server->drag = event->button == BTN_RIGHT ? Server::Drag::Resize
+                                                : Server::Drag::Move;
+      server->dragSurface = over->id;
+      server->dragStartX = server->cursor->x;
+      server->dragStartY = server->cursor->y;
+      server->dragOriginX = over->x;
+      server->dragOriginY = over->y;
+      server->dragOriginW = over->width;
+      server->dragOriginH = over->height;
+      return;
+    }
+  }
 
   // A press over a client surface focuses it and is forwarded; a release goes
   // to whichever surface is focused even if the pointer has since left it, so

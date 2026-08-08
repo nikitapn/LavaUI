@@ -248,6 +248,41 @@ struct Application::Impl
     }
   }
 
+  /// Resizes an exported surface, and re-exports it.
+  ///
+  /// The image cannot be reused: a dmabuf's size, stride and modifier are
+  /// fixed when it is allocated, so a new size is a new buffer and the
+  /// consumer has to be handed it. That is why this returns a bool rather
+  /// than resizing in place — the caller has a `wlr_buffer` to replace.
+  ///
+  /// The client is told separately, by whoever owns the window, with a
+  /// `Resize`. It has to re-lay-out before its next frame means anything.
+  bool resizeExportedWindow(uint32_t windowId, uint32_t w, uint32_t h)
+  {
+    AppWindow *window = win(windowId);
+    if (window == nullptr || !window->hasRenderer()) return false;
+    auto it = exportImages.find(windowId);
+    if (it == exportImages.end()) return false;
+    if (!window->renderWindow().resizeTo(w, h)) return false;
+
+    auto image = canvas::DmabufImage::create(device, w, h, exportModifiers);
+    if (!image) {
+      std::cerr << "resizeExportedWindow: could not export " << w << "x" << h
+                << '\n';
+      return false;
+    }
+    window->renderWindow().setExportTarget(image.get());
+    // After the window points at the new one, so the old is released with
+    // nothing still able to name it.
+    it->second = std::move(image);
+
+    // The producer has no surface to measure and learns its size only by being
+    // told. Queued here rather than by the caller so no exported resize can
+    // happen without the client hearing about it.
+    window->queueResize(static_cast<float>(w), static_cast<float>(h));
+    return true;
+  }
+
   canvas::VoidResult initClient()
   {
     try {
@@ -449,6 +484,12 @@ canvas::VoidResult Application::initExported(
 uint32_t Application::openExportedWindow(uint32_t width, uint32_t height)
 {
   return impl_->openExportedWindow(width, height);
+}
+
+bool Application::resizeExportedWindow(uint32_t windowId, uint32_t width,
+                                       uint32_t height)
+{
+  return impl_->resizeExportedWindow(windowId, width, height);
 }
 
 const canvas::DmabufImage *Application::exportedImage(uint32_t windowId) const

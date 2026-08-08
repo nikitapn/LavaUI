@@ -1179,6 +1179,29 @@ bool RenderWindow::resize()
   return true;
 }
 
+bool RenderWindow::resizeTo(uint32_t width, uint32_t height)
+{
+  if (windowed_) return false;
+  if (width < 1 || height < 1) return false;
+  if (width == extent_.width && height == extent_.height) return false;
+
+  // This window's own frames, not the device's. Only these attachments are
+  // being rebuilt, and they are named by nobody else's command buffers — so
+  // unlike the windowed path above there is no reason to idle the whole
+  // device and stall every other surface.
+  waitForAllFrames();
+
+  // The old target is about to be the wrong size, and recording a frame
+  // against it between here and the caller's `setExportTarget` would blit into
+  // an image of the previous dimensions.
+  exportTarget_ = nullptr;
+
+  destroySizedResources();
+  extent_ = {width, height};
+  createSizedResources();
+  return true;
+}
+
 // ─── Renderers ─────────────────────────────────────────────────────────────
 
 void RenderWindow::initRenderers()

@@ -120,6 +120,15 @@ class AppWindow {
   /// over the same window.
   bool attachDrawArena(const std::string &id);
 
+  /// Queues the `Resize` a producer needs after this window changed size.
+  ///
+  /// The counterpart of what `prepare()` does when a *windowed* surface is
+  /// dragged: the renderer knows its new extent and the producer has no way to
+  /// measure it. Not `postInputEvent`, which is the other direction — that one
+  /// takes an event arriving *at* a client and turns a `Resize` into
+  /// `setClientSize`, which a window with a renderer ignores.
+  void queueResize(float width, float height);
+
   /// Takes the next published frame, if the producer has published one, and
   /// says whether it did. Draws nothing.
   ///

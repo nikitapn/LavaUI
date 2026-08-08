@@ -58,6 +58,12 @@ public:
   /// paid for; this costs attachments and an image.
   uint32_t openExportedWindow(uint32_t width, uint32_t height);
 
+  /// Resizes an exported surface and re-exports it. True if it changed, in
+  /// which case `exportedImage` returns a *different* buffer and the consumer
+  /// has to be handed it — a dmabuf's size and stride are fixed at allocation,
+  /// so a new size is always a new buffer.
+  bool resizeExportedWindow(uint32_t windowId, uint32_t width, uint32_t height);
+
   /// A window's exported buffer, or null. Owned here; the consumer reads its
   /// descriptors and does not take them.
   const canvas::DmabufImage *exportedImage(uint32_t windowId) const;

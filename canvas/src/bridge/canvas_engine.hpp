@@ -107,6 +107,10 @@ class Engine {
   /// Opens one exported surface. Returns its window id, or 0.
   uint32_t openExportedWindow(uint32_t width, uint32_t height);
 
+  /// Resizes an exported surface. True if it changed, in which case its
+  /// buffer is a new one — see `Application::resizeExportedWindow`.
+  bool resizeExportedWindow(uint32_t windowId, uint32_t width, uint32_t height);
+
   /// Attributes of a surface's exported buffer, or null.
   const DmabufImage *exportedImage(uint32_t windowId) const;
 

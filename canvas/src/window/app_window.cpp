@@ -279,6 +279,24 @@ void AppWindow::stepSceneAnimations()
   }
 }
 
+void AppWindow::queueResize(float width, float height)
+{
+  canvas::InputEvent ev;
+  ev.kind = static_cast<uint32_t>(canvas::InputEventKind::Resize);
+  ev.x    = width;
+  ev.y    = height;
+  std::lock_guard lock(inputMu_);
+  // Coalesced against any pending resize: a drag produces one per motion
+  // event and only the newest size says anything the older ones did not.
+  for (auto &queued : inputEvents_) {
+    if (queued.kind == ev.kind) {
+      queued = ev;
+      return;
+    }
+  }
+  inputEvents_.push_back(ev);
+}
+
 bool AppWindow::pollDrawArena()
 {
   if (!arena_) return false;

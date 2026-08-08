@@ -85,6 +85,13 @@ class CanvasSurface {
   CanvasSurface(const CanvasSurface &)            = delete;
   CanvasSurface &operator=(const CanvasSurface &) = delete;
 
+  /// Resizes the surface and tells its client to lay out again.
+  ///
+  /// The buffer changes — a dmabuf's size and stride are fixed when it is
+  /// allocated, so a new size is a new buffer — which is why the caller has to
+  /// hand `buffer()` to the scene again afterwards. False if nothing changed.
+  bool resize(uint32_t width, uint32_t height);
+
   /// Renders whatever another process publishes into the arena named `id`.
   ///
   /// The arena is shared memory the client writes its draw list straight

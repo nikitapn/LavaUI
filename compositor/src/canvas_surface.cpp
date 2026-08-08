@@ -168,6 +168,31 @@ CanvasSurface::~CanvasSurface() {
   renderer_.engine().closeWindow(windowId_);
 }
 
+bool CanvasSurface::resize(uint32_t width, uint32_t height) {
+  if (width < 1 || height < 1) return false;
+  if (width == width_ && height == height_) return false;
+  if (!renderer_.engine().resizeExportedWindow(windowId_, width, height)) {
+    return false;
+  }
+  const canvas::DmabufImage *image = renderer_.engine().exportedImage(windowId_);
+  if (image == nullptr) return false;
+
+  // A fresh `wlr_buffer` around the new image. The old one is dropped *after*
+  // the new one exists, so the scene never holds a reference to nothing.
+  DmabufBuffer *replacement = DmabufBuffer::create(image);
+  if (buffer_ != nullptr) wlr_buffer_drop(&buffer_->base);
+  buffer_ = replacement;
+  width_ = width;
+  height_ = height;
+
+  // The `Resize` the client needs is queued by the engine as part of the
+  // resize, and reaches it on the caller's next drain. Until it arrives and the
+  // client republishes, the window shows its old frame in a differently-sized
+  // space — which is why the frame clears to nothing rather than to whatever
+  // happened to be there.
+  return true;
+}
+
 bool CanvasSurface::attachArena(const std::string &id) {
   // Failure is not logged: a caller may retry on a timer until a client turns
   // up, and an error line per attempt would bury the one that matters.
