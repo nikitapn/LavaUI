@@ -48,6 +48,43 @@ T *owner_of(wl_listener *listener) {
 struct Server;
 class SurfaceRegistry;
 
+// ─── Workspaces ────────────────────────────────────────────────────────────
+
+/// The desktop's workspaces: one scene tree each, one of them enabled.
+///
+/// Switching is two calls to `wlr_scene_node_set_enabled` rather than moving
+/// windows between parents. That is not only cheaper — re-parenting every node
+/// on a switch dirties the scene wholesale and throws away the damage tracking
+/// that makes a switch cost one frame — it also means a window keeps its
+/// stacking order, its position and its buffer across a switch without anybody
+/// having to remember them.
+///
+/// A window belongs to exactly one of these. A panel belongs to none: see
+/// `panels` below.
+struct Workspaces {
+  /// Alt+1 … Alt+9. Nine because that is how many the keyboard offers without
+  /// a second modifier, and a fixed set means switching never allocates.
+  static constexpr uint32_t kCount = 9;
+
+  wlr_scene_tree *tree[kCount] = {};
+  /// Panels are not members of a workspace — a taskbar is on all of them — so
+  /// this tree is never disabled. Created last, which is what puts panels above
+  /// the windows without anybody raising them.
+  wlr_scene_tree *panels = nullptr;
+  uint32_t current = 0;
+
+  void init(wlr_scene_tree *root) {
+    for (auto *&t : tree) {
+      t = wlr_scene_tree_create(root);
+      wlr_scene_node_set_enabled(&t->node, false);
+    }
+    wlr_scene_node_set_enabled(&tree[current]->node, true);
+    panels = wlr_scene_tree_create(root);
+  }
+
+  wlr_scene_tree *currentTree() const { return tree[current]; }
+};
+
 // ─── Output ────────────────────────────────────────────────────────────────
 
 struct Output {
@@ -77,6 +114,9 @@ struct Toplevel {
   Server *server;
   wlr_xdg_toplevel *xdg_toplevel;
   wlr_scene_tree *scene_tree;
+  /// Which workspace it was opened on. A Wayland client has no say in this and
+  /// no way to ask, which is why the compositor is the only place it lives.
+  uint32_t workspace = 0;
 
   Listener<Toplevel> map;
   Listener<Toplevel> unmap;
@@ -159,13 +199,33 @@ struct Server {
   /// whatever is under the cursor.
   bool update_drag();
 
-  /// Which client surface the keyboard goes to, or 0.
+  /// Which client surface the keyboard goes to, per workspace, or 0.
   ///
   /// Separate from `wlr_seat`'s focus because a client surface is not a
   /// `wlr_surface` — it has no Wayland object for the seat to focus. Clicking
   /// one takes the keyboard away from any Wayland window, and clicking a
   /// Wayland window takes it back.
-  uint32_t focusedSurface = 0;
+  ///
+  /// Per workspace rather than one value, because a single one would survive a
+  /// switch and leave the keyboard pointed at a window that is no longer on
+  /// screen — every keystroke going somewhere the user cannot see.
+  uint32_t focusedByWorkspace[Workspaces::kCount] = {};
+  Workspaces workspaces;
+
+  uint32_t focusedSurface() const {
+    return focusedByWorkspace[workspaces.current];
+  }
+  void setFocusedSurface(uint32_t id) {
+    focusedByWorkspace[workspaces.current] = id;
+  }
+
+  /// Shows workspace `index` and hands it the keyboard. A no-op if it is
+  /// already current, so a repeated shortcut costs nothing.
+  void switchWorkspace(uint32_t index);
+  /// Sends whatever has the keyboard to workspace `index`, and stays put.
+  void moveFocusedToWorkspace(uint32_t index);
+  /// The front window of a workspace, or null if it has none.
+  Toplevel *frontToplevel(uint32_t workspace);
 
   Listener<Server> new_output;
   Listener<Server> new_toplevel;
@@ -237,10 +297,18 @@ struct ClientSurface {
   uint32_t width = 0;
   uint32_t height = 0;
 
+  /// Which workspace it is on. Assigned at creation, from whichever was
+  /// current: `CreateSurface` has no say in it and should not — a client that
+  /// could choose its workspace could also follow the user around.
+  uint32_t workspace = 0;
+
   /// Panels have no frame and are laid out by their edge, not by the user.
   bool panel = false;
+  /// Which edge, for a panel. Meaningless otherwise. Kept rather than inferred
+  /// from the position, so the work area does not have to guess.
+  uint32_t edge = 0;
   /// Whether windows should be laid out around this panel rather than under
-  /// it. Recorded now; the layout that honours it is not written yet.
+  /// it. See `SurfaceRegistry::workArea`.
   bool reserve = false;
 
   /// Where a maximized window came from, so restoring is exact.
@@ -279,9 +347,9 @@ struct ClientSurface {
 /// in this class takes a lock, and that is why.
 class SurfaceRegistry : public lava::CompositorHost {
  public:
-  void bind(lava::CanvasRenderer *renderer, wlr_scene_tree *tree) {
+  void bind(lava::CanvasRenderer *renderer, Workspaces *workspaces) {
     renderer_ = renderer;
-    tree_ = tree;
+    workspaces_ = workspaces;
   }
 
   /// Arms the timer that carries renderer-owned animations along.
@@ -297,6 +365,35 @@ class SurfaceRegistry : public lava::CompositorHost {
     return nullptr;
   }
 
+  /// Whether a surface is on screen right now.
+  ///
+  /// Every hit test goes through this. The scene graph already refuses to draw
+  /// a disabled tree, but it cannot help the tests below — those walk our own
+  /// list, and without this a window on another workspace would still take the
+  /// pointer, invisibly, from underneath the one the user can see.
+  bool visible(const ClientSurface &surface) const {
+    return surface.panel || workspaces_ == nullptr ||
+           surface.workspace == workspaces_->current;
+  }
+
+  /// Sends a window to another workspace.
+  ///
+  /// Re-parenting, which a switch deliberately avoids — but here the window is
+  /// genuinely changing which tree it belongs to, and it happens once per
+  /// keystroke rather than once per switch.
+  void moveToWorkspace(ClientSurface &surface, uint32_t index) {
+    if (workspaces_ == nullptr || index >= Workspaces::kCount) return;
+    if (surface.panel || surface.workspace == index) return;
+    surface.workspace = index;
+    wlr_scene_node_reparent(&surface.node->node, workspaces_->tree[index]);
+    if (surface.barNode != nullptr) {
+      wlr_scene_node_reparent(&surface.barNode->node, workspaces_->tree[index]);
+    }
+    // The pointer is not going with it, so nothing on its frame is hovered any
+    // more — and a button left lit would still be lit when it comes back.
+    hoverBar(surface, lava::DecorationHit::Bar);
+  }
+
   /// Updates every window's bar hover for a pointer at `lx, ly`.
   ///
   /// True when the pointer is over a bar, which is also the caller's signal to
@@ -305,6 +402,7 @@ class SurfaceRegistry : public lava::CompositorHost {
   bool hoverFrames(double lx, double ly) {
     bool over = false;
     for (auto &surface : surfaces_) {
+      if (!visible(*surface)) continue;
       double sx = 0, sy = 0;
       lava::DecorationHit hit = lava::DecorationHit::Bar;
       const bool on = !over && surface->hitBar(lx, ly, sx, sy);
@@ -323,7 +421,9 @@ class SurfaceRegistry : public lava::CompositorHost {
   /// Topmost window whose bar is under a layout-space point.
   ClientSurface *frameAt(double lx, double ly, double &sx, double &sy) {
     for (auto &surface : surfaces_) {
-      if (surface->hitBar(lx, ly, sx, sy)) return surface.get();
+      if (visible(*surface) && surface->hitBar(lx, ly, sx, sy)) {
+        return surface.get();
+      }
     }
     return nullptr;
   }
@@ -331,7 +431,7 @@ class SurfaceRegistry : public lava::CompositorHost {
   /// Topmost surface under a layout-space point. Front is most recent.
   ClientSurface *at(double lx, double ly, double &sx, double &sy) {
     for (auto &s : surfaces_) {
-      if (s->hit(lx, ly, sx, sy)) return s.get();
+      if (visible(*s) && s->hit(lx, ly, sx, sy)) return s.get();
     }
     return nullptr;
   }
@@ -350,38 +450,11 @@ class SurfaceRegistry : public lava::CompositorHost {
 
   uint32_t createSurface(const std::string &arenaId, uint32_t width,
                          uint32_t height, const std::string &title) override {
-    if (renderer_ == nullptr) return 0;
-    auto surface = std::make_unique<ClientSurface>();
-    surface->canvas = renderer_->createSurface(width, height);
-    if (!surface->canvas) return 0;
-    if (!surface->canvas->attachArena(arenaId)) {
-      // The client creates the arena and the compositor attaches, so this
-      // means the client asked before it had somewhere to draw.
-      return 0;
-    }
-    surface->id = nextId_++;
-    surface->width = width;
-    surface->height = height;
-    // Cascaded, so a second client is visible rather than exactly on top of
-    // the first. A real layout policy belongs with window management.
-    surface->x = 40 + static_cast<int>(surfaces_.size()) * 40;
-    surface->y = 40 + static_cast<int>(surfaces_.size()) * 40;
-
-    surface->title = title;
-    surface->bar = renderer_->createSurface(width, lava::Decoration::kHeight);
-    if (!surface->bar) return 0;
-
-    surface->node = wlr_scene_buffer_create(tree_, surface->canvas->buffer());
-    surface->barNode = wlr_scene_buffer_create(tree_, surface->bar->buffer());
-    if (surface->node == nullptr || surface->barNode == nullptr) return 0;
-    place(*surface);
-    drawBar(*surface);
-
-    const uint32_t id = surface->id;
-    surfaces_.push_front(std::move(surface));
-    wlr_log(WLR_INFO, "surface %u: '%s' %ux%u on arena '%s'", id, title.c_str(),
-            width, height, arenaId.c_str());
-    return id;
+    if (workspaces_ == nullptr) return 0;
+    // On whichever workspace is current, because that is where the user was
+    // when they asked for it.
+    return openSurface(arenaId, width, height, title,
+                       workspaces_->currentTree(), workspaces_->current);
   }
 
   /// Puts both of a window's nodes where its frame origin says they go.
@@ -417,19 +490,58 @@ class SurfaceRegistry : public lava::CompositorHost {
     surface.restoreY = surface.y;
     surface.restoreW = surface.width;
     surface.restoreH = surface.height;
-    moveSurface(surface, 0, 0);
-    resizeSurface(surface, outputWidth_,
-                  outputHeight_ > lava::Decoration::kHeight
-                      ? outputHeight_ - lava::Decoration::kHeight
-                      : outputHeight_);
+    fillWorkArea(surface);
     surface.maximized = true;
   }
 
-  /// The area a maximized window fills. Told by the output, since a surface
-  /// registry has no other way to know how big the screen is.
+  /// Spreads a window over everything a panel has not claimed.
+  ///
+  /// The work area, not the output: a maximized window that covered the panel
+  /// would hide the one thing on screen meant to always be reachable.
+  void fillWorkArea(ClientSurface &surface) {
+    const WorkArea area = workArea();
+    moveSurface(surface, area.x, area.y);
+    resizeSurface(surface, area.width,
+                  area.height > lava::Decoration::kHeight
+                      ? area.height - lava::Decoration::kHeight
+                      : area.height);
+  }
+
+  /// Puts a panel back on its edge, at the full length of that edge.
+  void layoutPanel(ClientSurface &panel) {
+    const bool horizontal =
+        panel.edge == kPanelTop || panel.edge == kPanelBottom;
+    // A panel chose only its thickness; the length is the screen's to decide.
+    const uint32_t thickness = horizontal ? panel.height : panel.width;
+    resizeSurface(panel, horizontal ? outputWidth_ : thickness,
+                  horizontal ? thickness : outputHeight_);
+    moveSurface(panel,
+                panel.edge == kPanelRight
+                    ? static_cast<int>(outputWidth_) -
+                          static_cast<int>(thickness)
+                    : 0,
+                panel.edge == kPanelBottom
+                    ? static_cast<int>(outputHeight_) -
+                          static_cast<int>(thickness)
+                    : 0);
+  }
+
+  /// How big the screen is. Told by the output, since a surface registry has
+  /// no other way to know — and told *again* whenever it changes, which is not
+  /// hypothetical: nested in another compositor, the first size is a default
+  /// that is replaced within a frame or two of the window appearing.
   void setOutputSize(uint32_t width, uint32_t height) {
+    if (width == outputWidth_ && height == outputHeight_) return;
     outputWidth_ = width;
     outputHeight_ = height;
+    // Panels first: every one of them spans an edge that just changed length,
+    // and the work area is measured from where they end up.
+    for (auto &surface : surfaces_) {
+      if (surface->panel) layoutPanel(*surface);
+    }
+    for (auto &surface : surfaces_) {
+      if (!surface->panel && surface->maximized) fillWorkArea(*surface);
+    }
   }
 
   /// Redraws the title bar. Cheap — a strip, from commands built here.
@@ -478,8 +590,11 @@ class SurfaceRegistry : public lava::CompositorHost {
   /// than told the old one changed shape.
   void resizeSurface(ClientSurface &surface, uint32_t width, uint32_t height) {
     // A floor, because zero is not a size and a drag can cross the origin.
-    width = width < kMinSurface ? kMinSurface : width;
-    height = height < kMinSurface ? kMinSurface : height;
+    // Panels are exempt: a 32-pixel strip is a perfectly good panel, and there
+    // is no drag that could shrink one by accident.
+    const uint32_t floor = surface.panel ? 1u : kMinSurface;
+    width = width < floor ? floor : width;
+    height = height < floor ? floor : height;
     if (!surface.canvas->resize(width, height)) return;
     surface.width = width;
     surface.height = height;
@@ -499,7 +614,7 @@ class SurfaceRegistry : public lava::CompositorHost {
   uint32_t createPanel(const std::string &arenaId, uint32_t edge,
                        uint32_t thickness, bool reserve,
                        const std::string &title) override {
-    if (outputWidth_ == 0 || outputHeight_ == 0) {
+    if (outputWidth_ == 0 || outputHeight_ == 0 || workspaces_ == nullptr) {
       wlr_log(WLR_ERROR, "panel: no output yet");
       return 0;
     }
@@ -508,10 +623,14 @@ class SurfaceRegistry : public lava::CompositorHost {
     const uint32_t w = horizontal ? outputWidth_ : thickness;
     const uint32_t h = horizontal ? thickness : outputHeight_;
 
-    const uint32_t id = createSurface(arenaId, w, h, title);
+    // Into the panel tree, which no workspace switch ever disables — a taskbar
+    // that vanished on Alt+2 would be a strange sort of taskbar.
+    const uint32_t id =
+        openSurface(arenaId, w, h, title, workspaces_->panels, 0);
     if (id == 0) return 0;
     ClientSurface *panel = find(id);
     panel->panel = true;
+    panel->edge = edge;
     panel->reserve = reserve;
 
     // No title bar: there is nothing to drag, close or maximize. Dropped
@@ -522,13 +641,7 @@ class SurfaceRegistry : public lava::CompositorHost {
     }
     panel->bar.reset();
 
-    panel->x = edge == kPanelRight
-                   ? static_cast<int>(outputWidth_ - thickness)
-                   : 0;
-    panel->y = edge == kPanelBottom
-                   ? static_cast<int>(outputHeight_ - thickness)
-                   : 0;
-    place(*panel);
+    layoutPanel(*panel);
     // Above ordinary windows, which is what "panel" mostly means to a user.
     wlr_scene_node_raise_to_top(&panel->node->node);
     wlr_log(WLR_INFO, "panel %u: '%s' on edge %u, %u deep%s", id, title.c_str(),
@@ -634,12 +747,109 @@ class SurfaceRegistry : public lava::CompositorHost {
     return surface->canvas->capturePng(x, y, w, h, maxSide, outPng, outW, outH);
   }
 
+ public:
+  /// What is left of the output once reserving panels have taken their strip.
+  struct WorkArea {
+    int x = 0;
+    int y = 0;
+    uint32_t width = 0;
+    uint32_t height = 0;
+  };
+
+  /// Where a window may go without being covered by a panel.
+  ///
+  /// Computed rather than cached, because it changes whenever a panel opens,
+  /// closes or the output is resized, and there is no signal for the last one.
+  /// A panel that did not ask to `reserve` is not in here — it floats over the
+  /// windows, which is what a dock usually wants.
+  WorkArea workArea() const {
+    int x = 0;
+    int y = 0;
+    int w = static_cast<int>(outputWidth_);
+    int h = static_cast<int>(outputHeight_);
+    for (const auto &s : surfaces_) {
+      if (!s->panel || !s->reserve) continue;
+      // A panel is flush against its edge and spans it, so its thickness is
+      // the only measurement that matters.
+      switch (s->edge) {
+        case kPanelTop:
+          y += static_cast<int>(s->height);
+          h -= static_cast<int>(s->height);
+          break;
+        case kPanelBottom:
+          h -= static_cast<int>(s->height);
+          break;
+        case kPanelLeft:
+          x += static_cast<int>(s->width);
+          w -= static_cast<int>(s->width);
+          break;
+        case kPanelRight:
+          w -= static_cast<int>(s->width);
+          break;
+        default:
+          break;
+      }
+    }
+    // Panels thicker than the screen are a client's mistake, not a reason to
+    // hand back a negative extent.
+    const int floor = static_cast<int>(kMinSurface);
+    return {x, y, static_cast<uint32_t>(w < floor ? floor : w),
+            static_cast<uint32_t>(h < floor ? floor : h)};
+  }
+
  private:
+  /// The shared half of `createSurface` and `createPanel`: everything except
+  /// which tree the nodes go in and which workspace owns them.
+  uint32_t openSurface(const std::string &arenaId, uint32_t width,
+                       uint32_t height, const std::string &title,
+                       wlr_scene_tree *parent, uint32_t workspace) {
+    if (renderer_ == nullptr || parent == nullptr) return 0;
+    auto surface = std::make_unique<ClientSurface>();
+    surface->canvas = renderer_->createSurface(width, height);
+    if (!surface->canvas) return 0;
+    if (!surface->canvas->attachArena(arenaId)) {
+      // The client creates the arena and the compositor attaches, so this
+      // means the client asked before it had somewhere to draw.
+      return 0;
+    }
+    surface->id = nextId_++;
+    surface->width = width;
+    surface->height = height;
+    surface->workspace = workspace;
+    // Cascaded from the work area, so a second client is visible rather than
+    // exactly on top of the first, and the first is not under the panel.
+    // Counted per workspace, so each one starts its own cascade. A real layout
+    // policy belongs with window management.
+    int peers = 0;
+    for (const auto &s : surfaces_) {
+      if (!s->panel && s->workspace == workspace) ++peers;
+    }
+    const WorkArea area = workArea();
+    surface->x = area.x + 40 + peers * 40;
+    surface->y = area.y + 40 + peers * 40;
+
+    surface->title = title;
+    surface->bar = renderer_->createSurface(width, lava::Decoration::kHeight);
+    if (!surface->bar) return 0;
+
+    surface->node = wlr_scene_buffer_create(parent, surface->canvas->buffer());
+    surface->barNode = wlr_scene_buffer_create(parent, surface->bar->buffer());
+    if (surface->node == nullptr || surface->barNode == nullptr) return 0;
+    place(*surface);
+    drawBar(*surface);
+
+    const uint32_t id = surface->id;
+    surfaces_.push_front(std::move(surface));
+    wlr_log(WLR_INFO, "surface %u: '%s' %ux%u on arena '%s'", id, title.c_str(),
+            width, height, arenaId.c_str());
+    return id;
+  }
+
   std::list<std::unique_ptr<ClientSurface>> surfaces_;
   /// The one canvas device. Every surface is a window on it, sharing its
   /// glyph atlas and texture cache.
   lava::CanvasRenderer *renderer_ = nullptr;
-  wlr_scene_tree *tree_ = nullptr;
+  Workspaces *workspaces_ = nullptr;
   lava::ControlPlane *control_ = nullptr;
   lava::Decoration decoration_;
   /// Whose bar is drawn active.
@@ -734,6 +944,15 @@ void Output::on_request_state(wl_listener *listener, void *data) {
   auto *output = owner_of<Output>(listener);
   auto *event = static_cast<wlr_output_event_request_state *>(data);
   wlr_output_commit_state(output->wlr, event->state);
+  // The screen just changed size, and nothing else would say so. Nested in
+  // another compositor this fires within a frame or two of startup — the mode
+  // the backend opens with is a placeholder, and a panel laid out against it
+  // is the wrong length for the whole session.
+  if (output->server->surfaces != nullptr) {
+    output->server->surfaces->setOutputSize(
+        static_cast<uint32_t>(output->wlr->width),
+        static_cast<uint32_t>(output->wlr->height));
+  }
 }
 
 void Output::on_destroy(wl_listener *listener, void *) {
@@ -744,8 +963,12 @@ void Output::on_destroy(wl_listener *listener, void *) {
 
 Toplevel::Toplevel(Server *server, wlr_xdg_toplevel *toplevel)
     : server(server), xdg_toplevel(toplevel),
-      scene_tree(wlr_scene_xdg_surface_create(&server->scene->tree,
-                                              toplevel->base)) {
+      // Into the current workspace's tree rather than the scene root, which is
+      // all it takes for an ordinary Wayland window to hide and come back with
+      // its workspace like a LavaUI one.
+      scene_tree(wlr_scene_xdg_surface_create(server->workspaces.currentTree(),
+                                              toplevel->base)),
+      workspace(server->workspaces.current) {
   // The scene node points back here so `surface_at` can get from a hit node to
   // the window that owns it. wlroots walks up to the nearest node with data.
   scene_tree->node.data = this;
@@ -928,24 +1151,55 @@ uint32_t glfw_mods(uint32_t modifiers) {
   return out;
 }
 
+/// The compositor's own shortcuts, taken before any client sees the key.
+///
+/// True when the key was one of ours, which is the caller's signal to stop: a
+/// bound key is not also text, and forwarding it would put a digit in whatever
+/// the user was typing in every time they changed workspace.
+bool handle_binding(Server *server, xkb_keysym_t sym, bool shift) {
+  // Worth having while this runs nested inside another compositor: without it
+  // the only way out is killing the process from elsewhere, and a compositor
+  // that has taken the keyboard is hard to leave.
+  if (sym == XKB_KEY_Escape) {
+    wl_display_terminate(server->display);
+    return true;
+  }
+  if (sym >= XKB_KEY_1 && sym <= XKB_KEY_9) {
+    const uint32_t index = static_cast<uint32_t>(sym - XKB_KEY_1);
+    if (index >= Workspaces::kCount) return false;
+    // Shift sends the window instead of following it, which is the arrangement
+    // every tiling compositor has settled on.
+    if (shift) {
+      server->moveFocusedToWorkspace(index);
+    } else {
+      server->switchWorkspace(index);
+    }
+    return true;
+  }
+  return false;
+}
+
 void Keyboard::on_key(wl_listener *listener, void *data) {
   auto *keyboard = owner_of<Keyboard>(listener);
   auto *event = static_cast<wlr_keyboard_key_event *>(data);
   Server *server = keyboard->server;
 
-  // Alt+Escape quits. Worth having while this runs nested inside another
-  // compositor: without it the only way out is killing the process from
-  // elsewhere, and a compositor that has taken the keyboard is hard to leave.
   const uint32_t modifiers = wlr_keyboard_get_modifiers(keyboard->wlr);
   if ((modifiers & WLR_MODIFIER_ALT) &&
       event->state == WL_KEYBOARD_KEY_STATE_PRESSED) {
     // +8 converts evdev to xkb keycodes; the offset is historical, from X.
+    const xkb_keycode_t keycode = event->keycode + 8;
+    // The *unshifted* keysym, deliberately: Alt+Shift+2 produces "at" on a US
+    // layout and something else again on a German one, while the binding is
+    // about the key the digit is printed on. Level 0 is that key, whatever the
+    // modifiers currently say.
+    const xkb_layout_index_t layout =
+        xkb_state_key_get_layout(keyboard->wlr->xkb_state, keycode);
     const xkb_keysym_t *syms = nullptr;
-    const int count = xkb_state_key_get_syms(keyboard->wlr->xkb_state,
-                                             event->keycode + 8, &syms);
+    const int count = xkb_keymap_key_get_syms_by_level(
+        keyboard->wlr->keymap, keycode, layout, 0, &syms);
     for (int i = 0; i < count; ++i) {
-      if (syms[i] == XKB_KEY_Escape) {
-        wl_display_terminate(server->display);
+      if (handle_binding(server, syms[i], modifiers & WLR_MODIFIER_SHIFT)) {
         return;
       }
     }
@@ -957,14 +1211,14 @@ void Keyboard::on_key(wl_listener *listener, void *data) {
   // is what a shortcut or an arrow is; `Text` is the character the layout
   // produced, which is the only thing that knows about shift, dead keys or a
   // non-US keymap.
-  if (server->focusedSurface != 0) {
+  if (server->focusedSurface() != 0) {
     const bool pressed = event->state == WL_KEYBOARD_KEY_STATE_PRESSED;
     const xkb_keysym_t *syms = nullptr;
     const int count = xkb_state_key_get_syms(keyboard->wlr->xkb_state,
                                              event->keycode + 8, &syms);
     const int32_t mods = static_cast<int32_t>(glfw_mods(modifiers));
     if (ClientSurface *target =
-            server->surfaces->find(server->focusedSurface)) {
+            server->surfaces->find(server->focusedSurface())) {
       for (int i = 0; i < count; ++i) {
         target->canvas->keyEvent(glfw_key(syms[i]), pressed ? 1 : 0, mods);
       }
@@ -1087,6 +1341,70 @@ void Server::focus(Toplevel *toplevel) {
   }
 }
 
+Toplevel *Server::frontToplevel(uint32_t workspace) {
+  for (Toplevel *toplevel : toplevels) {
+    if (toplevel->workspace == workspace) return toplevel;
+  }
+  return nullptr;
+}
+
+void Server::switchWorkspace(uint32_t index) {
+  if (index >= Workspaces::kCount || index == workspaces.current) return;
+
+  wlr_scene_node_set_enabled(&workspaces.currentTree()->node, false);
+  workspaces.current = index;
+  wlr_scene_node_set_enabled(&workspaces.currentTree()->node, true);
+
+  // A drag is a grab on a window that is no longer on screen. Dropping it here
+  // rather than letting it run means the pointer does not keep dragging
+  // something invisible around the workspace the user just arrived in.
+  drag = Drag::None;
+
+  // Whatever had the keyboard is hidden now. Clearing first covers both cases
+  // at once: the seat is pointed at nothing until something on *this*
+  // workspace takes it.
+  wlr_seat_keyboard_notify_clear_focus(seat);
+  if (surfaces != nullptr) surfaces->setFocused(focusedSurface());
+  if (focusedSurface() == 0) {
+    focus(frontToplevel(index));
+  }
+
+  // The cursor did not move, but what is under it did.
+  update_pointer_focus(0);
+}
+
+void Server::moveFocusedToWorkspace(uint32_t index) {
+  if (index >= Workspaces::kCount || index == workspaces.current) return;
+
+  if (surfaces != nullptr) {
+    if (ClientSurface *surface = surfaces->find(focusedSurface())) {
+      surfaces->moveToWorkspace(*surface, index);
+      // It arrives focused on the workspace it was sent to, and leaves this
+      // one with nothing focused — the same as if it had been closed here.
+      setFocusedSurface(0);
+      focusedByWorkspace[index] = surface->id;
+      surfaces->setFocused(0);
+      drag = Drag::None;
+      update_pointer_focus(0);
+      return;
+    }
+  }
+
+  // No client surface has the keyboard, so it is a Wayland window's turn — the
+  // front one, which is the one the user is looking at.
+  if (Toplevel *toplevel = frontToplevel(workspaces.current)) {
+    toplevel->workspace = index;
+    wlr_scene_node_reparent(&toplevel->scene_tree->node,
+                            workspaces.tree[index]);
+    // Left at the front of the stacking list, which makes it the front window
+    // of the workspace it arrived on — nothing else is there to be in front.
+    wlr_seat_keyboard_notify_clear_focus(seat);
+    focus(frontToplevel(workspaces.current));
+    drag = Drag::None;
+    update_pointer_focus(0);
+  }
+}
+
 void Server::update_pointer_focus(uint32_t time_msec) {
   // A drag owns the pointer until the button comes back up, wherever it has
   // got to — otherwise letting the cursor outrun the window would hand the
@@ -1206,7 +1524,7 @@ void Server::on_cursor_button(wl_listener *listener, void *data) {
             server->surfaces->frameAt(server->cursor->x, server->cursor->y, bx,
                                       by)) {
       server->surfaces->setFocused(frame->id);
-      server->focusedSurface = frame->id;
+      server->setFocusedSurface(frame->id);
       wlr_seat_keyboard_notify_clear_focus(server->seat);
       switch (lava::Decoration::hitTest(static_cast<float>(bx),
                                         static_cast<float>(by),
@@ -1215,6 +1533,9 @@ void Server::on_cursor_button(wl_listener *listener, void *data) {
           // The client's stream ends with its surface, which is how it learns
           // the window is gone — see `SubscribeInput`.
           server->surfaces->destroySurface(frame->id);
+          // Or the workspace goes on pointing at an id that no longer resolves,
+          // and the next Alt+Shift would move a Wayland window instead.
+          server->setFocusedSurface(0);
           return;
         case lava::DecorationHit::Maximize:
           server->surfaces->toggleMaximize(*frame);
@@ -1267,7 +1588,7 @@ void Server::on_cursor_button(wl_listener *listener, void *data) {
     if (pressed) {
       if (ClientSurface *over =
               server->surfaces->at(server->cursor->x, server->cursor->y, sx, sy)) {
-        server->focusedSurface = over->id;
+        server->setFocusedSurface(over->id);
         // Taking the keyboard from any Wayland window: the two focus models
         // are separate, and leaving both focused would deliver every key twice.
         wlr_seat_keyboard_notify_clear_focus(server->seat);
@@ -1277,7 +1598,7 @@ void Server::on_cursor_button(wl_listener *listener, void *data) {
         return;
       }
     } else if (ClientSurface *target =
-                   server->surfaces->find(server->focusedSurface)) {
+                   server->surfaces->find(server->focusedSurface())) {
       // Recomputed against the focused surface rather than reusing whatever a
       // hit test left behind: the pointer may be outside it, and `at` only
       // fills the offsets for surfaces it actually tested.
@@ -1295,7 +1616,7 @@ void Server::on_cursor_button(wl_listener *listener, void *data) {
     server->surface_at(server->cursor->x, server->cursor->y, &sx, &sy,
                        &toplevel);
     server->focus(toplevel);  // click to focus; null over the desktop is a no-op
-    server->focusedSurface = 0;
+    server->setFocusedSurface(0);
   }
 
   wlr_seat_pointer_notify_button(server->seat, event->time_msec, event->button,
@@ -1387,6 +1708,11 @@ int main() {
   const float background[] = {0.055f, 0.075f, 0.12f, 1.0f};
   wlr_scene_rect_create(&server.scene->tree, 8192, 8192, background);
 
+  // After the background and before anything else: the trees created here are
+  // siblings above it, and the panel tree created last inside `init` is above
+  // them. Every window in the compositor lives in one of these.
+  server.workspaces.init(&server.scene->tree);
+
   server.new_output.attach(&server.backend->events.new_output, &server,
                            Server::on_new_output);
 
@@ -1433,7 +1759,7 @@ int main() {
   // connects. Surfaces are windows on it.
   auto canvas_renderer = lava::CanvasRenderer::create(server.renderer);
   SurfaceRegistry surfaces;
-  surfaces.bind(canvas_renderer.get(), &server.scene->tree);
+  surfaces.bind(canvas_renderer.get(), &server.workspaces);
   server.surfaces = &surfaces;
   if (!canvas_renderer) {
     wlr_log(WLR_ERROR, "no canvas device — LavaUI surfaces cannot be drawn");
