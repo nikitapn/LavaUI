@@ -2,20 +2,28 @@
 #include <cstdio>
 #include <cstddef>
 #include <fstream>
+#include <spawn.h>
 #include <sys/stat.h>
+#include <sys/wait.h>
 #include <linux/input-event-codes.h>  // BTN_RIGHT
+#include <cerrno>
 #include <csignal>
+#include <cstring>
 #include <pthread.h>
 #include <cstdlib>
 #include <ctime>
 #include <iostream>
 #include <list>
+#include <thread>
+#include <vector>
 
 #include "canvas_surface.hpp"
 #include "config.hpp"
 #include "decoration.hpp"
 #include "control_plane.hpp"
 #include "wlr.hpp"
+
+extern char **environ;
 
 namespace {
 
@@ -232,6 +240,11 @@ struct XwaylandSurface : FramedWindow {
   /// Whether `map`/`unmap` are attached. They can only be while a Wayland
   /// surface exists behind the X11 window, which is not its whole life.
   bool associated = false;
+  /// Override-redirect launchers such as Rofi need an explicit exception to
+  /// the normal "menus never take focus" rule. Remember what they displaced
+  /// so closing the launcher returns the keyboard to the previous client.
+  bool overrideFocused = false;
+  uint32_t previousClientFocus = 0;
 
   XwaylandSurface(Server *server, wlr_xwayland_surface *surface);
   ~XwaylandSurface();
@@ -355,6 +368,8 @@ struct Keyboard {
 struct Server {
   wl_display *display = nullptr;
   wlr_backend *backend = nullptr;
+  /// The logind/libseat session behind a DRM backend. Null when nested.
+  wlr_session *session = nullptr;
   wlr_renderer *renderer = nullptr;
   wlr_allocator *allocator = nullptr;
   wlr_scene *scene = nullptr;
@@ -1399,12 +1414,27 @@ void XwaylandSurface::on_map(wl_listener *listener, void *) {
   const char *title = self->xsurface->title;
 
   if (self->overrideRedirect()) {
-    // A menu, a tooltip, a drag icon. It has asked the window manager to keep
-    // out, and it means it: placed exactly where it says, never framed, and
-    // never given the keyboard by us — the application manages that itself.
+    // A menu, tooltip or launcher. It has asked the window manager to keep
+    // out, so it is placed exactly where it says and never framed. Most such
+    // windows must not take focus, but X11 launchers such as Rofi cannot use
+    // their traditional keyboard grab through Xwayland. wlroots classifies
+    // the small subset that needs the compositor to hand it focus instead.
     wlr_scene_node_set_position(&self->scene_tree->node, self->xsurface->x,
                                 self->xsurface->y);
     wlr_scene_node_raise_to_top(&self->scene_tree->node);
+    if (wlr_xwayland_surface_override_redirect_wants_focus(self->xsurface)) {
+      self->previousClientFocus = server->focusedSurface();
+      server->setFocusedSurface(0);
+      if (server->surfaces != nullptr) server->surfaces->setFocused(0);
+      wlr_xwayland_surface_activate(self->xsurface, true);
+      if (wlr_keyboard *keyboard = wlr_seat_get_keyboard(server->seat)) {
+        wlr_seat_keyboard_notify_enter(
+            server->seat, self->xsurface->surface, keyboard->keycodes,
+            keyboard->num_keycodes, &keyboard->modifiers);
+      }
+      self->overrideFocused = true;
+      wlr_log(WLR_INFO, "x11 override-redirect window given keyboard focus");
+    }
     return;
   }
 
@@ -1432,6 +1462,19 @@ void XwaylandSurface::on_map(wl_listener *listener, void *) {
 void XwaylandSurface::on_unmap(wl_listener *listener, void *) {
   auto *self = owner_of<XwaylandSurface>(listener);
   Server *server = self->server;
+  if (self->overrideFocused) {
+    self->overrideFocused = false;
+    wlr_xwayland_surface_activate(self->xsurface, false);
+    wlr_seat_keyboard_notify_clear_focus(server->seat);
+    if (self->previousClientFocus != 0 && server->surfaces != nullptr &&
+        server->surfaces->find(self->previousClientFocus) != nullptr) {
+      server->setFocusedSurface(self->previousClientFocus);
+      server->surfaces->setFocused(self->previousClientFocus);
+    } else {
+      server->focus(server->frontToplevel(server->workspaces.current));
+    }
+    self->previousClientFocus = 0;
+  }
   server->toplevels.remove(self);
   if (self->frameId != 0 && server->surfaces != nullptr) {
     server->surfaces->destroySurface(self->frameId);
@@ -1927,17 +1970,88 @@ uint32_t glfw_mods(uint32_t modifiers) {
   return out;
 }
 
+/// Starts a program without blocking the Wayland event loop.
+///
+/// The child inherits WAYLAND_DISPLAY and DISPLAY from the compositor. The
+/// former lets native clients connect directly; the latter lets X11 clients
+/// start Xwayland lazily. Programs launched from either inherit the same
+/// environment and therefore open here rather than in a session outside it.
+void launch_program(const char *program, char *const argv[],
+                    char *const envp[] = environ) {
+  pid_t pid = -1;
+  const int error = posix_spawnp(&pid, program, nullptr, nullptr, argv, envp);
+  if (error != 0) {
+    wlr_log(WLR_ERROR, "launcher: could not start %s: %s", program,
+            std::strerror(error));
+    return;
+  }
+
+  wlr_log(WLR_INFO, "launcher: started %s (pid %d)", program,
+          static_cast<int>(pid));
+  // A launcher may stay open for an arbitrary time. Waiting on a detached
+  // thread keeps zombies out without ever parking the compositor's loop.
+  std::thread([pid] {
+    int status = 0;
+    while (waitpid(pid, &status, 0) < 0 && errno == EINTR) {}
+  }).detach();
+}
+
+void launch_rofi() {
+  char program[] = "rofi";
+  char show[] = "-show";
+  char mode[] = "drun";
+  char *argv[] = {program, show, mode, nullptr};
+
+  // Native rofi-wayland requires zwlr_layer_shell_v1, which this compositor
+  // does not advertise yet. Keep DISPLAY so Rofi uses our lazy Xwayland, but
+  // hide WAYLAND_DISPLAY so it cannot select the unsupported native path.
+  std::vector<char *> x11Environment;
+  for (char **entry = environ; *entry != nullptr; ++entry) {
+    if (std::strncmp(*entry, "WAYLAND_DISPLAY=", 16) != 0) {
+      x11Environment.push_back(*entry);
+    }
+  }
+  x11Environment.push_back(nullptr);
+  launch_program(program, argv, x11Environment.data());
+}
+
+void launch_alacritty() {
+  char program[] = "alacritty";
+  char *argv[] = {program, nullptr};
+  launch_program(program, argv);
+}
+
 /// The compositor's own shortcuts, taken before any client sees the key.
 ///
 /// True when the key was one of ours, which is the caller's signal to stop: a
 /// bound key is not also text, and forwarding it would put a digit in whatever
 /// the user was typing in every time they changed workspace.
-bool handle_binding(Server *server, xkb_keysym_t sym, bool shift) {
+bool handle_binding(Server *server, xkb_keysym_t sym, bool shift, bool ctrl) {
   // Worth having while this runs nested inside another compositor: without it
   // the only way out is killing the process from elsewhere, and a compositor
   // that has taken the keyboard is hard to leave.
   if (sym == XKB_KEY_Escape) {
     wl_display_terminate(server->display);
+    return true;
+  }
+  if (sym == XKB_KEY_space) {
+    launch_rofi();
+    return true;
+  }
+  if (sym == XKB_KEY_Return || sym == XKB_KEY_KP_Enter) {
+    launch_alacritty();
+    return true;
+  }
+  if (ctrl && sym >= XKB_KEY_F1 && sym <= XKB_KEY_F10) {
+    const unsigned vt = static_cast<unsigned>(sym - XKB_KEY_F1) + 1;
+    if (server->session == nullptr) {
+      wlr_log(WLR_ERROR, "session: cannot switch to VT %u without a DRM session",
+              vt);
+    } else if (!wlr_session_change_vt(server->session, vt)) {
+      wlr_log(WLR_ERROR, "session: failed to switch to VT %u", vt);
+    } else {
+      wlr_log(WLR_INFO, "session: switching to VT %u", vt);
+    }
     return true;
   }
   if (sym >= XKB_KEY_1 && sym <= XKB_KEY_9) {
@@ -1975,7 +2089,8 @@ void Keyboard::on_key(wl_listener *listener, void *data) {
     const int count = xkb_keymap_key_get_syms_by_level(
         keyboard->wlr->keymap, keycode, layout, 0, &syms);
     for (int i = 0; i < count; ++i) {
-      if (handle_binding(server, syms[i], modifiers & WLR_MODIFIER_SHIFT)) {
+      if (handle_binding(server, syms[i], modifiers & WLR_MODIFIER_SHIFT,
+                         modifiers & WLR_MODIFIER_CTRL)) {
         return;
       }
     }
@@ -2596,7 +2711,7 @@ int main() {
   server.config.applyEnvironment();
 
   auto *loop = wl_display_get_event_loop(server.display);
-  server.backend = wlr_backend_autocreate(loop, nullptr);
+  server.backend = wlr_backend_autocreate(loop, &server.session);
   server.renderer = server.backend ? wlr_renderer_autocreate(server.backend) : nullptr;
   server.allocator = (server.backend && server.renderer)
                          ? wlr_allocator_autocreate(server.backend, server.renderer)
