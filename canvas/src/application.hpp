@@ -210,7 +210,8 @@ public:
   /// Load the face TextRenderer uses for draw-list text. Swift is the only
   /// caller (FontStore); Application does not pick a default path.
   [[nodiscard]] canvas::VoidResult loadFont(const std::string &path, float pixelSize);
-  int registerFont(const std::string &path, float pixelSize);
+  int registerFont(const std::string &path, uint32_t pixelSize26_6,
+                   uint32_t faceIndex, uint32_t rasterFlags);
 
   /// System clipboard (GLFW-backed; empty when headless).
   std::string clipboardText() const;

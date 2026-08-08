@@ -87,10 +87,16 @@ public final class CompositorResources: GPUResourceHost, @unchecked Sendable {
 
     public init(_ compositor: Compositor) { self.compositor = compositor }
 
-    public func registerFont(path: String, pixelSize: Float) -> UInt32? {
+    public func registerFont(
+        path: String, pixelSize26_6: UInt32, faceIndex: UInt32,
+        rasterFlags: UInt32
+    ) -> UInt32? {
         do {
             return try blockingCall { [compositor] in
-                try await compositor.registerFont(path: path, pixelSize: pixelSize)
+                try await compositor.registerFont(
+                    path: path, pixelSize26_6: pixelSize26_6,
+                    faceIndex: faceIndex, rasterFlags: rasterFlags
+                )
             }
         } catch {
             FileHandle.standardError.write(

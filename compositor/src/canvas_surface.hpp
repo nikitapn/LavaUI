@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "bridge/canvas_engine.hpp"
+#include "render/font_key.hpp"
 
 #include "wlr.hpp"
 
@@ -65,7 +66,8 @@ class CanvasRenderer {
   ///
   /// Device-wide, not per surface: one atlas serves every window, so a face
   /// registered for one client is already rasterised for the next.
-  int registerFont(const std::string &path, float pixelSize);
+  int registerFont(const std::string &path, uint32_t pixelSize26_6,
+                   uint32_t faceIndex, uint32_t rasterFlags);
 
   /// Decodes a file and uploads it as `key`. Texture id (>0), or -1 if the
   /// file will not decode. `outWidth`/`outHeight` are the *decoded* size,

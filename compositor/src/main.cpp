@@ -705,12 +705,15 @@ class SurfaceRegistry : public lava::CompositorHost {
 
   // ─── CompositorHost ──────────────────────────────────────────────────────
 
-  int registerFont(const std::string &path, float pixelSize) override {
+  int registerFont(const std::string &path, uint32_t pixelSize26_6,
+                   uint32_t faceIndex, uint32_t rasterFlags) override {
     // Straight to the device, which exists before any surface does — that is
     // the whole reason the renderer and the surfaces are separate objects.
     // The atlas is device-wide, so a face registered by one client is already
     // rasterised for the next, and the id means the same thing to both.
-    return renderer_ ? renderer_->registerFont(path, pixelSize) : -1;
+    return renderer_ ? renderer_->registerFont(path, pixelSize26_6, faceIndex,
+                                               rasterFlags)
+                     : -1;
   }
 
   int registerImage(const std::string &key, const std::string &path,
@@ -932,7 +935,8 @@ class SurfaceRegistry : public lava::CompositorHost {
       wlr_log(WLR_ERROR, "decoration: no title face at '%s'", fontPath.c_str());
       return;
     }
-    const int id = registerFont(fontPath, pixelSize);
+    const int id = registerFont(fontPath, canvas::pixelSizeTo26_6(pixelSize), 0,
+                                canvas::RasterFlags::of(canvas::FontHinting::Normal));
     if (id >= 0) decoration_.setFontId(static_cast<uint32_t>(id));
   }
 

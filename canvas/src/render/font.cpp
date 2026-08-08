@@ -10,6 +10,7 @@
 #include <cctype>
 #include <cstdlib>
 #include <cstring>
+#include <fstream>
 #include <string>
 #include <vector>
 
@@ -23,10 +24,20 @@ struct Font::Impl {
   hb_face_t *hbFace = nullptr;
   hb_font_t *hbFont = nullptr;
 
+  /// The file, owned here. FreeType and HarfBuzz both point into it rather
+  /// than re-reading the path, so it must outlive both — which is why
+  /// `unload` clears it last.
+  std::vector<uint8_t> bytes;
+  FontDigest digest;
+
   float pixelSize = 0.f;
   float ascent = 0.f;
   float descent = 0.f;
   float lineHeight = 0.f;
+
+  uint32_t faceCount = 0;
+  /// Precomputed from `rasterFlags` once, because it is wanted per glyph.
+  int32_t loadFlags = FT_LOAD_DEFAULT;
 
   /// Last prepareWrap result (for wrapLineAt).
   std::vector<std::string> wrapCache;
@@ -59,6 +70,12 @@ struct Font::Impl {
       FT_Done_FreeType(ftLibrary);
       ftLibrary = nullptr;
     }
+    // Last: everything above was reading these bytes in place.
+    bytes.clear();
+    bytes.shrink_to_fit();
+    digest = FontDigest{};
+    faceCount = 0;
+    loadFlags = FT_LOAD_DEFAULT;
   }
 };
 
@@ -167,6 +184,35 @@ std::vector<float> wrapLineWidths(hb_font_t *font, const std::string &text,
   return lineWidths;
 }
 
+/// `RasterFlags` → the `FT_LOAD_*` bits for `FT_Load_Glyph`.
+///
+/// Hinting only. The result is always rendered to 8-bit grayscale, because
+/// that is what the atlas stores; LCD and 1-bit mono would change what a glyph
+/// *is* in the atlas rather than how it was fitted, and need a format before
+/// they need a flag.
+int32_t freetypeLoadFlags(uint32_t rasterFlags) {
+  int32_t flags = FT_LOAD_DEFAULT;
+  switch (RasterFlags::hinting(rasterFlags)) {
+    case FontHinting::Normal:
+      flags |= FT_LOAD_TARGET_NORMAL;
+      break;
+    case FontHinting::None:
+      flags |= FT_LOAD_NO_HINTING;
+      break;
+    case FontHinting::Light:
+      flags |= FT_LOAD_TARGET_LIGHT;
+      break;
+    case FontHinting::Mono:
+      // Mono *hinting* — the grid-fitting a 1-bit target implies — while
+      // still rendering coverage. Sharper stems than Normal, and not the
+      // same thing as a 1-bit bitmap.
+      flags |= FT_LOAD_TARGET_MONO;
+      break;
+  }
+  if (RasterFlags::forceAutohint(rasterFlags)) flags |= FT_LOAD_FORCE_AUTOHINT;
+  return flags;
+}
+
 } // namespace
 
 Font::Font() : impl_(std::make_unique<Impl>()) {}
@@ -175,38 +221,92 @@ Font::Font(Font &&) noexcept = default;
 Font &Font::operator=(Font &&) noexcept = default;
 
 VoidResult Font::load(const std::string &path, float pixelSize) {
+  return loadFace(path, pixelSizeTo26_6(pixelSize), 0,
+                  RasterFlags::of(FontHinting::Normal));
+}
+
+VoidResult Font::loadFace(const std::string &path, uint32_t pixelSize26_6,
+                          uint32_t faceIndex, uint32_t rasterFlags) {
+  std::vector<uint8_t> bytes;
+  if (!readFontFile(path, bytes)) {
+    return fail("Font::load: failed to read font: " + path);
+  }
+  auto result = loadFaceFromMemory(bytes.data(), bytes.size(), pixelSize26_6,
+                                   faceIndex, rasterFlags);
+  // The memory form names no file, and a caller that passed a path should
+  // get one back.
+  if (!result) return fail(result.error() + " (" + path + ")");
+  return result;
+}
+
+VoidResult Font::loadFaceFromMemory(const uint8_t *bytes, size_t byteCount,
+                                    uint32_t pixelSize26_6, uint32_t faceIndex,
+                                    uint32_t rasterFlags) {
   impl_->unload();
+
+  if (bytes == nullptr || byteCount == 0) {
+    return fail("Font::load: no font bytes");
+  }
+  if ((rasterFlags & ~RasterFlags::kKnownMask) != 0) {
+    // Refused rather than masked off. An unknown bit means the caller asked
+    // for something this renderer does not do, and rasterizing as though it
+    // had not asked is exactly the silent wrongness the key exists to stop.
+    return fail("Font::load: unknown raster flags");
+  }
+  if (pixelSize26_6 == 0) {
+    return fail("Font::load: zero pixel size");
+  }
+
+  impl_->bytes.assign(bytes, bytes + byteCount);
+  impl_->digest = sha256(impl_->bytes);
+  impl_->loadFlags = freetypeLoadFlags(rasterFlags);
 
   FT_Error ftError = FT_Init_FreeType(&impl_->ftLibrary);
   if (ftError) {
+    impl_->unload();
     return fail("Font::load: failed to initialize FreeType");
   }
 
-  ftError = FT_New_Face(impl_->ftLibrary, path.c_str(), 0, &impl_->ftFace);
+  ftError = FT_New_Memory_Face(impl_->ftLibrary, impl_->bytes.data(),
+                               static_cast<FT_Long>(impl_->bytes.size()),
+                               static_cast<FT_Long>(faceIndex), &impl_->ftFace);
   if (ftError) {
     impl_->unload();
-    return fail("Font::load: failed to load font: " + path);
+    return fail("Font::load: no face " + std::to_string(faceIndex) +
+                " in this font");
   }
+  impl_->faceCount = static_cast<uint32_t>(impl_->ftFace->num_faces);
 
-  FT_Set_Pixel_Sizes(impl_->ftFace, 0, static_cast<FT_UInt>(pixelSize));
+  // `FT_Set_Char_Size` at 72 dpi rather than `FT_Set_Pixel_Sizes`, so one
+  // point is one pixel and the size keeps its fractional part. The old call
+  // passed `(FT_UInt)pixelSize` — an integer ppem — while HarfBuzz below was
+  // scaled to the unrounded value, so a fractional size was shaped at one
+  // size and rasterized at another. Whole sizes are identical either way,
+  // which is why nothing ever noticed.
+  FT_Set_Char_Size(impl_->ftFace, 0, static_cast<FT_F26Dot6>(pixelSize26_6), 72,
+                   72);
 
-  // Independent load from the same file, not a shared buffer with
-  // FreeType — simpler lifetime bookkeeping than reusing one blob for
-  // both, at the cost of reading a (small) font file from disk twice, once
-  // at load time only.
-  impl_->hbBlob = hb_blob_create_from_file(path.c_str());
+  // The same bytes FreeType is reading, not a second read of the same path.
+  // `HB_MEMORY_MODE_READONLY` because this buffer outlives the blob and is
+  // not HarfBuzz's to free.
+  impl_->hbBlob = hb_blob_create(
+    reinterpret_cast<const char *>(impl_->bytes.data()),
+    static_cast<unsigned int>(impl_->bytes.size()), HB_MEMORY_MODE_READONLY,
+    nullptr, nullptr);
   if (!impl_->hbBlob || hb_blob_get_length(impl_->hbBlob) == 0) {
     impl_->unload();
-    return fail("Font::load: HarfBuzz failed to read font: " + path);
+    return fail("Font::load: HarfBuzz rejected the font bytes");
   }
 
-  impl_->hbFace = hb_face_create(impl_->hbBlob, 0);
+  impl_->hbFace = hb_face_create(impl_->hbBlob, faceIndex);
   impl_->hbFont = hb_font_create(impl_->hbFace);
   hb_ot_font_set_funcs(impl_->hbFont);
-  // 26.6 fixed-point, HarfBuzz's convention (matches FreeType's).
-  const int scale = static_cast<int>(pixelSize * 64.f);
-  hb_font_set_scale(impl_->hbFont, scale, scale);
+  // 26.6 fixed-point, HarfBuzz's convention — and now literally the same
+  // number FreeType was given, rather than a parallel computation of it.
+  hb_font_set_scale(impl_->hbFont, static_cast<int>(pixelSize26_6),
+                    static_cast<int>(pixelSize26_6));
 
+  const float pixelSize = pixelSizeFrom26_6(pixelSize26_6);
   impl_->pixelSize = pixelSize;
   impl_->ascent = static_cast<float>(impl_->ftFace->size->metrics.ascender) / 64.f;
   impl_->descent = static_cast<float>(-impl_->ftFace->size->metrics.descender) / 64.f;
@@ -219,6 +319,10 @@ VoidResult Font::load(const std::string &path, float pixelSize) {
 }
 
 bool Font::isLoaded() const { return impl_->isLoaded(); }
+
+const FontDigest &Font::contentHash() const { return impl_->digest; }
+
+uint32_t Font::faceCount() const { return impl_->faceCount; }
 
 // Both measure() and shape() assume single-line input — callers doing
 // multi-line layout are expected to split on '\n' themselves and call once
@@ -368,7 +472,7 @@ GlyphBitmap Font::rasterize(uint32_t glyphId) const {
   // shaping), so this loads it directly — the step that lets a ligature's
   // single substituted glyph rasterize correctly instead of only ever
   // being reachable by codepoint.
-  FT_Error error = FT_Load_Glyph(impl_->ftFace, glyphId, FT_LOAD_DEFAULT);
+  FT_Error error = FT_Load_Glyph(impl_->ftFace, glyphId, impl_->loadFlags);
   if (error) {
     return result;
   }

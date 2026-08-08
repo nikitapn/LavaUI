@@ -79,15 +79,15 @@ struct Application::Impl
 
   /// Client-mode font numbering, standing in for the atlas the device would
   /// own. Same contract as `TextRenderer::registerFont`: an index, stable per
-  /// (path, pixelSize), -1 if the file will not load.
+  /// `canvas::FontKey`, -1 if the file will not load.
   ///
   /// Provisional by construction. These ids are stamped into every
   /// `GlyphInstance` and mean nothing to a renderer in another process — a
   /// client's real font ids have to come back from whoever owns the atlas.
   /// Loading the face anyway is not waste: it fails here, at registration,
   /// rather than as missing text in a frame nobody can debug.
-  std::vector<std::pair<std::string, float>> clientFontKeys;
-  std::vector<canvas::Font>                  clientFonts;
+  std::vector<canvas::FontKey> clientFontKeys;
+  std::vector<canvas::Font>    clientFonts;
 
   /// Open windows, in creation order. `windows[0]` is the one every
   /// window-less overload of the public API means, which keeps single-window
@@ -379,27 +379,46 @@ struct Application::Impl
     }
   }
 
-  int registerFont(const std::string &path, float pixelSize)
+  int registerFont(const std::string &path, uint32_t pixelSize26_6,
+                   uint32_t faceIndex, uint32_t rasterFlags)
   {
-    if (deviceUp) return device.textRenderer().registerFont(path, pixelSize);
-
-    for (size_t i = 0; i < clientFontKeys.size(); ++i) {
-      if (clientFontKeys[i].first == path
-          && clientFontKeys[i].second == pixelSize) {
-        return static_cast<int>(i);
-      }
+    if (deviceUp) {
+      return device.textRenderer().registerFont(path, pixelSize26_6, faceIndex,
+                                                rasterFlags);
     }
+
+    // The same key the device path uses, for the same reason: two names for
+    // one file must not become two ids, and a file whose bytes changed must
+    // not keep the old one.
+    std::vector<uint8_t> bytes;
+    if (!canvas::readFontFile(path, bytes)) return -1;
+    const canvas::FontKey key{
+      .contentHash = canvas::sha256(bytes),
+      .faceIndex = faceIndex,
+      .pixelSize26_6 = pixelSize26_6,
+      .variationsHash = canvas::FontDigest{},
+      .rasterFlags = rasterFlags,
+    };
+    for (size_t i = 0; i < clientFontKeys.size(); ++i) {
+      if (clientFontKeys[i] == key) return static_cast<int>(i);
+    }
+
     canvas::Font font;
-    if (!font.load(path, pixelSize)) return -1;
+    if (!font.loadFaceFromMemory(bytes.data(), bytes.size(), pixelSize26_6,
+                                 faceIndex, rasterFlags)) {
+      return -1;
+    }
     clientFonts.push_back(std::move(font));
-    clientFontKeys.emplace_back(path, pixelSize);
+    clientFontKeys.push_back(key);
     return static_cast<int>(clientFonts.size() - 1);
   }
 
   canvas::VoidResult loadFont(const std::string &path, float pixelSize)
   {
     if (!deviceUp) {
-      return registerFont(path, pixelSize) >= 0
+      return registerFont(path, canvas::pixelSizeTo26_6(pixelSize), 0,
+                          canvas::RasterFlags::of(canvas::FontHinting::Normal))
+                 >= 0
                ? canvas::ok()
                : canvas::fail("Application::loadFont: " + path);
     }
@@ -756,9 +775,10 @@ void Application::setClipboardText(const std::string &text)
   if (AppWindow *w = impl_->win(0)) w->setClipboardText(text);
 }
 
-int Application::registerFont(const std::string &path, float pixelSize)
+int Application::registerFont(const std::string &path, uint32_t pixelSize26_6,
+                              uint32_t faceIndex, uint32_t rasterFlags)
 {
-  return impl_->registerFont(path, pixelSize);
+  return impl_->registerFont(path, pixelSize26_6, faceIndex, rasterFlags);
 }
 
 int Application::loadTexture(const std::string &path)

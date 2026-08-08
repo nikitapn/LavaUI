@@ -8,7 +8,9 @@ namespace lava {
 namespace {
 struct lava_M1 {
   ::nprpc::flat::String _1;
-  float _2;
+  uint32_t _2;
+  uint32_t _3;
+  uint32_t _4;
 };
 
 class lava_M1_Direct {
@@ -30,8 +32,12 @@ public:
   auto _1() noexcept { return (::nprpc::flat::Span<char>)base()._1; }
   auto _1() const noexcept { return (::nprpc::flat::Span<const char>)base()._1; }
   auto _1_d() noexcept { return ::nprpc::flat::String_Direct1(buffer_, offset_ + offsetof(lava_M1, _1)); }
-  const float& _2() const noexcept { return base()._2;}
-  float& _2() noexcept { return base()._2;}
+  const uint32_t& _2() const noexcept { return base()._2;}
+  uint32_t& _2() noexcept { return base()._2;}
+  const uint32_t& _3() const noexcept { return base()._3;}
+  uint32_t& _3() noexcept { return base()._3;}
+  const uint32_t& _4() const noexcept { return base()._4;}
+  uint32_t& _4() noexcept { return base()._4;}
 };
 
 struct lava_M2 {
@@ -371,8 +377,8 @@ public:
 };
 
 
-bool check_1S2Ff32(::nprpc::flat_buffer& buf, lava_M1_Direct& ia) {
-  if (static_cast<std::uint32_t>(buf.size()) < ia.offset() + 12) goto check_failed;
+bool check_1S2Fu323Fu324Fu32(::nprpc::flat_buffer& buf, lava_M1_Direct& ia) {
+  if (static_cast<std::uint32_t>(buf.size()) < ia.offset() + 20) goto check_failed;
   {
     if(!ia._1_d()._check_size_align(static_cast<std::uint32_t>(buf.size()))) goto check_failed;
   }
@@ -451,18 +457,18 @@ check_failed:
 }
 } // 
 
-uint32_t Compositor::RegisterFont(const std::string& path, float pixelSize) {
+uint32_t Compositor::RegisterFont(const std::string& path, uint32_t pixelSize26_6, uint32_t faceIndex, uint32_t rasterFlags) {
   auto& __arena = ::nprpc::impl::tls_bump_arena();
   __arena.reset();
   ::nprpc::flat_buffer buf;
   buf.set_arena(&__arena);
   auto session = ::nprpc::impl::g_rpc->get_session(this->get_endpoint());
-  std::size_t __wire_size = 44;
+  std::size_t __wire_size = 52;
   __wire_size = ::nprpc::flat::grow_size(__wire_size, 1, static_cast<std::size_t>(path.size()));
   if (!::nprpc::impl::g_rpc->prepare_zero_copy_buffer(session->ctx(), buf, __wire_size))
     buf.prepare(__wire_size);
   {
-    buf.commit(44);
+    buf.commit(52);
     static_cast<::nprpc::impl::Header*>(buf.data().data())->msg_id = ::nprpc::impl::MessageId::FunctionCall;
   static_cast<::nprpc::impl::Header*>(buf.data().data())->msg_type =::nprpc::impl::MessageType::Request;
   }
@@ -473,7 +479,9 @@ uint32_t Compositor::RegisterFont(const std::string& path, float pixelSize) {
   __ch.function_idx() = 0;
   lava_M1_Direct _(buf,32);
   _._1(path);
-  _._2() = pixelSize;
+  _._2() = pixelSize26_6;
+  _._3() = faceIndex;
+  _._4() = rasterFlags;
   static_cast<::nprpc::impl::Header*>(buf.data().data())->size = static_cast<uint32_t>(buf.size());
   session->send_receive(buf, this->get_timeout());
   auto std_reply = ::nprpc::impl::handle_standart_reply(buf);
@@ -488,16 +496,16 @@ uint32_t Compositor::RegisterFont(const std::string& path, float pixelSize) {
 }
 
 ::nprpc::Task<uint32_t>
-Compositor::RegisterFontAsync(const std::string& path, float pixelSize, std::stop_token st) {
+Compositor::RegisterFontAsync(const std::string& path, uint32_t pixelSize26_6, uint32_t faceIndex, uint32_t rasterFlags, std::stop_token st) {
   if (st.stop_requested()) throw nprpc::OperationCancelled();
   ::nprpc::flat_buffer buf;
   auto session = ::nprpc::impl::g_rpc->get_session(this->get_endpoint());
-  std::size_t __wire_size = 44;
+  std::size_t __wire_size = 52;
   __wire_size = ::nprpc::flat::grow_size(__wire_size, 1, static_cast<std::size_t>(path.size()));
   if (!::nprpc::impl::g_rpc->prepare_zero_copy_buffer(session->ctx(), buf, __wire_size))
     buf.prepare(__wire_size);
   {
-    buf.commit(44);
+    buf.commit(52);
     static_cast<::nprpc::impl::Header*>(buf.data().data())->msg_id = ::nprpc::impl::MessageId::FunctionCall;
   static_cast<::nprpc::impl::Header*>(buf.data().data())->msg_type =::nprpc::impl::MessageType::Request;
   }
@@ -508,7 +516,9 @@ Compositor::RegisterFontAsync(const std::string& path, float pixelSize, std::sto
   __ch.function_idx() = 0;
   lava_M1_Direct _(buf,32);
   _._1(path);
-  _._2() = pixelSize;
+  _._2() = pixelSize26_6;
+  _._3() = faceIndex;
+  _._4() = rasterFlags;
   static_cast<::nprpc::impl::Header*>(buf.data().data())->size = static_cast<uint32_t>(buf.size());
   co_await session->send_receive_coro(buf, this->get_timeout(), std::move(st));
   auto std_reply = ::nprpc::impl::handle_standart_reply(buf);
@@ -1370,13 +1380,13 @@ void ICompositor_Servant::dispatch(::nprpc::SessionContext& ctx, [[maybe_unused]
     case 0: {
       assert(ctx.rx_buffer != nullptr);
       lava_M1_Direct ia(*ctx.rx_buffer, 32);
-      if ( !check_1S2Ff32(*ctx.rx_buffer, ia) ) {
+      if ( !check_1S2Fu323Fu324Fu32(*ctx.rx_buffer, ia) ) {
         ::nprpc::impl::make_simple_answer(ctx, ::nprpc::impl::MessageId::Error_BadInput);
         break;
       }
       uint32_t __ret_val;
       try {
-        __ret_val = RegisterFont(ia._1(), ia._2());
+        __ret_val = RegisterFont(ia._1(), ia._2(), ia._3(), ia._4());
       }
       catch(::lava::FontNotFound& e) {
         assert(ctx.tx_buffer != nullptr);

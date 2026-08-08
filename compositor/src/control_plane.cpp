@@ -233,10 +233,15 @@ class CompositorImpl final : public ICompositor_Servant {
 
   // ─── Resources ───────────────────────────────────────────────────────────
 
-  uint32_t RegisterFont(nprpc::flat::Span<char> path, float pixelSize) override {
+  uint32_t RegisterFont(nprpc::flat::Span<char> path, uint32_t pixelSize26_6,
+                        uint32_t faceIndex, uint32_t rasterFlags) override {
     const std::string file{path};
-    const int id = host_.registerFont(file, pixelSize);
+    const int id =
+        host_.registerFont(file, pixelSize26_6, faceIndex, rasterFlags);
     if (id < 0) throw FontNotFound(file);
+    wlr_log(WLR_INFO, "font %d: %.2fpx face %u flags 0x%x '%s'", id,
+            static_cast<double>(pixelSize26_6) / 64.0, faceIndex, rasterFlags,
+            file.c_str());
     return static_cast<uint32_t>(id);
   }
 

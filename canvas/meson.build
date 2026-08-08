@@ -15,6 +15,7 @@ canvas_engine_sources = files(
   'src/render/compute_physics.cpp',
   'src/render/dmabuf_image.cpp',
   'src/render/font.cpp',
+  'src/render/font_key.cpp',
   'src/render/image_atlas.cpp',
   'src/render/pipeline.cpp',
   'src/render/quad_renderer.cpp',

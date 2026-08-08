@@ -25,6 +25,7 @@
 // search — same reasoning as canvas_engine.hpp, which canvas_swift's
 // CxxCanvas shim depends on too.
 #include "../util/result.hpp"
+#include "font_key.hpp"
 
 #include <cstdint>
 #include <memory>
@@ -105,7 +106,37 @@ class Font {
   // The object already exists either way; this just fills it in.
   [[nodiscard]] VoidResult load(const std::string &path, float pixelSize);
 
+  /// The full form: a face inside a collection, a size that is already 26.6,
+  /// and a hinting selection. `load` above is this one with face 0 and the
+  /// renderer's default hinting, kept because most callers want a font file
+  /// at a size and nothing else.
+  [[nodiscard]] VoidResult loadFace(const std::string &path,
+                                    uint32_t pixelSize26_6, uint32_t faceIndex,
+                                    uint32_t rasterFlags);
+
+  /// The same, from bytes the caller already has.
+  ///
+  /// This is the one the font registry uses, and the reason it exists is that
+  /// identity is content: the registry has to hash the file to know whether it
+  /// has this face already, and having read it, handing the same bytes on
+  /// costs nothing where re-opening the path costs two more reads — FreeType's
+  /// and HarfBuzz's. The bytes are copied and owned here, so the caller's
+  /// buffer need not outlive the call.
+  [[nodiscard]] VoidResult loadFaceFromMemory(const uint8_t *bytes,
+                                              size_t byteCount,
+                                              uint32_t pixelSize26_6,
+                                              uint32_t faceIndex,
+                                              uint32_t rasterFlags);
+
   bool isLoaded() const;
+
+  /// SHA-256 of the bytes this face was loaded from. Empty before a
+  /// successful load.
+  const FontDigest &contentHash() const;
+
+  /// How many faces the loaded file contains — 1 for a plain font, more for a
+  /// `.ttc`/`.otc` collection. Valid indices are `0 … faceCount() - 1`.
+  uint32_t faceCount() const;
 
   // Shapes `text` (HarfBuzz, full GSUB/GPOS — ligatures, kerning, the
   // works) as a single line and returns its aggregate size. This is what a

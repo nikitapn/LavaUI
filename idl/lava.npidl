@@ -129,9 +129,28 @@ interface Compositor {
   // convention, which works exactly until there are two clients.
 
   /// Registers a face and returns the id to put in `GlyphInstance.fontId`.
-  /// Idempotent per (path, pixelSize) — asking twice gets the same id, so a
-  /// client may call it whenever rather than caching carefully.
-  u32 RegisterFont(path: in string, pixelSize: in f32) raises(FontNotFound);
+  ///
+  /// Idempotent per *face*, which is not the same as per path. The compositor
+  /// opens the file and keys on what it contained — see `canvas::FontKey` —
+  /// so two clients naming the same bytes by different paths share one face
+  /// and one set of atlas glyphs, and a path whose bytes have changed since
+  /// the last call is correctly a different face rather than a stale hit.
+  /// That second half matters more than it sounds: a compositor outlives the
+  /// builds of the clients it draws, and `.build/…/fonts/X.ttf` is a
+  /// different file after every one of them.
+  ///
+  /// `pixelSize26_6` is 26.6 fixed point — pixels times 64 — because that is
+  /// the unit FreeType and HarfBuzz both size in, and because a `f32` size is
+  /// not something two processes can compare for equality and agree.
+  ///
+  /// `faceIndex` selects a face inside a `.ttc`/`.otc` collection; 0 for a
+  /// plain font file. `rasterFlags` is `canvas::RasterFlags` — hinting mode,
+  /// and whether to force the autohinter. Unknown bits are refused rather
+  /// than ignored, so a client asking for something this renderer does not do
+  /// hears about it instead of silently getting something else.
+  u32 RegisterFont(path: in string, pixelSize26_6: in u32,
+                   faceIndex: in u32, rasterFlags: in u32)
+      raises(FontNotFound);
 
   /// Registers an image and returns the id to put in an image command, with
   /// the size it decoded to. Idempotent per `(path, maxPixelSize)`.

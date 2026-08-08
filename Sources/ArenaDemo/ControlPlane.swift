@@ -423,15 +423,21 @@ final class CompositorImpl: CompositorServant, @unchecked Sendable {
         super.init()
     }
 
-    override func registerFont(path: String, pixelSize: Float) throws -> UInt32 {
-        let id = editor.registerFont(path: path, pixelSize: pixelSize)
+    override func registerFont(
+        path: String, pixelSize26_6: UInt32, faceIndex: UInt32,
+        rasterFlags: UInt32
+    ) throws -> UInt32 {
+        let id = editor.registerFont(
+            path: path, pixelSize26_6: pixelSize26_6,
+            faceIndex: faceIndex, rasterFlags: rasterFlags
+        )
         guard let id else {
             var ex = FontNotFound()
             ex.path = path
             throw ex
         }
         let line = "RegisterFont(\(URL(fileURLWithPath: path).lastPathComponent), "
-            + "\(pixelSize)) → \(id)\n"
+            + "\(Float(pixelSize26_6) / 64)px face \(faceIndex)) → \(id)\n"
         FileHandle.standardError.write(Data(line.utf8))
         return id
     }

@@ -38,7 +38,12 @@ struct CompositorHost {
   virtual ~CompositorHost() = default;
 
   /// Id to stamp into `GlyphInstance.fontId`, or -1 if the face will not load.
-  virtual int registerFont(const std::string &path, float pixelSize) = 0;
+  ///
+  /// Keyed on the file's contents rather than its path, so the size is 26.6
+  /// fixed point and the face index and hinting come along — see
+  /// `canvas::FontKey`.
+  virtual int registerFont(const std::string &path, uint32_t pixelSize26_6,
+                           uint32_t faceIndex, uint32_t rasterFlags) = 0;
 
   /// Id to stamp into an `Image` command's `param`, or -1 if the file will
   /// not decode. `key` is the caller's name for the entry — the same string

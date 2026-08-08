@@ -6,6 +6,7 @@
 
 #include <vulkan/vulkan.h>
 
+#include "render/font_key.hpp"
 #include "util/result.hpp"
 #include "util/types.hpp"
 
@@ -61,7 +62,21 @@ public:
   /// Registers a face; returns its id (stable, idempotent) or -1. Glyph ids
   /// are face-relative, so every glyph must be looked up with the id of the
   /// font it was shaped with.
+  ///
+  /// Idempotent per `canvas::FontKey` — the file's *contents*, the face inside
+  /// it, the 26.6 size and the hinting — not per path. Two names for the same
+  /// bytes are one face and one set of atlas glyphs; a path whose bytes
+  /// changed since the last call is a different face and gets a new id.
+  int registerFont(const std::string &path, uint32_t pixelSize26_6,
+                   uint32_t faceIndex, uint32_t rasterFlags);
+
+  /// Face 0 of `path` at `pixelSize`, hinted the default way. What a caller
+  /// that just wants a font file at a size should use.
   int registerFont(const std::string &path, float pixelSize);
+
+  /// The key `fontId` was registered under. False for an id this registry
+  /// never handed out.
+  bool fontKey(uint32_t fontId, canvas::FontKey &out) const;
 
   /// True if a glyph failed to pack and growAtlasIfNeeded() will replace the
   /// atlas image. Caller should wait for all in-flight frames first.

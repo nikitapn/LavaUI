@@ -315,6 +315,16 @@ class Engine {
   /// GlyphInstance so the renderer resolves ids against the right face.
   int registerFont(const std::string &path, float pixelSize);
 
+  /// The full form of the above: a face inside a collection, a 26.6 size, and
+  /// a `canvas::RasterFlags` hinting selection.
+  ///
+  /// Idempotent per `canvas::FontKey` — the file's *contents*, not its path.
+  /// Named differently rather than overloaded because Swift's C++ interop
+  /// imports overload sets by mangled name, and two `registerFont`s differing
+  /// only in arity read badly on that side.
+  int registerFace(const std::string &path, uint32_t pixelSize26_6,
+                   uint32_t faceIndex, uint32_t rasterFlags);
+
   /// System clipboard (GLFW-backed; empty when headless).
   std::string clipboardText() const;
   void setClipboardText(const std::string &text);

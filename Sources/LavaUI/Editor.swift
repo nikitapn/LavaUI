@@ -318,8 +318,13 @@ public final class Editor: @unchecked Sendable {
         set { engine.setClipboardText(std.string(newValue)) }
     }
 
-    public func registerFont(path: String, pixelSize: Float) -> UInt32? {
-        let id = engine.registerFont(std.string(path), pixelSize)
+    public func registerFont(
+        path: String, pixelSize26_6: UInt32, faceIndex: UInt32,
+        rasterFlags: UInt32
+    ) -> UInt32? {
+        let id = engine.registerFace(
+            std.string(path), pixelSize26_6, faceIndex, rasterFlags
+        )
         return id >= 0 ? UInt32(id) : nil
     }
 

@@ -123,15 +123,81 @@ final class ClientModeTests: XCTestCase {
         let first = try XCTUnwrap(editor.registerFont(path: face, pixelSize: 16))
         XCTAssertEqual(
             editor.registerFont(path: face, pixelSize: 16), first,
-            "registration is idempotent per (path, pixelSize)"
+            "registration is idempotent per face"
         )
         XCTAssertNotEqual(
             editor.registerFont(path: face, pixelSize: 24), first,
             "a different size is a different face"
         )
+        XCTAssertNotEqual(
+            editor.registerFont(
+                path: face, pixelSize26_6: 16 * 64, faceIndex: 0,
+                rasterFlags: FontRasterFlags(hinting: .none).raw
+            ),
+            first,
+            "hinting changes the bitmaps, so it changes the face"
+        )
         XCTAssertNil(
             editor.registerFont(path: "/nonesuch.ttf", pixelSize: 16),
             "a face that will not load must not get an id"
+        )
+        XCTAssertNil(
+            editor.registerFont(
+                path: face, pixelSize26_6: 16 * 64, faceIndex: 0,
+                rasterFlags: 0x8000_0000
+            ),
+            "an unknown raster flag is refused, not quietly ignored"
+        )
+        XCTAssertNil(
+            editor.registerFont(
+                path: face, pixelSize26_6: 16 * 64, faceIndex: 99,
+                rasterFlags: FontRasterFlags.default.raw
+            ),
+            "a face index this file does not contain has no id to give"
+        )
+    }
+
+    /// The point of content addressing: one file reachable by two names is one
+    /// face, and one name whose bytes changed is two.
+    ///
+    /// Both halves matter in this project specifically. Apps ship the same
+    /// framework faces in their own resource bundles, so the first case is
+    /// every second client that starts; and `swift build` rewrites those
+    /// bundles under a compositor that outlives it, which is the second.
+    func testAFaceIsItsBytesAndNotItsPath() throws {
+        let editor = try openClient()
+        let face = LavaResources.fontsDirectory + "/OpenSans-Regular.ttf"
+        try XCTSkipUnless(FileManager.default.fileExists(atPath: face), "no UI face on disk")
+        let symbols = LavaResources.fontsDirectory + "/NotoSansSymbols2-Regular.ttf"
+        try XCTSkipUnless(
+            FileManager.default.fileExists(atPath: symbols), "no symbol face on disk"
+        )
+
+        let directory = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("lava-font-identity-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(
+            at: directory, withIntermediateDirectories: true
+        )
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        // Same bytes, a name of its own — an app's private copy of a shared
+        // face. It must not cost a second face or a second set of glyphs.
+        let copy = directory.appendingPathComponent("copy-of-open-sans.ttf")
+        try FileManager.default.copyItem(at: URL(fileURLWithPath: face), to: copy)
+
+        let original = try XCTUnwrap(editor.registerFont(path: face, pixelSize: 16))
+        XCTAssertEqual(
+            editor.registerFont(path: copy.path, pixelSize: 16), original,
+            "the same bytes under another name are the same face"
+        )
+
+        // Now overwrite that name with a different face, the way a rebuild
+        // does. The old id must not answer for the new bytes.
+        try FileManager.default.removeItem(at: copy)
+        try FileManager.default.copyItem(at: URL(fileURLWithPath: symbols), to: copy)
+        XCTAssertNotEqual(
+            editor.registerFont(path: copy.path, pixelSize: 16), original,
+            "a path whose bytes changed is a different face, not a cache hit"
         )
     }
 
@@ -148,7 +214,7 @@ final class ClientModeTests: XCTestCase {
     /// ids nothing local would ever mint, so a call that went to the built-in
     /// renderer instead is visible rather than merely wrong.
     private final class StubHost: GPUResourceHost, @unchecked Sendable {
-        var fontAsks: [(path: String, pixelSize: Float)] = []
+        var fontAsks: [(path: String, pixelSize26_6: UInt32)] = []
         var imageAsks: [(path: String, maxPixelSize: UInt32)] = []
         var dataAsks: [(byteCount: Int, maxPixelSize: UInt32)] = []
         var released: [String] = []
@@ -156,8 +222,11 @@ final class ClientModeTests: XCTestCase {
         static let fontID: UInt32 = 4242
         static let textureID: UInt32 = 9001
 
-        func registerFont(path: String, pixelSize: Float) -> UInt32? {
-            fontAsks.append((path, pixelSize))
+        func registerFont(
+            path: String, pixelSize26_6: UInt32, faceIndex: UInt32,
+            rasterFlags: UInt32
+        ) -> UInt32? {
+            fontAsks.append((path, pixelSize26_6))
             return Self.fontID
         }
 

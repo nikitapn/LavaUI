@@ -5,6 +5,7 @@
 
 #include "application.hpp"
 #include "menu/app_menu.hpp"
+#include "render/font_key.hpp"
 #include "window/canvas_window.hpp"
 
 #define GLFW_INCLUDE_NONE
@@ -537,11 +538,20 @@ void Engine::setClipboardText(const std::string &text)
   impl_->withApp([&](Application &app) { app.setClipboardText(text); });
 }
 
-int Engine::registerFont(const std::string &path, float pixelSize)
+int Engine::registerFace(const std::string &path, uint32_t pixelSize26_6,
+                         uint32_t faceIndex, uint32_t rasterFlags)
 {
   int id = -1;
-  impl_->withApp([&](Application &app) { id = app.registerFont(path, pixelSize); });
+  impl_->withApp([&](Application &app) {
+    id = app.registerFont(path, pixelSize26_6, faceIndex, rasterFlags);
+  });
   return id;
+}
+
+int Engine::registerFont(const std::string &path, float pixelSize)
+{
+  return registerFace(path, canvas::pixelSizeTo26_6(pixelSize), 0,
+                      canvas::RasterFlags::of(canvas::FontHinting::Normal));
 }
 
 int Engine::loadTexture(const std::string &path)

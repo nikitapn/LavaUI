@@ -385,7 +385,7 @@ public:
   static std::string_view _get_class() noexcept { return "lava/lava.Compositor"; }
   std::string_view get_class() const noexcept override { return ICompositor_Servant::_get_class(); }
   void dispatch(::nprpc::SessionContext& ctx, [[maybe_unused]] bool from_parent) override;
-  virtual uint32_t RegisterFont (::nprpc::flat::Span<char> path, float pixelSize) = 0;
+  virtual uint32_t RegisterFont (::nprpc::flat::Span<char> path, uint32_t pixelSize26_6, uint32_t faceIndex, uint32_t rasterFlags) = 0;
   virtual ImageInfo RegisterImage (::nprpc::flat::Span<char> path, uint32_t maxPixelSize) = 0;
   virtual ImageInfo RegisterImageData (::nprpc::flat::Span<uint8_t> bytes, uint32_t maxPixelSize) = 0;
   virtual void ReleaseImage (uint32_t id) = 0;
@@ -409,8 +409,8 @@ public:
   using servant_t = ICompositor_Servant;
 
   Compositor(uint8_t interface_idx) : interface_idx_(interface_idx) {}
-  uint32_t RegisterFont (const std::string& path, float pixelSize);
-  ::nprpc::Task<uint32_t> RegisterFontAsync (const std::string& path, float pixelSize, std::stop_token st = {});
+  uint32_t RegisterFont (const std::string& path, uint32_t pixelSize26_6, uint32_t faceIndex, uint32_t rasterFlags);
+  ::nprpc::Task<uint32_t> RegisterFontAsync (const std::string& path, uint32_t pixelSize26_6, uint32_t faceIndex, uint32_t rasterFlags, std::stop_token st = {});
   ImageInfo RegisterImage (const std::string& path, uint32_t maxPixelSize);
   ::nprpc::Task<ImageInfo> RegisterImageAsync (const std::string& path, uint32_t maxPixelSize, std::stop_token st = {});
   ImageInfo RegisterImageData (::nprpc::flat::Span<const uint8_t> bytes, uint32_t maxPixelSize);

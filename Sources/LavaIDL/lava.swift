@@ -270,13 +270,17 @@ public func unmarshal_InputAck(buffer: UnsafeRawPointer, offset: Int) -> InputAc
 
 fileprivate struct lava_M1: Codable, Sendable {
   public var _1: String = ""
-  public var _2: Float = 0.0
+  public var _2: UInt32 = 0
+  public var _3: UInt32 = 0
+  public var _4: UInt32 = 0
 
   public init() {}
 
-  public init(_1: String, _2: Float)   {
+  public init(_1: String, _2: UInt32, _3: UInt32, _4: UInt32)   {
     self._1 = _1
     self._2 = _2
+    self._3 = _3
+    self._4 = _4
   }
 }
 
@@ -284,14 +288,18 @@ fileprivate struct lava_M1: Codable, Sendable {
 // MARK: - Marshal lava_M1
 fileprivate func marshal_lava_M1(buffer: FlatBuffer, offset: Int, data: lava_M1) {
   NPRPC.marshal_string(buffer: buffer, offset: offset + 0, string: data._1)
-  buffer.storeBytes(of: data._2, toByteOffset: offset + 8, as: Float.self)
+  buffer.storeBytes(of: data._2, toByteOffset: offset + 8, as: UInt32.self)
+  buffer.storeBytes(of: data._3, toByteOffset: offset + 12, as: UInt32.self)
+  buffer.storeBytes(of: data._4, toByteOffset: offset + 16, as: UInt32.self)
 }
 
 // MARK: - Unmarshal lava_M1
 fileprivate func unmarshal_lava_M1(buffer: UnsafeRawPointer, offset: Int) -> lava_M1 {
   var result = lava_M1()
   result._1 = NPRPC.unmarshal_string(buffer: buffer, offset: offset + 0)
-  result._2 = buffer.load(fromByteOffset: offset + 8, as: Float.self)
+  result._2 = buffer.load(fromByteOffset: offset + 8, as: UInt32.self)
+  result._3 = buffer.load(fromByteOffset: offset + 12, as: UInt32.self)
+  result._4 = buffer.load(fromByteOffset: offset + 16, as: UInt32.self)
   return result
 }
 
@@ -640,7 +648,7 @@ fileprivate func unmarshal_lava_M13(buffer: UnsafeRawPointer, offset: Int) -> la
 }
 
 public protocol CompositorProtocol {
-  func registerFont(path: String, pixelSize: Float) throws -> UInt32
+  func registerFont(path: String, pixelSize26_6: UInt32, faceIndex: UInt32, rasterFlags: UInt32) throws -> UInt32
   func registerImage(path: String, maxPixelSize: UInt32) throws -> ImageInfo
   func registerImageData(bytes: [UInt8], maxPixelSize: UInt32) throws -> ImageInfo
   func releaseImage(id: UInt32)
@@ -671,11 +679,11 @@ final public class Compositor: NPRPCObject, @unchecked Sendable {
     try super.init(from: decoder)
   }
 
-  public func registerFont(path: String, pixelSize: Float) async throws -> UInt32   {
+  public func registerFont(path: String, pixelSize26_6: UInt32, faceIndex: UInt32, rasterFlags: UInt32) async throws -> UInt32   {
     // Prepare buffer
     let buffer = FlatBuffer()
-    buffer.prepare(172)
-    buffer.commit(44)
+    buffer.prepare(180)
+    buffer.commit(52)
     guard let bufData = buffer.data else { throw BufferError(message: "Failed to get buffer data") }
 
     // Write message header
@@ -693,7 +701,9 @@ final public class Compositor: NPRPCObject, @unchecked Sendable {
     // Marshal input arguments
     var inArgs = lava_M1()
     inArgs._1 = path
-    inArgs._2 = pixelSize
+    inArgs._2 = pixelSize26_6
+    inArgs._3 = faceIndex
+    inArgs._4 = rasterFlags
     marshal_lava_M1(buffer: buffer, offset: 32, data: inArgs)
 
     guard let finalData = buffer.data else { throw BufferError(message: "Failed to get buffer data") }
@@ -1251,7 +1261,7 @@ open class CompositorServant: NPRPCServant, CompositorProtocol, @unchecked Senda
     return "lava/lava.Compositor"
   }
 
-  open func registerFont(path: String, pixelSize: Float) throws -> UInt32   {
+  open func registerFont(path: String, pixelSize26_6: UInt32, faceIndex: UInt32, rasterFlags: UInt32) throws -> UInt32   {
     fatalError("Subclass must implement registerFont")
   }
 
@@ -1376,7 +1386,7 @@ open class CompositorServant: NPRPCServant, CompositorProtocol, @unchecked Senda
     switch functionIdx     {
       case 0: // RegisterFont
         // Validate input buffer for untrusted interface
-        guard check_1S2Ff32(buffer: data, bufferSize: buffer.size, offset: 32) else         {
+        guard check_1S2Fu323Fu324Fu32(buffer: data, bufferSize: buffer.size, offset: 32) else         {
           makeSimpleAnswer(buffer: buffer, messageId: impl.MessageId.Error_BadInput)
           return
         }
@@ -1385,7 +1395,7 @@ open class CompositorServant: NPRPCServant, CompositorProtocol, @unchecked Senda
         let ia = unmarshal_lava_M1(buffer: data, offset: 32)
         
         do {
-          let __ret_val = try registerFont(path: ia._1, pixelSize: ia._2)
+          let __ret_val = try registerFont(path: ia._1, pixelSize26_6: ia._2, faceIndex: ia._3, rasterFlags: ia._4)
           // Prepare output buffer
           let obuf = buffer
           obuf.consume(obuf.size)
@@ -1814,8 +1824,8 @@ open class CompositorServant: NPRPCServant, CompositorProtocol, @unchecked Senda
 
 
 // Safety check for lava_M1
-fileprivate func check_1S2Ff32(buffer: UnsafeRawPointer, bufferSize: Int, offset: Int) -> Bool {
-  guard NPRPC.check_struct_bounds(bufferSize: bufferSize, offset: offset, structSize: 12) else { return false }
+fileprivate func check_1S2Fu323Fu324Fu32(buffer: UnsafeRawPointer, bufferSize: Int, offset: Int) -> Bool {
+  guard NPRPC.check_struct_bounds(bufferSize: bufferSize, offset: offset, structSize: 20) else { return false }
   guard NPRPC.check_string_bounds(buffer: buffer, bufferSize: bufferSize, offset: offset + 0) else { return false }
   return true
 }

@@ -142,8 +142,10 @@ std::unique_ptr<CanvasSurface> CanvasRenderer::createSurface(uint32_t width,
                                          height);
 }
 
-int CanvasRenderer::registerFont(const std::string &path, float pixelSize) {
-  return engine_.registerFont(path, pixelSize);
+int CanvasRenderer::registerFont(const std::string &path,
+                                 uint32_t pixelSize26_6, uint32_t faceIndex,
+                                 uint32_t rasterFlags) {
+  return engine_.registerFace(path, pixelSize26_6, faceIndex, rasterFlags);
 }
 
 namespace {

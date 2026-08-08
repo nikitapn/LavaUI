@@ -23,8 +23,20 @@ import Foundation
 /// decode, because they are about to own the result.
 public protocol GPUResourceHost: AnyObject, Sendable {
     /// Registers a face and returns the id to stamp into `GlyphInstance`.
-    /// Idempotent per `(path, pixelSize)`; nil if the file will not load.
-    func registerFont(path: String, pixelSize: Float) -> UInt32?
+    ///
+    /// Idempotent per *face*, which is a stronger claim than per path: the
+    /// host opens the file and keys on what it contained, so two names for
+    /// one file are one id, and a file whose bytes changed is correctly a new
+    /// one. Nil if the file will not load.
+    ///
+    /// The size is 26.6 fixed point — pixels times 64 — because a `Float` is
+    /// not something two processes can compare for equality and agree on, and
+    /// FreeType wants it quantised anyway. `rasterFlags` is a
+    /// `FontRasterFlags.raw`; unknown bits are refused, not ignored.
+    func registerFont(
+        path: String, pixelSize26_6: UInt32, faceIndex: UInt32,
+        rasterFlags: UInt32
+    ) -> UInt32?
 
     /// Registers an image, decoded from `path` and capped to `maxPixelSize`
     /// (0 = native), returning a handle with the id and the decoded size.
@@ -65,6 +77,21 @@ public protocol GPUResourceHost: AnyObject, Sendable {
 }
 
 extension GPUResourceHost {
+    /// Face 0 of `path` at `pixelSize`, hinted the renderer's default way —
+    /// what a caller that just wants a font file at a size should use.
+    ///
+    /// Rounds the size to 26.6 here rather than making every caller do it,
+    /// which is the point: there is exactly one conversion from "pixels a
+    /// human typed" to "the number the renderer keys on", and it lives here.
+    public func registerFont(path: String, pixelSize: Float) -> UInt32? {
+        registerFont(
+            path: path,
+            pixelSize26_6: UInt32(max(0, (pixelSize * 64).rounded())),
+            faceIndex: 0,
+            rasterFlags: FontRasterFlags.default.raw
+        )
+    }
+
     /// Off-thread registration for a host that has no main-thread half — a
     /// remote one, where the call is already a round trip and touches nothing
     /// local. `Editor` overrides this, because it does.

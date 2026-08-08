@@ -43,12 +43,68 @@ struct TextInkBounds: Sendable {
     var height: Float { maxY - minY }
 }
 
+/// How a face is fitted to the pixel grid on its way to the atlas.
+///
+/// Mirrors `canvas::FontHinting`. Part of a face's identity, not a rendering
+/// hint applied afterwards: the same file at the same size hinted two ways is
+/// two sets of glyph bitmaps, and sharing one atlas entry between them would
+/// hand out whichever was rasterized first.
+public enum FontHinting: UInt32, Sendable {
+    /// The font's own bytecode, where it has any. The renderer's default.
+    case normal = 0
+    /// Unhinted — faithful outlines, softer stems.
+    case none = 1
+    /// Vertical fitting only. The usual Linux desktop preference.
+    case light = 2
+    /// Monochrome-style grid fitting, still rendered to grayscale coverage.
+    case mono = 3
+}
+
+/// Hinting selection plus flags, packed the way `canvas::RasterFlags` reads
+/// it. Bits outside the ones defined here are refused by the renderer rather
+/// than ignored, so this type is the only supported way to build the word.
+public struct FontRasterFlags: Equatable, Sendable {
+    private static let forceAutohintBit: UInt32 = 0x10
+
+    public var hinting: FontHinting
+    /// Force FreeType's autohinter over the font's own bytecode.
+    public var forceAutohint: Bool
+
+    public init(hinting: FontHinting = .normal, forceAutohint: Bool = false) {
+        self.hinting = hinting
+        self.forceAutohint = forceAutohint
+    }
+
+    public static let `default` = FontRasterFlags()
+
+    public var raw: UInt32 {
+        hinting.rawValue | (forceAutohint ? Self.forceAutohintBit : 0)
+    }
+}
+
 /// Swift-facing typeface handle. Wraps `canvas::Font` (FreeType + HarfBuzz).
-/// Identity for cache keys is `(path, pixelSize)` — not the C++ object.
+///
+/// Identity for local cache keys is the path, face index, size and hinting.
+/// Note that this is *not* the identity the renderer uses — that one is the
+/// file's contents, computed on the far side of `registerWithEngine`, because
+/// only the process that opens the file can hash it. The two agree on
+/// everything except the path, and disagree about the path on purpose: this
+/// side needs a name to look up, that side needs a fact to trust.
 public final class UIFont: @unchecked Sendable {
     public let path: String
     public let pixelSize: Float
+    /// Which face inside a `.ttc`/`.otc` collection. 0 for a plain font file.
+    public let faceIndex: UInt32
+    public let raster: FontRasterFlags
     public let identity: String
+
+    /// The size as FreeType and HarfBuzz both count it: pixels times 64.
+    ///
+    /// Rounded, not truncated. A `Float` size cannot be compared for equality
+    /// across two processes and cannot be handed to FreeType unquantised, so
+    /// this is the number that actually travels and the number the renderer
+    /// keys on.
+    public var pixelSize26_6: UInt32 { UInt32((pixelSize * 64).rounded()) }
 
     /// Move-only C++ font; only touched on the UI thread.
     private var raw: canvas.Font
@@ -67,12 +123,19 @@ public final class UIFont: @unchecked Sendable {
     private var shapeCache: [String: [ShapedGlyph]] = [:]
     private var inkBoundsCache: [String: TextInkBounds] = [:]
 
-    public init?(path: String, pixelSize: Float = 16) {
+    public init?(
+        path: String, pixelSize: Float = 16, faceIndex: UInt32 = 0,
+        raster: FontRasterFlags = .default
+    ) {
         self.path = path
         self.pixelSize = pixelSize
-        self.identity = "\(path)@\(pixelSize)"
+        self.faceIndex = faceIndex
+        self.raster = raster
+        self.identity = "\(path)#\(faceIndex)@\(pixelSize)/\(raster.raw)"
         var f = canvas.Font()
-        let ok = f.load(std.string(path), pixelSize).has_value()
+        let size26_6 = UInt32((pixelSize * 64).rounded())
+        let ok = f.loadFace(std.string(path), size26_6, faceIndex, raster.raw)
+            .has_value()
         guard ok, f.isLoaded() else { return nil }
         self.raw = f
         // Probe metrics via empty measure.
@@ -408,8 +471,10 @@ public final class UIFont: @unchecked Sendable {
     /// never loaded. See `GPUResourceHost`.
     @discardableResult
     public func registerWithEngine(_ editor: Editor) -> Bool {
-        guard let id = editor.resources.registerFont(path: path, pixelSize: pixelSize)
-        else {
+        guard let id = editor.resources.registerFont(
+            path: path, pixelSize26_6: pixelSize26_6,
+            faceIndex: faceIndex, rasterFlags: raster.raw
+        ) else {
             FileHandle.standardError.write(
                 Data("UIFont: engine registerFont failed for \(path)\n".utf8)
             )

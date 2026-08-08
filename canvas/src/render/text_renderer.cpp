@@ -37,11 +37,11 @@ struct TextRenderer::Impl {
   // live behind canvas::Font now — this class only caches rasterized
   // bitmaps into its own Vulkan atlas and never touches FreeType/HarfBuzz
   // directly.
-  // One entry per registered (path, pixelSize). Glyph ids are *face-relative*,
-  // so the atlas must be keyed by (fontId, glyphId) — keying by glyphId alone
+  // One entry per registered `FontKey`. Glyph ids are *face-relative*, so the
+  // atlas must be keyed by (fontId, glyphId) — keying by glyphId alone
   // silently draws the wrong glyph as soon as a second face or size exists.
-  std::vector<canvas::Font>               fonts_;
-  std::vector<std::pair<std::string, float>> fontKeys_;
+  std::vector<canvas::Font>   fonts_;
+  std::vector<canvas::FontKey> fontKeys_;
   std::unordered_map<uint64_t, GlyphInfo> glyphMap_;
 
   static uint64_t glyphKey(uint32_t fontId, uint32_t glyphId) {
@@ -128,21 +128,43 @@ struct TextRenderer::Impl {
   }
 
   /// Registers a face and returns its id, or -1 on failure. Ids are stable
-  /// for the process; re-registering the same (path, size) returns the
-  /// existing id so Swift can call this idempotently.
-  int registerFont(const std::string& fontPath, float pixelSize) {
+  /// for the process; re-registering the same face returns the existing id,
+  /// so a caller may register whenever rather than caching carefully.
+  ///
+  /// The file is read once, here, and identity comes from what it contained —
+  /// see `FontKey` for why a path is neither necessary nor sufficient. The
+  /// bytes are then handed to `Font` rather than re-opened, so content
+  /// addressing costs one read and saves the two it replaces.
+  int registerFont(const std::string &fontPath, uint32_t pixelSize26_6,
+                   uint32_t faceIndex, uint32_t rasterFlags) {
+    std::vector<uint8_t> bytes;
+    if (!canvas::readFontFile(fontPath, bytes)) return -1;
+
+    canvas::FontKey key{
+      .contentHash = canvas::sha256(bytes),
+      .faceIndex = faceIndex,
+      .pixelSize26_6 = pixelSize26_6,
+      .variationsHash = canvas::FontDigest{},
+      .rasterFlags = rasterFlags,
+    };
     for (size_t i = 0; i < fontKeys_.size(); ++i) {
-      if (fontKeys_[i].first == fontPath && fontKeys_[i].second == pixelSize) {
-        return static_cast<int>(i);
-      }
+      if (fontKeys_[i] == key) return static_cast<int>(i);
     }
+
     canvas::Font font;
-    if (!font.load(fontPath, pixelSize)) {
+    if (!font.loadFaceFromMemory(bytes.data(), bytes.size(), pixelSize26_6,
+                                 faceIndex, rasterFlags)) {
       return -1;
     }
     fonts_.push_back(std::move(font));
-    fontKeys_.emplace_back(fontPath, pixelSize);
+    fontKeys_.push_back(key);
     return static_cast<int>(fonts_.size() - 1);
+  }
+
+  /// The key a registered id was loaded under. Null if the id is not one this
+  /// registry handed out.
+  const canvas::FontKey *fontKey(uint32_t fontId) const {
+    return fontId < fontKeys_.size() ? &fontKeys_[fontId] : nullptr;
   }
 
 
@@ -456,9 +478,23 @@ bool TextRenderer::glyphQuad(uint32_t fontId, uint32_t glyphId, GlyphQuad &out) 
   return true;
 }
 
-int  TextRenderer::registerFont(const std::string &path, float pixelSize) {
+int TextRenderer::registerFont(const std::string &path, float pixelSize) {
+  return registerFont(path, canvas::pixelSizeTo26_6(pixelSize), 0,
+                      canvas::RasterFlags::of(canvas::FontHinting::Normal));
+}
+
+int TextRenderer::registerFont(const std::string &path, uint32_t pixelSize26_6,
+                               uint32_t faceIndex, uint32_t rasterFlags) {
   std::unique_lock lock(mutex_);
-  return impl_->registerFont(path, pixelSize);
+  return impl_->registerFont(path, pixelSize26_6, faceIndex, rasterFlags);
+}
+
+bool TextRenderer::fontKey(uint32_t fontId, canvas::FontKey &out) const {
+  std::shared_lock lock(mutex_);
+  const canvas::FontKey *key = impl_->fontKey(fontId);
+  if (key == nullptr) return false;
+  out = *key;
+  return true;
 }
 bool TextRenderer::atlasNeedsGrow() const {
   std::shared_lock lock(mutex_);
@@ -487,7 +523,7 @@ VkSampler TextRenderer::atlasSampler() const {
 
 canvas::VoidResult TextRenderer::loadFont(const std::string& fontPath, int fontSize) {
   // Back-compat shim: registers as font 0 (the default face).
-  return impl_->registerFont(fontPath, static_cast<float>(fontSize)) >= 0
+  return registerFont(fontPath, static_cast<float>(fontSize)) >= 0
            ? canvas::ok()
            : canvas::VoidResult(std::unexpected(
                canvas::Error{"failed to load font: " + fontPath}));
