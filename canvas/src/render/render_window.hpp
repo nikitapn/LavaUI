@@ -99,6 +99,24 @@ class RenderWindow {
   /// *every* window and each has to be told.
   void setGlyphAtlas(VkImageView view, VkSampler sampler);
 
+  /// Clears each frame to nothing instead of to opaque black.
+  ///
+  /// For a window whose pixels are composited by something else — a compositor
+  /// surface — where "the parts nothing was drawn over" has to mean *nothing*
+  /// rather than black. A rounded corner, a translucent panel and a shadow all
+  /// depend on it, and against an opaque clear all three come out as black.
+  ///
+  /// What lands in the buffer is then premultiplied alpha, which is what
+  /// Wayland expects, and it falls out of the blend state rather than needing
+  /// one: colour blends `SRC_ALPHA`/`ONE_MINUS_SRC_ALPHA` and alpha blends
+  /// `ONE`/`ONE_MINUS_SRC_ALPHA`, so the first quad drawn onto a transparent
+  /// clear leaves `rgb = C·A, a = A` and every quad after it composes as
+  /// premultiplied `over`.
+  ///
+  /// Off by default: a window that presents to a swapchain, or that is read
+  /// back as a PNG, wants a background rather than a hole.
+  void setTransparent(bool transparent) { transparent_ = transparent; }
+
   /// Whole-window camera applied at draw time (layout pixels → screen).
   /// Per window: two views of the same document can sit at different zooms.
   void setViewTransform(float zoom, float panX, float panY);
@@ -454,6 +472,8 @@ class RenderWindow {
 
   bool        windowed_ = false;
   GLFWwindow *window_   = nullptr;
+  /// See `setTransparent`.
+  bool        transparent_ = false;
 
   /// Where frames go when this window is neither presenting nor being read
   /// back on the CPU. Borrowed; see `setExportTarget`.

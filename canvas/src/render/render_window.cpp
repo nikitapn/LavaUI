@@ -591,7 +591,8 @@ void RenderWindow::beginMainRenderPass(VkCommandBuffer commandBuffer, bool clear
   }
 
   std::array<VkClearValue, 2> clearValues {};
-  clearValues[0].color = {{0.0f, 0.0f, 0.0f, 1.0f}};
+  // Alpha 0 for a surface someone else composites; see `setTransparent`.
+  clearValues[0].color = {{0.0f, 0.0f, 0.0f, transparent_ ? 0.0f : 1.0f}};
   clearValues[1].depthStencil = {1.0f, 0};
 
   VkRenderPassBeginInfo renderPassInfo {

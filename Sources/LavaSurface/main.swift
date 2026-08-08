@@ -79,11 +79,19 @@ struct SurfaceDemoView: View {
             .background(Theme.current.inset)
             .cornerRadius(8)
         }
-        .background(Theme.current.background)
+        // No background of its own: the window's backdrop is the one thing
+        // deciding how opaque this surface is, and a second opaque fill here
+        // would quietly override it.
     }
 }
 
 // ─── Bring-up ───────────────────────────────────────────────────────────────
+
+// Translucent on purpose, and set before the first frame. The compositor
+// composites this surface rather than pasting it, so an alpha below 1 is a
+// window you can see the desktop through — the whole difference between the
+// ARGB surface this exports and the XRGB one it used to.
+WindowBackdrop.current = .color(Theme.current.background.opacity(0.75))
 
 guard let editor = LavaClient.open(
     title: "LavaSurface", width: 720, height: 560

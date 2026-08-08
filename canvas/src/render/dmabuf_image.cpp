@@ -18,7 +18,7 @@ namespace {
 
 /// The one format the export is fixed to, for now.
 ///
-/// Vulkan's B8G8R8A8_SRGB and DRM's XRGB8888 describe the same bytes on a
+/// Vulkan's B8G8R8A8_SRGB and DRM's ARGB8888 describe the same bytes on a
 /// little-endian machine, which is what makes the handover a reinterpretation
 /// rather than a conversion.
 ///
@@ -28,13 +28,24 @@ namespace {
 /// source and write it back without re-encoding — a whole-surface darkening
 /// that looks like a blending bug and is not one.
 ///
-/// X rather than A on the DRM side. The two name identical memory and differ
-/// only in whether the fourth channel means anything. A window's content is
-/// opaque, and saying so lets the compositor skip blending it against what is
-/// behind. Surfaces that genuinely need transparency will have to negotiate a
-/// format rather than inherit this one.
+/// A rather than X on the DRM side. The two name identical memory and differ
+/// only in whether the fourth channel means anything — and it does: a window
+/// with a rounded corner, a translucent panel, or a shadow around it has
+/// pixels that are not fully opaque, and saying `X` tells the compositor to
+/// read them as if they were.
+///
+/// The cost is that the compositor now blends the whole surface instead of
+/// skipping it. The way back is `wlr_scene_buffer_set_opaque_region`, which
+/// needs a client able to say which part of itself is opaque — a question the
+/// draw list does not answer yet.
+///
+/// Alpha here is *premultiplied*, which is what Wayland expects and what the
+/// engine already produces: its blend state is `SRC_ALPHA`/`ONE_MINUS_SRC_ALPHA`
+/// for colour and `ONE`/`ONE_MINUS_SRC_ALPHA` for alpha, which onto a
+/// transparent clear yields `rgb = C·A, a = A` and composes correctly from
+/// there. See `RenderWindow::setTransparent`.
 constexpr VkFormat kVkFormat  = VK_FORMAT_B8G8R8A8_SRGB;
-constexpr uint32_t kDrmFormat = DRM_FORMAT_XRGB8888;
+constexpr uint32_t kDrmFormat = DRM_FORMAT_ARGB8888;
 
 constexpr VkImageUsageFlags kUsage = VK_IMAGE_USAGE_TRANSFER_DST_BIT;
 /// What the modifier's tiling has to support for the blit above to be legal.

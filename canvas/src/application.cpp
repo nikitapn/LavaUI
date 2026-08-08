@@ -235,6 +235,9 @@ struct Application::Impl
       auto window = std::make_unique<AppWindow>(
         device, id, static_cast<int>(w), static_cast<int>(h));
       bringUpWindow(*window);
+      // Composited by whoever imports the buffer, so the frame clears to
+      // nothing rather than to black — see `RenderWindow::setTransparent`.
+      window->renderWindow().setTransparent(true);
       window->renderWindow().setExportTarget(image.get());
       exportImages.emplace(id, std::move(image));
       windows.push_back(std::move(window));

@@ -399,7 +399,15 @@ public final class LavaWindow {
         guard let root = host.rootNode else { return }
 
         drawList.clear()
-        drawList.rect(x: 0, y: 0, w: width, h: height, color: Theme.current.background)
+        // The window's own backdrop, and the only thing that decides whether
+        // this window is opaque. A compositor surface is composited rather
+        // than pasted, so a translucent colour here is a window you can see
+        // through and `nil` is one with no backdrop at all — which is what a
+        // rounded corner or a shadow needs, since both require the parts
+        // nothing was drawn over to stay empty.
+        if let backdrop = WindowBackdrop.current.fill {
+            drawList.rect(x: 0, y: 0, w: width, h: height, color: backdrop)
+        }
         drawList.emitTree(
             root, originX: 0, originY: menuH, viewportW: width, viewportH: height
         )

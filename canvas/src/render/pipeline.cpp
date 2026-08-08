@@ -152,9 +152,18 @@ Pipeline PipelineBuilder::build(
     .alphaToOneEnable      = VK_FALSE,  // Optional
   };
 
+  // Premultiplied `over`, because that is what the shaders emit: every one of
+  // them ends in `outColor = vec4(c.rgb * c.a, c.a)`. The source factor is
+  // therefore ONE — a SRC_ALPHA here would apply the alpha a second time, and
+  // a colour at a=0.5 would land at a quarter of its intended contribution
+  // rather than a half.
+  //
+  // Invisible for as long as everything was opaque, which it was: at a=1 the
+  // two are identical. It shows up the moment anything is genuinely
+  // translucent, which is what a composited window surface is.
   VkPipelineColorBlendAttachmentState colorBlendAttachment {
     .blendEnable         = VK_TRUE,
-    .srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA,
+    .srcColorBlendFactor = VK_BLEND_FACTOR_ONE,
     .dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA,
     .colorBlendOp        = VK_BLEND_OP_ADD,
     .srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE,

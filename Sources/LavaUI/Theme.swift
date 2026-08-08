@@ -156,3 +156,35 @@ extension Color {
     public static var muted: Color { Environment.current.theme.textMuted }
     public static var dim: Color { Environment.current.theme.textDim }
 }
+
+/// What a window paints behind its content, before anything in the tree.
+///
+/// Its own type rather than a `Theme` field because it is not a colour choice,
+/// it is a statement about the *window*: whether the surface underneath the UI
+/// is opaque, translucent, or absent.
+///
+/// A windowed app never touches this — `.theme` is what every one of them has
+/// always drawn. A compositor surface is composited by somebody else rather
+/// than pasted onto a swapchain, so it can be any of the three, and `.none` is
+/// what a rounded corner or a drop shadow needs: both depend on the parts
+/// nothing was drawn over staying empty rather than becoming black.
+public enum WindowBackdrop: Sendable {
+    /// The theme's opaque background. The default, and the only thing a
+    /// windowed app should want.
+    case theme
+    /// A specific colour, which may be translucent.
+    case color(Color)
+    /// Nothing at all — the surface stays as the frame was cleared.
+    case none
+
+    nonisolated(unsafe) public static var current: WindowBackdrop = .theme
+
+    /// The colour to fill the window with, or nil to fill nothing.
+    public var fill: Color? {
+        switch self {
+        case .theme: return Theme.current.background
+        case .color(let c): return c
+        case .none: return nil
+        }
+    }
+}
