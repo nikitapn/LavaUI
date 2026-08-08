@@ -127,22 +127,92 @@ struct Toplevel {
   /// no way to ask, which is why the compositor is the only place it lives.
   uint32_t workspace = 0;
 
+  /// Its frame in the registry, while it is mapped. 0 between an unmap and the
+  /// next map, when the window exists but is not on screen and has no title
+  /// bar to speak of.
+  uint32_t frameId = 0;
+
   Listener<Toplevel> map;
   Listener<Toplevel> unmap;
   Listener<Toplevel> commit;
   Listener<Toplevel> destroy;
+  Listener<Toplevel> set_title;
   Listener<Toplevel> request_maximize;
   Listener<Toplevel> request_fullscreen;
 
   Toplevel(Server *server, wlr_xdg_toplevel *toplevel);
   ~Toplevel();
 
+  /// What the client says its window is, in its own coordinates. Not the
+  /// surface size: a client may draw shadows outside its window, and framing
+  /// those would put the title bar a centimetre away from the window.
+  void geometry(uint32_t &width, uint32_t &height) const;
+
   static void on_map(wl_listener *listener, void *data);
   static void on_unmap(wl_listener *listener, void *data);
   static void on_commit(wl_listener *listener, void *data);
   static void on_destroy(wl_listener *listener, void *data);
+  static void on_set_title(wl_listener *listener, void *data);
   static void on_request_maximize(wl_listener *listener, void *data);
   static void on_request_fullscreen(wl_listener *listener, void *data);
+};
+
+// ─── Decoration negotiation ────────────────────────────────────────────────
+
+/// One client's question: "who draws the title bar, you or me?"
+///
+/// Without an answer a client assumes it does, and the result is two title
+/// bars — the compositor's, and the client's own drawn just below it. Saying
+/// "server side" is what makes a window under this compositor look like the
+/// others rather than like whichever toolkit it happens to use.
+///
+/// Answered when asked *and* when the decoration first appears, because a
+/// client that never sends `set_mode` still needs telling.
+struct ToplevelDecoration {
+  wlr_xdg_toplevel_decoration_v1 *wlr;
+  Listener<ToplevelDecoration> request_mode;
+  Listener<ToplevelDecoration> commit;
+  Listener<ToplevelDecoration> destroy;
+  bool answered = false;
+
+  explicit ToplevelDecoration(wlr_xdg_toplevel_decoration_v1 *decoration)
+      : wlr(decoration) {
+    request_mode.attach(&wlr->events.request_mode, this, on_request_mode);
+    // A client creates the decoration object *before* its first commit, so at
+    // this point the surface cannot be configured at all. Waiting for a commit
+    // is the only reliable moment: a client that asked once, got no answer and
+    // fell back to drawing its own is not going to ask again.
+    commit.attach(&wlr->toplevel->base->surface->events.commit, this,
+                  on_commit);
+    destroy.attach(&wlr->events.destroy, this, on_destroy);
+    apply();
+  }
+  ~ToplevelDecoration() {
+    request_mode.detach();
+    commit.detach();
+    destroy.detach();
+  }
+
+  void apply() {
+    // Configuring a surface that has not had its first commit is a protocol
+    // error.
+    if (answered || !wlr->toplevel->base->initialized) return;
+    wlr_xdg_toplevel_decoration_v1_set_mode(
+        wlr, WLR_XDG_TOPLEVEL_DECORATION_V1_MODE_SERVER_SIDE);
+    answered = true;
+    wlr_log(WLR_INFO, "decoration: server side for '%s'",
+            wlr->toplevel->app_id ? wlr->toplevel->app_id : "(none)");
+  }
+
+  static void on_request_mode(wl_listener *listener, void *) {
+    owner_of<ToplevelDecoration>(listener)->apply();
+  }
+  static void on_commit(wl_listener *listener, void *) {
+    owner_of<ToplevelDecoration>(listener)->apply();
+  }
+  static void on_destroy(wl_listener *listener, void *) {
+    delete owner_of<ToplevelDecoration>(listener);
+  }
 };
 
 // ─── Keyboard ──────────────────────────────────────────────────────────────
@@ -264,6 +334,7 @@ struct Server {
 
   Listener<Server> new_output;
   Listener<Server> new_toplevel;
+  Listener<Server> new_decoration;
   Listener<Server> new_input;
   Listener<Server> cursor_motion;
   Listener<Server> cursor_motion_absolute;
@@ -271,9 +342,12 @@ struct Server {
   Listener<Server> cursor_axis;
   Listener<Server> cursor_frame;
   Listener<Server> request_cursor;
+  Listener<Server> request_set_selection;
+  Listener<Server> request_set_primary_selection;
 
   static void on_new_output(wl_listener *listener, void *data);
   static void on_new_toplevel(wl_listener *listener, void *data);
+  static void on_new_decoration(wl_listener *listener, void *data);
   static void on_new_input(wl_listener *listener, void *data);
   static void on_cursor_motion(wl_listener *listener, void *data);
   static void on_cursor_motion_absolute(wl_listener *listener, void *data);
@@ -281,6 +355,9 @@ struct Server {
   static void on_cursor_axis(wl_listener *listener, void *data);
   static void on_cursor_frame(wl_listener *listener, void *data);
   static void on_request_cursor(wl_listener *listener, void *data);
+  static void on_request_set_selection(wl_listener *listener, void *data);
+  static void on_request_set_primary_selection(wl_listener *listener,
+                                               void *data);
 
   /// Deepest surface under a layout-space point, plus that point in the
   /// surface's own coordinates. Null when the cursor is over blank desktop.
@@ -318,8 +395,24 @@ struct ClientSurface {
   uint32_t id = 0;
   std::string title;
 
+  /// The contents, when they are a LavaUI draw list: null for a Wayland
+  /// window, whose pixels arrive as its own surface instead.
   std::unique_ptr<lava::CanvasSurface> canvas;
   wlr_scene_buffer *node = nullptr;
+
+  /// Set when the contents are an ordinary Wayland client.
+  ///
+  /// A window is framed the same either way — the title bar, the buttons, the
+  /// geometry, which workspace it is on and where it sits in the stack are all
+  /// the compositor's, and none of them care where the pixels came from. What
+  /// differs is only how the middle is filled and how a resize is asked for:
+  /// a LavaUI surface is told its new size and redraws, a Wayland client is
+  /// *asked* and answers with a new buffer when it is ready.
+  ///
+  /// Sharing the frame is the whole point. Two parallel implementations of
+  /// dragging a title bar is how the two kinds of window drift apart.
+  Toplevel *toplevel = nullptr;
+  bool isToplevel() const { return toplevel != nullptr; }
 
   /// The non-client area. Its own surface, so a title change redraws a strip
   /// rather than the window, and hit testing stays a rectangle comparison.
@@ -463,9 +556,28 @@ class SurfaceRegistry : public lava::CompositorHost {
     return nullptr;
   }
 
+  /// Topmost *window* under a point, of either kind.
+  ///
+  /// Separate from `at` because the two questions differ: `at` asks "who
+  /// should receive this pointer event", which a Wayland window answers
+  /// through the seat instead; this asks "which window is here", which is what
+  /// a compositor-level gesture like Alt+drag needs.
+  ClientSurface *windowAt(double lx, double ly) {
+    double sx = 0, sy = 0;
+    for (auto &s : surfaces_) {
+      if (s->panel || !visible(*s)) continue;
+      if (s->hit(lx, ly, sx, sy) || s->hitBar(lx, ly, sx, sy)) return s.get();
+    }
+    return nullptr;
+  }
+
   /// Topmost surface under a layout-space point. Front is most recent.
   ClientSurface *at(double lx, double ly, double &sx, double &sy) {
     for (auto &s : surfaces_) {
+      // Wayland windows are deliberately absent: their pointer input goes
+      // through the seat, to the client's own surface, and routing it here as
+      // well would deliver every event twice.
+      if (s->isToplevel()) continue;
       if (visible(*s) && s->hit(lx, ly, sx, sy)) return s.get();
     }
     return nullptr;
@@ -492,13 +604,75 @@ class SurfaceRegistry : public lava::CompositorHost {
                        workspaces_->currentTree(), workspaces_->current);
   }
 
+  /// Frames a Wayland window: a title bar, a place in the stack, a workspace.
+  ///
+  /// Everything an ordinary application gets from this compositor comes from
+  /// here. Without it a toplevel sits at the scene origin forever, because a
+  /// Wayland client cannot place its own window and nothing else would.
+  uint32_t adoptToplevel(Toplevel *toplevel, const std::string &title,
+                         uint32_t width, uint32_t height);
+
+  /// A Wayland client committed at a new size.
+  ///
+  /// The frame follows the window rather than the other way round: a resize is
+  /// a request, and the client is the authority on what it settled at.
+  void toplevelResized(ClientSurface &surface, uint32_t width,
+                       uint32_t height) {
+    if (width == surface.width && height == surface.height) return;
+    surface.width = width;
+    surface.height = height;
+    if (surface.bar &&
+        surface.bar->resize(width, lava::Decoration::kHeight)) {
+      wlr_scene_buffer_set_buffer(surface.barNode, surface.bar->buffer());
+    }
+    drawBar(surface);
+  }
+
+  void setTitle(ClientSurface &surface, const std::string &title) {
+    if (surface.title == title) return;
+    surface.title = title;
+    drawBar(surface);
+  }
+
+  /// Brings a window to the front of its workspace, frame and all.
+  ///
+  /// The bar after the contents, or focusing a window would raise its own
+  /// title bar out from under it — they are siblings in one tree, and "on top"
+  /// is decided by order alone.
+  void raise(ClientSurface &surface) {
+    if (surface.panel) return;  // already above everything, by its own tree
+    if (surface.isToplevel()) {
+      wlr_scene_node_raise_to_top(&surface.toplevel->scene_tree->node);
+    } else if (surface.node != nullptr) {
+      wlr_scene_node_raise_to_top(&surface.node->node);
+    }
+    if (surface.barNode != nullptr) {
+      wlr_scene_node_raise_to_top(&surface.barNode->node);
+    }
+    // Front of the list is front of the stack, and the two must not disagree:
+    // the hit tests walk this list and would otherwise answer with a window
+    // that is visibly behind another.
+    for (auto it = surfaces_.begin(); it != surfaces_.end(); ++it) {
+      if (it->get() != &surface) continue;
+      auto owned = std::move(*it);
+      surfaces_.erase(it);
+      surfaces_.push_front(std::move(owned));
+      return;
+    }
+  }
+
   /// Puts both of a window's nodes where its frame origin says they go.
   void place(ClientSurface &surface) {
     if (surface.barNode != nullptr) {
       wlr_scene_node_set_position(&surface.barNode->node, surface.x, surface.y);
     }
-    wlr_scene_node_set_position(&surface.node->node, surface.x,
-                                surface.contentY());
+    if (surface.isToplevel()) {
+      wlr_scene_node_set_position(&surface.toplevel->scene_tree->node,
+                                  surface.x, surface.contentY());
+    } else if (surface.node != nullptr) {
+      wlr_scene_node_set_position(&surface.node->node, surface.x,
+                                  surface.contentY());
+    }
   }
 
   /// Moves a window. Both nodes, because a frame and its content are one
@@ -630,6 +804,26 @@ class SurfaceRegistry : public lava::CompositorHost {
     const uint32_t floor = surface.panel ? 1u : kMinSurface;
     width = width < floor ? floor : width;
     height = height < floor ? floor : height;
+
+    if (surface.isToplevel()) {
+      // Asked, not told. A Wayland client is sent a size and answers with a
+      // buffer when it is ready — possibly at a different size, if it has a
+      // minimum or snaps to a character cell like a terminal does. The frame
+      // takes the requested size now so the bar tracks the drag, and adopts
+      // whatever the client actually commits.
+      wlr_xdg_toplevel_set_size(surface.toplevel->xdg_toplevel,
+                                static_cast<int32_t>(width),
+                                static_cast<int32_t>(height));
+      surface.width = width;
+      surface.height = height;
+      if (surface.bar &&
+          surface.bar->resize(width, lava::Decoration::kHeight)) {
+        wlr_scene_buffer_set_buffer(surface.barNode, surface.bar->buffer());
+      }
+      drawBar(surface);
+      return;
+    }
+
     if (!surface.canvas->resize(width, height)) return;
     surface.width = width;
     surface.height = height;
@@ -687,14 +881,32 @@ class SurfaceRegistry : public lava::CompositorHost {
   bool destroySurface(uint32_t id) override {
     for (auto it = surfaces_.begin(); it != surfaces_.end(); ++it) {
       if ((*it)->id != id) continue;
-      if ((*it)->node) wlr_scene_node_destroy(&(*it)->node->node);
+      // A Wayland window's contents are not ours to destroy — the scene tree
+      // belongs to its `Toplevel`, which outlives the frame across an unmap.
+      // Only the decoration we added comes down with it.
+      if (!(*it)->isToplevel() && (*it)->node != nullptr) {
+        wlr_scene_node_destroy(&(*it)->node->node);
+      }
       if ((*it)->barNode) wlr_scene_node_destroy(&(*it)->barNode->node);
+      if ((*it)->isToplevel()) (*it)->toplevel->frameId = 0;
       surfaces_.erase(it);
       if (control_) control_->surfaceGone(id);
       wlr_log(WLR_INFO, "surface %u: gone", id);
       return true;
     }
     return false;
+  }
+
+  /// Politely, for a Wayland window: a client that is asked to close gets to
+  /// put up its "save your work?" dialog, which killing it does not.
+  void requestClose(ClientSurface &surface) {
+    if (surface.isToplevel()) {
+      wlr_xdg_toplevel_send_close(surface.toplevel->xdg_toplevel);
+      return;
+    }
+    // A LavaUI client learns its window is gone by its stream ending — see
+    // `SubscribeInput`. There is nothing to ask.
+    destroySurface(surface.id);
   }
 
   bool surfaceExists(uint32_t id) const override {
@@ -712,6 +924,7 @@ class SurfaceRegistry : public lava::CompositorHost {
   /// `NodeAnimationDone` — which is what makes a hover cost no round trip and
   /// a scroll survive a stopped client.
   void pump(ClientSurface &surface) {
+    if (!surface.canvas) return;  // a Wayland window draws itself
     drain(surface);
     if (!surface.canvas->takeInternalRepaint()) return;
     if (surface.canvas->redraw()) damage(surface);
@@ -723,7 +936,7 @@ class SurfaceRegistry : public lava::CompositorHost {
 
   /// Hands the renderer's conclusions to the client.
   void drain(ClientSurface &surface) {
-    if (control_ == nullptr) return;
+    if (control_ == nullptr || !surface.canvas) return;
     canvas::InputEvent event{};
     while (surface.canvas->pollEvent(event)) {
       control_->postInput(surface.id, event.kind, event.x, event.y,
@@ -746,13 +959,14 @@ class SurfaceRegistry : public lava::CompositorHost {
   /// Tells wlroots the surface's contents changed. Same buffer, so without
   /// this it keeps showing the texture it already uploaded.
   void damage(ClientSurface &surface) {
+    if (!surface.canvas) return;
     wlr_scene_buffer_set_buffer_with_damage(surface.node,
                                             surface.canvas->buffer(), nullptr);
   }
 
   void present(uint32_t id) override {
     ClientSurface *surface = find(id);
-    if (surface == nullptr) return;
+    if (surface == nullptr || !surface->canvas) return;
     if (!surface->canvas->renderFromArena()) return;
     damage(*surface);
   }
@@ -770,7 +984,7 @@ class SurfaceRegistry : public lava::CompositorHost {
 
   void scrollUnclaimed(uint32_t id, float dx, float dy) override {
     ClientSurface *surface = find(id);
-    if (surface == nullptr) return;
+    if (surface == nullptr || !surface->canvas) return;
     surface->canvas->scrollUnclaimed(dx, dy);
   }
 
@@ -778,7 +992,7 @@ class SurfaceRegistry : public lava::CompositorHost {
                       int32_t maxSide, std::vector<uint8_t> &outPng,
                       uint32_t &outW, uint32_t &outH) override {
     ClientSurface *surface = find(id);
-    if (surface == nullptr) return false;
+    if (surface == nullptr || !surface->canvas) return false;
     return surface->canvas->capturePng(x, y, w, h, maxSide, outPng, outW, outH);
   }
 
@@ -880,6 +1094,8 @@ class SurfaceRegistry : public lava::CompositorHost {
     return id;
   }
 
+  /// Front is topmost. See `raise`, which is what keeps this in step with the
+  /// scene graph's own order.
   std::list<std::unique_ptr<ClientSurface>> surfaces_;
   /// The one canvas device. Every surface is a window on it, sharing its
   /// glyph atlas and texture cache.
@@ -916,6 +1132,7 @@ class SurfaceRegistry : public lava::CompositorHost {
     auto *self = static_cast<SurfaceRegistry *>(data);
     bool again = false;
     for (auto &surface : self->surfaces_) {
+      if (!surface->canvas) continue;
       if (!surface->canvas->takeInternalRepaint()) continue;
       if (surface->canvas->redraw()) self->damage(*surface);
       self->drain(*surface);
@@ -928,6 +1145,63 @@ class SurfaceRegistry : public lava::CompositorHost {
   }
 };
 
+
+uint32_t SurfaceRegistry::adoptToplevel(Toplevel *toplevel,
+                                        const std::string &title,
+                                        uint32_t width, uint32_t height) {
+  if (workspaces_ == nullptr) return 0;
+  auto surface = std::make_unique<ClientSurface>();
+  surface->id = nextId_++;
+  surface->toplevel = toplevel;
+  surface->title = title.empty() ? "Untitled" : title;
+  surface->width = width < kMinSurface ? kMinSurface : width;
+  surface->height = height < kMinSurface ? kMinSurface : height;
+  surface->workspace = toplevel->workspace;
+
+  int peers = 0;
+  for (const auto &other : surfaces_) {
+    if (!other->panel && other->workspace == surface->workspace) ++peers;
+  }
+  const WorkArea area = workArea();
+  surface->x = area.x + 40 + peers * 40;
+  surface->y = area.y + 40 + peers * 40;
+
+  // A client's default size knows nothing about this monitor — alacritty
+  // opens at 1100 wide whether or not the screen is that big. Asked to fit,
+  // leaving room for the frame and the cascade it was just placed at.
+  const uint32_t fitW = area.width > 80 ? area.width - 80 : area.width;
+  const uint32_t fitH = area.height > 80 + lava::Decoration::kHeight
+                            ? area.height - 80 - lava::Decoration::kHeight
+                            : area.height;
+  if (surface->width > fitW || surface->height > fitH) {
+    surface->width = std::min(surface->width, fitW);
+    surface->height = std::min(surface->height, fitH);
+    wlr_xdg_toplevel_set_size(toplevel->xdg_toplevel,
+                              static_cast<int32_t>(surface->width),
+                              static_cast<int32_t>(surface->height));
+  }
+
+  // Undecorated if there is no canvas device to draw a bar with. The window
+  // still gets a position and a workspace, which is most of what it needed.
+  if (renderer_ != nullptr) {
+    surface->bar =
+        renderer_->createSurface(surface->width, lava::Decoration::kHeight);
+    if (surface->bar) {
+      surface->barNode = wlr_scene_buffer_create(
+          workspaces_->tree[surface->workspace], surface->bar->buffer());
+    }
+  }
+
+  const uint32_t id = surface->id;
+  toplevel->frameId = id;
+  place(*surface);
+  drawBar(*surface);
+  surfaces_.push_front(std::move(surface));
+  wlr_log(WLR_INFO, "window %u: '%s' %ux%u on workspace %u", id, title.c_str(),
+          surfaces_.front()->width, surfaces_.front()->height,
+          toplevel->workspace + 1);
+  return id;
+}
 
 // ─── Output ────────────────────────────────────────────────────────────────
 
@@ -1120,6 +1394,7 @@ Toplevel::Toplevel(Server *server, wlr_xdg_toplevel *toplevel)
   unmap.attach(&surface->events.unmap, this, on_unmap);
   commit.attach(&surface->events.commit, this, on_commit);
   destroy.attach(&toplevel->events.destroy, this, on_destroy);
+  set_title.attach(&toplevel->events.set_title, this, on_set_title);
   request_maximize.attach(&toplevel->events.request_maximize, this,
                           on_request_maximize);
   request_fullscreen.attach(&toplevel->events.request_fullscreen, this,
@@ -1131,16 +1406,42 @@ Toplevel::~Toplevel() {
   unmap.detach();
   commit.detach();
   destroy.detach();
+  set_title.detach();
   request_maximize.detach();
   request_fullscreen.detach();
 }
 
+void Toplevel::geometry(uint32_t &width, uint32_t &height) const {
+  const wlr_box &box = xdg_toplevel->base->geometry;
+  width = box.width > 0 ? static_cast<uint32_t>(box.width) : 0;
+  height = box.height > 0 ? static_cast<uint32_t>(box.height) : 0;
+}
+
 void Toplevel::on_map(wl_listener *listener, void *) {
   auto *toplevel = owner_of<Toplevel>(listener);
+  Server *server = toplevel->server;
   toplevel->server->toplevels.push_front(toplevel);
-  toplevel->server->focus(toplevel);
+
   const char *title = toplevel->xdg_toplevel->title;
   const char *app_id = toplevel->xdg_toplevel->app_id;
+
+  // A frame: a title bar, a position, a workspace. Until this existed every
+  // Wayland window sat at the scene origin, on top of every other one.
+  if (server->surfaces != nullptr) {
+    uint32_t width = 0, height = 0;
+    toplevel->geometry(width, height);
+    const uint32_t id = server->surfaces->adoptToplevel(
+        toplevel, title ? title : "", width, height);
+    if (ClientSurface *frame = server->surfaces->find(id)) {
+      server->surfaces->raise(*frame);
+      server->surfaces->setFocused(id);
+    }
+  }
+  server->focus(toplevel);
+  // A Wayland window takes the keyboard through the seat, so no client
+  // surface may be holding it as well.
+  server->setFocusedSurface(0);
+
   wlr_log(WLR_INFO, "toplevel mapped: app_id=%s title=%s",
           app_id ? app_id : "(none)", title ? title : "(none)");
 }
@@ -1149,6 +1450,11 @@ void Toplevel::on_unmap(wl_listener *listener, void *) {
   auto *toplevel = owner_of<Toplevel>(listener);
   wlr_log(WLR_INFO, "toplevel unmapped");
   toplevel->server->toplevels.remove(toplevel);
+  // The frame goes with it, or an unmapped window leaves a title bar floating
+  // over the desktop with nothing underneath.
+  if (toplevel->frameId != 0 && toplevel->server->surfaces != nullptr) {
+    toplevel->server->surfaces->destroySurface(toplevel->frameId);
+  }
   // Whatever is under the cursor now is a different surface, and nothing else
   // will tell the seat so — an unmap is not a pointer event.
   toplevel->server->update_pointer_focus(0);
@@ -1161,6 +1467,29 @@ void Toplevel::on_commit(wl_listener *listener, void *) {
   // policy. Skipping the reply entirely leaves the client waiting forever.
   if (toplevel->xdg_toplevel->base->initial_commit) {
     wlr_xdg_toplevel_set_size(toplevel->xdg_toplevel, 0, 0);
+    return;
+  }
+  // Whatever size the client settled at is the size the frame is, whether or
+  // not it is the size we asked for — a terminal snaps to whole character
+  // cells and will not honour an arbitrary drag exactly.
+  if (toplevel->frameId == 0 || toplevel->server->surfaces == nullptr) return;
+  if (ClientSurface *frame =
+          toplevel->server->surfaces->find(toplevel->frameId)) {
+    uint32_t width = 0, height = 0;
+    toplevel->geometry(width, height);
+    if (width > 0 && height > 0) {
+      toplevel->server->surfaces->toplevelResized(*frame, width, height);
+    }
+  }
+}
+
+void Toplevel::on_set_title(wl_listener *listener, void *) {
+  auto *toplevel = owner_of<Toplevel>(listener);
+  if (toplevel->frameId == 0 || toplevel->server->surfaces == nullptr) return;
+  if (ClientSurface *frame =
+          toplevel->server->surfaces->find(toplevel->frameId)) {
+    const char *title = toplevel->xdg_toplevel->title;
+    toplevel->server->surfaces->setTitle(*frame, title ? title : "Untitled");
   }
 }
 
@@ -1169,10 +1498,19 @@ void Toplevel::on_destroy(wl_listener *listener, void *) {
 }
 
 void Toplevel::on_request_maximize(wl_listener *listener, void *) {
-  auto *toplevel =
-      owner_of<Toplevel>(listener);
-  // No maximize policy yet, but the protocol requires a configure in reply to
-  // the request whether or not anything changed. Silence is a protocol error.
+  auto *toplevel = owner_of<Toplevel>(listener);
+  if (toplevel->frameId != 0 && toplevel->server->surfaces != nullptr) {
+    if (ClientSurface *frame =
+            toplevel->server->surfaces->find(toplevel->frameId)) {
+      // The same maximize the title bar button does, so a window maximized
+      // from its own menu and one maximized from its frame end up in the same
+      // state — including remembering where to restore to.
+      toplevel->server->surfaces->toggleMaximize(*frame);
+      wlr_xdg_toplevel_set_maximized(toplevel->xdg_toplevel, frame->maximized);
+    }
+  }
+  // The protocol requires a configure in reply to the request whether or not
+  // anything changed. Silence is a protocol error.
   if (toplevel->xdg_toplevel->base->initialized) {
     wlr_xdg_surface_schedule_configure(toplevel->xdg_toplevel->base);
   }
@@ -1425,6 +1763,12 @@ void Server::on_new_toplevel(wl_listener *listener, void *data) {
   new Toplevel(server, static_cast<wlr_xdg_toplevel *>(data));
 }
 
+void Server::on_new_decoration(wl_listener *, void *data) {
+  // Self-owned: it deletes itself when the client drops the decoration.
+  new ToplevelDecoration(
+      static_cast<wlr_xdg_toplevel_decoration_v1 *>(data));
+}
+
 void Server::on_new_input(wl_listener *listener, void *data) {
   auto *server = owner_of<Server>(listener);
   auto *device = static_cast<wlr_input_device *>(data);
@@ -1495,7 +1839,17 @@ void Server::focus(Toplevel *toplevel) {
     }
   }
 
-  wlr_scene_node_raise_to_top(&toplevel->scene_tree->node);
+  // Through the registry, so the title bar comes up with the window: the two
+  // are siblings in one tree and raising only the contents would put a
+  // window's own frame behind it.
+  if (surfaces != nullptr && toplevel->frameId != 0) {
+    if (ClientSurface *frame = surfaces->find(toplevel->frameId)) {
+      surfaces->raise(*frame);
+      surfaces->setFocused(frame->id);
+    }
+  } else {
+    wlr_scene_node_raise_to_top(&toplevel->scene_tree->node);
+  }
   toplevels.remove(toplevel);
   toplevels.push_front(toplevel);
   wlr_xdg_toplevel_set_activated(toplevel->xdg_toplevel, true);
@@ -1712,21 +2066,36 @@ void Server::on_cursor_button(wl_listener *listener, void *data) {
             server->surfaces->frameAt(server->cursor->x, server->cursor->y, bx,
                                       by)) {
       server->surfaces->setFocused(frame->id);
-      server->setFocusedSurface(frame->id);
-      wlr_seat_keyboard_notify_clear_focus(server->seat);
+      server->surfaces->raise(*frame);
+      if (frame->isToplevel()) {
+        // A Wayland window takes the keyboard through the seat, and no client
+        // surface may hold it at the same time — both focused would deliver
+        // every key twice.
+        server->setFocusedSurface(0);
+        server->focus(frame->toplevel);
+      } else {
+        server->setFocusedSurface(frame->id);
+        wlr_seat_keyboard_notify_clear_focus(server->seat);
+      }
       switch (lava::Decoration::hitTest(static_cast<float>(bx),
                                         static_cast<float>(by),
                                         frame->width)) {
         case lava::DecorationHit::Close:
-          // The client's stream ends with its surface, which is how it learns
-          // the window is gone — see `SubscribeInput`.
-          server->surfaces->destroySurface(frame->id);
+          // Asked rather than killed, where there is somebody to ask: a
+          // Wayland client gets to put up its "save your work?" dialog.
+          server->surfaces->requestClose(*frame);
           // Or the workspace goes on pointing at an id that no longer resolves,
           // and the next Alt+Shift would move a Wayland window instead.
           server->setFocusedSurface(0);
           return;
         case lava::DecorationHit::Maximize:
           server->surfaces->toggleMaximize(*frame);
+          if (frame->isToplevel()) {
+            // Told, so the client draws itself as maximized — squared corners,
+            // a different button in its own menu.
+            wlr_xdg_toplevel_set_maximized(frame->toplevel->xdg_toplevel,
+                                           frame->maximized);
+          }
           return;
         case lava::DecorationHit::Bar:
           // Bare bar: drag the window, the way a title bar always has.
@@ -1748,10 +2117,10 @@ void Server::on_cursor_button(wl_listener *listener, void *data) {
         server->seat->keyboard_state.keyboard != nullptr
             ? wlr_keyboard_get_modifiers(server->seat->keyboard_state.keyboard)
             : 0;
-    double sx = 0, sy = 0;
     ClientSurface *over =
-        server->surfaces->at(server->cursor->x, server->cursor->y, sx, sy);
+        server->surfaces->windowAt(server->cursor->x, server->cursor->y);
     if ((modifiers & WLR_MODIFIER_ALT) && over != nullptr) {
+      server->surfaces->raise(*over);
       server->drag = event->button == BTN_RIGHT ? Server::Drag::Resize
                                                 : Server::Drag::Move;
       server->dragSurface = over->id;
@@ -1848,6 +2217,33 @@ void Server::on_cursor_frame(wl_listener *listener, void *) {
   wlr_seat_pointer_notify_frame(server->seat);
 }
 
+// ─── Selections ────────────────────────────────────────────────────────────
+//
+// The clipboard is not a thing the compositor stores. A client that copies
+// says "I have a selection, in these formats"; a client that pastes asks the
+// seat who has it and reads the data over a pipe straight from the source. All
+// the compositor does is decide whose offer is current — which is exactly
+// these two handlers, and without them copy and paste silently does nothing at
+// all. `wlr_data_device_manager_create` alone is not enough: it publishes the
+// protocol, and then every `set_selection` request is dropped on the floor.
+
+void Server::on_request_set_selection(wl_listener *listener, void *data) {
+  auto *server = owner_of<Server>(listener);
+  auto *event = static_cast<wlr_seat_request_set_selection_event *>(data);
+  // The serial is checked by wlroots against a real input event, which is what
+  // stops a background client taking the clipboard whenever it likes.
+  wlr_seat_set_selection(server->seat, event->source, event->serial);
+}
+
+void Server::on_request_set_primary_selection(wl_listener *listener,
+                                              void *data) {
+  auto *server = owner_of<Server>(listener);
+  auto *event =
+      static_cast<wlr_seat_request_set_primary_selection_event *>(data);
+  // The X11 middle-click clipboard, which every terminal still expects.
+  wlr_seat_set_primary_selection(server->seat, event->source, event->serial);
+}
+
 void Server::on_request_cursor(wl_listener *listener, void *data) {
   auto *server = owner_of<Server>(listener);
   auto *event = static_cast<wlr_seat_pointer_request_set_cursor_event *>(data);
@@ -1909,7 +2305,10 @@ int main() {
   wlr_renderer_init_wl_display(server.renderer, server.display);
   wlr_compositor_create(server.display, 6, server.renderer);
   wlr_subcompositor_create(server.display);
+  // The clipboard, and the X11-style middle-click one beside it. Both are
+  // only half of what a working selection needs — see `on_request_set_selection`.
   wlr_data_device_manager_create(server.display);
+  wlr_primary_selection_v1_device_manager_create(server.display);
 
   server.scene = wlr_scene_create();
   server.output_layout = wlr_output_layout_create(server.display);
@@ -1931,6 +2330,14 @@ int main() {
   server.xdg_shell = wlr_xdg_shell_create(server.display, 3);
   server.new_toplevel.attach(&server.xdg_shell->events.new_toplevel, &server,
                              Server::on_new_toplevel);
+
+  // Server-side decorations, so a window drawn by this compositor is not also
+  // drawn by its toolkit. Clients that do not speak this protocol still draw
+  // their own — there is no way to stop them, which is the one real cost of
+  // decorating from outside.
+  auto *decorations = wlr_xdg_decoration_manager_v1_create(server.display);
+  server.new_decoration.attach(&decorations->events.new_toplevel_decoration,
+                               &server, Server::on_new_decoration);
 
   // The cursor is a position in layout space; the manager supplies the images
   // it is drawn with, scaled per output.
@@ -1955,6 +2362,12 @@ int main() {
                           Server::on_new_input);
   server.request_cursor.attach(&server.seat->events.request_set_cursor, &server,
                                Server::on_request_cursor);
+  server.request_set_selection.attach(&server.seat->events.request_set_selection,
+                                      &server,
+                                      Server::on_request_set_selection);
+  server.request_set_primary_selection.attach(
+      &server.seat->events.request_set_primary_selection, &server,
+      Server::on_request_set_primary_selection);
 
   // A LavaUI client's window, drawn here and composited with no copy.
   //
