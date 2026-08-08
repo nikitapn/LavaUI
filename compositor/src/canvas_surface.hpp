@@ -100,6 +100,48 @@ class CanvasSurface {
   /// contents are still correct and still on screen.
   bool renderFromArena();
 
+  // ─── Input ───────────────────────────────────────────────────────────────
+  //
+  // Events go *into* the renderer before they go on to the client, and that
+  // ordering is the whole point rather than an implementation detail.
+  //
+  // Part of what an event means is answered here and nowhere else. The
+  // renderer holds the retained scene — which node is under the pointer, which
+  // is pressed, how far each scrollable one has been dragged — so it can draw
+  // a hover highlight, take a wheel notch, or move a subtree without asking
+  // the client anything. That is what lets a stopped client's list still
+  // scroll, and what makes a hover cost no round trip.
+  //
+  // Feeding the raw event straight to the client would skip all of it: the
+  // client would get the click, and the button under the pointer would never
+  // have learned it was hovered. What comes back out of `pollEvent` is the
+  // event *plus* whatever the renderer concluded — `NodeHover`, `NodeScroll`,
+  // `NodeAnimationDone` — which is what the client should actually receive.
+  //
+  // Coordinates are surface-local, which is what the caller's hit test already
+  // produced.
+
+  void pointerMove(float x, float y);
+  void pointerButton(int button, bool pressed, float x, float y, int mods);
+  void pointerScroll(float dx, float dy);
+  void keyEvent(int key, int action, int mods);
+  void textInput(const std::string &utf8);
+
+  /// Takes one event the renderer has for the client, or false if there are
+  /// none left. Drain after feeding input in.
+  bool pollEvent(canvas::InputEvent &out);
+
+  /// Whether the renderer changed something the client did not ask for — a
+  /// hover tint, a scroll offset, an animation step — and the surface needs
+  /// drawing again to show it.
+  bool takeInternalRepaint();
+
+  /// Redraws the frame already held, without waiting for a new one.
+  ///
+  /// What `takeInternalRepaint` is answered with: the content has not changed,
+  /// but what the renderer draws over it has.
+  bool redraw();
+
   /// Hands a wheel notch back to the scene after the client's own tree
   /// declined it. See `ScrollUnclaimed` in the IDL.
   void scrollUnclaimed(float dx, float dy);

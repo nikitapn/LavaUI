@@ -199,6 +199,25 @@ void AppWindow::noteSceneResume()
   glfwPostEmptyEvent();
 }
 
+namespace {
+
+/// Seconds on a monotonic clock, for stepping eased values.
+///
+/// Deliberately not `glfwGetTime`. GLFW's timer only runs after `glfwInit`,
+/// and an engine drawing a compositor surface never initialises GLFW — it has
+/// no windows, so there is nothing to initialise it for. There it returns 0,
+/// which freezes every eased value at the moment it started: a hover tint that
+/// never fades in, and an animation that reports itself as still running
+/// forever because it never advances. Both were visible exactly once the
+/// compositor started driving hover, and neither is a GLFW question.
+double monotonicSeconds()
+{
+  using namespace std::chrono;
+  return duration<double>(steady_clock::now().time_since_epoch()).count();
+}
+
+}  // namespace
+
 void AppWindow::stepSceneAnimations()
 {
   if (!render_) return;
@@ -209,7 +228,7 @@ void AppWindow::stepSceneAnimations()
   sceneMovedScratch_.clear();
   sceneFinishedScratch_.clear();
   const bool animating = render_->advanceSceneAnimations(
-    glfwGetTime(), sceneMovedScratch_, sceneFinishedScratch_);
+    monotonicSeconds(), sceneMovedScratch_, sceneFinishedScratch_);
 
   if (!sceneMovedScratch_.empty()) {
     std::lock_guard lock(inputMu_);

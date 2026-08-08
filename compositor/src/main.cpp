@@ -180,9 +180,6 @@ struct Server {
   /// hand the same event to a Wayland client: the two focus models are
   /// separate and an event belongs to exactly one of them.
   bool route_pointer(uint32_t kind, int32_t button, int32_t mods);
-  /// Sends one event to the focused client surface. True if there was one.
-  bool route_to_focused(uint32_t kind, float x, float y, int32_t button,
-                        int32_t mods);
 };
 
 // ─── Client surfaces ───────────────────────────────────────────────────────
@@ -222,6 +219,11 @@ class SurfaceRegistry : public lava::CompositorHost {
   void bind(lava::CanvasRenderer *renderer, wlr_scene_tree *tree) {
     renderer_ = renderer;
     tree_ = tree;
+  }
+
+  /// Arms the timer that carries renderer-owned animations along.
+  void start(wl_event_loop *loop) {
+    animation_ = wl_event_loop_add_timer(loop, on_animation, this);
   }
   void bind(lava::ControlPlane *control) { control_ = control; }
 
@@ -301,14 +303,57 @@ class SurfaceRegistry : public lava::CompositorHost {
     return false;
   }
 
+  /// Hands the renderer's conclusions to the client, and redraws the surface
+  /// if the renderer changed something on its own.
+  ///
+  /// Called after every input event. The events that come out are the raw one
+  /// plus whatever the scene decided — `NodeHover`, `NodeScroll`,
+  /// `NodeAnimationDone` — which is what makes a hover cost no round trip and
+  /// a scroll survive a stopped client.
+  void pump(ClientSurface &surface) {
+    drain(surface);
+    if (!surface.canvas->takeInternalRepaint()) return;
+    if (surface.canvas->redraw()) damage(surface);
+    // The redraw steps the scene, which may itself have produced events and
+    // may want another frame.
+    drain(surface);
+    animate();
+  }
+
+  /// Hands the renderer's conclusions to the client.
+  void drain(ClientSurface &surface) {
+    if (control_ == nullptr) return;
+    canvas::InputEvent event{};
+    while (surface.canvas->pollEvent(event)) {
+      control_->postInput(surface.id, event.kind, event.x, event.y,
+                          event.button, event.mods);
+    }
+  }
+
+  /// Keeps drawing while the renderer has something in flight of its own.
+  ///
+  /// A hover tint is *eased* in, not switched on — a highlight that appears
+  /// between two frames reads as a flicker at the speed a pointer actually
+  /// crosses a list. So the frame that answers a hover is the first of
+  /// several, and nothing else will ask for the rest: the client published no
+  /// new frame and does not know a fade is happening. Drawing once and
+  /// stopping is what "clicks work but there is no hover" looks like.
+  void animate() {
+    if (animation_ != nullptr) wl_event_source_timer_update(animation_, kFrameMs);
+  }
+
+  /// Tells wlroots the surface's contents changed. Same buffer, so without
+  /// this it keeps showing the texture it already uploaded.
+  void damage(ClientSurface &surface) {
+    wlr_scene_buffer_set_buffer_with_damage(surface.node,
+                                            surface.canvas->buffer(), nullptr);
+  }
+
   void present(uint32_t id) override {
     ClientSurface *surface = find(id);
     if (surface == nullptr) return;
     if (!surface->canvas->renderFromArena()) return;
-    // Same buffer, new contents. wlroots caches a texture per buffer, so
-    // without damage it keeps showing the frame it already uploaded.
-    wlr_scene_buffer_set_buffer_with_damage(surface->node,
-                                            surface->canvas->buffer(), nullptr);
+    damage(*surface);
   }
 
   void surfaceSize(uint32_t id, float &outW, float &outH) const override {
@@ -346,6 +391,26 @@ class SurfaceRegistry : public lava::CompositorHost {
   /// Never reused, so a stale id from a closed surface fails to resolve rather
   /// than quietly addressing whatever opened next.
   uint32_t nextId_ = 1;
+
+  /// One frame at ~60Hz, and only while something is actually animating —
+  /// re-armed from `on_animation` rather than left running.
+  static constexpr int kFrameMs = 16;
+  wl_event_source *animation_ = nullptr;
+
+  static int on_animation(void *data) {
+    auto *self = static_cast<SurfaceRegistry *>(data);
+    bool again = false;
+    for (auto &surface : self->surfaces_) {
+      if (!surface->canvas->takeInternalRepaint()) continue;
+      if (surface->canvas->redraw()) self->damage(*surface);
+      self->drain(*surface);
+      again = true;
+    }
+    // Re-armed only while something wanted this frame. An idle desktop stops
+    // asking, which is the difference between an animation and a busy loop.
+    if (again) self->animate();
+    return 0;
+  }
 };
 
 
@@ -518,6 +583,31 @@ void Keyboard::on_modifiers(wl_listener *listener, void *) {
                                      &keyboard->wlr->modifiers);
 }
 
+/// One Unicode scalar as UTF-8.
+///
+/// The engine takes committed text as a string because a character is not a
+/// key: what the layout produced needs no interpreting, and a codepoint above
+/// the BMP is not one `char` anywhere.
+std::string utf8_of(uint32_t cp) {
+  std::string out;
+  if (cp < 0x80) {
+    out += static_cast<char>(cp);
+  } else if (cp < 0x800) {
+    out += static_cast<char>(0xc0 | (cp >> 6));
+    out += static_cast<char>(0x80 | (cp & 0x3f));
+  } else if (cp < 0x10000) {
+    out += static_cast<char>(0xe0 | (cp >> 12));
+    out += static_cast<char>(0x80 | ((cp >> 6) & 0x3f));
+    out += static_cast<char>(0x80 | (cp & 0x3f));
+  } else {
+    out += static_cast<char>(0xf0 | (cp >> 18));
+    out += static_cast<char>(0x80 | ((cp >> 12) & 0x3f));
+    out += static_cast<char>(0x80 | ((cp >> 6) & 0x3f));
+    out += static_cast<char>(0x80 | (cp & 0x3f));
+  }
+  return out;
+}
+
 /// xkb keysym → the GLFW key code canvas' `Key` events are numbered in.
 ///
 /// Only the keys that mean something structurally: everything a client can
@@ -596,22 +686,21 @@ void Keyboard::on_key(wl_listener *listener, void *data) {
     const int count = xkb_state_key_get_syms(keyboard->wlr->xkb_state,
                                              event->keycode + 8, &syms);
     const int32_t mods = static_cast<int32_t>(glfw_mods(modifiers));
-    for (int i = 0; i < count; ++i) {
-      server->route_to_focused(
-          static_cast<uint32_t>(canvas::InputEventKind::Key),
-          pressed ? 1.f : 0.f, static_cast<float>(mods),
-          static_cast<int32_t>(glfw_key(syms[i])), mods);
-    }
-    if (pressed) {
-      const uint32_t utf32 =
-          xkb_state_key_get_utf32(keyboard->wlr->xkb_state, event->keycode + 8);
-      // Control characters are keys, not text: a client that inserted them
-      // would put a literal backspace in its document.
-      if (utf32 >= 0x20 && utf32 != 0x7f) {
-        server->route_to_focused(
-            static_cast<uint32_t>(canvas::InputEventKind::Text), 0.f, 0.f,
-            static_cast<int32_t>(utf32), mods);
+    if (ClientSurface *target =
+            server->surfaces->find(server->focusedSurface)) {
+      for (int i = 0; i < count; ++i) {
+        target->canvas->keyEvent(glfw_key(syms[i]), pressed ? 1 : 0, mods);
       }
+      if (pressed) {
+        const uint32_t utf32 = xkb_state_key_get_utf32(
+            keyboard->wlr->xkb_state, event->keycode + 8);
+        // Control characters are keys, not text: a client that inserted them
+        // would put a literal backspace in its document.
+        if (utf32 >= 0x20 && utf32 != 0x7f) {
+          target->canvas->textInput(utf8_of(utf32));
+        }
+      }
+      server->surfaces->pump(*target);
     }
     return;
   }
@@ -752,23 +841,18 @@ bool Server::route_pointer(uint32_t kind, int32_t button, int32_t mods) {
   double sx = 0, sy = 0;
   ClientSurface *surface = surfaces->at(cursor->x, cursor->y, sx, sy);
   if (surface == nullptr) return false;
-  control->postInput(surface->id, kind, static_cast<float>(sx),
-                     static_cast<float>(sy), button, mods);
+  // Through the renderer, not around it — the hover under this pointer is its
+  // to answer. See the input section of `CanvasSurface`.
+  if (kind == static_cast<uint32_t>(canvas::InputEventKind::MouseMove)) {
+    surface->canvas->pointerMove(static_cast<float>(sx),
+                                 static_cast<float>(sy));
+  }
+  (void)button;
+  (void)mods;
+  surfaces->pump(*surface);
   return true;
 }
 
-bool Server::route_to_focused(uint32_t kind, float x, float y, int32_t button,
-                              int32_t mods) {
-  if (surfaces == nullptr || control == nullptr || focusedSurface == 0) {
-    return false;
-  }
-  if (!surfaces->surfaceExists(focusedSurface)) {
-    focusedSurface = 0;
-    return false;
-  }
-  control->postInput(focusedSurface, kind, x, y, button, mods);
-  return true;
-}
 
 void Server::on_cursor_motion(wl_listener *listener, void *data) {
   auto *server = owner_of<Server>(listener);
@@ -808,9 +892,9 @@ void Server::on_cursor_button(wl_listener *listener, void *data) {
         // Taking the keyboard from any Wayland window: the two focus models
         // are separate, and leaving both focused would deliver every key twice.
         wlr_seat_keyboard_notify_clear_focus(server->seat);
-        server->control->postInput(
-            over->id, static_cast<uint32_t>(canvas::InputEventKind::MouseDown),
-            static_cast<float>(sx), static_cast<float>(sy), button, 0);
+        over->canvas->pointerButton(button, true, static_cast<float>(sx),
+                                    static_cast<float>(sy), 0);
+        server->surfaces->pump(*over);
         return;
       }
     } else if (ClientSurface *target =
@@ -818,10 +902,10 @@ void Server::on_cursor_button(wl_listener *listener, void *data) {
       // Recomputed against the focused surface rather than reusing whatever a
       // hit test left behind: the pointer may be outside it, and `at` only
       // fills the offsets for surfaces it actually tested.
-      server->control->postInput(
-          target->id, static_cast<uint32_t>(canvas::InputEventKind::MouseUp),
-          static_cast<float>(server->cursor->x - target->x),
-          static_cast<float>(server->cursor->y - target->y), button, 0);
+      target->canvas->pointerButton(
+          button, false, static_cast<float>(server->cursor->x - target->x),
+          static_cast<float>(server->cursor->y - target->y), 0);
+      server->surfaces->pump(*target);
       return;
     }
   }
@@ -854,9 +938,12 @@ void Server::on_cursor_axis(wl_listener *listener, void *data) {
           static_cast<float>(-event->delta / 15.0);  // ~15 units per notch
       const bool horizontal =
           event->orientation == WL_POINTER_AXIS_HORIZONTAL_SCROLL;
-      server->control->postInput(
-          over->id, static_cast<uint32_t>(canvas::InputEventKind::Scroll),
-          horizontal ? notches : 0.f, horizontal ? 0.f : notches, 0, 0);
+      // The renderer may take this notch itself — a scrollable node under the
+      // pointer moves without the client hearing about it, which is what lets
+      // a list scroll while the process that drew it is stopped.
+      over->canvas->pointerScroll(horizontal ? notches : 0.f,
+                                  horizontal ? 0.f : notches);
+      server->surfaces->pump(*over);
       return;
     }
   }
@@ -972,6 +1059,8 @@ int main() {
   if (!canvas_renderer) {
     wlr_log(WLR_ERROR, "no canvas device — LavaUI surfaces cannot be drawn");
   }
+
+  surfaces.start(wl_display_get_event_loop(server.display));
 
   auto control = lava::ControlPlane::start(
       wl_display_get_event_loop(server.display), surfaces);

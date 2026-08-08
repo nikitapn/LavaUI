@@ -189,6 +189,42 @@ bool CanvasSurface::renderFromArena() {
   return true;
 }
 
+void CanvasSurface::pointerMove(float x, float y) {
+  renderer_.engine().pointerMove(x, y, windowId_);
+}
+
+void CanvasSurface::pointerButton(int button, bool pressed, float x, float y,
+                                  int mods) {
+  renderer_.engine().pointerButton(button, pressed, x, y, windowId_);
+  (void)mods;  // The engine takes modifiers on keys, not on buttons.
+}
+
+void CanvasSurface::pointerScroll(float dx, float dy) {
+  renderer_.engine().pointerScroll(dx, dy, windowId_);
+}
+
+void CanvasSurface::keyEvent(int key, int action, int mods) {
+  renderer_.engine().keyEvent(key, action, mods, windowId_);
+}
+
+void CanvasSurface::textInput(const std::string &utf8) {
+  renderer_.engine().textInput(utf8, windowId_);
+}
+
+bool CanvasSurface::pollEvent(canvas::InputEvent &out) {
+  return renderer_.engine().pollInputEvent(out, windowId_);
+}
+
+bool CanvasSurface::takeInternalRepaint() {
+  return renderer_.engine().takeInternalRepaint(windowId_);
+}
+
+bool CanvasSurface::redraw() {
+  if (!renderer_.engine().renderFrame(windowId_)) return false;
+  drawn_ = renderer_.engine().frameCounter(windowId_);
+  return true;
+}
+
 void CanvasSurface::scrollUnclaimed(float dx, float dy) {
   renderer_.engine().scrollSceneUnclaimed(dx, dy, windowId_);
 }
