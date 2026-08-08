@@ -180,6 +180,12 @@ public:
 };
 } // namespace flat
 
+enum class PanelEdge : uint32_t {
+  top,
+  bottom,
+  left,
+  right
+};
 class SurfaceNotFound : public ::nprpc::Exception {
 public:
   uint32_t surfaceId;
@@ -384,6 +390,7 @@ public:
   virtual ImageInfo RegisterImageData (::nprpc::flat::Span<uint8_t> bytes, uint32_t maxPixelSize) = 0;
   virtual void ReleaseImage (uint32_t id) = 0;
   virtual uint32_t CreateSurface (::nprpc::flat::Span<char> arenaId, uint32_t width, uint32_t height, ::nprpc::flat::Span<char> title) = 0;
+  virtual uint32_t CreatePanel (::nprpc::flat::Span<char> arenaId, PanelEdge edge, uint32_t thickness, ::nprpc::flat::Boolean reserve, ::nprpc::flat::Span<char> title) = 0;
   virtual void DestroySurface (uint32_t surfaceId) = 0;
   virtual void Present (uint32_t surfaceId) = 0;
   virtual void ScrollUnclaimed (uint32_t surfaceId, float dx, float dy) = 0;
@@ -412,6 +419,8 @@ public:
   ::nprpc::Task<void> ReleaseImageAsync (uint32_t id, std::stop_token st = {});
   uint32_t CreateSurface (const std::string& arenaId, uint32_t width, uint32_t height, const std::string& title);
   ::nprpc::Task<uint32_t> CreateSurfaceAsync (const std::string& arenaId, uint32_t width, uint32_t height, const std::string& title, std::stop_token st = {});
+  uint32_t CreatePanel (const std::string& arenaId, const PanelEdge& edge, uint32_t thickness, bool reserve, const std::string& title);
+  ::nprpc::Task<uint32_t> CreatePanelAsync (const std::string& arenaId, const PanelEdge& edge, uint32_t thickness, bool reserve, const std::string& title, std::stop_token st = {});
   void DestroySurface (uint32_t surfaceId);
   ::nprpc::Task<void> DestroySurfaceAsync (uint32_t surfaceId, std::stop_token st = {});
   void Present (uint32_t surfaceId);

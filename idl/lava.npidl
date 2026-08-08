@@ -42,6 +42,18 @@ exception ArenaNotFound {
   arenaId: string;
 }
 
+/// Which screen edge a panel is docked to.
+///
+/// A panel does not choose where it is, only which side it is on: the
+/// compositor gives it the full length of that edge, because a panel that
+/// picked its own position would be a window with extra steps.
+enum PanelEdge: u32 {
+  top,
+  bottom,
+  left,
+  right,
+};
+
 /// The surface id is not one this compositor handed out, or its client has
 /// already let it go.
 ///
@@ -203,6 +215,35 @@ interface Compositor {
   /// wrong size on any tiling WM.
   u32 CreateSurface(arenaId: in string, width: in u32, height: in u32,
                     title: in string) raises(ArenaNotFound);
+
+  /// Asks for a *panel*: a surface docked to a screen edge.
+  ///
+  /// A separate call rather than a flag on `CreateSurface`, because the
+  /// arguments genuinely differ. A window is given the size it asked for and
+  /// put where the compositor likes; a panel is given the length of its edge
+  /// and chooses only its `thickness`. Passing width and height for something
+  /// that controls one of them would be an interface that lies about what the
+  /// caller decides.
+  ///
+  /// Everything downstream is the same surface id as any window:
+  /// `SubscribeInput`, `Present`, `CaptureSurface` and `DestroySurface` all
+  /// work on it unchanged. That is the point of making this a different way to
+  /// *create* a surface rather than a different kind of thing to own.
+  ///
+  /// What differs is what the compositor does with it. A panel gets no title
+  /// bar — there is nothing to drag, close or maximize — it is stacked above
+  /// ordinary windows, and if `reserve` is set, windows are laid out inside
+  /// what is left rather than under it. A taskbar wants that; an overlay that
+  /// floats over the desktop does not.
+  ///
+  /// `thickness` is in the direction the panel is *not* long: height for a
+  /// top or bottom panel, width for a left or right one. Like a window's
+  /// requested size it is a request — the real one arrives as the opening
+  /// `Resize` on the input stream, which is also how a panel learns its length
+  /// and how it hears about the screen being resized.
+  u32 CreatePanel(arenaId: in string, edge: in PanelEdge,
+                  thickness: in u32, reserve: in boolean,
+                  title: in string) raises(ArenaNotFound);
 
   /// Gives the surface back: the window closes and the arena is released.
   ///

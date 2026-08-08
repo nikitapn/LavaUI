@@ -237,6 +237,12 @@ struct ClientSurface {
   uint32_t width = 0;
   uint32_t height = 0;
 
+  /// Panels have no frame and are laid out by their edge, not by the user.
+  bool panel = false;
+  /// Whether windows should be laid out around this panel rather than under
+  /// it. Recorded now; the layout that honours it is not written yet.
+  bool reserve = false;
+
   /// Where a maximized window came from, so restoring is exact.
   bool maximized = false;
   int restoreX = 0;
@@ -245,7 +251,9 @@ struct ClientSurface {
   uint32_t restoreH = 0;
 
   /// Where the content starts, below the bar.
-  int contentY() const { return y + lava::Decoration::kHeight; }
+  int contentY() const {
+    return panel ? y : y + lava::Decoration::kHeight;
+  }
 
   /// Whether `lx, ly` (layout space) is inside the content, and where in it.
   bool hit(double lx, double ly, double &sx, double &sy) const {
@@ -256,6 +264,7 @@ struct ClientSurface {
 
   /// Whether `lx, ly` is on the title bar, and where along it.
   bool hitBar(double lx, double ly, double &sx, double &sy) const {
+    if (panel) return false;
     sx = lx - x;
     sy = ly - y;
     return sx >= 0 && sy >= 0 && sx < width &&
@@ -377,7 +386,9 @@ class SurfaceRegistry : public lava::CompositorHost {
 
   /// Puts both of a window's nodes where its frame origin says they go.
   void place(ClientSurface &surface) {
-    wlr_scene_node_set_position(&surface.barNode->node, surface.x, surface.y);
+    if (surface.barNode != nullptr) {
+      wlr_scene_node_set_position(&surface.barNode->node, surface.x, surface.y);
+    }
     wlr_scene_node_set_position(&surface.node->node, surface.x,
                                 surface.contentY());
   }
@@ -423,6 +434,7 @@ class SurfaceRegistry : public lava::CompositorHost {
 
   /// Redraws the title bar. Cheap — a strip, from commands built here.
   void drawBar(ClientSurface &surface) {
+    if (!surface.bar) return;
     decoration_.build(surface.title, surface.width, surface.hovered,
                       surface.id == focused_);
     if (surface.bar->renderList(decoration_.commands(), decoration_.glyphs())) {
@@ -473,7 +485,7 @@ class SurfaceRegistry : public lava::CompositorHost {
     surface.height = height;
     wlr_scene_buffer_set_buffer(surface.node, surface.canvas->buffer());
     // The bar spans the window, so it follows every width change.
-    if (surface.bar->resize(width, lava::Decoration::kHeight)) {
+    if (surface.bar && surface.bar->resize(width, lava::Decoration::kHeight)) {
       wlr_scene_buffer_set_buffer(surface.barNode, surface.bar->buffer());
     }
     drawBar(surface);
@@ -482,6 +494,46 @@ class SurfaceRegistry : public lava::CompositorHost {
     // already held into the new extent meanwhile.
     pump(surface);
     if (surface.canvas->redraw()) damage(surface);
+  }
+
+  uint32_t createPanel(const std::string &arenaId, uint32_t edge,
+                       uint32_t thickness, bool reserve,
+                       const std::string &title) override {
+    if (outputWidth_ == 0 || outputHeight_ == 0) {
+      wlr_log(WLR_ERROR, "panel: no output yet");
+      return 0;
+    }
+    // A panel is given the length of its edge and chooses only its thickness.
+    const bool horizontal = edge == kPanelTop || edge == kPanelBottom;
+    const uint32_t w = horizontal ? outputWidth_ : thickness;
+    const uint32_t h = horizontal ? thickness : outputHeight_;
+
+    const uint32_t id = createSurface(arenaId, w, h, title);
+    if (id == 0) return 0;
+    ClientSurface *panel = find(id);
+    panel->panel = true;
+    panel->reserve = reserve;
+
+    // No title bar: there is nothing to drag, close or maximize. Dropped
+    // rather than hidden, so no hit test has to remember it is not there.
+    if (panel->barNode != nullptr) {
+      wlr_scene_node_destroy(&panel->barNode->node);
+      panel->barNode = nullptr;
+    }
+    panel->bar.reset();
+
+    panel->x = edge == kPanelRight
+                   ? static_cast<int>(outputWidth_ - thickness)
+                   : 0;
+    panel->y = edge == kPanelBottom
+                   ? static_cast<int>(outputHeight_ - thickness)
+                   : 0;
+    place(*panel);
+    // Above ordinary windows, which is what "panel" mostly means to a user.
+    wlr_scene_node_raise_to_top(&panel->node->node);
+    wlr_log(WLR_INFO, "panel %u: '%s' on edge %u, %u deep%s", id, title.c_str(),
+            edge, thickness, reserve ? ", reserving" : "");
+    return id;
   }
 
   bool destroySurface(uint32_t id) override {
@@ -597,6 +649,14 @@ class SurfaceRegistry : public lava::CompositorHost {
   /// Never reused, so a stale id from a closed surface fails to resolve rather
   /// than quietly addressing whatever opened next.
   uint32_t nextId_ = 1;
+
+  /// Matches `PanelEdge` in the IDL, which is the authority. Named here so
+  /// the compositor does not have to include the generated header just to
+  /// compare an integer.
+  static constexpr uint32_t kPanelTop = 0;
+  static constexpr uint32_t kPanelBottom = 1;
+  static constexpr uint32_t kPanelLeft = 2;
+  static constexpr uint32_t kPanelRight = 3;
 
   /// Smaller than this and a window is not a window — and a drag that crosses
   /// its own origin would otherwise ask for a zero-sized buffer.

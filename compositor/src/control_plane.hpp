@@ -42,6 +42,12 @@ struct CompositorHost {
   /// Opens a surface driven by `arenaId`. 0 if the arena does not exist.
   virtual uint32_t createSurface(const std::string &arenaId, uint32_t width,
                                  uint32_t height, const std::string &title) = 0;
+  /// Opens a panel docked to `edge`, `thickness` deep. 0 if the arena does
+  /// not exist. `reserve` asks that windows be laid out around it.
+  virtual uint32_t createPanel(const std::string &arenaId, uint32_t edge,
+                               uint32_t thickness, bool reserve,
+                               const std::string &title) = 0;
+
   virtual bool destroySurface(uint32_t surfaceId) = 0;
   virtual bool surfaceExists(uint32_t surfaceId) const = 0;
 
