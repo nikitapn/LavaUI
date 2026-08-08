@@ -95,6 +95,7 @@ executable(
   'compositor',
   'src/main.cpp',
   'src/canvas_surface.cpp',
+  'src/config.cpp',
   'src/decoration.cpp',
   lava_idl_sources,
   protocol_headers,

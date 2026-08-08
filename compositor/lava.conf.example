@@ -1,0 +1,89 @@
+# Lava compositor configuration.
+#
+# Copy to ~/.config/lava/lava.conf. Every setting here is a decision about the
+# machine rather than about the program — which GPU, which screens, what the
+# keyboard is — which is why none of them are compiled in.
+#
+# `kill -HUP $(pidof compositor)` re-reads this file. Screen modes, positions,
+# scale and the keyboard layout take effect immediately. The GPU settings do
+# not: they are read once, while the backend is being created, and changing
+# which GPU a running compositor draws on would mean re-importing every buffer
+# in the session.
+#
+# Anything unrecognised is logged and skipped, so a config written for a newer
+# build still starts an older one.
+
+
+[core]
+
+# Which renderer: vulkan, gles2, pixman. Left unset, wlroots decides.
+#
+# Vulkan is the one to use here. On this hardware GLES2 fails outright on the
+# NVIDIA card ("EGLImage not supported"), and pixman is software — dependable,
+# and far too slow for a session.
+renderer = vulkan
+
+# Which card drives the screens — WLR_DRM_DEVICES. Not the fastest card: the
+# one the connectors physically hang off. Check with
+#
+#     for c in /sys/class/drm/card*-*; do echo "$c: $(cat $c/status)"; done
+#
+# On this laptop:
+#
+#     card0  NVIDIA   DP-3 connected      <- the external monitor
+#     card1  AMD      eDP-1 connected     <- the laptop panel
+#
+# so card0 lights the external screen and card1 lights the built-in one. One
+# card, one set of screens. To drive both at once, list both — first is
+# primary and does the rendering, the rest get their buffers copied to them:
+#
+#     drm-device = /dev/dri/card0:/dev/dri/card1
+drm-device = /dev/dri/card0
+
+# Which card *draws*, if that differs from the one presenting —
+# WLR_RENDER_DRM_DEVICE. Only worth setting for render-on-one, present-on-
+# another. Canvas follows this automatically: it pins its Vulkan device by
+# matching the DRM node wlroots is using, so the compositor never ends up
+# rendering LavaUI surfaces on a different GPU than it composites on.
+# render-device = /dev/dri/renderD129
+
+
+# One block per connector. The name is what wlroots calls it — run the
+# compositor once and read the log, which lists every output it found together
+# with the modes each one accepts.
+#
+# `[output *]` is the fallback for anything without a block of its own.
+
+[output DP-3]
+# WIDTHxHEIGHT@RATE. The rate is optional; without it, the fastest mode at
+# that size wins. Write the rate as the monitor advertises it — 74.973 rather
+# than 75 — though near misses are matched to the closest mode anyway.
+mode = 1920x1080@74.973
+position = 0,0
+scale = 1
+transform = normal
+enabled = true
+
+# The laptop panel, off by default here because the lid is usually shut.
+# Enabling it needs card1 in drm-device above as well, or there is nothing
+# driving that connector.
+[output eDP-1]
+enabled = false
+
+[output *]
+mode = preferred
+
+
+[keyboard]
+
+# xkb names, exactly as setxkbmap takes them. Empty means xkb's own default,
+# which is a US layout on most installs.
+layout = us
+# variant = colemak
+# options = ctrl:nocaps
+# model =
+# rules =
+
+# Repeat, in keys per second and milliseconds held before it starts.
+repeat-rate = 25
+repeat-delay = 600

@@ -4,12 +4,15 @@
 #include <fstream>
 #include <sys/stat.h>
 #include <linux/input-event-codes.h>  // BTN_RIGHT
+#include <csignal>
+#include <pthread.h>
 #include <cstdlib>
 #include <ctime>
 #include <iostream>
 #include <list>
 
 #include "canvas_surface.hpp"
+#include "config.hpp"
 #include "decoration.hpp"
 #include "control_plane.hpp"
 #include "wlr.hpp"
@@ -98,6 +101,12 @@ struct Output {
   Output(Server *server, wlr_output *output);
   ~Output();
 
+  /// Applies the config block for this connector: mode, scale, transform,
+  /// position, enabled. Returns its entry in the output layout, or null if the
+  /// config disabled it. Run again on reload, which is what makes changing a
+  /// resolution not need a restart.
+  wlr_output_layout_output *applyConfig();
+
   static void on_frame(wl_listener *listener, void *data);
   static void on_request_state(wl_listener *listener, void *data);
   static void on_destroy(wl_listener *listener, void *data);
@@ -148,6 +157,11 @@ struct Keyboard {
   Keyboard(Server *server, wlr_input_device *device);
   ~Keyboard();
 
+  /// Compiles the configured layout and hands it to this keyboard. Called
+  /// again on reload, which is what makes a layout change take effect without
+  /// restarting — every client is sent the new keymap.
+  void applyKeymap(const lava::KeyboardConfig &config);
+
   static void on_modifiers(wl_listener *listener, void *data);
   static void on_key(wl_listener *listener, void *data);
   static void on_destroy(wl_listener *listener, void *data);
@@ -175,6 +189,8 @@ struct Server {
   /// Kept here because `wlr_seat` does not expose one, and seat capabilities
   /// have to be recomputed whenever a keyboard comes or goes.
   std::list<Keyboard *> keyboards;
+  /// Every screen, so a config reload can re-apply itself to all of them.
+  std::list<Output *> outputs;
 
   /// LavaUI client surfaces, and the channel their input goes back down.
   /// Both null until `main` builds them; a compositor without a control plane
@@ -212,12 +228,31 @@ struct Server {
   uint32_t focusedByWorkspace[Workspaces::kCount] = {};
   Workspaces workspaces;
 
+  /// What the machine looks like: which GPU, which screens at which sizes,
+  /// what the keyboard is. Re-read on SIGHUP — see `reload_config`.
+  lava::Config config;
+  std::string configPath;
+
   uint32_t focusedSurface() const {
     return focusedByWorkspace[workspaces.current];
   }
   void setFocusedSurface(uint32_t id) {
     focusedByWorkspace[workspaces.current] = id;
   }
+
+  /// Re-reads the config file and applies what can be applied while running.
+  ///
+  /// This is as close to a hot reload as a Wayland compositor gets. The binary
+  /// cannot be swapped underneath a running session — every client holds a
+  /// socket to *this* process, and neither libwayland nor wlroots has a way to
+  /// hand those over, so restarting is a logout. What a reload can change is
+  /// everything the config file describes about the machine: screen modes,
+  /// positions, scale, the keyboard layout.
+  ///
+  /// What it cannot change is which GPU is in use. That is decided when the
+  /// backend is created, before any of this exists, and moving it would mean
+  /// re-importing every buffer in the compositor.
+  void reloadConfig();
 
   /// Shows workspace `index` and hands it the keyboard. A no-op if it is
   /// already current, so a repeated shortcut costs nothing.
@@ -896,6 +931,52 @@ class SurfaceRegistry : public lava::CompositorHost {
 
 // ─── Output ────────────────────────────────────────────────────────────────
 
+/// Everything a monitor can tell us about itself, in the log.
+///
+/// This is how anybody finds the connector name to put in a config file, and
+/// what modes it will actually accept — guessing either is the difference
+/// between a screen that lights up and one that stays dark with no clue why.
+void describe_output(wlr_output *output) {
+  wlr_log(WLR_INFO, "output %s: %s %s %s (%dmm x %dmm)", output->name,
+          output->make ? output->make : "?",
+          output->model ? output->model : "?",
+          output->serial ? output->serial : "",
+          output->phys_width, output->phys_height);
+  wlr_output_mode *mode = nullptr;
+  wl_list_for_each(mode, &output->modes, link) {
+    wlr_log(WLR_INFO, "  mode %dx%d@%.3fHz%s", mode->width, mode->height,
+            mode->refresh / 1000.0, mode->preferred ? " (preferred)" : "");
+  }
+  if (wl_list_empty(&output->modes)) {
+    // Nested and headless backends have no mode list — they take any size.
+    wlr_log(WLR_INFO, "  no fixed modes; any size accepted");
+  }
+}
+
+/// The mode nearest what the config asked for, or null to use the preferred.
+///
+/// Nearest rather than exact on the refresh rate, because a rate is written in
+/// the config as a human reads it off a box — "144" — and the mode is really
+/// 143.998Hz. Exact matching would reject the mode the user obviously meant.
+wlr_output_mode *pick_mode(wlr_output *output, const lava::OutputConfig *cfg) {
+  if (cfg == nullptr || !cfg->hasMode()) return wlr_output_preferred_mode(output);
+  wlr_output_mode *best = nullptr;
+  int32_t bestDelta = 0;
+  wlr_output_mode *mode = nullptr;
+  wl_list_for_each(mode, &output->modes, link) {
+    if (mode->width != cfg->width || mode->height != cfg->height) continue;
+    // No rate asked for means the fastest one at that size.
+    const int32_t delta =
+        cfg->refresh == 0 ? -mode->refresh
+                          : std::abs(mode->refresh - cfg->refresh);
+    if (best == nullptr || delta < bestDelta) {
+      best = mode;
+      bestDelta = delta;
+    }
+  }
+  return best;
+}
+
 Output::Output(Server *server, wlr_output *output)
     : server(server), wlr(output),
       scene_output(wlr_scene_output_create(server->scene, output)) {
@@ -904,19 +985,75 @@ Output::Output(Server *server, wlr_output *output)
   destroy.attach(&wlr->events.destroy, this, on_destroy);
 
   wlr_output_init_render(wlr, server->allocator, server->renderer);
+  describe_output(wlr);
+  server->outputs.push_back(this);
+
+  if (wlr_output_layout_output *layout_output = applyConfig()) {
+    // Once only: the scene follows the layout from here, so a later reload
+    // that moves the output does not need to say so twice.
+    wlr_scene_output_layout_add_output(server->scene_layout, layout_output,
+                                       scene_output);
+  }
+}
+
+wlr_output_layout_output *Output::applyConfig() {
+  const lava::OutputConfig *cfg = server->config.forOutput(wlr->name);
 
   wlr_output_state state;
   wlr_output_state_init(&state);
-  wlr_output_state_set_enabled(&state, true);
-  if (auto *mode = wlr_output_preferred_mode(wlr)) {
+  wlr_output_state_set_enabled(&state, cfg == nullptr || cfg->enabled);
+
+  if (wlr_output_mode *mode = pick_mode(wlr, cfg)) {
     wlr_output_state_set_mode(&state, mode);
+  } else if (cfg != nullptr && cfg->hasMode()) {
+    // No mode matched. Ask for it anyway as a custom mode: on a nested or
+    // headless backend there is no mode list at all and this is the only way
+    // to set a size, and on real hardware a rejected commit is a clearer
+    // failure than silently running at something else.
+    wlr_log(WLR_INFO, "output %s: no mode %dx%d, asking for it directly",
+            wlr->name, cfg->width, cfg->height);
+    wlr_output_state_set_custom_mode(&state, cfg->width, cfg->height,
+                                     cfg->refresh);
   }
-  wlr_output_commit_state(wlr, &state);
+  if (cfg != nullptr && cfg->scale > 0.0) {
+    wlr_output_state_set_scale(&state, static_cast<float>(cfg->scale));
+  }
+  if (cfg != nullptr) {
+    wlr_output_state_set_transform(
+        &state, static_cast<wl_output_transform>(cfg->transform));
+  }
+
+  if (!wlr_output_commit_state(wlr, &state)) {
+    // Falling back rather than giving up: a bad line in a config file should
+    // cost the resolution, not the session — with no screen there is no way
+    // left to fix the config.
+    wlr_log(WLR_ERROR, "output %s: configuration rejected, using preferred",
+            wlr->name);
+    wlr_output_state_finish(&state);
+    wlr_output_state_init(&state);
+    wlr_output_state_set_enabled(&state, true);
+    if (auto *mode = wlr_output_preferred_mode(wlr)) {
+      wlr_output_state_set_mode(&state, mode);
+    }
+    wlr_output_commit_state(wlr, &state);
+  }
   wlr_output_state_finish(&state);
 
-  auto *layout_output = wlr_output_layout_add_auto(server->output_layout, wlr);
-  wlr_scene_output_layout_add_output(server->scene_layout, layout_output,
-                                     scene_output);
+  if (cfg != nullptr && !cfg->enabled) {
+    wlr_log(WLR_INFO, "output %s: disabled by config", wlr->name);
+    wlr_output_layout_remove(server->output_layout, wlr);
+    return nullptr;
+  }
+
+  // Placed where the config says, or strung left to right after the outputs
+  // already there. `add_auto` is right for one screen and a guess for two.
+  wlr_output_layout_output *layout_output =
+      cfg != nullptr && cfg->x != lava::OutputConfig::kAuto
+          ? wlr_output_layout_add(server->output_layout, wlr, cfg->x, cfg->y)
+          : wlr_output_layout_add_auto(server->output_layout, wlr);
+
+  wlr_log(WLR_INFO, "output %s: running %dx%d@%.3fHz scale %.2f", wlr->name,
+          wlr->width, wlr->height, wlr->refresh / 1000.0, wlr->scale);
 
   // What a maximized window fills. The registry has no other way to know how
   // big the screen is, and this is the only place it changes.
@@ -924,9 +1061,11 @@ Output::Output(Server *server, wlr_output *output)
     server->surfaces->setOutputSize(static_cast<uint32_t>(wlr->width),
                                     static_cast<uint32_t>(wlr->height));
   }
+  return layout_output;
 }
 
 Output::~Output() {
+  server->outputs.remove(this);
   frame.detach();
   request_state.detach();
   destroy.detach();
@@ -1053,13 +1192,7 @@ Keyboard::Keyboard(Server *server, wlr_input_device *device)
     : server(server), wlr(wlr_keyboard_from_input_device(device)) {
   // Every client is sent this keymap and interprets keycodes with it, so the
   // compositor's idea of the layout is the only one that exists.
-  xkb_context *context = xkb_context_new(XKB_CONTEXT_NO_FLAGS);
-  xkb_keymap *keymap =
-      xkb_keymap_new_from_names(context, nullptr, XKB_KEYMAP_COMPILE_NO_FLAGS);
-  wlr_keyboard_set_keymap(wlr, keymap);
-  xkb_keymap_unref(keymap);
-  xkb_context_unref(context);
-  wlr_keyboard_set_repeat_info(wlr, 25, 600);
+  applyKeymap(server->config.keyboard);
 
   modifiers.attach(&wlr->events.modifiers, this, on_modifiers);
   key.attach(&wlr->events.key, this, on_key);
@@ -1067,6 +1200,38 @@ Keyboard::Keyboard(Server *server, wlr_input_device *device)
 
   server->keyboards.push_back(this);
   wlr_seat_set_keyboard(server->seat, wlr);
+}
+
+void Keyboard::applyKeymap(const lava::KeyboardConfig &config) {
+  // Empty strings mean "xkb's default", which is what nullptr fields ask for.
+  xkb_rule_names names{};
+  auto or_null = [](const std::string &s) {
+    return s.empty() ? nullptr : s.c_str();
+  };
+  names.rules = or_null(config.rules);
+  names.model = or_null(config.model);
+  names.layout = or_null(config.layout);
+  names.variant = or_null(config.variant);
+  names.options = or_null(config.options);
+
+  xkb_context *context = xkb_context_new(XKB_CONTEXT_NO_FLAGS);
+  xkb_keymap *keymap =
+      xkb_keymap_new_from_names(context, &names, XKB_KEYMAP_COMPILE_NO_FLAGS);
+  if (keymap == nullptr) {
+    // A layout name with a typo in it compiles to nothing, and a keyboard with
+    // no keymap delivers no keys at all — including the one that would let
+    // anybody fix the config.
+    wlr_log(WLR_ERROR, "keyboard: layout '%s' did not compile, keeping default",
+            config.layout.c_str());
+    keymap = xkb_keymap_new_from_names(context, nullptr,
+                                       XKB_KEYMAP_COMPILE_NO_FLAGS);
+  }
+  if (keymap != nullptr) {
+    wlr_keyboard_set_keymap(wlr, keymap);
+    xkb_keymap_unref(keymap);
+  }
+  xkb_context_unref(context);
+  wlr_keyboard_set_repeat_info(wlr, config.repeatRate, config.repeatDelay);
 }
 
 Keyboard::~Keyboard() {
@@ -1339,6 +1504,29 @@ void Server::focus(Toplevel *toplevel) {
     wlr_seat_keyboard_notify_enter(seat, surface, keyboard->keycodes,
                                    keyboard->num_keycodes, &keyboard->modifiers);
   }
+}
+
+void Server::reloadConfig() {
+  const lava::Config fresh = lava::Config::load(configPath);
+  const std::string previousDevices = config.drmDevices;
+  const std::string previousRenderer = config.renderer;
+  config = fresh;
+
+  if (fresh.drmDevices != previousDevices ||
+      fresh.renderer != previousRenderer) {
+    wlr_log(WLR_INFO,
+            "config: GPU settings changed; they apply on the next start");
+  }
+
+  for (Output *output : outputs) {
+    output->applyConfig();
+  }
+  for (Keyboard *keyboard : keyboards) {
+    // Every client is sent the new keymap by wlroots as a side effect, so a
+    // layout change reaches applications that are already running.
+    keyboard->applyKeymap(config.keyboard);
+  }
+  wlr_log(WLR_INFO, "config: reloaded");
 }
 
 Toplevel *Server::frontToplevel(uint32_t workspace) {
@@ -1676,12 +1864,35 @@ void Server::on_request_cursor(wl_listener *listener, void *data) {
 
 int main() {
   wlr_log_init(WLR_DEBUG, nullptr);
+
+  // Blocked here, before anything else, because `wl_event_loop_add_signal`
+  // reads it off a signalfd and a signalfd only sees signals that are blocked.
+  // libwayland does block it — but only on the thread that registers, and by
+  // then the control plane has started NPRPC's threads, which would inherit
+  // nothing and take the SIGHUP with its default disposition. The compositor
+  // exits, on the signal that was supposed to reload its config.
+  //
+  // A mask set before any thread exists is inherited by every thread created
+  // afterwards, which is the only version of this that stays true.
+  {
+    sigset_t mask;
+    sigemptyset(&mask);
+    sigaddset(&mask, SIGHUP);
+    pthread_sigmask(SIG_BLOCK, &mask, nullptr);
+  }
+
   Server server;
   server.display = wl_display_create();
   if (!server.display) {
     std::cerr << "Could not create Wayland display\n";
     return EXIT_FAILURE;
   }
+
+  // Before the backend, because the GPU choice is an environment variable
+  // wlroots reads while creating it — after this point nothing rereads them.
+  server.configPath = lava::Config::defaultPath();
+  server.config = lava::Config::load(server.configPath);
+  server.config.applyEnvironment();
 
   auto *loop = wl_display_get_event_loop(server.display);
   server.backend = wlr_backend_autocreate(loop, nullptr);
@@ -1785,6 +1996,17 @@ int main() {
     // no way left for a client to ask for a surface.
     wlr_log(WLR_ERROR, "no control plane — LavaUI clients cannot connect");
   }
+
+  // `kill -HUP` re-reads the config. The event loop delivers it, so it lands
+  // on the loop thread like everything else rather than in a signal handler
+  // where almost nothing here would be safe to call.
+  wl_event_loop_add_signal(
+      wl_display_get_event_loop(server.display), SIGHUP,
+      [](int, void *data) {
+        static_cast<Server *>(data)->reloadConfig();
+        return 0;
+      },
+      &server);
 
   const char *socket = wl_display_add_socket_auto(server.display);
   if (!socket || !wlr_backend_start(server.backend)) {
