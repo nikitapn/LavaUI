@@ -52,6 +52,9 @@ executable(
   dependencies: [
     wlroots,
     dependency('wayland-server'),
+    # Keyboards arrive as evdev keycodes; xkbcommon is what turns those into
+    # keysyms, and what the keymap sent to every client is built from.
+    dependency('xkbcommon'),
   ],
   install: true,
 )

@@ -34,6 +34,8 @@ extern "C" {
 #include <wlr/types/wlr_xdg_shell.h>
 #include <wlr/util/log.h>
 
+#include <xkbcommon/xkbcommon.h>
+
 // 2. `wlr_scene.h` declares two functions with C99 array parameters —
 //    `const float color[static 4]` — which is a syntax error in C++, so the
 //    header cannot be parsed at all. Not "the two functions are unavailable":
