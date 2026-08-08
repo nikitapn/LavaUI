@@ -76,3 +76,18 @@ unsigned char utf8d[] = {
 } // namespace detail
 } // namespace utf8
 } // namespace utils
+
+// ─── Frame tracing ──────────────────────────────────────────────────────────
+
+#include "render/draw_command.hpp"
+
+namespace canvas {
+
+bool traceFrames()
+{
+  // Read once: this sits inside the per-glyph loop of every frame.
+  static const bool on = utils::envFlag("CANVAS_TRACE_FRAMES", false);
+  return on;
+}
+
+}  // namespace canvas

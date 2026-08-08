@@ -214,6 +214,16 @@ class Engine {
 
   // ─── Declarative UI (Swift tree → Yoga + TextRenderer) ────────────────
   bool repaint(uint32_t windowId = 0);
+
+  /// Takes the next frame published into this window's arena, without drawing
+  /// it, and says whether there was one. What a polling consumer asks before
+  /// deciding to render. See `AppWindow::pollDrawArena`.
+  bool pollDrawArena(uint32_t windowId = 0);
+
+  /// Frames this window has actually drawn. See `Application::frameCounter` —
+  /// it does not advance on a repaint that found nothing new to draw, which is
+  /// what makes it usable as "is there anything to show?".
+  uint64_t frameCounter(uint32_t windowId = 0) const;
   void readPixels(uint8_t *dst, size_t dstSize);
 
   /// Agent/automation: capture resolve as PNG (base64). Empty on failure.

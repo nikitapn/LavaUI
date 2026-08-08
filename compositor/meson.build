@@ -38,6 +38,7 @@ endforeach
 # the environment overrides it for an installed binary.
 canvas_assets = meson.project_source_root() / 'canvas/Sources/CanvasResources'
 
+
 executable(
   'compositor',
   'src/main.cpp',

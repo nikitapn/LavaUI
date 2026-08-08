@@ -115,6 +115,20 @@ public:
   // every windowed app — needs to know none of this.
   bool repaint(uint32_t windowId = 0);
 
+  /// Takes the next frame a producer has published into this window's arena,
+  /// without drawing it. See `AppWindow::pollDrawArena`.
+  bool pollDrawArena(uint32_t windowId = 0);
+
+  /// Frames this window has actually drawn, or 0 if it has no renderer.
+  ///
+  /// Monotonic, and it does not advance on a `repaint` that had nothing to
+  /// draw — a window fed by an arena whose producer has published nothing
+  /// since the last call returns success without rendering. That distinction
+  /// is the whole reason to expose this: a consumer downstream of the frame
+  /// needs to know whether there is anything new to show, and "repaint
+  /// succeeded" does not say.
+  uint64_t frameCounter(uint32_t windowId = 0) const;
+
   /// Brackets a set of `repaint` calls that may run concurrently, one thread
   /// per window.
   ///

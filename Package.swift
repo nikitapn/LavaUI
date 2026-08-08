@@ -43,6 +43,7 @@ var products: [Product] = [
     .executable(name: "LavaBench", targets: ["LavaBench"]),
     .executable(name: "TwoWindows", targets: ["TwoWindows"]),
     .executable(name: "ArenaDemo", targets: ["ArenaDemo"]),
+    .executable(name: "LavaSurface", targets: ["LavaSurface"]),
     .library(name: "LavaUI", targets: ["LavaUI"]),
     .library(name: "LavaText", targets: ["LavaText"]),
     .library(name: "LavaMenu", targets: ["LavaMenu"]),
@@ -73,6 +74,15 @@ var targets: [Target] = [
             + (haveNprpc
                 ? [Target.Dependency("LavaIDL"), Target.Dependency("LavaClient")]
                 : []),
+        swiftSettings: interopCxx
+    ),
+    // A LavaUI app with no window and no GPU, drawn by the wlroots compositor.
+    // Deliberately free of the NPRPC control plane: it is the arena half on
+    // its own, so the arena half can be seen working before anything is built
+    // on top of it. See Sources/LavaSurface/main.swift.
+    .executableTarget(
+        name: "LavaSurface",
+        dependencies: ["LavaUI"],
         swiftSettings: interopCxx
     ),
     .executableTarget(

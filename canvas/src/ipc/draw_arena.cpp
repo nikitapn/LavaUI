@@ -331,7 +331,12 @@ bool DrawArena::Impl::mapExisting(const std::string &name, Mapping &out)
 {
   int fd = ::shm_open(name.c_str(), O_RDWR, 0600);
   if (fd < 0) {
-    logErrno("shm_open", name);
+    // "There is no arena by that name" is the normal answer to a consumer
+    // asking whether its producer has started yet, not a failure. A renderer
+    // that polls until one appears would otherwise print a line per attempt,
+    // and the log it buries is the one that says why the arena that *did*
+    // appear could not be mapped.
+    if (errno != ENOENT) logErrno("shm_open", name);
     return false;
   }
   struct stat st{};

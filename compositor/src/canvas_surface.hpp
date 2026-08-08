@@ -53,6 +53,36 @@ class CanvasSurface {
   /// Draws `commands` into the shared buffer and hands it over.
   bool render(const std::vector<canvas::DrawCommand> &commands);
 
+  /// Renders whatever another process has published into the arena named
+  /// `id`, instead of commands written here.
+  ///
+  /// The arena is shared memory the client writes its draw list straight
+  /// into, so a frame crosses the process boundary without being copied or
+  /// serialised. The client owns no GPU and no window; this owns both and
+  /// knows nothing about the view tree that produced the commands.
+  ///
+  /// False simply means no arena by that name exists yet, which is the normal
+  /// state before a client starts. Quiet on failure for that reason — the
+  /// caller retries.
+  bool attachArena(const std::string &id);
+
+  /// Loads a face into the shared glyph atlas and returns the id the client's
+  /// `GlyphInstance`s must carry, or -1.
+  ///
+  /// Ids are assigned in registration order, which is the whole of the
+  /// agreement between the two processes about fonts — see the call site in
+  /// `main.cpp` for why that is a stopgap and not a design.
+  int registerFont(const std::string &path, float pixelSize);
+
+  /// Draws whatever the arena currently holds.
+  ///
+  /// True only when a *new* frame was drawn. A producer that has published
+  /// nothing since the last call is not an error and not a frame: the
+  /// previous contents are still correct and still on screen, and reporting
+  /// otherwise would damage the scene sixty times a second to show the same
+  /// pixels.
+  bool renderFromArena();
+
   /// The buffer, for `wlr_scene_buffer_create`. Owned here; the scene takes
   /// its own reference.
   wlr_buffer *buffer() { return &buffer_->base; }
@@ -63,10 +93,16 @@ class CanvasSurface {
  private:
   CanvasSurface() = default;
 
+  /// Writes the resolve target to `$LAVA_CANVAS_DUMP` if it is set.
+  void dumpIfRequested();
+
   canvas::Engine engine_;
   DmabufBuffer  *buffer_ = nullptr;
   uint32_t       width_  = 0;
   uint32_t       height_ = 0;
+  /// Frames drawn as of the last `renderFromArena`, so a tick that found
+  /// nothing published can be told from one that drew.
+  uint64_t drawn_ = 0;
 };
 
 }  // namespace lava

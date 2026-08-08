@@ -119,6 +119,17 @@ class AppWindow {
   /// vectors, so a producer in this process and one in another cannot fight
   /// over the same window.
   bool attachDrawArena(const std::string &id);
+
+  /// Takes the next published frame, if the producer has published one, and
+  /// says whether it did. Draws nothing.
+  ///
+  /// For a consumer that has to *poll*, which is anyone without a nudge from
+  /// the producer. `repaint()` deliberately redraws the frame it is holding
+  /// when nothing new has arrived — a resize has to repaint something, and an
+  /// empty window is not it — so "did repaint draw?" cannot answer "is there
+  /// anything new?". Asking here first turns an idle client into an idle
+  /// renderer instead of a full redraw every poll.
+  bool pollDrawArena();
   void detachDrawArena();
   bool hasDrawArena() const { return arena_ != nullptr; }
 

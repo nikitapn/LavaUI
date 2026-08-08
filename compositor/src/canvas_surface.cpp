@@ -143,13 +143,54 @@ CanvasSurface::~CanvasSurface() {
   engine_.close();
 }
 
+bool CanvasSurface::attachArena(const std::string &id) {
+  // Failure is not logged here: the only caller retries on a timer until a
+  // client turns up, and an error line every 16ms would bury the one that
+  // matters.
+  if (!engine_.attachDrawArena(id)) return false;
+  wlr_log(WLR_INFO, "canvas: rendering the arena '%s'", id.c_str());
+  return true;
+}
+
+int CanvasSurface::registerFont(const std::string &path, float pixelSize) {
+  const int id = engine_.registerFont(path, pixelSize);
+  if (id < 0) {
+    wlr_log(WLR_ERROR, "canvas: could not load font '%s'", path.c_str());
+  } else {
+    wlr_log(WLR_INFO, "canvas: font %d = %s @ %.0fpx", id, path.c_str(),
+            static_cast<double>(pixelSize));
+  }
+  return id;
+}
+
+bool CanvasSurface::renderFromArena() {
+  // Ask before drawing. A repaint with nothing new published still redraws
+  // the frame it is holding — deliberately, so a resize repaints content
+  // rather than nothing — so rendering first and asking afterwards would blit
+  // and re-damage sixty times a second to show pixels that never changed.
+  if (!engine_.pollDrawArena()) return false;
+  if (!engine_.renderFrame()) {
+    wlr_log(WLR_ERROR, "canvas: the surface failed to draw");
+    return false;
+  }
+  drawn_ = engine_.frameCounter();
+  dumpIfRequested();
+  return true;
+}
+
 bool CanvasSurface::render(const std::vector<canvas::DrawCommand> &commands) {
   engine_.submitDrawList(commands.data(), commands.size(), nullptr, 0, nullptr,
                          0, nullptr, 0);
   if (!engine_.renderFrame()) {
     return false;
   }
+  drawn_ = engine_.frameCounter();
 
+  dumpIfRequested();
+  return true;
+}
+
+void CanvasSurface::dumpIfRequested() {
   // A way to see what canvas *thinks* it drew, independent of everything
   // downstream of the blit.
   //
@@ -158,18 +199,16 @@ bool CanvasSurface::render(const std::vector<canvas::DrawCommand> &commands) {
   // handover produced it, and comparing this file with a screenshot answers
   // that in one step. Reads the same resolve target the blit copies, through
   // the staging buffer an offscreen window has anyway.
-  if (const char *path = std::getenv("LAVA_CANVAS_DUMP")) {
-    const canvas::U8Vector png = engine_.capturePng(0, 0, 0, 0);
-    if (!png.empty()) {
-      if (FILE *f = std::fopen(path, "wb")) {
-        std::fwrite(png.data(), 1, png.size(), f);
-        std::fclose(f);
-        wlr_log(WLR_INFO, "canvas: wrote %zu bytes of resolve to %s",
-                png.size(), path);
-      }
-    }
+  const char *path = std::getenv("LAVA_CANVAS_DUMP");
+  if (path == nullptr) return;
+  const canvas::U8Vector png = engine_.capturePng(0, 0, 0, 0);
+  if (png.empty()) return;
+  if (FILE *f = std::fopen(path, "wb")) {
+    std::fwrite(png.data(), 1, png.size(), f);
+    std::fclose(f);
+    wlr_log(WLR_INFO, "canvas: wrote %zu bytes of resolve to %s", png.size(),
+            path);
   }
-  return true;
 }
 
 }  // namespace lava

@@ -126,6 +126,10 @@ bool AppWindow::repaint()
       // we are holding rather than an empty one.
       if (arena_->acquireFrame(arenaFrame_)) arenaHasFrame_ = true;
       if (!arenaHasFrame_) return true;
+      if (canvas::traceFrames()) {
+        std::cerr << "arena frame: cmds=" << arenaFrame_.commandCount
+                  << " glyphs=" << arenaFrame_.glyphCount << '\n';
+      }
       render_->render(arenaFrame_);
       noteSceneResume();
       return true;
@@ -254,6 +258,14 @@ void AppWindow::stepSceneAnimations()
     internalRepaint_ = true;
     glfwPostEmptyEvent();
   }
+}
+
+bool AppWindow::pollDrawArena()
+{
+  if (!arena_) return false;
+  if (!arena_->acquireFrame(arenaFrame_)) return false;
+  arenaHasFrame_ = true;
+  return true;
 }
 
 bool AppWindow::attachDrawArena(const std::string &id)

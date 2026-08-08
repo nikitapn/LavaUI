@@ -328,6 +328,18 @@ bool Engine::repaint(uint32_t windowId)
   return impl_->withApp([&](Application &app) { return app.repaint(windowId); });
 }
 
+bool Engine::pollDrawArena(uint32_t windowId)
+{
+  return impl_->withApp(
+    [&](Application &app) { return app.pollDrawArena(windowId); });
+}
+
+uint64_t Engine::frameCounter(uint32_t windowId) const
+{
+  return impl_->withApp(
+    [&](Application &app) { return app.frameCounter(windowId); });
+}
+
 void Engine::readPixels(uint8_t *dst, size_t dstSize)
 {
   impl_->withApp([&](Application &app) { app.readPixels(dst, dstSize); });

@@ -454,6 +454,19 @@ void Application::closeWindow(uint32_t windowId) { impl_->closeWindow(windowId);
 
 size_t Application::windowCount() const { return impl_->windows.size(); }
 
+bool Application::pollDrawArena(uint32_t windowId)
+{
+  AppWindow *w = impl_->win(windowId);
+  return w != nullptr && w->pollDrawArena();
+}
+
+uint64_t Application::frameCounter(uint32_t windowId) const
+{
+  AppWindow *w = impl_->win(windowId);
+  if (w == nullptr || !w->hasRenderer()) return 0;
+  return w->renderWindow().frameCounter();
+}
+
 uint32_t Application::windowIdAt(size_t index) const
 {
   if (index >= impl_->windows.size()) return 0;

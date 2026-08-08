@@ -1570,7 +1570,17 @@ void RenderWindow::replayDrawList(const canvas::DrawList &list, float viewW,
       for (uint32_t g = 0; g < count; ++g) {
         const auto &gi = list.glyphs[first + g];
         TextRenderer::GlyphQuad q;
-        if (!dev_.textRenderer().glyphQuad(gi.fontId, gi.glyphId, q)) continue;
+        if (!dev_.textRenderer().glyphQuad(gi.fontId, gi.glyphId, q)) {
+          // Silent by design — a run naming a face this renderer does not
+          // have draws nothing rather than drawing something wrong. That is
+          // the right behaviour and a miserable thing to debug, because the
+          // symptom is text that is simply absent. Hence the trace.
+          if (canvas::traceFrames()) {
+            std::cerr << "glyph miss font=" << gi.fontId
+                      << " glyph=" << gi.glyphId << '\n';
+          }
+          continue;
+        }
         if (q.size.x <= 0.f || q.size.y <= 0.f) continue;  // e.g. space
         quads_.pushGlyph({gi.x + q.bearing.x + ox, gi.y - q.bearing.y + oy},
                          q.size, q.uv0, q.uv1, faded(cmd.color));

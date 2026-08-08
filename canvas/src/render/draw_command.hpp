@@ -10,6 +10,17 @@
 
 namespace canvas {
 
+/// Whether `CANVAS_TRACE_FRAMES` is set: log what a frame contained and what
+/// the renderer could not resolve in it.
+///
+/// One switch for both because they are one question. A frame that draws less
+/// than it should has two candidate explanations — it did not arrive, or it
+/// arrived and something in it was dropped — and the only way to tell them
+/// apart is to see the counts next to the drops. Both sites are otherwise
+/// silent on purpose, which is correct and is exactly what makes them hard to
+/// diagnose across a process boundary.
+bool traceFrames();
+
 enum class DrawCommandKind : uint32_t {
   Rect = 0,
   RoundedRect = 1,

@@ -1,4 +1,6 @@
 #include <cstddef>
+#include <fstream>
+#include <sys/stat.h>
 #include <cstdlib>
 #include <ctime>
 #include <iostream>
@@ -532,6 +534,155 @@ void Server::on_request_cursor(wl_listener *listener, void *data) {
   }
 }
 
+// ─── Client surface ────────────────────────────────────────────────────────
+
+/// Size of the surface a client draws into.
+///
+/// Fixed on both sides for now, and the client is told nothing. A real
+/// surface learns its size from the opening `Resize` on its input stream,
+/// because the window manager has the last word — see `LavaClient.open`. That
+/// stream is part of the control plane this does not have yet.
+constexpr uint32_t kSurfaceWidth = 720;
+constexpr uint32_t kSurfaceHeight = 480;
+
+/// How often the arena is checked for a new frame.
+///
+/// Polling, and only because there is nothing to wake us: a shared-memory
+/// store signals no one. The control plane's `Present` is exactly the nudge
+/// that replaces this, and with it the compositor blocks in
+/// `wl_display_run` until a client says there is something to draw instead of
+/// asking sixty times a second whether there is.
+constexpr int kArenaPollMs = 16;
+
+std::string arena_id() {
+  if (const char *fromEnv = std::getenv("LAVA_ARENA")) return fromEnv;
+  return "lava-surface";
+}
+
+/// Where the client leaves its font table.
+std::string font_manifest_path() {
+  const char *dir = std::getenv("XDG_RUNTIME_DIR");
+  return std::string(dir ? dir : "/tmp") + "/lava-fonts-" + arena_id();
+}
+
+/// The faces a client's glyphs are numbered against, in the client's order.
+///
+/// A `GlyphInstance` carries a font id, and an id means nothing on its own —
+/// it is an index into whichever table handed it out. The arena carries the id
+/// and nothing that says what it means, so the client writes its table down
+/// and this registers the same faces in the same order to reproduce it.
+///
+/// Guessing the order was tried and was wrong: LavaUI's bootstrap loads the
+/// symbols face before the UI face, so "the obvious two in the obvious order"
+/// put the UI face at 2 on one side and 0 on the other, and every glyph
+/// missed. Hence reading it rather than assuming it — and hence the check
+/// below, which says so loudly instead of drawing the wrong glyphs quietly.
+///
+/// `Compositor.RegisterFont` over NPRPC is what replaces this: a client asks
+/// for an id rather than describing a table and hoping it can be reproduced.
+/// Returns the number of faces registered, or -1 if there is no manifest yet.
+int register_fonts_from_manifest(lava::CanvasSurface &surface, int alreadyHave) {
+  // Cheap enough to ask every tick, unlike reading and parsing the file.
+  static timespec lastSeen{};
+  struct stat info{};
+  const std::string path = font_manifest_path();
+  if (::stat(path.c_str(), &info) != 0) return alreadyHave;
+  if (info.st_mtim.tv_sec == lastSeen.tv_sec &&
+      info.st_mtim.tv_nsec == lastSeen.tv_nsec) {
+    return alreadyHave;
+  }
+  lastSeen = info.st_mtim;
+
+  std::ifstream file(path);
+  if (!file) return alreadyHave;
+
+  int index = 0;
+  std::string line;
+  while (std::getline(file, line)) {
+    if (line.empty()) continue;
+    const size_t firstTab = line.find('\t');
+    const size_t secondTab = line.find('\t', firstTab + 1);
+    if (firstTab == std::string::npos || secondTab == std::string::npos) continue;
+    const int wanted = std::stoi(line.substr(0, firstTab));
+    const float pixelSize =
+        std::stof(line.substr(firstTab + 1, secondTab - firstTab - 1));
+    const std::string path = line.substr(secondTab + 1);
+
+    if (index++ < alreadyHave) continue;  // registered on an earlier pass
+    const int got = surface.registerFont(path, pixelSize);
+    if (got != wanted) {
+      // Not fatal, and much better said than not: text will draw with the
+      // wrong face rather than not at all, which is far harder to recognise.
+      wlr_log(WLR_ERROR,
+              "canvas: font '%s' landed at id %d but the client stamped %d",
+              path.c_str(), got, wanted);
+    }
+  }
+  return index;
+}
+
+/// What the surface shows before any client has published a frame.
+std::vector<canvas::DrawCommand> placeholder_commands() {
+  using canvas::DrawCommand;
+  using enum canvas::DrawCommandKind;
+  const float w = kSurfaceWidth;
+  const float h = kSurfaceHeight;
+  // RGBA8 little-endian — R in the low byte, so these read as 0xAABBGGRR.
+  return {
+      {.kind = static_cast<uint32_t>(Rect),
+       .x = 0, .y = 0, .w = w, .h = h, .color = 0xff2a1f18u},
+      {.kind = static_cast<uint32_t>(RoundedRect),
+       .x = 24, .y = 24, .w = w - 48, .h = h - 48, .color = 0xff3a2a20u,
+       .aux = 12.f},
+      {.kind = static_cast<uint32_t>(Circle),
+       .x = w / 2, .y = h / 2, .color = 0xff1973f2u, .aux = 40.f},
+  };
+}
+
+/// The surface, the scene node showing it, and the poll that keeps it current.
+struct ClientSurface {
+  std::unique_ptr<lava::CanvasSurface> canvas;
+  wlr_scene_buffer *node = nullptr;
+  wl_event_source *timer = nullptr;
+  /// False until a client has created the arena. Retried rather than required
+  /// at startup, because a compositor that only works if its clients started
+  /// first is not a compositor.
+  bool attached = false;
+  /// Faces taken from the client's manifest so far. Re-read rather than read
+  /// once: a client that changes content scale registers its faces again at
+  /// the new size, and those ids have to exist here before the glyphs
+  /// carrying them arrive.
+  int fonts = 0;
+
+  void start(wl_event_loop *loop) {
+    timer = wl_event_loop_add_timer(loop, on_timer, this);
+    wl_event_source_timer_update(timer, kArenaPollMs);
+  }
+
+  static int on_timer(void *data) {
+    auto *self = static_cast<ClientSurface *>(data);
+    if (!self->attached) {
+      self->attached = self->canvas->attachArena(arena_id());
+    } else if (const int have =
+                   register_fonts_from_manifest(*self->canvas, self->fonts);
+               have > self->fonts) {
+      // Before the frame that uses them, and it costs a frame of latency at
+      // most: a client publishes its table when it loads a face, which is
+      // always before it can shape anything with it.
+      self->fonts = have;
+    } else if (self->canvas->renderFromArena()) {
+      // Same buffer, new contents. wlroots caches a texture per buffer, so
+      // without damage it would keep showing the frame it already uploaded.
+      // Null damage means the whole surface, which is honest until a client
+      // tells us what it actually changed.
+      wlr_scene_buffer_set_buffer_with_damage(self->node,
+                                              self->canvas->buffer(), nullptr);
+    }
+    wl_event_source_timer_update(self->timer, kArenaPollMs);
+    return 0;
+  }
+};
+
 } // namespace
 
 int main() {
@@ -600,42 +751,30 @@ int main() {
   server.request_cursor.attach(&server.seat->events.request_set_cursor, &server,
                                Server::on_request_cursor);
 
-  // A canvas-rendered surface, composited with no copy.
+  // A LavaUI client's window, drawn here and composited with no copy.
   //
-  // This is the mechanism LavaUI surfaces arrive through: canvas draws a
-  // client's frame into an image whose memory is exported as a dmabuf, and the
-  // scene graph shows it alongside ordinary Wayland windows. Both halves are
-  // real now — the draw list below goes through the same replay, the same
-  // pipelines and the same MSAA resolve a windowed canvas app uses. What is
-  // still a stand-in is only *whose* list it is: these commands are written
-  // here rather than arriving from a client's draw arena.
-  auto demo_surface = lava::CanvasSurface::create(server.renderer, 480, 320);
-  if (demo_surface) {
-    using canvas::DrawCommand;
-    using enum canvas::DrawCommandKind;
-    // RGBA8 little-endian — R in the low byte, so these read as 0xAABBGGRR.
-    const std::vector<DrawCommand> commands{
-        {.kind = static_cast<uint32_t>(Rect),
-         .x = 0, .y = 0, .w = 480, .h = 320, .color = 0xff2a1f18u},
-        {.kind = static_cast<uint32_t>(RoundedRect),
-         .x = 32, .y = 28, .w = 416, .h = 120, .color = 0xff1973f2u,
-         .aux = 18.f},
-        {.kind = static_cast<uint32_t>(Circle),
-         .x = 96, .y = 232, .color = 0xff8fd0f2u, .aux = 44.f},
-        {.kind = static_cast<uint32_t>(RoundedRect),
-         .x = 168, .y = 196, .w = 280, .h = 72, .color = 0xff5ac8a8u,
-         .aux = 8.f},
-        {.kind = static_cast<uint32_t>(Line),
-         .x = 32, .y = 172, .w = 448, .h = 172, .color = 0xffffffffu},
-    };
-    if (demo_surface->render(commands)) {
-      if (auto *node = wlr_scene_buffer_create(&server.scene->tree,
-                                               demo_surface->buffer())) {
-        wlr_scene_node_set_position(&node->node, 120, 90);
-        wlr_log(WLR_INFO, "canvas: demo surface placed in the scene");
-      }
-    } else {
-      wlr_log(WLR_ERROR, "canvas: the demo surface drew nothing");
+  // This is the whole shape of the thing: the client owns no GPU and no
+  // window. It runs a view tree, lays it out, and writes draw commands
+  // straight into shared memory. Canvas — in *this* process, on the GPU
+  // wlroots is using — replays them into an image whose memory is exported as
+  // a dmabuf, and the scene graph shows it alongside ordinary Wayland
+  // windows. Nothing is copied at either boundary: the bytes the client
+  // writes are the bytes canvas reads, and the pixels canvas draws are the
+  // pixels wlroots samples.
+  ClientSurface client;
+  client.canvas = lava::CanvasSurface::create(server.renderer, kSurfaceWidth,
+                                              kSurfaceHeight);
+  if (client.canvas) {
+    // Something to look at before a client connects, and a way to tell "no
+    // client" apart from "client publishing nothing" at a glance.
+    client.canvas->render(placeholder_commands());
+    client.node =
+        wlr_scene_buffer_create(&server.scene->tree, client.canvas->buffer());
+    if (client.node) {
+      wlr_scene_node_set_position(&client.node->node, 80, 60);
+      client.start(wl_display_get_event_loop(server.display));
+      wlr_log(WLR_INFO, "canvas: surface placed, polling arena '%s'",
+              arena_id().c_str());
     }
   }
 
