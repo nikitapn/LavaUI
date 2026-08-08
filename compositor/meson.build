@@ -48,6 +48,7 @@ endforeach
 executable(
   'compositor',
   'src/main.cpp',
+  'src/dmabuf.cpp',
   protocol_headers,
   dependencies: [
     wlroots,
@@ -55,6 +56,11 @@ executable(
     # Keyboards arrive as evdev keycodes; xkbcommon is what turns those into
     # keysyms, and what the keymap sent to every client is built from.
     dependency('xkbcommon'),
+    # The renderer half of the compositor. Vulkan is what canvas draws with,
+    # and libdrm supplies the FourCC/modifier vocabulary both it and wlroots
+    # describe a shared buffer in.
+    dependency('vulkan'),
+    dependency('libdrm'),
   ],
   install: true,
 )

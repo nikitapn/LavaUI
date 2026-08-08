@@ -4,6 +4,7 @@
 #include <iostream>
 #include <list>
 
+#include "dmabuf.hpp"
 #include "wlr.hpp"
 
 namespace {
@@ -598,6 +599,32 @@ int main() {
                           Server::on_new_input);
   server.request_cursor.attach(&server.seat->events.request_set_cursor, &server,
                                Server::on_request_cursor);
+
+  // A Vulkan-rendered surface, composited with no copy.
+  //
+  // This is the mechanism LavaUI surfaces will arrive through: canvas draws a
+  // client's frame into an image whose memory is exported as a dmabuf, and the
+  // scene graph shows it alongside ordinary Wayland windows. What the image
+  // contains is the only stand-in part — a flat colour here, a replayed draw
+  // list once canvas is linked.
+  lava::VulkanExporter *exporter = nullptr;
+  lava::ExportedImage demo_image;
+  if (int drm_fd = wlr_renderer_get_drm_fd(server.renderer); drm_fd >= 0) {
+    exporter = lava::VulkanExporter::create(drm_fd);
+  } else {
+    wlr_log(WLR_INFO, "dmabuf: renderer has no DRM fd; skipping export demo");
+  }
+  if (exporter && exporter->make_image(480, 320, demo_image) &&
+      exporter->clear_image(demo_image, 0.95f, 0.45f, 0.10f)) {
+    auto *buffer = lava::DmabufBuffer::create(&demo_image);
+    if (auto *node = wlr_scene_buffer_create(&server.scene->tree,
+                                             &buffer->base)) {
+      wlr_scene_node_set_position(&node->node, 120, 90);
+      wlr_log(WLR_INFO, "dmabuf: demo surface placed in the scene");
+    }
+    // The scene took its own reference; this one has done its job.
+    wlr_buffer_drop(&buffer->base);
+  }
 
   const char *socket = wl_display_add_socket_auto(server.display);
   if (!socket || !wlr_backend_start(server.backend)) {
