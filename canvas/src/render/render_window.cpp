@@ -19,6 +19,7 @@
 #endif
 
 #include "render/render_window.hpp"
+#include "render/dmabuf_image.hpp"
 #include "render/render_device.hpp"
 #include "render/text_renderer.hpp"
 #include "render/texture_manager.hpp"
@@ -765,6 +766,32 @@ void RenderWindow::submitFrame(
       VK_PIPELINE_STAGE_TRANSFER_BIT,
       VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
       0, 0, nullptr, 0, nullptr, 1, &toPresent);
+  } else if (exportTarget_ != nullptr) {
+    // Export: blit resolve → the shared image, then hand it over.
+    //
+    // Same shape as the swapchain path above, and for the same reason — the
+    // resolve is the frame, and everything after it is a destination. The
+    // difference is only in what "handed over" means: a swapchain image goes
+    // to PRESENT_SRC and stays ours, this one goes to GENERAL and stops being
+    // ours at all.
+    exportTarget_->recordAcquire(cmd);
+
+    VkImageBlit blit {
+      .srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
+      .srcOffsets = {{0, 0, 0},
+                     {static_cast<int32_t>(extent_.width),
+                      static_cast<int32_t>(extent_.height), 1}},
+      .dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
+      .dstOffsets = {{0, 0, 0},
+                     {static_cast<int32_t>(exportTarget_->width()),
+                      static_cast<int32_t>(exportTarget_->height()), 1}},
+    };
+    vkCmdBlitImage(cmd,
+                   resolveImage_, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                   exportTarget_->image(), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                   1, &blit, VK_FILTER_LINEAR);
+
+    exportTarget_->recordRelease(cmd, dev_.graphicsQueueFamily());
   } else {
     // Offscreen: copy resolve → staging for readPixels().
     VkBufferImageCopy copyRegion {
@@ -811,6 +838,16 @@ void RenderWindow::submitFrame(
     submitInfo.pSignalSemaphores = &renderFinished;
   }
 
+  // The handover fence, if this device can produce one. Signalled by the same
+  // submit that writes the shared image, exported just below and attached to
+  // the buffer so a consumer waits for exactly this work.
+  VkSemaphore handover = exportTarget_ ? exportTarget_->handoverSemaphore()
+                                       : VK_NULL_HANDLE;
+  if (handover != VK_NULL_HANDLE) {
+    submitInfo.signalSemaphoreCount = 1;
+    submitInfo.pSignalSemaphores = &handover;
+  }
+
   // Index already claimed at the top of `render()`, before a single command
   // was recorded. See there for why the ordering matters.
 
@@ -835,12 +872,34 @@ void RenderWindow::submitFrame(
     }
     }
   }
+  if (handover != VK_NULL_HANDLE) {
+    // Exported while the submit is still pending, which is the point: the
+    // sync_file becomes signalled when the work does, and the export resets
+    // the semaphore so the next frame can signal it again.
+    exportTarget_->publishFence();
+  }
+
   if (!windowed_) {
     // Offscreen readback needs the staging copy finished — this window's copy,
     // in this window's command buffer, signalling this window's fence. A
     // `vkDeviceWaitIdle` here would be both broader than needed and illegal:
     // it requires external synchronization of *every* queue on the device, and
     // a sibling window is submitting on another one right now.
+    //
+    // Exporting waits for a different reason, and both, deliberately.
+    // Attaching the fence above is correct and costs nothing: a consumer that
+    // honours implicit synchronisation waits for exactly this work rather
+    // than for the whole queue. But it only helps if the consumer looks, and
+    // NVIDIA has never participated in dma_resv implicit synchronisation —
+    // it is why Wayland grew an explicit-sync protocol at all. Measured:
+    // dropping this wait and trusting the fence alone reads the surface
+    // before it is written roughly one run in five. So the fence goes on for
+    // drivers that respect it and the wait stays for those that do not.
+    //
+    // This is the thing that has to go before anything animates: it stalls
+    // the worker every frame. Removing it needs the *consumer* told to wait,
+    // and wlroots exposes no acquire fence for a compositor-owned buffer
+    // today.
     waitForAllFrames();
   }
 
@@ -1135,6 +1194,24 @@ void RenderWindow::initRenderers()
   quads_.createSceneTargetPipeline(blur_.sceneRenderPass());
 
   renderersReady_ = true;
+}
+
+void RenderWindow::setExportTarget(canvas::DmabufImage *target)
+{
+  if (windowed_) {
+    throw std::runtime_error(
+      "setExportTarget: a window that presents already has a destination");
+  }
+  if (target != nullptr &&
+      (target->width() != extent_.width || target->height() != extent_.height)) {
+    // A mismatch would silently scale the frame — the blit would happily do
+    // it — and the consumer would show a stretched surface with no error
+    // anywhere. Refuse instead: whoever sized the two apart has a bug.
+    throw std::runtime_error("setExportTarget: target is not this window's size");
+  }
+  // Anything still running was recorded against the old destination.
+  waitForAllFrames();
+  exportTarget_ = target;
 }
 
 void RenderWindow::setGlyphAtlas(VkImageView view, VkSampler sampler)

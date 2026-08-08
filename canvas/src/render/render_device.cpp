@@ -21,6 +21,11 @@
 
 #include <vulkan/vulkan_core.h>
 
+// Only for `matchesExportDrmDevice`: a DRM node is identified by its device
+// number, and `fstat` is the only thing that knows one from a descriptor.
+#include <sys/stat.h>
+#include <sys/sysmacros.h>
+
 #define GLFW_INCLUDE_VULKAN
 #include <GLFW/glfw3.h>
 
@@ -158,7 +163,13 @@ void RenderDevice::createVkInstance(
     .applicationVersion = VK_MAKE_VERSION(1, 0, 0),
     .pEngineName        = "No Engine",
     .engineVersion      = VK_MAKE_VERSION(1, 0, 0),
-    .apiVersion         = VK_API_VERSION_1_0,
+    // 1.0 is enough for everything this engine does on its own. Exporting is
+    // the exception: `VK_EXT_image_drm_format_modifier` is built on
+    // `bind_memory2`, `image_format_list`, `sampler_ycbcr_conversion` and
+    // `get_physical_device_properties2`, all four of which are core by 1.2.
+    // Asking for 1.2 there replaces a chain of extension enables (and the
+    // KHR-suffixed entry points that come with them) with a version number.
+    .apiVersion = exportDrmFd_ >= 0 ? VK_API_VERSION_1_2 : VK_API_VERSION_1_0,
   };
 
   VkInstanceCreateInfo createInfo {
@@ -230,6 +241,35 @@ bool RenderDevice::checkExtensionsSupport(
   return true;
 }
 
+bool RenderDevice::matchesExportDrmDevice(VkPhysicalDevice device) const
+{
+  struct stat st {};
+  if (fstat(exportDrmFd_, &st) != 0) return false;
+  const unsigned wantMajor = major(st.st_rdev);
+  const unsigned wantMinor = minor(st.st_rdev);
+
+  VkPhysicalDeviceDrmPropertiesEXT drm {
+    .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DRM_PROPERTIES_EXT,
+  };
+  VkPhysicalDeviceProperties2 props {
+    .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2,
+    .pNext = &drm,
+  };
+  vkGetPhysicalDeviceProperties2(device, &props);
+
+  // Either node names the same GPU. Which one arrives depends on the caller's
+  // backend — wlroots hands out a render node or a primary one — and a device
+  // that reports neither simply does not match, which is the right answer for
+  // a driver without `VK_EXT_physical_device_drm`.
+  if (drm.hasRender && static_cast<unsigned>(drm.renderMajor) == wantMajor &&
+      static_cast<unsigned>(drm.renderMinor) == wantMinor) {
+    return true;
+  }
+  return drm.hasPrimary &&
+         static_cast<unsigned>(drm.primaryMajor) == wantMajor &&
+         static_cast<unsigned>(drm.primaryMinor) == wantMinor;
+}
+
 void RenderDevice::selectSupportedGraphicsCard()
 {
   uint32_t deviceCount = 0;
@@ -242,7 +282,7 @@ void RenderDevice::selectSupportedGraphicsCard()
   std::vector<VkPhysicalDevice> devices(deviceCount);
   vkEnumeratePhysicalDevices(instance_, &deviceCount, devices.data());
 
-  auto isDeviceSuitable = [](VkPhysicalDevice device) {
+  auto isDeviceSuitable = [this](VkPhysicalDevice device) {
     auto checkDeviceExtensionSupport = [device]() {
       uint32_t extensionCount;
       vkEnumerateDeviceExtensionProperties(
@@ -260,6 +300,15 @@ void RenderDevice::selectSupportedGraphicsCard()
 
       return requiredExtensions.empty();
     };
+
+    // Exporting overrides the preference entirely. The GPU is not ours to
+    // pick: it has to be the one the consumer already renders on, or the
+    // buffer we hand over is one it cannot read. "Discrete, with a geometry
+    // shader" is a good default and the wrong question here — on a hybrid
+    // laptop it reliably chooses the *other* card.
+    if (exportDrmFd_ >= 0) {
+      return checkDeviceExtensionSupport() && matchesExportDrmDevice(device);
+    }
 
     VkPhysicalDeviceProperties deviceProperties;
     vkGetPhysicalDeviceProperties(device, &deviceProperties);
@@ -300,6 +349,15 @@ void RenderDevice::selectSupportedGraphicsCard()
     std::cout << physicalDeviceProperties_.deviceName
               << "\n\t MSAA Samples: " << msaaSamples_ << std::endl;
 #endif
+  } else if (exportDrmFd_ >= 0) {
+    // Worth naming precisely rather than falling back to the other GPU. On a
+    // hybrid laptop this means the card the consumer renders on has no Vulkan
+    // driver installed, and rendering on the one that does would produce a
+    // buffer nothing on the other side can import.
+    throw std::runtime_error(
+      std::format("No Vulkan device for the GPU behind the given DRM node "
+                  "({} Vulkan device(s) present, none matching)",
+                  devices.size()));
   } else {
     throw std::runtime_error("No suitable physical device found!");
   }
@@ -374,6 +432,41 @@ void RenderDevice::createLogicalDevice()
     }
   }
 
+  // Also optional, and for the same reason: without it the handover to another
+  // driver falls back to a CPU wait, which is slower but not wrong. Requiring
+  // it would disqualify a GPU over a performance property.
+  if (exportDrmFd_ >= 0) {
+    uint32_t extCount = 0;
+    vkEnumerateDeviceExtensionProperties(physicalDevice_, nullptr, &extCount,
+                                         nullptr);
+    std::vector<VkExtensionProperties> available(extCount);
+    vkEnumerateDeviceExtensionProperties(physicalDevice_, nullptr, &extCount,
+                                         available.data());
+    const bool haveExtension = std::ranges::any_of(
+      available, [](const VkExtensionProperties &ext) {
+        return std::strcmp(ext.extensionName,
+                           VK_KHR_EXTERNAL_SEMAPHORE_FD_EXTENSION_NAME) == 0;
+      });
+
+    // Having the extension is not the same as supporting the handle type.
+    VkPhysicalDeviceExternalSemaphoreInfo semaphoreInfo {
+      .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_EXTERNAL_SEMAPHORE_INFO,
+      .handleType = VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_SYNC_FD_BIT,
+    };
+    VkExternalSemaphoreProperties semaphoreProps {
+      .sType = VK_STRUCTURE_TYPE_EXTERNAL_SEMAPHORE_PROPERTIES,
+    };
+    vkGetPhysicalDeviceExternalSemaphoreProperties(
+      physicalDevice_, &semaphoreInfo, &semaphoreProps);
+
+    exportSyncFd_ = haveExtension &&
+                    (semaphoreProps.externalSemaphoreFeatures &
+                     VK_EXTERNAL_SEMAPHORE_FEATURE_EXPORTABLE_BIT) != 0;
+    if (exportSyncFd_) {
+      deviceExtensions.push_back(VK_KHR_EXTERNAL_SEMAPHORE_FD_EXTENSION_NAME);
+    }
+  }
+
   // Must outlive vkCreateDevice: it is referenced through pNext.
   VkPhysicalDevicePresentModeFifoLatestReadyFeaturesKHR fifoLatestReady {
     .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PRESENT_MODE_FIFO_LATEST_READY_FEATURES_KHR,
@@ -402,6 +495,29 @@ void RenderDevice::createLogicalDevice()
     vkGetDeviceQueue(device_, graphicsAndPresentationQueueFamilyIdx_, i,
                      &slot->queue);
     graphicsQueues_.push_back(std::move(slot));
+  }
+
+  if (exportDrmFd_ >= 0) {
+    getMemoryFd_ = reinterpret_cast<PFN_vkGetMemoryFdKHR>(
+      vkGetDeviceProcAddr(device_, "vkGetMemoryFdKHR"));
+    getModifierProps_ =
+      reinterpret_cast<PFN_vkGetImageDrmFormatModifierPropertiesEXT>(
+        vkGetDeviceProcAddr(device_,
+                            "vkGetImageDrmFormatModifierPropertiesEXT"));
+    if (!getMemoryFd_ || !getModifierProps_) {
+      throw std::runtime_error(
+        "device claims the dmabuf export extensions but has no entry points");
+    }
+    if (exportSyncFd_) {
+      getSemaphoreFd_ = reinterpret_cast<PFN_vkGetSemaphoreFdKHR>(
+        vkGetDeviceProcAddr(device_, "vkGetSemaphoreFdKHR"));
+      exportSyncFd_ = getSemaphoreFd_ != nullptr;
+    }
+    std::cout << "dmabuf export ready on '"
+              << physicalDeviceProperties_.deviceName << "'; handover is "
+              << (exportSyncFd_ ? "fenced (sync_file)"
+                                : "a CPU wait (no sync_file export)")
+              << '\n';
   }
 
   createAllocator();
@@ -1493,6 +1609,22 @@ void RenderDevice::init(const char *applicationName, bool presentCapable)
     if (!glfwInit()) {
       throw std::runtime_error("glfwInit failed");
     }
+  }
+  if (exportDrmFd_ >= 0) {
+    // Required, so they go in before device selection: a GPU that cannot
+    // export is not a GPU this device can be built on, and finding that out
+    // at `vkCreateImage` time is a much more confusing failure.
+    deviceExtensions.insert(
+      deviceExtensions.end(),
+      {VK_KHR_EXTERNAL_MEMORY_FD_EXTENSION_NAME,
+       VK_EXT_EXTERNAL_MEMORY_DMA_BUF_EXTENSION_NAME,
+       VK_EXT_IMAGE_DRM_FORMAT_MODIFIER_EXTENSION_NAME,
+       // Handing an image to a driver that is not this one means releasing
+       // queue ownership to `VK_QUEUE_FAMILY_FOREIGN_EXT`, and naming that
+       // family is only legal with this enabled. Required rather than
+       // optional: without it the release barrier is undefined behaviour that
+       // happens to work, which is worse than not exporting at all.
+       VK_EXT_QUEUE_FAMILY_FOREIGN_EXTENSION_NAME});
   }
 
   enableValidationLayers_ = utils::envFlag("CANVAS_VK_VALIDATION", false);

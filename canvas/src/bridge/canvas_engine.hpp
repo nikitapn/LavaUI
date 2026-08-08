@@ -26,6 +26,8 @@ class Application;
 
 namespace canvas {
 
+class DmabufImage;
+
 // Named specializations so Swift can import/construct them. The primary
 // `std::vector<T>` template is unavailable to Swift (ClangImporter +
 // libstdc++ `vector<bool>`), but a `using` alias of a concrete
@@ -82,6 +84,24 @@ class Engine {
   /// Headless offscreen (tests / PNG smoke).
   [[nodiscard]] VoidResult openOffscreen(const std::string &assetsRoot,
                                          uint32_t width, uint32_t height);
+
+  /// Headless, rendering into a buffer another driver reads.
+  ///
+  /// The compositor path: canvas draws a surface and a wlroots scene graph
+  /// shows it, with no copy between them. Same as `openOffscreen` except that
+  /// the GPU is not ours to choose — it has to be the one the consumer already
+  /// renders on — and the frame's destination is a shared image rather than a
+  /// staging buffer. See `Application::initExported`.
+  ///
+  /// `drmFd` is the consumer's DRM node (wlroots: `wlr_renderer_get_drm_fd`);
+  /// it is read during the call and not owned here.
+  [[nodiscard]] VoidResult openExported(
+    const std::string &assetsRoot, uint32_t width, uint32_t height, int drmFd,
+    const std::vector<uint64_t> &importableModifiers);
+
+  /// Attributes of the exported buffer, or null unless opened with
+  /// `openExported`.
+  const DmabufImage *exportedImage() const;
 
   /// Client: lays out and emits frames for another process to draw. No
   /// Vulkan, no window, no GPU.

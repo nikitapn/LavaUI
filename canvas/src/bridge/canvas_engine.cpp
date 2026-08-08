@@ -111,6 +111,30 @@ VoidResult Engine::openOffscreen(const std::string &assetsRoot, uint32_t width,
   return ok();
 }
 
+VoidResult Engine::openExported(const std::string &assetsRoot, uint32_t width,
+                                uint32_t height, int drmFd,
+                                const std::vector<uint64_t> &importableModifiers)
+{
+  close();
+  impl_->offscreen =
+    std::make_unique<Application>(static_cast<int>(width), static_cast<int>(height));
+  if (auto r = impl_->offscreen->initExported(assetsRoot, drmFd,
+                                              importableModifiers);
+      !r) {
+    impl_->offscreen.reset();
+    return r;
+  }
+  // Offscreen as far as everything else is concerned: no window, no present
+  // loop, frames driven by whoever asks for them. Only the destination differs.
+  impl_->mode = Impl::Mode::Offscreen;
+  return ok();
+}
+
+const DmabufImage *Engine::exportedImage() const
+{
+  return impl_->offscreen ? impl_->offscreen->exportedImage() : nullptr;
+}
+
 VoidResult Engine::openClient(uint32_t width, uint32_t height)
 {
   close();

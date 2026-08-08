@@ -9,6 +9,10 @@
 #include "render/draw_command.hpp"
 #include "util/result.hpp"
 
+namespace canvas {
+class DmabufImage;
+}
+
 class Application {
   struct Impl;
   std::unique_ptr<Impl> impl_;
@@ -36,6 +40,21 @@ public:
   /// never needed the device — only rasterizing into the glyph atlas does,
   /// and that belongs to whoever renders. See `registerFont`.
   [[nodiscard]] canvas::VoidResult initClient();
+
+  /// Offscreen, rendering into a buffer another driver reads — a compositor
+  /// surface. See `canvas::DmabufImage`.
+  ///
+  /// `drmFd` names the GPU the consumer renders on; this one has to be the
+  /// same, and it is pinned rather than preferred. `importableModifiers` is
+  /// what the consumer said it can read, and an empty list is a request to
+  /// fail rather than a request to guess.
+  [[nodiscard]] canvas::VoidResult initExported(
+    const std::string &assetsRoot, int drmFd,
+    const std::vector<uint64_t> &importableModifiers);
+
+  /// The exported buffer, or null unless opened with `initExported`. Owned
+  /// here; the consumer reads its descriptors and does not take them.
+  const canvas::DmabufImage *exportedImage() const;
 
   /// See `AppWindow::setClientSize`. No-op on a window that has a renderer.
   void setClientSize(float width, float height, uint32_t windowId = 0);

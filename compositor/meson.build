@@ -1,20 +1,7 @@
-project(
-  'compositor',
-  'cpp',
-  version: '0.1.0',
-  default_options: ['cpp_std=c++23', 'warning_level=3', 'werror=false'],
-)
-
 wlroots = dependency('wlroots-0.19', version: '>=0.19.0', required: false)
 if not wlroots.found()
   wlroots = dependency('wlroots', version: '>=0.19.0')
 endif
-
-# wlroots guards every header behind this. It is not opt-in extra features:
-# without it `wlr/backend.h` is a hard #error, so nothing compiles at all. The
-# name is a promise about API stability across releases, not about maturity —
-# every compositor built on wlroots defines it.
-add_project_arguments('-DWLR_USE_UNSTABLE', language: 'cpp')
 
 # Wayland protocols are XML, not headers. `wayland-scanner` turns each one into
 # the C the compositor side needs, and wlroots' own headers include the result
@@ -45,10 +32,16 @@ foreach xml : protocol_xml
   )
 endforeach
 
+# Canvas resolves its compiled shaders relative to an assets root it is told.
+# A Swift client passes the SwiftPM resource bundle; a compositor has no
+# bundle, so the build points it at the source tree. `LAVA_CANVAS_ASSETS` in
+# the environment overrides it for an installed binary.
+canvas_assets = meson.project_source_root() / 'canvas/Sources/CanvasResources'
+
 executable(
   'compositor',
   'src/main.cpp',
-  'src/dmabuf.cpp',
+  'src/canvas_surface.cpp',
   protocol_headers,
   dependencies: [
     wlroots,
@@ -56,11 +49,22 @@ executable(
     # Keyboards arrive as evdev keycodes; xkbcommon is what turns those into
     # keysyms, and what the keymap sent to every client is built from.
     dependency('xkbcommon'),
-    # The renderer half of the compositor. Vulkan is what canvas draws with,
-    # and libdrm supplies the FourCC/modifier vocabulary both it and wlroots
-    # describe a shared buffer in.
-    dependency('vulkan'),
+    # libdrm supplies the FourCC/modifier vocabulary that canvas and wlroots
+    # describe a shared buffer in. Vulkan arrives through canvas.
     dependency('libdrm'),
+    # The renderer. Canvas draws the pixels a compositor-side surface shows,
+    # and owns the Vulkan device they are exported from.
+    canvas_dep,
   ],
+  # wlroots guards every header behind this. It is not opt-in extra features:
+  # without it `wlr/backend.h` is a hard #error, so nothing compiles at all.
+  # The name is a promise about API stability across releases, not about
+  # maturity — every compositor built on wlroots defines it. Per target rather
+  # than project-wide because canvas neither needs nor should see it.
+  cpp_args: [
+    '-DWLR_USE_UNSTABLE',
+    '-DLAVA_CANVAS_ASSETS="' + canvas_assets + '"',
+  ],
+  override_options: ['warning_level=3'],
   install: true,
 )

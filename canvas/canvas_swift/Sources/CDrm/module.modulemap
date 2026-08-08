@@ -1,0 +1,4 @@
+module CDrm [system] {
+  header "shim.h"
+  export *
+}

@@ -9,6 +9,7 @@
 
 #include "util/constants.hpp"
 #include "util/key_codes.hpp"
+#include "render/dmabuf_image.hpp"
 #include "render/render_device.hpp"
 #include "render/render_window.hpp"
 #include "window/app_window.hpp"
@@ -59,6 +60,14 @@ struct Application::Impl
   /// down a device that was never created is not a no-op, it is a crash.
   RenderDevice device;
   bool deviceUp = false;
+
+  /// The buffer another driver reads, when this application renders a surface
+  /// for one. Null in every other mode.
+  ///
+  /// Declared here, above `windows`, for its destruction order: members die in
+  /// reverse, so a window that blits into this image is gone before the image
+  /// is. Below `device`, for the same reason in the other direction.
+  std::unique_ptr<canvas::DmabufImage> exportImage;
 
   /// True between `beginFrameGroup` and `endFrameGroup`. Written on the main
   /// thread while nothing is drawing and read by every render worker, so the
@@ -168,6 +177,50 @@ struct Application::Impl
       return canvas::fail(std::string("Application::init: ") + ex.what());
     } catch (...) {
       return canvas::fail("Application::init: unknown error");
+    }
+  }
+
+  /// Offscreen, but rendering into a buffer another driver reads.
+  ///
+  /// Everything `init` does, plus the two agreements a shared buffer needs:
+  /// the GPU is pinned to the one behind `drmFd` (told to the device *before*
+  /// it is brought up, since it decides which card is chosen), and the image
+  /// is allocated with a modifier the consumer can read.
+  ///
+  /// There is no staging readback here, but the buffer is still created —
+  /// `captureFrame` is how a compositor surface gets tested without a second
+  /// process to look at it.
+  canvas::VoidResult initExported(const std::string &assetsRoot, int drmFd,
+                                  const std::vector<uint64_t> &importable)
+  {
+    try {
+      if (!assetsRoot.empty()) {
+        std::filesystem::current_path(assetsRoot);
+      }
+      device.exportToDrmDevice(drmFd);
+      device.init("2d shenanigans!", /*presentCapable=*/false);
+      deviceUp = true;
+      std::cout << "Vulkan initialized (exported surface).\n";
+      if (auto r = finishInitCommon(assetsRoot); !r) return r;
+
+      exportImage = canvas::DmabufImage::create(
+        device, static_cast<uint32_t>(width), static_cast<uint32_t>(height),
+        importable);
+      if (!exportImage) {
+        return canvas::fail(
+          "Application::initExported: could not export a shared image");
+      }
+
+      auto w = std::make_unique<AppWindow>(
+        device, nextWindowId++, static_cast<int>(width), static_cast<int>(height));
+      bringUpWindow(*w);
+      w->renderWindow().setExportTarget(exportImage.get());
+      windows.push_back(std::move(w));
+      return canvas::ok();
+    } catch (const std::exception &ex) {
+      return canvas::fail(std::string("Application::initExported: ") + ex.what());
+    } catch (...) {
+      return canvas::fail("Application::initExported: unknown error");
     }
   }
 
@@ -357,6 +410,18 @@ struct Application::Impl
 
 canvas::VoidResult Application::init(const std::string &assetsRoot) {
   return impl_->init(assetsRoot);
+}
+
+canvas::VoidResult Application::initExported(
+  const std::string &assetsRoot, int drmFd,
+  const std::vector<uint64_t> &importableModifiers)
+{
+  return impl_->initExported(assetsRoot, drmFd, importableModifiers);
+}
+
+const canvas::DmabufImage *Application::exportedImage() const
+{
+  return impl_->exportImage.get();
 }
 
 canvas::VoidResult Application::initClient() { return impl_->initClient(); }

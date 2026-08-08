@@ -4,7 +4,7 @@
 #include <iostream>
 #include <list>
 
-#include "dmabuf.hpp"
+#include "canvas_surface.hpp"
 #include "wlr.hpp"
 
 namespace {
@@ -600,25 +600,43 @@ int main() {
   server.request_cursor.attach(&server.seat->events.request_set_cursor, &server,
                                Server::on_request_cursor);
 
-  // A Vulkan-rendered surface, composited with no copy.
+  // A canvas-rendered surface, composited with no copy.
   //
-  // This is the mechanism LavaUI surfaces will arrive through: canvas draws a
+  // This is the mechanism LavaUI surfaces arrive through: canvas draws a
   // client's frame into an image whose memory is exported as a dmabuf, and the
-  // scene graph shows it alongside ordinary Wayland windows. What the image
-  // contains is the only stand-in part — a flat colour here, a replayed draw
-  // list once canvas is linked.
-  lava::VulkanExporter *exporter = lava::VulkanExporter::create(server.renderer);
-  lava::ExportedImage demo_image;
-  if (exporter && exporter->make_image(480, 320, demo_image) &&
-      exporter->clear_image(demo_image, 0.95f, 0.45f, 0.10f)) {
-    auto *buffer = lava::DmabufBuffer::create(&demo_image);
-    if (auto *node = wlr_scene_buffer_create(&server.scene->tree,
-                                             &buffer->base)) {
-      wlr_scene_node_set_position(&node->node, 120, 90);
-      wlr_log(WLR_INFO, "dmabuf: demo surface placed in the scene");
+  // scene graph shows it alongside ordinary Wayland windows. Both halves are
+  // real now — the draw list below goes through the same replay, the same
+  // pipelines and the same MSAA resolve a windowed canvas app uses. What is
+  // still a stand-in is only *whose* list it is: these commands are written
+  // here rather than arriving from a client's draw arena.
+  auto demo_surface = lava::CanvasSurface::create(server.renderer, 480, 320);
+  if (demo_surface) {
+    using canvas::DrawCommand;
+    using enum canvas::DrawCommandKind;
+    // RGBA8 little-endian — R in the low byte, so these read as 0xAABBGGRR.
+    const std::vector<DrawCommand> commands{
+        {.kind = static_cast<uint32_t>(Rect),
+         .x = 0, .y = 0, .w = 480, .h = 320, .color = 0xff2a1f18u},
+        {.kind = static_cast<uint32_t>(RoundedRect),
+         .x = 32, .y = 28, .w = 416, .h = 120, .color = 0xff1973f2u,
+         .aux = 18.f},
+        {.kind = static_cast<uint32_t>(Circle),
+         .x = 96, .y = 232, .color = 0xff8fd0f2u, .aux = 44.f},
+        {.kind = static_cast<uint32_t>(RoundedRect),
+         .x = 168, .y = 196, .w = 280, .h = 72, .color = 0xff5ac8a8u,
+         .aux = 8.f},
+        {.kind = static_cast<uint32_t>(Line),
+         .x = 32, .y = 172, .w = 448, .h = 172, .color = 0xffffffffu},
+    };
+    if (demo_surface->render(commands)) {
+      if (auto *node = wlr_scene_buffer_create(&server.scene->tree,
+                                               demo_surface->buffer())) {
+        wlr_scene_node_set_position(&node->node, 120, 90);
+        wlr_log(WLR_INFO, "canvas: demo surface placed in the scene");
+      }
+    } else {
+      wlr_log(WLR_ERROR, "canvas: the demo surface drew nothing");
     }
-    // The scene took its own reference; this one has done its job.
-    wlr_buffer_drop(&buffer->base);
   }
 
   const char *socket = wl_display_add_socket_auto(server.display);

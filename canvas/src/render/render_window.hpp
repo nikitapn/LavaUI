@@ -18,6 +18,10 @@
 struct GLFWwindow;
 class RenderDevice;
 
+namespace canvas {
+class DmabufImage;
+}
+
 /// One render target and everything sized to it.
 ///
 /// Windowed, it owns a surface and a swapchain; offscreen, it owns a
@@ -76,6 +80,19 @@ class RenderWindow {
   ///
   /// `list` only has to stay alive for the duration of the call.
   void render(const canvas::DrawList &list);
+
+  /// Sends this window's frames to a buffer another driver reads.
+  ///
+  /// A third destination alongside the swapchain and the staging buffer, and
+  /// the same kind of thing as both: the frame is drawn into this window's own
+  /// attachments and resolved as always, and only the resolve is blitted out.
+  /// Nothing about the render passes, the pipelines or the atlas changes
+  /// because someone else is going to read the result.
+  ///
+  /// Offscreen windows only — a window that presents already has somewhere to
+  /// put its frames. `target` must be this window's size and must outlive it;
+  /// null goes back to the staging buffer. See `canvas::DmabufImage`.
+  void setExportTarget(canvas::DmabufImage *target);
 
   /// Rebinds the glyph atlas this window's batches sample. The atlas belongs
   /// to the shared `TextRenderer`, so growing it invalidates the binding in
@@ -437,6 +454,10 @@ class RenderWindow {
 
   bool        windowed_ = false;
   GLFWwindow *window_   = nullptr;
+
+  /// Where frames go when this window is neither presenting nor being read
+  /// back on the CPU. Borrowed; see `setExportTarget`.
+  canvas::DmabufImage *exportTarget_ = nullptr;
 
   VkSurfaceKHR             surface_   = VK_NULL_HANDLE;
   VkSwapchainKHR           swapchain_ = VK_NULL_HANDLE;

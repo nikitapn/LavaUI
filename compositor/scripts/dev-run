@@ -33,7 +33,9 @@
 # still the way to see real output, on a virtio GPU that has none of this mess.
 set -euo pipefail
 
-cd "$(dirname "$0")/.."
+# The repo root: canvas and the compositor are one meson project now, because
+# the compositor links canvas. `build/` is at the top for the same reason.
+cd "$(dirname "$0")/../.."
 
 # Empty means "decide from the environment" just below.
 mode=""
@@ -83,14 +85,14 @@ esac
 echo "backend: $mode" >&2
 
 if [[ ${#client[@]} -eq 0 ]]; then
-  exec ./build/compositor
+  exec ./build/compositor/compositor
 fi
 
 # With a client: start the compositor, wait for the socket it actually chose
 # (wl_display_add_socket_auto picks the first free name, which is not always
 # wayland-0 if something else is already running), then launch into it.
 log="$(mktemp)"
-stdbuf -oL ./build/compositor >"$log" 2>&1 &
+stdbuf -oL ./build/compositor/compositor >"$log" 2>&1 &
 compositor=$!
 trap 'kill "$compositor" 2>/dev/null || true' EXIT
 

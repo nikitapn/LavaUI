@@ -104,6 +104,33 @@ class RenderDevice
   /// and device extension sets, and whether a queue family has to prove it can
   /// present before being chosen.
   bool presentCapable_ = false;
+
+  // ─── dmabuf export ───────────────────────────────────────────────────────
+  //
+  // Set by `exportToDrmDevice` before `init`, for the one caller whose images
+  // are read by a driver that is not this one: the compositor, handing a
+  // rendered surface to wlroots.
+
+  /// DRM node the chosen GPU must be behind, or -1 when nothing outside this
+  /// process will read our images.
+  ///
+  /// Not owned, and not a preference — a pin. A dmabuf can cross devices in
+  /// principle and is miserable in practice, so "whichever GPU enumerates
+  /// first" is the wrong rule as soon as a second process has to read the
+  /// result. On a hybrid laptop it is also usually the wrong *device*.
+  int exportDrmFd_ = -1;
+  /// True when a semaphore signalled here can be handed out as a sync_file,
+  /// which is what lets a consumer be told to wait instead of us blocking
+  /// until the work is done. Queried, not assumed: having
+  /// `VK_KHR_external_semaphore_fd` is not the same as supporting the handle
+  /// type, and the fallback is correct, just slower.
+  bool exportSyncFd_ = false;
+  PFN_vkGetMemoryFdKHR getMemoryFd_ = nullptr;
+  PFN_vkGetImageDrmFormatModifierPropertiesEXT getModifierProps_ = nullptr;
+  PFN_vkGetSemaphoreFdKHR getSemaphoreFd_ = nullptr;
+
+  /// Whether `device` is the GPU behind `exportDrmFd_`.
+  bool matchesExportDrmDevice(VkPhysicalDevice device) const;
   /// Live only during `init`: the throwaway surface present support is tested
   /// against, since no real window exists yet. See `init`.
   VkSurfaceKHR probeSurface_ = VK_NULL_HANDLE;
@@ -261,6 +288,33 @@ class RenderDevice
   /// surface) triple and there is no real surface yet. Pass false for headless
   /// use (smoke tests, offscreen render).
   void init(const char *applicationName, bool presentCapable);
+
+  /// Pins device selection to the GPU behind `drmFd` and brings the device up
+  /// able to export images as dmabufs. Call before `init`.
+  ///
+  /// Takes the descriptor rather than a device id because the caller has one
+  /// and nothing else: wlroots hands out `wlr_renderer_get_drm_fd`, and which
+  /// GPU that names is a question for `fstat`, not for the caller. The
+  /// descriptor is only read during `init` and is not owned here.
+  ///
+  /// This is the whole of what "render for someone else" means to the device.
+  /// It changes which GPU is chosen and which extensions are enabled; nothing
+  /// downstream of it — render passes, pipelines, the atlas — knows or cares.
+  void exportToDrmDevice(int drmFd) { exportDrmFd_ = drmFd; }
+
+  /// True once `init` has brought up a device that can export dmabufs.
+  bool canExportDmabuf() const { return getMemoryFd_ != nullptr; }
+  /// True when the handover can be fenced rather than waited on.
+  bool canExportSyncFd() const { return exportSyncFd_; }
+
+  // Extension entry points are not in the loader's static table, so they are
+  // resolved once at `init` and handed out rather than looked up per call.
+  PFN_vkGetMemoryFdKHR getMemoryFd() const { return getMemoryFd_; }
+  PFN_vkGetImageDrmFormatModifierPropertiesEXT getModifierProps() const
+  {
+    return getModifierProps_;
+  }
+  PFN_vkGetSemaphoreFdKHR getSemaphoreFd() const { return getSemaphoreFd_; }
 
   VkFormat colorFormat() const { return colorFormat_; }
 
