@@ -1289,7 +1289,10 @@ class SurfaceRegistry : public lava::CompositorHost {
     command.y = static_cast<float>(margin + shadowOffsetY_);
     command.w = static_cast<float>(surface.width);
     command.h = static_cast<float>(surface.frameHeight());
-    command.aux = cornerRadius_;
+    // The silhouette this shadow falls under — square for a foreign window,
+    // whose corners nothing here can round. A rounded shadow under a square
+    // window shows as a wedge of dark poking past the corner.
+    command.aux = frameIsRoundable(surface) ? cornerRadius_ : 0.f;
     command.param = static_cast<uint32_t>(shadowBlur_);
     // Black at the configured opacity. RGBA8 little-endian, so the alpha is
     // the top byte — see the colours in `Decoration`.
@@ -1335,15 +1338,32 @@ class SurfaceRegistry : public lava::CompositorHost {
   /// none: it is flush against an edge of the screen, and rounding the corners
   /// of something that is meant to look like part of the frame would just show
   /// the wallpaper through the gap.
+  ///
+  /// A **foreign window is square, bar included**, and that is a decision
+  /// rather than a limitation left showing. Its content is the client's own
+  /// buffer, composited by `wlr_scene`, which offers no way to reshape it —
+  /// so rounding the bar above it would round two corners of a rectangle whose
+  /// other two stay sharp, and the shadow behind it can match one end or the
+  /// other but not both. Square all the way round is the version that looks
+  /// finished. It stops being the answer the day foreign buffers are drawn
+  /// through canvas, and that is the day this line changes.
   void applyCorners(ClientSurface &surface) {
+    const float radius = cornerRadius_ * (frameIsRoundable(surface) ? 1.f : 0.f);
     if (surface.canvas) {
       const bool top = !surface.decorated;
-      surface.canvas->setCornerRadius(surface.panel ? 0.f : cornerRadius_, top,
+      surface.canvas->setCornerRadius(surface.panel ? 0.f : radius, top,
                                       !surface.panel);
     }
     if (surface.bar) {
-      surface.bar->setCornerRadius(cornerRadius_, true, false);
+      surface.bar->setCornerRadius(radius, true, false);
     }
+  }
+
+  /// Whether this window's whole outline is the compositor's to shape.
+  ///
+  /// False for a Wayland client: the pixels in the middle are its own.
+  static bool frameIsRoundable(const ClientSurface &surface) {
+    return !surface.isForeign() && !surface.panel;
   }
 
   /// Redraws the title bar. Cheap — a strip, from commands built here.

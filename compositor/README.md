@@ -64,6 +64,12 @@ property baked into a surface. Wayland clients keep square corners: their
 pixels are their own buffer, composited by `wlr_scene`, which has no per-node
 shader hook. Rounding those means compositing the scene by hand.
 
+A Wayland window is therefore square *including* its title bar, and its shadow
+is square too. Rounding only the bar would round two corners of a rectangle
+whose other two stay sharp, and the shadow behind it could match one end or the
+other but not both — square all the way round is the version that looks
+finished rather than half-applied.
+
 The shadow is cast by the **focused window only**, which is what says a window
 is active — no border tint to go and look for. Unlike rounding it works for
 Wayland clients as well, because a shadow is drawn on a surface *behind* the
