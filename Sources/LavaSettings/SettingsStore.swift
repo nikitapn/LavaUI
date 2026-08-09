@@ -1,4 +1,4 @@
-#if canImport(CxxCanvas) && canImport(LavaIDL)
+#if canImport(LavaIDL)
 import Foundation
 import LavaClient
 import LavaIDL

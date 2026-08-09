@@ -1,4 +1,4 @@
-#if canImport(CxxCanvas) && canImport(LavaIDL)
+#if canImport(LavaIDL)
 import Foundation
 import LavaClient
 import LavaIDL
@@ -100,16 +100,52 @@ private struct SidebarRow: View {
     }
 }
 
-/// The open page, scrolled.
+/// The pages, all of them, with one showing.
+///
+/// All three stay mounted and the two you are not looking at are `hidden` —
+/// rather than the obvious `switch`, which would build only the open one.
+///
+/// The reason is scroll position. It is held by the renderer against a node
+/// id, so a page destroyed on the way out comes back as a different node with
+/// nothing remembered about it: leave the Keyboard page halfway down its layout
+/// list, go to Appearance, come back, and you are at the top again. Keeping the
+/// nodes alive is what lets each page keep its own place. The cost is three
+/// mounted trees instead of one, which for three settings pages is nothing —
+/// Yoga skips a hidden one entirely, and a page whose state nobody is changing
+/// does not recompute its body either.
 struct SettingsContent: View {
     let store: SettingsStore
 
     var body: some View {
+        // Read here, not inside the `ForEach` closure. Observation records a
+        // dependency on what a `body` reads *while it runs*, and the closure
+        // runs later, when the list mounts its children — so reading it in
+        // there registers nothing, and changing the page updated the sidebar
+        // (whose own body does read it) while the content sat still.
+        let active = store.section
+        // Side by side rather than stacked, though only one is ever shown. In
+        // a column each page's height would be its *content* height — flex
+        // grows free space and there is none when the content is four screens
+        // tall — and a scroll view whose height equals its content has nothing
+        // to scroll. Across, height is the cross axis: `stretch` gives every
+        // page exactly the window's height, which is the viewport it needs.
+        return HStack(flexGrow: 1, alignment: .stretch, spacing: 0) {
+            ForEach(SettingsSection.allCases, id: \.self) { section in
+                page(section)
+                    .flexGrow(1)
+                    .hidden(section != active)
+            }
+        }
+        .flexGrow(1)
+    }
+
+    @ViewBuilder
+    private func page(_ section: SettingsSection) -> some View {
         ScrollView {
             VStack(padding: 26, spacing: 22) {
-                Text(store.section.title, color: Theme.current.textPrimary)
+                Text(section.title, color: Theme.current.textPrimary)
 
-                switch store.section {
+                switch section {
                 case .appearance:
                     AppearancePage(store: store)
                 case .keyboard:
@@ -121,7 +157,6 @@ struct SettingsContent: View {
                 Spacer()
             }
         }
-        .flexGrow(1)
     }
 }
 

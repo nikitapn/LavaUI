@@ -1,4 +1,3 @@
-#if canImport(CxxCanvas)
 import Foundation
 import LavaIDL
 import LavaUI
@@ -179,4 +178,3 @@ public enum SettingsError: Error, CustomStringConvertible {
         }
     }
 }
-#endif

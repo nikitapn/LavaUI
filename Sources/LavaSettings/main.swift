@@ -1,4 +1,4 @@
-#if canImport(CxxCanvas) && canImport(LavaIDL)
+#if canImport(LavaIDL)
 import Foundation
 import LavaClient
 import LavaIDL
@@ -46,7 +46,7 @@ LavaClient.run(editor: editor) { SettingsWindow(store: store) }
 import Foundation
 
 FileHandle.standardError.write(
-    Data("LavaSettings needs the canvas engine and the control plane.\n".utf8)
+    Data("LavaSettings needs the control plane.\n".utf8)
 )
 exit(1)
 #endif
