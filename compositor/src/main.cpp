@@ -422,6 +422,14 @@ struct Server {
   int pointerButtonsDown = 0;
   int32_t lastPressedButton = 0;
 
+  /// Which client surface took the last press, so its release goes to the same
+  /// place. 0 when the press landed somewhere else.
+  ///
+  /// Not the same as the focused surface, and the difference is the whole
+  /// reason it exists: a panel takes presses without taking focus, so routing
+  /// releases by focus delivered them to the window underneath.
+  uint32_t pointerTarget = 0;
+
   /// Carries an in-progress drag to the pointer. True if one was live, which
   /// is the caller's signal that the motion belongs to the drag and not to
   /// whatever is under the cursor.
@@ -1181,7 +1189,13 @@ class SurfaceRegistry : public lava::CompositorHost {
     // The one place focus changes, so the one place anyone else can be told.
     // A panel with a global menu on it is the caller that needs this; there is
     // usually nobody subscribed and this costs a virtual call.
-    if (control_ != nullptr) {
+    //
+    // A panel is never reported as the active window. `focusSurface` already
+    // refuses to focus one, and this is the second half of the same rule: what
+    // a panel wants to know is which *window* is active, and answering "you
+    // are" would be both useless and, for a panel showing that window's menu,
+    // actively wrong.
+    if (control_ != nullptr && (now == nullptr || !now->panel)) {
       control_->postActiveWindow(now != nullptr ? id : 0,
                                  now != nullptr ? now->title : std::string{});
     }
@@ -1358,6 +1372,12 @@ class SurfaceRegistry : public lava::CompositorHost {
       if ((*it)->barNode) wlr_scene_node_destroy(&(*it)->barNode->node);
       if ((*it)->isForeign()) (*it)->window->frameId = 0;
       surfaces_.erase(it);
+      // A press whose surface went away before its release: nothing left to
+      // deliver it to, and the id would otherwise resolve to whatever opened
+      // next.
+      if (server_ != nullptr && server_->pointerTarget == id) {
+        server_->pointerTarget = 0;
+      }
       // Before `surfaceGone`, so a panel hears "nothing is focused" rather
       // than going on showing the menu of a window that has been destroyed.
       if (id == focused_) {
@@ -2885,6 +2905,22 @@ bool Server::beginInteractiveMove(ClientSurface &surface) {
 
 void Server::focusSurface(ClientSurface &surface) {
   if (surfaces == nullptr) return;
+  // A panel is not a window and clicking one does not change which window the
+  // user is in. This is what a desktop means by a panel — layer-shell spells
+  // it `keyboard_interactivity: none` — and here it is load-bearing rather
+  // than a nicety: the panel *is* the global menu, so a click on a menu title
+  // that made the panel active would replace the menu being opened with the
+  // panel's own, which has no items. The menu vanished as it was clicked.
+  //
+  // The press still reaches the panel; only focus stays where it was. Which
+  // also means the keyboard stays in the window the user was typing in, which
+  // is what they expect from clicking a menu.
+  //
+  // The cost is a panel that wants the keyboard — a launcher with a search
+  // field — cannot have it. That wants an interactivity flag on
+  // `CreatePanel`, not an exception here.
+  if (surface.panel) return;
+
   surfaces->setFocused(surface.id);
   surfaces->raise(surface);
   if (surface.isForeign()) {
@@ -3089,8 +3125,8 @@ void Server::on_cursor_button(wl_listener *listener, void *data) {
   }
 
   // A press over a client surface focuses it and is forwarded; a release goes
-  // to whichever surface is focused even if the pointer has since left it, so
-  // a drag that ends outside still ends.
+  // to whichever surface took the press even if the pointer has since left it,
+  // so a drag that ends outside still ends.
   if (server->surfaces != nullptr && server->control != nullptr) {
     const int32_t button = lavaButton;
     double sx = 0, sy = 0;
@@ -3103,16 +3139,28 @@ void Server::on_cursor_button(wl_listener *listener, void *data) {
         // whatever last took a bar click — looking like focus only works from
         // the non-client strip.
         server->focusSurface(*over);
+        // Remembered separately from focus, because they are different
+        // questions and a panel is where they part company: a press on the
+        // panel must not move the keyboard, but its *release* still belongs to
+        // the panel. Routing the release by focus sent it to the window
+        // behind, so every control on a panel got a press it never saw the end
+        // of — and a menu item, which fires on release, never fired at all.
+        server->pointerTarget = over->id;
         over->canvas->pointerButton(button, true, static_cast<float>(sx),
                                     static_cast<float>(sy), 0);
         server->surfaces->pump(*over);
         return;
       }
-    } else if (ClientSurface *target =
-                   server->surfaces->find(server->focusedSurface())) {
-      // Recomputed against the focused surface rather than reusing whatever a
-      // hit test left behind: the pointer may be outside it, and `at` only
-      // fills the offsets for surfaces it actually tested.
+      // Pressed on something that is not a client surface: whatever held the
+      // pointer before does not hold it now.
+      server->pointerTarget = 0;
+    } else if (ClientSurface *target = server->surfaces->find(
+                   server->pointerTarget != 0 ? server->pointerTarget
+                                              : server->focusedSurface())) {
+      server->pointerTarget = 0;
+      // Recomputed against that surface rather than reusing whatever a hit
+      // test left behind: the pointer may be outside it, and `at` only fills
+      // the offsets for surfaces it actually tested.
       // `contentY()`, not `y`. The frame origin is the top of the title bar
       // and the content starts one bar below it, so subtracting `y` puts every
       // release 32 pixels below where it happened.

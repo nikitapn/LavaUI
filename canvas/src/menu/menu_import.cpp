@@ -107,9 +107,6 @@ struct MenuImportHost::Impl {
   uint32_t active = 0;
   DbusmenuClient *client = nullptr;
   std::vector<Item> items;
-  /// DBusMenu id → the live item, for activation and about-to-show. Rebuilt
-  /// with the snapshot, because the ids belong to the layout that produced it.
-  std::unordered_map<int32_t, DbusmenuMenuitem *> live;
   bool dirty = false;
   uint64_t revision = 0;
 
@@ -207,7 +204,6 @@ struct MenuImportHost::Impl {
       client = nullptr;
     }
     items.clear();
-    live.clear();
     dirty = false;
     ++revision;
   }
@@ -237,7 +233,6 @@ struct MenuImportHost::Impl {
   void rebuild()
   {
     items.clear();
-    live.clear();
     dirty = false;
     ++revision;
     if (client == nullptr) return;
@@ -294,16 +289,48 @@ struct MenuImportHost::Impl {
       }
 
       items.push_back(item);
-      live[item.id] = mi;
       append(mi, item.id);
     }
   }
 
+  /// The item with this id, resolved against the tree that exists *now*.
+  ///
+  /// Deliberately a walk rather than a map built with the snapshot. The items
+  /// belong to the `DbusmenuClient`, which frees them whenever the application
+  /// changes its menu — so a map of raw pointers is correct only until the
+  /// next layout update, and a click landing in that window used a freed
+  /// object. It crashed inside libdbusmenu, which is the polite version of
+  /// what a use-after-free usually does.
+  ///
+  /// Refcounting the entries would have fixed the crash and kept a subtler
+  /// bug: an item detached from its client is not a menu item any more, and
+  /// sending it an event asks a question about a menu that no longer exists.
+  /// Walking is O(items) on a structure with tens of entries, and it happens
+  /// once per click.
   DbusmenuMenuitem *find(int32_t id) const
   {
-    auto it = live.find(id);
-    return it == live.end() ? nullptr : it->second;
+    if (client == nullptr) return nullptr;
+    DbusmenuMenuitem *root = dbusmenu_client_get_root(client);
+    return root == nullptr ? nullptr : findIn(root, id);
   }
+
+  static DbusmenuMenuitem *findIn(DbusmenuMenuitem *parent, int32_t id)
+  {
+    for (GList *node = dbusmenu_menuitem_get_children(parent); node != nullptr;
+         node = node->next) {
+      auto *mi = static_cast<DbusmenuMenuitem *>(node->data);
+      if (mi == nullptr) continue;
+      if (dbusmenu_menuitem_get_id(mi) == id) return mi;
+      if (DbusmenuMenuitem *found = findIn(mi, id)) return found;
+    }
+    return nullptr;
+  }
+
+  /// Somewhere for libdbusmenu to call back into. Nothing here wants the
+  /// reply — the layout update that follows is the answer — but the client
+  /// implementation is not obliged to tolerate a null one, and a crash inside
+  /// a library is a poor way to find out which way it went.
+  static void onAboutToShown(DbusmenuMenuitem * /*mi*/, gpointer /*data*/) {}
 };
 
 MenuImportHost::MenuImportHost() : impl_(std::make_unique<Impl>()) {}
@@ -468,7 +495,7 @@ void MenuImportHost::aboutToShow(int32_t itemId)
   if (mi == nullptr) return;
   // Fire and forget: the reply is a "you should re-read this" that arrives as
   // a layout update anyway, which `poll` is already watching for.
-  dbusmenu_menuitem_send_about_to_show(mi, nullptr, nullptr);
+  dbusmenu_menuitem_send_about_to_show(mi, Impl::onAboutToShown, nullptr);
 }
 
 #else // !CANVAS_HAVE_DBUSMENU
