@@ -177,6 +177,92 @@ public enum LavaClient {
         }
     }
 
+    /// Every window on the desktop, and again whenever the set changes.
+    ///
+    /// What a dock or a task list is built on: the compositor knows which
+    /// windows exist and a client cannot see past its own. `handler` runs on
+    /// the frame loop with the whole list — a snapshot, not a delta, so a
+    /// shell that draws what it is handed is always right.
+    ///
+    /// The first call back is the state at subscription, so a dock started
+    /// after the windows are open is not empty until one of them moves.
+    public static func onWindowList(
+        _ handler: @escaping @Sendable (UInt32, [WindowInfo]) -> Void
+    ) {
+        guard let compositor = Self.compositor else { return }
+        let stream: NPRPCBidiStream<WindowListAck, WindowList>
+        do {
+            stream = try compositor.subscribeWindows()
+        } catch {
+            FileHandle.standardError.write(
+                Data("SubscribeWindows failed: \(error)\n".utf8)
+            )
+            return
+        }
+        Task.detached {
+            do {
+                for try await list in stream.reader {
+                    let workspace = list.currentWorkspace
+                    let windows = list.windows
+                    let serial = list.serial
+                    MainQueue.async { handler(workspace, windows) }
+                    try? await stream.writer.write(WindowListAck(serial: serial))
+                }
+            } catch {
+                FileHandle.standardError.write(
+                    Data("window list stream ended: \(error)\n".utf8)
+                )
+            }
+            stream.writer.close()
+        }
+    }
+
+    /// Brings a window forward: restores, raises and focuses it in one go.
+    /// What a dock icon does when it is clicked.
+    public static func activateWindow(_ surfaceId: UInt32) {
+        guard let compositor = Self.compositor else { return }
+        report("ActivateWindow") {
+            try blockingCall {
+                try await compositor.activateWindow(surfaceId: surfaceId)
+            }
+        }
+    }
+
+    /// Hides a window without ending it, by surface id.
+    ///
+    /// The window-state calls on `WindowBridge` act on *this* client's own
+    /// window; a shell acts on somebody else's, which is why this one takes an
+    /// id and lives here rather than there.
+    public static func minimizeWindow(_ surfaceId: UInt32) {
+        guard let compositor = Self.compositor else { return }
+        report("Minimize") {
+            try blockingCall {
+                try await compositor.minimize(surfaceId: surfaceId)
+            }
+        }
+    }
+
+    /// Limits where this surface takes pointer input, in its own coordinates.
+    ///
+    /// For a panel that draws less than it covers — a dock floating over the
+    /// desktop is a full-width strip with a few icons in it, and panels are
+    /// hit-tested above windows, so without this the empty half of the strip
+    /// swallows clicks meant for the window underneath. Pass a zero size to go
+    /// back to the whole surface.
+    public static func setInputRegion(
+        x: Float, y: Float, width: Float, height: Float
+    ) {
+        guard let compositor = Self.compositor, surfaceID != 0 else { return }
+        report("SetInputRegion") {
+            try blockingCall {
+                try await compositor.setInputRegion(
+                    surfaceId: surfaceID, x: Int32(x), y: Int32(y),
+                    w: UInt32(max(0, width)), h: UInt32(max(0, height))
+                )
+            }
+        }
+    }
+
     /// The focused window, now and whenever it changes.
     ///
     /// For a panel: a global menu shows the *active* window's menu, and the
@@ -257,7 +343,7 @@ public enum LavaClient {
                 return try await compositor.createSurface(
                     arenaId: arenaID,
                     width: UInt32(requestedWidth), height: UInt32(requestedHeight),
-                    title: title, frame: Self.frame
+                    title: title, frame: Self.frame, appId: Self.appId
                 )
             }
             input = InputChannel(
@@ -446,6 +532,11 @@ public enum LavaClient {
     nonisolated(unsafe) private static var requestedHeight: Float = 800
     /// Who draws the non-client area. Read once, at `CreateSurface`.
     nonisolated(unsafe) private static var frame: WindowFrame = .server
+    /// What this application calls itself, for a dock looking for its icon.
+    /// The executable's name unless the app says otherwise, which is the
+    /// closest thing a process has to an identity without being told one.
+    nonisolated(unsafe) private static var appId =
+        ProcessInfo.processInfo.processName
     /// Set by `openPanel`; nil for an ordinary window.
     nonisolated(unsafe) private static var panel:
         (edge: PanelEdge, thickness: Float, reserve: Bool)?

@@ -129,6 +129,9 @@ public enum InputEventKind: UInt32, Sendable, Equatable {
     ///
     /// A click is this plus the `.mouseDown` queued immediately after it.
     case nodeHover = 12
+    /// The pointer left this window. No payload — see `PointerLeave` in
+    /// `draw_command.hpp`.
+    case pointerLeave = 13
 }
 
 /// One polled event from `Editor.pollInputEvent`.

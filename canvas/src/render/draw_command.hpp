@@ -354,6 +354,18 @@ enum class InputEventKind : uint32_t {
   /// collapses, but one separated by a `MouseDown` does not, because that is
   /// the pairing the ordering above depends on.
   NodeHover = 12,
+  /// The pointer left this surface. No payload.
+  ///
+  /// A surface hears about the pointer only while it is over it, so without
+  /// this the last `MouseMove` it received is where the pointer appears to
+  /// still be: a hover stays lit after the cursor has gone somewhere else
+  /// entirely, and a panel that reveals itself on approach never learns it
+  /// should hide again.
+  ///
+  /// Sent by whoever owns the pointer — a compositor — when the surface it was
+  /// over stops being the surface it is over. A windowed app gets it from
+  /// GLFW's cursor-leave, which answers the same question for the same reason.
+  PointerLeave = 13,
 };
 
 struct InputEvent {

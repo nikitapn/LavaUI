@@ -4,6 +4,7 @@
 #include <unistd.h>
 
 #include <condition_variable>
+#include <deque>
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
@@ -90,32 +91,120 @@ class LoopQueue {
   std::thread::id loopThread_{};
 };
 
-/// One client's input subscription.
+/// One subscriber's outbound stream, with a thread of its own.
 ///
-/// The writer is pushed to from the loop thread and closed from wherever the
-/// stream ends, so it carries its own lock. `active` is what makes closing
-/// twice — which happens routinely, since a surface can end from either side —
-/// a no-op rather than a use-after-close.
+/// The rule this exists to enforce: **a client can only ever hurt itself**. A
+/// write into a shared-memory ring waits when the ring is full, and a client
+/// that has stopped reading — usually because it crashed a moment ago and its
+/// session has not been reaped yet — never drains one. Anywhere that write
+/// happens on a thread somebody else depends on, one dead shell stops the
+/// desktop: on the Wayland loop it stops every client's calls, and on a broker
+/// thread shared between subscribers it stops the *other* shells from being
+/// told anything.
+///
+/// So every subscription owns a thread and a queue. `post` is what the rest of
+/// the compositor calls, and it takes a lock, appends, and returns.
+///
+/// `Coalesce` says what to do when the queue is not empty: state messages —
+/// the focused window, the window list — keep only the newest, because an
+/// older one is simply wrong. Events do not merge, because each is a fact and
+/// dropping one loses a keystroke.
+template <typename T, bool Coalesce>
+class StreamPump {
+ public:
+  explicit StreamPump(nprpc::StreamWriter<T> &&writer)
+      : writer_(std::move(writer)), worker_([this] { run(); }) {}
+
+  ~StreamPump() {
+    {
+      std::lock_guard lock(mutex_);
+      stop_ = true;
+    }
+    wake_.notify_all();
+    worker_.join();
+  }
+
+  StreamPump(const StreamPump &) = delete;
+  StreamPump &operator=(const StreamPump &) = delete;
+
+  /// Queues one message. Never writes, and therefore never blocks.
+  void post(T value) {
+    {
+      std::lock_guard lock(mutex_);
+      if (closed_) return;
+      if constexpr (Coalesce) {
+        queue_.clear();
+      } else if (queue_.size() >= kMaxQueued) {
+        // Deep enough that a busy frame never trims, shallow enough that a
+        // client which stopped reading cannot cost real memory. The oldest
+        // goes, because the newest events are the ones still worth having.
+        queue_.pop_front();
+      }
+      queue_.push_back(std::move(value));
+    }
+    wake_.notify_one();
+  }
+
+  /// Ends the stream. Safe to call twice — a surface can end from either side.
+  void close() {
+    {
+      std::lock_guard lock(mutex_);
+      if (closed_) return;
+      closed_ = true;
+      queue_.clear();
+    }
+    wake_.notify_all();
+  }
+
+  bool done() {
+    std::lock_guard lock(mutex_);
+    return closed_ || writer_.is_done();
+  }
+
+ private:
+  void run() {
+    for (;;) {
+      T value;
+      {
+        std::unique_lock lock(mutex_);
+        wake_.wait(lock, [this] { return stop_ || closed_ || !queue_.empty(); });
+        if (stop_) return;
+        if (closed_) {
+          // The writer is this thread's to touch, so the stream is finished
+          // here rather than by whoever asked for it.
+          writer_.close();
+          return;
+        }
+        value = std::move(queue_.front());
+        queue_.pop_front();
+      }
+      // Outside the lock and on nobody else's thread: a write that blocks here
+      // delays this one subscriber and nothing else in the compositor.
+      writer_.write(value);
+    }
+  }
+
+  static constexpr size_t kMaxQueued = 4096;
+
+  std::mutex mutex_;
+  std::condition_variable wake_;
+  std::deque<T> queue_;
+  bool closed_ = false;
+  bool stop_ = false;
+  nprpc::StreamWriter<T> writer_;
+  std::thread worker_;
+};
+
+/// One client's input subscription.
 struct Subscriber {
   explicit Subscriber(nprpc::StreamWriter<InputEvent> &&w)
-      : writer(std::move(w)) {}
+      : pump(std::move(w)) {}
 
-  void send(const InputEvent &event) {
-    std::lock_guard lock(mutex);
-    if (!active) return;
-    writer.write(event);
-  }
+  void send(const InputEvent &event) { pump.post(event); }
+  void close() { pump.close(); }
+  bool done() { return pump.done(); }
 
-  void close() {
-    std::lock_guard lock(mutex);
-    if (!active) return;
-    active = false;
-    writer.close();
-  }
-
-  std::mutex mutex;
-  bool active = true;
-  nprpc::StreamWriter<InputEvent> writer;
+  StreamPump<InputEvent, false> pump;
 };
 
 using SubscriberPtr = std::shared_ptr<Subscriber>;
@@ -152,8 +241,9 @@ class InputBroker {
       event.serial = ++serial_;
       targets = it->second;
     }
-    // Outside the lock: a write can block on flow control, and holding the
-    // map's lock across it would stall every other surface's input too.
+    // This runs on the Wayland loop for every pointer motion, and every one of
+    // these is a queue append — see `StreamPump`, which is where the promise
+    // that it cannot block lives.
     for (const auto &sub : targets) sub->send(event);
   }
 
@@ -179,116 +269,75 @@ class InputBroker {
 };
 
 /// One panel's focus subscription.
-///
-/// The same shape as `Subscriber` and for the same reasons — pushed to from
-/// the loop thread, closed from wherever the stream ends — but a different
-/// type, because it carries a different message and there is nothing to gain
-/// from making one class that carries either.
 struct FocusWatcher {
   explicit FocusWatcher(nprpc::StreamWriter<ActiveWindow> &&w)
-      : writer(std::move(w)) {}
+      : pump(std::move(w)) {}
 
-  void send(const ActiveWindow &window) {
-    std::lock_guard lock(mutex);
-    if (!active) return;
-    writer.write(window);
-  }
+  void send(const ActiveWindow &window) { pump.post(window); }
+  void close() { pump.close(); }
+  bool done() { return pump.done(); }
 
-  void close() {
-    std::lock_guard lock(mutex);
-    if (!active) return;
-    active = false;
-    writer.close();
-  }
-
-  std::mutex mutex;
-  bool active = true;
-  nprpc::StreamWriter<ActiveWindow> writer;
+  StreamPump<ActiveWindow, true> pump;
 };
 
 using FocusWatcherPtr = std::shared_ptr<FocusWatcher>;
 
-/// Everyone watching the focus.
+/// One shell's window-list subscription.
+struct ListWatcher {
+  explicit ListWatcher(nprpc::StreamWriter<WindowList> &&w)
+      : pump(std::move(w)) {}
+
+  void send(const WindowList &list) { pump.post(list); }
+  void close() { pump.close(); }
+  bool done() { return pump.done(); }
+
+  StreamPump<WindowList, true> pump;
+};
+
+using ListWatcherPtr = std::shared_ptr<ListWatcher>;
+
+/// Everyone watching one fact about the whole desktop.
 ///
-/// Not per surface, unlike input: focus is one fact about the whole session,
-/// and a panel wants the changes rather than the changes *of* some window it
-/// named. There are normally zero or one of these.
-///
-/// Writes happen on a thread of this broker's own, and that is the important
-/// part rather than an implementation detail. Focus changes on the Wayland
-/// loop — including when a *panel* dies, which destroys its surface and moves
-/// focus — and writing to a subscriber that has just stopped reading can
-/// block on a full ring buffer. On the loop thread that is the whole
-/// compositor stopping: every client's calls time out because the panel that
-/// crashed is not draining a stream. Here it is one idle thread waiting for a
-/// session that is about to be reaped.
-///
-/// The queue holds one value, not a log. Focus is a state — the newest answer
-/// makes every older one wrong — so a panel that was slow gets what is true
-/// now rather than a replay of what it missed.
-class FocusBroker {
+/// Focus and the window list are the same shape — one value, every subscriber
+/// gets it, the newest wins — so they are the same class twice rather than two
+/// classes that drift.
+template <typename Watcher, typename Message>
+class StateBroker {
  public:
-  FocusBroker() : worker_([this] { run(); }) {}
-
-  ~FocusBroker() {
-    {
-      std::lock_guard lock(mutex_);
-      stop_ = true;
-    }
-    wake_.notify_all();
-    worker_.join();
-  }
-
-  void subscribe(const FocusWatcherPtr &watcher) {
+  void subscribe(const std::shared_ptr<Watcher> &watcher) {
     std::lock_guard lock(mutex_);
     watchers_.push_back(watcher);
   }
 
-  void unsubscribe(const FocusWatcherPtr &watcher) {
+  void unsubscribe(const std::shared_ptr<Watcher> &watcher) {
     std::lock_guard lock(mutex_);
     std::erase(watchers_, watcher);
   }
 
-  void broadcast(const ActiveWindow &window) {
+  void broadcast(const Message &message) {
+    std::vector<std::shared_ptr<Watcher>> targets;
     {
       std::lock_guard lock(mutex_);
-      pending_ = window;
-      hasPending_ = true;
+      std::erase_if(watchers_, [](const std::shared_ptr<Watcher> &w) {
+        return w->done();
+      });
+      targets = watchers_;
     }
-    wake_.notify_one();
+    for (const auto &watcher : targets) watcher->send(message);
+  }
+
+  bool empty() {
+    std::lock_guard lock(mutex_);
+    return watchers_.empty();
   }
 
  private:
-  void run() {
-    for (;;) {
-      ActiveWindow window{};
-      std::vector<FocusWatcherPtr> targets;
-      {
-        std::unique_lock lock(mutex_);
-        wake_.wait(lock, [this] { return stop_ || hasPending_; });
-        if (stop_) return;
-        window = pending_;
-        hasPending_ = false;
-        // A panel whose stream has ended is a writer nothing will ever read.
-        std::erase_if(watchers_, [](const FocusWatcherPtr &w) {
-          return w->writer.is_done();
-        });
-        targets = watchers_;
-      }
-      // Outside the lock: a write can block, and a subscription arriving
-      // meanwhile must not wait behind it.
-      for (const auto &watcher : targets) watcher->send(window);
-    }
-  }
-
   std::mutex mutex_;
-  std::condition_variable wake_;
-  std::vector<FocusWatcherPtr> watchers_;
-  ActiveWindow pending_{};
-  bool hasPending_ = false;
-  bool stop_ = false;
-  std::thread worker_;
+  std::vector<std::shared_ptr<Watcher>> watchers_;
 };
+
+using FocusBroker = StateBroker<FocusWatcher, ActiveWindow>;
+using ListBroker = StateBroker<ListWatcher, WindowList>;
 
 /// How the renderer names a file decoded at a given cap.
 ///
@@ -342,8 +391,9 @@ InputEvent make_event(uint32_t kind, float x, float y, int32_t button,
 class CompositorImpl final : public ICompositor_Servant {
  public:
   CompositorImpl(CompositorHost &host, LoopQueue &loop, InputBroker &broker,
-                 FocusBroker &focus)
-      : host_(host), loop_(loop), broker_(broker), focus_(focus) {}
+                 FocusBroker &focus, ListBroker &windows)
+      : host_(host), loop_(loop), broker_(broker), focus_(focus),
+        windows_(windows) {}
 
   // ─── Resources ───────────────────────────────────────────────────────────
 
@@ -418,11 +468,13 @@ class CompositorImpl final : public ICompositor_Servant {
 
   uint32_t CreateSurface(nprpc::flat::Span<char> arenaId, uint32_t width,
                          uint32_t height, nprpc::flat::Span<char> title,
-                         WindowFrame frame) override {
+                         WindowFrame frame,
+                         nprpc::flat::Span<char> appId) override {
     const std::string arena{arenaId};
     const uint32_t id = host_.createSurface(arena, width, height,
                                             std::string{title},
-                                            frame == WindowFrame::server);
+                                            frame == WindowFrame::server,
+                                            std::string{appId});
     if (id == 0) throw ArenaNotFound(arena);
     return id;
   }
@@ -470,6 +522,59 @@ class CompositorImpl final : public ICompositor_Servant {
     Appearance out{};
     host_.appearance(out.cornerRadius, out.shadowBlur, out.shadowOpacity,
                      out.shadowOffsetY);
+    return out;
+  }
+
+  void ActivateWindow(uint32_t surfaceId) override {
+    if (!host_.activateWindow(surfaceId)) throw SurfaceNotFound(surfaceId);
+  }
+
+  void SetInputRegion(uint32_t surfaceId, int32_t x, int32_t y, uint32_t w,
+                      uint32_t h) override {
+    if (!host_.setInputRegion(surfaceId, x, y, w, h)) {
+      throw SurfaceNotFound(surfaceId);
+    }
+  }
+
+  nprpc::Task<> SubscribeWindows(
+      nprpc::BidiStream<WindowListAck, WindowList> stream) override {
+    auto watcher = std::make_shared<ListWatcher>(std::move(stream.writer));
+    windows_.subscribe(watcher);
+
+    // The state at subscription: a dock that started after the windows did
+    // would otherwise be empty until somebody opened or closed one.
+    watcher->send(currentList());
+
+    try {
+      while (auto ack = co_await stream.reader) {
+        (void)ack;
+      }
+    } catch (...) {
+      windows_.unsubscribe(watcher);
+      watcher->close();
+      throw;
+    }
+    windows_.unsubscribe(watcher);
+    watcher->close();
+    co_return;
+  }
+
+  /// The window list as it is right now, in wire form.
+  WindowList currentList() const {
+    WindowList out{};
+    std::vector<CompositorHost::WindowEntry> entries;
+    host_.windowList(out.currentWorkspace, entries);
+    out.windows.reserve(entries.size());
+    for (const auto &entry : entries) {
+      WindowInfo info{};
+      info.surfaceId = entry.surfaceId;
+      info.title = entry.title;
+      info.appId = entry.appId;
+      info.workspace = entry.workspace;
+      info.minimized = entry.minimized;
+      info.focused = entry.focused;
+      out.windows.push_back(std::move(info));
+    }
     return out;
   }
 
@@ -622,6 +727,7 @@ class CompositorImpl final : public ICompositor_Servant {
   LoopQueue &loop_;
   InputBroker &broker_;
   FocusBroker &focus_;
+  ListBroker &windows_;
 
   /// Registered images, three ways round: what a key resolves to, how many
   /// clients hold it, and which key an id came from. No lock, unlike
@@ -685,7 +791,8 @@ class ControlPlaneImpl final : public ControlPlane {
       return false;
     }
 
-    servant_ = std::make_unique<CompositorImpl>(host, queue_, broker_, focus_);
+    servant_ = std::make_unique<CompositorImpl>(host, queue_, broker_, focus_,
+                                                windows_);
     const nprpc::ObjectId oid = poa_->activate_object_with_id(
         0, servant_.get(), nprpc::ObjectActivationFlags::shm);
 
@@ -716,6 +823,17 @@ class ControlPlaneImpl final : public ControlPlane {
     broker_.closeAll(surfaceId);
   }
 
+  void postWindowList() override {
+    // Nothing to build when nobody is listening: a desktop with no dock and no
+    // task list should not pay for a snapshot on every focus change.
+    if (windows_.empty()) return;
+    WindowList list = servant_->currentList();
+    // Monotonic, so a shell's ack names the snapshot it drew — the same
+    // contract `InputEvent.serial` has.
+    list.serial = ++listSerial_;
+    windows_.broadcast(list);
+  }
+
   void postActiveWindow(uint32_t surfaceId,
                         const std::string &title) override {
     ActiveWindow window{};
@@ -735,6 +853,8 @@ class ControlPlaneImpl final : public ControlPlane {
   LoopQueue queue_;
   InputBroker broker_;
   FocusBroker focus_;
+  ListBroker windows_;
+  uint32_t listSerial_ = 0;
   nprpc::Rpc *rpc_ = nullptr;
   nprpc::Poa *poa_ = nullptr;
   std::unique_ptr<CompositorImpl> servant_;

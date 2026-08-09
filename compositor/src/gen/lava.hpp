@@ -343,6 +343,125 @@ public:
 };
 } // namespace flat
 
+struct WindowInfo {
+  uint32_t surfaceId;
+  std::string title;
+  std::string appId;
+  uint32_t workspace;
+  bool minimized;
+  bool focused;
+};
+
+namespace flat {
+struct WindowInfo {
+  uint32_t surfaceId;
+  ::nprpc::flat::String title;
+  ::nprpc::flat::String appId;
+  uint32_t workspace;
+  ::nprpc::flat::Boolean minimized;
+  ::nprpc::flat::Boolean focused;
+};
+
+class WindowInfo_Direct {
+  ::nprpc::flat_buffer& buffer_;
+  const std::uint32_t offset_;
+
+  auto& base() noexcept { return *reinterpret_cast<WindowInfo*>(reinterpret_cast<std::byte*>(buffer_.data().data()) + offset_); }
+  auto const& base() const noexcept { return *reinterpret_cast<const WindowInfo*>(reinterpret_cast<const std::byte*>(buffer_.data().data()) + offset_); }
+public:
+  uint32_t offset() const noexcept { return offset_; }
+  void* __data() noexcept { return (void*)&base(); }
+  WindowInfo_Direct(::nprpc::flat_buffer& buffer, std::uint32_t offset)
+    : buffer_(buffer)
+    , offset_(offset)
+  {
+  }
+  const uint32_t& surfaceId() const noexcept { return base().surfaceId;}
+  uint32_t& surfaceId() noexcept { return base().surfaceId;}
+  void title(const char* str) { new (&base().title) ::nprpc::flat::String(buffer_, str); }
+  void title(const std::string& str) { new (&base().title) ::nprpc::flat::String(buffer_, str); }
+  auto title() noexcept { return (::nprpc::flat::Span<char>)base().title; }
+  auto title() const noexcept { return (::nprpc::flat::Span<const char>)base().title; }
+  auto title_d() noexcept { return ::nprpc::flat::String_Direct1(buffer_, offset_ + offsetof(WindowInfo, title)); }
+  void appId(const char* str) { new (&base().appId) ::nprpc::flat::String(buffer_, str); }
+  void appId(const std::string& str) { new (&base().appId) ::nprpc::flat::String(buffer_, str); }
+  auto appId() noexcept { return (::nprpc::flat::Span<char>)base().appId; }
+  auto appId() const noexcept { return (::nprpc::flat::Span<const char>)base().appId; }
+  auto appId_d() noexcept { return ::nprpc::flat::String_Direct1(buffer_, offset_ + offsetof(WindowInfo, appId)); }
+  const uint32_t& workspace() const noexcept { return base().workspace;}
+  uint32_t& workspace() noexcept { return base().workspace;}
+  const ::nprpc::flat::Boolean& minimized() const noexcept { return base().minimized;}
+  ::nprpc::flat::Boolean& minimized() noexcept { return base().minimized;}
+  const ::nprpc::flat::Boolean& focused() const noexcept { return base().focused;}
+  ::nprpc::flat::Boolean& focused() noexcept { return base().focused;}
+};
+} // namespace flat
+
+struct WindowList {
+  uint32_t serial;
+  uint32_t currentWorkspace;
+  std::vector<WindowInfo> windows;
+};
+
+namespace flat {
+struct WindowList {
+  uint32_t serial;
+  uint32_t currentWorkspace;
+  ::nprpc::flat::Vector<flat::WindowInfo> windows;
+};
+
+class WindowList_Direct {
+  ::nprpc::flat_buffer& buffer_;
+  const std::uint32_t offset_;
+
+  auto& base() noexcept { return *reinterpret_cast<WindowList*>(reinterpret_cast<std::byte*>(buffer_.data().data()) + offset_); }
+  auto const& base() const noexcept { return *reinterpret_cast<const WindowList*>(reinterpret_cast<const std::byte*>(buffer_.data().data()) + offset_); }
+public:
+  uint32_t offset() const noexcept { return offset_; }
+  void* __data() noexcept { return (void*)&base(); }
+  WindowList_Direct(::nprpc::flat_buffer& buffer, std::uint32_t offset)
+    : buffer_(buffer)
+    , offset_(offset)
+  {
+  }
+  const uint32_t& serial() const noexcept { return base().serial;}
+  uint32_t& serial() noexcept { return base().serial;}
+  const uint32_t& currentWorkspace() const noexcept { return base().currentWorkspace;}
+  uint32_t& currentWorkspace() noexcept { return base().currentWorkspace;}
+  void windows(std::uint32_t elements_size) { new (&base().windows) ::nprpc::flat::Vector<flat::WindowInfo>(buffer_, elements_size); }
+  auto windows_d() noexcept { return ::nprpc::flat::Vector_Direct2<flat::WindowInfo,flat::WindowInfo_Direct>(buffer_, offset_ + offsetof(WindowList, windows)); }
+  auto windows() noexcept { return ::nprpc::flat::Span_ref<flat::WindowInfo, flat::WindowInfo_Direct>(buffer_, base().windows.range(buffer_.data().data())); }
+};
+} // namespace flat
+
+struct WindowListAck {
+  uint32_t serial;
+};
+
+namespace flat {
+struct WindowListAck {
+  uint32_t serial;
+};
+
+class WindowListAck_Direct {
+  ::nprpc::flat_buffer& buffer_;
+  const std::uint32_t offset_;
+
+  auto& base() noexcept { return *reinterpret_cast<WindowListAck*>(reinterpret_cast<std::byte*>(buffer_.data().data()) + offset_); }
+  auto const& base() const noexcept { return *reinterpret_cast<const WindowListAck*>(reinterpret_cast<const std::byte*>(buffer_.data().data()) + offset_); }
+public:
+  uint32_t offset() const noexcept { return offset_; }
+  void* __data() noexcept { return (void*)&base(); }
+  WindowListAck_Direct(::nprpc::flat_buffer& buffer, std::uint32_t offset)
+    : buffer_(buffer)
+    , offset_(offset)
+  {
+  }
+  const uint32_t& serial() const noexcept { return base().serial;}
+  uint32_t& serial() noexcept { return base().serial;}
+};
+} // namespace flat
+
 struct FocusAck {
   uint32_t surfaceId;
 };
@@ -496,12 +615,15 @@ public:
   virtual ImageInfo RegisterImage (::nprpc::flat::Span<char> path, uint32_t maxPixelSize) = 0;
   virtual ImageInfo RegisterImageData (::nprpc::flat::Span<uint8_t> bytes, uint32_t maxPixelSize) = 0;
   virtual void ReleaseImage (uint32_t id) = 0;
-  virtual uint32_t CreateSurface (::nprpc::flat::Span<char> arenaId, uint32_t width, uint32_t height, ::nprpc::flat::Span<char> title, WindowFrame frame) = 0;
+  virtual uint32_t CreateSurface (::nprpc::flat::Span<char> arenaId, uint32_t width, uint32_t height, ::nprpc::flat::Span<char> title, WindowFrame frame, ::nprpc::flat::Span<char> appId) = 0;
   virtual uint32_t CreatePanel (::nprpc::flat::Span<char> arenaId, PanelEdge edge, uint32_t thickness, ::nprpc::flat::Boolean reserve, ::nprpc::flat::Span<char> title) = 0;
   virtual void BeginMove (uint32_t surfaceId) = 0;
   virtual bool ToggleMaximize (uint32_t surfaceId) = 0;
   virtual void Minimize (uint32_t surfaceId) = 0;
   virtual void SetPanelThickness (uint32_t surfaceId, uint32_t thickness, uint32_t reserved) = 0;
+  virtual ::nprpc::Task<> SubscribeWindows (::nprpc::BidiStream<WindowListAck, WindowList> stream) = 0;
+  virtual void ActivateWindow (uint32_t surfaceId) = 0;
+  virtual void SetInputRegion (uint32_t surfaceId, int32_t x, int32_t y, uint32_t w, uint32_t h) = 0;
   virtual Appearance GetAppearance () = 0;
   virtual ::nprpc::Task<> SubscribeActiveWindow (::nprpc::BidiStream<FocusAck, ActiveWindow> stream) = 0;
   virtual void DestroySurface (uint32_t surfaceId) = 0;
@@ -530,8 +652,8 @@ public:
   ::nprpc::Task<ImageInfo> RegisterImageDataAsync (::nprpc::flat::Span<const uint8_t> bytes, uint32_t maxPixelSize, std::stop_token st = {});
   void ReleaseImage (uint32_t id);
   ::nprpc::Task<void> ReleaseImageAsync (uint32_t id, std::stop_token st = {});
-  uint32_t CreateSurface (const std::string& arenaId, uint32_t width, uint32_t height, const std::string& title, const WindowFrame& frame);
-  ::nprpc::Task<uint32_t> CreateSurfaceAsync (const std::string& arenaId, uint32_t width, uint32_t height, const std::string& title, const WindowFrame& frame, std::stop_token st = {});
+  uint32_t CreateSurface (const std::string& arenaId, uint32_t width, uint32_t height, const std::string& title, const WindowFrame& frame, const std::string& appId);
+  ::nprpc::Task<uint32_t> CreateSurfaceAsync (const std::string& arenaId, uint32_t width, uint32_t height, const std::string& title, const WindowFrame& frame, const std::string& appId, std::stop_token st = {});
   uint32_t CreatePanel (const std::string& arenaId, const PanelEdge& edge, uint32_t thickness, bool reserve, const std::string& title);
   ::nprpc::Task<uint32_t> CreatePanelAsync (const std::string& arenaId, const PanelEdge& edge, uint32_t thickness, bool reserve, const std::string& title, std::stop_token st = {});
   void BeginMove (uint32_t surfaceId);
@@ -542,6 +664,11 @@ public:
   ::nprpc::Task<void> MinimizeAsync (uint32_t surfaceId, std::stop_token st = {});
   void SetPanelThickness (uint32_t surfaceId, uint32_t thickness, uint32_t reserved);
   ::nprpc::Task<void> SetPanelThicknessAsync (uint32_t surfaceId, uint32_t thickness, uint32_t reserved, std::stop_token st = {});
+  std::pair<::nprpc::StreamWriter<WindowListAck>, ::nprpc::StreamReader<WindowList>> SubscribeWindows ();
+  void ActivateWindow (uint32_t surfaceId);
+  ::nprpc::Task<void> ActivateWindowAsync (uint32_t surfaceId, std::stop_token st = {});
+  void SetInputRegion (uint32_t surfaceId, int32_t x, int32_t y, uint32_t w, uint32_t h);
+  ::nprpc::Task<void> SetInputRegionAsync (uint32_t surfaceId, int32_t x, int32_t y, uint32_t w, uint32_t h, std::stop_token st = {});
   Appearance GetAppearance ();
   ::nprpc::Task<Appearance> GetAppearanceAsync (std::stop_token st = {});
   std::pair<::nprpc::StreamWriter<FocusAck>, ::nprpc::StreamReader<ActiveWindow>> SubscribeActiveWindow ();
@@ -563,6 +690,93 @@ public:
 namespace helper {
 }
 } // module lava
+namespace nprpc_stream {
+template<>
+inline ::lava::WindowList deserialize<::lava::WindowList>(::nprpc::flat_buffer& buf) {
+  ::nprpc::impl::flat::StreamChunk_Direct __chunk(buf, sizeof(::nprpc::impl::Header));
+  auto __span = __chunk.data();
+  ::nprpc::flat_buffer __elem_buf;
+  auto __mb = __elem_buf.prepare(__span.size());
+  std::memcpy(__mb.data(), __span.data(), __span.size());
+  __elem_buf.commit(__span.size());
+  ::lava::WindowList __result;
+  ::lava::flat::WindowList_Direct __d(__elem_buf, 0);
+  __result.serial = __d.serial();
+  __result.currentWorkspace = __d.currentWorkspace();
+  {
+    auto span = __d.windows();
+    __result.windows.resize(span.size());
+    auto it2 = std::begin(__result.windows);
+    for (auto e : span) {
+      (*it2).surfaceId = e.surfaceId();
+      (*it2).title = (std::string_view)e.title();
+      (*it2).appId = (std::string_view)e.appId();
+      (*it2).workspace = e.workspace();
+      (*it2).minimized = (bool)e.minimized();
+      (*it2).focused = (bool)e.focused();
+      ++it2;
+    }
+  }
+  return __result;
+}
+} // namespace nprpc_stream
+
+namespace nprpc_stream {
+template<>
+inline ::lava::WindowListAck deserialize<::lava::WindowListAck>(::nprpc::flat_buffer& buf) {
+  ::nprpc::impl::flat::StreamChunk_Direct __chunk(buf, sizeof(::nprpc::impl::Header));
+  auto __span = __chunk.data();
+  ::nprpc::flat_buffer __elem_buf;
+  auto __mb = __elem_buf.prepare(__span.size());
+  std::memcpy(__mb.data(), __span.data(), __span.size());
+  __elem_buf.commit(__span.size());
+  ::lava::WindowListAck __result;
+  ::lava::flat::WindowListAck_Direct __d(__elem_buf, 0);
+  memcpy(&__result, __d.__data(), 4);
+  return __result;
+}
+} // namespace nprpc_stream
+
+namespace nprpc_stream {
+template<>
+inline ::nprpc::flat_buffer serialize<::lava::WindowListAck>(const ::lava::WindowListAck& value) {
+  ::nprpc::flat_buffer __buf;
+  __buf.prepare(4);
+  __buf.commit(4);
+  ::lava::flat::WindowListAck_Direct __d(__buf, 0);
+  memcpy(__d.__data(), &value, 4);
+  return __buf;
+}
+} // namespace nprpc_stream
+
+namespace nprpc_stream {
+template<>
+inline ::nprpc::flat_buffer serialize<::lava::WindowList>(const ::lava::WindowList& value) {
+  ::nprpc::flat_buffer __buf;
+  __buf.prepare(16 + 128);
+  __buf.commit(16);
+  ::lava::flat::WindowList_Direct __d(__buf, 0);
+  __d.serial() = value.serial;
+  __d.currentWorkspace() = value.currentWorkspace;
+  __d.windows(static_cast<uint32_t>(value.windows.size()));
+  {
+    auto span = __d.windows();
+    auto it = value.windows.begin();
+    for (auto e : span) {
+      auto __ptr = ::nprpc::make_wrapper1(*it);
+        e.surfaceId() = __ptr->surfaceId;
+        e.title(__ptr->title);
+        e.appId(__ptr->appId);
+        e.workspace() = __ptr->workspace;
+        e.minimized() = __ptr->minimized;
+        e.focused() = __ptr->focused;
+      ++it;
+    }
+  }
+  return __buf;
+}
+} // namespace nprpc_stream
+
 namespace nprpc_stream {
 template<>
 inline ::lava::ActiveWindow deserialize<::lava::ActiveWindow>(::nprpc::flat_buffer& buf) {

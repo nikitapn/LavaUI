@@ -133,6 +133,16 @@ public enum PointerState {
 
     public static func set(x: Float, y: Float) { last = (x, y) }
     public static var window: (x: Float, y: Float) { last }
+
+    /// Called when the pointer leaves this window entirely.
+    ///
+    /// A window hears about the pointer only while it is inside, so "it has
+    /// gone" is information no amount of watching positions can produce. A
+    /// dock that reveals itself on approach hides again from here; hover
+    /// clearing is handled without it.
+    nonisolated(unsafe) public static var onLeave: (@Sendable () -> Void)?
+
+    static func left() { onLeave?() }
 }
 
 /// How many leaves want to know where the pointer is *inside* them.

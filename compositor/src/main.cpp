@@ -422,6 +422,10 @@ struct Server {
   int pointerButtonsDown = 0;
   int32_t lastPressedButton = 0;
 
+  /// Which client surface the pointer is currently over, so the one it leaves
+  /// can be told. 0 when it is over none.
+  uint32_t pointerOver = 0;
+
   /// Which client surface took the last press, so its release goes to the same
   /// place. 0 when the press landed somewhere else.
   ///
@@ -594,6 +598,29 @@ struct ClientSurface {
   std::unique_ptr<lava::CanvasSurface> bar;
   wlr_scene_buffer *barNode = nullptr;
   lava::DecorationHit hovered = lava::DecorationHit::Bar;
+
+  /// What the application calls itself — an xdg-shell `app_id`, or what a
+  /// lava client passed to `CreateSurface`. The identity a dock finds an icon
+  /// by, and the one two windows of an application share; the title is not
+  /// that, since it changes with the document.
+  std::string appId;
+
+  /// Where this surface takes pointer input, in its own coordinates. Zero
+  /// width or height means the whole surface, which is every window's answer
+  /// and most panels'. See `SetInputRegion`.
+  int32_t inputX = 0;
+  int32_t inputY = 0;
+  uint32_t inputW = 0;
+  uint32_t inputH = 0;
+
+  /// Whether `sx, sy` — already surface-local — is somewhere this surface
+  /// accepts input. A dock is a full-width strip with a few icons in it, and
+  /// the strip between them belongs to whatever is underneath.
+  bool acceptsInput(double sx, double sy) const {
+    if (inputW == 0 || inputH == 0) return true;
+    return sx >= inputX && sy >= inputY && sx < inputX + inputW &&
+           sy < inputY + inputH;
+  }
 
   /// The drop shadow: its own surface, sitting behind the window.
   ///
@@ -781,6 +808,7 @@ class SurfaceRegistry : public lava::CompositorHost {
     // The pointer is not going with it, so nothing on its frame is hovered any
     // more — and a button left lit would still be lit when it comes back.
     hoverBar(surface, lava::DecorationHit::Bar);
+    announceWindows();
   }
 
   /// Topmost hit under a layout-space point. Front of `surfaces_` is topmost.
@@ -813,7 +841,7 @@ class SurfaceRegistry : public lava::CompositorHost {
       if (s->hitBar(lx, ly, sx, sy)) {
         return {s.get(), SurfaceHitKind::Bar, sx, sy};
       }
-      if (s->hit(lx, ly, sx, sy)) {
+      if (s->hit(lx, ly, sx, sy) && s->acceptsInput(sx, sy)) {
         return {s.get(),
                 s->isForeign() ? SurfaceHitKind::ForeignContent
                                : SurfaceHitKind::ClientContent,
@@ -953,6 +981,7 @@ class SurfaceRegistry : public lava::CompositorHost {
     } else {
       std::erase(minimizedOrder_, surface.id);
     }
+    announceWindows();
   }
 
   /// Un-hides the most recently minimized window *of this workspace* and
@@ -1028,13 +1057,14 @@ class SurfaceRegistry : public lava::CompositorHost {
 
   uint32_t createSurface(const std::string &arenaId, uint32_t width,
                          uint32_t height, const std::string &title,
-                         bool decorated) override {
+                         bool decorated, const std::string &appId) override {
     if (workspaces_ == nullptr) return 0;
     // On whichever workspace is current, because that is where the user was
     // when they asked for it.
     const uint32_t id = openSurface(arenaId, width, height, title,
                                     workspaces_->currentTree(),
                                     workspaces_->current, decorated);
+    if (ClientSurface *opened = find(id)) opened->appId = appId;
     // A window that opens is the window the user is now looking at, and it
     // should not need a click to become so. It matters more than it used to:
     // focus is what a panel's global menu follows, so a window that opened
@@ -1043,6 +1073,9 @@ class SurfaceRegistry : public lava::CompositorHost {
     if (id != 0 && server_ != nullptr) {
       if (ClientSurface *surface = find(id)) server_->focusSurface(*surface);
     }
+    // Now that it has its identity and its focus: one announcement describing
+    // the window as it actually is.
+    announceWindows();
     return id;
   }
 
@@ -1052,7 +1085,8 @@ class SurfaceRegistry : public lava::CompositorHost {
   /// here. Without it a toplevel sits at the scene origin forever, because a
   /// Wayland client cannot place its own window and nothing else would.
   uint32_t adoptWindow(FramedWindow *window, const std::string &title,
-                       uint32_t width, uint32_t height, bool decorated = true);
+                       uint32_t width, uint32_t height,
+                       const std::string &appId, bool decorated = true);
 
   /// A Wayland client committed at a new size.
   ///
@@ -1080,6 +1114,7 @@ class SurfaceRegistry : public lava::CompositorHost {
     if (control_ != nullptr && surface.id == focused_) {
       control_->postActiveWindow(surface.id, surface.title);
     }
+    announceWindows();
   }
 
   /// Brings a window to the front of its workspace, frame and all.
@@ -1330,6 +1365,16 @@ class SurfaceRegistry : public lava::CompositorHost {
     }
   }
 
+  /// "The window set changed" — to whatever shell is watching.
+  ///
+  /// Called from everywhere a dock would draw something different: a window
+  /// opening, closing, renaming itself, taking focus, being minimized, or
+  /// moving between workspaces. Cheap when nobody subscribed, which is the
+  /// usual case — the control plane checks before building a snapshot.
+  void announceWindows() {
+    if (control_ != nullptr) control_->postWindowList();
+  }
+
   /// Rounds a surface the way its place in the window says it should be.
   ///
   /// A decorated window is two surfaces stacked, so each rounds the pair of
@@ -1405,6 +1450,7 @@ class SurfaceRegistry : public lava::CompositorHost {
       control_->postActiveWindow(now != nullptr ? id : 0,
                                  now != nullptr ? now->title : std::string{});
     }
+    announceWindows();
   }
 
   /// Lights whichever control is under the pointer. True if it changed.
@@ -1555,6 +1601,38 @@ class SurfaceRegistry : public lava::CompositorHost {
     return true;
   }
 
+  void windowList(uint32_t &outCurrentWorkspace,
+                  std::vector<WindowEntry> &outWindows) const override {
+    outCurrentWorkspace = workspaces_ != nullptr ? workspaces_->current : 0;
+    outWindows.clear();
+    for (const auto &surface : surfaces_) {
+      // Panels are furniture, not windows. A dock listing itself, and the
+      // taskbar beside it, would be a dock listing the desktop's own parts.
+      if (surface->panel) continue;
+      WindowEntry entry;
+      entry.surfaceId = surface->id;
+      entry.title = surface->title;
+      entry.appId = surface->appId;
+      entry.workspace = surface->workspace;
+      entry.minimized = surface->minimized;
+      entry.focused = surface->id == focused_;
+      outWindows.push_back(std::move(entry));
+    }
+  }
+
+  bool activateWindow(uint32_t id) override;
+
+  bool setInputRegion(uint32_t id, int32_t x, int32_t y, uint32_t w,
+                      uint32_t h) override {
+    ClientSurface *surface = find(id);
+    if (surface == nullptr) return false;
+    surface->inputX = x;
+    surface->inputY = y;
+    surface->inputW = w;
+    surface->inputH = h;
+    return true;
+  }
+
   void appearance(float &outCornerRadius, float &outShadowBlur,
                   float &outShadowOpacity,
                   float &outShadowOffsetY) const override {
@@ -1607,6 +1685,7 @@ class SurfaceRegistry : public lava::CompositorHost {
       }
       if (control_) control_->surfaceGone(id);
       wlr_log(WLR_INFO, "surface %u: gone", id);
+      announceWindows();
       return true;
     }
     return false;
@@ -1817,6 +1896,10 @@ class SurfaceRegistry : public lava::CompositorHost {
     wlr_log(WLR_INFO, "surface %u: '%s' %ux%u on arena '%s'%s", id,
             title.c_str(), width, height, arenaId.c_str(),
             decorated ? "" : ", client-framed");
+    // Deliberately silent: the caller is still deciding what this surface *is*
+    // — whether it is a panel, what application it belongs to — and a shell
+    // told about it now would draw a window with no name that turns into a
+    // panel a moment later. `createSurface` announces when it has finished.
     return id;
   }
 
@@ -1888,12 +1971,14 @@ class SurfaceRegistry : public lava::CompositorHost {
 
 uint32_t SurfaceRegistry::adoptWindow(FramedWindow *window,
                                      const std::string &title, uint32_t width,
-                                     uint32_t height, bool decorated) {
+                                     uint32_t height, const std::string &appId,
+                                     bool decorated) {
   if (workspaces_ == nullptr) return 0;
   auto surface = std::make_unique<ClientSurface>();
   surface->id = nextId_++;
   surface->window = window;
   surface->title = title.empty() ? "Untitled" : title;
+  surface->appId = appId;
   surface->width = width < kMinSurface ? kMinSurface : width;
   surface->height = height < kMinSurface ? kMinSurface : height;
   surface->workspace = window->workspace;
@@ -1935,6 +2020,7 @@ uint32_t SurfaceRegistry::adoptWindow(FramedWindow *window,
   applyCorners(*surface);
   place(*surface);
   drawBar(*surface);
+  announceWindows();
   surfaces_.push_front(std::move(surface));
   wlr_log(WLR_INFO, "window %u: '%s' %ux%u on workspace %u", id, title.c_str(),
           surfaces_.front()->width, surfaces_.front()->height,
@@ -2026,8 +2112,11 @@ void XwaylandSurface::on_map(wl_listener *listener, void *) {
     const uint32_t height = self->xsurface->height > 0
                                 ? static_cast<uint32_t>(self->xsurface->height)
                                 : 0;
+    // X11's WM_CLASS is what a desktop file matches on, the same role
+    // `app_id` plays for a Wayland client.
     const uint32_t id = server->surfaces->adoptWindow(
-        self, title ? title : "", width, height);
+        self, title ? title : "", width, height,
+        self->xsurface->xclass ? self->xsurface->xclass : "");
     if (ClientSurface *frame = server->surfaces->find(id)) {
       server->surfaces->raise(*frame);
     }
@@ -2327,7 +2416,7 @@ void Toplevel::on_map(wl_listener *listener, void *) {
     uint32_t width = 0, height = 0;
     toplevel->geometry(width, height);
     const uint32_t id = server->surfaces->adoptWindow(
-        toplevel, title ? title : "", width, height);
+        toplevel, title ? title : "", width, height, app_id ? app_id : "");
     if (ClientSurface *frame = server->surfaces->find(id)) {
       server->surfaces->raise(*frame);
       server->surfaces->setFocused(id);
@@ -2926,6 +3015,8 @@ void Server::switchWorkspace(uint32_t index) {
 
   // The cursor did not move, but what is under it did.
   update_pointer_focus(0);
+  // A switch changes no window and changes everything a dock shows.
+  if (surfaces != nullptr) surfaces->announceWindows();
 }
 
 void Server::moveFocusedToWorkspace(uint32_t index) {
@@ -3203,6 +3294,23 @@ bool SurfaceRegistry::beginMove(uint32_t id) {
   return true;
 }
 
+bool SurfaceRegistry::activateWindow(uint32_t id) {
+  ClientSurface *surface = find(id);
+  if (surface == nullptr || surface->panel) return false;
+  // Restore first: raising and focusing a hidden window would leave the shell
+  // showing it as active and the screen showing nothing.
+  setMinimized(*surface, false);
+  if (server_ != nullptr) {
+    server_->focusSurface(*surface);
+    server_->update_pointer_focus(0);
+  } else {
+    raise(*surface);
+    setFocused(id);
+  }
+  // Deliberately not switching workspace to follow it — see `ActivateWindow`.
+  return true;
+}
+
 bool SurfaceRegistry::minimize(uint32_t id) {
   ClientSurface *surface = find(id);
   if (surface == nullptr) return false;
@@ -3218,6 +3326,28 @@ bool Server::route_pointer(uint32_t kind, int32_t button, int32_t mods) {
   if (surfaces == nullptr || control == nullptr) return false;
   double sx = 0, sy = 0;
   ClientSurface *surface = surfaces->at(cursor->x, cursor->y, sx, sy);
+
+  // The surface the pointer *was* over hears that it left. Without it a client
+  // sees only the last position inside itself and has to assume the pointer is
+  // still there: hovers stay lit after the cursor has gone, and a dock that
+  // reveals itself on approach never learns to hide.
+  const uint32_t nowOver = surface != nullptr ? surface->id : 0;
+  if (pointerOver != 0 && pointerOver != nowOver) {
+    if (ClientSurface *left = surfaces->find(pointerOver)) {
+      if (left->canvas) {
+        // The renderer's own hover has to be cleared as well, or the tint it
+        // owns outlives the pointer that caused it.
+        left->canvas->pointerMove(-1.f, -1.f);
+        surfaces->pump(*left);
+      }
+      control->postInput(
+          pointerOver,
+          static_cast<uint32_t>(canvas::InputEventKind::PointerLeave), 0.f, 0.f,
+          0, 0);
+    }
+  }
+  pointerOver = nowOver;
+
   if (surface == nullptr) return false;
   // Through the renderer, not around it — the hover under this pointer is its
   // to answer. See the input section of `CanvasSurface`.

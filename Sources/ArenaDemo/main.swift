@@ -376,7 +376,7 @@ func runProducer() {
         let surfaceID: UInt32 = try blockingCall(timeout: 10) {
             try await compositor.createSurface(
                 arenaId: arenaID, width: 720, height: 480, title: clientName,
-                frame: .server
+                frame: .server, appId: clientName
             )
         }
         // Only after `CreateSurface`: the id has to exist before it can be

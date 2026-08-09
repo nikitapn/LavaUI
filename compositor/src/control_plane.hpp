@@ -61,6 +61,30 @@ struct CompositorHost {
   /// Drops the compositor's reference to `key`.
   virtual void releaseImage(const std::string &key) = 0;
 
+  /// One window as a shell sees it. Mirrors `WindowInfo` in the IDL without
+  /// dragging the generated header into this one.
+  struct WindowEntry {
+    uint32_t surfaceId = 0;
+    std::string title;
+    std::string appId;
+    uint32_t workspace = 0;
+    bool minimized = false;
+    bool focused = false;
+  };
+
+  /// Every window, and which workspace is showing. For a subscriber that has
+  /// just arrived; after that the compositor pushes.
+  virtual void windowList(uint32_t &outCurrentWorkspace,
+                          std::vector<WindowEntry> &outWindows) const = 0;
+
+  /// Restores, raises and focuses a window. False if the id is unknown.
+  virtual bool activateWindow(uint32_t surfaceId) = 0;
+
+  /// Limits where a surface takes pointer input. `w` or `h` of 0 restores the
+  /// whole surface. False if the id is unknown.
+  virtual bool setInputRegion(uint32_t surfaceId, int32_t x, int32_t y,
+                              uint32_t w, uint32_t h) = 0;
+
   /// Opens a surface driven by `arenaId`. 0 if the arena does not exist.
   ///
   /// `decorated` is `WindowFrame::server` — the compositor draws the title
@@ -69,7 +93,7 @@ struct CompositorHost {
   /// integer.
   virtual uint32_t createSurface(const std::string &arenaId, uint32_t width,
                                  uint32_t height, const std::string &title,
-                                 bool decorated) = 0;
+                                 bool decorated, const std::string &appId) = 0;
   /// Opens a panel docked to `edge`, `thickness` deep. 0 if the arena does
   /// not exist. `reserve` asks that windows be laid out around it.
   virtual uint32_t createPanel(const std::string &arenaId, uint32_t edge,
@@ -150,6 +174,10 @@ class ControlPlane {
 
   /// Ends every subscription to a surface that has gone away.
   virtual void surfaceGone(uint32_t surfaceId) = 0;
+
+  /// "The set of windows changed" — to every shell watching. Called from the
+  /// loop thread on anything a dock would draw differently.
+  virtual void postWindowList() = 0;
 
   /// "The focused window is now this one" — to every panel watching.
   ///

@@ -619,7 +619,7 @@ final class CompositorImpl: CompositorServant, @unchecked Sendable {
     /// anyone to observe. Being on the loop is what lets them stay one step.
     override func createSurface(
         arenaId: String, width: UInt32, height: UInt32, title: String,
-        frame: WindowFrame
+        frame: WindowFrame, appId: String
     ) throws -> UInt32 {
         // `frame` is the compositor's to honour and this host has no frame of
         // its own to drop: every surface here is a GLFW window, and the
@@ -687,6 +687,26 @@ final class CompositorImpl: CompositorServant, @unchecked Sendable {
     override func getAppearance() -> Appearance {
         Appearance(cornerRadius: 0, shadowBlur: 0, shadowOpacity: 0,
                    shadowOffsetY: 0)
+    }
+
+    /// A host with no window manager of its own has no list to give and
+    /// nothing to activate. Answered rather than left to the generated
+    /// `fatalError`, so a shell that connects here is disappointed instead of
+    /// killing the process.
+    override func subscribeWindows(
+        stream: NPRPCBidiStream<WindowList, WindowListAck>
+    ) async {
+        stream.writer.close()
+    }
+
+    override func activateWindow(surfaceId: UInt32) throws {
+        try requireSurface(surfaceId)
+    }
+
+    override func setInputRegion(
+        surfaceId: UInt32, x: Int32, y: Int32, w: UInt32, h: UInt32
+    ) throws {
+        try requireSurface(surfaceId)
     }
 
     override func beginMove(surfaceId: UInt32) throws {

@@ -155,6 +155,53 @@ message ActiveWindow {
   title: string;
 }
 
+/// One window, as a dock or a task list has to see it.
+///
+/// What a *shell* needs, which is narrower than what a window is: enough to
+/// draw an entry, group entries by application, and say which one to bring
+/// forward. Nothing about geometry — a dock that knew where windows were would
+/// be tempted to move them, and moving windows is the compositor's job.
+message WindowInfo {
+  surfaceId: u32;
+  title: string;
+  /// What the application calls itself: an xdg-shell `app_id` for a Wayland
+  /// client, and whatever a lava client passed to `CreateSurface` otherwise.
+  /// Empty when nobody said, which a shell should read as "no icon for this",
+  /// not as "no application".
+  ///
+  /// The identity a desktop file is found by, and therefore the identity an
+  /// icon is found by. Two windows of one application share it, which is what
+  /// lets a dock show one entry with two windows behind it.
+  appId: string;
+  workspace: u32;
+  minimized: boolean;
+  focused: boolean;
+}
+
+/// Every window the compositor has, and which workspace is on screen.
+///
+/// A whole list every time rather than deltas, and that is a deliberate
+/// trade rather than laziness. A desktop has tens of windows, not thousands;
+/// a snapshot is a few hundred bytes; and a shell that receives one is
+/// *correct* rather than correct-if-it-applied-every-previous-message. Deltas
+/// would be machinery whose only purpose is to make a resynchronisation bug
+/// possible.
+///
+/// `currentWorkspace` rides along because a dock showing "what is open here"
+/// needs both halves and they change together — a workspace switch changes
+/// which windows are relevant without changing any window.
+message WindowList {
+  /// Monotonic. Echoed back in `WindowListAck`, like `InputEvent.serial`.
+  serial: u32;
+  currentWorkspace: u32;
+  windows: vector<WindowInfo>;
+}
+
+/// Shell → compositor: "I have drawn this list."
+message WindowListAck {
+  serial: u32;
+}
+
 /// Panel → compositor on the same stream: "I am showing this one now."
 ///
 /// Not a permission and not a request — the focus has already changed. It is
@@ -326,8 +373,14 @@ interface Compositor {
   /// title bar, which is the only thing about this call it changes: a
   /// frameless surface is presented, resized, captured and destroyed exactly
   /// like a framed one.
+  /// `appId` is what this application calls itself — the identity a dock
+  /// finds a desktop file and an icon by, and the identity two windows of one
+  /// application share. A title is not that: it changes with the document.
+  /// Empty is allowed and means "no icon for me", which is what a client with
+  /// nothing installed on the system should say rather than guessing.
   u32 CreateSurface(arenaId: in string, width: in u32, height: in u32,
-                    title: in string, frame: in WindowFrame)
+                    title: in string, frame: in WindowFrame,
+                    appId: in string)
       raises(ArenaNotFound);
 
   /// Asks for a *panel*: a surface docked to a screen edge.
@@ -446,6 +499,56 @@ interface Compositor {
   /// than a size someone chose.
   void SetPanelThickness(surfaceId: in u32, thickness: in u32,
                          reserved: in u32) raises(SurfaceNotFound);
+
+  /// Every window, and again whenever the set or any of it changes.
+  ///
+  /// The other half of `SubscribeActiveWindow`, and the one a *dock* needs:
+  /// focus says which window is in front, this says which windows exist. Until
+  /// it, a panel could show a clock and nothing else about the desktop it sat
+  /// on — and `Minimize` was a button that hid a window nothing could bring
+  /// back, because nothing could name it.
+  ///
+  /// Sent on every change that a shell would draw differently: a window
+  /// opening or closing, a title changing, focus moving, a window being
+  /// minimized or restored, and a workspace switch. Not on move or resize —
+  /// this carries no geometry, so nothing a dock draws depends on them.
+  ///
+  /// Bidirectional for the reason the other streams are: the reverse half is
+  /// what flow control meters and what tells the compositor the shell is still
+  /// there, not because a shell has anything to say.
+  bidi_stream<WindowListAck, WindowList> SubscribeWindows();
+
+  /// Brings a window forward: restores it if minimized, raises it, focuses it.
+  ///
+  /// What a dock icon does when it is clicked, and the counterpart to
+  /// `Minimize` — which until now put windows somewhere nothing could reach.
+  ///
+  /// Deliberately three things in one call rather than three calls a shell
+  /// sequences itself. "Activate" is a single intention, and a shell that had
+  /// to spell it out could spell it out differently — restoring without
+  /// raising, focusing without restoring — leaving windows in states no
+  /// gesture in the desktop produces.
+  ///
+  /// A window on another workspace is *not* followed by switching to it: that
+  /// would move the user somewhere they did not ask to go. It is restored and
+  /// raised on its own workspace, where they will find it when they arrive.
+  void ActivateWindow(surfaceId: in u32) raises(SurfaceNotFound);
+
+  /// Where a surface takes pointer input, in its own coordinates.
+  ///
+  /// For a panel that draws less than it covers. A dock floating over the
+  /// desktop is a full-width strip with a few icons in the middle of it, and
+  /// panels are hit-tested above windows — so without this, the empty half of
+  /// that strip swallows every click meant for the window underneath.
+  ///
+  /// A rectangle rather than a region, because the shapes that need it are
+  /// rectangles: a dock's icon row, a menu's dropdown. A region would be the
+  /// general answer and is what to reach for when a shell wants a hole in the
+  /// middle of itself, which nothing does yet.
+  ///
+  /// `w` or `h` of 0 restores the default, which is the whole surface.
+  void SetInputRegion(surfaceId: in u32, x: in i32, y: in i32,
+                      w: in u32, h: in u32) raises(SurfaceNotFound);
 
   /// The desktop's look, for a client matching its own surfaces to it.
   ///

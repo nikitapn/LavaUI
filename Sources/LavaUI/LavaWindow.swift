@@ -495,6 +495,15 @@ public final class LavaWindow {
             }
         case .nodeHover:
             HoverState.set(SceneNodeIdentity.node(for: UInt32(bitPattern: ev.button)))
+        case .pointerLeave:
+            // Whatever was lit is not under the pointer any more. A window
+            // only hears about the pointer while it is inside, so without this
+            // the last hover it saw stays on until the pointer comes back —
+            // which for a dock that hides when the pointer leaves is the
+            // difference between working and not.
+            PointerCapture.release()
+            HoverState.clear()
+            PointerState.left()
         case .nodeScroll:
             guard let nodeID = SceneNodeIdentity.node(for: UInt32(bitPattern: ev.button)),
                   let scroll = findNode(nodeID, in: host.rootNode) as? ScrollNode
