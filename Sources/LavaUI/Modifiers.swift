@@ -27,6 +27,9 @@ public struct ViewStyle: Equatable {
     public var contentBlurRadius: Float?
     /// Scissor paint to this node's layout rect (SwiftUI `.clipped()`).
     public var clipsContent: Bool?
+    /// Take this subtree out of layout and drawing without unmounting it.
+    /// `nil` = visible. See `View.hidden(_:)`.
+    public var isHidden: Bool?
 
     public init() {}
 
@@ -46,6 +49,7 @@ public struct ViewStyle: Equatable {
         out.backdropBlurRadius = backdropBlurRadius ?? base.backdropBlurRadius
         out.contentBlurRadius = contentBlurRadius ?? base.contentBlurRadius
         out.clipsContent = clipsContent ?? base.clipsContent
+        out.isHidden = isHidden ?? base.isHidden
         return out
     }
 }
@@ -136,6 +140,7 @@ extension YogaBoxNode {
             base.backdropBlurRadius = backdropBlurRadius
             base.contentBlurRadius = contentBlurRadius
             base.clipsContent = clipsContent
+            base.isHidden = isHidden
             styleBaseline = base
         }
         let base = styleBaseline ?? ViewStyle()
@@ -152,6 +157,7 @@ extension YogaBoxNode {
         backdropBlurRadius = style.backdropBlurRadius ?? base.backdropBlurRadius
         contentBlurRadius = style.contentBlurRadius ?? base.contentBlurRadius
         clipsContent = style.clipsContent ?? base.clipsContent ?? false
+        isHidden = style.isHidden ?? base.isHidden ?? false
 
         if let leaf = self as? LeafNode {
             if let fill = style.fill { leaf.fillColor = fill }
@@ -320,6 +326,27 @@ extension View {
     public func clipped() -> ModifiedView<Self> {
         styled { $0.clipsContent = true }
     }
+
+    /// Takes this view out of layout and drawing, without unmounting it.
+    ///
+    /// The difference from `if condition { view }` is identity. An `if` that
+    /// goes false destroys the subtree, and everything keyed to it goes with it
+    /// — most visibly the scroll position, which the renderer holds against a
+    /// node id that no longer exists when the view comes back. A hidden view
+    /// keeps its nodes, so it comes back where it was.
+    ///
+    /// That is what this is for: alternating panes that should each remember
+    /// their own place. It is not a cheaper `if` — the subtree stays mounted,
+    /// its state stays alive, and its body still recomputes when what it reads
+    /// changes. Yoga skips it (`display: none`, so it occupies nothing rather
+    /// than occupying nothing *visibly*) and the draw walk steps over it.
+    ///
+    /// Long enough away and the renderer forgets anyway: it drops a node's
+    /// state after `SceneNodeIdentity.retentionPasses` emit passes without
+    /// seeing it, which is what stops a hidden pane pinning that state forever.
+    public func hidden(_ isHidden: Bool = true) -> ModifiedView<Self> {
+        styled { $0.isHidden = isHidden }
+    }
 }
 
 // MARK: - Collapsing a chain
@@ -378,6 +405,11 @@ extension ModifiedView {
 
     public func clipped() -> ModifiedView<Content> {
         adding { $0.clipsContent = true }
+    }
+
+    /// See `View.hidden(_:)`.
+    public func hidden(_ isHidden: Bool = true) -> ModifiedView<Content> {
+        adding { $0.isHidden = isHidden }
     }
 
     public func frame(

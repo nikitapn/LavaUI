@@ -874,6 +874,12 @@ public final class DrawList {
         _ node: any AnyViewNode,
         ox: Float, oy: Float
     ) {
+        // Hidden: mounted, not drawn. Yoga has already skipped it, so its
+        // children still carry whatever frames they had when it was last
+        // visible — walking in would draw the pane where it used to be. See
+        // `View.hidden(_:)`.
+        if let box = node as? YogaBoxNode, box.isHidden { return }
+
         // A transitioning subtree is drawn faded and displaced. Wrapping the
         // whole walk means every primitive underneath inherits it without
         // knowing anything about transitions, and nesting multiplies.

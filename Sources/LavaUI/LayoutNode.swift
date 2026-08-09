@@ -166,6 +166,8 @@ class YogaBoxNode: AnyViewNode {
     /// Yoga still allows overflow for measure; we clip at emit only — used by
     /// the menubar strip so a title's hover fill cannot paint over content.
     var clipsContent: Bool = false
+    /// Out of layout and drawing, but still mounted. See `View.hidden(_:)`.
+    var isHidden: Bool = false
 
     /// How far this node's children are drawn from its own origin.
     ///
@@ -201,6 +203,10 @@ class YogaBoxNode: AnyViewNode {
     }
 
     func applyStyle() {
+        // `display: none` rather than a zero size: Yoga skips the subtree
+        // entirely, so a hidden pane costs no measurement, and — the part that
+        // matters — its children keep their nodes and therefore their ids.
+        YGNodeStyleSetDisplay(yogaStorage, isHidden ? YGDisplayNone : YGDisplayFlex)
         YGNodeStyleSetFlexGrow(yogaStorage, flexGrow)
         YGNodeStyleSetFlexShrink(yogaStorage, effectiveFlexShrink)
         applyDimension(
@@ -262,6 +268,10 @@ class YogaBoxNode: AnyViewNode {
     }
 
     func collectFrames(originX: Float, originY: Float, into frames: inout [LayoutFrame]) {
+        // Nothing here is on screen, and the frames its children still carry
+        // are where they were when it last was. An agent searching the tree
+        // would otherwise find and click a row on a page nobody is looking at.
+        if isHidden { return }
         let x = originX + YGNodeLayoutGetLeft(yogaStorage)
         let y = originY + YGNodeLayoutGetTop(yogaStorage)
         let w = YGNodeLayoutGetWidth(yogaStorage)
@@ -1709,8 +1719,13 @@ public final class LayoutHost {
         _ node: any AnyViewNode, x: Float, y: Float, ox: Float, oy: Float
     ) -> NodeID? {
         // A departing subtree is still drawn but is no longer part of the view
-        // tree, so it must not answer for input on the way out.
-        if let box = node as? YogaBoxNode, box.transitionState?.isLeaving == true {
+        // tree, so it must not answer for input on the way out. A hidden one
+        // is the mirror image — still in the tree, not on screen — and must
+        // not answer either, or a pane nobody can see takes the clicks meant
+        // for the one in front of it.
+        if let box = node as? YogaBoxNode,
+           box.transitionState?.isLeaving == true || box.isHidden
+        {
             return nil
         }
         if let box = node as? YogaBoxNode, let yref = box.yoga {
@@ -1765,7 +1780,9 @@ public final class LayoutHost {
         _ node: any AnyViewNode, x: Float, y: Float, ox: Float, oy: Float,
         into chain: inout [NodeID]
     ) -> Bool {
-        if let box = node as? YogaBoxNode, box.transitionState?.isLeaving == true {
+        if let box = node as? YogaBoxNode,
+           box.transitionState?.isLeaving == true || box.isHidden
+        {
             return false
         }
         if let box = node as? YogaBoxNode, let yref = box.yoga {
@@ -1807,8 +1824,11 @@ public final class LayoutHost {
         mods: Int32
     ) -> (() -> Void)? {
         // Clicking something that is fading out would run an action the view
-        // tree no longer describes.
-        if let box = node as? YogaBoxNode, box.transitionState?.isLeaving == true {
+        // tree no longer describes; clicking through to something hidden runs
+        // one the user cannot see.
+        if let box = node as? YogaBoxNode,
+           box.transitionState?.isLeaving == true || box.isHidden
+        {
             return nil
         }
         if let box = node as? YogaBoxNode, let yref = box.yoga {
