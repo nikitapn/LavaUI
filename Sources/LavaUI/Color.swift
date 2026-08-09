@@ -12,6 +12,15 @@ public struct Color: Equatable, Sendable, Hashable {
         self.a = a
     }
 
+    /// Fully transparent — draws nothing at all.
+    ///
+    /// What a conditional background needs for its "neither" case. A row that
+    /// is highlighted when selected and hovered has to fall back to *no fill*
+    /// the rest of the time, and the nearest thing without this is the theme's
+    /// own background painted over whatever the row actually sits on, which is
+    /// right until the day something sits behind it.
+    public static let clear = Color(r: 0, g: 0, b: 0, a: 0)
+
     /// Pack as RGBA8 (r in high bits of first byte… actually R,G,B,A little-endian u32).
     public var rgba8: UInt32 {
         let R = UInt32(clamping: Int((r * 255).rounded()))

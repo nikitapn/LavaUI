@@ -46,6 +46,7 @@ var products: [Product] = [
     .executable(name: "LavaSurface", targets: ["LavaSurface"]),
     .executable(name: "LavaTaskbar", targets: ["LavaTaskbar"]),
     .executable(name: "LavaDock", targets: ["LavaDock"]),
+    .executable(name: "LavaSettings", targets: ["LavaSettings"]),
     .library(name: "LavaUI", targets: ["LavaUI"]),
     .library(name: "LavaText", targets: ["LavaText"]),
     .library(name: "LavaMenu", targets: ["LavaMenu"]),
@@ -99,6 +100,15 @@ var targets: [Target] = [
     // shell, and the first client that needed the window list.
     .executableTarget(
         name: "LavaDock",
+        dependencies: ["LavaUI"]
+            + (haveNprpc ? [Target.Dependency("LavaClient"),
+                            Target.Dependency("LavaIDL")] : []),
+        swiftSettings: interopCxx
+    ),
+    // The desktop's settings, and the first client that changes the desktop
+    // rather than asking it questions. See Sources/LavaSettings/main.swift.
+    .executableTarget(
+        name: "LavaSettings",
         dependencies: ["LavaUI"]
             + (haveNprpc ? [Target.Dependency("LavaClient"),
                             Target.Dependency("LavaIDL")] : []),

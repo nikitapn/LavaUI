@@ -523,7 +523,12 @@ public enum LavaClient {
     /// Handed from `open` to `run`. Statics rather than a returned handle so
     /// the pair reads exactly like `LavaApp.open`/`LavaApp.run`, which an app
     /// is switching between.
-    nonisolated(unsafe) private static var compositor: Compositor?
+    ///
+    /// Visible inside the module so `DesktopSettings` can reach the same
+    /// connection rather than opening a second one: the compositor's reference
+    /// is a shared-memory session, and two of them from one process would be
+    /// two sets of ring buffers for one client.
+    nonisolated(unsafe) static var compositor: Compositor?
     nonisolated(unsafe) private static var arena: ArenaFrameSink?
     nonisolated(unsafe) private static var arenaID = ""
     nonisolated(unsafe) private static var title = ""
