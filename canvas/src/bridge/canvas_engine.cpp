@@ -7,6 +7,7 @@
 #include "menu/app_menu.hpp"
 #include "menu/menu_import.hpp"
 #include "render/font_key.hpp"
+#include "render/svg_image.hpp"
 #include "window/canvas_window.hpp"
 
 #define GLFW_INCLUDE_NONE
@@ -637,6 +638,18 @@ DecodedImage finishDecode(stbi_uc *pixels, int w, int h, uint32_t maxPixelSize)
 
 DecodedImage Engine::decodeImage(const std::string &path, uint32_t maxPixelSize)
 {
+  // An SVG has no pixels to load, only a shape to draw — so `maxPixelSize` is
+  // not a cap here but the size itself, and the result needs no downscale
+  // afterwards. That is the whole reason icons are worth rendering rather than
+  // unpacking: a 48-pixel PNG drawn at 64 is soft, and this is not.
+  if (path.size() > 4 &&
+      path.compare(path.size() - 4, 4, ".svg") == 0) {
+    DecodedImage out;
+    out.pixels = rasterizeSvg(path, maxPixelSize, out.width, out.height);
+    if (out.pixels.empty()) return DecodedImage{};
+    return out;
+  }
+
   int w = 0, h = 0, channels = 0;
   // stbi_load is reentrant and touches no shared state, which is what makes
   // this callable off the device thread.

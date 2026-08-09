@@ -21,6 +21,7 @@ canvas_engine_sources = files(
   'src/render/pipeline.cpp',
   'src/render/quad_renderer.cpp',
   'src/render/shaders.cpp',
+  'src/render/svg_image.cpp',
   'src/render/text_renderer.cpp',
   'src/render/texture_manager.cpp',
   'src/render/vma_impl.cpp',
@@ -55,6 +56,10 @@ canvas_deps = [
   dependency('x11'),
   dependency('gio-2.0'),
   dependency('dbusmenu-glib-0.4'),
+  # Icon themes ship SVG; a dock rendering one at the size it draws beats
+  # unpacking a PNG chosen for a different size.
+  dependency('librsvg-2.0'),
+  dependency('cairo'),
   # The stack trace printed by the VR() macro when a Vulkan call fails.
   meson.get_compiler('cpp').find_library('boost_stacktrace_basic'),
   meson.get_compiler('cpp').find_library('m'),
@@ -64,6 +69,7 @@ canvas_defines = [
   '-DGLM_FORCE_DEPTH_ZERO_TO_ONE',
   '-DCANVAS_HAVE_X11',
   '-DCANVAS_HAVE_DBUSMENU',
+  '-DCANVAS_HAVE_RSVG',
 ]
 
 libcanvas = static_library(
