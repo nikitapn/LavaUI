@@ -550,7 +550,8 @@ public final class Editor: @unchecked Sendable {
 
     // ─── App menu (Linux DBusMenu / global panel) ────────────────────────
 
-    /// True if `com.canonical.AppMenu.Registrar` is on the session bus and
+    /// True if a menu registrar — `org.lavaui.AppMenu.Registrar` or the
+    /// canonical `com.canonical.AppMenu.Registrar` — is on the session bus and
     /// canvas was built with libdbusmenu-glib.
     public static func appMenuRegistrarAvailable() -> Bool {
         canvas.Engine.appMenuRegistrarAvailable()
@@ -559,6 +560,55 @@ public final class Editor: @unchecked Sendable {
     /// Register this window's menu with the session AppMenu registrar.
     @discardableResult
     public func appMenuAttach() -> Bool { engine.appMenuAttach() }
+
+    /// The same, under an id this process supplies rather than an X11 window
+    /// id — which is what a compositor client has instead: its surface id, the
+    /// number the panel hears about when the window takes focus.
+    @discardableResult
+    public func appMenuAttach(windowId: UInt32) -> Bool {
+        engine.appMenuAttachWindow(windowId)
+    }
+
+    // ─── Menu import (panel side) ────────────────────────────────────────
+
+    /// Own a registrar name and start importing menus. False without a bus.
+    @discardableResult
+    public func menuImportStart() -> Bool { engine.menuImportStart() }
+
+    /// Which registrar name this panel owns, or empty.
+    public var menuImportBusName: String { String(engine.menuImportBusName()) }
+
+    /// Whose menu to import. 0 shows none.
+    public func menuImportSetActiveWindow(_ windowId: UInt32) {
+        engine.menuImportSetActiveWindow(windowId)
+    }
+
+    public func menuImportPoll() { engine.menuImportPoll() }
+
+    /// Changes whenever the imported menu does.
+    public var menuImportRevision: UInt64 { engine.menuImportRevision() }
+
+    public var menuImportItemCount: Int { Int(engine.menuImportItemCount()) }
+
+    public func menuImportItem(_ index: Int) -> ImportedMenuItem {
+        ImportedMenuItem(
+            id: engine.menuImportItemId(index),
+            parent: engine.menuImportItemParent(index),
+            label: String(engine.menuImportItemLabel(index)),
+            isEnabled: engine.menuImportItemEnabled(index),
+            isSeparator: engine.menuImportItemSeparator(index),
+            hasSubmenu: engine.menuImportItemHasSubmenu(index),
+            checked: Int(engine.menuImportItemChecked(index))
+        )
+    }
+
+    public func menuImportActivate(_ itemId: Int32) {
+        engine.menuImportActivate(itemId)
+    }
+
+    public func menuImportAboutToShow(_ itemId: Int32) {
+        engine.menuImportAboutToShow(itemId)
+    }
 
     public func appMenuDetach() { engine.appMenuDetach() }
 
@@ -586,6 +636,24 @@ public final class Editor: @unchecked Sendable {
     public func appMenuPopActivation() -> String {
         String(engine.appMenuPopActivation())
     }
+}
+
+/// One row of a menu imported from another application.
+///
+/// Flat, and named by DBusMenu's own ids, because that is the shape it crosses
+/// the interop boundary in — `parent` is another row's `id`, or -1 at the top
+/// level. `PanelMenu` is what turns a run of these into a tree.
+public struct ImportedMenuItem: Equatable, Sendable {
+    public var id: Int32
+    public var parent: Int32
+    public var label: String
+    public var isEnabled: Bool
+    public var isSeparator: Bool
+    /// Opens a submenu. Its children may not have been fetched yet — the
+    /// application is entitled to fill them only when asked.
+    public var hasSubmenu: Bool
+    /// -1 not checkable, 0 unchecked, 1 checked.
+    public var checked: Int
 }
 #endif
 

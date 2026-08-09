@@ -23,14 +23,24 @@ import Observation
 // the client API is complete enough to build a desktop with, which a built-in
 // would have quietly avoided answering.
 //
+// It carries the desktop's **global menu**: the focused window's menubar,
+// exported by that application over DBusMenu and drawn here instead of inside
+// its own window. Two channels meet to make that work, and they are separate
+// on purpose:
+//
+//   * the *menu* arrives over the session bus. This panel owns the AppMenu
+//     registrar, so applications hand it an object path and it reads the menu
+//     from there — the same protocol Qt and GTK applications already speak, so
+//     they need nothing added to appear here.
+//   * *which* menu arrives over the control plane, as `SubscribeActiveWindow`.
+//     Focus belongs to the compositor and to nothing else, and a global menu
+//     is the first thing on this panel that genuinely had to know it.
+//
 // What it does not have yet, and why:
 //
-//   * no window list. The compositor knows which surfaces exist; the panel
-//     does not, and there is no call that would tell it. That is the next
-//     piece of the control plane, and it is what minimize is waiting for.
-//   * no global menu. LavaUI apps can already export one over DBus
-//     (`appMenuAttach`), so the panel would consume it the same way a GNOME
-//     panel does — a separate channel from this one entirely.
+//   * no window list. The compositor knows which surfaces exist; the panel now
+//     knows which one is *focused*, which is half of it, but not what else is
+//     open. That is what minimize is still waiting for.
 
 /// Refreshed on a timer, because a clock is the one thing on a panel that
 /// changes without anybody touching it.
@@ -48,41 +58,210 @@ final class Clock {
 
 nonisolated(unsafe) let clock = Clock()
 
+/// The focused window and its menu, as this panel currently understands them.
+///
+/// Two sources, one object, because they are two halves of one fact: the
+/// compositor says *which* window is active and the session bus says what its
+/// menu contains, and a panel showing one without the other would either draw
+/// a menu belonging to a window nobody is using or a title with no menu under
+/// it.
+@Observable
+final class MenuSession {
+    /// What the focused window is called. Shown when it has no menu — a
+    /// terminal, a foreign application that exports nothing — so the panel
+    /// says something true rather than going blank.
+    var title = ""
+    var model = MenuModel()
+
+    /// The importer is not observable state: it is the machinery that produces
+    /// `model`, and a view that depended on it would rebuild on every poll.
+    @ObservationIgnored var menus: PanelMenu?
+
+    /// Which top-level menu is open, if any. Kept here rather than in the view
+    /// because the panel's *size* depends on it — see `openBinding`.
+    var openMenu: MenuID?
+
+    func attach(editor: Editor) {
+        menus = PanelMenu(editor: editor)
+    }
+
+    /// Called on the frame loop when the compositor's focus changes.
+    func focus(surfaceId: UInt32, title: String) {
+        self.title = title
+        // An open menu belongs to the window that is no longer focused.
+        closeMenu()
+        menus?.setActiveWindow(surfaceId)
+        model = menus?.model ?? MenuModel()
+    }
+
+    /// Pumps DBus, publishes a new model when there is one, and brings the
+    /// panel's height into line with whether a menu is open.
+    func poll() {
+        guard let menus else { return }
+        if menus.poll() { model = menus.model }
+        applyThickness()
+    }
+
+    func activate(_ id: MenuID) {
+        menus?.activate(id)
+        closeMenu()
+    }
+
+    // ─── Opening a menu, and the panel growing to hold it ────────────────
+    //
+    // The panel is a 32pt strip and a dropdown is not 32pt tall. Rather than a
+    // second surface to position, the panel asks the compositor to make it
+    // deeper while a menu is open and to put it back afterwards — the
+    // reservation never changes, so the windows underneath do not move, and
+    // the extra surface is also what catches the click that closes the menu.
+
+    func openMenu(_ id: MenuID) {
+        openMenu = id
+        // Applications are allowed to fill a submenu only when asked. Most
+        // send everything up front; the ones that do not would show an empty
+        // dropdown without this.
+        menus?.aboutToShow(id)
+    }
+
+    func closeMenu() {
+        openMenu = nil
+    }
+
+    /// Resizes the panel to match `openMenu`, if it does not already.
+    ///
+    /// On the poll tick rather than in the two functions above, and that is
+    /// not tidiness. Clicking an open menu's title closes and reopens it
+    /// within one click — the overlay dismisses on the press, the title
+    /// handler runs after — and resizing the surface *between* those two left
+    /// the panel tall with no menu in it: the resize churn arrived in the
+    /// middle of the overlay being re-presented and it never came back.
+    /// Reconciling here collapses that pair into the state it settles on.
+    private func applyThickness() {
+        let want = openMenu != nil ? Self.openHeight : Self.stripHeight
+        guard want != applied else { return }
+        applied = want
+        LavaClient.setPanelThickness(want)
+    }
+
+    @ObservationIgnored private var applied: Float = MenuSession.stripHeight
+
+    /// The strip, and how deep the panel goes while a menu is open.
+    ///
+    /// A fixed number because the panel does not know how tall the screen is —
+    /// it is told its own size and nothing else — and this is comfortably more
+    /// than any menubar depth while staying under the smallest display anyone
+    /// runs this on.
+    static let stripHeight: Float = 32
+    static let openHeight: Float = 600
+}
+
+nonisolated(unsafe) let session = MenuSession()
+
 struct TaskbarView: View {
     var body: some View {
-        HStack(padding: 10, alignment: .center, spacing: 16) {
-            Text("Lava", color: Theme.current.accent)
+        // The strip is the panel; the space below it exists only while a menu
+        // is open, and only so the dropdown has somewhere to be. Transparent,
+        // so what is really underneath shows through.
+        VStack(flexGrow: 1, padding: 0) {
+            HStack(height: .pt(MenuSession.stripHeight), padding: 10,
+                   alignment: .center, spacing: 16) {
+                Text("Lava", color: Theme.current.accent)
 
-            // Stands in for the window list until there is a call that would
-            // provide one. Deliberately not faked from anything local: the
-            // panel genuinely cannot know, and pretending would hide that.
-            Text("no window list yet", color: Theme.current.textDim)
+                if session.model.menus.isEmpty {
+                    // No menu — either nothing is focused, or the focused
+                    // window exports none. Its name is the honest thing to
+                    // show, and it is also how a user can tell the panel is
+                    // tracking focus at all.
+                    Text(
+                        session.title.isEmpty ? "no window" : session.title,
+                        color: Theme.current.textDim
+                    )
+                } else {
+                    MenuBarStrip(
+                        model: session.model,
+                        openMenuID: openBinding,
+                        onActivate: { session.activate($0) }
+                    )
+                }
 
-            // Pushes the clock to the far end: an empty growing child is the
-            // spacer, since the stack distributes leftover space by flex.
-            HStack(flexGrow: 1, padding: 0) {}
+                // Pushes the clock to the far end: an empty growing child is
+                // the spacer, since the stack distributes leftover space by
+                // flex.
+                HStack(flexGrow: 1, padding: 0) {}
 
-            Text(clock.text, color: Theme.current.textPrimary)
+                Text(clock.text, color: Theme.current.textPrimary)
+            }
+            .background(Theme.current.panel)
+
+            // Only while something is open: an always-present growing box
+            // would make the strip's own background 600pt tall.
+            if session.openMenu != nil {
+                HStack(flexGrow: 1, padding: 0) {}
+            }
         }
-        .background(Theme.current.panel)
+    }
+
+    /// The strip's open-menu state, with the panel's height attached to it.
+    ///
+    /// A plain `@State` would leave the panel 32pt tall and the dropdown
+    /// clipped to nothing, which is exactly what it looked like before the
+    /// compositor could be asked for more room.
+    private var openBinding: Binding<MenuID?> {
+        Binding(
+            get: { session.openMenu },
+            set: { id in
+                if let id {
+                    session.openMenu(id)
+                } else {
+                    session.closeMenu()
+                }
+            }
+        )
     }
 }
 
 // ─── Bring-up ───────────────────────────────────────────────────────────────
 
-// Opaque: a panel is a background, and seeing the desktop through it would
-// make everything on it harder to read. `.color(…)` rather than `.theme` only
-// so the panel is a shade apart from the windows in front of it.
-WindowBackdrop.current = .color(Theme.current.panel)
+// Nothing at all, and the strip paints its own background instead.
+//
+// It used to be an opaque fill, which is right for a panel that is only ever
+// its strip. This one grows to hold an open menu, and a filled surface would
+// mean opening a menu greyed out the whole screen — so the fill moved onto the
+// strip's own `HStack`, where it covers what the panel actually occupies.
+WindowBackdrop.current = .none
 
 guard let editor = LavaClient.openPanel(
-    title: "Lava Panel", edge: .top, thickness: 32, reserve: true
+    title: "Lava Panel", edge: .top,
+    thickness: MenuSession.stripHeight, reserve: true
 ) else { exit(1) }
+
+// Owns the registrar from here on, so an application starting after this point
+// finds somewhere to export to. Before `run`, because an app that registers
+// while the panel is still coming up should not have to try twice.
+session.attach(editor: editor)
+
+// Focus, from the compositor. Delivered on the frame loop, so touching
+// observable state from it is the same as touching it from a click handler.
+LavaClient.onActiveWindow { surfaceId, title in
+    session.focus(surfaceId: surfaceId, title: title)
+}
 
 Thread.detachNewThread {
     while true {
         MainQueue.async { clock.tick() }
         Thread.sleep(forTimeInterval: 1.0)
+    }
+}
+
+// DBus has no frame clock of its own, and the traffic goes both ways: this is
+// what answers an application's `GetLayout` as much as what collects it. 20 Hz
+// because a menu appearing 50ms after the application published it is
+// imperceptible, and because a panel that iterated GLib per frame would be
+// doing it 60 times a second to find nothing.
+Thread.detachNewThread {
+    while true {
+        MainQueue.async { session.poll() }
+        Thread.sleep(forTimeInterval: 0.05)
     }
 }
 

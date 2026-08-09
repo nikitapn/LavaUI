@@ -20,6 +20,12 @@ namespace canvas {
 namespace {
 
 constexpr const char *kRegistrarDest = "com.canonical.AppMenu.Registrar";
+/// LavaUI's own registrar — see `MenuImportHost::start`. Preferred over the
+/// canonical name when both are on the bus, because both means this app is
+/// running under a lava panel inside somebody else's session: the canonical
+/// registrar belongs to that session's panel, which is drawing menus for *its*
+/// windows and would silently swallow ours.
+constexpr const char *kLavaRegistrarDest = "org.lavaui.AppMenu.Registrar";
 constexpr const char *kRegistrarPath = "/com/canonical/AppMenu/Registrar";
 constexpr const char *kRegistrarIface = "com.canonical.AppMenu.Registrar";
 constexpr const char *kLavaIdKey = "lava-menu-id";
@@ -41,6 +47,14 @@ bool nameHasOwner(GDBusConnection *conn, const char *name)
   return owned;
 }
 
+/// Which registrar to hand this window's menu to, or null if none is there.
+const char *registrarDestination(GDBusConnection *conn)
+{
+  if (nameHasOwner(conn, kLavaRegistrarDest)) return kLavaRegistrarDest;
+  if (nameHasOwner(conn, kRegistrarDest)) return kRegistrarDest;
+  return nullptr;
+}
+
 } // namespace
 
 struct AppMenuHost::Impl {
@@ -49,7 +63,64 @@ struct AppMenuHost::Impl {
   std::vector<DbusmenuMenuitem *> stack;
   uint32_t xid = 0;
   std::string objectPath;
+  /// Whoever we registered with, so the unregister goes to the same panel.
+  std::string registrar;
   bool registered = false;
+  /// Name watches, so a panel that starts (or restarts) after this app is
+  /// still handed the menu. Without them a panel restart silently empties
+  /// itself: the registration lived in the process that just exited, and
+  /// nothing else in the protocol tells an application to say it again.
+  guint watchLava = 0;
+  guint watchCanonical = 0;
+
+  /// Registers with `dest`, replacing any existing registration.
+  ///
+  /// Separate from `attach` because it happens again later: the first call is
+  /// at startup, and every one after it is a panel appearing.
+  bool sendRegister(const char *dest)
+  {
+    GError *err = nullptr;
+    GDBusConnection *conn = g_bus_get_sync(G_BUS_TYPE_SESSION, nullptr, &err);
+    if (!conn) {
+      if (err) g_error_free(err);
+      return false;
+    }
+    GVariant *ret = g_dbus_connection_call_sync(
+      conn, dest, kRegistrarPath, kRegistrarIface, "RegisterWindow",
+      g_variant_new("(uo)", static_cast<guint32>(xid), objectPath.c_str()),
+      nullptr, G_DBUS_CALL_FLAGS_NONE, 3000, nullptr, &err);
+    g_object_unref(conn);
+    if (!ret) {
+      if (err) g_error_free(err);
+      return false;
+    }
+    g_variant_unref(ret);
+    registrar = dest;
+    registered = true;
+    return true;
+  }
+
+  static void onRegistrarAppeared(GDBusConnection * /*conn*/,
+                                  const gchar *name, const gchar * /*owner*/,
+                                  gpointer userData)
+  {
+    auto *self = static_cast<Impl *>(userData);
+    if (self->server == nullptr || self->xid == 0) return;
+    // The lava registrar wins over the canonical one wherever both exist —
+    // see `registrarDestination`. A canonical registrar appearing while we
+    // are already with a lava panel is somebody else's session starting, and
+    // is not ours to move to.
+    if (self->registrar == kLavaRegistrarDest &&
+        g_strcmp0(name, kCanonicalName()) == 0) {
+      return;
+    }
+    if (self->sendRegister(name)) {
+      std::cerr << "canvas: AppMenu re-registered window " << self->xid
+                << " with " << name << "\n";
+    }
+  }
+
+  static const char *kCanonicalName() { return kRegistrarDest; }
 
   std::mutex activationMutex;
   std::queue<std::string> activations;
@@ -116,7 +187,7 @@ bool AppMenuHost::registrarAvailable()
     if (err) g_error_free(err);
     return false;
   }
-  const bool ok = nameHasOwner(conn, kRegistrarDest);
+  const bool ok = registrarDestination(conn) != nullptr;
   g_object_unref(conn);
   return ok;
 }
@@ -153,8 +224,16 @@ bool AppMenuHost::attach(uint32_t x11WindowId)
     return false;
   }
 
+  const char *dest = registrarDestination(conn);
+  if (dest == nullptr) {
+    g_object_unref(conn);
+    detach();
+    return false;
+  }
+  impl_->registrar = dest;
+
   GVariant *ret = g_dbus_connection_call_sync(
-    conn, kRegistrarDest, kRegistrarPath, kRegistrarIface, "RegisterWindow",
+    conn, dest, kRegistrarPath, kRegistrarIface, "RegisterWindow",
     g_variant_new("(uo)", static_cast<guint32>(x11WindowId),
                   impl_->objectPath.c_str()),
     nullptr, G_DBUS_CALL_FLAGS_NONE, 3000, nullptr, &err);
@@ -169,8 +248,17 @@ bool AppMenuHost::attach(uint32_t x11WindowId)
   }
   g_variant_unref(ret);
   impl_->registered = true;
-  std::cerr << "canvas: AppMenu registered window " << x11WindowId
-            << " → " << impl_->objectPath << "\n";
+  // Watched from here on, so a panel that restarts gets the menu again. Both
+  // names, because which one is right can change: a lava panel starting inside
+  // a session that already has a canonical registrar is exactly the case.
+  impl_->watchLava = g_bus_watch_name(
+    G_BUS_TYPE_SESSION, kLavaRegistrarDest, G_BUS_NAME_WATCHER_FLAGS_NONE,
+    Impl::onRegistrarAppeared, nullptr, impl_.get(), nullptr);
+  impl_->watchCanonical = g_bus_watch_name(
+    G_BUS_TYPE_SESSION, kRegistrarDest, G_BUS_NAME_WATCHER_FLAGS_NONE,
+    Impl::onRegistrarAppeared, nullptr, impl_.get(), nullptr);
+  std::cerr << "canvas: AppMenu registered window " << x11WindowId << " with "
+            << dest << " → " << impl_->objectPath << "\n";
   return true;
 }
 
@@ -184,7 +272,8 @@ void AppMenuHost::detach()
       g_bus_get_sync(G_BUS_TYPE_SESSION, nullptr, &err);
     if (conn) {
       GVariant *ret = g_dbus_connection_call_sync(
-        conn, kRegistrarDest, kRegistrarPath, kRegistrarIface, "UnregisterWindow",
+        conn, impl_->registrar.c_str(), kRegistrarPath, kRegistrarIface,
+        "UnregisterWindow",
         g_variant_new("(u)", static_cast<guint32>(impl_->xid)),
         nullptr, G_DBUS_CALL_FLAGS_NONE, 2000, nullptr, &err);
       if (ret) g_variant_unref(ret);
@@ -201,8 +290,17 @@ void AppMenuHost::detach()
     g_object_unref(impl_->server);
     impl_->server = nullptr;
   }
+  if (impl_->watchLava != 0) {
+    g_bus_unwatch_name(impl_->watchLava);
+    impl_->watchLava = 0;
+  }
+  if (impl_->watchCanonical != 0) {
+    g_bus_unwatch_name(impl_->watchCanonical);
+    impl_->watchCanonical = 0;
+  }
   impl_->xid = 0;
   impl_->objectPath.clear();
+  impl_->registrar.clear();
   {
     std::lock_guard<std::mutex> lock(impl_->activationMutex);
     while (!impl_->activations.empty()) impl_->activations.pop();

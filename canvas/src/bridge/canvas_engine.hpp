@@ -381,6 +381,10 @@ class Engine {
   /// Attach DBusMenu server + RegisterWindow. No-op / false without deps.
   bool appMenuAttach();
 
+  /// The same, for a window this process names itself: a compositor client
+  /// has no X11 id, and its surface id is what the panel knows it by.
+  bool appMenuAttachWindow(uint32_t windowId);
+
   void appMenuDetach();
   bool appMenuIsAttached() const;
   void appMenuPoll();
@@ -396,6 +400,40 @@ class Engine {
 
   /// Pop panel activation (MenuID string). Empty string if none.
   std::string appMenuPopActivation();
+
+  // ─── Menu import (the panel side of the same protocol) ──────────────────
+  //
+  // A panel owns the registrar and reads other applications' menus; an
+  // application exports one. Both live here because both are one process's
+  // engine away from the code that needs them, and neither is worth a second
+  // bridge. See `MenuImportHost`.
+
+  /// Own a registrar name and start serving. False without a session bus or
+  /// a free name.
+  bool menuImportStart();
+  /// Which name was claimed, or empty.
+  std::string menuImportBusName();
+  /// Whose menu to show; 0 for none.
+  void menuImportSetActiveWindow(uint32_t windowId);
+  /// Iterate GLib once. Call every frame while a panel is showing a menu.
+  void menuImportPoll();
+  /// Bumped whenever the imported menu changes.
+  uint64_t menuImportRevision() const;
+
+  size_t menuImportItemCount() const;
+  int32_t menuImportItemId(size_t index) const;
+  int32_t menuImportItemParent(size_t index) const;
+  std::string menuImportItemLabel(size_t index) const;
+  bool menuImportItemEnabled(size_t index) const;
+  bool menuImportItemSeparator(size_t index) const;
+  bool menuImportItemHasSubmenu(size_t index) const;
+  /// -1 none, 0 unchecked, 1 checked.
+  int menuImportItemChecked(size_t index) const;
+
+  /// Run the item, in the application that owns it.
+  void menuImportActivate(int32_t itemId);
+  /// Ask for a submenu's contents before opening it.
+  void menuImportAboutToShow(int32_t itemId);
 
  private:
   struct Impl;

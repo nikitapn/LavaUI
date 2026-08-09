@@ -20,6 +20,16 @@ public enum MenuBackendKind: Equatable, Sendable {
 /// (unset / auto)   → DBusMenu if registrar + X11, else vulkan
 /// ```
 public final class MenuHost {
+    /// The id to register this app's menu under, when the window is not an
+    /// X11 one and has no id of its own to offer.
+    ///
+    /// Set by `LavaClient` to the compositor's surface id, before the first
+    /// `MenuHost` exists. That number is what the compositor reports as
+    /// focused, so it is the one a panel can match a menu to — and without it
+    /// a client's menu could be exported but never *found*, which is why a
+    /// client used to fall back to drawing its own strip.
+    nonisolated(unsafe) public static var exportWindowId: UInt32 = 0
+
     public let controller = MenuController()
     public private(set) var backend: MenuBackendKind = .vulkan
     private let editor: Editor
@@ -141,7 +151,14 @@ public final class MenuHost {
             }
             return .vulkan
         }
-        guard editor.appMenuAttach() else {
+        // An X11 window registers itself; a compositor client has no X11 id
+        // and registers under the surface id the panel knows it by. Tried in
+        // that order rather than either/or, because a windowed app on X11 has
+        // both a real id and (if it is also a client, which it is not) nothing
+        // to gain from the second.
+        let attached = editor.appMenuAttach()
+            || (exportWindowId != 0 && editor.appMenuAttach(windowId: exportWindowId))
+        guard attached else {
             if forced == "dbus" {
                 FileHandle.standardError.write(
                     Data("LavaUI: LAVA_MENU=dbus but attach failed; using vulkan\n".utf8)

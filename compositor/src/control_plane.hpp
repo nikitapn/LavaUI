@@ -95,6 +95,16 @@ struct CompositorHost {
   /// Hides the window without ending it.
   virtual bool minimize(uint32_t surfaceId) = 0;
 
+  /// Re-thickens a panel, reserving `reserved` of it. False when the surface
+  /// is unknown or is not a panel. See `SetPanelThickness`.
+  virtual bool setPanelThickness(uint32_t surfaceId, uint32_t thickness,
+                                 uint32_t reserved) = 0;
+
+  /// The focused window and its title, for a subscriber that has just
+  /// arrived. `outSurfaceId` is 0 when nothing has focus.
+  virtual void activeWindow(uint32_t &outSurfaceId,
+                            std::string &outTitle) const = 0;
+
   /// "A frame is committed on this surface" — draw it.
   virtual void present(uint32_t surfaceId) = 0;
 
@@ -134,6 +144,14 @@ class ControlPlane {
 
   /// Ends every subscription to a surface that has gone away.
   virtual void surfaceGone(uint32_t surfaceId) = 0;
+
+  /// "The focused window is now this one" — to every panel watching.
+  ///
+  /// Called from the loop thread on every focus change, including the change
+  /// to nothing. Cheap when nobody is subscribed, which is the usual case:
+  /// only a panel with a global menu on it ever asks.
+  virtual void postActiveWindow(uint32_t surfaceId,
+                                const std::string &title) = 0;
 
   /// Where the reference is published. Clients read this file to find us.
   static std::string referencePath();

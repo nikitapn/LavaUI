@@ -65,6 +65,12 @@ skips body and layout. `LAVAUI_DEBUG=1` prints per-frame stage timings.
   commands must be ones the compositor understands. Fonts are
   **content-addressed** (`FontKey`: hash of bytes, face index, 26.6 size, …).
 - Draw lists: shared **DrawArena**. Control plane: small RPCs only.
+- **Global menu**: `LavaTaskbar` owns the AppMenu registrar and draws the
+  focused window's menu (`canvas/src/menu/menu_import.*` imports it,
+  `SubscribeActiveWindow` says whose, `SetPanelThickness` makes room for the
+  dropdown). A client registers under its **surface id**, not an X11 id — so
+  client-mode apps no longer fall back to an in-window menubar. See
+  `docs/native-menus.md`.
 - Window frame is the **client's** choice at `CreateSurface`:
   `LavaClient.open(frame: .client)` gets no compositor title bar, and the app
   places `WindowControls()` / `.windowDrag()` itself (`Sources/LavaUI/
@@ -176,6 +182,7 @@ Runtime agent protocol (MCP/CLI, stable `sid`s, hit-testing): **`docs/agent.md`*
 | Control-plane API | `idl/lava.npidl` then `scripts/gen_stubs.sh` |
 | Compositor windows / input / workspaces | `compositor/src/main.cpp` |
 | Window chrome an app draws itself | `Sources/LavaUI/WindowControls.swift` |
+| Panel global menu (import side) | `canvas/src/menu/menu_import.*`, `Sources/LavaUI/PanelMenu.swift` |
 | Client open / Present / input stream | `Sources/LavaClient/` |
 | Perf scenarios | `Sources/LavaBench/`, `docs/performance.md` |
 | App demos | `Sources/HelloWorld/`, Spotify/TraceLoom/LavaTerm apps |

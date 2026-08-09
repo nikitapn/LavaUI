@@ -612,9 +612,14 @@ struct ClientSurface {
   /// Which edge, for a panel. Meaningless otherwise. Kept rather than inferred
   /// from the position, so the work area does not have to guess.
   uint32_t edge = 0;
-  /// Whether windows should be laid out around this panel rather than under
-  /// it. See `SurfaceRegistry::workArea`.
-  bool reserve = false;
+  /// How much of a panel's thickness windows are laid out around, in pixels.
+  /// 0 floats over them, which is what an overlay wants.
+  ///
+  /// A number rather than a flag, because the two stopped being the same
+  /// thing: a panel with a menu on it grows to make room for an open dropdown
+  /// while still reserving only its strip, so the windows underneath do not
+  /// jump every time a menu opens. See `SetPanelThickness`.
+  uint32_t reserved = 0;
 
   /// Where a maximized window came from, so restoring is exact.
   bool maximized = false;
@@ -979,9 +984,18 @@ class SurfaceRegistry : public lava::CompositorHost {
     if (workspaces_ == nullptr) return 0;
     // On whichever workspace is current, because that is where the user was
     // when they asked for it.
-    return openSurface(arenaId, width, height, title,
-                       workspaces_->currentTree(), workspaces_->current,
-                       decorated);
+    const uint32_t id = openSurface(arenaId, width, height, title,
+                                    workspaces_->currentTree(),
+                                    workspaces_->current, decorated);
+    // A window that opens is the window the user is now looking at, and it
+    // should not need a click to become so. It matters more than it used to:
+    // focus is what a panel's global menu follows, so a window that opened
+    // unfocused would show its title bar as active — it is on top — while the
+    // menu on the panel still belonged to whatever was there before.
+    if (id != 0 && server_ != nullptr) {
+      if (ClientSurface *surface = find(id)) server_->focusSurface(*surface);
+    }
+    return id;
   }
 
   /// Frames a Wayland window: a title bar, a place in the stack, a workspace.
@@ -1012,6 +1026,12 @@ class SurfaceRegistry : public lava::CompositorHost {
     if (surface.title == title) return;
     surface.title = title;
     drawBar(surface);
+    // A panel showing the active window's name is showing this string, and a
+    // window that renames itself while focused — a browser changing tabs — is
+    // the ordinary case rather than an odd one.
+    if (control_ != nullptr && surface.id == focused_) {
+      control_->postActiveWindow(surface.id, surface.title);
+    }
   }
 
   /// Brings a window to the front of its workspace, frame and all.
@@ -1156,7 +1176,15 @@ class SurfaceRegistry : public lava::CompositorHost {
     const uint32_t previous = focused_;
     focused_ = id;
     if (ClientSurface *was = find(previous)) drawBar(*was);
-    if (ClientSurface *now = find(id)) drawBar(*now);
+    ClientSurface *now = find(id);
+    if (now != nullptr) drawBar(*now);
+    // The one place focus changes, so the one place anyone else can be told.
+    // A panel with a global menu on it is the caller that needs this; there is
+    // usually nobody subscribed and this costs a virtual call.
+    if (control_ != nullptr) {
+      control_->postActiveWindow(now != nullptr ? id : 0,
+                                 now != nullptr ? now->title : std::string{});
+    }
   }
 
   /// Lights whichever control is under the pointer. True if it changed.
@@ -1245,7 +1273,10 @@ class SurfaceRegistry : public lava::CompositorHost {
     ClientSurface *panel = find(id);
     panel->panel = true;
     panel->edge = edge;
-    panel->reserve = reserve;
+    // A panel that reserves, reserves all of itself — the strip it draws is
+    // the strip it is owed. Only `SetPanelThickness` can make the two differ,
+    // and only for as long as something is open.
+    panel->reserved = reserve ? thickness : 0;
 
     layoutPanel(*panel);
     // Above ordinary windows, which is what "panel" mostly means to a user.
@@ -1275,6 +1306,45 @@ class SurfaceRegistry : public lava::CompositorHost {
 
   bool minimize(uint32_t id) override;
 
+  bool setPanelThickness(uint32_t id, uint32_t thickness,
+                         uint32_t reserved) override {
+    ClientSurface *panel = find(id);
+    if (panel == nullptr || !panel->panel) return false;
+    // A panel cannot be owed more than it occupies. Clamped rather than
+    // refused: the caller's intent is plain, and the arithmetic below would
+    // otherwise hand out a negative work area.
+    panel->reserved = reserved > thickness ? thickness : reserved;
+    const bool horizontal =
+        panel->edge == kPanelTop || panel->edge == kPanelBottom;
+    resizeSurface(*panel, horizontal ? outputWidth_ : thickness,
+                  horizontal ? thickness : outputHeight_);
+    layoutPanel(*panel);
+    // A bottom or right panel grows *into* the screen, so its origin moved;
+    // `layoutPanel` has just put it back. What is left is everything that was
+    // laid out against the old reservation — which is only the maximized
+    // windows, since a maximized window is a promise about the work area
+    // rather than a size the user chose.
+    for (auto &surface : surfaces_) {
+      if (!surface->panel && surface->maximized) fillWorkArea(*surface);
+    }
+    return true;
+  }
+
+  void activeWindow(uint32_t &outSurfaceId,
+                    std::string &outTitle) const override {
+    outSurfaceId = focused_;
+    outTitle.clear();
+    for (const auto &surface : surfaces_) {
+      if (surface->id == focused_) {
+        outTitle = surface->title;
+        return;
+      }
+    }
+    // Focused id with no surface behind it means the window went away between
+    // the two; nothing is focused, and saying so is better than a stale name.
+    if (outSurfaceId != 0 && outTitle.empty()) outSurfaceId = 0;
+  }
+
   bool destroySurface(uint32_t id) override {
     for (auto it = surfaces_.begin(); it != surfaces_.end(); ++it) {
       if ((*it)->id != id) continue;
@@ -1288,6 +1358,12 @@ class SurfaceRegistry : public lava::CompositorHost {
       if ((*it)->barNode) wlr_scene_node_destroy(&(*it)->barNode->node);
       if ((*it)->isForeign()) (*it)->window->frameId = 0;
       surfaces_.erase(it);
+      // Before `surfaceGone`, so a panel hears "nothing is focused" rather
+      // than going on showing the menu of a window that has been destroyed.
+      if (id == focused_) {
+        focused_ = 0;
+        if (control_) control_->postActiveWindow(0, {});
+      }
       if (control_) control_->surfaceGone(id);
       wlr_log(WLR_INFO, "surface %u: gone", id);
       return true;
@@ -1415,23 +1491,25 @@ class SurfaceRegistry : public lava::CompositorHost {
     int w = static_cast<int>(outputWidth_);
     int h = static_cast<int>(outputHeight_);
     for (const auto &s : surfaces_) {
-      if (!s->panel || !s->reserve) continue;
-      // A panel is flush against its edge and spans it, so its thickness is
-      // the only measurement that matters.
+      if (!s->panel || s->reserved == 0) continue;
+      // What it *reserved*, not how thick it is: a panel that grew to hold an
+      // open menu is still only owed its strip, and windows that jumped every
+      // time a menu opened would be the most obvious bug on the desktop.
+      const int claim = static_cast<int>(s->reserved);
       switch (s->edge) {
         case kPanelTop:
-          y += static_cast<int>(s->height);
-          h -= static_cast<int>(s->height);
+          y += claim;
+          h -= claim;
           break;
         case kPanelBottom:
-          h -= static_cast<int>(s->height);
+          h -= claim;
           break;
         case kPanelLeft:
-          x += static_cast<int>(s->width);
-          w -= static_cast<int>(s->width);
+          x += claim;
+          w -= claim;
           break;
         case kPanelRight:
-          w -= static_cast<int>(s->width);
+          w -= claim;
           break;
         default:
           break;

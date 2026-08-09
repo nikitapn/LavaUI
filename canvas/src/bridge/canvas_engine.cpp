@@ -5,6 +5,7 @@
 
 #include "application.hpp"
 #include "menu/app_menu.hpp"
+#include "menu/menu_import.hpp"
 #include "render/font_key.hpp"
 #include "window/canvas_window.hpp"
 
@@ -29,6 +30,10 @@ struct Engine::Impl {
   std::unique_ptr<Application> offscreen;
   std::unique_ptr<CanvasWindowHost> window;
   AppMenuHost appMenu;
+  /// The panel's half of the same protocol. Built here rather than owned by
+  /// whoever draws a panel, so a menu importer has the same lifetime as the
+  /// engine that polls it — see `MenuImportHost`.
+  MenuImportHost menuImport;
 
   /// Client-mode event wait. A client has no GLFW to park in, but it still
   /// has to block — a producer that spins is worse than one that is slow,
@@ -702,6 +707,18 @@ bool Engine::appMenuAttach()
   return impl_->appMenu.attach(xid);
 }
 
+bool Engine::appMenuAttachWindow(uint32_t windowId)
+{
+  // The registrar's key is an X11 window id only because X11 is where the
+  // protocol grew up; it is a `u` on the wire and nothing on the panel side
+  // looks it up in an X server. A client of the lava compositor has no X11
+  // id at all — its window is a surface id — so this is the same registration
+  // keyed by the number that *does* name its window here, which is also the
+  // number the compositor reports as focused.
+  if (windowId == 0) return false;
+  return impl_->appMenu.attach(windowId);
+}
+
 void Engine::appMenuDetach() { impl_->appMenu.detach(); }
 
 bool Engine::appMenuIsAttached() const { return impl_->appMenu.isAttached(); }
@@ -732,6 +749,74 @@ std::string Engine::appMenuPopActivation()
   std::string id;
   if (impl_->appMenu.popActivation(id)) return id;
   return {};
+}
+
+// ─── Menu import (the panel side) ─────────────────────────────────────────
+
+bool Engine::menuImportStart() { return impl_->menuImport.start(); }
+
+std::string Engine::menuImportBusName() { return impl_->menuImport.busName(); }
+
+void Engine::menuImportSetActiveWindow(uint32_t windowId)
+{
+  impl_->menuImport.setActiveWindow(windowId);
+}
+
+void Engine::menuImportPoll() { impl_->menuImport.poll(); }
+
+uint64_t Engine::menuImportRevision() const
+{
+  return impl_->menuImport.revision();
+}
+
+size_t Engine::menuImportItemCount() const
+{
+  return impl_->menuImport.itemCount();
+}
+
+int32_t Engine::menuImportItemId(size_t index) const
+{
+  return impl_->menuImport.itemId(index);
+}
+
+int32_t Engine::menuImportItemParent(size_t index) const
+{
+  return impl_->menuImport.itemParent(index);
+}
+
+std::string Engine::menuImportItemLabel(size_t index) const
+{
+  return impl_->menuImport.itemLabel(index);
+}
+
+bool Engine::menuImportItemEnabled(size_t index) const
+{
+  return impl_->menuImport.itemEnabled(index);
+}
+
+bool Engine::menuImportItemSeparator(size_t index) const
+{
+  return impl_->menuImport.itemSeparator(index);
+}
+
+bool Engine::menuImportItemHasSubmenu(size_t index) const
+{
+  return impl_->menuImport.itemHasSubmenu(index);
+}
+
+int Engine::menuImportItemChecked(size_t index) const
+{
+  return impl_->menuImport.itemChecked(index);
+}
+
+void Engine::menuImportActivate(int32_t itemId)
+{
+  impl_->menuImport.activate(itemId);
+}
+
+void Engine::menuImportAboutToShow(int32_t itemId)
+{
+  impl_->menuImport.aboutToShow(itemId);
 }
 
 } // namespace canvas

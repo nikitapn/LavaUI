@@ -108,6 +108,34 @@ exception CaptureFailed {
   surfaceId: u32;
 }
 
+/// Which window has the keyboard now.
+///
+/// The compositor is the only process that knows, and until this there was no
+/// way for a second client to find out — which is why a panel could show a
+/// clock and nothing about the windows it sits above. A global menu is the
+/// first thing that genuinely needs it: the menu on the panel is *the focused
+/// window's* menu, and a panel guessing would show the wrong app's File menu.
+///
+/// A window, not an app: two windows of one process are two entries, because
+/// they are two menus and the user is looking at one of them.
+message ActiveWindow {
+  /// 0 when nothing is focused — the desktop, or the last window closing.
+  /// Panels should read it as "show nothing" rather than "keep the last".
+  surfaceId: u32;
+  /// What the window calls itself, so a panel showing a title does not need a
+  /// second call to learn it.
+  title: string;
+}
+
+/// Panel → compositor on the same stream: "I am showing this one now."
+///
+/// Not a permission and not a request — the focus has already changed. It is
+/// how far the panel has got, in the same sense `InputAck` is, and it is what
+/// keeps the stream's flow control moving.
+message FocusAck {
+  surfaceId: u32;
+}
+
 /// A PNG and the size it encoded to.
 ///
 /// The size is not redundant with the PNG's own header: `maxSide` may have
@@ -368,6 +396,53 @@ interface Compositor {
   /// exists, minimize is a button an app can offer but a desktop cannot fully
   /// answer.
   void Minimize(surfaceId: in u32) raises(SurfaceNotFound);
+
+  /// Changes how deep a panel is, and how much of that depth windows are laid
+  /// out around.
+  ///
+  /// Two numbers because they stopped being the same one. A panel is normally
+  /// both — a 32-pixel strip that reserves 32 pixels — but a panel with a
+  /// *menu* on it has to be able to draw a dropdown, and a dropdown does not
+  /// fit in the strip that owns it. So the panel grows its surface to the room
+  /// the menu needs while reserving the strip it always did: the windows
+  /// underneath do not move, and the open menu is drawn over them.
+  ///
+  /// It also decides what the panel takes clicks in, and that falls out rather
+  /// than being a second thing to set: a surface is hit-tested where it is,
+  /// so a grown panel receives the click that lands outside the open menu —
+  /// which is exactly the click that should close it.
+  ///
+  /// `reserved` may not exceed `thickness`; it is clamped if it does. A window
+  /// that was maximized against the old reservation is re-fitted to the new
+  /// one, because a maximized window is a promise about the work area rather
+  /// than a size someone chose.
+  void SetPanelThickness(surfaceId: in u32, thickness: in u32,
+                         reserved: in u32) raises(SurfaceNotFound);
+
+  /// The focused window, now and whenever it changes.
+  ///
+  /// The compositor owns focus, so a panel has no way to know it — the same
+  /// shape of hole `SubscribeInput` filled for the pointer. Without it a
+  /// global menu cannot exist at all: the menu on a panel is the *active*
+  /// window's, and nothing else in this system can say which that is.
+  ///
+  /// A stream rather than a call, for what focus is: it changes when the user
+  /// clicks, not when a panel asks, and a panel polling for it would be a
+  /// round trip per frame to learn nothing has happened. The first event is
+  /// the state at subscription, so a panel that starts after the windows do
+  /// is not blank until the next click.
+  ///
+  /// Bidirectional for the reason `SubscribeInput` is, and not because the
+  /// panel has anything to say: the reverse half is what NPRPC's flow control
+  /// meters and what makes the compositor notice a panel that has gone away,
+  /// instead of writing focus changes into a socket nobody reads. `FocusAck`
+  /// carries the id the panel actually applied, which also makes "the panel is
+  /// showing the wrong window's menu" a question with an answer.
+  ///
+  /// Nothing here asks *for* focus. Being told is a panel's business; taking
+  /// the keyboard from the window the user is typing in is not, and this
+  /// interface deliberately has no call for it.
+  bidi_stream<FocusAck, ActiveWindow> SubscribeActiveWindow();
 
   /// Gives the surface back: the window closes and the arena is released.
   ///

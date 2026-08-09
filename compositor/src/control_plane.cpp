@@ -3,6 +3,7 @@
 #include <sys/eventfd.h>
 #include <unistd.h>
 
+#include <condition_variable>
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
@@ -177,6 +178,118 @@ class InputBroker {
   uint32_t serial_ = 0;
 };
 
+/// One panel's focus subscription.
+///
+/// The same shape as `Subscriber` and for the same reasons — pushed to from
+/// the loop thread, closed from wherever the stream ends — but a different
+/// type, because it carries a different message and there is nothing to gain
+/// from making one class that carries either.
+struct FocusWatcher {
+  explicit FocusWatcher(nprpc::StreamWriter<ActiveWindow> &&w)
+      : writer(std::move(w)) {}
+
+  void send(const ActiveWindow &window) {
+    std::lock_guard lock(mutex);
+    if (!active) return;
+    writer.write(window);
+  }
+
+  void close() {
+    std::lock_guard lock(mutex);
+    if (!active) return;
+    active = false;
+    writer.close();
+  }
+
+  std::mutex mutex;
+  bool active = true;
+  nprpc::StreamWriter<ActiveWindow> writer;
+};
+
+using FocusWatcherPtr = std::shared_ptr<FocusWatcher>;
+
+/// Everyone watching the focus.
+///
+/// Not per surface, unlike input: focus is one fact about the whole session,
+/// and a panel wants the changes rather than the changes *of* some window it
+/// named. There are normally zero or one of these.
+///
+/// Writes happen on a thread of this broker's own, and that is the important
+/// part rather than an implementation detail. Focus changes on the Wayland
+/// loop — including when a *panel* dies, which destroys its surface and moves
+/// focus — and writing to a subscriber that has just stopped reading can
+/// block on a full ring buffer. On the loop thread that is the whole
+/// compositor stopping: every client's calls time out because the panel that
+/// crashed is not draining a stream. Here it is one idle thread waiting for a
+/// session that is about to be reaped.
+///
+/// The queue holds one value, not a log. Focus is a state — the newest answer
+/// makes every older one wrong — so a panel that was slow gets what is true
+/// now rather than a replay of what it missed.
+class FocusBroker {
+ public:
+  FocusBroker() : worker_([this] { run(); }) {}
+
+  ~FocusBroker() {
+    {
+      std::lock_guard lock(mutex_);
+      stop_ = true;
+    }
+    wake_.notify_all();
+    worker_.join();
+  }
+
+  void subscribe(const FocusWatcherPtr &watcher) {
+    std::lock_guard lock(mutex_);
+    watchers_.push_back(watcher);
+  }
+
+  void unsubscribe(const FocusWatcherPtr &watcher) {
+    std::lock_guard lock(mutex_);
+    std::erase(watchers_, watcher);
+  }
+
+  void broadcast(const ActiveWindow &window) {
+    {
+      std::lock_guard lock(mutex_);
+      pending_ = window;
+      hasPending_ = true;
+    }
+    wake_.notify_one();
+  }
+
+ private:
+  void run() {
+    for (;;) {
+      ActiveWindow window{};
+      std::vector<FocusWatcherPtr> targets;
+      {
+        std::unique_lock lock(mutex_);
+        wake_.wait(lock, [this] { return stop_ || hasPending_; });
+        if (stop_) return;
+        window = pending_;
+        hasPending_ = false;
+        // A panel whose stream has ended is a writer nothing will ever read.
+        std::erase_if(watchers_, [](const FocusWatcherPtr &w) {
+          return w->writer.is_done();
+        });
+        targets = watchers_;
+      }
+      // Outside the lock: a write can block, and a subscription arriving
+      // meanwhile must not wait behind it.
+      for (const auto &watcher : targets) watcher->send(window);
+    }
+  }
+
+  std::mutex mutex_;
+  std::condition_variable wake_;
+  std::vector<FocusWatcherPtr> watchers_;
+  ActiveWindow pending_{};
+  bool hasPending_ = false;
+  bool stop_ = false;
+  std::thread worker_;
+};
+
 /// How the renderer names a file decoded at a given cap.
 ///
 /// The same spelling `ImageStore.key` uses on the client, and deliberately so:
@@ -228,8 +341,9 @@ InputEvent make_event(uint32_t kind, float x, float y, int32_t button,
 
 class CompositorImpl final : public ICompositor_Servant {
  public:
-  CompositorImpl(CompositorHost &host, LoopQueue &loop, InputBroker &broker)
-      : host_(host), loop_(loop), broker_(broker) {}
+  CompositorImpl(CompositorHost &host, LoopQueue &loop, InputBroker &broker,
+                 FocusBroker &focus)
+      : host_(host), loop_(loop), broker_(broker), focus_(focus) {}
 
   // ─── Resources ───────────────────────────────────────────────────────────
 
@@ -343,6 +457,43 @@ class CompositorImpl final : public ICompositor_Servant {
 
   void Minimize(uint32_t surfaceId) override {
     if (!host_.minimize(surfaceId)) throw SurfaceNotFound(surfaceId);
+  }
+
+  void SetPanelThickness(uint32_t surfaceId, uint32_t thickness,
+                         uint32_t reserved) override {
+    if (!host_.setPanelThickness(surfaceId, thickness, reserved)) {
+      throw SurfaceNotFound(surfaceId);
+    }
+  }
+
+  nprpc::Task<> SubscribeActiveWindow(
+      nprpc::BidiStream<FocusAck, ActiveWindow> stream) override {
+    auto watcher = std::make_shared<FocusWatcher>(std::move(stream.writer));
+    focus_.subscribe(watcher);
+
+    // The state at subscription, before any change. A panel that started after
+    // the windows did would otherwise show nothing until the user next clicked
+    // something — which, on a desktop that is already sitting still, is a
+    // global menu that appears to be broken.
+    ActiveWindow current{};
+    host_.activeWindow(current.surfaceId, current.title);
+    watcher->send(current);
+
+    try {
+      // The panel saying which window it is showing. Nothing here needs the
+      // number yet; reading is what keeps flow control moving and what ends
+      // this loop when the panel goes away.
+      while (auto ack = co_await stream.reader) {
+        (void)ack;
+      }
+    } catch (...) {
+      focus_.unsubscribe(watcher);
+      watcher->close();
+      throw;
+    }
+    focus_.unsubscribe(watcher);
+    watcher->close();
+    co_return;
   }
 
   void Present(uint32_t surfaceId) override { host_.present(surfaceId); }
@@ -463,6 +614,7 @@ class CompositorImpl final : public ICompositor_Servant {
   CompositorHost &host_;
   LoopQueue &loop_;
   InputBroker &broker_;
+  FocusBroker &focus_;
 
   /// Registered images, three ways round: what a key resolves to, how many
   /// clients hold it, and which key an id came from. No lock, unlike
@@ -526,7 +678,7 @@ class ControlPlaneImpl final : public ControlPlane {
       return false;
     }
 
-    servant_ = std::make_unique<CompositorImpl>(host, queue_, broker_);
+    servant_ = std::make_unique<CompositorImpl>(host, queue_, broker_, focus_);
     const nprpc::ObjectId oid = poa_->activate_object_with_id(
         0, servant_.get(), nprpc::ObjectActivationFlags::shm);
 
@@ -557,9 +709,25 @@ class ControlPlaneImpl final : public ControlPlane {
     broker_.closeAll(surfaceId);
   }
 
+  void postActiveWindow(uint32_t surfaceId,
+                        const std::string &title) override {
+    ActiveWindow window{};
+    window.surfaceId = surfaceId;
+    window.title = title;
+    // Queued, never written from here. Two things go wrong when the loop
+    // thread does the writing itself, and both were seen: focus changes
+    // *inside* an RPC dispatch (`CreateSurface` focuses the window it just
+    // opened) re-enter the RPC layer the loop is already running under, and a
+    // subscriber that has stopped reading — the panel process dying is the
+    // ordinary way — blocks the write on a full buffer. Either one stops the
+    // compositor answering anybody. See `FocusBroker`.
+    focus_.broadcast(window);
+  }
+
  private:
   LoopQueue queue_;
   InputBroker broker_;
+  FocusBroker focus_;
   nprpc::Rpc *rpc_ = nullptr;
   nprpc::Poa *poa_ = nullptr;
   std::unique_ptr<CompositorImpl> servant_;

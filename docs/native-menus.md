@@ -299,13 +299,54 @@ nice-to-have; v1 can pick once at open.
 #### Wayland
 
 AppMenu Registrar historically keys menus by **X11 window id**. On pure
-Wayland there is no portable equivalent for non-GTK toolkits. v1 policy:
+Wayland there is no portable equivalent for non-GTK toolkits, so the original
+policy here was "prefer DBusMenu only when an X11 xid is available, otherwise
+draw the bar in-window".
 
-- Prefer DBusMenu only when an X11 xid is available (X11 or XWayland if the
-  handle is still meaningful for the DE — verify per target DE).
-- Otherwise use **VulkanMenuHost**.
+**Under the lava compositor that is now solved**, and the answer was smaller
+than the archaeology suggested: the registrar's key is a `u` on the wire and
+nothing on the panel side looks it up in an X server. So a client registers
+under its **surface id** — the number the compositor already uses to name its
+window, and the same number it reports as focused.
 
-Document this; do not block the feature on Wayland global-menu archaeology.
+```text
+    app (LavaUI client)                     LavaTaskbar
+    ────────────────────                    ───────────
+    DbusmenuServer at                       owns the registrar name
+    /com/canonical/menu/<surfaceId>  ──┐    (canonical, else org.lavaui.…)
+                                       │
+              RegisterWindow(surfaceId, path)
+                                       │
+                                       ▼
+                              DbusmenuClient reads the layout
+                                       ▲
+    compositor  ──SubscribeActiveWindow──┘   which window's menu to show
+```
+
+Three pieces make it work, and each is where it is for a reason:
+
+- **`MenuImportHost`** (`canvas/src/menu/menu_import.*`) is the panel's half:
+  it serves the registrar and imports layouts. Separate class from
+  `AppMenuHost` — publishing a menu and reading other applications' menus are
+  different jobs and no process should accidentally do both.
+- **`SubscribeActiveWindow`** on the control plane says *whose* menu. Focus
+  belongs to the compositor; a panel guessing would show the wrong app's File
+  menu.
+- **`SetPanelThickness`** lets the 32pt strip grow while a dropdown is open
+  and shrink afterwards, reserving the strip either way, so windows do not
+  move when a menu opens.
+
+Bus name: the panel takes `com.canonical.AppMenu.Registrar` when it is free —
+then Qt and GTK applications export to it with nothing changed on their side —
+and `org.lavaui.AppMenu.Registrar` when a host desktop (KDE, say) already owns
+the canonical one. Applications prefer the lava name where both exist, since
+both means "a lava panel inside somebody else's session".
+
+Applications also *re-register* when a registrar appears on the bus
+(`g_bus_watch_name`), so restarting the panel does not empty it. What still
+does not recover is an app that started when there was no registrar at all: it
+picked the in-window bar at startup and keeps it, because the backend is
+chosen once. Start the panel before the apps — which a session does anyway.
 
 ## Vulkan menu host (Linux fallback) — layout integration
 

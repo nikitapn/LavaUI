@@ -176,6 +176,56 @@ public func unmarshal_CaptureFailed(buffer: UnsafeRawPointer, offset: Int) -> Ca
   return result
 }
 
+public struct ActiveWindow: Codable, Sendable {
+  public var surfaceId: UInt32 = 0
+  public var title: String = ""
+
+  public init() {}
+
+  public init(surfaceId: UInt32, title: String)   {
+    self.surfaceId = surfaceId
+    self.title = title
+  }
+}
+
+
+// MARK: - Marshal ActiveWindow
+public func marshal_ActiveWindow(buffer: FlatBuffer, offset: Int, data: ActiveWindow) {
+  buffer.storeBytes(of: data.surfaceId, toByteOffset: offset + 0, as: UInt32.self)
+  NPRPC.marshal_string(buffer: buffer, offset: offset + 4, string: data.title)
+}
+
+// MARK: - Unmarshal ActiveWindow
+public func unmarshal_ActiveWindow(buffer: UnsafeRawPointer, offset: Int) -> ActiveWindow {
+  var result = ActiveWindow()
+  result.surfaceId = buffer.load(fromByteOffset: offset + 0, as: UInt32.self)
+  result.title = NPRPC.unmarshal_string(buffer: buffer, offset: offset + 4)
+  return result
+}
+
+public struct FocusAck: Codable, Sendable {
+  public var surfaceId: UInt32 = 0
+
+  public init() {}
+
+  public init(surfaceId: UInt32)   {
+    self.surfaceId = surfaceId
+  }
+}
+
+
+// MARK: - Marshal FocusAck
+public func marshal_FocusAck(buffer: FlatBuffer, offset: Int, data: FocusAck) {
+  buffer.storeBytes(of: data.surfaceId, toByteOffset: offset + 0, as: UInt32.self)
+}
+
+// MARK: - Unmarshal FocusAck
+public func unmarshal_FocusAck(buffer: UnsafeRawPointer, offset: Int) -> FocusAck {
+  var result = FocusAck()
+  result.surfaceId = buffer.load(fromByteOffset: offset + 0, as: UInt32.self)
+  return result
+}
+
 public struct Capture: Codable, Sendable {
   public var width: UInt32 = 0
   public var height: UInt32 = 0
@@ -511,6 +561,37 @@ fileprivate func unmarshal_lava_M8(buffer: UnsafeRawPointer, offset: Int) -> lav
 
 fileprivate struct lava_M9: Codable, Sendable {
   public var _1: UInt32 = 0
+  public var _2: UInt32 = 0
+  public var _3: UInt32 = 0
+
+  public init() {}
+
+  public init(_1: UInt32, _2: UInt32, _3: UInt32)   {
+    self._1 = _1
+    self._2 = _2
+    self._3 = _3
+  }
+}
+
+
+// MARK: - Marshal lava_M9
+fileprivate func marshal_lava_M9(buffer: FlatBuffer, offset: Int, data: lava_M9) {
+  buffer.storeBytes(of: data._1, toByteOffset: offset + 0, as: UInt32.self)
+  buffer.storeBytes(of: data._2, toByteOffset: offset + 4, as: UInt32.self)
+  buffer.storeBytes(of: data._3, toByteOffset: offset + 8, as: UInt32.self)
+}
+
+// MARK: - Unmarshal lava_M9
+fileprivate func unmarshal_lava_M9(buffer: UnsafeRawPointer, offset: Int) -> lava_M9 {
+  var result = lava_M9()
+  result._1 = buffer.load(fromByteOffset: offset + 0, as: UInt32.self)
+  result._2 = buffer.load(fromByteOffset: offset + 4, as: UInt32.self)
+  result._3 = buffer.load(fromByteOffset: offset + 8, as: UInt32.self)
+  return result
+}
+
+fileprivate struct lava_M10: Codable, Sendable {
+  public var _1: UInt32 = 0
   public var _2: Float = 0.0
   public var _3: Float = 0.0
 
@@ -524,23 +605,23 @@ fileprivate struct lava_M9: Codable, Sendable {
 }
 
 
-// MARK: - Marshal lava_M9
-fileprivate func marshal_lava_M9(buffer: FlatBuffer, offset: Int, data: lava_M9) {
+// MARK: - Marshal lava_M10
+fileprivate func marshal_lava_M10(buffer: FlatBuffer, offset: Int, data: lava_M10) {
   buffer.storeBytes(of: data._1, toByteOffset: offset + 0, as: UInt32.self)
   buffer.storeBytes(of: data._2, toByteOffset: offset + 4, as: Float.self)
   buffer.storeBytes(of: data._3, toByteOffset: offset + 8, as: Float.self)
 }
 
-// MARK: - Unmarshal lava_M9
-fileprivate func unmarshal_lava_M9(buffer: UnsafeRawPointer, offset: Int) -> lava_M9 {
-  var result = lava_M9()
+// MARK: - Unmarshal lava_M10
+fileprivate func unmarshal_lava_M10(buffer: UnsafeRawPointer, offset: Int) -> lava_M10 {
+  var result = lava_M10()
   result._1 = buffer.load(fromByteOffset: offset + 0, as: UInt32.self)
   result._2 = buffer.load(fromByteOffset: offset + 4, as: Float.self)
   result._3 = buffer.load(fromByteOffset: offset + 8, as: Float.self)
   return result
 }
 
-fileprivate struct lava_M10: Codable, Sendable {
+fileprivate struct lava_M11: Codable, Sendable {
   public var _1: [String] = []
 
   public init() {}
@@ -551,19 +632,19 @@ fileprivate struct lava_M10: Codable, Sendable {
 }
 
 
-// MARK: - Marshal lava_M10
-fileprivate func marshal_lava_M10(buffer: FlatBuffer, offset: Int, data: lava_M10) {
+// MARK: - Marshal lava_M11
+fileprivate func marshal_lava_M11(buffer: FlatBuffer, offset: Int, data: lava_M11) {
   NPRPC.marshal_string_vector(buffer: buffer, offset: offset + 0, vector: data._1)
 }
 
-// MARK: - Unmarshal lava_M10
-fileprivate func unmarshal_lava_M10(buffer: UnsafeRawPointer, offset: Int) -> lava_M10 {
-  var result = lava_M10()
+// MARK: - Unmarshal lava_M11
+fileprivate func unmarshal_lava_M11(buffer: UnsafeRawPointer, offset: Int) -> lava_M11 {
+  var result = lava_M11()
   result._1 = NPRPC.unmarshal_string_vector(buffer: buffer, offset: offset + 0)
   return result
 }
 
-fileprivate struct lava_M11: Codable, Sendable {
+fileprivate struct lava_M12: Codable, Sendable {
   public var _1: UInt32 = 0
   public var _2: Int32 = 0
   public var _3: Int32 = 0
@@ -584,8 +665,8 @@ fileprivate struct lava_M11: Codable, Sendable {
 }
 
 
-// MARK: - Marshal lava_M11
-fileprivate func marshal_lava_M11(buffer: FlatBuffer, offset: Int, data: lava_M11) {
+// MARK: - Marshal lava_M12
+fileprivate func marshal_lava_M12(buffer: FlatBuffer, offset: Int, data: lava_M12) {
   buffer.storeBytes(of: data._1, toByteOffset: offset + 0, as: UInt32.self)
   buffer.storeBytes(of: data._2, toByteOffset: offset + 4, as: Int32.self)
   buffer.storeBytes(of: data._3, toByteOffset: offset + 8, as: Int32.self)
@@ -594,9 +675,9 @@ fileprivate func marshal_lava_M11(buffer: FlatBuffer, offset: Int, data: lava_M1
   buffer.storeBytes(of: data._6, toByteOffset: offset + 20, as: Int32.self)
 }
 
-// MARK: - Unmarshal lava_M11
-fileprivate func unmarshal_lava_M11(buffer: UnsafeRawPointer, offset: Int) -> lava_M11 {
-  var result = lava_M11()
+// MARK: - Unmarshal lava_M12
+fileprivate func unmarshal_lava_M12(buffer: UnsafeRawPointer, offset: Int) -> lava_M12 {
+  var result = lava_M12()
   result._1 = buffer.load(fromByteOffset: offset + 0, as: UInt32.self)
   result._2 = buffer.load(fromByteOffset: offset + 4, as: Int32.self)
   result._3 = buffer.load(fromByteOffset: offset + 8, as: Int32.self)
@@ -606,7 +687,7 @@ fileprivate func unmarshal_lava_M11(buffer: UnsafeRawPointer, offset: Int) -> la
   return result
 }
 
-fileprivate struct lava_M12: Codable, Sendable {
+fileprivate struct lava_M13: Codable, Sendable {
   public var _1: Capture = Capture()
 
   public init() {}
@@ -617,19 +698,19 @@ fileprivate struct lava_M12: Codable, Sendable {
 }
 
 
-// MARK: - Marshal lava_M12
-fileprivate func marshal_lava_M12(buffer: FlatBuffer, offset: Int, data: lava_M12) {
+// MARK: - Marshal lava_M13
+fileprivate func marshal_lava_M13(buffer: FlatBuffer, offset: Int, data: lava_M13) {
   marshal_Capture(buffer: buffer, offset: offset + 0, data: data._1)
 }
 
-// MARK: - Unmarshal lava_M12
-fileprivate func unmarshal_lava_M12(buffer: UnsafeRawPointer, offset: Int) -> lava_M12 {
-  var result = lava_M12()
+// MARK: - Unmarshal lava_M13
+fileprivate func unmarshal_lava_M13(buffer: UnsafeRawPointer, offset: Int) -> lava_M13 {
+  var result = lava_M13()
   result._1 = unmarshal_Capture(buffer: buffer, offset: offset + 0)
   return result
 }
 
-fileprivate struct lava_M13: Codable, Sendable {
+fileprivate struct lava_M14: Codable, Sendable {
   public var _1: String = ""
 
   public init() {}
@@ -640,19 +721,19 @@ fileprivate struct lava_M13: Codable, Sendable {
 }
 
 
-// MARK: - Marshal lava_M13
-fileprivate func marshal_lava_M13(buffer: FlatBuffer, offset: Int, data: lava_M13) {
+// MARK: - Marshal lava_M14
+fileprivate func marshal_lava_M14(buffer: FlatBuffer, offset: Int, data: lava_M14) {
   NPRPC.marshal_string(buffer: buffer, offset: offset + 0, string: data._1)
 }
 
-// MARK: - Unmarshal lava_M13
-fileprivate func unmarshal_lava_M13(buffer: UnsafeRawPointer, offset: Int) -> lava_M13 {
-  var result = lava_M13()
+// MARK: - Unmarshal lava_M14
+fileprivate func unmarshal_lava_M14(buffer: UnsafeRawPointer, offset: Int) -> lava_M14 {
+  var result = lava_M14()
   result._1 = NPRPC.unmarshal_string(buffer: buffer, offset: offset + 0)
   return result
 }
 
-fileprivate struct lava_M14: Codable, Sendable {
+fileprivate struct lava_M15: Codable, Sendable {
   public var _1: UInt32 = 0
   public var _2: String = ""
 
@@ -665,15 +746,15 @@ fileprivate struct lava_M14: Codable, Sendable {
 }
 
 
-// MARK: - Marshal lava_M14
-fileprivate func marshal_lava_M14(buffer: FlatBuffer, offset: Int, data: lava_M14) {
+// MARK: - Marshal lava_M15
+fileprivate func marshal_lava_M15(buffer: FlatBuffer, offset: Int, data: lava_M15) {
   buffer.storeBytes(of: data._1, toByteOffset: offset + 0, as: UInt32.self)
   NPRPC.marshal_string(buffer: buffer, offset: offset + 4, string: data._2)
 }
 
-// MARK: - Unmarshal lava_M14
-fileprivate func unmarshal_lava_M14(buffer: UnsafeRawPointer, offset: Int) -> lava_M14 {
-  var result = lava_M14()
+// MARK: - Unmarshal lava_M15
+fileprivate func unmarshal_lava_M15(buffer: UnsafeRawPointer, offset: Int) -> lava_M15 {
+  var result = lava_M15()
   result._1 = buffer.load(fromByteOffset: offset + 0, as: UInt32.self)
   result._2 = NPRPC.unmarshal_string(buffer: buffer, offset: offset + 4)
   return result
@@ -689,6 +770,8 @@ public protocol CompositorProtocol {
   func beginMove(surfaceId: UInt32) throws
   func toggleMaximize(surfaceId: UInt32) throws -> Bool
   func minimize(surfaceId: UInt32) throws
+  func setPanelThickness(surfaceId: UInt32, thickness: UInt32, reserved: UInt32) throws
+  func subscribeActiveWindow(stream: NPRPCBidiStream<ActiveWindow, FocusAck>) async
   func destroySurface(surfaceId: UInt32) throws
   func present(surfaceId: UInt32)
   func scrollUnclaimed(surfaceId: UInt32, dx: Float, dy: Float)
@@ -1083,6 +1166,83 @@ final public class Compositor: NPRPCObject, @unchecked Sendable {
     if stdReply != 0 { throw UnexpectedReplyError(message: "Unexpected reply") }
   }
 
+  public func setPanelThickness(surfaceId: UInt32, thickness: UInt32, reserved: UInt32) async throws   {
+    // Prepare buffer
+    let buffer = FlatBuffer()
+    buffer.prepare(44)
+    buffer.commit(44)
+    guard let bufData = buffer.data else { throw BufferError(message: "Failed to get buffer data") }
+
+    // Write message header
+    bufData.storeBytes(of: UInt32(0), toByteOffset: 0, as: UInt32.self)  // size (set later)
+    bufData.storeBytes(of: UInt32(0), toByteOffset: 4, as: UInt32.self)  // msg_id: FunctionCall (MessageId enum value 0)
+    bufData.storeBytes(of: UInt32(0), toByteOffset: 8, as: UInt32.self)  // msg_type: Request
+    bufData.storeBytes(of: UInt32(0), toByteOffset: 12, as: UInt32.self) // reserved
+
+    // Write call header
+    bufData.storeBytes(of: poaIdx, toByteOffset: 16, as: UInt16.self)
+    bufData.storeBytes(of: UInt8(0), toByteOffset: 18, as: UInt8.self)  // interface_idx
+    bufData.storeBytes(of: UInt8(9), toByteOffset: 19, as: UInt8.self)  // function_idx
+    bufData.storeBytes(of: objectId, toByteOffset: 24, as: UInt64.self)
+
+    // Marshal input arguments
+    var inArgs = lava_M9()
+    inArgs._1 = surfaceId
+    inArgs._2 = thickness
+    inArgs._3 = reserved
+    marshal_lava_M9(buffer: buffer, offset: 32, data: inArgs)
+
+    guard let finalData = buffer.data else { throw BufferError(message: "Failed to get buffer data") }
+    finalData.storeBytes(of: UInt32(buffer.size), toByteOffset: 0, as: UInt32.self)
+
+    // Send and receive
+    try Task.checkCancellation()
+    let responseBuffer = try await sendAsyncReceive(buffer: buffer, timeout: timeout)
+
+    // Handle reply
+    let stdReply = try handleStandardReply(buffer: responseBuffer)
+    if stdReply == 1 { throw lava_throwException(buffer: responseBuffer) }
+    if stdReply != 0 { throw UnexpectedReplyError(message: "Unexpected reply") }
+  }
+
+  public func subscribeActiveWindow() throws -> NPRPCBidiStream<FocusAck, ActiveWindow>   {
+    let streamId = nprpc_generate_stream_id()
+
+    // Prepare StreamInit buffer
+    let buffer = FlatBuffer()
+    buffer.prepare(48)
+    buffer.commit(48)
+    guard let data = buffer.data else { throw BufferError(message: "Failed to get buffer data") }
+
+    // Write StreamInit message header
+    data.storeBytes(of: UInt32(0), toByteOffset: 0, as: UInt32.self)  // size (set later)
+    data.storeBytes(of: impl.MessageId.StreamInitialization.rawValue, toByteOffset: 4, as: UInt32.self)
+    data.storeBytes(of: impl.MessageType.Request.rawValue, toByteOffset: 8, as: UInt32.self)
+    data.storeBytes(of: UInt32(0), toByteOffset: 12, as: UInt32.self)  // reserved
+
+    // Write StreamInit fields
+    data.storeBytes(of: streamId, toByteOffset: 16, as: UInt64.self)  // offset 0
+    data.storeBytes(of: poaIdx, toByteOffset: 24, as: UInt16.self)  // offset 8
+    data.storeBytes(of: UInt8(0), toByteOffset: 26, as: UInt8.self)  // interface_idx at offset 10
+    data.storeBytes(of: objectId, toByteOffset: 32, as: UInt64.self)  // offset 16 (after 5-byte pad)
+    data.storeBytes(of: UInt8(10), toByteOffset: 40, as: UInt8.self)  // func_idx at offset 24
+    data.storeBytes(of: impl.StreamKind.Bidi.rawValue, toByteOffset: 41, as: UInt8.self)
+    data.storeBytes(of: defaultReaderWindow, toByteOffset: 44, as: UInt32.self)  // initial_credits at offset 28
+
+    guard let finalData = buffer.data else { throw BufferError(message: "Failed to get buffer data") }
+    finalData.storeBytes(of: UInt32(buffer.size), toByteOffset: 0, as: UInt32.self)
+
+    guard let session = nprpc_object_get_session(self.handle),
+          let streamManager = nprpc_session_get_stream_manager(session) else {
+      throw RuntimeError(message: "Failed to get session for stream")
+    }
+
+    let stream = NPRPC.createStreamManagerBidiStream(streamManager: streamManager, streamId: streamId, buffer: buffer, initialPayloadCapacity: 132, unreliable: false, producerWindow: defaultReaderWindow, serializer: { (buffer: FlatBuffer, offset: Int, value: FocusAck) in NPRPC.marshal_stream_struct(buffer: buffer, offset: offset, rootSize: 4, value: value) { buf, off, elem in marshal_FocusAck(buffer: buf, offset: off, data: elem) } }, deserializer: { (data: UnsafeRawPointer, _: Int) in unmarshal_ActiveWindow(buffer: data, offset: 0) })
+    let result = nprpc_session_stream_send_init(session, buffer.handle, self.timeout)
+    if result != 0 { throw RuntimeError(message: "StreamInit failed (code: \(result))") }
+    return stream
+  }
+
   public func destroySurface(surfaceId: UInt32) async throws   {
     // Prepare buffer
     let buffer = FlatBuffer()
@@ -1099,7 +1259,7 @@ final public class Compositor: NPRPCObject, @unchecked Sendable {
     // Write call header
     bufData.storeBytes(of: poaIdx, toByteOffset: 16, as: UInt16.self)
     bufData.storeBytes(of: UInt8(0), toByteOffset: 18, as: UInt8.self)  // interface_idx
-    bufData.storeBytes(of: UInt8(9), toByteOffset: 19, as: UInt8.self)  // function_idx
+    bufData.storeBytes(of: UInt8(11), toByteOffset: 19, as: UInt8.self)  // function_idx
     bufData.storeBytes(of: objectId, toByteOffset: 24, as: UInt64.self)
 
     // Marshal input arguments
@@ -1136,7 +1296,7 @@ final public class Compositor: NPRPCObject, @unchecked Sendable {
     // Write call header
     bufData.storeBytes(of: poaIdx, toByteOffset: 16, as: UInt16.self)
     bufData.storeBytes(of: UInt8(0), toByteOffset: 18, as: UInt8.self)  // interface_idx
-    bufData.storeBytes(of: UInt8(10), toByteOffset: 19, as: UInt8.self)  // function_idx
+    bufData.storeBytes(of: UInt8(12), toByteOffset: 19, as: UInt8.self)  // function_idx
     bufData.storeBytes(of: objectId, toByteOffset: 24, as: UInt64.self)
 
     // Marshal input arguments
@@ -1167,15 +1327,15 @@ final public class Compositor: NPRPCObject, @unchecked Sendable {
     // Write call header
     bufData.storeBytes(of: poaIdx, toByteOffset: 16, as: UInt16.self)
     bufData.storeBytes(of: UInt8(0), toByteOffset: 18, as: UInt8.self)  // interface_idx
-    bufData.storeBytes(of: UInt8(11), toByteOffset: 19, as: UInt8.self)  // function_idx
+    bufData.storeBytes(of: UInt8(13), toByteOffset: 19, as: UInt8.self)  // function_idx
     bufData.storeBytes(of: objectId, toByteOffset: 24, as: UInt64.self)
 
     // Marshal input arguments
-    var inArgs = lava_M9()
+    var inArgs = lava_M10()
     inArgs._1 = surfaceId
     inArgs._2 = dx
     inArgs._3 = dy
-    marshal_lava_M9(buffer: buffer, offset: 32, data: inArgs)
+    marshal_lava_M10(buffer: buffer, offset: 32, data: inArgs)
 
     guard let finalData = buffer.data else { return  }
     finalData.storeBytes(of: UInt32(buffer.size), toByteOffset: 0, as: UInt32.self)
@@ -1204,7 +1364,7 @@ final public class Compositor: NPRPCObject, @unchecked Sendable {
     data.storeBytes(of: poaIdx, toByteOffset: 24, as: UInt16.self)  // offset 8
     data.storeBytes(of: UInt8(0), toByteOffset: 26, as: UInt8.self)  // interface_idx at offset 10
     data.storeBytes(of: objectId, toByteOffset: 32, as: UInt64.self)  // offset 16 (after 5-byte pad)
-    data.storeBytes(of: UInt8(12), toByteOffset: 40, as: UInt8.self)  // func_idx at offset 24
+    data.storeBytes(of: UInt8(14), toByteOffset: 40, as: UInt8.self)  // func_idx at offset 24
     data.storeBytes(of: impl.StreamKind.Bidi.rawValue, toByteOffset: 41, as: UInt8.self)
     data.storeBytes(of: defaultReaderWindow, toByteOffset: 44, as: UInt32.self)  // initial_credits at offset 28
 
@@ -1244,93 +1404,6 @@ final public class Compositor: NPRPCObject, @unchecked Sendable {
     // Write call header
     bufData.storeBytes(of: poaIdx, toByteOffset: 16, as: UInt16.self)
     bufData.storeBytes(of: UInt8(0), toByteOffset: 18, as: UInt8.self)  // interface_idx
-    bufData.storeBytes(of: UInt8(13), toByteOffset: 19, as: UInt8.self)  // function_idx
-    bufData.storeBytes(of: objectId, toByteOffset: 24, as: UInt64.self)
-
-    // Marshal input arguments
-    var inArgs = lava_M2()
-    inArgs._1 = surfaceId
-    marshal_lava_M2(buffer: buffer, offset: 32, data: inArgs)
-
-    guard let finalData = buffer.data else { throw BufferError(message: "Failed to get buffer data") }
-    finalData.storeBytes(of: UInt32(buffer.size), toByteOffset: 0, as: UInt32.self)
-
-    // Send and receive
-    try Task.checkCancellation()
-    let responseBuffer = try await sendAsyncReceive(buffer: buffer, timeout: timeout)
-
-    // Handle reply
-    let stdReply = try handleStandardReply(buffer: responseBuffer)
-    if stdReply == 1 { throw lava_throwException(buffer: responseBuffer) }
-    if stdReply != -1 { throw UnexpectedReplyError(message: "Unexpected reply") }
-
-    guard let responseData = responseBuffer.data else { throw BufferError(message: "Failed to get response data") }
-    let out = unmarshal_lava_M10(buffer: responseData, offset: 16)
-    return out._1
-  }
-
-  public func captureSurface(surfaceId: UInt32, x: Int32, y: Int32, w: Int32, h: Int32, maxSide: Int32) async throws -> Capture   {
-    // Prepare buffer
-    let buffer = FlatBuffer()
-    buffer.prepare(56)
-    buffer.commit(56)
-    guard let bufData = buffer.data else { throw BufferError(message: "Failed to get buffer data") }
-
-    // Write message header
-    bufData.storeBytes(of: UInt32(0), toByteOffset: 0, as: UInt32.self)  // size (set later)
-    bufData.storeBytes(of: UInt32(0), toByteOffset: 4, as: UInt32.self)  // msg_id: FunctionCall (MessageId enum value 0)
-    bufData.storeBytes(of: UInt32(0), toByteOffset: 8, as: UInt32.self)  // msg_type: Request
-    bufData.storeBytes(of: UInt32(0), toByteOffset: 12, as: UInt32.self) // reserved
-
-    // Write call header
-    bufData.storeBytes(of: poaIdx, toByteOffset: 16, as: UInt16.self)
-    bufData.storeBytes(of: UInt8(0), toByteOffset: 18, as: UInt8.self)  // interface_idx
-    bufData.storeBytes(of: UInt8(14), toByteOffset: 19, as: UInt8.self)  // function_idx
-    bufData.storeBytes(of: objectId, toByteOffset: 24, as: UInt64.self)
-
-    // Marshal input arguments
-    var inArgs = lava_M11()
-    inArgs._1 = surfaceId
-    inArgs._2 = x
-    inArgs._3 = y
-    inArgs._4 = w
-    inArgs._5 = h
-    inArgs._6 = maxSide
-    marshal_lava_M11(buffer: buffer, offset: 32, data: inArgs)
-
-    guard let finalData = buffer.data else { throw BufferError(message: "Failed to get buffer data") }
-    finalData.storeBytes(of: UInt32(buffer.size), toByteOffset: 0, as: UInt32.self)
-
-    // Send and receive
-    try Task.checkCancellation()
-    let responseBuffer = try await sendAsyncReceive(buffer: buffer, timeout: timeout)
-
-    // Handle reply
-    let stdReply = try handleStandardReply(buffer: responseBuffer)
-    if stdReply == 1 { throw lava_throwException(buffer: responseBuffer) }
-    if stdReply != -1 { throw UnexpectedReplyError(message: "Unexpected reply") }
-
-    guard let responseData = responseBuffer.data else { throw BufferError(message: "Failed to get response data") }
-    let out = unmarshal_lava_M12(buffer: responseData, offset: 16)
-    return out._1
-  }
-
-  public func getClipboard(surfaceId: UInt32) async throws -> String   {
-    // Prepare buffer
-    let buffer = FlatBuffer()
-    buffer.prepare(36)
-    buffer.commit(36)
-    guard let bufData = buffer.data else { throw BufferError(message: "Failed to get buffer data") }
-
-    // Write message header
-    bufData.storeBytes(of: UInt32(0), toByteOffset: 0, as: UInt32.self)  // size (set later)
-    bufData.storeBytes(of: UInt32(0), toByteOffset: 4, as: UInt32.self)  // msg_id: FunctionCall (MessageId enum value 0)
-    bufData.storeBytes(of: UInt32(0), toByteOffset: 8, as: UInt32.self)  // msg_type: Request
-    bufData.storeBytes(of: UInt32(0), toByteOffset: 12, as: UInt32.self) // reserved
-
-    // Write call header
-    bufData.storeBytes(of: poaIdx, toByteOffset: 16, as: UInt16.self)
-    bufData.storeBytes(of: UInt8(0), toByteOffset: 18, as: UInt8.self)  // interface_idx
     bufData.storeBytes(of: UInt8(15), toByteOffset: 19, as: UInt8.self)  // function_idx
     bufData.storeBytes(of: objectId, toByteOffset: 24, as: UInt64.self)
 
@@ -1352,7 +1425,94 @@ final public class Compositor: NPRPCObject, @unchecked Sendable {
     if stdReply != -1 { throw UnexpectedReplyError(message: "Unexpected reply") }
 
     guard let responseData = responseBuffer.data else { throw BufferError(message: "Failed to get response data") }
+    let out = unmarshal_lava_M11(buffer: responseData, offset: 16)
+    return out._1
+  }
+
+  public func captureSurface(surfaceId: UInt32, x: Int32, y: Int32, w: Int32, h: Int32, maxSide: Int32) async throws -> Capture   {
+    // Prepare buffer
+    let buffer = FlatBuffer()
+    buffer.prepare(56)
+    buffer.commit(56)
+    guard let bufData = buffer.data else { throw BufferError(message: "Failed to get buffer data") }
+
+    // Write message header
+    bufData.storeBytes(of: UInt32(0), toByteOffset: 0, as: UInt32.self)  // size (set later)
+    bufData.storeBytes(of: UInt32(0), toByteOffset: 4, as: UInt32.self)  // msg_id: FunctionCall (MessageId enum value 0)
+    bufData.storeBytes(of: UInt32(0), toByteOffset: 8, as: UInt32.self)  // msg_type: Request
+    bufData.storeBytes(of: UInt32(0), toByteOffset: 12, as: UInt32.self) // reserved
+
+    // Write call header
+    bufData.storeBytes(of: poaIdx, toByteOffset: 16, as: UInt16.self)
+    bufData.storeBytes(of: UInt8(0), toByteOffset: 18, as: UInt8.self)  // interface_idx
+    bufData.storeBytes(of: UInt8(16), toByteOffset: 19, as: UInt8.self)  // function_idx
+    bufData.storeBytes(of: objectId, toByteOffset: 24, as: UInt64.self)
+
+    // Marshal input arguments
+    var inArgs = lava_M12()
+    inArgs._1 = surfaceId
+    inArgs._2 = x
+    inArgs._3 = y
+    inArgs._4 = w
+    inArgs._5 = h
+    inArgs._6 = maxSide
+    marshal_lava_M12(buffer: buffer, offset: 32, data: inArgs)
+
+    guard let finalData = buffer.data else { throw BufferError(message: "Failed to get buffer data") }
+    finalData.storeBytes(of: UInt32(buffer.size), toByteOffset: 0, as: UInt32.self)
+
+    // Send and receive
+    try Task.checkCancellation()
+    let responseBuffer = try await sendAsyncReceive(buffer: buffer, timeout: timeout)
+
+    // Handle reply
+    let stdReply = try handleStandardReply(buffer: responseBuffer)
+    if stdReply == 1 { throw lava_throwException(buffer: responseBuffer) }
+    if stdReply != -1 { throw UnexpectedReplyError(message: "Unexpected reply") }
+
+    guard let responseData = responseBuffer.data else { throw BufferError(message: "Failed to get response data") }
     let out = unmarshal_lava_M13(buffer: responseData, offset: 16)
+    return out._1
+  }
+
+  public func getClipboard(surfaceId: UInt32) async throws -> String   {
+    // Prepare buffer
+    let buffer = FlatBuffer()
+    buffer.prepare(36)
+    buffer.commit(36)
+    guard let bufData = buffer.data else { throw BufferError(message: "Failed to get buffer data") }
+
+    // Write message header
+    bufData.storeBytes(of: UInt32(0), toByteOffset: 0, as: UInt32.self)  // size (set later)
+    bufData.storeBytes(of: UInt32(0), toByteOffset: 4, as: UInt32.self)  // msg_id: FunctionCall (MessageId enum value 0)
+    bufData.storeBytes(of: UInt32(0), toByteOffset: 8, as: UInt32.self)  // msg_type: Request
+    bufData.storeBytes(of: UInt32(0), toByteOffset: 12, as: UInt32.self) // reserved
+
+    // Write call header
+    bufData.storeBytes(of: poaIdx, toByteOffset: 16, as: UInt16.self)
+    bufData.storeBytes(of: UInt8(0), toByteOffset: 18, as: UInt8.self)  // interface_idx
+    bufData.storeBytes(of: UInt8(17), toByteOffset: 19, as: UInt8.self)  // function_idx
+    bufData.storeBytes(of: objectId, toByteOffset: 24, as: UInt64.self)
+
+    // Marshal input arguments
+    var inArgs = lava_M2()
+    inArgs._1 = surfaceId
+    marshal_lava_M2(buffer: buffer, offset: 32, data: inArgs)
+
+    guard let finalData = buffer.data else { throw BufferError(message: "Failed to get buffer data") }
+    finalData.storeBytes(of: UInt32(buffer.size), toByteOffset: 0, as: UInt32.self)
+
+    // Send and receive
+    try Task.checkCancellation()
+    let responseBuffer = try await sendAsyncReceive(buffer: buffer, timeout: timeout)
+
+    // Handle reply
+    let stdReply = try handleStandardReply(buffer: responseBuffer)
+    if stdReply == 1 { throw lava_throwException(buffer: responseBuffer) }
+    if stdReply != -1 { throw UnexpectedReplyError(message: "Unexpected reply") }
+
+    guard let responseData = responseBuffer.data else { throw BufferError(message: "Failed to get response data") }
+    let out = unmarshal_lava_M14(buffer: responseData, offset: 16)
     return out._1
   }
 
@@ -1372,14 +1532,14 @@ final public class Compositor: NPRPCObject, @unchecked Sendable {
     // Write call header
     bufData.storeBytes(of: poaIdx, toByteOffset: 16, as: UInt16.self)
     bufData.storeBytes(of: UInt8(0), toByteOffset: 18, as: UInt8.self)  // interface_idx
-    bufData.storeBytes(of: UInt8(16), toByteOffset: 19, as: UInt8.self)  // function_idx
+    bufData.storeBytes(of: UInt8(18), toByteOffset: 19, as: UInt8.self)  // function_idx
     bufData.storeBytes(of: objectId, toByteOffset: 24, as: UInt64.self)
 
     // Marshal input arguments
-    var inArgs = lava_M14()
+    var inArgs = lava_M15()
     inArgs._1 = surfaceId
     inArgs._2 = text
-    marshal_lava_M14(buffer: buffer, offset: 32, data: inArgs)
+    marshal_lava_M15(buffer: buffer, offset: 32, data: inArgs)
 
     guard let finalData = buffer.data else { throw BufferError(message: "Failed to get buffer data") }
     finalData.storeBytes(of: UInt32(buffer.size), toByteOffset: 0, as: UInt32.self)
@@ -1440,6 +1600,14 @@ open class CompositorServant: NPRPCServant, CompositorProtocol, @unchecked Senda
     fatalError("Subclass must implement minimize")
   }
 
+  open func setPanelThickness(surfaceId: UInt32, thickness: UInt32, reserved: UInt32) throws   {
+    fatalError("Subclass must implement setPanelThickness")
+  }
+
+  open func subscribeActiveWindow(stream: NPRPCBidiStream<ActiveWindow, FocusAck>) async   {
+    fatalError("Subclass must implement subscribeActiveWindow")
+  }
+
   open func destroySurface(surfaceId: UInt32) throws   {
     fatalError("Subclass must implement destroySurface")
   }
@@ -1482,7 +1650,25 @@ open class CompositorServant: NPRPCServant, CompositorProtocol, @unchecked Senda
     if msgId == impl.MessageId.StreamInitialization.rawValue     {
       let streamFuncIdx = data.load(fromByteOffset: (16 + MemoryLayout<NPRPC.impl.StreamInit>.offset(of: \NPRPC.impl.StreamInit.func_idx)!), as: UInt8.self)
       switch streamFuncIdx       {
-        case 12: // SubscribeInput
+        case 10: // SubscribeActiveWindow
+          // Streaming method dispatch
+          guard let data = buffer.data else { return }
+          let streamId = data.load(fromByteOffset: (16 + MemoryLayout<NPRPC.impl.StreamInit>.offset(of: \NPRPC.impl.StreamInit.stream_id)!), as: UInt64.self)
+
+          guard let sessionCtx = self.sessionContext,
+                let streamManager = nprpc_get_stream_manager(sessionCtx) else {
+            makeSimpleAnswer(buffer: buffer, messageId: impl.MessageId.Error_BadInput)
+            return
+          }
+          let initialCredits = data.load(fromByteOffset: 44, as: UInt32.self)
+          let stream = NPRPC.createStreamManagerBidiStream(streamManager: streamManager, streamId: streamId, buffer: buffer, initialPayloadCapacity: 140, unreliable: false, initialCredits: initialCredits, serializer: { (buffer: FlatBuffer, offset: Int, value: ActiveWindow) in NPRPC.marshal_stream_struct(buffer: buffer, offset: offset, rootSize: 12, value: value) { buf, off, elem in marshal_ActiveWindow(buffer: buf, offset: off, data: elem) } }, deserializer: { (data: UnsafeRawPointer, _: Int) in unmarshal_FocusAck(buffer: data, offset: 0) })
+          nprpc_stream_manager_defer_stream_start(streamManager, streamId)
+          makeSimpleAnswer(buffer: buffer, messageId: impl.MessageId.Success)
+          Task {
+            await subscribeActiveWindow(stream: stream)
+          }
+
+        case 14: // SubscribeInput
           // Streaming method dispatch
           guard let data = buffer.data else { return }
           let streamId = data.load(fromByteOffset: (16 + MemoryLayout<NPRPC.impl.StreamInit>.offset(of: \NPRPC.impl.StreamInit.stream_id)!), as: UInt64.self)
@@ -1856,7 +2042,36 @@ open class CompositorServant: NPRPCServant, CompositorProtocol, @unchecked Senda
         catch {
           makeSimpleAnswer(buffer: buffer, messageId: impl.MessageId.Error_Unknown)
         }
-      case 9: // DestroySurface
+      case 9: // SetPanelThickness
+        // Validate input buffer for untrusted interface
+        guard check_1Fu322Fu323Fu32(buffer: data, bufferSize: buffer.size, offset: 32) else         {
+          makeSimpleAnswer(buffer: buffer, messageId: impl.MessageId.Error_BadInput)
+          return
+        }
+
+        // Unmarshal input arguments
+        let ia = unmarshal_lava_M9(buffer: data, offset: 32)
+        
+        do {
+          try setPanelThickness(surfaceId: ia._1, thickness: ia._2, reserved: ia._3)
+          // Send success
+          makeSimpleAnswer(buffer: buffer, messageId: impl.MessageId.Success)
+        }
+        catch let e as SurfaceNotFound {
+          let obuf = buffer
+          obuf.consume(obuf.size)
+          obuf.prepare(24)
+          obuf.commit(24)
+          guard let exData = obuf.data else { return }
+          marshal_SurfaceNotFound(buffer: obuf, offset: 16, data: e)
+          exData.storeBytes(of: UInt32(obuf.size), toByteOffset: 0, as: UInt32.self)
+          exData.storeBytes(of: impl.MessageId.Exception.rawValue, toByteOffset: 4, as: UInt32.self)
+          exData.storeBytes(of: impl.MessageType.Answer.rawValue, toByteOffset: 8, as: UInt32.self)
+        }
+        catch {
+          makeSimpleAnswer(buffer: buffer, messageId: impl.MessageId.Error_Unknown)
+        }
+      case 11: // DestroySurface
         // Validate input buffer for untrusted interface
         guard check_1Fu32(buffer: data, bufferSize: buffer.size, offset: 32) else         {
           makeSimpleAnswer(buffer: buffer, messageId: impl.MessageId.Error_BadInput)
@@ -1885,7 +2100,7 @@ open class CompositorServant: NPRPCServant, CompositorProtocol, @unchecked Senda
         catch {
           makeSimpleAnswer(buffer: buffer, messageId: impl.MessageId.Error_Unknown)
         }
-      case 10: // Present
+      case 12: // Present
         // Validate input buffer for untrusted interface
         guard check_1Fu32(buffer: data, bufferSize: buffer.size, offset: 32) else         {
           makeSimpleAnswer(buffer: buffer, messageId: impl.MessageId.Error_BadInput)
@@ -1896,7 +2111,7 @@ open class CompositorServant: NPRPCServant, CompositorProtocol, @unchecked Senda
         let ia = unmarshal_lava_M2(buffer: data, offset: 32)
         
         present(surfaceId: ia._1)
-      case 11: // ScrollUnclaimed
+      case 13: // ScrollUnclaimed
         // Validate input buffer for untrusted interface
         guard check_1Fu322Ff323Ff32(buffer: data, bufferSize: buffer.size, offset: 32) else         {
           makeSimpleAnswer(buffer: buffer, messageId: impl.MessageId.Error_BadInput)
@@ -1904,10 +2119,10 @@ open class CompositorServant: NPRPCServant, CompositorProtocol, @unchecked Senda
         }
 
         // Unmarshal input arguments
-        let ia = unmarshal_lava_M9(buffer: data, offset: 32)
+        let ia = unmarshal_lava_M10(buffer: data, offset: 32)
         
         scrollUnclaimed(surfaceId: ia._1, dx: ia._2, dy: ia._3)
-      case 13: // TakeDroppedPaths
+      case 15: // TakeDroppedPaths
         // Validate input buffer for untrusted interface
         guard check_1Fu32(buffer: data, bufferSize: buffer.size, offset: 32) else         {
           makeSimpleAnswer(buffer: buffer, messageId: impl.MessageId.Error_BadInput)
@@ -1925,10 +2140,10 @@ open class CompositorServant: NPRPCServant, CompositorProtocol, @unchecked Senda
         do {
           let __ret_val = try takeDroppedPaths(surfaceId: ia._1)
           // Marshal output arguments
-          var out_data = lava_M10()
+          var out_data = lava_M11()
           out_data._1 = __ret_val
 
-          marshal_lava_M10(buffer: buffer, offset: 16, data: out_data)
+          marshal_lava_M11(buffer: buffer, offset: 16, data: out_data)
           guard let outData = buffer.data else { return }
           outData.storeBytes(of: UInt32(buffer.size), toByteOffset: 0, as: UInt32.self)
           outData.storeBytes(of: impl.MessageId.BlockResponse.rawValue, toByteOffset: 4, as: UInt32.self)
@@ -1948,7 +2163,7 @@ open class CompositorServant: NPRPCServant, CompositorProtocol, @unchecked Senda
         catch {
           makeSimpleAnswer(buffer: buffer, messageId: impl.MessageId.Error_Unknown)
         }
-      case 14: // CaptureSurface
+      case 16: // CaptureSurface
         // Validate input buffer for untrusted interface
         guard check_1Fu322Fi323Fi324Fi325Fi326Fi32(buffer: data, bufferSize: buffer.size, offset: 32) else         {
           makeSimpleAnswer(buffer: buffer, messageId: impl.MessageId.Error_BadInput)
@@ -1956,7 +2171,7 @@ open class CompositorServant: NPRPCServant, CompositorProtocol, @unchecked Senda
         }
 
         // Unmarshal input arguments
-        let ia = unmarshal_lava_M11(buffer: data, offset: 32)
+        let ia = unmarshal_lava_M12(buffer: data, offset: 32)
         // Prepare output buffer
         let obuf = buffer
         obuf.consume(obuf.size)
@@ -1966,10 +2181,10 @@ open class CompositorServant: NPRPCServant, CompositorProtocol, @unchecked Senda
         do {
           let __ret_val = try captureSurface(surfaceId: ia._1, x: ia._2, y: ia._3, w: ia._4, h: ia._5, maxSide: ia._6)
           // Marshal output arguments
-          var out_data = lava_M12()
+          var out_data = lava_M13()
           out_data._1 = __ret_val
 
-          marshal_lava_M12(buffer: buffer, offset: 16, data: out_data)
+          marshal_lava_M13(buffer: buffer, offset: 16, data: out_data)
           guard let outData = buffer.data else { return }
           outData.storeBytes(of: UInt32(buffer.size), toByteOffset: 0, as: UInt32.self)
           outData.storeBytes(of: impl.MessageId.BlockResponse.rawValue, toByteOffset: 4, as: UInt32.self)
@@ -2000,7 +2215,7 @@ open class CompositorServant: NPRPCServant, CompositorProtocol, @unchecked Senda
         catch {
           makeSimpleAnswer(buffer: buffer, messageId: impl.MessageId.Error_Unknown)
         }
-      case 15: // GetClipboard
+      case 17: // GetClipboard
         // Validate input buffer for untrusted interface
         guard check_1Fu32(buffer: data, bufferSize: buffer.size, offset: 32) else         {
           makeSimpleAnswer(buffer: buffer, messageId: impl.MessageId.Error_BadInput)
@@ -2018,10 +2233,10 @@ open class CompositorServant: NPRPCServant, CompositorProtocol, @unchecked Senda
         do {
           let __ret_val = try getClipboard(surfaceId: ia._1)
           // Marshal output arguments
-          var out_data = lava_M13()
+          var out_data = lava_M14()
           out_data._1 = __ret_val
 
-          marshal_lava_M13(buffer: buffer, offset: 16, data: out_data)
+          marshal_lava_M14(buffer: buffer, offset: 16, data: out_data)
           guard let outData = buffer.data else { return }
           outData.storeBytes(of: UInt32(buffer.size), toByteOffset: 0, as: UInt32.self)
           outData.storeBytes(of: impl.MessageId.BlockResponse.rawValue, toByteOffset: 4, as: UInt32.self)
@@ -2041,7 +2256,7 @@ open class CompositorServant: NPRPCServant, CompositorProtocol, @unchecked Senda
         catch {
           makeSimpleAnswer(buffer: buffer, messageId: impl.MessageId.Error_Unknown)
         }
-      case 16: // SetClipboard
+      case 18: // SetClipboard
         // Validate input buffer for untrusted interface
         guard check_1Fu322S(buffer: data, bufferSize: buffer.size, offset: 32) else         {
           makeSimpleAnswer(buffer: buffer, messageId: impl.MessageId.Error_BadInput)
@@ -2049,7 +2264,7 @@ open class CompositorServant: NPRPCServant, CompositorProtocol, @unchecked Senda
         }
 
         // Unmarshal input arguments
-        let ia = unmarshal_lava_M14(buffer: data, offset: 32)
+        let ia = unmarshal_lava_M15(buffer: data, offset: 32)
         
         do {
           try setClipboard(surfaceId: ia._1, text: ia._2)
@@ -2127,20 +2342,27 @@ fileprivate func check_1S2EPanelEdge3Fu324Fb5S(buffer: UnsafeRawPointer, bufferS
 
 
 // Safety check for lava_M9
+fileprivate func check_1Fu322Fu323Fu32(buffer: UnsafeRawPointer, bufferSize: Int, offset: Int) -> Bool {
+  guard NPRPC.check_struct_bounds(bufferSize: bufferSize, offset: offset, structSize: 12) else { return false }
+  return true
+}
+
+
+// Safety check for lava_M10
 fileprivate func check_1Fu322Ff323Ff32(buffer: UnsafeRawPointer, bufferSize: Int, offset: Int) -> Bool {
   guard NPRPC.check_struct_bounds(bufferSize: bufferSize, offset: offset, structSize: 12) else { return false }
   return true
 }
 
 
-// Safety check for lava_M11
+// Safety check for lava_M12
 fileprivate func check_1Fu322Fi323Fi324Fi325Fi326Fi32(buffer: UnsafeRawPointer, bufferSize: Int, offset: Int) -> Bool {
   guard NPRPC.check_struct_bounds(bufferSize: bufferSize, offset: offset, structSize: 24) else { return false }
   return true
 }
 
 
-// Safety check for lava_M14
+// Safety check for lava_M15
 fileprivate func check_1Fu322S(buffer: UnsafeRawPointer, bufferSize: Int, offset: Int) -> Bool {
   guard NPRPC.check_struct_bounds(bufferSize: bufferSize, offset: offset, structSize: 12) else { return false }
   guard NPRPC.check_string_bounds(buffer: buffer, bufferSize: bufferSize, offset: offset + 4) else { return false }

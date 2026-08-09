@@ -249,9 +249,15 @@ This is not a client/server gap (windowed mode has none either), but a
 desktop needs it and the client path is where it has to be designed, since
 the renderer owns the pointer.
 
-No global/panel menu for clients: `x11WindowId()` returns 0 without a window,
-so `appMenuAttach` cannot register, and the menu bar degrades to in-window.
-Correct fallback; still means a client cannot put a menu in a panel.
+**Fixed:** the global menu. `x11WindowId()` is still 0 without a window, but
+the registrar's key never needed to be an X11 id — a client registers under
+its surface id, `LavaTaskbar` owns the registrar and imports the layout, and
+`SubscribeActiveWindow` tells it whose menu to show. A client-mode app now
+picks the `dbusMenu` backend rather than degrading to an in-window bar. See
+`docs/native-menus.md`.
+
+What is left of it: an app that starts before any registrar exists keeps the
+in-window bar for its lifetime, because the backend is chosen once at startup.
 
 No monitor DPI. `ContentScale` is LavaUI's own zoom, not the display's scale
 factor, and nothing carries the latter across.

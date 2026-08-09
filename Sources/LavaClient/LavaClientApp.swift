@@ -127,10 +127,77 @@ public enum LavaClient {
         reserve: Bool = true
     ) -> Editor? {
         Self.panel = (edge, thickness, reserve)
+        Self.panelReserved = reserve ? thickness : 0
         // The requested size is only a starting point for layout until the
         // compositor sends the real one; a panel's length is not its own to
         // choose, so guessing the screen's width is as good as anything.
         return open(title: title, width: 1920, height: thickness)
+    }
+
+    /// Grows or shrinks this panel, keeping what it reserves.
+    ///
+    /// For a panel that has to draw something taller than its strip — a menu
+    /// dropdown is the case this exists for. The windows underneath do not
+    /// move, because the reservation is unchanged; the panel simply has more
+    /// surface, and takes the clicks that land in it, which is what dismisses
+    /// an open menu.
+    ///
+    /// Pass `reserved: nil` to keep the reservation the panel was opened with,
+    /// which is almost always what a caller means.
+    public static func setPanelThickness(_ thickness: Float, reserved: Float? = nil) {
+        guard let compositor = Self.compositor, surfaceID != 0 else { return }
+        let claim = reserved ?? Self.panelReserved
+        report("SetPanelThickness") {
+            try blockingCall {
+                try await compositor.setPanelThickness(
+                    surfaceId: surfaceID,
+                    thickness: UInt32(max(1, thickness)),
+                    reserved: UInt32(max(0, claim))
+                )
+            }
+        }
+    }
+
+    /// The focused window, now and whenever it changes.
+    ///
+    /// For a panel: a global menu shows the *active* window's menu, and the
+    /// compositor is the only process that knows which that is. `handler` runs
+    /// on the frame loop — the same place a view's state may be touched — with
+    /// the surface id (0 for none) and the window's title.
+    ///
+    /// Call after `run` has a surface. The first call back is the state at
+    /// subscription rather than the next change, so a panel that started last
+    /// is not blank until the user clicks something.
+    public static func onActiveWindow(
+        _ handler: @escaping @Sendable (UInt32, String) -> Void
+    ) {
+        guard let compositor = Self.compositor else { return }
+        let stream: NPRPCBidiStream<FocusAck, ActiveWindow>
+        do {
+            stream = try compositor.subscribeActiveWindow()
+        } catch {
+            FileHandle.standardError.write(
+                Data("SubscribeActiveWindow failed: \(error)\n".utf8)
+            )
+            return
+        }
+        Task.detached {
+            do {
+                for try await window in stream.reader {
+                    let id = window.surfaceId
+                    let title = window.title
+                    MainQueue.async { handler(id, title) }
+                    // Cheap, and the only thing that keeps the stream's flow
+                    // control moving — see `FocusAck`.
+                    try? await stream.writer.write(FocusAck(surfaceId: id))
+                }
+            } catch {
+                FileHandle.standardError.write(
+                    Data("active window stream ended: \(error)\n".utf8)
+                )
+            }
+            stream.writer.close()
+        }
     }
 
     /// Takes a surface, subscribes to its input, and runs the frame loop.
@@ -180,6 +247,12 @@ public enum LavaClient {
         } catch {
             fail("surface setup failed: \(error)")
         }
+
+        // The id this app's menu is registered under, and the same id the
+        // compositor reports when this window takes focus — which is what lets
+        // a panel pair the two. Set before `LavaApp.run` builds the `MenuHost`,
+        // since that is when the registration happens.
+        MenuHost.exportWindowId = surfaceID
 
         // Now that there is a surface to name, the clipboard has somewhere to
         // go. `openClient` deliberately left this unwired; this is the other
@@ -356,6 +429,9 @@ public enum LavaClient {
     /// Set by `openPanel`; nil for an ordinary window.
     nonisolated(unsafe) private static var panel:
         (edge: PanelEdge, thickness: Float, reserve: Bool)?
+    /// What this panel reserves, kept across a thickness change so a caller
+    /// growing the panel for a menu does not have to restate it.
+    nonisolated(unsafe) private static var panelReserved: Float = 0
     /// The `Rpc` owns the transport — the shared-memory listener, its ring
     /// buffers, the worker threads — and dropping it tears all of that down.
     nonisolated(unsafe) private static var runtime: Rpc?
