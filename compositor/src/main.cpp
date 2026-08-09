@@ -770,9 +770,26 @@ class SurfaceRegistry : public lava::CompositorHost {
   /// Walks each window's bar, then its content, before the next window — so a
   /// content rectangle occludes every bar (and every content) behind it. That
   /// is the Z-order the scene graph already draws; hit testing has to match it.
+  ///
+  /// Panels are tested before windows, whatever order the list is in, because
+  /// that is where the scene puts them: they live in their own tree, above
+  /// every workspace, and `raise` deliberately never reorders them. Hit
+  /// testing did not know that. It mattered the moment a panel became bigger
+  /// than its strip — a panel grown to hold an open menu is a tall rectangle
+  /// under the window in front of it, so every dropdown row below the window's
+  /// top edge answered to the *window*, and only the first row or two of a
+  /// menu could be clicked at all.
   SurfaceHit hitTest(double lx, double ly) const {
+    if (SurfaceHit hit = hitTestPass(lx, ly, true); hit.surface != nullptr) {
+      return hit;
+    }
+    return hitTestPass(lx, ly, false);
+  }
+
+ private:
+  SurfaceHit hitTestPass(double lx, double ly, bool panels) const {
     for (const auto &s : surfaces_) {
-      if (!visible(*s)) continue;
+      if (s->panel != panels || !visible(*s)) continue;
       double sx = 0, sy = 0;
       // Within one window the bar is drawn above the content.
       if (s->hitBar(lx, ly, sx, sy)) {
@@ -787,6 +804,8 @@ class SurfaceRegistry : public lava::CompositorHost {
     }
     return {};
   }
+
+ public:
 
   /// Updates every window's bar hover for a pointer at `lx, ly`.
   ///
