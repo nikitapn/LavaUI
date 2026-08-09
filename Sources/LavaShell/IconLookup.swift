@@ -12,24 +12,7 @@ import Foundation
 /// Everything here is cached, because it is a directory walk answering a
 /// question whose answer does not change while the dock runs, and it happens
 /// on the frame loop.
-enum IconLookup {
-    /// Where a desktop entry can live, most specific first. A user's own
-    /// override of an application's entry has to win over the system's.
-    private static var applicationDirs: [String] {
-        var dirs: [String] = []
-        let env = ProcessInfo.processInfo.environment
-        if let home = env["XDG_DATA_HOME"], !home.isEmpty {
-            dirs.append(home + "/applications")
-        } else if let home = env["HOME"] {
-            dirs.append(home + "/.local/share/applications")
-        }
-        let system = env["XDG_DATA_DIRS"] ?? "/usr/local/share:/usr/share"
-        dirs.append(contentsOf: system.split(separator: ":").map {
-            String($0) + "/applications"
-        })
-        return dirs
-    }
-
+public enum IconLookup {
     /// Icon theme roots, most specific first.
     private static var iconRoots: [String] {
         var roots: [String] = []
@@ -66,7 +49,7 @@ enum IconLookup {
     /// Nil is a normal answer, not a failure: a lava app that installed no
     /// desktop entry has no icon anywhere on the system, and the dock draws its
     /// initial instead.
-    static func iconPath(forAppId appId: String) -> String? {
+    public static func iconPath(forAppId appId: String) -> String? {
         if let cached = iconPathCache[appId] { return cached }
         let found = search(appId: appId)
         iconPathCache[appId] = found
@@ -89,80 +72,40 @@ enum IconLookup {
 
     /// The `Icon=` of the entry belonging to `appId`.
     ///
-    /// Tried by filename first, which is how a well-behaved application names
-    /// its entry after its app id. Failing that the entries are scanned for a
-    /// `StartupWMClass` matching it — the field that exists precisely because
-    /// the two do not always agree, and the reason X11 apps under Wayland are
-    /// findable at all.
+    /// By id first, which is how a well-behaved application names its entry
+    /// after the `app_id` its windows report. Failing that, by
+    /// `StartupWMClass` — the field that exists precisely because the two do
+    /// not always agree, and the reason an X11 application under Xwayland can
+    /// be matched to an icon at all.
+    ///
+    /// Both come from `DesktopEntry.installed()`, which is the same list the
+    /// launcher shows. One parser for the format, so an entry the launcher can
+    /// read is one the dock can find an icon for.
     private static func desktopIconName(appId: String) -> String? {
-        let candidates = [appId, appId.lowercased(), "org.\(appId)"]
-        for dir in applicationDirs {
-            for candidate in candidates {
-                let path = "\(dir)/\(candidate).desktop"
-                if let icon = iconField(inFile: path) { return icon }
+        let needle = appId.lowercased()
+        var byWMClass: String?
+        for entry in entries() where !entry.icon.isEmpty {
+            let id = entry.id.lowercased()
+            if id == needle || id == "org.\(needle)" { return entry.icon }
+            if byWMClass == nil, entry.startupWMClass.lowercased() == needle {
+                byWMClass = entry.icon
             }
         }
-        return scanForWMClass(appId: appId)
+        return byWMClass
     }
 
-    private static func iconField(inFile path: String) -> String? {
-        guard let text = try? String(contentsOfFile: path, encoding: .utf8) else {
-            return nil
-        }
-        return field("Icon", in: text)
-    }
-
-    /// One pass over every entry, done at most once per dock run.
+    /// Every installed entry, read once.
     ///
-    /// Expensive enough to be worth avoiding — a few hundred small files — and
-    /// cheap enough not to be worth avoiding twice, which is what the cache is
-    /// for. Built lazily so a desktop whose applications all name themselves
-    /// properly never pays for it at all.
-    nonisolated(unsafe) private static var wmClassIndex: [String: String]?
+    /// A few hundred small files, and the answer does not change while a dock
+    /// or a launcher is showing — so it is worth avoiding the second walk and
+    /// not worth watching the directories for a third.
+    nonisolated(unsafe) private static var cachedEntries: [DesktopEntry]?
 
-    private static func scanForWMClass(appId: String) -> String? {
-        if wmClassIndex == nil {
-            var index: [String: String] = [:]
-            for dir in applicationDirs {
-                let entries = (try? FileManager.default.contentsOfDirectory(atPath: dir)) ?? []
-                for entry in entries where entry.hasSuffix(".desktop") {
-                    let path = "\(dir)/\(entry)"
-                    guard let text = try? String(contentsOfFile: path, encoding: .utf8),
-                          let wmClass = field("StartupWMClass", in: text),
-                          let icon = field("Icon", in: text)
-                    else { continue }
-                    // First wins: `applicationDirs` is in precedence order.
-                    if index[wmClass.lowercased()] == nil {
-                        index[wmClass.lowercased()] = icon
-                    }
-                }
-            }
-            wmClassIndex = index
-        }
-        return wmClassIndex?[appId.lowercased()]
-    }
-
-    /// A `Key=Value` from the `[Desktop Entry]` group.
-    ///
-    /// Stops at the next group header, because an action group further down
-    /// (`[Desktop Action new-window]`) has its own `Icon=` for a different
-    /// thing entirely.
-    private static func field(_ key: String, in text: String) -> String? {
-        var inMainGroup = false
-        for rawLine in text.split(separator: "\n", omittingEmptySubsequences: false) {
-            let line = rawLine.trimmingCharacters(in: .whitespaces)
-            if line.hasPrefix("[") {
-                inMainGroup = line == "[Desktop Entry]"
-                continue
-            }
-            guard inMainGroup, line.hasPrefix(key) else { continue }
-            let parts = line.split(separator: "=", maxSplits: 1)
-            guard parts.count == 2, parts[0].trimmingCharacters(in: .whitespaces) == key
-            else { continue }
-            let value = parts[1].trimmingCharacters(in: .whitespaces)
-            return value.isEmpty ? nil : value
-        }
-        return nil
+    private static func entries() -> [DesktopEntry] {
+        if let cachedEntries { return cachedEntries }
+        let found = DesktopEntry.installed()
+        cachedEntries = found
+        return found
     }
 
     // MARK: - Icon themes

@@ -72,6 +72,12 @@ class ShellSupervisor {
   /// insist. Safe to call twice.
   void stop();
 
+  /// Where a component named without a path is found: `$LAVA_SHELL_DIR`, then
+  /// beside the compositor binary, then this repo's SwiftPM build directory,
+  /// then PATH. Public because the key bindings launch one — the application
+  /// launcher — that is not supervised but lives in exactly the same places.
+  static std::string programPath(const std::string &program);
+
  private:
   struct Supervised {
     ShellComponent component;
@@ -99,9 +105,6 @@ class ShellSupervisor {
   void retire(Supervised &entry, const char *why);
   Supervised *byAppId(const std::string &appId);
   Supervised *byPid(pid_t pid);
-
-  /// Where to look for a component named without a path.
-  static std::string resolve(const std::string &program);
 
   static int on_sigchld(int signal, void *data);
   static int on_tick(void *data);

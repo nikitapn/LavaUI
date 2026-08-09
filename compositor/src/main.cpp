@@ -2203,6 +2203,22 @@ class SurfaceRegistry : public lava::CompositorHost {
                        wlr_scene_tree *parent, uint32_t workspace,
                        bool decorated) {
     if (renderer_ == nullptr || parent == nullptr) return 0;
+
+    // A requested size is a request, and the screen is the limit on it. A
+    // client asking for more than there is gets what there is: the alternative
+    // is a window whose bottom and right are off the display, which is not
+    // what anything means by asking for a big window. It is also how a client
+    // says "fill the screen" without a call for it — the launcher asks for
+    // 4K and gets the work area, whatever that is here.
+    if (const WorkArea area = workArea(); area.width > 0 && area.height > 0) {
+      // A decorated window's title bar sits above its content, so the content
+      // that fits is the work area less the strip.
+      const uint32_t bar = decorated ? lava::Decoration::kHeight : 0;
+      const uint32_t limitH = area.height > bar ? area.height - bar : kMinSurface;
+      width = std::min(width, area.width);
+      height = std::min(height, std::max(limitH, kMinSurface));
+    }
+
     auto surface = std::make_unique<ClientSurface>();
     surface->canvas = renderer_->createSurface(width, height);
     if (!surface->canvas) return 0;
@@ -3038,6 +3054,15 @@ void launch_rofi() {
   launch_program(program, argv, x11Environment.data());
 }
 
+/// The application launcher, which is a LavaUI client rather than a program on
+/// PATH — so it is found the way the panel and the dock are.
+void launch_launcher() {
+  const std::string path = lava::ShellSupervisor::programPath("LavaLauncher");
+  std::string program = path;
+  char *argv[] = {program.data(), nullptr};
+  launch_program(program.c_str(), argv);
+}
+
 void launch_alacritty() {
   char program[] = "alacritty";
   char *argv[] = {program, nullptr};
@@ -3048,6 +3073,7 @@ void launch_alacritty() {
 enum class BindingAction : uint8_t {
   Quit,
   Launcher,
+  AppLauncher,
   Terminal,
   Minimize,
   RestoreLast,
@@ -3088,7 +3114,9 @@ constexpr BindingSpec kBindings[] = {
     {BindingAction::Quit, XKB_KEY_Escape, XKB_KEY_Escape, false, false,
      "Escape", "session.quit", "Ends the session"},
     {BindingAction::Launcher, XKB_KEY_space, XKB_KEY_space, false, false,
-     "Space", "launcher.open", "Opens the application launcher"},
+     "Space", "launcher.rofi", "Opens rofi"},
+    {BindingAction::AppLauncher, XKB_KEY_p, XKB_KEY_p, false, false, "P",
+     "launcher.open", "Opens the application launcher"},
     {BindingAction::Terminal, XKB_KEY_Return, XKB_KEY_Return, false, false,
      "Return", "terminal.open", "Opens a terminal"},
     {BindingAction::Minimize, XKB_KEY_m, XKB_KEY_m, false, false, "M",
@@ -3179,6 +3207,10 @@ bool perform_binding(Server *server, const BindingSpec &spec,
 
   case BindingAction::Launcher:
     launch_rofi();
+    return true;
+
+  case BindingAction::AppLauncher:
+    launch_launcher();
     return true;
 
   case BindingAction::Terminal:

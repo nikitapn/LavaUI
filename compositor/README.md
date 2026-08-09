@@ -57,6 +57,20 @@ client to get wrong.
 `LAVA_NO_SHELL=1` turns the lot off for one run — which is what you want when
 running the dock under a debugger.
 
+**Alt+P** opens the application launcher, which is *not* supervised: it is
+spawned per invocation and exits as soon as it has launched something or been
+dismissed, the way rofi does. A LavaUI client reaches its first frame in about
+200 ms, so there is nothing to gain from keeping one resident and holding an
+arena for the time nobody is launching anything. It is found in the same places
+a supervised component is — beside the compositor, then this repo's SwiftPM
+build directory, then PATH.
+
+The list it shows comes from freedesktop desktop entries, which is the only
+registry of installed applications Linux has: a directory walk over
+`applications/` under each XDG data directory. `Sources/LavaShell` is where
+that is implemented, and it is shared with the dock, so an entry the launcher
+can read is one the dock can find an icon for.
+
 ## Configuration
 
 `$LAVA_CONFIG`, else `$XDG_CONFIG_HOME/lava/lava.conf`, else

@@ -1,0 +1,208 @@
+import Foundation
+import LavaClient
+import LavaShell
+import LavaUI
+
+/// Everything that is not a click: Escape, Enter, and the arrows.
+///
+/// Handled raw rather than through the search field, because they belong to
+/// the *grid* while the caret is in the box. That is the arrangement every
+/// launcher has — you type without aiming, and the arrows move a selection
+/// somewhere else on the screen. Returning true consumes the key, which is
+/// what stops Down from putting a character in the field.
+func handleKey(_ event: LavaUI.InputEvent) -> Bool {
+    guard event.kind == .key, event.keyAction != KeyAction.release else {
+        return false
+    }
+
+    switch event.keyCode {
+    case KeyCode.escape:
+        // Dismissed. A launcher is a question, and this is declining to answer.
+        exit(0)
+    case KeyCode.enter:
+        model.launchSelected()
+        return true
+    case KeyCode.left:
+        model.move(by: -1)
+        return true
+    case KeyCode.right:
+        model.move(by: 1)
+        return true
+    case KeyCode.up:
+        model.move(by: -LauncherLayout.columns)
+        return true
+    case KeyCode.down:
+        model.move(by: LauncherLayout.columns)
+        return true
+    case KeyCode.tab:
+        model.move(by: KeyMods.contains(event.keyMods, KeyMods.shift) ? -1 : 1)
+        return true
+    default:
+        return false
+    }
+}
+
+/// How many cards are across, as of the last frame.
+///
+/// Up and Down mean "one row", and a row is only as long as the window is
+/// wide — which the key handler cannot know and the layout can. Written by the
+/// ruler below, read by the handler; both run on the frame loop, so one
+/// variable is the whole of the synchronisation.
+enum LauncherLayout {
+    nonisolated(unsafe) static var columns: Int = 1
+}
+
+struct LauncherView: View {
+    var body: some View {
+        VStack(flexGrow: 1, padding: Grid.padding, spacing: 12) {
+            SearchField()
+            Ruler()
+            Results()
+        }
+    }
+}
+
+/// The search box, focused from the first frame.
+///
+/// Focused because that is the entire interaction: the window opens and you
+/// type. A launcher that needed a click in the box first would be asking the
+/// user to aim at something before saying what they want.
+private struct SearchField: View {
+    var body: some View {
+        VStack(spacing: 0) {
+            TextField(
+                text: Binding(model, \.query),
+                placeholder: "Search",
+                autoFocus: true,
+                onSubmit: { model.launchSelected() }
+            )
+            .padding(12)
+            .background(Theme.current.panel)
+            .cornerRadius(10)
+        }
+    }
+}
+
+/// A view that draws nothing and measures the row.
+///
+/// Zero height, full width, and its paint records how many cards fit across.
+/// It exists because the arrow keys need a number that only layout knows, and
+/// the alternative — the launcher guessing from a surface size it is never
+/// told — is the bug where Down moves by the wrong amount on every screen but
+/// the developer's.
+private struct Ruler: View {
+    var body: some View {
+        Canvas(
+            label: "Ruler",
+            width: .pct(100),
+            height: .pt(0),
+            paint: { _, frame in
+                LauncherLayout.columns = Grid.columns(width: frame.w)
+            }
+        )
+    }
+}
+
+/// The wall of applications.
+private struct Results: View {
+    @ViewBuilder
+    var body: some View {
+        let entries = model.matches
+        if entries.isEmpty {
+            VStack(flexGrow: 1, padding: 40, alignment: .center, spacing: 8) {
+                Text("Nothing matches “\(model.query)”.",
+                     color: Theme.current.textDim)
+                Spacer()
+            }
+        } else {
+            ScrollView {
+                LazyVGrid(
+                    entries,
+                    cellWidth: Grid.cardWidth,
+                    cellHeight: Grid.cardHeight,
+                    spacing: Grid.spacing
+                ) { entry in
+                    AppCard(entry: entry)
+                }
+            }
+            .flexGrow(1)
+        }
+    }
+}
+
+/// One application: its icon, its name, and what kind of thing it is.
+private struct AppCard: View {
+    let entry: DesktopEntry
+
+    @DrawState private var hovered = false
+
+    var body: some View {
+        // Read here so the card re-renders when the selection moves onto or
+        // off it; `matches` is stable while the query is.
+        let isSelected = model.matches.indices.contains(model.selected)
+            && model.matches[model.selected].id == entry.id
+
+        return VStack(
+            width: .pt(Grid.cardWidth),
+            height: .pt(Grid.cardHeight),
+            padding: 10,
+            alignment: .center,
+            spacing: 6,
+            onClick: { model.launch(entry) },
+            onHover: { hovered = $0 }
+        ) {
+            Spacer()
+            Icon(entry: entry)
+            Text(entry.name, color: Theme.current.textPrimary, lineLimit: 1)
+            if !entry.genericName.isEmpty {
+                Text(entry.genericName, color: Theme.current.textDim, lineLimit: 1)
+            }
+            Spacer()
+        }
+        .background(
+            isSelected ? Theme.current.selectionFill
+                       : (hovered ? Theme.current.hover : Theme.current.panel)
+        )
+        .cornerRadius(12)
+    }
+}
+
+/// The icon, or the application's initial when there is none to find.
+private struct Icon: View {
+    let entry: DesktopEntry
+
+    @ViewBuilder
+    var body: some View {
+        // An absolute path in `Icon=` is used as given; a name goes through
+        // the theme search. Both end as a file for the renderer to decode, and
+        // `Image(path:)` resolves it at emit — so a screen of two hundred
+        // icons costs two hundred decodes spread over the frames that show
+        // them, not one stall before the first one.
+        if let path = iconPath() {
+            Image(
+                path: path,
+                width: .pt(Grid.iconSize),
+                height: .pt(Grid.iconSize),
+                contentMode: .fit
+            )
+        } else {
+            Text(String(entry.name.prefix(1)).uppercased(),
+                 color: Theme.current.textSecondary)
+                .frame(width: .pt(Grid.iconSize), height: .pt(Grid.iconSize))
+        }
+    }
+
+    /// The entry's own `Icon=` first, since that is what it says it wants; the
+    /// id second, for the entries that name no icon and ship one anyway.
+    private func iconPath() -> String? {
+        themedIcon(entry.icon) ?? IconLookup.iconPath(forAppId: entry.id)
+    }
+
+    private func themedIcon(_ name: String) -> String? {
+        guard !name.isEmpty else { return nil }
+        if name.hasPrefix("/") {
+            return FileManager.default.fileExists(atPath: name) ? name : nil
+        }
+        return IconLookup.iconPath(forAppId: name)
+    }
+}

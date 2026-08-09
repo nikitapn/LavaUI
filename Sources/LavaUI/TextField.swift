@@ -27,6 +27,17 @@ public struct TextField: PrimitiveView {
     public var maxLines: Int
     /// Wrap long lines to the field width instead of letting them overflow.
     public var wraps: Bool
+    /// Take the caret as soon as this field appears.
+    ///
+    /// For the window whose entire purpose is one field — a launcher, a search
+    /// overlay, a rename prompt. Without it the user has to click the box
+    /// before typing, which is asking them to aim at something before saying
+    /// what they want.
+    ///
+    /// Only on mount, and only when nothing else in the window is focused: a
+    /// field that re-took focus on every reconcile would steal the caret back
+    /// from wherever the user had since put it.
+    public var autoFocus: Bool = false
     /// Overrides `Theme.focusRingStyle` when set.
     public var focusRing: FocusRingStyle?
     public var focusRingWidth: Float?
@@ -39,6 +50,7 @@ public struct TextField: PrimitiveView {
         multiline: Bool = false,
         maxLines: Int = 8,
         wraps: Bool = false,
+        autoFocus: Bool = false,
         focusRing: FocusRingStyle? = nil,
         focusRingWidth: Float? = nil,
         focusRingColor: Color? = nil,
@@ -50,6 +62,7 @@ public struct TextField: PrimitiveView {
         self.isMultiline = multiline
         self.maxLines = maxLines
         self.wraps = wraps
+        self.autoFocus = autoFocus
         self.focusRing = focusRing
         self.focusRingWidth = focusRingWidth
         self.focusRingColor = focusRingColor
@@ -65,6 +78,9 @@ public struct TextField: PrimitiveView {
         configure(leaf)
         leaf.editing = TextEditingState(text)
         leaf.installTextMeasure()
+        if autoFocus, FocusManager.focusedID == nil {
+            leaf.focusSelf(binding: _text, onSubmit: onSubmit)
+        }
         return leaf
     }
 

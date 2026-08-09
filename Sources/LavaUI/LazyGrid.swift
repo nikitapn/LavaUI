@@ -357,6 +357,21 @@ final class LazyGridNode: YogaBoxNode {
         let cellW = cellWidth ?? max(1, lastWidth)
         for index in range where cells[index] == nil {
             let cell = LazyCellNode(index: index, item: ViewGraph.mount(makeCell(index)))
+            cells[index] = cell
+            YGNodeInsertChild(yogaStorage, cell.yogaStorage, YGNodeGetChildCount(yogaStorage))
+        }
+
+        // Every cell, not only the ones just created. A cell's position is a
+        // function of the column count, and the column count changes when the
+        // window is resized — so a cell that survives a resize would otherwise
+        // keep the place it was given under the old count. It is invisible
+        // when the range changes too and the survivors are replaced, and it is
+        // the whole bug when the range happens to stay the same: a grid that
+        // had 23 columns on a 4K guess and 7 after the compositor said how
+        // wide the window really is keeps laying its rows out 23 wide, off the
+        // side of a window that only shows the first seven.
+        for index in range {
+            guard let cell = cells[index] else { continue }
             let row = columns > 0 ? index / columns : 0
             let col = columns > 0 ? index % columns : 0
             cell.place(
@@ -365,8 +380,6 @@ final class LazyGridNode: YogaBoxNode {
                 w: cellW,
                 h: cellHeight
             )
-            cells[index] = cell
-            YGNodeInsertChild(yogaStorage, cell.yogaStorage, YGNodeGetChildCount(yogaStorage))
         }
 
         mounted = range

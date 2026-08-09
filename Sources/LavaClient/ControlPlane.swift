@@ -83,6 +83,19 @@ public final class CompositorResources: GPUResourceHost, @unchecked Sendable {
     /// exists because `releaseImage` speaks in keys and the wire speaks in ids.
     private let lock = NSLock()
     private var idsByKey: [String: UInt32] = [:]
+    /// Keys the compositor has already refused.
+    ///
+    /// A path that will not decode — a `.ico`, an `.xpm`, a file that is not
+    /// an image at all — is asked for again on the very next frame, because
+    /// nothing else remembers the answer. That is a round trip *and* a decode
+    /// attempt on the compositor's event loop, per broken icon, per frame,
+    /// for as long as the window is open. A launcher showing four hundred
+    /// applications finds a handful of these on any real machine.
+    ///
+    /// Remembered for the life of the process rather than retried: a file that
+    /// could not be decoded a moment ago is not going to decode now, and a
+    /// client that outlives the file being fixed can be restarted.
+    private var refusedKeys: Set<String> = []
 
     public init(_ compositor: Compositor) { self.compositor = compositor }
 
@@ -106,6 +119,12 @@ public final class CompositorResources: GPUResourceHost, @unchecked Sendable {
     }
 
     public func registerImage(path: String, maxPixelSize: UInt32) -> UIImage? {
+        let key = ImageStore.key(path: path, maxPixelSize: maxPixelSize)
+        lock.lock()
+        let alreadyRefused = refusedKeys.contains(key)
+        lock.unlock()
+        if alreadyRefused { return nil }
+
         let info: ImageInfo
         do {
             info = try blockingCall(timeout: 10) { [compositor] in
@@ -116,12 +135,16 @@ public final class CompositorResources: GPUResourceHost, @unchecked Sendable {
                 )
             }
         } catch {
+            // Said once. The `refusedKeys` entry is what makes it once — see
+            // above; without it this line is printed every frame.
             FileHandle.standardError.write(
                 Data("RegisterImage(\(path)) failed: \(error)\n".utf8)
             )
+            lock.lock()
+            refusedKeys.insert(key)
+            lock.unlock()
             return nil
         }
-        let key = ImageStore.key(path: path, maxPixelSize: maxPixelSize)
         lock.lock()
         idsByKey[key] = info.id
         lock.unlock()

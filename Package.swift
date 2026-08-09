@@ -47,9 +47,11 @@ var products: [Product] = [
     .executable(name: "LavaTaskbar", targets: ["LavaTaskbar"]),
     .executable(name: "LavaDock", targets: ["LavaDock"]),
     .executable(name: "LavaSettings", targets: ["LavaSettings"]),
+    .executable(name: "LavaLauncher", targets: ["LavaLauncher"]),
     .library(name: "LavaUI", targets: ["LavaUI"]),
     .library(name: "LavaText", targets: ["LavaText"]),
     .library(name: "LavaMenu", targets: ["LavaMenu"]),
+    .library(name: "LavaShell", targets: ["LavaShell"]),
     .library(name: "TraceLoomCore", targets: ["TraceLoomCore"]),
     .library(name: "SpotifyCore", targets: ["SpotifyCore"]),
     .library(name: "LavaTermCore", targets: ["LavaTermCore"]),
@@ -61,6 +63,11 @@ var targets: [Target] = [
     .target(name: "LavaText"),
     // Application menu IR + DSL. Headless-testable.
     .target(name: "LavaMenu"),
+    // What a desktop shell needs to know about the machine it is a shell for:
+    // which applications are installed, and which picture belongs to each.
+    // Pure Foundation — no engine, no control plane — so it is testable
+    // without either. See Sources/LavaShell/DesktopEntry.swift.
+    .target(name: "LavaShell"),
     .target(name: "TraceLoomCore"),
     .target(name: "SpotifyCore"),
     .target(name: "LavaTermCore"),
@@ -100,7 +107,15 @@ var targets: [Target] = [
     // shell, and the first client that needed the window list.
     .executableTarget(
         name: "LavaDock",
-        dependencies: ["LavaUI"]
+        dependencies: ["LavaUI", "LavaShell"]
+            + (haveNprpc ? [Target.Dependency("LavaClient"),
+                            Target.Dependency("LavaIDL")] : []),
+        swiftSettings: interopCxx
+    ),
+    // The application launcher: everything installed, as a wall of icons.
+    .executableTarget(
+        name: "LavaLauncher",
+        dependencies: ["LavaUI", "LavaShell"]
             + (haveNprpc ? [Target.Dependency("LavaClient"),
                             Target.Dependency("LavaIDL")] : []),
         swiftSettings: interopCxx
@@ -182,6 +197,7 @@ var targets: [Target] = [
     ),
     .testTarget(name: "LavaTextTests", dependencies: ["LavaText"]),
     .testTarget(name: "LavaMenuTests", dependencies: ["LavaMenu"]),
+    .testTarget(name: "LavaShellTests", dependencies: ["LavaShell"]),
     .testTarget(name: "FBDModelTests", dependencies: ["FBDModel"]),
     .testTarget(name: "TraceLoomCoreTests", dependencies: ["TraceLoomCore"]),
     .testTarget(

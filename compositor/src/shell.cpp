@@ -78,7 +78,7 @@ std::filesystem::path exeDir() {
 
 }  // namespace
 
-std::string ShellSupervisor::resolve(const std::string &program) {
+std::string ShellSupervisor::programPath(const std::string &program) {
   // A path is a path: whoever wrote it in the config meant that file.
   if (program.find('/') != std::string::npos) return program;
 
@@ -139,7 +139,7 @@ void ShellSupervisor::start(wl_event_loop *loop,
 }
 
 void ShellSupervisor::spawn(Supervised &entry) {
-  const std::string path = resolve(entry.component.program);
+  const std::string path = programPath(entry.component.program);
 
   std::string program = path;
   char *argv[] = {program.data(), nullptr};
