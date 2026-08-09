@@ -130,6 +130,112 @@ struct CompositorHost {
                           float &outShadowOpacity,
                           float &outShadowOffsetY) const = 0;
 
+  // ─── Settings ────────────────────────────────────────────────────────────
+  //
+  // The desktop's preferences, for the app that exists to change them. Each
+  // setter does two things and both matter: it applies the change to the
+  // running compositor, and it writes it to `lava.conf` so the next session
+  // has it too.
+  //
+  // `outError` is how the second half reports: empty means saved, non-empty
+  // means the change is live but did not reach the file. The distinction is
+  // worth carrying because the user can see the first half happen, and would
+  // otherwise find out about the second half at the next login.
+  //
+  // Mirrors of the IDL's messages rather than the generated types, for the
+  // reason `WindowEntry` is: this header stays independent of the stubs.
+
+  struct KeyboardState {
+    std::string layout;
+    std::string variant;
+    std::string options;
+    std::string model;
+    std::string rules;
+    int32_t repeatRate = 0;
+    int32_t repeatDelay = 0;
+  };
+
+  /// One layout, or one variant of one — `variant` empty means the layout
+  /// itself. See `KeyboardLayout` in the IDL.
+  struct LayoutEntry {
+    std::string code;
+    std::string variant;
+    std::string description;
+  };
+
+  /// One compiled-in shortcut, as the key handler's own table describes it.
+  struct BindingEntry {
+    std::string modifiers;
+    std::string key;
+    std::string action;
+    std::string description;
+  };
+
+  struct ModeEntry {
+    uint32_t width = 0;
+    uint32_t height = 0;
+    uint32_t refresh = 0;  ///< mHz
+    bool current = false;
+    bool preferred = false;
+  };
+
+  struct OutputEntry {
+    std::string name;
+    std::string description;
+    bool enabled = true;
+    int32_t x = 0;
+    int32_t y = 0;
+    uint32_t width = 0;
+    uint32_t height = 0;
+    uint32_t refresh = 0;
+    float scale = 1.f;
+    uint32_t transform = 0;
+  };
+
+  /// What to set a screen to. 0 for a size, rate or scale means "the default
+  /// for that field" — see `OutputRequest` in the IDL.
+  struct OutputChange {
+    std::string name;
+    bool enabled = true;
+    uint32_t width = 0;
+    uint32_t height = 0;
+    uint32_t refresh = 0;
+    float scale = 0.f;
+    int32_t x = 0;
+    int32_t y = 0;
+    uint32_t transform = 0;
+  };
+
+  /// Where the settings below are saved. Named in `SettingsWriteFailed`, so
+  /// a user told their change did not stick is told which file to look at.
+  virtual std::string configPath() const = 0;
+
+  /// Sets the desktop's look. Values are clamped to what can be drawn.
+  virtual void updateAppearance(float cornerRadius, float shadowBlur,
+                                float shadowOpacity, float shadowOffsetY,
+                                std::string &outError) = 0;
+
+  virtual void keyboardSettings(KeyboardState &out) const = 0;
+  virtual void setKeyboardSettings(const KeyboardState &settings,
+                                   std::string &outError) = 0;
+
+  /// Every layout this machine's xkb offers. Empty if the rules cannot be
+  /// read, which is a broken install rather than a machine with no layouts.
+  virtual void keyboardLayouts(std::vector<LayoutEntry> &out) const = 0;
+
+  /// Every shortcut the compositor takes for itself, from the table the key
+  /// handler dispatches through.
+  virtual void keyBindings(std::vector<BindingEntry> &out) const = 0;
+
+  virtual void outputList(std::vector<OutputEntry> &out) const = 0;
+
+  /// Every mode `name` can run at. False if no such screen is connected.
+  virtual bool outputModes(const std::string &name,
+                           std::vector<ModeEntry> &out) const = 0;
+
+  /// Reconfigures a screen. False if no such screen is connected.
+  virtual bool setOutput(const OutputChange &change, std::string &outError) = 0;
+
   /// The focused window and its title, for a subscriber that has just
   /// arrived. `outSurfaceId` is 0 when nothing has focus.
   virtual void activeWindow(uint32_t &outSurfaceId,

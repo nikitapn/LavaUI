@@ -1,6 +1,8 @@
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <cstddef>
+#include <format>
 #include <fstream>
 #include <spawn.h>
 #include <sys/stat.h>
@@ -16,6 +18,11 @@
 #include <list>
 #include <thread>
 #include <vector>
+
+// The catalogue of keyboard layouts, which is xkb's to know: where the rules
+// files live differs between distributions, and this is the API that answers
+// without guessing. Separate library from xkbcommon proper, same project.
+#include <xkbcommon/xkbregistry.h>
 
 #include "canvas_surface.hpp"
 #include "config.hpp"
@@ -745,6 +752,68 @@ struct SurfaceHit {
   double sy = 0;
 };
 
+/// A number for a config file: no trailing zeros, no exponent, no locale.
+///
+/// `1` rather than `1.000000`, because this is written into a file people
+/// read and edit, and a scale of 1 written as 1.000000 is a compositor
+/// showing its floating point.
+std::string format_float(double value) {
+  std::string text = std::format("{:.3f}", value);
+  const auto lastNonZero = text.find_last_not_of('0');
+  if (lastNonZero != std::string::npos) {
+    text.erase(text[lastNonZero] == '.' ? lastNonZero : lastNonZero + 1);
+  }
+  return text;
+}
+
+/// "1920x1080@74.973", or "preferred" when no size was asked for.
+std::string format_mode(const lava::OutputConfig &output) {
+  if (!output.hasMode()) return "preferred";
+  std::string text =
+      std::to_string(output.width) + "x" + std::to_string(output.height);
+  // Written in Hz because that is how a monitor is sold, and stored in mHz
+  // because that is what modes are matched in — see `parseMode`.
+  if (output.refresh > 0) text += "@" + format_float(output.refresh / 1000.0);
+  return text;
+}
+
+/// The `wl_output_transform` names the config parser accepts.
+std::string format_transform(int32_t transform) {
+  switch (transform) {
+  case WL_OUTPUT_TRANSFORM_90: return "90";
+  case WL_OUTPUT_TRANSFORM_180: return "180";
+  case WL_OUTPUT_TRANSFORM_270: return "270";
+  case WL_OUTPUT_TRANSFORM_FLIPPED: return "flipped";
+  case WL_OUTPUT_TRANSFORM_FLIPPED_90: return "flipped-90";
+  case WL_OUTPUT_TRANSFORM_FLIPPED_180: return "flipped-180";
+  case WL_OUTPUT_TRANSFORM_FLIPPED_270: return "flipped-270";
+  default: return "normal";
+  }
+}
+
+/// What to call a screen in a list, when "DP-3" is not enough to tell two
+/// connectors apart. Empty when the display says nothing about itself.
+std::string describe_output(const wlr_output &output) {
+  if (output.description != nullptr && output.description[0] != '\0') {
+    return output.description;
+  }
+  std::string text;
+  if (output.make != nullptr && output.make[0] != '\0') text = output.make;
+  if (output.model != nullptr && output.model[0] != '\0') {
+    if (!text.empty()) text += ' ';
+    text += output.model;
+  }
+  return text;
+}
+
+/// The compositor's shortcuts, from the table the key handler dispatches
+/// through. Defined next to that table, near the bottom of this file.
+void collect_key_bindings(std::vector<lava::CompositorHost::BindingEntry> &out);
+
+/// Every layout this machine's xkb offers, from libxkbregistry.
+void collect_keyboard_layouts(
+    std::vector<lava::CompositorHost::LayoutEntry> &out);
+
 /// Every client surface, and the control plane's view of the compositor.
 ///
 /// Implements `lava::CompositorHost`, so the servant calls land here — always
@@ -765,6 +834,8 @@ class SurfaceRegistry : public lava::CompositorHost {
   /// Arms the timer that carries renderer-owned animations along.
   void start(wl_event_loop *loop) {
     animation_ = wl_event_loop_add_timer(loop, on_animation, this);
+    // The trailing edge of a settings burst — see `save`.
+    saveTimer_ = wl_event_loop_add_timer(loop, on_save_timer, this);
   }
   void bind(lava::ControlPlane *control) { control_ = control; }
 
@@ -1642,6 +1713,184 @@ class SurfaceRegistry : public lava::CompositorHost {
     outShadowOffsetY = shadowOffsetY_;
   }
 
+  // ─── Settings ────────────────────────────────────────────────────────────
+  //
+  // Apply, then save. The applying is what makes a slider worth having; the
+  // saving is what makes it worth using. Both halves go through the same
+  // paths a SIGHUP reload does — this is the same change, arriving by a
+  // different route, and a second implementation of "put the config into
+  // effect" is a second implementation to keep in step.
+
+  std::string configPath() const override {
+    return server_ != nullptr ? server_->configPath : lava::Config::defaultPath();
+  }
+
+  void updateAppearance(float cornerRadius, float shadowBlur,
+                        float shadowOpacity, float shadowOffsetY,
+                        std::string &outError) override {
+    // The same limits the config parser applies, for the same reason: these
+    // are what the renderer will actually draw, and a client should not have
+    // to know them to avoid asking for nonsense.
+    const auto clampInt = [](float value, int32_t low, int32_t high) {
+      const int32_t rounded = static_cast<int32_t>(std::lround(value));
+      return rounded < low ? low : (rounded > high ? high : rounded);
+    };
+    const int32_t radius = clampInt(cornerRadius, 0, 64);
+    const int32_t blur = clampInt(shadowBlur, 0, 128);
+    const int32_t offsetY = clampInt(shadowOffsetY, -128, 128);
+    const float opacity =
+        shadowOpacity < 0.f ? 0.f : (shadowOpacity > 1.f ? 1.f : shadowOpacity);
+
+    if (server_ != nullptr) {
+      server_->config.appearance.cornerRadius = radius;
+      server_->config.appearance.shadowBlur = blur;
+      server_->config.appearance.shadowOpacity = opacity;
+      server_->config.appearance.shadowOffsetY = offsetY;
+    }
+    setAppearance(static_cast<float>(radius), static_cast<float>(blur), opacity,
+                  static_cast<float>(offsetY));
+
+    save({{"appearance", "corner-radius", std::to_string(radius)},
+          {"appearance", "shadow-blur", std::to_string(blur)},
+          {"appearance", "shadow-opacity", format_float(opacity)},
+          {"appearance", "shadow-offset-y", std::to_string(offsetY)}},
+         outError);
+  }
+
+  void keyboardSettings(KeyboardState &out) const override {
+    if (server_ == nullptr) return;
+    const lava::KeyboardConfig &keyboard = server_->config.keyboard;
+    out.layout = keyboard.layout;
+    out.variant = keyboard.variant;
+    out.options = keyboard.options;
+    out.model = keyboard.model;
+    out.rules = keyboard.rules;
+    out.repeatRate = keyboard.repeatRate;
+    out.repeatDelay = keyboard.repeatDelay;
+  }
+
+  void setKeyboardSettings(const KeyboardState &settings,
+                           std::string &outError) override {
+    if (server_ == nullptr) return;
+    lava::KeyboardConfig &keyboard = server_->config.keyboard;
+    keyboard.layout = settings.layout;
+    keyboard.variant = settings.variant;
+    keyboard.options = settings.options;
+    keyboard.model = settings.model;
+    keyboard.rules = settings.rules;
+    // Nonsense here would be a keyboard that repeats forever or not at all,
+    // and neither is recoverable by typing.
+    keyboard.repeatRate = std::clamp(settings.repeatRate, 0, 100);
+    keyboard.repeatDelay = std::clamp(settings.repeatDelay, 100, 2000);
+
+    // Every connected client is sent the new keymap by wlroots as a side
+    // effect, so this reaches applications that are already running.
+    for (Keyboard *device : server_->keyboards) device->applyKeymap(keyboard);
+
+    save({{"keyboard", "layout", keyboard.layout},
+          {"keyboard", "variant", keyboard.variant},
+          {"keyboard", "options", keyboard.options},
+          {"keyboard", "model", keyboard.model},
+          {"keyboard", "rules", keyboard.rules},
+          {"keyboard", "repeat-rate", std::to_string(keyboard.repeatRate)},
+          {"keyboard", "repeat-delay", std::to_string(keyboard.repeatDelay)}},
+         outError);
+  }
+
+  void keyboardLayouts(std::vector<LayoutEntry> &out) const override {
+    collect_keyboard_layouts(out);
+  }
+
+  void keyBindings(std::vector<BindingEntry> &out) const override {
+    collect_key_bindings(out);
+  }
+
+  void outputList(std::vector<OutputEntry> &out) const override {
+    if (server_ == nullptr) return;
+    for (Output *output : server_->outputs) {
+      OutputEntry entry;
+      entry.name = output->wlr->name != nullptr ? output->wlr->name : "";
+      entry.description = describe_output(*output->wlr);
+      entry.enabled = output->wlr->enabled;
+      entry.width = static_cast<uint32_t>(output->wlr->width);
+      entry.height = static_cast<uint32_t>(output->wlr->height);
+      entry.refresh = static_cast<uint32_t>(output->wlr->refresh);
+      entry.scale = output->wlr->scale;
+      entry.transform = static_cast<uint32_t>(output->wlr->transform);
+      if (const wlr_output_layout_output *placed =
+              wlr_output_layout_get(server_->output_layout, output->wlr)) {
+        entry.x = placed->x;
+        entry.y = placed->y;
+      }
+      out.push_back(std::move(entry));
+    }
+  }
+
+  bool outputModes(const std::string &name,
+                   std::vector<ModeEntry> &out) const override {
+    Output *output = findOutput(name);
+    if (output == nullptr) return false;
+
+    wlr_output_mode *mode = nullptr;
+    wl_list_for_each(mode, &output->wlr->modes, link) {
+      ModeEntry entry;
+      entry.width = static_cast<uint32_t>(mode->width);
+      entry.height = static_cast<uint32_t>(mode->height);
+      entry.refresh = static_cast<uint32_t>(mode->refresh);
+      entry.preferred = mode->preferred;
+      entry.current = output->wlr->current_mode == mode;
+      out.push_back(entry);
+    }
+
+    // Biggest first, then fastest. A mode list in the order the display
+    // happened to report it reads as random, and the one a person wants is
+    // almost always at one end of that ordering.
+    std::sort(out.begin(), out.end(), [](const ModeEntry &a, const ModeEntry &b) {
+      const uint64_t areaA = uint64_t{a.width} * a.height;
+      const uint64_t areaB = uint64_t{b.width} * b.height;
+      if (areaA != areaB) return areaA > areaB;
+      return a.refresh > b.refresh;
+    });
+    return true;
+  }
+
+  bool setOutput(const OutputChange &change, std::string &outError) override {
+    Output *output = findOutput(change.name);
+    if (output == nullptr || server_ == nullptr) return false;
+
+    lava::OutputConfig &block = outputBlock(change.name);
+    block.enabled = change.enabled;
+    block.width = static_cast<int32_t>(change.width);
+    block.height = static_cast<int32_t>(change.height);
+    block.refresh = static_cast<int32_t>(change.refresh);
+    block.scale = change.scale;
+    block.x = change.x;
+    block.y = change.y;
+    block.transform = static_cast<int32_t>(change.transform);
+
+    // The same call SIGHUP makes. A mode the display refuses falls back to its
+    // preferred one in there rather than leaving a screen showing nothing —
+    // the one failure a user cannot recover from without another machine.
+    output->applyConfig();
+
+    const std::string section = "output " + change.name;
+    std::vector<lava::Setting> settings{
+        {section, "enabled", block.enabled ? "true" : "false"},
+        {section, "mode", format_mode(block)},
+        {section, "scale", format_float(block.scale)},
+        {section, "transform", format_transform(block.transform)},
+    };
+    // Only when there is one to write. `kAuto` means "string them left to
+    // right", which the config file spells by having no position line at all
+    // — there is no value that says it.
+    if (block.x != lava::OutputConfig::kAuto) {
+      settings.push_back({section, "position",
+                          std::to_string(block.x) + "," + std::to_string(block.y)});
+    }
+    save(std::move(settings), outError);
+    return true;
+  }
+
   void activeWindow(uint32_t &outSurfaceId,
                     std::string &outTitle) const override {
     outSurfaceId = focused_;
@@ -1843,6 +2092,95 @@ class SurfaceRegistry : public lava::CompositorHost {
   }
 
  private:
+  /// Queues settings for the config file, and reports rather than throws.
+  ///
+  /// The change is already applied by the time this runs, so a failure here is
+  /// "it will not survive a restart" and not "it did not happen" — see
+  /// `SettingsWriteFailed` in the IDL for why those are different sentences.
+  ///
+  /// Rate-limited, because the caller is a slider. A drag sends a new radius
+  /// every frame and each one is a legitimate change to apply; rewriting the
+  /// config file sixty times a second to keep up is not. The first write in a
+  /// burst goes out immediately — so a config that cannot be written at all
+  /// says so on the first call rather than at the end of the drag — and the
+  /// rest are merged and flushed once the drag stops.
+  void save(std::vector<lava::Setting> settings, std::string &outError) {
+    outError.clear();
+    for (lava::Setting &setting : settings) {
+      auto existing = std::find_if(
+          pendingSave_.begin(), pendingSave_.end(),
+          [&](const lava::Setting &queued) {
+            return queued.section == setting.section && queued.key == setting.key;
+          });
+      if (existing != pendingSave_.end()) {
+        existing->value = std::move(setting.value);
+      } else {
+        pendingSave_.push_back(std::move(setting));
+      }
+    }
+
+    const int64_t now = now_ms();
+    if (now - lastSaveMs_ >= kSaveIntervalMs) {
+      flushSave(outError);
+      return;
+    }
+    if (saveTimer_ != nullptr) {
+      wl_event_source_timer_update(
+          saveTimer_, static_cast<int>(kSaveIntervalMs - (now - lastSaveMs_)));
+    }
+  }
+
+  void flushSave(std::string &outError) {
+    if (pendingSave_.empty()) return;
+    lastSaveMs_ = now_ms();
+    const bool ok = lava::Config::write(configPath(), pendingSave_, outError);
+    pendingSave_.clear();
+    if (!ok) wlr_log(WLR_ERROR, "settings: not saved: %s", outError.c_str());
+  }
+
+  static int64_t now_ms() {
+    timespec ts{};
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return int64_t{ts.tv_sec} * 1000 + ts.tv_nsec / 1'000'000;
+  }
+
+  static int on_save_timer(void *data) {
+    std::string ignored;
+    static_cast<SurfaceRegistry *>(data)->flushSave(ignored);
+    return 0;
+  }
+
+  /// Settings changed since the last write, one entry per section+key.
+  std::vector<lava::Setting> pendingSave_;
+  wl_event_source *saveTimer_ = nullptr;
+  int64_t lastSaveMs_ = 0;
+  static constexpr int64_t kSaveIntervalMs = 400;
+
+  Output *findOutput(const std::string &name) const {
+    if (server_ == nullptr) return nullptr;
+    for (Output *output : server_->outputs) {
+      if (output->wlr->name != nullptr && name == output->wlr->name) {
+        return output;
+      }
+    }
+    return nullptr;
+  }
+
+  /// The config block for a connector, created if the file never had one.
+  ///
+  /// Never the `[output *]` fallback: a change made to one screen is about
+  /// that screen, and writing it into the wildcard would apply it to every
+  /// screen that has no block of its own.
+  lava::OutputConfig &outputBlock(const std::string &name) {
+    for (lava::OutputConfig &output : server_->config.outputs) {
+      if (output.name == name) return output;
+    }
+    lava::OutputConfig created;
+    created.name = name;
+    server_->config.outputs.push_back(std::move(created));
+    return server_->config.outputs.back();
+  }
+
   /// The shared half of `createSurface` and `createPanel`: everything except
   /// which tree the nodes go in and which workspace owns them.
   uint32_t openSurface(const std::string &arenaId, uint32_t width,
@@ -2690,28 +3028,181 @@ void launch_alacritty() {
   launch_program(program, argv);
 }
 
-/// The compositor's own shortcuts, taken before any client sees the key.
+/// What a binding does.
+enum class BindingAction : uint8_t {
+  Quit,
+  Launcher,
+  Terminal,
+  Minimize,
+  RestoreLast,
+  WorkspaceSwitch,
+  WorkspaceMove,
+  SwitchVt,
+};
+
+/// One shortcut: which keys reach it, and what to call it.
 ///
-/// True when the key was one of ours, which is the caller's signal to stop: a
-/// bound key is not also text, and forwarding it would put a digit in whatever
-/// the user was typing in every time they changed workspace.
-bool handle_binding(Server *server, xkb_keysym_t sym, bool shift, bool ctrl) {
-  // Worth having while this runs nested inside another compositor: without it
-  // the only way out is killing the process from elsewhere, and a compositor
-  // that has taken the keyboard is hard to leave.
-  if (sym == XKB_KEY_Escape) {
+/// Alt is implicit — the key handler only consults this table while Alt is
+/// down — and `shift`/`ctrl` are matched exactly. Exactly, because these are
+/// distinct bindings and not a loose prefix: Alt+Shift+1 sends a window where
+/// Alt+1 follows it, and Alt+Shift+Return is deliberately nothing rather than
+/// a sloppy second spelling of "open a terminal".
+struct BindingSpec {
+  BindingAction action;
+  /// The keysym range this covers, inclusive; `last == first` for one key.
+  xkb_keysym_t first;
+  xkb_keysym_t last;
+  bool shift;
+  bool ctrl;
+  /// Shown, never parsed — the key as a person would write it.
+  const char *key;
+  /// Stable id for a settings app to key off, in case the wording changes.
+  const char *id;
+  const char *description;
+};
+
+/// The compositor's shortcuts, as one table.
+///
+/// One table rather than a chain of ifs, because this list is now something
+/// the desktop *shows*: `ListKeyBindings` hands it to a settings app, and a
+/// list maintained separately from the code that dispatches would be wrong
+/// within one release. Both come from here, so a listed binding is one that
+/// works and a working binding is one that is listed.
+constexpr BindingSpec kBindings[] = {
+    {BindingAction::Quit, XKB_KEY_Escape, XKB_KEY_Escape, false, false,
+     "Escape", "session.quit", "Ends the session"},
+    {BindingAction::Launcher, XKB_KEY_space, XKB_KEY_space, false, false,
+     "Space", "launcher.open", "Opens the application launcher"},
+    {BindingAction::Terminal, XKB_KEY_Return, XKB_KEY_Return, false, false,
+     "Return", "terminal.open", "Opens a terminal"},
+    {BindingAction::Minimize, XKB_KEY_m, XKB_KEY_m, false, false, "M",
+     "window.minimize", "Hides the focused window"},
+    {BindingAction::RestoreLast, XKB_KEY_m, XKB_KEY_m, true, false, "M",
+     "window.restore", "Brings back the window hidden last"},
+    {BindingAction::WorkspaceSwitch, XKB_KEY_1, XKB_KEY_9, false, false,
+     "1 … 9", "workspace.switch", "Shows that workspace"},
+    {BindingAction::WorkspaceMove, XKB_KEY_1, XKB_KEY_9, true, false, "1 … 9",
+     "workspace.move", "Sends the focused window to that workspace"},
+    {BindingAction::SwitchVt, XKB_KEY_F1, XKB_KEY_F10, false, true, "F1 … F10",
+     "session.vt", "Switches to that virtual terminal"},
+};
+
+/// The modifiers as a person reads them. Alt is in every one of them.
+std::string binding_modifiers(const BindingSpec &spec) {
+  std::string out = "Alt";
+  if (spec.ctrl) out += "+Ctrl";
+  if (spec.shift) out += "+Shift";
+  return out;
+}
+
+/// Every layout and variant this machine's xkb knows about.
+///
+/// From libxkbregistry rather than by reading `evdev.lst` ourselves, because
+/// where those rules live is xkb's business: a machine that keeps them
+/// somewhere else is a machine a hand-rolled parser silently finds nothing on,
+/// and "no layouts" looks exactly like "no layouts installed".
+///
+/// Flattened on the way out — a variant is an entry with the same `code` and a
+/// non-empty `variant` — so the wire stays a list and the picker groups it in
+/// one pass. See `KeyboardLayout` in the IDL.
+void collect_keyboard_layouts(
+    std::vector<lava::CompositorHost::LayoutEntry> &out) {
+  rxkb_context *registry = rxkb_context_new(RXKB_CONTEXT_NO_FLAGS);
+  if (registry == nullptr) {
+    wlr_log(WLR_ERROR, "keyboard: cannot open the xkb registry");
+    return;
+  }
+  if (!rxkb_context_parse_default_ruleset(registry)) {
+    wlr_log(WLR_ERROR, "keyboard: cannot read the xkb rules");
+    rxkb_context_unref(registry);
+    return;
+  }
+
+  for (rxkb_layout *layout = rxkb_layout_first(registry); layout != nullptr;
+       layout = rxkb_layout_next(layout)) {
+    lava::CompositorHost::LayoutEntry entry;
+    const char *code = rxkb_layout_get_name(layout);
+    if (code == nullptr) continue;
+    entry.code = code;
+    if (const char *variant = rxkb_layout_get_variant(layout)) {
+      entry.variant = variant;
+    }
+    const char *description = rxkb_layout_get_description(layout);
+    entry.description = description != nullptr ? description : entry.code;
+    out.push_back(std::move(entry));
+  }
+
+  rxkb_context_unref(registry);
+}
+
+void collect_key_bindings(std::vector<lava::CompositorHost::BindingEntry> &out) {
+  out.clear();
+  out.reserve(std::size(kBindings));
+  for (const BindingSpec &spec : kBindings) {
+    lava::CompositorHost::BindingEntry entry;
+    entry.modifiers = binding_modifiers(spec);
+    entry.key = spec.key;
+    entry.action = spec.id;
+    entry.description = spec.description;
+    out.push_back(std::move(entry));
+  }
+}
+
+/// Runs one binding. False means "not handled after all" — the key falls
+/// through to the focused client, which is what a digit past the last
+/// workspace should do.
+bool perform_binding(Server *server, const BindingSpec &spec,
+                     xkb_keysym_t sym) {
+  switch (spec.action) {
+  case BindingAction::Quit:
+    // Worth having while this runs nested inside another compositor: without
+    // it the only way out is killing the process from elsewhere, and a
+    // compositor that has taken the keyboard is hard to leave.
     wl_display_terminate(server->display);
     return true;
-  }
-  if (sym == XKB_KEY_space) {
+
+  case BindingAction::Launcher:
     launch_rofi();
     return true;
-  }
-  if (sym == XKB_KEY_Return || sym == XKB_KEY_KP_Enter) {
+
+  case BindingAction::Terminal:
     launch_alacritty();
     return true;
+
+  // Minimize, and the way back. A window with no frame can offer a minimize
+  // button, and the dock can now show what is hidden — but this is still the
+  // fastest handle there is: the one you put away last comes back.
+  case BindingAction::Minimize:
+    if (server->surfaces == nullptr) return false;
+    if (ClientSurface *focused =
+            server->surfaces->find(server->focusedSurface())) {
+      server->minimizeSurface(*focused);
+    }
+    return true;
+
+  case BindingAction::RestoreLast:
+    if (server->surfaces == nullptr) return false;
+    if (ClientSurface *restored = server->surfaces->restoreLastMinimized()) {
+      server->focusSurface(*restored);
+      server->update_pointer_focus(0);
+    }
+    return true;
+
+  case BindingAction::WorkspaceSwitch:
+  case BindingAction::WorkspaceMove: {
+    const uint32_t index = static_cast<uint32_t>(sym - XKB_KEY_1);
+    if (index >= Workspaces::kCount) return false;
+    // Shift sends the window instead of following it, which is the
+    // arrangement every tiling compositor has settled on.
+    if (spec.action == BindingAction::WorkspaceMove) {
+      server->moveFocusedToWorkspace(index);
+    } else {
+      server->switchWorkspace(index);
+    }
+    return true;
   }
-  if (ctrl && sym >= XKB_KEY_F1 && sym <= XKB_KEY_F10) {
+
+  case BindingAction::SwitchVt: {
     const unsigned vt = static_cast<unsigned>(sym - XKB_KEY_F1) + 1;
     if (server->session == nullptr) {
       wlr_log(WLR_ERROR, "session: cannot switch to VT %u without a DRM session",
@@ -2723,35 +3214,25 @@ bool handle_binding(Server *server, xkb_keysym_t sym, bool shift, bool ctrl) {
     }
     return true;
   }
-  // Minimize, and the way back. A window with no frame can offer a minimize
-  // button, but nothing yet can *show* the windows that are hidden — the panel
-  // has no window list — so the compositor keeps the only handle there is: the
-  // one you put away last comes back.
-  if (sym == XKB_KEY_m && server->surfaces != nullptr) {
-    if (shift) {
-      if (ClientSurface *restored = server->surfaces->restoreLastMinimized()) {
-        server->focusSurface(*restored);
-        server->update_pointer_focus(0);
-      }
-      return true;
-    }
-    if (ClientSurface *focused =
-            server->surfaces->find(server->focusedSurface())) {
-      server->minimizeSurface(*focused);
-    }
-    return true;
   }
-  if (sym >= XKB_KEY_1 && sym <= XKB_KEY_9) {
-    const uint32_t index = static_cast<uint32_t>(sym - XKB_KEY_1);
-    if (index >= Workspaces::kCount) return false;
-    // Shift sends the window instead of following it, which is the arrangement
-    // every tiling compositor has settled on.
-    if (shift) {
-      server->moveFocusedToWorkspace(index);
-    } else {
-      server->switchWorkspace(index);
-    }
-    return true;
+  return false;
+}
+
+/// The compositor's own shortcuts, taken before any client sees the key.
+///
+/// True when the key was one of ours, which is the caller's signal to stop: a
+/// bound key is not also text, and forwarding it would put a digit in whatever
+/// the user was typing in every time they changed workspace.
+bool handle_binding(Server *server, xkb_keysym_t sym, bool shift, bool ctrl) {
+  // The numeric keypad's Enter is the same intention as the main one, and
+  // folding it here keeps the table one row per binding rather than one row
+  // per spelling.
+  if (sym == XKB_KEY_KP_Enter) sym = XKB_KEY_Return;
+
+  for (const BindingSpec &spec : kBindings) {
+    if (sym < spec.first || sym > spec.last) continue;
+    if (spec.shift != shift || spec.ctrl != ctrl) continue;
+    return perform_binding(server, spec, sym);
   }
   return false;
 }

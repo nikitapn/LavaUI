@@ -37,6 +37,14 @@ isolated development VM, not production.
 unknown keys are reported and skipped, so a file written for a newer build
 still starts an older one. See `src/config.hpp` for every key.
 
+Most of it can now be changed without a text editor: `swift run LavaSettings`
+opens a panel over the control plane that applies each change to the *running*
+compositor and then writes it here. That write is surgical — it replaces the
+values it changes and leaves every other line, comments included, exactly where
+you put them — so a hand-tuned file survives being edited by the app, and vice
+versa. What it cannot change is what `SIGHUP` cannot either: the `[core]` GPU
+settings, which are read once while the backend is being created.
+
 ```ini
 [core]
 renderer = vulkan

@@ -96,6 +96,18 @@ struct AppearanceConfig {
   int32_t shadowOffsetY = 4;
 };
 
+/// One `key = value` bound for one `[section]`.
+///
+/// The unit `Config::write` takes, because a settings app changes a handful of
+/// keys and should not have to hand back a whole file to do it.
+struct Setting {
+  /// The section header without its brackets: "appearance", "keyboard", or
+  /// "output DP-3".
+  std::string section;
+  std::string key;
+  std::string value;
+};
+
 struct Config {
   /// `WLR_RENDERER`: "vulkan", "gles2", "pixman". Empty lets wlroots choose.
   std::string renderer;
@@ -118,6 +130,26 @@ struct Config {
   /// Reads `path`. A missing file is not an error — it yields the defaults,
   /// which are what the compositor did before this existed.
   static Config load(const std::string &path);
+
+  /// Writes `settings` into `path`, changing nothing else.
+  ///
+  /// Surgical on purpose. This file is one people write by hand, and most of
+  /// what is in it is comments explaining which GPU drives which connector on
+  /// this particular machine — none of which a settings app could regenerate
+  /// and none of which it should destroy. So each setting replaces the value
+  /// of an existing key where there is one, is appended to its section where
+  /// the section exists, and appends a new section where it does not.
+  ///
+  /// A key that is commented out is left commented out and a live one added
+  /// below it: uncommenting somebody's note would be deciding that a line
+  /// they deliberately disabled was meant to be on.
+  ///
+  /// Creates the file, and the directory it lives in. Replaces it atomically,
+  /// so an interrupted write cannot leave a half-written config that the next
+  /// start cannot parse. False with `outError` filled if it could not.
+  static bool write(const std::string &path,
+                    const std::vector<Setting> &settings,
+                    std::string &outError);
 
   /// The block for a connector: its own if it has one, else `*`, else null.
   const OutputConfig *forOutput(const std::string &name) const;

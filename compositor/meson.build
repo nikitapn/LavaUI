@@ -105,6 +105,10 @@ executable(
     # Keyboards arrive as evdev keycodes; xkbcommon is what turns those into
     # keysyms, and what the keymap sent to every client is built from.
     dependency('xkbcommon'),
+    # The catalogue of layouts a settings app offers to choose from. Ships
+    # with xkbcommon and answers where the rules files actually are, which
+    # differs between distributions.
+    dependency('xkbregistry'),
     # libdrm supplies the FourCC/modifier vocabulary that canvas and wlroots
     # describe a shared buffer in. Vulkan arrives through canvas.
     dependency('libdrm'),

@@ -136,6 +136,147 @@ message Appearance {
   shadowOffsetY: f32;
 }
 
+// ─── Settings ──────────────────────────────────────────────────────────────
+//
+// The desktop's own preferences, for the one client that exists to change
+// them. Everything here is already in `lava.conf` and already applied on
+// SIGHUP; what this adds is the ability to change one without a text editor
+// and to see the result while the pointer is still on the slider.
+//
+// Two properties every setter below keeps, because a settings app is useless
+// without either: the change takes effect **now**, on the running compositor,
+// and it is **written to the config file**, so the session it survives is the
+// next one. Writing is surgical — the file's comments and its blocks stay
+// where the user put them — because a config file people hand-edit is a file
+// an app has no business reformatting.
+
+/// The keyboard, as xkb is currently set up.
+///
+/// Named after the `xkb_rule_names` fields rather than prettified, because
+/// these are the strings `setxkbmap` takes and the strings the config file
+/// stores: an app showing a picker still has to write "colemak" in the end,
+/// and a layer of nicer names in between is a translation table that can be
+/// wrong in both directions.
+message KeyboardSettings {
+  /// Comma-separated, as xkb takes them: "us", or "us,ru" for two layouts
+  /// with a switching key in `options`. Empty means xkb's own default.
+  layout: string;
+  variant: string;
+  /// Comma-separated xkb options: "ctrl:nocaps", "grp:alt_shift_toggle".
+  options: string;
+  model: string;
+  rules: string;
+  /// Keys per second once repeating starts, and the milliseconds a key is
+  /// held before it does.
+  repeatRate: i32;
+  repeatDelay: i32;
+}
+
+/// One layout — or one variant of one — that this machine's xkb offers.
+///
+/// Flat rather than a layout with variants nested inside it: an entry with an
+/// empty `variant` is the layout itself, and the rest are its variants. A
+/// picker groups them by `code` in one pass, and the wire stays a plain list.
+message KeyboardLayout {
+  /// What goes in `KeyboardSettings.layout`: "us", "de", "ru".
+  code: string;
+  /// What goes in `KeyboardSettings.variant`; empty for the base layout.
+  variant: string;
+  /// What a person would call it: "English (US)", "German (Dvorak)".
+  description: string;
+}
+
+/// One shortcut the compositor takes before any client sees the key.
+///
+/// Read-only, and honestly so: these are compiled in. Listing them is worth
+/// doing on its own — a desktop whose shortcuts are only discoverable by
+/// reading its source is a desktop with no shortcuts, as far as most users
+/// are concerned — and the table this comes from is the same one the key
+/// handler dispatches through, so a listed binding is a binding that works.
+///
+/// `action` is a stable id ("workspace.switch"), meant for a settings app to
+/// key off; `description` is the sentence to show.
+message KeyBinding {
+  /// As a person reads it: "Alt", "Alt+Shift", "Alt+Ctrl".
+  modifiers: string;
+  /// The key, or the range one binding covers: "1 … 9", "Return", "M".
+  key: string;
+  action: string;
+  description: string;
+}
+
+/// One mode a screen can run at.
+message OutputMode {
+  width: u32;
+  height: u32;
+  /// In mHz, as wlroots counts refresh rates: 74973 is 74.973 Hz. Rounding it
+  /// to whole Hz is what makes a mode fail to match.
+  refresh: u32;
+  /// Whether the screen is running this one now.
+  current: boolean;
+  /// Whether the display says it prefers it. Usually its native resolution,
+  /// and the right default for a list to select when nothing else is set.
+  preferred: boolean;
+}
+
+/// One screen, as it is right now.
+message OutputInfo {
+  /// The connector: "DP-3", "eDP-1". The name the config file blocks use.
+  name: string;
+  /// Make and model, when the display reports them. For a person picking
+  /// between two connectors that are both called DP-something.
+  description: string;
+  enabled: boolean;
+  /// Where it sits in layout space, and what it is running.
+  x: i32;
+  y: i32;
+  width: u32;
+  height: u32;
+  refresh: u32;
+  scale: f32;
+  /// `enum wl_output_transform`: 0 normal, 1 90°, 2 180°, 3 270°, and 4…7
+  /// the flipped forms.
+  transform: u32;
+}
+
+/// What to set a screen to.
+///
+/// The whole state rather than the one field that changed, so that applying
+/// it is one commit: a screen asked to change mode and position in two calls
+/// would be re-laid-out twice, and the intermediate arrangement is one the
+/// user never asked for.
+///
+/// `width`/`height` of 0 means "the mode it prefers", `refresh` of 0 means
+/// "the fastest at that size", and `scale` of 0 means "leave it alone" — the
+/// same three defaults the config file has.
+message OutputRequest {
+  name: string;
+  enabled: boolean;
+  width: u32;
+  height: u32;
+  refresh: u32;
+  scale: f32;
+  x: i32;
+  y: i32;
+  transform: u32;
+}
+
+/// No screen by that name is connected.
+exception OutputNotFound {
+  name: string;
+}
+
+/// The change was applied but could not be saved, so it will not survive a
+/// restart.
+///
+/// Deliberately raised *after* applying rather than instead of: the user asked
+/// for a thing, the thing happened, and the honest report is that it happened
+/// and will not last — not that it failed.
+exception SettingsWriteFailed {
+  path: string;
+  reason: string;
+}
+
 /// Which window has the keyboard now.
 ///
 /// The compositor is the only process that knows, and until this there was no
@@ -563,6 +704,69 @@ interface Compositor {
   /// No surface id: this describes the desktop, and every window on it gets
   /// the same answer.
   Appearance GetAppearance();
+
+  // ─── Settings ──────────────────────────────────────────────────────────
+  //
+  // For the app that exists to change them. Every setter applies to the
+  // running compositor first and then writes `lava.conf`, so what the user
+  // sees and what the file says cannot disagree.
+
+  /// Sets the desktop's look, now and for the next session.
+  ///
+  /// Live because it can be: the radius and the shadow are numbers the
+  /// renderer reads per frame, so every window on screen takes the new ones
+  /// without being told anything. That is what makes a slider here worth
+  /// having rather than a text field and an Apply button.
+  ///
+  /// Values are clamped to what the compositor will draw, so a client does
+  /// not have to know the limits — call `GetAppearance` afterwards to see
+  /// what was actually taken.
+  void SetAppearance(appearance: in Appearance) raises(SettingsWriteFailed);
+
+  /// The keyboard as it is set up now.
+  KeyboardSettings GetKeyboard();
+
+  /// Changes the keyboard, now and for the next session.
+  ///
+  /// wlroots hands the new keymap to every connected client as a side effect,
+  /// so a layout change reaches applications that are already running — which
+  /// is the difference between this and editing the file, where it only
+  /// reaches them on SIGHUP.
+  void SetKeyboard(settings: in KeyboardSettings) raises(SettingsWriteFailed);
+
+  /// Every layout and variant this machine's xkb knows about.
+  ///
+  /// From the compositor because xkb is the compositor's dependency: a client
+  /// would have to guess where the rules files live, and a client on a
+  /// machine where they live somewhere else would guess wrong and show an
+  /// empty list rather than an error.
+  vector<KeyboardLayout> ListKeyboardLayouts();
+
+  /// Every shortcut the compositor takes for itself.
+  ///
+  /// So a settings app can show them, and so a user can find out that Alt+M
+  /// minimizes without reading `main.cpp`. Compiled in for now, hence no
+  /// setter — see `KeyBinding`.
+  vector<KeyBinding> ListKeyBindings();
+
+  /// Every screen the compositor has, in layout order.
+  vector<OutputInfo> ListOutputs();
+
+  /// Every mode a screen can run at, best first.
+  ///
+  /// Separate from `ListOutputs` because a screen has dozens of modes and a
+  /// settings app needs them only for the one the user is looking at.
+  vector<OutputMode> ListOutputModes(name: in string) raises(OutputNotFound);
+
+  /// Reconfigures a screen, now and for the next session.
+  ///
+  /// A rejected mode does not cost the session: the compositor falls back to
+  /// the display's preferred mode rather than leaving a screen showing
+  /// nothing, which is the one failure a user cannot recover from without
+  /// another machine. The fallback is visible through `ListOutputs`, so a
+  /// client can tell that what it asked for is not what it got.
+  void SetOutput(request: in OutputRequest)
+      raises(OutputNotFound, SettingsWriteFailed);
 
   /// The focused window, now and whenever it changes.
   ///

@@ -87,3 +87,32 @@ layout = us
 # Repeat, in keys per second and milliseconds held before it starts.
 repeat-rate = 25
 repeat-delay = 600
+
+
+[appearance]
+
+# How the desktop looks, as opposed to what the machine is — the odd section
+# out in this file, and the one you should not need to edit: `LavaSettings`
+# writes it, applying each change to the running compositor first and saving it
+# here afterwards. Editing by hand still works, and still needs a SIGHUP.
+#
+# Values here are what that app writes back, so a hand edit survives it: it
+# rewrites the keys it changes and leaves everything else, comments included,
+# exactly where you put them.
+
+# Window corner radius in pixels; 0 is square. Applies to what the compositor
+# draws — LavaUI clients and the title bars above them. A Wayland client's own
+# buffer is not ours to reshape, so those stay square.
+corner-radius = 0
+
+# How far the focused window's shadow reaches, in pixels; 0 turns shadows off.
+# Only the focused window casts one, which is how the desktop says which window
+# is active without tinting a border.
+shadow-blur = 0
+
+# Opacity directly under the window, 0…1, fading to nothing over the blur.
+shadow-opacity = 0.35
+
+# How far down the shadow is pushed. Light comes from above, and a shadow
+# centred on its window reads as a glow instead.
+shadow-offset-y = 4

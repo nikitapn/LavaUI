@@ -1,8 +1,11 @@
 #include "config.hpp"
 
 #include <cstdlib>
+#include <filesystem>
 #include <fstream>
+#include <optional>
 #include <sstream>
+#include <system_error>
 
 #include "wlr.hpp"
 
@@ -238,6 +241,133 @@ Config Config::load(const std::string &path) {
   wlr_log(WLR_INFO, "config: loaded '%s' (%zu output block(s))", path.c_str(),
           config.outputs.size());
   return config;
+}
+
+namespace {
+
+/// The section a header line opens, or nullopt if the line is not a header.
+std::optional<std::string> sectionOf(const std::string &line) {
+  const std::string t = trim(line);
+  if (t.size() < 2 || t.front() != '[' || t.back() != ']') return std::nullopt;
+  return trim(t.substr(1, t.size() - 2));
+}
+
+/// The key a line assigns, ignoring comments and blank lines.
+///
+/// A commented-out `# layout = us` deliberately does not count: it is a note,
+/// and the value it names is not in effect.
+std::optional<std::string> keyOf(const std::string &line) {
+  const std::string t = trim(line);
+  if (t.empty() || t.front() == '#') return std::nullopt;
+  const auto equals = t.find('=');
+  if (equals == std::string::npos) return std::nullopt;
+  return trim(t.substr(0, equals));
+}
+
+/// Whether two section names refer to the same block. `[output DP-3]` is one
+/// block per connector, and the name is the part after the word.
+bool sameSection(const std::string &a, const std::string &b) { return a == b; }
+
+}  // namespace
+
+bool Config::write(const std::string &path,
+                   const std::vector<Setting> &settings,
+                   std::string &outError) {
+  std::vector<std::string> lines;
+  {
+    std::ifstream file(path);
+    std::string line;
+    while (std::getline(file, line)) lines.push_back(line);
+  }
+
+  for (const Setting &setting : settings) {
+    // Where the section runs from and to. `end` is one past its last line,
+    // which for the final section is the end of the file.
+    size_t sectionStart = std::string::npos;
+    size_t sectionEnd = lines.size();
+    for (size_t i = 0; i < lines.size(); ++i) {
+      const auto header = sectionOf(lines[i]);
+      if (!header) continue;
+      if (sectionStart == std::string::npos) {
+        if (sameSection(*header, setting.section)) sectionStart = i + 1;
+      } else {
+        sectionEnd = i;
+        break;
+      }
+    }
+
+    const std::string assignment = setting.key + " = " + setting.value;
+
+    if (sectionStart == std::string::npos) {
+      // A section this file has never had. Appended with a blank line before
+      // it, which is how every other block in the file is separated.
+      if (!lines.empty() && !trim(lines.back()).empty()) lines.push_back("");
+      lines.push_back("[" + setting.section + "]");
+      lines.push_back(assignment);
+      continue;
+    }
+
+    size_t existing = std::string::npos;
+    for (size_t i = sectionStart; i < sectionEnd; ++i) {
+      const auto key = keyOf(lines[i]);
+      if (key && *key == setting.key) {
+        existing = i;
+        break;
+      }
+    }
+
+    if (existing != std::string::npos) {
+      lines[existing] = assignment;
+      continue;
+    }
+
+    // New key in an existing section: after its last real line, so it lands
+    // with the block rather than after the blank line that follows it.
+    size_t insert = sectionEnd;
+    while (insert > sectionStart && trim(lines[insert - 1]).empty()) --insert;
+    lines.insert(lines.begin() + static_cast<std::ptrdiff_t>(insert),
+                 assignment);
+  }
+
+  std::error_code ec;
+  const std::filesystem::path target(path);
+  if (target.has_parent_path()) {
+    std::filesystem::create_directories(target.parent_path(), ec);
+    if (ec) {
+      outError = "cannot create " + target.parent_path().string() + ": " +
+                 ec.message();
+      return false;
+    }
+  }
+
+  // Written beside the target and renamed over it: rename is atomic within a
+  // filesystem, so a compositor killed mid-write leaves the old config intact
+  // rather than a truncated one that the next start cannot read.
+  const std::filesystem::path temporary = target.string() + ".tmp";
+  {
+    std::ofstream out(temporary, std::ios::trunc);
+    if (!out) {
+      outError = "cannot write " + temporary.string();
+      return false;
+    }
+    for (const std::string &line : lines) out << line << '\n';
+    out.flush();
+    if (!out) {
+      outError = "write failed for " + temporary.string();
+      return false;
+    }
+  }
+
+  std::filesystem::rename(temporary, target, ec);
+  if (ec) {
+    std::filesystem::remove(temporary, ec);
+    outError = "cannot replace " + path + ": " + ec.message();
+    return false;
+  }
+
+  wlr_log(WLR_INFO, "config: wrote %zu setting(s) to '%s'", settings.size(),
+          path.c_str());
+  return true;
 }
 
 const OutputConfig *Config::forOutput(const std::string &name) const {

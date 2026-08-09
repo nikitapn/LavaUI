@@ -534,6 +534,145 @@ class CompositorImpl final : public ICompositor_Servant {
     return out;
   }
 
+  // ─── Settings ────────────────────────────────────────────────────────────
+  //
+  // Every setter applies first and saves second, and raises only if the save
+  // failed — so a client that catches `SettingsWriteFailed` knows the change
+  // is on screen and will not be next time, which is a different sentence
+  // from "nothing happened".
+
+  void SetAppearance(flat::Appearance_Direct appearance) override {
+    std::string error;
+    host_.updateAppearance(appearance.cornerRadius(), appearance.shadowBlur(),
+                        appearance.shadowOpacity(), appearance.shadowOffsetY(),
+                        error);
+    if (!error.empty()) throw SettingsWriteFailed(host_.configPath(), error);
+  }
+
+  KeyboardSettings GetKeyboard() override {
+    CompositorHost::KeyboardState state;
+    host_.keyboardSettings(state);
+    KeyboardSettings out{};
+    out.layout = state.layout;
+    out.variant = state.variant;
+    out.options = state.options;
+    out.model = state.model;
+    out.rules = state.rules;
+    out.repeatRate = state.repeatRate;
+    out.repeatDelay = state.repeatDelay;
+    return out;
+  }
+
+  void SetKeyboard(flat::KeyboardSettings_Direct settings) override {
+    CompositorHost::KeyboardState state;
+    state.layout = std::string{settings.layout()};
+    state.variant = std::string{settings.variant()};
+    state.options = std::string{settings.options()};
+    state.model = std::string{settings.model()};
+    state.rules = std::string{settings.rules()};
+    state.repeatRate = settings.repeatRate();
+    state.repeatDelay = settings.repeatDelay();
+
+    std::string error;
+    host_.setKeyboardSettings(state, error);
+    if (!error.empty()) throw SettingsWriteFailed(host_.configPath(), error);
+  }
+
+  std::vector<KeyboardLayout> ListKeyboardLayouts() override {
+    std::vector<CompositorHost::LayoutEntry> entries;
+    host_.keyboardLayouts(entries);
+
+    std::vector<KeyboardLayout> out;
+    out.reserve(entries.size());
+    for (const auto &entry : entries) {
+      KeyboardLayout layout{};
+      layout.code = entry.code;
+      layout.variant = entry.variant;
+      layout.description = entry.description;
+      out.push_back(std::move(layout));
+    }
+    return out;
+  }
+
+  std::vector<KeyBinding> ListKeyBindings() override {
+    std::vector<CompositorHost::BindingEntry> entries;
+    host_.keyBindings(entries);
+
+    std::vector<KeyBinding> out;
+    out.reserve(entries.size());
+    for (const auto &entry : entries) {
+      KeyBinding binding{};
+      binding.modifiers = entry.modifiers;
+      binding.key = entry.key;
+      binding.action = entry.action;
+      binding.description = entry.description;
+      out.push_back(std::move(binding));
+    }
+    return out;
+  }
+
+  std::vector<OutputInfo> ListOutputs() override {
+    std::vector<CompositorHost::OutputEntry> entries;
+    host_.outputList(entries);
+
+    std::vector<OutputInfo> out;
+    out.reserve(entries.size());
+    for (const auto &entry : entries) {
+      OutputInfo info{};
+      info.name = entry.name;
+      info.description = entry.description;
+      info.enabled = entry.enabled;
+      info.x = entry.x;
+      info.y = entry.y;
+      info.width = entry.width;
+      info.height = entry.height;
+      info.refresh = entry.refresh;
+      info.scale = entry.scale;
+      info.transform = entry.transform;
+      out.push_back(std::move(info));
+    }
+    return out;
+  }
+
+  std::vector<OutputMode> ListOutputModes(
+      nprpc::flat::Span<char> name) override {
+    const std::string connector{name};
+    std::vector<CompositorHost::ModeEntry> entries;
+    if (!host_.outputModes(connector, entries)) {
+      throw OutputNotFound(connector);
+    }
+
+    std::vector<OutputMode> out;
+    out.reserve(entries.size());
+    for (const auto &entry : entries) {
+      OutputMode mode{};
+      mode.width = entry.width;
+      mode.height = entry.height;
+      mode.refresh = entry.refresh;
+      mode.current = entry.current;
+      mode.preferred = entry.preferred;
+      out.push_back(mode);
+    }
+    return out;
+  }
+
+  void SetOutput(flat::OutputRequest_Direct request) override {
+    CompositorHost::OutputChange change;
+    change.name = std::string{request.name()};
+    change.enabled = static_cast<bool>(request.enabled());
+    change.width = request.width();
+    change.height = request.height();
+    change.refresh = request.refresh();
+    change.scale = request.scale();
+    change.x = request.x();
+    change.y = request.y();
+    change.transform = request.transform();
+
+    std::string error;
+    if (!host_.setOutput(change, error)) throw OutputNotFound(change.name);
+    if (!error.empty()) throw SettingsWriteFailed(host_.configPath(), error);
+  }
+
   void ActivateWindow(uint32_t surfaceId) override {
     if (!host_.activateWindow(surfaceId)) throw SurfaceNotFound(surfaceId);
   }
