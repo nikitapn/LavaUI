@@ -104,7 +104,8 @@ Sources/
   LavaIDL/         Generated NPRPC Swift stubs (do not hand-edit long-term)
   LavaBench/       Perf suite vs committed baseline
   LavaSurface/     Client: wallpaper / desktop surface
-  LavaTaskbar/     Client: panel / taskbar
+  LavaTaskbar/     Client: panel / taskbar (global menu)
+  LavaDock/        Client: dock — open windows on this workspace
   HelloWorld/      Demo playground + FBD bits
   LavaTerm*/       Terminal emulator (core headless + app)
   Spotify*/        LavaSpotify (core headless + app)
@@ -186,6 +187,8 @@ Runtime agent protocol (MCP/CLI, stable `sid`s, hit-testing): **`docs/agent.md`*
 | Window shadows (focused only) | `SurfaceRegistry::applyShadow`, `quad.frag` kind 5 |
 | Window chrome an app draws itself | `Sources/LavaUI/WindowControls.swift` |
 | Panel global menu (import side) | `canvas/src/menu/menu_import.*`, `Sources/LavaUI/PanelMenu.swift` |
+| Window list / dock | `SubscribeWindows` in the IDL, `Sources/LavaDock/` |
+| Stream delivery to clients | `StreamPump` in `compositor/src/control_plane.cpp` |
 | Client open / Present / input stream | `Sources/LavaClient/` |
 | Perf scenarios | `Sources/LavaBench/`, `docs/performance.md` |
 | App demos | `Sources/HelloWorld/`, Spotify/TraceLoom/LavaTerm apps |

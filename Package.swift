@@ -45,6 +45,7 @@ var products: [Product] = [
     .executable(name: "ArenaDemo", targets: ["ArenaDemo"]),
     .executable(name: "LavaSurface", targets: ["LavaSurface"]),
     .executable(name: "LavaTaskbar", targets: ["LavaTaskbar"]),
+    .executable(name: "LavaDock", targets: ["LavaDock"]),
     .library(name: "LavaUI", targets: ["LavaUI"]),
     .library(name: "LavaText", targets: ["LavaText"]),
     .library(name: "LavaMenu", targets: ["LavaMenu"]),
@@ -89,6 +90,15 @@ var targets: [Target] = [
     // out of the same client API an app uses. See Sources/LavaTaskbar.
     .executableTarget(
         name: "LavaTaskbar",
+        dependencies: ["LavaUI"]
+            + (haveNprpc ? [Target.Dependency("LavaClient"),
+                            Target.Dependency("LavaIDL")] : []),
+        swiftSettings: interopCxx
+    ),
+    // The dock: what is open on this workspace, as icons. The other half of a
+    // shell, and the first client that needed the window list.
+    .executableTarget(
+        name: "LavaDock",
         dependencies: ["LavaUI"]
             + (haveNprpc ? [Target.Dependency("LavaClient"),
                             Target.Dependency("LavaIDL")] : []),
