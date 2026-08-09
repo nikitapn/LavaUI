@@ -601,6 +601,30 @@ struct ClientSurface {
   }
 };
 
+/// What a layout-space pointer resolved to, walking the window stack top-down.
+///
+/// Bars and contents of a single window are both rectangles in the same plane
+/// as every other window. Testing "any title bar under this point" without
+/// asking whether a higher window's content covers that point first is how a
+/// click on the active window ends up on the inactive window's non-client
+/// strip and raises it.
+enum class SurfaceHitKind {
+  None,
+  /// Compositor-owned title bar.
+  Bar,
+  /// LavaUI client content — input goes through the control plane.
+  ClientContent,
+  /// Wayland/X11 content — occludes what is behind; input goes through the seat.
+  ForeignContent,
+};
+
+struct SurfaceHit {
+  ClientSurface *surface = nullptr;
+  SurfaceHitKind kind = SurfaceHitKind::None;
+  double sx = 0;
+  double sy = 0;
+};
+
 /// Every client surface, and the control plane's view of the compositor.
 ///
 /// Implements `lava::CompositorHost`, so the servant calls land here — always
@@ -655,38 +679,61 @@ class SurfaceRegistry : public lava::CompositorHost {
     hoverBar(surface, lava::DecorationHit::Bar);
   }
 
+  /// Topmost hit under a layout-space point. Front of `surfaces_` is topmost.
+  ///
+  /// Walks each window's bar, then its content, before the next window — so a
+  /// content rectangle occludes every bar (and every content) behind it. That
+  /// is the Z-order the scene graph already draws; hit testing has to match it.
+  SurfaceHit hitTest(double lx, double ly) const {
+    for (const auto &s : surfaces_) {
+      if (!visible(*s)) continue;
+      double sx = 0, sy = 0;
+      // Within one window the bar is drawn above the content.
+      if (s->hitBar(lx, ly, sx, sy)) {
+        return {s.get(), SurfaceHitKind::Bar, sx, sy};
+      }
+      if (s->hit(lx, ly, sx, sy)) {
+        return {s.get(),
+                s->isForeign() ? SurfaceHitKind::ForeignContent
+                               : SurfaceHitKind::ClientContent,
+                sx, sy};
+      }
+    }
+    return {};
+  }
+
   /// Updates every window's bar hover for a pointer at `lx, ly`.
   ///
   /// True when the pointer is over a bar, which is also the caller's signal to
   /// stop: a title bar is the compositor's and the window under it should not
   /// also see the motion.
   bool hoverFrames(double lx, double ly) {
-    bool over = false;
+    const SurfaceHit top = hitTest(lx, ly);
     for (auto &surface : surfaces_) {
       if (!visible(*surface)) continue;
-      double sx = 0, sy = 0;
       lava::DecorationHit hit = lava::DecorationHit::Bar;
-      const bool on = !over && surface->hitBar(lx, ly, sx, sy);
+      const bool on =
+          top.kind == SurfaceHitKind::Bar && top.surface == surface.get();
       if (on) {
-        hit = lava::Decoration::hitTest(static_cast<float>(sx),
-                                        static_cast<float>(sy), surface->width);
-        over = true;
+        hit = lava::Decoration::hitTest(static_cast<float>(top.sx),
+                                        static_cast<float>(top.sy),
+                                        surface->width);
       }
       // Windows the pointer is *not* over have their highlight cleared, which
       // is what stops a button staying lit after the cursor leaves it.
       hoverBar(*surface, on ? hit : lava::DecorationHit::Bar);
     }
-    return over;
+    return top.kind == SurfaceHitKind::Bar;
   }
 
-  /// Topmost window whose bar is under a layout-space point.
+  /// Topmost window whose bar is under a layout-space point, with nothing
+  /// higher in the stack covering that point.
   ClientSurface *frameAt(double lx, double ly, double &sx, double &sy) {
-    for (auto &surface : surfaces_) {
-      if (visible(*surface) && surface->hitBar(lx, ly, sx, sy)) {
-        return surface.get();
-      }
-    }
-    return nullptr;
+    const SurfaceHit top = hitTest(lx, ly);
+    if (top.kind != SurfaceHitKind::Bar) return nullptr;
+    sx = top.sx;
+    sy = top.sy;
+    return top.surface;
   }
 
   /// Topmost *window* under a point, of either kind.
@@ -696,24 +743,22 @@ class SurfaceRegistry : public lava::CompositorHost {
   /// through the seat instead; this asks "which window is here", which is what
   /// a compositor-level gesture like Alt+drag needs.
   ClientSurface *windowAt(double lx, double ly) {
-    double sx = 0, sy = 0;
-    for (auto &s : surfaces_) {
-      if (s->panel || !visible(*s)) continue;
-      if (s->hit(lx, ly, sx, sy) || s->hitBar(lx, ly, sx, sy)) return s.get();
-    }
-    return nullptr;
+    const SurfaceHit top = hitTest(lx, ly);
+    if (top.surface == nullptr || top.surface->panel) return nullptr;
+    return top.surface;
   }
 
-  /// Topmost surface under a layout-space point. Front is most recent.
+  /// Topmost LavaUI content under a layout-space point.
+  ///
+  /// Foreign (Wayland) content is deliberately absent: its pointer input goes
+  /// through the seat. It still occludes via `hitTest`, so a window behind a
+  /// Wayland client is not reachable here either.
   ClientSurface *at(double lx, double ly, double &sx, double &sy) {
-    for (auto &s : surfaces_) {
-      // Wayland windows are deliberately absent: their pointer input goes
-      // through the seat, to the client's own surface, and routing it here as
-      // well would deliver every event twice.
-      if (s->isForeign()) continue;
-      if (visible(*s) && s->hit(lx, ly, sx, sy)) return s.get();
-    }
-    return nullptr;
+    const SurfaceHit top = hitTest(lx, ly);
+    if (top.kind != SurfaceHitKind::ClientContent) return nullptr;
+    sx = top.sx;
+    sy = top.sy;
+    return top.surface;
   }
 
   bool empty() const { return surfaces_.empty(); }
@@ -2554,7 +2599,14 @@ void Server::on_cursor_button(wl_listener *listener, void *data) {
     if (pressed) {
       if (ClientSurface *over =
               server->surfaces->at(server->cursor->x, server->cursor->y, sx, sy)) {
+        // Same two halves the title bar sets: the workspace's keyboard target
+        // and the decoration's "this window is active" paint. Forgetting the
+        // second made a content click raise the window but leave the chrome on
+        // whatever last took a bar click — looking like focus only works from
+        // the non-client strip.
         server->setFocusedSurface(over->id);
+        server->surfaces->setFocused(over->id);
+        server->surfaces->raise(*over);
         // Taking the keyboard from any Wayland window: the two focus models
         // are separate, and leaving both focused would deliver every key twice.
         wlr_seat_keyboard_notify_clear_focus(server->seat);
