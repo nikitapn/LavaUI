@@ -180,7 +180,16 @@ class StreamPump {
       }
       // Outside the lock and on nobody else's thread: a write that blocks here
       // delays this one subscriber and nothing else in the compositor.
-      writer_.write(value);
+      if (!writer_.write(value)) {
+        // The transport refused it — a shared memory ring the client stopped
+        // draining, or a session already gone. Either way this subscription
+        // is over; carrying on would serialise frames into a wall and hold a
+        // thread doing it. The broker notices via done() and drops us.
+        std::lock_guard lock(mutex_);
+        closed_ = true;
+        queue_.clear();
+        return;
+      }
     }
   }
 
