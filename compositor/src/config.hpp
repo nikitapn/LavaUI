@@ -77,6 +77,23 @@ struct AppearanceConfig {
   /// `docs/native-menus.md`'s neighbour in `decoration.hpp` for the same
   /// split — so those stay square until the scene is composited by hand.
   int32_t cornerRadius = 0;
+
+  /// How far a window's shadow reaches, in pixels. 0 turns shadows off.
+  ///
+  /// Only the focused window casts one, which is the point: it says which
+  /// window is active without tinting a border, and it says it in the one
+  /// place the eye is already looking. Unlike rounding, this works for
+  /// Wayland clients too — a shadow is drawn *behind* a window and needs
+  /// nothing from its buffer.
+  int32_t shadowBlur = 0;
+
+  /// Shadow opacity directly under the window, 0…1. The falloff takes it to
+  /// zero over `shadowBlur` pixels.
+  float shadowOpacity = 0.35f;
+
+  /// How far the shadow is pushed down, in pixels. Light comes from above, so
+  /// a shadow sitting exactly under its window reads as a glow instead.
+  int32_t shadowOffsetY = 4;
 };
 
 struct Config {

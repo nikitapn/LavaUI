@@ -194,6 +194,17 @@ Config Config::load(const std::string &path) {
         // refusing to start over.
         const int32_t radius = std::atoi(value.c_str());
         config.appearance.cornerRadius = radius < 0 ? 0 : (radius > 64 ? 64 : radius);
+      } else if (key == "shadow-blur") {
+        const int32_t blur = std::atoi(value.c_str());
+        config.appearance.shadowBlur = blur < 0 ? 0 : (blur > 128 ? 128 : blur);
+      } else if (key == "shadow-opacity") {
+        const double opacity = std::atof(value.c_str());
+        config.appearance.shadowOpacity =
+          static_cast<float>(opacity < 0.0 ? 0.0 : (opacity > 1.0 ? 1.0 : opacity));
+      } else if (key == "shadow-offset-y") {
+        const int32_t offset = std::atoi(value.c_str());
+        config.appearance.shadowOffsetY =
+          offset < -128 ? -128 : (offset > 128 ? 128 : offset);
       } else {
         known = false;
       }

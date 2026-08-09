@@ -124,6 +124,16 @@ message Appearance {
   /// as the window around it, and 8 against the desktop's 12 is the kind of
   /// wrongness people see without being able to name.
   cornerRadius: f32;
+
+  /// How far a window's shadow reaches, in pixels; 0 when there are none.
+  /// With `shadowOpacity` and `shadowOffsetY`, enough for a client to give a
+  /// menu or a dialog of its own the same shadow the desktop gives a window.
+  shadowBlur: f32;
+  /// Opacity directly under the shape, 0…1, fading to nothing over the blur.
+  shadowOpacity: f32;
+  /// How far the shadow is pushed down. Light comes from above, and a shadow
+  /// centred on its shape reads as a glow.
+  shadowOffsetY: f32;
 }
 
 /// Which window has the keyboard now.

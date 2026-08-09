@@ -10,6 +10,7 @@ layout(location = 2) in vec2  inHalfSize;  // SDF half-extent
 layout(location = 3) in float inRadius;    // SDF corner radius
 layout(location = 4) in vec4  inColor;     // fetched from RGBA8 via R8G8B8A8_UNORM
 layout(location = 5) in uint  inKind;      // 0 = sdf shape, 1 = glyph
+layout(location = 6) in float inAux;       // kind-specific: shadow blur
 
 // std140: vec2@0, vec2@8, float@16, float@20 → 24 bytes
 layout(push_constant) uniform Push {
@@ -24,6 +25,7 @@ layout(location = 1) out vec2       vHalfSize;
 layout(location = 2) out float      vRadius;
 layout(location = 3) out vec4       vColor;
 layout(location = 4) flat out uint  vKind;
+layout(location = 5) flat out float vAux;
 
 void main() {
   vLocal    = inLocal;
@@ -31,6 +33,7 @@ void main() {
   vRadius   = inRadius;
   vColor    = inColor;
   vKind     = inKind;
+  vAux      = inAux;
 
   // Zoom about viewport center, then pan (layout → screen pixels).
   vec2 center = pc.viewport * 0.5;

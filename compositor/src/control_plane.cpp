@@ -468,7 +468,8 @@ class CompositorImpl final : public ICompositor_Servant {
 
   Appearance GetAppearance() override {
     Appearance out{};
-    out.cornerRadius = host_.cornerRadius();
+    host_.appearance(out.cornerRadius, out.shadowBlur, out.shadowOpacity,
+                     out.shadowOffsetY);
     return out;
   }
 

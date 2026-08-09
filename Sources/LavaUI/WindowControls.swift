@@ -85,6 +85,17 @@ public enum WindowBridge {
     /// `GetAppearance` in the IDL for why that is a call and not a stream.
     nonisolated(unsafe) public static var desktopCornerRadius: Float = 0
 
+    /// The shadow the desktop puts under a focused window: how far it reaches,
+    /// how dark it is directly underneath, and how far down it is pushed.
+    ///
+    /// For the same reason the radius is here — matching, not doing. The
+    /// compositor casts a window's shadow; an app that gives its own menu or
+    /// dialog one should use these numbers rather than pick its own, or the
+    /// two will disagree in the same frame. `blur` 0 means the desktop casts
+    /// no shadows, and so should the app.
+    nonisolated(unsafe) public static var desktopShadow:
+        (blur: Float, opacity: Float, offsetY: Float) = (0, 0, 0)
+
     static func requestDrag() { beginDrag?() }
     static func requestMaximize() { toggleMaximize?() }
     static func requestMinimize() { minimize?() }

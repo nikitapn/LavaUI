@@ -595,6 +595,19 @@ struct ClientSurface {
   wlr_scene_buffer *barNode = nullptr;
   lava::DecorationHit hovered = lava::DecorationHit::Bar;
 
+  /// The drop shadow: its own surface, sitting behind the window.
+  ///
+  /// Behind rather than around, which is what lets it exist at all for a
+  /// Wayland client — a shadow falls on what is *under* a window and needs
+  /// nothing from the window's own pixels, unlike rounding, which has to
+  /// reshape them.
+  ///
+  /// Only the focused window's is enabled. That is the whole feature: it says
+  /// which window is active in the place the user is already looking, instead
+  /// of a tinted border they have to go and check.
+  std::unique_ptr<lava::CanvasSurface> shadow;
+  wlr_scene_buffer *shadowNode = nullptr;
+
   /// Whether the compositor draws this window's non-client area.
   ///
   /// False costs the window nothing except the strip: it is still placed,
@@ -760,6 +773,11 @@ class SurfaceRegistry : public lava::CompositorHost {
     if (surface.barNode != nullptr) {
       wlr_scene_node_reparent(&surface.barNode->node, workspaces_->tree[index]);
     }
+    if (surface.shadowNode != nullptr) {
+      wlr_scene_node_reparent(&surface.shadowNode->node,
+                              workspaces_->tree[index]);
+      placeShadow(surface);
+    }
     // The pointer is not going with it, so nothing on its frame is hovered any
     // more — and a button left lit would still be lit when it comes back.
     hoverBar(surface, lava::DecorationHit::Bar);
@@ -924,6 +942,9 @@ class SurfaceRegistry : public lava::CompositorHost {
     if (surface.barNode != nullptr) {
       wlr_scene_node_set_enabled(&surface.barNode->node, !minimized);
     }
+    if (surface.shadowNode != nullptr) {
+      wlr_scene_node_set_enabled(&surface.shadowNode->node, false);
+    }
     // Nothing on a hidden window's frame is hovered, and a button left lit
     // would still be lit when it comes back.
     hoverBar(surface, lava::DecorationHit::Bar);
@@ -1076,6 +1097,10 @@ class SurfaceRegistry : public lava::CompositorHost {
     if (surface.barNode != nullptr) {
       wlr_scene_node_raise_to_top(&surface.barNode->node);
     }
+    // The window went up; its shadow has to follow it rather than stay where
+    // the old stacking left it, which would be behind whatever this window was
+    // just raised over.
+    placeShadow(surface);
     // Front of the list is front of the stack, and the two must not disagree:
     // the hit tests walk this list and would otherwise answer with a window
     // that is visibly behind another.
@@ -1104,12 +1129,13 @@ class SurfaceRegistry : public lava::CompositorHost {
     }
   }
 
-  /// Moves a window. Both nodes, because a frame and its content are one
-  /// window and only ever move together.
+  /// Moves a window. Every node, because a frame, its content and the shadow
+  /// under them are one window and only ever move together.
   void moveSurface(ClientSurface &surface, int x, int y) {
     surface.x = x;
     surface.y = y;
     place(surface);
+    placeShadow(surface);
   }
 
   /// Fills the work area, or goes back to where the window came from.
@@ -1185,18 +1211,119 @@ class SurfaceRegistry : public lava::CompositorHost {
     }
   }
 
-  /// How round every window's corners are. Applied to each surface as it is
-  /// created or reshaped — see `applyCorners`.
-  void setCornerRadius(float radius) {
-    if (cornerRadius_ == radius) return;
+  /// Every appearance setting at once, from the config and again on reload.
+  ///
+  /// One call rather than four setters because they are read together and a
+  /// window has to be redrawn once when any of them changes: a shadow's corner
+  /// radius comes from the same number the window's own corners do, so setting
+  /// them one at a time would draw an intermediate frame where the two
+  /// disagreed.
+  void setAppearance(float radius, float shadowBlur, float shadowOpacity,
+                     float shadowOffsetY) {
+    const bool same = cornerRadius_ == radius && shadowBlur_ == shadowBlur &&
+                      shadowOpacity_ == shadowOpacity &&
+                      shadowOffsetY_ == shadowOffsetY;
+    if (same) return;
     cornerRadius_ = radius;
+    shadowBlur_ = shadowBlur;
+    shadowOpacity_ = shadowOpacity;
+    shadowOffsetY_ = shadowOffsetY;
     for (auto &surface : surfaces_) {
+      applyShadow(*surface);
       applyCorners(*surface);
       // Only the surfaces the compositor fills itself redraw from here; a
       // client's next frame carries its own content, and the mask is applied
       // to whatever that turns out to be.
       drawBar(*surface);
       if (surface->canvas && surface->canvas->redraw()) damage(*surface);
+    }
+  }
+
+  /// Builds, moves, resizes and redraws a window's shadow.
+  ///
+  /// One function rather than the four the bar needs, because a shadow has no
+  /// state of its own worth tracking: it is entirely a function of the
+  /// window's rectangle, the config, and whether the window is focused. Called
+  /// whenever any of those changes, and cheap when nothing did — the surface
+  /// is only reallocated when its size actually differs.
+  void applyShadow(ClientSurface &surface) {
+    const bool wanted =
+        shadowBlur_ > 0.f && !surface.panel && renderer_ != nullptr &&
+        workspaces_ != nullptr && surface.id == focused_ && !surface.minimized;
+    if (!wanted) {
+      if (surface.shadowNode != nullptr) {
+        wlr_scene_node_set_enabled(&surface.shadowNode->node, false);
+      }
+      return;
+    }
+
+    // The margin has to hold the blur on every side plus wherever the offset
+    // pushes it, or the shadow is clipped by its own surface.
+    const int margin =
+        static_cast<int>(shadowBlur_) + std::abs(static_cast<int>(shadowOffsetY_));
+    const uint32_t width = surface.width + static_cast<uint32_t>(margin * 2);
+    const uint32_t height =
+        static_cast<uint32_t>(surface.frameHeight()) +
+        static_cast<uint32_t>(margin * 2);
+
+    if (!surface.shadow) {
+      surface.shadow = renderer_->createSurface(width, height);
+      if (!surface.shadow) return;
+      surface.shadowNode = wlr_scene_buffer_create(
+          workspaces_->tree[surface.workspace], surface.shadow->buffer());
+      if (surface.shadowNode == nullptr) {
+        surface.shadow.reset();
+        return;
+      }
+      wlr_log(WLR_INFO, "surface %u: shadow %ux%u, blur %.0f, offset %.0f",
+              surface.id, width, height, shadowBlur_, shadowOffsetY_);
+    } else if (surface.shadow->resize(width, height)) {
+      wlr_scene_buffer_set_buffer(surface.shadowNode, surface.shadow->buffer());
+    }
+
+    // Drawn in the shadow surface's own coordinates: the window's rectangle
+    // sits `margin` in from every edge, shifted down by the offset.
+    canvas::DrawCommand command{};
+    command.kind = static_cast<uint32_t>(canvas::DrawCommandKind::Shadow);
+    command.x = static_cast<float>(margin);
+    command.y = static_cast<float>(margin + shadowOffsetY_);
+    command.w = static_cast<float>(surface.width);
+    command.h = static_cast<float>(surface.frameHeight());
+    command.aux = cornerRadius_;
+    command.param = static_cast<uint32_t>(shadowBlur_);
+    // Black at the configured opacity. RGBA8 little-endian, so the alpha is
+    // the top byte — see the colours in `Decoration`.
+    const uint32_t alpha =
+        static_cast<uint32_t>(std::clamp(shadowOpacity_, 0.f, 1.f) * 255.f);
+    command.color = alpha << 24;
+
+    const std::vector<canvas::DrawCommand> commands{command};
+    const std::vector<canvas::GlyphInstance> glyphs;
+    if (surface.shadow->renderList(commands, glyphs)) {
+      wlr_scene_buffer_set_buffer_with_damage(surface.shadowNode,
+                                              surface.shadow->buffer(), nullptr);
+    }
+    wlr_scene_node_set_enabled(&surface.shadowNode->node, true);
+    placeShadow(surface);
+  }
+
+  /// Puts the shadow under its window, in position and in the stack.
+  void placeShadow(ClientSurface &surface) {
+    if (surface.shadowNode == nullptr) return;
+    const int margin =
+        static_cast<int>(shadowBlur_) + std::abs(static_cast<int>(shadowOffsetY_));
+    wlr_scene_node_set_position(&surface.shadowNode->node, surface.x - margin,
+                               surface.y - margin);
+    // Below this window's own nodes and nothing else's: `lower_to_bottom`
+    // would put it under every other window too, so a shadow would fall behind
+    // the window it belongs in front of.
+    wlr_scene_node *content = surface.isForeign()
+                                  ? surface.window->contentNode()
+                                  : (surface.node != nullptr
+                                         ? &surface.node->node
+                                         : nullptr);
+    if (content != nullptr) {
+      wlr_scene_node_place_below(&surface.shadowNode->node, content);
     }
   }
 
@@ -1236,9 +1363,15 @@ class SurfaceRegistry : public lava::CompositorHost {
     if (focused_ == id) return;
     const uint32_t previous = focused_;
     focused_ = id;
-    if (ClientSurface *was = find(previous)) drawBar(*was);
+    if (ClientSurface *was = find(previous)) {
+      drawBar(*was);
+      applyShadow(*was);
+    }
     ClientSurface *now = find(id);
-    if (now != nullptr) drawBar(*now);
+    if (now != nullptr) {
+      drawBar(*now);
+      applyShadow(*now);
+    }
     // The one place focus changes, so the one place anyone else can be told.
     // A panel with a global menu on it is the caller that needs this; there is
     // usually nobody subscribed and this costs a virtual call.
@@ -1295,6 +1428,7 @@ class SurfaceRegistry : public lava::CompositorHost {
       surface.window->requestSize(width, height);
       surface.width = width;
       surface.height = height;
+      applyShadow(surface);
       if (surface.bar &&
           surface.bar->resize(width, lava::Decoration::kHeight)) {
         wlr_scene_buffer_set_buffer(surface.barNode, surface.bar->buffer());
@@ -1306,6 +1440,10 @@ class SurfaceRegistry : public lava::CompositorHost {
     if (!surface.canvas->resize(width, height)) return;
     surface.width = width;
     surface.height = height;
+    // The shadow is the window's rectangle blurred, so a new rectangle is a
+    // new shadow. Rebuilt rather than stretched: a stretched one would soften
+    // along one axis and not the other.
+    applyShadow(surface);
     wlr_scene_buffer_set_buffer(surface.node, surface.canvas->buffer());
     // The bar spans the window, so it follows every width change.
     if (surface.bar && surface.bar->resize(width, lava::Decoration::kHeight)) {
@@ -1397,7 +1535,14 @@ class SurfaceRegistry : public lava::CompositorHost {
     return true;
   }
 
-  float cornerRadius() const override { return cornerRadius_; }
+  void appearance(float &outCornerRadius, float &outShadowBlur,
+                  float &outShadowOpacity,
+                  float &outShadowOffsetY) const override {
+    outCornerRadius = cornerRadius_;
+    outShadowBlur = shadowBlur_;
+    outShadowOpacity = shadowOpacity_;
+    outShadowOffsetY = shadowOffsetY_;
+  }
 
   void activeWindow(uint32_t &outSurfaceId,
                     std::string &outTitle) const override {
@@ -1425,6 +1570,7 @@ class SurfaceRegistry : public lava::CompositorHost {
         wlr_scene_node_destroy(&(*it)->node->node);
       }
       if ((*it)->barNode) wlr_scene_node_destroy(&(*it)->barNode->node);
+      if ((*it)->shadowNode) wlr_scene_node_destroy(&(*it)->shadowNode->node);
       if ((*it)->isForeign()) (*it)->window->frameId = 0;
       surfaces_.erase(it);
       // A press whose surface went away before its release: nothing left to
@@ -1667,6 +1813,10 @@ class SurfaceRegistry : public lava::CompositorHost {
   Server *server_ = nullptr;
   /// Window corner radius in pixels, from the config. 0 is square.
   float cornerRadius_ = 0.f;
+  /// Shadow reach in pixels; 0 turns shadows off. See `applyShadow`.
+  float shadowBlur_ = 0.f;
+  float shadowOpacity_ = 0.35f;
+  float shadowOffsetY_ = 4.f;
   lava::Decoration decoration_;
   /// Whose bar is drawn active.
   uint32_t focused_ = 0;
@@ -2717,8 +2867,11 @@ void Server::reloadConfig() {
   // running: it is a number the renderer reads per frame, so every window on
   // screen takes the new one without being told anything.
   if (surfaces != nullptr) {
-    surfaces->setCornerRadius(
-        static_cast<float>(config.appearance.cornerRadius));
+    surfaces->setAppearance(
+        static_cast<float>(config.appearance.cornerRadius),
+        static_cast<float>(config.appearance.shadowBlur),
+        config.appearance.shadowOpacity,
+        static_cast<float>(config.appearance.shadowOffsetY));
   }
   wlr_log(WLR_INFO, "config: reloaded");
 }
@@ -3476,8 +3629,11 @@ int main() {
     const std::string dir = root ? root : LAVA_UI_FONTS;
     surfaces.initDecoration(dir + "/OpenSans-Regular.ttf", 14.f);
   }
-  surfaces.setCornerRadius(
-      static_cast<float>(server.config.appearance.cornerRadius));
+  surfaces.setAppearance(
+      static_cast<float>(server.config.appearance.cornerRadius),
+      static_cast<float>(server.config.appearance.shadowBlur),
+      server.config.appearance.shadowOpacity,
+      static_cast<float>(server.config.appearance.shadowOffsetY));
   surfaces.start(wl_display_get_event_loop(server.display));
 
   auto control = lava::ControlPlane::start(

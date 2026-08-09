@@ -270,11 +270,17 @@ public:
 
 struct Appearance {
   float cornerRadius;
+  float shadowBlur;
+  float shadowOpacity;
+  float shadowOffsetY;
 };
 
 namespace flat {
 struct Appearance {
   float cornerRadius;
+  float shadowBlur;
+  float shadowOpacity;
+  float shadowOffsetY;
 };
 
 class Appearance_Direct {
@@ -293,6 +299,12 @@ public:
   }
   const float& cornerRadius() const noexcept { return base().cornerRadius;}
   float& cornerRadius() noexcept { return base().cornerRadius;}
+  const float& shadowBlur() const noexcept { return base().shadowBlur;}
+  float& shadowBlur() noexcept { return base().shadowBlur;}
+  const float& shadowOpacity() const noexcept { return base().shadowOpacity;}
+  float& shadowOpacity() noexcept { return base().shadowOpacity;}
+  const float& shadowOffsetY() const noexcept { return base().shadowOffsetY;}
+  float& shadowOffsetY() noexcept { return base().shadowOffsetY;}
 };
 } // namespace flat
 

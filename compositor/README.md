@@ -47,6 +47,10 @@ layout = us
 [appearance]
 # Window corner radius in pixels. 0 (the default) is square; clamped to 64.
 corner-radius = 10
+# Drop shadow under the *focused* window. blur 0 (the default) turns it off.
+shadow-blur = 24
+shadow-opacity = 0.35
+shadow-offset-y = 4
 
 [output DP-3]
 mode = 2560x1440@144
@@ -59,6 +63,14 @@ anything, because it is a number the renderer reads per frame rather than a
 property baked into a surface. Wayland clients keep square corners: their
 pixels are their own buffer, composited by `wlr_scene`, which has no per-node
 shader hook. Rounding those means compositing the scene by hand.
+
+The shadow is cast by the **focused window only**, which is what says a window
+is active — no border tint to go and look for. Unlike rounding it works for
+Wayland clients as well, because a shadow is drawn on a surface *behind* the
+window and needs nothing from the window's own pixels. It is a shape rather
+than a blurred picture of anything: the compositor knows the rectangle a window
+occupies, and a distance field describes what falls outside it exactly, so
+nothing is sampled or blurred per frame.
 
 ## Useful commands
 

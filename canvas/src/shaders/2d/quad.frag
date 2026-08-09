@@ -25,6 +25,7 @@ layout(location = 1) in vec2      vHalfSize;
 layout(location = 2) in float     vRadius;
 layout(location = 3) in vec4      vColor;
 layout(location = 4) flat in uint vKind;
+layout(location = 5) flat in float vAux;
 
 layout(binding = 0) uniform sampler2D uAtlas;
 
@@ -38,6 +39,25 @@ float sdRoundBox(vec2 p, vec2 b, float r) {
 
 void main() {
   vec4 c;
+
+  if (vKind == 5u) {
+    // Drop shadow: the same rounded box, faded outwards over `vAux` pixels.
+    //
+    // A distance field is already the exact thing a blur approximates — how
+    // far a pixel is from the shape — so the falloff is a curve over that
+    // distance rather than a pass over an image of the window. `smoothstep`
+    // rather than a straight ramp because a linear edge reads as a band; this
+    // is not a Gaussian, and at these radii nobody can tell.
+    float ds = sdRoundBox(vLocal, vHalfSize, vRadius);
+    float blur = max(vAux, 1e-4);
+    float fall = 1.0 - smoothstep(0.0, blur, max(ds, 0.0));
+    float av = vColor.a * fall * fall;
+    if (av <= 0.002) {
+      discard;
+    }
+    outColor = vec4(vColor.rgb * av, av);
+    return;
+  }
 
   if (vKind == 4u) {
     // Window corner mask. Drawn with the mask pipeline, where the blend is

@@ -141,6 +141,20 @@ enum class DrawCommandKind : uint32_t {
   /// nothing is not a default anyone asked for. To animate an entrance,
   /// declare the start on one frame and the end on the next.
   NodeAnimate = 18,
+  /// A drop shadow: a rounded rectangle whose edge fades outwards.
+  ///
+  ///   x, y, w, h = the rect casting it, in this surface's own coordinates
+  ///   aux        = corner radius, which must match the window's or the
+  ///                shadow will not sit under it
+  ///   param      = blur in pixels: how far the fade reaches past the rect
+  ///   color      = the shadow's colour and its opacity at full strength
+  ///
+  /// A shape rather than a post-process, because that is what it is: a
+  /// compositor knows the rectangle a window occupies and needs no picture of
+  /// the window to draw what falls outside it. Blurring an actual image of the
+  /// window would cost a pass over the whole thing every frame to produce
+  /// something the SDF already describes exactly.
+  Shadow = 19,
 };
 
 /// Bits in `NodeAnimate.color` — which properties the command states.

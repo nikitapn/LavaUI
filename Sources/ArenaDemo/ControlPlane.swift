@@ -685,7 +685,8 @@ final class CompositorImpl: CompositorServant, @unchecked Sendable {
     /// Square, and honestly so: the windows here are the window manager's,
     /// and their corners are its business rather than this host's.
     override func getAppearance() -> Appearance {
-        Appearance(cornerRadius: 0)
+        Appearance(cornerRadius: 0, shadowBlur: 0, shadowOpacity: 0,
+                   shadowOffsetY: 0)
     }
 
     override func beginMove(surfaceId: UInt32) throws {

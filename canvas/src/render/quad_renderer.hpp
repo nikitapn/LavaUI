@@ -57,6 +57,8 @@ class QuadRenderer {
     /// Coverage only, written as alpha and never discarded where a shape
     /// would be empty — the corners *are* the output. See `pushCornerMask`.
     Mask = 4,
+    /// Rounded rect with an outward fade. `aux` carries the blur distance.
+    Shadow = 5,
   };
 
   // Must match the vertex input layout in quad.vert.
@@ -67,8 +69,19 @@ class QuadRenderer {
     float    radius;    // SDF corner radius
     uint32_t color;     // RGBA8, R in the low byte
     uint32_t kind;
+    /// One number whose meaning belongs to `kind`: the blur distance for a
+    /// shadow, and unread by everything else.
+    ///
+    /// Four bytes on every vertex of every quad, for something one shape in a
+    /// frame uses. Worth it against the alternatives: a push constant would
+    /// have to be re-pushed per batch and would make the parameter a property
+    /// of the *pipeline bind* rather than of the shape, and packing it into
+    /// the spare bits of `kind` is the kind of cleverness that is discovered
+    /// by whoever adds the next kind. A draw list of two thousand quads pays
+    /// 32 KB for it.
+    float    aux;
   };
-  static_assert(sizeof(Vertex) == 36, "QuadVertex must stay tightly packed");
+  static_assert(sizeof(Vertex) == 40, "QuadVertex must stay tightly packed");
 
   explicit QuadRenderer(RenderDevice &device) : device_{device} {}
 
@@ -99,6 +112,16 @@ class QuadRenderer {
   void pushBox(vec2 topLeft, vec2 size, uint32_t rgba, float radius = 0.0f);
 
   void pushCircle(vec2 center, float radius, uint32_t rgba);
+
+  /// A rounded rectangle whose edge fades outwards over `blur` pixels.
+  ///
+  /// `topLeft`/`size` are the rect *casting* the shadow, not the area painted:
+  /// the falloff reaches `blur` beyond it on every side, and the quad is grown
+  /// to make room. Drawn with the ordinary blend — a shadow is painted, not
+  /// masked — onto whatever is behind, which for a compositor is a surface of
+  /// its own sitting under the window.
+  void pushShadow(vec2 topLeft, vec2 size, float radius, float blur,
+                  uint32_t rgba);
 
   /// Stroked segment with round caps, emitted as a rotated capsule quad.
   void pushLine(vec2 p0, vec2 p1, float width, uint32_t rgba);
@@ -262,7 +285,7 @@ class QuadRenderer {
   /// Appends 4 vertices + 6 indices. All four share the shape parameters; only
   /// `pos`/`local` differ per corner.
   void appendQuad(const vec2 corners[4], const vec2 locals[4], vec2 halfSize,
-                  float radius, uint32_t rgba, Kind kind);
+                  float radius, uint32_t rgba, Kind kind, float aux = 0.f);
 
   FrameResources &activeFrame();
 

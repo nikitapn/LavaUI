@@ -178,11 +178,17 @@ public func unmarshal_CaptureFailed(buffer: UnsafeRawPointer, offset: Int) -> Ca
 
 public struct Appearance: Codable, Sendable {
   public var cornerRadius: Float = 0.0
+  public var shadowBlur: Float = 0.0
+  public var shadowOpacity: Float = 0.0
+  public var shadowOffsetY: Float = 0.0
 
   public init() {}
 
-  public init(cornerRadius: Float)   {
+  public init(cornerRadius: Float, shadowBlur: Float, shadowOpacity: Float, shadowOffsetY: Float)   {
     self.cornerRadius = cornerRadius
+    self.shadowBlur = shadowBlur
+    self.shadowOpacity = shadowOpacity
+    self.shadowOffsetY = shadowOffsetY
   }
 }
 
@@ -190,12 +196,18 @@ public struct Appearance: Codable, Sendable {
 // MARK: - Marshal Appearance
 public func marshal_Appearance(buffer: FlatBuffer, offset: Int, data: Appearance) {
   buffer.storeBytes(of: data.cornerRadius, toByteOffset: offset + 0, as: Float.self)
+  buffer.storeBytes(of: data.shadowBlur, toByteOffset: offset + 4, as: Float.self)
+  buffer.storeBytes(of: data.shadowOpacity, toByteOffset: offset + 8, as: Float.self)
+  buffer.storeBytes(of: data.shadowOffsetY, toByteOffset: offset + 12, as: Float.self)
 }
 
 // MARK: - Unmarshal Appearance
 public func unmarshal_Appearance(buffer: UnsafeRawPointer, offset: Int) -> Appearance {
   var result = Appearance()
   result.cornerRadius = buffer.load(fromByteOffset: offset + 0, as: Float.self)
+  result.shadowBlur = buffer.load(fromByteOffset: offset + 4, as: Float.self)
+  result.shadowOpacity = buffer.load(fromByteOffset: offset + 8, as: Float.self)
+  result.shadowOffsetY = buffer.load(fromByteOffset: offset + 12, as: Float.self)
   return result
 }
 
@@ -2163,8 +2175,8 @@ open class CompositorServant: NPRPCServant, CompositorProtocol, @unchecked Senda
         // Prepare output buffer
         let obuf = buffer
         obuf.consume(obuf.size)
-        obuf.prepare(20)
-        obuf.commit(20)
+        obuf.prepare(32)
+        obuf.commit(32)
         // Marshal output arguments
         var out_data = lava_M10()
         out_data._1 = __ret_val

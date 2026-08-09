@@ -81,6 +81,11 @@ public enum LavaClient {
                 try await compositor.getAppearance()
             }
             WindowBridge.desktopCornerRadius = appearance.cornerRadius
+            WindowBridge.desktopShadow = (
+                blur: appearance.shadowBlur,
+                opacity: appearance.shadowOpacity,
+                offsetY: appearance.shadowOffsetY
+            )
         }
 
         // Before anything loads a face or an image. Ids already stamped into a

@@ -348,7 +348,7 @@ void QuadRenderer::createPipeline(VkRenderPass renderPass,
 
   // RGBA8 is fetched as R8G8B8A8_UNORM so the shader receives a normalised
   // vec4 without any unpack maths.
-  std::array<VkVertexInputAttributeDescription, 6> attributes{
+  std::array<VkVertexInputAttributeDescription, 7> attributes{
     VkVertexInputAttributeDescription{0, 0, VK_FORMAT_R32G32_SFLOAT,
                                       offsetof(Vertex, pos)},
     VkVertexInputAttributeDescription{1, 0, VK_FORMAT_R32G32_SFLOAT,
@@ -361,6 +361,8 @@ void QuadRenderer::createPipeline(VkRenderPass renderPass,
                                       offsetof(Vertex, color)},
     VkVertexInputAttributeDescription{5, 0, VK_FORMAT_R32_UINT,
                                       offsetof(Vertex, kind)},
+    VkVertexInputAttributeDescription{6, 0, VK_FORMAT_R32_SFLOAT,
+                                      offsetof(Vertex, aux)},
   };
 
   VkPipelineVertexInputStateCreateInfo vertexInput{
@@ -601,7 +603,7 @@ void QuadRenderer::begin(vec2 viewportSize, uint32_t frameSlot) {
 
 void QuadRenderer::appendQuad(const vec2 corners[4], const vec2 locals[4],
                               vec2 halfSize, float radius, uint32_t rgba,
-                              Kind kind) {
+                              Kind kind, float aux) {
   const uint32_t base = static_cast<uint32_t>(vertices_.size());
   for (int i = 0; i < 4; ++i) {
     vertices_.push_back(Vertex{
@@ -611,6 +613,7 @@ void QuadRenderer::appendQuad(const vec2 corners[4], const vec2 locals[4],
       .radius   = radius,
       .color    = rgba,
       .kind     = static_cast<uint32_t>(kind),
+      .aux      = aux,
     });
   }
   // 0-1-2, 0-2-3
@@ -688,6 +691,34 @@ void QuadRenderer::pushCornerMask(vec2 topLeft, vec2 size, float radius) {
 
   flushBatch();
   if (!batches_.empty()) batches_.back().mask = true;
+}
+
+void QuadRenderer::pushShadow(vec2 topLeft, vec2 size, float radius,
+                              float blur, uint32_t rgba) {
+  if (size.x <= 0.0f || size.y <= 0.0f) {
+    return;
+  }
+  ensureBatchTexture(glyphAtlasView_);
+  const float spread = blur > 0.f ? blur : 0.f;
+
+  const vec2 half{size.x * 0.5f, size.y * 0.5f};
+  const vec2 center{topLeft.x + half.x, topLeft.y + half.y};
+  // The quad has to hold the whole falloff, not just the shape: a shadow that
+  // stopped at the rect's own edge would be a hard-edged rectangle with a
+  // gradient painted inside it.
+  const vec2 ext{half.x + spread + 1.f, half.y + spread + 1.f};
+  const float r = std::min(radius, std::min(half.x, half.y));
+
+  const vec2 corners[4] = {
+    {center.x - ext.x, center.y - ext.y},
+    {center.x + ext.x, center.y - ext.y},
+    {center.x + ext.x, center.y + ext.y},
+    {center.x - ext.x, center.y + ext.y},
+  };
+  const vec2 locals[4] = {
+    {-ext.x, -ext.y}, {ext.x, -ext.y}, {ext.x, ext.y}, {-ext.x, ext.y},
+  };
+  appendQuad(corners, locals, half, r, rgba, Kind::Shadow, spread);
 }
 
 void QuadRenderer::pushCircle(vec2 center, float radius, uint32_t rgba) {

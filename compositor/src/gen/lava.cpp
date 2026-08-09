@@ -1246,7 +1246,7 @@ Appearance Compositor::GetAppearance() {
   }
   lava_M10_Direct out(buf, sizeof(::nprpc::impl::Header));
     Appearance __ret_value;
-    memcpy(&__ret_value, out._1().__data(), 4);
+    memcpy(&__ret_value, out._1().__data(), 16);
   return __ret_value;
 }
 
@@ -1276,7 +1276,7 @@ Compositor::GetAppearanceAsync(std::stop_token st) {
   }
   lava_M10_Direct out(buf, sizeof(::nprpc::impl::Header));
     Appearance __ret_value;
-    memcpy(&__ret_value, out._1().__data(), 4);
+    memcpy(&__ret_value, out._1().__data(), 16);
   co_return __ret_value;
 }
 
@@ -2154,11 +2154,11 @@ void ICompositor_Servant::dispatch(::nprpc::SessionContext& ctx, [[maybe_unused]
       assert(ctx.tx_buffer != nullptr);
       auto& obuf = *ctx.tx_buffer;
       obuf.consume(obuf.size());
-      if (!::nprpc::impl::g_rpc->prepare_zero_copy_buffer(ctx, obuf, 20))
-        obuf.prepare(20);
-      obuf.commit(20);
+      if (!::nprpc::impl::g_rpc->prepare_zero_copy_buffer(ctx, obuf, 32))
+        obuf.prepare(32);
+      obuf.commit(32);
       lava_M10_Direct oa(obuf,16);
-      memcpy(oa._1().__data(), &__ret_val, 4);
+      memcpy(oa._1().__data(), &__ret_val, 16);
       static_cast<::nprpc::impl::Header*>(obuf.data().data())->size = static_cast<uint32_t>(obuf.size());
       static_cast<::nprpc::impl::Header*>(obuf.data().data())->msg_id = ::nprpc::impl::MessageId::BlockResponse;
       static_cast<::nprpc::impl::Header*>(obuf.data().data())->msg_type = ::nprpc::impl::MessageType::Answer;

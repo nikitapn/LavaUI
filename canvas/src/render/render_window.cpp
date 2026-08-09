@@ -1573,6 +1573,11 @@ void RenderWindow::replayDrawList(const canvas::DrawList &list, float viewW,
     case canvas::DrawCommandKind::Circle:
       quads_.pushCircle({cmd.x + ox, cmd.y + oy}, cmd.aux, faded(cmd.color));
       break;
+    case canvas::DrawCommandKind::Shadow:
+      // `param` is the blur distance; `aux` the corner radius it has to match.
+      quads_.pushShadow({cmd.x + ox, cmd.y + oy}, {cmd.w, cmd.h}, cmd.aux,
+                        static_cast<float>(cmd.param), faded(cmd.color));
+      break;
     case canvas::DrawCommandKind::Line:
       // x,y = p0 and w,h = p1 (see draw_command.hpp). aux carries stroke
       // width when the emitter sets it; 1.5px is the wire default.
