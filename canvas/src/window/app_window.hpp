@@ -208,6 +208,9 @@ class AppWindow {
 
   void setWindowFrame(int x, int y, int width, int height);
   void setWindowVisible(bool visible);
+
+  /// Rounds the window's corners — see `RenderWindow::setCornerRadius`.
+  void setCornerRadius(float radius, bool top, bool bottom);
   bool isVisible() const { return visible_; }
   bool isIconified() const;
   void framebufferSize(float &outW, float &outH) const;

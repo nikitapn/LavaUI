@@ -181,6 +181,8 @@ Runtime agent protocol (MCP/CLI, stable `sid`s, hit-testing): **`docs/agent.md`*
 | Font identity / registration | `canvas/src/render/font_key.*`, `Font.swift`, IDL `RegisterFont` |
 | Control-plane API | `idl/lava.npidl` then `scripts/gen_stubs.sh` |
 | Compositor windows / input / workspaces | `compositor/src/main.cpp` |
+| Compositor config (`lava.conf`) | `compositor/src/config.*`, `compositor/README.md` |
+| Window corner rounding | `QuadRenderer::pushCornerMask`, `quad.frag` kind 4 |
 | Window chrome an app draws itself | `Sources/LavaUI/WindowControls.swift` |
 | Panel global menu (import side) | `canvas/src/menu/menu_import.*`, `Sources/LavaUI/PanelMenu.swift` |
 | Client open / Present / input stream | `Sources/LavaClient/` |

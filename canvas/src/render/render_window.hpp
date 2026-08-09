@@ -179,6 +179,21 @@ class RenderWindow {
   void setWindowFrame(int x, int y, int width, int height);
   void setWindowVisible(bool visible);
 
+  /// Rounds this window's corners: everything outside the rounded rectangle
+  /// is cleared to transparent as the last step of every frame.
+  ///
+  /// `radius` 0 turns it off. `top`/`bottom` select which pair is rounded, so
+  /// a title bar can round only the two corners it actually owns and leave the
+  /// join with the content below it square. The client is never told — this
+  /// is a property of the *window*, and a client that had to know its own
+  /// corners were round would have to be told again every time a config
+  /// changed.
+  void setCornerRadius(float radius, bool top = true, bool bottom = true) {
+    cornerRadius_ = radius < 0.f ? 0.f : radius;
+    cornerTop_ = top;
+    cornerBottom_ = bottom;
+  }
+
 #ifdef INCLUDE_IMGUI
   /// Call after installing app-level GLFW callbacks so ImGui can chain.
   void initImGuiGlfwBackend();
@@ -309,6 +324,13 @@ class RenderWindow {
   void resetSceneState();
 
  private:
+  /// Window rounding — see `setCornerRadius`. Applied in `replayDrawList`,
+  /// after the client's own content, because it shapes the finished frame
+  /// rather than anything in the draw list.
+  float cornerRadius_ = 0.f;
+  bool  cornerTop_    = true;
+  bool  cornerBottom_ = true;
+
   /// What this window remembers about a node between frames.
   struct SceneNodeState {
     /// Where the node is drawn.

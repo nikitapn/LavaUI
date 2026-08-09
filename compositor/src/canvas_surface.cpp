@@ -240,6 +240,10 @@ bool CanvasSurface::resize(uint32_t width, uint32_t height) {
   return true;
 }
 
+void CanvasSurface::setCornerRadius(float radius, bool top, bool bottom) {
+  renderer_.engine().setWindowCornerRadius(radius, top, bottom, windowId_);
+}
+
 bool CanvasSurface::renderList(
     const std::vector<canvas::DrawCommand> &commands,
     const std::vector<canvas::GlyphInstance> &glyphs) {

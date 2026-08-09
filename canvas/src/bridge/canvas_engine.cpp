@@ -329,6 +329,14 @@ void Engine::setWindowFrame(int x, int y, int width, int height, uint32_t window
   });
 }
 
+void Engine::setWindowCornerRadius(float radius, bool top, bool bottom,
+                                   uint32_t windowId)
+{
+  impl_->withApp([&](Application &app) {
+    app.setWindowCornerRadius(radius, top, bottom, windowId);
+  });
+}
+
 void Engine::setWindowVisible(bool visible, uint32_t windowId)
 {
   impl_->withApp([&](Application &app) { app.setWindowVisible(visible, windowId); });

@@ -111,6 +111,12 @@ public:
   /// Show or hide the GLFW window (does not destroy it).
   void setWindowVisible(bool visible, uint32_t windowId = 0);
 
+  /// Rounds a window's corners. `radius` 0 turns it off; `top`/`bottom` pick
+  /// which pair, so a title bar and the content under it can each round the
+  /// two they own and meet flush. See `RenderWindow::setCornerRadius`.
+  void setWindowCornerRadius(float radius, bool top, bool bottom,
+                             uint32_t windowId = 0);
+
   /// True while minimized. A live GLFW query, not a cached flag — WM
   /// minimize/restore doesn't route through `setWindowVisible`, so caching
   /// would need its own callback wiring to stay correct.

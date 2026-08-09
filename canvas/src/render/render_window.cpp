@@ -1733,6 +1733,18 @@ void RenderWindow::replayDrawList(const canvas::DrawList &list, float viewW,
     openNodes.pop_back();
   }
   sweepSceneState();
+
+  // Last, so it shapes everything the frame ended up containing. The mask rect
+  // is grown past whichever edge should stay square: the curve then falls
+  // outside the surface and only the corners that remain inside are rounded.
+  // A title bar rounds its top two and joins the content below it flush; the
+  // content rounds its bottom two and meets the bar the same way.
+  if (cornerRadius_ > 0.f && (cornerTop_ || cornerBottom_)) {
+    const float r = cornerRadius_;
+    const float top = cornerTop_ ? 0.f : -r;
+    const float bottom = cornerBottom_ ? 0.f : r;
+    quads_.pushCornerMask({0.f, top}, {viewW, viewH - top + bottom}, r);
+  }
   quads_.end();
 }
 

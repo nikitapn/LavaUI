@@ -52,7 +52,12 @@ inline uint32_t withScaledAlpha(uint32_t rgba, float k)
 
 class QuadRenderer {
  public:
-  enum class Kind : uint32_t { Sdf = 0, Glyph = 1, Image = 2, Mesh = 3 };
+  enum class Kind : uint32_t {
+    Sdf = 0, Glyph = 1, Image = 2, Mesh = 3,
+    /// Coverage only, written as alpha and never discarded where a shape
+    /// would be empty — the corners *are* the output. See `pushCornerMask`.
+    Mask = 4,
+  };
 
   // Must match the vertex input layout in quad.vert.
   struct Vertex {
@@ -133,6 +138,21 @@ class QuadRenderer {
   /// which has no single point the whole boundary can fan from.
   void pushMesh(const vec2 *points, uint32_t count, uint32_t rgba, bool isRing);
 
+  /// Cuts everything outside a rounded rect out of what has already been
+  /// drawn: `dst *= coverage`, so the corners become transparent and the edge
+  /// antialiases the way every other rounded shape here does.
+  ///
+  /// Last thing in a frame, and only ever a window's own outline — this is how
+  /// a window gets rounded corners without the client knowing it has them, and
+  /// without the compositor re-rendering somebody else's buffer.
+  ///
+  /// The rect may fall outside the surface, which is how corners are rounded
+  /// selectively: a mask an inch taller than the window rounds its top two
+  /// corners and leaves the bottom two square, because the bottom curve
+  /// happens past the last row of pixels. That is what a title bar above a
+  /// window's content wants, and it needs no per-corner radii to express.
+  void pushCornerMask(vec2 topLeft, vec2 size, float radius);
+
   /// Ends the current batch and records a scissor change. Rect is in pixels;
   /// a null rect (w or h <= 0) restores the full viewport.
   void pushScissor(vec2 topLeft, vec2 size);
@@ -196,6 +216,9 @@ class QuadRenderer {
     VkRect2D scissor{};
     VkImageView textureView = VK_NULL_HANDLE;  // null → use glyphAtlasView_
     bool sampleBlurResult = false;             // bind blurResultView_ at draw
+    /// Drawn with the mask pipeline: multiplies the target rather than
+    /// painting over it. See `pushCornerMask`.
+    bool mask = false;
   };
 
   /// Per-frame-slot GPU resources (not shared across in-flight frames).
@@ -216,9 +239,14 @@ class QuadRenderer {
     uint32_t descriptorWriteIndex = 0;
   };
 
+  /// How a pipeline combines what it draws with what is already there.
+  /// `Over` is premultiplied source-over, what everything paints with.
+  /// `Mask` multiplies the target by the source's alpha and adds nothing.
+  enum class Blend : uint8_t { Over, Mask };
+
   void createPipelineLayout();
   void createPipeline(VkRenderPass renderPass, VkSampleCountFlagBits samples,
-                      vk::Handle<VkPipeline> &out);
+                      vk::Handle<VkPipeline> &out, Blend blend = Blend::Over);
   void createLinePipeline(VkRenderPass renderPass, VkSampleCountFlagBits samples,
                           vk::Handle<VkPipeline> &out);
   void createSpatialPipeline(VkRenderPass renderPass, VkSampleCountFlagBits samples,
@@ -242,6 +270,8 @@ class QuadRenderer {
   RenderWindow *owner_ = nullptr;
 
   vk::Handle<VkPipeline>            pipeline_;
+  /// Same shaders as `pipeline_` with the mask blend — see `pushCornerMask`.
+  vk::Handle<VkPipeline>            maskPipeline_;
   /// Same shaders and layout against the content-blur scene pass: one colour
   /// attachment, no depth, single sample. A pipeline is tied to a
   /// render-pass-compatible pass, so drawing the same geometry into a different

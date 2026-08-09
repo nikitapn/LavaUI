@@ -30,6 +30,36 @@ The development account is `dev` with password `dev`. SSH is forwarded only to
 localhost on port 2222. This deliberately convenient configuration is for an
 isolated development VM, not production.
 
+## Configuration
+
+`$LAVA_CONFIG`, else `$XDG_CONFIG_HOME/lava/lava.conf`, else
+`~/.config/lava/lava.conf`. INI-shaped, read at startup and again on `SIGHUP`;
+unknown keys are reported and skipped, so a file written for a newer build
+still starts an older one. See `src/config.hpp` for every key.
+
+```ini
+[core]
+renderer = vulkan
+
+[keyboard]
+layout = us
+
+[appearance]
+# Window corner radius in pixels. 0 (the default) is square; clamped to 64.
+corner-radius = 10
+
+[output DP-3]
+mode = 2560x1440@144
+position = 0,0
+```
+
+`corner-radius` applies to what the compositor draws — LavaUI clients and the
+title bars above them — and takes effect on `SIGHUP` without restarting
+anything, because it is a number the renderer reads per frame rather than a
+property baked into a surface. Wayland clients keep square corners: their
+pixels are their own buffer, composited by `wlr_scene`, which has no per-node
+shader hook. Rounding those means compositing the scene by hand.
+
 ## Useful commands
 
 ```sh

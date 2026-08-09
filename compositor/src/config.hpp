@@ -62,6 +62,23 @@ struct KeyboardConfig {
   int32_t repeatDelay = 600;  ///< ms held before it starts
 };
 
+/// How the desktop looks, as opposed to what the machine is.
+///
+/// The odd one out in this file: everything else here is a fact about the
+/// hardware that the compositor cannot know, and this is a preference the user
+/// is entitled to have. It lives here anyway because the alternative — a
+/// second file, or a hard-coded number somebody has to rebuild to change — is
+/// worse for the one thing a config exists to make possible.
+struct AppearanceConfig {
+  /// Corner radius for windows, in pixels. 0 is square.
+  ///
+  /// Applied to what the compositor draws: LavaUI clients and the title bars
+  /// above them. A Wayland client's own buffer is not ours to reshape — see
+  /// `docs/native-menus.md`'s neighbour in `decoration.hpp` for the same
+  /// split — so those stay square until the scene is composited by hand.
+  int32_t cornerRadius = 0;
+};
+
 struct Config {
   /// `WLR_RENDERER`: "vulkan", "gles2", "pixman". Empty lets wlroots choose.
   std::string renderer;
@@ -74,6 +91,7 @@ struct Config {
   std::string renderDevice;
 
   KeyboardConfig keyboard;
+  AppearanceConfig appearance;
   std::vector<OutputConfig> outputs;
 
   /// Where the file lives: `$LAVA_CONFIG`, else

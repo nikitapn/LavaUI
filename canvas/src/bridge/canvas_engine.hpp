@@ -221,6 +221,11 @@ class Engine {
 
   void setWindowFrame(int x, int y, int width, int height, uint32_t windowId = 0);
   void setWindowVisible(bool visible, uint32_t windowId = 0);
+
+  /// Rounds a window's corners, applied as the last step of every frame.
+  /// `radius` 0 is square. `top`/`bottom` select which pair is rounded.
+  void setWindowCornerRadius(float radius, bool top, bool bottom,
+                             uint32_t windowId = 0);
   bool isWindowVisible(uint32_t windowId = 0) const;
 
   // ─── Declarative UI (Swift tree → Yoga + TextRenderer) ────────────────

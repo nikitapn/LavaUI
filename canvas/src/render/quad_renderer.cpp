@@ -23,6 +23,11 @@ void QuadRenderer::init() {
   setupDescriptors();
   createPipelineLayout();
   createPipeline(device_.getRenderPass(), device_.getMSAASamples(), pipeline_);
+  // Same shaders, same geometry, opposite job: this one multiplies what is
+  // already in the target by the shape's coverage instead of drawing over it.
+  // See `Blend::Mask` and `pushCornerMask`.
+  createPipeline(device_.getRenderPass(), device_.getMSAASamples(),
+                 maskPipeline_, Blend::Mask);
   createLinePipeline(device_.getRenderPass(), device_.getMSAASamples(),
                      linePipeline_);
   createSpatialPipeline(device_.getRenderPass(), device_.getMSAASamples(),
@@ -64,6 +69,7 @@ void QuadRenderer::cleanUp() {
   }
 
   pipeline_.destroy(device);
+  maskPipeline_.destroy(device);
   pipelineScene_.destroy(device);
   linePipeline_.destroy(device);
   linePipelineScene_.destroy(device);
@@ -312,7 +318,7 @@ void QuadRenderer::createSpatialPipeline(VkRenderPass renderPass,
 
 void QuadRenderer::createPipeline(VkRenderPass renderPass,
                                   VkSampleCountFlagBits samples,
-                                  vk::Handle<VkPipeline> &out) {
+                                  vk::Handle<VkPipeline> &out, Blend blend) {
   VkDevice device = device_.getDevice();
   Shaders &shaders = device_.getShaders();
 
@@ -418,6 +424,19 @@ void QuadRenderer::createPipeline(VkRenderPass renderPass,
     .colorWriteMask      = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
                            VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT,
   };
+
+  // `dst *= src.a`, which is the one thing `over` cannot do: it can add
+  // coverage but never take it away, so nothing drawn with the pipeline above
+  // could cut a corner out of a finished window. Both factors are ZERO/SRC so
+  // colour and alpha are scaled together — the target holds premultiplied
+  // colour, and scaling one without the other would leave a bright fringe
+  // where the alpha faded but the colour did not.
+  if (blend == Blend::Mask) {
+    blendAttachment.srcColorBlendFactor = VK_BLEND_FACTOR_ZERO;
+    blendAttachment.dstColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
+    blendAttachment.srcAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
+    blendAttachment.dstAlphaBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
+  }
 
   VkPipelineColorBlendStateCreateInfo colorBlending{
     .sType           = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO,
@@ -638,6 +657,37 @@ void QuadRenderer::pushBox(vec2 topLeft, vec2 size, uint32_t rgba, float radius)
     {-ext.x, -ext.y}, {ext.x, -ext.y}, {ext.x, ext.y}, {-ext.x, ext.y},
   };
   appendQuad(corners, locals, half, r, rgba, Kind::Sdf);
+}
+
+void QuadRenderer::pushCornerMask(vec2 topLeft, vec2 size, float radius) {
+  if (size.x <= 0.0f || size.y <= 0.0f || radius <= 0.0f) {
+    return;
+  }
+  // Its own batch, before and after: this one geometry is drawn with a
+  // different pipeline, and a batch is a run sharing one.
+  flushBatch();
+  ensureBatchTexture(glyphAtlasView_);
+
+  const vec2 half{size.x * 0.5f, size.y * 0.5f};
+  const vec2 center{topLeft.x + half.x, topLeft.y + half.y};
+  const float r = std::min(radius, std::min(half.x, half.y));
+
+  // No bleed, unlike `pushBox`. The quad is the region being *cleared* rather
+  // than a shape being drawn, and a pixel of overhang would put it outside the
+  // surface where there is nothing to clear.
+  const vec2 corners[4] = {
+    {center.x - half.x, center.y - half.y},
+    {center.x + half.x, center.y - half.y},
+    {center.x + half.x, center.y + half.y},
+    {center.x - half.x, center.y + half.y},
+  };
+  const vec2 locals[4] = {
+    {-half.x, -half.y}, {half.x, -half.y}, {half.x, half.y}, {-half.x, half.y},
+  };
+  appendQuad(corners, locals, half, r, 0xffffffffu, Kind::Mask);
+
+  flushBatch();
+  if (!batches_.empty()) batches_.back().mask = true;
 }
 
 void QuadRenderer::pushCircle(vec2 center, float radius, uint32_t rgba) {
@@ -1094,6 +1144,11 @@ void QuadRenderer::drawBatchRange(VkCommandBuffer commandBuffer,
     } else if (batch.geometry == Batch::Geometry::SpatialTriangles) {
       wanted = intoSceneTarget ? static_cast<VkPipeline>(spatialPipelineScene_)
                                : static_cast<VkPipeline>(spatialPipeline_);
+    } else if (batch.mask) {
+      // Never in the scene target: the mask shapes the *window*, and the
+      // content-blur pass renders a subtree that has no corners of its own.
+      wanted = intoSceneTarget ? VK_NULL_HANDLE
+                               : static_cast<VkPipeline>(maskPipeline_);
     } else {
       wanted = intoSceneTarget ? static_cast<VkPipeline>(pipelineScene_)
                                : static_cast<VkPipeline>(pipeline_);

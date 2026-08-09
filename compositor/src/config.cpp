@@ -187,6 +187,16 @@ Config Config::load(const std::string &path) {
       } else {
         known = false;
       }
+    } else if (section == "appearance") {
+      if (key == "corner-radius") {
+        // Clamped rather than refused: a negative radius is a typo and a
+        // gigantic one is a request nothing can honour, and neither is worth
+        // refusing to start over.
+        const int32_t radius = std::atoi(value.c_str());
+        config.appearance.cornerRadius = radius < 0 ? 0 : (radius > 64 ? 64 : radius);
+      } else {
+        known = false;
+      }
     } else if (section == "output" && !config.outputs.empty()) {
       OutputConfig &output = config.outputs.back();
       if (key == "mode" || key == "resolution") {

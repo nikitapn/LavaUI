@@ -598,6 +598,13 @@ void Application::setWindowVisible(bool visible, uint32_t windowId) {
   if (AppWindow *w = impl_->win(windowId)) w->setWindowVisible(visible);
 }
 
+void Application::setWindowCornerRadius(float radius, bool top, bool bottom,
+                                        uint32_t windowId) {
+  if (AppWindow *w = impl_->win(windowId)) {
+    w->setCornerRadius(radius, top, bottom);
+  }
+}
+
 bool Application::isIconified(uint32_t windowId) const {
   const AppWindow *w = impl_->win(windowId);
   return w && w->isIconified();

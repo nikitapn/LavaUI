@@ -1185,6 +1185,40 @@ class SurfaceRegistry : public lava::CompositorHost {
     }
   }
 
+  /// How round every window's corners are. Applied to each surface as it is
+  /// created or reshaped — see `applyCorners`.
+  void setCornerRadius(float radius) {
+    if (cornerRadius_ == radius) return;
+    cornerRadius_ = radius;
+    for (auto &surface : surfaces_) {
+      applyCorners(*surface);
+      // Only the surfaces the compositor fills itself redraw from here; a
+      // client's next frame carries its own content, and the mask is applied
+      // to whatever that turns out to be.
+      drawBar(*surface);
+      if (surface->canvas && surface->canvas->redraw()) damage(*surface);
+    }
+  }
+
+  /// Rounds a surface the way its place in the window says it should be.
+  ///
+  /// A decorated window is two surfaces stacked, so each rounds the pair of
+  /// corners it actually owns and the seam between them stays straight. A
+  /// frameless window is one surface and rounds all four. A panel rounds
+  /// none: it is flush against an edge of the screen, and rounding the corners
+  /// of something that is meant to look like part of the frame would just show
+  /// the wallpaper through the gap.
+  void applyCorners(ClientSurface &surface) {
+    if (surface.canvas) {
+      const bool top = !surface.decorated;
+      surface.canvas->setCornerRadius(surface.panel ? 0.f : cornerRadius_, top,
+                                      !surface.panel);
+    }
+    if (surface.bar) {
+      surface.bar->setCornerRadius(cornerRadius_, true, false);
+    }
+  }
+
   /// Redraws the title bar. Cheap — a strip, from commands built here.
   void drawBar(ClientSurface &surface) {
     if (!surface.bar) return;
@@ -1606,6 +1640,7 @@ class SurfaceRegistry : public lava::CompositorHost {
       surface->barNode = wlr_scene_buffer_create(parent, surface->bar->buffer());
       if (surface->barNode == nullptr) return 0;
     }
+    applyCorners(*surface);
     place(*surface);
     drawBar(*surface);
 
@@ -1628,6 +1663,8 @@ class SurfaceRegistry : public lava::CompositorHost {
   Workspaces *workspaces_ = nullptr;
   lava::ControlPlane *control_ = nullptr;
   Server *server_ = nullptr;
+  /// Window corner radius in pixels, from the config. 0 is square.
+  float cornerRadius_ = 0.f;
   lava::Decoration decoration_;
   /// Whose bar is drawn active.
   uint32_t focused_ = 0;
@@ -1723,6 +1760,7 @@ uint32_t SurfaceRegistry::adoptWindow(FramedWindow *window,
 
   const uint32_t id = surface->id;
   window->frameId = id;
+  applyCorners(*surface);
   place(*surface);
   drawBar(*surface);
   surfaces_.push_front(std::move(surface));
@@ -2673,6 +2711,13 @@ void Server::reloadConfig() {
     // layout change reaches applications that are already running.
     keyboard->applyKeymap(config.keyboard);
   }
+  // Corners are the one appearance setting that can be re-applied while
+  // running: it is a number the renderer reads per frame, so every window on
+  // screen takes the new one without being told anything.
+  if (surfaces != nullptr) {
+    surfaces->setCornerRadius(
+        static_cast<float>(config.appearance.cornerRadius));
+  }
   wlr_log(WLR_INFO, "config: reloaded");
 }
 
@@ -3429,6 +3474,8 @@ int main() {
     const std::string dir = root ? root : LAVA_UI_FONTS;
     surfaces.initDecoration(dir + "/OpenSans-Regular.ttf", 14.f);
   }
+  surfaces.setCornerRadius(
+      static_cast<float>(server.config.appearance.cornerRadius));
   surfaces.start(wl_display_get_event_loop(server.display));
 
   auto control = lava::ControlPlane::start(

@@ -107,6 +107,14 @@ class CanvasSurface {
   CanvasSurface(const CanvasSurface &)            = delete;
   CanvasSurface &operator=(const CanvasSurface &) = delete;
 
+  /// Rounds this surface's corners, in pixels; 0 is square.
+  ///
+  /// `top`/`bottom` are which pair to round, because a decorated window is two
+  /// surfaces: the bar rounds the top two, the content rounds the bottom two,
+  /// and the seam between them stays straight. A frameless window is one
+  /// surface and rounds all four.
+  void setCornerRadius(float radius, bool top, bool bottom);
+
   /// Resizes the surface and tells its client to lay out again.
   ///
   /// The buffer changes — a dmabuf's size and stride are fixed when it is

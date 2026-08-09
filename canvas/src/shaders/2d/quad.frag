@@ -39,6 +39,27 @@ float sdRoundBox(vec2 p, vec2 b, float r) {
 void main() {
   vec4 c;
 
+  if (vKind == 4u) {
+    // Window corner mask. Drawn with the mask pipeline, where the blend is
+    // `dst *= src.a` — so this emits coverage as alpha and nothing else, and
+    // the colour is multiplied by zero on its way in.
+    //
+    // The inverse of every other path here: those discard where a shape is
+    // empty, and empty is exactly what this one has to write. A corner the
+    // shape does not cover is a corner that must end up transparent, so the
+    // discard is on the *inside* instead — the interior is left untouched
+    // rather than multiplied by an almost-one, which would otherwise dim a
+    // whole window by a rounding error every frame.
+    float dm = sdRoundBox(vLocal, vHalfSize, vRadius);
+    float aam = max(fwidth(dm), 1e-5);
+    float covm = 1.0 - smoothstep(-aam, aam, dm);
+    if (covm >= 0.999) {
+      discard;
+    }
+    outColor = vec4(0.0, 0.0, 0.0, covm);
+    return;
+  }
+
   if (vKind == 2u) {
     // Image: vLocal holds UV; multiply by vertex color as tint.
     c = texture(uAtlas, vLocal) * vColor;

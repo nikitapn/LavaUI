@@ -366,6 +366,11 @@ void AppWindow::setWindowFrame(int x, int y, int width, int height)
   if (render_) render_->setWindowFrame(x, y, width, height);
 }
 
+void AppWindow::setCornerRadius(float radius, bool top, bool bottom)
+{
+  if (render_) render_->setCornerRadius(radius, top, bottom);
+}
+
 void AppWindow::setWindowVisible(bool visible)
 {
   if (render_) render_->setWindowVisible(visible);
