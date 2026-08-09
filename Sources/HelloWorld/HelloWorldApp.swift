@@ -18,8 +18,17 @@ struct HelloWorldApp {
         // separate program.
         let client = ProcessInfo.processInfo.environment["LAVA_CLIENT"] == "1"
         #if canImport(LavaClient)
+        // Client-framed by default under the compositor: the demo's toolbar is
+        // already a 56pt row, and a title bar above it would be a second one
+        // saying less. `LAVA_FRAME=server` puts the compositor's strip back,
+        // which is the comparison worth being able to make in one keystroke.
+        let serverFrame =
+            ProcessInfo.processInfo.environment["LAVA_FRAME"] == "server"
         let editorOrNil = client
-            ? LavaClient.open(title: "LavaUI · DemoExample")
+            ? LavaClient.open(
+                title: "LavaUI · DemoExample",
+                frame: serverFrame ? .server : .client
+              )
             : LavaApp.open(title: "LavaUI · DemoExample")
         #else
         // Without the control plane there is nothing to be a client of. The

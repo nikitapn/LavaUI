@@ -62,8 +62,14 @@ struct CompositorHost {
   virtual void releaseImage(const std::string &key) = 0;
 
   /// Opens a surface driven by `arenaId`. 0 if the arena does not exist.
+  ///
+  /// `decorated` is `WindowFrame::server` — the compositor draws the title
+  /// bar. A bool rather than the generated enum so this header stays
+  /// independent of the stubs, the same way `createPanel` takes `edge` as an
+  /// integer.
   virtual uint32_t createSurface(const std::string &arenaId, uint32_t width,
-                                 uint32_t height, const std::string &title) = 0;
+                                 uint32_t height, const std::string &title,
+                                 bool decorated) = 0;
   /// Opens a panel docked to `edge`, `thickness` deep. 0 if the arena does
   /// not exist. `reserve` asks that windows be laid out around it.
   virtual uint32_t createPanel(const std::string &arenaId, uint32_t edge,
@@ -72,6 +78,22 @@ struct CompositorHost {
 
   virtual bool destroySurface(uint32_t surfaceId) = 0;
   virtual bool surfaceExists(uint32_t surfaceId) const = 0;
+
+  // ─── Window state ────────────────────────────────────────────────────────
+  //
+  // What a title bar's buttons do, for the client that draws its own. Each
+  // returns false only when the surface is unknown, so the servant can turn
+  // that into `SurfaceNotFound` without asking twice.
+
+  /// Hands the pointer to an interactive move of `surfaceId`. No-op when no
+  /// button is down — see `BeginMove`.
+  virtual bool beginMove(uint32_t surfaceId) = 0;
+
+  /// Fills the work area or restores; `outMaximized` is the state it ended in.
+  virtual bool toggleMaximize(uint32_t surfaceId, bool &outMaximized) = 0;
+
+  /// Hides the window without ending it.
+  virtual bool minimize(uint32_t surfaceId) = 0;
 
   /// "A frame is committed on this surface" — draw it.
   virtual void present(uint32_t surfaceId) = 0;

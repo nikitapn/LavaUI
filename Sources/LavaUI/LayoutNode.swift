@@ -179,6 +179,16 @@ class YogaBoxNode: AnyViewNode {
     var yoga: YGNodeRef? { yogaStorage }
     var childNodes: [any AnyViewNode] { [] }
 
+    /// A press anywhere in this box that no child claimed.
+    ///
+    /// On the *press*, not the release, and that is the whole reason it is not
+    /// `onClick`: the one thing using it is a window drag region, where the
+    /// gesture is "the pointer went down on the chrome" and everything after
+    /// belongs to whoever moves the window. Children win — a button in a
+    /// toolbar that also drags the window is still a button — because
+    /// `hitWalk` reaches them first.
+    var onBoxPress: ((_ localX: Float, _ localY: Float, _ mods: Int32) -> Void)?
+
     init(label: String) {
         self.id = .generate()
         self.label = label
@@ -1829,6 +1839,13 @@ public final class LayoutHost {
                x >= nx, x < nx + nw, y >= ny, y < ny + nh
             {
                 return click
+            }
+            if let press = box.onBoxPress,
+               x >= nx, x < nx + nw, y >= ny, y < ny + nh
+            {
+                let lx = x - nx
+                let ly = y - ny
+                return { press(lx, ly, mods) }
             }
             return nil
         }

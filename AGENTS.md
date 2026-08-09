@@ -65,6 +65,11 @@ skips body and layout. `LAVAUI_DEBUG=1` prints per-frame stage timings.
   commands must be ones the compositor understands. Fonts are
   **content-addressed** (`FontKey`: hash of bytes, face index, 26.6 size, …).
 - Draw lists: shared **DrawArena**. Control plane: small RPCs only.
+- Window frame is the **client's** choice at `CreateSurface`:
+  `LavaClient.open(frame: .client)` gets no compositor title bar, and the app
+  places `WindowControls()` / `.windowDrag()` itself (`Sources/LavaUI/
+  WindowControls.swift`). `BeginMove` / `ToggleMaximize` / `Minimize` are how
+  it asks; close is just the app ending.
 - `Present` and `ScrollUnclaimed` are IDL **`[unreliable]`** — fire-and-forget,
   no reply. Never wait for a response on those (Swift uses
   `sendUnreliable`).
@@ -148,6 +153,7 @@ optional QEMU VM).
 | Variable | Effect |
 |---|---|
 | `LAVA_CLIENT=1` | App as compositor client |
+| `LAVA_FRAME=server` | HelloWorld: compositor title bar instead of its own chrome |
 | `LAVA_AGENT_PORT=9876` | Local agent TCP server (layout / input / screenshots) |
 | `LAVAUI_DEBUG=1` | Per-frame body/layout/emit/present timings |
 | `LAVAUI_PROFILE=1` | Per-widget paint profiling via agent `profile` |
@@ -169,6 +175,7 @@ Runtime agent protocol (MCP/CLI, stable `sid`s, hit-testing): **`docs/agent.md`*
 | Font identity / registration | `canvas/src/render/font_key.*`, `Font.swift`, IDL `RegisterFont` |
 | Control-plane API | `idl/lava.npidl` then `scripts/gen_stubs.sh` |
 | Compositor windows / input / workspaces | `compositor/src/main.cpp` |
+| Window chrome an app draws itself | `Sources/LavaUI/WindowControls.swift` |
 | Client open / Present / input stream | `Sources/LavaClient/` |
 | Perf scenarios | `Sources/LavaBench/`, `docs/performance.md` |
 | App demos | `Sources/HelloWorld/`, Spotify/TraceLoom/LavaTerm apps |

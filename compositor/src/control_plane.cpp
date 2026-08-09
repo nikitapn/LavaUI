@@ -303,11 +303,12 @@ class CompositorImpl final : public ICompositor_Servant {
   // ─── Surfaces ────────────────────────────────────────────────────────────
 
   uint32_t CreateSurface(nprpc::flat::Span<char> arenaId, uint32_t width,
-                         uint32_t height,
-                         nprpc::flat::Span<char> title) override {
+                         uint32_t height, nprpc::flat::Span<char> title,
+                         WindowFrame frame) override {
     const std::string arena{arenaId};
-    const uint32_t id =
-        host_.createSurface(arena, width, height, std::string{title});
+    const uint32_t id = host_.createSurface(arena, width, height,
+                                            std::string{title},
+                                            frame == WindowFrame::server);
     if (id == 0) throw ArenaNotFound(arena);
     return id;
   }
@@ -326,6 +327,22 @@ class CompositorImpl final : public ICompositor_Servant {
   void DestroySurface(uint32_t surfaceId) override {
     if (!host_.destroySurface(surfaceId)) throw SurfaceNotFound(surfaceId);
     broker_.closeAll(surfaceId);
+  }
+
+  void BeginMove(uint32_t surfaceId) override {
+    if (!host_.beginMove(surfaceId)) throw SurfaceNotFound(surfaceId);
+  }
+
+  bool ToggleMaximize(uint32_t surfaceId) override {
+    bool maximized = false;
+    if (!host_.toggleMaximize(surfaceId, maximized)) {
+      throw SurfaceNotFound(surfaceId);
+    }
+    return maximized;
+  }
+
+  void Minimize(uint32_t surfaceId) override {
+    if (!host_.minimize(surfaceId)) throw SurfaceNotFound(surfaceId);
   }
 
   void Present(uint32_t surfaceId) override { host_.present(surfaceId); }

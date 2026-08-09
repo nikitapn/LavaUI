@@ -618,8 +618,19 @@ final class CompositorImpl: CompositorServant, @unchecked Sendable {
     /// nothing to draw, and there is no useful state between the two for
     /// anyone to observe. Being on the loop is what lets them stay one step.
     override func createSurface(
-        arenaId: String, width: UInt32, height: UInt32, title: String
+        arenaId: String, width: UInt32, height: UInt32, title: String,
+        frame: WindowFrame
     ) throws -> UInt32 {
+        // `frame` is the compositor's to honour and this host has no frame of
+        // its own to drop: every surface here is a GLFW window, and the
+        // decoration around it belongs to whatever window manager the demo is
+        // running under. Named rather than ignored silently, so a client that
+        // asked for `.client` and got a title bar anyway can see why.
+        if frame == .client {
+            let note = "CreateSurface(\"\(title)\"): client frames are the "
+                + "compositor's; this host draws none of its own\n"
+            FileHandle.standardError.write(Data(note.utf8))
+        }
         let opened: WindowID? = {
             guard let window = editor.openWindow(
                 width: Float(width), height: Float(height), title: title
@@ -661,6 +672,27 @@ final class CompositorImpl: CompositorServant, @unchecked Sendable {
             ex.surfaceId = surfaceId
             throw ex
         }
+    }
+
+    // ─── Window state ────────────────────────────────────────────────────
+    //
+    // Answered, not performed. A surface here is a window belonging to the
+    // window manager this demo runs under, which owns moving, maximizing and
+    // hiding it — so the honest implementation is to confirm the surface
+    // exists and do nothing, rather than to fake a window state this process
+    // does not own. The compositor is where these mean something.
+
+    override func beginMove(surfaceId: UInt32) throws {
+        try requireSurface(surfaceId)
+    }
+
+    override func toggleMaximize(surfaceId: UInt32) throws -> Bool {
+        try requireSurface(surfaceId)
+        return false
+    }
+
+    override func minimize(surfaceId: UInt32) throws {
+        try requireSurface(surfaceId)
     }
 
     /// The oldest uncollected drop for this surface — see the IDL for why the

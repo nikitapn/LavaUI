@@ -256,9 +256,18 @@ Correct fallback; still means a client cannot put a menu in a panel.
 No monitor DPI. `ContentScale` is LavaUI's own zoom, not the display's scale
 factor, and nothing carries the latter across.
 
-No window-state protocol at all: minimize, maximize, fullscreen, retitle,
-raise, request-focus, ask-to-be-resized. A client can be told its size and
-can give the surface back, and that is the whole vocabulary.
+Window state is now three verbs and not more: `BeginMove`, `ToggleMaximize`
+and `Minimize`, which exist because a client that draws its own frame — see
+`WindowFrame` in the IDL — has to be able to do what the title bar it gave up
+used to. Still missing: fullscreen, retitle, raise, request-focus,
+ask-to-be-resized, and any way for a client to *learn* its state rather than
+ask for a change to it (`ToggleMaximize` returns the state it ended in, which
+is the whole of what a client can know).
+
+The gap under minimize is bigger than the call: nothing can show a hidden
+window. The compositor keeps a stack and `Alt+Shift+M` pops it, which is a
+keybinding standing in for a window list on this interface that a panel could
+render — the same one `LavaTaskbar` has been waiting for.
 
 ## Against the wlroots plan
 

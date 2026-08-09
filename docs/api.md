@@ -87,6 +87,66 @@ A client owns no retained scene state, so a wheel notch reaches its own
 `ScrollRouter` handlers and moves nothing else — the scroll offsets live
 wherever the frame is drawn.
 
+### Who draws the window frame
+
+Under the compositor an app chooses, once, at open:
+
+```swift
+// The compositor draws a title bar above the content (default).
+LavaClient.open(title: "My App")
+
+// No strip at all: the window is this app's content and nothing else.
+LavaClient.open(title: "My App", frame: .client)
+```
+
+`.server` is the strip with the title and the three buttons, and it costs the
+app 32 points it never sees. `.client` gives them back — worth having whenever
+the app already draws a toolbar, and the only sensible choice for a pop-up or
+an overlay that should have no chrome at all.
+
+With `.client` the app places the controls itself. They are drawn by LavaUI
+and performed by the compositor, so they behave the same in every app that
+uses them:
+
+```swift
+HStack(height: .pt(48), padding: 8) {
+    if WindowBridge.drawsOwnChrome { WindowControls() }
+    Text("My App")
+    Spacer()
+    Button("Settings") { … }
+}
+.windowDrag()
+```
+
+| Piece | What it is |
+|---|---|
+| `WindowControls([.close, .minimize, .maximize])` | the cluster, in the order given — list only what the window supports |
+| `WindowControlButton(.close)` | one control, for chrome that places them apart |
+| `WindowControlsStyle` | size, spacing, colours; `.monochrome()` for chrome that should not shout |
+| `.windowDrag()` | this view's *empty* space moves the window; double-click maximizes |
+| `WindowBridge.drawsOwnChrome` | whether this window has no frame but its own |
+
+`.windowDrag()` is the piece that is easy to forget: without it a frameless
+window can be closed and maximized but never moved. Anything interactive
+inside it still takes its own clicks — the hit test reaches children first —
+so a toolbar can be both a drag handle and a toolbar.
+
+A press is all the drag takes. From the moment the compositor hears about it
+the pointer is the compositor's: the motion never reaches this process, and
+the drag ends somewhere the app is never told about. That is why nothing here
+tracks a drag, and why the app is sent a synthetic mouse-up as the grab
+starts.
+
+In a windowed (GLFW) app `drawsOwnChrome` is false and the controls do
+nothing: the window manager's own frame is still there and already has all
+three. An app that runs both ways should gate its cluster on the flag rather
+than drawing buttons that lie.
+
+Minimize hides the window without ending it. Getting it back is the
+compositor's business, and today that means `Alt+Shift+M` (restores the most
+recently minimized window) — a panel window list is what it is really waiting
+for.
+
 ### Who names GPU resources
 
 A `GlyphInstance` carries a font id and an image command carries a texture id,

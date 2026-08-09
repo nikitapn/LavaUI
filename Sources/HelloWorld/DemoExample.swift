@@ -175,6 +175,15 @@ public struct DemoExample: View {
     @ViewBuilder
     private var toolbar: some View {
         HStack(height: .pt(56), padding: 8) {
+            // Client-side decoration. With no compositor title bar above it
+            // this row *is* the non-client area: the buttons are here, and
+            // `.windowDrag()` below makes its empty space the drag handle.
+            // Hidden in a windowed app, where the window manager's own frame
+            // already carries all three.
+            if WindowBridge.drawsOwnChrome {
+                WindowControls()
+                    .padding(.trailing, 6)
+            }
             if let brandImage {
                 Image(brandImage, width: .pt(40), height: .pt(40), contentMode: .fit)
             }
@@ -211,6 +220,11 @@ public struct DemoExample: View {
             )
             .agentId("inspector-toggle")
         }
+        // Everything the toolbar does not otherwise use drags the window, and
+        // a double-click maximizes it — a title bar's two gestures, on a row
+        // the app was drawing anyway. The controls and text above still take
+        // their own clicks: the hit test reaches children first.
+        .windowDrag()
     }
 
     // MARK: - Sidebar (fixed width column + dynamic ForEach)

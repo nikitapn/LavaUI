@@ -58,6 +58,7 @@ T *owner_of(wl_listener *listener) {
 
 struct Server;
 class SurfaceRegistry;
+struct ClientSurface;
 
 // ─── Foreign windows ───────────────────────────────────────────────────────
 
@@ -407,11 +408,39 @@ struct Server {
   double dragStartX = 0, dragStartY = 0;
   int dragOriginX = 0, dragOriginY = 0;
   uint32_t dragOriginW = 0, dragOriginH = 0;
+  /// Which sides a resize is pulling — see `edges`. Alt+right-drag sets the
+  /// bottom-right corner, a grab on a window's border sets whichever it hit.
+  uint32_t dragEdges = 0;
+
+  /// How many pointer buttons are down, and which went down last.
+  ///
+  /// Kept because a client asking to be moved has to be answered with "only
+  /// if the user is actually holding a button" — `BeginMove` from an idle
+  /// client would otherwise stick the window to the cursor. The button is
+  /// remembered so the synthetic release that hands the pointer over names
+  /// the one the client is waiting on.
+  int pointerButtonsDown = 0;
+  int32_t lastPressedButton = 0;
 
   /// Carries an in-progress drag to the pointer. True if one was live, which
   /// is the caller's signal that the motion belongs to the drag and not to
   /// whatever is under the cursor.
   bool update_drag();
+
+  /// Starts an interactive move of a client-framed window, as a title bar
+  /// press does for a decorated one. False when there is no button down to
+  /// carry it. See `lava::Compositor::BeginMove`.
+  bool beginInteractiveMove(ClientSurface &surface);
+
+  /// Gives a window the keyboard and the active frame paint, whichever kind
+  /// of window it is. Both halves matter and they are easy to do by halves:
+  /// the workspace's keyboard target and the decoration's "this one is
+  /// active" are separate pieces of state that must agree.
+  void focusSurface(ClientSurface &surface);
+
+  /// Hides a window and moves focus off it, so the keyboard does not go on
+  /// pointing at something nobody can see.
+  void minimizeSurface(ClientSurface &surface);
 
   /// Which client surface the keyboard goes to, per workspace, or 0.
   ///
@@ -549,9 +578,24 @@ struct ClientSurface {
 
   /// The non-client area. Its own surface, so a title change redraws a strip
   /// rather than the window, and hit testing stays a rectangle comparison.
+  ///
+  /// Null when the window has no frame — a panel, or a LavaUI client that
+  /// asked for `WindowFrame::client` and draws its own controls. Everything
+  /// that touches the bar therefore checks, and `decorated` is the one flag
+  /// that says which world a window is in.
   std::unique_ptr<lava::CanvasSurface> bar;
   wlr_scene_buffer *barNode = nullptr;
   lava::DecorationHit hovered = lava::DecorationHit::Bar;
+
+  /// Whether the compositor draws this window's non-client area.
+  ///
+  /// False costs the window nothing except the strip: it is still placed,
+  /// stacked, maximized, moved and resized by the compositor, and asks for
+  /// those through `BeginMove` / `ToggleMaximize` / `Minimize` instead of
+  /// through buttons drawn here. The only geometric difference is that its
+  /// content starts at the frame origin rather than a bar below it, which
+  /// `contentY` is the single place that knows.
+  bool decorated = true;
 
   int x = 0;
   int y = 0;
@@ -579,9 +623,21 @@ struct ClientSurface {
   uint32_t restoreW = 0;
   uint32_t restoreH = 0;
 
-  /// Where the content starts, below the bar.
+  /// Hidden, but alive: the client keeps its surface, its arena and its input
+  /// stream, and the scene simply stops drawing it. See `Minimize`.
+  bool minimized = false;
+
+  /// Where the content starts — below the bar, or at the frame origin when
+  /// there is no bar to be below.
   int contentY() const {
-    return panel ? y : y + lava::Decoration::kHeight;
+    return decorated ? y + lava::Decoration::kHeight : y;
+  }
+
+  /// Total height on screen, frame included. What a resize drag works in, and
+  /// what an edge is measured from.
+  int frameHeight() const {
+    return static_cast<int>(height) +
+           (decorated ? lava::Decoration::kHeight : 0);
   }
 
   /// Whether `lx, ly` (layout space) is inside the content, and where in it.
@@ -591,15 +647,26 @@ struct ClientSurface {
     return sx >= 0 && sy >= 0 && sx < width && sy < height;
   }
 
-  /// Whether `lx, ly` is on the title bar, and where along it.
+  /// Whether `lx, ly` is on the title bar, and where along it. Always false
+  /// for a window that has none — which is what keeps every bar path below
+  /// from needing to ask twice.
   bool hitBar(double lx, double ly, double &sx, double &sy) const {
-    if (panel) return false;
+    if (!decorated) return false;
     sx = lx - x;
     sy = ly - y;
     return sx >= 0 && sy >= 0 && sx < width &&
            sy < lava::Decoration::kHeight;
   }
 };
+
+/// Which sides of a window a resize drag is pulling. A bitmask because a
+/// corner is two of them, and there is no third thing an edge can be.
+namespace edges {
+constexpr uint32_t kLeft = 1u;
+constexpr uint32_t kRight = 2u;
+constexpr uint32_t kTop = 4u;
+constexpr uint32_t kBottom = 8u;
+}  // namespace edges
 
 /// What a layout-space pointer resolved to, walking the window stack top-down.
 ///
@@ -637,6 +704,11 @@ class SurfaceRegistry : public lava::CompositorHost {
     workspaces_ = workspaces;
   }
 
+  /// The seat and the pointer live on `Server`, and a client asking to be
+  /// moved or hidden needs both — the drag it starts is the same one a title
+  /// bar starts, and the focus it gives up is the same focus a click takes.
+  void bind(Server *server) { server_ = server; }
+
   /// Arms the timer that carries renderer-owned animations along.
   void start(wl_event_loop *loop) {
     animation_ = wl_event_loop_add_timer(loop, on_animation, this);
@@ -657,6 +729,7 @@ class SurfaceRegistry : public lava::CompositorHost {
   /// list, and without this a window on another workspace would still take the
   /// pointer, invisibly, from underneath the one the user can see.
   bool visible(const ClientSurface &surface) const {
+    if (surface.minimized) return false;
     return surface.panel || workspaces_ == nullptr ||
            surface.workspace == workspaces_->current;
   }
@@ -761,7 +834,107 @@ class SurfaceRegistry : public lava::CompositorHost {
     return top.surface;
   }
 
+  /// A window whose edge is within grabbing distance of `lx, ly`, and which
+  /// edges those are.
+  ///
+  /// The zone is *outside* the window rather than a margin cut out of it: a
+  /// window with no title bar has no spare pixels to give up, and an app whose
+  /// own scrollbar sits four pixels from the edge should not find the last
+  /// four of them belonging to the compositor. Nothing is drawn there — the
+  /// band is over whatever is behind the window, which is why this is only
+  /// asked when the ordinary hit test found nothing at all. That refusal is
+  /// deliberate: an invisible band that took precedence over a *visible*
+  /// window underneath would resize a window the user was not pointing at.
+  ClientSurface *borderAt(double lx, double ly, uint32_t &outEdges) {
+    outEdges = 0;
+    if (hitTest(lx, ly).kind != SurfaceHitKind::None) return nullptr;
+    for (const auto &s : surfaces_) {
+      // A panel is on an edge of the screen by definition and is not the
+      // user's to resize; a maximized window has already been given the work
+      // area and would fight the next thing that re-applied it.
+      if (!visible(*s) || s->panel || s->maximized) continue;
+      const double x0 = s->x, y0 = s->y;
+      const double x1 = x0 + s->width, y1 = y0 + s->frameHeight();
+      if (lx < x0 - kGrab || lx > x1 + kGrab) continue;
+      if (ly < y0 - kGrab || ly > y1 + kGrab) continue;
+
+      uint32_t hit = 0;
+      if (lx <= x0) hit |= edges::kLeft;
+      if (lx >= x1) hit |= edges::kRight;
+      if (ly <= y0) hit |= edges::kTop;
+      if (ly >= y1) hit |= edges::kBottom;
+      // Inside on both axes means the point is in the window, which the hit
+      // test above has already ruled out — but a window whose content is
+      // covered by nothing still owns its own interior, so refuse rather than
+      // return an empty edge set.
+      if (hit == 0) continue;
+      outEdges = hit;
+      return s.get();
+    }
+    return nullptr;
+  }
+
+  /// Hides a window without ending it, or brings it back.
+  ///
+  /// The scene node is disabled rather than reparented or destroyed: the
+  /// client goes on owning its surface and its arena, keeps publishing frames
+  /// if it feels like it, and none of them are drawn. `visible` is what keeps
+  /// the pointer out — a hidden window that still hit-tested would take clicks
+  /// from whatever the user can actually see.
+  void setMinimized(ClientSurface &surface, bool minimized) {
+    if (surface.panel || surface.minimized == minimized) return;
+    surface.minimized = minimized;
+    if (surface.isForeign()) {
+      wlr_scene_node_set_enabled(surface.window->contentNode(), !minimized);
+    } else if (surface.node != nullptr) {
+      wlr_scene_node_set_enabled(&surface.node->node, !minimized);
+    }
+    if (surface.barNode != nullptr) {
+      wlr_scene_node_set_enabled(&surface.barNode->node, !minimized);
+    }
+    // Nothing on a hidden window's frame is hovered, and a button left lit
+    // would still be lit when it comes back.
+    hoverBar(surface, lava::DecorationHit::Bar);
+    if (minimized) {
+      minimizedOrder_.push_back(surface.id);
+    } else {
+      std::erase(minimizedOrder_, surface.id);
+    }
+  }
+
+  /// Un-hides the most recently minimized window *of this workspace* and
+  /// returns it, or null if it has none hidden.
+  ///
+  /// A stack rather than a list, because there is nothing yet that can *show*
+  /// the set — the panel has no window list, so "the one you just put away" is
+  /// the only entry a user could name. When a window list exists this becomes
+  /// its click handler and the stack becomes a detail.
+  ///
+  /// Per workspace for the reason everything else here is: a window belongs to
+  /// one, and restoring one from another workspace would bring back something
+  /// the user cannot see and did not ask for.
+  ClientSurface *restoreLastMinimized() {
+    // Closed while hidden — drop them here, since nothing else walks this.
+    std::erase_if(minimizedOrder_,
+                  [this](uint32_t id) { return find(id) == nullptr; });
+    for (auto it = minimizedOrder_.rbegin(); it != minimizedOrder_.rend();
+         ++it) {
+      ClientSurface *surface = find(*it);
+      if (workspaces_ != nullptr &&
+          surface->workspace != workspaces_->current) {
+        continue;
+      }
+      setMinimized(*surface, false);
+      return surface;
+    }
+    return nullptr;
+  }
+
   bool empty() const { return surfaces_.empty(); }
+
+  /// The smallest a window is allowed to get. Public because a resize drag
+  /// lives on `Server` and has to stop at the same number this does.
+  static constexpr uint32_t minSurface() { return kMinSurface; }
 
   // ─── CompositorHost ──────────────────────────────────────────────────────
 
@@ -801,12 +974,14 @@ class SurfaceRegistry : public lava::CompositorHost {
   }
 
   uint32_t createSurface(const std::string &arenaId, uint32_t width,
-                         uint32_t height, const std::string &title) override {
+                         uint32_t height, const std::string &title,
+                         bool decorated) override {
     if (workspaces_ == nullptr) return 0;
     // On whichever workspace is current, because that is where the user was
     // when they asked for it.
     return openSurface(arenaId, width, height, title,
-                       workspaces_->currentTree(), workspaces_->current);
+                       workspaces_->currentTree(), workspaces_->current,
+                       decorated);
   }
 
   /// Frames a Wayland window: a title bar, a place in the stack, a workspace.
@@ -890,12 +1065,13 @@ class SurfaceRegistry : public lava::CompositorHost {
     place(surface);
   }
 
-  /// Fills the output, or goes back to where it was.
+  /// Fills the work area, or goes back to where the window came from.
   ///
   /// The previous frame is remembered rather than recomputed, so restoring
   /// puts a window back exactly where the user left it.
-  void toggleMaximize(ClientSurface &surface) {
-    if (surface.maximized) {
+  void setMaximized(ClientSurface &surface, bool maximized) {
+    if (surface.maximized == maximized) return;
+    if (!maximized) {
       moveSurface(surface, surface.restoreX, surface.restoreY);
       resizeSurface(surface, surface.restoreW, surface.restoreH);
       surface.maximized = false;
@@ -917,10 +1093,12 @@ class SurfaceRegistry : public lava::CompositorHost {
   void fillWorkArea(ClientSurface &surface) {
     const WorkArea area = workArea();
     moveSurface(surface, area.x, area.y);
+    // The frame comes out of the height, and a window with no frame keeps all
+    // of it — which is most of what an app gives up its title bar for.
+    const uint32_t frame =
+        surface.decorated ? static_cast<uint32_t>(lava::Decoration::kHeight) : 0;
     resizeSurface(surface, area.width,
-                  area.height > lava::Decoration::kHeight
-                      ? area.height - lava::Decoration::kHeight
-                      : area.height);
+                  area.height > frame ? area.height - frame : area.height);
   }
 
   /// Puts a panel back on its edge, at the full length of that edge.
@@ -1059,22 +1237,15 @@ class SurfaceRegistry : public lava::CompositorHost {
     const uint32_t h = horizontal ? thickness : outputHeight_;
 
     // Into the panel tree, which no workspace switch ever disables — a taskbar
-    // that vanished on Alt+2 would be a strange sort of taskbar.
+    // that vanished on Alt+2 would be a strange sort of taskbar. Undecorated,
+    // because there is nothing on a panel to drag, close or maximize.
     const uint32_t id =
-        openSurface(arenaId, w, h, title, workspaces_->panels, 0);
+        openSurface(arenaId, w, h, title, workspaces_->panels, 0, false);
     if (id == 0) return 0;
     ClientSurface *panel = find(id);
     panel->panel = true;
     panel->edge = edge;
     panel->reserve = reserve;
-
-    // No title bar: there is nothing to drag, close or maximize. Dropped
-    // rather than hidden, so no hit test has to remember it is not there.
-    if (panel->barNode != nullptr) {
-      wlr_scene_node_destroy(&panel->barNode->node);
-      panel->barNode = nullptr;
-    }
-    panel->bar.reset();
 
     layoutPanel(*panel);
     // Above ordinary windows, which is what "panel" mostly means to a user.
@@ -1084,9 +1255,30 @@ class SurfaceRegistry : public lava::CompositorHost {
     return id;
   }
 
+  // ─── Window state ────────────────────────────────────────────────────────
+  //
+  // The other end of the buttons in `Decoration`. A client that draws its own
+  // frame reaches the same code the compositor's strip does, which is what
+  // stops the two kinds of window from acquiring two ideas of what "maximize"
+  // means.
+
+  bool beginMove(uint32_t id) override;
+
+  bool toggleMaximize(uint32_t id, bool &outMaximized) override {
+    ClientSurface *surface = find(id);
+    if (surface == nullptr) return false;
+    // A panel is placed by its edge and has nothing to restore to.
+    if (!surface->panel) setMaximized(*surface, !surface->maximized);
+    outMaximized = surface->maximized;
+    return true;
+  }
+
+  bool minimize(uint32_t id) override;
+
   bool destroySurface(uint32_t id) override {
     for (auto it = surfaces_.begin(); it != surfaces_.end(); ++it) {
       if ((*it)->id != id) continue;
+      std::erase(minimizedOrder_, id);
       // A Wayland window's contents are not ours to destroy — the scene tree
       // belongs to its `Toplevel`, which outlives the frame across an unmap.
       // Only the decoration we added comes down with it.
@@ -1257,7 +1449,8 @@ class SurfaceRegistry : public lava::CompositorHost {
   /// which tree the nodes go in and which workspace owns them.
   uint32_t openSurface(const std::string &arenaId, uint32_t width,
                        uint32_t height, const std::string &title,
-                       wlr_scene_tree *parent, uint32_t workspace) {
+                       wlr_scene_tree *parent, uint32_t workspace,
+                       bool decorated) {
     if (renderer_ == nullptr || parent == nullptr) return 0;
     auto surface = std::make_unique<ClientSurface>();
     surface->canvas = renderer_->createSurface(width, height);
@@ -1284,30 +1477,40 @@ class SurfaceRegistry : public lava::CompositorHost {
     surface->y = area.y + 40 + peers * 40;
 
     surface->title = title;
-    surface->bar = renderer_->createSurface(width, lava::Decoration::kHeight);
-    if (!surface->bar) return 0;
+    surface->decorated = decorated;
+    if (decorated) {
+      surface->bar = renderer_->createSurface(width, lava::Decoration::kHeight);
+      if (!surface->bar) return 0;
+    }
 
     surface->node = wlr_scene_buffer_create(parent, surface->canvas->buffer());
-    surface->barNode = wlr_scene_buffer_create(parent, surface->bar->buffer());
-    if (surface->node == nullptr || surface->barNode == nullptr) return 0;
+    if (surface->node == nullptr) return 0;
+    if (surface->bar) {
+      surface->barNode = wlr_scene_buffer_create(parent, surface->bar->buffer());
+      if (surface->barNode == nullptr) return 0;
+    }
     place(*surface);
     drawBar(*surface);
 
     const uint32_t id = surface->id;
     surfaces_.push_front(std::move(surface));
-    wlr_log(WLR_INFO, "surface %u: '%s' %ux%u on arena '%s'", id, title.c_str(),
-            width, height, arenaId.c_str());
+    wlr_log(WLR_INFO, "surface %u: '%s' %ux%u on arena '%s'%s", id,
+            title.c_str(), width, height, arenaId.c_str(),
+            decorated ? "" : ", client-framed");
     return id;
   }
 
   /// Front is topmost. See `raise`, which is what keeps this in step with the
   /// scene graph's own order.
   std::list<std::unique_ptr<ClientSurface>> surfaces_;
+  /// Minimized windows, oldest first — see `restoreLastMinimized`.
+  std::vector<uint32_t> minimizedOrder_;
   /// The one canvas device. Every surface is a window on it, sharing its
   /// glyph atlas and texture cache.
   lava::CanvasRenderer *renderer_ = nullptr;
   Workspaces *workspaces_ = nullptr;
   lava::ControlPlane *control_ = nullptr;
+  Server *server_ = nullptr;
   lava::Decoration decoration_;
   /// Whose bar is drawn active.
   uint32_t focused_ = 0;
@@ -1328,6 +1531,11 @@ class SurfaceRegistry : public lava::CompositorHost {
   /// Smaller than this and a window is not a window — and a drag that crosses
   /// its own origin would otherwise ask for a zero-sized buffer.
   static constexpr uint32_t kMinSurface = 120;
+
+  /// How far outside its own edge a window can still be grabbed to resize.
+  /// Wide enough to hit without aiming, narrow enough that two windows a few
+  /// pixels apart do not overlap each other's band. See `borderAt`.
+  static constexpr double kGrab = 6.0;
 
   /// One frame at ~60Hz, and only while something is actually animating —
   /// re-armed from `on_animation` rather than left running.
@@ -1866,7 +2074,7 @@ void Toplevel::on_request_maximize(wl_listener *listener, void *) {
       // The same maximize the title bar button does, so a window maximized
       // from its own menu and one maximized from its frame end up in the same
       // state — including remembering where to restore to.
-      toplevel->server->surfaces->toggleMaximize(*frame);
+      toplevel->server->surfaces->setMaximized(*frame, !frame->maximized);
       wlr_xdg_toplevel_set_maximized(toplevel->xdg_toplevel, frame->maximized);
     }
   }
@@ -2096,6 +2304,24 @@ bool handle_binding(Server *server, xkb_keysym_t sym, bool shift, bool ctrl) {
       wlr_log(WLR_ERROR, "session: failed to switch to VT %u", vt);
     } else {
       wlr_log(WLR_INFO, "session: switching to VT %u", vt);
+    }
+    return true;
+  }
+  // Minimize, and the way back. A window with no frame can offer a minimize
+  // button, but nothing yet can *show* the windows that are hidden — the panel
+  // has no window list — so the compositor keeps the only handle there is: the
+  // one you put away last comes back.
+  if (sym == XKB_KEY_m && server->surfaces != nullptr) {
+    if (shift) {
+      if (ClientSurface *restored = server->surfaces->restoreLastMinimized()) {
+        server->focusSurface(*restored);
+        server->update_pointer_focus(0);
+      }
+      return true;
+    }
+    if (ClientSurface *focused =
+            server->surfaces->find(server->focusedSurface())) {
+      server->minimizeSurface(*focused);
     }
     return true;
   }
@@ -2403,6 +2629,26 @@ void Server::moveFocusedToWorkspace(uint32_t index) {
   }
 }
 
+/// The cursor image for a set of resize edges.
+///
+/// The X11 names rather than the newer `cursor-shape-v1` ones, because that is
+/// what `wlr_xcursor_manager` loads from a theme — and every theme has had
+/// these eight since long before Wayland.
+const char *resize_cursor(uint32_t hitEdges) {
+  const bool left = (hitEdges & edges::kLeft) != 0;
+  const bool right = (hitEdges & edges::kRight) != 0;
+  const bool top = (hitEdges & edges::kTop) != 0;
+  const bool bottom = (hitEdges & edges::kBottom) != 0;
+  if (top && left) return "nw-resize";
+  if (top && right) return "ne-resize";
+  if (bottom && left) return "sw-resize";
+  if (bottom && right) return "se-resize";
+  if (top) return "n-resize";
+  if (bottom) return "s-resize";
+  if (left) return "w-resize";
+  return "e-resize";
+}
+
 void Server::update_pointer_focus(uint32_t time_msec) {
   // A drag owns the pointer until the button comes back up, wherever it has
   // got to — otherwise letting the cursor outrun the window would hand the
@@ -2424,6 +2670,18 @@ void Server::update_pointer_focus(uint32_t time_msec) {
     wlr_cursor_set_xcursor(cursor, cursor_mgr, "default");
     wlr_seat_pointer_clear_focus(seat);
     return;
+  }
+
+  // Just outside a window's edge: the resize band. Only the cursor changes —
+  // the grab itself waits for a press — and it is the one piece of feedback
+  // that makes an invisible affordance discoverable at all.
+  if (surfaces != nullptr) {
+    uint32_t hitEdges = 0;
+    if (surfaces->borderAt(cursor->x, cursor->y, hitEdges) != nullptr) {
+      wlr_cursor_set_xcursor(cursor, cursor_mgr, resize_cursor(hitEdges));
+      wlr_seat_pointer_clear_focus(seat);
+      return;
+    }
   }
 
   double sx = 0, sy = 0;
@@ -2454,14 +2712,151 @@ bool Server::update_drag() {
   if (drag == Drag::Move) {
     surfaces->moveSurface(*surface, dragOriginX + static_cast<int>(dx),
                           dragOriginY + static_cast<int>(dy));
+    return true;
+  }
+
+  // A resize is a move as well whenever it pulls a left or top edge: that
+  // side follows the pointer and the opposite one has to stay where it is,
+  // which only holds if the origin moves by exactly what the size lost.
+  int x = dragOriginX;
+  int y = dragOriginY;
+  double w = dragOriginW;
+  double h = dragOriginH;
+  if (dragEdges & edges::kRight) w = dragOriginW + dx;
+  if (dragEdges & edges::kBottom) h = dragOriginH + dy;
+  if (dragEdges & edges::kLeft) {
+    w = dragOriginW - dx;
+    x = dragOriginX + static_cast<int>(dx);
+  }
+  if (dragEdges & edges::kTop) {
+    h = dragOriginH - dy;
+    y = dragOriginY + static_cast<int>(dy);
+  }
+  // Past the minimum, the far edge is what the user is holding still, so the
+  // near one stops rather than pushing it. Without this a window dragged
+  // through its own minimum starts walking sideways.
+  const double floor = SurfaceRegistry::minSurface();
+  if (w < floor) {
+    if (dragEdges & edges::kLeft) {
+      x = dragOriginX + static_cast<int>(dragOriginW - floor);
+    }
+    w = floor;
+  }
+  if (h < floor) {
+    if (dragEdges & edges::kTop) {
+      y = dragOriginY + static_cast<int>(dragOriginH - floor);
+    }
+    h = floor;
+  }
+  if (x != surface->x || y != surface->y) surfaces->moveSurface(*surface, x, y);
+  // Rebuilding a swapchain-sized set of attachments and re-exporting a
+  // dmabuf on every motion event is not free, and a drag produces one per
+  // pixel. `resizeSurface` is a no-op when the size has not changed, which
+  // the integer truncation above makes true most of the time.
+  surfaces->resizeSurface(*surface, static_cast<uint32_t>(w),
+                          static_cast<uint32_t>(h));
+  return true;
+}
+
+bool Server::beginInteractiveMove(ClientSurface &surface) {
+  if (surfaces == nullptr || surface.panel) return false;
+  // Nothing to carry the move: a client that asks for one with no button down
+  // would get a window glued to the cursor until the next click.
+  if (pointerButtonsDown == 0) return false;
+
+  // Dragging a maximized window unmaximizes it and hands it back under the
+  // pointer, which is what every desktop does and what the gesture means —
+  // the user is pulling the window off the edge, not asking to move a
+  // full-screen rectangle around. The grab keeps its place along the width so
+  // a title bar grabbed near its right end stays grabbed there.
+  if (surface.maximized) {
+    const double fraction =
+        surface.width > 0 ? (cursor->x - surface.x) / surface.width : 0.5;
+    const int grabY = static_cast<int>(cursor->y) - surface.y;
+    surfaces->setMaximized(surface, false);
+    const int height = surface.frameHeight();
+    surfaces->moveSurface(
+        surface, static_cast<int>(cursor->x - fraction * surface.width),
+        static_cast<int>(cursor->y) - std::min(grabY, std::max(0, height - 1)));
+  }
+
+  // The release the client is never going to see, because from the next line
+  // the pointer is the compositor's. Sent first, so a client that tracks its
+  // own button state resolves the press it just handled instead of holding a
+  // capture that nothing will ever end.
+  if (!surface.isForeign() && surface.canvas) {
+    surface.canvas->pointerButton(lastPressedButton, false,
+                                  static_cast<float>(cursor->x - surface.x),
+                                  static_cast<float>(cursor->y -
+                                                     surface.contentY()),
+                                  0);
+    surfaces->pump(surface);
+  }
+
+  drag = Drag::Move;
+  dragSurface = surface.id;
+  dragEdges = 0;
+  dragStartX = cursor->x;
+  dragStartY = cursor->y;
+  dragOriginX = surface.x;
+  dragOriginY = surface.y;
+  dragOriginW = surface.width;
+  dragOriginH = surface.height;
+  return true;
+}
+
+void Server::focusSurface(ClientSurface &surface) {
+  if (surfaces == nullptr) return;
+  surfaces->setFocused(surface.id);
+  surfaces->raise(surface);
+  if (surface.isForeign()) {
+    // A foreign window takes the keyboard through the seat, and no client
+    // surface may hold it at the same time — both focused would deliver every
+    // key twice.
+    setFocusedSurface(0);
+    focus(surface.window);
+    return;
+  }
+  setFocusedSurface(surface.id);
+  wlr_seat_keyboard_notify_clear_focus(seat);
+}
+
+void Server::minimizeSurface(ClientSurface &surface) {
+  if (surfaces == nullptr || surface.panel) return;
+  surfaces->setMinimized(surface, true);
+  // A drag on a window that just vanished would go on moving it invisibly.
+  if (drag != Drag::None && dragSurface == surface.id) drag = Drag::None;
+  if (focusedSurface() == surface.id) setFocusedSurface(0);
+  surfaces->setFocused(focusedSurface());
+  if (surface.isForeign()) surface.window->activate(false);
+  // Somebody has to have the keyboard, and the window behind is the one the
+  // user is now looking at.
+  wlr_seat_keyboard_notify_clear_focus(seat);
+  if (focusedSurface() == 0) focus(frontToplevel(workspaces.current));
+  update_pointer_focus(0);
+}
+
+// The two control-plane verbs that need the pointer and the seat, which live
+// on `Server` — so they are defined here, below it, rather than inline with
+// the rest of the registry.
+
+bool SurfaceRegistry::beginMove(uint32_t id) {
+  ClientSurface *surface = find(id);
+  if (surface == nullptr) return false;
+  // True means "the surface is yours", not "the drag started": a client that
+  // asked with no button down has made a harmless mistake, and turning it
+  // into `SurfaceNotFound` would say something false about the window.
+  if (server_ != nullptr) server_->beginInteractiveMove(*surface);
+  return true;
+}
+
+bool SurfaceRegistry::minimize(uint32_t id) {
+  ClientSurface *surface = find(id);
+  if (surface == nullptr) return false;
+  if (server_ != nullptr) {
+    server_->minimizeSurface(*surface);
   } else {
-    // Rebuilding a swapchain-sized set of attachments and re-exporting a
-    // dmabuf on every motion event is not free, and a drag produces one per
-    // pixel. `resizeSurface` is a no-op when the size has not changed, which
-    // the integer truncation above makes true most of the time.
-    surfaces->resizeSurface(
-        *surface, static_cast<uint32_t>(std::max(1.0, dragOriginW + dx)),
-        static_cast<uint32_t>(std::max(1.0, dragOriginH + dy)));
+    setMinimized(*surface, true);
   }
   return true;
 }
@@ -2506,9 +2901,25 @@ void Server::on_cursor_button(wl_listener *listener, void *data) {
   auto *event = static_cast<wlr_pointer_button_event *>(data);
 
   const bool pressed = event->state == WL_POINTER_BUTTON_STATE_PRESSED;
+  // Left = 0, matching GLFW, which is what the client's event decoding was
+  // written against.
+  const int32_t lavaButton = static_cast<int32_t>(event->button - 0x110u);
+  // Counted rather than tracked per button: the only question anything asks is
+  // "is the user holding something", which `BeginMove` needs before it glues a
+  // window to the cursor.
+  if (pressed) {
+    ++server->pointerButtonsDown;
+    server->lastPressedButton = lavaButton;
+  } else if (server->pointerButtonsDown > 0) {
+    --server->pointerButtonsDown;
+  }
+
   // A release always ends a drag, whatever it is over by then.
   if (!pressed && server->drag != Server::Drag::None) {
     server->drag = Server::Drag::None;
+    // What is under the pointer has not been tracked during the drag, and the
+    // window it was over has probably moved out from under it.
+    server->update_pointer_focus(event->time_msec);
     return;
   }
 
@@ -2520,18 +2931,7 @@ void Server::on_cursor_button(wl_listener *listener, void *data) {
     if (ClientSurface *frame =
             server->surfaces->frameAt(server->cursor->x, server->cursor->y, bx,
                                       by)) {
-      server->surfaces->setFocused(frame->id);
-      server->surfaces->raise(*frame);
-      if (frame->isForeign()) {
-        // A foreign window takes the keyboard through the seat, and no client
-        // surface may hold it at the same time — both focused would deliver
-        // every key twice.
-        server->setFocusedSurface(0);
-        server->focus(frame->window);
-      } else {
-        server->setFocusedSurface(frame->id);
-        wlr_seat_keyboard_notify_clear_focus(server->seat);
-      }
+      server->focusSurface(*frame);
       switch (lava::Decoration::hitTest(static_cast<float>(bx),
                                         static_cast<float>(by),
                                         frame->width)) {
@@ -2544,7 +2944,7 @@ void Server::on_cursor_button(wl_listener *listener, void *data) {
           server->setFocusedSurface(0);
           return;
         case lava::DecorationHit::Maximize:
-          server->surfaces->toggleMaximize(*frame);
+          server->surfaces->setMaximized(*frame, !frame->maximized);
           if (frame->isForeign()) {
             // Told, so the client draws itself as maximized — squared corners,
             // a different button in its own menu.
@@ -2552,15 +2952,34 @@ void Server::on_cursor_button(wl_listener *listener, void *data) {
           }
           return;
         case lava::DecorationHit::Bar:
-          // Bare bar: drag the window, the way a title bar always has.
-          server->drag = Server::Drag::Move;
-          server->dragSurface = frame->id;
-          server->dragStartX = server->cursor->x;
-          server->dragStartY = server->cursor->y;
-          server->dragOriginX = frame->x;
-          server->dragOriginY = frame->y;
+          // Bare bar: drag the window, the way a title bar always has. The
+          // same drag a client-framed window asks for with `BeginMove`, which
+          // is why that one is a call into `Server` and not its own gesture.
+          server->beginInteractiveMove(*frame);
           return;
       }
+    }
+  }
+
+  // A window's outer edge, which is a resize grip whether or not the window
+  // has a frame — and the only one a client-framed window has. Answered only
+  // where the ordinary hit test found nothing, so the band never takes a click
+  // from a window the user can actually see. See `borderAt`.
+  if (pressed && server->surfaces != nullptr) {
+    uint32_t hitEdges = 0;
+    if (ClientSurface *edge = server->surfaces->borderAt(
+            server->cursor->x, server->cursor->y, hitEdges)) {
+      server->focusSurface(*edge);
+      server->drag = Server::Drag::Resize;
+      server->dragEdges = hitEdges;
+      server->dragSurface = edge->id;
+      server->dragStartX = server->cursor->x;
+      server->dragStartY = server->cursor->y;
+      server->dragOriginX = edge->x;
+      server->dragOriginY = edge->y;
+      server->dragOriginW = edge->width;
+      server->dragOriginH = edge->height;
+      return;
     }
   }
 
@@ -2577,6 +2996,9 @@ void Server::on_cursor_button(wl_listener *listener, void *data) {
       server->surfaces->raise(*over);
       server->drag = event->button == BTN_RIGHT ? Server::Drag::Resize
                                                 : Server::Drag::Move;
+      // Bottom-right, which is where an Alt+resize has always grown from: the
+      // gesture has no edge of its own to name.
+      server->dragEdges = edges::kRight | edges::kBottom;
       server->dragSurface = over->id;
       server->dragStartX = server->cursor->x;
       server->dragStartY = server->cursor->y;
@@ -2592,9 +3014,7 @@ void Server::on_cursor_button(wl_listener *listener, void *data) {
   // to whichever surface is focused even if the pointer has since left it, so
   // a drag that ends outside still ends.
   if (server->surfaces != nullptr && server->control != nullptr) {
-    // Left = 0, matching GLFW, which is what the client's event decoding was
-    // written against.
-    const int32_t button = static_cast<int32_t>(event->button - 0x110u);
+    const int32_t button = lavaButton;
     double sx = 0, sy = 0;
     if (pressed) {
       if (ClientSurface *over =
@@ -2604,12 +3024,7 @@ void Server::on_cursor_button(wl_listener *listener, void *data) {
         // second made a content click raise the window but leave the chrome on
         // whatever last took a bar click — looking like focus only works from
         // the non-client strip.
-        server->setFocusedSurface(over->id);
-        server->surfaces->setFocused(over->id);
-        server->surfaces->raise(*over);
-        // Taking the keyboard from any Wayland window: the two focus models
-        // are separate, and leaving both focused would deliver every key twice.
-        wlr_seat_keyboard_notify_clear_focus(server->seat);
+        server->focusSurface(*over);
         over->canvas->pointerButton(button, true, static_cast<float>(sx),
                                     static_cast<float>(sy), 0);
         server->surfaces->pump(*over);
@@ -2856,6 +3271,7 @@ int main() {
   auto canvas_renderer = lava::CanvasRenderer::create(server.renderer);
   SurfaceRegistry surfaces;
   surfaces.bind(canvas_renderer.get(), &server.workspaces);
+  surfaces.bind(&server);
   server.surfaces = &surfaces;
   if (!canvas_renderer) {
     wlr_log(WLR_ERROR, "no canvas device — LavaUI surfaces cannot be drawn");

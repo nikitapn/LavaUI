@@ -54,6 +54,38 @@ enum PanelEdge: u32 {
   right,
 };
 
+/// Who draws a window's non-client area.
+///
+/// The compositor's title bar is a service, not a law: it exists so that every
+/// client gets a drag handle and a close button without writing one, and so
+/// that a client which has stopped answering can still be closed. An app that
+/// *does* write its own gets nothing from it but a 32-pixel strip of somebody
+/// else's design above its own, which is exactly the space a toolbar it is
+/// already drawing would have used.
+///
+/// So it is the client's choice, made once, at `CreateSurface` — not a call
+/// that turns the strip off later, which would mean opening a window with a
+/// frame and taking it away a frame afterwards.
+///
+/// What the compositor keeps either way is everything that cannot be trusted
+/// to the client: where the window is, whether it is maximized, which
+/// workspace it is on, and the pointer that resizes it. A `client` window asks
+/// for those through `BeginMove`, `ToggleMaximize` and `Minimize` rather than
+/// doing them itself, and a client that never asks is a client with a window
+/// the user can still move.
+///
+/// Wayland windows are not offered this. Their frame is negotiated through
+/// `xdg-decoration`, which is a protocol this one has no business duplicating.
+enum WindowFrame: u32 {
+  /// The compositor draws a title bar above the content: the title, the
+  /// buttons, and the strip they sit in. The default, and what an app that
+  /// does not think about window chrome should have.
+  server,
+  /// Nobody. The surface *is* the window — no strip, no reserved height, and
+  /// the client's own first row of pixels is the top of the window.
+  client,
+};
+
 /// The surface id is not one this compositor handed out, or its client has
 /// already let it go.
 ///
@@ -232,8 +264,15 @@ interface Compositor {
   /// the one that arrives on `SubscribeInput` as the opening `Resize`. A
   /// client that trusts these numbers instead is a client that draws at the
   /// wrong size on any tiling WM.
+  ///
+  /// `frame` says who draws the non-client area — see `WindowFrame`. With
+  /// `client` the size above is the whole window rather than the part below a
+  /// title bar, which is the only thing about this call it changes: a
+  /// frameless surface is presented, resized, captured and destroyed exactly
+  /// like a framed one.
   u32 CreateSurface(arenaId: in string, width: in u32, height: in u32,
-                    title: in string) raises(ArenaNotFound);
+                    title: in string, frame: in WindowFrame)
+      raises(ArenaNotFound);
 
   /// Asks for a *panel*: a surface docked to a screen edge.
   ///
@@ -263,6 +302,72 @@ interface Compositor {
   u32 CreatePanel(arenaId: in string, edge: in PanelEdge,
                   thickness: in u32, reserve: in boolean,
                   title: in string) raises(ArenaNotFound);
+
+  // ─── Window state ──────────────────────────────────────────────────────
+  //
+  // The three things a title bar did, for the client that drew its own
+  // instead. Nothing here is new *behaviour* — the compositor already moves,
+  // maximizes and hides windows when its own buttons are pressed; these are
+  // the same paths, reached from the other side of the boundary.
+  //
+  // Asked for rather than done, which is the whole reason they are calls. A
+  // client cannot place its own window: it has no idea where it is, what else
+  // is on screen, which workspace it is on, or where the panel that a maximize
+  // must not cover ends. It knows exactly one thing the compositor does not —
+  // that the pointer just went down on something the app considers a title bar
+  // — and that is what it sends.
+  //
+  // A `server`-framed window may call these too. The strip is a convenience,
+  // not a lock, and an app with a menu item that maximizes should not need a
+  // different window to have one.
+
+  /// "The user has grabbed this window; take the pointer and move it."
+  ///
+  /// The client-side decoration counterpart of pressing a title bar, and it
+  /// carries no coordinates for the same reason `ScrollUnclaimed` does not:
+  /// the compositor still has the pointer that produced the press, and a
+  /// position from the client would be a position it could aim anywhere.
+  ///
+  /// The move ends when the button comes up, which the compositor sees and
+  /// the client does not — from the moment this returns, the pointer is the
+  /// compositor's and the client stops receiving motion. The release it would
+  /// otherwise never see is delivered anyway, synthetically, before the grab
+  /// starts: a client left believing a button is still down is a client with a
+  /// stuck drag, and that is a worse bug than a release that arrives early.
+  ///
+  /// Ignored, deliberately, when no button is down. Without that check a
+  /// client could call this at any time and have the window follow the cursor
+  /// until the next click, which is not a window manager anybody asked for.
+  void BeginMove(surfaceId: in u32) raises(SurfaceNotFound);
+
+  /// Fills the work area, or puts the window back where it was. Returns the
+  /// state it ended in.
+  ///
+  /// A toggle rather than `SetMaximized(bool)`, because the client does not
+  /// know which state it is in and has no way to find out: the user can
+  /// maximize a window from the compositor's own button or a keybinding, and a
+  /// client tracking its own idea of the answer would drift out of step with
+  /// the first one of those. The return value is how it paints the button.
+  ///
+  /// The *work* area, not the output: a maximized window that covered the
+  /// panel would hide the one thing on screen meant to always be reachable.
+  boolean ToggleMaximize(surfaceId: in u32) raises(SurfaceNotFound);
+
+  /// Hides the window without ending it. The client keeps its surface, its
+  /// arena and its input stream.
+  ///
+  /// Frames published while minimized cost the compositor nothing to accept
+  /// and are not drawn, so a client need not know it happened — and today it
+  /// is not told, because there is nothing it could usefully do with the news
+  /// that a `Resize` does not already say.
+  ///
+  /// Getting it back is the compositor's business, and at present that means a
+  /// keybinding (Alt+Shift+M restores the most recently minimized window).
+  /// The honest answer is a window list on this interface that a taskbar can
+  /// show and click — the same one `LavaTaskbar` is waiting for — and until it
+  /// exists, minimize is a button an app can offer but a desktop cannot fully
+  /// answer.
+  void Minimize(surfaceId: in u32) raises(SurfaceNotFound);
 
   /// Gives the surface back: the window closes and the arena is released.
   ///

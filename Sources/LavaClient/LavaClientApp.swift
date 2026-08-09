@@ -38,14 +38,22 @@ public enum LavaClient {
     ///     and the size to actually draw at arrives as the opening `Resize` on
     ///     the input stream. A client that trusts these numbers instead draws
     ///     at the wrong size on any tiling WM.
+    ///   - frame: who draws the non-client area. `.server` is the compositor's
+    ///     title bar, which costs 32 pixels above the app and gives it a drag
+    ///     handle and a close button for free. `.client` is those pixels back:
+    ///     the window is the app's content and nothing else, and the app places
+    ///     `WindowControls()` and `.windowDrag()` wherever its own design wants
+    ///     them — or nowhere, for an overlay that should have no chrome at all.
     public static func open(
         title: String,
         width: Float = 1280,
-        height: Float = 800
+        height: Float = 800,
+        frame: WindowFrame = .server
     ) -> Editor? {
         Self.title = title
         Self.requestedWidth = width
         Self.requestedHeight = height
+        Self.frame = frame
         guard let editor = LavaApp.openClient(width: width, height: height) else {
             fail("client engine failed to open")
         }
@@ -163,7 +171,7 @@ public enum LavaClient {
                 return try await compositor.createSurface(
                     arenaId: arenaID,
                     width: UInt32(requestedWidth), height: UInt32(requestedHeight),
-                    title: title
+                    title: title, frame: Self.frame
                 )
             }
             input = InputChannel(
@@ -216,6 +224,35 @@ public enum LavaClient {
         ScrollBridge.handBack = { [compositor] dx, dy in
             Task.detached {
                 await compositor.scrollUnclaimed(surfaceId: surfaceID, dx: dx, dy: dy)
+            }
+        }
+
+        // The window's own chrome, for an app drawing its own frame — and for
+        // one that is not, since a menu item that maximizes is as good a caller
+        // as a button. `close` needs nothing here: a client's window is held by
+        // its input stream, so ending the app is how it closes.
+        //
+        // Blocking, like the clipboard and for the same reason: these run on
+        // the frame loop from a press handler, and the round trip is the ~7 µs
+        // shared memory takes rather than anything a user could see. `drag` in
+        // particular *must* be synchronous — the compositor is about to take
+        // the pointer, and a detached task would let the release race it.
+        WindowBridge.drawsOwnChrome = Self.frame == .client
+        WindowBridge.beginDrag = { [compositor] in
+            report("BeginMove") {
+                try blockingCall { try await compositor.beginMove(surfaceId: surfaceID) }
+            }
+        }
+        WindowBridge.toggleMaximize = { [compositor] in
+            report("ToggleMaximize") {
+                _ = try blockingCall {
+                    try await compositor.toggleMaximize(surfaceId: surfaceID)
+                }
+            }
+        }
+        WindowBridge.minimize = { [compositor] in
+            report("Minimize") {
+                try blockingCall { try await compositor.minimize(surfaceId: surfaceID) }
             }
         }
 
@@ -314,12 +351,28 @@ public enum LavaClient {
     nonisolated(unsafe) private static var title = ""
     nonisolated(unsafe) private static var requestedWidth: Float = 1280
     nonisolated(unsafe) private static var requestedHeight: Float = 800
+    /// Who draws the non-client area. Read once, at `CreateSurface`.
+    nonisolated(unsafe) private static var frame: WindowFrame = .server
     /// Set by `openPanel`; nil for an ordinary window.
     nonisolated(unsafe) private static var panel:
         (edge: PanelEdge, thickness: Float, reserve: Bool)?
     /// The `Rpc` owns the transport — the shared-memory listener, its ring
     /// buffers, the worker threads — and dropping it tears all of that down.
     nonisolated(unsafe) private static var runtime: Rpc?
+
+    /// Runs a control-plane call whose failure is worth saying and not worth
+    /// crashing over. A window that would not maximize is a bad frame, not a
+    /// bad process — and the compositor going away already ends this one
+    /// through the input stream.
+    private static func report(_ call: String, _ body: () throws -> Void) {
+        do {
+            try body()
+        } catch {
+            FileHandle.standardError.write(
+                Data("\(call) failed: \(error)\n".utf8)
+            )
+        }
+    }
 
     private static func fail(_ message: String) -> Never {
         FileHandle.standardError.write(Data((message + "\n").utf8))

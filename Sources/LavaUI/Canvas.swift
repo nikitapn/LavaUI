@@ -61,6 +61,10 @@ public struct CanvasGesture: Sendable, Equatable {
 ///   intentionally recomputes the owning body on every change.
 /// - `onWheel`: deltas plus the pointer's position local to this canvas, for
 ///   zooming around the cursor rather than the center.
+/// - `onHover`: enter/leave, for a canvas whose paint changes under the
+///   pointer. A hover fill would come free from a `.hoverBackground()`; this
+///   is for the ones that draw the difference themselves, and it is also what
+///   makes the canvas resolvable as a hover target at all.
 public struct Canvas: PrimitiveView {
     public var label: String
     public var width: Dimension
@@ -73,6 +77,7 @@ public struct Canvas: PrimitiveView {
     public var onTap: (() -> Void)?
     public var onGesture: ((CanvasGesture) -> Void)?
     public var onWheel: ((_ dx: Float, _ dy: Float, _ localX: Float, _ localY: Float) -> Void)?
+    public var onHover: ((Bool) -> Void)?
     public var paint: (DrawList, CanvasFrame) -> Void
 
     public init(
@@ -86,6 +91,7 @@ public struct Canvas: PrimitiveView {
         onTap: (() -> Void)? = nil,
         onGesture: ((CanvasGesture) -> Void)? = nil,
         onWheel: ((_ dx: Float, _ dy: Float, _ localX: Float, _ localY: Float) -> Void)? = nil,
+        onHover: ((Bool) -> Void)? = nil,
         paint: @escaping (DrawList, CanvasFrame) -> Void
     ) {
         self.label = label
@@ -98,6 +104,7 @@ public struct Canvas: PrimitiveView {
         self.onTap = onTap
         self.onGesture = onGesture
         self.onWheel = onWheel
+        self.onHover = onHover
         self.paint = paint
     }
 
@@ -185,6 +192,19 @@ public struct Canvas: PrimitiveView {
                 )
             }
         leaf.onClick = nil
+
+        // Set before the wheel's placeholder below, so a canvas with both keeps
+        // the real handler. `HoverState` is what calls it — the renderer owns
+        // the pointer and answers hover, and a client has no other way to hear
+        // about it at all.
+        if let hover = onHover {
+            leaf.onHover = hover
+            HoverState.register(leaf.id) { [weak leaf] inside in
+                leaf?.onHover?(inside)
+            }
+        } else {
+            HoverState.unregister(leaf.id)
+        }
 
         if let wheel = onWheel {
             // Keeps the canvas resolvable as the hover target despite having

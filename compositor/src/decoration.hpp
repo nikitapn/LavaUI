@@ -9,12 +9,21 @@
 
 /// The non-client area: the strip a window is dragged, titled and closed by.
 ///
-/// Drawn by the compositor rather than by the client, and that is the choice
-/// worth stating. A client could draw its own — GTK does — but then every
-/// client reimplements the same three buttons, and the compositor has to trust
-/// each of them to put a close button somewhere. Here the compositor owns the
-/// window frame and the client owns the window *content*, which is also the
-/// only split under which a client that has crashed can still be closed.
+/// Drawn by the compositor by default, and that default is the choice worth
+/// stating. A client that draws its own — GTK does — reimplements the same
+/// three buttons in every app, and the compositor has to trust each of them to
+/// put a close button somewhere; with the frame here, a client that has
+/// crashed can still be closed.
+///
+/// It is a default rather than a rule. A client that asks for
+/// `WindowFrame::client` gets no strip at all and places LavaUI's own
+/// `WindowControls` wherever its design wants them, which is the right trade
+/// for an app already drawing a toolbar — and the only sensible one for an
+/// overlay that should have no chrome. What it gives up is exactly the
+/// property above: nothing but the client is drawing its close button, so a
+/// client that stops answering is closed by `Alt+drag` and the keyboard rather
+/// than by a button. Wayland windows are never offered the choice; theirs is
+/// negotiated through `xdg-decoration`.
 ///
 /// It is a separate surface, not a reserved strip inside the client's buffer.
 /// Same reasoning as a drop shadow: the client's draw list is its own and this
