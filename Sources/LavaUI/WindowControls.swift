@@ -67,6 +67,24 @@ public enum WindowBridge {
     /// Whether the window state verbs reach anything. False in a windowed app.
     public static var canControlWindow: Bool { beginDrag != nil }
 
+    /// The desktop's window corner radius, in points. 0 when windows are
+    /// square, and 0 in a windowed app, where the radius belongs to whatever
+    /// window manager drew the frame and is not ours to know.
+    ///
+    /// Not needed to *be* rounded — the compositor masks a window's corners
+    /// whatever the client draws. It is for matching: a menu, a dialog or a
+    /// card the app draws inside its own window should carry the same radius
+    /// as the window around it.
+    ///
+    /// ```swift
+    /// content.cornerRadius(WindowBridge.desktopCornerRadius)
+    /// ```
+    ///
+    /// Read once, when the client connected. A desktop whose config changes
+    /// mid-session leaves this stale until the app restarts — see
+    /// `GetAppearance` in the IDL for why that is a call and not a stream.
+    nonisolated(unsafe) public static var desktopCornerRadius: Float = 0
+
     static func requestDrag() { beginDrag?() }
     static func requestMaximize() { toggleMaximize?() }
     static func requestMinimize() { minimize?() }

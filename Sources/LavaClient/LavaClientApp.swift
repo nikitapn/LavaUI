@@ -69,6 +69,20 @@ public enum LavaClient {
             fail("no compositor (\(error)) — is the renderer running?")
         }
 
+        // What the desktop looks like, before the first body runs — a view
+        // reading `WindowBridge.desktopCornerRadius` as it builds must not see
+        // a zero that is about to become a twelve.
+        //
+        // Not fatal if it fails: a compositor too old to answer leaves the
+        // radius at 0, which means square, which is what this looked like
+        // before there was a radius at all.
+        report("GetAppearance") {
+            let appearance = try blockingCall {
+                try await compositor.getAppearance()
+            }
+            WindowBridge.desktopCornerRadius = appearance.cornerRadius
+        }
+
         // Before anything loads a face or an image. Ids already stamped into a
         // `UIFont` are not revisited, and `openClient` has just bootstrapped
         // the default one against the local table.
@@ -406,7 +420,8 @@ public enum LavaClient {
         }
 
         let banner = "client up — surface \(surfaceID), arena '\(arenaID)' "
-            + "(\(sink.mappedBytes / 1024) KiB)\n"
+            + "(\(sink.mappedBytes / 1024) KiB), "
+            + "corner radius \(Int(WindowBridge.desktopCornerRadius))\n"
         FileHandle.standardError.write(Data(banner.utf8))
 
         LavaApp.run(editor: editor, menu: menu, onRawKey: onRawKey, makeRoot: makeRoot)

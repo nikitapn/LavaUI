@@ -466,6 +466,12 @@ class CompositorImpl final : public ICompositor_Servant {
     }
   }
 
+  Appearance GetAppearance() override {
+    Appearance out{};
+    out.cornerRadius = host_.cornerRadius();
+    return out;
+  }
+
   nprpc::Task<> SubscribeActiveWindow(
       nprpc::BidiStream<FocusAck, ActiveWindow> stream) override {
     auto watcher = std::make_shared<FocusWatcher>(std::move(stream.writer));

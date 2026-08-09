@@ -142,6 +142,19 @@ nothing: the window manager's own frame is still there and already has all
 three. An app that runs both ways should gate its cluster on the flag rather
 than drawing buttons that lie.
 
+The desktop's own corner radius is on `WindowBridge.desktopCornerRadius`,
+read from the compositor when the client connected. A window does not need it
+to *be* rounded — the compositor masks its corners whatever the client draws —
+but a menu, dialog or card the app draws inside its own window should match
+it rather than pick a number:
+
+```swift
+card.cornerRadius(WindowBridge.desktopCornerRadius)
+```
+
+0 means square, and it is 0 in a windowed app, where the radius belongs to
+whatever window manager drew the frame.
+
 Minimize hides the window without ending it. Getting it back is the
 compositor's business, and today that means `Alt+Shift+M` (restores the most
 recently minimized window) — a panel window list is what it is really waiting

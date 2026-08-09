@@ -100,6 +100,9 @@ struct CompositorHost {
   virtual bool setPanelThickness(uint32_t surfaceId, uint32_t thickness,
                                  uint32_t reserved) = 0;
 
+  /// Window corner radius in pixels, as the config asked for. 0 is square.
+  virtual float cornerRadius() const = 0;
+
   /// The focused window and its title, for a subscriber that has just
   /// arrived. `outSurfaceId` is 0 when nothing has focus.
   virtual void activeWindow(uint32_t &outSurfaceId,

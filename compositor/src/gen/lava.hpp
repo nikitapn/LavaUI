@@ -268,6 +268,34 @@ public:
 };
 } // namespace flat
 
+struct Appearance {
+  float cornerRadius;
+};
+
+namespace flat {
+struct Appearance {
+  float cornerRadius;
+};
+
+class Appearance_Direct {
+  ::nprpc::flat_buffer& buffer_;
+  const std::uint32_t offset_;
+
+  auto& base() noexcept { return *reinterpret_cast<Appearance*>(reinterpret_cast<std::byte*>(buffer_.data().data()) + offset_); }
+  auto const& base() const noexcept { return *reinterpret_cast<const Appearance*>(reinterpret_cast<const std::byte*>(buffer_.data().data()) + offset_); }
+public:
+  uint32_t offset() const noexcept { return offset_; }
+  void* __data() noexcept { return (void*)&base(); }
+  Appearance_Direct(::nprpc::flat_buffer& buffer, std::uint32_t offset)
+    : buffer_(buffer)
+    , offset_(offset)
+  {
+  }
+  const float& cornerRadius() const noexcept { return base().cornerRadius;}
+  float& cornerRadius() noexcept { return base().cornerRadius;}
+};
+} // namespace flat
+
 struct ActiveWindow {
   uint32_t surfaceId;
   std::string title;
@@ -462,6 +490,7 @@ public:
   virtual bool ToggleMaximize (uint32_t surfaceId) = 0;
   virtual void Minimize (uint32_t surfaceId) = 0;
   virtual void SetPanelThickness (uint32_t surfaceId, uint32_t thickness, uint32_t reserved) = 0;
+  virtual Appearance GetAppearance () = 0;
   virtual ::nprpc::Task<> SubscribeActiveWindow (::nprpc::BidiStream<FocusAck, ActiveWindow> stream) = 0;
   virtual void DestroySurface (uint32_t surfaceId) = 0;
   virtual void Present (uint32_t surfaceId) = 0;
@@ -501,6 +530,8 @@ public:
   ::nprpc::Task<void> MinimizeAsync (uint32_t surfaceId, std::stop_token st = {});
   void SetPanelThickness (uint32_t surfaceId, uint32_t thickness, uint32_t reserved);
   ::nprpc::Task<void> SetPanelThicknessAsync (uint32_t surfaceId, uint32_t thickness, uint32_t reserved, std::stop_token st = {});
+  Appearance GetAppearance ();
+  ::nprpc::Task<Appearance> GetAppearanceAsync (std::stop_token st = {});
   std::pair<::nprpc::StreamWriter<FocusAck>, ::nprpc::StreamReader<ActiveWindow>> SubscribeActiveWindow ();
   void DestroySurface (uint32_t surfaceId);
   ::nprpc::Task<void> DestroySurfaceAsync (uint32_t surfaceId, std::stop_token st = {});

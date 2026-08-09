@@ -1397,6 +1397,8 @@ class SurfaceRegistry : public lava::CompositorHost {
     return true;
   }
 
+  float cornerRadius() const override { return cornerRadius_; }
+
   void activeWindow(uint32_t &outSurfaceId,
                     std::string &outTitle) const override {
     outSurfaceId = focused_;

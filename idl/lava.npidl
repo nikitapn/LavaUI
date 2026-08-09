@@ -108,6 +108,24 @@ exception CaptureFailed {
   surfaceId: u32;
 }
 
+/// What the desktop looks like, for a client that wants to match it.
+///
+/// Not what a client is *made* of — the compositor has no opinion about an
+/// app's colours and should not acquire one. This is the small set of numbers
+/// that are decisions about the desktop rather than about the app, where an
+/// app choosing its own would look wrong next to everything else.
+message Appearance {
+  /// Window corner radius in pixels; 0 when windows are square.
+  ///
+  /// A client does not need this to *be* rounded — the compositor masks its
+  /// corners either way, and a client that drew its own would be rounding
+  /// pixels that are about to be cut. It needs it to match: a menu, a dialog
+  /// or a card the app draws *inside* its window should have the same radius
+  /// as the window around it, and 8 against the desktop's 12 is the kind of
+  /// wrongness people see without being able to name.
+  cornerRadius: f32;
+}
+
 /// Which window has the keyboard now.
 ///
 /// The compositor is the only process that knows, and until this there was no
@@ -418,6 +436,20 @@ interface Compositor {
   /// than a size someone chose.
   void SetPanelThickness(surfaceId: in u32, thickness: in u32,
                          reserved: in u32) raises(SurfaceNotFound);
+
+  /// The desktop's look, for a client matching its own surfaces to it.
+  ///
+  /// A call rather than a stream, unlike the focus next door, because of how
+  /// often the answer changes: focus changes whenever the user clicks, and
+  /// this changes when somebody edits a config file and sends SIGHUP. A client
+  /// that read it at startup is right for the rest of the session in every
+  /// case except that one, where it is stale until it restarts — worth saying
+  /// out loud, and worth turning into a stream on the day a setting here can
+  /// change for a better reason than a hand edit.
+  ///
+  /// No surface id: this describes the desktop, and every window on it gets
+  /// the same answer.
+  Appearance GetAppearance();
 
   /// The focused window, now and whenever it changes.
   ///
