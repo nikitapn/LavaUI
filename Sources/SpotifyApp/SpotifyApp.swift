@@ -2,8 +2,6 @@ import Foundation
 import LavaUI
 import SpotifyCore
 
-#if canImport(CxxCanvas)
-
 /// LavaSpotify — Spotify-shaped UI + Connect control of spotifyd.
 ///
 /// Catalog: client credentials or seed/oembed.
@@ -133,17 +131,3 @@ struct SpotifyApp {
         }
     }
 }
-
-#else
-
-@main
-struct SpotifyApp {
-    static func main() {
-        FileHandle.standardError.write(
-            Data("LavaSpotify: LavaUI requires Linux + CxxCanvas (Vulkan engine).\n".utf8)
-        )
-        exit(1)
-    }
-}
-
-#endif

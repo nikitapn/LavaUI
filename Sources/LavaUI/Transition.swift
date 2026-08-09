@@ -1,4 +1,3 @@
-#if canImport(CxxCanvas)
 import Foundation
 
 /// How a view animates as it appears and disappears.
@@ -165,5 +164,3 @@ extension View {
         TransitionView(content: self, transition: transition)
     }
 }
-
-#endif

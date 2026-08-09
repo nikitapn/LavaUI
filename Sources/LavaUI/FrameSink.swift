@@ -1,4 +1,3 @@
-#if canImport(CxxCanvas)
 import CxxCanvas
 import Foundation
 
@@ -239,4 +238,3 @@ extension FrameCapacity {
         return c
     }
 }
-#endif

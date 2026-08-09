@@ -1,4 +1,3 @@
-#if canImport(CxxCanvas)
 import Foundation
 
 /// Deterministic inputs, so a number from today is comparable with a number
@@ -141,4 +140,3 @@ enum Fixtures {
         return paths
     }
 }
-#endif

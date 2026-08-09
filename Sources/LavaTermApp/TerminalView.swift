@@ -2,8 +2,6 @@ import Foundation
 import LavaUI
 import LavaTermCore
 
-#if canImport(CxxCanvas)
-
 /// Full-window terminal surface: canvas paint + focus for keyboard.
 public struct TerminalView: View {
     let session: TerminalSession
@@ -197,5 +195,3 @@ struct TerminalCanvas: View {
 private func lavaColor(_ rgb: (r: Float, g: Float, b: Float)) -> Color {
     Color(r: rgb.r, g: rgb.g, b: rgb.b)
 }
-
-#endif

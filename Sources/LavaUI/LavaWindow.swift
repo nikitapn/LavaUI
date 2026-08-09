@@ -1,4 +1,3 @@
-#if canImport(CxxCanvas)
 import Foundation
 
 /// One window's worth of the frame loop: its layout tree, its draw arena, its
@@ -634,4 +633,3 @@ extension InvalidationLevel {
         }
     }
 }
-#endif

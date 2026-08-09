@@ -1,4 +1,3 @@
-#if canImport(CxxCanvas)
 import Foundation
 
 /// A hairline rule separating content.
@@ -65,5 +64,3 @@ public struct DividerStyle {
         self.color = color ?? theme.border
     }
 }
-
-#endif

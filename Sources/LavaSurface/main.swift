@@ -1,4 +1,3 @@
-#if canImport(CxxCanvas) && canImport(LavaIDL)
 import Foundation
 import LavaClient
 import LavaUI
@@ -106,6 +105,3 @@ Thread.detachNewThread {
 }
 
 LavaClient.run(editor: editor) { SurfaceDemoView() }
-#else
-print("LavaSurface needs CxxCanvas and the NPRPC control plane (Linux).")
-#endif

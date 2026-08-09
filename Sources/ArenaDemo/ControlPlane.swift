@@ -1,4 +1,3 @@
-#if canImport(CxxCanvas) && canImport(LavaIDL)
 import Foundation
 import LavaClient
 import LavaIDL
@@ -960,7 +959,3 @@ func startCompositorService(editor: Editor) throws -> Rpc {
     )
     return rpc
 }
-
-// ─── App side ────────────────────────────────────────────────────────────────
-
-#endif

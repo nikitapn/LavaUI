@@ -1,4 +1,3 @@
-#if canImport(CxxCanvas)
 import Foundation
 import LavaUI
 import TraceLoomCore
@@ -100,4 +99,3 @@ enum TraceLoomScenarios {
         ]
     }
 }
-#endif

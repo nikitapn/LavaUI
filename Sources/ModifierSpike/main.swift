@@ -11,7 +11,6 @@
 //             which has no single node to style?
 // Question 3: does the flexGrow-swallowing problem come back?
 
-#if canImport(CxxCanvas)
 import Foundation
 import LavaUI
 
@@ -126,6 +125,3 @@ report("Q4 flexGrow through a wrapper", n4, expectedBoxes: 2)
 print(n4.flexGrow > 0
     ? "   wrapper forwarded flexGrow — no swallow"
     : "   REGRESSION: wrapper swallowed flexGrow")
-#else
-print("spike needs CxxCanvas")
-#endif

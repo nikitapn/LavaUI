@@ -1,4 +1,3 @@
-#if canImport(CxxCanvas)
 import Foundation
 
 /// A clickable control whose hover and press feedback is owned by the renderer.
@@ -112,5 +111,3 @@ public struct ButtonStyle {
         self.duration = duration
     }
 }
-
-#endif

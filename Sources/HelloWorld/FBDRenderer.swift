@@ -1,8 +1,6 @@
 import FBDModel
 import LavaUI
 
-#if canImport(CxxCanvas)
-
 private enum FBDLayout {
     static let blockWidth: Float = 130
     static let headerHeight: Float = 22
@@ -102,5 +100,3 @@ func makeSampleDiagram() -> Diagram {
 
     return diagram
 }
-
-#endif

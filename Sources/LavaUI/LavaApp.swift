@@ -1,4 +1,3 @@
-#if canImport(CxxCanvas)
 import Foundation
 import CanvasResources
 
@@ -476,5 +475,3 @@ public enum LavaApp {
         }()
     }
 }
-
-#endif

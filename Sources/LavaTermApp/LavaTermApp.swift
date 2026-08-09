@@ -5,8 +5,6 @@ import LavaTermCore
 import LavaClient
 #endif
 
-#if canImport(CxxCanvas)
-
 /// LavaTerm — a minimal terminal emulator built with LavaUI.
 ///
 /// Architecture:
@@ -141,17 +139,3 @@ struct LavaTermApp {
         return nil
     }
 }
-
-#else
-
-@main
-struct LavaTermApp {
-    static func main() {
-        FileHandle.standardError.write(
-            Data("LavaTerm: requires Linux + CxxCanvas (Vulkan engine).\n".utf8)
-        )
-        exit(1)
-    }
-}
-
-#endif

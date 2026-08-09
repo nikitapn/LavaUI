@@ -178,8 +178,6 @@ Replace the generated source with something like
 import Foundation
 import LavaUI
 
-#if canImport(CxxCanvas)
-
 @main
 struct MyApp {
     static func main() {
@@ -194,19 +192,6 @@ struct MyApp {
     }
 }
 
-#else
-
-@main
-struct MyApp {
-    static func main() {
-        FileHandle.standardError.write(
-            Data("MyApp: LavaUI requires Linux + CxxCanvas (Vulkan).\n".utf8)
-        )
-        exit(1)
-    }
-}
-
-#endif
 ```
 
 ### 5. Build and run

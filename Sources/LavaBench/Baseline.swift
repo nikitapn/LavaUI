@@ -1,4 +1,3 @@
-#if canImport(CxxCanvas)
 import Foundation
 
 struct BaselineEntry: Codable {
@@ -138,4 +137,3 @@ enum BaselineCheck {
         return verdicts
     }
 }
-#endif

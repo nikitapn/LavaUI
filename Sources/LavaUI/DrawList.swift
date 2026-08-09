@@ -1,4 +1,3 @@
-#if canImport(CxxCanvas)
 import CxxCanvas
 import CYoga
 import Foundation
@@ -1986,5 +1985,3 @@ extension DrawList {
         }
     }
 }
-
-#endif

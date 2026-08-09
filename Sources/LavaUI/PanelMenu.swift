@@ -1,4 +1,3 @@
-#if canImport(CxxCanvas)
 import Foundation
 import LavaMenu
 
@@ -151,5 +150,3 @@ public final class PanelMenu {
         MenuID(String(itemId))
     }
 }
-
-#endif

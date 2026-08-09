@@ -1,4 +1,3 @@
-#if canImport(CxxCanvas)
 import Foundation
 
 /// The window's own chrome: the three controls a title bar used to own, and
@@ -434,12 +433,3 @@ extension View {
         WindowDragArea(content: self, doubleClickMaximizes: doubleClickMaximizes)
     }
 }
-
-#else
-
-extension View {
-    /// No-op without Yoga (stubs).
-    public func windowDrag(doubleClickMaximizes: Bool = true) -> Self { self }
-}
-
-#endif

@@ -1,4 +1,3 @@
-#if canImport(CxxCanvas)
 import Foundation
 
 /// Single-line editable text.
@@ -356,5 +355,3 @@ public enum ClipboardBridge {
     static func read() -> String { reader?() ?? "" }
     static func write(_ text: String) { writer?(text) }
 }
-
-#endif

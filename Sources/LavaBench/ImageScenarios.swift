@@ -1,4 +1,3 @@
-#if canImport(CxxCanvas)
 import Foundation
 import LavaUI
 
@@ -148,4 +147,3 @@ enum ImageScenarios {
         return scenarios
     }
 }
-#endif

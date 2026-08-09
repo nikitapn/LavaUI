@@ -1,4 +1,3 @@
-#if canImport(CxxCanvas)
 import CxxCanvas
 import Foundation
 
@@ -655,7 +654,6 @@ public struct ImportedMenuItem: Equatable, Sendable {
     /// -1 not checkable, 0 unchecked, 1 checked.
     public var checked: Int
 }
-#endif
 
 /// Identifies one window of an `Editor`.
 ///

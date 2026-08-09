@@ -1,4 +1,3 @@
-#if canImport(CxxCanvas) && canImport(LavaIDL)
 import Foundation
 import LavaClient
 import LavaIDL
@@ -266,6 +265,3 @@ Thread.detachNewThread {
 }
 
 LavaClient.run(editor: editor) { TaskbarView() }
-#else
-print("LavaTaskbar needs CxxCanvas and the NPRPC control plane (Linux).")
-#endif

@@ -1,4 +1,3 @@
-#if canImport(CxxCanvas) && canImport(LavaIDL)
 import CxxCanvas
 import Foundation
 import LavaClient
@@ -220,4 +219,3 @@ func runLavaUIClient() -> Never {
     ) else { exit(1) }
     LavaClient.run(editor: editor) { ClientDemoView(editor: editor) }
 }
-#endif

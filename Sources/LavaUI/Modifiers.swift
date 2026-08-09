@@ -1,4 +1,3 @@
-#if canImport(CxxCanvas)
 import CYoga
 import Foundation
 
@@ -409,5 +408,3 @@ extension ModifiedView {
         adding { $0.backdropBlurRadius = max(0.5, radius) }
     }
 }
-
-#endif

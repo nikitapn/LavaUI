@@ -1,4 +1,3 @@
-#if canImport(CxxCanvas)
 import Foundation
 
 /// Disclosure control: chevron + title in a rounded outline, content below when open.
@@ -104,5 +103,3 @@ public struct ExpandStyle {
         self.transition = transition
     }
 }
-
-#endif

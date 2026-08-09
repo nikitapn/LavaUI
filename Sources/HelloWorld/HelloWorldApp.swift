@@ -4,8 +4,6 @@ import LavaUI
 import LavaClient
 #endif
 
-#if canImport(CxxCanvas)
-
 /// Runs the LavaUI widget playground (`DemoExample`).
 @main
 struct HelloWorldApp {
@@ -162,17 +160,3 @@ struct HelloWorldApp {
         LavaApp.run(editor: editor, menu: menu, makeRoot: root)
     }
 }
-
-#else
-
-@main
-struct HelloWorldApp {
-    static func main() {
-        FileHandle.standardError.write(
-            Data("HelloWorld: LavaUI requires Linux + CxxCanvas (Vulkan engine).\n".utf8)
-        )
-        exit(1)
-    }
-}
-
-#endif

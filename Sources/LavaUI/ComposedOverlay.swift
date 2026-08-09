@@ -1,4 +1,3 @@
-#if canImport(CxxCanvas)
 import CYoga
 import Foundation
 
@@ -234,5 +233,3 @@ extension View {
         )
     }
 }
-
-#endif

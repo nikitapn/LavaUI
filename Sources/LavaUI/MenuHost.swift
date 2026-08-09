@@ -1,4 +1,3 @@
-#if canImport(CxxCanvas)
 import CxxCanvas
 import Foundation
 import LavaMenu
@@ -205,5 +204,3 @@ public final class MenuHost {
         editor.appMenuEndMenu()
     }
 }
-
-#endif

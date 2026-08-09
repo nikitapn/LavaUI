@@ -1,4 +1,3 @@
-#if canImport(CxxCanvas) && canImport(LavaIDL)
 import Foundation
 import LavaClient
 import LavaIDL
@@ -357,6 +356,3 @@ PointerState.onLeave = {
 }
 
 LavaClient.run(editor: editor) { DockView() }
-#else
-print("LavaDock needs CxxCanvas and the NPRPC control plane (Linux).")
-#endif

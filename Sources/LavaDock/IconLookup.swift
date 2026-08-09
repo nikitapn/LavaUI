@@ -1,4 +1,3 @@
-#if canImport(CxxCanvas) && canImport(LavaIDL)
 import Foundation
 
 /// Finding the picture that belongs to an application.
@@ -209,5 +208,3 @@ enum IconLookup {
         return nil
     }
 }
-
-#endif

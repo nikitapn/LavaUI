@@ -1,4 +1,3 @@
-#if canImport(CxxCanvas)
 import CYoga
 import Foundation
 
@@ -440,5 +439,3 @@ enum LazyGrid {
         }
     }
 }
-
-#endif

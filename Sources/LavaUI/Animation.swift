@@ -1,4 +1,3 @@
-#if canImport(CxxCanvas)
 import Foundation
 
 /// A value that can be interpolated between two endpoints.
@@ -273,5 +272,3 @@ public enum AnimationDriver {
         }
     }
 }
-
-#endif

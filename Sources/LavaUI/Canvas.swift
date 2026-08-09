@@ -1,4 +1,3 @@
-#if canImport(CxxCanvas)
 import Foundation
 
 /// Absolute layout box handed to a custom paint callback (window pixels).
@@ -241,5 +240,3 @@ extension LeafNode {
         }
     }
 }
-
-#endif

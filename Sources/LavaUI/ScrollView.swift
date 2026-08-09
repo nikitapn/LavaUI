@@ -1,4 +1,3 @@
-#if canImport(CxxCanvas)
 import CYoga
 import Foundation
 
@@ -268,5 +267,3 @@ final class ScrollNode: YogaBoxNode {
         contentNode.collectFrames(originX: originX, originY: originY, into: &frames)
     }
 }
-
-#endif

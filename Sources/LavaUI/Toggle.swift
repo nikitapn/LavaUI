@@ -1,4 +1,3 @@
-#if canImport(CxxCanvas)
 import Foundation
 
 /// A boolean switch with an animated knob.
@@ -219,5 +218,3 @@ extension LeafNode {
         ViewInvalidation.markNeedsRedraw()
     }
 }
-
-#endif

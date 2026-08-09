@@ -2,8 +2,6 @@ import Foundation
 import LavaUI
 import SpotifyCore
 
-#if canImport(CxxCanvas)
-
 /// LavaSpotify root: sidebar + main + player bar. UI only — no audio.
 struct Spotify: View {
     @Bindable var session: SpotifySession
@@ -740,5 +738,3 @@ struct Spotify: View {
         return "Connect · no device (start spotifyd)"
     }
 }
-
-#endif

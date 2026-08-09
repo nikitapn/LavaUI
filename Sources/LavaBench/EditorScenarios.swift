@@ -1,4 +1,3 @@
-#if canImport(CxxCanvas)
 import Foundation
 import LavaText
 import LavaUI
@@ -135,4 +134,3 @@ enum EditorScenarios {
         return scenarios
     }
 }
-#endif

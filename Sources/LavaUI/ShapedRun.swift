@@ -1,4 +1,3 @@
-#if canImport(CxxCanvas)
 import CxxCanvas
 import Foundation
 
@@ -126,5 +125,3 @@ extension UIFont {
         ShapedRun(text: line, glyphs: shape(line))
     }
 }
-
-#endif

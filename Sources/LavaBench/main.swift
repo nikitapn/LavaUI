@@ -1,4 +1,3 @@
-#if canImport(CxxCanvas)
 import Foundation
 import LavaUI
 
@@ -259,4 +258,3 @@ if baseline == nil {
 }
 
 exit(failures == 0 ? 0 : 1)
-#endif

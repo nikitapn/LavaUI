@@ -1,4 +1,3 @@
-#if canImport(CxxCanvas)
 import Foundation
 import LavaUI
 
@@ -157,4 +156,3 @@ enum BenchmarkRunner {
         )
     }
 }
-#endif

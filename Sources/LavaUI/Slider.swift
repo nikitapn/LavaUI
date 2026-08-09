@@ -1,4 +1,3 @@
-#if canImport(CxxCanvas)
 import Foundation
 
 /// A draggable value in a range.
@@ -260,5 +259,3 @@ extension LeafNode {
         ViewInvalidation.markNeedsRedraw()
     }
 }
-
-#endif

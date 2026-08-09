@@ -1,4 +1,3 @@
-#if canImport(CxxCanvas)
 import CYoga
 import Foundation
 
@@ -365,5 +364,3 @@ enum OverlayScan {
         }
     }
 }
-
-#endif

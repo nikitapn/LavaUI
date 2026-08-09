@@ -1,4 +1,3 @@
-#if canImport(CxxCanvas) && canImport(LavaIDL)
 import CxxCanvas
 import Foundation
 import LavaIDL
@@ -566,4 +565,3 @@ public enum LavaClient {
         exit(1)
     }
 }
-#endif

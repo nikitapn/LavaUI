@@ -1,4 +1,3 @@
-#if canImport(CxxCanvas)
 import Foundation
 import LavaText
 
@@ -66,4 +65,3 @@ public struct MarkdownView: PrimitiveView {
         leaf.label = "MarkdownView"
     }
 }
-#endif

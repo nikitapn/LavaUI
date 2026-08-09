@@ -1,4 +1,3 @@
-#if canImport(CxxCanvas)
 import Foundation
 
 public struct Vector3: Equatable, Sendable, Animatable,
@@ -1061,4 +1060,3 @@ private func pointInTriangle(_ x:Float,_ y:Float,_ a:SpatialProjectedVertex,_ b:
     let d3=(x-a.x)*(c.y-a.y)-(c.x-a.x)*(y-a.y)
     return !((d1 < 0 || d2 < 0 || d3 < 0) && (d1 > 0 || d2 > 0 || d3 > 0))
 }
-#endif

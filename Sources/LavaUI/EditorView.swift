@@ -1,4 +1,3 @@
-#if canImport(CxxCanvas)
 import Foundation
 
 /// Style palette for `EditorView`. Rules carry style *indices*; this maps them
@@ -380,5 +379,3 @@ extension LeafNode {
         return decorations.first { $0.range.overlaps(range) }
     }
 }
-
-#endif

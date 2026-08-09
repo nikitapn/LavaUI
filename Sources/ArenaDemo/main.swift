@@ -1,4 +1,3 @@
-#if canImport(CxxCanvas)
 import CxxCanvas
 import CanvasResources
 import Foundation
@@ -906,6 +905,3 @@ default:
     )
     exit(2)
 }
-#else
-print("ArenaDemo needs the CxxCanvas engine.")
-#endif

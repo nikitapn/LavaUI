@@ -1,4 +1,3 @@
-#if canImport(CxxCanvas)
 import Foundation
 import LavaUI
 import Observation
@@ -141,6 +140,3 @@ struct MirrorWindow: View {
 LavaApp.run(editor: editor) { MainWindow(model: model) }
 
 FileHandle.standardError.write(Data("two-window app exited\n".utf8))
-#else
-print("TwoWindows needs the CxxCanvas engine.")
-#endif

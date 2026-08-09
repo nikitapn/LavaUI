@@ -1,7 +1,5 @@
 import Foundation
 
-#if canImport(CxxCanvas)
-
 // MARK: - Image resource
 
 /// GPU texture handle for LavaUI `Image` views.
@@ -446,5 +444,3 @@ public struct Image: PrimitiveView {
         return height
     }
 }
-
-#endif

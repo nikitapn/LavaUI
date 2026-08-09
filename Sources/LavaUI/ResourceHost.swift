@@ -1,4 +1,3 @@
-#if canImport(CxxCanvas)
 import Foundation
 
 /// Who names the things that live on a GPU.
@@ -185,4 +184,3 @@ extension Editor: GPUResourceHost {
         set { remoteResources = newValue === self ? nil : newValue }
     }
 }
-#endif

@@ -2,8 +2,6 @@ import Foundation
 import LavaUI
 import SpotifyCore
 
-#if canImport(CxxCanvas)
-
 /// Async cover: network (`CoverCache`) then decode (`ImageStore`), placeholder
 /// while either is outstanding.
 ///
@@ -65,5 +63,3 @@ struct CoverArt: View {
         }
     }
 }
-
-#endif

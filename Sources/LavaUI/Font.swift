@@ -1,4 +1,3 @@
-#if canImport(CxxCanvas)
 import CxxCanvas
 import Foundation
 
@@ -861,5 +860,3 @@ public final class TextLayoutCache: @unchecked Sendable {
         return entry
     }
 }
-
-#endif

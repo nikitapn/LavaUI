@@ -1,4 +1,3 @@
-#if canImport(CxxCanvas)
 import Foundation
 import LavaUI
 
@@ -88,4 +87,3 @@ final class Harness {
         rec.stage("emit") { emit() }
     }
 }
-#endif

@@ -1,4 +1,3 @@
-#if canImport(CxxCanvas)
 import Foundation
 import LavaMenu
 
@@ -258,5 +257,3 @@ enum MenuShortcutLabel {
         }
     }
 }
-
-#endif
