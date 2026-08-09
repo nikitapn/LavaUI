@@ -1542,6 +1542,30 @@ void RenderWindow::replayDrawList(const canvas::DrawList &list, float viewW,
       state.extentKnown = true;
       state.lastSeen    = sceneReplayIndex_;
 
+      // The content may have got *shorter* than where this node is parked.
+      //
+      // Scroll position survives a change of content, deliberately — that is
+      // what lets a virtualized list emit a short band per frame without
+      // snapping to its top. But a node whose content is genuinely replaced by
+      // less of it (one page of a settings panel swapped for a smaller one) is
+      // then sitting past the end of everything there is, showing nothing, and
+      // nothing will correct it: the wheel clamps on the way *in*, so a page
+      // nobody scrolls again stays blank until they do.
+      //
+      // Clamped against the full extent rather than the emitted band, which is
+      // short on purpose while a virtualized producer catches up. Only the
+      // target moves; the step below carries `scrollY` to it and reports the
+      // new position, so the producer's own idea of the offset — what its hit
+      // testing and lazy mounting use — comes along the same way it always
+      // does.
+      const float travelY = std::max(0.f, state.contentH - node.h);
+      const float travelX = std::max(0.f, state.contentW - node.w);
+      if (state.targetY > travelY || state.targetX > travelX) {
+        state.targetY = std::min(state.targetY, travelY);
+        state.targetX = std::min(state.targetX, travelX);
+        sceneResume_  = true;
+      }
+
       // This publish may have extended how far the node can travel. It was
       // parked at the edge of the previous band with a target beyond it —
       // settled but not arrived — and nothing else will wake it, because
