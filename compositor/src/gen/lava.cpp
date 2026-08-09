@@ -190,6 +190,7 @@ struct lava_M7 {
   uint32_t _3;
   ::nprpc::flat::Boolean _4;
   ::nprpc::flat::String _5;
+  ::nprpc::flat::String _6;
 };
 
 class lava_M7_Direct {
@@ -222,6 +223,11 @@ public:
   auto _5() noexcept { return (::nprpc::flat::Span<char>)base()._5; }
   auto _5() const noexcept { return (::nprpc::flat::Span<const char>)base()._5; }
   auto _5_d() noexcept { return ::nprpc::flat::String_Direct1(buffer_, offset_ + offsetof(lava_M7, _5)); }
+  void _6(const char* str) { new (&base()._6) ::nprpc::flat::String(buffer_, str); }
+  void _6(const std::string& str) { new (&base()._6) ::nprpc::flat::String(buffer_, str); }
+  auto _6() noexcept { return (::nprpc::flat::Span<char>)base()._6; }
+  auto _6() const noexcept { return (::nprpc::flat::Span<const char>)base()._6; }
+  auto _6_d() noexcept { return ::nprpc::flat::String_Direct1(buffer_, offset_ + offsetof(lava_M7, _6)); }
 };
 
 struct lava_M8 {
@@ -673,13 +679,16 @@ bool check_1S2Fu323Fu324S5EWindowFrame6S(::nprpc::flat_buffer& buf, lava_M6_Dire
 check_failed:
   return false;
 }
-bool check_1S2EPanelEdge3Fu324Fb5S(::nprpc::flat_buffer& buf, lava_M7_Direct& ia) {
-  if (static_cast<std::uint32_t>(buf.size()) < ia.offset() + 28) goto check_failed;
+bool check_1S2EPanelEdge3Fu324Fb5S6S(::nprpc::flat_buffer& buf, lava_M7_Direct& ia) {
+  if (static_cast<std::uint32_t>(buf.size()) < ia.offset() + 36) goto check_failed;
   {
     if(!ia._1_d()._check_size_align(static_cast<std::uint32_t>(buf.size()))) goto check_failed;
   }
   {
     if(!ia._5_d()._check_size_align(static_cast<std::uint32_t>(buf.size()))) goto check_failed;
+  }
+  {
+    if(!ia._6_d()._check_size_align(static_cast<std::uint32_t>(buf.size()))) goto check_failed;
   }
   return true;
 check_failed:
@@ -1128,19 +1137,20 @@ Compositor::CreateSurfaceAsync(const std::string& arenaId, uint32_t width, uint3
   co_return __ret_value;
 }
 
-uint32_t Compositor::CreatePanel(const std::string& arenaId, const PanelEdge& edge, uint32_t thickness, bool reserve, const std::string& title) {
+uint32_t Compositor::CreatePanel(const std::string& arenaId, const PanelEdge& edge, uint32_t thickness, bool reserve, const std::string& title, const std::string& appId) {
   auto& __arena = ::nprpc::impl::tls_bump_arena();
   __arena.reset();
   ::nprpc::flat_buffer buf;
   buf.set_arena(&__arena);
   auto session = ::nprpc::impl::g_rpc->get_session(this->get_endpoint());
-  std::size_t __wire_size = 60;
+  std::size_t __wire_size = 68;
   __wire_size = ::nprpc::flat::grow_size(__wire_size, 1, static_cast<std::size_t>(arenaId.size()));
   __wire_size = ::nprpc::flat::grow_size(__wire_size, 1, static_cast<std::size_t>(title.size()));
+  __wire_size = ::nprpc::flat::grow_size(__wire_size, 1, static_cast<std::size_t>(appId.size()));
   if (!::nprpc::impl::g_rpc->prepare_zero_copy_buffer(session->ctx(), buf, __wire_size))
     buf.prepare(__wire_size);
   {
-    buf.commit(60);
+    buf.commit(68);
     static_cast<::nprpc::impl::Header*>(buf.data().data())->msg_id = ::nprpc::impl::MessageId::FunctionCall;
   static_cast<::nprpc::impl::Header*>(buf.data().data())->msg_type =::nprpc::impl::MessageType::Request;
   }
@@ -1155,6 +1165,7 @@ uint32_t Compositor::CreatePanel(const std::string& arenaId, const PanelEdge& ed
   _._3() = thickness;
   _._4() = reserve;
   _._5(title);
+  _._6(appId);
   static_cast<::nprpc::impl::Header*>(buf.data().data())->size = static_cast<uint32_t>(buf.size());
   session->send_receive(buf, this->get_timeout());
   auto std_reply = ::nprpc::impl::handle_standart_reply(buf);
@@ -1169,17 +1180,18 @@ uint32_t Compositor::CreatePanel(const std::string& arenaId, const PanelEdge& ed
 }
 
 ::nprpc::Task<uint32_t>
-Compositor::CreatePanelAsync(const std::string& arenaId, const PanelEdge& edge, uint32_t thickness, bool reserve, const std::string& title, std::stop_token st) {
+Compositor::CreatePanelAsync(const std::string& arenaId, const PanelEdge& edge, uint32_t thickness, bool reserve, const std::string& title, const std::string& appId, std::stop_token st) {
   if (st.stop_requested()) throw nprpc::OperationCancelled();
   ::nprpc::flat_buffer buf;
   auto session = ::nprpc::impl::g_rpc->get_session(this->get_endpoint());
-  std::size_t __wire_size = 60;
+  std::size_t __wire_size = 68;
   __wire_size = ::nprpc::flat::grow_size(__wire_size, 1, static_cast<std::size_t>(arenaId.size()));
   __wire_size = ::nprpc::flat::grow_size(__wire_size, 1, static_cast<std::size_t>(title.size()));
+  __wire_size = ::nprpc::flat::grow_size(__wire_size, 1, static_cast<std::size_t>(appId.size()));
   if (!::nprpc::impl::g_rpc->prepare_zero_copy_buffer(session->ctx(), buf, __wire_size))
     buf.prepare(__wire_size);
   {
-    buf.commit(60);
+    buf.commit(68);
     static_cast<::nprpc::impl::Header*>(buf.data().data())->msg_id = ::nprpc::impl::MessageId::FunctionCall;
   static_cast<::nprpc::impl::Header*>(buf.data().data())->msg_type =::nprpc::impl::MessageType::Request;
   }
@@ -1194,6 +1206,7 @@ Compositor::CreatePanelAsync(const std::string& arenaId, const PanelEdge& edge, 
   _._3() = thickness;
   _._4() = reserve;
   _._5(title);
+  _._6(appId);
   static_cast<::nprpc::impl::Header*>(buf.data().data())->size = static_cast<uint32_t>(buf.size());
   co_await session->send_receive_coro(buf, this->get_timeout(), std::move(st));
   auto std_reply = ::nprpc::impl::handle_standart_reply(buf);
@@ -2429,6 +2442,28 @@ void Compositor::ScrollUnclaimed(uint32_t surfaceId, float dx, float dy) {
   ::nprpc::impl::g_rpc->send_unreliable(this->get_endpoint(), std::move(buf));
 }
 
+void Compositor::Heartbeat(uint32_t surfaceId) {
+  ::nprpc::flat_buffer buf;
+  auto session = ::nprpc::impl::g_rpc->get_session(this->get_endpoint());
+  std::size_t __wire_size = 36;
+  if (!::nprpc::impl::g_rpc->prepare_zero_copy_buffer(session->ctx(), buf, __wire_size))
+    buf.prepare(__wire_size);
+  {
+    buf.commit(36);
+    static_cast<::nprpc::impl::Header*>(buf.data().data())->msg_id = ::nprpc::impl::MessageId::FunctionCall;
+  static_cast<::nprpc::impl::Header*>(buf.data().data())->msg_type =::nprpc::impl::MessageType::Request;
+  }
+  ::nprpc::impl::flat::CallHeader_Direct __ch(buf, sizeof(::nprpc::impl::Header));
+  __ch.object_id() = this->object_id();
+  __ch.poa_idx() = this->poa_idx();
+  __ch.interface_idx() = interface_idx_;
+  __ch.function_idx() = 26;
+  lava_M2_Direct _(buf,32);
+  _._1() = surfaceId;
+  static_cast<::nprpc::impl::Header*>(buf.data().data())->size = static_cast<uint32_t>(buf.size());
+  ::nprpc::impl::g_rpc->send_unreliable(this->get_endpoint(), std::move(buf));
+}
+
 std::pair<::nprpc::StreamWriter<InputAck>, ::nprpc::StreamReader<InputEvent>> Compositor::SubscribeInput(uint32_t surfaceId) {
   auto session = ::nprpc::impl::g_rpc->get_session(this->get_endpoint());
   auto stream_id = ::nprpc::impl::StreamManager::generate_stream_id();
@@ -2445,7 +2480,7 @@ std::pair<::nprpc::StreamWriter<InputAck>, ::nprpc::StreamReader<InputEvent>> Co
   init.poa_idx() = this->poa_idx();
   init.interface_idx() = interface_idx_;
   init.object_id() = this->object_id();
-  init.func_idx() = 26;
+  init.func_idx() = 27;
   init.stream_kind() = ::nprpc::impl::StreamKind::Bidi;
   init.initial_credits() = ::nprpc::impl::StreamManager::kDefaultReaderWindow;
   lava_M2_Direct _(buf,48);
@@ -2478,7 +2513,7 @@ std::vector<std::string> Compositor::TakeDroppedPaths(uint32_t surfaceId) {
   __ch.object_id() = this->object_id();
   __ch.poa_idx() = this->poa_idx();
   __ch.interface_idx() = interface_idx_;
-  __ch.function_idx() = 27;
+  __ch.function_idx() = 28;
   lava_M2_Direct _(buf,32);
   _._1() = surfaceId;
   static_cast<::nprpc::impl::Header*>(buf.data().data())->size = static_cast<uint32_t>(buf.size());
@@ -2519,7 +2554,7 @@ Compositor::TakeDroppedPathsAsync(uint32_t surfaceId, std::stop_token st) {
   __ch.object_id() = this->object_id();
   __ch.poa_idx() = this->poa_idx();
   __ch.interface_idx() = interface_idx_;
-  __ch.function_idx() = 27;
+  __ch.function_idx() = 28;
   lava_M2_Direct _(buf,32);
   _._1() = surfaceId;
   static_cast<::nprpc::impl::Header*>(buf.data().data())->size = static_cast<uint32_t>(buf.size());
@@ -2561,7 +2596,7 @@ Capture Compositor::CaptureSurface(uint32_t surfaceId, int32_t x, int32_t y, int
   __ch.object_id() = this->object_id();
   __ch.poa_idx() = this->poa_idx();
   __ch.interface_idx() = interface_idx_;
-  __ch.function_idx() = 28;
+  __ch.function_idx() = 29;
   lava_M21_Direct _(buf,32);
   _._1() = surfaceId;
   _._2() = x;
@@ -2605,7 +2640,7 @@ Compositor::CaptureSurfaceAsync(uint32_t surfaceId, int32_t x, int32_t y, int32_
   __ch.object_id() = this->object_id();
   __ch.poa_idx() = this->poa_idx();
   __ch.interface_idx() = interface_idx_;
-  __ch.function_idx() = 28;
+  __ch.function_idx() = 29;
   lava_M21_Direct _(buf,32);
   _._1() = surfaceId;
   _._2() = x;
@@ -2650,7 +2685,7 @@ std::string Compositor::GetClipboard(uint32_t surfaceId) {
   __ch.object_id() = this->object_id();
   __ch.poa_idx() = this->poa_idx();
   __ch.interface_idx() = interface_idx_;
-  __ch.function_idx() = 29;
+  __ch.function_idx() = 30;
   lava_M2_Direct _(buf,32);
   _._1() = surfaceId;
   static_cast<::nprpc::impl::Header*>(buf.data().data())->size = static_cast<uint32_t>(buf.size());
@@ -2683,7 +2718,7 @@ Compositor::GetClipboardAsync(uint32_t surfaceId, std::stop_token st) {
   __ch.object_id() = this->object_id();
   __ch.poa_idx() = this->poa_idx();
   __ch.interface_idx() = interface_idx_;
-  __ch.function_idx() = 29;
+  __ch.function_idx() = 30;
   lava_M2_Direct _(buf,32);
   _._1() = surfaceId;
   static_cast<::nprpc::impl::Header*>(buf.data().data())->size = static_cast<uint32_t>(buf.size());
@@ -2718,7 +2753,7 @@ void Compositor::SetClipboard(uint32_t surfaceId, const std::string& text) {
   __ch.object_id() = this->object_id();
   __ch.poa_idx() = this->poa_idx();
   __ch.interface_idx() = interface_idx_;
-  __ch.function_idx() = 30;
+  __ch.function_idx() = 31;
   lava_M23_Direct _(buf,32);
   _._1() = surfaceId;
   _._2(text);
@@ -2749,7 +2784,7 @@ Compositor::SetClipboardAsync(uint32_t surfaceId, const std::string& text, std::
   __ch.object_id() = this->object_id();
   __ch.poa_idx() = this->poa_idx();
   __ch.interface_idx() = interface_idx_;
-  __ch.function_idx() = 30;
+  __ch.function_idx() = 31;
   lava_M23_Direct _(buf,32);
   _._1() = surfaceId;
   _._2(text);
@@ -2786,7 +2821,7 @@ void ICompositor_Servant::dispatch(::nprpc::SessionContext& ctx, [[maybe_unused]
         ctx.stream_manager->start_task_after_reply(init.stream_id(), std::move(__task));
         break;
       }
-      case 26: {
+      case 27: {
         lava_M2_Direct ia(*ctx.rx_buffer, 48);
         if ( !check_1Fu32(*ctx.rx_buffer, ia) ) {
           ::nprpc::impl::make_simple_answer(ctx, ::nprpc::impl::MessageId::Error_BadInput);
@@ -3008,13 +3043,13 @@ void ICompositor_Servant::dispatch(::nprpc::SessionContext& ctx, [[maybe_unused]
     case 5: {
       assert(ctx.rx_buffer != nullptr);
       lava_M7_Direct ia(*ctx.rx_buffer, 32);
-      if ( !check_1S2EPanelEdge3Fu324Fb5S(*ctx.rx_buffer, ia) ) {
+      if ( !check_1S2EPanelEdge3Fu324Fb5S6S(*ctx.rx_buffer, ia) ) {
         ::nprpc::impl::make_simple_answer(ctx, ::nprpc::impl::MessageId::Error_BadInput);
         break;
       }
       uint32_t __ret_val;
       try {
-        __ret_val = CreatePanel(ia._1(), ia._2(), ia._3(), ia._4(), ia._5());
+        __ret_val = CreatePanel(ia._1(), ia._2(), ia._3(), ia._4(), ia._5(), ia._6());
       }
       catch(::lava::ArenaNotFound& e) {
         assert(ctx.tx_buffer != nullptr);
@@ -3589,7 +3624,16 @@ void ICompositor_Servant::dispatch(::nprpc::SessionContext& ctx, [[maybe_unused]
       ScrollUnclaimed(ia._1(), ia._2(), ia._3());
       break;
     }
-    case 27: {
+    case 26: {
+      assert(ctx.rx_buffer != nullptr);
+      lava_M2_Direct ia(*ctx.rx_buffer, 32);
+      if ( !check_1Fu32(*ctx.rx_buffer, ia) ) {
+        break;
+      }
+      Heartbeat(ia._1());
+      break;
+    }
+    case 28: {
       assert(ctx.rx_buffer != nullptr);
       lava_M2_Direct ia(*ctx.rx_buffer, 32);
       if ( !check_1Fu32(*ctx.rx_buffer, ia) ) {
@@ -3643,7 +3687,7 @@ void ICompositor_Servant::dispatch(::nprpc::SessionContext& ctx, [[maybe_unused]
       static_cast<::nprpc::impl::Header*>(obuf.data().data())->msg_type = ::nprpc::impl::MessageType::Answer;
       break;
     }
-    case 28: {
+    case 29: {
       assert(ctx.rx_buffer != nullptr);
       lava_M21_Direct ia(*ctx.rx_buffer, 32);
       if ( !check_1Fu322Fi323Fi324Fi325Fi326Fi32(*ctx.rx_buffer, ia) ) {
@@ -3704,7 +3748,7 @@ void ICompositor_Servant::dispatch(::nprpc::SessionContext& ctx, [[maybe_unused]
       static_cast<::nprpc::impl::Header*>(obuf.data().data())->msg_type = ::nprpc::impl::MessageType::Answer;
       break;
     }
-    case 29: {
+    case 30: {
       assert(ctx.rx_buffer != nullptr);
       lava_M2_Direct ia(*ctx.rx_buffer, 32);
       if ( !check_1Fu32(*ctx.rx_buffer, ia) ) {
@@ -3746,7 +3790,7 @@ void ICompositor_Servant::dispatch(::nprpc::SessionContext& ctx, [[maybe_unused]
       static_cast<::nprpc::impl::Header*>(obuf.data().data())->msg_type = ::nprpc::impl::MessageType::Answer;
       break;
     }
-    case 30: {
+    case 31: {
       assert(ctx.rx_buffer != nullptr);
       lava_M23_Direct ia(*ctx.rx_buffer, 32);
       if ( !check_1Fu322S(*ctx.rx_buffer, ia) ) {

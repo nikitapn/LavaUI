@@ -28,6 +28,7 @@
 #include "config.hpp"
 #include "decoration.hpp"
 #include "control_plane.hpp"
+#include "shell.hpp"
 #include "wlr.hpp"
 
 extern char **environ;
@@ -1596,7 +1597,8 @@ class SurfaceRegistry : public lava::CompositorHost {
 
   uint32_t createPanel(const std::string &arenaId, uint32_t edge,
                        uint32_t thickness, bool reserve,
-                       const std::string &title) override {
+                       const std::string &title,
+                       const std::string &appId) override {
     if (outputWidth_ == 0 || outputHeight_ == 0 || workspaces_ == nullptr) {
       wlr_log(WLR_ERROR, "panel: no output yet");
       return 0;
@@ -1615,6 +1617,7 @@ class SurfaceRegistry : public lava::CompositorHost {
     ClientSurface *panel = find(id);
     panel->panel = true;
     panel->edge = edge;
+    panel->appId = appId;
     // A panel that reserves, reserves all of itself — the strip it draws is
     // the strip it is owed. Only `SetPanelThickness` can make the two differ,
     // and only for as long as something is open.
@@ -2031,6 +2034,18 @@ class SurfaceRegistry : public lava::CompositorHost {
     surface->canvas->scrollUnclaimed(dx, dy);
   }
 
+  void heartbeat(uint32_t id) override {
+    if (shell_ == nullptr) return;
+    // Resolved to an application here rather than in the supervisor: this is
+    // the side that knows what a surface is. Every client sends these and only
+    // the two the compositor started are watched, so the usual answer is that
+    // nothing matches and nothing happens.
+    const ClientSurface *surface = find(id);
+    if (surface != nullptr) shell_->heartbeat(surface->appId);
+  }
+
+  void bind(lava::ShellSupervisor *shell) { shell_ = shell; }
+
   bool captureSurface(uint32_t id, int32_t x, int32_t y, int32_t w, int32_t h,
                       int32_t maxSide, std::vector<uint8_t> &outPng,
                       uint32_t &outW, uint32_t &outH) override {
@@ -2253,6 +2268,7 @@ class SurfaceRegistry : public lava::CompositorHost {
   lava::ControlPlane *control_ = nullptr;
   Server *server_ = nullptr;
   /// Window corner radius in pixels, from the config. 0 is square.
+  lava::ShellSupervisor *shell_ = nullptr;
   float cornerRadius_ = 0.f;
   /// Shadow reach in pixels; 0 turns shadows off. See `applyShadow`.
   float shadowBlur_ = 0.f;
@@ -4137,6 +4153,11 @@ int main() {
     sigset_t mask;
     sigemptyset(&mask);
     sigaddset(&mask, SIGHUP);
+    // SIGCHLD for the same reason, and it matters more: the compositor is the
+    // parent of the panel and the dock, and `ShellSupervisor` learns one died
+    // by reading this off the loop's signalfd. Unblocked, the default
+    // disposition discards it and a crashed dock never comes back.
+    sigaddset(&mask, SIGCHLD);
     pthread_sigmask(SIG_BLOCK, &mask, nullptr);
   }
 
@@ -4328,8 +4349,34 @@ int main() {
   // launched from here inherits the right socket without being told.
   setenv("WAYLAND_DISPLAY", socket, 1);
 
+  // The desktop's own parts, last: they are clients, and everything a client
+  // needs — the socket above, the control plane, an output to be laid out
+  // against — exists by now. Started here rather than by a session manager
+  // because they are not a choice (see `shell.hpp`).
+  lava::ShellSupervisor shell;
+  surfaces.bind(&shell);
+  if (server.config.shell.enabled && std::getenv("LAVA_NO_SHELL") == nullptr) {
+    std::vector<lava::ShellComponent> components;
+    const auto want = [](const std::string &program) {
+      return !program.empty() && program != "off" && program != "none";
+    };
+    if (want(server.config.shell.panel)) {
+      components.push_back({"panel", server.config.shell.panel, {}});
+    }
+    if (want(server.config.shell.dock)) {
+      components.push_back({"dock", server.config.shell.dock, {}});
+    }
+    shell.start(wl_display_get_event_loop(server.display), std::move(components));
+  } else {
+    wlr_log(WLR_INFO, "shell: not starting anything (disabled)");
+  }
+
   std::cout << "Compositor running on WAYLAND_DISPLAY=" << socket << '\n';
   wl_display_run(server.display);
+  // Before the clients are destroyed: they are our children, and a component
+  // told to go while its socket still works exits cleanly rather than dying of
+  // a broken connection.
+  shell.stop();
   wl_display_destroy_clients(server.display);
   wl_display_destroy(server.display);
   return EXIT_SUCCESS;

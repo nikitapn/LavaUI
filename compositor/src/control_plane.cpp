@@ -490,11 +490,13 @@ class CompositorImpl final : public ICompositor_Servant {
 
   uint32_t CreatePanel(nprpc::flat::Span<char> arenaId, PanelEdge edge,
                        uint32_t thickness, nprpc::flat::Boolean reserve,
-                       nprpc::flat::Span<char> title) override {
+                       nprpc::flat::Span<char> title,
+                       nprpc::flat::Span<char> appId) override {
     const std::string arena{arenaId};
     const uint32_t id =
         host_.createPanel(arena, static_cast<uint32_t>(edge), thickness,
-                          static_cast<bool>(reserve), std::string{title});
+                          static_cast<bool>(reserve), std::string{title},
+                          std::string{appId});
     if (id == 0) throw ArenaNotFound(arena);
     return id;
   }
@@ -757,6 +759,8 @@ class CompositorImpl final : public ICompositor_Servant {
   }
 
   void Present(uint32_t surfaceId) override { host_.present(surfaceId); }
+
+  void Heartbeat(uint32_t surfaceId) override { host_.heartbeat(surfaceId); }
 
   void ScrollUnclaimed(uint32_t surfaceId, float dx, float dy) override {
     host_.scrollUnclaimed(surfaceId, dx, dy);

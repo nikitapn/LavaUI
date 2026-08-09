@@ -108,6 +108,25 @@ struct Setting {
   std::string value;
 };
 
+/// Which parts of the desktop the compositor starts and keeps running.
+///
+/// Deliberately thin. These are not a choice of panel — they are this
+/// desktop's panel and dock, started the way Xwayland is, and the only reason
+/// they are configurable at all is that a developer needs to run one by hand
+/// sometimes and a packager needs to say where they live. There is no
+/// mechanism here for assembling a session out of parts, because a session
+/// that can come up without a dock is a session that will.
+struct ShellConfig {
+  /// Program names or paths. Empty, or the word `off`, means "do not start
+  /// this one" — which is what a developer running it under a debugger wants.
+  std::string panel = "LavaTaskbar";
+  std::string dock = "LavaDock";
+
+  /// Whether to start anything at all. `LAVA_NO_SHELL=1` in the environment
+  /// says the same thing without editing a file, for a one-off run.
+  bool enabled = true;
+};
+
 struct Config {
   /// `WLR_RENDERER`: "vulkan", "gles2", "pixman". Empty lets wlroots choose.
   std::string renderer;
@@ -121,6 +140,7 @@ struct Config {
 
   KeyboardConfig keyboard;
   AppearanceConfig appearance;
+  ShellConfig shell;
   std::vector<OutputConfig> outputs;
 
   /// Where the file lives: `$LAVA_CONFIG`, else

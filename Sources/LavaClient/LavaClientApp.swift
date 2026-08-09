@@ -336,7 +336,8 @@ public enum LavaClient {
                     return try await compositor.createPanel(
                         arenaId: arenaID, edge: panel.edge,
                         thickness: UInt32(panel.thickness),
-                        reserve: panel.reserve, title: title
+                        reserve: panel.reserve, title: title,
+                        appId: Self.appId
                     )
                 }
                 return try await compositor.createSurface(
@@ -509,6 +510,8 @@ public enum LavaClient {
             exit(0)
         }
 
+        startHeartbeat(compositor)
+
         let banner = "client up — surface \(surfaceID), arena '\(arenaID)' "
             + "(\(sink.mappedBytes / 1024) KiB), "
             + "corner radius \(Int(WindowBridge.desktopCornerRadius))\n"
@@ -550,6 +553,42 @@ public enum LavaClient {
     /// The `Rpc` owns the transport — the shared-memory listener, its ring
     /// buffers, the worker threads — and dropping it tears all of that down.
     nonisolated(unsafe) private static var runtime: Rpc?
+
+    /// How often to say "still drawing". The compositor waits several of
+    /// these before concluding anything, so this is a cheap number rather than
+    /// a tuned one: six datagrams a minute, no reply, no round trip.
+    private static let heartbeatInterval: TimeInterval = 2
+
+    /// Tells the compositor this client is still drawing, for as long as it is.
+    ///
+    /// The beat is sent from the **frame loop**, not from the thread that
+    /// times it, and that is the whole design. A timer thread proves the
+    /// process exists — which the compositor can already see, since it is the
+    /// parent — while a beat that has to pass through `MainQueue` proves the
+    /// loop that draws is still turning. An app deadlocked in its own view
+    /// tree looks perfectly healthy to `waitpid` and stops beating here.
+    ///
+    /// Every client does this; only the components the compositor started are
+    /// watched, and a client is not told which it is. That keeps the rule
+    /// simple — there is no supervised mode to get wrong — at the cost of a
+    /// datagram every two seconds from windows nobody is watching.
+    private static func startHeartbeat(_ compositor: Compositor) {
+        let surface = surfaceID
+        guard surface != 0 else { return }
+        Thread.detachNewThread {
+            while true {
+                Thread.sleep(forTimeInterval: heartbeatInterval)
+                MainQueue.async {
+                    // Inside the queue: reaching here is the fact being
+                    // reported. `[unreliable]`, so this neither waits for a
+                    // reply nor blocks the loop it is running on.
+                    Task.detached {
+                        await compositor.heartbeat(surfaceId: surface)
+                    }
+                }
+            }
+        }
+    }
 
     /// Runs a control-plane call whose failure is worth saying and not worth
     /// crashing over. A window that would not maximize is a bad frame, not a

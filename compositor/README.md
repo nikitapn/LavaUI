@@ -30,6 +30,33 @@ The development account is `dev` with password `dev`. SSH is forwarded only to
 localhost on port 2222. This deliberately convenient configuration is for an
 isolated development VM, not production.
 
+## The shell
+
+The compositor starts the panel and the dock itself, once the Wayland socket
+and the control plane are up, and keeps them running. Not a session manager
+reading autostart files — these are as much part of this desktop as the window
+frames are, and a session that came up without them would be a bug rather than
+a configuration.
+
+Two failures, handled separately because they look nothing alike. A component
+that **ends** is seen through `SIGCHLD`, which the compositor gets because it
+is the parent. A component that is **still running and has stopped drawing** is
+invisible to the operating system, so clients say so themselves: every LavaUI
+client sends `Heartbeat` every two seconds, from inside its frame loop rather
+than from the thread that times it — a beat that has to pass through the loop
+that draws is the only kind that proves the loop is turning. Miss enough of
+them and the component is asked to go, then made to.
+
+Either way it comes back, after a delay that grows if it keeps happening
+(250 ms → 20 s) and with a point past which the compositor stops trying and
+says why. Only the components it started are watched; every other client sends
+heartbeats too and they are ignored, so there is no supervised mode for a
+client to get wrong.
+
+`[shell]` in the config points them elsewhere or turns one off, and
+`LAVA_NO_SHELL=1` turns the lot off for one run — which is what you want when
+running the dock under a debugger.
+
 ## Configuration
 
 `$LAVA_CONFIG`, else `$XDG_CONFIG_HOME/lava/lava.conf`, else

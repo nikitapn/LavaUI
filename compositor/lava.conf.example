@@ -89,6 +89,30 @@ repeat-rate = 25
 repeat-delay = 600
 
 
+[shell]
+
+# The desktop's own parts, started by the compositor and kept running.
+#
+# Not a choice of panel — these *are* this desktop's panel and dock, started
+# the way Xwayland is. What you can do here is point them somewhere else or
+# turn one off, which is what a developer running one under a debugger wants:
+#
+#     panel = off          # do not start it; run it by hand
+#     dock  = /opt/bin/MyDock
+#
+# A bare name is looked for next to the compositor binary, then in this repo's
+# SwiftPM build directory, then on PATH. `LAVA_NO_SHELL=1` in the environment
+# turns the whole thing off for one run without editing this file.
+#
+# If one of them crashes it is restarted, with a delay that grows if it keeps
+# happening and a point past which the compositor stops trying and says so. If
+# one stops *drawing* while still running, it is restarted too — clients send
+# a heartbeat from their frame loop, so a wedged panel is not mistaken for a
+# quiet one.
+panel = LavaTaskbar
+dock = LavaDock
+
+
 [appearance]
 
 # How the desktop looks, as opposed to what the machine is — the odd section

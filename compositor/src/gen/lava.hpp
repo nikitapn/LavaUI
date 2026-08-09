@@ -1049,7 +1049,7 @@ public:
   virtual ImageInfo RegisterImageData (::nprpc::flat::Span<uint8_t> bytes, uint32_t maxPixelSize) = 0;
   virtual void ReleaseImage (uint32_t id) = 0;
   virtual uint32_t CreateSurface (::nprpc::flat::Span<char> arenaId, uint32_t width, uint32_t height, ::nprpc::flat::Span<char> title, WindowFrame frame, ::nprpc::flat::Span<char> appId) = 0;
-  virtual uint32_t CreatePanel (::nprpc::flat::Span<char> arenaId, PanelEdge edge, uint32_t thickness, ::nprpc::flat::Boolean reserve, ::nprpc::flat::Span<char> title) = 0;
+  virtual uint32_t CreatePanel (::nprpc::flat::Span<char> arenaId, PanelEdge edge, uint32_t thickness, ::nprpc::flat::Boolean reserve, ::nprpc::flat::Span<char> title, ::nprpc::flat::Span<char> appId) = 0;
   virtual void BeginMove (uint32_t surfaceId) = 0;
   virtual bool ToggleMaximize (uint32_t surfaceId) = 0;
   virtual void Minimize (uint32_t surfaceId) = 0;
@@ -1070,6 +1070,7 @@ public:
   virtual void DestroySurface (uint32_t surfaceId) = 0;
   virtual void Present (uint32_t surfaceId) = 0;
   virtual void ScrollUnclaimed (uint32_t surfaceId, float dx, float dy) = 0;
+  virtual void Heartbeat (uint32_t surfaceId) = 0;
   virtual ::nprpc::Task<> SubscribeInput (uint32_t surfaceId, ::nprpc::BidiStream<InputAck, InputEvent> stream) = 0;
   virtual std::vector<std::string> TakeDroppedPaths (uint32_t surfaceId) = 0;
   virtual Capture CaptureSurface (uint32_t surfaceId, int32_t x, int32_t y, int32_t w, int32_t h, int32_t maxSide) = 0;
@@ -1095,8 +1096,8 @@ public:
   ::nprpc::Task<void> ReleaseImageAsync (uint32_t id, std::stop_token st = {});
   uint32_t CreateSurface (const std::string& arenaId, uint32_t width, uint32_t height, const std::string& title, const WindowFrame& frame, const std::string& appId);
   ::nprpc::Task<uint32_t> CreateSurfaceAsync (const std::string& arenaId, uint32_t width, uint32_t height, const std::string& title, const WindowFrame& frame, const std::string& appId, std::stop_token st = {});
-  uint32_t CreatePanel (const std::string& arenaId, const PanelEdge& edge, uint32_t thickness, bool reserve, const std::string& title);
-  ::nprpc::Task<uint32_t> CreatePanelAsync (const std::string& arenaId, const PanelEdge& edge, uint32_t thickness, bool reserve, const std::string& title, std::stop_token st = {});
+  uint32_t CreatePanel (const std::string& arenaId, const PanelEdge& edge, uint32_t thickness, bool reserve, const std::string& title, const std::string& appId);
+  ::nprpc::Task<uint32_t> CreatePanelAsync (const std::string& arenaId, const PanelEdge& edge, uint32_t thickness, bool reserve, const std::string& title, const std::string& appId, std::stop_token st = {});
   void BeginMove (uint32_t surfaceId);
   ::nprpc::Task<void> BeginMoveAsync (uint32_t surfaceId, std::stop_token st = {});
   bool ToggleMaximize (uint32_t surfaceId);
@@ -1133,6 +1134,7 @@ public:
   ::nprpc::Task<void> DestroySurfaceAsync (uint32_t surfaceId, std::stop_token st = {});
   void Present (uint32_t surfaceId);
   void ScrollUnclaimed (uint32_t surfaceId, float dx, float dy);
+  void Heartbeat (uint32_t surfaceId);
   std::pair<::nprpc::StreamWriter<InputAck>, ::nprpc::StreamReader<InputEvent>> SubscribeInput (uint32_t surfaceId);
   std::vector<std::string> TakeDroppedPaths (uint32_t surfaceId);
   ::nprpc::Task<std::vector<std::string>> TakeDroppedPathsAsync (uint32_t surfaceId, std::stop_token st = {});

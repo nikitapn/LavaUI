@@ -97,6 +97,7 @@ executable(
   'src/canvas_surface.cpp',
   'src/config.cpp',
   'src/decoration.cpp',
+  'src/shell.cpp',
   lava_idl_sources,
   protocol_headers,
   dependencies: [

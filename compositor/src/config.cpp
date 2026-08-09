@@ -211,6 +211,16 @@ Config Config::load(const std::string &path) {
       } else {
         known = false;
       }
+    } else if (section == "shell") {
+      if (key == "panel") {
+        config.shell.panel = value;
+      } else if (key == "dock") {
+        config.shell.dock = value;
+      } else if (key == "enabled") {
+        config.shell.enabled = parseBool(value, true);
+      } else {
+        known = false;
+      }
     } else if (section == "output" && !config.outputs.empty()) {
       OutputConfig &output = config.outputs.back();
       if (key == "mode" || key == "resolution") {

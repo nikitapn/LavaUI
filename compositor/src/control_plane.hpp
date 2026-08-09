@@ -98,7 +98,8 @@ struct CompositorHost {
   /// not exist. `reserve` asks that windows be laid out around it.
   virtual uint32_t createPanel(const std::string &arenaId, uint32_t edge,
                                uint32_t thickness, bool reserve,
-                               const std::string &title) = 0;
+                               const std::string &title,
+                               const std::string &appId) = 0;
 
   virtual bool destroySurface(uint32_t surfaceId) = 0;
   virtual bool surfaceExists(uint32_t surfaceId) const = 0;
@@ -249,6 +250,11 @@ struct CompositorHost {
 
   /// A wheel notch the client's own tree declined. See `ScrollUnclaimed`.
   virtual void scrollUnclaimed(uint32_t surfaceId, float dx, float dy) = 0;
+
+  /// "This surface is still drawing." Only the components the compositor
+  /// started are watched; for everything else this is a no-op. See
+  /// `Heartbeat` in the IDL.
+  virtual void heartbeat(uint32_t surfaceId) = 0;
 
   /// PNG of what is on screen for this surface. False if there was nothing to
   /// read back.

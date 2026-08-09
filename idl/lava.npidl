@@ -549,9 +549,13 @@ interface Compositor {
   /// requested size it is a request — the real one arrives as the opening
   /// `Resize` on the input stream, which is also how a panel learns its length
   /// and how it hears about the screen being resized.
+  ///
+  /// `appId` names the application, the way it does on `CreateSurface`: a
+  /// panel is not in the window list, but it is how the compositor recognises
+  /// a component it started when that component says it is still drawing.
   u32 CreatePanel(arenaId: in string, edge: in PanelEdge,
                   thickness: in u32, reserve: in boolean,
-                  title: in string) raises(ArenaNotFound);
+                  title: in string, appId: in string) raises(ArenaNotFound);
 
   // ─── Window state ──────────────────────────────────────────────────────
   //
@@ -842,6 +846,33 @@ interface Compositor {
   /// costs a few pixels of travel rather than a wrong position. It also keeps
   /// the wheel — which arrives in bursts — off the client's blocking path.
   [unreliable] void ScrollUnclaimed(surfaceId: in u32, dx: in f32, dy: in f32);
+
+  /// "I am still drawing."
+  ///
+  /// For the components the compositor starts and keeps running — the panel
+  /// and the dock. It already learns when one of them *dies*: the process is
+  /// its child, and the shared-memory session is reaped when the peer goes. A
+  /// shell that is still a process and no longer a shell is the case that
+  /// needs saying out loud — wedged on a lock, stuck in a call that never
+  /// returns, alive in every way the operating system can see and not drawing
+  /// anything. A desktop where the dock stopped responding and nothing
+  /// noticed is worse than one where it crashed, because a crash gets fixed
+  /// by restarting it and this does not.
+  ///
+  /// Sent from the client's **frame loop**, which is the point. A heartbeat
+  /// from a timer thread proves the process exists, which the compositor
+  /// could already see; one that has to pass through the loop that draws
+  /// proves the thing the compositor actually cares about.
+  ///
+  /// `[unreliable]`, for the reason `Present` is, and because the whole cost
+  /// of this feature should be one datagram every couple of seconds: a lost
+  /// beat is not a lost fact, since the next one carries the same one, and
+  /// the compositor waits several before concluding anything.
+  ///
+  /// Every LavaUI client sends these; the compositor keeps them only for
+  /// surfaces belonging to something it started. A client is not told whether
+  /// it is supervised, and should not behave differently if it is.
+  [unreliable] void Heartbeat(surfaceId: in u32);
 
   // ─── Input ─────────────────────────────────────────────────────────────
 
