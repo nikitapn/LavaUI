@@ -17,6 +17,20 @@ public final class TerminalScreen: @unchecked Sendable {
     /// the switch happened without reading private storage.
     public private(set) var onAlternateScreen: Bool = false
 
+    /// Last OSC 0/1/2 title the shell sent. Empty until the first one.
+    public private(set) var windowTitle: String = ""
+    /// Last OSC 7 working directory (filesystem path). Empty until reported.
+    public private(set) var workingDirectory: String = ""
+
+    /// How many lines above the live screen the view is currently showing.
+    /// Zero is "follow the bottom"; positive means the user has scrolled up
+    /// into history. The alternate screen has no history, so this stays 0 there.
+    public private(set) var viewOffset: Int = 0
+
+    /// Lines held above the live screen on the primary buffer. Capped so a
+    /// long-running shell cannot grow forever.
+    public private(set) var scrollbackLineCount: Int = 0
+
     public private(set) var currentFg: TerminalColor = .defaultForeground
     public private(set) var currentBg: TerminalColor = .defaultBackground
     public private(set) var bold: Bool = false
@@ -37,6 +51,13 @@ public final class TerminalScreen: @unchecked Sendable {
     private var mainCursorRow: Int = 0
     private var mainScrollTop: Int = 0
     private var mainScrollBottom: Int = 0
+
+    /// Primary-screen history. Each entry is one full row of `cols` cells.
+    /// Only lines that scroll off the top of the *main* screen land here —
+    /// the alternate screen is ephemeral, which is what full-screen tools
+    /// assume.
+    private var scrollback: [[TerminalCell]] = []
+    private let maxScrollbackLines = 10_000
 
     private let parser = AnsiParser()
 
@@ -60,12 +81,23 @@ public final class TerminalScreen: @unchecked Sendable {
             mainScrollTop = 0
             mainScrollBottom = nr - 1
         }
+        // History rows: pad or truncate to the new width. Reflow is a harder
+        // problem and not what xterm does either.
+        if !scrollback.isEmpty {
+            scrollback = scrollback.map { row in
+                var next = Array(repeating: TerminalCell.empty, count: nc)
+                let n = min(row.count, nc)
+                for c in 0..<n { next[c] = row[c] }
+                return next
+            }
+        }
         cols = nc
         rows = nr
         scrollTop = 0
         scrollBottom = rows - 1
         cursorCol = min(cursorCol, cols - 1)
         cursorRow = min(cursorRow, rows - 1)
+        viewOffset = min(viewOffset, scrollback.count)
     }
 
     private func resizeBuffer(
@@ -86,6 +118,54 @@ public final class TerminalScreen: @unchecked Sendable {
     public func cell(row: Int, col: Int) -> TerminalCell {
         guard row >= 0, row < rows, col >= 0, col < cols else { return .empty }
         return cells[row * cols + col]
+    }
+
+    /// The cell at a viewport row, honouring `viewOffset`.
+    ///
+    /// Painting and hit-testing both go through this so a selection made
+    /// while scrolled up copies what the user actually sees, not whatever
+    /// is under it on the live screen.
+    public func visibleCell(row: Int, col: Int) -> TerminalCell {
+        guard row >= 0, row < rows, col >= 0, col < cols else { return .empty }
+        let offset = onAlternateScreen ? 0 : viewOffset
+        if offset == 0 {
+            return cells[row * cols + col]
+        }
+        // Combined buffer: scrollback lines, then the live screen.
+        // Viewport starts `offset` lines above the bottom of that buffer.
+        let history = scrollback.count
+        let lineIndex = history - offset + row
+        if lineIndex < 0 {
+            return .empty
+        }
+        if lineIndex < history {
+            let line = scrollback[lineIndex]
+            return col < line.count ? line[col] : .empty
+        }
+        let liveRow = lineIndex - history
+        guard liveRow >= 0, liveRow < rows else { return .empty }
+        return cells[liveRow * cols + col]
+    }
+
+    /// True when the viewport is not glued to the live bottom.
+    public var isScrolledUp: Bool { viewOffset > 0 && !onAlternateScreen }
+
+    /// Move the viewport by `delta` lines. Positive looks further into
+    /// history (wheel-up). Returns true if the offset actually changed.
+    @discardableResult
+    public func scrollView(by delta: Int) -> Bool {
+        guard !onAlternateScreen, delta != 0 else { return false }
+        let maxOffset = scrollback.count
+        let next = max(0, min(maxOffset, viewOffset + delta))
+        guard next != viewOffset else { return false }
+        viewOffset = next
+        return true
+    }
+
+    /// Snap the viewport to the live screen. Called when the user types, so
+    /// they are not editing a command they cannot see.
+    public func scrollToBottom() {
+        viewOffset = 0
     }
 
     /// Ingest PTY output.
@@ -174,9 +254,43 @@ public final class TerminalScreen: @unchecked Sendable {
             for mode in modes {
                 applyPrivateMode(mode, set: set)
             }
+        case .setTitle(let title):
+            windowTitle = title
+        case .setWorkingDirectory(let uri):
+            if let path = Self.path(fromOSC7: uri) {
+                workingDirectory = path
+            }
         case .ignore:
             break
         }
+    }
+
+    /// OSC 7 carries `file://host/path` (or a bare absolute path from some
+    /// shells). Returns the filesystem path, percent-decoded.
+    static func path(fromOSC7 uri: String) -> String? {
+        let trimmed = uri.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        if trimmed.hasPrefix("/") {
+            return trimmed
+        }
+        if let url = URL(string: trimmed), url.isFileURL {
+            // `fileURL.path` percent-decodes and drops the host.
+            let path = url.path
+            return path.isEmpty ? nil : path
+        }
+        // `file://hostname/path` without a third slash confuses some parsers;
+        // peel the scheme by hand.
+        if trimmed.hasPrefix("file://") {
+            var rest = String(trimmed.dropFirst("file://".count))
+            if rest.hasPrefix("/") {
+                return rest.removingPercentEncoding ?? rest
+            }
+            if let slash = rest.firstIndex(of: "/") {
+                rest = String(rest[slash...])
+                return rest.removingPercentEncoding ?? rest
+            }
+        }
+        return nil
     }
 
     /// DECSET / DECRST. Only the modes a full-screen tool actually needs are
@@ -309,6 +423,27 @@ public final class TerminalScreen: @unchecked Sendable {
         let top = scrollTop
         let bottom = scrollBottom
         if top > bottom { return }
+        // Only the primary screen keeps history, and only lines that leave
+        // through the top of the screen (region starts at row 0). A region
+        // that starts mid-screen is an editor viewport; those lines are not
+        // scrollback.
+        if !onAlternateScreen && top == 0 {
+            var line = Array(repeating: TerminalCell.empty, count: width)
+            for c in 0..<width {
+                line[c] = cells[c]
+            }
+            scrollback.append(line)
+            if scrollback.count > maxScrollbackLines {
+                scrollback.removeFirst(scrollback.count - maxScrollbackLines)
+            }
+            scrollbackLineCount = scrollback.count
+            // Keep the viewport fixed on the same history line while new
+            // output arrives underneath — only if the user was already
+            // looking up. At the bottom we stay glued.
+            if viewOffset > 0 {
+                viewOffset = min(viewOffset + 1, scrollback.count)
+            }
+        }
         for r in top..<bottom {
             let dst = r * width
             let src = (r + 1) * width
@@ -349,7 +484,10 @@ public final class TerminalScreen: @unchecked Sendable {
         default:
             for i in cells.indices { cells[i] = blankCell() }
             if mode == 3 {
-                // xterm clear scrollback — we have no scrollback buffer yet
+                // CSI 3 J — clear scrollback, xterm extension.
+                scrollback.removeAll(keepingCapacity: true)
+                scrollbackLineCount = 0
+                viewOffset = 0
             }
         }
     }

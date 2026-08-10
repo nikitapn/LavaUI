@@ -37,6 +37,12 @@ public final class AnsiParser: @unchecked Sendable {
         /// DEC private modes: `CSI ? … h` / `CSI ? … l`. Modes are the
         /// integers between the `?` and the final — one sequence can set several.
         case privateModes(modes: [Int], set: Bool)
+        /// OSC 0 / 1 / 2 — window / icon title. Shells put the path or a short
+        /// label here; we surface it in the chrome when OSC 7 is absent.
+        case setTitle(String)
+        /// OSC 7 — working directory as a `file://` URI (or a bare path).
+        /// The modern way a shell tells the terminal where it is.
+        case setWorkingDirectory(String)
         case ignore
     }
 
@@ -168,9 +174,8 @@ public final class AnsiParser: @unchecked Sendable {
 
         case .osc:
             if s.value == 0x07 {
-                state = .ground
-                oscBuffer = ""
-                return [.ignore]
+                // BEL terminates OSC.
+                return [finishOSC()]
             }
             if s.value == 0x1B {
                 state = .oscEsc
@@ -183,6 +188,9 @@ public final class AnsiParser: @unchecked Sendable {
 
         case .oscEsc:
             // ST is ESC \ — anything else after ESC ends OSC too (resync).
+            if s.value == 0x5C {  // \
+                return [finishOSC()]
+            }
             state = .ground
             oscBuffer = ""
             return [.ignore]
@@ -201,6 +209,25 @@ public final class AnsiParser: @unchecked Sendable {
         case .stringIgnoredEsc:
             state = .ground
             return [.ignore]
+        }
+    }
+
+    /// Classify a finished OSC payload. Unknown codes are ignored rather than
+    /// printed, which is the whole reason OSC went through a string state.
+    private func finishOSC() -> Output {
+        let raw = oscBuffer
+        state = .ground
+        oscBuffer = ""
+        guard let semi = raw.firstIndex(of: ";") else { return .ignore }
+        let code = String(raw[..<semi])
+        let payload = String(raw[raw.index(after: semi)...])
+        switch code {
+        case "0", "1", "2":
+            return .setTitle(payload)
+        case "7":
+            return .setWorkingDirectory(payload)
+        default:
+            return .ignore
         }
     }
 

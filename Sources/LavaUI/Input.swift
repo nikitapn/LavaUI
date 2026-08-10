@@ -40,6 +40,11 @@ public enum KeyCode {
     public static let left: Int32 = 263
     public static let down: Int32 = 264
     public static let up: Int32 = 265
+    /// GLFW `PAGE_UP` / `PAGE_DOWN`. Terminals send CSI 5~/6~ for these —
+    /// without the mapping, tmux never sees Ctrl+b then PageUp as a scroll.
+    public static let pageUp: Int32 = 266
+    public static let pageDown: Int32 = 267
+    public static let insert: Int32 = 260
     public static let kp0: Int32 = 320
     public static let kpSub: Int32 = 333
     public static let kpAdd: Int32 = 334

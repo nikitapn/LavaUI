@@ -69,6 +69,8 @@ public struct KeyEvent {
 
     public var shift: Bool { KeyMods.contains(mods, KeyMods.shift) }
     public var control: Bool { KeyMods.contains(mods, KeyMods.control) }
+    public var alt: Bool { KeyMods.contains(mods, KeyMods.alt) }
+    public var superKey: Bool { KeyMods.contains(mods, KeyMods.superKey) }
 }
 
 /// Caret blink, expressed as a phase rather than a timer.

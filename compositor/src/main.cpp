@@ -532,8 +532,33 @@ struct Server {
     return focusedByWorkspace[workspaces.current];
   }
   void setFocusedSurface(uint32_t id) {
+    if (id != focusedByWorkspace[workspaces.current]) {
+      // The held key belonged to the previous focus; do not keep stuffing
+      // backspaces into whatever is about to take the keyboard.
+      stopKeyRepeat();
+    }
     focusedByWorkspace[workspaces.current] = id;
   }
+
+  // ─── Key repeat for Lava clients ───────────────────────────────────────
+  //
+  // libinput delivers only real press and release. Wayland clients get
+  // repeats from `wlr_seat` because they speak `wl_keyboard`; a Lava surface
+  // does not, so without this timer a held Backspace would erase one cell
+  // and stop. Rate and delay are the same numbers `wlr_keyboard_set_repeat_info`
+  // already takes from `lava.conf`.
+
+  /// Arm (or re-arm) repeat for a key just pressed into a client surface.
+  void startKeyRepeat(uint32_t surfaceId, int glfwKey, int32_t mods,
+                      std::string text);
+  void stopKeyRepeat();
+  static int on_key_repeat(void *data);
+
+  wl_event_source *keyRepeatTimer = nullptr;
+  uint32_t keyRepeatSurface = 0;
+  int keyRepeatKey = 0;
+  int32_t keyRepeatMods = 0;
+  std::string keyRepeatText;
 
   /// Re-reads the config file and applies what can be applied while running.
   ///
@@ -3520,6 +3545,103 @@ bool handle_binding(Server *server, xkb_keysym_t sym, bool shift, bool ctrl) {
   return false;
 }
 
+/// Modifier keys themselves do not repeat — holding Shift should not flood
+/// the client with Shift presses. Everything else (letters, Backspace, arrows)
+/// does, which is what makes held-delete and held-move work.
+bool is_modifier_key(int glfwKey) {
+  switch (glfwKey) {
+  case 340:  // Left Shift
+  case 341:  // Left Control
+  case 342:  // Left Alt
+  case 343:  // Left Super
+  case 344:  // Right Shift
+  case 345:  // Right Control
+  case 346:  // Right Alt
+  case 347:  // Right Super
+  case 348:  // Menu
+    return true;
+  default:
+    return false;
+  }
+}
+
+void Server::stopKeyRepeat() {
+  if (keyRepeatTimer != nullptr) {
+    wl_event_source_timer_update(keyRepeatTimer, 0);
+  }
+  keyRepeatSurface = 0;
+  keyRepeatKey = 0;
+  keyRepeatMods = 0;
+  keyRepeatText.clear();
+}
+
+void Server::startKeyRepeat(uint32_t surfaceId, int glfwKey, int32_t mods,
+                            std::string text) {
+  if (is_modifier_key(glfwKey)) {
+    stopKeyRepeat();
+    return;
+  }
+  const int32_t rate = config.keyboard.repeatRate;
+  const int32_t delay = config.keyboard.repeatDelay;
+  // rate 0 means "do not repeat", which is a legitimate accessibility choice.
+  if (rate <= 0 || delay <= 0) {
+    stopKeyRepeat();
+    return;
+  }
+
+  keyRepeatSurface = surfaceId;
+  keyRepeatKey = glfwKey;
+  keyRepeatMods = mods;
+  keyRepeatText = std::move(text);
+
+  if (keyRepeatTimer == nullptr) {
+    wl_event_loop *loop = wl_display_get_event_loop(display);
+    if (loop == nullptr) return;
+    keyRepeatTimer = wl_event_loop_add_timer(loop, on_key_repeat, this);
+  }
+  if (keyRepeatTimer != nullptr) {
+    wl_event_source_timer_update(keyRepeatTimer, delay);
+  }
+}
+
+int Server::on_key_repeat(void *data) {
+  auto *server = static_cast<Server *>(data);
+  if (server->keyRepeatSurface == 0 || server->surfaces == nullptr) {
+    return 0;
+  }
+  // Focus moved, or the surface died, or the user is no longer on this
+  // workspace — all mean the held key no longer has a home.
+  if (server->keyRepeatSurface != server->focusedSurface()) {
+    server->stopKeyRepeat();
+    return 0;
+  }
+  ClientSurface *target =
+      server->surfaces->find(server->keyRepeatSurface);
+  if (target == nullptr || target->canvas == nullptr) {
+    server->stopKeyRepeat();
+    return 0;
+  }
+
+  // Action 2 is GLFW_REPEAT / ACTION_REPEAT — the Swift side treats any
+  // x > 0 as a press, and marks isRepeat when x > 1.
+  target->canvas->keyEvent(server->keyRepeatKey, 2, server->keyRepeatMods);
+  if (!server->keyRepeatText.empty()) {
+    target->canvas->textInput(server->keyRepeatText);
+  }
+  server->surfaces->pump(*target);
+
+  const int32_t rate = server->config.keyboard.repeatRate;
+  if (rate <= 0 || server->keyRepeatTimer == nullptr) {
+    server->stopKeyRepeat();
+    return 0;
+  }
+  // ms between repeats. Clamp so a misconfigured "1000 keys/s" cannot pin
+  // the event loop at 1 ms forever.
+  const int interval = std::max(10, 1000 / rate);
+  wl_event_source_timer_update(server->keyRepeatTimer, interval);
+  return 0;
+}
+
 void Keyboard::on_key(wl_listener *listener, void *data) {
   auto *keyboard = owner_of<Keyboard>(listener);
   auto *event = static_cast<wlr_keyboard_key_event *>(data);
@@ -3543,6 +3665,9 @@ void Keyboard::on_key(wl_listener *listener, void *data) {
     for (int i = 0; i < count; ++i) {
       if (handle_binding(server, syms[i], modifiers & WLR_MODIFIER_SHIFT,
                          modifiers & WLR_MODIFIER_CTRL)) {
+        // A compositor binding ate the key — do not also start repeating it
+        // into a client (Alt+Q held would close a stream of windows).
+        server->stopKeyRepeat();
         return;
       }
     }
@@ -3562,16 +3687,30 @@ void Keyboard::on_key(wl_listener *listener, void *data) {
     const int32_t mods = static_cast<int32_t>(glfw_mods(modifiers));
     if (ClientSurface *target =
             server->surfaces->find(server->focusedSurface())) {
+      // Prefer the first keysym for repeat tracking — multi-sym keys are
+      // rare and the first is what we deliver first.
+      const int glfwKey = count > 0 ? glfw_key(syms[0]) : 0;
       for (int i = 0; i < count; ++i) {
         target->canvas->keyEvent(glfw_key(syms[i]), pressed ? 1 : 0, mods);
       }
+      std::string text;
       if (pressed) {
         const uint32_t utf32 = xkb_state_key_get_utf32(
             keyboard->wlr->xkb_state, event->keycode + 8);
         // Control characters are keys, not text: a client that inserted them
         // would put a literal backspace in its document.
         if (utf32 >= 0x20 && utf32 != 0x7f) {
-          target->canvas->textInput(utf8_of(utf32));
+          text = utf8_of(utf32);
+          target->canvas->textInput(text);
+        }
+        if (glfwKey != 0) {
+          server->startKeyRepeat(target->id, glfwKey, mods, std::move(text));
+        }
+      } else {
+        // Only the key that is currently repeating cancels it — releasing
+        // an earlier chord member must not kill a later held Backspace.
+        if (glfwKey != 0 && glfwKey == server->keyRepeatKey) {
+          server->stopKeyRepeat();
         }
       }
       server->surfaces->pump(*target);
@@ -3579,6 +3718,7 @@ void Keyboard::on_key(wl_listener *listener, void *data) {
     return;
   }
 
+  server->stopKeyRepeat();
   wlr_seat_set_keyboard(server->seat, keyboard->wlr);
   wlr_seat_keyboard_notify_key(server->seat, event->time_msec, event->keycode,
                                event->state);

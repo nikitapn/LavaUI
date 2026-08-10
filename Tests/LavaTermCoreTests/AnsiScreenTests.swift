@@ -161,4 +161,58 @@ final class AnsiScreenTests: XCTestCase {
         XCTAssertEqual(Character(s.cell(row: 0, col: 0).scalar), "A")
         XCTAssertEqual(Character(s.cell(row: 4, col: 0).scalar), "S")
     }
+
+    /// Lines that leave through the top of the primary screen land in history,
+    /// and the viewport can look at them without changing the live buffer.
+    func testScrollbackKeepsLinesScrolledOffTheTop() {
+        let s = TerminalScreen(cols: 4, rows: 3)
+        s.feed("AAAA\nBBBB\nCCCC\nDDDD")
+        // After filling 3 rows and another LF, "AAAA" left the screen.
+        XCTAssertEqual(s.scrollbackLineCount, 1)
+        XCTAssertEqual(Character(s.cell(row: 0, col: 0).scalar), "B")
+        XCTAssertEqual(s.viewOffset, 0)
+
+        XCTAssertTrue(s.scrollView(by: 1))
+        XCTAssertEqual(s.viewOffset, 1)
+        // Viewport shows history on the first row, live on the rest.
+        XCTAssertEqual(Character(s.visibleCell(row: 0, col: 0).scalar), "A")
+        XCTAssertEqual(Character(s.visibleCell(row: 1, col: 0).scalar), "B")
+        // Live cells untouched.
+        XCTAssertEqual(Character(s.cell(row: 0, col: 0).scalar), "B")
+
+        s.scrollToBottom()
+        XCTAssertEqual(s.viewOffset, 0)
+        XCTAssertEqual(Character(s.visibleCell(row: 0, col: 0).scalar), "B")
+    }
+
+    /// Full-screen apps do not pollute (or read) the primary scrollback.
+    func testAlternateScreenDoesNotAddScrollback() {
+        let s = TerminalScreen(cols: 4, rows: 3)
+        s.feed("AAAA\nBBBB\nCCCC\n")
+        let before = s.scrollbackLineCount
+        s.feed("\u{1B}[?1049h")
+        s.feed("XXXX\nYYYY\nZZZZ\nWWWW")
+        XCTAssertEqual(s.scrollbackLineCount, before)
+        XCTAssertFalse(s.scrollView(by: 1))
+    }
+
+    func testOSCTitleAndWorkingDirectory() {
+        let s = TerminalScreen(cols: 20, rows: 4)
+        s.feed("\u{1B}]2;my title\u{7}")
+        XCTAssertEqual(s.windowTitle, "my title")
+        s.feed("\u{1B}]7;file:///home/nikita/projects/HelloWorld\u{1B}\\")
+        XCTAssertEqual(s.workingDirectory, "/home/nikita/projects/HelloWorld")
+    }
+
+    func testOSC7PathParsing() {
+        XCTAssertEqual(
+            TerminalScreen.path(fromOSC7: "file:///tmp/foo"),
+            "/tmp/foo")
+        XCTAssertEqual(
+            TerminalScreen.path(fromOSC7: "file://localhost/tmp/bar"),
+            "/tmp/bar")
+        XCTAssertEqual(
+            TerminalScreen.path(fromOSC7: "/already/absolute"),
+            "/already/absolute")
+    }
 }

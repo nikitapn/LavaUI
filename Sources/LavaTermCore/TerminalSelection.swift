@@ -189,7 +189,10 @@ public struct TerminalSelection {
             else { continue }
             var line = ""
             for col in columns where col < screen.cols {
-                line.unicodeScalars.append(screen.cell(row: row, col: col).scalar)
+                // visibleCell: a selection made while scrolled into history
+                // must copy what was under the pointer, not the live screen
+                // underneath.
+                line.unicodeScalars.append(screen.visibleCell(row: row, col: col).scalar)
             }
             while line.last == " " { line.removeLast() }
             lines.append(line)
@@ -210,14 +213,14 @@ public struct TerminalSelection {
                     CellPosition(row: position.row, col: max(0, screen.cols - 1)))
         case .word:
             guard position.col < screen.cols, position.row < screen.rows,
-                  isWord(screen.cell(row: position.row, col: position.col).scalar)
+                  isWord(screen.visibleCell(row: position.row, col: position.col).scalar)
             else { return (position, position) }
             var first = position.col, last = position.col
             while first > 0,
-                  isWord(screen.cell(row: position.row, col: first - 1).scalar)
+                  isWord(screen.visibleCell(row: position.row, col: first - 1).scalar)
             { first -= 1 }
             while last + 1 < screen.cols,
-                  isWord(screen.cell(row: position.row, col: last + 1).scalar)
+                  isWord(screen.visibleCell(row: position.row, col: last + 1).scalar)
             { last += 1 }
             return (CellPosition(row: position.row, col: first),
                     CellPosition(row: position.row, col: last))

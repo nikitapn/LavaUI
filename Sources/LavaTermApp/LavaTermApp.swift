@@ -24,8 +24,17 @@ struct LavaTermApp {
         // session and view tree are unchanged — only the host differs.
         let client = ProcessInfo.processInfo.environment["LAVA_CLIENT"] == "1"
         #if canImport(LavaClient)
+        // Client-framed by default under the compositor: the app draws
+        // WindowControls + a path strip and owns the drag region, so a second
+        // compositor title bar would only add a duplicate "LavaTerm" label.
+        // `LAVA_FRAME=server` puts the server chrome back for comparison.
+        let serverFrame =
+            ProcessInfo.processInfo.environment["LAVA_FRAME"] == "server"
         let editorOrNil = client
-            ? LavaClient.open(title: "LavaTerm", width: 1024, height: 640)
+            ? LavaClient.open(
+                title: "LavaTerm", width: 1024, height: 640,
+                frame: serverFrame ? .server : .client
+              )
             : LavaApp.open(title: "LavaTerm", width: 1024, height: 640)
         #else
         let editorOrNil = client

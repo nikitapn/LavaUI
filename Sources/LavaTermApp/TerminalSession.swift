@@ -10,7 +10,11 @@ import Observation
 @Observable
 public final class TerminalSession: @unchecked Sendable {
     public let screen = TerminalScreen(cols: 80, rows: 24)
+    /// Window / tab label from OSC title, or "LavaTerm" until the shell says.
     public private(set) var title = "LavaTerm"
+    /// Path shown in the chrome. Prefers OSC 7 cwd, then a title that looks
+    /// like a path, then a short idle label.
+    public private(set) var pathLabel = "~"
     public private(set) var exited = false
     public private(set) var exitCode: Int32 = 0
     public private(set) var statusLine = "starting…"
@@ -44,6 +48,10 @@ public final class TerminalSession: @unchecked Sendable {
 
     public func start() {
         statusLine = "opening PTY…"
+        // Seed the chrome with this process's cwd — the shell usually starts
+        // there, and OSC 7 will refine it once the shell reports in.
+        pathLabel = Self.displayPath(
+            cwd: FileManager.default.currentDirectoryPath, title: "")
         let session = PtySession(
             onData: { [weak self] data in
                 guard let self else { return }
@@ -180,31 +188,52 @@ public final class TerminalSession: @unchecked Sendable {
         // one did — makes the shortcut impossible to reach. Modifiers arrive
         // as key events of their own, and they are typed by definition before
         // every chord.
+        // Shift+PageUp/Down scrolls *our* history, the way xterm does — plain
+        // PageUp/Down go to the application so tmux's Ctrl+b then PageUp can
+        // enter copy-mode. Without the plain mapping those keys vanished.
+        if event.shift, !event.control {
+            switch event.key {
+            case KeyCode.pageUp:
+                if scrollHistory(by: screen.rows) { return true }
+            case KeyCode.pageDown:
+                if scrollHistory(by: -screen.rows) { return true }
+            default:
+                break
+            }
+        }
+
         let payload: Data? = {
-            if event.control, let b = controlByte(for: event.key) {
+            // Ctrl+letter is a C0 control byte, not a modified CSI. Must run
+            // before the cursor-key path or Ctrl+C would become CSI 1;5 something.
+            if event.control, !event.alt, !event.shift,
+               let b = controlByte(for: event.key)
+            {
                 return Data([b])
             }
             switch event.key {
             case KeyCode.enter: return Data("\r".utf8)
-            case KeyCode.backspace: return Data([0x7F])  // DEL — what most modern shells expect
+            case KeyCode.backspace:
+                // Plain Backspace is DEL (0x7F), which most modern shells
+                // expect. Alt+Backspace is Meta-DEL (`ESC DEL`): readline and
+                // zsh bind that to backward-kill-word — delete the token to
+                // the left, not one character. Ctrl+W is the other common
+                // spelling of the same idea and already goes out as ^W.
+                if event.alt {
+                    return Data([0x1B, 0x7F])
+                }
+                return Data([0x7F])
             case KeyCode.tab: return Data("\t".utf8)
             case KeyCode.escape: return Data([0x1B])
-            // DECCKM: application mode (what tmux/vim ask for) uses SS3
-            // rather than CSI. Sending the wrong spelling is why arrows in
-            // tmux looked "pretty bad" even after the alternate screen worked.
-            case KeyCode.up:
-                return Data((screen.applicationCursorKeys ? "\u{1B}OA" : "\u{1B}[A").utf8)
-            case KeyCode.down:
-                return Data((screen.applicationCursorKeys ? "\u{1B}OB" : "\u{1B}[B").utf8)
-            case KeyCode.right:
-                return Data((screen.applicationCursorKeys ? "\u{1B}OC" : "\u{1B}[C").utf8)
-            case KeyCode.left:
-                return Data((screen.applicationCursorKeys ? "\u{1B}OD" : "\u{1B}[D").utf8)
-            case KeyCode.home:
-                return Data((screen.applicationCursorKeys ? "\u{1B}OH" : "\u{1B}[H").utf8)
-            case KeyCode.end:
-                return Data((screen.applicationCursorKeys ? "\u{1B}OF" : "\u{1B}[F").utf8)
-            case KeyCode.delete: return Data("\u{1B}[3~".utf8)
+            case KeyCode.up: return cursorKey(final: "A", event: event)
+            case KeyCode.down: return cursorKey(final: "B", event: event)
+            case KeyCode.right: return cursorKey(final: "C", event: event)
+            case KeyCode.left: return cursorKey(final: "D", event: event)
+            case KeyCode.home: return cursorKey(final: "H", event: event)
+            case KeyCode.end: return cursorKey(final: "F", event: event)
+            case KeyCode.insert: return functionKey(code: 2, event: event)
+            case KeyCode.delete: return functionKey(code: 3, event: event)
+            case KeyCode.pageUp: return functionKey(code: 5, event: event)
+            case KeyCode.pageDown: return functionKey(code: 6, event: event)
             default: return nil
             }
         }()
@@ -215,7 +244,39 @@ public final class TerminalSession: @unchecked Sendable {
         // about to be scrolled off or overwritten, and leaving it on screen
         // would point at whatever happened to land there next.
         clearSelection()
+        // And jumps the viewport to the live bottom — you are about to type
+        // into a prompt you cannot see if still scrolled into history.
+        if screen.isScrolledUp {
+            screen.scrollToBottom()
+            ViewInvalidation.markNeedsRedraw()
+        }
         write(payload)
+        return true
+    }
+
+    /// Wheel / Shift+Page* history navigation. Positive `delta` looks further
+    /// into the past. On the alternate screen there is no history; notches
+    /// become arrow keys so less/vim/tmux still move.
+    @discardableResult
+    public func scrollHistory(by delta: Int) -> Bool {
+        guard delta != 0 else { return false }
+        if screen.onAlternateScreen {
+            // One CSI arrow per notch. Same DECCKM spelling as the real keys.
+            let seq = delta > 0
+                ? (screen.applicationCursorKeys ? "\u{1B}OA" : "\u{1B}[A")
+                : (screen.applicationCursorKeys ? "\u{1B}OB" : "\u{1B}[B")
+            let steps = abs(delta)
+            var bytes = Data()
+            bytes.reserveCapacity(seq.utf8.count * steps)
+            for _ in 0..<steps {
+                bytes.append(contentsOf: seq.utf8)
+            }
+            write(bytes)
+            return true
+        }
+        guard screen.scrollView(by: delta) else { return false }
+        clearSelection()
+        ViewInvalidation.markNeedsRedraw()
         return true
     }
 
@@ -225,6 +286,9 @@ public final class TerminalSession: @unchecked Sendable {
             return false
         }
         clearSelection()
+        if screen.isScrolledUp {
+            screen.scrollToBottom()
+        }
         write(String(ch))
         return true
     }
@@ -248,17 +312,60 @@ public final class TerminalSession: @unchecked Sendable {
 
     private func ingest(_ data: Data) {
         screen.feed(data)
+        syncChromeFromScreen()
         bump()
     }
 
     private func feedLocal(_ message: String) {
         screen.feed(message)
+        syncChromeFromScreen()
         bump()
     }
 
     private func bump() {
         generation &+= 1
         ViewInvalidation.markDirty()
+    }
+
+    /// Pull title / cwd off the screen after a feed. Only dirty when something
+    /// the chrome shows actually changed — OSC traffic is frequent and most
+    /// of it is a title rewrite of the same path.
+    private func syncChromeFromScreen() {
+        if !screen.windowTitle.isEmpty, screen.windowTitle != title {
+            title = screen.windowTitle
+        }
+        let next = Self.displayPath(
+            cwd: screen.workingDirectory, title: screen.windowTitle)
+        if next != pathLabel {
+            pathLabel = next
+        }
+    }
+
+    /// What the title strip should say. Home is collapsed to `~` so a long
+    /// path still fits; OSC 7 wins over the title string when both exist.
+    private static func displayPath(cwd: String, title: String) -> String {
+        let home = ProcessInfo.processInfo.environment["HOME"] ?? ""
+        func shorten(_ path: String) -> String {
+            if !home.isEmpty, path == home { return "~" }
+            if !home.isEmpty, path.hasPrefix(home + "/") {
+                return "~" + path.dropFirst(home.count)
+            }
+            return path
+        }
+        if !cwd.isEmpty { return shorten(cwd) }
+        if title.hasPrefix("/") || title.hasPrefix("~") {
+            return shorten(title)
+        }
+        // Titles like `user@host: ~/proj` — take the part after the last ": ".
+        if let range = title.range(of: ": ", options: .backwards) {
+            let tail = String(title[range.upperBound...])
+                .trimmingCharacters(in: .whitespaces)
+            if tail.hasPrefix("/") || tail.hasPrefix("~") {
+                return shorten(tail)
+            }
+            if !tail.isEmpty { return tail }
+        }
+        return title.isEmpty ? "~" : title
     }
 
     private func controlByte(for key: Int32) -> UInt8? {
@@ -272,5 +379,45 @@ public final class TerminalSession: @unchecked Sendable {
         case 93: return 0x1D         // Ctrl+]
         default: return nil
         }
+    }
+
+    // MARK: - Cursor / function keys (xterm)
+
+    /// xterm modifier parameter: 1 + shift + 2·alt + 4·ctrl.
+    ///
+    /// So plain = 1 (omitted), Shift = 2, Alt = 3, Ctrl = 5, Ctrl+Shift = 6.
+    /// Ctrl+Left/Right become `CSI 1;5 D/C`, which is what bash/zsh/readline
+    /// bind to word-wise motion — the sequence bare CSI D never carried.
+    private func xtermModifier(for event: KeyEvent) -> Int {
+        var mod = 1
+        if event.shift { mod += 1 }
+        if event.alt { mod += 2 }
+        if event.control { mod += 4 }
+        return mod
+    }
+
+    /// Arrows / Home / End. Unmodified honour DECCKM (application cursor
+    /// keys); any modifier forces the CSI form with the xterm mod parameter,
+    /// because `ESC O A` has no place to put one.
+    private func cursorKey(final: String, event: KeyEvent) -> Data {
+        let mod = xtermModifier(for: event)
+        if mod == 1 {
+            if screen.applicationCursorKeys {
+                return Data("\u{1B}O\(final)".utf8)
+            }
+            return Data("\u{1B}[\(final)".utf8)
+        }
+        // CSI 1 ; mod final — the leading 1 is the "default" of CUP-style
+        // params that xterm uses for modified cursor keys.
+        return Data("\u{1B}[1;\(mod)\(final)".utf8)
+    }
+
+    /// Insert / Delete / PageUp / PageDown: `CSI n ~` or `CSI n ; mod ~`.
+    private func functionKey(code: Int, event: KeyEvent) -> Data {
+        let mod = xtermModifier(for: event)
+        if mod == 1 {
+            return Data("\u{1B}[\(code)~".utf8)
+        }
+        return Data("\u{1B}[\(code);\(mod)~".utf8)
     }
 }
