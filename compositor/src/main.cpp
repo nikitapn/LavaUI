@@ -187,6 +187,8 @@ struct Toplevel : FramedWindow {
   Listener<Toplevel> set_title;
   Listener<Toplevel> request_maximize;
   Listener<Toplevel> request_fullscreen;
+  Listener<Toplevel> request_move;
+  Listener<Toplevel> request_resize;
 
   Toplevel(Server *server, wlr_xdg_toplevel *toplevel);
   ~Toplevel();
@@ -217,6 +219,8 @@ struct Toplevel : FramedWindow {
   static void on_set_title(wl_listener *listener, void *data);
   static void on_request_maximize(wl_listener *listener, void *data);
   static void on_request_fullscreen(wl_listener *listener, void *data);
+  static void on_request_move(wl_listener *listener, void *data);
+  static void on_request_resize(wl_listener *listener, void *data);
 };
 
 // ─── X11 windows ───────────────────────────────────────────────────────────
@@ -246,6 +250,8 @@ struct XwaylandSurface : FramedWindow {
   Listener<XwaylandSurface> destroy;
   Listener<XwaylandSurface> request_configure;
   Listener<XwaylandSurface> set_title;
+  Listener<XwaylandSurface> request_move;
+  Listener<XwaylandSurface> request_resize;
   /// Whether `map`/`unmap` are attached. They can only be while a Wayland
   /// surface exists behind the X11 window, which is not its whole life.
   bool associated = false;
@@ -283,6 +289,17 @@ struct XwaylandSurface : FramedWindow {
         static_cast<uint16_t>(width), static_cast<uint16_t>(height));
   }
 
+  /// Whether this compositor draws the frame. X11's answer to the same
+  /// question xdg-decoration asks is the Motif hint, which is how a client
+  /// that draws its own header — Chrome and the Electron applications — says
+  /// so. Absent the hint an X11 window expects to be framed, which is the
+  /// opposite of the Wayland default and the reason the two are asked
+  /// separately.
+  bool serverDecorated() const {
+    return (xsurface->decorations &
+            WLR_XWAYLAND_SURFACE_DECORATIONS_NO_TITLE) == 0;
+  }
+
   static void on_associate(wl_listener *listener, void *data);
   static void on_dissociate(wl_listener *listener, void *data);
   static void on_map(wl_listener *listener, void *data);
@@ -290,6 +307,8 @@ struct XwaylandSurface : FramedWindow {
   static void on_destroy(wl_listener *listener, void *data);
   static void on_request_configure(wl_listener *listener, void *data);
   static void on_set_title(wl_listener *listener, void *data);
+  static void on_request_move(wl_listener *listener, void *data);
+  static void on_request_resize(wl_listener *listener, void *data);
 };
 
 // ─── Decoration negotiation ────────────────────────────────────────────────
@@ -451,6 +470,25 @@ struct Server {
   /// press does for a decorated one. False when there is no button down to
   /// carry it. See `lava::Compositor::BeginMove`.
   bool beginInteractiveMove(ClientSurface &surface);
+
+  /// Starts an interactive resize pulling `edges`, as a drag on a window's
+  /// border does. False when there is no button down to carry it.
+  bool beginInteractiveResize(ClientSurface &surface, uint32_t edges);
+
+  /// Whether this compositor draws the frame for `toplevel`.
+  ///
+  /// It does when the client asked through xdg-decoration, because the answer
+  /// was "server side" and the client is drawing nothing itself. It does not
+  /// when the client never asked at all: a toolkit with no xdg-decoration
+  /// support — GTK is the one everybody meets — always draws its own header,
+  /// so a bar from us would be the second one on the window. That is what the
+  /// protocol means by leaving the mode client-side in the absence of a
+  /// decoration object, and what KWin and Mutter do with the same silence.
+  bool serverDecorated(wlr_xdg_toplevel *toplevel) const;
+
+  /// The xdg-decoration manager, for the question above. Null before `main`
+  /// creates it.
+  wlr_xdg_decoration_manager_v1 *decorations = nullptr;
 
   /// Gives a window the keyboard and the active frame paint, whichever kind
   /// of window it is. Both halves matter and they are easy to do by halves:
@@ -728,6 +766,20 @@ constexpr uint32_t kRight = 2u;
 constexpr uint32_t kTop = 4u;
 constexpr uint32_t kBottom = 8u;
 }  // namespace edges
+
+/// wlroots' edge bits in ours. The two disagree — `WLR_EDGE_*` is
+/// top/bottom/left/right and `edges::` is left/right/top/bottom — and a
+/// straight cast would turn a client dragging its top edge into a resize from
+/// the left. Written out rather than reordered to match, because the four
+/// constants above are also what the control plane sends to LavaUI clients.
+inline uint32_t fromWlrEdges(uint32_t wlr) {
+  uint32_t out = 0;
+  if (wlr & WLR_EDGE_LEFT) out |= edges::kLeft;
+  if (wlr & WLR_EDGE_RIGHT) out |= edges::kRight;
+  if (wlr & WLR_EDGE_TOP) out |= edges::kTop;
+  if (wlr & WLR_EDGE_BOTTOM) out |= edges::kBottom;
+  return out;
+}
 
 /// What a layout-space pointer resolved to, walking the window stack top-down.
 ///
@@ -2368,6 +2420,12 @@ uint32_t SurfaceRegistry::adoptWindow(FramedWindow *window,
   surface->width = width < kMinSurface ? kMinSurface : width;
   surface->height = height < kMinSurface ? kMinSurface : height;
   surface->workspace = window->workspace;
+  // Load-bearing from here on rather than only a note: `contentY`, hit
+  // testing and the corner rounding all place the window against its bar, and
+  // a window with no bar left marked as having one is drawn 32 px below where
+  // everything thinks it is. Nothing noticed while every adopted window was
+  // decorated.
+  surface->decorated = decorated;
 
   int peers = 0;
   for (const auto &other : surfaces_) {
@@ -2408,9 +2466,9 @@ uint32_t SurfaceRegistry::adoptWindow(FramedWindow *window,
   drawBar(*surface);
   announceWindows();
   surfaces_.push_front(std::move(surface));
-  wlr_log(WLR_INFO, "window %u: '%s' %ux%u on workspace %u", id, title.c_str(),
-          surfaces_.front()->width, surfaces_.front()->height,
-          window->workspace + 1);
+  wlr_log(WLR_INFO, "window %u: '%s' %ux%u on workspace %u%s", id,
+          title.c_str(), surfaces_.front()->width, surfaces_.front()->height,
+          window->workspace + 1, decorated ? "" : ", client-framed");
   return id;
 }
 
@@ -2428,6 +2486,12 @@ XwaylandSurface::XwaylandSurface(Server *server, wlr_xwayland_surface *surface)
   request_configure.attach(&xsurface->events.request_configure, this,
                            on_request_configure);
   set_title.attach(&xsurface->events.set_title, this, on_set_title);
+  // `_NET_WM_MOVERESIZE`, which is X11's version of the same conversation: a
+  // client that draws its own header tells the window manager the user has
+  // started dragging it, rather than moving itself.
+  request_move.attach(&xsurface->events.request_move, this, on_request_move);
+  request_resize.attach(&xsurface->events.request_resize, this,
+                        on_request_resize);
 }
 
 XwaylandSurface::~XwaylandSurface() {
@@ -2437,6 +2501,8 @@ XwaylandSurface::~XwaylandSurface() {
   destroy.detach();
   request_configure.detach();
   set_title.detach();
+  request_move.detach();
+  request_resize.detach();
 }
 
 void XwaylandSurface::on_associate(wl_listener *listener, void *) {
@@ -2502,7 +2568,8 @@ void XwaylandSurface::on_map(wl_listener *listener, void *) {
     // `app_id` plays for a Wayland client.
     const uint32_t id = server->surfaces->adoptWindow(
         self, title ? title : "", width, height,
-        self->xsurface->xclass ? self->xsurface->xclass : "");
+        self->xsurface->xclass ? self->xsurface->xclass : "",
+        self->serverDecorated());
     if (ClientSurface *frame = server->surfaces->find(id)) {
       server->surfaces->raise(*frame);
     }
@@ -2571,6 +2638,28 @@ void XwaylandSurface::on_set_title(wl_listener *listener, void *) {
   if (ClientSurface *frame = self->server->surfaces->find(self->frameId)) {
     self->server->surfaces->setTitle(
         *frame, self->xsurface->title ? self->xsurface->title : "Untitled");
+  }
+}
+
+/// X11's move request. No serial to validate — `_NET_WM_MOVERESIZE` carries
+/// none — so the guard is the one `beginInteractiveMove` already applies:
+/// a button has to be down for a drag to be carrying anything.
+void XwaylandSurface::on_request_move(wl_listener *listener, void *) {
+  auto *self = owner_of<XwaylandSurface>(listener);
+  Server *server = self->server;
+  if (server->surfaces == nullptr || self->frameId == 0) return;
+  if (ClientSurface *frame = server->surfaces->find(self->frameId)) {
+    server->beginInteractiveMove(*frame);
+  }
+}
+
+void XwaylandSurface::on_request_resize(wl_listener *listener, void *data) {
+  auto *self = owner_of<XwaylandSurface>(listener);
+  auto *event = static_cast<wlr_xwayland_resize_event *>(data);
+  Server *server = self->server;
+  if (server->surfaces == nullptr || self->frameId == 0) return;
+  if (ClientSurface *frame = server->surfaces->find(self->frameId)) {
+    server->beginInteractiveResize(*frame, fromWlrEdges(event->edges));
   }
 }
 
@@ -2770,6 +2859,14 @@ Toplevel::Toplevel(Server *server, wlr_xdg_toplevel *toplevel)
                           on_request_maximize);
   request_fullscreen.attach(&toplevel->events.request_fullscreen, this,
                             on_request_fullscreen);
+  // How a client that draws its own title bar gets moved. There is no protocol
+  // for advertising *where* the draggable part of a window is, and there does
+  // not need to be: the client knows where its own header is, sees the press
+  // land on it, and asks to be moved. GTK does exactly this, which is why its
+  // windows drag under every other compositor and sat still under this one.
+  request_move.attach(&toplevel->events.request_move, this, on_request_move);
+  request_resize.attach(&toplevel->events.request_resize, this,
+                        on_request_resize);
 }
 
 Toplevel::~Toplevel() {
@@ -2780,6 +2877,8 @@ Toplevel::~Toplevel() {
   set_title.detach();
   request_maximize.detach();
   request_fullscreen.detach();
+  request_move.detach();
+  request_resize.detach();
 }
 
 void Toplevel::geometry(uint32_t &width, uint32_t &height) const {
@@ -2802,7 +2901,8 @@ void Toplevel::on_map(wl_listener *listener, void *) {
     uint32_t width = 0, height = 0;
     toplevel->geometry(width, height);
     const uint32_t id = server->surfaces->adoptWindow(
-        toplevel, title ? title : "", width, height, app_id ? app_id : "");
+        toplevel, title ? title : "", width, height, app_id ? app_id : "",
+        server->serverDecorated(toplevel->xdg_toplevel));
     if (ClientSurface *frame = server->surfaces->find(id)) {
       server->surfaces->raise(*frame);
       server->surfaces->setFocused(id);
@@ -2892,6 +2992,41 @@ void Toplevel::on_request_fullscreen(wl_listener *listener, void *) {
       owner_of<Toplevel>(listener);
   if (toplevel->xdg_toplevel->base->initialized) {
     wlr_xdg_surface_schedule_configure(toplevel->xdg_toplevel->base);
+  }
+}
+
+/// "The user is dragging my title bar; please move me."
+///
+/// The serial is checked because this request is a client asking to take the
+/// pointer, and one that has not just been given a press has no business
+/// asking. Without the check a background window could glue itself to the
+/// cursor at any moment.
+void Toplevel::on_request_move(wl_listener *listener, void *data) {
+  auto *toplevel = owner_of<Toplevel>(listener);
+  auto *event = static_cast<wlr_xdg_toplevel_move_event *>(data);
+  Server *server = toplevel->server;
+  if (server->surfaces == nullptr || toplevel->frameId == 0) return;
+  if (!wlr_seat_validate_pointer_grab_serial(
+          server->seat, toplevel->xdg_toplevel->base->surface, event->serial)) {
+    return;
+  }
+  if (ClientSurface *frame = server->surfaces->find(toplevel->frameId)) {
+    server->beginInteractiveMove(*frame);
+  }
+}
+
+/// The same, for the resize handles a client-drawn frame has around its edge.
+void Toplevel::on_request_resize(wl_listener *listener, void *data) {
+  auto *toplevel = owner_of<Toplevel>(listener);
+  auto *event = static_cast<wlr_xdg_toplevel_resize_event *>(data);
+  Server *server = toplevel->server;
+  if (server->surfaces == nullptr || toplevel->frameId == 0) return;
+  if (!wlr_seat_validate_pointer_grab_serial(
+          server->seat, toplevel->xdg_toplevel->base->surface, event->serial)) {
+    return;
+  }
+  if (ClientSurface *frame = server->surfaces->find(toplevel->frameId)) {
+    server->beginInteractiveResize(*frame, fromWlrEdges(event->edges));
   }
 }
 
@@ -3778,6 +3913,41 @@ bool Server::beginInteractiveMove(ClientSurface &surface) {
   return true;
 }
 
+bool Server::beginInteractiveResize(ClientSurface &surface, uint32_t edges) {
+  if (surfaces == nullptr || surface.panel) return false;
+  if (pointerButtonsDown == 0) return false;
+  // A resize with no side named is not a resize. Nothing sensible to grow
+  // from, and the drag would move the window instead.
+  if (edges == 0) return false;
+  // Unlike a move, a maximized window is left maximized-then-resized rather
+  // than restored: the user is dragging an edge, which is a size they mean,
+  // not a window they are pulling off the top of the screen.
+  if (surface.maximized) surfaces->setMaximized(surface, false);
+
+  drag = Drag::Resize;
+  dragEdges = edges;
+  dragSurface = surface.id;
+  dragStartX = cursor->x;
+  dragStartY = cursor->y;
+  dragOriginX = surface.x;
+  dragOriginY = surface.y;
+  dragOriginW = surface.width;
+  dragOriginH = surface.height;
+  return true;
+}
+
+bool Server::serverDecorated(wlr_xdg_toplevel *toplevel) const {
+  if (decorations == nullptr || toplevel == nullptr) return true;
+  wlr_xdg_toplevel_decoration_v1 *decoration = nullptr;
+  wl_list_for_each(decoration, &decorations->decorations, link) {
+    // Existence is the whole answer: `ToplevelDecoration::apply` replies
+    // "server side" to every client that creates one, so a client holding a
+    // decoration object has been told we are drawing its frame.
+    if (decoration->toplevel == toplevel) return true;
+  }
+  return false;
+}
+
 void Server::focusSurface(ClientSurface &surface) {
   if (surfaces == nullptr) return;
   // A panel is not a window and clicking one does not change which window the
@@ -4267,9 +4437,10 @@ int main() {
   // drawn by its toolkit. Clients that do not speak this protocol still draw
   // their own — there is no way to stop them, which is the one real cost of
   // decorating from outside.
-  auto *decorations = wlr_xdg_decoration_manager_v1_create(server.display);
-  server.new_decoration.attach(&decorations->events.new_toplevel_decoration,
-                               &server, Server::on_new_decoration);
+  server.decorations = wlr_xdg_decoration_manager_v1_create(server.display);
+  server.new_decoration.attach(
+      &server.decorations->events.new_toplevel_decoration, &server,
+      Server::on_new_decoration);
 
   // The cursor is a position in layout space; the manager supplies the images
   // it is drawn with, scaled per output.

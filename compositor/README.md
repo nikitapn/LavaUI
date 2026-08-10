@@ -122,6 +122,16 @@ property baked into a surface. Wayland clients keep square corners: their
 pixels are their own buffer, composited by `wlr_scene`, which has no per-node
 shader hook. Rounding those means compositing the scene by hand.
 
+Which windows get a bar at all is the client's decision, taken by whether it
+asks. A client that creates an `xdg-decoration` object is told "server side"
+and gets our frame; one that never creates one is drawing its own header —
+GTK has no `xdg-decoration` support at all and always does — and a bar from us
+would be the second on the window. X11 says the same thing through its Motif
+hint. There is no protocol for a client to advertise *where* its draggable
+part is, and none is needed: the client sees the press land on its own header
+and sends `xdg_toplevel.move`, which starts the same interactive move a drag
+on our title bar does. `_NET_WM_MOVERESIZE` is the X11 spelling.
+
 A Wayland window is therefore square *including* its title bar, and its shadow
 is square too. Rounding only the bar would round two corners of a rectangle
 whose other two stay sharp, and the shadow behind it could match one end or the

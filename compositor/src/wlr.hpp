@@ -39,6 +39,7 @@ extern "C" {
 #include <wlr/interfaces/wlr_buffer.h>
 #include <wlr/render/drm_format_set.h>
 #include <wlr/types/wlr_buffer.h>
+#include <wlr/util/edges.h>
 #include <wlr/util/log.h>
 
 #include <xkbcommon/xkbcommon.h>
