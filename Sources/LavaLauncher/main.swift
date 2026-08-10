@@ -61,7 +61,9 @@ final class LauncherModel {
         // Exec line is broken is indistinguishable from one that ignored the
         // click.
         FileHandle.standardError.write(Data("launching \(entry.id)\n".utf8))
-        if entry.launch() { exit(0) }
+        // Quit through the client so the surface is destroyed before we die —
+        // bare `exit` left the fullscreen dimmer up for ~half a second.
+        if entry.launch() { LavaClient.quit() }
     }
 
     /// Moves the cursor by `columns` per row, clamped rather than wrapped:

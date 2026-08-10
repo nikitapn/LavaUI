@@ -359,7 +359,6 @@ public enum LavaClient {
         }
         let arenaID = Self.arenaID
 
-        let input: InputChannel
         do {
             // Longer than the default: this opens a window and builds a
             // swapchain on the far side, which on a cold device is not a
@@ -384,11 +383,14 @@ public enum LavaClient {
                     title: title, frame: Self.frame, appId: Self.appId
                 )
             }
-            input = InputChannel(
+            inputChannel = InputChannel(
                 stream: try compositor.subscribeInput(surfaceId: surfaceID)
             )
         } catch {
             fail("surface setup failed: \(error)")
+        }
+        guard let input = inputChannel else {
+            fail("surface setup failed: no input channel")
         }
 
         // The id this app's menu is registered under, and the same id the
@@ -585,12 +587,22 @@ public enum LavaClient {
         FileHandle.standardError.write(Data(banner.utf8))
 
         LavaApp.run(editor: editor, menu: menu, onRawKey: onRawKey, makeRoot: makeRoot)
-        // App-side close (client chrome X, Esc, `LavaApp.closeWindow`, …)
-        // used to just `exit`. The compositor only then noticed the process
-        // was gone on NPRPC's shared-memory peer poll (up to ~500 ms), so the
-        // window lingered on screen after the app had already quit. Tear the
-        // surface down first — same path as the compositor's title-bar close.
-        releaseSurface(compositor: compositor, input: input)
+        // Frame-loop return (client chrome X, `LavaApp.closeWindow`, …).
+        // Handlers that call `exit` directly never get here — use `quit()`.
+        quit()
+    }
+
+    /// Ends this client: drops the surface on the compositor, then exits.
+    ///
+    /// Prefer this over bare `exit(0)`. Shared-memory NPRPC only notices a
+    /// dead peer on a ~500 ms poll, so a process that dies without
+    /// `DestroySurface` leaves its window on screen for that long. Compositor
+    /// shortcuts (Mod+Q) destroy the surface themselves and feel instant;
+    /// Escape / "launch then close" in a launcher must take this path to match.
+    ///
+    /// Safe to call from a key handler on the frame loop. Idempotent.
+    public static func quit() -> Never {
+        releaseSurface()
         exit(0)
     }
 
@@ -599,28 +611,29 @@ public enum LavaClient {
     /// Idempotent: if the compositor already destroyed it (its own close
     /// button, or the stream ended first), `DestroySurface` is a no-op error
     /// we ignore.
-    private static func releaseSurface(
-        compositor: Compositor, input: InputChannel
-    ) {
+    private static func releaseSurface() {
         let id = surfaceID
-        guard id != 0 else {
-            input.close()
-            return
-        }
-        // Visual first: scene node gone before we do anything else.
-        do {
-            try blockingCall {
-                try await compositor.destroySurface(surfaceId: id)
-            }
-        } catch {
-            // Already gone is the ordinary race with compositor-side close.
-        }
+        let compositor = Self.compositor
+        let input = inputChannel
         surfaceID = 0
-        input.close()
+        // Visual first: scene node gone before we do anything else.
+        if id != 0, let compositor {
+            do {
+                try blockingCall {
+                    try await compositor.destroySurface(surfaceId: id)
+                }
+            } catch {
+                // Already gone is the ordinary race with compositor-side close.
+            }
+        }
+        input?.close()
+        inputChannel = nil
     }
 
     /// Set once, before the first publish can read it. See `run`.
     nonisolated(unsafe) private static var surfaceID: UInt32 = 0
+    /// Input lease for `quit()` / compositor-side close. Set in `run`.
+    nonisolated(unsafe) private static var inputChannel: InputChannel?
     /// Handed from `open` to `run`. Statics rather than a returned handle so
     /// the pair reads exactly like `LavaApp.open`/`LavaApp.run`, which an app
     /// is switching between.

@@ -18,7 +18,10 @@ func handleKey(_ event: LavaUI.InputEvent) -> Bool {
     switch event.keyCode {
     case KeyCode.escape:
         // Dismissed. A launcher is a question, and this is declining to answer.
-        exit(0)
+        // `LavaClient.quit`, not bare `exit`: that tears the surface down so
+        // the window does not linger for NPRPC's peer-death poll (Mod+Q is
+        // instant because the compositor closes the surface itself).
+        LavaClient.quit()
     case KeyCode.enter:
         model.launchSelected()
         return true
