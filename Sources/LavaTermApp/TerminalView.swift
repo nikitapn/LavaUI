@@ -75,8 +75,30 @@ struct TerminalCanvas: View {
                 takeFocus()
             },
             onGesture: { gesture in
-                if gesture.phase == .began {
+                switch gesture.phase {
+                case .began:
                     takeFocus()
+                    // `ClickCounter` is the same one `EditorView` uses, so a
+                    // double-click means the same interval and the same slop
+                    // everywhere on this desktop rather than a number this
+                    // widget picked for itself.
+                    let clicks = ClickCounter.register(
+                        x: gesture.windowX, y: gesture.windowY)
+                    session.beginSelection(
+                        atX: gesture.localX + gesture.frame.x,
+                        y: gesture.localY + gesture.frame.y,
+                        clicks: clicks
+                    )
+                case .moved:
+                    // Local coordinates go negative and past the edges once a
+                    // drag leaves the box, which is exactly what selecting to
+                    // the end of a line means — `TerminalGeometry` clamps.
+                    session.extendSelection(
+                        toX: gesture.localX + gesture.frame.x,
+                        y: gesture.localY + gesture.frame.y
+                    )
+                case .ended:
+                    session.endSelection()
                 }
             },
             paint: { list, frame in
@@ -111,6 +133,16 @@ struct TerminalCanvas: View {
         let screen = session.screen
         let originX = frame.x + pad
         let originY = frame.y + pad
+
+        // Published for the pointer handlers, which have a pixel and need a
+        // cell. Written here because this is where the numbers are decided —
+        // and they are decided per frame, since the grid moves when the window
+        // resizes.
+        session.geometry = TerminalGeometry(
+            originX: originX, originY: originY,
+            cellW: cellW, cellH: cellH,
+            cols: screen.cols, rows: screen.rows
+        )
 
         list.rect(
             x: frame.x, y: frame.y, w: frame.w, h: frame.h,
@@ -178,6 +210,23 @@ struct TerminalCanvas: View {
                 }
 
                 c = end
+            }
+        }
+
+        // Over the cells rather than under them, and translucent so the text
+        // reads through. A highlight drawn *before* the run loop would be
+        // painted over by the background of any cell that has one of its own,
+        // which is most of a `ls` and all of a syntax-highlighted file.
+        if !session.selection.isEmpty {
+            for r in 0..<screen.rows {
+                guard let columns = session.selection.columns(
+                    inRow: r, cols: screen.cols) else { continue }
+                let x = originX + Float(columns.lowerBound) * cellW
+                let w = Float(columns.count) * cellW
+                list.rect(
+                    x: x, y: originY + Float(r) * cellH, w: w, h: cellH,
+                    color: Color(r: 0.35, g: 0.55, b: 0.85, a: 0.35)
+                )
             }
         }
 

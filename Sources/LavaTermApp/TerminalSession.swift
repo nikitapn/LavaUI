@@ -21,6 +21,21 @@ public final class TerminalSession: @unchecked Sendable {
     /// Stable focus target for `FocusManager` (Canvas does not expose its leaf id).
     public let focusID = NodeID.generate()
 
+    /// What the pointer has chosen, and where the grid is on screen.
+    ///
+    /// `@ObservationIgnored` on purpose, and it is the same lesson `EditorView`
+    /// records: a drag-select changes this on every pointer move, and if
+    /// observation saw it the whole body would be rebuilt sixty times a second
+    /// for something only the paint pass reads. The paint pass reads the
+    /// current value because it runs at emit; `markNeedsRedraw` is what asks
+    /// for the frame.
+    @ObservationIgnored var selection = TerminalSelection()
+    /// Written by the paint pass, read by the pointer handlers — the mapping
+    /// only the layout knows, and the same variable `LauncherLayout.columns`
+    /// is for. Both run on the frame loop, which is the whole of the
+    /// synchronisation.
+    @ObservationIgnored var geometry: TerminalGeometry?
+
     private var pty: PtySession?
     private var lastCols = 80
     private var lastRows = 24
@@ -69,8 +84,84 @@ public final class TerminalSession: @unchecked Sendable {
         pty?.write(string)
     }
 
+    // MARK: - Selection
+
+    /// Begins a selection under the pointer. `clicks` is 1, 2 or 3 — character,
+    /// word, or the whole row.
+    public func beginSelection(atX x: Float, y: Float, clicks: Int) {
+        guard let geometry else { return }
+        let granularity: TerminalSelection.Granularity =
+            clicks >= 3 ? .line : (clicks == 2 ? .word : .character)
+        selection.begin(
+            at: geometry.cell(atX: x, y: y), granularity: granularity, in: screen)
+        ViewInvalidation.markNeedsRedraw()
+    }
+
+    public func extendSelection(toX x: Float, y: Float) {
+        guard let geometry else { return }
+        selection.extend(to: geometry.cell(atX: x, y: y), in: screen)
+        ViewInvalidation.markNeedsRedraw()
+    }
+
+    /// A press that never moved is a click, and a click puts the selection
+    /// away — the same thing clicking in a text editor does.
+    public func endSelection() {
+        if !selection.dragged, selection.granularity == .character {
+            selection.clear()
+        }
+        ViewInvalidation.markNeedsRedraw()
+    }
+
+    public func clearSelection() {
+        guard !selection.isEmpty else { return }
+        selection.clear()
+        ViewInvalidation.markNeedsRedraw()
+    }
+
+    /// The selection to the clipboard. False when there was nothing selected,
+    /// so the caller can let the key through to the shell instead.
+    @discardableResult
+    public func copySelection() -> Bool {
+        let text = selection.text(from: screen)
+        guard !text.isEmpty else { return false }
+        ClipboardBridge.writer?(text)
+        return true
+    }
+
+    /// Clipboard to the shell, as if it had been typed.
+    public func paste() {
+        let text = ClipboardBridge.reader?() ?? ""
+        guard !text.isEmpty else { return }
+        // Newlines included: pasting three lines into a shell runs three
+        // commands, which is what every other terminal does and what anyone
+        // pasting a snippet expects. Bracketed paste is the day this needs to
+        // be able to say "this came from a clipboard".
+        write(text)
+    }
+
     /// Key → PTY bytes (CSI where appropriate).
     public func handleKey(_ event: KeyEvent) -> Bool {
+        // Before the control-byte mapping below, which would otherwise turn
+        // these into ^C and ^V. Shift is what separates them: Ctrl+C has to
+        // stay the interrupt, because a terminal where it copied instead
+        // would be a terminal that cannot stop a runaway process.
+        if event.control, event.shift {
+            switch event.key {
+            case KeyCode.c:
+                if copySelection() { return true }
+            case KeyCode.v:
+                paste()
+                return true
+            default:
+                break
+            }
+        }
+
+        // Typing puts the selection away: the highlight describes text that is
+        // about to be scrolled off or overwritten, and leaving it on screen
+        // would point at whatever happened to land there next.
+        clearSelection()
+
         if event.control {
             if let b = controlByte(for: event.key) {
                 write(Data([b]))
@@ -112,6 +203,7 @@ public final class TerminalSession: @unchecked Sendable {
         if ch.asciiValue.map({ $0 < 0x20 || $0 == 0x7F }) == true {
             return false
         }
+        clearSelection()
         write(String(ch))
         return true
     }
