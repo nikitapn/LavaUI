@@ -1,5 +1,6 @@
 #include "ipc/draw_arena.hpp"
 
+#include <dirent.h>
 #include <fcntl.h>
 #include <sys/mman.h>
 #include <signal.h>
@@ -10,6 +11,7 @@
 #include <cerrno>
 #include <cstring>
 #include <iostream>
+#include <string_view>
 #include <vector>
 
 namespace canvas::ipc {
@@ -121,7 +123,10 @@ void logErrno(const char *what, const std::string &name)
 /// Deliberately conservative about pid reuse: a recycled pid makes a dead
 /// arena look live, which refuses to start rather than stealing a running
 /// producer's memory. That is the direction to be wrong in.
-bool claimStale(const std::string &name)
+///
+/// `announce` is off for the sweep, which would otherwise print a line per
+/// arena on the first run after a long session.
+bool claimStale(const std::string &name, bool announce = true)
 {
   int fd = ::shm_open(name.c_str(), O_RDONLY, 0600);
   if (fd < 0) return false;
@@ -134,8 +139,10 @@ bool claimStale(const std::string &name)
     return false;
   }
   if (header.producerPid > 0 && ::kill(header.producerPid, 0) == 0) return false;
-  std::cerr << "DrawArena: reclaiming " << name << " from dead pid "
-            << header.producerPid << "\n";
+  if (announce) {
+    std::cerr << "DrawArena: reclaiming " << name << " from dead pid "
+              << header.producerPid << "\n";
+  }
   return ::shm_unlink(name.c_str()) == 0;
 }
 
@@ -406,6 +413,34 @@ DrawArena::~DrawArena() = default;
 DrawArena::DrawArena(DrawArena &&) noexcept = default;
 DrawArena &DrawArena::operator=(DrawArena &&) noexcept = default;
 
+size_t DrawArena::reapStale()
+{
+#if defined(__linux__)
+  DIR *dir = ::opendir("/dev/shm");
+  if (dir == nullptr) return 0;
+
+  size_t removed = 0;
+  while (const dirent *entry = ::readdir(dir)) {
+    const std::string_view name(entry->d_name);
+    if (!name.starts_with("lava-arena-")) continue;
+    // The name is the shm object's, with the leading slash every other call
+    // here uses.
+    if (claimStale("/" + std::string(name), /*announce=*/false)) ++removed;
+  }
+  ::closedir(dir);
+
+  if (removed != 0) {
+    std::cerr << "DrawArena: reclaimed " << removed
+              << " arena(s) from processes that are gone\n";
+  }
+  return removed;
+#else
+  // Nowhere to look: /dev/shm is Linux's, and POSIX gives no way to enumerate
+  // shared memory objects.
+  return 0;
+#endif
+}
+
 bool DrawArena::create(const std::string &id, ArenaCapacity capacity)
 {
   if (impl_->current.base) return false;
@@ -413,6 +448,16 @@ bool DrawArena::create(const std::string &id, ArenaCapacity capacity)
     std::cerr << "DrawArena: capacity above the per-array limit\n";
     return false;
   }
+
+  // Every producer clears up after the ones that died before it. Here rather
+  // than once at compositor startup because the arenas that accumulate are
+  // mostly launcher invocations — dozens within a single session, each one a
+  // process that ends by calling exit() and so destroys nothing. A sweep per
+  // producer keeps the count near zero instead of near a session's worth.
+  //
+  // Not in mapNew, which also runs for every growth generation: this belongs
+  // to starting up, not to allocating.
+  reapStale();
   Impl::Mapping m;
   if (!impl_->mapNew(shmName(id, 0), capacity, 0, m)) return false;
   impl_->id         = id;

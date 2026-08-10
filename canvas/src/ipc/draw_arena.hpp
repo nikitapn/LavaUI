@@ -146,7 +146,27 @@ class DrawArena {
   ///
   /// Fails if an arena with this id already exists, which is what stops two
   /// producers from silently writing over each other.
+  ///
+  /// Sweeps first — see `reapStale`.
   bool create(const std::string &id, ArenaCapacity capacity = kDefaultArenaCapacity);
+
+  /// Unlinks every arena whose producer process is gone, and says how many.
+  ///
+  /// An arena belongs to its producer and is unlinked by its destructor, which
+  /// covers an orderly ending and none of the others: a client that ends with
+  /// `exit()` — as every LavaUI client does, and as the launcher does on every
+  /// Escape — runs no destructor and leaves its mapping in `/dev/shm` for
+  /// good. A day of launching things is a few hundred of them.
+  ///
+  /// Nothing the dying process can do fixes that, so the next producer does
+  /// it. Only an arena naming a pid that no longer exists is taken; one whose
+  /// header is unreadable or half-written is left alone, and a recycled pid
+  /// makes a dead arena look alive, which wastes a mapping rather than
+  /// pulling one out from under a running client.
+  ///
+  /// Called by `create`; public because a long-lived consumer may want to
+  /// sweep without producing anything.
+  static size_t reapStale();
 
   /// Claims a slot to write into. The returned pointers stay valid until
   /// `commitFrame`, or until `growFrame` replaces them.

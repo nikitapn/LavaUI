@@ -75,10 +75,15 @@ screenshot is a whole window as a PNG in one reply, measured at 542 KiB for a
 agent's screenshot into a timeout. Everything else here is input events,
 `Present` and heartbeats, which would fit a hundred times over.
 
-That memory comes back when a window closes and does *not* when the
-compositor is killed — a process that runs no destructor removes nothing. The
-next compositor to start sweeps what the last one left; `/dev/shm` filling up
-with `nprpc_*` is a thing that used to happen and no longer should.
+That memory comes back when a window closes and does *not* when the process
+is killed — one that runs no destructor removes nothing, and a client ending
+with `exit()` is no different, which is how every LavaUI client ends. So both
+halves are swept by whoever comes next rather than by whoever left: a new
+compositor clears stale `nprpc_*` rings before creating its own, and a new
+client clears stale `lava-arena-*` before creating its own. The second is a
+sweep per client rather than per session because the arenas that pile up are
+launcher invocations — dozens between one compositor start and the next.
+`/dev/shm` filling up is a thing that used to happen and no longer should.
 
 **Alt+P** opens the application launcher, which is *not* supervised: it is
 spawned per invocation and exits as soon as it has launched something or been
