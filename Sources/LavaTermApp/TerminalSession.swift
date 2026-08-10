@@ -157,44 +157,41 @@ public final class TerminalSession: @unchecked Sendable {
             }
         }
 
+        // What this key sends, decided before anything is done about it.
+        //
+        // Worked out first because a key that sends nothing must change
+        // nothing: pressing Ctrl is the first half of Ctrl+Shift+C, and a
+        // version of this that cleared the selection on the way past — as this
+        // one did — makes the shortcut impossible to reach. Modifiers arrive
+        // as key events of their own, and they are typed by definition before
+        // every chord.
+        let payload: Data? = {
+            if event.control, let b = controlByte(for: event.key) {
+                return Data([b])
+            }
+            switch event.key {
+            case KeyCode.enter: return Data("\r".utf8)
+            case KeyCode.backspace: return Data([0x7F])  // DEL — what most modern shells expect
+            case KeyCode.tab: return Data("\t".utf8)
+            case KeyCode.escape: return Data([0x1B])
+            case KeyCode.up: return Data("\u{1B}[A".utf8)
+            case KeyCode.down: return Data("\u{1B}[B".utf8)
+            case KeyCode.right: return Data("\u{1B}[C".utf8)
+            case KeyCode.left: return Data("\u{1B}[D".utf8)
+            case KeyCode.home: return Data("\u{1B}[H".utf8)
+            case KeyCode.end: return Data("\u{1B}[F".utf8)
+            case KeyCode.delete: return Data("\u{1B}[3~".utf8)
+            default: return nil
+            }
+        }()
+
+        guard let payload else { return false }
+
         // Typing puts the selection away: the highlight describes text that is
         // about to be scrolled off or overwritten, and leaving it on screen
         // would point at whatever happened to land there next.
         clearSelection()
-
-        if event.control {
-            if let b = controlByte(for: event.key) {
-                write(Data([b]))
-                return true
-            }
-        }
-
-        switch event.key {
-        case KeyCode.enter:
-            write("\r")
-        case KeyCode.backspace:
-            write(Data([0x7F]))  // DEL — what most modern shells expect
-        case KeyCode.tab:
-            write("\t")
-        case KeyCode.escape:
-            write(Data([0x1B]))
-        case KeyCode.up:
-            write("\u{1B}[A")
-        case KeyCode.down:
-            write("\u{1B}[B")
-        case KeyCode.right:
-            write("\u{1B}[C")
-        case KeyCode.left:
-            write("\u{1B}[D")
-        case KeyCode.home:
-            write("\u{1B}[H")
-        case KeyCode.end:
-            write("\u{1B}[F")
-        case KeyCode.delete:
-            write("\u{1B}[3~")
-        default:
-            return false
-        }
+        write(payload)
         return true
     }
 
