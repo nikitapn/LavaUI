@@ -713,7 +713,7 @@ check_failed:
   return false;
 }
 bool check_1KeyboardSettings_1(::nprpc::flat_buffer& buf, lava_M12_Direct& ia) {
-  if (static_cast<std::uint32_t>(buf.size()) < ia.offset() + 48) goto check_failed;
+  if (static_cast<std::uint32_t>(buf.size()) < ia.offset() + 56) goto check_failed;
   {
     {
       if(!ia._1().layout_d()._check_size_align(static_cast<std::uint32_t>(buf.size()))) goto check_failed;
@@ -729,6 +729,9 @@ bool check_1KeyboardSettings_1(::nprpc::flat_buffer& buf, lava_M12_Direct& ia) {
     }
     {
       if(!ia._1().rules_d()._check_size_align(static_cast<std::uint32_t>(buf.size()))) goto check_failed;
+    }
+    {
+      if(!ia._1().modKey_d()._check_size_align(static_cast<std::uint32_t>(buf.size()))) goto check_failed;
     }
   }
   return true;
@@ -1776,6 +1779,7 @@ KeyboardSettings Compositor::GetKeyboard() {
     __ret_value.rules = (std::string_view)out._1().rules();
     __ret_value.repeatRate = out._1().repeatRate();
     __ret_value.repeatDelay = out._1().repeatDelay();
+    __ret_value.modKey = (std::string_view)out._1().modKey();
   return __ret_value;
 }
 
@@ -1812,6 +1816,7 @@ Compositor::GetKeyboardAsync(std::stop_token st) {
     __ret_value.rules = (std::string_view)out._1().rules();
     __ret_value.repeatRate = out._1().repeatRate();
     __ret_value.repeatDelay = out._1().repeatDelay();
+    __ret_value.modKey = (std::string_view)out._1().modKey();
   co_return __ret_value;
 }
 
@@ -1821,16 +1826,17 @@ void Compositor::SetKeyboard(const KeyboardSettings& settings) {
   ::nprpc::flat_buffer buf;
   buf.set_arena(&__arena);
   auto session = ::nprpc::impl::g_rpc->get_session(this->get_endpoint());
-  std::size_t __wire_size = 80;
+  std::size_t __wire_size = 88;
   __wire_size = ::nprpc::flat::grow_size(__wire_size, 1, static_cast<std::size_t>(settings.layout.size()));
   __wire_size = ::nprpc::flat::grow_size(__wire_size, 1, static_cast<std::size_t>(settings.variant.size()));
   __wire_size = ::nprpc::flat::grow_size(__wire_size, 1, static_cast<std::size_t>(settings.options.size()));
   __wire_size = ::nprpc::flat::grow_size(__wire_size, 1, static_cast<std::size_t>(settings.model.size()));
   __wire_size = ::nprpc::flat::grow_size(__wire_size, 1, static_cast<std::size_t>(settings.rules.size()));
+  __wire_size = ::nprpc::flat::grow_size(__wire_size, 1, static_cast<std::size_t>(settings.modKey.size()));
   if (!::nprpc::impl::g_rpc->prepare_zero_copy_buffer(session->ctx(), buf, __wire_size))
     buf.prepare(__wire_size);
   {
-    buf.commit(80);
+    buf.commit(88);
     static_cast<::nprpc::impl::Header*>(buf.data().data())->msg_id = ::nprpc::impl::MessageId::FunctionCall;
   static_cast<::nprpc::impl::Header*>(buf.data().data())->msg_type =::nprpc::impl::MessageType::Request;
   }
@@ -1847,6 +1853,7 @@ void Compositor::SetKeyboard(const KeyboardSettings& settings) {
   _._1().rules(settings.rules);
   _._1().repeatRate() = settings.repeatRate;
   _._1().repeatDelay() = settings.repeatDelay;
+  _._1().modKey(settings.modKey);
   static_cast<::nprpc::impl::Header*>(buf.data().data())->size = static_cast<uint32_t>(buf.size());
   session->send_receive(buf, this->get_timeout());
   auto std_reply = ::nprpc::impl::handle_standart_reply(buf);
@@ -1861,16 +1868,17 @@ Compositor::SetKeyboardAsync(const KeyboardSettings& settings, std::stop_token s
   if (st.stop_requested()) throw nprpc::OperationCancelled();
   ::nprpc::flat_buffer buf;
   auto session = ::nprpc::impl::g_rpc->get_session(this->get_endpoint());
-  std::size_t __wire_size = 80;
+  std::size_t __wire_size = 88;
   __wire_size = ::nprpc::flat::grow_size(__wire_size, 1, static_cast<std::size_t>(settings.layout.size()));
   __wire_size = ::nprpc::flat::grow_size(__wire_size, 1, static_cast<std::size_t>(settings.variant.size()));
   __wire_size = ::nprpc::flat::grow_size(__wire_size, 1, static_cast<std::size_t>(settings.options.size()));
   __wire_size = ::nprpc::flat::grow_size(__wire_size, 1, static_cast<std::size_t>(settings.model.size()));
   __wire_size = ::nprpc::flat::grow_size(__wire_size, 1, static_cast<std::size_t>(settings.rules.size()));
+  __wire_size = ::nprpc::flat::grow_size(__wire_size, 1, static_cast<std::size_t>(settings.modKey.size()));
   if (!::nprpc::impl::g_rpc->prepare_zero_copy_buffer(session->ctx(), buf, __wire_size))
     buf.prepare(__wire_size);
   {
-    buf.commit(80);
+    buf.commit(88);
     static_cast<::nprpc::impl::Header*>(buf.data().data())->msg_id = ::nprpc::impl::MessageId::FunctionCall;
   static_cast<::nprpc::impl::Header*>(buf.data().data())->msg_type =::nprpc::impl::MessageType::Request;
   }
@@ -1887,6 +1895,7 @@ Compositor::SetKeyboardAsync(const KeyboardSettings& settings, std::stop_token s
   _._1().rules(settings.rules);
   _._1().repeatRate() = settings.repeatRate;
   _._1().repeatDelay() = settings.repeatDelay;
+  _._1().modKey(settings.modKey);
   static_cast<::nprpc::impl::Header*>(buf.data().data())->size = static_cast<uint32_t>(buf.size());
   co_await session->send_receive_coro(buf, this->get_timeout(), std::move(st));
   auto std_reply = ::nprpc::impl::handle_standart_reply(buf);
@@ -3450,15 +3459,16 @@ void ICompositor_Servant::dispatch(::nprpc::SessionContext& ctx, [[maybe_unused]
       assert(ctx.tx_buffer != nullptr);
       auto& obuf = *ctx.tx_buffer;
       obuf.consume(obuf.size());
-      std::size_t __wire_size = 64;
+      std::size_t __wire_size = 72;
       __wire_size = ::nprpc::flat::grow_size(__wire_size, 1, static_cast<std::size_t>(__ret_val.layout.size()));
       __wire_size = ::nprpc::flat::grow_size(__wire_size, 1, static_cast<std::size_t>(__ret_val.variant.size()));
       __wire_size = ::nprpc::flat::grow_size(__wire_size, 1, static_cast<std::size_t>(__ret_val.options.size()));
       __wire_size = ::nprpc::flat::grow_size(__wire_size, 1, static_cast<std::size_t>(__ret_val.model.size()));
       __wire_size = ::nprpc::flat::grow_size(__wire_size, 1, static_cast<std::size_t>(__ret_val.rules.size()));
+      __wire_size = ::nprpc::flat::grow_size(__wire_size, 1, static_cast<std::size_t>(__ret_val.modKey.size()));
       if (!::nprpc::impl::g_rpc->prepare_zero_copy_buffer(ctx, obuf, __wire_size))
         obuf.prepare(__wire_size);
-      obuf.commit(64);
+      obuf.commit(72);
       lava_M12_Direct oa(obuf,16);
       oa._1().layout(__ret_val.layout);
       oa._1().variant(__ret_val.variant);
@@ -3467,6 +3477,7 @@ void ICompositor_Servant::dispatch(::nprpc::SessionContext& ctx, [[maybe_unused]
       oa._1().rules(__ret_val.rules);
       oa._1().repeatRate() = __ret_val.repeatRate;
       oa._1().repeatDelay() = __ret_val.repeatDelay;
+      oa._1().modKey(__ret_val.modKey);
       static_cast<::nprpc::impl::Header*>(obuf.data().data())->size = static_cast<uint32_t>(obuf.size());
       static_cast<::nprpc::impl::Header*>(obuf.data().data())->msg_id = ::nprpc::impl::MessageId::BlockResponse;
       static_cast<::nprpc::impl::Header*>(obuf.data().data())->msg_type = ::nprpc::impl::MessageType::Answer;

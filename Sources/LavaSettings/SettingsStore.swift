@@ -75,6 +75,9 @@ final class SettingsStore {
     var rules = ""
     var repeatRate: Float = 25
     var repeatDelay: Float = 600
+    /// Compositor shortcut modifier: `"alt"` or `"super"`. Same vocabulary
+    /// as `lava.conf`'s `mod-key` and the IDL field.
+    var modKey = "alt"
     /// Filter over the layout list, which is a few hundred entries long on a
     /// normal install and unusable without one.
     var layoutFilter = ""
@@ -203,15 +206,26 @@ final class SettingsStore {
             model: model,
             rules: rules,
             repeatRate: Int32(repeatRate.rounded()),
-            repeatDelay: Int32(repeatDelay.rounded())
+            repeatDelay: Int32(repeatDelay.rounded()),
+            modKey: modKey
         )
         do {
             try DesktopSettings.setKeyboard(wanted)
             clearStatus()
             if let taken = try? DesktopSettings.keyboard() { apply(taken) }
+            // Bindings list the live mod name; refresh so the table matches.
+            if let listed = try? DesktopSettings.keyBindings() {
+                bindings = listed
+            }
         } catch {
             report(error)
         }
+    }
+
+    /// Switches the compositor shortcut modifier and pushes it.
+    func setModKey(_ value: String) {
+        modKey = value == "super" ? "super" : "alt"
+        pushKeyboard()
     }
 
     /// Applies one change to the selected screen, leaving its other fields as
@@ -249,6 +263,7 @@ final class SettingsStore {
         rules = keyboard.rules
         repeatRate = Float(keyboard.repeatRate)
         repeatDelay = Float(keyboard.repeatDelay)
+        modKey = keyboard.modKey == "super" ? "super" : "alt"
     }
 
     private func report(_ error: Error) {

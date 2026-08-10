@@ -152,6 +152,30 @@ struct KeyboardPage: View {
 
             SettingGroup("Shortcuts") {
                 SettingRow(
+                    "Modifier",
+                    "Which key the compositor's own shortcuts use, and which "
+                    + "one holds a window for drag-to-move. Alt is the "
+                    + "default; Super is the Win key."
+                ) {
+                    HStack(spacing: 8) {
+                        PickerRow(
+                            title: "Alt",
+                            detail: "Left/Right Alt",
+                            selected: store.modKey != "super"
+                        ) {
+                            store.setModKey("alt")
+                        }
+                        PickerRow(
+                            title: "Super",
+                            detail: "Win / Meta",
+                            selected: store.modKey == "super"
+                        ) {
+                            store.setModKey("super")
+                        }
+                    }
+                }
+
+                SettingRow(
                     "Compositor shortcuts",
                     "Taken before any application sees the key. Compiled in for "
                     + "now — this list comes from the same table that dispatches "
@@ -162,7 +186,7 @@ struct KeyboardPage: View {
                             HStack(padding: 4, alignment: .center, spacing: 10) {
                                 Text("\(binding.modifiers)+\(binding.key)",
                                      color: Theme.current.accent)
-                                    .frame(width: .pt(140))
+                                    .frame(width: .pt(160))
                                 Text(binding.description,
                                      color: Theme.current.textSecondary)
                                 Spacer()

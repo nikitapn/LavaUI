@@ -4,11 +4,18 @@ import Foundation
 public final class TerminalScreen: @unchecked Sendable {
     public private(set) var cols: Int
     public private(set) var rows: Int
-    /// Row-major cells.
+    /// Row-major cells of the *active* buffer (main or alternate).
     public private(set) var cells: [TerminalCell]
     public private(set) var cursorCol: Int = 0
     public private(set) var cursorRow: Int = 0
     public private(set) var cursorVisible: Bool = true
+    /// DECCKM: when set, arrow keys send application sequences (`ESC O A`)
+    /// rather than ANSI ones (`ESC [ A`). Full-screen tools (tmux, vim)
+    /// turn this on and expect the other spelling.
+    public private(set) var applicationCursorKeys: Bool = false
+    /// Whether the alternate screen is showing. Exposed so tests can assert
+    /// the switch happened without reading private storage.
+    public private(set) var onAlternateScreen: Bool = false
 
     public private(set) var currentFg: TerminalColor = .defaultForeground
     public private(set) var currentBg: TerminalColor = .defaultBackground
@@ -21,6 +28,15 @@ public final class TerminalScreen: @unchecked Sendable {
     private var savedCol: Int = 0
     private var savedRow: Int = 0
     private var originMode = false
+
+    /// Main buffer while the alternate screen is active. Nil on the main
+    /// screen. Swapping rather than copying keeps enter/leave O(1) in the
+    /// cell count sense (just a pointer swap of two arrays).
+    private var mainCells: [TerminalCell]?
+    private var mainCursorCol: Int = 0
+    private var mainCursorRow: Int = 0
+    private var mainScrollTop: Int = 0
+    private var mainScrollBottom: Int = 0
 
     private let parser = AnsiParser()
 
@@ -35,21 +51,36 @@ public final class TerminalScreen: @unchecked Sendable {
         let nc = max(1, newCols)
         let nr = max(1, newRows)
         guard nc != cols || nr != rows else { return }
-        var next = Array(repeating: TerminalCell.empty, count: nc * nr)
-        let copyRows = min(rows, nr)
-        let copyCols = min(cols, nc)
-        for r in 0..<copyRows {
-            for c in 0..<copyCols {
-                next[r * nc + c] = cells[r * cols + c]
-            }
+        cells = resizeBuffer(cells, fromCols: cols, fromRows: rows, toCols: nc, toRows: nr)
+        if var saved = mainCells {
+            saved = resizeBuffer(saved, fromCols: cols, fromRows: rows, toCols: nc, toRows: nr)
+            mainCells = saved
+            mainCursorCol = min(mainCursorCol, nc - 1)
+            mainCursorRow = min(mainCursorRow, nr - 1)
+            mainScrollTop = 0
+            mainScrollBottom = nr - 1
         }
         cols = nc
         rows = nr
-        cells = next
         scrollTop = 0
         scrollBottom = rows - 1
         cursorCol = min(cursorCol, cols - 1)
         cursorRow = min(cursorRow, rows - 1)
+    }
+
+    private func resizeBuffer(
+        _ source: [TerminalCell], fromCols: Int, fromRows: Int,
+        toCols: Int, toRows: Int
+    ) -> [TerminalCell] {
+        var next = Array(repeating: TerminalCell.empty, count: toCols * toRows)
+        let copyRows = min(fromRows, toRows)
+        let copyCols = min(fromCols, toCols)
+        for r in 0..<copyRows {
+            for c in 0..<copyCols {
+                next[r * toCols + c] = source[r * fromCols + c]
+            }
+        }
+        return next
     }
 
     public func cell(row: Int, col: Int) -> TerminalCell {
@@ -118,9 +149,12 @@ public final class TerminalScreen: @unchecked Sendable {
             cursorCol = min(cols - 1, savedCol)
             cursorRow = min(rows - 1, savedRow)
         case .setScrollRegion(let top, let bottom):
+            // DECSTBM: top and bottom are 1-based inclusive. Empty / zero bottom
+            // means "default" (the whole screen). Equal margins are legal and
+            // give a one-line region.
             let t = max(0, top - 1)
             let b = bottom == 0 ? rows - 1 : min(rows - 1, bottom - 1)
-            if t < b {
+            if t <= b {
                 scrollTop = t
                 scrollBottom = b
                 cursorCol = 0
@@ -136,9 +170,104 @@ public final class TerminalScreen: @unchecked Sendable {
             deleteLines(n)
         case .insertLines(let n):
             insertLines(n)
+        case .privateModes(let modes, let set):
+            for mode in modes {
+                applyPrivateMode(mode, set: set)
+            }
         case .ignore:
             break
         }
+    }
+
+    /// DECSET / DECRST. Only the modes a full-screen tool actually needs are
+    /// implemented; the rest are acknowledged and ignored so a sequence does
+    /// not leave the parser in a bad state.
+    private func applyPrivateMode(_ mode: Int, set: Bool) {
+        switch mode {
+        case 1:
+            // DECCKM — application cursor keys.
+            applicationCursorKeys = set
+        case 25:
+            // DECTCEM — show / hide cursor.
+            cursorVisible = set
+        case 47, 1047:
+            // Alternate screen, without (47/1047) or with (1049) a cursor
+            // save. Enter clears the alt buffer so the previous full-screen
+            // app does not flash through.
+            if set {
+                enterAlternateScreen(saveCursor: false)
+            } else {
+                leaveAlternateScreen(restoreCursor: false)
+            }
+        case 1048:
+            if set {
+                savedCol = cursorCol
+                savedRow = cursorRow
+            } else {
+                cursorCol = min(cols - 1, savedCol)
+                cursorRow = min(rows - 1, savedRow)
+            }
+        case 1049:
+            if set {
+                enterAlternateScreen(saveCursor: true)
+            } else {
+                leaveAlternateScreen(restoreCursor: true)
+            }
+        default:
+            break
+        }
+    }
+
+    private func enterAlternateScreen(saveCursor: Bool) {
+        if saveCursor {
+            savedCol = cursorCol
+            savedRow = cursorRow
+        }
+        guard !onAlternateScreen else {
+            // Already on alt: clear it, which is what a second 1049h from a
+            // nested tool should do rather than stacking another buffer.
+            for i in cells.indices { cells[i] = .empty }
+            cursorCol = 0
+            cursorRow = 0
+            scrollTop = 0
+            scrollBottom = rows - 1
+            return
+        }
+        mainCells = cells
+        mainCursorCol = cursorCol
+        mainCursorRow = cursorRow
+        mainScrollTop = scrollTop
+        mainScrollBottom = scrollBottom
+        cells = Array(repeating: .empty, count: cols * rows)
+        cursorCol = 0
+        cursorRow = 0
+        scrollTop = 0
+        scrollBottom = rows - 1
+        onAlternateScreen = true
+    }
+
+    private func leaveAlternateScreen(restoreCursor: Bool) {
+        guard onAlternateScreen, let saved = mainCells else {
+            // Already on main: still honour a restore so a lone 1049l after
+            // a crash does not leave the cursor wherever the alt left it.
+            if restoreCursor {
+                cursorCol = min(cols - 1, savedCol)
+                cursorRow = min(rows - 1, savedRow)
+            }
+            return
+        }
+        cells = saved
+        mainCells = nil
+        scrollTop = mainScrollTop
+        scrollBottom = min(rows - 1, mainScrollBottom)
+        if restoreCursor {
+            cursorCol = min(cols - 1, savedCol)
+            cursorRow = min(rows - 1, savedRow)
+        } else {
+            cursorCol = min(cols - 1, mainCursorCol)
+            cursorRow = min(rows - 1, mainCursorRow)
+        }
+        onAlternateScreen = false
     }
 
     private func put(_ s: Unicode.Scalar) {
@@ -161,9 +290,16 @@ public final class TerminalScreen: @unchecked Sendable {
     }
 
     private func lineFeed() {
-        if cursorRow >= scrollBottom {
-            scrollUp()
-        } else {
+        // Scroll only when the cursor is *inside* the scrolling region and on
+        // its bottom margin. A line feed on the status line (below the region)
+        // must not scroll the pane away — that is how tmux's status bar works.
+        if cursorRow >= scrollTop && cursorRow <= scrollBottom {
+            if cursorRow == scrollBottom {
+                scrollUp()
+            } else {
+                cursorRow += 1
+            }
+        } else if cursorRow < rows - 1 {
             cursorRow += 1
         }
     }

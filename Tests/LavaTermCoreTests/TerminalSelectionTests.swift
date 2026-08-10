@@ -67,6 +67,22 @@ final class TerminalSelectionTests: XCTestCase {
         XCTAssertEqual(backward.text(from: screen), "ell")
     }
 
+    /// A plain click is not a selection — only a drag (or a word/line press)
+    /// is. Selecting on the press itself left a one-cell highlight and put
+    /// one character into the primary selection.
+    func testACharacterPressAloneDoesNotSelect() {
+        let screen = TerminalScreen(cols: 10, rows: 2)
+        screen.feed("hello")
+        var selection = TerminalSelection()
+        selection.begin(at: CellPosition(row: 0, col: 1),
+                        granularity: .character, in: screen)
+        XCTAssertTrue(selection.isEmpty)
+        XCTAssertFalse(selection.dragged)
+        // A release move at the same cell still is not a drag.
+        selection.extend(to: CellPosition(row: 0, col: 1), in: screen)
+        XCTAssertTrue(selection.isEmpty)
+    }
+
     func testASelectionAcrossRowsIsReadingOrderNotARectangle() {
         let screen = TerminalScreen(cols: 10, rows: 4)
         screen.feed("abcdefghij\r\nklmnopqrst")
@@ -156,8 +172,10 @@ final class TerminalSelectionTests: XCTestCase {
         selection.begin(at: CellPosition(row: 0, col: 1),
                         granularity: .character, in: screen)
         XCTAssertFalse(selection.dragged)
+        XCTAssertTrue(selection.isEmpty)
         selection.extend(to: CellPosition(row: 0, col: 2), in: screen)
         XCTAssertTrue(selection.dragged)
+        XCTAssertEqual(selection.text(from: screen), "el")
     }
 
     /// Found by watching the real thing: a release delivers one last move at
@@ -171,6 +189,7 @@ final class TerminalSelectionTests: XCTestCase {
         selection.begin(at: press, granularity: .character, in: screen)
         selection.extend(to: press, in: screen)
         XCTAssertFalse(selection.dragged)
+        XCTAssertTrue(selection.isEmpty)
     }
 
     func testADragThatWandersBackIsStillADrag() {

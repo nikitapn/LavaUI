@@ -154,6 +154,8 @@ struct CompositorHost {
     std::string rules;
     int32_t repeatRate = 0;
     int32_t repeatDelay = 0;
+    /// "alt" or "super" — see `KeyboardConfig::modKey`.
+    std::string modKey = "alt";
   };
 
   /// One layout, or one variant of one — `variant` empty means the layout

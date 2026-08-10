@@ -115,14 +115,38 @@ public struct TerminalSelection {
         at position: CellPosition, granularity: Granularity, in screen: TerminalScreen
     ) {
         self.granularity = granularity
-        anchorSpan = TerminalSelection.span(
-            at: position, granularity: granularity, in: screen)
-        focusSpan = anchorSpan
         pressed = position
         dragged = false
+        // A character-granularity press is only a *pending* selection: a plain
+        // click should not light up one cell (and fill the primary selection
+        // with one character). Word and line presses are deliberate picks and
+        // take effect on the press itself.
+        if granularity == .character {
+            anchorSpan = nil
+            focusSpan = nil
+        } else {
+            anchorSpan = TerminalSelection.span(
+                at: position, granularity: granularity, in: screen)
+            focusSpan = anchorSpan
+        }
     }
 
     public mutating func extend(to position: CellPosition, in screen: TerminalScreen) {
+        guard let pressed else { return }
+        if granularity == .character {
+            // Still sitting on the press cell: not a drag yet. A release
+            // commonly delivers one last move here, and counting it would make
+            // every click a one-cell selection.
+            if position == pressed && !dragged { return }
+            if !dragged {
+                anchorSpan = TerminalSelection.span(
+                    at: pressed, granularity: .character, in: screen)
+                dragged = true
+            }
+            focusSpan = TerminalSelection.span(
+                at: position, granularity: .character, in: screen)
+            return
+        }
         guard anchorSpan != nil else { return }
         focusSpan = TerminalSelection.span(
             at: position, granularity: granularity, in: screen)

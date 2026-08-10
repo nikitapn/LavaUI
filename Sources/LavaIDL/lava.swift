@@ -219,10 +219,11 @@ public struct KeyboardSettings: Codable, Sendable {
   public var rules: String = ""
   public var repeatRate: Int32 = 0
   public var repeatDelay: Int32 = 0
+  public var modKey: String = ""
 
   public init() {}
 
-  public init(layout: String, variant: String, options: String, model: String, rules: String, repeatRate: Int32, repeatDelay: Int32)   {
+  public init(layout: String, variant: String, options: String, model: String, rules: String, repeatRate: Int32, repeatDelay: Int32, modKey: String)   {
     self.layout = layout
     self.variant = variant
     self.options = options
@@ -230,6 +231,7 @@ public struct KeyboardSettings: Codable, Sendable {
     self.rules = rules
     self.repeatRate = repeatRate
     self.repeatDelay = repeatDelay
+    self.modKey = modKey
   }
 }
 
@@ -243,6 +245,7 @@ public func marshal_KeyboardSettings(buffer: FlatBuffer, offset: Int, data: Keyb
   NPRPC.marshal_string(buffer: buffer, offset: offset + 32, string: data.rules)
   buffer.storeBytes(of: data.repeatRate, toByteOffset: offset + 40, as: Int32.self)
   buffer.storeBytes(of: data.repeatDelay, toByteOffset: offset + 44, as: Int32.self)
+  NPRPC.marshal_string(buffer: buffer, offset: offset + 48, string: data.modKey)
 }
 
 // MARK: - Unmarshal KeyboardSettings
@@ -255,6 +258,7 @@ public func unmarshal_KeyboardSettings(buffer: UnsafeRawPointer, offset: Int) ->
   result.rules = NPRPC.unmarshal_string(buffer: buffer, offset: offset + 32)
   result.repeatRate = buffer.load(fromByteOffset: offset + 40, as: Int32.self)
   result.repeatDelay = buffer.load(fromByteOffset: offset + 44, as: Int32.self)
+  result.modKey = NPRPC.unmarshal_string(buffer: buffer, offset: offset + 48)
   return result
 }
 
@@ -2130,8 +2134,8 @@ final public class Compositor: NPRPCObject, @unchecked Sendable {
   public func setKeyboard(settings: KeyboardSettings) async throws   {
     // Prepare buffer
     let buffer = FlatBuffer()
-    buffer.prepare(208)
-    buffer.commit(80)
+    buffer.prepare(216)
+    buffer.commit(88)
     guard let bufData = buffer.data else { throw BufferError(message: "Failed to get buffer data") }
 
     // Write message header
@@ -3509,8 +3513,8 @@ open class CompositorServant: NPRPCServant, CompositorProtocol, @unchecked Senda
         // Prepare output buffer
         let obuf = buffer
         obuf.consume(obuf.size)
-        obuf.prepare(192)
-        obuf.commit(64)
+        obuf.prepare(200)
+        obuf.commit(72)
         
         let __ret_val = getKeyboard()
         // Marshal output arguments
@@ -4059,12 +4063,13 @@ fileprivate func check_1Appearance_1(buffer: UnsafeRawPointer, bufferSize: Int, 
 
 // Safety check for lava_M12
 fileprivate func check_1KeyboardSettings_1(buffer: UnsafeRawPointer, bufferSize: Int, offset: Int) -> Bool {
-  guard NPRPC.check_struct_bounds(bufferSize: bufferSize, offset: offset, structSize: 48) else { return false }
+  guard NPRPC.check_struct_bounds(bufferSize: bufferSize, offset: offset, structSize: 56) else { return false }
   guard NPRPC.check_string_bounds(buffer: buffer, bufferSize: bufferSize, offset: offset + 0 + 0) else { return false }
   guard NPRPC.check_string_bounds(buffer: buffer, bufferSize: bufferSize, offset: offset + 0 + 8) else { return false }
   guard NPRPC.check_string_bounds(buffer: buffer, bufferSize: bufferSize, offset: offset + 0 + 16) else { return false }
   guard NPRPC.check_string_bounds(buffer: buffer, bufferSize: bufferSize, offset: offset + 0 + 24) else { return false }
   guard NPRPC.check_string_bounds(buffer: buffer, bufferSize: bufferSize, offset: offset + 0 + 32) else { return false }
+  guard NPRPC.check_string_bounds(buffer: buffer, bufferSize: bufferSize, offset: offset + 0 + 48) else { return false }
   return true
 }
 

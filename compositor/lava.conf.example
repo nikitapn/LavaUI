@@ -88,6 +88,10 @@ layout = us
 repeat-rate = 25
 repeat-delay = 600
 
+# Which modifier the compositor's own shortcuts use (and mod+drag):
+# alt (default) or super (the Win / Meta key).
+# mod-key = alt
+
 
 [shell]
 

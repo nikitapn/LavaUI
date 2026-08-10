@@ -120,6 +120,9 @@ renderer = vulkan
 
 [keyboard]
 layout = us
+# Compositor shortcut modifier: alt (default) or super (Win key).
+# Also gates mod+drag to move/resize windows.
+# mod-key = alt
 
 [appearance]
 # Window corner radius in pixels. 0 (the default) is square; clamped to 64.

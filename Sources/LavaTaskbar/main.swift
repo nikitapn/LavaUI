@@ -64,12 +64,22 @@ nonisolated(unsafe) let clock = Clock()
 /// menu contains, and a panel showing one without the other would either draw
 /// a menu belonging to a window nobody is using or a title with no menu under
 /// it.
+/// Stable ids for the desktop menu the panel shows when nothing is focused.
+/// Kept out of the DBus namespace (those are numeric strings) so a click can
+/// never be mistaken for an imported item.
+enum DesktopMenuID {
+    static let root = MenuID("desktop")
+    static let settings = MenuID("desktop.settings")
+}
+
 @Observable
 final class MenuSession {
     /// What the focused window is called. Shown when it has no menu — a
     /// terminal, a foreign application that exports nothing — so the panel
     /// says something true rather than going blank.
     var title = ""
+    /// Non-zero while a real window owns focus. Zero is the desktop itself.
+    var focusedSurface: UInt32 = 0
     var model = MenuModel()
 
     /// The importer is not observable state: it is the machinery that produces
@@ -82,29 +92,66 @@ final class MenuSession {
 
     func attach(editor: Editor) {
         menus = PanelMenu(editor: editor)
+        // Start on the desktop menu: nothing is focused yet.
+        model = Self.desktopMenu
     }
 
     /// Called on the frame loop when the compositor's focus changes.
     func focus(surfaceId: UInt32, title: String) {
         self.title = title
+        self.focusedSurface = surfaceId
         // An open menu belongs to the window that is no longer focused.
         closeMenu()
         menus?.setActiveWindow(surfaceId)
-        model = menus?.model ?? MenuModel()
+        refreshModel()
     }
 
     /// Pumps DBus, publishes a new model when there is one, and brings the
     /// panel's height into line with whether a menu is open.
     func poll() {
-        guard let menus else { return }
-        if menus.poll() { model = menus.model }
+        guard let menus else {
+            applyThickness()
+            return
+        }
+        if menus.poll() { refreshModel() }
         applyThickness()
     }
 
     func activate(_ id: MenuID) {
+        if id == DesktopMenuID.settings {
+            closeMenu()
+            launchSettings()
+            return
+        }
         menus?.activate(id)
         closeMenu()
     }
+
+    /// The focused window's menu when it has one; otherwise the desktop menu
+    /// (nothing focused) or just the window's name (focused but silent).
+    private func refreshModel() {
+        if focusedSurface == 0 {
+            model = Self.desktopMenu
+            return
+        }
+        let imported = menus?.model ?? MenuModel()
+        model = imported
+    }
+
+    /// macOS-style: when no window owns the menu bar, the panel still offers a
+    /// way into Settings rather than going blank.
+    static let desktopMenu = MenuModel(menus: [
+        MenuNode(
+            id: DesktopMenuID.root,
+            title: "Lava",
+            items: [
+                .item(MenuItemModel(
+                    id: DesktopMenuID.settings,
+                    title: "Settings…"
+                )),
+            ]
+        ),
+    ])
 
     // ─── Opening a menu, and the panel growing to hold it ────────────────
     //
@@ -167,8 +214,8 @@ struct TaskbarView: View {
                 Text("Lava", color: Theme.current.accent)
 
                 if session.model.menus.isEmpty {
-                    // No menu — either nothing is focused, or the focused
-                    // window exports none. Its name is the honest thing to
+                    // Focused window exports no menu (LavaTerm, a foreign app
+                    // that never registered). Its name is the honest thing to
                     // show, and it is also how a user can tell the panel is
                     // tracking focus at all.
                     Text(
@@ -176,6 +223,8 @@ struct TaskbarView: View {
                         color: Theme.current.textDim
                     )
                 } else {
+                    // Either the focused window's menu, or the desktop menu
+                    // shown when nothing is focused — both are ordinary models.
                     MenuBarStrip(
                         model: session.model,
                         openMenuID: openBinding,
@@ -217,6 +266,55 @@ struct TaskbarView: View {
             }
         )
     }
+}
+
+// ─── Desktop actions ─────────────────────────────────────────────────────────
+
+/// Starts LavaSettings the way the compositor starts the panel: look beside
+/// this binary first (tree build / installed layout), then fall through to PATH.
+func launchSettings() {
+    let candidates: [String] = {
+        var paths: [String] = []
+        let args = CommandLine.arguments
+        if let selfPath = args.first {
+            let dir = URL(fileURLWithPath: selfPath).deletingLastPathComponent()
+            paths.append(dir.appendingPathComponent("LavaSettings").path)
+            // compositor/scripts/dev-run often puts clients in .build/debug
+            // while the panel may also live there — same dir is enough.
+            paths.append(dir
+                .appendingPathComponent("../debug/LavaSettings").path)
+            paths.append(dir
+                .appendingPathComponent("../release/LavaSettings").path)
+        }
+        paths.append("LavaSettings")
+        return paths
+    }()
+
+    for path in candidates {
+        let process = Process()
+        if path.contains("/") {
+            let url = URL(fileURLWithPath: path)
+            guard FileManager.default.isExecutableFile(atPath: url.path) else {
+                continue
+            }
+            process.executableURL = url
+        } else {
+            // Let the shell resolve PATH for a bare name.
+            process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+            process.arguments = [path]
+        }
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        do {
+            try process.run()
+            return
+        } catch {
+            continue
+        }
+    }
+    FileHandle.standardError.write(
+        Data("LavaTaskbar: could not launch LavaSettings\n".utf8)
+    )
 }
 
 // ─── Bring-up ───────────────────────────────────────────────────────────────

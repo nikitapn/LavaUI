@@ -3,8 +3,11 @@ import Foundation
 /// Streaming ANSI / VT100 parser. Feeds printable characters and control
 /// sequences into a `TerminalScreen`.
 ///
-/// Intentionally incomplete: enough for interactive shells (bash/zsh prompts,
-/// ls --color, less, vim basics) without implementing every DEC private mode.
+/// Incomplete on purpose: enough for interactive shells and full-screen tools
+/// (tmux, less, vim) — SGR, CUP, scroll regions, DEC private modes, and a
+/// correct ECMA-48 escape state machine so sequences like `ESC ( B` (charset
+/// designate) are consumed whole rather than leaving a stray `B` on screen.
+/// Everything else is acknowledged and ignored.
 public final class AnsiParser: @unchecked Sendable {
     public enum Output: Equatable, Sendable {
         case print(Unicode.Scalar)
@@ -31,15 +34,28 @@ public final class AnsiParser: @unchecked Sendable {
         case eraseChars(Int)
         case deleteLines(Int)
         case insertLines(Int)
+        /// DEC private modes: `CSI ? … h` / `CSI ? … l`. Modes are the
+        /// integers between the `?` and the final — one sequence can set several.
+        case privateModes(modes: [Int], set: Bool)
         case ignore
     }
 
     private enum State {
         case ground
+        /// Byte immediately after ESC.
         case escape
+        /// ESC + one or more intermediate bytes (0x20…0x2F). The next final
+        /// (0x30…0x7E) ends the sequence — charset designates live here:
+        /// `ESC ( B`, `ESC ) 0`, `ESC * B`, …
+        case escapeIntermediate
         case csi
         case osc
+        /// OSC saw ESC; next byte is `\` (ST) or something else.
         case oscEsc
+        /// DCS / SOS / PM / APC: ignore until BEL or ST. Without this, the
+        /// payload of an ignored string sequence prints as garbage.
+        case stringIgnored
+        case stringIgnoredEsc
     }
 
     private var state: State = .ground
@@ -61,7 +77,7 @@ public final class AnsiParser: @unchecked Sendable {
         var out: [Output] = []
         var i = data.startIndex
         while i < data.endIndex {
-            // Multi-byte UTF-8 in ground state
+            // Multi-byte UTF-8 only in ground: control sequences are byte-oriented.
             if state == .ground {
                 let byte = data[i]
                 if byte < 0x80 {
@@ -69,7 +85,6 @@ public final class AnsiParser: @unchecked Sendable {
                     i = data.index(after: i)
                     continue
                 }
-                // Decode one UTF-8 scalar
                 if let (scalar, next) = decodeUTF8(data, from: i) {
                     out.append(contentsOf: consumeGround(scalar))
                     i = next
@@ -112,35 +127,24 @@ public final class AnsiParser: @unchecked Sendable {
             return consumeGround(s)
 
         case .escape:
-            switch s.value {
-            case 0x5B:  // [
-                state = .csi
-                csiParams = ""
-                csiPrivate = false
+            return consumeEscape(s)
+
+        case .escapeIntermediate:
+            let v = s.value
+            // More intermediates.
+            if v >= 0x20 && v <= 0x2F {
                 return []
-            case 0x5D:  // ]
-                state = .osc
-                oscBuffer = ""
-                return []
-            case 0x37:  // 7
-                state = .ground
-                return [.saveCursor]
-            case 0x38:  // 8
-                state = .ground
-                return [.restoreCursor]
-            case 0x44:  // D index
-                state = .ground
-                return [.lineFeed]
-            case 0x4D:  // M reverse index
-                state = .ground
-                return [.scrollDown(1)]
-            case 0x45:  // E next line
-                state = .ground
-                return [.carriageReturn, .lineFeed]
-            default:
+            }
+            // Final byte — charset designates, double-height lines, etc.
+            // We do not implement any of them; consuming the final is the fix
+            // so `ESC ( B` does not leave a printable `B` on the screen.
+            if v >= 0x30 && v <= 0x7E {
                 state = .ground
                 return [.ignore]
             }
+            // CAN / SUB / unexpected: cancel and resync.
+            state = .ground
+            return consumeGround(s)
 
         case .csi:
             let v = s.value
@@ -178,10 +182,79 @@ public final class AnsiParser: @unchecked Sendable {
             return []
 
         case .oscEsc:
-            // ST is ESC \
+            // ST is ESC \ — anything else after ESC ends OSC too (resync).
             state = .ground
             oscBuffer = ""
             return [.ignore]
+
+        case .stringIgnored:
+            if s.value == 0x07 {
+                state = .ground
+                return [.ignore]
+            }
+            if s.value == 0x1B {
+                state = .stringIgnoredEsc
+                return []
+            }
+            return []
+
+        case .stringIgnoredEsc:
+            state = .ground
+            return [.ignore]
+        }
+    }
+
+    private func consumeEscape(_ s: Unicode.Scalar) -> [Output] {
+        let v = s.value
+        switch v {
+        case 0x5B:  // [
+            state = .csi
+            csiParams = ""
+            csiPrivate = false
+            return []
+        case 0x5D:  // ]
+            state = .osc
+            oscBuffer = ""
+            return []
+        // DCS / SOS / PM / APC — ignore the string body until BEL or ST.
+        case 0x50, 0x58, 0x5E, 0x5F:  // P X ^ _
+            state = .stringIgnored
+            return []
+        // Intermediate: charset designation, etc. (`ESC ( B`).
+        case 0x20...0x2F:
+            state = .escapeIntermediate
+            return []
+        // Finals we care about (no intermediates).
+        case 0x37:  // 7
+            state = .ground
+            return [.saveCursor]
+        case 0x38:  // 8
+            state = .ground
+            return [.restoreCursor]
+        case 0x44:  // D index
+            state = .ground
+            return [.lineFeed]
+        case 0x4D:  // M reverse index
+            state = .ground
+            return [.scrollDown(1)]
+        case 0x45:  // E next line
+            state = .ground
+            return [.carriageReturn, .lineFeed]
+        case 0x3D, 0x3E:  // DECKPAM / DECKPNM — keypad mode; keys still work
+            state = .ground
+            return [.ignore]
+        case 0x63:  // RIS full reset
+            state = .ground
+            return [.ignore]
+        default:
+            // Unknown single-byte ESC final: swallow it, do not print it.
+            if v >= 0x30 && v <= 0x7E {
+                state = .ground
+                return [.ignore]
+            }
+            // C0 inside ESC: cancel.
+            state = .ground
+            return consumeGround(s)
         }
     }
 
@@ -202,9 +275,18 @@ public final class AnsiParser: @unchecked Sendable {
             return d
         }
 
-        // Private modes (cursor visible etc.) — ignore for now
+        // DEC private modes. Without these, full-screen tools (tmux, less,
+        // vim, htop) cannot enter the alternate screen or hide the cursor —
+        // they draw on top of the shell's scrollback and look broken.
         if csiPrivate {
-            return .ignore
+            switch final {
+            case "h":
+                return .privateModes(modes: parts.isEmpty ? [0] : parts, set: true)
+            case "l":
+                return .privateModes(modes: parts.isEmpty ? [0] : parts, set: false)
+            default:
+                return .ignore
+            }
         }
 
         switch final {

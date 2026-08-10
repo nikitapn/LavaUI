@@ -562,6 +562,7 @@ class CompositorImpl final : public ICompositor_Servant {
     out.rules = state.rules;
     out.repeatRate = state.repeatRate;
     out.repeatDelay = state.repeatDelay;
+    out.modKey = state.modKey;
     return out;
   }
 
@@ -574,6 +575,7 @@ class CompositorImpl final : public ICompositor_Servant {
     state.rules = std::string{settings.rules()};
     state.repeatRate = settings.repeatRate();
     state.repeatDelay = settings.repeatDelay();
+    state.modKey = std::string{settings.modKey()};
 
     std::string error;
     host_.setKeyboardSettings(state, error);

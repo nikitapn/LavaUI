@@ -170,6 +170,10 @@ message KeyboardSettings {
   /// held before it does.
   repeatRate: i32;
   repeatDelay: i32;
+  /// Which modifier the compositor's own shortcuts (and mod+drag) use:
+  /// `"alt"` or `"super"` (the Win key). Anything else is treated as Alt.
+  /// Defaults to `"alt"`.
+  modKey: string;
 }
 
 /// One layout — or one variant of one — that this machine's xkb offers.

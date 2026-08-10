@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstdio>
 #include <cstddef>
@@ -870,7 +871,12 @@ std::string describe_output(const wlr_output &output) {
 
 /// The compositor's shortcuts, from the table the key handler dispatches
 /// through. Defined next to that table, near the bottom of this file.
-void collect_key_bindings(std::vector<lava::CompositorHost::BindingEntry> &out);
+void collect_key_bindings(std::vector<lava::CompositorHost::BindingEntry> &out,
+                          const char *modName = "Alt");
+/// Canonical form of `KeyboardConfig::modKey`: "alt" or "super".
+std::string normalize_mod_key(const std::string &value);
+/// WLR modifier bit for the configured shortcut mod.
+uint32_t shortcut_mod_mask(const lava::KeyboardConfig &keyboard);
 
 /// Every layout this machine's xkb offers, from libxkbregistry.
 void collect_keyboard_layouts(
@@ -1834,6 +1840,7 @@ class SurfaceRegistry : public lava::CompositorHost {
     out.rules = keyboard.rules;
     out.repeatRate = keyboard.repeatRate;
     out.repeatDelay = keyboard.repeatDelay;
+    out.modKey = keyboard.modKey.empty() ? "alt" : keyboard.modKey;
   }
 
   void setKeyboardSettings(const KeyboardState &settings,
@@ -1849,6 +1856,7 @@ class SurfaceRegistry : public lava::CompositorHost {
     // and neither is recoverable by typing.
     keyboard.repeatRate = std::clamp(settings.repeatRate, 0, 100);
     keyboard.repeatDelay = std::clamp(settings.repeatDelay, 100, 2000);
+    keyboard.modKey = normalize_mod_key(settings.modKey);
 
     // Every connected client is sent the new keymap by wlroots as a side
     // effect, so this reaches applications that are already running.
@@ -1860,7 +1868,8 @@ class SurfaceRegistry : public lava::CompositorHost {
           {"keyboard", "model", keyboard.model},
           {"keyboard", "rules", keyboard.rules},
           {"keyboard", "repeat-rate", std::to_string(keyboard.repeatRate)},
-          {"keyboard", "repeat-delay", std::to_string(keyboard.repeatDelay)}},
+          {"keyboard", "repeat-delay", std::to_string(keyboard.repeatDelay)},
+          {"keyboard", "mod-key", keyboard.modKey}},
          outError);
   }
 
@@ -1869,7 +1878,12 @@ class SurfaceRegistry : public lava::CompositorHost {
   }
 
   void keyBindings(std::vector<BindingEntry> &out) const override {
-    collect_key_bindings(out);
+    // Pass the live mod name so the list matches what will actually fire.
+    const char *mod =
+        (server_ != nullptr && server_->config.keyboard.modKey == "super")
+            ? "Super"
+            : "Alt";
+    collect_key_bindings(out, mod);
   }
 
   void outputList(std::vector<OutputEntry> &out) const override {
@@ -3250,10 +3264,28 @@ void launch_launcher() {
   launch_program(program.c_str(), argv);
 }
 
-void launch_alacritty() {
-  char program[] = "alacritty";
-  char *argv[] = {program, nullptr};
-  launch_program(program, argv);
+/// LavaTerm — the desktop's own terminal. Found the same way the panel is, so
+/// a tree build and an installed package both work without a PATH entry.
+void launch_terminal() {
+  const std::string path = lava::ShellSupervisor::programPath("LavaTerm");
+  std::string program = path;
+  char *argv[] = {program.data(), nullptr};
+  launch_program(program.c_str(), argv);
+}
+
+std::string normalize_mod_key(const std::string &value) {
+  std::string lower = value;
+  for (char &c : lower)
+    c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+  if (lower == "super" || lower == "logo" || lower == "win" ||
+      lower == "meta" || lower == "mod4") {
+    return "super";
+  }
+  return "alt";
+}
+
+uint32_t shortcut_mod_mask(const lava::KeyboardConfig &keyboard) {
+  return keyboard.modKey == "super" ? WLR_MODIFIER_LOGO : WLR_MODIFIER_ALT;
 }
 
 /// What a binding does.
@@ -3262,6 +3294,7 @@ enum class BindingAction : uint8_t {
   Launcher,
   AppLauncher,
   Terminal,
+  Close,
   Minimize,
   RestoreLast,
   WorkspaceSwitch,
@@ -3271,11 +3304,12 @@ enum class BindingAction : uint8_t {
 
 /// One shortcut: which keys reach it, and what to call it.
 ///
-/// Alt is implicit — the key handler only consults this table while Alt is
-/// down — and `shift`/`ctrl` are matched exactly. Exactly, because these are
-/// distinct bindings and not a loose prefix: Alt+Shift+1 sends a window where
-/// Alt+1 follows it, and Alt+Shift+Return is deliberately nothing rather than
-/// a sloppy second spelling of "open a terminal".
+/// The primary modifier (Alt or Super, from config) is implicit — the key
+/// handler only consults this table while that mod is down — and
+/// `shift`/`ctrl` are matched exactly. Exactly, because these are distinct
+/// bindings and not a loose prefix: Mod+Shift+1 sends a window where Mod+1
+/// follows it, and Mod+Shift+Return is deliberately nothing rather than a
+/// sloppy second spelling of "open a terminal".
 struct BindingSpec {
   BindingAction action;
   /// The keysym range this covers, inclusive; `last == first` for one key.
@@ -3305,7 +3339,9 @@ constexpr BindingSpec kBindings[] = {
     {BindingAction::AppLauncher, XKB_KEY_p, XKB_KEY_p, false, false, "P",
      "launcher.open", "Opens the application launcher"},
     {BindingAction::Terminal, XKB_KEY_Return, XKB_KEY_Return, false, false,
-     "Return", "terminal.open", "Opens a terminal"},
+     "Return", "terminal.open", "Opens LavaTerm"},
+    {BindingAction::Close, XKB_KEY_q, XKB_KEY_q, false, false, "Q",
+     "window.close", "Closes the focused window"},
     {BindingAction::Minimize, XKB_KEY_m, XKB_KEY_m, false, false, "M",
      "window.minimize", "Hides the focused window"},
     {BindingAction::RestoreLast, XKB_KEY_m, XKB_KEY_m, true, false, "M",
@@ -3318,9 +3354,10 @@ constexpr BindingSpec kBindings[] = {
      "session.vt", "Switches to that virtual terminal"},
 };
 
-/// The modifiers as a person reads them. Alt is in every one of them.
-std::string binding_modifiers(const BindingSpec &spec) {
-  std::string out = "Alt";
+/// The modifiers as a person reads them. The primary mod is whatever the
+/// desktop is configured to use.
+std::string binding_modifiers(const BindingSpec &spec, const char *modName) {
+  std::string out = modName != nullptr ? modName : "Alt";
   if (spec.ctrl) out += "+Ctrl";
   if (spec.shift) out += "+Shift";
   return out;
@@ -3366,12 +3403,13 @@ void collect_keyboard_layouts(
   rxkb_context_unref(registry);
 }
 
-void collect_key_bindings(std::vector<lava::CompositorHost::BindingEntry> &out) {
+void collect_key_bindings(std::vector<lava::CompositorHost::BindingEntry> &out,
+                          const char *modName) {
   out.clear();
   out.reserve(std::size(kBindings));
   for (const BindingSpec &spec : kBindings) {
     lava::CompositorHost::BindingEntry entry;
-    entry.modifiers = binding_modifiers(spec);
+    entry.modifiers = binding_modifiers(spec, modName);
     entry.key = spec.key;
     entry.action = spec.id;
     entry.description = spec.description;
@@ -3401,7 +3439,17 @@ bool perform_binding(Server *server, const BindingSpec &spec,
     return true;
 
   case BindingAction::Terminal:
-    launch_alacritty();
+    launch_terminal();
+    return true;
+
+  case BindingAction::Close:
+    // Politely: Wayland windows get a close request (save dialogs still work);
+    // Lava clients are torn down by their stream ending — see requestClose.
+    if (server->surfaces == nullptr) return false;
+    if (ClientSurface *focused =
+            server->surfaces->find(server->focusedSurface())) {
+      server->surfaces->requestClose(*focused);
+    }
     return true;
 
   // Minimize, and the way back. A window with no frame can offer a minimize
@@ -3478,11 +3526,12 @@ void Keyboard::on_key(wl_listener *listener, void *data) {
   Server *server = keyboard->server;
 
   const uint32_t modifiers = wlr_keyboard_get_modifiers(keyboard->wlr);
-  if ((modifiers & WLR_MODIFIER_ALT) &&
+  const uint32_t modMask = shortcut_mod_mask(server->config.keyboard);
+  if ((modifiers & modMask) &&
       event->state == WL_KEYBOARD_KEY_STATE_PRESSED) {
     // +8 converts evdev to xkb keycodes; the offset is historical, from X.
     const xkb_keycode_t keycode = event->keycode + 8;
-    // The *unshifted* keysym, deliberately: Alt+Shift+2 produces "at" on a US
+    // The *unshifted* keysym, deliberately: Mod+Shift+2 produces "at" on a US
     // layout and something else again on a German one, while the binding is
     // about the key the digit is printed on. Level 0 is that key, whatever the
     // modifiers currently say.
@@ -4245,11 +4294,12 @@ void Server::on_cursor_button(wl_listener *listener, void *data) {
             : 0;
     ClientSurface *over =
         server->surfaces->windowAt(server->cursor->x, server->cursor->y);
-    if ((modifiers & WLR_MODIFIER_ALT) && over != nullptr) {
+    if ((modifiers & shortcut_mod_mask(server->config.keyboard)) &&
+        over != nullptr) {
       server->surfaces->raise(*over);
       server->drag = event->button == BTN_RIGHT ? Server::Drag::Resize
                                                 : Server::Drag::Move;
-      // Bottom-right, which is where an Alt+resize has always grown from: the
+      // Bottom-right, which is where a mod+resize has always grown from: the
       // gesture has no edge of its own to name.
       server->dragEdges = edges::kRight | edges::kBottom;
       server->dragSurface = over->id;

@@ -1,5 +1,6 @@
 #include "config.hpp"
 
+#include <cctype>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -187,6 +188,20 @@ Config Config::load(const std::string &path) {
         config.keyboard.repeatRate = std::atoi(value.c_str());
       } else if (key == "repeat-delay") {
         config.keyboard.repeatDelay = std::atoi(value.c_str());
+      } else if (key == "mod-key" || key == "mod") {
+        // "super", "logo", "win", "meta" all mean the Win key. Anything else
+        // (including empty) is Alt — the historical default.
+        const std::string lower = [&] {
+          std::string s = value;
+          for (char &c : s) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+          return s;
+        }();
+        if (lower == "super" || lower == "logo" || lower == "win" ||
+            lower == "meta" || lower == "mod4") {
+          config.keyboard.modKey = "super";
+        } else {
+          config.keyboard.modKey = "alt";
+        }
       } else {
         known = false;
       }

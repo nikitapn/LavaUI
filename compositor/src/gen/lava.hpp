@@ -316,6 +316,7 @@ struct KeyboardSettings {
   std::string rules;
   int32_t repeatRate;
   int32_t repeatDelay;
+  std::string modKey;
 };
 
 namespace flat {
@@ -327,6 +328,7 @@ struct KeyboardSettings {
   ::nprpc::flat::String rules;
   int32_t repeatRate;
   int32_t repeatDelay;
+  ::nprpc::flat::String modKey;
 };
 
 class KeyboardSettings_Direct {
@@ -372,6 +374,11 @@ public:
   int32_t& repeatRate() noexcept { return base().repeatRate;}
   const int32_t& repeatDelay() const noexcept { return base().repeatDelay;}
   int32_t& repeatDelay() noexcept { return base().repeatDelay;}
+  void modKey(const char* str) { new (&base().modKey) ::nprpc::flat::String(buffer_, str); }
+  void modKey(const std::string& str) { new (&base().modKey) ::nprpc::flat::String(buffer_, str); }
+  auto modKey() noexcept { return (::nprpc::flat::Span<char>)base().modKey; }
+  auto modKey() const noexcept { return (::nprpc::flat::Span<const char>)base().modKey; }
+  auto modKey_d() noexcept { return ::nprpc::flat::String_Direct1(buffer_, offset_ + offsetof(KeyboardSettings, modKey)); }
 };
 } // namespace flat
 

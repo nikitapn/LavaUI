@@ -60,6 +60,11 @@ struct KeyboardConfig {
 
   int32_t repeatRate = 25;    ///< keys per second once repeating starts
   int32_t repeatDelay = 600;  ///< ms held before it starts
+
+  /// Compositor shortcut modifier: "alt" (default) or "super" (Win/Meta).
+  /// Also gates mod+drag. Kept as a string so `lava.conf` and the settings
+  /// app share one vocabulary rather than inventing an enum each.
+  std::string modKey = "alt";
 };
 
 /// How the desktop looks, as opposed to what the machine is.

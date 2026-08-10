@@ -189,12 +189,21 @@ public final class TerminalSession: @unchecked Sendable {
             case KeyCode.backspace: return Data([0x7F])  // DEL — what most modern shells expect
             case KeyCode.tab: return Data("\t".utf8)
             case KeyCode.escape: return Data([0x1B])
-            case KeyCode.up: return Data("\u{1B}[A".utf8)
-            case KeyCode.down: return Data("\u{1B}[B".utf8)
-            case KeyCode.right: return Data("\u{1B}[C".utf8)
-            case KeyCode.left: return Data("\u{1B}[D".utf8)
-            case KeyCode.home: return Data("\u{1B}[H".utf8)
-            case KeyCode.end: return Data("\u{1B}[F".utf8)
+            // DECCKM: application mode (what tmux/vim ask for) uses SS3
+            // rather than CSI. Sending the wrong spelling is why arrows in
+            // tmux looked "pretty bad" even after the alternate screen worked.
+            case KeyCode.up:
+                return Data((screen.applicationCursorKeys ? "\u{1B}OA" : "\u{1B}[A").utf8)
+            case KeyCode.down:
+                return Data((screen.applicationCursorKeys ? "\u{1B}OB" : "\u{1B}[B").utf8)
+            case KeyCode.right:
+                return Data((screen.applicationCursorKeys ? "\u{1B}OC" : "\u{1B}[C").utf8)
+            case KeyCode.left:
+                return Data((screen.applicationCursorKeys ? "\u{1B}OD" : "\u{1B}[D").utf8)
+            case KeyCode.home:
+                return Data((screen.applicationCursorKeys ? "\u{1B}OH" : "\u{1B}[H").utf8)
+            case KeyCode.end:
+                return Data((screen.applicationCursorKeys ? "\u{1B}OF" : "\u{1B}[F").utf8)
             case KeyCode.delete: return Data("\u{1B}[3~".utf8)
             default: return nil
             }
