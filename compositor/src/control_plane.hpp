@@ -262,6 +262,17 @@ struct CompositorHost {
                               int32_t w, int32_t h, int32_t maxSide,
                               std::vector<uint8_t> &outPng, uint32_t &outW,
                               uint32_t &outH) = 0;
+
+  /// The seat's selection, as text. Empty when there is none or it is not
+  /// text-shaped.
+  ///
+  /// The same selection every Wayland client reads, which is the point: a
+  /// LavaUI client has no `wl_data_device` of its own, so without these two
+  /// its copy and paste would be a private drawer that Firefox cannot see.
+  virtual std::string clipboardText() const = 0;
+
+  /// Offers `text` as the seat's selection, replacing what was there.
+  virtual void setClipboardText(const std::string &text) = 0;
 };
 
 class ControlPlane {

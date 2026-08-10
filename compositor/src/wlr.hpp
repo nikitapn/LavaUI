@@ -13,6 +13,13 @@
 #define WLR_USE_UNSTABLE
 #endif
 
+// Pulled in before anything else, and before `extern "C"`, because section 3
+// below renames the `class` keyword for the span of one include — and the C
+// headers reached from there include these, which are not as C as they look.
+// Their include guards are what makes the rename safe; see section 3.
+#include <pthread.h>
+#include <stdlib.h>
+
 extern "C" {
 
 #include <wayland-server-core.h>
@@ -81,6 +88,14 @@ extern "C" {
 //
 //    The field is reached as `xclass` in this program. Re-check with
 //    `grep -n '\bclass\b' wlr/xwayland/*.h` after a wlroots upgrade.
+//
+//    "Everything here is C" is the claim that has to hold, and on its own it
+//    does not: `wlr/xwayland.h` reaches `xcb/xcb.h`, which includes
+//    `<pthread.h>`, which defines a C++ class — `__pthread_cleanup_class`,
+//    glibc's RAII wrapper for cancellation handlers — whenever it is compiled
+//    as C++ with exceptions on. Under the macro that line does not parse. The
+//    guard block below pulls it in first, outside the window, so nothing but
+//    an include guard is left to find in there.
 #define class xclass
 #include <wlr/xwayland.h>
 #undef class

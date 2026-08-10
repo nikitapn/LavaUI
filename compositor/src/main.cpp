@@ -25,6 +25,7 @@
 #include <xkbcommon/xkbregistry.h>
 
 #include "canvas_surface.hpp"
+#include "clipboard.hpp"
 #include "config.hpp"
 #include "decoration.hpp"
 #include "control_plane.hpp"
@@ -2115,6 +2116,21 @@ class SurfaceRegistry : public lava::CompositorHost {
     ClientSurface *surface = find(id);
     if (surface == nullptr || !surface->canvas) return false;
     return surface->canvas->capturePng(x, y, w, h, maxSide, outPng, outW, outH);
+  }
+
+  // The seat's selection, not a drawer of our own — see `lava::Clipboard`.
+  // Both of these run on the compositor's loop, because the servants are
+  // dispatched there; `get` is the one that can wait, and is bounded.
+  std::string clipboardText() const override {
+    if (server_ == nullptr) return {};
+    lava::Clipboard clipboard(server_->display, server_->seat);
+    return clipboard.get();
+  }
+
+  void setClipboardText(const std::string &text) override {
+    if (server_ == nullptr) return;
+    lava::Clipboard clipboard(server_->display, server_->seat);
+    clipboard.set(text);
   }
 
  public:

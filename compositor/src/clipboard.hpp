@@ -1,0 +1,45 @@
+#pragma once
+
+#include <string>
+
+struct wl_display;
+struct wlr_seat;
+
+namespace lava {
+
+/// The bridge between the seat's selection and clients that are not Wayland
+/// clients.
+///
+/// A LavaUI client draws through a shared-memory arena and talks over the
+/// control plane; it has no `wl_data_device`, so the copy and paste every
+/// other application gets for free are two RPC calls here. What those calls
+/// must not become is a private string that only Lava apps can see — a
+/// clipboard that does not reach Firefox is not a clipboard — so both ends go
+/// through `wlr_seat`'s selection, which is the same one every Wayland client
+/// reads and writes.
+///
+/// Only text. `text/plain;charset=utf-8` and the four spellings X11 clients
+/// ask for through Xwayland, which is what makes a copy here pasteable in an
+/// xterm.
+class Clipboard {
+ public:
+  Clipboard(wl_display *display, wlr_seat *seat)
+      : display_(display), seat_(seat) {}
+
+  /// Offers `text` as the seat's selection, replacing whatever was there.
+  void set(const std::string &text);
+
+  /// The selection as text, or empty if there is none or it offers nothing
+  /// text-shaped.
+  ///
+  /// Bounded: a source that never writes cannot hang the compositor, it just
+  /// yields an empty paste. See `kReadTimeout` in the implementation for what
+  /// that costs when the owner is another process.
+  std::string get();
+
+ private:
+  wl_display *display_ = nullptr;
+  wlr_seat *seat_ = nullptr;
+};
+
+} // namespace lava

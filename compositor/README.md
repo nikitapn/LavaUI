@@ -151,6 +151,28 @@ part is, and none is needed: the client sees the press land on its own header
 and sends `xdg_toplevel.move`, which starts the same interactive move a drag
 on our title bar does. `_NET_WM_MOVERESIZE` is the X11 spelling.
 
+## The clipboard
+
+A LavaUI client has no `wl_data_device` — it draws through a shared-memory
+arena and talks over the control plane — so copy and paste are two RPC calls.
+What they are *not* is a private drawer: both go through `wlr_seat`'s
+selection, the same one every Wayland client reads and writes, so text copied
+in LavaTerm pastes into Firefox and text copied in Firefox pastes into
+LavaTerm. Five MIME types are offered, four of them the spellings X11 clients
+ask for through Xwayland, which is what makes a copy here work in an xterm.
+
+Reading is the direction with a hazard, because the answer comes from another
+process: the compositor asks the selection's owner to write down a pipe and
+waits for it, on the loop that draws everything. So the wait is bounded at
+250 ms — a healthy client answers in about three — and a frozen one costs a
+dropped paste rather than a frozen desktop. A selection this compositor owns
+itself is answered from memory without a pipe at all, since waiting on this
+thread for a write only this thread can perform is not a risk but a
+certainty.
+
+Only text, and only the clipboard: the primary selection (middle-click paste)
+is a second seat selection that nothing here sets yet.
+
 A Wayland window is therefore square *including* its title bar, and its shadow
 is square too. Rounding only the bar would round two corners of a rectangle
 whose other two stay sharp, and the shadow behind it could match one end or the

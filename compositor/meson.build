@@ -95,6 +95,7 @@ executable(
   'compositor',
   'src/main.cpp',
   'src/canvas_surface.cpp',
+  'src/clipboard.cpp',
   'src/config.cpp',
   'src/decoration.cpp',
   'src/shell.cpp',

@@ -822,11 +822,12 @@ class CompositorImpl final : public ICompositor_Servant {
 
   std::string GetClipboard(uint32_t surfaceId) override {
     if (!host_.surfaceExists(surfaceId)) throw SurfaceNotFound(surfaceId);
-    return {};
+    return host_.clipboardText();
   }
 
-  void SetClipboard(uint32_t surfaceId, nprpc::flat::Span<char>) override {
+  void SetClipboard(uint32_t surfaceId, nprpc::flat::Span<char> text) override {
     if (!host_.surfaceExists(surfaceId)) throw SurfaceNotFound(surfaceId);
+    host_.setClipboardText(std::string(text.begin(), text.end()));
   }
 
  private:
