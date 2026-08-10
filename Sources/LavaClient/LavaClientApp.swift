@@ -568,10 +568,11 @@ public enum LavaClient {
         }
 
         // The stream is the surface's lease. When it ends — the user closed
-        // the window, the compositor went away, the client was evicted — the
-        // surface goes with it and there is nothing left to draw into.
+        // the window from the compositor side, the compositor went away, the
+        // client was evicted — the surface goes with it and there is nothing
+        // left to draw into.
         Thread.detachNewThread {
-            while !input.isClosed { Thread.sleep(forTimeInterval: 0.25) }
+            while !input.isClosed { Thread.sleep(forTimeInterval: 0.05) }
             FileHandle.standardError.write(Data("surface closed — exiting\n".utf8))
             exit(0)
         }
@@ -584,7 +585,38 @@ public enum LavaClient {
         FileHandle.standardError.write(Data(banner.utf8))
 
         LavaApp.run(editor: editor, menu: menu, onRawKey: onRawKey, makeRoot: makeRoot)
+        // App-side close (client chrome X, Esc, `LavaApp.closeWindow`, …)
+        // used to just `exit`. The compositor only then noticed the process
+        // was gone on NPRPC's shared-memory peer poll (up to ~500 ms), so the
+        // window lingered on screen after the app had already quit. Tear the
+        // surface down first — same path as the compositor's title-bar close.
+        releaseSurface(compositor: compositor, input: input)
         exit(0)
+    }
+
+    /// Drops this client's window on the compositor before the process ends.
+    ///
+    /// Idempotent: if the compositor already destroyed it (its own close
+    /// button, or the stream ended first), `DestroySurface` is a no-op error
+    /// we ignore.
+    private static func releaseSurface(
+        compositor: Compositor, input: InputChannel
+    ) {
+        let id = surfaceID
+        guard id != 0 else {
+            input.close()
+            return
+        }
+        // Visual first: scene node gone before we do anything else.
+        do {
+            try blockingCall {
+                try await compositor.destroySurface(surfaceId: id)
+            }
+        } catch {
+            // Already gone is the ordinary race with compositor-side close.
+        }
+        surfaceID = 0
+        input.close()
     }
 
     /// Set once, before the first publish can read it. See `run`.

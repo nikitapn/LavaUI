@@ -37,9 +37,10 @@ public enum WindowControlKind: Sendable, Equatable, CaseIterable {
 /// has asked for a decoration it does not need.
 ///
 /// `close` is the exception, and it needs no hook at all: ending the window is
-/// something an app can always do, and in a client that is also how the window
-/// goes away — the compositor holds the surface on the input stream's lease,
-/// so a process that stops is a window that closes.
+/// something an app can always do. A client still must drop its surface
+/// (`DestroySurface`) on the way out — otherwise the window lingers until
+/// NPRPC notices the process is gone — and `LavaClient.run` does that when
+/// the frame loop returns.
 public enum WindowBridge {
     /// "The user has grabbed the window" — starts an interactive move.
     /// Called on the *press*; everything after it belongs to the compositor.

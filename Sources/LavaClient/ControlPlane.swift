@@ -244,6 +244,16 @@ public final class InputChannel: @unchecked Sendable {
         }
     }
 
+    /// Ends the lease cleanly from this side.
+    ///
+    /// Finishes the ack stream so the writer closes, which is what the
+    /// compositor treats as "the surface is gone" when `DestroySurface` is
+    /// not used first. Cheap if already closed.
+    public func close() {
+        acks.finish()
+        finish()
+    }
+
     /// Called on the NPRPC thread the moment something arrives, for a client
     /// whose frame loop parks rather than polls.
     ///
