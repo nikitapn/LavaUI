@@ -44,6 +44,16 @@ public struct CanvasGesture: Sendable, Equatable {
     /// `.moved`/`.ended` — a drag can't ask again mid-flight, only a fresh
     /// press reflects current state, so this stays whatever `.began` saw.
     public var mods: Int32
+    /// How many clicks this press continues: 1 for a single, 2 for a double,
+    /// 3 for a triple. Carried through `.moved` and `.ended` like `mods`, so a
+    /// double-click-and-drag knows all the way through that it is extending by
+    /// words.
+    ///
+    /// Here rather than left to the caller because the caller would have to
+    /// find `ClickCounter` to get it, and one that reached for a timer of its
+    /// own would disagree with the text editor and the title bar about what a
+    /// double-click is — on the same desktop, under the same finger.
+    public var clickCount: Int = 1
 }
 
 /// Custom-drawn control: Yoga sizes the box; the app emits draw commands.
@@ -161,21 +171,32 @@ public struct Canvas: PrimitiveView {
                 // more obviously correct than reaching for a separate global.
                 var lastWindow = (x: originX + localX, y: originY + localY)
                 let beganFrame = leaf.lastCanvasFrame
+                // The same counter `EditorView` and the title bar use, so one
+                // interval and one slop govern every double-click here.
+                let clicks = ClickCounter.register(x: lastWindow.x, y: lastWindow.y)
                 gesture(CanvasGesture(
                     phase: .began, localX: localX, localY: localY,
                     windowX: lastWindow.x, windowY: lastWindow.y,
-                    frame: beganFrame, mods: mods
+                    frame: beganFrame, mods: mods, clickCount: clicks
                 ))
                 PointerCapture.capture(
                     leaf.id,
                     onMove: { windowX, windowY in
+                        // A move that did not move carries nothing, and a
+                        // release commonly delivers one at the position it is
+                        // releasing at. Forwarding it made every plain click
+                        // look like a one-pixel drag, which any consumer
+                        // telling a click from a drag then has to undo — so it
+                        // is dropped here, once, instead of in each of them.
+                        guard windowX != lastWindow.x || windowY != lastWindow.y
+                        else { return }
                         lastWindow = (windowX, windowY)
                         let frame = leaf.lastCanvasFrame
                         gesture(CanvasGesture(
                             phase: .moved,
                             localX: windowX - frame.x, localY: windowY - frame.y,
                             windowX: windowX, windowY: windowY,
-                            frame: frame, mods: mods
+                            frame: frame, mods: mods, clickCount: clicks
                         ))
                     },
                     onUp: {
@@ -185,7 +206,7 @@ public struct Canvas: PrimitiveView {
                             localX: lastWindow.x - frame.x,
                             localY: lastWindow.y - frame.y,
                             windowX: lastWindow.x, windowY: lastWindow.y,
-                            frame: frame, mods: mods
+                            frame: frame, mods: mods, clickCount: clicks
                         ))
                     }
                 )

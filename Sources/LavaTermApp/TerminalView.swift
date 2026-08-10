@@ -78,16 +78,10 @@ struct TerminalCanvas: View {
                 switch gesture.phase {
                 case .began:
                     takeFocus()
-                    // `ClickCounter` is the same one `EditorView` uses, so a
-                    // double-click means the same interval and the same slop
-                    // everywhere on this desktop rather than a number this
-                    // widget picked for itself.
-                    let clicks = ClickCounter.register(
-                        x: gesture.windowX, y: gesture.windowY)
                     session.beginSelection(
                         atX: gesture.localX + gesture.frame.x,
                         y: gesture.localY + gesture.frame.y,
-                        clicks: clicks
+                        clicks: gesture.clickCount
                     )
                 case .moved:
                     // Local coordinates go negative and past the edges once a
