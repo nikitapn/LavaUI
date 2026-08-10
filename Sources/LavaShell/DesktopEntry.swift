@@ -65,23 +65,30 @@ extension DesktopEntry {
     /// and a launcher that runs for four seconds should see an application
     /// that was installed while it was closed.
     public static func installed() -> [DesktopEntry] {
-        var byId: [String: DesktopEntry] = [:]
-        var order: [String] = []
+        BootTrace.measure("desktop entries: installed()") {
+            var byId: [String: DesktopEntry] = [:]
+            var order: [String] = []
 
-        for directory in applicationDirectories() {
-            for file in desktopFiles(in: directory) {
-                let id = entryId(for: file, root: directory)
-                // First wins: `applicationDirectories` is in precedence order,
-                // so a user's override is already ahead of the packaged one.
-                guard byId[id] == nil else { continue }
-                guard let entry = parse(file: file, id: id) else { continue }
-                byId[id] = entry
-                order.append(id)
+            for directory in applicationDirectories() {
+                let files = BootTrace.measure("  walk") { desktopFiles(in: directory) }
+                BootTrace.count("  .desktop files", files.count)
+                for file in files {
+                    let id = entryId(for: file, root: directory)
+                    // First wins: `applicationDirectories` is in precedence
+                    // order, so a user's override is already ahead of the
+                    // packaged one.
+                    guard byId[id] == nil else { continue }
+                    guard let entry = BootTrace.measure("  read + parse", {
+                        parse(file: file, id: id)
+                    }) else { continue }
+                    byId[id] = entry
+                    order.append(id)
+                }
             }
-        }
 
-        return order.compactMap { byId[$0] }
-            .sorted { $0.name.lowercased() < $1.name.lowercased() }
+            return order.compactMap { byId[$0] }
+                .sorted { $0.name.lowercased() < $1.name.lowercased() }
+        }
     }
 
     /// Where entries live, most specific first.
@@ -129,10 +136,12 @@ extension DesktopEntry {
     // MARK: - Parsing
 
     private static func parse(file: String, id: String) -> DesktopEntry? {
-        guard let text = try? String(contentsOfFile: file, encoding: .utf8) else {
+        guard let text = BootTrace.measure("    read file", {
+            try? String(contentsOfFile: file, encoding: .utf8)
+        }) else {
             return nil
         }
-        return parse(text: text, id: id)
+        return BootTrace.measure("    parse text") { parse(text: text, id: id) }
     }
 
     /// The parse itself, against text rather than a path — which is what makes
@@ -169,7 +178,9 @@ extension DesktopEntry {
         }
         // `TryExec` is the entry's own liveness check: a package that left its
         // entry behind names a binary that is not there any more.
-        if let probe = fields["TryExec"], !probe.isEmpty, !exists(program: probe) {
+        if let probe = fields["TryExec"], !probe.isEmpty,
+           !BootTrace.measure("  TryExec probe", { exists(program: probe) })
+        {
             return nil
         }
         guard let exec = fields["Exec"], !exec.isEmpty else { return nil }

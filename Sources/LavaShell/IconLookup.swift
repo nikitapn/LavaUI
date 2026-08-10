@@ -50,8 +50,11 @@ public enum IconLookup {
     /// desktop entry has no icon anywhere on the system, and the dock draws its
     /// initial instead.
     public static func iconPath(forAppId appId: String) -> String? {
-        if let cached = iconPathCache[appId] { return cached }
-        let found = search(appId: appId)
+        if let cached = iconPathCache[appId] {
+            BootTrace.count("icon: cache hit")
+            return cached
+        }
+        let found = BootTrace.measure("icon: search") { search(appId: appId) }
         iconPathCache[appId] = found
         return found
     }
@@ -82,6 +85,7 @@ public enum IconLookup {
     /// launcher shows. One parser for the format, so an entry the launcher can
     /// read is one the dock can find an icon for.
     private static func desktopIconName(appId: String) -> String? {
+        BootTrace.count("icon: entry scan")
         let needle = appId.lowercased()
         var byWMClass: String?
         for entry in entries() where !entry.icon.isEmpty {
@@ -143,11 +147,12 @@ public enum IconLookup {
     private static func themeIcon(named name: String) -> String? {
         let manager = FileManager.default
         for theme in themes {
-            for path in candidatePaths(theme: theme, name: name)
-            where manager.fileExists(atPath: path) {
-                return path
+            for path in candidatePaths(theme: theme, name: name) {
+                BootTrace.count("icon: fileExists")
+                if manager.fileExists(atPath: path) { return path }
             }
         }
+        BootTrace.count("icon: not found")
         return nil
     }
 }

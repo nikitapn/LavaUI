@@ -97,7 +97,13 @@ enum Grid {
 // something reads as a layer over the desktop rather than a context switch.
 WindowBackdrop.current = .color(Color(r: 0.06, g: 0.07, b: 0.09, a: 0.86))
 
+// `LAVA_BOOT_TRACE=1` says where the time before the first frame went. This is
+// the client that most needs it: everything else opens a window and draws,
+// while a launcher first has to find out what is installed on the machine.
+BootTrace.mark("main")
+
 model.load()
+BootTrace.mark("desktop entries read (\(model.all.count))")
 
 // Full-screen by asking for something bigger than any screen: the compositor
 // clamps to the work area and sends the real size back as the opening resize.
@@ -105,5 +111,13 @@ model.load()
 guard let editor = LavaClient.open(
     title: "Launcher", width: 3840, height: 2160, frame: .client
 ) else { exit(1) }
+BootTrace.mark("compositor connected")
+
+// Drained right after the first present, so this runs with a frame genuinely
+// on screen rather than merely built.
+FrameTasks.after {
+    BootTrace.mark("first frame presented")
+    BootTrace.report()
+}
 
 LavaClient.run(editor: editor, onRawKey: handleKey) { LauncherView() }
