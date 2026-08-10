@@ -55,7 +55,7 @@ public struct Button: PrimitiveView {
         leaf.applyStyle()
 
         let act = action
-        leaf.onClickLocal = { [weak leaf] _, _, _, _, _ in
+        leaf.onClickLocal = { [weak leaf] _, _, _, _, _, _ in
             guard let leaf, leaf.isEnabled else { return }
 
             // Capture so the release is seen even if the pointer leaves, and so

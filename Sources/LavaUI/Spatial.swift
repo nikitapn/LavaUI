@@ -565,7 +565,7 @@ public struct Scene3D: PrimitiveView {
         let runtime = leaf.spatialRuntime ?? SpatialRuntime(nodeID: leaf.id)
         leaf.spatialRuntime = runtime
         runtime.update(camera: camera, controls: cameraControls, elements: elements)
-        leaf.onClickLocal = { [weak leaf, weak runtime] x, y, _, _, mods in
+        leaf.onClickLocal = { [weak leaf, weak runtime] x, y, _, _, mods, _ in
             guard let leaf, let runtime else { return }
             guard runtime.controls != nil else { runtime.tap(x: x, y: y); return }
             runtime.beginCameraGesture(x: x, y: y, mods: mods)

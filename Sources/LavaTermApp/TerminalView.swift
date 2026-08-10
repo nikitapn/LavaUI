@@ -78,6 +78,15 @@ struct TerminalCanvas: View {
                 switch gesture.phase {
                 case .began:
                     takeFocus()
+                    // Middle button: paste what was last selected, anywhere,
+                    // and leave this terminal's own selection alone. Older
+                    // than the clipboard and still the fastest thing in a
+                    // terminal — highlight there, middle-click here.
+                    if gesture.button == PointerButton.middle {
+                        session.pastePrimary()
+                        return
+                    }
+                    guard gesture.button == PointerButton.left else { return }
                     session.beginSelection(
                         atX: gesture.localX + gesture.frame.x,
                         y: gesture.localY + gesture.frame.y,

@@ -427,6 +427,34 @@ public enum LavaClient {
                 )
             }
         }
+        // The other selection — what middle-click pastes. Written whenever a
+        // selection is *made* rather than copied, so this one is on the path
+        // of a drag ending and is worth being the cheap call that it is.
+        ClipboardBridge.primaryReader = { [compositor] in
+            do {
+                return try blockingCall {
+                    try await compositor.getPrimarySelection(surfaceId: surfaceID)
+                }
+            } catch {
+                FileHandle.standardError.write(
+                    Data("GetPrimarySelection failed: \(error)\n".utf8)
+                )
+                return ""
+            }
+        }
+        ClipboardBridge.primaryWriter = { [compositor] text in
+            do {
+                try blockingCall {
+                    try await compositor.setPrimarySelection(
+                        surfaceId: surfaceID, text: text
+                    )
+                }
+            } catch {
+                FileHandle.standardError.write(
+                    Data("SetPrimarySelection failed: \(error)\n".utf8)
+                )
+            }
+        }
 
         // A wheel notch this tree declined, handed back to the scene that
         // forwarded it. Fire and forget, like `Present` and for the same

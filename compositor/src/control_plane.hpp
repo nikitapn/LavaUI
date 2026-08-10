@@ -273,6 +273,12 @@ struct CompositorHost {
 
   /// Offers `text` as the seat's selection, replacing what was there.
   virtual void setClipboardText(const std::string &text) = 0;
+
+  /// The primary selection — what middle-click pastes. Filled by selecting
+  /// rather than by copying, which is why a client sets it from wherever a
+  /// drag ends.
+  virtual std::string primarySelectionText() const = 0;
+  virtual void setPrimarySelectionText(const std::string &text) = 0;
 };
 
 class ControlPlane {

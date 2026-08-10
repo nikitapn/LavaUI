@@ -49,6 +49,18 @@ public enum KeyCode {
 }
 
 /// Modifier bitfield (GLFW `mods`).
+/// Which mouse button an event came from.
+///
+/// The order the compositor forwards them in, which is evdev's `BTN_LEFT`,
+/// `BTN_RIGHT`, `BTN_MIDDLE` shifted to zero — and the same numbering GLFW
+/// uses, which is what the windowed path was written against. Middle is 2, not
+/// 1, and that is the one worth having a name for.
+public enum PointerButton {
+    public static let left: Int32 = 0
+    public static let right: Int32 = 1
+    public static let middle: Int32 = 2
+}
+
 public enum KeyMods {
     public static let shift: Int32 = 0x0001
     public static let control: Int32 = 0x0002

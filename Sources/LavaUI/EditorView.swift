@@ -270,7 +270,7 @@ public struct EditorView: PrimitiveView {
             }
         }
 
-        leaf.onClickLocal = { [weak leaf] localX, localY, originX, originY, _ in
+        leaf.onClickLocal = { [weak leaf] localX, localY, originX, originY, _, _ in
             guard let leaf else { return }
             leaf.focusSelf(binding: binding, onSubmit: nil)
             // Clicks in the gutter select the whole line, as they do in every

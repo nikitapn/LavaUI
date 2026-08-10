@@ -126,7 +126,7 @@ public struct TextField: PrimitiveView {
         let submit = onSubmit
 
         // Press: focus, place the caret, and start a drag session.
-        leaf.onClickLocal = { [weak leaf] localX, localY, originX, originY, _ in
+        leaf.onClickLocal = { [weak leaf] localX, localY, originX, originY, _, _ in
             guard let leaf, let run = leaf.shapedRun() else { return }
             leaf.focusSelf(binding: binding, onSubmit: submit)
 
@@ -368,6 +368,28 @@ public enum ClipboardBridge {
     nonisolated(unsafe) public static var reader: (() -> String)?
     nonisolated(unsafe) public static var writer: ((String) -> Void)?
 
-    static func read() -> String { reader?() ?? "" }
-    static func write(_ text: String) { writer?(text) }
+    /// The *primary* selection — what middle-click pastes. A second selection,
+    /// filled by the act of selecting rather than by a copy command, which is
+    /// why a widget writes it from wherever a drag ends rather than from a
+    /// keybinding.
+    ///
+    /// Separate closures rather than a flag, because the two are separate
+    /// protocols under a compositor and the host wires whichever it has: left
+    /// nil, primary simply does nothing, and middle-click pastes nothing.
+    nonisolated(unsafe) public static var primaryReader: (() -> String)?
+    nonisolated(unsafe) public static var primaryWriter: ((String) -> Void)?
+
+    public static func read() -> String { reader?() ?? "" }
+    public static func write(_ text: String) { writer?(text) }
+    public static func readPrimary() -> String { primaryReader?() ?? "" }
+    public static func writePrimary(_ text: String) { primaryWriter?(text) }
+}
+
+/// The primary selection for a process with no display server behind it.
+///
+/// `LavaApp` points `ClipboardBridge`'s primary closures here, so a windowed
+/// app has the middle-click paste its client-mode twin gets from the seat —
+/// within itself, which is as far as a lone window can see.
+enum LocalPrimarySelection {
+    nonisolated(unsafe) static var text: String = ""
 }

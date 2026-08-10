@@ -80,7 +80,7 @@ public struct Toggle: PrimitiveView {
         }
 
         let binding = isOn
-        leaf.onClickLocal = { [weak leaf] _, _, _, _, _ in
+        leaf.onClickLocal = { [weak leaf] _, _, _, _, _, _ in
             guard let leaf, leaf.isEnabled else { return }
             leaf.isPressed = true
             // Capture so the flip happens on *release*, and only if the pointer

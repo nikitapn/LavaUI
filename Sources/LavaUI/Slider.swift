@@ -94,7 +94,7 @@ public struct Slider: PrimitiveView {
         }
 
         let commit = self.commit
-        leaf.onClickLocal = { [weak leaf] localX, _, originX, _, _ in
+        leaf.onClickLocal = { [weak leaf] localX, _, originX, _, _, _ in
             guard let leaf, leaf.isEnabled else { return }
             leaf.isPressed = true
             leaf.retargetSliderKnob(active: true)

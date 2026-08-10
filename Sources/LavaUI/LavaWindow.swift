@@ -424,7 +424,8 @@ public final class LavaWindow {
         switch ev.kind {
         case .mouseDown:
             if let action = host.hitTestClick(
-                x: ev.x, y: ev.y, originX: 0, originY: menuH, mods: ev.mods
+                x: ev.x, y: ev.y, originX: 0, originY: menuH, mods: ev.mods,
+                button: ev.button
             ) {
                 action()
                 // A handler exists to change something, so a click is a repaint

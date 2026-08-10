@@ -2133,6 +2133,18 @@ class SurfaceRegistry : public lava::CompositorHost {
     clipboard.set(text);
   }
 
+  std::string primarySelectionText() const override {
+    if (server_ == nullptr) return {};
+    lava::Clipboard clipboard(server_->display, server_->seat);
+    return clipboard.getPrimary();
+  }
+
+  void setPrimarySelectionText(const std::string &text) override {
+    if (server_ == nullptr) return;
+    lava::Clipboard clipboard(server_->display, server_->seat);
+    clipboard.setPrimary(text);
+  }
+
  public:
   /// What is left of the output once reserving panels have taken their strip.
   struct WorkArea {

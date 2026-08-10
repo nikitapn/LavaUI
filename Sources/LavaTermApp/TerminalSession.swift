@@ -108,6 +108,13 @@ public final class TerminalSession: @unchecked Sendable {
     public func endSelection() {
         if !selection.dragged, selection.granularity == .character {
             selection.clear()
+        } else {
+            // Selecting *is* the copy, for the primary selection. No shortcut,
+            // no menu: this is the whole of the Unix convention that middle
+            // click pastes what you last highlighted, and it is why it has to
+            // happen here rather than anywhere a user might press something.
+            let text = selection.text(from: screen)
+            if !text.isEmpty { ClipboardBridge.writePrimary(text) }
         }
         ViewInvalidation.markNeedsRedraw()
     }
@@ -128,9 +135,17 @@ public final class TerminalSession: @unchecked Sendable {
         return true
     }
 
+    /// The primary selection to the shell — what middle-click does.
+    public func pastePrimary() {
+        insert(ClipboardBridge.readPrimary())
+    }
+
     /// Clipboard to the shell, as if it had been typed.
     public func paste() {
-        let text = ClipboardBridge.reader?() ?? ""
+        insert(ClipboardBridge.read())
+    }
+
+    private func insert(_ text: String) {
         guard !text.isEmpty else { return }
         // Newlines included: pasting three lines into a shell runs three
         // commands, which is what every other terminal does and what anyone

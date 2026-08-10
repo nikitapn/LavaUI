@@ -170,8 +170,16 @@ itself is answered from memory without a pipe at all, since waiting on this
 thread for a write only this thread can perform is not a risk but a
 certainty.
 
-Only text, and only the clipboard: the primary selection (middle-click paste)
-is a second seat selection that nothing here sets yet.
+The **primary selection** — what middle-click pastes — is a second, separate
+selection with a protocol of its own, and it works the same way. Selecting
+text fills it, with no copy command anywhere: that is the whole convention,
+and it is why a client writes it from wherever a drag ends rather than from a
+keybinding. So a drag in LavaTerm is readable by `wl-paste --primary`, and a
+middle-click in LavaTerm pastes what you highlighted in Firefox. Two
+selections is not duplication — it is what lets you paste something copied an
+hour ago into a line assembled from things you are selecting now.
+
+Text only, both of them.
 
 A Wayland window is therefore square *including* its title bar, and its shadow
 is square too. Rounding only the bar would round two corners of a rectangle

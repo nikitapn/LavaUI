@@ -618,13 +618,11 @@ void AppWindow::pointerMove(float x, float y)
   // modifier source and keep the 0 default.
 void AppWindow::pointerButton(int button, bool pressed, float x, float y, int mods)
 {
-    // Queue raw input for Swift hit-testing (Phase 3+).
+    // Pressed feedback is the primary button's alone: a scene node lights up
+    // under a left press and should not under a middle one, and "is the
+    // pointer down" means the drag button everywhere it is asked.
     if (button == MOUSE_BUTTON_1) {
       pointerDown_ = pressed;
-      // Feedback is drawn here; the event still goes to the producer below.
-      // Unlike a scroll this is not consumed — a press *means* something, and
-      // only the producer knows what. The renderer paints it, it does not
-      // interpret it.
       pointerX_ = x;
       pointerY_ = y;
       // Before the MouseDown is queued below, so the producer reads the two
@@ -633,20 +631,25 @@ void AppWindow::pointerButton(int button, bool pressed, float x, float y, int mo
       if (render_ && render_->updateScenePress(pressed)) {
         internalRepaint_ = true;
       }
-      canvas::InputEvent ev;
-      ev.kind =
-          static_cast<uint32_t>(pressed ? canvas::InputEventKind::MouseDown
-                                        : canvas::InputEventKind::MouseUp);
-      ev.x = x;
-      ev.y = y;
-      ev.button = button;
-      ev.mods = mods;
-      {
-        std::lock_guard lock(inputMu_);
-        inputEvents_.push_back(ev);
-      }
     }
 
+    // The event itself goes up for *every* button. Unlike a scroll this is not
+    // consumed — a press means something and only the producer knows what; the
+    // renderer paints it, it does not interpret it. Queueing only button 1 was
+    // that rule half-applied, and it made middle-click paste and a right-click
+    // menu impossible to write against this path: the compositor forwards
+    // every button to a client, and a windowed app saw none of them.
+    canvas::InputEvent ev;
+    ev.kind = static_cast<uint32_t>(pressed ? canvas::InputEventKind::MouseDown
+                                            : canvas::InputEventKind::MouseUp);
+    ev.x = x;
+    ev.y = y;
+    ev.button = button;
+    ev.mods = mods;
+    {
+      std::lock_guard lock(inputMu_);
+      inputEvents_.push_back(ev);
+    }
   }
 
 void AppWindow::keyEvent(int key, int action, int mods)

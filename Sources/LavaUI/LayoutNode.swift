@@ -754,7 +754,7 @@ final class LeafNode: YogaBoxNode {
     /// press reflects current modifier state.
     var onClickLocal: ((_ localX: Float, _ localY: Float,
                         _ originX: Float, _ originY: Float,
-                        _ mods: Int32) -> Void)?
+                        _ mods: Int32, _ button: Int32) -> Void)?
     /// Called when hover enters/leaves, for views wanting more than a fill.
     var onHover: ((Bool) -> Void)?
 
@@ -1553,7 +1553,7 @@ public final class LayoutHost {
     public func hitTestClick(
         x: Float, y: Float,
         originX: Float = 0, originY: Float = 0,
-        mods: Int32 = 0
+        mods: Int32 = 0, button: Int32 = 0
     ) -> (() -> Void)? {
         guard layoutValid, let root else { return nil }
 
@@ -1567,7 +1567,8 @@ public final class LayoutHost {
                 guard let overlayRoot = att.root else { continue }
                 if let hit = hitWalk(
                     overlayRoot, x: x, y: y,
-                    ox: originX + att.origin.x, oy: originY + att.origin.y, mods: mods
+                    ox: originX + att.origin.x, oy: originY + att.origin.y,
+                    mods: mods, button: button
                 ) {
                     return hit
                 }
@@ -1578,7 +1579,8 @@ public final class LayoutHost {
             return { for att in overlays { att.dismiss() } }
         }
 
-        return hitWalk(root, x: x, y: y, ox: originX, oy: originY, mods: mods)
+        return hitWalk(root, x: x, y: y, ox: originX, oy: originY,
+                       mods: mods, button: button)
     }
 
     /// Topmost interactive node under the pointer, for hover highlighting.
@@ -1821,7 +1823,7 @@ public final class LayoutHost {
         _ node: any AnyViewNode,
         x: Float, y: Float,
         ox: Float, oy: Float,
-        mods: Int32
+        mods: Int32, button: Int32
     ) -> (() -> Void)? {
         // Clicking something that is fading out would run an action the view
         // tree no longer describes; clicking through to something hidden runs
@@ -1840,7 +1842,8 @@ public final class LayoutHost {
             for child in node.childNodes.reversed() {
                 let shift = box.childOffset
                 if let h = hitWalk(
-                    child, x: x, y: y, ox: nx - shift.x, oy: ny - shift.y, mods: mods
+                    child, x: x, y: y, ox: nx - shift.x, oy: ny - shift.y,
+                    mods: mods, button: button
                 ) { return h }
             }
             if let leaf = node as? LeafNode,
@@ -1849,7 +1852,7 @@ public final class LayoutHost {
                 if let local = leaf.onClickLocal {
                     let lx = x - nx
                     let ly = y - ny
-                    return { local(lx, ly, nx, ny, mods) }
+                    return { local(lx, ly, nx, ny, mods, button) }
                 }
                 if let click = leaf.onClick, leaf.kind == .text || leaf.kind == .image {
                     return click
@@ -1870,7 +1873,8 @@ public final class LayoutHost {
             return nil
         }
         for child in node.childNodes.reversed() {
-            if let h = hitWalk(child, x: x, y: y, ox: ox, oy: oy, mods: mods) { return h }
+            if let h = hitWalk(child, x: x, y: y, ox: ox, oy: oy,
+                               mods: mods, button: button) { return h }
         }
         return nil
     }

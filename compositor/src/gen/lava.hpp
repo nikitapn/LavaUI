@@ -1076,6 +1076,8 @@ public:
   virtual Capture CaptureSurface (uint32_t surfaceId, int32_t x, int32_t y, int32_t w, int32_t h, int32_t maxSide) = 0;
   virtual std::string GetClipboard (uint32_t surfaceId) = 0;
   virtual void SetClipboard (uint32_t surfaceId, ::nprpc::flat::Span<char> text) = 0;
+  virtual std::string GetPrimarySelection (uint32_t surfaceId) = 0;
+  virtual void SetPrimarySelection (uint32_t surfaceId, ::nprpc::flat::Span<char> text) = 0;
 };
 
 class LAVA_API Compositor
@@ -1144,6 +1146,10 @@ public:
   ::nprpc::Task<std::string> GetClipboardAsync (uint32_t surfaceId, std::stop_token st = {});
   void SetClipboard (uint32_t surfaceId, const std::string& text);
   ::nprpc::Task<void> SetClipboardAsync (uint32_t surfaceId, const std::string& text, std::stop_token st = {});
+  std::string GetPrimarySelection (uint32_t surfaceId);
+  ::nprpc::Task<std::string> GetPrimarySelectionAsync (uint32_t surfaceId, std::stop_token st = {});
+  void SetPrimarySelection (uint32_t surfaceId, const std::string& text);
+  ::nprpc::Task<void> SetPrimarySelectionAsync (uint32_t surfaceId, const std::string& text, std::stop_token st = {});
 };
 
 namespace helper {

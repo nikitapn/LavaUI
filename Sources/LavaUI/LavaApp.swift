@@ -61,6 +61,11 @@ public enum LavaApp {
 
         ClipboardBridge.reader = { editor.clipboardText }
         ClipboardBridge.writer = { editor.clipboardText = $0 }
+        // No display server to ask, so this window keeps a primary selection
+        // of its own: middle-click paste works within the app and stops at its
+        // edge, which is the most a windowed process can honestly offer.
+        ClipboardBridge.primaryReader = { LocalPrimarySelection.text }
+        ClipboardBridge.primaryWriter = { LocalPrimarySelection.text = $0 }
 
         return editor
     }

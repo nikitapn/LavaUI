@@ -54,6 +54,14 @@ public struct CanvasGesture: Sendable, Equatable {
     /// own would disagree with the text editor and the title bar about what a
     /// double-click is — on the same desktop, under the same finger.
     public var clickCount: Int = 1
+    /// Which button started this: 0 left, 1 right, 2 middle, matching GLFW and
+    /// the order the compositor forwards them in.
+    ///
+    /// A canvas that only wants the primary button has to check, because every
+    /// button arrives here — which is the honest default for a surface whose
+    /// whole point is that the app decides what a press means. Middle-click
+    /// paste and a right-click menu are the two that need it.
+    public var button: Int32 = 0
 }
 
 /// Custom-drawn control: Yoga sizes the box; the app emits draw commands.
@@ -161,7 +169,7 @@ public struct Canvas: PrimitiveView {
         let gesture = onGesture
         leaf.onClickLocal = (tap == nil && gesture == nil)
             ? nil
-            : { [weak leaf] localX, localY, originX, originY, mods in
+            : { [weak leaf] localX, localY, originX, originY, mods, button in
                 tap?()
                 guard let gesture else { return }
                 guard let leaf else { return }
@@ -177,7 +185,8 @@ public struct Canvas: PrimitiveView {
                 gesture(CanvasGesture(
                     phase: .began, localX: localX, localY: localY,
                     windowX: lastWindow.x, windowY: lastWindow.y,
-                    frame: beganFrame, mods: mods, clickCount: clicks
+                    frame: beganFrame, mods: mods, clickCount: clicks,
+                    button: button
                 ))
                 PointerCapture.capture(
                     leaf.id,
@@ -196,7 +205,8 @@ public struct Canvas: PrimitiveView {
                             phase: .moved,
                             localX: windowX - frame.x, localY: windowY - frame.y,
                             windowX: windowX, windowY: windowY,
-                            frame: frame, mods: mods, clickCount: clicks
+                            frame: frame, mods: mods, clickCount: clicks,
+                            button: button
                         ))
                     },
                     onUp: {
@@ -206,7 +216,8 @@ public struct Canvas: PrimitiveView {
                             localX: lastWindow.x - frame.x,
                             localY: lastWindow.y - frame.y,
                             windowX: lastWindow.x, windowY: lastWindow.y,
-                            frame: frame, mods: mods, clickCount: clicks
+                            frame: frame, mods: mods, clickCount: clicks,
+                            button: button
                         ))
                     }
                 )

@@ -37,6 +37,18 @@ class Clipboard {
   /// that costs when the owner is another process.
   std::string get();
 
+  /// The *primary* selection — what middle-click pastes.
+  ///
+  /// A second selection, filled by the act of selecting rather than by a copy
+  /// command, and emptied into the pointer's position by the middle button.
+  /// Unix has had it since X11 and it is why you can paste something you
+  /// copied an hour ago into a line assembled from things you are selecting
+  /// now. A separate protocol (`primary-selection-unstable-v1`) with its own
+  /// source type, which is why these are two more methods rather than a flag
+  /// on the two above.
+  void setPrimary(const std::string &text);
+  std::string getPrimary();
+
  private:
   wl_display *display_ = nullptr;
   wlr_seat *seat_ = nullptr;

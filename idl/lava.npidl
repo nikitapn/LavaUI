@@ -992,4 +992,25 @@ interface Compositor {
   /// they pressed anything. Worth a round trip.
   void SetClipboard(surfaceId: in u32, text: in string)
       raises(SurfaceNotFound);
+
+  /// The *primary* selection — what middle-click pastes.
+  ///
+  /// A second, separate selection that Unix has had since X11 and that no
+  /// other desktop makes a setting: selecting text fills it, middle-click
+  /// empties it into wherever the pointer is, and neither of those touches
+  /// the clipboard. Two selections is not duplication — it is what lets you
+  /// paste something you copied an hour ago into a line you are assembling
+  /// from things you are selecting now.
+  ///
+  /// Same shape and same costs as `GetClipboard`, and empty for the same
+  /// reason: nothing selected is the ordinary state, not a failure.
+  string GetPrimarySelection(surfaceId: in u32) raises(SurfaceNotFound);
+
+  /// Offers text as the primary selection.
+  ///
+  /// Called when a selection is *made*, not when a copy is asked for — which
+  /// is the whole convention, and the reason a client should call this from
+  /// wherever a drag ends rather than from a keybinding.
+  void SetPrimarySelection(surfaceId: in u32, text: in string)
+      raises(SurfaceNotFound);
 }
