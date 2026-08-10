@@ -903,7 +903,18 @@ class ControlPlaneImpl final : public ControlPlane {
       return false;
     }
 
-    rpc_ = nprpc::RpcBuilder().set_log_level(nprpc::LogLevel::warn).build();
+    // Two shared-memory rings per client, resident for as long as the window
+    // is open, so this is what a window costs before it has drawn anything.
+    // Almost everything here is tiny — input events, Present, heartbeats, a
+    // window list — and would be happy with the 1 MiB default; `CaptureSurface`
+    // is the exception, returning a whole window as a PNG in one reply, and a
+    // ring that cannot carry one turns the agent's screenshot into a timeout.
+    // So: sized for the one big message rather than for the traffic, and the
+    // day captures travel in their own segment this can drop back.
+    rpc_ = nprpc::RpcBuilder()
+               .set_log_level(nprpc::LogLevel::warn)
+               .shm_channel_sizes(4 * 1024 * 1024, 3 * 1024 * 1024)
+               .build();
     if (rpc_ == nullptr) {
       wlr_log(WLR_ERROR, "control plane: could not build the RPC runtime");
       return false;

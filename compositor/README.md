@@ -66,6 +66,20 @@ and half of the other. `LAVA_SHELL_DIR` settles it by naming the directory to
 look in first, and `scripts/dev-run -r` sets it while building both halves
 release, so the flag is the whole of what you have to remember.
 
+Every client also costs shared memory before it has drawn anything: two nprpc
+rings, one each way, created by the compositor and resident for the life of
+the window. They are asked for at 4 MiB in `control_plane.cpp` rather than
+left at nprpc's 1 MiB default, and only because of `CaptureSurface` — a
+screenshot is a whole window as a PNG in one reply, measured at 542 KiB for a
+1280×720 window with album art, and a ring that cannot carry one turns the
+agent's screenshot into a timeout. Everything else here is input events,
+`Present` and heartbeats, which would fit a hundred times over.
+
+That memory comes back when a window closes and does *not* when the
+compositor is killed — a process that runs no destructor removes nothing. The
+next compositor to start sweeps what the last one left; `/dev/shm` filling up
+with `nprpc_*` is a thing that used to happen and no longer should.
+
 **Alt+P** opens the application launcher, which is *not* supervised: it is
 spawned per invocation and exits as soon as it has launched something or been
 dismissed, the way rofi does. A LavaUI client reaches its first frame in about

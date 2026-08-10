@@ -178,7 +178,10 @@ var targets: [Target] = [
     ),
     .executableTarget(
         name: "SpotifyApp",
-        dependencies: ["LavaUI", "SpotifyCore"],
+        dependencies: [
+            "LavaUI",
+            "SpotifyCore"
+        ] + (haveNprpc ? [Target.Dependency("LavaClient")] : []),
         swiftSettings: interopCxx
     ),
     .executableTarget(
