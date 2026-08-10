@@ -116,11 +116,15 @@ private struct Results: View {
             }
         } else {
             ScrollView {
+                // Centred: the cards are the only thing on the screen, so the
+                // width left over after the last whole column belongs on both
+                // sides of them rather than all down the right.
                 LazyVGrid(
                     entries,
                     cellWidth: Grid.cardWidth,
                     cellHeight: Grid.cardHeight,
-                    spacing: Grid.spacing
+                    spacing: Grid.spacing,
+                    alignment: .center
                 ) { entry in
                     AppCard(entry: entry)
                 }

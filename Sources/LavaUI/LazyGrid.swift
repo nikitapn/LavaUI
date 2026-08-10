@@ -46,19 +46,29 @@ where Data.Index == Int {
     public var cellWidth: Float?
     public var cellHeight: Float
     public var spacing: Float
+    /// Where the columns sit when the container is wider than they need.
+    public var alignment: StackAlignment
     public var content: (Data.Element) -> Content
 
+    /// - Parameter alignment: what to do with the width left over after the
+    ///   last whole column. Cells have a fixed width, so a container is almost
+    ///   never an exact number of them across, and `.start` — the default —
+    ///   leaves the remainder as one uneven gap down the right-hand side. That
+    ///   reads as a list, which is right for one. `.center` splits it, which
+    ///   is right for a wall of cards with nothing to align to.
     public init(
         _ data: Data,
         cellWidth: Float,
         cellHeight: Float,
         spacing: Float = 0,
+        alignment: StackAlignment = .start,
         @ViewBuilder content: @escaping (Data.Element) -> Content
     ) {
         self.data = data
         self.cellWidth = cellWidth
         self.cellHeight = cellHeight
         self.spacing = spacing
+        self.alignment = alignment
         self.content = content
     }
 
@@ -72,6 +82,8 @@ where Data.Index == Int {
         self.cellWidth = nil
         self.cellHeight = fullWidthRowHeight
         self.spacing = spacing
+        // One full-width column leaves nothing over to place.
+        self.alignment = .start
         self.content = content
     }
 
@@ -107,6 +119,7 @@ where Data.Index == Int {
             cellWidth: cellWidth,
             cellHeight: cellHeight,
             spacing: spacing,
+            alignment: alignment,
             makeCell: { index in content(data[data.startIndex + index]) }
         )
     }
@@ -198,6 +211,7 @@ final class LazyGridNode: YogaBoxNode {
     private var cellWidth: Float?
     private var cellHeight: Float = 1
     private var spacing: Float = 0
+    private var alignment: StackAlignment = .start
     private var makeCell: (Int) -> any View = { _ in EmptyView() }
 
     /// The scroll container that decides what is visible. Set by
@@ -240,17 +254,20 @@ final class LazyGridNode: YogaBoxNode {
         cellWidth: Float?,
         cellHeight: Float,
         spacing: Float,
+        alignment: StackAlignment,
         makeCell: @escaping (Int) -> any View
     ) {
         let geometryChanged =
             self.cellWidth != cellWidth
             || self.cellHeight != cellHeight
             || self.spacing != spacing
+            || self.alignment != alignment
             || self.count != count
         self.count = count
         self.cellWidth = cellWidth
         self.cellHeight = max(1, cellHeight)
         self.spacing = max(0, spacing)
+        self.alignment = alignment
         self.makeCell = makeCell
         // Even an identical index range now yields different views, because the
         // closure closed over new data.
@@ -370,12 +387,18 @@ final class LazyGridNode: YogaBoxNode {
         // had 23 columns on a 4K guess and 7 after the compositor said how
         // wide the window really is keeps laying its rows out 23 wide, off the
         // side of a window that only shows the first seven.
+        // Where the width left over after the last whole column goes. The
+        // partial last row is not centred on its own — it keeps the columns of
+        // the rows above it, which is what stops the final row of a card wall
+        // from sitting visibly off the grid everything else is on.
+        let inset = leftInset(cellW: cellW)
+
         for index in range {
             guard let cell = cells[index] else { continue }
             let row = columns > 0 ? index / columns : 0
             let col = columns > 0 ? index % columns : 0
             cell.place(
-                x: Float(col) * (cellW + spacing),
+                x: inset + Float(col) * (cellW + spacing),
                 y: Float(row) * rowStride,
                 w: cellW,
                 h: cellHeight
@@ -383,6 +406,19 @@ final class LazyGridNode: YogaBoxNode {
         }
 
         mounted = range
+    }
+
+    /// How far in from the left the first column starts.
+    ///
+    /// `.stretch` has no meaning for a grid of fixed-width cells — there is
+    /// nothing to stretch — so it is read as `.start`.
+    private func leftInset(cellW: Float) -> Float {
+        guard columns > 0, alignment == .center || alignment == .end else {
+            return 0
+        }
+        let used = Float(columns) * cellW + Float(columns - 1) * spacing
+        let slack = max(0, lastWidth - used)
+        return alignment == .center ? slack / 2 : slack
     }
 
     override func collectChildFrames(
