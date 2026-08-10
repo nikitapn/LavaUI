@@ -1,10 +1,11 @@
 project(
   'lava',
-  'cpp',
+  ['c', 'cpp'],
   version: '0.1.0',
   # Level 1 because this tree is not warning-clean at 3 and the compositor,
   # which is, raises its own per target. A global level everything has to meet
   # is a level nobody looks at.
+  # C is for wayland-scanner private-code (appmenu protocol) only.
   default_options: ['cpp_std=c++23', 'warning_level=1', 'werror=false'],
 )
 

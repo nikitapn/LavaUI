@@ -105,6 +105,10 @@ struct MenuImportHost::Impl {
   std::unordered_map<uint32_t, Registration> windows;
 
   uint32_t active = 0;
+  /// When set, open this DBus object instead of looking up `active` in
+  /// `windows`. Filled from the KDE Wayland AppMenu protocol.
+  std::string activeService;
+  std::string activePath;
   DbusmenuClient *client = nullptr;
   std::vector<Item> items;
   bool dirty = false;
@@ -211,14 +215,24 @@ struct MenuImportHost::Impl {
   void openClient()
   {
     closeClient();
-    auto it = windows.find(active);
-    if (active == 0 || it == windows.end()) return;
+    std::string service;
+    std::string path;
+    if (!activeService.empty() && !activePath.empty()) {
+      // Explicit address from kde-appmenu — skip the registrar.
+      service = activeService;
+      path = activePath;
+    } else {
+      auto it = windows.find(active);
+      if (active == 0 || it == windows.end()) return;
+      service = it->second.service;
+      path = it->second.objectPath;
+    }
 
-    client = dbusmenu_client_new(it->second.service.c_str(),
-                                 it->second.objectPath.c_str());
+    client = dbusmenu_client_new(service.c_str(), path.c_str());
     if (client == nullptr) {
       std::cerr << "canvas: dbusmenu client for window " << active
-                << " could not be created\n";
+                << " (" << service << " " << path
+                << ") could not be created\n";
       return;
     }
     g_signal_connect(client, DBUSMENU_CLIENT_SIGNAL_LAYOUT_UPDATED,
@@ -401,26 +415,39 @@ bool MenuImportHost::start()
 
   if (claim(kCanonicalName)) {
     impl_->busName = kCanonicalName;
+    impl_->nameAcquired = true;
   } else if (claim(kLavaName)) {
     impl_->busName = kLavaName;
+    impl_->nameAcquired = true;
     std::cerr << "canvas: " << kCanonicalName
               << " is owned by another panel; serving " << kLavaName
-              << " instead (LavaUI apps will find it; foreign apps will not)\n";
+              << " instead (LavaUI apps will find it; foreign apps use "
+                 "kde-appmenu)\n";
   } else {
-    std::cerr << "canvas: no registrar name available\n";
-    return false;
+    // Still useful: the panel can import menus whose addresses arrive over
+    // the control plane from org_kde_kwin_appmenu, without owning a registrar.
+    std::cerr << "canvas: no registrar name available; importing only via "
+                 "explicit menu addresses (kde-appmenu)\n";
   }
 
-  impl_->nameAcquired = true;
+  // Bus connection is enough to open a DbusmenuClient; registrar ownership is
+  // only required for Lava clients that RegisterWindow under a surface id.
   return true;
 }
 
 const std::string &MenuImportHost::busName() const { return impl_->busName; }
 
-void MenuImportHost::setActiveWindow(uint32_t windowId)
+void MenuImportHost::setActiveWindow(uint32_t windowId,
+                                     std::string menuService,
+                                     std::string menuObjectPath)
 {
-  if (impl_->active == windowId) return;
+  if (impl_->active == windowId && impl_->activeService == menuService &&
+      impl_->activePath == menuObjectPath) {
+    return;
+  }
   impl_->active = windowId;
+  impl_->activeService = std::move(menuService);
+  impl_->activePath = std::move(menuObjectPath);
   impl_->openClient();
 }
 
@@ -509,7 +536,7 @@ MenuImportHost::~MenuImportHost() = default;
 
 bool MenuImportHost::start() { return false; }
 const std::string &MenuImportHost::busName() const { return impl_->busName; }
-void MenuImportHost::setActiveWindow(uint32_t) {}
+void MenuImportHost::setActiveWindow(uint32_t, std::string, std::string) {}
 uint32_t MenuImportHost::activeWindow() const { return 0; }
 bool MenuImportHost::hasMenu() const { return false; }
 void MenuImportHost::poll() {}

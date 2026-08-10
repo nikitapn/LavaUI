@@ -418,8 +418,10 @@ class Engine {
   bool menuImportStart();
   /// Which name was claimed, or empty.
   std::string menuImportBusName();
-  /// Whose menu to show; 0 for none.
-  void menuImportSetActiveWindow(uint32_t windowId);
+  /// Whose menu to show; 0 for none. Optional service/path from kde-appmenu.
+  void menuImportSetActiveWindow(uint32_t windowId,
+                                 std::string menuService = {},
+                                 std::string menuObjectPath = {});
   /// Iterate GLib once. Call every frame while a panel is showing a menu.
   void menuImportPoll();
   /// Bumped whenever the imported menu changes.

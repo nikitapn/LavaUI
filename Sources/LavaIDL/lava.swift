@@ -540,12 +540,16 @@ public func unmarshal_SettingsWriteFailed(buffer: UnsafeRawPointer, offset: Int)
 public struct ActiveWindow: Codable, Sendable {
   public var surfaceId: UInt32 = 0
   public var title: String = ""
+  public var menuService: String = ""
+  public var menuObjectPath: String = ""
 
   public init() {}
 
-  public init(surfaceId: UInt32, title: String)   {
+  public init(surfaceId: UInt32, title: String, menuService: String, menuObjectPath: String)   {
     self.surfaceId = surfaceId
     self.title = title
+    self.menuService = menuService
+    self.menuObjectPath = menuObjectPath
   }
 }
 
@@ -554,6 +558,8 @@ public struct ActiveWindow: Codable, Sendable {
 public func marshal_ActiveWindow(buffer: FlatBuffer, offset: Int, data: ActiveWindow) {
   buffer.storeBytes(of: data.surfaceId, toByteOffset: offset + 0, as: UInt32.self)
   NPRPC.marshal_string(buffer: buffer, offset: offset + 4, string: data.title)
+  NPRPC.marshal_string(buffer: buffer, offset: offset + 12, string: data.menuService)
+  NPRPC.marshal_string(buffer: buffer, offset: offset + 20, string: data.menuObjectPath)
 }
 
 // MARK: - Unmarshal ActiveWindow
@@ -561,6 +567,8 @@ public func unmarshal_ActiveWindow(buffer: UnsafeRawPointer, offset: Int) -> Act
   var result = ActiveWindow()
   result.surfaceId = buffer.load(fromByteOffset: offset + 0, as: UInt32.self)
   result.title = NPRPC.unmarshal_string(buffer: buffer, offset: offset + 4)
+  result.menuService = NPRPC.unmarshal_string(buffer: buffer, offset: offset + 12)
+  result.menuObjectPath = NPRPC.unmarshal_string(buffer: buffer, offset: offset + 20)
   return result
 }
 
@@ -2995,7 +3003,7 @@ open class CompositorServant: NPRPCServant, CompositorProtocol, @unchecked Senda
             return
           }
           let initialCredits = data.load(fromByteOffset: 44, as: UInt32.self)
-          let stream = NPRPC.createStreamManagerBidiStream(streamManager: streamManager, streamId: streamId, buffer: buffer, initialPayloadCapacity: 140, unreliable: false, initialCredits: initialCredits, serializer: { (buffer: FlatBuffer, offset: Int, value: ActiveWindow) in NPRPC.marshal_stream_struct(buffer: buffer, offset: offset, rootSize: 12, value: value) { buf, off, elem in marshal_ActiveWindow(buffer: buf, offset: off, data: elem) } }, deserializer: { (data: UnsafeRawPointer, _: Int) in unmarshal_FocusAck(buffer: data, offset: 0) })
+          let stream = NPRPC.createStreamManagerBidiStream(streamManager: streamManager, streamId: streamId, buffer: buffer, initialPayloadCapacity: 156, unreliable: false, initialCredits: initialCredits, serializer: { (buffer: FlatBuffer, offset: Int, value: ActiveWindow) in NPRPC.marshal_stream_struct(buffer: buffer, offset: offset, rootSize: 28, value: value) { buf, off, elem in marshal_ActiveWindow(buffer: buf, offset: off, data: elem) } }, deserializer: { (data: UnsafeRawPointer, _: Int) in unmarshal_FocusAck(buffer: data, offset: 0) })
           nprpc_stream_manager_defer_stream_start(streamManager, streamId)
           makeSimpleAnswer(buffer: buffer, messageId: impl.MessageId.Success)
           Task {

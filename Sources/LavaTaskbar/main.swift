@@ -97,12 +97,17 @@ final class MenuSession {
     }
 
     /// Called on the frame loop when the compositor's focus changes.
-    func focus(surfaceId: UInt32, title: String) {
+    func focus(
+        surfaceId: UInt32, title: String,
+        menuService: String = "", menuObjectPath: String = ""
+    ) {
         self.title = title
         self.focusedSurface = surfaceId
         // An open menu belongs to the window that is no longer focused.
         closeMenu()
-        menus?.setActiveWindow(surfaceId)
+        menus?.setActiveWindow(
+            surfaceId, menuService: menuService, menuObjectPath: menuObjectPath
+        )
         refreshModel()
     }
 
@@ -339,8 +344,11 @@ session.attach(editor: editor)
 
 // Focus, from the compositor. Delivered on the frame loop, so touching
 // observable state from it is the same as touching it from a click handler.
-LavaClient.onActiveWindow { surfaceId, title in
-    session.focus(surfaceId: surfaceId, title: title)
+LavaClient.onActiveWindow { surfaceId, title, menuService, menuObjectPath in
+    session.focus(
+        surfaceId: surfaceId, title: title,
+        menuService: menuService, menuObjectPath: menuObjectPath
+    )
 }
 
 Thread.detachNewThread {

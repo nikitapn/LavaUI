@@ -299,13 +299,19 @@ nice-to-have; v1 can pick once at open.
 #### Wayland
 
 AppMenu Registrar historically keys menus by **X11 window id**. On pure
-Wayland there is no portable equivalent for non-GTK toolkits, so the original
-policy here was "prefer DBusMenu only when an X11 xid is available, otherwise
-draw the bar in-window".
+Wayland Lava uses two paths:
+
+1. **Lava clients** — the registrar's key is a `u` on the wire; clients register
+   under their **surface id** (the same id `SubscribeActiveWindow` reports).
+2. **Foreign Wayland clients (Qt/KDE)** — the compositor advertises
+   **`org_kde_kwin_appmenu_manager`**. The client exports dbusmenu as usual and
+   calls `set_address(service, path)` on the surface. Focus carries those
+   strings to the panel, which opens `DbusmenuClient` on them directly. This is
+   the same protocol Dolphin uses on Plasma; no X11 / Xwayland path.
 
 **Under the lava compositor that is now solved**, and the answer was smaller
 than the archaeology suggested: the registrar's key is a `u` on the wire and
-nothing on the panel side looks it up in an X server. So a client registers
+nothing on the panel side looks it up in an X server. So a Lava client registers
 under its **surface id** — the number the compositor already uses to name its
 window, and the same number it reports as focused.
 

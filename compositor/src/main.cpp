@@ -25,6 +25,7 @@
 // without guessing. Separate library from xkbcommon proper, same project.
 #include <xkbcommon/xkbregistry.h>
 
+#include "appmenu.hpp"
 #include "canvas_surface.hpp"
 #include "clipboard.hpp"
 #include "config.hpp"
@@ -425,6 +426,11 @@ struct Server {
   /// has neither, and every use below checks.
   SurfaceRegistry *surfaces = nullptr;
   lava::ControlPlane *control = nullptr;
+
+  /// KDE Wayland AppMenu: foreign clients (Dolphin, modern Qt) point a
+  /// surface at a dbusmenu export. Looked up when focus changes so the panel
+  /// can import without an X11 window id.
+  lava::AppMenuManager appmenu;
   /// An interactive move or resize in progress, and what it started from.
   ///
   /// Alt+drag rather than window edges: there are no decorations to grab yet,
@@ -1276,7 +1282,7 @@ class SurfaceRegistry : public lava::CompositorHost {
     // window that renames itself while focused — a browser changing tabs — is
     // the ordinary case rather than an odd one.
     if (control_ != nullptr && surface.id == focused_) {
-      control_->postActiveWindow(surface.id, surface.title);
+      postActive(surface);
     }
     announceWindows();
   }
@@ -1611,10 +1617,46 @@ class SurfaceRegistry : public lava::CompositorHost {
     // are" would be both useless and, for a panel showing that window's menu,
     // actively wrong.
     if (control_ != nullptr && (now == nullptr || !now->panel)) {
-      control_->postActiveWindow(now != nullptr ? id : 0,
-                                 now != nullptr ? now->title : std::string{});
+      if (now != nullptr)
+        postActive(*now);
+      else
+        control_->postActiveWindow(0, {}, {}, {});
     }
     announceWindows();
+  }
+
+  /// DBus address of this window's menu, from `org_kde_kwin_appmenu`.
+  void menuAddress(const ClientSurface &surface, std::string &outService,
+                   std::string &outPath) const {
+    outService.clear();
+    outPath.clear();
+    if (!surface.isForeign() || server_ == nullptr || surface.window == nullptr)
+      return;
+    wlr_surface *fs = surface.window->focusSurface();
+    if (fs == nullptr) return;
+    lava::AppMenuAddress addr = server_->appmenu.addressFor(fs);
+    outService = std::move(addr.service);
+    outPath = std::move(addr.objectPath);
+  }
+
+  /// Tell every panel which window is focused and where its menu lives.
+  void postActive(const ClientSurface &surface) {
+    if (control_ == nullptr) return;
+    std::string service, path;
+    menuAddress(surface, service, path);
+    control_->postActiveWindow(surface.id, surface.title, service, path);
+  }
+
+  /// A surface's AppMenu address changed. If it is the focused window, re-post
+  /// so the panel can open the menu that arrived after focus.
+  void onAppMenuChanged(wlr_surface *surface) {
+    if (control_ == nullptr || surface == nullptr) return;
+    for (const auto &s : surfaces_) {
+      if (!s->isForeign() || s->window == nullptr) continue;
+      if (s->window->focusSurface() != surface) continue;
+      if (s->id == focused_ && !s->panel) postActive(*s);
+      return;
+    }
   }
 
   /// Lights whichever control is under the pointer. True if it changed.
@@ -1997,13 +2039,17 @@ class SurfaceRegistry : public lava::CompositorHost {
     return true;
   }
 
-  void activeWindow(uint32_t &outSurfaceId,
-                    std::string &outTitle) const override {
+  void activeWindow(uint32_t &outSurfaceId, std::string &outTitle,
+                    std::string &outMenuService,
+                    std::string &outMenuObjectPath) const override {
     outSurfaceId = focused_;
     outTitle.clear();
+    outMenuService.clear();
+    outMenuObjectPath.clear();
     for (const auto &surface : surfaces_) {
       if (surface->id == focused_) {
         outTitle = surface->title;
+        menuAddress(*surface, outMenuService, outMenuObjectPath);
         return;
       }
     }
@@ -2036,7 +2082,7 @@ class SurfaceRegistry : public lava::CompositorHost {
       // than going on showing the menu of a window that has been destroyed.
       if (id == focused_) {
         focused_ = 0;
-        if (control_) control_->postActiveWindow(0, {});
+        if (control_) control_->postActiveWindow(0, {}, {}, {});
       }
       if (control_) control_->surfaceGone(id);
       wlr_log(WLR_INFO, "surface %u: gone", id);
@@ -4678,6 +4724,11 @@ int main() {
   server.new_toplevel.attach(&server.xdg_shell->events.new_toplevel, &server,
                              Server::on_new_toplevel);
 
+  // KDE AppMenu: foreign Wayland clients export dbusmenu coordinates here.
+  // Before any client can bind, and before surfaces exist so the change
+  // callback can resolve a surface to a frame.
+  server.appmenu.init(server.display);
+
   // Server-side decorations, so a window drawn by this compositor is not also
   // drawn by its toolkit. Clients that do not speak this protocol still draw
   // their own — there is no way to stop them, which is the one real cost of
@@ -4734,6 +4785,10 @@ int main() {
   surfaces.bind(canvas_renderer.get(), &server.workspaces);
   surfaces.bind(&server);
   server.surfaces = &surfaces;
+  // Late AppMenu addresses (Qt often set_address after map) re-notify the
+  // panel only when the surface that changed is the focused one.
+  server.appmenu.setOnChanged(
+      [&surfaces](wlr_surface *surface) { surfaces.onAppMenuChanged(surface); });
   if (!canvas_renderer) {
     wlr_log(WLR_ERROR, "no canvas device — LavaUI surfaces cannot be drawn");
   }

@@ -16,14 +16,16 @@ wayland_scanner = find_program(
   native: true,
 )
 
-protocol_xml = [
+# Headers only for protocols we bind through wlroots (xdg-shell). Full
+# private-code is only needed for protocols we implement ourselves.
+protocol_headers = []
+protocol_sources = []
+
+foreach xml : [
   # The shell every ordinary Wayland application speaks: toplevels, popups,
   # the negotiation behind resize and maximize.
   protocol_dir / 'stable/xdg-shell/xdg-shell.xml',
 ]
-
-protocol_headers = []
-foreach xml : protocol_xml
   protocol_headers += custom_target(
     xml.underscorify() + '_server_h',
     input: xml,
@@ -31,6 +33,24 @@ foreach xml : protocol_xml
     command: [wayland_scanner, 'server-header', '@INPUT@', '@OUTPUT@'],
   )
 endforeach
+
+# KDE AppMenu: clients point a wl_surface at a com.canonical.dbusmenu
+# object on the session bus. How Dolphin (etc.) export a global menu on
+# pure Wayland without an X11 window id. Checked into protocols/ rather
+# than wayland-protocols — it is a KDE extension, not a standard one.
+appmenu_xml = meson.current_source_dir() / 'protocols/appmenu.xml'
+protocol_headers += custom_target(
+  'appmenu_server_h',
+  input: appmenu_xml,
+  output: 'appmenu-protocol.h',
+  command: [wayland_scanner, 'server-header', '@INPUT@', '@OUTPUT@'],
+)
+protocol_sources += custom_target(
+  'appmenu_private_c',
+  input: appmenu_xml,
+  output: 'appmenu-protocol.c',
+  command: [wayland_scanner, 'private-code', '@INPUT@', '@OUTPUT@'],
+)
 
 # Canvas resolves its compiled shaders relative to an assets root it is told.
 # A Swift client passes the SwiftPM resource bundle; a compositor has no
@@ -94,6 +114,7 @@ endif
 executable(
   'compositor',
   'src/main.cpp',
+  'src/appmenu.cpp',
   'src/canvas_surface.cpp',
   'src/clipboard.cpp',
   'src/config.cpp',
@@ -101,6 +122,7 @@ executable(
   'src/shell.cpp',
   lava_idl_sources,
   protocol_headers,
+  protocol_sources,
   dependencies: [
     wlroots,
     dependency('wayland-server'),

@@ -578,8 +578,18 @@ public final class Editor: @unchecked Sendable {
     public var menuImportBusName: String { String(engine.menuImportBusName()) }
 
     /// Whose menu to import. 0 shows none.
-    public func menuImportSetActiveWindow(_ windowId: UInt32) {
-        engine.menuImportSetActiveWindow(windowId)
+    ///
+    /// `menuService` / `menuObjectPath` come from the focused window's KDE
+    /// Wayland AppMenu address when the compositor has one; empty falls back
+    /// to the AppMenu registrar under `windowId` (Lava clients).
+    public func menuImportSetActiveWindow(
+        _ windowId: UInt32,
+        menuService: String = "",
+        menuObjectPath: String = ""
+    ) {
+        engine.menuImportSetActiveWindow(
+            windowId, std.string(menuService), std.string(menuObjectPath)
+        )
     }
 
     public func menuImportPoll() { engine.menuImportPoll() }

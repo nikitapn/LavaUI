@@ -19,6 +19,8 @@ public final class PanelMenu {
     /// Last imported revision, so a poll that changed nothing costs a compare.
     private var revision: UInt64 = 0
     private var lastWindow: UInt32 = 0
+    private var lastMenuService = ""
+    private var lastMenuObjectPath = ""
 
     /// The imported menu. Empty when nothing is focused, when the focused
     /// window exported no menu, or before the layout has arrived.
@@ -47,11 +49,27 @@ public final class PanelMenu {
         }
     }
 
-    /// Show this window's menu. Cheap to call with an unchanged id.
-    public func setActiveWindow(_ surfaceId: UInt32) {
-        guard isServing, surfaceId != lastWindow else { return }
+    /// Show this window's menu. Cheap to call with an unchanged address.
+    ///
+    /// `menuService` / `menuObjectPath` are the KDE AppMenu DBus coordinates
+    /// for foreign Wayland clients; empty uses the registrar + surface id.
+    public func setActiveWindow(
+        _ surfaceId: UInt32,
+        menuService: String = "",
+        menuObjectPath: String = ""
+    ) {
+        guard isServing else { return }
+        if surfaceId == lastWindow, menuService == lastMenuService,
+           menuObjectPath == lastMenuObjectPath
+        {
+            return
+        }
         lastWindow = surfaceId
-        editor.menuImportSetActiveWindow(surfaceId)
+        lastMenuService = menuService
+        lastMenuObjectPath = menuObjectPath
+        editor.menuImportSetActiveWindow(
+            surfaceId, menuService: menuService, menuObjectPath: menuObjectPath
+        )
     }
 
     /// Pumps DBus and rebuilds the model when the far side changed it.

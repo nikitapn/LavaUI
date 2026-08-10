@@ -55,7 +55,14 @@ public:
 
   /// Whose menu to import. 0 for none — the desktop is focused, or the focused
   /// window never registered one.
-  void setActiveWindow(uint32_t windowId);
+  ///
+  /// When `menuService` and `menuObjectPath` are non-empty they are the DBus
+  /// coordinates of the menu (KDE Wayland AppMenu / `org_kde_kwin_appmenu`).
+  /// The panel opens that object directly. When they are empty, falls back to
+  /// the AppMenu registrar entry for `windowId` — what Lava clients use with
+  /// their surface id.
+  void setActiveWindow(uint32_t windowId, std::string menuService = {},
+                       std::string menuObjectPath = {});
   uint32_t activeWindow() const;
 
   /// Whether the active window has a menu with anything in it.

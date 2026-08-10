@@ -241,8 +241,14 @@ struct CompositorHost {
 
   /// The focused window and its title, for a subscriber that has just
   /// arrived. `outSurfaceId` is 0 when nothing has focus.
-  virtual void activeWindow(uint32_t &outSurfaceId,
-                            std::string &outTitle) const = 0;
+  ///
+  /// `outMenuService` / `outMenuObjectPath` are the KDE Wayland AppMenu
+  /// address for that window's dbusmenu export, or empty when the focused
+  /// surface never sent one (Lava clients use the registrar + surface id
+  /// instead).
+  virtual void activeWindow(uint32_t &outSurfaceId, std::string &outTitle,
+                            std::string &outMenuService,
+                            std::string &outMenuObjectPath) const = 0;
 
   /// "A frame is committed on this surface" — draw it.
   virtual void present(uint32_t surfaceId) = 0;
@@ -313,10 +319,11 @@ class ControlPlane {
   /// "The focused window is now this one" — to every panel watching.
   ///
   /// Called from the loop thread on every focus change, including the change
-  /// to nothing. Cheap when nobody is subscribed, which is the usual case:
-  /// only a panel with a global menu on it ever asks.
-  virtual void postActiveWindow(uint32_t surfaceId,
-                                const std::string &title) = 0;
+  /// to nothing, and again when the focused window's AppMenu address arrives
+  /// late (Qt often sets it after map). Cheap when nobody is subscribed.
+  virtual void postActiveWindow(uint32_t surfaceId, const std::string &title,
+                                const std::string &menuService = {},
+                                const std::string &menuObjectPath = {}) = 0;
 
   /// Where the reference is published. Clients read this file to find us.
   static std::string referencePath();

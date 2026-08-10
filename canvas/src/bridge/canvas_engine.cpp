@@ -778,9 +778,12 @@ bool Engine::menuImportStart() { return impl_->menuImport.start(); }
 
 std::string Engine::menuImportBusName() { return impl_->menuImport.busName(); }
 
-void Engine::menuImportSetActiveWindow(uint32_t windowId)
+void Engine::menuImportSetActiveWindow(uint32_t windowId,
+                                       std::string menuService,
+                                       std::string menuObjectPath)
 {
-  impl_->menuImport.setActiveWindow(windowId);
+  impl_->menuImport.setActiveWindow(windowId, std::move(menuService),
+                                    std::move(menuObjectPath));
 }
 
 void Engine::menuImportPoll() { impl_->menuImport.poll(); }
