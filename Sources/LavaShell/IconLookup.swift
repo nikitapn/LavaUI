@@ -43,8 +43,40 @@ public enum IconLookup {
     }
 
     nonisolated(unsafe) private static var iconPathCache: [String: String?] = [:]
+    nonisolated(unsafe) private static var namePathCache: [String: String?] = [:]
+
+    /// The file for an icon *name* — what a desktop entry's `Icon=` holds.
+    ///
+    /// The lookup for a caller that already has the entry, and the reason it
+    /// is separate from `iconPath(forAppId:)`: that one starts from a window's
+    /// `app_id` and has to find the entry before it can find the icon, which
+    /// means reading every desktop entry on the machine. A launcher showing a
+    /// list it has already read should not pay for a second walk to be told
+    /// what it is holding.
+    ///
+    /// An absolute path is used as given, since `Icon=` is allowed to be one.
+    public static func themePath(forIconName name: String) -> String? {
+        guard !name.isEmpty else { return nil }
+        if let cached = namePathCache[name] {
+            BootTrace.count("icon: cache hit")
+            return cached
+        }
+        let found = BootTrace.measure("icon: search") { () -> String? in
+            if name.hasPrefix("/") {
+                return FileManager.default.fileExists(atPath: name) ? name : nil
+            }
+            return themeIcon(named: name) ?? themeIcon(named: name.lowercased())
+        }
+        namePathCache[name] = found
+        return found
+    }
 
     /// The best icon file for an application id, or nil if nothing was found.
+    ///
+    /// For a caller holding a window rather than an entry — a dock, a task
+    /// list — where the `app_id` is all there is and the entry has to be found
+    /// first. A caller that already has the entry wants
+    /// `themePath(forIconName:)`.
     ///
     /// Nil is a normal answer, not a failure: a lava app that installed no
     /// desktop entry has no icon anywhere on the system, and the dock draws its
@@ -54,9 +86,20 @@ public enum IconLookup {
             BootTrace.count("icon: cache hit")
             return cached
         }
-        let found = BootTrace.measure("icon: search") { search(appId: appId) }
+        let found = search(appId: appId)
         iconPathCache[appId] = found
         return found
+    }
+
+    /// Hands over a list of entries already read, so the lookup by app id does
+    /// not walk the directories again.
+    ///
+    /// For a process that shows the applications *and* looks icons up by
+    /// window — the launcher reads the list to display it, and the dock will
+    /// read it to name windows. The walk costs about 170 ms on a normal
+    /// install, which is worth not doing twice in one process.
+    public static func useEntries(_ entries: [DesktopEntry]) {
+        cachedEntries = entries
     }
 
     private static func search(appId: String) -> String? {
@@ -65,10 +108,8 @@ public enum IconLookup {
         // only name there is and is worth trying directly, since applications
         // that ship an icon and no entry do exist.
         let name = desktopIconName(appId: appId) ?? appId
-        if name.hasPrefix("/") {
-            return FileManager.default.fileExists(atPath: name) ? name : nil
-        }
-        return themeIcon(named: name) ?? themeIcon(named: appId.lowercased())
+        return themePath(forIconName: name)
+            ?? themePath(forIconName: appId.lowercased())
     }
 
     // MARK: - Desktop entries
@@ -114,6 +155,33 @@ public enum IconLookup {
 
     // MARK: - Icon themes
 
+    /// The theme directories that are actually on this machine, in preference
+    /// order: theme first, then root, which is the order the search wants.
+    ///
+    /// Computed once. Five themes across three roots is fifteen combinations
+    /// and six of them exist here — the other nine were being asked about
+    /// thirty times per icon, which is most of a stat storm spent confirming
+    /// that Papirus is not installed.
+    private static let themeDirectories: [String] = {
+        var found: [String] = []
+        for theme in themes {
+            for root in iconRoots {
+                let base = "\(root)/\(theme)"
+                var isDirectory: ObjCBool = false
+                if FileManager.default.fileExists(
+                    atPath: base, isDirectory: &isDirectory
+                ), isDirectory.boolValue {
+                    found.append(base)
+                }
+            }
+        }
+        return found
+    }()
+
+    /// Sizes to try, best first. A raster icon is a compromise made by whoever
+    /// packaged it, so this asks for the big ones before the small.
+    private static let sizes = [128, 96, 64, 48, 256, 512, 32]
+
     /// Where the themes on this machine actually put their files.
     ///
     /// Four layouts rather than one because they genuinely differ: breeze is
@@ -121,37 +189,44 @@ public enum IconLookup {
     /// directories are spelled both ways round. The spec describes an index
     /// file that would answer this properly; reading it is worth doing the day
     /// one of these guesses misses something.
-    private static func candidatePaths(theme: String, name: String) -> [String] {
-        var paths: [String] = []
-        for root in iconRoots {
-            let base = "\(root)/\(theme)"
-            // Vector first at every size: it is exact at whatever the dock
-            // magnifies to, where a raster icon is a compromise made by
-            // whoever packaged it.
-            paths.append("\(base)/scalable/apps/\(name).svg")
-            paths.append("\(base)/apps/scalable/\(name).svg")
-            for size in [128, 96, 64, 48, 256, 512, 32] {
-                paths.append("\(base)/apps/\(size)/\(name).svg")
-                paths.append("\(base)/\(size)x\(size)/apps/\(name).svg")
-                paths.append("\(base)/apps/\(size)/\(name).png")
-                paths.append("\(base)/\(size)x\(size)/apps/\(name).png")
-            }
-        }
-        // The pre-theme dumping ground, still where a surprising number of
-        // applications put their only icon.
-        paths.append("/usr/share/pixmaps/\(name).svg")
-        paths.append("/usr/share/pixmaps/\(name).png")
-        return paths
-    }
-
+    ///
+    /// Built one path at a time rather than as a list to iterate: the answer
+    /// is usually in the first few, and a list means allocating four hundred
+    /// strings to look at six of them.
     private static func themeIcon(named name: String) -> String? {
         let manager = FileManager.default
-        for theme in themes {
-            for path in candidatePaths(theme: theme, name: name) {
-                BootTrace.count("icon: fileExists")
-                if manager.fileExists(atPath: path) { return path }
+
+        func hit(_ path: String) -> Bool {
+            BootTrace.count("icon: fileExists")
+            return manager.fileExists(atPath: path)
+        }
+
+        for base in themeDirectories {
+            // Vector first at every size: it is exact at whatever the dock
+            // magnifies to.
+            for path in ["\(base)/scalable/apps/\(name).svg",
+                         "\(base)/apps/scalable/\(name).svg"] where hit(path) {
+                return path
+            }
+            for size in sizes {
+                for path in ["\(base)/apps/\(size)/\(name).svg",
+                             "\(base)/\(size)x\(size)/apps/\(name).svg",
+                             "\(base)/apps/\(size)/\(name).png",
+                             "\(base)/\(size)x\(size)/apps/\(name).png"]
+                where hit(path) {
+                    return path
+                }
             }
         }
+
+        // The pre-theme dumping ground, still where a surprising number of
+        // applications put their only icon. After every theme now rather than
+        // after the first one, which is the order the comment always claimed.
+        for path in ["/usr/share/pixmaps/\(name).svg",
+                     "/usr/share/pixmaps/\(name).png"] where hit(path) {
+            return path
+        }
+
         BootTrace.count("icon: not found")
         return nil
     }

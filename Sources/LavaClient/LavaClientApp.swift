@@ -43,11 +43,21 @@ public enum LavaClient {
     ///     the window is the app's content and nothing else, and the app places
     ///     `WindowControls()` and `.windowDrag()` wherever its own design wants
     ///     them — or nowhere, for an overlay that should have no chrome at all.
+    ///   - fillScreen: ask for the whole screen, whatever size it is. Replaces
+    ///     `width`/`height` with the largest screen the compositor has, which
+    ///     is both a better *request* and — the reason this exists — a
+    ///     truthful size to lay out at while the opening `Resize` is in
+    ///     flight. Asking for something deliberately bigger than any screen
+    ///     works for the request and is a lie to the layout: the tree lays out
+    ///     once at the size that was asked for, so a virtualised list
+    ///     materialises every row a 4K window would show before being told the
+    ///     window is a quarter of that.
     public static func open(
         title: String,
         width: Float = 1280,
         height: Float = 800,
-        frame: WindowFrame = .server
+        frame: WindowFrame = .server,
+        fillScreen: Bool = false
     ) -> Editor? {
         Self.title = title
         Self.requestedWidth = width
@@ -85,6 +95,30 @@ public enum LavaClient {
                 opacity: appearance.shadowOpacity,
                 offsetY: appearance.shadowOffsetY
             )
+        }
+
+        // Before the first body runs, for the same reason as the appearance
+        // above: a tree that lays out at a size nobody has, and then again at
+        // the real one, has done all of its work twice — and a virtualised
+        // list has done the expensive half of it for rows that were never on
+        // screen. Failure leaves the requested size alone, which is the
+        // behaviour this replaces.
+        if fillScreen {
+            report("ListOutputs") {
+                let outputs = try blockingCall { try await compositor.listOutputs() }
+                // The largest single screen rather than the bounding box of
+                // all of them: a window lives on one screen, and the
+                // compositor clamps this to that screen's work area anyway.
+                guard let largest = outputs
+                    .filter({ $0.enabled && $0.width > 0 && $0.height > 0 })
+                    .max(by: { $0.width * $0.height < $1.width * $1.height })
+                else { return }
+                Self.requestedWidth = Float(largest.width)
+                Self.requestedHeight = Float(largest.height)
+                editor.setClientSize(
+                    width: Self.requestedWidth, height: Self.requestedHeight
+                )
+            }
         }
 
         // Before anything loads a face or an image. Ids already stamped into a

@@ -45,6 +45,9 @@ final class LauncherModel {
     func load() {
         all = DesktopEntry.installed()
         matches = all
+        // The icon lookup would otherwise read every entry on the machine
+        // again the first time something asks for an icon by app id.
+        IconLookup.useEntries(all)
     }
 
     /// Runs the selection and ends the process. Nothing after this returns.
@@ -105,11 +108,14 @@ BootTrace.mark("main")
 model.load()
 BootTrace.mark("desktop entries read (\(model.all.count))")
 
-// Full-screen by asking for something bigger than any screen: the compositor
-// clamps to the work area and sends the real size back as the opening resize.
-// `.client` because a launcher with a title bar would be a dialog.
+// Full-screen: the compositor is asked how big its screens are and clamps this
+// to the work area, sending the real size back as the opening resize. Asking
+// for something deliberately bigger than any screen would do as well for the
+// *request* and lays the grid out at 4K first — which materialises every card
+// on the machine, and looks up every icon, before the window turns out to be a
+// quarter of that. `.client` because a launcher with a title bar is a dialog.
 guard let editor = LavaClient.open(
-    title: "Launcher", width: 3840, height: 2160, frame: .client
+    title: "Launcher", frame: .client, fillScreen: true
 ) else { exit(1) }
 BootTrace.mark("compositor connected")
 

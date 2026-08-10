@@ -136,85 +136,243 @@ extension DesktopEntry {
     // MARK: - Parsing
 
     private static func parse(file: String, id: String) -> DesktopEntry? {
-        guard let text = BootTrace.measure("    read file", {
-            try? String(contentsOfFile: file, encoding: .utf8)
+        guard let data = BootTrace.measure("    read file", {
+            FileManager.default.contents(atPath: file)
         }) else {
             return nil
         }
-        return BootTrace.measure("    parse text") { parse(text: text, id: id) }
+        return BootTrace.measure("    parse bytes") {
+            data.withUnsafeBytes { parse(bytes: $0, id: id) }
+        }
     }
 
     /// The parse itself, against text rather than a path — which is what makes
     /// it testable without a machine's worth of applications installed.
     static func parse(text: String, id: String) -> DesktopEntry? {
-        var fields: [String: String] = [:]
+        let bytes = Array(text.utf8)
+        return bytes.withUnsafeBytes { parse(bytes: $0, id: id) }
+    }
+
+    /// The keys this reads, as bytes, because that is what a file is.
+    ///
+    /// The parser works on bytes rather than on `String` for one reason, and
+    /// it is worth writing down: a desktop entry is mostly translations. A
+    /// typical `/usr/share/applications` file is a hundred lines of which
+    /// eighty are `Name[xx]`, `Comment[xx]` and `GenericName[xx]` for
+    /// languages this machine is not set to, plus `[Desktop Action]` groups
+    /// describing right-click items. Reading that into a `[String: String]`
+    /// allocates a grapheme-aware `String` for every key and every value, all
+    /// but a dozen of which are discarded immediately. On this machine that
+    /// was 172 ms across 257 files — more than a third of the launcher's
+    /// entire startup, spent building dictionaries to throw away.
+    ///
+    /// Comparing byte spans against these instead allocates a `String` only
+    /// for a value that is actually kept.
+    private enum Key {
+        static let type           = Array("Type".utf8)
+        static let noDisplay      = Array("NoDisplay".utf8)
+        static let hidden         = Array("Hidden".utf8)
+        static let tryExec        = Array("TryExec".utf8)
+        static let exec           = Array("Exec".utf8)
+        static let icon           = Array("Icon".utf8)
+        static let path           = Array("Path".utf8)
+        static let terminal       = Array("Terminal".utf8)
+        static let categories     = Array("Categories".utf8)
+        static let keywords       = Array("Keywords".utf8)
+        static let startupWMClass = Array("StartupWMClass".utf8)
+        static let name           = Array("Name".utf8)
+        static let genericName    = Array("GenericName".utf8)
+        static let comment        = Array("Comment".utf8)
+        static let application    = Array("Application".utf8)
+        static let `true`         = Array("true".utf8)
+        static let desktopEntry   = Array("[Desktop Entry]".utf8)
+    }
+
+    /// A localisable field, kept with the rank of the locale it came from so a
+    /// later `Name=` cannot displace an earlier `Name[de]=`.
+    ///
+    /// Rank 0 is the best match this machine's language offers; the
+    /// unlocalised key ranks last. Worth the bookkeeping: an entry that has
+    /// been translated shows the translation everywhere else on the machine,
+    /// and a launcher that alone showed the English one would look like it was
+    /// reading a different system.
+    private struct Localised {
+        var value = ""
+        var rank = Int.max
+
+        mutating func offer(_ candidate: String, rank candidateRank: Int) {
+            // Strictly better only, so the first of two equal-ranked keys wins
+            // — which is what the format says about a repeated key.
+            guard candidateRank < rank, !candidate.isEmpty else { return }
+            value = candidate
+            rank = candidateRank
+        }
+    }
+
+    private static func parse(bytes: UnsafeRawBufferPointer, id: String)
+        -> DesktopEntry?
+    {
+        let locales = preferredLocales()
+
+        var isApplication = false
+        var exec = "", icon = "", path = "", tryExec = "", startupWMClass = ""
+        var categories = "", keywords = ""
+        var terminal = false
+        var name = Localised(), genericName = Localised(), comment = Localised()
+
         var inMainGroup = false
-        for rawLine in text.split(separator: "\n", omittingEmptySubsequences: false) {
-            let line = rawLine.trimmingCharacters(in: .whitespaces)
-            if line.hasPrefix("[") {
+        var seenMainGroup = false
+        var lineStart = 0
+
+        while lineStart <= bytes.count {
+            var lineEnd = lineStart
+            while lineEnd < bytes.count, bytes[lineEnd] != UInt8(ascii: "\n") {
+                lineEnd += 1
+            }
+            defer { lineStart = lineEnd + 1 }
+
+            var begin = lineStart, end = lineEnd
+            while begin < end, isSpace(bytes[begin]) { begin += 1 }
+            while end > begin, isSpace(bytes[end - 1]) { end -= 1 }
+            if begin >= end { continue }
+
+            if bytes[begin] == UInt8(ascii: "[") {
                 // Only `[Desktop Entry]`. A `[Desktop Action new-window]`
                 // further down has its own Name, Exec and Icon describing
-                // something else entirely — the right-click menu, not the app.
-                inMainGroup = line == "[Desktop Entry]"
+                // something else entirely — the right-click menu, not the app
+                // — and once the main group has ended there is nothing left in
+                // the file this cares about.
+                if seenMainGroup { break }
+                inMainGroup = equal(bytes, begin, end, Key.desktopEntry)
+                seenMainGroup = inMainGroup
                 continue
             }
-            guard inMainGroup, !line.isEmpty, !line.hasPrefix("#") else { continue }
-            guard let equals = line.firstIndex(of: "=") else { continue }
-            let key = String(line[line.startIndex..<equals])
-                .trimmingCharacters(in: .whitespaces)
-            let value = String(line[line.index(after: equals)...])
-                .trimmingCharacters(in: .whitespaces)
-            if fields[key] == nil { fields[key] = value }
+            guard inMainGroup, bytes[begin] != UInt8(ascii: "#") else { continue }
+
+            var equals = begin
+            while equals < end, bytes[equals] != UInt8(ascii: "=") { equals += 1 }
+            guard equals < end else { continue }
+
+            var keyEnd = equals
+            while keyEnd > begin, isSpace(bytes[keyEnd - 1]) { keyEnd -= 1 }
+            var valueStart = equals + 1
+            while valueStart < end, isSpace(bytes[valueStart]) { valueStart += 1 }
+
+            // `Name[de_DE]` splits into the key and the locale it is for.
+            var keyBase = keyEnd
+            var localeStart = keyEnd
+            var i = begin
+            while i < keyEnd, bytes[i] != UInt8(ascii: "[") { i += 1 }
+            if i < keyEnd {
+                keyBase = i
+                localeStart = i + 1
+            }
+            let localeEnd = keyBase == keyEnd ? keyEnd
+                : (bytes[keyEnd - 1] == UInt8(ascii: "]") ? keyEnd - 1 : keyEnd)
+
+            let rank: Int
+            if keyBase == keyEnd {
+                rank = locales.count // the unlocalised key, ranked last
+            } else if let found = locales.firstIndex(where: {
+                equal(bytes, localeStart, localeEnd, Array($0.utf8))
+            }) {
+                rank = found
+            } else {
+                continue // a language this machine is not set to
+            }
+
+            @inline(__always) func value() -> String {
+                String(decoding: UnsafeRawBufferPointer(
+                    rebasing: bytes[valueStart..<end]), as: UTF8.self)
+            }
+            @inline(__always) func isKey(_ key: [UInt8]) -> Bool {
+                rank == locales.count && equal(bytes, begin, keyBase, key)
+            }
+            @inline(__always) func isLocalisable(_ key: [UInt8]) -> Bool {
+                equal(bytes, begin, keyBase, key)
+            }
+
+            // Decisive on their own, and usually near the top of the file: an
+            // entry that is not an application, or that asks not to be listed,
+            // is not worth reading the rest of. `NoDisplay` is "I am a
+            // handler, not an application" — a MIME association, a URL scheme
+            // — and `Hidden` means the user deleted it in a way that leaves
+            // the file behind.
+            if isKey(Key.type) {
+                guard equal(bytes, valueStart, end, Key.application) else { return nil }
+                isApplication = true
+                continue
+            }
+            if isKey(Key.noDisplay) || isKey(Key.hidden) {
+                if equal(bytes, valueStart, end, Key.true) { return nil }
+                continue
+            }
+
+            if isLocalisable(Key.name) { name.offer(value(), rank: rank); continue }
+            if isLocalisable(Key.genericName) {
+                genericName.offer(value(), rank: rank); continue
+            }
+            if isLocalisable(Key.comment) {
+                comment.offer(value(), rank: rank); continue
+            }
+
+            if isKey(Key.exec), exec.isEmpty { exec = value() }
+            else if isKey(Key.icon), icon.isEmpty { icon = value() }
+            else if isKey(Key.tryExec), tryExec.isEmpty { tryExec = value() }
+            else if isKey(Key.path), path.isEmpty { path = value() }
+            else if isKey(Key.categories), categories.isEmpty { categories = value() }
+            else if isKey(Key.keywords), keywords.isEmpty { keywords = value() }
+            else if isKey(Key.startupWMClass), startupWMClass.isEmpty {
+                startupWMClass = value()
+            } else if isKey(Key.terminal) {
+                terminal = equal(bytes, valueStart, end, Key.true)
+            }
         }
 
         // Only applications. The same directories hold `Type=Link` and
         // `Type=Directory` entries, which are not things to launch.
-        guard fields["Type"] == "Application" else { return nil }
-        // The entry asking not to be listed. `NoDisplay` is "I am a handler,
-        // not an application" — a MIME association, a URL scheme — and
-        // `Hidden` means the user deleted it in a way that leaves the file.
-        guard !isTrue(fields["NoDisplay"]), !isTrue(fields["Hidden"]) else {
-            return nil
-        }
+        guard isApplication else { return nil }
         // `TryExec` is the entry's own liveness check: a package that left its
         // entry behind names a binary that is not there any more.
-        if let probe = fields["TryExec"], !probe.isEmpty,
-           !BootTrace.measure("  TryExec probe", { exists(program: probe) })
+        if !tryExec.isEmpty,
+           !BootTrace.measure("  TryExec probe", { exists(program: tryExec) })
         {
             return nil
         }
-        guard let exec = fields["Exec"], !exec.isEmpty else { return nil }
+        guard !exec.isEmpty else { return nil }
 
-        let name = localised("Name", in: fields) ?? id
         return DesktopEntry(
             id: id,
-            name: name,
-            genericName: localised("GenericName", in: fields) ?? "",
-            comment: localised("Comment", in: fields) ?? "",
-            icon: fields["Icon"] ?? "",
+            name: name.value.isEmpty ? id : name.value,
+            genericName: genericName.value,
+            comment: comment.value,
+            icon: icon,
             exec: exec,
-            workingDirectory: fields["Path"] ?? "",
-            terminal: isTrue(fields["Terminal"]),
-            categories: split(fields["Categories"]),
-            keywords: split(fields["Keywords"]),
-            startupWMClass: fields["StartupWMClass"] ?? ""
+            workingDirectory: path,
+            terminal: terminal,
+            categories: split(categories),
+            keywords: split(keywords),
+            startupWMClass: startupWMClass
         )
     }
 
-    /// `Name[de_DE]`, then `Name[de]`, then `Name`.
-    ///
-    /// Worth the twelve lines: an entry that has been translated shows the
-    /// translation everywhere else on the machine, and a launcher that alone
-    /// showed the English one would look like it was reading a different
-    /// system.
-    private static func localised(_ key: String, in fields: [String: String]) -> String? {
-        for locale in preferredLocales() {
-            if let value = fields["\(key)[\(locale)]"], !value.isEmpty {
-                return value
-            }
+    /// ASCII whitespace, which is all a key/value format can contain around
+    /// its delimiters. Covers the `\r` of a file written on Windows.
+    @inline(__always)
+    private static func isSpace(_ byte: UInt8) -> Bool {
+        byte == UInt8(ascii: " ") || byte == UInt8(ascii: "\t")
+            || byte == UInt8(ascii: "\r")
+    }
+
+    @inline(__always)
+    private static func equal(
+        _ bytes: UnsafeRawBufferPointer, _ start: Int, _ end: Int, _ other: [UInt8]
+    ) -> Bool {
+        guard end - start == other.count else { return false }
+        for offset in 0..<other.count where bytes[start + offset] != other[offset] {
+            return false
         }
-        let value = fields[key]
-        return (value?.isEmpty ?? true) ? nil : value
+        return true
     }
 
     private static func preferredLocales() -> [String] {
@@ -232,10 +390,8 @@ extension DesktopEntry {
         return locales
     }
 
-    private static func isTrue(_ value: String?) -> Bool { value == "true" }
-
-    private static func split(_ value: String?) -> [String] {
-        (value ?? "").split(separator: ";")
+    private static func split(_ value: String) -> [String] {
+        value.split(separator: ";")
             .map { $0.trimmingCharacters(in: .whitespaces) }
             .filter { !$0.isEmpty }
     }

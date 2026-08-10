@@ -25,7 +25,7 @@ public enum BootTrace {
 
     /// As close to process start as this type can get: the first touch of
     /// `BootTrace` from `main`. Every mark is relative to it.
-    nonisolated(unsafe) private static let origin = DispatchTime.now()
+    private static let origin = DispatchTime.now()
 
     private struct Bucket {
         var seconds: Double = 0

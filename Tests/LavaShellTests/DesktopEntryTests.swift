@@ -91,6 +91,68 @@ struct DesktopEntryParsingTests {
             """, id: "nothing") == nil)
     }
 
+    @Test("a translation for another language does not win")
+    func foreignLocaleLosesToThePlainKey() throws {
+        // Both orders, because the parser keeps the best-ranked value rather
+        // than the last one it saw, and getting that backwards would show a
+        // Nepali name on an English machine — or, worse, only sometimes,
+        // depending on where in the file the translation sits.
+        for text in [
+            """
+            [Desktop Entry]
+            Type=Application
+            Exec=firefox
+            Name=Firefox
+            Name[zz_ZZ]=Ffffoxx
+            """,
+            """
+            [Desktop Entry]
+            Type=Application
+            Exec=firefox
+            Name[zz_ZZ]=Ffffoxx
+            Name=Firefox
+            """,
+        ] {
+            #expect(try #require(DesktopEntry.parse(text: text, id: "f")).name
+                == "Firefox")
+        }
+    }
+
+    @Test("a repeated key keeps the first, as the format says")
+    func firstOfARepeatedKeyWins() throws {
+        let entry = try #require(DesktopEntry.parse(text: """
+            [Desktop Entry]
+            Type=Application
+            Name=First
+            Name=Second
+            Exec=one
+            Exec=two
+            """, id: "dup"))
+        #expect(entry.name == "First")
+        #expect(entry.exec == "one")
+    }
+
+    @Test("survives CRLF and spaces around the delimiter")
+    func toleratesWhitespaceAndCarriageReturns() throws {
+        let entry = try #require(DesktopEntry.parse(text:
+            "[Desktop Entry]\r\n  Type = Application \r\n"
+            + "Name\t=\tSpaced Out\r\nExec=spaced\r\n", id: "spaced"))
+        #expect(entry.name == "Spaced Out")
+        #expect(entry.exec == "spaced")
+    }
+
+    @Test("a file that is not a desktop entry at all is not one")
+    func rejectsRubbish() {
+        #expect(DesktopEntry.parse(text: "", id: "empty") == nil)
+        #expect(DesktopEntry.parse(text: "not ini at all", id: "junk") == nil)
+        // Keys before any group header belong to no group and are not read.
+        #expect(DesktopEntry.parse(text: """
+            Type=Application
+            Name=Homeless
+            Exec=nowhere
+            """, id: "groupless") == nil)
+    }
+
     @Test("Terminal=true is carried through")
     func terminalFlag() throws {
         let entry = try #require(DesktopEntry.parse(text: """
