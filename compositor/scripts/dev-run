@@ -6,7 +6,14 @@
 #   scripts/dev-run -w           nested in a Wayland window (needs a Wayland session)
 #   scripts/dev-run -H           headless — no window, software rendering
 #   scripts/dev-run -x           nested in an X11 window — see CAVEAT
+#   scripts/dev-run -r           release build, compositor and shell alike
 #   scripts/dev-run -- <cmd...>  run <cmd> as a client once the socket is up
+#
+# A session here is two builds, not one: the compositor and canvas are meson's,
+# and the panel, dock and launcher it starts are SwiftPM's. This builds both
+# and points the compositor at the matching half, because the mismatch is
+# otherwise silent — a release compositor will happily start a debug dock and
+# leave you measuring one.
 #
 # BEST LOOP: log into a Wayland session (Hyprland, Plasma, GNOME) and use the
 # default. The Wayland backend nests this compositor as an ordinary window of
@@ -39,12 +46,14 @@ cd "$(dirname "$0")/../.."
 
 # Empty means "decide from the environment" just below.
 mode=""
+flavour=debug
 client=()
 while [[ $# -gt 0 ]]; do
   case "$1" in
     -w) mode=wayland; shift ;;
     -H) mode=headless; shift ;;
     -x) mode=x11; shift ;;
+    -r|--release) flavour=release; shift ;;
     --) shift; client=("$@"); break ;;
     *) echo "unknown option: $1" >&2; exit 1 ;;
   esac
@@ -58,8 +67,34 @@ if [[ -z "$mode" ]]; then
   if [[ -n "${WAYLAND_DISPLAY:-}" ]]; then mode=wayland; else mode=headless; fi
 fi
 
-[[ -d build ]] || meson setup build
-ninja -C build
+# One build directory per flavour rather than reconfiguring the one, so
+# switching between them costs a relink of what changed instead of a rebuild
+# of everything. `build/` stays the debug one: it is what every other script,
+# the README and muscle memory already point at.
+if [[ $flavour == release ]]; then
+  build=build-release
+  [[ -d $build ]] || meson setup "$build" --buildtype=release
+else
+  build=build
+  [[ -d $build ]] || meson setup "$build"
+fi
+ninja -C "$build"
+
+# The other half. The compositor starts the panel and the dock itself and
+# spawns the launcher on Alt+P, finding them by `ShellSupervisor::programPath`
+# — which searches `.build/debug` before `.build/release`, so a release
+# session left to itself would come up with debug components and no sign that
+# it had. LAVA_SHELL_DIR is that decision taken out of its hands.
+if command -v swift >/dev/null; then
+  if [[ $flavour == release ]]; then
+    swift build -c release >&2
+  else
+    swift build >&2
+  fi
+  export LAVA_SHELL_DIR="$PWD/.build/$flavour"
+else
+  echo "swift not found: no panel, dock or launcher this run" >&2
+fi
 
 case "$mode" in
   wayland)
@@ -82,17 +117,17 @@ case "$mode" in
     export WLR_BACKENDS=headless WLR_RENDERER=pixman
     ;;
 esac
-echo "backend: $mode" >&2
+echo "backend: $mode, $flavour build" >&2
 
 if [[ ${#client[@]} -eq 0 ]]; then
-  exec ./build/compositor/compositor
+  exec "./$build/compositor/compositor"
 fi
 
 # With a client: start the compositor, wait for the socket it actually chose
 # (wl_display_add_socket_auto picks the first free name, which is not always
 # wayland-0 if something else is already running), then launch into it.
 log="$(mktemp)"
-stdbuf -oL ./build/compositor/compositor >"$log" 2>&1 &
+stdbuf -oL "./$build/compositor/compositor" >"$log" 2>&1 &
 compositor=$!
 trap 'kill "$compositor" 2>/dev/null || true' EXIT
 

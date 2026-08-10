@@ -57,6 +57,15 @@ client to get wrong.
 `LAVA_NO_SHELL=1` turns the lot off for one run — which is what you want when
 running the dock under a debugger.
 
+A session is two builds, though: the compositor and canvas are meson's, the
+components are SwiftPM's, and a component is found by searching beside the
+compositor, then `.build/debug`, then `.build/release`, then PATH. Debug first
+means a release compositor left to itself comes up running debug components,
+and says nothing about it — the numbers you then measure are half of one build
+and half of the other. `LAVA_SHELL_DIR` settles it by naming the directory to
+look in first, and `scripts/dev-run -r` sets it while building both halves
+release, so the flag is the whole of what you have to remember.
+
 **Alt+P** opens the application launcher, which is *not* supervised: it is
 spawned per invocation and exits as soon as it has launched something or been
 dismissed, the way rofi does. A LavaUI client reaches its first frame in about
