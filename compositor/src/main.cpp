@@ -438,6 +438,13 @@ struct Server {
   /// Which sides a resize is pulling — see `edges`. Alt+right-drag sets the
   /// bottom-right corner, a grab on a window's border sets whichever it hit.
   uint32_t dragEdges = 0;
+  /// Whether the client asked for this drag rather than the compositor
+  /// starting it. The difference is who holds the press: a client that sent
+  /// `xdg_toplevel.move` was given one and is waiting for its release, while a
+  /// title-bar or Alt+drag never let the press out of the compositor. Sending
+  /// the release to the wrong one of those is either a client stuck mid-press
+  /// or a button fired that nobody clicked.
+  bool dragFromClient = false;
 
   /// How many pointer buttons are down, and which went down last.
   ///
@@ -469,11 +476,12 @@ struct Server {
   /// Starts an interactive move of a client-framed window, as a title bar
   /// press does for a decorated one. False when there is no button down to
   /// carry it. See `lava::Compositor::BeginMove`.
-  bool beginInteractiveMove(ClientSurface &surface);
+  bool beginInteractiveMove(ClientSurface &surface, bool fromClient = false);
 
   /// Starts an interactive resize pulling `edges`, as a drag on a window's
   /// border does. False when there is no button down to carry it.
-  bool beginInteractiveResize(ClientSurface &surface, uint32_t edges);
+  bool beginInteractiveResize(ClientSurface &surface, uint32_t edges,
+                              bool fromClient = false);
 
   /// Whether this compositor draws the frame for `toplevel`.
   ///
@@ -2649,7 +2657,7 @@ void XwaylandSurface::on_request_move(wl_listener *listener, void *) {
   Server *server = self->server;
   if (server->surfaces == nullptr || self->frameId == 0) return;
   if (ClientSurface *frame = server->surfaces->find(self->frameId)) {
-    server->beginInteractiveMove(*frame);
+    server->beginInteractiveMove(*frame, true);
   }
 }
 
@@ -2659,7 +2667,7 @@ void XwaylandSurface::on_request_resize(wl_listener *listener, void *data) {
   Server *server = self->server;
   if (server->surfaces == nullptr || self->frameId == 0) return;
   if (ClientSurface *frame = server->surfaces->find(self->frameId)) {
-    server->beginInteractiveResize(*frame, fromWlrEdges(event->edges));
+    server->beginInteractiveResize(*frame, fromWlrEdges(event->edges), true);
   }
 }
 
@@ -3011,7 +3019,7 @@ void Toplevel::on_request_move(wl_listener *listener, void *data) {
     return;
   }
   if (ClientSurface *frame = server->surfaces->find(toplevel->frameId)) {
-    server->beginInteractiveMove(*frame);
+    server->beginInteractiveMove(*frame, true);
   }
 }
 
@@ -3026,7 +3034,7 @@ void Toplevel::on_request_resize(wl_listener *listener, void *data) {
     return;
   }
   if (ClientSurface *frame = server->surfaces->find(toplevel->frameId)) {
-    server->beginInteractiveResize(*frame, fromWlrEdges(event->edges));
+    server->beginInteractiveResize(*frame, fromWlrEdges(event->edges), true);
   }
 }
 
@@ -3866,7 +3874,7 @@ bool Server::update_drag() {
   return true;
 }
 
-bool Server::beginInteractiveMove(ClientSurface &surface) {
+bool Server::beginInteractiveMove(ClientSurface &surface, bool fromClient) {
   if (surfaces == nullptr || surface.panel) return false;
   // Nothing to carry the move: a client that asks for one with no button down
   // would get a window glued to the cursor until the next click.
@@ -3902,6 +3910,7 @@ bool Server::beginInteractiveMove(ClientSurface &surface) {
   }
 
   drag = Drag::Move;
+  dragFromClient = fromClient;
   dragSurface = surface.id;
   dragEdges = 0;
   dragStartX = cursor->x;
@@ -3913,7 +3922,8 @@ bool Server::beginInteractiveMove(ClientSurface &surface) {
   return true;
 }
 
-bool Server::beginInteractiveResize(ClientSurface &surface, uint32_t edges) {
+bool Server::beginInteractiveResize(ClientSurface &surface, uint32_t edges,
+                                    bool fromClient) {
   if (surfaces == nullptr || surface.panel) return false;
   if (pointerButtonsDown == 0) return false;
   // A resize with no side named is not a resize. Nothing sensible to grow
@@ -3925,6 +3935,7 @@ bool Server::beginInteractiveResize(ClientSurface &surface, uint32_t edges) {
   if (surface.maximized) surfaces->setMaximized(surface, false);
 
   drag = Drag::Resize;
+  dragFromClient = fromClient;
   dragEdges = edges;
   dragSurface = surface.id;
   dragStartX = cursor->x;
@@ -4114,7 +4125,23 @@ void Server::on_cursor_button(wl_listener *listener, void *data) {
 
   // A release always ends a drag, whatever it is over by then.
   if (!pressed && server->drag != Server::Drag::None) {
+    const bool answerClient = server->dragFromClient;
     server->drag = Server::Drag::None;
+    server->dragFromClient = false;
+    // A drag the client asked for began with a press the client was given —
+    // that is how it knew to ask — and it is still holding it. Taking the
+    // pointer for the drag and then swallowing the release leaves the client
+    // in a press that never ends: GTK goes on believing a button is down and
+    // ignores everything after, which looks like a window that stops
+    // responding the moment you finish moving it.
+    //
+    // Only then. A title-bar or Alt+drag never let the press out of the
+    // compositor, and a release for a press it never saw would fire whatever
+    // control the pointer happens to be over.
+    if (answerClient) {
+      wlr_seat_pointer_notify_button(server->seat, event->time_msec,
+                                     event->button, event->state);
+    }
     // What is under the pointer has not been tracked during the drag, and the
     // window it was over has probably moved out from under it.
     server->update_pointer_focus(event->time_msec);
