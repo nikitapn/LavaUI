@@ -1626,8 +1626,11 @@ class SurfaceRegistry : public lava::CompositorHost {
     layoutPanel(*panel);
     // Above ordinary windows, which is what "panel" mostly means to a user.
     wlr_scene_node_raise_to_top(&panel->node->node);
-    wlr_log(WLR_INFO, "panel %u: '%s' on edge %u, %u deep%s", id, title.c_str(),
-            edge, thickness, reserve ? ", reserving" : "");
+    // With the position it settled at, which is not the one `openSurface`
+    // logged: a panel is placed by its edge, and that happens here.
+    wlr_log(WLR_INFO, "panel %u: '%s' at %d,%d on edge %u, %u deep%s", id,
+            title.c_str(), panel->x, panel->y, edge, thickness,
+            reserve ? ", reserving" : "");
     return id;
   }
 
@@ -2240,8 +2243,21 @@ class SurfaceRegistry : public lava::CompositorHost {
       if (!s->panel && s->workspace == workspace) ++peers;
     }
     const WorkArea area = workArea();
-    surface->x = area.x + 40 + peers * 40;
-    surface->y = area.y + 40 + peers * 40;
+    // The cascade steps in from the corner only as far as there is room to
+    // step. A window the size of the work area has none: 40 px in would put
+    // its right edge and its bottom off the screen, having just clamped the
+    // size to keep them on it. That is the launcher exactly — it asks to fill
+    // the screen — and the same clamp keeps any large window's corner where a
+    // user can reach it.
+    const int cascade = 40 + peers * 40;
+    const int bar = decorated ? static_cast<int>(lava::Decoration::kHeight) : 0;
+    const int roomX = static_cast<int>(area.width) - static_cast<int>(width);
+    const int roomY =
+        static_cast<int>(area.height) - static_cast<int>(height) - bar;
+    const int x = area.x + std::clamp(cascade, 0, std::max(0, roomX));
+    const int y = area.y + std::clamp(cascade, 0, std::max(0, roomY));
+    surface->x = x;
+    surface->y = y;
 
     surface->title = title;
     surface->decorated = decorated;
@@ -2262,8 +2278,8 @@ class SurfaceRegistry : public lava::CompositorHost {
 
     const uint32_t id = surface->id;
     surfaces_.push_front(std::move(surface));
-    wlr_log(WLR_INFO, "surface %u: '%s' %ux%u on arena '%s'%s", id,
-            title.c_str(), width, height, arenaId.c_str(),
+    wlr_log(WLR_INFO, "surface %u: '%s' %ux%u at %d,%d on arena '%s'%s", id,
+            title.c_str(), width, height, x, y, arenaId.c_str(),
             decorated ? "" : ", client-framed");
     // Deliberately silent: the caller is still deciding what this surface *is*
     // — whether it is a panel, what application it belongs to — and a shell
