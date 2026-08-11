@@ -67,6 +67,27 @@ struct Application::Impl
   /// reverse, so a window that blits into its image is gone before the image
   /// is. Below `device`, for the same reason in the other direction.
   std::unordered_map<uint32_t, std::unique_ptr<canvas::DmabufImage>> exportImages;
+  /// Exported buffers no window is using, kept for the next one that asks for
+  /// that size.
+  ///
+  /// A dmabuf is not only an allocation. Handing one to a consumer makes it
+  /// *import* the memory, and an import can outlive everything on this side:
+  /// measured here, a wlroots renderer holds its import for as long as the
+  /// compositor runs, whatever we do with the image, the descriptors or the
+  /// buffer wrapped around it. A session that opened and closed a hundred
+  /// windows had therefore paid for a hundred buffers and could use none of
+  /// them again.
+  ///
+  /// So a closed window's buffer comes back here rather than going away: the
+  /// next window that wants that size is handed the same memory, and the
+  /// consumer recognises the import it already has. Alongside the stepped
+  /// sizes in `exportCapacity`, this is what keeps a desktop's buffer count
+  /// proportional to the windows on screen rather than to the windows it has
+  /// ever shown.
+  ///
+  /// Declared with `exportImages` and for the same reason: both hold device
+  /// memory and both have to be gone before the device is.
+  std::vector<std::unique_ptr<canvas::DmabufImage>> exportPool;
   /// What the consumer said it can import. Settled once, at `initExported`,
   /// because it describes the consumer and not any one surface.
   std::vector<uint64_t> exportModifiers;
@@ -231,6 +252,59 @@ struct Application::Impl
     return ((size + kStep - 1) / kStep) * kStep;
   }
 
+  /// How much unused exported memory is worth keeping. Past this the oldest
+  /// buffers are let go: a pool nobody empties is a leak that was planned.
+  static constexpr size_t kExportPoolBytes = 64u * 1024 * 1024;
+
+  static size_t exportBytes(const canvas::DmabufImage &image)
+  {
+    return static_cast<size_t>(image.width()) * image.height() * 4;
+  }
+
+  /// A buffer exactly `w` by `h` — recycled if one is spare, new otherwise.
+  /// Null only if the device could not export one.
+  ///
+  /// Exact rather than "one that fits": sizes are already stepped, so the
+  /// window asking is usually the same size as one that closed, and taking
+  /// only an exact match keeps a small window from being handed a buffer far
+  /// larger than it will ever fill.
+  std::unique_ptr<canvas::DmabufImage> takeExportImage(uint32_t w, uint32_t h)
+  {
+    for (auto it = exportPool.begin(); it != exportPool.end(); ++it) {
+      if ((*it)->width() != w || (*it)->height() != h) continue;
+      auto image = std::move(*it);
+      exportPool.erase(it);
+      return image;
+    }
+    return canvas::DmabufImage::create(device, w, h, exportModifiers);
+  }
+
+  /// Takes a buffer back once no window is drawing into it.
+  ///
+  /// The caller has to have made sure nothing still names it. For the
+  /// compositor that means the `wlr_buffer` wrapped around it is gone, which
+  /// is why `CanvasSurface` drops that before it closes its window.
+  ///
+  /// What it still holds is the last frame the previous window drew. Nothing
+  /// shows it — the next window blits its whole extent before anything reads
+  /// the buffer, and the part past that extent is cropped away by the
+  /// consumer — and it never leaves this process either way, since the
+  /// descriptors go to the compositor's own renderer and to nobody else.
+  void recycleExportImage(std::unique_ptr<canvas::DmabufImage> image)
+  {
+    if (!image) return;
+    size_t bytes = exportBytes(*image);
+    for (const auto &pooled : exportPool) bytes += exportBytes(*pooled);
+    exportPool.push_back(std::move(image));
+
+    // Oldest first, so a size that stopped being asked for drains away instead
+    // of holding its place against the sizes that are.
+    while (bytes > kExportPoolBytes && !exportPool.empty()) {
+      bytes -= exportBytes(*exportPool.front());
+      exportPool.erase(exportPool.begin());
+    }
+  }
+
   /// Opens one more surface on the device `initExported` brought up.
   ///
   /// Everything expensive and shared — the device, the pipelines, the glyph
@@ -244,8 +318,7 @@ struct Application::Impl
       return 0;
     }
     try {
-      auto image = canvas::DmabufImage::create(
-        device, exportCapacity(w), exportCapacity(h), exportModifiers);
+      auto image = takeExportImage(exportCapacity(w), exportCapacity(h));
       if (!image) return 0;
 
       const uint32_t id = nextWindowId++;
@@ -293,8 +366,7 @@ struct Application::Impl
     std::unique_ptr<canvas::DmabufImage> replacement;
     if (it->second == nullptr || it->second->width() < w ||
         it->second->height() < h) {
-      replacement = canvas::DmabufImage::create(
-        device, exportCapacity(w), exportCapacity(h), exportModifiers);
+      replacement = takeExportImage(exportCapacity(w), exportCapacity(h));
       if (!replacement) {
         std::cerr << "resizeExportedWindow: could not export " << w << "x" << h
                   << '\n';
@@ -305,9 +377,11 @@ struct Application::Impl
     if (!window->renderWindow().resizeTo(w, h)) return false;
 
     if (replacement) {
-      // The old image is released only after the window points at the new one,
-      // so nothing is still able to name it.
+      // The old image is let go only after the window points at the new one,
+      // so nothing is still able to name it. It goes back to the pool rather
+      // than away: a window growing past a step will usually cross back.
       window->renderWindow().setExportTarget(replacement.get());
+      recycleExportImage(std::move(it->second));
       it->second = std::move(replacement);
     } else {
       // `resizeTo` drops the target rather than keep pointing at an image the
@@ -411,9 +485,14 @@ struct Application::Impl
       // may be mid-frame against the same queue.
       device.waitForAllFramesInFlight();
       windows.erase(it);
-      // After the window, so nothing is still blitting into it. A no-op for
-      // any window that was not exporting.
-      exportImages.erase(windowId);
+      // After the window, so nothing is still blitting into it. Kept for the
+      // next window of this size rather than destroyed — see `exportPool`. A
+      // no-op for any window that was not exporting.
+      if (auto image = exportImages.find(windowId);
+          image != exportImages.end()) {
+        recycleExportImage(std::move(image->second));
+        exportImages.erase(image);
+      }
       return;
     }
   }
@@ -515,6 +594,11 @@ struct Application::Impl
     // from resources cleanUp is about to destroy, and the device asserts on
     // any still registered.
     windows.clear();
+    // Exported buffers likewise — they are device memory, and letting them
+    // outlive the device leaves their destructors freeing handles on a device
+    // that is gone. Nothing is drawing into them by now: the windows are.
+    exportImages.clear();
+    exportPool.clear();
     device.cleanUp();
     deviceUp = false;
   }
