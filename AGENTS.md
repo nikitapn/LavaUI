@@ -164,6 +164,7 @@ optional QEMU VM).
 | `LAVA_AGENT_PORT=9876` | Local agent TCP server (layout / input / screenshots) |
 | `LAVAUI_DEBUG=1` | Per-frame body/layout/emit/present timings |
 | `LAVAUI_PROFILE=1` | Per-widget paint profiling via agent `profile` |
+| `LAVA_FRAME_PROBE=1` | Compositor: per-surface frame cost, gaps and stalls |
 | `CANVAS_VK_VALIDATION=1` | Vulkan validation layers |
 | `NPRPC_SWIFT_PATH` | Override path to `nprpc_swift` package |
 | `NPRPC_ROOT` / `NPRPC_BUILD_DIR` | In-tree nprpc link for Swift bridge |
@@ -189,6 +190,8 @@ Runtime agent protocol (MCP/CLI, stable `sid`s, hit-testing): **`docs/agent.md`*
 | Panel global menu (import side) | `canvas/src/menu/menu_import.*`, `Sources/LavaUI/PanelMenu.swift` |
 | Window list / dock | `SubscribeWindows` in the IDL, `Sources/LavaDock/` |
 | Stream delivery to clients | `StreamPump` in `compositor/src/control_plane.cpp` |
+| Why a frame was late | `compositor/src/frame_probe.*` (`LAVA_FRAME_PROBE=1`) |
+| Frame handover / fences | `DmabufImage::publishFence`, `CanvasSurface::frameFence` |
 | Client open / Present / input stream | `Sources/LavaClient/` |
 | Perf scenarios | `Sources/LavaBench/`, `docs/performance.md` |
 | App demos | `Sources/HelloWorld/`, Spotify/TraceLoom/LavaTerm apps |

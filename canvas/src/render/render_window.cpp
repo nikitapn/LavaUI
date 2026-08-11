@@ -1,6 +1,7 @@
 #include <unistd.h>
 
 #include <algorithm>
+#include <chrono>
 #include <array>
 #include <cassert>
 #include <cstdlib>
@@ -924,7 +925,32 @@ void RenderWindow::submitFrame(
     // Everything else waits, and a readback most of all — it needs the pixels,
     // not a promise.
     if (!fenced || exportTarget_ == nullptr || !dev_.exportFenceHonoured()) {
-      waitForAllFrames();
+      // `LAVA_FRAME_PROBE` reports what that costs, because "the handover is
+      // fenced" is a claim about startup and this is the frame-by-frame truth:
+      // a device that cannot export a fence, or a consumer that does not take
+      // one, lands here every frame and nothing else says so.
+      static const bool probe = std::getenv("LAVA_FRAME_PROBE") != nullptr;
+      if (!probe || exportTarget_ == nullptr) {
+        waitForAllFrames();
+      } else {
+        const auto before = std::chrono::steady_clock::now();
+        waitForAllFrames();
+        const auto us = std::chrono::duration_cast<std::chrono::microseconds>(
+                            std::chrono::steady_clock::now() - before).count();
+        static uint64_t count = 0, total = 0, worst = 0;
+        static auto reported = std::chrono::steady_clock::now();
+        ++count;
+        total += static_cast<uint64_t>(us);
+        worst = std::max(worst, static_cast<uint64_t>(us));
+        const auto now = std::chrono::steady_clock::now();
+        if (now - reported > std::chrono::seconds(2)) {
+          reported = now;
+          std::cerr << "canvas: export wait " << count << " frames, mean "
+                    << double(total) / double(count) / 1000.0 << " ms, max "
+                    << double(worst) / 1000.0 << " ms\n";
+          count = total = worst = 0;
+        }
+      }
     }
   }
 

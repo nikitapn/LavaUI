@@ -6,6 +6,7 @@
 #include <cstdlib>
 #include <filesystem>
 
+#include "frame_probe.hpp"
 #include "render/dmabuf_image.hpp"
 
 namespace lava {
@@ -326,12 +327,18 @@ bool CanvasSurface::renderFromArena() {
   // frame it is holding — deliberately, so a resize repaints content rather
   // than nothing — so rendering first and asking afterwards would blit and
   // re-damage to show pixels that never changed.
-  if (!renderer_.engine().pollDrawArena(windowId_)) return false;
+  const int64_t startedArena = FrameProbe::on() ? FrameProbe::now() : 0;
+  const bool published = renderer_.engine().pollDrawArena(windowId_);
+  FrameProbe::record(windowId_, FrameProbe::Stage::Arena, startedArena);
+  if (!published) return false;
+
+  const int64_t startedRender = FrameProbe::on() ? FrameProbe::now() : 0;
   if (!renderer_.engine().renderFrame(windowId_)) {
     wlr_log(WLR_ERROR, "canvas: surface %u failed to draw", windowId_);
     return false;
   }
   captureFence();
+  FrameProbe::record(windowId_, FrameProbe::Stage::Render, startedRender);
   drawn_ = renderer_.engine().frameCounter(windowId_);
   dumpIfRequested();
   return true;
@@ -368,8 +375,10 @@ bool CanvasSurface::takeInternalRepaint() {
 }
 
 bool CanvasSurface::redraw() {
+  const int64_t started = FrameProbe::on() ? FrameProbe::now() : 0;
   if (!renderer_.engine().renderFrame(windowId_)) return false;
   captureFence();
+  FrameProbe::record(windowId_, FrameProbe::Stage::Redraw, started);
   drawn_ = renderer_.engine().frameCounter(windowId_);
   return true;
 }

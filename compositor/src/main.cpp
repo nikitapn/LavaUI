@@ -30,6 +30,7 @@
 #include "clipboard.hpp"
 #include "config.hpp"
 #include "decoration.hpp"
+#include "frame_probe.hpp"
 #include "control_plane.hpp"
 #include "shell.hpp"
 #include "wlr.hpp"
@@ -2127,6 +2128,7 @@ class SurfaceRegistry : public lava::CompositorHost {
         if (control_) control_->postActiveWindow(0, {}, {}, {});
       }
       if (control_) control_->surfaceGone(id);
+      lava::FrameProbe::forget(id);
       wlr_log(WLR_INFO, "surface %u: gone", id);
       announceWindows();
       return true;
@@ -2178,6 +2180,7 @@ class SurfaceRegistry : public lava::CompositorHost {
     while (surface.canvas->pollEvent(event)) {
       control_->postInput(surface.id, event.kind, event.x, event.y,
                           event.button, event.mods);
+      lava::FrameProbe::input(surface.id);
     }
   }
 
@@ -2198,7 +2201,11 @@ class SurfaceRegistry : public lava::CompositorHost {
   /// texture it already uploaded — see `show_surface`.
   void damage(ClientSurface &surface) {
     if (!surface.canvas) return;
+    const int64_t started =
+        lava::FrameProbe::on() ? lava::FrameProbe::now() : 0;
     show_surface(surface.node, *surface.canvas);
+    lava::FrameProbe::record(surface.id, lava::FrameProbe::Stage::Scene,
+                             started);
   }
 
   void present(uint32_t id) override {
@@ -2206,6 +2213,8 @@ class SurfaceRegistry : public lava::CompositorHost {
     if (surface == nullptr || !surface->canvas) return;
     if (!surface->canvas->renderFromArena()) return;
     damage(*surface);
+    lava::FrameProbe::frame(id);
+    lava::FrameProbe::report();
   }
 
   void surfaceSize(uint32_t id, float &outW, float &outH) const override {
@@ -2973,7 +2982,15 @@ Output::~Output() {
 
 void Output::on_frame(wl_listener *listener, void *) {
   auto *output = owner_of<Output>(listener);
+  // Composite is surface 0 in the probe: it is the desktop's own frame rather
+  // than any one client's, and it is where a wait that was moved rather than
+  // removed would end up — the scene waits for a client's acquire fence here,
+  // on this thread, if the renderer cannot hand the wait to the GPU.
+  const int64_t started = lava::FrameProbe::on() ? lava::FrameProbe::now() : 0;
   wlr_scene_output_commit(output->scene_output, nullptr);
+  lava::FrameProbe::record(0, lava::FrameProbe::Stage::Render, started);
+  lava::FrameProbe::frame(0);
+  lava::FrameProbe::report();
   timespec now{};
   clock_gettime(CLOCK_MONOTONIC, &now);
   wlr_scene_output_send_frame_done(output->scene_output, &now);

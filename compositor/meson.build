@@ -119,6 +119,7 @@ executable(
   'src/clipboard.cpp',
   'src/config.cpp',
   'src/decoration.cpp',
+  'src/frame_probe.cpp',
   'src/shell.cpp',
   lava_idl_sources,
   protocol_headers,
