@@ -19,35 +19,41 @@ struct VolumeApplet: View {
         let theme = Theme.current
         let open = isOpen
 
-        // Canvas is the hit target: it can take left/right and the wheel, and
-        // paints a speaker that reflects mute + level without shipping icons.
-        Canvas(
-            label: "volume",
-            width: .pt(28),
-            height: .pt(22),
-            onGesture: { gesture in
-                guard gesture.phase == .began else { return }
-                if gesture.button == PointerButton.right {
-                    pulse.toggleMute()
-                } else if gesture.button == PointerButton.left {
-                    open.wrappedValue.toggle()
+        // Presenter height must reach the strip bottom. A short 22pt canvas is
+        // centred in the 32pt bar, so "overlay below" started mid-strip and the
+        // popover sat a few pixels into the taskbar (calendar is fine — padded
+        // text already fills the cross-axis). Match that with padding + a full
+        // strip-tall hit box; the glyph still paints inside the canvas.
+        HStack(height: .pt(36), padding: 0, alignment: .center) {
+            Canvas(
+                label: "volume",
+                width: .pt(36),
+                height: .pt(22),
+                onGesture: { gesture in
+                    guard gesture.phase == .began else { return }
+                    if gesture.button == PointerButton.right {
+                        pulse.toggleMute()
+                    } else if gesture.button == PointerButton.left {
+                        open.wrappedValue.toggle()
+                    }
+                },
+                onWheel: { _, dy, _, _ in
+                    // Positive dy = scroll up = louder. One notch ≈ 5%.
+                    let step: Float = dy > 0 ? 0.05 : -0.05
+                    pulse.adjustVolume(by: step)
+                    if pulse.muted && step > 0 { pulse.setMuted(false) }
+                },
+                paint: { list, frame in
+                    VolumeGlyph.paint(
+                        list: list, frame: frame,
+                        volume: volume, muted: muted,
+                        color: muted ? theme.textDim : theme.textPrimary,
+                        accent: theme.accent
+                    )
                 }
-            },
-            onWheel: { _, dy, _, _ in
-                // Positive dy = scroll up = louder. One notch ≈ 5%.
-                let step: Float = dy > 0 ? 0.05 : -0.05
-                pulse.adjustVolume(by: step)
-                if pulse.muted && step > 0 { pulse.setMuted(false) }
-            },
-            paint: { list, frame in
-                VolumeGlyph.paint(
-                    list: list, frame: frame,
-                    volume: volume, muted: muted,
-                    color: muted ? theme.textDim : theme.textPrimary,
-                    accent: theme.accent
-                )
-            }
-        )
+            )
+        }
+        .padding(2)
         .hoverBackground(Theme.current.hover)
         .cornerRadius(3)
         .agentId("applet.volume")

@@ -40,8 +40,8 @@ import Observation
 // calls Activate / ContextMenu on the item; the app draws its own menu window.
 // That is phase 1 of tray support — stock applets without rewriting them.
 //
-// And a **native volume applet** next to the tray: PulseAudio (or PipeWire's
-// Pulse shim) via libpulse, drawn entirely in LavaUI — no pasystray.
+// And native applets next to the tray: volume (PulseAudio / PipeWire-Pulse)
+// and a month calendar on the clock — both pure LavaUI popovers.
 //
 // What it does not have yet, and why:
 //
@@ -102,10 +102,10 @@ final class MenuSession {
     /// because the panel's *hit region* depends on it — see `openBinding`.
     var openMenu: MenuID?
 
-    /// Volume (or any other) strip popover is open. Same input-region rule as
-    /// `openMenu`: the surface is tall, but without a deep hit region the
-    /// popover paints into dead space and nothing in it is clickable.
+    /// Strip popovers that need the deep hit region (volume, calendar, …).
+    /// Same rule as `openMenu`: without it, dropdowns paint into dead space.
     var volumeOpen = false
+    var calendarOpen = false
 
     func attach(editor: Editor) {
         self.editor = editor
@@ -196,8 +196,9 @@ final class MenuSession {
         // before the first frame that shows the dropdown.
         menus?.aboutToShow(id)
         openMenu = id
-        // One popover at a time: a volume panel under an open menu is noise.
+        // One popover at a time.
         volumeOpen = false
+        calendarOpen = false
         syncInputRegion()
     }
 
@@ -211,8 +212,18 @@ final class MenuSession {
         guard volumeOpen != open else { return }
         volumeOpen = open
         if open {
-            // Drop the menubar dropdown if it was up — same one-popover rule.
             openMenu = nil
+            calendarOpen = false
+        }
+        syncInputRegion()
+    }
+
+    func setCalendarOpen(_ open: Bool) {
+        guard calendarOpen != open else { return }
+        calendarOpen = open
+        if open {
+            openMenu = nil
+            volumeOpen = false
         }
         syncInputRegion()
     }
@@ -233,7 +244,9 @@ final class MenuSession {
     }
 
     /// Whether any strip popover needs the deep hit region.
-    private var wantsCapture: Bool { openMenu != nil || volumeOpen }
+    private var wantsCapture: Bool {
+        openMenu != nil || volumeOpen || calendarOpen
+    }
 
     /// Hit-test region: strip when idle, full panel while a menu or volume
     /// popover is open so the dropdown is clickable and outside clicks dismiss.
@@ -314,7 +327,7 @@ struct TaskbarView: View {
                 // Native sound control before the clock — scroll, mute, popover.
                 VolumeApplet(pulse: pulse, isOpen: volumeOpenBinding)
 
-                Text(clock.text, color: Theme.current.textPrimary)
+                CalendarApplet(clockText: clock.text, isOpen: calendarOpenBinding)
             }
             .background(Theme.current.panel)
 
@@ -390,6 +403,13 @@ struct TaskbarView: View {
         Binding(
             get: { session.volumeOpen },
             set: { session.setVolumeOpen($0) }
+        )
+    }
+
+    private var calendarOpenBinding: Binding<Bool> {
+        Binding(
+            get: { session.calendarOpen },
+            set: { session.setCalendarOpen($0) }
         )
     }
 }
