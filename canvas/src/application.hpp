@@ -76,6 +76,21 @@ public:
   /// so a consumer showing the whole image would show slack along two edges.
   const canvas::DmabufImage *exportedImage(uint32_t windowId) const;
 
+  /// Whether the consumer of exported frames waits on their fence rather than
+  /// leaving canvas to block until the GPU is done. See
+  /// `RenderDevice::setExportFenceHonoured`; a consumer that says yes must
+  /// collect `takeFrameFence` after every frame it shows.
+  void setExportFenceHonoured(bool honoured);
+
+  /// The sync_file for a window's last exported frame, or -1. The caller owns
+  /// the fd. See `RenderWindow::takeFrameFence`.
+  int takeFrameFence(uint32_t windowId);
+
+  /// Blocks until this window's submitted frames have finished. What a
+  /// consumer that meant to wait on a fence falls back to when it turns out it
+  /// cannot.
+  void waitForFrames(uint32_t windowId);
+
   /// See `AppWindow::setClientSize`. No-op on a window that has a renderer.
   void setClientSize(float width, float height, uint32_t windowId = 0);
 

@@ -1,5 +1,7 @@
 #include "canvas_surface.hpp"
 
+#include <unistd.h>
+
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
@@ -118,6 +120,18 @@ std::unique_ptr<CanvasRenderer> CanvasRenderer::create(wlr_renderer *renderer) {
     wlr_log(WLR_ERROR, "canvas: %s", r.error().c_str());
     return nullptr;
   }
+  self->drmFd_ = drm_fd;
+
+  // Whether a frame can be handed over with a fence rather than a stall, which
+  // is a question about the *consumer*: this renderer has to be able to wait on
+  // a timeline before it samples, or canvas has to go on blocking until every
+  // frame is finished. Asked once, here, because it is a property of the
+  // renderer and not of any surface.
+  self->fencedHandover_ = renderer->features.timeline;
+  self->engine_.setExportFenceHonoured(self->fencedHandover_);
+  wlr_log(WLR_INFO, "canvas: frame handover is %s",
+          self->fencedHandover_ ? "fenced (scene waits on a timeline)"
+                                : "a CPU wait (renderer has no timelines)");
   return self;
 }
 
@@ -212,7 +226,41 @@ CanvasSurface::~CanvasSurface() {
     wlr_buffer_drop(&buffer_->base);
     buffer_ = nullptr;
   }
+  // `closeWindow` waits for this window's frames before it takes the buffer
+  // back, so nothing is still writing whatever the timeline was tracking.
   renderer_.engine().closeWindow(windowId_);
+  if (fenceTimeline_ != nullptr) {
+    wlr_drm_syncobj_timeline_unref(fenceTimeline_);
+    fenceTimeline_ = nullptr;
+  }
+}
+
+void CanvasSurface::captureFence() {
+  const int fence = renderer_.engine().takeFrameFence(windowId_);
+  if (fence < 0) {
+    // No fence for this frame, which means canvas waited for it instead: what
+    // the surface is holding is finished, and the point already on the
+    // timeline is finished with it.
+    return;
+  }
+  if (fenceTimeline_ == nullptr && renderer_.drmFd() >= 0) {
+    fenceTimeline_ = wlr_drm_syncobj_timeline_create(renderer_.drmFd());
+  }
+  if (fenceTimeline_ == nullptr ||
+      !wlr_drm_syncobj_timeline_import_sync_file(fenceTimeline_,
+                                                 fencePoint_ + 1, fence)) {
+    // The frame is in flight and nothing can be told to wait for it. Waiting
+    // here is the same stall this exists to avoid, but it is a stall on a path
+    // that should never run rather than a torn frame on one that does.
+    wlr_log(WLR_ERROR, "canvas: surface %u could not publish its frame fence",
+            windowId_);
+    close(fence);
+    renderer_.engine().waitForFrames(windowId_);
+    return;
+  }
+  close(fence);
+  ++fencePoint_;
+
 }
 
 bool CanvasSurface::resize(uint32_t width, uint32_t height) {
@@ -262,6 +310,7 @@ bool CanvasSurface::renderList(
                                     glyphs.data(), glyphs.size(), nullptr, 0,
                                     nullptr, 0, windowId_);
   if (!renderer_.engine().renderFrame(windowId_)) return false;
+  captureFence();
   drawn_ = renderer_.engine().frameCounter(windowId_);
   return true;
 }
@@ -282,6 +331,7 @@ bool CanvasSurface::renderFromArena() {
     wlr_log(WLR_ERROR, "canvas: surface %u failed to draw", windowId_);
     return false;
   }
+  captureFence();
   drawn_ = renderer_.engine().frameCounter(windowId_);
   dumpIfRequested();
   return true;
@@ -319,6 +369,7 @@ bool CanvasSurface::takeInternalRepaint() {
 
 bool CanvasSurface::redraw() {
   if (!renderer_.engine().renderFrame(windowId_)) return false;
+  captureFence();
   drawn_ = renderer_.engine().frameCounter(windowId_);
   return true;
 }

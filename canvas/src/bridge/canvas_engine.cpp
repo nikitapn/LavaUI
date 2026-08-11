@@ -156,6 +156,21 @@ const DmabufImage *Engine::exportedImage(uint32_t windowId) const
   return impl_->offscreen ? impl_->offscreen->exportedImage(windowId) : nullptr;
 }
 
+void Engine::setExportFenceHonoured(bool honoured)
+{
+  if (impl_->offscreen) impl_->offscreen->setExportFenceHonoured(honoured);
+}
+
+int Engine::takeFrameFence(uint32_t windowId)
+{
+  return impl_->offscreen ? impl_->offscreen->takeFrameFence(windowId) : -1;
+}
+
+void Engine::waitForFrames(uint32_t windowId)
+{
+  if (impl_->offscreen) impl_->offscreen->waitForFrames(windowId);
+}
+
 VoidResult Engine::openClient(uint32_t width, uint32_t height)
 {
   close();

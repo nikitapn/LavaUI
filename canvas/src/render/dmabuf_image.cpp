@@ -355,9 +355,9 @@ void DmabufImage::recordRelease(VkCommandBuffer cmd,
                        nullptr, 1, &release);
 }
 
-bool DmabufImage::publishFence()
+int DmabufImage::publishFence()
 {
-  if (semaphore_ == VK_NULL_HANDLE) return false;
+  if (semaphore_ == VK_NULL_HANDLE) return -1;
 
   VkSemaphoreGetFdInfoKHR get {
     .sType      = VK_STRUCTURE_TYPE_SEMAPHORE_GET_FD_INFO_KHR,
@@ -367,11 +367,12 @@ bool DmabufImage::publishFence()
   int fenceFd = -1;
   if (device_->getSemaphoreFd()(device_->getDevice(), &get, &fenceFd) !=
       VK_SUCCESS) {
-    return false;
+    return -1;
   }
   // -1 is legal and means "already signalled": the work finished before the
-  // export, so there is nothing for anyone to wait on.
-  if (fenceFd < 0) return true;
+  // export, so there is nothing for anyone to wait on. The caller falls back
+  // to its CPU wait, which costs nothing on a frame that is already done.
+  if (fenceFd < 0) return -1;
 
   // Implicit synchronisation is what GL and EGL consumers use — they do not
   // ask for a fence, they read the one hanging off the buffer. Marked WRITE
@@ -381,9 +382,12 @@ bool DmabufImage::publishFence()
     .flags = DMA_BUF_SYNC_WRITE,
     .fd    = static_cast<__s32>(fenceFd),
   };
-  const bool ok = ioctl(fd_[0], DMA_BUF_IOCTL_IMPORT_SYNC_FILE, &import) == 0;
-  close(fenceFd);
-  return ok;
+  // Best effort, and not the caller's problem: the ioctl only serves consumers
+  // that read the buffer's own fence, and the fd is going back to the caller
+  // either way for the one that asks for it explicitly. Importing does not
+  // consume the descriptor.
+  ioctl(fd_[0], DMA_BUF_IOCTL_IMPORT_SYNC_FILE, &import);
+  return fenceFd;
 }
 
 }  // namespace canvas

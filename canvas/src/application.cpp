@@ -396,6 +396,22 @@ struct Application::Impl
     return true;
   }
 
+  /// See `RenderWindow::takeFrameFence`. -1 for a window that has no renderer
+  /// or no fence to give.
+  int takeFrameFence(uint32_t windowId)
+  {
+    AppWindow *window = win(windowId);
+    if (window == nullptr || !window->hasRenderer()) return -1;
+    return window->renderWindow().takeFrameFence();
+  }
+
+  void waitForFrames(uint32_t windowId)
+  {
+    AppWindow *window = win(windowId);
+    if (window == nullptr || !window->hasRenderer()) return;
+    window->renderWindow().waitForAllFrames();
+  }
+
   canvas::VoidResult initClient()
   {
     try {
@@ -632,6 +648,21 @@ bool Application::resizeExportedWindow(uint32_t windowId, uint32_t width,
                                        uint32_t height)
 {
   return impl_->resizeExportedWindow(windowId, width, height);
+}
+
+void Application::setExportFenceHonoured(bool honoured)
+{
+  impl_->device.setExportFenceHonoured(honoured);
+}
+
+int Application::takeFrameFence(uint32_t windowId)
+{
+  return impl_->takeFrameFence(windowId);
+}
+
+void Application::waitForFrames(uint32_t windowId)
+{
+  impl_->waitForFrames(windowId);
 }
 
 const canvas::DmabufImage *Application::exportedImage(uint32_t windowId) const

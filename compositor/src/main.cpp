@@ -799,29 +799,45 @@ struct ClientSurface {
   }
 };
 
-/// Shows the part of a canvas surface's buffer that is actually the surface.
+/// Puts a canvas surface's buffer on its scene node: the one way one of ours
+/// reaches the screen.
 ///
-/// An exported buffer is allocated in steps and is normally larger than the
-/// window it carries, so that a resize can reuse it rather than allocate —
-/// see `Application::exportCapacity`. The frame lands in its top-left corner,
-/// and everything past that corner is whatever the last larger frame left
-/// behind. This is what keeps that out of the scene: the source box says which
-/// part to sample, and the destination size says to draw it at its own size
-/// rather than stretched over the whole buffer.
+/// Three things have to be said together, and saying any two of them is a bug
+/// that only shows up sometimes:
 ///
-/// Called wherever a node is given a buffer or a surface changes size. Cheap
-/// to repeat: wlroots compares before it damages anything.
-void crop_to_surface(wlr_scene_buffer *node, uint32_t width, uint32_t height) {
+///   * **the buffer**, again on every frame, because the contents changed even
+///     though the buffer did not;
+///   * **the crop**, because an exported buffer is allocated in steps and is
+///     normally larger than the window it carries (see
+///     `Application::exportCapacity`) — the frame lands in its top-left
+///     corner, and past that corner is whatever the last larger frame left
+///     behind. The source box says which part to sample; the destination size
+///     says to draw it at its own size rather than stretched over the whole
+///     buffer;
+///   * **the fence**, because the frame may still be being drawn. Canvas used
+///     to block until the GPU had finished before it returned — on the event
+///     loop, where it cost every other client the same milliseconds — and now
+///     hands over the point that will be signalled instead. Waiting is the
+///     scene's job from here.
+void show_surface(wlr_scene_buffer *node, lava::CanvasSurface &surface) {
   if (node == nullptr) return;
+  const lava::CanvasSurface::FrameFence fence = surface.frameFence();
+  const wlr_scene_buffer_set_buffer_options options{
+      .damage = nullptr,
+      .wait_timeline = fence.timeline,
+      .wait_point = fence.point,
+  };
+  wlr_scene_buffer_set_buffer_with_options(node, surface.buffer(), &options);
+
   const wlr_fbox source{
       .x = 0,
       .y = 0,
-      .width = static_cast<double>(width),
-      .height = static_cast<double>(height),
+      .width = static_cast<double>(surface.width()),
+      .height = static_cast<double>(surface.height()),
   };
   wlr_scene_buffer_set_source_box(node, &source);
-  wlr_scene_buffer_set_dest_size(node, static_cast<int>(width),
-                                 static_cast<int>(height));
+  wlr_scene_buffer_set_dest_size(node, static_cast<int>(surface.width()),
+                                 static_cast<int>(surface.height()));
 }
 
 /// Which sides of a window a resize drag is pulling. A bitmask because a
@@ -1294,8 +1310,7 @@ class SurfaceRegistry : public lava::CompositorHost {
     surface.height = height;
     if (surface.bar &&
         surface.bar->resize(width, lava::Decoration::kHeight)) {
-      wlr_scene_buffer_set_buffer(surface.barNode, surface.bar->buffer());
-      crop_to_surface(surface.barNode, width, lava::Decoration::kHeight);
+      show_surface(surface.barNode, *surface.bar);
     }
     drawBar(surface);
   }
@@ -1508,10 +1523,9 @@ class SurfaceRegistry : public lava::CompositorHost {
       }
       wlr_log(WLR_INFO, "surface %u: shadow %ux%u, blur %.0f, offset %.0f",
               surface.id, width, height, shadowBlur_, shadowOffsetY_);
-      crop_to_surface(surface.shadowNode, width, height);
+      show_surface(surface.shadowNode, *surface.shadow);
     } else if (surface.shadow->resize(width, height)) {
-      wlr_scene_buffer_set_buffer(surface.shadowNode, surface.shadow->buffer());
-      crop_to_surface(surface.shadowNode, width, height);
+      show_surface(surface.shadowNode, *surface.shadow);
     }
 
     // Drawn in the shadow surface's own coordinates: the window's rectangle
@@ -1536,8 +1550,7 @@ class SurfaceRegistry : public lava::CompositorHost {
     const std::vector<canvas::DrawCommand> commands{command};
     const std::vector<canvas::GlyphInstance> glyphs;
     if (surface.shadow->renderList(commands, glyphs)) {
-      wlr_scene_buffer_set_buffer_with_damage(surface.shadowNode,
-                                              surface.shadow->buffer(), nullptr);
+      show_surface(surface.shadowNode, *surface.shadow);
     }
     wlr_scene_node_set_enabled(&surface.shadowNode->node, true);
     placeShadow(surface);
@@ -1615,8 +1628,7 @@ class SurfaceRegistry : public lava::CompositorHost {
     decoration_.build(surface.title, surface.width, surface.hovered,
                       surface.id == focused_);
     if (surface.bar->renderList(decoration_.commands(), decoration_.glyphs())) {
-      wlr_scene_buffer_set_buffer_with_damage(surface.barNode,
-                                              surface.bar->buffer(), nullptr);
+      show_surface(surface.barNode, *surface.bar);
     }
   }
 
@@ -1731,8 +1743,7 @@ class SurfaceRegistry : public lava::CompositorHost {
       applyShadow(surface);
       if (surface.bar &&
           surface.bar->resize(width, lava::Decoration::kHeight)) {
-        wlr_scene_buffer_set_buffer(surface.barNode, surface.bar->buffer());
-        crop_to_surface(surface.barNode, width, lava::Decoration::kHeight);
+        show_surface(surface.barNode, *surface.bar);
       }
       drawBar(surface);
       return;
@@ -1747,12 +1758,10 @@ class SurfaceRegistry : public lava::CompositorHost {
     applyShadow(surface);
     // Usually the same buffer at a smaller or larger crop — a surface only
     // hands back a different one when the window outgrew it.
-    wlr_scene_buffer_set_buffer(surface.node, surface.canvas->buffer());
-    crop_to_surface(surface.node, width, height);
+    show_surface(surface.node, *surface.canvas);
     // The bar spans the window, so it follows every width change.
     if (surface.bar && surface.bar->resize(width, lava::Decoration::kHeight)) {
-      wlr_scene_buffer_set_buffer(surface.barNode, surface.bar->buffer());
-      crop_to_surface(surface.barNode, width, lava::Decoration::kHeight);
+      show_surface(surface.barNode, *surface.bar);
     }
     drawBar(surface);
     // The `Resize` the surface just queued for its client is sitting in the
@@ -2184,12 +2193,12 @@ class SurfaceRegistry : public lava::CompositorHost {
     if (animation_ != nullptr) wl_event_source_timer_update(animation_, kFrameMs);
   }
 
-  /// Tells wlroots the surface's contents changed. Same buffer, so without
-  /// this it keeps showing the texture it already uploaded.
+  /// Tells wlroots the surface's contents changed, and when they will have
+  /// finished changing. Same buffer, so without this it keeps showing the
+  /// texture it already uploaded — see `show_surface`.
   void damage(ClientSurface &surface) {
     if (!surface.canvas) return;
-    wlr_scene_buffer_set_buffer_with_damage(surface.node,
-                                            surface.canvas->buffer(), nullptr);
+    show_surface(surface.node, *surface.canvas);
   }
 
   void present(uint32_t id) override {
@@ -2474,11 +2483,11 @@ class SurfaceRegistry : public lava::CompositorHost {
 
     surface->node = wlr_scene_buffer_create(parent, surface->canvas->buffer());
     if (surface->node == nullptr) return 0;
-    crop_to_surface(surface->node, width, height);
+    show_surface(surface->node, *surface->canvas);
     if (surface->bar) {
       surface->barNode = wlr_scene_buffer_create(parent, surface->bar->buffer());
       if (surface->barNode == nullptr) return 0;
-      crop_to_surface(surface->barNode, width, lava::Decoration::kHeight);
+      show_surface(surface->barNode, *surface->bar);
     }
     applyCorners(*surface);
     place(*surface);
@@ -2612,8 +2621,7 @@ uint32_t SurfaceRegistry::adoptWindow(FramedWindow *window,
     if (surface->bar) {
       surface->barNode = wlr_scene_buffer_create(
           workspaces_->tree[surface->workspace], surface->bar->buffer());
-      crop_to_surface(surface->barNode, surface->width,
-                      lava::Decoration::kHeight);
+      show_surface(surface->barNode, *surface->bar);
     }
   }
 

@@ -125,6 +125,9 @@ class RenderDevice
   /// `VK_KHR_external_semaphore_fd` is not the same as supporting the handle
   /// type, and the fallback is correct, just slower.
   bool exportSyncFd_ = false;
+  /// See `setExportFenceHonoured`. A property of the consumer, so it is set
+  /// from outside and never inferred here.
+  bool exportFenceHonoured_ = false;
   PFN_vkGetMemoryFdKHR getMemoryFd_ = nullptr;
   PFN_vkGetImageDrmFormatModifierPropertiesEXT getModifierProps_ = nullptr;
   PFN_vkGetSemaphoreFdKHR getSemaphoreFd_ = nullptr;
@@ -306,6 +309,22 @@ class RenderDevice
   bool canExportDmabuf() const { return getMemoryFd_ != nullptr; }
   /// True when the handover can be fenced rather than waited on.
   bool canExportSyncFd() const { return exportSyncFd_; }
+
+  /// Whether the consumer waits on the fence an exported frame publishes.
+  ///
+  /// Off by default, and that default is the expensive one: a frame ends by
+  /// blocking until the GPU has finished it, because a consumer that never
+  /// looks at the fence would otherwise read a surface still being written.
+  /// Measured on NVIDIA, which has never honoured the fence hung off a buffer,
+  /// that read the surface early about one run in five.
+  ///
+  /// Turning it on is a promise by whoever owns the buffers that they take the
+  /// fence and wait on it themselves — for the compositor, that it hands the
+  /// point to `wlr_scene_buffer`'s wait timeline. It is what lets a frame end
+  /// when the work is *queued* instead of when it is done, and what keeps the
+  /// event loop out of a GPU wait it has no business in.
+  void setExportFenceHonoured(bool honoured) { exportFenceHonoured_ = honoured; }
+  bool exportFenceHonoured() const { return exportFenceHonoured_; }
 
   // Extension entry points are not in the loader's static table, so they are
   // resolved once at `init` and handed out rather than looked up per call.

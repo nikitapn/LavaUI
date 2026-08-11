@@ -95,17 +95,24 @@ class DmabufImage {
   /// this one still believes it owns.
   void recordRelease(VkCommandBuffer cmd, uint32_t srcQueueFamily) const;
 
-  /// Exports the handover semaphore as a sync_file and hangs it off the buffer
-  /// as its write fence. Call after the submit that signals it.
+  /// Exports the handover semaphore as a sync_file. Call after the submit that
+  /// signals it. The caller owns the returned fd; -1 means there is no fence
+  /// and the frame has to be waited for on the CPU instead.
   ///
-  /// This is what lets a consumer using *implicit* synchronisation wait for
-  /// exactly our rendering rather than being handed a buffer mid-write: GL and
-  /// EGL importers do not ask for a fence, they read the one attached to the
-  /// buffer, and Vulkan does not put one there on its own.
+  /// Two consumers are served by the one export, because there are two ways to
+  /// be told when a buffer is finished and neither covers everything:
   ///
-  /// Returns false when the fence could not be attached — which is a reason to
-  /// keep waiting on the CPU, not a reason to stop.
-  bool publishFence();
+  ///   * *Implicit* — the fence is hung off the buffer here, where a GL or EGL
+  ///     importer reads it without being asked. Vulkan does not put one there
+  ///     on its own. NVIDIA has never honoured these.
+  ///   * *Explicit* — the fd goes back to the caller, to be handed to a
+  ///     consumer that takes an acquire fence (`wlr_scene_buffer`'s wait
+  ///     timeline). This is the one that lets the frame end at the submit
+  ///     rather than at the completion.
+  ///
+  /// Exporting resets the semaphore, so this happens once per frame and the
+  /// same fd answers both.
+  int publishFence();
 
   /// Whether `publishFence` can do anything at all.
   bool fenced() const { return semaphore_ != VK_NULL_HANDLE; }

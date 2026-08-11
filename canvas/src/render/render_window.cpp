@@ -1,3 +1,5 @@
+#include <unistd.h>
+
 #include <algorithm>
 #include <array>
 #include <cassert>
@@ -95,6 +97,13 @@ RenderWindow::RenderWindow(RenderDevice &device, uint32_t width, uint32_t height
 RenderWindow::~RenderWindow()
 {
   dev_.unregisterWindow(this);
+
+  // A fence nobody collected. Closing it is only tidiness — the work it names
+  // is waited for below, device-wide.
+  if (frameFence_ >= 0) {
+    close(frameFence_);
+    frameFence_ = -1;
+  }
 
   const VkDevice dev = dev_.getDevice();
   if (dev == VK_NULL_HANDLE) return;
@@ -878,11 +887,17 @@ void RenderWindow::submitFrame(
     }
     }
   }
+  bool fenced = false;
   if (handover != VK_NULL_HANDLE) {
     // Exported while the submit is still pending, which is the point: the
     // sync_file becomes signalled when the work does, and the export resets
     // the semaphore so the next frame can signal it again.
-    exportTarget_->publishFence();
+    //
+    // The old fd goes first: a consumer that never collected the last one has
+    // said by not asking that it does not want it.
+    if (frameFence_ >= 0) close(frameFence_);
+    frameFence_ = exportTarget_->publishFence();
+    fenced = frameFence_ >= 0;
   }
 
   if (!windowed_) {
@@ -892,21 +907,25 @@ void RenderWindow::submitFrame(
     // it requires external synchronization of *every* queue on the device, and
     // a sibling window is submitting on another one right now.
     //
-    // Exporting waits for a different reason, and both, deliberately.
-    // Attaching the fence above is correct and costs nothing: a consumer that
-    // honours implicit synchronisation waits for exactly this work rather
-    // than for the whole queue. But it only helps if the consumer looks, and
-    // NVIDIA has never participated in dma_resv implicit synchronisation —
-    // it is why Wayland grew an explicit-sync protocol at all. Measured:
-    // dropping this wait and trusting the fence alone reads the surface
-    // before it is written roughly one run in five. So the fence goes on for
-    // drivers that respect it and the wait stays for those that do not.
+    // Exporting waits for a different reason, and the difference is who is
+    // told. Hanging the fence off the buffer costs nothing and is right for a
+    // consumer that honours implicit synchronisation — but it only helps if
+    // the consumer looks, and NVIDIA never has; it is why Wayland grew an
+    // explicit-sync protocol at all. Measured: trusting that fence alone reads
+    // the surface before it is written about one run in five.
     //
-    // This is the thing that has to go before anything animates: it stalls
-    // the worker every frame. Removing it needs the *consumer* told to wait,
-    // and wlroots exposes no acquire fence for a compositor-owned buffer
-    // today.
-    waitForAllFrames();
+    // So the wait is skipped only where the consumer has *said* it takes the
+    // fence and waits on it — `setExportFenceHonoured`, answered by whoever
+    // owns the buffers, and collected through `takeFrameFence`. Then the frame
+    // ends here with the work merely queued: this wait was ~4 ms of every
+    // client frame, taken on the compositor's event loop, where it delayed
+    // every other client's frame and every input event behind it.
+    //
+    // Everything else waits, and a readback most of all — it needs the pixels,
+    // not a promise.
+    if (!fenced || exportTarget_ == nullptr || !dev_.exportFenceHonoured()) {
+      waitForAllFrames();
+    }
   }
 
   // Next record/submit uses the other slot (CPU can overlap with this GPU work).
@@ -1243,6 +1262,13 @@ void RenderWindow::setExportTarget(canvas::DmabufImage *target)
   // Anything still running was recorded against the old destination.
   waitForAllFrames();
   exportTarget_ = target;
+}
+
+int RenderWindow::takeFrameFence()
+{
+  const int fd = frameFence_;
+  frameFence_ = -1;
+  return fd;
 }
 
 void RenderWindow::setGlyphAtlas(VkImageView view, VkSampler sampler)

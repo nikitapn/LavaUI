@@ -91,10 +91,22 @@ class CanvasRenderer {
 
   canvas::Engine &engine() { return engine_; }
 
+  /// The GPU everything here is on, for the timelines surfaces synchronise
+  /// through. -1 when this renderer never came up.
+  int drmFd() const { return drmFd_; }
+
+  /// Whether frames are handed over with a fence instead of a stall. False
+  /// when the compositor's own renderer cannot wait on one, in which case
+  /// canvas keeps blocking until each frame is finished — see
+  /// `RenderDevice::setExportFenceHonoured`.
+  bool fencedHandover() const { return fencedHandover_; }
+
  private:
   CanvasRenderer() = default;
 
   canvas::Engine engine_;
+  int drmFd_ = -1;
+  bool fencedHandover_ = false;
 };
 
 /// One client's window.
@@ -192,6 +204,23 @@ class CanvasSurface {
   /// declined it. See `ScrollUnclaimed` in the IDL.
   void scrollUnclaimed(float dx, float dy);
 
+  /// When the frame this surface is holding will have been written.
+  ///
+  /// The compositor renders a client's frame and hands the buffer to the
+  /// scene, and those used to be the same moment because canvas blocked until
+  /// the GPU was done — on the event loop, where it cost every other client
+  /// the same milliseconds. Now the frame ends at the submit and this is what
+  /// the scene is told to wait for instead: `wlr_scene_buffer`'s wait timeline
+  /// takes exactly this pair.
+  ///
+  /// A null timeline means there is nothing to wait for, because there was no
+  /// fence to be had and canvas waited itself.
+  struct FrameFence {
+    wlr_drm_syncobj_timeline *timeline = nullptr;
+    uint64_t point = 0;
+  };
+  FrameFence frameFence() const { return {fenceTimeline_, fencePoint_}; }
+
   /// PNG of the last frame, or a region of it. `w`/`h` <= 0 means the whole
   /// surface; `maxSide` > 0 downsamples so the longer encoded edge fits.
   bool capturePng(int32_t x, int32_t y, int32_t w, int32_t h, int32_t maxSide,
@@ -214,6 +243,10 @@ class CanvasSurface {
   /// Writes the resolve target to `$LAVA_CANVAS_DUMP` if it is set.
   void dumpIfRequested();
 
+  /// Moves the fence for the frame just submitted onto this surface's
+  /// timeline. Called after every frame; quiet when there is no fence.
+  void captureFence();
+
   CanvasRenderer &renderer_;
   uint32_t        windowId_ = 0;
   DmabufBuffer   *buffer_   = nullptr;
@@ -222,6 +255,11 @@ class CanvasSurface {
   /// Frames drawn as of the last `renderFromArena`, so a poll that found
   /// nothing published can be told from one that drew.
   uint64_t drawn_ = 0;
+  /// This surface's synchronisation timeline, made on the first frame that has
+  /// a fence to put on it, and the point that frame signals. One per surface
+  /// because a frame is a surface's, not the desktop's.
+  wlr_drm_syncobj_timeline *fenceTimeline_ = nullptr;
+  uint64_t fencePoint_ = 0;
 };
 
 }  // namespace lava

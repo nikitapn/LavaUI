@@ -116,6 +116,20 @@ class Engine {
   /// size, and usually larger; the frame sits in its top-left corner.
   const DmabufImage *exportedImage(uint32_t windowId) const;
 
+  /// Says that whoever shows these surfaces waits on each frame's fence, so a
+  /// frame can end at the submit instead of at the GPU. The promise is only
+  /// kept by collecting `takeFrameFence` after every frame — see
+  /// `RenderDevice::setExportFenceHonoured`.
+  void setExportFenceHonoured(bool honoured);
+
+  /// The sync_file for this surface's last exported frame, or -1 when there is
+  /// none and the frame is already finished. The caller owns the fd.
+  int takeFrameFence(uint32_t windowId);
+
+  /// Blocks until this surface's submitted frames have finished — the fallback
+  /// for a consumer that asked for a fence and could not be given one.
+  void waitForFrames(uint32_t windowId);
+
   /// Client: lays out and emits frames for another process to draw. No
   /// Vulkan, no window, no GPU.
   ///

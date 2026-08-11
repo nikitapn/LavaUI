@@ -97,6 +97,16 @@ class RenderWindow {
   /// the rectangle the consumer crops to. See `canvas::DmabufImage`.
   void setExportTarget(canvas::DmabufImage *target);
 
+  /// The sync_file for the frame this window last exported, or -1 when there
+  /// is none — either the device cannot make one or the frame was waited for
+  /// instead. **The caller owns the fd** and must close it.
+  ///
+  /// Valid to ignore: an uncollected fence is closed when the next frame
+  /// replaces it. What is not valid is to skip the wait *and* not collect,
+  /// which is why `setExportFenceHonoured` and this are two halves of one
+  /// promise.
+  int takeFrameFence();
+
   /// Rebinds the glyph atlas this window's batches sample. The atlas belongs
   /// to the shared `TextRenderer`, so growing it invalidates the binding in
   /// *every* window and each has to be told.
@@ -515,6 +525,9 @@ class RenderWindow {
   /// Where frames go when this window is neither presenting nor being read
   /// back on the CPU. Borrowed; see `setExportTarget`.
   canvas::DmabufImage *exportTarget_ = nullptr;
+  /// sync_file for the last exported frame, or -1. Owned here until a consumer
+  /// takes it — see `takeFrameFence`.
+  int frameFence_ = -1;
 
   VkSurfaceKHR             surface_   = VK_NULL_HANDLE;
   VkSwapchainKHR           swapchain_ = VK_NULL_HANDLE;

@@ -70,6 +70,7 @@ extern "C" {
 //    fix becomes a patched private copy of the header instead.
 #include <pixman.h>
 #include <time.h>
+#include <wlr/render/drm_syncobj.h>
 #include <wlr/types/wlr_damage_ring.h>
 #include <wlr/types/wlr_linux_dmabuf_v1.h>
 #include <wlr/util/addon.h>
