@@ -191,6 +191,7 @@ Runtime agent protocol (MCP/CLI, stable `sid`s, hit-testing): **`docs/agent.md`*
 | Window list / dock | `SubscribeWindows` in the IDL, `Sources/LavaDock/` |
 | Stream delivery to clients | `StreamPump` in `compositor/src/control_plane.cpp` |
 | Why a frame was late | `compositor/src/frame_probe.*` (`LAVA_FRAME_PROBE=1`) |
+| When a frame is drawn (pacing) | `SurfaceRegistry::animate`, `Output::on_frame` |
 | Frame handover / fences | `DmabufImage::publishFence`, `CanvasSurface::frameFence` |
 | Client open / Present / input stream | `Sources/LavaClient/` |
 | Perf scenarios | `Sources/LavaBench/`, `docs/performance.md` |
