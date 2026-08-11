@@ -224,11 +224,18 @@ bool CanvasSurface::resize(uint32_t width, uint32_t height) {
   const canvas::DmabufImage *image = renderer_.engine().exportedImage(windowId_);
   if (image == nullptr) return false;
 
-  // A fresh `wlr_buffer` around the new image. The old one is dropped *after*
-  // the new one exists, so the scene never holds a reference to nothing.
-  DmabufBuffer *replacement = DmabufBuffer::create(image);
-  if (buffer_ != nullptr) wlr_buffer_drop(&buffer_->base);
-  buffer_ = replacement;
+  // Usually the same image, and that is the point of the check: exported
+  // buffers are allocated in steps, so most of a drag's resizes land inside the
+  // buffer already here. A new `wlr_buffer` means the renderer on the other
+  // side imports a dmabuf again, and an import is not free — see
+  // `Application::exportCapacity`.
+  if (buffer_ == nullptr || buffer_->image != image) {
+    // The old one is dropped *after* the new one exists, so the scene never
+    // holds a reference to nothing.
+    DmabufBuffer *replacement = DmabufBuffer::create(image);
+    if (buffer_ != nullptr) wlr_buffer_drop(&buffer_->base);
+    buffer_ = replacement;
+  }
   width_ = width;
   height_ = height;
 
@@ -237,6 +244,10 @@ bool CanvasSurface::resize(uint32_t width, uint32_t height) {
   // client republishes, the window shows its old frame in a differently-sized
   // space — which is why the frame clears to nothing rather than to whatever
   // happened to be there.
+  //
+  // The caller still has work to do either way: `buffer()` has to go back to
+  // the scene (cheap when it is the same one), and the crop has to follow the
+  // new size — see `CanvasSurface::buffer`.
   return true;
 }
 

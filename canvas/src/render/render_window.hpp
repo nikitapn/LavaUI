@@ -90,8 +90,11 @@ class RenderWindow {
   /// because someone else is going to read the result.
   ///
   /// Offscreen windows only — a window that presents already has somewhere to
-  /// put its frames. `target` must be this window's size and must outlive it;
-  /// null goes back to the staging buffer. See `canvas::DmabufImage`.
+  /// put its frames. `target` must be at least this window's size and must
+  /// outlive it; null goes back to the staging buffer. Larger is ordinary:
+  /// exported buffers are allocated in steps so a resize can keep the one it
+  /// has, and the frame is blitted into the target's top-left corner, which is
+  /// the rectangle the consumer crops to. See `canvas::DmabufImage`.
   void setExportTarget(canvas::DmabufImage *target);
 
   /// Rebinds the glyph atlas this window's batches sample. The atlas belongs
@@ -161,9 +164,10 @@ class RenderWindow {
   /// its swapchain how big it is, and one that is composited elsewhere has to
   /// be *told*. True if anything was rebuilt.
   ///
-  /// An export target does not survive this — it was allocated at the old size
-  /// and `setExportTarget` refuses a mismatch. The caller allocates a new one
-  /// and sets it; see `Application::resizeExportedWindow`.
+  /// An export target does not survive this — a window mid-resize must not
+  /// draw into an image it no longer matches. The caller sets one again
+  /// afterwards, which is usually the *same* image at a size the window now
+  /// fills less of; see `Application::resizeExportedWindow`.
   bool resizeTo(uint32_t width, uint32_t height);
 
   // ─── Window ──────────────────────────────────────────────────────────────

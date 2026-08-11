@@ -58,14 +58,22 @@ public:
   /// paid for; this costs attachments and an image.
   uint32_t openExportedWindow(uint32_t width, uint32_t height);
 
-  /// Resizes an exported surface and re-exports it. True if it changed, in
-  /// which case `exportedImage` returns a *different* buffer and the consumer
-  /// has to be handed it — a dmabuf's size and stride are fixed at allocation,
-  /// so a new size is always a new buffer.
+  /// Resizes an exported surface, keeping its buffer if the new size still
+  /// fits. True if anything changed.
+  ///
+  /// `exportedImage` is what says whether the consumer has a new buffer to be
+  /// handed: exported buffers are allocated in steps, so most resizes land
+  /// inside the image already there and the pointer does not move. Only when a
+  /// window outgrows its buffer is a new one allocated — and only then does
+  /// anything have to import a dmabuf again.
   bool resizeExportedWindow(uint32_t windowId, uint32_t width, uint32_t height);
 
   /// A window's exported buffer, or null. Owned here; the consumer reads its
   /// descriptors and does not take them.
+  ///
+  /// At least the window's size and usually larger — see
+  /// `resizeExportedWindow`. The window's frame occupies its top-left corner,
+  /// so a consumer showing the whole image would show slack along two edges.
   const canvas::DmabufImage *exportedImage(uint32_t windowId) const;
 
   /// See `AppWindow::setClientSize`. No-op on a window that has a renderer.

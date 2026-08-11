@@ -777,6 +777,11 @@ void RenderWindow::submitFrame(
     // ours at all.
     exportTarget_->recordAcquire(cmd);
 
+    // Into the corner, at 1:1, rather than across the whole image: the target
+    // is at least this window's size and usually larger, because it is
+    // allocated in steps so that a resize can reuse it. Blitting to its full
+    // extent would scale the frame up into the slack; the consumer crops the
+    // slack away instead, and what it crops to is exactly this rectangle.
     VkImageBlit blit {
       .srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
       .srcOffsets = {{0, 0, 0},
@@ -784,8 +789,8 @@ void RenderWindow::submitFrame(
                       static_cast<int32_t>(extent_.height), 1}},
       .dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
       .dstOffsets = {{0, 0, 0},
-                     {static_cast<int32_t>(exportTarget_->width()),
-                      static_cast<int32_t>(exportTarget_->height()), 1}},
+                     {static_cast<int32_t>(extent_.width),
+                      static_cast<int32_t>(extent_.height), 1}},
     };
     vkCmdBlitImage(cmd,
                    resolveImage_, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
@@ -1227,11 +1232,13 @@ void RenderWindow::setExportTarget(canvas::DmabufImage *target)
       "setExportTarget: a window that presents already has a destination");
   }
   if (target != nullptr &&
-      (target->width() != extent_.width || target->height() != extent_.height)) {
-    // A mismatch would silently scale the frame — the blit would happily do
-    // it — and the consumer would show a stretched surface with no error
-    // anywhere. Refuse instead: whoever sized the two apart has a bug.
-    throw std::runtime_error("setExportTarget: target is not this window's size");
+      (target->width() < extent_.width || target->height() < extent_.height)) {
+    // Larger is allowed and is the normal case — exported buffers are
+    // allocated in steps so that a resize can keep the one it has, and the
+    // frame lands in the corner of it (see the blit in `submitFrame`, and the
+    // source box the consumer crops with). Smaller is not: the frame would be
+    // silently clipped, with no error anywhere.
+    throw std::runtime_error("setExportTarget: target is smaller than this window");
   }
   // Anything still running was recorded against the old destination.
   waitForAllFrames();

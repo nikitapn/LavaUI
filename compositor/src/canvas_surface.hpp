@@ -117,9 +117,11 @@ class CanvasSurface {
 
   /// Resizes the surface and tells its client to lay out again.
   ///
-  /// The buffer changes — a dmabuf's size and stride are fixed when it is
-  /// allocated, so a new size is a new buffer — which is why the caller has to
-  /// hand `buffer()` to the scene again afterwards. False if nothing changed.
+  /// The caller has to hand `buffer()` to the scene again afterwards and to
+  /// re-crop the node to the new size. Usually it is the same buffer: exported
+  /// images are allocated in steps, so a window that has not outgrown its own
+  /// buffer keeps it — see `Application::resizeExportedWindow`. False if
+  /// nothing changed.
   bool resize(uint32_t width, uint32_t height);
 
   /// Draws a list built here rather than one published by a client.
@@ -197,6 +199,12 @@ class CanvasSurface {
 
   /// The buffer, for `wlr_scene_buffer_create`. Owned here; the scene takes
   /// its own reference.
+  ///
+  /// Bigger than the surface, in general: it is allocated in steps so that a
+  /// resize can reuse it, and the frame occupies its top-left `width()` by
+  /// `height()` corner. A scene node showing it must be cropped to that — see
+  /// `crop_to_surface` in the compositor — or the window trails the slack of
+  /// its own buffer along two edges.
   wlr_buffer *buffer() { return &buffer_->base; }
 
   uint32_t width() const { return width_; }

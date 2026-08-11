@@ -799,6 +799,31 @@ struct ClientSurface {
   }
 };
 
+/// Shows the part of a canvas surface's buffer that is actually the surface.
+///
+/// An exported buffer is allocated in steps and is normally larger than the
+/// window it carries, so that a resize can reuse it rather than allocate —
+/// see `Application::exportCapacity`. The frame lands in its top-left corner,
+/// and everything past that corner is whatever the last larger frame left
+/// behind. This is what keeps that out of the scene: the source box says which
+/// part to sample, and the destination size says to draw it at its own size
+/// rather than stretched over the whole buffer.
+///
+/// Called wherever a node is given a buffer or a surface changes size. Cheap
+/// to repeat: wlroots compares before it damages anything.
+void crop_to_surface(wlr_scene_buffer *node, uint32_t width, uint32_t height) {
+  if (node == nullptr) return;
+  const wlr_fbox source{
+      .x = 0,
+      .y = 0,
+      .width = static_cast<double>(width),
+      .height = static_cast<double>(height),
+  };
+  wlr_scene_buffer_set_source_box(node, &source);
+  wlr_scene_buffer_set_dest_size(node, static_cast<int>(width),
+                                 static_cast<int>(height));
+}
+
 /// Which sides of a window a resize drag is pulling. A bitmask because a
 /// corner is two of them, and there is no third thing an edge can be.
 namespace edges {
@@ -1270,6 +1295,7 @@ class SurfaceRegistry : public lava::CompositorHost {
     if (surface.bar &&
         surface.bar->resize(width, lava::Decoration::kHeight)) {
       wlr_scene_buffer_set_buffer(surface.barNode, surface.bar->buffer());
+      crop_to_surface(surface.barNode, width, lava::Decoration::kHeight);
     }
     drawBar(surface);
   }
@@ -1482,8 +1508,10 @@ class SurfaceRegistry : public lava::CompositorHost {
       }
       wlr_log(WLR_INFO, "surface %u: shadow %ux%u, blur %.0f, offset %.0f",
               surface.id, width, height, shadowBlur_, shadowOffsetY_);
+      crop_to_surface(surface.shadowNode, width, height);
     } else if (surface.shadow->resize(width, height)) {
       wlr_scene_buffer_set_buffer(surface.shadowNode, surface.shadow->buffer());
+      crop_to_surface(surface.shadowNode, width, height);
     }
 
     // Drawn in the shadow surface's own coordinates: the window's rectangle
@@ -1704,6 +1732,7 @@ class SurfaceRegistry : public lava::CompositorHost {
       if (surface.bar &&
           surface.bar->resize(width, lava::Decoration::kHeight)) {
         wlr_scene_buffer_set_buffer(surface.barNode, surface.bar->buffer());
+        crop_to_surface(surface.barNode, width, lava::Decoration::kHeight);
       }
       drawBar(surface);
       return;
@@ -1716,10 +1745,14 @@ class SurfaceRegistry : public lava::CompositorHost {
     // new shadow. Rebuilt rather than stretched: a stretched one would soften
     // along one axis and not the other.
     applyShadow(surface);
+    // Usually the same buffer at a smaller or larger crop — a surface only
+    // hands back a different one when the window outgrew it.
     wlr_scene_buffer_set_buffer(surface.node, surface.canvas->buffer());
+    crop_to_surface(surface.node, width, height);
     // The bar spans the window, so it follows every width change.
     if (surface.bar && surface.bar->resize(width, lava::Decoration::kHeight)) {
       wlr_scene_buffer_set_buffer(surface.barNode, surface.bar->buffer());
+      crop_to_surface(surface.barNode, width, lava::Decoration::kHeight);
     }
     drawBar(surface);
     // The `Resize` the surface just queued for its client is sitting in the
@@ -2441,9 +2474,11 @@ class SurfaceRegistry : public lava::CompositorHost {
 
     surface->node = wlr_scene_buffer_create(parent, surface->canvas->buffer());
     if (surface->node == nullptr) return 0;
+    crop_to_surface(surface->node, width, height);
     if (surface->bar) {
       surface->barNode = wlr_scene_buffer_create(parent, surface->bar->buffer());
       if (surface->barNode == nullptr) return 0;
+      crop_to_surface(surface->barNode, width, lava::Decoration::kHeight);
     }
     applyCorners(*surface);
     place(*surface);
@@ -2577,6 +2612,8 @@ uint32_t SurfaceRegistry::adoptWindow(FramedWindow *window,
     if (surface->bar) {
       surface->barNode = wlr_scene_buffer_create(
           workspaces_->tree[surface->workspace], surface->bar->buffer());
+      crop_to_surface(surface->barNode, surface->width,
+                      lava::Decoration::kHeight);
     }
   }
 

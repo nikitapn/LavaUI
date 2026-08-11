@@ -215,6 +215,22 @@ struct Application::Impl
     }
   }
 
+  /// How large a buffer a window `size` pixels across is exported into.
+  ///
+  /// Exported buffers are allocated in steps rather than at the window's exact
+  /// size, because a resize cannot reuse one: a dmabuf's stride is settled when
+  /// it is allocated, so every new size would otherwise be a new buffer — and a
+  /// drag is a new size every frame. Stepping makes a drag allocate once per
+  /// step it crosses instead of once per frame, at the cost of a window
+  /// occupying the corner of a buffer that is usually slightly larger than it
+  /// is. See `RenderWindow::setExportTarget`, which is what allows the two to
+  /// differ, and the consumer's crop, which is what hides the difference.
+  static uint32_t exportCapacity(uint32_t size)
+  {
+    constexpr uint32_t kStep = 128;
+    return ((size + kStep - 1) / kStep) * kStep;
+  }
+
   /// Opens one more surface on the device `initExported` brought up.
   ///
   /// Everything expensive and shared — the device, the pipelines, the glyph
@@ -228,7 +244,8 @@ struct Application::Impl
       return 0;
     }
     try {
-      auto image = canvas::DmabufImage::create(device, w, h, exportModifiers);
+      auto image = canvas::DmabufImage::create(
+        device, exportCapacity(w), exportCapacity(h), exportModifiers);
       if (!image) return 0;
 
       const uint32_t id = nextWindowId++;
@@ -248,12 +265,19 @@ struct Application::Impl
     }
   }
 
-  /// Resizes an exported surface, and re-exports it.
+  /// Resizes an exported surface, reusing its buffer where it can.
   ///
-  /// The image cannot be reused: a dmabuf's size, stride and modifier are
-  /// fixed when it is allocated, so a new size is a new buffer and the
-  /// consumer has to be handed it. That is why this returns a bool rather
-  /// than resizing in place — the caller has a `wlr_buffer` to replace.
+  /// A dmabuf's size and stride are settled when it is allocated, so a window
+  /// that has outgrown its buffer needs a new one. A window that has not does
+  /// not: it renders at its new size into the same image and occupies less of
+  /// it, which is why the buffer usually survives a resize and why a drag no
+  /// longer allocates sixty buffers a second. `exportedImage` is how a caller
+  /// tells the two cases apart — the pointer only changes in the first.
+  ///
+  /// Grow-only, deliberately. Giving memory back when a window shrinks would
+  /// mean allocating on the way down as well as on the way up, which is the
+  /// cost this exists to avoid, and the most a window can hold on to is one
+  /// step in each direction.
   ///
   /// The client is told separately, by whoever owns the window, with a
   /// `Resize`. It has to re-lay-out before its next frame means anything.
@@ -263,18 +287,33 @@ struct Application::Impl
     if (window == nullptr || !window->hasRenderer()) return false;
     auto it = exportImages.find(windowId);
     if (it == exportImages.end()) return false;
+
+    // Allocated before anything is torn down, so a failure here leaves the
+    // window exactly as it was rather than half resized with nowhere to draw.
+    std::unique_ptr<canvas::DmabufImage> replacement;
+    if (it->second == nullptr || it->second->width() < w ||
+        it->second->height() < h) {
+      replacement = canvas::DmabufImage::create(
+        device, exportCapacity(w), exportCapacity(h), exportModifiers);
+      if (!replacement) {
+        std::cerr << "resizeExportedWindow: could not export " << w << "x" << h
+                  << '\n';
+        return false;
+      }
+    }
+
     if (!window->renderWindow().resizeTo(w, h)) return false;
 
-    auto image = canvas::DmabufImage::create(device, w, h, exportModifiers);
-    if (!image) {
-      std::cerr << "resizeExportedWindow: could not export " << w << "x" << h
-                << '\n';
-      return false;
+    if (replacement) {
+      // The old image is released only after the window points at the new one,
+      // so nothing is still able to name it.
+      window->renderWindow().setExportTarget(replacement.get());
+      it->second = std::move(replacement);
+    } else {
+      // `resizeTo` drops the target rather than keep pointing at an image the
+      // window no longer matches, so even the buffer being kept is handed back.
+      window->renderWindow().setExportTarget(it->second.get());
     }
-    window->renderWindow().setExportTarget(image.get());
-    // After the window points at the new one, so the old is released with
-    // nothing still able to name it.
-    it->second = std::move(image);
 
     // The producer has no surface to measure and learns its size only by being
     // told. Queued here rather than by the caller so no exported resize can
