@@ -1015,7 +1015,9 @@ extension LeafNode {
 }
 
 extension StackNode {
-    var isRendererInteractive: Bool { hoverFill != nil || onHover != nil }
+    var isRendererInteractive: Bool {
+        hoverFill != nil || onHover != nil || onClick != nil || onPointer != nil
+    }
 }
 
 // MARK: - Stack container (HStack / VStack only)
@@ -1027,6 +1029,9 @@ final class StackNode: YogaBoxNode {
     var fillColor: Color?
     var hoverFill: Color?
     var onClick: (() -> Void)?
+    /// Button-aware press (tray right-click, etc.). Prefer over `onClick` when
+    /// both are set — see `hitWalk`.
+    var onPointer: ((_ mods: Int32, _ button: Int32) -> Void)?
     var onHover: ((Bool) -> Void)?
     /// Corner radius for `fillColor`. Set via `.cornerRadius()` modifiers.
     var cornerRadius: Float = 0
@@ -1037,11 +1042,13 @@ final class StackNode: YogaBoxNode {
     init(
         label: String, direction: FlexDirection, style: StackStyle,
         content: any AnyViewNode, onClick: (() -> Void)?,
+        onPointer: ((_ mods: Int32, _ button: Int32) -> Void)?,
         onHover: ((Bool) -> Void)?
     ) {
         self.direction = direction
         self.contentNode = content
         self.onClick = onClick
+        self.onPointer = onPointer
         self.onHover = onHover
         super.init(label: label)
         YGNodeStyleSetFlexDirection(yogaStorage, direction.yoga)
@@ -1054,10 +1061,13 @@ final class StackNode: YogaBoxNode {
 
     func update(
         style: StackStyle, contentView: some View,
-        onClick: (() -> Void)?, onHover: ((Bool) -> Void)?
+        onClick: (() -> Void)?,
+        onPointer: ((_ mods: Int32, _ button: Int32) -> Void)?,
+        onHover: ((Bool) -> Void)?
     ) {
         apply(style)
         self.onClick = onClick
+        self.onPointer = onPointer
         self.onHover = onHover
         configureHover()
         contentNode = ViewGraph.reconcile(contentNode, with: contentView)
@@ -1871,10 +1881,17 @@ public final class LayoutHost {
                     return click
                 }
             }
-            if let stack = node as? StackNode, let click = stack.onClick,
+            if let stack = node as? StackNode,
                x >= nx, x < nx + nw, y >= ny, y < ny + nh
             {
-                return click
+                // Pointer first: tray icons need right-click → ContextMenu
+                // without losing left-click Activate.
+                if let pointer = stack.onPointer {
+                    return { pointer(mods, button) }
+                }
+                if let click = stack.onClick {
+                    return click
+                }
             }
             if let press = box.onBoxPress,
                x >= nx, x < nx + nw, y >= ny, y < ny + nh

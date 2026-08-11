@@ -312,27 +312,35 @@ struct TaskbarView: View {
 
     @ViewBuilder
     private func trayIcon(_ item: StatusNotifierTray.TrayItem) -> some View {
-        let activate: () -> Void = { tray?.activate(item) }
-        // Fixed 22pt so a large IconPixmap does not blow the strip height.
-        if let image = item.image {
-            Image(
-                image,
-                width: .pt(22), height: .pt(22),
-                contentMode: .fit,
-                onClick: activate
-            )
-            .agentId("tray.\(item.key)")
-        } else {
-            Text(
-                item.fallback,
-                color: Theme.current.textPrimary,
-                onClick: activate
-            )
-            .padding(4)
-            .hoverBackground(Theme.current.hover)
-            .cornerRadius(3)
-            .agentId("tray.\(item.key)")
+        // Stack owns the hit target so left and right both work: left is
+        // Activate (or ContextMenu when ItemIsMenu), right is always
+        // ContextMenu — what nm-applet / Blueman expect from a tray.
+        HStack(
+            padding: 0,
+            alignment: .center,
+            onPointer: { _, button in
+                if button == PointerButton.right {
+                    tray?.contextMenu(item)
+                } else if button == PointerButton.left {
+                    tray?.activate(item)
+                }
+            }
+        ) {
+            // Fixed 22pt so a large IconPixmap does not blow the strip height.
+            if let image = item.image {
+                Image(
+                    image,
+                    width: .pt(22), height: .pt(22),
+                    contentMode: .fit
+                )
+            } else {
+                Text(item.fallback, color: Theme.current.textPrimary)
+                    .padding(4)
+            }
         }
+        .hoverBackground(Theme.current.hover)
+        .cornerRadius(3)
+        .agentId("tray.\(item.key)")
     }
 
     /// The strip's open-menu state, with the input region attached to it.
