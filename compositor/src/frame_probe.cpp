@@ -124,11 +124,17 @@ void FrameProbe::report() {
     // itself; the stages below are where it came from.
     std::string line;
     char buffer[256];
-    std::snprintf(buffer, sizeof(buffer),
-                  "frame probe surface %u: %.1f fps, gap mean %.1f max %.1f ms",
-                  id, double(surface.frames) / seconds, surface.gap.mean(),
-                  surface.gap.max());
+    std::snprintf(buffer, sizeof(buffer), "frame probe surface %u: %.1f fps",
+                  id, double(surface.frames) / seconds);
     line = buffer;
+    // Only when there were gaps to average. A surface that draws once a second
+    // has every gap counted as idle, and printing the empty average as
+    // "gap mean 0.0 max 0.0" reads like a stall rather than like a clock.
+    if (surface.gap.count > 0) {
+      std::snprintf(buffer, sizeof(buffer), ", gap mean %.1f max %.1f ms",
+                    surface.gap.mean(), surface.gap.max());
+      line += buffer;
+    }
 
     for (size_t i = 0; i < static_cast<size_t>(Stage::Count); ++i) {
       const Span &span = surface.stage[i];

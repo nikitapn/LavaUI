@@ -4714,8 +4714,19 @@ void Server::on_cursor_axis(wl_listener *listener, void *data) {
     double sx = 0, sy = 0;
     if (ClientSurface *over =
             server->surfaces->at(server->cursor->x, server->cursor->y, sx, sy)) {
-      const float notches =
-          static_cast<float>(-event->delta / 15.0);  // ~15 units per notch
+      // One detent is one notch, whatever units the device counts it in.
+      // `delta` is 15 per detent by convention for a wheel and pixels of
+      // travel for a touchpad, so on its own it cannot say which it is
+      // looking at; `delta_discrete` is 120 per detent and only a device
+      // with detents sends it. Preferring it means a high-resolution wheel
+      // covers the same distance per detent as an old one instead of moving
+      // in eighths of it, while a touchpad keeps its continuous feel.
+      constexpr double kUnitsPerDetent    = 15.0;
+      constexpr double kDiscretePerDetent = 120.0;
+      const float notches = static_cast<float>(
+          event->delta_discrete != 0
+              ? -event->delta_discrete / kDiscretePerDetent
+              : -event->delta / kUnitsPerDetent);
       const bool horizontal =
           event->orientation == WL_POINTER_AXIS_HORIZONTAL_SCROLL;
       // The renderer may take this notch itself — a scrollable node under the

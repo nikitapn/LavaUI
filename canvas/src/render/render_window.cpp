@@ -1906,11 +1906,17 @@ bool RenderWindow::scrollSceneNode(float pointerX, float pointerY,
                                    float deltaX, float deltaY,
                                    bool ignoreWheelClaims)
 {
-  // One notch of a wheel. Chosen to match what a line of text costs to read
+  // One detent of a wheel. Chosen to match what a line of text costs to read
   // past rather than derived from anything — a scroll that moves by a
   // fraction of a line feels broken, and one that moves by a screen feels
   // like a page key.
-  constexpr float kPixelsPerNotch = 48.f;
+  //
+  // 72 rather than 48 because both input paths now deliver one notch per
+  // detent (see the scroll callback in `app_window.cpp`). GLFW's Wayland
+  // backend used to hand this 1.5 per detent, so windowed apps have always
+  // travelled 72 px and only client-mode apps travelled 48; this is the
+  // number that was already on screen, now written down where it is applied.
+  constexpr float kPixelsPerNotch = 72.f;
 
   // The chain under the pointer, innermost first. A wheel belongs to the
   // innermost thing that wants it, and if that thing cannot use it, to the

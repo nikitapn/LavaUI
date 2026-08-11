@@ -439,7 +439,23 @@ void AppWindow::installGlfwCallbacks()
     glfwSetScrollCallback(win, [](GLFWwindow *w, double dx, double dy) {
       auto *self = static_cast<AppWindow *>(glfwGetWindowUserPointer(w));
       if (!self) return;
-      self->scroll(static_cast<float>(dx), static_cast<float>(dy));
+      // A notch means one wheel detent, and GLFW does not deliver one
+      // consistently. Its Wayland backend scales the protocol's axis value by
+      // 1/10, and the protocol carries 15 units per detent, so a detent
+      // arrives as 1.5; X11 sends 1.0. Left alone, the same wheel scrolls half
+      // again as far in a windowed app as in a client of the compositor, and
+      // anything that rounds a notch to an integer — LavaTerm's lines per
+      // notch — silently doubles instead.
+      //
+      // Normalized here rather than at each reader, so `kPixelsPerNotch` and
+      // every other per-notch number mean the same thing whichever way the app
+      // is run.
+      constexpr double kWaylandUnitsPerDetent = 1.5;
+      const double scale = glfwGetPlatform() == GLFW_PLATFORM_WAYLAND
+                               ? 1.0 / kWaylandUnitsPerDetent
+                               : 1.0;
+      self->scroll(static_cast<float>(dx * scale),
+                   static_cast<float>(dy * scale));
     });
 
     glfwSetCharCallback(win, [](GLFWwindow *w, unsigned int codepoint) {

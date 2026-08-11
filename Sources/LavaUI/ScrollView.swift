@@ -147,10 +147,10 @@ final class ScrollNode: YogaBoxNode {
     /// half a screen of travel against a producer that has stopped dead.
     private static let overscanFraction: Float = 0.5
 
-    /// Floor for the above, in pixels: four wheel notches at the renderer's
-    /// 48px step. A fraction alone would leave a 100px pane 50px of slack,
+    /// Floor for the above, in pixels: four wheel detents at the renderer's
+    /// 72px step. A fraction alone would leave a 100px pane 50px of slack,
     /// which a single flick outruns.
-    private static let minimumOverscan: Float = 192
+    private static let minimumOverscan: Float = 288
 
     /// The span of content this frame is *trying* to cover, in the same
     /// coordinates as `scrollOffset`.
