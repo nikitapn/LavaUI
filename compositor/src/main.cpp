@@ -1,5 +1,6 @@
 #include <algorithm>
 #include <cctype>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cstddef>
@@ -2164,12 +2165,16 @@ class SurfaceRegistry : public lava::CompositorHost {
   /// a scroll survive a stopped client.
   void pump(ClientSurface &surface) {
     if (!surface.canvas) return;  // a Wayland window draws itself
+    // The events go out now — an app should hear about a click at the speed it
+    // happened, not at the speed the screen refreshes.
     drain(surface);
-    if (!surface.canvas->takeInternalRepaint()) return;
-    if (surface.canvas->redraw()) damage(surface);
-    // The redraw steps the scene, which may itself have produced events and
-    // may want another frame.
-    drain(surface);
+    // The frame does not. Drawing here would put one unpaced frame in front of
+    // every paced one, and buy nothing for it: a pointer event arriving in the
+    // middle of a refresh interval is shown at the end of that interval either
+    // way. On a touchpad emitting a hundred events a second, it was buying a
+    // hundred renders a second whose only effect was to land at a different
+    // phase than the ones around them. The repaint the renderer asked for is
+    // still pending; `stepAnimations` takes it at the next vblank.
     animate();
   }
 
@@ -2193,7 +2198,59 @@ class SurfaceRegistry : public lava::CompositorHost {
   /// new frame and does not know a fade is happening. Drawing once and
   /// stopping is what "clicks work but there is no hover" looks like.
   void animate() {
-    if (animation_ != nullptr) wl_event_source_timer_update(animation_, kFrameMs);
+    // Asks the display for a frame rather than setting a clock of our own.
+    //
+    // A timer here is wrong however carefully it is tuned: 16 ms against a
+    // 75 Hz panel is 62.5 content updates a second for 75 chances to show one,
+    // so a quarter of the frames shown repeat the one before and the rest
+    // arrive at a phase that walks steadily through the refresh interval. That
+    // reads as judder even though every frame was cheap and none were late,
+    // which is exactly the shape of "the numbers look fine and it looks bad".
+    // Scheduling an output frame instead puts the step in `Output::on_frame`:
+    // one per vblank, at whatever rate the panel actually runs, sampled at the
+    // moment it will be scanned out.
+    bool scheduled = false;
+    if (server_ != nullptr) {
+      for (Output *output : server_->outputs) {
+        if (output->wlr == nullptr || !output->wlr->enabled) continue;
+        wlr_output_schedule_frame(output->wlr);
+        scheduled = true;
+      }
+    }
+    // Nothing to pace against — a headless run with no output, or every screen
+    // disabled. The timer stays as the fallback so an animation still finishes
+    // rather than freezing halfway through an ease.
+    if (!scheduled && animation_ != nullptr) {
+      wl_event_source_timer_update(animation_, kFrameMs);
+    }
+  }
+
+  /// Carries every renderer-owned animation forward one step and redraws the
+  /// surfaces that moved. True while any of them still wants another frame.
+  ///
+  /// Called once per output frame. The redraws it does land in the buffers the
+  /// commit that follows will pick up, so a step and the frame that shows it
+  /// are the same vblank rather than consecutive ones.
+  bool stepAnimations() {
+    // Two screens mean two frame events per refresh, and the second would
+    // charge every surface a full redraw for the microseconds since the first.
+    // One step per display tick, no matter how many screens are watching.
+    const int64_t now = std::chrono::duration_cast<std::chrono::microseconds>(
+                            std::chrono::steady_clock::now().time_since_epoch())
+                            .count();
+    if (lastStepAt_ != 0 && now - lastStepAt_ < kMinStepUs) return animating_;
+    lastStepAt_ = now;
+
+    bool again = false;
+    for (auto &surface : surfaces_) {
+      if (!surface->canvas) continue;
+      if (!surface->canvas->takeInternalRepaint()) continue;
+      if (surface->canvas->redraw()) damage(*surface);
+      drain(*surface);
+      again = true;
+    }
+    animating_ = again;
+    return again;
   }
 
   /// Tells wlroots the surface's contents changed, and when they will have
@@ -2232,6 +2289,11 @@ class SurfaceRegistry : public lava::CompositorHost {
     ClientSurface *surface = find(id);
     if (surface == nullptr || !surface->canvas) return;
     surface->canvas->scrollUnclaimed(dx, dy);
+    // This is the one scroll that does not arrive as a pointer event, so
+    // nothing has scheduled a frame for it. Every other input path pumps; a
+    // notch a widget declined has to ask for its own, or the ease it just
+    // aimed sits still until some unrelated event wakes the loop.
+    animate();
   }
 
   void heartbeat(uint32_t id) override {
@@ -2455,6 +2517,9 @@ class SurfaceRegistry : public lava::CompositorHost {
       return 0;
     }
     surface->id = nextId_++;
+    // So the surface's whole frame — the arena poll, the render, the scene
+    // handover — reports under the number everything else calls it by.
+    surface->canvas->setReportedId(surface->id);
     surface->width = width;
     surface->height = height;
     surface->workspace = workspace;
@@ -2558,24 +2623,22 @@ class SurfaceRegistry : public lava::CompositorHost {
   /// pixels apart do not overlap each other's band. See `borderAt`.
   static constexpr double kGrab = 6.0;
 
-  /// One frame at ~60Hz, and only while something is actually animating —
-  /// re-armed from `on_animation` rather than left running.
+  /// One frame at ~60Hz. Only the fallback for a run with no output at all;
+  /// a desktop with a screen paces on that screen — see `animate`.
   static constexpr int kFrameMs = 16;
+  /// Closest two animation steps may be, whatever asks for them. Two outputs
+  /// send two frame events per refresh and this is what keeps that from
+  /// costing two redraws; 2 ms leaves headroom to 500 Hz.
+  static constexpr int64_t kMinStepUs = 2000;
   wl_event_source *animation_ = nullptr;
+  int64_t lastStepAt_ = 0;
+  bool animating_ = false;
 
   static int on_animation(void *data) {
     auto *self = static_cast<SurfaceRegistry *>(data);
-    bool again = false;
-    for (auto &surface : self->surfaces_) {
-      if (!surface->canvas) continue;
-      if (!surface->canvas->takeInternalRepaint()) continue;
-      if (surface->canvas->redraw()) self->damage(*surface);
-      self->drain(*surface);
-      again = true;
-    }
     // Re-armed only while something wanted this frame. An idle desktop stops
     // asking, which is the difference between an animation and a busy loop.
-    if (again) self->animate();
+    if (self->stepAnimations()) self->animate();
     return 0;
   }
 };
@@ -2982,6 +3045,12 @@ Output::~Output() {
 
 void Output::on_frame(wl_listener *listener, void *) {
   auto *output = owner_of<Output>(listener);
+  // Renderer-owned motion — an eased scroll, a hover tint fading in — steps
+  // here, before the composite, so that its clock is the display's and the
+  // buffer it produces goes out in *this* commit rather than waiting for the
+  // next one. See `SurfaceRegistry::animate` for why not a timer.
+  const bool animating = output->server->surfaces != nullptr &&
+                         output->server->surfaces->stepAnimations();
   // Composite is surface 0 in the probe: it is the desktop's own frame rather
   // than any one client's, and it is where a wait that was moved rather than
   // removed would end up — the scene waits for a client's acquire fence here,
@@ -2994,6 +3063,10 @@ void Output::on_frame(wl_listener *listener, void *) {
   timespec now{};
   clock_gettime(CLOCK_MONOTONIC, &now);
   wlr_scene_output_send_frame_done(output->scene_output, &now);
+  // Nothing else will ask: the scene is composited and, as far as wlroots is
+  // concerned, settled. An animation that is still running has to keep the
+  // output awake itself or it stops one frame in.
+  if (animating) wlr_output_schedule_frame(output->wlr);
 }
 
 void Output::on_request_state(wl_listener *listener, void *data) {

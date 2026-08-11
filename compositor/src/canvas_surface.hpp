@@ -119,6 +119,17 @@ class CanvasSurface {
   CanvasSurface(const CanvasSurface &)            = delete;
   CanvasSurface &operator=(const CanvasSurface &) = delete;
 
+  /// The number this surface answers to in the frame probe.
+  ///
+  /// Two counters run here and they drift apart: the canvas window id counts
+  /// every window the engine opened — shadows and title bars included — while
+  /// a client surface id counts only the windows a client asked for. Left
+  /// alone, a surface files half its report under one number and half under
+  /// the other, and the half nobody can look up is the half with the render
+  /// cost in it. So the owner names the surface once, here.
+  void setReportedId(uint32_t id) { reportedId_ = id; }
+  uint32_t reportedId() const { return reportedId_ != 0 ? reportedId_ : windowId_; }
+
   /// Rounds this surface's corners, in pixels; 0 is square.
   ///
   /// `top`/`bottom` are which pair to round, because a decorated window is two
@@ -249,6 +260,7 @@ class CanvasSurface {
 
   CanvasRenderer &renderer_;
   uint32_t        windowId_ = 0;
+  uint32_t        reportedId_ = 0;
   DmabufBuffer   *buffer_   = nullptr;
   uint32_t        width_    = 0;
   uint32_t        height_   = 0;

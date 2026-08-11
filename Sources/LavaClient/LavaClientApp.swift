@@ -552,10 +552,24 @@ public enum LavaClient {
         // tree has seen it", not "the socket has".
         input.onArrival = {
             MainQueue.async {
+                var wantsFrame = false
                 for event in input.drain() {
+                    let kind = InputEventKind(rawValue: event.kind) ?? .none
+                    // Read-back, not news. `.nodeHover` and `.nodeScroll` are
+                    // the renderer telling us what it already drew, and the
+                    // compositor emits one of each per frame of an eased
+                    // scroll — so treating them as repaint requests makes this
+                    // process publish a full draw list for every frame the
+                    // compositor drew *without* it, which is the whole point
+                    // of renderer-owned motion given away. Both invalidate for
+                    // themselves where they have to: `HoverState.set` documents
+                    // that tints have already repainted, and
+                    // `ScrollNode.adoptRendererOffset` asks for layout when
+                    // lazy content has to mount or an indicator has to move.
+                    if kind != .nodeHover, kind != .nodeScroll { wantsFrame = true }
                     editor.postInputEvent(
                         LavaUI.InputEvent(
-                            kind: InputEventKind(rawValue: event.kind) ?? .none,
+                            kind: kind,
                             x: event.x, y: event.y,
                             button: event.button, mods: event.mods
                         )
@@ -565,7 +579,7 @@ public enum LavaClient {
                 // consumes it and then asks invalidation what to do — but the
                 // frame it produces has to be asked for, because nothing in
                 // the queue does it.
-                ViewInvalidation.markNeedsRedraw()
+                if wantsFrame { ViewInvalidation.markNeedsRedraw() }
             }
         }
 

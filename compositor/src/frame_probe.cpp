@@ -32,8 +32,15 @@ struct Surface {
   Span gap;
   uint64_t frames = 0;
   uint64_t inputs = 0;
+  uint64_t idled = 0;
   int64_t lastFrameAt = 0;
 };
+
+/// Above this, a gap is a surface that had nothing to draw rather than a
+/// surface that was late, and averaging the two together answers neither
+/// question — a single idle second buries sixty real frames. Counted
+/// separately as `idle` so the report still says a quiet spell happened.
+constexpr int64_t kIdleGapUs = 250'000;
 
 /// Ordered, so the report reads in surface order rather than in whatever order
 /// a hash table happens to hold. There are a handful of surfaces.
@@ -73,7 +80,14 @@ void FrameProbe::frame(uint32_t surfaceId) {
   const int64_t at = now();
   // The first frame after a quiet spell has no meaningful gap — nothing was
   // owed one — so only consecutive frames are counted.
-  if (surface.lastFrameAt != 0) surface.gap.add(at - surface.lastFrameAt);
+  if (surface.lastFrameAt != 0) {
+    const int64_t gap = at - surface.lastFrameAt;
+    if (gap > kIdleGapUs) {
+      ++surface.idled;
+    } else {
+      surface.gap.add(gap);
+    }
+  }
   surface.lastFrameAt = at;
   ++surface.frames;
 }
@@ -97,7 +111,14 @@ void FrameProbe::report() {
   lastReport() = at;
 
   for (auto &[id, surface] : surfaces()) {
-    if (surface.frames == 0 && surface.inputs == 0) continue;
+    // Anything at all, not just frames: a surface whose stages ran but whose
+    // frames were counted elsewhere is exactly the surface worth looking at,
+    // and skipping it is how a client's render cost goes missing entirely.
+    bool worked = surface.frames != 0 || surface.inputs != 0;
+    for (size_t i = 0; !worked && i < static_cast<size_t>(Stage::Count); ++i) {
+      worked = surface.stage[i].count != 0;
+    }
+    if (!worked) continue;
 
     // Frames and the gaps between them first, because that is the stutter
     // itself; the stages below are where it came from.
@@ -120,6 +141,11 @@ void FrameProbe::report() {
     if (surface.inputs > 0) {
       std::snprintf(buffer, sizeof(buffer), ", %llu input",
                     static_cast<unsigned long long>(surface.inputs));
+      line += buffer;
+    }
+    if (surface.idled > 0) {
+      std::snprintf(buffer, sizeof(buffer), ", %llu idle",
+                    static_cast<unsigned long long>(surface.idled));
       line += buffer;
     }
     wlr_log(WLR_INFO, "%s", line.c_str());

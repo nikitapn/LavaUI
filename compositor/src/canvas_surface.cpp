@@ -329,7 +329,7 @@ bool CanvasSurface::renderFromArena() {
   // re-damage to show pixels that never changed.
   const int64_t startedArena = FrameProbe::on() ? FrameProbe::now() : 0;
   const bool published = renderer_.engine().pollDrawArena(windowId_);
-  FrameProbe::record(windowId_, FrameProbe::Stage::Arena, startedArena);
+  FrameProbe::record(reportedId(), FrameProbe::Stage::Arena, startedArena);
   if (!published) return false;
 
   const int64_t startedRender = FrameProbe::on() ? FrameProbe::now() : 0;
@@ -338,7 +338,7 @@ bool CanvasSurface::renderFromArena() {
     return false;
   }
   captureFence();
-  FrameProbe::record(windowId_, FrameProbe::Stage::Render, startedRender);
+  FrameProbe::record(reportedId(), FrameProbe::Stage::Render, startedRender);
   drawn_ = renderer_.engine().frameCounter(windowId_);
   dumpIfRequested();
   return true;
@@ -378,7 +378,7 @@ bool CanvasSurface::redraw() {
   const int64_t started = FrameProbe::on() ? FrameProbe::now() : 0;
   if (!renderer_.engine().renderFrame(windowId_)) return false;
   captureFence();
-  FrameProbe::record(windowId_, FrameProbe::Stage::Redraw, started);
+  FrameProbe::record(reportedId(), FrameProbe::Stage::Redraw, started);
   drawn_ = renderer_.engine().frameCounter(windowId_);
   return true;
 }
