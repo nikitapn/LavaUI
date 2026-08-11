@@ -72,17 +72,64 @@ struct LauncherView: View {
 /// user to aim at something before saying what they want.
 private struct SearchField: View {
     var body: some View {
-        VStack(spacing: 0) {
-            TextField(
-                text: Binding(model, \.query),
-                placeholder: "Search",
-                autoFocus: true,
-                onSubmit: { model.launchSelected() }
-            )
-            .padding(12)
-            .background(Theme.current.panel)
-            .cornerRadius(10)
+        let surface = Theme.current.inset
+        let outline = Theme.current.textSecondary.opacity(0.78)
+
+        // The full-width row centres the bounded field on the same axis as
+        // LazyVGrid. Two nested fills make a crisp rounded outline without a
+        // separate stroke primitive.
+        HStack(width: .pct(100), alignment: .center) {
+            Spacer()
+            HStack(
+                width: .pt(Grid.searchWidth), height: .pt(50), padding: 2,
+                alignment: .center
+            ) {
+                HStack(
+                    flexGrow: 1, height: .pt(46), padding: 10,
+                    alignment: .center, spacing: 8
+                ) {
+                    Magnifier(color: Theme.current.textSecondary, surface: surface)
+                    TextField(
+                        text: Binding(model, \.query),
+                        placeholder: "What do you want to launch?",
+                        autoFocus: true,
+                        focusRing: FocusRingStyle.none,
+                        onSubmit: { model.launchSelected() }
+                    )
+                    .flexGrow(1)
+                    .frame(height: .pct(100))
+                }
+                .background(surface)
+                .cornerRadius(23)
+            }
+            .background(outline)
+            .cornerRadius(25)
+            Spacer()
         }
+    }
+}
+
+/// Drawn rather than borrowed from a font: the mark stays circular and crisp
+/// at every content scale, independent of which symbol glyphs are installed.
+private struct Magnifier: View {
+    let color: Color
+    let surface: Color
+
+    var body: some View {
+        Canvas(
+            label: "Search icon", width: .pt(24), height: .pt(24),
+            paint: { draw, frame in
+                let cx = frame.x + 10
+                let cy = frame.y + 10
+                draw.circle(cx: cx, cy: cy, radius: 7.5, color: color)
+                draw.circle(cx: cx, cy: cy, radius: 5.5, color: surface)
+                draw.line(
+                    x1: cx + 5, y1: cy + 5,
+                    x2: frame.x + 21, y2: frame.y + 21,
+                    color: color, width: 2
+                )
+            }
+        )
     }
 }
 

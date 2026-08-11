@@ -86,6 +86,10 @@ enum Grid {
     static let iconSize: Float = 64
     /// Side padding around the grid, which the column count is measured after.
     static let padding: Float = 16
+    /// A deliberate reading width rather than the full screen. The app grid
+    /// is centred below it, so the two controls share one visual axis even on
+    /// an ultrawide display.
+    static let searchWidth: Float = 480
 
     /// How many cards fit across a surface `width` wide. At least one, so a
     /// silly window size cannot divide by zero.
