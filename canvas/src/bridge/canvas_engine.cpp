@@ -6,6 +6,7 @@
 #include "application.hpp"
 #include "menu/app_menu.hpp"
 #include "menu/menu_import.hpp"
+#include "menu/status_notifier.hpp"
 #include "render/font_key.hpp"
 #include "render/svg_image.hpp"
 #include "window/canvas_window.hpp"
@@ -35,6 +36,8 @@ struct Engine::Impl {
   /// whoever draws a panel, so a menu importer has the same lifetime as the
   /// engine that polls it — see `MenuImportHost`.
   MenuImportHost menuImport;
+  /// System tray: StatusNotifierWatcher. Same lifetime rationale as menus.
+  StatusNotifierHost statusNotifier;
 
   /// Client-mode event wait. A client has no GLFW to park in, but it still
   /// has to block — a producer that spins is worse than one that is slow,
@@ -856,6 +859,105 @@ void Engine::menuImportActivate(int32_t itemId)
 void Engine::menuImportAboutToShow(int32_t itemId)
 {
   impl_->menuImport.aboutToShow(itemId);
+}
+
+// ─── Status Notifier (system tray) ────────────────────────────────────────
+
+bool Engine::statusNotifierStart() { return impl_->statusNotifier.start(); }
+
+bool Engine::statusNotifierIsServing() const
+{
+  return impl_->statusNotifier.isServing();
+}
+
+void Engine::statusNotifierPoll() { impl_->statusNotifier.poll(); }
+
+uint64_t Engine::statusNotifierRevision() const
+{
+  return impl_->statusNotifier.revision();
+}
+
+size_t Engine::statusNotifierItemCount() const
+{
+  return impl_->statusNotifier.itemCount();
+}
+
+std::string Engine::statusNotifierItemKey(size_t index) const
+{
+  return impl_->statusNotifier.itemKey(index);
+}
+
+std::string Engine::statusNotifierItemId(size_t index) const
+{
+  return impl_->statusNotifier.itemId(index);
+}
+
+std::string Engine::statusNotifierItemTitle(size_t index) const
+{
+  return impl_->statusNotifier.itemTitle(index);
+}
+
+std::string Engine::statusNotifierItemStatus(size_t index) const
+{
+  return impl_->statusNotifier.itemStatus(index);
+}
+
+std::string Engine::statusNotifierItemIconName(size_t index) const
+{
+  return impl_->statusNotifier.itemIconName(index);
+}
+
+std::string Engine::statusNotifierItemIconPath(size_t index) const
+{
+  return impl_->statusNotifier.itemIconPath(index);
+}
+
+bool Engine::statusNotifierItemIsMenu(size_t index) const
+{
+  return impl_->statusNotifier.itemIsMenu(index);
+}
+
+int Engine::statusNotifierItemIconWidth(size_t index) const
+{
+  return impl_->statusNotifier.itemIconWidth(index);
+}
+
+int Engine::statusNotifierItemIconHeight(size_t index) const
+{
+  return impl_->statusNotifier.itemIconHeight(index);
+}
+
+size_t Engine::statusNotifierItemIconRgbaSize(size_t index) const
+{
+  return impl_->statusNotifier.itemIconRgbaSize(index);
+}
+
+size_t Engine::statusNotifierItemIconRgbaCopy(size_t index, uint8_t *out,
+                                              size_t cap) const
+{
+  return impl_->statusNotifier.itemIconRgbaCopy(index, out, cap);
+}
+
+void Engine::statusNotifierActivate(const std::string &key, int x, int y)
+{
+  impl_->statusNotifier.activate(key, x, y);
+}
+
+void Engine::statusNotifierContextMenu(const std::string &key, int x, int y)
+{
+  impl_->statusNotifier.contextMenu(key, x, y);
+}
+
+void Engine::statusNotifierSecondaryActivate(const std::string &key, int x,
+                                             int y)
+{
+  impl_->statusNotifier.secondaryActivate(key, x, y);
+}
+
+void Engine::statusNotifierScroll(const std::string &key, int delta,
+                                  const std::string &orientation)
+{
+  impl_->statusNotifier.scroll(key, delta, orientation);
 }
 
 } // namespace canvas

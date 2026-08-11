@@ -35,6 +35,11 @@ import Observation
 //     Focus belongs to the compositor and to nothing else, and a global menu
 //     is the first thing on this panel that genuinely had to know it.
 //
+// It also owns the **system tray** (`org.kde.StatusNotifierWatcher`): icons
+// from nm-applet, Blueman, pasystray, and other StatusNotifierItems. Click
+// calls Activate / ContextMenu on the item; the app draws its own menu window.
+// That is phase 1 of tray support — stock applets without rewriting them.
+//
 // What it does not have yet, and why:
 //
 //   * no window list. The compositor knows which surfaces exist; the panel now
@@ -237,6 +242,7 @@ final class MenuSession {
 }
 
 nonisolated(unsafe) let session = MenuSession()
+nonisolated(unsafe) var tray: StatusNotifierTray?
 
 struct TaskbarView: View {
     let brandIcon: UIImage
@@ -273,10 +279,12 @@ struct TaskbarView: View {
                     )
                 }
 
-                // Pushes the clock to the far end: an empty growing child is
-                // the spacer, since the stack distributes leftover space by
-                // flex.
+                // Pushes the clock (and tray) to the far end: an empty growing
+                // child is the spacer, since the stack distributes leftover
+                // space by flex.
                 HStack(flexGrow: 1, padding: 0) {}
+
+                trayStrip
 
                 Text(clock.text, color: Theme.current.textPrimary)
             }
@@ -285,6 +293,45 @@ struct TaskbarView: View {
             // Fills the expanded surface so the strip stays top-aligned; never
             // painted (backdrop is none, no fill here).
             HStack(flexGrow: 1, padding: 0) {}
+        }
+    }
+
+    /// StatusNotifier icons, left of the clock. Empty when no items or when
+    /// another process owns the watcher.
+    @ViewBuilder
+    private var trayStrip: some View {
+        let items = tray?.items ?? []
+        if !items.isEmpty {
+            HStack(padding: 0, alignment: .center, spacing: 6) {
+                ForEach(items) { item in
+                    trayIcon(item)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func trayIcon(_ item: StatusNotifierTray.TrayItem) -> some View {
+        let activate: () -> Void = { tray?.activate(item) }
+        // Fixed 22pt so a large IconPixmap does not blow the strip height.
+        if let image = item.image {
+            Image(
+                image,
+                width: .pt(22), height: .pt(22),
+                contentMode: .fit,
+                onClick: activate
+            )
+            .agentId("tray.\(item.key)")
+        } else {
+            Text(
+                item.fallback,
+                color: Theme.current.textPrimary,
+                onClick: activate
+            )
+            .padding(4)
+            .hoverBackground(Theme.current.hover)
+            .cornerRadius(3)
+            .agentId("tray.\(item.key)")
         }
     }
 
@@ -381,6 +428,9 @@ guard let brandIcon = ImageStore.loadAsset(
 // while the panel is still coming up should not have to try twice.
 session.attach(editor: editor)
 
+// System tray watcher — same timing as the menu registrar.
+tray = StatusNotifierTray(editor: editor)
+
 // Focus, from the compositor. Delivered on the frame loop, so touching
 // observable state from it is the same as touching it from a click handler.
 LavaClient.onActiveWindow { surfaceId, title, menuService, menuObjectPath in
@@ -401,10 +451,14 @@ Thread.detachNewThread {
 // what answers an application's `GetLayout` as much as what collects it. 20 Hz
 // because a menu appearing 50ms after the application published it is
 // imperceptible, and because a panel that iterated GLib per frame would be
-// doing it 60 times a second to find nothing.
+// doing it 60 times a second to find nothing. Same loop pumps the tray
+// watcher — one GLib context for both.
 Thread.detachNewThread {
     while true {
-        MainQueue.async { session.poll() }
+        MainQueue.async {
+            session.poll()
+            _ = tray?.poll()
+        }
         Thread.sleep(forTimeInterval: 0.05)
     }
 }

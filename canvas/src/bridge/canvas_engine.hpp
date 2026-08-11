@@ -458,6 +458,33 @@ class Engine {
   /// Ask for a submenu's contents before opening it.
   void menuImportAboutToShow(int32_t itemId);
 
+  // ─── Status Notifier (system tray) ─────────────────────────────────────
+  //
+  // Panel owns `org.kde.StatusNotifierWatcher`. See `StatusNotifierHost`.
+
+  bool statusNotifierStart();
+  bool statusNotifierIsServing() const;
+  void statusNotifierPoll();
+  uint64_t statusNotifierRevision() const;
+  size_t statusNotifierItemCount() const;
+  std::string statusNotifierItemKey(size_t index) const;
+  std::string statusNotifierItemId(size_t index) const;
+  std::string statusNotifierItemTitle(size_t index) const;
+  std::string statusNotifierItemStatus(size_t index) const;
+  std::string statusNotifierItemIconName(size_t index) const;
+  std::string statusNotifierItemIconPath(size_t index) const;
+  bool statusNotifierItemIsMenu(size_t index) const;
+  int statusNotifierItemIconWidth(size_t index) const;
+  int statusNotifierItemIconHeight(size_t index) const;
+  size_t statusNotifierItemIconRgbaSize(size_t index) const;
+  size_t statusNotifierItemIconRgbaCopy(size_t index, uint8_t *out,
+                                        size_t cap) const;
+  void statusNotifierActivate(const std::string &key, int x, int y);
+  void statusNotifierContextMenu(const std::string &key, int x, int y);
+  void statusNotifierSecondaryActivate(const std::string &key, int x, int y);
+  void statusNotifierScroll(const std::string &key, int delta,
+                            const std::string &orientation);
+
  private:
   struct Impl;
   std::unique_ptr<Impl> impl_;

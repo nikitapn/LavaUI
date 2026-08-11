@@ -645,6 +645,85 @@ public final class Editor: @unchecked Sendable {
     public func appMenuPopActivation() -> String {
         String(engine.appMenuPopActivation())
     }
+
+    // ─── Status Notifier (system tray) ───────────────────────────────────
+
+    /// Own `org.kde.StatusNotifierWatcher`. False if the name is taken or
+    /// there is no session bus.
+    @discardableResult
+    public func statusNotifierStart() -> Bool { engine.statusNotifierStart() }
+
+    public var statusNotifierIsServing: Bool { engine.statusNotifierIsServing() }
+
+    public func statusNotifierPoll() { engine.statusNotifierPoll() }
+
+    public var statusNotifierRevision: UInt64 { engine.statusNotifierRevision() }
+
+    public var statusNotifierItemCount: Int { Int(engine.statusNotifierItemCount()) }
+
+    public func statusNotifierItem(_ index: Int) -> StatusNotifierItemInfo {
+        let i = index
+        return StatusNotifierItemInfo(
+            key: String(engine.statusNotifierItemKey(i)),
+            id: String(engine.statusNotifierItemId(i)),
+            title: String(engine.statusNotifierItemTitle(i)),
+            status: String(engine.statusNotifierItemStatus(i)),
+            iconName: String(engine.statusNotifierItemIconName(i)),
+            iconPath: String(engine.statusNotifierItemIconPath(i)),
+            isMenu: engine.statusNotifierItemIsMenu(i),
+            iconWidth: Int(engine.statusNotifierItemIconWidth(i)),
+            iconHeight: Int(engine.statusNotifierItemIconHeight(i)),
+            iconRgba: copyStatusNotifierIconRgba(index: i)
+        )
+    }
+
+    public func statusNotifierActivate(_ key: String, x: Int32 = 0, y: Int32 = 0) {
+        engine.statusNotifierActivate(std.string(key), x, y)
+    }
+
+    public func statusNotifierContextMenu(_ key: String, x: Int32 = 0, y: Int32 = 0) {
+        engine.statusNotifierContextMenu(std.string(key), x, y)
+    }
+
+    public func statusNotifierSecondaryActivate(
+        _ key: String, x: Int32 = 0, y: Int32 = 0
+    ) {
+        engine.statusNotifierSecondaryActivate(std.string(key), x, y)
+    }
+
+    public func statusNotifierScroll(
+        _ key: String, delta: Int32, orientation: String = "vertical"
+    ) {
+        engine.statusNotifierScroll(std.string(key), delta, std.string(orientation))
+    }
+
+    private func copyStatusNotifierIconRgba(index: Int) -> [UInt8] {
+        let n = engine.statusNotifierItemIconRgbaSize(index)
+        guard n > 0 else { return [] }
+        var bytes = [UInt8](repeating: 0, count: n)
+        bytes.withUnsafeMutableBufferPointer { buf in
+            guard let base = buf.baseAddress else { return }
+            _ = engine.statusNotifierItemIconRgbaCopy(index, base, n)
+        }
+        return bytes
+    }
+}
+
+/// One StatusNotifierItem as the panel sees it after a poll.
+public struct StatusNotifierItemInfo: Equatable, Sendable {
+    /// `uniqueName/objectPath` — stable activate key.
+    public var key: String
+    public var id: String
+    public var title: String
+    public var status: String
+    public var iconName: String
+    /// Resolved filesystem path for `iconName`, when found.
+    public var iconPath: String
+    public var isMenu: Bool
+    public var iconWidth: Int
+    public var iconHeight: Int
+    /// RGBA8 pixels when the item published `IconPixmap`.
+    public var iconRgba: [UInt8]
 }
 
 /// One row of a menu imported from another application.

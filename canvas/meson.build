@@ -12,6 +12,7 @@ canvas_engine_sources = files(
   'src/ipc/draw_arena.cpp',
   'src/menu/app_menu.cpp',
   'src/menu/menu_import.cpp',
+  'src/menu/status_notifier.cpp',
   'src/render/blur_pass.cpp',
   'src/render/compute_physics.cpp',
   'src/render/dmabuf_image.cpp',
