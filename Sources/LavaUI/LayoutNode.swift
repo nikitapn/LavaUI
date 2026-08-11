@@ -1576,6 +1576,19 @@ public final class LayoutHost {
                 // neither dismisses nor reaches the content below.
                 if att.contains(x - originX, y - originY) { return {} }
             }
+            // Outside the popup but still on this window: prefer a real target
+            // in the main tree (menu bar titles especially) over a blind
+            // dismiss. A native menubar switches on the same click that leaves
+            // the previous menu; dismissing first then re-running the title
+            // handler used to reopen the same menu (blink) or require two
+            // clicks to change menus. Title handlers toggle presentation
+            // themselves — no second dismiss needed when they fire.
+            if let hit = hitWalk(
+                root, x: x, y: y, ox: originX, oy: originY,
+                mods: mods, button: button
+            ) {
+                return hit
+            }
             return { for att in overlays { att.dismiss() } }
         }
 

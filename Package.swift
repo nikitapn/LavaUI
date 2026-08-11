@@ -101,6 +101,9 @@ var targets: [Target] = [
         dependencies: ["LavaUI"]
             + (haveNprpc ? [Target.Dependency("LavaClient"),
                             Target.Dependency("LavaIDL")] : []),
+        resources: [
+            .process("Resources"),
+        ],
         swiftSettings: interopCxx
     ),
     // The dock: what is open on this workspace, as icons. The other half of a

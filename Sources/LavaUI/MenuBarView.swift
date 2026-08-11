@@ -81,17 +81,34 @@ public struct MenuBarStrip: View {
         let isOpen = openID == menu.id
         let binding = openMenuID
         let activate = onActivate
-        Text(
-            menu.title,
-            color: isOpen ? theme.accent : theme.textPrimary,
+        let menuID = menu.id
+        // Stack carries click + hover so the hit target is the padded title
+        // chrome, not the text glyphs alone — and so hover can open the next
+        // menu while one is already showing (native menubar behaviour).
+        HStack(
+            padding: 0,
+            alignment: .center,
             onClick: {
-                if binding.wrappedValue == menu.id {
+                if binding.wrappedValue == menuID {
                     binding.wrappedValue = nil
                 } else {
-                    binding.wrappedValue = menu.id
+                    binding.wrappedValue = menuID
                 }
+            },
+            onHover: { inside in
+                guard inside else { return }
+                // After the first click opens a menu, moving across titles
+                // expands each one — without this, only a second click works.
+                guard let current = binding.wrappedValue, current != menuID
+                else { return }
+                binding.wrappedValue = menuID
             }
-        )
+        ) {
+            Text(
+                menu.title,
+                color: isOpen ? theme.accent : theme.textPrimary
+            )
+        }
         // Horizontal room for a comfortable hit target; keep vertical padding
         // small so the label fits inside `MenuHost.barHeight` (see `.clipped()`).
         .padding(4)
@@ -100,11 +117,11 @@ public struct MenuBarStrip: View {
         .agentId("menu.\(menu.id.raw)")
         .overlay(
             isPresented: Binding(
-                get: { binding.wrappedValue == menu.id },
+                get: { binding.wrappedValue == menuID },
                 set: { presented in
                     if presented {
-                        binding.wrappedValue = menu.id
-                    } else if binding.wrappedValue == menu.id {
+                        binding.wrappedValue = menuID
+                    } else if binding.wrappedValue == menuID {
                         binding.wrappedValue = nil
                     }
                 }
@@ -168,13 +185,18 @@ public struct MenuDropdownPanel: View {
         let title = indentPrefix + check + item.title
         let shortcut = item.shortcut.map(MenuShortcutLabel.format) ?? ""
         let activate = onActivate
+        let itemID = item.id
 
-        let row = HStack(padding: 0, alignment: .center) {
-            Text(
-                title,
-                color: color,
-                onClick: enabled ? { activate(item.id) } : nil
-            )
+        // Click and hover live on the row stack, not the label. Text-with-
+        // onClick only highlights glyph bounds; the dropdown is stretch-width
+        // under the parent VStack, so the stack fills the menu and the hover
+        // tint covers the whole item (shortcut side included).
+        let row = HStack(
+            padding: 0,
+            alignment: .center,
+            onClick: enabled ? { activate(itemID) } : nil
+        ) {
+            Text(title, color: color)
             if !shortcut.isEmpty {
                 Spacer()
                 Text(shortcut, color: theme.textDim)

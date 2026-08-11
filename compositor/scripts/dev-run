@@ -120,6 +120,7 @@ esac
 echo "backend: $mode, $flavour build" >&2
 
 if [[ ${#client[@]} -eq 0 ]]; then
+  export LAVA_CLIENT=1
   exec "./$build/compositor/compositor"
 fi
 

@@ -3425,7 +3425,10 @@ uint32_t glfw_mods(uint32_t modifiers) {
 void launch_program(const char *program, char *const argv[],
                     char *const envp[] = environ) {
   pid_t pid = -1;
-  const int error = posix_spawnp(&pid, program, nullptr, nullptr, argv, envp);
+  // Home cwd so terminals and apps do not open in the canvas assets tree
+  // the compositor itself chdirs into for shader loads (see spawnAtHome).
+  const int error =
+      lava::ShellSupervisor::spawnAtHome(&pid, program, argv, envp);
   if (error != 0) {
     wlr_log(WLR_ERROR, "launcher: could not start %s: %s", program,
             std::strerror(error));

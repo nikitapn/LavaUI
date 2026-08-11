@@ -86,11 +86,16 @@ final class MenuSession {
     /// `model`, and a view that depended on it would rebuild on every poll.
     @ObservationIgnored var menus: PanelMenu?
 
+    /// Client editor, for local size updates that must not wait on a Resize
+    /// event from the compositor (see `ensureExpanded`).
+    @ObservationIgnored var editor: Editor?
+
     /// Which top-level menu is open, if any. Kept here rather than in the view
-    /// because the panel's *size* depends on it — see `openBinding`.
+    /// because the panel's *hit region* depends on it — see `openBinding`.
     var openMenu: MenuID?
 
     func attach(editor: Editor) {
+        self.editor = editor
         menus = PanelMenu(editor: editor)
         // Start on the desktop menu: nothing is focused yet.
         model = Self.desktopMenu
@@ -111,15 +116,18 @@ final class MenuSession {
         refreshModel()
     }
 
-    /// Pumps DBus, publishes a new model when there is one, and brings the
-    /// panel's height into line with whether a menu is open.
+    /// Pumps DBus, publishes a new model when there is one, and keeps the
+    /// panel's hit region in step with whether a menu is open.
     func poll() {
+        // Surface id exists only after `LavaClient.run` creates it; the first
+        // poll is the earliest safe moment to expand the panel for menus.
+        ensureExpanded()
         guard let menus else {
-            applyThickness()
+            syncInputRegion()
             return
         }
         if menus.poll() { refreshModel() }
-        applyThickness()
+        syncInputRegion()
     }
 
     func activate(_ id: MenuID) {
@@ -158,45 +166,67 @@ final class MenuSession {
         ),
     ])
 
-    // ─── Opening a menu, and the panel growing to hold it ────────────────
+    // ─── Opening a menu without resizing the surface ─────────────────────
     //
-    // The panel is a 32pt strip and a dropdown is not 32pt tall. Rather than a
-    // second surface to position, the panel asks the compositor to make it
-    // deeper while a menu is open and to put it back afterwards — the
-    // reservation never changes, so the windows underneath do not move, and
-    // the extra surface is also what catches the click that closes the menu.
+    // In-window menus sit inside a tall window; the dropdown just paints below
+    // the strip. A panel that is only 32pt tall cannot do that — the overlay
+    // would layout against a 32pt viewport, clip, then jump when the surface
+    // grew. That read as a blink and a bad transition.
+    //
+    // So the panel is expanded *once* to `openHeight` (reservation stays the
+    // strip) and only the input region changes: closed → strip only (clicks
+    // fall through to windows below); open → full surface (clicks outside the
+    // dropdown dismiss). Same idea as the dock's trigger strip.
 
     func openMenu(_ id: MenuID) {
-        openMenu = id
-        // Applications are allowed to fill a submenu only when asked. Most
-        // send everything up front; the ones that do not would show an empty
-        // dropdown without this.
+        // AboutToShow before presentation so a deferred submenu is asked for
+        // before the first frame that shows the dropdown.
         menus?.aboutToShow(id)
+        openMenu = id
+        syncInputRegion()
     }
 
     func closeMenu() {
+        guard openMenu != nil else { return }
         openMenu = nil
+        syncInputRegion()
     }
 
-    /// Resizes the panel to match `openMenu`, if it does not already.
-    ///
-    /// On the poll tick rather than in the two functions above, and that is
-    /// not tidiness. Clicking an open menu's title closes and reopens it
-    /// within one click — the overlay dismisses on the press, the title
-    /// handler runs after — and resizing the surface *between* those two left
-    /// the panel tall with no menu in it: the resize churn arrived in the
-    /// middle of the overlay being re-presented and it never came back.
-    /// Reconciling here collapses that pair into the state it settles on.
-    private func applyThickness() {
-        let want = openMenu != nil ? Self.openHeight : Self.stripHeight
-        guard want != applied else { return }
-        applied = want
-        LavaClient.setPanelThickness(want)
+    /// Grows the panel to menu depth once, keeps the strip reservation, and
+    /// updates the local layout size so the first open does not wait on a
+    /// Resize stream event.
+    private func ensureExpanded() {
+        guard !expanded else { return }
+        expanded = true
+        LavaClient.setPanelThickness(Self.openHeight)
+        if let editor {
+            let size = editor.framebufferSize()
+            let width = size.w > 1 ? size.w : 1920
+            editor.setClientSize(width: width, height: Self.openHeight)
+        }
+        syncInputRegion()
     }
 
-    @ObservationIgnored private var applied: Float = MenuSession.stripHeight
+    /// Hit-test region: strip when closed, full panel when a menu is open.
+    private func syncInputRegion() {
+        ensureExpanded()
+        let height = openMenu != nil ? Self.openHeight : Self.stripHeight
+        // Width is the surface length; compositor clamps. A large constant is
+        // fine — the panel is always full edge width.
+        let width: Float = 8192
+        let region = (x: Float(0), y: Float(0), w: width, h: height)
+        guard region != appliedRegion else { return }
+        appliedRegion = region
+        LavaClient.setInputRegion(
+            x: region.x, y: region.y, width: region.w, height: region.h
+        )
+    }
 
-    /// The strip, and how deep the panel goes while a menu is open.
+    @ObservationIgnored private var expanded = false
+    @ObservationIgnored private var appliedRegion:
+        (x: Float, y: Float, w: Float, h: Float) = (0, 0, 0, 0)
+
+    /// The strip, and how deep the panel surface is for dropdown room.
     ///
     /// A fixed number because the panel does not know how tall the screen is —
     /// it is told its own size and nothing else — and this is comfortably more
@@ -209,14 +239,20 @@ final class MenuSession {
 nonisolated(unsafe) let session = MenuSession()
 
 struct TaskbarView: View {
+    let brandIcon: UIImage
+
     var body: some View {
-        // The strip is the panel; the space below it exists only while a menu
-        // is open, and only so the dropdown has somewhere to be. Transparent,
-        // so what is really underneath shows through.
+        // The strip is what paints; the surface is always tall enough for a
+        // dropdown (see MenuSession.ensureExpanded). Transparent below the
+        // strip so the desktop shows through; input region is strip-only when
+        // closed so those pixels do not steal clicks.
         VStack(flexGrow: 1, padding: 0) {
             HStack(height: .pt(MenuSession.stripHeight), padding: 10,
                    alignment: .center, spacing: 16) {
-                Text("Lava", color: Theme.current.accent)
+                Image(
+                    brandIcon,
+                    width: .pt(22), height: .pt(22), contentMode: .fit
+                )
 
                 if session.model.menus.isEmpty {
                     // Focused window exports no menu (LavaTerm, a foreign app
@@ -246,19 +282,13 @@ struct TaskbarView: View {
             }
             .background(Theme.current.panel)
 
-            // Only while something is open: an always-present growing box
-            // would make the strip's own background 600pt tall.
-            if session.openMenu != nil {
-                HStack(flexGrow: 1, padding: 0) {}
-            }
+            // Fills the expanded surface so the strip stays top-aligned; never
+            // painted (backdrop is none, no fill here).
+            HStack(flexGrow: 1, padding: 0) {}
         }
     }
 
-    /// The strip's open-menu state, with the panel's height attached to it.
-    ///
-    /// A plain `@State` would leave the panel 32pt tall and the dropdown
-    /// clipped to nothing, which is exactly what it looked like before the
-    /// compositor could be asked for more room.
+    /// The strip's open-menu state, with the input region attached to it.
     private var openBinding: Binding<MenuID?> {
         Binding(
             get: { session.openMenu },
@@ -337,6 +367,15 @@ guard let editor = LavaClient.openPanel(
     thickness: MenuSession.stripHeight, reserve: true
 ) else { exit(1) }
 
+guard let brandIcon = ImageStore.loadAsset(
+    named: "lavaui-icon.svg", bundle: .module, into: editor
+) else {
+    FileHandle.standardError.write(
+        Data("LavaTaskbar: could not load lavaui-icon.svg\n".utf8)
+    )
+    exit(1)
+}
+
 // Owns the registrar from here on, so an application starting after this point
 // finds somewhere to export to. Before `run`, because an app that registers
 // while the panel is still coming up should not have to try twice.
@@ -370,4 +409,4 @@ Thread.detachNewThread {
     }
 }
 
-LavaClient.run(editor: editor) { TaskbarView() }
+LavaClient.run(editor: editor) { TaskbarView(brandIcon: brandIcon) }

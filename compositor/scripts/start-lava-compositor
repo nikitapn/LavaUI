@@ -10,6 +10,7 @@ WLR_DRM_DEVICES=/dev/dri/card0 \
 WLR_RENDER_DRM_DEVICE=/dev/dri/renderD129 \
 WLR_RENDERER=vulkan \
 LAVA_FRAME_PROBE=1 \
+LAVA_CLIENT=1 \
 	stdbuf -oL -eL ./build/compositor/compositor \
 		>"$HOME/lava-compositor.log" 2>&1
 

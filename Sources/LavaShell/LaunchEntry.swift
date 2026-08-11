@@ -106,13 +106,21 @@ extension DesktopEntry {
             argv.map { strdup($0) } + [nil]
         defer { for pointer in cArgv where pointer != nil { free(pointer) } }
 
-        // The entry's `Path=`, applied around the spawn. Not thread-safe in
+        // Working directory for the child. Prefer the entry's `Path=`;
+        // otherwise `$HOME`. Desktop apps almost never set Path, and without
+        // this they inherit whatever the launcher process was started in —
+        // which under the Lava compositor is the canvas assets tree (shader
+        // loads), not the user's home. Temporary chdir is not thread-safe in
         // general; this process is about to exit and has one thread doing
         // this, which is the only reason it is acceptable here.
+        let launchDirectory: String = {
+            if !workingDirectory.isEmpty { return workingDirectory }
+            return ProcessInfo.processInfo.environment["HOME"] ?? ""
+        }()
         var previousDirectory: String?
-        if !workingDirectory.isEmpty {
+        if !launchDirectory.isEmpty {
             previousDirectory = FileManager.default.currentDirectoryPath
-            _ = FileManager.default.changeCurrentDirectoryPath(workingDirectory)
+            _ = FileManager.default.changeCurrentDirectoryPath(launchDirectory)
         }
         defer {
             if let previousDirectory {

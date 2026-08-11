@@ -138,6 +138,34 @@ void ShellSupervisor::start(wl_event_loop *loop,
   if (timer_ != nullptr) wl_event_source_timer_update(timer_, kTickMs);
 }
 
+int ShellSupervisor::spawnAtHome(pid_t *outPid, const char *file,
+                                 char *const argv[], char *const envp[]) {
+  pid_t pid = -1;
+  posix_spawn_file_actions_t actions;
+  posix_spawn_file_actions_t *actionsPtr = nullptr;
+  const char *home = std::getenv("HOME");
+  // `addchdir_np` puts the child in $HOME without racing the compositor's own
+  // cwd (which is the assets tree for shader loads). Missing HOME keeps the
+  // inherited directory — better a wrong cwd than refusing to start.
+  if (home != nullptr && home[0] != '\0') {
+    if (posix_spawn_file_actions_init(&actions) == 0) {
+      if (posix_spawn_file_actions_addchdir_np(&actions, home) == 0) {
+        actionsPtr = &actions;
+      } else {
+        posix_spawn_file_actions_destroy(&actions);
+      }
+    }
+  }
+  const int error =
+      posix_spawnp(&pid, file, actionsPtr, nullptr, argv, envp);
+  if (actionsPtr != nullptr) {
+    posix_spawn_file_actions_destroy(actionsPtr);
+  }
+  if (error != 0) return error;
+  if (outPid != nullptr) *outPid = pid;
+  return 0;
+}
+
 void ShellSupervisor::spawn(Supervised &entry) {
   const std::string path = programPath(entry.component.program);
 
@@ -146,9 +174,8 @@ void ShellSupervisor::spawn(Supervised &entry) {
 
   pid_t pid = -1;
   // `p` so a bare name still finds something on PATH; `resolve` has already
-  // preferred anything nearer.
-  const int error = posix_spawnp(&pid, program.c_str(), nullptr, nullptr, argv,
-                                 environ);
+  // preferred anything nearer. Home cwd: see spawnAtHome.
+  const int error = spawnAtHome(&pid, program.c_str(), argv, environ);
   if (error != 0) {
     wlr_log(WLR_ERROR, "shell: cannot start %s (%s): %s",
             entry.component.role.c_str(), program.c_str(),

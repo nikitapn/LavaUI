@@ -3,7 +3,11 @@
 #include <cstdint>
 #include <string>
 #include <sys/types.h>
+#include <unistd.h>
 #include <vector>
+
+// `environ` — used as the default envp for `spawnAtHome`.
+extern char **environ;
 
 struct wl_event_loop;
 struct wl_event_source;
@@ -77,6 +81,16 @@ class ShellSupervisor {
   /// then PATH. Public because the key bindings launch one — the application
   /// launcher — that is not supervised but lives in exactly the same places.
   static std::string programPath(const std::string &program);
+
+  /// `posix_spawnp` with the child's working directory set to `$HOME`.
+  ///
+  /// The compositor process stays in the canvas assets tree so relative
+  /// shader loads keep working. Anything it starts for the user — shell
+  /// components, the launcher, terminals — must not inherit that path, or
+  /// every new shell opens in `…/CanvasResources`. On success writes the
+  /// child pid and returns 0; otherwise returns an errno for `strerror`.
+  static int spawnAtHome(pid_t *pid, const char *file, char *const argv[],
+                         char *const envp[] = environ);
 
  private:
   struct Supervised {
