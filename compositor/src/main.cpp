@@ -1800,6 +1800,10 @@ class SurfaceRegistry : public lava::CompositorHost {
     // the strip it is owed. Only `SetPanelThickness` can make the two differ,
     // and only for as long as something is open.
     panel->reserved = reserve ? thickness : 0;
+    // `openSurface` applied corners while `panel` was still false, so it
+    // used the desktop window radius. Re-apply now that this is known to be
+    // a panel — flush to the screen edge, square corners (see applyCorners).
+    applyCorners(*panel);
 
     layoutPanel(*panel);
     // Above ordinary windows, which is what "panel" mostly means to a user.
