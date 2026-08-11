@@ -1542,6 +1542,16 @@ void RenderWindow::replayDrawList(const canvas::DrawList &list, float viewW,
       }
       break;
     }
+    case canvas::DrawCommandKind::NodeScrollTo: {
+      if (openNodes.empty() || cmd.param == 0) break;
+      auto &state = sceneState_[openNodes.back().id];
+      if (state.scrollRequestSerial == cmd.param) break;
+      state.scrollRequestSerial = cmd.param;
+      state.targetX = std::max(0.f, cmd.x);
+      state.targetY = std::max(0.f, cmd.y);
+      sceneResume_ = true;
+      break;
+    }
     case canvas::DrawCommandKind::EndNode: {
       if (openNodes.empty()) break;  // unbalanced; ignore rather than corrupt
       const OpenNode node = openNodes.back();

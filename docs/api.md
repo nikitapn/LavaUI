@@ -426,7 +426,10 @@ ScrollView(.vertical, showsIndicator: true) {
 `ScrollView`:
 
 ```swift
-LazyVGrid(albums, cellWidth: 180, cellHeight: 250, spacing: 10) {
+LazyVGrid(
+    albums, cellWidth: 180, cellHeight: 250, spacing: 10,
+    scrollTarget: selectedIndex
+) {
     AlbumCard(album: $0)
 }
 ```
@@ -434,6 +437,11 @@ LazyVGrid(albums, cellWidth: 180, cellHeight: 250, spacing: 10) {
 The grid determines the column count from available width. Lazy cells are
 unmounted when they leave the viewport, so state that must survive scrolling
 belongs in the model rather than inside a cell.
+
+Pass an optional item index as `scrollTarget` to `LazyVGrid` or `LazyVStack`
+when keyboard selection should remain visible. A changed target scrolls only
+as far as needed to reveal its cell; later wheel input remains under user
+control until the target changes again.
 
 ## Common modifiers
 

@@ -174,7 +174,8 @@ private struct Results: View {
                     cellWidth: Grid.cardWidth,
                     cellHeight: Grid.cardHeight,
                     spacing: Grid.spacing,
-                    alignment: .center
+                    alignment: .center,
+                    scrollTarget: model.selected
                 ) { entry in
                     AppCard(entry: entry)
                 }

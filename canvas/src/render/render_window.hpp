@@ -355,6 +355,9 @@ class RenderWindow {
     /// flag to keep in step with the numbers it describes.
     float targetX = 0.f;
     float targetY = 0.f;
+    /// Last producer scroll request applied. Repeated draw-list frames carry
+    /// the same serial and must not override a later wheel gesture.
+    uint32_t scrollRequestSerial = 0;
     /// Last extent an `EndNode` actually reported.
     ///
     /// Retained rather than re-read per frame because the list comes from

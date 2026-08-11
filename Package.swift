@@ -68,6 +68,15 @@ var targets: [Target] = [
     // Pure Foundation — no engine, no control plane — so it is testable
     // without either. See Sources/LavaShell/DesktopEntry.swift.
     .target(name: "LavaShell"),
+    // libpulse client for the panel volume applet (PulseAudio / PipeWire-Pulse).
+    .target(
+        name: "CPulse",
+        path: "Sources/CPulse",
+        publicHeadersPath: "include",
+        linkerSettings: [
+            .linkedLibrary("pulse", .when(platforms: [.linux])),
+        ]
+    ),
     .target(name: "TraceLoomCore"),
     .target(name: "SpotifyCore"),
     .target(name: "LavaTermCore"),
@@ -98,7 +107,7 @@ var targets: [Target] = [
     // out of the same client API an app uses. See Sources/LavaTaskbar.
     .executableTarget(
         name: "LavaTaskbar",
-        dependencies: ["LavaUI"]
+        dependencies: ["LavaUI", "CPulse"]
             + (haveNprpc ? [Target.Dependency("LavaClient"),
                             Target.Dependency("LavaIDL")] : []),
         resources: [

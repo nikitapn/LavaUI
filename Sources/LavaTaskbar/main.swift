@@ -40,6 +40,9 @@ import Observation
 // calls Activate / ContextMenu on the item; the app draws its own menu window.
 // That is phase 1 of tray support — stock applets without rewriting them.
 //
+// And a **native volume applet** next to the tray: PulseAudio (or PipeWire's
+// Pulse shim) via libpulse, drawn entirely in LavaUI — no pasystray.
+//
 // What it does not have yet, and why:
 //
 //   * no window list. The compositor knows which surfaces exist; the panel now
@@ -98,6 +101,11 @@ final class MenuSession {
     /// Which top-level menu is open, if any. Kept here rather than in the view
     /// because the panel's *hit region* depends on it — see `openBinding`.
     var openMenu: MenuID?
+
+    /// Volume (or any other) strip popover is open. Same input-region rule as
+    /// `openMenu`: the surface is tall, but without a deep hit region the
+    /// popover paints into dead space and nothing in it is clickable.
+    var volumeOpen = false
 
     func attach(editor: Editor) {
         self.editor = editor
@@ -188,12 +196,24 @@ final class MenuSession {
         // before the first frame that shows the dropdown.
         menus?.aboutToShow(id)
         openMenu = id
+        // One popover at a time: a volume panel under an open menu is noise.
+        volumeOpen = false
         syncInputRegion()
     }
 
     func closeMenu() {
         guard openMenu != nil else { return }
         openMenu = nil
+        syncInputRegion()
+    }
+
+    func setVolumeOpen(_ open: Bool) {
+        guard volumeOpen != open else { return }
+        volumeOpen = open
+        if open {
+            // Drop the menubar dropdown if it was up — same one-popover rule.
+            openMenu = nil
+        }
         syncInputRegion()
     }
 
@@ -212,10 +232,14 @@ final class MenuSession {
         syncInputRegion()
     }
 
-    /// Hit-test region: strip when closed, full panel when a menu is open.
+    /// Whether any strip popover needs the deep hit region.
+    private var wantsCapture: Bool { openMenu != nil || volumeOpen }
+
+    /// Hit-test region: strip when idle, full panel while a menu or volume
+    /// popover is open so the dropdown is clickable and outside clicks dismiss.
     private func syncInputRegion() {
         ensureExpanded()
-        let height = openMenu != nil ? Self.openHeight : Self.stripHeight
+        let height = wantsCapture ? Self.openHeight : Self.stripHeight
         // Width is the surface length; compositor clamps. A large constant is
         // fine — the panel is always full edge width.
         let width: Float = 8192
@@ -243,6 +267,7 @@ final class MenuSession {
 
 nonisolated(unsafe) let session = MenuSession()
 nonisolated(unsafe) var tray: StatusNotifierTray?
+nonisolated(unsafe) let pulse = PulseSession()
 
 struct TaskbarView: View {
     let brandIcon: UIImage
@@ -285,6 +310,9 @@ struct TaskbarView: View {
                 HStack(flexGrow: 1, padding: 0) {}
 
                 trayStrip
+
+                // Native sound control before the clock — scroll, mute, popover.
+                VolumeApplet(pulse: pulse, isOpen: volumeOpenBinding)
 
                 Text(clock.text, color: Theme.current.textPrimary)
             }
@@ -354,6 +382,14 @@ struct TaskbarView: View {
                     session.closeMenu()
                 }
             }
+        )
+    }
+
+    /// Volume popover visibility — same input-region plumbing as the menubar.
+    private var volumeOpenBinding: Binding<Bool> {
+        Binding(
+            get: { session.volumeOpen },
+            set: { session.setVolumeOpen($0) }
         )
     }
 }

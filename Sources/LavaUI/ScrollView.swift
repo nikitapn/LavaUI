@@ -73,6 +73,10 @@ final class ScrollNode: YogaBoxNode {
     /// what was asked for — the same lesson the editor's viewport learned.
     var viewportLength: Float = 0
     var contentLength: Float = 0
+    /// Latest programmatic reveal. Kept after emission: the renderer uses the
+    /// serial to distinguish a repeated frame from a new request.
+    private(set) var revealRequest: (offset: Float, serial: UInt32)?
+    private var nextRevealSerial: UInt32 = 1
 
     private var insertedLeaves: [any AnyViewNode] = []
     /// Virtualized containers below this node, which need its offset and
@@ -135,6 +139,23 @@ final class ScrollNode: YogaBoxNode {
     }
 
     var maxOffset: Float { max(0, contentLength - viewportLength) }
+
+    func reveal(top: Float, bottom: Float, viewport: Float) {
+        guard viewport > 0 else { return }
+        let target: Float
+        if top < scrollOffset {
+            target = top
+        } else if bottom > scrollOffset + viewport {
+            target = bottom - viewport
+        } else {
+            return
+        }
+        let serial = nextRevealSerial
+        nextRevealSerial &+= 1
+        if nextRevealSerial == 0 { nextRevealSerial = 1 }
+        revealRequest = (max(0, target), serial)
+        ViewInvalidation.markNeedsRedraw()
+    }
 
     /// Content emitted beyond the viewport on each side, as a fraction of it.
     ///

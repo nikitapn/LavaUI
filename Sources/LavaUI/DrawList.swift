@@ -38,6 +38,8 @@ public enum DrawKind: UInt32 {
     /// Declares what the enclosing node should animate toward. See
     /// `NodeAnimate` in `draw_command.hpp`.
     case nodeAnimate = 18
+    /// Retargets the enclosing scroll node once per request serial.
+    case nodeScrollTo = 20
     case spatialBegin = 15
 }
 
@@ -647,6 +649,18 @@ public final class DrawList {
         appendCommand(cmd)
     }
 
+    /// Asks the enclosing retained node to scroll toward a position. The
+    /// renderer applies each serial once, so later wheel input is not undone
+    /// merely because the same draw list is published again.
+    func scrollNode(to offset: Float, serial: UInt32) {
+        guard serial != 0 else { return }
+        var cmd = canvas.DrawCommand()
+        cmd.kind = DrawKind.nodeScrollTo.rawValue
+        cmd.y = max(0, offset)
+        cmd.param = serial
+        appendCommand(cmd)
+    }
+
     public func pushClip(x: Float, y: Float, w: Float, h: Float) {
         append(kind: .pushClip, x: x, y: y, w: w, h: h, color: .primary)
     }
@@ -965,6 +979,9 @@ public final class DrawList {
                     ? [.clip, .scrollY, .absoluteCoordinates]
                     : [.clip, .scrollX, .absoluteCoordinates]
                 beginNode(scroll.id, x: x, y: y, w: w, h: h, flags: flags)
+                if let request = scroll.revealRequest {
+                    scrollNode(to: request.offset, serial: request.serial)
+                }
                 cullStack.append(viewCull)
                 // The renderer will subtract this from everything below, so
                 // anything recorded here for later emission has to know.

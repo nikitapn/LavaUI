@@ -141,6 +141,14 @@ enum class DrawCommandKind : uint32_t {
   /// nothing is not a default anyone asked for. To animate an entrance,
   /// declare the start on one frame and the end on the next.
   NodeAnimate = 18,
+  /// Asks the enclosing scroll node to reveal a producer-selected target.
+  ///
+  ///   x, y  = requested scroll target
+  ///   param = request serial; a repeated serial is ignored
+  ///
+  /// The serial matters because draw lists are republished: without it every
+  /// frame would pull a node back to the selection after the user wheeled it.
+  NodeScrollTo = 20,
   /// A drop shadow: a rounded rectangle whose edge fades outwards.
   ///
   ///   x, y, w, h = the rect casting it, in this surface's own coordinates

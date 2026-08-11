@@ -48,6 +48,9 @@ where Data.Index == Int {
     public var spacing: Float
     /// Where the columns sit when the container is wider than they need.
     public var alignment: StackAlignment
+    /// Index whose cell should remain visible as keyboard selection moves.
+    /// Nil leaves scrolling entirely under pointer/wheel control.
+    public var scrollTarget: Int?
     public var content: (Data.Element) -> Content
 
     /// - Parameter alignment: what to do with the width left over after the
@@ -62,6 +65,7 @@ where Data.Index == Int {
         cellHeight: Float,
         spacing: Float = 0,
         alignment: StackAlignment = .start,
+        scrollTarget: Int? = nil,
         @ViewBuilder content: @escaping (Data.Element) -> Content
     ) {
         self.data = data
@@ -69,6 +73,7 @@ where Data.Index == Int {
         self.cellHeight = cellHeight
         self.spacing = spacing
         self.alignment = alignment
+        self.scrollTarget = scrollTarget
         self.content = content
     }
 
@@ -76,6 +81,7 @@ where Data.Index == Int {
         _ data: Data,
         fullWidthRowHeight: Float,
         spacing: Float,
+        scrollTarget: Int? = nil,
         @ViewBuilder content: @escaping (Data.Element) -> Content
     ) {
         self.data = data
@@ -84,6 +90,7 @@ where Data.Index == Int {
         self.spacing = spacing
         // One full-width column leaves nothing over to place.
         self.alignment = .start
+        self.scrollTarget = scrollTarget
         self.content = content
     }
 
@@ -120,6 +127,7 @@ where Data.Index == Int {
             cellHeight: cellHeight,
             spacing: spacing,
             alignment: alignment,
+            scrollTarget: scrollTarget,
             makeCell: { index in content(data[data.startIndex + index]) }
         )
     }
@@ -135,22 +143,28 @@ where Data.Index == Int {
     public var data: Data
     public var rowHeight: Float
     public var spacing: Float
+    public var scrollTarget: Int?
     public var content: (Data.Element) -> Content
 
     public init(
         _ data: Data,
         rowHeight: Float,
         spacing: Float = 0,
+        scrollTarget: Int? = nil,
         @ViewBuilder content: @escaping (Data.Element) -> Content
     ) {
         self.data = data
         self.rowHeight = rowHeight
         self.spacing = spacing
+        self.scrollTarget = scrollTarget
         self.content = content
     }
 
     public var body: some View {
-        LazyVGrid(data, fullWidthRowHeight: rowHeight, spacing: spacing, content: content)
+        LazyVGrid(
+            data, fullWidthRowHeight: rowHeight, spacing: spacing,
+            scrollTarget: scrollTarget, content: content
+        )
     }
 }
 
@@ -212,6 +226,8 @@ final class LazyGridNode: YogaBoxNode {
     private var cellHeight: Float = 1
     private var spacing: Float = 0
     private var alignment: StackAlignment = .start
+    private var scrollTarget: Int?
+    private var revealedTarget: Int?
     private var makeCell: (Int) -> any View = { _ in EmptyView() }
 
     /// The scroll container that decides what is visible. Set by
@@ -255,6 +271,7 @@ final class LazyGridNode: YogaBoxNode {
         cellHeight: Float,
         spacing: Float,
         alignment: StackAlignment,
+        scrollTarget: Int?,
         makeCell: @escaping (Int) -> any View
     ) {
         let geometryChanged =
@@ -268,6 +285,7 @@ final class LazyGridNode: YogaBoxNode {
         self.cellHeight = max(1, cellHeight)
         self.spacing = max(0, spacing)
         self.alignment = alignment
+        self.scrollTarget = scrollTarget
         self.makeCell = makeCell
         // Even an identical index range now yields different views, because the
         // closure closed over new data.
@@ -313,6 +331,8 @@ final class LazyGridNode: YogaBoxNode {
             changed = true
         }
 
+        revealTargetIfNeeded()
+
         let desired = desiredRange(rows: rows)
         if desired != mounted || contentDirty || changed {
             remount(to: desired)
@@ -320,6 +340,20 @@ final class LazyGridNode: YogaBoxNode {
         }
         contentDirty = false
         return changed
+    }
+
+    /// Resolves an index without mounting it. Fixed row geometry is what
+    /// makes a far-away keyboard selection an O(1) scroll request.
+    private func revealTargetIfNeeded() {
+        guard scrollTarget != revealedTarget else { return }
+        revealedTarget = scrollTarget
+        guard let index = scrollTarget, (0..<count).contains(index),
+              columns > 0, let scroll = scrollNode,
+              let scrollYoga = scroll.yoga else { return }
+        let viewport = YGNodeLayoutGetHeight(scrollYoga)
+        let row = index / columns
+        let top = YGNodeLayoutGetTop(yogaStorage) + Float(row) * rowStride
+        scroll.reveal(top: top, bottom: top + cellHeight, viewport: viewport)
     }
 
     /// Index range the viewport needs, in cells.
