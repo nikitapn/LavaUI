@@ -29,9 +29,10 @@ public struct TerminalView: View {
         let _ = session.pathLabel
         let _ = session.generation
 
+        let theme = Theme.current
         return VStack(padding: 0, spacing: 0) {
             TitleStrip(path: session.pathLabel)
-                .background(TerminalPalette.windowFill)
+                .background(theme.panel.opacity(TerminalPalette.windowAlpha))
 
             TerminalCanvas(
                 session: session,
@@ -59,7 +60,7 @@ private struct TitleStrip: View {
             if WindowBridge.drawsOwnChrome {
                 WindowControls()
             }
-            Text(path, color: TerminalPalette.chromeText)
+            Text(path, color: Theme.current.textSecondary)
             Spacer()
         }
         .frame(height: .pt(36))

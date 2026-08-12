@@ -1207,6 +1207,7 @@ class SurfaceRegistry : public lava::CompositorHost {
     saveTimer_ = wl_event_loop_add_timer(loop, on_save_timer, this);
   }
   void bind(lava::ControlPlane *control) { control_ = control; }
+  lava::ControlPlane *control() const { return control_; }
 
   ClientSurface *find(uint32_t id) {
     for (auto &s : surfaces_) {
@@ -2172,6 +2173,23 @@ class SurfaceRegistry : public lava::CompositorHost {
     outShadowBlur = shadowBlur_;
     outShadowOpacity = shadowOpacity_;
     outShadowOffsetY = shadowOffsetY_;
+  }
+
+  void systemTheme(std::string &outName) const override {
+    if (server_ == nullptr) {
+      outName = "dark";
+      return;
+    }
+    outName = server_->config.theme.name;
+  }
+
+  void updateSystemTheme(const std::string &name,
+                         std::string &outError) override {
+    std::string taken = name;
+    if (taken != "light" && taken != "nebula") taken = "dark";
+    if (server_ != nullptr) server_->config.theme.name = taken;
+    save({{"theme", "name", taken}}, outError);
+    if (control_ != nullptr) control_->postSystemTheme();
   }
 
   // ─── Settings ────────────────────────────────────────────────────────────
@@ -4652,6 +4670,7 @@ void Server::reloadConfig() {
         static_cast<float>(config.appearance.shadowBlur),
         config.appearance.shadowOpacity,
         static_cast<float>(config.appearance.shadowOffsetY));
+    if (surfaces->control()) surfaces->control()->postSystemTheme();
   }
   wlr_log(WLR_INFO, "config: reloaded");
 }

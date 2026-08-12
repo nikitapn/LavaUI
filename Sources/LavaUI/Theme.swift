@@ -173,6 +173,22 @@ public struct Theme: Equatable, Sendable {
             if current != oldValue { ViewInvalidation.markDirty() }
         }
     }
+
+    /// The three names the compositor's system theme understands.
+    public static func named(_ name: String) -> Theme? {
+        switch name {
+        case "dark": return .dark
+        case "light": return .light
+        case "nebula": return .nebula
+        default: return nil
+        }
+    }
+
+    /// Called after a compositor system-theme push is applied to `current`.
+    /// Apps that paint their own paper (a terminal, a player) can retint
+    /// here. Nil is the usual case — `Theme.current` already rebuilt the
+    /// tree.
+    nonisolated(unsafe) public static var onSystemUpdate: ((Theme) -> Void)?
 }
 
 extension Color {

@@ -205,6 +205,12 @@ Config Config::load(const std::string &path) {
       } else {
         known = false;
       }
+    } else if (section == "theme") {
+      if (key == "name") {
+        config.theme.name = value;
+      } else {
+        known = false;
+      }
     } else if (section == "appearance") {
       if (key == "corner-radius") {
         // Clamped rather than refused: a negative radius is a typo and a

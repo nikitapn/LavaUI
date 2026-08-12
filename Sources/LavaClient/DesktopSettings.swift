@@ -48,6 +48,16 @@ public enum DesktopSettings {
         try call { try await $0.setAppearance(appearance: appearance) }
     }
 
+    /// The system colour theme name (`dark` / `light` / `nebula`).
+    public static func systemTheme() throws -> SystemTheme {
+        try call { try await $0.getSystemTheme() }
+    }
+
+    /// Pushes the name; every subscribed Lava window retints.
+    public static func setSystemTheme(_ theme: SystemTheme) throws {
+        try call { try await $0.setSystemTheme(theme: theme) }
+    }
+
     // MARK: - Keyboard
 
     public static func keyboard() throws -> KeyboardSettings {

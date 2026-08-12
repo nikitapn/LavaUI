@@ -136,6 +136,11 @@ struct CompositorHost {
                           float &outShadowOpacity,
                           float &outShadowOffsetY) const = 0;
 
+  /// The system colour theme name (`dark` / `light` / `nebula`).
+  virtual void systemTheme(std::string &outName) const = 0;
+  virtual void updateSystemTheme(const std::string &name,
+                                 std::string &outError) = 0;
+
   // ─── Settings ────────────────────────────────────────────────────────────
   //
   // The desktop's preferences, for the app that exists to change them. Each
@@ -329,6 +334,9 @@ class ControlPlane {
   virtual void postActiveWindow(uint32_t surfaceId, const std::string &title,
                                 const std::string &menuService = {},
                                 const std::string &menuObjectPath = {}) = 0;
+
+  /// "The system theme changed" — to every Lava client watching.
+  virtual void postSystemTheme() = 0;
 
   /// Where the reference is published. Clients read this file to find us.
   static std::string referencePath();

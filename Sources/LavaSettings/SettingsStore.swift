@@ -23,7 +23,7 @@ enum SettingsSection: String, CaseIterable, Sendable {
     /// sidebar. Cheap, and it turns three nouns into three answers.
     var subtitle: String {
         switch self {
-        case .appearance: return "Corners and shadows"
+        case .appearance: return "Colours, corners, shadows"
         case .keyboard: return "Layout, repeat, shortcuts"
         case .display: return "Screens and modes"
         }
@@ -61,6 +61,9 @@ final class SettingsStore {
     var shadowBlur: Float = 0
     var shadowOpacity: Float = 0.35
     var shadowOffsetY: Float = 4
+    /// `dark`, `light`, or `nebula`. What Lava windows that wear
+    /// `Theme.current` will paint.
+    var themeName = "dark"
 
     // MARK: Keyboard
 
@@ -122,6 +125,10 @@ final class SettingsStore {
         do {
             let appearance = try DesktopSettings.appearance()
             apply(appearance)
+
+            if let theme = try? DesktopSettings.systemTheme() {
+                themeName = theme.name
+            }
 
             let keyboard = try DesktopSettings.keyboard()
             apply(keyboard)
@@ -195,6 +202,26 @@ final class SettingsStore {
         } catch {
             report(error)
         }
+    }
+
+    func pushSystemTheme() {
+        guard connected else { return }
+        do {
+            try DesktopSettings.setSystemTheme(
+                SystemTheme(serial: 0, name: themeName)
+            )
+            clearStatus()
+            if let taken = try? DesktopSettings.systemTheme() {
+                themeName = taken.name
+            }
+        } catch {
+            report(error)
+        }
+    }
+
+    func setThemeName(_ name: String) {
+        themeName = name
+        pushSystemTheme()
     }
 
     func pushKeyboard() {

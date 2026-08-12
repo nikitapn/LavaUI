@@ -308,6 +308,69 @@ public:
 };
 } // namespace flat
 
+struct SystemTheme {
+  uint32_t serial;
+  std::string name;
+};
+
+namespace flat {
+struct SystemTheme {
+  uint32_t serial;
+  ::nprpc::flat::String name;
+};
+
+class SystemTheme_Direct {
+  ::nprpc::flat_buffer& buffer_;
+  const std::uint32_t offset_;
+
+  auto& base() noexcept { return *reinterpret_cast<SystemTheme*>(reinterpret_cast<std::byte*>(buffer_.data().data()) + offset_); }
+  auto const& base() const noexcept { return *reinterpret_cast<const SystemTheme*>(reinterpret_cast<const std::byte*>(buffer_.data().data()) + offset_); }
+public:
+  uint32_t offset() const noexcept { return offset_; }
+  void* __data() noexcept { return (void*)&base(); }
+  SystemTheme_Direct(::nprpc::flat_buffer& buffer, std::uint32_t offset)
+    : buffer_(buffer)
+    , offset_(offset)
+  {
+  }
+  const uint32_t& serial() const noexcept { return base().serial;}
+  uint32_t& serial() noexcept { return base().serial;}
+  void name(const char* str) { new (&base().name) ::nprpc::flat::String(buffer_, str); }
+  void name(const std::string& str) { new (&base().name) ::nprpc::flat::String(buffer_, str); }
+  auto name() noexcept { return (::nprpc::flat::Span<char>)base().name; }
+  auto name() const noexcept { return (::nprpc::flat::Span<const char>)base().name; }
+  auto name_d() noexcept { return ::nprpc::flat::String_Direct1(buffer_, offset_ + offsetof(SystemTheme, name)); }
+};
+} // namespace flat
+
+struct ThemeAck {
+  uint32_t serial;
+};
+
+namespace flat {
+struct ThemeAck {
+  uint32_t serial;
+};
+
+class ThemeAck_Direct {
+  ::nprpc::flat_buffer& buffer_;
+  const std::uint32_t offset_;
+
+  auto& base() noexcept { return *reinterpret_cast<ThemeAck*>(reinterpret_cast<std::byte*>(buffer_.data().data()) + offset_); }
+  auto const& base() const noexcept { return *reinterpret_cast<const ThemeAck*>(reinterpret_cast<const std::byte*>(buffer_.data().data()) + offset_); }
+public:
+  uint32_t offset() const noexcept { return offset_; }
+  void* __data() noexcept { return (void*)&base(); }
+  ThemeAck_Direct(::nprpc::flat_buffer& buffer, std::uint32_t offset)
+    : buffer_(buffer)
+    , offset_(offset)
+  {
+  }
+  const uint32_t& serial() const noexcept { return base().serial;}
+  uint32_t& serial() noexcept { return base().serial;}
+};
+} // namespace flat
+
 struct KeyboardSettings {
   std::string layout;
   std::string variant;
@@ -1077,10 +1140,13 @@ public:
   virtual void Minimize (uint32_t surfaceId) = 0;
   virtual void SetPanelThickness (uint32_t surfaceId, uint32_t thickness, uint32_t reserved) = 0;
   virtual ::nprpc::Task<> SubscribeWindows (::nprpc::BidiStream<WindowListAck, WindowList> stream) = 0;
+  virtual ::nprpc::Task<> SubscribeSystemTheme (::nprpc::BidiStream<ThemeAck, SystemTheme> stream) = 0;
   virtual void ActivateWindow (uint32_t surfaceId) = 0;
   virtual void SetInputRegion (uint32_t surfaceId, int32_t x, int32_t y, uint32_t w, uint32_t h) = 0;
   virtual Appearance GetAppearance () = 0;
   virtual void SetAppearance (flat::Appearance_Direct appearance) = 0;
+  virtual SystemTheme GetSystemTheme () = 0;
+  virtual void SetSystemTheme (flat::SystemTheme_Direct theme) = 0;
   virtual KeyboardSettings GetKeyboard () = 0;
   virtual void SetKeyboard (flat::KeyboardSettings_Direct settings) = 0;
   virtual std::vector<KeyboardLayout> ListKeyboardLayouts () = 0;
@@ -1133,6 +1199,7 @@ public:
   void SetPanelThickness (uint32_t surfaceId, uint32_t thickness, uint32_t reserved);
   ::nprpc::Task<void> SetPanelThicknessAsync (uint32_t surfaceId, uint32_t thickness, uint32_t reserved, std::stop_token st = {});
   std::pair<::nprpc::StreamWriter<WindowListAck>, ::nprpc::StreamReader<WindowList>> SubscribeWindows ();
+  std::pair<::nprpc::StreamWriter<ThemeAck>, ::nprpc::StreamReader<SystemTheme>> SubscribeSystemTheme ();
   void ActivateWindow (uint32_t surfaceId);
   ::nprpc::Task<void> ActivateWindowAsync (uint32_t surfaceId, std::stop_token st = {});
   void SetInputRegion (uint32_t surfaceId, int32_t x, int32_t y, uint32_t w, uint32_t h);
@@ -1141,6 +1208,10 @@ public:
   ::nprpc::Task<Appearance> GetAppearanceAsync (std::stop_token st = {});
   void SetAppearance (const Appearance& appearance);
   ::nprpc::Task<void> SetAppearanceAsync (const Appearance& appearance, std::stop_token st = {});
+  SystemTheme GetSystemTheme ();
+  ::nprpc::Task<SystemTheme> GetSystemThemeAsync (std::stop_token st = {});
+  void SetSystemTheme (const SystemTheme& theme);
+  ::nprpc::Task<void> SetSystemThemeAsync (const SystemTheme& theme, std::stop_token st = {});
   KeyboardSettings GetKeyboard ();
   ::nprpc::Task<KeyboardSettings> GetKeyboardAsync (std::stop_token st = {});
   void SetKeyboard (const KeyboardSettings& settings);
@@ -1273,6 +1344,64 @@ inline ::nprpc::flat_buffer serialize<::lava::WindowList>(const ::lava::WindowLi
       ++it;
     }
   }
+  return __buf;
+}
+} // namespace nprpc_stream
+
+namespace nprpc_stream {
+template<>
+inline ::lava::SystemTheme deserialize<::lava::SystemTheme>(::nprpc::flat_buffer& buf) {
+  ::nprpc::impl::flat::StreamChunk_Direct __chunk(buf, sizeof(::nprpc::impl::Header));
+  auto __span = __chunk.data();
+  ::nprpc::flat_buffer __elem_buf;
+  auto __mb = __elem_buf.prepare(__span.size());
+  std::memcpy(__mb.data(), __span.data(), __span.size());
+  __elem_buf.commit(__span.size());
+  ::lava::SystemTheme __result;
+  ::lava::flat::SystemTheme_Direct __d(__elem_buf, 0);
+  __result.serial = __d.serial();
+  __result.name = (std::string_view)__d.name();
+  return __result;
+}
+} // namespace nprpc_stream
+
+namespace nprpc_stream {
+template<>
+inline ::lava::ThemeAck deserialize<::lava::ThemeAck>(::nprpc::flat_buffer& buf) {
+  ::nprpc::impl::flat::StreamChunk_Direct __chunk(buf, sizeof(::nprpc::impl::Header));
+  auto __span = __chunk.data();
+  ::nprpc::flat_buffer __elem_buf;
+  auto __mb = __elem_buf.prepare(__span.size());
+  std::memcpy(__mb.data(), __span.data(), __span.size());
+  __elem_buf.commit(__span.size());
+  ::lava::ThemeAck __result;
+  ::lava::flat::ThemeAck_Direct __d(__elem_buf, 0);
+  memcpy(&__result, __d.__data(), 4);
+  return __result;
+}
+} // namespace nprpc_stream
+
+namespace nprpc_stream {
+template<>
+inline ::nprpc::flat_buffer serialize<::lava::ThemeAck>(const ::lava::ThemeAck& value) {
+  ::nprpc::flat_buffer __buf;
+  __buf.prepare(4);
+  __buf.commit(4);
+  ::lava::flat::ThemeAck_Direct __d(__buf, 0);
+  memcpy(__d.__data(), &value, 4);
+  return __buf;
+}
+} // namespace nprpc_stream
+
+namespace nprpc_stream {
+template<>
+inline ::nprpc::flat_buffer serialize<::lava::SystemTheme>(const ::lava::SystemTheme& value) {
+  ::nprpc::flat_buffer __buf;
+  __buf.prepare(12 + 128);
+  __buf.commit(12);
+  ::lava::flat::SystemTheme_Direct __d(__buf, 0);
+  __d.serial() = value.serial;
+  __d.name(value.name);
   return __buf;
 }
 } // namespace nprpc_stream

@@ -28,7 +28,7 @@ import LavaUI
 
 // Opaque: this is a document-shaped window, and reading a settings page
 // through the desktop behind it is worse, not better.
-WindowBackdrop.current = .color(Theme.current.background)
+WindowBackdrop.current = .theme
 
 guard let editor = LavaClient.open(
     title: "Settings", width: 900, height: 640, frame: .client

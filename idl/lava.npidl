@@ -136,6 +136,25 @@ message Appearance {
   shadowOffsetY: f32;
 }
 
+/// Which LavaUI `Theme` every client that uses system colours should wear.
+///
+/// The compositor does not invent palettes — `dark`, `light` and `nebula`
+/// live in LavaUI. This is only the *name*, so a settings app can change it
+/// and every Lava window hears, without the control plane carrying fifteen
+/// colour sliders. A client that paints its own paper (a terminal, a player)
+/// ignores the push, or remaps it in `Theme.onSystemUpdate`.
+message SystemTheme {
+  /// Monotonic. Echoed in `ThemeAck`, like `WindowList.serial`.
+  serial: u32;
+  /// `dark`, `light`, or `nebula`. Anything else is ignored by clients.
+  name: string;
+}
+
+/// Client → compositor: "I have applied this theme."
+message ThemeAck {
+  serial: u32;
+}
+
 // ─── Settings ──────────────────────────────────────────────────────────────
 //
 // The desktop's own preferences, for the one client that exists to change
@@ -699,6 +718,19 @@ interface Compositor {
   /// there, not because a shell has anything to say.
   bidi_stream<WindowListAck, WindowList> SubscribeWindows();
 
+  /// The system colour theme, and again whenever Settings changes it.
+  ///
+  /// Bidirectional for the same reason the other state streams are: the
+  /// reverse half is flow control and "this client is still here", not
+  /// because a window has a theme to send back. A `server_stream` would
+  /// work on the wire; it would not plug into the pump every other
+  /// subscription already uses.
+  ///
+  /// The first message is the theme at subscription, so a client that
+  /// starts after Settings already picked nebula is nebula on its first
+  /// frame rather than dark-until-someone-clicks.
+  bidi_stream<ThemeAck, SystemTheme> SubscribeSystemTheme();
+
   /// Brings a window forward: restores it if minimized, raises it, focuses it.
   ///
   /// What a dock icon does when it is clicked, and the counterpart to
@@ -762,6 +794,18 @@ interface Compositor {
   /// not have to know the limits — call `GetAppearance` afterwards to see
   /// what was actually taken.
   void SetAppearance(appearance: in Appearance) raises(SettingsWriteFailed);
+
+  /// The system colour theme Lava windows should wear.
+  ///
+  /// A name, not a palette: see `SystemTheme`. The running value, so a
+  /// settings app that just opened is not guessing from the config file.
+  SystemTheme GetSystemTheme();
+
+  /// Sets the system colour theme, now and for the next session.
+  ///
+  /// Every subscribed client is told; a Lava window that uses `Theme.current`
+  /// retints without restarting. Written to `lava.conf` as `[theme] name=…`.
+  void SetSystemTheme(theme: in SystemTheme) raises(SettingsWriteFailed);
 
   /// The keyboard as it is set up now.
   KeyboardSettings GetKeyboard();

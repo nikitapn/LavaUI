@@ -101,6 +101,14 @@ struct AppearanceConfig {
   int32_t shadowOffsetY = 4;
 };
 
+/// Which LavaUI `Theme` clients that wear system colours should use.
+///
+/// A name, not a palette: `dark`, `light`, `nebula`. The colours live in
+/// LavaUI; the compositor only remembers which one the desktop picked.
+struct ThemeConfig {
+  std::string name = "dark";
+};
+
 /// One `key = value` bound for one `[section]`.
 ///
 /// The unit `Config::write` takes, because a settings app changes a handful of
@@ -145,6 +153,7 @@ struct Config {
 
   KeyboardConfig keyboard;
   AppearanceConfig appearance;
+  ThemeConfig theme;
   ShellConfig shell;
   std::vector<OutputConfig> outputs;
 

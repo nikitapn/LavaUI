@@ -18,6 +18,25 @@ struct AppearancePage: View {
 
     var body: some View {
         VStack(spacing: 18) {
+            SettingGroup("Colours") {
+                SettingRow("Theme",
+                           "Pushed to every Lava window that uses system "
+                           + "colours. A terminal or a player that paints "
+                           + "its own paper is left alone.") {
+                    VStack(spacing: 2) {
+                        ForEach(["dark", "light", "nebula"], id: \.self) { name in
+                            PickerRow(
+                                title: name.capitalized,
+                                detail: name,
+                                selected: store.themeName == name
+                            ) {
+                                store.setThemeName(name)
+                            }
+                        }
+                    }
+                }
+            }
+
             SettingGroup("Windows") {
                 SettingRow("Corner radius",
                            "Rounds every window the compositor draws, and the "

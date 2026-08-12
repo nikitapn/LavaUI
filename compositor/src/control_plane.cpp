@@ -10,6 +10,7 @@
 #include <fstream>
 #include <mutex>
 #include <thread>
+#include <string_view>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -348,6 +349,26 @@ class StateBroker {
 using FocusBroker = StateBroker<FocusWatcher, ActiveWindow>;
 using ListBroker = StateBroker<ListWatcher, WindowList>;
 
+struct ThemeWatcher {
+  explicit ThemeWatcher(nprpc::StreamWriter<SystemTheme> &&w)
+      : pump(std::move(w)) {}
+
+  void send(const SystemTheme &theme) { pump.post(theme); }
+  void close() { pump.close(); }
+  bool done() { return pump.done(); }
+
+  StreamPump<SystemTheme, true> pump;
+};
+
+using ThemeWatcherPtr = std::shared_ptr<ThemeWatcher>;
+using ThemeBroker = StateBroker<ThemeWatcher, SystemTheme>;
+
+/// The three names LavaUI actually has. Anything else is dark.
+std::string canonicalThemeName(std::string_view name) {
+  if (name == "light" || name == "nebula") return std::string(name);
+  return "dark";
+}
+
 /// How the renderer names a file decoded at a given cap.
 ///
 /// The same spelling `ImageStore.key` uses on the client, and deliberately so:
@@ -400,9 +421,9 @@ InputEvent make_event(uint32_t kind, float x, float y, int32_t button,
 class CompositorImpl final : public ICompositor_Servant {
  public:
   CompositorImpl(CompositorHost &host, LoopQueue &loop, InputBroker &broker,
-                 FocusBroker &focus, ListBroker &windows)
+                 FocusBroker &focus, ListBroker &windows, ThemeBroker &theme)
       : host_(host), loop_(loop), broker_(broker), focus_(focus),
-        windows_(windows) {}
+        windows_(windows), theme_(theme) {}
 
   // ─── Resources ───────────────────────────────────────────────────────────
 
@@ -556,6 +577,42 @@ class CompositorImpl final : public ICompositor_Servant {
                         appearance.shadowOpacity(), appearance.shadowOffsetY(),
                         error);
     if (!error.empty()) throw SettingsWriteFailed(host_.configPath(), error);
+  }
+
+  SystemTheme GetSystemTheme() override { return currentTheme(); }
+
+  void SetSystemTheme(flat::SystemTheme_Direct theme) override {
+    const std::string name = canonicalThemeName(std::string{theme.name()});
+    std::string error;
+    host_.updateSystemTheme(name, error);
+    if (!error.empty()) throw SettingsWriteFailed(host_.configPath(), error);
+  }
+
+  nprpc::Task<> SubscribeSystemTheme(
+      nprpc::BidiStream<ThemeAck, SystemTheme> stream) override {
+    auto watcher = std::make_shared<ThemeWatcher>(std::move(stream.writer));
+    theme_.subscribe(watcher);
+    watcher->send(currentTheme());
+    try {
+      while (auto ack = co_await stream.reader) {
+        (void)ack;
+      }
+    } catch (...) {
+      theme_.unsubscribe(watcher);
+      watcher->close();
+      throw;
+    }
+    theme_.unsubscribe(watcher);
+    watcher->close();
+    co_return;
+  }
+
+  SystemTheme currentTheme() const {
+    SystemTheme out{};
+    std::string name;
+    host_.systemTheme(name);
+    out.name = canonicalThemeName(name);
+    return out;
   }
 
   KeyboardSettings GetKeyboard() override {
@@ -902,6 +959,7 @@ class CompositorImpl final : public ICompositor_Servant {
   InputBroker &broker_;
   FocusBroker &focus_;
   ListBroker &windows_;
+  ThemeBroker &theme_;
 
   /// Registered images, three ways round: what a key resolves to, how many
   /// clients hold it, and which key an id came from. No lock, unlike
@@ -977,7 +1035,7 @@ class ControlPlaneImpl final : public ControlPlane {
     }
 
     servant_ = std::make_unique<CompositorImpl>(host, queue_, broker_, focus_,
-                                                windows_);
+                                                windows_, theme_);
     const nprpc::ObjectId oid = poa_->activate_object_with_id(
         0, servant_.get(), nprpc::ObjectActivationFlags::shm);
 
@@ -1019,6 +1077,13 @@ class ControlPlaneImpl final : public ControlPlane {
     windows_.broadcast(list);
   }
 
+  void postSystemTheme() override {
+    if (theme_.empty()) return;
+    SystemTheme theme = servant_->currentTheme();
+    theme.serial = ++themeSerial_;
+    theme_.broadcast(theme);
+  }
+
   void postActiveWindow(uint32_t surfaceId, const std::string &title,
                         const std::string &menuService,
                         const std::string &menuObjectPath) override {
@@ -1042,7 +1107,9 @@ class ControlPlaneImpl final : public ControlPlane {
   InputBroker broker_;
   FocusBroker focus_;
   ListBroker windows_;
+  ThemeBroker theme_;
   uint32_t listSerial_ = 0;
+  uint32_t themeSerial_ = 0;
   nprpc::Rpc *rpc_ = nullptr;
   nprpc::Poa *poa_ = nullptr;
   std::unique_ptr<CompositorImpl> servant_;

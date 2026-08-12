@@ -160,6 +160,7 @@ public enum LavaClient {
         Self.arena = sink
         Self.arenaID = arenaID
         Self.compositor = compositor
+        subscribeSystemTheme()
         return editor
     }
 
@@ -250,6 +251,49 @@ public enum LavaClient {
             )
             return nil
         }
+    }
+
+    /// The desktop's colour theme, and again whenever Settings changes it.
+    ///
+    /// Applies `Theme.current` on the frame loop and then `Theme.onSystemUpdate`,
+    /// so an app that uses system colours retints and one that paints its
+    /// own paper can follow or ignore. The first message is the theme at
+    /// subscription — a window that opens after nebula is already picked
+    /// should not flash dark.
+    private static func subscribeSystemTheme() {
+        guard let compositor = Self.compositor else { return }
+        let stream: NPRPCBidiStream<ThemeAck, SystemTheme>
+        do {
+            stream = try compositor.subscribeSystemTheme()
+        } catch {
+            FileHandle.standardError.write(
+                Data("SubscribeSystemTheme failed: \(error)\n".utf8)
+            )
+            return
+        }
+        Task.detached {
+            do {
+                for try await theme in stream.reader {
+                    let name = theme.name
+                    let serial = theme.serial
+                    MainQueue.async { applySystemTheme(name) }
+                    try? await stream.writer.write(ThemeAck(serial: serial))
+                }
+            } catch {
+                FileHandle.standardError.write(
+                    Data("system theme stream ended: \(error)\n".utf8)
+                )
+            }
+            stream.writer.close()
+        }
+    }
+
+    /// Wears the named palette. Unknown names are left alone — a typo in
+    /// `lava.conf` should not blank a running app.
+    static func applySystemTheme(_ name: String) {
+        guard let theme = Theme.named(name) else { return }
+        Theme.current = theme
+        Theme.onSystemUpdate?(theme)
     }
 
     /// Every window on the desktop, and again whenever the set changes.
