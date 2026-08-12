@@ -58,6 +58,67 @@ Linux + Swift 6 + C++ interop only for anything that links the engine.
 Invalidation levels: `.none` / `.redraw` / `.layout` / `.body`. A pure redraw
 skips body and layout. `LAVAUI_DEBUG=1` prints per-frame stage timings.
 
+### The shared renderer (scene tree) — read this before touching scroll or hover
+
+The compositor's canvas is not a dumb blitter. A draw list carries **scene
+nodes** (`BeginNode` / `EndNode` in `draw_command.hpp`), which are named
+subtrees the renderer owns *between* client frames:
+
+| Flag | Meaning |
+|---|---|
+| `kSceneNodeClip` | scissor children to the node rect |
+| `kSceneNodeScrollY` / `ScrollX` | renderer may translate this subtree |
+| `kSceneNodeHitTest` | renderer resolves hover/press here |
+| `kSceneNodeAbsoluteCoordinates` | commands inside are window-space already |
+| `kSceneNodeWheel` | the widget handles the wheel itself; do not scroll its container |
+
+Consequences that surprise people:
+
+- **Scrolling is renderer-side.** The compositor eases `scrollX/scrollY` and
+  reports the result back as a `.nodeScroll` input event; the client *adopts*
+  the offset for hit-testing and lazy mounting (`ScrollNode.adoptRendererOffset`)
+  rather than driving it. A stopped client still scrolls — as far as the
+  overscan it last emitted (`ScrollView.paintedSpan`).
+- **Hover tints are renderer-side** too, which is why a hover costs no round
+  trip and why `.nodeHover` must not force a client repaint.
+- One wheel detent is `kPixelsPerNotch` (72) in `render_window.cpp`. Both input
+  paths normalise a detent to one notch first — GLFW's Wayland backend scales
+  the protocol's 15 units by 1/10, the compositor divides by 15 or prefers
+  `delta_discrete / 120`.
+- A wheel has only a Y axis, so over a container that scrolls **only** in X the
+  renderer maps the vertical wheel onto X (`RenderWindow::scrollScene`).
+
+### Renderer facts worth knowing before debugging pixels
+
+- **Colours are linear**; the swapchain sRGB-encodes on the way out. A
+  component of `0.28` leaves the GPU looking like `0.56`. Every palette in the
+  repo is authored against that, so a "dark" number from a colour picker
+  arrives on screen as a mid-tone.
+- **One descriptor set per texture *change*.** Batches are emitted in tree
+  order with no sorting, so a grid pairing an atlased icon with a glyph label
+  costs two per cell. The pool grows in chunks of `kDescriptorSetsPerChunk`
+  (64) up to `kMaxDescriptorChunks`; past that it warns and draws the *wrong*
+  texture rather than nothing. Keep images atlasable: `ImageAtlas` refuses
+  anything wider than one 256px cell, so pass `decodePixels`/`maxPixelSize`
+  whenever the box is a percentage rather than a point size.
+- **Backdrop blur captures this surface's own framebuffer**
+  (`RenderDevice::resolveImage`), never the desktop. A client cannot frost what
+  is behind its window; that would need a compositor-side effect.
+- Blur scopes do **not** nest — the outermost wins (`DrawList.withBlurScope`).
+
+### Layout traps (LavaUI)
+
+- **A column stack that states its own width gets `theme.panel` for free.**
+  `StackNode.apply` does this so a sidebar looks like a sidebar
+  (`case (.column, .point), (.column, .percent)`). Write
+  `VStack(width: .pct(100))` in a full-width container and you paint the whole
+  window `panel`, burying everything under it. Let columns stretch instead, or
+  use `.frame(width:)`, which goes through the modifier and does not trigger it.
+- A modifier that paints lands on the content's own node when that node can
+  show it (`LeafNode` / `StackNode` / `StyleBoxNode`) and otherwise wraps in a
+  `StyleBoxNode`. Order still matters: `.background()` *after* a modifier that
+  wraps applies to the wrapper.
+
 ### Client mode rules of thumb
 
 - `LAVA_CLIENT=1` → `LavaClient.open` / `LavaClient.run` (not a separate app).
@@ -82,6 +143,37 @@ skips body and layout. `LAVAUI_DEBUG=1` prints per-frame stage timings.
 - NPRPC object timeout defaults to **1s**. Long work (surface create, image
   decode, capture) must raise the proxy timeout, not only a local semaphore.
 - Servants hop to the **Wayland event loop** before touching wlroots/Vulkan.
+- **`LavaClient.open` returns before the surface exists.** It hands back an
+  `Editor`; `createSurface` happens on the way into `run`, so `surfaceID` is
+  still 0 during app setup. Anything that needs an id (`SetMinSize`,
+  `SetInputRegion`) must either be called later or, better, store the request
+  and flush it when the id arrives — see `LavaClient.setMinimumSize`. A guard
+  that silently returns here looks exactly like a broken compositor.
+- Adding a call: edit `idl/lava.npidl`, run `scripts/gen_stubs.sh`, implement
+  the servant in `compositor/src/control_plane.cpp`, add the virtual to
+  `CompositorHost` (`control_plane.hpp`) and the body on `SurfaceRegistry`.
+  Method indices are positional — regenerating both stubs together is what
+  keeps client and server agreeing.
+
+### Compositor policy decisions already made
+
+- **Who draws the title bar.** A client that explicitly asks xdg-decoration for
+  client side gets it and no frame (Chromium, Electron: their header *is* their
+  tab strip and overriding it just yields two rows of buttons). Server side or
+  no preference gets the compositor's frame; clients that never bind the
+  protocol (GTK) get none. X11's equivalent is the Motif hint.
+- **Input regions are honoured by the scene, not just by us.**
+  `point_accepts_input` on each content buffer means a 600px-tall panel that
+  only claims a 32px strip stops occluding the windows underneath. Shadows
+  accept nothing. Both hit paths (`hitTestPass` and `wlr_scene_node_at`) must
+  agree or clicks land where motion did not.
+- **Popups** (`xdg_popup`) need three things: a scene subtree under the
+  parent's, a configure on `initial_commit`, and unconstraining against the
+  work area **in the root toplevel's coordinates** — not the immediate
+  parent's, or submenus drift off-screen a level at a time.
+- **Clicking the desktop clears focus** (`Server::blurAll`), which is what
+  makes the panel fall back to its own menu. Tested on the surface under the
+  pointer, not on the toplevel: a popup resolves to no toplevel.
 
 Sibling checkout often expected:
 
@@ -110,6 +202,7 @@ Sources/
   LavaTerm*/       Terminal emulator (core headless + app)
   Spotify*/        LavaSpotify (core headless + app)
   TraceLoom*/      Log / trace viewer + Ollama assistant
+  Weather*/        LavaWeather (core headless + app; Open-Meteo, no API key)
   ArenaDemo/       Multi-client / arena experiments
   FBDModel/        Function-block diagram model
 canvas/            C++ Vulkan engine + Yoga (SwiftPM C++ targets)
@@ -165,11 +258,63 @@ optional QEMU VM).
 | `LAVAUI_DEBUG=1` | Per-frame body/layout/emit/present timings |
 | `LAVAUI_PROFILE=1` | Per-widget paint profiling via agent `profile` |
 | `LAVA_FRAME_PROBE=1` | Compositor: per-surface frame cost, gaps and stalls |
+| `LAVA_NO_SHELL=1` | Compositor: do not start panel/dock/wallpaper |
+| `WLR_BACKENDS=headless` `WLR_RENDERER=vulkan` | Compositor with no screen (see below) |
+| `WLR_LOG=debug` | wlroots + compositor debug logging (popups, scene) |
+| `LAVA_BOOT_TRACE=1` | Where the time before a client's first frame went |
 | `CANVAS_VK_VALIDATION=1` | Vulkan validation layers |
 | `NPRPC_SWIFT_PATH` | Override path to `nprpc_swift` package |
 | `NPRPC_ROOT` / `NPRPC_BUILD_DIR` | In-tree nprpc link for Swift bridge |
 
 Runtime agent protocol (MCP/CLI, stable `sid`s, hit-testing): **`docs/agent.md`**.
+
+## Verifying a change without a screen
+
+Most of this repo can be exercised headlessly, and the recipe is worth copying
+rather than rediscovering.
+
+```bash
+# A compositor of your own. NEVER reuse the live session's XDG_RUNTIME_DIR:
+# the second compositor overwrites $XDG_RUNTIME_DIR/lava-compositor.ior and
+# every client — including the user's running session — follows the new one.
+export RT=/tmp/lvt          # keep it SHORT: the wayland socket path has a
+mkdir -p $RT && chmod 700 $RT   # 108-byte limit and long paths fail to bind
+XDG_RUNTIME_DIR=$RT WLR_BACKENDS=headless WLR_RENDERER=vulkan \
+  LAVA_NO_SHELL=1 ./build/compositor/compositor &
+
+# A client of it, with the agent server on for scripted input + screenshots
+XDG_RUNTIME_DIR=$RT WAYLAND_DISPLAY=wayland-0 LAVA_CLIENT=1 \
+  LAVA_AGENT_PORT=9876 ./.build/debug/LavaTerm &
+```
+
+Then drive it over the agent port (JSON lines, one request per connection):
+`settle`, `screenshot`, `find`, `hit_test`, `click`, `move`, `scroll`,
+`type_text`, `key`, `layout_tree`, `fb_size`, `profile`. Screenshots come back
+as base64 PNG, which is the fastest way to check a layout claim.
+
+**Before killing anything**, confirm it is yours:
+
+```bash
+grep -qa "$RT" /proc/$PID/environ && echo mine || echo "leave alone"
+```
+
+The user's session compositor and their browser look just like test processes
+in `pgrep` output. `pkill -f` on a pattern that matches your own shell command
+will also kill the shell.
+
+### What headless cannot do
+
+| Cannot | Why | Do instead |
+|---|---|---|
+| Move the real cursor / click the desktop, drag a window edge, right-click for a popup | headless wlroots has no input devices, and there is no virtual-pointer protocol | drive the app's own agent port, or ask the human |
+| Screenshot foreign (GTK/Chromium) windows | no screencopy protocol implemented, so `grim` cannot attach | read the compositor log; `capturePng` only covers Lava surfaces |
+| See overlay content from the agent | `find`/`layout_tree` walk the main tree; a presented overlay's subtree is detached | click by coordinate |
+| Reach the compositor's scene scroll from a client's agent | agent input is injected into that client's engine | test scene-level behaviour in **windowed** mode, where the app owns the renderer |
+
+Windowed mode under a nested compositor is fragile in one known way: if the
+compositor clamps the window to a size the app did not request, the swapchain
+can hit `VK_ERROR_OUT_OF_DATE_KHR` on acquire and the engine treats it as
+fatal. Open at the size the output will actually grant to avoid it.
 
 ## Where to change what
 
@@ -194,6 +339,15 @@ Runtime agent protocol (MCP/CLI, stable `sid`s, hit-testing): **`docs/agent.md`*
 | When a frame is drawn (pacing) | `SurfaceRegistry::animate`, `Output::on_frame` |
 | Frame handover / fences | `DmabufImage::publishFence`, `CanvasSurface::frameFence` |
 | Client open / Present / input stream | `Sources/LavaClient/` |
+| Scene nodes / renderer-owned scroll + hover | `RenderWindow::scrollScene`, `advanceSceneAnimations`, `DrawList.nodeFlags` |
+| Who draws the title bar | `ToplevelDecoration::apply`, `Server::serverDecorated` |
+| Popups / context menus | `Server::on_new_popup`, `Popup::on_commit`, `Server::popupBounds` |
+| Which pixels of a surface take input | `point_accepts_input` hooks, `ClientSurface::acceptsInput`, `SetInputRegion` |
+| Minimum window size | IDL `SetMinSize`, `SurfaceRegistry::minFor`, `LavaClient.setMinimumSize` |
+| Focus, including clicking the desktop | `Server::focusSurface`, `Server::blurAll` |
+| Texture batching / descriptor budget | `QuadRenderer::bindTexture`, `ImageAtlas` |
+| Blur (backdrop + content) | `BlurPass`, `quad.frag` kinds 2/6, `DrawList.withBlurScope` |
+| Terminal reflow on resize | `TerminalScreen.reflow`, `rowWrapped` |
 | Perf scenarios | `Sources/LavaBench/`, `docs/performance.md` |
 | App demos | `Sources/HelloWorld/`, Spotify/TraceLoom/LavaTerm apps |
 
@@ -214,6 +368,13 @@ Runtime agent protocol (MCP/CLI, stable `sid`s, hit-testing): **`docs/agent.md`*
    `docs/performance.md` (work *counts* gate harder than noisy ms).
 8. Client input release coordinates use **content** space (title bar offset);
    see compositor cursor release path if clicks “miss” by a constant Y.
+9. Verify claims about pixels by rendering and looking, not by reading the
+   layout tree. Several bugs here — a clipped row in a scroll container, a
+   panel fill painted over everything — are invisible in `layout_tree` and
+   obvious in a screenshot.
+10. Say plainly what you could not test. Whole classes of behaviour here
+    (real pointer input, foreign-window pixels) have no headless path, and a
+    confident claim about one of them is a claim nobody checked.
 
 ## Docs index
 
