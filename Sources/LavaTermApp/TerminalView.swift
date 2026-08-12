@@ -31,6 +31,7 @@ public struct TerminalView: View {
 
         return VStack(padding: 0, spacing: 0) {
             TitleStrip(path: session.pathLabel)
+                .background(TerminalPalette.windowFill)
 
             TerminalCanvas(
                 session: session,
@@ -42,7 +43,6 @@ public struct TerminalView: View {
             .flexGrow(1)
         }
         .frame(width: .pct(100), height: .pct(100))
-        .background(Color(r: 0.08, g: 0.09, b: 0.11))
         // Empty space in the strip moves the window; the controls and the
         // canvas still take their own hits first.
         .windowDrag()
@@ -59,11 +59,10 @@ private struct TitleStrip: View {
             if WindowBridge.drawsOwnChrome {
                 WindowControls()
             }
-            Text(path, color: Theme.current.textSecondary)
+            Text(path, color: TerminalPalette.chromeText)
             Spacer()
         }
         .frame(height: .pt(36))
-        .background(Color(r: 0.10, g: 0.11, b: 0.14))
     }
 }
 
@@ -200,7 +199,7 @@ struct TerminalCanvas: View {
 
         list.rect(
             x: frame.x, y: frame.y, w: frame.w, h: frame.h,
-            color: lavaColor(TerminalPalette.defaultBg)
+            color: TerminalPalette.terminalFill
         )
 
         // visibleCell honours scrollback offset so history, not only the live
@@ -237,7 +236,7 @@ struct TerminalCanvas: View {
                     let bgRGB = TerminalPalette.rgb(for: bg, isForeground: false)
                     list.rect(
                         x: x, y: y, w: runW, h: cellH,
-                        color: lavaColor(bgRGB)
+                        color: TerminalPalette.color(bgRGB)
                     )
                 }
 
@@ -250,7 +249,7 @@ struct TerminalCanvas: View {
                         y: y,
                         w: runW + 4,
                         h: cellH,
-                        color: lavaColor(fgRGB),
+                        color: TerminalPalette.color(fgRGB),
                         font: mono
                     )
                 }
@@ -260,7 +259,7 @@ struct TerminalCanvas: View {
                     list.line(
                         x1: x, y1: y + cellH - 2,
                         x2: x + runW, y2: y + cellH - 2,
-                        color: lavaColor(uRGB),
+                        color: TerminalPalette.color(uRGB),
                         width: 1
                     )
                 }
@@ -281,7 +280,7 @@ struct TerminalCanvas: View {
                 let w = Float(columns.count) * cellW
                 list.rect(
                     x: x, y: originY + Float(r) * cellH, w: w, h: cellH,
-                    color: Color(r: 0.35, g: 0.55, b: 0.85, a: 0.35)
+                    color: TerminalPalette.selectionFill
                 )
             }
         }
@@ -299,7 +298,7 @@ struct TerminalCanvas: View {
             let cy = originY + Float(row) * cellH
             list.rect(
                 x: cx, y: cy, w: cellW, h: cellH,
-                color: Color(r: 0.85, g: 0.88, b: 0.92, a: 0.45)
+                color: TerminalPalette.cursorFill
             )
             // Redraw the glyph on top so the cell stays readable under the
             // fill — same idea as reverse video without swapping the palette.
@@ -314,14 +313,10 @@ struct TerminalCanvas: View {
                     y: cy,
                     w: cellW + 4,
                     h: cellH,
-                    color: lavaColor(fgRGB),
+                    color: TerminalPalette.color(fgRGB),
                     font: mono
                 )
             }
         }
     }
-}
-
-private func lavaColor(_ rgb: (r: Float, g: Float, b: Float)) -> Color {
-    Color(r: rgb.r, g: rgb.g, b: rgb.b)
 }

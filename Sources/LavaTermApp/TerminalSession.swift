@@ -117,14 +117,20 @@ public final class TerminalSession: @unchecked Sendable {
         if !selection.dragged, selection.granularity == .character {
             selection.clear()
         } else {
-            // Selecting *is* the copy, for the primary selection. No shortcut,
-            // no menu: this is the whole of the Unix convention that middle
-            // click pastes what you last highlighted, and it is why it has to
-            // happen here rather than anywhere a user might press something.
-            let text = selection.text(from: screen)
-            if !text.isEmpty { ClipboardBridge.writePrimary(text) }
+            publishSelection()
         }
         ViewInvalidation.markNeedsRedraw()
+    }
+
+    /// Selecting *is* the copy. Claude Code and most modern terminals put
+    /// the highlight on the clipboard on release, so Ctrl+V already has it.
+    /// Primary is filled too — middle-click still pastes, and `wl-paste
+    /// --primary` still sees the drag.
+    private func publishSelection() {
+        let text = selection.text(from: screen)
+        guard !text.isEmpty else { return }
+        ClipboardBridge.write(text)
+        ClipboardBridge.writePrimary(text)
     }
 
     public func clearSelection() {

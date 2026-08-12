@@ -1,7 +1,15 @@
-/// xterm 256-colour palette helpers (pure data, no UI).
+/// Every colour LavaTerm draws. RGB tuples so this file stays in
+/// `LavaTermCore` (no LavaUI). The app turns them into `Color` in one
+/// place; change a number here and the grid, the window wash and the
+/// chrome all follow.
+///
+/// `defaultBg` is the gray behind the glyphs. The window is that same
+/// paper at `windowAlpha` — mostly solid, a little desktop through.
 public enum TerminalPalette {
+    public typealias RGB = (r: Float, g: Float, b: Float)
+
     /// Classic 16 ANSI colours (normal + bright), dark-terminal defaults.
-    public static let ansi16: [(r: Float, g: Float, b: Float)] = [
+    public static let ansi16: [RGB] = [
         // Normal
         (0.00, 0.00, 0.00),  // 0 black
         (0.80, 0.00, 0.00),  // 1 red
@@ -22,10 +30,22 @@ public enum TerminalPalette {
         (1.00, 1.00, 1.00),  // 15
     ]
 
-    public static let defaultFg: (r: Float, g: Float, b: Float) = (0.85, 0.87, 0.90)
-    public static let defaultBg: (r: Float, g: Float, b: Float) = (0.08, 0.09, 0.11)
+    /// Ink when a cell has no explicit foreground.
+    public static let defaultFg: RGB = (0.85, 0.87, 0.90)
+    /// Paper when a cell has no explicit background. Also the window tint.
+    public static let defaultBg: RGB = (0, 0, 0)
+    /// Window wash over the desktop. 1 is a slab; 0 is a hole.
+    public static let windowAlpha: Float = 0.90
+    /// Path in the title strip — dimmer than `defaultFg`.
+    public static let chromeFg: RGB = (0.55, 0.58, 0.64)
+    /// Selection overlay, drawn on top of the cells.
+    public static let selection: RGB = (0.35, 0.55, 0.85)
+    public static let selectionAlpha: Float = 0.35
+    /// Block caret fill.
+    public static let cursor: RGB = (0.85, 0.88, 0.92)
+    public static let cursorAlpha: Float = 0.45
 
-    public static func rgb(for color: TerminalColor, isForeground: Bool) -> (r: Float, g: Float, b: Float) {
+    public static func rgb(for color: TerminalColor, isForeground: Bool) -> RGB {
         switch color {
         case .default:
             return isForeground ? defaultFg : defaultBg
@@ -36,7 +56,7 @@ public enum TerminalPalette {
         }
     }
 
-    public static func rgb256(_ index: UInt8) -> (r: Float, g: Float, b: Float) {
+    public static func rgb256(_ index: UInt8) -> RGB {
         if index < 16 {
             return ansi16[Int(index)]
         }
