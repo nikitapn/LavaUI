@@ -9,6 +9,19 @@ import LavaClient
 ///
 /// Data from Open-Meteo, which needs no API key: an app that refused to start
 /// until you had registered for something would not be a weather app.
+/// Sizes the window is opened and held at.
+///
+/// The minimum is not a guess: below roughly this width the week rows run out
+/// of room for the summary and the range bar at once, and the hour strip stops
+/// showing enough hours to be a strip. The compositor clamps interactive
+/// resizes to it, so the broken shape is simply not reachable.
+enum Layout {
+    static let initialWidth: Float = 580
+    static let initialHeight: Float = 660
+    static let minWidth: Float = 560
+    static let minHeight: Float = 420
+}
+
 @main
 struct WeatherApp {
     static func main() {
@@ -23,15 +36,31 @@ struct WeatherApp {
             ProcessInfo.processInfo.environment["LAVA_FRAME"] == "server"
         let editorOrNil = client
             ? LavaClient.open(
-                title: "LavaWeather", frame: serverFrame ? .server : .client
+                title: "LavaWeather",
+                width: Layout.initialWidth, height: Layout.initialHeight,
+                frame: serverFrame ? .server : .client
               )
-            : LavaApp.open(title: "LavaWeather")
+            : LavaApp.open(
+                title: "LavaWeather",
+                width: Layout.initialWidth, height: Layout.initialHeight
+              )
         #else
         let editorOrNil = client
             ? LavaApp.openClient()
             : LavaApp.open(title: "LavaWeather")
         #endif
         guard let editor = editorOrNil else { exit(1) }
+
+        // Not the whole screen. A forecast is a glance, and the content has a
+        // natural size — a hero, a strip of hours, seven rows — that a
+        // full-screen window would leave floating in the middle of nothing.
+        #if canImport(LavaClient)
+        if client {
+            LavaClient.setMinimumSize(
+                width: Layout.minWidth, height: Layout.minHeight
+            )
+        }
+        #endif
 
         Theme.current = .nebula
         // A second, larger instance of the UI face for the headline. Loaded

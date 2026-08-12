@@ -1967,15 +1967,32 @@ bool RenderWindow::scrollSceneNode(float pointerX, float pointerY,
     // Applied to the target rather than the position: notches land while the
     // last one is still easing, and each should extend the journey rather
     // than restart it from wherever the animation happens to be.
-    if (node.flags & canvas::kSceneNodeScrollY) {
+    const bool scrollsX = (node.flags & canvas::kSceneNodeScrollX) != 0;
+    const bool scrollsY = (node.flags & canvas::kSceneNodeScrollY) != 0;
+
+    // A mouse wheel has one axis and it is the vertical one. A container that
+    // scrolls only sideways — a row of cards, a filmstrip — would therefore
+    // never move for the input most people have, which is not a preference to
+    // be configured but a control that does nothing. Every desktop resolves it
+    // the same way: over a horizontal-only container, the vertical wheel
+    // drives the axis it does have.
+    //
+    // Only when there is no genuine horizontal delta to prefer, so a touchpad
+    // or a tilt wheel still says which way it meant, and only when the node
+    // does not also scroll vertically — there the two axes are separate and
+    // borrowing one for the other would move the wrong thing.
+    const float wheelX =
+      (scrollsX && !scrollsY && deltaX == 0.f) ? deltaY : deltaX;
+
+    if (scrollsY) {
       const float limit = std::max(0.f, node.contentH - node.h);
       state.targetY =
         std::clamp(state.targetY - deltaY * kPixelsPerNotch, 0.f, limit);
     }
-    if (node.flags & canvas::kSceneNodeScrollX) {
+    if (scrollsX) {
       const float limit = std::max(0.f, node.contentW - node.w);
       state.targetX =
-        std::clamp(state.targetX - deltaX * kPixelsPerNotch, 0.f, limit);
+        std::clamp(state.targetX - wheelX * kPixelsPerNotch, 0.f, limit);
     }
     if (state.targetX != wasX || state.targetY != wasY) return true;
     // Pinned at its end: keep going outward.

@@ -606,6 +606,26 @@ interface Compositor {
   /// until the next click, which is not a window manager anybody asked for.
   void BeginMove(surfaceId: in u32) raises(SurfaceNotFound);
 
+  /// The smallest this window is willing to be, in pixels.
+  ///
+  /// A window has a size below which its layout stops being a layout — a
+  /// column that no longer fits its own labels, a row whose right-hand end is
+  /// simply gone. Only the client knows where that point is, and until this
+  /// call there was no way for it to say so: the compositor clamped every
+  /// surface at one global floor meant to stop a window vanishing, not to
+  /// keep anybody's design intact.
+  ///
+  /// Advisory in the sense that the compositor still owns the geometry: it
+  /// clamps interactive resizes and its own tiling to this, but a window that
+  /// cannot fit on a small output is made to fit anyway. A minimum larger than
+  /// the work area is not a request the compositor can honour and is not
+  /// treated as one.
+  ///
+  /// Zero on either axis means "no opinion about that direction", which is
+  /// what every existing client is saying by never calling this.
+  void SetMinSize(surfaceId: in u32, minWidth: in u32, minHeight: in u32)
+      raises(SurfaceNotFound);
+
   /// Fills the work area, or puts the window back where it was. Returns the
   /// state it ended in.
   ///

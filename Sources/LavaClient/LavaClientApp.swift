@@ -275,6 +275,28 @@ public enum LavaClient {
         }
     }
 
+    /// States the smallest this window is willing to be.
+    ///
+    /// A layout has a size below which it stops being one, and only the
+    /// application knows where that is. Told once, the compositor clamps
+    /// interactive resizes to it, so a window cannot be dragged into a shape
+    /// its own author knows is broken. Zero on an axis means no opinion.
+    ///
+    /// Quiet when there is no compositor — a windowed build has a window
+    /// manager for this, and an app should be able to say it either way.
+    public static func setMinimumSize(width: Float, height: Float) {
+        guard let compositor = Self.compositor, surfaceID != 0 else { return }
+        report("SetMinSize") {
+            try blockingCall {
+                try await compositor.setMinSize(
+                    surfaceId: surfaceID,
+                    minWidth: UInt32(max(0, width)),
+                    minHeight: UInt32(max(0, height))
+                )
+            }
+        }
+    }
+
     /// Limits where this surface takes pointer input, in its own coordinates.
     ///
     /// For a panel that draws less than it covers — a dock floating over the

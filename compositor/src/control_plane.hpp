@@ -122,6 +122,11 @@ struct CompositorHost {
 
   /// Re-thickens a panel, reserving `reserved` of it. False when the surface
   /// is unknown or is not a panel. See `SetPanelThickness`.
+  /// The client's own floor for its window, in pixels. Zero means no opinion
+  /// about that axis. False if the surface is gone.
+  virtual bool setMinSize(uint32_t surfaceId, uint32_t minWidth,
+                          uint32_t minHeight) = 0;
+
   virtual bool setPanelThickness(uint32_t surfaceId, uint32_t thickness,
                                  uint32_t reserved) = 0;
 

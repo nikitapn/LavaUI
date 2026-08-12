@@ -1072,6 +1072,7 @@ public:
   virtual uint32_t CreateSurface (::nprpc::flat::Span<char> arenaId, uint32_t width, uint32_t height, ::nprpc::flat::Span<char> title, WindowFrame frame, ::nprpc::flat::Span<char> appId) = 0;
   virtual uint32_t CreatePanel (::nprpc::flat::Span<char> arenaId, PanelEdge edge, uint32_t thickness, ::nprpc::flat::Boolean reserve, ::nprpc::flat::Span<char> title, ::nprpc::flat::Span<char> appId) = 0;
   virtual void BeginMove (uint32_t surfaceId) = 0;
+  virtual void SetMinSize (uint32_t surfaceId, uint32_t minWidth, uint32_t minHeight) = 0;
   virtual bool ToggleMaximize (uint32_t surfaceId) = 0;
   virtual void Minimize (uint32_t surfaceId) = 0;
   virtual void SetPanelThickness (uint32_t surfaceId, uint32_t thickness, uint32_t reserved) = 0;
@@ -1123,6 +1124,8 @@ public:
   ::nprpc::Task<uint32_t> CreatePanelAsync (const std::string& arenaId, const PanelEdge& edge, uint32_t thickness, bool reserve, const std::string& title, const std::string& appId, std::stop_token st = {});
   void BeginMove (uint32_t surfaceId);
   ::nprpc::Task<void> BeginMoveAsync (uint32_t surfaceId, std::stop_token st = {});
+  void SetMinSize (uint32_t surfaceId, uint32_t minWidth, uint32_t minHeight);
+  ::nprpc::Task<void> SetMinSizeAsync (uint32_t surfaceId, uint32_t minWidth, uint32_t minHeight, std::stop_token st = {});
   bool ToggleMaximize (uint32_t surfaceId);
   ::nprpc::Task<bool> ToggleMaximizeAsync (uint32_t surfaceId, std::stop_token st = {});
   void Minimize (uint32_t surfaceId);

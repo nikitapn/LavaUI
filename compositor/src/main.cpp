@@ -746,6 +746,11 @@ struct ClientSurface {
   /// could choose its workspace could also follow the user around.
   uint32_t workspace = 0;
 
+  /// The smallest the client says this window may usefully be, in pixels;
+  /// 0 means it has no opinion about that axis. See `SetMinSize`.
+  uint32_t minWidth = 0;
+  uint32_t minHeight = 0;
+
   /// Panels have no frame and are laid out by their edge, not by the user.
   bool panel = false;
   /// Which edge, for a panel. Meaningless otherwise. Kept rather than inferred
@@ -1837,6 +1842,38 @@ class SurfaceRegistry : public lava::CompositorHost {
   }
 
   bool minimize(uint32_t id) override;
+
+  bool setMinSize(uint32_t id, uint32_t minWidth, uint32_t minHeight) override {
+    ClientSurface *surface = find(id);
+    if (surface == nullptr) return false;
+    surface->minWidth = minWidth;
+    surface->minHeight = minHeight;
+    wlr_log(WLR_INFO, "setMinSize id=%u ask=%ux%u now=%ux%u floor=%ux%u", id,
+            minWidth, minHeight, surface->width, surface->height,
+            minFor(*surface, true), minFor(*surface, false));
+    // Applied at once rather than only on the next drag: a client that states
+    // a minimum after opening at less than it is asking to be grown, and
+    // waiting for the user to grab an edge would be an odd way to answer.
+    if (!surface->panel) {
+      const uint32_t w = std::max(surface->width, minFor(*surface, true));
+      const uint32_t h = std::max(surface->height, minFor(*surface, false));
+      if (w != surface->width || h != surface->height) {
+        resizeSurface(*surface, w, h);
+      }
+    }
+    return true;
+  }
+
+  /// The floor for one axis: the client's own, never below the compositor's
+  /// and never above what the work area can show — a minimum that does not
+  /// fit on the screen is not a minimum anybody can honour.
+  uint32_t minFor(const ClientSurface &surface, bool horizontal) const {
+    const uint32_t asked = horizontal ? surface.minWidth : surface.minHeight;
+    const uint32_t available = horizontal ? outputWidth_ : outputHeight_;
+    uint32_t floor = std::max(asked, kMinSurface);
+    if (available > 0) floor = std::min(floor, available);
+    return std::max(floor, kMinSurface);
+  }
 
   bool setPanelThickness(uint32_t id, uint32_t thickness,
                          uint32_t reserved) override {
@@ -4284,18 +4321,24 @@ bool Server::update_drag() {
   // Past the minimum, the far edge is what the user is holding still, so the
   // near one stops rather than pushing it. Without this a window dragged
   // through its own minimum starts walking sideways.
-  const double floor = SurfaceRegistry::minSurface();
-  if (w < floor) {
+  //
+  // The window's own floor where it has stated one, so a layout that stops
+  // working below a certain width cannot be dragged into that state; the
+  // compositor's global floor otherwise. Per axis, because a window may care
+  // about one and not the other.
+  const double floorW = surfaces->minFor(*surface, true);
+  const double floorH = surfaces->minFor(*surface, false);
+  if (w < floorW) {
     if (dragEdges & edges::kLeft) {
-      x = dragOriginX + static_cast<int>(dragOriginW - floor);
+      x = dragOriginX + static_cast<int>(dragOriginW - floorW);
     }
-    w = floor;
+    w = floorW;
   }
-  if (h < floor) {
+  if (h < floorH) {
     if (dragEdges & edges::kTop) {
-      y = dragOriginY + static_cast<int>(dragOriginH - floor);
+      y = dragOriginY + static_cast<int>(dragOriginH - floorH);
     }
-    h = floor;
+    h = floorH;
   }
   if (x != surface->x || y != surface->y) surfaces->moveSurface(*surface, x, y);
   // Rebuilding a swapchain-sized set of attachments and re-exporting a

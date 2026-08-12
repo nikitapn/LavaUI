@@ -522,6 +522,13 @@ class CompositorImpl final : public ICompositor_Servant {
     if (!host_.minimize(surfaceId)) throw SurfaceNotFound(surfaceId);
   }
 
+  void SetMinSize(uint32_t surfaceId, uint32_t minWidth,
+                  uint32_t minHeight) override {
+    if (!host_.setMinSize(surfaceId, minWidth, minHeight)) {
+      throw SurfaceNotFound(surfaceId);
+    }
+  }
+
   void SetPanelThickness(uint32_t surfaceId, uint32_t thickness,
                          uint32_t reserved) override {
     if (!host_.setPanelThickness(surfaceId, thickness, reserved)) {
