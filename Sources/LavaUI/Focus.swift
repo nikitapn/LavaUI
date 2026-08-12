@@ -42,16 +42,50 @@ public enum FocusManager {
         scope.charHandler = nil
     }
 
+    /// Declares where keys go when *nothing* is focused.
+    ///
+    /// For a window whose whole purpose is one keyboard target — a terminal,
+    /// a game, a full-window editor. Focus is a click-driven idea, and it is
+    /// the right one where a window holds several things worth typing into;
+    /// applied to a window holding exactly one, it produces an application
+    /// that ignores the keyboard until you have told it which of its one
+    /// thing you meant.
+    ///
+    /// A fallback rather than a permanent claim, so anything that genuinely
+    /// wants focus — a find bar, a rename prompt — still takes it and gives
+    /// it back on its own terms. Nothing here overrides `focus`.
+    public static func setDefault(
+        _ id: NodeID,
+        onKey: @escaping (KeyEvent) -> Bool,
+        onChar: @escaping (Character) -> Bool
+    ) {
+        let scope = WindowScope.currentOrMain
+        scope.defaultFocus = id
+        scope.defaultKeyHandler = onKey
+        scope.defaultCharHandler = onChar
+    }
+
+    /// Whether `id` receives keys right now, either by holding focus or by
+    /// being the default while nothing does. What a caret should be drawn on.
+    public static func isActive(_ id: NodeID) -> Bool {
+        let scope = WindowScope.currentOrMain
+        return scope.focused == id || (scope.focused == nil && scope.defaultFocus == id)
+    }
+
     /// Routes a key to the focused node. Returns true if it was consumed, so
     /// the app can fall through to global shortcuts otherwise.
     @discardableResult
     public static func handle(_ event: KeyEvent) -> Bool {
-        WindowScope.currentOrMain.keyHandler?(event) ?? false
+        let scope = WindowScope.currentOrMain
+        if let handler = scope.keyHandler { return handler(event) }
+        return scope.defaultKeyHandler?(event) ?? false
     }
 
     @discardableResult
     public static func handle(character: Character) -> Bool {
-        WindowScope.currentOrMain.charHandler?(character) ?? false
+        let scope = WindowScope.currentOrMain
+        if let handler = scope.charHandler { return handler(character) }
+        return scope.defaultCharHandler?(character) ?? false
     }
 }
 

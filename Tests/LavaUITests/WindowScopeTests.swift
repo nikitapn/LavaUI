@@ -171,6 +171,97 @@ final class WindowScopeTests: XCTestCase {
         XCTAssertTrue(bSawKey)
     }
 
+    // MARK: - Default keyboard target
+
+    /// A window whose whole purpose is one keyboard target — a terminal — must
+    /// accept typing before anything has been clicked.
+    func testKeysReachTheDefaultTargetWhenNothingIsFocused() {
+        var seen: [Character] = []
+        WindowScope.withCurrent(a) {
+            FocusManager.setDefault(
+                .generate(), onKey: { _ in true },
+                onChar: { ch in seen.append(ch); return true }
+            )
+            XCTAssertNil(FocusManager.focusedID, "nothing should hold focus yet")
+            _ = FocusManager.handle(character: "x")
+        }
+        XCTAssertEqual(seen, ["x"])
+    }
+
+    /// A real claim still wins. The fallback is for the gap, not a veto — a
+    /// find bar in a terminal has to be typable.
+    func testFocusOverridesTheDefaultTarget() {
+        var defaultSaw = false
+        var focusedSaw = false
+        WindowScope.withCurrent(a) {
+            FocusManager.setDefault(
+                .generate(), onKey: { _ in defaultSaw = true; return true },
+                onChar: { _ in defaultSaw = true; return true }
+            )
+            FocusManager.focus(
+                .generate(), onKey: { _ in focusedSaw = true; return true },
+                onChar: { _ in true }
+            )
+            _ = FocusManager.handle(KeyEvent(key: 65, mods: 0))
+        }
+        XCTAssertTrue(focusedSaw)
+        XCTAssertFalse(defaultSaw, "the default target must not shadow real focus")
+    }
+
+    /// And the gap reopens when the claim ends. This is the case that makes a
+    /// terminal keep working after something else transiently took focus.
+    func testDefaultTargetResumesAfterFocusIsCleared() {
+        var defaultSaw = false
+        WindowScope.withCurrent(a) {
+            FocusManager.setDefault(
+                .generate(), onKey: { _ in defaultSaw = true; return true },
+                onChar: { _ in true }
+            )
+            FocusManager.focus(
+                .generate(), onKey: { _ in false }, onChar: { _ in false }
+            )
+            FocusManager.clear()
+            _ = FocusManager.handle(KeyEvent(key: 65, mods: 0))
+        }
+        XCTAssertTrue(defaultSaw)
+    }
+
+    /// The fallback is per window like everything else here, or a key sent to
+    /// one window would reach another window's terminal.
+    func testDefaultTargetIsPerWindow() {
+        var aSaw = false
+        WindowScope.withCurrent(a) {
+            FocusManager.setDefault(
+                .generate(), onKey: { _ in aSaw = true; return true },
+                onChar: { _ in true }
+            )
+        }
+        WindowScope.withCurrent(b) {
+            _ = FocusManager.handle(KeyEvent(key: 65, mods: 0))
+        }
+        XCTAssertFalse(aSaw)
+    }
+
+    /// What a caret is drawn on: holding focus, or being the default while
+    /// nothing holds it.
+    func testIsActiveCoversBothWaysOfReceivingKeys() {
+        let target = NodeID.generate()
+        let other = NodeID.generate()
+        WindowScope.withCurrent(a) {
+            FocusManager.setDefault(
+                target, onKey: { _ in true }, onChar: { _ in true }
+            )
+            XCTAssertTrue(FocusManager.isActive(target), "default and nothing focused")
+
+            FocusManager.focus(other, onKey: { _ in true }, onChar: { _ in true })
+            XCTAssertFalse(FocusManager.isActive(target), "someone else holds focus")
+            XCTAssertTrue(FocusManager.isActive(other))
+
+            FocusManager.clear()
+            XCTAssertTrue(FocusManager.isActive(target), "back to the default")
+        }
+    }
+
     func testClearingFocusInOneWindowLeavesTheOther() {
         let idA = NodeID.generate()
         WindowScope.withCurrent(a) {

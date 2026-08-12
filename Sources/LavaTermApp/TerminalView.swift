@@ -83,6 +83,21 @@ struct TerminalCanvas: View {
         let _ = session.generation
         let _ = focused
 
+        // A terminal is the only thing in its window worth typing into, so it
+        // says so once and stops depending on a click to find that out. Two
+        // parts, and both are needed:
+        //
+        //   * the default target, so a key arriving while nothing holds focus
+        //     still reaches the shell — which is the state the window opens
+        //     in, and the state anything that clears focus leaves it in;
+        //   * taking focus outright when it is free, so the caret is drawn and
+        //     the grid is visibly live rather than merely working.
+        //
+        // Neither overrides a real claim: a field that takes focus keeps it,
+        // and gets it back the moment it asks.
+        registerAsDefaultTarget()
+        if FocusManager.focusedID == nil, !focused { takeFocus() }
+
         return Canvas(
             label: "terminal",
             flexGrow: 1,
@@ -139,17 +154,26 @@ struct TerminalCanvas: View {
 
     private func takeFocus() {
         focused = true
-        let id = session.focusID
         FocusManager.focus(
-            id,
-            onKey: { [session] event in
-                session.handleKey(event)
-            },
-            onChar: { [session] ch in
-                session.handleChar(ch)
-            }
+            session.focusID,
+            onKey: { [session] event in session.handleKey(event) },
+            onChar: { [session] ch in session.handleChar(ch) }
         )
         ViewInvalidation.markDirty()
+    }
+
+    /// Says where keys go when nothing is focused.
+    ///
+    /// Re-asserted on every body pass rather than once at mount: it costs two
+    /// stores, and the alternative is a lifecycle question — which pass was
+    /// the first one, and whether the window scope existed yet — whose wrong
+    /// answer is a terminal that silently ignores the keyboard.
+    private func registerAsDefaultTarget() {
+        FocusManager.setDefault(
+            session.focusID,
+            onKey: { [session] event in session.handleKey(event) },
+            onChar: { [session] ch in session.handleChar(ch) }
+        )
     }
 
     private func paint(list: DrawList, frame: CanvasFrame) {
@@ -267,7 +291,8 @@ struct TerminalCanvas: View {
         // on the live screen, and drawing it over a different row would be a
         // lie. No blink: a steady block is easier to track on a grid, and it
         // also means we do not have to burn frames for a caret phase.
-        if focused && screen.cursorVisible && !screen.isScrolledUp {
+        if FocusManager.isActive(session.focusID), screen.cursorVisible,
+           !screen.isScrolledUp {
             let col = min(screen.cursorCol, screen.cols - 1)
             let row = screen.cursorRow
             let cx = originX + Float(col) * cellW

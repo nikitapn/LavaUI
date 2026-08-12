@@ -628,6 +628,8 @@ struct Server {
                           Toplevel **out_toplevel);
 
   void focus(FramedWindow *window);
+  /// The inverse: nothing is focused, because the click landed on the desktop.
+  void blurAll();
   void update_pointer_focus(uint32_t time_msec);
   void update_seat_capabilities();
 
@@ -4045,6 +4047,32 @@ void Server::focus(FramedWindow *window) {
   }
 }
 
+void Server::blurAll() {
+  // Clicking the desktop means "I am not in any window now", and until this
+  // existed there was no way to say it: `focus(nullptr)` returns immediately,
+  // so the last window kept the keyboard, kept drawing itself active, and kept
+  // its menu on the panel — a global menu bar describing a window the user had
+  // just clicked away from.
+  //
+  // Deactivating the outgoing window is the same courtesy `focus` pays the
+  // window it replaces: nothing else would ever tell it to put its caret away.
+  if (wlr_surface *previous = seat->keyboard_state.focused_surface) {
+    for (FramedWindow *other : toplevels) {
+      if (other->focusSurface() == previous) {
+        other->activate(false);
+        break;
+      }
+    }
+  }
+  wlr_seat_keyboard_notify_clear_focus(seat);
+
+  // Both halves, as everywhere else focus moves: the workspace's keyboard
+  // target for Lava surfaces, and the registry, which repaints the decorations
+  // and is the one place that tells a panel the active window changed.
+  setFocusedSurface(0);
+  if (surfaces != nullptr) surfaces->setFocused(0);
+}
+
 void Server::reloadConfig() {
   const lava::Config fresh = lava::Config::load(configPath);
   const std::string previousDevices = config.drmDevices;
@@ -4700,10 +4728,19 @@ void Server::on_cursor_button(wl_listener *listener, void *data) {
   if (pressed) {
     double sx = 0, sy = 0;
     Toplevel *toplevel = nullptr;
-    server->surface_at(server->cursor->x, server->cursor->y, &sx, &sy,
-                       &toplevel);
-    server->focus(toplevel);  // click to focus; null over the desktop is a no-op
-    server->setFocusedSurface(0);
+    wlr_surface *hit = server->surface_at(server->cursor->x, server->cursor->y,
+                                          &sx, &sy, &toplevel);
+    if (hit == nullptr) {
+      // Nothing of anyone's under the pointer — the scene's background rect is
+      // not a surface, so this is the desktop. Tested on the *surface* and not
+      // on `toplevel`: a popup or an override-redirect window has no toplevel
+      // to resolve to, and blurring on one of those would drop the keyboard
+      // every time a menu was clicked.
+      server->blurAll();
+    } else {
+      server->focus(toplevel);  // click to focus; a hit with no toplevel is a no-op
+      server->setFocusedSurface(0);
+    }
   }
 
   wlr_seat_pointer_notify_button(server->seat, event->time_msec, event->button,

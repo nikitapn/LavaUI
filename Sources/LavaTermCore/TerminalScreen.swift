@@ -59,12 +59,28 @@ public final class TerminalScreen: @unchecked Sendable {
     private var scrollback: [[TerminalCell]] = []
     private let maxScrollbackLines = 10_000
 
+    // ─── Soft wraps ──────────────────────────────────────────────────────
+    //
+    // Whether each row *continues* onto the next one, because the text ran
+    // past the right margin, as opposed to ending because the program said so.
+    //
+    // A grid of cells cannot answer that on its own, and the difference is the
+    // whole of reflow: joining rows that were never one line would run a
+    // program's output together, and not joining the ones that were leaves
+    // every wrapped line permanently broken at whatever width it first
+    // appeared. So it is recorded at the moment it happens — the only moment
+    // it is known — and carried alongside the cells everywhere they move.
+    private var rowWrapped: [Bool]
+    private var scrollbackWrapped: [Bool] = []
+    private var mainRowWrapped: [Bool]?
+
     private let parser = AnsiParser()
 
     public init(cols: Int = 80, rows: Int = 24) {
         self.cols = max(1, cols)
         self.rows = max(1, rows)
         self.cells = Array(repeating: .empty, count: self.cols * self.rows)
+        self.rowWrapped = Array(repeating: false, count: self.rows)
         self.scrollBottom = self.rows - 1
     }
 
@@ -72,32 +88,224 @@ public final class TerminalScreen: @unchecked Sendable {
         let nc = max(1, newCols)
         let nr = max(1, newRows)
         guard nc != cols || nr != rows else { return }
-        cells = resizeBuffer(cells, fromCols: cols, fromRows: rows, toCols: nc, toRows: nr)
-        if var saved = mainCells {
-            saved = resizeBuffer(saved, fromCols: cols, fromRows: rows, toCols: nc, toRows: nr)
-            mainCells = saved
-            mainCursorCol = min(mainCursorCol, nc - 1)
-            mainCursorRow = min(mainCursorRow, nr - 1)
-            mainScrollTop = 0
-            mainScrollBottom = nr - 1
-        }
-        // History rows: pad or truncate to the new width. Reflow is a harder
-        // problem and not what xterm does either.
-        if !scrollback.isEmpty {
+
+        if onAlternateScreen {
+            // The alternate screen is not reflowed, and that is not a
+            // shortcut. It belongs to a full-screen program that has drawn an
+            // absolute layout on it and will redraw the whole thing when it
+            // sees SIGWINCH; rewrapping vim's window into continuation lines
+            // would produce something no program ever intended, for the one
+            // frame before it repainted anyway.
+            cells = resizeBuffer(
+                cells, fromCols: cols, fromRows: rows, toCols: nc, toRows: nr
+            )
+            rowWrapped = Array(repeating: false, count: nr)
+            if let saved = mainCells {
+                mainCells = resizeBuffer(
+                    saved, fromCols: cols, fromRows: rows, toCols: nc, toRows: nr
+                )
+                mainRowWrapped = Array(repeating: false, count: nr)
+                mainCursorCol = min(mainCursorCol, nc - 1)
+                mainCursorRow = min(mainCursorRow, nr - 1)
+                mainScrollTop = 0
+                mainScrollBottom = nr - 1
+            }
             scrollback = scrollback.map { row in
                 var next = Array(repeating: TerminalCell.empty, count: nc)
-                let n = min(row.count, nc)
-                for c in 0..<n { next[c] = row[c] }
+                for c in 0..<min(row.count, nc) { next[c] = row[c] }
                 return next
             }
+            cols = nc
+            rows = nr
+            scrollTop = 0
+            scrollBottom = rows - 1
+            cursorCol = min(cursorCol, cols - 1)
+            cursorRow = min(cursorRow, rows - 1)
+            viewOffset = min(viewOffset, scrollback.count)
+            return
         }
+
+        reflow(toCols: nc, toRows: nr)
+    }
+
+    /// One row, as reflow sees it.
+    private struct WrappedRow {
+        var cells: [TerminalCell]
+        /// Continues onto the row below rather than ending here.
+        var wrapped: Bool
+    }
+
+    /// Rewraps everything the screen holds to a new width.
+    ///
+    /// The alternative — copy the top-left corner of the old grid into the new
+    /// one — is what this used to do, and it is lossy in the direction that
+    /// matters: narrowing a window deletes the right-hand end of every line
+    /// that was longer than the new width, permanently, including in the
+    /// history. Widening is no better, since lines that wrapped stay broken at
+    /// a margin that no longer exists.
+    ///
+    /// So the grid is turned back into the *logical* lines that produced it,
+    /// rewrapped at the new width, and laid out again. Scrollback and the live
+    /// screen are one sequence for this purpose — a line that wrapped across
+    /// the boundary between them is still one line — which is also why the
+    /// cursor is tracked by its offset into its own logical line rather than
+    /// by a row and column that will not survive.
+    private func reflow(toCols nc: Int, toRows nr: Int) {
+        // ── 1. Every row there is, history first ──────────────────────────
+        var source: [WrappedRow] = []
+        source.reserveCapacity(scrollback.count + rows)
+        for (index, line) in scrollback.enumerated() {
+            source.append(WrappedRow(
+                cells: line,
+                wrapped: index < scrollbackWrapped.count && scrollbackWrapped[index]
+            ))
+        }
+        for r in 0..<rows {
+            let base = r * cols
+            source.append(WrappedRow(
+                cells: Array(cells[base..<(base + cols)]),
+                wrapped: r < rowWrapped.count && rowWrapped[r]
+            ))
+        }
+        let cursorSourceRow = scrollback.count + cursorRow
+
+        // The blank rows below the cursor are unused screen, not content, and
+        // rewrapping them as empty lines would push real output off the top:
+        // a line that grows from one row to two has to take its extra row from
+        // somewhere, and taking it from the bottom padding is free while taking
+        // it from the history is a line scrolling away for no reason. Anything
+        // genuinely printed below the cursor still counts — a program is
+        // allowed to move the cursor up and keep writing underneath it.
+        var lastContent = cursorSourceRow
+        for index in stride(from: source.count - 1, through: 0, by: -1) {
+            guard index > lastContent else { break }
+            let row = source[index]
+            if row.wrapped || !Self.trimmingTrailingBlanks(row.cells).isEmpty {
+                lastContent = index
+                break
+            }
+        }
+        if lastContent + 1 < source.count {
+            source.removeSubrange((lastContent + 1)...)
+        }
+
+        // ── 2. Join soft-wrapped runs back into logical lines ─────────────
+        var lines: [[TerminalCell]] = []
+        var cursorLine = 0
+        var cursorOffset = 0
+        var current: [TerminalCell] = []
+        for (index, row) in source.enumerated() {
+            if index == cursorSourceRow {
+                cursorLine = lines.count
+                cursorOffset = current.count + cursorCol
+            }
+            // A wrapped row is full by definition, so its trailing blanks are
+            // content. An ended one is padded out to the width by the grid,
+            // and keeping that padding would make every logical line exactly
+            // as long as the old screen was wide — rewrapping noise.
+            current.append(
+                contentsOf: row.wrapped ? row.cells : Self.trimmingTrailingBlanks(row.cells)
+            )
+            if !row.wrapped {
+                lines.append(current)
+                current = []
+            }
+        }
+        if !current.isEmpty { lines.append(current) }
+
+        // ── 3. Lay the logical lines out at the new width ─────────────────
+        var out: [WrappedRow] = []
+        out.reserveCapacity(lines.count)
+        var cursorOutRow = 0
+        var cursorOutCol = 0
+        for (index, line) in lines.enumerated() {
+            var start = 0
+            repeat {
+                let end = min(line.count, start + nc)
+                let isLast = end >= line.count
+                if index == cursorLine, cursorOffset >= start,
+                   cursorOffset < end || isLast
+                {
+                    cursorOutRow = out.count
+                    cursorOutCol = min(nc - 1, cursorOffset - start)
+                }
+                var chunk = Array(line[start..<end])
+                if chunk.count < nc {
+                    chunk.append(
+                        contentsOf: repeatElement(.empty, count: nc - chunk.count)
+                    )
+                }
+                out.append(WrappedRow(cells: chunk, wrapped: !isLast))
+                start = end
+            } while start < line.count
+        }
+        if out.isEmpty {
+            out.append(WrappedRow(
+                cells: Array(repeating: .empty, count: nc), wrapped: false
+            ))
+        }
+
+        // ── 4. Split back into history and screen ─────────────────────────
+        //
+        // The screen is the last `nr` rows. The cursor is normally on the last
+        // one of them — it is a shell prompt — so it comes along; a cursor
+        // parked far above the end is clamped into view rather than dragging
+        // the window up and stranding the rows below it.
+        let windowStart = max(0, out.count - nr)
+        var history = out.prefix(windowStart).map(\.cells)
+        var historyWrapped = out.prefix(windowStart).map(\.wrapped)
+        if history.count > maxScrollbackLines {
+            let drop = history.count - maxScrollbackLines
+            history.removeFirst(drop)
+            historyWrapped.removeFirst(drop)
+        }
+
+        var grid = Array(repeating: TerminalCell.empty, count: nc * nr)
+        var wrapped = Array(repeating: false, count: nr)
+        for r in 0..<nr {
+            let index = windowStart + r
+            guard index < out.count else { break }
+            let base = r * nc
+            for c in 0..<nc { grid[base + c] = out[index].cells[c] }
+            wrapped[r] = out[index].wrapped
+        }
+
+        cells = grid
+        rowWrapped = wrapped
+        scrollback = history
+        scrollbackWrapped = historyWrapped
+        scrollbackLineCount = scrollback.count
         cols = nc
         rows = nr
         scrollTop = 0
         scrollBottom = rows - 1
-        cursorCol = min(cursorCol, cols - 1)
-        cursorRow = min(cursorRow, rows - 1)
+        cursorRow = min(rows - 1, max(0, cursorOutRow - windowStart))
+        cursorCol = min(cols - 1, max(0, cursorOutCol))
+        savedCol = min(cols - 1, savedCol)
+        savedRow = min(rows - 1, savedRow)
+        // Reflow moves every history line, so an offset counted in old lines
+        // means nothing now. Clamping keeps it in range; being glued to the
+        // bottom, which is where a terminal usually is, is exact.
         viewOffset = min(viewOffset, scrollback.count)
+    }
+
+    /// A row without the padding the grid gave it.
+    ///
+    /// Only blanks that carry no colour of their own: a bar of highlighted
+    /// spaces at the end of a line is content, and dropping it would rewrap a
+    /// prompt's background into the wrong place.
+    private static func trimmingTrailingBlanks(
+        _ row: [TerminalCell]
+    ) -> [TerminalCell] {
+        var end = row.count
+        while end > 0 {
+            let cell = row[end - 1]
+            let isPadding = cell.scalar == " " && cell.bg == .default
+                && !cell.inverse && !cell.underline
+            if !isPadding { break }
+            end -= 1
+        }
+        return Array(row[0..<end])
     }
 
     private func resizeBuffer(
@@ -197,6 +405,11 @@ public final class TerminalScreen: @unchecked Sendable {
             // Pending wrap: cursor may sit at `cols` after the last cell.
             // Clear it so the next print does not also wrap (double advance).
             if cursorCol >= cols { cursorCol = 0 }
+            // The program ended this line itself, so it does not continue —
+            // even if a previous print had wrapped into it.
+            if cursorRow >= 0, cursorRow < rowWrapped.count {
+                rowWrapped[cursorRow] = false
+            }
             lineFeed()
         case .carriageReturn:
             cursorCol = 0
@@ -341,6 +554,7 @@ public final class TerminalScreen: @unchecked Sendable {
             // Already on alt: clear it, which is what a second 1049h from a
             // nested tool should do rather than stacking another buffer.
             for i in cells.indices { cells[i] = .empty }
+            for r in rowWrapped.indices { rowWrapped[r] = false }
             cursorCol = 0
             cursorRow = 0
             scrollTop = 0
@@ -348,11 +562,13 @@ public final class TerminalScreen: @unchecked Sendable {
             return
         }
         mainCells = cells
+        mainRowWrapped = rowWrapped
         mainCursorCol = cursorCol
         mainCursorRow = cursorRow
         mainScrollTop = scrollTop
         mainScrollBottom = scrollBottom
         cells = Array(repeating: .empty, count: cols * rows)
+        rowWrapped = Array(repeating: false, count: rows)
         cursorCol = 0
         cursorRow = 0
         scrollTop = 0
@@ -371,7 +587,12 @@ public final class TerminalScreen: @unchecked Sendable {
             return
         }
         cells = saved
+        rowWrapped = mainRowWrapped ?? Array(repeating: false, count: rows)
+        if rowWrapped.count != rows {
+            rowWrapped = Array(repeating: false, count: rows)
+        }
         mainCells = nil
+        mainRowWrapped = nil
         scrollTop = mainScrollTop
         scrollBottom = min(rows - 1, mainScrollBottom)
         if restoreCursor {
@@ -388,6 +609,11 @@ public final class TerminalScreen: @unchecked Sendable {
         // C1 / control shouldn't land here
         if s.value < 0x20 || s.value == 0x7F { return }
         if cursorCol >= cols {
+            // Recorded before the feed, which may scroll and take the row with
+            // it — after that there is no way to say which row this was.
+            if cursorRow >= 0, cursorRow < rowWrapped.count {
+                rowWrapped[cursorRow] = true
+            }
             cursorCol = 0
             lineFeed()
         }
@@ -433,8 +659,11 @@ public final class TerminalScreen: @unchecked Sendable {
                 line[c] = cells[c]
             }
             scrollback.append(line)
+            scrollbackWrapped.append(rowWrapped.first ?? false)
             if scrollback.count > maxScrollbackLines {
-                scrollback.removeFirst(scrollback.count - maxScrollbackLines)
+                let drop = scrollback.count - maxScrollbackLines
+                scrollback.removeFirst(drop)
+                scrollbackWrapped.removeFirst(min(drop, scrollbackWrapped.count))
             }
             scrollbackLineCount = scrollback.count
             // Keep the viewport fixed on the same history line while new
@@ -450,11 +679,13 @@ public final class TerminalScreen: @unchecked Sendable {
             for c in 0..<width {
                 cells[dst + c] = cells[src + c]
             }
+            rowWrapped[r] = rowWrapped[r + 1]
         }
         let last = bottom * width
         for c in 0..<width {
             cells[last + c] = blankCell()
         }
+        rowWrapped[bottom] = false
     }
 
     private func scrollDown() {
@@ -468,11 +699,13 @@ public final class TerminalScreen: @unchecked Sendable {
             for c in 0..<width {
                 cells[dst + c] = cells[src + c]
             }
+            rowWrapped[r] = rowWrapped[r - 1]
         }
         let first = top * width
         for c in 0..<width {
             cells[first + c] = blankCell()
         }
+        rowWrapped[top] = false
     }
 
     private func eraseDisplay(_ mode: Int) {
@@ -483,9 +716,11 @@ public final class TerminalScreen: @unchecked Sendable {
             eraseFromStartToCursor()
         default:
             for i in cells.indices { cells[i] = blankCell() }
+            for r in rowWrapped.indices { rowWrapped[r] = false }
             if mode == 3 {
                 // CSI 3 J — clear scrollback, xterm extension.
                 scrollback.removeAll(keepingCapacity: true)
+                scrollbackWrapped.removeAll(keepingCapacity: true)
                 scrollbackLineCount = 0
                 viewOffset = 0
             }
@@ -494,6 +729,9 @@ public final class TerminalScreen: @unchecked Sendable {
 
     private func eraseLine(_ mode: Int) {
         let base = cursorRow * cols
+        // Clearing to the end of a row is the program saying the line stops
+        // here, so it no longer continues into the next one.
+        if mode != 1, cursorRow < rowWrapped.count { rowWrapped[cursorRow] = false }
         switch mode {
         case 0:
             for c in cursorCol..<cols { cells[base + c] = blankCell() }
@@ -510,6 +748,7 @@ public final class TerminalScreen: @unchecked Sendable {
             for i in ((cursorRow + 1) * cols)..<cells.count {
                 cells[i] = blankCell()
             }
+            for r in (cursorRow + 1)..<rows { rowWrapped[r] = false }
         }
     }
 
@@ -559,10 +798,12 @@ public final class TerminalScreen: @unchecked Sendable {
             let dst = r * width
             let src = (r + count) * width
             for c in 0..<width { cells[dst + c] = cells[src + c] }
+            rowWrapped[r] = rowWrapped[r + count]
         }
         for r in (scrollBottom - count + 1)...scrollBottom {
             let base = r * width
             for c in 0..<width { cells[base + c] = blankCell() }
+            rowWrapped[r] = false
         }
     }
 
@@ -573,10 +814,12 @@ public final class TerminalScreen: @unchecked Sendable {
             let dst = r * width
             let src = (r - count) * width
             for c in 0..<width { cells[dst + c] = cells[src + c] }
+            rowWrapped[r] = rowWrapped[r - count]
         }
         for r in cursorRow..<(cursorRow + count) {
             let base = r * width
             for c in 0..<width { cells[base + c] = blankCell() }
+            rowWrapped[r] = false
         }
     }
 

@@ -120,6 +120,11 @@ public final class WindowScope {
     var keyHandler: ((KeyEvent) -> Bool)?
     var charHandler: ((Character) -> Bool)?
 
+    /// Where keys go when nothing is focused. See `FocusManager.setDefault`.
+    var defaultFocus: NodeID?
+    var defaultKeyHandler: ((KeyEvent) -> Bool)?
+    var defaultCharHandler: ((Character) -> Bool)?
+
     // ─── Caret blink (see `CaretBlink`) ──────────────────────────────────
 
     /// Per window, so two windows with focused fields do not eat each other's
