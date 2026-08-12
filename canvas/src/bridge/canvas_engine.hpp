@@ -353,9 +353,12 @@ class Engine {
   /// Load PNG/JPEG for `Image` draw commands. Returns texture id (>0) or -1.
   int loadTexture(const std::string &path);
 
-  /// Releases one reference to a texture. The GPU memory is freed only after
-  /// every in-flight frame that could reference it has retired — see
-  /// `RenderDevice::destroyImageDeferred`. Atlased images return their cell instead.
+  /// Releases one ownership reference. At zero the entry goes dormant rather
+  /// than away: it keeps its id and its pixels, and `reviveTexture` picks it
+  /// up again for free. Eviction from there is LRU and runs on whichever
+  /// resource is actually scarce — a byte budget for standalone images, atlas
+  /// occupancy for packed ones. Either way the GPU memory or the cell is
+  /// released only once every frame that could still sample it has retired.
   void unloadTexture(const std::string &path);
 
   /// Decodes an image file to RGBA8 **without touching RenderDevice**, so it is safe
@@ -384,8 +387,21 @@ class Engine {
   int uploadTexture(const std::string &key, const U8Vector &rgba,
                     uint32_t width, uint32_t height);
 
-  /// Whether `key` is already resident, so a caller can skip decoding.
+  /// Whether `key` is already resident, so a caller can skip decoding. Only a
+  /// hint — see `reviveTexture` for the form that is safe to act on.
   bool hasTexture(const std::string &key) const;
+
+  /// Takes a reference on `key` if it is already resident, reviving it from
+  /// the dormant cache, and reports its pixel size. Returns the texture id, or
+  /// -1 if the key is absent and the caller must decode after all.
+  ///
+  /// Lookup and reference happen under one lock, which `hasTexture` followed
+  /// by `loadTexture` cannot promise: an eviction in the gap turns the second
+  /// call into a filesystem load of the key, ignoring whatever size cap the
+  /// caller had decoded to.
+  int reviveTexture(const std::string &key, uint32_t &outWidth,
+                    uint32_t &outHeight);
+
   bool textureSize(uint32_t textureId, float &outW, float &outH) const;
 
   /// Low-level access for advanced use; may be null if closed.

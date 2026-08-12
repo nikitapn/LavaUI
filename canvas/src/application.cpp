@@ -587,6 +587,26 @@ struct Application::Impl
     return TextureManager::getInstance().hasTexture(key);
   }
 
+  int reviveTexture(const std::string &key, uint32_t &outWidth,
+                    uint32_t &outHeight)
+  {
+    if (!deviceUp) return -1;
+    auto &tm = TextureManager::getInstance();
+    const auto h = tm.reviveTexture(key);
+    if (!h.isValid()) return -1;
+    // The reference is already held, so nothing can evict it out from under
+    // this second lookup. A sizeless entry is one registered as a bare
+    // external view; hand the reference back rather than report a 0×0 image.
+    const auto [w, ht] = tm.getTextureDimensions(h.id);
+    if (w == 0 || ht == 0) {
+      tm.unloadTexture(h.id);
+      return -1;
+    }
+    outWidth = w;
+    outHeight = ht;
+    return static_cast<int>(h.id);
+  }
+
   bool textureSize(uint32_t textureId, float &outW, float &outH) const
   {
     auto [w, h] = TextureManager::getInstance().getTextureDimensions(textureId);
@@ -780,7 +800,13 @@ void Application::prepareFrames()
 
 void Application::retireFrames()
 {
-  if (impl_->deviceUp) impl_->device.collectGarbage();
+  if (!impl_->deviceUp) return;
+  // Atlas cells ride the same retire clock as deferred image destruction, but
+  // drain *after* `collectGarbage` returns rather than inside it: eviction
+  // reaches `destroyImageDeferred` while holding the texture cache's lock, so
+  // taking that lock underneath the device's own would close an ABBA cycle.
+  const uint64_t retired = impl_->device.collectGarbage();
+  TextureManager::getInstance().collectGarbage(retired);
 }
 
 void Application::beginFrameGroup()
@@ -961,6 +987,12 @@ int Application::uploadTexture(const std::string &key, const uint8_t *rgba,
 bool Application::hasTexture(const std::string &key) const
 {
   return impl_->hasTexture(key);
+}
+
+int Application::reviveTexture(const std::string &key, uint32_t &outWidth,
+                               uint32_t &outHeight)
+{
+  return impl_->reviveTexture(key, outWidth, outHeight);
 }
 
 bool Application::textureSize(uint32_t textureId, float &outW, float &outH) const

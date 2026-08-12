@@ -714,6 +714,16 @@ bool Engine::hasTexture(const std::string &key) const
   return found;
 }
 
+int Engine::reviveTexture(const std::string &key, uint32_t &outWidth,
+                          uint32_t &outHeight)
+{
+  int id = -1;
+  impl_->withApp([&](Application &app) {
+    id = app.reviveTexture(key, outWidth, outHeight);
+  });
+  return id;
+}
+
 bool Engine::textureSize(uint32_t textureId, float &outW, float &outH) const
 {
   bool ok = false;

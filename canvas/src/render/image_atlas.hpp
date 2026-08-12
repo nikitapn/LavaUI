@@ -76,6 +76,15 @@ public:
   uint32_t totalSlots() const {
     return static_cast<uint32_t>(pages_.size()) * slotsPerPage();
   }
+  /// Cells the atlas could ever hold, counting pages not yet created.
+  ///
+  /// The eviction policy above wants this rather than `totalSlots()`: early on
+  /// every page that exists is full, and the right answer there is to add a
+  /// page, not to start throwing entries out.
+  uint32_t capacitySlots() const { return maxPages_ * slotsPerPage(); }
+  uint64_t allocatedBytes() const {
+    return static_cast<uint64_t>(pages_.size()) * pageSize_ * pageSize_ * 4;
+  }
 
 private:
   struct Page {

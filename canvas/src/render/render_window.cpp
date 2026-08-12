@@ -97,6 +97,7 @@ RenderWindow::RenderWindow(RenderDevice &device, uint32_t width, uint32_t height
 
 RenderWindow::~RenderWindow()
 {
+  TextureManager::getInstance().removeWindowTextureReferences(this);
   dev_.unregisterWindow(this);
 
   // A fence nobody collected. Closing it is only tidiness — the work it names
@@ -1379,6 +1380,20 @@ void RenderWindow::replayDrawList(const canvas::DrawList &list, float viewW,
                                   std::vector<Boundary> &outBoundaries)
 {
   outBoundaries.clear();
+  // Pin the complete submitted working set before resolving any view. This is
+  // per window: another window may advance its cache while this one simply
+  // replays the retained frame it already owns.
+  std::unordered_set<uint32_t> textureIds;
+  for (size_t i = 0; i < list.commandCount; ++i) {
+    const auto &command = list.commands[i];
+    const auto kind = static_cast<canvas::DrawCommandKind>(command.kind);
+    if (kind == canvas::DrawCommandKind::Image && command.param != 0)
+      textureIds.insert(command.param);
+    else if (kind == canvas::DrawCommandKind::SpatialTriangles) {
+      if (const uint32_t id = textureIdFromFloat(command.x)) textureIds.insert(id);
+    }
+  }
+  TextureManager::getInstance().updateWindowTextureReferences(this, textureIds);
   // Rect + radius of each open content-blur scope, so End knows what region
   // to composite. A stack even though the draw list forbids nesting today,
   // because an unbalanced End must not pop something that was never pushed.
@@ -2308,6 +2323,7 @@ void RenderWindow::render(const canvas::DrawList &list)
   static const bool renderStats = std::getenv("LAVA_RENDER_STATS") != nullptr;
   if (renderStats) {
     const auto &s = quads_.frameStats();
+    const auto images = TextureManager::getInstance().cacheStats();
     std::cerr << "LAVA_RENDER_STATS quads=" << quads_.quadCount()
               << " batches=" << quads_.batchCount()
               << " draws=" << s.drawCalls
@@ -2325,6 +2341,18 @@ void RenderWindow::render(const canvas::DrawList &list)
               << " instances=" << s.instanceCount
               << " instance_bytes=" << s.instanceBytes
               << " instance_capacity_bytes=" << s.instanceCapacityBytes
+              << " image_textures=" << images.textures
+              << " image_pinned=" << images.pinnedTextures
+              << " image_bytes=" << images.imageBytes
+              << " image_dormant_bytes=" << images.dormantBytes
+              << " image_dormant_budget_bytes=" << images.dormantBudgetBytes
+              << " image_atlas_bytes=" << images.atlasBytes
+              << " image_atlas_slots=" << images.atlasSlotsUsed
+              << " image_atlas_slot_capacity=" << images.atlasSlotsCapacity
+              << " image_dormant_slots=" << images.dormantSlots
+              << " image_pending_slots=" << images.pendingSlots
+              << " image_cache_hits=" << images.cacheHits
+              << " image_evictions=" << images.evictions
               << '\n';
   }
 }

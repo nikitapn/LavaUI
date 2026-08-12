@@ -421,11 +421,14 @@ public final class Editor: @unchecked Sendable {
 
     /// Drops one reference to a loaded image.
     ///
-    /// The GPU memory is not freed here. Vulkan releases it only once every
-    /// frame that could still sample it has retired, so calling this on an
-    /// image that is on screen right now is safe — see
-    /// `Vulkan::destroyImageDeferred`. An atlased image returns its cell to
-    /// the page instead, and the page stays.
+    /// The GPU memory is not normally freed here. At zero references the image
+    /// goes dormant, keeping its pixels and its id so reloading the same key
+    /// costs nothing. Eviction from there is LRU, and never touches an image a
+    /// window's current frame still names. Standalone images are evicted
+    /// against a byte budget (`LAVA_IMAGE_CACHE_MB`, 256 by default); atlased
+    /// ones against atlas occupancy, since a cell is far too small to move a
+    /// byte budget but the cells themselves run out. Allocated atlas pages
+    /// stay resident either way.
     public func unloadImage(path: String) {
         engine.unloadTexture(std.string(path))
     }

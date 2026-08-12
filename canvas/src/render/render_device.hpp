@@ -348,6 +348,16 @@ class RenderDevice
   /// immediately before `vkQueueSubmit`.
   uint64_t nextSubmission() { return nextSubmission_.fetch_add(1); }
 
+  /// The index the next submission *will* claim, without claiming it.
+  ///
+  /// Stamping a resource released right now with this mark says: every
+  /// submission from here on was recorded after the last reference to it went
+  /// away, so only submissions before the mark can still name it. Waiting for
+  /// the retire clock to pass the mark is then equivalent to blocking on every
+  /// fence, and costs nothing — which is what lets a caller that is *inside* a
+  /// frame release something safely. See `collectGarbage`.
+  uint64_t pendingSubmissionMark() const { return nextSubmission_.load(); }
+
   struct QueueLease {
     VkQueue queue = VK_NULL_HANDLE;
     std::mutex *mutex = nullptr;
@@ -395,7 +405,14 @@ class RenderDevice
   /// window's own frame. Asking whether a submission has retired means reading
   /// every window's fences, and a window that is submitting on another thread
   /// owns its fence exclusively while it does.
-  void collectGarbage();
+  ///
+  /// Returns the retire mark it computed: the oldest submission still running
+  /// anywhere, so anything stamped at or below it is provably unreferenced.
+  /// Other caches that defer releases on the same clock — `TextureManager` and
+  /// its atlas cells — drain against this, and must be called *after* this
+  /// returns rather than from inside it, so their own locks are never taken
+  /// underneath `sharedStateMutex_`.
+  uint64_t collectGarbage();
 
   void cleanUp();
 

@@ -185,6 +185,10 @@ int CanvasRenderer::registerImage(const std::string &key,
                                   const std::string &path,
                                   uint32_t maxPixelSize, uint32_t &outWidth,
                                   uint32_t &outHeight) {
+  // Already resident — including dormant, which reuses the id and the pixels
+  // already on the GPU — so skip the decode entirely.
+  if (const int id = engine_.reviveTexture(key, outWidth, outHeight); id > 0)
+    return id;
   // Decoded here rather than in the client, which is the point of the call:
   // the renderer knows the size it will be drawn at, owns the atlas that
   // decides whether it fits a cell, and already has the codec. A client that
@@ -198,6 +202,8 @@ int CanvasRenderer::registerImageData(const std::string &key,
                                       const uint8_t *bytes, size_t byteCount,
                                       uint32_t maxPixelSize,
                                       uint32_t &outWidth, uint32_t &outHeight) {
+  if (const int id = engine_.reviveTexture(key, outWidth, outHeight); id > 0)
+    return id;
   return upload_decoded(
       engine_, key,
       canvas::Engine::decodeImageData(bytes, byteCount, maxPixelSize),

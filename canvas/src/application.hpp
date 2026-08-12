@@ -255,6 +255,11 @@ public:
   int uploadTexture(const std::string &key, const uint8_t *rgba,
                     uint32_t width, uint32_t height);
   bool hasTexture(const std::string &key) const;
+  /// Takes a reference on an already-resident `key` and reports its size.
+  /// Returns the texture id, or -1 if the key is not resident — in which case
+  /// the caller still has to decode. See `TextureManager::reviveTexture`.
+  int reviveTexture(const std::string &key, uint32_t &outWidth,
+                    uint32_t &outHeight);
   /// Pixel size of a loaded texture; returns false if id unknown.
   bool textureSize(uint32_t textureId, float &outW, float &outH) const;
 

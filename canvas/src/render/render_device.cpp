@@ -825,14 +825,13 @@ void RenderDevice::destroyImageDeferred(VkImage &image, VmaAllocation &allocatio
   view       = VK_NULL_HANDLE;
 }
 
-void RenderDevice::collectGarbage()
+uint64_t RenderDevice::collectGarbage()
 {
   // Exclusive: `oldestUnretiredSubmission()` below calls `vkGetFenceStatus` on
   // every window's fences, and a window submitting on its own thread holds
   // those exclusively. This is the call the validation layer catches first.
   std::unique_lock frameLock(frameMutex_);
   std::lock_guard lock(sharedStateMutex_);
-  if (trash_.empty()) return;
 
   // The oldest submission still running anywhere. A resource queued before
   // that point may still be named by it; anything queued at or after it is
@@ -850,6 +849,8 @@ void RenderDevice::collectGarbage()
     safe = std::min(safe, w->oldestUnretiredSubmission());
   }
 
+  if (trash_.empty()) return safe;
+
   size_t keep = 0;
   for (size_t i = 0; i < trash_.size(); ++i) {
     auto &t = trash_[i];
@@ -865,6 +866,7 @@ void RenderDevice::collectGarbage()
     }
   }
   trash_.resize(keep);
+  return safe;
 }
 
 void RenderDevice::destroyImage(VkImage &image, VmaAllocation &allocation)
