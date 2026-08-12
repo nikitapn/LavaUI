@@ -238,7 +238,28 @@ uint32_t QuadRenderer::textureSlot(VkImageView view, VkSampler sampler) {
     return found->second;
   }
   if (fr.nextTextureIndex >= blurTextureIndex_) {
-    throw std::runtime_error("bindless texture table exhausted for one frame");
+    // Draw the placeholder rather than throw. This is reachable input — the
+    // table is `maxPerStageDescriptorSampledImages` wide, and the Vulkan floor
+    // for that is 16, so "enough textures in one frame" is as much a property
+    // of the driver as of the scene.
+    //
+    // Throwing does not crash — `AppWindow::repaint` catches and returns false
+    // — but it abandons the frame half-recorded, and it does so again on every
+    // frame after, because the next one exhausts the table at the same point.
+    // The window stops drawing entirely and never starts again: a black
+    // surface and one "failed to draw" per frame in the log. A quad with the
+    // wrong texture is the better failure, and it is one the frame recovers
+    // from as soon as the scene needs fewer textures.
+    ++frameStats_.textureSlotOverflows;
+    static bool warned = false;
+    if (!warned) {
+      warned = true;
+      std::cerr << "canvas: bindless texture table exhausted ("
+                << blurTextureIndex_ << " slots); drawing the placeholder for "
+                   "the rest of this frame. Reported once per process; "
+                   "LAVA_RENDER_STATS counts every occurrence.\n";
+    }
+    return fallbackTextureIndex_;
   }
   const uint32_t slot = fr.nextTextureIndex++;
   fr.textureSlots.emplace(key, slot);
@@ -759,6 +780,15 @@ void QuadRenderer::begin(vec2 viewportSize, uint32_t frameSlot) {
   fr.nextTextureIndex = 0;
   fr.textureSlots.clear();
   frameStats_ = {};
+
+  // The placeholder takes the first slot of every frame, before any content
+  // can compete for it. `textureSlot` hands this back when the table runs
+  // out, so it has to be a slot that is written even in the frame that ran
+  // out — claiming it lazily would mean the fallback needs a slot exactly
+  // when there are none left. The table is at least two wide
+  // (`setupDescriptors`), so this claim cannot itself overflow.
+  fallbackTextureIndex_ = 0;
+  fallbackTextureIndex_ = textureSlot(whiteImageView_, sampler_);
 
   viewportSize_ = viewportSize;
   vertices_.clear();

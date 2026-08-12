@@ -2341,6 +2341,7 @@ void RenderWindow::render(const canvas::DrawList &list)
               << " instances=" << s.instanceCount
               << " instance_bytes=" << s.instanceBytes
               << " instance_capacity_bytes=" << s.instanceCapacityBytes
+              << " texture_slot_overflows=" << s.textureSlotOverflows
               << " image_textures=" << images.textures
               << " image_pinned=" << images.pinnedTextures
               << " image_bytes=" << images.imageBytes

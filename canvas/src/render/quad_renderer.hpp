@@ -69,6 +69,9 @@ class QuadRenderer {
     uint32_t instanceCount = 0;
     uint64_t instanceBytes = 0;
     uint64_t instanceCapacityBytes = 0;
+    /// Times this frame wanted a texture the bindless table had no room for
+    /// and drew the white placeholder instead. See `textureSlot`.
+    uint32_t textureSlotOverflows = 0;
   };
 
   enum class Kind : uint32_t {
@@ -407,6 +410,9 @@ class QuadRenderer {
   vk::Handle<VkDescriptorSetLayout> descriptorSetLayout_;
   uint32_t maxBindlessTextures_ = 0;
   uint32_t blurTextureIndex_ = 0;
+  /// Slot holding the 1x1 white placeholder, claimed first every frame so a
+  /// frame that exhausts the table still has somewhere valid to point.
+  uint32_t fallbackTextureIndex_ = 0;
   static constexpr uint32_t kDesiredBindlessTextures = 4096;
   static constexpr uint32_t kMaxFramesInFlight = 2;
   FrameResources frames_[kMaxFramesInFlight]{};
