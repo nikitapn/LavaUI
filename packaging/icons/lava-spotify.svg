@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title desc">
+  <title id="title">LavaSpotify</title>
+  <desc id="desc">Music note on a dark rounded tile — the LavaSpotify application icon.</desc>
+  <defs>
+    <linearGradient id="tile" x1="96" y1="64" x2="416" y2="448" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#343866"/>
+      <stop offset="1" stop-color="#171a35"/>
+    </linearGradient>
+    <linearGradient id="note" x1="180" y1="100" x2="360" y2="400" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#7dffb3"/>
+      <stop offset=".45" stop-color="#3dd68c"/>
+      <stop offset="1" stop-color="#1db954"/>
+    </linearGradient>
+  </defs>
+  <rect x="28" y="28" width="456" height="456" rx="116" fill="url(#tile)"/>
+  <!-- Stem -->
+  <rect x="292" y="120" width="28" height="220" rx="10" fill="url(#note)"/>
+  <!-- Flag -->
+  <path d="M320 120 C390 150 410 210 400 270 C360 240 330 210 320 180 Z" fill="url(#note)"/>
+  <!-- Note head -->
+  <ellipse cx="250" cy="360" rx="78" ry="54" transform="rotate(-18 250 360)" fill="url(#note)"/>
+</svg>

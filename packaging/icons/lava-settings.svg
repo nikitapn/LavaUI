@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title desc">
+  <title id="title">LavaSettings</title>
+  <desc id="desc">Gear on a dark rounded tile — the LavaSettings application icon.</desc>
+  <defs>
+    <linearGradient id="tile" x1="96" y1="64" x2="416" y2="448" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#343866"/>
+      <stop offset="1" stop-color="#171a35"/>
+    </linearGradient>
+    <linearGradient id="gear" x1="160" y1="120" x2="360" y2="400" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#c5cce8"/>
+      <stop offset="1" stop-color="#8ab4ff"/>
+    </linearGradient>
+  </defs>
+  <rect x="28" y="28" width="456" height="456" rx="116" fill="url(#tile)"/>
+  <!-- Simple gear: hub + teeth as rotated bars -->
+  <g fill="url(#gear)">
+    <circle cx="256" cy="256" r="72"/>
+    <rect x="236" y="100" width="40" height="312" rx="12"/>
+    <rect x="236" y="100" width="40" height="312" rx="12" transform="rotate(45 256 256)"/>
+    <rect x="236" y="100" width="40" height="312" rx="12" transform="rotate(90 256 256)"/>
+    <rect x="236" y="100" width="40" height="312" rx="12" transform="rotate(135 256 256)"/>
+  </g>
+  <circle cx="256" cy="256" r="42" fill="#171a35"/>
+  <circle cx="256" cy="256" r="22" fill="url(#gear)"/>
+</svg>

@@ -58,8 +58,11 @@ public struct DesktopEntry: Sendable, Identifiable, Equatable {
 }
 
 extension DesktopEntry {
-    /// Everything installed, in the order a launcher should show it: by name,
-    /// case-insensitively.
+    /// Everything installed, sorted by name (case-insensitively).
+    ///
+    /// A launcher that wants "most used first" reorders this with
+    /// `LaunchHistory` — frequency is a property of the user's habits, not of
+    /// the install, so it does not belong in the walk.
     ///
     /// Not cached. It is a few hundred small files and about ten milliseconds,
     /// and a launcher that runs for four seconds should see an application

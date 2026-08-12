@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title desc">
+  <title id="title">LavaTerm</title>
+  <desc id="desc">Terminal prompt on a dark rounded tile — the LavaTerm application icon.</desc>
+  <defs>
+    <linearGradient id="tile" x1="96" y1="64" x2="416" y2="448" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#343866"/>
+      <stop offset="1" stop-color="#171a35"/>
+    </linearGradient>
+    <linearGradient id="glow" x1="140" y1="140" x2="380" y2="380" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#7dffb3"/>
+      <stop offset="1" stop-color="#2ecf8a"/>
+    </linearGradient>
+  </defs>
+  <rect x="28" y="28" width="456" height="456" rx="116" fill="url(#tile)"/>
+  <!-- Window chrome -->
+  <rect x="96" y="120" width="320" height="272" rx="28" fill="#0d1024" stroke="#4a5288" stroke-width="8"/>
+  <circle cx="140" cy="158" r="10" fill="#f12f61"/>
+  <circle cx="172" cy="158" r="10" fill="#ffd84a"/>
+  <circle cx="204" cy="158" r="10" fill="#2ecf8a"/>
+  <!-- Prompt: > _ -->
+  <path d="M150 250 L210 300 L150 350" fill="none" stroke="url(#glow)" stroke-width="22" stroke-linecap="round" stroke-linejoin="round"/>
+  <rect x="240" y="328" width="120" height="22" rx="8" fill="url(#glow)"/>
+</svg>

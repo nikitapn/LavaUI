@@ -18,7 +18,9 @@ import Observation
 //
 // The list comes from freedesktop desktop entries; `LavaShell.DesktopEntry`
 // is where that is explained, because "where does the list of applications
-// come from" turns out to have a longer answer than it looks.
+// come from" turns out to have a longer answer than it looks. Empty-query
+// order is by launch frequency (`LaunchHistory`, rofi's druncache idea);
+// typing still ranks by match score, with history as the tiebreaker.
 //
 // It closes as soon as it has done something: launched an application, or been
 // dismissed with Escape. A launcher that stayed open after launching would be
@@ -28,10 +30,13 @@ import Observation
 final class LauncherModel {
     /// Everything installed, read once at startup.
     var all: [DesktopEntry] = []
+    /// How often each app has been launched — what puts frequent apps first,
+    /// the way rofi's druncache does.
+    var history = LaunchHistory()
     var query = "" {
         didSet {
             guard query != oldValue else { return }
-            matches = DesktopEntry.search(query, in: all)
+            matches = DesktopEntry.search(query, in: all, history: history)
             // A new search is a new list, and the old cursor pointed into a
             // list that no longer exists. Anywhere but the top would be a
             // selection the user did not make.
@@ -43,8 +48,10 @@ final class LauncherModel {
     var selected = 0
 
     func load() {
+        history = LaunchHistory.load()
         all = DesktopEntry.installed()
-        matches = all
+        // Empty query: most-used first, never-used alphabetical underneath.
+        matches = DesktopEntry.search("", in: all, history: history)
         // The icon lookup would otherwise read every entry on the machine
         // again the first time something asks for an icon by app id.
         IconLookup.useEntries(all)
@@ -61,6 +68,10 @@ final class LauncherModel {
         // Exec line is broken is indistinguishable from one that ignored the
         // click.
         FileHandle.standardError.write(Data("launching \(entry.id)\n".utf8))
+        // Count before quit: once the surface tears down this process is on
+        // its way out, and a write after that is a race against exit.
+        history.record(entry.id)
+        history.save()
         // Quit through the client so the surface is destroyed before we die —
         // bare `exit` left the fullscreen dimmer up for ~half a second.
         if entry.launch() { LavaClient.quit() }

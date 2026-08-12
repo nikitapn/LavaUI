@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title desc">
+  <title id="title">TraceLoom</title>
+  <desc id="desc">Log timeline bars on a dark rounded tile — the TraceLoom application icon.</desc>
+  <defs>
+    <linearGradient id="tile" x1="96" y1="64" x2="416" y2="448" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#343866"/>
+      <stop offset="1" stop-color="#171a35"/>
+    </linearGradient>
+    <linearGradient id="bar" x1="120" y1="120" x2="400" y2="400" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#8ab4ff"/>
+      <stop offset="1" stop-color="#5b7cfa"/>
+    </linearGradient>
+  </defs>
+  <rect x="28" y="28" width="456" height="456" rx="116" fill="url(#tile)"/>
+  <!-- Timeline spine -->
+  <rect x="118" y="248" width="276" height="16" rx="8" fill="#4a5288"/>
+  <!-- Event bars of a log pyramid -->
+  <rect x="130" y="160" width="48" height="88" rx="12" fill="url(#bar)" opacity="0.85"/>
+  <rect x="198" y="130" width="48" height="118" rx="12" fill="#ff9a2f"/>
+  <rect x="266" y="180" width="48" height="68" rx="12" fill="#7dffb3"/>
+  <rect x="334" y="150" width="48" height="98" rx="12" fill="#f12f61"/>
+  <!-- Lower markers -->
+  <circle cx="154" cy="320" r="14" fill="#8ab4ff"/>
+  <circle cx="222" cy="320" r="14" fill="#ff9a2f"/>
+  <circle cx="290" cy="320" r="14" fill="#7dffb3"/>
+  <circle cx="358" cy="320" r="14" fill="#f12f61"/>
+  <rect x="154" y="360" width="204" height="14" rx="7" fill="#4a5288"/>
+</svg>

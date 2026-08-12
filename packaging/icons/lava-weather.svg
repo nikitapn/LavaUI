@@ -1,0 +1,36 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title desc">
+  <title id="title">LavaWeather</title>
+  <desc id="desc">Sun and cloud on a dark rounded tile — the LavaWeather application icon.</desc>
+  <defs>
+    <linearGradient id="tile" x1="96" y1="64" x2="416" y2="448" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#343866"/>
+      <stop offset="1" stop-color="#171a35"/>
+    </linearGradient>
+    <linearGradient id="sun" x1="200" y1="120" x2="340" y2="280" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#ffe56a"/>
+      <stop offset="1" stop-color="#ff9a2f"/>
+    </linearGradient>
+    <linearGradient id="cloud" x1="120" y1="260" x2="400" y2="400" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#f2f5ff"/>
+      <stop offset="1" stop-color="#c5cce8"/>
+    </linearGradient>
+  </defs>
+  <rect x="28" y="28" width="456" height="456" rx="116" fill="url(#tile)"/>
+  <circle cx="286" cy="200" r="62" fill="url(#sun)"/>
+  <g stroke="#ffd84a" stroke-width="18" stroke-linecap="round" opacity="0.95">
+    <line x1="286" y1="88" x2="286" y2="112"/>
+    <line x1="286" y1="288" x2="286" y2="312"/>
+    <line x1="174" y1="200" x2="198" y2="200"/>
+    <line x1="374" y1="200" x2="398" y2="200"/>
+    <line x1="206" y1="120" x2="224" y2="138"/>
+    <line x1="348" y1="262" x2="366" y2="280"/>
+    <line x1="348" y1="138" x2="366" y2="120"/>
+    <line x1="206" y1="280" x2="224" y2="262"/>
+  </g>
+  <g fill="url(#cloud)">
+    <ellipse cx="210" cy="318" rx="78" ry="52"/>
+    <ellipse cx="278" cy="300" rx="72" ry="58"/>
+    <ellipse cx="340" cy="322" rx="70" ry="50"/>
+    <rect x="150" y="318" width="210" height="54" rx="27"/>
+  </g>
+</svg>

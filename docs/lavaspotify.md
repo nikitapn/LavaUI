@@ -96,7 +96,7 @@ export SPOTIFY_DEVICE_NAME="spotifyd"
 ```
 
 Put these in your shell profile or a small env file you `source` before
-`swift run Spotify`. Client credentials alone load the live catalog; playback
+`swift run LavaSpotify`. Client credentials alone load the live catalog; playback
 needs the user login in step 5.
 
 ## 3. Build and run LavaSpotify
@@ -104,11 +104,11 @@ needs the user login in step 5.
 From the repo root (same as other LavaUI apps):
 
 ```bash
-swift build --product Spotify   # SwiftPM builds the C++ engine too
-swift run Spotify
+swift build --product LavaSpotify   # SwiftPM builds the C++ engine too
+swift run LavaSpotify
 ```
 
-Executable product name: `Spotify` (target `SpotifyApp`).
+Executable product name: `LavaSpotify` (target `SpotifyApp`).
 
 Without credentials the app falls back to a **seed catalog** + oembed covers so
 the image cache can still be exercised offline.
@@ -364,7 +364,7 @@ spotifyd authenticate
 systemctl --user enable --now spotifyd
 
 # --- LavaSpotify ---
-swift run Spotify
+swift run LavaSpotify
 # Account → Log in → Refresh devices → click a track
 ```
 

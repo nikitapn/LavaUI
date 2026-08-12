@@ -38,7 +38,7 @@ if haveNprpc {
 var products: [Product] = [
     .executable(name: "HelloWorld", targets: ["HelloWorld"]),
     .executable(name: "TraceLoom", targets: ["TraceLoomApp"]),
-    .executable(name: "Spotify", targets: ["SpotifyApp"]),
+    .executable(name: "LavaSpotify", targets: ["SpotifyApp"]),
     .executable(name: "LavaWeather", targets: ["WeatherApp"]),
     .executable(name: "LavaTerm", targets: ["LavaTermApp"]),
     .executable(name: "LavaBench", targets: ["LavaBench"]),

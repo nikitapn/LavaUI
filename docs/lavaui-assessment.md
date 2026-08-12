@@ -16,7 +16,7 @@ problem is the transferable part, not the patch.
 
 ## Method
 
-- Build: `swift build -c release --product Spotify`, `LAVAUI_DEBUG=1` frame
+- Build: `swift build -c release --product LavaSpotify`, `LAVAUI_DEBUG=1` frame
   timings, real X11 input via `xdotool`.
 - Tree size measured via the agent's `layout_tree`; library inflated to 1320
   albums with a temporary env-var fanout in `SpotifySession`, since reverted.
@@ -25,7 +25,7 @@ Three traps worth knowing before trusting any measurement taken here:
 
 1. **Debug builds are ~10× slower than release on this path.** Same view, same
    window: `body=4.98 layout=5.31` debug vs `body=0.82 layout=0.18` release. The
-   setup guide tells you to `swift run Spotify`, which is debug — so the
+   setup guide tells you to `swift run LavaSpotify`, which is debug — so the
    framework feels far heavier during development than it is.
 2. **The agent's `settle()` renders outside the instrumented block**, so agent
    clicks produce *no* frame lines. Drive with `xdotool` when timing.
