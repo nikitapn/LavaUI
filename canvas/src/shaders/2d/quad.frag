@@ -1,16 +1,17 @@
 #version 450
+#extension GL_EXT_nonuniform_qualifier : require
 
 // See quad.vert. Coverage / sample paths:
 //   kind 0 — rounded-box SDF (rect / round-rect / circle / stroked line).
 //   kind 1 — glyph coverage from the R8 atlas (`.r` * tint).
-//   kind 2 — full-color image (RGBA sample * tint). Descriptor is rebound
-//            per batch to the image view; scissor + texture both break batches.
+//   kind 2 — full-color image (RGBA sample * tint). The vertex selects an
+//            entry in the frame's bindless descriptor table.
 //   kind 3 — flat-filled mesh (arbitrary polygon). The triangle boundary
 //            already *is* the shape's edge, so there is no distance function
 //            to evaluate — full coverage everywhere the rasterizer covers.
 //
 // Solid shapes still sample the bound texture (usually a white texel), so one
-// descriptor set is enough.
+// descriptor table is enough.
 //
 // Output is **premultiplied** and the pipeline blends with ONE /
 // ONE_MINUS_SRC_ALPHA. Over an opaque target that is identical to straight
@@ -27,8 +28,9 @@ layout(location = 3) in vec4      vColor;
 layout(location = 4) flat in uint vKind;
 layout(location = 5) flat in float vAux;
 layout(location = 6) in vec2      vUv;
+layout(location = 7) flat in uint vTextureIndex;
 
-layout(binding = 0) uniform sampler2D uAtlas;
+layout(binding = 0) uniform sampler2D uTextures[];
 
 layout(location = 0) out vec4 outColor;
 
@@ -98,7 +100,7 @@ void main() {
     if (covb <= 0.0) {
       discard;
     }
-    vec4 cb = texture(uAtlas, vUv) * vColor;
+    vec4 cb = texture(uTextures[nonuniformEXT(vTextureIndex)], vUv) * vColor;
     float ab = cb.a * covb;
     if (ab <= 0.001) {
       discard;
@@ -109,7 +111,7 @@ void main() {
 
   if (vKind == 2u) {
     // Image: vLocal holds UV; multiply by vertex color as tint.
-    c = texture(uAtlas, vLocal) * vColor;
+    c = texture(uTextures[nonuniformEXT(vTextureIndex)], vLocal) * vColor;
     if (c.a <= 0.001) {
       discard;
     }
@@ -121,7 +123,7 @@ void main() {
   } else {
     float cov;
     if (vKind == 1u) {
-      cov = texture(uAtlas, vLocal).r;
+      cov = texture(uTextures[nonuniformEXT(vTextureIndex)], vLocal).r;
     } else {
       float d = sdRoundBox(vLocal, vHalfSize, vRadius);
       // fwidth gives ~1px of screen-space falloff, so edges antialias without

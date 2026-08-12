@@ -21,6 +21,7 @@
 // slot passed to begin(); Application waits that slot before writing.
 
 #include <cstdint>
+#include <unordered_map>
 #include <vector>
 
 #include <vulkan/vulkan.h>
@@ -52,6 +53,14 @@ inline uint32_t withScaledAlpha(uint32_t rgba, float k)
 
 class QuadRenderer {
  public:
+  struct FrameStats {
+    uint32_t drawCalls = 0;
+    uint32_t textureBinds = 0;
+    uint32_t descriptorWrites = 0;
+    uint32_t uniqueTextureSamplers = 0;
+    uint32_t descriptorPoolGrowths = 0;
+  };
+
   enum class Kind : uint32_t {
     Sdf = 0, Glyph = 1, Image = 2, Mesh = 3,
     /// Coverage only, written as alpha and never discarded where a shape
@@ -93,8 +102,10 @@ class QuadRenderer {
     /// they are the overwhelming majority of quads and the migration would buy
     /// them nothing.
     vec2     uv;
+    /// Index into the frame slot's bindless combined-image-sampler table.
+    uint32_t textureIndex;
   };
-  static_assert(sizeof(Vertex) == 48, "QuadVertex must stay tightly packed");
+  static_assert(sizeof(Vertex) == 52, "QuadVertex must stay tightly packed");
 
   explicit QuadRenderer(RenderDevice &device) : device_{device} {}
 
@@ -160,8 +171,8 @@ class QuadRenderer {
   void pushGlyph(vec2 topLeft, vec2 size, vec2 uv0, vec2 uv1, uint32_t rgba);
 
   /// Full-color textured quad. `textureView` is sampled as RGBA; `uv0`/`uv1`
-  /// are the source rect (usually (0,0)-(1,1)). Flushes the batch when the
-  /// bound texture changes.
+  /// are the source rect (usually (0,0)-(1,1)). The view becomes a bindless
+  /// table slot carried by the vertices, so changing it does not end a batch.
   void pushImage(vec2 topLeft, vec2 size, vec2 uv0, vec2 uv1, uint32_t rgba,
                  VkImageView textureView);
 
@@ -223,11 +234,7 @@ class QuadRenderer {
 
   /// Bind the BlurPass result for batches created with pushBlurResultImage.
   /// Optional sampler (e.g. clamp-to-edge from BlurPass); null → default.
-  void setBlurResultView(VkImageView view, VkSampler sampler = VK_NULL_HANDLE)
-  {
-    blurResultView_ = view;
-    blurResultSampler_ = sampler;
-  }
+  void setBlurResultView(VkImageView view, VkSampler sampler = VK_NULL_HANDLE);
 
   /// Records every batch, in order, into `commandBuffer`.
   void draw(VkCommandBuffer commandBuffer);
@@ -247,6 +254,7 @@ class QuadRenderer {
 
   size_t quadCount() const { return vertices_.size() / 4; }
   size_t batchCount() const { return batches_.size(); }
+  const FrameStats &frameStats() const { return frameStats_; }
 
  private:
   /// A contiguous run of quads sharing one scissor + one sampled texture.
@@ -258,7 +266,6 @@ class QuadRenderer {
     uint32_t firstVertex = 0;
     uint32_t vertexCount = 0;
     VkRect2D scissor{};
-    VkImageView textureView = VK_NULL_HANDLE;  // null → use glyphAtlasView_
     bool sampleBlurResult = false;             // bind blurResultView_ at draw
     /// Drawn with the mask pipeline: multiplies the target rather than
     /// painting over it. See `pushCornerMask`.
@@ -267,6 +274,21 @@ class QuadRenderer {
 
   /// Per-frame-slot GPU resources (not shared across in-flight frames).
   struct FrameResources {
+    struct TextureSampler {
+      VkImageView view = VK_NULL_HANDLE;
+      VkSampler sampler = VK_NULL_HANDLE;
+
+      bool operator==(const TextureSampler &) const = default;
+    };
+
+    struct TextureSamplerHash {
+      size_t operator()(const TextureSampler &key) const {
+        const size_t a = std::hash<VkImageView>{}(key.view);
+        const size_t b = std::hash<VkSampler>{}(key.sampler);
+        return a ^ (b + 0x9e3779b9u + (a << 6) + (a >> 2));
+      }
+    };
+
     VkBuffer      vertexBuffer = VK_NULL_HANDLE;
     VmaAllocation vertexAlloc  = VK_NULL_HANDLE;
     void         *vertexMapped = nullptr;
@@ -279,8 +301,9 @@ class QuadRenderer {
     /// 1 — so a frame with mesh content needs more than the quad ratio, and
     /// assuming otherwise overruns the buffer. See `ensureBufferCapacity`.
     size_t        indexCapacity = 0;
-    std::vector<VkDescriptorSet> descriptorSets;
-    uint32_t descriptorWriteIndex = 0;
+    VkDescriptorSet descriptorSet = VK_NULL_HANDLE;
+    uint32_t nextTextureIndex = 0;
+    std::unordered_map<TextureSampler, uint32_t, TextureSamplerHash> textureSlots;
   };
 
   /// How a pipeline combines what it draws with what is already there.
@@ -296,19 +319,14 @@ class QuadRenderer {
   void createSpatialPipeline(VkRenderPass renderPass, VkSampleCountFlagBits samples,
                              vk::Handle<VkPipeline> &out, bool depthEnabled);
   void setupDescriptors();
-  /// Adds another chunk of descriptor sets to `fr`, from a fresh pool.
-  ///
-  /// Host-side only — creating a pool and allocating sets touches no command
-  /// buffer — so it is safe from inside `drawSegment`, which is where the need
-  /// is discovered. The sets are new, so nothing in flight can be reading them.
-  /// False if the device refused, which leaves the old behaviour (rebind the
-  /// last set) as the fallback rather than a crash.
-  bool growDescriptorSets(FrameResources &fr);
+  uint32_t textureSlot(VkImageView view, VkSampler sampler = VK_NULL_HANDLE);
+  void writeTextureSlot(uint32_t slot, VkImageView view, VkSampler sampler);
   void createWhiteTexture();
   void ensureBufferCapacity(size_t vertexCount, size_t indexCount);
   void destroyFrameBuffers(FrameResources &fr);
   void flushBatch();
-  /// Switch the texture used by subsequent quads (flushes if it changes).
+  /// Switch the texture selected by subsequent vertices. Texture changes do
+  /// not break a batch: the fragment shader indexes the descriptor table.
   void ensureBatchTexture(VkImageView view);
 
   /// Appends 4 vertices + 6 indices. All four share the shape parameters; only
@@ -337,33 +355,14 @@ class QuadRenderer {
   vk::Handle<VkPipeline>            spatialPipelineScene_;
   vk::Handle<VkPipelineLayout>      pipelineLayout_;
   vk::Handle<VkDescriptorPool>      descriptorPool_;
-  /// Pools allocated after the first ran out, in the order they were made.
-  ///
-  /// A frame needs one descriptor set per *texture change*, and batches are
-  /// emitted in tree order with no sorting, so a grid whose cards each pair an
-  /// atlased icon with a text label costs two per card and the total is a
-  /// function of how much content is on screen. A fixed ceiling therefore is
-  /// not a budget, it is a scroll depth — which is exactly how it presented:
-  /// correct until the list got long enough, then the wrong texture.
-  std::vector<vk::Handle<VkDescriptorPool>> extraDescriptorPools_;
   vk::Handle<VkDescriptorSetLayout> descriptorSetLayout_;
-
-  /// Sets per texture bind within one frame slot (never rewritten while bound).
-  ///
-  /// The starting allocation, not a ceiling: `growDescriptorSets` adds another
-  /// chunk of this size whenever a frame needs more. Enough that an ordinary
-  /// window never allocates twice, small enough that every window does not pay
-  /// for the worst case.
-  static constexpr uint32_t kDescriptorSetsPerChunk = 64;
-  /// How many chunks one frame slot may hold before the renderer stops asking.
-  ///
-  /// A stop is needed somewhere: past a few thousand texture changes the frame
-  /// is pathological — an unatlased image per row, most likely — and quietly
-  /// allocating against it hides the problem instead of reporting it.
-  static constexpr uint32_t kMaxDescriptorChunks = 32;
+  uint32_t maxBindlessTextures_ = 0;
+  uint32_t blurTextureIndex_ = 0;
+  static constexpr uint32_t kDesiredBindlessTextures = 4096;
   static constexpr uint32_t kMaxFramesInFlight = 2;
   FrameResources frames_[kMaxFramesInFlight]{};
   uint32_t activeFrameSlot_ = 0;
+  FrameStats frameStats_{};
 
   // 1x1 opaque white, bound until setAtlas() supplies the glyph atlas.
   VkImage       whiteImage_      = VK_NULL_HANDLE;
@@ -373,6 +372,7 @@ class QuadRenderer {
   VkImageView    glyphAtlasView_   = VK_NULL_HANDLE;
   VkSampler      glyphAtlasSampler_ = VK_NULL_HANDLE;
   VkImageView    currentBatchTexture_ = VK_NULL_HANDLE;
+  uint32_t       currentTextureIndex_ = 0;
 
   // CPU-side build arena (copied into frames_[slot] on end()).
   std::vector<Vertex>   vertices_;

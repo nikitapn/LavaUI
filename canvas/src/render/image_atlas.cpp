@@ -109,13 +109,7 @@ ImageAtlas::Region ImageAtlas::add(const uint8_t *rgba, uint32_t w, uint32_t h)
   std::memcpy(mapped, rgba, static_cast<size_t>(bytes));
   device_->unmapBuffer(stagingAlloc);
 
-  device_->transitionImageLayout(target->image, VK_FORMAT_R8G8B8A8_SRGB,
-                                 VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                                 VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
-  device_->copyBufferToImageRegion(staging, target->image, x, y, w, h);
-  device_->transitionImageLayout(target->image, VK_FORMAT_R8G8B8A8_SRGB,
-                                 VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                                 VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+  device_->updateSampledImageRegion(staging, target->image, x, y, w, h);
   device_->destroyBuffer(staging, stagingAlloc);
 
   // UVs cover only the pixels written, not the whole cell — an image smaller

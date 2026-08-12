@@ -2300,4 +2300,17 @@ void RenderWindow::render(const canvas::DrawList &list)
       VkRect2D fullScissor{.offset = {0, 0}, .extent = extent};
       vkCmdSetScissor(commandBuffer, 0, 1, &fullScissor);
     });
+
+  static const bool renderStats = std::getenv("LAVA_RENDER_STATS") != nullptr;
+  if (renderStats) {
+    const auto &s = quads_.frameStats();
+    std::cerr << "LAVA_RENDER_STATS quads=" << quads_.quadCount()
+              << " batches=" << quads_.batchCount()
+              << " draws=" << s.drawCalls
+              << " texture_binds=" << s.textureBinds
+              << " unique_texture_samplers=" << s.uniqueTextureSamplers
+              << " descriptor_writes=" << s.descriptorWrites
+              << " descriptor_pool_growths=" << s.descriptorPoolGrowths
+              << '\n';
+  }
 }

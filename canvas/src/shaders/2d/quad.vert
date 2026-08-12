@@ -16,6 +16,7 @@ layout(location = 6) in float inAux;       // kind-specific: shadow blur
 // backdrop cannot, because it is a textured quad *and* a rounded shape, and
 // those are the only two things `inLocal` can mean.
 layout(location = 7) in vec2  inUv;
+layout(location = 8) in uint  inTextureIndex;
 
 // std140: vec2@0, vec2@8, float@16, float@20 → 24 bytes
 layout(push_constant) uniform Push {
@@ -32,6 +33,7 @@ layout(location = 3) out vec4       vColor;
 layout(location = 4) flat out uint  vKind;
 layout(location = 5) flat out float vAux;
 layout(location = 6) out vec2       vUv;
+layout(location = 7) flat out uint  vTextureIndex;
 
 void main() {
   vUv       = inUv;
@@ -41,6 +43,7 @@ void main() {
   vColor    = inColor;
   vKind     = inKind;
   vAux      = inAux;
+  vTextureIndex = inTextureIndex;
 
   // Zoom about viewport center, then pan (layout → screen pixels).
   vec2 center = pc.viewport * 0.5;

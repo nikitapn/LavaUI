@@ -521,6 +521,16 @@ class RenderDevice
                                uint32_t width,
                                uint32_t height);
 
+  /// Updates a sub-rect of a live sampled image in one submission. Recording
+  /// both barriers and the copy together avoids idling the graphics queue once
+  /// for each operation, which matters when a page receives many thumbnails.
+  void updateSampledImageRegion(VkBuffer buffer,
+                                VkImage  image,
+                                int32_t  dstX,
+                                int32_t  dstY,
+                                uint32_t width,
+                                uint32_t height);
+
   VkImageView createImageView(VkImage            image,
                               VkFormat           format,
                               VkImageAspectFlags aspectFlags,

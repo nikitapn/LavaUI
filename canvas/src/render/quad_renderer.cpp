@@ -55,7 +55,7 @@ void QuadRenderer::cleanUp() {
 
   for (auto &fr : frames_) {
     destroyFrameBuffers(fr);
-    fr.descriptorSets.clear();
+    fr.textureSlots.clear();
   }
 
   if (whiteImageView_ != VK_NULL_HANDLE) {
@@ -76,10 +76,6 @@ void QuadRenderer::cleanUp() {
   spatialPipeline_.destroy(device);
   spatialPipelineScene_.destroy(device);
   pipelineLayout_.destroy(device);
-  for (auto &pool : extraDescriptorPools_) {
-    pool.destroy(device);
-  }
-  extraDescriptorPools_.clear();
   descriptorPool_.destroy(device);
   descriptorSetLayout_.destroy(device);
 }
@@ -125,61 +121,35 @@ void QuadRenderer::createWhiteTexture() {
   sampler_ = device_.createTextureSampler();
 }
 
-bool QuadRenderer::growDescriptorSets(FrameResources &fr)
-{
-  if (extraDescriptorPools_.size() >= kMaxDescriptorChunks) return false;
-
-  VkDevice device = device_.getDevice();
-  VkDescriptorPoolSize poolSize{
-    .type            = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-    .descriptorCount = kDescriptorSetsPerChunk,
-  };
-  VkDescriptorPoolCreateInfo poolInfo{
-    .sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
-    .maxSets       = kDescriptorSetsPerChunk,
-    .poolSizeCount = 1,
-    .pPoolSizes    = &poolSize,
-  };
-  VkDescriptorPool pool = VK_NULL_HANDLE;
-  if (vkCreateDescriptorPool(device, &poolInfo, nullptr, &pool) != VK_SUCCESS) {
-    return false;
-  }
-
-  std::vector<VkDescriptorSetLayout> layouts(kDescriptorSetsPerChunk,
-                                             descriptorSetLayout_);
-  std::vector<VkDescriptorSet> sets(kDescriptorSetsPerChunk, VK_NULL_HANDLE);
-  VkDescriptorSetAllocateInfo allocInfo{
-    .sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
-    .descriptorPool     = pool,
-    .descriptorSetCount = kDescriptorSetsPerChunk,
-    .pSetLayouts        = layouts.data(),
-  };
-  if (vkAllocateDescriptorSets(device, &allocInfo, sets.data()) != VK_SUCCESS) {
-    vkDestroyDescriptorPool(device, pool, nullptr);
-    return false;
-  }
-
-  // The pool outlives every frame that will bind out of it: it is released in
-  // cleanUp with the rest, never per frame, so a set handed out here stays
-  // valid for as long as any recorded command buffer can reference it.
-  extraDescriptorPools_.emplace_back();
-  extraDescriptorPools_.back() = pool;
-  fr.descriptorSets.insert(fr.descriptorSets.end(), sets.begin(), sets.end());
-  return true;
-}
-
 void QuadRenderer::setupDescriptors() {
   VkDevice device = device_.getDevice();
+
+  const auto &limits = device_.getDeviceProperties().limits;
+  maxBindlessTextures_ = std::min(
+    kDesiredBindlessTextures,
+    std::min(limits.maxPerStageDescriptorSampledImages,
+             limits.maxDescriptorSetSampledImages));
+  if (maxBindlessTextures_ < 2) {
+    throw std::runtime_error("GPU exposes fewer than two sampled-image descriptors");
+  }
+  blurTextureIndex_ = maxBindlessTextures_ - 1;
 
   VkDescriptorSetLayoutBinding samplerBinding{
     .binding         = 0,
     .descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-    .descriptorCount = 1,
+    .descriptorCount = maxBindlessTextures_,
     .stageFlags      = VK_SHADER_STAGE_FRAGMENT_BIT,
   };
 
+  VkDescriptorBindingFlags bindingFlags = VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT;
+  VkDescriptorSetLayoutBindingFlagsCreateInfo bindingFlagsInfo{
+    .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO,
+    .bindingCount = 1,
+    .pBindingFlags = &bindingFlags,
+  };
   VkDescriptorSetLayoutCreateInfo layoutInfo{
     .sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
+    .pNext        = &bindingFlagsInfo,
     .bindingCount = 1,
     .pBindings    = &samplerBinding,
   };
@@ -187,14 +157,14 @@ void QuadRenderer::setupDescriptors() {
                                  &descriptorSetLayout_),
      "Failed to create quad descriptor set layout");
 
-  const uint32_t totalSets = kMaxFramesInFlight * kDescriptorSetsPerChunk;
+  const uint32_t totalDescriptors = kMaxFramesInFlight * maxBindlessTextures_;
   VkDescriptorPoolSize poolSize{
     .type            = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-    .descriptorCount = totalSets,
+    .descriptorCount = totalDescriptors,
   };
   VkDescriptorPoolCreateInfo poolInfo{
     .sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
-    .maxSets       = totalSets,
+    .maxSets       = kMaxFramesInFlight,
     .poolSizeCount = 1,
     .pPoolSizes    = &poolSize,
   };
@@ -205,21 +175,59 @@ void QuadRenderer::setupDescriptors() {
   // other's descriptors.
   for (uint32_t f = 0; f < kMaxFramesInFlight; ++f) {
     auto &fr = frames_[f];
-    fr.descriptorSets.resize(kDescriptorSetsPerChunk);
-    std::vector<VkDescriptorSetLayout> layouts(kDescriptorSetsPerChunk,
-                                               descriptorSetLayout_);
+    VkDescriptorSetLayout layout = descriptorSetLayout_;
     VkDescriptorSetAllocateInfo allocInfo{
       .sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
       .descriptorPool     = descriptorPool_,
-      .descriptorSetCount = kDescriptorSetsPerChunk,
-      .pSetLayouts        = layouts.data(),
+      .descriptorSetCount = 1,
+      .pSetLayouts        = &layout,
     };
-    VR(vkAllocateDescriptorSets(device, &allocInfo, fr.descriptorSets.data()),
-       "Failed to allocate quad descriptor sets");
-    fr.descriptorWriteIndex = 0;
+    VR(vkAllocateDescriptorSets(device, &allocInfo, &fr.descriptorSet),
+       "Failed to allocate bindless quad descriptor set");
   }
 
   setAtlas(whiteImageView_, sampler_);
+}
+
+void QuadRenderer::writeTextureSlot(uint32_t slot, VkImageView view,
+                                    VkSampler sampler) {
+  VkDescriptorImageInfo imageInfo{
+    .sampler = sampler,
+    .imageView = view,
+    .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+  };
+  VkWriteDescriptorSet write{
+    .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+    .dstSet = activeFrame().descriptorSet,
+    .dstBinding = 0,
+    .dstArrayElement = slot,
+    .descriptorCount = 1,
+    .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+    .pImageInfo = &imageInfo,
+  };
+  vkUpdateDescriptorSets(device_.getDevice(), 1, &write, 0, nullptr);
+  ++frameStats_.descriptorWrites;
+}
+
+uint32_t QuadRenderer::textureSlot(VkImageView view, VkSampler sampler) {
+  if (view == VK_NULL_HANDLE) view = whiteImageView_;
+  if (sampler == VK_NULL_HANDLE) {
+    sampler = (view == glyphAtlasView_ && glyphAtlasSampler_ != VK_NULL_HANDLE)
+                ? glyphAtlasSampler_ : sampler_;
+  }
+  auto &fr = activeFrame();
+  const FrameResources::TextureSampler key{view, sampler};
+  if (const auto found = fr.textureSlots.find(key); found != fr.textureSlots.end()) {
+    return found->second;
+  }
+  if (fr.nextTextureIndex >= blurTextureIndex_) {
+    throw std::runtime_error("bindless texture table exhausted for one frame");
+  }
+  const uint32_t slot = fr.nextTextureIndex++;
+  fr.textureSlots.emplace(key, slot);
+  writeTextureSlot(slot, view, sampler);
+  frameStats_.uniqueTextureSamplers = static_cast<uint32_t>(fr.textureSlots.size());
+  return slot;
 }
 
 void QuadRenderer::setAtlas(VkImageView view, VkSampler sampler) {
@@ -324,11 +332,12 @@ void QuadRenderer::createSpatialPipeline(VkRenderPass renderPass,
     VkPipelineShaderStageCreateInfo{.sType=VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
       .stage=VK_SHADER_STAGE_FRAGMENT_BIT,.module=frag,.pName="main"}};
   VkVertexInputBindingDescription binding{0, sizeof(Vertex), VK_VERTEX_INPUT_RATE_VERTEX};
-  std::array<VkVertexInputAttributeDescription, 4> attrs{
+  std::array<VkVertexInputAttributeDescription, 5> attrs{
     VkVertexInputAttributeDescription{0,0,VK_FORMAT_R32G32_SFLOAT,offsetof(Vertex,pos)},
     VkVertexInputAttributeDescription{1,0,VK_FORMAT_R32G32_SFLOAT,offsetof(Vertex,local)},
     VkVertexInputAttributeDescription{2,0,VK_FORMAT_R8G8B8A8_UNORM,offsetof(Vertex,color)},
-    VkVertexInputAttributeDescription{3,0,VK_FORMAT_R32G32_SFLOAT,offsetof(Vertex,halfSize)}};
+    VkVertexInputAttributeDescription{3,0,VK_FORMAT_R32G32_SFLOAT,offsetof(Vertex,halfSize)},
+    VkVertexInputAttributeDescription{4,0,VK_FORMAT_R32_UINT,offsetof(Vertex,textureIndex)}};
   VkPipelineVertexInputStateCreateInfo vi{.sType=VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
     .vertexBindingDescriptionCount=1,.pVertexBindingDescriptions=&binding,
     .vertexAttributeDescriptionCount=static_cast<uint32_t>(attrs.size()),.pVertexAttributeDescriptions=attrs.data()};
@@ -395,7 +404,7 @@ void QuadRenderer::createPipeline(VkRenderPass renderPass,
 
   // RGBA8 is fetched as R8G8B8A8_UNORM so the shader receives a normalised
   // vec4 without any unpack maths.
-  std::array<VkVertexInputAttributeDescription, 8> attributes{
+  std::array<VkVertexInputAttributeDescription, 9> attributes{
     VkVertexInputAttributeDescription{0, 0, VK_FORMAT_R32G32_SFLOAT,
                                       offsetof(Vertex, pos)},
     VkVertexInputAttributeDescription{1, 0, VK_FORMAT_R32G32_SFLOAT,
@@ -412,6 +421,8 @@ void QuadRenderer::createPipeline(VkRenderPass renderPass,
                                       offsetof(Vertex, aux)},
     VkVertexInputAttributeDescription{7, 0, VK_FORMAT_R32G32_SFLOAT,
                                       offsetof(Vertex, uv)},
+    VkVertexInputAttributeDescription{8, 0, VK_FORMAT_R32_UINT,
+                                      offsetof(Vertex, textureIndex)},
   };
 
   VkPipelineVertexInputStateCreateInfo vertexInput{
@@ -630,7 +641,10 @@ void QuadRenderer::ensureBufferCapacity(size_t vertexCount, size_t indexCount) {
 
 void QuadRenderer::begin(vec2 viewportSize, uint32_t frameSlot) {
   activeFrameSlot_ = frameSlot % kMaxFramesInFlight;
-  activeFrame().descriptorWriteIndex = 0;
+  auto &fr = activeFrame();
+  fr.nextTextureIndex = 0;
+  fr.textureSlots.clear();
+  frameStats_ = {};
 
   viewportSize_ = viewportSize;
   vertices_.clear();
@@ -648,6 +662,7 @@ void QuadRenderer::begin(vec2 viewportSize, uint32_t frameSlot) {
   // Default open batch samples the glyph atlas (SDF ignores it).
   currentBatchTexture_ =
     glyphAtlasView_ != VK_NULL_HANDLE ? glyphAtlasView_ : whiteImageView_;
+  currentTextureIndex_ = textureSlot(currentBatchTexture_);
 }
 
 void QuadRenderer::appendQuad(const vec2 corners[4], const vec2 locals[4],
@@ -664,6 +679,7 @@ void QuadRenderer::appendQuad(const vec2 corners[4], const vec2 locals[4],
       .kind     = static_cast<uint32_t>(kind),
       .aux      = aux,
       .uv       = uvs != nullptr ? uvs[i] : vec2{0.f, 0.f},
+      .textureIndex = currentTextureIndex_,
     });
   }
   // 0-1-2, 0-2-3
@@ -680,10 +696,8 @@ void QuadRenderer::ensureBatchTexture(VkImageView view)
   if (view == VK_NULL_HANDLE) {
     view = glyphAtlasView_ != VK_NULL_HANDLE ? glyphAtlasView_ : whiteImageView_;
   }
-  if (view != currentBatchTexture_) {
-    flushBatch();
-    currentBatchTexture_ = view;
-  }
+  currentBatchTexture_ = view;
+  currentTextureIndex_ = textureSlot(view);
 }
 
 void QuadRenderer::pushBox(vec2 topLeft, vec2 size, uint32_t rgba, float radius) {
@@ -847,11 +861,11 @@ void QuadRenderer::pushSpatialTriangles(const canvas::SpatialVertex *points,
       .local={points[i].z,uv0.x+points[i].u*(uv1.x-uv0.x)},
       .halfSize={points[i].textured,uv0.y+points[i].v*(uv1.y-uv0.y)},.radius=0.f,
       .color=faded ? withScaledAlpha(points[i].color, opacity) : points[i].color,
-      .kind=static_cast<uint32_t>(Kind::Mesh)});
+      .kind=static_cast<uint32_t>(Kind::Mesh),
+      .textureIndex=textureSlot(textureView)});
   }
   batches_.push_back(Batch{.geometry=Batch::Geometry::SpatialTriangles,
-    .firstVertex=first,.vertexCount=count,.scissor=currentScissor_,
-    .textureView=textureView});
+    .firstVertex=first,.vertexCount=count,.scissor=currentScissor_});
 }
 
 void QuadRenderer::pushSpatialBegin(vec2 topLeft, vec2 size) {
@@ -922,6 +936,7 @@ void QuadRenderer::pushMesh(const vec2 *points, uint32_t count, uint32_t rgba,
       .radius   = 0.0f,
       .color    = rgba,
       .kind     = static_cast<uint32_t>(Kind::Mesh),
+      .textureIndex = currentTextureIndex_,
     });
   }
   if (isRing) {
@@ -954,7 +969,6 @@ void QuadRenderer::flushBatch() {
       .firstIndex          = batchStartIndex_,
       .indexCount          = end - batchStartIndex_,
       .scissor             = currentScissor_,
-      .textureView         = currentBatchTexture_,
       .sampleBlurResult  = false,
     });
   }
@@ -977,6 +991,7 @@ void QuadRenderer::pushBlurResultImage(vec2 topLeft, vec2 size, vec2 uv0,
   // atlas/SDF geometry into the same descriptor bind.
   flushBatch();
   currentBatchTexture_ = whiteImageView_;  // unused when sampleBlurResult
+  currentTextureIndex_ = blurTextureIndex_;
 
   const vec2 half{size.x * 0.5f, size.y * 0.5f};
   const float r = std::min(std::max(cornerRadius, 0.f), std::min(half.x, half.y));
@@ -1022,10 +1037,18 @@ void QuadRenderer::pushBlurResultImage(vec2 topLeft, vec2 size, vec2 uv0,
   flushBatch();
   if (!batches_.empty()) {
     batches_.back().sampleBlurResult = true;
-    batches_.back().textureView = VK_NULL_HANDLE;
   }
   currentBatchTexture_ =
     glyphAtlasView_ != VK_NULL_HANDLE ? glyphAtlasView_ : whiteImageView_;
+  currentTextureIndex_ = textureSlot(currentBatchTexture_);
+}
+
+void QuadRenderer::setBlurResultView(VkImageView view, VkSampler sampler) {
+  blurResultView_ = view;
+  blurResultSampler_ = sampler != VK_NULL_HANDLE ? sampler : sampler_;
+  if (view != VK_NULL_HANDLE) {
+    writeTextureSlot(blurTextureIndex_, view, blurResultSampler_);
+  }
 }
 
 void QuadRenderer::pushScissor(vec2 topLeft, vec2 size) {
@@ -1173,72 +1196,11 @@ void QuadRenderer::drawBatchRange(VkCommandBuffer commandBuffer,
     };
   };
 
-  // Do not reset descriptorWriteIndex here — multiphase drawSegment calls
-  // share one begin() and must not rewrite sets already bound earlier in the CB.
-  VkImageView boundView = VK_NULL_HANDLE;
-  VkSampler boundSampler = VK_NULL_HANDLE;
-  VkDescriptorSet boundSet = VK_NULL_HANDLE;
-
-  auto bindTexture = [&](VkImageView view, VkSampler overrideSamp) {
-    if (view == VK_NULL_HANDLE) {
-      view = glyphAtlasView_ != VK_NULL_HANDLE ? glyphAtlasView_ : whiteImageView_;
-    }
-    VkSampler samp = overrideSamp;
-    if (samp == VK_NULL_HANDLE) {
-      samp = (view == glyphAtlasView_ && glyphAtlasSampler_ != VK_NULL_HANDLE)
-               ? glyphAtlasSampler_
-               : sampler_;
-    }
-    if (view == boundView && samp == boundSampler && boundSet != VK_NULL_HANDLE)
-      return;
-    boundView = view;
-    boundSampler = samp;
-
-    if (fr.descriptorWriteIndex >= fr.descriptorSets.size() &&
-        !growDescriptorSets(fr)) {
-      // Only reachable once the frame is pathological or the device refused
-      // to allocate. Past here every further bind rewrites the *same* set, so
-      // all of them sample whichever texture was written last: the visible
-      // result is the wrong picture, not a missing one. Nothing else in the
-      // pipeline reports it — no Vulkan error, no dropped draw — so say it out
-      // loud, once, or it reads as a mysterious content bug.
-      //
-      // Each texture *change* costs a set, and batches are emitted in tree
-      // order with no sorting, so an image grid alternating art and labels
-      // burns roughly two per card. Atlasing is what keeps the count down:
-      // images sharing a page share one binding. See ImageAtlas and
-      // `Engine::decodeImage`'s size cap.
-      static bool warned = false;
-      if (!warned) {
-        warned = true;
-        std::cerr << "QuadRenderer: more than " << fr.descriptorSets.size()
-                  << " texture binds in one frame and no more sets available; "
-                     "further textures will draw the wrong image. Reduce "
-                     "distinct textures per frame or make them small enough "
-                     "to atlas.\n";
-      }
-      fr.descriptorWriteIndex =
-        static_cast<uint32_t>(fr.descriptorSets.size()) - 1;
-    }
-    VkDescriptorSet set = fr.descriptorSets[fr.descriptorWriteIndex++];
-    VkDescriptorImageInfo imageInfo{
-      .sampler     = samp,
-      .imageView   = view,
-      .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-    };
-    VkWriteDescriptorSet write{
-      .sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-      .dstSet          = set,
-      .dstBinding      = 0,
-      .descriptorCount = 1,
-      .descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-      .pImageInfo      = &imageInfo,
-    };
-    vkUpdateDescriptorSets(device_.getDevice(), 1, &write, 0, nullptr);
-    vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                            pipelineLayout_, 0, 1, &set, 0, nullptr);
-    boundSet = set;
-  };
+  // Every segment shares the frame slot's descriptor table. Texture selection
+  // is a vertex attribute, so binding it once per recorded range is enough.
+  vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                          pipelineLayout_, 0, 1, &fr.descriptorSet, 0, nullptr);
+  ++frameStats_.textureBinds;
 
   for (uint32_t bi = firstBatch; bi < last; ++bi) {
     const auto &batch = batches_[bi];
@@ -1279,21 +1241,13 @@ void QuadRenderer::drawBatchRange(VkCommandBuffer commandBuffer,
       vkCmdPushConstants(commandBuffer, pipelineLayout_, VK_SHADER_STAGE_VERTEX_BIT,
                          0, sizeof(ViewPush), &pc);
     }
-    if (batch.geometry == Batch::Geometry::Quads) {
-      if (batch.sampleBlurResult) {
-        if (blurResultView_ == VK_NULL_HANDLE) continue;
-        bindTexture(blurResultView_, blurResultSampler_);
-      } else {
-        bindTexture(batch.textureView, VK_NULL_HANDLE);
-      }
-    } else if (batch.geometry == Batch::Geometry::SpatialTriangles) {
-      bindTexture(batch.textureView, VK_NULL_HANDLE);
-    }
+    if (batch.sampleBlurResult && blurResultView_ == VK_NULL_HANDLE) continue;
     vkCmdSetScissor(commandBuffer, 0, 1, &sc);
     if (batch.geometry != Batch::Geometry::Quads) {
       vkCmdDraw(commandBuffer, batch.vertexCount, 1, batch.firstVertex, 0);
     } else {
       vkCmdDrawIndexed(commandBuffer, batch.indexCount, 1, batch.firstIndex, 0, 0);
     }
+    ++frameStats_.drawCalls;
   }
 }

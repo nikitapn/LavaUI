@@ -163,13 +163,10 @@ void RenderDevice::createVkInstance(
     .applicationVersion = VK_MAKE_VERSION(1, 0, 0),
     .pEngineName        = "No Engine",
     .engineVersion      = VK_MAKE_VERSION(1, 0, 0),
-    // 1.0 is enough for everything this engine does on its own. Exporting is
-    // the exception: `VK_EXT_image_drm_format_modifier` is built on
-    // `bind_memory2`, `image_format_list`, `sampler_ycbcr_conversion` and
-    // `get_physical_device_properties2`, all four of which are core by 1.2.
-    // Asking for 1.2 there replaces a chain of extension enables (and the
-    // KHR-suffixed entry points that come with them) with a version number.
-    .apiVersion = exportDrmFd_ >= 0 ? VK_API_VERSION_1_2 : VK_API_VERSION_1_0,
+    // Descriptor indexing is core in 1.2 and the quad renderer relies on its
+    // non-uniform sampled-image arrays. Export also needs the group of memory
+    // and format features promoted by the same version.
+    .apiVersion = VK_API_VERSION_1_2,
   };
 
   VkInstanceCreateInfo createInfo {
@@ -313,6 +310,21 @@ void RenderDevice::selectSupportedGraphicsCard()
     VkPhysicalDeviceProperties deviceProperties;
     vkGetPhysicalDeviceProperties(device, &deviceProperties);
 
+    if (deviceProperties.apiVersion < VK_API_VERSION_1_2) return false;
+
+    VkPhysicalDeviceVulkan12Features v12{
+      .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES,
+    };
+    VkPhysicalDeviceFeatures2 features2{
+      .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2,
+      .pNext = &v12,
+    };
+    vkGetPhysicalDeviceFeatures2(device, &features2);
+    if (!v12.runtimeDescriptorArray || !v12.descriptorBindingPartiallyBound ||
+        !v12.shaderSampledImageArrayNonUniformIndexing) {
+      return false;
+    }
+
     std::cout << std::format("Limits:\n\tmaxPushConstantsSize: {}\n",
                 deviceProperties.limits.maxPushConstantsSize);
 
@@ -406,6 +418,13 @@ void RenderDevice::createLogicalDevice()
 
   VkPhysicalDeviceFeatures deviceFeatures {};
 
+  VkPhysicalDeviceVulkan12Features descriptorIndexing{
+    .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES,
+  };
+  descriptorIndexing.shaderSampledImageArrayNonUniformIndexing = VK_TRUE;
+  descriptorIndexing.descriptorBindingPartiallyBound = VK_TRUE;
+  descriptorIndexing.runtimeDescriptorArray = VK_TRUE;
+
   // Optional, windowed only: VK_PRESENT_MODE_FIFO_LATEST_READY is MAILBOX's
   // behaviour — present the most recently finished image at the next refresh
   // and discard the ones it overtook — so it is non-tearing without letting
@@ -470,13 +489,15 @@ void RenderDevice::createLogicalDevice()
   // Must outlive vkCreateDevice: it is referenced through pNext.
   VkPhysicalDevicePresentModeFifoLatestReadyFeaturesKHR fifoLatestReady {
     .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PRESENT_MODE_FIFO_LATEST_READY_FEATURES_KHR,
-    .pNext = nullptr,
+    .pNext = &descriptorIndexing,
     .presentModeFifoLatestReady = VK_TRUE,
   };
 
   VkDeviceCreateInfo deviceCreateInfo = {
     .sType                   = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
-    .pNext                   = fifoLatestReadyEnabled_ ? &fifoLatestReady : nullptr,
+    .pNext                   = fifoLatestReadyEnabled_
+                                 ? static_cast<void *>(&fifoLatestReady)
+                                 : static_cast<void *>(&descriptorIndexing),
     .queueCreateInfoCount    = 1,
     .pQueueCreateInfos       = &queueCreateInfo,
     .enabledExtensionCount   = static_cast<uint32_t>(deviceExtensions.size()),
@@ -1258,6 +1279,59 @@ void RenderDevice::copyBufferToImageRegion(
                          VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                          1,
                          &region);
+
+  endSingleTimeCommands(commandBuffer);
+}
+
+void RenderDevice::updateSampledImageRegion(
+  VkBuffer buffer, VkImage image, int32_t dstX, int32_t dstY,
+  uint32_t width, uint32_t height)
+{
+  VkCommandBuffer commandBuffer = beginSingleTimeCommands();
+
+  VkImageMemoryBarrier toTransfer{
+    .sType               = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+    .srcAccessMask       = VK_ACCESS_SHADER_READ_BIT,
+    .dstAccessMask       = VK_ACCESS_TRANSFER_WRITE_BIT,
+    .oldLayout           = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+    .newLayout           = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+    .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+    .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+    .image               = image,
+    .subresourceRange    = {
+      .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+      .baseMipLevel = 0, .levelCount = 1,
+      .baseArrayLayer = 0, .layerCount = 1,
+    },
+  };
+  vkCmdPipelineBarrier(commandBuffer,
+                       VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                       VK_PIPELINE_STAGE_TRANSFER_BIT, 0,
+                       0, nullptr, 0, nullptr, 1, &toTransfer);
+
+  VkBufferImageCopy region{
+    .bufferOffset = 0,
+    .bufferRowLength = 0,
+    .bufferImageHeight = 0,
+    .imageSubresource = {
+      .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+      .mipLevel = 0, .baseArrayLayer = 0, .layerCount = 1,
+    },
+    .imageOffset = {dstX, dstY, 0},
+    .imageExtent = {width, height, 1},
+  };
+  vkCmdCopyBufferToImage(commandBuffer, buffer, image,
+                         VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+
+  VkImageMemoryBarrier toSample = toTransfer;
+  toSample.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+  toSample.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+  toSample.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+  toSample.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+  vkCmdPipelineBarrier(commandBuffer,
+                       VK_PIPELINE_STAGE_TRANSFER_BIT,
+                       VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0,
+                       0, nullptr, 0, nullptr, 1, &toSample);
 
   endSingleTimeCommands(commandBuffer);
 }
