@@ -42,6 +42,7 @@ let engineSources: [String] = [
     "src/render/font_key.cpp",
     "src/render/image_atlas.cpp",
     "src/render/pipeline.cpp",
+    "src/render/png_encode.cpp",
     "src/render/quad_renderer.cpp",
     "src/render/shaders.cpp",
     "src/render/svg_image.cpp",

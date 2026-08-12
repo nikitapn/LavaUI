@@ -1,9 +1,11 @@
 #include <algorithm>
+#include <atomic>
 #include <cctype>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cstddef>
+#include <drm_fourcc.h>
 #include <format>
 #include <fstream>
 #include <spawn.h>
@@ -35,10 +37,22 @@
 #include "control_plane.hpp"
 #include "shell.hpp"
 #include "wlr.hpp"
+#include "render/png_encode.hpp"
 
 extern char **environ;
 
 namespace {
+
+/// What `CreateSurface` stamps on the 3D app switcher, and the name
+/// `programPath` finds. Filtered out of the window list so a dock does not
+/// offer to switch to the switcher, and skipped by `focusSurface` so the
+/// previous window keeps the active title bar while the overlay has the
+/// keyboard.
+constexpr const char *kSwitcherAppId = "LavaSwitcher";
+
+/// Pid of a switcher we spawned and have not reaped. Stops Ctrl+Tab during
+/// the ~200 ms to first frame from launching a second overlay.
+std::atomic<pid_t> g_switcherPid{-1};
 
 /// A `wl_listener` that remembers what owns it.
 ///
@@ -553,6 +567,18 @@ struct Server {
   uint32_t focusedByWorkspace[Workspaces::kCount] = {};
   Workspaces workspaces;
 
+  /// Modifier that keeps the app switcher open (Ctrl, or the desktop mod).
+  /// 0 when no switcher session is live. Release of this bit commits.
+  uint32_t switcherHold = 0;
+  /// Ctrl came up before CreateSurface. Dismiss the overlay on map rather
+  /// than showing it after the user already let go.
+  bool switcherDismissOnMap = false;
+
+  void beginSwitcherSession(uint32_t holdMask);
+  void dismissSwitcherOnMapIfNeeded(ClientSurface &surface);
+  void onSwitcherHoldReleased();
+  void injectSwitcherCommit();
+
   /// What the machine looks like: which GPU, which screens at which sizes,
   /// what the keyboard is. Re-read on SIGHUP — see `reload_config`.
   lava::Config config;
@@ -803,6 +829,12 @@ struct ClientSurface {
   /// stream, and the scene simply stops drawing it. See `Minimize`.
   bool minimized = false;
 
+  /// Content node is off until the first `Present`. CreateSurface puts an
+  /// empty buffer in the scene; showing it is a flash of desktop-through-
+  /// a-hole (or a black slab) before the client has drawn. The switcher
+  /// is the case that made this load-bearing.
+  bool awaitingFirstFrame = false;
+
   /// Where the content starts — below the bar, or at the frame origin when
   /// there is no bar to be below.
   int contentY() const {
@@ -1032,6 +1064,125 @@ uint32_t shortcut_mod_mask(const lava::KeyboardConfig &keyboard);
 void collect_keyboard_layouts(
     std::vector<lava::CompositorHost::LayoutEntry> &out);
 
+/// Packs one DRM fourcc pixel into RGBA8. Unknown formats are treated as
+/// ARGB8888 (B,G,R,A in memory), which is what almost every Wayland client
+/// actually commits.
+void drmPixelToRgba(uint32_t format, const uint8_t *src, uint8_t *dst) {
+  switch (format) {
+  case DRM_FORMAT_ABGR8888:
+  case DRM_FORMAT_XBGR8888:
+    dst[0] = src[0];
+    dst[1] = src[1];
+    dst[2] = src[2];
+    dst[3] = format == DRM_FORMAT_XBGR8888 ? 255 : src[3];
+    break;
+  case DRM_FORMAT_RGBA8888:
+  case DRM_FORMAT_RGBX8888:
+    dst[0] = src[0];
+    dst[1] = src[1];
+    dst[2] = src[2];
+    dst[3] = format == DRM_FORMAT_RGBX8888 ? 255 : src[3];
+    break;
+  case DRM_FORMAT_BGRA8888:
+  case DRM_FORMAT_BGRX8888:
+    dst[0] = src[2];
+    dst[1] = src[1];
+    dst[2] = src[0];
+    dst[3] = format == DRM_FORMAT_BGRX8888 ? 255 : src[3];
+    break;
+  case DRM_FORMAT_ARGB8888:
+  case DRM_FORMAT_XRGB8888:
+  default:
+    dst[0] = src[2];
+    dst[1] = src[1];
+    dst[2] = src[0];
+    dst[3] = format == DRM_FORMAT_XRGB8888 ? 255 : src[3];
+    break;
+  }
+}
+
+bool encodeForeignRgba(const uint8_t *src, int width, int height, int stride,
+                       uint32_t format, int32_t maxSide,
+                       std::vector<uint8_t> &outPng, uint32_t &outW,
+                       uint32_t &outH) {
+  if (src == nullptr || width < 1 || height < 1 || stride < width * 4) {
+    return false;
+  }
+  std::vector<uint8_t> rgba(static_cast<size_t>(width) *
+                            static_cast<size_t>(height) * 4);
+  for (int y = 0; y < height; ++y) {
+    const uint8_t *row = src + static_cast<size_t>(y) * stride;
+    uint8_t *dst = rgba.data() + static_cast<size_t>(y) * width * 4;
+    for (int x = 0; x < width; ++x) {
+      drmPixelToRgba(format, row, dst);
+      row += 4;
+      dst += 4;
+    }
+  }
+  int encW = 0, encH = 0;
+  if (!canvas::encodeRgbaPng(rgba.data(), width, height, width * 4, maxSide,
+                             outPng, encW, encH)) {
+    return false;
+  }
+  outW = static_cast<uint32_t>(encW);
+  outH = static_cast<uint32_t>(encH);
+  return true;
+}
+
+/// Reads a foreign (Wayland / X11) window's last committed buffer into a PNG.
+///
+/// Two paths, cheapest first: a CPU map when the buffer exposes one (shm,
+/// some dmabufs), then a GPU readback through the scene texture. Either can
+/// fail — a client that has not committed, a format we do not unpack, a
+/// vulkan renderer that cannot read its own textures — and the caller then
+/// draws an icon instead of a poster.
+bool captureForeign(const ClientSurface &surface, int32_t maxSide,
+                    std::vector<uint8_t> &outPng, uint32_t &outW,
+                    uint32_t &outH) {
+  if (!surface.isForeign() || surface.window == nullptr) return false;
+  wlr_surface *wl = surface.window->focusSurface();
+  if (wl == nullptr || wl->buffer == nullptr) return false;
+
+  wlr_client_buffer *client = wl->buffer;
+  wlr_buffer *source = client->source != nullptr ? client->source : &client->base;
+  wlr_buffer_lock(source);
+
+  bool ok = false;
+  void *data = nullptr;
+  uint32_t format = 0;
+  size_t stride = 0;
+  if (wlr_buffer_begin_data_ptr_access(source, WLR_BUFFER_DATA_PTR_ACCESS_READ,
+                                       &data, &format, &stride)) {
+    ok = encodeForeignRgba(static_cast<const uint8_t *>(data), source->width,
+                           source->height, static_cast<int>(stride), format,
+                           maxSide, outPng, outW, outH);
+    wlr_buffer_end_data_ptr_access(source);
+  }
+
+  if (!ok && client->texture != nullptr) {
+    wlr_texture *texture = client->texture;
+    uint32_t readFormat = wlr_texture_preferred_read_format(texture);
+    if (readFormat == 0) readFormat = DRM_FORMAT_ARGB8888;
+    const int width = static_cast<int>(texture->width);
+    const int height = static_cast<int>(texture->height);
+    if (width > 0 && height > 0) {
+      std::vector<uint8_t> pixels(static_cast<size_t>(width) *
+                                  static_cast<size_t>(height) * 4);
+      wlr_texture_read_pixels_options opts{};
+      opts.data = pixels.data();
+      opts.format = readFormat;
+      opts.stride = static_cast<uint32_t>(width * 4);
+      if (wlr_texture_read_pixels(texture, &opts)) {
+        ok = encodeForeignRgba(pixels.data(), width, height, width * 4,
+                               readFormat, maxSide, outPng, outW, outH);
+      }
+    }
+  }
+
+  wlr_buffer_unlock(source);
+  return ok;
+}
+
 /// Every client surface, and the control plane's view of the compositor.
 ///
 /// Implements `lava::CompositorHost`, so the servant calls land here — always
@@ -1060,6 +1211,14 @@ class SurfaceRegistry : public lava::CompositorHost {
   ClientSurface *find(uint32_t id) {
     for (auto &s : surfaces_) {
       if (s->id == id) return s.get();
+    }
+    return nullptr;
+  }
+
+  ClientSurface *findByAppId(const std::string &appId) {
+    if (appId.empty()) return nullptr;
+    for (auto &s : surfaces_) {
+      if (s->appId == appId) return s.get();
     }
     return nullptr;
   }
@@ -1975,6 +2134,9 @@ class SurfaceRegistry : public lava::CompositorHost {
       // Panels are furniture, not windows. A dock listing itself, and the
       // taskbar beside it, would be a dock listing the desktop's own parts.
       if (surface->panel) continue;
+      // The switcher is a regular surface (it needs the keyboard, which a
+      // panel never gets) but it is not an application the user opened.
+      if (surface->appId == kSwitcherAppId) continue;
       WindowEntry entry;
       entry.surfaceId = surface->id;
       entry.title = surface->title;
@@ -2384,6 +2546,10 @@ class SurfaceRegistry : public lava::CompositorHost {
     ClientSurface *surface = find(id);
     if (surface == nullptr || !surface->canvas) return;
     if (!surface->canvas->renderFromArena()) return;
+    if (surface->awaitingFirstFrame) {
+      surface->awaitingFirstFrame = false;
+      wlr_scene_node_set_enabled(&surface->node->node, true);
+    }
     damage(*surface);
     lava::FrameProbe::frame(id);
     lava::FrameProbe::report();
@@ -2427,8 +2593,12 @@ class SurfaceRegistry : public lava::CompositorHost {
                       int32_t maxSide, std::vector<uint8_t> &outPng,
                       uint32_t &outW, uint32_t &outH) override {
     ClientSurface *surface = find(id);
-    if (surface == nullptr || !surface->canvas) return false;
-    return surface->canvas->capturePng(x, y, w, h, maxSide, outPng, outW, outH);
+    if (surface == nullptr) return false;
+    if (surface->canvas) {
+      return surface->canvas->capturePng(x, y, w, h, maxSide, outPng, outW,
+                                         outH);
+    }
+    return captureForeign(*surface, maxSide, outPng, outW, outH);
   }
 
   // The seat's selection, not a drawer of our own — see `lava::Clipboard`.
@@ -2673,6 +2843,11 @@ class SurfaceRegistry : public lava::CompositorHost {
     surface->node = wlr_scene_buffer_create(parent, surface->canvas->buffer());
     if (surface->node == nullptr) return 0;
     show_surface(surface->node, *surface->canvas);
+    // Invisible until the client has published a frame. The buffer at this
+    // point is a clear — showing it is the flash the switcher was painting
+    // over the desktop for a split second.
+    wlr_scene_node_set_enabled(&surface->node->node, false);
+    surface->awaitingFirstFrame = true;
     // Before the surface moves into the list: the pointer is stable, and
     // every later `SetInputRegion` is read through it — see the scene-graph
     // input region note above `content_point_accepts_input`.
@@ -3544,7 +3719,8 @@ int glfw_key(xkb_keysym_t sym) {
   switch (sym) {
     case XKB_KEY_Escape: return 256;
     case XKB_KEY_Return: case XKB_KEY_KP_Enter: return 257;
-    case XKB_KEY_Tab: return 258;
+    case XKB_KEY_Tab:
+    case XKB_KEY_ISO_Left_Tab: return 258;
     case XKB_KEY_BackSpace: return 259;
     case XKB_KEY_Insert: return 260;
     case XKB_KEY_Delete: return 261;
@@ -3564,6 +3740,21 @@ int glfw_key(xkb_keysym_t sym) {
   }
   if (sym >= XKB_KEY_A && sym <= XKB_KEY_Z) return static_cast<int>(sym);
   if (sym >= XKB_KEY_0 && sym <= XKB_KEY_9) return static_cast<int>(sym);
+  // Modifiers: the app switcher commits on Control/Alt/Super release, and
+  // without these the release arrives as key 0.
+  switch (sym) {
+    case XKB_KEY_Shift_L: return 340;
+    case XKB_KEY_Control_L: return 341;
+    case XKB_KEY_Alt_L:
+    case XKB_KEY_Meta_L: return 342;
+    case XKB_KEY_Super_L: return 343;
+    case XKB_KEY_Shift_R: return 344;
+    case XKB_KEY_Control_R: return 345;
+    case XKB_KEY_Alt_R:
+    case XKB_KEY_Meta_R: return 346;
+    case XKB_KEY_Super_R: return 347;
+    default: break;
+  }
   return 0;
 }
 
@@ -3634,6 +3825,47 @@ void launch_launcher() {
   launch_program(program.c_str(), argv);
 }
 
+/// The 3D app switcher. Spawned per invocation like the launcher: a LavaUI
+/// client is on screen in ~200 ms, and holding one resident for the time
+/// nobody is switching would be an arena and a surface for nothing.
+///
+/// `backwards` is the first chord being Shift+Tab — the overlay then lands
+/// on the last window rather than the next one.
+void launch_switcher(bool backwards) {
+  if (g_switcherPid > 0) return;
+  const std::string path = lava::ShellSupervisor::programPath("LavaSwitcher");
+  std::string program = path;
+  char back[] = "--back";
+  char *argvForward[] = {program.data(), nullptr};
+  char *argvBack[] = {program.data(), back, nullptr};
+  char **argv = backwards ? argvBack : argvForward;
+
+  pid_t pid = -1;
+  const int error =
+      lava::ShellSupervisor::spawnAtHome(&pid, program.c_str(), argv, environ);
+  if (error != 0) {
+    wlr_log(WLR_ERROR, "switcher: could not start %s: %s", program.c_str(),
+            std::strerror(error));
+    return;
+  }
+  g_switcherPid = pid;
+  wlr_log(WLR_INFO, "switcher: started %s (pid %d)%s", program.c_str(),
+          static_cast<int>(pid), backwards ? " --back" : "");
+  std::thread([pid] {
+    int status = 0;
+    while (waitpid(pid, &status, 0) < 0 && errno == EINTR) {
+    }
+    pid_t expected = pid;
+    g_switcherPid.compare_exchange_strong(expected, -1);
+  }).detach();
+}
+
+bool switcherHasKeyboard(Server *server) {
+  if (server->surfaces == nullptr) return false;
+  ClientSurface *surface = server->surfaces->find(server->focusedSurface());
+  return surface != nullptr && surface->appId == kSwitcherAppId;
+}
+
 /// LavaTerm — the desktop's own terminal. Found the same way the panel is, so
 /// a tree build and an installed package both work without a PATH entry.
 void launch_terminal() {
@@ -3663,6 +3895,8 @@ enum class BindingAction : uint8_t {
   Quit,
   Launcher,
   AppLauncher,
+  AppSwitcher,
+  AppSwitcherBack,
   Terminal,
   Close,
   Minimize,
@@ -3674,12 +3908,16 @@ enum class BindingAction : uint8_t {
 
 /// One shortcut: which keys reach it, and what to call it.
 ///
-/// The primary modifier (Alt or Super, from config) is implicit — the key
-/// handler only consults this table while that mod is down — and
-/// `shift`/`ctrl` are matched exactly. Exactly, because these are distinct
-/// bindings and not a loose prefix: Mod+Shift+1 sends a window where Mod+1
-/// follows it, and Mod+Shift+Return is deliberately nothing rather than a
-/// sloppy second spelling of "open a terminal".
+/// The primary modifier (Alt or Super, from config) is implicit when
+/// `needMod` is set — and `shift`/`ctrl` are matched exactly. Exactly,
+/// because these are distinct bindings and not a loose prefix: Mod+Shift+1
+/// sends a window where Mod+1 follows it, and Mod+Shift+Return is
+/// deliberately nothing rather than a sloppy second spelling of "open a
+/// terminal".
+///
+/// `needMod` is false for chords that must work without the desktop mod.
+/// Ctrl+Tab is the case: an app switcher that required Alt as well would
+/// be a different shortcut than the one the user asked for.
 struct BindingSpec {
   BindingAction action;
   /// The keysym range this covers, inclusive; `last == first` for one key.
@@ -3687,6 +3925,7 @@ struct BindingSpec {
   xkb_keysym_t last;
   bool shift;
   bool ctrl;
+  bool needMod;
   /// Shown, never parsed — the key as a person would write it.
   const char *key;
   /// Stable id for a settings app to key off, in case the wording changes.
@@ -3702,35 +3941,50 @@ struct BindingSpec {
 /// within one release. Both come from here, so a listed binding is one that
 /// works and a working binding is one that is listed.
 constexpr BindingSpec kBindings[] = {
-    {BindingAction::Quit, XKB_KEY_Escape, XKB_KEY_Escape, false, false,
+    {BindingAction::Quit, XKB_KEY_Escape, XKB_KEY_Escape, false, false, true,
      "Escape", "session.quit", "Ends the session"},
-    {BindingAction::Launcher, XKB_KEY_space, XKB_KEY_space, false, false,
+    {BindingAction::Launcher, XKB_KEY_space, XKB_KEY_space, false, false, true,
      "Space", "launcher.rofi", "Opens rofi"},
-    {BindingAction::AppLauncher, XKB_KEY_p, XKB_KEY_p, false, false, "P",
+    {BindingAction::AppLauncher, XKB_KEY_p, XKB_KEY_p, false, false, true, "P",
      "launcher.open", "Opens the application launcher"},
-    {BindingAction::Terminal, XKB_KEY_Return, XKB_KEY_Return, false, false,
+    {BindingAction::AppSwitcher, XKB_KEY_Tab, XKB_KEY_Tab, false, true, false,
+     "Tab", "window.switch", "Cycles open windows"},
+    {BindingAction::AppSwitcherBack, XKB_KEY_Tab, XKB_KEY_Tab, true, true, false,
+     "Tab", "window.switch-back", "Cycles open windows backwards"},
+    {BindingAction::AppSwitcher, XKB_KEY_Tab, XKB_KEY_Tab, false, false, true,
+     "Tab", "window.switch-mod", "Cycles open windows"},
+    {BindingAction::AppSwitcherBack, XKB_KEY_Tab, XKB_KEY_Tab, true, false, true,
+     "Tab", "window.switch-mod-back", "Cycles open windows backwards"},
+    {BindingAction::Terminal, XKB_KEY_Return, XKB_KEY_Return, false, false, true,
      "Return", "terminal.open", "Opens LavaTerm"},
-    {BindingAction::Close, XKB_KEY_q, XKB_KEY_q, false, false, "Q",
+    {BindingAction::Close, XKB_KEY_q, XKB_KEY_q, false, false, true, "Q",
      "window.close", "Closes the focused window"},
-    {BindingAction::Minimize, XKB_KEY_m, XKB_KEY_m, false, false, "M",
+    {BindingAction::Minimize, XKB_KEY_m, XKB_KEY_m, false, false, true, "M",
      "window.minimize", "Hides the focused window"},
-    {BindingAction::RestoreLast, XKB_KEY_m, XKB_KEY_m, true, false, "M",
+    {BindingAction::RestoreLast, XKB_KEY_m, XKB_KEY_m, true, false, true, "M",
      "window.restore", "Brings back the window hidden last"},
-    {BindingAction::WorkspaceSwitch, XKB_KEY_1, XKB_KEY_9, false, false,
+    {BindingAction::WorkspaceSwitch, XKB_KEY_1, XKB_KEY_9, false, false, true,
      "1 … 9", "workspace.switch", "Shows that workspace"},
-    {BindingAction::WorkspaceMove, XKB_KEY_1, XKB_KEY_9, true, false, "1 … 9",
-     "workspace.move", "Sends the focused window to that workspace"},
-    {BindingAction::SwitchVt, XKB_KEY_F1, XKB_KEY_F10, false, true, "F1 … F10",
-     "session.vt", "Switches to that virtual terminal"},
+    {BindingAction::WorkspaceMove, XKB_KEY_1, XKB_KEY_9, true, false, true,
+     "1 … 9", "workspace.move", "Sends the focused window to that workspace"},
+    {BindingAction::SwitchVt, XKB_KEY_F1, XKB_KEY_F10, false, true, true,
+     "F1 … F10", "session.vt", "Switches to that virtual terminal"},
 };
 
 /// The modifiers as a person reads them. The primary mod is whatever the
 /// desktop is configured to use.
 std::string binding_modifiers(const BindingSpec &spec, const char *modName) {
-  std::string out = modName != nullptr ? modName : "Alt";
-  if (spec.ctrl) out += "+Ctrl";
-  if (spec.shift) out += "+Shift";
-  return out;
+  std::string out;
+  if (spec.needMod) out = modName != nullptr ? modName : "Alt";
+  if (spec.ctrl) {
+    if (!out.empty()) out += "+";
+    out += "Ctrl";
+  }
+  if (spec.shift) {
+    if (!out.empty()) out += "+";
+    out += "Shift";
+  }
+  return out.empty() ? "None" : out;
 }
 
 /// Every layout and variant this machine's xkb knows about.
@@ -3808,6 +4062,21 @@ bool perform_binding(Server *server, const BindingSpec &spec,
     launch_launcher();
     return true;
 
+  case BindingAction::AppSwitcher:
+  case BindingAction::AppSwitcherBack:
+    server->beginSwitcherSession(
+        spec.ctrl ? static_cast<uint32_t>(WLR_MODIFIER_CTRL)
+                  : shortcut_mod_mask(server->config.keyboard));
+    if (server->surfaces != nullptr) {
+      if (ClientSurface *existing =
+              server->surfaces->findByAppId(kSwitcherAppId)) {
+        server->focusSurface(*existing);
+        return true;
+      }
+    }
+    launch_switcher(spec.action == BindingAction::AppSwitcherBack);
+    return true;
+
   case BindingAction::Terminal:
     launch_terminal();
     return true;
@@ -3876,15 +4145,26 @@ bool perform_binding(Server *server, const BindingSpec &spec,
 /// True when the key was one of ours, which is the caller's signal to stop: a
 /// bound key is not also text, and forwarding it would put a digit in whatever
 /// the user was typing in every time they changed workspace.
-bool handle_binding(Server *server, xkb_keysym_t sym, bool shift, bool ctrl) {
+bool handle_binding(Server *server, xkb_keysym_t sym, bool shift, bool ctrl,
+                    bool modDown) {
   // The numeric keypad's Enter is the same intention as the main one, and
   // folding it here keeps the table one row per binding rather than one row
   // per spelling.
   if (sym == XKB_KEY_KP_Enter) sym = XKB_KEY_Return;
+  if (sym == XKB_KEY_ISO_Left_Tab) sym = XKB_KEY_Tab;
 
   for (const BindingSpec &spec : kBindings) {
     if (sym < spec.first || sym > spec.last) continue;
     if (spec.shift != shift || spec.ctrl != ctrl) continue;
+    if (spec.needMod != modDown) continue;
+    // Subsequent Tab while the overlay is up belongs to the overlay — it
+    // is how the user cycles. Eating it here would launch a second process
+    // and the first would never see the key.
+    if ((spec.action == BindingAction::AppSwitcher ||
+         spec.action == BindingAction::AppSwitcherBack) &&
+        switcherHasKeyboard(server)) {
+      return false;
+    }
     return perform_binding(server, spec, sym);
   }
   return false;
@@ -3994,8 +4274,7 @@ void Keyboard::on_key(wl_listener *listener, void *data) {
 
   const uint32_t modifiers = wlr_keyboard_get_modifiers(keyboard->wlr);
   const uint32_t modMask = shortcut_mod_mask(server->config.keyboard);
-  if ((modifiers & modMask) &&
-      event->state == WL_KEYBOARD_KEY_STATE_PRESSED) {
+  if (event->state == WL_KEYBOARD_KEY_STATE_PRESSED) {
     // +8 converts evdev to xkb keycodes; the offset is historical, from X.
     const xkb_keycode_t keycode = event->keycode + 8;
     // The *unshifted* keysym, deliberately: Mod+Shift+2 produces "at" on a US
@@ -4007,15 +4286,48 @@ void Keyboard::on_key(wl_listener *listener, void *data) {
     const xkb_keysym_t *syms = nullptr;
     const int count = xkb_keymap_key_get_syms_by_level(
         keyboard->wlr->keymap, keycode, layout, 0, &syms);
+    const bool modDown = (modifiers & modMask) != 0;
     for (int i = 0; i < count; ++i) {
       if (handle_binding(server, syms[i], modifiers & WLR_MODIFIER_SHIFT,
-                         modifiers & WLR_MODIFIER_CTRL)) {
+                         modifiers & WLR_MODIFIER_CTRL, modDown)) {
         // A compositor binding ate the key — do not also start repeating it
         // into a client (Alt+Q held would close a stream of windows).
         server->stopKeyRepeat();
         return;
       }
     }
+  } else if (server->switcherHold != 0) {
+    // The hold key that opened the switcher. Released here, not in the
+    // client: the overlay is often still capturing when the user lets go,
+    // so it never sees the key-up and stays on screen.
+    const xkb_keycode_t keycode = event->keycode + 8;
+    const xkb_layout_index_t layout =
+        xkb_state_key_get_layout(keyboard->wlr->xkb_state, keycode);
+    const xkb_keysym_t *syms = nullptr;
+    const int count = xkb_keymap_key_get_syms_by_level(
+        keyboard->wlr->keymap, keycode, layout, 0, &syms);
+    uint32_t released = 0;
+    for (int i = 0; i < count; ++i) {
+      switch (syms[i]) {
+      case XKB_KEY_Control_L:
+      case XKB_KEY_Control_R:
+        released |= WLR_MODIFIER_CTRL;
+        break;
+      case XKB_KEY_Alt_L:
+      case XKB_KEY_Alt_R:
+      case XKB_KEY_Meta_L:
+      case XKB_KEY_Meta_R:
+        released |= WLR_MODIFIER_ALT;
+        break;
+      case XKB_KEY_Super_L:
+      case XKB_KEY_Super_R:
+        released |= WLR_MODIFIER_LOGO;
+        break;
+      default:
+        break;
+      }
+    }
+    if (released & server->switcherHold) server->onSwitcherHoldReleased();
   }
 
   // A focused client surface takes the keyboard instead of any Wayland
@@ -4659,6 +4971,19 @@ void Server::focusSurface(ClientSurface &surface) {
   // `CreatePanel`, not an exception here.
   if (surface.panel) return;
 
+  // The switcher takes the keyboard without becoming the "active window".
+  // The previous app keeps its title-bar highlight and stays focused in
+  // the dock; only input is redirected. A panel already works this way
+  // because it never takes the keyboard at all — the switcher is the one
+  // overlay that needs both.
+  if (surface.appId == kSwitcherAppId) {
+    surfaces->raise(surface);
+    setFocusedSurface(surface.id);
+    wlr_seat_keyboard_notify_clear_focus(seat);
+    dismissSwitcherOnMapIfNeeded(surface);
+    return;
+  }
+
   surfaces->setFocused(surface.id);
   surfaces->raise(surface);
   if (surface.isForeign()) {
@@ -4671,6 +4996,49 @@ void Server::focusSurface(ClientSurface &surface) {
   }
   setFocusedSurface(surface.id);
   wlr_seat_keyboard_notify_clear_focus(seat);
+}
+
+void Server::beginSwitcherSession(uint32_t holdMask) {
+  switcherHold = holdMask;
+  switcherDismissOnMap = false;
+}
+
+void Server::dismissSwitcherOnMapIfNeeded(ClientSurface &surface) {
+  if (!switcherDismissOnMap) return;
+  switcherDismissOnMap = false;
+  switcherHold = 0;
+  // Never shown: the hold key was already up. Closing is the whole session.
+  if (surfaces != nullptr) surfaces->requestClose(surface);
+}
+
+void Server::onSwitcherHoldReleased() {
+  const uint32_t hold = switcherHold;
+  switcherHold = 0;
+  if (hold == 0) return;
+  if (surfaces != nullptr) {
+    if (surfaces->findByAppId(kSwitcherAppId) != nullptr) {
+      injectSwitcherCommit();
+      return;
+    }
+  }
+  // Still capturing / not mapped. Kill it so a shelf never flashes after
+  // the user already let go.
+  const pid_t pid = g_switcherPid.exchange(-1);
+  if (pid > 0) {
+    kill(pid, SIGTERM);
+    return;
+  }
+  switcherDismissOnMap = true;
+}
+
+void Server::injectSwitcherCommit() {
+  if (surfaces == nullptr) return;
+  ClientSurface *surface = surfaces->findByAppId(kSwitcherAppId);
+  if (surface == nullptr || !surface->canvas) return;
+  // Left Control release, no mods — the client treats any hold-mod up as
+  // commit. 341 is GLFW_KEY_LEFT_CONTROL, matching `KeyCode.leftControl`.
+  surface->canvas->keyEvent(341, 0, 0);
+  surfaces->pump(*surface);
 }
 
 void Server::minimizeSurface(ClientSurface &surface) {

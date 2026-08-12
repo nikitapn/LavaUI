@@ -71,6 +71,10 @@ public enum LavaClient {
         do {
             let (proxy, rpc) = try connectToCompositor()
             compositor = proxy
+            // Capture (and CreateSurface) can exceed the 1s default: a PNG of
+            // a window is the one call that does real GPU work. The switcher
+            // fires one per open window.
+            compositor.timeout = 10_000
             // Held for the process's lifetime: the `Rpc` owns the transport,
             // and ARC releases a local at its last use, not at end of scope.
             runtime = rpc
@@ -210,6 +214,44 @@ public enum LavaClient {
         }
     }
 
+    /// The compositor's current window list, blocking, without a frame loop.
+    ///
+    /// For a client that has to *finish* something — capture every poster —
+    /// before it may open a surface. `onWindowList` hops through `MainQueue`,
+    /// which nobody drains until `run`, so waiting on that from `main` deadlocks.
+    /// This reads the opening snapshot on the calling thread and closes the
+    /// stream; subscribe again with `onWindowList` for later changes.
+    public static func currentWindowList() -> (UInt32, [WindowInfo])? {
+        guard let compositor = Self.compositor else { return nil }
+        let stream: NPRPCBidiStream<WindowListAck, WindowList>
+        do {
+            stream = try compositor.subscribeWindows()
+        } catch {
+            FileHandle.standardError.write(
+                Data("SubscribeWindows failed: \(error)\n".utf8)
+            )
+            return nil
+        }
+        defer { stream.writer.close() }
+        do {
+            let list = try blockingCall(timeout: 5) {
+                for try await snapshot in stream.reader {
+                    try? await stream.writer.write(
+                        WindowListAck(serial: snapshot.serial)
+                    )
+                    return snapshot
+                }
+                throw ControlPlaneError.timedOut
+            }
+            return (list.currentWorkspace, list.windows)
+        } catch {
+            FileHandle.standardError.write(
+                Data("currentWindowList failed: \(error)\n".utf8)
+            )
+            return nil
+        }
+    }
+
     /// Every window on the desktop, and again whenever the set changes.
     ///
     /// What a dock or a task list is built on: the compositor knows which
@@ -247,6 +289,35 @@ public enum LavaClient {
                 )
             }
             stream.writer.close()
+        }
+    }
+
+    /// A PNG of another window, as the compositor currently sees it.
+    ///
+    /// What the app switcher puts on a card. `maxSide` downsamples the longer
+    /// edge (0 = native). Nil if the window is gone or has not drawn yet —
+    /// a caller should then fall back to an icon rather than retrying in a
+    /// loop.
+    ///
+    /// Safe to call from a worker: the round trip does not touch the frame
+    /// loop, and the bytes have no GPU identity until `registerImage(data:)`.
+    public static func captureWindow(
+        _ surfaceId: UInt32, maxSide: Int32 = 256
+    ) -> [UInt8]? {
+        guard let compositor = Self.compositor else { return nil }
+        do {
+            let shot = try blockingCall(timeout: 10) {
+                try await compositor.captureSurface(
+                    surfaceId: surfaceId, x: 0, y: 0, w: 0, h: 0,
+                    maxSide: maxSide
+                )
+            }
+            return shot.png.isEmpty ? nil : Array(shot.png)
+        } catch {
+            FileHandle.standardError.write(
+                Data("CaptureSurface(\(surfaceId)) failed: \(error)\n".utf8)
+            )
+            return nil
         }
     }
 
@@ -654,8 +725,13 @@ public enum LavaClient {
     /// Escape / "launch then close" in a launcher must take this path to match.
     ///
     /// Safe to call from a key handler on the frame loop. Idempotent.
-    public static func quit() -> Never {
+    public static func quit(activating surfaceId: UInt32? = nil) -> Never {
+        // Overlay first: DestroySurface takes the fullscreen switcher off
+        // the scene before we raise the target. Activate-then-quit left the
+        // dimmer up until this RPC returned, which is the pause after
+        // Ctrl+Tab release.
         releaseSurface()
+        if let surfaceId { activateWindow(surfaceId) }
         exit(0)
     }
 

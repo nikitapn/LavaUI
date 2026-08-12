@@ -975,17 +975,24 @@ interface Compositor {
   /// The queue is per surface, so a client falling behind delays only itself.
   vector<string> TakeDroppedPaths(surfaceId: in u32) raises(SurfaceNotFound);
 
-  /// A PNG of what is actually on screen for this surface.
+  /// A PNG of what this window currently looks like.
   ///
-  /// For automation, and it closes a hole that mattered more than it looks:
-  /// every LavaUI app is tested through an agent that can read the layout
-  /// tree, click, type — and screenshot. A client has no framebuffer, so the
-  /// one command that checks what the user would *see* was the one that did
-  /// not work in the mode this project is moving to.
+  /// `surfaceId` is any id from `SubscribeWindows`, not only the caller's own
+  /// surface. A LavaUI window is read back from its canvas framebuffer. A
+  /// foreign Wayland or X11 window is read from the buffer it last committed
+  /// — shm via a CPU map, GPU clients via `wlr_texture_read_pixels`. That is
+  /// how an app switcher puts live posters on its cards without a second
+  /// protocol: the pixels already live here.
+  ///
+  /// Also what automation uses. A LavaUI client has no framebuffer of its
+  /// own, so the one agent command that checks what the user would *see* has
+  /// to ask the process that drew it.
   ///
   /// Region in framebuffer pixels; `w`/`h` ≤ 0 means the whole surface, and
   /// `maxSide` > 0 downsamples so the longer encoded edge fits — a full 4K
-  /// window is several megabytes of PNG that no assertion needed.
+  /// window is several megabytes of PNG that no assertion (and no 3D card)
+  /// needed. Region crop is honoured for Lava surfaces; foreign windows
+  /// currently return the whole buffer (then `maxSide`).
   ///
   /// Bytes, not base64. The agent's protocol is JSON and wants text, but that
   /// is the client's protocol, not the renderer's: encoding here would put a

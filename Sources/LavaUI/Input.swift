@@ -51,6 +51,17 @@ public enum KeyCode {
     public static let leftShift: Int32 = 340
     public static let leftControl: Int32 = 341
     public static let leftAlt: Int32 = 342
+    public static let leftSuper: Int32 = 343
+    public static let rightShift: Int32 = 344
+    public static let rightControl: Int32 = 345
+    public static let rightAlt: Int32 = 346
+    public static let rightSuper: Int32 = 347
+
+    public static func isHoldModifier(_ key: Int32) -> Bool {
+        key == leftControl || key == rightControl
+            || key == leftAlt || key == rightAlt
+            || key == leftSuper || key == rightSuper
+    }
 }
 
 /// Modifier bitfield (GLFW `mods`).

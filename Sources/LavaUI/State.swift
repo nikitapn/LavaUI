@@ -447,4 +447,14 @@ public enum MainQueue {
         lock.unlock()
         for item in work { item() }
     }
+
+    /// Work posted before the loop installed its wake, or between drain and
+    /// the next `pumpEvents`. The loop must not park while this is true —
+    /// that is the switcher opening on an already-queued `SubscribeWindows`
+    /// snapshot and sitting on "no windows" until the pointer moves.
+    public static var hasPending: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return !pending.isEmpty
+    }
 }

@@ -198,6 +198,7 @@ Sources/
   LavaSurface/     Client: wallpaper / desktop surface
   LavaTaskbar/     Client: panel / taskbar (global menu)
   LavaDock/        Client: dock — open windows on this workspace
+  LavaSwitcher/    Client: 3D Ctrl+Tab / Mod+Tab app switcher
   HelloWorld/      Demo playground + FBD bits
   LavaTerm*/       Terminal emulator (core headless + app)
   Spotify*/        LavaSpotify (core headless + app)
@@ -307,7 +308,7 @@ will also kill the shell.
 | Cannot | Why | Do instead |
 |---|---|---|
 | Move the real cursor / click the desktop, drag a window edge, right-click for a popup | headless wlroots has no input devices, and there is no virtual-pointer protocol | drive the app's own agent port, or ask the human |
-| Screenshot foreign (GTK/Chromium) windows | no screencopy protocol implemented, so `grim` cannot attach | read the compositor log; `capturePng` only covers Lava surfaces |
+| Screenshot foreign (GTK/Chromium) windows from *grim* | no screencopy protocol implemented, so `grim` cannot attach | `CaptureSurface` now reads a foreign window's last buffer (shm map or `wlr_texture_read_pixels`); the 3D switcher uses that. Whole-output capture is still missing. |
 | See overlay content from the agent | `find`/`layout_tree` walk the main tree; a presented overlay's subtree is detached | click by coordinate |
 | Reach the compositor's scene scroll from a client's agent | agent input is injected into that client's engine | test scene-level behaviour in **windowed** mode, where the app owns the renderer |
 
@@ -334,6 +335,7 @@ fatal. Open at the size the output will actually grant to avoid it.
 | Window chrome an app draws itself | `Sources/LavaUI/WindowControls.swift` |
 | Panel global menu (import side) | `canvas/src/menu/menu_import.*`, `Sources/LavaUI/PanelMenu.swift` |
 | Window list / dock | `SubscribeWindows` in the IDL, `Sources/LavaDock/` |
+| 3D app switcher | `LavaSwitcher`, launched by Ctrl+Tab / Mod+Tab; live posters via `CaptureSurface` |
 | Stream delivery to clients | `StreamPump` in `compositor/src/control_plane.cpp` |
 | Why a frame was late | `compositor/src/frame_probe.*` (`LAVA_FRAME_PROBE=1`) |
 | When a frame is drawn (pacing) | `SurfaceRegistry::animate`, `Output::on_frame` |

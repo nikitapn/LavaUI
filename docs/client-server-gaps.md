@@ -182,6 +182,12 @@ command that checks what the user would actually *see*.
 LavaUI — the third seam of the same shape as `ClipboardBridge` and
 `DropBridge`, and unset means windowed, so an ordinary app installs nothing.
 
+The same call now also answers for a *foreign* window (Wayland / X11): the
+compositor reads the buffer that client last committed. That is what the 3D
+app switcher (`LavaSwitcher`) puts on each card. A buffer that cannot be
+mapped or read back still raises `CaptureFailed`; the switcher then draws
+the app icon instead.
+
 Bytes on the wire, base64 in the client. The agent's protocol is JSON and
 wants text, but that is the client's protocol: encoding in the compositor
 would put a third more bytes on the wire in service of something the renderer

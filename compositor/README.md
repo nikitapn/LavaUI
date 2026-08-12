@@ -93,6 +93,15 @@ arena for the time nobody is launching anything. It is found in the same places
 a supervised component is — beside the compositor, then this repo's SwiftPM
 build directory, then PATH.
 
+**Ctrl+Tab** (and **Mod+Tab**) opens the 3D app switcher, the same way: a
+one-shot `LavaSwitcher` client. Keep the modifier down and press Tab again
+to cycle, Shift+Tab to go backwards, then release to activate. Escape
+cancels. The cards are live screenshots from `CaptureSurface` — Lava
+windows from their canvas framebuffer, foreign Wayland/X11 windows from
+the buffer they last committed. A window that cannot be read back shows
+its icon instead. The overlay is filtered out of the window list so the
+dock does not offer to switch to the switcher.
+
 The list it shows comes from freedesktop desktop entries, which is the only
 registry of installed applications Linux has: a directory walk over
 `applications/` under each XDG data directory. `Sources/LavaShell` is where

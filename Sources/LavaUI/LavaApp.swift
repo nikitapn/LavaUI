@@ -174,6 +174,13 @@ public enum LavaApp {
         let agentServer = makeAgentServer(editor: editor, main: main)
 
         while editor.isOpen, !windows.isEmpty {
+            // Work posted before this loop existed — `SubscribeWindows` is
+            // subscribed in `open`, the first snapshot races `run` — must be
+            // applied *before* we decide how long to park. Parking first with
+            // that snapshot already queued is how a switcher opens empty and
+            // stays empty until unrelated input happens to drain the queue.
+            MainQueue.drain()
+
             // Agent wake posts an empty GLFW event, so we can still block
             // forever when idle (zero CPU) and still answer TCP immediately.
             //
@@ -183,6 +190,9 @@ public enum LavaApp {
             // other wake source freezes the whole panel/session. Cap the wait
             // and pump GLib on both sides of the wait.
             var wake = FrameScheduler.timeoutUntilNextWake()
+            if MainQueue.hasPending || ViewInvalidation.isDirty || FrameTasks.hasPending {
+                wake = 0
+            }
             if main.menuHost?.needsDBusPump == true {
                 let cap = MenuHost.dbusPumpInterval
                 if wake < 0 || wake > cap { wake = cap }

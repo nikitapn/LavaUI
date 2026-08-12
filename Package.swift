@@ -49,6 +49,7 @@ var products: [Product] = [
     .executable(name: "LavaDock", targets: ["LavaDock"]),
     .executable(name: "LavaSettings", targets: ["LavaSettings"]),
     .executable(name: "LavaLauncher", targets: ["LavaLauncher"]),
+    .executable(name: "LavaSwitcher", targets: ["LavaSwitcher"]),
     .library(name: "LavaUI", targets: ["LavaUI"]),
     .library(name: "LavaText", targets: ["LavaText"]),
     .library(name: "LavaMenu", targets: ["LavaMenu"]),
@@ -130,6 +131,14 @@ var targets: [Target] = [
     // The application launcher: everything installed, as a wall of icons.
     .executableTarget(
         name: "LavaLauncher",
+        dependencies: ["LavaUI", "LavaShell"]
+            + (haveNprpc ? [Target.Dependency("LavaClient"),
+                            Target.Dependency("LavaIDL")] : []),
+        swiftSettings: interopCxx
+    ),
+    // Ctrl+Tab / Mod+Tab: live window posters in a Scene3D shelf.
+    .executableTarget(
+        name: "LavaSwitcher",
         dependencies: ["LavaUI", "LavaShell"]
             + (haveNprpc ? [Target.Dependency("LavaClient"),
                             Target.Dependency("LavaIDL")] : []),
