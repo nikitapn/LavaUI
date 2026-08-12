@@ -24,6 +24,8 @@ shaders=(
   shader.frag
   quad.vert
   quad.frag
+  quad_instance.vert
+  quad_instance.frag
   polyline.vert
   polyline.frag
   spatial.vert

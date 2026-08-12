@@ -59,6 +59,16 @@ class QuadRenderer {
     uint32_t descriptorWrites = 0;
     uint32_t uniqueTextureSamplers = 0;
     uint32_t descriptorPoolGrowths = 0;
+    uint32_t bufferGrowths = 0;
+    uint64_t vertexBytes = 0;
+    uint64_t indexBytes = 0;
+    uint64_t vertexCapacityBytes = 0;
+    uint64_t indexCapacityBytes = 0;
+    uint64_t replayCpuUs = 0;
+    uint64_t uploadCpuUs = 0;
+    uint32_t instanceCount = 0;
+    uint64_t instanceBytes = 0;
+    uint64_t instanceCapacityBytes = 0;
   };
 
   enum class Kind : uint32_t {
@@ -106,6 +116,23 @@ class QuadRenderer {
     uint32_t textureIndex;
   };
   static_assert(sizeof(Vertex) == 52, "QuadVertex must stay tightly packed");
+
+  /// One axis-aligned quad. The instance vertex shader expands its six
+  /// corners from gl_VertexIndex; rotated capsules and arbitrary meshes stay
+  /// in Vertex because they cannot be described by this rectangle ABI.
+  struct Instance {
+    vec2 topLeft;
+    vec2 size;
+    vec2 halfSize;
+    float radius;
+    float aux;
+    vec2 uv0;
+    vec2 uv1;
+    uint32_t color;
+    uint32_t kind;
+    uint32_t textureIndex;
+  };
+  static_assert(sizeof(Instance) == 60, "QuadInstance ABI changed");
 
   explicit QuadRenderer(RenderDevice &device) : device_{device} {}
 
@@ -252,19 +279,24 @@ class QuadRenderer {
   void drawSegment(VkCommandBuffer commandBuffer, uint32_t segmentIndex,
                    bool intoSceneTarget = false);
 
-  size_t quadCount() const { return vertices_.size() / 4; }
+  size_t quadCount() const { return instances_.size() + vertices_.size() / 4; }
   size_t batchCount() const { return batches_.size(); }
   const FrameStats &frameStats() const { return frameStats_; }
+  void setReplayCpuUs(uint64_t us) { frameStats_.replayCpuUs = us; }
 
  private:
-  /// A contiguous run of quads sharing one scissor + one sampled texture.
+  /// A contiguous run in one geometry stream sharing a scissor and pipeline.
   struct Batch {
-    enum class Geometry : uint8_t { Quads, LineStrip, SpatialTriangles, SpatialBegin };
-    Geometry geometry = Geometry::Quads;
+    enum class Geometry : uint8_t {
+      Instances, IndexedTriangles, LineStrip, SpatialTriangles, SpatialBegin
+    };
+    Geometry geometry = Geometry::IndexedTriangles;
     uint32_t firstIndex = 0;
     uint32_t indexCount = 0;
     uint32_t firstVertex = 0;
     uint32_t vertexCount = 0;
+    uint32_t firstInstance = 0;
+    uint32_t instanceCount = 0;
     VkRect2D scissor{};
     bool sampleBlurResult = false;             // bind blurResultView_ at draw
     /// Drawn with the mask pipeline: multiplies the target rather than
@@ -295,12 +327,16 @@ class QuadRenderer {
     VkBuffer      indexBuffer  = VK_NULL_HANDLE;
     VmaAllocation indexAlloc   = VK_NULL_HANDLE;
     void         *indexMapped  = nullptr;
+    VkBuffer      instanceBuffer = VK_NULL_HANDLE;
+    VmaAllocation instanceAlloc = VK_NULL_HANDLE;
+    void         *instanceMapped = nullptr;
     size_t        capacity     = 0;  // vertices
     /// Indices, tracked separately rather than derived from `capacity`.
     /// A quad is 6 indices per 4 vertices, but a triangle fan is nearly 3 per
     /// 1 — so a frame with mesh content needs more than the quad ratio, and
     /// assuming otherwise overruns the buffer. See `ensureBufferCapacity`.
     size_t        indexCapacity = 0;
+    size_t        instanceCapacity = 0;
     VkDescriptorSet descriptorSet = VK_NULL_HANDLE;
     uint32_t nextTextureIndex = 0;
     std::unordered_map<TextureSampler, uint32_t, TextureSamplerHash> textureSlots;
@@ -314,6 +350,10 @@ class QuadRenderer {
   void createPipelineLayout();
   void createPipeline(VkRenderPass renderPass, VkSampleCountFlagBits samples,
                       vk::Handle<VkPipeline> &out, Blend blend = Blend::Over);
+  void createInstancePipeline(VkRenderPass renderPass,
+                              VkSampleCountFlagBits samples,
+                              vk::Handle<VkPipeline> &out,
+                              Blend blend = Blend::Over);
   void createLinePipeline(VkRenderPass renderPass, VkSampleCountFlagBits samples,
                           vk::Handle<VkPipeline> &out);
   void createSpatialPipeline(VkRenderPass renderPass, VkSampleCountFlagBits samples,
@@ -322,9 +362,12 @@ class QuadRenderer {
   uint32_t textureSlot(VkImageView view, VkSampler sampler = VK_NULL_HANDLE);
   void writeTextureSlot(uint32_t slot, VkImageView view, VkSampler sampler);
   void createWhiteTexture();
-  void ensureBufferCapacity(size_t vertexCount, size_t indexCount);
+  void ensureBufferCapacity(size_t vertexCount, size_t indexCount,
+                            size_t instanceCount);
   void destroyFrameBuffers(FrameResources &fr);
   void flushBatch();
+  void flushIndexedBatch();
+  void flushInstanceBatch();
   /// Switch the texture selected by subsequent vertices. Texture changes do
   /// not break a batch: the fragment shader indexes the descriptor table.
   void ensureBatchTexture(VkImageView view);
@@ -335,6 +378,9 @@ class QuadRenderer {
   void appendQuad(const vec2 corners[4], const vec2 locals[4], vec2 halfSize,
                   float radius, uint32_t rgba, Kind kind, float aux = 0.f,
                   const vec2 *uvs = nullptr);
+  void appendInstance(vec2 topLeft, vec2 size, vec2 halfSize, float radius,
+                      uint32_t rgba, Kind kind, float aux = 0.f,
+                      vec2 uv0 = {0.f, 0.f}, vec2 uv1 = {1.f, 1.f});
 
   FrameResources &activeFrame();
 
@@ -342,6 +388,8 @@ class QuadRenderer {
   RenderWindow *owner_ = nullptr;
 
   vk::Handle<VkPipeline>            pipeline_;
+  vk::Handle<VkPipeline>            instancePipeline_;
+  vk::Handle<VkPipeline>            instanceMaskPipeline_;
   /// Same shaders as `pipeline_` with the mask blend — see `pushCornerMask`.
   vk::Handle<VkPipeline>            maskPipeline_;
   /// Same shaders and layout against the content-blur scene pass: one colour
@@ -349,6 +397,7 @@ class QuadRenderer {
   /// render-pass-compatible pass, so drawing the same geometry into a different
   /// target needs its own object rather than a state change.
   vk::Handle<VkPipeline>            pipelineScene_;
+  vk::Handle<VkPipeline>            instancePipelineScene_;
   vk::Handle<VkPipeline>            linePipeline_;
   vk::Handle<VkPipeline>            linePipelineScene_;
   vk::Handle<VkPipeline>            spatialPipeline_;
@@ -377,6 +426,7 @@ class QuadRenderer {
   // CPU-side build arena (copied into frames_[slot] on end()).
   std::vector<Vertex>   vertices_;
   std::vector<uint32_t> indices_;
+  std::vector<Instance> instances_;
   std::vector<Batch>    batches_;
   /// Exclusive batch-end indices for each closeSegment() (+ final in end()).
   std::vector<uint32_t> segmentEnds_;
@@ -384,6 +434,7 @@ class QuadRenderer {
   std::vector<VkRect2D> scissorStack_;
   VkRect2D              currentScissor_{};
   uint32_t              batchStartIndex_ = 0;
+  uint32_t              instanceBatchStart_ = 0;
 
   VkImageView blurResultView_ = VK_NULL_HANDLE;
   VkSampler   blurResultSampler_ = VK_NULL_HANDLE;

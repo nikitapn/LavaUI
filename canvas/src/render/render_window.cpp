@@ -2241,7 +2241,11 @@ void RenderWindow::render(const canvas::DrawList &list)
   }
 
   std::vector<Boundary> boundaries;
+  const auto replayStart = std::chrono::steady_clock::now();
   replayDrawList(list, viewW, viewH, boundaries);
+  quads_.setReplayCpuUs(static_cast<uint64_t>(
+    std::chrono::duration_cast<std::chrono::microseconds>(
+      std::chrono::steady_clock::now() - replayStart).count()));
 
   submitFrame(
     [&](VkCommandBuffer commandBuffer, u32 /*imageIndex*/) {
@@ -2311,6 +2315,16 @@ void RenderWindow::render(const canvas::DrawList &list)
               << " unique_texture_samplers=" << s.uniqueTextureSamplers
               << " descriptor_writes=" << s.descriptorWrites
               << " descriptor_pool_growths=" << s.descriptorPoolGrowths
+              << " buffer_growths=" << s.bufferGrowths
+              << " vertex_bytes=" << s.vertexBytes
+              << " index_bytes=" << s.indexBytes
+              << " vertex_capacity_bytes=" << s.vertexCapacityBytes
+              << " index_capacity_bytes=" << s.indexCapacityBytes
+              << " replay_cpu_us=" << s.replayCpuUs
+              << " upload_cpu_us=" << s.uploadCpuUs
+              << " instances=" << s.instanceCount
+              << " instance_bytes=" << s.instanceBytes
+              << " instance_capacity_bytes=" << s.instanceCapacityBytes
               << '\n';
   }
 }

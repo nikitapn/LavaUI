@@ -1,4 +1,5 @@
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <cstring>
 #include <iostream>
@@ -13,6 +14,7 @@ namespace {
 
 // Growth headroom so a frame that adds a few quads doesn't reallocate.
 constexpr size_t kInitialVertexCapacity = 4096;  // 1024 quads
+constexpr size_t kInitialInstanceCapacity = 4096;
 
 }  // namespace
 
@@ -23,16 +25,22 @@ void QuadRenderer::init() {
   setupDescriptors();
   createPipelineLayout();
   createPipeline(device_.getRenderPass(), device_.getMSAASamples(), pipeline_);
+  createInstancePipeline(device_.getRenderPass(), device_.getMSAASamples(),
+                         instancePipeline_);
   // Same shaders, same geometry, opposite job: this one multiplies what is
   // already in the target by the shape's coverage instead of drawing over it.
   // See `Blend::Mask` and `pushCornerMask`.
   createPipeline(device_.getRenderPass(), device_.getMSAASamples(),
                  maskPipeline_, Blend::Mask);
+  createInstancePipeline(device_.getRenderPass(), device_.getMSAASamples(),
+                         instanceMaskPipeline_, Blend::Mask);
   createLinePipeline(device_.getRenderPass(), device_.getMSAASamples(),
                      linePipeline_);
   createSpatialPipeline(device_.getRenderPass(), device_.getMSAASamples(),
                         spatialPipeline_, true);
-  ensureBufferCapacity(kInitialVertexCapacity, (kInitialVertexCapacity / 4) * 6);
+  ensureBufferCapacity(kInitialVertexCapacity,
+                       (kInitialVertexCapacity / 4) * 6,
+                       kInitialInstanceCapacity);
 }
 
 void QuadRenderer::destroyFrameBuffers(FrameResources &fr) {
@@ -44,10 +52,16 @@ void QuadRenderer::destroyFrameBuffers(FrameResources &fr) {
     if (fr.indexAlloc != VK_NULL_HANDLE) device_.unmapBuffer(fr.indexAlloc);
     fr.indexMapped = nullptr;
   }
+  if (fr.instanceMapped != nullptr) {
+    if (fr.instanceAlloc != VK_NULL_HANDLE) device_.unmapBuffer(fr.instanceAlloc);
+    fr.instanceMapped = nullptr;
+  }
   device_.destroyBuffer(fr.vertexBuffer, fr.vertexAlloc);
   device_.destroyBuffer(fr.indexBuffer, fr.indexAlloc);
+  device_.destroyBuffer(fr.instanceBuffer, fr.instanceAlloc);
   fr.capacity = 0;
   fr.indexCapacity = 0;
+  fr.instanceCapacity = 0;
 }
 
 void QuadRenderer::cleanUp() {
@@ -69,8 +83,11 @@ void QuadRenderer::cleanUp() {
   }
 
   pipeline_.destroy(device);
+  instancePipeline_.destroy(device);
+  instanceMaskPipeline_.destroy(device);
   maskPipeline_.destroy(device);
   pipelineScene_.destroy(device);
+  instancePipelineScene_.destroy(device);
   linePipeline_.destroy(device);
   linePipelineScene_.destroy(device);
   spatialPipeline_.destroy(device);
@@ -241,6 +258,8 @@ void QuadRenderer::createSceneTargetPipeline(VkRenderPass sceneRenderPass) {
   // Single sample: the result is about to be blurred, so MSAA would only buy a
   // resolve attachment and the coverage it recovers is gone a pass later.
   createPipeline(sceneRenderPass, VK_SAMPLE_COUNT_1_BIT, pipelineScene_);
+  createInstancePipeline(sceneRenderPass, VK_SAMPLE_COUNT_1_BIT,
+                         instancePipelineScene_);
   createLinePipeline(sceneRenderPass, VK_SAMPLE_COUNT_1_BIT,
                      linePipelineScene_);
   createSpatialPipeline(sceneRenderPass, VK_SAMPLE_COUNT_1_BIT,
@@ -535,6 +554,87 @@ void QuadRenderer::createPipeline(VkRenderPass renderPass,
      "Failed to create quad pipeline");
 }
 
+void QuadRenderer::createInstancePipeline(VkRenderPass renderPass,
+                                          VkSampleCountFlagBits samples,
+                                          vk::Handle<VkPipeline> &out,
+                                          Blend blend) {
+  VkDevice device = device_.getDevice();
+  Shaders &shaders = device_.getShaders();
+  VkShaderModule vert = shaders.loadShader("shaders/quad_instance.vert.bin");
+  VkShaderModule frag = shaders.loadShader("shaders/quad_instance.frag.bin");
+  std::array<VkPipelineShaderStageCreateInfo, 2> stages{
+    VkPipelineShaderStageCreateInfo{.sType=VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+      .stage=VK_SHADER_STAGE_VERTEX_BIT,.module=vert,.pName="main"},
+    VkPipelineShaderStageCreateInfo{.sType=VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+      .stage=VK_SHADER_STAGE_FRAGMENT_BIT,.module=frag,.pName="main"}};
+
+  VkVertexInputBindingDescription binding{0, sizeof(Instance),
+                                           VK_VERTEX_INPUT_RATE_INSTANCE};
+  std::array<VkVertexInputAttributeDescription, 10> attrs{
+    VkVertexInputAttributeDescription{0,0,VK_FORMAT_R32G32_SFLOAT,offsetof(Instance,topLeft)},
+    VkVertexInputAttributeDescription{1,0,VK_FORMAT_R32G32_SFLOAT,offsetof(Instance,size)},
+    VkVertexInputAttributeDescription{2,0,VK_FORMAT_R32G32_SFLOAT,offsetof(Instance,halfSize)},
+    VkVertexInputAttributeDescription{3,0,VK_FORMAT_R32_SFLOAT,offsetof(Instance,radius)},
+    VkVertexInputAttributeDescription{4,0,VK_FORMAT_R32_SFLOAT,offsetof(Instance,aux)},
+    VkVertexInputAttributeDescription{5,0,VK_FORMAT_R32G32_SFLOAT,offsetof(Instance,uv0)},
+    VkVertexInputAttributeDescription{6,0,VK_FORMAT_R32G32_SFLOAT,offsetof(Instance,uv1)},
+    VkVertexInputAttributeDescription{7,0,VK_FORMAT_R8G8B8A8_UNORM,offsetof(Instance,color)},
+    VkVertexInputAttributeDescription{8,0,VK_FORMAT_R32_UINT,offsetof(Instance,kind)},
+    VkVertexInputAttributeDescription{9,0,VK_FORMAT_R32_UINT,offsetof(Instance,textureIndex)}};
+  VkPipelineVertexInputStateCreateInfo vi{
+    .sType=VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
+    .vertexBindingDescriptionCount=1,.pVertexBindingDescriptions=&binding,
+    .vertexAttributeDescriptionCount=static_cast<uint32_t>(attrs.size()),
+    .pVertexAttributeDescriptions=attrs.data()};
+  VkPipelineInputAssemblyStateCreateInfo ia{
+    .sType=VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
+    .topology=VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST};
+  VkPipelineViewportStateCreateInfo vp{
+    .sType=VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO,
+    .viewportCount=1,.scissorCount=1};
+  VkPipelineRasterizationStateCreateInfo rs{
+    .sType=VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
+    .polygonMode=VK_POLYGON_MODE_FILL,.cullMode=VK_CULL_MODE_NONE,
+    .frontFace=VK_FRONT_FACE_COUNTER_CLOCKWISE,.lineWidth=1.f};
+  VkPipelineMultisampleStateCreateInfo ms{
+    .sType=VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO,
+    .rasterizationSamples=samples};
+  VkPipelineDepthStencilStateCreateInfo ds{
+    .sType=VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO,
+    .depthTestEnable=VK_FALSE,.depthWriteEnable=VK_FALSE,
+    .depthCompareOp=VK_COMPARE_OP_ALWAYS};
+  VkPipelineColorBlendAttachmentState ba{
+    .blendEnable=VK_TRUE,.srcColorBlendFactor=VK_BLEND_FACTOR_ONE,
+    .dstColorBlendFactor=VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA,
+    .colorBlendOp=VK_BLEND_OP_ADD,.srcAlphaBlendFactor=VK_BLEND_FACTOR_ONE,
+    .dstAlphaBlendFactor=VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA,
+    .alphaBlendOp=VK_BLEND_OP_ADD,
+    .colorWriteMask=VK_COLOR_COMPONENT_R_BIT|VK_COLOR_COMPONENT_G_BIT|
+                    VK_COLOR_COMPONENT_B_BIT|VK_COLOR_COMPONENT_A_BIT};
+  if (blend == Blend::Mask) {
+    ba.srcColorBlendFactor = VK_BLEND_FACTOR_ZERO;
+    ba.dstColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
+    ba.srcAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
+    ba.dstAlphaBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
+  }
+  VkPipelineColorBlendStateCreateInfo cb{
+    .sType=VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO,
+    .attachmentCount=1,.pAttachments=&ba};
+  std::array<VkDynamicState,2> dyns{VK_DYNAMIC_STATE_VIEWPORT,
+                                    VK_DYNAMIC_STATE_SCISSOR};
+  VkPipelineDynamicStateCreateInfo dyn{
+    .sType=VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO,
+    .dynamicStateCount=2,.pDynamicStates=dyns.data()};
+  VkGraphicsPipelineCreateInfo info{
+    .sType=VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
+    .stageCount=2,.pStages=stages.data(),.pVertexInputState=&vi,
+    .pInputAssemblyState=&ia,.pViewportState=&vp,.pRasterizationState=&rs,
+    .pMultisampleState=&ms,.pDepthStencilState=&ds,.pColorBlendState=&cb,
+    .pDynamicState=&dyn,.layout=pipelineLayout_,.renderPass=renderPass,.subpass=0};
+  VR(vkCreateGraphicsPipelines(device,VK_NULL_HANDLE,1,&info,nullptr,&out),
+     "Failed to create instanced quad pipeline");
+}
+
 void QuadRenderer::createPipelineLayout() {
   // Must match quad.vert Push { vec2 viewport; vec2 pan; float zoom; float pad; }
   struct ViewPush {
@@ -579,11 +679,14 @@ void QuadRenderer::createPipelineLayout() {
 /// mid-word, appearing and disappearing as scrolling brought a chart into
 /// view and took it out again. Nothing reported it: no Vulkan error, no
 /// dropped draw, just missing content.
-void QuadRenderer::ensureBufferCapacity(size_t vertexCount, size_t indexCount) {
+void QuadRenderer::ensureBufferCapacity(size_t vertexCount, size_t indexCount,
+                                        size_t instanceCount) {
   auto &fr = activeFrame();
-  if (vertexCount <= fr.capacity && indexCount <= fr.indexCapacity) {
+  if (vertexCount <= fr.capacity && indexCount <= fr.indexCapacity &&
+      instanceCount <= fr.instanceCapacity) {
     return;
   }
+  ++frameStats_.bufferGrowths;
 
   // Growing destroys mapped buffers; both slots may need the same capacity
   // later, and any in-flight use of the *other* slot is unrelated — but this
@@ -608,11 +711,15 @@ void QuadRenderer::ensureBufferCapacity(size_t vertexCount, size_t indexCount) {
   while (newIndexCapacity < indexCount) {
     newIndexCapacity *= 2;
   }
+  size_t newInstanceCapacity = fr.instanceCapacity == 0
+    ? kInitialInstanceCapacity : fr.instanceCapacity;
+  while (newInstanceCapacity < instanceCount) newInstanceCapacity *= 2;
 
   // Grow every frame slot to the same size so slot switches stay cheap.
   for (uint32_t s = 0; s < kMaxFramesInFlight; ++s) {
     auto &slot = frames_[s];
-    if (slot.capacity >= newCapacity && slot.indexCapacity >= newIndexCapacity) {
+    if (slot.capacity >= newCapacity && slot.indexCapacity >= newIndexCapacity &&
+        slot.instanceCapacity >= newInstanceCapacity) {
       continue;
     }
 
@@ -620,6 +727,7 @@ void QuadRenderer::ensureBufferCapacity(size_t vertexCount, size_t indexCount) {
 
     const VkDeviceSize vertexBytes = newCapacity * sizeof(Vertex);
     const VkDeviceSize indexBytes  = newIndexCapacity * sizeof(uint32_t);
+    const VkDeviceSize instanceBytes = newInstanceCapacity * sizeof(Instance);
 
     device_.createBuffer(vertexBytes, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
                          VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
@@ -629,11 +737,17 @@ void QuadRenderer::ensureBufferCapacity(size_t vertexCount, size_t indexCount) {
                          VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
                            VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
                          slot.indexBuffer, slot.indexAlloc);
+    device_.createBuffer(instanceBytes, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+                         VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+                           VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                         slot.instanceBuffer, slot.instanceAlloc);
 
     slot.vertexMapped = device_.mapBuffer(slot.vertexAlloc);
     slot.indexMapped = device_.mapBuffer(slot.indexAlloc);
+    slot.instanceMapped = device_.mapBuffer(slot.instanceAlloc);
     slot.capacity = newCapacity;
     slot.indexCapacity = newIndexCapacity;
+    slot.instanceCapacity = newInstanceCapacity;
   }
 }
 
@@ -649,10 +763,12 @@ void QuadRenderer::begin(vec2 viewportSize, uint32_t frameSlot) {
   viewportSize_ = viewportSize;
   vertices_.clear();
   indices_.clear();
+  instances_.clear();
   batches_.clear();
   segmentEnds_.clear();
   scissorStack_.clear();
   batchStartIndex_ = 0;
+  instanceBatchStart_ = 0;
   blurResultView_ = VK_NULL_HANDLE;
   blurResultSampler_ = VK_NULL_HANDLE;
   currentScissor_  = VkRect2D{
@@ -668,6 +784,7 @@ void QuadRenderer::begin(vec2 viewportSize, uint32_t frameSlot) {
 void QuadRenderer::appendQuad(const vec2 corners[4], const vec2 locals[4],
                               vec2 halfSize, float radius, uint32_t rgba,
                               Kind kind, float aux, const vec2 *uvs) {
+  flushInstanceBatch();
   const uint32_t base = static_cast<uint32_t>(vertices_.size());
   for (int i = 0; i < 4; ++i) {
     vertices_.push_back(Vertex{
@@ -689,6 +806,16 @@ void QuadRenderer::appendQuad(const vec2 corners[4], const vec2 locals[4],
   indices_.push_back(base + 0);
   indices_.push_back(base + 2);
   indices_.push_back(base + 3);
+}
+
+void QuadRenderer::appendInstance(vec2 topLeft, vec2 size, vec2 halfSize,
+                                  float radius, uint32_t rgba, Kind kind,
+                                  float aux, vec2 uv0, vec2 uv1) {
+  flushIndexedBatch();
+  instances_.push_back(Instance{
+    .topLeft=topLeft,.size=size,.halfSize=halfSize,.radius=radius,.aux=aux,
+    .uv0=uv0,.uv1=uv1,.color=rgba,.kind=static_cast<uint32_t>(kind),
+    .textureIndex=currentTextureIndex_});
 }
 
 void QuadRenderer::ensureBatchTexture(VkImageView view)
@@ -714,16 +841,8 @@ void QuadRenderer::pushBox(vec2 topLeft, vec2 size, uint32_t rgba, float radius)
   const vec2 ext{half.x + kPad, half.y + kPad};
   const float r = std::min(radius, std::min(half.x, half.y));
 
-  const vec2 corners[4] = {
-    {center.x - ext.x, center.y - ext.y},
-    {center.x + ext.x, center.y - ext.y},
-    {center.x + ext.x, center.y + ext.y},
-    {center.x - ext.x, center.y + ext.y},
-  };
-  const vec2 locals[4] = {
-    {-ext.x, -ext.y}, {ext.x, -ext.y}, {ext.x, ext.y}, {-ext.x, ext.y},
-  };
-  appendQuad(corners, locals, half, r, rgba, Kind::Sdf);
+  appendInstance({center.x-ext.x, center.y-ext.y}, {ext.x*2.f, ext.y*2.f},
+                 half, r, rgba, Kind::Sdf);
 }
 
 void QuadRenderer::pushCornerMask(vec2 topLeft, vec2 size, float radius) {
@@ -742,16 +861,7 @@ void QuadRenderer::pushCornerMask(vec2 topLeft, vec2 size, float radius) {
   // No bleed, unlike `pushBox`. The quad is the region being *cleared* rather
   // than a shape being drawn, and a pixel of overhang would put it outside the
   // surface where there is nothing to clear.
-  const vec2 corners[4] = {
-    {center.x - half.x, center.y - half.y},
-    {center.x + half.x, center.y - half.y},
-    {center.x + half.x, center.y + half.y},
-    {center.x - half.x, center.y + half.y},
-  };
-  const vec2 locals[4] = {
-    {-half.x, -half.y}, {half.x, -half.y}, {half.x, half.y}, {-half.x, half.y},
-  };
-  appendQuad(corners, locals, half, r, 0xffffffffu, Kind::Mask);
+  appendInstance(topLeft, size, half, r, 0xffffffffu, Kind::Mask);
 
   flushBatch();
   if (!batches_.empty()) batches_.back().mask = true;
@@ -773,16 +883,8 @@ void QuadRenderer::pushShadow(vec2 topLeft, vec2 size, float radius,
   const vec2 ext{half.x + spread + 1.f, half.y + spread + 1.f};
   const float r = std::min(radius, std::min(half.x, half.y));
 
-  const vec2 corners[4] = {
-    {center.x - ext.x, center.y - ext.y},
-    {center.x + ext.x, center.y - ext.y},
-    {center.x + ext.x, center.y + ext.y},
-    {center.x - ext.x, center.y + ext.y},
-  };
-  const vec2 locals[4] = {
-    {-ext.x, -ext.y}, {ext.x, -ext.y}, {ext.x, ext.y}, {-ext.x, ext.y},
-  };
-  appendQuad(corners, locals, half, r, rgba, Kind::Shadow, spread);
+  appendInstance({center.x-ext.x, center.y-ext.y}, {ext.x*2.f, ext.y*2.f},
+                 half, r, rgba, Kind::Shadow, spread);
 }
 
 void QuadRenderer::pushCircle(vec2 center, float radius, uint32_t rgba) {
@@ -884,17 +986,8 @@ void QuadRenderer::pushGlyph(vec2 topLeft, vec2 size, vec2 uv0, vec2 uv1,
     return;
   }
   ensureBatchTexture(glyphAtlasView_);
-  const vec2 corners[4] = {
-    {topLeft.x, topLeft.y},
-    {topLeft.x + size.x, topLeft.y},
-    {topLeft.x + size.x, topLeft.y + size.y},
-    {topLeft.x, topLeft.y + size.y},
-  };
-  // `local` carries atlas UV for the glyph path.
-  const vec2 locals[4] = {
-    {uv0.x, uv0.y}, {uv1.x, uv0.y}, {uv1.x, uv1.y}, {uv0.x, uv1.y},
-  };
-  appendQuad(corners, locals, {0.0f, 0.0f}, 0.0f, rgba, Kind::Glyph);
+  appendInstance(topLeft, size, {0.f,0.f}, 0.f, rgba, Kind::Glyph,
+                 0.f, uv0, uv1);
 }
 
 void QuadRenderer::pushImage(vec2 topLeft, vec2 size, vec2 uv0, vec2 uv1,
@@ -904,16 +997,8 @@ void QuadRenderer::pushImage(vec2 topLeft, vec2 size, vec2 uv0, vec2 uv1,
     return;
   }
   ensureBatchTexture(textureView);
-  const vec2 corners[4] = {
-    {topLeft.x, topLeft.y},
-    {topLeft.x + size.x, topLeft.y},
-    {topLeft.x + size.x, topLeft.y + size.y},
-    {topLeft.x, topLeft.y + size.y},
-  };
-  const vec2 locals[4] = {
-    {uv0.x, uv0.y}, {uv1.x, uv0.y}, {uv1.x, uv1.y}, {uv0.x, uv1.y},
-  };
-  appendQuad(corners, locals, {0.0f, 0.0f}, 0.0f, rgba, Kind::Image);
+  appendInstance(topLeft, size, {0.f,0.f}, 0.f, rgba, Kind::Image,
+                 0.f, uv0, uv1);
 }
 
 void QuadRenderer::pushMesh(const vec2 *points, uint32_t count, uint32_t rgba,
@@ -927,6 +1012,7 @@ void QuadRenderer::pushMesh(const vec2 *points, uint32_t count, uint32_t rgba,
     return;
   }
   ensureBatchTexture(glyphAtlasView_);
+  flushInstanceBatch();
   const uint32_t base = static_cast<uint32_t>(vertices_.size());
   for (uint32_t i = 0; i < count; ++i) {
     vertices_.push_back(Vertex{
@@ -961,11 +1047,11 @@ void QuadRenderer::pushMesh(const vec2 *points, uint32_t count, uint32_t rgba,
   }
 }
 
-void QuadRenderer::flushBatch() {
+void QuadRenderer::flushIndexedBatch() {
   const uint32_t end = static_cast<uint32_t>(indices_.size());
   if (end > batchStartIndex_) {
     batches_.push_back(Batch{
-      .geometry            = Batch::Geometry::Quads,
+      .geometry            = Batch::Geometry::IndexedTriangles,
       .firstIndex          = batchStartIndex_,
       .indexCount          = end - batchStartIndex_,
       .scissor             = currentScissor_,
@@ -973,6 +1059,25 @@ void QuadRenderer::flushBatch() {
     });
   }
   batchStartIndex_ = end;
+}
+
+void QuadRenderer::flushInstanceBatch() {
+  const uint32_t end = static_cast<uint32_t>(instances_.size());
+  if (end > instanceBatchStart_) {
+    batches_.push_back(Batch{
+      .geometry=Batch::Geometry::Instances,
+      .firstInstance=instanceBatchStart_,
+      .instanceCount=end-instanceBatchStart_,
+      .scissor=currentScissor_});
+  }
+  instanceBatchStart_ = end;
+}
+
+void QuadRenderer::flushBatch() {
+  // Stream switches flush the other side before appending, so at most one of
+  // these has an open tail. Calling both is therefore ordered, not a sort.
+  flushIndexedBatch();
+  flushInstanceBatch();
 }
 
 void QuadRenderer::closeSegment() {
@@ -997,16 +1102,8 @@ void QuadRenderer::pushBlurResultImage(vec2 topLeft, vec2 size, vec2 uv0,
   const float r = std::min(std::max(cornerRadius, 0.f), std::min(half.x, half.y));
 
   if (r <= 0.f) {
-    const vec2 corners[4] = {
-      {topLeft.x, topLeft.y},
-      {topLeft.x + size.x, topLeft.y},
-      {topLeft.x + size.x, topLeft.y + size.y},
-      {topLeft.x, topLeft.y + size.y},
-    };
-    const vec2 locals[4] = {
-      {uv0.x, uv0.y}, {uv1.x, uv0.y}, {uv1.x, uv1.y}, {uv0.x, uv1.y},
-    };
-    appendQuad(corners, locals, {0.0f, 0.0f}, 0.0f, rgba, Kind::Image);
+    appendInstance(topLeft, size, {0.f,0.f}, 0.f, rgba, Kind::Image,
+                   0.f, uv0, uv1);
   } else {
     // A pixel of bleed for the SDF to antialias into, exactly as `pushBox`
     // takes. The UV rect is extended by the same pixel in texture units so
@@ -1020,19 +1117,8 @@ void QuadRenderer::pushBlurResultImage(vec2 topLeft, vec2 size, vec2 uv0,
     const vec2 u0{uv0.x - uvPerPx.x * kPad, uv0.y - uvPerPx.y * kPad};
     const vec2 u1{uv1.x + uvPerPx.x * kPad, uv1.y + uvPerPx.y * kPad};
 
-    const vec2 corners[4] = {
-      {center.x - ext.x, center.y - ext.y},
-      {center.x + ext.x, center.y - ext.y},
-      {center.x + ext.x, center.y + ext.y},
-      {center.x - ext.x, center.y + ext.y},
-    };
-    const vec2 locals[4] = {
-      {-ext.x, -ext.y}, {ext.x, -ext.y}, {ext.x, ext.y}, {-ext.x, ext.y},
-    };
-    const vec2 uvs[4] = {
-      {u0.x, u0.y}, {u1.x, u0.y}, {u1.x, u1.y}, {u0.x, u1.y},
-    };
-    appendQuad(corners, locals, half, r, rgba, Kind::BlurComposite, 0.f, uvs);
+    appendInstance({center.x-ext.x, center.y-ext.y}, {ext.x*2.f,ext.y*2.f},
+                   half, r, rgba, Kind::BlurComposite, 0.f, u0, u1);
   }
   flushBatch();
   if (!batches_.empty()) {
@@ -1088,24 +1174,44 @@ void QuadRenderer::popScissor() {
 }
 
 void QuadRenderer::end() {
+  const auto uploadStart = std::chrono::steady_clock::now();
   flushBatch();
   // Close the trailing open segment so multiphase always has a range.
   if (segmentEnds_.empty() || segmentEnds_.back() != batches_.size()) {
     segmentEnds_.push_back(static_cast<uint32_t>(batches_.size()));
   }
 
-  if (vertices_.empty()) {
+  if (vertices_.empty() && instances_.empty()) {
+    frameStats_.uploadCpuUs = static_cast<uint64_t>(
+      std::chrono::duration_cast<std::chrono::microseconds>(
+        std::chrono::steady_clock::now() - uploadStart).count());
     return;
   }
-  ensureBufferCapacity(vertices_.size(), indices_.size());
+  ensureBufferCapacity(vertices_.size(), indices_.size(), instances_.size());
 
   auto &fr = activeFrame();
-  std::memcpy(fr.vertexMapped, vertices_.data(),
-              vertices_.size() * sizeof(Vertex));
+  if (!vertices_.empty()) {
+    std::memcpy(fr.vertexMapped, vertices_.data(),
+                vertices_.size() * sizeof(Vertex));
+  }
   if (!indices_.empty()) {
     std::memcpy(fr.indexMapped, indices_.data(),
                 indices_.size() * sizeof(uint32_t));
   }
+  if (!instances_.empty()) {
+    std::memcpy(fr.instanceMapped, instances_.data(),
+                instances_.size() * sizeof(Instance));
+  }
+  frameStats_.vertexBytes = vertices_.size() * sizeof(Vertex);
+  frameStats_.indexBytes = indices_.size() * sizeof(uint32_t);
+  frameStats_.vertexCapacityBytes = fr.capacity * sizeof(Vertex);
+  frameStats_.indexCapacityBytes = fr.indexCapacity * sizeof(uint32_t);
+  frameStats_.instanceCount = static_cast<uint32_t>(instances_.size());
+  frameStats_.instanceBytes = instances_.size() * sizeof(Instance);
+  frameStats_.instanceCapacityBytes = fr.instanceCapacity * sizeof(Instance);
+  frameStats_.uploadCpuUs = static_cast<uint64_t>(
+    std::chrono::duration_cast<std::chrono::microseconds>(
+      std::chrono::steady_clock::now() - uploadStart).count());
 }
 
 void QuadRenderer::setViewTransform(float zoom, float panX, float panY)
@@ -1132,7 +1238,8 @@ void QuadRenderer::drawSegment(VkCommandBuffer commandBuffer,
 void QuadRenderer::drawBatchRange(VkCommandBuffer commandBuffer,
                                   uint32_t firstBatch, uint32_t batchCount,
                                   bool intoSceneTarget) {
-  if (batchCount == 0 || vertices_.empty() || firstBatch >= batches_.size()) {
+  if (batchCount == 0 || (vertices_.empty() && instances_.empty()) ||
+      firstBatch >= batches_.size()) {
     return;
   }
   const uint32_t last =
@@ -1163,11 +1270,6 @@ void QuadRenderer::drawBatchRange(VkCommandBuffer commandBuffer,
     .minDepth = 0.0f, .maxDepth = 1.0f,
   };
   vkCmdSetViewport(commandBuffer, 0, 1, &viewport);
-
-  VkDeviceSize offset = 0;
-  VkBuffer     vb     = fr.vertexBuffer;
-  vkCmdBindVertexBuffers(commandBuffer, 0, 1, &vb, &offset);
-  vkCmdBindIndexBuffer(commandBuffer, fr.indexBuffer, 0, VK_INDEX_TYPE_UINT32);
 
   // Scissors were recorded in layout space; map them through the same
   // center-zoom + pan used by the vertex shader.
@@ -1219,7 +1321,15 @@ void QuadRenderer::drawBatchRange(VkCommandBuffer commandBuffer,
       continue;
     }
     VkPipeline wanted = VK_NULL_HANDLE;
-    if (batch.geometry == Batch::Geometry::LineStrip) {
+    if (batch.geometry == Batch::Geometry::Instances) {
+      if (batch.mask) {
+        wanted = intoSceneTarget ? VK_NULL_HANDLE
+                                 : static_cast<VkPipeline>(instanceMaskPipeline_);
+      } else {
+        wanted = intoSceneTarget ? static_cast<VkPipeline>(instancePipelineScene_)
+                                 : static_cast<VkPipeline>(instancePipeline_);
+      }
+    } else if (batch.geometry == Batch::Geometry::LineStrip) {
       wanted = intoSceneTarget ? static_cast<VkPipeline>(linePipelineScene_)
                                : static_cast<VkPipeline>(linePipeline_);
     } else if (batch.geometry == Batch::Geometry::SpatialTriangles) {
@@ -1243,9 +1353,20 @@ void QuadRenderer::drawBatchRange(VkCommandBuffer commandBuffer,
     }
     if (batch.sampleBlurResult && blurResultView_ == VK_NULL_HANDLE) continue;
     vkCmdSetScissor(commandBuffer, 0, 1, &sc);
-    if (batch.geometry != Batch::Geometry::Quads) {
+    VkDeviceSize offset = 0;
+    if (batch.geometry == Batch::Geometry::Instances) {
+      VkBuffer instanceBuffer = fr.instanceBuffer;
+      vkCmdBindVertexBuffers(commandBuffer, 0, 1, &instanceBuffer, &offset);
+      vkCmdDraw(commandBuffer, 6, batch.instanceCount, 0, batch.firstInstance);
+    } else if (batch.geometry != Batch::Geometry::IndexedTriangles) {
+      VkBuffer vertexBuffer = fr.vertexBuffer;
+      vkCmdBindVertexBuffers(commandBuffer, 0, 1, &vertexBuffer, &offset);
       vkCmdDraw(commandBuffer, batch.vertexCount, 1, batch.firstVertex, 0);
     } else {
+      VkBuffer vertexBuffer = fr.vertexBuffer;
+      vkCmdBindVertexBuffers(commandBuffer, 0, 1, &vertexBuffer, &offset);
+      vkCmdBindIndexBuffer(commandBuffer, fr.indexBuffer, 0,
+                           VK_INDEX_TYPE_UINT32);
       vkCmdDrawIndexed(commandBuffer, batch.indexCount, 1, batch.firstIndex, 0, 0);
     }
     ++frameStats_.drawCalls;
