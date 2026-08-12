@@ -849,6 +849,48 @@ void show_surface(wlr_scene_buffer *node, lava::CanvasSurface &surface) {
                                  static_cast<int>(surface.height()));
 }
 
+// ─── Scene-graph input regions ─────────────────────────────────────────────
+//
+// `SetInputRegion` is how a panel or dock says "only this rectangle is mine".
+// The Lava hit path (`hitTest` / `acceptsInput`) has always honoured it. The
+// *scene* did not: `wlr_scene_node_at` walks buffers top-down and treats every
+// opaque-or-not canvas node as a hard occluder. A taskbar that is 600 px tall
+// so menus can paint into it — with only the top 32 px accepting input — was
+// still a 600 px scene buffer above every window, so `surface_at` returned
+// null for GTK and friends and the seat never got `pointer.enter`. No enter,
+// no clicks. Shadows had the same shape of bug on a smaller scale: a blur
+// ring around the focused window that sat above every window behind it.
+//
+// `point_accepts_input` is wlroots' hook for this. Returning false makes the
+// hit walk continue underneath, which is exactly "these pixels are not input".
+
+/// Content of a Lava surface: honour `SetInputRegion` (whole surface when
+/// unset). `node.data` is the owning `ClientSurface`.
+bool content_point_accepts_input(wlr_scene_buffer *buffer, double *sx,
+                                 double *sy) {
+  auto *surface = static_cast<ClientSurface *>(buffer->node.data);
+  if (surface == nullptr) return true;
+  return surface->acceptsInput(*sx, *sy);
+}
+
+/// Never: decorations that only *look* like they occupy space (shadows).
+bool never_point_accepts_input(wlr_scene_buffer *, double *, double *) {
+  return false;
+}
+
+/// Wires a content buffer to its surface's input region. Safe to call more
+/// than once; the region itself is read live from the surface.
+void bind_content_input(wlr_scene_buffer *node, ClientSurface *surface) {
+  if (node == nullptr || surface == nullptr) return;
+  node->node.data = surface;
+  node->point_accepts_input = content_point_accepts_input;
+}
+
+void bind_never_input(wlr_scene_buffer *node) {
+  if (node == nullptr) return;
+  node->point_accepts_input = never_point_accepts_input;
+}
+
 /// Which sides of a window a resize drag is pulling. A bitmask because a
 /// corner is two of them, and there is no third thing an edge can be.
 namespace edges {
@@ -1530,6 +1572,9 @@ class SurfaceRegistry : public lava::CompositorHost {
         surface.shadow.reset();
         return;
       }
+      // A shadow is drawn around the window but must not own the pointer —
+      // otherwise the blur ring steals clicks from whatever sits under it.
+      bind_never_input(surface.shadowNode);
       wlr_log(WLR_INFO, "surface %u: shadow %ux%u, blur %.0f, offset %.0f",
               surface.id, width, height, shadowBlur_, shadowOffsetY_);
       show_surface(surface.shadowNode, *surface.shadow);
@@ -1848,19 +1893,15 @@ class SurfaceRegistry : public lava::CompositorHost {
     if (surface == nullptr) return false;
     surface->minWidth = minWidth;
     surface->minHeight = minHeight;
-    wlr_log(WLR_INFO, "setMinSize id=%u ask=%ux%u now=%ux%u floor=%ux%u", id,
-            minWidth, minHeight, surface->width, surface->height,
-            minFor(*surface, true), minFor(*surface, false));
-    // Applied at once rather than only on the next drag: a client that states
-    // a minimum after opening at less than it is asking to be grown, and
-    // waiting for the user to grab an edge would be an odd way to answer.
-    if (!surface->panel) {
-      const uint32_t w = std::max(surface->width, minFor(*surface, true));
-      const uint32_t h = std::max(surface->height, minFor(*surface, false));
-      if (w != surface->width || h != surface->height) {
-        resizeSurface(*surface, w, h);
-      }
-    }
+    // Recorded, not acted on. This bounds what the *user* can drag the window
+    // down to, which is what a minimum is for; a window that opened smaller
+    // than its own minimum asked for that size explicitly and is left alone.
+    //
+    // Growing it here was the first version and is deliberately gone: the
+    // resize goes out through the exported buffer, which at this point in a
+    // surface's life is not yet in a state to take one, so the call returned
+    // quietly having done nothing. A feature that works only sometimes and
+    // says nothing when it does not is worse than one with a stated edge.
     return true;
   }
 
@@ -1928,6 +1969,10 @@ class SurfaceRegistry : public lava::CompositorHost {
     surface->inputY = y;
     surface->inputW = w;
     surface->inputH = h;
+    // The Lava hit path reads these on every test. The scene path needs the
+    // callback installed once; re-bind is cheap and covers a surface that was
+    // somehow created without it.
+    if (surface->node != nullptr) bind_content_input(surface->node, surface);
     return true;
   }
 
@@ -2601,10 +2646,15 @@ class SurfaceRegistry : public lava::CompositorHost {
     surface->node = wlr_scene_buffer_create(parent, surface->canvas->buffer());
     if (surface->node == nullptr) return 0;
     show_surface(surface->node, *surface->canvas);
+    // Before the surface moves into the list: the pointer is stable, and
+    // every later `SetInputRegion` is read through it — see the scene-graph
+    // input region note above `content_point_accepts_input`.
+    bind_content_input(surface->node, surface.get());
     if (surface->bar) {
       surface->barNode = wlr_scene_buffer_create(parent, surface->bar->buffer());
       if (surface->barNode == nullptr) return 0;
       show_surface(surface->barNode, *surface->bar);
+      // Title bars are fully clickable; leave the default accepts-all.
     }
     applyCorners(*surface);
     place(*surface);

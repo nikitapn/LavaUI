@@ -285,13 +285,28 @@ public enum LavaClient {
     /// Quiet when there is no compositor — a windowed build has a window
     /// manager for this, and an app should be able to say it either way.
     public static func setMinimumSize(width: Float, height: Float) {
-        guard let compositor = Self.compositor, surfaceID != 0 else { return }
+        // Remembered, not just sent. `open` returns an `Editor` before the
+        // surface exists — creation happens on the way into `run` — so an
+        // application stating its minimum at the natural moment, right after
+        // opening, was sending it to surface id 0 and having it dropped on the
+        // floor in a guard. Storing it means the call works whenever it is
+        // made, which is the only version of this that is not a trap.
+        pendingMinSize = (max(0, width), max(0, height))
+        flushMinimumSize()
+    }
+
+    /// Sends the stored minimum once there is a surface to attach it to.
+    /// Called again from surface setup, which is where the id arrives.
+    private static func flushMinimumSize() {
+        guard let compositor = Self.compositor, surfaceID != 0,
+              let pending = pendingMinSize
+        else { return }
         report("SetMinSize") {
             try blockingCall {
                 try await compositor.setMinSize(
                     surfaceId: surfaceID,
-                    minWidth: UInt32(max(0, width)),
-                    minHeight: UInt32(max(0, height))
+                    minWidth: UInt32(pending.width),
+                    minHeight: UInt32(pending.height)
                 )
             }
         }
@@ -408,6 +423,8 @@ public enum LavaClient {
             inputChannel = InputChannel(
                 stream: try compositor.subscribeInput(surfaceId: surfaceID)
             )
+            // Anything the application asked for before it had a surface.
+            flushMinimumSize()
         } catch {
             fail("surface setup failed: \(error)")
         }
@@ -668,6 +685,8 @@ public enum LavaClient {
 
     /// Set once, before the first publish can read it. See `run`.
     nonisolated(unsafe) private static var surfaceID: UInt32 = 0
+    /// A minimum size stated before the surface existed. See `setMinimumSize`.
+    nonisolated(unsafe) private static var pendingMinSize: (width: Float, height: Float)?
     /// Input lease for `quit()` / compositor-side close. Set in `run`.
     nonisolated(unsafe) private static var inputChannel: InputChannel?
     /// Handed from `open` to `run`. Statics rather than a returned handle so

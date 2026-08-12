@@ -616,10 +616,14 @@ interface Compositor {
   /// keep anybody's design intact.
   ///
   /// Advisory in the sense that the compositor still owns the geometry: it
-  /// clamps interactive resizes and its own tiling to this, but a window that
-  /// cannot fit on a small output is made to fit anyway. A minimum larger than
-  /// the work area is not a request the compositor can honour and is not
-  /// treated as one.
+  /// clamps interactive resizes to this, but a window that cannot fit on a
+  /// small output is made to fit anyway. A minimum larger than the work area
+  /// is not a request the compositor can honour and is not treated as one.
+  ///
+  /// It bounds what the user can drag the window down to. It does not resize a
+  /// window that is already smaller — one that opened at less than its own
+  /// stated minimum asked for that size, and this call is not a way to argue
+  /// with it.
   ///
   /// Zero on either axis means "no opinion about that direction", which is
   /// what every existing client is saying by never calling this.
