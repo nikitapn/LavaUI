@@ -118,9 +118,25 @@ public struct CameraControls3D: Equatable, Sendable {
 public struct SpatialAnimation: Equatable, Sendable {
     public var duration: Double
     public var curve: AnimationCurve
+    /// When false, world x jumps to the new pose and only y/z, rotation,
+    /// and scale interpolate. A bookshelf can keep the focused cover
+    /// planted at the camera centre instead of sliding the whole shelf.
+    public var animatesPosition: Bool
 
-    public init(duration: Double = 0.22, curve: AnimationCurve = .easeOut) {
-        self.duration = duration; self.curve = curve
+    public init(
+        duration: Double = 0.22, curve: AnimationCurve = .easeOut,
+        animatesPosition: Bool = true
+    ) {
+        self.duration = duration
+        self.curve = curve
+        self.animatesPosition = animatesPosition
+    }
+
+    /// Position.x jumps; lift, turn, and scale still ease.
+    public func snappingPosition() -> SpatialAnimation {
+        var copy = self
+        copy.animatesPosition = false
+        return copy
     }
 
     public static func smooth(
@@ -299,6 +315,96 @@ public struct CatalogLayout3D: Equatable, Sendable {
     }
 }
 
+/// Two stacks of books around a face-on cover: neighbours stand on the
+/// shelf at a steep yaw so a sliver of their front is still readable, and
+/// the focused item turns to face the camera.
+///
+/// Index 0 is the left of the *list*, not of the screen. The focused card
+/// sits at x = 0; everything before it packs into the left stack, everything
+/// after into the right. An empty stack is just an empty stack.
+public struct BookshelfLayout3D: Equatable, Sendable {
+    /// World x of the first book in a stack, measured from the focused card.
+    public var stackOrigin: Float
+    /// How tightly later books pack along x. Small on purpose: a stack, not a row.
+    public var stackPitch: Float
+    /// How far each further book steps back.
+    public var stackRecede: Float
+    /// Yaw of a book in the stack. Large enough to read as a spine-on-shelf
+    /// pose; small enough that the cover is still visible.
+    public var bookAngle: Angle3D
+    public var focusDepth: Float
+    public var focusLift: Float
+    public var focusScale: Float
+
+    public init(
+        stackOrigin: Float = 1.05,
+        stackPitch: Float = 0.16,
+        stackRecede: Float = 0.07,
+        bookAngle: Angle3D = .degrees(62),
+        focusDepth: Float = 0.55,
+        focusLift: Float = 0.06,
+        focusScale: Float = 1.06
+    ) {
+        self.stackOrigin = max(0.01, stackOrigin)
+        self.stackPitch = max(0, stackPitch)
+        self.stackRecede = max(0, stackRecede)
+        self.bookAngle = bookAngle
+        self.focusDepth = focusDepth
+        self.focusLift = focusLift
+        self.focusScale = max(0.01, focusScale)
+    }
+
+    public static func bookStacks(
+        stackOrigin: Float = 1.05,
+        stackPitch: Float = 0.16,
+        bookAngle: Angle3D = .degrees(62)
+    ) -> BookshelfLayout3D {
+        BookshelfLayout3D(
+            stackOrigin: stackOrigin, stackPitch: stackPitch, bookAngle: bookAngle
+        )
+    }
+
+    public func pose(
+        at index: Int, itemCount: Int, focusedIndex: Int?,
+        itemHeight: Float = 0
+    ) -> CatalogPose3D {
+        let count = max(0, itemCount)
+        let focus = focusedIndex ?? 0
+        let restY = max(0, itemHeight) * 0.5
+        var transform = Transform3D(position: [0, restY, 0])
+        let distance = index - focus
+        if distance == 0 {
+            transform.position.y = restY + focusLift
+            transform.position.z = focusDepth
+            transform.scale = [focusScale, focusScale, focusScale]
+            return CatalogPose3D(transform: transform)
+        }
+        let side: Float = distance < 0 ? -1 : 1
+        let rank = abs(distance)
+        // First book sits at `stackOrigin`; the rest pack behind it.
+        transform.position.x = side * (stackOrigin + Float(rank - 1) * stackPitch)
+        transform.position.z = -Float(rank - 1) * stackRecede
+        // Right stack: +yaw turns the cover toward −X (the focus). Left
+        // stack is the mirror. The cover stays a bit visible; the edge
+        // reads as a book on a shelf.
+        transform.rotation.y = side * bookAngle.radians
+        return CatalogPose3D(transform: transform)
+    }
+
+    public func recommendedMinimumCameraDistance(
+        itemCount: Int, itemWidth: Float, itemHeight: Float,
+        clearance: Float = 2.2
+    ) -> Float {
+        let maxRank = Float(max(0, itemCount - 1))
+        let halfWidth = stackOrigin + maxRank * stackPitch
+            + max(0, itemWidth) * focusScale * 0.5
+        let halfHeight = max(0, itemHeight) * focusScale + focusLift
+        let depth = abs(focusDepth) + maxRank * stackRecede
+        return sqrt(halfWidth * halfWidth + halfHeight * halfHeight + depth * depth)
+            + max(0, clearance)
+    }
+}
+
 public protocol View3D {
     func spatialElements() -> [SpatialElement]
 }
@@ -412,6 +518,16 @@ extension View3D {
     ) -> some View3D {
         transform3D(layout.pose(
             at: index, itemCount: itemCount, focusedIndex: focusedIndex
+        ).transform)
+    }
+    public func catalog3D(
+        index: Int, itemCount: Int, focusedIndex: Int?,
+        itemHeight: Float = 0,
+        layout: BookshelfLayout3D
+    ) -> some View3D {
+        transform3D(layout.pose(
+            at: index, itemCount: itemCount, focusedIndex: focusedIndex,
+            itemHeight: itemHeight
         ).transform)
     }
     public func position(_ value: Vector3) -> some View3D {
@@ -656,7 +772,25 @@ final class SpatialRuntime {
                 if m.position.target != e.transform.position || m.rotation.target != e.transform.rotation
                     || m.scale.target != e.transform.scale {
                     if let a = e.animation {
-                        m.position.animate(to: e.transform.position, duration: a.duration, curve: a.curve)
+                        if a.animatesPosition {
+                            m.position.animate(
+                                to: e.transform.position,
+                                duration: a.duration, curve: a.curve
+                            )
+                        } else {
+                            // Plant x now so a shelf reflow cannot drag the
+                            // focused card across the screen with the stacks.
+                            let planted = Vector3(
+                                e.transform.position.x,
+                                m.position.current.y,
+                                m.position.current.z
+                            )
+                            m.position.snap(to: planted)
+                            m.position.animate(
+                                to: e.transform.position,
+                                duration: a.duration, curve: a.curve
+                            )
+                        }
                         m.rotation.animate(to: e.transform.rotation, duration: a.duration, curve: a.curve)
                         m.scale.animate(to: e.transform.scale, duration: a.duration, curve: a.curve)
                         animating = true

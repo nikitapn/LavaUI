@@ -1033,6 +1033,7 @@ final class StackNode: YogaBoxNode {
     /// both are set — see `hitWalk`.
     var onPointer: ((_ mods: Int32, _ button: Int32) -> Void)?
     var onHover: ((Bool) -> Void)?
+    var onWheel: ((Float, Float) -> Void)?
     /// Corner radius for `fillColor`. Set via `.cornerRadius()` modifiers.
     var cornerRadius: Float = 0
 
@@ -1043,17 +1044,20 @@ final class StackNode: YogaBoxNode {
         label: String, direction: FlexDirection, style: StackStyle,
         content: any AnyViewNode, onClick: (() -> Void)?,
         onPointer: ((_ mods: Int32, _ button: Int32) -> Void)?,
-        onHover: ((Bool) -> Void)?
+        onHover: ((Bool) -> Void)?,
+        onWheel: ((Float, Float) -> Void)? = nil
     ) {
         self.direction = direction
         self.contentNode = content
         self.onClick = onClick
         self.onPointer = onPointer
         self.onHover = onHover
+        self.onWheel = onWheel
         super.init(label: label)
         YGNodeStyleSetFlexDirection(yogaStorage, direction.yoga)
         apply(style)
         configureHover()
+        configureWheel()
         relinkYogaChildren()
     }
 
@@ -1063,13 +1067,16 @@ final class StackNode: YogaBoxNode {
         style: StackStyle, contentView: some View,
         onClick: (() -> Void)?,
         onPointer: ((_ mods: Int32, _ button: Int32) -> Void)?,
-        onHover: ((Bool) -> Void)?
+        onHover: ((Bool) -> Void)?,
+        onWheel: ((Float, Float) -> Void)? = nil
     ) {
         apply(style)
         self.onClick = onClick
         self.onPointer = onPointer
         self.onHover = onHover
+        self.onWheel = onWheel
         configureHover()
+        configureWheel()
         contentNode = ViewGraph.reconcile(contentNode, with: contentView)
         relinkYogaChildren()
     }
@@ -1080,6 +1087,14 @@ final class StackNode: YogaBoxNode {
             return
         }
         HoverState.register(id) { inside in onHover(inside) }
+    }
+
+    private func configureWheel() {
+        if let onWheel {
+            ScrollRouter.register(id, handler: onWheel)
+        } else {
+            ScrollRouter.unregister(id)
+        }
     }
 
     private func apply(_ style: StackStyle) {

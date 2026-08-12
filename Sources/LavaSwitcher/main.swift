@@ -23,10 +23,25 @@ enum Switcher {
     static let appId = "LavaSwitcher"
     /// Longest encoded edge. Stays inside one atlas cell so a shelf of
     /// posters does not burn a descriptor set each.
-    static let captureSide: Int32 = 256
-    static let cardWidth: Float = 2.05
-    static let cardHeight: Float = 1.28
-    static let cardDepth: Float = 0.07
+    static let captureSide: Int32 = 384
+    /// Longer world-space edge of a card. The other edge follows the
+    /// screenshot's aspect ratio so a terminal is tall and a browser is wide.
+    static let cardMaxEdge: Float = 2.35
+    static let cardDepth: Float = 0.018
+
+    static func cardSize(for image: UIImage?) -> (w: Float, h: Float) {
+        let raw: Float
+        if let image, image.pixelHeight > 1 {
+            raw = image.pixelWidth / image.pixelHeight
+        } else {
+            raw = 16 / 10
+        }
+        let aspect = min(max(raw, 0.45), 2.8)
+        if aspect >= 1 {
+            return (cardMaxEdge, cardMaxEdge / aspect)
+        }
+        return (cardMaxEdge * aspect, cardMaxEdge)
+    }
 }
 
 @Observable
@@ -155,7 +170,7 @@ final class SwitcherModel {
         guard let idx = windows.firstIndex(where: { $0.surfaceId == surfaceId })
         else { return }
         selected = idx
-        ViewInvalidation.markNeedsRedraw()
+        ViewInvalidation.markNeedsBody()
     }
 
     func preview(for window: WindowInfo) -> UIImage? {
@@ -267,6 +282,14 @@ private final class CaptureBag: @unchecked Sendable {
 }
 
 nonisolated(unsafe) let model = SwitcherModel()
+
+/// Wheel / trackpad: down or right advances, up or left goes back.
+/// Dominant axis wins so a mostly-vertical notch is not also a tiny x step.
+func handleSwitcherWheel(dx: Float, dy: Float) {
+    let axis = abs(dx) >= abs(dy) ? dx : -dy
+    guard abs(axis) > 0.05 else { return }
+    model.cycle(backwards: axis < 0)
+}
 
 func handleKey(_ event: LavaUI.InputEvent) -> Bool {
     guard event.kind == .key else { return false }

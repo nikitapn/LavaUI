@@ -52,6 +52,7 @@ public struct HStack<Content: View>: PrimitiveView {
     /// takes priority over `onClick`.
     public var onPointer: ((_ mods: Int32, _ button: Int32) -> Void)?
     public var onHover: ((Bool) -> Void)?
+    public var onWheel: ((Float, Float) -> Void)?
 
     public init(
         flexGrow: Float = 0,
@@ -64,6 +65,7 @@ public struct HStack<Content: View>: PrimitiveView {
         onClick: (() -> Void)? = nil,
         onPointer: ((_ mods: Int32, _ button: Int32) -> Void)? = nil,
         onHover: ((Bool) -> Void)? = nil,
+        onWheel: ((Float, Float) -> Void)? = nil,
         @ViewBuilder content: () -> Content
     ) {
         self.style = StackStyle(
@@ -73,6 +75,7 @@ public struct HStack<Content: View>: PrimitiveView {
         self.onClick = onClick
         self.onPointer = onPointer
         self.onHover = onHover
+        self.onWheel = onWheel
         self.content = content()
     }
 
@@ -94,7 +97,8 @@ public struct HStack<Content: View>: PrimitiveView {
             content: ViewGraph.mount(content),
             onClick: onClick,
             onPointer: onPointer,
-            onHover: onHover
+            onHover: onHover,
+            onWheel: onWheel
         )
     }
 
@@ -102,7 +106,8 @@ public struct HStack<Content: View>: PrimitiveView {
         if let stack = node as? StackNode, stack.direction == .row {
             stack.update(
                 style: style, contentView: content,
-                onClick: onClick, onPointer: onPointer, onHover: onHover
+                onClick: onClick, onPointer: onPointer, onHover: onHover,
+                onWheel: onWheel
             )
             return stack
         }
@@ -116,6 +121,7 @@ public struct VStack<Content: View>: PrimitiveView {
     public var onClick: (() -> Void)?
     public var onPointer: ((_ mods: Int32, _ button: Int32) -> Void)?
     public var onHover: ((Bool) -> Void)?
+    public var onWheel: ((Float, Float) -> Void)?
 
     public init(
         flexGrow: Float = 0,
@@ -128,6 +134,7 @@ public struct VStack<Content: View>: PrimitiveView {
         onClick: (() -> Void)? = nil,
         onPointer: ((_ mods: Int32, _ button: Int32) -> Void)? = nil,
         onHover: ((Bool) -> Void)? = nil,
+        onWheel: ((Float, Float) -> Void)? = nil,
         @ViewBuilder content: () -> Content
     ) {
         self.style = StackStyle(
@@ -137,6 +144,7 @@ public struct VStack<Content: View>: PrimitiveView {
         self.onClick = onClick
         self.onPointer = onPointer
         self.onHover = onHover
+        self.onWheel = onWheel
         self.content = content()
     }
 
@@ -158,7 +166,8 @@ public struct VStack<Content: View>: PrimitiveView {
             content: ViewGraph.mount(content),
             onClick: onClick,
             onPointer: onPointer,
-            onHover: onHover
+            onHover: onHover,
+            onWheel: onWheel
         )
     }
 
@@ -166,7 +175,8 @@ public struct VStack<Content: View>: PrimitiveView {
         if let stack = node as? StackNode, stack.direction == .column {
             stack.update(
                 style: style, contentView: content,
-                onClick: onClick, onPointer: onPointer, onHover: onHover
+                onClick: onClick, onPointer: onPointer, onHover: onHover,
+                onWheel: onWheel
             )
             return stack
         }

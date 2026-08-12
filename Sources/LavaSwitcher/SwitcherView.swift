@@ -12,31 +12,35 @@ struct SwitcherView: View {
         let current = model.selectedWindow
         let ready = model.ready
         let showCards = ready && !windows.isEmpty
-        let layout = CatalogLayout3D.focusedShelf(
-            spacing: 1.85,
-            focusDepth: 0.78,
-            focusLift: 0.14,
-            focusScale: 1.18,
-            fanAngle: .degrees(16)
+        let layout = BookshelfLayout3D.bookStacks(
+            stackOrigin: 2.15,
+            stackPitch: 0.18,
+            bookAngle: .degrees(64)
         )
+        let tallest = windows.reduce(Switcher.cardMaxEdge) { tallest, window in
+            max(tallest, Switcher.cardSize(for: model.preview(for: window)).h)
+        }
         let distance = layout.recommendedMinimumCameraDistance(
             itemCount: max(windows.count, 1),
-            itemWidth: Switcher.cardWidth,
-            itemHeight: Switcher.cardHeight,
-            clearance: 2.4
+            itemWidth: Switcher.cardMaxEdge,
+            itemHeight: tallest,
+            clearance: 1.25
         )
 
         // Stretch, not center: Scene3D is a Yoga leaf with no intrinsic size,
         // and a centered column leaves that leaf at 0×N — the projector then
         // refuses to emit, which is exactly "labels and no cards".
-        VStack(flexGrow: 1, padding: 36, spacing: 18) {
+        VStack(
+            flexGrow: 1, padding: 36, spacing: 18,
+            onWheel: { dx, dy in handleSwitcherWheel(dx: dx, dy: dy) }
+        ) {
             HeaderLine(text: headerLine(
                 empty: windows.isEmpty, ready: ready
             ))
             Scene3D(
                 camera: .perspective(
-                    position: [0, 0.42, distance],
-                    target: [0, -0.08, 0],
+                    position: [0, 0.55, distance],
+                    target: [0, tallest * 0.32, 0],
                     fieldOfView: .degrees(38)
                 ),
                 width: .pct(100),
@@ -121,14 +125,15 @@ private struct WindowCard3D: View3D {
     let count: Int
     let window: WindowInfo
     let selected: Int
-    let layout: CatalogLayout3D
+    let layout: BookshelfLayout3D
 
     func spatialElements() -> [SpatialElement] {
         let preview = model.preview(for: window)
+        let size = Switcher.cardSize(for: preview)
         let card = Box3D(
             id: window.surfaceId,
-            width: Switcher.cardWidth,
-            height: Switcher.cardHeight,
+            width: size.w,
+            height: size.h,
             depth: Switcher.cardDepth,
             color: preview == nil
                 ? (index == selected ? Theme.current.selected : cardTint(for: window))
@@ -148,19 +153,21 @@ private struct WindowCard3D: View3D {
     }
 
     private func applyChrome<V: View3D>(_ card: V) -> [SpatialElement] {
-        card
-            .shadow3D(radius: 18, offsetX: 8, offsetY: 14, opacity: 0.62)
+        let size = Switcher.cardSize(for: model.preview(for: window))
+        return card
+            .shadow3D(radius: 16, offsetX: 6, offsetY: 12, opacity: 0.55)
             .reflection3D(
-                planeY: -Switcher.cardHeight * 0.5 - 0.04,
-                opacity: 0.30,
-                fadeDistance: 1.55,
-                blurRadius: 1.35
+                planeY: -0.03,
+                opacity: 0.26,
+                fadeDistance: 1.45,
+                blurRadius: 1.2
             )
             .catalog3D(
                 index: index, itemCount: count, focusedIndex: selected,
+                itemHeight: size.h,
                 layout: layout
             )
-            .animation3D(.spring(response: 0.28, dampingFraction: 0.72))
+            .animation3D(.spring(response: 0.28, dampingFraction: 0.82))
             .onHover3D { inside in
                 if inside { model.select(surfaceId: window.surfaceId) }
             }

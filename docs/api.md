@@ -728,13 +728,22 @@ must be stable: retained transform animation and hit dispatch are keyed by id.
 Use `.animation3D(.spring(response:dampingFraction:))` for responsive hover
 motion. A shorter response reacts faster; a damping fraction below `1` adds
 overshoot, `1` is critically damped, and values above `1` settle without
-bouncing. `.smooth(duration:curve:)` remains available for time-based motion.
+bouncing. `.snappingPosition()` jumps world x and only eases lift, turn, and
+scale — the app switcher uses this so the focused card stays planted at the
+camera centre. `.smooth(duration:curve:)` remains available for time-based
+motion.
 
 `CatalogLayout3D.focusedShelf()` provides a depth-aware album/poster layout.
 Apply it with `.catalog3D(index:itemCount:focusedIndex:layout:)`; the focused
 item lifts and scales while its neighbors spread, recede, and fan toward it.
 `recommendedMinimumCameraDistance(...)` returns a conservative orbit radius
 from the shelf and item dimensions, keeping the camera outside the catalog.
+
+`BookshelfLayout3D.bookStacks()` is the other catalog: two packed stacks of
+books around a face-on cover. Neighbours stand at a steep yaw so a sliver of
+the front stays readable; the focused card turns to the camera. Pass
+`itemHeight` so cards of different aspect ratios sit on the same shelf plane
+rather than sharing a centre. The app switcher uses this layout.
 
 `.shadow3D(...)` projects the transformed card silhouette into a shared
 offscreen mask and Gaussian-blurs it. Radius and offset are expressed in screen
