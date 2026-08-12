@@ -39,6 +39,7 @@ var products: [Product] = [
     .executable(name: "HelloWorld", targets: ["HelloWorld"]),
     .executable(name: "TraceLoom", targets: ["TraceLoomApp"]),
     .executable(name: "Spotify", targets: ["SpotifyApp"]),
+    .executable(name: "LavaWeather", targets: ["WeatherApp"]),
     .executable(name: "LavaTerm", targets: ["LavaTermApp"]),
     .executable(name: "LavaBench", targets: ["LavaBench"]),
     .executable(name: "TwoWindows", targets: ["TwoWindows"]),
@@ -55,6 +56,7 @@ var products: [Product] = [
     .library(name: "TraceLoomCore", targets: ["TraceLoomCore"]),
     .library(name: "SpotifyCore", targets: ["SpotifyCore"]),
     .library(name: "LavaTermCore", targets: ["LavaTermCore"]),
+    .library(name: "WeatherCore", targets: ["WeatherCore"]),
     .library(name: "FBDModel", targets: ["FBDModel"]),
 ]
 
@@ -80,6 +82,7 @@ var targets: [Target] = [
     .target(name: "TraceLoomCore"),
     .target(name: "SpotifyCore"),
     .target(name: "LavaTermCore"),
+    .target(name: "WeatherCore"),
     .target(name: "FBDModel"),
 
     .executableTarget(
@@ -206,6 +209,12 @@ var targets: [Target] = [
         ]
     ),
     .executableTarget(
+        name: "WeatherApp",
+        dependencies: ["LavaUI", "WeatherCore"]
+            + (haveNprpc ? [Target.Dependency("LavaClient")] : []),
+        swiftSettings: interopCxx
+    ),
+    .executableTarget(
         name: "LavaBench",
         dependencies: ["LavaUI", "LavaText", "TraceLoomCore"],
         swiftSettings: interopCxx
@@ -221,6 +230,7 @@ var targets: [Target] = [
         swiftSettings: interopCxx
     ),
     .testTarget(name: "LavaTermCoreTests", dependencies: ["LavaTermCore"]),
+    .testTarget(name: "WeatherCoreTests", dependencies: ["WeatherCore"]),
 ]
 
 if haveNprpc {
