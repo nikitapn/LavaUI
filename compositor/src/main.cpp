@@ -327,6 +327,18 @@ struct XwaylandSurface : FramedWindow {
 ///
 /// Answered when asked *and* when the decoration first appears, because a
 /// client that never sends `set_mode` still needs telling.
+///
+/// The house style is server side, but only where the client has no opinion.
+/// A client that explicitly asks for client side is asking because it draws a
+/// header it cannot take apart — Chromium's tab strip is its title bar, and
+/// Electron applications are the same — and answering "server side" at one of
+/// those does not make it stop. It makes it draw its header *under* ours, so
+/// the window ends up with two rows of window buttons and the user's title bar
+/// is the one that does nothing. Overriding a stated preference cannot win
+/// that argument; it can only make the result worse than either answer alone.
+///
+/// So: asked for client side, it gets client side and no frame. Anything else
+/// — server side, or no preference at all — gets the compositor's frame.
 struct ToplevelDecoration {
   wlr_xdg_toplevel_decoration_v1 *wlr;
   Listener<ToplevelDecoration> request_mode;
@@ -336,6 +348,7 @@ struct ToplevelDecoration {
 
   explicit ToplevelDecoration(wlr_xdg_toplevel_decoration_v1 *decoration)
       : wlr(decoration) {
+    wlr->data = this;
     request_mode.attach(&wlr->events.request_mode, this, on_request_mode);
     // A client creates the decoration object *before* its first commit, so at
     // this point the surface cannot be configured at all. Waiting for a commit
@@ -352,14 +365,23 @@ struct ToplevelDecoration {
     destroy.detach();
   }
 
+  /// What we told this client, once we have told it. Read back by
+  /// `Server::serverDecorated` when the window maps and the frame is built,
+  /// so the answer and the frame cannot disagree.
+  bool serverSide = true;
+
   void apply() {
     // Configuring a surface that has not had its first commit is a protocol
     // error.
     if (answered || !wlr->toplevel->base->initialized) return;
+    serverSide = wlr->requested_mode !=
+                 WLR_XDG_TOPLEVEL_DECORATION_V1_MODE_CLIENT_SIDE;
     wlr_xdg_toplevel_decoration_v1_set_mode(
-        wlr, WLR_XDG_TOPLEVEL_DECORATION_V1_MODE_SERVER_SIDE);
+        wlr, serverSide ? WLR_XDG_TOPLEVEL_DECORATION_V1_MODE_SERVER_SIDE
+                        : WLR_XDG_TOPLEVEL_DECORATION_V1_MODE_CLIENT_SIDE);
     answered = true;
-    wlr_log(WLR_INFO, "decoration: server side for '%s'",
+    wlr_log(WLR_INFO, "decoration: %s for '%s'",
+            serverSide ? "server side" : "client side (asked for it)",
             wlr->toplevel->app_id ? wlr->toplevel->app_id : "(none)");
   }
 
@@ -592,6 +614,7 @@ struct Server {
 
   Listener<Server> new_output;
   Listener<Server> new_toplevel;
+  Listener<Server> new_popup;
   Listener<Server> new_decoration;
   Listener<Server> new_xwayland_surface;
   Listener<Server> xwayland_ready;
@@ -608,6 +631,10 @@ struct Server {
 
   static void on_new_output(wl_listener *listener, void *data);
   static void on_new_toplevel(wl_listener *listener, void *data);
+  static void on_new_popup(wl_listener *listener, void *data);
+  /// The box a popup may be placed in, in the coordinates its positioner
+  /// uses — the work area translated so the parent window's origin is 0,0.
+  wlr_box popupBounds(const wlr_xdg_popup &popup) const;
   static void on_new_decoration(wl_listener *listener, void *data);
   static void on_new_xwayland_surface(wl_listener *listener, void *data);
   static void on_xwayland_ready(wl_listener *listener, void *data);
@@ -3181,6 +3208,47 @@ void Output::on_destroy(wl_listener *listener, void *) {
   delete owner_of<Output>(listener);
 }
 
+// ─── Popups ────────────────────────────────────────────────────────────────
+//
+// Menus, dropdowns, tooltips, the whole of a browser's right-click. An
+// `xdg_popup` is a surface with a *parent* and a positioner describing where
+// it wants to sit relative to it, and until this existed the compositor
+// ignored the signal entirely: nothing was ever put in the scene, so no
+// application under it had a context menu at all. Not a broken menu — no menu.
+//
+// Almost all of the work is wlroots': `wlr_scene_xdg_surface_create` builds
+// the subtree and keeps it positioned against the parent, which is why the
+// parent's scene tree is stashed on `xdg_surface::data` when a toplevel is
+// created. Two things are ours:
+//
+//   * the first configure, without which the popup never maps. wlroots
+//     signals `initial_commit` and expects a `schedule_configure` back;
+//   * unconstraining. A positioner is written in the client's coordinates and
+//     assumes infinite room, so a menu opened near the bottom of the screen
+//     runs off it unless the compositor says how much room there really is —
+//     which only the compositor knows, since it owns the work area and the
+//     window's position within it.
+struct Popup {
+  wlr_xdg_popup *wlr = nullptr;
+  Server *server = nullptr;
+  Listener<Popup> commit;
+  Listener<Popup> destroy;
+
+  Popup(Server *server, wlr_xdg_popup *popup) : wlr(popup), server(server) {
+    commit.attach(&popup->base->surface->events.commit, this, on_commit);
+    destroy.attach(&popup->events.destroy, this, on_destroy);
+  }
+  ~Popup() {
+    commit.detach();
+    destroy.detach();
+  }
+
+  static void on_commit(wl_listener *listener, void *);
+  static void on_destroy(wl_listener *listener, void *) {
+    delete owner_of<Popup>(listener);
+  }
+};
+
 // ─── Toplevel ──────────────────────────────────────────────────────────────
 
 Toplevel::Toplevel(Server *server, wlr_xdg_toplevel *toplevel)
@@ -4020,6 +4088,50 @@ void Server::on_new_toplevel(wl_listener *listener, void *data) {
   new Toplevel(server, static_cast<wlr_xdg_toplevel *>(data));
 }
 
+void Server::on_new_popup(wl_listener *listener, void *data) {
+  auto *server = owner_of<Server>(listener);
+  auto *popup = static_cast<wlr_xdg_popup *>(data);
+
+  // The parent may be another popup — a submenu — which is why this asks the
+  // surface rather than assuming a toplevel. Either way the tree it wants is
+  // the one stashed when that surface was created, so a submenu nests inside
+  // its menu and the whole stack moves with the window.
+  wlr_xdg_surface *parent =
+      wlr_xdg_surface_try_from_wlr_surface(popup->parent);
+  if (parent == nullptr || parent->data == nullptr) return;
+  auto *parentTree = static_cast<wlr_scene_tree *>(parent->data);
+
+  wlr_scene_tree *tree = wlr_scene_xdg_surface_create(parentTree, popup->base);
+  if (tree == nullptr) return;
+  popup->base->data = tree;
+
+  // Self-owned, like the other shell objects here: it goes when the client
+  // closes the menu.
+  new Popup(server, popup);
+  wlr_log(WLR_DEBUG, "popup: %dx%d",
+          popup->scheduled.geometry.width, popup->scheduled.geometry.height);
+}
+
+void Popup::on_commit(wl_listener *listener, void *) {
+  auto *self = owner_of<Popup>(listener);
+  if (!self->wlr->base->initial_commit) return;
+
+  // Where the menu may go, in the popup's own frame of reference: the work
+  // area, moved into the coordinates its positioner is written in. Without
+  // this a menu near an edge is placed past it and the client never finds
+  // out — the protocol makes unconstraining the compositor's job precisely
+  // because the client cannot see the screen.
+  if (self->server != nullptr && self->server->surfaces != nullptr) {
+    wlr_box box = self->server->popupBounds(*self->wlr);
+    if (box.width > 0 && box.height > 0) {
+      wlr_xdg_popup_unconstrain_from_box(self->wlr, &box);
+    }
+  }
+  // Answers the client's first commit. A popup that is never configured never
+  // maps, which looks exactly like a menu that does not open.
+  wlr_xdg_surface_schedule_configure(self->wlr->base);
+}
+
 void Server::on_new_decoration(wl_listener *, void *data) {
   // Self-owned: it deletes itself when the client drops the decoration.
   new ToplevelDecoration(
@@ -4093,6 +4205,45 @@ wlr_surface *Server::surface_at(double lx, double ly, double *sx, double *sy,
     }
   }
   return scene_surface->surface;
+}
+
+wlr_box Server::popupBounds(const wlr_xdg_popup &popup) const {
+  wlr_box box{};
+  if (surfaces == nullptr) return box;
+
+  // The *root toplevel's* coordinate system, which is what
+  // `wlr_xdg_popup_unconstrain_from_box` documents and not what the immediate
+  // parent gives: a submenu hangs off another popup, and measuring from that
+  // one would offset the screen by however far the first menu already is from
+  // the window. The result is a submenu unconstrained against the wrong
+  // rectangle — right for the first level, drifting further off-screen with
+  // every level after it.
+  const wlr_surface *surface = popup.parent;
+  const wlr_xdg_surface *root = nullptr;
+  while (surface != nullptr) {
+    const wlr_xdg_surface *xdg =
+        wlr_xdg_surface_try_from_wlr_surface(const_cast<wlr_surface *>(surface));
+    if (xdg == nullptr) break;
+    if (xdg->role == WLR_XDG_SURFACE_ROLE_TOPLEVEL) {
+      root = xdg;
+      break;
+    }
+    if (xdg->role != WLR_XDG_SURFACE_ROLE_POPUP || xdg->popup == nullptr) break;
+    surface = xdg->popup->parent;
+  }
+  if (root == nullptr || root->data == nullptr) return box;
+
+  int lx = 0;
+  int ly = 0;
+  auto *tree = static_cast<wlr_scene_tree *>(root->data);
+  if (!wlr_scene_node_coords(&tree->node, &lx, &ly)) return box;
+
+  const SurfaceRegistry::WorkArea area = surfaces->workArea();
+  box.x = area.x - lx;
+  box.y = area.y - ly;
+  box.width = static_cast<int>(area.width);
+  box.height = static_cast<int>(area.height);
+  return box;
 }
 
 void Server::focus(FramedWindow *window) {
@@ -4477,11 +4628,16 @@ bool Server::serverDecorated(wlr_xdg_toplevel *toplevel) const {
   if (decorations == nullptr || toplevel == nullptr) return true;
   wlr_xdg_toplevel_decoration_v1 *decoration = nullptr;
   wl_list_for_each(decoration, &decorations->decorations, link) {
-    // Existence is the whole answer: `ToplevelDecoration::apply` replies
-    // "server side" to every client that creates one, so a client holding a
-    // decoration object has been told we are drawing its frame.
-    if (decoration->toplevel == toplevel) return true;
+    if (decoration->toplevel != toplevel) continue;
+    // What we actually told it, not merely that it asked. A client that
+    // requested client side has been answered client side and is drawing its
+    // own header; framing it anyway is how a window gets two title bars.
+    const auto *ours = static_cast<const ToplevelDecoration *>(decoration->data);
+    return ours == nullptr || ours->serverSide;
   }
+  // Never bound the protocol at all. Toolkits that do this — GTK — draw their
+  // own and have no way to be told otherwise, so a frame here would be the
+  // second one.
   return false;
 }
 
@@ -5006,6 +5162,8 @@ int main() {
   server.xdg_shell = wlr_xdg_shell_create(server.display, 3);
   server.new_toplevel.attach(&server.xdg_shell->events.new_toplevel, &server,
                              Server::on_new_toplevel);
+  server.new_popup.attach(&server.xdg_shell->events.new_popup, &server,
+                          Server::on_new_popup);
 
   // KDE AppMenu: foreign Wayland clients export dbusmenu coordinates here.
   // Before any client can bind, and before surfaces exist so the change
