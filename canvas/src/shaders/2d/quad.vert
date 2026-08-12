@@ -11,6 +11,11 @@ layout(location = 3) in float inRadius;    // SDF corner radius
 layout(location = 4) in vec4  inColor;     // fetched from RGBA8 via R8G8B8A8_UNORM
 layout(location = 5) in uint  inKind;      // 0 = sdf shape, 1 = glyph
 layout(location = 6) in float inAux;       // kind-specific: shadow blur
+// Texture coords for kinds that also need `inLocal` for SDF space. Glyphs and
+// plain images put their UV in `inLocal` and leave this at zero; a frosted
+// backdrop cannot, because it is a textured quad *and* a rounded shape, and
+// those are the only two things `inLocal` can mean.
+layout(location = 7) in vec2  inUv;
 
 // std140: vec2@0, vec2@8, float@16, float@20 → 24 bytes
 layout(push_constant) uniform Push {
@@ -26,8 +31,10 @@ layout(location = 2) out float      vRadius;
 layout(location = 3) out vec4       vColor;
 layout(location = 4) flat out uint  vKind;
 layout(location = 5) flat out float vAux;
+layout(location = 6) out vec2       vUv;
 
 void main() {
+  vUv       = inUv;
   vLocal    = inLocal;
   vHalfSize = inHalfSize;
   vRadius   = inRadius;

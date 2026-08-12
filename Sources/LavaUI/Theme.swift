@@ -134,6 +134,36 @@ public struct Theme: Equatable, Sendable {
         border: Color(r: 0.75, g: 0.76, b: 0.80)
     )
 
+    /// Deep indigo with a cyan/magenta pair, for surfaces that sit over a
+    /// desktop rather than filling a window.
+    ///
+    /// The greys exist to disappear behind content, which is right for an
+    /// editor and wrong for a launcher: there the surface is most of what is
+    /// on screen, and neutral grey over a photograph reads as a smudge rather
+    /// than as a thing. This is still dark and still low-chroma enough to put
+    /// a wall of app icons on, but it has a hue, so what is behind it is
+    /// clearly behind *something*.
+    ///
+    /// `selected` and `accent` are far apart on the wheel on purpose — the two
+    /// mean different things (where you are, versus what is important) and a
+    /// palette that makes them cousins loses that distinction exactly when a
+    /// keyboard-driven grid needs it most.
+    public static let nebula = Theme(
+        textPrimary: Color(r: 0.94, g: 0.94, b: 0.98),
+        textSecondary: Color(r: 0.68, g: 0.66, b: 0.82),
+        textMuted: Color(r: 0.58, g: 0.56, b: 0.74),
+        textDim: Color(r: 0.50, g: 0.48, b: 0.66),
+        accent: Color(r: 0.36, g: 0.86, b: 0.92),
+        selected: Color(r: 1.00, g: 0.45, b: 0.72),
+        background: Color(r: 0.06, g: 0.05, b: 0.12),
+        panel: Color(r: 0.11, g: 0.10, b: 0.20),
+        inset: Color(r: 0.08, g: 0.07, b: 0.16),
+        canvas: Color(r: 0.09, g: 0.08, b: 0.18),
+        hover: Color(r: 0.22, g: 0.20, b: 0.38),
+        selectionFill: Color(r: 0.42, g: 0.24, b: 0.62),
+        border: Color(r: 0.32, g: 0.28, b: 0.52)
+    )
+
     /// App-wide default theme. `Environment.current.theme` falls through to
     /// this wherever no `.theme(_:)` override is in scope, so setting it still
     /// reaches everything that never opted out — but a subtree wearing

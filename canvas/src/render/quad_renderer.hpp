@@ -59,6 +59,11 @@ class QuadRenderer {
     Mask = 4,
     /// Rounded rect with an outward fade. `aux` carries the blur distance.
     Shadow = 5,
+    /// Blur result sampled through a rounded-rect mask: `uv` selects the
+    /// region of the blur texture, `local`/`halfSize`/`radius` describe the
+    /// shape it is cut to. The one kind that needs both, which is what the
+    /// separate `uv` attribute is for.
+    BlurComposite = 6,
   };
 
   // Must match the vertex input layout in quad.vert.
@@ -80,8 +85,16 @@ class QuadRenderer {
     /// by whoever adds the next kind. A draw list of two thousand quads pays
     /// 32 KB for it.
     float    aux;
+    /// Texture coords for a kind that needs `local` for something else.
+    ///
+    /// Only `BlurComposite` reads it: a shape that is both textured and
+    /// rounded has two things to say and `local` can only carry one. Glyphs
+    /// and images keep their UV in `local` rather than moving here, because
+    /// they are the overwhelming majority of quads and the migration would buy
+    /// them nothing.
+    vec2     uv;
   };
-  static_assert(sizeof(Vertex) == 40, "QuadVertex must stay tightly packed");
+  static_assert(sizeof(Vertex) == 48, "QuadVertex must stay tightly packed");
 
   explicit QuadRenderer(RenderDevice &device) : device_{device} {}
 
@@ -191,7 +204,15 @@ class QuadRenderer {
   /// `setBlurResultView`). `uv0`/`uv1` select the region of the full-frame blur
   /// texture. Serves both blur kinds: the backdrop composite is opaque because
   /// its source was, the content composite carries the subtree's own alpha.
+  ///
+  /// `cornerRadius` rounds the composite to match the panel that will be drawn
+  /// over it. It has to be stated here rather than left to the fill on top,
+  /// because the frost is *behind* that fill: a square composite under a
+  /// rounded panel shows four bright tabs the panel never covers. Zero keeps
+  /// the plain rectangular quad, which is what a content blur wants — that one
+  /// composites a subtree's own silhouette and has no panel to match.
   void pushBlurResultImage(vec2 topLeft, vec2 size, vec2 uv0, vec2 uv1,
+                           float cornerRadius = 0.f,
                            uint32_t rgba = 0xffffffffu);
 
   void end();
@@ -275,6 +296,14 @@ class QuadRenderer {
   void createSpatialPipeline(VkRenderPass renderPass, VkSampleCountFlagBits samples,
                              vk::Handle<VkPipeline> &out, bool depthEnabled);
   void setupDescriptors();
+  /// Adds another chunk of descriptor sets to `fr`, from a fresh pool.
+  ///
+  /// Host-side only — creating a pool and allocating sets touches no command
+  /// buffer — so it is safe from inside `drawSegment`, which is where the need
+  /// is discovered. The sets are new, so nothing in flight can be reading them.
+  /// False if the device refused, which leaves the old behaviour (rebind the
+  /// last set) as the fallback rather than a crash.
+  bool growDescriptorSets(FrameResources &fr);
   void createWhiteTexture();
   void ensureBufferCapacity(size_t vertexCount, size_t indexCount);
   void destroyFrameBuffers(FrameResources &fr);
@@ -283,9 +312,11 @@ class QuadRenderer {
   void ensureBatchTexture(VkImageView view);
 
   /// Appends 4 vertices + 6 indices. All four share the shape parameters; only
-  /// `pos`/`local` differ per corner.
+  /// `pos`/`local`/`uv` differ per corner. `uvs` is null for every kind that
+  /// keeps its texture coords in `local`.
   void appendQuad(const vec2 corners[4], const vec2 locals[4], vec2 halfSize,
-                  float radius, uint32_t rgba, Kind kind, float aux = 0.f);
+                  float radius, uint32_t rgba, Kind kind, float aux = 0.f,
+                  const vec2 *uvs = nullptr);
 
   FrameResources &activeFrame();
 
@@ -306,10 +337,30 @@ class QuadRenderer {
   vk::Handle<VkPipeline>            spatialPipelineScene_;
   vk::Handle<VkPipelineLayout>      pipelineLayout_;
   vk::Handle<VkDescriptorPool>      descriptorPool_;
+  /// Pools allocated after the first ran out, in the order they were made.
+  ///
+  /// A frame needs one descriptor set per *texture change*, and batches are
+  /// emitted in tree order with no sorting, so a grid whose cards each pair an
+  /// atlased icon with a text label costs two per card and the total is a
+  /// function of how much content is on screen. A fixed ceiling therefore is
+  /// not a budget, it is a scroll depth — which is exactly how it presented:
+  /// correct until the list got long enough, then the wrong texture.
+  std::vector<vk::Handle<VkDescriptorPool>> extraDescriptorPools_;
   vk::Handle<VkDescriptorSetLayout> descriptorSetLayout_;
 
   /// Sets per texture bind within one frame slot (never rewritten while bound).
-  static constexpr uint32_t kMaxDescriptorSetsPerFrame = 64;
+  ///
+  /// The starting allocation, not a ceiling: `growDescriptorSets` adds another
+  /// chunk of this size whenever a frame needs more. Enough that an ordinary
+  /// window never allocates twice, small enough that every window does not pay
+  /// for the worst case.
+  static constexpr uint32_t kDescriptorSetsPerChunk = 64;
+  /// How many chunks one frame slot may hold before the renderer stops asking.
+  ///
+  /// A stop is needed somewhere: past a few thousand texture changes the frame
+  /// is pathological — an unatlased image per row, most likely — and quietly
+  /// allocating against it hides the problem instead of reporting it.
+  static constexpr uint32_t kMaxDescriptorChunks = 32;
   static constexpr uint32_t kMaxFramesInFlight = 2;
   FrameResources frames_[kMaxFramesInFlight]{};
   uint32_t activeFrameSlot_ = 0;

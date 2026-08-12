@@ -34,6 +34,12 @@ enum class DrawCommandKind : uint32_t {
   /// Backdrop blur barrier. Flushes UI drawn so far, captures the main target
   /// in x,y,w,h, blurs it, and composites the result. Children/chrome after
   /// this draw sharp on top. `aux` = blur radius in pixels (clamped in engine).
+  ///
+  /// `param` = corner radius of the surface the frost sits under, in whole
+  /// pixels; 0 is square. The composite has to be told, because it is drawn
+  /// *under* the panel's own fill and so is the one part of a rounded glass
+  /// panel that the fill cannot cover — square corners on it show as bright
+  /// tabs poking out from behind the shape.
   BeginBackdropBlur = 8,
   /// Closes a blur scope (bookkeeping / future nesting). No GPU work yet.
   EndBackdropBlur = 9,

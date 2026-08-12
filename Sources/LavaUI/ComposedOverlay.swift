@@ -54,17 +54,29 @@ public struct ComposedOverlayView<Content: View, OverlayContent: View>: Primitiv
     public var overlayContent: OverlayContent
     public var anchor: OverlayAnchor
     public var inset: Float
+    /// Panel styling for the floating surface, or nil to draw no surface at
+    /// all — a bare badge or button that is only its own content.
+    ///
+    /// Optional here and not in `OverlayView` because the two have different
+    /// defaults for good reason. A popup is a *surface* by definition: a menu
+    /// with no plate under it is unreadable over whatever it covers. Composed
+    /// content is usually already a styled thing of its own, and giving it a
+    /// theme-coloured plate it never asked for would put a rectangle behind
+    /// every floating button in the codebase.
+    public var style: OverlayStyle?
 
     public init(
         content: Content,
         overlayContent: OverlayContent,
         anchor: OverlayAnchor,
-        inset: Float
+        inset: Float,
+        style: OverlayStyle? = nil
     ) {
         self.content = content
         self.overlayContent = overlayContent
         self.anchor = anchor
         self.inset = inset
+        self.style = style
     }
 
     public var dumpDetail: String { "overlay \(anchor)" }
@@ -81,12 +93,14 @@ public struct ComposedOverlayView<Content: View, OverlayContent: View>: Primitiv
 
     public func mountPrimitive() -> any AnyViewNode {
         let overlay = StyleBoxNode(content: ViewGraph.mount(overlayContent))
+        let plate = StyleBoxNode(content: overlay)
         let node = ComposedOverlayNode(
             content: ViewGraph.mount(content),
             overlay: overlay,
-            alignmentBox: StyleBoxNode(content: overlay)
+            plateBox: plate,
+            alignmentBox: StyleBoxNode(content: plate)
         )
-        node.apply(anchor: anchor, inset: inset)
+        node.apply(anchor: anchor, inset: inset, style: style)
         return node
     }
 
@@ -96,15 +110,31 @@ public struct ComposedOverlayView<Content: View, OverlayContent: View>: Primitiv
         box.overlayBox.updateContent(
             ViewGraph.reconcile(box.overlayBox.contentNode, with: overlayContent)
         )
-        box.apply(anchor: anchor, inset: inset)
+        box.apply(anchor: anchor, inset: inset, style: style)
         return box
     }
 }
 
 final class ComposedOverlayNode: YogaBoxNode {
     private(set) var contentNode: any AnyViewNode
-    /// Sizes to the overlay content.
+    /// Sizes to the overlay content, and carries the panel's own fill.
     let overlayBox: StyleBoxNode
+    /// Draws the outline, one pixel proud on every side, and carries the
+    /// backdrop-blur scope.
+    ///
+    /// A stroke the SDF pipeline cannot draw, done as a filled box a pixel
+    /// larger with the panel's own fill covering its middle — the same trick
+    /// `emitTree` plays for a detached overlay, as a node rather than as a
+    /// hand-emitted rect, because a composed overlay has no post-walk hook to
+    /// emit anything from.
+    ///
+    /// The blur belongs here rather than on `overlayBox` for a reason worth
+    /// stating: a scope frosts what was painted *before* it opens, so opening
+    /// it one box out puts both the outline and the panel fill inside the
+    /// scope, and they stay sharp on top of the frost. A detached overlay
+    /// cannot do this — its outline is emitted before the hoisted scope — which
+    /// is why that path drops the border for glass panels and this one keeps it.
+    let plateBox: StyleBoxNode
     /// Absolute, pinned to all four edges so it exactly covers the base box,
     /// and holds `overlayBox`.
     ///
@@ -116,9 +146,13 @@ final class ComposedOverlayNode: YogaBoxNode {
     let alignmentBox: StyleBoxNode
     private var insertedLeaves: [any AnyViewNode] = []
 
-    init(content: any AnyViewNode, overlay: StyleBoxNode, alignmentBox: StyleBoxNode) {
+    init(
+        content: any AnyViewNode, overlay: StyleBoxNode,
+        plateBox: StyleBoxNode, alignmentBox: StyleBoxNode
+    ) {
         self.contentNode = content
         self.overlayBox = overlay
+        self.plateBox = plateBox
         self.alignmentBox = alignmentBox
         super.init(label: "Overlay")
         YGNodeStyleSetFlexDirection(yogaStorage, YGFlexDirectionColumn)
@@ -146,7 +180,7 @@ final class ComposedOverlayNode: YogaBoxNode {
         flexShrink = leaves.map(\.effectiveFlexShrink).min()
     }
 
-    func apply(anchor: OverlayAnchor, inset: Float) {
+    func apply(anchor: OverlayAnchor, inset: Float, style: OverlayStyle?) {
         guard let container = alignmentBox.yoga else { return }
 
         // Out of flow, and stretched across the base box: defining both edges
@@ -173,14 +207,34 @@ final class ComposedOverlayNode: YogaBoxNode {
         YGNodeStyleSetJustifyContent(container, anchor.justify)
         YGNodeStyleSetAlignItems(container, anchor.align)
 
+        // The outline, or nothing at all: a nil fill paints no rect, so an
+        // unstyled overlay pays one Yoga node and no draw command for a box
+        // that is exactly its content's size. Kept in the chain either way
+        // rather than inserted on demand — a node appearing and vanishing with
+        // a style is a reconcile identity problem, and this is one box.
+        let border = style?.border
+        plateBox.fillColor = border
+        plateBox.cornerRadius = border != nil ? (style?.cornerRadius ?? 0) + 1 : 0
+        plateBox.padding = border != nil ? .all(1) : .zero
+        plateBox.backdropBlurRadius = style?.backdropBlurRadius
+
         // A floating surface sizes to its content. `StyleBoxNode.inheritFlex`
         // copies flex from what it wraps, so this has to be cleared after every
-        // update or a wrapped `Spacer` would try to grow inside nothing.
-        overlayBox.flexGrow = 0
-        overlayBox.flexShrink = 0
-        overlayBox.width = .auto
-        overlayBox.height = .auto
+        // update or a wrapped `Spacer` would try to grow inside nothing. Both
+        // boxes: only `overlayBox` gets an `updateContent`, but `plateBox`
+        // inherited its flex from that box back when it was mounted.
+        for box in [plateBox, overlayBox] {
+            box.flexGrow = 0
+            box.flexShrink = 0
+            box.width = .auto
+            box.height = .auto
+        }
+        overlayBox.fillColor = style?.background
+        overlayBox.cornerRadius = style?.cornerRadius ?? 0
+        overlayBox.padding = .all(style?.padding ?? 0)
+        overlayBox.minWidth = style?.minWidth ?? 0
         overlayBox.applyStyle()
+        plateBox.applyStyle()
     }
 
     private func relink() {
@@ -220,16 +274,25 @@ extension View {
     /// button, a badge, or an in-canvas control that is simply always there.
     ///
     /// `inset` insets from the anchored edges; a centred axis ignores it.
+    ///
+    /// `style` draws a panel under the content — fill, outline, corner radius,
+    /// padding and frosted backdrop, the same `OverlayStyle` the presented
+    /// overlay takes. Omitted, the content floats bare, which is what a badge
+    /// or an already-styled button wants; the ordinary modifiers still work on
+    /// whatever is inside the closure, so this is convenience rather than the
+    /// only way to paint one.
     public func overlay<OverlayContent: View>(
         alignment: OverlayAnchor,
         inset: Float = 0,
+        style: OverlayStyle? = nil,
         @ViewBuilder content: () -> OverlayContent
     ) -> ComposedOverlayView<Self, OverlayContent> {
         ComposedOverlayView(
             content: self,
             overlayContent: content(),
             anchor: alignment,
-            inset: inset
+            inset: inset,
+            style: style
         )
     }
 }

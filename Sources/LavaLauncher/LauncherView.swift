@@ -57,10 +57,54 @@ enum LauncherLayout {
 
 struct LauncherView: View {
     var body: some View {
-        VStack(flexGrow: 1, padding: Grid.padding, spacing: 12) {
-            SearchField()
-            Ruler()
-            Results()
+        // Three layers, outside in: an undimmed desktop ring, the card panel,
+        // and the search pill floating over it.
+        //
+        // The ring is the window's own inset — `WindowBackdrop.none` means the
+        // surface is clear, so whatever the padding does not cover is desktop.
+        // The panel is opaque enough to read a wall of icons and labels
+        // against, which is the one thing it is for: it cannot frost the
+        // desktop behind it (see below), so what legibility it has, it has to
+        // paint.
+        let scrim = Theme.current.background.opacity(0.80)
+
+        VStack(flexGrow: 1, padding: Grid.screenInset) {
+            VStack(flexGrow: 1, padding: 0) {
+                ScrollView {
+                    VStack(padding: Grid.padding, spacing: 12) {
+                        // Keeps the first row clear of the floating search;
+                        // when the user scrolls, cards pass under the pill.
+                        HStack(height: .pt(Grid.searchClearance), padding: 0) {}
+                        Ruler()
+                        Results()
+                    }
+                }
+                .flexGrow(1)
+            }
+            .background(scrim)
+            .cornerRadius(Grid.panelRadius)
+            // On the panel, not on the padded box around it, so the gap is
+            // measured from the panel's own edge — anchored outside, the pill
+            // floats in the desktop ring and straddles the border.
+            //
+            // The style hugs the pill rather than a row containing it: this
+            // panel *is* the glass, so it has to be exactly the shape of the
+            // thing being frosted. `padding: 0` keeps it to the pill's own
+            // 480×50, and the radius is half the height, which is what rounds
+            // the ends into a capsule rather than merely softening them.
+            .overlay(
+                alignment: .top,
+                inset: Grid.searchGap,
+                style: OverlayStyle(
+                    background: Theme.current.panel.opacity(0.55),
+                    border: Theme.current.accent.opacity(0.35),
+                    cornerRadius: Grid.searchHeight * 0.5,
+                    padding: 0,
+                    backdropBlurRadius: 12
+                )
+            ) {
+                SearchField()
+            }
         }
     }
 }
@@ -70,41 +114,35 @@ struct LauncherView: View {
 /// Focused because that is the entire interaction: the window opens and you
 /// type. A launcher that needed a click in the box first would be asking the
 /// user to aim at something before saying what they want.
+///
+/// The pill and nothing else.
+///
+/// No surrounding row: the panel drawn by `overlay(alignment:style:)` is sized
+/// to whatever this returns, and a full-width row would make the glass the
+/// full width of the screen. Centring is the overlay anchor's job, not a pair
+/// of `Spacer`s here — which is the same reason there is no plate: this view
+/// is the *contents* of a surface, not a surface.
 private struct SearchField: View {
     var body: some View {
-        let surface = Theme.current.inset
-        let outline = Theme.current.textSecondary.opacity(0.78)
-
-        // The full-width row centres the bounded field on the same axis as
-        // LazyVGrid. Two nested fills make a crisp rounded outline without a
-        // separate stroke primitive.
-        HStack(width: .pct(100), alignment: .center) {
-            Spacer()
-            HStack(
-                width: .pt(Grid.searchWidth), height: .pt(50), padding: 2,
-                alignment: .center
-            ) {
-                HStack(
-                    flexGrow: 1, height: .pt(46), padding: 10,
-                    alignment: .center, spacing: 8
-                ) {
-                    Magnifier(color: Theme.current.textSecondary, surface: surface)
-                    TextField(
-                        text: Binding(model, \.query),
-                        placeholder: "What do you want to launch?",
-                        autoFocus: true,
-                        focusRing: FocusRingStyle.none,
-                        onSubmit: { model.launchSelected() }
-                    )
-                    .flexGrow(1)
-                    .frame(height: .pct(100))
-                }
-                .background(surface)
-                .cornerRadius(23)
-            }
-            .background(outline)
-            .cornerRadius(25)
-            Spacer()
+        HStack(
+            width: .pt(Grid.searchWidth), height: .pt(Grid.searchHeight),
+            padding: 12, alignment: .center, spacing: 8
+        ) {
+            Magnifier(
+                color: Theme.current.textSecondary, surface: Theme.current.inset
+            )
+            TextField(
+                text: Binding(model, \.query),
+                placeholder: "What do you want to launch?",
+                autoFocus: true,
+                focusRing: FocusRingStyle.none,
+                onSubmit: { model.launchSelected() }
+            )
+            .flexGrow(1)
+            .frame(height: .pct(100))
+            // The field's own surface would be a second plate inside the
+            // glass, and there is only one surface here.
+            .background(.clear)
         }
     }
 }
@@ -153,34 +191,31 @@ private struct Ruler: View {
     }
 }
 
-/// The wall of applications.
+/// The wall of applications (inside the outer scroll — no nested ScrollView).
 private struct Results: View {
     @ViewBuilder
     var body: some View {
         let entries = model.matches
         if entries.isEmpty {
-            VStack(flexGrow: 1, padding: 40, alignment: .center, spacing: 8) {
+            VStack(padding: 40, alignment: .center, spacing: 8) {
                 Text("Nothing matches “\(model.query)”.",
                      color: Theme.current.textDim)
-                Spacer()
             }
         } else {
-            ScrollView {
-                // Centred: the cards are the only thing on the screen, so the
-                // width left over after the last whole column belongs on both
-                // sides of them rather than all down the right.
-                LazyVGrid(
-                    entries,
-                    cellWidth: Grid.cardWidth,
-                    cellHeight: Grid.cardHeight,
-                    spacing: Grid.spacing,
-                    alignment: .center,
-                    scrollTarget: model.selected
-                ) { entry in
-                    AppCard(entry: entry)
-                }
+            // Centred: the cards are the only thing on the screen, so the
+            // width left over after the last whole column belongs on both
+            // sides of them rather than all down the right.
+            LazyVGrid(
+                entries,
+                cellWidth: Grid.cardWidth,
+                cellHeight: Grid.cardHeight,
+                spacing: Grid.spacing,
+                maxColumns: Grid.maxColumns,
+                alignment: .center,
+                scrollTarget: model.selected
+            ) { entry in
+                AppCard(entry: entry)
             }
-            .flexGrow(1)
         }
     }
 }
@@ -197,9 +232,12 @@ private struct AppCard: View {
         let isSelected = model.matches.indices.contains(model.selected)
             && model.matches[model.selected].id == entry.id
 
+        // Percentages, not points: the grid divides the row into `maxColumns`
+        // and hands each cell whatever that came to, so a card that stated its
+        // own size would sit in the corner of the space it was given.
         return VStack(
-            width: .pt(Grid.cardWidth),
-            height: .pt(Grid.cardHeight),
+            width: .pct(100),
+            height: .pct(100),
             padding: 10,
             alignment: .center,
             spacing: 6,
@@ -215,10 +253,35 @@ private struct AppCard: View {
             Spacer()
         }
         .background(
-            isSelected ? Theme.current.selectionFill
-                       : (hovered ? Theme.current.hover : Theme.current.panel)
+            isSelected ? tint(saturation: 0.75, lightness: 0.24)
+                       : tint(saturation: 0.55, lightness: hovered ? 0.16 : 0.10)
         )
-        .cornerRadius(12)
+        .cornerRadius(14)
+    }
+}
+
+extension AppCard {
+    /// A colour that belongs to this application and no other.
+    ///
+    /// Hue from the entry id, everything else fixed — which is the whole trick:
+    /// vary one axis and a wall of two hundred cards reads as one palette
+    /// rather than as two hundred decisions. It also means a card's colour is
+    /// stable across launches and across queries, so the eye learns where an
+    /// application is by more than its position in a list that keeps changing.
+    ///
+    /// FNV-1a rather than `hashValue`: Swift's hashing is seeded per process,
+    /// so the same application would be a different colour every time the
+    /// launcher opened.
+    func tint(saturation: Float, lightness: Float) -> Color {
+        var hash: UInt64 = 0xcbf29ce484222325
+        for byte in entry.id.utf8 {
+            hash = (hash ^ UInt64(byte)) &* 0x100000001b3
+        }
+        return Color(
+            hue: Float(hash % 3600) / 3600,
+            saturation: saturation,
+            lightness: lightness
+        )
     }
 }
 
@@ -234,16 +297,27 @@ private struct Icon: View {
         // icons costs two hundred decodes spread over the frames that show
         // them, not one stall before the first one.
         if let path = iconPath() {
+            // A fraction of the card rather than a fixed 64pt, so the icon
+            // grows with the cell the grid hands out. `decodePixels` has to be
+            // said out loud once the box is a percentage: the cap is normally
+            // derived from a definite size, and without one the file decodes
+            // at whatever resolution it shipped at — which for a 512px icon
+            // means it no longer fits an atlas cell and costs a texture
+            // binding of its own. See `Image.decodePixels` and `ImageAtlas`.
             Image(
                 path: path,
-                width: .pt(Grid.iconSize),
-                height: .pt(Grid.iconSize),
+                width: .pct(Grid.iconFraction * 100),
+                height: .pct(Grid.iconFraction * 100),
+                decodePixels: 192,
                 contentMode: .fit
             )
         } else {
             Text(String(entry.name.prefix(1)).uppercased(),
                  color: Theme.current.textSecondary)
-                .frame(width: .pt(Grid.iconSize), height: .pt(Grid.iconSize))
+                .frame(
+                    width: .pct(Grid.iconFraction * 100),
+                    height: .pct(Grid.iconFraction * 100)
+                )
         }
     }
 

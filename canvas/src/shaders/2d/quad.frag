@@ -26,6 +26,7 @@ layout(location = 2) in float     vRadius;
 layout(location = 3) in vec4      vColor;
 layout(location = 4) flat in uint vKind;
 layout(location = 5) flat in float vAux;
+layout(location = 6) in vec2      vUv;
 
 layout(binding = 0) uniform sampler2D uAtlas;
 
@@ -77,6 +78,32 @@ void main() {
       discard;
     }
     outColor = vec4(0.0, 0.0, 0.0, covm);
+    return;
+  }
+
+  if (vKind == 6u) {
+    // Frosted backdrop, cut to the shape of the panel it sits under.
+    //
+    // Both halves at once, which is why it needs its own kind: the blur result
+    // is sampled through `vUv` while `vLocal` stays in SDF space, so the
+    // composite can have corners. Square ones were visible as bright tabs
+    // poking out from behind every rounded glass panel — the frost is a
+    // rectangle and the fill over it is not.
+    //
+    // The source is opaque and premultiplied (it is a capture of the frame),
+    // so coverage scales colour and alpha together.
+    float db = sdRoundBox(vLocal, vHalfSize, vRadius);
+    float aab = max(fwidth(db), 1e-5);
+    float covb = 1.0 - smoothstep(-aab, aab, db);
+    if (covb <= 0.0) {
+      discard;
+    }
+    vec4 cb = texture(uAtlas, vUv) * vColor;
+    float ab = cb.a * covb;
+    if (ab <= 0.001) {
+      discard;
+    }
+    outColor = vec4(cb.rgb * ab, ab);
     return;
   }
 

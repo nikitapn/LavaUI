@@ -76,6 +76,10 @@ void QuadRenderer::cleanUp() {
   spatialPipeline_.destroy(device);
   spatialPipelineScene_.destroy(device);
   pipelineLayout_.destroy(device);
+  for (auto &pool : extraDescriptorPools_) {
+    pool.destroy(device);
+  }
+  extraDescriptorPools_.clear();
   descriptorPool_.destroy(device);
   descriptorSetLayout_.destroy(device);
 }
@@ -121,6 +125,49 @@ void QuadRenderer::createWhiteTexture() {
   sampler_ = device_.createTextureSampler();
 }
 
+bool QuadRenderer::growDescriptorSets(FrameResources &fr)
+{
+  if (extraDescriptorPools_.size() >= kMaxDescriptorChunks) return false;
+
+  VkDevice device = device_.getDevice();
+  VkDescriptorPoolSize poolSize{
+    .type            = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+    .descriptorCount = kDescriptorSetsPerChunk,
+  };
+  VkDescriptorPoolCreateInfo poolInfo{
+    .sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
+    .maxSets       = kDescriptorSetsPerChunk,
+    .poolSizeCount = 1,
+    .pPoolSizes    = &poolSize,
+  };
+  VkDescriptorPool pool = VK_NULL_HANDLE;
+  if (vkCreateDescriptorPool(device, &poolInfo, nullptr, &pool) != VK_SUCCESS) {
+    return false;
+  }
+
+  std::vector<VkDescriptorSetLayout> layouts(kDescriptorSetsPerChunk,
+                                             descriptorSetLayout_);
+  std::vector<VkDescriptorSet> sets(kDescriptorSetsPerChunk, VK_NULL_HANDLE);
+  VkDescriptorSetAllocateInfo allocInfo{
+    .sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
+    .descriptorPool     = pool,
+    .descriptorSetCount = kDescriptorSetsPerChunk,
+    .pSetLayouts        = layouts.data(),
+  };
+  if (vkAllocateDescriptorSets(device, &allocInfo, sets.data()) != VK_SUCCESS) {
+    vkDestroyDescriptorPool(device, pool, nullptr);
+    return false;
+  }
+
+  // The pool outlives every frame that will bind out of it: it is released in
+  // cleanUp with the rest, never per frame, so a set handed out here stays
+  // valid for as long as any recorded command buffer can reference it.
+  extraDescriptorPools_.emplace_back();
+  extraDescriptorPools_.back() = pool;
+  fr.descriptorSets.insert(fr.descriptorSets.end(), sets.begin(), sets.end());
+  return true;
+}
+
 void QuadRenderer::setupDescriptors() {
   VkDevice device = device_.getDevice();
 
@@ -140,7 +187,7 @@ void QuadRenderer::setupDescriptors() {
                                  &descriptorSetLayout_),
      "Failed to create quad descriptor set layout");
 
-  const uint32_t totalSets = kMaxFramesInFlight * kMaxDescriptorSetsPerFrame;
+  const uint32_t totalSets = kMaxFramesInFlight * kDescriptorSetsPerChunk;
   VkDescriptorPoolSize poolSize{
     .type            = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
     .descriptorCount = totalSets,
@@ -158,13 +205,13 @@ void QuadRenderer::setupDescriptors() {
   // other's descriptors.
   for (uint32_t f = 0; f < kMaxFramesInFlight; ++f) {
     auto &fr = frames_[f];
-    fr.descriptorSets.resize(kMaxDescriptorSetsPerFrame);
-    std::vector<VkDescriptorSetLayout> layouts(kMaxDescriptorSetsPerFrame,
+    fr.descriptorSets.resize(kDescriptorSetsPerChunk);
+    std::vector<VkDescriptorSetLayout> layouts(kDescriptorSetsPerChunk,
                                                descriptorSetLayout_);
     VkDescriptorSetAllocateInfo allocInfo{
       .sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
       .descriptorPool     = descriptorPool_,
-      .descriptorSetCount = kMaxDescriptorSetsPerFrame,
+      .descriptorSetCount = kDescriptorSetsPerChunk,
       .pSetLayouts        = layouts.data(),
     };
     VR(vkAllocateDescriptorSets(device, &allocInfo, fr.descriptorSets.data()),
@@ -348,7 +395,7 @@ void QuadRenderer::createPipeline(VkRenderPass renderPass,
 
   // RGBA8 is fetched as R8G8B8A8_UNORM so the shader receives a normalised
   // vec4 without any unpack maths.
-  std::array<VkVertexInputAttributeDescription, 7> attributes{
+  std::array<VkVertexInputAttributeDescription, 8> attributes{
     VkVertexInputAttributeDescription{0, 0, VK_FORMAT_R32G32_SFLOAT,
                                       offsetof(Vertex, pos)},
     VkVertexInputAttributeDescription{1, 0, VK_FORMAT_R32G32_SFLOAT,
@@ -363,6 +410,8 @@ void QuadRenderer::createPipeline(VkRenderPass renderPass,
                                       offsetof(Vertex, kind)},
     VkVertexInputAttributeDescription{6, 0, VK_FORMAT_R32_SFLOAT,
                                       offsetof(Vertex, aux)},
+    VkVertexInputAttributeDescription{7, 0, VK_FORMAT_R32G32_SFLOAT,
+                                      offsetof(Vertex, uv)},
   };
 
   VkPipelineVertexInputStateCreateInfo vertexInput{
@@ -603,7 +652,7 @@ void QuadRenderer::begin(vec2 viewportSize, uint32_t frameSlot) {
 
 void QuadRenderer::appendQuad(const vec2 corners[4], const vec2 locals[4],
                               vec2 halfSize, float radius, uint32_t rgba,
-                              Kind kind, float aux) {
+                              Kind kind, float aux, const vec2 *uvs) {
   const uint32_t base = static_cast<uint32_t>(vertices_.size());
   for (int i = 0; i < 4; ++i) {
     vertices_.push_back(Vertex{
@@ -614,6 +663,7 @@ void QuadRenderer::appendQuad(const vec2 corners[4], const vec2 locals[4],
       .color    = rgba,
       .kind     = static_cast<uint32_t>(kind),
       .aux      = aux,
+      .uv       = uvs != nullptr ? uvs[i] : vec2{0.f, 0.f},
     });
   }
   // 0-1-2, 0-2-3
@@ -917,7 +967,8 @@ void QuadRenderer::closeSegment() {
 }
 
 void QuadRenderer::pushBlurResultImage(vec2 topLeft, vec2 size, vec2 uv0,
-                                         vec2 uv1, uint32_t rgba)
+                                         vec2 uv1, float cornerRadius,
+                                         uint32_t rgba)
 {
   if (size.x <= 0.0f || size.y <= 0.0f) {
     return;
@@ -926,16 +977,48 @@ void QuadRenderer::pushBlurResultImage(vec2 topLeft, vec2 size, vec2 uv0,
   // atlas/SDF geometry into the same descriptor bind.
   flushBatch();
   currentBatchTexture_ = whiteImageView_;  // unused when sampleBlurResult
-  const vec2 corners[4] = {
-    {topLeft.x, topLeft.y},
-    {topLeft.x + size.x, topLeft.y},
-    {topLeft.x + size.x, topLeft.y + size.y},
-    {topLeft.x, topLeft.y + size.y},
-  };
-  const vec2 locals[4] = {
-    {uv0.x, uv0.y}, {uv1.x, uv0.y}, {uv1.x, uv1.y}, {uv0.x, uv1.y},
-  };
-  appendQuad(corners, locals, {0.0f, 0.0f}, 0.0f, rgba, Kind::Image);
+
+  const vec2 half{size.x * 0.5f, size.y * 0.5f};
+  const float r = std::min(std::max(cornerRadius, 0.f), std::min(half.x, half.y));
+
+  if (r <= 0.f) {
+    const vec2 corners[4] = {
+      {topLeft.x, topLeft.y},
+      {topLeft.x + size.x, topLeft.y},
+      {topLeft.x + size.x, topLeft.y + size.y},
+      {topLeft.x, topLeft.y + size.y},
+    };
+    const vec2 locals[4] = {
+      {uv0.x, uv0.y}, {uv1.x, uv0.y}, {uv1.x, uv1.y}, {uv0.x, uv1.y},
+    };
+    appendQuad(corners, locals, {0.0f, 0.0f}, 0.0f, rgba, Kind::Image);
+  } else {
+    // A pixel of bleed for the SDF to antialias into, exactly as `pushBox`
+    // takes. The UV rect is extended by the same pixel in texture units so
+    // that a texel still lands where its pixel is — the sample there is
+    // discarded by coverage, but a UV that did not follow the geometry would
+    // shear the whole composite by a texel.
+    constexpr float kPad = 1.0f;
+    const vec2 center{topLeft.x + half.x, topLeft.y + half.y};
+    const vec2 ext{half.x + kPad, half.y + kPad};
+    const vec2 uvPerPx{(uv1.x - uv0.x) / size.x, (uv1.y - uv0.y) / size.y};
+    const vec2 u0{uv0.x - uvPerPx.x * kPad, uv0.y - uvPerPx.y * kPad};
+    const vec2 u1{uv1.x + uvPerPx.x * kPad, uv1.y + uvPerPx.y * kPad};
+
+    const vec2 corners[4] = {
+      {center.x - ext.x, center.y - ext.y},
+      {center.x + ext.x, center.y - ext.y},
+      {center.x + ext.x, center.y + ext.y},
+      {center.x - ext.x, center.y + ext.y},
+    };
+    const vec2 locals[4] = {
+      {-ext.x, -ext.y}, {ext.x, -ext.y}, {ext.x, ext.y}, {-ext.x, ext.y},
+    };
+    const vec2 uvs[4] = {
+      {u0.x, u0.y}, {u1.x, u0.y}, {u1.x, u1.y}, {u0.x, u1.y},
+    };
+    appendQuad(corners, locals, half, r, rgba, Kind::BlurComposite, 0.f, uvs);
+  }
   flushBatch();
   if (!batches_.empty()) {
     batches_.back().sampleBlurResult = true;
@@ -1111,26 +1194,31 @@ void QuadRenderer::drawBatchRange(VkCommandBuffer commandBuffer,
     boundView = view;
     boundSampler = samp;
 
-    if (fr.descriptorWriteIndex >= kMaxDescriptorSetsPerFrame) {
-      // Past the limit every further bind rewrites the *same* set, so all of
-      // them end up sampling whichever texture was written last: the visible
+    if (fr.descriptorWriteIndex >= fr.descriptorSets.size() &&
+        !growDescriptorSets(fr)) {
+      // Only reachable once the frame is pathological or the device refused
+      // to allocate. Past here every further bind rewrites the *same* set, so
+      // all of them sample whichever texture was written last: the visible
       // result is the wrong picture, not a missing one. Nothing else in the
-      // pipeline reports this — no Vulkan error, no dropped draw — so say it
-      // out loud, once, or it reads as a mysterious content bug.
+      // pipeline reports it — no Vulkan error, no dropped draw — so say it out
+      // loud, once, or it reads as a mysterious content bug.
       //
       // Each texture *change* costs a set, and batches are emitted in tree
       // order with no sorting, so an image grid alternating art and labels
-      // burns roughly two per card. Atlasing is the fix: images sharing a page
-      // share one binding. See ImageAtlas and `Engine::decodeImage`'s size cap.
+      // burns roughly two per card. Atlasing is what keeps the count down:
+      // images sharing a page share one binding. See ImageAtlas and
+      // `Engine::decodeImage`'s size cap.
       static bool warned = false;
       if (!warned) {
         warned = true;
-        std::cerr << "QuadRenderer: more than " << kMaxDescriptorSetsPerFrame
-                  << " texture binds in one frame; further textures will draw "
-                     "the wrong image. Reduce distinct textures per frame or "
-                     "make them small enough to atlas.\n";
+        std::cerr << "QuadRenderer: more than " << fr.descriptorSets.size()
+                  << " texture binds in one frame and no more sets available; "
+                     "further textures will draw the wrong image. Reduce "
+                     "distinct textures per frame or make them small enough "
+                     "to atlas.\n";
       }
-      fr.descriptorWriteIndex = kMaxDescriptorSetsPerFrame - 1;
+      fr.descriptorWriteIndex =
+        static_cast<uint32_t>(fr.descriptorSets.size()) - 1;
     }
     VkDescriptorSet set = fr.descriptorSets[fr.descriptorWriteIndex++];
     VkDescriptorImageInfo imageInfo{

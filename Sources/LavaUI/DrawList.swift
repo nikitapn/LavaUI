@@ -187,6 +187,31 @@ public final class DrawList {
         adopt(sink.beginFrame(minimum: Self.initialCapacity))
     }
 
+    /// One emitted command, for tests asserting on the shape of a frame.
+    ///
+    /// Read-back rather than a mirror kept alongside: what a test wants to know
+    /// is what actually reached the arena, and a second record of it could
+    /// agree with the test while the arena disagreed with both.
+    ///
+    /// Repackaged into a plain tuple rather than handed over as the C++ struct
+    /// it is stored as: a member whose signature names a C++ type is not
+    /// visible to a module that has not itself enabled interop, so returning
+    /// one would make this accessor unusable from exactly the place it exists
+    /// for.
+    func emitted(at index: Int)
+        -> (
+            kind: DrawKind?, x: Float, y: Float, w: Float, h: Float,
+            aux: Float, param: UInt32
+        )?
+    {
+        guard index >= 0, index < commandCount else { return nil }
+        let cmd = commandStorage[index]
+        return (
+            DrawKind(rawValue: cmd.kind), cmd.x, cmd.y, cmd.w, cmd.h, cmd.aux,
+            cmd.param
+        )
+    }
+
     /// Hands the frame to its sink. Returns whether anything was published —
     /// false when no storage was claimed, which is a frame skipped rather
     /// than a failure.
@@ -684,13 +709,20 @@ public final class DrawList {
 
     /// Barrier: engine flushes UI drawn so far, blurs under this rect, composites.
     /// `color` is unused by the engine (tint the glass with a following fill).
+    ///
+    /// `cornerRadius` is the radius of the surface that will be drawn over the
+    /// frost. The composite is the one piece of a rounded glass panel the
+    /// panel's own fill cannot hide — it is underneath it — so a square one
+    /// shows as four bright tabs around the shape.
     public func beginBackdropBlur(
-        x: Float, y: Float, w: Float, h: Float, radius: Float
+        x: Float, y: Float, w: Float, h: Float, radius: Float,
+        cornerRadius: Float = 0
     ) {
         guard w > 0, h > 0, radius > 0 else { return }
         append(
             kind: .beginBackdropBlur, x: x, y: y, w: w, h: h,
-            color: Color(r: 1, g: 1, b: 1), aux: radius
+            color: Color(r: 1, g: 1, b: 1),
+            param: UInt32(max(0, cornerRadius.rounded())), aux: radius
         )
     }
 
@@ -751,6 +783,7 @@ public final class DrawList {
         content contentRadius: Float?,
         backdrop backdropRadius: Float?,
         x: Float, y: Float, w: Float, h: Float,
+        cornerRadius: Float = 0,
         body: () -> Void
     ) {
         guard w > 0, h > 0, !insideBlurScope else { return body() }
@@ -763,7 +796,10 @@ public final class DrawList {
             insideBlurScope = false
         } else if let radius = backdropRadius, radius > 0 {
             insideBlurScope = true
-            beginBackdropBlur(x: x, y: y, w: w, h: h, radius: radius)
+            beginBackdropBlur(
+                x: x, y: y, w: w, h: h, radius: radius,
+                cornerRadius: cornerRadius
+            )
             body()
             endBackdropBlur()
             insideBlurScope = false
@@ -839,11 +875,26 @@ public final class DrawList {
             // One level down is where a collapsed `.blur()` lands, because the
             // shell wraps exactly one mounted content node. Behind a fragment
             // (a tuple, an `if`) it stays where it was.
+            let glassChild = overlayRoot.childNodes.first as? YogaBoxNode
             let glassRadius = overlayRoot.backdropBlurRadius
-                ?? (overlayRoot.childNodes.first as? YogaBoxNode)?.backdropBlurRadius
+                ?? glassChild?.backdropBlurRadius
+
+            // Which shape the frost is cut to. Normally the panel's own, since
+            // the frost rect *is* the panel — but a "transparent shell" panel
+            // (no fill, no padding, the pattern for putting the glass on the
+            // content instead) draws nothing itself, and there the visible
+            // surface is the child. Cutting to the panel then leaves frost
+            // outside the only rounded thing on screen.
+            let shellIsBare = (overlayRoot.fillColor?.a ?? 0) <= 0
+                && overlayRoot.padding == .zero
+            let glassCorner = shellIsBare
+                ? (cornerRadius(of: glassChild) ?? att.cornerRadius)
+                : att.cornerRadius
+
             withBlurScope(
                 content: nil, backdrop: glassRadius,
-                x: att.origin.x, y: att.origin.y, w: att.size.w, h: att.size.h
+                x: att.origin.x, y: att.origin.y, w: att.size.w, h: att.size.h,
+                cornerRadius: glassCorner
             ) {
                 // Outline first, one pixel proud on every side, so the panel's
                 // own fill covers the middle of it — which is exactly why a
@@ -874,6 +925,18 @@ public final class DrawList {
         pendingOverlays.removeAll(keepingCapacity: true)
         cullStack.removeAll(keepingCapacity: true)
         WidgetProfiler.endFrame()
+    }
+
+    /// A node's corner radius, wherever it happens to keep it.
+    ///
+    /// Three classes declare their own rather than sharing one on the base, so
+    /// asking the question needs all three names. Same shape as the fill
+    /// branches in `applyViewStyle`.
+    private func cornerRadius(of node: (any AnyViewNode)?) -> Float? {
+        if let leaf = node as? LeafNode { return leaf.cornerRadius }
+        if let stack = node as? StackNode { return stack.cornerRadius }
+        if let box = node as? StyleBoxNode { return box.cornerRadius }
+        return nil
     }
 
     private struct PendingOverlay {
@@ -1023,7 +1086,8 @@ public final class DrawList {
                 withBlurScope(
                     content: styled.contentBlurRadius,
                     backdrop: styled.backdropBlurRadius,
-                    x: x, y: y, w: w, h: h
+                    x: x, y: y, w: w, h: h,
+                    cornerRadius: styled.cornerRadius
                 ) {
                     if let fill = styled.fillColor {
                         if styled.cornerRadius > 0 {
@@ -1048,7 +1112,8 @@ public final class DrawList {
                 withBlurScope(
                     content: stack.contentBlurRadius,
                     backdrop: stack.backdropBlurRadius,
-                    x: x, y: y, w: w, h: h
+                    x: x, y: y, w: w, h: h,
+                    cornerRadius: stack.cornerRadius
                 ) {
                     let flags = nodeFlags(
                         for: stack.id, interactive: stack.isRendererInteractive
@@ -1084,7 +1149,8 @@ public final class DrawList {
                 withBlurScope(
                     content: leaf.contentBlurRadius,
                     backdrop: leaf.backdropBlurRadius,
-                    x: x, y: y, w: w, h: h
+                    x: x, y: y, w: w, h: h,
+                    cornerRadius: leaf.cornerRadius
                 ) {
                     let interaction = interactionTints(for: leaf)
                     let flags = nodeFlags(for: leaf.id, interactive: interaction.isInteractive)

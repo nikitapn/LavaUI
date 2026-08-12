@@ -46,6 +46,15 @@ where Data.Index == Int {
     public var cellWidth: Float?
     public var cellHeight: Float
     public var spacing: Float
+    /// Never lay out more than this many columns, whatever the width allows.
+    ///
+    /// Changes what `cellWidth`/`cellHeight` *mean*: without it they are the
+    /// cell's size and the container fits as many as go in, with it they are
+    /// the smallest acceptable cell and its proportions, and the cells stretch
+    /// to divide the row exactly. A wall of application icons wants the second
+    /// — the count is the design and the size follows the display, rather than
+    /// a fixed card leaving a wider and wider gutter as the screen grows.
+    public var maxColumns: Int?
     /// Where the columns sit when the container is wider than they need.
     public var alignment: StackAlignment
     /// Index whose cell should remain visible as keyboard selection moves.
@@ -64,6 +73,7 @@ where Data.Index == Int {
         cellWidth: Float,
         cellHeight: Float,
         spacing: Float = 0,
+        maxColumns: Int? = nil,
         alignment: StackAlignment = .start,
         scrollTarget: Int? = nil,
         @ViewBuilder content: @escaping (Data.Element) -> Content
@@ -72,6 +82,7 @@ where Data.Index == Int {
         self.cellWidth = cellWidth
         self.cellHeight = cellHeight
         self.spacing = spacing
+        self.maxColumns = maxColumns
         self.alignment = alignment
         self.scrollTarget = scrollTarget
         self.content = content
@@ -88,6 +99,7 @@ where Data.Index == Int {
         self.cellWidth = nil
         self.cellHeight = fullWidthRowHeight
         self.spacing = spacing
+        self.maxColumns = nil
         // One full-width column leaves nothing over to place.
         self.alignment = .start
         self.scrollTarget = scrollTarget
@@ -126,6 +138,7 @@ where Data.Index == Int {
             cellWidth: cellWidth,
             cellHeight: cellHeight,
             spacing: spacing,
+            maxColumns: maxColumns,
             alignment: alignment,
             scrollTarget: scrollTarget,
             makeCell: { index in content(data[data.startIndex + index]) }
@@ -225,6 +238,7 @@ final class LazyGridNode: YogaBoxNode {
     private var cellWidth: Float?
     private var cellHeight: Float = 1
     private var spacing: Float = 0
+    private var maxColumns: Int?
     private var alignment: StackAlignment = .start
     private var scrollTarget: Int?
     private var revealedTarget: Int?
@@ -270,6 +284,7 @@ final class LazyGridNode: YogaBoxNode {
         cellWidth: Float?,
         cellHeight: Float,
         spacing: Float,
+        maxColumns: Int?,
         alignment: StackAlignment,
         scrollTarget: Int?,
         makeCell: @escaping (Int) -> any View
@@ -278,12 +293,14 @@ final class LazyGridNode: YogaBoxNode {
             self.cellWidth != cellWidth
             || self.cellHeight != cellHeight
             || self.spacing != spacing
+            || self.maxColumns != maxColumns
             || self.alignment != alignment
             || self.count != count
         self.count = count
         self.cellWidth = cellWidth
         self.cellHeight = max(1, cellHeight)
         self.spacing = max(0, spacing)
+        self.maxColumns = maxColumns.map { max(1, $0) }
         self.alignment = alignment
         self.scrollTarget = scrollTarget
         self.makeCell = makeCell
@@ -293,7 +310,27 @@ final class LazyGridNode: YogaBoxNode {
         if geometryChanged { lastWidth = -1 }
     }
 
-    var rowStride: Float { cellHeight + spacing }
+    var rowStride: Float { laidOutCellHeight + spacing }
+
+    /// Cell width as laid out, which is not always the width asked for.
+    ///
+    /// Under `maxColumns` the cells divide the row exactly — that is the whole
+    /// point of capping the count — so `cellWidth` becomes the *smallest*
+    /// acceptable cell rather than the cell. Without it, nothing stretches and
+    /// this is the value the caller passed.
+    private var laidOutCellWidth: Float {
+        guard let cellWidth, cellWidth > 0 else { return max(1, lastWidth) }
+        guard maxColumns != nil, columns > 0, lastWidth > 0 else { return cellWidth }
+        return max(1, (lastWidth - spacing * Float(columns - 1)) / Float(columns))
+    }
+
+    /// Cell height as laid out. Follows the width by the same ratio, so a card
+    /// keeps the proportions it was designed at instead of turning into a
+    /// letterbox on a wide display.
+    private var laidOutCellHeight: Float {
+        guard let cellWidth, cellWidth > 0, maxColumns != nil else { return cellHeight }
+        return max(1, cellHeight * (laidOutCellWidth / cellWidth))
+    }
 
     /// Recomputes the visible window from the geometry Yoga just produced.
     ///
@@ -313,7 +350,8 @@ final class LazyGridNode: YogaBoxNode {
 
         let newColumns: Int
         if let cellWidth, cellWidth > 0 {
-            newColumns = max(1, Int((boxWidth + spacing) / (cellWidth + spacing)))
+            let fit = max(1, Int((boxWidth + spacing) / (cellWidth + spacing)))
+            newColumns = maxColumns.map { min($0, fit) } ?? fit
         } else {
             newColumns = 1
         }
@@ -324,7 +362,8 @@ final class LazyGridNode: YogaBoxNode {
         }
 
         let rows = columns > 0 ? (count + columns - 1) / columns : 0
-        let total = rows > 0 ? Float(rows) * cellHeight + Float(rows - 1) * spacing : 0
+        let total = rows > 0
+            ? Float(rows) * laidOutCellHeight + Float(rows - 1) * spacing : 0
         if case .point(let current) = height, current != total {
             height = .point(total)
             applyStyle()
@@ -353,7 +392,7 @@ final class LazyGridNode: YogaBoxNode {
         let viewport = YGNodeLayoutGetHeight(scrollYoga)
         let row = index / columns
         let top = YGNodeLayoutGetTop(yogaStorage) + Float(row) * rowStride
-        scroll.reveal(top: top, bottom: top + cellHeight, viewport: viewport)
+        scroll.reveal(top: top, bottom: top + laidOutCellHeight, viewport: viewport)
     }
 
     /// Index range the viewport needs, in cells.
@@ -405,7 +444,8 @@ final class LazyGridNode: YogaBoxNode {
             cells.removeValue(forKey: index)
         }
 
-        let cellW = cellWidth ?? max(1, lastWidth)
+        let cellW = laidOutCellWidth
+        let cellH = laidOutCellHeight
         for index in range where cells[index] == nil {
             let cell = LazyCellNode(index: index, item: ViewGraph.mount(makeCell(index)))
             cells[index] = cell
@@ -435,7 +475,7 @@ final class LazyGridNode: YogaBoxNode {
                 x: inset + Float(col) * (cellW + spacing),
                 y: Float(row) * rowStride,
                 w: cellW,
-                h: cellHeight
+                h: cellH
             )
         }
 

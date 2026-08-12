@@ -1308,14 +1308,16 @@ void RenderWindow::setViewTransform(float zoom, float panX, float panY)
 }
 
 void RenderWindow::pushBlurComposite(float x, float y, float w, float h,
-                                     float viewW, float viewH, float radius)
+                                     float viewW, float viewH, float radius,
+                                     float cornerRadius)
 {
   if (w <= 0.f || h <= 0.f || viewW <= 0.f || viewH <= 0.f) return;
   const vec2 uv = blur_.uvScaleFor(radius);
   quads_.pushBlurResultImage(
     {x, y}, {w, h},
     {x / viewW * uv.x, y / viewH * uv.y},
-    {(x + w) / viewW * uv.x, (y + h) / viewH * uv.y}, 0xffffffffu);
+    {(x + w) / viewW * uv.x, (y + h) / viewH * uv.y}, cornerRadius,
+    0xffffffffu);
 }
 
 namespace {
@@ -1777,8 +1779,10 @@ void RenderWindow::replayDrawList(const canvas::DrawList &list, float viewW,
       quads_.closeSegment();
       const float radius = cmd.aux > 0.f ? cmd.aux : 8.f;
       outBoundaries.push_back({Boundary::Kind::Backdrop, radius});
+      // `param` is the corner radius of the surface this frost sits under —
+      // whole pixels, which is all a corner is ever specified in.
       pushBlurComposite(cmd.x + ox, cmd.y + oy, cmd.w, cmd.h, viewW, viewH,
-                        radius);
+                        radius, static_cast<float>(cmd.param));
       break;
     }
     case canvas::DrawCommandKind::EndBackdropBlur:

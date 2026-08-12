@@ -54,6 +54,39 @@ public struct Color: Equatable, Sendable, Hashable {
     /// foreground drawn *on* this colour should be light or dark.
     public var luminance: Float { 0.299 * r + 0.587 * g + 0.114 * b }
 
+    /// From hue (turns, 0…1 and wrapping), saturation and lightness.
+    ///
+    /// Here rather than at a call site because the useful thing about HSL is
+    /// generating a *family* — a row of tints that vary in hue while holding
+    /// saturation and lightness fixed, so they read as one set instead of as
+    /// an argument. Doing that in RGB means picking every member by hand and
+    /// getting the brightness subtly wrong on the ones near yellow.
+    ///
+    /// `lightness` is in the same space as `r`/`g`/`b`, which is the space the
+    /// pipeline treats as **linear** — the swapchain encodes to sRGB on the way
+    /// out, so a component of 0.28 leaves the GPU looking like 0.56 and every
+    /// palette in this codebase is authored against that. Worth knowing before
+    /// picking a number: a lightness that reads as "dark" in a colour picker
+    /// arrives on screen as a mid-tone.
+    public init(hue: Float, saturation: Float, lightness: Float, alpha: Float = 1) {
+        let h = hue - hue.rounded(.down)  // wrap into 0…1
+        let s = min(max(saturation, 0), 1)
+        let l = min(max(lightness, 0), 1)
+        let c = (1 - abs(2 * l - 1)) * s
+        let x = c * (1 - abs((h * 6).truncatingRemainder(dividingBy: 2) - 1))
+        let m = l - c / 2
+        let (r1, g1, b1): (Float, Float, Float)
+        switch Int(h * 6) {
+        case 0: (r1, g1, b1) = (c, x, 0)
+        case 1: (r1, g1, b1) = (x, c, 0)
+        case 2: (r1, g1, b1) = (0, c, x)
+        case 3: (r1, g1, b1) = (0, x, c)
+        case 4: (r1, g1, b1) = (x, 0, c)
+        default: (r1, g1, b1) = (c, 0, x)
+        }
+        self.init(r: r1 + m, g: g1 + m, b: b1 + m, a: alpha)
+    }
+
     // Semantic tokens live in Theme.swift so they resolve through
     // `Theme.current` rather than being frozen here.
 }

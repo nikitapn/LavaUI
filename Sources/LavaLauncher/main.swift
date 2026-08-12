@@ -80,31 +80,70 @@ nonisolated(unsafe) let model = LauncherModel()
 /// The grid's geometry, in one place so the card and the arrow keys agree
 /// about what "one row down" means.
 enum Grid {
+    /// The *smallest* a card may be, and the proportions every card keeps.
+    ///
+    /// Not the size it is drawn at: `maxColumns` makes the grid divide the row
+    /// into exactly this many cards, so the width follows the display and the
+    /// height follows the width. A fixed card on a 4K screen leaves a gutter
+    /// the size of another column; seven bigger cards use the space it was
+    /// given.
     static let cardWidth: Float = 152
     static let cardHeight: Float = 148
+    /// Never more than this many across, however wide the screen is. A wall of
+    /// applications is read by scanning rows, and a row of fourteen is not
+    /// scanned, it is searched.
+    static let maxColumns: Int = 7
     static let spacing: Float = 10
     static let iconSize: Float = 64
-    /// Side padding around the grid, which the column count is measured after.
+    /// Icon edge as a fraction of the card, so it scales with the cell the
+    /// grid hands out. Matches `iconSize / cardWidth` at the minimum size.
+    static let iconFraction: Float = iconSize / cardWidth
+    /// Inset from the screen edge — the gap that leaves the desktop visible
+    /// around the launcher instead of a hard full-bleed dim.
+    static let screenInset: Float = 36
+    /// Side padding inside the content area (around the card grid).
     static let padding: Float = 16
+    /// Height reserved under the floating search so the first row of cards
+    /// starts clear of it; scrolling still draws cards through the transparent
+    /// header.
+    static let searchClearance: Float = 72
     /// A deliberate reading width rather than the full screen. The app grid
     /// is centred below it, so the two controls share one visual axis even on
     /// an ultrawide display.
     static let searchWidth: Float = 480
+    /// Pill height. Its corner radius is half of this, which is what rounds
+    /// the ends into a capsule instead of merely softening them.
+    static let searchHeight: Float = 50
+    /// Gap between the top of the card panel and the pill floating over it.
+    static let searchGap: Float = 14
+    /// Corner radius of the card panel.
+    static let panelRadius: Float = 18
 
     /// How many cards fit across a surface `width` wide. At least one, so a
     /// silly window size cannot divide by zero.
+    ///
+    /// Must agree with `LazyGridNode.settleWindow`, including the cap — this is
+    /// what Up and Down move by, and a key handler that disagrees with the
+    /// layout about the row length moves the selection somewhere the user did
+    /// not point at.
     static func columns(width: Float) -> Int {
         let usable = max(cardWidth, width - padding * 2)
-        return max(1, Int((usable + spacing) / (cardWidth + spacing)))
+        let fit = max(1, Int((usable + spacing) / (cardWidth + spacing)))
+        return min(maxColumns, fit)
     }
 }
 
 // ─── Bring-up ───────────────────────────────────────────────────────────────
 
-// Translucent, and the reason this is a whole-screen window rather than a
-// small centred one: what is behind it stays visible and dimmed, so launching
-// something reads as a layer over the desktop rather than a context switch.
-WindowBackdrop.current = .color(Color(r: 0.06, g: 0.07, b: 0.09, a: 0.86))
+// Window itself is clear so the *edge gaps* show the desktop undimmed. The
+// floating content card paints its own translucent scrim (see LauncherView) —
+// a full-surface backdrop would fill the margins too and kill the gap.
+WindowBackdrop.current = .none
+
+// Indigo rather than the editor greys. A launcher is nearly all surface, and a
+// neutral panel over somebody's wallpaper reads as a smudge on it. See
+// `Theme.nebula`.
+Theme.current = .nebula
 
 // `LAVA_BOOT_TRACE=1` says where the time before the first frame went. This is
 // the client that most needs it: everything else opens a window and draws,

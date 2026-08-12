@@ -105,15 +105,36 @@ public struct ModifiedView<Content: View>: PrimitiveView {
         return attach(style, to: ViewGraph.reconcile(node, with: content))
     }
 
-    /// Style the node if it is a single box; otherwise wrap it once.
+    /// Style the node if it is a single box that can show the style; otherwise
+    /// wrap it once.
     private func attach(_ style: ViewStyle, to node: any AnyViewNode) -> any AnyViewNode {
-        if !forceWrapper, let box = node as? YogaBoxNode {
+        if !forceWrapper, let box = node as? YogaBoxNode, Self.canPaint(style, on: box) {
             box.applyViewStyle(style)
             return box
         }
         let wrapper = StyleBoxNode(content: node)
         wrapper.applyViewStyle(style)
         return wrapper
+    }
+
+    /// Whether `node` can actually show the paint `style` is asking for.
+    ///
+    /// Not every `YogaBoxNode` can. A fill and a corner radius are declared by
+    /// `LeafNode`, `StackNode` and `StyleBoxNode` separately — `applyViewStyle`
+    /// has one branch each — so a box that is none of those (`ScrollNode`, and
+    /// the wrappers overlays and transitions build) accepted the style and
+    /// silently dropped the half of it that paints. The failure looked like a
+    /// missing background with nothing wrong anywhere: no warning, no crash,
+    /// and the padding from the same modifier chain arrived normally.
+    ///
+    /// Wrapping in that case costs one box, and only in the case that used to
+    /// lose the fill. Layout is unchanged because `StyleBoxNode` inherits flex
+    /// from what it wraps.
+    private static func canPaint(_ style: ViewStyle, on node: any AnyViewNode) -> Bool {
+        if style.fill == nil, style.hoverFill == nil, style.cornerRadius == nil {
+            return true
+        }
+        return node is LeafNode || node is StackNode || node is StyleBoxNode
     }
 }
 
