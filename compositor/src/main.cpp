@@ -835,17 +835,25 @@ struct ClientSurface {
   /// is the case that made this load-bearing.
   bool awaitingFirstFrame = false;
 
+  /// Whether the compositor title bar is on screen.
+  ///
+  /// A maximized window gives the bar up: the panel already names it, and a
+  /// 32 px strip under the panel is just a second title. Restoring puts it
+  /// back. `decorated` is still the lasting choice (who draws the chrome);
+  /// this is only whether that chrome is showing *now*.
+  bool showsBar() const { return decorated && !maximized; }
+
   /// Where the content starts — below the bar, or at the frame origin when
   /// there is no bar to be below.
   int contentY() const {
-    return decorated ? y + lava::Decoration::kHeight : y;
+    return showsBar() ? y + lava::Decoration::kHeight : y;
   }
 
   /// Total height on screen, frame included. What a resize drag works in, and
   /// what an edge is measured from.
   int frameHeight() const {
     return static_cast<int>(height) +
-           (decorated ? lava::Decoration::kHeight : 0);
+           (showsBar() ? lava::Decoration::kHeight : 0);
   }
 
   /// Whether `lx, ly` (layout space) is inside the content, and where in it.
@@ -859,7 +867,7 @@ struct ClientSurface {
   /// for a window that has none — which is what keeps every bar path below
   /// from needing to ask twice.
   bool hitBar(double lx, double ly, double &sx, double &sy) const {
-    if (!decorated) return false;
+    if (!showsBar()) return false;
     sx = lx - x;
     sy = ly - y;
     return sx >= 0 && sy >= 0 && sx < width &&
@@ -1416,9 +1424,7 @@ class SurfaceRegistry : public lava::CompositorHost {
     } else if (surface.node != nullptr) {
       wlr_scene_node_set_enabled(&surface.node->node, !minimized);
     }
-    if (surface.barNode != nullptr) {
-      wlr_scene_node_set_enabled(&surface.barNode->node, !minimized);
-    }
+    syncBar(surface);
     if (surface.shadowNode != nullptr) {
       wlr_scene_node_set_enabled(&surface.shadowNode->node, false);
     }
@@ -1629,9 +1635,22 @@ class SurfaceRegistry : public lava::CompositorHost {
   void setMaximized(ClientSurface &surface, bool maximized) {
     if (surface.maximized == maximized) return;
     if (!maximized) {
+      // Flag first: `showsBar` / `contentY` / `fillWorkArea` / rounding
+      // all read it.
+      surface.maximized = false;
+      syncBar(surface);
+      applyCorners(surface);
+      const uint32_t wasW = surface.width;
+      const uint32_t wasH = surface.height;
       moveSurface(surface, surface.restoreX, surface.restoreY);
       resizeSurface(surface, surface.restoreW, surface.restoreH);
-      surface.maximized = false;
+      // Same rectangle as before: resize is a no-op, so the mask
+      // change has to be drawn here or the window stays square.
+      if (surface.width == wasW && surface.height == wasH) {
+        restyleFrame(surface);
+      }
+      if (surface.isForeign()) surface.window->setMaximized(false);
+      tellClientWindowState(surface);
       return;
     }
     if (outputWidth_ == 0 || outputHeight_ == 0) return;
@@ -1639,8 +1658,49 @@ class SurfaceRegistry : public lava::CompositorHost {
     surface.restoreY = surface.y;
     surface.restoreW = surface.width;
     surface.restoreH = surface.height;
-    fillWorkArea(surface);
     surface.maximized = true;
+    syncBar(surface);
+    applyCorners(surface);
+    const uint32_t wasW = surface.width;
+    const uint32_t wasH = surface.height;
+    fillWorkArea(surface);
+    if (surface.width == wasW && surface.height == wasH) {
+      restyleFrame(surface);
+    }
+    if (surface.isForeign()) surface.window->setMaximized(true);
+    tellClientWindowState(surface);
+  }
+
+  /// Corners and shadow for the current flags, then a redraw.
+  ///
+  /// Used when maximize flips but the rectangle does not: `resizeSurface`
+  /// is a no-op in that case, and a flush window still has to become
+  /// square (and drop its shadow) or a restored one round again.
+  void restyleFrame(ClientSurface &surface) {
+    applyCorners(surface);
+    applyShadow(surface);
+    if (surface.canvas && surface.canvas->redraw()) damage(surface);
+  }
+
+  /// A Lava client that draws its own chrome has to hide that strip when
+  /// we would have dropped a title bar — including maximize from a key
+  /// the client never saw. Resize already says the new size; this says
+  /// why. Foreign windows have no Lava input stream.
+  void tellClientWindowState(const ClientSurface &surface) {
+    if (control_ == nullptr || !surface.canvas) return;
+    control_->postInput(
+        surface.id,
+        static_cast<uint32_t>(canvas::InputEventKind::WindowState), 0.f, 0.f,
+        surface.maximized ? 1 : 0, 0);
+  }
+
+  /// Title bar on screen only when the window is decorated *and* not
+  /// maximized — and not minimized. One place so the three flags cannot
+  /// disagree about whether the strip is visible.
+  void syncBar(ClientSurface &surface) {
+    if (surface.barNode == nullptr) return;
+    wlr_scene_node_set_enabled(&surface.barNode->node,
+                               surface.showsBar() && !surface.minimized);
   }
 
   /// Spreads a window over everything a panel has not claimed.
@@ -1653,7 +1713,8 @@ class SurfaceRegistry : public lava::CompositorHost {
     // The frame comes out of the height, and a window with no frame keeps all
     // of it — which is most of what an app gives up its title bar for.
     const uint32_t frame =
-        surface.decorated ? static_cast<uint32_t>(lava::Decoration::kHeight) : 0;
+        surface.showsBar() ? static_cast<uint32_t>(lava::Decoration::kHeight)
+                           : 0;
     resizeSurface(surface, area.width,
                   area.height > frame ? area.height - frame : area.height);
   }
@@ -1732,8 +1793,9 @@ class SurfaceRegistry : public lava::CompositorHost {
   /// is only reallocated when its size actually differs.
   void applyShadow(ClientSurface &surface) {
     const bool wanted =
-        shadowBlur_ > 0.f && !surface.panel && renderer_ != nullptr &&
-        workspaces_ != nullptr && surface.id == focused_ && !surface.minimized;
+        shadowBlur_ > 0.f && !surface.panel && !surface.maximized &&
+        renderer_ != nullptr && workspaces_ != nullptr &&
+        surface.id == focused_ && !surface.minimized;
     if (!wanted) {
       if (surface.shadowNode != nullptr) {
         wlr_scene_node_set_enabled(&surface.shadowNode->node, false);
@@ -1831,10 +1893,10 @@ class SurfaceRegistry : public lava::CompositorHost {
   ///
   /// A decorated window is two surfaces stacked, so each rounds the pair of
   /// corners it actually owns and the seam between them stays straight. A
-  /// frameless window is one surface and rounds all four. A panel rounds
-  /// none: it is flush against an edge of the screen, and rounding the corners
-  /// of something that is meant to look like part of the frame would just show
-  /// the wallpaper through the gap.
+  /// frameless window is one surface and rounds all four. A panel or a
+  /// maximized window rounds none: it is flush against an edge of the
+  /// screen, and rounding the corners of something that is meant to look
+  /// like part of the frame would just show the wallpaper through the gap.
   ///
   /// A **foreign window is square, bar included**, and that is a decision
   /// rather than a limitation left showing. Its content is the client's own
@@ -1847,7 +1909,7 @@ class SurfaceRegistry : public lava::CompositorHost {
   void applyCorners(ClientSurface &surface) {
     const float radius = cornerRadius_ * (frameIsRoundable(surface) ? 1.f : 0.f);
     if (surface.canvas) {
-      const bool top = !surface.decorated;
+      const bool top = !surface.showsBar();
       surface.canvas->setCornerRadius(surface.panel ? 0.f : radius, top,
                                       !surface.panel);
     }
@@ -1859,8 +1921,10 @@ class SurfaceRegistry : public lava::CompositorHost {
   /// Whether this window's whole outline is the compositor's to shape.
   ///
   /// False for a Wayland client: the pixels in the middle are its own.
+  /// False for a maximized window: it is flush to the work area, the
+  /// same reason a panel is square.
   static bool frameIsRoundable(const ClientSurface &surface) {
-    return !surface.isForeign() && !surface.panel;
+    return !surface.isForeign() && !surface.panel && !surface.maximized;
   }
 
   /// Redraws the title bar. Cheap — a strip, from commands built here.
@@ -5289,18 +5353,14 @@ void Server::on_cursor_button(wl_listener *listener, void *data) {
     if ((modifiers & shortcut_mod_mask(server->config.keyboard)) &&
         over != nullptr) {
       server->surfaces->raise(*over);
-      server->drag = event->button == BTN_RIGHT ? Server::Drag::Resize
-                                                : Server::Drag::Move;
-      // Bottom-right, which is where a mod+resize has always grown from: the
-      // gesture has no edge of its own to name.
-      server->dragEdges = edges::kRight | edges::kBottom;
-      server->dragSurface = over->id;
-      server->dragStartX = server->cursor->x;
-      server->dragStartY = server->cursor->y;
-      server->dragOriginX = over->x;
-      server->dragOriginY = over->y;
-      server->dragOriginW = over->width;
-      server->dragOriginH = over->height;
+      // Same entry as a title-bar drag: a maximized window has to come off
+      // the edge *and* get its decoration back. Setting `drag` here by hand
+      // used to skip that and leave a floating window with no title bar.
+      if (event->button == BTN_RIGHT) {
+        server->beginInteractiveResize(*over, edges::kRight | edges::kBottom);
+      } else {
+        server->beginInteractiveMove(*over);
+      }
       return;
     }
   }

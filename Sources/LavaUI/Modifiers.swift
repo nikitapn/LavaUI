@@ -94,15 +94,27 @@ public struct ModifiedView<Content: View>: PrimitiveView {
     }
 
     public func reconcilePrimitive(_ node: any AnyViewNode) -> any AnyViewNode {
-        if let box = node as? StyleBoxNode {
-            // Previously wrapped. Reconcile inside; if the content collapsed to
-            // a single box we could unwrap, but keeping the box is stable and
-            // avoids churning Yoga's tree on every frame.
+        if let box = node as? StyleBoxNode, ownsWrapper(box) {
+            // This wrapper is ours. Reconcile inside; if the content
+            // collapsed to a single box we could unwrap, but keeping the
+            // box is stable and avoids churning Yoga's tree on every frame.
             box.updateContent(ViewGraph.reconcile(box.contentNode, with: content))
             box.applyViewStyle(style)
             return box
         }
         return attach(style, to: ViewGraph.reconcile(node, with: content))
+    }
+
+    /// Whether `box` was created by *this* modifier, not an inner one.
+    ///
+    /// `.hidden()` / `.frame()` apply in-place to any Yoga box, including a
+    /// `StyleBox` an inner `.background()` just made. The next reconcile
+    /// used to treat that box as this modifier's wrapper, then wrap the
+    /// still-parented content again — Yoga fatal on `YGNodeInsertChild`.
+    /// A box is ours only if we would have had to create one.
+    private func ownsWrapper(_ box: StyleBoxNode) -> Bool {
+        if forceWrapper { return true }
+        return !Self.canPaint(style, on: box.contentNode)
     }
 
     /// Style the node if it is a single box that can show the style; otherwise
@@ -247,6 +259,12 @@ class StyleBoxNode: YogaBoxNode {
         insertedLeaves = leaves
         for (i, leaf) in insertedLeaves.enumerated() {
             guard let y = leaf.yoga else { continue }
+            // A modifier that claimed the wrong wrapper can still hand us a
+            // child that already sits under someone else. Yoga fatal if we
+            // insert it anyway; steal it first.
+            if let owner = YGNodeGetOwner(y), owner != yogaStorage {
+                YGNodeRemoveChild(owner, y)
+            }
             YGNodeInsertChild(yogaStorage, y, i)
         }
     }

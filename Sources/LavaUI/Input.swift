@@ -160,6 +160,9 @@ public enum InputEventKind: UInt32, Sendable, Equatable {
     /// The pointer left this window. No payload — see `PointerLeave` in
     /// `draw_command.hpp`.
     case pointerLeave = 13
+    /// The window was maximized or restored. `button` = 1 maximized, 0
+    /// restored. See `WindowState` in `draw_command.hpp`.
+    case windowState = 14
 }
 
 /// One polled event from `Editor.pollInputEvent`.

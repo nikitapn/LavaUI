@@ -49,6 +49,7 @@ struct SettingsSidebar: View {
                 Spacer()
             }
             .frame(height: .pt(40))
+            .windowChrome()
 
             VStack(padding: 10, spacing: 3) {
                 ForEach(SettingsSection.allCases, id: \.self) { section in

@@ -645,9 +645,10 @@ public enum LavaClient {
         }
         WindowBridge.toggleMaximize = { [compositor] in
             report("ToggleMaximize") {
-                _ = try blockingCall {
+                let now = try blockingCall {
                     try await compositor.toggleMaximize(surfaceId: surfaceID)
                 }
+                WindowBridge.isMaximized = now
             }
         }
         WindowBridge.minimize = { [compositor] in
@@ -709,6 +710,9 @@ public enum LavaClient {
                 var wantsFrame = false
                 for event in input.drain() {
                     let kind = InputEventKind(rawValue: event.kind) ?? .none
+                    if kind == .windowState {
+                        WindowBridge.isMaximized = event.button != 0
+                    }
                     // Read-back, not news. `.nodeHover` and `.nodeScroll` are
                     // the renderer telling us what it already drew, and the
                     // compositor emits one of each per frame of an eased

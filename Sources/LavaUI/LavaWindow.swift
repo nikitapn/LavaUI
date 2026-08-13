@@ -442,6 +442,8 @@ public final class LavaWindow {
                 // tree has already raised `.body` via observation.
                 ViewInvalidation.markNeedsRedraw()
             }
+        case .windowState:
+            WindowBridge.isMaximized = ev.button != 0
         case .resize:
             let nw = max(1, ev.x)
             let nh = max(1, ev.y)

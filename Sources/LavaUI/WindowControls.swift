@@ -45,8 +45,7 @@ public enum WindowBridge {
     /// "The user has grabbed the window" — starts an interactive move.
     /// Called on the *press*; everything after it belongs to the compositor.
     nonisolated(unsafe) public static var beginDrag: (@Sendable () -> Void)?
-    /// Fills the work area, or restores. The desktop owns which one it is,
-    /// which is why nothing here tracks a maximized flag.
+    /// Fills the work area, or restores.
     nonisolated(unsafe) public static var toggleMaximize: (@Sendable () -> Void)?
     /// Hides the window without ending it.
     nonisolated(unsafe) public static var minimize: (@Sendable () -> Void)?
@@ -63,6 +62,25 @@ public enum WindowBridge {
     /// if WindowBridge.drawsOwnChrome { WindowControls() }
     /// ```
     nonisolated(unsafe) public static var drawsOwnChrome = false
+
+    /// Whether this window currently fills the work area.
+    ///
+    /// The compositor owns the fact; this is the client's copy, updated
+    /// when `ToggleMaximize` returns and when a `WindowState` input event
+    /// arrives (keyboard maximize, a restore from a drag). Read it in
+    /// `body` and hide your chrome:
+    ///
+    /// ```swift
+    /// TitleStrip().windowChrome()
+    /// ```
+    ///
+    /// Writing it marks the tree for a body pass, so a strip that reads
+    /// this disappears on the same frame the window grows.
+    nonisolated(unsafe) public static var isMaximized = false {
+        didSet {
+            if isMaximized != oldValue { ViewInvalidation.markNeedsBody() }
+        }
+    }
 
     /// Whether the window state verbs reach anything. False in a windowed app.
     public static var canControlWindow: Bool { beginDrag != nil }
@@ -432,5 +450,12 @@ extension View {
     /// the thing that moves the window.
     public func windowDrag(doubleClickMaximizes: Bool = true) -> WindowDragArea<Self> {
         WindowDragArea(content: self, doubleClickMaximizes: doubleClickMaximizes)
+    }
+
+    /// Hidden while the window is maximized — the client-side half of
+    /// dropping a compositor title bar. Wrap the VStack / strip that
+    /// holds `WindowControls()`, not the whole window.
+    public func windowChrome() -> some View {
+        hidden(WindowBridge.isMaximized)
     }
 }

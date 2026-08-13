@@ -183,6 +183,7 @@ public struct DemoExample: View {
             if WindowBridge.drawsOwnChrome {
                 WindowControls()
                     .padding(.trailing, 6)
+                    .windowChrome()
             }
             if let brandImage {
                 Image(brandImage, width: .pt(40), height: .pt(40), contentMode: .fit)

@@ -58,6 +58,7 @@ private struct TitleBar: View {
         HStack(padding: 10, alignment: .center, spacing: 10) {
             if WindowBridge.drawsOwnChrome {
                 WindowControls()
+                    .windowChrome()
             }
             Text(session.place.name, color: Theme.current.textPrimary)
                 .agentId("place-name")

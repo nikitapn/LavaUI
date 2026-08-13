@@ -380,6 +380,14 @@ enum class InputEventKind : uint32_t {
   /// over stops being the surface it is over. A windowed app gets it from
   /// GLFW's cursor-leave, which answers the same question for the same reason.
   PointerLeave = 13,
+  /// The window was maximized or restored. `button` = 1 maximized, 0 restored.
+  ///
+  /// A client that draws its own chrome has to hide that strip when the
+  /// compositor would have dropped a title bar — including when maximize
+  /// came from a keybinding the client never saw. Resize already says the
+  /// new size; this says *why*, so a toolbar can vanish without guessing
+  /// from the framebuffer dimensions.
+  WindowState = 14,
 };
 
 struct InputEvent {

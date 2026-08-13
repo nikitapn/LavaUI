@@ -33,6 +33,7 @@ public struct TerminalView: View {
         return VStack(padding: 0, spacing: 0) {
             TitleStrip(path: session.pathLabel)
                 .background(theme.panel.opacity(TerminalPalette.windowAlpha))
+                .windowChrome()
 
             TerminalCanvas(
                 session: session,
