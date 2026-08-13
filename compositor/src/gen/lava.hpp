@@ -371,6 +371,55 @@ public:
 };
 } // namespace flat
 
+struct Wallpaper {
+  std::string mode;
+  uint32_t color;
+  std::string path;
+  std::string fit;
+};
+
+namespace flat {
+struct Wallpaper {
+  ::nprpc::flat::String mode;
+  uint32_t color;
+  ::nprpc::flat::String path;
+  ::nprpc::flat::String fit;
+};
+
+class Wallpaper_Direct {
+  ::nprpc::flat_buffer& buffer_;
+  const std::uint32_t offset_;
+
+  auto& base() noexcept { return *reinterpret_cast<Wallpaper*>(reinterpret_cast<std::byte*>(buffer_.data().data()) + offset_); }
+  auto const& base() const noexcept { return *reinterpret_cast<const Wallpaper*>(reinterpret_cast<const std::byte*>(buffer_.data().data()) + offset_); }
+public:
+  uint32_t offset() const noexcept { return offset_; }
+  void* __data() noexcept { return (void*)&base(); }
+  Wallpaper_Direct(::nprpc::flat_buffer& buffer, std::uint32_t offset)
+    : buffer_(buffer)
+    , offset_(offset)
+  {
+  }
+  void mode(const char* str) { new (&base().mode) ::nprpc::flat::String(buffer_, str); }
+  void mode(const std::string& str) { new (&base().mode) ::nprpc::flat::String(buffer_, str); }
+  auto mode() noexcept { return (::nprpc::flat::Span<char>)base().mode; }
+  auto mode() const noexcept { return (::nprpc::flat::Span<const char>)base().mode; }
+  auto mode_d() noexcept { return ::nprpc::flat::String_Direct1(buffer_, offset_ + offsetof(Wallpaper, mode)); }
+  const uint32_t& color() const noexcept { return base().color;}
+  uint32_t& color() noexcept { return base().color;}
+  void path(const char* str) { new (&base().path) ::nprpc::flat::String(buffer_, str); }
+  void path(const std::string& str) { new (&base().path) ::nprpc::flat::String(buffer_, str); }
+  auto path() noexcept { return (::nprpc::flat::Span<char>)base().path; }
+  auto path() const noexcept { return (::nprpc::flat::Span<const char>)base().path; }
+  auto path_d() noexcept { return ::nprpc::flat::String_Direct1(buffer_, offset_ + offsetof(Wallpaper, path)); }
+  void fit(const char* str) { new (&base().fit) ::nprpc::flat::String(buffer_, str); }
+  void fit(const std::string& str) { new (&base().fit) ::nprpc::flat::String(buffer_, str); }
+  auto fit() noexcept { return (::nprpc::flat::Span<char>)base().fit; }
+  auto fit() const noexcept { return (::nprpc::flat::Span<const char>)base().fit; }
+  auto fit_d() noexcept { return ::nprpc::flat::String_Direct1(buffer_, offset_ + offsetof(Wallpaper, fit)); }
+};
+} // namespace flat
+
 struct KeyboardSettings {
   std::string layout;
   std::string variant;
@@ -811,6 +860,56 @@ public:
 };
 } // namespace flat
 
+class WallpaperUnreadable : public ::nprpc::Exception {
+public:
+  std::string path;
+  std::string reason;
+
+  WallpaperUnreadable() : ::nprpc::Exception("WallpaperUnreadable") {} 
+  WallpaperUnreadable(std::string _path, std::string _reason)
+    : ::nprpc::Exception("WallpaperUnreadable")
+    , path(_path)
+    , reason(_reason)
+  {
+  }
+};
+
+namespace flat {
+struct WallpaperUnreadable {
+  uint32_t __ex_id;
+  ::nprpc::flat::String path;
+  ::nprpc::flat::String reason;
+};
+
+class WallpaperUnreadable_Direct {
+  ::nprpc::flat_buffer& buffer_;
+  const std::uint32_t offset_;
+
+  auto& base() noexcept { return *reinterpret_cast<WallpaperUnreadable*>(reinterpret_cast<std::byte*>(buffer_.data().data()) + offset_); }
+  auto const& base() const noexcept { return *reinterpret_cast<const WallpaperUnreadable*>(reinterpret_cast<const std::byte*>(buffer_.data().data()) + offset_); }
+public:
+  uint32_t offset() const noexcept { return offset_; }
+  void* __data() noexcept { return (void*)&base(); }
+  WallpaperUnreadable_Direct(::nprpc::flat_buffer& buffer, std::uint32_t offset)
+    : buffer_(buffer)
+    , offset_(offset)
+  {
+  }
+  const uint32_t& __ex_id() const noexcept { return base().__ex_id;}
+  uint32_t& __ex_id() noexcept { return base().__ex_id;}
+  void path(const char* str) { new (&base().path) ::nprpc::flat::String(buffer_, str); }
+  void path(const std::string& str) { new (&base().path) ::nprpc::flat::String(buffer_, str); }
+  auto path() noexcept { return (::nprpc::flat::Span<char>)base().path; }
+  auto path() const noexcept { return (::nprpc::flat::Span<const char>)base().path; }
+  auto path_d() noexcept { return ::nprpc::flat::String_Direct1(buffer_, offset_ + offsetof(WallpaperUnreadable, path)); }
+  void reason(const char* str) { new (&base().reason) ::nprpc::flat::String(buffer_, str); }
+  void reason(const std::string& str) { new (&base().reason) ::nprpc::flat::String(buffer_, str); }
+  auto reason() noexcept { return (::nprpc::flat::Span<char>)base().reason; }
+  auto reason() const noexcept { return (::nprpc::flat::Span<const char>)base().reason; }
+  auto reason_d() noexcept { return ::nprpc::flat::String_Direct1(buffer_, offset_ + offsetof(WallpaperUnreadable, reason)); }
+};
+} // namespace flat
+
 struct ActiveWindow {
   uint32_t surfaceId;
   std::string title;
@@ -1147,6 +1246,8 @@ public:
   virtual void SetAppearance (flat::Appearance_Direct appearance) = 0;
   virtual SystemTheme GetSystemTheme () = 0;
   virtual void SetSystemTheme (flat::SystemTheme_Direct theme) = 0;
+  virtual Wallpaper GetWallpaper () = 0;
+  virtual void SetWallpaper (flat::Wallpaper_Direct wallpaper) = 0;
   virtual KeyboardSettings GetKeyboard () = 0;
   virtual void SetKeyboard (flat::KeyboardSettings_Direct settings) = 0;
   virtual std::vector<KeyboardLayout> ListKeyboardLayouts () = 0;
@@ -1212,6 +1313,10 @@ public:
   ::nprpc::Task<SystemTheme> GetSystemThemeAsync (std::stop_token st = {});
   void SetSystemTheme (const SystemTheme& theme);
   ::nprpc::Task<void> SetSystemThemeAsync (const SystemTheme& theme, std::stop_token st = {});
+  Wallpaper GetWallpaper ();
+  ::nprpc::Task<Wallpaper> GetWallpaperAsync (std::stop_token st = {});
+  void SetWallpaper (const Wallpaper& wallpaper);
+  ::nprpc::Task<void> SetWallpaperAsync (const Wallpaper& wallpaper, std::stop_token st = {});
   KeyboardSettings GetKeyboard ();
   ::nprpc::Task<KeyboardSettings> GetKeyboardAsync (std::stop_token st = {});
   void SetKeyboard (const KeyboardSettings& settings);

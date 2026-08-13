@@ -17,7 +17,14 @@ struct AppearancePage: View {
     let store: SettingsStore
 
     var body: some View {
-        VStack(spacing: 18) {
+        // Read in `body`, not in the `ForEach` closure below it. The closure is
+        // `@escaping` and runs when the list mounts its children, outside the
+        // tracking scope, so a comparison written in there registers no
+        // dependency and the dot goes stale. Survives here only because
+        // changing the theme repaints every window anyway.
+        let theme = store.themeName
+
+        return VStack(spacing: 18) {
             SettingGroup("Colours") {
                 SettingRow("Theme",
                            "Pushed to every Lava window that uses system "
@@ -28,7 +35,7 @@ struct AppearancePage: View {
                             PickerRow(
                                 title: name.capitalized,
                                 detail: name,
-                                selected: store.themeName == name
+                                selected: theme == name
                             ) {
                                 store.setThemeName(name)
                             }
@@ -106,6 +113,266 @@ struct AppearancePage: View {
             }
         )
     }
+}
+
+// ─── Background ─────────────────────────────────────────────────────────────
+
+/// What the desktop is painted with, behind every window.
+///
+/// The colour controls stay live in both modes rather than greying out under
+/// a picture, because the colour is not the *alternative* to a picture — it is
+/// what shows through the letterbox under `Fit`, around the edges under
+/// `Centre`, and on any screen the picture has not reached yet. Hiding it in
+/// picture mode would hide half of what a letterboxed wallpaper looks like.
+struct BackgroundPage: View {
+    let store: SettingsStore
+
+    /// Enough to pick from without a colour wheel, and there is a hex field
+    /// underneath for everything else. Weighted dark because they sit behind
+    /// a desktop of dark windows, with one light entry for the light theme.
+    private static let swatches: [(name: String, value: UInt32)] = [
+        ("Midnight", 0x0e_13_1f), ("Slate", 0x1e_24_30),
+        ("Ink", 0x0b_0f_14), ("Charcoal", 0x17_17_1a),
+        ("Teal", 0x0d_2b_2b), ("Plum", 0x24_1a_2e),
+        ("Moss", 0x17_25_1a), ("Clay", 0x2b_1f_1a),
+        ("Paper", 0xd8_d8_dc),
+    ]
+
+    private static let fits: [(name: String, value: String, detail: String)] = [
+        ("Fill", "fill", "Covers the screen, crops the overflow"),
+        ("Fit", "fit", "Whole picture, colour in the bars"),
+        ("Stretch", "stretch", "Covers the screen, ignores the shape"),
+        ("Centre", "center", "Actual size, no scaling"),
+    ]
+
+    var body: some View {
+        // Every observed value is read *here*, in `body`, and passed down as a
+        // plain value. Only `body` runs inside `withObservationTracking`, and a
+        // `ForEach`'s content closure is `@escaping` — it runs later, when the
+        // list mounts its children. So `store.backgroundFit == fit.value`
+        // written inside one of those closures registers no dependency at all:
+        // the setting applied, the compositor repainted, and the radio dot sat
+        // on the old row until something else forced this body to run again.
+        // Same trap the page switcher in `SettingsChrome` documents.
+        let mode = store.backgroundMode
+        let fit = store.backgroundFit
+        let color = store.backgroundColor
+        let path = store.picturePath
+
+        return VStack(spacing: 18) {
+            SettingGroup("Desktop") {
+                SettingRow("What to show",
+                           "A picture is fitted to each screen separately, so "
+                           + "two monitors of different shapes each get their "
+                           + "own crop rather than one stretched across both.") {
+                    VStack(spacing: 2) {
+                        PickerRow(title: "Solid colour",
+                                  detail: "solid",
+                                  selected: mode != "picture") {
+                            store.setBackgroundMode("solid")
+                        }
+                        PickerRow(title: "Picture",
+                                  detail: path.isEmpty
+                                      ? "none chosen yet"
+                                      : displayName(path),
+                                  selected: mode == "picture") {
+                            store.setBackgroundMode("picture")
+                        }
+                    }
+                }
+            }
+
+            SettingGroup("Colour") {
+                SettingRow("Desktop colour",
+                           mode == "picture"
+                               ? "Behind the picture: the letterbox bars, the "
+                                 + "margins, and any screen the picture has "
+                                 + "not been fitted to yet."
+                               : "What the desktop is painted with.") {
+                    VStack(spacing: 10) {
+                        SwatchGrid(store: store, swatches: Self.swatches,
+                                   selected: color)
+                        TextField(
+                            text: Binding(store, \.colorText),
+                            placeholder: hexString(color)
+                                + " — type a hex colour and press Return",
+                            onSubmit: { store.commitColorText() }
+                        )
+                        .padding(8)
+                        .background(Theme.current.inset)
+                        .cornerRadius(6)
+                    }
+                }
+            }
+
+            SettingGroup("Picture") {
+                SettingRow("Fit",
+                           "How the picture is placed on each screen.") {
+                    VStack(spacing: 2) {
+                        ForEach(Self.fits, id: \.value) { entry in
+                            PickerRow(title: entry.name,
+                                      detail: entry.detail,
+                                      selected: fit == entry.value) {
+                                store.setBackgroundFit(entry.value)
+                            }
+                        }
+                    }
+                }
+
+                SettingRow(
+                    "File",
+                    "PNG, JPEG, BMP, GIF or TGA. A path that cannot be read is "
+                    + "refused and the desktop is left as it is."
+                ) {
+                    VStack(spacing: 8) {
+                        TextField(
+                            text: Binding(store, \.picturePath),
+                            placeholder: "~/Pictures/something.png",
+                            onSubmit: { store.setPicture(store.picturePath) }
+                        )
+                        .padding(8)
+                        .background(Theme.current.inset)
+                        .cornerRadius(6)
+                        PictureList(store: store, selected: path,
+                                    isPictureMode: mode == "picture")
+                    }
+                }
+            }
+        }
+    }
+
+    private func displayName(_ path: String) -> String {
+        String(path.split(separator: "/").last ?? "")
+    }
+}
+
+/// The colours, as colours. A name in a list would be a worse way to pick one.
+private struct SwatchGrid: View {
+    let store: SettingsStore
+    let swatches: [(name: String, value: UInt32)]
+    /// Passed in rather than read from the store, so the comparison happens
+    /// where a dependency on it is registered. See `BackgroundPage.body`.
+    let selected: UInt32
+
+    var body: some View {
+        // Two rows rather than one: nine swatches wide enough to hit would
+        // overflow the panel at its default width, and wrapping is not
+        // something the layout offers.
+        let half = (swatches.count + 1) / 2
+        return VStack(spacing: 6) {
+            row(Array(swatches.prefix(half)))
+            row(Array(swatches.dropFirst(half)))
+        }
+    }
+
+    private func row(_ entries: [(name: String, value: UInt32)]) -> some View {
+        let current = selected
+        return HStack(spacing: 6) {
+            ForEach(entries, id: \.value) { swatch in
+                Swatch(
+                    color: swatch.value,
+                    name: swatch.name,
+                    selected: current == swatch.value
+                ) {
+                    store.setBackgroundColor(swatch.value)
+                }
+            }
+            Spacer()
+        }
+    }
+}
+
+private struct Swatch: View {
+    let color: UInt32
+    let name: String
+    let selected: Bool
+    let action: () -> Void
+
+    @DrawState private var hovered = false
+
+    var body: some View {
+        // The selection ring is an outer box painted the accent colour with
+        // the swatch inset into it. There is no border modifier, and a ring
+        // made of padding costs nothing and cannot be half-drawn.
+        VStack(
+            padding: 3,
+            spacing: 0,
+            onClick: action,
+            onHover: { hovered = $0 }
+        ) {
+            VStack(spacing: 0) {
+                Spacer()
+            }
+            .frame(width: .pt(46), height: .pt(30))
+            .background(colorOf(color))
+            .cornerRadius(5)
+        }
+        .background(
+            selected ? Theme.current.accent
+                     : (hovered ? Theme.current.hover : .clear)
+        )
+        .cornerRadius(8)
+    }
+}
+
+/// Pictures found in the usual directories.
+private struct PictureList: View {
+    let store: SettingsStore
+    /// Both passed in rather than read from the store, for the reason in
+    /// `BackgroundPage.body`: the comparison below happens inside a `ForEach`
+    /// closure, which runs outside the tracking scope that would notice them.
+    let selected: String
+    let isPictureMode: Bool
+
+    private static let visibleLimit = 24
+
+    var body: some View {
+        // `store.pictures` is different: it is read here in `body`, so its own
+        // dependency is registered and the list refreshes when the scan lands.
+        let all = store.pictures
+        let shown = Array(all.prefix(Self.visibleLimit))
+        let current = selected
+        let picked = isPictureMode
+
+        return VStack(spacing: 2) {
+            if all.isEmpty {
+                Text("No pictures found in ~/Pictures, ~/Wallpapers or "
+                     + "/usr/share/backgrounds. Type a path above instead.",
+                     color: Theme.current.textDim)
+            }
+            ForEach(shown, id: \.self) { path in
+                PickerRow(
+                    title: String(path.split(separator: "/").last ?? ""),
+                    detail: folderOf(path),
+                    selected: current == path && picked
+                ) {
+                    store.setPicture(path)
+                }
+            }
+            if all.count > shown.count {
+                Text("…and \(all.count - shown.count) more — type a path above.",
+                     color: Theme.current.textDim)
+            }
+        }
+    }
+
+    private func folderOf(_ path: String) -> String {
+        let parts = path.split(separator: "/")
+        return parts.count >= 2 ? String(parts[parts.count - 2]) : ""
+    }
+}
+
+/// `0x00RRGGBB` as a LavaUI colour.
+private func colorOf(_ value: UInt32) -> Color {
+    Color(
+        r: Float((value >> 16) & 0xff) / 255,
+        g: Float((value >> 8) & 0xff) / 255,
+        b: Float(value & 0xff) / 255
+    )
+}
+
+private func hexString(_ value: UInt32) -> String {
+    String(format: "#%06x", value & 0x00_ff_ff_ff)
 }
 
 // ─── Keyboard ───────────────────────────────────────────────────────────────

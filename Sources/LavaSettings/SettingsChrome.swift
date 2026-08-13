@@ -82,6 +82,7 @@ private struct SidebarRow: View {
                 // open — and here rather than in that page's `body`, which
                 // must not be the thing that changes what it is drawing.
                 if section == .keyboard { store.ensureLayouts() }
+                if section == .background { store.ensurePictures() }
             },
             onHover: { hovered = $0 }
         ) {
@@ -149,6 +150,8 @@ struct SettingsContent: View {
                 switch section {
                 case .appearance:
                     AppearancePage(store: store)
+                case .background:
+                    BackgroundPage(store: store)
                 case .keyboard:
                     KeyboardPage(store: store)
                 case .display:

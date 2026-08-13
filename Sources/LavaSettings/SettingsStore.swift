@@ -8,22 +8,25 @@ import Observation
 /// Which page is showing.
 enum SettingsSection: String, CaseIterable, Sendable {
     case appearance
+    case background
     case keyboard
     case display
 
     var title: String {
         switch self {
         case .appearance: return "Appearance"
+        case .background: return "Background"
         case .keyboard: return "Keyboard"
         case .display: return "Display"
         }
     }
 
     /// A one-line word about what lives on the page, under its name in the
-    /// sidebar. Cheap, and it turns three nouns into three answers.
+    /// sidebar. Cheap, and it turns four nouns into four answers.
     var subtitle: String {
         switch self {
         case .appearance: return "Colours, corners, shadows"
+        case .background: return "Picture or colour"
         case .keyboard: return "Layout, repeat, shortcuts"
         case .display: return "Screens and modes"
         }
@@ -64,6 +67,27 @@ final class SettingsStore {
     /// `dark`, `light`, or `nebula`. What Lava windows that wear
     /// `Theme.current` will paint.
     var themeName = "dark"
+
+    // MARK: Background
+
+    /// `solid` or `picture`.
+    var backgroundMode = "solid"
+    /// `0x00RRGGBB`. Meaningful in both modes — in `picture` it is what shows
+    /// through the letterbox, so the colour controls stay live there.
+    var backgroundColor: UInt32 = 0x0e_13_1f
+    var picturePath = ""
+    /// `fill`, `fit`, `stretch` or `center`.
+    var backgroundFit = "fill"
+    /// What is typed into the hex field, which is not the same thing as the
+    /// colour: half-typed hex is not a colour yet, and echoing the applied
+    /// value back into the field would fight the person typing it.
+    var colorText = ""
+
+    /// Pictures found in the usual places, offered so the common case does not
+    /// need a path typed by hand. Not a file browser and not trying to be —
+    /// there is a text field beside it for everything else.
+    var pictures: [String] = []
+    var picturesLoaded = false
 
     // MARK: Keyboard
 
@@ -130,6 +154,10 @@ final class SettingsStore {
                 themeName = theme.name
             }
 
+            if let wallpaper = try? DesktopSettings.wallpaper() {
+                apply(wallpaper)
+            }
+
             let keyboard = try DesktopSettings.keyboard()
             apply(keyboard)
 
@@ -151,6 +179,124 @@ final class SettingsStore {
         } catch {
             note("Could not read the keyboard layouts: \(error)", isError: true)
         }
+    }
+
+    /// Scans the usual picture directories, the first time the page is opened.
+    ///
+    /// Done here rather than at startup for the same reason as the keyboard
+    /// layouts: it touches the disk, and a user who never opens this page
+    /// should not wait for it behind their first frame.
+    func ensurePictures() {
+        guard !picturesLoaded else { return }
+        picturesLoaded = true
+
+        let home = FileManager.default.homeDirectoryForCurrentUser
+        let roots = [
+            home.appendingPathComponent("Pictures"),
+            home.appendingPathComponent("Pictures/Wallpapers"),
+            home.appendingPathComponent("Wallpapers"),
+            URL(fileURLWithPath: "/usr/share/backgrounds"),
+            URL(fileURLWithPath: "/usr/share/wallpapers"),
+        ]
+        // What the compositor's decoder actually reads. Listing an SVG here
+        // would offer the user a file that is guaranteed to be refused.
+        let extensions: Set<String> = ["png", "jpg", "jpeg", "bmp", "gif", "tga"]
+
+        var found: [String] = []
+        var seen: Set<String> = []
+        for root in roots {
+            guard let entries = try? FileManager.default.contentsOfDirectory(
+                at: root, includingPropertiesForKeys: nil
+            ) else { continue }
+            for entry in entries.sorted(by: { $0.path < $1.path }) {
+                guard extensions.contains(entry.pathExtension.lowercased()),
+                      seen.insert(entry.path).inserted
+                else { continue }
+                found.append(entry.path)
+            }
+        }
+        pictures = found
+    }
+
+    // MARK: - Writing the background
+
+    /// Pushes the background and takes back what the compositor kept.
+    ///
+    /// The failure here is the interesting one, and it is why this does not
+    /// look like `pushAppearance`. A picture that will not decode changes
+    /// nothing at all, so the local copy is reloaded from the compositor
+    /// rather than left holding the path that was refused — otherwise the page
+    /// would keep showing a selection the desktop does not have.
+    func pushWallpaper() {
+        guard connected else { return }
+        let wanted = Wallpaper(
+            mode: backgroundMode,
+            color: backgroundColor,
+            path: picturePath,
+            fit: backgroundFit
+        )
+        do {
+            try DesktopSettings.setWallpaper(wanted)
+            clearStatus()
+            if let taken = try? DesktopSettings.wallpaper() { apply(taken) }
+        } catch {
+            report(error)
+            if let actual = try? DesktopSettings.wallpaper() { apply(actual) }
+        }
+    }
+
+    func setBackgroundMode(_ mode: String) {
+        backgroundMode = mode
+        pushWallpaper()
+    }
+
+    func setBackgroundFit(_ fit: String) {
+        backgroundFit = fit
+        pushWallpaper()
+    }
+
+    func setBackgroundColor(_ color: UInt32) {
+        backgroundColor = color & 0x00_ff_ff_ff
+        pushWallpaper()
+    }
+
+    /// Picks a picture, switching to `picture` mode in the same push.
+    ///
+    /// One call rather than two: setting a path and then setting the mode
+    /// would put a picture on screen in two steps, and the first of them is a
+    /// state nobody asked for.
+    func setPicture(_ path: String) {
+        picturePath = path
+        backgroundMode = path.isEmpty ? "solid" : "picture"
+        pushWallpaper()
+    }
+
+    /// Applies whatever is in the hex field, if it is a colour yet.
+    func commitColorText() {
+        guard let parsed = Self.parseHex(colorText) else {
+            note("“\(colorText)” is not a colour — try something like #1e2430.",
+                 isError: true)
+            return
+        }
+        colorText = ""
+        setBackgroundColor(parsed)
+    }
+
+    /// `#rrggbb`, `rrggbb`, or the three-digit short form. Nil if it is not
+    /// one of those, which includes the half-typed states.
+    static func parseHex(_ text: String) -> UInt32? {
+        var digits = text.trimmingCharacters(in: .whitespaces).lowercased()
+        if digits.hasPrefix("#") { digits.removeFirst() }
+        else if digits.hasPrefix("0x") { digits.removeFirst(2) }
+        if digits.count == 3 {
+            // `abc` is `aabbcc`: each digit is a nibble repeated, which is what
+            // makes `#fff` white rather than a very dark blue.
+            digits = digits.map { "\($0)\($0)" }.joined()
+        }
+        guard digits.count == 6, let value = UInt32(digits, radix: 16) else {
+            return nil
+        }
+        return value & 0x00_ff_ff_ff
     }
 
     func reloadOutputs() {
@@ -282,6 +428,13 @@ final class SettingsStore {
         shadowOffsetY = appearance.shadowOffsetY
     }
 
+    private func apply(_ wallpaper: Wallpaper) {
+        backgroundMode = wallpaper.mode == "picture" ? "picture" : "solid"
+        backgroundColor = wallpaper.color & 0x00_ff_ff_ff
+        picturePath = wallpaper.path
+        backgroundFit = wallpaper.fit.isEmpty ? "fill" : wallpaper.fit
+    }
+
     private func apply(_ keyboard: KeyboardSettings) {
         layout = keyboard.layout
         variant = keyboard.variant
@@ -294,11 +447,18 @@ final class SettingsStore {
     }
 
     private func report(_ error: Error) {
-        // The one failure worth its own wording: the change is on screen and
-        // will not be after a restart, which no amount of looking at the
-        // desktop would reveal.
+        // Two failures worth their own wording, and they are opposites. The
+        // first says the change is on screen and will not survive a restart;
+        // the second says nothing happened and the old background is intact.
+        // Neither is something looking at the desktop would reveal, and a
+        // panel that showed the same sentence for both would be wrong half
+        // the time.
         if let failure = error as? SettingsWriteFailed {
             note("Applied, but not saved to \(failure.path): \(failure.reason)",
+                 isError: true)
+        } else if let failure = error as? WallpaperUnreadable {
+            note("Could not read \(failure.path): \(failure.reason). "
+                 + "The background is unchanged.",
                  isError: true)
         } else {
             note("\(error)", isError: true)

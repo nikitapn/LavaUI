@@ -58,6 +58,30 @@ public enum DesktopSettings {
         try call { try await $0.setSystemTheme(theme: theme) }
     }
 
+    // MARK: - Background
+
+    /// What the desktop is painted with, behind every window.
+    ///
+    /// Reports what is *on screen*. After a picture the compositor could not
+    /// read, that is the background which survived — not the one that was
+    /// asked for — so re-reading this after a failure is how a panel gets its
+    /// controls back in step with the desktop.
+    public static func wallpaper() throws -> Wallpaper {
+        try call { try await $0.getWallpaper() }
+    }
+
+    /// Sets the desktop background, immediately and for the next session.
+    ///
+    /// The only setter here that can refuse. A picture that will not decode
+    /// throws `WallpaperUnreadable` and changes *nothing* — the old background
+    /// is still up and still saved — which is a different report from
+    /// `SettingsWriteFailed`, where the change is on screen and will not
+    /// survive a restart. A panel that collapses the two will tell the user
+    /// the wrong thing in one of the two cases.
+    public static func setWallpaper(_ wallpaper: Wallpaper) throws {
+        try call { try await $0.setWallpaper(wallpaper: wallpaper) }
+    }
+
     // MARK: - Keyboard
 
     public static func keyboard() throws -> KeyboardSettings {

@@ -1,6 +1,7 @@
 #include "config.hpp"
 
 #include <cctype>
+#include <cstdio>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -18,6 +19,24 @@ std::string trim(std::string s) {
   if (first == std::string::npos) return {};
   const auto last = s.find_last_not_of(" \t\r\n");
   return s.substr(first, last - first + 1);
+}
+
+/// Turns a leading `~` into the user's home directory.
+///
+/// Only for paths a person types. Nothing else in this file needs it — a
+/// connector name or a program name has no `~` in it — but a wallpaper lives
+/// in `~/Pictures`, and a config file that made people spell out `/home/…`
+/// would be a config file that disagrees with every other one on the machine.
+std::string expandUser(const std::string &path) {
+  if (path.empty() || path.front() != '~') return path;
+  // `~otheruser` is deliberately not handled: resolving it means a passwd
+  // lookup to support a spelling nobody uses for their own wallpaper, and
+  // leaving it alone at least fails visibly rather than resolving to the
+  // wrong person's home.
+  if (path.size() > 1 && path[1] != '/') return path;
+  const char *home = std::getenv("HOME");
+  if (home == nullptr || *home == '\0') return path;
+  return std::string{home} + path.substr(1);
 }
 
 bool parseBool(const std::string &value, bool fallback) {
@@ -102,7 +121,73 @@ bool parseTransform(const std::string &value, OutputConfig &out) {
   return false;
 }
 
+/// `#rrggbb`, `rrggbb`, `0xrrggbb`, or the three-digit short form.
+///
+/// The short form is worth the six lines: `#fff` and `#000` are how people
+/// write white and black from memory, and a config file that took one spelling
+/// of white and silently ignored the other would be a small daily annoyance.
+bool parseColor(const std::string &value, uint32_t &out) {
+  std::string digits = value;
+  if (digits.rfind("0x", 0) == 0 || digits.rfind("0X", 0) == 0) {
+    digits.erase(0, 2);
+  } else if (!digits.empty() && digits.front() == '#') {
+    digits.erase(0, 1);
+  }
+  if (digits.size() != 3 && digits.size() != 6) return false;
+  for (const char c : digits) {
+    if (std::isxdigit(static_cast<unsigned char>(c)) == 0) return false;
+  }
+  if (digits.size() == 3) {
+    // `abc` means `aabbcc`, not `000abc` — each digit is a nibble repeated,
+    // which is what makes `#fff` white rather than a very dark blue.
+    digits = {digits[0], digits[0], digits[1], digits[1], digits[2], digits[2]};
+  }
+  out = static_cast<uint32_t>(std::stoul(digits, nullptr, 16)) & 0x00ffffffu;
+  return true;
+}
+
+/// One of `solid`/`picture`, defaulting to `solid`.
+///
+/// Never fails, and that is the point: an unreadable mode falls to the one
+/// that always works rather than leaving the desktop with no background at
+/// all. Same argument as the clamping in `[appearance]` — a typo should cost
+/// the user the setting, not the session.
+std::string canonicalBackgroundMode(const std::string &value) {
+  return value == "picture" || value == "image" ? "picture" : "solid";
+}
+
+/// One of `fill`/`fit`/`stretch`/`center`, defaulting to `fill`.
+std::string canonicalBackgroundFit(const std::string &value) {
+  if (value == "fit" || value == "contain") return "fit";
+  if (value == "stretch" || value == "scale") return "stretch";
+  if (value == "center" || value == "centre" || value == "none") return "center";
+  return "fill";
+}
+
 }  // namespace
+
+std::string canonicalWallpaperMode(const std::string &value) {
+  return canonicalBackgroundMode(value);
+}
+
+std::string canonicalWallpaperFit(const std::string &value) {
+  return canonicalBackgroundFit(value);
+}
+
+std::string formatWallpaperColor(uint32_t color) {
+  // `0x`, never `#`, however the user typed it. A `#` starts a comment on
+  // every line of this file, so `color = #1e2430` parses as `color =` and the
+  // key is dropped — a colour written that way would not survive being read
+  // back by the compositor that wrote it. Both spellings are accepted on the
+  // way in; only this one is ever written out.
+  char buffer[11];
+  std::snprintf(buffer, sizeof(buffer), "0x%06x", color & 0x00ffffffu);
+  return buffer;
+}
+
+bool parseWallpaperColor(const std::string &value, uint32_t &out) {
+  return parseColor(value, out);
+}
 
 std::string Config::defaultPath() {
   if (const char *explicitPath = std::getenv("LAVA_CONFIG")) {
@@ -132,8 +217,9 @@ Config Config::load(const std::string &path) {
   int lineNumber = 0;
   while (std::getline(file, line)) {
     ++lineNumber;
-    // Comments run to the end of the line, and a `#` inside a value is not a
-    // thing anyone writes in a resolution or a keyboard layout.
+    // Comments run to the end of the line, anywhere on it. This is why a
+    // colour is written `0x1e2430` rather than `#1e2430`: the latter is a
+    // value that this loop turns into an empty one, silently.
     const auto hash = line.find('#');
     if (hash != std::string::npos) line = line.substr(0, hash);
     line = trim(line);
@@ -229,6 +315,20 @@ Config Config::load(const std::string &path) {
         const int32_t offset = std::atoi(value.c_str());
         config.appearance.shadowOffsetY =
           offset < -128 ? -128 : (offset > 128 ? 128 : offset);
+      } else {
+        known = false;
+      }
+    } else if (section == "background") {
+      if (key == "mode") {
+        config.background.mode = canonicalBackgroundMode(value);
+      } else if (key == "color" || key == "colour") {
+        // A colour that will not parse leaves the default in place and says
+        // so, rather than painting the desktop whatever `atoi` made of it.
+        known = parseColor(value, config.background.color);
+      } else if (key == "picture" || key == "image" || key == "path") {
+        config.background.picture = expandUser(value);
+      } else if (key == "fit") {
+        config.background.fit = canonicalBackgroundFit(value);
       } else {
         known = false;
       }

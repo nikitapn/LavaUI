@@ -152,3 +152,44 @@ shadow-opacity = 0.35
 # How far down the shadow is pushed. Light comes from above, and a shadow
 # centred on its window reads as a glow instead.
 shadow-offset-y = 4
+
+
+[background]
+
+# What the desktop is painted with, behind every window. Written by
+# LavaSettings' Background page; editable here, and a SIGHUP applies it.
+
+# solid or picture. `solid` is the mode that cannot fail — there is no file to
+# be missing and nothing to decode.
+mode = solid
+
+# The desktop colour, as 0xrrggbb.
+#
+# Written with `0x` and not `#`, because a `#` starts a comment anywhere on a
+# line in this file — `color = #0e131f` would parse as an empty value and the
+# key would be dropped. LavaSettings accepts either spelling in its hex field
+# and always writes this one.
+#
+# Meaningful in *both* modes. Under a picture this is what shows wherever the
+# picture does not reach: the letterbox bars under `fit = fit`, the margins
+# under `fit = center`, and the whole of any screen plugged in before the
+# picture has been fitted to it.
+color = 0x0e131f
+
+# The picture, when mode = picture. A leading ~ is expanded. PNG, JPEG, BMP,
+# GIF and TGA are read; SVG is not.
+#
+# A path that cannot be read is reported and skipped at startup, and the
+# desktop comes up in the colour above rather than refusing to start. Over the
+# control plane the same path is *refused* outright, leaving the previous
+# background up — which is why a broken path never reaches this file.
+# picture = ~/Pictures/wallpaper.png
+
+# How the picture is placed on each screen. Applied per screen, so two
+# monitors of different shapes each get their own crop:
+#
+#     fill      cover the screen, crop whichever axis overflows  (default)
+#     fit       the whole picture, colour in the letterbox bars
+#     stretch   cover the screen, ignoring the picture's shape
+#     center    actual size, no scaling at all
+fit = fill

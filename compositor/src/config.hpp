@@ -109,6 +109,37 @@ struct ThemeConfig {
   std::string name = "dark";
 };
 
+/// What the desktop is painted with, behind every window.
+///
+/// Kept apart from `AppearanceConfig` deliberately. That block is the set of
+/// numbers clients copy so their own menus match the windows around them; this
+/// one is the compositor's own backdrop, which no client ever draws. They are
+/// two different audiences that happen to both be about how the desktop looks.
+struct BackgroundConfig {
+  /// `solid` or `picture`. Anything else parses as `solid` — the mode with no
+  /// file to be missing and no decode to fail.
+  std::string mode = "solid";
+
+  /// Packed `0x00RRGGBB`, opaque. The desktop is the bottom of the scene, so
+  /// there is nothing underneath for an alpha channel to describe.
+  ///
+  /// Meaningful in both modes: in `picture` this is what shows wherever the
+  /// picture does not reach, which is the letterbox under `fit`, the margin
+  /// under `center`, and the whole screen while a picture is being decoded or
+  /// after its file has gone away.
+  /// The blue-black the desktop was hard-coded to before any of this existed,
+  /// to a rounding error: 0.055, 0.075, 0.12 in floats is `0e131f` in bytes.
+  /// Changing the default would repaint the desktop of everyone who has never
+  /// opened the settings app, which is not a thing adding a setting should do.
+  uint32_t color = 0x0e131f;
+
+  /// Absolute path to the picture; empty in `solid` mode.
+  std::string picture;
+
+  /// `fill`, `fit`, `stretch` or `center`. Anything else parses as `fill`.
+  std::string fit = "fill";
+};
+
 /// One `key = value` bound for one `[section]`.
 ///
 /// The unit `Config::write` takes, because a settings app changes a handful of
@@ -153,6 +184,7 @@ struct Config {
 
   KeyboardConfig keyboard;
   AppearanceConfig appearance;
+  BackgroundConfig background;
   ThemeConfig theme;
   ShellConfig shell;
   std::vector<OutputConfig> outputs;
@@ -194,5 +226,25 @@ struct Config {
   /// a one-off `WLR_RENDERER=pixman ./compositor` still overrides the file.
   void applyEnvironment() const;
 };
+
+// ─── Background vocabulary ──────────────────────────────────────────────────
+//
+// Shared with the control plane so a value arriving over RPC and a value read
+// out of the file are narrowed by the same code. Two implementations of "what
+// counts as a fit mode" is two implementations to keep in step, and the one
+// that drifts is always the one with no file to look at.
+
+/// Narrows anything to `solid` or `picture`. Never fails.
+std::string canonicalWallpaperMode(const std::string &value);
+
+/// Narrows anything to `fill`, `fit`, `stretch` or `center`. Never fails.
+std::string canonicalWallpaperFit(const std::string &value);
+
+/// `#rrggbb`, for writing into the config file.
+std::string formatWallpaperColor(uint32_t color);
+
+/// Reads `#rrggbb`, `rrggbb`, `0xrrggbb` or the three-digit short form.
+/// False leaves `out` untouched.
+bool parseWallpaperColor(const std::string &value, uint32_t &out);
 
 }  // namespace lava

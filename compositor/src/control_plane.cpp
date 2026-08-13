@@ -579,6 +579,28 @@ class CompositorImpl final : public ICompositor_Servant {
     if (!error.empty()) throw SettingsWriteFailed(host_.configPath(), error);
   }
 
+  Wallpaper GetWallpaper() override {
+    Wallpaper out{};
+    host_.background(out.mode, out.color, out.path, out.fit);
+    return out;
+  }
+
+  void SetWallpaper(flat::Wallpaper_Direct wallpaper) override {
+    std::string pictureError;
+    std::string error;
+    host_.updateBackground(std::string{wallpaper.mode()}, wallpaper.color(),
+                           std::string{wallpaper.path()},
+                           std::string{wallpaper.fit()}, pictureError, error);
+    // Order matters. A picture that could not be read means nothing happened
+    // at all, so that is the report — raising the save failure instead would
+    // tell the user their new wallpaper is up and merely unsaved, which is
+    // the opposite of what is on screen.
+    if (!pictureError.empty()) {
+      throw WallpaperUnreadable(std::string{wallpaper.path()}, pictureError);
+    }
+    if (!error.empty()) throw SettingsWriteFailed(host_.configPath(), error);
+  }
+
   SystemTheme GetSystemTheme() override { return currentTheme(); }
 
   void SetSystemTheme(flat::SystemTheme_Direct theme) override {

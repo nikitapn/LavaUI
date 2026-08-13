@@ -155,6 +155,45 @@ message ThemeAck {
   serial: u32;
 }
 
+/// What the desktop itself is painted with, behind every window.
+///
+/// The one piece of the desktop's look that is *not* in `Appearance`, and for a
+/// reason: `Appearance` is the handful of numbers a client copies so its own
+/// menus match the windows around them, and no client should ever draw the
+/// wallpaper. This is the compositor's own backdrop, of interest to the app
+/// that changes it and to nobody else.
+///
+/// `color` is always meaningful, in both modes. In `solid` it is the desktop;
+/// in `picture` it is what shows wherever the picture does not reach — the
+/// letterbox bars under `fit`, the margin under `center`, and the whole screen
+/// for the moment before a picture is decoded or after its file goes away. A
+/// wallpaper with no colour would mean a desktop that can flash undefined
+/// pixels, so there is no mode in which this field is ignored.
+message Wallpaper {
+  /// `solid` or `picture`. Anything else is read as `solid`, which is the mode
+  /// that cannot fail — see `WallpaperUnreadable`.
+  mode: string;
+  /// `0x00RRGGBB`. Opaque by construction: the desktop is the bottom of the
+  /// scene and there is nothing behind it to blend with, so an alpha channel
+  /// here could only describe blending against darkness.
+  color: u32;
+  /// Absolute path to the picture. Empty in `solid` mode.
+  ///
+  /// A path rather than pixels: the compositor reads the file itself, once,
+  /// and re-reads it at every startup. Sending the decoded image over the
+  /// control plane would make a 4K wallpaper a 33 MB RPC and would leave the
+  /// desktop with no way to restore itself at login without the settings app
+  /// running again.
+  path: string;
+  /// How the picture is fitted to each screen: `fill`, `fit`, `stretch` or
+  /// `center`. Ignored in `solid` mode. Anything else is read as `fill`.
+  ///
+  /// Applied per screen, not once across the desktop — two monitors of
+  /// different sizes each get the picture fitted to themselves, which is what
+  /// every one of these words means on a desk with two monitors on it.
+  fit: string;
+}
+
 // ─── Settings ──────────────────────────────────────────────────────────────
 //
 // The desktop's own preferences, for the one client that exists to change
@@ -296,6 +335,18 @@ exception OutputNotFound {
 /// for a thing, the thing happened, and the honest report is that it happened
 /// and will not last — not that it failed.
 exception SettingsWriteFailed {
+  path: string;
+  reason: string;
+}
+
+/// That file is not a picture this compositor can put on the desktop.
+///
+/// Separate from `SettingsWriteFailed` because it is the opposite report.
+/// `SettingsWriteFailed` says the change happened and will not last; this says
+/// nothing happened at all — the old background is still up, unchanged and
+/// still saved. Folding the two into one exception would leave a settings app
+/// unable to tell the user which of those two very different things occurred.
+exception WallpaperUnreadable {
   path: string;
   reason: string;
 }
@@ -806,6 +857,27 @@ interface Compositor {
   /// Every subscribed client is told; a Lava window that uses `Theme.current`
   /// retints without restarting. Written to `lava.conf` as `[theme] name=…`.
   void SetSystemTheme(theme: in SystemTheme) raises(SettingsWriteFailed);
+
+  /// What the desktop is painted with now.
+  ///
+  /// Reports what is *up*, which after a failed picture is the background that
+  /// survived rather than the one that was asked for. A settings app that
+  /// re-reads this after a `WallpaperUnreadable` therefore sees the truth on
+  /// screen, and its controls go back to matching the desktop.
+  Wallpaper GetWallpaper();
+
+  /// Sets the desktop background, now and for the next session.
+  ///
+  /// The picture is decoded before anything changes, so the failure case
+  /// leaves the desktop exactly as it was: a mistyped path raises
+  /// `WallpaperUnreadable` and the old background stays up and stays saved.
+  /// This is the one setter here that can refuse, and it is why it can —
+  /// every other setting on this interface is a number or a name that cannot
+  /// be wrong in a way the compositor could detect in advance.
+  ///
+  /// Written to `lava.conf` as a `[background]` block.
+  void SetWallpaper(wallpaper: in Wallpaper)
+      raises(WallpaperUnreadable, SettingsWriteFailed);
 
   /// The keyboard as it is set up now.
   KeyboardSettings GetKeyboard();

@@ -228,6 +228,25 @@ struct CompositorHost {
                                 float shadowOpacity, float shadowOffsetY,
                                 std::string &outError) = 0;
 
+  /// What the desktop is painted with now: `solid`/`picture`, `0x00RRGGBB`,
+  /// the picture's path, and the fit mode.
+  virtual void background(std::string &outMode, uint32_t &outColor,
+                          std::string &outPicture,
+                          std::string &outFit) const = 0;
+
+  /// Sets the desktop background, applying before saving like the rest.
+  ///
+  /// The one setter here that can refuse outright. `outPictureError` is filled
+  /// when the picture could not be read, and in that case *nothing* changed —
+  /// not the screen and not the file — so the caller must report it as a
+  /// refusal rather than as a failure to save. `outError` keeps its usual
+  /// meaning: applied, not written.
+  virtual void updateBackground(const std::string &mode, uint32_t color,
+                                const std::string &picture,
+                                const std::string &fit,
+                                std::string &outPictureError,
+                                std::string &outError) = 0;
+
   virtual void keyboardSettings(KeyboardState &out) const = 0;
   virtual void setKeyboardSettings(const KeyboardState &settings,
                                    std::string &outError) = 0;

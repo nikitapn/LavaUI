@@ -115,6 +115,7 @@ executable(
   'compositor',
   'src/main.cpp',
   'src/appmenu.cpp',
+  'src/background.cpp',
   'src/canvas_surface.cpp',
   'src/clipboard.cpp',
   'src/config.cpp',
@@ -137,6 +138,10 @@ executable(
     # libdrm supplies the FourCC/modifier vocabulary that canvas and wlroots
     # describe a shared buffer in. Vulkan arrives through canvas.
     dependency('libdrm'),
+    # Regions. wlroots puts pixman on the include path already, but linking it
+    # is ours to declare — the wallpaper marks itself opaque so the scene can
+    # skip drawing the desktop underneath it.
+    dependency('pixman-1'),
     # The renderer. Canvas draws the pixels a compositor-side surface shows,
     # and owns the Vulkan device they are exported from.
     canvas_dep,

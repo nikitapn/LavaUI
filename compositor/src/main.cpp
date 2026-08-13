@@ -36,6 +36,7 @@
 #include "frame_probe.hpp"
 #include "control_plane.hpp"
 #include "shell.hpp"
+#include "background.hpp"
 #include "wlr.hpp"
 #include "render/png_encode.hpp"
 
@@ -444,6 +445,10 @@ struct Server {
   wlr_scene *scene = nullptr;
   wlr_output_layout *output_layout = nullptr;
   wlr_scene_output_layout *scene_layout = nullptr;
+
+  /// What the desktop is painted with, under every window. Built first so its
+  /// tree is the lowest in the scene — see `Background`.
+  lava::Background wallpaper;
 
   wlr_xdg_shell *xdg_shell = nullptr;
   wlr_seat *seat = nullptr;
@@ -2297,6 +2302,46 @@ class SurfaceRegistry : public lava::CompositorHost {
           {"appearance", "shadow-blur", std::to_string(blur)},
           {"appearance", "shadow-opacity", format_float(opacity)},
           {"appearance", "shadow-offset-y", std::to_string(offsetY)}},
+         outError);
+  }
+
+  void background(std::string &outMode, uint32_t &outColor,
+                  std::string &outPicture, std::string &outFit) const override {
+    // Read off the live backdrop rather than off the config, so a picture that
+    // was refused at startup reports the colour that is actually up. The two
+    // agree in every other case; this is the one that matters.
+    const lava::BackgroundConfig &background =
+        server_ != nullptr ? server_->wallpaper.config()
+                           : lava::BackgroundConfig{};
+    outMode    = background.mode;
+    outColor   = background.color;
+    outPicture = background.picture;
+    outFit     = background.fit;
+  }
+
+  void updateBackground(const std::string &mode, uint32_t color,
+                        const std::string &picture, const std::string &fit,
+                        std::string &outPictureError,
+                        std::string &outError) override {
+    if (server_ == nullptr) return;
+
+    lava::BackgroundConfig wanted;
+    wanted.mode    = lava::canonicalWallpaperMode(mode);
+    wanted.color   = color & 0x00ffffffu;
+    wanted.picture = picture;
+    wanted.fit     = lava::canonicalWallpaperFit(fit);
+
+    // Applied first, and only saved if it took. A path that does not decode
+    // must not reach the config file: the next start would read it back, fail
+    // again, and the desktop would come up wrong every time from then on.
+    if (!server_->wallpaper.apply(wanted, outPictureError)) return;
+
+    server_->config.background = server_->wallpaper.config();
+    const lava::BackgroundConfig &saved = server_->config.background;
+    save({{"background", "mode", saved.mode},
+          {"background", "color", lava::formatWallpaperColor(saved.color)},
+          {"background", "picture", saved.picture},
+          {"background", "fit", saved.fit}},
          outError);
   }
 
@@ -4736,6 +4781,22 @@ void Server::reloadConfig() {
         static_cast<float>(config.appearance.shadowOffsetY));
     if (surfaces->control()) surfaces->control()->postSystemTheme();
   }
+  // A hand-edited wallpaper, on the same signal as everything else. A picture
+  // that will not decode leaves the previous one up and says why — the reload
+  // must not take the desktop's background away because one line of the file
+  // now points at a file that has moved.
+  {
+    std::string error;
+    if (!wallpaper.apply(config.background, error)) {
+      wlr_log(WLR_ERROR, "background: %s: %s", config.background.picture.c_str(),
+              error.c_str());
+      // The config in memory has already been replaced, so put back what is
+      // actually on screen. Otherwise `GetWallpaper` would report the picture
+      // that was refused, and a settings app would show a wallpaper the
+      // desktop does not have.
+      config.background = wallpaper.config();
+    }
+  }
   wlr_log(WLR_INFO, "config: reloaded");
 }
 
@@ -5594,8 +5655,25 @@ int main() {
   server.scene_layout =
       wlr_scene_attach_output_layout(server.scene, server.output_layout);
 
-  const float background[] = {0.055f, 0.075f, 0.12f, 1.0f};
-  wlr_scene_rect_create(&server.scene->tree, 8192, 8192, background);
+  // The desktop's own backdrop, first, so everything below is above it. A
+  // picture that will not decode is reported and skipped rather than fatal:
+  // an unplugged external drive should cost the user their wallpaper, not
+  // their session.
+  server.wallpaper.init(&server.scene->tree, server.output_layout);
+  {
+    std::string error;
+    if (!server.wallpaper.apply(server.config.background, error)) {
+      wlr_log(WLR_ERROR, "background: %s: %s",
+              server.config.background.picture.c_str(), error.c_str());
+      // Fall back to the colour, which is the half of the setting that cannot
+      // fail, rather than to the built-in default — the user chose that colour
+      // too, and it is very likely the one the picture was picked to match.
+      lava::BackgroundConfig solid = server.config.background;
+      solid.mode = "solid";
+      solid.picture.clear();
+      server.wallpaper.apply(solid, error);
+    }
+  }
 
   // After the background and before anything else: the trees created here are
   // siblings above it, and the panel tree created last inside `init` is above
