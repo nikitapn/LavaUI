@@ -81,7 +81,6 @@ struct WeatherApp {
         #if canImport(LavaClient)
         if client {
             LavaClient.run(editor: editor) { WeatherView(session: session) }
-            return
         }
         #endif
         LavaApp.run(editor: editor) { WeatherView(session: session) }

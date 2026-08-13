@@ -280,7 +280,7 @@ final class MenuSession {
 
 nonisolated(unsafe) let session = MenuSession()
 nonisolated(unsafe) var tray: StatusNotifierTray?
-nonisolated(unsafe) let pulse = PulseSession()
+let pulse = PulseSession()
 
 struct TaskbarView: View {
     let brandIcon: UIImage

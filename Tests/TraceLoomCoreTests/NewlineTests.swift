@@ -22,7 +22,7 @@ import Testing
     defer { try? FileManager.default.removeItem(at: dir) }
 
     let url = dir.appendingPathComponent("crlf.log")
-    FileManager.default.createFile(
+    _ = FileManager.default.createFile(
         atPath: url.path,
         contents: Data("10:00:00.000 a=1\r\n10:00:01.000 a=2\r\n".utf8)
     )

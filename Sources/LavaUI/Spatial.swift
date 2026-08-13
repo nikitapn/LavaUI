@@ -368,7 +368,6 @@ public struct BookshelfLayout3D: Equatable, Sendable {
         at index: Int, itemCount: Int, focusedIndex: Int?,
         itemHeight: Float = 0
     ) -> CatalogPose3D {
-        let count = max(0, itemCount)
         let focus = focusedIndex ?? 0
         let restY = max(0, itemHeight) * 0.5
         var transform = Transform3D(position: [0, restY, 0])

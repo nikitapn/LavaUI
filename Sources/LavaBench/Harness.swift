@@ -46,7 +46,7 @@ final class Harness {
     /// mounting in `prepare` and calling `mount` again in `body`.
     func resetTree() {
         host = LayoutHost()
-        ViewInvalidation.consume()
+        _ = ViewInvalidation.consume()
     }
 
     func mount<V: View>(_ view: V) {

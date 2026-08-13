@@ -11,7 +11,7 @@ private func withTempFile(
     try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: dir) }
     let url = dir.appendingPathComponent(name)
-    FileManager.default.createFile(atPath: url.path, contents: bytes)
+    _ = FileManager.default.createFile(atPath: url.path, contents: bytes)
     try body(url)
 }
 

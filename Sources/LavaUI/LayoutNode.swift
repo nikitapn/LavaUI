@@ -1220,9 +1220,16 @@ class FragmentNode: AnyViewNode {
 
 /// Composite user view (`EditorChrome`): forwards to `body` node.
 ///
-/// `@unchecked Sendable` so `computeBody()` can weak-capture `self` in
-/// `withObservationTracking`'s `@Sendable onChange` — UI construction is
-/// single-threaded (frame loop), same as `Editor`.
+/// The observation callback captures this non-generic sendable token rather
+/// than `CompositeNode<V>`, avoiding the generic metatype Sendable warning.
+private final class BodyInvalidationToken: @unchecked Sendable {
+    weak var node: (any BodyRecomputable)?
+
+    init(_ node: any BodyRecomputable) {
+        self.node = node
+    }
+}
+
 final class CompositeNode<V: View>: FragmentNode, BodyRecomputable, @unchecked Sendable {
     var view: V
 
@@ -1282,11 +1289,12 @@ final class CompositeNode<V: View>: FragmentNode, BodyRecomputable, @unchecked S
     ///   that skips `computeBody()` would silently unsubscribe that node.
     private func computeBody() -> V.Body {
         var body: V.Body!
+        let invalidation = BodyInvalidationToken(self)
         withObservationTracking {
             body = view.body
-        } onChange: { [weak self] in
-            guard let self else { return }
-            ViewInvalidation.markBodyDirty(self)
+        } onChange: { [invalidation] in
+            guard let node = invalidation.node else { return }
+            ViewInvalidation.markBodyDirty(node)
         }
         return body
     }
