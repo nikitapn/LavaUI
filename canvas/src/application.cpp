@@ -866,11 +866,12 @@ void Application::ensureDrawListCapacity(size_t cmdCapacity,
                                          size_t glyphCapacity,
                                          size_t meshVertCapacity,
                                          size_t spatialVertCapacity,
+                                         size_t gradientCapacity,
                                          uint32_t windowId)
 {
   if (AppWindow *w = impl_->win(windowId)) {
     w->ensureDrawListCapacity(cmdCapacity, glyphCapacity, meshVertCapacity,
-                              spatialVertCapacity);
+                              spatialVertCapacity, gradientCapacity);
   }
 }
 
@@ -890,6 +891,10 @@ canvas::SpatialVertex *Application::drawSpatialVertexData(uint32_t windowId) {
   AppWindow *w = impl_->win(windowId);
   return w ? w->drawSpatialVertexData() : nullptr;
 }
+canvas::GradientDesc *Application::drawGradientData(uint32_t windowId) {
+  AppWindow *w = impl_->win(windowId);
+  return w ? w->drawGradientData() : nullptr;
+}
 size_t Application::drawCommandCapacity(uint32_t windowId) const {
   const AppWindow *w = impl_->win(windowId);
   return w ? w->drawCommandCapacity() : 0;
@@ -907,12 +912,18 @@ size_t Application::drawSpatialVertexCapacity(uint32_t windowId) const {
   return w ? w->drawSpatialVertexCapacity() : 0;
 }
 
+size_t Application::drawGradientCapacity(uint32_t windowId) const {
+  const AppWindow *w = impl_->win(windowId);
+  return w ? w->drawGradientCapacity() : 0;
+}
+
 void Application::commitDrawList(size_t cmdCount, size_t glyphCount,
                                  size_t meshVertCount, size_t spatialVertCount,
-                                 uint32_t windowId)
+                                 size_t gradientCount, uint32_t windowId)
 {
   if (AppWindow *w = impl_->win(windowId)) {
-    w->commitDrawList(cmdCount, glyphCount, meshVertCount, spatialVertCount);
+    w->commitDrawList(cmdCount, glyphCount, meshVertCount, spatialVertCount,
+                      gradientCount);
   }
 }
 

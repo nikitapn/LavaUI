@@ -18,7 +18,10 @@ namespace canvas::ipc {
 namespace {
 
 constexpr uint32_t kMagic   = 0x4c564441;  // 'LVDA'
-constexpr uint32_t kVersion = 1;
+// 2 added the gradient array. The layout of every slot changed, so a producer
+// and a consumer from either side of that must not agree to share memory —
+// which the version check below is exactly what enforces.
+constexpr uint32_t kVersion = 2;
 
 /// Every array starts on a cache line so two slots in flight cannot share one
 /// with each other.
@@ -57,7 +60,8 @@ struct ArenaHeader {
   uint32_t capGlyphs;
   uint32_t capMeshVertices;
   uint32_t capSpatialVertices;
-  uint32_t pad0;
+  /// Took `pad0`'s place, so adding this did not move any field below it.
+  uint32_t capGradients;
 
   uint64_t payloadBase;
   uint64_t slotStride;
@@ -69,7 +73,7 @@ struct ArenaHeader {
 
   /// Written before `published`, read after — the release/acquire pair on
   /// `published` is what orders them.
-  alignas(64) uint32_t counts[DrawArena::kSlots][4];
+  alignas(64) uint32_t counts[DrawArena::kSlots][5];
 };
 
 constexpr uint32_t kNoSlot = 0xffffffffu;
@@ -87,11 +91,12 @@ std::string shmName(const std::string &id, uint32_t generation)
 /// Byte size of one slot for `cap`, or 0 on overflow.
 size_t slotStrideFor(const ArenaCapacity &cap)
 {
-  const size_t parts[4] = {
+  const size_t parts[5] = {
     alignUp(static_cast<size_t>(cap.commands) * sizeof(DrawCommand), kAlign),
     alignUp(static_cast<size_t>(cap.glyphs) * sizeof(GlyphInstance), kAlign),
     alignUp(static_cast<size_t>(cap.meshVertices) * sizeof(MeshVertex), kAlign),
     alignUp(static_cast<size_t>(cap.spatialVertices) * sizeof(SpatialVertex), kAlign),
+    alignUp(static_cast<size_t>(cap.gradients) * sizeof(GradientDesc), kAlign),
   };
   size_t total = 0;
   for (size_t p : parts) total += p;
@@ -103,7 +108,8 @@ bool capacityInRange(const ArenaCapacity &cap)
   return cap.commands <= DrawArena::kMaxElements
          && cap.glyphs <= DrawArena::kMaxElements
          && cap.meshVertices <= DrawArena::kMaxElements
-         && cap.spatialVertices <= DrawArena::kMaxElements;
+         && cap.spatialVertices <= DrawArena::kMaxElements
+         && cap.gradients <= DrawArena::kMaxElements;
 }
 
 void logErrno(const char *what, const std::string &name)
@@ -155,6 +161,7 @@ ArenaCapacity ArenaCapacity::unionWith(const ArenaCapacity &other) const
     std::max(glyphs, other.glyphs),
     std::max(meshVertices, other.meshVertices),
     std::max(spatialVertices, other.spatialVertices),
+    std::max(gradients, other.gradients),
   };
 }
 
@@ -239,13 +246,14 @@ struct DrawArena::Impl {
   {
     const ArenaHeader *h = m.header();
     return ArenaCapacity{h->capCommands, h->capGlyphs, h->capMeshVertices,
-                         h->capSpatialVertices};
+                         h->capSpatialVertices, h->capGradients};
   }
 
-  /// Base of `slot`'s payload, and the four sub-array pointers within it.
-  template <typename Cmd, typename Gly, typename Mesh, typename Spat>
+  /// Base of `slot`'s payload, and the sub-array pointers within it.
+  template <typename Cmd, typename Gly, typename Mesh, typename Spat,
+            typename Grad>
   void slotPointers(const Mapping &m, uint32_t slot, Cmd *&cmds, Gly *&glyphs,
-                    Mesh *&mesh, Spat *&spatial) const
+                    Mesh *&mesh, Spat *&spatial, Grad *&gradients) const
   {
     const ArenaHeader *h = m.header();
     auto *bytes = static_cast<uint8_t *>(m.base) + h->payloadBase
@@ -257,6 +265,8 @@ struct DrawArena::Impl {
     mesh = reinterpret_cast<Mesh *>(bytes);
     bytes += alignUp(static_cast<size_t>(h->capMeshVertices) * sizeof(MeshVertex), kAlign);
     spatial = reinterpret_cast<Spat *>(bytes);
+    bytes += alignUp(static_cast<size_t>(h->capSpatialVertices) * sizeof(SpatialVertex), kAlign);
+    gradients = reinterpret_cast<Grad *>(bytes);
   }
 
   bool mapNew(const std::string &name, ArenaCapacity cap, uint32_t generation,
@@ -316,6 +326,7 @@ bool DrawArena::Impl::mapNew(const std::string &name, ArenaCapacity cap,
   h->capGlyphs          = cap.glyphs;
   h->capMeshVertices    = cap.meshVertices;
   h->capSpatialVertices = cap.spatialVertices;
+  h->capGradients       = cap.gradients;
   h->payloadBase        = payloadBase;
   h->slotStride         = stride;
   h->supersededBy.store(0, std::memory_order_relaxed);
@@ -370,7 +381,8 @@ bool DrawArena::Impl::mapExisting(const std::string &name, Mapping &out)
                   && h->payloadBase >= sizeof(ArenaHeader)
                   && capacityInRange(ArenaCapacity{h->capCommands, h->capGlyphs,
                                                    h->capMeshVertices,
-                                                   h->capSpatialVertices});
+                                                   h->capSpatialVertices,
+                                                   h->capGradients});
   if (!ok) {
     std::cerr << "DrawArena: " << name << " has a bad header\n";
     ::munmap(base, total);
@@ -379,8 +391,14 @@ bool DrawArena::Impl::mapExisting(const std::string &name, Mapping &out)
   // The slot geometry must be the one *this* build would have produced for
   // that capacity, and it must fit the file. Recomputing rather than trusting
   // `slotStride` is what keeps every derived pointer inside the mapping.
+  // Every field, including `capGradients`. Leaving one out here does not fail
+  // loudly at the omission — it silently computes a *shorter* stride than the
+  // producer used, which then disagrees with `slotStride` and rejects every
+  // arena as inconsistent. Adding an array to the payload means adding it in
+  // all three places: `slotStrideFor`, `slotPointers`, and here.
   const size_t stride = slotStrideFor(ArenaCapacity{
-    h->capCommands, h->capGlyphs, h->capMeshVertices, h->capSpatialVertices});
+    h->capCommands, h->capGlyphs, h->capMeshVertices, h->capSpatialVertices,
+    h->capGradients});
   if (stride == 0 || h->slotStride != stride
       || h->payloadBase + stride * kSlots > total) {
     std::cerr << "DrawArena: " << name << " has inconsistent geometry\n";
@@ -511,7 +529,8 @@ ArenaFrame DrawArena::beginFrame()
   frame.slot     = slot;
   frame.capacity = impl_->capacityOf(impl_->current);
   impl_->slotPointers(impl_->current, slot, frame.commands, frame.glyphs,
-                      frame.meshVertices, frame.spatialVertices);
+                      frame.meshVertices, frame.spatialVertices,
+                      frame.gradients);
   frame.valid = true;
   return frame;
 }
@@ -531,6 +550,7 @@ bool DrawArena::growFrame(ArenaFrame &frame, ArenaCapacity atLeast,
   next.glyphs          = std::max(next.glyphs * 2, 2048u);
   next.meshVertices    = std::max(next.meshVertices * 2, 256u);
   next.spatialVertices = std::max(next.spatialVertices * 2, 256u);
+  next.gradients       = std::max(next.gradients * 2, 64u);
   next = next.unionWith(atLeast);
   if (!capacityInRange(next)) {
     std::cerr << "DrawArena: frame needs more than the per-array limit\n";
@@ -550,11 +570,13 @@ bool DrawArena::growFrame(ArenaFrame &frame, ArenaCapacity atLeast,
   GlyphInstance *glyphs  = nullptr;
   MeshVertex    *mesh    = nullptr;
   SpatialVertex *spatial = nullptr;
-  impl_->slotPointers(newer, frame.slot, cmds, glyphs, mesh, spatial);
+  GradientDesc  *grads   = nullptr;
+  impl_->slotPointers(newer, frame.slot, cmds, glyphs, mesh, spatial, grads);
   std::memcpy(cmds, frame.commands, static_cast<size_t>(written.commands) * sizeof(DrawCommand));
   std::memcpy(glyphs, frame.glyphs, static_cast<size_t>(written.glyphs) * sizeof(GlyphInstance));
   std::memcpy(mesh, frame.meshVertices, static_cast<size_t>(written.meshVertices) * sizeof(MeshVertex));
   std::memcpy(spatial, frame.spatialVertices, static_cast<size_t>(written.spatialVertices) * sizeof(SpatialVertex));
+  std::memcpy(grads, frame.gradients, static_cast<size_t>(written.gradients) * sizeof(GradientDesc));
 
   // The consumer may be mid-frame in the old generation, so the old mapping
   // has to stay alive and readable. It learns about the move from the old
@@ -572,6 +594,7 @@ bool DrawArena::growFrame(ArenaFrame &frame, ArenaCapacity atLeast,
   frame.glyphs          = glyphs;
   frame.meshVertices    = mesh;
   frame.spatialVertices = spatial;
+  frame.gradients       = grads;
   return true;
 }
 
@@ -588,6 +611,7 @@ void DrawArena::commitFrame(const ArenaFrame &frame, ArenaCapacity written)
   h->counts[frame.slot][1] = std::min(written.glyphs, cap.glyphs);
   h->counts[frame.slot][2] = std::min(written.meshVertices, cap.meshVertices);
   h->counts[frame.slot][3] = std::min(written.spatialVertices, cap.spatialVertices);
+  h->counts[frame.slot][4] = std::min(written.gradients, cap.gradients);
 
   // Release: everything above — the payload and the counts — is visible to a
   // consumer that acquires this value.
@@ -637,12 +661,15 @@ bool DrawArena::acquireFrame(canvas::DrawList &out)
   const uint32_t glyphs   = std::min(h->counts[slot][1], cap.glyphs);
   const uint32_t mesh     = std::min(h->counts[slot][2], cap.meshVertices);
   const uint32_t spatial  = std::min(h->counts[slot][3], cap.spatialVertices);
+  const uint32_t grads    = std::min(h->counts[slot][4], cap.gradients);
 
   const DrawCommand   *cmdPtr     = nullptr;
   const GlyphInstance *glyphPtr   = nullptr;
   const MeshVertex    *meshPtr    = nullptr;
   const SpatialVertex *spatialPtr = nullptr;
-  impl_->slotPointers(impl_->current, slot, cmdPtr, glyphPtr, meshPtr, spatialPtr);
+  const GradientDesc  *gradPtr    = nullptr;
+  impl_->slotPointers(impl_->current, slot, cmdPtr, glyphPtr, meshPtr, spatialPtr,
+                      gradPtr);
 
   out.commands           = cmdPtr;
   out.commandCount       = commands;
@@ -652,6 +679,8 @@ bool DrawArena::acquireFrame(canvas::DrawList &out)
   out.meshVertexCount    = mesh;
   out.spatialVertices    = spatialPtr;
   out.spatialVertexCount = spatial;
+  out.gradients          = gradPtr;
+  out.gradientCount      = grads;
   return true;
 }
 

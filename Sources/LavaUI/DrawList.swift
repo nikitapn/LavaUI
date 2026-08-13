@@ -29,6 +29,10 @@ public enum DrawKind: UInt32 {
     /// Connected 1px line strip. `param`/`w` index into `meshVertices`.
     case polyline = 13
     case spatialTriangles = 14
+    /// Rounded rect filled with a two-stop linear ramp. `aux` = radius,
+    /// `param` = index into the frame's gradients, `color` = the start colour
+    /// so a consumer that ignores gradients still paints something sane.
+    case linearGradientRect = 21
     /// Opens a scene node: `param` = id, x/y = local offset, w/h = viewport,
     /// `color` = `SceneNodeFlags`. See `draw_command.hpp` — the renderer owns
     /// state against the id, which is what a node has and a command does not.
@@ -108,6 +112,9 @@ public final class DrawList {
     private var spatialVertexStorage: UnsafeMutablePointer<canvas.SpatialVertex>
     private var spatialVertexCapacity: Int
     public private(set) var spatialVertexCount = 0
+    private var gradientStorage: UnsafeMutablePointer<canvas.GradientDesc>
+    private var gradientCapacity: Int
+    public private(set) var gradientCount = 0
 
     /// Overlays found during the current walk, emitted once it finishes.
     private var pendingOverlays: [PendingOverlay] = []
@@ -147,7 +154,8 @@ public final class DrawList {
     /// The first frame's ask. Only a starting point: `grow` doubles from here
     /// as a tree turns out to be bigger than the last one was.
     private static let initialCapacity = FrameCapacity(
-        commands: 256, glyphs: 2048, meshVertices: 256, spatialVertices: 256
+        commands: 256, glyphs: 2048, meshVertices: 256, spatialVertices: 256,
+        gradients: 16
     )
 
     public init(editor: Editor, window: WindowID = .main) {
@@ -159,10 +167,12 @@ public final class DrawList {
         glyphStorage = buffers?.glyphs ?? Self.nowhere()
         meshVertexStorage = buffers?.meshVertices ?? Self.nowhere()
         spatialVertexStorage = buffers?.spatialVertices ?? Self.nowhere()
+        gradientStorage = buffers?.gradients ?? Self.nowhere()
         commandCapacity = buffers?.capacity.commands ?? 0
         glyphCapacity = buffers?.capacity.glyphs ?? 0
         meshVertexCapacity = buffers?.capacity.meshVertices ?? 0
         spatialVertexCapacity = buffers?.capacity.spatialVertices ?? 0
+        gradientCapacity = buffers?.capacity.gradients ?? 0
     }
 
     /// A one-element buffer for a frame with no storage, so the pointers are
@@ -183,6 +193,7 @@ public final class DrawList {
         glyphCount = 0
         meshVertexCount = 0
         spatialVertexCount = 0
+        gradientCount = 0
         cullStack.removeAll(keepingCapacity: true)
         adopt(sink.beginFrame(minimum: Self.initialCapacity))
     }
@@ -225,7 +236,8 @@ public final class DrawList {
     private var written: FrameCapacity {
         FrameCapacity(
             commands: commandCount, glyphs: glyphCount,
-            meshVertices: meshVertexCount, spatialVertices: spatialVertexCount
+            meshVertices: meshVertexCount, spatialVertices: spatialVertexCount,
+            gradients: gradientCount
         )
     }
 
@@ -254,21 +266,24 @@ public final class DrawList {
             glyphCapacity = 0
             meshVertexCapacity = 0
             spatialVertexCapacity = 0
+            gradientCapacity = 0
             return
         }
         commandStorage = buffers.commands
         glyphStorage = buffers.glyphs
         meshVertexStorage = buffers.meshVertices
         spatialVertexStorage = buffers.spatialVertices
+        gradientStorage = buffers.gradients
         commandCapacity = buffers.capacity.commands
         glyphCapacity = buffers.capacity.glyphs
         meshVertexCapacity = buffers.capacity.meshVertices
         spatialVertexCapacity = buffers.capacity.spatialVertices
+        gradientCapacity = buffers.capacity.gradients
     }
 
     private func grow(
         commands: Int = 0, glyphs: Int = 0, meshVertices: Int = 0,
-        spatialVertices: Int = 0
+        spatialVertices: Int = 0, gradients: Int = 0
     ) {
         let wanted = FrameCapacity(
             commands: commands > commandCapacity
@@ -279,7 +294,9 @@ public final class DrawList {
                 ? max(meshVertices, max(256, meshVertexCapacity * 2)) : meshVertexCapacity,
             spatialVertices: spatialVertices > spatialVertexCapacity
                 ? max(spatialVertices, max(256, spatialVertexCapacity * 2))
-                : spatialVertexCapacity
+                : spatialVertexCapacity,
+            gradients: gradients > gradientCapacity
+                ? max(gradients, max(16, gradientCapacity * 2)) : gradientCapacity
         )
         // A sink that cannot grow leaves the buffers it already handed out
         // valid, so the frame finishes smaller rather than being abandoned
@@ -331,6 +348,25 @@ public final class DrawList {
         }
         spatialVertexStorage[spatialVertexCount] = vertex
         spatialVertexCount += 1
+    }
+
+    /// Records one gradient and returns its index, or nil if there was no room.
+    ///
+    /// Returning the index rather than taking one is what keeps the two halves
+    /// in step: the command that names it is written immediately afterwards,
+    /// with whatever this actually allocated.
+    private func appendGradient(_ desc: canvas.GradientDesc) -> UInt32? {
+        if gradientCount == gradientCapacity {
+            grow(gradients: gradientCount + 1)
+        }
+        guard gradientCount < gradientCapacity else {
+            Self.noteTruncated("gradients", at: gradientCount)
+            return nil
+        }
+        gradientStorage[gradientCount] = desc
+        let index = UInt32(gradientCount)
+        gradientCount += 1
+        return index
     }
 
     func spatialTriangles(_ vertices: [SpatialProjectedVertex], texture: UIImage?) {
@@ -427,6 +463,35 @@ public final class DrawList {
         x: Float, y: Float, w: Float, h: Float, color: Color, radius: Float = 4
     ) {
         append(kind: .roundedRect, x: x, y: y, w: w, h: h, color: color, aux: radius)
+    }
+
+    /// A rect filled with a two-stop linear ramp.
+    ///
+    /// `angle` is in radians from +x towards +y, so 0 runs left to right and
+    /// `.pi / 2` runs top to bottom. The ramp spans the rect exactly whatever
+    /// the angle and whatever the aspect ratio, and both stops carry their own
+    /// alpha — a fade to transparent is `to:` with alpha 0, not a separate
+    /// mechanism.
+    ///
+    /// Falls back to a flat `from` fill if the frame has no room left for
+    /// another gradient, which is the same shape as every other truncation
+    /// here: draw less than was asked for rather than nothing.
+    public func linearGradientRect(
+        x: Float, y: Float, w: Float, h: Float,
+        from: Color, to: Color, angle: Float = .pi / 2, radius: Float = 0
+    ) {
+        var desc = canvas.GradientDesc()
+        desc.color0 = from.rgba8
+        desc.color1 = to.rgba8
+        desc.angle = angle
+        desc.flags = 0
+        guard let index = appendGradient(desc) else {
+            append(kind: .roundedRect, x: x, y: y, w: w, h: h, color: from,
+                   aux: radius)
+            return
+        }
+        append(kind: .linearGradientRect, x: x, y: y, w: w, h: h, color: from,
+               param: index, aux: radius)
     }
 
     /// Shapes `string` (cached on the font) and appends its glyphs at
@@ -1089,7 +1154,12 @@ public final class DrawList {
                     x: x, y: y, w: w, h: h,
                     cornerRadius: styled.cornerRadius
                 ) {
-                    if let fill = styled.fillColor {
+                    if let g = styled.fillGradient {
+                        linearGradientRect(
+                            x: x, y: y, w: w, h: h, from: g.from, to: g.to,
+                            angle: g.angle, radius: styled.cornerRadius
+                        )
+                    } else if let fill = styled.fillColor {
                         if styled.cornerRadius > 0 {
                             roundedRect(
                                 x: x, y: y, w: w, h: h,
@@ -1122,7 +1192,12 @@ public final class DrawList {
                         beginNode(stack.id, x: x, y: y, w: w, h: h, flags: flags)
                     }
                     let fill = stack.fillColor
-                    if let fill {
+                    if let g = stack.fillGradient {
+                        linearGradientRect(
+                            x: x, y: y, w: w, h: h, from: g.from, to: g.to,
+                            angle: g.angle, radius: stack.cornerRadius
+                        )
+                    } else if let fill {
                         if stack.cornerRadius > 0 {
                             roundedRect(
                                 x: x, y: y, w: w, h: h,
@@ -1252,7 +1327,12 @@ public final class DrawList {
     ) {
         // Hover wins over the base fill; both honour the radius.
         let leafFill = leaf.fillColor
-        if let fill = leafFill {
+        if let g = leaf.fillGradient {
+            linearGradientRect(
+                x: x, y: y, w: w, h: h, from: g.from, to: g.to,
+                angle: g.angle, radius: leaf.cornerRadius
+            )
+        } else if let fill = leafFill {
             if leaf.cornerRadius > 0 {
                 roundedRect(
                     x: x, y: y, w: w, h: h,

@@ -455,11 +455,11 @@ void Engine::submitDrawList(const DrawCommand *cmds, size_t cmdCount,
 
 void Engine::ensureDrawListCapacity(size_t cmdCapacity, size_t glyphCapacity,
                                     size_t meshVertCapacity, size_t spatialVertCapacity,
-                                    uint32_t windowId)
+                                    size_t gradientCapacity, uint32_t windowId)
 {
   impl_->withApp([&](Application &app) {
     app.ensureDrawListCapacity(cmdCapacity, glyphCapacity, meshVertCapacity,
-                               spatialVertCapacity, windowId);
+                               spatialVertCapacity, gradientCapacity, windowId);
   });
 }
 
@@ -507,13 +507,24 @@ size_t Engine::drawSpatialVertexCapacity(uint32_t windowId) const
     [&](Application &app) { return app.drawSpatialVertexCapacity(windowId); });
 }
 
+GradientDesc *Engine::drawGradientData(uint32_t windowId)
+{
+  return impl_->withApp([&](Application &app) { return app.drawGradientData(windowId); });
+}
+
+size_t Engine::drawGradientCapacity(uint32_t windowId) const
+{
+  return impl_->withApp(
+    [&](Application &app) { return app.drawGradientCapacity(windowId); });
+}
+
 void Engine::commitDrawList(size_t cmdCount, size_t glyphCount,
                             size_t meshVertCount, size_t spatialVertCount,
-                            uint32_t windowId)
+                            size_t gradientCount, uint32_t windowId)
 {
   impl_->withApp([&](Application &app) {
     app.commitDrawList(cmdCount, glyphCount, meshVertCount, spatialVertCount,
-                       windowId);
+                       gradientCount, windowId);
   });
 }
 

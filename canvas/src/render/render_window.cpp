@@ -1616,6 +1616,22 @@ void RenderWindow::replayDrawList(const canvas::DrawList &list, float viewW,
       quads_.pushBox({cmd.x + ox, cmd.y + oy}, {cmd.w, cmd.h}, faded(cmd.color),
                      cmd.aux);
       break;
+    case canvas::DrawCommandKind::LinearGradientRect: {
+      // `param` indexes the frame's gradient array. Out of range means a
+      // producer and this renderer disagree about the frame, so fall back to
+      // the flat colour rather than reading past the array — the command
+      // carries it precisely so this case has something honest to draw.
+      if (cmd.param < list.gradientCount && list.gradients != nullptr) {
+        const canvas::GradientDesc &g = list.gradients[cmd.param];
+        quads_.pushBoxGradient({cmd.x + ox, cmd.y + oy}, {cmd.w, cmd.h},
+                               faded(g.color0), faded(g.color1), g.angle,
+                               cmd.aux);
+      } else {
+        quads_.pushBox({cmd.x + ox, cmd.y + oy}, {cmd.w, cmd.h},
+                       faded(cmd.color), cmd.aux);
+      }
+      break;
+    }
     case canvas::DrawCommandKind::Circle:
       quads_.pushCircle({cmd.x + ox, cmd.y + oy}, cmd.aux, faded(cmd.color));
       break;

@@ -169,6 +169,16 @@ enum class DrawCommandKind : uint32_t {
   /// window would cost a pass over the whole thing every frame to produce
   /// something the SDF already describes exactly.
   Shadow = 19,
+  /// Rounded rect filled with a two-stop linear ramp. `aux` = corner radius,
+  /// `param` = index into the frame's `GradientDesc` array, `color` = the
+  /// start colour (also what a reader that ignores gradients should paint).
+  ///
+  /// The parameters do not fit here — a second colour and an angle are twelve
+  /// bytes and this struct is full — so they go in a side array indexed by
+  /// `param`, which is how `Text`, `Mesh` and `SpatialTriangles` already carry
+  /// what will not fit. The alternative, widening `DrawCommand`, would charge
+  /// every rect in every frame for something a handful of them use.
+  LinearGradientRect = 21,
 };
 
 /// Bits in `NodeAnimate.color` — which properties the command states.
@@ -286,6 +296,27 @@ struct SpatialVertex {
   float textured = 0.f;
 };
 static_assert(sizeof(SpatialVertex) == 28, "SpatialVertex must stay packed");
+
+/// The parameters of one gradient, pointed at by `LinearGradientRect.param`.
+///
+/// Deliberately roomier than a two-stop ramp needs. `flags` is reserved so a
+/// later multi-stop or radial gradient can be added without moving anything:
+/// it would name a gradient type and a range in a stops array, and the two
+/// colours here stay meaningful as the ends. Sixteen bytes now costs nothing —
+/// there is one of these per gradient, not per quad — and keeps that door open.
+struct GradientDesc {
+  /// Where the ramp starts. `DrawCommand.color` carries the same value, so a
+  /// consumer that does not implement gradients still paints something sane.
+  uint32_t color0 = 0xffffffffu;
+  uint32_t color1 = 0xffffffffu;
+  /// Radians, from +x towards +y: 0 is left-to-right, π/2 top-to-bottom. The
+  /// ramp always spans the rect exactly, whatever the angle or aspect ratio.
+  float angle = 0.f;
+  /// Reserved; must be zero. See above.
+  uint32_t flags = 0;
+};
+
+static_assert(sizeof(GradientDesc) == 16, "GradientDesc must stay packed");
 
 struct DrawCommand {
   uint32_t kind = 0;
@@ -417,6 +448,8 @@ struct DrawList {
   size_t               meshVertexCount    = 0;
   const SpatialVertex *spatialVertices    = nullptr;
   size_t               spatialVertexCount = 0;
+  const GradientDesc  *gradients          = nullptr;
+  size_t               gradientCount      = 0;
 };
 
 } // namespace canvas

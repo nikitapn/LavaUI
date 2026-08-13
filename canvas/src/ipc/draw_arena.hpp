@@ -82,17 +82,20 @@ struct ArenaCapacity {
   uint32_t glyphs         = 0;
   uint32_t meshVertices   = 0;
   uint32_t spatialVertices = 0;
+  /// Gradient descriptors. One per gradient, not per quad — see `GradientDesc`.
+  uint32_t gradients      = 0;
 
   /// Element-wise "fits inside".
   bool fitsIn(const ArenaCapacity &limit) const
   {
     return commands <= limit.commands && glyphs <= limit.glyphs
            && meshVertices <= limit.meshVertices
-           && spatialVertices <= limit.spatialVertices;
+           && spatialVertices <= limit.spatialVertices
+           && gradients <= limit.gradients;
   }
 
   /// Element-wise maximum — what a growth has to satisfy when only one of
-  /// the four arrays actually overflowed.
+  /// the arrays actually overflowed.
   ArenaCapacity unionWith(const ArenaCapacity &other) const;
 };
 
@@ -100,7 +103,7 @@ struct ArenaCapacity {
 /// common case a single mapping with no growth at all.
 inline constexpr ArenaCapacity kDefaultArenaCapacity{
   /*commands=*/1024, /*glyphs=*/4096, /*meshVertices=*/1024,
-  /*spatialVertices=*/1024};
+  /*spatialVertices=*/1024, /*gradients=*/64};
 
 /// One frame in progress: where to write, and how much room there is.
 ///
@@ -113,6 +116,7 @@ struct CANVAS_SWIFT_UNSAFE_POINTER ArenaFrame {
   GlyphInstance *glyphs          = nullptr;
   MeshVertex    *meshVertices    = nullptr;
   SpatialVertex *spatialVertices = nullptr;
+  GradientDesc  *gradients        = nullptr;
   ArenaCapacity  capacity;
   uint32_t       slot  = 0;
   bool           valid = false;

@@ -210,18 +210,20 @@ public:
                       uint32_t windowId = 0);
   void ensureDrawListCapacity(size_t cmdCapacity, size_t glyphCapacity,
                               size_t meshVertCapacity, size_t spatialVertCapacity,
-                              uint32_t windowId = 0);
+                              size_t gradientCapacity, uint32_t windowId = 0);
   canvas::DrawCommand *drawCommandData(uint32_t windowId = 0);
   canvas::GlyphInstance *drawGlyphData(uint32_t windowId = 0);
   canvas::MeshVertex *drawMeshVertexData(uint32_t windowId = 0);
   canvas::SpatialVertex *drawSpatialVertexData(uint32_t windowId = 0);
+  canvas::GradientDesc *drawGradientData(uint32_t windowId = 0);
   size_t drawCommandCapacity(uint32_t windowId = 0) const;
   size_t drawGlyphCapacity(uint32_t windowId = 0) const;
   size_t drawMeshVertexCapacity(uint32_t windowId = 0) const;
   size_t drawSpatialVertexCapacity(uint32_t windowId = 0) const;
+  size_t drawGradientCapacity(uint32_t windowId = 0) const;
   void commitDrawList(size_t cmdCount, size_t glyphCount,
                       size_t meshVertCount, size_t spatialVertCount,
-                      uint32_t windowId = 0);
+                      size_t gradientCount, uint32_t windowId = 0);
   bool pollInputEvent(canvas::InputEvent &out, uint32_t windowId = 0);
 
   /// Paths from the most recent FileDrop event, pulled by index — see the

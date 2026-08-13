@@ -9,15 +9,19 @@ public struct FrameCapacity: Equatable, Sendable {
     public var glyphs = 0
     public var meshVertices = 0
     public var spatialVertices = 0
+    /// Gradient descriptors. One per gradient rather than per quad, so this
+    /// stays small even on a screen full of them.
+    public var gradients = 0
 
     public init(
         commands: Int = 0, glyphs: Int = 0,
-        meshVertices: Int = 0, spatialVertices: Int = 0
+        meshVertices: Int = 0, spatialVertices: Int = 0, gradients: Int = 0
     ) {
         self.commands = commands
         self.glyphs = glyphs
         self.meshVertices = meshVertices
         self.spatialVertices = spatialVertices
+        self.gradients = gradients
     }
 }
 
@@ -27,6 +31,7 @@ public struct FrameBuffers {
     public var glyphs: UnsafeMutablePointer<canvas.GlyphInstance>
     public var meshVertices: UnsafeMutablePointer<canvas.MeshVertex>
     public var spatialVertices: UnsafeMutablePointer<canvas.SpatialVertex>
+    public var gradients: UnsafeMutablePointer<canvas.GradientDesc>
     public var capacity: FrameCapacity
 
     public init(
@@ -34,12 +39,14 @@ public struct FrameBuffers {
         glyphs: UnsafeMutablePointer<canvas.GlyphInstance>,
         meshVertices: UnsafeMutablePointer<canvas.MeshVertex>,
         spatialVertices: UnsafeMutablePointer<canvas.SpatialVertex>,
+        gradients: UnsafeMutablePointer<canvas.GradientDesc>,
         capacity: FrameCapacity
     ) {
         self.commands = commands
         self.glyphs = glyphs
         self.meshVertices = meshVertices
         self.spatialVertices = spatialVertices
+        self.gradients = gradients
         self.capacity = capacity
     }
 }
@@ -125,17 +132,20 @@ public final class EngineFrameSink: FrameSink {
         editor.ensureDrawListCapacity(
             commands: wanted.commands, glyphs: wanted.glyphs,
             meshVertices: wanted.meshVertices,
-            spatialVertices: wanted.spatialVertices, window: window
+            spatialVertices: wanted.spatialVertices,
+            gradients: wanted.gradients, window: window
         )
         let storage = editor.drawListStorage(window: window)
         let next = FrameBuffers(
             commands: storage.commands, glyphs: storage.glyphs,
             meshVertices: storage.meshVertices,
             spatialVertices: storage.spatialVertices,
+            gradients: storage.gradients,
             capacity: FrameCapacity(
                 commands: storage.commandCapacity, glyphs: storage.glyphCapacity,
                 meshVertices: storage.meshVertexCapacity,
-                spatialVertices: storage.spatialVertexCapacity
+                spatialVertices: storage.spatialVertexCapacity,
+                gradients: storage.gradientCapacity
             )
         )
         buffers = next
@@ -167,7 +177,8 @@ public final class ArenaFrameSink: FrameSink {
     public init?(
         id: String,
         capacity: FrameCapacity = FrameCapacity(
-            commands: 1024, glyphs: 4096, meshVertices: 1024, spatialVertices: 1024
+            commands: 1024, glyphs: 4096, meshVertices: 1024,
+            spatialVertices: 1024, gradients: 64
         ),
         onPublish: @escaping () -> Void = {}
     ) {
@@ -206,16 +217,18 @@ public final class ArenaFrameSink: FrameSink {
     /// than a state a producer can reach.
     private var current: FrameBuffers? {
         guard let commands = frame.commands, let glyphs = frame.glyphs,
-              let mesh = frame.meshVertices, let spatial = frame.spatialVertices
+              let mesh = frame.meshVertices, let spatial = frame.spatialVertices,
+              let gradients = frame.gradients
         else { return nil }
         return FrameBuffers(
             commands: commands, glyphs: glyphs,
-            meshVertices: mesh, spatialVertices: spatial,
+            meshVertices: mesh, spatialVertices: spatial, gradients: gradients,
             capacity: FrameCapacity(
                 commands: Int(frame.capacity.commands),
                 glyphs: Int(frame.capacity.glyphs),
                 meshVertices: Int(frame.capacity.meshVertices),
-                spatialVertices: Int(frame.capacity.spatialVertices)
+                spatialVertices: Int(frame.capacity.spatialVertices),
+                gradients: Int(frame.capacity.gradients)
             )
         )
     }
@@ -227,6 +240,7 @@ extension FrameCapacity {
         commands >= limit.commands && glyphs >= limit.glyphs
             && meshVertices >= limit.meshVertices
             && spatialVertices >= limit.spatialVertices
+            && gradients >= limit.gradients
     }
 
     var arenaCapacity: canvas.ipc.ArenaCapacity {
@@ -235,6 +249,7 @@ extension FrameCapacity {
         c.glyphs = UInt32(max(0, glyphs))
         c.meshVertices = UInt32(max(0, meshVertices))
         c.spatialVertices = UInt32(max(0, spatialVertices))
+        c.gradients = UInt32(max(0, gradients))
         return c
     }
 }

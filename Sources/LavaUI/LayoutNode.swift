@@ -311,6 +311,8 @@ final class LeafNode: YogaBoxNode {
     var color: Color = .primary
     var onClick: (() -> Void)?
     var fillColor: Color?
+    /// Two-stop linear fill; wins over `fillColor` when set.
+    var fillGradient: Gradient?
     /// Explicit face, or nil → `FontStore.default` at measure time.
     var font: UIFont?
     /// Captured from `Environment.current.theme` at mount/reconcile — measure
@@ -1027,6 +1029,8 @@ final class StackNode: YogaBoxNode {
     let direction: FlexDirection
     /// Panel background (Phase 3 draw list).
     var fillColor: Color?
+    /// Two-stop linear fill; wins over `fillColor` when set.
+    var fillGradient: Gradient?
     var hoverFill: Color?
     var onClick: (() -> Void)?
     /// Button-aware press (tray right-click, etc.). Prefer over `onClick` when
@@ -1996,6 +2000,8 @@ final class LeafNode: AnyViewNode {
     var cornerRadius: Float = 0
     var onHover: ((Bool) -> Void)?
     var fillColor: Color?
+    /// Two-stop linear fill; wins over `fillColor` when set.
+    var fillGradient: Gradient?
     var childNodes: [any AnyViewNode] { [] }
     init(kind: LeafKind, label: String, width: Dimension, height: Dimension, flexGrow: Float = 0, minWidth: Float = 0) {
         self.kind = kind
@@ -2018,6 +2024,8 @@ final class StackNode: AnyViewNode {
     var structuralKey: String?
     var needsBodyRecompute = false
     var fillColor: Color?
+    /// Two-stop linear fill; wins over `fillColor` when set.
+    var fillGradient: Gradient?
     let direction: FlexDirection
     var childNodes: [any AnyViewNode]
     init(label: String, direction: FlexDirection, style: StackStyle, content: any AnyViewNode) {

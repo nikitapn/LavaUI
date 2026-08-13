@@ -134,8 +134,35 @@ class QuadRenderer {
     uint32_t color;
     uint32_t kind;
     uint32_t textureIndex;
+
+    // ─── Gradient ──────────────────────────────────────────────────────────
+    //
+    // A second colour and a ramp across the quad, evaluated per vertex and
+    // interpolated. Not a `Kind` of its own, deliberately: the ramp only
+    // decides what `vColor` is, and every kind already uses `vColor` — as a
+    // fill for shapes and as a tint for glyphs and images — so leaving it
+    // orthogonal makes a gradient-tinted image fall out for free rather than
+    // needing a seventh way to say "shape".
+    //
+    // Solid quads leave `gradAxis` zero, which makes the ramp position zero
+    // everywhere and `mix(color, color1, 0)` exactly `color`. So there is no
+    // branch in the shader and nothing to set on the paths that predate this.
+
+    /// The far end of the ramp. Read only where `gradAxis` is non-zero.
+    uint32_t color1 = 0;
+    /// Ramp direction in the quad's own 0…1 corner space, pre-divided by the
+    /// span so the shader is one dot product. Zero means "no gradient".
+    ///
+    /// Computed on the CPU (`pushBoxGradient`) rather than passing an angle,
+    /// because turning an angle into this needs the quad's aspect ratio and a
+    /// projection of four corners — per vertex, six times per quad, for a
+    /// value that is constant across the whole instance.
+    vec2 gradAxis{0.f, 0.f};
+    /// Ramp offset, so `t = dot(corner, gradAxis) + gradBias` lands in 0…1
+    /// across the quad whichever way the gradient points.
+    float gradBias = 0.f;
   };
-  static_assert(sizeof(Instance) == 60, "QuadInstance ABI changed");
+  static_assert(sizeof(Instance) == 76, "QuadInstance ABI changed");
 
   explicit QuadRenderer(RenderDevice &device) : device_{device} {}
 
@@ -164,6 +191,21 @@ class QuadRenderer {
   /// Axis-aligned box. radius 0 gives a hard rect; w/2 == h/2 == radius gives a
   /// circle. Coordinates are the box's top-left corner and size, in pixels.
   void pushBox(vec2 topLeft, vec2 size, uint32_t rgba, float radius = 0.0f);
+
+  /// The same box, filled with a two-stop linear ramp.
+  ///
+  /// `angle` is in radians, measured from +x towards +y — so 0 runs left to
+  /// right and π/2 runs top to bottom, in screen terms. The ramp always spans
+  /// the box exactly: `rgba0` sits on the first corner the direction reaches
+  /// and `rgba1` on the last, whatever the angle and whatever the aspect
+  /// ratio. Both ends may differ in alpha as well as colour.
+  ///
+  /// Exact rather than approximate, despite being interpolated between six
+  /// vertices: a two-stop ramp is an affine function of position, and that is
+  /// the one family barycentric interpolation reproduces perfectly. Multi-stop
+  /// and radial are not, and would need the ramp evaluated per fragment.
+  void pushBoxGradient(vec2 topLeft, vec2 size, uint32_t rgba0, uint32_t rgba1,
+                       float angle, float radius = 0.0f);
 
   void pushCircle(vec2 center, float radius, uint32_t rgba);
 

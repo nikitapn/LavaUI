@@ -10,6 +10,12 @@ public struct ViewStyle: Equatable {
     /// Per-edge inset. `nil` means "leave the node's baseline alone".
     public var padding: EdgeInsets?
     public var fill: Color?
+    /// A two-stop linear fill, which wins over `fill` when both are set.
+    ///
+    /// Separate rather than making `fill` an enum: `fill` is read in a dozen
+    /// places that only ever want a flat colour, and widening it would make
+    /// every one of them handle a case it has no use for.
+    public var fillGradient: Gradient?
     public var hoverFill: Color?
     public var cornerRadius: Float?
     public var width: Dimension?
@@ -34,10 +40,18 @@ public struct ViewStyle: Equatable {
     public init() {}
 
     /// `self` wins where both define a field.
+    ///
+    /// **Every field has to be listed here.** `out` starts empty, so a field
+    /// left out is not merged conservatively — it is dropped, from both sides,
+    /// silently. `.frame().background(gradient)` is two styles that merge, and
+    /// omitting `fillGradient` here meant the gradient vanished while the flat
+    /// `fill` beside it survived: a box that should have been a red-to-black
+    /// ramp drew solid red, with nothing wrong anywhere else to point at.
     func merged(over base: ViewStyle) -> ViewStyle {
         var out = ViewStyle()
         out.padding = padding ?? base.padding
         out.fill = fill ?? base.fill
+        out.fillGradient = fillGradient ?? base.fillGradient
         out.hoverFill = hoverFill ?? base.hoverFill
         out.cornerRadius = cornerRadius ?? base.cornerRadius
         out.width = width ?? base.width
@@ -143,7 +157,8 @@ public struct ModifiedView<Content: View>: PrimitiveView {
     /// lose the fill. Layout is unchanged because `StyleBoxNode` inherits flex
     /// from what it wraps.
     private static func canPaint(_ style: ViewStyle, on node: any AnyViewNode) -> Bool {
-        if style.fill == nil, style.hoverFill == nil, style.cornerRadius == nil {
+        if style.fill == nil, style.fillGradient == nil, style.hoverFill == nil,
+           style.cornerRadius == nil {
             return true
         }
         return node is LeafNode || node is StackNode || node is StyleBoxNode
@@ -194,14 +209,17 @@ extension YogaBoxNode {
 
         if let leaf = self as? LeafNode {
             if let fill = style.fill { leaf.fillColor = fill }
+            if let g = style.fillGradient { leaf.fillGradient = g }
             if let hover = style.hoverFill { leaf.hoverFill = hover }
             if let radius = style.cornerRadius { leaf.cornerRadius = radius }
         } else if let stack = self as? StackNode {
             if let fill = style.fill { stack.fillColor = fill }
+            if let g = style.fillGradient { stack.fillGradient = g }
             if let hover = style.hoverFill { stack.hoverFill = hover }
             if let radius = style.cornerRadius { stack.cornerRadius = radius }
         } else if let box = self as? StyleBoxNode {
             if let fill = style.fill { box.fillColor = fill }
+            if let g = style.fillGradient { box.fillGradient = g }
             if let radius = style.cornerRadius { box.cornerRadius = radius }
         }
         applyStyle()
@@ -217,6 +235,8 @@ extension YogaBoxNode {
 class StyleBoxNode: YogaBoxNode {
     private(set) var contentNode: any AnyViewNode
     var fillColor: Color?
+    /// Two-stop linear fill; wins over `fillColor` when set.
+    var fillGradient: Gradient?
     var cornerRadius: Float = 0
     private var insertedLeaves: [any AnyViewNode] = []
 
@@ -307,6 +327,15 @@ extension View {
 
     public func background(_ color: Color) -> ModifiedView<Self> {
         styled { $0.fill = color }
+    }
+
+    /// Fills the box with a two-stop linear ramp instead of a flat colour.
+    ///
+    /// The start colour is also recorded as the flat `fill`, so anything that
+    /// reads a background as one colour — and a renderer too old to know about
+    /// gradients — still has an answer.
+    public func background(_ gradient: Gradient) -> ModifiedView<Self> {
+        styled { $0.fillGradient = gradient; $0.fill = gradient.from }
     }
 
     public func hoverBackground(_ color: Color) -> ModifiedView<Self> {
@@ -432,6 +461,10 @@ extension ModifiedView {
 
     public func background(_ color: Color) -> ModifiedView<Content> {
         adding { $0.fill = color }
+    }
+
+    public func background(_ gradient: Gradient) -> ModifiedView<Content> {
+        adding { $0.fillGradient = gradient; $0.fill = gradient.from }
     }
 
     public func hoverBackground(_ color: Color) -> ModifiedView<Content> {

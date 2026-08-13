@@ -313,6 +313,11 @@ public struct DemoExample: View {
                 }
             }
 
+            Text("Linear gradient", color: .accent)
+            HStack(alignment: .center) {}
+            .frame(width: .pct(100), height: .pt(200))
+            .background(Gradient(from: Color(r: 1.0, g: 0.0, b: 0.0), to: Color(r: 0.0, g: 1.0, b: 0.0, a: 0), angle: .pi))
+
             Text("Charts · pie (static Canvas)", color: .accent)
             Text(
                 "Donut tap cycles slices. Live widgets live in the collapsible lab below.",

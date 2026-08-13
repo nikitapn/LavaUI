@@ -91,17 +91,20 @@ class AppWindow {
   // ─── Draw-list arena ─────────────────────────────────────────────────────
 
   void ensureDrawListCapacity(size_t cmdCapacity, size_t glyphCapacity,
-                              size_t meshVertCapacity, size_t spatialVertCapacity);
+                              size_t meshVertCapacity, size_t spatialVertCapacity,
+                              size_t gradientCapacity);
   canvas::DrawCommand   *drawCommandData()       { return drawCmds_.data(); }
   canvas::GlyphInstance *drawGlyphData()         { return drawGlyphs_.data(); }
   canvas::MeshVertex    *drawMeshVertexData()    { return drawMeshVerts_.data(); }
   canvas::SpatialVertex *drawSpatialVertexData() { return drawSpatialVerts_.data(); }
+  canvas::GradientDesc  *drawGradientData()      { return drawGradients_.data(); }
   size_t drawCommandCapacity() const      { return drawCmds_.size(); }
   size_t drawGlyphCapacity() const        { return drawGlyphs_.size(); }
   size_t drawMeshVertexCapacity() const   { return drawMeshVerts_.size(); }
   size_t drawSpatialVertexCapacity() const { return drawSpatialVerts_.size(); }
+  size_t drawGradientCapacity() const     { return drawGradients_.size(); }
   void commitDrawList(size_t cmdCount, size_t glyphCount, size_t meshVertCount,
-                      size_t spatialVertCount);
+                      size_t spatialVertCount, size_t gradientCount);
   /// Legacy copying path.
   void submitDrawList(const canvas::DrawCommand *cmds, size_t cmdCount,
                       const canvas::GlyphInstance *glyphs, size_t glyphCount,
@@ -272,10 +275,12 @@ class AppWindow {
   std::vector<canvas::GlyphInstance> drawGlyphs_;
   std::vector<canvas::MeshVertex>    drawMeshVerts_;
   std::vector<canvas::SpatialVertex> drawSpatialVerts_;
+  std::vector<canvas::GradientDesc>  drawGradients_;
   size_t drawCmdCount_ = 0;
   size_t drawGlyphCount_ = 0;
   size_t drawMeshVertCount_ = 0;
   size_t drawSpatialVertCount_ = 0;
+  size_t drawGradientCount_ = 0;
 
   // GLFW callbacks vs the consuming loop — protect the queue so Resize / Key /
   // Mouse are not lost.

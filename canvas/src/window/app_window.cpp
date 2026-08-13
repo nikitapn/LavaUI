@@ -92,6 +92,8 @@ canvas::DrawList AppWindow::currentDrawList() const
     .meshVertexCount    = drawMeshVertCount_,
     .spatialVertices    = drawSpatialVerts_.data(),
     .spatialVertexCount = drawSpatialVertCount_,
+    .gradients          = drawGradients_.data(),
+    .gradientCount      = drawGradientCount_,
   };
 }
 
@@ -826,7 +828,8 @@ void AppWindow::submitDrawList(const canvas::DrawCommand *cmds, size_t cmdCount,
   }
 
 void AppWindow::ensureDrawListCapacity(size_t cmdCapacity, size_t glyphCapacity,
-                              size_t meshVertCapacity, size_t spatialVertCapacity)
+                              size_t meshVertCapacity, size_t spatialVertCapacity,
+                              size_t gradientCapacity)
   {
     if (drawCmds_.size() < cmdCapacity) drawCmds_.resize(cmdCapacity);
     if (drawGlyphs_.size() < glyphCapacity) drawGlyphs_.resize(glyphCapacity);
@@ -836,15 +839,19 @@ void AppWindow::ensureDrawListCapacity(size_t cmdCapacity, size_t glyphCapacity,
     if (drawSpatialVerts_.size() < spatialVertCapacity) {
       drawSpatialVerts_.resize(spatialVertCapacity);
     }
+    if (drawGradients_.size() < gradientCapacity) {
+      drawGradients_.resize(gradientCapacity);
+    }
   }
 
 void AppWindow::commitDrawList(size_t cmdCount, size_t glyphCount, size_t meshVertCount,
-                      size_t spatialVertCount)
+                      size_t spatialVertCount, size_t gradientCount)
   {
     drawCmdCount_ = std::min(cmdCount, drawCmds_.size());
     drawGlyphCount_ = std::min(glyphCount, drawGlyphs_.size());
     drawMeshVertCount_ = std::min(meshVertCount, drawMeshVerts_.size());
     drawSpatialVertCount_ = std::min(spatialVertCount, drawSpatialVerts_.size());
+    drawGradientCount_ = std::min(gradientCount, drawGradients_.size());
   }
 
 bool AppWindow::pollInputEvent(canvas::InputEvent &out)

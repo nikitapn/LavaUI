@@ -591,7 +591,7 @@ void QuadRenderer::createInstancePipeline(VkRenderPass renderPass,
 
   VkVertexInputBindingDescription binding{0, sizeof(Instance),
                                            VK_VERTEX_INPUT_RATE_INSTANCE};
-  std::array<VkVertexInputAttributeDescription, 10> attrs{
+  std::array<VkVertexInputAttributeDescription, 13> attrs{
     VkVertexInputAttributeDescription{0,0,VK_FORMAT_R32G32_SFLOAT,offsetof(Instance,topLeft)},
     VkVertexInputAttributeDescription{1,0,VK_FORMAT_R32G32_SFLOAT,offsetof(Instance,size)},
     VkVertexInputAttributeDescription{2,0,VK_FORMAT_R32G32_SFLOAT,offsetof(Instance,halfSize)},
@@ -601,7 +601,10 @@ void QuadRenderer::createInstancePipeline(VkRenderPass renderPass,
     VkVertexInputAttributeDescription{6,0,VK_FORMAT_R32G32_SFLOAT,offsetof(Instance,uv1)},
     VkVertexInputAttributeDescription{7,0,VK_FORMAT_R8G8B8A8_UNORM,offsetof(Instance,color)},
     VkVertexInputAttributeDescription{8,0,VK_FORMAT_R32_UINT,offsetof(Instance,kind)},
-    VkVertexInputAttributeDescription{9,0,VK_FORMAT_R32_UINT,offsetof(Instance,textureIndex)}};
+    VkVertexInputAttributeDescription{9,0,VK_FORMAT_R32_UINT,offsetof(Instance,textureIndex)},
+    VkVertexInputAttributeDescription{10,0,VK_FORMAT_R8G8B8A8_UNORM,offsetof(Instance,color1)},
+    VkVertexInputAttributeDescription{11,0,VK_FORMAT_R32G32_SFLOAT,offsetof(Instance,gradAxis)},
+    VkVertexInputAttributeDescription{12,0,VK_FORMAT_R32_SFLOAT,offsetof(Instance,gradBias)}};
   VkPipelineVertexInputStateCreateInfo vi{
     .sType=VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
     .vertexBindingDescriptionCount=1,.pVertexBindingDescriptions=&binding,
@@ -873,6 +876,58 @@ void QuadRenderer::pushBox(vec2 topLeft, vec2 size, uint32_t rgba, float radius)
 
   appendInstance({center.x-ext.x, center.y-ext.y}, {ext.x*2.f, ext.y*2.f},
                  half, r, rgba, Kind::Sdf);
+}
+
+void QuadRenderer::pushBoxGradient(vec2 topLeft, vec2 size, uint32_t rgba0,
+                                   uint32_t rgba1, float angle, float radius) {
+  if (size.x <= 0.0f || size.y <= 0.0f) {
+    return;
+  }
+  ensureBatchTexture(glyphAtlasView_);
+  constexpr float kPad = 1.0f;
+
+  const vec2 half{size.x * 0.5f, size.y * 0.5f};
+  const vec2 center{topLeft.x + half.x, topLeft.y + half.y};
+  const vec2 ext{half.x + kPad, half.y + kPad};
+  const float r = std::min(radius, std::min(half.x, half.y));
+
+  // The ramp is defined in *pixels* and then expressed in corner space, which
+  // is what makes a 45° gradient look like 45° on a wide box instead of being
+  // sheared by the aspect ratio.
+  //
+  // Fitted to `size`, the shape, and not to `quad`, which is a pixel larger on
+  // every side so the SDF has room to antialias. Those differ by 2px, so
+  // fitting the ramp to the quad would hold both stops slightly inside the
+  // edges — 0.2% of a full-screen gradient and nobody would ever see it, but
+  // 20% of a 10px chip, which is exactly the size a gradient gets used at.
+  const vec2 quad{ext.x * 2.f, ext.y * 2.f};
+  const float c = std::cos(angle);
+  const float s = std::sin(angle);
+  // Extremes of the projection over the *shape*, corner ∈ {0,1}²: each axis
+  // contributes its component only where that pushes the value further out.
+  const float lo = std::min(c * size.x, 0.f) + std::min(s * size.y, 0.f);
+  const float hi = std::max(c * size.x, 0.f) + std::max(s * size.y, 0.f);
+  const float span = hi - lo;
+  vec2 axis{0.f, 0.f};
+  float bias = 0.f;
+  if (span > 1e-6f) {
+    // `corner` runs over the padded quad, so the projection is taken there and
+    // the padding is subtracted back off in the bias.
+    axis = {c * quad.x / span, s * quad.y / span};
+    bias = (-kPad * (c + s) - lo) / span;
+  } else {
+    // A degenerate direction has no ramp to speak of; show the far stop rather
+    // than half of each, so the result is a solid colour instead of a mix
+    // nobody asked for.
+    bias = 1.f;
+  }
+
+  flushIndexedBatch();
+  instances_.push_back(Instance{
+    .topLeft={center.x-ext.x, center.y-ext.y}, .size=quad, .halfSize=half,
+    .radius=r, .aux=0.f, .uv0={0.f,0.f}, .uv1={0.f,0.f}, .color=rgba0,
+    .kind=static_cast<uint32_t>(Kind::Sdf), .textureIndex=currentTextureIndex_,
+    .color1=rgba1, .gradAxis=axis, .gradBias=bias});
 }
 
 void QuadRenderer::pushCornerMask(vec2 topLeft, vec2 size, float radius) {

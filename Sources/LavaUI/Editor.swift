@@ -242,10 +242,10 @@ public final class Editor: @unchecked Sendable {
 
     func ensureDrawListCapacity(
         commands: Int, glyphs: Int, meshVertices: Int, spatialVertices: Int,
-        window: WindowID = .main
+        gradients: Int, window: WindowID = .main
     ) {
         engine.ensureDrawListCapacity(
-            commands, glyphs, meshVertices, spatialVertices, window.raw
+            commands, glyphs, meshVertices, spatialVertices, gradients, window.raw
         )
     }
 
@@ -253,14 +253,16 @@ public final class Editor: @unchecked Sendable {
         commands: UnsafeMutablePointer<canvas.DrawCommand>, commandCapacity: Int,
         glyphs: UnsafeMutablePointer<canvas.GlyphInstance>, glyphCapacity: Int,
         meshVertices: UnsafeMutablePointer<canvas.MeshVertex>, meshVertexCapacity: Int,
-        spatialVertices: UnsafeMutablePointer<canvas.SpatialVertex>, spatialVertexCapacity: Int
+        spatialVertices: UnsafeMutablePointer<canvas.SpatialVertex>, spatialVertexCapacity: Int,
+        gradients: UnsafeMutablePointer<canvas.GradientDesc>, gradientCapacity: Int
     ) {
         (
             engine.drawCommandData(window.raw), engine.drawCommandCapacity(window.raw),
             engine.drawGlyphData(window.raw), engine.drawGlyphCapacity(window.raw),
             engine.drawMeshVertexData(window.raw), engine.drawMeshVertexCapacity(window.raw),
             engine.drawSpatialVertexData(window.raw),
-            engine.drawSpatialVertexCapacity(window.raw)
+            engine.drawSpatialVertexCapacity(window.raw),
+            engine.drawGradientData(window.raw), engine.drawGradientCapacity(window.raw)
         )
     }
 
@@ -274,7 +276,7 @@ public final class Editor: @unchecked Sendable {
     func commitFrame(_ written: FrameCapacity, window: WindowID = .main) {
         engine.commitDrawList(
             written.commands, written.glyphs, written.meshVertices,
-            written.spatialVertices, window.raw
+            written.spatialVertices, written.gradients, window.raw
         )
     }
 
