@@ -17,11 +17,6 @@ struct AppearancePage: View {
     let store: SettingsStore
 
     var body: some View {
-        // Read in `body`, not in the `ForEach` closure below it. The closure is
-        // `@escaping` and runs when the list mounts its children, outside the
-        // tracking scope, so a comparison written in there registers no
-        // dependency and the dot goes stale. Survives here only because
-        // changing the theme repaints every window anyway.
         let theme = store.themeName
 
         return VStack(spacing: 18) {
@@ -146,14 +141,11 @@ struct BackgroundPage: View {
     ]
 
     var body: some View {
-        // Every observed value is read *here*, in `body`, and passed down as a
-        // plain value. Only `body` runs inside `withObservationTracking`, and a
-        // `ForEach`'s content closure is `@escaping` — it runs later, when the
-        // list mounts its children. So `store.backgroundFit == fit.value`
-        // written inside one of those closures registers no dependency at all:
-        // the setting applied, the compositor repainted, and the radio dot sat
-        // on the old row until something else forced this body to run again.
-        // Same trap the page switcher in `SettingsChrome` documents.
+        // Read once here and passed down, which is the cheaper shape rather
+        // than the required one: `ForEach` builds its children during this
+        // body, so a read left inside one of its closures would register
+        // correctly too. Hoisting still avoids re-reading the same property
+        // for every row, and keeps the comparison next to what it compares.
         let mode = store.backgroundMode
         let fit = store.backgroundFit
         let color = store.backgroundColor
@@ -250,8 +242,8 @@ struct BackgroundPage: View {
 private struct SwatchGrid: View {
     let store: SettingsStore
     let swatches: [(name: String, value: UInt32)]
-    /// Passed in rather than read from the store, so the comparison happens
-    /// where a dependency on it is registered. See `BackgroundPage.body`.
+    /// Passed in rather than read from the store: the grid draws a selection
+    /// it is given and has no opinion about where the value lives.
     let selected: UInt32
 
     var body: some View {
@@ -318,17 +310,14 @@ private struct Swatch: View {
 /// Pictures found in the usual directories.
 private struct PictureList: View {
     let store: SettingsStore
-    /// Both passed in rather than read from the store, for the reason in
-    /// `BackgroundPage.body`: the comparison below happens inside a `ForEach`
-    /// closure, which runs outside the tracking scope that would notice them.
+    /// Both passed in rather than read from the store, so this list draws the
+    /// selection the page hands it rather than deciding on one of its own.
     let selected: String
     let isPictureMode: Bool
 
     private static let visibleLimit = 24
 
     var body: some View {
-        // `store.pictures` is different: it is read here in `body`, so its own
-        // dependency is registered and the list refreshes when the scan lands.
         let all = store.pictures
         let shown = Array(all.prefix(Self.visibleLimit))
         let current = selected

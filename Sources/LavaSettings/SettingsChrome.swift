@@ -119,11 +119,12 @@ struct SettingsContent: View {
     let store: SettingsStore
 
     var body: some View {
-        // Read here, not inside the `ForEach` closure. Observation records a
-        // dependency on what a `body` reads *while it runs*, and the closure
-        // runs later, when the list mounts its children — so reading it in
-        // there registers nothing, and changing the page updated the sidebar
-        // (whose own body does read it) while the content sat still.
+        // Read once here rather than per page in the `ForEach` below. This
+        // used to be load-bearing: the closure ran at mount time, outside the
+        // tracking scope, so reading it in there registered nothing and
+        // changing the page updated the sidebar while the content sat still.
+        // `ForEach` builds its children during this body now, so either
+        // spelling works and this is only the tidier one.
         let active = store.section
         // Side by side rather than stacked, though only one is ever shown. In
         // a column each page's height would be its *content* height — flex

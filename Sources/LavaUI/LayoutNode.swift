@@ -1376,18 +1376,17 @@ final class ForEachFragmentNode<ID: Hashable>: FragmentNode {
         super.init(label: "ForEach", children: [])
     }
 
-    func update<Data: RandomAccessCollection, Content: View>(
-        data: Data,
-        idKeyPath: KeyPath<Data.Element, ID>,
-        content: (Data.Element) -> Content
-    ) {
+    /// Takes children already built by `ForEach.init`, which ran inside the
+    /// parent body's observation-tracking scope. Nothing is evaluated here —
+    /// see `ForEach` for why that matters.
+    func update<Content: View>(rows: [(id: ID, content: Content)]) {
         var oldMap = Dictionary(uniqueKeysWithValues: keyed.map { ($0.id, $0.node) })
         var next: [(id: ID, node: any AnyViewNode)] = []
-        next.reserveCapacity(data.count)
+        next.reserveCapacity(rows.count)
 
-        for element in data {
-            let key = element[keyPath: idKeyPath]
-            let childView = content(element)
+        for row in rows {
+            let key = row.id
+            let childView = row.content
             let childNode: any AnyViewNode
             if let existing = oldMap.removeValue(forKey: key) {
                 childNode = ViewGraph.reconcile(existing, with: childView)
@@ -2089,9 +2088,7 @@ final class ForEachFragmentNode<ID: Hashable>: AnyViewNode {
     var structuralKey: String?
     var needsBodyRecompute = false
     var childNodes: [any AnyViewNode] = []
-    func update<Data: RandomAccessCollection, Content: View>(
-        data: Data, idKeyPath: KeyPath<Data.Element, ID>, content: (Data.Element) -> Content
-    ) {}
+    func update<Content: View>(rows: [(id: ID, content: Content)]) {}
     func collectFrames(originX: Float, originY: Float, into frames: inout [LayoutFrame]) {}
     func flattenedLayoutNodes() -> [any AnyViewNode] { childNodes.flatMap { $0.flattenedLayoutNodes() } }
 }
