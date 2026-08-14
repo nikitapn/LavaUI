@@ -124,6 +124,25 @@ void main() {
     float cov;
     if (vKind == 1u) {
       cov = texture(uTextures[nonuniformEXT(vTextureIndex)], vLocal).r;
+      // Text is the one place linear-correct blending looks wrong. The
+      // attachment is sRGB, so the blend unit works in linear light, and at
+      // half coverage that lands on 0.735 rather than 0.5 once re-encoded:
+      // thin stems go pale dark-on-light and clot light-on-dark. Shape edges
+      // (below) are wide enough that nobody notices; glyph stems are not.
+      //
+      // The blend unit is not ours to change without splitting the render pass
+      // per text batch, so bend the coverage instead. Which way to bend
+      // depends on whether the glyph is darker or lighter than what is behind
+      // it, and the glyph's own lightness stands in for that — UI text sits on
+      // a contrasting background almost by definition. Same trick as Skia's
+      // gamma LUT, minus the table.
+      //
+      // Exponents are tuned by eye. 0.35/2.2 would match a gamma-space blend
+      // exactly at cov = 0.5; both are pulled toward 1.0 to soften it. The
+      // assumption fails for text on a low-contrast or frosted backdrop, which
+      // is where this would have to become a framebuffer fetch.
+      float lum = sqrt(dot(vColor.rgb, vec3(0.2126, 0.7152, 0.0722)));
+      cov = pow(cov, mix(0.45, 2.0, lum));
     } else {
       float d = sdRoundBox(vLocal, vHalfSize, vRadius);
       // fwidth gives ~1px of screen-space falloff, so edges antialias without
