@@ -244,10 +244,35 @@ public enum PointerCapture {
     }
 
     public static func release() {
-        upHandler?()
+        // Cleared *before* the handler runs, so an `onUp` that chains straight
+        // into another capture — a drag that hands off to a second phase —
+        // keeps it, instead of having it wiped by the lines after the call.
+        let handler = upHandler
         owner = nil
         moveHandler = nil
         upHandler = nil
+        guard let handler else { return }
+        handler()
+
+        // The same rule `.mouseDown` applies after a click handler: a handler
+        // exists to change something, so running one is a repaint request.
+        // It has to be said here as well because a control that fires on
+        // *release* — every `Button` — runs its action from this call and not
+        // from that one, and nothing else on the mouse-up path asks for a
+        // frame. A live-read presenter like `overlay(isPresented:)` is only
+        // resolved during emit, so without this, opening a menu by clicking a
+        // button showed nothing until an unrelated event happened to repaint.
+        //
+        // It used to work by accident: the press tint was an `Animated<Color>`
+        // driven by this loop, so the fade back after release re-emitted the
+        // draw list for ~0.12s. The renderer owns that tint now and its own
+        // frames arrive as `takeInternalRepaint`, which redraws the retained
+        // list without re-emitting — so the accident is gone.
+        //
+        // `.redraw` is the right floor, for the reason `Binding.set`
+        // documents: anything that genuinely changed the tree has already
+        // raised `.body` through observation.
+        ViewInvalidation.markNeedsRedraw()
     }
 }
 

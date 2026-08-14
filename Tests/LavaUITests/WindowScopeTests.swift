@@ -81,6 +81,45 @@ final class WindowScopeTests: XCTestCase {
         XCTAssertEqual(level(a), .body, "a redraw must not downgrade a body pass")
     }
 
+    /// A control that fires on release — every `Button` — runs its action from
+    /// `PointerCapture.release()`, and the mouse-up path asks for no frame of
+    /// its own. Presentation is resolved at emit, so without this the action's
+    /// effect waits for an unrelated event to repaint.
+    func testReleasingACaptureRequestsARedraw() {
+        var fired = false
+
+        WindowScope.withCurrent(a) {
+            PointerCapture.capture(NodeID.generate(), onMove: { _, _ in }, onUp: { fired = true })
+            PointerCapture.release()
+        }
+
+        XCTAssertTrue(fired)
+        XCTAssertEqual(level(a), .redraw)
+        XCTAssertEqual(level(b), .none, "b was not the window being processed")
+    }
+
+    /// A mouse-up with nothing captured is not a handler running, so it must
+    /// not wake a frame — a click on empty space would otherwise cost one.
+    func testReleasingNothingDoesNotRequestARedraw() {
+        WindowScope.withCurrent(a) { PointerCapture.release() }
+
+        XCTAssertEqual(level(a), .none)
+    }
+
+    /// An `onUp` that chains into a second capture keeps it: the handler runs
+    /// after the old one is cleared, not before.
+    func testACaptureInstalledFromOnUpSurvives() {
+        WindowScope.withCurrent(a) {
+            PointerCapture.capture(NodeID.generate(), onMove: { _, _ in }, onUp: {
+                PointerCapture.capture(NodeID.generate(), onMove: { _, _ in })
+            })
+            PointerCapture.release()
+        }
+
+        XCTAssertTrue(PointerCapture.isActive)
+        PointerCapture.release()
+    }
+
     // ─── Node-targeted invalidation ──────────────────────────────────────
 
     /// The routing that cannot use the ambient scope: an `@Observable` model
