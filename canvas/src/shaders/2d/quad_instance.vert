@@ -1,4 +1,5 @@
 #version 450
+#include "srgb.glsl"
 
 layout(location = 0) in vec2 inTopLeft;
 layout(location = 1) in vec2 inSize;
@@ -60,7 +61,8 @@ void main() {
   // which matters once a rounded corner or the antialias bleed pushes a
   // fragment past the corner the ramp was fitted to.
   float t = clamp(dot(corner, inGradAxis) + inGradBias, 0.0, 1.0);
-  vColor = mix(inColor, inColor1, t);
+  // Decode before the mix so the ramp interpolates in linear light.
+  vColor = mix(srgbToLinear(inColor), srgbToLinear(inColor1), t);
   vDither = dot(inGradAxis, inGradAxis) > 0.0 ? 1.0 : 0.0;
   vKind = inKind;
   vAux = inAux;

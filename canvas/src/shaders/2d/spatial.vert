@@ -1,4 +1,5 @@
 #version 450
+#include "srgb.glsl"
 
 layout(location = 0) in vec2 inPos;
 layout(location = 1) in vec2 inDepth;
@@ -19,7 +20,7 @@ layout(location = 2) flat out float vTextured;
 layout(location = 3) flat out uint vTextureIndex;
 
 void main() {
-  vColor = inColor;
+  vColor = srgbToLinear(inColor);
   vUV = vec2(inDepth.y, inAux.y);
   vTextured = inAux.x;
   vTextureIndex = inTextureIndex;

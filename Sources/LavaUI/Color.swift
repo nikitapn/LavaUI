@@ -1,4 +1,7 @@
-/// sRGB color with alpha. Maps cleanly to `DrawCommand` RGBA8 later.
+/// sRGB colour with alpha. Components are what a colour picker shows —
+/// `Color(r: 0.5, g: 0, b: 0)` is `#800000`, and that is what the swapchain
+/// should present. The engine linearises at the vertex stage so the sRGB
+/// attachment does not encode the value a second time.
 public struct Color: Equatable, Sendable, Hashable {
     public var r: Float
     public var g: Float
@@ -21,7 +24,8 @@ public struct Color: Equatable, Sendable, Hashable {
     /// right until the day something sits behind it.
     public static let clear = Color(r: 0, g: 0, b: 0, a: 0)
 
-    /// Pack as RGBA8 (r in high bits of first byte… actually R,G,B,A little-endian u32).
+    /// Pack as authored sRGB RGBA8 (R in the low byte). The renderer decodes
+    /// to linear; do not pre-linearise here or the attachment encodes twice.
     public var rgba8: UInt32 {
         let R = UInt32(clamping: Int((r * 255).rounded()))
         let G = UInt32(clamping: Int((g * 255).rounded()))
@@ -62,12 +66,9 @@ public struct Color: Equatable, Sendable, Hashable {
     /// an argument. Doing that in RGB means picking every member by hand and
     /// getting the brightness subtly wrong on the ones near yellow.
     ///
-    /// `lightness` is in the same space as `r`/`g`/`b`, which is the space the
-    /// pipeline treats as **linear** — the swapchain encodes to sRGB on the way
-    /// out, so a component of 0.28 leaves the GPU looking like 0.56 and every
-    /// palette in this codebase is authored against that. Worth knowing before
-    /// picking a number: a lightness that reads as "dark" in a colour picker
-    /// arrives on screen as a mid-tone.
+    /// `lightness` is in the same space as `r`/`g`/`b`: authored sRGB, the
+    /// numbers a colour picker shows. The engine linearises them before
+    /// blending so they survive the swapchain encode unchanged.
     public init(hue: Float, saturation: Float, lightness: Float, alpha: Float = 1) {
         let h = hue - hue.rounded(.down)  // wrap into 0…1
         let s = min(max(saturation, 0), 1)

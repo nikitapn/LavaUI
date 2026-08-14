@@ -1,4 +1,5 @@
 #version 450
+#include "srgb.glsl"
 
 // Unified quad pipeline. Positions arrive in *layout* (window) pixels.
 // Camera zoom/pan is applied here so Yoga/draw-list stay at zoom=1 and only
@@ -8,7 +9,7 @@ layout(location = 0) in vec2  inPos;       // layout pixels, top-left origin
 layout(location = 1) in vec2  inLocal;     // SDF-space coords, or atlas UV for glyphs
 layout(location = 2) in vec2  inHalfSize;  // SDF half-extent
 layout(location = 3) in float inRadius;    // SDF corner radius
-layout(location = 4) in vec4  inColor;     // fetched from RGBA8 via R8G8B8A8_UNORM
+layout(location = 4) in vec4  inColor;     // sRGB RGBA8 via R8G8B8A8_UNORM
 layout(location = 5) in uint  inKind;      // 0 = sdf shape, 1 = glyph
 layout(location = 6) in float inAux;       // kind-specific: shadow blur
 // Texture coords for kinds that also need `inLocal` for SDF space. Glyphs and
@@ -40,7 +41,7 @@ void main() {
   vLocal    = inLocal;
   vHalfSize = inHalfSize;
   vRadius   = inRadius;
-  vColor    = inColor;
+  vColor    = srgbToLinear(inColor);
   vKind     = inKind;
   vAux      = inAux;
   vTextureIndex = inTextureIndex;

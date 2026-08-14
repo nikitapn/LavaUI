@@ -90,10 +90,13 @@ Consequences that surprise people:
 
 ### Renderer facts worth knowing before debugging pixels
 
-- **Colours are linear**; the swapchain sRGB-encodes on the way out. A
-  component of `0.28` leaves the GPU looking like `0.56`. Every palette in the
-  repo is authored against that, so a "dark" number from a colour picker
-  arrives on screen as a mid-tone.
+- **Colours are sRGB** (picker / hex / `Color(r:)`). Vertex shaders
+  linearise (`srgb.glsl`) before blending; the swapchain encodes on the way
+  out, so `Color(r: 0.5)` is `#800000` on screen. They used to be written
+  as linear and encoded twice — `0.28` arrived looking like `0.56` and a
+  palette from a colour wheel came out pastel. Palettes authored against
+  that will read darker until retuned. Do not pre-linearise in
+  `Color.rgba8` or the attachment encodes twice again.
 - **One descriptor set per texture *change*.** Batches are emitted in tree
   order with no sorting, so a grid pairing an atlased icon with a glyph label
   costs two per cell. The pool grows in chunks of `kDescriptorSetsPerChunk`

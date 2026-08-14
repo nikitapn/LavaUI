@@ -48,7 +48,7 @@ for rel in "${shaders[@]}"; do
     continue
   fi
   echo "glslc  $rel  →  shaders/${base}.bin"
-  glslc -mfmt=bin -o "$out" "$in"
+  glslc -mfmt=bin -I "$SRC" -o "$out" "$in"
 done
 
 if [[ "$failed" -ne 0 ]]; then
