@@ -216,14 +216,14 @@ public final class DrawList {
     func emitted(at index: Int)
         -> (
             kind: DrawKind?, x: Float, y: Float, w: Float, h: Float,
-            aux: Float, param: UInt32
+            aux: Float, param: UInt32, color: UInt32
         )?
     {
         guard index >= 0, index < commandCount else { return nil }
         let cmd = commandStorage[index]
         return (
             DrawKind(rawValue: cmd.kind), cmd.x, cmd.y, cmd.w, cmd.h, cmd.aux,
-            cmd.param
+            cmd.param, cmd.color
         )
     }
 

@@ -212,9 +212,13 @@ final class ComposedOverlayNode: YogaBoxNode {
         // that is exactly its content's size. Kept in the chain either way
         // rather than inserted on demand — a node appearing and vanishing with
         // a style is a reconcile identity problem, and this is one box.
-        let border = style?.border
+        let border = style?.plateBorder
         plateBox.fillColor = border
-        plateBox.cornerRadius = border != nil ? (style?.cornerRadius ?? 0) + 1 : 0
+        // Even with no drawable plate, this node owns the backdrop scope and
+        // therefore has to retain the panel shape that clips the frost.
+        plateBox.cornerRadius = border != nil
+            ? (style?.cornerRadius ?? 0) + 1
+            : (style?.cornerRadius ?? 0)
         plateBox.padding = border != nil ? .all(1) : .zero
         plateBox.backdropBlurRadius = style?.backdropBlurRadius
 

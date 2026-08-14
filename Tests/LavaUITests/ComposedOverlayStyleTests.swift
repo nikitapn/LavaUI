@@ -30,7 +30,7 @@ final class ComposedOverlayStyleTests: XCTestCase {
     ) throws -> [
         (
             kind: DrawKind, x: Float, y: Float, w: Float, h: Float,
-            aux: Float, param: UInt32
+            aux: Float, param: UInt32, color: UInt32
         )
     ] {
         let editor = try XCTUnwrap(
@@ -50,10 +50,13 @@ final class ComposedOverlayStyleTests: XCTestCase {
         list.clear()
         list.emitTree(root, viewportW: 400, viewportH: 300)
 
-        return (0..<list.commandCount).compactMap { index in
+        return (0..<list.commandCount).compactMap { index -> (
+            kind: DrawKind, x: Float, y: Float, w: Float, h: Float,
+            aux: Float, param: UInt32, color: UInt32
+        )? in
             guard let cmd = list.emitted(at: index), let kind = cmd.kind
             else { return nil }
-            return (kind, cmd.x, cmd.y, cmd.w, cmd.h, cmd.aux, cmd.param)
+            return (kind, cmd.x, cmd.y, cmd.w, cmd.h, cmd.aux, cmd.param, cmd.color)
         }
     }
 
@@ -98,6 +101,26 @@ final class ComposedOverlayStyleTests: XCTestCase {
         XCTAssertEqual(outline.y, 10, accuracy: 0.01)
     }
 
+    /// Until rounded rectangles have a real stroke, their border is a filled
+    /// plate underneath the panel. Keeping that plate under an alpha fill
+    /// makes the complete panel opaque, because its middle shows through too.
+    func testTranslucentStyleDoesNotPutOpaquePlateBehindFill() throws {
+        let commands = try emit(
+            Base(
+                style: OverlayStyle(
+                    background: Color(r: 0.1, g: 0.1, b: 0.1, a: 0.5),
+                    border: Color(r: 1, g: 0, b: 0, a: 1),
+                    cornerRadius: 8,
+                    padding: 6
+                )
+            )
+        )
+
+        let plates = commands.filter { $0.kind == .roundedRect }
+        XCTAssertEqual(plates.count, 1, "opaque border plate defeated panel alpha")
+        XCTAssertEqual(plates[0].color >> 24, 128, "panel alpha was not emitted")
+    }
+
     /// The one that matters: the scope opens before any of the panel's own
     /// paint, so what frosts is the base view and not the plate.
     func testBackdropBlurScopeOpensBeforePanelChrome() throws {
@@ -118,9 +141,9 @@ final class ComposedOverlayStyleTests: XCTestCase {
         XCTAssertEqual(commands[begin].aux, 10, accuracy: 0.01)
         // The frost is cut to the panel's shape. Without this the composite is
         // a rectangle *under* a rounded fill, and its corners show as four
-        // bright tabs the panel cannot cover. The plate is a pixel proud of
-        // the fill, so it carries the fill's radius plus that pixel.
-        XCTAssertEqual(commands[begin].param, 9)
+        // bright tabs the panel cannot cover. A translucent surface has no
+        // outline plate, so the scope carries the fill's radius exactly.
+        XCTAssertEqual(commands[begin].param, 8)
 
         // Everything the panel paints is inside the scope.
         let plates = commands.indices.filter { commands[$0].kind == .roundedRect }

@@ -260,7 +260,7 @@ public struct OverlayView<Content: View, OverlayContent: View>: PrimitiveView {
             binding.wrappedValue = false
         }
 
-        att.border = style.border
+        att.border = style.plateBorder
         att.cornerRadius = style.cornerRadius
         root.fillColor = style.background
         root.cornerRadius = style.cornerRadius
@@ -304,6 +304,15 @@ public struct OverlayStyle {
         self.padding = padding
         self.minWidth = minWidth
         self.backdropBlurRadius = backdropBlurRadius
+    }
+
+    /// The current rounded "border" is a filled plate one pixel larger than
+    /// the panel, not a stroked SDF. It may only sit behind an opaque fill:
+    /// through a translucent fill its opaque middle covers the backdrop and
+    /// makes the requested alpha look ignored. Glass already omitted the
+    /// plate for the same reason; plain translucent panels must as well.
+    var plateBorder: Color? {
+        background.a >= 1 && backdropBlurRadius == nil ? border : nil
     }
 }
 
