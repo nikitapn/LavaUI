@@ -6,6 +6,26 @@ import LavaMenu
 /// Compact panel chrome vs the in-window default, and a dropdown that
 /// hugs a single short item instead of opening a 160pt slab.
 final class MenuBarStyleTests: XCTestCase {
+    func testWindowMenuHasNoGapBeforeApplicationContent() throws {
+        let model = MenuModel(menus: [
+            MenuNode(id: MenuID("app"), title: "App", items: [])
+        ])
+        let host = LayoutHost()
+        host.setRoot(
+            MenuChromeRoot(
+                model: model,
+                onActivate: { _ in },
+                content: Text("application content")
+            )
+        )
+
+        let frames = host.calculateLayout(width: 400, height: 200)
+        let content = try XCTUnwrap(
+            frames.first { $0.label == "Text \"application content\"" }
+        )
+        XCTAssertEqual(content.y, MenuHost.barHeight, accuracy: 0.01)
+    }
+
     func testPanelStyleHasNoStripFillAndHugsContent() {
         let panel = MenuBarStyle.panel(theme: .dark)
         XCTAssertNil(panel.stripFill)

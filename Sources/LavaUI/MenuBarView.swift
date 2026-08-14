@@ -162,7 +162,7 @@ public struct MenuChromeRoot<Content: View>: View {
     }
 
     public var body: some View {
-        VStack(flexGrow: 1, padding: 0) {
+        VStack(flexGrow: 1, padding: 0, spacing: 0) {
             if !model.menus.isEmpty {
                 MenuBarStrip(
                     model: model,
