@@ -25,4 +25,33 @@ final class ModifierReconcileTests: XCTestCase {
         let frames = host.calculateLayout(width: 80, height: 40)
         XCTAssertFalse(frames.isEmpty)
     }
+
+    /// An in-window menubar applies `.flexGrow(1)` to application content.
+    /// Because a composite has no Yoga node that modifier creates a wrapper;
+    /// the wrapper must remain owned by the same modifier on the next body
+    /// pass or the whole application subtree — including focused editors —
+    /// is remounted.
+    func testPaintlessModifierKeepsCompositeContentIdentity() throws {
+        let host = LayoutHost()
+        let tree = Named().flexGrow(1)
+
+        host.setRoot(tree)
+        _ = host.calculateLayout(width: 80, height: 40)
+        let firstText = try XCTUnwrap(findText(in: host.rootNode))
+
+        host.setRoot(tree)
+        _ = host.calculateLayout(width: 80, height: 40)
+        let secondText = try XCTUnwrap(findText(in: host.rootNode))
+
+        XCTAssertEqual(secondText.id, firstText.id)
+    }
+
+    private func findText(in node: (any AnyViewNode)?) -> (any AnyViewNode)? {
+        guard let node else { return nil }
+        if node.label.hasPrefix("Text") { return node }
+        for child in node.childNodes {
+            if let match = findText(in: child) { return match }
+        }
+        return nil
+    }
 }

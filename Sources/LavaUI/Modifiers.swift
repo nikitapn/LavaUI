@@ -127,8 +127,7 @@ public struct ModifiedView<Content: View>: PrimitiveView {
     /// still-parented content again — Yoga fatal on `YGNodeInsertChild`.
     /// A box is ours only if we would have had to create one.
     private func ownsWrapper(_ box: StyleBoxNode) -> Bool {
-        if forceWrapper { return true }
-        return !Self.canPaint(style, on: box.contentNode)
+        box.modifierOwner == ObjectIdentifier(Content.self)
     }
 
     /// Style the node if it is a single box that can show the style; otherwise
@@ -139,6 +138,17 @@ public struct ModifiedView<Content: View>: PrimitiveView {
             return box
         }
         let wrapper = StyleBoxNode(content: node)
+        // Ownership is a retained fact, not something reconcile can infer
+        // from today's content. A paint-less modifier around a composite has
+        // to wrap on mount because the composite has no Yoga node, but once
+        // that wrapper exists `canPaint` sees a StyleBox and says no wrapper
+        // is needed. Treating that answer as ownership remounts the content
+        // on the next body pass and strands focus on its discarded node.
+        //
+        // Static content types distinguish adjacent modifier boundaries:
+        // `.background().hidden()` has a different `Content` at each layer,
+        // so the outer modifier cannot steal the inner one's box.
+        wrapper.modifierOwner = ObjectIdentifier(Content.self)
         wrapper.applyViewStyle(style)
         return wrapper
     }
@@ -235,6 +245,9 @@ extension YogaBoxNode {
 /// subtree, and the emitter's `as? StyleBoxNode` branch then covers both.
 class StyleBoxNode: YogaBoxNode {
     private(set) var contentNode: any AnyViewNode
+    /// Static content type of the `ModifiedView` that created this wrapper.
+    /// Nil for style boxes owned by overlays or other framework components.
+    var modifierOwner: ObjectIdentifier?
     var fillColor: Color?
     /// Two-stop linear fill; wins over `fillColor` when set.
     var fillGradient: Gradient?
