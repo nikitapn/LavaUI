@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <cstdint>
 #include <functional>
 #include <mutex>
@@ -307,6 +308,31 @@ class RenderWindow {
     return was;
   }
 
+  /// The part of the last frame that is genuinely opaque, or false if none is.
+  ///
+  /// The producer's claim (`DrawCommandKind::OpaqueBounds`) narrowed by this
+  /// window's own rounding, because the corner mask runs *after* the client's
+  /// content and clears pixels the client believed it had filled. Insetting
+  /// here rather than in the caller keeps the two facts in the one place that
+  /// knows both: a consumer would have to be told the radius to get it right,
+  /// and would be wrong for a frame every time the radius changed.
+  ///
+  /// Only the rounded pair is inset, matching `setCornerRadius` — a bar that
+  /// rounds its top two corners stays opaque all the way to its bottom edge.
+  bool opaqueBounds(float &x, float &y, float &w, float &h) const
+  {
+    if (opaqueW_ <= 0.f || opaqueH_ <= 0.f) return false;
+    const float r =
+      (cornerTop_ || cornerBottom_) ? std::max(0.f, cornerRadius_) : 0.f;
+    const float top    = cornerTop_ ? r : 0.f;
+    const float bottom = cornerBottom_ ? r : 0.f;
+    x = opaqueX_ + r;
+    y = opaqueY_ + top;
+    w = opaqueW_ - 2.f * r;
+    h = opaqueH_ - top - bottom;
+    return w > 0.f && h > 0.f;
+  }
+
   /// Points the scene graph at a new pointer position.
   ///
   /// Returns true if the hovered node changed, which is the caller's cue that
@@ -344,6 +370,14 @@ class RenderWindow {
   float cornerRadius_ = 0.f;
   bool  cornerTop_    = true;
   bool  cornerBottom_ = true;
+
+  /// What the last replayed frame declared fully opaque, in viewport pixels —
+  /// see `DrawCommandKind::OpaqueBounds`. Zero width or height is "nothing
+  /// claimed", which is where every frame starts.
+  float opaqueX_ = 0.f;
+  float opaqueY_ = 0.f;
+  float opaqueW_ = 0.f;
+  float opaqueH_ = 0.f;
 
   /// What this window remembers about a node between frames.
   struct SceneNodeState {

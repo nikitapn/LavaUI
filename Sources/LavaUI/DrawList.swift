@@ -45,6 +45,10 @@ public enum DrawKind: UInt32 {
     /// Retargets the enclosing scroll node once per request serial.
     case nodeScrollTo = 20
     case spatialBegin = 15
+    /// Declares `x,y,w,h` of this frame fully opaque. Draws nothing; lets a
+    /// compositor stop blending the surface and skip what is behind it.
+    /// See `OpaqueBounds` in `draw_command.hpp`.
+    case opaqueBounds = 22
 }
 
 /// Bits in a `beginNode` command's `color` field. Mirrors
@@ -457,6 +461,24 @@ public final class DrawList {
 
     public func rect(x: Float, y: Float, w: Float, h: Float, color: Color) {
         append(kind: .rect, x: x, y: y, w: w, h: h, color: color)
+    }
+
+    /// Promises that `x,y,w,h` of this frame is fully opaque, so a compositor
+    /// showing it can skip blending there — and skip drawing whatever is
+    /// behind it entirely.
+    ///
+    /// Only worth saying for a compositor surface; a windowed app is pasted
+    /// onto a swapchain and nobody asks. Emit before the tree, at the top
+    /// level: the renderer ignores a claim made inside a scene node or a faded
+    /// subtree, because those are about pixels the frame may not own.
+    ///
+    /// Claiming too little costs a blend. Claiming too much punches a hole
+    /// through to the desktop, so anything uncertain — a translucent wash, a
+    /// backdrop blur, a rounded corner the client drew itself — is a reason
+    /// not to call this. The window's *own* rounding needs no allowance; the
+    /// renderer insets for that, since it is the one that cuts the corners.
+    public func opaqueBounds(x: Float, y: Float, w: Float, h: Float) {
+        append(kind: .opaqueBounds, x: x, y: y, w: w, h: h, color: .clear)
     }
 
     public func roundedRect(

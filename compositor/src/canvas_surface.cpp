@@ -350,6 +350,11 @@ bool CanvasSurface::renderFromArena() {
   return true;
 }
 
+bool CanvasSurface::opaqueBounds(float &x, float &y, float &w,
+                                 float &h) const {
+  return renderer_.engine().opaqueBounds(windowId_, x, y, w, h);
+}
+
 void CanvasSurface::pointerMove(float x, float y) {
   renderer_.engine().pointerMove(x, y, windowId_);
 }

@@ -387,6 +387,13 @@ uint64_t Engine::frameCounter(uint32_t windowId) const
     [&](Application &app) { return app.frameCounter(windowId); });
 }
 
+bool Engine::opaqueBounds(uint32_t windowId, float &x, float &y, float &w,
+                          float &h) const
+{
+  return impl_->withApp(
+    [&](Application &app) { return app.opaqueBounds(windowId, x, y, w, h); });
+}
+
 void Engine::readPixels(uint8_t *dst, size_t dstSize)
 {
   impl_->withApp([&](Application &app) { app.readPixels(dst, dstSize); });

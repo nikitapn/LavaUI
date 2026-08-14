@@ -182,6 +182,25 @@ enum class DrawCommandKind : uint32_t {
   /// what will not fit. The alternative, widening `DrawCommand`, would charge
   /// every rect in every frame for something a handful of them use.
   LinearGradientRect = 21,
+  /// Declares the part of this frame that is fully opaque: `x,y,w,h` in
+  /// viewport pixels. `w` or `h` of 0 — and a frame that never sends one —
+  /// means "assume nothing", which is always safe.
+  ///
+  /// Draws nothing. It exists because opacity is the one thing about a frame
+  /// that only its producer knows and its *consumer* needs: a compositor
+  /// showing this surface has to blend every pixel of it unless something
+  /// tells it which ones cannot possibly let light through. Saying so lets
+  /// the scene skip both the blend and everything underneath.
+  ///
+  /// Per frame rather than per surface because that is the only form that
+  /// cannot go stale — a window that dims its own background is opaque on one
+  /// frame and not the next, and a producer that has to remember to retract a
+  /// standing claim eventually forgets.
+  ///
+  /// A conservative claim is fine and an optimistic one is a bug: the pixels
+  /// under a region declared opaque are not drawn at all, so a window that
+  /// oversells itself gets holes onto whatever the scene skipped.
+  OpaqueBounds = 22,
 };
 
 /// Bits in `NodeAnimate.color` — which properties the command states.

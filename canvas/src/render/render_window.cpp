@@ -1316,6 +1316,9 @@ void RenderWindow::replayDrawList(const canvas::DrawList &list, float viewW,
                                   std::vector<Boundary> &outBoundaries)
 {
   outBoundaries.clear();
+  // Cleared per replay, not carried: a claim is about the frame that made it,
+  // and a producer that stops sending one is saying it is no longer opaque.
+  opaqueX_ = opaqueY_ = opaqueW_ = opaqueH_ = 0.f;
   // Pin the complete submitted working set before resolving any view. This is
   // per window: another window may advance its cache while this one simply
   // replays the retained frame it already owns.
@@ -1649,6 +1652,18 @@ void RenderWindow::replayDrawList(const canvas::DrawList &list, float viewW,
       // width when the emitter sets it; 1.5px is the wire default.
       quads_.pushLine({cmd.x + ox, cmd.y + oy}, {cmd.w + ox, cmd.h + oy},
                       cmd.aux > 0.f ? cmd.aux : 1.5f, faded(cmd.color));
+      break;
+    case canvas::DrawCommandKind::OpaqueBounds:
+      // Draws nothing; records a promise. Taken only at full opacity and
+      // outside every scissor and node offset — a claim made inside a faded
+      // or clipped subtree is about pixels the frame may not actually own,
+      // and the cost of believing one wrongly is a hole in the desktop.
+      if (opacity >= 1.f && openNodes.empty()) {
+        opaqueX_ = cmd.x;
+        opaqueY_ = cmd.y;
+        opaqueW_ = cmd.w;
+        opaqueH_ = cmd.h;
+      }
       break;
     case canvas::DrawCommandKind::PushClip:
       quads_.pushScissor({cmd.x + ox, cmd.y + oy}, {cmd.w, cmd.h});

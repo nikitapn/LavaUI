@@ -935,6 +935,44 @@ void show_surface(wlr_scene_buffer *node, lava::CanvasSurface &surface) {
   wlr_scene_buffer_set_source_box(node, &source);
   wlr_scene_buffer_set_dest_size(node, static_cast<int>(surface.width()),
                                  static_cast<int>(surface.height()));
+
+  // ...and **the opaque region**, a fourth thing that has to be said with the
+  // rest of them.
+  //
+  // A canvas surface is exported as ARGB8888 with premultiplied alpha and the
+  // scene has no way to know that most of one is a solid slab, so without this
+  // it blends every pixel of every Lava window and draws everything behind
+  // them to have something to blend against. Saying which part cannot let
+  // light through lets it skip both.
+  //
+  // Shrunk to the frame rather than the buffer: an exported image is allocated
+  // in steps and is normally larger than the window it carries, and the slack
+  // past `width()`/`height()` is whatever the last larger frame left there —
+  // the same reason the source box exists a few lines up.
+  //
+  // Re-stated every frame because the claim is per frame: the client rebuilds
+  // it from its own backdrop each time, so a window that fades itself out
+  // stops being opaque without anyone having to remember to retract anything.
+  pixman_region32_t opaque;
+  pixman_region32_init(&opaque);
+  float ox = 0.f, oy = 0.f, ow = 0.f, oh = 0.f;
+  if (surface.opaqueBounds(ox, oy, ow, oh)) {
+    const int x0 = std::max(0, static_cast<int>(std::ceil(ox)));
+    const int y0 = std::max(0, static_cast<int>(std::ceil(oy)));
+    const int x1 = std::min(static_cast<int>(surface.width()),
+                            static_cast<int>(std::floor(ox + ow)));
+    const int y1 = std::min(static_cast<int>(surface.height()),
+                            static_cast<int>(std::floor(oy + oh)));
+    if (x1 > x0 && y1 > y0) {
+      pixman_region32_union_rect(&opaque, &opaque, x0, y0,
+                                 static_cast<unsigned>(x1 - x0),
+                                 static_cast<unsigned>(y1 - y0));
+    }
+  }
+  // An empty region is the honest answer for a frame that claimed nothing, and
+  // is also what restores the default — so the unset case needs no branch.
+  wlr_scene_buffer_set_opaque_region(node, &opaque);
+  pixman_region32_fini(&opaque);
 }
 
 // ─── Scene-graph input regions ─────────────────────────────────────────────

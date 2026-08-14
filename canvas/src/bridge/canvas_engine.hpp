@@ -256,6 +256,14 @@ class Engine {
   /// it does not advance on a repaint that found nothing new to draw, which is
   /// what makes it usable as "is there anything to show?".
   uint64_t frameCounter(uint32_t windowId = 0) const;
+
+  /// The opaque part of this window's last frame, in window pixels, already
+  /// inset for rounded corners. False when nothing was claimed.
+  ///
+  /// What a compositor needs to stop blending a surface it does not have to —
+  /// see `DrawCommandKind::OpaqueBounds`.
+  bool opaqueBounds(uint32_t windowId, float &x, float &y, float &w,
+                    float &h) const;
   void readPixels(uint8_t *dst, size_t dstSize);
 
   /// Agent/automation: capture resolve as PNG (base64). Empty on failure.

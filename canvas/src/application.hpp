@@ -170,6 +170,13 @@ public:
   /// succeeded" does not say.
   uint64_t frameCounter(uint32_t windowId = 0) const;
 
+  /// The part of this window's last frame that is fully opaque, already
+  /// narrowed by the window's rounding. False when the producer claimed
+  /// nothing, which is the default and always safe.
+  /// See `RenderWindow::opaqueBounds`.
+  bool opaqueBounds(uint32_t windowId, float &x, float &y, float &w,
+                    float &h) const;
+
   /// Brackets a set of `repaint` calls that may run concurrently, one thread
   /// per window.
   ///

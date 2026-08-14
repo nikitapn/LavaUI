@@ -734,6 +734,14 @@ uint64_t Application::frameCounter(uint32_t windowId) const
   return w->renderWindow().frameCounter();
 }
 
+bool Application::opaqueBounds(uint32_t windowId, float &x, float &y, float &w,
+                               float &h) const
+{
+  AppWindow *win = impl_->win(windowId);
+  if (win == nullptr || !win->hasRenderer()) return false;
+  return win->renderWindow().opaqueBounds(x, y, w, h);
+}
+
 uint32_t Application::windowIdAt(size_t index) const
 {
   if (index >= impl_->windows.size()) return 0;

@@ -250,6 +250,14 @@ class CanvasSurface {
   uint32_t width() const { return width_; }
   uint32_t height() const { return height_; }
 
+  /// The part of the last frame that is fully opaque, in surface pixels, or
+  /// false if none of it is.
+  ///
+  /// The client says so per frame and the renderer narrows it for this
+  /// surface's rounding; all that is left here is handing it to the scene.
+  /// See `DrawCommandKind::OpaqueBounds`.
+  bool opaqueBounds(float &x, float &y, float &w, float &h) const;
+
  private:
   /// Writes the resolve target to `$LAVA_CANVAS_DUMP` if it is set.
   void dumpIfRequested();

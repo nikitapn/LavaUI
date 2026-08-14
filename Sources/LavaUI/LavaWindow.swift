@@ -406,6 +406,19 @@ public final class LavaWindow {
         // nothing was drawn over to stay empty.
         if let backdrop = WindowBackdrop.current.fill {
             drawList.rect(x: 0, y: 0, w: width, h: height, color: backdrop)
+            // An opaque backdrop is the whole reason a compositor may skip
+            // blending this window and everything behind it. Said here and
+            // nowhere else because this fill is the only thing that covers the
+            // window edge to edge — anything the tree draws is somewhere in
+            // the middle of it, and a claim has to be about pixels that are
+            // certainly covered.
+            //
+            // A translucent backdrop, or `.none`, says nothing at all: a
+            // client that paints its own wash (LavaTerm) knows whether that
+            // wash is solid and this code does not.
+            if backdrop.a >= 1 {
+                drawList.opaqueBounds(x: 0, y: 0, w: width, h: height)
+            }
         }
         drawList.emitTree(
             root, originX: 0, originY: menuH, viewportW: width, viewportH: height
