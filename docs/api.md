@@ -497,7 +497,13 @@ TextField(
 )
 Toggle("Live parsing", isOn: $live)
 Slider(value: $volume, in: 0...1, step: 0.01)
+ColorPicker(color: $fill)
 ```
+
+`Color` is authored sRGB (`Color(r: 0.5)` is `#800000`). `ColorPicker` binds
+one and edits it as an HSV square plus a hue strip, writing the same
+components hex and CSS use. `Color(hex:)`, `.hex`, `.hsv`, and
+`Color(hue:saturation:value:)` are the pieces it is made of.
 
 `Text.lineLimit(_:)` wraps within its resolved width and ellipsizes the last
 visible line. Clickable `Text` receives the theme hover surface by default;

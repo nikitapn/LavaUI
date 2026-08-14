@@ -77,6 +77,7 @@ public struct DemoExample: View {
     @State private var flexSlots = 3
     @State private var nextId = 10
     @State private var gauge: Float = 0.35
+    @State private var picked = Color(r: 0.22, g: 0.48, b: 0.86)
     @State private var showMenu = false
     @State private var showGlass = false
     /// Neon EQ showcase — continuous animation while true.
@@ -548,6 +549,24 @@ public struct DemoExample: View {
                     .background(Color(r: 0.24, g: 0.30, b: 0.42))
                     .cornerRadius(6)
                     .transition(.slide(dy: -12))
+            }
+
+            Text("ColorPicker · HSV square, hue, hex", color: .accent)
+            HStack(padding: 2, alignment: .start) {
+                ColorPicker(color: $picked)
+                VStack(alignment: .start, spacing: 6) {
+                    Text("Authored sRGB — \(picked.hex)", color: .secondary)
+                    Text(
+                        "The square is the same space the hex names. "
+                            + "A wash of this colour sits beside it.",
+                        color: .dim
+                    )
+                    VStack(spacing: 0) { Spacer() }
+                        .frame(width: .pt(120), height: .pt(56))
+                        .background(picked)
+                        .cornerRadius(8)
+                }
+                Spacer()
             }
 
             Text("Slider · drag, step, readout", color: .accent)

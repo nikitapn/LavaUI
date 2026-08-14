@@ -184,6 +184,12 @@ struct BackgroundPage: View {
                     VStack(spacing: 10) {
                         SwatchGrid(store: store, swatches: Self.swatches,
                                    selected: color)
+                        ColorPicker(
+                            color: Binding(
+                                get: { Color(rgb24: color) },
+                                set: { store.setBackgroundColor($0.rgb24) }
+                            )
+                        )
                         TextField(
                             text: Binding(store, \.colorText),
                             placeholder: hexString(color)

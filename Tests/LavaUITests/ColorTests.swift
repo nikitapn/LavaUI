@@ -60,4 +60,54 @@ final class ColorTests: XCTestCase {
         // And is emphatically not the naive answer, which would be 0.4.
         XCTAssertGreaterThan(half.r, 0.55)
     }
+
+    /// HSV is the picker's square. A pure hue is V = 1, S = 1, and must
+    /// come back as the same authored RGB the HSL mid-light form produces.
+    func testHSVPureHueMatchesHSLMid() {
+        for h: Float in [0, 0.125, 1 / 6, 0.33, 0.5, 0.8] {
+            let hsv = Color(hue: h, saturation: 1, value: 1)
+            let hsl = Color(hue: h, saturation: 1, lightness: 0.5)
+            XCTAssertEqual(hsv.r, hsl.r, accuracy: 1e-5, "h=\(h) r")
+            XCTAssertEqual(hsv.g, hsl.g, accuracy: 1e-5, "h=\(h) g")
+            XCTAssertEqual(hsv.b, hsl.b, accuracy: 1e-5, "h=\(h) b")
+        }
+    }
+
+    func testHSVRoundTripOnPrimaries() {
+        let red = Color(r: 1, g: 0, b: 0)
+        let hsv = red.hsv
+        XCTAssertEqual(hsv.hue, 0, accuracy: 1e-5)
+        XCTAssertEqual(hsv.saturation, 1, accuracy: 1e-5)
+        XCTAssertEqual(hsv.value, 1, accuracy: 1e-5)
+        let back = Color(hue: hsv.hue, saturation: hsv.saturation, value: hsv.value)
+        XCTAssertEqual(back.r, 1, accuracy: 1e-5)
+        XCTAssertEqual(back.g, 0, accuracy: 1e-5)
+        XCTAssertEqual(back.b, 0, accuracy: 1e-5)
+    }
+
+    func testHexOpaqueAndShortForm() {
+        XCTAssertEqual(Color(r: 1, g: 0, b: 0.5).hex, "#FF0080")
+        let fromLong = Color(hex: "#ff0080")
+        XCTAssertEqual(fromLong?.r ?? 0, 1, accuracy: 1e-5)
+        XCTAssertEqual(fromLong?.b ?? 0, 128 / 255, accuracy: 1e-5)
+        let fromShort = Color(hex: "#f08")
+        XCTAssertEqual(fromShort?.r ?? 0, 1, accuracy: 1e-5)
+        XCTAssertEqual(fromShort?.g ?? 1, 0, accuracy: 1e-5)
+        XCTAssertEqual(fromShort?.b ?? 0, 136 / 255, accuracy: 1e-5)
+        XCTAssertNil(Color(hex: "#gg0000"))
+        XCTAssertNil(Color(hex: "#ff00"))
+    }
+
+    func testHexKeepsAlpha() {
+        let c = Color(hex: "#80ff00aa")
+        XCTAssertEqual(c?.a ?? 0, 170 / 255, accuracy: 1e-5)
+        XCTAssertEqual(c?.hex, "#80FF00AA")
+    }
+
+    func testRgb24MatchesCompositorWallpaperSpelling() {
+        let c = Color(r: 14 / 255, g: 19 / 255, b: 31 / 255)
+        XCTAssertEqual(c.rgb24, 0x0e_13_1f)
+        let back = Color(rgb24: 0x0e_13_1f)
+        XCTAssertEqual(back.rgb24, 0x0e_13_1f)
+    }
 }
