@@ -105,24 +105,31 @@ times more solid than it did on the desktop it shipped to. `dev-run` now pins
 Vulkan. **If the two sessions ever disagree about a translucency again, check
 the renderer banner in each log first.**
 
-## Known gap: 3D lighting runs in gamma space
+## 3D lighting converts explicitly
 
-`Spatial.swift:1127` (`litColor`) multiplies light amounts into `base.r/g/b`,
-which are authored **sRGB** — and `spatial.vert` then linearises the product.
-So the shading math happens in the wrong space and the decode compounds it:
-the result is `dec(base)·k^2.4` where it should be `dec(base)·k`.
+`Spatial.swift`'s `litColor` decodes the surface colour *and* every light
+colour with `Color.linear`, multiplies there, and re-encodes with
+`Color.fromLinear` before the result goes anywhere. Both conversions are
+needed: a light's colour is as much a colour as the surface it falls on.
 
-Shaded faces are therefore much darker than intended, and the falloff is
-exaggerated:
+It converts back rather than emitting linear components because the wire
+format is 8-bit and `spatial.vert` linearises unconditionally. Handing it
+linear values would decode twice *and* spend those 8 bits on highlights
+instead of shadows, which is the one thing sRGB storage exists to avoid.
 
-| light amount | fraction of correct |
-|---|---|
-| 0.7 | 0.65x |
-| 0.5 | 0.44x |
-| 0.3 | 0.26x |
+This was a bug until 2026-08-14: the multiply ran on authored components, so
+shading landed on `dec(base)·k^2.4` instead of `dec(base)·k` and a face at
+half light came out at 44% of where it belonged. **Any `Scene3D` content
+authored before that date was tuned against it.** With the default lights
+(ambient 0.3, directional 0.9) over a 0.8 surface:
 
-The fix is to decode `base` before multiplying and emit the result already
-linear — which means the spatial path wants a vertex format or flag that says
-"already linear, do not decode again", since `spatial.vert` currently decodes
-unconditionally. Not done yet. Until it is, `Scene3D` colours are tuned
-against a bug, and fixing it will visibly brighten every shaded face.
+| face | before | after |
+|---|---|---|
+| unlit (N·L = 0) | 0.240 | 0.463 |
+| half-lit | 0.600 | 0.703 |
+| fully lit | 0.960 | 0.867 |
+
+Shadows lift a lot, highlights come down slightly — the old version was
+over-driving into the clamp. The net effect is flatter, so a scene that
+looked right before will want less ambient rather than more: **0.078**
+reproduces the old shadow depth exactly, against a default of 0.3.

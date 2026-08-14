@@ -105,8 +105,10 @@ Consequences that surprise people:
   linear. Same reason text coverage is deliberately bent in `quad.frag`, and
   the reason a translucency tuned under one wlroots renderer is wrong under
   the other. **Read `docs/colour-and-blending.md` before picking any alpha
-  value** — it has the numbers, the comparison to other toolkits, and the
-  known gap where `Scene3D` lighting still multiplies in gamma space.
+  value** — it has the numbers, the comparison to other toolkits, and what
+  changed for `Scene3D` when its lighting stopped multiplying authored
+  components (shadows lifted; scenes tuned before 2026-08-14 want less
+  ambient, not more).
 - **One descriptor set per texture *change*.** Batches are emitted in tree
   order with no sorting, so a grid pairing an atlased icon with a glyph label
   costs two per cell. The pool grows in chunks of `kDescriptorSetsPerChunk`

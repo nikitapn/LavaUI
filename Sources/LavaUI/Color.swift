@@ -1,3 +1,5 @@
+import Foundation
+
 /// sRGB colour with alpha. Components are what a colour picker shows —
 /// `Color(r: 0.5, g: 0, b: 0)` is `#800000`, and that is what the swapchain
 /// should present. The engine linearises at the vertex stage so the sRGB
@@ -57,6 +59,36 @@ public struct Color: Equatable, Sendable, Hashable {
     /// Perceived brightness, 0…1 (Rec. 601 weights). For deciding whether a
     /// foreground drawn *on* this colour should be light or dark.
     public var luminance: Float { 0.299 * r + 0.587 * g + 0.114 * b }
+
+    /// This colour with the sRGB curve removed — components proportional to
+    /// light rather than to perceived brightness.
+    ///
+    /// Needed wherever colours are *multiplied* rather than merely carried:
+    /// a light times a surface, a fade times a fill. Doing that arithmetic on
+    /// authored components is the classic error — it looks like a dimming
+    /// that is simply too strong, because halving an encoded value takes far
+    /// more than half the light out. See `docs/colour-and-blending.md`.
+    ///
+    /// Not what to hand to the renderer: the wire format is authored sRGB and
+    /// the vertex stage linearises. Convert back with `fromLinear` first.
+    /// Alpha is a coverage fraction, not light, and is carried through.
+    public var linear: Color {
+        func f(_ c: Float) -> Float {
+            c <= 0.04045 ? c / 12.92 : pow((c + 0.055) / 1.055, 2.4)
+        }
+        return Color(r: f(r), g: f(g), b: f(b), a: a)
+    }
+
+    /// The inverse of `linear`: re-applies the sRGB curve, so the result can
+    /// be packed and sent like any authored colour. Clamps, because lighting
+    /// arithmetic overshoots and 8-bit packing has nowhere to put it.
+    public static func fromLinear(_ c: Color) -> Color {
+        func f(_ v: Float) -> Float {
+            let x = min(max(v, 0), 1)
+            return x <= 0.0031308 ? 12.92 * x : 1.055 * pow(x, 1 / 2.4) - 0.055
+        }
+        return Color(r: f(c.r), g: f(c.g), b: f(c.b), a: min(max(c.a, 0), 1))
+    }
 
     /// From hue (turns, 0…1 and wrapping), saturation and lightness.
     ///

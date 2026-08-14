@@ -1138,15 +1138,32 @@ final class SpatialRuntime {
         let ambients = ambientLights.isEmpty ? [(Color(r:1,g:1,b:1),Float(0.3))] : ambientLights
         let directionals = directionalLights.isEmpty
             ? [([-0.4,-0.7,-1] as Vector3,Color(r:1,g:1,b:1),Float(0.9))] : directionalLights
+        // Light adds up as light does, which means linear components — a
+        // light colour is as much a colour as the surface it falls on, so it
+        // is decoded too. Multiplying authored components instead makes a
+        // face at half illumination land at 0.5^2.4 of full rather than 0.5,
+        // and reads as shading far heavier than any light asked for.
         var lr:Float=0, lg:Float=0, lb:Float=0
-        for (c,i) in ambients { lr += c.r*i; lg += c.g*i; lb += c.b*i }
+        for (c,i) in ambients {
+            let l = c.linear
+            lr += l.r*i; lg += l.g*i; lb += l.b*i
+        }
         let n = normalized(normal)
         for (direction,c,i) in directionals {
             let d = normalized([-direction.x,-direction.y,-direction.z])
             let amount = max(0,dot(n,d))*i
-            lr += c.r*amount; lg += c.g*amount; lb += c.b*amount
+            let l = c.linear
+            lr += l.r*amount; lg += l.g*amount; lb += l.b*amount
         }
-        return Color(r:min(1,base.r*lr),g:min(1,base.g*lg),b:min(1,base.b*lb),a:base.a)
+        // Back to authored sRGB before it goes anywhere: the vertex format is
+        // 8-bit and `spatial.vert` linearises what it is given, so handing it
+        // linear components would both decode twice and spend those 8 bits on
+        // the highlights instead of the shadows. `fromLinear` clamps, which is
+        // where an overshooting sum of lights ends up.
+        let lit = base.linear
+        return Color.fromLinear(
+            Color(r: lit.r*lr, g: lit.g*lg, b: lit.b*lb, a: base.a)
+        )
     }
 
     private func apply(_ t: Transform3D, _ input: Vector3) -> Vector3 {
