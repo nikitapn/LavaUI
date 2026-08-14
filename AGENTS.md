@@ -308,7 +308,7 @@ will also kill the shell.
 | Cannot | Why | Do instead |
 |---|---|---|
 | Move the real cursor / click the desktop, drag a window edge, right-click for a popup | headless wlroots has no input devices, and there is no virtual-pointer protocol | drive the app's own agent port, or ask the human |
-| Screenshot foreign (GTK/Chromium) windows from *grim* | no screencopy protocol implemented, so `grim` cannot attach | `CaptureSurface` now reads a foreign window's last buffer (shm map or `wlr_texture_read_pixels`); the 3D switcher uses that. Whole-output capture is still missing. |
+| Screenshot foreign (GTK/Chromium) windows from *grim* | no screencopy protocol implemented, so `grim` cannot attach | Print Screen copies the output under the cursor to the clipboard as PNG. `CaptureSurface` reads a foreign window's last buffer (shm map or `wlr_texture_read_pixels`); the 3D switcher uses that. |
 | See overlay content from the agent | `find`/`layout_tree` walk the main tree; a presented overlay's subtree is detached | click by coordinate |
 | Reach the compositor's scene scroll from a client's agent | agent input is injected into that client's engine | test scene-level behaviour in **windowed** mode, where the app owns the renderer |
 
@@ -347,6 +347,7 @@ fatal. Open at the size the output will actually grant to avoid it.
 | Which pixels of a surface take input | `point_accepts_input` hooks, `ClientSurface::acceptsInput`, `SetInputRegion` |
 | Minimum window size | IDL `SetMinSize`, `SurfaceRegistry::minFor`, `LavaClient.setMinimumSize` |
 | Focus, including clicking the desktop | `Server::focusSurface`, `Server::blurAll` |
+| Print Screen → clipboard | `Server::requestScreenshot`, `Clipboard::setImagePng` |
 | Texture batching / descriptor budget | `QuadRenderer::bindTexture`, `ImageAtlas` |
 | Blur (backdrop + content) | `BlurPass`, `quad.frag` kinds 2/6, `DrawList.withBlurScope` |
 | Terminal reflow on resize | `TerminalScreen.reflow`, `rowWrapped` |

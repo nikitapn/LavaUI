@@ -1,6 +1,8 @@
 #pragma once
 
+#include <cstdint>
 #include <string>
+#include <vector>
 
 struct wl_display;
 struct wlr_seat;
@@ -18,9 +20,11 @@ namespace lava {
 /// through `wlr_seat`'s selection, which is the same one every Wayland client
 /// reads and writes.
 ///
-/// Only text. `text/plain;charset=utf-8` and the four spellings X11 clients
-/// ask for through Xwayland, which is what makes a copy here pasteable in an
-/// xterm.
+/// Text is the everyday case: `text/plain;charset=utf-8` and the four
+/// spellings X11 clients ask for through Xwayland, which is what makes a
+/// copy here pasteable in an xterm. Print Screen is the other: a PNG
+/// offered as `image/png`, so a paste in Firefox or GIMP is the picture
+/// rather than a pile of bytes.
 class Clipboard {
  public:
   Clipboard(wl_display *display, wlr_seat *seat)
@@ -28,6 +32,10 @@ class Clipboard {
 
   /// Offers `text` as the seat's selection, replacing whatever was there.
   void set(const std::string &text);
+
+  /// Offers a PNG as the seat's selection. Same pipe as text; a different
+  /// MIME type is what makes a paste land as an image.
+  void setImagePng(const std::vector<uint8_t> &png);
 
   /// The selection as text, or empty if there is none or it offers nothing
   /// text-shaped.

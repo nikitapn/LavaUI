@@ -173,6 +173,13 @@ struct Output {
   Listener<Output> frame;
   Listener<Output> request_state;
   Listener<Output> destroy;
+  Listener<Output> commit;
+
+  /// Set by Print Screen; cleared when the next committed buffer has been
+  /// copied to the clipboard. The capture has to wait for a real frame —
+  /// the pixels live in the buffer the scene just presented, not in a
+  /// picture the compositor keeps on the side.
+  bool pendingScreenshot = false;
 
   Output(Server *server, wlr_output *output);
   ~Output();
@@ -186,6 +193,7 @@ struct Output {
   static void on_frame(wl_listener *listener, void *data);
   static void on_request_state(wl_listener *listener, void *data);
   static void on_destroy(wl_listener *listener, void *data);
+  static void on_commit(wl_listener *listener, void *data);
 };
 
 // ─── Toplevel ──────────────────────────────────────────────────────────────
@@ -697,6 +705,14 @@ struct Server {
   /// hand the same event to a Wayland client: the two focus models are
   /// separate and an event belongs to exactly one of them.
   bool route_pointer(uint32_t kind, int32_t button, int32_t mods);
+
+  /// Print Screen: copy the output under the cursor onto the seat selection
+  /// as a PNG. Tries an offscreen render first so the buffer is not the
+  /// one the display is scanning out; falls back to the next committed
+  /// frame if that cannot be read. See `Output::pendingScreenshot`.
+  void requestScreenshot();
+  bool captureOutputNow(Output *output);
+  bool finishScreenshot(wlr_buffer *buffer);
 };
 
 // ─── Client surfaces ───────────────────────────────────────────────────────
@@ -1193,6 +1209,57 @@ bool captureForeign(const ClientSurface &surface, int32_t maxSide,
   }
 
   wlr_buffer_unlock(source);
+  return ok;
+}
+
+/// PNG of a compositor output buffer: the last presented frame, wallpaper
+/// and decorations and every window together.
+///
+/// Same two paths as `captureForeign`. A GBM/Vulkan swapchain almost never
+/// maps, so the useful one is a texture readback. `maxSide` is 0 — Print
+/// Screen is a 1:1 copy, not a poster.
+bool encodeBufferPng(wlr_buffer *buffer, wlr_renderer *renderer,
+                     std::vector<uint8_t> &outPng, uint32_t &outW,
+                     uint32_t &outH) {
+  if (buffer == nullptr || renderer == nullptr) return false;
+  wlr_buffer_lock(buffer);
+
+  bool ok = false;
+  void *data = nullptr;
+  uint32_t format = 0;
+  size_t stride = 0;
+  if (wlr_buffer_begin_data_ptr_access(buffer, WLR_BUFFER_DATA_PTR_ACCESS_READ,
+                                       &data, &format, &stride)) {
+    ok = encodeForeignRgba(static_cast<const uint8_t *>(data), buffer->width,
+                           buffer->height, static_cast<int>(stride), format, 0,
+                           outPng, outW, outH);
+    wlr_buffer_end_data_ptr_access(buffer);
+  }
+
+  if (!ok) {
+    wlr_texture *texture = wlr_texture_from_buffer(renderer, buffer);
+    if (texture != nullptr) {
+      uint32_t readFormat = wlr_texture_preferred_read_format(texture);
+      if (readFormat == 0) readFormat = DRM_FORMAT_ARGB8888;
+      const int width = static_cast<int>(texture->width);
+      const int height = static_cast<int>(texture->height);
+      if (width > 0 && height > 0) {
+        std::vector<uint8_t> pixels(static_cast<size_t>(width) *
+                                    static_cast<size_t>(height) * 4);
+        wlr_texture_read_pixels_options opts{};
+        opts.data = pixels.data();
+        opts.format = readFormat;
+        opts.stride = static_cast<uint32_t>(width * 4);
+        if (wlr_texture_read_pixels(texture, &opts)) {
+          ok = encodeForeignRgba(pixels.data(), width, height, width * 4,
+                                 readFormat, 0, outPng, outW, outH);
+        }
+      }
+      wlr_texture_destroy(texture);
+    }
+  }
+
+  wlr_buffer_unlock(buffer);
   return ok;
 }
 
@@ -3377,6 +3444,7 @@ Output::Output(Server *server, wlr_output *output)
   frame.attach(&wlr->events.frame, this, on_frame);
   request_state.attach(&wlr->events.request_state, this, on_request_state);
   destroy.attach(&wlr->events.destroy, this, on_destroy);
+  commit.attach(&wlr->events.commit, this, on_commit);
 
   wlr_output_init_render(wlr, server->allocator, server->renderer);
   describe_output(wlr);
@@ -3463,6 +3531,7 @@ Output::~Output() {
   frame.detach();
   request_state.detach();
   destroy.detach();
+  commit.detach();
 }
 
 void Output::on_frame(wl_listener *listener, void *) {
@@ -3508,6 +3577,119 @@ void Output::on_request_state(wl_listener *listener, void *data) {
 
 void Output::on_destroy(wl_listener *listener, void *) {
   delete owner_of<Output>(listener);
+}
+
+void Output::on_commit(wl_listener *listener, void *data) {
+  auto *output = owner_of<Output>(listener);
+  if (!output->pendingScreenshot) return;
+  auto *event = static_cast<wlr_output_event_commit *>(data);
+  if (event->state == nullptr) return;
+  if ((event->state->committed & WLR_OUTPUT_STATE_BUFFER) == 0) return;
+  if (event->state->buffer == nullptr) return;
+  output->pendingScreenshot = false;
+  output->server->finishScreenshot(event->state->buffer);
+}
+
+void Server::requestScreenshot() {
+  // The output the pointer is on, which is the screen the user is looking
+  // at. A gap between monitors, or a headless run with no outputs yet,
+  // falls through to the first enabled one.
+  Output *target = nullptr;
+  if (cursor != nullptr && output_layout != nullptr) {
+    wlr_output *under =
+        wlr_output_layout_output_at(output_layout, cursor->x, cursor->y);
+    if (under != nullptr) {
+      for (Output *output : outputs) {
+        if (output->wlr == under && output->wlr->enabled) {
+          target = output;
+          break;
+        }
+      }
+    }
+  }
+  if (target == nullptr) {
+    for (Output *output : outputs) {
+      if (output->wlr->enabled) {
+        target = output;
+        break;
+      }
+    }
+  }
+  if (target == nullptr) {
+    wlr_log(WLR_ERROR, "screenshot: no output to capture");
+    return;
+  }
+
+  if (captureOutputNow(target)) return;
+
+  // The offscreen path could not read the pixels — usually a renderer
+  // that refuses its own textures. Wait for the next presented buffer
+  // instead, which is the same picture and sometimes a different
+  // allocation that *will* read back.
+  target->pendingScreenshot = true;
+  wlr_damage_ring_add_whole(&target->scene_output->damage_ring);
+  wlr_output_schedule_frame(target->wlr);
+}
+
+bool Server::captureOutputNow(Output *output) {
+  const int width = output->wlr->width;
+  const int height = output->wlr->height;
+  if (width <= 0 || height <= 0 || allocator == nullptr) return false;
+
+  // Same format the output already presents. A format the allocator
+  // cannot create, or the renderer cannot draw to, fails
+  // `wlr_swapchain_create` / `build_state` and we fall back.
+  const wlr_drm_format *fmt = nullptr;
+  if (output->wlr->swapchain != nullptr) {
+    fmt = &output->wlr->swapchain->format;
+  } else {
+    const wlr_drm_format_set *formats = wlr_output_get_primary_formats(
+        output->wlr, allocator->buffer_caps);
+    if (formats != nullptr) {
+      fmt = wlr_drm_format_set_get(formats, DRM_FORMAT_XRGB8888);
+      if (fmt == nullptr) {
+        fmt = wlr_drm_format_set_get(formats, DRM_FORMAT_ARGB8888);
+      }
+      if (fmt == nullptr && formats->len > 0) fmt = &formats->formats[0];
+    }
+  }
+  if (fmt == nullptr) return false;
+
+  wlr_swapchain *chain = wlr_swapchain_create(allocator, width, height, fmt);
+  if (chain == nullptr) return false;
+
+  wlr_output_state state;
+  wlr_output_state_init(&state);
+  wlr_scene_output_state_options opts{};
+  opts.swapchain = chain;
+  const bool built =
+      wlr_scene_output_build_state(output->scene_output, &state, &opts);
+
+  bool ok = false;
+  if (built && state.buffer != nullptr) {
+    ok = finishScreenshot(state.buffer);
+  }
+  wlr_output_state_finish(&state);
+  wlr_swapchain_destroy(chain);
+  // `build_state` rotates the damage ring against our capture buffers.
+  // The next real frame must not think those were the last presented
+  // ones, or it would skip redrawing everything that did not change.
+  wlr_damage_ring_add_whole(&output->scene_output->damage_ring);
+  return ok;
+}
+
+bool Server::finishScreenshot(wlr_buffer *buffer) {
+  std::vector<uint8_t> png;
+  uint32_t width = 0, height = 0;
+  if (!encodeBufferPng(buffer, renderer, png, width, height) || png.empty()) {
+    wlr_log(WLR_ERROR, "screenshot: could not read the output buffer");
+    return false;
+  }
+  lava::Clipboard clipboard(display, seat);
+  clipboard.setImagePng(png);
+  wlr_log(WLR_INFO, "screenshot: %ux%u PNG (%zu bytes) copied to the clipboard",
+          width, height, png.size());
+  return true;
 }
 
 // ─── Popups ────────────────────────────────────────────────────────────────
@@ -4031,6 +4213,7 @@ enum class BindingAction : uint8_t {
   WorkspaceSwitch,
   WorkspaceMove,
   SwitchVt,
+  Screenshot,
 };
 
 /// One shortcut: which keys reach it, and what to call it.
@@ -4096,6 +4279,9 @@ constexpr BindingSpec kBindings[] = {
      "1 … 9", "workspace.move", "Sends the focused window to that workspace"},
     {BindingAction::SwitchVt, XKB_KEY_F1, XKB_KEY_F10, false, true, true,
      "F1 … F10", "session.vt", "Switches to that virtual terminal"},
+    {BindingAction::Screenshot, XKB_KEY_Print, XKB_KEY_Print, false, false,
+     false, "Print", "screen.capture",
+     "Copies a screenshot of the screen to the clipboard"},
 };
 
 /// The modifiers as a person reads them. The primary mod is whatever the
@@ -4263,6 +4449,10 @@ bool perform_binding(Server *server, const BindingSpec &spec,
     }
     return true;
   }
+
+  case BindingAction::Screenshot:
+    server->requestScreenshot();
+    return true;
   }
   return false;
 }
@@ -4279,6 +4469,15 @@ bool handle_binding(Server *server, xkb_keysym_t sym, bool shift, bool ctrl,
   // per spelling.
   if (sym == XKB_KEY_KP_Enter) sym = XKB_KEY_Return;
   if (sym == XKB_KEY_ISO_Left_Tab) sym = XKB_KEY_Tab;
+
+  // Print Screen is the key, not a chord. Some boards emit Sys_Req when
+  // Alt is held (the historical SysRq spelling); both mean the same
+  // thing here, and both fire regardless of the desktop modifier so a
+  // leftover Alt does not swallow the shot.
+  if (sym == XKB_KEY_Print || sym == XKB_KEY_Sys_Req) {
+    server->requestScreenshot();
+    return true;
+  }
 
   for (const BindingSpec &spec : kBindings) {
     if (sym < spec.first || sym > spec.last) continue;

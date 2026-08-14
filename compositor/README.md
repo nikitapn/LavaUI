@@ -191,7 +191,11 @@ middle-click in LavaTerm pastes what you highlighted in Firefox. Two
 selections is not duplication — it is what lets you paste something copied an
 hour ago into a line assembled from things you are selecting now.
 
-Text only, both of them.
+Text is the everyday case. Print Screen is the other: the compositor
+reads the output under the cursor (the next presented frame) and offers
+the result as `image/png` on the same seat selection, so a paste in
+Firefox or GIMP is the picture. The primary selection stays text — a
+screenshot is a copy, not a highlight.
 
 A Wayland window is therefore square *including* its title bar, and its shadow
 is square too. Rounding only the bar would round two corners of a rectangle

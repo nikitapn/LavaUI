@@ -28,6 +28,14 @@ constexpr const char *kTextMimeTypes[] = {
     "TEXT",
 };
 
+/// What a PNG selection is called. The first is what every modern Wayland
+/// client asks for; the second is the spelling some X11 clients still use
+/// through Xwayland.
+constexpr const char *kPngMimeTypes[] = {
+    "image/png",
+    "image/x-png",
+};
+
 /// How long a paste waits for whoever owns the selection.
 ///
 /// The owner is another process, and asking it for the data means writing a
@@ -144,6 +152,34 @@ constexpr wlr_data_source_impl kTextSourceImpl = {
     .dnd_action = nullptr,
 };
 
+/// Same shape as `TextSource`, holding a PNG instead of a string. A
+/// separate impl table is what lets `get` tell "this is ours and it is
+/// text" from "this is ours and it is a picture" — pasting text from a
+/// screenshot should be empty, not a hang on a pipe that will never write
+/// characters.
+struct ImageSource {
+  wlr_data_source base{};
+  std::string png;
+};
+
+void image_send(wlr_data_source *source, const char *mime_type, int32_t fd) {
+  (void)mime_type;
+  writeAsync(reinterpret_cast<ImageSource *>(source)->png, fd);
+}
+
+void image_destroy(wlr_data_source *source) {
+  delete reinterpret_cast<ImageSource *>(source);
+}
+
+constexpr wlr_data_source_impl kImageSourceImpl = {
+    .send = image_send,
+    .accept = source_accept,
+    .destroy = image_destroy,
+    .dnd_drop = nullptr,
+    .dnd_finish = nullptr,
+    .dnd_action = nullptr,
+};
+
 /// The same thing again for the primary selection, which is a separate
 /// protocol with a separate source type — same fields, two callbacks instead
 /// of six, and no way to express "these are the same" that is shorter than
@@ -197,6 +233,14 @@ const char *preferredMime(const wl_array &mime_types) {
 /// Fills `mime_types` with every spelling of "this is text".
 void offerTextTypes(wl_array &mime_types) {
   for (const char *mime : kTextMimeTypes) {
+    auto **slot = static_cast<char **>(wl_array_add(&mime_types, sizeof(char *)));
+    if (slot == nullptr) continue;
+    *slot = strdup(mime);
+  }
+}
+
+void offerPngTypes(wl_array &mime_types) {
+  for (const char *mime : kPngMimeTypes) {
     auto **slot = static_cast<char **>(wl_array_add(&mime_types, sizeof(char *)));
     if (slot == nullptr) continue;
     *slot = strdup(mime);
@@ -263,6 +307,18 @@ void Clipboard::set(const std::string &text) {
   // than what they hold. There is no input event behind a control-plane copy,
   // so the display's next serial is the honest answer: it orders this after
   // everything that has happened so far.
+  wlr_seat_set_selection(seat_, &source->base,
+                         wl_display_next_serial(display_));
+}
+
+void Clipboard::setImagePng(const std::vector<uint8_t> &png) {
+  g_loop = wl_display_get_event_loop(display_);
+
+  auto *source = new ImageSource();
+  source->png.assign(reinterpret_cast<const char *>(png.data()), png.size());
+  wlr_data_source_init(&source->base, &kImageSourceImpl);
+  offerPngTypes(source->base.mime_types);
+
   wlr_seat_set_selection(seat_, &source->base,
                          wl_display_next_serial(display_));
 }
