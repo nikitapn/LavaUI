@@ -97,6 +97,16 @@ Consequences that surprise people:
   palette from a colour wheel came out pastel. Palettes authored against
   that will read darker until retuned. Do not pre-linearise in
   `Color.rgba8` or the attachment encodes twice again.
+- **Blending happens in linear light, so alpha does not mean what CSS means
+  by it.** Every attachment is `*_SRGB`, so a translucent black at `a=0.9`
+  lets through 0.27 where a browser would show 0.08 — the useful range of a
+  window wash is 0.98–1.0, not 0.8–1.0. This is not alpha being encoded
+  (it never is, anywhere); it is the colours it was blended against being
+  linear. Same reason text coverage is deliberately bent in `quad.frag`, and
+  the reason a translucency tuned under one wlroots renderer is wrong under
+  the other. **Read `docs/colour-and-blending.md` before picking any alpha
+  value** — it has the numbers, the comparison to other toolkits, and the
+  known gap where `Scene3D` lighting still multiplies in gamma space.
 - **One descriptor set per texture *change*.** Batches are emitted in tree
   order with no sorting, so a grid pairing an atlased icon with a glyph label
   costs two per cell. The pool grows in chunks of `kDescriptorSetsPerChunk`
