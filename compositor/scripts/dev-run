@@ -102,10 +102,23 @@ case "$mode" in
       echo "-w needs a Wayland session; WAYLAND_DISPLAY is unset" >&2
       exit 1
     fi
-    # Renderer left to wlroots: the host compositor already settled which GPU
-    # and format everyone is using, so autodetection has the right answer here
-    # in a way it does not under X11.
-    export WLR_BACKENDS=wayland
+    # GPU left to wlroots: the host compositor already settled which one and
+    # which formats everyone is using, so autodetection has the right answer
+    # here in a way it does not under X11.
+    #
+    # The *renderer* is pinned, because it decides what colour space alpha is
+    # composited in and the two disagree. GLES2 — wlroots' default, and what
+    # this used to get — samples ARGB8888 as plain RGBA8 and blends the
+    # encoded values, so a window at a=0.96 leaks 4% of the desktop and looks
+    # like it. Vulkan imports the same buffer as B8G8R8A8_SRGB, blends in
+    # linear light, and the encode on the way out lifts that same 4% to
+    # something five times brighter. Left to default, this session composited
+    # nothing like `start-lava-compositor` and every translucency tuned in it
+    # was wrong on the desktop it shipped to.
+    #
+    # The host's own renderer does not enter into it: a nested compositor
+    # renders into its own buffer and hands that over finished.
+    export WLR_BACKENDS=wayland WLR_RENDERER=vulkan
     ;;
   x11)
     # renderD128 is the AMD iGPU. Left explicit because the default picks
