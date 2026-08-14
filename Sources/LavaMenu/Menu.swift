@@ -34,6 +34,23 @@ public struct MenuID: Hashable, Sendable, Codable, CustomStringConvertible {
     public var description: String { raw }
 }
 
+/// Picture for a top-level menu title.
+///
+/// LavaMenu has no GPU types, so this is a path and a size. The Vulkan
+/// strip loads it (or is handed a decoded `UIImage` keyed by `MenuID`).
+/// DBus / Cocoa hosts ignore it and keep using `title` as the name.
+public struct MenuIcon: Equatable, Sendable, Hashable {
+    /// Suggested draw size, in points.
+    public var size: Float
+    /// File the LavaUI strip can load when it was not given pixels.
+    public var path: String?
+
+    public init(size: Float = 18, path: String? = nil) {
+        self.size = size
+        self.path = path
+    }
+}
+
 // MARK: - Shortcuts
 
 /// Modifier flags for `KeyShortcut`, resolved to GLFW-style `KeyMods` bits.
@@ -142,11 +159,20 @@ public struct MenuModel: Equatable, Sendable {
 public struct MenuNode: Equatable, Sendable, Identifiable {
     public var id: MenuID
     public var title: String
+    /// When set, the Vulkan strip draws this instead of the title. `title`
+    /// stays the accessible name (and what a DBus host exports).
+    public var icon: MenuIcon?
     public var items: [MenuEntry]
 
-    public init(id: MenuID, title: String, items: [MenuEntry]) {
+    public init(
+        id: MenuID,
+        title: String,
+        icon: MenuIcon? = nil,
+        items: [MenuEntry]
+    ) {
         self.id = id
         self.title = title
+        self.icon = icon
         self.items = items
     }
 
@@ -292,24 +318,28 @@ public struct MenuSeparator {
 public struct Menu {
     public var title: String
     public var id: MenuID?
+    public var icon: MenuIcon?
     public var content: [MenuContent]
 
     public init(
         _ title: String,
         id: MenuID? = nil,
+        icon: MenuIcon? = nil,
         @MenuBuilder content: () -> [MenuContent]
     ) {
         self.title = title
         self.id = id
+        self.icon = icon
         self.content = content()
     }
 
     public init(
         _ title: String,
         id: String,
+        icon: MenuIcon? = nil,
         @MenuBuilder content: () -> [MenuContent]
     ) {
-        self.init(title, id: MenuID(id), content: content)
+        self.init(title, id: MenuID(id), icon: icon, content: content)
     }
 }
 
@@ -475,7 +505,7 @@ enum MenuResolve {
                 used: &used
             )
         }
-        return MenuNode(id: id, title: menu.title, items: entries)
+        return MenuNode(id: id, title: menu.title, icon: menu.icon, items: entries)
     }
 
     static func entry(

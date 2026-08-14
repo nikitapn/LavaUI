@@ -1022,6 +1022,10 @@ extension StackNode {
     }
 }
 
+extension StyleBoxNode {
+    var isRendererInteractive: Bool { hoverFill != nil }
+}
+
 // MARK: - Stack container (HStack / VStack only)
 
 final class StackNode: YogaBoxNode {
@@ -1719,6 +1723,9 @@ public final class LayoutHost {
         guard x >= nx, x < nx + nw, y >= ny, y < ny + nh else { return nil }
         if let leaf = node as? LeafNode, leaf.isRendererInteractive { return leaf.id }
         if let stack = node as? StackNode, stack.isRendererInteractive { return stack.id }
+        if let styled = node as? StyleBoxNode, styled.isRendererInteractive {
+            return styled.id
+        }
         return nil
     }
 
@@ -1805,6 +1812,9 @@ public final class LayoutHost {
                    stack.hoverFill != nil || stack.onHover != nil
                 {
                     return stack.id
+                }
+                if let styled = node as? StyleBoxNode, styled.hoverFill != nil {
+                    return styled.id
                 }
                 if box.isScrollable { return box.id }
                 // A `.onDrop()` target has no visual hover feedback of its

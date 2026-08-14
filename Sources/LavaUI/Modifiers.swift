@@ -220,6 +220,7 @@ extension YogaBoxNode {
         } else if let box = self as? StyleBoxNode {
             if let fill = style.fill { box.fillColor = fill }
             if let g = style.fillGradient { box.fillGradient = g }
+            if let hover = style.hoverFill { box.hoverFill = hover }
             if let radius = style.cornerRadius { box.cornerRadius = radius }
         }
         applyStyle()
@@ -237,6 +238,9 @@ class StyleBoxNode: YogaBoxNode {
     var fillColor: Color?
     /// Two-stop linear fill; wins over `fillColor` when set.
     var fillGradient: Gradient?
+    /// Renderer-side hover chip. Applied here so `.background().hoverBackground()`
+    /// still lights up after the first modifier wraps.
+    var hoverFill: Color?
     var cornerRadius: Float = 0
     private var insertedLeaves: [any AnyViewNode] = []
 

@@ -54,13 +54,18 @@ struct VolumeApplet: View {
             )
         }
         .padding(2)
-        .hoverBackground(Theme.current.hover)
-        .cornerRadius(3)
+        .hoverBackground(MenuBarStyle.panel().titleHover)
+        .cornerRadius(6)
         .agentId("applet.volume")
         .overlay(
             isPresented: isOpen,
             alignment: .below,
-            style: OverlayStyle(padding: 10, minWidth: 200)
+            style: {
+                var s = MenuBarStyle.panel().overlayStyle
+                s.padding = 10
+                s.minWidth = 200
+                return s
+            }()
         ) {
             volumePopover
         }

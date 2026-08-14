@@ -693,7 +693,8 @@ public final class DrawList {
     public func endNode(
         contentW: Float, contentH: Float,
         emittedTop: Float = 0, emittedBottom: Float = 0,
-        hoverTint: Color? = nil, pressTint: Color? = nil
+        hoverTint: Color? = nil, pressTint: Color? = nil,
+        cornerRadius: Float = 0
     ) {
         var cmd = canvas.DrawCommand()
         cmd.kind = DrawKind.endNode.rawValue
@@ -703,6 +704,9 @@ public final class DrawList {
         cmd.h = emittedBottom
         cmd.color = hoverTint?.rgba8 ?? 0
         cmd.param = pressTint?.rgba8 ?? 0
+        // Renderer hover/press tints honour this so a rounded row does
+        // not grow a square highlight. See `EndNode.aux`.
+        cmd.aux = max(0, cornerRadius)
         appendCommand(cmd)
     }
 
@@ -1154,6 +1158,13 @@ public final class DrawList {
                     x: x, y: y, w: w, h: h,
                     cornerRadius: styled.cornerRadius
                 ) {
+                    let interactive = styled.hoverFill != nil
+                    let flags = nodeFlags(
+                        for: styled.id, interactive: interactive
+                    )
+                    if let flags {
+                        beginNode(styled.id, x: x, y: y, w: w, h: h, flags: flags)
+                    }
                     if let g = styled.fillGradient {
                         linearGradientRect(
                             x: x, y: y, w: w, h: h, from: g.from, to: g.to,
@@ -1173,6 +1184,15 @@ public final class DrawList {
                         for c in styled.childNodes {
                             emitNode(c, ox: x, oy: y)
                         }
+                    }
+                    if flags != nil {
+                        endNode(
+                            contentW: w, contentH: h,
+                            hoverTint: hoverTint(
+                                base: styled.fillColor, target: styled.hoverFill
+                            ),
+                            cornerRadius: styled.cornerRadius
+                        )
                     }
                 }
                 return
@@ -1213,8 +1233,11 @@ public final class DrawList {
                         }
                     }
                     if flags != nil {
-                        endNode(contentW: w, contentH: h,
-                                hoverTint: hoverTint(base: fill, target: stack.hoverFill))
+                        endNode(
+                            contentW: w, contentH: h,
+                            hoverTint: hoverTint(base: fill, target: stack.hoverFill),
+                            cornerRadius: stack.cornerRadius
+                        )
                     }
                 }
                 return
@@ -1236,8 +1259,12 @@ public final class DrawList {
                         emitLeafContents(leaf, x: x, y: y, w: w, h: h)
                     }
                     if flags != nil {
-                        endNode(contentW: w, contentH: h,
-                                hoverTint: interaction.hover, pressTint: interaction.press)
+                        endNode(
+                            contentW: w, contentH: h,
+                            hoverTint: interaction.hover,
+                            pressTint: interaction.press,
+                            cornerRadius: leaf.cornerRadius
+                        )
                     }
                 }
                 return
@@ -1303,7 +1330,12 @@ public final class DrawList {
 
     private func hoverTint(base: Color?, target: Color?) -> Color? {
         guard let target else { return nil }
-        guard let base else { return target.opacity(min(target.a, 0.18)) }
+        // A fully transparent fill is not a colour — `.background(.clear)`
+        // is how an open-state chip turns off, and treating it as black
+        // made the hover tint a dark slab.
+        guard let base, base.a > 0.01 else {
+            return target.opacity(min(max(target.a, 0.01), 0.18))
+        }
         return interactionTint(from: base, to: target)
     }
 

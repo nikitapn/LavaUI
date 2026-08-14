@@ -227,4 +227,20 @@ final class MenuTests: XCTestCase {
         XCTAssertEqual(sidebar?.isChecked, true)
         XCTAssertEqual(model.item(id: MenuID("ghost"))?.isEnabled, false)
     }
+
+    func testTopLevelIconSurvivesResolve() {
+        let icon = MenuIcon(size: 18, path: "/tmp/lava.svg")
+        let bar = MenuBar {
+            Menu("Lava", id: "desktop", icon: icon) {
+                MenuItem("Settings…", id: "desktop.settings") {}
+            }
+            Menu("File") {
+                MenuItem("Open") {}
+            }
+        }
+        let model = bar.resolve().model
+        XCTAssertEqual(model.menus[0].icon, icon)
+        XCTAssertEqual(model.menus[0].title, "Lava")
+        XCTAssertNil(model.menus[1].icon)
+    }
 }

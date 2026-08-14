@@ -4,10 +4,147 @@ import LavaMenu
 // Vulkan (in-window) menubar chrome. Framework-owned: composed above the app
 // root by `LavaApp` when a `menu:` builder is supplied. See docs/native-menus.md.
 
+/// How a menubar strip and its dropdowns look.
+///
+/// The IR (`MenuModel`) is just titles and actions; this is the paint. An
+/// in-window bar wants a filled strip and a `theme.panel` popup. A desktop
+/// panel already paints its own gradient and wants the titles to sit on it
+/// with a matching, compact dropdown — pass `.panel()` there rather than
+/// restyle every row.
+public struct MenuBarStyle: Equatable, Sendable {
+    /// Fill behind the title strip. `nil` leaves whatever is already there.
+    public var stripFill: Color?
+    /// Forced strip height. `nil` sizes to the titles, which is what a
+    /// panel wants when the strip itself is already a fixed 32pt.
+    public var stripHeight: Float?
+    public var titlePadding: EdgeInsets
+    /// Inset around an icon-only title. Tighter than `titlePadding` so a
+    /// 18pt mark does not sit in a text-sized chip.
+    public var iconPadding: EdgeInsets
+    public var titleCornerRadius: Float
+    public var titleHover: Color
+    /// Fill under an open title, so the chip stays lit after the pointer
+    /// has moved into the dropdown.
+    public var titleOpenFill: Color
+    public var itemPadding: EdgeInsets
+    public var itemCornerRadius: Float
+    public var itemHover: Color
+    public var itemSpacing: Float
+    public var dropdownPadding: Float
+    public var dropdownMinWidth: Float
+    public var dropdownBackground: Color
+    public var dropdownBorder: Color?
+    public var dropdownCornerRadius: Float
+    public var dropdownBlur: Float?
+
+    public init(
+        stripFill: Color?,
+        stripHeight: Float?,
+        titlePadding: EdgeInsets,
+        iconPadding: EdgeInsets,
+        titleCornerRadius: Float,
+        titleHover: Color,
+        titleOpenFill: Color,
+        itemPadding: EdgeInsets,
+        itemCornerRadius: Float,
+        itemHover: Color,
+        itemSpacing: Float,
+        dropdownPadding: Float,
+        dropdownMinWidth: Float,
+        dropdownBackground: Color,
+        dropdownBorder: Color?,
+        dropdownCornerRadius: Float,
+        dropdownBlur: Float?
+    ) {
+        self.stripFill = stripFill
+        self.stripHeight = stripHeight
+        self.titlePadding = titlePadding
+        self.iconPadding = iconPadding
+        self.titleCornerRadius = titleCornerRadius
+        self.titleHover = titleHover
+        self.titleOpenFill = titleOpenFill
+        self.itemPadding = itemPadding
+        self.itemCornerRadius = itemCornerRadius
+        self.itemHover = itemHover
+        self.itemSpacing = itemSpacing
+        self.dropdownPadding = dropdownPadding
+        self.dropdownMinWidth = dropdownMinWidth
+        self.dropdownBackground = dropdownBackground
+        self.dropdownBorder = dropdownBorder
+        self.dropdownCornerRadius = dropdownCornerRadius
+        self.dropdownBlur = dropdownBlur
+    }
+
+    /// Overlay chrome for the dropdown (and anything else that should
+    /// match it — a panel clock or volume popover).
+    public var overlayStyle: OverlayStyle {
+        OverlayStyle(
+            background: dropdownBackground,
+            border: dropdownBorder,
+            cornerRadius: dropdownCornerRadius,
+            padding: dropdownPadding,
+            minWidth: dropdownMinWidth,
+            backdropBlurRadius: dropdownBlur
+        )
+    }
+
+    /// In-window bar: filled strip, theme colours, room for shortcuts.
+    public static func standard(theme: Theme = Theme.current) -> MenuBarStyle {
+        MenuBarStyle(
+            stripFill: theme.panel,
+            stripHeight: MenuHost.barHeight,
+            titlePadding: EdgeInsets(top: 2, leading: 7, bottom: 2, trailing: 7),
+            iconPadding: EdgeInsets(top: 4, leading: 4, bottom: 4, trailing: 4),
+            titleCornerRadius: 5,
+            titleHover: theme.hover,
+            titleOpenFill: theme.hover,
+            itemPadding: EdgeInsets(top: 3, leading: 8, bottom: 3, trailing: 8),
+            itemCornerRadius: 5,
+            itemHover: theme.hover,
+            itemSpacing: 1,
+            dropdownPadding: 4,
+            dropdownMinWidth: 140,
+            dropdownBackground: theme.panel,
+            dropdownBorder: theme.border,
+            dropdownCornerRadius: 8,
+            dropdownBlur: nil
+        )
+    }
+
+    /// Desktop panel: no strip fill (the bar already painted one), compact
+    /// rows, and a translucent popup in the same indigo family as the
+    /// panel gradient rather than an opaque `theme.panel` slab.
+    public static func panel(theme: Theme = Theme.current) -> MenuBarStyle {
+        let wash = Color(r: 1, g: 1, b: 1, a: 0.14)
+        return MenuBarStyle(
+            stripFill: nil,
+            stripHeight: nil,
+            titlePadding: EdgeInsets(top: 3, leading: 8, bottom: 3, trailing: 8),
+            iconPadding: EdgeInsets(top: 5, leading: 5, bottom: 5, trailing: 5),
+            titleCornerRadius: 6,
+            titleHover: wash,
+            titleOpenFill: Color(r: 0.12, g: 0.12, b: 0.28, a: 0.82),
+            itemPadding: EdgeInsets(top: 4, leading: 10, bottom: 4, trailing: 10),
+            itemCornerRadius: 5,
+            itemHover: wash,
+            itemSpacing: 1,
+            dropdownPadding: 4,
+            dropdownMinWidth: 0,
+            dropdownBackground: Color(r: 0.10, g: 0.10, b: 0.24, a: 0.88),
+            dropdownBorder: Color(r: 0.50, g: 0.50, b: 0.78, a: 0.28),
+            dropdownCornerRadius: 8,
+            // Backdrop blur captures this surface, not the desktop, so
+            // frosting a panel popup would only smear the strip.
+            dropdownBlur: nil
+        )
+    }
+}
+
 /// Wraps app content with an in-window menu strip when `model` is non-empty.
 public struct MenuChromeRoot<Content: View>: View {
     public var model: MenuModel
     public var onActivate: (MenuID) -> Void
+    public var style: MenuBarStyle
     public var content: Content
 
     @State private var openMenuID: MenuID? = nil
@@ -15,10 +152,12 @@ public struct MenuChromeRoot<Content: View>: View {
     public init(
         model: MenuModel,
         onActivate: @escaping (MenuID) -> Void,
+        style: MenuBarStyle = .standard(),
         content: Content
     ) {
         self.model = model
         self.onActivate = onActivate
+        self.style = style
         self.content = content
     }
 
@@ -28,7 +167,8 @@ public struct MenuChromeRoot<Content: View>: View {
                 MenuBarStrip(
                     model: model,
                     openMenuID: $openMenuID,
-                    onActivate: onActivate
+                    onActivate: onActivate,
+                    style: style
                 )
             }
             content.flexGrow(1)
@@ -41,33 +181,44 @@ public struct MenuBarStrip: View {
     public var model: MenuModel
     public var openMenuID: Binding<MenuID?>
     public var onActivate: (MenuID) -> Void
+    public var style: MenuBarStyle
+    /// Already-decoded pictures for icon titles, keyed by menu id. A
+    /// `MenuIcon.path` is used when this has nothing for that id.
+    public var icons: [MenuID: UIImage]
 
     public init(
         model: MenuModel,
         openMenuID: Binding<MenuID?>,
-        onActivate: @escaping (MenuID) -> Void
+        onActivate: @escaping (MenuID) -> Void,
+        style: MenuBarStyle = .standard(),
+        icons: [MenuID: UIImage] = [:]
     ) {
         self.model = model
         self.openMenuID = openMenuID
         self.onActivate = onActivate
+        self.style = style
+        self.icons = icons
     }
 
     public var body: some View {
         let theme = Environment.current.theme
         let openID = openMenuID.wrappedValue
-        // Fixed height + clip: title hover fills use natural text+padding size
-        // and would otherwise paint past the strip into the content below.
+        // Height is optional: an in-window bar is a 30pt chrome strip and
+        // clips hover fills so they cannot spill into content. A panel
+        // already has a 32pt row and wants the titles to size themselves
+        // so they centre in it.
         HStack(
-            height: .pt(MenuHost.barHeight),
+            height: style.stripHeight.map { .pt($0) } ?? .auto,
             padding: 0,
-            alignment: .center
+            alignment: .center,
+            spacing: 2
         ) {
             ForEach(model.menus) { menu in
                 topLevelTitle(menu, theme: theme, openID: openID)
             }
             Spacer()
         }
-        .background(theme.panel)
+        .background(style.stripFill ?? .clear)
         .clipped()
         .agentId("menu.bar")
     }
@@ -104,16 +255,12 @@ public struct MenuBarStrip: View {
                 binding.wrappedValue = menuID
             }
         ) {
-            Text(
-                menu.title,
-                color: isOpen ? theme.accent : theme.textPrimary
-            )
+            titleLabel(menu, theme: theme, isOpen: isOpen)
         }
-        // Horizontal room for a comfortable hit target; keep vertical padding
-        // small so the label fits inside `MenuHost.barHeight` (see `.clipped()`).
-        .padding(4)
-        .hoverBackground(theme.hover)
-        .cornerRadius(3)
+        .padding(menu.icon != nil ? style.iconPadding : style.titlePadding)
+        .background(isOpen ? style.titleOpenFill : .clear)
+        .hoverBackground(style.titleHover)
+        .cornerRadius(style.titleCornerRadius)
         .agentId("menu.\(menu.id.raw)")
         .overlay(
             isPresented: Binding(
@@ -126,14 +273,46 @@ public struct MenuBarStrip: View {
                     }
                 }
             ),
-            style: OverlayStyle(padding: 4, minWidth: 160)
+            style: style.overlayStyle
         ) {
             MenuDropdownPanel(
                 entries: menu.items,
                 onActivate: { id in
                     activate(id)
                     binding.wrappedValue = nil
-                }
+                },
+                style: style
+            )
+        }
+    }
+
+    @ViewBuilder
+    private func titleLabel(
+        _ menu: MenuNode, theme: Theme, isOpen: Bool
+    ) -> some View {
+        if let icon = menu.icon {
+            let size = icon.size
+            if let image = icons[menu.id] {
+                Image(
+                    image,
+                    width: .pt(size), height: .pt(size), contentMode: .fit
+                )
+            } else if let path = icon.path {
+                Image(
+                    path: path,
+                    width: .pt(size), height: .pt(size),
+                    contentMode: .fit
+                )
+            } else {
+                Text(
+                    menu.title,
+                    color: isOpen ? theme.accent : theme.textPrimary
+                )
+            }
+        } else {
+            Text(
+                menu.title,
+                color: isOpen ? theme.accent : theme.textPrimary
             )
         }
     }
@@ -143,14 +322,20 @@ public struct MenuBarStrip: View {
 public struct MenuDropdownPanel: View {
     public var entries: [MenuEntry]
     public var onActivate: (MenuID) -> Void
+    public var style: MenuBarStyle
 
-    public init(entries: [MenuEntry], onActivate: @escaping (MenuID) -> Void) {
+    public init(
+        entries: [MenuEntry],
+        onActivate: @escaping (MenuID) -> Void,
+        style: MenuBarStyle = .standard()
+    ) {
         self.entries = entries
         self.onActivate = onActivate
+        self.style = style
     }
 
     public var body: some View {
-        VStack(padding: 2) {
+        VStack(padding: 0, spacing: style.itemSpacing) {
             ForEach(Self.rows(from: entries), id: \.id) { row in
                 rowView(row)
             }
@@ -164,10 +349,10 @@ public struct MenuDropdownPanel: View {
         switch row.kind {
         case .separator:
             Divider()
-                .padding(2)
+                .padding(EdgeInsets(top: 2, leading: 6, bottom: 2, trailing: 6))
         case .header(let title):
             Text(indent + title, color: theme.textSecondary)
-                .padding(4)
+                .padding(style.itemPadding)
                 .agentId("menu.\(row.id.raw)")
         case .item(let item):
             itemRow(item, indentPrefix: indent, theme: theme)
@@ -202,12 +387,12 @@ public struct MenuDropdownPanel: View {
                 Text(shortcut, color: theme.textDim)
             }
         }
-        .padding(4)
-        .cornerRadius(3)
+        .padding(style.itemPadding)
+        .cornerRadius(style.itemCornerRadius)
         .agentId("menu.\(item.id.raw)")
 
         if enabled {
-            row.hoverBackground(theme.hover)
+            row.hoverBackground(style.itemHover)
         } else {
             row
         }

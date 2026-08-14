@@ -107,11 +107,12 @@ final class MenuSession {
     var volumeOpen = false
     var calendarOpen = false
 
-    func attach(editor: Editor) {
+    func attach(editor: Editor, brandIcon: UIImage) {
         self.editor = editor
+        self.brandIcon = MenuIcon(size: 18, path: brandIcon.path)
         menus = PanelMenu(editor: editor)
         // Start on the desktop menu: nothing is focused yet.
-        model = Self.desktopMenu
+        model = Self.desktopMenu(icon: self.brandIcon)
     }
 
     /// Called on the frame loop when the compositor's focus changes.
@@ -153,31 +154,47 @@ final class MenuSession {
         closeMenu()
     }
 
-    /// The focused window's menu when it has one; otherwise the desktop menu
-    /// (nothing focused) or just the window's name (focused but silent).
+    /// The system menu (Lava icon) always stays first. A focused window's
+    /// titles follow it; a focused window with nothing to export just leaves
+    /// the icon and we paint its name beside the strip.
     private func refreshModel() {
+        let desktop = Self.desktopMenu(icon: brandIcon)
         if focusedSurface == 0 {
-            model = Self.desktopMenu
+            hasAppMenu = false
+            model = desktop
             return
         }
         let imported = menus?.model ?? MenuModel()
-        model = imported
+        hasAppMenu = !imported.menus.isEmpty
+        var menus = desktop.menus
+        menus.append(contentsOf: imported.menus)
+        model = MenuModel(menus: menus)
     }
 
-    /// macOS-style: when no window owns the menu bar, the panel still offers a
-    /// way into Settings rather than going blank.
-    static let desktopMenu = MenuModel(menus: [
-        MenuNode(
-            id: DesktopMenuID.root,
-            title: "Lava",
-            items: [
-                .item(MenuItemModel(
-                    id: DesktopMenuID.settings,
-                    title: "Settings…"
-                )),
-            ]
-        ),
-    ])
+    /// Whether the focused window exported titles of its own. The strip
+    /// always has the system icon; this decides whether to also print the
+    /// window's name.
+    var hasAppMenu = false
+
+    /// macOS-style: the brand mark is the system menu, always present.
+    /// `title` stays "Lava" for anything that cannot draw a picture.
+    static func desktopMenu(icon: MenuIcon?) -> MenuModel {
+        MenuModel(menus: [
+            MenuNode(
+                id: DesktopMenuID.root,
+                title: "Lava",
+                icon: icon ?? MenuIcon(size: 18),
+                items: [
+                    .item(MenuItemModel(
+                        id: DesktopMenuID.settings,
+                        title: "Settings…"
+                    )),
+                ]
+            ),
+        ])
+    }
+
+    @ObservationIgnored var brandIcon: MenuIcon?
 
     // ─── Opening a menu without resizing the surface ─────────────────────
     //
@@ -284,36 +301,39 @@ let pulse = PulseSession()
 
 struct TaskbarView: View {
     let brandIcon: UIImage
+    let menuFont: UIFont
 
     var body: some View {
+        let chrome = MenuBarStyle.panel()
         // The strip is what paints; the surface is always tall enough for a
         // dropdown (see MenuSession.ensureExpanded). Transparent below the
         // strip so the desktop shows through; input region is strip-only when
         // closed so those pixels do not steal clicks.
-        VStack(flexGrow: 1, padding: 0) {
-            HStack(height: .pt(MenuSession.stripHeight), padding: 10,
-                   alignment: .center, spacing: 16) {
-                Image(
-                    brandIcon,
-                    width: .pt(22), height: .pt(22), contentMode: .fit
+        //
+        // Horizontal inset only: 10pt on every edge of a 32pt bar left
+        // 12pt for the icon and the titles overflowed the row.
+        return VStack(flexGrow: 1, padding: 0) {
+            HStack(height: .pt(MenuSession.stripHeight), padding: 0,
+                   alignment: .center, spacing: 10) {
+                // The flame is a top-level menu title, not a separate
+                // picture: click it for Settings, the way a panel logo
+                // always is the system menu. Window titles follow it.
+                MenuBarStrip(
+                    model: session.model,
+                    openMenuID: openBinding,
+                    onActivate: { session.activate($0) },
+                    style: chrome,
+                    icons: [DesktopMenuID.root: brandIcon]
                 )
+                .font(menuFont)
 
-                if session.model.menus.isEmpty {
-                    // Focused window exports no menu (LavaTerm, a foreign app
-                    // that never registered). Its name is the honest thing to
-                    // show, and it is also how a user can tell the panel is
-                    // tracking focus at all.
+                if session.focusedSurface != 0 && !session.hasAppMenu {
+                    // Focused window exports no menu (LavaTerm, a foreign
+                    // app that never registered). Its name sits after the
+                    // icon so the panel still says who is focused.
                     Text(
                         session.title.isEmpty ? "no window" : session.title,
                         color: Theme.current.textDim
-                    )
-                } else {
-                    // Either the focused window's menu, or the desktop menu
-                    // shown when nothing is focused — both are ordinary models.
-                    MenuBarStrip(
-                        model: session.model,
-                        openMenuID: openBinding,
-                        onActivate: { session.activate($0) }
                     )
                 }
 
@@ -329,7 +349,12 @@ struct TaskbarView: View {
 
                 CalendarApplet(clockText: clock.text, isOpen: calendarOpenBinding)
             }
-            .background(Theme.current.panel)
+            .padding(.horizontal, 10)
+            .background(Gradient(
+                from: Theme.current.panel.opacity(0.5),
+                to: Theme.current.panel.opacity(0.0),
+                angle: .pi / 2
+            ))
 
             // Fills the expanded surface so the strip stays top-aligned; never
             // painted (backdrop is none, no fill here).
@@ -379,8 +404,8 @@ struct TaskbarView: View {
                     .padding(4)
             }
         }
-        .hoverBackground(Theme.current.hover)
-        .cornerRadius(3)
+        .hoverBackground(MenuBarStyle.panel().titleHover)
+        .cornerRadius(6)
         .agentId("tray.\(item.key)")
     }
 
@@ -490,7 +515,20 @@ guard let brandIcon = ImageStore.loadAsset(
 // Owns the registrar from here on, so an application starting after this point
 // finds somewhere to export to. Before `run`, because an app that registers
 // while the panel is still coming up should not have to try twice.
-session.attach(editor: editor)
+session.attach(editor: editor, brandIcon: brandIcon)
+
+// One face, loaded once. Building it inside `body` would reopen FreeType
+// every clock tick, and a face that is never `registerWithEngine`'d
+// measures at 64px while the compositor rasterizes font id 0 — the
+// default 16px — which is the widely spaced "S e t t i n g s" look.
+guard let menuFont = UIFont.loadUI(assetsRoot: LavaResources.root, pixelSize: 12)
+else {
+    FileHandle.standardError.write(
+        Data("LavaTaskbar: could not load menu face\n".utf8)
+    )
+    exit(1)
+}
+menuFont.registerWithEngine(editor)
 
 // System tray watcher — same timing as the menu registrar.
 tray = StatusNotifierTray(editor: editor)
@@ -527,4 +565,6 @@ Thread.detachNewThread {
     }
 }
 
-LavaClient.run(editor: editor) { TaskbarView(brandIcon: brandIcon) }
+LavaClient.run(editor: editor) {
+    TaskbarView(brandIcon: brandIcon, menuFont: menuFont)
+}

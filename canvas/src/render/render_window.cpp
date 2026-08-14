@@ -1529,13 +1529,17 @@ void RenderWindow::replayDrawList(const canvas::DrawList &list, float viewW,
         // only a hover tint must not dim itself when pressed.
         const float pressK = pressTint != 0 ? pressAmount : 0.f;
         const float hoverK = hoverAmount * (1.f - pressK);
+        // `aux` is the producer's corner radius. A hover chip on a
+        // rounded row has to match the fill underneath or it reads as a
+        // hard box leaking past the corners.
+        const float radius = cmd.aux > 0.f ? cmd.aux : 0.f;
         if (hoverTint != 0 && hoverK > 0.f) {
           quads_.pushBox({node.x, node.y}, {node.w, node.h},
-                         withScaledAlpha(hoverTint, hoverK), 0.f);
+                         withScaledAlpha(hoverTint, hoverK), radius);
         }
         if (pressK > 0.f) {
           quads_.pushBox({node.x, node.y}, {node.w, node.h},
-                         withScaledAlpha(pressTint, pressK), 0.f);
+                         withScaledAlpha(pressTint, pressK), radius);
         }
       }
 

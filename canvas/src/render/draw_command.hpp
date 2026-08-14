@@ -93,6 +93,9 @@ enum class DrawCommandKind : uint32_t {
   ///           space. Both zero means "all of it".
   ///   color = tint drawn over the node while the pointer is inside it
   ///   param = tint drawn over it while it is also being pressed
+  ///   aux   = corner radius of those tints, so a `.hoverBackground()` on a
+  ///           rounded row draws a rounded chip rather than a hard box. 0
+  ///           is a rectangle, matching the previous default.
   ///
   /// Both tints are RGBA8 and zero means none, so a node that says nothing
   /// behaves exactly as before. They live on `EndNode` rather than

@@ -1,18 +1,13 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title desc">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="108 72 300 360" role="img" aria-labelledby="title desc">
   <title id="title">LavaUI icon</title>
-  <desc id="desc">A bright lava flame on a dark rounded tile.</desc>
+  <desc id="desc">A bright lava flame, sized to sit in a 32pt panel strip.</desc>
   <defs>
-    <linearGradient id="tile" x1="96" y1="64" x2="416" y2="448" gradientUnits="userSpaceOnUse">
-      <stop stop-color="#343866"/>
-      <stop offset="1" stop-color="#171a35"/>
-    </linearGradient>
     <linearGradient id="flame" x1="196" y1="112" x2="330" y2="408" gradientUnits="userSpaceOnUse">
       <stop stop-color="#ffd84a"/>
       <stop offset=".48" stop-color="#ff7a2f"/>
       <stop offset="1" stop-color="#f12f61"/>
     </linearGradient>
   </defs>
-  <rect x="28" y="28" width="456" height="456" rx="116" fill="url(#tile)"/>
   <path d="M258 424c-88 0-144-55-144-139 0-62 34-108 79-152 3 38 17 57 34 70 10-69 42-118 100-159-6 68 47 101 65 161 32 108-35 219-134 219Z" fill="url(#flame)"/>
   <path d="M258 385c-43 0-72-28-72-70 0-34 20-59 45-85 1 22 9 34 19 42 7-38 25-67 57-92-3 40 25 59 35 92 17 57-18 113-84 113Z" fill="#fff3a3"/>
   <path d="M258 358c-20 0-34-13-34-33 0-16 9-28 21-40 1 11 5 16 9 20 4-19 12-32 27-44-1 19 12 28 17 43 8 27-8 54-40 54Z" fill="#fffdf0"/>
