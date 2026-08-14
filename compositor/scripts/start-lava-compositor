@@ -5,6 +5,13 @@ cd "$SCRIPT_DIR/../.."
 
 export XDG_RUNTIME_DIR="/run/user/$(id -u)"
 
+# The panel, dock, launcher and everything the launcher starts are found by
+# `ShellSupervisor::programPath`, which searches `.build/debug` *before*
+# `.build/release` when this is unset. A release session left to itself comes
+# up running debug components and says nothing about it — and an edit rebuilt
+# only in release then has no visible effect, which reads as a bug in the
+# change rather than in the session. Same reason `dev-run` sets it.
+LAVA_SHELL_DIR="$PWD/.build/release" \
 WLR_BACKENDS=drm,libinput \
 WLR_DRM_DEVICES=/dev/dri/card0 \
 WLR_RENDER_DRM_DEVICE=/dev/dri/renderD129 \

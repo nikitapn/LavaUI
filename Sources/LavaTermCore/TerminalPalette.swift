@@ -35,7 +35,7 @@ public enum TerminalPalette {
     /// Paper when a cell has no explicit background. Also the window tint.
     public static let defaultBg: RGB = (0, 0, 0)
     /// Window wash over the desktop. 1 is a slab; 0 is a hole.
-    public static let windowAlpha: Float = 0.90
+    public static let windowAlpha: Float = 0.96
     /// Selection overlay, drawn on top of the cells.
     public static let selection: RGB = (0.35, 0.55, 0.85)
     public static let selectionAlpha: Float = 0.35
