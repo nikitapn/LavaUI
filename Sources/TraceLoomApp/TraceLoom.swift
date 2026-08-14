@@ -153,7 +153,7 @@ private final class TraceDataCache: @unchecked Sendable {
 }
 
 public struct TraceLoom: View {
-    /// Shared with `LavaApp.run(menu:)` — see `TraceLoomSession`. `@Bindable`
+    /// Shared with `LavaHost.run(menu:)` — see `TraceLoomSession`. `@Bindable`
     /// so `$session.rules` projects a binding the way `$state` does.
     @Bindable var session: TraceLoomSession
 

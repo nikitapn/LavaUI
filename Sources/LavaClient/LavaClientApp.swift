@@ -63,8 +63,23 @@ public enum LavaClient {
         Self.requestedWidth = width
         Self.requestedHeight = height
         Self.frame = frame
-        guard let editor = LavaApp.openClient(width: width, height: height) else {
+        FileHandle.standardError.write(
+            Data("lava fonts: \(LavaResources.fontsDirectory)\n".utf8)
+        )
+        guard let editor = Editor.openClient(width: width, height: height) else {
             fail("client engine failed to open")
+        }
+        if FontStore.bootstrap(
+            assetsRoot: LavaResources.root, pixelSize: 16, into: editor
+        ) == nil {
+            FileHandle.standardError.write(
+                Data("warning: default UIFont failed to load\n".utf8)
+            )
+        }
+        if FontStore.symbols == nil {
+            FileHandle.standardError.write(
+                Data("warning: symbol font missing (Noto Sans Symbols 2)\n".utf8)
+            )
         }
 
         let compositor: Compositor

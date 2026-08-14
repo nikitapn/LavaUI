@@ -1,11 +1,12 @@
 import Foundation
+import LavaHost
 import LavaUI
 
 /// Runs TraceLoom, a pattern-driven log timeline product built with LavaUI.
 @main
 struct TraceLoomApp {
     static func main() {
-        guard let editor = LavaApp.open(title: "TraceLoom · Log Timeline Studio") else {
+        guard let editor = LavaHost.open(title: "TraceLoom · Log Timeline Studio") else {
             exit(1)
         }
 
@@ -14,7 +15,7 @@ struct TraceLoomApp {
         // `@Observable` object — see `TraceLoomSession`.
         let session = TraceLoomSession()
 
-        LavaApp.run(
+        LavaHost.run(
             editor: editor,
             menu: {
                 // One home per action. Duplicating an item across menus is not

@@ -62,8 +62,8 @@ take whatever scissor an enclosing node pushed.
 This was skipped once, on the belief that those vertices were in the scene's
 own space and a Scene3D inside a scroll view could only be half-moved. The
 belief was wrong — the struct says window pixels — but the caution was sound
-while nothing exercised it, because ArenaDemo never put a scene inside a
-scrolling node. LavaUI's `ScrollView` wraps arbitrary content, so it does.
+until LavaUI put a scene inside a scrolling node. `ScrollView` wraps arbitrary
+content, so it does.
 
 ## Scroll
 
@@ -398,8 +398,8 @@ one as ordinary input rather than as an error:
 
 ## Demonstrated
 
-`ArenaDemo produce <name>` draws an animated bar chart (immediate) beside a
-5000-row panel inside one scrolling node (retained).
+The original retained-scene prototype used an animated bar chart (immediate)
+beside a 5000-row panel inside one scrolling node (retained).
 
 - Wheel over the panel: it scrolls, and the client's own counter stays at
   "0 scrolls seen here" — the events never reached it.
@@ -441,12 +441,10 @@ one as ordinary input rather than as an error:
 - **Two curves, neither chosen.** Decay or timed cubic; there is no way to
   ask for a spring, an overshoot, or a different easing.
 - ~~**Nothing in LavaUI emits any of this yet.**~~ Done. `ScrollView` opens a
-  node, and a whole LavaUI app runs as a compositor client — `ArenaDemo
-  lavaui`. See "Wiring this to LavaUI" below.
+  node, and whole LavaUI apps run as compositor clients through `LavaClient`.
+  See "Wiring this to LavaUI" below.
 - ~~**Node ids are the producer's to invent, and there is no scheme for it.**~~
-  Done — `SceneNodeIdentity`. `ArenaDemo`'s hand-written producer still
-  hardcodes ranges, because a fixed tree can; anything dynamic gets ids from
-  there.
+  Done — `SceneNodeIdentity`. Dynamic trees get ids from there.
 - **A tint is a flat overlay** over the node's whole viewport, text
   included. That is the ordinary highlight look at low alpha, but it cannot
   express "change this one background colour".

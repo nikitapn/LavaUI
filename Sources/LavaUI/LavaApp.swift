@@ -70,51 +70,6 @@ public enum LavaApp {
         return editor
     }
 
-    /// Opens a client: the same framework, laying out and emitting frames for
-    /// another process to draw, with no window and no GPU of its own.
-    ///
-    /// The counterpart to `open`, and `run` takes what it returns unchanged —
-    /// a client app's `main.swift` differs from a windowed one's by this call
-    /// and nothing else.
-    ///
-    /// Fonts still load and shape here, because shaping never needed the
-    /// device; only rasterizing into the glyph atlas does, and that belongs
-    /// to whoever draws. No engine assets are needed for the same reason: a
-    /// client compiles no shaders.
-    ///
-    /// - Parameters `width`/`height`: the size to lay out at until something
-    ///   tells it otherwise (`Editor.setClientSize`). A client has no surface
-    ///   to measure, so this is a starting guess rather than a fact.
-    public static func openClient(width: Float = 1280, height: Float = 800) -> Editor? {
-        FileHandle.standardError.write(Data("lava fonts: \(LavaResources.fontsDirectory)\n".utf8))
-
-        guard let editor = Editor.openClient(width: width, height: height) else {
-            FileHandle.standardError.write(Data("failed to open client engine\n".utf8))
-            return nil
-        }
-
-        if FontStore.bootstrap(
-            assetsRoot: LavaResources.root,
-            pixelSize: 16,
-            into: editor
-        ) == nil {
-            FileHandle.standardError.write(Data("warning: default UIFont failed to load\n".utf8))
-        }
-        if FontStore.symbols == nil {
-            FileHandle.standardError.write(
-                Data("warning: symbol font missing (Noto Sans Symbols 2)\n".utf8)
-            )
-        }
-
-        // Left unset rather than wired to an engine that has no window: the
-        // clipboard is the display server's, and a client reaches it through
-        // whoever owns the surface. `LavaClient.run` installs the pair that
-        // asks the compositor once it has a surface to ask about; until then
-        // reads return "" and writes are dropped, which is what
-        // `ClipboardBridge` already does with no reader.
-        return editor
-    }
-
     /// Engine assets root: `override`, else `CANVAS_ASSETS_ROOT`, else the
     /// `CanvasResources` SwiftPM bundle (checked-in SPIR-V under `shaders/`).
     public static func resolveEngineAssetsRoot(_ override: String? = nil) -> String {

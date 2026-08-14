@@ -1,8 +1,6 @@
 import Foundation
+import LavaHost
 import LavaUI
-#if canImport(LavaClient)
-import LavaClient
-#endif
 
 /// Runs the LavaUI widget playground (`DemoExample`).
 @main
@@ -14,28 +12,11 @@ struct HelloWorldApp {
         // been — the images still load, the menu is still built — which is the
         // property worth having and the reason this is two calls rather than a
         // separate program.
-        let client = ProcessInfo.processInfo.environment["LAVA_CLIENT"] == "1"
-        #if canImport(LavaClient)
         // Client-framed by default under the compositor: the demo's toolbar is
         // already a 56pt row, and a title bar above it would be a second one
         // saying less. `LAVA_FRAME=server` puts the compositor's strip back,
         // which is the comparison worth being able to make in one keystroke.
-        let serverFrame =
-            ProcessInfo.processInfo.environment["LAVA_FRAME"] == "server"
-        let editorOrNil = client
-            ? LavaClient.open(
-                title: "LavaUI · DemoExample",
-                frame: serverFrame ? .server : .client
-              )
-            : LavaApp.open(title: "LavaUI · DemoExample")
-        #else
-        // Without the control plane there is nothing to be a client of. The
-        // windowless engine still exists, so this stays useful for checking
-        // that a tree lays out and emits with no GPU.
-        let editorOrNil = client
-            ? LavaApp.openClient()
-            : LavaApp.open(title: "LavaUI · DemoExample")
-        #endif
+        let editorOrNil = LavaHost.open(title: "LavaUI · DemoExample")
         guard let editor = editorOrNil else { exit(1) }
 
         // Demo art is HelloWorld's own SPM resources, not the engine/LavaUI.
@@ -152,11 +133,6 @@ struct HelloWorldApp {
         let root = {
             DemoExample(session: session, brandImage: brandImage, posters: posters)
         }
-        #if canImport(LavaClient)
-        if client {
-            LavaClient.run(editor: editor, menu: menu, makeRoot: root)
-        }
-        #endif
-        LavaApp.run(editor: editor, menu: menu, makeRoot: root)
+        LavaHost.run(editor: editor, menu: menu, makeRoot: root)
     }
 }

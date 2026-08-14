@@ -1,9 +1,7 @@
 import Foundation
+import LavaHost
 import LavaUI
 import WeatherCore
-#if canImport(LavaClient)
-import LavaClient
-#endif
 
 /// LavaWeather — current conditions, the next day, and the week.
 ///
@@ -13,8 +11,8 @@ import LavaClient
 ///
 /// The minimum is not a guess: below roughly this width the week rows run out
 /// of room for the summary and the range bar at once, and the hour strip stops
-/// showing enough hours to be a strip. The compositor clamps interactive
-/// resizes to it, so the broken shape is simply not reachable.
+/// showing enough hours to be a strip. The active window host clamps
+/// interactive resizes to it, so the broken shape is simply not reachable.
 enum Layout {
     static let initialWidth: Float = 580
     static let initialHeight: Float = 660
@@ -27,40 +25,22 @@ struct WeatherApp {
     static func main() {
         AppSettings.configure(appName: "LavaWeather")
 
-        let client = ProcessInfo.processInfo.environment["LAVA_CLIENT"] == "1"
-        #if canImport(LavaClient)
         // Client-framed under the compositor: the window already has a strip
         // with the place name on it, and a title bar above that would be a
-        // second one saying less.
-        let serverFrame =
-            ProcessInfo.processInfo.environment["LAVA_FRAME"] == "server"
-        let editorOrNil = client
-            ? LavaClient.open(
-                title: "LavaWeather",
-                width: Layout.initialWidth, height: Layout.initialHeight,
-                frame: serverFrame ? .server : .client
-              )
-            : LavaApp.open(
-                title: "LavaWeather",
-                width: Layout.initialWidth, height: Layout.initialHeight
-              )
-        #else
-        let editorOrNil = client
-            ? LavaApp.openClient()
-            : LavaApp.open(title: "LavaWeather")
-        #endif
+        // second one saying less. `LAVA_FRAME=server` puts it back.
+        let editorOrNil = LavaHost.open(
+            title: "LavaWeather",
+            width: Layout.initialWidth, height: Layout.initialHeight
+        )
         guard let editor = editorOrNil else { exit(1) }
 
         // Not the whole screen. A forecast is a glance, and the content has a
         // natural size — a hero, a strip of hours, seven rows — that a
         // full-screen window would leave floating in the middle of nothing.
-        #if canImport(LavaClient)
-        if client {
-            LavaClient.setMinimumSize(
-                width: Layout.minWidth, height: Layout.minHeight
-            )
-        }
-        #endif
+        LavaHost.setMinimumSize(
+            editor: editor,
+            width: Layout.minWidth, height: Layout.minHeight
+        )
 
         Theme.current = .nebula
         // A second, larger instance of the UI face for the headline. Loaded
@@ -78,11 +58,6 @@ struct WeatherApp {
         // forecast arrives looks like one that failed to start.
         FrameTasks.after { session.reload() }
 
-        #if canImport(LavaClient)
-        if client {
-            LavaClient.run(editor: editor) { WeatherView(session: session) }
-        }
-        #endif
-        LavaApp.run(editor: editor) { WeatherView(session: session) }
+        LavaHost.run(editor: editor) { WeatherView(session: session) }
     }
 }

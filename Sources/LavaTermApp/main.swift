@@ -1,9 +1,7 @@
 import Foundation
+import LavaHost
 import LavaUI
 import LavaTermCore
-#if canImport(LavaClient)
-import LavaClient
-#endif
 
 /// LavaTerm — a minimal terminal emulator built with LavaUI.
 ///
@@ -24,25 +22,12 @@ WindowBackdrop.current = .none
 // `LAVA_CLIENT=1` runs under the compositor: no window, no GPU, frames
 // published into shared memory for another process to draw. The PTY
 // session and view tree are unchanged — only the host differs.
-let client = ProcessInfo.processInfo.environment["LAVA_CLIENT"] == "1"
-#if canImport(LavaClient)
+let client = LavaHost.isClient
 // Client-framed by default under the compositor: the app draws
 // WindowControls + a path strip and owns the drag region, so a second
 // compositor title bar would only add a duplicate "LavaTerm" label.
 // `LAVA_FRAME=server` puts the server chrome back for comparison.
-let serverFrame =
-    ProcessInfo.processInfo.environment["LAVA_FRAME"] == "server"
-let editorOrNil = client
-    ? LavaClient.open(
-        title: "LavaTerm", width: 1024, height: 640,
-        frame: serverFrame ? .server : .client
-      )
-    : LavaApp.open(title: "LavaTerm", width: 1024, height: 640)
-#else
-let editorOrNil = client
-    ? LavaApp.openClient(width: 1024, height: 640)
-    : LavaApp.open(title: "LavaTerm", width: 1024, height: 640)
-#endif
+let editorOrNil = LavaHost.open(title: "LavaTerm", width: 1024, height: 640)
 guard let editor = editorOrNil else { exit(1) }
 
 if client {
@@ -146,12 +131,5 @@ let root = {
     TerminalView(session: session, mono: mono)
 }
 
-#if canImport(LavaClient)
-if client {
-    // Never returns: process exits when the compositor surface goes away.
-    LavaClient.run(editor: editor, menu: menu, makeRoot: root)
-}
-#endif
-
-LavaApp.run(editor: editor, menu: menu, makeRoot: root)
+LavaHost.run(editor: editor, menu: menu, makeRoot: root)
 session.stop()

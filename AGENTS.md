@@ -208,6 +208,7 @@ Sources/
   LavaText/        Editing logic — no C++, no Vulkan (unit-tested hard)
   LavaMenu/        Menu DSL / IR — no drawing
   LavaClient/      Compositor client library
+  LavaHost/        Runtime window/compositor selection for app entry points
   LavaIDL/         Generated NPRPC Swift stubs (do not hand-edit long-term)
   LavaBench/       Perf suite vs committed baseline
   LavaSurface/     Client: wallpaper / desktop surface
@@ -219,14 +220,13 @@ Sources/
   Spotify*/        LavaSpotify (core headless + app)
   TraceLoom*/      Log / trace viewer + Ollama assistant
   Weather*/        LavaWeather (core headless + app; Open-Meteo, no API key)
-  ArenaDemo/       Multi-client / arena experiments
   FBDModel/        Function-block diagram model
 canvas/            C++ Vulkan engine + Yoga (SwiftPM C++ targets)
 compositor/        wlroots compositor + canvas surfaces + control plane
 idl/lava.npidl     Control-plane IDL
 docs/              Design notes, API, performance, gaps
 tools/             Agent CLI / MCP over LAVA_AGENT_PORT
-scripts/           gen_stubs.sh, run-host-client.sh
+scripts/           RPC stub generation
 Tests/             Headless Swift tests (no GPU required for most)
 ```
 

@@ -51,16 +51,26 @@ overlay, and content-scale handling; return `true` to consume an event.
 The optional `menu` closure builds a `LavaMenu.MenuBar`. See
 [native menus](native-menus.md) for its DSL and Linux backends.
 
-### Running without a window
+Monorepo apps that support both modes use `LavaHost.open`: it selects
+`LavaClient.open` when `LAVA_CLIENT=1` and `LavaApp.open` otherwise. This keeps
+the conditional NPRPC dependency and `LAVA_FRAME` handling out of app entry
+points. The matching `LavaHost.run` selects the correct frame loop with the
+same `menu`, `onRawKey`, and root-builder arguments.
 
-`LavaApp.openClient(width:height:)` opens the same framework with no window,
-no Vulkan and no GPU. It returns an `Editor` that `LavaApp.run` takes
-unchanged, so a client app's `main.swift` differs from a windowed one's by
-that call and nothing else:
+Use `LavaHost.setMinimumSize(editor:width:height:)` for a layout's resize
+floor. It applies `glfwSetWindowSizeLimits` to a local window or sends the
+deferred `SetMinSize` request to the compositor in client mode. Zero means no
+constraint on that axis.
+
+### Running under the compositor
+
+`LavaClient.open(title:width:height:)` opens the framework with no local
+window, Vulkan device or GPU. `LavaClient.run` connects the editor to the C++
+compositor's resources, shared draw arena and input stream:
 
 ```swift
-guard let editor = LavaApp.openClient() else { exit(1) }
-LavaApp.run(editor: editor) { RootView() }
+guard let editor = LavaClient.open(title: "My App") else { exit(1) }
+LavaClient.run(editor: editor) { RootView() }
 ```
 
 The view tree, layout, invalidation and emit are all unaware of the
@@ -189,7 +199,7 @@ client under a shared renderer assigns the compositor once, before loading
 anything:
 
 ```swift
-guard let editor = LavaApp.openClient() else { exit(1) }
+guard let editor = LavaClient.open(title: "My App") else { exit(1) }
 editor.resources = CompositorResources(compositor)
 ```
 
@@ -240,14 +250,14 @@ frame that is halfway emitted.
 
 ### Putting it together
 
-`ArenaDemo lavaui` is a complete client and the shortest description of what
-one is: `LavaApp.run` unmodified, with three installs before it.
+`LavaClient.open` and `LavaClient.run` own the client-side setup. Applications
+choose the host at their entry point and otherwise keep the same view tree:
 
 ```swift
-let editor = LavaApp.openClient(width: 720, height: 560)!   // no window, no GPU
-editor.resources = CompositorResources(compositor)          // ids from the renderer
-editor.publishFrames(to: sink)                              // frames to shared memory
-LavaApp.run(editor: editor) { ClientDemoView() }
+let editor = LavaClient.open(
+    title: "My App", width: 720, height: 560
+)!
+LavaClient.run(editor: editor) { ClientView() }
 ```
 
 Input comes back the other way: the compositor's `SubscribeInput` stream feeds

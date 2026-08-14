@@ -94,6 +94,9 @@ public:
   /// See `AppWindow::setClientSize`. No-op on a window that has a renderer.
   void setClientSize(float width, float height, uint32_t windowId = 0);
 
+  /// See `AppWindow::setMinimumSize`. No-op on a client window.
+  void setMinimumSize(float width, float height, uint32_t windowId = 0);
+
   /// See `AppWindow::postInputEvent`.
   void postInputEvent(uint32_t kind, float x, float y, int32_t button,
                       int32_t mods, uint32_t windowId = 0);

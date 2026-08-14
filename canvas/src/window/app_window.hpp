@@ -209,6 +209,10 @@ class AppWindow {
   /// told is the only way it can know.
   void setClientSize(float width, float height);
 
+  /// Constrains interactive GLFW resizes. Zero means no floor on that axis;
+  /// client windows have no local surface and ignore this.
+  void setMinimumSize(float width, float height);
+
   void setWindowFrame(int x, int y, int width, int height);
   void setWindowVisible(bool visible);
 

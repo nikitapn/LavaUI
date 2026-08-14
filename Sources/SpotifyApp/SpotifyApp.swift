@@ -1,9 +1,7 @@
 import Foundation
+import LavaHost
 import LavaUI
 import SpotifyCore
-#if canImport(LavaClient)
-import LavaClient
-#endif
 
 /// LavaSpotify — Spotify-shaped UI + Connect control of spotifyd.
 ///
@@ -17,28 +15,11 @@ struct SpotifyApp {
         SpotifyTheme.restore()
         Theme.current = SpotifyTheme.theme
 
-        let client = ProcessInfo.processInfo.environment["LAVA_CLIENT"] == "1"
-        #if canImport(LavaClient)
         // Client-framed by default under the compositor: the demo's toolbar is
         // already a 56pt row, and a title bar above it would be a second one
         // saying less. `LAVA_FRAME=server` puts the compositor's strip back,
         // which is the comparison worth being able to make in one keystroke.
-        let serverFrame =
-            ProcessInfo.processInfo.environment["LAVA_FRAME"] == "server"
-        let editorOrNil = client
-            ? LavaClient.open(
-                title: "LavaSpotify",
-                frame: serverFrame ? .server : .client
-              )
-            : LavaApp.open(title: "LavaSpotify")
-        #else
-        // Without the control plane there is nothing to be a client of. The
-        // windowless engine still exists, so this stays useful for checking
-        // that a tree lays out and emits with no GPU.
-        let editorOrNil = client
-            ? LavaApp.openClient()
-            : LavaApp.open(title: "LavaSpotify")
-        #endif
+        let editorOrNil = LavaHost.open(title: "LavaSpotify")
         guard let editor = editorOrNil else { exit(1) }
 
         if let b = ProcessInfo.processInfo.environment["LAVA_IMAGE_BUDGET_KB"],
@@ -147,17 +128,7 @@ struct SpotifyApp {
         }
         let root = { Spotify(session: session) }
 
-        #if canImport(LavaClient)
-        if client {
-            // Never returns: the surface is created here, not by `open`, and
-            // the process exits when the compositor takes it away.
-            LavaClient.run(
-                editor: editor, menu: menu, onRawKey: onRawKey, makeRoot: root
-            )
-        }
-        #endif
-
-        LavaApp.run(
+        LavaHost.run(
             editor: editor, menu: menu, onRawKey: onRawKey, makeRoot: root
         )
     }

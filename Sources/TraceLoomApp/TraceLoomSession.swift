@@ -5,7 +5,7 @@ import TraceLoomCore
 
 /// Shared document + chrome state for TraceLoom.
 ///
-/// Menu actions live outside the view tree (`LavaApp.run(menu:)`), while the
+/// Menu actions live outside the view tree (`LavaHost.run(menu:)`), while the
 /// UI is a `View` with `@State`. Connecting them with closures that capture
 /// `@State` does not work — those wrappers are value copies. An `@Observable`
 /// class is the join: the menu mutates the same instance the view reads, and
@@ -14,7 +14,7 @@ import TraceLoomCore
 /// Pattern:
 /// ```swift
 /// let session = TraceLoomSession()
-/// LavaApp.run(editor: editor, menu: { … session.openLogFile() … }) {
+/// LavaHost.run(editor: editor, menu: { … session.openLogFile() … }) {
 ///     TraceLoom(session: session)
 /// }
 /// ```

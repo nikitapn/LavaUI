@@ -172,7 +172,7 @@ extension Editor: GPUResourceHost {
     /// assigns the compositor here, once, at startup:
     ///
     /// ```swift
-    /// guard let editor = LavaApp.openClient() else { exit(1) }
+    /// guard let editor = LavaClient.open(title: "My App") else { exit(1) }
     /// editor.resources = compositor      // ids now come from the renderer
     /// ```
     ///

@@ -1,7 +1,7 @@
 # What is broken when LavaUI runs as a client
 
-Audited 2026-08-06 against `ArenaDemo host` + `LAVA_CLIENT=1 HelloWorld`,
-release build. Everything below was either reproduced live or traced to the
+Audited 2026-08-06 against `LAVA_CLIENT=1 HelloWorld` and the C++ compositor,
+release builds. Everything below was either reproduced live or traced to the
 line that makes it impossible; each entry says which.
 
 The list exists because the client/server split is now good enough that what
@@ -81,7 +81,7 @@ one client worked, because that is `TextEditing`'s own buffer rather than the
 system's.
 
 Half of it was already right: `AppWindow::clipboardText` needs a GLFW window,
-a client has none, and `LavaApp.openClient` deliberately left
+a client has none, and the client bootstrap deliberately left
 `ClipboardBridge` unwired rather than pointing it at an engine that could not
 answer. The missing half was a route — nothing on the control plane could
 reach the display server's selection.
@@ -166,8 +166,8 @@ the other.
 A path should still go through `RegisterImage`. This one copies the file
 through the ring buffer; a path sends a path.
 
-**Verified:** the ArenaDemo client builds a BMP in memory and gets it on
-screen (`RegisterImageData(27702 bytes) → 96×96`); a second client generating
+**Verified:** a client-built BMP gets on screen
+(`RegisterImageData(27702 bytes) → 96×96`); a second client generating
 byte-identical pixels gets the existing texture with no second decode.
 
 ### 6. ~~The agent cannot see a client's pixels~~ — fixed

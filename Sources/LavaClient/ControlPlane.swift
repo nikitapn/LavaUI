@@ -6,11 +6,9 @@ import NPRPC
 
 // The app's half of the compositor control plane.
 //
-// Split out of `ArenaDemo` so that being a client is a library feature rather
-// than something one demo knows how to do. Everything here is the side that
-// *asks*: find the compositor, get ids for the resources it owns, take a
-// surface, read its input. The serving half stays with whoever is the
-// renderer.
+// Everything here is the side that *asks*: find the compositor, get ids for
+// the resources it owns, take a surface, read its input. The serving half
+// stays with whoever is the renderer.
 //
 // Kept out of `LavaUI` itself, and not by accident: NPRPC builds with
 // `.unsafeFlags`, which SwiftPM propagates to every dependent and permits only
@@ -67,7 +65,7 @@ public func connectToCompositor() throws -> (Compositor, Rpc) {
 /// resolve to the same thing:
 ///
 /// ```swift
-/// guard let editor = LavaApp.openClient() else { exit(1) }
+/// guard let editor = LavaClient.open(title: "My App") else { exit(1) }
 /// editor.resources = CompositorResources(compositor)
 /// ```
 ///
@@ -257,9 +255,8 @@ public final class InputChannel: @unchecked Sendable {
     /// Called on the NPRPC thread the moment something arrives, for a client
     /// whose frame loop parks rather than polls.
     ///
-    /// `ArenaDemo`'s own producer spins a frame clock and calls `drain` when
-    /// it gets to it, so it needs no such thing. A LavaUI client blocks in
-    /// `pumpEvents` until something happens, and an input that only becomes
+    /// A LavaUI client blocks in `pumpEvents` until something happens, and an
+    /// input that only becomes
     /// visible on the next tick would be an input that arrives when the next
     /// tick happens to be — which for an idle app is never.
     public var onArrival: (@Sendable () -> Void)?

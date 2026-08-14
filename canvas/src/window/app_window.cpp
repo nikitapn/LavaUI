@@ -1,6 +1,7 @@
 #include "window/app_window.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <iostream>
 #include <stdexcept>
 
@@ -361,6 +362,19 @@ void AppWindow::setClientSize(float width, float height)
   ev.button = 0;
   std::lock_guard lock(inputMu_);
   inputEvents_.push_back(ev);
+}
+
+void AppWindow::setMinimumSize(float width, float height)
+{
+  if (!glfw_) return;
+  const int minWidth = width > 0.f
+                         ? static_cast<int>(std::ceil(width))
+                         : GLFW_DONT_CARE;
+  const int minHeight = height > 0.f
+                          ? static_cast<int>(std::ceil(height))
+                          : GLFW_DONT_CARE;
+  glfwSetWindowSizeLimits(
+    glfw_, minWidth, minHeight, GLFW_DONT_CARE, GLFW_DONT_CARE);
 }
 
 void AppWindow::setWindowFrame(int x, int y, int width, int height)

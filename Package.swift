@@ -14,10 +14,7 @@ import PackageDescription
 // GitHub dependency (see canvas/Package.swift), and the control plane belongs
 // above the UI framework anyway.
 //
-// Detected rather than required, because HelloWorld itself does not need it.
-// Without nprpc checked out, everything still builds; `ArenaDemo` simply
-// falls back to agreeing on ids out of band, which is what it did before this
-// existed.
+// Detected rather than required, because windowed LavaUI apps do not need it.
 let nprpcPath = ProcessInfo.processInfo.environment["NPRPC_SWIFT_PATH"]
     ?? URL(fileURLWithPath: #filePath)
         .deletingLastPathComponent()
@@ -43,7 +40,6 @@ var products: [Product] = [
     .executable(name: "LavaTerm", targets: ["LavaTermApp"]),
     .executable(name: "LavaBench", targets: ["LavaBench"]),
     .executable(name: "TwoWindows", targets: ["TwoWindows"]),
-    .executable(name: "ArenaDemo", targets: ["ArenaDemo"]),
     .executable(name: "LavaSurface", targets: ["LavaSurface"]),
     .executable(name: "LavaTaskbar", targets: ["LavaTaskbar"]),
     .executable(name: "LavaDock", targets: ["LavaDock"]),
@@ -51,6 +47,7 @@ var products: [Product] = [
     .executable(name: "LavaLauncher", targets: ["LavaLauncher"]),
     .executable(name: "LavaSwitcher", targets: ["LavaSwitcher"]),
     .library(name: "LavaUI", targets: ["LavaUI"]),
+    .library(name: "LavaHost", targets: ["LavaHost"]),
     .library(name: "LavaText", targets: ["LavaText"]),
     .library(name: "LavaMenu", targets: ["LavaMenu"]),
     .library(name: "LavaShell", targets: ["LavaShell"]),
@@ -89,14 +86,6 @@ var targets: [Target] = [
     .executableTarget(
         name: "TwoWindows",
         dependencies: ["LavaUI"],
-        swiftSettings: interopCxx
-    ),
-    .executableTarget(
-        name: "ArenaDemo",
-        dependencies: ["LavaUI"]
-            + (haveNprpc
-                ? [Target.Dependency("LavaIDL"), Target.Dependency("LavaClient")]
-                : []),
         swiftSettings: interopCxx
     ),
     // A LavaUI app with no window and no GPU, drawn by the wlroots compositor
@@ -184,12 +173,20 @@ var targets: [Target] = [
         ],
         swiftSettings: interopCxx
     ),
+    // Runtime host selection stays above LavaUI so NPRPC remains optional.
+    .target(
+        name: "LavaHost",
+        dependencies: ["LavaUI"]
+            + (haveNprpc ? [Target.Dependency("LavaClient")] : []),
+        swiftSettings: interopCxx + (haveNprpc ? [.define("LAVA_HAS_CLIENT")] : [])
+    ),
     .executableTarget(
         name: "HelloWorld",
         dependencies: [
             "LavaUI",
+            "LavaHost",
             "FBDModel",
-        ] + (haveNprpc ? [Target.Dependency("LavaClient")] : []),
+        ],
         resources: [
             .process("Resources"),
         ],
@@ -197,21 +194,21 @@ var targets: [Target] = [
     ),
     .executableTarget(
         name: "TraceLoomApp",
-        dependencies: ["LavaUI", "TraceLoomCore"],
+        dependencies: ["LavaUI", "LavaHost", "TraceLoomCore"],
         swiftSettings: interopCxx
     ),
     .executableTarget(
         name: "SpotifyApp",
         dependencies: [
             "LavaUI",
+            "LavaHost",
             "SpotifyCore"
-        ] + (haveNprpc ? [Target.Dependency("LavaClient")] : []),
+        ],
         swiftSettings: interopCxx
     ),
     .executableTarget(
         name: "LavaTermApp",
-        dependencies: ["LavaUI", "LavaTermCore"]
-            + (haveNprpc ? [Target.Dependency("LavaClient")] : []),
+        dependencies: ["LavaUI", "LavaHost", "LavaTermCore"],
         swiftSettings: interopCxx,
         linkerSettings: [
             .linkedLibrary("util", .when(platforms: [.linux])),
@@ -219,8 +216,7 @@ var targets: [Target] = [
     ),
     .executableTarget(
         name: "WeatherApp",
-        dependencies: ["LavaUI", "WeatherCore"]
-            + (haveNprpc ? [Target.Dependency("LavaClient")] : []),
+        dependencies: ["LavaUI", "LavaHost", "WeatherCore"],
         swiftSettings: interopCxx
     ),
     .executableTarget(

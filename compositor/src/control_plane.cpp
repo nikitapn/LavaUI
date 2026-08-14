@@ -32,7 +32,7 @@ namespace {
 /// registered as a loop source is how: enqueue, write a byte, and the loop
 /// wakes and drains.
 ///
-/// The same shape as LavaUI's `MainQueue` and `ArenaDemo`'s `LoopQueue`, which
+/// The same shape as LavaUI's `MainQueue`, which
 /// is not a coincidence — every one of those exists because a renderer's state
 /// belongs to one thread and its inputs do not.
 class LoopQueue {

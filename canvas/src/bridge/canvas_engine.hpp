@@ -148,6 +148,10 @@ class Engine {
   /// No-op unless this engine was opened with `openClient`.
   void setClientSize(float width, float height, uint32_t windowId = 0);
 
+  /// Sets the minimum interactive size of a local GLFW window. Zero means no
+  /// constraint on that axis; no-op in client mode.
+  void setMinimumSize(float width, float height, uint32_t windowId = 0);
+
   /// Queues an event that arrived already formed — from a renderer in
   /// another process. See `AppWindow::postInputEvent`.
   void postInputEvent(uint32_t kind, float x, float y, int32_t button,

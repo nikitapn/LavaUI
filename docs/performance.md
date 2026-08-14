@@ -132,9 +132,9 @@ costs that have not been fixed yet — not measurement artifacts.
 
 ## Where the frame actually goes
 
-Measured 2026-08-05, release build, one LavaUI client under the `ArenaDemo`
-compositor — so producer and renderer are separate processes and every number
-below crosses a real boundary. The view is a `ForEach` of rows inside a
+Measured 2026-08-05, release build, with the LavaUI producer and renderer in
+separate processes, so every number below crosses a real boundary. The view is
+a `ForEach` of rows inside a
 `ScrollView`, grown by clicking a button in the running app.
 
 | per frame | 60 rows | 560 rows |

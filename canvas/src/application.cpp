@@ -698,6 +698,11 @@ void Application::setClientSize(float width, float height, uint32_t windowId)
   if (AppWindow *w = impl_->win(windowId)) w->setClientSize(width, height);
 }
 
+void Application::setMinimumSize(float width, float height, uint32_t windowId)
+{
+  if (AppWindow *w = impl_->win(windowId)) w->setMinimumSize(width, height);
+}
+
 void Application::postInputEvent(uint32_t kind, float x, float y, int32_t button,
                                  int32_t mods, uint32_t windowId)
 {
