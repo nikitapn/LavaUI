@@ -16,6 +16,14 @@ public struct EnvironmentValues {
 /// frame at every nesting level: push before descending into an overridden
 /// subtree, pop right after `ViewGraph.mount`/`.reconcile` returns.
 ///
+/// That stack is gone the next time a composite recomputes on its own.
+/// `ViewInvalidation.markBodyDirty` calls `recomputeBody` without walking
+/// back through the `.font()` / `.theme()` wrappers that originally pushed,
+/// so `CompositeNode` snapshots the stack at mount/parent-reconcile and
+/// replays it for those targeted passes. An empty snapshot still falls
+/// through to the live globals — a `Theme.current` toggle keeps reaching
+/// every subtree that never opted out.
+///
 /// Measure callbacks and the draw-list emit walk run later, as separate
 /// passes over the retained node tree with an empty stack — they read
 /// whatever a node captured from `current` at mount/reconcile time, not
@@ -38,6 +46,22 @@ public enum Environment {
     }
 
     static func pop() { overrides.removeLast() }
+
+    /// The override frames currently in force. Empty means `current` is the
+    /// live globals, not a captured copy of them.
+    static var stackSnapshot: [EnvironmentValues] { overrides }
+
+    /// Runs `body` as if `stack` were the live override stack, then puts
+    /// back whatever was there. Used by `CompositeNode.recomputeBody` so a
+    /// targeted rebuild still sees the `.font()` / `.theme()` that wrapped
+    /// it — without freezing `Theme.current` / `FontStore.default` for
+    /// subtrees that never overrode them.
+    static func withRestoredStack(_ stack: [EnvironmentValues], _ body: () -> Void) {
+        let saved = overrides
+        overrides = stack
+        defer { overrides = saved }
+        body()
+    }
 }
 
 /// Wraps `content` with an environment override active for its own

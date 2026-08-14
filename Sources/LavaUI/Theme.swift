@@ -125,11 +125,11 @@ public struct Theme: Equatable, Sendable {
         textDim: Color(r: 0.55, g: 0.58, b: 0.55),
         accent: Color(r: 0.20, g: 0.35, b: 0.70),
         selected: Color(r: 0.75, g: 0.50, b: 0.05),
-        background: Color(r: 0.96, g: 0.96, b: 0.97),
-        panel: Color(r: 0.92, g: 0.92, b: 0.94),
+        background: Color(r: 0.93, g: 0.96, b: 0.97),
+        panel: Color(r: 0.92, g: 0.93, b: 0.94),
         inset: Color(r: 1.00, g: 1.00, b: 1.00),
         canvas: Color(r: 0.88, g: 0.89, b: 0.91),
-        hover: Color(r: 0.85, g: 0.86, b: 0.89),
+        hover: Color(r: 0.24, g: 0.68, b: 0.91),
         selectionFill: Color(r: 0.65, g: 0.78, b: 0.95),
         border: Color(r: 0.75, g: 0.76, b: 0.80)
     )

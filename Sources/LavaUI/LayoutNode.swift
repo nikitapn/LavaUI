@@ -1248,9 +1248,16 @@ final class CompositeNode<V: View>: FragmentNode, BodyRecomputable, @unchecked S
     /// scope is correct exactly once: now.
     let invalidationScope: WindowScope?
 
+    /// Override stack in force when this node last mounted or was reconciled
+    /// from a parent. Targeted `recomputeBody` has no ancestor wrappers left
+    /// on the call stack — `.font()` / `.theme()` live only there — so we
+    /// replay this. An empty snapshot is the live globals, not a frozen copy.
+    private var capturedEnvironmentStack: [EnvironmentValues]
+
     init(_ view: V) {
         self.view = view
         self.invalidationScope = WindowScope.currentOrMain
+        self.capturedEnvironmentStack = Environment.stackSnapshot
         super.init(label: String(describing: V.self))
         setChildren([ViewGraph.mount(computeBody())])
     }
@@ -1261,6 +1268,9 @@ final class CompositeNode<V: View>: FragmentNode, BodyRecomputable, @unchecked S
         // reading `newView.body` first would observe reset state.
         StateTransfer.adopt(into: newView, from: view)
         view = newView
+        // Parent reconcile runs inside whatever `.font()` / `.theme()`
+        // wrapped us this pass; keep that, not the stack from last time.
+        capturedEnvironmentStack = Environment.stackSnapshot
         reconcileBody()
     }
 
@@ -1272,7 +1282,13 @@ final class CompositeNode<V: View>: FragmentNode, BodyRecomputable, @unchecked S
     /// dirty, so a change here does not force every unrelated node's body
     /// to run again too.
     func recomputeBody() {
-        reconcileBody()
+        // No `EnvironmentModifiedView` on this path: the dirty node is
+        // invoked directly. Replay the stack captured when a parent last
+        // mounted or reconciled us, or `.font()` on a wrapper evaporates
+        // the first time this view's own `@Observable` ticks.
+        Environment.withRestoredStack(capturedEnvironmentStack) {
+            reconcileBody()
+        }
     }
 
     private func reconcileBody() {

@@ -115,24 +115,24 @@ public struct MenuBarStyle: Equatable, Sendable {
     /// rows, and a translucent popup in the same indigo family as the
     /// panel gradient rather than an opaque `theme.panel` slab.
     public static func panel(theme: Theme = Theme.current) -> MenuBarStyle {
-        let wash = Color(r: 1, g: 1, b: 1, a: 0.14)
+        let wash = Color(r: 0.24, g: 0.68, b: 0.91)
         return MenuBarStyle(
             stripFill: nil,
             stripHeight: nil,
-            titlePadding: EdgeInsets(top: 3, leading: 8, bottom: 3, trailing: 8),
+            titlePadding: EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0),
             iconPadding: EdgeInsets(top: 5, leading: 5, bottom: 5, trailing: 5),
             titleCornerRadius: 6,
             titleHover: wash,
             titleOpenFill: Color(r: 0.12, g: 0.12, b: 0.28, a: 0.82),
             itemPadding: EdgeInsets(top: 4, leading: 10, bottom: 4, trailing: 10),
-            itemCornerRadius: 5,
+            itemCornerRadius: 0,
             itemHover: wash,
             itemSpacing: 1,
-            dropdownPadding: 4,
+            dropdownPadding: 0,
             dropdownMinWidth: 0,
             dropdownBackground: Color(r: 0.10, g: 0.10, b: 0.24, a: 0.88),
             dropdownBorder: Color(r: 0.50, g: 0.50, b: 0.78, a: 0.28),
-            dropdownCornerRadius: 8,
+            dropdownCornerRadius: 2,
             // Backdrop blur captures this surface, not the desktop, so
             // frosting a panel popup would only smear the strip.
             dropdownBlur: nil

@@ -350,11 +350,7 @@ struct TaskbarView: View {
                 CalendarApplet(clockText: clock.text, isOpen: calendarOpenBinding)
             }
             .padding(.horizontal, 10)
-            .background(Gradient(
-                from: Theme.current.panel.opacity(0.5),
-                to: Theme.current.panel.opacity(0.0),
-                angle: .pi / 2
-            ))
+            .background(Theme.current.background)
 
             // Fills the expanded surface so the strip stays top-aligned; never
             // painted (backdrop is none, no fill here).
