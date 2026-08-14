@@ -1,6 +1,18 @@
 #version 450
 #extension GL_EXT_nonuniform_qualifier : require
 
+// Instanced twin of quad.frag. `vKind` is `QuadRenderer::Kind`:
+//   0 Sdf           — rounded-box distance field (rect / round-rect / circle).
+//   1 Glyph         — coverage from the R8 atlas (`.r` * tint).
+//   2 Image         — full-colour sample * tint, bindless.
+//   3 Mesh          — unused here; arbitrary polygons stay on the indexed path.
+//   4 Mask          — window corner punch: emit coverage as alpha, multiply
+//                     dest, write nothing inside the shape.
+//   5 Shadow        — the same rounded box, faded outwards over `vAux` px.
+//   6 BlurComposite — frosted backdrop, sampled through the same SDF.
+//
+// Output is premultiplied; the pipeline blends ONE / ONE_MINUS_SRC_ALPHA.
+
 layout(location = 0) in vec2 vLocal;
 layout(location = 1) in vec2 vHalfSize;
 layout(location = 2) in float vRadius;
@@ -43,18 +55,24 @@ vec3 dither(vec3 premultiplied) {
 }
 
 void main() {
-  if (vKind == 5u) {
+  if (vKind == 5u) { // Shadow
     float d = sdRoundBox(vLocal, vHalfSize, vRadius);
     float fall = 1.0 - smoothstep(0.0, max(vAux, 1e-4), max(d, 0.0));
     float a = vColor.a * fall * fall;
     if (a <= 0.002) discard;
-    // Shadows are the other long, slow ramp on screen, and they band for the
-    // same reason even without a gradient — hence `max`, not the gate alone.
-    outColor = vec4(vColor.rgb * a + (ign(gl_FragCoord.xy) - 0.5) / 255.0, a);
+    // No RGB dither. A shadow is premultiplied black — `rgb = 0, a = falloff`
+    // — and adding ±½ a quantization step to the colour (the trick that
+    // hides bands on a gradient) writes a grey that is no longer
+    // premultiplied. On a 1:1 DRM output those greys land as a dotted
+    // rim along the iso-alpha of the SDF. Nested under another compositor
+    // the extra filter hides it, which is why the bug only showed on a
+    // real session. The falloff is tens of pixels, not a screen, so the
+    // banding this was meant to hide is not there to begin with.
+    outColor = vec4(vColor.rgb * a, a);
     return;
   }
 
-  if (vKind == 4u) {
+  if (vKind == 4u) { // Mask
     float d = sdRoundBox(vLocal, vHalfSize, vRadius);
     float coverage = 1.0 - smoothstep(-max(fwidth(d), 1e-5),
                                      max(fwidth(d), 1e-5), d);
@@ -63,7 +81,7 @@ void main() {
     return;
   }
 
-  if (vKind == 6u) {
+  if (vKind == 6u) { // BlurComposite
     float d = sdRoundBox(vLocal, vHalfSize, vRadius);
     float aa = max(fwidth(d), 1e-5);
     float coverage = 1.0 - smoothstep(-aa, aa, d);
@@ -74,7 +92,7 @@ void main() {
     return;
   }
 
-  if (vKind == 2u) {
+  if (vKind == 2u) { // Image
     vec4 c = texture(textures[nonuniformEXT(vTextureIndex)], vUv) * vColor;
     if (c.a <= 0.001) discard;
     outColor = vec4(c.rgb * c.a, c.a);
@@ -82,9 +100,9 @@ void main() {
   }
 
   float coverage;
-  if (vKind == 1u) {
+  if (vKind == 1u) { // Glyph
     coverage = texture(textures[nonuniformEXT(vTextureIndex)], vUv).r;
-  } else {
+  } else { // Sdf (kind 0); Mesh never reaches this shader
     float d = sdRoundBox(vLocal, vHalfSize, vRadius);
     float aa = max(fwidth(d), 1e-5);
     coverage = 1.0 - smoothstep(-aa, aa, d);
