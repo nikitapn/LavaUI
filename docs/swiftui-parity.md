@@ -172,7 +172,8 @@ Needed by most non-trivial UIs once Tier 0 is done.
 | **`Button` label builder** | partial | `Button("Title")` only |
 | **`Text` composition** | partial | Single `String`; no `Text+Text`, attributes |
 | **`Label`**, **`Link`**, **`SecureField`** | absent | |
-| **`Picker`**, **`Stepper`**, **`ProgressView`** | absent | Build ad hoc when needed |
+| **`Picker`** | partial | `ComboBox` is the menu style: closed field + anchored dropdown, mouse-driven, no arrow keys |
+| **`Stepper`**, **`ProgressView`** | absent | Build ad hoc when needed |
 | **`List` / `Form` / `Section`** | absent | Recipes with stacks may suffice medium-term |
 
 ### Interaction

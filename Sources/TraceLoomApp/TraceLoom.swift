@@ -70,7 +70,16 @@ private final class TraceDataCache: @unchecked Sendable {
     /// very first frame.
     private static let syncByteLimit = 256 * 1024
 
-    private var current: (input: ParseInput, output: ParseOutput)?
+    /// Parsed documents, most recently used first.
+    ///
+    /// Keyed per document, not per session: switching tabs is supposed to be a
+    /// return, and a single-slot cache would make every switch a reparse — for
+    /// a 12 MB log, seconds of stale timeline each way. The cap is what keeps
+    /// that from being a memory leak with a nice name; four is enough for the
+    /// pair or trio anyone actually flips between, and the fifth reparses.
+    private static let cacheLimit = 4
+
+    private var entries: [(id: Int, input: ParseInput, output: ParseOutput)] = []
     private var inFlight: ParseInput?
     private var activeCancel: CancelFlag?
     /// Bumped per request. A worker's result is dropped unless its stamp is
@@ -82,24 +91,48 @@ private final class TraceDataCache: @unchecked Sendable {
     /// pretending the displayed data is current.
     var isParsing: Bool { inFlight != nil }
 
-    func resolve(log: String, rules: String) -> ParseOutput {
+    func resolve(document: Int, log: String, rules: String) -> ParseOutput {
         let input = ParseInput(log: log, rules: rules)
-        if let current, current.input == input { return current.output }
+        if let hit = entries.firstIndex(where: { $0.id == document && $0.input == input }) {
+            touch(hit)
+            return entries[0].output
+        }
 
         if input.log.utf8.count <= Self.syncByteLimit {
             supersedeInFlight()
             let output = Self.compute(input, shouldContinue: nil)!
-            current = (input, output)
+            store(document, input, output)
             return output
         }
 
-        if inFlight != input { start(input) }
-        // The previous document keeps rendering. Only a first-ever parse of a
-        // large log has nothing to show, and the view marks that as pending.
-        return current?.output ?? .empty
+        if inFlight != input { start(document, input) }
+        // This document's *previous* parse keeps rendering — never another
+        // document's, which would put someone else's timeline under this log's
+        // name. Only a first-ever parse of a large log has nothing to show,
+        // and the view marks that as pending.
+        return entries.first(where: { $0.id == document })?.output ?? .empty
     }
 
-    private func start(_ input: ParseInput) {
+    /// Drops what belongs to documents that are no longer open, so a closed
+    /// tab's points and pyramids go with it rather than waiting to be evicted
+    /// by four unrelated parses.
+    func forget(except live: Set<Int>) {
+        entries.removeAll { !live.contains($0.id) }
+    }
+
+    private func store(_ id: Int, _ input: ParseInput, _ output: ParseOutput) {
+        entries.removeAll { $0.id == id }
+        entries.insert((id, input, output), at: 0)
+        if entries.count > Self.cacheLimit { entries.removeLast(entries.count - Self.cacheLimit) }
+    }
+
+    private func touch(_ index: Int) {
+        guard index != 0 else { return }
+        let entry = entries.remove(at: index)
+        entries.insert(entry, at: 0)
+    }
+
+    private func start(_ document: Int, _ input: ParseInput) {
         supersedeInFlight()
         let flag = CancelFlag()
         activeCancel = flag
@@ -107,7 +140,9 @@ private final class TraceDataCache: @unchecked Sendable {
         let stamp = generation
         Thread.detachNewThread { [self] in
             guard let output = Self.compute(input, shouldContinue: flag.isLive) else { return }
-            MainQueue.async { self.commit(stamp: stamp, input: input, output: output) }
+            MainQueue.async {
+                self.commit(stamp: stamp, document: document, input: input, output: output)
+            }
         }
     }
 
@@ -121,9 +156,11 @@ private final class TraceDataCache: @unchecked Sendable {
         generation &+= 1
     }
 
-    private func commit(stamp: UInt64, input: ParseInput, output: ParseOutput) {
+    private func commit(
+        stamp: UInt64, document: Int, input: ParseInput, output: ParseOutput
+    ) {
         guard stamp == generation else { return }
-        current = (input, output)
+        store(document, input, output)
         inFlight = nil
         activeCancel = nil
         // A plain class, so nothing observed this change — the frame that
@@ -171,7 +208,6 @@ public struct TraceLoom: View {
     /// Parsing and pyramid construction are tied to source edits, not cursor
     /// motion or other view-state changes that recompute this body.
     @State private var dataCache = TraceDataCache()
-    @State private var logEditorController = EditorController()
     /// Set by tapping a decorated gutter row — `EditorView` has no built-in
     /// tooltip, it just tells the app which decoration was tapped.
     @State private var tappedDiagnostic: String?
@@ -186,7 +222,10 @@ public struct TraceLoom: View {
     }
 
     private var parseOutput: ParseOutput {
-        dataCache.resolve(log: session.log, rules: session.rules)
+        dataCache.forget(except: Set(session.documents.map(\.id)))
+        return dataCache.resolve(
+            document: session.active.id, log: session.log, rules: session.rules
+        )
     }
 
     private var result: TraceParseResult { parseOutput.result }
@@ -294,7 +333,7 @@ public struct TraceLoom: View {
                        prefix: "Log ", severity: .warning, in: session.log
                    ),
                    onDecorationTap: { tappedDiagnostic = $0.message },
-                   controller: logEditorController
+                   controller: session.logEditor
                 )
                 // Fills whatever the divider leaves it; `visibleLines` is only
                 // what it would measure to on its own.
@@ -335,6 +374,8 @@ public struct TraceLoom: View {
                         .padding(.trailing, 6)
                         .windowChrome()
                 }
+                documentSwitcher
+
                 HStack() {
                     Text("\(parsed.series.count) rules", color: .secondary)
                     Text("\(parsed.matchedLineCount) matched lines", color: .secondary)
@@ -394,6 +435,64 @@ public struct TraceLoom: View {
             loadStatus()
         }
         .background(Environment.current.theme.panel)
+    }
+
+    /// Which log is in front, and the workspace it came from.
+    ///
+    /// A combo box rather than a row of tabs: the log names are file names,
+    /// which are long and similar, and twenty of them across the top would
+    /// leave nothing for the header to say. The closed field is one line and
+    /// the list carries each log's directory, which is usually the only thing
+    /// that tells two `app.log`s apart.
+    private var documentSwitcher: some View {
+        HStack(alignment: .center, spacing: 6) {
+            ComboBox(
+                selection: Binding(
+                    get: { session.activeIndex },
+                    set: { switchTo($0) }
+                ),
+                items: session.documents.enumerated().map { index, document in
+                    ComboBoxItem(document.name, tag: index, detail: document.detail)
+                },
+                width: .pt(230),
+                maxVisibleRows: 12
+            )
+            .agentId("document-switcher")
+
+            Text("×", color: .muted, onClick: { closeDocument() })
+                .padding(4)
+                .hoverBackground(Environment.current.theme.hover)
+                .cornerRadius(4)
+                .cursor(.pointer)
+                .agentId("close-document")
+
+            Text(
+                session.workspaceName.map { "workspace · \($0)" } ?? "no workspace",
+                color: .dim
+            )
+            .agentId("workspace-name")
+        }
+    }
+
+    /// Switching documents is a session action, plus forgetting the pointer
+    /// state this view is holding: `probeTime` is a timestamp in the log being
+    /// left, and in the next one it would mark a moment that log never had.
+    private func switchTo(_ index: Int) {
+        guard index != session.activeIndex else { return }
+        session.activate(index)
+        clearTimelineGesture()
+    }
+
+    private func closeDocument() {
+        session.closeActiveDocument()
+        clearTimelineGesture()
+    }
+
+    private func clearTimelineGesture() {
+        probeTime = nil
+        cursorLocalX = nil
+        dragStartLocalX = nil
+        dragCurrentLocalX = nil
     }
 
     /// One line under the header for whichever of the two states is live.
@@ -678,7 +777,7 @@ public struct TraceLoom: View {
                             ) {
                                 probeTime = point.time
                                 if let line = point.sourceLine {
-                                    logEditorController.reveal(line: line)
+                                    session.logEditor.reveal(line: line)
                                 }
                             } else {
                                 probeTime = selectedTime

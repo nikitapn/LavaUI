@@ -588,6 +588,30 @@ with `.horizontal` or `.vertical` and a `DividerStyle`.
 `Expand(title:isExpanded:style:content:)` provides a disclosure section with
 an animatable body.
 
+`ComboBox` is a closed field plus a dropdown — a switcher for one of several
+things, where a row of tabs would not fit:
+
+```swift
+ComboBox(
+    selection: Binding(get: { active }, set: { switchTo($0) }),
+    items: documents.enumerated().map {
+        ComboBoxItem($0.element.name, tag: $0.offset, detail: $0.element.directory)
+    },
+    placeholder: "nothing open",
+    width: .pt(230),
+    maxVisibleRows: 12
+)
+```
+
+The tag is any `Hashable` — an index, an id, a string — and is what the
+binding carries. `detail` is dim trailing text for telling similarly named
+rows apart; keep it short, since the list sizes to its widest row. Picking the
+row that is already selected does not write the binding, so a setter with side
+effects is safe to use directly. The list is an anchored overlay, so it paints
+above everything, escapes any enclosing clip, and dismisses on an outside
+click or Escape. It is mouse-driven: there is no arrow-key navigation, because
+a composed view cannot hold keyboard focus.
+
 ### Images
 
 Load an application resource once when possible:
@@ -640,7 +664,19 @@ EditorView(
 )
 
 controller.reveal(line: 120) // one-based physical line; focuses and centers it
+
+let spot = controller.position()   // scroll offsets + selection, or nil if unmounted
+controller.restore(spot ?? .start) // applied on the editor's next reconcile
 ```
+
+`EditorPosition` is character offsets and scroll offsets — not `String.Index`
+— because the point of saving one is to restore it into a buffer that has
+since changed: another document in the same editor, or the same log a day
+later. Offsets are clamped to whatever is there on arrival. `restore(_:)` is
+never immediate for the same reason: at the moment an app switches documents
+the editor still holds the outgoing text, so the position is queued and
+applied by the pass that installs the new text. It is `Codable`, so a
+document-per-tab app can write it into its own session file.
 
 Highlighting rules and search types are re-exported from `LavaText`.
 `EditorDecoration` adds severity, underline style, optional gutter icon,

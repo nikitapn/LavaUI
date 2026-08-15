@@ -14,6 +14,7 @@ struct TraceLoomApp {
         // Menu closures capture this reference; the view reads the same
         // `@Observable` object — see `TraceLoomSession`.
         let session = TraceLoomSession()
+        session.openArguments(Array(CommandLine.arguments.dropFirst()))
 
         LavaHost.run(
             editor: editor,
@@ -52,6 +53,11 @@ struct TraceLoomApp {
                             editor.requestClose()
                         }
                     }
+                    // Logs first, then the workspace that remembers them. Two
+                    // groups rather than two menus: opening a log and opening
+                    // the workspace it belongs to are the same errand, and a
+                    // "Workspace" menu of four items next to a "File" menu of
+                    // two would only make the user guess which one has "Open".
                     Menu("File", id: "file") {
                         MenuItem(
                             "Open Log…",
@@ -60,8 +66,40 @@ struct TraceLoomApp {
                         ) {
                             session.openLogFile()
                         }
+                        MenuItem(
+                            "Close Log",
+                            id: "file.close",
+                            shortcut: KeyShortcut(KeyCode.w, .primary)
+                        ) {
+                            session.closeActiveDocument()
+                        }
                         MenuItem("Reload Sample", id: "file.reload-sample") {
                             session.reloadSample()
+                        }
+                        MenuSeparator()
+                        MenuItem("New Workspace", id: "file.workspace-new") {
+                            session.newWorkspace()
+                        }
+                        MenuItem(
+                            "Open Workspace…",
+                            id: "file.workspace-open",
+                            shortcut: KeyShortcut(KeyCode.o, .primary, .shift)
+                        ) {
+                            session.openWorkspace()
+                        }
+                        MenuItem(
+                            "Save Workspace",
+                            id: "file.workspace-save",
+                            shortcut: KeyShortcut(KeyCode.s, .primary)
+                        ) {
+                            session.saveWorkspace()
+                        }
+                        MenuItem(
+                            "Save Workspace As…",
+                            id: "file.workspace-save-as",
+                            shortcut: KeyShortcut(KeyCode.s, .primary, .shift)
+                        ) {
+                            session.saveWorkspaceAs()
                         }
                     }
                     Menu("View", id: "view") {

@@ -685,6 +685,19 @@ final class LeafNode: YogaBoxNode {
         return max(0, content - visible)
     }
 
+    /// Pulls both offsets back inside the current content and viewport.
+    ///
+    /// Only ever shrinks them: an offset that is still legal is left exactly
+    /// where it is, so this cannot fight a scroll in progress.
+    func clampScroll(font: UIFont) {
+        if scrollY > 0 {
+            scrollY = max(0, min(scrollY, maxScrollY(lineHeight: font.lineHeight)))
+        }
+        if scrollX > 0 {
+            scrollX = max(0, min(scrollX, maxScrollX(font: font)))
+        }
+    }
+
     func scrollBy(_ delta: Float, lineHeight: Float) {
         let next = min(max(0, scrollY + delta), maxScrollY(lineHeight: lineHeight))
         if next != scrollY {

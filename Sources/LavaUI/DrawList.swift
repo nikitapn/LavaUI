@@ -1889,6 +1889,15 @@ extension DrawList {
         leaf.viewportHeight = h
         leaf.textViewportWidth = max(0, w - leaf.gutterWidth - inset * 2)
 
+        // A scroll offset outlives what justified it. The buffer can be
+        // replaced by a shorter one (an editor bound to whichever document is
+        // in front), the box can be dragged smaller, and either leaves the
+        // editor scrolled past its own content — drawing nothing, which reads
+        // as an empty file rather than as a stale offset. Every handler that
+        // *sets* a scroll offset already clamps it; this is for the changes
+        // that arrive without one.
+        leaf.clampScroll(font: font)
+
         let textX = x + leaf.gutterWidth + inset - leaf.scrollX
         let top = y + inset - leaf.scrollY
 

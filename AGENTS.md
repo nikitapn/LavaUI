@@ -219,6 +219,8 @@ Sources/
   LavaTerm*/       Terminal emulator (core headless + app)
   Spotify*/        LavaSpotify (core headless + app)
   TraceLoom*/      Log / trace viewer + Ollama assistant
+                   (`TraceLoom a.log b.log` opens a tab each;
+                    `TraceLoom x.traceloom` reopens a saved workspace)
   Weather*/        LavaWeather (core headless + app; Open-Meteo, no API key)
   FBDModel/        Function-block diagram model
 canvas/            C++ Vulkan engine + Yoga (SwiftPM C++ targets)
@@ -351,6 +353,9 @@ fatal. Open at the size the output will actually grant to avoid it.
 | Window chrome an app draws itself | `Sources/LavaUI/WindowControls.swift` |
 | Pointer image (`.cursor(_:)`) | `Sources/LavaUI/Cursor.swift`, `AppWindow::setCursorShape`, IDL `SetCursor` |
 | Draggable panes | `Sources/LavaUI/SplitView.swift` |
+| Dropdown / one-of-many switcher | `Sources/LavaUI/ComboBox.swift` |
+| Restoring where an editor was | `EditorPosition`, `EditorController.position()/restore(_:)` |
+| TraceLoom tabs and workspaces | `Sources/TraceLoomApp/{LogDocument,TraceLoomSession}.swift`, `TraceLoomCore/Workspace.swift` |
 | Panel global menu (import side) | `canvas/src/menu/menu_import.*`, `Sources/LavaUI/PanelMenu.swift` |
 | Window list / dock | `SubscribeWindows` in the IDL, `Sources/LavaDock/` |
 | 3D app switcher | `LavaSwitcher`, launched by Ctrl+Tab / Mod+Tab; live posters via `CaptureSurface` |

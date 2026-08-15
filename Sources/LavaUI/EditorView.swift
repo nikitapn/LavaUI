@@ -114,6 +114,30 @@ public struct EditorDecoration: Sendable, Equatable {
     var resolvedGutterIcon: String { gutterIcon ?? severity.defaultGutterIcon }
 }
 
+/// Where an editor was left: what it was scrolled to, and what was selected.
+///
+/// Character offsets rather than `String.Index`, because the point of saving
+/// this is to restore it into a *different* buffer state — a document swapped
+/// out and back, or a workspace reopened days later. An index into a string
+/// that no longer exists is not a position, it is a crash waiting for the
+/// wrong buffer; an offset is merely clamped.
+public struct EditorPosition: Equatable, Sendable, Codable {
+    public var scrollX: Float
+    public var scrollY: Float
+    /// Selection ends, in character offsets. Equal means a plain caret.
+    public var anchor: Int
+    public var focus: Int
+
+    public init(scrollX: Float = 0, scrollY: Float = 0, anchor: Int = 0, focus: Int = 0) {
+        self.scrollX = scrollX
+        self.scrollY = scrollY
+        self.anchor = anchor
+        self.focus = focus
+    }
+
+    public static let start = EditorPosition()
+}
+
 /// A code editor: line-number gutter, current-line highlight, rule-based
 /// syntax colouring, and find-match highlighting.
 ///
@@ -123,7 +147,9 @@ public struct EditorDecoration: Sendable, Equatable {
 /// than a rewrite of `TextField`.
 public final class EditorController {
     private var revealAction: ((Int) -> Bool)?
+    private var captureAction: (() -> EditorPosition?)?
     private var pendingLine: Int?
+    private var pendingPosition: EditorPosition?
 
     public init() {}
 
@@ -139,9 +165,37 @@ public final class EditorController {
         }
     }
 
-    fileprivate func install(_ action: @escaping (Int) -> Bool) {
-        revealAction = action
-        if let pendingLine, action(pendingLine) {
+    /// Where the editor is right now, or nil if it is not mounted.
+    public func position() -> EditorPosition? { captureAction?() }
+
+    /// Puts the editor back at `position` on its next reconcile.
+    ///
+    /// Deliberately never immediate. The caller for this is a document switch,
+    /// and at the moment of the switch the editor still holds the *outgoing*
+    /// buffer — applying an offset from the incoming one would clamp it against
+    /// the wrong length and scroll the document being left. Deferring to the
+    /// pass that installs the new text is the only point at which the position
+    /// means what it says.
+    public func restore(_ position: EditorPosition) {
+        pendingPosition = position
+        // A restore usually rides along with a model change that would rebuild
+        // the body anyway. Asking for one regardless is what makes the call
+        // stand on its own rather than quietly waiting for the next unrelated
+        // frame that happens to reconcile this editor.
+        ViewInvalidation.markNeedsBody()
+    }
+
+    fileprivate func install(
+        reveal: @escaping (Int) -> Bool,
+        capture: @escaping () -> EditorPosition?,
+        restore: @escaping (EditorPosition) -> Bool
+    ) {
+        revealAction = reveal
+        captureAction = capture
+        if let pendingPosition, restore(pendingPosition) {
+            self.pendingPosition = nil
+        }
+        if let pendingLine, reveal(pendingLine) {
             self.pendingLine = nil
         }
     }
@@ -239,14 +293,22 @@ public struct EditorView: PrimitiveView {
         leaf.onDecorationTap = onDecorationTap
 
         let binding = _text
-        controller?.install { [weak leaf] line in
-            guard let leaf, let font = leaf.font ?? FontStore.default else { return false }
-            leaf.revealPhysicalLine(line, font: font)
-            leaf.focusSelf(binding: binding, onSubmit: nil)
-            CaretBlink.noteEdit()
-            ViewInvalidation.markNeedsRedraw()
-            return true
-        }
+        controller?.install(
+            reveal: { [weak leaf] line in
+                guard let leaf, let font = leaf.font ?? FontStore.default else { return false }
+                leaf.revealPhysicalLine(line, font: font)
+                leaf.focusSelf(binding: binding, onSubmit: nil)
+                CaretBlink.noteEdit()
+                ViewInvalidation.markNeedsRedraw()
+                return true
+            },
+            capture: { [weak leaf] in leaf?.editorPosition() },
+            restore: { [weak leaf] position in
+                guard let leaf else { return false }
+                leaf.apply(position)
+                return true
+            }
+        )
 
         // Height is decided by the measure callback from the row count, so
         // the box always matches what is drawn.
@@ -322,6 +384,46 @@ public struct EditorView: PrimitiveView {
 }
 
 extension LeafNode {
+    /// Scroll offsets and selection, as `EditorController.position()` reports
+    /// them.
+    func editorPosition() -> EditorPosition {
+        // `charOffset` is anchored, so the second call walks only the distance
+        // between the two ends rather than back to the start of the buffer.
+        EditorPosition(
+            scrollX: scrollX,
+            scrollY: scrollY,
+            anchor: charOffset(of: editing.anchor),
+            focus: charOffset(of: editing.focus)
+        )
+    }
+
+    /// Puts the editor back where `editorPosition()` found it, clamped to the
+    /// buffer that is there now — which is not necessarily the one it came
+    /// from, and after an external edit is not even the same length.
+    func apply(_ position: EditorPosition) {
+        // The row table's last upper bound is the character count, already
+        // computed. `editing.text.count` would walk the whole buffer for a
+        // number we are holding.
+        let total = editing.layout.rows.last?.upperBound ?? 0
+        let anchor = min(max(0, position.anchor), total)
+        let focus = min(max(0, position.focus), total)
+
+        let anchorIndex = textIndex(atOffset: anchor)
+        editing.setCursor(anchorIndex)
+        if focus != anchor {
+            editing.setCursor(textIndex(atOffset: focus), extending: true)
+        }
+
+        if let font = font ?? FontStore.default {
+            scrollY = min(max(0, position.scrollY), maxScrollY(lineHeight: font.lineHeight))
+            scrollX = min(max(0, position.scrollX), maxScrollX(font: font))
+        } else {
+            scrollY = max(0, position.scrollY)
+            scrollX = max(0, position.scrollX)
+        }
+        ViewInvalidation.markNeedsRedraw()
+    }
+
     /// Selects and centers a one-based physical line in a non-wrapping editor.
     func revealPhysicalLine(_ line: Int, font: UIFont) {
         let rows = editing.layout.rows
