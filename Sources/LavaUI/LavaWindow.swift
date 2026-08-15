@@ -509,7 +509,14 @@ public final class LavaWindow {
                 )
             }
         case .nodeHover:
-            HoverState.set(SceneNodeIdentity.node(for: UInt32(bitPattern: ev.button)))
+            let hovered = SceneNodeIdentity.node(for: UInt32(bitPattern: ev.button))
+            HoverState.set(hovered)
+            // The pointer image belongs to the same event: this is the only
+            // thing that says the pointer entered a different view, in either
+            // run mode.
+            CursorBridge.hover(
+                hovered, in: host.rootNode, window: id, editor: editor
+            )
         case .pointerLeave:
             // Whatever was lit is not under the pointer any more. A window
             // only hears about the pointer while it is inside, so without this
@@ -519,6 +526,11 @@ public final class LavaWindow {
             PointerCapture.release()
             HoverState.clear()
             PointerState.left()
+            // Hand the arrow back on the way out. A window that kept its
+            // resize cursor after the pointer left would be setting the image
+            // for whatever the pointer went on to.
+            CursorBridge.hover(nil, in: host.rootNode, window: id, editor: editor)
+            CursorBridge.invalidate()
         case .nodeScroll:
             guard let nodeID = SceneNodeIdentity.node(for: UInt32(bitPattern: ev.button)),
                   let scroll = findNode(nodeID, in: host.rootNode) as? ScrollNode

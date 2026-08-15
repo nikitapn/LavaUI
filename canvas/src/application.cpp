@@ -792,6 +792,10 @@ void Application::setWindowCornerRadius(float radius, bool top, bool bottom,
   }
 }
 
+void Application::setCursorShape(uint32_t shape, uint32_t windowId) {
+  if (AppWindow *w = impl_->win(windowId)) w->setCursorShape(shape);
+}
+
 bool Application::isIconified(uint32_t windowId) const {
   const AppWindow *w = impl_->win(windowId);
   return w && w->isIconified();

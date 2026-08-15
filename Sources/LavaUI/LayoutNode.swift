@@ -168,6 +168,9 @@ class YogaBoxNode: AnyViewNode {
     var clipsContent: Bool = false
     /// Out of layout and drawing, but still mounted. See `View.hidden(_:)`.
     var isHidden: Bool = false
+    /// Pointer image while the pointer is inside this box (`View.cursor(_:)`).
+    /// Nil inherits whatever an ancestor asked for, and an arrow if none did.
+    var cursor: CursorShape?
 
     /// How far this node's children are drawn from its own origin.
     ///
@@ -1008,22 +1011,28 @@ private func leafTextMeasure(
 // fill because its tint is the renderer's job, so a walk keyed on `hoverFill`
 // skipped the one control every app is made of.
 
+// A stated cursor is part of that definition, and has to be: the pointer image
+// changes when the pointer *enters* the view, and nothing learns about an entry
+// into a node the renderer was never told to watch.
+
 extension LeafNode {
     /// True when `DrawList` would emit this leaf as a hit-testable node.
     var isRendererInteractive: Bool {
         if kind == .button, buttonStyle != nil, isEnabled { return true }
         return hoverFill != nil || hoverColor != nil || onHover != nil
+            || cursor != nil
     }
 }
 
 extension StackNode {
     var isRendererInteractive: Bool {
         hoverFill != nil || onHover != nil || onClick != nil || onPointer != nil
+            || cursor != nil
     }
 }
 
 extension StyleBoxNode {
-    var isRendererInteractive: Bool { hoverFill != nil }
+    var isRendererInteractive: Bool { hoverFill != nil || cursor != nil }
 }
 
 // MARK: - Stack container (HStack / VStack only)

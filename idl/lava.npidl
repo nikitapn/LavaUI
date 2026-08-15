@@ -86,6 +86,32 @@ enum WindowFrame: u32 {
   client,
 };
 
+/// The pointer image a client asks for over its own surface.
+///
+/// Names a *meaning*, not a bitmap: the compositor resolves each to whatever
+/// the user's cursor theme calls it, so the desktop stays one cursor theme
+/// rather than one per application. That is also why the set is small — every
+/// shape here has to exist in every theme and in GLFW's standard cursors, so a
+/// windowed app and a client draw the same thing.
+///
+/// The client keeps the *policy*: which view wants which shape is a question
+/// only the process with the view tree can answer, and the compositor's own
+/// cursors (the resize band around a window, the title bar) still win over
+/// this, because those are its affordances and not the client's.
+enum CursorShape: u32 {
+  /// The default pointer.
+  arrow,
+  /// I-beam, over editable or selectable text.
+  text,
+  /// The "this activates something" hand.
+  pointer,
+  crosshair,
+  /// Horizontal drag: a vertical divider, a column edge.
+  resizeLeftRight,
+  /// Vertical drag: a horizontal divider, a row edge.
+  resizeUpDown,
+};
+
 /// The surface id is not one this compositor handed out, or its client has
 /// already let it go.
 ///
@@ -813,6 +839,29 @@ interface Compositor {
   /// `w` or `h` of 0 restores the default, which is the whole surface.
   void SetInputRegion(surfaceId: in u32, x: in i32, y: in i32,
                       w: in u32, h: in u32) raises(SurfaceNotFound);
+
+  /// The pointer image while the pointer is inside this surface.
+  ///
+  /// A client cannot set the cursor: there is one pointer, it belongs to the
+  /// seat, and the compositor is the only thing that can see what else is
+  /// under it. So this is a *preference* stored against the surface, applied
+  /// while the pointer is over that surface and dropped the moment it is not
+  /// — which is what stops a client that asked for a resize arrow and then
+  /// stopped answering from leaving that arrow on the whole desktop.
+  ///
+  /// Sent when the pointer crosses from one view to another, which the client
+  /// learns from the `NodeHover` event the renderer already sends it. The
+  /// round trip is real but it is not in the way: the hover *tint* is drawn
+  /// by the renderer without asking anyone, and only the cursor waits for
+  /// this.
+  ///
+  /// `[unreliable]`, for the reason `Present` is: it is on the pointer's path,
+  /// it arrives in bursts as the pointer crosses a toolbar, and a client that
+  /// blocked on each one would put a shared-memory round trip between the
+  /// pointer and every frame. The cost of a lost one is the wrong cursor
+  /// until the pointer crosses something else, which is also what happens
+  /// when a client is simply slow to answer.
+  [unreliable] void SetCursor(surfaceId: in u32, shape: in CursorShape);
 
   /// The desktop's look, for a client matching its own surfaces to it.
   ///

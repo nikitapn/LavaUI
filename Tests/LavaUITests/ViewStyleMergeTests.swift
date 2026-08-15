@@ -37,6 +37,7 @@ final class ViewStyleMergeTests: XCTestCase {
         s.contentBlurRadius = 5
         s.clipsContent = true
         s.isHidden = false
+        s.cursor = .resizeUpDown
         return s
     }
 

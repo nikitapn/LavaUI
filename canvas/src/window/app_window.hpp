@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <cstdint>
 #include <deque>
 #include <memory>
@@ -10,6 +11,7 @@
 #include "ipc/draw_arena.hpp"
 #include "render/draw_command.hpp"
 
+struct GLFWcursor;
 struct GLFWwindow;
 class RenderDevice;
 class RenderWindow;
@@ -218,6 +220,16 @@ class AppWindow {
 
   /// Rounds the window's corners — see `RenderWindow::setCornerRadius`.
   void setCornerRadius(float radius, bool top, bool bottom);
+
+  /// The pointer image over this window, as a `CursorShape` ordinal (see
+  /// `LavaUI/Cursor.swift`, which owns the numbering).
+  ///
+  /// A client window has no platform window and no pointer of its own: this
+  /// is a no-op there, and the compositor is asked over the control plane
+  /// instead. Unknown ordinals fall back to the arrow rather than failing —
+  /// a shape added on the producer side before the renderer knows it should
+  /// leave the pointer usable.
+  void setCursorShape(uint32_t shape);
   bool isVisible() const { return visible_; }
   bool isIconified() const;
   void framebufferSize(float &outW, float &outH) const;
@@ -251,10 +263,23 @@ class AppWindow {
   /// A view over whatever the producer last committed.
   canvas::DrawList currentDrawList() const;
 
+  /// The GLFW cursor for a shape, created on first use. Null for a shape GLFW
+  /// has no standard cursor for, which `setCursorShape` reads as the arrow.
+  GLFWcursor *cursorFor(uint32_t shape);
+
   uint32_t     id_ = 0;
   GLFWwindow  *glfw_ = nullptr;
   std::unique_ptr<RenderWindow> render_;
   bool visible_ = false;
+
+  /// One entry per `CursorShape`, owned by this window and destroyed with it.
+  /// Per window rather than per process: a GLFW cursor outliving the window
+  /// that set it is a lifetime nobody needs, and there are six of them.
+  std::array<GLFWcursor *, 6> cursors_{};
+  /// Last shape applied, so a hover that resolves to the same one costs
+  /// nothing. The producer already de-duplicates; this covers the other
+  /// callers (and a second window with its own pointer history).
+  uint32_t cursorShape_ = 0;
 
   /// Client-only size and close flag. A rendered window keeps both in the
   /// renderer — the swapchain extent and GLFW's should-close — and asking two

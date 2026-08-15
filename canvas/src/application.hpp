@@ -143,6 +143,9 @@ public:
   void setWindowCornerRadius(float radius, bool top, bool bottom,
                              uint32_t windowId = 0);
 
+  /// The pointer image over a window. See `AppWindow::setCursorShape`.
+  void setCursorShape(uint32_t shape, uint32_t windowId = 0);
+
   /// True while minimized. A live GLFW query, not a cached flag — WM
   /// minimize/restore doesn't route through `setWindowVisible`, so caching
   /// would need its own callback wiring to stay correct.

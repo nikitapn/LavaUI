@@ -532,6 +532,14 @@ struct Server {
   /// whatever is under the cursor.
   bool update_drag();
 
+  /// Puts the image `surface` asked for on the pointer, if the pointer is
+  /// over it and nothing of the compositor's own has a better claim.
+  ///
+  /// For a client that changed its mind without the pointer moving — which is
+  /// every `SetCursor`, since what prompts one is the pointer arriving
+  /// somewhere it already is.
+  void applyCursorFor(const ClientSurface &surface);
+
   /// Starts an interactive move of a client-framed window, as a title bar
   /// press does for a decorated one. False when there is no button down to
   /// carry it. See `lava::Compositor::BeginMove`.
@@ -777,6 +785,13 @@ struct ClientSurface {
   int32_t inputY = 0;
   uint32_t inputW = 0;
   uint32_t inputH = 0;
+
+  /// The pointer image this client asked for, as a `CursorShape` ordinal.
+  ///
+  /// A preference, not a setting: it applies while the pointer is inside this
+  /// surface and the compositor's own affordances — the resize band, the
+  /// title bar — still win over it. See `SetCursor`.
+  uint32_t cursorShape = 0;
 
   /// Whether `sx, sy` — already surface-local — is somewhere this surface
   /// accepts input. A dock is a full-width strip with a few icons in it, and
@@ -2324,6 +2339,8 @@ class SurfaceRegistry : public lava::CompositorHost {
   }
 
   bool activateWindow(uint32_t id) override;
+
+  void setCursor(uint32_t id, uint32_t shape) override;
 
   bool setInputRegion(uint32_t id, int32_t x, int32_t y, uint32_t w,
                       uint32_t h) override {
@@ -5109,6 +5126,25 @@ void Server::moveFocusedToWorkspace(uint32_t index) {
   }
 }
 
+/// The theme's name for a `CursorShape` a client asked for.
+///
+/// Same family of names as `resize_cursor` below, and for the same reason:
+/// these are what `wlr_xcursor_manager` loads from an X11 cursor theme, and
+/// every theme has had them for decades. The double-headed splitter cursors
+/// (`col-resize`, `row-resize`) would read better and are not universal, so a
+/// divider gets the one-sided arrow every theme can draw.
+const char *client_cursor(uint32_t shape) {
+  switch (shape) {
+    case 1: return "text";
+    case 2: return "pointer";
+    case 3: return "crosshair";
+    case 4: return "e-resize";
+    case 5: return "s-resize";
+    default: return "default";
+  }
+}
+
+/// The cursor image for a set of resize edges.
 /// The cursor image for a set of resize edges.
 ///
 /// The X11 names rather than the newer `cursor-shape-v1` ones, because that is
@@ -5147,7 +5183,15 @@ void Server::update_pointer_focus(uint32_t time_msec) {
   // are not `wlr_surface`s, so `surface_at` cannot see them at all.
   if (route_pointer(static_cast<uint32_t>(canvas::InputEventKind::MouseMove), 0,
                     0)) {
-    wlr_cursor_set_xcursor(cursor, cursor_mgr, "default");
+    // Whatever that surface last asked for, which is "default" until a client
+    // says otherwise. `route_pointer` has just set `pointerOver` to it.
+    uint32_t shape = 0;
+    if (surfaces != nullptr) {
+      if (const ClientSurface *over = surfaces->find(pointerOver)) {
+        shape = over->cursorShape;
+      }
+    }
+    wlr_cursor_set_xcursor(cursor, cursor_mgr, client_cursor(shape));
     wlr_seat_pointer_clear_focus(seat);
     return;
   }
@@ -5178,6 +5222,16 @@ void Server::update_pointer_focus(uint32_t time_msec) {
   }
   wlr_seat_pointer_notify_enter(seat, surface, sx, sy);
   wlr_seat_pointer_notify_motion(seat, time_msec, sx, sy);
+}
+
+void Server::applyCursorFor(const ClientSurface &surface) {
+  if (cursor == nullptr || cursor_mgr == nullptr) return;
+  // Only while the pointer is actually inside it. A client whose window is in
+  // the background must not be able to reach the pointer at all — and one
+  // that asks while a drag is live is asking about a pointer the compositor
+  // has already given to something else.
+  if (pointerOver != surface.id || drag != Drag::None) return;
+  wlr_cursor_set_xcursor(cursor, cursor_mgr, client_cursor(surface.cursorShape));
 }
 
 bool Server::update_drag() {
@@ -5466,6 +5520,18 @@ bool SurfaceRegistry::activateWindow(uint32_t id) {
   }
   // Deliberately not switching workspace to follow it — see `ActivateWindow`.
   return true;
+}
+
+void SurfaceRegistry::setCursor(uint32_t id, uint32_t shape) {
+  ClientSurface *surface = find(id);
+  if (surface == nullptr) return;
+  if (surface->cursorShape == shape) return;
+  surface->cursorShape = shape;
+  // Applied now rather than at the next pointer motion: the client sends this
+  // *because* the pointer crossed into something, and by then the pointer has
+  // usually stopped moving. Waiting for motion would mean the cursor only
+  // changed on the way back out.
+  if (server_ != nullptr) server_->applyCursorFor(*surface);
 }
 
 bool SurfaceRegistry::minimize(uint32_t id) {

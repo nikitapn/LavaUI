@@ -93,6 +93,15 @@ public final class Editor: @unchecked Sendable {
         engine.setMinimumSize(max(0, width), max(0, height), window.raw)
     }
 
+    /// The pointer image over this window.
+    ///
+    /// Windowed only: a client has no pointer to set, and asks the compositor
+    /// instead (`CursorBridge`). No-op there rather than an error, so the same
+    /// call site works in both modes.
+    public func setCursor(_ shape: CursorShape, window: WindowID = .main) {
+        engine.setCursorShape(shape.rawValue, window.raw)
+    }
+
     /// Queues an event that arrived already formed — from a renderer in
     /// another process — rather than one derived from a device here.
     ///

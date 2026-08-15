@@ -115,6 +115,11 @@ public struct TextField: PrimitiveView {
         // reserves a sensible line box.
         leaf.text = leaf.editing.text.isEmpty ? placeholder : leaf.editing.text
         leaf.minWidth = 80
+        // The I-beam is what says "you can put a caret here" before anything is
+        // clicked. It also makes this leaf a hit-testable scene node, which a
+        // field that draws no hover fill was not — the cost of the affordance,
+        // paid per field. See `View.cursor(_:)`.
+        leaf.cursor = .text
         leaf.isMultiline = isMultiline
         leaf.maxLines = maxLines
         leaf.wraps = wraps && isMultiline

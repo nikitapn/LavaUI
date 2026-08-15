@@ -642,6 +642,18 @@ public enum LavaClient {
             }
         }
 
+        // The pointer image, asked for rather than set: there is one pointer
+        // and it belongs to the seat. Fire and forget for the reason the wheel
+        // hand-back is — this is on the pointer's path, it arrives in bursts as
+        // the pointer crosses a toolbar, and a round trip per crossing would
+        // sit between the pointer and the next frame.
+        CursorBridge.request = { [compositor] shape in
+            let resolved = LavaIDL.CursorShape(rawValue: shape) ?? .arrow
+            Task.detached {
+                await compositor.setCursor(surfaceId: surfaceID, shape: resolved)
+            }
+        }
+
         // The window's own chrome, for an app drawing its own frame — and for
         // one that is not, since a menu item that maximizes is as good a caller
         // as a button. `close` needs nothing here: a client's window is held by

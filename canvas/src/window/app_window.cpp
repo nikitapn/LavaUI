@@ -71,6 +71,11 @@ AppWindow::~AppWindow()
 {
   // Renderer first: it holds a surface made from this GLFW window.
   render_.reset();
+  for (GLFWcursor *&cursor : cursors_) {
+    if (cursor == nullptr) continue;
+    glfwDestroyCursor(cursor);
+    cursor = nullptr;
+  }
   if (glfw_) {
     glfwDestroyWindow(glfw_);
     glfw_ = nullptr;
@@ -391,6 +396,42 @@ void AppWindow::setWindowVisible(bool visible)
 {
   if (render_) render_->setWindowVisible(visible);
   visible_ = visible;
+}
+
+GLFWcursor *AppWindow::cursorFor(uint32_t shape)
+{
+  if (shape >= cursors_.size()) return nullptr;
+  if (cursors_[shape] != nullptr) return cursors_[shape];
+
+  // The legacy spellings on purpose. `GLFW_POINTING_HAND_CURSOR` and friends
+  // arrived in 3.4; these aliases mean the same thing there and are the only
+  // names an older GLFW has, so the shapes we offer stay the shapes that
+  // exist everywhere. Anything needing 3.4-only cursors (NWSE resize, "not
+  // allowed") has to be version-guarded when it is added.
+  int standard = GLFW_ARROW_CURSOR;
+  switch (shape) {
+    case 1: standard = GLFW_IBEAM_CURSOR; break;
+    case 2: standard = GLFW_HAND_CURSOR; break;
+    case 3: standard = GLFW_CROSSHAIR_CURSOR; break;
+    case 4: standard = GLFW_HRESIZE_CURSOR; break;
+    case 5: standard = GLFW_VRESIZE_CURSOR; break;
+    default: standard = GLFW_ARROW_CURSOR; break;
+  }
+  cursors_[shape] = glfwCreateStandardCursor(standard);
+  return cursors_[shape];
+}
+
+void AppWindow::setCursorShape(uint32_t shape)
+{
+  // A client window: no GLFW window, no pointer here to set. The producer
+  // asks the compositor instead — see `SetCursor` in the IDL.
+  if (glfw_ == nullptr) return;
+  if (shape >= cursors_.size()) shape = 0;
+  if (shape == cursorShape_ && cursors_[shape] != nullptr) return;
+  cursorShape_ = shape;
+  // Null is GLFW's own way of saying "the standard arrow", which is also the
+  // right answer when a theme has no cursor for the shape asked for.
+  glfwSetCursor(glfw_, shape == 0 ? nullptr : cursorFor(shape));
 }
 
 bool AppWindow::isIconified() const

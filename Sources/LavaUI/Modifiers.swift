@@ -36,6 +36,8 @@ public struct ViewStyle: Equatable {
     /// Take this subtree out of layout and drawing without unmounting it.
     /// `nil` = visible. See `View.hidden(_:)`.
     public var isHidden: Bool?
+    /// Pointer image over this view. `nil` inherits. See `View.cursor(_:)`.
+    public var cursor: CursorShape?
 
     public init() {}
 
@@ -64,6 +66,7 @@ public struct ViewStyle: Equatable {
         out.contentBlurRadius = contentBlurRadius ?? base.contentBlurRadius
         out.clipsContent = clipsContent ?? base.clipsContent
         out.isHidden = isHidden ?? base.isHidden
+        out.cursor = cursor ?? base.cursor
         return out
     }
 }
@@ -199,6 +202,7 @@ extension YogaBoxNode {
             base.contentBlurRadius = contentBlurRadius
             base.clipsContent = clipsContent
             base.isHidden = isHidden
+            base.cursor = cursor
             styleBaseline = base
         }
         let base = styleBaseline ?? ViewStyle()
@@ -216,6 +220,10 @@ extension YogaBoxNode {
         contentBlurRadius = style.contentBlurRadius ?? base.contentBlurRadius
         clipsContent = style.clipsContent ?? base.clipsContent ?? false
         isHidden = style.isHidden ?? base.isHidden ?? false
+        // Through the baseline like blur, not set-if-present like fill:
+        // removing `.cursor()` has to give the pointer back to whatever the
+        // view is sitting in.
+        cursor = style.cursor ?? base.cursor
 
         if let leaf = self as? LeafNode {
             if let fill = style.fill { leaf.fillColor = fill }
@@ -499,6 +507,11 @@ extension ModifiedView {
     /// See `View.hidden(_:)`.
     public func hidden(_ isHidden: Bool = true) -> ModifiedView<Content> {
         adding { $0.isHidden = isHidden }
+    }
+
+    /// See `View.cursor(_:)`.
+    public func cursor(_ shape: CursorShape?) -> ModifiedView<Content> {
+        adding { $0.cursor = shape }
     }
 
     public func frame(

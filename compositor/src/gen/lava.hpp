@@ -190,6 +190,14 @@ enum class WindowFrame : uint32_t {
   server,
   client
 };
+enum class CursorShape : uint32_t {
+  arrow,
+  text,
+  pointer,
+  crosshair,
+  resizeLeftRight,
+  resizeUpDown
+};
 class SurfaceNotFound : public ::nprpc::Exception {
 public:
   uint32_t surfaceId;
@@ -1242,6 +1250,7 @@ public:
   virtual ::nprpc::Task<> SubscribeSystemTheme (::nprpc::BidiStream<ThemeAck, SystemTheme> stream) = 0;
   virtual void ActivateWindow (uint32_t surfaceId) = 0;
   virtual void SetInputRegion (uint32_t surfaceId, int32_t x, int32_t y, uint32_t w, uint32_t h) = 0;
+  virtual void SetCursor (uint32_t surfaceId, CursorShape shape) = 0;
   virtual Appearance GetAppearance () = 0;
   virtual void SetAppearance (flat::Appearance_Direct appearance) = 0;
   virtual SystemTheme GetSystemTheme () = 0;
@@ -1305,6 +1314,7 @@ public:
   ::nprpc::Task<void> ActivateWindowAsync (uint32_t surfaceId, std::stop_token st = {});
   void SetInputRegion (uint32_t surfaceId, int32_t x, int32_t y, uint32_t w, uint32_t h);
   ::nprpc::Task<void> SetInputRegionAsync (uint32_t surfaceId, int32_t x, int32_t y, uint32_t w, uint32_t h, std::stop_token st = {});
+  void SetCursor (uint32_t surfaceId, const CursorShape& shape);
   Appearance GetAppearance ();
   ::nprpc::Task<Appearance> GetAppearanceAsync (std::stop_token st = {});
   void SetAppearance (const Appearance& appearance);

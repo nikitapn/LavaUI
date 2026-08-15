@@ -362,6 +362,11 @@ void Engine::setWindowCornerRadius(float radius, bool top, bool bottom,
   });
 }
 
+void Engine::setCursorShape(uint32_t shape, uint32_t windowId)
+{
+  impl_->withApp([&](Application &app) { app.setCursorShape(shape, windowId); });
+}
+
 void Engine::setWindowVisible(bool visible, uint32_t windowId)
 {
   impl_->withApp([&](Application &app) { app.setWindowVisible(visible, windowId); });

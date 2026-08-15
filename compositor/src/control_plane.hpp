@@ -85,6 +85,15 @@ struct CompositorHost {
   virtual bool setInputRegion(uint32_t surfaceId, int32_t x, int32_t y,
                               uint32_t w, uint32_t h) = 0;
 
+  /// Remembers the pointer image a surface wants, and applies it now if the
+  /// pointer is over that surface. `shape` is a `CursorShape` ordinal — an
+  /// integer rather than the generated enum, the same way `createPanel` takes
+  /// `edge`, so this header stays independent of the stubs.
+  ///
+  /// No return: the call behind it is `[unreliable]` and has no reply to put
+  /// a failure in, so an unknown surface is dropped rather than reported.
+  virtual void setCursor(uint32_t surfaceId, uint32_t shape) = 0;
+
   /// Opens a surface driven by `arenaId`. 0 if the arena does not exist.
   ///
   /// `decorated` is `WindowFrame::server` — the compositor draws the title

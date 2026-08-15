@@ -774,6 +774,13 @@ class CompositorImpl final : public ICompositor_Servant {
     }
   }
 
+  void SetCursor(uint32_t surfaceId, CursorShape shape) override {
+    // Unreliable: there is no reply, so nothing to raise into. A surface that
+    // has gone is a client whose window closed while the pointer was on it,
+    // which is ordinary rather than exceptional.
+    host_.setCursor(surfaceId, static_cast<uint32_t>(shape));
+  }
+
   nprpc::Task<> SubscribeWindows(
       nprpc::BidiStream<WindowListAck, WindowList> stream) override {
     auto watcher = std::make_shared<ListWatcher>(std::move(stream.writer));

@@ -231,6 +231,10 @@ public struct EditorView: PrimitiveView {
         leaf.search = search
         leaf.text = leaf.editing.text
         leaf.minWidth = 160
+        // Over the whole box, gutter included: the gutter is part of the
+        // editor's own click behaviour (it selects a row), not a separate
+        // surface, so switching the pointer there would say otherwise.
+        leaf.cursor = .text
         leaf.decorations = decorations
         leaf.onDecorationTap = onDecorationTap
 
