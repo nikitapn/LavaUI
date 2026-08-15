@@ -122,6 +122,7 @@ executable(
   'src/decoration.cpp',
   'src/frame_probe.cpp',
   'src/shell.cpp',
+  'src/screenshot_portal.cpp',
   lava_idl_sources,
   protocol_headers,
   protocol_sources,
@@ -146,6 +147,10 @@ executable(
     # and owns the Vulkan device they are exported from.
     canvas_dep,
     nprpc_dep,
+    # Session-bus Screenshot portal (Flameshot). sd-bus is what logind
+    # already pulled in through wlroots; we talk to it directly so the
+    # capture stays on the compositor thread.
+    dependency('libsystemd'),
   ],
   # wlroots guards every header behind this. It is not opt-in extra features:
   # without it `wlr/backend.h` is a hard #error, so nothing compiles at all.

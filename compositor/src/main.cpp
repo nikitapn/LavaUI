@@ -20,6 +20,7 @@
 #include <ctime>
 #include <iostream>
 #include <list>
+#include <memory>
 #include <thread>
 #include <vector>
 
@@ -36,6 +37,7 @@
 #include "frame_probe.hpp"
 #include "control_plane.hpp"
 #include "shell.hpp"
+#include "screenshot_portal.hpp"
 #include "background.hpp"
 #include "wlr.hpp"
 #include "render/png_encode.hpp"
@@ -787,6 +789,14 @@ struct Server {
   void requestScreenshot();
   bool captureOutputNow(Output *output);
   bool finishScreenshot(wlr_buffer *buffer);
+  Output *outputForScreenshot();
+  bool renderOutputPng(Output *output, std::vector<uint8_t> &png,
+                       uint32_t &width, uint32_t &height);
+  /// Ask the output for a new frame so the portal can read the committed
+  /// buffer. Does not read GPU memory on this call.
+  bool schedulePortalCapture();
+
+  std::unique_ptr<lava::ScreenshotPortal> screenshotPortal;
 };
 
 // ─── Client surfaces ───────────────────────────────────────────────────────
@@ -4079,40 +4089,53 @@ void Output::on_destroy(wl_listener *listener, void *) {
 
 void Output::on_commit(wl_listener *listener, void *data) {
   auto *output = owner_of<Output>(listener);
-  if (!output->pendingScreenshot) return;
   auto *event = static_cast<wlr_output_event_commit *>(data);
   if (event->state == nullptr) return;
   if ((event->state->committed & WLR_OUTPUT_STATE_BUFFER) == 0) return;
   if (event->state->buffer == nullptr) return;
+
+  Server *server = output->server;
+  const bool printScreen = output->pendingScreenshot;
+  const bool portal = server->screenshotPortal &&
+                      server->screenshotPortal->hasPending();
+  if (!printScreen && !portal) return;
   output->pendingScreenshot = false;
-  output->server->finishScreenshot(event->state->buffer);
+
+  if (printScreen) server->finishScreenshot(event->state->buffer);
+  if (portal) {
+    std::vector<uint8_t> png;
+    uint32_t width = 0, height = 0;
+    if (encodeBufferPng(event->state->buffer, server->renderer, png, width,
+                        height) &&
+        !png.empty()) {
+      server->screenshotPortal->finish(png, width, height);
+    } else {
+      server->screenshotPortal->fail();
+    }
+  }
 }
 
-void Server::requestScreenshot() {
+Output *Server::outputForScreenshot() {
   // The output the pointer is on, which is the screen the user is looking
   // at. A gap between monitors, or a headless run with no outputs yet,
   // falls through to the first enabled one.
-  Output *target = nullptr;
   if (cursor != nullptr && output_layout != nullptr) {
     wlr_output *under =
         wlr_output_layout_output_at(output_layout, cursor->x, cursor->y);
     if (under != nullptr) {
       for (Output *output : outputs) {
-        if (output->wlr == under && output->wlr->enabled) {
-          target = output;
-          break;
-        }
+        if (output->wlr == under && output->wlr->enabled) return output;
       }
     }
   }
-  if (target == nullptr) {
-    for (Output *output : outputs) {
-      if (output->wlr->enabled) {
-        target = output;
-        break;
-      }
-    }
+  for (Output *output : outputs) {
+    if (output->wlr->enabled) return output;
   }
+  return nullptr;
+}
+
+void Server::requestScreenshot() {
+  Output *target = outputForScreenshot();
   if (target == nullptr) {
     wlr_log(WLR_ERROR, "screenshot: no output to capture");
     return;
@@ -4129,10 +4152,11 @@ void Server::requestScreenshot() {
   wlr_output_schedule_frame(target->wlr);
 }
 
-bool Server::captureOutputNow(Output *output) {
-  const int width = output->wlr->width;
-  const int height = output->wlr->height;
-  if (width <= 0 || height <= 0 || allocator == nullptr) return false;
+bool Server::renderOutputPng(Output *output, std::vector<uint8_t> &png,
+                             uint32_t &width, uint32_t &height) {
+  const int w = output->wlr->width;
+  const int h = output->wlr->height;
+  if (w <= 0 || h <= 0 || allocator == nullptr) return false;
 
   // Same format the output already presents. A format the allocator
   // cannot create, or the renderer cannot draw to, fails
@@ -4153,7 +4177,7 @@ bool Server::captureOutputNow(Output *output) {
   }
   if (fmt == nullptr) return false;
 
-  wlr_swapchain *chain = wlr_swapchain_create(allocator, width, height, fmt);
+  wlr_swapchain *chain = wlr_swapchain_create(allocator, w, h, fmt);
   if (chain == nullptr) return false;
 
   wlr_output_state state;
@@ -4165,7 +4189,7 @@ bool Server::captureOutputNow(Output *output) {
 
   bool ok = false;
   if (built && state.buffer != nullptr) {
-    ok = finishScreenshot(state.buffer);
+    ok = encodeBufferPng(state.buffer, renderer, png, width, height);
   }
   wlr_output_state_finish(&state);
   wlr_swapchain_destroy(chain);
@@ -4173,7 +4197,27 @@ bool Server::captureOutputNow(Output *output) {
   // The next real frame must not think those were the last presented
   // ones, or it would skip redrawing everything that did not change.
   wlr_damage_ring_add_whole(&output->scene_output->damage_ring);
-  return ok;
+  return ok && !png.empty();
+}
+
+bool Server::captureOutputNow(Output *output) {
+  std::vector<uint8_t> png;
+  uint32_t width = 0, height = 0;
+  if (!renderOutputPng(output, png, width, height)) return false;
+  lava::Clipboard clipboard(display, seat);
+  clipboard.setImagePng(png);
+  wlr_log(WLR_INFO, "screenshot: %ux%u PNG (%zu bytes) copied to the clipboard",
+          width, height, png.size());
+  return true;
+}
+
+bool Server::schedulePortalCapture() {
+  Output *target = outputForScreenshot();
+  if (target == nullptr) return false;
+  target->pendingScreenshot = true;
+  wlr_damage_ring_add_whole(&target->scene_output->damage_ring);
+  wlr_output_schedule_frame(target->wlr);
+  return true;
 }
 
 bool Server::finishScreenshot(wlr_buffer *buffer) {
@@ -4708,6 +4752,15 @@ void launch_rofi() {
   launch_program(program, argv, x11Environment.data());
 }
 
+/// Flameshot's interactive capture. The compositor answers the screenshot
+/// portal it talks to — see `ScreenshotPortal`.
+void launch_flameshot() {
+  char program[] = "flameshot";
+  char gui[] = "gui";
+  char *argv[] = {program, gui, nullptr};
+  launch_program(program, argv);
+}
+
 /// The application launcher, which is a LavaUI client rather than a program on
 /// PATH — so it is found the way the panel and the dock are.
 void launch_launcher() {
@@ -4795,6 +4848,7 @@ enum class BindingAction : uint8_t {
   RestoreLast,
   ToggleMaximize,
   ShowDesktop,
+  Flameshot,
   Fullscreen,
   WorkspaceSwitch,
   WorkspaceMove,
@@ -4864,6 +4918,8 @@ constexpr BindingSpec kBindings[] = {
      "window.restore", "Brings back the window hidden last"},
     {BindingAction::ShowDesktop, XKB_KEY_d, XKB_KEY_d, false, false, true, "D",
      "window.desktop", "Hides every window, or brings them back"},
+    {BindingAction::Flameshot, XKB_KEY_s, XKB_KEY_s, true, false, true, "S",
+     "screen.flameshot", "Opens Flameshot to capture a region"},
     {BindingAction::Fullscreen, XKB_KEY_f, XKB_KEY_f, false, false, true, "F",
      "window.fullscreen", "Toggles fullscreen on the focused window"},
     {BindingAction::WorkspaceSwitch, XKB_KEY_1, XKB_KEY_9, false, false, true,
@@ -5040,6 +5096,10 @@ bool perform_binding(Server *server, const BindingSpec &spec,
 
   case BindingAction::ShowDesktop:
     server->toggleShowDesktop();
+    return true;
+
+  case BindingAction::Flameshot:
+    launch_flameshot();
     return true;
 
   case BindingAction::RestoreLast:
@@ -6604,6 +6664,10 @@ int main() {
 
   server.scene = wlr_scene_create();
   server.output_layout = wlr_output_layout_create(server.display);
+  // Names and layout boxes for clients that capture an output (grim,
+  // the screenshot portal's peers). Without this, screencopy has pixels
+  // but no idea which output they belong to.
+  wlr_xdg_output_manager_v1_create(server.display, server.output_layout);
   server.scene_layout =
       wlr_scene_attach_output_layout(server.scene, server.output_layout);
 
@@ -6639,6 +6703,11 @@ int main() {
   // Version 5 is `wm_capabilities` — maximize / fullscreen / minimize —
   // which we now implement. Below that a client is allowed to assume we
   // cannot fullscreen, and a call to `set_wm_capabilities` asserts.
+  // How grim and similar tools read the framebuffer. Print Screen and
+  // the in-process portal do not use this — they render the scene
+  // themselves — but the protocol is cheap to advertise.
+  wlr_screencopy_manager_v1_create(server.display);
+
   server.xdg_shell = wlr_xdg_shell_create(server.display, 5);
   server.new_toplevel.attach(&server.xdg_shell->events.new_toplevel, &server,
                              Server::on_new_toplevel);
@@ -6843,6 +6912,25 @@ int main() {
   // appears, which is what happens a moment later when the panel finishes
   // coming up. Waiting for the panel would mean inventing a signal for
   // "ready" that nothing else needs.
+  // After the socket exists. A nested compositor claims a .test name
+  // so it cannot steal the session's Screenshot impl or restart the
+  // user's xdg-desktop-portal — that restart, done synchronously, is
+  // what locked the last session: the portal came back, asked us for
+  // a shot, and we were still inside `system()`.
+  {
+    lava::ScreenshotPortal::Options opts;
+    if (nested) {
+      opts.busName = "org.freedesktop.impl.portal.desktop.lava.test";
+      opts.claimDesktop = false;
+    }
+    server.screenshotPortal = std::make_unique<lava::ScreenshotPortal>();
+    if (!server.screenshotPortal->start(
+            wl_display_get_event_loop(server.display),
+            [&server]() { return server.schedulePortalCapture(); }, opts)) {
+      server.screenshotPortal.reset();
+    }
+  }
+
   if (nested) {
     wlr_log(WLR_INFO, "autostart: skipped, this session is nested");
   } else if (server.config.shell.enabled &&
@@ -6857,6 +6945,8 @@ int main() {
   // told to go while its socket still works exits cleanly rather than dying of
   // a broken connection.
   shell.stop();
+  // The bus watch lives on this display's loop.
+  server.screenshotPortal.reset();
   wl_display_destroy_clients(server.display);
   // Then the control plane, before the display it publishes a way into: a
   // client that reads the reference after this point gets nothing, which is
