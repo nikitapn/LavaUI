@@ -126,6 +126,8 @@ struct FramedWindow {
   virtual void activate(bool activated) = 0;
   /// Draw yourself maximized. Cosmetic — the compositor has already moved it.
   virtual void setMaximized(bool) {}
+  /// Same, for fullscreen. The compositor has already covered the output.
+  virtual void setFullscreen(bool) {}
   /// Told where it ended up. A Wayland window never learns its own position
   /// and does not need this; an X11 client keeps its own copy and draws its
   /// menus against it, so one that is moved without being told puts them in
@@ -249,6 +251,9 @@ struct Toplevel : FramedWindow {
   void setMaximized(bool maximized) override {
     wlr_xdg_toplevel_set_maximized(xdg_toplevel, maximized);
   }
+  void setFullscreen(bool fullscreen) override {
+    wlr_xdg_toplevel_set_fullscreen(xdg_toplevel, fullscreen);
+  }
 
   static void on_map(wl_listener *listener, void *data);
   static void on_unmap(wl_listener *listener, void *data);
@@ -290,6 +295,7 @@ struct XwaylandSurface : FramedWindow {
   Listener<XwaylandSurface> set_title;
   Listener<XwaylandSurface> request_move;
   Listener<XwaylandSurface> request_resize;
+  Listener<XwaylandSurface> request_fullscreen;
   /// Whether `map`/`unmap` are attached. They can only be while a Wayland
   /// surface exists behind the X11 window, which is not its whole life.
   bool associated = false;
@@ -317,6 +323,12 @@ struct XwaylandSurface : FramedWindow {
   void requestClose() override { wlr_xwayland_surface_close(xsurface); }
   void activate(bool activated) override {
     wlr_xwayland_surface_activate(xsurface, activated);
+  }
+  void setMaximized(bool maximized) override {
+    wlr_xwayland_surface_set_maximized(xsurface, maximized, maximized);
+  }
+  void setFullscreen(bool fullscreen) override {
+    wlr_xwayland_surface_set_fullscreen(xsurface, fullscreen);
   }
   /// Tells the client where it now is. Nothing else will: an X11 client keeps
   /// its own idea of its position and draws menus against it, so a window
@@ -347,6 +359,7 @@ struct XwaylandSurface : FramedWindow {
   static void on_set_title(wl_listener *listener, void *data);
   static void on_request_move(wl_listener *listener, void *data);
   static void on_request_resize(wl_listener *listener, void *data);
+  static void on_request_fullscreen(wl_listener *listener, void *data);
 };
 
 // ─── Decoration negotiation ────────────────────────────────────────────────
@@ -889,8 +902,11 @@ struct ClientSurface {
   /// jump every time a menu opens. See `SetPanelThickness`.
   uint32_t reserved = 0;
 
-  /// Where a maximized window came from, so restoring is exact.
+  /// Where a maximized or fullscreen window came from, so restoring is exact.
   bool maximized = false;
+  /// Covers the output, including the panel. Distinct from maximize: a
+  /// maximized window leaves the work area, a fullscreen one does not.
+  bool fullscreen = false;
   int restoreX = 0;
   int restoreY = 0;
   uint32_t restoreW = 0;
@@ -909,10 +925,11 @@ struct ClientSurface {
   /// Whether the compositor title bar is on screen.
   ///
   /// A maximized window gives the bar up: the panel already names it, and a
-  /// 32 px strip under the panel is just a second title. Restoring puts it
-  /// back. `decorated` is still the lasting choice (who draws the chrome);
-  /// this is only whether that chrome is showing *now*.
-  bool showsBar() const { return decorated && !maximized; }
+  /// 32 px strip under the panel is just a second title. Fullscreen does
+  /// the same, and covers the panel too. Restoring puts the bar back.
+  /// `decorated` is still the lasting choice (who draws the chrome); this
+  /// is only whether that chrome is showing *now*.
+  bool showsBar() const { return decorated && !maximized && !fullscreen; }
 
   /// Where the content starts — below the bar, or at the frame origin when
   /// there is no bar to be below.
@@ -1400,6 +1417,10 @@ class SurfaceRegistry : public lava::CompositorHost {
   /// pointer, invisibly, from underneath the one the user can see.
   bool visible(const ClientSurface &surface) const {
     if (surface.minimized) return false;
+    // Hidden, not gone: a fullscreen window on this workspace owns the
+    // output, and the panel staying clickable on top of a game is how
+    // fullscreen failed to be fullscreen.
+    if (surface.panel && fullscreenCoversShell()) return false;
     return surface.panel || workspaces_ == nullptr ||
            surface.workspace == workspaces_->current;
   }
@@ -1413,7 +1434,13 @@ class SurfaceRegistry : public lava::CompositorHost {
     if (workspaces_ == nullptr || index >= Workspaces::kCount) return;
     if (surface.panel || surface.workspace == index) return;
     surface.workspace = index;
-    wlr_scene_node_reparent(&surface.node->node, workspaces_->tree[index]);
+    // A Wayland/X11 window has no canvas node — its pixels live on
+    // `window->contentNode()`, which `Server::moveFocusedToWorkspace`
+    // already reparents. Dereferencing `node` here is how sending a
+    // game to another workspace used to take the compositor with it.
+    if (surface.node != nullptr) {
+      wlr_scene_node_reparent(&surface.node->node, workspaces_->tree[index]);
+    }
     if (surface.barNode != nullptr) {
       wlr_scene_node_reparent(&surface.barNode->node, workspaces_->tree[index]);
     }
@@ -1426,6 +1453,7 @@ class SurfaceRegistry : public lava::CompositorHost {
     // more — and a button left lit would still be lit when it comes back.
     hoverBar(surface, lava::DecorationHit::Bar);
     announceWindows();
+    syncShellForFullscreen();
   }
 
   /// Topmost hit under a layout-space point. Front of `surfaces_` is topmost.
@@ -1547,7 +1575,7 @@ class SurfaceRegistry : public lava::CompositorHost {
       // A panel is on an edge of the screen by definition and is not the
       // user's to resize; a maximized window has already been given the work
       // area and would fight the next thing that re-applied it.
-      if (!visible(*s) || s->panel || s->maximized) continue;
+      if (!visible(*s) || s->panel || s->maximized || s->fullscreen) continue;
       const double x0 = s->x, y0 = s->y;
       const double x1 = x0 + s->width, y1 = y0 + s->frameHeight();
       if (lx < x0 - kGrab || lx > x1 + kGrab) continue;
@@ -1597,6 +1625,7 @@ class SurfaceRegistry : public lava::CompositorHost {
       std::erase(minimizedOrder_, surface.id);
     }
     announceWindows();
+    syncShellForFullscreen();
   }
 
   /// Un-hides the most recently minimized window *of this workspace* and
@@ -1709,6 +1738,10 @@ class SurfaceRegistry : public lava::CompositorHost {
   /// a request, and the client is the authority on what it settled at.
   void toplevelResized(ClientSurface &surface, uint32_t width,
                        uint32_t height) {
+    // Fullscreen already asked for the output size. A client that answers
+    // with something else is still fullscreen — shrinking the frame would
+    // show the desktop around a game that thought it owned the screen.
+    if (surface.fullscreen) return;
     if (width == surface.width && height == surface.height) return;
     surface.width = width;
     surface.height = height;
@@ -1759,8 +1792,9 @@ class SurfaceRegistry : public lava::CompositorHost {
       auto owned = std::move(*it);
       surfaces_.erase(it);
       surfaces_.push_front(std::move(owned));
-      return;
+      break;
     }
+    syncShellForFullscreen();
   }
 
   /// Puts both of a window's nodes where its frame origin says they go.
@@ -1798,6 +1832,14 @@ class SurfaceRegistry : public lava::CompositorHost {
   /// puts a window back exactly where the user left it.
   void setMaximized(ClientSurface &surface, bool maximized) {
     if (surface.maximized == maximized) return;
+    // Fullscreen already owns the rectangle. Remember maximize for when
+    // it ends, but do not pull a game off the output to fill the work area.
+    if (surface.fullscreen) {
+      surface.maximized = maximized;
+      if (surface.isForeign()) surface.window->setMaximized(maximized);
+      tellClientWindowState(surface);
+      return;
+    }
     if (!maximized) {
       // Flag first: `showsBar` / `contentY` / `fillWorkArea` / rounding
       // all read it.
@@ -1835,6 +1877,65 @@ class SurfaceRegistry : public lava::CompositorHost {
     tellClientWindowState(surface);
   }
 
+  /// Covers the output, or goes back to maximize / the floating rectangle.
+  ///
+  /// The output, not the work area: fullscreen is what a game asked for when
+  /// it said 1920×1080, and leaving the panel on top of it is how that
+  /// request used to become a movable window of that size.
+  void setFullscreen(ClientSurface &surface, bool fullscreen) {
+    if (surface.panel) return;
+    if (surface.fullscreen == fullscreen) {
+      // Protocol still wants an ack even when nothing moved.
+      if (surface.isForeign()) surface.window->setFullscreen(fullscreen);
+      return;
+    }
+    if (fullscreen) {
+      if (outputWidth_ == 0 || outputHeight_ == 0) return;
+      if (surface.minimized) setMinimized(surface, false);
+      // Maximize already saved the floating rectangle. Overwriting it here
+      // with the work-area size would restore a "maximized" window to
+      // maximized instead of to where the user left it.
+      if (!surface.maximized) {
+        surface.restoreX = surface.x;
+        surface.restoreY = surface.y;
+        surface.restoreW = surface.width;
+        surface.restoreH = surface.height;
+      }
+      surface.fullscreen = true;
+      syncBar(surface);
+      applyCorners(surface);
+      const uint32_t wasW = surface.width;
+      const uint32_t wasH = surface.height;
+      fillOutput(surface);
+      if (surface.width == wasW && surface.height == wasH) {
+        restyleFrame(surface);
+      }
+      raise(surface);
+      if (surface.isForeign()) surface.window->setFullscreen(true);
+      tellClientWindowState(surface);
+      wlr_log(WLR_INFO, "window %u: fullscreen", surface.id);
+      return;
+    }
+    surface.fullscreen = false;
+    syncBar(surface);
+    applyCorners(surface);
+    const uint32_t wasW = surface.width;
+    const uint32_t wasH = surface.height;
+    if (surface.maximized) {
+      fillWorkArea(surface);
+    } else {
+      moveSurface(surface, surface.restoreX, surface.restoreY);
+      resizeSurface(surface, surface.restoreW, surface.restoreH);
+    }
+    if (surface.width == wasW && surface.height == wasH) {
+      restyleFrame(surface);
+    }
+    if (surface.isForeign()) surface.window->setFullscreen(false);
+    tellClientWindowState(surface);
+    syncShellForFullscreen();
+    wlr_log(WLR_INFO, "window %u: left fullscreen", surface.id);
+  }
+
   /// Corners and shadow for the current flags, then a redraw.
   ///
   /// Used when maximize flips but the rectangle does not: `resizeSurface`
@@ -1852,10 +1953,13 @@ class SurfaceRegistry : public lava::CompositorHost {
   /// why. Foreign windows have no Lava input stream.
   void tellClientWindowState(const ClientSurface &surface) {
     if (control_ == nullptr || !surface.canvas) return;
+    // Both states drop the chrome; the client only needs to know whether
+    // its title strip should be showing. A bitmask would be the next
+    // verb, and nothing here has asked for one yet.
     control_->postInput(
         surface.id,
         static_cast<uint32_t>(canvas::InputEventKind::WindowState), 0.f, 0.f,
-        surface.maximized ? 1 : 0, 0);
+        (surface.maximized || surface.fullscreen) ? 1 : 0, 0);
   }
 
   /// Title bar on screen only when the window is decorated *and* not
@@ -1881,6 +1985,48 @@ class SurfaceRegistry : public lava::CompositorHost {
                            : 0;
     resizeSurface(surface, area.width,
                   area.height > frame ? area.height - frame : area.height);
+  }
+
+  /// Spreads a window over the output, panel and all.
+  void fillOutput(ClientSurface &surface) {
+    moveSurface(surface, 0, 0);
+    resizeSurface(surface, outputWidth_, outputHeight_);
+  }
+
+  /// Whether a fullscreen window on the current workspace owns the output.
+  ///
+  /// Any such window, not only the focused one: a game that is still
+  /// fullscreen underneath a raised terminal is still a game that should
+  /// not have a taskbar painted across it.
+  bool fullscreenCoversShell() const {
+    for (const auto &s : surfaces_) {
+      if (s->panel || s->minimized || !s->fullscreen) continue;
+      if (workspaces_ != nullptr && s->workspace != workspaces_->current) {
+        continue;
+      }
+      return true;
+    }
+    return false;
+  }
+
+  /// Hides the panel tree while a fullscreen window owns the output.
+  ///
+  /// Panels live in a tree created after the workspaces, so they draw on
+  /// top of every window. Disabling their nodes is what makes fullscreen
+  /// actually cover the screen rather than sit under the taskbar.
+  void syncShellForFullscreen() {
+    const bool hide = fullscreenCoversShell();
+    for (auto &s : surfaces_) {
+      if (!s->panel || s->node == nullptr) continue;
+      wlr_scene_node_set_enabled(&s->node->node, !hide);
+    }
+  }
+
+  /// How big the output currently is. Used to size a fullscreen configure
+  /// before the window has a frame (xdg initial commit).
+  void outputSize(uint32_t &width, uint32_t &height) const {
+    width = outputWidth_;
+    height = outputHeight_;
   }
 
   /// Puts a panel back on its edge, at the full length of that edge.
@@ -1916,7 +2062,9 @@ class SurfaceRegistry : public lava::CompositorHost {
       if (surface->panel) layoutPanel(*surface);
     }
     for (auto &surface : surfaces_) {
-      if (!surface->panel && surface->maximized) fillWorkArea(*surface);
+      if (surface->panel) continue;
+      if (surface->fullscreen) fillOutput(*surface);
+      else if (surface->maximized) fillWorkArea(*surface);
     }
   }
 
@@ -1958,7 +2106,7 @@ class SurfaceRegistry : public lava::CompositorHost {
   void applyShadow(ClientSurface &surface) {
     const bool wanted =
         shadowBlur_ > 0.f && !surface.panel && !surface.maximized &&
-        renderer_ != nullptr && workspaces_ != nullptr &&
+        !surface.fullscreen && renderer_ != nullptr && workspaces_ != nullptr &&
         surface.id == focused_ && !surface.minimized;
     if (!wanted) {
       if (surface.shadowNode != nullptr) {
@@ -2094,7 +2242,8 @@ class SurfaceRegistry : public lava::CompositorHost {
   /// False for a maximized window: it is flush to the work area, the
   /// same reason a panel is square.
   static bool frameIsRoundable(const ClientSurface &surface) {
-    return !surface.isForeign() && !surface.panel && !surface.maximized;
+    return !surface.isForeign() && !surface.panel && !surface.maximized &&
+           !surface.fullscreen;
   }
 
   /// Redraws the title bar. Cheap — a strip, from commands built here.
@@ -2109,6 +2258,8 @@ class SurfaceRegistry : public lava::CompositorHost {
 
   /// Which window's bar is drawn as active. Not the seat's focus: a client
   /// surface is not a `wlr_surface` and the seat has no object for it.
+  uint32_t focusedId() const { return focused_; }
+
   void setFocused(uint32_t id) {
     if (focused_ == id) return;
     const uint32_t previous = focused_;
@@ -2288,6 +2439,9 @@ class SurfaceRegistry : public lava::CompositorHost {
     wlr_log(WLR_INFO, "panel %u: '%s' at %d,%d on edge %u, %u deep%s", id,
             title.c_str(), panel->x, panel->y, edge, thickness,
             reserve ? ", reserving" : "");
+    // A panel that appears while a game is fullscreen must not draw on top
+    // of it — the same rule as every other shell change.
+    syncShellForFullscreen();
     return id;
   }
 
@@ -2358,7 +2512,9 @@ class SurfaceRegistry : public lava::CompositorHost {
     // windows, since a maximized window is a promise about the work area
     // rather than a size the user chose.
     for (auto &surface : surfaces_) {
-      if (!surface->panel && surface->maximized) fillWorkArea(*surface);
+      if (surface->panel) continue;
+      if (surface->fullscreen) fillOutput(*surface);
+      else if (surface->maximized) fillWorkArea(*surface);
     }
     return true;
   }
@@ -2705,6 +2861,7 @@ class SurfaceRegistry : public lava::CompositorHost {
       lava::FrameProbe::forget(id);
       wlr_log(WLR_INFO, "surface %u: gone", id);
       announceWindows();
+      syncShellForFullscreen();
       return true;
     }
     return false;
@@ -3380,6 +3537,8 @@ XwaylandSurface::XwaylandSurface(Server *server, wlr_xwayland_surface *surface)
   request_move.attach(&xsurface->events.request_move, this, on_request_move);
   request_resize.attach(&xsurface->events.request_resize, this,
                         on_request_resize);
+  request_fullscreen.attach(&xsurface->events.request_fullscreen, this,
+                            on_request_fullscreen);
 }
 
 XwaylandSurface::~XwaylandSurface() {
@@ -3391,6 +3550,7 @@ XwaylandSurface::~XwaylandSurface() {
   set_title.detach();
   request_move.detach();
   request_resize.detach();
+  request_fullscreen.detach();
 }
 
 void XwaylandSurface::on_associate(wl_listener *listener, void *) {
@@ -3470,6 +3630,12 @@ void XwaylandSurface::on_map(wl_listener *listener, void *) {
         self->serverDecorated());
     if (ClientSurface *frame = server->surfaces->find(id)) {
       server->surfaces->raise(*frame);
+      // Games often map already wanting `_NET_WM_STATE_FULLSCREEN`. Applying
+      // it here, after the frame exists, is what turns that into covering
+      // the output rather than a 1920×1080 window in the cascade.
+      if (self->xsurface->fullscreen) {
+        server->surfaces->setFullscreen(*frame, true);
+      }
     }
   }
   server->focus(self);
@@ -3526,6 +3692,15 @@ void XwaylandSurface::on_request_configure(wl_listener *listener, void *data) {
                                    event->width, event->height);
     return;
   }
+  // Fullscreen owns both: a game that also sends a ConfigureRequest for
+  // 1920×1080 at (0,0) is asking for the same thing, and honouring the
+  // position as a move would pull it off fullscreen.
+  if (frame->fullscreen) {
+    wlr_xwayland_surface_configure(
+        self->xsurface, 0, 0, static_cast<uint16_t>(frame->width),
+        static_cast<uint16_t>(frame->height));
+    return;
+  }
   // Framed: the size is the client's to ask for, the position is not.
   self->server->surfaces->resizeSurface(*frame, event->width, event->height);
 }
@@ -3559,6 +3734,22 @@ void XwaylandSurface::on_request_resize(wl_listener *listener, void *data) {
   if (ClientSurface *frame = server->surfaces->find(self->frameId)) {
     server->beginInteractiveResize(*frame, fromWlrEdges(event->edges), true);
   }
+}
+
+/// `_NET_WM_STATE_FULLSCREEN`. wlroots has already written the requested
+/// value onto `xsurface->fullscreen` by the time this fires.
+void XwaylandSurface::on_request_fullscreen(wl_listener *listener, void *) {
+  auto *self = owner_of<XwaylandSurface>(listener);
+  const bool want = self->xsurface->fullscreen;
+  if (self->frameId != 0 && self->server->surfaces != nullptr) {
+    if (ClientSurface *frame = self->server->surfaces->find(self->frameId)) {
+      self->server->surfaces->setFullscreen(*frame, want);
+      return;
+    }
+  }
+  // Not framed yet — map will apply it. Still ack the property so the
+  // client does not sit waiting for a WM that never answers.
+  wlr_xwayland_surface_set_fullscreen(self->xsurface, want);
 }
 
 // ─── Output ────────────────────────────────────────────────────────────────
@@ -3982,6 +4173,9 @@ void Toplevel::on_map(wl_listener *listener, void *) {
     if (ClientSurface *frame = server->surfaces->find(id)) {
       server->surfaces->raise(*frame);
       server->surfaces->setFocused(id);
+      if (toplevel->xdg_toplevel->requested.fullscreen) {
+        server->surfaces->setFullscreen(*frame, true);
+      }
     }
   }
   server->focus(toplevel);
@@ -4013,7 +4207,28 @@ void Toplevel::on_commit(wl_listener *listener, void *) {
   // means "you decide", which is the honest answer until there is a layout
   // policy. Skipping the reply entirely leaves the client waiting forever.
   if (toplevel->xdg_toplevel->base->initial_commit) {
-    wlr_xdg_toplevel_set_size(toplevel->xdg_toplevel, 0, 0);
+    // Advertise the states this compositor actually implements, or a
+    // well-behaved client will not offer fullscreen in its own menu.
+    // Only clients that bound xdg-shell v5 understand the event.
+    if (wl_resource_get_version(toplevel->xdg_toplevel->resource) >=
+        XDG_TOPLEVEL_WM_CAPABILITIES_SINCE_VERSION) {
+      wlr_xdg_toplevel_set_wm_capabilities(
+          toplevel->xdg_toplevel,
+          WLR_XDG_TOPLEVEL_WM_CAPABILITIES_MAXIMIZE |
+              WLR_XDG_TOPLEVEL_WM_CAPABILITIES_FULLSCREEN |
+              WLR_XDG_TOPLEVEL_WM_CAPABILITIES_MINIMIZE);
+    }
+    uint32_t width = 0, height = 0;
+    const bool fullscreen = toplevel->xdg_toplevel->requested.fullscreen;
+    if (fullscreen && toplevel->server->surfaces != nullptr) {
+      toplevel->server->surfaces->outputSize(width, height);
+    }
+    wlr_xdg_toplevel_set_size(toplevel->xdg_toplevel,
+                              static_cast<int32_t>(width),
+                              static_cast<int32_t>(height));
+    if (fullscreen) {
+      wlr_xdg_toplevel_set_fullscreen(toplevel->xdg_toplevel, true);
+    }
     return;
   }
   // Whatever size the client settled at is the size the frame is, whether or
@@ -4064,11 +4279,23 @@ void Toplevel::on_request_maximize(wl_listener *listener, void *) {
 }
 
 void Toplevel::on_request_fullscreen(wl_listener *listener, void *) {
-  auto *toplevel =
-      owner_of<Toplevel>(listener);
-  if (toplevel->xdg_toplevel->base->initialized) {
-    wlr_xdg_surface_schedule_configure(toplevel->xdg_toplevel->base);
+  auto *toplevel = owner_of<Toplevel>(listener);
+  const bool want = toplevel->xdg_toplevel->requested.fullscreen;
+  // Before the first commit the surface cannot be configured. wlroots
+  // keeps `requested.fullscreen` and initial_commit / map apply it.
+  // `set_fullscreen` would schedule a configure and assert.
+  if (!toplevel->xdg_toplevel->base->initialized) return;
+  if (toplevel->frameId != 0 && toplevel->server->surfaces != nullptr) {
+    if (ClientSurface *frame =
+            toplevel->server->surfaces->find(toplevel->frameId)) {
+      toplevel->server->surfaces->setFullscreen(*frame, want);
+    }
+  } else {
+    wlr_xdg_toplevel_set_fullscreen(toplevel->xdg_toplevel, want);
   }
+  // The protocol requires a configure in reply whether or not anything
+  // changed. `set_fullscreen` schedules one; this covers the no-op path.
+  wlr_xdg_surface_schedule_configure(toplevel->xdg_toplevel->base);
 }
 
 /// "The user is dragging my title bar; please move me."
@@ -4408,6 +4635,7 @@ enum class BindingAction : uint8_t {
   Close,
   Minimize,
   RestoreLast,
+  Fullscreen,
   WorkspaceSwitch,
   WorkspaceMove,
   SwitchVt,
@@ -4471,6 +4699,8 @@ constexpr BindingSpec kBindings[] = {
      "window.minimize", "Hides the focused window"},
     {BindingAction::RestoreLast, XKB_KEY_m, XKB_KEY_m, true, false, true, "M",
      "window.restore", "Brings back the window hidden last"},
+    {BindingAction::Fullscreen, XKB_KEY_f, XKB_KEY_f, false, false, true, "F",
+     "window.fullscreen", "Toggles fullscreen on the focused window"},
     {BindingAction::WorkspaceSwitch, XKB_KEY_1, XKB_KEY_9, false, false, true,
      "1 … 9", "workspace.switch", "Shows that workspace"},
     {BindingAction::WorkspaceMove, XKB_KEY_1, XKB_KEY_9, true, false, true,
@@ -4620,6 +4850,23 @@ bool perform_binding(Server *server, const BindingSpec &spec,
       server->update_pointer_focus(0);
     }
     return true;
+
+  case BindingAction::Fullscreen: {
+    if (server->surfaces == nullptr) return false;
+    // Decoration focus, not the Lava keyboard target: a Wayland or X11
+    // window has `focusedSurface() == 0` and is still the one on screen.
+    ClientSurface *focused =
+        server->surfaces->find(server->surfaces->focusedId());
+    if (focused == nullptr || focused->panel) {
+      if (FramedWindow *window =
+              server->frontToplevel(server->workspaces.current)) {
+        focused = server->surfaces->find(window->frameId);
+      }
+    }
+    if (focused == nullptr || focused->panel) return false;
+    server->surfaces->setFullscreen(*focused, !focused->fullscreen);
+    return true;
+  }
 
   case BindingAction::WorkspaceSwitch:
   case BindingAction::WorkspaceMove: {
@@ -5236,7 +5483,10 @@ void Server::switchWorkspace(uint32_t index) {
   // The cursor did not move, but what is under it did.
   update_pointer_focus(0);
   // A switch changes no window and changes everything a dock shows.
-  if (surfaces != nullptr) surfaces->announceWindows();
+  if (surfaces != nullptr) {
+    surfaces->announceWindows();
+    surfaces->syncShellForFullscreen();
+  }
 }
 
 void Server::moveFocusedToWorkspace(uint32_t index) {
@@ -5455,11 +5705,13 @@ bool Server::beginInteractiveMove(ClientSurface &surface, bool fromClient) {
   // would get a window glued to the cursor until the next click.
   if (pointerButtonsDown == 0) return false;
 
-  // Dragging a maximized window unmaximizes it and hands it back under the
-  // pointer, which is what every desktop does and what the gesture means —
-  // the user is pulling the window off the edge, not asking to move a
-  // full-screen rectangle around. The grab keeps its place along the width so
-  // a title bar grabbed near its right end stays grabbed there.
+  // Dragging a maximized or fullscreen window restores it and hands it back
+  // under the pointer, which is what every desktop does and what the
+  // gesture means — the user is pulling the window off the edge, not
+  // asking to move a full-screen rectangle around. The grab keeps its
+  // place along the width so a title bar grabbed near its right end stays
+  // grabbed there.
+  if (surface.fullscreen) surfaces->setFullscreen(surface, false);
   if (surface.maximized) {
     const double fraction =
         surface.width > 0 ? (cursor->x - surface.x) / surface.width : 0.5;
@@ -5506,7 +5758,9 @@ bool Server::beginInteractiveResize(ClientSurface &surface, uint32_t edges,
   if (edges == 0) return false;
   // Unlike a move, a maximized window is left maximized-then-resized rather
   // than restored: the user is dragging an edge, which is a size they mean,
-  // not a window they are pulling off the top of the screen.
+  // not a window they are pulling off the top of the screen. Fullscreen
+  // still has to come off first — there is no edge of the output to grow.
+  if (surface.fullscreen) surfaces->setFullscreen(surface, false);
   if (surface.maximized) surfaces->setMaximized(surface, false);
 
   drag = Drag::Resize;
@@ -6161,7 +6415,10 @@ int main() {
                            Server::on_new_output);
 
   // xdg-shell: how ordinary applications get a window.
-  server.xdg_shell = wlr_xdg_shell_create(server.display, 3);
+  // Version 5 is `wm_capabilities` — maximize / fullscreen / minimize —
+  // which we now implement. Below that a client is allowed to assume we
+  // cannot fullscreen, and a call to `set_wm_capabilities` asserts.
+  server.xdg_shell = wlr_xdg_shell_create(server.display, 5);
   server.new_toplevel.attach(&server.xdg_shell->events.new_toplevel, &server,
                              Server::on_new_toplevel);
   server.new_popup.attach(&server.xdg_shell->events.new_popup, &server,
