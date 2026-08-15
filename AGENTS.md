@@ -273,6 +273,7 @@ optional QEMU VM).
 | `LAVA_AGENT_PORT=9876` | Local agent TCP server (layout / input / screenshots) |
 | `LAVAUI_DEBUG=1` | Per-frame body/layout/emit/present timings |
 | `LAVAUI_PROFILE=1` | Per-widget paint profiling via agent `profile` |
+| `LAVA_EDITOR_PROBE=1` | Editor hot paths (hit test, caret, selection, emit) with the buffer offset each was working at — see `EditorProbe` |
 | `LAVA_FRAME_PROBE=1` | Compositor: per-surface frame cost, gaps and stalls |
 | `LAVA_NO_SHELL=1` | Compositor: do not start panel/dock/wallpaper |
 | `WLR_BACKENDS=headless` `WLR_RENDERER=vulkan` | Compositor with no screen (see below) |

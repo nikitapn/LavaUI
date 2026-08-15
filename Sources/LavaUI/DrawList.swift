@@ -1514,7 +1514,15 @@ public final class DrawList {
             emitTextField(leaf, x: x, y: y, w: w, h: h)
         }
         if leaf.kind == .editor {
-            emitEditor(leaf, x: x, y: y, w: w, h: h)
+            EditorProbe.measure("emit.total") {
+                emitEditor(leaf, x: x, y: y, w: w, h: h)
+            }
+            // Outside the span, so the summary it may print is not counted as
+            // part of the frame it is reporting on.
+            EditorProbe.endFrame(
+                chars: leaf.editing.text.utf8.count,
+                rows: leaf.editing.layout.count
+            )
         }
         if leaf.kind == .image {
             // A path-backed image resolves here rather than in `body`. Two
@@ -1871,7 +1879,9 @@ extension DrawList {
         // every single emit. The cache itself no-ops for that case anyway;
         // this is what stops it from even trying every frame.
         if let highlighter = leaf.highlighter, highlighter.isStateful {
-            leaf.highlightCache.update(lines: state.lines, with: highlighter)
+            EditorProbe.measure("emit.highlight") {
+                leaf.highlightCache.update(lines: state.lines, with: highlighter)
+            }
         }
 
         // Yoga may have shrunk the box below the measured height; the clamp
@@ -1893,8 +1903,20 @@ extension DrawList {
         let selection = state.hasSelection ? state.selectedRange : nil
         // Also once, not once per row a selection happens to span — the
         // value is the same every time.
-        let selFromOffset = selection.map { state.offset(of: $0.lowerBound) }
-        let selToOffset = selection.map { state.offset(of: $0.upperBound) }
+        //
+        // Unlike the caret above, these are *not* cached against the value
+        // they were computed from, so they are two walks from the buffer's
+        // start on every emit that has a selection at all.
+        let selFromOffset = selection.map { sel in
+            EditorProbe.measureOffset("emit.selStart") {
+                state.offset(of: sel.lowerBound)
+            }
+        }
+        let selToOffset = selection.map { sel in
+            EditorProbe.measureOffset("emit.selEnd") {
+                state.offset(of: sel.upperBound)
+            }
+        }
 
         // Only rows intersecting the viewport are emitted: a long buffer costs
         // a screenful of quads, not a file's worth.
@@ -1963,7 +1985,15 @@ extension DrawList {
         // focused. Paying that walk once, to reach the first visible row,
         // and advancing by each row's own length from there, is the standard
         // fix for sequential `String.Index` access.
-        var cursor = leaf.textIndex(atOffset: rows[firstRow].lowerBound)
+        // Anchored (`LeafNode.textIndex(atOffset:)` carries the last index it
+        // resolved), so this is cheap while scrolling and expensive on the
+        // first frame after a jump. Watching it is how the anchor is known to
+        // still be doing its job.
+        var cursor = EditorProbe.measure(
+            "emit.rowWindow", at: rows[firstRow].lowerBound
+        ) {
+            leaf.textIndex(atOffset: rows[firstRow].lowerBound)
+        }
         var cursorOffset = rows[firstRow].lowerBound
 
         for row in firstRow...lastRow {

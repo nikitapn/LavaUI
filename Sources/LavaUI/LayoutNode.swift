@@ -714,10 +714,18 @@ final class LeafNode: YogaBoxNode {
         if let cached = cachedFocusPosition,
            cached.index == editing.focus, cached.affinity == editing.affinity
         {
+            EditorProbe.count("caret.cacheHit")
             return (cached.offset, cached.row)
         }
-        let offset = editing.offset(of: editing.focus)
-        let row = editing.layout.rowIndex(ofOffset: offset, affinity: editing.affinity)
+        // Split, because the two are different shapes of cost and a drag
+        // invalidates the cache on every pointer move: the first is a walk
+        // from the buffer's start, the second a scan of every row.
+        let offset = EditorProbe.measureOffset("caret.offsetOf") {
+            editing.offset(of: editing.focus)
+        }
+        let row = EditorProbe.measure("caret.rowIndex", at: offset) {
+            editing.layout.rowIndex(ofOffset: offset, affinity: editing.affinity)
+        }
         cachedFocusPosition = (editing.focus, editing.affinity, offset, row)
         return (offset, row)
     }

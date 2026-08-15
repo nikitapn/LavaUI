@@ -238,9 +238,11 @@ extension LeafNode {
         let rows = editing.layout.rows
         guard n >= 0, n < rows.count else { return "" }
         let r = rows[n]
-        let lo = editing.index(atOffset: r.lowerBound)
-        let hi = editing.index(atOffset: r.upperBound)
-        return String(editing.text[lo..<hi])
+        return EditorProbe.measure("text.rowText", at: r.lowerBound) {
+            let lo = editing.index(atOffset: r.lowerBound)
+            let hi = editing.index(atOffset: r.upperBound)
+            return String(editing.text[lo..<hi])
+        }
     }
 
     /// Index under a point in node-local coordinates, resolving the visual row
@@ -251,9 +253,16 @@ extension LeafNode {
         let rows = editing.layout.rows
         let row = max(0, min(rows.count - 1, Int((y - inset) / f.lineHeight)))
         let line = rowText(row)
-        let local = f.shapedRun(line).index(atX: x - inset)
+        let local = EditorProbe.measure("text.shapeRow") {
+            f.shapedRun(line).index(atX: x - inset)
+        }
         let column = line.distance(from: line.startIndex, to: local)
-        return editing.index(atOffset: editing.layout.offset(row: row, column: column))
+        let offset = editing.layout.offset(row: row, column: column)
+        // Named apart from `text.rowText` above even though both are the same
+        // walk: this one is the *result* of a hit test, and a drag pays both.
+        return EditorProbe.measure("text.hitIndex", at: offset) {
+            editing.index(atOffset: offset)
+        }
     }
 
     func focusSelf(binding: Binding<String>, onSubmit: (() -> Void)?) {

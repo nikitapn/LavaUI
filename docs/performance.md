@@ -357,6 +357,14 @@ Rules of thumb:
 - `LAVAUI_PROFILE=1` — per-widget paint cost; `WidgetProfiler.snapshot()`, and
   the `profile` agent command. Answers "which widget", where the frame line
   answers "which stage".
+- `LAVA_EDITOR_PROBE=1` — the pass under a widget, for the one widget where
+  that is a recurring question. Prints a rolling summary of the editor's hot
+  paths about once a second, each row carrying the **buffer offset** the calls
+  were working at (`@ 554.9k`). That column is the point: almost everything
+  expensive in a text buffer is a `String.Index` walk from its start, so a row
+  whose cost rises with its offset is a walk, and one that does not is real
+  work. The comparison that reads it is the same gesture at both ends of one
+  buffer — see `EditorProbe`.
 - `perf record -F 999 -g -p <pid>` — the last resort, and the only one that
   names a function. Attach by exact pid (`pgrep -x TraceLoom`); `pgrep -f` also
   matches wrapper shells and will attach to the wrong process.
