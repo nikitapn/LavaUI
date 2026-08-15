@@ -112,13 +112,36 @@ public final class PanelMenu {
     private func buildModel() -> MenuModel {
         let count = editor.menuImportItemCount
         guard count > 0 else { return MenuModel() }
+        return ImportedMenu.model(
+            count: count, item: { editor.menuImportItem($0) }
+        )
+    }
+}
 
+/// Turning a flattened DBusMenu import into a `MenuModel`.
+///
+/// Shared because there are two importers now and one shape: the focused
+/// window's menu (`PanelMenu`) and a tray item's (`StatusNotifierTray`). They
+/// differ in where the rows come from and in nothing else, so the conversion
+/// takes an accessor rather than an importer.
+public enum ImportedMenu {
+    /// A DBusMenu id as a `MenuID`. Deliberately the number and nothing else,
+    /// so activation can turn it back without a side table that would have to
+    /// be invalidated every time the layout changed.
+    public static func menuID(for itemId: Int32) -> MenuID {
+        MenuID(String(itemId))
+    }
+
+    /// Top-level menus, each with its items. `item` is called once per index.
+    public static func model(
+        count: Int, item: (Int) -> ImportedMenuItem
+    ) -> MenuModel {
         // One pass, parents before children — the order the importer emits —
         // so a child always finds its parent already in the map.
         var children: [Int32: [ImportedMenuItem]] = [:]
         for index in 0..<count {
-            let item = editor.menuImportItem(index)
-            children[item.parent, default: []].append(item)
+            let row = item(index)
+            children[row.parent, default: []].append(row)
         }
 
         let roots = children[-1] ?? []
@@ -135,7 +158,11 @@ public final class PanelMenu {
         return MenuModel(menus: menus)
     }
 
-    private func entries(
+    /// The rows under one parent, as menu entries.
+    ///
+    /// A tray item's menu is this list directly: its root *is* the menu, where
+    /// a window's root is a bar of them.
+    public static func entries(
         under parent: Int32,
         children: [Int32: [ImportedMenuItem]]
     ) -> [MenuEntry] {
@@ -161,10 +188,23 @@ public final class PanelMenu {
         }
     }
 
-    /// A DBusMenu id as a `MenuID`. Deliberately the number and nothing else,
-    /// so `activate` can turn it back without a side table that would have to
-    /// be invalidated every time the layout changed.
-    private func menuID(for itemId: Int32) -> MenuID {
-        MenuID(String(itemId))
+    /// The flattened import as a flat list of entries — every row under the
+    /// root, submenus nested.
+    public static func rootEntries(
+        count: Int, item: (Int) -> ImportedMenuItem
+    ) -> [MenuEntry] {
+        var children: [Int32: [ImportedMenuItem]] = [:]
+        for index in 0..<count {
+            let row = item(index)
+            children[row.parent, default: []].append(row)
+        }
+        // DBusMenu's root is item 0 and the importer emits it with parent -1,
+        // so the entries a tray menu shows are its children — one level down
+        // from where a menu bar's top level sits.
+        let roots = children[-1] ?? []
+        if roots.count == 1, !roots[0].isSeparator {
+            return entries(under: roots[0].id, children: children)
+        }
+        return entries(under: -1, children: children)
     }
 }

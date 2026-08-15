@@ -1,5 +1,7 @@
 #include "menu/status_notifier.hpp"
 
+#include "menu/menu_import.hpp"
+
 #include <algorithm>
 #include <cstring>
 #include <filesystem>
@@ -203,6 +205,41 @@ bool propBool(GDBusConnection *conn, const char *name, const char *path,
   return out;
 }
 
+/// Whether an object implements `method` on the item interface.
+///
+/// Introspection rather than "call it and see": the call is fire-and-forget so
+/// its failure arrives nowhere useful, and the difference between an applet
+/// that acts on a click and one that only has a menu has to be known *before*
+/// the click is decided.
+bool hasMethod(GDBusConnection *conn, const char *name, const char *path,
+               const char *method)
+{
+  GError *err = nullptr;
+  GVariant *ret = g_dbus_connection_call_sync(
+      conn, name, path, "org.freedesktop.DBus.Introspectable", "Introspect",
+      nullptr, G_VARIANT_TYPE("(s)"), G_DBUS_CALL_FLAGS_NONE, 1500, nullptr,
+      &err);
+  if (ret == nullptr) {
+    if (err) g_error_free(err);
+    return false;
+  }
+  const gchar *xml = nullptr;
+  g_variant_get(ret, "(&s)", &xml);
+  bool found = false;
+  if (xml != nullptr) {
+    GDBusNodeInfo *node = g_dbus_node_info_new_for_xml(xml, nullptr);
+    if (node != nullptr) {
+      if (GDBusInterfaceInfo *iface =
+              g_dbus_node_info_lookup_interface(node, kItemIface)) {
+        found = g_dbus_interface_info_lookup_method(iface, method) != nullptr;
+      }
+      g_dbus_node_info_unref(node);
+    }
+  }
+  g_variant_unref(ret);
+  return found;
+}
+
 /// Largest pixmap from IconPixmap `a(iiay)`.
 void loadPixmap(GDBusConnection *conn, const char *name, const char *path,
                 int &outW, int &outH, std::vector<uint8_t> &outRgba)
@@ -260,6 +297,18 @@ struct StatusNotifierHost::Impl {
     std::string iconName;
     std::string iconThemePath;
     std::string iconPath;
+    /// `Menu`: the DBusMenu object this item exports, or empty. For most
+    /// applets this is not a fallback but *the* interface — see `hasActivate`.
+    std::string menuPath;
+    /// Whether the item implements `Activate` at all.
+    ///
+    /// Read once, by introspection, because the answer decides what a left
+    /// click does and there is no way to ask afterwards: a call to a method
+    /// that is not there fails asynchronously, long after the click. Ayatana
+    /// applets — nm-applet is one — implement none of `Activate`,
+    /// `ContextMenu` or even `ItemIsMenu`, and expect the host to open the
+    /// DBusMenu itself.
+    bool hasActivate = false;
     bool isMenu = false;
     int iconW = 0;
     int iconH = 0;
@@ -287,6 +336,12 @@ struct StatusNotifierHost::Impl {
 
   std::vector<Item> items;
   uint64_t revision = 0;
+
+  /// The open item's DBusMenu, and whose it is. Import-only: this one serves
+  /// no registrar — the panel's other importer does that.
+  MenuImportHost menu;
+  bool menuStarted = false;
+  std::string menuKey;
 
   bool serving() const { return mode == Mode::Own || mode == Mode::Follow; }
 
@@ -547,6 +602,8 @@ struct StatusNotifierHost::Impl {
     it.iconName = propString(conn, n, p, "IconName");
     it.iconThemePath = propString(conn, n, p, "IconThemePath");
     it.isMenu = propBool(conn, n, p, "ItemIsMenu");
+    it.menuPath = propString(conn, n, p, "Menu");
+    it.hasActivate = hasMethod(conn, n, p, "Activate");
     it.iconPath = resolveIconFile(it.iconName, it.iconThemePath);
     loadPixmap(conn, n, p, it.iconW, it.iconH, it.iconRgba);
     // Attention icon when status asks for it and main icon is empty.
@@ -757,6 +814,9 @@ void StatusNotifierHost::poll()
 {
   while (g_main_context_iteration(nullptr, FALSE)) {
   }
+  // The open menu rides the same GLib context, but the importer keeps its own
+  // dirty flag and only rebuilds its flattened items when told to look.
+  if (impl_->menuStarted) impl_->menu.poll();
 }
 
 uint64_t StatusNotifierHost::revision() const { return impl_->revision; }
@@ -802,6 +862,105 @@ std::string StatusNotifierHost::itemIconPath(size_t index) const
 bool StatusNotifierHost::itemIsMenu(size_t index) const
 {
   return index < impl_->items.size() && impl_->items[index].isMenu;
+}
+
+bool StatusNotifierHost::itemHasMenu(size_t index) const
+{
+  return index < impl_->items.size() && !impl_->items[index].menuPath.empty();
+}
+
+bool StatusNotifierHost::itemPrefersMenu(size_t index) const
+{
+  if (index >= impl_->items.size()) return false;
+  const auto &it = impl_->items[index];
+  if (it.menuPath.empty()) return false;
+  return it.isMenu || !it.hasActivate;
+}
+
+bool StatusNotifierHost::openMenu(const std::string &key)
+{
+  Impl::Item *it = impl_->find(key);
+  if (it == nullptr || it->menuPath.empty()) return false;
+  if (!impl_->menuStarted) {
+    impl_->menuStarted = impl_->menu.startImportOnly();
+    if (!impl_->menuStarted) return false;
+  }
+  // Window id 0 throughout: this menu was never registered against a window
+  // and never will be. The service and path are the whole address.
+  impl_->menu.setActiveWindow(0, it->service, it->menuPath);
+  impl_->menuKey = key;
+  // Applications are allowed to fill the root only when asked, and an applet
+  // whose menu is built on demand — nm-applet rebuilds its network list every
+  // time — hands back an empty layout otherwise.
+  impl_->menu.aboutToShow(0);
+  return true;
+}
+
+void StatusNotifierHost::closeMenu()
+{
+  if (impl_->menuKey.empty()) return;
+  impl_->menuKey.clear();
+  if (impl_->menuStarted) impl_->menu.setActiveWindow(0, {}, {});
+}
+
+const std::string &StatusNotifierHost::openMenuKey() const
+{
+  return impl_->menuKey;
+}
+
+uint64_t StatusNotifierHost::menuRevision() const
+{
+  return impl_->menu.revision();
+}
+
+size_t StatusNotifierHost::menuItemCount() const
+{
+  return impl_->menuKey.empty() ? 0 : impl_->menu.itemCount();
+}
+
+int32_t StatusNotifierHost::menuItemId(size_t index) const
+{
+  return impl_->menu.itemId(index);
+}
+
+int32_t StatusNotifierHost::menuItemParent(size_t index) const
+{
+  return impl_->menu.itemParent(index);
+}
+
+std::string StatusNotifierHost::menuItemLabel(size_t index) const
+{
+  return impl_->menu.itemLabel(index);
+}
+
+bool StatusNotifierHost::menuItemEnabled(size_t index) const
+{
+  return impl_->menu.itemEnabled(index);
+}
+
+bool StatusNotifierHost::menuItemSeparator(size_t index) const
+{
+  return impl_->menu.itemSeparator(index);
+}
+
+bool StatusNotifierHost::menuItemHasSubmenu(size_t index) const
+{
+  return impl_->menu.itemHasSubmenu(index);
+}
+
+int StatusNotifierHost::menuItemChecked(size_t index) const
+{
+  return impl_->menu.itemChecked(index);
+}
+
+void StatusNotifierHost::menuActivate(int32_t itemId)
+{
+  impl_->menu.activate(itemId);
+}
+
+void StatusNotifierHost::menuAboutToShow(int32_t itemId)
+{
+  impl_->menu.aboutToShow(itemId);
 }
 
 int StatusNotifierHost::itemIconWidth(size_t index) const
@@ -878,6 +1037,26 @@ std::string StatusNotifierHost::itemStatus(size_t) const { return {}; }
 std::string StatusNotifierHost::itemIconName(size_t) const { return {}; }
 std::string StatusNotifierHost::itemIconPath(size_t) const { return {}; }
 bool StatusNotifierHost::itemIsMenu(size_t) const { return false; }
+bool StatusNotifierHost::itemHasMenu(size_t) const { return false; }
+bool StatusNotifierHost::itemPrefersMenu(size_t) const { return false; }
+bool StatusNotifierHost::openMenu(const std::string &) { return false; }
+void StatusNotifierHost::closeMenu() {}
+const std::string &StatusNotifierHost::openMenuKey() const
+{
+  static const std::string none;
+  return none;
+}
+uint64_t StatusNotifierHost::menuRevision() const { return 0; }
+size_t StatusNotifierHost::menuItemCount() const { return 0; }
+int32_t StatusNotifierHost::menuItemId(size_t) const { return 0; }
+int32_t StatusNotifierHost::menuItemParent(size_t) const { return -1; }
+std::string StatusNotifierHost::menuItemLabel(size_t) const { return {}; }
+bool StatusNotifierHost::menuItemEnabled(size_t) const { return false; }
+bool StatusNotifierHost::menuItemSeparator(size_t) const { return false; }
+bool StatusNotifierHost::menuItemHasSubmenu(size_t) const { return false; }
+int StatusNotifierHost::menuItemChecked(size_t) const { return -1; }
+void StatusNotifierHost::menuActivate(int32_t) {}
+void StatusNotifierHost::menuAboutToShow(int32_t) {}
 int StatusNotifierHost::itemIconWidth(size_t) const { return 0; }
 int StatusNotifierHost::itemIconHeight(size_t) const { return 0; }
 size_t StatusNotifierHost::itemIconRgbaSize(size_t) const { return 0; }

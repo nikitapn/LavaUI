@@ -68,6 +68,12 @@ public:
   std::string itemIconPath(size_t index) const;
   /// Whether left-click should open the menu rather than Activate.
   bool itemIsMenu(size_t index) const;
+  /// Whether this item exports a DBusMenu at all.
+  bool itemHasMenu(size_t index) const;
+  /// Whether a left click has nowhere to go but the menu: the item said
+  /// `ItemIsMenu`, or it never implemented `Activate` — which is the ordinary
+  /// case for anything built on libappindicator, nm-applet included.
+  bool itemPrefersMenu(size_t index) const;
 
   /// Decoded RGBA8 icon pixels (may be empty). Network-order ARGB from the
   /// bus is converted here so Swift can `uploadImage` without byte-swapping.
@@ -84,6 +90,39 @@ public:
   void contextMenu(const std::string &key, int x, int y);
   void secondaryActivate(const std::string &key, int x, int y);
   void scroll(const std::string &key, int delta, const std::string &orientation);
+
+  // ─── The open item's menu ────────────────────────────────────────────────
+  //
+  // An applet's menu is a DBusMenu like any other, so this is a
+  // `MenuImportHost` in import-only mode rather than a second implementation
+  // of the protocol. It lives here because the menu belongs to the item: it
+  // opens with one, closes with it, and dies when the applet goes away.
+  //
+  // Same flat, index-addressed shape as the importer's own accessors, and the
+  // ids are DBusMenu's, so a panel can turn both into the same menu model.
+
+  /// Points the importer at `key`'s menu. False when the item has none, which
+  /// is the caller's cue to fall back to `activate`.
+  bool openMenu(const std::string &key);
+  /// Drops the menu. The applet is told nothing — DBusMenu has no "closed"
+  /// and none of them expect one.
+  void closeMenu();
+  /// Which item's menu is open, empty for none.
+  const std::string &openMenuKey() const;
+  /// Bumped when the open menu's layout changes, including when it first
+  /// arrives — a menu is empty until the application answers.
+  uint64_t menuRevision() const;
+
+  size_t menuItemCount() const;
+  int32_t menuItemId(size_t index) const;
+  int32_t menuItemParent(size_t index) const;
+  std::string menuItemLabel(size_t index) const;
+  bool menuItemEnabled(size_t index) const;
+  bool menuItemSeparator(size_t index) const;
+  bool menuItemHasSubmenu(size_t index) const;
+  int menuItemChecked(size_t index) const;
+  void menuActivate(int32_t itemId);
+  void menuAboutToShow(int32_t itemId);
 
 private:
   struct Impl;

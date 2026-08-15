@@ -106,6 +106,8 @@ final class MenuSession {
     /// Same rule as `openMenu`: without it, dropdowns paint into dead space.
     var volumeOpen = false
     var calendarOpen = false
+    /// A tray applet's imported menu. Which applet is the tray's business.
+    var trayMenuOpen = false
 
     func attach(editor: Editor, brandIcon: UIImage) {
         self.editor = editor
@@ -245,6 +247,20 @@ final class MenuSession {
         syncInputRegion()
     }
 
+    /// An applet's own menu, open in the tray strip. The tray holds which
+    /// item it belongs to; all this needs to know is that the panel has to
+    /// keep the clicks.
+    func setTrayMenuOpen(_ open: Bool) {
+        guard trayMenuOpen != open else { return }
+        trayMenuOpen = open
+        if open {
+            openMenu = nil
+            volumeOpen = false
+            calendarOpen = false
+        }
+        syncInputRegion()
+    }
+
     /// Grows the panel to menu depth once, keeps the strip reservation, and
     /// updates the local layout size so the first open does not wait on a
     /// Resize stream event.
@@ -262,7 +278,7 @@ final class MenuSession {
 
     /// Whether any strip popover needs the deep hit region.
     private var wantsCapture: Bool {
-        openMenu != nil || volumeOpen || calendarOpen
+        openMenu != nil || volumeOpen || calendarOpen || trayMenuOpen
     }
 
     /// Hit-test region: strip when idle, full panel while a menu or volume
@@ -374,18 +390,33 @@ struct TaskbarView: View {
 
     @ViewBuilder
     private func trayIcon(_ item: StatusNotifierTray.TrayItem) -> some View {
-        // Stack owns the hit target so left and right both work: left is
-        // Activate (or ContextMenu when ItemIsMenu), right is always
-        // ContextMenu — what nm-applet / Blueman expect from a tray.
+        // Stack owns the hit target so left and right both work. Both may end
+        // in the item's DBusMenu, drawn here rather than by the applet: an
+        // SNI item has no window of its own, and the ones that implement no
+        // methods at all — nm-applet, and most of libappindicator's users —
+        // have nothing but that menu to offer.
         HStack(
             padding: 0,
             alignment: .center,
             onPointer: { _, button in
-                if button == PointerButton.right {
-                    tray?.contextMenu(item)
-                } else if button == PointerButton.left {
-                    tray?.activate(item)
+                guard let tray else { return }
+                // A second click on the icon whose menu is open closes it,
+                // which is what every panel does and what the pointer already
+                // suggests by dismissing on click-out.
+                if tray.openMenuKey == item.key {
+                    session.setTrayMenuOpen(false)
+                    tray.closeMenu()
+                    return
                 }
+                let opened: Bool
+                if button == PointerButton.right {
+                    opened = tray.contextMenu(item)
+                } else if button == PointerButton.left {
+                    opened = tray.activate(item)
+                } else {
+                    opened = false
+                }
+                session.setTrayMenuOpen(opened)
             }
         ) {
             // Fixed 22pt so a large IconPixmap does not blow the strip height.
@@ -403,6 +434,52 @@ struct TaskbarView: View {
         .hoverBackground(MenuBarStyle.panel().titleHover)
         .cornerRadius(6)
         .agentId("tray.\(item.key)")
+        .overlay(
+            isPresented: trayMenuBinding(item),
+            alignment: .below,
+            style: MenuBarStyle.panel().overlayStyle
+        ) {
+            trayMenu
+        }
+    }
+
+    /// The open applet menu, drawn with the same panel a menu-bar dropdown
+    /// uses — an imported menu is an imported menu, whether it came from the
+    /// focused window or from an icon in the tray.
+    @ViewBuilder
+    private var trayMenu: some View {
+        let entries = tray?.menuEntries ?? []
+        if entries.isEmpty {
+            // The applet was asked and has not answered yet. Saying so beats
+            // an empty box that looks like a menu with nothing in it.
+            Text("…", color: Theme.current.textDim)
+        } else {
+            MenuDropdownPanel(
+                entries: entries,
+                onActivate: { id in
+                    tray?.activateMenuItem(id)
+                    session.setTrayMenuOpen(false)
+                    tray?.closeMenu()
+                },
+                style: MenuBarStyle.panel()
+            )
+        }
+    }
+
+    /// Open state for one item's menu. Setting it false is the click-out
+    /// path — the overlay dismisses itself, and the tray has to hear about it
+    /// or the next click on the icon would be treated as a re-open.
+    private func trayMenuBinding(
+        _ item: StatusNotifierTray.TrayItem
+    ) -> Binding<Bool> {
+        Binding(
+            get: { tray?.openMenuKey == item.key },
+            set: { open in
+                guard !open else { return }
+                session.setTrayMenuOpen(false)
+                tray?.closeMenu()
+            }
+        )
     }
 
     /// The strip's open-menu state, with the input region attached to it.

@@ -360,6 +360,15 @@ MenuImportHost::~MenuImportHost()
   if (impl_->conn != nullptr) g_object_unref(impl_->conn);
 }
 
+bool MenuImportHost::startImportOnly()
+{
+  // Nothing to do but say yes. `DbusmenuClient` opens its own connection to
+  // the service it is pointed at, so an importer that serves no registrar
+  // needs neither a bus handle of its own nor a name — and claiming one would
+  // take it from the panel's real registrar, which is the same process.
+  return true;
+}
+
 bool MenuImportHost::start()
 {
   if (impl_->nameToken != 0) return impl_->nameAcquired;
@@ -535,6 +544,7 @@ MenuImportHost::MenuImportHost() : impl_(std::make_unique<Impl>()) {}
 MenuImportHost::~MenuImportHost() = default;
 
 bool MenuImportHost::start() { return false; }
+bool MenuImportHost::startImportOnly() { return false; }
 const std::string &MenuImportHost::busName() const { return impl_->busName; }
 void MenuImportHost::setActiveWindow(uint32_t, std::string, std::string) {}
 uint32_t MenuImportHost::activeWindow() const { return 0; }

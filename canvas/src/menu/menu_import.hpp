@@ -49,6 +49,14 @@ public:
   /// which LavaUI applications look for first for exactly this reason.
   bool start();
 
+  /// Start the importing half only: no registrar name, no exported object.
+  ///
+  /// For menus whose address arrives some other way and that nobody registers
+  /// — a tray item's `Menu` property is the one that matters, and a panel
+  /// needs a second importer for it precisely because the first is busy
+  /// holding the focused window's menu.
+  bool startImportOnly();
+
   /// The name actually owned, or empty. Worth surfacing: which one it is
   /// decides whether foreign applications can find us.
   const std::string &busName() const;

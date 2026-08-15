@@ -517,6 +517,23 @@ class Engine {
   void statusNotifierActivate(const std::string &key, int x, int y);
   void statusNotifierContextMenu(const std::string &key, int x, int y);
   void statusNotifierSecondaryActivate(const std::string &key, int x, int y);
+  bool statusNotifierItemHasMenu(size_t index) const;
+  /// Left click has nowhere to go but the menu — `ItemIsMenu`, or no
+  /// `Activate` at all. See `StatusNotifierHost::itemPrefersMenu`.
+  bool statusNotifierItemPrefersMenu(size_t index) const;
+  bool statusNotifierOpenMenu(const std::string &key);
+  void statusNotifierCloseMenu();
+  uint64_t statusNotifierMenuRevision() const;
+  size_t statusNotifierMenuItemCount() const;
+  int32_t statusNotifierMenuItemId(size_t index) const;
+  int32_t statusNotifierMenuItemParent(size_t index) const;
+  std::string statusNotifierMenuItemLabel(size_t index) const;
+  bool statusNotifierMenuItemEnabled(size_t index) const;
+  bool statusNotifierMenuItemSeparator(size_t index) const;
+  bool statusNotifierMenuItemHasSubmenu(size_t index) const;
+  int statusNotifierMenuItemChecked(size_t index) const;
+  void statusNotifierMenuActivate(int32_t itemId);
+  void statusNotifierMenuAboutToShow(int32_t itemId);
   void statusNotifierScroll(const std::string &key, int delta,
                             const std::string &orientation);
 

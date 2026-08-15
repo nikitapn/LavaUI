@@ -693,6 +693,8 @@ public final class Editor: @unchecked Sendable {
             iconName: String(engine.statusNotifierItemIconName(i)),
             iconPath: String(engine.statusNotifierItemIconPath(i)),
             isMenu: engine.statusNotifierItemIsMenu(i),
+            hasMenu: engine.statusNotifierItemHasMenu(i),
+            prefersMenu: engine.statusNotifierItemPrefersMenu(i),
             iconWidth: Int(engine.statusNotifierItemIconWidth(i)),
             iconHeight: Int(engine.statusNotifierItemIconHeight(i)),
             iconRgba: copyStatusNotifierIconRgba(index: i)
@@ -719,6 +721,42 @@ public final class Editor: @unchecked Sendable {
         engine.statusNotifierScroll(std.string(key), delta, std.string(orientation))
     }
 
+    /// Opens `key`'s DBusMenu. False when the item exports none — activate it
+    /// instead.
+    public func statusNotifierOpenMenu(_ key: String) -> Bool {
+        engine.statusNotifierOpenMenu(std.string(key))
+    }
+
+    public func statusNotifierCloseMenu() { engine.statusNotifierCloseMenu() }
+
+    public var statusNotifierMenuRevision: UInt64 {
+        engine.statusNotifierMenuRevision()
+    }
+
+    public var statusNotifierMenuItemCount: Int {
+        Int(engine.statusNotifierMenuItemCount())
+    }
+
+    public func statusNotifierMenuItem(_ index: Int) -> ImportedMenuItem {
+        ImportedMenuItem(
+            id: engine.statusNotifierMenuItemId(index),
+            parent: engine.statusNotifierMenuItemParent(index),
+            label: String(engine.statusNotifierMenuItemLabel(index)),
+            isEnabled: engine.statusNotifierMenuItemEnabled(index),
+            isSeparator: engine.statusNotifierMenuItemSeparator(index),
+            hasSubmenu: engine.statusNotifierMenuItemHasSubmenu(index),
+            checked: Int(engine.statusNotifierMenuItemChecked(index))
+        )
+    }
+
+    public func statusNotifierMenuActivate(_ itemId: Int32) {
+        engine.statusNotifierMenuActivate(itemId)
+    }
+
+    public func statusNotifierMenuAboutToShow(_ itemId: Int32) {
+        engine.statusNotifierMenuAboutToShow(itemId)
+    }
+
     private func copyStatusNotifierIconRgba(index: Int) -> [UInt8] {
         let n = engine.statusNotifierItemIconRgbaSize(index)
         guard n > 0 else { return [] }
@@ -742,6 +780,11 @@ public struct StatusNotifierItemInfo: Equatable, Sendable {
     /// Resolved filesystem path for `iconName`, when found.
     public var iconPath: String
     public var isMenu: Bool
+    /// The item exports a DBusMenu.
+    public var hasMenu: Bool
+    /// A left click has nowhere to go but that menu — the item said
+    /// `ItemIsMenu`, or never implemented `Activate`.
+    public var prefersMenu: Bool
     public var iconWidth: Int
     public var iconHeight: Int
     /// RGBA8 pixels when the item published `IconPixmap`.

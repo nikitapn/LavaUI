@@ -999,4 +999,79 @@ void Engine::statusNotifierScroll(const std::string &key, int delta,
   impl_->statusNotifier.scroll(key, delta, orientation);
 }
 
+bool Engine::statusNotifierItemHasMenu(size_t index) const
+{
+  return impl_->statusNotifier.itemHasMenu(index);
+}
+
+bool Engine::statusNotifierItemPrefersMenu(size_t index) const
+{
+  return impl_->statusNotifier.itemPrefersMenu(index);
+}
+
+bool Engine::statusNotifierOpenMenu(const std::string &key)
+{
+  return impl_->statusNotifier.openMenu(key);
+}
+
+void Engine::statusNotifierCloseMenu()
+{
+  impl_->statusNotifier.closeMenu();
+}
+
+uint64_t Engine::statusNotifierMenuRevision() const
+{
+  return impl_->statusNotifier.menuRevision();
+}
+
+size_t Engine::statusNotifierMenuItemCount() const
+{
+  return impl_->statusNotifier.menuItemCount();
+}
+
+int32_t Engine::statusNotifierMenuItemId(size_t index) const
+{
+  return impl_->statusNotifier.menuItemId(index);
+}
+
+int32_t Engine::statusNotifierMenuItemParent(size_t index) const
+{
+  return impl_->statusNotifier.menuItemParent(index);
+}
+
+std::string Engine::statusNotifierMenuItemLabel(size_t index) const
+{
+  return impl_->statusNotifier.menuItemLabel(index);
+}
+
+bool Engine::statusNotifierMenuItemEnabled(size_t index) const
+{
+  return impl_->statusNotifier.menuItemEnabled(index);
+}
+
+bool Engine::statusNotifierMenuItemSeparator(size_t index) const
+{
+  return impl_->statusNotifier.menuItemSeparator(index);
+}
+
+bool Engine::statusNotifierMenuItemHasSubmenu(size_t index) const
+{
+  return impl_->statusNotifier.menuItemHasSubmenu(index);
+}
+
+int Engine::statusNotifierMenuItemChecked(size_t index) const
+{
+  return impl_->statusNotifier.menuItemChecked(index);
+}
+
+void Engine::statusNotifierMenuActivate(int32_t itemId)
+{
+  impl_->statusNotifier.menuActivate(itemId);
+}
+
+void Engine::statusNotifierMenuAboutToShow(int32_t itemId)
+{
+  impl_->statusNotifier.menuAboutToShow(itemId);
+}
+
 } // namespace canvas
