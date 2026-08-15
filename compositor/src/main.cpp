@@ -296,6 +296,7 @@ struct XwaylandSurface : FramedWindow {
   Listener<XwaylandSurface> request_move;
   Listener<XwaylandSurface> request_resize;
   Listener<XwaylandSurface> request_fullscreen;
+  Listener<XwaylandSurface> request_maximize;
   /// Whether `map`/`unmap` are attached. They can only be while a Wayland
   /// surface exists behind the X11 window, which is not its whole life.
   bool associated = false;
@@ -360,6 +361,7 @@ struct XwaylandSurface : FramedWindow {
   static void on_request_move(wl_listener *listener, void *data);
   static void on_request_resize(wl_listener *listener, void *data);
   static void on_request_fullscreen(wl_listener *listener, void *data);
+  static void on_request_maximize(wl_listener *listener, void *data);
 };
 
 // ─── Decoration negotiation ────────────────────────────────────────────────
@@ -1831,7 +1833,11 @@ class SurfaceRegistry : public lava::CompositorHost {
   /// The previous frame is remembered rather than recomputed, so restoring
   /// puts a window back exactly where the user left it.
   void setMaximized(ClientSurface &surface, bool maximized) {
-    if (surface.maximized == maximized) return;
+    if (surface.maximized == maximized) {
+      // X11 still wants the property ack, the same as a no-op fullscreen.
+      if (surface.isForeign()) surface.window->setMaximized(maximized);
+      return;
+    }
     // Fullscreen already owns the rectangle. Remember maximize for when
     // it ends, but do not pull a game off the output to fill the work area.
     if (surface.fullscreen) {
@@ -1857,6 +1863,7 @@ class SurfaceRegistry : public lava::CompositorHost {
       }
       if (surface.isForeign()) surface.window->setMaximized(false);
       tellClientWindowState(surface);
+      wlr_log(WLR_INFO, "window %u: unmaximized", surface.id);
       return;
     }
     if (outputWidth_ == 0 || outputHeight_ == 0) return;
@@ -1875,6 +1882,7 @@ class SurfaceRegistry : public lava::CompositorHost {
     }
     if (surface.isForeign()) surface.window->setMaximized(true);
     tellClientWindowState(surface);
+    wlr_log(WLR_INFO, "window %u: maximized", surface.id);
   }
 
   /// Covers the output, or goes back to maximize / the floating rectangle.
@@ -3539,6 +3547,8 @@ XwaylandSurface::XwaylandSurface(Server *server, wlr_xwayland_surface *surface)
                         on_request_resize);
   request_fullscreen.attach(&xsurface->events.request_fullscreen, this,
                             on_request_fullscreen);
+  request_maximize.attach(&xsurface->events.request_maximize, this,
+                          on_request_maximize);
 }
 
 XwaylandSurface::~XwaylandSurface() {
@@ -3551,6 +3561,7 @@ XwaylandSurface::~XwaylandSurface() {
   request_move.detach();
   request_resize.detach();
   request_fullscreen.detach();
+  request_maximize.detach();
 }
 
 void XwaylandSurface::on_associate(wl_listener *listener, void *) {
@@ -3635,6 +3646,9 @@ void XwaylandSurface::on_map(wl_listener *listener, void *) {
       // the output rather than a 1920×1080 window in the cascade.
       if (self->xsurface->fullscreen) {
         server->surfaces->setFullscreen(*frame, true);
+      } else if (self->xsurface->maximized_horz ||
+                 self->xsurface->maximized_vert) {
+        server->surfaces->setMaximized(*frame, true);
       }
     }
   }
@@ -3701,6 +3715,17 @@ void XwaylandSurface::on_request_configure(wl_listener *listener, void *data) {
         static_cast<uint16_t>(frame->height));
     return;
   }
+  // Same for maximize: Steam (and most X11 toolkits) answer a maximize
+  // configure by asking for their old size. Honouring that is how the
+  // title-bar button looked like a no-op.
+  if (frame->maximized) {
+    wlr_xwayland_surface_configure(
+        self->xsurface, static_cast<int16_t>(frame->x),
+        static_cast<int16_t>(frame->contentY()),
+        static_cast<uint16_t>(frame->width),
+        static_cast<uint16_t>(frame->height));
+    return;
+  }
   // Framed: the size is the client's to ask for, the position is not.
   self->server->surfaces->resizeSurface(*frame, event->width, event->height);
 }
@@ -3750,6 +3775,24 @@ void XwaylandSurface::on_request_fullscreen(wl_listener *listener, void *) {
   // Not framed yet — map will apply it. Still ack the property so the
   // client does not sit waiting for a WM that never answers.
   wlr_xwayland_surface_set_fullscreen(self->xsurface, want);
+}
+
+/// `_NET_WM_STATE_MAXIMIZED_{HORZ,VERT}`. Both flags are the requested
+/// state by the time this fires. This compositor only has all-or-nothing
+/// maximize, so both on means fill the work area and both off means
+/// restore — a single axis is treated as maximized rather than ignored,
+/// because a client that asked for one half still asked to be parked.
+void XwaylandSurface::on_request_maximize(wl_listener *listener, void *) {
+  auto *self = owner_of<XwaylandSurface>(listener);
+  const bool want =
+      self->xsurface->maximized_horz || self->xsurface->maximized_vert;
+  if (self->frameId != 0 && self->server->surfaces != nullptr) {
+    if (ClientSurface *frame = self->server->surfaces->find(self->frameId)) {
+      self->server->surfaces->setMaximized(*frame, want);
+      return;
+    }
+  }
+  wlr_xwayland_surface_set_maximized(self->xsurface, want, want);
 }
 
 // ─── Output ────────────────────────────────────────────────────────────────
