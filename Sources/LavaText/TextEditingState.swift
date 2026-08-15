@@ -21,6 +21,42 @@ public struct TextEditingState: Equatable {
     public private(set) var anchor: String.Index
     public private(set) var focus: String.Index
 
+    /// Which version of the *content* this is. Changes on every edit, and
+    /// never for a caret or selection move.
+    ///
+    /// Exists for the caches around this type. Converting between a
+    /// `String.Index` and a character offset walks the buffer, so every
+    /// consumer that does it in a hot path — the draw list's first visible
+    /// row, the caret, a hit test — keeps the last pair it resolved and works
+    /// relative to it. Such a pair is only meaningful for the buffer it was
+    /// taken from, and "has the text changed" has no cheap answer otherwise:
+    /// comparing two `String`s is a content comparison, and comparing a *copy*
+    /// of the state (this is a value type, copied constantly) says nothing
+    /// about whether the text moved.
+    ///
+    /// Process-wide unique rather than a per-instance counter, so a cache
+    /// cannot mistake a freshly constructed state — whose counter would start
+    /// over — for the one it sampled.
+    ///
+    /// It participates in the synthesized `Equatable`, which makes equality
+    /// stricter than it was: two states built separately from the same string
+    /// are no longer `==`. Nothing in the repo compares whole states (only
+    /// their `text`), and leaving the conformance synthesized is worth more
+    /// than the looser semantics — a hand-written `==` is one field away from
+    /// silently ignoring the next thing added here.
+    public private(set) var revision: UInt64 = TextEditingState.nextRevision()
+
+    private final class Counter: @unchecked Sendable {
+        var value: UInt64 = 1
+    }
+    private static let counter = Counter()
+
+    /// Editing is single-threaded (the frame loop), like `NodeID.generate`.
+    private static func nextRevision() -> UInt64 {
+        counter.value &+= 1
+        return counter.value
+    }
+
     /// Edit history. Every mutation funnels through `replace(...)`, which is
     /// what makes undo possible without auditing each operation separately —
     /// the thing the plan warned becomes painful to retrofit.
@@ -212,6 +248,7 @@ public struct TextEditingState: Equatable {
         }
 
         text.replaceSubrange(range, with: replacement)
+        revision = Self.nextRevision()
         // Row ranges are character offsets into `text`. Leaving them installed
         // after a delete (or any length-changing edit) makes every consumer of
         // `layout` — `rowTexts`, `scrollToCaretX`, hit-testing — walk past
@@ -254,6 +291,7 @@ public struct TextEditingState: Equatable {
         let lower = index(atUTF8Offset: edit.offset)
         let upper = index(atUTF8Offset: edit.offset + edit.removed.utf8.count)
         text.replaceSubrange(lower..<upper, with: edit.inserted)
+        revision = Self.nextRevision()
         visualRows = nil
         let caret = index(atUTF8Offset: edit.offset + edit.inserted.utf8.count)
         focus = caret
@@ -309,6 +347,7 @@ public struct TextEditingState: Equatable {
             ? text.utf8.distance(from: text.utf8.startIndex, to: focus.samePosition(in: text.utf8)!)
             : new.utf8.count
         text = new
+        revision = Self.nextRevision()
         // Same reason as `replace`: rows are character offsets into the old
         // buffer and describe nothing once it is gone. The view layer usually
         // reseeds immediately afterwards, but "usually" is not an invariant —

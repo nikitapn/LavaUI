@@ -301,6 +301,49 @@ driving clicks through the agent, which means it profiled the agent server
 answering rather than the body passes it was supposed to measure. The numbers
 quoted are from a re-run driven with real input.
 
+### Dragging a selection near the end of a large file
+
+The benchmark suite covers opening, editing and redrawing a large buffer, and
+all of those were fast while *selecting* in one was not: a drag near the end of
+a 12 MB log ran at a few frames a second, and near the start of the same log it
+was instant. That difference is the whole diagnosis — the cost tracked the
+caret's **offset**, not the file's size, which is the signature of a
+`String.Index` walk from `startIndex`.
+
+`LAVA_EDITOR_PROBE=1` found six of them per pointer move, measured on the same
+buffer (555k chars, 9.2k rows) with the same gesture at each end:
+
+| span | at the end | at the start | after |
+|---|---|---|---|
+| `emit.total` | 3.216ms | 0.208ms | 0.238ms |
+| `text.rowText` (row bounds, twice) | 2.526ms | 0.003ms | 0.006ms |
+| `text.hitIndex` (the hit's result) | 1.257ms | 0.002ms | 0.002ms |
+| `caret.rowIndex` (scan of every row) | 1.143ms | 0.003ms | 0.002ms |
+| `emit.rowWindow` (first visible row) | 1.017ms | 0.001ms | 0.002ms |
+| `emit.selStart` / `emit.selEnd` | 0.765 / 0.744ms | 0.001ms | cached |
+| `caret.offsetOf` | 0.682ms | 0.001ms | cached |
+
+Four fixes, in the order the probe ranked them:
+
+1. **The offset anchor was being thrown away by cursor moves.** It was dropped
+   on *any* write to `editing`, which included every `setCursor` — so it was
+   empty exactly during a drag. It is now keyed on
+   `TextEditingState.revision`, which changes only when the text does.
+2. **The reverse conversion had no anchor at all.** `offset(of:)` walks from
+   the buffer's start; `LeafNode.charOffset(of:)` measures from the anchor
+   instead, so it costs the distance travelled.
+3. **The selection's two ends were recomputed every emit.** Cached per end, so
+   a drag pays only for the end that moved.
+4. **`rowIndex` scanned every row.** A binary search now picks where that scan
+   may start; the scan itself — which owns the affinity rules at a wrap
+   boundary — is untouched, and `RowIndexTests` checks the two agree over
+   random layouts.
+
+Net: ~7.5ms of walking per pointer move became ~0.25ms, and what remains is
+O(distance moved) and O(log rows) rather than O(offset) and O(rows), so it
+should stay flat as the file grows. A caret *jump* (Ctrl+Home/End) still walks
+once, which is correct: it really did travel that far.
+
 ### What to measure before revisiting
 
 - **Many clients.** Every number above is one. If a renderer driving 10–20

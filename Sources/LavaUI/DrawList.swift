@@ -1901,22 +1901,14 @@ extension DrawList {
         let caretOffset = leaf.focusOffset()
         let caretRow = leaf.focusRow()
         let selection = state.hasSelection ? state.selectedRange : nil
-        // Also once, not once per row a selection happens to span — the
-        // value is the same every time.
-        //
-        // Unlike the caret above, these are *not* cached against the value
-        // they were computed from, so they are two walks from the buffer's
-        // start on every emit that has a selection at all.
-        let selFromOffset = selection.map { sel in
-            EditorProbe.measureOffset("emit.selStart") {
-                state.offset(of: sel.lowerBound)
-            }
-        }
-        let selToOffset = selection.map { sel in
-            EditorProbe.measureOffset("emit.selEnd") {
-                state.offset(of: sel.upperBound)
-            }
-        }
+        // Once per emit rather than once per row a selection happens to span,
+        // and cached per end on the leaf: a drag moves one end and leaves the
+        // other alone, so only the moving end is ever recomputed — and from
+        // the offset anchor, not from the buffer's start. See
+        // `LeafNode.selectionOffsets`.
+        let selectionOffsets = leaf.selectionOffsets(selection)
+        let selFromOffset = selectionOffsets?.from
+        let selToOffset = selectionOffsets?.to
 
         // Only rows intersecting the viewport are emitted: a long buffer costs
         // a screenful of quads, not a file's worth.

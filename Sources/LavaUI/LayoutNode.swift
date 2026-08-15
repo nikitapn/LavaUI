@@ -330,14 +330,9 @@ final class LeafNode: YogaBoxNode {
     /// Editable payload (textField leaves). Lives on the node because a
     /// PrimitiveView has no body, so it never goes through CompositeNode's
     /// @State transplant — the node's own lifetime is the persistence.
-    var editing = TextEditingState("") {
-        // Any write invalidates the offset anchor below. Deliberately every
-        // write, not just text edits: a cursor move cannot invalidate it, but
-        // paying a nil-out on those is nothing next to the cost of getting
-        // this wrong, which is glyphs drawn from the wrong part of the buffer.
-        didSet { indexAnchor = nil }
-    }
-    /// Last character offset resolved to a `String.Index` in this buffer.
+    var editing = TextEditingState("")
+    /// Last character offset resolved to a `String.Index`, and the buffer
+    /// version it was resolved against.
     ///
     /// `TextEditingState.index(atOffset:)` walks from `startIndex` on every
     /// call. The draw path needs the first visible row's index once per
@@ -346,7 +341,16 @@ final class LeafNode: YogaBoxNode {
     /// causes, at ~25ms each. Scrolling moves that offset by a few rows, so
     /// resolving from the previous answer makes the steady state a few
     /// characters instead.
-    private var indexAnchor: (offset: Int, index: String.Index)?
+    ///
+    /// Keyed on `revision`, which changes only when the *text* does. It used
+    /// to be dropped on any write to `editing` at all, on the grounds that a
+    /// cursor move could not invalidate it and paying for one anyway was
+    /// nothing. That was wrong in the one case it mattered: a drag-select
+    /// writes the cursor on every pointer move, so the anchor was empty
+    /// exactly when the walks it exists to prevent were being made, and
+    /// dragging near the end of a large file paid several full-buffer walks
+    /// per move (`LAVA_EDITOR_PROBE=1` shows them).
+    private var indexAnchor: (revision: UInt64, offset: Int, index: String.Index)?
     var placeholder: String = ""
     var isMultiline = false
     var maxLines = 8
@@ -517,18 +521,44 @@ final class LeafNode: YogaBoxNode {
     /// offset this leaf resolved — see `indexAnchor`.
     func textIndex(atOffset offset: Int) -> String.Index {
         let text = editing.text
-        if let anchor = indexAnchor {
+        if let anchor = indexAnchor, anchor.revision == editing.revision {
             let delta = offset - anchor.offset
             if delta == 0 { return anchor.index }
             let limit = delta > 0 ? text.endIndex : text.startIndex
             if let moved = text.index(anchor.index, offsetBy: delta, limitedBy: limit) {
-                indexAnchor = (offset, moved)
+                indexAnchor = (editing.revision, offset, moved)
                 return moved
             }
         }
         let resolved = editing.index(atOffset: offset)
-        indexAnchor = (offset, resolved)
+        indexAnchor = (editing.revision, offset, resolved)
         return resolved
+    }
+
+    /// The other direction, and the one a caret and a selection need: a
+    /// character offset for an index the buffer already holds.
+    ///
+    /// `TextEditingState.offset(of:)` is `distance(from: startIndex,…)`, so it
+    /// costs the offset itself — the single largest per-move cost of dragging a
+    /// selection near the end of a large file. Measuring from the anchor
+    /// instead costs the *distance travelled*, which for a drag is a few
+    /// characters and for a scroll a few rows.
+    ///
+    /// Falls back to the walk when there is no usable anchor, so the answer is
+    /// the same either way; only the price changes.
+    func charOffset(of index: String.Index) -> Int {
+        let text = editing.text
+        guard let anchor = indexAnchor, anchor.revision == editing.revision else {
+            let resolved = editing.offset(of: index)
+            indexAnchor = (editing.revision, resolved, index)
+            return resolved
+        }
+        if index == anchor.index { return anchor.offset }
+        // Negative when `index` sits before the anchor, which `distance`
+        // handles and which a drag upwards produces constantly.
+        let offset = anchor.offset + text.distance(from: anchor.index, to: index)
+        indexAnchor = (editing.revision, offset, index)
+        return offset
     }
 
     /// Text of the given rows, extracted in a single forward pass.
@@ -721,13 +751,65 @@ final class LeafNode: YogaBoxNode {
         // invalidates the cache on every pointer move: the first is a walk
         // from the buffer's start, the second a scan of every row.
         let offset = EditorProbe.measureOffset("caret.offsetOf") {
-            editing.offset(of: editing.focus)
+            charOffset(of: editing.focus)
         }
         let row = EditorProbe.measure("caret.rowIndex", at: offset) {
             editing.layout.rowIndex(ofOffset: offset, affinity: editing.affinity)
         }
         cachedFocusPosition = (editing.focus, editing.affinity, offset, row)
         return (offset, row)
+    }
+
+    /// The selection's two ends as character offsets, each cached against the
+    /// index it was computed from.
+    ///
+    /// The caret has had a cache for this reason since large files first got
+    /// slow; the selection did not, so every emit with a selection paid two
+    /// more walks from the buffer's start. Two slots rather than one pair,
+    /// because a drag moves one end and leaves the other alone — the still
+    /// end should cost nothing at all, not be recomputed because its partner
+    /// moved.
+    ///
+    /// Keyed on `revision` as well as the index, and it has to be: an edit
+    /// can leave a `String.Index` comparing equal to the one cached here while
+    /// the character offset at that position has moved, because text was
+    /// inserted before it.
+    private var cachedSelectionOffsets: (
+        lower: (revision: UInt64, index: String.Index, offset: Int)?,
+        upper: (revision: UInt64, index: String.Index, offset: Int)?
+    ) = (nil, nil)
+
+    /// Character offsets of `range`, both ends cached. `nil` when there is no
+    /// selection to measure.
+    func selectionOffsets(_ range: Range<String.Index>?) -> (from: Int, to: Int)? {
+        guard let range else { return nil }
+        let from = cachedSelectionOffset(
+            range.lowerBound, cache: \.lower, name: "sel.start"
+        )
+        let to = cachedSelectionOffset(
+            range.upperBound, cache: \.upper, name: "sel.end"
+        )
+        return (from, to)
+    }
+
+    private func cachedSelectionOffset(
+        _ index: String.Index,
+        cache: WritableKeyPath<
+            (lower: (revision: UInt64, index: String.Index, offset: Int)?,
+             upper: (revision: UInt64, index: String.Index, offset: Int)?),
+            (revision: UInt64, index: String.Index, offset: Int)?
+        >,
+        name: String
+    ) -> Int {
+        if let hit = cachedSelectionOffsets[keyPath: cache],
+           hit.revision == editing.revision, hit.index == index
+        {
+            EditorProbe.count("\(name).cacheHit")
+            return hit.offset
+        }
+        let offset = EditorProbe.measureOffset(name) { charOffset(of: index) }
+        cachedSelectionOffsets[keyPath: cache] = (editing.revision, index, offset)
+        return offset
     }
 
     /// Keeps the caret on screen after a move or an edit.

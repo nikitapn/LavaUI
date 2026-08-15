@@ -239,8 +239,16 @@ extension LeafNode {
         guard n >= 0, n < rows.count else { return "" }
         let r = rows[n]
         return EditorProbe.measure("text.rowText", at: r.lowerBound) {
-            let lo = editing.index(atOffset: r.lowerBound)
-            let hi = editing.index(atOffset: r.upperBound)
+            // Through the offset anchor, and then *along the row* for its end:
+            // two independent `index(atOffset:)` calls each walked from the
+            // buffer's start, so reading one row near the end of a large file
+            // — which is what every pointer move during a drag does — cost
+            // two full walks before anything was shaped.
+            let lo = textIndex(atOffset: r.lowerBound)
+            let hi = editing.text.index(
+                lo, offsetBy: r.upperBound - r.lowerBound,
+                limitedBy: editing.text.endIndex
+            ) ?? editing.text.endIndex
             return String(editing.text[lo..<hi])
         }
     }
@@ -258,10 +266,10 @@ extension LeafNode {
         }
         let column = line.distance(from: line.startIndex, to: local)
         let offset = editing.layout.offset(row: row, column: column)
-        // Named apart from `text.rowText` above even though both are the same
-        // walk: this one is the *result* of a hit test, and a drag pays both.
+        // Anchored like the row above, which for a hit test means walking from
+        // the row's start to the column under the pointer.
         return EditorProbe.measure("text.hitIndex", at: offset) {
-            editing.index(atOffset: offset)
+            textIndex(atOffset: offset)
         }
     }
 
