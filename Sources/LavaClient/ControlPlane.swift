@@ -65,10 +65,15 @@ public enum ControlPlane {
         }
         let running = published()
         if running.count == 1 { return running[0] }
-        // None, or several. Either way there is no answer to give; the path
-        // named here is the one `connectToCompositor` reports as missing,
-        // alongside what it did find.
-        return (base as NSString).appendingPathComponent("lava-compositor.ior")
+        // None, or several. Either way there is no answer to give, and the
+        // path named here exists only to be reported as missing by
+        // `connectToCompositor`, alongside what it did find. Deliberately not
+        // a name any compositor writes — including `lava-compositor.ior`,
+        // which is what this scheme replaced and may still be lying around
+        // from a session that predates it, holding a reference to a
+        // compositor that is long gone.
+        return (base as NSString)
+            .appendingPathComponent("lava-compositor-<no session>.ior")
     }
 
     /// Every session currently advertising a compositor, as full paths.

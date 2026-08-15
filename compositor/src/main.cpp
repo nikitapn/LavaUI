@@ -6239,6 +6239,21 @@ int main() {
     control.reset();
   }
   server.detachListeners();
+  // The backend by hand, before the display rather than with it.
+  //
+  // `wl_display_destroy` tears down its globals first and its event loop
+  // second, and the backend hangs off the loop — so every output and input
+  // device is destroyed *after* the seat they belong to. The compositor's own
+  // handlers run in that window: a keyboard going away recomputes the seat's
+  // capabilities, and by then `wlr_seat_set_capabilities` is reading freed
+  // memory. Destroying the backend here runs those handlers while the seat,
+  // the scene and the output layout are all still there, which is the order
+  // they were written for.
+  //
+  // Only reachable at all since SIGTERM stopped killing the process outright,
+  // which is why it survived this long: the quit binding hit it, and quitting
+  // by keyboard is not what anyone does to a compositor that is their session.
+  wlr_backend_destroy(server.backend);
   wl_display_destroy(server.display);
   return EXIT_SUCCESS;
 }
