@@ -278,6 +278,8 @@ optional QEMU VM).
 | `LAVA_EDITOR_PROBE=1` | Editor hot paths (hit test, caret, selection, emit) with the buffer offset each was working at — see `EditorProbe` |
 | `LAVA_FRAME_PROBE=1` | Compositor: per-surface frame cost, gaps and stalls |
 | `LAVA_NO_SHELL=1` | Compositor: do not start panel/dock/wallpaper |
+| `LAVA_NO_AUTOSTART=1` | Compositor: do not run the user's autostart script |
+| `LAVA_AUTOSTART` | Path to that script, overriding `~/.config/lava/autostart` |
 | `LAVA_COMPOSITOR_IOR` | Client: the compositor reference to use, overriding the one named by `WAYLAND_DISPLAY` |
 | `WLR_BACKENDS=headless` `WLR_RENDERER=vulkan` | Compositor with no screen (see below) |
 | `WLR_LOG=debug` | wlroots + compositor debug logging (popups, scene) |
@@ -371,6 +373,36 @@ Windowed mode under a nested compositor is fragile in one known way: if the
 compositor clamps the window to a size the app did not request, the swapchain
 can hit `VK_ERROR_OUT_OF_DATE_KHR` on acquire and the engine treats it as
 fatal. Open at the size the output will actually grant to avoid it.
+
+## Starting things with the session
+
+Two layers, and the split is deliberate.
+
+**The desktop's own parts** — panel, dock — are `[shell]` in `lava.conf`, started
+and supervised by `ShellSupervisor`: restarted with backoff, abandoned after
+enough failures, stopped on the way out. A session without them is broken, so
+the compositor treats them as its own.
+
+**The user's programs** — tray applets, an idle inhibitor, a notification
+daemon — go in `~/.config/lava/autostart`, a plain shell script run with
+`/bin/sh` once the socket, the control plane and the shell are up:
+
+```sh
+# ~/.config/lava/autostart
+blueman-applet &
+nm-applet --indicator &
+pasystray &
+```
+
+Fire and forget, not supervised: an applet that exits was either told to or is
+not installed, and neither improves by being restarted every ten seconds. It
+runs after the panel is *spawned* rather than after the tray exists, which is
+enough — a StatusNotifierItem re-registers when the watcher appears.
+
+**A nested session does not run it.** Applets are singletons on the session
+bus, and the second `nm-applet` either fights the first for the tray or exits.
+The test is whether the compositor inherited a `WAYLAND_DISPLAY` or `DISPLAY`,
+so headless test runs skip it too.
 
 ## Where to change what
 

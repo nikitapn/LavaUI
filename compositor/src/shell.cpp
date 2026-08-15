@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <cerrno>
 #include <csignal>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <ctime>
@@ -257,9 +258,18 @@ void ShellSupervisor::reap() {
     const int64_t delay =
         kBackoffMs[std::min<size_t>(entry->failures, std::size(kBackoffMs)) - 1];
     entry->restartAt = now + delay;
+    // Which signal, not just "a signal": SIGTERM means somebody asked it to
+    // go and SIGSEGV means it fell over, and telling those apart from the log
+    // is the difference between looking for a crash and looking for whoever
+    // sent it.
+    char how[32];
+    if (WIFSIGNALED(status)) {
+      std::snprintf(how, sizeof(how), "signal %d", WTERMSIG(status));
+    } else {
+      std::snprintf(how, sizeof(how), "exit %d", WEXITSTATUS(status));
+    }
     wlr_log(WLR_INFO, "shell: %s ended (%s); restarting in %lldms",
-            entry->component.role.c_str(),
-            WIFSIGNALED(status) ? "signal" : "exit",
+            entry->component.role.c_str(), how,
             static_cast<long long>(delay));
   }
 }

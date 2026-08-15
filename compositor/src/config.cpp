@@ -202,6 +202,19 @@ std::string Config::defaultPath() {
   return "lava.conf";
 }
 
+std::string Config::autostartPath() {
+  if (const char *explicitPath = std::getenv("LAVA_AUTOSTART")) {
+    return explicitPath;
+  }
+  if (const char *xdg = std::getenv("XDG_CONFIG_HOME")) {
+    return std::string(xdg) + "/lava/autostart";
+  }
+  if (const char *home = std::getenv("HOME")) {
+    return std::string(home) + "/.config/lava/autostart";
+  }
+  return "autostart";
+}
+
 Config Config::load(const std::string &path) {
   Config config;
   std::ifstream file(path);

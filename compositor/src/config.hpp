@@ -193,6 +193,16 @@ struct Config {
   /// `$XDG_CONFIG_HOME/lava/lava.conf`, else `~/.config/lava/lava.conf`.
   static std::string defaultPath();
 
+  /// The user's own startup script — `$LAVA_AUTOSTART`, else `autostart`
+  /// beside `lava.conf`. Run with `/bin/sh` once the session is up.
+  ///
+  /// A script rather than a list of programs in `lava.conf`, because what
+  /// these need is rarely just a name: an applet wants a flag, an environment
+  /// variable, a `sleep` before something slow, and a shell says all of that
+  /// already. It is also the honest boundary — `[shell]` above is this
+  /// desktop's own parts, and this is everything that is the user's.
+  static std::string autostartPath();
+
   /// Reads `path`. A missing file is not an error — it yields the defaults,
   /// which are what the compositor did before this existed.
   static Config load(const std::string &path);

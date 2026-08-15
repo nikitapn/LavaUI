@@ -4191,6 +4191,29 @@ void launch_program(const char *program, char *const argv[],
   }).detach();
 }
 
+/// Runs the user's autostart script, if they have written one.
+///
+/// `/bin/sh` rather than the file's own shebang, executable bit or not: this
+/// is documented as a shell script and reading it as one means a user who
+/// forgot `chmod +x` gets their applets rather than a silent nothing.
+///
+/// Fire and forget. `ShellSupervisor` watches the panel and the dock because
+/// a desktop without them is broken; nothing here is that, and an applet that
+/// exits was either told to or is not installed, neither of which is improved
+/// by starting it again every ten seconds.
+void run_autostart() {
+  const std::string path = lava::Config::autostartPath();
+  if (::access(path.c_str(), R_OK) != 0) {
+    wlr_log(WLR_INFO, "autostart: nothing at '%s'", path.c_str());
+    return;
+  }
+  std::string shell = "/bin/sh";
+  std::string script = path;
+  char *argv[] = {shell.data(), script.data(), nullptr};
+  wlr_log(WLR_INFO, "autostart: running '%s'", path.c_str());
+  launch_program(shell.c_str(), argv);
+}
+
 void launch_rofi() {
   char program[] = "rofi";
   char show[] = "-show";
@@ -5929,6 +5952,17 @@ void Server::on_request_cursor(wl_listener *listener, void *data) {
 int main() {
   wlr_log_init(WLR_DEBUG, nullptr);
 
+  // Whether this compositor is running inside somebody else's session, read
+  // before it publishes a socket of its own and becomes the answer itself.
+  //
+  // What turns on it is the user's autostart script, at the bottom of this
+  // function: applets are singletons on the session bus, so a nested session
+  // starting a second nm-applet gets a fight over the tray or an immediate
+  // exit, and a developer restarting a compositor twenty times an hour wants
+  // neither.
+  const bool nested = std::getenv("WAYLAND_DISPLAY") != nullptr ||
+                      std::getenv("DISPLAY") != nullptr;
+
   // Blocked here, before anything else, because `wl_event_loop_add_signal`
   // reads it off a signalfd and a signalfd only sees signals that are blocked.
   // libwayland does block it — but only on the thread that registers, and by
@@ -6221,6 +6255,22 @@ int main() {
     shell.start(wl_display_get_event_loop(server.display), std::move(components));
   } else {
     wlr_log(WLR_INFO, "shell: not starting anything (disabled)");
+  }
+
+  // The user's own programs, after the desktop's: the socket is in the
+  // environment, the control plane is listening, and the panel is on its way.
+  //
+  // On its way is enough. An applet that starts before the tray exists is not
+  // a lost applet — a StatusNotifierItem re-registers when the watcher
+  // appears, which is what happens a moment later when the panel finishes
+  // coming up. Waiting for the panel would mean inventing a signal for
+  // "ready" that nothing else needs.
+  if (nested) {
+    wlr_log(WLR_INFO, "autostart: skipped, this session is nested");
+  } else if (server.config.shell.enabled &&
+             std::getenv("LAVA_NO_SHELL") == nullptr &&
+             std::getenv("LAVA_NO_AUTOSTART") == nullptr) {
+    run_autostart();
   }
 
   std::cout << "Compositor running on WAYLAND_DISPLAY=" << socket << '\n';
