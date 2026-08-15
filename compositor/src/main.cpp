@@ -38,6 +38,7 @@
 #include "control_plane.hpp"
 #include "shell.hpp"
 #include "screenshot_portal.hpp"
+#include "startup_watchdog.hpp"
 #include "background.hpp"
 #include "wlr.hpp"
 #include "render/png_encode.hpp"
@@ -4056,6 +4057,7 @@ void Output::on_frame(wl_listener *listener, void *) {
   // on this thread, if the renderer cannot hand the wait to the GPU.
   const int64_t started = lava::FrameProbe::on() ? lava::FrameProbe::now() : 0;
   wlr_scene_output_commit(output->scene_output, nullptr);
+  lava::StartupWatchdog::dismiss();
   lava::FrameProbe::record(0, lava::FrameProbe::Stage::Render, started);
   lava::FrameProbe::frame(0);
   lava::FrameProbe::report();
@@ -5034,6 +5036,7 @@ bool perform_binding(Server *server, const BindingSpec &spec,
     // Worth having while this runs nested inside another compositor: without
     // it the only way out is killing the process from elsewhere, and a
     // compositor that has taken the keyboard is hard to leave.
+    lava::arm_shutdown_watchdog();
     wl_display_terminate(server->display);
     return true;
 
@@ -6587,6 +6590,21 @@ void Server::on_request_cursor(wl_listener *listener, void *data) {
 int main() {
   wlr_log_init(WLR_DEBUG, nullptr);
 
+  // Before backend start, portal start, anything that can wedge the
+  // loop. Default 15 s; `LAVA_NO_WATCHDOG=1` or `_MS=0` turns it off.
+  int watchdogMs = 15000;
+  if (const char *off = std::getenv("LAVA_NO_WATCHDOG");
+      off != nullptr && off[0] != '\0' && off[0] != '0') {
+    watchdogMs = 0;
+  }
+  if (const char *ms = std::getenv("LAVA_STARTUP_WATCHDOG_MS")) {
+    watchdogMs = std::atoi(ms);
+  }
+  lava::StartupWatchdog startupWatchdog(watchdogMs);
+  if (watchdogMs > 0) {
+    wlr_log(WLR_INFO, "startup watchdog: %d ms", watchdogMs);
+  }
+
   // Whether this compositor is running inside somebody else's session, read
   // before it publishes a socket of its own and becomes the answer itself.
   //
@@ -6843,6 +6861,7 @@ int main() {
         wl_display_get_event_loop(server.display), signal,
         [](int number, void *data) {
           wlr_log(WLR_INFO, "shutting down on signal %d", number);
+          lava::arm_shutdown_watchdog();
           wl_display_terminate(static_cast<wl_display *>(data));
           return 0;
         },
