@@ -421,6 +421,64 @@ Modifier order can affect layout. In particular, `.frame(...).padding(8)`
 creates outer padding around the explicit frame, while
 `.padding(8).frame(...)` applies the fixed frame to the padded box.
 
+### Resizable panes
+
+`VSplitView` stacks two panes with a divider the user drags; `HSplitView` is
+the same thing side by side (`leading:` / `trailing:`, `minLeading` /
+`minTrailing`). Nest them for more than two panes.
+
+```swift
+VSplitView(fraction: $session.timelineSplit, minTop: 200, minBottom: 90) {
+    chart
+    legend
+} bottom: {
+    EditorView(text: $session.log).flexGrow(1)
+}
+```
+
+The split is a fraction of the space the two panes share, so a window resize
+keeps the proportion rather than growing one pane and pinning the other.
+`minTop` / `minBottom` are where the *drag* stops; they are deliberately not
+Yoga `minHeight`s, which would become each pane's base size and skew the
+fraction. Pass `initialFraction:` instead of `fraction:` to let the view own
+the value.
+
+Each pane is a column, like a `VStack`. Its height is the divider's decision,
+so content that should fill a pane needs `.flexGrow(1)`; content taller than
+its pane is clipped, not overflowed onto its neighbour.
+
+Dragging writes flex factors straight onto the panes and re-runs layout — no
+body pass per pointer pixel — and writes the binding once, on release. A view
+that displays the fraction therefore updates when the drag ends.
+
+Dividers carry a resize cursor, which is the built-in use of `.cursor(_:)`.
+
+### Pointer image
+
+```swift
+grabBar.cursor(.resizeUpDown)
+```
+
+`CursorShape` is `.arrow`, `.text`, `.pointer`, `.crosshair`,
+`.resizeLeftRight`, `.resizeUpDown` — the shapes that exist both in GLFW's
+standard cursors and in every X11 cursor theme, so a windowed app and a client
+show the same thing. The innermost view under the pointer that states one wins;
+ancestors cover the gaps.
+
+`TextField` and `EditorView` state `.text` for themselves; everything else is
+the app's call. The modifier is applied *over* a control's own setting, so
+`TextField(...).cursor(.pointer)` still wins.
+
+Stating a cursor makes a view hit-testable (the renderer has to report the
+pointer entering it), which costs a scene node — the same cost
+`.hoverBackground` already pays, and now the cost of every text field.
+
+Windowed apps set the cursor on their own GLFW window. Clients send `SetCursor`
+to the compositor, which stores it against the surface and applies it while the
+pointer is inside — the compositor's own affordances (resize band, title bar,
+an active drag) still win, and the preference is dropped the moment the pointer
+leaves.
+
 ### Scrolling and lazy content
 
 ```swift

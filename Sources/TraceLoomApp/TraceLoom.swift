@@ -270,27 +270,37 @@ public struct TraceLoom: View {
         VStack(flexGrow: 1) {
             header(parsed)
 
-            HStack(alignment: .center) {
-                sectionTitle("UNIFIED TIMELINE", detail: timelineDetail(traces))
-                Spacer()
-                layoutPicker
+            // The log is the pane people want more of, and how much more
+            // depends on the log — so it is dragged, not fixed. The header
+            // stays out of the split: it is chrome, not a pane.
+            VSplitView(
+                fraction: $session.timelineSplit, minTop: 200, minBottom: 90
+            ) {
+                HStack(alignment: .center) {
+                    sectionTitle("UNIFIED TIMELINE", detail: timelineDetail(traces))
+                    Spacer()
+                    layoutPicker
+                }
+
+                timeline(traces)
+                .agentId("unified-timeline")
+
+                legend(traces)
+            } bottom: {
+                EditorView(
+                   text: $session.log,
+                   visibleLines: 8,
+                   decorations: decorations(
+                       prefix: "Log ", severity: .warning, in: session.log
+                   ),
+                   onDecorationTap: { tappedDiagnostic = $0.message },
+                   controller: logEditorController
+                )
+                // Fills whatever the divider leaves it; `visibleLines` is only
+                // what it would measure to on its own.
+                .flexGrow(1)
+                .agentId("log-editor")
             }
-
-            timeline(traces)
-            .agentId("unified-timeline")
-
-            legend(traces)
-
-            EditorView(
-               text: $session.log,
-               visibleLines: 8,
-               decorations: decorations(
-                   prefix: "Log ", severity: .warning, in: session.log
-               ),
-               onDecorationTap: { tappedDiagnostic = $0.message },
-               controller: logEditorController
-            )
-            .agentId("log-editor")
         }
         .onDrop { urls in session.loadLog(from: urls) }
         .overlay(
@@ -619,7 +629,10 @@ public struct TraceLoom: View {
             label: "UnifiedTimeline",
             height: .auto,
             flexGrow: 1,
-            minHeight: 300,
+            // Low enough that the split can actually be dragged: a floor the
+            // pane cannot honour is not a floor, it is content hanging out of
+            // a clipped box.
+            minHeight: 120,
             onGesture: { gesture in
                 switch gesture.phase {
                 case .began:

@@ -348,6 +348,8 @@ fatal. Open at the size the output will actually grant to avoid it.
 | Window corner rounding | `QuadRenderer::pushCornerMask`, `quad.frag` kind 4 |
 | Window shadows (focused only) | `SurfaceRegistry::applyShadow`, `quad.frag` kind 5 |
 | Window chrome an app draws itself | `Sources/LavaUI/WindowControls.swift` |
+| Pointer image (`.cursor(_:)`) | `Sources/LavaUI/Cursor.swift`, `AppWindow::setCursorShape`, IDL `SetCursor` |
+| Draggable panes | `Sources/LavaUI/SplitView.swift` |
 | Panel global menu (import side) | `canvas/src/menu/menu_import.*`, `Sources/LavaUI/PanelMenu.swift` |
 | Window list / dock | `SubscribeWindows` in the IDL, `Sources/LavaDock/` |
 | 3D app switcher | `LavaSwitcher`, launched by Ctrl+Tab / Mod+Tab; live posters via `CaptureSurface` |

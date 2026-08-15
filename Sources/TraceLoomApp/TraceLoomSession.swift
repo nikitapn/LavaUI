@@ -38,6 +38,12 @@ final class TraceLoomSession {
     /// plot so a long rule list does not squash every chart to a few pixels.
     var timelineLayout: TimelineLayout = .lanes
 
+    /// Share of the window below the header that the timeline gets; the log
+    /// editor takes the rest. Lives here rather than in the view so the split
+    /// survives whatever else rebuilds the body — and so a future "restore my
+    /// layout" has one number to write down.
+    var timelineSplit: Float = 0.62
+
     init(
         rules: String = TraceLoom.sampleRules,
         log: String = TraceLoom.sampleLog
