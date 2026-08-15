@@ -128,6 +128,10 @@ struct FramedWindow {
   virtual void setMaximized(bool) {}
   /// Same, for fullscreen. The compositor has already covered the output.
   virtual void setFullscreen(bool) {}
+  /// `_NET_WM_STATE_HIDDEN` / iconic. Cosmetic to the compositor — the
+  /// scene node is already off — but an X11 client that asked to minimize
+  /// will keep asking until the property says it did.
+  virtual void setMinimized(bool) {}
   /// Told where it ended up. A Wayland window never learns its own position
   /// and does not need this; an X11 client keeps its own copy and draws its
   /// menus against it, so one that is moved without being told puts them in
@@ -227,6 +231,7 @@ struct Toplevel : FramedWindow {
   Listener<Toplevel> set_title;
   Listener<Toplevel> request_maximize;
   Listener<Toplevel> request_fullscreen;
+  Listener<Toplevel> request_minimize;
   Listener<Toplevel> request_move;
   Listener<Toplevel> request_resize;
 
@@ -262,6 +267,7 @@ struct Toplevel : FramedWindow {
   static void on_set_title(wl_listener *listener, void *data);
   static void on_request_maximize(wl_listener *listener, void *data);
   static void on_request_fullscreen(wl_listener *listener, void *data);
+  static void on_request_minimize(wl_listener *listener, void *data);
   static void on_request_move(wl_listener *listener, void *data);
   static void on_request_resize(wl_listener *listener, void *data);
 };
@@ -297,6 +303,7 @@ struct XwaylandSurface : FramedWindow {
   Listener<XwaylandSurface> request_resize;
   Listener<XwaylandSurface> request_fullscreen;
   Listener<XwaylandSurface> request_maximize;
+  Listener<XwaylandSurface> request_minimize;
   /// Whether `map`/`unmap` are attached. They can only be while a Wayland
   /// surface exists behind the X11 window, which is not its whole life.
   bool associated = false;
@@ -331,6 +338,9 @@ struct XwaylandSurface : FramedWindow {
   void setFullscreen(bool fullscreen) override {
     wlr_xwayland_surface_set_fullscreen(xsurface, fullscreen);
   }
+  void setMinimized(bool minimized) override {
+    wlr_xwayland_surface_set_minimized(xsurface, minimized);
+  }
   /// Tells the client where it now is. Nothing else will: an X11 client keeps
   /// its own idea of its position and draws menus against it, so a window
   /// moved without being told puts its menus in the wrong place.
@@ -362,6 +372,7 @@ struct XwaylandSurface : FramedWindow {
   static void on_request_resize(wl_listener *listener, void *data);
   static void on_request_fullscreen(wl_listener *listener, void *data);
   static void on_request_maximize(wl_listener *listener, void *data);
+  static void on_request_minimize(wl_listener *listener, void *data);
 };
 
 // ─── Decoration negotiation ────────────────────────────────────────────────
@@ -1607,10 +1618,15 @@ class SurfaceRegistry : public lava::CompositorHost {
   /// the pointer out — a hidden window that still hit-tested would take clicks
   /// from whatever the user can actually see.
   void setMinimized(ClientSurface &surface, bool minimized) {
-    if (surface.panel || surface.minimized == minimized) return;
+    if (surface.panel) return;
+    if (surface.minimized == minimized) {
+      if (surface.isForeign()) surface.window->setMinimized(minimized);
+      return;
+    }
     surface.minimized = minimized;
     if (surface.isForeign()) {
       wlr_scene_node_set_enabled(surface.window->contentNode(), !minimized);
+      surface.window->setMinimized(minimized);
     } else if (surface.node != nullptr) {
       wlr_scene_node_set_enabled(&surface.node->node, !minimized);
     }
@@ -1628,6 +1644,8 @@ class SurfaceRegistry : public lava::CompositorHost {
     }
     announceWindows();
     syncShellForFullscreen();
+    wlr_log(WLR_INFO, "window %u: %s", surface.id,
+            minimized ? "minimized" : "restored");
   }
 
   /// Un-hides the most recently minimized window *of this workspace* and
@@ -3549,6 +3567,8 @@ XwaylandSurface::XwaylandSurface(Server *server, wlr_xwayland_surface *surface)
                             on_request_fullscreen);
   request_maximize.attach(&xsurface->events.request_maximize, this,
                           on_request_maximize);
+  request_minimize.attach(&xsurface->events.request_minimize, this,
+                          on_request_minimize);
 }
 
 XwaylandSurface::~XwaylandSurface() {
@@ -3562,6 +3582,7 @@ XwaylandSurface::~XwaylandSurface() {
   request_resize.detach();
   request_fullscreen.detach();
   request_maximize.detach();
+  request_minimize.detach();
 }
 
 void XwaylandSurface::on_associate(wl_listener *listener, void *) {
@@ -3654,6 +3675,12 @@ void XwaylandSurface::on_map(wl_listener *listener, void *) {
   }
   server->focus(self);
   server->setFocusedSurface(0);
+  if (self->xsurface->minimized && self->frameId != 0 &&
+      server->surfaces != nullptr) {
+    if (ClientSurface *frame = server->surfaces->find(self->frameId)) {
+      server->minimizeSurface(*frame);
+    }
+  }
   wlr_log(WLR_INFO, "x11 window mapped: class=%s title=%s",
           self->xsurface->xclass ? self->xsurface->xclass : "(none)",
           title ? title : "(none)");
@@ -3793,6 +3820,25 @@ void XwaylandSurface::on_request_maximize(wl_listener *listener, void *) {
     }
   }
   wlr_xwayland_surface_set_maximized(self->xsurface, want, want);
+}
+
+/// `_NET_WM_STATE_HIDDEN` / `WM_CHANGE_STATE` Iconic. The event carries
+/// the requested state — a client can ask to come back as well as to go.
+void XwaylandSurface::on_request_minimize(wl_listener *listener, void *data) {
+  auto *self = owner_of<XwaylandSurface>(listener);
+  auto *event = static_cast<wlr_xwayland_minimize_event *>(data);
+  if (self->frameId != 0 && self->server->surfaces != nullptr) {
+    if (ClientSurface *frame = self->server->surfaces->find(self->frameId)) {
+      if (event->minimize) {
+        self->server->minimizeSurface(*frame);
+      } else {
+        self->server->surfaces->setMinimized(*frame, false);
+        self->server->focusSurface(*frame);
+      }
+      return;
+    }
+  }
+  wlr_xwayland_surface_set_minimized(self->xsurface, event->minimize);
 }
 
 // ─── Output ────────────────────────────────────────────────────────────────
@@ -4169,6 +4215,8 @@ Toplevel::Toplevel(Server *server, wlr_xdg_toplevel *toplevel)
                           on_request_maximize);
   request_fullscreen.attach(&toplevel->events.request_fullscreen, this,
                             on_request_fullscreen);
+  request_minimize.attach(&toplevel->events.request_minimize, this,
+                          on_request_minimize);
   // How a client that draws its own title bar gets moved. There is no protocol
   // for advertising *where* the draggable part of a window is, and there does
   // not need to be: the client knows where its own header is, sees the press
@@ -4187,6 +4235,7 @@ Toplevel::~Toplevel() {
   set_title.detach();
   request_maximize.detach();
   request_fullscreen.detach();
+  request_minimize.detach();
   request_move.detach();
   request_resize.detach();
 }
@@ -4225,6 +4274,14 @@ void Toplevel::on_map(wl_listener *listener, void *) {
   // A Wayland window takes the keyboard through the seat, so no client
   // surface may be holding it as well.
   server->setFocusedSurface(0);
+  // After focus: minimizing first would hand the keyboard back to a
+  // window that just hid.
+  if (toplevel->xdg_toplevel->requested.minimized &&
+      toplevel->frameId != 0 && server->surfaces != nullptr) {
+    if (ClientSurface *frame = server->surfaces->find(toplevel->frameId)) {
+      server->minimizeSurface(*frame);
+    }
+  }
 
   wlr_log(WLR_INFO, "toplevel mapped: app_id=%s title=%s",
           app_id ? app_id : "(none)", title ? title : "(none)");
@@ -4339,6 +4396,17 @@ void Toplevel::on_request_fullscreen(wl_listener *listener, void *) {
   // The protocol requires a configure in reply whether or not anything
   // changed. `set_fullscreen` schedules one; this covers the no-op path.
   wlr_xdg_surface_schedule_configure(toplevel->xdg_toplevel->base);
+}
+
+/// xdg_toplevel.set_minimized. No configure is owed — the protocol has
+/// no minimized state for the client to ack — so this is just "hide it".
+void Toplevel::on_request_minimize(wl_listener *listener, void *) {
+  auto *toplevel = owner_of<Toplevel>(listener);
+  if (toplevel->frameId == 0 || toplevel->server->surfaces == nullptr) return;
+  if (ClientSurface *frame =
+          toplevel->server->surfaces->find(toplevel->frameId)) {
+    toplevel->server->minimizeSurface(*frame);
+  }
 }
 
 /// "The user is dragging my title bar; please move me."
@@ -4878,13 +4946,20 @@ bool perform_binding(Server *server, const BindingSpec &spec,
   // Minimize, and the way back. A window with no frame can offer a minimize
   // button, and the dock can now show what is hidden — but this is still the
   // fastest handle there is: the one you put away last comes back.
-  case BindingAction::Minimize:
+  case BindingAction::Minimize: {
     if (server->surfaces == nullptr) return false;
-    if (ClientSurface *focused =
-            server->surfaces->find(server->focusedSurface())) {
-      server->minimizeSurface(*focused);
+    ClientSurface *focused =
+        server->surfaces->find(server->surfaces->focusedId());
+    if (focused == nullptr || focused->panel) {
+      if (FramedWindow *window =
+              server->frontToplevel(server->workspaces.current)) {
+        focused = server->surfaces->find(window->frameId);
+      }
     }
+    if (focused == nullptr || focused->panel) return false;
+    server->minimizeSurface(*focused);
     return true;
+  }
 
   case BindingAction::RestoreLast:
     if (server->surfaces == nullptr) return false;
@@ -6120,6 +6195,9 @@ void Server::on_cursor_button(wl_listener *listener, void *data) {
             // a different button in its own menu.
             frame->window->setMaximized(frame->maximized);
           }
+          return;
+        case lava::DecorationHit::Minimize:
+          server->minimizeSurface(*frame);
           return;
         case lava::DecorationHit::Bar:
           // Bare bar: drag the window, the way a title bar always has. The

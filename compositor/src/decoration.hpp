@@ -42,6 +42,7 @@ enum class DecorationHit {
   Bar,
   Close,
   Maximize,
+  Minimize,
 };
 
 /// Builds the draw list for one window's title bar.

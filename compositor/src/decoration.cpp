@@ -40,6 +40,7 @@ DecorationHit Decoration::hitTest(float x, float y, uint32_t width) {
   const std::pair<DecorationHit, int> buttons[] = {
       {DecorationHit::Close, 0},
       {DecorationHit::Maximize, 1},
+      {DecorationHit::Minimize, 2},
   };
   for (const auto &[hit, slot] : buttons) {
     const float cx = buttonCenterX(width, slot);
@@ -73,7 +74,7 @@ void Decoration::build(const std::string &title, uint32_t width,
     const float baseline = (h + metrics.ascent - metrics.descent) * 0.5f;
     const float first = kTitlePad;
     // Stop before the buttons rather than drawing under them.
-    const float limit = buttonCenterX(width, 1) - kButtonSize;
+    const float limit = buttonCenterX(width, 2) - kButtonSize;
     for (const auto &g : shaped) {
       const float x = first + g.x;
       if (x > limit) break;
@@ -135,6 +136,18 @@ void Decoration::build(const std::string &title, uint32_t width,
                          .x = c[0], .y = c[1], .w = c[2], .h = c[3],
                          .color = kGlyph});
   }
+
+  const float minX = buttonCenterX(width, 2);
+  if (hovered == DecorationHit::Minimize) {
+    commands_.push_back({.kind = static_cast<uint32_t>(RoundedRect),
+                         .x = minX - kButtonSize * 0.5f,
+                         .y = cy - kButtonSize * 0.5f,
+                         .w = kButtonSize, .h = kButtonSize,
+                         .color = kButtonHover, .aux = 6.f});
+  }
+  commands_.push_back({.kind = static_cast<uint32_t>(Line),
+                       .x = minX - box, .y = cy + 1.f,
+                       .w = minX + box, .h = cy + 1.f, .color = kGlyph});
 }
 
 }  // namespace lava
