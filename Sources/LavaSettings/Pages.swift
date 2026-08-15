@@ -458,9 +458,11 @@ struct KeyboardPage: View {
 
                 SettingRow(
                     "Compositor shortcuts",
-                    "Taken before any application sees the key. Compiled in for "
-                    + "now — this list comes from the same table that dispatches "
-                    + "them, so what is here is what works."
+                    "Taken before any application sees the key. Alt+Tab cycles "
+                    + "windows; Super+M (or Alt+M) maximizes or restores the "
+                    + "focused window; Super+D shows the desktop. Compiled in "
+                    + "for now — this list comes from the same table that "
+                    + "dispatches them, so what is here is what works."
                 ) {
                     VStack(spacing: 2) {
                         ForEach(store.bindings, id: \.action) { binding in

@@ -611,6 +611,11 @@ struct Server {
   /// pointing at something nobody can see.
   void minimizeSurface(ClientSurface &surface);
 
+  /// Windows Win+D: hide every window on this workspace, or bring back
+  /// the ones that press hid. A second press restores even if the user
+  /// opened something in between.
+  void toggleShowDesktop();
+
   /// Which client surface the keyboard goes to, per workspace, or 0.
   ///
   /// Separate from `wlr_seat`'s focus because a client surface is not a
@@ -1675,6 +1680,44 @@ class SurfaceRegistry : public lava::CompositorHost {
     }
     return nullptr;
   }
+
+  /// Hide every visible window on the current workspace. Remembers them
+  /// so `restoreDesktop` can put the same set back.
+  void hideDesktop() {
+    desktopHidden_.clear();
+    std::vector<uint32_t> ids;
+    for (const auto &s : surfaces_) {
+      if (s->panel || s->minimized) continue;
+      if (s->appId == kSwitcherAppId) continue;
+      if (workspaces_ != nullptr && s->workspace != workspaces_->current) {
+        continue;
+      }
+      ids.push_back(s->id);
+    }
+    for (uint32_t id : ids) {
+      if (ClientSurface *s = find(id)) {
+        setMinimized(*s, true);
+        desktopHidden_.push_back(id);
+      }
+    }
+    desktopShown_ = !desktopHidden_.empty();
+  }
+
+  /// Bring back what `hideDesktop` hid. Returns the window that was in
+  /// front, or 0 if there was nothing to restore.
+  uint32_t restoreDesktop() {
+    const uint32_t front = desktopHidden_.empty() ? 0 : desktopHidden_.front();
+    for (auto it = desktopHidden_.rbegin(); it != desktopHidden_.rend(); ++it) {
+      if (ClientSurface *s = find(*it); s != nullptr && s->minimized) {
+        setMinimized(*s, false);
+      }
+    }
+    desktopHidden_.clear();
+    desktopShown_ = false;
+    return front;
+  }
+
+  bool desktopShown() const { return desktopShown_; }
 
   bool empty() const { return surfaces_.empty(); }
 
@@ -3417,6 +3460,10 @@ class SurfaceRegistry : public lava::CompositorHost {
   std::list<std::unique_ptr<ClientSurface>> surfaces_;
   /// Minimized windows, oldest first — see `restoreLastMinimized`.
   std::vector<uint32_t> minimizedOrder_;
+  /// Ids Mod+D hid, in front-to-back order, so the next press can put
+  /// them back. Empty and `desktopShown_` false is the idle desktop.
+  std::vector<uint32_t> desktopHidden_;
+  bool desktopShown_ = false;
   /// The one canvas device. Every surface is a window on it, sharing its
   /// glyph atlas and texture cache.
   lava::CanvasRenderer *renderer_ = nullptr;
@@ -4746,6 +4793,8 @@ enum class BindingAction : uint8_t {
   Close,
   Minimize,
   RestoreLast,
+  ToggleMaximize,
+  ShowDesktop,
   Fullscreen,
   WorkspaceSwitch,
   WorkspaceMove,
@@ -4763,8 +4812,8 @@ enum class BindingAction : uint8_t {
 /// terminal".
 ///
 /// `needMod` is false for chords that must work without the desktop mod.
-/// Ctrl+Tab is the case: an app switcher that required Alt as well would
-/// be a different shortcut than the one the user asked for.
+/// Alt+Tab is the case: the switcher is the Windows chord even when the
+/// desktop key is Super, and requiring Mod as well would make it Super+Alt+Tab.
 struct BindingSpec {
   BindingAction action;
   /// The keysym range this covers, inclusive; `last == first` for one key.
@@ -4778,6 +4827,9 @@ struct BindingSpec {
   /// Stable id for a settings app to key off, in case the wording changes.
   const char *id;
   const char *description;
+  /// Literal Alt, not the desktop mod. Trailing so the table rows that
+  /// do not care can omit it.
+  bool alt = false;
 };
 
 /// The compositor's shortcuts, as one table.
@@ -4798,18 +4850,20 @@ constexpr BindingSpec kBindings[] = {
      "Tab", "window.switch", "Cycles open windows"},
     {BindingAction::AppSwitcherBack, XKB_KEY_Tab, XKB_KEY_Tab, true, true, false,
      "Tab", "window.switch-back", "Cycles open windows backwards"},
-    {BindingAction::AppSwitcher, XKB_KEY_Tab, XKB_KEY_Tab, false, false, true,
-     "Tab", "window.switch-mod", "Cycles open windows"},
-    {BindingAction::AppSwitcherBack, XKB_KEY_Tab, XKB_KEY_Tab, true, false, true,
-     "Tab", "window.switch-mod-back", "Cycles open windows backwards"},
+    {BindingAction::AppSwitcher, XKB_KEY_Tab, XKB_KEY_Tab, false, false, false,
+     "Tab", "window.switch-alt", "Cycles open windows", true},
+    {BindingAction::AppSwitcherBack, XKB_KEY_Tab, XKB_KEY_Tab, true, false, false,
+     "Tab", "window.switch-alt-back", "Cycles open windows backwards", true},
     {BindingAction::Terminal, XKB_KEY_Return, XKB_KEY_Return, false, false, true,
      "Return", "terminal.open", "Opens LavaTerm"},
     {BindingAction::Close, XKB_KEY_q, XKB_KEY_q, false, false, true, "Q",
      "window.close", "Closes the focused window"},
-    {BindingAction::Minimize, XKB_KEY_m, XKB_KEY_m, false, false, true, "M",
-     "window.minimize", "Hides the focused window"},
+    {BindingAction::ToggleMaximize, XKB_KEY_m, XKB_KEY_m, false, false, true, "M",
+     "window.maximize", "Maximizes or restores the focused window"},
     {BindingAction::RestoreLast, XKB_KEY_m, XKB_KEY_m, true, false, true, "M",
      "window.restore", "Brings back the window hidden last"},
+    {BindingAction::ShowDesktop, XKB_KEY_d, XKB_KEY_d, false, false, true, "D",
+     "window.desktop", "Hides every window, or brings them back"},
     {BindingAction::Fullscreen, XKB_KEY_f, XKB_KEY_f, false, false, true, "F",
      "window.fullscreen", "Toggles fullscreen on the focused window"},
     {BindingAction::WorkspaceSwitch, XKB_KEY_1, XKB_KEY_9, false, false, true,
@@ -4828,6 +4882,10 @@ constexpr BindingSpec kBindings[] = {
 std::string binding_modifiers(const BindingSpec &spec, const char *modName) {
   std::string out;
   if (spec.needMod) out = modName != nullptr ? modName : "Alt";
+  if (spec.alt) {
+    if (!out.empty()) out += "+";
+    out += "Alt";
+  }
   if (spec.ctrl) {
     if (!out.empty()) out += "+";
     out += "Ctrl";
@@ -4879,6 +4937,23 @@ void collect_keyboard_layouts(
   rxkb_context_unref(registry);
 }
 
+/// The window the title-bar buttons and Mod+M act on: decoration focus,
+/// not the Lava keyboard target. A Wayland or X11 window has
+/// `focusedSurface() == 0` and is still the one on screen.
+ClientSurface *focusedWindow(Server *server) {
+  if (server->surfaces == nullptr) return nullptr;
+  ClientSurface *focused =
+      server->surfaces->find(server->surfaces->focusedId());
+  if (focused == nullptr || focused->panel) {
+    if (FramedWindow *window =
+            server->frontToplevel(server->workspaces.current)) {
+      focused = server->surfaces->find(window->frameId);
+    }
+  }
+  if (focused == nullptr || focused->panel) return nullptr;
+  return focused;
+}
+
 void collect_key_bindings(std::vector<lava::CompositorHost::BindingEntry> &out,
                           const char *modName) {
   out.clear();
@@ -4918,7 +4993,8 @@ bool perform_binding(Server *server, const BindingSpec &spec,
   case BindingAction::AppSwitcherBack:
     server->beginSwitcherSession(
         spec.ctrl ? static_cast<uint32_t>(WLR_MODIFIER_CTRL)
-                  : shortcut_mod_mask(server->config.keyboard));
+        : spec.alt ? static_cast<uint32_t>(WLR_MODIFIER_ALT)
+                   : shortcut_mod_mask(server->config.keyboard));
     if (server->surfaces != nullptr) {
       if (ClientSurface *existing =
               server->surfaces->findByAppId(kSwitcherAppId)) {
@@ -4943,23 +5019,28 @@ bool perform_binding(Server *server, const BindingSpec &spec,
     }
     return true;
 
-  // Minimize, and the way back. A window with no frame can offer a minimize
-  // button, and the dock can now show what is hidden — but this is still the
-  // fastest handle there is: the one you put away last comes back.
   case BindingAction::Minimize: {
-    if (server->surfaces == nullptr) return false;
-    ClientSurface *focused =
-        server->surfaces->find(server->surfaces->focusedId());
-    if (focused == nullptr || focused->panel) {
-      if (FramedWindow *window =
-              server->frontToplevel(server->workspaces.current)) {
-        focused = server->surfaces->find(window->frameId);
-      }
+    if (ClientSurface *focused = focusedWindow(server)) {
+      server->minimizeSurface(*focused);
     }
-    if (focused == nullptr || focused->panel) return false;
-    server->minimizeSurface(*focused);
     return true;
   }
+
+  case BindingAction::ToggleMaximize: {
+    ClientSurface *focused = focusedWindow(server);
+    if (focused == nullptr) return false;
+    // Fullscreen already owns the output; drop it first so maximize is
+    // a real rectangle change rather than a flag under a covering game.
+    if (focused->fullscreen) {
+      server->surfaces->setFullscreen(*focused, false);
+    }
+    server->surfaces->setMaximized(*focused, !focused->maximized);
+    return true;
+  }
+
+  case BindingAction::ShowDesktop:
+    server->toggleShowDesktop();
+    return true;
 
   case BindingAction::RestoreLast:
     if (server->surfaces == nullptr) return false;
@@ -4970,18 +5051,8 @@ bool perform_binding(Server *server, const BindingSpec &spec,
     return true;
 
   case BindingAction::Fullscreen: {
-    if (server->surfaces == nullptr) return false;
-    // Decoration focus, not the Lava keyboard target: a Wayland or X11
-    // window has `focusedSurface() == 0` and is still the one on screen.
-    ClientSurface *focused =
-        server->surfaces->find(server->surfaces->focusedId());
-    if (focused == nullptr || focused->panel) {
-      if (FramedWindow *window =
-              server->frontToplevel(server->workspaces.current)) {
-        focused = server->surfaces->find(window->frameId);
-      }
-    }
-    if (focused == nullptr || focused->panel) return false;
+    ClientSurface *focused = focusedWindow(server);
+    if (focused == nullptr) return false;
     server->surfaces->setFullscreen(*focused, !focused->fullscreen);
     return true;
   }
@@ -5026,7 +5097,7 @@ bool perform_binding(Server *server, const BindingSpec &spec,
 /// bound key is not also text, and forwarding it would put a digit in whatever
 /// the user was typing in every time they changed workspace.
 bool handle_binding(Server *server, xkb_keysym_t sym, bool shift, bool ctrl,
-                    bool modDown) {
+                    bool modDown, bool altDown) {
   // The numeric keypad's Enter is the same intention as the main one, and
   // folding it here keeps the table one row per binding rather than one row
   // per spelling.
@@ -5045,7 +5116,14 @@ bool handle_binding(Server *server, xkb_keysym_t sym, bool shift, bool ctrl,
   for (const BindingSpec &spec : kBindings) {
     if (sym < spec.first || sym > spec.last) continue;
     if (spec.shift != shift || spec.ctrl != ctrl) continue;
-    if (spec.needMod != modDown) continue;
+    if (spec.alt) {
+      // Literal Alt, even when the desktop mod is Super. Do not also
+      // demand `needMod`: if the desktop mod *is* Alt, Alt+Tab would
+      // have `modDown` and a `needMod == false` row would never fire.
+      if (!altDown) continue;
+    } else if (spec.needMod != modDown) {
+      continue;
+    }
     // Subsequent Tab while the overlay is up belongs to the overlay — it
     // is how the user cycles. Eating it here would launch a second process
     // and the first would never see the key.
@@ -5178,7 +5256,8 @@ void Keyboard::on_key(wl_listener *listener, void *data) {
     const bool modDown = (modifiers & modMask) != 0;
     for (int i = 0; i < count; ++i) {
       if (handle_binding(server, syms[i], modifiers & WLR_MODIFIER_SHIFT,
-                         modifiers & WLR_MODIFIER_CTRL, modDown)) {
+                         modifiers & WLR_MODIFIER_CTRL, modDown,
+                         modifiers & WLR_MODIFIER_ALT)) {
         // A compositor binding ate the key — do not also start repeating it
         // into a client (Alt+Q held would close a stream of windows).
         server->stopKeyRepeat();
@@ -5997,6 +6076,27 @@ void Server::injectSwitcherCommit() {
   // commit. 341 is GLFW_KEY_LEFT_CONTROL, matching `KeyCode.leftControl`.
   surface->canvas->keyEvent(341, 0, 0);
   surfaces->pump(*surface);
+}
+
+void Server::toggleShowDesktop() {
+  if (surfaces == nullptr) return;
+  if (surfaces->desktopShown()) {
+    const uint32_t front = surfaces->restoreDesktop();
+    if (ClientSurface *surface = surfaces->find(front)) {
+      focusSurface(*surface);
+    } else {
+      focus(frontToplevel(workspaces.current));
+    }
+    update_pointer_focus(0);
+    return;
+  }
+  surfaces->hideDesktop();
+  // Nothing on screen to type into. Clearing both halves is the same
+  // as the last minimize in a stack of them.
+  setFocusedSurface(0);
+  surfaces->setFocused(0);
+  wlr_seat_keyboard_notify_clear_focus(seat);
+  update_pointer_focus(0);
 }
 
 void Server::minimizeSurface(ClientSurface &surface) {
