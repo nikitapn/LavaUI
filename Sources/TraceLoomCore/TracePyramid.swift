@@ -19,6 +19,25 @@ public struct TracePyramid: Sendable {
         return points[minima[1]].value...points[maxima[1]].value
     }
 
+    /// Min/max value among points whose time falls in `timeRange`.
+    ///
+    /// The chart uses this for the visible X window so a series whose absolute
+    /// values are huge (unix millis, counters) still uses the full lane height
+    /// for the delta that is actually on screen. The global `valueRange` would
+    /// pin that delta to a single pixel once an out-of-window 0 or other
+    /// outlier is in the tree.
+    public func valueRange(in timeRange: ClosedRange<Double>) -> ClosedRange<Double>? {
+        guard !points.isEmpty, timeRange.upperBound >= timeRange.lowerBound else { return nil }
+        let lower = lowerBound(timeRange.lowerBound)
+        let upper = upperBound(timeRange.upperBound)
+        guard lower < upper else { return nil }
+        let extrema = rangeExtrema(lower..<upper)
+        guard extrema.minimum >= 0, extrema.maximum >= 0 else { return nil }
+        let lo = points[extrema.minimum].value
+        let hi = points[extrema.maximum].value
+        return Swift.min(lo, hi)...Swift.max(lo, hi)
+    }
+
     public init(points: [TracePoint]) {
         self.points = points
         var base = 1

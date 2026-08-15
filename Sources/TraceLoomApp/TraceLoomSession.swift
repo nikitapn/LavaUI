@@ -28,12 +28,15 @@ final class TraceLoomSession {
     /// Outcome of the last load until the next one starts.
     var notice: TraceLoomNotice?
 
-    var showLog = false
     var showSettings = false
 
     /// Timeline domain. Nil means fit all parsed data.
     var zoomStart: Double?
     var zoomEnd: Double?
+
+    /// `lanes` gives each series its own strip; `overlay` stacks them in one
+    /// plot so a long rule list does not squash every chart to a few pixels.
+    var timelineLayout: TimelineLayout = .lanes
 
     init(
         rules: String = TraceLoom.sampleRules,
@@ -98,6 +101,11 @@ final class TraceLoomSession {
     private func report(_ message: String) {
         FileHandle.standardError.write(Data("TraceLoom: \(message)\n".utf8))
     }
+}
+
+enum TimelineLayout: String, CaseIterable, Sendable {
+    case lanes
+    case overlay
 }
 
 struct TraceLoomNotice {

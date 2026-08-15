@@ -28,6 +28,37 @@ import Testing
     #expect(sampled.allSatisfy { $0.time >= 32 && $0.time <= 80 })
 }
 
+@Test func valueRangeInViewportIgnoresOutsideExtrema() {
+    var points = (0..<100).map { TracePoint(time: Double($0), value: 50) }
+    points[10].value = 0
+    points[50].value = 80
+    points[90].value = 1_000
+    let pyramid = TracePyramid(points: points)
+    #expect(pyramid.valueRange == 0...1_000)
+    #expect(pyramid.valueRange(in: 40...60) == 50...80)
+}
+
+@Test func valueRangeInViewportFitsLargeOffsetDelta() {
+    // The screenshot case: unix-millis Y values whose delta is only a few
+    // million. Scaling against 0 (or an out-of-window 0) flattens the lane.
+    let base = 1_716_769_247_698.0
+    let delta = 3_720_951.0
+    let points = [
+        TracePoint(time: 0, value: 0),
+        TracePoint(time: 1, value: base),
+        TracePoint(time: 2, value: base + 1_000_000),
+        TracePoint(time: 3, value: base + delta),
+    ]
+    let range = TracePyramid(points: points).valueRange(in: 1...3)
+    #expect(range?.lowerBound == base)
+    #expect(range?.upperBound == base + delta)
+}
+
+@Test func valueRangeInEmptyViewportIsNil() {
+    let points = [TracePoint(time: 5, value: 1), TracePoint(time: 6, value: 2)]
+    #expect(TracePyramid(points: points).valueRange(in: 0...1) == nil)
+}
+
 @Test func fiftyThousandIrregularPointsStayPixelBoundedAndKeepSpikes() {
     var time = 0.0
     var points: [TracePoint] = []

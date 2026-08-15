@@ -66,11 +66,18 @@ struct TraceLoomApp {
                     }
                     Menu("View", id: "view") {
                         MenuItem(
-                            "Show Log Editor",
-                            id: "view.show-log",
-                            isChecked: session.showLog
+                            "Lanes",
+                            id: "view.lanes",
+                            isChecked: session.timelineLayout == .lanes
                         ) {
-                            session.showLog.toggle()
+                            session.timelineLayout = .lanes
+                        }
+                        MenuItem(
+                            "Overlay",
+                            id: "view.overlay",
+                            isChecked: session.timelineLayout == .overlay
+                        ) {
+                            session.timelineLayout = .overlay
                         }
                         MenuSeparator()
                         MenuItem(

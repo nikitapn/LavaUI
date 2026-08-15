@@ -179,6 +179,7 @@ public struct TraceLoom: View {
     @State private var assistantExample = ""
     @State private var showAssistant = false
     @State private var assistant = AssistantSession()
+    @State private var showParseRules = false
 
     init(session: TraceLoomSession) {
         self.session = session
@@ -268,71 +269,28 @@ public struct TraceLoom: View {
         let traces = displayed
         VStack(flexGrow: 1) {
             header(parsed)
-            Divider()
-            VStack(padding: 6) {
-                sectionTitle("PARSING RULES", detail: "type | name | regex | time | value | group")
-                EditorView(
-                    text: $session.rules,
-                    rules: ruleHighlighting,
-                    style: ruleStyle,
-                    visibleLines: 20,
-                    decorations: decorations(
-                        prefix: "Rule ", severity: .error, in: session.rules
-                    ),
-                    onDecorationTap: { tappedDiagnostic = $0.message }
-                )
-                .agentId("rules-editor")
-                // Floats over the editor's own corner instead of taking a
-                // layout row of its own. Composition overlay, not the popup
-                // one: the button is always there, and popup semantics would
-                // make every click elsewhere in the window an outside-click
-                // dismissal.
-                .overlay(alignment: .bottomTrailing, inset: 8) {
-                    assistantLauncher()
-                }
-                if let tappedDiagnostic {
-                    Text("⚑ \(tappedDiagnostic)", color: .selected)
-                        .agentId("tapped-diagnostic")
-                }
-            }
-            .background(Environment.current.theme.panel)
-            .cornerRadius(7)
 
-            Divider()
-            VStack(flexGrow: 1, padding: 6) {
-                HStack(alignment: .center) {
-                    sectionTitle("UNIFIED TIMELINE", detail: timelineDetail(traces))
-                    Spacer()
-                    if session.zoomStart != nil {
-                        Text("Reset zoom", color: .accent, onClick: { resetZoom() })
-                            .padding(4)
-                            .hoverBackground(Environment.current.theme.hover)
-                            .cornerRadius(4)
-                            .agentId("reset-zoom")
-                    }
-                    Text("live parse", color: .muted)
-                }
-                timeline(traces)
-                    .agentId("unified-timeline")
-                legend(traces)
-                diagnostics(parsed)
+            HStack(alignment: .center) {
+                sectionTitle("UNIFIED TIMELINE", detail: timelineDetail(traces))
+                Spacer()
+                layoutPicker
             }
-            Expand("Log input · \(logLineCount) lines", isExpanded: $session.showLog) {
-                VStack {
-                    EditorView(
-                        text: $session.log,
-                        visibleLines: 8,
-                        decorations: decorations(
-                            prefix: "Log ", severity: .warning, in: session.log
-                        ),
-                        onDecorationTap: { tappedDiagnostic = $0.message },
-                        controller: logEditorController
-                    )
-                    .agentId("log-editor")
-                }
-            }
-            .padding(8)
-            .agentId("log-disclosure")
+
+            timeline(traces)
+            .agentId("unified-timeline")
+
+            legend(traces)
+
+            EditorView(
+               text: $session.log,
+               visibleLines: 8,
+               decorations: decorations(
+                   prefix: "Log ", severity: .warning, in: session.log
+               ),
+               onDecorationTap: { tappedDiagnostic = $0.message },
+               controller: logEditorController
+            )
+            .agentId("log-editor")
         }
         .onDrop { urls in session.loadLog(from: urls) }
         .overlay(
@@ -362,6 +320,11 @@ public struct TraceLoom: View {
     private func header(_ parsed: TraceParseResult) -> some View {
         VStack {
             HStack(padding: 10) {
+                if WindowBridge.drawsOwnChrome {
+                    WindowControls()
+                        .padding(.trailing, 6)
+                        .windowChrome()
+                }
                 HStack() {
                     Text("\(parsed.series.count) rules", color: .secondary)
                     Text("\(parsed.matchedLineCount) matched lines", color: .secondary)
@@ -369,6 +332,46 @@ public struct TraceLoom: View {
                 }
 
                 Spacer()
+
+                Button("Open parsing rules") { showParseRules.toggle() }
+                    .padding(0)
+                    .overlay(
+                        isPresented: $showParseRules,
+                        placement: .viewport(inset: 48),
+                        style: OverlayStyle(
+                            background: Theme.current.background.opacity(0.93),
+                        )
+                    ) {
+                        VStack() {
+                            sectionTitle("PARSING RULES", detail: "type | name | regex | time | value | group")
+                            EditorView(
+                                text: $session.rules,
+                                rules: ruleHighlighting,
+                                style: ruleStyle,
+                                visibleLines: 14,
+                                decorations: decorations(
+                                    prefix: "Rule ", severity: .error, in: session.rules
+                                ),
+                                onDecorationTap: { tappedDiagnostic = $0.message }
+                            )
+                            .agentId("rules-editor")
+                            .background(Theme.current.background.opacity(0.70))
+
+                            assistantPanel()
+                            Spacer()
+                            diagnostics(parsed)
+                        }
+                        .flexGrow(1)
+                    }
+                Spacer()
+                if session.zoomStart != nil {
+                    Text("Reset zoom", color: .accent, onClick: { resetZoom() })
+                        .padding(4)
+                        .hoverBackground(Environment.current.theme.hover)
+                        .cornerRadius(4)
+                        .agentId("reset-zoom")
+                }
+                Text("live parse", color: .muted)
 
                 HStack() {
                     Text("Paste, edit, drop a file here, or", color: .dim)
@@ -420,11 +423,6 @@ public struct TraceLoom: View {
             Text("Settings", color: .accent)
             Divider()
             Toggle(
-                "Show log editor",
-                isOn: $session.showLog
-            )
-            .agentId("settings-show-log")
-            Toggle(
                 "Light theme",
                 isOn: Binding(
                     get: { Theme.current == .light },
@@ -447,45 +445,12 @@ public struct TraceLoom: View {
 
     // MARK: - Rule assistant
 
-    /// Compact launcher at the quiet edge of the rules workspace. The assistant
-    /// itself is detached from layout, so opening it does not push the editor,
-    /// timeline, or log around.
-    private func assistantLauncher() -> some View {
-        let binding = $showAssistant
-        return Button(showAssistant ? "Close AI assistant" : "AI assistant") {
-            binding.wrappedValue.toggle()
-        }
-        .agentId("assistant-toggle")
-        // The panel itself stays a popup: it *is* modal-ish — it appears on
-        // demand and an outside click should put it away. Only the launcher
-        // needed the composition overlay.
-        .overlay(
-            isPresented: binding,
-            placement: .viewport(inset: 28),
-            style: OverlayStyle(
-                background: Environment.current.theme.panel.opacity(0.88),
-                cornerRadius: 14,
-                padding: 18,
-                backdropBlurRadius: 12
-            )
-        ) {
-            assistantPanel()
-        }
-        .agentId("assistant-launcher")
-    }
-
     private func assistantPanel() -> some View {
         let state = assistant.snapshot
         return VStack(padding: 6) {
             HStack(alignment: .center) {
                 Text("RULE ASSISTANT", color: .accent)
                 Text(assistant.model, color: .dim)
-                Spacer()
-                Text("Close", color: .muted, onClick: { showAssistant = false })
-                    .padding(4)
-                    .hoverBackground(Environment.current.theme.hover)
-                    .cornerRadius(4)
-                    .agentId("assistant-close")
             }
             Divider()
             Text(
@@ -601,13 +566,36 @@ public struct TraceLoom: View {
     private func timelineDetail(_ traces: [DisplaySeries]) -> String {
         let lo = traces.compactMap { $0.series.points.first?.time }.min()
         let hi = traces.compactMap { $0.series.points.last?.time }.max()
+        let mode = session.timelineLayout == .overlay ? "overlay" : "lanes"
         guard let lo, let hi else {
             return "waiting for matching log lines"
         }
         if let zoomStart = session.zoomStart, let zoomEnd = session.zoomEnd {
-            return "\(formatTime(zoomStart)) — \(formatTime(zoomEnd)) · zoomed"
+            return "\(formatTime(zoomStart)) — \(formatTime(zoomEnd)) · zoomed · \(mode)"
         }
-        return "\(formatTime(lo)) — \(formatTime(hi)) · shared X axis"
+        return "\(formatTime(lo)) — \(formatTime(hi)) · \(mode)"
+    }
+
+    private var layoutPicker: some View {
+        HStack(padding: 2) {
+            layoutChoice("Lanes", .lanes)
+            layoutChoice("Overlay", .overlay)
+        }
+        .agentId("timeline-layout")
+    }
+
+    private func layoutChoice(_ title: String, _ layout: TimelineLayout) -> some View {
+        let selected = session.timelineLayout == layout
+        return Text(
+            title,
+            color: selected ? .accent : .muted,
+            onClick: { session.timelineLayout = layout }
+        )
+        .padding(4)
+        .background(selected ? Environment.current.theme.hover : .clear)
+        .hoverBackground(Environment.current.theme.hover)
+        .cornerRadius(4)
+        .agentId("timeline-layout-\(layout.rawValue)")
     }
 
     private func timeline(_ traces: [DisplaySeries]) -> some View {
@@ -622,9 +610,10 @@ public struct TraceLoom: View {
         let hasValidZoom = clampedMax > clampedMin
         let tMin = hasValidZoom ? clampedMin : fullMin
         let tMax = hasValidZoom ? clampedMax : fullMax
-        let groupedRanges = yRanges(traces)
-        let plotLeft: Float = 116
+        let groupedRanges = yRanges(traces, in: tMin...tMax)
+        let plotLeft: Float = 18
         let plotRight: Float = 18
+        let overlay = session.timelineLayout == .overlay
 
         return Canvas(
             label: "UnifiedTimeline",
@@ -671,11 +660,11 @@ public struct TraceLoom: View {
                                 tMin: tMin,
                                 tMax: tMax,
                                 plotLeft: plotLeft,
-                                plotRight: plotRight
+                                plotRight: plotRight,
+                                overlay: overlay
                             ) {
                                 probeTime = point.time
                                 if let line = point.sourceLine {
-                                    session.showLog = true
                                     logEditorController.reveal(line: line)
                                 }
                             } else {
@@ -689,14 +678,20 @@ public struct TraceLoom: View {
                 }
             }
         ) { draw, frame in
-            let left = plotLeft
-            let right = plotRight
-            let top: Float = 16
-            let bottom: Float = 30
-            let plotW = max(1, frame.w - left - right)
-            let lanes = max(1, traces.count)
-            let laneH = max(42, (frame.h - top - bottom) / Float(lanes))
-            let plotBottom = top + laneH * Float(lanes)
+            let plot = TimelinePlot.make(
+                overlay: overlay,
+                width: frame.w,
+                height: frame.h,
+                plotLeft: plotLeft,
+                plotRight: plotRight,
+                laneCount: traces.count
+            )
+            let left = plot.left
+            let right = plot.right
+            let top = plot.top
+            let bottom = plot.bottom
+            let plotW = plot.plotW
+            let plotBottom = plot.plotBottom
             let activeProbeTime: Double? = {
                 if let cx = cursorLocalX, cx >= left, cx <= frame.w - right {
                     return tMin + Double((cx - left) / plotW) * (tMax - tMin)
@@ -713,24 +708,49 @@ public struct TraceLoom: View {
                 draw.text(formatTime(value), x: x - 29, y: frame.y + frame.h - bottom + 5, w: 70, h: 18, color: theme.textDim)
             }
 
+            if overlay {
+                draw.line(
+                    x1: frame.x + left, y1: frame.y + plotBottom,
+                    x2: frame.x + left + plotW, y2: frame.y + plotBottom,
+                    color: theme.border.opacity(0.65), width: 1
+                )
+                // Colour key lives in the plot so the legend below is not the
+                // only way to tell overlaid series apart.
+                for item in traces {
+                    draw.text(
+                        item.series.rule.name,
+                        x: frame.x + left + 6,
+                        y: frame.y + top + 4 + Float(item.id) * 16,
+                        w: 160, h: 16, color: item.color
+                    )
+                }
+            }
+
             draw.pushClip(
                 x: frame.x + left, y: frame.y + top,
                 w: plotW, h: min(plotBottom, frame.h - bottom) - top
             )
             for item in traces {
-                let lane = item.id
-                let yTop = frame.y + top + Float(lane) * laneH
-                let yBottom = min(frame.y + frame.h - bottom, yTop + laneH)
-                draw.line(x1: frame.x + left, y1: yBottom, x2: frame.x + left + plotW, y2: yBottom, color: theme.border.opacity(0.65), width: 1)
-                draw.text(item.series.rule.name, x: frame.x + 8, y: yTop + 8, w: left - 12, h: 18, color: item.color)
+                let band = plot.band(index: item.id, originY: frame.y)
+                if !overlay {
+                    draw.line(
+                        x1: frame.x + left, y1: band.yBottom,
+                        x2: frame.x + left + plotW, y2: band.yBottom,
+                        color: theme.border.opacity(0.65), width: 1
+                    )
+                    draw.text(
+                        item.series.rule.name,
+                        x: frame.x + 8, y: band.yTop + 8,
+                        w: 160, h: 18, color: item.color
+                    )
+                }
                 let group = item.series.rule.scaleGroup ?? "@\(item.id)"
                 let range = groupedRanges[group] ?? (0, 1)
-                let ySpan = range.max > range.min ? range.max - range.min : 1
                 func px(_ time: Double) -> Float {
                     frame.x + left + Float((time - tMin) / (tMax - tMin)) * plotW
                 }
                 func py(_ value: Double) -> Float {
-                    yBottom - 7 - Float((value - range.min) / ySpan) * max(1, laneH - 18)
+                    plotY(value, range: range, yBottom: band.yBottom, laneH: band.height)
                 }
 
                 switch item.series.rule.kind {
@@ -774,8 +794,12 @@ public struct TraceLoom: View {
                     )
                     for point in visible {
                         let x = px(point.time)
-                        draw.line(x1: x, y1: yTop + 7, x2: x, y2: yBottom - 7, color: item.color, width: 3)
-                        draw.circle(cx: x, cy: yTop + 9, radius: 3.5, color: item.color)
+                        draw.line(
+                            x1: x, y1: band.yTop + 7,
+                            x2: x, y2: band.yBottom - 7,
+                            color: item.color, width: 3
+                        )
+                        draw.circle(cx: x, cy: band.yTop + 9, radius: 3.5, color: item.color)
                     }
                 }
             }
@@ -810,20 +834,20 @@ public struct TraceLoom: View {
 
                 // Use the original series rather than the display pyramid:
                 // downsampling must never change which value inspection finds.
+                var overlayLabel = 0
                 for item in traces {
                     guard let point = nearestPoint(in: item.series.points, to: time),
                           point.time >= tMin, point.time <= tMax
                     else { continue }
-                    let lane = item.id
-                    let yTop = frame.y + top + Float(lane) * laneH
-                    let yBottom = min(frame.y + frame.h - bottom, yTop + laneH)
+                    let band = plot.band(index: item.id, originY: frame.y)
                     let group = item.series.rule.scaleGroup ?? "@\(item.id)"
                     let range = groupedRanges[group] ?? (0, 1)
-                    let ySpan = range.max > range.min ? range.max - range.min : 1
                     let pointX = frame.x + left
                         + Float((point.time - tMin) / (tMax - tMin)) * plotW
-                    let pointY = yBottom - 7
-                        - Float((point.value - range.min) / ySpan) * max(1, laneH - 18)
+                    let pointY = plotY(
+                        point.value, range: range,
+                        yBottom: band.yBottom, laneH: band.height
+                    )
 
                     // Two filled circles make a crisp outline without adding
                     // another shape primitive to LavaUI.
@@ -834,11 +858,15 @@ public struct TraceLoom: View {
                     let valueW: Float = 86
                     let preferRight = pointX + 8 + valueW <= frame.x + frame.w - right
                     let valueX = preferRight ? pointX + 8 : pointX - valueW - 8
-                    let valueY = min(max(yTop + 2, pointY - 9), yBottom - 20)
-                    // draw.roundedRect(
-                    //     x: valueX, y: valueY, w: valueW, h: 18,
-                    //     color: theme.panel.opacity(0.94), radius: 4
-                    // )
+                    // Overlay stacks labels so independently-scaled series do
+                    // not write on top of each other at the same pixel.
+                    let valueY: Float
+                    if overlay {
+                        valueY = frame.y + top + 20 + Float(overlayLabel) * 16
+                        overlayLabel += 1
+                    } else {
+                        valueY = min(max(band.yTop + 2, pointY - 9), band.yBottom - 20)
+                    }
                     draw.text(
                         value, x: valueX, y: valueY + 2, w: valueW, h: 14,
                         color: item.color
@@ -872,8 +900,8 @@ public struct TraceLoom: View {
         String(format: "%.6g", value)
     }
 
-    /// Resolves only the clicked lane, then binary-searches that series. Dense
-    /// timelines therefore remain just as cheap to click as sparse ones.
+    /// Lanes: only the strip under the pointer. Overlay: nearest series in
+    /// screen space, because every chart occupies the same rectangle.
     private func hitTestPoint(
         traces: [DisplaySeries],
         ranges: [String: (min: Double, max: Double)],
@@ -884,29 +912,60 @@ public struct TraceLoom: View {
         tMin: Double,
         tMax: Double,
         plotLeft: Float,
-        plotRight: Float
+        plotRight: Float,
+        overlay: Bool
     ) -> TracePoint? {
-        let top: Float = 16
-        let bottom: Float = 30
-        let plotW = max(1, frame.w - plotLeft - plotRight)
-        let laneH = max(42, (frame.h - top - bottom) / Float(max(1, traces.count)))
-        let lane = Int((localY - top) / laneH)
-        guard lane >= 0, let item = traces.first(where: { $0.id == lane }),
-              let point = nearestPoint(in: item.series.points, to: time),
-              point.time >= tMin, point.time <= tMax
-        else { return nil }
+        let plot = TimelinePlot.make(
+            overlay: overlay,
+            width: frame.w,
+            height: frame.h,
+            plotLeft: plotLeft,
+            plotRight: plotRight,
+            laneCount: traces.count
+        )
+        let candidates: [DisplaySeries]
+        if overlay {
+            candidates = traces
+        } else {
+            let lane = Int((localY - plot.top) / plot.laneH)
+            guard lane >= 0, let item = traces.first(where: { $0.id == lane }) else {
+                return nil
+            }
+            candidates = [item]
+        }
 
-        let yTop = top + Float(lane) * laneH
-        let yBottom = min(frame.h - bottom, yTop + laneH)
-        let group = item.series.rule.scaleGroup ?? "@\(item.id)"
-        let range = ranges[group] ?? (0, 1)
-        let span = range.max > range.min ? range.max - range.min : 1
-        let pointX = plotLeft + Float((point.time - tMin) / (tMax - tMin)) * plotW
-        let pointY = yBottom - 7
-            - Float((point.value - range.min) / span) * max(1, laneH - 18)
-        let dx = localX - pointX
-        let dy = localY - pointY
-        return dx * dx + dy * dy <= 10 * 10 ? point : nil
+        var best: (point: TracePoint, dist: Float)?
+        for item in candidates {
+            guard let point = nearestPoint(in: item.series.points, to: time),
+                  point.time >= tMin, point.time <= tMax
+            else { continue }
+            let band = plot.band(index: item.id, originY: 0)
+            let group = item.series.rule.scaleGroup ?? "@\(item.id)"
+            let range = ranges[group] ?? (0, 1)
+            let pointX = plot.left
+                + Float((point.time - tMin) / (tMax - tMin)) * plot.plotW
+            let dx = localX - pointX
+            let dist: Float
+            if item.series.rule.kind == .event {
+                // Event markers are a full-height tick; X proximity is enough.
+                guard abs(dx) <= 4,
+                      localY >= plot.top, localY <= plot.plotBottom
+                else { continue }
+                dist = dx * dx
+            } else {
+                let pointY = plotY(
+                    point.value, range: range,
+                    yBottom: band.yBottom, laneH: band.height
+                )
+                let dy = localY - pointY
+                dist = dx * dx + dy * dy
+                guard dist <= 10 * 10 else { continue }
+            }
+            if best == nil || dist < best!.dist {
+                best = (point, dist)
+            }
+        }
+        return best?.point
     }
 
     private func legend(_ traces: [DisplaySeries]) -> some View {
@@ -952,11 +1011,96 @@ public struct TraceLoom: View {
         let text: String
     }
 
-    private func yRanges(_ traces: [DisplaySeries]) -> [String: (min: Double, max: Double)] {
+    /// Shared plot metrics so the canvas, the probe, and hit-testing cannot
+    /// disagree about where a lane (or the single overlay rect) lives.
+    private struct TimelinePlot {
+        var overlay: Bool
+        var left: Float
+        var right: Float
+        var top: Float
+        var bottom: Float
+        var plotW: Float
+        var plotBottom: Float
+        var laneH: Float
+
+        static func make(
+            overlay: Bool,
+            width: Float,
+            height: Float,
+            plotLeft: Float,
+            plotRight: Float,
+            laneCount: Int
+        ) -> TimelinePlot {
+            let top: Float = 16
+            let bottom: Float = 30
+            let plotW = max(1, width - plotLeft - plotRight)
+            let available = max(1, height - top - bottom)
+            if overlay {
+                return TimelinePlot(
+                    overlay: true,
+                    left: plotLeft,
+                    right: plotRight,
+                    top: top,
+                    bottom: bottom,
+                    plotW: plotW,
+                    plotBottom: top + available,
+                    laneH: available
+                )
+            }
+            let lanes = max(1, laneCount)
+            let laneH = max(42, available / Float(lanes))
+            return TimelinePlot(
+                overlay: false,
+                left: plotLeft,
+                right: plotRight,
+                top: top,
+                bottom: bottom,
+                plotW: plotW,
+                plotBottom: top + laneH * Float(lanes),
+                laneH: laneH
+            )
+        }
+
+        func band(index: Int, originY: Float) -> (yTop: Float, yBottom: Float, height: Float) {
+            if overlay {
+                let yTop = originY + top
+                let yBottom = originY + plotBottom
+                return (yTop, yBottom, yBottom - yTop)
+            }
+            let yTop = originY + top + Float(index) * laneH
+            let yBottom = min(originY + plotBottom, yTop + laneH)
+            return (yTop, yBottom, laneH)
+        }
+    }
+
+    /// Map a series value into the lane so the visible min sits on the bottom
+    /// padding and the visible max on the top. Subtract in Double first:
+    /// values like unix-millis (1.7e12) are not Float-exact, but their delta is.
+    private func plotY(
+        _ value: Double,
+        range: (min: Double, max: Double),
+        yBottom: Float,
+        laneH: Float
+    ) -> Float {
+        let plotH = max(1, laneH - 18)
+        let span = range.max - range.min
+        if span > 0 {
+            return yBottom - 7 - Float((value - range.min) / span) * plotH
+        }
+        return yBottom - 7 - plotH * 0.5
+    }
+
+    /// Per-group Y extents for the *visible* X window, not the whole series.
+    /// Otherwise a 3.7M delta around 1.7e12 (or any window next to a 0) draws
+    /// as a flat line against the global min/max.
+    private func yRanges(
+        _ traces: [DisplaySeries],
+        in timeRange: ClosedRange<Double>
+    ) -> [String: (min: Double, max: Double)] {
         var ranges: [String: (min: Double, max: Double)] = [:]
         for item in traces where item.series.rule.kind != .event {
             let key = item.series.rule.scaleGroup ?? "@\(item.id)"
-            guard let valueRange = item.pyramid.valueRange else { continue }
+            guard let valueRange = item.pyramid.valueRange(in: timeRange) else { continue }
             if let old = ranges[key] {
                 ranges[key] = (
                     min(old.min, valueRange.lowerBound),
