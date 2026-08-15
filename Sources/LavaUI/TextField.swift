@@ -273,6 +273,36 @@ extension LeafNode {
         )
     }
 
+    /// Clipboard text in the form this control can hold.
+    ///
+    /// Two separate corrections, and only the second depends on the control:
+    ///
+    /// **Line endings are normalised to `\n` first, always.** A clipboard
+    /// filled by a browser, a Windows tool or a terminal often carries CRLF,
+    /// and a stray CR is not a cosmetic problem here: `SoftWrap` treats
+    /// `"\r\n"` as one grapheme, so a buffer holding any CR falls off the
+    /// ASCII fast path and re-scans the whole thing as `Character`s on every
+    /// mount — documented there as ~130ms on a 10 MB log.
+    ///
+    /// **Newlines survive only in a multiline control.** A single-line field
+    /// has nowhere to show a line break, so it becomes a space rather than an
+    /// invisible character that moves the caret somewhere the text is not.
+    /// A multiline field and `EditorView` take the text as it is: pasting a
+    /// stack trace into a log pane and getting one long line was the bug this
+    /// replaces.
+    func pastable(_ raw: String) -> String {
+        var text = raw
+        // Guarded because the scan is the whole cost on a large paste, and a
+        // clipboard filled on this platform usually has no CR at all.
+        if text.contains("\r") {
+            text = text
+                .replacingOccurrences(of: "\r\n", with: "\n")
+                .replacingOccurrences(of: "\r", with: "\n")
+        }
+        guard !isMultiline else { return text }
+        return text.replacingOccurrences(of: "\n", with: " ")
+    }
+
     /// Called after any key: an offscreen caret reads as a frozen editor.
     func followCaret() {
         guard let f = font ?? FontStore.default else { return }
@@ -348,10 +378,11 @@ extension LeafNode {
                 editing.deleteBackward()
             }
         case KeyCode.v where event.control:
-            let pasted = ClipboardBridge.read()
+            let pasted = pastable(ClipboardBridge.read())
             if !pasted.isEmpty {
-                // Single-line: a pasted newline would otherwise be invisible.
-                editing.insert(pasted.replacingOccurrences(of: "\n", with: " "))
+                // One `insert`, not one per line: it is one edit, so it is one
+                // undo step and one re-wrap rather than a thousand of each.
+                editing.insert(pasted)
             }
         default:
             return false
