@@ -110,6 +110,9 @@ struct MenuImportHost::Impl {
   std::string activeService;
   std::string activePath;
   DbusmenuClient *client = nullptr;
+  /// The address the open client was created with, resolved.
+  std::string openService;
+  std::string openPath;
   std::vector<Item> items;
   bool dirty = false;
   uint64_t revision = 0;
@@ -228,6 +231,11 @@ struct MenuImportHost::Impl {
       path = it->second.objectPath;
     }
 
+    // Kept for `mergeToggleProperties`, which has to ask the same object for
+    // what the library did not.
+    openService = service;
+    openPath = path;
+
     client = dbusmenu_client_new(service.c_str(), path.c_str());
     if (client == nullptr) {
       std::cerr << "canvas: dbusmenu client for window " << active
@@ -253,6 +261,84 @@ struct MenuImportHost::Impl {
     DbusmenuMenuitem *root = dbusmenu_client_get_root(client);
     if (root == nullptr) return;
     append(root, -1);
+    mergeToggleProperties();
+  }
+
+  /// Fills in the check state, which the library does not fetch.
+  ///
+  /// `DbusmenuClient` asks for a fixed set of properties and only that set:
+  ///
+  ///     GetLayout(0, -1, ["type", "label", "visible", "enabled",
+  ///                       "children-display", "accessible-desc"])
+  ///
+  /// `toggle-type` and `toggle-state` are not in it, are therefore never sent
+  /// by the application, and are missing from every menu item the library
+  /// hands back — there is no client API to widen the list. So a menu full of
+  /// checkboxes came out with every box unticked: nm-applet's "Enable
+  /// Networking" read as *off* while the network was plainly on.
+  ///
+  /// One extra round trip per layout change asks for exactly the two, which is
+  /// cheap next to the layout itself and happens on the same thread for the
+  /// same reason everything else here does.
+  void mergeToggleProperties()
+  {
+    if (items.empty() || openService.empty() || openPath.empty()) return;
+    if (conn == nullptr) {
+      conn = g_bus_get_sync(G_BUS_TYPE_SESSION, nullptr, nullptr);
+      if (conn == nullptr) return;
+    }
+
+    GVariantBuilder ids;
+    g_variant_builder_init(&ids, G_VARIANT_TYPE("ai"));
+    for (const Item &it : items) g_variant_builder_add(&ids, "i", it.id);
+    static const gchar *const wanted[] = {"toggle-type", "toggle-state",
+                                          nullptr};
+
+    GError *err = nullptr;
+    GVariant *ret = g_dbus_connection_call_sync(
+      conn, openService.c_str(), openPath.c_str(), "com.canonical.dbusmenu",
+      "GetGroupProperties",
+      g_variant_new("(@ai^as)", g_variant_builder_end(&ids), wanted),
+      G_VARIANT_TYPE("(a(ia{sv}))"), G_DBUS_CALL_FLAGS_NONE, 1000, nullptr,
+      &err);
+    if (ret == nullptr) {
+      // Not worth a word in the log: an application that answers the layout
+      // and not this is drawing an unticked box, which is what it did before.
+      if (err) g_error_free(err);
+      return;
+    }
+
+    GVariantIter *rows = nullptr;
+    g_variant_get(ret, "(a(ia{sv}))", &rows);
+    gint32 id = 0;
+    GVariantIter *props = nullptr;
+    while (g_variant_iter_loop(rows, "(ia{sv})", &id, &props)) {
+      const gchar *key = nullptr;
+      GVariant *value = nullptr;
+      bool checkable = false;
+      int state = 0;
+      while (g_variant_iter_loop(props, "{&sv}", &key, &value)) {
+        if (g_strcmp0(key, "toggle-type") == 0 &&
+            g_variant_is_of_type(value, G_VARIANT_TYPE_STRING)) {
+          const gchar *type = g_variant_get_string(value, nullptr);
+          checkable = type != nullptr && *type != '\0';
+        } else if (g_strcmp0(key, "toggle-state") == 0 &&
+                   g_variant_is_of_type(value, G_VARIANT_TYPE_INT32)) {
+          state = g_variant_get_int32(value);
+        }
+      }
+      if (!checkable) continue;
+      for (Item &it : items) {
+        if (it.id == id) {
+          // Anything but 1 is unchecked, including DBusMenu's "indeterminate"
+          // — a tri-state box is not something this menu can draw.
+          it.checked = state == DBUSMENU_MENUITEM_TOGGLE_STATE_CHECKED ? 1 : 0;
+          break;
+        }
+      }
+    }
+    g_variant_iter_free(rows);
+    g_variant_unref(ret);
   }
 
   /// Depth-first, parents before children, which is the order a menu is drawn
@@ -294,6 +380,10 @@ struct MenuImportHost::Impl {
 
       const gchar *toggle =
         dbusmenu_menuitem_property_get(mi, DBUSMENU_MENUITEM_PROP_TOGGLE_TYPE);
+      // Almost always null — see `mergeToggleProperties`, which is where the
+      // check state actually comes from. Read here anyway for the day the
+      // library learns to fetch it, and because a menu item that carries the
+      // property already should not need a second call to be believed.
       if (toggle != nullptr && *toggle != '\0') {
         item.checked = dbusmenu_menuitem_property_get_int(
                          mi, DBUSMENU_MENUITEM_PROP_TOGGLE_STATE) ==
