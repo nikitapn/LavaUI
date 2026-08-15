@@ -1003,7 +1003,10 @@ class ControlPlaneImpl final : public ControlPlane {
  public:
   ~ControlPlaneImpl() override {
     if (rpc_) rpc_->destroy();
-    std::remove(ControlPlane::referencePath().c_str());
+    // The path we published, not the one `referencePath()` would compute now:
+    // a compositor must never unlink another session's reference, and the
+    // only way to be sure is to remember what we wrote.
+    if (!publishedPath_.empty()) std::remove(publishedPath_.c_str());
   }
 
   bool start(wl_event_loop *loop, CompositorHost &host) {
@@ -1081,6 +1084,7 @@ class ControlPlaneImpl final : public ControlPlane {
     }
     file << oid.to_string();
     file.close();
+    publishedPath_ = path;
 
     wlr_log(WLR_INFO, "control plane: listening, reference at %s", path.c_str());
     return true;
@@ -1142,13 +1146,45 @@ class ControlPlaneImpl final : public ControlPlane {
   nprpc::Rpc *rpc_ = nullptr;
   nprpc::Poa *poa_ = nullptr;
   std::unique_ptr<CompositorImpl> servant_;
+  std::string publishedPath_;
 };
 
 }  // namespace
 
+std::string ControlPlane::sessionId() {
+  // The Wayland socket names the session, so it names the control plane too.
+  //
+  // Nothing else has to be configured for that to work: `main` publishes
+  // `WAYLAND_DISPLAY` before this runs, and every process started from inside
+  // the session inherits it — which is exactly the set of processes that
+  // should reach *this* compositor. A nested one, started from a terminal in
+  // an existing session, gets its own socket from
+  // `wl_display_add_socket_auto` and therefore its own name here, without
+  // being told it is nested.
+  const char *display = std::getenv("WAYLAND_DISPLAY");
+  if (display == nullptr || *display == '\0') return "default";
+  // The protocol allows an absolute path. The last component still names the
+  // socket, and it is the only part that can go in a filename.
+  std::string_view name{display};
+  if (const auto slash = name.rfind('/'); slash != std::string_view::npos) {
+    name.remove_prefix(slash + 1);
+  }
+  return std::string(name);
+}
+
 std::string ControlPlane::referencePath() {
+  // One name per session, not per machine. Two compositors sharing
+  // `XDG_RUNTIME_DIR` is the ordinary case while developing one — a nested
+  // session inside the live one — and with a single well-known name the
+  // second to start owns the file: every client launched afterwards connects
+  // to it, including the clients of the session that was already running, and
+  // the file is deleted out from under that session when the nested one ends.
+  if (const char *forced = std::getenv("LAVA_COMPOSITOR_IOR")) {
+    if (*forced != '\0') return forced;
+  }
   const char *dir = std::getenv("XDG_RUNTIME_DIR");
-  return std::string(dir ? dir : "/tmp") + "/lava-compositor.ior";
+  return std::string(dir ? dir : "/tmp") + "/lava-compositor-" + sessionId() +
+         ".ior";
 }
 
 std::unique_ptr<ControlPlane> ControlPlane::start(wl_event_loop *loop,

@@ -25,22 +25,87 @@ public typealias WireInputEvent = LavaIDL.InputEvent
 
 /// Where the renderer publishes its object reference, and the client reads it.
 ///
-/// A file rather than a nameserver: this is one machine, one desktop session,
-/// and requiring a separate `npnameserver` process to start before the
-/// compositor would be a deployment step in exchange for nothing. The IOR
-/// string already carries the endpoint.
+/// A file rather than a nameserver: this is one machine, and requiring a
+/// separate `npnameserver` process to start before the compositor would be a
+/// deployment step in exchange for nothing. The IOR string already carries the
+/// endpoint.
+///
+/// One file per *session*, though, not one per machine. Two compositors on one
+/// `XDG_RUNTIME_DIR` is the ordinary case while developing one — a nested
+/// session started from a terminal inside the live one — and a single
+/// well-known name makes them fight over it: the second to start owns the
+/// file, every client launched afterwards follows it regardless of which
+/// session it belongs to, and the live session is left pointing at a deleted
+/// path when the nested one ends.
 public enum ControlPlane {
+    /// Which session this process belongs to, by the name of the Wayland
+    /// socket it inherited. Nil outside a session — a plain tty, an ssh
+    /// shell, a test harness run by hand.
+    public static var sessionName: String? {
+        guard let display = ProcessInfo.processInfo.environment["WAYLAND_DISPLAY"],
+              !display.isEmpty
+        else { return nil }
+        // May be an absolute path; the last component is the socket's name.
+        return (display as NSString).lastPathComponent
+    }
+
+    /// The reference this process should read, in order of how explicit the
+    /// answer is: told outright, inherited from a session, or — for a client
+    /// started outside one — the single compositor running, if there is
+    /// exactly one.
     public static var referencePath: String {
-        let base = ProcessInfo.processInfo.environment["XDG_RUNTIME_DIR"] ?? "/tmp"
+        let environment = ProcessInfo.processInfo.environment
+        if let forced = environment["LAVA_COMPOSITOR_IOR"], !forced.isEmpty {
+            return forced
+        }
+        let base = environment["XDG_RUNTIME_DIR"] ?? "/tmp"
+        if let session = sessionName {
+            return (base as NSString)
+                .appendingPathComponent("lava-compositor-\(session).ior")
+        }
+        let running = published()
+        if running.count == 1 { return running[0] }
+        // None, or several. Either way there is no answer to give; the path
+        // named here is the one `connectToCompositor` reports as missing,
+        // alongside what it did find.
         return (base as NSString).appendingPathComponent("lava-compositor.ior")
+    }
+
+    /// Every session currently advertising a compositor, as full paths.
+    /// Sorted, so an error message reads the same twice in a row.
+    ///
+    /// A reference whose Wayland socket is gone is left out. The compositor
+    /// unlinks its own on the way out, including on a signal, but a session
+    /// that was killed outright leaves one behind — and the socket it is named
+    /// after is the cheapest thing that says so.
+    public static func published() -> [String] {
+        let base = ProcessInfo.processInfo.environment["XDG_RUNTIME_DIR"] ?? "/tmp"
+        let entries = (try? FileManager.default.contentsOfDirectory(atPath: base)) ?? []
+        return entries
+            .filter { $0.hasPrefix("lava-compositor-") && $0.hasSuffix(".ior") }
+            .filter { name in
+                let socket = (base as NSString)
+                    .appendingPathComponent(session(ofPath: name))
+                return FileManager.default.fileExists(atPath: socket)
+            }
+            .sorted()
+            .map { (base as NSString).appendingPathComponent($0) }
     }
 }
 
 /// Connects to the compositor. Returns the proxy plus the `Rpc` that owns its
 /// transport, which the caller must keep alive.
 public func connectToCompositor() throws -> (Compositor, Rpc) {
-    let ior = try String(contentsOfFile: ControlPlane.referencePath, encoding: .utf8)
-        .trimmingCharacters(in: .whitespacesAndNewlines)
+    let path = ControlPlane.referencePath
+    guard let published = try? String(contentsOfFile: path, encoding: .utf8) else {
+        // Worth spelling out rather than letting a file-not-found through: the
+        // usual cause is a client started outside the session it was meant for,
+        // and the fix is in the list.
+        throw ControlPlaneError.noCompositor(
+            path: path, running: ControlPlane.published()
+        )
+    }
+    let ior = published.trimmingCharacters(in: .whitespacesAndNewlines)
     let rpc = try RpcBuilder().setLogLevel(.warn).build()
     try rpc.startThreadPool(2)
 
@@ -332,6 +397,7 @@ public func blockingCall<T>(
 }
 
 public enum ControlPlaneError: Error, CustomStringConvertible {
+    case noCompositor(path: String, running: [String])
     case badReference(String)
     case noEndpoint(String)
     case classMismatch
@@ -339,10 +405,32 @@ public enum ControlPlaneError: Error, CustomStringConvertible {
 
     public var description: String {
         switch self {
+        case .noCompositor(let path, let running):
+            var text = "no compositor at \(path)"
+            if running.isEmpty {
+                text += " — none is running"
+            } else {
+                let sessions = running.map(ControlPlane.session(ofPath:))
+                text += " — sessions running: \(sessions.joined(separator: ", "))."
+                text += " Set WAYLAND_DISPLAY to the one you mean"
+                text += " (or LAVA_COMPOSITOR_IOR to a reference file)"
+            }
+            return text
         case .badReference(let s): return "not a usable object reference: \(s)"
         case .noEndpoint(let urls): return "no usable endpoint among: \(urls)"
         case .classMismatch: return "reference is not a lava.Compositor"
         case .timedOut: return "the compositor did not answer"
         }
+    }
+}
+
+extension ControlPlane {
+    /// The session a published reference belongs to — the inverse of the
+    /// naming rule in `referencePath`, and only used to say it back to a
+    /// human.
+    static func session(ofPath path: String) -> String {
+        var name = (path as NSString).lastPathComponent
+        name = String(name.dropFirst("lava-compositor-".count))
+        return String(name.dropLast(".ior".count))
     }
 }

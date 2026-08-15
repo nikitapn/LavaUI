@@ -366,7 +366,16 @@ class ControlPlane {
   /// "The system theme changed" — to every Lava client watching.
   virtual void postSystemTheme() = 0;
 
+  /// Which session this compositor is: the name of its Wayland socket, which
+  /// is what tells a nested compositor from the one it is running inside.
+  /// `"default"` before the socket is bound, which no caller should see.
+  static std::string sessionId();
+
   /// Where the reference is published. Clients read this file to find us.
+  ///
+  /// `$XDG_RUNTIME_DIR/lava-compositor-<session>.ior`, or `$LAVA_COMPOSITOR_IOR`
+  /// verbatim when that is set — the escape hatch for a client that has to
+  /// reach a compositor it did not inherit an environment from.
   static std::string referencePath();
 };
 

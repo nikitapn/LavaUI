@@ -76,7 +76,17 @@ struct Listener {
     listener.notify = notify;
     wl_signal_add(signal, &listener);
   }
-  void detach() { wl_list_remove(&listener.link); }
+  /// Unhooks, and does nothing if there is nothing to unhook.
+  ///
+  /// The tolerance is what makes this usable from a shutdown path, which has
+  /// to detach listeners without knowing how far startup got — Xwayland may
+  /// have failed to start, and the two listeners it would have owned are then
+  /// zero-initialised rather than linked into anything.
+  void detach() {
+    if (listener.link.next == nullptr) return;
+    wl_list_remove(&listener.link);
+    wl_list_init(&listener.link);
+  }
 };
 
 template <typename T>
@@ -675,6 +685,26 @@ struct Server {
   Listener<Server> request_cursor;
   Listener<Server> request_set_selection;
   Listener<Server> request_set_primary_selection;
+
+  /// Unhooks everything above, for shutdown.
+  ///
+  /// `wl_display_destroy` asserts that the globals it is tearing down have no
+  /// listeners left — `wlr_xdg_shell` is the one that catches it first — so a
+  /// compositor that just destroys the display aborts on the way out instead
+  /// of returning from `main`. That costs nothing on a real logout and quite a
+  /// lot when the session is a nested one being restarted every few minutes:
+  /// the control plane's reference is never unlinked, because the destructor
+  /// that unlinks it does not run.
+  void detachListeners() {
+    for (Listener<Server> *listener :
+         {&new_output, &new_toplevel, &new_popup, &new_decoration,
+          &new_xwayland_surface, &xwayland_ready, &new_input, &cursor_motion,
+          &cursor_motion_absolute, &cursor_button, &cursor_axis, &cursor_frame,
+          &request_cursor, &request_set_selection,
+          &request_set_primary_selection}) {
+      listener->detach();
+    }
+  }
 
   static void on_new_output(wl_listener *listener, void *data);
   static void on_new_toplevel(wl_listener *listener, void *data);
@@ -5917,6 +5947,16 @@ int main() {
     // by reading this off the loop's signalfd. Unblocked, the default
     // disposition discards it and a crashed dock never comes back.
     sigaddset(&mask, SIGCHLD);
+    // And the two ways a compositor is asked to stop. Taken on the loop
+    // instead of by default disposition so that ending one is an orderly
+    // shutdown: the control plane unlinks its reference, the shell components
+    // are told to go while their sockets still work, and clients see a
+    // display that closed rather than one that vanished. Developing a
+    // compositor means killing it a hundred times a day — usually a nested
+    // one, sharing a runtime directory with the session it runs inside — and
+    // every one of those left a stale reference behind before this.
+    sigaddset(&mask, SIGTERM);
+    sigaddset(&mask, SIGINT);
     pthread_sigmask(SIG_BLOCK, &mask, nullptr);
   }
 
@@ -6076,6 +6116,22 @@ int main() {
       static_cast<float>(server.config.appearance.shadowOffsetY));
   surfaces.start(wl_display_get_event_loop(server.display));
 
+  // Before the control plane, not after it: the socket's name is what tells
+  // one session from another, and the control plane publishes its reference
+  // under that name. Binding it here costs nothing, because the event loop
+  // does not run until `wl_display_run` far below — no client can connect in
+  // between, whatever it finds in the environment.
+  const char *socket = wl_display_add_socket_auto(server.display);
+  if (!socket) {
+    std::cerr << "Could not create a Wayland socket\n";
+    wl_display_destroy(server.display);
+    return EXIT_FAILURE;
+  }
+  // Clients find the compositor through the environment, so a terminal
+  // launched from here inherits the right socket — and, since the reference
+  // is named after it, the right control plane — without being told either.
+  setenv("WAYLAND_DISPLAY", socket, 1);
+
   auto control = lava::ControlPlane::start(
       wl_display_get_event_loop(server.display), surfaces);
   if (control) {
@@ -6098,6 +6154,19 @@ int main() {
         return 0;
       },
       &server);
+
+  // `kill` and Ctrl+C leave through the same door the compositor's own quit
+  // binding uses: stop the loop, then unwind. See the mask in `main`.
+  for (const int signal : {SIGTERM, SIGINT}) {
+    wl_event_loop_add_signal(
+        wl_display_get_event_loop(server.display), signal,
+        [](int number, void *data) {
+          wlr_log(WLR_INFO, "shutting down on signal %d", number);
+          wl_display_terminate(static_cast<wl_display *>(data));
+          return 0;
+        },
+        server.display);
+  }
 
   // X11 applications, through Xwayland. Lazy: the X server is not started
   // until something actually tries to connect, so a session that never runs an
@@ -6126,16 +6195,11 @@ int main() {
     wlr_log(WLR_ERROR, "xwayland: unavailable — X11 clients cannot connect");
   }
 
-  const char *socket = wl_display_add_socket_auto(server.display);
-  if (!socket || !wlr_backend_start(server.backend)) {
+  if (!wlr_backend_start(server.backend)) {
     std::cerr << "Could not start compositor backend\n";
     wl_display_destroy(server.display);
     return EXIT_FAILURE;
   }
-
-  // Clients find the compositor through the environment, so a terminal
-  // launched from here inherits the right socket without being told.
-  setenv("WAYLAND_DISPLAY", socket, 1);
 
   // The desktop's own parts, last: they are clients, and everything a client
   // needs — the socket above, the control plane, an output to be laid out
@@ -6166,6 +6230,15 @@ int main() {
   // a broken connection.
   shell.stop();
   wl_display_destroy_clients(server.display);
+  // Then the control plane, before the display it publishes a way into: a
+  // client that reads the reference after this point gets nothing, which is
+  // the truth, rather than an endpoint that answers until it does not.
+  if (control) {
+    surfaces.bind(static_cast<lava::ControlPlane *>(nullptr));
+    server.control = nullptr;
+    control.reset();
+  }
+  server.detachListeners();
   wl_display_destroy(server.display);
   return EXIT_SUCCESS;
 }

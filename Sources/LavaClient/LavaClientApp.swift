@@ -153,7 +153,17 @@ public enum LavaClient {
         // Namespaced by pid: `DrawArena.create` refuses an id that already
         // exists, which is the right refusal and exactly what two clients of
         // the same compositor would hit if the id were a constant.
-        let arenaID = "\(title.replacingOccurrences(of: " ", with: "-"))-\(getpid())"
+        //
+        // The session goes in the name as well, and only for the sake of
+        // whoever is reading `/dev/shm`. Which compositor a mapping is for is
+        // never in doubt — the id travels over this client's own connection,
+        // to the one compositor that then opens it — but `/dev/shm` is a
+        // single namespace shared by every session on the machine, and with
+        // two of them running, a list of `lava-arena-*` otherwise says
+        // nothing about who is drawing what.
+        let name = title.replacingOccurrences(of: " ", with: "-")
+        let session = ControlPlane.sessionName.map { "\($0)-" } ?? ""
+        let arenaID = "\(name)-\(session)\(getpid())"
 
         // The surface id is only known after `CreateSurface`, which cannot
         // happen until the arena exists, which is what the sink creates. So

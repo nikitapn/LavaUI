@@ -278,6 +278,7 @@ optional QEMU VM).
 | `LAVA_EDITOR_PROBE=1` | Editor hot paths (hit test, caret, selection, emit) with the buffer offset each was working at — see `EditorProbe` |
 | `LAVA_FRAME_PROBE=1` | Compositor: per-surface frame cost, gaps and stalls |
 | `LAVA_NO_SHELL=1` | Compositor: do not start panel/dock/wallpaper |
+| `LAVA_COMPOSITOR_IOR` | Client: the compositor reference to use, overriding the one named by `WAYLAND_DISPLAY` |
 | `WLR_BACKENDS=headless` `WLR_RENDERER=vulkan` | Compositor with no screen (see below) |
 | `WLR_LOG=debug` | wlroots + compositor debug logging (popups, scene) |
 | `LAVA_BOOT_TRACE=1` | Where the time before a client's first frame went |
@@ -293,9 +294,8 @@ Most of this repo can be exercised headlessly, and the recipe is worth copying
 rather than rediscovering.
 
 ```bash
-# A compositor of your own. NEVER reuse the live session's XDG_RUNTIME_DIR:
-# the second compositor overwrites $XDG_RUNTIME_DIR/lava-compositor.ior and
-# every client — including the user's running session — follows the new one.
+# A compositor of your own. A separate XDG_RUNTIME_DIR is still the tidiest
+# way — nothing of the live session is then reachable by accident at all.
 export RT=/tmp/lvt          # keep it SHORT: the wayland socket path has a
 mkdir -p $RT && chmod 700 $RT   # 108-byte limit and long paths fail to bind
 XDG_RUNTIME_DIR=$RT WLR_BACKENDS=headless WLR_RENDERER=vulkan \
@@ -305,6 +305,43 @@ XDG_RUNTIME_DIR=$RT WLR_BACKENDS=headless WLR_RENDERER=vulkan \
 XDG_RUNTIME_DIR=$RT WAYLAND_DISPLAY=wayland-0 LAVA_CLIENT=1 \
   LAVA_AGENT_PORT=9876 ./.build/debug/LavaTerm &
 ```
+
+### Two compositors at once
+
+Sharing a runtime directory with a running session is supported, which is what
+makes a **nested** compositor — one started from a terminal inside the live
+one, on the `wayland` backend — a usable way to develop this:
+
+```bash
+WLR_BACKENDS=wayland WLR_RENDERER=vulkan ./build/compositor/compositor &
+```
+
+Each compositor publishes its control plane under the name of its own Wayland
+socket, `$XDG_RUNTIME_DIR/lava-compositor-<session>.ior`, and every client
+resolves that name from the `WAYLAND_DISPLAY` it inherited — so a client
+started from a terminal inside the nested session reaches the nested
+compositor, and one started outside reaches the outer one, with nothing to
+configure either way. The window an app opens follows from where it was
+launched, which is the same rule Wayland clients already obey.
+
+Overriding by hand, in order of precedence:
+
+| Variable | Effect |
+|---|---|
+| `LAVA_COMPOSITOR_IOR` | Full path to a reference file — reach a compositor whose environment you did not inherit |
+| `WAYLAND_DISPLAY` | Names the session, and therefore the reference file |
+| neither | The one session running, if exactly one; otherwise the client says which are and stops |
+
+Draw arenas carry the session in their name too (`lava-arena-<app>-<session>-<pid>`),
+which is a labelling convenience rather than routing: `/dev/shm` is one
+namespace for the whole machine, but an arena id travels over the client's own
+connection to the compositor that then opens it, so no arena is ever ambiguous
+about who it is for.
+
+`SIGTERM` and `SIGINT` are an orderly shutdown — the reference is unlinked, the
+shell components are stopped, clients see a display that closed. Killing a
+nested compositor with `kill` therefore leaves nothing behind; `kill -9` leaves
+a stale `.ior`, which the next compositor on that socket name overwrites.
 
 Then drive it over the agent port (JSON lines, one request per connection):
 `settle`, `screenshot`, `find`, `hit_test`, `click`, `move`, `scroll`,
