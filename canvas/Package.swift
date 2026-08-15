@@ -34,6 +34,7 @@ let engineSources: [String] = [
     "ipc/draw_arena.cpp",
     "menu/app_menu.cpp",
     "menu/menu_import.cpp",
+    "menu/notification.cpp",
     "menu/status_notifier.cpp",
     "render/blur_pass.cpp",
     "render/compute_physics.cpp",

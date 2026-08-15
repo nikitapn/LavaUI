@@ -109,6 +109,13 @@ final class MenuSession {
     /// A tray applet's imported menu. Which applet is the tray's business.
     var trayMenuOpen = false
 
+    /// How far down the surface the notification stack currently reaches, or
+    /// 0 for none. Not `wantsCapture`: a toast needs its own pixels clickable
+    /// and nothing else, where a dropdown wants the whole panel so a click
+    /// outside it dismisses. Stealing 600pt of desktop for a toast that is
+    /// 90pt tall would be a click nobody meant to give up.
+    @ObservationIgnored private var toastDepth: Float = 0
+
     func attach(editor: Editor, brandIcon: UIImage) {
         self.editor = editor
         self.brandIcon = MenuIcon(size: 18, path: brandIcon.path)
@@ -276,6 +283,14 @@ final class MenuSession {
         syncInputRegion()
     }
 
+    /// The notification stack changed shape; keep the hit region in step.
+    func setToasts(_ toasts: [Notifications.Toast]) {
+        let depth = ToastStack.estimatedDepth(of: toasts)
+        guard depth != toastDepth else { return }
+        toastDepth = depth
+        syncInputRegion()
+    }
+
     /// Whether any strip popover needs the deep hit region.
     private var wantsCapture: Bool {
         openMenu != nil || volumeOpen || calendarOpen || trayMenuOpen
@@ -285,7 +300,9 @@ final class MenuSession {
     /// popover is open so the dropdown is clickable and outside clicks dismiss.
     private func syncInputRegion() {
         ensureExpanded()
-        let height = wantsCapture ? Self.openHeight : Self.stripHeight
+        let height = wantsCapture
+            ? Self.openHeight
+            : max(Self.stripHeight, min(toastDepth, Self.openHeight))
         // Width is the surface length; compositor clamps. A large constant is
         // fine — the panel is always full edge width.
         let width: Float = 8192
@@ -313,6 +330,7 @@ final class MenuSession {
 
 nonisolated(unsafe) let session = MenuSession()
 nonisolated(unsafe) var tray: StatusNotifierTray?
+nonisolated(unsafe) var notifications: Notifications?
 let pulse = PulseSession()
 
 struct TaskbarView: View {
@@ -368,9 +386,18 @@ struct TaskbarView: View {
             .padding(.horizontal, 10)
             .background(Theme.current.background)
 
-            // Fills the expanded surface so the strip stays top-aligned; never
-            // painted (backdrop is none, no fill here).
-            HStack(flexGrow: 1, padding: 0) {}
+            // Fills the expanded surface so the strip stays top-aligned. Never
+            // painted (backdrop is none, no fill here) — but it is where the
+            // notification stack goes, pinned to the top right corner under
+            // the strip, which is the one part of this surface that is empty
+            // whether or not a menu is open.
+            HStack(flexGrow: 1, padding: 0, alignment: .start) {
+                Spacer()
+                if let notifications, !notifications.toasts.isEmpty {
+                    ToastStack(notifications: notifications)
+                        .padding(EdgeInsets(top: 8, leading: 0, bottom: 0, trailing: 10))
+                }
+            }
         }
     }
 
@@ -606,6 +633,11 @@ menuFont.registerWithEngine(editor)
 // System tray watcher — same timing as the menu registrar.
 tray = StatusNotifierTray(editor: editor)
 
+// And the notification daemon, if the session has none. Started here for the
+// same reason as the other two: anything that fires a notification during
+// login should find somewhere to send it.
+notifications = Notifications(editor: editor)
+
 // Focus, from the compositor. Delivered on the frame loop, so touching
 // observable state from it is the same as touching it from a click handler.
 LavaClient.onActiveWindow { surfaceId, title, menuService, menuObjectPath in
@@ -633,6 +665,12 @@ Thread.detachNewThread {
         MainQueue.async {
             session.poll()
             _ = tray?.poll()
+            // Notifications ride the same context, and they need it for more
+            // than delivery: an expiry is a clock nobody else is watching, so
+            // a stack that stopped being polled would stay on screen forever.
+            if notifications?.poll() == true {
+                session.setToasts(notifications?.toasts ?? [])
+            }
         }
         Thread.sleep(forTimeInterval: 0.05)
     }

@@ -6,6 +6,7 @@
 #include "application.hpp"
 #include "menu/app_menu.hpp"
 #include "menu/menu_import.hpp"
+#include "menu/notification.hpp"
 #include "menu/status_notifier.hpp"
 #include "render/font_key.hpp"
 #include "render/svg_image.hpp"
@@ -38,6 +39,9 @@ struct Engine::Impl {
   MenuImportHost menuImport;
   /// System tray: StatusNotifierWatcher. Same lifetime rationale as menus.
   StatusNotifierHost statusNotifier;
+
+  /// Desktop notifications, served for the session. See `NotificationHost`.
+  NotificationHost notifications;
 
   /// Client-mode event wait. A client has no GLFW to park in, but it still
   /// has to block — a producer that spins is worse than one that is slow,
@@ -1072,6 +1076,116 @@ void Engine::statusNotifierMenuActivate(int32_t itemId)
 void Engine::statusNotifierMenuAboutToShow(int32_t itemId)
 {
   impl_->statusNotifier.menuAboutToShow(itemId);
+}
+
+
+// ─── Notifications ─────────────────────────────────────────────────────────
+
+bool Engine::notificationsStart() { return impl_->notifications.start(); }
+
+bool Engine::notificationsIsServing() const
+{
+  return impl_->notifications.isServing();
+}
+
+void Engine::notificationsPoll() { impl_->notifications.poll(); }
+
+uint64_t Engine::notificationsRevision() const
+{
+  return impl_->notifications.revision();
+}
+
+size_t Engine::notificationsCount() const
+{
+  return impl_->notifications.count();
+}
+
+uint32_t Engine::notificationId(size_t index) const
+{
+  return impl_->notifications.id(index);
+}
+
+std::string Engine::notificationAppName(size_t index) const
+{
+  return impl_->notifications.appName(index);
+}
+
+std::string Engine::notificationSummary(size_t index) const
+{
+  return impl_->notifications.summary(index);
+}
+
+std::string Engine::notificationBody(size_t index) const
+{
+  return impl_->notifications.body(index);
+}
+
+std::string Engine::notificationIconPath(size_t index) const
+{
+  return impl_->notifications.iconPath(index);
+}
+
+int Engine::notificationIconWidth(size_t index) const
+{
+  return impl_->notifications.iconWidth(index);
+}
+
+int Engine::notificationIconHeight(size_t index) const
+{
+  return impl_->notifications.iconHeight(index);
+}
+
+size_t Engine::notificationIconRgbaSize(size_t index) const
+{
+  return impl_->notifications.iconRgbaSize(index);
+}
+
+size_t Engine::notificationIconRgbaCopy(size_t index, uint8_t *out,
+                                        size_t cap) const
+{
+  return impl_->notifications.iconRgbaCopy(index, out, cap);
+}
+
+uint8_t Engine::notificationUrgency(size_t index) const
+{
+  return impl_->notifications.urgency(index);
+}
+
+int64_t Engine::notificationRemainingMs(size_t index) const
+{
+  return impl_->notifications.remainingMs(index);
+}
+
+size_t Engine::notificationActionCount(size_t index) const
+{
+  return impl_->notifications.actionCount(index);
+}
+
+std::string Engine::notificationActionKey(size_t index, size_t action) const
+{
+  return impl_->notifications.actionKey(index, action);
+}
+
+std::string Engine::notificationActionLabel(size_t index, size_t action) const
+{
+  return impl_->notifications.actionLabel(index, action);
+}
+
+void Engine::notificationInvokeAction(uint32_t id, const std::string &key)
+{
+  impl_->notifications.invokeAction(id, key);
+}
+
+void Engine::notificationDismiss(uint32_t id)
+{
+  impl_->notifications.dismiss(id);
+}
+
+void Engine::notificationDismissAll() { impl_->notifications.dismissAll(); }
+
+void Engine::notificationsSetPaused(bool paused)
+{
+  impl_->notifications.setPaused(paused);
 }
 
 } // namespace canvas

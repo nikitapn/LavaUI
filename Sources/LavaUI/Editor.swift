@@ -721,6 +721,68 @@ public final class Editor: @unchecked Sendable {
         engine.statusNotifierScroll(std.string(key), delta, std.string(orientation))
     }
 
+    // ─── Notifications ───────────────────────────────────────────────────
+
+    public func notificationsStart() -> Bool { engine.notificationsStart() }
+
+    public var notificationsIsServing: Bool { engine.notificationsIsServing() }
+
+    public func notificationsPoll() { engine.notificationsPoll() }
+
+    public var notificationsRevision: UInt64 { engine.notificationsRevision() }
+
+    public var notificationsCount: Int { Int(engine.notificationsCount()) }
+
+    public func notification(_ index: Int) -> NotificationInfo {
+        NotificationInfo(
+            id: engine.notificationId(index),
+            appName: String(engine.notificationAppName(index)),
+            summary: String(engine.notificationSummary(index)),
+            body: String(engine.notificationBody(index)),
+            iconPath: String(engine.notificationIconPath(index)),
+            iconWidth: Int(engine.notificationIconWidth(index)),
+            iconHeight: Int(engine.notificationIconHeight(index)),
+            iconRgba: copyNotificationIconRgba(index: index),
+            urgency: engine.notificationUrgency(index),
+            remainingMs: engine.notificationRemainingMs(index),
+            actionCount: Int(engine.notificationActionCount(index))
+        )
+    }
+
+    public func notificationActionKey(_ index: Int, action: Int) -> String {
+        String(engine.notificationActionKey(index, action))
+    }
+
+    public func notificationActionLabel(_ index: Int, action: Int) -> String {
+        String(engine.notificationActionLabel(index, action))
+    }
+
+    public func notificationInvokeAction(_ id: UInt32, key: String) {
+        engine.notificationInvokeAction(id, std.string(key))
+    }
+
+    public func notificationDismiss(_ id: UInt32) {
+        engine.notificationDismiss(id)
+    }
+
+    public func notificationDismissAll() { engine.notificationDismissAll() }
+
+    public func notificationsSetPaused(_ paused: Bool) {
+        engine.notificationsSetPaused(paused)
+    }
+
+    private func copyNotificationIconRgba(index: Int) -> [UInt8] {
+        let n = engine.notificationIconRgbaSize(index)
+        guard n > 0 else { return [] }
+        var out = [UInt8](repeating: 0, count: Int(n))
+        let written = out.withUnsafeMutableBufferPointer { buf -> Int in
+            guard let base = buf.baseAddress else { return 0 }
+            return Int(engine.notificationIconRgbaCopy(index, base, n))
+        }
+        if written < out.count { out.removeLast(out.count - written) }
+        return out
+    }
+
     /// Opens `key`'s DBusMenu. False when the item exports none — activate it
     /// instead.
     public func statusNotifierOpenMenu(_ key: String) -> Bool {
@@ -789,6 +851,26 @@ public struct StatusNotifierItemInfo: Equatable, Sendable {
     public var iconHeight: Int
     /// RGBA8 pixels when the item published `IconPixmap`.
     public var iconRgba: [UInt8]
+}
+
+/// One live desktop notification, as the server holds it.
+public struct NotificationInfo: Equatable, Sendable {
+    /// The protocol's id, which is what actions and closing speak in.
+    public var id: UInt32
+    public var appName: String
+    public var summary: String
+    public var body: String
+    /// Resolved file for `app_icon` or the `image-path` hint.
+    public var iconPath: String
+    /// Pixels from the `image-data` hint, RGBA8, when the sender sent its own.
+    public var iconWidth: Int
+    public var iconHeight: Int
+    public var iconRgba: [UInt8]
+    /// 0 low, 1 normal, 2 critical.
+    public var urgency: UInt8
+    /// Milliseconds left, or 0 when it waits for the user instead.
+    public var remainingMs: Int64
+    public var actionCount: Int
 }
 
 /// One row of a menu imported from another application.

@@ -374,6 +374,29 @@ compositor clamps the window to a size the app did not request, the swapchain
 can hit `VK_ERROR_OUT_OF_DATE_KHR` on acquire and the engine treats it as
 fatal. Open at the size the output will actually grant to avoid it.
 
+## Notifications
+
+The panel is the session's notification daemon: canvas's `NotificationHost`
+owns `org.freedesktop.Notifications`, `Notifications` in LavaUI is the
+view-model, and `ToastStack` in LavaTaskbar draws the cards at the top right of
+the panel's own surface — no second process, no new surface kind, because the
+panel already has a full-width one that reaches `MenuSession.openHeight` down
+the screen for dropdowns.
+
+Supported: body text, `app_icon` and the `image-data`/`image-path` hints,
+urgency (critical is red and never expires), actions as buttons with `default`
+on the card body, `replaces_id`, hover to pause the countdown. Capabilities are
+reported honestly as `body`, `icon-static`, `actions`, `persistence` — no
+markup, so nothing prints `<b>` at the user.
+
+If another daemon already owns the name — dunst, or a desktop this is nested
+inside — the panel says so once and shows nothing rather than fighting for it.
+
+Two known edges: the input region is a single rectangle, so while toasts are up
+the panel claims a band across the top of the screen rather than only the cards
+(`SetInputRegion` would need to take a region for that), and the depth of that
+band is estimated from the toast contents rather than measured.
+
 ## Starting things with the session
 
 Two layers, and the split is deliberate.

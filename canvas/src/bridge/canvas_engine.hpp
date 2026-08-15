@@ -517,6 +517,37 @@ class Engine {
   void statusNotifierActivate(const std::string &key, int x, int y);
   void statusNotifierContextMenu(const std::string &key, int x, int y);
   void statusNotifierSecondaryActivate(const std::string &key, int x, int y);
+  // ─── Notifications ───────────────────────────────────────────────────
+  //
+  // The panel serves `org.freedesktop.Notifications`. See `NotificationHost`.
+
+  bool notificationsStart();
+  bool notificationsIsServing() const;
+  /// Pumps the bus *and* retires whatever expired. Every frame.
+  void notificationsPoll();
+  uint64_t notificationsRevision() const;
+  size_t notificationsCount() const;
+  uint32_t notificationId(size_t index) const;
+  std::string notificationAppName(size_t index) const;
+  std::string notificationSummary(size_t index) const;
+  std::string notificationBody(size_t index) const;
+  std::string notificationIconPath(size_t index) const;
+  int notificationIconWidth(size_t index) const;
+  int notificationIconHeight(size_t index) const;
+  size_t notificationIconRgbaSize(size_t index) const;
+  size_t notificationIconRgbaCopy(size_t index, uint8_t *out, size_t cap) const;
+  /// 0 low, 1 normal, 2 critical. Critical never expires on its own.
+  uint8_t notificationUrgency(size_t index) const;
+  int64_t notificationRemainingMs(size_t index) const;
+  size_t notificationActionCount(size_t index) const;
+  std::string notificationActionKey(size_t index, size_t action) const;
+  std::string notificationActionLabel(size_t index, size_t action) const;
+  void notificationInvokeAction(uint32_t id, const std::string &key);
+  void notificationDismiss(uint32_t id);
+  void notificationDismissAll();
+  /// Holds every countdown while the pointer is over the stack.
+  void notificationsSetPaused(bool paused);
+
   bool statusNotifierItemHasMenu(size_t index) const;
   /// Left click has nowhere to go but the menu — `ItemIsMenu`, or no
   /// `Activate` at all. See `StatusNotifierHost::itemPrefersMenu`.
