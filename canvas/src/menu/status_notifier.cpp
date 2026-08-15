@@ -274,6 +274,10 @@ struct StatusNotifierHost::Impl {
   guint nameToken = 0;
   guint objectToken = 0;
   Mode mode = Mode::None;
+  /// Whether the bus has answered our `RequestName` yet, either way. Not the
+  /// same question as `mode`: "the name is taken" is an answer, and it leaves
+  /// the mode exactly where it started.
+  bool nameAnswered = false;
   /// Own mode: hosts that called RegisterStatusNotifierHost (incl. ourselves).
   int hostCount = 0;
   /// Follow mode: subscriptions on the session's watcher.
@@ -307,6 +311,7 @@ struct StatusNotifierHost::Impl {
                                 gpointer userData)
   {
     auto *self = static_cast<Impl *>(userData);
+    self->nameAnswered = true;
     self->mode = Mode::Own;
     // We are the host: clients check this before RegisterStatusNotifierItem.
     self->hostCount = 1;
@@ -318,6 +323,7 @@ struct StatusNotifierHost::Impl {
   static void onBusNameLost(GDBusConnection *, const gchar *, gpointer userData)
   {
     auto *self = static_cast<Impl *>(userData);
+    self->nameAnswered = true;
     // With DO_NOT_QUEUE this also fires when the name was already taken —
     // that is not an error; `start` falls through to follow mode.
     if (self->mode == Mode::Own) {
@@ -607,11 +613,28 @@ struct StatusNotifierHost::Impl {
       return false;
     }
 
+    nameAnswered = false;
     nameToken = g_bus_own_name_on_connection(
         conn, kWatcherName, G_BUS_NAME_OWNER_FLAGS_DO_NOT_QUEUE,
         onBusNameAcquired, onBusNameLost, this, nullptr);
 
-    while (g_main_context_iteration(nullptr, FALSE)) {
+    // Waited for, not glanced at. `g_bus_own_name_on_connection` is
+    // asynchronous and the answer is a round trip to the bus daemon, so
+    // draining what happens to be pending the instant after asking dispatches
+    // nothing at all: this concluded "name taken" every time, tore down the
+    // object it had just exported, found no other watcher to follow either,
+    // and gave the session no tray. Every stock applet — nm-applet, Blueman,
+    // pasystray — went invisible, with one line in the log to say so.
+    //
+    // Bounded, because a bus that never answers should cost a panel its tray
+    // and not its startup. Two seconds is the same budget the calls around
+    // here use.
+    const gint64 deadline = g_get_monotonic_time() + 2 * G_TIME_SPAN_SECOND;
+    while (!nameAnswered && g_get_monotonic_time() < deadline) {
+      while (g_main_context_iteration(nullptr, FALSE)) {
+      }
+      if (nameAnswered) break;
+      g_usleep(500);
     }
     if (mode == Mode::Own) return true;
 
