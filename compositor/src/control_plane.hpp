@@ -113,6 +113,14 @@ struct CompositorHost {
   virtual bool destroySurface(uint32_t surfaceId) = 0;
   virtual bool surfaceExists(uint32_t surfaceId) const = 0;
 
+  /// Whether a window on the current workspace overlaps this panel's own
+  /// rectangle — the question behind `SubscribePanelArea`.
+  ///
+  /// False for anything that is not a panel, including a surface that has
+  /// gone: "nothing is in the way" is the safe answer for a dock, because it
+  /// leaves the dock visible rather than hiding it over an empty desktop.
+  virtual bool panelCovered(uint32_t surfaceId) const = 0;
+
   // ─── Window state ────────────────────────────────────────────────────────
   //
   // What a title bar's buttons do, for the client that draws its own. Each
@@ -353,6 +361,16 @@ class ControlPlane {
   /// "The set of windows changed" — to every shell watching. Called from the
   /// loop thread on anything a dock would draw differently.
   virtual void postWindowList() = 0;
+
+  /// "Something moved" — recompute whether each subscribed panel is covered,
+  /// and tell the ones whose answer changed.
+  ///
+  /// Called from far more places than `postWindowList`, because this depends
+  /// on geometry and that one does not: a window dragged across the bottom of
+  /// the screen changes nothing about the window *list*. Cheap to call
+  /// wrongly — it is a rectangle test per panel, and it sends nothing when
+  /// the answer is what it was.
+  virtual void postPanelAreas() = 0;
 
   /// "The focused window is now this one" — to every panel watching.
   ///

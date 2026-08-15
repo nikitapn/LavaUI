@@ -1086,6 +1086,66 @@ public:
 };
 } // namespace flat
 
+struct PanelArea {
+  uint32_t serial;
+  bool covered;
+};
+
+namespace flat {
+struct PanelArea {
+  uint32_t serial;
+  ::nprpc::flat::Boolean covered;
+};
+
+class PanelArea_Direct {
+  ::nprpc::flat_buffer& buffer_;
+  const std::uint32_t offset_;
+
+  auto& base() noexcept { return *reinterpret_cast<PanelArea*>(reinterpret_cast<std::byte*>(buffer_.data().data()) + offset_); }
+  auto const& base() const noexcept { return *reinterpret_cast<const PanelArea*>(reinterpret_cast<const std::byte*>(buffer_.data().data()) + offset_); }
+public:
+  uint32_t offset() const noexcept { return offset_; }
+  void* __data() noexcept { return (void*)&base(); }
+  PanelArea_Direct(::nprpc::flat_buffer& buffer, std::uint32_t offset)
+    : buffer_(buffer)
+    , offset_(offset)
+  {
+  }
+  const uint32_t& serial() const noexcept { return base().serial;}
+  uint32_t& serial() noexcept { return base().serial;}
+  const ::nprpc::flat::Boolean& covered() const noexcept { return base().covered;}
+  ::nprpc::flat::Boolean& covered() noexcept { return base().covered;}
+};
+} // namespace flat
+
+struct PanelAreaAck {
+  uint32_t serial;
+};
+
+namespace flat {
+struct PanelAreaAck {
+  uint32_t serial;
+};
+
+class PanelAreaAck_Direct {
+  ::nprpc::flat_buffer& buffer_;
+  const std::uint32_t offset_;
+
+  auto& base() noexcept { return *reinterpret_cast<PanelAreaAck*>(reinterpret_cast<std::byte*>(buffer_.data().data()) + offset_); }
+  auto const& base() const noexcept { return *reinterpret_cast<const PanelAreaAck*>(reinterpret_cast<const std::byte*>(buffer_.data().data()) + offset_); }
+public:
+  uint32_t offset() const noexcept { return offset_; }
+  void* __data() noexcept { return (void*)&base(); }
+  PanelAreaAck_Direct(::nprpc::flat_buffer& buffer, std::uint32_t offset)
+    : buffer_(buffer)
+    , offset_(offset)
+  {
+  }
+  const uint32_t& serial() const noexcept { return base().serial;}
+  uint32_t& serial() noexcept { return base().serial;}
+};
+} // namespace flat
+
 struct FocusAck {
   uint32_t surfaceId;
 };
@@ -1247,6 +1307,7 @@ public:
   virtual void Minimize (uint32_t surfaceId) = 0;
   virtual void SetPanelThickness (uint32_t surfaceId, uint32_t thickness, uint32_t reserved) = 0;
   virtual ::nprpc::Task<> SubscribeWindows (::nprpc::BidiStream<WindowListAck, WindowList> stream) = 0;
+  virtual ::nprpc::Task<> SubscribePanelArea (uint32_t surfaceId, ::nprpc::BidiStream<PanelAreaAck, PanelArea> stream) = 0;
   virtual ::nprpc::Task<> SubscribeSystemTheme (::nprpc::BidiStream<ThemeAck, SystemTheme> stream) = 0;
   virtual void ActivateWindow (uint32_t surfaceId) = 0;
   virtual void SetInputRegion (uint32_t surfaceId, int32_t x, int32_t y, uint32_t w, uint32_t h) = 0;
@@ -1309,6 +1370,7 @@ public:
   void SetPanelThickness (uint32_t surfaceId, uint32_t thickness, uint32_t reserved);
   ::nprpc::Task<void> SetPanelThicknessAsync (uint32_t surfaceId, uint32_t thickness, uint32_t reserved, std::stop_token st = {});
   std::pair<::nprpc::StreamWriter<WindowListAck>, ::nprpc::StreamReader<WindowList>> SubscribeWindows ();
+  std::pair<::nprpc::StreamWriter<PanelAreaAck>, ::nprpc::StreamReader<PanelArea>> SubscribePanelArea (uint32_t surfaceId);
   std::pair<::nprpc::StreamWriter<ThemeAck>, ::nprpc::StreamReader<SystemTheme>> SubscribeSystemTheme ();
   void ActivateWindow (uint32_t surfaceId);
   ::nprpc::Task<void> ActivateWindowAsync (uint32_t surfaceId, std::stop_token st = {});
@@ -1459,6 +1521,62 @@ inline ::nprpc::flat_buffer serialize<::lava::WindowList>(const ::lava::WindowLi
       ++it;
     }
   }
+  return __buf;
+}
+} // namespace nprpc_stream
+
+namespace nprpc_stream {
+template<>
+inline ::lava::PanelArea deserialize<::lava::PanelArea>(::nprpc::flat_buffer& buf) {
+  ::nprpc::impl::flat::StreamChunk_Direct __chunk(buf, sizeof(::nprpc::impl::Header));
+  auto __span = __chunk.data();
+  ::nprpc::flat_buffer __elem_buf;
+  auto __mb = __elem_buf.prepare(__span.size());
+  std::memcpy(__mb.data(), __span.data(), __span.size());
+  __elem_buf.commit(__span.size());
+  ::lava::PanelArea __result;
+  ::lava::flat::PanelArea_Direct __d(__elem_buf, 0);
+  memcpy(&__result, __d.__data(), 8);
+  return __result;
+}
+} // namespace nprpc_stream
+
+namespace nprpc_stream {
+template<>
+inline ::lava::PanelAreaAck deserialize<::lava::PanelAreaAck>(::nprpc::flat_buffer& buf) {
+  ::nprpc::impl::flat::StreamChunk_Direct __chunk(buf, sizeof(::nprpc::impl::Header));
+  auto __span = __chunk.data();
+  ::nprpc::flat_buffer __elem_buf;
+  auto __mb = __elem_buf.prepare(__span.size());
+  std::memcpy(__mb.data(), __span.data(), __span.size());
+  __elem_buf.commit(__span.size());
+  ::lava::PanelAreaAck __result;
+  ::lava::flat::PanelAreaAck_Direct __d(__elem_buf, 0);
+  memcpy(&__result, __d.__data(), 4);
+  return __result;
+}
+} // namespace nprpc_stream
+
+namespace nprpc_stream {
+template<>
+inline ::nprpc::flat_buffer serialize<::lava::PanelAreaAck>(const ::lava::PanelAreaAck& value) {
+  ::nprpc::flat_buffer __buf;
+  __buf.prepare(4);
+  __buf.commit(4);
+  ::lava::flat::PanelAreaAck_Direct __d(__buf, 0);
+  memcpy(__d.__data(), &value, 4);
+  return __buf;
+}
+} // namespace nprpc_stream
+
+namespace nprpc_stream {
+template<>
+inline ::nprpc::flat_buffer serialize<::lava::PanelArea>(const ::lava::PanelArea& value) {
+  ::nprpc::flat_buffer __buf;
+  __buf.prepare(8);
+  __buf.commit(8);
+  ::lava::flat::PanelArea_Direct __d(__buf, 0);
+  memcpy(__d.__data(), &value, 8);
   return __buf;
 }
 } // namespace nprpc_stream

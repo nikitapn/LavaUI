@@ -1786,6 +1786,10 @@ class SurfaceRegistry : public lava::CompositorHost {
     surface.y = y;
     place(surface);
     placeShadow(surface);
+    // Geometry, which the window list does not carry — a dock that hides
+    // itself when something is in the way learns about it here and nowhere
+    // else. Cheap when nobody has asked: see `postPanelAreas`.
+    if (control_ != nullptr && !surface.panel) control_->postPanelAreas();
   }
 
   /// Fills the work area, or goes back to where the window came from.
@@ -2046,7 +2050,13 @@ class SurfaceRegistry : public lava::CompositorHost {
   /// moving between workspaces. Cheap when nobody subscribed, which is the
   /// usual case — the control plane checks before building a snapshot.
   void announceWindows() {
-    if (control_ != nullptr) control_->postWindowList();
+    if (control_ == nullptr) return;
+    control_->postWindowList();
+    // Every reason to announce the set is also a reason to recheck the
+    // panels: a window that opened, closed, minimized or changed workspace
+    // was in the way a moment ago or is now. Geometry-only changes — a drag,
+    // a resize — do not come through here and are notified where they happen.
+    control_->postPanelAreas();
   }
 
   /// Rounds a surface the way its place in the window says it should be.
@@ -2234,6 +2244,8 @@ class SurfaceRegistry : public lava::CompositorHost {
     // already held into the new extent meanwhile.
     pump(surface);
     if (surface.canvas->redraw()) damage(surface);
+    // A window that grew into the dock's strip is in the way of it now.
+    if (control_ != nullptr && !surface.panel) control_->postPanelAreas();
   }
 
   uint32_t createPanel(const std::string &arenaId, uint32_t edge,
@@ -2713,6 +2725,65 @@ class SurfaceRegistry : public lava::CompositorHost {
   bool surfaceExists(uint32_t id) const override {
     for (const auto &s : surfaces_) {
       if (s->id == id) return true;
+    }
+    return false;
+  }
+
+  bool panelCovered(uint32_t id) const override {
+    const ClientSurface *panel = nullptr;
+    for (const auto &s : surfaces_) {
+      if (s->id == id) {
+        panel = s.get();
+        break;
+      }
+    }
+    if (panel == nullptr || !panel->panel) return false;
+
+    // The strip the panel *shows*, not the surface it was given. Those part
+    // company for a panel that reserves less than it occupies — the menu bar
+    // is 32 pixels of chrome on a 600-pixel surface it keeps for dropdowns —
+    // and testing the surface would report that panel covered by any window in
+    // the top third of the screen. A panel that reserves nothing is a dock,
+    // and there the surface is the strip.
+    const bool horizontal = panel->edge == 0 || panel->edge == 1;  // top/bottom
+    const uint32_t along = horizontal ? panel->height : panel->width;
+    const uint32_t strip = panel->reserved != 0
+                               ? std::min(panel->reserved, along)
+                               : along;
+    // Which end of the surface the strip sits at: against its own edge.
+    const bool atFarEnd = panel->edge == 1 || panel->edge == 3;  // bottom/right
+    const int px0 =
+        panel->x + (horizontal || !atFarEnd
+                        ? 0
+                        : static_cast<int>(panel->width - strip));
+    const int py0 =
+        panel->y + (!horizontal || !atFarEnd
+                        ? 0
+                        : static_cast<int>(panel->height - strip));
+    const int px1 =
+        px0 + static_cast<int>(horizontal ? panel->width : strip);
+    const int py1 =
+        py0 + static_cast<int>(horizontal ? strip : panel->height);
+
+    for (const auto &s : surfaces_) {
+      const ClientSurface &other = *s;
+      if (other.id == id) continue;
+      // Another panel is furniture, not a window: a dock does not hide from
+      // the taskbar, and two panels that overlap have already agreed to.
+      if (other.panel) continue;
+      // Minimized is not on screen, and neither is another workspace's.
+      if (other.minimized) continue;
+      if (workspaces_ != nullptr && other.workspace != workspaces_->current) {
+        continue;
+      }
+
+      // The frame, not the content: the title bar is part of the window and
+      // a dock that ignored it would show itself under one.
+      const int ox1 = other.x + static_cast<int>(other.width);
+      const int oy1 = other.y + static_cast<int>(other.frameHeight());
+      if (other.x < px1 && ox1 > px0 && other.y < py1 && oy1 > py0) {
+        return true;
+      }
     }
     return false;
   }

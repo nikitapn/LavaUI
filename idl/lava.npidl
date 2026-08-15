@@ -451,6 +451,26 @@ message WindowListAck {
   serial: u32;
 }
 
+/// Whether anything is in the way of a panel.
+///
+/// What it answers is "is the strip I occupy clear of windows right now",
+/// which is the whole question an auto-hiding dock has and the only one it
+/// cannot answer for itself: a client knows where it is and nothing about
+/// what is in front of it.
+message PanelArea {
+  /// Monotonic. Echoed in `PanelAreaAck`, like `WindowList.serial`.
+  serial: u32;
+  /// True when a window on the current workspace overlaps the panel's own
+  /// rectangle. Minimized windows and other panels do not count — nor does a
+  /// window on another workspace, which is not on screen to be in the way.
+  covered: boolean;
+}
+
+/// Panel → compositor: "I have drawn myself for this answer."
+message PanelAreaAck {
+  serial: u32;
+}
+
 /// Panel → compositor on the same stream: "I am showing this one now."
 ///
 /// Not a permission and not a request — the focus has already changed. It is
@@ -795,13 +815,51 @@ interface Compositor {
   /// there, not because a shell has anything to say.
   bidi_stream<WindowListAck, WindowList> SubscribeWindows();
 
+  /// Whether this panel's strip is clear of windows, and again whenever that
+  /// changes.
+  ///
+  /// For a dock that hides itself: auto-hide is right when a window is in the
+  /// way and wrong when the desktop behind it is empty, and the difference is
+  /// something only the compositor can see. A panel knows its own rectangle
+  /// and nothing about what overlaps it.
+  ///
+  /// Sent on subscription, and afterwards only when the answer changes — not
+  /// on every window move. Dragging a window across the bottom of the screen
+  /// is two messages, on the frames it crosses the edge of the strip, however
+  /// many motion events it took.
+  ///
+  /// `bidi_stream` like the rest, and the reason is the servant's shape rather
+  /// than anything the client has to say. A `server_stream` servant in NPRPC
+  /// is a *generator*: it returns a coroutine that the stream manager resumes
+  /// once per credit and pulls values out of, which is right for a stream that
+  /// can produce on demand — a file, a video, N rows. This one cannot. Its
+  /// values are pushed, irregularly, by the compositor's own loop when a
+  /// window moves, so the coroutine would have to suspend on an awaiter until
+  /// there is news and whoever resumed it would do the transport write: the
+  /// Wayland loop, writing into a ring a wedged client has stopped draining,
+  /// which is the one thing every subscription here is built to avoid. Putting
+  /// that write back on its own thread means rebuilding `StreamPump` inside a
+  /// coroutine.
+  ///
+  /// The bidirectional form hands the servant an ordinary writer instead, and
+  /// that moves straight into the pump every other subscription already uses.
+  /// The acks are flow control and liveness, as everywhere else here.
+  ///
+  /// The subscription also ends when the surface does — `DestroySurface`, or
+  /// the client exiting — which is the same signal the input stream is torn
+  /// down by.
+  bidi_stream<PanelAreaAck, PanelArea> SubscribePanelArea(surfaceId: in u32)
+      raises(SurfaceNotFound);
+
   /// The system colour theme, and again whenever Settings changes it.
   ///
-  /// Bidirectional for the same reason the other state streams are: the
-  /// reverse half is flow control and "this client is still here", not
-  /// because a window has a theme to send back. A `server_stream` would
-  /// work on the wire; it would not plug into the pump every other
-  /// subscription already uses.
+  /// Bidirectional for the same reason the other state streams are, and it is
+  /// a sharper reason than "the acks are flow control" — see
+  /// `SubscribePanelArea`, where it is written out. Briefly: a `server_stream`
+  /// servant is a generator the stream manager pulls from, and none of these
+  /// streams can produce on demand; they are pushed by the compositor when
+  /// something changes. The bidirectional form is the one that hands the
+  /// servant a writer it can keep.
   ///
   /// The first message is the theme at subscription, so a client that
   /// starts after Settings already picked nebula is nebula on its first

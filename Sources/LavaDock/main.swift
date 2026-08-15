@@ -63,6 +63,24 @@ final class DockModel {
     /// bottom edge and nothing on screen.
     var revealed = false
 
+    /// Whether a window is in the way of the dock's strip, as the compositor
+    /// sees it — `SubscribePanelArea`.
+    ///
+    /// Auto-hide is the right behaviour when something is under the dock and
+    /// the wrong one when the desktop below it is empty: there is nothing to
+    /// get out of the way of, and a dock that hides from bare wallpaper is
+    /// just a dock you have to go and fetch. False keeps it out.
+    var covered = false
+
+    /// Whether the pointer is on the dock. Tracked because "hidden" now has
+    /// two possible reasons and only one of them is the pointer's.
+    var pointerInside = false
+
+    /// Out because nothing is in the way, rather than because the pointer is
+    /// here. The distinction matters on the way back: the pointer leaving
+    /// must not put away a dock that was never hiding.
+    var showsBecauseClear: Bool { !covered && !entries.isEmpty }
+
     @ObservationIgnored var editor: Editor?
     @ObservationIgnored private var icons: [String: UIImage?] = [:]
 
@@ -196,6 +214,7 @@ struct DockView: View {
                 // The pointer arriving is the only thing a hidden dock ever
                 // hears: its input region is a three-pixel strip along the
                 // screen's edge, so being hovered at all *is* the approach.
+                model.pointerInside = inside
                 if inside { reveal() }
             },
             paint: { list, frame in paint(list, frame) }
@@ -344,13 +363,39 @@ model.editor = editor
 
 LavaClient.onWindowList { workspace, windows in
     model.apply(workspace: workspace, windows: windows)
+    // Entries changing can change the answer without any window moving: the
+    // last window on this workspace closing leaves the desktop clear, and the
+    // dock having no entries at all is not a dock worth showing.
+    model.revealed = model.showsBecauseClear || model.revealed
+    ViewInvalidation.markNeedsRedraw()
+}
+
+// Out when nothing is in the way, hidden when something is. The compositor is
+// the only one that can see the difference — see `SubscribePanelArea`.
+LavaClient.onPanelArea { covered in
+    guard model.covered != covered else { return }
+    model.covered = covered
+    // Uncovered brings it out. Covered puts it away again *unless* the
+    // pointer is on it, which is the ordinary reveal and belongs to the
+    // pointer.
+    if model.showsBecauseClear {
+        model.revealed = true
+    } else if !model.pointerInside {
+        model.revealed = false
+    }
+    ViewInvalidation.markNeedsRedraw()
 }
 
 // The pointer leaving is the only way a dock learns to put itself away: it
 // hears about the pointer while it is inside and nothing at all afterwards.
 PointerState.onLeave = {
     MainQueue.async {
+        model.pointerInside = false
         guard model.revealed else { return }
+        // Nothing to hide behind: the dock is out because the desktop under it
+        // is clear, and the pointer wandering off is not a reason to put it
+        // away.
+        guard !model.showsBecauseClear else { return }
         model.revealed = false
         ViewInvalidation.markNeedsRedraw()
     }

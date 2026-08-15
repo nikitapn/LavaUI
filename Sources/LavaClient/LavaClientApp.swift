@@ -361,6 +361,63 @@ public enum LavaClient {
         }
     }
 
+    /// Whether anything is in the way of this panel, now and whenever it
+    /// changes.
+    ///
+    /// For a panel that hides itself. A dock knows where it is and nothing
+    /// about what is in front of it — overlap is the compositor's to see, and
+    /// this is it saying so. `covered` is false when the strip the panel
+    /// occupies is clear of windows on the current workspace.
+    ///
+    /// Only meaningful for a panel; a window gets `false` forever.
+    public static func onPanelArea(
+        _ handler: @escaping @Sendable (Bool) -> Void
+    ) {
+        guard Self.compositor != nil else { return }
+        guard surfaceID != 0 else {
+            // Set up before the surface exists, which is where a panel
+            // naturally puts its subscriptions — and the only one of them that
+            // needs a surface id, because it is the only one that is *about*
+            // the surface. Held until `run` creates it.
+            pendingPanelArea = handler
+            return
+        }
+        startPanelArea(handler)
+    }
+
+    nonisolated(unsafe) private static var pendingPanelArea:
+        (@Sendable (Bool) -> Void)?
+
+    private static func startPanelArea(
+        _ handler: @escaping @Sendable (Bool) -> Void
+    ) {
+        guard let compositor = Self.compositor, surfaceID != 0 else { return }
+        let stream: NPRPCBidiStream<PanelAreaAck, PanelArea>
+        do {
+            stream = try compositor.subscribePanelArea(surfaceId: surfaceID)
+        } catch {
+            FileHandle.standardError.write(
+                Data("SubscribePanelArea failed: \(error)\n".utf8)
+            )
+            return
+        }
+        Task.detached {
+            do {
+                for try await area in stream.reader {
+                    let covered = area.covered
+                    let serial = area.serial
+                    MainQueue.async { handler(covered) }
+                    try? await stream.writer.write(PanelAreaAck(serial: serial))
+                }
+            } catch {
+                FileHandle.standardError.write(
+                    Data("panel area stream ended: \(error)\n".utf8)
+                )
+            }
+            stream.writer.close()
+        }
+    }
+
     /// A PNG of another window, as the compositor currently sees it.
     ///
     /// What the app switcher puts on a card. `maxSide` downsamples the longer
@@ -565,6 +622,10 @@ public enum LavaClient {
             )
             // Anything the application asked for before it had a surface.
             flushMinimumSize()
+            if let pending = pendingPanelArea {
+                pendingPanelArea = nil
+                startPanelArea(pending)
+            }
         } catch {
             fail("surface setup failed: \(error)")
         }

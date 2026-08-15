@@ -374,6 +374,20 @@ compositor clamps the window to a size the app did not request, the swapchain
 can hit `VK_ERROR_OUT_OF_DATE_KHR` on acquire and the engine treats it as
 fatal. Open at the size the output will actually grant to avoid it.
 
+## The dock hides only when something is in the way
+
+`SubscribePanelArea` tells a panel whether a window on the current workspace
+overlaps its own strip; the dock stays out while nothing does and falls back to
+pointer-driven auto-hide when something does. The compositor recomputes on
+window moves and resizes as well as on list changes — geometry the window list
+deliberately does not carry — and sends only when the answer flips, so dragging
+a window across the bottom edge is two messages, not one per motion event.
+
+It is a `bidi_stream` like the other subscriptions, and the IDL says why at
+length: a `server_stream` servant in NPRPC is a generator the stream manager
+pulls from, and this data is pushed by the compositor's loop. Read that note
+before adding another state stream.
+
 ## Notifications
 
 The panel is the session's notification daemon: canvas's `NotificationHost`

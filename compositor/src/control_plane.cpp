@@ -278,6 +278,100 @@ class InputBroker {
   uint32_t serial_ = 0;
 };
 
+/// One panel's "is anything in the way of me" subscription.
+///
+/// Remembers what it was last told, which is what turns a recompute on every
+/// window move into a message only when the answer changes. The state lives
+/// per subscriber rather than per panel because two subscribers to the same
+/// panel may have joined at different times, and the one that joined second
+/// has been told nothing yet.
+struct AreaWatcher {
+  explicit AreaWatcher(nprpc::StreamWriter<PanelArea> &&w)
+      : pump(std::move(w)) {}
+
+  /// Sends only what is news. True when something went out.
+  bool sendIfChanged(bool covered) {
+    if (sent && lastCovered == covered) return false;
+    sent = true;
+    lastCovered = covered;
+    PanelArea area{};
+    area.serial = ++serial;
+    area.covered = covered;
+    pump.post(area);
+    return true;
+  }
+
+  void close() { pump.close(); }
+  bool done() { return pump.done(); }
+
+  // Coalescing, like every other state stream: if a client is slow, the
+  // newest answer is the only one worth having.
+  StreamPump<PanelArea, true> pump;
+  uint32_t serial = 0;
+  bool sent = false;
+  bool lastCovered = false;
+};
+
+using AreaWatcherPtr = std::shared_ptr<AreaWatcher>;
+
+/// Panel-area subscriptions, keyed by the panel they are about.
+///
+/// The same shape as `InputBroker` and for the same reason: this is the other
+/// per-surface stream, and both are torn down by the surface going away.
+class AreaBroker {
+ public:
+  void subscribe(uint32_t surfaceId, const AreaWatcherPtr &sub) {
+    std::lock_guard lock(mutex_);
+    subscribers_[surfaceId].push_back(sub);
+  }
+
+  void unsubscribe(uint32_t surfaceId, const AreaWatcherPtr &sub) {
+    std::lock_guard lock(mutex_);
+    auto it = subscribers_.find(surfaceId);
+    if (it == subscribers_.end()) return;
+    std::erase(it->second, sub);
+    if (it->second.empty()) subscribers_.erase(it);
+  }
+
+  void closeAll(uint32_t surfaceId) {
+    std::vector<AreaWatcherPtr> targets;
+    {
+      std::lock_guard lock(mutex_);
+      auto it = subscribers_.find(surfaceId);
+      if (it == subscribers_.end()) return;
+      targets = std::move(it->second);
+      subscribers_.erase(it);
+    }
+    for (const auto &sub : targets) sub->close();
+  }
+
+  /// Every subscribed panel, once each. The copy is what lets `answer` run
+  /// outside the lock — it computes against the scene, and the scene is the
+  /// loop's.
+  std::vector<uint32_t> panels() {
+    std::lock_guard lock(mutex_);
+    std::vector<uint32_t> ids;
+    ids.reserve(subscribers_.size());
+    for (const auto &entry : subscribers_) ids.push_back(entry.first);
+    return ids;
+  }
+
+  void tell(uint32_t surfaceId, bool covered) {
+    std::vector<AreaWatcherPtr> targets;
+    {
+      std::lock_guard lock(mutex_);
+      auto it = subscribers_.find(surfaceId);
+      if (it == subscribers_.end()) return;
+      targets = it->second;
+    }
+    for (const auto &sub : targets) sub->sendIfChanged(covered);
+  }
+
+ private:
+  std::mutex mutex_;
+  std::unordered_map<uint32_t, std::vector<AreaWatcherPtr>> subscribers_;
+};
+
 /// One panel's focus subscription.
 struct FocusWatcher {
   explicit FocusWatcher(nprpc::StreamWriter<ActiveWindow> &&w)
@@ -421,9 +515,10 @@ InputEvent make_event(uint32_t kind, float x, float y, int32_t button,
 class CompositorImpl final : public ICompositor_Servant {
  public:
   CompositorImpl(CompositorHost &host, LoopQueue &loop, InputBroker &broker,
-                 FocusBroker &focus, ListBroker &windows, ThemeBroker &theme)
+                 FocusBroker &focus, ListBroker &windows, ThemeBroker &theme,
+                 AreaBroker &areas)
       : host_(host), loop_(loop), broker_(broker), focus_(focus),
-        windows_(windows), theme_(theme) {}
+        windows_(windows), theme_(theme), areas_(areas) {}
 
   // ─── Resources ───────────────────────────────────────────────────────────
 
@@ -781,6 +876,32 @@ class CompositorImpl final : public ICompositor_Servant {
     host_.setCursor(surfaceId, static_cast<uint32_t>(shape));
   }
 
+  nprpc::Task<> SubscribePanelArea(
+      uint32_t surfaceId,
+      nprpc::BidiStream<PanelAreaAck, PanelArea> stream) override {
+    if (!host_.surfaceExists(surfaceId)) throw SurfaceNotFound(surfaceId);
+
+    auto watcher = std::make_shared<AreaWatcher>(std::move(stream.writer));
+    areas_.subscribe(surfaceId, watcher);
+    // The answer at subscription, so a dock that starts on an empty desktop
+    // shows itself on its first frame rather than after the first window
+    // happens to move.
+    watcher->sendIfChanged(host_.panelCovered(surfaceId));
+
+    try {
+      while (auto ack = co_await stream.reader) {
+        (void)ack;
+      }
+    } catch (...) {
+      areas_.unsubscribe(surfaceId, watcher);
+      watcher->close();
+      throw;
+    }
+    areas_.unsubscribe(surfaceId, watcher);
+    watcher->close();
+    co_return;
+  }
+
   nprpc::Task<> SubscribeWindows(
       nprpc::BidiStream<WindowListAck, WindowList> stream) override {
     auto watcher = std::make_shared<ListWatcher>(std::move(stream.writer));
@@ -989,6 +1110,7 @@ class CompositorImpl final : public ICompositor_Servant {
   FocusBroker &focus_;
   ListBroker &windows_;
   ThemeBroker &theme_;
+  AreaBroker &areas_;
 
   /// Registered images, three ways round: what a key resolves to, how many
   /// clients hold it, and which key an id came from. No lock, unlike
@@ -1066,8 +1188,9 @@ class ControlPlaneImpl final : public ControlPlane {
       return false;
     }
 
+    host_ = &host;
     servant_ = std::make_unique<CompositorImpl>(host, queue_, broker_, focus_,
-                                                windows_, theme_);
+                                                windows_, theme_, areas_);
     const nprpc::ObjectId oid = poa_->activate_object_with_id(
         0, servant_.get(), nprpc::ObjectActivationFlags::shm);
 
@@ -1097,6 +1220,18 @@ class ControlPlaneImpl final : public ControlPlane {
 
   void surfaceGone(uint32_t surfaceId) override {
     broker_.closeAll(surfaceId);
+    // A panel's area subscription dies with the panel, the same way its input
+    // stream does — and it is the only thing that ends this stream from the
+    // compositor's side, since nothing else is watching for the client.
+    areas_.closeAll(surfaceId);
+  }
+
+  void postPanelAreas() override {
+    // Nothing subscribed is the common case — no dock, or a dock that has not
+    // asked — and it costs one empty vector.
+    for (uint32_t id : areas_.panels()) {
+      areas_.tell(id, host_->panelCovered(id));
+    }
   }
 
   void postWindowList() override {
@@ -1141,6 +1276,8 @@ class ControlPlaneImpl final : public ControlPlane {
   FocusBroker focus_;
   ListBroker windows_;
   ThemeBroker theme_;
+  AreaBroker areas_;
+  CompositorHost *host_ = nullptr;
   uint32_t listSerial_ = 0;
   uint32_t themeSerial_ = 0;
   nprpc::Rpc *rpc_ = nullptr;
