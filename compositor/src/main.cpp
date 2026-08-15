@@ -728,8 +728,13 @@ struct Server {
 
   /// Deepest surface under a layout-space point, plus that point in the
   /// surface's own coordinates. Null when the cursor is over blank desktop.
+  ///
+  /// `out_window` is the window that owns the surface — an xdg toplevel or an
+  /// X11 one, which is why it is a `FramedWindow` and not a `Toplevel`. Null
+  /// for anything that owns its own stacking: a popup, an override-redirect
+  /// X11 menu.
   wlr_surface *surface_at(double lx, double ly, double *sx, double *sy,
-                          Toplevel **out_toplevel);
+                          FramedWindow **out_window);
 
   void focus(FramedWindow *window);
   /// The inverse: nothing is focused, because the click landed on the desktop.
@@ -3368,6 +3373,16 @@ void XwaylandSurface::on_map(wl_listener *listener, void *) {
     return;
   }
 
+  // The back-pointer click-to-focus resolves through — `surface_at` walks up
+  // from the surface it hit looking for exactly this, and an X11 window
+  // without one is a window that cannot be raised by clicking inside it.
+  //
+  // Set here rather than beside the tree above, because an override-redirect
+  // window must *not* have one: it is a menu, it decides its own stacking and
+  // its own focus at map time, and resolving a click on it to a window to
+  // raise would undo both.
+  self->scene_tree->node.data = static_cast<FramedWindow *>(self);
+
   server->toplevels.push_front(self);
   if (server->surfaces != nullptr) {
     const uint32_t width = self->xsurface->width > 0
@@ -3830,7 +3845,11 @@ Toplevel::Toplevel(Server *server, wlr_xdg_toplevel *toplevel)
   workspace = server->workspaces.current;
   // The scene node points back here so `surface_at` can get from a hit node to
   // the window that owns it. wlroots walks up to the nearest node with data.
-  scene_tree->node.data = this;
+  //
+  // As a `FramedWindow`, not as a `Toplevel`: an X11 window stores the same
+  // pointer, and the reader has no way to tell the two apart afterwards. The
+  // cast is what makes both ends agree on one type.
+  scene_tree->node.data = static_cast<FramedWindow *>(this);
   toplevel->base->data = scene_tree;
 
   // Map/unmap belong to the surface, not the xdg role — they moved there when
@@ -4929,8 +4948,8 @@ void Server::update_seat_capabilities() {
 }
 
 wlr_surface *Server::surface_at(double lx, double ly, double *sx, double *sy,
-                                Toplevel **out_toplevel) {
-  *out_toplevel = nullptr;
+                                FramedWindow **out_window) {
+  *out_window = nullptr;
   wlr_scene_node *node = wlr_scene_node_at(&scene->tree.node, lx, ly, sx, sy);
   if (node == nullptr || node->type != WLR_SCENE_NODE_BUFFER) {
     return nullptr;
@@ -4946,7 +4965,7 @@ wlr_surface *Server::surface_at(double lx, double ly, double *sx, double *sy,
   for (wlr_scene_tree *tree = node->parent; tree != nullptr;
        tree = tree->node.parent) {
     if (tree->node.data != nullptr) {
-      *out_toplevel = static_cast<Toplevel *>(tree->node.data);
+      *out_window = static_cast<FramedWindow *>(tree->node.data);
       break;
     }
   }
@@ -4997,16 +5016,23 @@ void Server::focus(FramedWindow *window) {
   wlr_surface *surface = window->focusSurface();
   if (surface == nullptr) return;
   wlr_surface *previous = seat->keyboard_state.focused_surface;
-  if (previous == surface) return;
+  // Already has the keyboard — but not necessarily the top of the stack, and
+  // this is also the raise path. Returning here used to mean a click inside a
+  // window that was focused-but-buried did nothing at all: the keyboard was
+  // already there, so nothing moved, and the window stayed under the one the
+  // user was trying to get out from behind.
+  const bool keyboardAlreadyHere = previous == surface;
 
   // Deactivating tells the old window to stop drawing itself as focused — its
   // caret, its titlebar. Nothing else would ever tell it. Found through the
   // window list rather than by asking the surface what kind it is, so an X11
   // window is deactivated the same way an xdg one is.
-  for (FramedWindow *other : toplevels) {
-    if (other != window && other->focusSurface() == previous) {
-      other->activate(false);
-      break;
+  if (!keyboardAlreadyHere) {
+    for (FramedWindow *other : toplevels) {
+      if (other != window && other->focusSurface() == previous) {
+        other->activate(false);
+        break;
+      }
     }
   }
 
@@ -5025,6 +5051,7 @@ void Server::focus(FramedWindow *window) {
   toplevels.push_front(window);
   window->activate(true);
 
+  if (keyboardAlreadyHere) return;
   if (auto *keyboard = wlr_seat_get_keyboard(seat)) {
     wlr_seat_keyboard_notify_enter(seat, surface, keyboard->keycodes,
                                    keyboard->num_keycodes, &keyboard->modifiers);
@@ -5262,9 +5289,9 @@ void Server::update_pointer_focus(uint32_t time_msec) {
   }
 
   double sx = 0, sy = 0;
-  Toplevel *toplevel = nullptr;
+  FramedWindow *window = nullptr;
   wlr_surface *surface =
-      surface_at(cursor->x, cursor->y, &sx, &sy, &toplevel);
+      surface_at(cursor->x, cursor->y, &sx, &sy, &window);
 
   if (surface == nullptr) {
     // Over blank desktop: take the cursor image back from whichever client set
@@ -5840,9 +5867,9 @@ void Server::on_cursor_button(wl_listener *listener, void *data) {
 
   if (pressed) {
     double sx = 0, sy = 0;
-    Toplevel *toplevel = nullptr;
+    FramedWindow *window = nullptr;
     wlr_surface *hit = server->surface_at(server->cursor->x, server->cursor->y,
-                                          &sx, &sy, &toplevel);
+                                          &sx, &sy, &window);
     if (hit == nullptr) {
       // Nothing of anyone's under the pointer — the scene's background rect is
       // not a surface, so this is the desktop. Tested on the *surface* and not
@@ -5851,7 +5878,9 @@ void Server::on_cursor_button(wl_listener *listener, void *data) {
       // every time a menu was clicked.
       server->blurAll();
     } else {
-      server->focus(toplevel);  // click to focus; a hit with no toplevel is a no-op
+      // Click to focus. A hit that resolves to no window is a popup or an
+      // override-redirect menu, which owns its own stacking and focus.
+      server->focus(window);
       server->setFocusedSurface(0);
     }
   }
