@@ -7,9 +7,11 @@
 #include <cstdlib>
 #include <filesystem>
 
+#include "application.hpp"
 #include "frame_probe.hpp"
 #include "render/dmabuf_image.hpp"
 #include "render/draw_command.hpp"
+#include "render/imported_dmabuf.hpp"
 
 namespace lava {
 namespace {
@@ -312,12 +314,7 @@ void CanvasSurface::setCornerRadius(float radius, bool top, bool bottom) {
   renderer_.engine().setWindowCornerRadius(radius, top, bottom, windowId_);
 }
 
-bool CanvasSurface::frostFromRgba(const uint8_t *rgba, uint32_t srcW,
-                                  uint32_t srcH, float radius,
-                                  const std::string &key, float cornerRadius) {
-  if (rgba == nullptr || srcW < 1 || srcH < 1 || key.empty()) return false;
-  const int id =
-      renderer_.engine().uploadTexture(key, rgba, srcW, srcH);
+bool CanvasSurface::frostWithTexture(int id, float radius, float cornerRadius) {
   if (id <= 0) return false;
 
   canvas::DrawCommand begin{};
@@ -342,6 +339,41 @@ bool CanvasSurface::frostFromRgba(const uint8_t *rgba, uint32_t srcW,
   const std::vector<canvas::DrawCommand> commands{begin, image, end};
   const std::vector<canvas::GlyphInstance> glyphs;
   return renderList(commands, glyphs);
+}
+
+bool CanvasSurface::frostFromRgba(const uint8_t *rgba, uint32_t srcW,
+                                  uint32_t srcH, float radius,
+                                  const std::string &key, float cornerRadius) {
+  if (rgba == nullptr || srcW < 1 || srcH < 1 || key.empty()) return false;
+  const int id =
+      renderer_.engine().uploadTexture(key, rgba, srcW, srcH);
+  return frostWithTexture(id, radius, cornerRadius);
+}
+
+bool CanvasSurface::frostFromDmabuf(const wlr_dmabuf_attributes &src, int srcX,
+                                    int srcY, int srcW, int srcH, float radius,
+                                    const std::string &key,
+                                    float cornerRadius) {
+  if (srcW < 1 || srcH < 1 || key.empty() || src.n_planes < 1) return false;
+  Application *app = renderer_.engine().application();
+  if (app == nullptr) return false;
+
+  canvas::DmabufImport desc{};
+  desc.width = static_cast<uint32_t>(src.width);
+  desc.height = static_cast<uint32_t>(src.height);
+  desc.drmFormat = src.format;
+  desc.modifier = src.modifier;
+  desc.planeCount = src.n_planes;
+  const int planes = std::min(src.n_planes, 4);
+  for (int i = 0; i < planes; ++i) {
+    desc.fd[i] = src.fd[i];
+    desc.offset[i] = src.offset[i];
+    desc.stride[i] = src.stride[i];
+  }
+  const int id = app->importDmabufTexture(
+      key, desc, srcX, srcY, static_cast<uint32_t>(srcW),
+      static_cast<uint32_t>(srcH));
+  return frostWithTexture(id, radius, cornerRadius);
 }
 
 bool CanvasSurface::renderList(

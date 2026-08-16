@@ -527,6 +527,8 @@ void RenderDevice::createLogicalDevice()
   if (exportDrmFd_ >= 0) {
     getMemoryFd_ = reinterpret_cast<PFN_vkGetMemoryFdKHR>(
       vkGetDeviceProcAddr(device_, "vkGetMemoryFdKHR"));
+    getMemoryFdProperties_ = reinterpret_cast<PFN_vkGetMemoryFdPropertiesKHR>(
+      vkGetDeviceProcAddr(device_, "vkGetMemoryFdPropertiesKHR"));
     getModifierProps_ =
       reinterpret_cast<PFN_vkGetImageDrmFormatModifierPropertiesEXT>(
         vkGetDeviceProcAddr(device_,

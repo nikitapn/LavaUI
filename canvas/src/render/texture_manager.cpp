@@ -4,6 +4,7 @@
 #include <cstdlib>
 #include <vector>
 
+#include "render/imported_dmabuf.hpp"
 #include "render/render_device.hpp"
 #include "render/texture_manager.hpp"
 
@@ -78,6 +79,97 @@ bool createStandaloneTexture(RenderDevice &device, const uint8_t *rgba,
   view = device.createImageView(image, VK_FORMAT_R8G8B8A8_SRGB,
                                 VK_IMAGE_ASPECT_COLOR_BIT, mips);
   return view != VK_NULL_HANDLE;
+}
+
+constexpr VkImageSubresourceRange kBlitColor{
+  VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+
+/// GPU crop + format convert of an imported dma-buf into a sampled texture.
+bool blitImportedTexture(RenderDevice &device, const canvas::ImportedDmabuf &src,
+                         int32_t x, int32_t y, uint32_t width, uint32_t height,
+                         VkImage &image, VmaAllocation &allocation,
+                         VkImageView &view)
+{
+  device.createImage(width, height, 1, VK_SAMPLE_COUNT_1_BIT,
+                     VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_TILING_OPTIMAL,
+                     VK_IMAGE_USAGE_TRANSFER_DST_BIT |
+                       VK_IMAGE_USAGE_SAMPLED_BIT,
+                     VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, image, allocation);
+
+  VkCommandBuffer cmd = device.beginSingleTimeCommands();
+  src.recordAcquire(cmd);
+
+  VkImageMemoryBarrier toDst{
+    .sType               = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+    .srcAccessMask       = 0,
+    .dstAccessMask       = VK_ACCESS_TRANSFER_WRITE_BIT,
+    .oldLayout           = VK_IMAGE_LAYOUT_UNDEFINED,
+    .newLayout           = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+    .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+    .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+    .image               = image,
+    .subresourceRange    = kBlitColor,
+  };
+  vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                       VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0,
+                       nullptr, 1, &toDst);
+
+  const VkImageBlit region{
+    .srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
+    .srcOffsets     = {{x, y, 0},
+                       {x + static_cast<int32_t>(width),
+                        y + static_cast<int32_t>(height), 1}},
+    .dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
+    .dstOffsets     = {{0, 0, 0},
+                       {static_cast<int32_t>(width),
+                        static_cast<int32_t>(height), 1}},
+  };
+  vkCmdBlitImage(cmd, src.image(), VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, image,
+                 VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region,
+                 VK_FILTER_LINEAR);
+
+  VkImageMemoryBarrier toSample{
+    .sType               = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+    .srcAccessMask       = VK_ACCESS_TRANSFER_WRITE_BIT,
+    .dstAccessMask       = VK_ACCESS_SHADER_READ_BIT,
+    .oldLayout           = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+    .newLayout           = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+    .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+    .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+    .image               = image,
+    .subresourceRange    = kBlitColor,
+  };
+  vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                       VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr, 0,
+                       nullptr, 1, &toSample);
+  device.endSingleTimeCommands(cmd);
+
+  VkComponentMapping swizzle{};
+  if (src.opaqueAlpha()) {
+    swizzle.a = VK_COMPONENT_SWIZZLE_ONE;
+  }
+  VkImageViewCreateInfo viewInfo{
+    .sType      = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+    .image      = image,
+    .viewType   = VK_IMAGE_VIEW_TYPE_2D,
+    .format     = VK_FORMAT_R8G8B8A8_SRGB,
+    .components = swizzle,
+    .subresourceRange =
+      {
+        .aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT,
+        .baseMipLevel   = 0,
+        .levelCount     = 1,
+        .baseArrayLayer = 0,
+        .layerCount     = 1,
+      },
+  };
+  if (vkCreateImageView(device.getDevice(), &viewInfo, nullptr, &view) !=
+      VK_SUCCESS) {
+    device.destroyImage(image, allocation);
+    view = VK_NULL_HANDLE;
+    return false;
+  }
+  return true;
 }
 
 }  // namespace
@@ -175,6 +267,74 @@ TextureHandle TextureManager::uploadTexture(const std::string& key,
     auto textureData = std::make_unique<TextureData>();
     textureData->image = textureImage;
     textureData->allocation = textureAlloc;
+    textureData->view = view;
+    textureData->path = key;
+    textureData->refCount = 1;
+    textureData->width = width;
+    textureData->height = height;
+    textureData->bytes = static_cast<uint64_t>(width) * height * 4;
+    imageBytes_ += textureData->bytes;
+    textureData->ownsImage = true;
+
+    uint32_t textureId = nextId_++;
+    textureData->id = textureId;
+    textureById_[textureId] = textureData.get();
+    textures_[key] = std::move(textureData);
+    return {view, textureId};
+}
+
+TextureHandle TextureManager::importDmabufTexture(
+    const std::string &key, const canvas::DmabufImport &src, int32_t x,
+    int32_t y, uint32_t width, uint32_t height)
+{
+    if (!device_ || key.empty() || width == 0 || height == 0) {
+        return {VK_NULL_HANDLE, 0};
+    }
+    if (x < 0 || y < 0 ||
+        static_cast<uint32_t>(x) + width > src.width ||
+        static_cast<uint32_t>(y) + height > src.height) {
+        return {VK_NULL_HANDLE, 0};
+    }
+
+    {
+        std::lock_guard lock(mutex_);
+        auto existing = textures_.find(key);
+        if (existing != textures_.end()) {
+            reviveLocked(*existing->second);
+            existing->second->refCount++;
+            existing->second->lastUsed = ++useCounter_;
+            return {existing->second->view, existing->second->id,
+                    existing->second->uv0, existing->second->uv1};
+        }
+    }
+
+    auto imported = canvas::ImportedDmabuf::create(*device_, src);
+    if (!imported) return {VK_NULL_HANDLE, 0};
+    imported->waitReady();
+
+    VkImage image = VK_NULL_HANDLE;
+    VmaAllocation allocation = VK_NULL_HANDLE;
+    VkImageView view = VK_NULL_HANDLE;
+    if (!blitImportedTexture(*device_, *imported, x, y, width, height, image,
+                             allocation, view)) {
+        return {VK_NULL_HANDLE, 0};
+    }
+
+    std::lock_guard lock(mutex_);
+    auto existing = textures_.find(key);
+    if (existing != textures_.end()) {
+        vkDestroyImageView(device_->getDevice(), view, nullptr);
+        device_->destroyImage(image, allocation);
+        reviveLocked(*existing->second);
+        existing->second->refCount++;
+        existing->second->lastUsed = ++useCounter_;
+        return {existing->second->view, existing->second->id,
+                existing->second->uv0, existing->second->uv1};
+    }
+
+    auto textureData = std::make_unique<TextureData>();
+    textureData->image = image;
+    textureData->allocation = allocation;
     textureData->view = view;
     textureData->path = key;
     textureData->refCount = 1;

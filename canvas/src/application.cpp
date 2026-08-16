@@ -10,6 +10,7 @@
 #include "util/constants.hpp"
 #include "util/key_codes.hpp"
 #include "render/dmabuf_image.hpp"
+#include "render/imported_dmabuf.hpp"
 #include "render/render_device.hpp"
 #include "render/render_window.hpp"
 #include "window/app_window.hpp"
@@ -582,6 +583,16 @@ struct Application::Impl
     return h.isValid() ? static_cast<int>(h.id) : -1;
   }
 
+  int importDmabufTexture(const std::string &key,
+                          const canvas::DmabufImport &src, int32_t x,
+                          int32_t y, uint32_t w, uint32_t h)
+  {
+    if (!deviceUp) return -1;
+    auto handle = TextureManager::getInstance().importDmabufTexture(
+      key, src, x, y, w, h);
+    return handle.isValid() ? static_cast<int>(handle.id) : -1;
+  }
+
   bool hasTexture(const std::string &key) const
   {
     return TextureManager::getInstance().hasTexture(key);
@@ -1010,6 +1021,14 @@ int Application::uploadTexture(const std::string &key, const uint8_t *rgba,
                                uint32_t width, uint32_t height)
 {
   return impl_->uploadTexture(key, rgba, width, height);
+}
+
+int Application::importDmabufTexture(const std::string &key,
+                                     const canvas::DmabufImport &src,
+                                     int32_t x, int32_t y, uint32_t w,
+                                     uint32_t h)
+{
+  return impl_->importDmabufTexture(key, src, x, y, w, h);
 }
 
 bool Application::hasTexture(const std::string &key) const

@@ -154,15 +154,22 @@ class CanvasSurface {
   bool renderList(const std::vector<canvas::DrawCommand> &commands,
                   const std::vector<canvas::GlyphInstance> &glyphs);
 
-  /// Uploads `rgba` (`srcW`×`srcH`) as a texture, draws it across this
-  /// surface, and runs the content-blur pass at `radius`. The result is
-  /// the exported dmabuf — GPU frost, no CPU box filter.
+  /// CPU fallback: uploads `rgba` (`srcW`×`srcH`) as a texture, draws it
+  /// across this surface, and runs the content-blur pass at `radius`.
+  /// Prefer `frostFromDmabuf` when the capture is a dma-buf.
   ///
   /// `key` names the upload so a later call can drop the previous one.
   /// `cornerRadius` cuts the frost to the window's outline; 0 is square.
   bool frostFromRgba(const uint8_t *rgba, uint32_t srcW, uint32_t srcH,
                      float radius, const std::string &key,
                      float cornerRadius = 0.f);
+
+  /// Same frost, but the pixels stay on the GPU: `src` is the wlroots
+  /// capture's dma-buf, cropped to `srcX,srcY,srcW,srcH`. False if the
+  /// import or blit failed — the caller can still do the CPU path.
+  bool frostFromDmabuf(const wlr_dmabuf_attributes &src, int srcX, int srcY,
+                       int srcW, int srcH, float radius,
+                       const std::string &key, float cornerRadius = 0.f);
 
   /// Renders whatever another process publishes into the arena named `id`.
   ///
@@ -269,6 +276,10 @@ class CanvasSurface {
   bool opaqueBounds(float &x, float &y, float &w, float &h) const;
 
  private:
+  /// Content-blur pass over an already-uploaded texture. Shared by the
+  /// CPU and dma-buf frost paths.
+  bool frostWithTexture(int id, float radius, float cornerRadius);
+
   /// Writes the resolve target to `$LAVA_CANVAS_DUMP` if it is set.
   void dumpIfRequested();
 

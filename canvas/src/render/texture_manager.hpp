@@ -12,6 +12,7 @@
 
 #include "util/types.hpp"
 #include "render/image_atlas.hpp"
+#include "render/imported_dmabuf.hpp"
 
 class RenderDevice;
 
@@ -139,6 +140,14 @@ public:
     /// the thread that owns the device.
     TextureHandle uploadTexture(const std::string& key, const uint8_t* rgba,
                                 uint32_t width, uint32_t height);
+
+    /// GPU-side crop of a dma-buf another driver wrote. Same cache contract
+    /// as `uploadTexture`, without a host copy: the importer blits `x,y,w,h`
+    /// into an `R8G8B8A8_SRGB` sampled image. Invalid handle on failure.
+    TextureHandle importDmabufTexture(const std::string &key,
+                                      const canvas::DmabufImport &src,
+                                      int32_t x, int32_t y, uint32_t w,
+                                      uint32_t h);
 
     /// True if `key` is already resident, so a caller can skip decoding.
     ///

@@ -11,6 +11,7 @@
 
 namespace canvas {
 class DmabufImage;
+struct DmabufImport;
 }
 
 class Application {
@@ -269,6 +270,11 @@ public:
   /// Uploads pre-decoded RGBA8. Must run on the thread owning the device.
   int uploadTexture(const std::string &key, const uint8_t *rgba,
                     uint32_t width, uint32_t height);
+  /// GPU crop of a dma-buf. Texture id (>0), or -1. See
+  /// `TextureManager::importDmabufTexture`.
+  int importDmabufTexture(const std::string &key,
+                          const canvas::DmabufImport &src, int32_t x,
+                          int32_t y, uint32_t w, uint32_t h);
   bool hasTexture(const std::string &key) const;
   /// Takes a reference on an already-resident `key` and reports its size.
   /// Returns the texture id, or -1 if the key is not resident — in which case

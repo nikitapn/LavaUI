@@ -132,6 +132,7 @@ class RenderDevice
   /// from outside and never inferred here.
   bool exportFenceHonoured_ = false;
   PFN_vkGetMemoryFdKHR getMemoryFd_ = nullptr;
+  PFN_vkGetMemoryFdPropertiesKHR getMemoryFdProperties_ = nullptr;
   PFN_vkGetImageDrmFormatModifierPropertiesEXT getModifierProps_ = nullptr;
   PFN_vkGetSemaphoreFdKHR getSemaphoreFd_ = nullptr;
 
@@ -310,6 +311,10 @@ class RenderDevice
 
   /// True once `init` has brought up a device that can export dmabufs.
   bool canExportDmabuf() const { return getMemoryFd_ != nullptr; }
+  /// True when this device can also *import* a dma-buf another driver wrote.
+  /// Same extensions as export; the extra entry point is
+  /// `vkGetMemoryFdPropertiesKHR`.
+  bool canImportDmabuf() const { return getMemoryFdProperties_ != nullptr; }
   /// True when the handover can be fenced rather than waited on.
   bool canExportSyncFd() const { return exportSyncFd_; }
 
@@ -332,6 +337,10 @@ class RenderDevice
   // Extension entry points are not in the loader's static table, so they are
   // resolved once at `init` and handed out rather than looked up per call.
   PFN_vkGetMemoryFdKHR getMemoryFd() const { return getMemoryFd_; }
+  PFN_vkGetMemoryFdPropertiesKHR getMemoryFdProperties() const
+  {
+    return getMemoryFdProperties_;
+  }
   PFN_vkGetImageDrmFormatModifierPropertiesEXT getModifierProps() const
   {
     return getModifierProps_;

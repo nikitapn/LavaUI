@@ -2409,23 +2409,20 @@ class SurfaceRegistry : public lava::CompositorHost {
     srcW = std::max(1, std::min(srcW, captured->width - srcX));
     srcH = std::max(1, std::min(srcH, captured->height - srcY));
 
-    std::vector<uint8_t> raw;
-    const bool read = srcX >= 0 && srcY >= 0 &&
-                      lava::readBufferRgba(server_->renderer, captured, srcX,
-                                           srcY, srcW, srcH, raw);
-    wlr_buffer_unlock(captured);
-    if (!read) return;
-
     wlr_scene_tree *parent = workspaces_->tree[surface.workspace];
     const uint32_t destW = static_cast<uint32_t>(frameW);
     const uint32_t destH = static_cast<uint32_t>(frameH);
     if (!surface.blurCanvas) {
       surface.blurCanvas = renderer_->createSurface(destW, destH);
-      if (!surface.blurCanvas) return;
+      if (!surface.blurCanvas) {
+        wlr_buffer_unlock(captured);
+        return;
+      }
       surface.blurNode =
           wlr_scene_buffer_create(parent, surface.blurCanvas->buffer());
       if (surface.blurNode == nullptr) {
         surface.blurCanvas.reset();
+        wlr_buffer_unlock(captured);
         return;
       }
       bind_never_input(surface.blurNode);
@@ -2440,12 +2437,31 @@ class SurfaceRegistry : public lava::CompositorHost {
         frameIsRoundable(surface) ? cornerRadius_ : 0.f;
     const float frost = corners > 0.f ? corners + 2.f : 0.f;
     surface.blurCanvas->setCornerRadius(frost, true, true);
-    if (!surface.blurCanvas->frostFromRgba(
-            raw.data(), static_cast<uint32_t>(srcW),
-            static_cast<uint32_t>(srcH), surface.backdropBlurRadius,
-            surface.blurKey, frost)) {
-      return;
+
+    // Prefer a GPU import of the capture: same DRM node, the other
+    // VkDevice. The CPU path is the fallback when the buffer is shm or
+    // the modifier will not import as a blit source.
+    bool frosted = false;
+    wlr_dmabuf_attributes attribs{};
+    if (srcX >= 0 && srcY >= 0 &&
+        wlr_buffer_get_dmabuf(captured, &attribs)) {
+      frosted = surface.blurCanvas->frostFromDmabuf(
+          attribs, srcX, srcY, srcW, srcH, surface.backdropBlurRadius,
+          surface.blurKey, frost);
     }
+    if (!frosted) {
+      std::vector<uint8_t> raw;
+      const bool read = srcX >= 0 && srcY >= 0 &&
+                        lava::readBufferRgba(server_->renderer, captured, srcX,
+                                             srcY, srcW, srcH, raw);
+      frosted = read && surface.blurCanvas->frostFromRgba(
+                            raw.data(), static_cast<uint32_t>(srcW),
+                            static_cast<uint32_t>(srcH),
+                            surface.backdropBlurRadius, surface.blurKey,
+                            frost);
+    }
+    wlr_buffer_unlock(captured);
+    if (!frosted) return;
     show_surface(surface.blurNode, *surface.blurCanvas);
     wlr_scene_node_set_enabled(&surface.blurNode->node, true);
     placeBackdrop(surface);

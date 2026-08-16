@@ -17,6 +17,7 @@ canvas_engine_sources = files(
   'src/render/blur_pass.cpp',
   'src/render/compute_physics.cpp',
   'src/render/dmabuf_image.cpp',
+  'src/render/imported_dmabuf.cpp',
   'src/render/font.cpp',
   'src/render/font_key.cpp',
   'src/render/image_atlas.cpp',

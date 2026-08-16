@@ -39,6 +39,7 @@ let engineSources: [String] = [
     "render/blur_pass.cpp",
     "render/compute_physics.cpp",
     "render/dmabuf_image.cpp",
+    "render/imported_dmabuf.cpp",
     "render/font.cpp",
     "render/font_key.cpp",
     "render/image_atlas.cpp",
