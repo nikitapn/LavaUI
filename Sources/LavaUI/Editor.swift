@@ -420,6 +420,15 @@ public final class Editor: @unchecked Sendable {
         key: String, path: String? = nil,
         pixels: [UInt8], width: UInt32, height: UInt32
     ) -> UIImage? {
+        // A client has no device. Encode and register with the compositor
+        // — Flameshot's tray icon is only an IconPixmap, and the local
+        // upload used to return nil, so the panel drew the letter F.
+        if let remote = remoteResources {
+            guard let png = Self.encodePng(
+                pixels: pixels, width: width, height: height, maxSide: 64
+            ), !png.isEmpty else { return nil }
+            return remote.registerImage(data: png, maxPixelSize: 64)
+        }
         // Pointer overload: avoids copying [UInt8] into a U8Vector just to
         // hand bytes to Vulkan. (U8Vector overload exists for C++ callers.)
         let id: Int32 = pixels.withUnsafeBufferPointer { buf in
@@ -431,6 +440,21 @@ public final class Editor: @unchecked Sendable {
             path: path ?? key, cacheKey: key, textureId: UInt32(id),
             pixelWidth: Float(width), pixelHeight: Float(height)
         )
+    }
+
+    /// RGBA8 → PNG. `maxSide` 0 is native.
+    public nonisolated static func encodePng(
+        pixels: [UInt8], width: UInt32, height: UInt32, maxSide: UInt32 = 0
+    ) -> [UInt8]? {
+        let encoded = pixels.withUnsafeBufferPointer { buf -> canvas.DecodedImage in
+            guard let base = buf.baseAddress else { return canvas.DecodedImage() }
+            return canvas.Engine.encodeRgbaPng(base, width, height, maxSide)
+        }
+        let n = encoded.pixels.size()
+        guard n > 0 else { return nil }
+        return [UInt8](unsafeUninitializedCapacity: Int(n)) { buf, written in
+            written = encoded.copyTo(buf.baseAddress, n)
+        }
     }
 
     /// Whether the engine already has this key resident.

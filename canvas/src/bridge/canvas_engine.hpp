@@ -400,6 +400,14 @@ class Engine {
   static DecodedImage decodeImageData(const uint8_t *bytes, size_t byteCount,
                                       uint32_t maxPixelSize = 0);
 
+  /// Encodes RGBA8 to a PNG. `maxSide` 0 is native. Empty `pixels` on failure.
+  /// Same `copyTo` contract as `DecodedImage` so Swift can lift the bytes
+  /// in one memcpy. Used when a client has raw pixels (an SNI pixmap) and
+  /// must `RegisterImageData` them — the compositor only accepts encoded
+  /// files, and there is no GPU here to `uploadTexture`.
+  static DecodedImage encodeRgbaPng(const uint8_t *rgba, uint32_t width,
+                                    uint32_t height, uint32_t maxSide = 0);
+
   /// Uploads pre-decoded pixels under `key`. Device thread only.
   int uploadTexture(const std::string &key, const uint8_t *rgba,
                     uint32_t width, uint32_t height);

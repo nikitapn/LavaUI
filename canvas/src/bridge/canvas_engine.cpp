@@ -9,6 +9,7 @@
 #include "menu/notification.hpp"
 #include "menu/status_notifier.hpp"
 #include "render/font_key.hpp"
+#include "render/png_encode.hpp"
 #include "render/svg_image.hpp"
 #include "window/canvas_window.hpp"
 
@@ -721,6 +722,27 @@ DecodedImage Engine::decodeImageData(const uint8_t *bytes, size_t byteCount,
   stbi_uc *pixels = stbi_load_from_memory(
     bytes, static_cast<int>(byteCount), &w, &h, &channels, 4);
   return finishDecode(pixels, w, h, maxPixelSize);
+}
+
+DecodedImage Engine::encodeRgbaPng(const uint8_t *rgba, uint32_t width,
+                                   uint32_t height, uint32_t maxSide)
+{
+  DecodedImage out;
+  if (rgba == nullptr || width == 0 || height == 0) return out;
+  int encW = 0, encH = 0;
+  if (!::canvas::encodeRgbaPng(rgba, static_cast<int>(width),
+                               static_cast<int>(height),
+                               static_cast<int>(width) * 4,
+                               static_cast<int>(maxSide), out.pixels, encW,
+                               encH) ||
+      out.pixels.empty()) {
+    return DecodedImage{};
+  }
+  // Width/height are the encoded pixel size, not a claim that `pixels` is
+  // RGBA — `copyTo` is what Swift uses, and it does not consult `valid()`.
+  out.width = static_cast<uint32_t>(encW);
+  out.height = static_cast<uint32_t>(encH);
+  return out;
 }
 
 int Engine::uploadTexture(const std::string &key, const uint8_t *rgba,
