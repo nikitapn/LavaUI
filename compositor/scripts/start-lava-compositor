@@ -51,4 +51,8 @@ export WLR_RENDERER="${WLR_RENDERER:-vulkan}"
 export LAVA_FRAME_PROBE="${LAVA_FRAME_PROBE:-1}"
 export LAVA_CLIENT=1
 
+if [ -z "$SSH_AUTH_SOCK" ]; then
+	eval "$(ssh-agent -s)"
+fi
+
 exec stdbuf -oL -eL "$COMPOSITOR" >"$HOME/lava-compositor.log" 2>&1
