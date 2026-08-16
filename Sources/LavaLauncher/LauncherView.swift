@@ -321,15 +321,9 @@ private struct Icon: View {
         }
     }
 
-    /// The entry's own `Icon=` first, since that is what it says it wants; the
-    /// id second, for the entries that name no icon and ship one anyway.
-    ///
-    /// Both go through `themePath(forIconName:)` rather than
-    /// `iconPath(forAppId:)`. The app-id lookup exists for a caller holding a
-    /// window, and starts by reading every desktop entry on the machine to
-    /// find the one whose `Icon=` line this code is already looking at.
+    /// The entry's own `Icon=` first, then its id, then a sibling that
+    /// launches the same binary — see `IconLookup.themePath(forEntry:)`.
     private func iconPath() -> String? {
-        IconLookup.themePath(forIconName: entry.icon)
-            ?? IconLookup.themePath(forIconName: entry.id)
+        IconLookup.themePath(forEntry: entry)
     }
 }

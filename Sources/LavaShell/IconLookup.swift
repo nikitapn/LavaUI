@@ -14,12 +14,37 @@ import Foundation
 /// on the frame loop.
 public enum IconLookup {
     /// Icon theme roots, most specific first.
+    ///
+    /// XDG data dirs, not a hard-coded `/usr/share/icons`. Flatpak exports
+    /// Steam's icon under `~/.local/share/flatpak/exports/share/icons`, and
+    /// that path is on `XDG_DATA_DIRS` — searching only the three classic
+    /// roots is why the launcher drew an S.
     private static var iconRoots: [String] {
         var roots: [String] = []
+        var seen = Set<String>()
+        func add(_ path: String) {
+            guard !path.isEmpty, !seen.contains(path) else { return }
+            seen.insert(path)
+            roots.append(path)
+        }
         let env = ProcessInfo.processInfo.environment
-        if let home = env["HOME"] { roots.append(home + "/.local/share/icons") }
-        roots.append("/usr/share/icons")
-        roots.append("/usr/local/share/icons")
+        if let home = env["XDG_DATA_HOME"], !home.isEmpty {
+            add(home + "/icons")
+        } else if let home = env["HOME"] {
+            add(home + "/.local/share/icons")
+        }
+        let dataDirs = env["XDG_DATA_DIRS"] ?? "/usr/local/share:/usr/share"
+        for dir in dataDirs.split(separator: ":") where !dir.isEmpty {
+            add(String(dir) + "/icons")
+        }
+        // Present even when `XDG_DATA_DIRS` was not inherited — a nested
+        // compositor started from a stripped environment still finds them.
+        if let home = env["HOME"] {
+            add(home + "/.local/share/flatpak/exports/share/icons")
+        }
+        add("/var/lib/flatpak/exports/share/icons")
+        add("/usr/local/share/icons")
+        add("/usr/share/icons")
         return roots
     }
 
@@ -38,7 +63,9 @@ public enum IconLookup {
         {
             list.append(named)
         }
-        list.append(contentsOf: ["breeze", "Adwaita", "Papirus", "Arc", "hicolor"])
+        list.append(contentsOf: [
+            "breeze", "Adwaita", "Papirus", "Arc", "HighContrast", "hicolor",
+        ])
         return list
     }
 
@@ -71,6 +98,36 @@ public enum IconLookup {
         return found
     }
 
+    /// The file for a desktop entry, including ones that forgot `Icon=`.
+    ///
+    /// A hand-written `evince.desktop` often has a Name and an Exec and
+    /// nothing else. The packaged `org.gnome.Evince` entry next to it names
+    /// the icon; we inherit that rather than drawing a letter.
+    public static func themePath(forEntry entry: DesktopEntry) -> String? {
+        if let path = themePath(forIconName: entry.icon) { return path }
+        if let path = themePath(forIconName: entry.id) { return path }
+        if entry.icon.isEmpty {
+            let key = executableKey(entry.exec)
+            if !key.isEmpty, key != "flatpak", key != "env" {
+                for other in entries() where other.id != entry.id && !other.icon.isEmpty {
+                    if executableKey(other.exec) == key {
+                        if let path = themePath(forIconName: other.icon) {
+                            return path
+                        }
+                    }
+                }
+            }
+        }
+        return nil
+    }
+
+    /// First `Exec=` token, basename only — ` /usr/bin/evince %u` → `evince`.
+    private static func executableKey(_ exec: String) -> String {
+        let token = exec.split(whereSeparator: \.isWhitespace).first.map(String.init) ?? ""
+        guard !token.isEmpty else { return "" }
+        return URL(fileURLWithPath: token).lastPathComponent.lowercased()
+    }
+
     /// The best icon file for an application id, or nil if nothing was found.
     ///
     /// For a caller holding a window rather than an entry — a dock, a task
@@ -100,6 +157,8 @@ public enum IconLookup {
     /// install, which is worth not doing twice in one process.
     public static func useEntries(_ entries: [DesktopEntry]) {
         cachedEntries = entries
+        iconPathCache.removeAll()
+        namePathCache.removeAll()
     }
 
     private static func search(appId: String) -> String? {
