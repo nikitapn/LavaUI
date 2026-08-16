@@ -1830,6 +1830,10 @@ class SurfaceRegistry : public lava::CompositorHost {
       show_surface(surface.barNode, *surface.bar);
     }
     drawBar(surface);
+    // The client settled at a different size than we asked — a terminal
+    // rounding to cells, or CSD chrome the geometry box does not include.
+    // The dock's overlap answer follows the committed rectangle.
+    if (control_ != nullptr) control_->postPanelAreas();
   }
 
   void setTitle(ClientSurface &surface, const std::string &title) {
@@ -2458,6 +2462,11 @@ class SurfaceRegistry : public lava::CompositorHost {
         show_surface(surface.barNode, *surface.bar);
       }
       drawBar(surface);
+      // Same as the Lava path below. Maximize is move-then-resize: the
+      // move posts with the *old* size (usually still clear of the dock)
+      // and this is the step that actually covers the strip. Skipping
+      // it is why a maximized VS Code left the dock up.
+      if (control_ != nullptr) control_->postPanelAreas();
       return;
     }
 
