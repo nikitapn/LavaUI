@@ -181,6 +181,16 @@ struct Config {
   /// `WLR_RENDER_DRM_DEVICE`: which card draws. Only differs from the above
   /// when rendering on one GPU and presenting on another.
   std::string renderDevice;
+  /// Connector that hosts the panel and new windows: "DP-3", "eDP-1".
+  /// Empty means no preference — the screen at the layout origin, which
+  /// is where the panel sat before this existed. The name is kept when
+  /// that screen is unplugged; another enabled one stands in until it
+  /// comes back.
+  std::string primaryOutput;
+  /// How the screens share the desktop: `"extend"` (default) or `"mirror"`.
+  /// Extend is each screen its own piece of the layout; mirror is the
+  /// same picture on every screen, stacked at the origin.
+  std::string arrangement = "extend";
 
   KeyboardConfig keyboard;
   AppearanceConfig appearance;
@@ -249,6 +259,9 @@ std::string canonicalWallpaperMode(const std::string &value);
 
 /// Narrows anything to `fill`, `fit`, `stretch` or `center`. Never fails.
 std::string canonicalWallpaperFit(const std::string &value);
+
+/// Narrows anything to `extend` or `mirror`. Never fails.
+std::string canonicalArrangement(const std::string &value);
 
 /// `#rrggbb`, for writing into the config file.
 std::string formatWallpaperColor(uint32_t color);

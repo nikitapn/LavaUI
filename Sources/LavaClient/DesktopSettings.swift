@@ -168,6 +168,22 @@ public enum DesktopSettings {
         try call { try await $0.setOutput(request: request) }
     }
 
+    /// Makes this screen the primary: the panel moves here, and new
+    /// windows open here. Empty means no preference.
+    public static func setPrimaryOutput(_ name: String) throws {
+        try call { try await $0.setPrimaryOutput(name: name) }
+    }
+
+    /// `"extend"` or `"mirror"`.
+    public static func arrangement() throws -> String {
+        try call { try await $0.getArrangement() }
+    }
+
+    /// Extend or mirror, immediately and for the next session.
+    public static func setArrangement(_ mode: String) throws {
+        try call { try await $0.setArrangement(mode: mode) }
+    }
+
     /// A request pre-filled from what a screen is doing now, so a caller
     /// changing one field does not have to restate the other six.
     public static func request(from output: OutputInfo) -> OutputRequest {

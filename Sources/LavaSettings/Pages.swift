@@ -647,6 +647,57 @@ struct DisplayPage: View {
             if store.outputs.isEmpty {
                 Text("No screens reported.", color: Theme.current.textDim)
             } else {
+                let enabled = store.outputs.filter(\.enabled)
+                if enabled.count >= 2 {
+                    SettingGroup("Arrangement") {
+                        SettingRow(
+                            "How screens work together",
+                            "Extend gives each screen its own desktop. "
+                            + "Mirror shows the same picture on every screen."
+                        ) {
+                            VStack(spacing: 2) {
+                                PickerRow(
+                                    title: "Extend",
+                                    detail: "side by side",
+                                    selected: store.arrangement != "mirror"
+                                ) {
+                                    store.setArrangement("extend")
+                                }
+                                PickerRow(
+                                    title: "Mirror",
+                                    detail: "same picture",
+                                    selected: store.arrangement == "mirror"
+                                ) {
+                                    store.setArrangement("mirror")
+                                }
+                            }
+                        }
+                    }
+
+                    SettingGroup("Primary") {
+                        SettingRow(
+                            "Panel screen",
+                            "The panel lives here, and new windows open here. "
+                            + "Unplugging it does not forget the choice — "
+                            + "another screen stands in until it comes back."
+                        ) {
+                            VStack(spacing: 2) {
+                                ForEach(enabled, id: \.name) { output in
+                                    PickerRow(
+                                        title: output.description.isEmpty
+                                            ? output.name
+                                            : "\(output.name) — \(output.description)",
+                                        detail: output.primary ? "panel" : "",
+                                        selected: output.primary
+                                    ) {
+                                        store.setPrimary(output.name)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
                 SettingGroup("Screens") {
                     VStack(spacing: 2) {
                         ForEach(store.outputs, id: \.name) { output in
@@ -654,11 +705,7 @@ struct DisplayPage: View {
                                 title: output.description.isEmpty
                                     ? output.name
                                     : "\(output.name) — \(output.description)",
-                                detail: output.enabled
-                                    ? (output.refresh > 0
-                                        ? "\(output.width)×\(output.height) · \(hz(output.refresh))"
-                                        : "\(output.width)×\(output.height)")
-                                    : "off",
+                                detail: screenDetail(output),
                                 selected: output.name == store.selectedOutput
                             ) {
                                 store.selectedOutput = output.name
@@ -676,6 +723,15 @@ struct DisplayPage: View {
     }
 
     private func hz(_ mHz: UInt32) -> String { formatHz(mHz) }
+
+    private func screenDetail(_ output: OutputInfo) -> String {
+        if !output.enabled { return "off" }
+        var text = output.refresh > 0
+            ? "\(output.width)×\(output.height) · \(hz(output.refresh))"
+            : "\(output.width)×\(output.height)"
+        if output.primary { text += " · primary" }
+        return text
+    }
 }
 
 private struct ScreenSettings: View {

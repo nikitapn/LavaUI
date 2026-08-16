@@ -654,6 +654,7 @@ struct OutputInfo {
   uint32_t refresh;
   float scale;
   uint32_t transform;
+  bool primary;
 };
 
 namespace flat {
@@ -668,6 +669,7 @@ struct OutputInfo {
   uint32_t refresh;
   float scale;
   uint32_t transform;
+  ::nprpc::flat::Boolean primary;
 };
 
 class OutputInfo_Direct {
@@ -710,6 +712,8 @@ public:
   float& scale() noexcept { return base().scale;}
   const uint32_t& transform() const noexcept { return base().transform;}
   uint32_t& transform() noexcept { return base().transform;}
+  const ::nprpc::flat::Boolean& primary() const noexcept { return base().primary;}
+  ::nprpc::flat::Boolean& primary() noexcept { return base().primary;}
 };
 } // namespace flat
 
@@ -1333,6 +1337,9 @@ public:
   virtual std::vector<OutputInfo> ListOutputs () = 0;
   virtual std::vector<OutputMode> ListOutputModes (::nprpc::flat::Span<char> name) = 0;
   virtual void SetOutput (flat::OutputRequest_Direct request) = 0;
+  virtual void SetPrimaryOutput (::nprpc::flat::Span<char> name) = 0;
+  virtual std::string GetArrangement () = 0;
+  virtual void SetArrangement (::nprpc::flat::Span<char> mode) = 0;
   virtual ::nprpc::Task<> SubscribeActiveWindow (::nprpc::BidiStream<FocusAck, ActiveWindow> stream) = 0;
   virtual void DestroySurface (uint32_t surfaceId) = 0;
   virtual void Present (uint32_t surfaceId) = 0;
@@ -1413,6 +1420,12 @@ public:
   ::nprpc::Task<std::vector<OutputMode>> ListOutputModesAsync (const std::string& name, std::stop_token st = {});
   void SetOutput (const OutputRequest& request);
   ::nprpc::Task<void> SetOutputAsync (const OutputRequest& request, std::stop_token st = {});
+  void SetPrimaryOutput (const std::string& name);
+  ::nprpc::Task<void> SetPrimaryOutputAsync (const std::string& name, std::stop_token st = {});
+  std::string GetArrangement ();
+  ::nprpc::Task<std::string> GetArrangementAsync (std::stop_token st = {});
+  void SetArrangement (const std::string& mode);
+  ::nprpc::Task<void> SetArrangementAsync (const std::string& mode, std::stop_token st = {});
   std::pair<::nprpc::StreamWriter<FocusAck>, ::nprpc::StreamReader<ActiveWindow>> SubscribeActiveWindow ();
   void DestroySurface (uint32_t surfaceId);
   ::nprpc::Task<void> DestroySurfaceAsync (uint32_t surfaceId, std::stop_token st = {});

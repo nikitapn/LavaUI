@@ -225,6 +225,9 @@ struct CompositorHost {
     uint32_t refresh = 0;
     float scale = 1.f;
     uint32_t transform = 0;
+    /// The screen that is actually hosting the panel right now, not
+    /// merely the remembered name — that one may be unplugged.
+    bool primary = false;
   };
 
   /// What to set a screen to. 0 for a size, rate or scale means "the default
@@ -289,6 +292,16 @@ struct CompositorHost {
 
   /// Reconfigures a screen. False if no such screen is connected.
   virtual bool setOutput(const OutputChange &change, std::string &outError) = 0;
+
+  /// Makes `name` the primary screen. False if no such connector is
+  /// connected. An empty name clears the preference.
+  virtual bool setPrimaryOutput(const std::string &name,
+                                std::string &outError) = 0;
+
+  /// `"extend"` or `"mirror"`. See `SetArrangement`.
+  virtual std::string arrangement() const = 0;
+  virtual void setArrangement(const std::string &mode,
+                              std::string &outError) = 0;
 
   /// The focused window and its title, for a subscriber that has just
   /// arrived. `outSurfaceId` is 0 when nothing has focus.

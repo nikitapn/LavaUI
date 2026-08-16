@@ -814,6 +814,7 @@ class CompositorImpl final : public ICompositor_Servant {
       info.refresh = entry.refresh;
       info.scale = entry.scale;
       info.transform = entry.transform;
+      info.primary = entry.primary;
       out.push_back(std::move(info));
     }
     return out;
@@ -855,6 +856,23 @@ class CompositorImpl final : public ICompositor_Servant {
 
     std::string error;
     if (!host_.setOutput(change, error)) throw OutputNotFound(change.name);
+    if (!error.empty()) throw SettingsWriteFailed(host_.configPath(), error);
+  }
+
+  void SetPrimaryOutput(nprpc::flat::Span<char> name) override {
+    const std::string connector{name};
+    std::string error;
+    if (!host_.setPrimaryOutput(connector, error)) {
+      throw OutputNotFound(connector);
+    }
+    if (!error.empty()) throw SettingsWriteFailed(host_.configPath(), error);
+  }
+
+  std::string GetArrangement() override { return host_.arrangement(); }
+
+  void SetArrangement(nprpc::flat::Span<char> mode) override {
+    std::string error;
+    host_.setArrangement(std::string{mode}, error);
     if (!error.empty()) throw SettingsWriteFailed(host_.configPath(), error);
   }
 

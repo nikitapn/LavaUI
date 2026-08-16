@@ -125,15 +125,19 @@ public enum LavaClient {
         if fillScreen {
             report("ListOutputs") {
                 let outputs = try blockingCall { try await compositor.listOutputs() }
-                // The largest single screen rather than the bounding box of
-                // all of them: a window lives on one screen, and the
-                // compositor clamps this to that screen's work area anyway.
-                guard let largest = outputs
-                    .filter({ $0.enabled && $0.width > 0 && $0.height > 0 })
-                    .max(by: { $0.width * $0.height < $1.width * $1.height })
+                // The primary if the compositor has one, otherwise the
+                // largest: a window lives on one screen, and the compositor
+                // clamps this to that screen's work area anyway.
+                let enabled = outputs.filter {
+                    $0.enabled && $0.width > 0 && $0.height > 0
+                }
+                guard let chosen = enabled.first(where: { $0.primary })
+                    ?? enabled.max(by: {
+                        $0.width * $0.height < $1.width * $1.height
+                    })
                 else { return }
-                Self.requestedWidth = Float(largest.width)
-                Self.requestedHeight = Float(largest.height)
+                Self.requestedWidth = Float(chosen.width)
+                Self.requestedHeight = Float(chosen.height)
                 editor.setClientSize(
                     width: Self.requestedWidth, height: Self.requestedHeight
                 )

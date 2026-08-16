@@ -130,10 +130,16 @@ values it changes and leaves every other line, comments included, exactly where
 you put them — so a hand-tuned file survives being edited by the app, and vice
 versa. What it cannot change is what `SIGHUP` cannot either: the `[core]` GPU
 settings, which are read once while the backend is being created.
+`primary-output` is the exception in that section — the panel moves as soon
+as Settings writes it.
 
 ```ini
 [core]
 renderer = vulkan
+# Which screen hosts the panel. Unset, the layout origin is used.
+# primary-output = DP-3
+# extend (default) or mirror. LavaSettings writes this.
+# arrangement = extend
 
 [keyboard]
 layout = us

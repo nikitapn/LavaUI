@@ -174,6 +174,15 @@ std::string canonicalWallpaperFit(const std::string &value) {
   return canonicalBackgroundFit(value);
 }
 
+std::string canonicalArrangement(const std::string &value) {
+  std::string lower = value;
+  for (char &c : lower) {
+    c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+  }
+  if (lower == "mirror" || lower == "clone" || lower == "same") return "mirror";
+  return "extend";
+}
+
 std::string formatWallpaperColor(uint32_t color) {
   // `0x`, never `#`, however the user typed it. A `#` starts a comment on
   // every line of this file, so `color = #1e2430` parses as `color =` and the
@@ -269,6 +278,10 @@ Config Config::load(const std::string &path) {
         config.drmDevices = value;
       } else if (key == "render-device") {
         config.renderDevice = value;
+      } else if (key == "primary-output" || key == "primary") {
+        config.primaryOutput = value;
+      } else if (key == "arrangement" || key == "output-arrangement") {
+        config.arrangement = canonicalArrangement(value);
       } else {
         known = false;
       }

@@ -28,7 +28,7 @@ enum SettingsSection: String, CaseIterable, Sendable {
         case .appearance: return "Colours, corners, shadows"
         case .background: return "Picture or colour"
         case .keyboard: return "Layout, repeat, shortcuts"
-        case .display: return "Screens and modes"
+        case .display: return "Screens, arrangement, primary"
         }
     }
 }
@@ -124,6 +124,8 @@ final class SettingsStore {
     var outputs: [OutputInfo] = []
     var selectedOutput = ""
     var modes: [OutputMode] = []
+    /// `"extend"` or `"mirror"`.
+    var arrangement = "extend"
 
     var currentOutput: OutputInfo? {
         outputs.first { $0.name == selectedOutput } ?? outputs.first
@@ -162,6 +164,9 @@ final class SettingsStore {
             apply(keyboard)
 
             bindings = try DesktopSettings.keyBindings()
+            if let mode = try? DesktopSettings.arrangement() {
+                arrangement = mode
+            }
             reloadOutputs()
         } catch {
             note("Could not read the desktop's settings: \(error)", isError: true)
@@ -310,6 +315,34 @@ final class SettingsStore {
         } catch {
             note("Could not read the screens: \(error)", isError: true)
         }
+    }
+
+    /// Extend or mirror, then reloads so the listed positions match.
+    func setArrangement(_ mode: String) {
+        guard connected else { return }
+        do {
+            try DesktopSettings.setArrangement(mode)
+            arrangement = mode == "mirror" ? "mirror" : "extend"
+            clearStatus()
+        } catch {
+            report(error)
+        }
+        if let taken = try? DesktopSettings.arrangement() {
+            arrangement = taken
+        }
+        reloadOutputs()
+    }
+
+    /// Moves the panel onto this screen and remembers the name.
+    func setPrimary(_ name: String) {
+        guard connected else { return }
+        do {
+            try DesktopSettings.setPrimaryOutput(name)
+            clearStatus()
+        } catch {
+            report(error)
+        }
+        reloadOutputs()
     }
 
     func reloadModes() {

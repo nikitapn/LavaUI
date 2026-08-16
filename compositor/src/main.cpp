@@ -201,15 +201,23 @@ struct Output {
   /// — `finishScreenshot` would replace Flameshot's later crop copy with
   /// the full frame (and a newer serial, so the crop is then ignored).
   bool pendingScreenshot = false;
+  /// Whether `scene_output` is hooked to `scene_layout`. The constructor
+  /// only attaches when the output starts enabled; enabling it later
+  /// (Settings, SIGHUP) has to attach too, or the screen paints the same
+  /// origin as the first one — i.e. it mirrors whether you asked it to.
+  bool sceneAttached = false;
 
   Output(Server *server, wlr_output *output);
   ~Output();
 
   /// Applies the config block for this connector: mode, scale, transform,
-  /// position, enabled. Returns its entry in the output layout, or null if the
-  /// config disabled it. Run again on reload, which is what makes changing a
-  /// resolution not need a restart.
+  /// enabled. Placement is `Server::applyArrangement`. Returns its entry
+  /// in the output layout, or null if the config disabled it.
   wlr_output_layout_output *applyConfig();
+
+  /// Puts this output at `(x, y)` in the layout and, the first time,
+  /// hooks its scene output so it actually draws that region.
+  void placeAt(int x, int y);
 
   static void on_frame(wl_listener *listener, void *data);
   static void on_request_state(wl_listener *listener, void *data);
@@ -720,6 +728,10 @@ struct Server {
   /// backend is created, before any of this exists, and moving it would mean
   /// re-importing every buffer in the compositor.
   void reloadConfig();
+
+  /// Places every enabled output: stacked at the origin for mirror,
+  /// side by side (or at saved non-overlapping positions) for extend.
+  void applyArrangement();
 
   /// Shows workspace `index` and hands it the keyboard. A no-op if it is
   /// already current, so a repeated shortcut costs nothing.
@@ -2117,10 +2129,12 @@ class SurfaceRegistry : public lava::CompositorHost {
 
   /// Spreads a window over everything a panel has not claimed.
   ///
-  /// The work area, not the output: a maximized window that covered the panel
-  /// would hide the one thing on screen meant to always be reachable.
+  /// The work area of the *window's* output, not the primary and not the
+  /// layout union: maximizing a window on the laptop must not jump it to
+  /// the external monitor just because that is where the panel lives.
   void fillWorkArea(ClientSurface &surface) {
-    const WorkArea area = workArea();
+    const WorkArea area = workAreaAt(surfaceCenterX(surface),
+                                     surfaceCenterY(surface));
     moveSurface(surface, area.x, area.y);
     // The frame comes out of the height, and a window with no frame keeps all
     // of it — which is most of what an app gives up its title bar for.
@@ -2131,10 +2145,15 @@ class SurfaceRegistry : public lava::CompositorHost {
                   area.height > frame ? area.height - frame : area.height);
   }
 
-  /// Spreads a window over the output, panel and all.
+  /// Spreads a window over its output, panel and all.
   void fillOutput(ClientSurface &surface) {
-    moveSurface(surface, 0, 0);
-    resizeSurface(surface, outputWidth_, outputHeight_);
+    int x = primaryX_;
+    int y = primaryY_;
+    uint32_t w = primaryWidth_;
+    uint32_t h = primaryHeight_;
+    outputBoxAt(surfaceCenterX(surface), surfaceCenterY(surface), x, y, w, h);
+    moveSurface(surface, x, y);
+    resizeSurface(surface, w, h);
   }
 
   /// Whether a fullscreen window on the current workspace owns the output.
@@ -2166,42 +2185,94 @@ class SurfaceRegistry : public lava::CompositorHost {
     }
   }
 
-  /// How big the output currently is. Used to size a fullscreen configure
-  /// before the window has a frame (xdg initial commit).
+  /// How big the primary output currently is. Used to size a fullscreen
+  /// configure before the window has a frame (xdg initial commit).
   void outputSize(uint32_t &width, uint32_t &height) const {
-    width = outputWidth_;
-    height = outputHeight_;
+    width = primaryWidth_;
+    height = primaryHeight_;
   }
 
-  /// Puts a panel back on its edge, at the full length of that edge.
+  /// Puts a panel back on the primary output's edge, at that edge's length.
   void layoutPanel(ClientSurface &panel) {
     const bool horizontal =
         panel.edge == kPanelTop || panel.edge == kPanelBottom;
     // A panel chose only its thickness; the length is the screen's to decide.
     const uint32_t thickness = horizontal ? panel.height : panel.width;
-    resizeSurface(panel, horizontal ? outputWidth_ : thickness,
-                  horizontal ? thickness : outputHeight_);
+    resizeSurface(panel, horizontal ? primaryWidth_ : thickness,
+                  horizontal ? thickness : primaryHeight_);
+    // Origin is the *primary* box, not the layout union and not (0,0):
+    // unplugging the leftmost monitor leaves the laptop at x=1920, and a
+    // strip at the origin would sit in the hole. Spanning the union would
+    // paint the panel across every screen.
     moveSurface(panel,
                 panel.edge == kPanelRight
-                    ? static_cast<int>(outputWidth_) -
+                    ? primaryX_ + static_cast<int>(primaryWidth_) -
                           static_cast<int>(thickness)
-                    : 0,
+                    : primaryX_,
                 panel.edge == kPanelBottom
-                    ? static_cast<int>(outputHeight_) -
+                    ? primaryY_ + static_cast<int>(primaryHeight_) -
                           static_cast<int>(thickness)
-                    : 0);
+                    : primaryY_);
   }
 
-  /// How big the screen is. Told by the output, since a surface registry has
-  /// no other way to know — and told *again* whenever it changes, which is not
-  /// hypothetical: nested in another compositor, the first size is a default
-  /// that is replaced within a frame or two of the window appearing.
-  void setOutputSize(uint32_t width, uint32_t height) {
-    if (width == outputWidth_ && height == outputHeight_) return;
+  /// Recomputes the layout union and the primary output's box.
+  ///
+  /// The union is what eviction uses — a window on the laptop is still
+  /// on the desktop when the external is primary. The primary box is
+  /// where the panel lives. Two monitors side by side are 1920+2560
+  /// wide; unplugging the 1920 must shrink the union or a window that
+  /// lived only there sits in the hole forever.
+  void refreshFromLayout() {
+    if (server_ == nullptr || server_->output_layout == nullptr) return;
+    wlr_box unionBox{};
+    wlr_output_layout_get_box(server_->output_layout, nullptr, &unionBox);
+    if (unionBox.width <= 0 || unionBox.height <= 0) return;
+
+    int px = unionBox.x;
+    int py = unionBox.y;
+    uint32_t pw = static_cast<uint32_t>(unionBox.width);
+    uint32_t ph = static_cast<uint32_t>(unionBox.height);
+    if (wlr_output *primary = resolvePrimaryOutput()) {
+      wlr_box box{};
+      wlr_output_layout_get_box(server_->output_layout, primary, &box);
+      if (box.width > 0 && box.height > 0) {
+        px = box.x;
+        py = box.y;
+        pw = static_cast<uint32_t>(box.width);
+        ph = static_cast<uint32_t>(box.height);
+      }
+    }
+    setLayoutGeometry(unionBox.x, unionBox.y,
+                      static_cast<uint32_t>(unionBox.width),
+                      static_cast<uint32_t>(unionBox.height), px, py, pw, ph);
+  }
+
+  void setLayoutGeometry(int x, int y, uint32_t width, uint32_t height,
+                         int primaryX, int primaryY, uint32_t primaryW,
+                         uint32_t primaryH) {
+    if (x == layoutX_ && y == layoutY_ && width == outputWidth_ &&
+        height == outputHeight_ && primaryX == primaryX_ &&
+        primaryY == primaryY_ && primaryW == primaryWidth_ &&
+        primaryH == primaryHeight_) {
+      return;
+    }
+    wlr_log(WLR_INFO,
+            "layout: %ux%u at %d,%d primary %ux%u at %d,%d (was %ux%u at "
+            "%d,%d primary %ux%u at %d,%d)",
+            width, height, x, y, primaryW, primaryH, primaryX, primaryY,
+            outputWidth_, outputHeight_, layoutX_, layoutY_, primaryWidth_,
+            primaryHeight_, primaryX_, primaryY_);
+    layoutX_ = x;
+    layoutY_ = y;
     outputWidth_ = width;
     outputHeight_ = height;
-    // Panels first: every one of them spans an edge that just changed length,
-    // and the work area is measured from where they end up.
+    primaryX_ = primaryX;
+    primaryY_ = primaryY;
+    primaryWidth_ = primaryW;
+    primaryHeight_ = primaryH;
+    // Panels first: every one of them spans an edge that just changed
+    // length or moved to another screen, and the work area is measured
+    // from where they end up.
     for (auto &surface : surfaces_) {
       if (surface->panel) layoutPanel(*surface);
     }
@@ -2209,7 +2280,26 @@ class SurfaceRegistry : public lava::CompositorHost {
       if (surface->panel) continue;
       if (surface->fullscreen) fillOutput(*surface);
       else if (surface->maximized) fillWorkArea(*surface);
+      else evictOntoLayout(*surface);
     }
+  }
+
+  /// A window that lived entirely on an output that just vanished is
+  /// moved onto the primary, rather than sitting in the hole.
+  void evictOntoLayout(ClientSurface &surface) {
+    if (surface.panel || surface.minimized) return;
+    // The union, not the primary work area: a window on the laptop is
+    // still on the desktop when the external is primary.
+    const int x1 = surface.x + static_cast<int>(surface.width);
+    const int y1 = surface.y + surface.frameHeight();
+    const int ax1 = layoutX_ + static_cast<int>(outputWidth_);
+    const int ay1 = layoutY_ + static_cast<int>(outputHeight_);
+    if (x1 > layoutX_ && y1 > layoutY_ && surface.x < ax1 &&
+        surface.y < ay1) {
+      return;
+    }
+    const WorkArea area = workArea();
+    moveSurface(surface, area.x + 32, area.y + 32);
   }
 
   /// Every appearance setting at once, from the config and again on reload.
@@ -2786,14 +2876,14 @@ class SurfaceRegistry : public lava::CompositorHost {
                        uint32_t thickness, bool reserve,
                        const std::string &title,
                        const std::string &appId) override {
-    if (outputWidth_ == 0 || outputHeight_ == 0 || workspaces_ == nullptr) {
+    if (primaryWidth_ == 0 || primaryHeight_ == 0 || workspaces_ == nullptr) {
       wlr_log(WLR_ERROR, "panel: no output yet");
       return 0;
     }
     // A panel is given the length of its edge and chooses only its thickness.
     const bool horizontal = edge == kPanelTop || edge == kPanelBottom;
-    const uint32_t w = horizontal ? outputWidth_ : thickness;
-    const uint32_t h = horizontal ? thickness : outputHeight_;
+    const uint32_t w = horizontal ? primaryWidth_ : thickness;
+    const uint32_t h = horizontal ? thickness : primaryHeight_;
 
     // Into the panel tree, which no workspace switch ever disables — a taskbar
     // that vanished on Alt+2 would be a strange sort of taskbar. Undecorated,
@@ -2870,7 +2960,8 @@ class SurfaceRegistry : public lava::CompositorHost {
   /// fit on the screen is not a minimum anybody can honour.
   uint32_t minFor(const ClientSurface &surface, bool horizontal) const {
     const uint32_t asked = horizontal ? surface.minWidth : surface.minHeight;
-    const uint32_t available = horizontal ? outputWidth_ : outputHeight_;
+    const WorkArea area = workAreaAt(surface.x, surface.y);
+    const uint32_t available = horizontal ? area.width : area.height;
     uint32_t floor = std::max(asked, kMinSurface);
     if (available > 0) floor = std::min(floor, available);
     return std::max(floor, kMinSurface);
@@ -2886,8 +2977,8 @@ class SurfaceRegistry : public lava::CompositorHost {
     panel->reserved = reserved > thickness ? thickness : reserved;
     const bool horizontal =
         panel->edge == kPanelTop || panel->edge == kPanelBottom;
-    resizeSurface(*panel, horizontal ? outputWidth_ : thickness,
-                  horizontal ? thickness : outputHeight_);
+    resizeSurface(*panel, horizontal ? primaryWidth_ : thickness,
+                  horizontal ? thickness : primaryHeight_);
     layoutPanel(*panel);
     // A bottom or right panel grows *into* the screen, so its origin moved;
     // `layoutPanel` has just put it back. What is left is everything that was
@@ -3170,6 +3261,12 @@ class SurfaceRegistry : public lava::CompositorHost {
       }
       out.push_back(std::move(entry));
     }
+    // Mark the screen that is actually hosting the panel, not the
+    // remembered name — that one may be unplugged.
+    const std::string primary = effectivePrimaryName();
+    for (OutputEntry &entry : out) {
+      entry.primary = entry.enabled && !primary.empty() && entry.name == primary;
+    }
   }
 
   bool outputModes(const std::string &name,
@@ -3226,15 +3323,68 @@ class SurfaceRegistry : public lava::CompositorHost {
         {section, "scale", format_float(block.scale)},
         {section, "transform", format_transform(block.transform)},
     };
-    // Only when there is one to write. `kAuto` means "string them left to
-    // right", which the config file spells by having no position line at all
-    // — there is no value that says it.
-    if (block.x != lava::OutputConfig::kAuto) {
-      settings.push_back({section, "position",
-                          std::to_string(block.x) + "," + std::to_string(block.y)});
+    // Mirror does not own positions — those are the last extend layout,
+    // so switching back does not have to guess. Extend writes where the
+    // screen actually landed, not what the request carried: enabling a
+    // screen that was never placed used to send 0,0 and stack it on the
+    // other one.
+    if (lava::canonicalArrangement(server_->config.arrangement) != "mirror") {
+      if (const wlr_output_layout_output *placed =
+              wlr_output_layout_get(server_->output_layout, output->wlr)) {
+        block.x = placed->x;
+        block.y = placed->y;
+        settings.push_back({section, "position",
+                            std::to_string(block.x) + "," +
+                                std::to_string(block.y)});
+      }
     }
     save(std::move(settings), outError);
     return true;
+  }
+
+  bool setPrimaryOutput(const std::string &name,
+                        std::string &outError) override {
+    if (server_ == nullptr) return false;
+    if (!name.empty() && findOutput(name) == nullptr) return false;
+    server_->config.primaryOutput = name;
+    refreshFromLayout();
+    save({{"core", "primary-output", name}}, outError);
+    return true;
+  }
+
+  std::string arrangement() const override {
+    if (server_ == nullptr) return "extend";
+    return lava::canonicalArrangement(server_->config.arrangement);
+  }
+
+  void setArrangement(const std::string &mode,
+                      std::string &outError) override {
+    if (server_ == nullptr) {
+      outError = "no server";
+      return;
+    }
+    server_->config.arrangement = lava::canonicalArrangement(mode);
+    server_->applyArrangement();
+
+    std::vector<lava::Setting> settings{
+        {"core", "arrangement", server_->config.arrangement}};
+    // Persist where extend put them, so the next start does not have
+    // to guess. Mirror leaves the last extend positions alone.
+    if (server_->config.arrangement == "extend") {
+      for (Output *output : server_->outputs) {
+        if (!output->wlr->enabled || output->wlr->name == nullptr) continue;
+        const wlr_output_layout_output *placed =
+            wlr_output_layout_get(server_->output_layout, output->wlr);
+        if (placed == nullptr) continue;
+        lava::OutputConfig &block = outputBlock(output->wlr->name);
+        block.x = placed->x;
+        block.y = placed->y;
+        settings.push_back({"output " + block.name, "position",
+                            std::to_string(block.x) + "," +
+                                std::to_string(block.y)});
+      }
+    }
+    save(std::move(settings), outError);
   }
 
   void activeWindow(uint32_t &outSurfaceId, std::string &outTitle,
@@ -3693,17 +3843,36 @@ class SurfaceRegistry : public lava::CompositorHost {
 
   /// Where a window may go without being covered by a panel.
   ///
+  /// The primary output, because that is where a new window opens. Use
+  /// `workAreaAt` for a window that already lives on another screen.
+  ///
   /// Computed rather than cached, because it changes whenever a panel opens,
   /// closes or the output is resized, and there is no signal for the last one.
   /// A panel that did not ask to `reserve` is not in here — it floats over the
   /// windows, which is what a dock usually wants.
   WorkArea workArea() const {
-    int x = 0;
-    int y = 0;
-    int w = static_cast<int>(outputWidth_);
-    int h = static_cast<int>(outputHeight_);
+    return workAreaIn(primaryX_, primaryY_, static_cast<int>(primaryWidth_),
+                      static_cast<int>(primaryHeight_));
+  }
+
+  /// The work area of the output that contains `(x, y)`, or the primary
+  /// if that point is in the gap between screens.
+  WorkArea workAreaAt(int x, int y) const {
+    int ox = primaryX_;
+    int oy = primaryY_;
+    uint32_t ow = primaryWidth_;
+    uint32_t oh = primaryHeight_;
+    outputBoxAt(x, y, ox, oy, ow, oh);
+    return workAreaIn(ox, oy, static_cast<int>(ow), static_cast<int>(oh));
+  }
+
+  /// Subtracts reserved panels that actually sit on this rectangle.
+  WorkArea workAreaIn(int x, int y, int w, int h) const {
     for (const auto &s : surfaces_) {
       if (!s->panel || s->reserved == 0) continue;
+      const int sx1 = s->x + static_cast<int>(s->width);
+      const int sy1 = s->y + s->frameHeight();
+      if (sx1 <= x || sy1 <= y || s->x >= x + w || s->y >= y + h) continue;
       // What it *reserved*, not how thick it is: a panel that grew to hold an
       // open menu is still only owed its strip, and windows that jumped every
       // time a menu opened would be the most obvious bug on the desktop.
@@ -3807,6 +3976,75 @@ class SurfaceRegistry : public lava::CompositorHost {
       }
     }
     return nullptr;
+  }
+
+  /// The output that should host the panel: the configured name if that
+  /// screen is still on, otherwise the one covering the layout origin.
+  wlr_output *resolvePrimaryOutput() const {
+    if (server_ == nullptr || server_->output_layout == nullptr) return nullptr;
+    const std::string &wanted = server_->config.primaryOutput;
+    if (!wanted.empty()) {
+      if (Output *found = findOutput(wanted)) {
+        if (found->wlr->enabled &&
+            wlr_output_layout_get(server_->output_layout, found->wlr) !=
+                nullptr) {
+          return found->wlr;
+        }
+      }
+    }
+    // No preference, or the named one is gone: the screen at the origin,
+    // which is where the panel sat before this existed. Read from the
+    // layout, not `layoutX_`: that is still the previous box while
+    // `refreshFromLayout` is computing the new one.
+    wlr_box unionBox{};
+    wlr_output_layout_get_box(server_->output_layout, nullptr, &unionBox);
+    if (unionBox.width > 0 && unionBox.height > 0) {
+      if (wlr_output *atOrigin = wlr_output_layout_output_at(
+              server_->output_layout, static_cast<double>(unionBox.x) + 0.5,
+              static_cast<double>(unionBox.y) + 0.5)) {
+        return atOrigin;
+      }
+    }
+    for (Output *output : server_->outputs) {
+      if (output->wlr->enabled &&
+          wlr_output_layout_get(server_->output_layout, output->wlr) !=
+              nullptr) {
+        return output->wlr;
+      }
+    }
+    return nullptr;
+  }
+
+  std::string effectivePrimaryName() const {
+    if (wlr_output *out = resolvePrimaryOutput()) {
+      return out->name != nullptr ? out->name : "";
+    }
+    return {};
+  }
+
+  /// The output box containing `(x, y)`. Leaves the primary box in the
+  /// out-params when that point is in a gap.
+  void outputBoxAt(int x, int y, int &outX, int &outY, uint32_t &outW,
+                   uint32_t &outH) const {
+    if (server_ == nullptr || server_->output_layout == nullptr) return;
+    wlr_output *output = wlr_output_layout_output_at(
+        server_->output_layout, static_cast<double>(x), static_cast<double>(y));
+    if (output == nullptr) return;
+    wlr_box box{};
+    wlr_output_layout_get_box(server_->output_layout, output, &box);
+    if (box.width <= 0 || box.height <= 0) return;
+    outX = box.x;
+    outY = box.y;
+    outW = static_cast<uint32_t>(box.width);
+    outH = static_cast<uint32_t>(box.height);
+  }
+
+  static int surfaceCenterX(const ClientSurface &surface) {
+    return surface.x + static_cast<int>(surface.width / 2);
+  }
+
+  static int surfaceCenterY(const ClientSurface &surface) {
+    return surface.y + surface.frameHeight() / 2;
   }
 
   /// The config block for a connector, created if the file never had one.
@@ -3956,6 +4194,16 @@ class SurfaceRegistry : public lava::CompositorHost {
   uint32_t focused_ = 0;
   uint32_t outputWidth_ = 0;
   uint32_t outputHeight_ = 0;
+  /// Top-left of the output layout. Not always (0,0): unplugging the
+  /// leftmost screen leaves the rest where they were.
+  int layoutX_ = 0;
+  int layoutY_ = 0;
+  /// The screen the panel lives on. Distinct from the layout union so
+  /// a window on another monitor is still "on the desktop".
+  int primaryX_ = 0;
+  int primaryY_ = 0;
+  uint32_t primaryWidth_ = 0;
+  uint32_t primaryHeight_ = 0;
   /// Set when a frosted window moved, resized, or asked for a new radius.
   bool backdropBlurDirty_ = false;
   /// `ImageSurface` posters, keyed by `(surfaceId << 32) | maxSide`.
@@ -4433,12 +4681,7 @@ Output::Output(Server *server, wlr_output *output)
   describe_output(wlr);
   server->outputs.push_back(this);
 
-  if (wlr_output_layout_output *layout_output = applyConfig()) {
-    // Once only: the scene follows the layout from here, so a later reload
-    // that moves the output does not need to say so twice.
-    wlr_scene_output_layout_add_output(server->scene_layout, layout_output,
-                                       scene_output);
-  }
+  applyConfig();
 }
 
 wlr_output_layout_output *Output::applyConfig() {
@@ -4487,26 +4730,107 @@ wlr_output_layout_output *Output::applyConfig() {
   if (cfg != nullptr && !cfg->enabled) {
     wlr_log(WLR_INFO, "output %s: disabled by config", wlr->name);
     wlr_output_layout_remove(server->output_layout, wlr);
+    sceneAttached = false;
+    server->applyArrangement();
     return nullptr;
   }
-
-  // Placed where the config says, or strung left to right after the outputs
-  // already there. `add_auto` is right for one screen and a guess for two.
-  wlr_output_layout_output *layout_output =
-      cfg != nullptr && cfg->x != lava::OutputConfig::kAuto
-          ? wlr_output_layout_add(server->output_layout, wlr, cfg->x, cfg->y)
-          : wlr_output_layout_add_auto(server->output_layout, wlr);
 
   wlr_log(WLR_INFO, "output %s: running %dx%d@%.3fHz scale %.2f", wlr->name,
           wlr->width, wlr->height, wlr->refresh / 1000.0, wlr->scale);
 
-  // What a maximized window fills. The registry has no other way to know how
-  // big the screen is, and this is the only place it changes.
-  if (server->surfaces != nullptr) {
-    server->surfaces->setOutputSize(static_cast<uint32_t>(wlr->width),
-                                    static_cast<uint32_t>(wlr->height));
+  server->applyArrangement();
+  return wlr_output_layout_get(server->output_layout, wlr);
+}
+
+void Output::placeAt(int x, int y) {
+  wlr_output_layout_output *layout_output =
+      wlr_output_layout_add(server->output_layout, wlr, x, y);
+  if (layout_output == nullptr) return;
+  // Removing an output from the layout destroys the scene-layout link.
+  // Enabling it again (or adding it the first time after a disabled
+  // start) has to put that link back, or this screen keeps painting
+  // whatever is at (0,0) — a mirror nobody asked for.
+  if (!sceneAttached) {
+    wlr_scene_output_layout_add_output(server->scene_layout, layout_output,
+                                       scene_output);
+    sceneAttached = true;
   }
-  return layout_output;
+}
+
+void Server::applyArrangement() {
+  std::vector<Output *> enabled;
+  for (Output *output : outputs) {
+    if (output->wlr->enabled) enabled.push_back(output);
+  }
+
+  const bool mirror = lava::canonicalArrangement(config.arrangement) == "mirror";
+  if (mirror) {
+    for (Output *output : enabled) output->placeAt(0, 0);
+  } else {
+    // Honour saved positions when they actually describe an extended
+    // desktop: every enabled screen has one, and no two sit on the same
+    // point. Two screens both at 0,0 is how Settings used to write a
+    // newly-enabled output — that is a mirror, not a layout.
+    bool honour = !enabled.empty();
+    for (Output *output : enabled) {
+      const lava::OutputConfig *cfg =
+          output->wlr->name != nullptr ? config.forOutput(output->wlr->name)
+                                       : nullptr;
+      if (cfg == nullptr || cfg->x == lava::OutputConfig::kAuto) {
+        honour = false;
+        break;
+      }
+      for (Output *other : enabled) {
+        if (other == output) continue;
+        const lava::OutputConfig *otherCfg =
+            other->wlr->name != nullptr ? config.forOutput(other->wlr->name)
+                                        : nullptr;
+        if (otherCfg != nullptr && otherCfg->x == cfg->x &&
+            otherCfg->y == cfg->y) {
+          honour = false;
+          break;
+        }
+      }
+      if (!honour) break;
+    }
+
+    if (honour) {
+      for (Output *output : enabled) {
+        const lava::OutputConfig *cfg = config.forOutput(output->wlr->name);
+        output->placeAt(cfg->x, cfg->y);
+      }
+    } else {
+      // Primary on the left, the rest strung to its right. A laptop
+      // that was stacked on the external becomes a second desktop
+      // instead of a second copy of the first.
+      Output *primary = nullptr;
+      if (!config.primaryOutput.empty()) {
+        for (Output *output : enabled) {
+          if (output->wlr->name != nullptr &&
+              config.primaryOutput == output->wlr->name) {
+            primary = output;
+            break;
+          }
+        }
+      }
+      if (primary == nullptr && !enabled.empty()) primary = enabled.front();
+
+      int x = 0;
+      auto place = [&](Output *output) {
+        output->placeAt(x, 0);
+        int width = 0, height = 0;
+        wlr_output_effective_resolution(output->wlr, &width, &height);
+        if (width <= 0) width = output->wlr->width;
+        x += width;
+      };
+      if (primary != nullptr) place(primary);
+      for (Output *output : enabled) {
+        if (output != primary) place(output);
+      }
+    }
+  }
+
+  if (surfaces != nullptr) surfaces->refreshFromLayout();
 }
 
 Output::~Output() {
@@ -4556,14 +4880,20 @@ void Output::on_request_state(wl_listener *listener, void *data) {
   // the backend opens with is a placeholder, and a panel laid out against it
   // is the wrong length for the whole session.
   if (output->server->surfaces != nullptr) {
-    output->server->surfaces->setOutputSize(
-        static_cast<uint32_t>(output->wlr->width),
-        static_cast<uint32_t>(output->wlr->height));
+    output->server->surfaces->refreshFromLayout();
   }
 }
 
 void Output::on_destroy(wl_listener *listener, void *) {
-  delete owner_of<Output>(listener);
+  auto *output = owner_of<Output>(listener);
+  Server *server = output->server;
+  // Drop it from the layout before we ask how big the layout is, or
+  // the dying output still inflates the box and the panel never shrinks.
+  if (server->output_layout != nullptr && output->wlr != nullptr) {
+    wlr_output_layout_remove(server->output_layout, output->wlr);
+  }
+  delete output;
+  if (server->surfaces != nullptr) server->surfaces->refreshFromLayout();
 }
 
 void Output::on_commit(wl_listener *listener, void *data) {
@@ -6079,7 +6409,7 @@ wlr_box Server::popupBounds(const wlr_xdg_popup &popup) const {
   auto *tree = static_cast<wlr_scene_tree *>(root->data);
   if (!wlr_scene_node_coords(&tree->node, &lx, &ly)) return box;
 
-  const SurfaceRegistry::WorkArea area = surfaces->workArea();
+  const SurfaceRegistry::WorkArea area = surfaces->workAreaAt(lx, ly);
   box.x = area.x - lx;
   box.y = area.y - ly;
   box.width = static_cast<int>(area.width);

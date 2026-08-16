@@ -325,6 +325,11 @@ message OutputInfo {
   /// `enum wl_output_transform`: 0 normal, 1 90°, 2 180°, 3 270°, and 4…7
   /// the flipped forms.
   transform: u32;
+  /// Where the panel lives, and where a new window opens. The remembered
+  /// name survives an unplug, so putting the screen back puts the panel
+  /// back; while it is gone, another enabled screen stands in. Exactly
+  /// one enabled screen reports true.
+  primary: boolean;
 }
 
 /// What to set a screen to.
@@ -1036,6 +1041,32 @@ interface Compositor {
   /// client can tell that what it asked for is not what it got.
   void SetOutput(request: in OutputRequest)
       raises(OutputNotFound, SettingsWriteFailed);
+
+  /// Makes this screen the primary, now and for the next session.
+  ///
+  /// The panel moves here immediately. An empty name means no preference
+  /// — the screen at the layout origin, which is where the panel sat
+  /// before this existed. Unplugging the primary does not forget the
+  /// name: another screen stands in until it comes back. `ListOutputs`
+  /// always reports the screen that is actually hosting the panel.
+  void SetPrimaryOutput(name: in string)
+      raises(OutputNotFound, SettingsWriteFailed);
+
+  /// How the screens share the desktop: `"extend"` or `"mirror"`.
+  ///
+  /// Extend gives each screen its own piece of the layout. Mirror puts
+  /// the same picture on every screen, aligned at the origin. The value
+  /// is what is stored, not what two screens happening to sit on top of
+  /// each other would look like.
+  string GetArrangement();
+
+  /// Sets extend or mirror, now and for the next session.
+  ///
+  /// Anything other than `"mirror"` (and the aliases `"clone"` / `"same"`)
+  /// is taken as extend. Switching to extend spreads screens that were
+  /// stacked; switching to mirror does not forget their extend positions,
+  /// so switching back puts them where they were.
+  void SetArrangement(mode: in string) raises(SettingsWriteFailed);
 
   /// The focused window, now and whenever it changes.
   ///

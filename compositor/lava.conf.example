@@ -47,6 +47,18 @@ drm-device = /dev/dri/card0
 # rendering LavaUI surfaces on a different GPU than it composites on.
 # render-device = /dev/dri/renderD129
 
+# Which screen hosts the panel and new windows. The connector name
+# wlroots reports — the same name as the `[output …]` blocks below.
+# Left unset, the screen at the layout origin is used (usually the
+# leftmost). Unplugging it does not forget the name: another screen
+# stands in until it comes back. LavaSettings writes this.
+# primary-output = DP-3
+
+# How the screens share the desktop. `extend` (the default) gives each
+# screen its own piece of the layout; `mirror` shows the same picture
+# on every screen. LavaSettings writes this.
+# arrangement = extend
+
 
 # One block per connector. The name is what wlroots calls it — run the
 # compositor once and read the log, which lists every output it found together
