@@ -324,6 +324,7 @@ struct CompositorHost {
   /// LavaUI client has no `wl_data_device` of its own, so without these two
   /// its copy and paste would be a private drawer that Firefox cannot see.
   virtual std::string clipboardText() const = 0;
+  virtual std::vector<uint8_t> clipboardPng() const = 0;
 
   /// Offers `text` as the seat's selection, replacing what was there.
   virtual void setClipboardText(const std::string &text) = 0;

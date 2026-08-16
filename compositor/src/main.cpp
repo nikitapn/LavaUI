@@ -3228,6 +3228,12 @@ class SurfaceRegistry : public lava::CompositorHost {
     return clipboard.get();
   }
 
+  std::vector<uint8_t> clipboardPng() const override {
+    if (server_ == nullptr) return {};
+    lava::Clipboard clipboard(server_->display, server_->seat);
+    return clipboard.getPng();
+  }
+
   void setClipboardText(const std::string &text) override {
     if (server_ == nullptr) return;
     lava::Clipboard clipboard(server_->display, server_->seat);

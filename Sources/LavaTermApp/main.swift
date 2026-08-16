@@ -106,12 +106,9 @@ let menu = {
             MenuItem(
                 "Paste",
                 id: "edit.paste",
-                shortcut: KeyShortcut(KeyCode.v, .primary)
+                shortcut: KeyShortcut(KeyCode.v, .primary, .shift)
             ) {
-                let text = editor.clipboardText
-                if !text.isEmpty {
-                    session.write(text)
-                }
+                session.paste()
             }
         }
         Menu("View", id: "view") {

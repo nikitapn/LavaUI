@@ -215,4 +215,14 @@ final class AnsiScreenTests: XCTestCase {
             TerminalScreen.path(fromOSC7: "/already/absolute"),
             "/already/absolute")
     }
+
+    func testOSC52SetsPendingClipboard() {
+        let s = TerminalScreen(cols: 20, rows: 4)
+        // "hi" in base64 is aGk=
+        s.feed("\u{1B}]52;c;aGk=\u{7}")
+        XCTAssertEqual(s.pendingClipboard, "hi")
+        s.pendingClipboard = nil
+        s.feed("\u{1B}]52;c;\u{7}")
+        XCTAssertEqual(s.pendingClipboard, "")
+    }
 }

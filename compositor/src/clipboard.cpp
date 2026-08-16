@@ -361,10 +361,8 @@ void offerPngTypes(wl_array &mime_types) {
 /// `send` is the protocol's own "write this type down this fd" — the two
 /// selections spell it differently and mean exactly the same thing.
 template <typename Send>
-std::string readSelection(wl_display *display, const wl_array &mime_types,
-                          Send send) {
-  const char *mime = preferredMime(mime_types);
-  if (mime == nullptr) return {}; // An image, a file list: nothing to paste.
+std::string readMime(wl_display *display, const char *mime, Send send) {
+  if (mime == nullptr) return {};
 
   int fds[2];
   if (pipe(fds) != 0) return {};
@@ -443,10 +441,29 @@ std::string Clipboard::get() {
     return reinterpret_cast<TextSource *>(source)->text;
   }
 
-  return readSelection(display_, source->mime_types,
-                       [source](const char *mime, int fd) {
-                         wlr_data_source_send(source, mime, fd);
-                       });
+  return readMime(display_, preferredMime(source->mime_types),
+                  [source](const char *mime, int fd) {
+                    wlr_data_source_send(source, mime, fd);
+                  });
+}
+
+std::vector<uint8_t> Clipboard::getPng() {
+  wlr_data_source *source = seat_->selection_source;
+  if (source == nullptr) return {};
+
+  if (isOurImage(source)) {
+    const std::string &png = reinterpret_cast<ImageSource *>(source)->png;
+    return {png.begin(), png.end()};
+  }
+
+  const char *mime = findMime(source->mime_types, kPngMimeTypes,
+                              sizeof(kPngMimeTypes) / sizeof(kPngMimeTypes[0]));
+  if (mime == nullptr) return {};
+  const std::string raw = readMime(
+      display_, mime, [source](const char *wanted, int fd) {
+        wlr_data_source_send(source, wanted, fd);
+      });
+  return {raw.begin(), raw.end()};
 }
 
 void Clipboard::setPrimary(const std::string &text) {
@@ -469,10 +486,10 @@ std::string Clipboard::getPrimary() {
     return reinterpret_cast<PrimaryTextSource *>(source)->text;
   }
 
-  return readSelection(display_, source->mime_types,
-                       [source](const char *mime, int fd) {
-                         wlr_primary_selection_source_send(source, mime, fd);
-                       });
+  return readMime(display_, preferredMime(source->mime_types),
+                  [source](const char *mime, int fd) {
+                    wlr_primary_selection_source_send(source, mime, fd);
+                  });
 }
 
 void Clipboard::persistClientSelection() {

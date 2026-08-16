@@ -45,6 +45,9 @@ class Clipboard {
   /// that costs when the owner is another process.
   std::string get();
 
+  /// The selection as a PNG, or empty if it is not an image.
+  std::vector<uint8_t> getPng();
+
   /// Snapshot a client-owned selection into a compositor source.
   ///
   /// Flameshot (and anything that copies then exits) offers the crop on a

@@ -673,6 +673,18 @@ public enum LavaClient {
                 )
             }
         }
+        ClipboardBridge.imageReader = { [compositor] in
+            do {
+                return try blockingCall(timeout: 5) {
+                    try await compositor.getClipboardPng(surfaceId: surfaceID)
+                }
+            } catch {
+                FileHandle.standardError.write(
+                    Data("GetClipboardPng failed: \(error)\n".utf8)
+                )
+                return []
+            }
+        }
         // The other selection — what middle-click pastes. Written whenever a
         // selection is *made* rather than copied, so this one is on the path
         // of a drag ending and is worth being the cheap call that it is.

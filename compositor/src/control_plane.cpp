@@ -1058,6 +1058,11 @@ class CompositorImpl final : public ICompositor_Servant {
     host_.setPrimarySelectionText(std::string(text.begin(), text.end()));
   }
 
+  std::vector<uint8_t> GetClipboardPng(uint32_t surfaceId) override {
+    if (!host_.surfaceExists(surfaceId)) throw SurfaceNotFound(surfaceId);
+    return host_.clipboardPng();
+  }
+
  private:
   /// The subscription is the surface's lease.
   ///

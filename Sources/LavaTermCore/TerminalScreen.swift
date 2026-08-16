@@ -21,6 +21,8 @@ public final class TerminalScreen: @unchecked Sendable {
     public private(set) var windowTitle: String = ""
     /// Last OSC 7 working directory (filesystem path). Empty until reported.
     public private(set) var workingDirectory: String = ""
+    /// Set by OSC 52. The host copies it to the seat selection and clears it.
+    public var pendingClipboard: String?
 
     /// How many lines above the live screen the view is currently showing.
     /// Zero is "follow the bottom"; positive means the user has scrolled up
@@ -473,6 +475,8 @@ public final class TerminalScreen: @unchecked Sendable {
             if let path = Self.path(fromOSC7: uri) {
                 workingDirectory = path
             }
+        case .setClipboard(let text):
+            pendingClipboard = text
         case .ignore:
             break
         }

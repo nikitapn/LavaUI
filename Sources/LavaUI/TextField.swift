@@ -420,6 +420,9 @@ extension LeafNode {
 public enum ClipboardBridge {
     nonisolated(unsafe) public static var reader: (() -> String)?
     nonisolated(unsafe) public static var writer: ((String) -> Void)?
+    /// PNG of the seat selection, when it is an image. Nil if the host
+    /// cannot read pictures (windowed GLFW) or the selection is text.
+    nonisolated(unsafe) public static var imageReader: (() -> [UInt8])?
 
     /// The *primary* selection — what middle-click pastes. A second selection,
     /// filled by the act of selecting rather than by a copy command, which is
@@ -434,6 +437,7 @@ public enum ClipboardBridge {
 
     public static func read() -> String { reader?() ?? "" }
     public static func write(_ text: String) { writer?(text) }
+    public static func readImage() -> [UInt8]? { imageReader?() }
     public static func readPrimary() -> String { primaryReader?() ?? "" }
     public static func writePrimary(_ text: String) { primaryWriter?(text) }
 }

@@ -1279,4 +1279,12 @@ interface Compositor {
   /// wherever a drag ends rather than from a keybinding.
   void SetPrimarySelection(surfaceId: in u32, text: in string)
       raises(SurfaceNotFound);
+
+  /// PNG of the seat selection, or empty if it holds none or is not an image.
+  ///
+  /// Same empty-not-error contract as `GetClipboard`. A Print Screen or a
+  /// Flameshot crop lives here as `image/png`; a text selection answers
+  /// empty. The bytes are the file, not a texture id — a terminal that
+  /// wants to paste a screenshot writes them out and inserts the path.
+  vector<u8> GetClipboardPng(surfaceId: in u32) raises(SurfaceNotFound);
 }

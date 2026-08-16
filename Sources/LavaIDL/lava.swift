@@ -1701,6 +1701,29 @@ fileprivate func unmarshal_lava_M26(buffer: UnsafeRawPointer, offset: Int) -> la
   return result
 }
 
+fileprivate struct lava_M27: Codable, Sendable {
+  public var _1: [UInt8] = []
+
+  public init() {}
+
+  public init(_1: [UInt8])   {
+    self._1 = _1
+  }
+}
+
+
+// MARK: - Marshal lava_M27
+fileprivate func marshal_lava_M27(buffer: FlatBuffer, offset: Int, data: lava_M27) {
+  NPRPC.marshal_fundamental_vector(buffer: buffer, offset: offset + 0, vector: data._1)
+}
+
+// MARK: - Unmarshal lava_M27
+fileprivate func unmarshal_lava_M27(buffer: UnsafeRawPointer, offset: Int) -> lava_M27 {
+  var result = lava_M27()
+  result._1 = NPRPC.unmarshal_fundamental_vector(buffer: buffer, offset: offset + 0)
+  return result
+}
+
 public protocol CompositorProtocol {
   func registerFont(path: String, pixelSize26_6: UInt32, faceIndex: UInt32, rasterFlags: UInt32) throws -> UInt32
   func registerImage(path: String, maxPixelSize: UInt32) throws -> ImageInfo
@@ -1744,6 +1767,7 @@ public protocol CompositorProtocol {
   func setClipboard(surfaceId: UInt32, text: String) throws
   func getPrimarySelection(surfaceId: UInt32) throws -> String
   func setPrimarySelection(surfaceId: UInt32, text: String) throws
+  func getClipboardPng(surfaceId: UInt32) throws -> [UInt8]
 }
 
 // Client proxy for Compositor
@@ -3370,6 +3394,47 @@ final public class Compositor: NPRPCObject, @unchecked Sendable {
     if stdReply != 0 { throw UnexpectedReplyError(message: "Unexpected reply") }
   }
 
+  public func getClipboardPng(surfaceId: UInt32) async throws -> [UInt8]   {
+    // Prepare buffer
+    let buffer = FlatBuffer()
+    buffer.prepare(36)
+    buffer.commit(36)
+    guard let bufData = buffer.data else { throw BufferError(message: "Failed to get buffer data") }
+
+    // Write message header
+    bufData.storeBytes(of: UInt32(0), toByteOffset: 0, as: UInt32.self)  // size (set later)
+    bufData.storeBytes(of: UInt32(0), toByteOffset: 4, as: UInt32.self)  // msg_id: FunctionCall (MessageId enum value 0)
+    bufData.storeBytes(of: UInt32(0), toByteOffset: 8, as: UInt32.self)  // msg_type: Request
+    bufData.storeBytes(of: UInt32(0), toByteOffset: 12, as: UInt32.self) // reserved
+
+    // Write call header
+    bufData.storeBytes(of: poaIdx, toByteOffset: 16, as: UInt16.self)
+    bufData.storeBytes(of: UInt8(0), toByteOffset: 18, as: UInt8.self)  // interface_idx
+    bufData.storeBytes(of: UInt8(42), toByteOffset: 19, as: UInt8.self)  // function_idx
+    bufData.storeBytes(of: objectId, toByteOffset: 24, as: UInt64.self)
+
+    // Marshal input arguments
+    var inArgs = lava_M2()
+    inArgs._1 = surfaceId
+    marshal_lava_M2(buffer: buffer, offset: 32, data: inArgs)
+
+    guard let finalData = buffer.data else { throw BufferError(message: "Failed to get buffer data") }
+    finalData.storeBytes(of: UInt32(buffer.size), toByteOffset: 0, as: UInt32.self)
+
+    // Send and receive
+    try Task.checkCancellation()
+    let responseBuffer = try await sendAsyncReceive(buffer: buffer, timeout: timeout)
+
+    // Handle reply
+    let stdReply = try handleStandardReply(buffer: responseBuffer)
+    if stdReply == 1 { throw lava_throwException(buffer: responseBuffer) }
+    if stdReply != -1 { throw UnexpectedReplyError(message: "Unexpected reply") }
+
+    guard let responseData = responseBuffer.data else { throw BufferError(message: "Failed to get response data") }
+    let out = unmarshal_lava_M27(buffer: responseData, offset: 16)
+    return out._1
+  }
+
 }
 
 // Servant base for Compositor
@@ -3546,6 +3611,10 @@ open class CompositorServant: NPRPCServant, CompositorProtocol, @unchecked Senda
 
   open func setPrimarySelection(surfaceId: UInt32, text: String) throws   {
     fatalError("Subclass must implement setPrimarySelection")
+  }
+
+  open func getClipboardPng(surfaceId: UInt32) throws -> [UInt8]   {
+    fatalError("Subclass must implement getClipboardPng")
   }
 
   // Dispatch incoming RPC calls
@@ -4767,6 +4836,47 @@ open class CompositorServant: NPRPCServant, CompositorProtocol, @unchecked Senda
           try setPrimarySelection(surfaceId: ia._1, text: ia._2)
           // Send success
           makeSimpleAnswer(buffer: buffer, messageId: impl.MessageId.Success)
+        }
+        catch let e as SurfaceNotFound {
+          let obuf = buffer
+          obuf.consume(obuf.size)
+          obuf.prepare(24)
+          obuf.commit(24)
+          guard let exData = obuf.data else { return }
+          marshal_SurfaceNotFound(buffer: obuf, offset: 16, data: e)
+          exData.storeBytes(of: UInt32(obuf.size), toByteOffset: 0, as: UInt32.self)
+          exData.storeBytes(of: impl.MessageId.Exception.rawValue, toByteOffset: 4, as: UInt32.self)
+          exData.storeBytes(of: impl.MessageType.Answer.rawValue, toByteOffset: 8, as: UInt32.self)
+        }
+        catch {
+          makeSimpleAnswer(buffer: buffer, messageId: impl.MessageId.Error_Unknown)
+        }
+      case 42: // GetClipboardPng
+        // Validate input buffer for untrusted interface
+        guard check_1Fu32(buffer: data, bufferSize: buffer.size, offset: 32) else         {
+          makeSimpleAnswer(buffer: buffer, messageId: impl.MessageId.Error_BadInput)
+          return
+        }
+
+        // Unmarshal input arguments
+        let ia = unmarshal_lava_M2(buffer: data, offset: 32)
+        // Prepare output buffer
+        let obuf = buffer
+        obuf.consume(obuf.size)
+        obuf.prepare(152)
+        obuf.commit(24)
+        
+        do {
+          let __ret_val = try getClipboardPng(surfaceId: ia._1)
+          // Marshal output arguments
+          var out_data = lava_M27()
+          out_data._1 = __ret_val
+
+          marshal_lava_M27(buffer: buffer, offset: 16, data: out_data)
+          guard let outData = buffer.data else { return }
+          outData.storeBytes(of: UInt32(buffer.size), toByteOffset: 0, as: UInt32.self)
+          outData.storeBytes(of: impl.MessageId.BlockResponse.rawValue, toByteOffset: 4, as: UInt32.self)
+          outData.storeBytes(of: impl.MessageType.Answer.rawValue, toByteOffset: 8, as: UInt32.self)
         }
         catch let e as SurfaceNotFound {
           let obuf = buffer

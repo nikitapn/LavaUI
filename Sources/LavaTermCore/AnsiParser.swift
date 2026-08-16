@@ -43,6 +43,9 @@ public final class AnsiParser: @unchecked Sendable {
         /// OSC 7 — working directory as a `file://` URI (or a bare path).
         /// The modern way a shell tells the terminal where it is.
         case setWorkingDirectory(String)
+        /// OSC 52 — the application wants this text on the system clipboard.
+        /// Grok, tmux and vim copy this way when they cannot reach the seat.
+        case setClipboard(String)
         case ignore
     }
 
@@ -181,7 +184,9 @@ public final class AnsiParser: @unchecked Sendable {
                 state = .oscEsc
                 return []
             }
-            if oscBuffer.count < 4096 {
+            // OSC 52 is a base64 clipboard payload; a long Grok copy is
+            // tens of kilobytes. The old 4 KiB cap truncated it to garbage.
+            if oscBuffer.count < 512_000 {
                 oscBuffer.append(Character(s))
             }
             return []
@@ -226,9 +231,24 @@ public final class AnsiParser: @unchecked Sendable {
             return .setTitle(payload)
         case "7":
             return .setWorkingDirectory(payload)
+        case "52":
+            return parseOSC52(payload)
         default:
             return .ignore
         }
+    }
+
+    /// `OSC 52 ; Pc ; Pd`. `Pd` is base64 text, empty to clear, `?` to query
+    /// (ignored — we do not implement the reply).
+    private func parseOSC52(_ payload: String) -> Output {
+        guard let semi = payload.firstIndex(of: ";") else { return .ignore }
+        let data = String(payload[payload.index(after: semi)...])
+        if data.isEmpty { return .setClipboard("") }
+        if data == "?" { return .ignore }
+        guard let bytes = Data(base64Encoded: data),
+              let text = String(data: bytes, encoding: .utf8)
+        else { return .ignore }
+        return .setClipboard(text)
     }
 
     private func consumeEscape(_ s: Unicode.Scalar) -> [Output] {

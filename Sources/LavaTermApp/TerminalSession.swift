@@ -155,8 +155,33 @@ public final class TerminalSession: @unchecked Sendable {
     }
 
     /// Clipboard to the shell, as if it had been typed.
+    ///
+    /// Text first. A screenshot (Print Screen / Flameshot crop) has no
+    /// text MIME — that used to paste nothing. The PNG is written to a
+    /// temp file and the path is inserted, which is what a shell can use
+    /// and what Grok treats as a file. Grok's own image-chip paste is
+    /// Ctrl+V sent through to the app (not this method).
     public func paste() {
-        insert(ClipboardBridge.read())
+        let text = ClipboardBridge.read()
+        if !text.isEmpty {
+            insert(text)
+            return
+        }
+        if let png = ClipboardBridge.readImage(), !png.isEmpty {
+            insert(writePasteImage(png))
+        }
+    }
+
+    /// Writes `png` under `$TMPDIR` and returns the path, or empty on failure.
+    private func writePasteImage(_ png: [UInt8]) -> String {
+        let dir = FileManager.default.temporaryDirectory
+        let url = dir.appendingPathComponent("lava-clip-\(UUID().uuidString).png")
+        do {
+            try Data(png).write(to: url, options: .atomic)
+            return url.path
+        } catch {
+            return ""
+        }
     }
 
     private func insert(_ text: String) {
@@ -184,6 +209,14 @@ public final class TerminalSession: @unchecked Sendable {
             default:
                 break
             }
+        }
+        // Shift+Insert is the other terminal-native paste. Leave Ctrl+V
+        // for the application — Grok reads the seat clipboard on that
+        // chord to attach a screenshot, and intercepting it (as the
+        // Edit menu used to) pastes empty text and swallows the key.
+        if event.shift, !event.control, event.key == KeyCode.insert {
+            paste()
+            return true
         }
 
         // What this key sends, decided before anything is done about it.
@@ -318,6 +351,10 @@ public final class TerminalSession: @unchecked Sendable {
 
     private func ingest(_ data: Data) {
         screen.feed(data)
+        if let clip = screen.pendingClipboard {
+            screen.pendingClipboard = nil
+            ClipboardBridge.write(clip)
+        }
         syncChromeFromScreen()
         bump()
     }
