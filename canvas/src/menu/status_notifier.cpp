@@ -6,6 +6,7 @@
 #include <cstring>
 #include <filesystem>
 #include <iostream>
+#include <memory>
 #include <unordered_map>
 #include <vector>
 
@@ -159,98 +160,50 @@ std::string resolveIconFile(const std::string &name,
   return {};
 }
 
-GVariant *getProp(GDBusConnection *conn, const char *name, const char *path,
-                  const char *prop)
+std::string dictString(GVariant *dict, const char *key)
 {
-  GError *err = nullptr;
-  GVariant *ret = g_dbus_connection_call_sync(
-      conn, name, path, kPropsIface, "Get",
-      g_variant_new("(ss)", kItemIface, prop), G_VARIANT_TYPE("(v)"),
-      G_DBUS_CALL_FLAGS_NONE, 1500, nullptr, &err);
-  if (ret == nullptr) {
-    if (err) g_error_free(err);
-    return nullptr;
-  }
-  GVariant *inner = nullptr;
-  g_variant_get(ret, "(v)", &inner);
-  g_variant_unref(ret);
-  return inner;
-}
-
-std::string propString(GDBusConnection *conn, const char *name,
-                       const char *path, const char *prop)
-{
-  GVariant *v = getProp(conn, name, path, prop);
+  GVariant *v = g_variant_lookup_value(dict, key, nullptr);
   if (v == nullptr) return {};
   std::string out;
-  if (g_variant_is_of_type(v, G_VARIANT_TYPE_STRING)) {
-    out = g_variant_get_string(v, nullptr);
-  } else if (g_variant_is_of_type(v, G_VARIANT_TYPE_OBJECT_PATH)) {
+  if (g_variant_is_of_type(v, G_VARIANT_TYPE_STRING) ||
+      g_variant_is_of_type(v, G_VARIANT_TYPE_OBJECT_PATH)) {
     out = g_variant_get_string(v, nullptr);
   }
   g_variant_unref(v);
   return out;
 }
 
-bool propBool(GDBusConnection *conn, const char *name, const char *path,
-              const char *prop)
+bool dictBool(GVariant *dict, const char *key)
 {
-  GVariant *v = getProp(conn, name, path, prop);
+  GVariant *v = g_variant_lookup_value(dict, key, G_VARIANT_TYPE_BOOLEAN);
   if (v == nullptr) return false;
-  bool out = false;
-  if (g_variant_is_of_type(v, G_VARIANT_TYPE_BOOLEAN)) {
-    out = g_variant_get_boolean(v);
-  }
+  const bool out = g_variant_get_boolean(v);
   g_variant_unref(v);
   return out;
 }
 
-/// Whether an object implements `method` on the item interface.
-///
-/// Introspection rather than "call it and see": the call is fire-and-forget so
-/// its failure arrives nowhere useful, and the difference between an applet
-/// that acts on a click and one that only has a menu has to be known *before*
-/// the click is decided.
-bool hasMethod(GDBusConnection *conn, const char *name, const char *path,
-               const char *method)
+bool xmlHasMethod(const char *xml, const char *method)
 {
-  GError *err = nullptr;
-  GVariant *ret = g_dbus_connection_call_sync(
-      conn, name, path, "org.freedesktop.DBus.Introspectable", "Introspect",
-      nullptr, G_VARIANT_TYPE("(s)"), G_DBUS_CALL_FLAGS_NONE, 1500, nullptr,
-      &err);
-  if (ret == nullptr) {
-    if (err) g_error_free(err);
-    return false;
-  }
-  const gchar *xml = nullptr;
-  g_variant_get(ret, "(&s)", &xml);
+  if (xml == nullptr || method == nullptr) return false;
+  GDBusNodeInfo *node = g_dbus_node_info_new_for_xml(xml, nullptr);
+  if (node == nullptr) return false;
   bool found = false;
-  if (xml != nullptr) {
-    GDBusNodeInfo *node = g_dbus_node_info_new_for_xml(xml, nullptr);
-    if (node != nullptr) {
-      if (GDBusInterfaceInfo *iface =
-              g_dbus_node_info_lookup_interface(node, kItemIface)) {
-        found = g_dbus_interface_info_lookup_method(iface, method) != nullptr;
-      }
-      g_dbus_node_info_unref(node);
-    }
+  if (GDBusInterfaceInfo *iface =
+          g_dbus_node_info_lookup_interface(node, kItemIface)) {
+    found = g_dbus_interface_info_lookup_method(iface, method) != nullptr;
   }
-  g_variant_unref(ret);
+  g_dbus_node_info_unref(node);
   return found;
 }
 
-/// Largest pixmap from IconPixmap `a(iiay)`.
-void loadPixmap(GDBusConnection *conn, const char *name, const char *path,
-                int &outW, int &outH, std::vector<uint8_t> &outRgba)
+/// Largest pixmap from an `IconPixmap` value `a(iiay)`.
+void decodePixmap(GVariant *v, int &outW, int &outH,
+                  std::vector<uint8_t> &outRgba)
 {
   outW = 0;
   outH = 0;
   outRgba.clear();
-  GVariant *v = getProp(conn, name, path, "IconPixmap");
-  if (v == nullptr) return;
-  if (!g_variant_is_of_type(v, G_VARIANT_TYPE("a(iiay)"))) {
-    g_variant_unref(v);
+  if (v == nullptr || !g_variant_is_of_type(v, G_VARIANT_TYPE("a(iiay)"))) {
     return;
   }
 
@@ -277,7 +230,6 @@ void loadPixmap(GDBusConnection *conn, const char *name, const char *path,
     }
     g_variant_unref(entry);
   }
-  g_variant_unref(v);
   if (bestW > 0 && bestH > 0 && !bestArgb.empty()) {
     argbNetToRgba(bestArgb.data(), bestArgb.size(), bestW, bestH, outRgba);
     outW = bestW;
@@ -308,8 +260,12 @@ struct StatusNotifierHost::Impl {
     /// applets — nm-applet is one — implement none of `Activate`,
     /// `ContextMenu` or even `ItemIsMenu`, and expect the host to open the
     /// DBusMenu itself.
-    bool hasActivate = false;
+    bool hasActivate = true;
     bool isMenu = false;
+    /// Set by Register / item signals. `requestRefresh` clears it when an
+    /// async GetAll is in flight.
+    bool pendingRefresh = false;
+    bool refreshInFlight = false;
     int iconW = 0;
     int iconH = 0;
     std::vector<uint8_t> iconRgba;
@@ -475,7 +431,7 @@ struct StatusNotifierHost::Impl {
 
     const std::string key = makeItemKey(name, path);
     if (Item *existing = find(key)) {
-      refreshItem(*existing);
+      existing->pendingRefresh = true;
       ++revision;
       return;
     }
@@ -484,11 +440,136 @@ struct StatusNotifierHost::Impl {
     it.service = std::move(name);
     it.path = std::move(path);
     watchItem(it);
-    refreshItem(it);
+    // Do not fetch properties here. This runs inside
+    // `RegisterStatusNotifierItem` *before* the reply is sent. Flameshot's
+    // daemon will not answer `Get` until Register returns. Mark it; `poll`
+    // starts an async GetAll on the next frame.
+    it.pendingRefresh = true;
     items.push_back(std::move(it));
     ++revision;
     if (announce) emitItemRegistered(key);
     std::cerr << "canvas: SNI registered " << key << "\n";
+  }
+
+  /// One GetAll / Introspect in flight. The key, not a pointer: the item
+  /// can vanish before the reply arrives.
+  struct RefreshJob {
+    Impl *self = nullptr;
+    std::string key;
+  };
+
+  void requestRefresh(Item &it)
+  {
+    if (it.refreshInFlight || conn == nullptr) return;
+    it.refreshInFlight = true;
+    it.pendingRefresh = false;
+    auto *job = new RefreshJob{this, makeItemKey(it.service, it.path)};
+    // Async on purpose. `call_sync` from the frame loop is what killed
+    // the panel on Flameshot's first launch: the applet is busy starting
+    // the GUI and answering the portal, so each Get sat on a 1.5s
+    // timeout, nine of them in a row, and heartbeats stopped.
+    g_dbus_connection_call(
+        conn, it.service.c_str(), it.path.c_str(), kPropsIface, "GetAll",
+        g_variant_new("(s)", kItemIface), G_VARIANT_TYPE("(a{sv})"),
+        G_DBUS_CALL_FLAGS_NONE, 2500, nullptr, &Impl::onGetAll, job);
+  }
+
+  void flushPendingRefreshes()
+  {
+    for (Item &it : items) {
+      if (it.pendingRefresh) requestRefresh(it);
+    }
+  }
+
+  static void onGetAll(GObject *source, GAsyncResult *res, gpointer data)
+  {
+    std::unique_ptr<RefreshJob> job(static_cast<RefreshJob *>(data));
+    GError *err = nullptr;
+    GVariant *reply = g_dbus_connection_call_finish(
+        G_DBUS_CONNECTION(source), res, &err);
+    if (err != nullptr) g_error_free(err);
+    Item *it = job->self->find(job->key);
+    if (it == nullptr) {
+      if (reply != nullptr) g_variant_unref(reply);
+      return;
+    }
+    it->refreshInFlight = false;
+    if (reply != nullptr) {
+      GVariant *dict = nullptr;
+      g_variant_get(reply, "(@a{sv})", &dict);
+      g_variant_unref(reply);
+      if (dict != nullptr) {
+        job->self->applyGetAll(*it, dict);
+        g_variant_unref(dict);
+      }
+      ++job->self->revision;
+      job->self->requestIntrospect(*it);
+    }
+    if (it->pendingRefresh) job->self->requestRefresh(*it);
+  }
+
+  void applyGetAll(Item &it, GVariant *dict)
+  {
+    it.id = dictString(dict, "Id");
+    it.title = dictString(dict, "Title");
+    it.status = dictString(dict, "Status");
+    it.iconName = dictString(dict, "IconName");
+    it.iconThemePath = dictString(dict, "IconThemePath");
+    it.isMenu = dictBool(dict, "ItemIsMenu");
+    it.menuPath = dictString(dict, "Menu");
+    it.iconPath = resolveIconFile(it.iconName, it.iconThemePath);
+    if (GVariant *pix =
+            g_variant_lookup_value(dict, "IconPixmap", G_VARIANT_TYPE("a(iiay)"))) {
+      decodePixmap(pix, it.iconW, it.iconH, it.iconRgba);
+      g_variant_unref(pix);
+    } else {
+      it.iconW = 0;
+      it.iconH = 0;
+      it.iconRgba.clear();
+    }
+    if (it.status == "NeedsAttention" && it.iconRgba.empty() &&
+        it.iconPath.empty()) {
+      const std::string att = dictString(dict, "AttentionIconName");
+      if (!att.empty()) {
+        it.iconName = att;
+        it.iconPath = resolveIconFile(att, it.iconThemePath);
+      }
+    }
+  }
+
+  void requestIntrospect(Item &it)
+  {
+    if (conn == nullptr) return;
+    auto *job = new RefreshJob{this, makeItemKey(it.service, it.path)};
+    g_dbus_connection_call(
+        conn, it.service.c_str(), it.path.c_str(),
+        "org.freedesktop.DBus.Introspectable", "Introspect", nullptr,
+        G_VARIANT_TYPE("(s)"), G_DBUS_CALL_FLAGS_NONE, 2500, nullptr,
+        &Impl::onIntrospect, job);
+  }
+
+  static void onIntrospect(GObject *source, GAsyncResult *res, gpointer data)
+  {
+    std::unique_ptr<RefreshJob> job(static_cast<RefreshJob *>(data));
+    GError *err = nullptr;
+    GVariant *reply = g_dbus_connection_call_finish(
+        G_DBUS_CONNECTION(source), res, &err);
+    if (err != nullptr) g_error_free(err);
+    Item *it = job->self->find(job->key);
+    if (it == nullptr) {
+      if (reply != nullptr) g_variant_unref(reply);
+      return;
+    }
+    if (reply != nullptr) {
+      const gchar *xml = nullptr;
+      g_variant_get(reply, "(&s)", &xml);
+      const bool has = xmlHasMethod(xml, "Activate");
+      g_variant_unref(reply);
+      if (it->hasActivate != has) {
+        it->hasActivate = has;
+        ++job->self->revision;
+      }
+    }
   }
 
   void unregisterByKey(const std::string &key)
@@ -531,8 +612,10 @@ struct StatusNotifierHost::Impl {
     const std::string key = makeItemKey(sender, path);
     for (Item &it : self->items) {
       if (makeItemKey(it.service, it.path) == key) {
-        self->refreshItem(it);
-        ++self->revision;
+        // Same rule as Register: never Get from a signal handler. The
+        // applet that just emitted NewIcon is often about to block on
+        // something else (Flameshot's first portal request).
+        it.pendingRefresh = true;
         return;
       }
     }
@@ -589,31 +672,6 @@ struct StatusNotifierHost::Impl {
     if (it.signalSub != 0 && conn != nullptr) {
       g_dbus_connection_signal_unsubscribe(conn, it.signalSub);
       it.signalSub = 0;
-    }
-  }
-
-  void refreshItem(Item &it)
-  {
-    const char *n = it.service.c_str();
-    const char *p = it.path.c_str();
-    it.id = propString(conn, n, p, "Id");
-    it.title = propString(conn, n, p, "Title");
-    it.status = propString(conn, n, p, "Status");
-    it.iconName = propString(conn, n, p, "IconName");
-    it.iconThemePath = propString(conn, n, p, "IconThemePath");
-    it.isMenu = propBool(conn, n, p, "ItemIsMenu");
-    it.menuPath = propString(conn, n, p, "Menu");
-    it.hasActivate = hasMethod(conn, n, p, "Activate");
-    it.iconPath = resolveIconFile(it.iconName, it.iconThemePath);
-    loadPixmap(conn, n, p, it.iconW, it.iconH, it.iconRgba);
-    // Attention icon when status asks for it and main icon is empty.
-    if (it.status == "NeedsAttention" && it.iconRgba.empty() &&
-        it.iconPath.empty()) {
-      const std::string att = propString(conn, n, p, "AttentionIconName");
-      if (!att.empty()) {
-        it.iconName = att;
-        it.iconPath = resolveIconFile(att, it.iconThemePath);
-      }
     }
   }
 
@@ -812,6 +870,9 @@ bool StatusNotifierHost::isServing() const { return impl_->serving(); }
 
 void StatusNotifierHost::poll()
 {
+  // Start any GetAll that was marked last frame. The calls themselves
+  // are async; this must not wait on the applet.
+  impl_->flushPendingRefreshes();
   while (g_main_context_iteration(nullptr, FALSE)) {
   }
   // The open menu rides the same GLib context, but the importer keeps its own
