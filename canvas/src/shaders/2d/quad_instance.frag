@@ -104,8 +104,14 @@ void main() {
     coverage = texture(textures[nonuniformEXT(vTextureIndex)], vUv).r;
   } else { // Sdf (kind 0); Mesh never reaches this shader
     float d = sdRoundBox(vLocal, vHalfSize, vRadius);
-    float aa = max(fwidth(d), 1e-5);
-    coverage = 1.0 - smoothstep(-aa, aa, d);
+    // Sharp box: full coverage inside, none outside. SDF AA on r=0
+    // eats ~1px on every edge — see quad.frag.
+    if (vRadius < 0.5) {
+      coverage = d <= 0.0 ? 1.0 : 0.0;
+    } else {
+      float aa = max(fwidth(d), 1e-5);
+      coverage = 1.0 - smoothstep(-aa, aa, d);
+    }
   }
   if (coverage <= 0.0) discard;
   vec4 c = vec4(vColor.rgb, vColor.a * coverage);

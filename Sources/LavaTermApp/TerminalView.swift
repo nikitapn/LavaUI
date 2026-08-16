@@ -209,15 +209,8 @@ struct TerminalCanvas: View {
             cols: screen.cols, rows: screen.rows
         )
 
-        // Overlap the chrome by 1px. Yoga is flush (strip y=0 h=36,
-        // canvas y=36 — `layout_tree` agrees). The hairline is the
-        // shared scanline of two rects blended in linear light against
-        // whatever was under the first one's bottom coverage
-        // (`docs/colour-and-blending.md`). FIXME: belongs in the quad
-        // rasterizer (axis-aligned opaque rects should snap, not AA
-        // against a clear neighbour). This just covers the fringe.
         list.rect(
-            x: frame.x, y: frame.y - 1, w: frame.w, h: frame.h,
+            x: frame.x, y: frame.y, w: frame.w, h: frame.h,
             color: TerminalPalette.terminalFill
         )
 

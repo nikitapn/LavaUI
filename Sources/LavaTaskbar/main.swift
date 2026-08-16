@@ -388,13 +388,6 @@ struct TaskbarView: View {
                 CalendarApplet(clockText: clock.text, isOpen: calendarOpenBinding)
             }
             .padding(.horizontal, 10)
-            // Paint 33px of strip colour, reserve 32. Yoga is flush at
-            // y=32; the hairline under the bar is the bottom coverage
-            // of that fill blended in linear light against the clear
-            // rest of this surface (and then over the window). Same
-            // cover-up as LavaTerm's canvas fill at y-1. FIXME: fix
-            // in the quad rasterizer, not here.
-            .frame(height: .pt(MenuSession.stripHeight + 1))
             .background(Theme.current.background)
 
             // Fills the expanded surface so the strip stays top-aligned. Never

@@ -145,10 +145,19 @@ void main() {
       cov = pow(cov, mix(0.45, 2.0, lum));
     } else {
       float d = sdRoundBox(vLocal, vHalfSize, vRadius);
-      // fwidth gives ~1px of screen-space falloff, so edges antialias without
-      // MSAA. Clamped away from zero so degenerate (zero-area) quads don't NaN.
-      float aa = max(fwidth(d), 1e-5);
-      cov = 1.0 - smoothstep(-aa, aa, d);
+      // A sharp box must not pay the SDF antialias. Pixel centres sit
+      // 0.5px inside a d=0 edge, so smoothstep(-aa, aa, d) lands around
+      // 0.75 and every side of a panel or a fill reads as a 1px hole
+      // (the neighbour is clear, or another window). Rounded shapes
+      // keep the falloff — that is what the radius is for. The quad
+      // is already padded 1px (`pushBox`) so the discarded outside
+      // still has fragments to reject.
+      if (vRadius < 0.5) {
+        cov = d <= 0.0 ? 1.0 : 0.0;
+      } else {
+        float aa = max(fwidth(d), 1e-5);
+        cov = 1.0 - smoothstep(-aa, aa, d);
+      }
     }
 
     if (cov <= 0.0) {
