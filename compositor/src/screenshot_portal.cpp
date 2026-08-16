@@ -171,11 +171,16 @@ int method_screenshot(sd_bus_message *m, void *userdata, sd_bus_error *error) {
   if (self->pending != nullptr) {
     return reply_status(m, 2, nullptr);
   }
+  // Mark pending *before* schedule(): that call damages the output and
+  // may present a frame on this turn. `on_commit` only captures when
+  // `hasPending()` is true, so the other order missed the frame and
+  // waited for the next one — or the 2s timeout.
+  self->pending = sd_bus_message_ref(m);
   if (!self->schedule || !self->schedule()) {
     wlr_log(WLR_ERROR, "screenshot portal: no output to capture");
-    return reply_status(m, 2, nullptr);
+    drop_pending(self, 2, nullptr);
+    return 1;
   }
-  self->pending = sd_bus_message_ref(m);
   if (self->timeout != nullptr) {
     wl_event_source_timer_update(self->timeout, kPendingTimeoutMs);
   }

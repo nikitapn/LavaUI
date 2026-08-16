@@ -206,11 +206,32 @@ constexpr wlr_primary_selection_source_impl kPrimarySourceImpl = {
 
 /// Whether a source is one of ours — which is what lets a read answer from
 /// memory instead of asking a pipe a question only this thread could answer.
-bool isOurs(const wlr_data_source *source) {
+bool isOurText(const wlr_data_source *source) {
   return source != nullptr && source->impl == &kTextSourceImpl;
+}
+bool isOurImage(const wlr_data_source *source) {
+  return source != nullptr && source->impl == &kImageSourceImpl;
+}
+bool isOurs(const wlr_data_source *source) {
+  return isOurText(source) || isOurImage(source);
 }
 bool isOurs(const wlr_primary_selection_source *source) {
   return source != nullptr && source->impl == &kPrimarySourceImpl;
+}
+
+/// First match of `wanted` in `mime_types`, or nullptr.
+const char *findMime(const wl_array &mime_types,
+                     const char *const *wanted, size_t nWanted) {
+  const auto *offered = static_cast<const char *const *>(mime_types.data);
+  const size_t count = mime_types.size / sizeof(char *);
+  for (size_t w = 0; w < nWanted; ++w) {
+    for (size_t i = 0; i < count; ++i) {
+      if (offered[i] != nullptr && std::strcmp(offered[i], wanted[w]) == 0) {
+        return offered[i];
+      }
+    }
+  }
+  return nullptr;
 }
 
 /// The first MIME type this array offers that we understand, or nullptr.
@@ -218,16 +239,104 @@ bool isOurs(const wlr_primary_selection_source *source) {
 /// Iterated by hand rather than with `wl_array_for_each`, whose first
 /// statement assigns `void *` to a typed pointer — legal C, and not C++.
 const char *preferredMime(const wl_array &mime_types) {
-  const auto *offered = static_cast<const char *const *>(mime_types.data);
-  const size_t count = mime_types.size / sizeof(char *);
-  for (const char *wanted : kTextMimeTypes) {
-    for (size_t i = 0; i < count; ++i) {
-      if (offered[i] != nullptr && std::strcmp(offered[i], wanted) == 0) {
-        return offered[i];
+  return findMime(mime_types, kTextMimeTypes,
+                  sizeof(kTextMimeTypes) / sizeof(kTextMimeTypes[0]));
+}
+
+/// A screenshot is a few megabytes; past that the client is not a crop.
+constexpr size_t kMaxPersistBytes = 32 * 1024 * 1024;
+
+/// In-flight copy of a client selection into one of ours.
+///
+/// The source process is allowed to exit the moment it has called
+/// `set_selection`. We have to pull the bytes off the pipe it will write
+/// before that, without blocking the compositor's loop on the write.
+struct PersistRead {
+  wl_display *display = nullptr;
+  wlr_seat *seat = nullptr;
+  uint32_t generation = 0;
+  bool wantPng = false;
+  std::string bytes;
+  wl_event_source *event = nullptr;
+  int fd = -1;
+};
+
+uint32_t g_persistGen = 0;
+PersistRead *g_persist = nullptr;
+
+void finishPersist(PersistRead *pending, bool install);
+
+int on_persist_readable(int fd, uint32_t mask, void *data) {
+  auto *pending = static_cast<PersistRead *>(data);
+  if (mask & (WL_EVENT_HANGUP | WL_EVENT_ERROR)) {
+    // Drain whatever arrived with the hangup, then settle.
+    char buffer[4096];
+    for (;;) {
+      const ssize_t got = read(fd, buffer, sizeof(buffer));
+      if (got > 0) {
+        if (pending->bytes.size() + static_cast<size_t>(got) > kMaxPersistBytes) {
+          finishPersist(pending, false);
+          return 0;
+        }
+        pending->bytes.append(buffer, static_cast<size_t>(got));
+        continue;
       }
+      break;
     }
+    finishPersist(pending, true);
+    return 0;
   }
-  return nullptr;
+
+  char buffer[4096];
+  for (;;) {
+    const ssize_t got = read(fd, buffer, sizeof(buffer));
+    if (got > 0) {
+      if (pending->bytes.size() + static_cast<size_t>(got) > kMaxPersistBytes) {
+        finishPersist(pending, false);
+        return 0;
+      }
+      pending->bytes.append(buffer, static_cast<size_t>(got));
+      continue;
+    }
+    if (got < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) return 0;
+    finishPersist(pending, got == 0);
+    return 0;
+  }
+}
+
+void abortPersist() {
+  ++g_persistGen;
+  if (g_persist == nullptr) return;
+  PersistRead *pending = g_persist;
+  g_persist = nullptr;
+  if (pending->event != nullptr) wl_event_source_remove(pending->event);
+  if (pending->fd >= 0) close(pending->fd);
+  delete pending;
+}
+
+void finishPersist(PersistRead *pending, bool install) {
+  const uint32_t generation = pending->generation;
+  const bool wantPng = pending->wantPng;
+  std::string bytes = std::move(pending->bytes);
+  wl_display *display = pending->display;
+  wlr_seat *seat = pending->seat;
+
+  if (g_persist == pending) g_persist = nullptr;
+  if (pending->event != nullptr) wl_event_source_remove(pending->event);
+  if (pending->fd >= 0) close(pending->fd);
+  delete pending;
+
+  if (!install || generation != g_persistGen || bytes.empty()) return;
+
+  Clipboard clipboard(display, seat);
+  if (wantPng) {
+    std::vector<uint8_t> png(bytes.begin(), bytes.end());
+    clipboard.setImagePng(png);
+    wlr_log(WLR_INFO, "clipboard: persisted %zu-byte PNG", png.size());
+  } else {
+    clipboard.set(bytes);
+    wlr_log(WLR_INFO, "clipboard: persisted %zu-byte text", bytes.size());
+  }
 }
 
 /// Fills `mime_types` with every spelling of "this is text".
@@ -330,7 +439,7 @@ std::string Clipboard::get() {
   // Ours: the bytes are right here. Going through a pipe would mean waiting
   // on this thread for a write only this thread can perform — the deadlock
   // would not be a risk, it would be a certainty.
-  if (isOurs(source)) {
+  if (isOurText(source)) {
     return reinterpret_cast<TextSource *>(source)->text;
   }
 
@@ -364,6 +473,47 @@ std::string Clipboard::getPrimary() {
                        [source](const char *mime, int fd) {
                          wlr_primary_selection_source_send(source, mime, fd);
                        });
+}
+
+void Clipboard::persistClientSelection() {
+  g_loop = wl_display_get_event_loop(display_);
+  abortPersist();
+
+  wlr_data_source *source = seat_->selection_source;
+  if (source == nullptr || isOurs(source)) return;
+
+  const char *png = findMime(source->mime_types, kPngMimeTypes,
+                             sizeof(kPngMimeTypes) / sizeof(kPngMimeTypes[0]));
+  const char *text = preferredMime(source->mime_types);
+  const char *mime = png != nullptr ? png : text;
+  if (mime == nullptr) return;
+
+  if (g_loop == nullptr) return;
+
+  int fds[2];
+  if (pipe(fds) != 0) return;
+  const int flags = fcntl(fds[0], F_GETFL, 0);
+  if (flags != -1) fcntl(fds[0], F_SETFL, flags | O_NONBLOCK);
+
+  auto *pending = new PersistRead();
+  pending->display = display_;
+  pending->seat = seat_;
+  pending->generation = g_persistGen;
+  pending->wantPng = png != nullptr;
+  pending->fd = fds[0];
+  g_persist = pending;
+
+  // The source owns and closes fds[1].
+  wlr_data_source_send(source, mime, fds[1]);
+  wl_display_flush_clients(display_);
+
+  if (g_loop != nullptr) {
+    pending->event = wl_event_loop_add_fd(
+        g_loop, fds[0], WL_EVENT_READABLE | WL_EVENT_HANGUP,
+        on_persist_readable, pending);
+  }
+  // Try once now: a small selection may already be in the pipe.
+  on_persist_readable(fds[0], WL_EVENT_READABLE, pending);
 }
 
 } // namespace lava

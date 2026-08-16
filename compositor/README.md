@@ -200,6 +200,18 @@ the result as `image/png` on the same seat selection, so a paste in
 Firefox or GIMP is the picture. The primary selection stays text — a
 screenshot is a copy, not a highlight.
 
+The seat also advertises `ext-data-control-v1` and
+`wlr-data-control-unstable-v1`. Those are how a client copies without an
+input serial — Flameshot (via KGuiAddons), `wl-copy`, clipboard managers.
+`wl_data_device.set_selection` still needs a serial newer than the
+current offer; a compositor screenshot uses `wl_display_next_serial`, so
+a tool that only speaks that protocol cannot reliably replace it.
+
+A client selection is snapshotted as soon as it is set: the compositor
+reads the PNG (or text) off the source and becomes the owner. Flameshot's
+GUI exits the moment the crop is copied; without that copy the seat
+selection dies with it and paste is empty.
+
 A Wayland window is therefore square *including* its title bar, and its shadow
 is square too. Rounding only the bar would round two corners of a rectangle
 whose other two stay sharp, and the shadow behind it could match one end or the

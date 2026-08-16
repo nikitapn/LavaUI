@@ -45,6 +45,15 @@ class Clipboard {
   /// that costs when the owner is another process.
   std::string get();
 
+  /// Snapshot a client-owned selection into a compositor source.
+  ///
+  /// Flameshot (and anything that copies then exits) offers the crop on a
+  /// source that dies with the process. Nobody asks for the bytes in time,
+  /// paste is empty. Called from the seat's `set_selection` signal — after
+  /// data-control or `wl_data_device` — and no-op when the source is already
+  /// ours. The copy is async; the event loop is not blocked on the client.
+  void persistClientSelection();
+
   /// The *primary* selection — what middle-click pastes.
   ///
   /// A second selection, filled by the act of selecting rather than by a copy

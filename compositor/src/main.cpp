@@ -194,10 +194,10 @@ struct Output {
   Listener<Output> destroy;
   Listener<Output> commit;
 
-  /// Set by Print Screen; cleared when the next committed buffer has been
-  /// copied to the clipboard. The capture has to wait for a real frame —
-  /// the pixels live in the buffer the scene just presented, not in a
-  /// picture the compositor keeps on the side.
+  /// Set by Print Screen only; cleared when the next committed buffer has
+  /// been copied to the clipboard. The screenshot portal must not set this
+  /// — `finishScreenshot` would replace Flameshot's later crop copy with
+  /// the full frame (and a newer serial, so the crop is then ignored).
   bool pendingScreenshot = false;
 
   Output(Server *server, wlr_output *output);
@@ -722,6 +722,7 @@ struct Server {
   Listener<Server> cursor_frame;
   Listener<Server> request_cursor;
   Listener<Server> request_set_selection;
+  Listener<Server> set_selection;
   Listener<Server> request_set_primary_selection;
 
   /// Unhooks everything above, for shutdown.
@@ -738,7 +739,7 @@ struct Server {
          {&new_output, &new_toplevel, &new_popup, &new_decoration,
           &new_xwayland_surface, &xwayland_ready, &new_input, &cursor_motion,
           &cursor_motion_absolute, &cursor_button, &cursor_axis, &cursor_frame,
-          &request_cursor, &request_set_selection,
+          &request_cursor, &request_set_selection, &set_selection,
           &request_set_primary_selection}) {
       listener->detach();
     }
@@ -761,6 +762,7 @@ struct Server {
   static void on_cursor_frame(wl_listener *listener, void *data);
   static void on_request_cursor(wl_listener *listener, void *data);
   static void on_request_set_selection(wl_listener *listener, void *data);
+  static void on_set_selection(wl_listener *listener, void *data);
   static void on_request_set_primary_selection(wl_listener *listener,
                                                void *data);
 
@@ -4118,6 +4120,11 @@ void Output::on_commit(wl_listener *listener, void *data) {
   if (!printScreen && !portal) return;
   output->pendingScreenshot = false;
 
+  // Two consumers, two destinations. Print Screen owns the seat selection.
+  // The portal writes a file:// for the caller (Flameshot crops that and
+  // copies the crop itself). Sharing the flag used to run both: the full
+  // frame landed on the clipboard with `wl_display_next_serial`, and
+  // Flameshot's later `set_selection` lost the serial race.
   if (printScreen) server->finishScreenshot(event->state->buffer);
   if (portal) {
     std::vector<uint8_t> png;
@@ -4231,7 +4238,9 @@ bool Server::captureOutputNow(Output *output) {
 bool Server::schedulePortalCapture() {
   Output *target = outputForScreenshot();
   if (target == nullptr) return false;
-  target->pendingScreenshot = true;
+  // Damage + a frame only. `on_commit` notices the portal via
+  // `hasPending()`; do not raise `pendingScreenshot` or the full frame
+  // is also published as the seat selection.
   wlr_damage_ring_add_whole(&target->scene_output->damage_ring);
   wlr_output_schedule_frame(target->wlr);
   return true;
@@ -6575,9 +6584,21 @@ void Server::on_cursor_frame(wl_listener *listener, void *) {
 void Server::on_request_set_selection(wl_listener *listener, void *data) {
   auto *server = owner_of<Server>(listener);
   auto *event = static_cast<wlr_seat_request_set_selection_event *>(data);
-  // The serial is checked by wlroots against a real input event, which is what
-  // stops a background client taking the clipboard whenever it likes.
+  // Reaching this handler means the serial already passed
+  // `wlr_seat_request_set_selection`: it was sent to this client, and it
+  // is not older than the current offer. Rejected requests never arrive
+  // — that is why a Qt fallback copy after Print Screen looks like a
+  // successful copy (the client never hears the denial). Clients that
+  // speak data-control skip this path entirely.
   wlr_seat_set_selection(server->seat, event->source, event->serial);
+}
+
+void Server::on_set_selection(wl_listener *listener, void *) {
+  auto *server = owner_of<Server>(listener);
+  // After the source is current — data-control and wl_data_device both
+  // land here. Snapshot PNG/text so the crop survives Flameshot exiting.
+  lava::Clipboard clipboard(server->display, server->seat);
+  clipboard.persistClientSelection();
 }
 
 void Server::on_request_set_primary_selection(wl_listener *listener,
@@ -6703,6 +6724,15 @@ int main() {
   // only half of what a working selection needs — see `on_request_set_selection`.
   wlr_data_device_manager_create(server.display);
   wlr_primary_selection_v1_device_manager_create(server.display);
+  // Privileged clipboard (no input serial). Flameshot's KGuiAddons
+  // `WaylandClipboard` prefers `ext-data-control`, then the older
+  // `wlr-data-control`. Without either it falls back to Qt's
+  // `wl_data_device.set_selection`, whose serial loses to Print Screen's
+  // `wl_display_next_serial` — crop copied, paste still the full frame.
+  // Same protocols `wl-copy` / `wl-paste` speak. The portal never uses
+  // these; they exist so the *crop* can become the seat selection.
+  wlr_data_control_manager_v1_create(server.display);
+  wlr_ext_data_control_manager_v1_create(server.display, 1);
 
   server.scene = wlr_scene_create();
   server.output_layout = wlr_output_layout_create(server.display);
@@ -6796,6 +6826,8 @@ int main() {
   server.request_set_selection.attach(&server.seat->events.request_set_selection,
                                       &server,
                                       Server::on_request_set_selection);
+  server.set_selection.attach(&server.seat->events.set_selection, &server,
+                              Server::on_set_selection);
   server.request_set_primary_selection.attach(
       &server.seat->events.request_set_primary_selection, &server,
       Server::on_request_set_primary_selection);
