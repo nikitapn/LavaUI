@@ -1808,7 +1808,11 @@ class SurfaceRegistry : public lava::CompositorHost {
     const uint32_t id = openSurface(arenaId, width, height, title,
                                     workspaces_->currentTree(),
                                     workspaces_->current, decorated);
-    if (ClientSurface *opened = find(id)) opened->appId = appId;
+    if (ClientSurface *opened = find(id)) {
+      opened->appId = appId;
+      // A new overlay must not reuse posters from the last Alt+Tab.
+      if (appId == kSwitcherAppId) invalidatePosters();
+    }
     // A window that opens is the window the user is now looking at, and it
     // should not need a click to become so. It matters more than it used to:
     // focus is what a panel's global menu follows, so a window that opened
@@ -3229,7 +3233,8 @@ class SurfaceRegistry : public lava::CompositorHost {
   bool destroySurface(uint32_t id) override {
     for (auto it = surfaces_.begin(); it != surfaces_.end(); ++it) {
       if ((*it)->id != id) continue;
-      forgetPosters(id);
+      if ((*it)->appId == kSwitcherAppId) invalidatePosters();
+      else forgetPosters(id);
       std::erase(minimizedOrder_, id);
       // A Wayland window's contents are not ours to destroy — the scene tree
       // belongs to its `Toplevel`, which outlives the frame across an unmap.
@@ -3503,11 +3508,20 @@ class SurfaceRegistry : public lava::CompositorHost {
   ///
   /// GPU import of the window's last dma-buf when we can; CPU readback
   /// only when the buffer will not import. Cached per (surface, maxSide)
-  /// so a switcher frame does not re-import twenty windows.
+  /// for the current switcher session so a frame does not re-import
+  /// twenty windows. The cache dies with the overlay — a second Alt+Tab
+  /// must see the windows as they are now, not as they were last time.
   static int posterResolveThunk(void *ctx, uint32_t surfaceId,
                                 uint32_t maxSide) {
     return static_cast<SurfaceRegistry *>(ctx)->posterTexture(surfaceId,
                                                               maxSide);
+  }
+
+  std::string posterKey(uint32_t surfaceId, uint32_t maxSide) const {
+    // Generation is in the TextureManager key so a dormant entry from the
+    // last session cannot be revived under the same name.
+    return "poster:" + std::to_string(posterGen_) + ":" +
+           std::to_string(surfaceId) + ":" + std::to_string(maxSide);
   }
 
   int posterTexture(uint32_t surfaceId, uint32_t maxSide) {
@@ -3520,8 +3534,7 @@ class SurfaceRegistry : public lava::CompositorHost {
     ClientSurface *surface = find(surfaceId);
     if (surface == nullptr) return 0;
 
-    const std::string texKey =
-        "poster:" + std::to_string(surfaceId) + ":" + std::to_string(maxSide);
+    const std::string texKey = posterKey(surfaceId, maxSide);
     int id = 0;
 
     if (surface->canvas) {
@@ -3576,10 +3589,22 @@ class SurfaceRegistry : public lava::CompositorHost {
         ++it;
         continue;
       }
-      renderer_->releaseImage("poster:" + std::to_string(surfaceId) + ":" +
-                              std::to_string(static_cast<uint32_t>(it->first)));
+      renderer_->releaseImage(
+          posterKey(surfaceId, static_cast<uint32_t>(it->first)));
       it = posters_.erase(it);
     }
+  }
+
+  void invalidatePosters() {
+    if (renderer_ != nullptr) {
+      for (const auto &[key, id] : posters_) {
+        (void)id;
+        renderer_->releaseImage(posterKey(static_cast<uint32_t>(key >> 32),
+                                          static_cast<uint32_t>(key)));
+      }
+    }
+    posters_.clear();
+    ++posterGen_;
   }
 
   bool captureSurface(uint32_t id, int32_t x, int32_t y, int32_t w, int32_t h,
@@ -3904,7 +3929,10 @@ class SurfaceRegistry : public lava::CompositorHost {
   /// Set when a frosted window moved, resized, or asked for a new radius.
   bool backdropBlurDirty_ = false;
   /// `ImageSurface` posters, keyed by `(surfaceId << 32) | maxSide`.
+  /// Lives for one switcher session; `posterGen_` is in the texture key
+  /// so TextureManager cannot revive last session's pixels.
   std::unordered_map<uint64_t, int> posters_;
+  uint32_t posterGen_ = 1;
   /// Never reused, so a stale id from a closed surface fails to resolve rather
   /// than quietly addressing whatever opened next.
   uint32_t nextId_ = 1;
