@@ -5068,6 +5068,13 @@ void Keyboard::applyKeymap(const lava::KeyboardConfig &config) {
                                        XKB_KEYMAP_COMPILE_NO_FLAGS);
   }
   if (keymap != nullptr) {
+    const xkb_layout_index_t groups = xkb_keymap_num_layouts(keymap);
+    if (groups < 2 && config.options.find("grp:") != std::string::npos) {
+      wlr_log(WLR_ERROR,
+              "keyboard: %s is set but the keymap has only %u layout(s) — "
+              "use a comma-separated list such as us,ru",
+              config.options.c_str(), groups);
+    }
     wlr_keyboard_set_keymap(wlr, keymap);
     xkb_keymap_unref(keymap);
   }

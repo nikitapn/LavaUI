@@ -401,6 +401,102 @@ final class SettingsStore {
         pushKeyboard()
     }
 
+    /// One xkb group: a `layout` slot and the matching `variant` slot.
+    ///
+    /// `us,ru` with an empty variant is two groups; `us,ru` with `dvorak,`
+    /// is US-Dvorak then default Russian. The picker used to write a single
+    /// code, which is why `grp:…` appeared to do nothing — there was only
+    /// one group to toggle.
+    struct InputSource: Equatable, Identifiable {
+        var code: String
+        var variant: String
+        var id: String { variant.isEmpty ? code : "\(code):\(variant)" }
+    }
+
+    var sources: [InputSource] {
+        Self.parseSources(layout: layout, variant: variant)
+    }
+
+    func containsSource(code: String, variant: String) -> Bool {
+        sources.contains { $0.code == code && $0.variant == variant }
+    }
+
+    func toggleSource(code: String, variant: String) {
+        var next = sources
+        if let idx = next.firstIndex(where: { $0.code == code && $0.variant == variant }) {
+            guard next.count > 1 else { return }
+            next.remove(at: idx)
+        } else {
+            next.append(InputSource(code: code, variant: variant))
+        }
+        applySources(next)
+        pushKeyboard()
+    }
+
+    func removeSource(id: String) {
+        var next = sources
+        next.removeAll { $0.id == id }
+        guard !next.isEmpty else { return }
+        applySources(next)
+        pushKeyboard()
+    }
+
+    /// The `grp:` option, if any. Switching keys only work with two layouts.
+    var layoutSwitch: String {
+        optionParts().first { $0.hasPrefix("grp:") } ?? ""
+    }
+
+    func setLayoutSwitch(_ option: String) {
+        var parts = optionParts().filter { !$0.hasPrefix("grp:") }
+        let trimmed = option.trimmingCharacters(in: .whitespaces)
+        if !trimmed.isEmpty { parts.append(trimmed) }
+        options = parts.joined(separator: ", ")
+        pushKeyboard()
+    }
+
+    func sourceLabel(_ source: InputSource) -> String {
+        for group in layoutGroups {
+            for entry in group.entries
+            where entry.code == source.code && entry.variant == source.variant {
+                return entry.description
+            }
+        }
+        return source.variant.isEmpty
+            ? source.code
+            : "\(source.code) · \(source.variant)"
+    }
+
+    private func optionParts() -> [String] {
+        options
+            .split(separator: ",", omittingEmptySubsequences: false)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+    }
+
+    private func applySources(_ sources: [InputSource]) {
+        layout = sources.map(\.code).joined(separator: ",")
+        if sources.allSatisfy(\.variant.isEmpty) {
+            variant = ""
+        } else {
+            variant = sources.map(\.variant).joined(separator: ",")
+        }
+    }
+
+    static func parseSources(layout: String, variant: String) -> [InputSource] {
+        let codes = layout
+            .split(separator: ",", omittingEmptySubsequences: false)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+        guard !codes.isEmpty else { return [] }
+        let variants = variant
+            .split(separator: ",", omittingEmptySubsequences: false)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+        return codes.enumerated().map { index, code in
+            let slot = index < variants.count ? variants[index] : ""
+            return InputSource(code: String(code), variant: slot)
+        }
+    }
+
     /// Applies one change to the selected screen, leaving its other fields as
     /// they are — `edit` is handed the screen's current state to modify.
     func pushOutput(_ edit: (inout OutputRequest) -> Void) {

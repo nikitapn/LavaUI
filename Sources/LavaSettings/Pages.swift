@@ -379,12 +379,39 @@ struct KeyboardPage: View {
         VStack(spacing: 18) {
             SettingGroup("Layout") {
                 SettingRow(
-                    "Current",
-                    store.variant.isEmpty
-                        ? "\(store.layout.isEmpty ? "xkb default" : store.layout)"
-                        : "\(store.layout) · \(store.variant)"
+                    "Layouts",
+                    "Add every language you type in. A switch key below "
+                    + "cycles this list — a single layout has nothing to "
+                    + "cycle to, which is how a `grp:` option looked broken."
                 ) {
                     VStack(spacing: 8) {
+                        if store.sources.isEmpty {
+                            Text(
+                                "xkb default (usually US). Pick one below "
+                                + "to set it, or two to switch between them.",
+                                color: Theme.current.textDim
+                            )
+                        } else {
+                            ForEach(store.sources) { source in
+                                PickerRow(
+                                    title: store.sourceLabel(source),
+                                    detail: source.variant.isEmpty
+                                        ? source.code
+                                        : "\(source.code) · \(source.variant)",
+                                    selected: true
+                                ) {
+                                    store.removeSource(id: source.id)
+                                }
+                            }
+                        }
+                        if store.sources.count < 2 && store.layoutSwitch.hasPrefix("grp:") {
+                            Text(
+                                "Switch key is set, but there is only one "
+                                + "layout. Add another — clicking the list "
+                                + "used to replace this one.",
+                                color: Theme.current.accent
+                            )
+                        }
                         TextField(
                             text: Binding(store, \.layoutFilter),
                             placeholder: "Search layouts — \"german\", \"dvorak\", \"ru\""
@@ -397,9 +424,27 @@ struct KeyboardPage: View {
                 }
 
                 SettingRow(
-                    "Options",
-                    "xkb options, comma separated: ctrl:nocaps, "
-                    + "grp:alt_shift_toggle. Applied when you press Return."
+                    "Switch layouts",
+                    "Needs two layouts above. `grp:ctrls_toggle` is both "
+                    + "Ctrl keys together; there is no `grp:ctrl_toggle`."
+                ) {
+                    VStack(spacing: 2) {
+                        ForEach(Self.layoutSwitches, id: \.option) { item in
+                            PickerRow(
+                                title: item.title,
+                                detail: item.option.isEmpty ? "off" : item.option,
+                                selected: store.layoutSwitch == item.option
+                            ) {
+                                store.setLayoutSwitch(item.option)
+                            }
+                        }
+                    }
+                }
+
+                SettingRow(
+                    "Other options",
+                    "Anything that is not a layout switch: ctrl:nocaps, "
+                    + "compose:ralt. Applied when you press Return."
                 ) {
                     TextField(
                         text: Binding(store, \.options),
@@ -481,6 +526,21 @@ struct KeyboardPage: View {
         }
     }
 
+    /// Common `grp:` options. Names from evdev.lst — a typo is silently
+    /// ignored by xkb, which is how `grp:ctrl_toggle` appeared to work
+    /// and then did nothing.
+    private static let layoutSwitches: [(title: String, option: String)] = [
+        ("None", ""),
+        ("Alt+Shift", "grp:alt_shift_toggle"),
+        ("Ctrl+Shift", "grp:ctrl_shift_toggle"),
+        ("Both Ctrl keys", "grp:ctrls_toggle"),
+        ("Super+Space", "grp:win_space_toggle"),
+        ("Left Ctrl", "grp:lctrl_toggle"),
+        ("Right Ctrl", "grp:rctrl_toggle"),
+        ("Caps Lock", "grp:caps_toggle"),
+        ("Both Shifts", "grp:shifts_toggle"),
+    ]
+
     private func pushed(
         _ keyPath: ReferenceWritableKeyPath<SettingsStore, Float>
     ) -> Binding<Float> {
@@ -524,12 +584,13 @@ private struct LayoutList: View {
                     detail: entry.layout.variant.isEmpty
                         ? entry.layout.code
                         : "\(entry.layout.code) · \(entry.layout.variant)",
-                    selected: entry.layout.code == store.layout
-                        && entry.layout.variant == store.variant
+                    selected: store.containsSource(
+                        code: entry.layout.code, variant: entry.layout.variant
+                    )
                 ) {
-                    store.layout = entry.layout.code
-                    store.variant = entry.layout.variant
-                    store.pushKeyboard()
+                    store.toggleSource(
+                        code: entry.layout.code, variant: entry.layout.variant
+                    )
                 }
             }
 
@@ -564,8 +625,12 @@ private struct LayoutList: View {
         // What is already in use first, so the list opens on the answer to
         // "what am I running now" rather than on whatever sorts first.
         return out.sorted { a, b in
-            let aCurrent = a.layout.code == store.layout
-            let bCurrent = b.layout.code == store.layout
+            let aCurrent = store.containsSource(
+                code: a.layout.code, variant: a.layout.variant
+            )
+            let bCurrent = store.containsSource(
+                code: b.layout.code, variant: b.layout.variant
+            )
             if aCurrent != bCurrent { return aCurrent }
             return false
         }

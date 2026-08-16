@@ -77,10 +77,13 @@ mode = preferred
 [keyboard]
 
 # xkb names, exactly as setxkbmap takes them. Empty means xkb's own default,
-# which is a US layout on most installs.
+# which is a US layout on most installs. Two languages is a comma-separated
+# list — `us,ru` — plus a `grp:` option, or the switch key has nothing to
+# cycle. Picking one layout in Settings used to replace the other.
 layout = us
+# layout = us,ru
 # variant = colemak
-# options = ctrl:nocaps
+# options = grp:alt_shift_toggle,ctrl:nocaps
 # model =
 # rules =
 
