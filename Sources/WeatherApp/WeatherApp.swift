@@ -14,8 +14,8 @@ import WeatherCore
 /// showing enough hours to be a strip. The active window host clamps
 /// interactive resizes to it, so the broken shape is simply not reachable.
 enum Layout {
-    static let initialWidth: Float = 580
-    static let initialHeight: Float = 660
+    static let initialWidth: Float = 600
+    static let initialHeight: Float = 874
     static let minWidth: Float = 560
     static let minHeight: Float = 420
 }
