@@ -568,6 +568,26 @@ struct Server {
   /// releases by focus delivered them to the window underneath.
   uint32_t pointerTarget = 0;
 
+  /// Title-bar / client move that has not become a drag yet.
+  ///
+  /// A press on the bar, or a maximized window asking to be moved, must not
+  /// restore the window until the pointer actually travels. A click on
+  /// VS Code's tab strip is a move request; treating it as a drag is how
+  /// a maximized window jumped off the work area. Double-click also
+  /// needs the press to stay a click.
+  bool pendingMove = false;
+  bool pendingFromClient = false;
+  uint32_t pendingSurface = 0;
+  double pendingX = 0, pendingY = 0;
+  uint32_t lastBarClickTime = 0;
+  uint32_t lastBarClickSurface = 0;
+
+  /// Remembers a move until the pointer leaves the slop, or the button
+  /// comes up. `fromClient` is who holds the press — see `dragFromClient`.
+  void armInteractiveMove(ClientSurface &surface, bool fromClient);
+  /// Starts the armed move if the pointer has travelled far enough.
+  void flushPendingMove();
+
   /// Carries an in-progress drag to the pointer. True if one was live, which
   /// is the caller's signal that the motion belongs to the drag and not to
   /// whatever is under the cursor.
@@ -1681,8 +1701,14 @@ class SurfaceRegistry : public lava::CompositorHost {
     hoverBar(surface, lava::DecorationHit::Bar);
     if (minimized) {
       minimizedOrder_.push_back(surface.id);
+      // The window node is off; the frost plate is a sibling and would
+      // otherwise keep blurring the desktop where the terminal was.
+      if (surface.blurNode != nullptr) {
+        wlr_scene_node_set_enabled(&surface.blurNode->node, false);
+      }
     } else {
       std::erase(minimizedOrder_, surface.id);
+      if (surface.backdropBlurRadius > 0.f) scheduleBackdropRefresh();
     }
     announceWindows();
     syncShellForFullscreen();
@@ -3235,6 +3261,10 @@ class SurfaceRegistry : public lava::CompositorHost {
       if ((*it)->id != id) continue;
       if ((*it)->appId == kSwitcherAppId) invalidatePosters();
       else forgetPosters(id);
+      if (server_ != nullptr && server_->pendingMove &&
+          server_->pendingSurface == id) {
+        server_->pendingMove = false;
+      }
       std::erase(minimizedOrder_, id);
       // A Wayland window's contents are not ours to destroy — the scene tree
       // belongs to its `Toplevel`, which outlives the frame across an unmap.
@@ -4272,7 +4302,11 @@ void XwaylandSurface::on_request_move(wl_listener *listener, void *) {
   Server *server = self->server;
   if (server->surfaces == nullptr || self->frameId == 0) return;
   if (ClientSurface *frame = server->surfaces->find(self->frameId)) {
-    server->beginInteractiveMove(*frame, true);
+    if (frame->maximized || frame->fullscreen) {
+      server->armInteractiveMove(*frame, true);
+    } else {
+      server->beginInteractiveMove(*frame, true);
+    }
   }
 }
 
@@ -4968,7 +5002,13 @@ void Toplevel::on_request_move(wl_listener *listener, void *data) {
     return;
   }
   if (ClientSurface *frame = server->surfaces->find(toplevel->frameId)) {
-    server->beginInteractiveMove(*frame, true);
+    // Maximized: wait for a real drag. A click on the tab strip is a
+    // move request and must not restore the window by itself.
+    if (frame->maximized || frame->fullscreen) {
+      server->armInteractiveMove(*frame, true);
+    } else {
+      server->beginInteractiveMove(*frame, true);
+    }
   }
 }
 
@@ -5521,9 +5561,10 @@ bool perform_binding(Server *server, const BindingSpec &spec,
   case BindingAction::Close:
     // Politely: Wayland windows get a close request (save dialogs still work);
     // Lava clients are torn down by their stream ending — see requestClose.
-    if (server->surfaces == nullptr) return false;
-    if (ClientSurface *focused =
-            server->surfaces->find(server->focusedSurface())) {
+    // `focusedWindow`, not `focusedSurface`: a foreign window holds the
+    // seat keyboard and leaves the Lava target at 0, which is why Mod+Q
+    // used to do nothing to VS Code.
+    if (ClientSurface *focused = focusedWindow(server)) {
       server->surfaces->requestClose(*focused);
     }
     return true;
@@ -6346,7 +6387,31 @@ void Server::applyCursorFor(const ClientSurface &surface) {
   wlr_cursor_set_xcursor(cursor, cursor_mgr, client_cursor(surface.cursorShape));
 }
 
+void Server::armInteractiveMove(ClientSurface &surface, bool fromClient) {
+  pendingMove = true;
+  pendingFromClient = fromClient;
+  pendingSurface = surface.id;
+  pendingX = cursor->x;
+  pendingY = cursor->y;
+}
+
+void Server::flushPendingMove() {
+  if (!pendingMove || surfaces == nullptr) return;
+  constexpr double kSlop = 8.0;
+  const double dx = cursor->x - pendingX;
+  const double dy = cursor->y - pendingY;
+  if (dx * dx + dy * dy < kSlop * kSlop) return;
+  pendingMove = false;
+  if (ClientSurface *surface = surfaces->find(pendingSurface)) {
+    beginInteractiveMove(*surface, pendingFromClient);
+  }
+}
+
 bool Server::update_drag() {
+  if (pendingMove) {
+    flushPendingMove();
+    if (drag == Drag::None) return true;
+  }
   if (drag == Drag::None || surfaces == nullptr) return false;
   ClientSurface *surface = surfaces->find(dragSurface);
   if (surface == nullptr) {
@@ -6467,12 +6532,10 @@ bool Server::beginInteractiveResize(ClientSurface &surface, uint32_t edges,
   // A resize with no side named is not a resize. Nothing sensible to grow
   // from, and the drag would move the window instead.
   if (edges == 0) return false;
-  // Unlike a move, a maximized window is left maximized-then-resized rather
-  // than restored: the user is dragging an edge, which is a size they mean,
-  // not a window they are pulling off the top of the screen. Fullscreen
-  // still has to come off first — there is no edge of the output to grow.
-  if (surface.fullscreen) surfaces->setFullscreen(surface, false);
-  if (surface.maximized) surfaces->setMaximized(surface, false);
+  // A maximized window has no edges to pull. Honouring the request is how
+  // a click on VS Code's chrome — it still sends `xdg_toplevel.resize` —
+  // dropped the window off the work area. Fullscreen likewise.
+  if (surface.maximized || surface.fullscreen) return false;
 
   drag = Drag::Resize;
   dragFromClient = fromClient;
@@ -6618,6 +6681,7 @@ void Server::minimizeSurface(ClientSurface &surface) {
   surfaces->setMinimized(surface, true);
   // A drag on a window that just vanished would go on moving it invisibly.
   if (drag != Drag::None && dragSurface == surface.id) drag = Drag::None;
+  if (pendingMove && pendingSurface == surface.id) pendingMove = false;
   if (focusedSurface() == surface.id) setFocusedSurface(0);
   surfaces->setFocused(focusedSurface());
   if (surface.isForeign()) surface.window->activate(false);
@@ -6757,6 +6821,18 @@ void Server::on_cursor_button(wl_listener *listener, void *data) {
     --server->pointerButtonsDown;
   }
 
+  // A click that never became a drag: remember it for double-click on
+  // our title bar, and let a client-originated press still see its release.
+  if (!pressed && server->pendingMove) {
+    if (!server->pendingFromClient) {
+      server->lastBarClickTime = event->time_msec;
+      server->lastBarClickSurface = server->pendingSurface;
+      server->pendingMove = false;
+      return;
+    }
+    server->pendingMove = false;
+  }
+
   // A release always ends a drag, whatever it is over by then.
   if (!pressed && server->drag != Server::Drag::None) {
     const bool answerClient = server->dragFromClient;
@@ -6813,12 +6889,26 @@ void Server::on_cursor_button(wl_listener *listener, void *data) {
         case lava::DecorationHit::Minimize:
           server->minimizeSurface(*frame);
           return;
-        case lava::DecorationHit::Bar:
-          // Bare bar: drag the window, the way a title bar always has. The
-          // same drag a client-framed window asks for with `BeginMove`, which
-          // is why that one is a call into `Server` and not its own gesture.
-          server->beginInteractiveMove(*frame);
+        case lava::DecorationHit::Bar: {
+          // Double-click maximizes (or restores). A single click must not
+          // start a move, or a maximized window would drop off the work
+          // area before the second click arrived — and a click that was
+          // never a drag would restore it anyway.
+          constexpr uint32_t kDoubleClickMs = 400;
+          const bool dbl =
+              frame->id == server->lastBarClickSurface &&
+              event->time_msec - server->lastBarClickTime <= kDoubleClickMs;
+          if (dbl) {
+            server->lastBarClickSurface = 0;
+            if (frame->fullscreen) {
+              server->surfaces->setFullscreen(*frame, false);
+            }
+            server->surfaces->setMaximized(*frame, !frame->maximized);
+            return;
+          }
+          server->armInteractiveMove(*frame, false);
           return;
+        }
       }
     }
   }
