@@ -115,6 +115,14 @@ can read is one the dock can find an icon for.
 unknown keys are reported and skipped, so a file written for a newer build
 still starts an older one. See `src/config.hpp` for every key.
 
+On a new machine run `scripts/start-lava-compositor setup` (or just
+`start-lava-compositor`, which offers the same TUI when `[core]` has no
+GPU yet). It lists every DRM card and the screens hanging off it — the
+usual hybrid-laptop question, Radeon vs NVIDIA — then the keyboard
+layouts and the key that cycles them, and writes those into the file.
+The compositor reads `[core]` before it creates the backend, so the
+start script no longer hardcodes `card0`.
+
 Most of it can now be changed without a text editor: `swift run LavaSettings`
 opens a panel over the control plane that applies each change to the *running*
 compositor and then writes it here. That write is surgical — it replaces the

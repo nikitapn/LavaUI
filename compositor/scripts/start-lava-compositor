@@ -1,23 +1,54 @@
-#!/bin/env sh
+#!/usr/bin/env sh
+# Start a real DRM session, or run first-time setup.
+#
+#   start-lava-compositor           start (setup first if the GPU is unset)
+#   start-lava-compositor setup     just the TUI; writes ~/.config/lava/lava.conf
+#
+# GPU devices come from lava.conf [core], not from this script. Hardcoding
+# card0 here is how a hybrid laptop always came up on the wrong GPU.
 
-SCRIPT_DIR="$(dirname "$0")"
-cd "$SCRIPT_DIR/../.."
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+cd "$ROOT"
 
-export XDG_RUNTIME_DIR="/run/user/$(id -u)"
+SETUP="$SCRIPT_DIR/setup"
+COMPOSITOR="${LAVA_COMPOSITOR:-$ROOT/build-release/compositor/compositor}"
+
+if [ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ]; then
+  sed -n '2,8p' "$0" | sed 's/^# \{0,1\}//'
+  exit 0
+fi
+
+if [ "${1:-}" = "setup" ]; then
+  exec python3 "$SETUP"
+fi
+
+if [ ! -x "$COMPOSITOR" ] && [ ! -f "$COMPOSITOR" ]; then
+  echo "start-lava-compositor: no compositor at $COMPOSITOR" >&2
+  echo "  meson compile -C build-release   or set LAVA_COMPOSITOR=" >&2
+  exit 1
+fi
+
+# A hybrid laptop with no drm-device in the file would otherwise come up
+# on whichever card enumerated first — often the one with no panel.
+if [ -t 0 ] && python3 "$SETUP" --needed; then
+  echo "Lava has not been set up on this machine yet."
+  python3 "$SETUP" || exit 1
+fi
+
+export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
 
 # The panel, dock, launcher and everything the launcher starts are found by
 # `ShellSupervisor::programPath`, which searches `.build/debug` *before*
 # `.build/release` when this is unset. A release session left to itself comes
-# up running debug components and says nothing about it — and an edit rebuilt
-# only in release then has no visible effect, which reads as a bug in the
-# change rather than in the session. Same reason `dev-run` sets it.
-LAVA_SHELL_DIR="$PWD/.build/release" \
-WLR_BACKENDS=drm,libinput \
-WLR_DRM_DEVICES=/dev/dri/card0 \
-WLR_RENDER_DRM_DEVICE=/dev/dri/renderD129 \
-WLR_RENDERER=vulkan \
-LAVA_FRAME_PROBE=1 \
-LAVA_CLIENT=1 \
-	stdbuf -oL -eL ./build-release/compositor/compositor \
-		>"$HOME/lava-compositor.log" 2>&1
+# up running debug components and says nothing about it.
+export LAVA_SHELL_DIR="${LAVA_SHELL_DIR:-$ROOT/.build/release}"
 
+# drm,libinput is a seat session. Do not set WLR_DRM_DEVICES here: the
+# compositor reads [core] from lava.conf before it creates the backend.
+export WLR_BACKENDS="${WLR_BACKENDS:-drm,libinput}"
+export WLR_RENDERER="${WLR_RENDERER:-vulkan}"
+export LAVA_FRAME_PROBE="${LAVA_FRAME_PROBE:-1}"
+export LAVA_CLIENT=1
+
+exec stdbuf -oL -eL "$COMPOSITOR" >"$HOME/lava-compositor.log" 2>&1
