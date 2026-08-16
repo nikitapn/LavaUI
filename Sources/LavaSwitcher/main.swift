@@ -15,9 +15,10 @@ import Observation
 // subsequent Tab while Control / Alt / Super is held. Release commits.
 // Escape cancels. Clicking a card commits that window.
 //
-// Screenshots come from `CaptureSurface` on each window in the list — Lava
-// surfaces from their canvas framebuffer, foreign windows from the buffer
-// they last committed. A window that cannot be read back shows its icon.
+// Posters are `ImageSurface` / Scene3D surface textures: the card names the
+// compositor surface id and the compositor imports that window's last
+// dma-buf onto the canvas device. No PNG, no CPU readback on the launch
+// path. A window with no size yet (never configured) shows its icon.
 
 enum Switcher {
     static let appId = "LavaSwitcher"
@@ -50,7 +51,7 @@ enum Switcher {
 
     static func cardSize(for image: UIImage?) -> (w: Float, h: Float) {
         let raw: Float
-        if let image, image.pixelHeight > 1 {
+        if let image, image.pixelHeight > 1, image.pixelWidth > 1 {
             raw = image.pixelWidth / image.pixelHeight
         } else {
             raw = 16 / 10
@@ -70,12 +71,11 @@ final class SwitcherModel {
     var shots: [UInt32: UIImage] = [:]
     var icons: [String: UIImage?] = [:]
     var committed = false
-    /// Cards stay hidden until every capture has been attempted. Showing an
-    /// icon and then swapping in the PNG is the blink this exists to kill.
+    /// Cards stay hidden until posters are bound. Surface posters bind
+    /// immediately (no RPC); an empty workspace is ready at once.
     var ready = false
 
     @ObservationIgnored var editor: Editor?
-    @ObservationIgnored var captureGeneration = 0
     @ObservationIgnored var awaitingInitialSelection = true
     @ObservationIgnored private var capturedIds: [UInt32] = []
 
@@ -113,7 +113,7 @@ final class SwitcherModel {
         let ids = mine.map(\.surfaceId)
         if ids != capturedIds {
             capturedIds = ids
-            startCaptures(revealImmediately: ready)
+            bindPosters(mine)
         }
     }
 
@@ -121,6 +121,8 @@ final class SwitcherModel {
     ///
     /// The overlay must not map until this returns: CreateSurface puts a
     /// window on screen, and a first frame without cards is the blink.
+    /// Surface posters do not wait on the compositor — they are names,
+    /// resolved when the first frame is drawn.
     func loadInitially(workspace: UInt32, incoming: [WindowInfo]) {
         let mine = Self.ordered(
             incoming.filter {
@@ -133,27 +135,10 @@ final class SwitcherModel {
             backwards: CommandLine.arguments.contains("--back")
         )
         capturedIds = mine.map(\.surfaceId)
-        captureGeneration += 1
         FileHandle.standardError.write(Data(
             "switcher: workspace \(workspace), \(mine.count)/\(incoming.count) windows\n".utf8
         ))
-        if mine.isEmpty {
-            ready = true
-            return
-        }
-        let pngs = Self.capturePNGs(mine, generation: captureGeneration)
-        var next: [UInt32: UIImage] = [:]
-        if let editor {
-            for (id, bytes) in pngs {
-                if let image = editor.resources.registerImage(
-                    data: bytes, maxPixelSize: UInt32(Switcher.captureSide)
-                ) {
-                    next[id] = image
-                }
-            }
-        }
-        shots = next
-        ready = true
+        bindPosters(mine)
     }
 
     /// Focused window is leftmost (index 0) and starts selected. Shift+Tab
@@ -210,62 +195,26 @@ final class SwitcherModel {
         return image
     }
 
-    func startCaptures(revealImmediately: Bool) {
-        captureGeneration += 1
-        let generation = captureGeneration
-        let targets = windows
-        if targets.isEmpty {
-            shots = [:]
-            ready = true
-            ViewInvalidation.markNeedsBody()
-            return
-        }
-        if !revealImmediately {
-            ready = false
-            ViewInvalidation.markNeedsBody()
-        }
-        guard let editor else { return }
-
-        Thread.detachNewThread {
-            let pngs = SwitcherModel.capturePNGs(targets, generation: generation)
-            MainQueue.async {
-                guard generation == model.captureGeneration else { return }
-                var next: [UInt32: UIImage] = [:]
-                for (id, bytes) in pngs {
-                    if let image = editor.resources.registerImage(
-                        data: bytes, maxPixelSize: UInt32(Switcher.captureSide)
-                    ) {
-                        next[id] = image
-                    }
-                }
-                model.shots = next
-                model.ready = true
-                ViewInvalidation.markNeedsBody()
+    func bindPosters(_ targets: [WindowInfo]) {
+        var next: [UInt32: UIImage] = [:]
+        for window in targets {
+            if let poster = Self.surfacePoster(for: window) {
+                next[window.surfaceId] = poster
             }
         }
+        shots = next
+        ready = true
+        ViewInvalidation.markNeedsBody()
     }
 
-    /// Fan the RPCs out. The compositor still *encodes* one at a time —
-    /// `CaptureSurface` hops onto the Wayland loop for the GPU read-back
-    /// *and* the PNG — so wall time is the sum of encodes, not the max.
-    static func capturePNGs(
-        _ targets: [WindowInfo], generation: Int
-    ) -> [UInt32: [UInt8]] {
-        let bag = CaptureBag()
-        let group = DispatchGroup()
-        for window in targets {
-            group.enter()
-            DispatchQueue.global(qos: .userInitiated).async {
-                defer { group.leave() }
-                guard generation == model.captureGeneration else { return }
-                guard let bytes = LavaClient.captureWindow(
-                    window.surfaceId, maxSide: Switcher.captureSide
-                ) else { return }
-                bag.store(window.surfaceId, bytes)
-            }
-        }
-        group.wait()
-        return bag.snapshot()
+    static func surfacePoster(for window: WindowInfo) -> UIImage? {
+        guard window.width > 0, window.height > 0 else { return nil }
+        return UIImage.surfacePoster(
+            surfaceId: window.surfaceId,
+            pixelWidth: Float(window.width),
+            pixelHeight: Float(window.height),
+            maxSide: UInt32(Switcher.captureSide)
+        )
     }
 
     func commit() {
@@ -278,25 +227,6 @@ final class SwitcherModel {
         guard !committed else { return }
         committed = true
         LavaClient.quit()
-    }
-}
-
-/// PNG bytes gathered off the frame loop. A class so concurrent captures
-/// share one bag without the compiler seeing a captured `var` dictionary.
-private final class CaptureBag: @unchecked Sendable {
-    private let lock = NSLock()
-    private var pngs: [UInt32: [UInt8]] = [:]
-
-    func store(_ id: UInt32, _ bytes: [UInt8]) {
-        lock.lock()
-        pngs[id] = bytes
-        lock.unlock()
-    }
-
-    func snapshot() -> [UInt32: [UInt8]] {
-        lock.lock()
-        defer { lock.unlock() }
-        return pngs
     }
 }
 
@@ -356,9 +286,9 @@ guard let editor = LavaClient.open(
 
 model.editor = editor
 
-// Surface is created in `run`. Finish the posters first so the first
-// frame is the real shelf, and the compositor keeps the window invisible
-// until that frame is presented.
+// Surface is created in `run`. Bind posters (names, not pixels) first so
+// the first frame is the real shelf, and the compositor keeps the window
+// invisible until that frame is presented.
 if let snapshot = LavaClient.currentWindowList() {
     model.loadInitially(workspace: snapshot.0, incoming: snapshot.1)
 }

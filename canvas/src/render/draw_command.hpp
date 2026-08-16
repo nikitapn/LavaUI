@@ -63,6 +63,11 @@ enum class DrawCommandKind : uint32_t {
   Polyline = 13,
   /// Depth-tested triangles emitted by a LavaUI Scene3D. param = first
   /// SpatialVertex and w = vertex count (a multiple of three).
+  ///
+  /// `x` is the texture: a TextureManager id when `y == 0`, or a compositor
+  /// surface id when `y == 1` (then `aux` is the longest dest edge, same
+  /// contract as `ImageSurface`). The second form is how a client with no
+  /// GPU puts a live window on a card — the compositor resolves the id.
   SpatialTriangles = 14,
   /// Clears depth inside one Scene3D viewport before its triangles.
   SpatialBegin = 15,
@@ -201,6 +206,19 @@ enum class DrawCommandKind : uint32_t {
   /// under a region declared opaque are not drawn at all, so a window that
   /// oversells itself gets holes onto whatever the scene skipped.
   OpaqueBounds = 22,
+  /// Textured quad whose source is another compositor surface's last frame,
+  /// not a TextureManager id.
+  ///
+  ///   param = surface id from `SubscribeWindows`
+  ///   aux   = longest dest edge in pixels (0 = native)
+  ///   x,y,w,h = dest rect, same as `Image`
+  ///
+  /// The producer is a GPU-less client: it cannot import a dma-buf and it
+  /// must not be sent one. It names the surface; the compositor that already
+  /// holds the buffer resolves it to a sampled texture (see
+  /// `TextureManager::setSurfaceResolver`). Without a resolver the command
+  /// draws nothing.
+  ImageSurface = 23,
 };
 
 /// Bits in `NodeAnimate.color` — which properties the command states.

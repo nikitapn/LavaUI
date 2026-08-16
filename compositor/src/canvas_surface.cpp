@@ -12,6 +12,7 @@
 #include "render/dmabuf_image.hpp"
 #include "render/draw_command.hpp"
 #include "render/imported_dmabuf.hpp"
+#include "render/texture_manager.hpp"
 
 namespace lava {
 namespace {
@@ -140,7 +141,10 @@ std::unique_ptr<CanvasRenderer> CanvasRenderer::create(wlr_renderer *renderer) {
   return self;
 }
 
-CanvasRenderer::~CanvasRenderer() { engine_.close(); }
+CanvasRenderer::~CanvasRenderer() {
+  TextureManager::getInstance().setSurfaceResolver(nullptr, nullptr);
+  engine_.close();
+}
 
 std::unique_ptr<CanvasSurface> CanvasRenderer::createSurface(uint32_t width,
                                                              uint32_t height) {
@@ -216,6 +220,40 @@ int CanvasRenderer::registerImageData(const std::string &key,
 
 void CanvasRenderer::releaseImage(const std::string &key) {
   engine_.unloadTexture(key);
+}
+
+void CanvasRenderer::setSurfaceTextureResolver(void *ctx,
+                                               SurfaceTextureResolver fn) {
+  TextureManager::getInstance().setSurfaceResolver(ctx, fn);
+}
+
+int CanvasRenderer::importBufferTexture(wlr_buffer *buffer,
+                                        const std::string &key,
+                                        uint32_t maxSide) {
+  if (buffer == nullptr || key.empty()) return 0;
+  Application *app = engine_.application();
+  if (app == nullptr) return 0;
+
+  wlr_dmabuf_attributes attribs{};
+  if (!wlr_buffer_get_dmabuf(buffer, &attribs) || attribs.n_planes < 1) {
+    return 0;
+  }
+
+  canvas::DmabufImport desc{};
+  desc.width = static_cast<uint32_t>(attribs.width);
+  desc.height = static_cast<uint32_t>(attribs.height);
+  desc.drmFormat = attribs.format;
+  desc.modifier = attribs.modifier;
+  desc.planeCount = attribs.n_planes;
+  const int planes = std::min(attribs.n_planes, 4);
+  for (int i = 0; i < planes; ++i) {
+    desc.fd[i] = attribs.fd[i];
+    desc.offset[i] = attribs.offset[i];
+    desc.stride[i] = attribs.stride[i];
+  }
+  const int id = app->importDmabufTexture(
+      key, desc, 0, 0, desc.width, desc.height, maxSide);
+  return id > 0 ? id : 0;
 }
 
 // ─── CanvasSurface ─────────────────────────────────────────────────────────

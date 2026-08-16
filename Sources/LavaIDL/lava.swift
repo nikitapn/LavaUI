@@ -703,16 +703,20 @@ public struct WindowInfo: Codable, Sendable {
   public var workspace: UInt32 = 0
   public var minimized: Bool = false
   public var focused: Bool = false
+  public var width: UInt32 = 0
+  public var height: UInt32 = 0
 
   public init() {}
 
-  public init(surfaceId: UInt32, title: String, appId: String, workspace: UInt32, minimized: Bool, focused: Bool)   {
+  public init(surfaceId: UInt32, title: String, appId: String, workspace: UInt32, minimized: Bool, focused: Bool, width: UInt32, height: UInt32)   {
     self.surfaceId = surfaceId
     self.title = title
     self.appId = appId
     self.workspace = workspace
     self.minimized = minimized
     self.focused = focused
+    self.width = width
+    self.height = height
   }
 }
 
@@ -725,6 +729,8 @@ public func marshal_WindowInfo(buffer: FlatBuffer, offset: Int, data: WindowInfo
   buffer.storeBytes(of: data.workspace, toByteOffset: offset + 20, as: UInt32.self)
   buffer.storeBytes(of: data.minimized, toByteOffset: offset + 24, as: Bool.self)
   buffer.storeBytes(of: data.focused, toByteOffset: offset + 25, as: Bool.self)
+  buffer.storeBytes(of: data.width, toByteOffset: offset + 28, as: UInt32.self)
+  buffer.storeBytes(of: data.height, toByteOffset: offset + 32, as: UInt32.self)
 }
 
 // MARK: - Unmarshal WindowInfo
@@ -736,6 +742,8 @@ public func unmarshal_WindowInfo(buffer: UnsafeRawPointer, offset: Int) -> Windo
   result.workspace = buffer.load(fromByteOffset: offset + 20, as: UInt32.self)
   result.minimized = buffer.load(fromByteOffset: offset + 24, as: Bool.self)
   result.focused = buffer.load(fromByteOffset: offset + 25, as: Bool.self)
+  result.width = buffer.load(fromByteOffset: offset + 28, as: UInt32.self)
+  result.height = buffer.load(fromByteOffset: offset + 32, as: UInt32.self)
   return result
 }
 
@@ -758,7 +766,7 @@ public struct WindowList: Codable, Sendable {
 public func marshal_WindowList(buffer: FlatBuffer, offset: Int, data: WindowList) {
   buffer.storeBytes(of: data.serial, toByteOffset: offset + 0, as: UInt32.self)
   buffer.storeBytes(of: data.currentWorkspace, toByteOffset: offset + 4, as: UInt32.self)
-  NPRPC.marshal_struct_vector(buffer: buffer, offset: offset + 8, vector: data.windows, elementSize: 28, elementAlignment: 4) { buf, off, elem in
+  NPRPC.marshal_struct_vector(buffer: buffer, offset: offset + 8, vector: data.windows, elementSize: 36, elementAlignment: 4) { buf, off, elem in
     marshal_WindowInfo(buffer: buf, offset: off, data: elem)
   }
 }
@@ -768,7 +776,7 @@ public func unmarshal_WindowList(buffer: UnsafeRawPointer, offset: Int) -> Windo
   var result = WindowList()
   result.serial = buffer.load(fromByteOffset: offset + 0, as: UInt32.self)
   result.currentWorkspace = buffer.load(fromByteOffset: offset + 4, as: UInt32.self)
-  result.windows = NPRPC.unmarshal_struct_vector(buffer: buffer, offset: offset + 8, elementSize: 28) { buf, off in
+  result.windows = NPRPC.unmarshal_struct_vector(buffer: buffer, offset: offset + 8, elementSize: 36) { buf, off in
     unmarshal_WindowInfo(buffer: buf, offset: off)
   }
   return result

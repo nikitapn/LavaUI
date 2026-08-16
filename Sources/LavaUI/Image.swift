@@ -19,19 +19,47 @@ public final class UIImage: @unchecked Sendable {
     public let textureId: UInt32
     public let pixelWidth: Float
     public let pixelHeight: Float
+    /// Compositor surface this poster should sample, or 0 for a normal
+    /// TextureManager id in `textureId`. A GPU-less client cannot import
+    /// a dma-buf; it names the surface and the compositor resolves it.
+    public let surfaceId: UInt32
+    /// Longest dest edge for a `surfaceId` poster; 0 is native.
+    public let surfaceMaxSide: UInt32
 
     public init(
         path: String,
         cacheKey: String? = nil,
         textureId: UInt32,
         pixelWidth: Float,
-        pixelHeight: Float
+        pixelHeight: Float,
+        surfaceId: UInt32 = 0,
+        surfaceMaxSide: UInt32 = 0
     ) {
         self.path = path
         self.cacheKey = cacheKey ?? path
         self.textureId = textureId
         self.pixelWidth = pixelWidth
         self.pixelHeight = pixelHeight
+        self.surfaceId = surfaceId
+        self.surfaceMaxSide = surfaceMaxSide
+    }
+
+    /// A window poster resolved by the compositor when this image is drawn.
+    public static func surfacePoster(
+        surfaceId: UInt32,
+        pixelWidth: Float,
+        pixelHeight: Float,
+        maxSide: UInt32
+    ) -> UIImage {
+        UIImage(
+            path: "surface:\(surfaceId)",
+            cacheKey: "surface:\(surfaceId):\(maxSide)",
+            textureId: 0,
+            pixelWidth: pixelWidth,
+            pixelHeight: pixelHeight,
+            surfaceId: surfaceId,
+            surfaceMaxSide: maxSide
+        )
     }
 
     public var size: (w: Float, h: Float) { (pixelWidth, pixelHeight) }

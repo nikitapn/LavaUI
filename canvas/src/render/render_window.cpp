@@ -1328,8 +1328,27 @@ void RenderWindow::replayDrawList(const canvas::DrawList &list, float viewW,
     const auto kind = static_cast<canvas::DrawCommandKind>(command.kind);
     if (kind == canvas::DrawCommandKind::Image && command.param != 0)
       textureIds.insert(command.param);
-    else if (kind == canvas::DrawCommandKind::SpatialTriangles) {
-      if (const uint32_t id = textureIdFromFloat(command.x)) textureIds.insert(id);
+    else if (kind == canvas::DrawCommandKind::ImageSurface && command.param != 0) {
+      const uint32_t maxSide =
+        command.aux > 0.f ? static_cast<uint32_t>(command.aux) : 0u;
+      if (const int id = TextureManager::getInstance().resolveSurfaceTexture(
+            command.param, maxSide);
+          id > 0) {
+        textureIds.insert(static_cast<uint32_t>(id));
+      }
+    } else if (kind == canvas::DrawCommandKind::SpatialTriangles) {
+      if (command.y == 1.f) {
+        const uint32_t surfaceId = textureIdFromFloat(command.x);
+        const uint32_t maxSide =
+          command.aux > 0.f ? static_cast<uint32_t>(command.aux) : 0u;
+        if (const int id = TextureManager::getInstance().resolveSurfaceTexture(
+              surfaceId, maxSide);
+            id > 0) {
+          textureIds.insert(static_cast<uint32_t>(id));
+        }
+      } else if (const uint32_t id = textureIdFromFloat(command.x)) {
+        textureIds.insert(id);
+      }
     }
   }
   TextureManager::getInstance().updateWindowTextureReferences(this, textureIds);
@@ -1729,10 +1748,20 @@ void RenderWindow::replayDrawList(const canvas::DrawList &list, float viewW,
       if (!sideBufferRange(cmd, list.spatialVertexCount, 3, first, count)) break;
       VkImageView texture = VK_NULL_HANDLE;
       vec2 uv0{0.f, 0.f}, uv1{1.f, 1.f};
-      if (const uint32_t id = textureIdFromFloat(cmd.x)) {
+      uint32_t texId = 0;
+      if (cmd.y == 1.f) {
+        const uint32_t maxSide =
+          cmd.aux > 0.f ? static_cast<uint32_t>(cmd.aux) : 0u;
+        const int resolved = TextureManager::getInstance().resolveSurfaceTexture(
+          textureIdFromFloat(cmd.x), maxSide);
+        if (resolved > 0) texId = static_cast<uint32_t>(resolved);
+      } else {
+        texId = textureIdFromFloat(cmd.x);
+      }
+      if (texId != 0) {
         auto &tm = TextureManager::getInstance();
-        texture = tm.getTextureView(id);
-        tm.getTextureUV(id, uv0, uv1);
+        texture = tm.getTextureView(texId);
+        tm.getTextureUV(texId, uv0, uv1);
       }
       quads_.pushSpatialTriangles(list.spatialVertices + first, count, texture,
                                   uv0, uv1, {ox, oy}, opacity);
@@ -1746,8 +1775,18 @@ void RenderWindow::replayDrawList(const canvas::DrawList &list, float viewW,
       // either: the triangles take the scissor an enclosing node pushed.
       quads_.pushSpatialBegin({cmd.x + ox, cmd.y + oy}, {cmd.w, cmd.h});
       break;
-    case canvas::DrawCommandKind::Image: {
-      const uint32_t texId = cmd.param;
+    case canvas::DrawCommandKind::Image:
+    case canvas::DrawCommandKind::ImageSurface: {
+      uint32_t texId = cmd.param;
+      if (static_cast<canvas::DrawCommandKind>(cmd.kind) ==
+          canvas::DrawCommandKind::ImageSurface) {
+        const uint32_t maxSide =
+          cmd.aux > 0.f ? static_cast<uint32_t>(cmd.aux) : 0u;
+        const int resolved =
+          TextureManager::getInstance().resolveSurfaceTexture(cmd.param, maxSide);
+        if (resolved <= 0) break;
+        texId = static_cast<uint32_t>(resolved);
+      }
       auto &tm = TextureManager::getInstance();
       VkImageView view = tm.getTextureView(texId);
       if (view == VK_NULL_HANDLE) break;

@@ -274,7 +274,8 @@ public:
   /// `TextureManager::importDmabufTexture`.
   int importDmabufTexture(const std::string &key,
                           const canvas::DmabufImport &src, int32_t x,
-                          int32_t y, uint32_t w, uint32_t h);
+                          int32_t y, uint32_t w, uint32_t h,
+                          uint32_t maxSide = 0);
   bool hasTexture(const std::string &key) const;
   /// Takes a reference on an already-resident `key` and reports its size.
   /// Returns the texture id, or -1 if the key is not resident — in which case

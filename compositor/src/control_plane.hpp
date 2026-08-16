@@ -70,6 +70,8 @@ struct CompositorHost {
     uint32_t workspace = 0;
     bool minimized = false;
     bool focused = false;
+    uint32_t width = 0;
+    uint32_t height = 0;
   };
 
   /// Every window, and which workspace is showing. For a subscriber that has

@@ -585,11 +585,11 @@ struct Application::Impl
 
   int importDmabufTexture(const std::string &key,
                           const canvas::DmabufImport &src, int32_t x,
-                          int32_t y, uint32_t w, uint32_t h)
+                          int32_t y, uint32_t w, uint32_t h, uint32_t maxSide)
   {
     if (!deviceUp) return -1;
     auto handle = TextureManager::getInstance().importDmabufTexture(
-      key, src, x, y, w, h);
+      key, src, x, y, w, h, maxSide);
     return handle.isValid() ? static_cast<int>(handle.id) : -1;
   }
 
@@ -1026,9 +1026,9 @@ int Application::uploadTexture(const std::string &key, const uint8_t *rgba,
 int Application::importDmabufTexture(const std::string &key,
                                      const canvas::DmabufImport &src,
                                      int32_t x, int32_t y, uint32_t w,
-                                     uint32_t h)
+                                     uint32_t h, uint32_t maxSide)
 {
-  return impl_->importDmabufTexture(key, src, x, y, w, h);
+  return impl_->importDmabufTexture(key, src, x, y, w, h, maxSide);
 }
 
 bool Application::hasTexture(const std::string &key) const

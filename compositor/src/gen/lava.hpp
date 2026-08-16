@@ -974,6 +974,8 @@ struct WindowInfo {
   uint32_t workspace;
   bool minimized;
   bool focused;
+  uint32_t width;
+  uint32_t height;
 };
 
 namespace flat {
@@ -984,6 +986,8 @@ struct WindowInfo {
   uint32_t workspace;
   ::nprpc::flat::Boolean minimized;
   ::nprpc::flat::Boolean focused;
+  uint32_t width;
+  uint32_t height;
 };
 
 class WindowInfo_Direct {
@@ -1018,6 +1022,10 @@ public:
   ::nprpc::flat::Boolean& minimized() noexcept { return base().minimized;}
   const ::nprpc::flat::Boolean& focused() const noexcept { return base().focused;}
   ::nprpc::flat::Boolean& focused() noexcept { return base().focused;}
+  const uint32_t& width() const noexcept { return base().width;}
+  uint32_t& width() noexcept { return base().width;}
+  const uint32_t& height() const noexcept { return base().height;}
+  uint32_t& height() noexcept { return base().height;}
 };
 } // namespace flat
 
@@ -1468,6 +1476,8 @@ inline ::lava::WindowList deserialize<::lava::WindowList>(::nprpc::flat_buffer& 
       (*it2).workspace = e.workspace();
       (*it2).minimized = (bool)e.minimized();
       (*it2).focused = (bool)e.focused();
+      (*it2).width = e.width();
+      (*it2).height = e.height();
       ++it2;
     }
   }
@@ -1524,6 +1534,8 @@ inline ::nprpc::flat_buffer serialize<::lava::WindowList>(const ::lava::WindowLi
         e.workspace() = __ptr->workspace;
         e.minimized() = __ptr->minimized;
         e.focused() = __ptr->focused;
+        e.width() = __ptr->width;
+        e.height() = __ptr->height;
       ++it;
     }
   }

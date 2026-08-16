@@ -22,6 +22,7 @@
 #include <list>
 #include <memory>
 #include <thread>
+#include <unordered_map>
 #include <vector>
 
 // The catalogue of keyboard layouts, which is xkb's to know: where the rules
@@ -1423,6 +1424,9 @@ class SurfaceRegistry : public lava::CompositorHost {
   void bind(lava::CanvasRenderer *renderer, Workspaces *workspaces) {
     renderer_ = renderer;
     workspaces_ = workspaces;
+    if (renderer_ != nullptr) {
+      renderer_->setSurfaceTextureResolver(this, &posterResolveThunk);
+    }
   }
 
   /// The seat and the pointer live on `Server`, and a client asking to be
@@ -2886,6 +2890,8 @@ class SurfaceRegistry : public lava::CompositorHost {
       entry.workspace = surface->workspace;
       entry.minimized = surface->minimized;
       entry.focused = surface->id == focused_;
+      entry.width = surface->width;
+      entry.height = surface->height;
       outWindows.push_back(std::move(entry));
     }
   }
@@ -3223,6 +3229,7 @@ class SurfaceRegistry : public lava::CompositorHost {
   bool destroySurface(uint32_t id) override {
     for (auto it = surfaces_.begin(); it != surfaces_.end(); ++it) {
       if ((*it)->id != id) continue;
+      forgetPosters(id);
       std::erase(minimizedOrder_, id);
       // A Wayland window's contents are not ours to destroy — the scene tree
       // belongs to its `Toplevel`, which outlives the frame across an unmap.
@@ -3491,6 +3498,89 @@ class SurfaceRegistry : public lava::CompositorHost {
   }
 
   void bind(lava::ShellSupervisor *shell) { shell_ = shell; }
+
+  /// Bind a compositor surface to a sampled texture for `ImageSurface`.
+  ///
+  /// GPU import of the window's last dma-buf when we can; CPU readback
+  /// only when the buffer will not import. Cached per (surface, maxSide)
+  /// so a switcher frame does not re-import twenty windows.
+  static int posterResolveThunk(void *ctx, uint32_t surfaceId,
+                                uint32_t maxSide) {
+    return static_cast<SurfaceRegistry *>(ctx)->posterTexture(surfaceId,
+                                                              maxSide);
+  }
+
+  int posterTexture(uint32_t surfaceId, uint32_t maxSide) {
+    if (renderer_ == nullptr || surfaceId == 0) return 0;
+    const uint64_t cacheKey =
+        (static_cast<uint64_t>(surfaceId) << 32) | maxSide;
+    if (const auto it = posters_.find(cacheKey); it != posters_.end()) {
+      return it->second;
+    }
+    ClientSurface *surface = find(surfaceId);
+    if (surface == nullptr) return 0;
+
+    const std::string texKey =
+        "poster:" + std::to_string(surfaceId) + ":" + std::to_string(maxSide);
+    int id = 0;
+
+    if (surface->canvas) {
+      if (wlr_buffer *buf = surface->canvas->buffer()) {
+        wlr_buffer_lock(buf);
+        id = renderer_->importBufferTexture(buf, texKey, maxSide);
+        wlr_buffer_unlock(buf);
+      }
+      if (id <= 0) {
+        std::vector<uint8_t> png;
+        uint32_t pw = 0, ph = 0;
+        if (surface->canvas->capturePng(0, 0, 0, 0,
+                                        static_cast<int32_t>(maxSide), png, pw,
+                                        ph) &&
+            !png.empty()) {
+          uint32_t ow = 0, oh = 0;
+          id = renderer_->registerImageData(texKey, png.data(), png.size(),
+                                            maxSide, ow, oh);
+        }
+      }
+    } else if (surface->isForeign() && surface->window != nullptr) {
+      wlr_surface *wl = surface->window->focusSurface();
+      if (wl != nullptr && wl->buffer != nullptr) {
+        wlr_client_buffer *client = wl->buffer;
+        wlr_buffer *source =
+            client->source != nullptr ? client->source : &client->base;
+        wlr_buffer_lock(source);
+        id = renderer_->importBufferTexture(source, texKey, maxSide);
+        if (id <= 0) {
+          std::vector<uint8_t> png;
+          uint32_t pw = 0, ph = 0;
+          if (captureForeign(*surface, static_cast<int32_t>(maxSide), png, pw,
+                             ph) &&
+              !png.empty()) {
+            uint32_t ow = 0, oh = 0;
+            id = renderer_->registerImageData(texKey, png.data(), png.size(),
+                                              maxSide, ow, oh);
+          }
+        }
+        wlr_buffer_unlock(source);
+      }
+    }
+
+    if (id > 0) posters_[cacheKey] = id;
+    return id;
+  }
+
+  void forgetPosters(uint32_t surfaceId) {
+    if (renderer_ == nullptr) return;
+    for (auto it = posters_.begin(); it != posters_.end();) {
+      if ((it->first >> 32) != surfaceId) {
+        ++it;
+        continue;
+      }
+      renderer_->releaseImage("poster:" + std::to_string(surfaceId) + ":" +
+                              std::to_string(static_cast<uint32_t>(it->first)));
+      it = posters_.erase(it);
+    }
+  }
 
   bool captureSurface(uint32_t id, int32_t x, int32_t y, int32_t w, int32_t h,
                       int32_t maxSide, std::vector<uint8_t> &outPng,
@@ -3813,6 +3903,8 @@ class SurfaceRegistry : public lava::CompositorHost {
   uint32_t outputHeight_ = 0;
   /// Set when a frosted window moved, resized, or asked for a new radius.
   bool backdropBlurDirty_ = false;
+  /// `ImageSurface` posters, keyed by `(surfaceId << 32) | maxSide`.
+  std::unordered_map<uint64_t, int> posters_;
   /// Never reused, so a stale id from a closed surface fails to resolve rather
   /// than quietly addressing whatever opened next.
   uint32_t nextId_ = 1;

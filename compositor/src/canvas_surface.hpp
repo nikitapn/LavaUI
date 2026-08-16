@@ -89,6 +89,18 @@ class CanvasRenderer {
   /// every in-flight frame that could still name it has retired.
   void releaseImage(const std::string &key);
 
+  /// How a draw list names another surface as a texture. `fn` is called
+  /// from replay with a compositor surface id; 0 means drop the command.
+  using SurfaceTextureResolver = int (*)(void *ctx, uint32_t surfaceId,
+                                         uint32_t maxSide);
+  void setSurfaceTextureResolver(void *ctx, SurfaceTextureResolver fn);
+
+  /// Import `buffer` as a sampled texture under `key`, optionally
+  /// downsampling so the longer edge is `maxSide`. Texture id (>0), or 0
+  /// if the buffer has no dma-buf or the import failed.
+  int importBufferTexture(wlr_buffer *buffer, const std::string &key,
+                          uint32_t maxSide);
+
   canvas::Engine &engine() { return engine_; }
 
   /// The GPU everything here is on, for the timelines surfaces synchronise

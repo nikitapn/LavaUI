@@ -408,8 +408,10 @@ message ActiveWindow {
 ///
 /// What a *shell* needs, which is narrower than what a window is: enough to
 /// draw an entry, group entries by application, and say which one to bring
-/// forward. Nothing about geometry — a dock that knew where windows were would
-/// be tempted to move them, and moving windows is the compositor's job.
+/// forward. Position is omitted on purpose — a dock that knew where windows
+/// were would be tempted to move them, and moving windows is the compositor's
+/// job. Size is here only so a switcher card can keep the window's aspect
+/// without a pixel round trip.
 message WindowInfo {
   surfaceId: u32;
   title: string;
@@ -425,6 +427,10 @@ message WindowInfo {
   workspace: u32;
   minimized: boolean;
   focused: boolean;
+  /// Last committed content size, in pixels. Zero if the window has never
+  /// been configured. Not a request and not a position.
+  width: u32;
+  height: u32;
 }
 
 /// Every window the compositor has, and which workspace is on screen.
@@ -1204,8 +1210,9 @@ interface Compositor {
   /// surface. A LavaUI window is read back from its canvas framebuffer. A
   /// foreign Wayland or X11 window is read from the buffer it last committed
   /// — shm via a CPU map, GPU clients via `wlr_texture_read_pixels`. That is
-  /// how an app switcher puts live posters on its cards without a second
-  /// protocol: the pixels already live here.
+  /// how automation (and anything that needs a file) reads a window. The
+  /// app switcher does **not** use this: it emits `ImageSurface` and the
+  /// compositor imports the dma-buf in place. Pixels already live here.
   ///
   /// Also what automation uses. A LavaUI client has no framebuffer of its
   /// own, so the one agent command that checks what the user would *see* has

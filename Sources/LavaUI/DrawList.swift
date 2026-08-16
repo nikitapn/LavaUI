@@ -49,6 +49,9 @@ public enum DrawKind: UInt32 {
     /// compositor stop blending the surface and skip what is behind it.
     /// See `OpaqueBounds` in `draw_command.hpp`.
     case opaqueBounds = 22
+    /// Textured quad sourced from another compositor surface. `param` is
+    /// the surface id; `aux` is the longest dest edge (0 = native).
+    case imageSurface = 23
 }
 
 /// Bits in a `beginNode` command's `color` field. Mirrors
@@ -389,11 +392,21 @@ public final class DrawList {
             vertex.w = point.w
             appendSpatialVertex(vertex)
         }
-        append(
-            kind: .spatialTriangles, x: Float(texture?.textureId ?? 0), y: 0,
-            w: Float(vertices.count), h: 0,
-            color: Color(r: 1, g: 1, b: 1), param: UInt32(first)
-        )
+        if let texture, texture.surfaceId != 0 {
+            append(
+                kind: .spatialTriangles,
+                x: Float(texture.surfaceId), y: 1,
+                w: Float(vertices.count), h: 0,
+                color: Color(r: 1, g: 1, b: 1), param: UInt32(first),
+                aux: Float(texture.surfaceMaxSide)
+            )
+        } else {
+            append(
+                kind: .spatialTriangles, x: Float(texture?.textureId ?? 0), y: 0,
+                w: Float(vertices.count), h: 0,
+                color: Color(r: 1, g: 1, b: 1), param: UInt32(first)
+            )
+        }
     }
 
     func beginSpatialScene(_ frame: CanvasFrame) {
@@ -796,6 +809,26 @@ public final class DrawList {
         append(
             kind: .image, x: x, y: y, w: w, h: h,
             color: tint, param: textureId
+        )
+    }
+
+    /// Textured quad from a `UIImage`, including compositor surface posters.
+    public func image(
+        _ image: UIImage,
+        x: Float, y: Float, w: Float, h: Float,
+        tint: Color = Color(r: 1, g: 1, b: 1)
+    ) {
+        guard w > 0, h > 0 else { return }
+        if image.surfaceId != 0 {
+            append(
+                kind: .imageSurface, x: x, y: y, w: w, h: h,
+                color: tint, param: image.surfaceId,
+                aux: Float(image.surfaceMaxSide)
+            )
+            return
+        }
+        self.image(
+            textureId: image.textureId, x: x, y: y, w: w, h: h, tint: tint
         )
     }
 
@@ -1562,7 +1595,7 @@ public final class DrawList {
                 mode: leaf.imageContentMode
             )
             self.image(
-                textureId: img.textureId,
+                img,
                 x: dest.x, y: dest.y, w: dest.w, h: dest.h,
                 tint: leaf.imageTint
             )

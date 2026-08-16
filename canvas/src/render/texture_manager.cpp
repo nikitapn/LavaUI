@@ -2,6 +2,7 @@
 #include <cstring>
 #include <algorithm>
 #include <cstdlib>
+#include <utility>
 #include <vector>
 
 #include "render/imported_dmabuf.hpp"
@@ -86,11 +87,12 @@ constexpr VkImageSubresourceRange kBlitColor{
 
 /// GPU crop + format convert of an imported dma-buf into a sampled texture.
 bool blitImportedTexture(RenderDevice &device, const canvas::ImportedDmabuf &src,
-                         int32_t x, int32_t y, uint32_t width, uint32_t height,
+                         int32_t x, int32_t y, uint32_t srcW, uint32_t srcH,
+                         uint32_t destW, uint32_t destH,
                          VkImage &image, VmaAllocation &allocation,
                          VkImageView &view)
 {
-  device.createImage(width, height, 1, VK_SAMPLE_COUNT_1_BIT,
+  device.createImage(destW, destH, 1, VK_SAMPLE_COUNT_1_BIT,
                      VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_TILING_OPTIMAL,
                      VK_IMAGE_USAGE_TRANSFER_DST_BIT |
                        VK_IMAGE_USAGE_SAMPLED_BIT,
@@ -117,12 +119,12 @@ bool blitImportedTexture(RenderDevice &device, const canvas::ImportedDmabuf &src
   const VkImageBlit region{
     .srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
     .srcOffsets     = {{x, y, 0},
-                       {x + static_cast<int32_t>(width),
-                        y + static_cast<int32_t>(height), 1}},
+                       {x + static_cast<int32_t>(srcW),
+                        y + static_cast<int32_t>(srcH), 1}},
     .dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
     .dstOffsets     = {{0, 0, 0},
-                       {static_cast<int32_t>(width),
-                        static_cast<int32_t>(height), 1}},
+                       {static_cast<int32_t>(destW),
+                        static_cast<int32_t>(destH), 1}},
   };
   vkCmdBlitImage(cmd, src.image(), VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, image,
                  VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region,
@@ -283,9 +285,45 @@ TextureHandle TextureManager::uploadTexture(const std::string& key,
     return {view, textureId};
 }
 
+void TextureManager::setSurfaceResolver(void *ctx, SurfaceResolver fn)
+{
+    std::lock_guard lock(mutex_);
+    surfaceResolverCtx_ = ctx;
+    surfaceResolver_ = fn;
+}
+
+int TextureManager::resolveSurfaceTexture(uint32_t surfaceId, uint32_t maxSide)
+{
+    SurfaceResolver fn = nullptr;
+    void *ctx = nullptr;
+    {
+        std::lock_guard lock(mutex_);
+        fn = surfaceResolver_;
+        ctx = surfaceResolverCtx_;
+    }
+    if (fn == nullptr || surfaceId == 0) return 0;
+    return fn(ctx, surfaceId, maxSide);
+}
+
+namespace {
+
+std::pair<uint32_t, uint32_t> fitMaxSide(uint32_t width, uint32_t height,
+                                         uint32_t maxSide)
+{
+    if (maxSide == 0 || (width <= maxSide && height <= maxSide)) {
+        return {width, height};
+    }
+    if (width >= height) {
+        return {maxSide, std::max(1u, height * maxSide / width)};
+    }
+    return {std::max(1u, width * maxSide / height), maxSide};
+}
+
+}  // namespace
+
 TextureHandle TextureManager::importDmabufTexture(
     const std::string &key, const canvas::DmabufImport &src, int32_t x,
-    int32_t y, uint32_t width, uint32_t height)
+    int32_t y, uint32_t width, uint32_t height, uint32_t maxSide)
 {
     if (!device_ || key.empty() || width == 0 || height == 0) {
         return {VK_NULL_HANDLE, 0};
@@ -295,6 +333,7 @@ TextureHandle TextureManager::importDmabufTexture(
         static_cast<uint32_t>(y) + height > src.height) {
         return {VK_NULL_HANDLE, 0};
     }
+    const auto [destW, destH] = fitMaxSide(width, height, maxSide);
 
     {
         std::lock_guard lock(mutex_);
@@ -315,8 +354,8 @@ TextureHandle TextureManager::importDmabufTexture(
     VkImage image = VK_NULL_HANDLE;
     VmaAllocation allocation = VK_NULL_HANDLE;
     VkImageView view = VK_NULL_HANDLE;
-    if (!blitImportedTexture(*device_, *imported, x, y, width, height, image,
-                             allocation, view)) {
+    if (!blitImportedTexture(*device_, *imported, x, y, width, height, destW,
+                             destH, image, allocation, view)) {
         return {VK_NULL_HANDLE, 0};
     }
 
@@ -338,9 +377,9 @@ TextureHandle TextureManager::importDmabufTexture(
     textureData->view = view;
     textureData->path = key;
     textureData->refCount = 1;
-    textureData->width = width;
-    textureData->height = height;
-    textureData->bytes = static_cast<uint64_t>(width) * height * 4;
+    textureData->width = destW;
+    textureData->height = destH;
+    textureData->bytes = static_cast<uint64_t>(destW) * destH * 4;
     imageBytes_ += textureData->bytes;
     textureData->ownsImage = true;
 

@@ -939,6 +939,8 @@ class CompositorImpl final : public ICompositor_Servant {
       info.workspace = entry.workspace;
       info.minimized = entry.minimized;
       info.focused = entry.focused;
+      info.width = entry.width;
+      info.height = entry.height;
       out.windows.push_back(std::move(info));
     }
     return out;

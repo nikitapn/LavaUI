@@ -91,6 +91,8 @@ private:
     uint32_t dormantSlots_ = 0;
     uint64_t cacheHits_ = 0;
     uint64_t evictions_ = 0;
+    void *surfaceResolverCtx_ = nullptr;
+    int (*surfaceResolver_)(void *, uint32_t, uint32_t) = nullptr;
 
     /// Atlas eviction runs on slot pressure, never on the byte budget.
     ///
@@ -147,7 +149,18 @@ public:
     TextureHandle importDmabufTexture(const std::string &key,
                                       const canvas::DmabufImport &src,
                                       int32_t x, int32_t y, uint32_t w,
-                                      uint32_t h);
+                                      uint32_t h, uint32_t maxSide = 0);
+
+    /// How a compositor-side draw list names another surface as a texture.
+    ///
+    /// Installed by the compositor (`CanvasRenderer`). `surfaceId` is a
+    /// `SubscribeWindows` id; `maxSide` is the longest dest edge (0 = native).
+    /// Returns a TextureManager id, or 0. Called from replay, so it must not
+    /// start a frame of its own.
+    using SurfaceResolver = int (*)(void *ctx, uint32_t surfaceId,
+                                    uint32_t maxSide);
+    void setSurfaceResolver(void *ctx, SurfaceResolver fn);
+    int resolveSurfaceTexture(uint32_t surfaceId, uint32_t maxSide);
 
     /// True if `key` is already resident, so a caller can skip decoding.
     ///
