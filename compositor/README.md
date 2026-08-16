@@ -133,6 +133,16 @@ settings, which are read once while the backend is being created.
 `primary-output` is the exception in that section — the panel moves as soon
 as Settings writes it.
 
+Window positions are not in this file. The compositor remembers the last
+frame of each application — position, size, whether it was maximized — in
+`~/.config/lava/windows`, keyed by `app_id` / WM_CLASS. A first launch of
+an application is centred on the primary screen. Moves and closes update
+the in-memory map; the file is rewritten every 30 seconds and again on
+orderly shutdown (`SIGTERM` / `SIGINT`). Delete a section to forget that
+app. A nested compositor writes `$XDG_RUNTIME_DIR/lava-windows` instead,
+so a development session does not overwrite the one you are sitting in.
+`LAVA_WINDOWS` overrides the path.
+
 ```ini
 [core]
 renderer = vulkan

@@ -124,6 +124,7 @@ executable(
   'src/frame_probe.cpp',
   'src/shell.cpp',
   'src/screenshot_portal.cpp',
+  'src/window_memory.cpp',
   lava_idl_sources,
   protocol_headers,
   protocol_sources,

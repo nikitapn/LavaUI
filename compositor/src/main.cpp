@@ -42,6 +42,7 @@
 #include "startup_watchdog.hpp"
 #include "backdrop_blur.hpp"
 #include "background.hpp"
+#include "window_memory.hpp"
 #include "wlr.hpp"
 #include "render/png_encode.hpp"
 
@@ -55,6 +56,13 @@ namespace {
 /// previous window keeps the active title bar while the overlay has the
 /// keyboard.
 constexpr const char *kSwitcherAppId = "LavaSwitcher";
+/// The launcher is a fill-screen overlay spawned per invocation. Remembering
+/// it would reopen a "window" the user never placed.
+constexpr const char *kLauncherAppId = "LavaLauncher";
+
+bool isTransientApp(const std::string &appId) {
+  return appId == kSwitcherAppId || appId == kLauncherAppId;
+}
 
 /// Pid of a switcher we spawned and have not reaped. Stops Ctrl+Tab during
 /// the ~200 ms to first frame from launching a second overlay.
@@ -242,6 +250,7 @@ struct Toplevel : FramedWindow {
   Listener<Toplevel> commit;
   Listener<Toplevel> destroy;
   Listener<Toplevel> set_title;
+  Listener<Toplevel> set_app_id;
   Listener<Toplevel> request_maximize;
   Listener<Toplevel> request_fullscreen;
   Listener<Toplevel> request_minimize;
@@ -278,6 +287,7 @@ struct Toplevel : FramedWindow {
   static void on_commit(wl_listener *listener, void *data);
   static void on_destroy(wl_listener *listener, void *data);
   static void on_set_title(wl_listener *listener, void *data);
+  static void on_set_app_id(wl_listener *listener, void *data);
   static void on_request_maximize(wl_listener *listener, void *data);
   static void on_request_fullscreen(wl_listener *listener, void *data);
   static void on_request_minimize(wl_listener *listener, void *data);
@@ -312,6 +322,7 @@ struct XwaylandSurface : FramedWindow {
   Listener<XwaylandSurface> destroy;
   Listener<XwaylandSurface> request_configure;
   Listener<XwaylandSurface> set_title;
+  Listener<XwaylandSurface> set_class;
   Listener<XwaylandSurface> request_move;
   Listener<XwaylandSurface> request_resize;
   Listener<XwaylandSurface> request_fullscreen;
@@ -381,6 +392,7 @@ struct XwaylandSurface : FramedWindow {
   static void on_destroy(wl_listener *listener, void *data);
   static void on_request_configure(wl_listener *listener, void *data);
   static void on_set_title(wl_listener *listener, void *data);
+  static void on_set_class(wl_listener *listener, void *data);
   static void on_request_move(wl_listener *listener, void *data);
   static void on_request_resize(wl_listener *listener, void *data);
   static void on_request_fullscreen(wl_listener *listener, void *data);
@@ -1471,6 +1483,23 @@ class SurfaceRegistry : public lava::CompositorHost {
     animation_ = wl_event_loop_add_timer(loop, on_animation, this);
     // The trailing edge of a settings burst — see `save`.
     saveTimer_ = wl_event_loop_add_timer(loop, on_save_timer, this);
+    placements_ = lava::WindowMemory::load(
+        lava::WindowMemory::defaultPath(server_ && server_->nested));
+    // Periodic, not per-move: the map lives in memory and this is what
+    // survives a crash. Shutdown flushes again. On the loop rather than
+    // a thread — the file is tiny and a second thread would only add a
+    // lock around every remember.
+    placementTimer_ = wl_event_loop_add_timer(loop, on_placement_timer, this);
+    if (placementTimer_ != nullptr) {
+      wl_event_source_timer_update(placementTimer_, kPlacementFlushMs);
+    }
+  }
+
+  /// Snapshots every live window and writes if the map changed. The
+  /// timer and SIGTERM both come through here.
+  void flushPlacements() {
+    for (const auto &surface : surfaces_) rememberPlacement(*surface);
+    placements_.flush();
   }
   void bind(lava::ControlPlane *control) { control_ = control; }
   lava::ControlPlane *control() const { return control_; }
@@ -1850,6 +1879,7 @@ class SurfaceRegistry : public lava::CompositorHost {
       opened->appId = appId;
       // A new overlay must not reuse posters from the last Alt+Tab.
       if (appId == kSwitcherAppId) invalidatePosters();
+      applyInitialPlacement(*opened);
     }
     // A window that opens is the window the user is now looking at, and it
     // should not need a click to become so. It matters more than it used to:
@@ -1873,6 +1903,24 @@ class SurfaceRegistry : public lava::CompositorHost {
   uint32_t adoptWindow(FramedWindow *window, const std::string &title,
                        uint32_t width, uint32_t height,
                        const std::string &appId, bool decorated = true);
+
+  /// Where this window should sit, now that we know its `app_id`.
+  ///
+  /// A remembered frame (position, size, maximized) is restored. A first
+  /// launch is centred on the primary work area — the cascade from the
+  /// corner was only a placeholder until the identity arrived. Overlays
+  /// (launcher, switcher) and panels are left alone.
+  void applyInitialPlacement(ClientSurface &surface);
+
+  /// Records the floating rectangle (and whether it was maximized) in
+  /// memory. The file is flushed on a timer and at shutdown.
+  void rememberPlacement(const ClientSurface &surface);
+
+  /// Size a Wayland toplevel should be configured to on its first commit,
+  /// before it has a frame. `width`/`height` stay 0 when there is nothing
+  /// to say — the client then picks its own default.
+  bool hintToplevelConfigure(const std::string &appId, uint32_t &width,
+                             uint32_t &height, bool &maximized) const;
 
   /// A Wayland client committed at a new size.
   ///
@@ -1992,6 +2040,7 @@ class SurfaceRegistry : public lava::CompositorHost {
       surface.maximized = maximized;
       if (surface.isForeign()) surface.window->setMaximized(maximized);
       tellClientWindowState(surface);
+      rememberPlacement(surface);
       return;
     }
     if (!maximized) {
@@ -2004,6 +2053,7 @@ class SurfaceRegistry : public lava::CompositorHost {
       const uint32_t wasH = surface.height;
       moveSurface(surface, surface.restoreX, surface.restoreY);
       resizeSurface(surface, surface.restoreW, surface.restoreH);
+      evictOntoLayout(surface);
       // Same rectangle as before: resize is a no-op, so the mask
       // change has to be drawn here or the window stays square.
       if (surface.width == wasW && surface.height == wasH) {
@@ -2011,6 +2061,7 @@ class SurfaceRegistry : public lava::CompositorHost {
       }
       if (surface.isForeign()) surface.window->setMaximized(false);
       tellClientWindowState(surface);
+      rememberPlacement(surface);
       wlr_log(WLR_INFO, "window %u: unmaximized", surface.id);
       return;
     }
@@ -2030,6 +2081,7 @@ class SurfaceRegistry : public lava::CompositorHost {
     }
     if (surface.isForeign()) surface.window->setMaximized(true);
     tellClientWindowState(surface);
+    rememberPlacement(surface);
     wlr_log(WLR_INFO, "window %u: maximized", surface.id);
   }
 
@@ -3411,6 +3463,7 @@ class SurfaceRegistry : public lava::CompositorHost {
       if ((*it)->id != id) continue;
       if ((*it)->appId == kSwitcherAppId) invalidatePosters();
       else forgetPosters(id);
+      rememberPlacement(**it);
       if (server_ != nullptr && server_->pendingMove &&
           server_->pendingSurface == id) {
         server_->pendingMove = false;
@@ -4100,21 +4153,15 @@ class SurfaceRegistry : public lava::CompositorHost {
     surface->width = width;
     surface->height = height;
     surface->workspace = workspace;
-    // Cascaded from the work area, so a second client is visible rather than
-    // exactly on top of the first, and the first is not under the panel.
-    // Counted per workspace, so each one starts its own cascade. A real layout
-    // policy belongs with window management.
+    // Placeholder only. `createSurface` overwrites this from
+    // `applyInitialPlacement` once the app id is known; panels are laid
+    // out by their edge. Kept on-screen so a window that somehow skips
+    // both is still reachable.
     int peers = 0;
     for (const auto &s : surfaces_) {
       if (!s->panel && s->workspace == workspace) ++peers;
     }
     const WorkArea area = workArea();
-    // The cascade steps in from the corner only as far as there is room to
-    // step. A window the size of the work area has none: 40 px in would put
-    // its right edge and its bottom off the screen, having just clamped the
-    // size to keep them on it. That is the launcher exactly — it asks to fill
-    // the screen — and the same clamp keeps any large window's corner where a
-    // user can reach it.
     const int cascade = 40 + peers * 40;
     const int bar = decorated ? static_cast<int>(lava::Decoration::kHeight) : 0;
     const int roomX = static_cast<int>(area.width) - static_cast<int>(width);
@@ -4214,6 +4261,19 @@ class SurfaceRegistry : public lava::CompositorHost {
   /// Never reused, so a stale id from a closed surface fails to resolve rather
   /// than quietly addressing whatever opened next.
   uint32_t nextId_ = 1;
+  /// Last frame of each application. See `applyInitialPlacement`.
+  lava::WindowMemory placements_;
+  wl_event_source *placementTimer_ = nullptr;
+  static constexpr int kPlacementFlushMs = 30 * 1000;
+
+  static int on_placement_timer(void *data) {
+    auto *self = static_cast<SurfaceRegistry *>(data);
+    self->flushPlacements();
+    if (self->placementTimer_ != nullptr) {
+      wl_event_source_timer_update(self->placementTimer_, kPlacementFlushMs);
+    }
+    return 0;
+  }
 
   /// Matches `PanelEdge` in the IDL, which is the authority. Named here so
   /// the compositor does not have to include the generated header just to
@@ -4253,6 +4313,162 @@ class SurfaceRegistry : public lava::CompositorHost {
 };
 
 
+bool SurfaceRegistry::hintToplevelConfigure(const std::string &appId,
+                                            uint32_t &width, uint32_t &height,
+                                            bool &maximized) const {
+  width = 0;
+  height = 0;
+  maximized = false;
+  if (appId.empty() || isTransientApp(appId)) return false;
+  const lava::WindowPlacement *saved = placements_.find(appId);
+  if (saved == nullptr) return false;
+  if (saved->maximized) {
+    const WorkArea area =
+        workAreaAt(saved->x + static_cast<int>(saved->width / 2),
+                   saved->y + static_cast<int>(saved->height / 2));
+    width = area.width;
+    height = area.height;
+    maximized = true;
+    return true;
+  }
+  width = saved->width;
+  height = saved->height;
+  return true;
+}
+
+void SurfaceRegistry::rememberPlacement(const ClientSurface &surface) {
+  if (surface.panel || surface.appId.empty() || isTransientApp(surface.appId)) {
+    return;
+  }
+  lava::WindowPlacement placement;
+  if (surface.fullscreen || surface.maximized) {
+    // The floating rectangle, not the work area: otherwise the next
+    // unmaximize would restore a "maximized" window to maximized.
+    placement.x = surface.restoreX;
+    placement.y = surface.restoreY;
+    placement.width = surface.restoreW;
+    placement.height = surface.restoreH;
+    placement.maximized = surface.maximized;
+  } else {
+    placement.x = surface.x;
+    placement.y = surface.y;
+    placement.width = surface.width;
+    placement.height = surface.height;
+    placement.maximized = false;
+  }
+  if (!placement.usable()) return;
+  placements_.remember(surface.appId, placement);
+}
+
+void SurfaceRegistry::applyInitialPlacement(ClientSurface &surface) {
+  if (surface.panel || isTransientApp(surface.appId)) return;
+
+  const WorkArea primary = workArea();
+  const int bar =
+      surface.showsBar() ? static_cast<int>(lava::Decoration::kHeight) : 0;
+
+  const auto nudge = [&](int &x, int &y) {
+    constexpr int kStep = 40;
+    for (int n = 0; n < 12; ++n) {
+      bool occupied = false;
+      for (const auto &other : surfaces_) {
+        if (other.get() == &surface || other->panel) continue;
+        if (other->workspace != surface.workspace) continue;
+        if (other->x == x && other->y == y) {
+          occupied = true;
+          break;
+        }
+      }
+      if (!occupied) return;
+      x += kStep;
+      y += kStep;
+    }
+  };
+
+  const auto clampTo = [&](int &x, int &y, uint32_t w, uint32_t h,
+                           const WorkArea &area) {
+    const int maxX = area.x + static_cast<int>(area.width) - static_cast<int>(w);
+    const int maxY = area.y + static_cast<int>(area.height) - static_cast<int>(h) -
+                     bar;
+    x = std::clamp(x, area.x, std::max(area.x, maxX));
+    y = std::clamp(y, area.y, std::max(area.y, maxY));
+  };
+
+  const lava::WindowPlacement *saved =
+      surface.appId.empty() ? nullptr : placements_.find(surface.appId);
+
+  if (saved == nullptr) {
+    // First launch of this application: centre on the primary, which is
+    // where a new window opens. A window the size of the work area has
+    // no slack, so the centre is the origin — the same place the old
+    // cascade collapsed to for a "fill the screen" request.
+    const int roomX =
+        static_cast<int>(primary.width) - static_cast<int>(surface.width);
+    const int roomY = static_cast<int>(primary.height) -
+                      static_cast<int>(surface.height) - bar;
+    int x = primary.x + std::max(0, roomX) / 2;
+    int y = primary.y + std::max(0, roomY) / 2;
+    nudge(x, y);
+    clampTo(x, y, surface.width, surface.height, primary);
+    moveSurface(surface, x, y);
+    wlr_log(WLR_INFO, "window %u: centred at %d,%d (first launch)", surface.id,
+            x, y);
+    return;
+  }
+
+  if (saved->maximized) {
+    // Park the floating rectangle on the surface so `setMaximized` copies
+    // *that* into restore, not whatever cascade `openSurface` just used.
+    // Clamp first: the screen it last sat on may be unplugged, and
+    // unmaximizing into the hole is how a window vanishes.
+    int rx = saved->x;
+    int ry = saved->y;
+    uint32_t rw = saved->width > 0 ? saved->width : surface.width;
+    uint32_t rh = saved->height > 0 ? saved->height : surface.height;
+    const WorkArea area =
+        workAreaAt(rx + static_cast<int>(rw / 2),
+                   ry + static_cast<int>(rh / 2));
+    const uint32_t limitH =
+        area.height > static_cast<uint32_t>(bar) ? area.height - bar
+                                                 : kMinSurface;
+    rw = std::min(rw, area.width);
+    rh = std::min(rh, std::max(limitH, kMinSurface));
+    if (rw < kMinSurface) rw = kMinSurface;
+    if (rh < kMinSurface) rh = kMinSurface;
+    clampTo(rx, ry, rw, rh, area);
+    surface.x = rx;
+    surface.y = ry;
+    surface.width = rw;
+    surface.height = rh;
+    setMaximized(surface, true);
+    wlr_log(WLR_INFO, "window %u: restored maximized (from %d,%d %ux%u)",
+            surface.id, saved->x, saved->y, saved->width, saved->height);
+    return;
+  }
+
+  uint32_t w = saved->width;
+  uint32_t h = saved->height;
+  int x = saved->x;
+  int y = saved->y;
+  const WorkArea area =
+      workAreaAt(x + static_cast<int>(w / 2), y + static_cast<int>(h / 2));
+  const uint32_t limitH =
+      area.height > static_cast<uint32_t>(bar) ? area.height - bar : kMinSurface;
+  w = std::min(w, area.width);
+  h = std::min(h, std::max(limitH, kMinSurface));
+  if (w < kMinSurface) w = kMinSurface;
+  if (h < kMinSurface) h = kMinSurface;
+  nudge(x, y);
+  clampTo(x, y, w, h, area);
+  if (w != surface.width || h != surface.height) {
+    resizeSurface(surface, w, h);
+  }
+  moveSurface(surface, x, y);
+  evictOntoLayout(surface);
+  wlr_log(WLR_INFO, "window %u: restored at %d,%d %ux%u", surface.id, surface.x,
+          surface.y, surface.width, surface.height);
+}
+
 uint32_t SurfaceRegistry::adoptWindow(FramedWindow *window,
                                      const std::string &title, uint32_t width,
                                      uint32_t height, const std::string &appId,
@@ -4273,17 +4489,16 @@ uint32_t SurfaceRegistry::adoptWindow(FramedWindow *window,
   // decorated.
   surface->decorated = decorated;
 
-  int peers = 0;
-  for (const auto &other : surfaces_) {
-    if (!other->panel && other->workspace == surface->workspace) ++peers;
-  }
   const WorkArea area = workArea();
-  surface->x = area.x + 40 + peers * 40;
-  surface->y = area.y + 40 + peers * 40;
+  // Placeholder; `applyInitialPlacement` is the authority once the
+  // identity is on the surface. A first launch centres, a remembered
+  // one comes back where it was.
+  surface->x = area.x;
+  surface->y = area.y;
 
   // A client's default size knows nothing about this monitor — alacritty
-  // opens at 1100 wide whether or not the screen is that big. Asked to fit,
-  // leaving room for the frame and the cascade it was just placed at.
+  // opens at 1100 wide whether or not the screen is that big. Asked to fit
+  // so a first-launch centre cannot park half the window off-screen.
   const uint32_t fitW = area.width > 80 ? area.width - 80 : area.width;
   const uint32_t fitH = area.height > 80 + lava::Decoration::kHeight
                             ? area.height - 80 - lava::Decoration::kHeight
@@ -4309,6 +4524,7 @@ uint32_t SurfaceRegistry::adoptWindow(FramedWindow *window,
   const uint32_t id = surface->id;
   window->frameId = id;
   applyCorners(*surface);
+  applyInitialPlacement(*surface);
   place(*surface);
   drawBar(*surface);
   announceWindows();
@@ -4333,6 +4549,7 @@ XwaylandSurface::XwaylandSurface(Server *server, wlr_xwayland_surface *surface)
   request_configure.attach(&xsurface->events.request_configure, this,
                            on_request_configure);
   set_title.attach(&xsurface->events.set_title, this, on_set_title);
+  set_class.attach(&xsurface->events.set_class, this, on_set_class);
   // `_NET_WM_MOVERESIZE`, which is X11's version of the same conversation: a
   // client that draws its own header tells the window manager the user has
   // started dragging it, rather than moving itself.
@@ -4354,6 +4571,7 @@ XwaylandSurface::~XwaylandSurface() {
   destroy.detach();
   request_configure.detach();
   set_title.detach();
+  set_class.detach();
   request_move.detach();
   request_resize.detach();
   request_fullscreen.detach();
@@ -4539,6 +4757,15 @@ void XwaylandSurface::on_set_title(wl_listener *listener, void *) {
   if (ClientSurface *frame = self->server->surfaces->find(self->frameId)) {
     self->server->surfaces->setTitle(
         *frame, self->xsurface->title ? self->xsurface->title : "Untitled");
+  }
+}
+
+void XwaylandSurface::on_set_class(wl_listener *listener, void *) {
+  auto *self = owner_of<XwaylandSurface>(listener);
+  if (self->frameId == 0 || self->server->surfaces == nullptr) return;
+  if (ClientSurface *frame = self->server->surfaces->find(self->frameId)) {
+    frame->appId = self->xsurface->xclass ? self->xsurface->xclass : "";
+    self->server->surfaces->announceWindows();
   }
 }
 
@@ -5118,6 +5345,7 @@ Toplevel::Toplevel(Server *server, wlr_xdg_toplevel *toplevel)
   commit.attach(&surface->events.commit, this, on_commit);
   destroy.attach(&toplevel->events.destroy, this, on_destroy);
   set_title.attach(&toplevel->events.set_title, this, on_set_title);
+  set_app_id.attach(&toplevel->events.set_app_id, this, on_set_app_id);
   request_maximize.attach(&toplevel->events.request_maximize, this,
                           on_request_maximize);
   request_fullscreen.attach(&toplevel->events.request_fullscreen, this,
@@ -5140,6 +5368,7 @@ Toplevel::~Toplevel() {
   commit.detach();
   destroy.detach();
   set_title.detach();
+  set_app_id.detach();
   request_maximize.detach();
   request_fullscreen.detach();
   request_minimize.detach();
@@ -5227,14 +5456,21 @@ void Toplevel::on_commit(wl_listener *listener, void *) {
     }
     uint32_t width = 0, height = 0;
     const bool fullscreen = toplevel->xdg_toplevel->requested.fullscreen;
+    bool maximized = false;
     if (fullscreen && toplevel->server->surfaces != nullptr) {
       toplevel->server->surfaces->outputSize(width, height);
+    } else if (toplevel->server->surfaces != nullptr) {
+      const char *app_id = toplevel->xdg_toplevel->app_id;
+      toplevel->server->surfaces->hintToplevelConfigure(
+          app_id ? app_id : "", width, height, maximized);
     }
     wlr_xdg_toplevel_set_size(toplevel->xdg_toplevel,
                               static_cast<int32_t>(width),
                               static_cast<int32_t>(height));
     if (fullscreen) {
       wlr_xdg_toplevel_set_fullscreen(toplevel->xdg_toplevel, true);
+    } else if (maximized) {
+      wlr_xdg_toplevel_set_maximized(toplevel->xdg_toplevel, true);
     }
     return;
   }
@@ -5259,6 +5495,20 @@ void Toplevel::on_set_title(wl_listener *listener, void *) {
           toplevel->server->surfaces->find(toplevel->frameId)) {
     const char *title = toplevel->xdg_toplevel->title;
     toplevel->server->surfaces->setTitle(*frame, title ? title : "Untitled");
+  }
+}
+
+void Toplevel::on_set_app_id(wl_listener *listener, void *) {
+  auto *toplevel = owner_of<Toplevel>(listener);
+  if (toplevel->frameId == 0 || toplevel->server->surfaces == nullptr) return;
+  if (ClientSurface *frame =
+          toplevel->server->surfaces->find(toplevel->frameId)) {
+    const char *app_id = toplevel->xdg_toplevel->app_id;
+    // Late: some toolkits name themselves after the first commit. The
+    // window is already placed; this only corrects the identity the
+    // next close will remember under.
+    frame->appId = app_id ? app_id : "";
+    toplevel->server->surfaces->announceWindows();
   }
 }
 
@@ -7189,6 +7439,9 @@ void Server::on_cursor_button(wl_listener *listener, void *data) {
       wlr_seat_pointer_notify_button(server->seat, event->time_msec,
                                      event->button, event->state);
     }
+    if (ClientSurface *moved = server->surfaces->find(server->dragSurface)) {
+      server->surfaces->rememberPlacement(*moved);
+    }
     // What is under the pointer has not been tracked during the drag, and the
     // window it was over has probably moved out from under it.
     server->update_pointer_focus(event->time_msec);
@@ -7869,6 +8122,9 @@ int main() {
 
   std::cout << "Compositor running on WAYLAND_DISPLAY=" << socket << '\n';
   wl_display_run(server.display);
+  // While the windows are still there: a SIGTERM must not forget where
+  // they sat just because nobody closed them first.
+  surfaces.flushPlacements();
   // Before the clients are destroyed: they are our children, and a component
   // told to go while its socket still works exits cleanly rather than dying of
   // a broken connection.

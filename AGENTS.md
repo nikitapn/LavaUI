@@ -472,6 +472,7 @@ so headless test runs skip it too.
 | Client open / Present / input stream | `Sources/LavaClient/` |
 | Scene nodes / renderer-owned scroll + hover | `RenderWindow::scrollScene`, `advanceSceneAnimations`, `DrawList.nodeFlags` |
 | Who draws the title bar | `ToplevelDecoration::apply`, `Server::serverDecorated` |
+| Window position / maximize restore | `compositor/src/window_memory.*`, `SurfaceRegistry::applyInitialPlacement` |
 | Popups / context menus | `Server::on_new_popup`, `Popup::on_commit`, `Server::popupBounds` |
 | Which pixels of a surface take input | `point_accepts_input` hooks, `ClientSurface::acceptsInput`, `SetInputRegion` |
 | Minimum window size | IDL `SetMinSize`, `SurfaceRegistry::minFor`, `LavaClient.setMinimumSize` |
