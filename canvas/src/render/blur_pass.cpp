@@ -2,9 +2,6 @@
 #include <array>
 #include <cmath>
 #include <cstring>
-#include <mutex>
-#include <string>
-#include <unordered_map>
 
 #include "render/blur_pass.hpp"
 #include "render/shaders.hpp"
@@ -31,12 +28,17 @@ void imageBarrier(VkCommandBuffer cmd, VkImage image, VkImageLayout oldL,
   vkCmdPipelineBarrier(cmd, srcS, dstS, 0, 0, nullptr, 0, nullptr, 1, &b);
 }
 
+struct KawasePush {
+  float halfpixel[2];
+  float offset;
+  float upsample;
+};
+static_assert(sizeof(KawasePush) == 16, "must match blur.frag push block");
+
 }  // namespace
 
 void BlurPass::init()
 {
-  // Match the main resolve format so blit/composite never hit a format-class
-  // edge case (SRGB resolve ↔ UNORM blur looked like garbage on some paths).
   format_ = device_.colorFormat();
   createPipeline();
   createSampler();
@@ -48,20 +50,15 @@ void BlurPass::createSceneRenderPass()
   VkAttachmentDescription att{
     .format = format_,
     .samples = VK_SAMPLE_COUNT_1_BIT,
-    // CLEAR, so a capture never inherits the previous one. Transparent black is
-    // the only correct clear for premultiplied content: it contributes nothing.
     .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
     .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
     .stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
     .stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
     .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
-    // Straight to TRANSFER_SRC: captureAndBlur blits out of it next.
     .finalLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
   };
   VkAttachmentReference ref{.attachment = 0,
                             .layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
-  // No depth: the quad pipeline does not use it, and leaving it out keeps this
-  // pass one attachment wide.
   VkSubpassDescription sub{
     .pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS,
     .colorAttachmentCount = 1,
@@ -71,7 +68,6 @@ void BlurPass::createSceneRenderPass()
     {
       .srcSubpass = VK_SUBPASS_EXTERNAL,
       .dstSubpass = 0,
-      // Waits on the previous frame's blit out of this image before clearing it.
       .srcStageMask = VK_PIPELINE_STAGE_TRANSFER_BIT,
       .dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
       .srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT,
@@ -152,9 +148,6 @@ void BlurPass::beginSceneCapture(VkCommandBuffer cmd)
   };
   vkCmdBeginRenderPass(cmd, &bi, VK_SUBPASS_CONTENTS_INLINE);
 
-  // The subtree's vertices are in window coordinates, so the viewport has to
-  // match the window exactly — this is what makes the composite a straight
-  // one-to-one sample later.
   VkViewport vp{0.f, 0.f, float(fullWidth_), float(fullHeight_), 0.f, 1.f};
   VkRect2D scissor{{0, 0}, {fullWidth_, fullHeight_}};
   vkCmdSetViewport(cmd, 0, 1, &vp);
@@ -210,7 +203,6 @@ void BlurPass::cleanUp()
   if (pool_ != VK_NULL_HANDLE) {
     vkDestroyDescriptorPool(device, pool_, nullptr);
     pool_ = VK_NULL_HANDLE;
-    setA_ = setB_ = VK_NULL_HANDLE;
   }
   if (setLayout_ != VK_NULL_HANDLE) {
     vkDestroyDescriptorSetLayout(device, setLayout_, nullptr);
@@ -229,130 +221,109 @@ void BlurPass::cleanUp()
 void BlurPass::destroyImages()
 {
   VkDevice device = device_.getDevice();
-  auto kill = [&](VkFramebuffer &fb, VkImageView &v, VkImage &img,
-                  VmaAllocation &alloc) {
-    if (fb != VK_NULL_HANDLE) {
-      vkDestroyFramebuffer(device, fb, nullptr);
-      fb = VK_NULL_HANDLE;
+  for (auto &lv : levels_) {
+    if (lv.fb != VK_NULL_HANDLE) {
+      vkDestroyFramebuffer(device, lv.fb, nullptr);
+      lv.fb = VK_NULL_HANDLE;
     }
-    if (v != VK_NULL_HANDLE) {
-      vkDestroyImageView(device, v, nullptr);
-      v = VK_NULL_HANDLE;
+    if (lv.view != VK_NULL_HANDLE) {
+      vkDestroyImageView(device, lv.view, nullptr);
+      lv.view = VK_NULL_HANDLE;
     }
-    device_.destroyImage(img, alloc);
-  };
-  kill(fbA_, viewA_, imageA_, allocA_);
-  kill(fbB_, viewB_, imageB_, allocB_);
-  width_ = height_ = 0;
+    device_.destroyImage(lv.image, lv.alloc);
+    lv.w = lv.h = 0;
+    // Descriptor sets live on the pool; they are rewritten on the next
+    // createImages, not freed here.
+  }
+  levelCount_ = 0;
 }
 
 void BlurPass::createImages(uint32_t width, uint32_t height)
 {
   destroyImages();
-  width_ = width;
-  height_ = height;
 
-  auto make = [&](VkImage &img, VmaAllocation &alloc, VkImageView &view,
-                  VkFramebuffer &fb) {
+  uint32_t w = width;
+  uint32_t h = height;
+  for (uint32_t i = 0; i < kMaxLevels; ++i) {
+    Level &lv = levels_[i];
+    lv.w = std::max(1u, w);
+    lv.h = std::max(1u, h);
     device_.createImage(
-      width, height, 1, VK_SAMPLE_COUNT_1_BIT, format_, VK_IMAGE_TILING_OPTIMAL,
+      lv.w, lv.h, 1, VK_SAMPLE_COUNT_1_BIT, format_, VK_IMAGE_TILING_OPTIMAL,
       VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT |
         VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
-      VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, img, alloc);
-    view = device_.createImageView(img, format_, VK_IMAGE_ASPECT_COLOR_BIT, 1);
+      VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, lv.image, lv.alloc);
+    lv.view =
+      device_.createImageView(lv.image, format_, VK_IMAGE_ASPECT_COLOR_BIT, 1);
 
     VkFramebufferCreateInfo fbi{
       .sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO,
       .renderPass = renderPass_,
       .attachmentCount = 1,
-      .pAttachments = &view,
-      .width = width,
-      .height = height,
+      .pAttachments = &lv.view,
+      .width = lv.w,
+      .height = lv.h,
       .layers = 1,
     };
-    VR(vkCreateFramebuffer(device_.getDevice(), &fbi, nullptr, &fb),
+    VR(vkCreateFramebuffer(device_.getDevice(), &fbi, nullptr, &lv.fb),
        "blur framebuffer");
-  };
 
-  make(imageA_, allocA_, viewA_, fbA_);
-  make(imageB_, allocB_, viewB_, fbB_);
-
-  auto writeSet = [&](VkDescriptorSet set, VkImageView view) {
     VkDescriptorImageInfo ii{
       .sampler = sampler_,
-      .imageView = view,
+      .imageView = lv.view,
       .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
     };
-    VkWriteDescriptorSet w{
+    VkWriteDescriptorSet wr{
       .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-      .dstSet = set,
+      .dstSet = lv.set,
       .dstBinding = 0,
       .descriptorCount = 1,
       .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
       .pImageInfo = &ii,
     };
-    vkUpdateDescriptorSets(device_.getDevice(), 1, &w, 0, nullptr);
-  };
-  writeSet(setA_, viewA_);
-  writeSet(setB_, viewB_);
+    vkUpdateDescriptorSets(device_.getDevice(), 1, &wr, 0, nullptr);
+
+    ++levelCount_;
+    if (lv.w == 1 && lv.h == 1) break;
+    w = std::max(1u, w / 2);
+    h = std::max(1u, h / 2);
+  }
 }
 
-uint32_t BlurPass::downscaleFor(float radius)
-{
-  // One H+V pass of the sigma-2 kernel at one texel of spacing blurs by two
-  // texels, so a texel worth radius/2 screen pixels lands the target width in
-  // a single pass with spacing still inside (0.5, 1].
-  const float r = std::clamp(radius, 0.5f, kMaxRadius);
-  return static_cast<uint32_t>(std::clamp(std::ceil(r / 2.f), 1.f, 8.f));
-}
-
-BlurPass::Sub BlurPass::subFor(float radius) const
+uint32_t BlurPass::iterationsFor(float radius)
 {
   const float r = std::clamp(radius, 0.5f, kMaxRadius);
-  // Never finer than what the images were allocated for, so a wide blur sharing
-  // a frame with a narrow one takes a sub-region rather than dragging the narrow
-  // one down to its resolution.
-  const uint32_t scale = std::max(downscaleFor(r), scaleFinest_);
-  Sub sub;
-  sub.w = std::clamp(fullWidth_ / scale, 1u, std::max(1u, width_));
-  sub.h = std::clamp(fullHeight_ / scale, 1u, std::max(1u, height_));
-  // The 9-tap kernel is a sigma-2 Gaussian *in texels*, and the scale was chosen
-  // so that r/2 screen pixels is one texel — so a single H+V pass reaches the
-  // requested width with spacing at or under a texel, which is the condition for
-  // it to blur rather than stamp offset copies. Anything asking for a wider blur
-  // gets bigger texels, not wider spacing.
-  sub.spacing = std::clamp(r / (2.f * float(scale)), 0.05f, 1.f);
-  return sub;
+  uint32_t n = 1;
+  float reach = 8.f;
+  while (n + 1 < kMaxLevels && reach < r) {
+    reach *= 2.f;
+    ++n;
+  }
+  return n;
 }
 
-vec2 BlurPass::uvScaleFor(float radius) const
+uint32_t BlurPass::downscaleFor(float)
 {
-  if (width_ < 1 || height_ < 1) return {1.f, 1.f};
-  const Sub sub = subFor(radius);
-  return {float(sub.w) / float(width_), float(sub.h) / float(height_)};
+  return 1;
 }
 
-void BlurPass::ensureSize(uint32_t width, uint32_t height, float finestRadius)
+vec2 BlurPass::uvScaleFor(float) const
+{
+  return {1.f, 1.f};
+}
+
+void BlurPass::ensureSize(uint32_t width, uint32_t height, float)
 {
   if (width < 1 || height < 1) return;
-  const uint32_t scale = downscaleFor(finestRadius);
-  const uint32_t w = std::max(1u, width / scale);
-  const uint32_t h = std::max(1u, height / scale);
-  if (w == width_ && h == height_ && width == fullWidth_ &&
-      height == fullHeight_ && imageA_ != VK_NULL_HANDLE) {
+  if (width == fullWidth_ && height == fullHeight_ &&
+      levels_[0].image != VK_NULL_HANDLE) {
     return;
   }
-  // This window's frames only — these targets belong to the owner, and this
-  // runs mid-frame where another window's fences are not ours to read. See
-  // `QuadRenderer::ensureBufferCapacity`.
   owner_->waitForAllFrames();
   const bool extentChanged = width != fullWidth_ || height != fullHeight_;
   fullWidth_ = width;
   fullHeight_ = height;
-  scaleFinest_ = scale;
-  createImages(w, h);
-  // The scene target follows the window, not the radius, so it only needs
-  // rebuilding when the extent actually moves.
+  createImages(width, height);
   if (extentChanged || !sceneReady()) {
     createSceneTarget(width, height);
   }
@@ -379,8 +350,6 @@ void BlurPass::createPipeline()
     .colorAttachmentCount = 1,
     .pColorAttachments = &ref,
   };
-  // External → color write (covers transfer→sample→write for the H pass, and
-  // previous pass → write for the V pass).
   std::array<VkSubpassDependency, 2> deps{{
     {
       .srcSubpass = VK_SUBPASS_EXTERNAL,
@@ -428,40 +397,32 @@ void BlurPass::createPipeline()
 
   VkDescriptorPoolSize poolSize{
     .type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-    .descriptorCount = 2,
+    .descriptorCount = kMaxLevels,
   };
   VkDescriptorPoolCreateInfo dpi{
     .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
-    .maxSets = 2,
+    .maxSets = kMaxLevels,
     .poolSizeCount = 1,
     .pPoolSizes = &poolSize,
   };
   VR(vkCreateDescriptorPool(device, &dpi, nullptr, &pool_), "blur pool");
 
-  VkDescriptorSetLayout layouts[2] = {setLayout_, setLayout_};
+  std::array<VkDescriptorSetLayout, kMaxLevels> layouts{};
+  layouts.fill(setLayout_);
   VkDescriptorSetAllocateInfo dai{
     .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
     .descriptorPool = pool_,
-    .descriptorSetCount = 2,
-    .pSetLayouts = layouts,
+    .descriptorSetCount = kMaxLevels,
+    .pSetLayouts = layouts.data(),
   };
-  VkDescriptorSet sets[2]{};
-  VR(vkAllocateDescriptorSets(device, &dai, sets), "blur sets");
-  setA_ = sets[0];
-  setB_ = sets[1];
+  std::array<VkDescriptorSet, kMaxLevels> sets{};
+  VR(vkAllocateDescriptorSets(device, &dai, sets.data()), "blur sets");
+  for (uint32_t i = 0; i < kMaxLevels; ++i) levels_[i].set = sets[i];
 
-  struct Push {
-    float direction[2];
-    float spacing;
-    float pad;
-    float subScale[2];
-    float texel[2];
-  };
-  static_assert(sizeof(Push) == 32, "must match blur.frag std140 push block");
   VkPushConstantRange pcr{
     .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT,
     .offset = 0,
-    .size = sizeof(Push),
+    .size = sizeof(KawasePush),
   };
   VkPipelineLayoutCreateInfo pli{
     .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
@@ -547,41 +508,30 @@ void BlurPass::createPipeline()
      "blur pipeline");
 }
 
-void BlurPass::blurPass(VkCommandBuffer cmd, VkFramebuffer dstFb,
-                        VkDescriptorSet srcSet, vec2 direction, float spacing,
-                        uint32_t subW, uint32_t subH)
+void BlurPass::kawasePass(VkCommandBuffer cmd, VkDescriptorSet srcSet,
+                          VkFramebuffer dstFb, uint32_t destW, uint32_t destH,
+                          float offset, bool upsample)
 {
-  // renderArea is the sub-region, so the pass touches only what this blur owns
-  // and leaves the rest of the image — which may hold another blur's result —
-  // alone. The attachment's DONT_CARE load applies to the area, not the image.
   VkRenderPassBeginInfo bi{
     .sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
     .renderPass = renderPass_,
     .framebuffer = dstFb,
-    .renderArea = {{0, 0}, {subW, subH}},
+    .renderArea = {{0, 0}, {destW, destH}},
   };
   vkCmdBeginRenderPass(cmd, &bi, VK_SUBPASS_CONTENTS_INLINE);
 
-  VkViewport viewport{0, 0, float(subW), float(subH), 0, 1};
-  VkRect2D scissor{{0, 0}, {subW, subH}};
+  VkViewport viewport{0, 0, float(destW), float(destH), 0, 1};
+  VkRect2D scissor{{0, 0}, {destW, destH}};
   vkCmdSetViewport(cmd, 0, 1, &viewport);
   vkCmdSetScissor(cmd, 0, 1, &scissor);
   vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_);
   vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout_,
                           0, 1, &srcSet, 0, nullptr);
 
-  struct Push {
-    float direction[2];
-    float spacing;
-    float pad;
-    float subScale[2];
-    float texel[2];
-  } pc{
-    {direction.x, direction.y},
-    spacing,
-    0.f,
-    {float(subW) / float(width_), float(subH) / float(height_)},
-    {1.f / float(width_), 1.f / float(height_)},
+  KawasePush pc{
+    {0.5f / float(destW), 0.5f / float(destH)},
+    offset,
+    upsample ? 1.f : 0.f,
   };
   vkCmdPushConstants(cmd, pipelineLayout_, VK_SHADER_STAGE_FRAGMENT_BIT, 0,
                      sizeof(pc), &pc);
@@ -592,18 +542,13 @@ void BlurPass::blurPass(VkCommandBuffer cmd, VkFramebuffer dstFb,
 void BlurPass::captureAndBlur(VkCommandBuffer cmd, VkImage src,
                               VkImageLayout srcLayout, float radius)
 {
-  if (!ready() || width_ < 1 || height_ < 1) return;
+  if (!ready() || levelCount_ < 2) return;
 
-  const Sub sub = subFor(radius);
-  const uint32_t subW = sub.w;
-  const uint32_t subH = sub.h;
-  const float spacing = sub.spacing;
+  const uint32_t iters =
+    std::min(iterationsFor(radius), levelCount_ > 0 ? levelCount_ - 1 : 0);
+  if (iters < 1) return;
 
-  // blurA: UNDEFINED → TRANSFER_DST. The source scope covers the *previous*
-  // frame's sampling of this image: one image pair serves both frames in
-  // flight, so without it frame N+1's capture can overwrite what frame N is
-  // still reading.
-  imageBarrier(cmd, imageA_, VK_IMAGE_LAYOUT_UNDEFINED,
+  imageBarrier(cmd, levels_[0].image, VK_IMAGE_LAYOUT_UNDEFINED,
                VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                VK_ACCESS_SHADER_READ_BIT, VK_ACCESS_TRANSFER_WRITE_BIT,
                VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
@@ -617,10 +562,6 @@ void BlurPass::captureAndBlur(VkCommandBuffer cmd, VkImage src,
                  VK_PIPELINE_STAGE_TRANSFER_BIT);
   }
 
-  // Full frame → the top-left subW x subH of the blur image. A linear blit only
-  // averages 2x2 of however many pixels it steps over, so from scale 3 up this
-  // is not a box filter; the Gaussian that follows hides it on static UI, and it
-  // is the reason the capture is a blit rather than a mip chain.
   VkImageBlit blit{
     .srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
     .srcOffsets = {{0, 0, 0},
@@ -628,29 +569,27 @@ void BlurPass::captureAndBlur(VkCommandBuffer cmd, VkImage src,
                     static_cast<int32_t>(fullHeight_), 1}},
     .dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
     .dstOffsets = {{0, 0, 0},
-                   {static_cast<int32_t>(subW), static_cast<int32_t>(subH), 1}},
+                   {static_cast<int32_t>(levels_[0].w),
+                    static_cast<int32_t>(levels_[0].h), 1}},
   };
-  vkCmdBlitImage(cmd, src, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, imageA_,
-                 VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blit,
-                 VK_FILTER_LINEAR);
+  vkCmdBlitImage(cmd, src, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                 levels_[0].image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1,
+                 &blit, VK_FILTER_LINEAR);
 
-  // A: TRANSFER_DST → SHADER_READ for H pass
-  imageBarrier(cmd, imageA_, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+  imageBarrier(cmd, levels_[0].image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT,
                VK_PIPELINE_STAGE_TRANSFER_BIT,
                VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT);
 
-  // One texel of the image, whatever fraction of it this blur is using.
-  const float texW = 1.f / float(width_);
-  const float texH = 1.f / float(height_);
-
-  // A →H→ B →V→ A. Chaining needs no extra barriers: the pass declares both an
-  // EXTERNAL→colour-write and a colour-write→EXTERNAL dependency.
-  blurPass(cmd, fbB_, setA_, {texW, 0.f}, spacing, subW, subH);
-  blurPass(cmd, fbA_, setB_, {0.f, texH}, spacing, subW, subH);
-
-  resultIsA_ = true;
-  // A is SHADER_READ_ONLY (render pass finalLayout).
+  constexpr float kOffset = 1.f;
+  for (uint32_t i = 0; i < iters; ++i) {
+    kawasePass(cmd, levels_[i].set, levels_[i + 1].fb, levels_[i + 1].w,
+               levels_[i + 1].h, kOffset, false);
+  }
+  for (uint32_t i = iters; i > 0; --i) {
+    kawasePass(cmd, levels_[i].set, levels_[i - 1].fb, levels_[i - 1].w,
+               levels_[i - 1].h, kOffset, true);
+  }
+  // levels_[0] is SHADER_READ_ONLY (render pass finalLayout).
 }
-

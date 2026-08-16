@@ -88,6 +88,7 @@ void QuadRenderer::cleanUp() {
   maskPipeline_.destroy(device);
   pipelineScene_.destroy(device);
   instancePipelineScene_.destroy(device);
+  instanceMaskPipelineScene_.destroy(device);
   linePipeline_.destroy(device);
   linePipelineScene_.destroy(device);
   spatialPipeline_.destroy(device);
@@ -281,6 +282,8 @@ void QuadRenderer::createSceneTargetPipeline(VkRenderPass sceneRenderPass) {
   createPipeline(sceneRenderPass, VK_SAMPLE_COUNT_1_BIT, pipelineScene_);
   createInstancePipeline(sceneRenderPass, VK_SAMPLE_COUNT_1_BIT,
                          instancePipelineScene_);
+  createInstancePipeline(sceneRenderPass, VK_SAMPLE_COUNT_1_BIT,
+                         instanceMaskPipelineScene_, Blend::Mask);
   createLinePipeline(sceneRenderPass, VK_SAMPLE_COUNT_1_BIT,
                      linePipelineScene_);
   createSpatialPipeline(sceneRenderPass, VK_SAMPLE_COUNT_1_BIT,
@@ -1412,8 +1415,9 @@ void QuadRenderer::drawBatchRange(VkCommandBuffer commandBuffer,
     VkPipeline wanted = VK_NULL_HANDLE;
     if (batch.geometry == Batch::Geometry::Instances) {
       if (batch.mask) {
-        wanted = intoSceneTarget ? VK_NULL_HANDLE
-                                 : static_cast<VkPipeline>(instanceMaskPipeline_);
+        wanted = intoSceneTarget
+                     ? static_cast<VkPipeline>(instanceMaskPipelineScene_)
+                     : static_cast<VkPipeline>(instanceMaskPipeline_);
       } else {
         wanted = intoSceneTarget ? static_cast<VkPipeline>(instancePipelineScene_)
                                  : static_cast<VkPipeline>(instancePipeline_);
@@ -1425,8 +1429,6 @@ void QuadRenderer::drawBatchRange(VkCommandBuffer commandBuffer,
       wanted = intoSceneTarget ? static_cast<VkPipeline>(spatialPipelineScene_)
                                : static_cast<VkPipeline>(spatialPipeline_);
     } else if (batch.mask) {
-      // Never in the scene target: the mask shapes the *window*, and the
-      // content-blur pass renders a subtree that has no corners of its own.
       wanted = intoSceneTarget ? VK_NULL_HANDLE
                                : static_cast<VkPipeline>(maskPipeline_);
     } else {

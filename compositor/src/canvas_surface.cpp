@@ -2,12 +2,14 @@
 
 #include <unistd.h>
 
+#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
 
 #include "frame_probe.hpp"
 #include "render/dmabuf_image.hpp"
+#include "render/draw_command.hpp"
 
 namespace lava {
 namespace {
@@ -308,6 +310,38 @@ bool CanvasSurface::resize(uint32_t width, uint32_t height) {
 
 void CanvasSurface::setCornerRadius(float radius, bool top, bool bottom) {
   renderer_.engine().setWindowCornerRadius(radius, top, bottom, windowId_);
+}
+
+bool CanvasSurface::frostFromRgba(const uint8_t *rgba, uint32_t srcW,
+                                  uint32_t srcH, float radius,
+                                  const std::string &key, float cornerRadius) {
+  if (rgba == nullptr || srcW < 1 || srcH < 1 || key.empty()) return false;
+  const int id =
+      renderer_.engine().uploadTexture(key, rgba, srcW, srcH);
+  if (id <= 0) return false;
+
+  canvas::DrawCommand begin{};
+  begin.kind = static_cast<uint32_t>(canvas::DrawCommandKind::BeginContentBlur);
+  begin.w = static_cast<float>(width_);
+  begin.h = static_cast<float>(height_);
+  begin.aux = radius;
+  // Same slot backdrop blur uses: the composite has to know the outline,
+  // or it paints a square tab behind a rounded window.
+  begin.param = static_cast<uint32_t>(std::max(0.f, cornerRadius) + 0.5f);
+
+  canvas::DrawCommand image{};
+  image.kind = static_cast<uint32_t>(canvas::DrawCommandKind::Image);
+  image.w = static_cast<float>(width_);
+  image.h = static_cast<float>(height_);
+  image.param = static_cast<uint32_t>(id);
+  image.color = 0xffffffffu;
+
+  canvas::DrawCommand end{};
+  end.kind = static_cast<uint32_t>(canvas::DrawCommandKind::EndContentBlur);
+
+  const std::vector<canvas::DrawCommand> commands{begin, image, end};
+  const std::vector<canvas::GlyphInstance> glyphs;
+  return renderList(commands, glyphs);
 }
 
 bool CanvasSurface::renderList(

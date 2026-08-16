@@ -39,6 +39,7 @@
 #include "shell.hpp"
 #include "screenshot_portal.hpp"
 #include "startup_watchdog.hpp"
+#include "backdrop_blur.hpp"
 #include "background.hpp"
 #include "wlr.hpp"
 #include "render/png_encode.hpp"
@@ -898,6 +899,15 @@ struct ClientSurface {
   std::unique_ptr<lava::CanvasSurface> shadow;
   wlr_scene_buffer *shadowNode = nullptr;
 
+  /// Compositor frost under this window. See `SetBackdropBlur`.
+  /// A canvas surface so the blur runs on the compositing Vulkan device
+  /// (`BlurPass`), not a CPU box filter.
+  float backdropBlurRadius = 0.f;
+  std::unique_ptr<lava::CanvasSurface> blurCanvas;
+  wlr_scene_buffer *blurNode = nullptr;
+  std::string blurKey;
+  uint32_t blurGen = 0;
+
   /// Whether the compositor draws this window's non-client area.
   ///
   /// False costs the window nothing except the strip: it is still placed,
@@ -1484,6 +1494,12 @@ class SurfaceRegistry : public lava::CompositorHost {
                               workspaces_->tree[index]);
       placeShadow(surface);
     }
+    if (surface.blurNode != nullptr) {
+      wlr_scene_node_reparent(&surface.blurNode->node,
+                              workspaces_->tree[index]);
+      placeBackdrop(surface);
+    }
+    scheduleBackdropRefresh();
     // The pointer is not going with it, so nothing on its frame is hovered any
     // more — and a button left lit would still be lit when it comes back.
     hoverBar(surface, lava::DecorationHit::Bar);
@@ -1868,6 +1884,8 @@ class SurfaceRegistry : public lava::CompositorHost {
     // the old stacking left it, which would be behind whatever this window was
     // just raised over.
     placeShadow(surface);
+    placeBackdrop(surface);
+    scheduleBackdropRefresh();
     // Front of the list is front of the stack, and the two must not disagree:
     // the hit tests walk this list and would otherwise answer with a window
     // that is visibly behind another.
@@ -1904,6 +1922,8 @@ class SurfaceRegistry : public lava::CompositorHost {
     surface.y = y;
     place(surface);
     placeShadow(surface);
+    placeBackdrop(surface);
+    scheduleBackdropRefresh();
     // Geometry, which the window list does not carry — a dock that hides
     // itself when something is in the way learns about it here and nowhere
     // else. Cheap when nobody has asked: see `postPanelAreas`.
@@ -2281,6 +2301,213 @@ class SurfaceRegistry : public lava::CompositorHost {
     }
   }
 
+  void placeBackdrop(ClientSurface &surface) {
+    if (surface.blurNode == nullptr) return;
+    wlr_scene_node_set_position(&surface.blurNode->node, surface.x, surface.y);
+    wlr_scene_node *content = surface.isForeign()
+                                  ? surface.window->contentNode()
+                                  : (surface.node != nullptr
+                                         ? &surface.node->node
+                                         : nullptr);
+    if (content != nullptr) {
+      wlr_scene_node_place_below(&surface.blurNode->node, content);
+    }
+    if (surface.shadowNode != nullptr) {
+      wlr_scene_node_place_below(&surface.shadowNode->node,
+                                 &surface.blurNode->node);
+    }
+  }
+
+  void clearBackdrop(ClientSurface &surface) {
+    if (surface.blurNode != nullptr) {
+      wlr_scene_node_destroy(&surface.blurNode->node);
+      surface.blurNode = nullptr;
+    }
+    surface.blurCanvas.reset();
+    if (renderer_ != nullptr && !surface.blurKey.empty()) {
+      renderer_->releaseImage(surface.blurKey);
+      surface.blurKey.clear();
+    }
+  }
+
+  void scheduleBackdropRefresh() {
+    backdropBlurDirty_ = true;
+    if (server_ == nullptr) return;
+    for (Output *output : server_->outputs) {
+      if (output->wlr != nullptr && output->wlr->enabled) {
+        wlr_output_schedule_frame(output->wlr);
+      }
+    }
+  }
+
+  void setNodeEnabled(wlr_scene_node *node, bool on) {
+    if (node != nullptr) wlr_scene_node_set_enabled(node, on);
+  }
+
+  /// Hide this window (not the others), render the output it sits on,
+  /// crop + frost, put the plate back under it.
+  void captureBackdrop(ClientSurface &surface) {
+    if (surface.backdropBlurRadius <= 0.f || server_ == nullptr ||
+        renderer_ == nullptr) {
+      clearBackdrop(surface);
+      return;
+    }
+    if (surface.minimized || surface.fullscreen) {
+      if (surface.blurNode != nullptr) {
+        wlr_scene_node_set_enabled(&surface.blurNode->node, false);
+      }
+      return;
+    }
+
+    const int frameW = static_cast<int>(surface.width);
+    const int frameH = surface.frameHeight();
+    if (frameW < 1 || frameH < 1) return;
+
+    Output *output = outputUnder(surface.x + frameW / 2, surface.y + frameH / 2);
+    if (output == nullptr || output->wlr == nullptr) return;
+
+    setNodeEnabled(surface.node != nullptr ? &surface.node->node : nullptr,
+                   false);
+    setNodeEnabled(surface.barNode != nullptr ? &surface.barNode->node : nullptr,
+                   false);
+    setNodeEnabled(surface.blurNode != nullptr ? &surface.blurNode->node
+                                               : nullptr,
+                   false);
+    setNodeEnabled(
+        surface.shadowNode != nullptr ? &surface.shadowNode->node : nullptr,
+        false);
+    if (surface.isForeign() && surface.window != nullptr) {
+      setNodeEnabled(surface.window->contentNode(), false);
+    }
+
+    wlr_buffer *captured = renderOutputBuffer(output);
+    if (surface.node != nullptr) {
+      setNodeEnabled(&surface.node->node, !surface.minimized);
+    }
+    if (surface.barNode != nullptr) {
+      setNodeEnabled(&surface.barNode->node, surface.showsBar());
+    }
+    if (surface.isForeign() && surface.window != nullptr) {
+      setNodeEnabled(surface.window->contentNode(), !surface.minimized);
+    }
+    // Shadow comes back through applyShadow's own rules.
+    applyShadow(surface);
+
+    if (captured == nullptr) return;
+
+    wlr_box layoutBox{};
+    wlr_output_layout_get_box(server_->output_layout, output->wlr, &layoutBox);
+    const float scale = output->wlr->scale > 0.f ? output->wlr->scale : 1.f;
+    const int ix = std::max(surface.x, layoutBox.x);
+    const int iy = std::max(surface.y, layoutBox.y);
+    const int ix2 = std::min(surface.x + frameW, layoutBox.x + layoutBox.width);
+    const int iy2 = std::min(surface.y + frameH, layoutBox.y + layoutBox.height);
+    const int srcX = static_cast<int>(std::lround((ix - layoutBox.x) * scale));
+    const int srcY = static_cast<int>(std::lround((iy - layoutBox.y) * scale));
+    int srcW = static_cast<int>(std::lround((ix2 - ix) * scale));
+    int srcH = static_cast<int>(std::lround((iy2 - iy) * scale));
+    srcW = std::max(1, std::min(srcW, captured->width - srcX));
+    srcH = std::max(1, std::min(srcH, captured->height - srcY));
+
+    std::vector<uint8_t> raw;
+    const bool read = srcX >= 0 && srcY >= 0 &&
+                      lava::readBufferRgba(server_->renderer, captured, srcX,
+                                           srcY, srcW, srcH, raw);
+    wlr_buffer_unlock(captured);
+    if (!read) return;
+
+    wlr_scene_tree *parent = workspaces_->tree[surface.workspace];
+    const uint32_t destW = static_cast<uint32_t>(frameW);
+    const uint32_t destH = static_cast<uint32_t>(frameH);
+    if (!surface.blurCanvas) {
+      surface.blurCanvas = renderer_->createSurface(destW, destH);
+      if (!surface.blurCanvas) return;
+      surface.blurNode =
+          wlr_scene_buffer_create(parent, surface.blurCanvas->buffer());
+      if (surface.blurNode == nullptr) {
+        surface.blurCanvas.reset();
+        return;
+      }
+      bind_never_input(surface.blurNode);
+    } else if (surface.blurCanvas->resize(destW, destH)) {
+      show_surface(surface.blurNode, *surface.blurCanvas);
+    }
+
+    if (!surface.blurKey.empty()) renderer_->releaseImage(surface.blurKey);
+    surface.blurKey = "frost:" + std::to_string(surface.id) + ":" +
+                      std::to_string(++surface.blurGen);
+    const float corners =
+        frameIsRoundable(surface) ? cornerRadius_ : 0.f;
+    const float frost = corners > 0.f ? corners + 2.f : 0.f;
+    surface.blurCanvas->setCornerRadius(frost, true, true);
+    if (!surface.blurCanvas->frostFromRgba(
+            raw.data(), static_cast<uint32_t>(srcW),
+            static_cast<uint32_t>(srcH), surface.backdropBlurRadius,
+            surface.blurKey, frost)) {
+      return;
+    }
+    show_surface(surface.blurNode, *surface.blurCanvas);
+    wlr_scene_node_set_enabled(&surface.blurNode->node, true);
+    placeBackdrop(surface);
+  }
+
+  Output *outputUnder(int lx, int ly) const {
+    if (server_ == nullptr || server_->output_layout == nullptr) return nullptr;
+    wlr_output *at =
+        wlr_output_layout_output_at(server_->output_layout, lx, ly);
+    if (at == nullptr) return nullptr;
+    for (Output *output : server_->outputs) {
+      if (output->wlr == at && output->wlr->enabled) return output;
+    }
+    return nullptr;
+  }
+
+  /// One offscreen composite of `output`. The caller unlocks the buffer.
+  wlr_buffer *renderOutputBuffer(Output *output) {
+    if (output == nullptr || output->wlr == nullptr ||
+        server_ == nullptr || server_->allocator == nullptr) {
+      return nullptr;
+    }
+    const int w = output->wlr->width;
+    const int h = output->wlr->height;
+    if (w <= 0 || h <= 0) return nullptr;
+
+    const wlr_drm_format *fmt = nullptr;
+    if (output->wlr->swapchain != nullptr) {
+      fmt = &output->wlr->swapchain->format;
+    } else {
+      const wlr_drm_format_set *formats = wlr_output_get_primary_formats(
+          output->wlr, server_->allocator->buffer_caps);
+      if (formats != nullptr) {
+        fmt = wlr_drm_format_set_get(formats, DRM_FORMAT_XRGB8888);
+        if (fmt == nullptr) {
+          fmt = wlr_drm_format_set_get(formats, DRM_FORMAT_ARGB8888);
+        }
+        if (fmt == nullptr && formats->len > 0) fmt = &formats->formats[0];
+      }
+    }
+    if (fmt == nullptr) return nullptr;
+
+    wlr_swapchain *chain = wlr_swapchain_create(server_->allocator, w, h, fmt);
+    if (chain == nullptr) return nullptr;
+
+    wlr_output_state state;
+    wlr_output_state_init(&state);
+    wlr_scene_output_state_options opts{};
+    opts.swapchain = chain;
+    const bool built =
+        wlr_scene_output_build_state(output->scene_output, &state, &opts);
+    wlr_buffer *locked = nullptr;
+    if (built && state.buffer != nullptr) {
+      locked = state.buffer;
+      wlr_buffer_lock(locked);
+    }
+    wlr_output_state_finish(&state);
+    wlr_swapchain_destroy(chain);
+    wlr_damage_ring_add_whole(&output->scene_output->damage_ring);
+    return locked;
+  }
+
   /// "The window set changed" — to whatever shell is watching.
   ///
   /// Called from everywhere a dock would draw something different: a window
@@ -2323,6 +2550,15 @@ class SurfaceRegistry : public lava::CompositorHost {
     }
     if (surface.bar) {
       surface.bar->setCornerRadius(radius, true, false);
+    }
+    // The frost plate is the whole frame, so it takes every corner the
+    // outline has. Square frost under a rounded window is the tab in the
+    // screenshot.
+    if (surface.blurCanvas) {
+      // One pixel more than the window so the frost's AA sits inside the
+      // window's, not beside it as a bright speck.
+      const float frost = radius > 0.f ? radius + 2.f : 0.f;
+      surface.blurCanvas->setCornerRadius(frost, true, true);
     }
   }
 
@@ -2457,6 +2693,7 @@ class SurfaceRegistry : public lava::CompositorHost {
       surface.width = width;
       surface.height = height;
       applyShadow(surface);
+      scheduleBackdropRefresh();
       if (surface.bar &&
           surface.bar->resize(width, lava::Decoration::kHeight)) {
         show_surface(surface.barNode, *surface.bar);
@@ -2477,6 +2714,7 @@ class SurfaceRegistry : public lava::CompositorHost {
     // new shadow. Rebuilt rather than stretched: a stretched one would soften
     // along one axis and not the other.
     applyShadow(surface);
+    scheduleBackdropRefresh();
     // Usually the same buffer at a smaller or larger crop — a surface only
     // hands back a different one when the window outgrew it.
     show_surface(surface.node, *surface.canvas);
@@ -2653,6 +2891,35 @@ class SurfaceRegistry : public lava::CompositorHost {
     // somehow created without it.
     if (surface->node != nullptr) bind_content_input(surface->node, surface);
     return true;
+  }
+
+  bool setBackdropBlur(uint32_t id, float radius) override {
+    ClientSurface *surface = find(id);
+    if (surface == nullptr) return false;
+    const float next = std::clamp(radius, 0.f, 64.f);
+    if (surface->backdropBlurRadius == next) return true;
+    surface->backdropBlurRadius = next;
+    if (next <= 0.f) {
+      clearBackdrop(*surface);
+    }
+    wlr_log(WLR_INFO, "surface %u: backdrop blur %.0f", id, next);
+    scheduleBackdropRefresh();
+    return true;
+  }
+
+  /// Recaptures frosted plates when something behind a window may have
+  /// moved. Cheap when nobody asked: no surface with a radius, nothing
+  /// to do. Called from the output frame callback, before the composite.
+  void refreshBackdropBlurs() {
+    if (!backdropBlurDirty_ || server_ == nullptr || workspaces_ == nullptr) {
+      return;
+    }
+    backdropBlurDirty_ = false;
+    for (auto &owned : surfaces_) {
+      if (owned->backdropBlurRadius > 0.f && !owned->minimized) {
+        captureBackdrop(*owned);
+      }
+    }
   }
 
   void appearance(float &outCornerRadius, float &outShadowBlur,
@@ -2949,6 +3216,8 @@ class SurfaceRegistry : public lava::CompositorHost {
       }
       if ((*it)->barNode) wlr_scene_node_destroy(&(*it)->barNode->node);
       if ((*it)->shadowNode) wlr_scene_node_destroy(&(*it)->shadowNode->node);
+      clearBackdrop(**it);
+      scheduleBackdropRefresh();
       if ((*it)->isForeign()) (*it)->window->frameId = 0;
       surfaces_.erase(it);
       // A press whose surface went away before its release: nothing left to
@@ -3488,6 +3757,7 @@ class SurfaceRegistry : public lava::CompositorHost {
 
     const uint32_t id = surface->id;
     surfaces_.push_front(std::move(surface));
+    scheduleBackdropRefresh();
     wlr_log(WLR_INFO, "surface %u: '%s' %ux%u at %d,%d on arena '%s'%s", id,
             title.c_str(), width, height, x, y, arenaId.c_str(),
             decorated ? "" : ", client-framed");
@@ -3525,6 +3795,8 @@ class SurfaceRegistry : public lava::CompositorHost {
   uint32_t focused_ = 0;
   uint32_t outputWidth_ = 0;
   uint32_t outputHeight_ = 0;
+  /// Set when a frosted window moved, resized, or asked for a new radius.
+  bool backdropBlurDirty_ = false;
   /// Never reused, so a stale id from a closed surface fails to resolve rather
   /// than quietly addressing whatever opened next.
   uint32_t nextId_ = 1;
@@ -4083,6 +4355,9 @@ void Output::on_frame(wl_listener *listener, void *) {
   // next one. See `SurfaceRegistry::animate` for why not a timer.
   const bool animating = output->server->surfaces != nullptr &&
                          output->server->surfaces->stepAnimations();
+  if (output->server->surfaces != nullptr) {
+    output->server->surfaces->refreshBackdropBlurs();
+  }
   // Composite is surface 0 in the probe: it is the desktop's own frame rather
   // than any one client's, and it is where a wait that was moved rather than
   // removed would end up — the scene waits for a client's acquire fence here,

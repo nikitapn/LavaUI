@@ -1,6 +1,6 @@
 #version 450
 
-// Fullscreen triangle (no vertex buffer). Used by the separable blur pass.
+// Fullscreen triangle (no vertex buffer). Used by Dual Kawase.
 // UV is 0..1 over the visible NDC square (Vulkan Y-down, origin top-left).
 
 layout(location = 0) out vec2 vUV;

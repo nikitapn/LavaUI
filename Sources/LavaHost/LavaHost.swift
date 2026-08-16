@@ -80,4 +80,14 @@ public enum LavaHost {
 
         editor.setMinimumSize(width: width, height: height)
     }
+
+    /// Frost the desktop behind this window. Client mode only; a windowed
+    /// app has no desktop behind it to sample. `radius` 0 turns it off.
+    public static func setBackdropBlur(radius: Float) {
+        #if LAVA_HAS_CLIENT
+        if isClient {
+            LavaClient.setBackdropBlur(radius: radius)
+        }
+        #endif
+    }
 }

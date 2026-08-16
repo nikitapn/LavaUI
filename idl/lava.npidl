@@ -1287,4 +1287,21 @@ interface Compositor {
   /// empty. The bytes are the file, not a texture id — a terminal that
   /// wants to paste a screenshot writes them out and inserts the path.
   vector<u8> GetClipboardPng(surfaceId: in u32) raises(SurfaceNotFound);
+
+  /// Frost the desktop behind this surface.
+  ///
+  /// The client's own pixels stay sharp — this is not `.blur()`. In-window
+  /// `backdropBlur` can only sample this surface's framebuffer, so a window
+  /// that wants the wallpaper and the windows under it softened has to ask
+  /// the compositor, which is the only process that can see them.
+  ///
+  /// `radius` is in layout pixels. 0 turns the effect off. The compositor
+  /// draws a blurred copy of what is *behind* the window, then the window
+  /// on top; a translucent `WindowBackdrop` is what lets the frost show
+  /// through. An opaque fill hides it completely.
+  ///
+  /// A property of the surface, not a draw command: the radius changes
+  /// rarely, and the pixels it samples are not the client's to name.
+  void SetBackdropBlur(surfaceId: in u32, radius: in f32)
+      raises(SurfaceNotFound);
 }

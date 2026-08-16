@@ -115,6 +115,7 @@ executable(
   'compositor',
   'src/main.cpp',
   'src/appmenu.cpp',
+  'src/backdrop_blur.cpp',
   'src/background.cpp',
   'src/canvas_surface.cpp',
   'src/clipboard.cpp',

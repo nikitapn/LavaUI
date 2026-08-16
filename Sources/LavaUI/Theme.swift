@@ -222,8 +222,23 @@ public enum WindowBackdrop: Sendable {
     case color(Color)
     /// Nothing at all — the surface stays as the frame was cleared.
     case none
+    /// Frost the desktop behind the window, then this translucent tint.
+    ///
+    /// Only the compositor can see what is under the window, so this is a
+    /// no-op in a windowed app (the tint still paints). `radius` 0 is
+    /// `.color(tint)`. An opaque tint hides the frost completely — the
+    /// useful alphas are well below 1; see `docs/colour-and-blending.md`.
+    case blur(radius: Float, tint: Color)
 
     nonisolated(unsafe) public static var current: WindowBackdrop = .theme
+
+    /// Frosted glass with a dark wash that still lets the desktop through.
+    public static func blur(radius: Float) -> WindowBackdrop {
+        .blur(
+            radius: radius,
+            tint: Color(r: 0.08, g: 0.07, b: 0.10, a: 0.42)
+        )
+    }
 
     /// The colour to fill the window with, or nil to fill nothing.
     public var fill: Color? {
@@ -231,6 +246,15 @@ public enum WindowBackdrop: Sendable {
         case .theme: return Theme.current.background
         case .color(let c): return c
         case .none: return nil
+        case .blur(_, let tint): return tint
+        }
+    }
+
+    /// Layout pixels the compositor should frost behind this window. 0 = off.
+    public var compositorBlurRadius: Float {
+        switch self {
+        case .blur(let radius, _): return max(0, radius)
+        default: return 0
         }
     }
 }

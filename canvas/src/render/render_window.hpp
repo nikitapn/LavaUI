@@ -516,8 +516,8 @@ class RenderWindow {
   /// blur image lines up one-to-one with the frame whatever the rect is.
   /// Scaled by the fraction of the image this radius occupies, since each blur
   /// gets its own resolution out of one allocation.
-  /// `cornerRadius` cuts the composite to the panel that will be drawn over
-  /// it; 0 leaves it square, which is what a content blur needs.
+  /// `cornerRadius` cuts the composite to the outline it sits under;
+  /// 0 leaves it square.
   void pushBlurComposite(float x, float y, float w, float h, float viewW,
                          float viewH, float radius, float cornerRadius = 0.f);
 

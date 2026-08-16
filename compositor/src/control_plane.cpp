@@ -1063,6 +1063,12 @@ class CompositorImpl final : public ICompositor_Servant {
     return host_.clipboardPng();
   }
 
+  void SetBackdropBlur(uint32_t surfaceId, float radius) override {
+    if (!host_.setBackdropBlur(surfaceId, radius)) {
+      throw SurfaceNotFound(surfaceId);
+    }
+  }
+
  private:
   /// The subscription is the surface's lease.
   ///

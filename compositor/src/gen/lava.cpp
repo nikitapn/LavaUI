@@ -721,6 +721,31 @@ public:
   const auto _1() const noexcept { return (::nprpc::flat::Span<const uint8_t>)base()._1; }
 };
 
+struct lava_M28 {
+  uint32_t _1;
+  float _2;
+};
+
+class lava_M28_Direct {
+  ::nprpc::flat_buffer& buffer_;
+  const std::uint32_t offset_;
+
+  auto& base() noexcept { return *reinterpret_cast<lava_M28*>(reinterpret_cast<std::byte*>(buffer_.data().data()) + offset_); }
+  auto const& base() const noexcept { return *reinterpret_cast<const lava_M28*>(reinterpret_cast<const std::byte*>(buffer_.data().data()) + offset_); }
+public:
+  uint32_t offset() const noexcept { return offset_; }
+  void* __data() noexcept { return (void*)&base(); }
+  lava_M28_Direct(::nprpc::flat_buffer& buffer, std::uint32_t offset)
+    : buffer_(buffer)
+    , offset_(offset)
+  {
+  }
+  const uint32_t& _1() const noexcept { return base()._1;}
+  uint32_t& _1() noexcept { return base()._1;}
+  const float& _2() const noexcept { return base()._2;}
+  float& _2() noexcept { return base()._2;}
+};
+
 
 bool check_1S2Fu323Fu324Fu32(::nprpc::flat_buffer& buf, lava_M1_Direct& ia) {
   if (static_cast<std::uint32_t>(buf.size()) < ia.offset() + 20) goto check_failed;
@@ -900,6 +925,12 @@ bool check_1Fu322S(::nprpc::flat_buffer& buf, lava_M26_Direct& ia) {
   {
     if(!ia._2_d()._check_size_align(static_cast<std::uint32_t>(buf.size()))) goto check_failed;
   }
+  return true;
+check_failed:
+  return false;
+}
+bool check_1Fu322Ff32(::nprpc::flat_buffer& buf, lava_M28_Direct& ia) {
+  if (static_cast<std::uint32_t>(buf.size()) < ia.offset() + 8) goto check_failed;
   return true;
 check_failed:
   return false;
@@ -3545,6 +3576,67 @@ Compositor::GetClipboardPngAsync(uint32_t surfaceId, std::stop_token st) {
   co_return __ret_value;
 }
 
+void Compositor::SetBackdropBlur(uint32_t surfaceId, float radius) {
+  auto& __arena = ::nprpc::impl::tls_bump_arena();
+  __arena.reset();
+  ::nprpc::flat_buffer buf;
+  buf.set_arena(&__arena);
+  auto session = ::nprpc::impl::g_rpc->get_session(this->get_endpoint());
+  std::size_t __wire_size = 40;
+  if (!::nprpc::impl::g_rpc->prepare_zero_copy_buffer(session->ctx(), buf, __wire_size))
+    buf.prepare(__wire_size);
+  {
+    buf.commit(40);
+    static_cast<::nprpc::impl::Header*>(buf.data().data())->msg_id = ::nprpc::impl::MessageId::FunctionCall;
+  static_cast<::nprpc::impl::Header*>(buf.data().data())->msg_type =::nprpc::impl::MessageType::Request;
+  }
+  ::nprpc::impl::flat::CallHeader_Direct __ch(buf, sizeof(::nprpc::impl::Header));
+  __ch.object_id() = this->object_id();
+  __ch.poa_idx() = this->poa_idx();
+  __ch.interface_idx() = interface_idx_;
+  __ch.function_idx() = 43;
+  lava_M28_Direct _(buf,32);
+  _._1() = surfaceId;
+  _._2() = radius;
+  static_cast<::nprpc::impl::Header*>(buf.data().data())->size = static_cast<uint32_t>(buf.size());
+  session->send_receive(buf, this->get_timeout());
+  auto std_reply = ::nprpc::impl::handle_standart_reply(buf);
+  if (std_reply == 1) lava_throw_exception(buf);
+  if (std_reply != 0) {
+    throw ::nprpc::Exception("Unknown Error");
+  }
+}
+
+::nprpc::Task<void>
+Compositor::SetBackdropBlurAsync(uint32_t surfaceId, float radius, std::stop_token st) {
+  if (st.stop_requested()) throw nprpc::OperationCancelled();
+  ::nprpc::flat_buffer buf;
+  auto session = ::nprpc::impl::g_rpc->get_session(this->get_endpoint());
+  std::size_t __wire_size = 40;
+  if (!::nprpc::impl::g_rpc->prepare_zero_copy_buffer(session->ctx(), buf, __wire_size))
+    buf.prepare(__wire_size);
+  {
+    buf.commit(40);
+    static_cast<::nprpc::impl::Header*>(buf.data().data())->msg_id = ::nprpc::impl::MessageId::FunctionCall;
+  static_cast<::nprpc::impl::Header*>(buf.data().data())->msg_type =::nprpc::impl::MessageType::Request;
+  }
+  ::nprpc::impl::flat::CallHeader_Direct __ch(buf, sizeof(::nprpc::impl::Header));
+  __ch.object_id() = this->object_id();
+  __ch.poa_idx() = this->poa_idx();
+  __ch.interface_idx() = interface_idx_;
+  __ch.function_idx() = 43;
+  lava_M28_Direct _(buf,32);
+  _._1() = surfaceId;
+  _._2() = radius;
+  static_cast<::nprpc::impl::Header*>(buf.data().data())->size = static_cast<uint32_t>(buf.size());
+  co_await session->send_receive_coro(buf, this->get_timeout(), std::move(st));
+  auto std_reply = ::nprpc::impl::handle_standart_reply(buf);
+  if (std_reply == 1) lava_throw_exception(buf);
+  if (std_reply != 0) {
+    throw ::nprpc::Exception("Unknown Error");
+  }
+}
+
 void ICompositor_Servant::dispatch(::nprpc::SessionContext& ctx, [[maybe_unused]] bool from_parent) {
   assert(ctx.rx_buffer != nullptr);
   auto* header = static_cast<::nprpc::impl::Header*>(ctx.rx_buffer->data().data());
@@ -4889,6 +4981,35 @@ void ICompositor_Servant::dispatch(::nprpc::SessionContext& ctx, [[maybe_unused]
       static_cast<::nprpc::impl::Header*>(obuf.data().data())->size = static_cast<uint32_t>(obuf.size());
       static_cast<::nprpc::impl::Header*>(obuf.data().data())->msg_id = ::nprpc::impl::MessageId::BlockResponse;
       static_cast<::nprpc::impl::Header*>(obuf.data().data())->msg_type = ::nprpc::impl::MessageType::Answer;
+      break;
+    }
+    case 43: {
+      assert(ctx.rx_buffer != nullptr);
+      lava_M28_Direct ia(*ctx.rx_buffer, 32);
+      if ( !check_1Fu322Ff32(*ctx.rx_buffer, ia) ) {
+        ::nprpc::impl::make_simple_answer(ctx, ::nprpc::impl::MessageId::Error_BadInput);
+        break;
+      }
+      try {
+        SetBackdropBlur(ia._1(), ia._2());
+      }
+      catch(::lava::SurfaceNotFound& e) {
+        assert(ctx.tx_buffer != nullptr);
+        auto& obuf = *ctx.tx_buffer;
+        obuf.consume(obuf.size());
+        std::size_t __wire_size = 24;
+        if (!::nprpc::impl::g_rpc->prepare_zero_copy_buffer(ctx, obuf, __wire_size))
+          obuf.prepare(__wire_size);
+        obuf.commit(24);
+        ::lava::flat::SurfaceNotFound_Direct oa(obuf,16);
+        oa.__ex_id() = 3;
+        oa.surfaceId() = e.surfaceId;
+        static_cast<::nprpc::impl::Header*>(obuf.data().data())->size = static_cast<uint32_t>(obuf.size());
+        static_cast<::nprpc::impl::Header*>(obuf.data().data())->msg_id = ::nprpc::impl::MessageId::Exception;
+        static_cast<::nprpc::impl::Header*>(obuf.data().data())->msg_type = ::nprpc::impl::MessageType::Answer;
+        return;
+      }
+      ::nprpc::impl::make_simple_answer(ctx, nprpc::impl::MessageId::Success);
       break;
     }
     default:

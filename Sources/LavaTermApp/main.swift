@@ -13,11 +13,7 @@ import LavaTermCore
 /// Client mode (`LAVA_CLIENT=1`): same app under the compositor — no local
 /// window/GPU; frames go to a shared-memory arena (see HelloWorldApp).
 Theme.current = .dark
-// Nothing under the tree: the wash is `TerminalView`'s own background,
-// so changing `TerminalPalette.defaultBg` / `windowAlpha` is what you
-// see. A WindowBackdrop fill here would sit *behind* the view and a
-// second wash on the root would stack two alphas.
-WindowBackdrop.current = .none
+WindowBackdrop.current = .blur(radius: 10)
 
 // `LAVA_CLIENT=1` runs under the compositor: no window, no GPU, frames
 // published into shared memory for another process to draw. The PTY

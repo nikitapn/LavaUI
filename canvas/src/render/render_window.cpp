@@ -1793,6 +1793,13 @@ void RenderWindow::replayDrawList(const canvas::DrawList &list, float viewW,
       if (contentScopes.empty()) break;
       const canvas::DrawCommand open = contentScopes.back();
       contentScopes.pop_back();
+      // Punch the source to the outline *before* the Gaussian. A square
+      // capture blurred at a rounded corner pulls the corner's bright
+      // wallpaper into the curve as a one-pixel spark.
+      if (open.param > 0) {
+        quads_.pushCornerMask({open.x, open.y}, {open.w, open.h},
+                              static_cast<float>(open.param));
+      }
       quads_.closeSegment();
       const float radius = open.aux > 0.f ? open.aux : 8.f;
       outBoundaries.push_back({Boundary::Kind::ContentEnd, radius});
@@ -1806,7 +1813,8 @@ void RenderWindow::replayDrawList(const canvas::DrawList &list, float viewW,
       const float y0 = std::max(0.f, open.y - pad);
       const float x1 = std::min(viewW, open.x + open.w + pad);
       const float y1 = std::min(viewH, open.y + open.h + pad);
-      pushBlurComposite(x0, y0, x1 - x0, y1 - y0, viewW, viewH, radius);
+      pushBlurComposite(x0, y0, x1 - x0, y1 - y0, viewW, viewH, radius,
+                        static_cast<float>(open.param));
       break;
     }
     }

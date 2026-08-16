@@ -515,6 +515,31 @@ public enum LavaClient {
         }
     }
 
+    /// Frost the desktop behind this window. `radius` 0 turns it off.
+    ///
+    /// Remembered like `setMinimumSize`: `open` returns before the surface
+    /// exists, so an app that sets `WindowBackdrop.blur` in `main` would
+    /// otherwise send it to id 0. The compositor draws a blurred copy of
+    /// what is *behind* the window; the client's own pixels stay sharp.
+    public static func setBackdropBlur(radius: Float) {
+        pendingBackdropBlur = max(0, radius)
+        flushBackdropBlur()
+    }
+
+    private static func flushBackdropBlur() {
+        guard let compositor = Self.compositor, surfaceID != 0 else { return }
+        let radius = pendingBackdropBlur
+            ?? WindowBackdrop.current.compositorBlurRadius
+        guard radius > 0 || pendingBackdropBlur != nil else { return }
+        report("SetBackdropBlur") {
+            try blockingCall {
+                try await compositor.setBackdropBlur(
+                    surfaceId: surfaceID, radius: radius
+                )
+            }
+        }
+    }
+
     /// Limits where this surface takes pointer input, in its own coordinates.
     ///
     /// For a panel that draws less than it covers — a dock floating over the
@@ -628,6 +653,7 @@ public enum LavaClient {
             )
             // Anything the application asked for before it had a surface.
             flushMinimumSize()
+            flushBackdropBlur()
             if let pending = pendingPanelArea {
                 pendingPanelArea = nil
                 startPanelArea(pending)
@@ -927,6 +953,8 @@ public enum LavaClient {
     nonisolated(unsafe) private static var surfaceID: UInt32 = 0
     /// A minimum size stated before the surface existed. See `setMinimumSize`.
     nonisolated(unsafe) private static var pendingMinSize: (width: Float, height: Float)?
+    /// Backdrop frost asked for before the surface existed. See `setBackdropBlur`.
+    nonisolated(unsafe) private static var pendingBackdropBlur: Float?
     /// Input lease for `quit()` / compositor-side close. Set in `run`.
     nonisolated(unsafe) private static var inputChannel: InputChannel?
     /// Handed from `open` to `run`. Statics rather than a returned handle so

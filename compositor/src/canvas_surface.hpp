@@ -154,6 +154,16 @@ class CanvasSurface {
   bool renderList(const std::vector<canvas::DrawCommand> &commands,
                   const std::vector<canvas::GlyphInstance> &glyphs);
 
+  /// Uploads `rgba` (`srcW`×`srcH`) as a texture, draws it across this
+  /// surface, and runs the content-blur pass at `radius`. The result is
+  /// the exported dmabuf — GPU frost, no CPU box filter.
+  ///
+  /// `key` names the upload so a later call can drop the previous one.
+  /// `cornerRadius` cuts the frost to the window's outline; 0 is square.
+  bool frostFromRgba(const uint8_t *rgba, uint32_t srcW, uint32_t srcH,
+                     float radius, const std::string &key,
+                     float cornerRadius = 0.f);
+
   /// Renders whatever another process publishes into the arena named `id`.
   ///
   /// The arena is shared memory the client writes its draw list straight
