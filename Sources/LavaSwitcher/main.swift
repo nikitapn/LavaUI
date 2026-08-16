@@ -277,8 +277,7 @@ func handleKey(_ event: LavaUI.InputEvent) -> Bool {
 
 // ─── Bring-up ───────────────────────────────────────────────────────────────
 
-WindowBackdrop.current = .none
-Theme.current = .nebula
+WindowBackdrop.current = .blur(radius: 12)
 
 guard let editor = LavaClient.open(
     title: "Switcher", frame: .client, fillScreen: true
