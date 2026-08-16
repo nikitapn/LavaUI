@@ -552,7 +552,7 @@ public final class Editor: @unchecked Sendable {
 
     /// Capture the resolve target as PNG (base64). Region in framebuffer
     /// pixels; omit or pass w/h ≤ 0 for the full frame.
-    /// `maxSide` > 0 box-downsamples so the longer encoded side ≤ maxSide.
+    /// `maxSide` > 0 downsamples so the longer encoded side ≤ maxSide.
     /// Returns `(base64, encodedWidth, encodedHeight)` or nil on failure.
     public func capturePngBase64(
         x: Int32 = 0, y: Int32 = 0, w: Int32 = 0, h: Int32 = 0,

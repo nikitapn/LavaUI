@@ -85,6 +85,9 @@ class RenderDevice
   // device creation. The present mode it unlocks may only be requested when
   // this is true — see createSwapchain.
   bool fifoLatestReadyEnabled_ = false;
+  /// Set when the physical device supports it *and* we asked for it on the
+  /// logical device. Sampler creation must not enable anisotropy otherwise.
+  bool samplerAnisotropy_ = false;
   // GPUOpen VMA — all createBuffer/createImage go through this.
   // Allocations live next to their VkBuffer/VkImage at each call site.
   VmaAllocator allocator_ = VK_NULL_HANDLE;
@@ -523,12 +526,22 @@ class RenderDevice
   void transitionImageLayout(VkImage               image,
                              VkFormat              format,
                              VkImageLayout         oldLayout,
-                             VkImageLayout         newLayout);
+                             VkImageLayout         newLayout,
+                             uint32_t              mipLevels = 1);
 
   void copyBufferToImage(VkBuffer buffer,
                          VkImage  image,
                          uint32_t width,
                          uint32_t height);
+
+  /// True when `format` can be linearly blitted — the requirement for
+  /// `generateMipmaps`. R8G8B8A8_SRGB does on every GPU we ship on.
+  bool formatSupportsLinearBlit(VkFormat format) const;
+
+  /// Blit mip 0 down the chain. Every level must already be TRANSFER_DST
+  /// with level 0 filled; leaves the whole image SHADER_READ_ONLY.
+  void generateMipmaps(VkImage image, int32_t width, int32_t height,
+                       uint32_t mipLevels);
 
   /// Copies into a sub-rect, for packing many images into one atlas page.
   void copyBufferToImageRegion(VkBuffer buffer,

@@ -21,9 +21,28 @@ import Observation
 
 enum Switcher {
     static let appId = "LavaSwitcher"
-    /// Longest encoded edge. Stays inside one atlas cell so a shelf of
-    /// posters does not burn a descriptor set each.
-    static let captureSide: Int32 = 384
+    /// Longest encoded edge. First read is after `open(fillScreen:)`, so
+    /// this sees the largest output. 1024 at 1920 looked sharp; scale that.
+    /// Floor 384 keeps a nested 720p session readable; cap 1536 so a 4K
+    /// capture does not own Alt+Tab. Always past the 256-px atlas cell so
+    /// posters stay standalone and keep a mip chain.
+    static let captureSide: Int32 = {
+        let size = LavaClient.requestedSize
+        let longest = Int(max(size.width, size.height).rounded())
+        let side = posterSide(longestOutputEdge: longest)
+        FileHandle.standardError.write(Data(
+            "switcher: captureSide \(side) (output \(longest))\n".utf8
+        ))
+        return side
+    }()
+
+    /// 1024 at 1920 was the size that looked sharp; scale that, don't
+    /// pick a second constant.
+    static func posterSide(longestOutputEdge: Int) -> Int32 {
+        guard longestOutputEdge > 0 else { return 1024 }
+        let scaled = (Int64(longestOutputEdge) * 1024) / 1920
+        return Int32(min(1536, max(384, scaled)))
+    }
     /// Longer world-space edge of a card. The other edge follows the
     /// screenshot's aspect ratio so a terminal is tall and a browser is wide.
     static let cardMaxEdge: Float = 2.35

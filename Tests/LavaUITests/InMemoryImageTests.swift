@@ -81,6 +81,36 @@ final class InMemoryImageTests: XCTestCase {
         XCTAssertNil(Editor.decodeImageData(bytes: []))
     }
 
+    func testEncodeDownsampleKeepsThinBrightLines() throws {
+        // 20×20, one white column on black, then 5× down. Averaging the
+        // encoded bytes (the old box filter) turns that column into ~51
+        // and a terminal poster looks nearest-neighbour. Linear-light
+        // resize keeps it a visible mid-grey.
+        let src = 20
+        var pixels = [UInt8](repeating: 0, count: src * src * 4)
+        for y in 0..<src {
+            let i = (y * src + 2) * 4
+            pixels[i] = 255
+            pixels[i + 1] = 255
+            pixels[i + 2] = 255
+            pixels[i + 3] = 255
+        }
+        let png = try XCTUnwrap(
+            Editor.encodePng(pixels: pixels, width: 20, height: 20, maxSide: 4)
+        )
+        let decoded = try XCTUnwrap(Editor.decodeImageData(bytes: png))
+        XCTAssertEqual(decoded.width, 4)
+        XCTAssertEqual(decoded.height, 4)
+        let peak = decoded.pixels.enumerated()
+            .filter { $0.offset % 4 < 3 }
+            .map(\.element)
+            .max() ?? 0
+        XCTAssertGreaterThan(
+            peak, 80,
+            "thin white on black must survive downsample as mid-grey, not ~51"
+        )
+    }
+
     // ─── Identity ────────────────────────────────────────────────────────────
 
     func testSameBytesGiveTheSameKey() throws {

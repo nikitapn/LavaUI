@@ -10,13 +10,77 @@
 #define STB_IMAGE_IMPLEMENTATION
 #include <stb_image.h>
 
-// Single translation unit for both stb implementations. `Engine::decodeImage`
-// (canvas_engine.cpp) is the only caller of the resizer; it includes the
-// header for declarations and links against the definitions emitted here.
+// Single translation unit for both stb implementations. Callers
+// (`Engine::decodeImage`, `encodeRgbaPng`) include the header for
+// declarations and link against the definitions emitted here.
 #define STB_IMAGE_RESIZE_IMPLEMENTATION
 #include <stb_image_resize2.h>
 
 #define STBI_rgb_alpha 4
+
+namespace {
+
+uint32_t mipLevelCount(uint32_t width, uint32_t height)
+{
+  uint32_t levels = 1;
+  uint32_t dim = std::max(width, height);
+  while (dim > 1) {
+    dim >>= 1;
+    ++levels;
+  }
+  return levels;
+}
+
+/// Uploads RGBA8 as a standalone sampled image, with a mip chain when the
+/// GPU can linearly blit the format. Atlas cells stay 1-level — a coarse
+/// mip would mix neighbouring covers.
+bool createStandaloneTexture(RenderDevice &device, const uint8_t *rgba,
+                             uint32_t width, uint32_t height, VkImage &image,
+                             VmaAllocation &allocation, VkImageView &view)
+{
+  const bool mipsOk =
+    device.formatSupportsLinearBlit(VK_FORMAT_R8G8B8A8_SRGB);
+  const uint32_t mips = mipsOk ? mipLevelCount(width, height) : 1u;
+  const VkDeviceSize imageSize =
+    static_cast<VkDeviceSize>(width) * height * 4;
+
+  VkBuffer stagingBuffer;
+  VmaAllocation stagingAlloc;
+  device.createBuffer(imageSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+                      VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+                        VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                      stagingBuffer, stagingAlloc);
+  void *data = device.mapBuffer(stagingAlloc);
+  std::memcpy(data, rgba, static_cast<size_t>(imageSize));
+  device.unmapBuffer(stagingAlloc);
+
+  VkImageUsageFlags usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT |
+                            VK_IMAGE_USAGE_SAMPLED_BIT;
+  if (mips > 1) usage |= VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+
+  device.createImage(width, height, mips, VK_SAMPLE_COUNT_1_BIT,
+                     VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_TILING_OPTIMAL, usage,
+                     VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, image, allocation);
+  device.transitionImageLayout(image, VK_FORMAT_R8G8B8A8_SRGB,
+                               VK_IMAGE_LAYOUT_UNDEFINED,
+                               VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, mips);
+  device.copyBufferToImage(stagingBuffer, image, width, height);
+  if (mips > 1) {
+    device.generateMipmaps(image, static_cast<int32_t>(width),
+                           static_cast<int32_t>(height), mips);
+  } else {
+    device.transitionImageLayout(image, VK_FORMAT_R8G8B8A8_SRGB,
+                                 VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                                 VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+  }
+  device.destroyBuffer(stagingBuffer, stagingAlloc);
+
+  view = device.createImageView(image, VK_FORMAT_R8G8B8A8_SRGB,
+                                VK_IMAGE_ASPECT_COLOR_BIT, mips);
+  return view != VK_NULL_HANDLE;
+}
+
+}  // namespace
 
 void TextureManager::initialize(RenderDevice& device) {
     std::lock_guard lock(mutex_);
@@ -101,35 +165,13 @@ TextureHandle TextureManager::uploadTexture(const std::string& key,
         return {atlas_.pageView(r.page), atlasId, r.uv0, r.uv1};
     }
 
-    const VkDeviceSize imageSize = static_cast<VkDeviceSize>(width) * height * 4;
-    VkBuffer stagingBuffer;
-    VmaAllocation stagingAlloc;
-    device_->createBuffer(imageSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-                          VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT
-                            | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-                          stagingBuffer, stagingAlloc);
-    void* data = device_->mapBuffer(stagingAlloc);
-    memcpy(data, rgba, static_cast<size_t>(imageSize));
-    device_->unmapBuffer(stagingAlloc);
-
-    VkImage textureImage;
-    VmaAllocation textureAlloc;
-    device_->createImage(width, height, 1, VK_SAMPLE_COUNT_1_BIT,
-                         VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_TILING_OPTIMAL,
-                         VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
-                         VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
-                         textureImage, textureAlloc);
-    device_->transitionImageLayout(textureImage, VK_FORMAT_R8G8B8A8_SRGB,
-                                   VK_IMAGE_LAYOUT_UNDEFINED,
-                                   VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
-    device_->copyBufferToImage(stagingBuffer, textureImage, width, height);
-    device_->transitionImageLayout(textureImage, VK_FORMAT_R8G8B8A8_SRGB,
-                                   VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                                   VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-    device_->destroyBuffer(stagingBuffer, stagingAlloc);
-
-    VkImageView view = device_->createImageView(textureImage, VK_FORMAT_R8G8B8A8_SRGB,
-                                                VK_IMAGE_ASPECT_COLOR_BIT, 1);
+    VkImage textureImage = VK_NULL_HANDLE;
+    VmaAllocation textureAlloc = VK_NULL_HANDLE;
+    VkImageView view = VK_NULL_HANDLE;
+    if (!createStandaloneTexture(*device_, rgba, width, height, textureImage,
+                                 textureAlloc, view)) {
+      return {VK_NULL_HANDLE, 0};
+    }
     auto textureData = std::make_unique<TextureData>();
     textureData->image = textureImage;
     textureData->allocation = textureAlloc;
@@ -207,45 +249,17 @@ TextureHandle TextureManager::loadTexture(const std::string& path) {
         return {atlas_.pageView(r.page), atlasId, r.uv0, r.uv1};
     }
 
-    VkDeviceSize imageSize = texWidth * texHeight * 4;
-
-    // Create staging buffer
-    VkBuffer stagingBuffer;
-    VmaAllocation stagingAlloc;
-    device_->createBuffer(
-        imageSize,
-        VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-        stagingBuffer,
-        stagingAlloc);
-
-    void *data = device_->mapBuffer(stagingAlloc);
-    memcpy(data, pixels, static_cast<size_t>(imageSize));
-    device_->unmapBuffer(stagingAlloc);
-
+    VkImage textureImage = VK_NULL_HANDLE;
+    VmaAllocation textureAlloc = VK_NULL_HANDLE;
+    VkImageView textureImageView = VK_NULL_HANDLE;
+    const bool uploaded = createStandaloneTexture(
+        *device_, pixels, static_cast<uint32_t>(texWidth),
+        static_cast<uint32_t>(texHeight), textureImage, textureAlloc,
+        textureImageView);
     stbi_image_free(pixels);
-
-    // Create texture image
-    VkImage textureImage;
-    VmaAllocation textureAlloc;
-    device_->createImage(texWidth, texHeight, 1, VK_SAMPLE_COUNT_1_BIT,
-                        VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_TILING_OPTIMAL,
-                        VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
-                        VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
-                        textureImage, textureAlloc);
-
-    // Transition image layout and copy from staging buffer
-    device_->transitionImageLayout(textureImage, VK_FORMAT_R8G8B8A8_SRGB,
-                                  VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
-    device_->copyBufferToImage(stagingBuffer, textureImage, texWidth, texHeight);
-    device_->transitionImageLayout(textureImage, VK_FORMAT_R8G8B8A8_SRGB,
-                                  VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-
-    device_->destroyBuffer(stagingBuffer, stagingAlloc);
-
-    // Create image view
-    VkImageView textureImageView = device_->createImageView(textureImage, VK_FORMAT_R8G8B8A8_SRGB, 
-                                                           VK_IMAGE_ASPECT_COLOR_BIT, 1);
+    if (!uploaded) {
+      return {VK_NULL_HANDLE, 0};
+    }
 
     // Create texture data entry
     auto textureData = std::make_unique<TextureData>();

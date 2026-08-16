@@ -7,8 +7,10 @@ namespace canvas {
 
 /// Encodes tightly-or-strided 8-bit RGBA into a PNG.
 ///
-/// `maxSide` > 0 box-filters so the longer encoded edge fits, the same
+/// `maxSide` > 0 downsamples so the longer encoded edge fits, the same
 /// contract `RenderWindow::capturePng` and `CaptureSurface` already have.
+/// The resize is `stbir` in linear light — a box filter in sRGB of a
+/// terminal poster looked like nearest-neighbour.
 /// `outW`/`outH` receive the encoded size. False if the source is empty or
 /// stb refuses to write.
 bool encodeRgbaPng(const uint8_t *rgba, int width, int height, int stride,

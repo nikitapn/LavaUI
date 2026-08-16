@@ -417,6 +417,12 @@ void RenderDevice::createLogicalDevice()
   };
 
   VkPhysicalDeviceFeatures deviceFeatures {};
+  VkPhysicalDeviceFeatures supportedFeatures {};
+  vkGetPhysicalDeviceFeatures(physicalDevice_, &supportedFeatures);
+  if (supportedFeatures.samplerAnisotropy) {
+    deviceFeatures.samplerAnisotropy = VK_TRUE;
+    samplerAnisotropy_ = true;
+  }
 
   VkPhysicalDeviceVulkan12Features descriptorIndexing{
     .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES,
@@ -911,6 +917,10 @@ VkImageView RenderDevice::createImageView(
 
 VkSampler RenderDevice::createTextureSampler()
 {
+  // maxLod used to be 0, so even a mipped image never left level 0. Scene3D
+  // cards sit at ~64° — that is a large dFdx and looks like nearest-neighbour
+  // without a mip chain. 1-level images (atlas pages, glyphs) still clamp to
+  // the one level they have.
   VkSamplerCreateInfo samplerInfo {
     .sType                   = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO,
     .magFilter               = VK_FILTER_LINEAR,
@@ -920,12 +930,14 @@ VkSampler RenderDevice::createTextureSampler()
     .addressModeV            = VK_SAMPLER_ADDRESS_MODE_REPEAT,
     .addressModeW            = VK_SAMPLER_ADDRESS_MODE_REPEAT,
     .mipLodBias              = 0.0f,
-    .anisotropyEnable        = VK_FALSE,
-    .maxAnisotropy           = 1.0f,
+    .anisotropyEnable        = samplerAnisotropy_ ? VK_TRUE : VK_FALSE,
+    .maxAnisotropy           = samplerAnisotropy_
+                                 ? physicalDeviceProperties_.limits.maxSamplerAnisotropy
+                                 : 1.0f,
     .compareEnable           = VK_FALSE,
     .compareOp               = VK_COMPARE_OP_ALWAYS,
     .minLod                  = 0.0f,
-    .maxLod                  = 0.0f,
+    .maxLod                  = VK_LOD_CLAMP_NONE,
     .borderColor             = VK_BORDER_COLOR_INT_OPAQUE_BLACK,
     .unnormalizedCoordinates = VK_FALSE,
   };
@@ -1156,7 +1168,8 @@ void RenderDevice::transitionImageLayout(
   VkImage       image,
   VkFormat      format,
   VkImageLayout oldLayout,
-  VkImageLayout newLayout)
+  VkImageLayout newLayout,
+  uint32_t      mipLevels)
 {
   VkCommandBuffer commandBuffer = beginSingleTimeCommands();
 
@@ -1172,7 +1185,7 @@ void RenderDevice::transitionImageLayout(
         .aspectMask     = static_cast<VkImageAspectFlags>(
           newLayout == VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL ? VK_IMAGE_ASPECT_DEPTH_BIT : VK_IMAGE_ASPECT_COLOR_BIT),
         .baseMipLevel   = 0,
-        .levelCount     = 1,
+        .levelCount     = std::max(1u, mipLevels),
         .baseArrayLayer = 0,
         .layerCount     = 1,
       },
@@ -1366,6 +1379,99 @@ void RenderDevice::copyBufferToImage(
                          &region);
 
   endSingleTimeCommands(commandBuffer);
+}
+
+bool RenderDevice::formatSupportsLinearBlit(VkFormat format) const
+{
+  VkFormatProperties props{};
+  vkGetPhysicalDeviceFormatProperties(physicalDevice_, format, &props);
+  const VkFormatFeatureFlags need =
+    VK_FORMAT_FEATURE_BLIT_SRC_BIT | VK_FORMAT_FEATURE_BLIT_DST_BIT |
+    VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT;
+  return (props.optimalTilingFeatures & need) == need;
+}
+
+void RenderDevice::generateMipmaps(VkImage image, int32_t width, int32_t height,
+                                   uint32_t mipLevels)
+{
+  if (image == VK_NULL_HANDLE || width < 1 || height < 1 || mipLevels < 1) {
+    return;
+  }
+
+  VkCommandBuffer cmd = beginSingleTimeCommands();
+
+  VkImageMemoryBarrier barrier{
+    .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+    .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+    .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+    .image = image,
+    .subresourceRange =
+      {
+        .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+        .baseMipLevel = 0,
+        .levelCount = 1,
+        .baseArrayLayer = 0,
+        .layerCount = 1,
+      },
+  };
+
+  int32_t mipW = width;
+  int32_t mipH = height;
+  for (uint32_t i = 1; i < mipLevels; ++i) {
+    barrier.subresourceRange.baseMipLevel = i - 1;
+    barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    barrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+    barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    barrier.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                         VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0,
+                         nullptr, 1, &barrier);
+
+    const int32_t nextW = mipW > 1 ? mipW / 2 : 1;
+    const int32_t nextH = mipH > 1 ? mipH / 2 : 1;
+    VkImageBlit blit{};
+    blit.srcOffsets[0] = {0, 0, 0};
+    blit.srcOffsets[1] = {mipW, mipH, 1};
+    blit.srcSubresource = {
+      .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+      .mipLevel = i - 1,
+      .baseArrayLayer = 0,
+      .layerCount = 1,
+    };
+    blit.dstOffsets[0] = {0, 0, 0};
+    blit.dstOffsets[1] = {nextW, nextH, 1};
+    blit.dstSubresource = {
+      .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+      .mipLevel = i,
+      .baseArrayLayer = 0,
+      .layerCount = 1,
+    };
+    vkCmdBlitImage(cmd, image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, image,
+                   VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blit,
+                   VK_FILTER_LINEAR);
+
+    barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+    barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    barrier.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+    barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                         VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr,
+                         0, nullptr, 1, &barrier);
+
+    mipW = nextW;
+    mipH = nextH;
+  }
+
+  barrier.subresourceRange.baseMipLevel = mipLevels - 1;
+  barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+  barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+  barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+  barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+  vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                       VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr, 0,
+                       nullptr, 1, &barrier);
+
+  endSingleTimeCommands(cmd);
 }
 
 void RenderDevice::cleanUp()

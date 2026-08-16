@@ -230,7 +230,7 @@ class RenderWindow {
 
   /// Encode a (sub)region of the current resolve as PNG bytes. `x,y,w,h` in
   /// framebuffer pixels; `w` or `h` <= 0 means full frame. If `maxSide` > 0
-  /// and the longer side exceeds it, box-downsamples so
+  /// and the longer side exceeds it, downsamples so
   /// max(outW, outH) <= maxSide (agent overview / token budget). Reuses the
   /// capture cache when still valid, so several crops share one readback.
   /// False on an empty/invalid region or an encode failure.

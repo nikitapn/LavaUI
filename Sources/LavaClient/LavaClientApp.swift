@@ -240,6 +240,12 @@ public enum LavaClient {
         }
     }
 
+    /// Size last asked of `CreateSurface`. After `fillScreen: true` this is
+    /// the largest enabled output — available before the surface exists.
+    public static var requestedSize: (width: Float, height: Float) {
+        (requestedWidth, requestedHeight)
+    }
+
     /// The compositor's current window list, blocking, without a frame loop.
     ///
     /// For a client that has to *finish* something — capture every poster —

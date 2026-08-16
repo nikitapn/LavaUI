@@ -6,6 +6,10 @@
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #include "stb_image_write.h"
 
+// Declarations only — the implementation lives in texture_manager.cpp
+// next to the other stb units.
+#include <stb_image_resize2.h>
+
 namespace canvas {
 namespace {
 
@@ -54,40 +58,19 @@ bool encodeRgbaPng(const uint8_t *rgba, int width, int height, int stride,
       encW = std::max(1, (width * maxSide + longSide / 2) / longSide);
       encH = std::max(1, (height * maxSide + longSide / 2) / longSide);
       scaled.resize(static_cast<size_t>(encW) * static_cast<size_t>(encH) * 4);
-      for (int dy = 0; dy < encH; ++dy) {
-        const int y0 = dy * height / encH;
-        const int y1 = std::max(y0 + 1, (dy + 1) * height / encH);
-        for (int dx = 0; dx < encW; ++dx) {
-          const int x0 = dx * width / encW;
-          const int x1 = std::max(x0 + 1, (dx + 1) * width / encW);
-          uint32_t sum[4] = {0, 0, 0, 0};
-          uint32_t count = 0;
-          for (int sy = y0; sy < y1; ++sy) {
-            const uint8_t *row =
-                pngPixels + (static_cast<size_t>(sy) * width + x0) * 4;
-            for (int sx = x0; sx < x1; ++sx) {
-              sum[0] += row[0];
-              sum[1] += row[1];
-              sum[2] += row[2];
-              sum[3] += row[3];
-              row += 4;
-              ++count;
-            }
-          }
-          uint8_t *out =
-              scaled.data() + (static_cast<size_t>(dy) * encW + dx) * 4;
-          if (count == 0) {
-            out[0] = out[1] = out[2] = out[3] = 0;
-          } else {
-            out[0] = static_cast<uint8_t>(sum[0] / count);
-            out[1] = static_cast<uint8_t>(sum[1] / count);
-            out[2] = static_cast<uint8_t>(sum[2] / count);
-            out[3] = static_cast<uint8_t>(sum[3] / count);
-          }
-        }
+      // Same sRGB resize the image decoder uses. Averaging encoded bytes
+      // (the old box filter) aliases high-contrast UI — a terminal poster
+      // looked nearest-neighbour even though it was a 5×5 mean.
+      unsigned char *ok = stbir_resize_uint8_srgb(
+          pngPixels, width, height, pngStride, scaled.data(), encW, encH,
+          encW * 4, STBIR_RGBA);
+      if (ok != nullptr) {
+        pngPixels = scaled.data();
+        pngStride = encW * 4;
+      } else {
+        encW = width;
+        encH = height;
       }
-      pngPixels = scaled.data();
-      pngStride = encW * 4;
     }
   }
 
