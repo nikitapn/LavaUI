@@ -346,7 +346,11 @@ struct TaskbarView: View {
         //
         // Horizontal inset only: 10pt on every edge of a 32pt bar left
         // 12pt for the icon and the titles overflowed the row.
-        return VStack(flexGrow: 1, padding: 0) {
+        // `spacing: 0` is load-bearing. The theme default is 8px, and a
+        // gap here is a hole between the painted strip and the work area
+        // — maximized windows start at `reserved` (the 32px strip) and
+        // that 8px is either empty desktop or a black band over them.
+        return VStack(flexGrow: 1, padding: 0, spacing: 0) {
             HStack(height: .pt(MenuSession.stripHeight), padding: 0,
                    alignment: .center, spacing: 10) {
                 // The flame is a top-level menu title, not a separate
@@ -384,6 +388,13 @@ struct TaskbarView: View {
                 CalendarApplet(clockText: clock.text, isOpen: calendarOpenBinding)
             }
             .padding(.horizontal, 10)
+            // Paint 33px of strip colour, reserve 32. Yoga is flush at
+            // y=32; the hairline under the bar is the bottom coverage
+            // of that fill blended in linear light against the clear
+            // rest of this surface (and then over the window). Same
+            // cover-up as LavaTerm's canvas fill at y-1. FIXME: fix
+            // in the quad rasterizer, not here.
+            .frame(height: .pt(MenuSession.stripHeight + 1))
             .background(Theme.current.background)
 
             // Fills the expanded surface so the strip stays top-aligned. Never

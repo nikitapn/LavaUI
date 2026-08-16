@@ -57,13 +57,17 @@ private struct TitleStrip: View {
     let path: String
 
     var body: some View {
-        HStack(padding: 10, alignment: .center, spacing: 10) {
+        HStack(padding: 0, alignment: .center, spacing: 10) {
             if WindowBridge.drawsOwnChrome {
                 WindowControls()
             }
             Text(path, color: Theme.current.textSecondary)
             Spacer()
         }
+        // Horizontal only — 10 on every edge of a 36pt strip was 10px of
+        // empty header under the controls, the same hole the panel hit
+        // when it padded a 32pt bar on all sides.
+        .padding(.horizontal, 10)
         .frame(height: .pt(36))
     }
 }
@@ -178,16 +182,22 @@ struct TerminalCanvas: View {
     }
 
     private func paint(list: DrawList, frame: CanvasFrame) {
-        let pad: Float = 6
-        let usableW = max(0, frame.w - pad * 2)
-        let usableH = max(0, frame.h - pad * 2)
+        // Top inset is the black hairline under the chrome. The canvas
+        // still fills the whole frame with `terminalFill`; only the
+        // cells start lower. Sides and bottom stay padded so glyphs
+        // are not flush to the window edge.
+        let padX: Float = 6
+        let padTop: Float = 4
+        let padBottom: Float = 6
+        let usableW = max(0, frame.w - padX * 2)
+        let usableH = max(0, frame.h - padTop - padBottom)
         let cols = max(1, Int(usableW / cellW))
         let rows = max(1, Int(usableH / cellH))
         session.ensureSize(cols: cols, rows: rows)
 
         let screen = session.screen
-        let originX = frame.x + pad
-        let originY = frame.y + pad
+        let originX = frame.x + padX
+        let originY = frame.y + padTop
 
         // Published for the pointer handlers, which have a pixel and need a
         // cell. Written here because this is where the numbers are decided —
@@ -199,8 +209,15 @@ struct TerminalCanvas: View {
             cols: screen.cols, rows: screen.rows
         )
 
+        // Overlap the chrome by 1px. Yoga is flush (strip y=0 h=36,
+        // canvas y=36 — `layout_tree` agrees). The hairline is the
+        // shared scanline of two rects blended in linear light against
+        // whatever was under the first one's bottom coverage
+        // (`docs/colour-and-blending.md`). FIXME: belongs in the quad
+        // rasterizer (axis-aligned opaque rects should snap, not AA
+        // against a clear neighbour). This just covers the fringe.
         list.rect(
-            x: frame.x, y: frame.y, w: frame.w, h: frame.h,
+            x: frame.x, y: frame.y - 1, w: frame.w, h: frame.h,
             color: TerminalPalette.terminalFill
         )
 
