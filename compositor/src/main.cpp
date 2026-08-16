@@ -648,6 +648,10 @@ struct Server {
   /// what the keyboard is. Re-read on SIGHUP — see `reload_config`.
   lava::Config config;
   std::string configPath;
+  /// Running inside another compositor (inherited `WAYLAND_DISPLAY` /
+  /// `DISPLAY`). Shortcuts then use Alt regardless of `mod-key`, so
+  /// Super+Shift+S and the rest stay with the host.
+  bool nested = false;
 
   uint32_t focusedSurface() const {
     return focusedByWorkspace[workspaces.current];
@@ -2776,21 +2780,32 @@ class SurfaceRegistry : public lava::CompositorHost {
     // and neither is recoverable by typing.
     keyboard.repeatRate = std::clamp(settings.repeatRate, 0, 100);
     keyboard.repeatDelay = std::clamp(settings.repeatDelay, 100, 2000);
-    keyboard.modKey = normalize_mod_key(settings.modKey);
+    // Nested: Alt stays the shortcut mod so we do not steal Super from
+    // the host, and we do not write that override into the shared
+    // `lava.conf` or a SIGHUP of the session compositor would pick it up.
+    if (server_->nested) {
+      keyboard.modKey = "alt";
+    } else {
+      keyboard.modKey = normalize_mod_key(settings.modKey);
+    }
 
     // Every connected client is sent the new keymap by wlroots as a side
     // effect, so this reaches applications that are already running.
     for (Keyboard *device : server_->keyboards) device->applyKeymap(keyboard);
 
-    save({{"keyboard", "layout", keyboard.layout},
-          {"keyboard", "variant", keyboard.variant},
-          {"keyboard", "options", keyboard.options},
-          {"keyboard", "model", keyboard.model},
-          {"keyboard", "rules", keyboard.rules},
-          {"keyboard", "repeat-rate", std::to_string(keyboard.repeatRate)},
-          {"keyboard", "repeat-delay", std::to_string(keyboard.repeatDelay)},
-          {"keyboard", "mod-key", keyboard.modKey}},
-         outError);
+    std::vector<lava::Setting> writes = {
+        {"keyboard", "layout", keyboard.layout},
+        {"keyboard", "variant", keyboard.variant},
+        {"keyboard", "options", keyboard.options},
+        {"keyboard", "model", keyboard.model},
+        {"keyboard", "rules", keyboard.rules},
+        {"keyboard", "repeat-rate", std::to_string(keyboard.repeatRate)},
+        {"keyboard", "repeat-delay", std::to_string(keyboard.repeatDelay)},
+    };
+    if (!server_->nested) {
+      writes.push_back({"keyboard", "mod-key", keyboard.modKey});
+    }
+    save(writes, outError);
   }
 
   void keyboardLayouts(std::vector<LayoutEntry> &out) const override {
@@ -5667,6 +5682,7 @@ void Server::reloadConfig() {
   const std::string previousDevices = config.drmDevices;
   const std::string previousRenderer = config.renderer;
   config = fresh;
+  if (nested) config.keyboard.modKey = "alt";
 
   if (fresh.drmDevices != previousDevices ||
       fresh.renderer != previousRenderer) {
@@ -6659,6 +6675,14 @@ int main() {
   server.configPath = lava::Config::defaultPath();
   server.config = lava::Config::load(server.configPath);
   server.config.applyEnvironment();
+  // After the file: Super on the host and Super in here would both fire
+  // on the same chord, and the host wins. Alt is free. Not written back.
+  server.nested = nested;
+  if (nested) {
+    server.config.keyboard.modKey = "alt";
+    wlr_log(WLR_INFO,
+            "keyboard: nested session, compositor shortcuts use Alt");
+  }
 
   auto *loop = wl_display_get_event_loop(server.display);
   server.backend = wlr_backend_autocreate(loop, &server.session);
