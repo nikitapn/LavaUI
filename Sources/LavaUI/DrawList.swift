@@ -386,6 +386,7 @@ public final class DrawList {
             vertex.v = point.v
             vertex.color = point.color.rgba8
             vertex.textured = point.sampleMode
+            vertex.w = point.w
             appendSpatialVertex(vertex)
         }
         append(

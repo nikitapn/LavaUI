@@ -617,6 +617,9 @@ public struct SpatialGroup3D: View3D {
 
 struct SpatialProjectedVertex {
     var x, y, depth: Float
+    /// Camera-space Z the projection divided by. 1 keeps affine mapping
+    /// (face-on cards); a tilted cover needs the real value.
+    var w: Float = 1
     var u: Float = 0
     var v: Float = 0
     /// 0 = flat color, 1 = sampled texture.
@@ -1010,7 +1013,9 @@ final class SpatialRuntime {
             return SpatialProjectedVertex(
                 x:p.x + style.offsetX,
                 y:p.y + style.offsetY,
-                depth:min(1,p.z + 0.0005),u:uv[index].0,v:uv[index].1,
+                depth:min(1,p.depth + 0.0005),
+                w:p.viewZ,
+                u:uv[index].0,v:uv[index].1,
                 sampleMode:0,color:style.color.opacity(style.opacity)
             )
         }
@@ -1110,7 +1115,8 @@ final class SpatialRuntime {
                     return nil
                 }
                 return SpatialProjectedVertex(
-                    x: p.x, y: p.y, depth: p.z, u: uv[index].0, v: uv[index].1,
+                    x: p.x, y: p.y, depth: p.depth, w: p.viewZ,
+                    u: uv[index].0, v: uv[index].1,
                     sampleMode: face.texture == nil ? 0 : 1, color: color
                 )
             }
@@ -1179,17 +1185,24 @@ final class SpatialRuntime {
         return apply(copy,input)
     }
 
-    private func project(_ p: Vector3, frame: CanvasFrame) -> Vector3? {
+    private struct Projected {
+        var x, y, depth, viewZ: Float
+    }
+
+    private func project(_ p: Vector3, frame: CanvasFrame) -> Projected? {
         let forward = normalized(camera.target - camera.position)
         let right = normalized(cross(forward, [0,1,0]))
         let up = cross(right, forward)
         let delta = p - camera.position
-        let z = dot(delta, forward)
-        guard z > camera.near else { return nil }
+        let viewZ = dot(delta, forward)
+        guard viewZ > camera.near else { return nil }
         let focal = frame.h * 0.5 / tan(camera.fieldOfView.radians * 0.5)
-        return [frame.x + frame.w*0.5 + dot(delta,right)*focal/z,
-                frame.y + frame.h*0.5 - dot(delta,up)*focal/z,
-                min(1, max(0, (z-camera.near)/(camera.far-camera.near)))]
+        return Projected(
+            x: frame.x + frame.w * 0.5 + dot(delta, right) * focal / viewZ,
+            y: frame.y + frame.h * 0.5 - dot(delta, up) * focal / viewZ,
+            depth: min(1, max(0, (viewZ - camera.near) / (camera.far - camera.near))),
+            viewZ: viewZ
+        )
     }
 }
 

@@ -6,6 +6,7 @@ layout(location = 1) in vec2 inDepth;
 layout(location = 2) in vec4 inColor;
 layout(location = 3) in vec2 inAux;
 layout(location = 4) in uint inTextureIndex;
+layout(location = 5) in float inW;
 
 layout(push_constant) uniform Push {
   vec2 viewport;
@@ -29,5 +30,10 @@ void main() {
   vec2 screen = (inPos - center) * z + center + pc.pan;
   vec2 ndc = vec2(screen.x / pc.viewport.x * 2.0 - 1.0,
                   screen.y / pc.viewport.y * 2.0 - 1.0);
-  gl_Position = vec4(ndc, clamp(inDepth.x, 0.0, 1.0), 1.0);
+  // Producer already divided x/y by camera Z. Putting that Z in clip w
+  // (and pre-multiplying ndc/depth) makes the rasterizer interpolate
+  // UVs in the plane — without it a 64° cover looks affine-mapped.
+  float w = inW > 0.0 ? inW : 1.0;
+  float depth = clamp(inDepth.x, 0.0, 1.0);
+  gl_Position = vec4(ndc * w, depth * w, w);
 }

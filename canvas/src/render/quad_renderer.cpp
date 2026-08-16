@@ -372,12 +372,13 @@ void QuadRenderer::createSpatialPipeline(VkRenderPass renderPass,
     VkPipelineShaderStageCreateInfo{.sType=VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
       .stage=VK_SHADER_STAGE_FRAGMENT_BIT,.module=frag,.pName="main"}};
   VkVertexInputBindingDescription binding{0, sizeof(Vertex), VK_VERTEX_INPUT_RATE_VERTEX};
-  std::array<VkVertexInputAttributeDescription, 5> attrs{
+  std::array<VkVertexInputAttributeDescription, 6> attrs{
     VkVertexInputAttributeDescription{0,0,VK_FORMAT_R32G32_SFLOAT,offsetof(Vertex,pos)},
     VkVertexInputAttributeDescription{1,0,VK_FORMAT_R32G32_SFLOAT,offsetof(Vertex,local)},
     VkVertexInputAttributeDescription{2,0,VK_FORMAT_R8G8B8A8_UNORM,offsetof(Vertex,color)},
     VkVertexInputAttributeDescription{3,0,VK_FORMAT_R32G32_SFLOAT,offsetof(Vertex,halfSize)},
-    VkVertexInputAttributeDescription{4,0,VK_FORMAT_R32_UINT,offsetof(Vertex,textureIndex)}};
+    VkVertexInputAttributeDescription{4,0,VK_FORMAT_R32_UINT,offsetof(Vertex,textureIndex)},
+    VkVertexInputAttributeDescription{5,0,VK_FORMAT_R32_SFLOAT,offsetof(Vertex,radius)}};
   VkPipelineVertexInputStateCreateInfo vi{.sType=VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
     .vertexBindingDescriptionCount=1,.pVertexBindingDescriptions=&binding,
     .vertexAttributeDescriptionCount=static_cast<uint32_t>(attrs.size()),.pVertexAttributeDescriptions=attrs.data()};
@@ -1046,7 +1047,10 @@ void QuadRenderer::pushSpatialTriangles(const canvas::SpatialVertex *points,
     vertices_.push_back(Vertex{
       .pos={points[i].x + offset.x, points[i].y + offset.y},
       .local={points[i].z,uv0.x+points[i].u*(uv1.x-uv0.x)},
-      .halfSize={points[i].textured,uv0.y+points[i].v*(uv1.y-uv0.y)},.radius=0.f,
+      .halfSize={points[i].textured,uv0.y+points[i].v*(uv1.y-uv0.y)},
+      // Camera-space Z → clip w. 0 would collapse the vertex; the producer
+      // writes 1 when it has no perspective (a 2D-looking card).
+      .radius=points[i].w > 0.f ? points[i].w : 1.f,
       .color=faded ? withScaledAlpha(points[i].color, opacity) : points[i].color,
       .kind=static_cast<uint32_t>(Kind::Mesh),
       .textureIndex=textureSlot(textureView)});

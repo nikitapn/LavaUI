@@ -306,8 +306,12 @@ struct MeshVertex {
 static_assert(sizeof(MeshVertex) == 8, "MeshVertex must stay packed");
 
 /// One already-projected spatial vertex. x/y are window pixels and z is
-/// Vulkan depth in 0...1. Projection stays in the UI scene layer for now;
-/// the dedicated GPU pipeline owns depth testing and ordered composition.
+/// Vulkan depth in 0...1. `w` is the camera-space Z the producer divided
+/// by — the vertex shader puts it in clip w so UVs interpolate in the
+/// plane, not in screen space. A 64° album card without that looks like
+/// the cover was squeezed onto the near edge (affine mapping).
+/// Projection stays in the UI scene layer; the GPU pipeline owns depth
+/// testing and ordered composition.
 struct SpatialVertex {
   float x = 0.f;
   float y = 0.f;
@@ -316,8 +320,9 @@ struct SpatialVertex {
   float v = 0.f;
   uint32_t color = 0xffffffffu;
   float textured = 0.f;
+  float w = 1.f;
 };
-static_assert(sizeof(SpatialVertex) == 28, "SpatialVertex must stay packed");
+static_assert(sizeof(SpatialVertex) == 32, "SpatialVertex must stay packed");
 
 /// The parameters of one gradient, pointed at by `LinearGradientRect.param`.
 ///
