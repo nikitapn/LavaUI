@@ -1866,6 +1866,75 @@ class SurfaceRegistry : public lava::CompositorHost {
     if (renderer_) renderer_->releaseImage(key);
   }
 
+  /// Periodic VRAM dump under `LAVA_VRAM_STATS`. Called once per output frame;
+  /// the interval and the decision to print at all live in canvas.
+  void reportVramIfDue() {
+    if (renderer_) renderer_->reportVramIfDue();
+  }
+
+  /// The GPU report, with every canvas window named.
+  ///
+  /// Naming is the whole value added here. One window on screen is up to four
+  /// canvas windows — the contents, the title bar, the drop shadow and the
+  /// frost under it — and they are wildly different sizes: a frost surface is
+  /// output-sized where the contents are window-sized. A report that said
+  /// "window 7: 128 MiB" would send the reader looking for a client that owns
+  /// none of it.
+  canvas::GpuReport gpuReport() override {
+    canvas::GpuReport report;
+    if (renderer_ == nullptr) return report;
+    report = renderer_->gpuReport();
+
+    std::unordered_map<uint32_t, std::string> names;
+    const auto name = [&](const std::unique_ptr<lava::CanvasSurface> &surface,
+                          const ClientSurface &owner, const char *role) {
+      if (!surface) return;
+      std::string label = owner.title.empty() ? owner.appId : owner.title;
+      if (label.empty()) label = "surface " + std::to_string(owner.id);
+      names[surface->canvasWindowId()] =
+        label + " (" + role + ", surface " + std::to_string(owner.id) + ")";
+    };
+    for (const auto &surface : surfaces_) {
+      name(surface->canvas, *surface, "contents");
+      name(surface->bar, *surface, "title bar");
+      name(surface->shadow, *surface, "shadow");
+      name(surface->blurCanvas, *surface, "backdrop frost");
+    }
+    for (canvas::GpuWindowReport &window : report.windows) {
+      if (auto found = names.find(window.id); found != names.end()) {
+        window.title = found->second;
+      }
+    }
+    return report;
+  }
+
+  /// Writes the atlas pages to `dir` as PNGs, filling in their paths.
+  size_t dumpAtlases(const std::string &dir, canvas::GpuReport &report) {
+    return renderer_ ? renderer_->dumpAtlases(dir, report) : 0;
+  }
+
+  std::vector<std::string> dumpAtlasImages(const std::string &directory,
+                                           std::string &outError) override {
+    if (renderer_ == nullptr) {
+      outError = "this compositor has no canvas device";
+      return {};
+    }
+    // The report is what says which pages exist; dumping fills in where each
+    // one went. Built here rather than taken from the caller so a dump cannot
+    // be asked to write pages that have since been replaced by a growth.
+    canvas::GpuReport report = gpuReport();
+    if (report.atlases.empty()) return {};  // nothing to write is not an error
+    const size_t written = dumpAtlases(directory, report);
+    std::vector<std::string> paths;
+    for (const canvas::GpuAtlasPage &page : report.atlases) {
+      if (!page.pngPath.empty()) paths.push_back(page.pngPath);
+    }
+    if (written == 0) {
+      outError = "no page could be read back or written";
+    }
+    return paths;
+  }
+
   uint32_t createSurface(const std::string &arenaId, uint32_t width,
                          uint32_t height, const std::string &title,
                          bool decorated, const std::string &appId) override {
@@ -5089,6 +5158,10 @@ void Output::on_frame(wl_listener *listener, void *) {
   lava::FrameProbe::record(0, lava::FrameProbe::Stage::Render, started);
   lava::FrameProbe::frame(0);
   lava::FrameProbe::report();
+  // Same cadence as the frame probe and the same deal: off unless asked for.
+  if (output->server->surfaces != nullptr) {
+    output->server->surfaces->reportVramIfDue();
+  }
   timespec now{};
   clock_gettime(CLOCK_MONOTONIC, &now);
   wlr_scene_output_send_frame_done(output->scene_output, &now);
@@ -7772,6 +7845,8 @@ int main() {
     sigset_t mask;
     sigemptyset(&mask);
     sigaddset(&mask, SIGHUP);
+    // SIGUSR2 for the same reason — it dumps the GPU report through the loop.
+    sigaddset(&mask, SIGUSR2);
     // SIGCHLD for the same reason, and it matters more: the compositor is the
     // parent of the panel and the dock, and `ShellSupervisor` learns one died
     // by reading this off the loop's signalfd. Unblocked, the default
@@ -8012,6 +8087,21 @@ int main() {
       wl_display_get_event_loop(server.display), SIGHUP,
       [](int, void *data) {
         static_cast<Server *>(data)->reloadConfig();
+        return 0;
+      },
+      &server);
+
+  // `kill -USR2` dumps the GPU report. Worth a signal of its own rather than
+  // only a periodic one: the periodic dump rides the output frame, and a desktop
+  // with nothing animating on it produces no frames — so the moment you most
+  // want to know what is holding 1.4 GB is the moment the timer stops firing.
+  wl_event_loop_add_signal(
+      wl_display_get_event_loop(server.display), SIGUSR2,
+      [](int, void *data) {
+        auto *server = static_cast<Server *>(data);
+        if (server->surfaces == nullptr) return 0;
+        canvas::printGpuReport(server->surfaces->gpuReport(), std::cerr,
+                               /*verbose=*/true);
         return 0;
       },
       &server);

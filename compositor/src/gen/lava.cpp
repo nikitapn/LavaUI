@@ -746,6 +746,27 @@ public:
   float& _2() noexcept { return base()._2;}
 };
 
+struct lava_M29 {
+  ::lava::flat::GpuReport _1;
+};
+
+class lava_M29_Direct {
+  ::nprpc::flat_buffer& buffer_;
+  const std::uint32_t offset_;
+
+  auto& base() noexcept { return *reinterpret_cast<lava_M29*>(reinterpret_cast<std::byte*>(buffer_.data().data()) + offset_); }
+  auto const& base() const noexcept { return *reinterpret_cast<const lava_M29*>(reinterpret_cast<const std::byte*>(buffer_.data().data()) + offset_); }
+public:
+  uint32_t offset() const noexcept { return offset_; }
+  void* __data() noexcept { return (void*)&base(); }
+  lava_M29_Direct(::nprpc::flat_buffer& buffer, std::uint32_t offset)
+    : buffer_(buffer)
+    , offset_(offset)
+  {
+  }
+  auto _1() noexcept { return ::lava::flat::GpuReport_Direct(buffer_, offset_ + offsetof(lava_M29, _1)); }
+};
+
 
 bool check_1S2Fu323Fu324Fu32(::nprpc::flat_buffer& buf, lava_M1_Direct& ia) {
   if (static_cast<std::uint32_t>(buf.size()) < ia.offset() + 20) goto check_failed;
@@ -3822,6 +3843,328 @@ Compositor::SetBackdropBlurAsync(uint32_t surfaceId, float radius, std::stop_tok
   }
 }
 
+GpuReport Compositor::GetGpuReport() {
+  auto& __arena = ::nprpc::impl::tls_bump_arena();
+  __arena.reset();
+  ::nprpc::flat_buffer buf;
+  buf.set_arena(&__arena);
+  auto session = ::nprpc::impl::g_rpc->get_session(this->get_endpoint());
+  std::size_t __wire_size = 32;
+  if (!::nprpc::impl::g_rpc->prepare_zero_copy_buffer(session->ctx(), buf, __wire_size))
+    buf.prepare(__wire_size);
+  {
+    buf.commit(32);
+    static_cast<::nprpc::impl::Header*>(buf.data().data())->msg_id = ::nprpc::impl::MessageId::FunctionCall;
+  static_cast<::nprpc::impl::Header*>(buf.data().data())->msg_type =::nprpc::impl::MessageType::Request;
+  }
+  ::nprpc::impl::flat::CallHeader_Direct __ch(buf, sizeof(::nprpc::impl::Header));
+  __ch.object_id() = this->object_id();
+  __ch.poa_idx() = this->poa_idx();
+  __ch.interface_idx() = interface_idx_;
+  __ch.function_idx() = 47;
+  static_cast<::nprpc::impl::Header*>(buf.data().data())->size = static_cast<uint32_t>(buf.size());
+  session->send_receive(buf, this->get_timeout());
+  auto std_reply = ::nprpc::impl::handle_standart_reply(buf);
+  if (std_reply != -1) {
+    throw ::nprpc::Exception("Unknown Error");
+  }
+  lava_M29_Direct out(buf, sizeof(::nprpc::impl::Header));
+    GpuReport __ret_value;
+    __ret_value.deviceName = (std::string_view)out._1().deviceName();
+    __ret_value.samples = out._1().samples();
+    __ret_value.maxSamples = out._1().maxSamples();
+    __ret_value.heapUsageBytes = out._1().heapUsageBytes();
+    __ret_value.heapBudgetBytes = out._1().heapBudgetBytes();
+    __ret_value.heapSizeBytes = out._1().heapSizeBytes();
+    __ret_value.vmaAllocatedBytes = out._1().vmaAllocatedBytes();
+    __ret_value.vmaBlockBytes = out._1().vmaBlockBytes();
+    __ret_value.ownBytes = out._1().ownBytes();
+    __ret_value.foreignBytes = out._1().foreignBytes();
+    __ret_value.retiringBytes = out._1().retiringBytes();
+    {
+      auto span = out._1().windows();
+      __ret_value.windows.resize(span.size());
+      auto it3 = std::begin(__ret_value.windows);
+      for (auto e : span) {
+        (*it3).id = e.id();
+        (*it3).title = (std::string_view)e.title();
+        (*it3).width = e.width();
+        (*it3).height = e.height();
+        (*it3).samples = e.samples();
+        (*it3).bytes = e.bytes();
+        (*it3).presenting = (bool)e.presenting();
+        ++it3;
+      }
+    }
+    {
+      auto span = out._1().allocations();
+      __ret_value.allocations.resize(span.size());
+      auto it3 = std::begin(__ret_value.allocations);
+      for (auto e : span) {
+        (*it3).kind = e.kind();
+        (*it3).category = (std::string_view)e.category();
+        (*it3).windowId = e.windowId();
+        (*it3).detail = (std::string_view)e.detail();
+        (*it3).bytes = e.bytes();
+        (*it3).isImage = (bool)e.isImage();
+        (*it3).width = e.width();
+        (*it3).height = e.height();
+        (*it3).samples = e.samples();
+        (*it3).mipLevels = e.mipLevels();
+        (*it3).retiring = (bool)e.retiring();
+        (*it3).foreign = (bool)e.foreign();
+        ++it3;
+      }
+    }
+    {
+      auto span = out._1().atlases();
+      __ret_value.atlases.resize(span.size());
+      auto it3 = std::begin(__ret_value.atlases);
+      for (auto e : span) {
+        (*it3).kind = e.kind();
+        (*it3).page = e.page();
+        (*it3).width = e.width();
+        (*it3).height = e.height();
+        (*it3).bytes = e.bytes();
+        (*it3).fillPercent = e.fillPercent();
+        (*it3).generation = e.generation();
+        (*it3).glyphs = e.glyphs();
+        (*it3).faces = e.faces();
+        (*it3).slotsUsed = e.slotsUsed();
+        (*it3).slotsTotal = e.slotsTotal();
+        (*it3).cellSize = e.cellSize();
+        (*it3).pngPath = (std::string_view)e.pngPath();
+        ++it3;
+      }
+    }
+    {
+      auto span = out._1().textures();
+      __ret_value.textures.resize(span.size());
+      auto it3 = std::begin(__ret_value.textures);
+      for (auto e : span) {
+        (*it3).key = (std::string_view)e.key();
+        (*it3).bytes = e.bytes();
+        (*it3).width = e.width();
+        (*it3).height = e.height();
+        (*it3).refCount = e.refCount();
+        (*it3).windowPins = e.windowPins();
+        (*it3).atlased = (bool)e.atlased();
+        (*it3).dormant = (bool)e.dormant();
+        ++it3;
+      }
+    }
+    __ret_value.textureCount = out._1().textureCount();
+    __ret_value.textureBytes = out._1().textureBytes();
+    __ret_value.dormantBytes = out._1().dormantBytes();
+    __ret_value.dormantBudgetBytes = out._1().dormantBudgetBytes();
+    __ret_value.cacheHits = out._1().cacheHits();
+    __ret_value.cacheEvictions = out._1().cacheEvictions();
+  return __ret_value;
+}
+
+::nprpc::Task<GpuReport>
+Compositor::GetGpuReportAsync(std::stop_token st) {
+  if (st.stop_requested()) throw nprpc::OperationCancelled();
+  ::nprpc::flat_buffer buf;
+  auto session = ::nprpc::impl::g_rpc->get_session(this->get_endpoint());
+  std::size_t __wire_size = 32;
+  if (!::nprpc::impl::g_rpc->prepare_zero_copy_buffer(session->ctx(), buf, __wire_size))
+    buf.prepare(__wire_size);
+  {
+    buf.commit(32);
+    static_cast<::nprpc::impl::Header*>(buf.data().data())->msg_id = ::nprpc::impl::MessageId::FunctionCall;
+  static_cast<::nprpc::impl::Header*>(buf.data().data())->msg_type =::nprpc::impl::MessageType::Request;
+  }
+  ::nprpc::impl::flat::CallHeader_Direct __ch(buf, sizeof(::nprpc::impl::Header));
+  __ch.object_id() = this->object_id();
+  __ch.poa_idx() = this->poa_idx();
+  __ch.interface_idx() = interface_idx_;
+  __ch.function_idx() = 47;
+  static_cast<::nprpc::impl::Header*>(buf.data().data())->size = static_cast<uint32_t>(buf.size());
+  co_await session->send_receive_coro(buf, this->get_timeout(), std::move(st));
+  auto std_reply = ::nprpc::impl::handle_standart_reply(buf);
+  if (std_reply != -1) {
+    throw ::nprpc::Exception("Unknown Error");
+  }
+  lava_M29_Direct out(buf, sizeof(::nprpc::impl::Header));
+    GpuReport __ret_value;
+    __ret_value.deviceName = (std::string_view)out._1().deviceName();
+    __ret_value.samples = out._1().samples();
+    __ret_value.maxSamples = out._1().maxSamples();
+    __ret_value.heapUsageBytes = out._1().heapUsageBytes();
+    __ret_value.heapBudgetBytes = out._1().heapBudgetBytes();
+    __ret_value.heapSizeBytes = out._1().heapSizeBytes();
+    __ret_value.vmaAllocatedBytes = out._1().vmaAllocatedBytes();
+    __ret_value.vmaBlockBytes = out._1().vmaBlockBytes();
+    __ret_value.ownBytes = out._1().ownBytes();
+    __ret_value.foreignBytes = out._1().foreignBytes();
+    __ret_value.retiringBytes = out._1().retiringBytes();
+    {
+      auto span = out._1().windows();
+      __ret_value.windows.resize(span.size());
+      auto it3 = std::begin(__ret_value.windows);
+      for (auto e : span) {
+        (*it3).id = e.id();
+        (*it3).title = (std::string_view)e.title();
+        (*it3).width = e.width();
+        (*it3).height = e.height();
+        (*it3).samples = e.samples();
+        (*it3).bytes = e.bytes();
+        (*it3).presenting = (bool)e.presenting();
+        ++it3;
+      }
+    }
+    {
+      auto span = out._1().allocations();
+      __ret_value.allocations.resize(span.size());
+      auto it3 = std::begin(__ret_value.allocations);
+      for (auto e : span) {
+        (*it3).kind = e.kind();
+        (*it3).category = (std::string_view)e.category();
+        (*it3).windowId = e.windowId();
+        (*it3).detail = (std::string_view)e.detail();
+        (*it3).bytes = e.bytes();
+        (*it3).isImage = (bool)e.isImage();
+        (*it3).width = e.width();
+        (*it3).height = e.height();
+        (*it3).samples = e.samples();
+        (*it3).mipLevels = e.mipLevels();
+        (*it3).retiring = (bool)e.retiring();
+        (*it3).foreign = (bool)e.foreign();
+        ++it3;
+      }
+    }
+    {
+      auto span = out._1().atlases();
+      __ret_value.atlases.resize(span.size());
+      auto it3 = std::begin(__ret_value.atlases);
+      for (auto e : span) {
+        (*it3).kind = e.kind();
+        (*it3).page = e.page();
+        (*it3).width = e.width();
+        (*it3).height = e.height();
+        (*it3).bytes = e.bytes();
+        (*it3).fillPercent = e.fillPercent();
+        (*it3).generation = e.generation();
+        (*it3).glyphs = e.glyphs();
+        (*it3).faces = e.faces();
+        (*it3).slotsUsed = e.slotsUsed();
+        (*it3).slotsTotal = e.slotsTotal();
+        (*it3).cellSize = e.cellSize();
+        (*it3).pngPath = (std::string_view)e.pngPath();
+        ++it3;
+      }
+    }
+    {
+      auto span = out._1().textures();
+      __ret_value.textures.resize(span.size());
+      auto it3 = std::begin(__ret_value.textures);
+      for (auto e : span) {
+        (*it3).key = (std::string_view)e.key();
+        (*it3).bytes = e.bytes();
+        (*it3).width = e.width();
+        (*it3).height = e.height();
+        (*it3).refCount = e.refCount();
+        (*it3).windowPins = e.windowPins();
+        (*it3).atlased = (bool)e.atlased();
+        (*it3).dormant = (bool)e.dormant();
+        ++it3;
+      }
+    }
+    __ret_value.textureCount = out._1().textureCount();
+    __ret_value.textureBytes = out._1().textureBytes();
+    __ret_value.dormantBytes = out._1().dormantBytes();
+    __ret_value.dormantBudgetBytes = out._1().dormantBudgetBytes();
+    __ret_value.cacheHits = out._1().cacheHits();
+    __ret_value.cacheEvictions = out._1().cacheEvictions();
+  co_return __ret_value;
+}
+
+std::vector<std::string> Compositor::DumpAtlasImages(const std::string& directory) {
+  auto& __arena = ::nprpc::impl::tls_bump_arena();
+  __arena.reset();
+  ::nprpc::flat_buffer buf;
+  buf.set_arena(&__arena);
+  auto session = ::nprpc::impl::g_rpc->get_session(this->get_endpoint());
+  std::size_t __wire_size = 40;
+  __wire_size = ::nprpc::flat::grow_size(__wire_size, 1, static_cast<std::size_t>(directory.size()));
+  if (!::nprpc::impl::g_rpc->prepare_zero_copy_buffer(session->ctx(), buf, __wire_size))
+    buf.prepare(__wire_size);
+  {
+    buf.commit(40);
+    static_cast<::nprpc::impl::Header*>(buf.data().data())->msg_id = ::nprpc::impl::MessageId::FunctionCall;
+  static_cast<::nprpc::impl::Header*>(buf.data().data())->msg_type =::nprpc::impl::MessageType::Request;
+  }
+  ::nprpc::impl::flat::CallHeader_Direct __ch(buf, sizeof(::nprpc::impl::Header));
+  __ch.object_id() = this->object_id();
+  __ch.poa_idx() = this->poa_idx();
+  __ch.interface_idx() = interface_idx_;
+  __ch.function_idx() = 48;
+  lava_M19_Direct _(buf,32);
+  _._1(directory);
+  static_cast<::nprpc::impl::Header*>(buf.data().data())->size = static_cast<uint32_t>(buf.size());
+  session->send_receive(buf, this->get_timeout());
+  auto std_reply = ::nprpc::impl::handle_standart_reply(buf);
+  if (std_reply == 1) lava_throw_exception(buf);
+  if (std_reply != -1) {
+    throw ::nprpc::Exception("Unknown Error");
+  }
+  lava_M23_Direct out(buf, sizeof(::nprpc::impl::Header));
+    std::vector<std::string> __ret_value;
+    {
+      auto span = out._1_d()();
+      __ret_value.resize(span.size());
+      auto it3 = std::begin(__ret_value);
+      for (auto e : span) {
+        (*it3) = (std::string_view)e();
+        ++it3;
+      }
+    }
+  return __ret_value;
+}
+
+::nprpc::Task<std::vector<std::string>>
+Compositor::DumpAtlasImagesAsync(const std::string& directory, std::stop_token st) {
+  if (st.stop_requested()) throw nprpc::OperationCancelled();
+  ::nprpc::flat_buffer buf;
+  auto session = ::nprpc::impl::g_rpc->get_session(this->get_endpoint());
+  std::size_t __wire_size = 40;
+  __wire_size = ::nprpc::flat::grow_size(__wire_size, 1, static_cast<std::size_t>(directory.size()));
+  if (!::nprpc::impl::g_rpc->prepare_zero_copy_buffer(session->ctx(), buf, __wire_size))
+    buf.prepare(__wire_size);
+  {
+    buf.commit(40);
+    static_cast<::nprpc::impl::Header*>(buf.data().data())->msg_id = ::nprpc::impl::MessageId::FunctionCall;
+  static_cast<::nprpc::impl::Header*>(buf.data().data())->msg_type =::nprpc::impl::MessageType::Request;
+  }
+  ::nprpc::impl::flat::CallHeader_Direct __ch(buf, sizeof(::nprpc::impl::Header));
+  __ch.object_id() = this->object_id();
+  __ch.poa_idx() = this->poa_idx();
+  __ch.interface_idx() = interface_idx_;
+  __ch.function_idx() = 48;
+  lava_M19_Direct _(buf,32);
+  _._1(directory);
+  static_cast<::nprpc::impl::Header*>(buf.data().data())->size = static_cast<uint32_t>(buf.size());
+  co_await session->send_receive_coro(buf, this->get_timeout(), std::move(st));
+  auto std_reply = ::nprpc::impl::handle_standart_reply(buf);
+  if (std_reply == 1) lava_throw_exception(buf);
+  if (std_reply != -1) {
+    throw ::nprpc::Exception("Unknown Error");
+  }
+  lava_M23_Direct out(buf, sizeof(::nprpc::impl::Header));
+    std::vector<std::string> __ret_value;
+    {
+      auto span = out._1_d()();
+      __ret_value.resize(span.size());
+      auto it3 = std::begin(__ret_value);
+      for (auto e : span) {
+        (*it3) = (std::string_view)e();
+        ++it3;
+      }
+    }
+  co_return __ret_value;
+}
+
 void ICompositor_Servant::dispatch(::nprpc::SessionContext& ctx, [[maybe_unused]] bool from_parent) {
   assert(ctx.rx_buffer != nullptr);
   auto* header = static_cast<::nprpc::impl::Header*>(ctx.rx_buffer->data().data());
@@ -5297,6 +5640,190 @@ void ICompositor_Servant::dispatch(::nprpc::SessionContext& ctx, [[maybe_unused]
       ::nprpc::impl::make_simple_answer(ctx, nprpc::impl::MessageId::Success);
       break;
     }
+    case 47: {
+      GpuReport __ret_val;
+      __ret_val = GetGpuReport();
+      assert(ctx.tx_buffer != nullptr);
+      auto& obuf = *ctx.tx_buffer;
+      obuf.consume(obuf.size());
+      std::size_t __wire_size = 176;
+      __wire_size = ::nprpc::flat::grow_size(__wire_size, 1, static_cast<std::size_t>(__ret_val.deviceName.size()));
+      __wire_size = ::nprpc::flat::grow_size(__wire_size, 8, static_cast<std::size_t>(__ret_val.windows.size()) * 40);
+      for (auto const& __m_elem : __ret_val.windows) {
+        __wire_size = ::nprpc::flat::grow_size(__wire_size, 1, static_cast<std::size_t>(__m_elem.title.size()));
+      }
+      __wire_size = ::nprpc::flat::grow_size(__wire_size, 8, static_cast<std::size_t>(__ret_val.allocations.size()) * 56);
+      for (auto const& __m_elem : __ret_val.allocations) {
+        __wire_size = ::nprpc::flat::grow_size(__wire_size, 1, static_cast<std::size_t>(__m_elem.category.size()));
+        __wire_size = ::nprpc::flat::grow_size(__wire_size, 1, static_cast<std::size_t>(__m_elem.detail.size()));
+      }
+      __wire_size = ::nprpc::flat::grow_size(__wire_size, 8, static_cast<std::size_t>(__ret_val.atlases.size()) * 64);
+      for (auto const& __m_elem : __ret_val.atlases) {
+        __wire_size = ::nprpc::flat::grow_size(__wire_size, 1, static_cast<std::size_t>(__m_elem.pngPath.size()));
+      }
+      __wire_size = ::nprpc::flat::grow_size(__wire_size, 8, static_cast<std::size_t>(__ret_val.textures.size()) * 40);
+      for (auto const& __m_elem : __ret_val.textures) {
+        __wire_size = ::nprpc::flat::grow_size(__wire_size, 1, static_cast<std::size_t>(__m_elem.key.size()));
+      }
+      if (!::nprpc::impl::g_rpc->prepare_zero_copy_buffer(ctx, obuf, __wire_size))
+        obuf.prepare(__wire_size);
+      obuf.commit(176);
+      lava_M29_Direct oa(obuf,16);
+      oa._1().deviceName(__ret_val.deviceName);
+      oa._1().samples() = __ret_val.samples;
+      oa._1().maxSamples() = __ret_val.maxSamples;
+      oa._1().heapUsageBytes() = __ret_val.heapUsageBytes;
+      oa._1().heapBudgetBytes() = __ret_val.heapBudgetBytes;
+      oa._1().heapSizeBytes() = __ret_val.heapSizeBytes;
+      oa._1().vmaAllocatedBytes() = __ret_val.vmaAllocatedBytes;
+      oa._1().vmaBlockBytes() = __ret_val.vmaBlockBytes;
+      oa._1().ownBytes() = __ret_val.ownBytes;
+      oa._1().foreignBytes() = __ret_val.foreignBytes;
+      oa._1().retiringBytes() = __ret_val.retiringBytes;
+      oa._1().windows(static_cast<uint32_t>(__ret_val.windows.size()));
+      {
+        auto span = oa._1().windows();
+        auto it = __ret_val.windows.begin();
+        for (auto e : span) {
+          auto __ptr = ::nprpc::make_wrapper1(*it);
+            e.id() = __ptr->id;
+            e.title(__ptr->title);
+            e.width() = __ptr->width;
+            e.height() = __ptr->height;
+            e.samples() = __ptr->samples;
+            e.bytes() = __ptr->bytes;
+            e.presenting() = __ptr->presenting;
+          ++it;
+        }
+      }
+      oa._1().allocations(static_cast<uint32_t>(__ret_val.allocations.size()));
+      {
+        auto span = oa._1().allocations();
+        auto it = __ret_val.allocations.begin();
+        for (auto e : span) {
+          auto __ptr = ::nprpc::make_wrapper1(*it);
+            e.kind() = __ptr->kind;
+            e.category(__ptr->category);
+            e.windowId() = __ptr->windowId;
+            e.detail(__ptr->detail);
+            e.bytes() = __ptr->bytes;
+            e.isImage() = __ptr->isImage;
+            e.width() = __ptr->width;
+            e.height() = __ptr->height;
+            e.samples() = __ptr->samples;
+            e.mipLevels() = __ptr->mipLevels;
+            e.retiring() = __ptr->retiring;
+            e.foreign() = __ptr->foreign;
+          ++it;
+        }
+      }
+      oa._1().atlases(static_cast<uint32_t>(__ret_val.atlases.size()));
+      {
+        auto span = oa._1().atlases();
+        auto it = __ret_val.atlases.begin();
+        for (auto e : span) {
+          auto __ptr = ::nprpc::make_wrapper1(*it);
+            e.kind() = __ptr->kind;
+            e.page() = __ptr->page;
+            e.width() = __ptr->width;
+            e.height() = __ptr->height;
+            e.bytes() = __ptr->bytes;
+            e.fillPercent() = __ptr->fillPercent;
+            e.generation() = __ptr->generation;
+            e.glyphs() = __ptr->glyphs;
+            e.faces() = __ptr->faces;
+            e.slotsUsed() = __ptr->slotsUsed;
+            e.slotsTotal() = __ptr->slotsTotal;
+            e.cellSize() = __ptr->cellSize;
+            e.pngPath(__ptr->pngPath);
+          ++it;
+        }
+      }
+      oa._1().textures(static_cast<uint32_t>(__ret_val.textures.size()));
+      {
+        auto span = oa._1().textures();
+        auto it = __ret_val.textures.begin();
+        for (auto e : span) {
+          auto __ptr = ::nprpc::make_wrapper1(*it);
+            e.key(__ptr->key);
+            e.bytes() = __ptr->bytes;
+            e.width() = __ptr->width;
+            e.height() = __ptr->height;
+            e.refCount() = __ptr->refCount;
+            e.windowPins() = __ptr->windowPins;
+            e.atlased() = __ptr->atlased;
+            e.dormant() = __ptr->dormant;
+          ++it;
+        }
+      }
+      oa._1().textureCount() = __ret_val.textureCount;
+      oa._1().textureBytes() = __ret_val.textureBytes;
+      oa._1().dormantBytes() = __ret_val.dormantBytes;
+      oa._1().dormantBudgetBytes() = __ret_val.dormantBudgetBytes;
+      oa._1().cacheHits() = __ret_val.cacheHits;
+      oa._1().cacheEvictions() = __ret_val.cacheEvictions;
+      static_cast<::nprpc::impl::Header*>(obuf.data().data())->size = static_cast<uint32_t>(obuf.size());
+      static_cast<::nprpc::impl::Header*>(obuf.data().data())->msg_id = ::nprpc::impl::MessageId::BlockResponse;
+      static_cast<::nprpc::impl::Header*>(obuf.data().data())->msg_type = ::nprpc::impl::MessageType::Answer;
+      break;
+    }
+    case 48: {
+      assert(ctx.rx_buffer != nullptr);
+      lava_M19_Direct ia(*ctx.rx_buffer, 32);
+      if ( !check_1S(*ctx.rx_buffer, ia) ) {
+        ::nprpc::impl::make_simple_answer(ctx, ::nprpc::impl::MessageId::Error_BadInput);
+        break;
+      }
+      std::vector<std::string> __ret_val;
+      try {
+        __ret_val = DumpAtlasImages(ia._1());
+      }
+      catch(::lava::AtlasDumpFailed& e) {
+        assert(ctx.tx_buffer != nullptr);
+        auto& obuf = *ctx.tx_buffer;
+        obuf.consume(obuf.size());
+        std::size_t __wire_size = 36;
+        __wire_size = ::nprpc::flat::grow_size(__wire_size, 1, static_cast<std::size_t>(e.directory.size()));
+        __wire_size = ::nprpc::flat::grow_size(__wire_size, 1, static_cast<std::size_t>(e.reason.size()));
+        if (!::nprpc::impl::g_rpc->prepare_zero_copy_buffer(ctx, obuf, __wire_size))
+          obuf.prepare(__wire_size);
+        obuf.commit(36);
+        ::lava::flat::AtlasDumpFailed_Direct oa(obuf,16);
+        oa.__ex_id() = 8;
+        oa.directory(e.directory);
+        oa.reason(e.reason);
+        static_cast<::nprpc::impl::Header*>(obuf.data().data())->size = static_cast<uint32_t>(obuf.size());
+        static_cast<::nprpc::impl::Header*>(obuf.data().data())->msg_id = ::nprpc::impl::MessageId::Exception;
+        static_cast<::nprpc::impl::Header*>(obuf.data().data())->msg_type = ::nprpc::impl::MessageType::Answer;
+        return;
+      }
+      assert(ctx.tx_buffer != nullptr);
+      auto& obuf = *ctx.tx_buffer;
+      obuf.consume(obuf.size());
+      std::size_t __wire_size = 24;
+      __wire_size = ::nprpc::flat::grow_size(__wire_size, 4, static_cast<std::size_t>(__ret_val.size()) * 8);
+      for (auto const& __m_elem : __ret_val) {
+        __wire_size = ::nprpc::flat::grow_size(__wire_size, 1, static_cast<std::size_t>(__m_elem.size()));
+      }
+      if (!::nprpc::impl::g_rpc->prepare_zero_copy_buffer(ctx, obuf, __wire_size))
+        obuf.prepare(__wire_size);
+      obuf.commit(24);
+      lava_M23_Direct oa(obuf,16);
+      oa._1(static_cast<uint32_t>(__ret_val.size()));
+      {
+        auto vdir = oa._1_d();
+        auto it = __ret_val.begin();
+        auto span = vdir();
+        for (auto e : span) {
+          e = *it;
+          ++it;
+        }
+      }
+      static_cast<::nprpc::impl::Header*>(obuf.data().data())->size = static_cast<uint32_t>(obuf.size());
+      static_cast<::nprpc::impl::Header*>(obuf.data().data())->msg_id = ::nprpc::impl::MessageId::BlockResponse;
+      static_cast<::nprpc::impl::Header*>(obuf.data().data())->msg_type = ::nprpc::impl::MessageType::Answer;
+      break;
+    }
     default:
       ::nprpc::impl::make_simple_answer(ctx, ::nprpc::impl::MessageId::Error_UnknownFunctionIdx);
   }
@@ -5361,6 +5888,14 @@ void lava_throw_exception(::nprpc::flat_buffer& buf) {
     ::lava::flat::WallpaperUnreadable_Direct ex_flat(buf, sizeof(::nprpc::impl::Header));
     ::lava::WallpaperUnreadable ex;
   ex.path = (std::string_view)ex_flat.path();
+  ex.reason = (std::string_view)ex_flat.reason();
+    throw ex;
+  }
+  case 8:
+  {
+    ::lava::flat::AtlasDumpFailed_Direct ex_flat(buf, sizeof(::nprpc::impl::Header));
+    ::lava::AtlasDumpFailed ex;
+  ex.directory = (std::string_view)ex_flat.directory();
   ex.reason = (std::string_view)ex_flat.reason();
     throw ex;
   }

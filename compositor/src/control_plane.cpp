@@ -680,6 +680,103 @@ class CompositorImpl final : public ICompositor_Servant {
     return out;
   }
 
+  GpuReport GetGpuReport() override {
+    const canvas::GpuReport source = host_.gpuReport();
+    GpuReport out{};
+    out.deviceName        = source.deviceName;
+    out.samples           = source.samples;
+    out.maxSamples        = source.maxSamples;
+    out.heapUsageBytes    = source.heapUsageBytes;
+    out.heapBudgetBytes   = source.heapBudgetBytes;
+    out.heapSizeBytes     = source.heapSizeBytes;
+    out.vmaAllocatedBytes = source.vmaAllocatedBytes;
+    out.vmaBlockBytes     = source.vmaBlockBytes;
+    out.ownBytes          = source.totals.bytes;
+    out.foreignBytes      = source.totals.foreignBytes;
+    out.retiringBytes     = source.totals.retiringBytes;
+
+    for (const canvas::GpuWindowReport &window : source.windows) {
+      GpuWindow entry{};
+      entry.id         = window.id;
+      entry.title      = window.title;
+      entry.width      = window.width;
+      entry.height     = window.height;
+      entry.samples    = window.samples;
+      entry.bytes      = window.bytes;
+      entry.presenting = window.windowed;
+      out.windows.push_back(std::move(entry));
+    }
+
+    for (const canvas::GpuAllocation &alloc : source.allocations) {
+      GpuAllocation entry{};
+      entry.kind      = static_cast<uint32_t>(alloc.category);
+      entry.category  = canvas::gpuCategoryName(alloc.category);
+      entry.windowId  = alloc.windowId;
+      entry.detail    = alloc.detail;
+      entry.bytes     = alloc.bytes;
+      entry.isImage   = alloc.isImage;
+      entry.width     = alloc.width;
+      entry.height    = alloc.height;
+      entry.samples   = alloc.samples;
+      entry.mipLevels = alloc.mips;
+      entry.retiring  = alloc.retiring;
+      entry.foreign   = canvas::gpuCategoryIsForeign(alloc.category);
+      out.allocations.push_back(std::move(entry));
+    }
+
+    for (const canvas::GpuAtlasPage &page : source.atlases) {
+      GpuAtlas entry{};
+      entry.kind        = static_cast<uint32_t>(page.kind);
+      entry.page        = page.page;
+      entry.width       = page.width;
+      entry.height      = page.height;
+      entry.bytes       = page.bytes;
+      entry.fillPercent = page.fillPercent;
+      entry.generation  = page.generation;
+      entry.glyphs      = page.glyphs;
+      entry.faces       = page.faces;
+      entry.slotsUsed   = page.slotsUsed;
+      entry.slotsTotal  = page.slotsTotal;
+      entry.cellSize    = page.cellSize;
+      entry.pngPath     = page.pngPath;
+      out.atlases.push_back(std::move(entry));
+    }
+
+    // Largest first already; the cap is what keeps a cache of thousands from
+    // making this reply the next thing worth reporting. The totals below are
+    // the whole cache regardless, so nothing is silently lost — only listed.
+    constexpr size_t kMaxTextures = 64;
+    for (const canvas::GpuTextureReport &texture : source.textures) {
+      if (out.textures.size() >= kMaxTextures) break;
+      GpuTexture entry{};
+      entry.key        = texture.key;
+      entry.bytes      = texture.bytes;
+      entry.width      = texture.width;
+      entry.height     = texture.height;
+      entry.refCount   = texture.refCount;
+      entry.windowPins = texture.windowPins;
+      entry.atlased    = texture.atlased;
+      entry.dormant    = texture.dormant;
+      out.textures.push_back(std::move(entry));
+    }
+    out.textureCount       = source.cache.textures;
+    out.textureBytes       = source.cache.imageBytes + source.cache.atlasBytes;
+    out.dormantBytes       = source.cache.dormantBytes;
+    out.dormantBudgetBytes = source.cache.dormantBudgetBytes;
+    out.cacheHits          = source.cache.cacheHits;
+    out.cacheEvictions     = source.cache.evictions;
+    return out;
+  }
+
+  std::vector<std::string> DumpAtlasImages(
+      ::nprpc::flat::Span<char> directory) override {
+    const std::string dir{directory.begin(), directory.end()};
+    std::string       error;
+    std::vector<std::string> paths = host_.dumpAtlasImages(dir, error);
+    if (!error.empty()) throw AtlasDumpFailed(dir, error);
+    return paths;
+  }
+
   void SetWallpaper(flat::Wallpaper_Direct wallpaper) override {
     std::string pictureError;
     std::string error;

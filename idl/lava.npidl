@@ -382,6 +382,16 @@ exception WallpaperUnreadable {
   reason: string;
 }
 
+/// `DumpAtlasImages` could not write the pages.
+///
+/// Distinct from "there were none to write", which is an empty list: this is a
+/// directory that cannot be created, a compositor with no GPU device at all, or
+/// a readback the driver refused.
+exception AtlasDumpFailed {
+  directory: string;
+  reason: string;
+}
+
 /// Which window has the keyboard now.
 ///
 /// The compositor is the only process that knows, and until this there was no
@@ -489,6 +499,143 @@ message PanelAreaAck {
 /// keeps the stream's flow control moving.
 message FocusAck {
   surfaceId: u32;
+}
+
+// ─── GPU memory ──────────────────────────────────────────────────────────
+//
+// What `GetGpuReport` answers with. Every byte figure is what the allocator
+// actually reserved rather than width × height × 4, which for a multisampled
+// attachment understates it by the sample count — and the sample count is
+// exactly what a reader is here to discover.
+
+/// One allocation, and who asked for it.
+message GpuAllocation {
+  /// `GpuCategory` as a number: what role this plays. Kept as an integer
+  /// rather than an enum so a compositor that learns a new category does not
+  /// break a debug app built against the old list — an unknown number displays
+  /// as its own name from `category`.
+  kind: u32;
+  /// The category's name, so a viewer needs no table of its own.
+  category: string;
+  /// The canvas window this belongs to, or 0 for something device-wide. Look
+  /// it up in `GpuReport.windows` for a name.
+  windowId: u32;
+  /// Free text from whoever allocated it: "multisampled depth attachment", a
+  /// texture cache key, "blur level".
+  detail: string;
+  bytes: u64;
+  /// False for buffers, where the dimensions below mean nothing.
+  isImage: boolean;
+  width: u32;
+  height: u32;
+  /// 1 for everything that is not a render target.
+  samples: u32;
+  mipLevels: u32;
+  /// Freed but not yet released, because a submitted frame may still name it.
+  /// Still occupying memory, which is why it is still in the report.
+  retiring: boolean;
+  /// Another process's memory, mapped in for sampling — a client's buffer.
+  /// Never counted in `ownBytes`.
+  foreign: boolean;
+}
+
+/// One canvas window and what its attachments cost.
+///
+/// A window here is not a window on screen: one visible window is up to four of
+/// these — its contents, its title bar, its drop shadow and the frost behind it
+/// — and they are different sizes, which is why `title` says which is which.
+message GpuWindow {
+  /// Canvas window id, matching `GpuAllocation.windowId`.
+  id: u32;
+  /// "LavaTerm (contents, surface 5)". Empty if the compositor cannot name it.
+  title: string;
+  width: u32;
+  height: u32;
+  /// Sample count its colour and depth attachments are multiplied by.
+  samples: u32;
+  /// Everything in the report tagged with this window.
+  bytes: u64;
+  /// False for an offscreen surface, which is every client window a compositor
+  /// draws — only a windowed app presents through a swapchain.
+  presenting: boolean;
+}
+
+/// One atlas page.
+message GpuAtlas {
+  /// 0 glyph coverage atlas, 1 image atlas page.
+  kind: u32;
+  page: u32;
+  width: u32;
+  height: u32;
+  bytes: u64;
+  /// Rows packed for a glyph atlas, cells taken for an image atlas.
+  fillPercent: u32;
+  /// Glyph atlas: how many times it has doubled, and what it holds.
+  generation: u32;
+  glyphs: u32;
+  faces: u32;
+  /// Image atlas: cells used of the cells a page has, and their edge in pixels.
+  slotsUsed: u32;
+  slotsTotal: u32;
+  cellSize: u32;
+  /// Where `DumpAtlasImages` last wrote this page, or empty. A path on the
+  /// compositor's filesystem, which for a local debug app is its own.
+  pngPath: string;
+}
+
+/// One entry in the shared texture cache.
+message GpuTexture {
+  /// What it is cached under: a file path, a content hash, or `surface:<id>`.
+  /// The answer to "why is this still resident".
+  key: string;
+  bytes: u64;
+  width: u32;
+  height: u32;
+  /// Client references. Zero means dormant — kept only in case it is asked for
+  /// again, and the first thing evicted under budget pressure.
+  refCount: u32;
+  /// Windows whose last drawn frame still names it.
+  windowPins: u32;
+  atlased: boolean;
+  dormant: boolean;
+}
+
+/// Everything the compositor knows about its own GPU memory.
+message GpuReport {
+  deviceName: string;
+  /// Samples every render target is allocated with, and the most the device
+  /// would allow. Two numbers because the first being the second is a *choice*,
+  /// and it multiplies the two largest categories in the report.
+  samples: u32;
+  maxSamples: u32;
+  /// What the driver attributes to this process, what it would allow, and what
+  /// the card has. The number to compare against `nvidia-smi`.
+  heapUsageBytes: u64;
+  heapBudgetBytes: u64;
+  heapSizeBytes: u64;
+  /// What the allocator has handed out, and the device-memory blocks it holds
+  /// to serve that. The difference is slack it could give back.
+  vmaAllocatedBytes: u64;
+  vmaBlockBytes: u64;
+  /// What the entries below add up to: this process's own memory, without the
+  /// client buffers it merely maps.
+  ownBytes: u64;
+  /// Foreign (mapped-in client) bytes, and bytes waiting for a frame to retire.
+  foreignBytes: u64;
+  retiringBytes: u64;
+  windows: vector<GpuWindow>;
+  allocations: vector<GpuAllocation>;
+  atlases: vector<GpuAtlas>;
+  /// Largest first, and capped — a cache with thousands of entries would make
+  /// this message the reason for the next report.
+  textures: vector<GpuTexture>;
+  /// Cache totals, which are the whole cache rather than only the entries sent.
+  textureCount: u32;
+  textureBytes: u64;
+  dormantBytes: u64;
+  dormantBudgetBytes: u64;
+  cacheHits: u64;
+  cacheEvictions: u64;
 }
 
 /// A PNG and the size it encoded to.
@@ -1342,4 +1489,38 @@ interface Compositor {
   /// rarely, and the pixels it samples are not the client's to name.
   void SetBackdropBlur(surfaceId: in u32, radius: in f32)
       raises(SurfaceNotFound);
+
+  // ─── Diagnostics ───────────────────────────────────────────────────────
+
+  /// What is in the compositor's VRAM, and which window asked for it.
+  ///
+  /// The compositor is the only process that can answer this. It renders every
+  /// LavaUI surface on the desktop on one Vulkan device, so "why is the
+  /// compositor holding a gigabyte" is a question about windows a client cannot
+  /// see, atlases it does not own, and a texture cache it never filled.
+  ///
+  /// A whole snapshot per call, like `WindowList` and for the same reason: it
+  /// is a few tens of kilobytes, a reader that has one is *correct*, and
+  /// allocation events are far too bursty to be worth streaming. Polling this
+  /// once a second is what a debug view should do.
+  ///
+  /// Not `[unreliable]`: the caller wants the answer, and a dropped reply
+  /// looks exactly like a compositor that has stopped answering.
+  GpuReport GetGpuReport();
+
+  /// Writes every atlas page to `directory` as a PNG and says where they went.
+  ///
+  /// Pixels rather than numbers, because the question about an atlas is often
+  /// "what is *in* it" — a coverage atlas 60% full of one font at nine sizes
+  /// looks completely different from one packed with a UI's worth of glyphs,
+  /// and no occupancy percentage tells the two apart.
+  ///
+  /// Written to disk rather than returned as bytes: a page is up to a couple of
+  /// hundred megabytes at the device maximum, the caller is on the same
+  /// machine, and a file can be opened again tomorrow. The returned paths are
+  /// what was actually written, so an empty list means nothing could be.
+  ///
+  /// Costly and deliberately so — each page is copied off the GPU, which idles
+  /// the device. Ask when a human asks, not on a timer.
+  vector<string> DumpAtlasImages(directory: in string) raises(AtlasDumpFailed);
 }

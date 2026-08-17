@@ -665,6 +665,36 @@ public func unmarshal_WallpaperUnreadable(buffer: UnsafeRawPointer, offset: Int)
   return result
 }
 
+public struct AtlasDumpFailed: NPRPCError {
+  public var directory: String = ""
+  public var reason: String = ""
+
+  public init() {}
+
+  public init(directory: String, reason: String)   {
+    self.directory = directory
+    self.reason = reason
+  }
+
+  public var message: String { "AtlasDumpFailed" }
+}
+
+
+// MARK: - Marshal AtlasDumpFailed
+public func marshal_AtlasDumpFailed(buffer: FlatBuffer, offset: Int, data: AtlasDumpFailed) {
+  buffer.storeBytes(of: UInt32(8), toByteOffset: offset + 0, as: UInt32.self)
+  NPRPC.marshal_string(buffer: buffer, offset: offset + 4, string: data.directory)
+  NPRPC.marshal_string(buffer: buffer, offset: offset + 12, string: data.reason)
+}
+
+// MARK: - Unmarshal AtlasDumpFailed
+public func unmarshal_AtlasDumpFailed(buffer: UnsafeRawPointer, offset: Int) -> AtlasDumpFailed {
+  var result = AtlasDumpFailed()
+  result.directory = NPRPC.unmarshal_string(buffer: buffer, offset: offset + 4)
+  result.reason = NPRPC.unmarshal_string(buffer: buffer, offset: offset + 12)
+  return result
+}
+
 public struct ActiveWindow: Codable, Sendable {
   public var surfaceId: UInt32 = 0
   public var title: String = ""
@@ -879,6 +909,361 @@ public func marshal_FocusAck(buffer: FlatBuffer, offset: Int, data: FocusAck) {
 public func unmarshal_FocusAck(buffer: UnsafeRawPointer, offset: Int) -> FocusAck {
   var result = FocusAck()
   result.surfaceId = buffer.load(fromByteOffset: offset + 0, as: UInt32.self)
+  return result
+}
+
+public struct GpuAllocation: Codable, Sendable {
+  public var kind: UInt32 = 0
+  public var category: String = ""
+  public var windowId: UInt32 = 0
+  public var detail: String = ""
+  public var bytes: UInt64 = 0
+  public var isImage: Bool = false
+  public var width: UInt32 = 0
+  public var height: UInt32 = 0
+  public var samples: UInt32 = 0
+  public var mipLevels: UInt32 = 0
+  public var retiring: Bool = false
+  public var foreign: Bool = false
+
+  public init() {}
+
+  public init(kind: UInt32, category: String, windowId: UInt32, detail: String, bytes: UInt64, isImage: Bool, width: UInt32, height: UInt32, samples: UInt32, mipLevels: UInt32, retiring: Bool, foreign: Bool)   {
+    self.kind = kind
+    self.category = category
+    self.windowId = windowId
+    self.detail = detail
+    self.bytes = bytes
+    self.isImage = isImage
+    self.width = width
+    self.height = height
+    self.samples = samples
+    self.mipLevels = mipLevels
+    self.retiring = retiring
+    self.foreign = foreign
+  }
+}
+
+
+// MARK: - Marshal GpuAllocation
+public func marshal_GpuAllocation(buffer: FlatBuffer, offset: Int, data: GpuAllocation) {
+  buffer.storeBytes(of: data.kind, toByteOffset: offset + 0, as: UInt32.self)
+  NPRPC.marshal_string(buffer: buffer, offset: offset + 4, string: data.category)
+  buffer.storeBytes(of: data.windowId, toByteOffset: offset + 12, as: UInt32.self)
+  NPRPC.marshal_string(buffer: buffer, offset: offset + 16, string: data.detail)
+  buffer.storeBytes(of: data.bytes, toByteOffset: offset + 24, as: UInt64.self)
+  buffer.storeBytes(of: data.isImage, toByteOffset: offset + 32, as: Bool.self)
+  buffer.storeBytes(of: data.width, toByteOffset: offset + 36, as: UInt32.self)
+  buffer.storeBytes(of: data.height, toByteOffset: offset + 40, as: UInt32.self)
+  buffer.storeBytes(of: data.samples, toByteOffset: offset + 44, as: UInt32.self)
+  buffer.storeBytes(of: data.mipLevels, toByteOffset: offset + 48, as: UInt32.self)
+  buffer.storeBytes(of: data.retiring, toByteOffset: offset + 52, as: Bool.self)
+  buffer.storeBytes(of: data.foreign, toByteOffset: offset + 53, as: Bool.self)
+}
+
+// MARK: - Unmarshal GpuAllocation
+public func unmarshal_GpuAllocation(buffer: UnsafeRawPointer, offset: Int) -> GpuAllocation {
+  var result = GpuAllocation()
+  result.kind = buffer.load(fromByteOffset: offset + 0, as: UInt32.self)
+  result.category = NPRPC.unmarshal_string(buffer: buffer, offset: offset + 4)
+  result.windowId = buffer.load(fromByteOffset: offset + 12, as: UInt32.self)
+  result.detail = NPRPC.unmarshal_string(buffer: buffer, offset: offset + 16)
+  result.bytes = buffer.load(fromByteOffset: offset + 24, as: UInt64.self)
+  result.isImage = buffer.load(fromByteOffset: offset + 32, as: Bool.self)
+  result.width = buffer.load(fromByteOffset: offset + 36, as: UInt32.self)
+  result.height = buffer.load(fromByteOffset: offset + 40, as: UInt32.self)
+  result.samples = buffer.load(fromByteOffset: offset + 44, as: UInt32.self)
+  result.mipLevels = buffer.load(fromByteOffset: offset + 48, as: UInt32.self)
+  result.retiring = buffer.load(fromByteOffset: offset + 52, as: Bool.self)
+  result.foreign = buffer.load(fromByteOffset: offset + 53, as: Bool.self)
+  return result
+}
+
+public struct GpuWindow: Codable, Sendable {
+  public var id: UInt32 = 0
+  public var title: String = ""
+  public var width: UInt32 = 0
+  public var height: UInt32 = 0
+  public var samples: UInt32 = 0
+  public var bytes: UInt64 = 0
+  public var presenting: Bool = false
+
+  public init() {}
+
+  public init(id: UInt32, title: String, width: UInt32, height: UInt32, samples: UInt32, bytes: UInt64, presenting: Bool)   {
+    self.id = id
+    self.title = title
+    self.width = width
+    self.height = height
+    self.samples = samples
+    self.bytes = bytes
+    self.presenting = presenting
+  }
+}
+
+
+// MARK: - Marshal GpuWindow
+public func marshal_GpuWindow(buffer: FlatBuffer, offset: Int, data: GpuWindow) {
+  buffer.storeBytes(of: data.id, toByteOffset: offset + 0, as: UInt32.self)
+  NPRPC.marshal_string(buffer: buffer, offset: offset + 4, string: data.title)
+  buffer.storeBytes(of: data.width, toByteOffset: offset + 12, as: UInt32.self)
+  buffer.storeBytes(of: data.height, toByteOffset: offset + 16, as: UInt32.self)
+  buffer.storeBytes(of: data.samples, toByteOffset: offset + 20, as: UInt32.self)
+  buffer.storeBytes(of: data.bytes, toByteOffset: offset + 24, as: UInt64.self)
+  buffer.storeBytes(of: data.presenting, toByteOffset: offset + 32, as: Bool.self)
+}
+
+// MARK: - Unmarshal GpuWindow
+public func unmarshal_GpuWindow(buffer: UnsafeRawPointer, offset: Int) -> GpuWindow {
+  var result = GpuWindow()
+  result.id = buffer.load(fromByteOffset: offset + 0, as: UInt32.self)
+  result.title = NPRPC.unmarshal_string(buffer: buffer, offset: offset + 4)
+  result.width = buffer.load(fromByteOffset: offset + 12, as: UInt32.self)
+  result.height = buffer.load(fromByteOffset: offset + 16, as: UInt32.self)
+  result.samples = buffer.load(fromByteOffset: offset + 20, as: UInt32.self)
+  result.bytes = buffer.load(fromByteOffset: offset + 24, as: UInt64.self)
+  result.presenting = buffer.load(fromByteOffset: offset + 32, as: Bool.self)
+  return result
+}
+
+public struct GpuAtlas: Codable, Sendable {
+  public var kind: UInt32 = 0
+  public var page: UInt32 = 0
+  public var width: UInt32 = 0
+  public var height: UInt32 = 0
+  public var bytes: UInt64 = 0
+  public var fillPercent: UInt32 = 0
+  public var generation: UInt32 = 0
+  public var glyphs: UInt32 = 0
+  public var faces: UInt32 = 0
+  public var slotsUsed: UInt32 = 0
+  public var slotsTotal: UInt32 = 0
+  public var cellSize: UInt32 = 0
+  public var pngPath: String = ""
+
+  public init() {}
+
+  public init(kind: UInt32, page: UInt32, width: UInt32, height: UInt32, bytes: UInt64, fillPercent: UInt32, generation: UInt32, glyphs: UInt32, faces: UInt32, slotsUsed: UInt32, slotsTotal: UInt32, cellSize: UInt32, pngPath: String)   {
+    self.kind = kind
+    self.page = page
+    self.width = width
+    self.height = height
+    self.bytes = bytes
+    self.fillPercent = fillPercent
+    self.generation = generation
+    self.glyphs = glyphs
+    self.faces = faces
+    self.slotsUsed = slotsUsed
+    self.slotsTotal = slotsTotal
+    self.cellSize = cellSize
+    self.pngPath = pngPath
+  }
+}
+
+
+// MARK: - Marshal GpuAtlas
+public func marshal_GpuAtlas(buffer: FlatBuffer, offset: Int, data: GpuAtlas) {
+  buffer.storeBytes(of: data.kind, toByteOffset: offset + 0, as: UInt32.self)
+  buffer.storeBytes(of: data.page, toByteOffset: offset + 4, as: UInt32.self)
+  buffer.storeBytes(of: data.width, toByteOffset: offset + 8, as: UInt32.self)
+  buffer.storeBytes(of: data.height, toByteOffset: offset + 12, as: UInt32.self)
+  buffer.storeBytes(of: data.bytes, toByteOffset: offset + 16, as: UInt64.self)
+  buffer.storeBytes(of: data.fillPercent, toByteOffset: offset + 24, as: UInt32.self)
+  buffer.storeBytes(of: data.generation, toByteOffset: offset + 28, as: UInt32.self)
+  buffer.storeBytes(of: data.glyphs, toByteOffset: offset + 32, as: UInt32.self)
+  buffer.storeBytes(of: data.faces, toByteOffset: offset + 36, as: UInt32.self)
+  buffer.storeBytes(of: data.slotsUsed, toByteOffset: offset + 40, as: UInt32.self)
+  buffer.storeBytes(of: data.slotsTotal, toByteOffset: offset + 44, as: UInt32.self)
+  buffer.storeBytes(of: data.cellSize, toByteOffset: offset + 48, as: UInt32.self)
+  NPRPC.marshal_string(buffer: buffer, offset: offset + 52, string: data.pngPath)
+}
+
+// MARK: - Unmarshal GpuAtlas
+public func unmarshal_GpuAtlas(buffer: UnsafeRawPointer, offset: Int) -> GpuAtlas {
+  var result = GpuAtlas()
+  result.kind = buffer.load(fromByteOffset: offset + 0, as: UInt32.self)
+  result.page = buffer.load(fromByteOffset: offset + 4, as: UInt32.self)
+  result.width = buffer.load(fromByteOffset: offset + 8, as: UInt32.self)
+  result.height = buffer.load(fromByteOffset: offset + 12, as: UInt32.self)
+  result.bytes = buffer.load(fromByteOffset: offset + 16, as: UInt64.self)
+  result.fillPercent = buffer.load(fromByteOffset: offset + 24, as: UInt32.self)
+  result.generation = buffer.load(fromByteOffset: offset + 28, as: UInt32.self)
+  result.glyphs = buffer.load(fromByteOffset: offset + 32, as: UInt32.self)
+  result.faces = buffer.load(fromByteOffset: offset + 36, as: UInt32.self)
+  result.slotsUsed = buffer.load(fromByteOffset: offset + 40, as: UInt32.self)
+  result.slotsTotal = buffer.load(fromByteOffset: offset + 44, as: UInt32.self)
+  result.cellSize = buffer.load(fromByteOffset: offset + 48, as: UInt32.self)
+  result.pngPath = NPRPC.unmarshal_string(buffer: buffer, offset: offset + 52)
+  return result
+}
+
+public struct GpuTexture: Codable, Sendable {
+  public var key: String = ""
+  public var bytes: UInt64 = 0
+  public var width: UInt32 = 0
+  public var height: UInt32 = 0
+  public var refCount: UInt32 = 0
+  public var windowPins: UInt32 = 0
+  public var atlased: Bool = false
+  public var dormant: Bool = false
+
+  public init() {}
+
+  public init(key: String, bytes: UInt64, width: UInt32, height: UInt32, refCount: UInt32, windowPins: UInt32, atlased: Bool, dormant: Bool)   {
+    self.key = key
+    self.bytes = bytes
+    self.width = width
+    self.height = height
+    self.refCount = refCount
+    self.windowPins = windowPins
+    self.atlased = atlased
+    self.dormant = dormant
+  }
+}
+
+
+// MARK: - Marshal GpuTexture
+public func marshal_GpuTexture(buffer: FlatBuffer, offset: Int, data: GpuTexture) {
+  NPRPC.marshal_string(buffer: buffer, offset: offset + 0, string: data.key)
+  buffer.storeBytes(of: data.bytes, toByteOffset: offset + 8, as: UInt64.self)
+  buffer.storeBytes(of: data.width, toByteOffset: offset + 16, as: UInt32.self)
+  buffer.storeBytes(of: data.height, toByteOffset: offset + 20, as: UInt32.self)
+  buffer.storeBytes(of: data.refCount, toByteOffset: offset + 24, as: UInt32.self)
+  buffer.storeBytes(of: data.windowPins, toByteOffset: offset + 28, as: UInt32.self)
+  buffer.storeBytes(of: data.atlased, toByteOffset: offset + 32, as: Bool.self)
+  buffer.storeBytes(of: data.dormant, toByteOffset: offset + 33, as: Bool.self)
+}
+
+// MARK: - Unmarshal GpuTexture
+public func unmarshal_GpuTexture(buffer: UnsafeRawPointer, offset: Int) -> GpuTexture {
+  var result = GpuTexture()
+  result.key = NPRPC.unmarshal_string(buffer: buffer, offset: offset + 0)
+  result.bytes = buffer.load(fromByteOffset: offset + 8, as: UInt64.self)
+  result.width = buffer.load(fromByteOffset: offset + 16, as: UInt32.self)
+  result.height = buffer.load(fromByteOffset: offset + 20, as: UInt32.self)
+  result.refCount = buffer.load(fromByteOffset: offset + 24, as: UInt32.self)
+  result.windowPins = buffer.load(fromByteOffset: offset + 28, as: UInt32.self)
+  result.atlased = buffer.load(fromByteOffset: offset + 32, as: Bool.self)
+  result.dormant = buffer.load(fromByteOffset: offset + 33, as: Bool.self)
+  return result
+}
+
+public struct GpuReport: Codable, Sendable {
+  public var deviceName: String = ""
+  public var samples: UInt32 = 0
+  public var maxSamples: UInt32 = 0
+  public var heapUsageBytes: UInt64 = 0
+  public var heapBudgetBytes: UInt64 = 0
+  public var heapSizeBytes: UInt64 = 0
+  public var vmaAllocatedBytes: UInt64 = 0
+  public var vmaBlockBytes: UInt64 = 0
+  public var ownBytes: UInt64 = 0
+  public var foreignBytes: UInt64 = 0
+  public var retiringBytes: UInt64 = 0
+  public var windows: [GpuWindow] = []
+  public var allocations: [GpuAllocation] = []
+  public var atlases: [GpuAtlas] = []
+  public var textures: [GpuTexture] = []
+  public var textureCount: UInt32 = 0
+  public var textureBytes: UInt64 = 0
+  public var dormantBytes: UInt64 = 0
+  public var dormantBudgetBytes: UInt64 = 0
+  public var cacheHits: UInt64 = 0
+  public var cacheEvictions: UInt64 = 0
+
+  public init() {}
+
+  public init(deviceName: String, samples: UInt32, maxSamples: UInt32, heapUsageBytes: UInt64, heapBudgetBytes: UInt64, heapSizeBytes: UInt64, vmaAllocatedBytes: UInt64, vmaBlockBytes: UInt64, ownBytes: UInt64, foreignBytes: UInt64, retiringBytes: UInt64, windows: [GpuWindow], allocations: [GpuAllocation], atlases: [GpuAtlas], textures: [GpuTexture], textureCount: UInt32, textureBytes: UInt64, dormantBytes: UInt64, dormantBudgetBytes: UInt64, cacheHits: UInt64, cacheEvictions: UInt64)   {
+    self.deviceName = deviceName
+    self.samples = samples
+    self.maxSamples = maxSamples
+    self.heapUsageBytes = heapUsageBytes
+    self.heapBudgetBytes = heapBudgetBytes
+    self.heapSizeBytes = heapSizeBytes
+    self.vmaAllocatedBytes = vmaAllocatedBytes
+    self.vmaBlockBytes = vmaBlockBytes
+    self.ownBytes = ownBytes
+    self.foreignBytes = foreignBytes
+    self.retiringBytes = retiringBytes
+    self.windows = windows
+    self.allocations = allocations
+    self.atlases = atlases
+    self.textures = textures
+    self.textureCount = textureCount
+    self.textureBytes = textureBytes
+    self.dormantBytes = dormantBytes
+    self.dormantBudgetBytes = dormantBudgetBytes
+    self.cacheHits = cacheHits
+    self.cacheEvictions = cacheEvictions
+  }
+}
+
+
+// MARK: - Marshal GpuReport
+public func marshal_GpuReport(buffer: FlatBuffer, offset: Int, data: GpuReport) {
+  NPRPC.marshal_string(buffer: buffer, offset: offset + 0, string: data.deviceName)
+  buffer.storeBytes(of: data.samples, toByteOffset: offset + 8, as: UInt32.self)
+  buffer.storeBytes(of: data.maxSamples, toByteOffset: offset + 12, as: UInt32.self)
+  buffer.storeBytes(of: data.heapUsageBytes, toByteOffset: offset + 16, as: UInt64.self)
+  buffer.storeBytes(of: data.heapBudgetBytes, toByteOffset: offset + 24, as: UInt64.self)
+  buffer.storeBytes(of: data.heapSizeBytes, toByteOffset: offset + 32, as: UInt64.self)
+  buffer.storeBytes(of: data.vmaAllocatedBytes, toByteOffset: offset + 40, as: UInt64.self)
+  buffer.storeBytes(of: data.vmaBlockBytes, toByteOffset: offset + 48, as: UInt64.self)
+  buffer.storeBytes(of: data.ownBytes, toByteOffset: offset + 56, as: UInt64.self)
+  buffer.storeBytes(of: data.foreignBytes, toByteOffset: offset + 64, as: UInt64.self)
+  buffer.storeBytes(of: data.retiringBytes, toByteOffset: offset + 72, as: UInt64.self)
+  NPRPC.marshal_struct_vector(buffer: buffer, offset: offset + 80, vector: data.windows, elementSize: 40, elementAlignment: 8) { buf, off, elem in
+    marshal_GpuWindow(buffer: buf, offset: off, data: elem)
+  }
+  NPRPC.marshal_struct_vector(buffer: buffer, offset: offset + 88, vector: data.allocations, elementSize: 56, elementAlignment: 8) { buf, off, elem in
+    marshal_GpuAllocation(buffer: buf, offset: off, data: elem)
+  }
+  NPRPC.marshal_struct_vector(buffer: buffer, offset: offset + 96, vector: data.atlases, elementSize: 64, elementAlignment: 8) { buf, off, elem in
+    marshal_GpuAtlas(buffer: buf, offset: off, data: elem)
+  }
+  NPRPC.marshal_struct_vector(buffer: buffer, offset: offset + 104, vector: data.textures, elementSize: 40, elementAlignment: 8) { buf, off, elem in
+    marshal_GpuTexture(buffer: buf, offset: off, data: elem)
+  }
+  buffer.storeBytes(of: data.textureCount, toByteOffset: offset + 112, as: UInt32.self)
+  buffer.storeBytes(of: data.textureBytes, toByteOffset: offset + 120, as: UInt64.self)
+  buffer.storeBytes(of: data.dormantBytes, toByteOffset: offset + 128, as: UInt64.self)
+  buffer.storeBytes(of: data.dormantBudgetBytes, toByteOffset: offset + 136, as: UInt64.self)
+  buffer.storeBytes(of: data.cacheHits, toByteOffset: offset + 144, as: UInt64.self)
+  buffer.storeBytes(of: data.cacheEvictions, toByteOffset: offset + 152, as: UInt64.self)
+}
+
+// MARK: - Unmarshal GpuReport
+public func unmarshal_GpuReport(buffer: UnsafeRawPointer, offset: Int) -> GpuReport {
+  var result = GpuReport()
+  result.deviceName = NPRPC.unmarshal_string(buffer: buffer, offset: offset + 0)
+  result.samples = buffer.load(fromByteOffset: offset + 8, as: UInt32.self)
+  result.maxSamples = buffer.load(fromByteOffset: offset + 12, as: UInt32.self)
+  result.heapUsageBytes = buffer.load(fromByteOffset: offset + 16, as: UInt64.self)
+  result.heapBudgetBytes = buffer.load(fromByteOffset: offset + 24, as: UInt64.self)
+  result.heapSizeBytes = buffer.load(fromByteOffset: offset + 32, as: UInt64.self)
+  result.vmaAllocatedBytes = buffer.load(fromByteOffset: offset + 40, as: UInt64.self)
+  result.vmaBlockBytes = buffer.load(fromByteOffset: offset + 48, as: UInt64.self)
+  result.ownBytes = buffer.load(fromByteOffset: offset + 56, as: UInt64.self)
+  result.foreignBytes = buffer.load(fromByteOffset: offset + 64, as: UInt64.self)
+  result.retiringBytes = buffer.load(fromByteOffset: offset + 72, as: UInt64.self)
+  result.windows = NPRPC.unmarshal_struct_vector(buffer: buffer, offset: offset + 80, elementSize: 40) { buf, off in
+    unmarshal_GpuWindow(buffer: buf, offset: off)
+  }
+  result.allocations = NPRPC.unmarshal_struct_vector(buffer: buffer, offset: offset + 88, elementSize: 56) { buf, off in
+    unmarshal_GpuAllocation(buffer: buf, offset: off)
+  }
+  result.atlases = NPRPC.unmarshal_struct_vector(buffer: buffer, offset: offset + 96, elementSize: 64) { buf, off in
+    unmarshal_GpuAtlas(buffer: buf, offset: off)
+  }
+  result.textures = NPRPC.unmarshal_struct_vector(buffer: buffer, offset: offset + 104, elementSize: 40) { buf, off in
+    unmarshal_GpuTexture(buffer: buf, offset: off)
+  }
+  result.textureCount = buffer.load(fromByteOffset: offset + 112, as: UInt32.self)
+  result.textureBytes = buffer.load(fromByteOffset: offset + 120, as: UInt64.self)
+  result.dormantBytes = buffer.load(fromByteOffset: offset + 128, as: UInt64.self)
+  result.dormantBudgetBytes = buffer.load(fromByteOffset: offset + 136, as: UInt64.self)
+  result.cacheHits = buffer.load(fromByteOffset: offset + 144, as: UInt64.self)
+  result.cacheEvictions = buffer.load(fromByteOffset: offset + 152, as: UInt64.self)
   return result
 }
 
@@ -1763,6 +2148,29 @@ fileprivate func unmarshal_lava_M28(buffer: UnsafeRawPointer, offset: Int) -> la
   return result
 }
 
+fileprivate struct lava_M29: Codable, Sendable {
+  public var _1: GpuReport = GpuReport()
+
+  public init() {}
+
+  public init(_1: GpuReport)   {
+    self._1 = _1
+  }
+}
+
+
+// MARK: - Marshal lava_M29
+fileprivate func marshal_lava_M29(buffer: FlatBuffer, offset: Int, data: lava_M29) {
+  marshal_GpuReport(buffer: buffer, offset: offset + 0, data: data._1)
+}
+
+// MARK: - Unmarshal lava_M29
+fileprivate func unmarshal_lava_M29(buffer: UnsafeRawPointer, offset: Int) -> lava_M29 {
+  var result = lava_M29()
+  result._1 = unmarshal_GpuReport(buffer: buffer, offset: offset + 0)
+  return result
+}
+
 public protocol CompositorProtocol {
   func registerFont(path: String, pixelSize26_6: UInt32, faceIndex: UInt32, rasterFlags: UInt32) throws -> UInt32
   func registerImage(path: String, maxPixelSize: UInt32) throws -> ImageInfo
@@ -1811,6 +2219,8 @@ public protocol CompositorProtocol {
   func setPrimarySelection(surfaceId: UInt32, text: String) throws
   func getClipboardPng(surfaceId: UInt32) throws -> [UInt8]
   func setBackdropBlur(surfaceId: UInt32, radius: Float) throws
+  func getGpuReport() -> GpuReport
+  func dumpAtlasImages(directory: String) throws -> [String]
 }
 
 // Client proxy for Compositor
@@ -3625,6 +4035,82 @@ final public class Compositor: NPRPCObject, @unchecked Sendable {
     if stdReply != 0 { throw UnexpectedReplyError(message: "Unexpected reply") }
   }
 
+  public func getGpuReport() async throws -> GpuReport   {
+    // Prepare buffer
+    let buffer = FlatBuffer()
+    buffer.prepare(32)
+    buffer.commit(32)
+    guard let bufData = buffer.data else { throw BufferError(message: "Failed to get buffer data") }
+
+    // Write message header
+    bufData.storeBytes(of: UInt32(0), toByteOffset: 0, as: UInt32.self)  // size (set later)
+    bufData.storeBytes(of: UInt32(0), toByteOffset: 4, as: UInt32.self)  // msg_id: FunctionCall (MessageId enum value 0)
+    bufData.storeBytes(of: UInt32(0), toByteOffset: 8, as: UInt32.self)  // msg_type: Request
+    bufData.storeBytes(of: UInt32(0), toByteOffset: 12, as: UInt32.self) // reserved
+
+    // Write call header
+    bufData.storeBytes(of: poaIdx, toByteOffset: 16, as: UInt16.self)
+    bufData.storeBytes(of: UInt8(0), toByteOffset: 18, as: UInt8.self)  // interface_idx
+    bufData.storeBytes(of: UInt8(47), toByteOffset: 19, as: UInt8.self)  // function_idx
+    bufData.storeBytes(of: objectId, toByteOffset: 24, as: UInt64.self)
+
+    guard let finalData = buffer.data else { throw BufferError(message: "Failed to get buffer data") }
+    finalData.storeBytes(of: UInt32(buffer.size), toByteOffset: 0, as: UInt32.self)
+
+    // Send and receive
+    try Task.checkCancellation()
+    let responseBuffer = try await sendAsyncReceive(buffer: buffer, timeout: timeout)
+
+    // Handle reply
+    let stdReply = try handleStandardReply(buffer: responseBuffer)
+    if stdReply != -1 { throw UnexpectedReplyError(message: "Unexpected reply") }
+
+    guard let responseData = responseBuffer.data else { throw BufferError(message: "Failed to get response data") }
+    let out = unmarshal_lava_M29(buffer: responseData, offset: 16)
+    return out._1
+  }
+
+  public func dumpAtlasImages(directory: String) async throws -> [String]   {
+    // Prepare buffer
+    let buffer = FlatBuffer()
+    buffer.prepare(168)
+    buffer.commit(40)
+    guard let bufData = buffer.data else { throw BufferError(message: "Failed to get buffer data") }
+
+    // Write message header
+    bufData.storeBytes(of: UInt32(0), toByteOffset: 0, as: UInt32.self)  // size (set later)
+    bufData.storeBytes(of: UInt32(0), toByteOffset: 4, as: UInt32.self)  // msg_id: FunctionCall (MessageId enum value 0)
+    bufData.storeBytes(of: UInt32(0), toByteOffset: 8, as: UInt32.self)  // msg_type: Request
+    bufData.storeBytes(of: UInt32(0), toByteOffset: 12, as: UInt32.self) // reserved
+
+    // Write call header
+    bufData.storeBytes(of: poaIdx, toByteOffset: 16, as: UInt16.self)
+    bufData.storeBytes(of: UInt8(0), toByteOffset: 18, as: UInt8.self)  // interface_idx
+    bufData.storeBytes(of: UInt8(48), toByteOffset: 19, as: UInt8.self)  // function_idx
+    bufData.storeBytes(of: objectId, toByteOffset: 24, as: UInt64.self)
+
+    // Marshal input arguments
+    var inArgs = lava_M19()
+    inArgs._1 = directory
+    marshal_lava_M19(buffer: buffer, offset: 32, data: inArgs)
+
+    guard let finalData = buffer.data else { throw BufferError(message: "Failed to get buffer data") }
+    finalData.storeBytes(of: UInt32(buffer.size), toByteOffset: 0, as: UInt32.self)
+
+    // Send and receive
+    try Task.checkCancellation()
+    let responseBuffer = try await sendAsyncReceive(buffer: buffer, timeout: timeout)
+
+    // Handle reply
+    let stdReply = try handleStandardReply(buffer: responseBuffer)
+    if stdReply == 1 { throw lava_throwException(buffer: responseBuffer) }
+    if stdReply != -1 { throw UnexpectedReplyError(message: "Unexpected reply") }
+
+    guard let responseData = responseBuffer.data else { throw BufferError(message: "Failed to get response data") }
+    let out = unmarshal_lava_M23(buffer: responseData, offset: 16)
+    return out._1
+  }
+
 }
 
 // Servant base for Compositor
@@ -3821,6 +4307,14 @@ open class CompositorServant: NPRPCServant, CompositorProtocol, @unchecked Senda
 
   open func setBackdropBlur(surfaceId: UInt32, radius: Float) throws   {
     fatalError("Subclass must implement setBackdropBlur")
+  }
+
+  open func getGpuReport() -> GpuReport   {
+    fatalError("Subclass must implement getGpuReport")
+  }
+
+  open func dumpAtlasImages(directory: String) throws -> [String]   {
+    fatalError("Subclass must implement dumpAtlasImages")
   }
 
   // Dispatch incoming RPC calls
@@ -5213,6 +5707,64 @@ open class CompositorServant: NPRPCServant, CompositorProtocol, @unchecked Senda
         catch {
           makeSimpleAnswer(buffer: buffer, messageId: impl.MessageId.Error_Unknown)
         }
+      case 47: // GetGpuReport
+        // Prepare output buffer
+        let obuf = buffer
+        obuf.consume(obuf.size)
+        obuf.prepare(304)
+        obuf.commit(176)
+        
+        let __ret_val = getGpuReport()
+        // Marshal output arguments
+        var out_data = lava_M29()
+        out_data._1 = __ret_val
+
+        marshal_lava_M29(buffer: buffer, offset: 16, data: out_data)
+        guard let outData = buffer.data else { return }
+        outData.storeBytes(of: UInt32(buffer.size), toByteOffset: 0, as: UInt32.self)
+        outData.storeBytes(of: impl.MessageId.BlockResponse.rawValue, toByteOffset: 4, as: UInt32.self)
+        outData.storeBytes(of: impl.MessageType.Answer.rawValue, toByteOffset: 8, as: UInt32.self)
+      case 48: // DumpAtlasImages
+        // Validate input buffer for untrusted interface
+        guard check_1S(buffer: data, bufferSize: buffer.size, offset: 32) else         {
+          makeSimpleAnswer(buffer: buffer, messageId: impl.MessageId.Error_BadInput)
+          return
+        }
+
+        // Unmarshal input arguments
+        let ia = unmarshal_lava_M19(buffer: data, offset: 32)
+        // Prepare output buffer
+        let obuf = buffer
+        obuf.consume(obuf.size)
+        obuf.prepare(152)
+        obuf.commit(24)
+        
+        do {
+          let __ret_val = try dumpAtlasImages(directory: ia._1)
+          // Marshal output arguments
+          var out_data = lava_M23()
+          out_data._1 = __ret_val
+
+          marshal_lava_M23(buffer: buffer, offset: 16, data: out_data)
+          guard let outData = buffer.data else { return }
+          outData.storeBytes(of: UInt32(buffer.size), toByteOffset: 0, as: UInt32.self)
+          outData.storeBytes(of: impl.MessageId.BlockResponse.rawValue, toByteOffset: 4, as: UInt32.self)
+          outData.storeBytes(of: impl.MessageType.Answer.rawValue, toByteOffset: 8, as: UInt32.self)
+        }
+        catch let e as AtlasDumpFailed {
+          let obuf = buffer
+          obuf.consume(obuf.size)
+          obuf.prepare(36)
+          obuf.commit(36)
+          guard let exData = obuf.data else { return }
+          marshal_AtlasDumpFailed(buffer: obuf, offset: 16, data: e)
+          exData.storeBytes(of: UInt32(obuf.size), toByteOffset: 0, as: UInt32.self)
+          exData.storeBytes(of: impl.MessageId.Exception.rawValue, toByteOffset: 4, as: UInt32.self)
+          exData.storeBytes(of: impl.MessageType.Answer.rawValue, toByteOffset: 8, as: UInt32.self)
+        }
+        catch {
+          makeSimpleAnswer(buffer: buffer, messageId: impl.MessageId.Error_Unknown)
+        }
       default:
         makeSimpleAnswer(buffer: buffer, messageId: impl.MessageId.Error_UnknownFunctionIdx)
     } // switch
@@ -5398,6 +5950,8 @@ fileprivate func lava_throwException(buffer: FlatBuffer) -> any Error {
     return unmarshal_SettingsWriteFailed(buffer: data, offset: 16)
   case 7:
     return unmarshal_WallpaperUnreadable(buffer: data, offset: 16)
+  case 8:
+    return unmarshal_AtlasDumpFailed(buffer: data, offset: 16)
   default:
     return RuntimeError(message: "Unknown exception id: \(exId)")
   }

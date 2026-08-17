@@ -44,6 +44,7 @@ var products: [Product] = [
     .executable(name: "LavaTaskbar", targets: ["LavaTaskbar"]),
     .executable(name: "LavaDock", targets: ["LavaDock"]),
     .executable(name: "LavaSettings", targets: ["LavaSettings"]),
+    .executable(name: "LavaDebug", targets: ["LavaDebug"]),
     .executable(name: "LavaLauncher", targets: ["LavaLauncher"]),
     .executable(name: "LavaSwitcher", targets: ["LavaSwitcher"]),
     .library(name: "LavaUI", targets: ["LavaUI"]),
@@ -137,6 +138,15 @@ var targets: [Target] = [
     // rather than asking it questions. See Sources/LavaSettings/main.swift.
     .executableTarget(
         name: "LavaSettings",
+        dependencies: ["LavaUI"]
+            + (haveNprpc ? [Target.Dependency("LavaClient"),
+                            Target.Dependency("LavaIDL")] : []),
+        swiftSettings: interopCxx
+    ),
+    // Where the compositor's VRAM went: the GPU report, as a window and as
+    // `--once` text. See Sources/LavaDebug/main.swift.
+    .executableTarget(
+        name: "LavaDebug",
         dependencies: ["LavaUI"]
             + (haveNprpc ? [Target.Dependency("LavaClient"),
                             Target.Dependency("LavaIDL")] : []),

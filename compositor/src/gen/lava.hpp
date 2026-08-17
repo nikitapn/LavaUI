@@ -922,6 +922,56 @@ public:
 };
 } // namespace flat
 
+class AtlasDumpFailed : public ::nprpc::Exception {
+public:
+  std::string directory;
+  std::string reason;
+
+  AtlasDumpFailed() : ::nprpc::Exception("AtlasDumpFailed") {} 
+  AtlasDumpFailed(std::string _directory, std::string _reason)
+    : ::nprpc::Exception("AtlasDumpFailed")
+    , directory(_directory)
+    , reason(_reason)
+  {
+  }
+};
+
+namespace flat {
+struct AtlasDumpFailed {
+  uint32_t __ex_id;
+  ::nprpc::flat::String directory;
+  ::nprpc::flat::String reason;
+};
+
+class AtlasDumpFailed_Direct {
+  ::nprpc::flat_buffer& buffer_;
+  const std::uint32_t offset_;
+
+  auto& base() noexcept { return *reinterpret_cast<AtlasDumpFailed*>(reinterpret_cast<std::byte*>(buffer_.data().data()) + offset_); }
+  auto const& base() const noexcept { return *reinterpret_cast<const AtlasDumpFailed*>(reinterpret_cast<const std::byte*>(buffer_.data().data()) + offset_); }
+public:
+  uint32_t offset() const noexcept { return offset_; }
+  void* __data() noexcept { return (void*)&base(); }
+  AtlasDumpFailed_Direct(::nprpc::flat_buffer& buffer, std::uint32_t offset)
+    : buffer_(buffer)
+    , offset_(offset)
+  {
+  }
+  const uint32_t& __ex_id() const noexcept { return base().__ex_id;}
+  uint32_t& __ex_id() noexcept { return base().__ex_id;}
+  void directory(const char* str) { new (&base().directory) ::nprpc::flat::String(buffer_, str); }
+  void directory(const std::string& str) { new (&base().directory) ::nprpc::flat::String(buffer_, str); }
+  auto directory() noexcept { return (::nprpc::flat::Span<char>)base().directory; }
+  auto directory() const noexcept { return (::nprpc::flat::Span<const char>)base().directory; }
+  auto directory_d() noexcept { return ::nprpc::flat::String_Direct1(buffer_, offset_ + offsetof(AtlasDumpFailed, directory)); }
+  void reason(const char* str) { new (&base().reason) ::nprpc::flat::String(buffer_, str); }
+  void reason(const std::string& str) { new (&base().reason) ::nprpc::flat::String(buffer_, str); }
+  auto reason() noexcept { return (::nprpc::flat::Span<char>)base().reason; }
+  auto reason() const noexcept { return (::nprpc::flat::Span<const char>)base().reason; }
+  auto reason_d() noexcept { return ::nprpc::flat::String_Direct1(buffer_, offset_ + offsetof(AtlasDumpFailed, reason)); }
+};
+} // namespace flat
+
 struct ActiveWindow {
   uint32_t surfaceId;
   std::string title;
@@ -1186,6 +1236,392 @@ public:
 };
 } // namespace flat
 
+struct GpuAllocation {
+  uint32_t kind;
+  std::string category;
+  uint32_t windowId;
+  std::string detail;
+  uint64_t bytes;
+  bool isImage;
+  uint32_t width;
+  uint32_t height;
+  uint32_t samples;
+  uint32_t mipLevels;
+  bool retiring;
+  bool foreign;
+};
+
+namespace flat {
+struct GpuAllocation {
+  uint32_t kind;
+  ::nprpc::flat::String category;
+  uint32_t windowId;
+  ::nprpc::flat::String detail;
+  uint64_t bytes;
+  ::nprpc::flat::Boolean isImage;
+  uint32_t width;
+  uint32_t height;
+  uint32_t samples;
+  uint32_t mipLevels;
+  ::nprpc::flat::Boolean retiring;
+  ::nprpc::flat::Boolean foreign;
+};
+
+class GpuAllocation_Direct {
+  ::nprpc::flat_buffer& buffer_;
+  const std::uint32_t offset_;
+
+  auto& base() noexcept { return *reinterpret_cast<GpuAllocation*>(reinterpret_cast<std::byte*>(buffer_.data().data()) + offset_); }
+  auto const& base() const noexcept { return *reinterpret_cast<const GpuAllocation*>(reinterpret_cast<const std::byte*>(buffer_.data().data()) + offset_); }
+public:
+  uint32_t offset() const noexcept { return offset_; }
+  void* __data() noexcept { return (void*)&base(); }
+  GpuAllocation_Direct(::nprpc::flat_buffer& buffer, std::uint32_t offset)
+    : buffer_(buffer)
+    , offset_(offset)
+  {
+  }
+  const uint32_t& kind() const noexcept { return base().kind;}
+  uint32_t& kind() noexcept { return base().kind;}
+  void category(const char* str) { new (&base().category) ::nprpc::flat::String(buffer_, str); }
+  void category(const std::string& str) { new (&base().category) ::nprpc::flat::String(buffer_, str); }
+  auto category() noexcept { return (::nprpc::flat::Span<char>)base().category; }
+  auto category() const noexcept { return (::nprpc::flat::Span<const char>)base().category; }
+  auto category_d() noexcept { return ::nprpc::flat::String_Direct1(buffer_, offset_ + offsetof(GpuAllocation, category)); }
+  const uint32_t& windowId() const noexcept { return base().windowId;}
+  uint32_t& windowId() noexcept { return base().windowId;}
+  void detail(const char* str) { new (&base().detail) ::nprpc::flat::String(buffer_, str); }
+  void detail(const std::string& str) { new (&base().detail) ::nprpc::flat::String(buffer_, str); }
+  auto detail() noexcept { return (::nprpc::flat::Span<char>)base().detail; }
+  auto detail() const noexcept { return (::nprpc::flat::Span<const char>)base().detail; }
+  auto detail_d() noexcept { return ::nprpc::flat::String_Direct1(buffer_, offset_ + offsetof(GpuAllocation, detail)); }
+  const uint64_t& bytes() const noexcept { return base().bytes;}
+  uint64_t& bytes() noexcept { return base().bytes;}
+  const ::nprpc::flat::Boolean& isImage() const noexcept { return base().isImage;}
+  ::nprpc::flat::Boolean& isImage() noexcept { return base().isImage;}
+  const uint32_t& width() const noexcept { return base().width;}
+  uint32_t& width() noexcept { return base().width;}
+  const uint32_t& height() const noexcept { return base().height;}
+  uint32_t& height() noexcept { return base().height;}
+  const uint32_t& samples() const noexcept { return base().samples;}
+  uint32_t& samples() noexcept { return base().samples;}
+  const uint32_t& mipLevels() const noexcept { return base().mipLevels;}
+  uint32_t& mipLevels() noexcept { return base().mipLevels;}
+  const ::nprpc::flat::Boolean& retiring() const noexcept { return base().retiring;}
+  ::nprpc::flat::Boolean& retiring() noexcept { return base().retiring;}
+  const ::nprpc::flat::Boolean& foreign() const noexcept { return base().foreign;}
+  ::nprpc::flat::Boolean& foreign() noexcept { return base().foreign;}
+};
+} // namespace flat
+
+struct GpuWindow {
+  uint32_t id;
+  std::string title;
+  uint32_t width;
+  uint32_t height;
+  uint32_t samples;
+  uint64_t bytes;
+  bool presenting;
+};
+
+namespace flat {
+struct GpuWindow {
+  uint32_t id;
+  ::nprpc::flat::String title;
+  uint32_t width;
+  uint32_t height;
+  uint32_t samples;
+  uint64_t bytes;
+  ::nprpc::flat::Boolean presenting;
+};
+
+class GpuWindow_Direct {
+  ::nprpc::flat_buffer& buffer_;
+  const std::uint32_t offset_;
+
+  auto& base() noexcept { return *reinterpret_cast<GpuWindow*>(reinterpret_cast<std::byte*>(buffer_.data().data()) + offset_); }
+  auto const& base() const noexcept { return *reinterpret_cast<const GpuWindow*>(reinterpret_cast<const std::byte*>(buffer_.data().data()) + offset_); }
+public:
+  uint32_t offset() const noexcept { return offset_; }
+  void* __data() noexcept { return (void*)&base(); }
+  GpuWindow_Direct(::nprpc::flat_buffer& buffer, std::uint32_t offset)
+    : buffer_(buffer)
+    , offset_(offset)
+  {
+  }
+  const uint32_t& id() const noexcept { return base().id;}
+  uint32_t& id() noexcept { return base().id;}
+  void title(const char* str) { new (&base().title) ::nprpc::flat::String(buffer_, str); }
+  void title(const std::string& str) { new (&base().title) ::nprpc::flat::String(buffer_, str); }
+  auto title() noexcept { return (::nprpc::flat::Span<char>)base().title; }
+  auto title() const noexcept { return (::nprpc::flat::Span<const char>)base().title; }
+  auto title_d() noexcept { return ::nprpc::flat::String_Direct1(buffer_, offset_ + offsetof(GpuWindow, title)); }
+  const uint32_t& width() const noexcept { return base().width;}
+  uint32_t& width() noexcept { return base().width;}
+  const uint32_t& height() const noexcept { return base().height;}
+  uint32_t& height() noexcept { return base().height;}
+  const uint32_t& samples() const noexcept { return base().samples;}
+  uint32_t& samples() noexcept { return base().samples;}
+  const uint64_t& bytes() const noexcept { return base().bytes;}
+  uint64_t& bytes() noexcept { return base().bytes;}
+  const ::nprpc::flat::Boolean& presenting() const noexcept { return base().presenting;}
+  ::nprpc::flat::Boolean& presenting() noexcept { return base().presenting;}
+};
+} // namespace flat
+
+struct GpuAtlas {
+  uint32_t kind;
+  uint32_t page;
+  uint32_t width;
+  uint32_t height;
+  uint64_t bytes;
+  uint32_t fillPercent;
+  uint32_t generation;
+  uint32_t glyphs;
+  uint32_t faces;
+  uint32_t slotsUsed;
+  uint32_t slotsTotal;
+  uint32_t cellSize;
+  std::string pngPath;
+};
+
+namespace flat {
+struct GpuAtlas {
+  uint32_t kind;
+  uint32_t page;
+  uint32_t width;
+  uint32_t height;
+  uint64_t bytes;
+  uint32_t fillPercent;
+  uint32_t generation;
+  uint32_t glyphs;
+  uint32_t faces;
+  uint32_t slotsUsed;
+  uint32_t slotsTotal;
+  uint32_t cellSize;
+  ::nprpc::flat::String pngPath;
+};
+
+class GpuAtlas_Direct {
+  ::nprpc::flat_buffer& buffer_;
+  const std::uint32_t offset_;
+
+  auto& base() noexcept { return *reinterpret_cast<GpuAtlas*>(reinterpret_cast<std::byte*>(buffer_.data().data()) + offset_); }
+  auto const& base() const noexcept { return *reinterpret_cast<const GpuAtlas*>(reinterpret_cast<const std::byte*>(buffer_.data().data()) + offset_); }
+public:
+  uint32_t offset() const noexcept { return offset_; }
+  void* __data() noexcept { return (void*)&base(); }
+  GpuAtlas_Direct(::nprpc::flat_buffer& buffer, std::uint32_t offset)
+    : buffer_(buffer)
+    , offset_(offset)
+  {
+  }
+  const uint32_t& kind() const noexcept { return base().kind;}
+  uint32_t& kind() noexcept { return base().kind;}
+  const uint32_t& page() const noexcept { return base().page;}
+  uint32_t& page() noexcept { return base().page;}
+  const uint32_t& width() const noexcept { return base().width;}
+  uint32_t& width() noexcept { return base().width;}
+  const uint32_t& height() const noexcept { return base().height;}
+  uint32_t& height() noexcept { return base().height;}
+  const uint64_t& bytes() const noexcept { return base().bytes;}
+  uint64_t& bytes() noexcept { return base().bytes;}
+  const uint32_t& fillPercent() const noexcept { return base().fillPercent;}
+  uint32_t& fillPercent() noexcept { return base().fillPercent;}
+  const uint32_t& generation() const noexcept { return base().generation;}
+  uint32_t& generation() noexcept { return base().generation;}
+  const uint32_t& glyphs() const noexcept { return base().glyphs;}
+  uint32_t& glyphs() noexcept { return base().glyphs;}
+  const uint32_t& faces() const noexcept { return base().faces;}
+  uint32_t& faces() noexcept { return base().faces;}
+  const uint32_t& slotsUsed() const noexcept { return base().slotsUsed;}
+  uint32_t& slotsUsed() noexcept { return base().slotsUsed;}
+  const uint32_t& slotsTotal() const noexcept { return base().slotsTotal;}
+  uint32_t& slotsTotal() noexcept { return base().slotsTotal;}
+  const uint32_t& cellSize() const noexcept { return base().cellSize;}
+  uint32_t& cellSize() noexcept { return base().cellSize;}
+  void pngPath(const char* str) { new (&base().pngPath) ::nprpc::flat::String(buffer_, str); }
+  void pngPath(const std::string& str) { new (&base().pngPath) ::nprpc::flat::String(buffer_, str); }
+  auto pngPath() noexcept { return (::nprpc::flat::Span<char>)base().pngPath; }
+  auto pngPath() const noexcept { return (::nprpc::flat::Span<const char>)base().pngPath; }
+  auto pngPath_d() noexcept { return ::nprpc::flat::String_Direct1(buffer_, offset_ + offsetof(GpuAtlas, pngPath)); }
+};
+} // namespace flat
+
+struct GpuTexture {
+  std::string key;
+  uint64_t bytes;
+  uint32_t width;
+  uint32_t height;
+  uint32_t refCount;
+  uint32_t windowPins;
+  bool atlased;
+  bool dormant;
+};
+
+namespace flat {
+struct GpuTexture {
+  ::nprpc::flat::String key;
+  uint64_t bytes;
+  uint32_t width;
+  uint32_t height;
+  uint32_t refCount;
+  uint32_t windowPins;
+  ::nprpc::flat::Boolean atlased;
+  ::nprpc::flat::Boolean dormant;
+};
+
+class GpuTexture_Direct {
+  ::nprpc::flat_buffer& buffer_;
+  const std::uint32_t offset_;
+
+  auto& base() noexcept { return *reinterpret_cast<GpuTexture*>(reinterpret_cast<std::byte*>(buffer_.data().data()) + offset_); }
+  auto const& base() const noexcept { return *reinterpret_cast<const GpuTexture*>(reinterpret_cast<const std::byte*>(buffer_.data().data()) + offset_); }
+public:
+  uint32_t offset() const noexcept { return offset_; }
+  void* __data() noexcept { return (void*)&base(); }
+  GpuTexture_Direct(::nprpc::flat_buffer& buffer, std::uint32_t offset)
+    : buffer_(buffer)
+    , offset_(offset)
+  {
+  }
+  void key(const char* str) { new (&base().key) ::nprpc::flat::String(buffer_, str); }
+  void key(const std::string& str) { new (&base().key) ::nprpc::flat::String(buffer_, str); }
+  auto key() noexcept { return (::nprpc::flat::Span<char>)base().key; }
+  auto key() const noexcept { return (::nprpc::flat::Span<const char>)base().key; }
+  auto key_d() noexcept { return ::nprpc::flat::String_Direct1(buffer_, offset_ + offsetof(GpuTexture, key)); }
+  const uint64_t& bytes() const noexcept { return base().bytes;}
+  uint64_t& bytes() noexcept { return base().bytes;}
+  const uint32_t& width() const noexcept { return base().width;}
+  uint32_t& width() noexcept { return base().width;}
+  const uint32_t& height() const noexcept { return base().height;}
+  uint32_t& height() noexcept { return base().height;}
+  const uint32_t& refCount() const noexcept { return base().refCount;}
+  uint32_t& refCount() noexcept { return base().refCount;}
+  const uint32_t& windowPins() const noexcept { return base().windowPins;}
+  uint32_t& windowPins() noexcept { return base().windowPins;}
+  const ::nprpc::flat::Boolean& atlased() const noexcept { return base().atlased;}
+  ::nprpc::flat::Boolean& atlased() noexcept { return base().atlased;}
+  const ::nprpc::flat::Boolean& dormant() const noexcept { return base().dormant;}
+  ::nprpc::flat::Boolean& dormant() noexcept { return base().dormant;}
+};
+} // namespace flat
+
+struct GpuReport {
+  std::string deviceName;
+  uint32_t samples;
+  uint32_t maxSamples;
+  uint64_t heapUsageBytes;
+  uint64_t heapBudgetBytes;
+  uint64_t heapSizeBytes;
+  uint64_t vmaAllocatedBytes;
+  uint64_t vmaBlockBytes;
+  uint64_t ownBytes;
+  uint64_t foreignBytes;
+  uint64_t retiringBytes;
+  std::vector<GpuWindow> windows;
+  std::vector<GpuAllocation> allocations;
+  std::vector<GpuAtlas> atlases;
+  std::vector<GpuTexture> textures;
+  uint32_t textureCount;
+  uint64_t textureBytes;
+  uint64_t dormantBytes;
+  uint64_t dormantBudgetBytes;
+  uint64_t cacheHits;
+  uint64_t cacheEvictions;
+};
+
+namespace flat {
+struct GpuReport {
+  ::nprpc::flat::String deviceName;
+  uint32_t samples;
+  uint32_t maxSamples;
+  uint64_t heapUsageBytes;
+  uint64_t heapBudgetBytes;
+  uint64_t heapSizeBytes;
+  uint64_t vmaAllocatedBytes;
+  uint64_t vmaBlockBytes;
+  uint64_t ownBytes;
+  uint64_t foreignBytes;
+  uint64_t retiringBytes;
+  ::nprpc::flat::Vector<flat::GpuWindow> windows;
+  ::nprpc::flat::Vector<flat::GpuAllocation> allocations;
+  ::nprpc::flat::Vector<flat::GpuAtlas> atlases;
+  ::nprpc::flat::Vector<flat::GpuTexture> textures;
+  uint32_t textureCount;
+  uint64_t textureBytes;
+  uint64_t dormantBytes;
+  uint64_t dormantBudgetBytes;
+  uint64_t cacheHits;
+  uint64_t cacheEvictions;
+};
+
+class GpuReport_Direct {
+  ::nprpc::flat_buffer& buffer_;
+  const std::uint32_t offset_;
+
+  auto& base() noexcept { return *reinterpret_cast<GpuReport*>(reinterpret_cast<std::byte*>(buffer_.data().data()) + offset_); }
+  auto const& base() const noexcept { return *reinterpret_cast<const GpuReport*>(reinterpret_cast<const std::byte*>(buffer_.data().data()) + offset_); }
+public:
+  uint32_t offset() const noexcept { return offset_; }
+  void* __data() noexcept { return (void*)&base(); }
+  GpuReport_Direct(::nprpc::flat_buffer& buffer, std::uint32_t offset)
+    : buffer_(buffer)
+    , offset_(offset)
+  {
+  }
+  void deviceName(const char* str) { new (&base().deviceName) ::nprpc::flat::String(buffer_, str); }
+  void deviceName(const std::string& str) { new (&base().deviceName) ::nprpc::flat::String(buffer_, str); }
+  auto deviceName() noexcept { return (::nprpc::flat::Span<char>)base().deviceName; }
+  auto deviceName() const noexcept { return (::nprpc::flat::Span<const char>)base().deviceName; }
+  auto deviceName_d() noexcept { return ::nprpc::flat::String_Direct1(buffer_, offset_ + offsetof(GpuReport, deviceName)); }
+  const uint32_t& samples() const noexcept { return base().samples;}
+  uint32_t& samples() noexcept { return base().samples;}
+  const uint32_t& maxSamples() const noexcept { return base().maxSamples;}
+  uint32_t& maxSamples() noexcept { return base().maxSamples;}
+  const uint64_t& heapUsageBytes() const noexcept { return base().heapUsageBytes;}
+  uint64_t& heapUsageBytes() noexcept { return base().heapUsageBytes;}
+  const uint64_t& heapBudgetBytes() const noexcept { return base().heapBudgetBytes;}
+  uint64_t& heapBudgetBytes() noexcept { return base().heapBudgetBytes;}
+  const uint64_t& heapSizeBytes() const noexcept { return base().heapSizeBytes;}
+  uint64_t& heapSizeBytes() noexcept { return base().heapSizeBytes;}
+  const uint64_t& vmaAllocatedBytes() const noexcept { return base().vmaAllocatedBytes;}
+  uint64_t& vmaAllocatedBytes() noexcept { return base().vmaAllocatedBytes;}
+  const uint64_t& vmaBlockBytes() const noexcept { return base().vmaBlockBytes;}
+  uint64_t& vmaBlockBytes() noexcept { return base().vmaBlockBytes;}
+  const uint64_t& ownBytes() const noexcept { return base().ownBytes;}
+  uint64_t& ownBytes() noexcept { return base().ownBytes;}
+  const uint64_t& foreignBytes() const noexcept { return base().foreignBytes;}
+  uint64_t& foreignBytes() noexcept { return base().foreignBytes;}
+  const uint64_t& retiringBytes() const noexcept { return base().retiringBytes;}
+  uint64_t& retiringBytes() noexcept { return base().retiringBytes;}
+  void windows(std::uint32_t elements_size) { new (&base().windows) ::nprpc::flat::Vector<flat::GpuWindow>(buffer_, elements_size); }
+  auto windows_d() noexcept { return ::nprpc::flat::Vector_Direct2<flat::GpuWindow,flat::GpuWindow_Direct>(buffer_, offset_ + offsetof(GpuReport, windows)); }
+  auto windows() noexcept { return ::nprpc::flat::Span_ref<flat::GpuWindow, flat::GpuWindow_Direct>(buffer_, base().windows.range(buffer_.data().data())); }
+  void allocations(std::uint32_t elements_size) { new (&base().allocations) ::nprpc::flat::Vector<flat::GpuAllocation>(buffer_, elements_size); }
+  auto allocations_d() noexcept { return ::nprpc::flat::Vector_Direct2<flat::GpuAllocation,flat::GpuAllocation_Direct>(buffer_, offset_ + offsetof(GpuReport, allocations)); }
+  auto allocations() noexcept { return ::nprpc::flat::Span_ref<flat::GpuAllocation, flat::GpuAllocation_Direct>(buffer_, base().allocations.range(buffer_.data().data())); }
+  void atlases(std::uint32_t elements_size) { new (&base().atlases) ::nprpc::flat::Vector<flat::GpuAtlas>(buffer_, elements_size); }
+  auto atlases_d() noexcept { return ::nprpc::flat::Vector_Direct2<flat::GpuAtlas,flat::GpuAtlas_Direct>(buffer_, offset_ + offsetof(GpuReport, atlases)); }
+  auto atlases() noexcept { return ::nprpc::flat::Span_ref<flat::GpuAtlas, flat::GpuAtlas_Direct>(buffer_, base().atlases.range(buffer_.data().data())); }
+  void textures(std::uint32_t elements_size) { new (&base().textures) ::nprpc::flat::Vector<flat::GpuTexture>(buffer_, elements_size); }
+  auto textures_d() noexcept { return ::nprpc::flat::Vector_Direct2<flat::GpuTexture,flat::GpuTexture_Direct>(buffer_, offset_ + offsetof(GpuReport, textures)); }
+  auto textures() noexcept { return ::nprpc::flat::Span_ref<flat::GpuTexture, flat::GpuTexture_Direct>(buffer_, base().textures.range(buffer_.data().data())); }
+  const uint32_t& textureCount() const noexcept { return base().textureCount;}
+  uint32_t& textureCount() noexcept { return base().textureCount;}
+  const uint64_t& textureBytes() const noexcept { return base().textureBytes;}
+  uint64_t& textureBytes() noexcept { return base().textureBytes;}
+  const uint64_t& dormantBytes() const noexcept { return base().dormantBytes;}
+  uint64_t& dormantBytes() noexcept { return base().dormantBytes;}
+  const uint64_t& dormantBudgetBytes() const noexcept { return base().dormantBudgetBytes;}
+  uint64_t& dormantBudgetBytes() noexcept { return base().dormantBudgetBytes;}
+  const uint64_t& cacheHits() const noexcept { return base().cacheHits;}
+  uint64_t& cacheHits() noexcept { return base().cacheHits;}
+  const uint64_t& cacheEvictions() const noexcept { return base().cacheEvictions;}
+  uint64_t& cacheEvictions() noexcept { return base().cacheEvictions;}
+};
+} // namespace flat
+
 struct Capture {
   uint32_t width;
   uint32_t height;
@@ -1354,6 +1790,8 @@ public:
   virtual void SetPrimarySelection (uint32_t surfaceId, ::nprpc::flat::Span<char> text) = 0;
   virtual std::vector<uint8_t> GetClipboardPng (uint32_t surfaceId) = 0;
   virtual void SetBackdropBlur (uint32_t surfaceId, float radius) = 0;
+  virtual GpuReport GetGpuReport () = 0;
+  virtual std::vector<std::string> DumpAtlasImages (::nprpc::flat::Span<char> directory) = 0;
 };
 
 class LAVA_API Compositor
@@ -1449,6 +1887,10 @@ public:
   ::nprpc::Task<std::vector<uint8_t>> GetClipboardPngAsync (uint32_t surfaceId, std::stop_token st = {});
   void SetBackdropBlur (uint32_t surfaceId, float radius);
   ::nprpc::Task<void> SetBackdropBlurAsync (uint32_t surfaceId, float radius, std::stop_token st = {});
+  GpuReport GetGpuReport ();
+  ::nprpc::Task<GpuReport> GetGpuReportAsync (std::stop_token st = {});
+  std::vector<std::string> DumpAtlasImages (const std::string& directory);
+  ::nprpc::Task<std::vector<std::string>> DumpAtlasImagesAsync (const std::string& directory, std::stop_token st = {});
 };
 
 namespace helper {

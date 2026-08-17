@@ -6,6 +6,8 @@
 #include <string>
 #include <vector>
 
+#include "render/gpu_report.hpp"
+
 struct wl_event_loop;
 
 /// The compositor's half of the LavaUI control plane.
@@ -297,6 +299,19 @@ struct CompositorHost {
   /// connected. An empty name clears the preference.
   virtual bool setPrimaryOutput(const std::string &name,
                                 std::string &outError) = 0;
+
+  // ─── Diagnostics ─────────────────────────────────────────────────────────
+
+  /// GPU memory, with each canvas window named where the compositor can name
+  /// it. `canvas::GpuReport` rather than a mirror struct: it is already plain
+  /// data, and a third copy of these fields would be three places to forget.
+  virtual canvas::GpuReport gpuReport() = 0;
+
+  /// Writes the atlas pages under `directory`; returns what it wrote. Sets
+  /// `outError` only when nothing could be written *and* something was wrong —
+  /// an atlas-less compositor writes nothing and reports no error.
+  virtual std::vector<std::string> dumpAtlasImages(const std::string &directory,
+                                                  std::string &outError) = 0;
 
   /// `"extend"` or `"mirror"`. See `SetArrangement`.
   virtual std::string arrangement() const = 0;

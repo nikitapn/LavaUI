@@ -7,6 +7,7 @@
 
 #include "bridge/canvas_engine.hpp"
 #include "render/font_key.hpp"
+#include "render/gpu_report.hpp"
 
 #include "wlr.hpp"
 
@@ -103,6 +104,18 @@ class CanvasRenderer {
 
   canvas::Engine &engine() { return engine_; }
 
+  /// What is in VRAM and who asked for it — see `canvas/render/gpu_report.hpp`.
+  /// Window ids in the report are canvas window ids; `CanvasSurface::probeId`
+  /// is what maps one back to a surface a user would recognise.
+  canvas::GpuReport gpuReport();
+
+  /// Writes each atlas page in `report` to `dir` as a PNG. On the loop thread
+  /// only: it reads images back off the GPU.
+  size_t dumpAtlases(const std::string &dir, canvas::GpuReport &report);
+
+  /// Periodic stderr dump under `LAVA_VRAM_STATS`; free when unset.
+  void reportVramIfDue();
+
   /// The GPU everything here is on, for the timelines surfaces synchronise
   /// through. -1 when this renderer never came up.
   int drmFd() const { return drmFd_; }
@@ -140,6 +153,10 @@ class CanvasSurface {
   /// the other, and the half nobody can look up is the half with the render
   /// cost in it. So the owner names the surface once, here.
   void setReportedId(uint32_t id) { reportedId_ = id; }
+
+  /// The canvas window behind this surface. What a GPU report is keyed by —
+  /// see `CanvasRenderer::gpuReport`.
+  uint32_t canvasWindowId() const { return windowId_; }
   uint32_t reportedId() const { return reportedId_ != 0 ? reportedId_ : windowId_; }
 
   /// Rounds this surface's corners, in pixels; 0 is square.

@@ -215,6 +215,7 @@ Sources/
   LavaTaskbar/     Client: panel / taskbar (global menu)
   LavaDock/        Client: dock — open windows on this workspace
   LavaSwitcher/    Client: 3D Ctrl+Tab / Mod+Tab app switcher
+  LavaDebug/       Client: where the compositor's VRAM went (`--once` for text)
   HelloWorld/      Demo playground + FBD bits
   LavaTerm*/       Terminal emulator (core headless + app)
   Spotify*/        LavaSpotify (core headless + app)
@@ -284,6 +285,7 @@ anywhere.
 | `LAVAUI_PROFILE=1` | Per-widget paint profiling via agent `profile` |
 | `LAVA_EDITOR_PROBE=1` | Editor hot paths (hit test, caret, selection, emit) with the buffer offset each was working at — see `EditorProbe` |
 | `LAVA_FRAME_PROBE=1` | Compositor: per-surface frame cost, gaps and stalls |
+| `LAVA_VRAM_STATS=1` | Compositor: GPU memory report to stderr, every 10s (`=N` for N seconds, `=verbose` for every allocation). Rides the output frame, so an idle desktop stops reporting — `kill -USR2` dumps one on demand |
 | `LAVA_NO_SHELL=1` | Compositor: do not start panel/dock/wallpaper |
 | `LAVA_NO_AUTOSTART=1` | Compositor: do not run the user's autostart script |
 | `LAVA_AUTOSTART` | Path to that script, overriding `~/.config/lava/autostart` |
@@ -380,6 +382,41 @@ Windowed mode under a nested compositor is fragile in one known way: if the
 compositor clamps the window to a size the app did not request, the swapchain
 can hit `VK_ERROR_OUT_OF_DATE_KHR` on acquire and the engine treats it as
 fatal. Open at the size the output will actually grant to avoid it.
+
+## Where the VRAM went
+
+The compositor renders every LavaUI surface on the desktop on **one** Vulkan
+device, so its VRAM is the desktop's, and no client can see any of it. Three
+things answer for it, sharing one implementation:
+
+| Route | What it is |
+|---|---|
+| `LAVA_VRAM_STATS` / `kill -USR2` | The report on the compositor's stderr |
+| `GetGpuReport` (IDL) | The same report over the control plane |
+| `swift run LavaDebug` | A window that polls it; `--once` prints text |
+
+`canvas::GpuLedger` is the source: every VMA allocation in the engine goes
+through `RenderDevice::createImage`/`createBuffer`, so tagging those two makes
+the inventory *complete* rather than a sample, and the exported/imported
+dma-bufs — the two things allocated outside VMA — register by hand.
+Imported client buffers are counted separately and never added to this
+process's own bytes.
+
+Three totals that disagree, on purpose: what the driver attributes to the
+process, what the allocator holds, and what the ledger can name an owner for.
+The gaps are the information — allocator minus ledger is slack VMA is keeping,
+driver minus allocator is the swapchain and the driver's own working set.
+
+Two things to know before reading a report:
+
+- **One window on screen is up to four canvas windows** — contents, title bar,
+  drop shadow, backdrop frost — and they are wildly different sizes (frost is
+  output-sized). The compositor names them in the report (`GpuWindow.title`);
+  a bare canvas window id would send you looking for a client that owns none
+  of it.
+- **`DumpAtlasImages` writes the atlas pages as PNGs** rather than returning
+  bytes, and `LavaDebug` then displays them by path. It idles the device to
+  read each page back, so it is a button, never a timer.
 
 ## The dock hides only when something is in the way
 

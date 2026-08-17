@@ -146,6 +146,24 @@ CanvasRenderer::~CanvasRenderer() {
   engine_.close();
 }
 
+canvas::GpuReport CanvasRenderer::gpuReport()
+{
+  Application *app = engine_.application();
+  return app != nullptr ? app->gpuReport() : canvas::GpuReport{};
+}
+
+size_t CanvasRenderer::dumpAtlases(const std::string &dir,
+                                   canvas::GpuReport &report)
+{
+  Application *app = engine_.application();
+  return app != nullptr ? app->dumpAtlases(dir, report) : 0;
+}
+
+void CanvasRenderer::reportVramIfDue()
+{
+  if (Application *app = engine_.application()) app->reportVramIfDue();
+}
+
 std::unique_ptr<CanvasSurface> CanvasRenderer::createSurface(uint32_t width,
                                                              uint32_t height) {
   const uint32_t windowId = engine_.openExportedWindow(width, height);
