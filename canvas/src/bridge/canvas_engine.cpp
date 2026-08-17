@@ -126,16 +126,16 @@ VoidResult Engine::openOffscreen(const std::string &assetsRoot, uint32_t width,
   return ok();
 }
 
-VoidResult Engine::openExported(const std::string &assetsRoot, int drmFd,
-                                const std::vector<uint64_t> &importableModifiers,
-                                uint32_t sampleCap)
+VoidResult Engine::openExported(
+  const std::string &assetsRoot, int drmFd,
+  const std::vector<ExportFormatSupport> &consumerFormats, uint32_t sampleCap)
 {
   close();
   // No nominal size: every surface is opened with its own, and a device that
   // has no window has nothing to apply a default to.
   impl_->offscreen = std::make_unique<Application>(1, 1);
   if (auto r = impl_->offscreen->initExported(assetsRoot, drmFd,
-                                              importableModifiers, sampleCap);
+                                              consumerFormats, sampleCap);
       !r) {
     impl_->offscreen.reset();
     return r;

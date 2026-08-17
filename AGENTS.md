@@ -288,6 +288,7 @@ anywhere.
 | `LAVA_VRAM_STATS=1` | Compositor: GPU memory report to stderr, every 10s (`=N` for N seconds, `=verbose` for every allocation). Rides the output frame, so an idle desktop stops reporting — `kill -USR2` dumps one on demand |
 | `LAVA_MSAA=N` | Any canvas process: cap multisampling at N (1/2/4/8). Overrides `[render] msaa`; the way to A/B a session without a rebuild |
 | `LAVA_SHARED_DEPTH=0` | Compositor: one depth attachment per window again, for comparing against the shared one |
+| `LAVA_EXPORT_BLIT=1` | Compositor: blit each frame into the exported dma-buf instead of resolving into it, as it did before — the A/B for that change, and the escape hatch where a driver dislikes it |
 | `LAVA_NO_SHELL=1` | Compositor: do not start panel/dock/wallpaper |
 | `LAVA_NO_AUTOSTART=1` | Compositor: do not run the user's autostart script |
 | `LAVA_AUTOSTART` | Path to that script, overriding `~/.config/lava/autostart` |
@@ -461,10 +462,41 @@ that proves nothing leaks between them.
 
 **The readback buffer is allocated on demand.** A full frame of host-visible
 memory — 7.9 MiB at 1080p — was allocated and mapped for every window at
-creation, and an exported window never touches it: its frame is blitted into a
-dma-buf. Now `ensureStagingBuffer` runs from the paths that actually read pixels
+creation, and an exported window never touches it: its frame goes to a dma-buf. Now `ensureStagingBuffer` runs from the paths that actually read pixels
 back (`captureFrame`, and the per-frame copy a window with no other destination
 does), so a screenshot pays for it and nothing else does.
+
+**The frame is resolved into the exported dma-buf, not blitted into it.** Every
+exported window owned a single-sample resolve image the size of its frame, drew
+into it, and then blitted the whole thing into the shared buffer — a second copy
+of every surface on the desktop, and a full-screen blit per window per frame.
+The dma-buf is now the render pass's resolve attachment, so the window owns no
+resolve image at all and the frame ends with a queue-ownership release instead
+of a copy. One window at 1280×720 (contents + shadow): 108.5 → 100.1 MiB, and
+the `window resolve` category disappears from the report.
+
+Two things had to line up, both negotiated rather than assumed, and either
+answer works:
+
+- **The format.** A framebuffer attachment must match the format its render
+  pass was built with, and an image view may not swizzle one byte order into
+  another — so `R8G8B8A8_SRGB`/`ABGR8888` can be rendered into and
+  `B8G8R8A8_SRGB`/`ARGB8888` cannot. `DmabufImage::exportFormats()` names both,
+  best first; the compositor answers with the modifiers it can import for each,
+  and canvas picks a renderable pair if one exists.
+- **The modifier.** Its tiling has to support `COLOR_ATTACHMENT` as well as
+  being exportable. If nothing does, the buffer is still a fine blit
+  destination and everything falls back to what it did before.
+
+`DmabufImage::renderable()` is the one place that answer lives; `LAVA_EXPORT_BLIT=1`
+forces the old path, which is how the two were compared. A full LavaUI frame —
+3D shelf, image atlas, blurred backdrop, gradients, text — comes out **identical
+in all 921,600 pixels** either way, and so does a growth to 2560×1440, which
+exports a new buffer and rebuilds the framebuffers around it mid-session.
+
+A window that is read back (`captureFrame`, so any screenshot) now acquires the
+buffer from the consumer first: the only acquire whose *contents* matter, and
+the reason `recordAcquireForRead` is not the discarding one the frame path uses.
 
 **Backdrop frost snapshots are discarded, not cached.** Each refresh uploads a
 full-screen texture under `frost:<surface>:<n>`, and `n` only goes up — so the

@@ -6,6 +6,7 @@
 
 #include "../util/result.hpp"
 #include "../render/draw_command.hpp"
+#include "../render/export_format.hpp"
 
 #include <cstdint>
 #include <cstring>
@@ -100,11 +101,13 @@ class Engine {
   ///
   /// `drmFd` is the consumer's DRM node (wlroots: `wlr_renderer_get_drm_fd`);
   /// it is read during the call and not owned here.
+  /// `consumerFormats` is what that consumer can import, one entry per format
+  /// in `DmabufImage::exportFormats()` it supports, in that order.
   /// `sampleCap` limits MSAA; 0 keeps the engine default. See
   /// `RenderDevice::setSampleCap` for why a compositor has an opinion.
   [[nodiscard]] VoidResult openExported(
     const std::string &assetsRoot, int drmFd,
-    const std::vector<uint64_t> &importableModifiers,
+    const std::vector<ExportFormatSupport> &consumerFormats,
     uint32_t sampleCap = 0);
 
   /// Opens one exported surface. Returns its window id, or 0.

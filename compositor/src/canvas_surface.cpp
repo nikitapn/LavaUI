@@ -104,16 +104,23 @@ std::unique_ptr<CanvasRenderer> CanvasRenderer::create(wlr_renderer *renderer,
     return nullptr;
   }
 
-  const std::vector<uint64_t> importable =
-      importable_modifiers(renderer, canvas::DmabufImage::exportFormat());
-  if (importable.empty()) {
+  // Asked in canvas' order of preference and kept in it: the first format the
+  // renderer can import that canvas can also render straight into is the one
+  // that costs no blit per frame. Which that is, is canvas' business — all the
+  // compositor does is answer for every format it was asked about.
+  std::vector<canvas::ExportFormatSupport> formats;
+  for (const uint32_t fourcc : canvas::DmabufImage::exportFormats()) {
+    std::vector<uint64_t> modifiers = importable_modifiers(renderer, fourcc);
+    if (modifiers.empty()) continue;
+    wlr_log(WLR_INFO, "canvas: renderer imports %zu modifier(s) for 0x%08x",
+            modifiers.size(), fourcc);
+    formats.push_back({fourcc, std::move(modifiers)});
+  }
+  if (formats.empty()) {
     wlr_log(WLR_ERROR,
-            "canvas: this renderer imports no modifier for format 0x%08x",
-            canvas::DmabufImage::exportFormat());
+            "canvas: this renderer imports none of the formats canvas exports");
     return nullptr;
   }
-  wlr_log(WLR_INFO, "canvas: renderer imports %zu modifier(s) for this format",
-          importable.size());
 
   const std::string root = assets_root();
   if (!std::filesystem::exists(std::filesystem::path(root) / "shaders")) {
@@ -123,7 +130,7 @@ std::unique_ptr<CanvasRenderer> CanvasRenderer::create(wlr_renderer *renderer,
   }
 
   std::unique_ptr<CanvasRenderer> self(new CanvasRenderer());
-  if (auto r = self->engine_.openExported(root, drm_fd, importable, sampleCap);
+  if (auto r = self->engine_.openExported(root, drm_fd, formats, sampleCap);
       !r) {
     wlr_log(WLR_ERROR, "canvas: %s", r.error().c_str());
     return nullptr;

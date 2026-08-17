@@ -183,7 +183,9 @@ void RenderWindow::createWindowSurface()
 void RenderWindow::createSizedResources()
 {
   createColorResources();
-  createResolveResources();
+  // Not when the frame resolves into the exported buffer — that image is the
+  // resolve attachment, and a second one would only be a place to copy it to.
+  if (!renderIntoExport()) createResolveResources();
   // Not when the device has one for everybody — see `setSharedDepth`.
   if (!dev_.sharedDepth()) createDepthResources();
   // The staging buffer is allocated on demand: only a readback needs it, and
@@ -543,6 +545,36 @@ void RenderWindow::createStagingBuffer()
   }
 }
 
+bool RenderWindow::renderIntoExport() const
+{
+  return exportTarget_ != nullptr && exportTarget_->renderable();
+}
+
+VkImage RenderWindow::frameImage() const
+{
+  return renderIntoExport() ? exportTarget_->image() : resolveImage_;
+}
+
+VkImageView RenderWindow::frameImageView() const
+{
+  return renderIntoExport() ? exportTarget_->view() : resolveImageView_;
+}
+
+void RenderWindow::syncResolveTarget()
+{
+  const bool direct = renderIntoExport();
+  if (direct && resolveImage_ != VK_NULL_HANDLE) {
+    if (resolveImageView_ != VK_NULL_HANDLE) {
+      vkDestroyImageView(dev_.getDevice(), resolveImageView_, nullptr);
+      resolveImageView_ = VK_NULL_HANDLE;
+    }
+    dev_.destroyImage(resolveImage_, resolveImageAlloc_);
+  } else if (!direct && resolveImage_ == VK_NULL_HANDLE) {
+    createResolveResources();
+  }
+  rebuildFramebuffer();
+}
+
 void RenderWindow::rebuildFramebuffer()
 {
   const VkDevice dev = dev_.getDevice();
@@ -565,8 +597,13 @@ void RenderWindow::createFramebuffer()
   const VkImageView depthView =
     dev_.sharedDepth() ? dev_.sharedDepthView(extent_.width, extent_.height)
                        : depthImageView_;
-  VkImageView attachments[] = {colorImageView_, depthView, resolveImageView_};
+  VkImageView attachments[] = {colorImageView_, depthView, frameImageView()};
 
+  // The resolve attachment may be *larger* than the framebuffer: an exported
+  // buffer is allocated in steps so a resize can reuse it, and the frame
+  // occupies its top-left corner. A framebuffer smaller than its attachments
+  // is legal and is what makes the corner the render area — the same
+  // rectangle the consumer crops to, and the same one the blit used to write.
   auto makeFb = [&](VkRenderPass rp, VkFramebuffer *out) {
     VkFramebufferCreateInfo framebufferInfo {
       .sType           = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO,
@@ -642,7 +679,7 @@ void RenderWindow::beginMainRenderPass(VkCommandBuffer commandBuffer, bool clear
       .newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
       .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
       .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-      .image = resolveImage_,
+      .image = frameImage(),
       .subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1},
     };
     // Both source stages, since the resolve was read by the capture blit
@@ -775,6 +812,11 @@ void RenderWindow::submitFrame(
   VR(vkBeginCommandBuffer(cmd, &beginInfo),
      "failed to begin recording command buffer!");
 
+  // Taken back from the consumer before anything writes it, because the render
+  // pass is about to resolve into it. Contents discarded — every frame covers
+  // the whole render area.
+  if (renderIntoExport()) exportTarget_->recordAcquireForRendering(cmd);
+
   // Main UI — callback owns begin/end of main pass(es) for blur interrupts.
   mainCallback(cmd, imageIndex);
 
@@ -831,8 +873,16 @@ void RenderWindow::submitFrame(
       VK_PIPELINE_STAGE_TRANSFER_BIT,
       VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
       0, 0, nullptr, 0, nullptr, 1, &toPresent);
+  } else if (renderIntoExport()) {
+    // Nothing to copy: the render pass resolved into the shared image, and its
+    // final layout already left it in TRANSFER_SRC. All that is left is to say
+    // it is not ours any more — GENERAL, and over to the foreign queue.
+    exportTarget_->recordRelease(cmd, dev_.graphicsQueueFamily(),
+                                 VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
   } else if (exportTarget_ != nullptr) {
-    // Export: blit resolve → the shared image, then hand it over.
+    // Export the long way round: blit resolve → the shared image, then hand it
+    // over. For a buffer that cannot be a colour attachment — see
+    // `DmabufImage::renderable`.
     //
     // Same shape as the swapchain path above, and for the same reason — the
     // resolve is the frame, and everything after it is a destination. The
@@ -1033,7 +1083,8 @@ void RenderWindow::readPixels(uint8_t *dst, size_t dstSize)
 
 void RenderWindow::captureFrame(uint8_t *dst, size_t dstSize)
 {
-  assert(resolveImage_ != VK_NULL_HANDLE);
+  const VkImage source = frameImage();
+  assert(source != VK_NULL_HANDLE);
 
   // Main pass finalLayout leaves resolve as TRANSFER_SRC (also the present blit source).
   waitForAllFrames();
@@ -1045,6 +1096,12 @@ void RenderWindow::captureFrame(uint8_t *dst, size_t dstSize)
 
   VkCommandBuffer cmd = dev_.beginSingleTimeCommands();
 
+  // A frame that was resolved into the shared buffer belongs to the consumer
+  // now, so reading it is a real acquisition — the one place the *contents*
+  // have to survive the round trip, which is why it is not the discarding
+  // acquire the frame path uses. Handed straight back below.
+  if (renderIntoExport()) exportTarget_->recordAcquireForRead(cmd);
+
   VkBufferImageCopy copyRegion{
     .bufferOffset = 0,
     .bufferRowLength = 0,
@@ -1053,9 +1110,14 @@ void RenderWindow::captureFrame(uint8_t *dst, size_t dstSize)
     .imageOffset = {0, 0, 0},
     .imageExtent = {extent_.width, extent_.height, 1},
   };
-  vkCmdCopyImageToBuffer(cmd, resolveImage_,
+  vkCmdCopyImageToBuffer(cmd, source,
                          VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, stagingBuffer_, 1,
                          &copyRegion);
+
+  if (renderIntoExport()) {
+    exportTarget_->recordRelease(cmd, dev_.graphicsQueueFamily(),
+                                 VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+  }
 
   VkBufferMemoryBarrier bufBarrier{
     .sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER,
@@ -1238,10 +1300,16 @@ bool RenderWindow::resizeTo(uint32_t width, uint32_t height)
   // device and stall every other surface.
   waitForAllFrames();
 
-  // The old target is about to be the wrong size, and recording a frame
-  // against it between here and the caller's `setExportTarget` would blit into
-  // an image of the previous dimensions.
-  exportTarget_ = nullptr;
+  // A target too small for the new extent is dropped: recording a frame
+  // against it between here and the caller's `setExportTarget` would draw
+  // outside an image of the previous dimensions. One that still fits is kept,
+  // which is the common case — exported buffers are stepped so a resize
+  // usually reuses the one it has — and keeping it is what stops every step of
+  // a drag from allocating a resolve image the window is about to give back.
+  if (exportTarget_ != nullptr && (exportTarget_->width() < width ||
+                                   exportTarget_->height() < height)) {
+    exportTarget_ = nullptr;
+  }
 
   destroySizedResources();
   extent_ = {width, height};
@@ -1282,9 +1350,13 @@ void RenderWindow::setExportTarget(canvas::DmabufImage *target)
     // silently clipped, with no error anywhere.
     throw std::runtime_error("setExportTarget: target is smaller than this window");
   }
+  if (target == exportTarget_) return;
   // Anything still running was recorded against the old destination.
   waitForAllFrames();
   exportTarget_ = target;
+  // Which image the frame lands in has just changed, and with it whether this
+  // window owns one at all.
+  syncResolveTarget();
 }
 
 int RenderWindow::takeFrameFence()
@@ -2370,7 +2442,7 @@ void RenderWindow::render(const canvas::DrawList &list)
           // The frame so far *is* the source, so it has to be resolved before
           // it can be read.
           endMainRenderPass(commandBuffer);
-          blur_.captureAndBlur(commandBuffer, resolveImage(),
+          blur_.captureAndBlur(commandBuffer, frameImage(),
                                VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, b.radius);
           quads_.setBlurResultView(blur_.resultView(), blur_.sampler());
           beginMainRenderPass(commandBuffer, /*clear=*/false);

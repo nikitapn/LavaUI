@@ -90,11 +90,14 @@ class RenderWindow {
 
   /// Sends this window's frames to a buffer another driver reads.
   ///
-  /// A third destination alongside the swapchain and the staging buffer, and
-  /// the same kind of thing as both: the frame is drawn into this window's own
-  /// attachments and resolved as always, and only the resolve is blitted out.
-  /// Nothing about the render passes, the pipelines or the atlas changes
-  /// because someone else is going to read the result.
+  /// A third destination alongside the swapchain and the staging buffer. Where
+  /// the buffer can be rendered into (`DmabufImage::renderable`) it *is* the
+  /// window's resolve attachment: the MSAA attachment resolves straight into
+  /// it, this window allocates no single-sample image of its own, and the
+  /// frame ends with a queue-ownership release instead of a full-screen blit.
+  /// Where it cannot, the frame resolves into this window's own image and is
+  /// blitted out, which is what every export used to do. Nothing about the
+  /// render passes, the pipelines or the atlas changes either way.
   ///
   /// Offscreen windows only — a window that presents already has somewhere to
   /// put its frames. `target` must be at least this window's size and must
@@ -167,8 +170,17 @@ class RenderWindow {
   // ─── Targets ─────────────────────────────────────────────────────────────
 
   const VkExtent2D &getExtent() const { return extent_; }
-  VkImage     resolveImage() const { return resolveImage_; }
-  VkImageView resolveImageView() const { return resolveImageView_; }
+
+  /// The single-sample image this window's frame ends up in.
+  ///
+  /// Usually this window's own resolve attachment, and for an exported window
+  /// whose buffer can be rendered into, the shared image itself — the frame
+  /// resolves there and there is no local copy of it to read. Anything that
+  /// wants the finished frame (the backdrop blur's capture, a readback) has to
+  /// go through here rather than name `resolveImage_`, which in that case does
+  /// not exist.
+  VkImage       frameImage() const;
+  VkImageView   frameImageView() const;
   VkFramebuffer mainFramebuffer() const { return framebuffer_; }
 
   /// If the framebuffer size drifted (a WM resize, `setWindowFrame`), rebuild
@@ -558,6 +570,17 @@ class RenderWindow {
   void createDepthResources();
   void createStagingBuffer();
   void createFramebuffer();
+
+  /// Whether this window's frames are resolved straight into the exported
+  /// buffer. See `setExportTarget`.
+  bool renderIntoExport() const;
+
+  /// Brings the local resolve attachment into line with the current export
+  /// target — allocated when the frame needs somewhere of its own to land,
+  /// released when the shared image is that place — and rebuilds the
+  /// framebuffers around whichever it is. Callers must have waited for this
+  /// window's frames first.
+  void syncResolveTarget();
 
   /// Everything `resize()` rebuilds, and everything the destructor frees.
   void createSizedResources();

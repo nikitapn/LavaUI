@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "render/draw_command.hpp"
+#include "render/export_format.hpp"
 #include "render/gpu_report.hpp"
 #include "util/result.hpp"
 
@@ -48,8 +49,9 @@ public:
   ///
   /// No window: surfaces come later, one per `openExportedWindow`. `drmFd`
   /// names the GPU the consumer renders on; this one has to be the same, and
-  /// it is pinned rather than preferred. `importableModifiers` is what the
-  /// consumer said it can read, and an empty list is a request to fail rather
+  /// it is pinned rather than preferred. `consumerFormats` is what the consumer
+  /// said it can read, for each of `DmabufImage::exportFormats()` it supports
+  /// and in that order of preference; an empty list is a request to fail rather
   /// than a request to guess.
   /// `sampleCap` limits MSAA — see `RenderDevice::setSampleCap`. 0 keeps the
   /// engine default, which is what a caller with no opinion should pass; a
@@ -57,7 +59,7 @@ public:
   /// multiplied by every surface on screen.
   [[nodiscard]] canvas::VoidResult initExported(
     const std::string &assetsRoot, int drmFd,
-    const std::vector<uint64_t> &importableModifiers,
+    const std::vector<canvas::ExportFormatSupport> &consumerFormats,
     uint32_t sampleCap = 0);
 
   /// Opens one more exported surface on the device. Returns its window id, or

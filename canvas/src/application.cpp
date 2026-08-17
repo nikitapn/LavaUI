@@ -66,8 +66,9 @@ struct Application::Impl
   /// The buffer another driver reads, per surface. Empty in every other mode.
   ///
   /// Declared here, above `windows`, for its destruction order: members die in
-  /// reverse, so a window that blits into its image is gone before the image
-  /// is. Below `device`, for the same reason in the other direction.
+  /// reverse, so a window that draws into its image — and whose framebuffer
+  /// names its view — is gone before the image is. Below `device`, for the
+  /// same reason in the other direction.
   std::unordered_map<uint32_t, std::unique_ptr<canvas::DmabufImage>> exportImages;
   /// Exported buffers no window is using, kept for the next one that asks for
   /// that size.
@@ -90,9 +91,10 @@ struct Application::Impl
   /// Declared with `exportImages` and for the same reason: both hold device
   /// memory and both have to be gone before the device is.
   std::vector<std::unique_ptr<canvas::DmabufImage>> exportPool;
-  /// What the consumer said it can import. Settled once, at `initExported`,
-  /// because it describes the consumer and not any one surface.
-  std::vector<uint64_t> exportModifiers;
+  /// What the consumer said it can import, per format and in preference
+  /// order. Settled once, at `initExported`, because it describes the consumer
+  /// and not any one surface.
+  std::vector<canvas::ExportFormatSupport> exportFormats;
 
   /// True between `beginFrameGroup` and `endFrameGroup`. Written on the main
   /// thread while nothing is drawing and read by every render worker, so the
@@ -218,15 +220,16 @@ struct Application::Impl
   /// pinned to the one behind `drmFd` (told to the device *before* it comes
   /// up, since it decides which card is chosen), and the modifiers it may
   /// export with are the ones the consumer said it can read.
-  canvas::VoidResult initExported(const std::string &assetsRoot, int drmFd,
-                                  const std::vector<uint64_t> &importable,
-                                  uint32_t sampleCap)
+  canvas::VoidResult initExported(
+    const std::string &assetsRoot, int drmFd,
+    const std::vector<canvas::ExportFormatSupport> &consumerFormats,
+    uint32_t sampleCap)
   {
     try {
       if (!assetsRoot.empty()) {
         std::filesystem::current_path(assetsRoot);
       }
-      exportModifiers = importable;
+      exportFormats = consumerFormats;
       device.exportToDrmDevice(drmFd);
       // Before `init`: the render passes and every pipeline are built against
       // the sample count it settles.
@@ -292,7 +295,7 @@ struct Application::Impl
       exportPool.erase(it);
       return image;
     }
-    return canvas::DmabufImage::create(device, w, h, exportModifiers);
+    return canvas::DmabufImage::create(device, w, h, exportFormats);
   }
 
   /// Takes a buffer back once no window is drawing into it.
@@ -302,7 +305,7 @@ struct Application::Impl
   /// is why `CanvasSurface` drops that before it closes its window.
   ///
   /// What it still holds is the last frame the previous window drew. Nothing
-  /// shows it — the next window blits its whole extent before anything reads
+  /// shows it — the next window covers its whole extent before anything reads
   /// the buffer, and the part past that extent is cropped away by the
   /// consumer — and it never leaves this process either way, since the
   /// descriptors go to the compositor's own renderer and to nobody else.
@@ -400,8 +403,9 @@ struct Application::Impl
       recycleExportImage(std::move(it->second));
       it->second = std::move(replacement);
     } else {
-      // `resizeTo` drops the target rather than keep pointing at an image the
-      // window no longer matches, so even the buffer being kept is handed back.
+      // Already the window's target — `resizeTo` keeps a buffer the new extent
+      // still fits in — so this only matters on the path where it did not, and
+      // costs nothing here.
       window->renderWindow().setExportTarget(it->second.get());
     }
 
@@ -517,7 +521,7 @@ struct Application::Impl
       // may be mid-frame against the same queue.
       device.waitForAllFramesInFlight();
       windows.erase(it);
-      // After the window, so nothing is still blitting into it. Kept for the
+      // After the window, so nothing is still drawing into it. Kept for the
       // next window of this size rather than destroyed — see `exportPool`. A
       // no-op for any window that was not exporting.
       if (auto image = exportImages.find(windowId);
@@ -680,9 +684,10 @@ canvas::VoidResult Application::init(const std::string &assetsRoot) {
 
 canvas::VoidResult Application::initExported(
   const std::string &assetsRoot, int drmFd,
-  const std::vector<uint64_t> &importableModifiers, uint32_t sampleCap)
+  const std::vector<canvas::ExportFormatSupport> &consumerFormats,
+  uint32_t sampleCap)
 {
-  return impl_->initExported(assetsRoot, drmFd, importableModifiers, sampleCap);
+  return impl_->initExported(assetsRoot, drmFd, consumerFormats, sampleCap);
 }
 
 uint32_t Application::openExportedWindow(uint32_t width, uint32_t height)
