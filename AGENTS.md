@@ -285,6 +285,7 @@ anywhere.
 | `LAVAUI_PROFILE=1` | Per-widget paint profiling via agent `profile` |
 | `LAVA_EDITOR_PROBE=1` | Editor hot paths (hit test, caret, selection, emit) with the buffer offset each was working at — see `EditorProbe` |
 | `LAVA_FRAME_PROBE=1` | Compositor: per-surface frame cost, gaps and stalls |
+| `LAVA_SCANOUT_PROBE=1` | Compositor: per output frame, whether a client covers it and whether that client's buffer is fenced — the input to the direct-scanout decision |
 | `LAVA_VRAM_STATS=1` | Compositor: GPU memory report to stderr, every 10s (`=N` for N seconds, `=verbose` for every allocation). Rides the output frame, so an idle desktop stops reporting — `kill -USR2` dumps one on demand |
 | `LAVA_MSAA=N` | Any canvas process: cap multisampling at N (1/2/4/8). Overrides `[render] msaa`; the way to A/B a session without a rebuild |
 | `LAVA_SHARED_DEPTH=0` | Compositor: one depth attachment per window again, for comparing against the shared one |
@@ -559,6 +560,46 @@ of snapshots nothing could ever name again. That is what
 `TextureManager::discardTexture` is for; reach for it for any key with a
 generation counter in it, and *not* for paths or content hashes, where the
 dormant set is a good bet.
+
+## A fullscreen game is scanned out, not composited
+
+Direct scanout hands a client's dmabuf straight to the CRTC. It is what makes
+a fullscreen game smooth, and it is also how one paints garbage: the game is
+still writing the buffer the display is reading. NVIDIA has never honoured the
+implicit `dma_resv` fence, so on that driver "still writing" is not a race
+anybody wins.
+
+**`linux-drm-syncobj-v1` is the answer, and it is advertised.** A client
+attaches an acquire timeline point to each buffer; wlroots hands it to the
+atomic commit as `IN_FENCE_FD` (`backend/drm/atomic.c`), and the CRTC waits for
+the client's own GPU work without anyone copying anything. `Output::syncScanoutLock`
+therefore composites only what is *not* fenced: it finds the client covering
+the output — X11 or Wayland, the question is the same — and holds
+`wlr_output_lock_attach_render` while that client's buffer has no acquire
+point.
+
+Two things make the fence a trustworthy per-frame signal rather than a flapping
+one, and both are worth knowing before "it toggles" is diagnosed again:
+
+- A buffer commit with no acquire point is a **protocol error** once the
+  surface has a `wp_linux_drm_syncobj_surface_v1`. A client cannot fence some
+  frames and not others.
+- wlroots **ignores bufferless commits** when moving the state, so a
+  damage-only or frame-callback commit does not clear the fence of the buffer
+  that is actually on screen.
+
+Measured with `LAVA_SCANOUT_PROBE=1` against a fullscreen X11 GL client on
+Xwayland 24.1 and NVIDIA 610: fenced on **100% of frames** over minutes, in
+both software and hardware GL. The compositor used to composite every covering
+X11 client regardless, which cost a full-screen render and a whole-output
+damage on every frame of every fullscreen game.
+
+The lock is asymmetric on purpose: an unfenced frame locks immediately, and it
+takes `kFencedFramesToUnlock` (30) consecutive fenced frames to release, so a
+surface swapped out under an X11 window cannot flip the output for a frame.
+While locked the damage ring gets the whole frame — Xwayland commits reused
+buffers with tiny damage regions, and the other swapchain image would still be
+holding the previous camera angle.
 
 ## The dock hides only when something is in the way
 

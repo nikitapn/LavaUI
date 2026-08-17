@@ -216,6 +216,14 @@ struct Output {
   bool sceneAttached = false;
   /// Whether `wlr_output_lock_attach_render` is held. See `syncScanoutLock`.
   bool compositeLocked = false;
+  /// Consecutive frames the covering client has been fenced for. Reset by any
+  /// frame that is not, which is what makes locking immediate and unlocking
+  /// patient — see `syncScanoutLock`.
+  uint32_t fencedFrames = 0;
+  /// Half a second at 60 Hz: long enough that a surface swap cannot uncover
+  /// the output for a frame, short enough that a game reaches scanout while
+  /// it is still showing its loading screen.
+  static constexpr uint32_t kFencedFramesToUnlock = 30;
 
   Output(Server *server, wlr_output *output);
   ~Output();
@@ -226,12 +234,32 @@ struct Output {
   /// mode never scanouts — other windows are visible — which is why that
   /// looks fine.
   ///
-  /// Covering X11 is always composited, even when a fence exists. Flipping
-  /// between scanout and composite every time the fence comes and goes is
-  /// a camera that jitters. And once we composite, the output damage ring
-  /// has to be the whole frame: Xwayland often commits a reused buffer with
-  /// a tiny damage region, and the other swapchain image then still holds
-  /// the previous camera angle.
+  /// A fence is the whole answer, and it is asked of the buffer rather than of
+  /// the client: `linux-drm-syncobj-v1` is advertised, wlroots hands a scanned
+  /// out buffer's acquire timeline to the atomic commit as `IN_FENCE_FD`, and
+  /// the CRTC then waits for the client's own GPU work by itself. So a fenced
+  /// covering client — X11 or Wayland — is scanned out, and only an unfenced
+  /// one is composited.
+  ///
+  /// This used to composite *every* covering X11 client, fenced or not, on the
+  /// theory that the fence came and went from frame to frame and the flipping
+  /// would jitter. It does not come and go: the protocol makes a buffer commit
+  /// without an acquire point a protocol error, and wlroots ignores bufferless
+  /// commits when it moves the state — so the fence on record is the fence of
+  /// the buffer actually on screen. `LAVA_SCANOUT_PROBE=1` counts it; measured
+  /// against a fullscreen X11 GL client on Xwayland 24.1 and NVIDIA 610, it is
+  /// fenced on 100% of frames over minutes. What the theory cost was a
+  /// full-screen composite, and a whole-output damage, on every frame of every
+  /// fullscreen game.
+  ///
+  /// The lock is still asymmetric, because the two mistakes are not equally
+  /// bad: an unfenced buffer locks on the spot, and it takes a run of
+  /// `kFencedFramesToUnlock` fenced frames to let scanout back. A surface
+  /// swapped out under an X11 window cannot flip the output for one frame.
+  ///
+  /// While composited the damage ring gets the whole frame: Xwayland often
+  /// commits a reused buffer with a tiny damage region, and the other
+  /// swapchain image then still holds the previous camera angle.
   void syncScanoutLock();
 
   /// Applies the config block for this connector: mode, scale, transform,
@@ -5465,7 +5493,17 @@ void Output::syncScanoutLock() {
   wlr_box box{};
   wlr_output_layout_get_box(server->output_layout, wlr, &box);
 
-  bool lock = false;
+  // `LAVA_SCANOUT_PROBE=1` answers the question this function is built around:
+  // does the covering client attach an acquire fence on *every* frame, or only
+  // on some? "Only on some" is what forces a blanket composite, and it is a
+  // claim about a particular client on a particular driver — not something to
+  // assume in either direction.
+  static const bool probe = std::getenv("LAVA_SCANOUT_PROBE") != nullptr;
+
+  // Whoever owns this output's pixels. X11 is looked at first only because it
+  // is the case that produced the bug; both kinds are then asked the same
+  // question, since both answer it the same way.
+  wlr_surface *covering = nullptr;
   for (XwaylandSurface *xwindow : server->xwindows) {
     if (xwindow->scene_tree == nullptr || xwindow->xsurface->surface == nullptr) {
       continue;
@@ -5475,12 +5513,10 @@ void Output::syncScanoutLock() {
                          xwindow->xsurface->height, box)) {
       continue;
     }
-    // Always, not only when unfenced: a fence that appears on some frames
-    // and not others would toggle scanout and read as a jumping camera.
-    lock = true;
+    covering = xwindow->xsurface->surface;
     break;
   }
-  if (!lock) {
+  if (covering == nullptr) {
     for (FramedWindow *window : server->toplevels) {
       wlr_surface *surface = window->focusSurface();
       wlr_scene_node *node = window->contentNode();
@@ -5489,11 +5525,22 @@ void Output::syncScanoutLock() {
                            box)) {
         continue;
       }
-      if (!surface_has_acquire_fence(surface)) {
-        lock = true;
-        break;
-      }
+      covering = surface;
+      break;
     }
+  }
+
+  const bool fenced = covering != nullptr && surface_has_acquire_fence(covering);
+  bool lock = compositeLocked;
+  if (covering == nullptr) {
+    // Nothing owns the output; what wlroots scanouts is its own business.
+    lock = false;
+    fencedFrames = 0;
+  } else if (!fenced) {
+    lock = true;
+    fencedFrames = 0;
+  } else if (++fencedFrames >= kFencedFramesToUnlock) {
+    lock = false;
   }
 
   if (lock != compositeLocked) {
@@ -5505,6 +5552,23 @@ void Output::syncScanoutLock() {
   }
   if (lock) {
     wlr_damage_ring_add_whole(&scene_output->damage_ring);
+  }
+
+  if (probe) {
+    static uint64_t totalFenced = 0, totalUnfenced = 0, frames = 0;
+    static auto reported = std::chrono::steady_clock::now();
+    if (covering != nullptr) (fenced ? totalFenced : totalUnfenced) += 1;
+    ++frames;
+    const auto now = std::chrono::steady_clock::now();
+    if (now - reported > std::chrono::seconds(2)) {
+      reported = now;
+      wlr_log(WLR_INFO,
+              "scanout probe: %" PRIu64 " frame(s), covering client fenced on "
+              "%" PRIu64 ", unfenced on %" PRIu64 ", composite %s",
+              frames, totalFenced, totalUnfenced,
+              compositeLocked ? "forced" : "not forced");
+      frames = totalFenced = totalUnfenced = 0;
+    }
   }
 }
 
