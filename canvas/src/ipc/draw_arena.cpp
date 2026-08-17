@@ -198,6 +198,10 @@ struct DrawArena::Impl {
   // Consumer state.
   uint64_t lastSeenSequence = 0;
   uint32_t heldSlot         = kNoSlot;
+  /// Generations the consumer has moved off but is still keeping mapped,
+  /// because the `DrawList` it handed out last points into one of them. Dropped
+  /// by `dropLeftBehind` — see `acquireFrame`.
+  std::vector<Mapping> leftBehind;
 
   ~Impl()
   {
@@ -211,7 +215,17 @@ struct DrawArena::Impl {
       m.pinned = false;  // the arena is going away; there is nothing left to join
       unmapAndUnlink(m);
     }
+    dropLeftBehind();
     unmapAndUnlink(current);
+  }
+
+  /// Unmaps the generations kept alive for a `DrawList` the caller no longer
+  /// holds. Consumer side, so this only ever munmaps — the names belong to the
+  /// producer, which has retired these generations already.
+  void dropLeftBehind()
+  {
+    for (auto &m : leftBehind) unmapAndUnlink(m);
+    leftBehind.clear();
   }
 
   /// Points every mapping the producer still holds at `generation`, so a
@@ -634,7 +648,19 @@ bool DrawArena::acquireFrame(canvas::DrawList &out)
     Impl::Mapping newer;
     if (!impl_->mapExisting(shmName(impl_->id, next), newer)) break;
     impl_->current.header()->consumerLeft.store(1, std::memory_order_release);
-    impl_->unmapAndUnlink(impl_->current);
+    // Kept mapped, not unmapped here. The caller is holding the `DrawList`
+    // this generation's last frame was acquired into, and is entitled to draw
+    // it again — a resize repaints without waiting for a publish. The producer
+    // grows *mid-frame*, so the usual state right after a growth is a new
+    // generation with nothing published in it yet, and the `return false`
+    // below would then leave the caller rendering out of a mapping this loop
+    // had already dropped. Unmapping happens once there are new pointers to
+    // hand over instead.
+    //
+    // `consumerLeft` above is still correct and still early: it lets the
+    // producer unlink and unmap its side, which does not disturb ours.
+    impl_->heldSlot = kNoSlot;  // that slot belongs to a generation the producer has left
+    impl_->leftBehind.push_back(impl_->current);
     impl_->current = newer;
     // Sequence numbers continue across generations, so nothing resets here.
   }
@@ -681,6 +707,8 @@ bool DrawArena::acquireFrame(canvas::DrawList &out)
   out.spatialVertexCount = spatial;
   out.gradients          = gradPtr;
   out.gradientCount      = grads;
+  // `out` no longer points into any generation we moved off, so those can go.
+  impl_->dropLeftBehind();
   return true;
 }
 

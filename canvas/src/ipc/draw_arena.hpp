@@ -47,6 +47,11 @@
 // it left off. The old header records the new generation number, so the
 // consumer discovers the move by reading memory it is already mapped to; no
 // control channel is needed for what is fundamentally an allocation detail.
+//
+// Both sides then hold the superseded generation open a little longer than they
+// need it, for mirror-image reasons: the producer until the consumer says it
+// has left, the consumer until it has a frame in the new generation to replace
+// the one it may still be drawing.
 
 #include <atomic>
 #include <cstddef>
@@ -208,7 +213,11 @@ class DrawArena {
   /// arena between frames is picked up here.
   ///
   /// The returned `DrawList` points into the mapping and stays valid until
-  /// `releaseFrame`.
+  /// `releaseFrame` — and so does the one from the *previous* call, including
+  /// when this one returns false after following a growth. A consumer that
+  /// redraws the frame it is holding (which is what a resize does) can
+  /// therefore keep drawing across a growth; the superseded mapping is dropped
+  /// only once there is a newer frame to point at.
   bool acquireFrame(canvas::DrawList &out);
 
   /// Releases the acquired slot back to the producer. Safe to call without a
