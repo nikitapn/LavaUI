@@ -266,6 +266,13 @@ Compositor is **Meson** (`meson setup build && ninja -C build`), separate from
 SwiftPM. Scripts under `compositor/scripts/` (`dev-run`, `start-lava-compositor`,
 optional QEMU VM).
 
+`meson test -C build` runs the C++ tests under `canvas/tests/`. They cover the
+parts that can be tested without a GPU or a screen — today the draw arena's
+handoff and growth protocol, whose consumer once unmapped a generation a frame
+was still being drawn out of. A test there is compiled from the sources it
+exercises rather than linked against `libcanvas`, so it stays runnable
+anywhere.
+
 ### Useful environment
 
 | Variable | Effect |

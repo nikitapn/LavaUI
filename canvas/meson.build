@@ -90,3 +90,17 @@ canvas_dep = declare_dependency(
   dependencies: canvas_deps,
   compile_args: canvas_defines,
 )
+
+# Tests. `meson test -C build`.
+#
+# Compiled from the sources under test rather than linked against libcanvas, so
+# a test costs nothing but the code it actually exercises — the draw arena is
+# shared memory and needs no Vulkan, no window and no display, and a test that
+# dragged the GPU stack in would stop being runnable in the places this one is.
+draw_arena_test = executable(
+  'draw_arena_test',
+  ['tests/draw_arena_test.cpp', 'src/ipc/draw_arena.cpp'],
+  include_directories: canvas_includes,
+  build_by_default: false,
+)
+test('draw arena', draw_arena_test)
