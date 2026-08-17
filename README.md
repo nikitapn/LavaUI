@@ -38,6 +38,8 @@ struct Counter: View {
 | `LavaTerm` / `LavaTermApp` | Terminal emulator (PTY + ANSI + Canvas grid) | `LavaUI`, `LavaTermCore` |
 | `LavaTermCore` | VT grid + ANSI parser (headless, unit-tested) | nothing |
 | `canvas/` (package) | C++ engine (`CxxCanvas`) + Yoga (`CYoga`), built by SwiftPM | system Vulkan/GLFW/FreeType/HarfBuzz |
+| `compositor/` | Wayland compositor and control-plane servant — C++20, built by **meson** rather than SwiftPM | wlroots 0.19, `canvas/`, NPRPC |
+| `LavaTaskbar` `LavaDock` `LavaLauncher` `LavaSettings` `LavaDebug` | The desktop shell — panel, dock, launcher, settings, GPU inspector. Ordinary LavaUI clients, with no privileges the demo does not have | `LavaUI`, `LavaClient` |
 
 `LavaText` and `LavaMenu` having **no dependencies at all** is deliberate:
 editing logic and menu IR are where fiddly correctness lives, and keeping them
@@ -97,6 +99,82 @@ LavaSpotify + spotifyd (PulseAudio, two logins, Connect playback):
 
 Linux only today. `CxxCanvas`/`CYoga` are gated on it, and the engine is
 GLFW + Vulkan.
+
+## The compositor
+
+The repo has a second half: a **Wayland compositor** under `compositor/` —
+C++20 on wlroots 0.19 — that runs a desktop of LavaUI apps, and everything else
+Linux runs alongside them through xdg-shell and Xwayland.
+
+It exists because of what an app costs when it is a *client* of it rather than
+a window on its own:
+
+```bash
+swift run LavaTerm                 # windowed: its own Vulkan device, its own GLFW window
+LAVA_CLIENT=1 swift run LavaTerm   # client: no device, no window, no GPU at all
+```
+
+The client still does body, layout, shaping and emission — the whole framework
+above the pixels. What it does not do is own a renderer: the draw list goes
+into a shared-memory **arena**, a `Present` call says a frame is ready, and the
+compositor draws it. One Vulkan device serves the entire desktop, so the glyph
+atlas, the texture cache and the pipelines are shared by every window on
+screen, and a second window costs its attachments and its exported buffer
+rather than a second copy of the renderer. Pixels never travel over RPC: the
+frame is rendered straight into a dma-buf that wlroots' scene graph shows, and
+handed over with a fence rather than a copy.
+
+The shell is made of the same thing. The panel, the dock, the Alt+P launcher,
+the 3D Ctrl+Tab switcher and the settings panel are LavaUI clients with no
+privilege the demo does not have — they ask the compositor for what they need
+over the control plane (`idl/lava.npidl`, one source of truth for both sides'
+stubs). The compositor starts and supervises the ones a session cannot do
+without, and notices a component that is still running but has stopped drawing,
+which the operating system cannot see.
+
+For everyone else it is an ordinary compositor: xdg-shell and Xwayland,
+server-side decorations for clients that ask and client-side for those that
+draw their own, the seat's clipboard and primary selection (so a copy in
+LavaTerm pastes into Firefox and back), `wlr-data-control` and
+`ext-data-control` for clipboard managers, `screencopy` and `xdg-output` for
+`grim`, pointer constraints and relative pointer for games, an
+`org.freedesktop.impl.portal.Screenshot` on D-Bus, and Print Screen straight to
+the clipboard as PNG.
+
+A fullscreen game is **scanned out, not composited**: `linux-drm-syncobj-v1` is
+advertised, the client's acquire fence rides the atomic commit as `IN_FENCE_FD`,
+and the CRTC waits for the game's own GPU work without anyone copying a frame.
+Only a covering client whose buffer carries no fence is composited, and that
+case is worth the copy: NVIDIA has never honoured the implicit fence hung off a
+dma-buf, so an unfenced buffer there goes to the display while the client is
+still drawing into it. Vsync does not help with that one — it is not a timing
+problem.
+
+```bash
+compositor/scripts/dev-run       # nested in the Wayland session you are in
+compositor/scripts/dev-run -H    # headless, software rendering, no window
+compositor/scripts/dev-run -r    # release build, compositor and shell alike
+compositor/scripts/dev-run -- env LAVA_CLIENT=1 ./.build/debug/LavaTerm
+compositor/scripts/start-lava-compositor setup   # a real session, on a real GPU
+```
+
+It builds both halves — the compositor with meson, the shell with SwiftPM — and
+points one at the other, because that mismatch is otherwise silent: a release
+compositor will happily start a debug dock and leave you measuring one build
+with the other.
+
+Nesting is the development loop: the compositor comes up as a window of your
+existing session, with its own control plane, its own socket and its own window
+memory, so nothing of the session you are sitting in is reachable by accident.
+
+Two things it does not do yet, in case they are what you came for:
+`zwlr_layer_shell_v1` is not advertised (rofi and friends run through Xwayland
+instead), and a Wayland client's corners stay square — rounding those means
+compositing the scene by hand rather than letting `wlr_scene` do it.
+
+The compositor's own README (**[compositor/README.md](compositor/README.md)**)
+carries the rest: configuration, the shell supervisor, window memory, the
+clipboard's hazards, and what `[render] msaa` costs per surface.
 
 ## Using LavaUI in a new project
 

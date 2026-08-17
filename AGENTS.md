@@ -379,9 +379,37 @@ will also kill the shell.
 | Cannot | Why | Do instead |
 |---|---|---|
 | Move the real cursor / click the desktop, drag a window edge, right-click for a popup | headless wlroots has no input devices, and there is no virtual-pointer protocol | drive the app's own agent port, or ask the human |
-| Screenshot foreign (GTK/Chromium) windows from *grim* | no screencopy protocol implemented, so `grim` cannot attach | Print Screen copies the output under the cursor to the clipboard as PNG. `CaptureSurface` reads a foreign window's last buffer (shm map or `wlr_texture_read_pixels`); the 3D switcher uses that. |
 | See overlay content from the agent | `find`/`layout_tree` walk the main tree; a presented overlay's subtree is detached | click by coordinate |
 | Reach the compositor's scene scroll from a client's agent | agent input is injected into that client's engine | test scene-level behaviour in **windowed** mode, where the app owns the renderer |
+
+### Seeing what the compositor drew
+
+A client's agent screenshot shows that client's own surface. Everything the
+*compositor* draws — shadows, frost, decorations, the wallpaper behind a
+window, where a window actually landed — needs an output capture, and headless
+has two. Both work with no pointer and no screen:
+
+```bash
+# 1. screencopy, if WAYLAND_DISPLAY points at the session under test
+XDG_RUNTIME_DIR=$RT WAYLAND_DISPLAY=wayland-0 grim shot.png
+
+# 2. the screenshot portal, over D-Bus, which needs neither
+busctl --user call org.freedesktop.impl.portal.desktop.lava.test \
+  /org/freedesktop/portal/desktop org.freedesktop.impl.portal.Screenshot \
+  Screenshot 'ossa{sv}' /org/freedesktop/portal/desktop/request/probe "probe" "" 0
+# → uri "file:///tmp/lava-shot-XXXXXX.png"
+```
+
+The portal's bus name is the `.test` one for a nested or headless compositor —
+`nested` is true whenever `WAYLAND_DISPLAY` or `DISPLAY` was set when it
+started — so a run inside your own session cannot answer for the desktop. That
+is what makes calling it from an agent session safe.
+
+`CaptureSurface` is the third and narrowest: one window, a foreign one from the
+buffer it last committed. The 3D switcher's cards are that.
+
+Print Screen puts the same output capture on the clipboard, and is the one that
+needs a key.
 
 Windowed mode under a nested compositor is fragile in one known way: if the
 compositor clamps the window to a size the app did not request, the swapchain

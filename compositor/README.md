@@ -1,8 +1,28 @@
-# wlroots compositor playground
+# The Lava compositor
 
-A minimal C++20/wlroots 0.19 compositor and a QEMU development VM. The first
-milestone intentionally renders only a dark background; xdg-shell and input
-handling come next.
+A C++20 Wayland compositor on wlroots 0.19: the desktop LavaUI apps run on, and
+an ordinary compositor for everything else — xdg-shell, Xwayland, the seat's
+clipboard and primary selection, screencopy, a screenshot portal.
+
+What is unusual is the client path. A LavaUI app can run with **no GPU at all**:
+it lays out, shapes text and emits a draw list into shared memory, and this
+process draws it. One Vulkan device, one glyph atlas and one texture cache
+serve every window on the desktop, so a second window costs its attachments
+rather than a second renderer. The panel, the dock, the launcher and the app
+switcher are exactly those clients, with no privilege any other client lacks.
+
+The fastest loop, from the repo root:
+
+```sh
+compositor/scripts/dev-run       # nested in the Wayland session you are in
+compositor/scripts/dev-run -H    # headless, software rendering
+compositor/scripts/dev-run -r    # release, compositor and shell alike
+```
+
+Nested, it is a window of your existing session with its own socket, control
+plane and window memory, so nothing of the session you are sitting in is
+reachable by accident. The QEMU VM below predates that loop and is still the
+way to see real KMS output on a machine you would rather not log out of.
 
 ## Start the VM
 
