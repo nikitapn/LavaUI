@@ -413,8 +413,8 @@ driver minus allocator is the swapchain and the driver's own working set.
 
 Two things to know before reading a report:
 
-- **One window on screen is up to four canvas windows** — contents, title bar,
-  drop shadow, backdrop frost — and they are wildly different sizes (frost is
+- **One window on screen is up to three canvas windows** — contents, title bar,
+  backdrop frost — and they are wildly different sizes (frost is
   output-sized). The compositor names them in the report (`GpuWindow.title`);
   a bare canvas window id would send you looking for a client that owns none
   of it.
@@ -498,6 +498,36 @@ exports a new buffer and rebuilds the framebuffers around it mid-session.
 A window that is read back (`captureFrame`, so any screenshot) now acquires the
 buffer from the consumer first: the only acquire whose *contents* matter, and
 the reason `recordAcquireForRead` is not the discarding one the frame path uses.
+
+**A drop shadow is nine scene nodes onto one shared image.** Every focused
+window used to get a canvas surface the size of itself plus the blur's reach —
+a multisampled attachment, an exported dma-buf and a render on every move — and
+a desktop of eleven windows had eleven pictures of the same thing at different
+sizes. It *is* the same thing: the falloff of a rounded rectangle depends only
+on the distance to it, so the picture is constant along each edge and one
+colour in the middle. That nine-slices exactly.
+
+`SurfaceRegistry::ShadowTile` draws it once at `2·(blur + radius) + band`
+square — 104×104 for the default 33 px blur and 14 px radius — and every
+window's shadow becomes nine `wlr_scene_buffer`s with source boxes into it.
+One terminal: **64.0 → 45.0 MiB**, its 14.0 MiB shadow surface replaced by a
+1.2 MiB tile that the next window will not pay for again.
+
+Nine-slicing is usually an approximation and here it is not, which is worth
+checking rather than believing: composing the slices on the CPU and comparing
+against the same shadow rendered at full size is **identical in every pixel**
+at 600×400, 1920×1080, 200×120, at radius 0 (foreign windows, whose corners
+nothing can round) and at another blur. A full-desktop capture through the
+screenshot portal, old build against new, differs in **3 pixels of 921,600, by
+1/255** — floating-point noise in the SDF, not a seam.
+
+Two things the geometry needs and would be silently wrong without: the source
+box for a stretched slice is inset two pixels into the band, because a linear
+sample at the end of a stretched run reaches past the box it was given; and the
+vertical offset is applied by *placing* the tree, not by drawing it into the
+tile, because an offset is a translation of the whole picture. The one
+approximation left is a window narrower than two corners, where the corner
+slices are squeezed rather than the shadow refused.
 
 **Blur happens at half resolution.** The Kawase pyramid's first level and the
 capture target were both window-sized, and they are the two largest things a

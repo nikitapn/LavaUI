@@ -966,18 +966,31 @@ struct ClientSurface {
            sy < inputY + inputH;
   }
 
-  /// The drop shadow: its own surface, sitting behind the window.
+  /// The drop shadow: nine scene nodes onto one shared image.
   ///
-  /// Behind rather than around, which is what lets it exist at all for a
-  /// Wayland client — a shadow falls on what is *under* a window and needs
-  /// nothing from the window's own pixels, unlike rounding, which has to
+  /// Behind the window rather than around it, which is what lets it exist at
+  /// all for a Wayland client — a shadow falls on what is *under* a window and
+  /// needs nothing from the window's own pixels, unlike rounding, which has to
   /// reshape them.
+  ///
+  /// It owns no pixels. A blurred rounded rectangle is the same picture at
+  /// every size — corners that do not change, edges that are constant along
+  /// their length, an interior that is one colour — so one tile is stretched
+  /// over any window by `SurfaceRegistry::ShadowTile`, and what a window keeps
+  /// is nine `wlr_scene_buffer`s pointing into it. The tree is what everything
+  /// else moves, enables and reparents, exactly as it did the single node this
+  /// replaces.
   ///
   /// Only the focused window's is enabled. That is the whole feature: it says
   /// which window is active in the place the user is already looking, instead
   /// of a tinted border they have to go and check.
-  std::unique_ptr<lava::CanvasSurface> shadow;
-  wlr_scene_buffer *shadowNode = nullptr;
+  wlr_scene_tree *shadowTree = nullptr;
+  std::array<wlr_scene_buffer *, 9> shadowSlices{};
+  /// What the slices were last laid out for, so a move does not redo a resize's
+  /// work. Width and height of the *window*; the tile's own numbers are its.
+  uint32_t shadowW = 0;
+  uint32_t shadowH = 0;
+  float    shadowRadius = -1.f;
 
   /// Compositor frost under this window. See `SetBackdropBlur`.
   /// A canvas surface so the blur runs on the compositing Vulkan device
@@ -1622,8 +1635,8 @@ class SurfaceRegistry : public lava::CompositorHost {
     if (surface.barNode != nullptr) {
       wlr_scene_node_reparent(&surface.barNode->node, workspaces_->tree[index]);
     }
-    if (surface.shadowNode != nullptr) {
-      wlr_scene_node_reparent(&surface.shadowNode->node,
+    if (surface.shadowTree != nullptr) {
+      wlr_scene_node_reparent(&surface.shadowTree->node,
                               workspaces_->tree[index]);
       placeShadow(surface);
     }
@@ -1802,8 +1815,8 @@ class SurfaceRegistry : public lava::CompositorHost {
       wlr_scene_node_set_enabled(&surface.node->node, !minimized);
     }
     syncBar(surface);
-    if (surface.shadowNode != nullptr) {
-      wlr_scene_node_set_enabled(&surface.shadowNode->node, false);
+    if (surface.shadowTree != nullptr) {
+      wlr_scene_node_set_enabled(&surface.shadowTree->node, false);
     }
     // Nothing on a hidden window's frame is hovered, and a button left lit
     // would still be lit when it comes back.
@@ -1965,8 +1978,15 @@ class SurfaceRegistry : public lava::CompositorHost {
     for (const auto &surface : surfaces_) {
       name(surface->canvas, *surface, "contents");
       name(surface->bar, *surface, "title bar");
-      name(surface->shadow, *surface, "shadow");
       name(surface->blurCanvas, *surface, "backdrop frost");
+    }
+    // One tile serves every window, so it is named after the shape it holds
+    // rather than after any of them.
+    for (const auto &tile : shadowTiles_) {
+      if (!tile.surface) continue;
+      names[tile.surface->canvasWindowId()] =
+        "drop shadow tile (radius " +
+        std::to_string(static_cast<int>(tile.radius)) + ", shared)";
     }
     for (canvas::GpuWindowReport &window : report.windows) {
       if (auto found = names.find(window.id); found != names.end()) {
@@ -2508,6 +2528,9 @@ class SurfaceRegistry : public lava::CompositorHost {
     shadowBlur_ = shadowBlur;
     shadowOpacity_ = shadowOpacity;
     shadowOffsetY_ = shadowOffsetY;
+    // The tiles were drawn for the old numbers. Dropped before anything asks
+    // for one, so the rebuild below hands every window the new shape.
+    dropShadowTiles();
     for (auto &surface : surfaces_) {
       applyShadow(*surface);
       applyCorners(*surface);
@@ -2519,65 +2542,107 @@ class SurfaceRegistry : public lava::CompositorHost {
     }
   }
 
-  /// Builds, moves, resizes and redraws a window's shadow.
+  /// One blurred rounded rectangle, stretched over every window that has a
+  /// shadow.
   ///
-  /// One function rather than the four the bar needs, because a shadow has no
-  /// state of its own worth tracking: it is entirely a function of the
-  /// window's rectangle, the config, and whether the window is focused. Called
-  /// whenever any of those changes, and cheap when nothing did — the surface
-  /// is only reallocated when its size actually differs.
-  void applyShadow(ClientSurface &surface) {
-    const bool wanted =
-        shadowBlur_ > 0.f && !surface.panel && !surface.maximized &&
-        !coversItsOutput(surface) && renderer_ != nullptr &&
-        workspaces_ != nullptr && surface.id == focused_ && !surface.minimized;
-    if (!wanted) {
-      if (surface.shadowNode != nullptr) {
-        wlr_scene_node_set_enabled(&surface.shadowNode->node, false);
+  /// A shadow used to be a canvas surface the size of its window — a
+  /// multisampled attachment, an exported dma-buf and a render every time the
+  /// window moved — and eleven of them were what a desktop of eleven windows
+  /// cost, for eleven pictures of the same thing at different sizes.
+  ///
+  /// It *is* the same thing. The falloff of a rounded rectangle depends only
+  /// on the distance to it, so away from the corners the picture is constant
+  /// along each edge and one colour in the middle: exactly the shape that
+  /// nine-slices without approximating anything. What changes with the window
+  /// is how far the edges are stretched, and stretching a constant is free.
+  ///
+  /// So the tile holds four true corners, four one-band-wide edges and a
+  /// middle, and every window's shadow is nine `wlr_scene_buffer`s over it.
+  /// `corner` is the part that must not stretch: the blur's reach plus the
+  /// corner radius.
+  struct ShadowTile {
+    std::unique_ptr<lava::CanvasSurface> surface;
+    /// How far the falloff reaches past the rectangle, and so how far outside
+    /// its window a shadow is drawn.
+    int pad = 0;
+    /// Non-stretchable extent at each side: `pad + radius`.
+    int corner = 0;
+    /// Stretchable band between the corners, in the tile. More than one pixel
+    /// so a source box can sit strictly inside it — a box flush against the
+    /// corners would let a linear sample reach into them.
+    int band = 0;
+    /// What it was built for. A tile is rebuilt when any of these changes, and
+    /// there is one per radius — rounded for Lava windows, square for foreign
+    /// ones, whose corners nothing here can round.
+    float radius = -1.f;
+    float blur = -1.f;
+    float opacity = -1.f;
+  };
+
+  /// The stretchable band, and the inset that keeps a linear sample inside it.
+  static constexpr int kShadowBand = 8;
+  static constexpr double kShadowInset = 2.0;
+
+  /// Lets go of every tile, after taking them off the windows showing them.
+  ///
+  /// A tile is a canvas surface, and destroying one while a scene node still
+  /// holds its buffer leaves the scene showing an image that has gone back to
+  /// the export pool. So the slices are emptied first; each window lays itself
+  /// out against the new tile on its next `applyShadow`, which is the call
+  /// that follows this one.
+  void dropShadowTiles() {
+    for (auto &surface : surfaces_) {
+      for (wlr_scene_buffer *slice : surface->shadowSlices) {
+        if (slice != nullptr) wlr_scene_buffer_set_buffer(slice, nullptr);
       }
-      return;
+      surface->shadowW = 0;
+      surface->shadowH = 0;
+      surface->shadowRadius = -1.f;
     }
+    shadowTiles_.clear();
+  }
 
-    // The margin has to hold the blur on every side plus wherever the offset
-    // pushes it, or the shadow is clipped by its own surface.
-    const int margin =
-        static_cast<int>(shadowBlur_) + std::abs(static_cast<int>(shadowOffsetY_));
-    const uint32_t width = surface.width + static_cast<uint32_t>(margin * 2);
-    const uint32_t height =
-        static_cast<uint32_t>(surface.frameHeight()) +
-        static_cast<uint32_t>(margin * 2);
-
-    if (!surface.shadow) {
-      surface.shadow = renderer_->createSurface(width, height);
-      if (!surface.shadow) return;
-      surface.shadowNode = wlr_scene_buffer_create(
-          workspaces_->tree[surface.workspace], surface.shadow->buffer());
-      if (surface.shadowNode == nullptr) {
-        surface.shadow.reset();
-        return;
+  /// The tile for `radius`, built if this is the first window to want it.
+  /// Null only if the device could not give it a surface.
+  ShadowTile *shadowTileFor(float radius) {
+    if (renderer_ == nullptr || shadowBlur_ <= 0.f) return nullptr;
+    for (auto &tile : shadowTiles_) {
+      if (tile.radius == radius && tile.blur == shadowBlur_ &&
+          tile.opacity == shadowOpacity_) {
+        return tile.surface ? &tile : nullptr;
       }
-      // A shadow is drawn around the window but must not own the pointer —
-      // otherwise the blur ring steals clicks from whatever sits under it.
-      bind_never_input(surface.shadowNode);
-      wlr_log(WLR_INFO, "surface %u: shadow %ux%u, blur %.0f, offset %.0f",
-              surface.id, width, height, shadowBlur_, shadowOffsetY_);
-      show_surface(surface.shadowNode, *surface.shadow);
-    } else if (surface.shadow->resize(width, height)) {
-      show_surface(surface.shadowNode, *surface.shadow);
     }
+    // A tile that no longer matches the config is one no window may still be
+    // showing — see `dropShadowTiles`. Reached only if something changed the
+    // appearance without going through `setAppearance`.
+    dropShadowTiles();
 
-    // Drawn in the shadow surface's own coordinates: the window's rectangle
-    // sits `margin` in from every edge, shifted down by the offset.
+    ShadowTile tile;
+    tile.radius = radius;
+    tile.blur = shadowBlur_;
+    tile.opacity = shadowOpacity_;
+    // `pushShadow` grows its quad by the blur plus a pixel, and that pixel is
+    // part of the picture — the falloff is still nonzero at the edge of the
+    // reach, and cutting it off is a visible seam where the slices meet.
+    tile.pad = static_cast<int>(std::ceil(shadowBlur_)) + 1;
+    const int r = static_cast<int>(std::ceil(radius));
+    tile.band = kShadowBand;
+    tile.corner = tile.pad + r;
+    const uint32_t side =
+        static_cast<uint32_t>(tile.corner * 2 + tile.band);
+
+    tile.surface = renderer_->createSurface(side, side);
+    if (!tile.surface) return nullptr;
+
+    // The rectangle casting it: two corner radii plus the band, so every
+    // corner is whole and the straight runs between them are the band.
     canvas::DrawCommand command{};
     command.kind = static_cast<uint32_t>(canvas::DrawCommandKind::Shadow);
-    command.x = static_cast<float>(margin);
-    command.y = static_cast<float>(margin + shadowOffsetY_);
-    command.w = static_cast<float>(surface.width);
-    command.h = static_cast<float>(surface.frameHeight());
-    // The silhouette this shadow falls under — square for a foreign window,
-    // whose corners nothing here can round. A rounded shadow under a square
-    // window shows as a wedge of dark poking past the corner.
-    command.aux = frameIsRoundable(surface) ? cornerRadius_ : 0.f;
+    command.x = static_cast<float>(tile.pad);
+    command.y = static_cast<float>(tile.pad);
+    command.w = static_cast<float>(r * 2 + tile.band);
+    command.h = static_cast<float>(r * 2 + tile.band);
+    command.aux = radius;
     command.param = static_cast<uint32_t>(shadowBlur_);
     // Black at the configured opacity. RGBA8 little-endian, so the alpha is
     // the top byte — see the colours in `Decoration`.
@@ -2587,20 +2652,150 @@ class SurfaceRegistry : public lava::CompositorHost {
 
     const std::vector<canvas::DrawCommand> commands{command};
     const std::vector<canvas::GlyphInstance> glyphs;
-    if (surface.shadow->renderList(commands, glyphs)) {
-      show_surface(surface.shadowNode, *surface.shadow);
+    tile.surface->renderList(commands, glyphs);
+    wlr_log(WLR_INFO,
+            "shadow tile %ux%u for radius %.0f, blur %.0f — shared by every "
+            "window",
+            side, side, radius, shadowBlur_);
+
+    shadowTiles_.push_back(std::move(tile));
+    return &shadowTiles_.back();
+  }
+
+  /// Builds, moves and resizes a window's shadow.
+  ///
+  /// One function rather than the four the bar needs, because a shadow has no
+  /// state of its own worth tracking: it is entirely a function of the
+  /// window's rectangle, the config, and whether the window is focused. Called
+  /// whenever any of those changes, and cheap when nothing did — nothing is
+  /// drawn here at all, and the slices are re-laid-out only when the size or
+  /// the radius actually differs.
+  void applyShadow(ClientSurface &surface) {
+    const bool wanted =
+        shadowBlur_ > 0.f && !surface.panel && !surface.maximized &&
+        !coversItsOutput(surface) && renderer_ != nullptr &&
+        workspaces_ != nullptr && surface.id == focused_ && !surface.minimized;
+    if (!wanted) {
+      if (surface.shadowTree != nullptr) {
+        wlr_scene_node_set_enabled(&surface.shadowTree->node, false);
+      }
+      return;
     }
-    wlr_scene_node_set_enabled(&surface.shadowNode->node, true);
+
+    // The silhouette this shadow falls under — square for a foreign window,
+    // whose corners nothing here can round. A rounded shadow under a square
+    // window shows as a wedge of dark poking past the corner.
+    const float radius = frameIsRoundable(surface) ? cornerRadius_ : 0.f;
+    ShadowTile *tile = shadowTileFor(radius);
+    if (tile == nullptr) return;
+
+    if (surface.shadowTree == nullptr) {
+      surface.shadowTree =
+          wlr_scene_tree_create(workspaces_->tree[surface.workspace]);
+      if (surface.shadowTree == nullptr) return;
+      for (wlr_scene_buffer *&slice : surface.shadowSlices) {
+        slice = wlr_scene_buffer_create(surface.shadowTree, nullptr);
+        if (slice == nullptr) continue;
+        // A shadow is drawn around the window but must not own the pointer —
+        // otherwise the blur ring steals clicks from whatever sits under it.
+        bind_never_input(slice);
+      }
+      surface.shadowW = 0;  // force the layout below
+    }
+
+    const uint32_t frameH = static_cast<uint32_t>(surface.frameHeight());
+    if (surface.shadowW != surface.width || surface.shadowH != frameH ||
+        surface.shadowRadius != radius) {
+      layoutShadow(surface, *tile, surface.width, frameH);
+      surface.shadowW = surface.width;
+      surface.shadowH = frameH;
+      surface.shadowRadius = radius;
+    }
+    wlr_scene_node_set_enabled(&surface.shadowTree->node, true);
     placeShadow(surface);
+  }
+
+  /// Points the nine slices at their parts of the tile and stretches them.
+  ///
+  /// Dest sizes are the shadow's footprint — the window grown by the tile's
+  /// reach on every side — cut into a fixed corner, a stretched middle and a
+  /// fixed corner along each axis. The middle is what absorbs every size a
+  /// window can be.
+  void layoutShadow(ClientSurface &surface, ShadowTile &tile, uint32_t winW,
+                    uint32_t winH) {
+    const int paintedW = static_cast<int>(winW) + tile.pad * 2;
+    const int paintedH = static_cast<int>(winH) + tile.pad * 2;
+    // A window narrower than two corners has nowhere to put a middle. Rather
+    // than refuse it a shadow, the corners are squeezed — wlroots scales the
+    // slice — which is wrong by a fraction of a pixel on a window nobody has.
+    const int cw = std::min(tile.corner, (paintedW - 1) / 2);
+    const int ch = std::min(tile.corner, (paintedH - 1) / 2);
+    if (cw < 1 || ch < 1) return;
+    const int midW = paintedW - cw * 2;
+    const int midH = paintedH - ch * 2;
+
+    // Source: the corners at their own size, and the band's middle for
+    // anything stretched. Inset, because a linear sample at the end of a
+    // stretched run reaches half a texel past the box it was given.
+    const double srcCorner = static_cast<double>(tile.corner);
+    const double srcFar = static_cast<double>(tile.corner + tile.band);
+    const double srcBand = static_cast<double>(tile.corner) + kShadowInset;
+    const double srcBandSize =
+        static_cast<double>(tile.band) - kShadowInset * 2.0;
+
+    const struct {
+      double sx, sy, sw, sh;
+      int dx, dy, dw, dh;
+    } slices[9] = {
+        {0, 0, srcCorner, srcCorner, 0, 0, cw, ch},
+        {srcBand, 0, srcBandSize, srcCorner, cw, 0, midW, ch},
+        {srcFar, 0, srcCorner, srcCorner, cw + midW, 0, cw, ch},
+        {0, srcBand, srcCorner, srcBandSize, 0, ch, cw, midH},
+        {srcBand, srcBand, srcBandSize, srcBandSize, cw, ch, midW, midH},
+        {srcFar, srcBand, srcCorner, srcBandSize, cw + midW, ch, cw, midH},
+        {0, srcFar, srcCorner, srcCorner, 0, ch + midH, cw, ch},
+        {srcBand, srcFar, srcBandSize, srcCorner, cw, ch + midH, midW, ch},
+        {srcFar, srcFar, srcCorner, srcCorner, cw + midW, ch + midH, cw, ch},
+    };
+
+    const lava::CanvasSurface::FrameFence fence = tile.surface->frameFence();
+    const wlr_scene_buffer_set_buffer_options options{
+        .damage = nullptr,
+        .wait_timeline = fence.timeline,
+        .wait_point = fence.point,
+    };
+    for (size_t i = 0; i < surface.shadowSlices.size(); ++i) {
+      wlr_scene_buffer *slice = surface.shadowSlices[i];
+      if (slice == nullptr) continue;
+      const auto &s = slices[i];
+      if (s.dw < 1 || s.dh < 1) {
+        wlr_scene_node_set_enabled(&slice->node, false);
+        continue;
+      }
+      wlr_scene_buffer_set_buffer_with_options(slice, tile.surface->buffer(),
+                                               &options);
+      const wlr_fbox source{s.sx, s.sy, s.sw, s.sh};
+      wlr_scene_buffer_set_source_box(slice, &source);
+      wlr_scene_buffer_set_dest_size(slice, s.dw, s.dh);
+      wlr_scene_node_set_position(&slice->node, s.dx, s.dy);
+      wlr_scene_node_set_enabled(&slice->node, true);
+    }
   }
 
   /// Puts the shadow under its window, in position and in the stack.
   void placeShadow(ClientSurface &surface) {
-    if (surface.shadowNode == nullptr) return;
-    const int margin =
-        static_cast<int>(shadowBlur_) + std::abs(static_cast<int>(shadowOffsetY_));
-    wlr_scene_node_set_position(&surface.shadowNode->node, surface.x - margin,
-                               surface.y - margin);
+    if (surface.shadowTree == nullptr) return;
+    const ShadowTile *tile = nullptr;
+    for (const auto &candidate : shadowTiles_) {
+      if (candidate.radius == surface.shadowRadius) tile = &candidate;
+    }
+    if (tile == nullptr) return;
+    // The tile's reach out from the window, and the offset that makes it read
+    // as a shadow rather than a glow. The offset is a translation of the whole
+    // picture, which is why it is applied here and not drawn into the tile.
+    wlr_scene_node_set_position(
+        &surface.shadowTree->node, surface.x - tile->pad,
+        surface.y - tile->pad + static_cast<int>(shadowOffsetY_));
     // Below this window's own nodes and nothing else's: `lower_to_bottom`
     // would put it under every other window too, so a shadow would fall behind
     // the window it belongs in front of.
@@ -2610,7 +2805,7 @@ class SurfaceRegistry : public lava::CompositorHost {
                                          ? &surface.node->node
                                          : nullptr);
     if (content != nullptr) {
-      wlr_scene_node_place_below(&surface.shadowNode->node, content);
+      wlr_scene_node_place_below(&surface.shadowTree->node, content);
     }
   }
 
@@ -2625,8 +2820,8 @@ class SurfaceRegistry : public lava::CompositorHost {
     if (content != nullptr) {
       wlr_scene_node_place_below(&surface.blurNode->node, content);
     }
-    if (surface.shadowNode != nullptr) {
-      wlr_scene_node_place_below(&surface.shadowNode->node,
+    if (surface.shadowTree != nullptr) {
+      wlr_scene_node_place_below(&surface.shadowTree->node,
                                  &surface.blurNode->node);
     }
   }
@@ -2690,7 +2885,7 @@ class SurfaceRegistry : public lava::CompositorHost {
                                                : nullptr,
                    false);
     setNodeEnabled(
-        surface.shadowNode != nullptr ? &surface.shadowNode->node : nullptr,
+        surface.shadowTree != nullptr ? &surface.shadowTree->node : nullptr,
         false);
     if (surface.isForeign() && surface.window != nullptr) {
       setNodeEnabled(surface.window->contentNode(), false);
@@ -3620,7 +3815,7 @@ class SurfaceRegistry : public lava::CompositorHost {
         wlr_scene_node_destroy(&(*it)->node->node);
       }
       if ((*it)->barNode) wlr_scene_node_destroy(&(*it)->barNode->node);
-      if ((*it)->shadowNode) wlr_scene_node_destroy(&(*it)->shadowNode->node);
+      if ((*it)->shadowTree) wlr_scene_node_destroy(&(*it)->shadowTree->node);
       clearBackdrop(**it);
       scheduleBackdropRefresh();
       if ((*it)->isForeign()) (*it)->window->frameId = 0;
@@ -4392,6 +4587,9 @@ class SurfaceRegistry : public lava::CompositorHost {
   float cornerRadius_ = 0.f;
   /// Shadow reach in pixels; 0 turns shadows off. See `applyShadow`.
   float shadowBlur_ = 0.f;
+  /// The shared shadow images, one per corner radius in use — see
+  /// `ShadowTile`. Two at most: rounded, and square for foreign windows.
+  std::vector<ShadowTile> shadowTiles_;
   float shadowOpacity_ = 0.35f;
   float shadowOffsetY_ = 4.f;
   lava::Decoration decoration_;
