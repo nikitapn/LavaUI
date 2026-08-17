@@ -82,6 +82,7 @@ extern "C" {
 #include <wlr/render/drm_syncobj.h>
 #include <wlr/types/wlr_damage_ring.h>
 #include <wlr/types/wlr_linux_dmabuf_v1.h>
+#include <wlr/types/wlr_linux_drm_syncobj_v1.h>
 #include <wlr/util/addon.h>
 #include <wlr/util/box.h>
 

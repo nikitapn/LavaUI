@@ -214,9 +214,25 @@ struct Output {
   /// (Settings, SIGHUP) has to attach too, or the screen paints the same
   /// origin as the first one — i.e. it mirrors whether you asked it to.
   bool sceneAttached = false;
+  /// Whether `wlr_output_lock_attach_render` is held. See `syncScanoutLock`.
+  bool compositeLocked = false;
 
   Output(Server *server, wlr_output *output);
   ~Output();
+
+  /// Direct-scanout of a buffer with no acquire fence is how an X11 game in
+  /// windowed-fullscreen paints garbage: the game is still writing the dmabuf
+  /// the CRTC is reading, and NVIDIA never honours implicit sync. Windowed
+  /// mode never scanouts — other windows are visible — which is why that
+  /// looks fine.
+  ///
+  /// Covering X11 is always composited, even when a fence exists. Flipping
+  /// between scanout and composite every time the fence comes and goes is
+  /// a camera that jitters. And once we composite, the output damage ring
+  /// has to be the whole frame: Xwayland often commits a reused buffer with
+  /// a tiny damage region, and the other swapchain image then still holds
+  /// the previous camera angle.
+  void syncScanoutLock();
 
   /// Applies the config block for this connector: mode, scale, transform,
   /// enabled. Placement is `Server::applyArrangement`. Returns its entry
@@ -534,6 +550,10 @@ struct Server {
   /// Front is the most recently focused. Focus order and stacking order are
   /// the same thing here, which is why one list serves both.
   std::list<FramedWindow *> toplevels;
+  /// Every X11 window, including override-redirect. `toplevels` only has the
+  /// framed ones; a game that maps borderless still has to be visible here
+  /// so a covering unfenced buffer can disable scanout.
+  std::list<XwaylandSurface *> xwindows;
   /// Kept here because `wlr_seat` does not expose one, and seat capabilities
   /// have to be recomputed whenever a keyboard comes or goes.
   std::list<Keyboard *> keyboards;
@@ -1551,6 +1571,21 @@ class SurfaceRegistry : public lava::CompositorHost {
            surface.workspace == workspaces_->current;
   }
 
+  /// True when this window owns an output the way a fullscreen game does:
+  /// either it asked (`_NET_WM_STATE_FULLSCREEN` / xdg fullscreen), or it is
+  /// an undecorated foreign window sitting exactly on an output — CS:GO's
+  /// "windowed fullscreen" is the second, and it never sends the property.
+  bool coversItsOutput(const ClientSurface &surface) const {
+    if (surface.fullscreen) return true;
+    if (!surface.isForeign() || surface.showsBar()) return false;
+    int ox = 0, oy = 0;
+    uint32_t ow = 0, oh = 0;
+    outputBoxAt(surface.x + static_cast<int>(surface.width) / 2,
+                surface.y + surface.frameHeight() / 2, ox, oy, ow, oh);
+    return surface.x == ox && surface.y == oy && surface.width == ow &&
+           surface.frameHeight() == static_cast<int>(oh);
+  }
+
   /// True when a frontmost fullscreen (including an undecorated X11 window
   /// sized exactly to an output) completely hides this surface.
   bool fullyOccluded(const ClientSurface &surface) const {
@@ -1558,17 +1593,7 @@ class SurfaceRegistry : public lava::CompositorHost {
     for (const auto &front : surfaces_) {
       if (front.get() == &surface) return false;
       if (!visible(*front) || front->workspace != surface.workspace) continue;
-      bool coversOutput = front->fullscreen;
-      if (!coversOutput && front->isForeign() && !front->showsBar()) {
-        int ox = 0, oy = 0;
-        uint32_t ow = 0, oh = 0;
-        outputBoxAt(front->x + static_cast<int>(front->width) / 2,
-                    front->y + front->frameHeight() / 2, ox, oy, ow, oh);
-        coversOutput = front->x == ox && front->y == oy &&
-                       front->width == ow && front->frameHeight() ==
-                                                   static_cast<int>(oh);
-      }
-      if (!coversOutput) continue;
+      if (!coversItsOutput(*front)) continue;
       if (front->x <= surface.x && front->y <= surface.y &&
           front->x + static_cast<int>(front->width) >=
               surface.x + static_cast<int>(surface.width) &&
@@ -2327,7 +2352,7 @@ class SurfaceRegistry : public lava::CompositorHost {
   /// not have a taskbar painted across it.
   bool fullscreenCoversShell() const {
     for (const auto &s : surfaces_) {
-      if (s->panel || s->minimized || !s->fullscreen) continue;
+      if (s->panel || s->minimized || !coversItsOutput(*s)) continue;
       if (workspaces_ != nullptr && s->workspace != workspaces_->current) {
         continue;
       }
@@ -2504,8 +2529,8 @@ class SurfaceRegistry : public lava::CompositorHost {
   void applyShadow(ClientSurface &surface) {
     const bool wanted =
         shadowBlur_ > 0.f && !surface.panel && !surface.maximized &&
-        !surface.fullscreen && renderer_ != nullptr && workspaces_ != nullptr &&
-        surface.id == focused_ && !surface.minimized;
+        !coversItsOutput(surface) && renderer_ != nullptr &&
+        workspaces_ != nullptr && surface.id == focused_ && !surface.minimized;
     if (!wanted) {
       if (surface.shadowNode != nullptr) {
         wlr_scene_node_set_enabled(&surface.shadowNode->node, false);
@@ -4673,6 +4698,7 @@ uint32_t SurfaceRegistry::adoptWindow(FramedWindow *window,
 XwaylandSurface::XwaylandSurface(Server *server, wlr_xwayland_surface *surface)
     : server(server), xsurface(surface) {
   workspace = server->workspaces.current;
+  server->xwindows.push_front(this);
   // An X11 window exists before it has any Wayland surface behind it, and may
   // outlive several. `associate` is when one appears, and the only point at
   // which map and unmap can be listened for.
@@ -4698,6 +4724,7 @@ XwaylandSurface::XwaylandSurface(Server *server, wlr_xwayland_surface *surface)
 }
 
 XwaylandSurface::~XwaylandSurface() {
+  server->xwindows.remove(this);
   if (associated) on_dissociate(&dissociate.listener, nullptr);
   associate.detach();
   dissociate.detach();
@@ -4797,6 +4824,10 @@ void XwaylandSurface::on_map(wl_listener *listener, void *) {
       } else if (self->xsurface->maximized_horz ||
                  self->xsurface->maximized_vert) {
         server->surfaces->setMaximized(*frame, true);
+      } else {
+        // Borderless and already the output: hide the panel even though the
+        // client never sent `_NET_WM_STATE_FULLSCREEN`.
+        server->surfaces->syncShellForFullscreen();
       }
     }
   }
@@ -4882,6 +4913,9 @@ void XwaylandSurface::on_request_configure(wl_listener *listener, void *data) {
   }
   // Framed: the size is the client's to ask for, the position is not.
   self->server->surfaces->resizeSurface(*frame, event->width, event->height);
+  // A game that grows to the output after map is the same as one that
+  // mapped that way — the panel has to get out.
+  self->server->surfaces->syncShellForFullscreen();
 }
 
 void XwaylandSurface::on_set_title(wl_listener *listener, void *) {
@@ -5194,11 +5228,86 @@ void Server::applyArrangement() {
 }
 
 Output::~Output() {
+  if (compositeLocked) {
+    wlr_output_lock_attach_render(wlr, false);
+    compositeLocked = false;
+  }
   server->outputs.remove(this);
   frame.detach();
   request_state.detach();
   destroy.detach();
   commit.detach();
+}
+
+namespace {
+
+bool surface_has_acquire_fence(wlr_surface *surface) {
+  if (surface == nullptr) return false;
+  const wlr_linux_drm_syncobj_surface_v1_state *state =
+      wlr_linux_drm_syncobj_v1_get_surface_state(surface);
+  return state != nullptr && state->acquire_timeline != nullptr;
+}
+
+/// True when `node` is on screen and its `width`×`height` covers `box`.
+bool node_covers_box(wlr_scene_node *node, int width, int height,
+                     const wlr_box &box) {
+  if (node == nullptr || width < 1 || height < 1 || box.width < 1) {
+    return false;
+  }
+  int lx = 0, ly = 0;
+  if (!wlr_scene_node_coords(node, &lx, &ly)) return false;
+  return lx <= box.x && ly <= box.y &&
+         lx + width >= box.x + box.width &&
+         ly + height >= box.y + box.height;
+}
+
+}  // namespace
+
+void Output::syncScanoutLock() {
+  wlr_box box{};
+  wlr_output_layout_get_box(server->output_layout, wlr, &box);
+
+  bool lock = false;
+  for (XwaylandSurface *xwindow : server->xwindows) {
+    if (xwindow->scene_tree == nullptr || xwindow->xsurface->surface == nullptr) {
+      continue;
+    }
+    if (!xwindow->xsurface->surface->mapped) continue;
+    if (!node_covers_box(&xwindow->scene_tree->node, xwindow->xsurface->width,
+                         xwindow->xsurface->height, box)) {
+      continue;
+    }
+    // Always, not only when unfenced: a fence that appears on some frames
+    // and not others would toggle scanout and read as a jumping camera.
+    lock = true;
+    break;
+  }
+  if (!lock) {
+    for (FramedWindow *window : server->toplevels) {
+      wlr_surface *surface = window->focusSurface();
+      wlr_scene_node *node = window->contentNode();
+      if (surface == nullptr || !surface->mapped || node == nullptr) continue;
+      if (!node_covers_box(node, surface->current.width, surface->current.height,
+                           box)) {
+        continue;
+      }
+      if (!surface_has_acquire_fence(surface)) {
+        lock = true;
+        break;
+      }
+    }
+  }
+
+  if (lock != compositeLocked) {
+    wlr_output_lock_attach_render(wlr, lock);
+    compositeLocked = lock;
+    wlr_log(WLR_INFO, "output %s: %s", wlr->name,
+            lock ? "compositing a covering client"
+                 : "direct scanout allowed again");
+  }
+  if (lock) {
+    wlr_damage_ring_add_whole(&scene_output->damage_ring);
+  }
 }
 
 void Output::on_frame(wl_listener *listener, void *) {
@@ -5212,6 +5321,7 @@ void Output::on_frame(wl_listener *listener, void *) {
   if (output->server->surfaces != nullptr) {
     output->server->surfaces->refreshBackdropBlurs();
   }
+  output->syncScanoutLock();
   // Composite is surface 0 in the probe: it is the desktop's own frame rather
   // than any one client's, and it is where a wait that was moved rather than
   // removed would end up — the scene waits for a client's acquire fence here,
@@ -8041,6 +8151,28 @@ int main() {
   }
 
   wlr_renderer_init_wl_display(server.renderer, server.display);
+  // Without this, Xwayland has no way to say when a buffer is finished —
+  // implicit dma_resv is what NVIDIA has never honoured, and a windowed-
+  // fullscreen game then scanouts mid-write. Tinywl and every other 0.19
+  // compositor advertise this; the scene waits on the fences itself.
+  {
+    const int drmFd = wlr_renderer_get_drm_fd(server.renderer);
+    if (drmFd >= 0 && server.renderer->features.timeline &&
+        server.backend->features.timeline) {
+      if (wlr_linux_drm_syncobj_manager_v1_create(server.display, 1, drmFd) ==
+          nullptr) {
+        wlr_log(WLR_ERROR, "linux-drm-syncobj: failed to advertise");
+      } else {
+        wlr_log(WLR_INFO, "linux-drm-syncobj: advertised");
+      }
+    } else {
+      wlr_log(WLR_INFO,
+              "linux-drm-syncobj: not advertised (timeline renderer=%d "
+              "backend=%d drm_fd=%d)",
+              static_cast<int>(server.renderer->features.timeline),
+              static_cast<int>(server.backend->features.timeline), drmFd);
+    }
+  }
   auto *compositor = wlr_compositor_create(server.display, 6, server.renderer);
   wlr_subcompositor_create(server.display);
   // The clipboard, and the X11-style middle-click one beside it. Both are
