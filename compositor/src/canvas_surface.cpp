@@ -478,6 +478,10 @@ bool CanvasSurface::renderFromArena() {
   return true;
 }
 
+bool CanvasSurface::consumeArena() {
+  return renderer_.engine().pollDrawArena(windowId_);
+}
+
 bool CanvasSurface::opaqueBounds(float &x, float &y, float &w,
                                  float &h) const {
   return renderer_.engine().opaqueBounds(windowId_, x, y, w, h);

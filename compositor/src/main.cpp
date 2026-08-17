@@ -1012,6 +1012,7 @@ struct ClientSurface {
   /// Covers the output, including the panel. Distinct from maximize: a
   /// maximized window leaves the work area, a fullscreen one does not.
   bool fullscreen = false;
+  bool deferredWhileOccluded = false;
   int restoreX = 0;
   int restoreY = 0;
   uint32_t restoreW = 0;
@@ -1548,6 +1549,33 @@ class SurfaceRegistry : public lava::CompositorHost {
     if (surface.panel && fullscreenCoversShell()) return false;
     return surface.panel || workspaces_ == nullptr ||
            surface.workspace == workspaces_->current;
+  }
+
+  /// True when a frontmost fullscreen (including an undecorated X11 window
+  /// sized exactly to an output) completely hides this surface.
+  bool fullyOccluded(const ClientSurface &surface) const {
+    if (!visible(surface) || surface.panel) return false;
+    for (const auto &front : surfaces_) {
+      if (front.get() == &surface) return false;
+      if (!visible(*front) || front->workspace != surface.workspace) continue;
+      bool coversOutput = front->fullscreen;
+      if (!coversOutput && front->isForeign() && !front->showsBar()) {
+        int ox = 0, oy = 0;
+        uint32_t ow = 0, oh = 0;
+        outputBoxAt(front->x + static_cast<int>(front->width) / 2,
+                    front->y + front->frameHeight() / 2, ox, oy, ow, oh);
+        coversOutput = front->x == ox && front->y == oy &&
+                       front->width == ow && front->frameHeight() ==
+                                                   static_cast<int>(oh);
+      }
+      if (!coversOutput) continue;
+      if (front->x <= surface.x && front->y <= surface.y &&
+          front->x + static_cast<int>(front->width) >=
+              surface.x + static_cast<int>(surface.width) &&
+          front->y + front->frameHeight() >=
+              surface.y + surface.frameHeight()) return true;
+    }
+    return false;
   }
 
   /// Sends a window to another workspace.
@@ -3760,6 +3788,16 @@ class SurfaceRegistry : public lava::CompositorHost {
     bool again = false;
     for (auto &surface : surfaces_) {
       if (!surface->canvas) continue;
+      if (fullyOccluded(*surface)) {
+        if (surface->canvas->takeInternalRepaint()) {
+          surface->deferredWhileOccluded = true;
+        }
+        continue;
+      }
+      if (surface->deferredWhileOccluded) {
+        surface->deferredWhileOccluded = false;
+        if (surface->canvas->redraw()) damage(*surface);
+      }
       if (!surface->canvas->takeInternalRepaint()) continue;
       if (surface->canvas->redraw()) damage(*surface);
       drain(*surface);
@@ -3784,6 +3822,10 @@ class SurfaceRegistry : public lava::CompositorHost {
   void present(uint32_t id) override {
     ClientSurface *surface = find(id);
     if (surface == nullptr || !surface->canvas) return;
+    if (fullyOccluded(*surface)) {
+      if (surface->canvas->consumeArena()) surface->deferredWhileOccluded = true;
+      return;
+    }
     if (!surface->canvas->renderFromArena()) return;
     if (surface->awaitingFirstFrame) {
       surface->awaitingFirstFrame = false;

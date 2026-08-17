@@ -225,6 +225,7 @@ class CanvasSurface {
   /// nothing since the last call is not an error and not a frame: the previous
   /// contents are still correct and still on screen.
   bool renderFromArena();
+  bool consumeArena();
 
   // ─── Input ───────────────────────────────────────────────────────────────
   //
