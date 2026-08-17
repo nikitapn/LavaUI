@@ -28,12 +28,14 @@
 #include "render/text_renderer.hpp"
 #include "render/texture_manager.hpp"
 
-RenderWindow::RenderWindow(RenderDevice &device, GLFWwindow *window)
+RenderWindow::RenderWindow(RenderDevice &device, GLFWwindow *window,
+                           uint32_t ownerId)
   : dev_{device}
   , quads_{device}
   , blur_{device}
   , windowed_{true}
   , window_{window}
+  , ownerId_{ownerId}
 {
   auto lease = dev_.leaseGraphicsQueue();
   queue_ = lease.queue;
@@ -74,11 +76,13 @@ RenderWindow::RenderWindow(RenderDevice &device, GLFWwindow *window)
   dev_.registerWindow(this);
 }
 
-RenderWindow::RenderWindow(RenderDevice &device, uint32_t width, uint32_t height)
+RenderWindow::RenderWindow(RenderDevice &device, uint32_t width,
+                           uint32_t height, uint32_t ownerId)
   : dev_{device}
   , quads_{device}
   , blur_{device}
   , windowed_{false}
+  , ownerId_{ownerId}
 {
   auto lease = dev_.leaseGraphicsQueue();
   queue_ = lease.queue;
@@ -443,7 +447,9 @@ void RenderWindow::createColorResources()
               VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
               VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
               colorImage_,
-              colorImageAlloc_);
+              colorImageAlloc_,
+              canvas::GpuTag{canvas::GpuCategory::WindowColor, ownerId_,
+                             "multisampled scene attachment"});
 
   colorImageView_ = dev_.createImageView(
     colorImage_, dev_.colorFormat(), VK_IMAGE_ASPECT_COLOR_BIT, 1);
@@ -466,7 +472,9 @@ void RenderWindow::createResolveResources()
                 VK_IMAGE_USAGE_TRANSFER_DST_BIT,
               VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
               resolveImage_,
-              resolveImageAlloc_);
+              resolveImageAlloc_,
+              canvas::GpuTag{canvas::GpuCategory::WindowResolve, ownerId_,
+                             "what the frame resolves into"});
 
   resolveImageView_ = dev_.createImageView(
     resolveImage_, dev_.colorFormat(), VK_IMAGE_ASPECT_COLOR_BIT, 1);
@@ -485,7 +493,9 @@ void RenderWindow::createDepthResources()
               VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,
               VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
               depthImage_,
-              depthImageAlloc_);
+              depthImageAlloc_,
+              canvas::GpuTag{canvas::GpuCategory::WindowDepth, ownerId_,
+                             "multisampled depth attachment"});
 
   depthImageView_ = dev_.createImageView(depthImage_, depthFormat, VK_IMAGE_ASPECT_DEPTH_BIT, 1);
 
@@ -503,7 +513,9 @@ void RenderWindow::createStagingBuffer()
                VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
                  VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
                stagingBuffer_,
-               stagingBufferAlloc_);
+               stagingBufferAlloc_,
+               canvas::GpuTag{canvas::GpuCategory::WindowStaging, ownerId_,
+                              "host copy for readPixels"});
 
   stagingBufferMapped_ = dev_.mapBuffer(stagingBufferAlloc_);
   if (!stagingBufferMapped_) {

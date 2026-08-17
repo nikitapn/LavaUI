@@ -46,7 +46,9 @@ bool ImageAtlas::addPage()
                        VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_TILING_OPTIMAL,
                        VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
                        VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
-                       page->image, page->allocation);
+                       page->image, page->allocation,
+                       canvas::GpuTag{canvas::GpuCategory::ImageAtlas, 0,
+                                      "page"});
   // Straight to shader-read: every later upload transitions in and back out
   // around its own copy, so the page is always in the layout a draw expects.
   device_->transitionImageLayout(page->image, VK_FORMAT_R8G8B8A8_SRGB,
@@ -104,7 +106,9 @@ ImageAtlas::Region ImageAtlas::add(const uint8_t *rgba, uint32_t w, uint32_t h)
   device_->createBuffer(bytes, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
                         VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT
                           | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-                        staging, stagingAlloc);
+                        staging, stagingAlloc,
+                        canvas::GpuTag{canvas::GpuCategory::Staging, 0,
+                                       "atlas cell upload"});
   void *mapped = device_->mapBuffer(stagingAlloc);
   std::memcpy(mapped, rgba, static_cast<size_t>(bytes));
   device_->unmapBuffer(stagingAlloc);
@@ -136,4 +140,17 @@ VkImageView ImageAtlas::pageView(uint32_t page) const
 {
   if (page >= pages_.size()) return VK_NULL_HANDLE;
   return pages_[page]->view;
+}
+
+VkImage ImageAtlas::pageImage(uint32_t page) const
+{
+  if (page >= pages_.size()) return VK_NULL_HANDLE;
+  return pages_[page]->image;
+}
+
+uint32_t ImageAtlas::pageUsedSlots(uint32_t page) const
+{
+  if (page >= pages_.size()) return 0;
+  const Page &p = *pages_[page];
+  return p.nextFresh - static_cast<uint32_t>(p.free.size());
 }

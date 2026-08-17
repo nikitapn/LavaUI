@@ -172,6 +172,10 @@ class QuadRenderer {
   /// them.
   void setOwner(RenderWindow *owner) { owner_ = owner; }
 
+  /// The window whose VRAM the per-slot arenas belong to, for `GpuLedger`.
+  /// Out of line: `RenderWindow` is only forward-declared here.
+  uint32_t ownerWindowId() const;
+
   QuadRenderer(const QuadRenderer &)            = delete;
   QuadRenderer &operator=(const QuadRenderer &) = delete;
 

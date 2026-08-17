@@ -28,6 +28,10 @@ class BlurPass {
   void setOwner(RenderWindow *owner) { owner_ = owner; }
   ~BlurPass() { cleanUp(); }
 
+  /// The window whose VRAM this scratch belongs to, for `GpuLedger`. Defined
+  /// out of line because `RenderWindow` is only forward-declared here.
+  uint32_t ownerWindowId() const;
+
   BlurPass(const BlurPass &) = delete;
   BlurPass &operator=(const BlurPass &) = delete;
 

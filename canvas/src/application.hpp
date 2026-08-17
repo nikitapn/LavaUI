@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "render/draw_command.hpp"
+#include "render/gpu_report.hpp"
 #include "util/result.hpp"
 
 namespace canvas {
@@ -313,6 +314,26 @@ public:
                                uint32_t windowId = 0);
 
   void shutdown();
+
+  // ─── GPU memory ──────────────────────────────────────────────────────────
+
+  /// What is in VRAM and who asked for it. See `render/gpu_report.hpp`.
+  ///
+  /// Window titles come back empty — canvas does not know them. A caller that
+  /// has names (a compositor knows its surfaces') fills them in on `id`.
+  canvas::GpuReport gpuReport();
+
+  /// Writes every atlas page in `report` to `dir` as a PNG, recording the paths
+  /// in the report's pages. Must run on the thread that owns the device: it
+  /// reads images back off the GPU.
+  size_t dumpAtlases(const std::string &dir, canvas::GpuReport &report);
+
+  /// Prints a report to stderr when `LAVA_VRAM_STATS` is set, at most once per
+  /// interval (the variable's value in seconds, default 10). Cheap when off,
+  /// so a frame loop can call it unconditionally.
+  ///
+  /// `LAVA_VRAM_STATS=verbose` adds every allocation and every cached texture.
+  void reportVramIfDue();
 
   Application(int width = 1280, int height = 720);
   ~Application();

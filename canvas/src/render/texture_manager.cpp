@@ -36,7 +36,8 @@ uint32_t mipLevelCount(uint32_t width, uint32_t height)
 /// Uploads RGBA8 as a standalone sampled image, with a mip chain when the
 /// GPU can linearly blit the format. Atlas cells stay 1-level — a coarse
 /// mip would mix neighbouring covers.
-bool createStandaloneTexture(RenderDevice &device, const uint8_t *rgba,
+bool createStandaloneTexture(RenderDevice &device, const std::string &key,
+                             const uint8_t *rgba,
                              uint32_t width, uint32_t height, VkImage &image,
                              VmaAllocation &allocation, VkImageView &view)
 {
@@ -51,7 +52,9 @@ bool createStandaloneTexture(RenderDevice &device, const uint8_t *rgba,
   device.createBuffer(imageSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
                       VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
                         VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-                      stagingBuffer, stagingAlloc);
+                      stagingBuffer, stagingAlloc,
+                      canvas::GpuTag{canvas::GpuCategory::Staging, 0,
+                                     "texture upload"});
   void *data = device.mapBuffer(stagingAlloc);
   std::memcpy(data, rgba, static_cast<size_t>(imageSize));
   device.unmapBuffer(stagingAlloc);
@@ -62,7 +65,8 @@ bool createStandaloneTexture(RenderDevice &device, const uint8_t *rgba,
 
   device.createImage(width, height, mips, VK_SAMPLE_COUNT_1_BIT,
                      VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_TILING_OPTIMAL, usage,
-                     VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, image, allocation);
+                     VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, image, allocation,
+                     canvas::GpuTag{canvas::GpuCategory::Texture, 0, key});
   device.transitionImageLayout(image, VK_FORMAT_R8G8B8A8_SRGB,
                                VK_IMAGE_LAYOUT_UNDEFINED,
                                VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, mips);
@@ -86,7 +90,8 @@ constexpr VkImageSubresourceRange kBlitColor{
   VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
 
 /// GPU crop + format convert of an imported dma-buf into a sampled texture.
-bool blitImportedTexture(RenderDevice &device, const canvas::ImportedDmabuf &src,
+bool blitImportedTexture(RenderDevice &device, const std::string &key,
+                         const canvas::ImportedDmabuf &src,
                          int32_t x, int32_t y, uint32_t srcW, uint32_t srcH,
                          uint32_t destW, uint32_t destH,
                          VkImage &image, VmaAllocation &allocation,
@@ -96,7 +101,8 @@ bool blitImportedTexture(RenderDevice &device, const canvas::ImportedDmabuf &src
                      VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_TILING_OPTIMAL,
                      VK_IMAGE_USAGE_TRANSFER_DST_BIT |
                        VK_IMAGE_USAGE_SAMPLED_BIT,
-                     VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, image, allocation);
+                     VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, image, allocation,
+                     canvas::GpuTag{canvas::GpuCategory::Texture, 0, key});
 
   VkCommandBuffer cmd = device.beginSingleTimeCommands();
   src.recordAcquire(cmd);
@@ -262,8 +268,8 @@ TextureHandle TextureManager::uploadTexture(const std::string& key,
     VkImage textureImage = VK_NULL_HANDLE;
     VmaAllocation textureAlloc = VK_NULL_HANDLE;
     VkImageView view = VK_NULL_HANDLE;
-    if (!createStandaloneTexture(*device_, rgba, width, height, textureImage,
-                                 textureAlloc, view)) {
+    if (!createStandaloneTexture(*device_, key, rgba, width, height,
+                                 textureImage, textureAlloc, view)) {
       return {VK_NULL_HANDLE, 0};
     }
     auto textureData = std::make_unique<TextureData>();
@@ -354,8 +360,8 @@ TextureHandle TextureManager::importDmabufTexture(
     VkImage image = VK_NULL_HANDLE;
     VmaAllocation allocation = VK_NULL_HANDLE;
     VkImageView view = VK_NULL_HANDLE;
-    if (!blitImportedTexture(*device_, *imported, x, y, width, height, destW,
-                             destH, image, allocation, view)) {
+    if (!blitImportedTexture(*device_, key, *imported, x, y, width, height,
+                             destW, destH, image, allocation, view)) {
         return {VK_NULL_HANDLE, 0};
     }
 
@@ -452,7 +458,7 @@ TextureHandle TextureManager::loadTexture(const std::string& path) {
     VmaAllocation textureAlloc = VK_NULL_HANDLE;
     VkImageView textureImageView = VK_NULL_HANDLE;
     const bool uploaded = createStandaloneTexture(
-        *device_, pixels, static_cast<uint32_t>(texWidth),
+        *device_, path, pixels, static_cast<uint32_t>(texWidth),
         static_cast<uint32_t>(texHeight), textureImage, textureAlloc,
         textureImageView);
     stbi_image_free(pixels);
@@ -740,6 +746,33 @@ TextureManager::CacheStats TextureManager::cacheStats() const {
         if (textureById_.contains(id)) ++stats.pinnedTextures;
     }
     return stats;
+}
+
+std::vector<TextureManager::Entry> TextureManager::entries() const {
+    std::lock_guard lock(mutex_);
+    std::vector<Entry> out;
+    out.reserve(textures_.size());
+    for (const auto &[key, data] : textures_) {
+        Entry entry;
+        entry.key       = key;
+        entry.bytes     = data->bytes;
+        entry.width     = data->width;
+        entry.height    = data->height;
+        entry.refCount  = data->refCount;
+        entry.atlased   = data->atlased;
+        entry.dormant   = data->dormant;
+        entry.external  = !data->ownsImage;
+        entry.lastUsed  = data->lastUsed;
+        if (auto pins = windowUsers_.find(data->id); pins != windowUsers_.end()) {
+            entry.windowPins = pins->second;
+        }
+        out.push_back(std::move(entry));
+    }
+    std::ranges::sort(out, [](const Entry &a, const Entry &b) {
+        if (a.bytes != b.bytes) return a.bytes > b.bytes;
+        return a.key < b.key;
+    });
+    return out;
 }
 
 void TextureManager::getTextureUV(uint32_t textureId, vec2 &uv0, vec2 &uv1) const {

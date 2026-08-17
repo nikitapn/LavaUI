@@ -209,7 +209,37 @@ public:
     /// Atlas used for images small enough to pack. Exposed so the app can
     /// report occupancy; adding entries goes through `loadTexture`.
     ImageAtlas &atlas() { return atlas_; }
+    const ImageAtlas &atlas() const { return atlas_; }
     CacheStats cacheStats() const;
+
+    /// One cache entry, for a report that has to say *which* pictures are
+    /// resident rather than only how many megabytes they add up to.
+    ///
+    /// The key is the answer to "why is this still here": a path names a file
+    /// something asked for, a content hash names bytes a client uploaded, and a
+    /// `surface:` key names another window being sampled as a texture.
+    struct Entry {
+        std::string key;
+        uint64_t bytes = 0;
+        uint32_t width = 0;
+        uint32_t height = 0;
+        uint32_t mipLevels = 1;
+        uint32_t refCount = 0;
+        /// Retained-frame pins from `updateWindowTextureReferences`, i.e. the
+        /// windows whose last draw list still names it.
+        uint32_t windowPins = 0;
+        bool atlased = false;
+        /// At refcount zero: kept only in case it is asked for again, and what
+        /// the dormant budget governs.
+        bool dormant = false;
+        /// A registered external view — no memory of ours at all.
+        bool external = false;
+        /// `useCounter_` when it was last taken, so a reader can see LRU order.
+        uint64_t lastUsed = 0;
+    };
+
+    /// Every resident entry, largest first. Debug tooling; takes the cache lock.
+    std::vector<Entry> entries() const;
 
     /// Returns atlas cells whose last possible reader has retired.
     ///

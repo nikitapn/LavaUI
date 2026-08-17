@@ -117,7 +117,9 @@ void QuadRenderer::createWhiteTexture() {
   device_.createBuffer(sizeof(white), VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
                        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
                          VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-                       staging, stagingAlloc);
+                       staging, stagingAlloc,
+                       canvas::GpuTag{canvas::GpuCategory::Staging, 0,
+                                      "1x1 white upload"});
 
   void *mapped = device_.mapBuffer(stagingAlloc);
   std::memcpy(mapped, &white, sizeof(white));
@@ -137,6 +139,11 @@ void QuadRenderer::createWhiteTexture() {
     device_.createImageView(whiteImage_, VK_FORMAT_R8_UNORM,
                             VK_IMAGE_ASPECT_COLOR_BIT, 1);
   sampler_ = device_.createTextureSampler();
+}
+
+uint32_t QuadRenderer::ownerWindowId() const
+{
+  return owner_ != nullptr ? owner_->ownerId() : 0;
 }
 
 void QuadRenderer::setupDescriptors() {
@@ -760,15 +767,21 @@ void QuadRenderer::ensureBufferCapacity(size_t vertexCount, size_t indexCount,
     device_.createBuffer(vertexBytes, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
                          VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
                            VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-                         slot.vertexBuffer, slot.vertexAlloc);
+                         slot.vertexBuffer, slot.vertexAlloc,
+                         canvas::GpuTag{canvas::GpuCategory::VertexArena,
+                                        ownerWindowId(), "vertices"});
     device_.createBuffer(indexBytes, VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
                          VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
                            VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-                         slot.indexBuffer, slot.indexAlloc);
+                         slot.indexBuffer, slot.indexAlloc,
+                         canvas::GpuTag{canvas::GpuCategory::VertexArena,
+                                        ownerWindowId(), "indices"});
     device_.createBuffer(instanceBytes, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
                          VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
                            VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-                         slot.instanceBuffer, slot.instanceAlloc);
+                         slot.instanceBuffer, slot.instanceAlloc,
+                         canvas::GpuTag{canvas::GpuCategory::VertexArena,
+                                        ownerWindowId(), "instances"});
 
     slot.vertexMapped = device_.mapBuffer(slot.vertexAlloc);
     slot.indexMapped = device_.mapBuffer(slot.indexAlloc);

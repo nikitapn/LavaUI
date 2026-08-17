@@ -11,6 +11,7 @@
 #include "util/key_codes.hpp"
 #include "render/dmabuf_image.hpp"
 #include "render/imported_dmabuf.hpp"
+#include "render/gpu_report.hpp"
 #include "render/render_device.hpp"
 #include "render/render_window.hpp"
 #include "window/app_window.hpp"
@@ -1121,6 +1122,42 @@ std::string Application::capturePngBase64(int x, int y, int w, int h,
     }
   }
   return out;
+}
+
+canvas::GpuReport Application::gpuReport() {
+  // A client window has no device at all, and asking one about VRAM should
+  // answer "none" rather than crash.
+  if (!impl_->deviceUp) return {};
+  return canvas::buildGpuReport(impl_->device);
+}
+
+size_t Application::dumpAtlases(const std::string &dir,
+                                canvas::GpuReport &report) {
+  if (!impl_->deviceUp) return 0;
+  return canvas::dumpAtlasPages(impl_->device, dir, report.atlases);
+}
+
+void Application::reportVramIfDue() {
+  // Read once: this is called from a frame loop, and `getenv` on every frame to
+  // discover a variable that cannot change is exactly the kind of cost a debug
+  // facility must not add.
+  static const char *setting  = std::getenv("LAVA_VRAM_STATS");
+  static const bool  enabled  = setting != nullptr && *setting != '\0'
+                               && std::string_view(setting) != "0";
+  if (!enabled) return;
+  static const bool verbose = std::string_view(setting) == "verbose";
+  static const std::chrono::seconds interval{[] {
+    const int seconds = std::atoi(setting);  // 0 for "1", "verbose" and ""
+    return seconds > 0 ? seconds : 10;
+  }()};
+
+  using clock = std::chrono::steady_clock;
+  static clock::time_point last{};
+  const clock::time_point  now = clock::now();
+  if (last != clock::time_point{} && now - last < interval) return;
+  last = now;
+
+  printGpuReport(gpuReport(), std::cerr, verbose);
 }
 
 void Application::shutdown() {

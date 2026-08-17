@@ -37,7 +37,7 @@ AppWindow::AppWindow(RenderDevice &device, uint32_t id, int width, int height,
   if (!glfw_) throw std::runtime_error("glfwCreateWindow failed");
 
   try {
-    render_ = std::make_unique<RenderWindow>(device, glfw_);
+    render_ = std::make_unique<RenderWindow>(device, glfw_, id);
   } catch (...) {
     glfwDestroyWindow(glfw_);
     glfw_ = nullptr;
@@ -52,7 +52,7 @@ AppWindow::AppWindow(RenderDevice &device, uint32_t id, int width, int height)
 {
   render_ = std::make_unique<RenderWindow>(
     device, static_cast<uint32_t>(width < 1 ? 1 : width),
-    static_cast<uint32_t>(height < 1 ? 1 : height));
+    static_cast<uint32_t>(height < 1 ? 1 : height), id);
 }
 
 AppWindow::AppWindow(uint32_t id, int width, int height)

@@ -135,6 +135,8 @@ class DmabufImage {
   /// payload to unsignalled, which is exactly the per-frame lifecycle needed.
   VkSemaphore semaphore_ = VK_NULL_HANDLE;
 
+  /// What `vkAllocateMemory` reserved, as reported to `GpuLedger`.
+  uint64_t allocatedBytes_ = 0;
   uint32_t width_     = 0;
   uint32_t height_    = 0;
   uint32_t drmFormat_ = 0;

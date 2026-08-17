@@ -245,6 +245,15 @@ std::unique_ptr<DmabufImage> DmabufImage::create(
     std::cerr << "DmabufImage: vkBindImageMemory failed\n";
     return nullptr;
   }
+  // Outside VMA, so the ledger would miss it otherwise — and these are one
+  // full-size frame each, on a compositor one per surface. Keyed by the memory
+  // handle, which is what the destructor frees.
+  self->allocatedBytes_ = reqs.size;
+  device.gpuLedger().addExternal(
+    self->memory_, reqs.size,
+    canvas::GpuTag{canvas::GpuCategory::ExportedFrame, 0,
+                   "dma-buf handed to the compositor"},
+    width, height, static_cast<uint32_t>(kVkFormat));
 
   VkImageDrmFormatModifierPropertiesEXT chosen {
     .sType = VK_STRUCTURE_TYPE_IMAGE_DRM_FORMAT_MODIFIER_PROPERTIES_EXT,
@@ -313,6 +322,7 @@ DmabufImage::~DmabufImage()
     vkDestroySemaphore(vk, semaphore_, nullptr);
   }
   if (image_ != VK_NULL_HANDLE) vkDestroyImage(vk, image_, nullptr);
+  device_->gpuLedger().remove(memory_);
   // Freed after the image that was bound to it, and by hand rather than
   // through VMA: this allocation never belonged to the allocator.
   if (memory_ != VK_NULL_HANDLE) vkFreeMemory(vk, memory_, nullptr);

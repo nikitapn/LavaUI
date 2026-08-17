@@ -238,6 +238,15 @@ bool ImportedDmabuf::bindImportedMemory(ImportedDmabuf &self, int srcFd)
     logFail("vkBindImageMemory failed");
     return false;
   }
+  // Reported, but as somebody else's memory: this is a client's buffer mapped
+  // in, so counting it against this process would double-count the pixels the
+  // client already paid for. `GpuCategory::ImportedSurface` is the one
+  // category the totals keep separate.
+  device.gpuLedger().addExternal(
+    self.memory_, reqs.size,
+    canvas::GpuTag{canvas::GpuCategory::ImportedSurface, 0,
+                   "client buffer mapped for sampling"},
+    self.width_, self.height_, static_cast<uint32_t>(self.vkFormat_));
   return true;
 }
 
@@ -383,7 +392,10 @@ ImportedDmabuf::~ImportedDmabuf()
   if (device_ == nullptr) return;
   VkDevice vk = device_->getDevice();
   if (image_ != VK_NULL_HANDLE) vkDestroyImage(vk, image_, nullptr);
-  if (memory_ != VK_NULL_HANDLE) vkFreeMemory(vk, memory_, nullptr);
+  if (memory_ != VK_NULL_HANDLE) {
+    device_->gpuLedger().remove(memory_);
+    vkFreeMemory(vk, memory_, nullptr);
+  }
 }
 
 void ImportedDmabuf::waitReady(int timeoutMs) const

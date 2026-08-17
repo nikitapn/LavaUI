@@ -52,11 +52,17 @@ class RenderWindow {
 
   /// Presents into `window`'s surface. The GLFW window belongs to the caller
   /// and must outlive this object.
-  RenderWindow(RenderDevice &device, GLFWwindow *window);
+  ///
+  /// `ownerId` is the `AppWindow::id` this belongs to, and exists only so the
+  /// attachments show up in `RenderDevice::gpuLedger()` under the window that
+  /// pays for them. It is a constructor argument rather than a setter because
+  /// the attachments are allocated before the constructor returns.
+  RenderWindow(RenderDevice &device, GLFWwindow *window, uint32_t ownerId = 0);
 
   /// Offscreen: no surface, no swapchain, no present. Each frame's resolve is
   /// copied into a staging buffer for `readPixels`.
-  RenderWindow(RenderDevice &device, uint32_t width, uint32_t height);
+  RenderWindow(RenderDevice &device, uint32_t width, uint32_t height,
+               uint32_t ownerId = 0);
 
   ~RenderWindow();
 
@@ -184,6 +190,8 @@ class RenderWindow {
   // ─── Window ──────────────────────────────────────────────────────────────
 
   bool isWindowed() const { return windowed_; }
+  /// The `AppWindow::id` whose allocations are tagged with this window.
+  uint32_t ownerId() const { return ownerId_; }
   GLFWwindow *window() const { return window_; }
   bool windowShouldClose() const;
   /// Ask the loop to exit (sets GLFW should-close).
@@ -558,6 +566,8 @@ class RenderWindow {
 
   bool        windowed_ = false;
   GLFWwindow *window_   = nullptr;
+  /// See the constructor: whose VRAM this is, for the ledger's benefit.
+  uint32_t    ownerId_  = 0;
   /// See `setTransparent`.
   bool        transparent_ = false;
 

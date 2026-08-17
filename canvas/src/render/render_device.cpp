@@ -608,7 +608,8 @@ void RenderDevice::createBuffer(
   VkBufferUsageFlags    usage,
   VkMemoryPropertyFlags properties,
   VkBuffer             &buffer,
-  VmaAllocation        &allocation)
+  VmaAllocation        &allocation,
+  const canvas::GpuTag &tag)
 {
   assert(allocator_ != VK_NULL_HANDLE);
 
@@ -641,9 +642,13 @@ void RenderDevice::createBuffer(
   }
 
   allocation = VK_NULL_HANDLE;
+  VmaAllocationInfo info{};
   VR(vmaCreateBuffer(allocator_, &bufferInfo, &allocInfo, &buffer, &allocation,
-                     nullptr),
+                     &info),
      "failed to create buffer (VMA)!");
+  // `info.size` rather than `size`: what the allocation actually occupies,
+  // which is what a memory report is asking about.
+  gpuLedger_.addBuffer(allocation, info.size, tag, usage);
 }
 
 void RenderDevice::destroyBuffer(VkBuffer &buffer, VmaAllocation &allocation)
@@ -653,6 +658,7 @@ void RenderDevice::destroyBuffer(VkBuffer &buffer, VmaAllocation &allocation)
     return;
   }
   assert(allocation != VK_NULL_HANDLE);
+  gpuLedger_.remove(allocation);
   vmaDestroyBuffer(allocator_, buffer, allocation);
   buffer = VK_NULL_HANDLE;
   allocation = VK_NULL_HANDLE;
@@ -767,7 +773,8 @@ void RenderDevice::createImage(
   VkImageUsageFlags     usage,
   VkMemoryPropertyFlags properties,
   VkImage              &image,
-  VmaAllocation        &allocation)
+  VmaAllocation        &allocation,
+  const canvas::GpuTag &tag)
 {
   assert(mipLevels > 0);
   assert(allocator_ != VK_NULL_HANDLE);
@@ -814,9 +821,16 @@ void RenderDevice::createImage(
   }
 
   allocation = VK_NULL_HANDLE;
+  VmaAllocationInfo info{};
   VR(vmaCreateImage(allocator_, &imageInfo, &allocInfo, &image, &allocation,
-                    nullptr),
+                    &info),
      "failed to create image (VMA)!");
+  // The size VMA actually reserved, which for a multisampled attachment is the
+  // one that matters: `width * height * 4` understates it by the sample count.
+  gpuLedger_.addImage(allocation, info.size, tag, width, height,
+                      static_cast<uint32_t>(samples), mipLevels,
+                      static_cast<uint32_t>(format),
+                      static_cast<uint32_t>(usage));
 }
 
 void RenderDevice::destroyImageDeferred(VkImage &image, VmaAllocation &allocation,
@@ -828,6 +842,10 @@ void RenderDevice::destroyImageDeferred(VkImage &image, VmaAllocation &allocatio
   // is recorded after these handles were nulled, so none of them can name the
   // resource; only submissions already claimed might.
   trash_.push_back({image, allocation, view, nextSubmission_.load()});
+  // Still in the ledger, and still in memory: this is queued, not freed. A
+  // report that dropped it here would claim less VRAM in use than the driver
+  // sees, which is the opposite of the point.
+  gpuLedger_.markRetiring(allocation);
   image      = VK_NULL_HANDLE;
   allocation = VK_NULL_HANDLE;
   view       = VK_NULL_HANDLE;
@@ -870,6 +888,7 @@ uint64_t RenderDevice::collectGarbage()
       vkDestroyImageView(device_, t.view, nullptr);
     }
     if (t.image != VK_NULL_HANDLE) {
+      gpuLedger_.remove(t.allocation);
       vmaDestroyImage(allocator_, t.image, t.allocation);
     }
   }
@@ -884,6 +903,7 @@ void RenderDevice::destroyImage(VkImage &image, VmaAllocation &allocation)
     return;
   }
   assert(allocation != VK_NULL_HANDLE);
+  gpuLedger_.remove(allocation);
   vmaDestroyImage(allocator_, image, allocation);
   image = VK_NULL_HANDLE;
   allocation = VK_NULL_HANDLE;
@@ -1234,6 +1254,17 @@ void RenderDevice::transitionImageLayout(
 
     sourceStage      = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
     destinationStage = VK_PIPELINE_STAGE_TRANSFER_BIT;
+  } else if (oldLayout == VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL &&
+             newLayout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL) {
+    // The way back from a readback. `readImagePixels` borrows a live image —
+    // an atlas page — copies it out and has to leave it exactly as it found
+    // it; without this the restore throws and the caller has read the pixels
+    // of an image it then left in the wrong layout.
+    barrier.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+    barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+
+    sourceStage      = VK_PIPELINE_STAGE_TRANSFER_BIT;
+    destinationStage = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
   } else if (oldLayout == VK_IMAGE_LAYOUT_UNDEFINED &&
              newLayout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL) {
     // Direct transition for images that don't need initial data upload
@@ -1267,6 +1298,125 @@ void RenderDevice::transitionImageLayout(
                        &barrier);
 
   endSingleTimeCommands(commandBuffer);
+}
+
+RenderDevice::GpuMemoryTotals RenderDevice::gpuMemoryTotals() const
+{
+  GpuMemoryTotals totals;
+  totals.deviceName = physicalDeviceProperties_.deviceName;
+  totals.samples    = static_cast<uint32_t>(msaaSamples_);
+  totals.maxSamples = static_cast<uint32_t>(
+    physicalDeviceProperties_.limits.framebufferColorSampleCounts &
+    physicalDeviceProperties_.limits.framebufferDepthSampleCounts);
+  if (allocator_ == VK_NULL_HANDLE) return totals;
+
+  VmaTotalStatistics stats{};
+  vmaCalculateStatistics(allocator_, &stats);
+  totals.vmaAllocatedBytes = stats.total.statistics.allocationBytes;
+  totals.vmaBlockBytes     = stats.total.statistics.blockBytes;
+
+  // Only the device-local heaps. A discrete GPU also exposes host heaps, and
+  // adding those to a VRAM figure is how a report ends up disagreeing with
+  // `nvidia-smi` for a reason nobody can find.
+  VmaBudget budgets[VK_MAX_MEMORY_HEAPS]{};
+  vmaGetHeapBudgets(allocator_, budgets);
+  for (uint32_t i = 0; i < deviceMemoryProperties_.memoryHeapCount; ++i) {
+    if ((deviceMemoryProperties_.memoryHeaps[i].flags &
+         VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) == 0) {
+      continue;
+    }
+    totals.heapUsageBytes  += budgets[i].usage;
+    totals.heapBudgetBytes += budgets[i].budget;
+    totals.heapSizeBytes   += deviceMemoryProperties_.memoryHeaps[i].size;
+  }
+  return totals;
+}
+
+bool RenderDevice::readImagePixels(VkImage image, uint32_t width,
+                                   uint32_t height, VkFormat format,
+                                   VkImageLayout currentLayout,
+                                   std::vector<uint8_t> &outRgba)
+{
+  if (image == VK_NULL_HANDLE || width == 0 || height == 0) return false;
+
+  uint32_t sourceBytesPerPixel = 0;
+  switch (format) {
+  case VK_FORMAT_R8_UNORM:      sourceBytesPerPixel = 1; break;
+  case VK_FORMAT_R8G8B8A8_UNORM:
+  case VK_FORMAT_R8G8B8A8_SRGB:
+  case VK_FORMAT_B8G8R8A8_UNORM:
+  case VK_FORMAT_B8G8R8A8_SRGB: sourceBytesPerPixel = 4; break;
+  default:
+    // Depth, compressed and multisampled formats are not pictures, and a
+    // report that showed one would be showing noise.
+    std::cerr << "readImagePixels: unsupported format " << format << '\n';
+    return false;
+  }
+  const bool swizzle = format == VK_FORMAT_B8G8R8A8_UNORM
+                       || format == VK_FORMAT_B8G8R8A8_SRGB;
+
+  const VkDeviceSize bytes =
+    static_cast<VkDeviceSize>(width) * height * sourceBytesPerPixel;
+
+  VkBuffer      staging      = VK_NULL_HANDLE;
+  VmaAllocation stagingAlloc = VK_NULL_HANDLE;
+  createBuffer(bytes, VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+               VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+                 VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+               staging, stagingAlloc,
+               canvas::GpuTag{canvas::GpuCategory::Staging, 0,
+                              "atlas readback"});
+
+  // Whatever the caller says the image is in, and back again: this runs
+  // alongside a live compositor and must leave the atlas exactly as it found
+  // it.
+  transitionImageLayout(image, format, currentLayout,
+                        VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+  {
+    VkCommandBuffer commandBuffer = beginSingleTimeCommands();
+    VkBufferImageCopy region{
+      .bufferOffset      = 0,
+      .bufferRowLength   = 0,
+      .bufferImageHeight = 0,
+      .imageSubresource =
+        {
+          .aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT,
+          .mipLevel       = 0,
+          .baseArrayLayer = 0,
+          .layerCount     = 1,
+        },
+      .imageOffset = {0, 0, 0},
+      .imageExtent = {width, height, 1},
+    };
+    vkCmdCopyImageToBuffer(commandBuffer, image,
+                           VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, staging, 1,
+                           &region);
+    endSingleTimeCommands(commandBuffer);
+  }
+  transitionImageLayout(image, format, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                        currentLayout);
+
+  const auto *src = static_cast<const uint8_t *>(mapBuffer(stagingAlloc));
+  outRgba.assign(static_cast<size_t>(width) * height * 4, 0);
+  for (size_t i = 0, pixels = static_cast<size_t>(width) * height; i < pixels;
+       ++i) {
+    uint8_t *dst = outRgba.data() + i * 4;
+    if (sourceBytesPerPixel == 1) {
+      // A coverage atlas as grey-on-opaque, which is what makes the packing
+      // visible. Alpha would render the whole page as transparent nothing.
+      dst[0] = dst[1] = dst[2] = src[i];
+      dst[3] = 0xff;
+    } else {
+      const uint8_t *s = src + i * 4;
+      dst[0] = swizzle ? s[2] : s[0];
+      dst[1] = s[1];
+      dst[2] = swizzle ? s[0] : s[2];
+      dst[3] = s[3];
+    }
+  }
+  unmapBuffer(stagingAlloc);
+  destroyBuffer(staging, stagingAlloc);
+  return true;
 }
 
 void RenderDevice::copyBufferToImageRegion(
@@ -1491,7 +1641,10 @@ void RenderDevice::cleanUp()
   // everything queued is releasable regardless of its submission index.
   for (auto &t : trash_) {
     if (t.view != VK_NULL_HANDLE) vkDestroyImageView(device_, t.view, nullptr);
-    if (t.image != VK_NULL_HANDLE) vmaDestroyImage(allocator_, t.image, t.allocation);
+    if (t.image != VK_NULL_HANDLE) {
+      gpuLedger_.remove(t.allocation);
+      vmaDestroyImage(allocator_, t.image, t.allocation);
+    }
   }
   trash_.clear();
 
@@ -1891,6 +2044,11 @@ void RenderDevice::registerWindow(RenderWindow *window)
   // A window opened after the atlas already has content must not start out
   // bound to QuadRenderer's 1x1 white placeholder.
   if (text_) window->setGlyphAtlas(text_->atlasView(), text_->atlasSampler());
+}
+
+std::vector<RenderWindow *> RenderDevice::windowsSnapshot() const
+{
+  return windows_;
 }
 
 void RenderDevice::unregisterWindow(RenderWindow *window)

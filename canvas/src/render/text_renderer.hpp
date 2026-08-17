@@ -90,6 +90,30 @@ public:
   VkImageView atlasView() const;
   VkSampler   atlasSampler() const;
 
+  /// What the glyph atlas is costing, and how full it is.
+  ///
+  /// One atlas serves every window, and it only ever doubles — a session that
+  /// used a lot of sizes never gives the pixels back. So the question a VRAM
+  /// report has to answer is not just "how big" but "how much of it is shelf
+  /// that will never be reused", which `packedRows` against `height` says.
+  struct AtlasStats {
+    uint32_t width      = 0;
+    uint32_t height     = 0;
+    /// Rows below the current shelf: packed, whether or not still referenced.
+    uint32_t packedRows = 0;
+    uint32_t generation = 0;
+    /// Cached glyphs, i.e. entries the atlas is holding pixels for.
+    uint32_t glyphs = 0;
+    /// Registered faces — a face is a (file contents, size, hinting) triple,
+    /// so a UI at many sizes registers many.
+    uint32_t faces = 0;
+    /// One byte per pixel: `VK_FORMAT_R8_UNORM` coverage.
+    uint64_t bytes = 0;
+    /// The atlas image, for `RenderDevice::readImagePixels`. Null before init.
+    VkImage image = VK_NULL_HANDLE;
+  };
+  AtlasStats atlasStats() const;
+
   // Main interface
   void init();
   /// Load FreeType face from an absolute (or process-cwd-relative) path.

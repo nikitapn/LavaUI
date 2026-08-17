@@ -181,7 +181,9 @@ struct TextRenderer::Impl {
       VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
       VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
       atlasTexture_,
-      atlasTextureAlloc_);
+      atlasTextureAlloc_,
+      canvas::GpuTag{canvas::GpuCategory::GlyphAtlas, 0,
+                     "coverage atlas, shared by every window"});
 
     // Transition to optimal layout
     device_.transitionImageLayout(atlasTexture_,
@@ -283,7 +285,9 @@ struct TextRenderer::Impl {
     device_.createImage(newW, newH, 1, VK_SAMPLE_COUNT_1_BIT, VK_FORMAT_R8_UNORM,
                         VK_IMAGE_TILING_OPTIMAL,
                         VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
-                        VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, newImage, newAlloc);
+                        VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, newImage, newAlloc,
+                        canvas::GpuTag{canvas::GpuCategory::GlyphAtlas, 0,
+                                       "coverage atlas, grown"});
 
     device_.transitionImageLayout(newImage, VK_FORMAT_R8_UNORM,
                                   VK_IMAGE_LAYOUT_UNDEFINED,
@@ -347,7 +351,9 @@ struct TextRenderer::Impl {
                          VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
                            VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
                          stagingBuffer,
-                         stagingAlloc);
+                         stagingAlloc,
+                         canvas::GpuTag{canvas::GpuCategory::Staging, 0,
+                                        "glyph upload"});
 
     // Copy bitmap data to staging buffer
     void *data = device_.mapBuffer(stagingAlloc);
@@ -519,6 +525,21 @@ VkImageView TextRenderer::atlasView() const {
 VkSampler TextRenderer::atlasSampler() const {
   std::shared_lock lock(mutex_);
   return impl_->atlasSampler_;
+}
+
+TextRenderer::AtlasStats TextRenderer::atlasStats() const {
+  std::shared_lock lock(mutex_);
+  AtlasStats stats;
+  stats.width  = static_cast<uint32_t>(impl_->atlasWidth_);
+  stats.height = static_cast<uint32_t>(impl_->atlasHeight_);
+  // The shelf being filled counts as packed: its rows are spoken for.
+  stats.packedRows = static_cast<uint32_t>(impl_->currentY_ + impl_->shelfHeight_);
+  stats.generation = impl_->atlasGeneration_;
+  stats.glyphs     = static_cast<uint32_t>(impl_->glyphMap_.size());
+  stats.faces      = static_cast<uint32_t>(impl_->fontKeys_.size());
+  stats.bytes      = static_cast<uint64_t>(stats.width) * stats.height;
+  stats.image      = impl_->atlasTexture_;
+  return stats;
 }
 
 canvas::VoidResult TextRenderer::loadFont(const std::string& fontPath, int fontSize) {

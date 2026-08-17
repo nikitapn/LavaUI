@@ -70,6 +70,16 @@ public:
   VkImageView pageView(uint32_t page) const;
   uint32_t    pageCount() const { return static_cast<uint32_t>(pages_.size()); }
   uint32_t    cellSize() const { return cellSize_; }
+  uint32_t    pageSize() const { return pageSize_; }
+
+  /// The page's image, so a debug tool can read the pixels back and show what
+  /// the packing actually looks like. Null for a page that does not exist.
+  VkImage pageImage(uint32_t page) const;
+
+  /// Cells handed out on one page, counting those returned to its free list as
+  /// free. Says which page a wall of covers actually landed on.
+  uint32_t pageUsedSlots(uint32_t page) const;
+  uint32_t slotsPerPageCount() const { return slotsPerPage(); }
 
   /// Cells in use / total, for the eviction policy that lives above this.
   uint32_t usedSlots() const { return usedSlots_; }

@@ -37,6 +37,11 @@ static_assert(sizeof(KawasePush) == 16, "must match blur.frag push block");
 
 }  // namespace
 
+uint32_t BlurPass::ownerWindowId() const
+{
+  return owner_ != nullptr ? owner_->ownerId() : 0;
+}
+
 void BlurPass::init()
 {
   format_ = device_.colorFormat();
@@ -115,7 +120,9 @@ void BlurPass::createSceneTarget(uint32_t width, uint32_t height)
   device_.createImage(
     width, height, 1, VK_SAMPLE_COUNT_1_BIT, format_, VK_IMAGE_TILING_OPTIMAL,
     VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
-    VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, sceneImage_, sceneAlloc_);
+    VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, sceneImage_, sceneAlloc_,
+    canvas::GpuTag{canvas::GpuCategory::BlurScratch, ownerWindowId(),
+                   "backdrop capture"});
   sceneView_ =
     device_.createImageView(sceneImage_, format_, VK_IMAGE_ASPECT_COLOR_BIT, 1);
 
@@ -252,7 +259,9 @@ void BlurPass::createImages(uint32_t width, uint32_t height)
       lv.w, lv.h, 1, VK_SAMPLE_COUNT_1_BIT, format_, VK_IMAGE_TILING_OPTIMAL,
       VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT |
         VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
-      VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, lv.image, lv.alloc);
+      VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, lv.image, lv.alloc,
+      canvas::GpuTag{canvas::GpuCategory::BlurScratch, ownerWindowId(),
+                     "blur level"});
     lv.view =
       device_.createImageView(lv.image, format_, VK_IMAGE_ASPECT_COLOR_BIT, 1);
 

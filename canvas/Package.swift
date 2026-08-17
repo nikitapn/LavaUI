@@ -42,6 +42,8 @@ let engineSources: [String] = [
     "render/imported_dmabuf.cpp",
     "render/font.cpp",
     "render/font_key.cpp",
+    "render/gpu_ledger.cpp",
+    "render/gpu_report.cpp",
     "render/image_atlas.cpp",
     "render/pipeline.cpp",
     "render/png_encode.cpp",

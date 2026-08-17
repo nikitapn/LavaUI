@@ -19,6 +19,7 @@ struct GLFWwindow;
 
 #include "util/types.hpp"
 #include "util/cout_ext.hpp"
+#include "render/gpu_ledger.hpp"
 #include "render/vulkan_ptr.hpp"
 
 extern bool g_ValidationFromResult;
@@ -219,6 +220,10 @@ class RenderDevice
   /// so every window's attachments must agree with it.
   VkSampleCountFlagBits msaaSamples_ = VK_SAMPLE_COUNT_1_BIT;
 
+  /// Who asked for each allocation. Thread-safe on its own; allocations happen
+  /// from window render workers as well as the main thread.
+  canvas::GpuLedger gpuLedger_;
+
 
 #ifdef INCLUDE_IMGUI
   // ImGui
@@ -356,6 +361,14 @@ class RenderDevice
   void registerWindow(RenderWindow *window);
   void unregisterWindow(RenderWindow *window);
 
+  /// A copy of the window list, for a report that has to say what each window
+  /// costs.
+  ///
+  /// Same contract as `registerWindow`: called on the thread that opens and
+  /// closes windows, which is the one a compositor's control plane already runs
+  /// on. Unlocked for that reason, like the two above it.
+  std::vector<RenderWindow *> windowsSnapshot() const;
+
   /// Reserves the next submission index. Called by `RenderWindow::render`
   /// immediately before `vkQueueSubmit`.
   uint64_t nextSubmission() { return nextSubmission_.fetch_add(1); }
@@ -445,11 +458,16 @@ class RenderDevice
 
   VkSampler createTextureSampler();
 
-  void createBuffer(VkDeviceSize          size,
-                    VkBufferUsageFlags    usage,
-                    VkMemoryPropertyFlags properties,
-                    VkBuffer             &buffer,
-                    VmaAllocation        &allocation);
+  /// `tag` says who the memory is for; it is recorded in `gpuLedger()` and is
+  /// the difference between a VRAM report that names an owner and one that
+  /// says "1 GB of images". Defaulted so a caller allocating something too
+  /// small to care about does not have to answer.
+  void createBuffer(VkDeviceSize            size,
+                    VkBufferUsageFlags      usage,
+                    VkMemoryPropertyFlags   properties,
+                    VkBuffer               &buffer,
+                    VmaAllocation          &allocation,
+                    const canvas::GpuTag   &tag = {});
 
   /// Destroy a buffer created with `createBuffer` (VMA-owned). Nulls both.
   void destroyBuffer(VkBuffer &buffer, VmaAllocation &allocation);
@@ -492,6 +510,47 @@ class RenderDevice
   auto     getMSAASamples() const noexcept { return msaaSamples_; }
   Shaders &getShaders();
 
+  /// Every allocation this device has made, and who asked for it.
+  canvas::GpuLedger       &gpuLedger() { return gpuLedger_; }
+  const canvas::GpuLedger &gpuLedger() const { return gpuLedger_; }
+
+  /// What the driver and VMA say, as opposed to what the ledger accounts for.
+  ///
+  /// The two disagree by design and the difference is informative: VMA rounds
+  /// allocations up into blocks and keeps empty ones for reuse, so
+  /// `vmaBlockBytes - vmaAllocatedBytes` is slack this process could in
+  /// principle give back, and `heapUsage - vmaBlockBytes` is everything the
+  /// driver counts that VMA never allocated — swapchains, exported dma-bufs,
+  /// and the driver's own working set.
+  struct GpuMemoryTotals {
+    std::string deviceName;
+    /// Sum of live VMA allocations, i.e. what was asked for.
+    uint64_t vmaAllocatedBytes = 0;
+    /// Sum of the device-memory blocks VMA is holding to serve them.
+    uint64_t vmaBlockBytes = 0;
+    /// `VmaBudget` for the device-local heap: what the driver attributes to
+    /// this process, and what it will let it have.
+    uint64_t heapUsageBytes  = 0;
+    uint64_t heapBudgetBytes = 0;
+    uint64_t heapSizeBytes   = 0;
+    uint32_t maxSamples      = 1;
+    /// Sample count the render passes actually use — `getMaxUsableSampleCount`
+    /// today, which is why it is worth reporting next to the attachments it
+    /// multiplies.
+    uint32_t samples = 1;
+  };
+  GpuMemoryTotals gpuMemoryTotals() const;
+
+  /// Copies an image's mip 0 into host RGBA8. Blocking, and for debug tooling
+  /// only — it waits for the device and allocates a staging buffer per call.
+  ///
+  /// `R8_UNORM` is expanded to grey RGBA so a glyph atlas can be looked at as a
+  /// picture; RGBA8/BGRA8 come through as they are, with BGRA swizzled.
+  /// `currentLayout` is restored before returning.
+  bool readImagePixels(VkImage image, uint32_t width, uint32_t height,
+                       VkFormat format, VkImageLayout currentLayout,
+                       std::vector<uint8_t> &outRgba);
+
   /// Shared glyph atlas and font registry. Valid between `init` and `cleanUp`.
   TextRenderer &textRenderer();
 
@@ -517,6 +576,7 @@ class RenderDevice
 
 
 
+  /// See `createBuffer` for `tag`.
   void createImage(uint32_t              width,
                    uint32_t              height,
                    uint32_t              mipLevels,
@@ -526,7 +586,8 @@ class RenderDevice
                    VkImageUsageFlags     usage,
                    VkMemoryPropertyFlags properties,
                    VkImage              &image,
-                   VmaAllocation        &allocation);
+                   VmaAllocation        &allocation,
+                   const canvas::GpuTag &tag = {});
 
   /// Destroy an image created with `createImage` (VMA-owned). Nulls both.
   /// Does not destroy image views — caller frees views first.

@@ -20,6 +20,8 @@ canvas_engine_sources = files(
   'src/render/imported_dmabuf.cpp',
   'src/render/font.cpp',
   'src/render/font_key.cpp',
+  'src/render/gpu_ledger.cpp',
+  'src/render/gpu_report.cpp',
   'src/render/image_atlas.cpp',
   'src/render/pipeline.cpp',
   'src/render/png_encode.cpp',
