@@ -524,6 +524,13 @@ struct Server {
   wlr_cursor *cursor = nullptr;
   wlr_xcursor_manager *cursor_mgr = nullptr;
 
+  /// Raw motion and pointer locking. Xwayland translates an X11 pointer grab
+  /// into these protocols; without them a game's camera is driven by the
+  /// finite desktop cursor and stops turning when that cursor reaches an edge.
+  wlr_relative_pointer_manager_v1 *relativePointers = nullptr;
+  wlr_pointer_constraints_v1 *pointerConstraints = nullptr;
+  wlr_pointer_constraint_v1 *activePointerConstraint = nullptr;
+
   /// Front is the most recently focused. Focus order and stacking order are
   /// the same thing here, which is why one list serves both.
   std::list<FramedWindow *> toplevels;
@@ -767,6 +774,9 @@ struct Server {
   Listener<Server> cursor_axis;
   Listener<Server> cursor_frame;
   Listener<Server> request_cursor;
+  Listener<Server> new_pointer_constraint;
+  Listener<Server> pointer_focus_change;
+  Listener<Server> active_constraint_destroy;
   Listener<Server> request_set_selection;
   Listener<Server> set_selection;
   Listener<Server> request_set_primary_selection;
@@ -785,7 +795,8 @@ struct Server {
          {&new_output, &new_toplevel, &new_popup, &new_decoration,
           &new_xwayland_surface, &xwayland_ready, &new_input, &cursor_motion,
           &cursor_motion_absolute, &cursor_button, &cursor_axis, &cursor_frame,
-          &request_cursor, &request_set_selection, &set_selection,
+          &request_cursor, &new_pointer_constraint, &pointer_focus_change,
+          &active_constraint_destroy, &request_set_selection, &set_selection,
           &request_set_primary_selection}) {
       listener->detach();
     }
@@ -807,6 +818,10 @@ struct Server {
   static void on_cursor_axis(wl_listener *listener, void *data);
   static void on_cursor_frame(wl_listener *listener, void *data);
   static void on_request_cursor(wl_listener *listener, void *data);
+  static void on_new_pointer_constraint(wl_listener *listener, void *data);
+  static void on_pointer_focus_change(wl_listener *listener, void *data);
+  static void on_active_constraint_destroy(wl_listener *listener, void *data);
+  void activatePointerConstraint(wlr_pointer_constraint_v1 *constraint);
   static void on_request_set_selection(wl_listener *listener, void *data);
   static void on_set_selection(wl_listener *listener, void *data);
   static void on_request_set_primary_selection(wl_listener *listener,
@@ -7456,8 +7471,39 @@ bool Server::route_pointer(uint32_t kind, int32_t button, int32_t mods) {
 void Server::on_cursor_motion(wl_listener *listener, void *data) {
   auto *server = owner_of<Server>(listener);
   auto *event = static_cast<wlr_pointer_motion_event *>(data);
-  wlr_cursor_move(server->cursor, &event->pointer->base, event->delta_x,
-                  event->delta_y);
+
+  // Relative motion is independent of the visible cursor. In particular it
+  // must keep flowing while a locked pointer is stationary: this is the path
+  // Xwayland uses for XI2 raw motion and therefore for first-person cameras.
+  if (server->relativePointers != nullptr) {
+    wlr_relative_pointer_manager_v1_send_relative_motion(
+        server->relativePointers, server->seat,
+        static_cast<uint64_t>(event->time_msec) * 1000u, event->delta_x,
+        event->delta_y, event->unaccel_dx, event->unaccel_dy);
+  }
+
+  wlr_pointer_constraint_v1 *constraint = server->activePointerConstraint;
+  if (constraint == nullptr ||
+      constraint->type != WLR_POINTER_CONSTRAINT_V1_LOCKED) {
+    double dx = event->delta_x;
+    double dy = event->delta_y;
+    if (constraint != nullptr &&
+        constraint->type == WLR_POINTER_CONSTRAINT_V1_CONFINED) {
+      const double sx = server->seat->pointer_state.sx;
+      const double sy = server->seat->pointer_state.sy;
+      double confinedX = sx;
+      double confinedY = sy;
+      if (wlr_region_confine(&constraint->region, sx, sy, sx + dx, sy + dy,
+                             &confinedX, &confinedY)) {
+        dx = confinedX - sx;
+        dy = confinedY - sy;
+      } else {
+        dx = 0;
+        dy = 0;
+      }
+    }
+    wlr_cursor_move(server->cursor, &event->pointer->base, dx, dy);
+  }
   server->update_pointer_focus(event->time_msec);
 }
 
@@ -7465,9 +7511,56 @@ void Server::on_cursor_motion_absolute(wl_listener *listener, void *data) {
   auto *server =
       owner_of<Server>(listener);
   auto *event = static_cast<wlr_pointer_motion_absolute_event *>(data);
-  wlr_cursor_warp_absolute(server->cursor, &event->pointer->base, event->x,
-                           event->y);
+  if (server->activePointerConstraint == nullptr ||
+      server->activePointerConstraint->type !=
+          WLR_POINTER_CONSTRAINT_V1_LOCKED) {
+    wlr_cursor_warp_absolute(server->cursor, &event->pointer->base, event->x,
+                             event->y);
+  }
   server->update_pointer_focus(event->time_msec);
+}
+
+void Server::activatePointerConstraint(
+    wlr_pointer_constraint_v1 *constraint) {
+  if (constraint == activePointerConstraint) return;
+
+  if (activePointerConstraint != nullptr) {
+    wlr_pointer_constraint_v1 *old = activePointerConstraint;
+    activePointerConstraint = nullptr;
+    active_constraint_destroy.detach();
+    wlr_pointer_constraint_v1_send_deactivated(old);
+  }
+
+  if (constraint == nullptr) return;
+  activePointerConstraint = constraint;
+  active_constraint_destroy.attach(&constraint->events.destroy, this,
+                                   on_active_constraint_destroy);
+  wlr_pointer_constraint_v1_send_activated(constraint);
+}
+
+void Server::on_new_pointer_constraint(wl_listener *listener, void *data) {
+  auto *server = owner_of<Server>(listener);
+  auto *constraint = static_cast<wlr_pointer_constraint_v1 *>(data);
+  if (server->seat->pointer_state.focused_surface == constraint->surface) {
+    server->activatePointerConstraint(constraint);
+  }
+}
+
+void Server::on_pointer_focus_change(wl_listener *listener, void *data) {
+  auto *server = owner_of<Server>(listener);
+  auto *event = static_cast<wlr_seat_pointer_focus_change_event *>(data);
+  wlr_pointer_constraint_v1 *constraint = nullptr;
+  if (event->new_surface != nullptr && server->pointerConstraints != nullptr) {
+    constraint = wlr_pointer_constraints_v1_constraint_for_surface(
+        server->pointerConstraints, event->new_surface, server->seat);
+  }
+  server->activatePointerConstraint(constraint);
+}
+
+void Server::on_active_constraint_destroy(wl_listener *listener, void *) {
+  auto *server = owner_of<Server>(listener);
+  server->active_constraint_destroy.detach();
+  server->activePointerConstraint = nullptr;
 }
 
 void Server::on_cursor_button(wl_listener *listener, void *data) {
@@ -8007,6 +8100,22 @@ int main() {
                              Server::on_cursor_frame);
 
   server.seat = wlr_seat_create(server.display, "seat0");
+  server.relativePointers =
+      wlr_relative_pointer_manager_v1_create(server.display);
+  server.pointerConstraints =
+      wlr_pointer_constraints_v1_create(server.display);
+  if (server.relativePointers == nullptr ||
+      server.pointerConstraints == nullptr) {
+    wlr_log(WLR_ERROR, "relative pointer protocols unavailable");
+  }
+  if (server.pointerConstraints != nullptr) {
+    server.new_pointer_constraint.attach(
+        &server.pointerConstraints->events.new_constraint, &server,
+        Server::on_new_pointer_constraint);
+  }
+  server.pointer_focus_change.attach(
+      &server.seat->pointer_state.events.focus_change, &server,
+      Server::on_pointer_focus_change);
   server.new_input.attach(&server.backend->events.new_input, &server,
                           Server::on_new_input);
   server.request_cursor.attach(&server.seat->events.request_set_cursor, &server,

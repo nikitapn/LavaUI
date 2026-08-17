@@ -25,6 +25,10 @@ foreach xml : [
   # The shell every ordinary Wayland application speaks: toplevels, popups,
   # the negotiation behind resize and maximize.
   protocol_dir / 'stable/xdg-shell/xdg-shell.xml',
+  # Pointer grabs and raw motion. Xwayland uses these to implement the X11
+  # grabs that games rely on for an unbounded first-person camera.
+  protocol_dir / 'unstable/pointer-constraints/pointer-constraints-unstable-v1.xml',
+  protocol_dir / 'unstable/relative-pointer/relative-pointer-unstable-v1.xml',
 ]
   protocol_headers += custom_target(
     xml.underscorify() + '_server_h',
