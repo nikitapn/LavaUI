@@ -51,9 +51,14 @@ public:
   /// it is pinned rather than preferred. `importableModifiers` is what the
   /// consumer said it can read, and an empty list is a request to fail rather
   /// than a request to guess.
+  /// `sampleCap` limits MSAA — see `RenderDevice::setSampleCap`. 0 keeps the
+  /// engine default, which is what a caller with no opinion should pass; a
+  /// compositor passes what its config says, because on a desktop the count is
+  /// multiplied by every surface on screen.
   [[nodiscard]] canvas::VoidResult initExported(
     const std::string &assetsRoot, int drmFd,
-    const std::vector<uint64_t> &importableModifiers);
+    const std::vector<uint64_t> &importableModifiers,
+    uint32_t sampleCap = 0);
 
   /// Opens one more exported surface on the device. Returns its window id, or
   /// 0. Everything shared — pipelines, glyph atlas, texture cache — is already
@@ -268,6 +273,10 @@ public:
   int loadTexture(const std::string &path);
   /// Drops one reference; frees only once no in-flight frame can name it.
   void unloadTexture(const std::string &path);
+
+  /// Releases `key` and drops it rather than keeping it warm. For an entry that
+  /// can never be asked for again — see `TextureManager::discardTexture`.
+  void discardTexture(const std::string &key);
   /// Uploads pre-decoded RGBA8. Must run on the thread owning the device.
   int uploadTexture(const std::string &key, const uint8_t *rgba,
                     uint32_t width, uint32_t height);

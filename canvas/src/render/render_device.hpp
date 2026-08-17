@@ -71,6 +71,23 @@ class RenderWindow;
 /// window has to hope the queue family it inherited happens to fit.
 class RenderDevice
 {
+ public:
+  /// How many samples the scene attachments may use at most.
+  ///
+  /// 4 rather than "whatever the device allows", which is what this used to
+  /// take. The count multiplies both of the largest allocations a window makes
+  /// — a multisampled colour attachment and a multisampled depth attachment —
+  /// so on a device offering 8 it was 128 MiB per 1920×1080 surface, and a
+  /// compositor holds one such surface per window plus one per title bar,
+  /// shadow and frost. 4 halves that for a difference visible only on the
+  /// diagonal edge of a rounded corner.
+  ///
+  /// Overridden per process by `LAVA_MSAA` (1, 2, 4, 8 …), which is how to
+  /// compare them without a rebuild, and per session by `[render] msaa` in
+  /// `lava.conf`, which the compositor passes to `setSampleCap`.
+  static constexpr uint32_t kDefaultSampleCap = 4;
+
+ private:
   bool enableValidationLayers_ = false;
   // Vulkan instance
   VkInstance instance_ = VK_NULL_HANDLE;
@@ -219,6 +236,9 @@ class RenderDevice
   /// Sample count every render pass and pipeline is built for. Device-wide,
   /// so every window's attachments must agree with it.
   VkSampleCountFlagBits msaaSamples_ = VK_SAMPLE_COUNT_1_BIT;
+
+  /// The most `msaaSamples_` may be. See `setSampleCap`.
+  uint32_t sampleCap_ = kDefaultSampleCap;
 
   /// Who asked for each allocation. Thread-safe on its own; allocations happen
   /// from window render workers as well as the main thread.
@@ -509,6 +529,15 @@ class RenderDevice
 
   auto     getMSAASamples() const noexcept { return msaaSamples_; }
   Shaders &getShaders();
+
+  /// Caps the sample count — see `kDefaultSampleCap`.
+  ///
+  /// Must be called before `init` — the render passes and every pipeline are
+  /// built against the count this settles, and changing it afterwards would
+  /// mean rebuilding all of them.
+  ///
+  /// Clamped to a power of two in 1…64. 0 means "leave the default".
+  void setSampleCap(uint32_t samples);
 
   /// Every allocation this device has made, and who asked for it.
   canvas::GpuLedger       &gpuLedger() { return gpuLedger_; }

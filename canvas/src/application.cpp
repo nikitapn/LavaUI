@@ -219,7 +219,8 @@ struct Application::Impl
   /// up, since it decides which card is chosen), and the modifiers it may
   /// export with are the ones the consumer said it can read.
   canvas::VoidResult initExported(const std::string &assetsRoot, int drmFd,
-                                  const std::vector<uint64_t> &importable)
+                                  const std::vector<uint64_t> &importable,
+                                  uint32_t sampleCap)
   {
     try {
       if (!assetsRoot.empty()) {
@@ -227,9 +228,17 @@ struct Application::Impl
       }
       exportModifiers = importable;
       device.exportToDrmDevice(drmFd);
+      // Before `init`: the render passes and every pipeline are built against
+      // the sample count it settles.
+      device.setSampleCap(sampleCap);
       device.init("2d shenanigans!", /*presentCapable=*/false);
       deviceUp = true;
-      std::cout << "Vulkan initialized (exported, no surfaces yet).\n";
+      // The sample count is worth a startup line: it is settled once, it
+      // multiplies every surface's attachments, and it comes from a config key
+      // the reader may not know is set.
+      std::cout << "Vulkan initialized (exported, no surfaces yet), "
+                << static_cast<uint32_t>(device.getMSAASamples())
+                << "x MSAA.\n";
       return finishInitCommon(assetsRoot);
     } catch (const std::exception &ex) {
       return canvas::fail(std::string("Application::initExported: ") + ex.what());
@@ -666,9 +675,9 @@ canvas::VoidResult Application::init(const std::string &assetsRoot) {
 
 canvas::VoidResult Application::initExported(
   const std::string &assetsRoot, int drmFd,
-  const std::vector<uint64_t> &importableModifiers)
+  const std::vector<uint64_t> &importableModifiers, uint32_t sampleCap)
 {
-  return impl_->initExported(assetsRoot, drmFd, importableModifiers);
+  return impl_->initExported(assetsRoot, drmFd, importableModifiers, sampleCap);
 }
 
 uint32_t Application::openExportedWindow(uint32_t width, uint32_t height)
@@ -1011,6 +1020,11 @@ int Application::registerFont(const std::string &path, uint32_t pixelSize26_6,
 int Application::loadTexture(const std::string &path)
 {
   return impl_->loadTexture(path);
+}
+
+void Application::discardTexture(const std::string &key)
+{
+  TextureManager::getInstance().discardTexture(key);
 }
 
 void Application::unloadTexture(const std::string &path)

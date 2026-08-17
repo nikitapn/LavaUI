@@ -286,6 +286,7 @@ anywhere.
 | `LAVA_EDITOR_PROBE=1` | Editor hot paths (hit test, caret, selection, emit) with the buffer offset each was working at — see `EditorProbe` |
 | `LAVA_FRAME_PROBE=1` | Compositor: per-surface frame cost, gaps and stalls |
 | `LAVA_VRAM_STATS=1` | Compositor: GPU memory report to stderr, every 10s (`=N` for N seconds, `=verbose` for every allocation). Rides the output frame, so an idle desktop stops reporting — `kill -USR2` dumps one on demand |
+| `LAVA_MSAA=N` | Any canvas process: cap multisampling at N (1/2/4/8). Overrides `[render] msaa`; the way to A/B a session without a rebuild |
 | `LAVA_NO_SHELL=1` | Compositor: do not start panel/dock/wallpaper |
 | `LAVA_NO_AUTOSTART=1` | Compositor: do not run the user's autostart script |
 | `LAVA_AUTOSTART` | Path to that script, overriding `~/.config/lava/autostart` |
@@ -417,6 +418,38 @@ Two things to know before reading a report:
 - **`DumpAtlasImages` writes the atlas pages as PNGs** rather than returning
   bytes, and `LavaDebug` then displays them by path. It idles the device to
   read each page back, so it is a button, never a timer.
+
+### What the first report changed
+
+Two things it found, both fixed, and the numbers are worth keeping because they
+are what any similar decision should be argued with. Measured headless at
+1920×1080 with one blurred terminal (its contents surface plus its frost
+surface):
+
+| Sample count | Accounted for | Per surface pair |
+|---|---|---|
+| 8 (was: device maximum) | 338 MiB | 310 MiB |
+| **4 (`kDefaultSampleCap`)** | **211 MiB** | **183 MiB** |
+| 2 | 151 MiB | 123 MiB |
+
+MSAA buys very little here and it is worth knowing why before raising it again:
+SDF shapes (rounded rectangles, the window buttons) are anti-aliased
+analytically in `quad.frag`, text is coverage-blended from the glyph atlas, and
+everything else in a UI is an axis-aligned rectangle. A full-screen capture at
+8× against the same frame at 2× differs in **244 pixels of 2,073,600 (0.012%),
+max channel delta 13** — all of it around two circles. Where it *would* show is
+a real triangle edge: `Scene3D` in the switcher, `Mesh`/`Polyline` charts, FBD
+diagrams. Set `[render] msaa` (or `LAVA_MSAA`) and look at one of those before
+concluding 2 is free.
+
+**Backdrop frost snapshots are discarded, not cached.** Each refresh uploads a
+full-screen texture under `frost:<surface>:<n>`, and `n` only goes up — so the
+dormant set was holding every dead one until the 256 MiB byte budget noticed.
+Thirteen refreshes now leave one entry and twelve evictions rather than ~95 MiB
+of snapshots nothing could ever name again. That is what
+`TextureManager::discardTexture` is for; reach for it for any key with a
+generation counter in it, and *not* for paths or content hashes, where the
+dormant set is a good bet.
 
 ## The dock hides only when something is in the way
 

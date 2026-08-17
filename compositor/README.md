@@ -160,6 +160,12 @@ layout = us
 # back here.
 # mod-key = alt
 
+[render]
+# Multisampling for every surface the compositor draws: 1, 2, 4 (default) or 8,
+# clamped to what the GPU supports. A memory setting as much as a quality one —
+# see below.
+# msaa = 4
+
 [appearance]
 # Window corner radius in pixels. 0 (the default) is square; clamped to 64.
 corner-radius = 10
@@ -172,6 +178,19 @@ shadow-offset-y = 4
 mode = 2560x1440@144
 position = 0,0
 ```
+
+`msaa` costs about 16 MiB per surface per step at 1920x1080, and there is one
+surface per client window plus one each for its title bar, its shadow and the
+frost behind it — the compositor's own GPU report (`kill -USR2`, or
+`LavaDebug`) shows the multisampled colour and depth attachments as the two
+largest categories in it. What it buys is smoothness on *diagonal* edges. It
+does nothing for text (coverage-blended from the glyph atlas), nothing for
+axis-aligned rectangles, and nothing for rounded corners or the window buttons
+(anti-aliased analytically in the shader): a full-screen capture at 8 against
+the same frame at 2 differs in 0.012% of its pixels. Where it earns its memory
+is 3D and charts — the switcher's shelf, a `Mesh`/`Polyline` plot, an FBD
+diagram. Requires a restart: the render passes and pipelines are built against
+it.
 
 `corner-radius` applies to what the compositor draws — LavaUI clients and the
 title bars above them — and takes effect on `SIGHUP` without restarting

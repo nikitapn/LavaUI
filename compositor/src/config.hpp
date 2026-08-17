@@ -101,6 +101,29 @@ struct AppearanceConfig {
   int32_t shadowOffsetY = 4;
 };
 
+/// How the compositor's own renderer is set up.
+///
+/// Distinct from `[output]`, which is about screens, and from `[appearance]`,
+/// which is about what windows look like: this is what the GPU is asked to do.
+struct RenderConfig {
+  /// Multisampling for the scene attachments: 1, 2, 4 or 8. Rounded down to a
+  /// power of two and further limited by what the device supports.
+  ///
+  /// It is a memory setting as much as a quality one. Every surface the
+  /// compositor draws — one per client window, plus one each for its title bar,
+  /// its shadow and the frost behind it — allocates a multisampled colour
+  /// attachment *and* a multisampled depth attachment, so this number multiplies
+  /// the two largest things in the GPU report. At 1920x1080 it is 16 MiB per
+  /// surface per step: 8 costs 128 MiB where 4 costs 64 and 2 costs 32.
+  ///
+  /// What it buys is the smoothness of a *diagonal* edge — a rounded corner, a
+  /// triangle in a chart. Text is unaffected (it is coverage-blended from the
+  /// glyph atlas) and so is every axis-aligned rectangle, which is most of a UI.
+  /// 4 is the default for that reason; drop to 2 on a memory-tight machine and
+  /// look at a corner before deciding it was free.
+  int32_t msaa = 4;
+};
+
 /// Which LavaUI `Theme` clients that wear system colours should use.
 ///
 /// A name, not a palette: `dark`, `light`, `nebula`. The colours live in
@@ -193,6 +216,7 @@ struct Config {
   std::string arrangement = "extend";
 
   KeyboardConfig keyboard;
+  RenderConfig render;
   AppearanceConfig appearance;
   BackgroundConfig background;
   ThemeConfig theme;

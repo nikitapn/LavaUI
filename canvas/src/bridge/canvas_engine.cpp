@@ -127,14 +127,15 @@ VoidResult Engine::openOffscreen(const std::string &assetsRoot, uint32_t width,
 }
 
 VoidResult Engine::openExported(const std::string &assetsRoot, int drmFd,
-                                const std::vector<uint64_t> &importableModifiers)
+                                const std::vector<uint64_t> &importableModifiers,
+                                uint32_t sampleCap)
 {
   close();
   // No nominal size: every surface is opened with its own, and a device that
   // has no window has nothing to apply a default to.
   impl_->offscreen = std::make_unique<Application>(1, 1);
   if (auto r = impl_->offscreen->initExported(assetsRoot, drmFd,
-                                              importableModifiers);
+                                              importableModifiers, sampleCap);
       !r) {
     impl_->offscreen.reset();
     return r;
@@ -625,6 +626,11 @@ int Engine::loadTexture(const std::string &path)
   int id = -1;
   impl_->withApp([&](Application &app) { id = app.loadTexture(path); });
   return id;
+}
+
+void Engine::discardTexture(const std::string &key)
+{
+  impl_->withApp([&](Application &app) { app.discardTexture(key); });
 }
 
 void Engine::unloadTexture(const std::string &path)

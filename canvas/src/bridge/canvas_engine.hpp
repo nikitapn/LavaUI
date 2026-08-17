@@ -100,9 +100,12 @@ class Engine {
   ///
   /// `drmFd` is the consumer's DRM node (wlroots: `wlr_renderer_get_drm_fd`);
   /// it is read during the call and not owned here.
+  /// `sampleCap` limits MSAA; 0 keeps the engine default. See
+  /// `RenderDevice::setSampleCap` for why a compositor has an opinion.
   [[nodiscard]] VoidResult openExported(
     const std::string &assetsRoot, int drmFd,
-    const std::vector<uint64_t> &importableModifiers);
+    const std::vector<uint64_t> &importableModifiers,
+    uint32_t sampleCap = 0);
 
   /// Opens one exported surface. Returns its window id, or 0.
   uint32_t openExportedWindow(uint32_t width, uint32_t height);
@@ -379,6 +382,10 @@ class Engine {
   /// occupancy for packed ones. Either way the GPU memory or the cell is
   /// released only once every frame that could still sample it has retired.
   void unloadTexture(const std::string &path);
+
+  /// Releases and drops, for a key with a generation in it that nothing will
+  /// ever ask for again. See `TextureManager::discardTexture`.
+  void discardTexture(const std::string &key);
 
   /// Decodes an image file to RGBA8 **without touching RenderDevice**, so it is safe
   /// to call from a worker thread. Empty/`valid()==false` if the file will not

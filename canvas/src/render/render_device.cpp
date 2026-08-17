@@ -336,19 +336,29 @@ void RenderDevice::selectSupportedGraphicsCard()
            deviceFeatures.geometryShader && checkDeviceExtensionSupport();
   };
 
-  auto getMaxUsableSampleCount =
-    [](const VkPhysicalDeviceProperties &physicalDeviceProperties)
+  // The highest count the device supports for colour *and* depth, and then no
+  // higher than `sampleCap_`.
+  //
+  // The cap is the whole point of this function now. Taking the device maximum
+  // was free-looking and is not: every window allocates a multisampled colour
+  // attachment and a multisampled depth attachment, so the count multiplies the
+  // two largest things in `gpuLedger()`. On an RTX 3060 the maximum is 8, which
+  // made a single 1920×1080 surface 128 MiB of attachments before anything was
+  // drawn into it — and a compositor has one of those per client window, plus
+  // one per title bar, shadow and frost surface.
+  auto usableSampleCount =
+    [this](const VkPhysicalDeviceProperties &physicalDeviceProperties)
     -> VkSampleCountFlagBits {
-    VkSampleCountFlags counts =
+    const VkSampleCountFlags counts =
       physicalDeviceProperties.limits.framebufferColorSampleCounts &
       physicalDeviceProperties.limits.framebufferDepthSampleCounts;
-    if (counts & VK_SAMPLE_COUNT_64_BIT) return VK_SAMPLE_COUNT_64_BIT;
-    if (counts & VK_SAMPLE_COUNT_32_BIT) return VK_SAMPLE_COUNT_32_BIT;
-    if (counts & VK_SAMPLE_COUNT_16_BIT) return VK_SAMPLE_COUNT_16_BIT;
-    if (counts & VK_SAMPLE_COUNT_8_BIT) return VK_SAMPLE_COUNT_8_BIT;
-    if (counts & VK_SAMPLE_COUNT_4_BIT) return VK_SAMPLE_COUNT_4_BIT;
-    if (counts & VK_SAMPLE_COUNT_2_BIT) return VK_SAMPLE_COUNT_2_BIT;
-
+    for (const VkSampleCountFlagBits candidate :
+         {VK_SAMPLE_COUNT_64_BIT, VK_SAMPLE_COUNT_32_BIT,
+          VK_SAMPLE_COUNT_16_BIT, VK_SAMPLE_COUNT_8_BIT,
+          VK_SAMPLE_COUNT_4_BIT, VK_SAMPLE_COUNT_2_BIT}) {
+      if (static_cast<uint32_t>(candidate) > sampleCap_) continue;
+      if (counts & candidate) return candidate;
+    }
     return VK_SAMPLE_COUNT_1_BIT;
   };
 
@@ -356,7 +366,7 @@ void RenderDevice::selectSupportedGraphicsCard()
       found != devices.end()) {
     physicalDevice_ = *found;
     vkGetPhysicalDeviceProperties(physicalDevice_, &physicalDeviceProperties_);
-    msaaSamples_ = getMaxUsableSampleCount(physicalDeviceProperties_);
+    msaaSamples_ = usableSampleCount(physicalDeviceProperties_);
 #if DEBUG_PRINT
     std::cout << physicalDeviceProperties_.deviceName
               << "\n\t MSAA Samples: " << msaaSamples_ << std::endl;
@@ -1300,6 +1310,25 @@ void RenderDevice::transitionImageLayout(
   endSingleTimeCommands(commandBuffer);
 }
 
+void RenderDevice::setSampleCap(uint32_t samples)
+{
+  // `LAVA_MSAA` wins, so a session can be compared at 8, 4, 2 and 1 without
+  // rebuilding or editing a config file — which is how the default came to be
+  // 4. Read here rather than in `init` so the log line below tells the truth
+  // about where the number came from.
+  if (const char *override = std::getenv("LAVA_MSAA")) {
+    const int wanted = std::atoi(override);
+    if (wanted > 0) samples = static_cast<uint32_t>(wanted);
+  }
+  if (samples == 0) return;  // "leave the default"
+
+  // Down to a power of two: Vulkan's sample counts are bit flags, and a cap of
+  // 3 must mean 2 rather than nothing.
+  uint32_t capped = 1;
+  while (capped * 2 <= samples && capped < 64) capped *= 2;
+  sampleCap_ = capped;
+}
+
 RenderDevice::GpuMemoryTotals RenderDevice::gpuMemoryTotals() const
 {
   GpuMemoryTotals totals;
@@ -1940,6 +1969,11 @@ void RenderDevice::initImGui()
 /// runs to completion before the first one is constructed.
 void RenderDevice::init(const char *applicationName, bool presentCapable)
 {
+  // Applies `LAVA_MSAA` even when nobody called the setter, and re-clamps
+  // whatever did. Cheap, and it means every device in the tree — compositor,
+  // windowed app, offscreen test — honours the same override.
+  setSampleCap(sampleCap_);
+
   deviceExtensions.clear();
   if (presentCapable) {
     deviceExtensions = {VK_KHR_SWAPCHAIN_EXTENSION_NAME};

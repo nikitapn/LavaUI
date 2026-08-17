@@ -96,7 +96,8 @@ DmabufBuffer *DmabufBuffer::create(const canvas::DmabufImage *image) {
 
 // ─── CanvasRenderer ────────────────────────────────────────────────────────
 
-std::unique_ptr<CanvasRenderer> CanvasRenderer::create(wlr_renderer *renderer) {
+std::unique_ptr<CanvasRenderer> CanvasRenderer::create(wlr_renderer *renderer,
+                                                      uint32_t sampleCap) {
   const int drm_fd = wlr_renderer_get_drm_fd(renderer);
   if (drm_fd < 0) {
     wlr_log(WLR_ERROR, "canvas: the compositor's renderer has no DRM device");
@@ -122,7 +123,8 @@ std::unique_ptr<CanvasRenderer> CanvasRenderer::create(wlr_renderer *renderer) {
   }
 
   std::unique_ptr<CanvasRenderer> self(new CanvasRenderer());
-  if (auto r = self->engine_.openExported(root, drm_fd, importable); !r) {
+  if (auto r = self->engine_.openExported(root, drm_fd, importable, sampleCap);
+      !r) {
     wlr_log(WLR_ERROR, "canvas: %s", r.error().c_str());
     return nullptr;
   }
@@ -238,6 +240,10 @@ int CanvasRenderer::registerImageData(const std::string &key,
 
 void CanvasRenderer::releaseImage(const std::string &key) {
   engine_.unloadTexture(key);
+}
+
+void CanvasRenderer::discardImage(const std::string &key) {
+  engine_.discardTexture(key);
 }
 
 void CanvasRenderer::setSurfaceTextureResolver(void *ctx,

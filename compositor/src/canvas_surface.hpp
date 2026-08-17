@@ -51,7 +51,12 @@ class CanvasRenderer {
  public:
   /// Brings canvas up on the GPU `renderer` uses. Null, having said why, if
   /// any of the agreements a shared buffer needs cannot be reached.
-  static std::unique_ptr<CanvasRenderer> create(wlr_renderer *renderer);
+  ///
+  /// `sampleCap` is `[render] msaa` from the config — it has to be settled here
+  /// because the device's render passes are built against it and every surface
+  /// opened later inherits it. 0 keeps the engine default.
+  static std::unique_ptr<CanvasRenderer> create(wlr_renderer *renderer,
+                                                uint32_t sampleCap = 0);
 
   ~CanvasRenderer();
 
@@ -89,6 +94,12 @@ class CanvasRenderer {
   /// Drops the device's reference to `key`. The memory goes back only once
   /// every in-flight frame that could still name it has retired.
   void releaseImage(const std::string &key);
+
+  /// The same, for an image that can never be asked for again — a frost
+  /// snapshot, whose key carries a generation that only goes up. `releaseImage`
+  /// would park it in the dormant set instead, where the byte budget keeps it
+  /// until 256 MiB of dead full-screen snapshots have accumulated.
+  void discardImage(const std::string &key);
 
   /// How a draw list names another surface as a texture. `fn` is called
   /// from replay with a compositor surface id; 0 means drop the command.

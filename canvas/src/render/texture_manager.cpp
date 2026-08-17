@@ -544,6 +544,34 @@ void TextureManager::unloadTexture(const std::string& path) {
     if (it != textures_.end()) unloadLocked(it);
 }
 
+void TextureManager::discardTexture(const std::string& key) {
+    std::lock_guard lock(mutex_);
+    auto it = textures_.find(key);
+    if (it == textures_.end()) return;
+    it->second->discard = true;
+    // Same release the ordinary path does — including going dormant, because a
+    // window's last drawn frame may still name this. What the flag changes is
+    // what happens *next*: `sweepDiscardedLocked` erases it as soon as no
+    // window is naming it, rather than leaving it for the byte budget to notice.
+    unloadLocked(it);
+    sweepDiscardedLocked();
+}
+
+void TextureManager::sweepDiscardedLocked() {
+    // Same rule the eviction path uses: a pinned entry is one a submitted frame
+    // may be sampling, and freeing it is a use-after-free that surfaces
+    // somewhere else entirely. So this waits for the pin, however long that
+    // takes — which is at most until the window that named it draws again.
+    std::vector<TextureData *> gone;
+    for (const auto &[key, data] : textures_) {
+        if (data->discard && data->refCount == 0
+            && !windowUsers_.contains(data->id)) {
+            gone.push_back(data.get());
+        }
+    }
+    for (TextureData *data : gone) eraseByPointerLocked(data);
+}
+
 void TextureManager::unloadTexture(uint32_t textureId) {
     // One lock for lookup *and* release. Resolving the id to a path, dropping
     // the lock and re-entering by path would let an eviction and a fresh
@@ -610,6 +638,9 @@ void TextureManager::updateWindowTextureReferences(
             found->second->lastUsed = ++useCounter_;
     }
     old = textureIds;
+    // Before the budget-driven eviction: an entry already known to be dead is
+    // not a candidate to be weighed against a budget, it is simply finished.
+    sweepDiscardedLocked();
     evictDormantLocked();
     evictAtlasSlotsLocked();
 }
@@ -623,6 +654,7 @@ void TextureManager::removeWindowTextureReferences(const void *window) {
         if (users != windowUsers_.end() && --users->second == 0) windowUsers_.erase(users);
     }
     windowTextures_.erase(found);
+    sweepDiscardedLocked();
     evictDormantLocked();
     evictAtlasSlotsLocked();
 }

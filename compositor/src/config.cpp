@@ -317,6 +317,15 @@ Config Config::load(const std::string &path) {
       } else {
         known = false;
       }
+    } else if (section == "render") {
+      if (key == "msaa" || key == "samples") {
+        // Clamped rather than refused, like the appearance numbers: 0 and 3 are
+        // typos, and 64 is a request no device will honour anyway.
+        const int32_t samples = std::atoi(value.c_str());
+        config.render.msaa = samples < 1 ? 1 : (samples > 8 ? 8 : samples);
+      } else {
+        known = false;
+      }
     } else if (section == "theme") {
       if (key == "name") {
         config.theme.name = value;

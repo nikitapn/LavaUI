@@ -46,6 +46,12 @@ private:
         /// False for external views we do not own — a view created elsewhere
         /// and registered here only so draw lists can name it.
         bool ownsImage = true;
+        /// Asked to go rather than to go dormant — see `discardTexture`. Kept
+        /// as a flag because "it can go" and "nothing is looking at it any
+        /// more" are different moments: a frost snapshot is dead the instant a
+        /// newer one exists, but the window's last drawn frame still names it
+        /// until that window draws again.
+        bool discard = false;
         /// Set when the pixels live in an atlas page rather than an image of
         /// their own — then `image`/`allocation` are null and releasing means
         /// returning the cell, not destroying anything.
@@ -187,6 +193,22 @@ public:
     void unloadTexture(const std::string& path);
     void unloadTexture(uint32_t textureId);
 
+    /// Drops `key` outright once its last reference goes, instead of parking it
+    /// in the dormant set.
+    ///
+    /// For an entry nothing can ever ask for again. The dormant set is a bet
+    /// that a key will come back — reopening a window, scrolling a list of
+    /// covers back up — and it is a good bet for a path or a content hash. It is
+    /// no bet at all for a key with a *generation counter* in it: the
+    /// compositor's frost snapshots are `frost:<surface>:<n>` where `n` only
+    /// goes up, so every release parks a full-screen texture that is provably
+    /// dead. Ten of those is 79 MiB the byte budget will not reclaim until it
+    /// notices 256.
+    ///
+    /// Still deferred, not immediate: a submitted frame may be sampling it, so
+    /// this goes through `destroyImageDeferred` like every other release.
+    void discardTexture(const std::string& key);
+
     /// Pins every texture named by a window's latest complete draw list.
     /// Client registrations are ownership; these are retained-frame safety
     /// references, so an idle sibling window cannot lose pixels when another
@@ -260,6 +282,8 @@ private:
     /// Dormant, unpinned entries of one kind, least-recently-used first.
     std::vector<TextureData *> dormantVictimsLocked(bool atlased) const;
     void evictDormantLocked();
+    /// Erases every discarded entry nothing is looking at any more.
+    void sweepDiscardedLocked();
     void evictAtlasSlotsLocked();
     void eraseByPointerLocked(TextureData *data);
     void eraseTextureLocked(TextureIter it);

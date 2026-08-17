@@ -2570,7 +2570,10 @@ class SurfaceRegistry : public lava::CompositorHost {
     }
     surface.blurCanvas.reset();
     if (renderer_ != nullptr && !surface.blurKey.empty()) {
-      renderer_->releaseImage(surface.blurKey);
+      // Discarded, not released: this snapshot's key names a generation that
+      // will never come round again, so keeping it warm keeps 8 MiB of a
+      // screen that has already changed.
+      renderer_->discardImage(surface.blurKey);
       surface.blurKey.clear();
     }
   }
@@ -2675,7 +2678,11 @@ class SurfaceRegistry : public lava::CompositorHost {
       show_surface(surface.blurNode, *surface.blurCanvas);
     }
 
-    if (!surface.blurKey.empty()) renderer_->releaseImage(surface.blurKey);
+    // Every refresh is a new full-screen texture, so the one it replaces has to
+    // go rather than go dormant — see `CanvasRenderer::discardImage`. Ten
+    // refreshes of one window used to leave 79 MiB of snapshots resident, none
+    // of which any draw list could name again.
+    if (!surface.blurKey.empty()) renderer_->discardImage(surface.blurKey);
     surface.blurKey = "frost:" + std::to_string(surface.id) + ":" +
                       std::to_string(++surface.blurGen);
     const float corners =
@@ -8025,7 +8032,8 @@ int main() {
   // pixels wlroots samples.
   // One canvas device for the whole compositor, brought up before any client
   // connects. Surfaces are windows on it.
-  auto canvas_renderer = lava::CanvasRenderer::create(server.renderer);
+  auto canvas_renderer = lava::CanvasRenderer::create(
+      server.renderer, static_cast<uint32_t>(server.config.render.msaa));
   SurfaceRegistry surfaces;
   surfaces.bind(canvas_renderer.get(), &server.workspaces);
   surfaces.bind(&server);
