@@ -312,6 +312,18 @@ class QuadRenderer {
   /// Optional sampler (e.g. clamp-to-edge from BlurPass); null → default.
   void setBlurResultView(VkImageView view, VkSampler sampler = VK_NULL_HANDLE);
 
+  /// How much smaller the content-blur capture target is than the window.
+  ///
+  /// Only `drawSegment(..., intoSceneTarget=true)` uses it, and it applies to
+  /// the *viewport and scissors*, never to the geometry: positions stay in
+  /// window pixels and the vertex shader keeps dividing by the window size, so
+  /// the same draw lands in the same place in NDC and the viewport transform
+  /// alone shrinks it. `BlurPass::captureScale()` is the value; 1 draws at
+  /// window size, which is what a full-size capture target would want.
+  void setSceneTargetScale(float scale) {
+    sceneTargetScale_ = scale > 0.f ? scale : 1.f;
+  }
+
   /// Records every batch, in order, into `commandBuffer`.
   void draw(VkCommandBuffer commandBuffer);
 
@@ -496,6 +508,8 @@ class QuadRenderer {
   VkSampler   blurResultSampler_ = VK_NULL_HANDLE;
 
   vec2 viewportSize_{800.0f, 600.0f};
+  /// See `setSceneTargetScale`.
+  float sceneTargetScale_ = 1.f;
   float viewZoom_ = 1.0f;
   float viewPanX_ = 0.0f;
   float viewPanY_ = 0.0f;

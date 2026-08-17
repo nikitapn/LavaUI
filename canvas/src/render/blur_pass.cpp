@@ -1,6 +1,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
 
 #include "render/blur_pass.hpp"
@@ -36,6 +37,17 @@ struct KawasePush {
 static_assert(sizeof(KawasePush) == 16, "must match blur.frag push block");
 
 }  // namespace
+
+uint32_t BlurPass::captureShift()
+{
+  static const uint32_t shift = [] {
+    const char *v = std::getenv("LAVA_BLUR_SHIFT");
+    if (v == nullptr) return kDefaultCaptureShift;
+    const long parsed = std::strtol(v, nullptr, 10);
+    return static_cast<uint32_t>(std::clamp<long>(parsed, 0, 2));
+  }();
+  return shift;
+}
 
 uint32_t BlurPass::ownerWindowId() const
 {
@@ -149,14 +161,17 @@ void BlurPass::beginSceneCapture(VkCommandBuffer cmd)
     .sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
     .renderPass = sceneRenderPass_,
     .framebuffer = sceneFb_,
-    .renderArea = {{0, 0}, {fullWidth_, fullHeight_}},
+    .renderArea = {{0, 0}, {captureWidth_, captureHeight_}},
     .clearValueCount = 1,
     .pClearValues = &clear,
   };
   vkCmdBeginRenderPass(cmd, &bi, VK_SUBPASS_CONTENTS_INLINE);
 
-  VkViewport vp{0.f, 0.f, float(fullWidth_), float(fullHeight_), 0.f, 1.f};
-  VkRect2D scissor{{0, 0}, {fullWidth_, fullHeight_}};
+  // The subtree is drawn at capture scale. Whoever records into this pass has
+  // to agree — see `QuadRenderer::setSceneTargetScale`, which is what shrinks
+  // the geometry to match this viewport.
+  VkViewport vp{0.f, 0.f, float(captureWidth_), float(captureHeight_), 0.f, 1.f};
+  VkRect2D scissor{{0, 0}, {captureWidth_, captureHeight_}};
   vkCmdSetViewport(cmd, 0, 1, &vp);
   vkCmdSetScissor(cmd, 0, 1, &scissor);
 }
@@ -303,7 +318,11 @@ uint32_t BlurPass::iterationsFor(float radius)
 {
   const float r = std::clamp(radius, 0.5f, kMaxRadius);
   uint32_t n = 1;
-  float reach = 8.f;
+  // One iteration reaches ~8 px of the level it runs on, and the first level
+  // is already `kCaptureShift` octaves below the window — so it reaches twice
+  // that many *window* pixels. Starting the ladder here is what keeps a given
+  // radius looking like the same radius after the pyramid moved down.
+  float reach = 8.f * float(1u << captureShift());
   while (n + 1 < kMaxLevels && reach < r) {
     reach *= 2.f;
     ++n;
@@ -332,9 +351,14 @@ void BlurPass::ensureSize(uint32_t width, uint32_t height, float)
   const bool extentChanged = width != fullWidth_ || height != fullHeight_;
   fullWidth_ = width;
   fullHeight_ = height;
-  createImages(width, height);
+  // Rounded up, so an odd window still has every one of its pixels covered by
+  // the capture rather than losing the last row to a truncating divide.
+  const uint32_t shift = captureShift();
+  captureWidth_  = std::max(1u, (width + (1u << shift) - 1) >> shift);
+  captureHeight_ = std::max(1u, (height + (1u << shift) - 1) >> shift);
+  createImages(captureWidth_, captureHeight_);
   if (extentChanged || !sceneReady()) {
-    createSceneTarget(width, height);
+    createSceneTarget(captureWidth_, captureHeight_);
   }
 }
 
@@ -549,7 +573,8 @@ void BlurPass::kawasePass(VkCommandBuffer cmd, VkDescriptorSet srcSet,
 }
 
 void BlurPass::captureAndBlur(VkCommandBuffer cmd, VkImage src,
-                              VkImageLayout srcLayout, float radius)
+                              VkImageLayout srcLayout, uint32_t srcW,
+                              uint32_t srcH, float radius)
 {
   if (!ready() || levelCount_ < 2) return;
 
@@ -574,8 +599,7 @@ void BlurPass::captureAndBlur(VkCommandBuffer cmd, VkImage src,
   VkImageBlit blit{
     .srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
     .srcOffsets = {{0, 0, 0},
-                   {static_cast<int32_t>(fullWidth_),
-                    static_cast<int32_t>(fullHeight_), 1}},
+                   {static_cast<int32_t>(srcW), static_cast<int32_t>(srcH), 1}},
     .dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
     .dstOffsets = {{0, 0, 0},
                    {static_cast<int32_t>(levels_[0].w),

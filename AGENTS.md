@@ -289,6 +289,7 @@ anywhere.
 | `LAVA_MSAA=N` | Any canvas process: cap multisampling at N (1/2/4/8). Overrides `[render] msaa`; the way to A/B a session without a rebuild |
 | `LAVA_SHARED_DEPTH=0` | Compositor: one depth attachment per window again, for comparing against the shared one |
 | `LAVA_EXPORT_BLIT=1` | Compositor: blit each frame into the exported dma-buf instead of resolving into it, as it did before — the A/B for that change, and the escape hatch where a driver dislikes it |
+| `LAVA_BLUR_SHIFT=N` | Any canvas process: octaves below the window the blur pyramid starts at (0/1/2). 0 captures at window size, as it did before |
 | `LAVA_NO_SHELL=1` | Compositor: do not start panel/dock/wallpaper |
 | `LAVA_NO_AUTOSTART=1` | Compositor: do not run the user's autostart script |
 | `LAVA_AUTOSTART` | Path to that script, overriding `~/.config/lava/autostart` |
@@ -497,6 +498,28 @@ exports a new buffer and rebuilds the framebuffers around it mid-session.
 A window that is read back (`captureFrame`, so any screenshot) now acquires the
 buffer from the consumer first: the only acquire whose *contents* matter, and
 the reason `recordAcquireForRead` is not the discarding one the frame path uses.
+
+**Blur happens at half resolution.** The Kawase pyramid's first level and the
+capture target were both window-sized, and they are the two largest things a
+blurred surface owns — 8.8 of a 1280×720 window's 100 MiB, with both blur kinds
+live. Starting the pyramid an octave down costs a quarter of the pixels for
+each: **8.8 → 2.3 MiB**, and the compositor's own frost surfaces drop the same
+way (LavaTerm's went 5.8 → 1.8 MiB).
+
+It is free in the way downsampling usually is not, because what is being
+downsampled is *about to be blurred*: the result is upsampled by a linear
+sampler onto a picture with no sharp detail left to lose. Measured against the
+same frame at full resolution — the demo's `.blur(radius: 5)` shelf reflections
+and its `.backdropBlur(radius: 10)` glass panel — **mean channel delta 1.0–2.3
+with a maximum of 23**, and nothing outside the blurred regions moves at all.
+
+The reach of one Kawase iteration doubles in window pixels when the pyramid
+moves down an octave, so `iterationsFor`'s ladder starts at 16 px rather than 8:
+a given radius asks for one *fewer* pass than it used to and lands at the same
+width. Content blur is drawn into the capture target at that scale too —
+`QuadRenderer::setSceneTargetScale` shrinks the viewport and the scissors while
+the vertex shader still divides by the window size, so the geometry needs no
+adjusting. `LAVA_BLUR_SHIFT=0` puts it all back.
 
 **Backdrop frost snapshots are discarded, not cached.** Each refresh uploads a
 full-screen texture under `frost:<surface>:<n>`, and `n` only goes up — so the

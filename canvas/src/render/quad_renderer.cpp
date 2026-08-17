@@ -1369,9 +1369,15 @@ void QuadRenderer::drawBatchRange(VkCommandBuffer commandBuffer,
   vkCmdPushConstants(commandBuffer, pipelineLayout_, VK_SHADER_STAGE_VERTEX_BIT,
                      0, sizeof(ViewPush), &pc);
 
+  // A content blur draws its subtree into a target smaller than the window,
+  // and shrinking the viewport is the whole of how: the push constant above
+  // still says the window is the window, so NDC is unchanged and every quad
+  // lands where it would have — just onto fewer pixels.
+  const float targetScale = intoSceneTarget ? sceneTargetScale_ : 1.f;
   VkViewport viewport{
     .x = 0.0f, .y = 0.0f,
-    .width = viewportSize_.x, .height = viewportSize_.y,
+    .width = viewportSize_.x * targetScale,
+    .height = viewportSize_.y * targetScale,
     .minDepth = 0.0f, .maxDepth = 1.0f,
   };
   vkCmdSetViewport(commandBuffer, 0, 1, &viewport);
@@ -1403,6 +1409,21 @@ void QuadRenderer::drawBatchRange(VkCommandBuffer commandBuffer,
     };
   };
 
+  // Scissors are recorded in window pixels and the target may be smaller.
+  // Outward-rounded, so a clip never eats a pixel the unscaled draw kept.
+  auto toTarget = [&](VkRect2D s) -> VkRect2D {
+    if (targetScale == 1.f) return s;
+    const int32_t x0 = static_cast<int32_t>(std::floor(float(s.offset.x) * targetScale));
+    const int32_t y0 = static_cast<int32_t>(std::floor(float(s.offset.y) * targetScale));
+    const int32_t x1 = static_cast<int32_t>(
+      std::ceil(float(s.offset.x + int32_t(s.extent.width)) * targetScale));
+    const int32_t y1 = static_cast<int32_t>(
+      std::ceil(float(s.offset.y + int32_t(s.extent.height)) * targetScale));
+    return VkRect2D{{x0, y0},
+                    {static_cast<uint32_t>(std::max(0, x1 - x0)),
+                     static_cast<uint32_t>(std::max(0, y1 - y0))}};
+  };
+
   // Every segment shares the frame slot's descriptor table. Texture selection
   // is a vertex attribute, so binding it once per recorded range is enough.
   vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
@@ -1414,9 +1435,9 @@ void QuadRenderer::drawBatchRange(VkCommandBuffer commandBuffer,
     if (batch.scissor.extent.width == 0 || batch.scissor.extent.height == 0) {
       continue;
     }
-    VkRect2D sc = (z == 1.f && viewPanX_ == 0.f && viewPanY_ == 0.f)
-                    ? batch.scissor
-                    : mapScissor(batch.scissor);
+    VkRect2D sc = toTarget((z == 1.f && viewPanX_ == 0.f && viewPanY_ == 0.f)
+                             ? batch.scissor
+                             : mapScissor(batch.scissor));
     if (sc.extent.width == 0 || sc.extent.height == 0) continue;
     if (batch.geometry == Batch::Geometry::SpatialBegin) {
       VkClearAttachment attachment{.aspectMask=VK_IMAGE_ASPECT_DEPTH_BIT,

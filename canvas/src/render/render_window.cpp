@@ -2409,6 +2409,10 @@ void RenderWindow::render(const canvas::DrawList &list)
   }
   if (anyBlur) {
     blur_.ensureSize(ext.width, ext.height, finestRadius);
+    // A content blur draws its subtree into the capture target, which is
+    // smaller than the window — told here rather than inside the blur, because
+    // it is the quad renderer that records the viewport.
+    quads_.setSceneTargetScale(BlurPass::captureScale());
   }
 
   std::vector<Boundary> boundaries;
@@ -2443,7 +2447,8 @@ void RenderWindow::render(const canvas::DrawList &list)
           // it can be read.
           endMainRenderPass(commandBuffer);
           blur_.captureAndBlur(commandBuffer, frameImage(),
-                               VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, b.radius);
+                               VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                               extent.width, extent.height, b.radius);
           quads_.setBlurResultView(blur_.resultView(), blur_.sampler());
           beginMainRenderPass(commandBuffer, /*clear=*/false);
           quads_.drawSegment(commandBuffer, segment);
@@ -2459,8 +2464,12 @@ void RenderWindow::render(const canvas::DrawList &list)
 
         case Boundary::Kind::ContentEnd:
           blur_.endSceneCapture(commandBuffer);
+          // Already at capture scale — the subtree was drawn into it that
+          // way, so the blit that follows is 1:1 rather than a downsample.
           blur_.captureAndBlur(commandBuffer, blur_.sceneImage(),
-                               VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, b.radius);
+                               VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                               blur_.captureWidth(), blur_.captureHeight(),
+                               b.radius);
           quads_.setBlurResultView(blur_.resultView(), blur_.sampler());
           beginMainRenderPass(commandBuffer, /*clear=*/false);
           quads_.drawSegment(commandBuffer, segment);
