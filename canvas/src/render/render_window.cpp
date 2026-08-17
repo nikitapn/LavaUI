@@ -184,8 +184,10 @@ void RenderWindow::createSizedResources()
 {
   createColorResources();
   createResolveResources();
-  createDepthResources();
-  createStagingBuffer();
+  // Not when the device has one for everybody — see `setSharedDepth`.
+  if (!dev_.sharedDepth()) createDepthResources();
+  // The staging buffer is allocated on demand: only a readback needs it, and
+  // most windows never have one. See `ensureStagingBuffer`.
   createFramebuffer();
 }
 
@@ -503,6 +505,24 @@ void RenderWindow::createDepthResources()
   dev_.transitionImageLayout(depthImage_, depthFormat, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
 }
 
+void RenderWindow::ensureStagingBuffer()
+{
+  const VkDeviceSize needed =
+    static_cast<VkDeviceSize>(extent_.width) * extent_.height * 4;
+  if (stagingBuffer_ != VK_NULL_HANDLE && stagingBufferSize_ >= needed) return;
+  if (stagingBuffer_ != VK_NULL_HANDLE) {
+    // A resize left one that is too small. It may still be the source of a
+    // capture the GPU has not finished with.
+    waitForAllFrames();
+    if (stagingBufferMapped_ != nullptr) {
+      dev_.unmapBuffer(stagingBufferAlloc_);
+      stagingBufferMapped_ = nullptr;
+    }
+    dev_.destroyBuffer(stagingBuffer_, stagingBufferAlloc_);
+  }
+  createStagingBuffer();
+}
+
 void RenderWindow::createStagingBuffer()
 {
   stagingBufferSize_ =
@@ -523,9 +543,29 @@ void RenderWindow::createStagingBuffer()
   }
 }
 
+void RenderWindow::rebuildFramebuffer()
+{
+  const VkDevice dev = dev_.getDevice();
+  if (framebuffer_ != VK_NULL_HANDLE) {
+    vkDestroyFramebuffer(dev, framebuffer_, nullptr);
+    framebuffer_ = VK_NULL_HANDLE;
+  }
+  if (framebufferContinue_ != VK_NULL_HANDLE) {
+    vkDestroyFramebuffer(dev, framebufferContinue_, nullptr);
+    framebufferContinue_ = VK_NULL_HANDLE;
+  }
+  createFramebuffer();
+}
+
 void RenderWindow::createFramebuffer()
 {
-  VkImageView attachments[] = {colorImageView_, depthImageView_, resolveImageView_};
+  // Asking for the shared view may *grow* it, which rebuilds every other
+  // window's framebuffer — so ask before naming the attachments, not inside the
+  // array initialiser where the order is up to the compiler.
+  const VkImageView depthView =
+    dev_.sharedDepth() ? dev_.sharedDepthView(extent_.width, extent_.height)
+                       : depthImageView_;
+  VkImageView attachments[] = {colorImageView_, depthView, resolveImageView_};
 
   auto makeFb = [&](VkRenderPass rp, VkFramebuffer *out) {
     VkFramebufferCreateInfo framebufferInfo {
@@ -822,7 +862,7 @@ void RenderWindow::submitFrame(
                    1, &blit, VK_FILTER_LINEAR);
 
     exportTarget_->recordRelease(cmd, dev_.graphicsQueueFamily());
-  } else {
+  } else if (stagingBuffer_ != VK_NULL_HANDLE) {
     // Offscreen: copy resolve → staging for readPixels().
     VkBufferImageCopy copyRegion {
       .bufferOffset      = 0,
@@ -982,6 +1022,11 @@ void RenderWindow::submitFrame(
 
 void RenderWindow::readPixels(uint8_t *dst, size_t dstSize)
 {
+  // Nothing has ever been copied out of this window, so there is nothing to
+  // hand back. Reachable now that the buffer is allocated on demand: an
+  // exported window blits its frame into a dma-buf and records no readback at
+  // all, so asking it for pixels was already answering with a stale frame.
+  if (stagingBufferMapped_ == nullptr) return;
   size_t n = std::min(dstSize, static_cast<size_t>(stagingBufferSize_));
   memcpy(dst, stagingBufferMapped_, n);
 }
@@ -989,11 +1034,14 @@ void RenderWindow::readPixels(uint8_t *dst, size_t dstSize)
 void RenderWindow::captureFrame(uint8_t *dst, size_t dstSize)
 {
   assert(resolveImage_ != VK_NULL_HANDLE);
-  assert(stagingBuffer_ != VK_NULL_HANDLE);
-  assert(stagingBufferMapped_ != nullptr);
 
   // Main pass finalLayout leaves resolve as TRANSFER_SRC (also the present blit source).
   waitForAllFrames();
+
+  // The first capture of this window's life is what pays for the readback
+  // buffer, and on a compositor most windows never take one.
+  ensureStagingBuffer();
+  if (stagingBufferMapped_ == nullptr) return;
 
   VkCommandBuffer cmd = dev_.beginSingleTimeCommands();
 
@@ -2234,6 +2282,12 @@ void RenderWindow::render(const canvas::DrawList &list)
   // Wait for *this* frame slot only (2-in-flight). The other slot may still be
   // on the GPU while we fill host-visible buffers for this one.
   waitForInFlightFrame();
+
+  // A window with nowhere else to put its frame copies it into the staging
+  // buffer every frame, so that one has to exist before recording begins. Every
+  // other window — presenting, or exporting to a dma-buf — allocates one only if
+  // something asks it for pixels. See `ensureStagingBuffer`.
+  if (!windowed_ && exportTarget_ == nullptr) ensureStagingBuffer();
 
   // Claim this frame's submission index *before* recording anything, not just
   // before the submit.

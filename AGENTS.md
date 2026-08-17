@@ -287,6 +287,7 @@ anywhere.
 | `LAVA_FRAME_PROBE=1` | Compositor: per-surface frame cost, gaps and stalls |
 | `LAVA_VRAM_STATS=1` | Compositor: GPU memory report to stderr, every 10s (`=N` for N seconds, `=verbose` for every allocation). Rides the output frame, so an idle desktop stops reporting — `kill -USR2` dumps one on demand |
 | `LAVA_MSAA=N` | Any canvas process: cap multisampling at N (1/2/4/8). Overrides `[render] msaa`; the way to A/B a session without a rebuild |
+| `LAVA_SHARED_DEPTH=0` | Compositor: one depth attachment per window again, for comparing against the shared one |
 | `LAVA_NO_SHELL=1` | Compositor: do not start panel/dock/wallpaper |
 | `LAVA_NO_AUTOSTART=1` | Compositor: do not run the user's autostart script |
 | `LAVA_AUTOSTART` | Path to that script, overriding `~/.config/lava/autostart` |
@@ -441,6 +442,29 @@ max channel delta 13** — all of it around two circles. Where it *would* show i
 a real triangle edge: `Scene3D` in the switcher, `Mesh`/`Polyline` charts, FBD
 diagrams. Set `[render] msaa` (or `LAVA_MSAA`) and look at one of those before
 concluding 2 is free.
+
+**Depth is one image for the whole device, not one per window.** It is
+per-frame scratch — cleared at pass start, `DONT_CARE` at the end, and only
+`Scene3D`'s pipeline even tests it — so 34 windows meant 34 copies of a
+scratchpad, 28% of the session's VRAM. `RenderDevice::setSharedDepth` gives them
+one, sized to the largest window (rounded up in steps of 256 so a drag does not
+reallocate per pixel) and grown from `sharedDepthView`, which waits for frames
+in flight and rebuilds every window's framebuffer before returning. Eight canvas
+windows: 80 MiB → 12 MiB, and it stays 12 however many windows open.
+
+**It is only legal because the compositor renders serially** — one
+`renderFrame` at a time from its event loop. An app that repaints N windows on N
+threads inside `beginFrameGroup` must not enable it, and does not: the switch is
+set in `initExported`, the compositor path. Two windows each drawing
+depth-tested 3D render *byte-identically* with it on and off, which is the test
+that proves nothing leaks between them.
+
+**The readback buffer is allocated on demand.** A full frame of host-visible
+memory — 7.9 MiB at 1080p — was allocated and mapped for every window at
+creation, and an exported window never touches it: its frame is blitted into a
+dma-buf. Now `ensureStagingBuffer` runs from the paths that actually read pixels
+back (`captureFrame`, and the per-frame copy a window with no other destination
+does), so a screenshot pays for it and nothing else does.
 
 **Backdrop frost snapshots are discarded, not cached.** Each refresh uploads a
 full-screen texture under `frost:<surface>:<n>`, and `n` only goes up — so the

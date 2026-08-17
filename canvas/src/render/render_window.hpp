@@ -190,6 +190,24 @@ class RenderWindow {
   // ─── Window ──────────────────────────────────────────────────────────────
 
   bool isWindowed() const { return windowed_; }
+
+  /// Rebuilds the framebuffers against the current attachment views.
+  ///
+  /// Called by the device when the shared depth image is replaced — every
+  /// window is then holding a framebuffer that names a destroyed view. Cheap
+  /// (two `vkCreateFramebuffer` calls) and safe only between frames, which is
+  /// where the growth that triggers it happens.
+  void rebuildFramebuffer();
+
+  /// Allocates the host-visible readback buffer if this window does not have one
+  /// yet. Idempotent, and safe to call only between frames.
+  ///
+  /// Called by the paths that actually read pixels back rather than at window
+  /// creation: it is a full frame of host-visible memory — 7.9 MiB at 1080p —
+  /// and a window that is never captured never needs it. On a compositor that
+  /// is every window, since an exported frame is blitted into its dma-buf and
+  /// never passes through here.
+  void ensureStagingBuffer();
   /// The `AppWindow::id` whose allocations are tagged with this window.
   uint32_t ownerId() const { return ownerId_; }
   GLFWwindow *window() const { return window_; }

@@ -240,6 +240,19 @@ class RenderDevice
   /// The most `msaaSamples_` may be. See `setSampleCap`.
   uint32_t sampleCap_ = kDefaultSampleCap;
 
+  // ─── Shared depth ────────────────────────────────────────────────────────
+  //
+  // See `setSharedDepth`. One image, at least as large as the largest window,
+  // which is legal as a framebuffer attachment — an attachment may exceed the
+  // framebuffer's extent, and the stepped size below means a drag does not
+  // rebuild every framebuffer per pixel.
+
+  bool          sharedDepth_      = false;
+  VkImage       sharedDepthImage_ = VK_NULL_HANDLE;
+  VmaAllocation sharedDepthAlloc_ = VK_NULL_HANDLE;
+  VkImageView   sharedDepthView_  = VK_NULL_HANDLE;
+  VkExtent2D    sharedDepthExtent_{};
+
   /// Who asked for each allocation. Thread-safe on its own; allocations happen
   /// from window render workers as well as the main thread.
   canvas::GpuLedger gpuLedger_;
@@ -529,6 +542,40 @@ class RenderDevice
 
   auto     getMSAASamples() const noexcept { return msaaSamples_; }
   Shaders &getShaders();
+
+  // ─── Shared depth ────────────────────────────────────────────────────────
+
+  /// Gives every window one depth attachment between them instead of one each.
+  ///
+  /// Depth here is per-frame scratch and nothing else: the render pass clears it
+  /// at the start (`LOAD_OP_CLEAR`) and throws it away at the end
+  /// (`STORE_OP_DONT_CARE`), and the only pipeline that even tests it is
+  /// `Scene3D`'s. So the contents of one window's depth buffer are never
+  /// interesting to that window's *next* frame, let alone to another window —
+  /// which makes 34 of them, as a desktop with 13 windows had, 34 copies of a
+  /// scratchpad.
+  ///
+  /// **Only legal when windows never render at the same time.** Two windows
+  /// recording into one depth image is exactly the race the per-window images
+  /// prevented, and nothing here can detect it. A compositor qualifies: it
+  /// renders surfaces one `renderFrame` at a time from its event loop. An app
+  /// using `Application::beginFrameGroup` to repaint N windows on N threads does
+  /// not, and must leave this off.
+  ///
+  /// Off by default for that reason, and `LAVA_SHARED_DEPTH=0` turns it off
+  /// again for a caller that wants to compare.
+  void setSharedDepth(bool shared);
+  bool sharedDepth() const { return sharedDepth_; }
+
+  /// The shared depth view, grown if needed to cover `width`x`height`.
+  ///
+  /// Called by a window while it builds its framebuffer. Growing replaces the
+  /// image, so every *other* window's framebuffer is rebuilt against the new
+  /// view before this returns — and the growth waits for frames in flight,
+  /// because the image it is replacing is one they may still be writing.
+  ///
+  /// Null when sharing is off, which is a caller's cue to use its own.
+  VkImageView sharedDepthView(uint32_t width, uint32_t height);
 
   /// Caps the sample count — see `kDefaultSampleCap`.
   ///

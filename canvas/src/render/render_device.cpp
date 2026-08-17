@@ -1310,6 +1310,73 @@ void RenderDevice::transitionImageLayout(
   endSingleTimeCommands(commandBuffer);
 }
 
+void RenderDevice::setSharedDepth(bool shared)
+{
+  // The escape hatch is a "0", not a "1": sharing is the thing a caller opts
+  // into in code, having promised it does not render two windows at once, and
+  // the variable exists to take that promise back for a comparison.
+  if (const char *override = std::getenv("LAVA_SHARED_DEPTH")) {
+    if (std::atoi(override) == 0) shared = false;
+  }
+  sharedDepth_ = shared;
+}
+
+VkImageView RenderDevice::sharedDepthView(uint32_t width, uint32_t height)
+{
+  if (!sharedDepth_) return VK_NULL_HANDLE;
+
+  // Rounded up, and grow-only. A drag resizes a window every frame, and an
+  // image that tracked the exact maximum would be reallocated — and every
+  // framebuffer in the process rebuilt — on the way through each pixel.
+  constexpr uint32_t kStep = 256;
+  const auto stepped = [](uint32_t size) {
+    return ((std::max(size, 1u) + kStep - 1) / kStep) * kStep;
+  };
+  const uint32_t wanted[2] = {
+    std::max(stepped(width), sharedDepthExtent_.width),
+    std::max(stepped(height), sharedDepthExtent_.height),
+  };
+  if (sharedDepthView_ != VK_NULL_HANDLE
+      && wanted[0] == sharedDepthExtent_.width
+      && wanted[1] == sharedDepthExtent_.height) {
+    return sharedDepthView_;
+  }
+
+  // Every window may be mid-flight against the image about to be replaced.
+  // This is the one place that needs the wait, and it is a resize — not a
+  // frame — so paying for it here costs nothing per frame.
+  waitForAllFramesInFlight();
+
+  if (sharedDepthView_ != VK_NULL_HANDLE) {
+    vkDestroyImageView(device_, sharedDepthView_, nullptr);
+    sharedDepthView_ = VK_NULL_HANDLE;
+  }
+  destroyImage(sharedDepthImage_, sharedDepthAlloc_);
+
+  const VkFormat depthFormat = findDepthFormat();
+  createImage(wanted[0], wanted[1], 1, msaaSamples_, depthFormat,
+              VK_IMAGE_TILING_OPTIMAL,
+              VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,
+              VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, sharedDepthImage_,
+              sharedDepthAlloc_,
+              canvas::GpuTag{canvas::GpuCategory::WindowDepth, 0,
+                             "shared by every window"});
+  sharedDepthView_ = createImageView(sharedDepthImage_, depthFormat,
+                                     VK_IMAGE_ASPECT_DEPTH_BIT, 1);
+  transitionImageLayout(sharedDepthImage_, depthFormat,
+                        VK_IMAGE_LAYOUT_UNDEFINED,
+                        VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
+  sharedDepthExtent_ = {wanted[0], wanted[1]};
+
+  // Everyone else is now holding a framebuffer built against a destroyed view.
+  // The window that asked is not in the list yet (it is being constructed) or
+  // is about to build its own framebuffer from the value we return, so it is
+  // excluded either way by rebuilding *before* returning.
+  for (RenderWindow *window : windows_) window->rebuildFramebuffer();
+
+  return sharedDepthView_;
+}
+
 void RenderDevice::setSampleCap(uint32_t samples)
 {
   // `LAVA_MSAA` wins, so a session can be compared at 8, 4, 2 and 1 without
@@ -1665,6 +1732,13 @@ void RenderDevice::cleanUp()
   // is still registered it holds attachments and sync objects allocated from
   // resources about to be destroyed.
   assert(windows_.empty() && "destroy every RenderWindow before the device");
+
+  if (sharedDepthView_ != VK_NULL_HANDLE) {
+    vkDestroyImageView(device_, sharedDepthView_, nullptr);
+    sharedDepthView_ = VK_NULL_HANDLE;
+  }
+  destroyImage(sharedDepthImage_, sharedDepthAlloc_);
+  sharedDepthExtent_ = {};
 
   // The wait above means nothing in the trash can still be referenced, so
   // everything queued is releasable regardless of its submission index.

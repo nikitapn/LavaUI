@@ -231,6 +231,11 @@ struct Application::Impl
       // Before `init`: the render passes and every pipeline are built against
       // the sample count it settles.
       device.setSampleCap(sampleCap);
+      // One depth attachment for every surface rather than one each. Legal
+      // here and only here: a consumer of exported frames drives surfaces one
+      // `renderFrame` at a time — see `RenderDevice::setSharedDepth`, and
+      // `Application::beginFrameGroup`, which is the caller that must not.
+      device.setSharedDepth(true);
       device.init("2d shenanigans!", /*presentCapable=*/false);
       deviceUp = true;
       // The sample count is worth a startup line: it is settled once, it
