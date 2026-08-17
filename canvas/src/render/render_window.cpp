@@ -185,7 +185,7 @@ void RenderWindow::createSizedResources()
   createColorResources();
   // Not when the frame resolves into the exported buffer — that image is the
   // resolve attachment, and a second one would only be a place to copy it to.
-  if (!renderIntoExport()) createResolveResources();
+  if (!directToExport()) createResolveResources();
   // Not when the device has one for everybody — see `setSharedDepth`.
   if (!dev_.sharedDepth()) createDepthResources();
   // The staging buffer is allocated on demand: only a readback needs it, and
@@ -545,24 +545,24 @@ void RenderWindow::createStagingBuffer()
   }
 }
 
-bool RenderWindow::renderIntoExport() const
+bool RenderWindow::exportIsRenderable() const
 {
   return exportTarget_ != nullptr && exportTarget_->renderable();
 }
 
 VkImage RenderWindow::frameImage() const
 {
-  return renderIntoExport() ? exportTarget_->image() : resolveImage_;
+  return directToExport() ? exportTarget_->image() : resolveImage_;
 }
 
 VkImageView RenderWindow::frameImageView() const
 {
-  return renderIntoExport() ? exportTarget_->view() : resolveImageView_;
+  return directToExport() ? exportTarget_->view() : resolveImageView_;
 }
 
 void RenderWindow::syncResolveTarget()
 {
-  const bool direct = renderIntoExport();
+  const bool direct = directToExport();
   if (direct && resolveImage_ != VK_NULL_HANDLE) {
     if (resolveImageView_ != VK_NULL_HANDLE) {
       vkDestroyImageView(dev_.getDevice(), resolveImageView_, nullptr);
@@ -815,7 +815,7 @@ void RenderWindow::submitFrame(
   // Taken back from the consumer before anything writes it, because the render
   // pass is about to resolve into it. Contents discarded — every frame covers
   // the whole render area.
-  if (renderIntoExport()) exportTarget_->recordAcquireForRendering(cmd);
+  if (directToExport()) exportTarget_->recordAcquireForRendering(cmd);
 
   // Main UI — callback owns begin/end of main pass(es) for blur interrupts.
   mainCallback(cmd, imageIndex);
@@ -873,7 +873,7 @@ void RenderWindow::submitFrame(
       VK_PIPELINE_STAGE_TRANSFER_BIT,
       VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
       0, 0, nullptr, 0, nullptr, 1, &toPresent);
-  } else if (renderIntoExport()) {
+  } else if (directToExport()) {
     // Nothing to copy: the render pass resolved into the shared image, and its
     // final layout already left it in TRANSFER_SRC. All that is left is to say
     // it is not ours any more — GENERAL, and over to the foreign queue.
@@ -1100,7 +1100,7 @@ void RenderWindow::captureFrame(uint8_t *dst, size_t dstSize)
   // now, so reading it is a real acquisition — the one place the *contents*
   // have to survive the round trip, which is why it is not the discarding
   // acquire the frame path uses. Handed straight back below.
-  if (renderIntoExport()) exportTarget_->recordAcquireForRead(cmd);
+  if (directToExport()) exportTarget_->recordAcquireForRead(cmd);
 
   VkBufferImageCopy copyRegion{
     .bufferOffset = 0,
@@ -1114,7 +1114,7 @@ void RenderWindow::captureFrame(uint8_t *dst, size_t dstSize)
                          VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, stagingBuffer_, 1,
                          &copyRegion);
 
-  if (renderIntoExport()) {
+  if (directToExport()) {
     exportTarget_->recordRelease(cmd, dev_.graphicsQueueFamily(),
                                  VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
   }
@@ -2351,6 +2351,48 @@ void RenderWindow::render(const canvas::DrawList &list)
   // See `RenderDevice::frameMutex_`.
   auto frameLock = dev_.lockForFrame();
 
+  // Each boundary below is a point where the GPU has to stop drawing the frame
+  // and do something else. Segment i is drawn, boundaries[i] runs, then segment
+  // i+1 — whose first quad is usually the composite of whatever the boundary
+  // produced. (Backdrop compositing must land in MSAA, not just the resolve,
+  // or the next pass's resolve wipes it.)
+  //
+  // Sizing has to happen *before* replay, not after: replay bakes the
+  // composite quads' UVs, and those depend on the allocation. Reallocating
+  // also waits on every frame in flight, so it cannot happen mid-recording
+  // either. Hence a cheap pre-scan for the radii.
+  //
+  // Ahead of everything else because *whether* there is a blur decides where
+  // this frame's segments resolve, and that decides which framebuffers are
+  // used — see `directToExport`.
+  //
+  // The *finest* radius drives the allocation, since that is the one needing
+  // the most resolution; wider blurs then take a sub-region at their own
+  // coarser grid rather than forcing the fine one down to theirs.
+  float finestRadius = BlurPass::kMaxRadius;
+  bool  anyBlur      = false;
+  for (size_t cmdIndex = 0; cmdIndex < list.commandCount; ++cmdIndex) {
+    const auto kind =
+      static_cast<canvas::DrawCommandKind>(list.commands[cmdIndex].kind);
+    if (kind != canvas::DrawCommandKind::BeginBackdropBlur &&
+        kind != canvas::DrawCommandKind::BeginContentBlur) {
+      continue;
+    }
+    anyBlur = true;
+    const float aux = list.commands[cmdIndex].aux;
+    finestRadius = std::min(finestRadius, aux > 0.f ? aux : 8.f);
+  }
+
+  // A window that has just started or stopped blurring changes where its
+  // frames land, and the framebuffers naming the old target are still in use
+  // by whatever is on the GPU. Rare — it takes an overlay opening or a frost
+  // being switched off — and the stall is the price of not rebuilding a
+  // framebuffer out from under a frame in flight.
+  const bool moved = anyBlur != frameBlurs_ && exportIsRenderable();
+  if (moved) waitForAllFrames();
+  frameBlurs_ = anyBlur;
+  if (moved) syncResolveTarget();
+
   // Wait for *this* frame slot only (2-in-flight). The other slot may still be
   // on the GPU while we fill host-visible buffers for this one.
   waitForInFlightFrame();
@@ -2380,33 +2422,6 @@ void RenderWindow::render(const canvas::DrawList &list)
   const float viewW = static_cast<float>(ext.width);
   const float viewH = static_cast<float>(ext.height);
 
-  // Each boundary is a point where the GPU has to stop drawing the frame and
-  // do something else. Segment i is drawn, boundaries[i] runs, then segment
-  // i+1 — whose first quad is usually the composite of whatever the boundary
-  // produced. (Backdrop compositing must land in MSAA, not just the resolve,
-  // or the next pass's resolve wipes it.)
-  //
-  // Sizing has to happen *before* replay, not after: replay bakes the
-  // composite quads' UVs, and those depend on the allocation. Reallocating
-  // also waits on every frame in flight, so it cannot happen mid-recording
-  // either. Hence a cheap pre-scan for the radii.
-  //
-  // The *finest* radius drives the allocation, since that is the one needing
-  // the most resolution; wider blurs then take a sub-region at their own
-  // coarser grid rather than forcing the fine one down to theirs.
-  float finestRadius = BlurPass::kMaxRadius;
-  bool  anyBlur      = false;
-  for (size_t cmdIndex = 0; cmdIndex < list.commandCount; ++cmdIndex) {
-    const auto kind =
-      static_cast<canvas::DrawCommandKind>(list.commands[cmdIndex].kind);
-    if (kind != canvas::DrawCommandKind::BeginBackdropBlur &&
-        kind != canvas::DrawCommandKind::BeginContentBlur) {
-      continue;
-    }
-    anyBlur = true;
-    const float aux = list.commands[cmdIndex].aux;
-    finestRadius = std::min(finestRadius, aux > 0.f ? aux : 8.f);
-  }
   if (anyBlur) {
     blur_.ensureSize(ext.width, ext.height, finestRadius);
     // A content blur draws its subtree into the capture target, which is

@@ -66,14 +66,18 @@ constexpr VkImageUsageFlags kBlitUsage = VK_IMAGE_USAGE_TRANSFER_DST_BIT;
 constexpr VkFormatFeatureFlags kBlitFeatures =
   VK_FORMAT_FEATURE_TRANSFER_DST_BIT | VK_FORMAT_FEATURE_BLIT_DST_BIT;
 
-/// Resolve target: written by the render pass, and still read afterwards —
-/// a backdrop blur blits the frame so far out of it, and a screenshot copies
-/// it to a buffer.
+/// Resolve target: written by the render pass, read afterwards by a
+/// screenshot — and a blit destination as well, because *renderable* is a
+/// property of the buffer and going through it is a decision the window makes
+/// per frame. A frame that blurs is copied in rather than resolved in (see
+/// `RenderWindow::directToExport`), so an image that can only be an attachment
+/// is an image half this window's frames cannot be written to.
 constexpr VkImageUsageFlags kRenderUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT |
-                                           VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+                                           VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
+                                           kBlitUsage;
 constexpr VkFormatFeatureFlags kRenderFeatures =
   VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT | VK_FORMAT_FEATURE_TRANSFER_SRC_BIT |
-  VK_FORMAT_FEATURE_BLIT_SRC_BIT;
+  VK_FORMAT_FEATURE_BLIT_SRC_BIT | kBlitFeatures;
 
 constexpr VkImageSubresourceRange kWholeImage {
   VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};

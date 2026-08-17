@@ -528,6 +528,27 @@ A window that is read back (`captureFrame`, so any screenshot) now acquires the
 buffer from the consumer first: the only acquire whose *contents* matter, and
 the reason `recordAcquireForRead` is not the discarding one the frame path uses.
 
+**A frame that blurs does not go straight into the buffer, and that is not an
+optimisation.** Every blur interrupts the main pass, and ending a pass resolves
+it — so a blurred frame resolving into the shared image lands there *twice*:
+once with everything drawn so far and nothing after it, and again at the end.
+The consumer is told to wait for the submit, and nothing at all stops it
+sampling between those two writes; what it draws then is the window with
+everything below the blur missing. It looked like elements blinking in and out
+while a list scrolled, and it is why exported buffers must be blit
+*destinations* as well as attachments — `directToExport()` decides per frame,
+from a pre-scan of the draw list, and a frame that blurs takes the old path
+into this window's own resolve image and a copy at the end. Only blurred
+windows carry a `window resolve` line in the report; a plain one still resolves
+straight into its buffer.
+
+That leaves the narrow race the old path always had — the consumer has a fence
+saying *when the frame is written* and canvas has nothing saying *when the
+consumer is done reading*, so a client that redraws while a composite is still
+in flight can still overwrite the buffer under it. One buffer per window is
+what makes that possible; the fix, if it ever matters, is a release timeline
+back from the compositor, not a second buffer.
+
 **A drop shadow is nine scene nodes onto one shared image.** Every focused
 window used to get a canvas surface the size of itself plus the blur's reach —
 a multisampled attachment, an exported dma-buf and a render on every move — and

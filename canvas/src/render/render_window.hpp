@@ -174,11 +174,12 @@ class RenderWindow {
   /// The single-sample image this window's frame ends up in.
   ///
   /// Usually this window's own resolve attachment, and for an exported window
-  /// whose buffer can be rendered into, the shared image itself — the frame
-  /// resolves there and there is no local copy of it to read. Anything that
-  /// wants the finished frame (the backdrop blur's capture, a readback) has to
-  /// go through here rather than name `resolveImage_`, which in that case does
-  /// not exist.
+  /// drawing a frame that goes straight into its buffer, the shared image
+  /// itself — the frame resolves there and there is no local copy of it to
+  /// read. Anything that wants the finished frame (the backdrop blur's
+  /// capture, a readback) has to go through here rather than name
+  /// `resolveImage_`, which in that case does not exist. Which of the two it
+  /// is can change from frame to frame: see `directToExport`.
   VkImage       frameImage() const;
   VkImageView   frameImageView() const;
   VkFramebuffer mainFramebuffer() const { return framebuffer_; }
@@ -571,16 +572,37 @@ class RenderWindow {
   void createStagingBuffer();
   void createFramebuffer();
 
-  /// Whether this window's frames are resolved straight into the exported
-  /// buffer. See `setExportTarget`.
-  bool renderIntoExport() const;
+  /// Whether the exported buffer *could* be the resolve attachment: it exists
+  /// and its format and modifier allow it. See `setExportTarget`.
+  bool exportIsRenderable() const;
 
-  /// Brings the local resolve attachment into line with the current export
-  /// target — allocated when the frame needs somewhere of its own to land,
+  /// Whether this frame is actually resolved straight into it.
+  ///
+  /// A frame that blurs is not, and that is not an optimisation — it is the
+  /// difference between a consumer seeing whole frames and seeing half of one.
+  /// Every blur interrupts the main pass, and ending a pass resolves it, so a
+  /// blurred frame would land in the shared buffer several times: once with
+  /// everything drawn so far and nothing after it, and again at the end. The
+  /// consumer is only told to wait for the *submit*, so nothing stops it
+  /// sampling between those two writes — and what it draws then is the window
+  /// with everything below the blur missing. See `frameBlurs_`.
+  bool directToExport() const { return exportIsRenderable() && !frameBlurs_; }
+
+  /// Brings the local resolve attachment into line with where this window's
+  /// frames now land — allocated when the frame needs somewhere of its own,
   /// released when the shared image is that place — and rebuilds the
   /// framebuffers around whichever it is. Callers must have waited for this
   /// window's frames first.
   void syncResolveTarget();
+
+  /// Whether the frame being recorded interrupts its main pass to blur.
+  ///
+  /// Set from the draw list before anything is recorded, because it decides
+  /// which image the framebuffers name. It changes only when a window starts
+  /// or stops blurring — a launcher overlay opening, a panel losing its
+  /// frost — and each change costs the stall and the two framebuffers that
+  /// `syncResolveTarget` rebuilds.
+  bool frameBlurs_ = false;
 
   /// Everything `resize()` rebuilds, and everything the destructor frees.
   void createSizedResources();
