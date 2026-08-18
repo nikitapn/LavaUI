@@ -129,6 +129,7 @@ executable(
   'src/shell.cpp',
   'src/screenshot_portal.cpp',
   'src/window_memory.cpp',
+  'src/focus_history.cpp',
   lava_idl_sources,
   protocol_headers,
   protocol_sources,
@@ -171,3 +172,12 @@ executable(
   override_options: ['warning_level=3'],
   install: true,
 )
+
+# Headless: the focus MRU is a vector of ids and needs no compositor.
+focus_history_test = executable(
+  'focus_history_test',
+  ['tests/focus_history_test.cpp', 'src/focus_history.cpp'],
+  include_directories: include_directories('src'),
+  build_by_default: false,
+)
+test('focus history', focus_history_test)

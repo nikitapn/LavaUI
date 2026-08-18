@@ -42,6 +42,7 @@
 #include "startup_watchdog.hpp"
 #include "backdrop_blur.hpp"
 #include "background.hpp"
+#include "focus_history.hpp"
 #include "window_memory.hpp"
 #include "wlr.hpp"
 #include "render/png_encode.hpp"
@@ -62,6 +63,31 @@ constexpr const char *kLauncherAppId = "LavaLauncher";
 
 bool isTransientApp(const std::string &appId) {
   return appId == kSwitcherAppId || appId == kLauncherAppId;
+}
+
+/// Dialogs, tool windows, splash screens: they share the parent's
+/// `app_id` / WM_CLASS, so the last-frame cache would open them at the
+/// parent's size (and maximized, if that is how the parent last sat).
+bool x11IsTransient(const wlr_xwayland_surface *surface) {
+  if (surface == nullptr) return false;
+  if (surface->parent != nullptr || surface->modal) return true;
+  static constexpr wlr_xwayland_net_wm_window_type kTypes[] = {
+      WLR_XWAYLAND_NET_WM_WINDOW_TYPE_DIALOG,
+      WLR_XWAYLAND_NET_WM_WINDOW_TYPE_UTILITY,
+      WLR_XWAYLAND_NET_WM_WINDOW_TYPE_TOOLBAR,
+      WLR_XWAYLAND_NET_WM_WINDOW_TYPE_MENU,
+      WLR_XWAYLAND_NET_WM_WINDOW_TYPE_SPLASH,
+      WLR_XWAYLAND_NET_WM_WINDOW_TYPE_DROPDOWN_MENU,
+      WLR_XWAYLAND_NET_WM_WINDOW_TYPE_POPUP_MENU,
+      WLR_XWAYLAND_NET_WM_WINDOW_TYPE_TOOLTIP,
+      WLR_XWAYLAND_NET_WM_WINDOW_TYPE_NOTIFICATION,
+      WLR_XWAYLAND_NET_WM_WINDOW_TYPE_COMBO,
+      WLR_XWAYLAND_NET_WM_WINDOW_TYPE_DND,
+  };
+  for (auto type : kTypes) {
+    if (wlr_xwayland_surface_has_window_type(surface, type)) return true;
+  }
+  return false;
 }
 
 /// Pid of a switcher we spawned and have not reaped. Stops Ctrl+Tab during
@@ -156,6 +182,13 @@ struct FramedWindow {
   uint32_t frameId = 0;
 };
 
+uint32_t xdgParentFrameId(const wlr_xdg_toplevel *parent) {
+  if (parent == nullptr || parent->base == nullptr) return 0;
+  auto *tree = static_cast<wlr_scene_tree *>(parent->base->data);
+  if (tree == nullptr || tree->node.data == nullptr) return 0;
+  return static_cast<FramedWindow *>(tree->node.data)->frameId;
+}
+
 // ─── Workspaces ────────────────────────────────────────────────────────────
 
 /// The desktop's workspaces: one scene tree each, one of them enabled.
@@ -192,6 +225,8 @@ struct Workspaces {
 
   wlr_scene_tree *currentTree() const { return tree[current]; }
 };
+
+static_assert(Workspaces::kCount == lava::FocusHistory::kWorkspaces);
 
 // ─── Output ────────────────────────────────────────────────────────────────
 
@@ -295,6 +330,7 @@ struct Toplevel : FramedWindow {
   Listener<Toplevel> destroy;
   Listener<Toplevel> set_title;
   Listener<Toplevel> set_app_id;
+  Listener<Toplevel> set_parent;
   Listener<Toplevel> request_maximize;
   Listener<Toplevel> request_fullscreen;
   Listener<Toplevel> request_minimize;
@@ -332,6 +368,7 @@ struct Toplevel : FramedWindow {
   static void on_destroy(wl_listener *listener, void *data);
   static void on_set_title(wl_listener *listener, void *data);
   static void on_set_app_id(wl_listener *listener, void *data);
+  static void on_set_parent(wl_listener *listener, void *data);
   static void on_request_maximize(wl_listener *listener, void *data);
   static void on_request_fullscreen(wl_listener *listener, void *data);
   static void on_request_minimize(wl_listener *listener, void *data);
@@ -367,6 +404,8 @@ struct XwaylandSurface : FramedWindow {
   Listener<XwaylandSurface> request_configure;
   Listener<XwaylandSurface> set_title;
   Listener<XwaylandSurface> set_class;
+  Listener<XwaylandSurface> set_parent;
+  Listener<XwaylandSurface> set_window_type;
   Listener<XwaylandSurface> request_move;
   Listener<XwaylandSurface> request_resize;
   Listener<XwaylandSurface> request_fullscreen;
@@ -437,6 +476,8 @@ struct XwaylandSurface : FramedWindow {
   static void on_request_configure(wl_listener *listener, void *data);
   static void on_set_title(wl_listener *listener, void *data);
   static void on_set_class(wl_listener *listener, void *data);
+  static void on_set_parent(wl_listener *listener, void *data);
+  static void on_set_window_type(wl_listener *listener, void *data);
   static void on_request_move(wl_listener *listener, void *data);
   static void on_request_resize(wl_listener *listener, void *data);
   static void on_request_fullscreen(wl_listener *listener, void *data);
@@ -575,8 +616,8 @@ struct Server {
   wlr_pointer_constraints_v1 *pointerConstraints = nullptr;
   wlr_pointer_constraint_v1 *activePointerConstraint = nullptr;
 
-  /// Front is the most recently focused. Focus order and stacking order are
-  /// the same thing here, which is why one list serves both.
+  /// Front is the most recently raised foreign window. Not a complete
+  /// focus history: Lava clients never join this list. See `focusHistory`.
   std::list<FramedWindow *> toplevels;
   /// Every X11 window, including override-redirect. `toplevels` only has the
   /// framed ones; a game that maps borderless still has to be visible here
@@ -727,6 +768,10 @@ struct Server {
   /// switch and leave the keyboard pointed at a window that is no longer on
   /// screen — every keystroke going somewhere the user cannot see.
   uint32_t focusedByWorkspace[Workspaces::kCount] = {};
+  /// Who had the keyboard before the window that has it now, per
+  /// workspace. Close and minimize consult this rather than stacking
+  /// order — see `restoreFocus`.
+  lava::FocusHistory focusHistory;
   Workspaces workspaces;
 
   /// Modifier that keeps the app switcher open (Ctrl, or the desktop mod).
@@ -807,6 +852,12 @@ struct Server {
   void moveFocusedToWorkspace(uint32_t index);
   /// The front window of a workspace, or null if it has none.
   FramedWindow *frontToplevel(uint32_t workspace);
+  /// Notes that `surface` now has the keyboard / the active frame.
+  /// Panels and the switcher are ignored.
+  void recordFocus(const ClientSurface &surface);
+  /// After `exceptId` closed or hid: give this workspace the window that
+  /// had focus just before it. Falls back to the topmost live window.
+  void restoreFocus(uint32_t workspace, uint32_t exceptId);
 
   Listener<Server> new_output;
   Listener<Server> new_toplevel;
@@ -969,6 +1020,14 @@ struct ClientSurface {
   /// by, and the one two windows of an application share; the title is not
   /// that, since it changes with the document.
   std::string appId;
+
+  /// Dialog, tool window, or anything with a parent. Shares the
+  /// parent's `appId`, so it must not inherit (or overwrite) the
+  /// remembered frame for that name.
+  bool transient = false;
+  /// Frame id of the parent window, if we know one. Used to centre a
+  /// dialog on whatever opened it.
+  uint32_t parentId = 0;
 
   /// Where this surface takes pointer input, in its own coordinates. Zero
   /// width or height means the whole surface, which is every window's answer
@@ -2087,25 +2146,39 @@ class SurfaceRegistry : public lava::CompositorHost {
   /// Wayland client cannot place its own window and nothing else would.
   uint32_t adoptWindow(FramedWindow *window, const std::string &title,
                        uint32_t width, uint32_t height,
-                       const std::string &appId, bool decorated = true);
+                       const std::string &appId, bool decorated = true,
+                       bool transient = false, uint32_t parentId = 0);
 
   /// Where this window should sit, now that we know its `app_id`.
   ///
-  /// A remembered frame (position, size, maximized) is restored. A first
-  /// launch is centred on the primary work area — the cascade from the
-  /// corner was only a placeholder until the identity arrived. Overlays
-  /// (launcher, switcher) and panels are left alone.
+  /// A remembered frame (position, size, maximized) is restored for an
+  /// ordinary window; a first launch is centred on the primary work area.
+  /// Dialogs and tool windows keep the size they asked for, centred on
+  /// their parent, and do not inherit its saved maximized state — being a
+  /// child is what marks them, not sharing an `app_id` with something
+  /// already on screen. Overlays (launcher, switcher) and panels are left
+  /// alone.
   void applyInitialPlacement(ClientSurface &surface);
 
   /// Records the floating rectangle (and whether it was maximized) in
-  /// memory. The file is flushed on a timer and at shutdown.
+  /// memory. The file is flushed on a timer and at shutdown. Dialogs
+  /// are skipped — they share the parent's identity and must not
+  /// overwrite it.
   void rememberPlacement(const ClientSurface &surface);
 
   /// Size a Wayland toplevel should be configured to on its first commit,
   /// before it has a frame. `width`/`height` stay 0 when there is nothing
   /// to say — the client then picks its own default.
   bool hintToplevelConfigure(const std::string &appId, uint32_t &width,
-                             uint32_t &height, bool &maximized) const;
+                             uint32_t &height, bool &maximized,
+                             bool transient = false) const;
+
+  /// Topmost live window on `workspace` that can take the keyboard.
+  ClientSurface *frontOnWorkspace(uint32_t workspace);
+
+  /// Late parent / window-type: mark a mapped window so it is not
+  /// remembered as the application's last frame.
+  void markTransient(ClientSurface &surface, uint32_t parentId);
 
   /// A Wayland client committed at a new size.
   ///
@@ -3831,6 +3904,10 @@ class SurfaceRegistry : public lava::CompositorHost {
       if ((*it)->appId == kSwitcherAppId) invalidatePosters();
       else forgetPosters(id);
       rememberPlacement(**it);
+      const uint32_t workspace = (*it)->workspace;
+      const bool hadFocus =
+          id == focused_ ||
+          (server_ != nullptr && server_->focusedSurface() == id);
       if (server_ != nullptr && server_->pendingMove &&
           server_->pendingSurface == id) {
         server_->pendingMove = false;
@@ -3865,6 +3942,15 @@ class SurfaceRegistry : public lava::CompositorHost {
       wlr_log(WLR_INFO, "surface %u: gone", id);
       announceWindows();
       syncShellForFullscreen();
+      if (server_ != nullptr) {
+        server_->focusHistory.forget(id);
+        if (server_->focusedByWorkspace[workspace] == id) {
+          server_->focusedByWorkspace[workspace] = 0;
+        }
+        if (hadFocus && server_->workspaces.current == workspace) {
+          server_->restoreFocus(workspace, id);
+        }
+      }
       return true;
     }
     return false;
@@ -4697,13 +4783,29 @@ class SurfaceRegistry : public lava::CompositorHost {
 };
 
 
+ClientSurface *SurfaceRegistry::frontOnWorkspace(uint32_t workspace) {
+  for (auto &surface : surfaces_) {
+    if (surface->panel || surface->minimized) continue;
+    if (surface->workspace != workspace) continue;
+    if (isTransientApp(surface->appId)) continue;
+    return surface.get();
+  }
+  return nullptr;
+}
+
+void SurfaceRegistry::markTransient(ClientSurface &surface, uint32_t parentId) {
+  surface.transient = true;
+  if (parentId != 0) surface.parentId = parentId;
+}
+
 bool SurfaceRegistry::hintToplevelConfigure(const std::string &appId,
                                             uint32_t &width, uint32_t &height,
-                                            bool &maximized) const {
+                                            bool &maximized,
+                                            bool transient) const {
   width = 0;
   height = 0;
   maximized = false;
-  if (appId.empty() || isTransientApp(appId)) return false;
+  if (appId.empty() || isTransientApp(appId) || transient) return false;
   const lava::WindowPlacement *saved = placements_.find(appId);
   if (saved == nullptr) return false;
   if (saved->maximized) {
@@ -4721,7 +4823,8 @@ bool SurfaceRegistry::hintToplevelConfigure(const std::string &appId,
 }
 
 void SurfaceRegistry::rememberPlacement(const ClientSurface &surface) {
-  if (surface.panel || surface.appId.empty() || isTransientApp(surface.appId)) {
+  if (surface.panel || surface.appId.empty() || isTransientApp(surface.appId) ||
+      surface.transient) {
     return;
   }
   lava::WindowPlacement placement;
@@ -4751,6 +4854,11 @@ void SurfaceRegistry::applyInitialPlacement(ClientSurface &surface) {
   const int bar =
       surface.showsBar() ? static_cast<int>(lava::Decoration::kHeight) : 0;
 
+  // Another window of the same application is not something to step off:
+  // it shares the one remembered frame, so the 40 px would come back as
+  // the new saved position and the app would walk down the screen a step
+  // per launch. Two instances landing on top of each other is the honest
+  // reading of one remembered frame per application.
   const auto nudge = [&](int &x, int &y) {
     constexpr int kStep = 40;
     for (int n = 0; n < 12; ++n) {
@@ -4758,6 +4866,7 @@ void SurfaceRegistry::applyInitialPlacement(ClientSurface &surface) {
       for (const auto &other : surfaces_) {
         if (other.get() == &surface || other->panel) continue;
         if (other->workspace != surface.workspace) continue;
+        if (!surface.appId.empty() && other->appId == surface.appId) continue;
         if (other->x == x && other->y == y) {
           occupied = true;
           break;
@@ -4778,25 +4887,45 @@ void SurfaceRegistry::applyInitialPlacement(ClientSurface &surface) {
     y = std::clamp(y, area.y, std::max(area.y, maxY));
   };
 
+  // A dialog shares its parent's identity, and restoring the saved frame
+  // is how a viewer opened maximized at the file manager's size. Only
+  // being a child disqualifies a window: counting other windows that
+  // carry this `app_id` cannot tell a genuine second window from the same
+  // window re-created, which is what Qt does between mapping a toplevel
+  // and negotiating its decoration.
   const lava::WindowPlacement *saved =
-      surface.appId.empty() ? nullptr : placements_.find(surface.appId);
+      !surface.transient && !surface.appId.empty()
+          ? placements_.find(surface.appId)
+          : nullptr;
 
   if (saved == nullptr) {
-    // First launch of this application: centre on the primary, which is
-    // where a new window opens. A window the size of the work area has
-    // no slack, so the centre is the origin — the same place the old
-    // cascade collapsed to for a "fill the screen" request.
-    const int roomX =
-        static_cast<int>(primary.width) - static_cast<int>(surface.width);
-    const int roomY = static_cast<int>(primary.height) -
-                      static_cast<int>(surface.height) - bar;
-    int x = primary.x + std::max(0, roomX) / 2;
-    int y = primary.y + std::max(0, roomY) / 2;
+    // Keep the size the client asked for. Centre on the parent if this
+    // is a dialog, otherwise on the primary — a window the size of the
+    // work area has no slack, so the centre is the origin.
+    int x = 0;
+    int y = 0;
+    WorkArea area = primary;
+    if (ClientSurface *parent = find(surface.parentId)) {
+      area = workAreaAt(parent->x + static_cast<int>(parent->width / 2),
+                        parent->y + parent->frameHeight() / 2);
+      x = parent->x + (static_cast<int>(parent->width) -
+                       static_cast<int>(surface.width)) /
+                          2;
+      y = parent->y + (parent->frameHeight() - surface.frameHeight()) / 2;
+    } else {
+      const int roomX =
+          static_cast<int>(primary.width) - static_cast<int>(surface.width);
+      const int roomY = static_cast<int>(primary.height) -
+                        static_cast<int>(surface.height) - bar;
+      x = primary.x + std::max(0, roomX) / 2;
+      y = primary.y + std::max(0, roomY) / 2;
+    }
     nudge(x, y);
-    clampTo(x, y, surface.width, surface.height, primary);
+    clampTo(x, y, surface.width, surface.height, area);
     moveSurface(surface, x, y);
-    wlr_log(WLR_INFO, "window %u: centred at %d,%d (first launch)", surface.id,
-            x, y);
+    wlr_log(WLR_INFO, "window %u: centred at %d,%d %ux%u%s", surface.id, x, y,
+            surface.width, surface.height,
+            surface.transient ? " (dialog)" : " (first launch)");
     return;
   }
 
@@ -4856,13 +4985,16 @@ void SurfaceRegistry::applyInitialPlacement(ClientSurface &surface) {
 uint32_t SurfaceRegistry::adoptWindow(FramedWindow *window,
                                      const std::string &title, uint32_t width,
                                      uint32_t height, const std::string &appId,
-                                     bool decorated) {
+                                     bool decorated, bool transient,
+                                     uint32_t parentId) {
   if (workspaces_ == nullptr) return 0;
   auto surface = std::make_unique<ClientSurface>();
   surface->id = nextId_++;
   surface->window = window;
   surface->title = title.empty() ? "Untitled" : title;
   surface->appId = appId;
+  surface->transient = transient;
+  surface->parentId = parentId;
   surface->width = width < kMinSurface ? kMinSurface : width;
   surface->height = height < kMinSurface ? kMinSurface : height;
   surface->workspace = window->workspace;
@@ -4935,6 +5067,9 @@ XwaylandSurface::XwaylandSurface(Server *server, wlr_xwayland_surface *surface)
                            on_request_configure);
   set_title.attach(&xsurface->events.set_title, this, on_set_title);
   set_class.attach(&xsurface->events.set_class, this, on_set_class);
+  set_parent.attach(&xsurface->events.set_parent, this, on_set_parent);
+  set_window_type.attach(&xsurface->events.set_window_type, this,
+                         on_set_window_type);
   // `_NET_WM_MOVERESIZE`, which is X11's version of the same conversation: a
   // client that draws its own header tells the window manager the user has
   // started dragging it, rather than moving itself.
@@ -4958,6 +5093,8 @@ XwaylandSurface::~XwaylandSurface() {
   request_configure.detach();
   set_title.detach();
   set_class.detach();
+  set_parent.detach();
+  set_window_type.detach();
   request_move.detach();
   request_resize.detach();
   request_fullscreen.detach();
@@ -5036,10 +5173,19 @@ void XwaylandSurface::on_map(wl_listener *listener, void *) {
                                 : 0;
     // X11's WM_CLASS is what a desktop file matches on, the same role
     // `app_id` plays for a Wayland client.
+    uint32_t parentId = 0;
+    if (self->xsurface->parent != nullptr) {
+      for (XwaylandSurface *other : server->xwindows) {
+        if (other->xsurface == self->xsurface->parent) {
+          parentId = other->frameId;
+          break;
+        }
+      }
+    }
     const uint32_t id = server->surfaces->adoptWindow(
         self, title ? title : "", width, height,
         self->xsurface->xclass ? self->xsurface->xclass : "",
-        self->serverDecorated());
+        self->serverDecorated(), x11IsTransient(self->xsurface), parentId);
     if (ClientSurface *frame = server->surfaces->find(id)) {
       server->surfaces->raise(*frame);
       // Games often map already wanting `_NET_WM_STATE_FULLSCREEN`. Applying
@@ -5159,6 +5305,40 @@ void XwaylandSurface::on_set_class(wl_listener *listener, void *) {
   if (ClientSurface *frame = self->server->surfaces->find(self->frameId)) {
     frame->appId = self->xsurface->xclass ? self->xsurface->xclass : "";
     self->server->surfaces->announceWindows();
+  }
+}
+
+void XwaylandSurface::on_set_parent(wl_listener *listener, void *) {
+  auto *self = owner_of<XwaylandSurface>(listener);
+  if (self->frameId == 0 || self->server->surfaces == nullptr) return;
+  if (self->xsurface->parent == nullptr) return;
+  uint32_t parentId = 0;
+  for (XwaylandSurface *other : self->server->xwindows) {
+    if (other->xsurface == self->xsurface->parent) {
+      parentId = other->frameId;
+      break;
+    }
+  }
+  if (ClientSurface *frame = self->server->surfaces->find(self->frameId)) {
+    self->server->surfaces->markTransient(*frame, parentId);
+  }
+}
+
+void XwaylandSurface::on_set_window_type(wl_listener *listener, void *) {
+  auto *self = owner_of<XwaylandSurface>(listener);
+  if (self->frameId == 0 || self->server->surfaces == nullptr) return;
+  if (!x11IsTransient(self->xsurface)) return;
+  if (ClientSurface *frame = self->server->surfaces->find(self->frameId)) {
+    uint32_t parentId = 0;
+    if (self->xsurface->parent != nullptr) {
+      for (XwaylandSurface *other : self->server->xwindows) {
+        if (other->xsurface == self->xsurface->parent) {
+          parentId = other->frameId;
+          break;
+        }
+      }
+    }
+    self->server->surfaces->markTransient(*frame, parentId);
   }
 }
 
@@ -5855,6 +6035,7 @@ Toplevel::Toplevel(Server *server, wlr_xdg_toplevel *toplevel)
   destroy.attach(&toplevel->events.destroy, this, on_destroy);
   set_title.attach(&toplevel->events.set_title, this, on_set_title);
   set_app_id.attach(&toplevel->events.set_app_id, this, on_set_app_id);
+  set_parent.attach(&toplevel->events.set_parent, this, on_set_parent);
   request_maximize.attach(&toplevel->events.request_maximize, this,
                           on_request_maximize);
   request_fullscreen.attach(&toplevel->events.request_fullscreen, this,
@@ -5878,6 +6059,7 @@ Toplevel::~Toplevel() {
   destroy.detach();
   set_title.detach();
   set_app_id.detach();
+  set_parent.detach();
   request_maximize.detach();
   request_fullscreen.detach();
   request_minimize.detach();
@@ -5904,9 +6086,12 @@ void Toplevel::on_map(wl_listener *listener, void *) {
   if (server->surfaces != nullptr) {
     uint32_t width = 0, height = 0;
     toplevel->geometry(width, height);
+    const bool transient = toplevel->xdg_toplevel->parent != nullptr;
+    const uint32_t parentId =
+        xdgParentFrameId(toplevel->xdg_toplevel->parent);
     const uint32_t id = server->surfaces->adoptWindow(
         toplevel, title ? title : "", width, height, app_id ? app_id : "",
-        server->serverDecorated(toplevel->xdg_toplevel));
+        server->serverDecorated(toplevel->xdg_toplevel), transient, parentId);
     if (ClientSurface *frame = server->surfaces->find(id)) {
       server->surfaces->raise(*frame);
       server->surfaces->setFocused(id);
@@ -5970,8 +6155,9 @@ void Toplevel::on_commit(wl_listener *listener, void *) {
       toplevel->server->surfaces->outputSize(width, height);
     } else if (toplevel->server->surfaces != nullptr) {
       const char *app_id = toplevel->xdg_toplevel->app_id;
+      const bool transient = toplevel->xdg_toplevel->parent != nullptr;
       toplevel->server->surfaces->hintToplevelConfigure(
-          app_id ? app_id : "", width, height, maximized);
+          app_id ? app_id : "", width, height, maximized, transient);
     }
     wlr_xdg_toplevel_set_size(toplevel->xdg_toplevel,
                               static_cast<int32_t>(width),
@@ -6018,6 +6204,31 @@ void Toplevel::on_set_app_id(wl_listener *listener, void *) {
     // next close will remember under.
     frame->appId = app_id ? app_id : "";
     toplevel->server->surfaces->announceWindows();
+  }
+}
+
+void Toplevel::on_set_parent(wl_listener *listener, void *) {
+  auto *toplevel = owner_of<Toplevel>(listener);
+  wlr_xdg_toplevel *parent = toplevel->xdg_toplevel->parent;
+  if (parent == nullptr) return;
+  const uint32_t parentId = xdgParentFrameId(parent);
+  // Before map we have no frame yet. The first configure and
+  // `adoptWindow` both re-read `parent`, so marking here is only
+  // needed once the window is already placed — otherwise a late
+  // set_parent would let the dialog overwrite the parent's slot.
+  if (toplevel->frameId == 0 || toplevel->server->surfaces == nullptr) {
+    // Already configured at the saved size before the parent arrived:
+    // take the hint back so the client can pick a dialog-sized buffer.
+    if (toplevel->xdg_toplevel->base->initialized &&
+        !toplevel->xdg_toplevel->base->initial_commit) {
+      wlr_xdg_toplevel_set_size(toplevel->xdg_toplevel, 0, 0);
+      wlr_xdg_toplevel_set_maximized(toplevel->xdg_toplevel, false);
+    }
+    return;
+  }
+  if (ClientSurface *frame =
+          toplevel->server->surfaces->find(toplevel->frameId)) {
+    toplevel->server->surfaces->markTransient(*frame, parentId);
   }
 }
 
@@ -7208,6 +7419,7 @@ void Server::focus(FramedWindow *window) {
     if (ClientSurface *frame = surfaces->find(window->frameId)) {
       surfaces->raise(*frame);
       surfaces->setFocused(frame->id);
+      recordFocus(*frame);
     }
   } else {
     wlr_scene_node_raise_to_top(window->contentNode());
@@ -7302,9 +7514,55 @@ void Server::reloadConfig() {
 
 FramedWindow *Server::frontToplevel(uint32_t workspace) {
   for (FramedWindow *window : toplevels) {
-    if (window->workspace == workspace) return window;
+    if (window->workspace != workspace) continue;
+    if (window->frameId != 0 && surfaces != nullptr) {
+      if (ClientSurface *frame = surfaces->find(window->frameId)) {
+        if (frame->minimized) continue;
+      }
+    }
+    return window;
   }
   return nullptr;
+}
+
+void Server::recordFocus(const ClientSurface &surface) {
+  if (surface.panel || surface.appId == kSwitcherAppId) return;
+  focusHistory.record(surface.workspace, surface.id);
+}
+
+void Server::restoreFocus(uint32_t workspace, uint32_t exceptId) {
+  if (exceptId != 0 && focusedSurface() == exceptId) setFocusedSurface(0);
+
+  auto tryFocus = [&](uint32_t id) -> bool {
+    if (id == 0 || id == exceptId || surfaces == nullptr) return false;
+    ClientSurface *surface = surfaces->find(id);
+    if (surface == nullptr || surface->panel || surface->minimized) return false;
+    if (surface->workspace != workspace) return false;
+    if (surface->appId == kSwitcherAppId) return false;
+    focusSurface(*surface);
+    return true;
+  };
+
+  if (surfaces != nullptr) {
+    for (uint32_t id : focusHistory.of(workspace)) {
+      if (tryFocus(id)) {
+        update_pointer_focus(0);
+        return;
+      }
+    }
+    if (ClientSurface *fallback = surfaces->frontOnWorkspace(workspace)) {
+      if (tryFocus(fallback->id)) {
+        update_pointer_focus(0);
+        return;
+      }
+    }
+  }
+  wlr_seat_keyboard_notify_clear_focus(seat);
+  if (surfaces != nullptr &&
+      (surfaces->focusedId() == 0 || surfaces->focusedId() == exceptId)) {
+    surfaces->setFocused(0);
+  }
+  update_pointer_focus(0);
 }
 
 void Server::switchWorkspace(uint32_t index) {
@@ -7325,7 +7583,7 @@ void Server::switchWorkspace(uint32_t index) {
   wlr_seat_keyboard_notify_clear_focus(seat);
   if (surfaces != nullptr) surfaces->setFocused(focusedSurface());
   if (focusedSurface() == 0) {
-    focus(frontToplevel(index));
+    restoreFocus(index, 0);
   }
 
   // The cursor did not move, but what is under it did.
@@ -7342,13 +7600,16 @@ void Server::moveFocusedToWorkspace(uint32_t index) {
 
   if (surfaces != nullptr) {
     if (ClientSurface *surface = surfaces->find(focusedSurface())) {
+      const uint32_t from = workspaces.current;
       surfaces->moveToWorkspace(*surface, index);
       // It arrives focused on the workspace it was sent to, and leaves this
       // one with nothing focused — the same as if it had been closed here.
       setFocusedSurface(0);
       focusedByWorkspace[index] = surface->id;
       surfaces->setFocused(0);
+      focusHistory.move(surface->id, from, index);
       drag = Drag::None;
+      restoreFocus(from, surface->id);
       update_pointer_focus(0);
       return;
     }
@@ -7357,20 +7618,23 @@ void Server::moveFocusedToWorkspace(uint32_t index) {
   // No client surface has the keyboard, so it is a Wayland window's turn — the
   // front one, which is the one the user is looking at.
   if (FramedWindow *window = frontToplevel(workspaces.current)) {
+    const uint32_t from = workspaces.current;
+    const uint32_t frameId = window->frameId;
     window->workspace = index;
     wlr_scene_node_reparent(window->contentNode(), workspaces.tree[index]);
     // Its frame goes with it, or the title bar stays on this workspace with
     // nothing underneath.
-    if (surfaces != nullptr && window->frameId != 0) {
-      if (ClientSurface *frame = surfaces->find(window->frameId)) {
+    if (surfaces != nullptr && frameId != 0) {
+      if (ClientSurface *frame = surfaces->find(frameId)) {
         surfaces->moveToWorkspace(*frame, index);
       }
     }
+    if (frameId != 0) focusHistory.move(frameId, from, index);
     // Left at the front of the stacking list, which makes it the front window
     // of the workspace it arrived on — nothing else is there to be in front.
     wlr_seat_keyboard_notify_clear_focus(seat);
-    focus(frontToplevel(workspaces.current));
     drag = Drag::None;
+    restoreFocus(from, frameId);
     update_pointer_focus(0);
   }
 }
@@ -7694,6 +7958,7 @@ void Server::focusSurface(ClientSurface &surface) {
     return;
   }
 
+  recordFocus(surface);
   surfaces->setFocused(surface.id);
   surfaces->raise(surface);
   if (surface.isForeign()) {
@@ -7774,17 +8039,20 @@ void Server::toggleShowDesktop() {
 
 void Server::minimizeSurface(ClientSurface &surface) {
   if (surfaces == nullptr || surface.panel) return;
+  const uint32_t workspace = surface.workspace;
+  const uint32_t id = surface.id;
+  const bool hadFocus =
+      focusedSurface() == id || surfaces->focusedId() == id;
   surfaces->setMinimized(surface, true);
   // A drag on a window that just vanished would go on moving it invisibly.
-  if (drag != Drag::None && dragSurface == surface.id) drag = Drag::None;
-  if (pendingMove && pendingSurface == surface.id) pendingMove = false;
-  if (focusedSurface() == surface.id) setFocusedSurface(0);
-  surfaces->setFocused(focusedSurface());
+  if (drag != Drag::None && dragSurface == id) drag = Drag::None;
+  if (pendingMove && pendingSurface == id) pendingMove = false;
   if (surface.isForeign()) surface.window->activate(false);
-  // Somebody has to have the keyboard, and the window behind is the one the
-  // user is now looking at.
-  wlr_seat_keyboard_notify_clear_focus(seat);
-  if (focusedSurface() == 0) focus(frontToplevel(workspaces.current));
+  // Somebody has to have the keyboard, and the window that had it
+  // before this one is the one the user is now looking at.
+  if (hadFocus) {
+    restoreFocus(workspace, id);
+  }
   update_pointer_focus(0);
 }
 
@@ -8050,10 +8318,10 @@ void Server::on_cursor_button(wl_listener *listener, void *data) {
         case lava::DecorationHit::Close:
           // Asked rather than killed, where there is somebody to ask: a
           // Wayland client gets to put up its "save your work?" dialog.
+          // A Lava client is destroyed here; `destroySurface` already
+          // handed the keyboard to whoever had it last. Zeroing focus
+          // after that used to undo the restore.
           server->surfaces->requestClose(*frame);
-          // Or the workspace goes on pointing at an id that no longer resolves,
-          // and the next Alt+Shift would move a Wayland window instead.
-          server->setFocusedSurface(0);
           return;
         case lava::DecorationHit::Maximize:
           server->surfaces->setMaximized(*frame, !frame->maximized);

@@ -10,8 +10,12 @@
 /// Keyed by `app_id` (Wayland) / WM_CLASS (X11) / the name a Lava client
 /// passed to `CreateSurface`. The title is not an identity: it changes with
 /// the document. One slot per application, which is the last closed (or
-/// last moved) window of that name — a second instance of the same app
-/// inherits that slot rather than getting its own history.
+/// last moved) *ordinary* window of that name. Dialogs and tool windows
+/// share that identity without being that window, and must not read or
+/// write this slot — otherwise a viewer inherits the parent's size and
+/// maximized state. A second ordinary window of the same name does
+/// inherit the slot: it is the same application, and there is no way to
+/// tell one apart from a toolkit re-creating the window it just mapped.
 ///
 /// Lives in its own file, not `lava.conf`. That file is about the machine
 /// and people edit it; this one is a cache the compositor rewrites, and
