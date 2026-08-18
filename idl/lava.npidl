@@ -1542,4 +1542,16 @@ interface Compositor {
                              x: in f32, y: in f32, w: in f32, h: in f32,
                              cornerRadius: in f32)
       raises(SurfaceNotFound);
+
+  /// Ends the session. Same as the compositor's own quit binding.
+  ///
+  /// For the panel's Log Out item. A client cannot terminate the display
+  /// itself — it does not own it — and killing its parent would also kill a
+  /// panel that was started from a terminal rather than by the compositor.
+  /// This is the one call that means "I am done with this desktop".
+  ///
+  /// Orderly: the reference is unlinked, the shell is stopped, clients see
+  /// a display that closed. There is no confirm here; the panel asks the
+  /// user first.
+  void EndSession();
 }

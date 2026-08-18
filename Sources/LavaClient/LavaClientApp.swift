@@ -554,6 +554,14 @@ public enum LavaClient {
         }
     }
 
+    /// Ends the compositor session. The panel's Log Out asks first.
+    public static func endSession() {
+        guard let compositor = Self.compositor else { return }
+        report("EndSession") {
+            try blockingCall { try await compositor.endSession() }
+        }
+    }
+
     /// Frost a rectangle of the desktop behind this surface. `radius` 0
     /// clears. Debounced: emit calls this every frame a popup is up, and
     /// the compositor recaptures whenever the region changes.

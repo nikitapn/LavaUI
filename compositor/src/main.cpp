@@ -3682,6 +3682,13 @@ class SurfaceRegistry : public lava::CompositorHost {
     return true;
   }
 
+  void endSession() override {
+    if (server_ == nullptr || server_->display == nullptr) return;
+    wlr_log(WLR_INFO, "session: ended by a client");
+    lava::arm_shutdown_watchdog();
+    wl_display_terminate(server_->display);
+  }
+
   /// Recaptures frosted plates when something behind a window may have
   /// moved. Cheap when nobody asked: no surface with a radius, nothing
   /// to do. Called from the output frame callback, before the composite.

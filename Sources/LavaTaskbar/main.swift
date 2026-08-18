@@ -77,7 +77,20 @@ nonisolated(unsafe) let clock = Clock()
 /// never be mistaken for an imported item.
 enum DesktopMenuID {
     static let root = MenuID("desktop")
+    static let about = MenuID("desktop.about")
     static let settings = MenuID("desktop.settings")
+    static let launcher = MenuID("desktop.launcher")
+    static let terminal = MenuID("desktop.terminal")
+    static let logout = MenuID("desktop.logout")
+}
+
+/// What the system menu is showing besides a dropdown: a card on the
+/// panel itself. One at a time, same as the other popovers — the hit
+/// region has to cover it, and two cards on a 32pt strip would stack.
+enum SystemDialog: Equatable {
+    case none
+    case about
+    case logout
 }
 
 @Observable
@@ -108,6 +121,10 @@ final class MenuSession {
     var calendarOpen = false
     /// A tray applet's imported menu. Which applet is the tray's business.
     var trayMenuOpen = false
+    /// About / log-out confirm. Not a dropdown: a card placed below the
+    /// strip, because a one-item confirm inside the menu itself would
+    /// fire the action on the same click that opened it.
+    var dialog: SystemDialog = .none
 
     /// How far down the surface the notification stack currently reaches, or
     /// 0 for none. Not `wantsCapture`: a toast needs its own pixels clickable
@@ -154,13 +171,24 @@ final class MenuSession {
     }
 
     func activate(_ id: MenuID) {
-        if id == DesktopMenuID.settings {
+        switch id {
+        case DesktopMenuID.about:
+            setDialog(.about)
+        case DesktopMenuID.settings:
             closeMenu()
-            launchSettings()
-            return
+            launchDesktopProgram("LavaSettings")
+        case DesktopMenuID.launcher:
+            closeMenu()
+            launchDesktopProgram("LavaLauncher")
+        case DesktopMenuID.terminal:
+            closeMenu()
+            launchDesktopProgram("LavaTerm")
+        case DesktopMenuID.logout:
+            setDialog(.logout)
+        default:
+            menus?.activate(id)
+            closeMenu()
         }
-        menus?.activate(id)
-        closeMenu()
     }
 
     /// The system menu (Lava icon) always stays first. A focused window's
@@ -195,8 +223,21 @@ final class MenuSession {
                 icon: icon ?? MenuIcon(size: 18),
                 items: [
                     .item(MenuItemModel(
-                        id: DesktopMenuID.settings,
-                        title: "Settings…"
+                        id: DesktopMenuID.about, title: "About Lava"
+                    )),
+                    .item(MenuItemModel(
+                        id: DesktopMenuID.settings, title: "Settings…"
+                    )),
+                    .separator,
+                    .item(MenuItemModel(
+                        id: DesktopMenuID.launcher, title: "Applications"
+                    )),
+                    .item(MenuItemModel(
+                        id: DesktopMenuID.terminal, title: "Terminal"
+                    )),
+                    .separator,
+                    .item(MenuItemModel(
+                        id: DesktopMenuID.logout, title: "Log Out…"
                     )),
                 ]
             ),
@@ -225,6 +266,7 @@ final class MenuSession {
         // One popover at a time.
         volumeOpen = false
         calendarOpen = false
+        dialog = .none
         syncInputRegion()
     }
 
@@ -240,6 +282,7 @@ final class MenuSession {
         if open {
             openMenu = nil
             calendarOpen = false
+            dialog = .none
         }
         syncInputRegion()
     }
@@ -250,6 +293,7 @@ final class MenuSession {
         if open {
             openMenu = nil
             volumeOpen = false
+            dialog = .none
         }
         syncInputRegion()
     }
@@ -264,6 +308,22 @@ final class MenuSession {
             openMenu = nil
             volumeOpen = false
             calendarOpen = false
+            dialog = .none
+        }
+        syncInputRegion()
+    }
+
+    func setDialog(_ next: SystemDialog) {
+        guard dialog != next else { return }
+        dialog = next
+        if next != .none {
+            openMenu = nil
+            volumeOpen = false
+            calendarOpen = false
+            if trayMenuOpen {
+                trayMenuOpen = false
+                tray?.closeMenu()
+            }
         }
         syncInputRegion()
     }
@@ -294,6 +354,7 @@ final class MenuSession {
     /// Whether any strip popover needs the deep hit region.
     private var wantsCapture: Bool {
         openMenu != nil || volumeOpen || calendarOpen || trayMenuOpen
+            || dialog != .none
     }
 
     /// Hit-test region: strip when idle, full panel while a menu or volume
@@ -409,6 +470,13 @@ struct TaskbarView: View {
                         .padding(EdgeInsets(top: 8, leading: 0, bottom: 0, trailing: 10))
                 }
             }
+        }
+        .overlay(
+            isPresented: dialogBinding,
+            placement: SystemDialogChrome.placement,
+            style: SystemDialogChrome.style
+        ) {
+            systemDialog
         }
     }
 
@@ -548,27 +616,127 @@ struct TaskbarView: View {
             set: { session.setCalendarOpen($0) }
         )
     }
+
+    private var dialogBinding: Binding<Bool> {
+        Binding(
+            get: { session.dialog != .none },
+            set: { open in
+                if !open { session.setDialog(.none) }
+            }
+        )
+    }
+
+    @ViewBuilder
+    private var systemDialog: some View {
+        switch session.dialog {
+        case .about:
+            aboutCard
+        case .logout:
+            logoutCard
+        case .none:
+            EmptyView()
+        }
+    }
+
+    private var aboutCard: some View {
+        let theme = Theme.current
+        return VStack(width: .pt(SystemDialogChrome.width), padding: 0, spacing: 10) {
+            Text("Lava", color: theme.textPrimary)
+            Text(
+                "The desktop this panel belongs to. The compositor draws the pixels; this process is the strip, the tray and the menu.",
+                color: theme.textSecondary,
+                lineLimit: 5
+            )
+            HStack(padding: 0) {
+                Spacer()
+                Button("Close") { session.setDialog(.none) }
+            }
+        }
+        .background(.clear)
+        .agentId("dialog.about")
+    }
+
+    private var logoutCard: some View {
+        let theme = Theme.current
+        return VStack(width: .pt(SystemDialogChrome.width), padding: 0, spacing: 12) {
+            Text("Log out?", color: theme.textPrimary)
+            Text(
+                "This ends the session and closes every window.",
+                color: theme.textSecondary,
+                lineLimit: 3
+            )
+            HStack(padding: 0, spacing: 8) {
+                Spacer()
+                Button("Cancel") { session.setDialog(.none) }
+                Button(
+                    "Log Out",
+                    style: ButtonStyle(
+                        background: theme.accent.opacity(0.22),
+                        hover: theme.accent.opacity(0.38),
+                        foreground: theme.accent
+                    )
+                ) {
+                    session.setDialog(.none)
+                    LavaClient.endSession()
+                }
+            }
+        }
+        .background(.clear)
+        .agentId("dialog.logout")
+    }
+}
+
+/// Shared chrome for the About / Log Out cards. Placed just under the
+/// strip and centred, so a confirm is a thing on the desktop rather than
+/// a second row in the menu that opened it.
+enum SystemDialogChrome {
+    static let width: Float = 340
+
+    static var placement: OverlayPlacement {
+        OverlayPlacement { context in
+            let gap: Float = 12
+            let width = min(
+                max(context.idealSize.width, Self.width),
+                max(1, context.viewport.width - gap * 2)
+            )
+            let height = context.idealSize.height
+            return OverlayFrame(
+                x: max(gap, (context.viewport.width - width) / 2),
+                y: MenuSession.stripHeight + gap,
+                width: width,
+                height: height
+            )
+        }
+    }
+
+    static var style: OverlayStyle {
+        var s = TaskbarChrome.style.overlayStyle
+        s.padding = 16
+        s.minWidth = width
+        return s
+    }
 }
 
 // ─── Desktop actions ─────────────────────────────────────────────────────────
 
-/// Starts LavaSettings the way the compositor starts the panel: look beside
-/// this binary first (tree build / installed layout), then fall through to PATH.
-func launchSettings() {
+/// Starts a sibling desktop program the way the compositor starts the
+/// panel: look beside this binary first (tree build / installed layout),
+/// then fall through to PATH.
+func launchDesktopProgram(_ name: String) {
     let candidates: [String] = {
         var paths: [String] = []
         let args = CommandLine.arguments
         if let selfPath = args.first {
             let dir = URL(fileURLWithPath: selfPath).deletingLastPathComponent()
-            paths.append(dir.appendingPathComponent("LavaSettings").path)
+            paths.append(dir.appendingPathComponent(name).path)
             // compositor/scripts/dev-run often puts clients in .build/debug
             // while the panel may also live there — same dir is enough.
             paths.append(dir
-                .appendingPathComponent("../debug/LavaSettings").path)
+                .appendingPathComponent("../debug/\(name)").path)
             paths.append(dir
-                .appendingPathComponent("../release/LavaSettings").path)
+                .appendingPathComponent("../release/\(name)").path)
         }
-        paths.append("LavaSettings")
+        paths.append(name)
         return paths
     }()
 
@@ -595,7 +763,7 @@ func launchSettings() {
         }
     }
     FileHandle.standardError.write(
-        Data("LavaTaskbar: could not launch LavaSettings\n".utf8)
+        Data("LavaTaskbar: could not launch \(name)\n".utf8)
     )
 }
 

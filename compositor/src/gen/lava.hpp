@@ -1793,6 +1793,7 @@ public:
   virtual GpuReport GetGpuReport () = 0;
   virtual std::vector<std::string> DumpAtlasImages (::nprpc::flat::Span<char> directory) = 0;
   virtual void SetBackdropBlurRegion (uint32_t surfaceId, float radius, float x, float y, float w, float h, float cornerRadius) = 0;
+  virtual void EndSession () = 0;
 };
 
 class LAVA_API Compositor
@@ -1894,6 +1895,8 @@ public:
   ::nprpc::Task<std::vector<std::string>> DumpAtlasImagesAsync (const std::string& directory, std::stop_token st = {});
   void SetBackdropBlurRegion (uint32_t surfaceId, float radius, float x, float y, float w, float h, float cornerRadius);
   ::nprpc::Task<void> SetBackdropBlurRegionAsync (uint32_t surfaceId, float radius, float x, float y, float w, float h, float cornerRadius, std::stop_token st = {});
+  void EndSession ();
+  ::nprpc::Task<void> EndSessionAsync (std::stop_token st = {});
 };
 
 namespace helper {

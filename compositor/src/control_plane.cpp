@@ -1193,6 +1193,8 @@ class CompositorImpl final : public ICompositor_Servant {
     }
   }
 
+  void EndSession() override { host_.endSession(); }
+
  private:
   /// The subscription is the surface's lease.
   ///

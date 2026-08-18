@@ -372,6 +372,9 @@ struct CompositorHost {
   /// drag ends.
   virtual std::string primarySelectionText() const = 0;
   virtual void setPrimarySelectionText(const std::string &text) = 0;
+
+  /// Ends the session. Same path as the compositor's quit binding.
+  virtual void endSession() = 0;
 };
 
 class ControlPlane {

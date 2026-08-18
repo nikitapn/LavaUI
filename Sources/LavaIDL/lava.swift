@@ -2269,6 +2269,7 @@ public protocol CompositorProtocol {
   func getGpuReport() -> GpuReport
   func dumpAtlasImages(directory: String) throws -> [String]
   func setBackdropBlurRegion(surfaceId: UInt32, radius: Float, x: Float, y: Float, w: Float, h: Float, cornerRadius: Float) throws
+  func endSession()
 }
 
 // Client proxy for Compositor
@@ -4202,6 +4203,37 @@ final public class Compositor: NPRPCObject, @unchecked Sendable {
     if stdReply != 0 { throw UnexpectedReplyError(message: "Unexpected reply") }
   }
 
+  public func endSession() async throws   {
+    // Prepare buffer
+    let buffer = FlatBuffer()
+    buffer.prepare(32)
+    buffer.commit(32)
+    guard let bufData = buffer.data else { throw BufferError(message: "Failed to get buffer data") }
+
+    // Write message header
+    bufData.storeBytes(of: UInt32(0), toByteOffset: 0, as: UInt32.self)  // size (set later)
+    bufData.storeBytes(of: UInt32(0), toByteOffset: 4, as: UInt32.self)  // msg_id: FunctionCall (MessageId enum value 0)
+    bufData.storeBytes(of: UInt32(0), toByteOffset: 8, as: UInt32.self)  // msg_type: Request
+    bufData.storeBytes(of: UInt32(0), toByteOffset: 12, as: UInt32.self) // reserved
+
+    // Write call header
+    bufData.storeBytes(of: poaIdx, toByteOffset: 16, as: UInt16.self)
+    bufData.storeBytes(of: UInt8(0), toByteOffset: 18, as: UInt8.self)  // interface_idx
+    bufData.storeBytes(of: UInt8(50), toByteOffset: 19, as: UInt8.self)  // function_idx
+    bufData.storeBytes(of: objectId, toByteOffset: 24, as: UInt64.self)
+
+    guard let finalData = buffer.data else { throw BufferError(message: "Failed to get buffer data") }
+    finalData.storeBytes(of: UInt32(buffer.size), toByteOffset: 0, as: UInt32.self)
+
+    // Send and receive
+    try Task.checkCancellation()
+    let responseBuffer = try await sendAsyncReceive(buffer: buffer, timeout: timeout)
+
+    // Handle reply
+    let stdReply = try handleStandardReply(buffer: responseBuffer)
+    if stdReply != 0 { throw UnexpectedReplyError(message: "Unexpected reply") }
+  }
+
 }
 
 // Servant base for Compositor
@@ -4410,6 +4442,10 @@ open class CompositorServant: NPRPCServant, CompositorProtocol, @unchecked Senda
 
   open func setBackdropBlurRegion(surfaceId: UInt32, radius: Float, x: Float, y: Float, w: Float, h: Float, cornerRadius: Float) throws   {
     fatalError("Subclass must implement setBackdropBlurRegion")
+  }
+
+  open func endSession()   {
+    fatalError("Subclass must implement endSession")
   }
 
   // Dispatch incoming RPC calls
@@ -5889,6 +5925,11 @@ open class CompositorServant: NPRPCServant, CompositorProtocol, @unchecked Senda
         catch {
           makeSimpleAnswer(buffer: buffer, messageId: impl.MessageId.Error_Unknown)
         }
+      case 50: // EndSession
+        
+        endSession()
+        // Send success
+        makeSimpleAnswer(buffer: buffer, messageId: impl.MessageId.Success)
       default:
         makeSimpleAnswer(buffer: buffer, messageId: impl.MessageId.Error_UnknownFunctionIdx)
     } // switch
