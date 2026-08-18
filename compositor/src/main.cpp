@@ -209,18 +209,24 @@ struct Workspaces {
 
   wlr_scene_tree *tree[kCount] = {};
   /// Panels are not members of a workspace — a taskbar is on all of them — so
-  /// this tree is never disabled. Created last, which is what puts panels above
-  /// the windows without anybody raising them.
+  /// this tree is never disabled.
   wlr_scene_tree *panels = nullptr;
+  /// Whatever a client is dragging, while it is dragging one. Above even the
+  /// panels: it hangs off the cursor, and the cursor is over everything.
+  wlr_scene_tree *dragIcons = nullptr;
   uint32_t current = 0;
 
   void init(wlr_scene_tree *root) {
+    // Creation order is Z order, and this is the one place the scene's
+    // top-level trees are ordered: the windows, the panels over them, and
+    // the drag icon over both.
     for (auto *&t : tree) {
       t = wlr_scene_tree_create(root);
       wlr_scene_node_set_enabled(&t->node, false);
     }
     wlr_scene_node_set_enabled(&tree[current]->node, true);
     panels = wlr_scene_tree_create(root);
+    dragIcons = wlr_scene_tree_create(root);
   }
 
   wlr_scene_tree *currentTree() const { return tree[current]; }
@@ -904,6 +910,8 @@ struct Server {
   Listener<Server> request_set_selection;
   Listener<Server> set_selection;
   Listener<Server> request_set_primary_selection;
+  Listener<Server> request_start_drag;
+  Listener<Server> start_drag;
 
   /// Unhooks everything above, for shutdown.
   ///
@@ -921,7 +929,7 @@ struct Server {
           &cursor_motion_absolute, &cursor_button, &cursor_axis, &cursor_frame,
           &request_cursor, &new_pointer_constraint, &pointer_focus_change,
           &active_constraint_destroy, &request_set_selection, &set_selection,
-          &request_set_primary_selection}) {
+          &request_set_primary_selection, &request_start_drag, &start_drag}) {
       listener->detach();
     }
   }
@@ -946,6 +954,11 @@ struct Server {
   static void on_pointer_focus_change(wl_listener *listener, void *data);
   static void on_active_constraint_destroy(wl_listener *listener, void *data);
   void activatePointerConstraint(wlr_pointer_constraint_v1 *constraint);
+  static void on_request_start_drag(wl_listener *listener, void *data);
+  static void on_start_drag(wl_listener *listener, void *data);
+  /// Keeps the drag icon under the cursor. Does nothing when no client is
+  /// dragging anything.
+  void moveDragIcon();
   static void on_request_set_selection(wl_listener *listener, void *data);
   static void on_set_selection(wl_listener *listener, void *data);
   static void on_request_set_primary_selection(wl_listener *listener,
@@ -7699,6 +7712,10 @@ const char *resize_cursor(uint32_t hitEdges) {
 }
 
 void Server::update_pointer_focus(uint32_t time_msec) {
+  // Whatever is being dragged hangs off the cursor, wherever the rest of
+  // this decides the motion belongs.
+  moveDragIcon();
+
   // A drag owns the pointer until the button comes back up, wherever it has
   // got to — otherwise letting the cursor outrun the window would hand the
   // motion to whatever it crossed.
@@ -7710,7 +7727,14 @@ void Server::update_pointer_focus(uint32_t time_msec) {
   // surface being dragged in stops hearing about the pointer it is
   // tracking. A scrollbar dragged past the edge of its own window is the
   // case people notice.
-  if (pointerButtonsDown > 0) {
+  //
+  // A `wl_data_device` drag is the exception, and it has to be: the button
+  // is held for the whole of one, and the *point* is to reach a surface
+  // other than the one it started on. wlroots has its own pointer grab
+  // installed for the duration, and the enter it sends a drop target is
+  // what puts a highlight under the cursor — so during a drag the hit test
+  // below is exactly the right question.
+  if (pointerButtonsDown > 0 && seat->drag == nullptr) {
     if (pointerTarget != 0 && surfaces != nullptr) {
       if (ClientSurface *held = surfaces->find(pointerTarget)) {
         // The frame of reference the *release* already uses: `contentY`,
@@ -8606,6 +8630,62 @@ void Server::on_cursor_frame(wl_listener *listener, void *) {
 // all. `wlr_data_device_manager_create` alone is not enough: it publishes the
 // protocol, and then every `set_selection` request is dropped on the floor.
 
+/// A client asks to start a drag — the other half of `wl_data_device`, and
+/// the half this compositor never answered.
+///
+/// The same trap the selection handlers above exist for:
+/// `wlr_data_device_manager_create` publishes the protocol and nothing more,
+/// so without this every `start_drag` was dropped and dragging a file in a
+/// Wayland client did nothing at all. Not "the drop was refused" — the drag
+/// never began, so there was no cursor change and no icon either.
+void Server::on_request_start_drag(wl_listener *listener, void *data) {
+  auto *server = owner_of<Server>(listener);
+  auto *event = static_cast<wlr_seat_request_start_drag_event *>(data);
+
+  // The serial has to name a press this client actually received on this
+  // surface. Unchecked, any client could start a drag at any time — and
+  // take the pointer away from whatever the user was really doing with it.
+  if (wlr_seat_validate_pointer_grab_serial(server->seat, event->origin,
+                                            event->serial)) {
+    wlr_seat_start_pointer_drag(server->seat, event->drag, event->serial);
+    return;
+  }
+  wlr_log(WLR_DEBUG, "drag: stale serial %u, refused", event->serial);
+  // Refused, and the client is told so by the source going away. Leaking it
+  // would leave a data source nobody can ever finish or cancel.
+  if (event->drag->source != nullptr) {
+    wlr_data_source_destroy(event->drag->source);
+  }
+}
+
+/// The drag is running: give the icon somewhere to be drawn.
+///
+/// A drag with no icon is legal and common — a client may drag with only the
+/// cursor changing — so the icon is optional here rather than assumed.
+void Server::on_start_drag(wl_listener *listener, void *data) {
+  auto *server = owner_of<Server>(listener);
+  auto *drag = static_cast<wlr_drag *>(data);
+  if (drag->icon == nullptr || server->workspaces.dragIcons == nullptr) return;
+
+  wlr_scene_tree *tree =
+      wlr_scene_drag_icon_create(server->workspaces.dragIcons, drag->icon);
+  if (tree == nullptr) return;
+  // On the icon, not on a member of `Server`: the scene tree dies with the
+  // icon, and a pointer kept here would outlive it by exactly as long as it
+  // takes to drop something.
+  drag->icon->data = tree;
+  server->moveDragIcon();
+}
+
+void Server::moveDragIcon() {
+  if (seat == nullptr || seat->drag == nullptr) return;
+  wlr_drag_icon *icon = seat->drag->icon;
+  if (icon == nullptr || icon->data == nullptr) return;
+  auto *tree = static_cast<wlr_scene_tree *>(icon->data);
+  wlr_scene_node_set_position(&tree->node, static_cast<int>(cursor->x),
+                              static_cast<int>(cursor->y));
+}
+
 void Server::on_request_set_selection(wl_listener *listener, void *data) {
   auto *server = owner_of<Server>(listener);
   auto *event = static_cast<wlr_seat_request_set_selection_event *>(data);
@@ -8896,6 +8976,12 @@ int main() {
   server.request_set_primary_selection.attach(
       &server.seat->events.request_set_primary_selection, &server,
       Server::on_request_set_primary_selection);
+  // Drag and drop. Both halves: one decides whether a drag may start, the
+  // other gives what is being dragged somewhere to be drawn.
+  server.request_start_drag.attach(&server.seat->events.request_start_drag,
+                                   &server, Server::on_request_start_drag);
+  server.start_drag.attach(&server.seat->events.start_drag, &server,
+                           Server::on_start_drag);
 
   // A LavaUI client's window, drawn here and composited with no copy.
   //
