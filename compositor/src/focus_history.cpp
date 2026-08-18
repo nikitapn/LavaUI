@@ -41,14 +41,6 @@ void FocusHistory::move(uint32_t id, uint32_t from, uint32_t to) {
   if (validWorkspace(to)) pushFront(byWorkspace_[to], id);
 }
 
-uint32_t FocusHistory::previous(uint32_t workspace, uint32_t except) const {
-  if (!validWorkspace(workspace)) return 0;
-  for (uint32_t id : byWorkspace_[workspace]) {
-    if (id != except) return id;
-  }
-  return 0;
-}
-
 const std::vector<uint32_t> &FocusHistory::of(uint32_t workspace) const {
   if (!validWorkspace(workspace)) return kEmpty;
   return byWorkspace_[workspace];

@@ -478,6 +478,8 @@ struct XwaylandSurface : FramedWindow {
   static void on_set_class(wl_listener *listener, void *data);
   static void on_set_parent(wl_listener *listener, void *data);
   static void on_set_window_type(wl_listener *listener, void *data);
+  /// Re-reads `WM_TRANSIENT_FOR` and `_NET_WM_WINDOW_TYPE` onto the frame.
+  void refreshTransient();
   static void on_request_move(wl_listener *listener, void *data);
   static void on_request_resize(wl_listener *listener, void *data);
   static void on_request_fullscreen(wl_listener *listener, void *data);
@@ -852,6 +854,10 @@ struct Server {
   void moveFocusedToWorkspace(uint32_t index);
   /// The front window of a workspace, or null if it has none.
   FramedWindow *frontToplevel(uint32_t workspace);
+  /// Our frame id for an X11 window, or 0 for one we do not frame.
+  /// `WM_TRANSIENT_FOR` names a `wlr_xwayland_surface`, and the list of
+  /// X11 windows is the only way back from one to a frame.
+  uint32_t x11FrameId(const wlr_xwayland_surface *xsurface) const;
   /// Notes that `surface` now has the keyboard / the active frame.
   /// Panels and the switcher are ignored.
   void recordFocus(const ClientSurface &surface);
@@ -2176,9 +2182,11 @@ class SurfaceRegistry : public lava::CompositorHost {
   /// Topmost live window on `workspace` that can take the keyboard.
   ClientSurface *frontOnWorkspace(uint32_t workspace);
 
-  /// Late parent / window-type: mark a mapped window so it is not
-  /// remembered as the application's last frame.
-  void markTransient(ClientSurface &surface, uint32_t parentId);
+  /// Late parent / window-type. Recomputed rather than only set: a
+  /// client that drops `WM_TRANSIENT_FOR`, or a tool window that turns
+  /// into an ordinary one, earns its slot in window memory back.
+  void setTransient(ClientSurface &surface, bool transient,
+                    uint32_t parentId);
 
   /// A Wayland client committed at a new size.
   ///
@@ -4793,9 +4801,10 @@ ClientSurface *SurfaceRegistry::frontOnWorkspace(uint32_t workspace) {
   return nullptr;
 }
 
-void SurfaceRegistry::markTransient(ClientSurface &surface, uint32_t parentId) {
-  surface.transient = true;
-  if (parentId != 0) surface.parentId = parentId;
+void SurfaceRegistry::setTransient(ClientSurface &surface, bool transient,
+                                   uint32_t parentId) {
+  surface.transient = transient;
+  surface.parentId = parentId;
 }
 
 bool SurfaceRegistry::hintToplevelConfigure(const std::string &appId,
@@ -5173,15 +5182,7 @@ void XwaylandSurface::on_map(wl_listener *listener, void *) {
                                 : 0;
     // X11's WM_CLASS is what a desktop file matches on, the same role
     // `app_id` plays for a Wayland client.
-    uint32_t parentId = 0;
-    if (self->xsurface->parent != nullptr) {
-      for (XwaylandSurface *other : server->xwindows) {
-        if (other->xsurface == self->xsurface->parent) {
-          parentId = other->frameId;
-          break;
-        }
-      }
-    }
+    const uint32_t parentId = server->x11FrameId(self->xsurface->parent);
     const uint32_t id = server->surfaces->adoptWindow(
         self, title ? title : "", width, height,
         self->xsurface->xclass ? self->xsurface->xclass : "",
@@ -5308,38 +5309,24 @@ void XwaylandSurface::on_set_class(wl_listener *listener, void *) {
   }
 }
 
-void XwaylandSurface::on_set_parent(wl_listener *listener, void *) {
-  auto *self = owner_of<XwaylandSurface>(listener);
-  if (self->frameId == 0 || self->server->surfaces == nullptr) return;
-  if (self->xsurface->parent == nullptr) return;
-  uint32_t parentId = 0;
-  for (XwaylandSurface *other : self->server->xwindows) {
-    if (other->xsurface == self->xsurface->parent) {
-      parentId = other->frameId;
-      break;
-    }
-  }
-  if (ClientSurface *frame = self->server->surfaces->find(self->frameId)) {
-    self->server->surfaces->markTransient(*frame, parentId);
+/// Both properties can be set at any time, and both can be taken back:
+/// a client that clears `WM_TRANSIENT_FOR`, or moves from a utility type
+/// to `_NET_WM_WINDOW_TYPE_NORMAL`, is an ordinary window again and its
+/// frame is once more the one to remember for that `WM_CLASS`.
+void XwaylandSurface::refreshTransient() {
+  if (frameId == 0 || server->surfaces == nullptr) return;
+  if (ClientSurface *frame = server->surfaces->find(frameId)) {
+    server->surfaces->setTransient(*frame, x11IsTransient(xsurface),
+                                   server->x11FrameId(xsurface->parent));
   }
 }
 
+void XwaylandSurface::on_set_parent(wl_listener *listener, void *) {
+  owner_of<XwaylandSurface>(listener)->refreshTransient();
+}
+
 void XwaylandSurface::on_set_window_type(wl_listener *listener, void *) {
-  auto *self = owner_of<XwaylandSurface>(listener);
-  if (self->frameId == 0 || self->server->surfaces == nullptr) return;
-  if (!x11IsTransient(self->xsurface)) return;
-  if (ClientSurface *frame = self->server->surfaces->find(self->frameId)) {
-    uint32_t parentId = 0;
-    if (self->xsurface->parent != nullptr) {
-      for (XwaylandSurface *other : self->server->xwindows) {
-        if (other->xsurface == self->xsurface->parent) {
-          parentId = other->frameId;
-          break;
-        }
-      }
-    }
-    self->server->surfaces->markTransient(*frame, parentId);
-  }
+  owner_of<XwaylandSurface>(listener)->refreshTransient();
 }
 
 /// X11's move request. No serial to validate — `_NET_WM_MOVERESIZE` carries
@@ -6210,8 +6197,6 @@ void Toplevel::on_set_app_id(wl_listener *listener, void *) {
 void Toplevel::on_set_parent(wl_listener *listener, void *) {
   auto *toplevel = owner_of<Toplevel>(listener);
   wlr_xdg_toplevel *parent = toplevel->xdg_toplevel->parent;
-  if (parent == nullptr) return;
-  const uint32_t parentId = xdgParentFrameId(parent);
   // Before map we have no frame yet. The first configure and
   // `adoptWindow` both re-read `parent`, so marking here is only
   // needed once the window is already placed — otherwise a late
@@ -6219,16 +6204,21 @@ void Toplevel::on_set_parent(wl_listener *listener, void *) {
   if (toplevel->frameId == 0 || toplevel->server->surfaces == nullptr) {
     // Already configured at the saved size before the parent arrived:
     // take the hint back so the client can pick a dialog-sized buffer.
-    if (toplevel->xdg_toplevel->base->initialized &&
-        !toplevel->xdg_toplevel->base->initial_commit) {
+    // `initialized` is the whole question — it is what says a configure
+    // has gone out. `initial_commit` is true only for the length of the
+    // first commit, and this is not that.
+    if (parent != nullptr && toplevel->xdg_toplevel->base->initialized) {
       wlr_xdg_toplevel_set_size(toplevel->xdg_toplevel, 0, 0);
       wlr_xdg_toplevel_set_maximized(toplevel->xdg_toplevel, false);
     }
     return;
   }
+  // A parent can be taken away as well as given: `set_parent(nil)` makes
+  // this an ordinary window of its application again.
   if (ClientSurface *frame =
           toplevel->server->surfaces->find(toplevel->frameId)) {
-    toplevel->server->surfaces->markTransient(*frame, parentId);
+    toplevel->server->surfaces->setTransient(*frame, parent != nullptr,
+                                             xdgParentFrameId(parent));
   }
 }
 
@@ -7510,6 +7500,14 @@ void Server::reloadConfig() {
     }
   }
   wlr_log(WLR_INFO, "config: reloaded");
+}
+
+uint32_t Server::x11FrameId(const wlr_xwayland_surface *xsurface) const {
+  if (xsurface == nullptr) return 0;
+  for (const XwaylandSurface *other : xwindows) {
+    if (other->xsurface == xsurface) return other->frameId;
+  }
+  return 0;
 }
 
 FramedWindow *Server::frontToplevel(uint32_t workspace) {

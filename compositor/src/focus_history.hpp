@@ -30,9 +30,9 @@ class FocusHistory {
   /// The window is still the same window; it just lives somewhere else.
   void move(uint32_t id, uint32_t from, uint32_t to);
 
-  /// Most recently recorded id on `workspace` that is not `except`, or 0.
-  uint32_t previous(uint32_t workspace, uint32_t except = 0) const;
-
+  /// Most recently recorded first. The compositor walks this rather than
+  /// asking for one id: the first candidate is often dead, minimized or
+  /// on another workspace, and it has to keep going until one takes.
   const std::vector<uint32_t> &of(uint32_t workspace) const;
 
  private:

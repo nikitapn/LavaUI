@@ -3,6 +3,8 @@
 #include "focus_history.hpp"
 
 #include <cstdio>
+#include <initializer_list>
+#include <vector>
 
 using lava::FocusHistory;
 
@@ -19,29 +21,38 @@ int failures = 0;
     }                                                                          \
   } while (0)
 
-void recordAndPrevious() {
+/// The order is the whole point of the list, so the checks are on the
+/// whole list rather than on whichever id happens to be at the front.
+bool is(const std::vector<uint32_t> &got, std::initializer_list<uint32_t> want) {
+  if (got.size() != want.size()) return false;
+  auto it = want.begin();
+  for (uint32_t id : got) {
+    if (id != *it++) return false;
+  }
+  return true;
+}
+
+void recordOrdersMostRecentFirst() {
   FocusHistory h;
   h.record(0, 1);
   h.record(0, 2);
   h.record(0, 3);
-  CHECK(h.previous(0) == 3);
-  CHECK(h.previous(0, 3) == 2);
-  CHECK(h.previous(0, 2) == 3);
+  CHECK(is(h.of(0), {3, 2, 1}));
   h.forget(3);
-  CHECK(h.previous(0) == 2);
-  CHECK(h.previous(0, 2) == 1);
+  CHECK(is(h.of(0), {2, 1}));
 }
 
 void workspaceIsolation() {
   FocusHistory h;
   h.record(0, 10);
   h.record(1, 20);
-  CHECK(h.previous(0) == 10);
-  CHECK(h.previous(1) == 20);
-  CHECK(h.previous(2) == 0);
+  CHECK(is(h.of(0), {10}));
+  CHECK(is(h.of(1), {20}));
+  CHECK(h.of(2).empty());
+  // Closing takes a window off every workspace, wherever it ended up.
   h.forget(10);
-  CHECK(h.previous(0) == 0);
-  CHECK(h.previous(1) == 20);
+  CHECK(h.of(0).empty());
+  CHECK(is(h.of(1), {20}));
 }
 
 void reRecordMovesToFront() {
@@ -49,9 +60,7 @@ void reRecordMovesToFront() {
   h.record(0, 1);
   h.record(0, 2);
   h.record(0, 1);
-  CHECK(h.of(0).size() == 2);
-  CHECK(h.previous(0) == 1);
-  CHECK(h.previous(0, 1) == 2);
+  CHECK(is(h.of(0), {1, 2}));
 }
 
 void moveBetweenWorkspaces() {
@@ -59,9 +68,11 @@ void moveBetweenWorkspaces() {
   h.record(0, 5);
   h.record(0, 6);
   h.move(6, 0, 2);
-  CHECK(h.previous(0) == 5);
-  CHECK(h.previous(2) == 6);
-  CHECK(h.previous(0, 5) == 0);
+  CHECK(is(h.of(0), {5}));
+  CHECK(is(h.of(2), {6}));
+  // Sending a window where it already is leaves the order alone.
+  h.move(5, 0, 0);
+  CHECK(is(h.of(0), {5}));
 }
 
 void capsAtLimit() {
@@ -70,7 +81,7 @@ void capsAtLimit() {
     h.record(0, i);
   }
   CHECK(h.of(0).size() == FocusHistory::kLimit);
-  CHECK(h.previous(0) == FocusHistory::kLimit + 5);
+  CHECK(h.of(0).front() == FocusHistory::kLimit + 5);
   // Oldest ids fell off the back.
   bool foundOldest = false;
   for (uint32_t id : h.of(0)) {
@@ -83,17 +94,17 @@ void ignoresZeroAndOutOfRange() {
   FocusHistory h;
   h.record(0, 0);
   h.record(FocusHistory::kWorkspaces, 7);
-  CHECK(h.previous(0) == 0);
-  CHECK(h.previous(FocusHistory::kWorkspaces) == 0);
+  CHECK(h.of(0).empty());
+  CHECK(h.of(FocusHistory::kWorkspaces).empty());
   h.record(0, 3);
   h.forget(0);
-  CHECK(h.previous(0) == 3);
+  CHECK(is(h.of(0), {3}));
 }
 
 }  // namespace
 
 int main() {
-  recordAndPrevious();
+  recordOrdersMostRecentFirst();
   workspaceIsolation();
   reRecordMovesToFront();
   moveBetweenWorkspaces();
