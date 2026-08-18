@@ -1132,6 +1132,15 @@ struct ClientSurface {
   /// A canvas surface so the blur runs on the compositing Vulkan device
   /// (`BlurPass`), not a CPU box filter.
   float backdropBlurRadius = 0.f;
+  /// Optional frost rect in surface coordinates. `blurW`/`blurH` of 0
+  /// means the whole surface, which is what a terminal wants. A panel
+  /// dropdown fills these in so the empty 600pt of surface does not
+  /// frost the desktop.
+  float blurX = 0.f;
+  float blurY = 0.f;
+  float blurW = 0.f;
+  float blurH = 0.f;
+  float blurCorner = 0.f;
   std::unique_ptr<lava::CanvasSurface> blurCanvas;
   wlr_scene_buffer *blurNode = nullptr;
   std::string blurKey;
@@ -2995,7 +3004,12 @@ class SurfaceRegistry : public lava::CompositorHost {
 
   void placeBackdrop(ClientSurface &surface) {
     if (surface.blurNode == nullptr) return;
-    wlr_scene_node_set_position(&surface.blurNode->node, surface.x, surface.y);
+    const bool regioned = surface.blurW > 0.f && surface.blurH > 0.f;
+    const int px =
+        surface.x + (regioned ? static_cast<int>(std::lround(surface.blurX)) : 0);
+    const int py =
+        surface.y + (regioned ? static_cast<int>(std::lround(surface.blurY)) : 0);
+    wlr_scene_node_set_position(&surface.blurNode->node, px, py);
     wlr_scene_node *content = surface.isForeign()
                                   ? surface.window->contentNode()
                                   : (surface.node != nullptr
@@ -3058,7 +3072,21 @@ class SurfaceRegistry : public lava::CompositorHost {
     const int frameH = surface.frameHeight();
     if (frameW < 1 || frameH < 1) return;
 
-    Output *output = outputUnder(surface.x + frameW / 2, surface.y + frameH / 2);
+    const bool regioned = surface.blurW > 0.f && surface.blurH > 0.f;
+    const int frostW =
+        regioned ? std::max(1, static_cast<int>(std::lround(surface.blurW)))
+                 : frameW;
+    const int frostH =
+        regioned ? std::max(1, static_cast<int>(std::lround(surface.blurH)))
+                 : frameH;
+    const int frostX =
+        surface.x +
+        (regioned ? static_cast<int>(std::lround(surface.blurX)) : 0);
+    const int frostY =
+        surface.y +
+        (regioned ? static_cast<int>(std::lround(surface.blurY)) : 0);
+
+    Output *output = outputUnder(frostX + frostW / 2, frostY + frostH / 2);
     if (output == nullptr || output->wlr == nullptr) return;
 
     setNodeEnabled(surface.node != nullptr ? &surface.node->node : nullptr,
@@ -3093,10 +3121,10 @@ class SurfaceRegistry : public lava::CompositorHost {
     wlr_box layoutBox{};
     wlr_output_layout_get_box(server_->output_layout, output->wlr, &layoutBox);
     const float scale = output->wlr->scale > 0.f ? output->wlr->scale : 1.f;
-    const int ix = std::max(surface.x, layoutBox.x);
-    const int iy = std::max(surface.y, layoutBox.y);
-    const int ix2 = std::min(surface.x + frameW, layoutBox.x + layoutBox.width);
-    const int iy2 = std::min(surface.y + frameH, layoutBox.y + layoutBox.height);
+    const int ix = std::max(frostX, layoutBox.x);
+    const int iy = std::max(frostY, layoutBox.y);
+    const int ix2 = std::min(frostX + frostW, layoutBox.x + layoutBox.width);
+    const int iy2 = std::min(frostY + frostH, layoutBox.y + layoutBox.height);
     const int srcX = static_cast<int>(std::lround((ix - layoutBox.x) * scale));
     const int srcY = static_cast<int>(std::lround((iy - layoutBox.y) * scale));
     int srcW = static_cast<int>(std::lround((ix2 - ix) * scale));
@@ -3104,9 +3132,14 @@ class SurfaceRegistry : public lava::CompositorHost {
     srcW = std::max(1, std::min(srcW, captured->width - srcX));
     srcH = std::max(1, std::min(srcH, captured->height - srcY));
 
-    wlr_scene_tree *parent = workspaces_->tree[surface.workspace];
-    const uint32_t destW = static_cast<uint32_t>(frameW);
-    const uint32_t destH = static_cast<uint32_t>(frameH);
+    // A panel lives in the panel tree, above every workspace. Parenting
+    // its frost to a workspace would put the plate *behind* the windows
+    // the menu is meant to frost, and `place_below` cannot reach across
+    // trees. Windows stay in their workspace, which is the existing path.
+    wlr_scene_tree *parent = surface.panel ? workspaces_->panels
+                                           : workspaces_->tree[surface.workspace];
+    const uint32_t destW = static_cast<uint32_t>(frostW);
+    const uint32_t destH = static_cast<uint32_t>(frostH);
     if (!surface.blurCanvas) {
       surface.blurCanvas = renderer_->createSurface(destW, destH);
       if (!surface.blurCanvas) {
@@ -3132,8 +3165,9 @@ class SurfaceRegistry : public lava::CompositorHost {
     if (!surface.blurKey.empty()) renderer_->discardImage(surface.blurKey);
     surface.blurKey = "frost:" + std::to_string(surface.id) + ":" +
                       std::to_string(++surface.blurGen);
-    const float corners =
-        frameIsRoundable(surface) ? cornerRadius_ : 0.f;
+    const float corners = regioned
+                              ? surface.blurCorner
+                              : (frameIsRoundable(surface) ? cornerRadius_ : 0.f);
     const float frost = corners > 0.f ? corners + 2.f : 0.f;
     surface.blurCanvas->setCornerRadius(frost, true, true);
 
@@ -3271,8 +3305,14 @@ class SurfaceRegistry : public lava::CompositorHost {
     // screenshot.
     if (surface.blurCanvas) {
       // One pixel more than the window so the frost's AA sits inside the
-      // window's, not beside it as a bright speck.
-      const float frost = radius > 0.f ? radius + 2.f : 0.f;
+      // window's, not beside it as a bright speck. A region frost (panel
+      // dropdown) uses the popup's own radius — the panel itself is
+      // square, and using that would leave a square plate under a
+      // rounded menu.
+      const float plate =
+          (surface.blurW > 0.f && surface.blurH > 0.f) ? surface.blurCorner
+                                                       : radius;
+      const float frost = plate > 0.f ? plate + 2.f : 0.f;
       surface.blurCanvas->setCornerRadius(frost, true, true);
     }
   }
@@ -3611,16 +3651,33 @@ class SurfaceRegistry : public lava::CompositorHost {
     return true;
   }
 
-  bool setBackdropBlur(uint32_t id, float radius) override {
+  bool setBackdropBlur(uint32_t id, float radius, float x, float y, float w,
+                       float h, float cornerRadius) override {
     ClientSurface *surface = find(id);
     if (surface == nullptr) return false;
     const float next = std::clamp(radius, 0.f, 64.f);
-    if (surface->backdropBlurRadius == next) return true;
+    const float nx = x;
+    const float ny = y;
+    const float nw = std::max(0.f, w);
+    const float nh = std::max(0.f, h);
+    const float nc = std::max(0.f, cornerRadius);
+    if (surface->backdropBlurRadius == next && surface->blurX == nx &&
+        surface->blurY == ny && surface->blurW == nw && surface->blurH == nh &&
+        surface->blurCorner == nc) {
+      return true;
+    }
     surface->backdropBlurRadius = next;
+    surface->blurX = nx;
+    surface->blurY = ny;
+    surface->blurW = nw;
+    surface->blurH = nh;
+    surface->blurCorner = nc;
     if (next <= 0.f) {
       clearBackdrop(*surface);
     }
-    wlr_log(WLR_INFO, "surface %u: backdrop blur %.0f", id, next);
+    wlr_log(WLR_INFO,
+            "surface %u: backdrop blur %.0f region %.0f,%.0f %.0fx%.0f r=%.0f",
+            id, next, nx, ny, nw, nh, nc);
     scheduleBackdropRefresh();
     return true;
   }

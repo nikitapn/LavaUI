@@ -1523,4 +1523,23 @@ interface Compositor {
   /// Costly and deliberately so — each page is copied off the GPU, which idles
   /// the device. Ask when a human asks, not on a timer.
   vector<string> DumpAtlasImages(directory: in string) raises(AtlasDumpFailed);
+
+  /// Frost a rectangle of the desktop behind this surface, not the whole
+  /// window.
+  ///
+  /// `SetBackdropBlur` is the window-sized version: a terminal that is itself
+  /// the glass wants that. A panel that is a 32pt strip on a 600pt surface
+  /// does not — frosting the whole thing would haze the desktop under every
+  /// pixel the panel owns, most of which are empty so clicks fall through.
+  /// A menu dropdown is a small rect on that surface, and this is how it
+  /// asks for frost under just that rect.
+  ///
+  /// `x,y,w,h` are in the surface's own coordinates. `w` or `h` of 0 is the
+  /// whole surface, the same as `SetBackdropBlur`. `cornerRadius` rounds the
+  /// frost plate so it matches the popup sitting on it; 0 is square.
+  /// `radius` 0 turns the effect off.
+  void SetBackdropBlurRegion(surfaceId: in u32, radius: in f32,
+                             x: in f32, y: in f32, w: in f32, h: in f32,
+                             cornerRadius: in f32)
+      raises(SurfaceNotFound);
 }

@@ -1181,7 +1181,14 @@ class CompositorImpl final : public ICompositor_Servant {
   }
 
   void SetBackdropBlur(uint32_t surfaceId, float radius) override {
-    if (!host_.setBackdropBlur(surfaceId, radius)) {
+    if (!host_.setBackdropBlur(surfaceId, radius, 0.f, 0.f, 0.f, 0.f, 0.f)) {
+      throw SurfaceNotFound(surfaceId);
+    }
+  }
+
+  void SetBackdropBlurRegion(uint32_t surfaceId, float radius, float x, float y,
+                             float w, float h, float cornerRadius) override {
+    if (!host_.setBackdropBlur(surfaceId, radius, x, y, w, h, cornerRadius)) {
       throw SurfaceNotFound(surfaceId);
     }
   }

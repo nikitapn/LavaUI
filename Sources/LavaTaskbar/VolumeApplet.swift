@@ -54,14 +54,14 @@ struct VolumeApplet: View {
             )
         }
         .padding(2)
-        .hoverBackground(MenuBarStyle.panel().titleHover)
+        .hoverBackground(TaskbarChrome.style.titleHover)
         .cornerRadius(6)
         .agentId("applet.volume")
         .overlay(
             isPresented: isOpen,
             alignment: .below,
             style: {
-                var s = MenuBarStyle.panel().overlayStyle
+                var s = TaskbarChrome.style.overlayStyle
                 s.padding = 10
                 s.minWidth = 200
                 return s

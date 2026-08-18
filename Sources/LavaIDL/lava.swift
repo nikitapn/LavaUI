@@ -2171,6 +2171,53 @@ fileprivate func unmarshal_lava_M29(buffer: UnsafeRawPointer, offset: Int) -> la
   return result
 }
 
+fileprivate struct lava_M30: Codable, Sendable {
+  public var _1: UInt32 = 0
+  public var _2: Float = 0.0
+  public var _3: Float = 0.0
+  public var _4: Float = 0.0
+  public var _5: Float = 0.0
+  public var _6: Float = 0.0
+  public var _7: Float = 0.0
+
+  public init() {}
+
+  public init(_1: UInt32, _2: Float, _3: Float, _4: Float, _5: Float, _6: Float, _7: Float)   {
+    self._1 = _1
+    self._2 = _2
+    self._3 = _3
+    self._4 = _4
+    self._5 = _5
+    self._6 = _6
+    self._7 = _7
+  }
+}
+
+
+// MARK: - Marshal lava_M30
+fileprivate func marshal_lava_M30(buffer: FlatBuffer, offset: Int, data: lava_M30) {
+  buffer.storeBytes(of: data._1, toByteOffset: offset + 0, as: UInt32.self)
+  buffer.storeBytes(of: data._2, toByteOffset: offset + 4, as: Float.self)
+  buffer.storeBytes(of: data._3, toByteOffset: offset + 8, as: Float.self)
+  buffer.storeBytes(of: data._4, toByteOffset: offset + 12, as: Float.self)
+  buffer.storeBytes(of: data._5, toByteOffset: offset + 16, as: Float.self)
+  buffer.storeBytes(of: data._6, toByteOffset: offset + 20, as: Float.self)
+  buffer.storeBytes(of: data._7, toByteOffset: offset + 24, as: Float.self)
+}
+
+// MARK: - Unmarshal lava_M30
+fileprivate func unmarshal_lava_M30(buffer: UnsafeRawPointer, offset: Int) -> lava_M30 {
+  var result = lava_M30()
+  result._1 = buffer.load(fromByteOffset: offset + 0, as: UInt32.self)
+  result._2 = buffer.load(fromByteOffset: offset + 4, as: Float.self)
+  result._3 = buffer.load(fromByteOffset: offset + 8, as: Float.self)
+  result._4 = buffer.load(fromByteOffset: offset + 12, as: Float.self)
+  result._5 = buffer.load(fromByteOffset: offset + 16, as: Float.self)
+  result._6 = buffer.load(fromByteOffset: offset + 20, as: Float.self)
+  result._7 = buffer.load(fromByteOffset: offset + 24, as: Float.self)
+  return result
+}
+
 public protocol CompositorProtocol {
   func registerFont(path: String, pixelSize26_6: UInt32, faceIndex: UInt32, rasterFlags: UInt32) throws -> UInt32
   func registerImage(path: String, maxPixelSize: UInt32) throws -> ImageInfo
@@ -2221,6 +2268,7 @@ public protocol CompositorProtocol {
   func setBackdropBlur(surfaceId: UInt32, radius: Float) throws
   func getGpuReport() -> GpuReport
   func dumpAtlasImages(directory: String) throws -> [String]
+  func setBackdropBlurRegion(surfaceId: UInt32, radius: Float, x: Float, y: Float, w: Float, h: Float, cornerRadius: Float) throws
 }
 
 // Client proxy for Compositor
@@ -4111,6 +4159,49 @@ final public class Compositor: NPRPCObject, @unchecked Sendable {
     return out._1
   }
 
+  public func setBackdropBlurRegion(surfaceId: UInt32, radius: Float, x: Float, y: Float, w: Float, h: Float, cornerRadius: Float) async throws   {
+    // Prepare buffer
+    let buffer = FlatBuffer()
+    buffer.prepare(60)
+    buffer.commit(60)
+    guard let bufData = buffer.data else { throw BufferError(message: "Failed to get buffer data") }
+
+    // Write message header
+    bufData.storeBytes(of: UInt32(0), toByteOffset: 0, as: UInt32.self)  // size (set later)
+    bufData.storeBytes(of: UInt32(0), toByteOffset: 4, as: UInt32.self)  // msg_id: FunctionCall (MessageId enum value 0)
+    bufData.storeBytes(of: UInt32(0), toByteOffset: 8, as: UInt32.self)  // msg_type: Request
+    bufData.storeBytes(of: UInt32(0), toByteOffset: 12, as: UInt32.self) // reserved
+
+    // Write call header
+    bufData.storeBytes(of: poaIdx, toByteOffset: 16, as: UInt16.self)
+    bufData.storeBytes(of: UInt8(0), toByteOffset: 18, as: UInt8.self)  // interface_idx
+    bufData.storeBytes(of: UInt8(49), toByteOffset: 19, as: UInt8.self)  // function_idx
+    bufData.storeBytes(of: objectId, toByteOffset: 24, as: UInt64.self)
+
+    // Marshal input arguments
+    var inArgs = lava_M30()
+    inArgs._1 = surfaceId
+    inArgs._2 = radius
+    inArgs._3 = x
+    inArgs._4 = y
+    inArgs._5 = w
+    inArgs._6 = h
+    inArgs._7 = cornerRadius
+    marshal_lava_M30(buffer: buffer, offset: 32, data: inArgs)
+
+    guard let finalData = buffer.data else { throw BufferError(message: "Failed to get buffer data") }
+    finalData.storeBytes(of: UInt32(buffer.size), toByteOffset: 0, as: UInt32.self)
+
+    // Send and receive
+    try Task.checkCancellation()
+    let responseBuffer = try await sendAsyncReceive(buffer: buffer, timeout: timeout)
+
+    // Handle reply
+    let stdReply = try handleStandardReply(buffer: responseBuffer)
+    if stdReply == 1 { throw lava_throwException(buffer: responseBuffer) }
+    if stdReply != 0 { throw UnexpectedReplyError(message: "Unexpected reply") }
+  }
+
 }
 
 // Servant base for Compositor
@@ -4315,6 +4406,10 @@ open class CompositorServant: NPRPCServant, CompositorProtocol, @unchecked Senda
 
   open func dumpAtlasImages(directory: String) throws -> [String]   {
     fatalError("Subclass must implement dumpAtlasImages")
+  }
+
+  open func setBackdropBlurRegion(surfaceId: UInt32, radius: Float, x: Float, y: Float, w: Float, h: Float, cornerRadius: Float) throws   {
+    fatalError("Subclass must implement setBackdropBlurRegion")
   }
 
   // Dispatch incoming RPC calls
@@ -5765,6 +5860,35 @@ open class CompositorServant: NPRPCServant, CompositorProtocol, @unchecked Senda
         catch {
           makeSimpleAnswer(buffer: buffer, messageId: impl.MessageId.Error_Unknown)
         }
+      case 49: // SetBackdropBlurRegion
+        // Validate input buffer for untrusted interface
+        guard check_1Fu322Ff323Ff324Ff325Ff326Ff327Ff32(buffer: data, bufferSize: buffer.size, offset: 32) else         {
+          makeSimpleAnswer(buffer: buffer, messageId: impl.MessageId.Error_BadInput)
+          return
+        }
+
+        // Unmarshal input arguments
+        let ia = unmarshal_lava_M30(buffer: data, offset: 32)
+        
+        do {
+          try setBackdropBlurRegion(surfaceId: ia._1, radius: ia._2, x: ia._3, y: ia._4, w: ia._5, h: ia._6, cornerRadius: ia._7)
+          // Send success
+          makeSimpleAnswer(buffer: buffer, messageId: impl.MessageId.Success)
+        }
+        catch let e as SurfaceNotFound {
+          let obuf = buffer
+          obuf.consume(obuf.size)
+          obuf.prepare(24)
+          obuf.commit(24)
+          guard let exData = obuf.data else { return }
+          marshal_SurfaceNotFound(buffer: obuf, offset: 16, data: e)
+          exData.storeBytes(of: UInt32(obuf.size), toByteOffset: 0, as: UInt32.self)
+          exData.storeBytes(of: impl.MessageId.Exception.rawValue, toByteOffset: 4, as: UInt32.self)
+          exData.storeBytes(of: impl.MessageType.Answer.rawValue, toByteOffset: 8, as: UInt32.self)
+        }
+        catch {
+          makeSimpleAnswer(buffer: buffer, messageId: impl.MessageId.Error_Unknown)
+        }
       default:
         makeSimpleAnswer(buffer: buffer, messageId: impl.MessageId.Error_UnknownFunctionIdx)
     } // switch
@@ -5923,6 +6047,13 @@ fileprivate func check_1Fu322S(buffer: UnsafeRawPointer, bufferSize: Int, offset
 // Safety check for lava_M28
 fileprivate func check_1Fu322Ff32(buffer: UnsafeRawPointer, bufferSize: Int, offset: Int) -> Bool {
   guard NPRPC.check_struct_bounds(bufferSize: bufferSize, offset: offset, structSize: 8) else { return false }
+  return true
+}
+
+
+// Safety check for lava_M30
+fileprivate func check_1Fu322Ff323Ff324Ff325Ff326Ff327Ff32(buffer: UnsafeRawPointer, bufferSize: Int, offset: Int) -> Bool {
+  guard NPRPC.check_struct_bounds(bufferSize: bufferSize, offset: offset, structSize: 28) else { return false }
   return true
 }
 

@@ -116,6 +116,16 @@ public enum LavaClient {
             )
         }
 
+        // Same moment as appearance: a panel dropdown that reads
+        // `Theme.current` on the first body must not paint the baked-in
+        // `.dark` and then snap when the theme stream arrives a frame later.
+        report("GetSystemTheme") {
+            let theme = try blockingCall {
+                try await compositor.getSystemTheme()
+            }
+            applySystemTheme(theme.name)
+        }
+
         // Before the first body runs, for the same reason as the appearance
         // above: a tree that lays out at a size nobody has, and then again at
         // the real one, has done all of its work twice — and a virtualised
@@ -544,6 +554,74 @@ public enum LavaClient {
         }
     }
 
+    /// Frost a rectangle of the desktop behind this surface. `radius` 0
+    /// clears. Debounced: emit calls this every frame a popup is up, and
+    /// the compositor recaptures whenever the region changes.
+    public static func setBackdropBlurRegion(
+        radius: Float, x: Float, y: Float, w: Float, h: Float,
+        cornerRadius: Float
+    ) {
+        let next = OverlayFrost(
+            radius: max(0, radius), x: x, y: y, w: w, h: h,
+            corner: max(0, cornerRadius)
+        )
+        pendingOverlayFrost = next
+        flushOverlayFrost()
+    }
+
+    private static func flushOverlayFrost() {
+        guard let compositor = Self.compositor, surfaceID != 0,
+              let pending = pendingOverlayFrost
+        else { return }
+        guard lastOverlayFrost != pending else { return }
+        lastOverlayFrost = pending
+        let id = surfaceID
+        Task.detached {
+            do {
+                try await compositor.setBackdropBlurRegion(
+                    surfaceId: id, radius: pending.radius,
+                    x: pending.x, y: pending.y,
+                    w: pending.w, h: pending.h,
+                    cornerRadius: pending.corner
+                )
+            } catch {
+                FileHandle.standardError.write(
+                    Data("SetBackdropBlurRegion failed: \(error)\n".utf8)
+                )
+            }
+        }
+    }
+
+    private struct OverlayFrost: Equatable, Sendable {
+        var radius: Float
+        var x: Float
+        var y: Float
+        var w: Float
+        var h: Float
+        var corner: Float
+    }
+
+    /// Asks once, with radius 0, so a compositor that does not have the
+    /// method fails cheaply and we never install the overlay hook.
+    private static func probeOverlayFrost(
+        compositor: Compositor, surfaceId: UInt32
+    ) {
+        do {
+            try blockingCall {
+                try await compositor.setBackdropBlurRegion(
+                    surfaceId: surfaceId, radius: 0,
+                    x: 0, y: 0, w: 0, h: 0, cornerRadius: 0
+                )
+            }
+            overlayFrostSupported = true
+        } catch {
+            overlayFrostSupported = false
+            FileHandle.standardError.write(
+                Data("SetBackdropBlurRegion not available: \(error)\n".utf8)
+            )
+        }
+    }
+
     /// Limits where this surface takes pointer input, in its own coordinates.
     ///
     /// For a panel that draws less than it covers — a dock floating over the
@@ -658,6 +736,12 @@ public enum LavaClient {
             // Anything the application asked for before it had a surface.
             flushMinimumSize()
             flushBackdropBlur()
+            // Probe region frost before the first body: `MenuBarStyle.panel`
+            // reads `BackdropBridge.frostOverlay != nil` to decide whether
+            // the popup wash can be translucent. An old compositor that
+            // does not have the method must leave the hook empty, or the
+            // menu goes back to stained glass with nothing behind it.
+            probeOverlayFrost(compositor: compositor, surfaceId: surfaceID)
             if let pending = pendingPanelArea {
                 pendingPanelArea = nil
                 startPanelArea(pending)
@@ -770,6 +854,15 @@ public enum LavaClient {
             let resolved = LavaIDL.CursorShape(rawValue: shape) ?? .arrow
             Task.detached {
                 await compositor.setCursor(surfaceId: surfaceID, shape: resolved)
+            }
+        }
+
+        if overlayFrostSupported {
+            BackdropBridge.frostOverlay = { radius, x, y, w, h, corner in
+                LavaClient.setBackdropBlurRegion(
+                    radius: radius, x: x, y: y, w: w, h: h,
+                    cornerRadius: corner
+                )
             }
         }
 
@@ -959,6 +1052,12 @@ public enum LavaClient {
     nonisolated(unsafe) private static var pendingMinSize: (width: Float, height: Float)?
     /// Backdrop frost asked for before the surface existed. See `setBackdropBlur`.
     nonisolated(unsafe) private static var pendingBackdropBlur: Float?
+    /// Popup frost last sent / last asked, so emit can call every frame.
+    nonisolated(unsafe) private static var pendingOverlayFrost: OverlayFrost?
+    nonisolated(unsafe) private static var lastOverlayFrost: OverlayFrost?
+    /// False until `probeOverlayFrost` succeeds. An old compositor
+    /// without `SetBackdropBlurRegion` must not get the hook installed.
+    nonisolated(unsafe) private static var overlayFrostSupported = false
     /// Input lease for `quit()` / compositor-side close. Set in `run`.
     nonisolated(unsafe) private static var inputChannel: InputChannel?
     /// Handed from `open` to `run`. Statics rather than a returned handle so

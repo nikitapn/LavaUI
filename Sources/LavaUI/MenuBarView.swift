@@ -112,30 +112,38 @@ public struct MenuBarStyle: Equatable, Sendable {
     }
 
     /// Desktop panel: no strip fill (the bar already painted one), compact
-    /// rows, and a translucent popup in the same indigo family as the
-    /// panel gradient rather than an opaque `theme.panel` slab.
+    /// rows, and a popup that wears the desktop theme rather than a
+    /// hard-coded indigo wash.
+    ///
+    /// The old fill was `0.10, 0.10, 0.24` at alpha 0.88. Linear blending
+    /// lets ~0.30 of the desktop through at that alpha, which is why the
+    /// menu read as a stained-glass pane instead of a surface — see
+    /// `docs/colour-and-blending.md`. Without compositor frost the useful
+    /// band is 0.97–1.0. With frost (a client that filled
+    /// `BackdropBridge.frostOverlay`) the wash can drop so the blur shows.
     public static func panel(theme: Theme = Theme.current) -> MenuBarStyle {
-        let wash = Color(r: 0.24, g: 0.68, b: 0.91)
+        let frosted = BackdropBridge.frostOverlay != nil
+        let radius = WindowBridge.desktopCornerRadius > 0
+            ? WindowBridge.desktopCornerRadius
+            : max(theme.cornerRadius, 8)
         return MenuBarStyle(
             stripFill: nil,
             stripHeight: nil,
             titlePadding: EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0),
             iconPadding: EdgeInsets(top: 5, leading: 5, bottom: 5, trailing: 5),
             titleCornerRadius: 6,
-            titleHover: wash,
-            titleOpenFill: Color(r: 0.12, g: 0.12, b: 0.28, a: 0.82),
+            titleHover: theme.hover,
+            titleOpenFill: theme.hover,
             itemPadding: EdgeInsets(top: 4, leading: 10, bottom: 4, trailing: 10),
-            itemCornerRadius: 0,
-            itemHover: wash,
+            itemCornerRadius: 6,
+            itemHover: theme.hover,
             itemSpacing: 1,
-            dropdownPadding: 0,
+            dropdownPadding: 4,
             dropdownMinWidth: 0,
-            dropdownBackground: Color(r: 0.10, g: 0.10, b: 0.24, a: 0.88),
-            dropdownBorder: Color(r: 0.50, g: 0.50, b: 0.78, a: 0.28),
-            dropdownCornerRadius: 2,
-            // Backdrop blur captures this surface, not the desktop, so
-            // frosting a panel popup would only smear the strip.
-            dropdownBlur: nil
+            dropdownBackground: theme.panel.opacity(frosted ? 0.97 : 0.98),
+            dropdownBorder: theme.border,
+            dropdownCornerRadius: radius,
+            dropdownBlur: frosted ? 12 : nil
         )
     }
 }

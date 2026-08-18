@@ -333,12 +333,19 @@ nonisolated(unsafe) var tray: StatusNotifierTray?
 nonisolated(unsafe) var notifications: Notifications?
 let pulse = PulseSession()
 
+/// Every popover on the panel — menubar dropdown, tray menu, volume,
+/// calendar — wears this, so a theme change retints all of them and a
+/// frost/radius tweak is not four call sites.
+enum TaskbarChrome {
+    static var style: MenuBarStyle { .panel() }
+}
+
 struct TaskbarView: View {
     let brandIcon: UIImage
     let menuFont: UIFont
 
     var body: some View {
-        let chrome = MenuBarStyle.panel()
+        let chrome = TaskbarChrome.style
         // The strip is what paints; the surface is always tall enough for a
         // dropdown (see MenuSession.ensureExpanded). Transparent below the
         // strip so the desktop shows through; input region is strip-only when
@@ -462,13 +469,13 @@ struct TaskbarView: View {
                     .padding(4)
             }
         }
-        .hoverBackground(MenuBarStyle.panel().titleHover)
+        .hoverBackground(TaskbarChrome.style.titleHover)
         .cornerRadius(6)
         .agentId("tray.\(item.key)")
         .overlay(
             isPresented: trayMenuBinding(item),
             alignment: .below,
-            style: MenuBarStyle.panel().overlayStyle
+            style: TaskbarChrome.style.overlayStyle
         ) {
             trayMenu
         }
@@ -492,7 +499,7 @@ struct TaskbarView: View {
                     session.setTrayMenuOpen(false)
                     tray?.closeMenu()
                 },
-                style: MenuBarStyle.panel()
+                style: TaskbarChrome.style
             )
         }
     }

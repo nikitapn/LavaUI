@@ -27,14 +27,14 @@ struct CalendarApplet: View {
             }
         )
         .padding(4)
-        .hoverBackground(MenuBarStyle.panel(theme: theme).titleHover)
+        .hoverBackground(TaskbarChrome.style.titleHover)
         .cornerRadius(6)
         .agentId("applet.calendar")
         .overlay(
             isPresented: isOpen,
             alignment: .below,
             style: {
-                var s = MenuBarStyle.panel(theme: theme).overlayStyle
+                var s = TaskbarChrome.style.overlayStyle
                 s.padding = 12
                 s.minWidth = 260
                 return s

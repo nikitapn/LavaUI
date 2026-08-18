@@ -90,7 +90,12 @@ struct CompositorHost {
                               uint32_t w, uint32_t h) = 0;
 
   /// Frost the desktop behind this surface. `radius` 0 turns it off.
-  virtual bool setBackdropBlur(uint32_t surfaceId, float radius) = 0;
+  /// `w` or `h` of 0 frosts the whole surface; otherwise `x,y,w,h` are a
+  /// rect in the surface's own coordinates. `cornerRadius` rounds that
+  /// plate so a popup's frost matches the popup.
+  virtual bool setBackdropBlur(uint32_t surfaceId, float radius, float x,
+                               float y, float w, float h,
+                               float cornerRadius) = 0;
 
   /// Remembers the pointer image a surface wants, and applies it now if the
   /// pointer is over that surface. `shape` is a `CursorShape` ordinal — an

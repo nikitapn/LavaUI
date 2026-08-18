@@ -302,6 +302,24 @@ public struct OverlayView<Content: View, OverlayContent: View>: PrimitiveView {
     }
 }
 
+/// Compositor frost behind a popup. LavaUI cannot see the desktop, so a
+/// client fills this in; a windowed app leaves it nil and `.backdropBlur`
+/// samples this window's own framebuffer instead.
+///
+/// A panel dropdown is the case this exists for. In-window `backdropBlur`
+/// captures *this* surface, and a panel's surface is empty below the strip
+/// — frosting it would smear nothing. The compositor can see the wallpaper
+/// and the windows under that rect, and this is how a popup asks it to.
+public enum BackdropBridge {
+    /// Frost `x,y,w,h` of this surface (layout pixels). `radius` 0 clears.
+    /// `cornerRadius` rounds the frost plate to match the popup.
+    nonisolated(unsafe) public static var frostOverlay:
+        (@Sendable (
+            _ radius: Float, _ x: Float, _ y: Float,
+            _ w: Float, _ h: Float, _ cornerRadius: Float
+        ) -> Void)?
+}
+
 /// Styling for the floating surface an overlay draws on.
 public struct OverlayStyle {
     public var background: Color

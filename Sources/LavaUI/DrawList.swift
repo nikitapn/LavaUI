@@ -983,6 +983,7 @@ public final class DrawList {
         // After the main walk, so overlays paint above everything and — because
         // the clip stack is balanced by now — are not scissored by whatever
         // ancestor the presenter happened to sit inside.
+        var compositorFrosted = false
         for pending in pendingOverlays {
             let att = pending.attachment
             att.layoutAndPlace(
@@ -1016,8 +1017,23 @@ public final class DrawList {
                 ? (cornerRadius(of: glassChild) ?? att.cornerRadius)
                 : att.cornerRadius
 
+            // A compositor client can frost the *desktop* under this rect.
+            // Skip the in-window blur when that path is live: on a panel the
+            // framebuffer behind the popup is empty, and smearing it is the
+            // thing the bridge exists to avoid.
+            let compositorGlass = glassRadius != nil
+                && BackdropBridge.frostOverlay != nil
+            if compositorGlass, let radius = glassRadius {
+                BackdropBridge.frostOverlay?(
+                    radius,
+                    att.origin.x, att.origin.y, att.size.w, att.size.h,
+                    glassCorner
+                )
+                compositorFrosted = true
+            }
+
             withBlurScope(
-                content: nil, backdrop: glassRadius,
+                content: nil, backdrop: compositorGlass ? nil : glassRadius,
                 x: att.origin.x, y: att.origin.y, w: att.size.w, h: att.size.h,
                 cornerRadius: glassCorner
             ) {
@@ -1046,6 +1062,9 @@ public final class DrawList {
                 )
                 cullStack = savedCull
             }
+        }
+        if !compositorFrosted {
+            BackdropBridge.frostOverlay?(0, 0, 0, 0, 0, 0)
         }
         pendingOverlays.removeAll(keepingCapacity: true)
         cullStack.removeAll(keepingCapacity: true)
