@@ -56,6 +56,19 @@ protocol_sources += custom_target(
   command: [wayland_scanner, 'private-code', '@INPUT@', '@OUTPUT@'],
 )
 
+# wlr-layer-shell: bars, docks and wallpapers written for wlroots
+# compositors. wlroots implements the protocol, so only the server *header*
+# is needed here — for the enums the arrangement code switches on. Checked
+# into protocols/ for the same reason appmenu.xml is: it is a wlroots
+# extension, and wlroots does not install its generated header.
+layer_shell_xml = meson.current_source_dir() / 'protocols/wlr-layer-shell-unstable-v1.xml'
+protocol_headers += custom_target(
+  'wlr_layer_shell_server_h',
+  input: layer_shell_xml,
+  output: 'wlr-layer-shell-unstable-v1-protocol.h',
+  command: [wayland_scanner, 'server-header', '@INPUT@', '@OUTPUT@'],
+)
+
 # Canvas resolves its compiled shaders relative to an assets root it is told.
 # A Swift client passes the SwiftPM resource bundle; a compositor has no
 # bundle, so the build points it at the source tree. `LAVA_CANVAS_ASSETS` in
@@ -130,6 +143,7 @@ executable(
   'src/screenshot_portal.cpp',
   'src/window_memory.cpp',
   'src/focus_history.cpp',
+  'src/layer_shell.cpp',
   lava_idl_sources,
   protocol_headers,
   protocol_sources,

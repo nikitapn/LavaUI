@@ -111,4 +111,22 @@ extern "C" {
 #include <wlr/xwayland.h>
 #undef class
 
+// 4. `wlr/types/wlr_layer_shell_v1.h` names a field `namespace`, which is the
+//    same shape of problem as `class` above and takes the same answer. The
+//    field is reached as `namespace_` in this program.
+//
+//    The two headers it reaches — `wlr_compositor.h` and `util/edges.h` — are
+//    included above, outside the window, so their include guards are all that
+//    is left to find in them. What is *not* included above is the generated
+//    `wlr-layer-shell-unstable-v1-protocol.h`, which is wayland-scanner output
+//    and therefore pure C; `namespace` appears in it only as the parameter
+//    name of `get_layer_surface`, which is renamed consistently and never
+//    referred to by name from C++.
+//
+//    Re-check with `grep -n '\bnamespace\b' wlr/types/wlr_layer_shell_v1.h`
+//    after a wlroots upgrade.
+#define namespace namespace_
+#include <wlr/types/wlr_layer_shell_v1.h>
+#undef namespace
+
 }  // extern "C"

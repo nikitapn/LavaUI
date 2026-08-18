@@ -43,6 +43,7 @@
 #include "backdrop_blur.hpp"
 #include "background.hpp"
 #include "focus_history.hpp"
+#include "layer_shell.hpp"
 #include "window_memory.hpp"
 #include "wlr.hpp"
 #include "render/png_encode.hpp"
@@ -209,18 +210,35 @@ struct Workspaces {
 
   wlr_scene_tree *tree[kCount] = {};
   /// Panels are not members of a workspace — a taskbar is on all of them — so
-  /// this tree is never disabled. Created last, which is what puts panels above
-  /// the windows without anybody raising them.
+  /// this tree is never disabled.
   wlr_scene_tree *panels = nullptr;
+  /// `zwlr_layer_shell_v1`'s four layers, which are not workspace members
+  /// either. Here rather than in `LayerShell` for the reason `panels` is
+  /// here: this function is the one place the creation order of the scene's
+  /// top-level trees is written down, and that order *is* the Z order.
+  lava::LayerShell::Trees layers;
   uint32_t current = 0;
 
   void init(wlr_scene_tree *root) {
+    // Bottom first. The wallpaper is already below all of this. Then
+    // layer-shell's background and bottom, which is where a foreign
+    // wallpaper or a dimmer goes; then the windows; then layer top, the
+    // desktop's own panels, and layer overlay.
+    //
+    // The two decisions in that list: the desktop's panels sit *above* a
+    // foreign bar, because a waybar has no business covering the dock, and
+    // *below* layer overlay, because a notification or a lock screen is the
+    // one thing that should be able to.
+    layers.background = wlr_scene_tree_create(root);
+    layers.bottom = wlr_scene_tree_create(root);
     for (auto *&t : tree) {
       t = wlr_scene_tree_create(root);
       wlr_scene_node_set_enabled(&t->node, false);
     }
     wlr_scene_node_set_enabled(&tree[current]->node, true);
+    layers.top = wlr_scene_tree_create(root);
     panels = wlr_scene_tree_create(root);
+    layers.overlay = wlr_scene_tree_create(root);
   }
 
   wlr_scene_tree *currentTree() const { return tree[current]; }
@@ -793,6 +811,10 @@ struct Server {
   /// workspace. Close and minimize consult this rather than stacking
   /// order — see `restoreFocus`.
   lava::FocusHistory focusHistory;
+  /// Foreign bars, docks and wallpapers. The desktop's own shell does not
+  /// use this — it speaks `CreatePanel` — so the two reserve screen edges
+  /// side by side and `workAreaIn` subtracts both.
+  lava::LayerShell layerShell;
   Workspaces workspaces;
 
   /// Modifier that keeps the app switcher open (Ctrl, or the desktop mod).
@@ -2520,6 +2542,10 @@ class SurfaceRegistry : public lava::CompositorHost {
       if (!s->panel || s->node == nullptr) continue;
       wlr_scene_node_set_enabled(&s->node->node, !hide);
     }
+    // A foreign bar goes with the desktop's own. Background and bottom are
+    // under the windows already, so a fullscreen window covers them without
+    // being asked; overlay deliberately stays up.
+    if (server_ != nullptr) server_->layerShell.setTopVisible(!hide);
   }
 
   /// How big the primary output currently is. Used to size a fullscreen
@@ -2561,6 +2587,10 @@ class SurfaceRegistry : public lava::CompositorHost {
   /// lived only there sits in the hole forever.
   void refreshFromLayout() {
     if (server_ == nullptr || server_->output_layout == nullptr) return;
+    // Outputs moved, resized or vanished: every anchored surface is
+    // measured from an edge that is no longer where it was. Before the
+    // work area is read below, not after.
+    server_->layerShell.arrange();
     wlr_box unionBox{};
     wlr_output_layout_get_box(server_->output_layout, nullptr, &unionBox);
     if (unionBox.width <= 0 || unionBox.height <= 0) return;
@@ -2613,11 +2643,23 @@ class SurfaceRegistry : public lava::CompositorHost {
     for (auto &surface : surfaces_) {
       if (surface->panel) layoutPanel(*surface);
     }
+    refitToWorkArea(/*evict=*/true);
+  }
+
+  /// The work area moved: whatever was laid out against it has to be laid
+  /// out again. Only maximized and fullscreen windows care — a maximized
+  /// window is a promise about the work area rather than a size the user
+  /// chose, and a floating one is where the user put it.
+  ///
+  /// `evict` also drags floating windows back onto the layout, which is
+  /// right when an output moved or vanished and wrong when a bar merely
+  /// changed how thick it is.
+  void refitToWorkArea(bool evict) {
     for (auto &surface : surfaces_) {
       if (surface->panel) continue;
       if (surface->fullscreen) fillOutput(*surface);
       else if (surface->maximized) fillWorkArea(*surface);
-      else evictOntoLayout(*surface);
+      else if (evict) evictOntoLayout(*surface);
     }
   }
 
@@ -3504,11 +3546,7 @@ class SurfaceRegistry : public lava::CompositorHost {
     // laid out against the old reservation — which is only the maximized
     // windows, since a maximized window is a promise about the work area
     // rather than a size the user chose.
-    for (auto &surface : surfaces_) {
-      if (surface->panel) continue;
-      if (surface->fullscreen) fillOutput(*surface);
-      else if (surface->maximized) fillWorkArea(*surface);
-    }
+    refitToWorkArea(/*evict=*/false);
     return true;
   }
 
@@ -4414,7 +4452,24 @@ class SurfaceRegistry : public lava::CompositorHost {
   }
 
   /// Subtracts reserved panels that actually sit on this rectangle.
+  ///
+  /// Two kinds of them, and layer-shell goes first: a foreign bar reserves
+  /// against the whole output, and the desktop's own panels are then
+  /// measured off what is left. Neither knows about the other, which is the
+  /// price of running both protocols — in practice nobody puts a waybar and
+  /// the Lava dock on the same edge.
   WorkArea workAreaIn(int x, int y, int w, int h) const {
+    if (server_ != nullptr) {
+      wlr_box usable{};
+      if (server_->layerShell.usableArea(x + w / 2, y + h / 2, usable)) {
+        const int x1 = std::min(x + w, usable.x + usable.width);
+        const int y1 = std::min(y + h, usable.y + usable.height);
+        x = std::max(x, usable.x);
+        y = std::max(y, usable.y);
+        w = std::max(0, x1 - x);
+        h = std::max(0, y1 - y);
+      }
+    }
     for (const auto &s : surfaces_) {
       if (!s->panel || s->reserved == 0) continue;
       const int sx1 = s->x + static_cast<int>(s->width);
@@ -5809,6 +5864,10 @@ void Output::on_request_state(wl_listener *listener, void *data) {
 void Output::on_destroy(wl_listener *listener, void *) {
   auto *output = owner_of<Output>(listener);
   Server *server = output->server;
+  // Before the layout loses it: the protocol makes closing these the
+  // compositor's job, and a client left pointing at a dead output never
+  // hears that it should come back on another one.
+  server->layerShell.closeOn(output->wlr);
   // Drop it from the layout before we ask how big the layout is, or
   // the dying output still inflates the box and the panel never shrinks.
   if (server->output_layout != nullptr && output->wlr != nullptr) {
@@ -7249,10 +7308,19 @@ void Server::on_new_popup(wl_listener *listener, void *data) {
   // surface rather than assuming a toplevel. Either way the tree it wants is
   // the one stashed when that surface was created, so a submenu nests inside
   // its menu and the whole stack moves with the window.
-  wlr_xdg_surface *parent =
-      wlr_xdg_surface_try_from_wlr_surface(popup->parent);
-  if (parent == nullptr || parent->data == nullptr) return;
-  auto *parentTree = static_cast<wlr_scene_tree *>(parent->data);
+  //
+  // It may also be a layer surface, which is not an xdg surface at all: a
+  // bar's tray menu and its tooltips are ordinary xdg popups hung off one.
+  // Asking xdg-shell first keeps the common path unchanged.
+  wlr_scene_tree *parentTree = nullptr;
+  if (wlr_xdg_surface *parent =
+          wlr_xdg_surface_try_from_wlr_surface(popup->parent);
+      parent != nullptr && parent->data != nullptr) {
+    parentTree = static_cast<wlr_scene_tree *>(parent->data);
+  } else {
+    parentTree = server->layerShell.treeFor(popup->parent);
+  }
+  if (parentTree == nullptr) return;
 
   wlr_scene_tree *tree = wlr_scene_xdg_surface_create(parentTree, popup->base);
   if (tree == nullptr) return;
@@ -8828,6 +8896,22 @@ int main() {
   // the in-process portal do not use this — they render the scene
   // themselves — but the protocol is cheap to advertise.
   wlr_screencopy_manager_v1_create(server.display);
+
+  // Layer-shell. After `workspaces.init`, which created the four trees, and
+  // after the output layout, which is what an anchored surface is measured
+  // against. A failure here costs foreign bars, not the session.
+  if (!server.layerShell.init(
+          server.display, server.workspaces.layers, server.output_layout,
+          [&server]() {
+            // A bar reserved or released a strip. Nothing floating moves —
+            // the user put those where they are — but every maximized
+            // window is a promise about a work area that just changed.
+            if (server.surfaces != nullptr) {
+              server.surfaces->refitToWorkArea(/*evict=*/false);
+            }
+          })) {
+    wlr_log(WLR_ERROR, "layer-shell: unavailable; foreign bars will not run");
+  }
 
   server.xdg_shell = wlr_xdg_shell_create(server.display, 5);
   server.new_toplevel.attach(&server.xdg_shell->events.new_toplevel, &server,
