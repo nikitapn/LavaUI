@@ -47,6 +47,7 @@ var products: [Product] = [
     .executable(name: "LavaDebug", targets: ["LavaDebug"]),
     .executable(name: "LavaLauncher", targets: ["LavaLauncher"]),
     .executable(name: "LavaSwitcher", targets: ["LavaSwitcher"]),
+    .executable(name: "LavaChooser", targets: ["LavaChooser"]),
     .library(name: "LavaUI", targets: ["LavaUI"]),
     .library(name: "LavaHost", targets: ["LavaHost"]),
     .library(name: "LavaText", targets: ["LavaText"]),
@@ -130,6 +131,15 @@ var targets: [Target] = [
     .executableTarget(
         name: "LavaSwitcher",
         dependencies: ["LavaUI", "LavaShell"]
+            + (haveNprpc ? [Target.Dependency("LavaClient"),
+                            Target.Dependency("LavaIDL")] : []),
+        swiftSettings: interopCxx
+    ),
+    // The screen picker xdg-desktop-portal-wlr shells out to before a screen
+    // share. See Sources/LavaChooser/main.swift.
+    .executableTarget(
+        name: "LavaChooser",
+        dependencies: ["LavaUI"]
             + (haveNprpc ? [Target.Dependency("LavaClient"),
                             Target.Dependency("LavaIDL")] : []),
         swiftSettings: interopCxx

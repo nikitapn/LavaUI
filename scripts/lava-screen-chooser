@@ -1,0 +1,50 @@
+#!/bin/sh
+# xdg-desktop-portal-wlr's output chooser, as a Lava window.
+#
+# xdpw reads this script's stdout and matches it against the lines it wrote
+# to our stdin; anything else is "the user declined". LavaChooser is a UI
+# process, and a UI framework may write to stdout (frame probes, warnings) —
+# one such line would turn a screen share into a cancelled one. So the picker
+# never touches fd 1: it writes the chosen line to $LAVA_CHOOSER_OUT and this
+# wrapper is the only thing that prints.
+#
+# Wire it up in ~/.config/xdg-desktop-portal-wlr/config:
+#
+#   [screencast]
+#   chooser_type=dmenu
+#   chooser_cmd=/path/to/lava-screen-chooser
+#
+# Exit code is deliberately 0 whatever happens: xdpw treats 127 as "no such
+# command" and ignores the output, and every other code as a valid answer.
+set -u
+
+find_chooser() {
+  if [ -n "${LAVA_CHOOSER_BIN:-}" ]; then
+    printf '%s\n' "$LAVA_CHOOSER_BIN"
+    return
+  fi
+  # Beside the compositor when installed, in SwiftPM's output when built from
+  # the tree — the same two places ShellSupervisor::programPath looks.
+  root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+  for candidate in \
+    "$(command -v LavaChooser 2>/dev/null)" \
+    "$root/.build/release/LavaChooser" \
+    "$root/.build/debug/LavaChooser"
+  do
+    [ -n "$candidate" ] && [ -x "$candidate" ] && printf '%s\n' "$candidate" && return
+  done
+}
+
+bin=$(find_chooser)
+if [ -z "$bin" ]; then
+  echo "lava-screen-chooser: no LavaChooser binary found" >&2
+  exit 0
+fi
+
+out=$(mktemp) || exit 0
+# stdin is xdpw's monitor list and goes straight through. stdout is discarded
+# on purpose; stderr is left alone so diagnostics reach the journal.
+LAVA_CHOOSER_OUT="$out" "$bin" >/dev/null
+[ -s "$out" ] && cat "$out"
+rm -f "$out"
+exit 0
