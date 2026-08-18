@@ -6683,8 +6683,11 @@ struct BindingSpec {
 /// within one release. Both come from here, so a listed binding is one that
 /// works and a working binding is one that is listed.
 constexpr BindingSpec kBindings[] = {
-    {BindingAction::Quit, XKB_KEY_Escape, XKB_KEY_Escape, false, false, true,
-     "Escape", "session.quit", "Ends the session"},
+    // Shift and a key nothing else in the table uses: Mod+Escape sat one
+    // slipped finger from ending the session, next to the Escape every
+    // dialog wants and under the same hand as the desktop mod.
+    {BindingAction::Quit, XKB_KEY_BackSpace, XKB_KEY_BackSpace, true, false,
+     true, "Backspace", "session.quit", "Ends the session"},
     {BindingAction::Launcher, XKB_KEY_space, XKB_KEY_space, false, false, true,
      "Space", "launcher.rofi", "Opens rofi"},
     {BindingAction::AppLauncher, XKB_KEY_p, XKB_KEY_p, false, false, true, "P",
