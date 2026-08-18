@@ -166,6 +166,14 @@ class YogaBoxNode: AnyViewNode {
     /// Yoga still allows overflow for measure; we clip at emit only — used by
     /// the menubar strip so a title's hover fill cannot paint over content.
     var clipsContent: Bool = false
+
+    /// Whether children outside this box's rect are off screen.
+    ///
+    /// Emit scissors both cases, so the input walks have to agree with it or
+    /// they answer for pixels nobody can see: a menu row scrolled past the
+    /// top of its list still has a layout rect, and it sits exactly where the
+    /// menu bar above the popup is drawn. Clicking a title would have run it.
+    var clipsChildren: Bool { isScrollable || clipsContent }
     /// Out of layout and drawing, but still mounted. See `View.hidden(_:)`.
     var isHidden: Bool = false
     /// Pointer image while the pointer is inside this box (`View.cursor(_:)`).
@@ -1919,6 +1927,12 @@ public final class LayoutHost {
             let ny = oy + YGNodeLayoutGetTop(yref)
             let nw = YGNodeLayoutGetWidth(yref)
             let nh = YGNodeLayoutGetHeight(yref)
+            // Outside a scissored box is off screen; see `clipsChildren`.
+            if box.clipsChildren,
+               x < nx || x >= nx + nw || y < ny || y >= ny + nh
+            {
+                return nil
+            }
             for child in node.childNodes.reversed() {
                 let shift = box.childOffset
                 if let h = hoverWalk(
@@ -1979,6 +1993,15 @@ public final class LayoutHost {
             let ny = oy + YGNodeLayoutGetTop(yref)
             let nw = YGNodeLayoutGetWidth(yref)
             let nh = YGNodeLayoutGetHeight(yref)
+            // Outside a scissored box is off screen; see `clipsChildren`. The
+            // allowance below is for content overflowing a container that
+            // does *not* clip — a wheel over a row that has been scrolled out
+            // of sight belongs to whatever is drawn in its place.
+            if box.clipsChildren,
+               x < nx || x >= nx + nw || y < ny || y >= ny + nh
+            {
+                return false
+            }
             var hit = false
             for child in node.childNodes.reversed() {
                 let shift = box.childOffset
@@ -2025,6 +2048,12 @@ public final class LayoutHost {
             let ny = oy + YGNodeLayoutGetTop(yref)
             let nw = YGNodeLayoutGetWidth(yref)
             let nh = YGNodeLayoutGetHeight(yref)
+            // Outside a scissored box is off screen; see `clipsChildren`.
+            if box.clipsChildren,
+               x < nx || x >= nx + nw || y < ny || y >= ny + nh
+            {
+                return nil
+            }
             // Children front-to-back.
             for child in node.childNodes.reversed() {
                 let shift = box.childOffset

@@ -154,15 +154,39 @@ final class OverlayAttachment {
             return
         }
 
-        let below = anchorY + anchorH
-        let above = anchorY - size.h
-        var oy: Float
+        // Room on each side of the anchor. The popup gets one of these, not
+        // the whole viewport: a panel that is taller than the space it lands
+        // in used to be clamped by *position* alone, which slid it back over
+        // the thing it dropped from — a menu covering its own menu bar — and
+        // still left its content overflowing past the bottom edge.
+        let spaceBelow = max(0, viewportH - (anchorY + anchorH))
+        let spaceAbove = max(0, anchorY)
+
+        // The requested side when the panel fits there, the other side when
+        // it only fits there, and the roomier of the two when it fits in
+        // neither — which is the case a long menu is always in.
+        let fitsBelow = size.h <= spaceBelow
+        let fitsAbove = size.h <= spaceAbove
+        let preferBelow: Bool
         switch alignment {
         case .below:
-            oy = below + size.h <= viewportH || above < 0 ? below : above
+            preferBelow = fitsBelow || (!fitsAbove && spaceBelow >= spaceAbove)
         case .above:
-            oy = above >= 0 || below + size.h > viewportH ? above : below
+            preferBelow = !fitsAbove && (fitsBelow || spaceBelow > spaceAbove)
         }
+        let room = preferBelow ? spaceBelow : spaceAbove
+
+        // Neither side fits: take the taller one and cut the panel down to
+        // it. Content that scrolls (a long menu) turns this into a reachable
+        // list; content that does not is clipped where it would have spilled
+        // off the window anyway.
+        if size.h > room, room > 0 {
+            YGNodeStyleSetMaxHeight(y, room)
+            YGNodeCalculateLayout(y, .nan, .nan, YGDirectionLTR)
+            size = (YGNodeLayoutGetWidth(y), YGNodeLayoutGetHeight(y))
+        }
+
+        var oy = preferBelow ? anchorY + anchorH : anchorY - size.h
         oy = max(0, min(oy, max(0, viewportH - size.h)))
 
         // Left-aligned with the anchor, pulled back in at the right edge.

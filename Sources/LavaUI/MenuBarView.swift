@@ -335,9 +335,18 @@ public struct MenuDropdownPanel: View {
     }
 
     public var body: some View {
-        VStack(padding: 0, spacing: style.itemSpacing) {
-            ForEach(Self.rows(from: entries), id: \.id) { row in
-                rowView(row)
+        // Always a scroll container, never a plain column. A menu that fits
+        // is laid out at its natural height and scrolls nowhere, so the
+        // wrapper costs a node; a menu that does not fit is the reason this
+        // is here at all. The bound comes from the overlay, which cuts the
+        // panel down to the room beside its anchor — an applet menu listing
+        // thirty wireless networks off a 32pt panel had no other way to
+        // reach the bottom of itself.
+        ScrollView {
+            VStack(padding: 0, spacing: style.itemSpacing) {
+                ForEach(Self.rows(from: entries), id: \.id) { row in
+                    rowView(row)
+                }
             }
         }
     }

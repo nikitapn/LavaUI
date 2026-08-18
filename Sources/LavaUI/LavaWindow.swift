@@ -570,6 +570,19 @@ public final class LavaWindow {
         }
     }
 
+    /// The node with this id anywhere in the window, **including inside an
+    /// open overlay**.
+    ///
+    /// An overlay's subtree hangs off the presenter's attachment, not its
+    /// `childNodes` — deliberately, so layout and frame collection leave it
+    /// alone and place it themselves. A plain walk therefore cannot see a
+    /// menu's contents, and the renderer's read-backs are addressed by id
+    /// with no idea where the node lives: a `NodeScroll` for a scrolled menu
+    /// found nothing, so the producer's copy of the offset stayed at zero
+    /// while the renderer moved the pixels. What that looks like is a menu
+    /// whose scrollbar never moves, whose clicks land on the row that used to
+    /// be under the pointer, and which stops scrolling a screenful in —
+    /// beyond that the producer had emitted nothing to scroll to.
     private func findNode(
         _ id: NodeID, in node: (any AnyViewNode)?
     ) -> (any AnyViewNode)? {
@@ -577,6 +590,9 @@ public final class LavaWindow {
         if node.id == id { return node }
         for child in node.childNodes {
             if let found = findNode(id, in: child) { return found }
+        }
+        if let presenter = node as? OverlayBoxNode {
+            return findNode(id, in: presenter.attachment.root)
         }
         return nil
     }
