@@ -686,6 +686,25 @@ struct Server {
   /// releases by focus delivered them to the window underneath.
   uint32_t pointerTarget = 0;
 
+  /// Whether a foreign client is holding the pointer through a press it
+  /// actually received. X11 calls this the implicit grab and does it in the
+  /// server; Wayland leaves it to the compositor, and this one did not do
+  /// it at all — so dragging a scrollbar out of its own window handed the
+  /// motion to whatever was underneath and the scroll stopped dead.
+  ///
+  /// A Lava client needs no flag: `pointerTarget` already is one.
+  bool pointerGrabbed = false;
+  /// Layout-space origin of the surface holding the seat pointer, captured
+  /// on the last motion that was free to choose a target. Motion during a
+  /// grab is measured from here, because the cursor is by then somewhere
+  /// the hit test would answer with a different surface — or with none.
+  ///
+  /// A surface that *moves* while grabbed drifts from this, which no drag
+  /// this exists for can do: the compositor's own window drags take
+  /// `update_drag` above and never reach here.
+  double pointerGrabOriginX = 0;
+  double pointerGrabOriginY = 0;
+
   /// Title-bar / client move that has not become a drag yet.
   ///
   /// A press on the bar, or a maximized window asking to be moved, must not
@@ -7685,6 +7704,34 @@ void Server::update_pointer_focus(uint32_t time_msec) {
   // motion to whatever it crossed.
   if (update_drag()) return;
 
+  // So does a press a client received. Everything below this asks "what is
+  // under the cursor now", which is the wrong question while a button is
+  // held: the answer changes as soon as the drag leaves the window, and the
+  // surface being dragged in stops hearing about the pointer it is
+  // tracking. A scrollbar dragged past the edge of its own window is the
+  // case people notice.
+  if (pointerButtonsDown > 0) {
+    if (pointerTarget != 0 && surfaces != nullptr) {
+      if (ClientSurface *held = surfaces->find(pointerTarget)) {
+        // The frame of reference the *release* already uses: `contentY`,
+        // not `y`, because the frame origin is the top of the title bar.
+        if (held->canvas) {
+          held->canvas->pointerMove(
+              static_cast<float>(cursor->x - held->x),
+              static_cast<float>(cursor->y - held->contentY()));
+          surfaces->pump(*held);
+        }
+        return;
+      }
+    }
+    if (pointerGrabbed && seat->pointer_state.focused_surface != nullptr) {
+      wlr_seat_pointer_notify_motion(seat, time_msec,
+                                     cursor->x - pointerGrabOriginX,
+                                     cursor->y - pointerGrabOriginY);
+      return;
+    }
+  }
+
   // The frame before the content. A title bar belongs to the compositor, so
   // its hover is answered here and never reaches the client.
   if (surfaces != nullptr && surfaces->hoverFrames(cursor->x, cursor->y)) {
@@ -7736,6 +7783,11 @@ void Server::update_pointer_focus(uint32_t time_msec) {
   }
   wlr_seat_pointer_notify_enter(seat, surface, sx, sy);
   wlr_seat_pointer_notify_motion(seat, time_msec, sx, sy);
+  // Where that surface's origin is in layout space. Kept so a grab starting
+  // on the next press can go on measuring from it once the hit test can no
+  // longer find the surface under the cursor.
+  pointerGrabOriginX = cursor->x - sx;
+  pointerGrabOriginY = cursor->y - sy;
 }
 
 void Server::applyCursorFor(const ClientSurface &surface) {
@@ -8263,6 +8315,10 @@ void Server::on_cursor_button(wl_listener *listener, void *data) {
   } else if (server->pointerButtonsDown > 0) {
     --server->pointerButtonsDown;
   }
+  // The last button came up, so the implicit grab is over — here rather
+  // than at the bottom, because a release leaves this function by whichever
+  // of half a dozen paths matches what it was over.
+  if (server->pointerButtonsDown == 0) server->pointerGrabbed = false;
 
   // A click that never became a drag: remember it for double-click on
   // our title bar, and let a client-originated press still see its release.
@@ -8483,6 +8539,13 @@ void Server::on_cursor_button(wl_listener *listener, void *data) {
 
   wlr_seat_pointer_notify_button(server->seat, event->time_msec, event->button,
                                  event->state);
+  // Only a press a client was actually given takes the pointer. The paths
+  // above that keep a press for the compositor — the title bar, the resize
+  // band, Alt+drag — return before this and never set it.
+  if (pressed) {
+    server->pointerGrabbed =
+        server->seat->pointer_state.focused_surface != nullptr;
+  }
 }
 
 void Server::on_cursor_axis(wl_listener *listener, void *data) {
