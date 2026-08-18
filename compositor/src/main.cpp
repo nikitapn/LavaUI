@@ -992,11 +992,22 @@ struct Server {
   /// one the display is scanning out; falls back to the next committed
   /// frame if that cannot be read. See `Output::pendingScreenshot`.
   void requestScreenshot();
-  bool captureOutputNow(Output *output);
+  /// Alt+Print Screen: the same picture, cropped to one window.
+  ///
+  /// Cropped out of a full render rather than read from the client's own
+  /// buffer, so it works the same for a Lava surface as for a foreign one
+  /// and comes back with the title bar the user is looking at. What it
+  /// cannot do is see through anything sitting on top of the window —
+  /// which is the honest answer for a screenshot.
+  void requestWindowScreenshot(const ClientSurface &surface);
+  bool captureOutputNow(Output *output, const wlr_box *crop = nullptr);
   bool finishScreenshot(wlr_buffer *buffer);
   Output *outputForScreenshot();
+  /// The output showing `(x, y)` in layout space, or null.
+  Output *outputAtPoint(int x, int y);
   bool renderOutputPng(Output *output, std::vector<uint8_t> &png,
-                       uint32_t &width, uint32_t &height);
+                       uint32_t &width, uint32_t &height,
+                       const wlr_box *crop = nullptr);
   /// Ask the output for a new frame so the portal can read the committed
   /// buffer. Does not read GPU memory on this call.
   bool schedulePortalCapture();
@@ -1587,11 +1598,32 @@ bool captureForeign(const ClientSurface &surface, int32_t maxSide,
 /// Same two paths as `captureForeign`. A GBM/Vulkan swapchain almost never
 /// maps, so the useful one is a texture readback. `maxSide` is 0 — Print
 /// Screen is a 1:1 copy, not a poster.
+/// `crop`, when given, is a rectangle in buffer pixels: the encode reads a
+/// window out of the frame rather than the whole thing. Free, because
+/// `encodeForeignRgba` already takes a stride — the crop is an offset into
+/// the first row and a smaller width and height, with the row pitch of the
+/// full buffer left alone.
 bool encodeBufferPng(wlr_buffer *buffer, wlr_renderer *renderer,
                      std::vector<uint8_t> &outPng, uint32_t &outW,
-                     uint32_t &outH) {
+                     uint32_t &outH, const wlr_box *crop = nullptr) {
   if (buffer == nullptr || renderer == nullptr) return false;
   wlr_buffer_lock(buffer);
+
+  // Clamped against the buffer rather than trusted: the rectangle comes
+  // from layout space, and a window hanging off the edge of its output
+  // would otherwise read past the end of the last row.
+  const auto clip = [&](int w, int h, int &x0, int &y0, int &cw, int &ch) {
+    x0 = 0;
+    y0 = 0;
+    cw = w;
+    ch = h;
+    if (crop == nullptr) return true;
+    x0 = std::clamp(crop->x, 0, w);
+    y0 = std::clamp(crop->y, 0, h);
+    cw = std::min(crop->width, w - x0);
+    ch = std::min(crop->height, h - y0);
+    return cw > 0 && ch > 0;
+  };
 
   bool ok = false;
   void *data = nullptr;
@@ -1599,9 +1631,14 @@ bool encodeBufferPng(wlr_buffer *buffer, wlr_renderer *renderer,
   size_t stride = 0;
   if (wlr_buffer_begin_data_ptr_access(buffer, WLR_BUFFER_DATA_PTR_ACCESS_READ,
                                        &data, &format, &stride)) {
-    ok = encodeForeignRgba(static_cast<const uint8_t *>(data), buffer->width,
-                           buffer->height, static_cast<int>(stride), format, 0,
-                           outPng, outW, outH);
+    int x0 = 0, y0 = 0, cw = 0, ch = 0;
+    if (clip(buffer->width, buffer->height, x0, y0, cw, ch)) {
+      const auto *src = static_cast<const uint8_t *>(data) +
+                        static_cast<size_t>(y0) * stride +
+                        static_cast<size_t>(x0) * 4;
+      ok = encodeForeignRgba(src, cw, ch, static_cast<int>(stride), format, 0,
+                             outPng, outW, outH);
+    }
     wlr_buffer_end_data_ptr_access(buffer);
   }
 
@@ -1620,8 +1657,14 @@ bool encodeBufferPng(wlr_buffer *buffer, wlr_renderer *renderer,
         opts.format = readFormat;
         opts.stride = static_cast<uint32_t>(width * 4);
         if (wlr_texture_read_pixels(texture, &opts)) {
-          ok = encodeForeignRgba(pixels.data(), width, height, width * 4,
-                                 readFormat, 0, outPng, outW, outH);
+          int x0 = 0, y0 = 0, cw = 0, ch = 0;
+          if (clip(width, height, x0, y0, cw, ch)) {
+            const uint8_t *src = pixels.data() +
+                                 static_cast<size_t>(y0) * width * 4 +
+                                 static_cast<size_t>(x0) * 4;
+            ok = encodeForeignRgba(src, cw, ch, width * 4, readFormat, 0,
+                                   outPng, outW, outH);
+          }
         }
       }
       wlr_texture_destroy(texture);
@@ -5901,8 +5944,57 @@ void Server::requestScreenshot() {
   wlr_output_schedule_frame(target->wlr);
 }
 
+Output *Server::outputAtPoint(int x, int y) {
+  if (output_layout == nullptr) return nullptr;
+  for (Output *output : outputs) {
+    if (!output->wlr->enabled) continue;
+    wlr_box box{};
+    wlr_output_layout_get_box(output_layout, output->wlr, &box);
+    if (wlr_box_contains_point(&box, x, y)) return output;
+  }
+  return nullptr;
+}
+
+void Server::requestWindowScreenshot(const ClientSurface &surface) {
+  // The frame, not the content: the title bar is part of the window as far
+  // as anyone looking at the screen is concerned. The shadow is not — it is
+  // painted outside this rectangle and belongs to the desktop behind.
+  const int fx = surface.x;
+  const int fy = surface.y;
+  const int fw = static_cast<int>(surface.width);
+  const int fh = surface.frameHeight();
+  if (fw <= 0 || fh <= 0) return;
+
+  Output *target = outputAtPoint(fx + fw / 2, fy + fh / 2);
+  if (target == nullptr) target = outputForScreenshot();
+  if (target == nullptr) {
+    wlr_log(WLR_ERROR, "screenshot: no output to capture");
+    return;
+  }
+
+  wlr_box outputBox{};
+  wlr_output_layout_get_box(output_layout, target->wlr, &outputBox);
+  // Layout space is logical pixels; the buffer is physical ones. Rotation
+  // is not handled — a window shot on a rotated screen would need the crop
+  // turned with it, and nothing here has ever run on one.
+  const float scale = target->wlr->scale > 0 ? target->wlr->scale : 1.f;
+  wlr_box crop{};
+  crop.x = static_cast<int>((fx - outputBox.x) * scale);
+  crop.y = static_cast<int>((fy - outputBox.y) * scale);
+  crop.width = static_cast<int>(fw * scale);
+  crop.height = static_cast<int>(fh * scale);
+
+  if (captureOutputNow(target, &crop)) return;
+  // No deferred path for this one. `pendingScreenshot` copies whatever the
+  // next committed frame holds, and it has nowhere to carry a crop — a
+  // whole screen where a window was asked for is the wrong answer, and
+  // silently the wrong answer.
+  wlr_log(WLR_ERROR, "screenshot: could not read the frame to crop");
+}
+
 bool Server::renderOutputPng(Output *output, std::vector<uint8_t> &png,
-                             uint32_t &width, uint32_t &height) {
+                             uint32_t &width, uint32_t &height,
+                             const wlr_box *crop) {
   const int w = output->wlr->width;
   const int h = output->wlr->height;
   if (w <= 0 || h <= 0 || allocator == nullptr) return false;
@@ -5938,7 +6030,7 @@ bool Server::renderOutputPng(Output *output, std::vector<uint8_t> &png,
 
   bool ok = false;
   if (built && state.buffer != nullptr) {
-    ok = encodeBufferPng(state.buffer, renderer, png, width, height);
+    ok = encodeBufferPng(state.buffer, renderer, png, width, height, crop);
   }
   wlr_output_state_finish(&state);
   wlr_swapchain_destroy(chain);
@@ -5949,10 +6041,10 @@ bool Server::renderOutputPng(Output *output, std::vector<uint8_t> &png,
   return ok && !png.empty();
 }
 
-bool Server::captureOutputNow(Output *output) {
+bool Server::captureOutputNow(Output *output, const wlr_box *crop) {
   std::vector<uint8_t> png;
   uint32_t width = 0, height = 0;
-  if (!renderOutputPng(output, png, width, height)) return false;
+  if (!renderOutputPng(output, png, width, height, crop)) return false;
   lava::Clipboard clipboard(display, seat);
   clipboard.setImagePng(png);
   wlr_log(WLR_INFO, "screenshot: %ux%u PNG (%zu bytes) copied to the clipboard",
@@ -6755,6 +6847,9 @@ constexpr BindingSpec kBindings[] = {
     {BindingAction::Screenshot, XKB_KEY_Print, XKB_KEY_Print, false, false,
      false, "Print", "screen.capture",
      "Copies a screenshot of the screen to the clipboard"},
+    {BindingAction::Screenshot, XKB_KEY_Print, XKB_KEY_Print, false, false,
+     false, "Print", "screen.capture-window",
+     "Copies the focused window to the clipboard", true},
 };
 
 /// The modifiers as a person reads them. The primary mod is whatever the
@@ -6990,11 +7085,25 @@ bool handle_binding(Server *server, xkb_keysym_t sym, bool shift, bool ctrl,
   if (sym == XKB_KEY_KP_Enter) sym = XKB_KEY_Return;
   if (sym == XKB_KEY_ISO_Left_Tab) sym = XKB_KEY_Tab;
 
-  // Print Screen is the key, not a chord. Some boards emit Sys_Req when
-  // Alt is held (the historical SysRq spelling); both mean the same
-  // thing here, and both fire regardless of the desktop modifier so a
-  // leftover Alt does not swallow the shot.
+  // Print Screen is the key, not a chord — handled here rather than from
+  // the table because it has to fire whatever the desktop modifier is
+  // doing, so a leftover Alt cannot swallow the shot. Some boards emit
+  // Sys_Req for it when Alt is held (the historical SysRq spelling), which
+  // is why the sym is not what decides between the two shots below.
+  //
+  // The table still carries both spellings; those rows exist to be listed
+  // by `ListKeyBindings`, and this is where they are answered.
   if (sym == XKB_KEY_Print || sym == XKB_KEY_Sys_Req) {
+    // Alt is the one modifier that means something: the focused window
+    // instead of the screen. Nothing focused falls through to the whole
+    // screen rather than doing nothing at all, which from the keyboard is
+    // indistinguishable from a key that did not register.
+    if (altDown) {
+      if (ClientSurface *focused = focusedWindow(server)) {
+        server->requestWindowScreenshot(*focused);
+        return true;
+      }
+    }
     server->requestScreenshot();
     return true;
   }
