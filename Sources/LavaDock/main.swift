@@ -6,7 +6,8 @@ import LavaUI
 import Observation
 
 // The desktop's dock: what is open on this workspace, as icons, at the bottom
-// of the screen.
+// of the screen — plus the applications the user pinned, which stay even
+// when they have no window.
 //
 //   terminal 1:  compositor/scripts/dev-run
 //   terminal 2:  swift run LavaDock
@@ -29,6 +30,16 @@ import Observation
 // Auto-hide falls out of the last one plus `PointerLeave`: hidden, the dock
 // accepts input in a sliver along the screen's edge; the pointer entering it is
 // the reveal, and the pointer leaving the dock is the hide.
+//
+// Reordering is a captured drag along the plate. The compositor already
+// keeps the pointer on the surface that received the press, so motion
+// after the icon leaves the plate still arrives. What cannot leave is
+// *paint*: the dock is a 110pt strip, and a client cannot draw on the
+// desktop above it. The dragged icon therefore slides on the plate (and
+// lifts a little inside the strip). Dragging off the top of the plate
+// unpins; growing the panel mid-drag with `SetPanelThickness` is how a
+// flying icon that followed the pointer up the screen would be done,
+// and is the same trick the taskbar uses for menus.
 
 /// One entry: an application, and the windows it has open.
 ///
@@ -40,9 +51,14 @@ struct DockEntry: Identifiable {
     var appId: String
     var title: String
     var windows: [WindowInfo]
+    var pinned: Bool
 
+    var isRunning: Bool { !windows.isEmpty }
     var isFocused: Bool { windows.contains { $0.focused } }
-    var isMinimized: Bool { windows.allSatisfy { $0.minimized } }
+    var isMinimized: Bool {
+        !windows.isEmpty && windows.allSatisfy { $0.minimized }
+    }
+    var canPin: Bool { DockPins.canPin(appId) }
 
     /// Which window a click should raise: the focused one if this application
     /// already has it, else the first that is not hidden, else the first.
@@ -55,9 +71,32 @@ struct DockEntry: Identifiable {
     }
 }
 
+/// A press that might become a reorder, or already has.
+struct DockDrag {
+    var appId: String
+    var fromIndex: Int
+    /// Slot the hole is in, in the full row. Neighbours slide toward
+    /// this rather than packing into a shorter plate.
+    var dest: Int
+    var startX: Float
+    var startY: Float
+    var pointerX: Float
+    var pointerY: Float
+    /// False until the pointer has moved past slop — a click must not
+    /// shuffle the row.
+    var active: Bool
+}
+
+/// Right-click menu, parked at the icon that opened it.
+struct DockContextMenu {
+    var appId: String
+    var x: Float
+}
+
 @Observable
 final class DockModel {
-    /// What the dock draws, in a stable order.
+    /// What the dock draws, in a stable order: pins first, then the
+    /// running applications that are not pinned.
     var entries: [DockEntry] = []
     /// Whether the dock is out. Hidden, it is a sliver of input along the
     /// bottom edge and nothing on screen.
@@ -76,19 +115,64 @@ final class DockModel {
     /// two possible reasons and only one of them is the pointer's.
     var pointerInside = false
 
+    var drag: DockDrag?
+    var menu: DockContextMenu?
+    /// True while neighbour icons are still catching up to a hole.
+    /// Drives `continuousRedraw` for the few hundred milliseconds a
+    /// slide lasts — not while the dock is merely out.
+    var sliding = false
+
     /// Out because nothing is in the way, rather than because the pointer is
     /// here. The distinction matters on the way back: the pointer leaving
     /// must not put away a dock that was never hiding.
     var showsBecauseClear: Bool { !covered && !entries.isEmpty }
 
+    /// Per-icon X, so a dest change eases rather than jumps.
+    @ObservationIgnored var iconSlide: [String: Animated<Float>] = [:]
+    /// The pin/unpinned divider follows the same ease as the icons.
+    @ObservationIgnored var separatorSlide: Animated<Float>?
+
     @ObservationIgnored var editor: Editor?
     @ObservationIgnored private var icons: [String: UIImage?] = [:]
+    @ObservationIgnored var pins = DockPins(ids: [])
+    @ObservationIgnored var catalog: [String: DesktopEntry] = [:]
+    @ObservationIgnored private var lastWindows: [WindowInfo] = []
+    @ObservationIgnored private var lastWorkspace: UInt32 = 0
 
-    /// The compositor's snapshot, filtered to this workspace and grouped.
+    func loadCatalog() {
+        let installed = DesktopEntry.installed()
+        IconLookup.useEntries(installed)
+        var map: [String: DesktopEntry] = [:]
+        for entry in installed {
+            map[entry.id] = entry
+            map[entry.id.lowercased()] = entry
+            if !entry.startupWMClass.isEmpty {
+                map[entry.startupWMClass] = entry
+                map[entry.startupWMClass.lowercased()] = entry
+            }
+        }
+        catalog = map
+    }
+
+    func entryInfo(for appId: String) -> DesktopEntry? {
+        catalog[appId] ?? catalog[appId.lowercased()]
+    }
+
+    /// The compositor's snapshot, filtered to this workspace and grouped,
+    /// then prefixed with whatever the user pinned.
     func apply(workspace: UInt32, windows: [WindowInfo]) {
-        // Only what is open *here*. A dock showing another workspace's windows
-        // is offering to switch the user somewhere they did not ask to go.
-        let mine = windows.filter { $0.workspace == workspace }
+        lastWorkspace = workspace
+        lastWindows = windows
+        rebuildEntries()
+        // The dock is painted by a `Canvas` closure, which reads this model at
+        // emit time rather than through a body — so observation has nothing to
+        // notice and no frame would be drawn. Asking here is what makes a
+        // window opening visible at all.
+        ViewInvalidation.markNeedsRedraw()
+    }
+
+    func rebuildEntries() {
+        let mine = lastWindows.filter { $0.workspace == lastWorkspace }
 
         var order: [String] = []
         var grouped: [String: DockEntry] = [:]
@@ -96,21 +180,63 @@ final class DockModel {
             // A window with no app id still deserves an entry — it is open, and
             // the user can see it. Keyed by surface so two anonymous windows do
             // not collapse into one icon that means neither.
-            let key = window.appId.isEmpty ? "window:\(window.surfaceId)" : window.appId
+            let key = window.appId.isEmpty
+                ? "window:\(window.surfaceId)" : window.appId
             if grouped[key] == nil {
                 order.append(key)
-                grouped[key] = DockEntry(appId: key, title: window.title,
-                                         windows: [window])
+                grouped[key] = DockEntry(
+                    appId: key, title: window.title,
+                    windows: [window], pinned: pins.contains(key)
+                )
             } else {
                 grouped[key]?.windows.append(window)
             }
         }
-        entries = order.compactMap { grouped[$0] }
-        // The dock is painted by a `Canvas` closure, which reads this model at
-        // emit time rather than through a body — so observation has nothing to
-        // notice and no frame would be drawn. Asking here is what makes a
-        // window opening visible at all.
-        ViewInvalidation.markNeedsRedraw()
+
+        var next: [DockEntry] = []
+        var seen = Set<String>()
+        for id in pins.ids {
+            seen.insert(id)
+            if var existing = grouped[id] {
+                existing.pinned = true
+                next.append(existing)
+            } else {
+                let named = entryInfo(for: id)
+                next.append(DockEntry(
+                    appId: id,
+                    title: named?.name ?? id,
+                    windows: [],
+                    pinned: true
+                ))
+            }
+        }
+        // Unpinned order is *ours*, not the compositor's. A click focuses
+        // the window and SubscribeWindows sends the list again — usually
+        // with the focused app first — which used to yank that icon to
+        // the left of the unpinned group. Keep whoever was already here
+        // in their old places; only a new window appends.
+        let stillOpen = Set(order.filter { !seen.contains($0) })
+        var unpinned: [String] = []
+        for entry in entries where !seen.contains(entry.appId) {
+            if stillOpen.contains(entry.appId) {
+                unpinned.append(entry.appId)
+                seen.insert(entry.appId)
+            }
+        }
+        for key in order where !seen.contains(key) {
+            unpinned.append(key)
+            seen.insert(key)
+        }
+        for key in unpinned {
+            if var extra = grouped[key] {
+                extra.pinned = false
+                next.append(extra)
+            }
+        }
+        entries = next
+        if let drag, !next.contains(where: { $0.appId == drag.appId }) {
+            self.drag = nil
+        }
     }
 
     /// The icon for an entry, loaded once. Nil means "draw its initial".
@@ -133,9 +259,51 @@ final class DockModel {
         icons[entry.appId] = image
         return image
     }
-}
 
-nonisolated(unsafe) let model = DockModel()
+    func pin(_ id: String, at index: Int? = nil) {
+        guard DockPins.canPin(id) else { return }
+        pins.pin(id, at: index)
+        pins.save()
+        rebuildEntries()
+        ViewInvalidation.markNeedsRedraw()
+    }
+
+    func unpin(_ id: String) {
+        pins.unpin(id)
+        pins.save()
+        rebuildEntries()
+        ViewInvalidation.markNeedsRedraw()
+    }
+
+    /// After a drop: `order` is the new left-to-right app ids, `pinnedIds`
+    /// is who stays on the dock when they have no window.
+    func commitOrder(_ order: [String], pinnedIds: [String]) {
+        var seen = Set<String>()
+        pins.ids = pinnedIds.filter { DockPins.canPin($0) && seen.insert($0).inserted }
+        pins.save()
+        // Seed `entries` with the drop order so rebuildEntries keeps
+        // unpinned icons where the user put them, not where the
+        // compositor lists them.
+        let pinSet = Set(pins.ids)
+        let extras = order.filter { !pinSet.contains($0) }
+        let byId = Dictionary(uniqueKeysWithValues: entries.map { ($0.appId, $0) })
+        entries = pins.ids.compactMap { byId[$0] } + extras.compactMap { byId[$0] }
+        rebuildEntries()
+        ViewInvalidation.markNeedsRedraw()
+    }
+
+    func launch(_ id: String) {
+        if let entry = entryInfo(for: id) {
+            if !entry.launch() {
+                FileHandle.standardError.write(
+                    Data("dock: launch failed for \(id)\n".utf8)
+                )
+            }
+            return
+        }
+        launchSibling(id)
+    }
+}
 
 /// The dock's geometry, in one place so the drawing and the input region
 /// cannot drift.
@@ -147,24 +315,129 @@ enum Dock {
     /// is what reads as a lens rather than a jump.
     static let lensWidth: Float = 110
     static let spacing: Float = 12
+    /// Extra space between the last pin and the first running-only icon.
+    static let groupGap: Float = 18
     static let padding: Float = 10
-    /// Height of the surface. Tall enough for a magnified icon plus its
-    /// indicator and the shadow's worth of breathing room above the edge.
-    static let height: Float = magnifiedSize + padding * 2 + 14
+    /// Room above a magnified icon for the name tooltip.
+    static let tooltipRoom: Float = 28
+    /// Height of the surface. Tall enough for a magnified icon, its
+    /// name, the indicator, and a little air above the edge.
+    static let height: Float = magnifiedSize + padding * 2 + 14 + tooltipRoom
     /// How deep the strip is that reveals the dock when the pointer enters it.
     /// One pixel is enough to be *entered*, and too little to be aimed at.
     static let triggerHeight: Float = 3
+    /// Lift the icon this far (in surface Y, up is smaller) and a drop unpins.
+    static let unpinLift: Float = 28
+    /// How long neighbours take to make room. Short enough to track the
+    /// pointer, long enough to read as a slide rather than a jump.
+    static let slideDuration: Double = 0.2
+
+    /// Where the row would sit if `from` were dropped at `dest`.
+    ///
+    /// Two groups, not one list. `dest` left of the separator is the
+    /// pin side (an unpinned app joining makes the divider shift
+    /// right); `dest` on the right unpins (divider shifts left). A
+    /// pin dragged into the running-only half lands there, it does
+    /// not stick to the last pin slot.
+    struct Preview {
+        var items: [DockEntry]
+        var hole: Int
+        var split: Int
+    }
+
+    static func preview(
+        entries: [DockEntry], from: Int, dest rawDest: Int
+    ) -> Preview {
+        let count = entries.count
+        let pinCount = entries.prefix { $0.pinned }.count
+        guard count > 0, from >= 0, from < count else {
+            return Preview(items: entries, hole: 0, split: pinCount)
+        }
+        let item = entries[from]
+        // `count` is a real dest: past the last icon, "append".
+        let dest = min(max(0, rawDest), count)
+        var pins = Array(entries.prefix(pinCount))
+        var rest = Array(entries.dropFirst(pinCount))
+        pins.removeAll { $0.appId == item.appId }
+        rest.removeAll { $0.appId == item.appId }
+
+        let inPins = item.pinned
+            ? dest < pinCount
+            : item.canPin && dest < pinCount
+        if inPins {
+            let insert = min(dest, pins.count)
+            pins.insert(item, at: insert)
+            return Preview(items: pins + rest, hole: insert, split: pins.count)
+        }
+        let destU = dest - pinCount
+        let insert = min(max(0, destU), rest.count)
+        rest.insert(item, at: insert)
+        return Preview(items: pins + rest, hole: pins.count + insert, split: pins.count)
+    }
+
+    static func separatorX(plateX: Float, split: Int, count: Int) -> Float? {
+        guard split > 0, split < count else { return nil }
+        let left = restingCenter(
+            index: split - 1, plateX: plateX, splitAfter: split, count: count
+        ) + iconSize * 0.5
+        let right = restingCenter(
+            index: split, plateX: plateX, splitAfter: split, count: count
+        ) - iconSize * 0.5
+        return (left + right) * 0.5
+    }
 
     /// The dock's own rounded plate, centred on the surface.
-    static func plate(entries: Int, surfaceWidth: Float) -> (x: Float, w: Float) {
-        let count = Float(max(entries, 1))
-        let width = count * iconSize + (count - 1) * spacing + padding * 2
+    ///
+    /// `splitAfter` is how many icons sit in the pinned group. A gap is
+    /// inserted after that many so pins and running-only apps read as two
+    /// rows sharing a plate, not one bag.
+    static func plate(
+        entries: Int, splitAfter: Int, surfaceWidth: Float
+    ) -> (x: Float, w: Float) {
+        let count = max(entries, 1)
+        var width = Float(count) * iconSize
+            + Float(max(count - 1, 0)) * spacing
+            + padding * 2
+        if splitAfter > 0 && splitAfter < count { width += groupGap }
         return ((surfaceWidth - width) * 0.5, width)
     }
 
     /// Where an icon rests, before magnification.
-    static func restingCenter(index: Int, plateX: Float) -> Float {
-        plateX + padding + iconSize * 0.5 + Float(index) * (iconSize + spacing)
+    static func restingCenter(
+        index: Int, plateX: Float, splitAfter: Int, count: Int
+    ) -> Float {
+        var x = plateX + padding + iconSize * 0.5
+            + Float(index) * (iconSize + spacing)
+        if splitAfter > 0 && splitAfter < count && index >= splitAfter {
+            x += groupGap
+        }
+        return x
+    }
+
+    /// Slot the pointer is over, 0 ... count. `count` means past the
+    /// last icon — append, and the way a pin lands after the last
+    /// unpinned app (or after the last pin when the right half is empty).
+    static func slot(
+        atX x: Float, plateX: Float, splitAfter: Int, count: Int
+    ) -> Int {
+        guard count > 0 else { return 0 }
+        var best = 0
+        var bestDist = Float.greatestFiniteMagnitude
+        for i in 0..<count {
+            let c = restingCenter(
+                index: i, plateX: plateX, splitAfter: splitAfter, count: count
+            )
+            let d = abs(c - x)
+            if d < bestDist {
+                bestDist = d
+                best = i
+            }
+        }
+        let last = restingCenter(
+            index: count - 1, plateX: plateX, splitAfter: splitAfter, count: count
+        )
+        if x >= last + iconSize * 0.5 { return count }
+        return best
     }
 
     /// How big an icon is with the pointer at `pointerX`.
@@ -187,29 +460,30 @@ enum Dock {
 nonisolated(unsafe) var appliedRegion: (x: Float, y: Float, w: Float, h: Float) =
     (-1, -1, -1, -1)
 
+nonisolated(unsafe) let model = DockModel()
+
 struct DockView: View {
     var body: some View {
         // Read here, not only in `paint`: a paint closure runs at emit and is
         // invisible to observation, so a body that never mentions the model is
         // a view that never rebuilds when it changes.
-        let revealed = model.revealed
+        _ = model.revealed
+        _ = model.menu
+        _ = model.entries.count
+        _ = model.drag?.active
+        _ = model.sliding
         return Canvas(
             label: "Dock",
             flexGrow: 1,
-            // Only while it is out, and then every frame: magnification tracks
-            // the pointer continuously, and a pointer that merely *moves*
-            // invalidates nothing on its own — there is no state change to
-            // notice, just a new position to draw against. Hidden, the dock
-            // draws nothing and asks for nothing.
-            continuousRedraw: revealed,
-            onGesture: { gesture in
-                switch gesture.phase {
-                case .began, .moved:
-                    reveal()
-                case .ended:
-                    activate(atX: gesture.localX, frameWidth: gesture.frame.w)
-                }
-            },
+            // Magnification reads the pointer at paint time. A move already
+            // wakes a client frame (`LavaClient` marks redraw on every input
+            // that is not a renderer-owned hover/scroll), so asking the
+            // animation driver for 60 fps while the dock is merely *out*
+            // would paint the same plate every vsync for nothing. A drag
+            // that opened a hole is the exception: neighbours have to
+            // keep sliding after the pointer stops.
+            continuousRedraw: model.drag?.active == true || model.sliding,
+            onGesture: { gesture in handle(gesture) },
             onHover: { inside in
                 // The pointer arriving is the only thing a hidden dock ever
                 // hears: its input region is a three-pixel strip along the
@@ -220,6 +494,83 @@ struct DockView: View {
             paint: { list, frame in paint(list, frame) }
         )
         .agentId("dock")
+        .overlay(
+            isPresented: menuBinding,
+            placement: menuPlacement,
+            style: {
+                var s = MenuBarStyle.panel().overlayStyle
+                s.padding = 4
+                s.minWidth = 120
+                return s
+            }()
+        ) {
+            contextMenu
+        }
+    }
+
+    private var menuBinding: Binding<Bool> {
+        Binding(
+            get: { model.menu != nil },
+            set: { open in
+                if !open { model.menu = nil }
+            }
+        )
+    }
+
+    private var menuPlacement: OverlayPlacement {
+        OverlayPlacement { context in
+            let w = max(context.idealSize.width, 120)
+            let h = context.idealSize.height
+            let anchor = model.menu?.x ?? context.anchor.x
+            let x = min(
+                max(8, anchor - 8),
+                max(8, context.viewport.width - w - 8)
+            )
+            let y = max(4, context.viewport.height - h - Dock.iconSize - 22)
+            return OverlayFrame(x: x, y: y, width: w, height: h)
+        }
+    }
+
+    @ViewBuilder
+    private var contextMenu: some View {
+        let appId = model.menu?.appId ?? ""
+        MenuDropdownPanel(
+            entries: menuEntries(for: appId),
+            onActivate: { id in
+                switch id.raw {
+                case "dock.open":
+                    model.launch(appId)
+                case "dock.pin":
+                    model.pin(appId)
+                case "dock.unpin":
+                    model.unpin(appId)
+                default:
+                    break
+                }
+                model.menu = nil
+            },
+            style: .panel()
+        )
+    }
+
+    private func menuEntries(for appId: String) -> [MenuEntry] {
+        let entry = model.entries.first { $0.appId == appId }
+        let pinned = entry?.pinned ?? false
+        let running = entry?.isRunning ?? false
+        var items: [MenuEntry] = []
+        if !running {
+            items.append(.item(MenuItemModel(
+                id: MenuID("dock.open"), title: "Open"
+            )))
+        }
+        if DockPins.canPin(appId) {
+            if !items.isEmpty { items.append(.separator) }
+            items.append(.item(MenuItemModel(
+                id: MenuID(pinned ? "dock.unpin" : "dock.pin"),
+                title: pinned ? "Unpin" : "Pin"
+            )))
+        }
+        return items
     }
 
     /// Brings the dock out. What it accepts input in follows on the next
@@ -230,10 +581,156 @@ struct DockView: View {
         ViewInvalidation.markNeedsRedraw()
     }
 
+    private func handle(_ gesture: CanvasGesture) {
+        switch gesture.phase {
+        case .began:
+            reveal()
+            if gesture.button == PointerButton.right {
+                openMenu(atX: gesture.localX, frameWidth: gesture.frame.w)
+            } else if gesture.button == PointerButton.left {
+                beginPress(atX: gesture.localX, y: gesture.localY,
+                           frameWidth: gesture.frame.w)
+            }
+        case .moved:
+            updateDrag(atX: gesture.localX, y: gesture.localY,
+                       frameWidth: gesture.frame.w)
+        case .ended:
+            endPress(atX: gesture.localX, y: gesture.localY,
+                     frameWidth: gesture.frame.w)
+        }
+    }
+
+    private func entryIndex(atX x: Float, frameWidth: Float) -> Int? {
+        let entries = model.entries
+        guard !entries.isEmpty else { return nil }
+        let split = entries.prefix { $0.pinned }.count
+        let plate = Dock.plate(
+            entries: entries.count, splitAfter: split, surfaceWidth: frameWidth
+        )
+        for (index, _) in entries.enumerated() {
+            let center = Dock.restingCenter(
+                index: index, plateX: plate.x,
+                splitAfter: split, count: entries.count
+            )
+            let size = Dock.size(center: center, pointerX: x)
+            if abs(center - x) <= size * 0.5 { return index }
+        }
+        return nil
+    }
+
+    private func openMenu(atX x: Float, frameWidth: Float) {
+        guard let index = entryIndex(atX: x, frameWidth: frameWidth) else {
+            return
+        }
+        let entry = model.entries[index]
+        // Nothing to offer: an anonymous window cannot be pinned, and it
+        // is already running.
+        guard entry.canPin || !entry.isRunning else { return }
+        model.drag = nil
+        model.menu = DockContextMenu(appId: entry.appId, x: x)
+        ViewInvalidation.markNeedsRedraw()
+    }
+
+    private func beginPress(atX x: Float, y: Float, frameWidth: Float) {
+        model.menu = nil
+        guard let index = entryIndex(atX: x, frameWidth: frameWidth) else {
+            model.drag = nil
+            return
+        }
+        let entry = model.entries[index]
+        model.drag = DockDrag(
+            appId: entry.appId, fromIndex: index, dest: index,
+            startX: x, startY: y, pointerX: x, pointerY: y,
+            active: false
+        )
+    }
+
+    private func updateDrag(atX x: Float, y: Float, frameWidth: Float) {
+        guard var drag = model.drag else { return }
+        drag.pointerX = x
+        drag.pointerY = y
+        if let dest = dropSlot(atX: x, frameWidth: frameWidth) {
+            if !drag.active {
+                // Pixel slop is the wrong test: a magnified icon is wider than
+                // its rest slot, so a click on the right half already sits
+                // closer to the neighbour. Only a *different slot* (or a lift
+                // toward unpin) is a drag.
+                let lifted = drag.startY - y
+                if dest != drag.fromIndex || lifted >= Dock.unpinLift * 0.5 {
+                    drag.active = true
+                    model.sliding = true
+                }
+            }
+            if drag.active { drag.dest = dest }
+        }
+        model.drag = drag
+        ViewInvalidation.markNeedsRedraw()
+    }
+
+    private func endPress(atX x: Float, y: Float, frameWidth: Float) {
+        let drag = model.drag
+        model.drag = nil
+        guard let drag else { return }
+        let dest = dropSlot(atX: x, frameWidth: frameWidth) ?? drag.dest
+        let lifted = drag.startY - y
+        let from = model.entries.firstIndex(where: { $0.appId == drag.appId })
+            ?? drag.fromIndex
+        let preview = Dock.preview(
+            entries: model.entries, from: from, dest: dest
+        )
+        let split = model.entries.prefix { $0.pinned }.count
+        let moved = preview.hole != from || preview.split != split
+        if !drag.active {
+            activate(atX: drag.startX, frameWidth: frameWidth)
+        } else if lifted >= Dock.unpinLift || moved {
+            commitDrag(drag, atX: x, y: y, frameWidth: frameWidth)
+        }
+        ViewInvalidation.markNeedsRedraw()
+    }
+
+    private func dropSlot(atX x: Float, frameWidth: Float) -> Int? {
+        let entries = model.entries
+        guard !entries.isEmpty else { return nil }
+        let split = entries.prefix { $0.pinned }.count
+        let plate = Dock.plate(
+            entries: entries.count, splitAfter: split, surfaceWidth: frameWidth
+        )
+        return Dock.slot(
+            atX: x, plateX: plate.x, splitAfter: split, count: entries.count
+        )
+    }
+
+    private func commitDrag(
+        _ drag: DockDrag, atX x: Float, y: Float, frameWidth: Float
+    ) {
+        let entries = model.entries
+        guard let from = entries.firstIndex(where: { $0.appId == drag.appId })
+        else { return }
+        let dest = dropSlot(atX: x, frameWidth: frameWidth) ?? drag.dest
+        let lifted = drag.startY - y
+        let item = entries[from]
+
+        if lifted >= Dock.unpinLift, item.pinned {
+            model.unpin(item.appId)
+            return
+        }
+
+        let preview = Dock.preview(entries: entries, from: from, dest: dest)
+        let order = preview.items.map(\.appId)
+        // The prefix *is* the pin group after this drop. Crossing the
+        // separator either way is how pin/unpin happens on a drag.
+        let pinnedIds = preview.items.prefix(preview.split).map(\.appId)
+        model.commitOrder(order, pinnedIds: Array(pinnedIds))
+    }
+
     private func paint(_ list: DrawList, _ frame: CanvasFrame) {
         let entries = model.entries
-        let plate = Dock.plate(entries: max(entries.count, 1),
-                               surfaceWidth: frame.w)
+        let drag = model.drag
+        let dragging = drag?.active == true
+        let layout = rowLayout(
+            entries: entries, drag: drag, surfaceWidth: frame.w
+        )
+        let plate = layout.plate
         // Where the dock takes clicks is decided *here*, from the geometry it
         // is about to draw with. The two were computed separately once — the
         // plate from the canvas's real width, the region from a width polled
@@ -261,49 +758,208 @@ struct DockView: View {
 
         // The pointer's own position, read at paint time. A `Canvas` hears
         // about motion only inside a press, and a dock magnifies under a
-        // pointer that is merely passing.
-        let pointer: Float? = PointerState.window.x
+        // pointer that is merely passing. A drag owns the lens.
+        let pointer: Float? = dragging ? nil : PointerState.window.x
+        let now = FrameScheduler.now()
+        var live: [String: Animated<Float>] = [:]
+        var anySliding = false
 
-        for (index, entry) in entries.enumerated() {
-            let center = frame.x + Dock.restingCenter(index: index, plateX: plate.x)
+        var hovered: (entry: DockEntry, center: Float, size: Float, top: Float)?
+        for entry in entries {
+            guard let target = layout.centers[entry.appId] else { continue }
+            var anim = model.iconSlide[entry.appId] ?? Animated(target)
+            if abs(anim.target - target) > 0.25 {
+                anim.animate(
+                    to: target, duration: Dock.slideDuration, curve: .easeOut
+                )
+            }
+            if anim.step(now) { anySliding = true }
+            live[entry.appId] = anim
+            let center = frame.x + anim.current
             let size = Dock.size(center: center, pointerX: pointer)
-            // Magnified icons grow *upwards* out of the plate, which is what
-            // keeps their feet on one line and the row from looking loose.
-            let bottom = plateY + plateH - Dock.padding
-            let rect = (x: center - size * 0.5, y: bottom - size, w: size, h: size)
-
-            if let icon = model.icon(for: entry) {
-                list.image(textureId: icon.textureId, x: rect.x, y: rect.y,
-                           w: rect.w, h: rect.h)
-            } else {
-                // No icon anywhere on the system for this application. Its
-                // initial in a tile reads as deliberate, where a blank square
-                // reads as broken.
-                list.roundedRect(x: rect.x, y: rect.y, w: rect.w, h: rect.h,
-                                 color: theme.accent, radius: size * 0.22)
-                let letter = String(entry.title.prefix(1)).uppercased()
-                list.text(letter, x: rect.x + size * 0.32,
-                          y: rect.y + size * 0.24, w: size, h: size,
-                          color: theme.background)
+            paintIcon(
+                list, entry: entry, center: center, size: size,
+                plateY: plateY, plateH: plateH, theme: theme
+            )
+            if let pointer, abs(center - pointer) <= size * 0.55 {
+                let top = (plateY + plateH - Dock.padding) - size
+                if hovered == nil
+                    || abs(center - pointer) < abs(hovered!.center - pointer)
+                {
+                    hovered = (entry, center, size, top)
+                }
             }
+        }
+        model.iconSlide = live
 
-            if entry.isMinimized {
-                // Hidden windows are still open, and a dock that showed them
-                // exactly like visible ones would be lying about the desktop.
-                list.roundedRect(x: rect.x, y: rect.y, w: rect.w, h: rect.h,
-                                 color: Color(r: theme.background.r,
-                                              g: theme.background.g,
-                                              b: theme.background.b, a: 0.45),
-                                 radius: size * 0.22)
+        if dragging, let drag, let entry = entries.first(where: { $0.appId == drag.appId }) {
+            let lift = max(0, min(Dock.unpinLift + 8, drag.startY - drag.pointerY))
+            let size = Dock.magnifiedSize
+            let center = frame.x + drag.pointerX
+            let bottom = plateY + plateH - Dock.padding - lift
+            paintIcon(
+                list, entry: entry, center: center, size: size,
+                plateY: plateY, plateH: plateH, theme: theme,
+                bottom: bottom
+            )
+        }
+
+        if let target = layout.separatorX {
+            var anim = model.separatorSlide ?? Animated(target)
+            if abs(anim.target - target) > 0.25 {
+                anim.animate(
+                    to: target, duration: Dock.slideDuration, curve: .easeOut
+                )
             }
+            if anim.step(now) { anySliding = true }
+            model.separatorSlide = anim
+            let mid = frame.x + anim.current
+            list.roundedRect(
+                x: mid - 1, y: plateY + plateH * 0.28,
+                w: 2, h: plateH * 0.44,
+                color: theme.border.opacity(0.85),
+                radius: 1
+            )
+        } else {
+            model.separatorSlide = nil
+        }
 
-            // The running indicator: one dot, brighter for the focused
-            // application. Under the icon rather than on it, so it survives
-            // whatever the icon happens to look like.
-            let dotY = plateY + plateH + 3
+        if anySliding { FrameScheduler.requestWake(in: 1.0 / 60.0) }
+        if model.sliding != anySliding { model.sliding = anySliding }
+
+        if !dragging, model.menu == nil, let hovered {
+            paintTooltip(
+                list, title: hovered.entry.title,
+                center: hovered.center, iconTop: hovered.top,
+                frame: frame, theme: theme
+            )
+        }
+    }
+
+    /// Resting centres for every icon that stays on the plate.
+    ///
+    /// A live drag keeps the plate at full width and leaves a hole at
+    /// the preview dest so neighbours have somewhere to slide into.
+    /// The pin/unpinned split is the preview's, so the separator
+    /// travels with the hole instead of sitting on the old boundary.
+    /// Lifting a pin far enough closes the hole: the row is about
+    /// to lose that icon.
+    private func rowLayout(
+        entries: [DockEntry], drag: DockDrag?, surfaceWidth: Float
+    ) -> (
+        plate: (x: Float, w: Float), split: Int, count: Int,
+        centers: [String: Float], separatorX: Float?
+    ) {
+        let dragging = drag?.active == true
+        let unpinning: Bool = {
+            guard dragging, let drag,
+                  let item = entries.first(where: { $0.appId == drag.appId })
+            else { return false }
+            return item.pinned && (drag.startY - drag.pointerY) >= Dock.unpinLift
+        }()
+
+        let items: [DockEntry]
+        let split: Int
+        let hole: Int?
+
+        if dragging, let drag, unpinning {
+            items = entries.filter { $0.appId != drag.appId }
+            split = items.prefix { $0.pinned }.count
+            hole = nil
+        } else if dragging, let drag,
+                  let from = entries.firstIndex(where: { $0.appId == drag.appId })
+        {
+            let preview = Dock.preview(
+                entries: entries, from: from, dest: drag.dest
+            )
+            items = preview.items
+            split = preview.split
+            hole = preview.hole
+        } else {
+            items = entries
+            split = entries.prefix { $0.pinned }.count
+            hole = nil
+        }
+
+        let plate = Dock.plate(
+            entries: max(items.count, 1),
+            splitAfter: split,
+            surfaceWidth: surfaceWidth
+        )
+        var centers: [String: Float] = [:]
+        for (index, entry) in items.enumerated() {
+            if hole == index { continue }
+            centers[entry.appId] = Dock.restingCenter(
+                index: index, plateX: plate.x,
+                splitAfter: split, count: items.count
+            )
+        }
+        return (
+            plate, split, items.count, centers,
+            Dock.separatorX(plateX: plate.x, split: split, count: items.count)
+        )
+    }
+
+    private func paintIcon(
+        _ list: DrawList, entry: DockEntry, center: Float, size: Float,
+        plateY: Float, plateH: Float, theme: Theme,
+        bottom: Float? = nil
+    ) {
+        let iconBottom = bottom ?? (plateY + plateH - Dock.padding)
+        let rect = (x: center - size * 0.5, y: iconBottom - size, w: size, h: size)
+
+        if let icon = model.icon(for: entry) {
+            list.image(textureId: icon.textureId, x: rect.x, y: rect.y,
+                       w: rect.w, h: rect.h)
+        } else {
+            // No icon anywhere on the system for this application. Its
+            // initial in a tile reads as deliberate, where a blank square
+            // reads as broken.
+            list.roundedRect(x: rect.x, y: rect.y, w: rect.w, h: rect.h,
+                             color: theme.accent, radius: size * 0.22)
+            let letter = String(entry.title.prefix(1)).uppercased()
+            list.text(letter, x: rect.x + size * 0.32,
+                      y: rect.y + size * 0.24, w: size, h: size,
+                      color: theme.background)
+        }
+
+        if !entry.isRunning, entry.pinned {
+            // No running indicator. The missing dot *is* the fact.
+        } else if entry.isRunning {
+            // Just under the icon, still inside the plate. It used to sit
+            // three pixels *below* the bar, which read as a second row.
+            let dotY = iconBottom + 5
             list.circle(cx: center, cy: dotY, radius: entry.isFocused ? 3 : 2,
                         color: entry.isFocused ? theme.accent : theme.textDim)
         }
+    }
+
+    /// Name of the icon under the pointer, parked above the magnified tile.
+    private func paintTooltip(
+        _ list: DrawList, title: String, center: Float, iconTop: Float,
+        frame: CanvasFrame, theme: Theme
+    ) {
+        let name = title.trimmingCharacters(in: .whitespaces)
+        guard !name.isEmpty, let font = FontStore.default else { return }
+        let textW = font.measure(name).width
+        let padX: Float = 10
+        let padY: Float = 4
+        let pillW = textW + padX * 2
+        let pillH = font.lineHeight + padY * 2
+        var x = center - pillW * 0.5
+        x = min(max(frame.x + 6, x), frame.x + frame.w - pillW - 6)
+        let y = max(frame.y + 4, iconTop - pillH - 6)
+        list.roundedRect(
+            x: x, y: y, w: pillW, h: pillH,
+            color: Color(r: theme.panel.r, g: theme.panel.g, b: theme.panel.b,
+                         a: 0.96),
+            radius: pillH * 0.5
+        )
+        list.text(
+            name, x: x + padX - 4, y: y + padY,
+            w: textW + 8, h: font.lineHeight,
+            color: theme.textPrimary, font: font
+        )
     }
 
     /// Keeps the compositor's idea of where this dock is clickable in step
@@ -312,13 +968,19 @@ struct DockView: View {
     /// Hidden, that is a sliver along the screen's edge — the strip the pointer
     /// has to reach to bring the dock out, and nothing else, so a click aimed
     /// at a window near the bottom of the screen is not eaten by an invisible
-    /// panel. Revealed, it is the plate.
+    /// panel. Revealed, it is the plate. A drag or a menu takes the whole
+    /// strip so the pointer is not clipped to the icons it started on.
     private func syncInputRegion(plate: (x: Float, w: Float), frame: CanvasFrame,
                                  hasEntries: Bool) {
-        let region: (x: Float, y: Float, w: Float, h: Float) =
-            model.revealed && hasEntries
-                ? (plate.x, 0, plate.w, frame.h)
-                : (0, frame.h - Dock.triggerHeight, frame.w, Dock.triggerHeight)
+        let grabbing = model.drag?.active == true || model.menu != nil
+        let region: (x: Float, y: Float, w: Float, h: Float)
+        if grabbing {
+            region = (0, 0, frame.w, frame.h)
+        } else if model.revealed && hasEntries {
+            region = (plate.x, 0, plate.w, frame.h)
+        } else {
+            region = (0, frame.h - Dock.triggerHeight, frame.w, Dock.triggerHeight)
+        }
         guard region != appliedRegion else { return }
         appliedRegion = region
         LavaClient.setInputRegion(x: region.x, y: region.y,
@@ -327,14 +989,12 @@ struct DockView: View {
 
     /// Which entry is under `x`, and what clicking it means.
     private func activate(atX x: Float, frameWidth: Float) {
-        let entries = model.entries
-        guard model.revealed, !entries.isEmpty else { return }
-        let plate = Dock.plate(entries: entries.count, surfaceWidth: frameWidth)
-        for (index, entry) in entries.enumerated() {
-            let center = Dock.restingCenter(index: index, plateX: plate.x)
-            let size = Dock.size(center: center, pointerX: x)
-            guard abs(center - x) <= size * 0.5 else { continue }
-            guard let window = entry.primary else { return }
+        guard model.revealed else { return }
+        guard let index = entryIndex(atX: x, frameWidth: frameWidth) else {
+            return
+        }
+        let entry = model.entries[index]
+        if let window = entry.primary {
             // Clicking the application you are already in puts it away, which
             // is the gesture every dock has: the icon is a toggle, not a
             // one-way trip.
@@ -345,7 +1005,51 @@ struct DockView: View {
             }
             return
         }
+        model.launch(entry.appId)
     }
+}
+
+// ─── Desktop actions ─────────────────────────────────────────────────────────
+
+/// Starts a sibling desktop program when there is no `.desktop` file —
+/// LavaTerm, LavaSettings — the same lookup the panel uses.
+func launchSibling(_ name: String) {
+    let candidates: [String] = {
+        var paths: [String] = []
+        if let selfPath = CommandLine.arguments.first {
+            let dir = URL(fileURLWithPath: selfPath).deletingLastPathComponent()
+            paths.append(dir.appendingPathComponent(name).path)
+            paths.append(dir.appendingPathComponent("../debug/\(name)").path)
+            paths.append(dir.appendingPathComponent("../release/\(name)").path)
+        }
+        paths.append(name)
+        return paths
+    }()
+
+    for path in candidates {
+        let process = Process()
+        if path.contains("/") {
+            let url = URL(fileURLWithPath: path)
+            guard FileManager.default.isExecutableFile(atPath: url.path) else {
+                continue
+            }
+            process.executableURL = url
+        } else {
+            process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+            process.arguments = [path]
+        }
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        do {
+            try process.run()
+            return
+        } catch {
+            continue
+        }
+    }
+    FileHandle.standardError.write(
+        Data("dock: could not launch \(name)\n".utf8)
+    )
 }
 
 // ─── Bring-up ───────────────────────────────────────────────────────────────
@@ -360,6 +1064,9 @@ guard let editor = LavaClient.openPanel(
 ) else { exit(1) }
 
 model.editor = editor
+model.loadCatalog()
+model.pins = DockPins.load()
+model.rebuildEntries()
 
 LavaClient.onWindowList { workspace, windows in
     model.apply(workspace: workspace, windows: windows)
@@ -380,7 +1087,7 @@ LavaClient.onPanelArea { covered in
     // pointer.
     if model.showsBecauseClear {
         model.revealed = true
-    } else if !model.pointerInside {
+    } else if !model.pointerInside, model.drag == nil, model.menu == nil {
         model.revealed = false
     }
     ViewInvalidation.markNeedsRedraw()
@@ -390,12 +1097,16 @@ LavaClient.onPanelArea { covered in
 // hears about the pointer while it is inside and nothing at all afterwards.
 PointerState.onLeave = {
     MainQueue.async {
+        // A captured drag still owns the pointer even after the cursor
+        // walks off the strip; do not hide under it.
+        if model.drag != nil { return }
         model.pointerInside = false
         guard model.revealed else { return }
         // Nothing to hide behind: the dock is out because the desktop under it
         // is clear, and the pointer wandering off is not a reason to put it
         // away.
         guard !model.showsBecauseClear else { return }
+        if model.menu != nil { return }
         model.revealed = false
         ViewInvalidation.markNeedsRedraw()
     }
