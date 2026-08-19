@@ -139,6 +139,9 @@ final class DockModel {
     @ObservationIgnored var catalog: [String: DesktopEntry] = [:]
     @ObservationIgnored private var lastWindows: [WindowInfo] = []
     @ObservationIgnored private var lastWorkspace: UInt32 = 0
+    /// Last canvas width, so a wheel can resolve which icon it is over.
+    @ObservationIgnored var lastFrameWidth: Float = 0
+    @ObservationIgnored private var badgeFontCache: UIFont?
 
     func loadCatalog() {
         let installed = DesktopEntry.installed()
@@ -199,6 +202,21 @@ final class DockModel {
             } else {
                 grouped[key]?.windows.append(window)
             }
+        }
+        // Window order inside an icon is ours. Activate restacks the
+        // compositor list, and a wheel-cycle that followed that would
+        // shuffle under the pointer. Keep whoever was already here;
+        // a new window of the same app appends.
+        let previousWindows = Dictionary(
+            uniqueKeysWithValues: entries.map { ($0.appId, $0.windows) }
+        )
+        for key in grouped.keys {
+            guard let incoming = grouped[key]?.windows,
+                  let old = previousWindows[key]
+            else { continue }
+            grouped[key]?.windows = Self.stableWindowOrder(
+                incoming, previous: old
+            )
         }
 
         var next: [DockEntry] = []
@@ -268,6 +286,30 @@ final class DockModel {
         return image
     }
 
+    /// Incoming windows in the order we already had them, new ones at the
+    /// end. The compositor's list is z-order and changes on every focus.
+    static func stableWindowOrder(
+        _ incoming: [WindowInfo], previous: [WindowInfo]
+    ) -> [WindowInfo] {
+        let byId = Dictionary(
+            incoming.map { ($0.surfaceId, $0) },
+            uniquingKeysWith: { first, _ in first }
+        )
+        var seen = Set<UInt32>()
+        var out: [WindowInfo] = []
+        for old in previous {
+            if let window = byId[old.surfaceId],
+               seen.insert(window.surfaceId).inserted
+            {
+                out.append(window)
+            }
+        }
+        for window in incoming where seen.insert(window.surfaceId).inserted {
+            out.append(window)
+        }
+        return out
+    }
+
     func pin(_ id: String, at index: Int? = nil) {
         guard DockPins.canPin(id) else { return }
         pins.pin(id, on: lastWorkspace, at: index)
@@ -298,6 +340,34 @@ final class DockModel {
         entries = pinIds.compactMap { byId[$0] } + extras.compactMap { byId[$0] }
         rebuildEntries()
         ViewInvalidation.markNeedsRedraw()
+    }
+
+    /// Next or previous window of this application. `step` is in notches
+    /// after the sign flip: positive is the next in our stable order.
+    func cycleWindows(of appId: String, step: Int) {
+        guard step != 0,
+              let entry = entries.first(where: { $0.appId == appId }),
+              entry.windows.count > 1
+        else { return }
+        let current = entry.windows.firstIndex(where: { $0.focused }) ?? 0
+        let count = entry.windows.count
+        let next = ((current + step) % count + count) % count
+        LavaClient.activateWindow(entry.windows[next].surfaceId)
+    }
+
+    /// Small face for the instance count. Registered the first time we
+    /// paint a badge, when the editor is already there.
+    func badgeFont() -> UIFont? {
+        if let badgeFontCache { return badgeFontCache }
+        guard let base = FontStore.default else { return nil }
+        guard let font = UIFont(
+            path: base.path, pixelSize: 10, faceIndex: base.faceIndex
+        ) else {
+            return base
+        }
+        if let editor { _ = font.registerWithEngine(editor) }
+        badgeFontCache = font
+        return font
     }
 
     func launch(_ id: String) {
@@ -492,6 +562,9 @@ struct DockView: View {
             // keep sliding after the pointer stops.
             continuousRedraw: model.drag?.active == true || model.sliding,
             onGesture: { gesture in handle(gesture) },
+            onWheel: { dx, dy, localX, _ in
+                handleWheel(dx: dx, dy: dy, atX: localX)
+            },
             onHover: { inside in
                 // The pointer arriving is the only thing a hidden dock ever
                 // hears: its input region is a three-pixel strip along the
@@ -587,6 +660,20 @@ struct DockView: View {
         guard !model.revealed else { return }
         model.revealed = true
         ViewInvalidation.markNeedsRedraw()
+    }
+
+    /// Scroll down (negative dy) is the next window; up is the previous.
+    /// Same sign VolumeApplet uses: positive dy is scroll up.
+    private func handleWheel(dx: Float, dy: Float, atX x: Float) {
+        guard model.revealed, model.drag == nil, model.menu == nil else { return }
+        let along = abs(dy) >= abs(dx) ? dy : dx
+        let step = Int(along.rounded())
+        guard step != 0 else { return }
+        let width = model.lastFrameWidth
+        guard width > 0,
+              let index = entryIndex(atX: x, frameWidth: width)
+        else { return }
+        model.cycleWindows(of: model.entries[index].appId, step: -step)
     }
 
     private func handle(_ gesture: CanvasGesture) {
@@ -735,6 +822,7 @@ struct DockView: View {
         let entries = model.entries
         let drag = model.drag
         let dragging = drag?.active == true
+        model.lastFrameWidth = frame.w
         let layout = rowLayout(
             entries: entries, drag: drag, surfaceWidth: frame.w
         )
@@ -940,6 +1028,40 @@ struct DockView: View {
             list.circle(cx: center, cy: dotY, radius: entry.isFocused ? 3 : 2,
                         color: entry.isFocused ? theme.accent : theme.textDim)
         }
+
+        if entry.windows.count > 1 {
+            paintCountBadge(
+                list, count: entry.windows.count,
+                icon: rect, theme: theme
+            )
+        }
+    }
+
+    /// Instance count, hung on the icon's top-right. One window is the
+    /// ordinary case and needs no number.
+    private func paintCountBadge(
+        _ list: DrawList, count: Int, icon: (x: Float, y: Float, w: Float, h: Float),
+        theme: Theme
+    ) {
+        guard let font = model.badgeFont() else { return }
+        let label = count > 99 ? "99+" : "\(count)"
+        let textW = font.measure(label).width
+        let pad: Float = 4
+        let h = max(14, font.lineHeight + 2)
+        let w = max(h, textW + pad * 2)
+        let x = icon.x + icon.w - w + 3
+        let y = icon.y - 2
+        list.roundedRect(
+            x: x, y: y, w: w, h: h,
+            color: theme.accent,
+            radius: h * 0.5
+        )
+        // `text` insets the pen 4px; pull back so the digit sits in the pill.
+        list.text(
+            label, x: x + pad - 4, y: y + (h - font.lineHeight) * 0.5,
+            w: textW + 8, h: font.lineHeight,
+            color: theme.background, font: font
+        )
     }
 
     /// Name of the icon under the pointer, parked above the magnified tile.
