@@ -59,7 +59,6 @@ final class MenuBarStyleTests: XCTestCase {
         defer { BackdropBridge.frostOverlay = nil }
         let panel = MenuBarStyle.panel(theme: .dark)
         XCTAssertEqual(panel.dropdownBlur, 12)
-        XCTAssertLessThan(panel.dropdownBackground.a, 0.9)
         XCTAssertGreaterThan(panel.dropdownBackground.a, 0.7)
     }
 

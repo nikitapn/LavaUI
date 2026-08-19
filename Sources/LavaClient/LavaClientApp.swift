@@ -562,9 +562,13 @@ public enum LavaClient {
         }
     }
 
-    /// Frost a rectangle of the desktop behind this surface. `radius` 0
-    /// clears. Debounced: emit calls this every frame a popup is up, and
-    /// the compositor recaptures whenever the region changes.
+    /// Frost a rectangle of the desktop behind this surface.
+    ///
+    /// `radius` 0 means the popup is gone. That must not wipe a window
+    /// that asked for whole-surface frost (`WindowBackdrop.blur`) — the
+    /// two share one compositor plate, so a clear here restores the
+    /// window radius when there is one. Idle frames (never had a popup)
+    /// send nothing at all.
     public static func setBackdropBlurRegion(
         radius: Float, x: Float, y: Float, w: Float, h: Float,
         cornerRadius: Float
@@ -582,20 +586,44 @@ public enum LavaClient {
               let pending = pendingOverlayFrost
         else { return }
         guard lastOverlayFrost != pending else { return }
+
+        let hadOverlay = lastOverlayFrost.map { $0.radius > 0 } ?? false
         lastOverlayFrost = pending
+
+        // Nothing to tell the compositor: no popup is up, and none was.
+        if pending.radius == 0 && !hadOverlay { return }
+
         let id = surfaceID
         Task.detached {
             do {
-                try await compositor.setBackdropBlurRegion(
-                    surfaceId: id, radius: pending.radius,
-                    x: pending.x, y: pending.y,
-                    w: pending.w, h: pending.h,
-                    cornerRadius: pending.corner
-                )
+                if pending.radius == 0 {
+                    let windowRadius = WindowBackdrop.current.compositorBlurRadius
+                    if windowRadius > 0 {
+                        try await compositor.setBackdropBlur(
+                            surfaceId: id, radius: windowRadius
+                        )
+                    } else {
+                        try await compositor.setBackdropBlurRegion(
+                            surfaceId: id, radius: 0,
+                            x: 0, y: 0, w: 0, h: 0, cornerRadius: 0
+                        )
+                    }
+                } else {
+                    try await compositor.setBackdropBlurRegion(
+                        surfaceId: id, radius: pending.radius,
+                        x: pending.x, y: pending.y,
+                        w: pending.w, h: pending.h,
+                        cornerRadius: pending.corner
+                    )
+                }
             } catch {
                 FileHandle.standardError.write(
                     Data("SetBackdropBlurRegion failed: \(error)\n".utf8)
                 )
+                MainQueue.async {
+                    BackdropBridge.frostOverlay = nil
+                    ViewInvalidation.markDirty()
+                }
             }
         }
     }
@@ -607,27 +635,6 @@ public enum LavaClient {
         var w: Float
         var h: Float
         var corner: Float
-    }
-
-    /// Asks once, with radius 0, so a compositor that does not have the
-    /// method fails cheaply and we never install the overlay hook.
-    private static func probeOverlayFrost(
-        compositor: Compositor, surfaceId: UInt32
-    ) {
-        do {
-            try blockingCall {
-                try await compositor.setBackdropBlurRegion(
-                    surfaceId: surfaceId, radius: 0,
-                    x: 0, y: 0, w: 0, h: 0, cornerRadius: 0
-                )
-            }
-            overlayFrostSupported = true
-        } catch {
-            overlayFrostSupported = false
-            FileHandle.standardError.write(
-                Data("SetBackdropBlurRegion not available: \(error)\n".utf8)
-            )
-        }
     }
 
     /// Limits where this surface takes pointer input, in its own coordinates.
@@ -744,12 +751,6 @@ public enum LavaClient {
             // Anything the application asked for before it had a surface.
             flushMinimumSize()
             flushBackdropBlur()
-            // Probe region frost before the first body: `MenuBarStyle.panel`
-            // reads `BackdropBridge.frostOverlay != nil` to decide whether
-            // the popup wash can be translucent. An old compositor that
-            // does not have the method must leave the hook empty, or the
-            // menu goes back to stained glass with nothing behind it.
-            probeOverlayFrost(compositor: compositor, surfaceId: surfaceID)
             if let pending = pendingPanelArea {
                 pendingPanelArea = nil
                 startPanelArea(pending)
@@ -865,13 +866,15 @@ public enum LavaClient {
             }
         }
 
-        if overlayFrostSupported {
-            BackdropBridge.frostOverlay = { radius, x, y, w, h, corner in
-                LavaClient.setBackdropBlurRegion(
-                    radius: radius, x: x, y: y, w: w, h: h,
-                    cornerRadius: corner
-                )
-            }
+        // Always arm the hook. A probe that sent radius 0 at startup
+        // cleared the window frost a terminal had just asked for, and
+        // every frame without a popup then kept it cleared. Idle emits
+        // no-op inside `flushOverlayFrost` until a popup actually asks.
+        BackdropBridge.frostOverlay = { radius, x, y, w, h, corner in
+            LavaClient.setBackdropBlurRegion(
+                radius: radius, x: x, y: y, w: w, h: h,
+                cornerRadius: corner
+            )
         }
 
         // The window's own chrome, for an app drawing its own frame — and for
@@ -1063,9 +1066,6 @@ public enum LavaClient {
     /// Popup frost last sent / last asked, so emit can call every frame.
     nonisolated(unsafe) private static var pendingOverlayFrost: OverlayFrost?
     nonisolated(unsafe) private static var lastOverlayFrost: OverlayFrost?
-    /// False until `probeOverlayFrost` succeeds. An old compositor
-    /// without `SetBackdropBlurRegion` must not get the hook installed.
-    nonisolated(unsafe) private static var overlayFrostSupported = false
     /// Input lease for `quit()` / compositor-side close. Set in `run`.
     nonisolated(unsafe) private static var inputChannel: InputChannel?
     /// Handed from `open` to `run`. Statics rather than a returned handle so
