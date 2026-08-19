@@ -36,15 +36,17 @@ public enum TerminalPalette {
     public static let defaultBg: RGB = (0, 0, 0)
     /// Window wash over the desktop. 1 is a slab; 0 is a hole.
     ///
-    /// **Needs retuning.** This 0.99 was chosen when blending happened in
-    /// linear light, where the encode curve is near-vertical at the bottom
-    /// and 0.99 let roughly 7% of the desktop through — the "little desktop
-    /// through" this file describes. Since 2026-08-19 the pipeline blends in
-    /// sRGB, where what shows through is simply `1 - a`, so 0.99 is now 1%:
-    /// effectively a slab. **0.93 reproduces the intended look.** Left at the
-    /// old value pending a look at it on a real desktop rather than a silent
-    /// change to how the terminal reads. See `docs/colour-and-blending.md`.
-    public static let windowAlpha: Float = 0.99
+    /// Read this as "7% of the desktop shows through", because since
+    /// 2026-08-19 that is literally what it means: the pipeline blends in
+    /// sRGB, so what comes through is `1 - a`.
+    ///
+    /// It was 0.99 for the same 7% under linear blending, where the encode
+    /// curve is near-vertical at the bottom and the useful range of a wash
+    /// was all crammed above 0.98. That is why a number this close to 1 used
+    /// to be the right answer, and why it is no longer. Anything else in the
+    /// palette carried over from before that date wants the same treatment.
+    /// See `docs/colour-and-blending.md`.
+    public static let windowAlpha: Float = 0.93
     /// Selection overlay, drawn on top of the cells.
     public static let selection: RGB = (0.35, 0.55, 0.85)
     public static let selectionAlpha: Float = 0.35

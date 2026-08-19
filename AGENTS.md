@@ -99,7 +99,8 @@ Consequences that surprise people:
   This changed on 2026-08-19; before that every attachment was `*_SRGB` and
   blending was linear, which made the useful range of a window wash 0.98–1.0.
   **Anything tuned against that is now too solid** — `TerminalPalette
-  .windowAlpha` is the known one and carries a note.
+  .windowAlpha` was retuned 0.99 → 0.93 for the same 7% of desktop showing
+  through; the rest of that palette has not been revisited.
   The reason for the change is the buffer handover, not taste: Wayland's
   premultiplied contract is on the stored bytes (`rgb <= a`), and
   premultiplying in linear light then encoding stores `encode(L*a)`, which is
