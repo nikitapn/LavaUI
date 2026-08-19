@@ -6,8 +6,9 @@ import LavaUI
 import Observation
 
 // The desktop's dock: what is open on this workspace, as icons, at the bottom
-// of the screen — plus the applications the user pinned, which stay even
-// when they have no window.
+// of the screen — plus the applications the user pinned *here*, which stay
+// even when they have no window. Pins are per workspace, so a work desk
+// and a home desk keep different ones.
 //
 //   terminal 1:  compositor/scripts/dev-run
 //   terminal 2:  swift run LavaDock
@@ -134,7 +135,7 @@ final class DockModel {
 
     @ObservationIgnored var editor: Editor?
     @ObservationIgnored private var icons: [String: UIImage?] = [:]
-    @ObservationIgnored var pins = DockPins(ids: [])
+    @ObservationIgnored var pins = DockPins()
     @ObservationIgnored var catalog: [String: DesktopEntry] = [:]
     @ObservationIgnored private var lastWindows: [WindowInfo] = []
     @ObservationIgnored private var lastWorkspace: UInt32 = 0
@@ -161,6 +162,12 @@ final class DockModel {
     /// The compositor's snapshot, filtered to this workspace and grouped,
     /// then prefixed with whatever the user pinned.
     func apply(workspace: UInt32, windows: [WindowInfo]) {
+        if workspace != lastWorkspace {
+            // A drag belongs to the workspace it started on. Committing it
+            // after a switch would write the other desk's pins.
+            drag = nil
+            menu = nil
+        }
         lastWorkspace = workspace
         lastWindows = windows
         rebuildEntries()
@@ -186,7 +193,8 @@ final class DockModel {
                 order.append(key)
                 grouped[key] = DockEntry(
                     appId: key, title: window.title,
-                    windows: [window], pinned: pins.contains(key)
+                    windows: [window],
+                    pinned: pins.contains(key, on: lastWorkspace)
                 )
             } else {
                 grouped[key]?.windows.append(window)
@@ -195,7 +203,7 @@ final class DockModel {
 
         var next: [DockEntry] = []
         var seen = Set<String>()
-        for id in pins.ids {
+        for id in pins.ids(on: lastWorkspace) {
             seen.insert(id)
             if var existing = grouped[id] {
                 existing.pinned = true
@@ -262,14 +270,14 @@ final class DockModel {
 
     func pin(_ id: String, at index: Int? = nil) {
         guard DockPins.canPin(id) else { return }
-        pins.pin(id, at: index)
+        pins.pin(id, on: lastWorkspace, at: index)
         pins.save()
         rebuildEntries()
         ViewInvalidation.markNeedsRedraw()
     }
 
     func unpin(_ id: String) {
-        pins.unpin(id)
+        pins.unpin(id, on: lastWorkspace)
         pins.save()
         rebuildEntries()
         ViewInvalidation.markNeedsRedraw()
@@ -278,16 +286,16 @@ final class DockModel {
     /// After a drop: `order` is the new left-to-right app ids, `pinnedIds`
     /// is who stays on the dock when they have no window.
     func commitOrder(_ order: [String], pinnedIds: [String]) {
-        var seen = Set<String>()
-        pins.ids = pinnedIds.filter { DockPins.canPin($0) && seen.insert($0).inserted }
+        pins.setIds(pinnedIds, on: lastWorkspace)
         pins.save()
         // Seed `entries` with the drop order so rebuildEntries keeps
         // unpinned icons where the user put them, not where the
         // compositor lists them.
-        let pinSet = Set(pins.ids)
+        let pinIds = pins.ids(on: lastWorkspace)
+        let pinSet = Set(pinIds)
         let extras = order.filter { !pinSet.contains($0) }
         let byId = Dictionary(uniqueKeysWithValues: entries.map { ($0.appId, $0) })
-        entries = pins.ids.compactMap { byId[$0] } + extras.compactMap { byId[$0] }
+        entries = pinIds.compactMap { byId[$0] } + extras.compactMap { byId[$0] }
         rebuildEntries()
         ViewInvalidation.markNeedsRedraw()
     }

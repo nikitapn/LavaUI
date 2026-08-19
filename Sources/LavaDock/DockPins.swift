@@ -1,12 +1,13 @@
 import Foundation
 
-/// Ordered app ids the user asked the dock to keep.
+/// Ordered app ids the user asked the dock to keep, **per workspace**.
 ///
-/// One id per line, top to bottom is left to right. Missing or unreadable
-/// is an empty dock, not a crash — a pin file is a preference, and a
-/// corrupt one must not take the running applications with it.
+/// A work desk and a home desk do not want the same pins. The file is
+/// still a preference: missing or unreadable is an empty dock, not a
+/// crash. A `[N]` section is workspace N; workspaces with no section
+/// have no pins.
 struct DockPins: Equatable {
-    var ids: [String]
+    var byWorkspace: [UInt32: [String]] = [:]
 
     static var defaultPath: String {
         let env = ProcessInfo.processInfo.environment
@@ -19,19 +20,34 @@ struct DockPins: Equatable {
         guard let data = FileManager.default.contents(atPath: path),
               let text = String(data: data, encoding: .utf8)
         else {
-            return DockPins(ids: [])
+            return DockPins()
         }
-        var seen = Set<String>()
-        var ids: [String] = []
-        for line in text.split(whereSeparator: \.isNewline) {
-            let id = line.trimmingCharacters(in: .whitespaces)
-            guard !id.isEmpty, !id.hasPrefix("#"), !seen.contains(id) else {
+        return parse(text)
+    }
+
+    static func parse(_ text: String) -> DockPins {
+        var byWorkspace: [UInt32: [String]] = [:]
+        var current: UInt32?
+        var seenByWorkspace: [UInt32: Set<String>] = [:]
+
+        for raw in text.split(whereSeparator: \.isNewline) {
+            let line = raw.trimmingCharacters(in: .whitespaces)
+            guard !line.isEmpty, !line.hasPrefix("#") else { continue }
+            if let ws = workspaceHeader(line) {
+                current = ws
+                if byWorkspace[ws] == nil {
+                    byWorkspace[ws] = []
+                    seenByWorkspace[ws] = []
+                }
                 continue
             }
-            seen.insert(id)
-            ids.append(id)
+            guard let ws = current, canPin(line) else { continue }
+            var seen = seenByWorkspace[ws] ?? []
+            guard seen.insert(line).inserted else { continue }
+            seenByWorkspace[ws] = seen
+            byWorkspace[ws, default: []].append(line)
         }
-        return DockPins(ids: ids)
+        return DockPins(byWorkspace: byWorkspace)
     }
 
     func save(to path: String = defaultPath) {
@@ -39,10 +55,9 @@ struct DockPins: Equatable {
         try? FileManager.default.createDirectory(
             atPath: directory, withIntermediateDirectories: true
         )
-        let body = ids.isEmpty ? "" : ids.joined(separator: "\n") + "\n"
         let temp = path + ".tmp-\(ProcessInfo.processInfo.processIdentifier)"
         do {
-            try Data(body.utf8).write(
+            try Data(serialized.utf8).write(
                 to: URL(fileURLWithPath: temp), options: .atomic
             )
             if FileManager.default.fileExists(atPath: path) {
@@ -57,26 +72,64 @@ struct DockPins: Equatable {
         }
     }
 
-    var isEmpty: Bool { ids.isEmpty }
+    var serialized: String {
+        let keys = byWorkspace.keys.sorted()
+        guard !keys.isEmpty else { return "" }
+        var lines = [
+            "# lava dock pins, per workspace",
+            "# [N] is workspace N. A workspace with no section has no pins.",
+        ]
+        for ws in keys {
+            lines.append("")
+            lines.append("[\(ws)]")
+            for id in byWorkspace[ws] ?? [] { lines.append(id) }
+        }
+        return lines.joined(separator: "\n") + "\n"
+    }
 
-    func contains(_ id: String) -> Bool { ids.contains(id) }
+    func ids(on workspace: UInt32) -> [String] {
+        byWorkspace[workspace] ?? []
+    }
 
-    mutating func pin(_ id: String, at index: Int? = nil) {
+    func contains(_ id: String, on workspace: UInt32) -> Bool {
+        ids(on: workspace).contains(id)
+    }
+
+    mutating func setIds(_ ids: [String], on workspace: UInt32) {
+        var seen = Set<String>()
+        byWorkspace[workspace] = ids.filter {
+            DockPins.canPin($0) && seen.insert($0).inserted
+        }
+    }
+
+    mutating func pin(_ id: String, on workspace: UInt32, at index: Int? = nil) {
         guard DockPins.canPin(id) else { return }
+        var ids = ids(on: workspace)
         ids.removeAll { $0 == id }
         if let index {
             ids.insert(id, at: min(max(0, index), ids.count))
         } else {
             ids.append(id)
         }
+        byWorkspace[workspace] = ids
     }
 
-    mutating func unpin(_ id: String) {
+    mutating func unpin(_ id: String, on workspace: UInt32) {
+        var ids = ids(on: workspace)
         ids.removeAll { $0 == id }
+        byWorkspace[workspace] = ids
+    }
+
+    /// `[N]` with optional spaces. Anything else is an app id.
+    static func workspaceHeader(_ line: String) -> UInt32? {
+        guard line.first == "[", line.last == "]" else { return nil }
+        let inner = line.dropFirst().dropLast().trimmingCharacters(in: .whitespaces)
+        guard !inner.isEmpty, inner.allSatisfy(\.isNumber) else { return nil }
+        return UInt32(inner)
     }
 
     /// Anonymous windows have no desktop identity to remember.
     static func canPin(_ id: String) -> Bool {
-        !id.isEmpty && !id.hasPrefix("window:")
+        !id.isEmpty && !id.hasPrefix("window:") && workspaceHeader(id) == nil
     }
 }
