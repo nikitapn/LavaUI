@@ -640,12 +640,14 @@ struct TaskbarView: View {
 
     private var aboutCard: some View {
         let theme = Theme.current
-        return VStack(width: .pt(SystemDialogChrome.width), padding: 0, spacing: 10) {
-            Text("Lava", color: theme.textPrimary)
-            Text(
-                "The desktop this panel belongs to. The compositor draws the pixels; this process is the strip, the tray and the menu.",
-                color: theme.textSecondary,
-                lineLimit: 5
+        return VStack(width: .pt(600), padding: 0, spacing: 10) {
+            HStack() {
+                Spacer()
+                Text("Lava", color: theme.textPrimary)
+                Spacer()
+            }
+            MarkdownView(
+                "Lava is a free and open-source desktop environment. It is designed to be fast, lightweight, and easy to use. It is built by *Claude, Grok and ChatGPT* for Nikita to use. During his life, Nikita has always *struggled with computers* and particularly with *Linux Desktop Environments*. He has tried many (XFCE, KDE, Gnome, Cosmic — *XFCE* was actually good in combination with vala-panel-plugin + plank-reloaded), but none of them have been able to provide him with the experience he desires. Then one day, he decided to have Claude build him a new desktop environment, and thus Lava was born, and now Nikita is *not struggling* with computers anymore, and he is *happy*.",
             )
             HStack(padding: 0) {
                 Spacer()
