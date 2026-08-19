@@ -116,14 +116,20 @@ ImageAtlas::Region ImageAtlas::add(const uint8_t *rgba, uint32_t w, uint32_t h)
   device_->updateSampledImageRegion(staging, target->image, x, y, w, h);
   device_->destroyBuffer(staging, stagingAlloc);
 
-  // UVs cover only the pixels written, not the whole cell — an image smaller
-  // than the cell must not sample its neighbour's leftovers.
+  // UVs cover only the pixels written, not the whole cell — an image
+  // smaller than the cell must not sample its neighbour's leftovers.
+  // Inset a half texel so bilinear at the quad edge stays inside the
+  // written rect. Without it the filter peeks at the next cell (or
+  // the unwritten rest of this one) and a circular icon grows a
+  // coloured fringe.
   const float inv = 1.f / static_cast<float>(pageSize_);
+  const float half = 0.5f * inv;
   out.page  = targetPage;
   out.slot  = slot;
-  out.uv0   = {static_cast<float>(x) * inv, static_cast<float>(y) * inv};
-  out.uv1   = {static_cast<float>(x + static_cast<int32_t>(w)) * inv,
-               static_cast<float>(y + static_cast<int32_t>(h)) * inv};
+  out.uv0   = {static_cast<float>(x) * inv + half,
+               static_cast<float>(y) * inv + half};
+  out.uv1   = {static_cast<float>(x + static_cast<int32_t>(w)) * inv - half,
+               static_cast<float>(y + static_cast<int32_t>(h)) * inv - half};
   out.valid = true;
   ++usedSlots_;
   return out;

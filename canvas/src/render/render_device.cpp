@@ -953,14 +953,20 @@ VkSampler RenderDevice::createTextureSampler()
   // cards sit at ~64° — that is a large dFdx and looks like nearest-neighbour
   // without a mip chain. 1-level images (atlas pages, glyphs) still clamp to
   // the one level they have.
+  //
+  // Clamp, not wrap. This sampler is the UI one (icons, atlas pages,
+  // glyphs). REPEAT at the top of a first-row atlas cell wraps to the
+  // unwritten bottom of the page, and NVIDIA leaves that green — the
+  // bright ticks on circular dock icons. A wallpaper that needs wrap
+  // has its own sampler.
   VkSamplerCreateInfo samplerInfo {
     .sType                   = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO,
     .magFilter               = VK_FILTER_LINEAR,
     .minFilter               = VK_FILTER_LINEAR,
     .mipmapMode              = VK_SAMPLER_MIPMAP_MODE_LINEAR,
-    .addressModeU            = VK_SAMPLER_ADDRESS_MODE_REPEAT,
-    .addressModeV            = VK_SAMPLER_ADDRESS_MODE_REPEAT,
-    .addressModeW            = VK_SAMPLER_ADDRESS_MODE_REPEAT,
+    .addressModeU            = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
+    .addressModeV            = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
+    .addressModeW            = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
     .mipLodBias              = 0.0f,
     .anisotropyEnable        = samplerAnisotropy_ ? VK_TRUE : VK_FALSE,
     .maxAnisotropy           = samplerAnisotropy_
