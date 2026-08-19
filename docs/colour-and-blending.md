@@ -89,9 +89,23 @@ near-vertical near black, so a small linear residue became a large encoded
 one, and the useful range of a window wash was 0.98–1.0. That is gone. What
 shows through at alpha `a` is now simply `(1 − a)` of the background.
 
-**Anything tuned against the old behaviour is now too solid.** A value chosen
-to let 7% of the desktop through was ~0.99 before and is 0.93 now.
-`TerminalPalette.windowAlpha` is the known one; see its comment.
+This is the *blend unit's* behaviour, and it is tempting to retune old alphas
+by arithmetic from it. Do not — it was tried on `TerminalPalette.windowAlpha`
+(0.99 → 0.93, for the same nominal 7%) and came out far too transparent on the
+desktop. Two things the arithmetic misses:
+
+- **A frosted window is a stack.** `WindowBackdrop.blur` paints a tint at
+  alpha 0.42 beneath the app's own wash, and the compositor's blur composite
+  carries an alpha as well. `1 - a` describes one layer of several.
+- **The old leak was not a flat percentage.** Linear blending let through an
+  amount that depended on the brightness behind each pixel — highlights leaked
+  several times more than shadows. Over a photo that reads as "a few bright
+  things show through"; a uniform leak of the same average reads as "the whole
+  wallpaper shows through", even at the same nominal number. **No single
+  constant reproduces an old look, because the old look was not a constant.**
+
+So: alphas are now honest and predictable per layer, but anything that was
+tuned by eye still has to be retuned by eye.
 
 ## Text is no longer corrected
 

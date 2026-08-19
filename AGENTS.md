@@ -98,9 +98,13 @@ Consequences that surprise people:
   shows through at alpha `a` is `1 - a` of the background, same as a browser.
   This changed on 2026-08-19; before that every attachment was `*_SRGB` and
   blending was linear, which made the useful range of a window wash 0.98–1.0.
-  **Anything tuned against that is now too solid** — `TerminalPalette
-  .windowAlpha` was retuned 0.99 → 0.93 for the same 7% of desktop showing
-  through; the rest of that palette has not been revisited.
+  **Do not retune an alpha by arithmetic.** `1 - a` is what the *blend unit*
+  does, not what reaches the eye: a frosted window has a second tint under the
+  wash and the blur composite has an alpha of its own, and the old linear leak
+  scaled with the brightness behind each pixel rather than being a flat
+  percentage — so no constant reproduces an old look. `TerminalPalette
+  .windowAlpha` was moved 0.99 → 0.93 on that reasoning and came out far too
+  transparent; it is back at 0.99. Tune by eye against a real wallpaper.
   The reason for the change is the buffer handover, not taste: Wayland's
   premultiplied contract is on the stored bytes (`rgb <= a`), and
   premultiplying in linear light then encoding stores `encode(L*a)`, which is

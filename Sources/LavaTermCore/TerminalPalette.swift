@@ -36,17 +36,28 @@ public enum TerminalPalette {
     public static let defaultBg: RGB = (0, 0, 0)
     /// Window wash over the desktop. 1 is a slab; 0 is a hole.
     ///
-    /// Read this as "7% of the desktop shows through", because since
-    /// 2026-08-19 that is literally what it means: the pipeline blends in
-    /// sRGB, so what comes through is `1 - a`.
+    /// **This is not "1 - a of the desktop shows through", and it is not a
+    /// number to derive.** Tune it by eye against a real wallpaper.
     ///
-    /// It was 0.99 for the same 7% under linear blending, where the encode
-    /// curve is near-vertical at the bottom and the useful range of a wash
-    /// was all crammed above 0.98. That is why a number this close to 1 used
-    /// to be the right answer, and why it is no longer. Anything else in the
-    /// palette carried over from before that date wants the same treatment.
-    /// See `docs/colour-and-blending.md`.
-    public static let windowAlpha: Float = 0.93
+    /// It was briefly changed to 0.93 on 2026-08-19, on the reasoning that
+    /// the move to sRGB blending made show-through equal `1 - a`, so 0.93
+    /// would reproduce the ~7% that 0.99 gave under linear blending. On the
+    /// desktop that came out far too transparent, because two things the
+    /// arithmetic left out:
+    ///
+    /// - **The frost is a second wash.** `WindowBackdrop.blur` puts a tint at
+    ///   alpha 0.42 under this one, and the compositor's blur composite has
+    ///   its own alpha again. What reaches the eye is a stack, not `1 - a`.
+    /// - **The old leak was not a flat percentage.** Under linear blending
+    ///   what came through depended on how bright the pixel behind was —
+    ///   highlights leaked several times more than shadows. Over a photo that
+    ///   reads as "a few bright things show"; a uniform leak of the same
+    ///   average reads as "the whole wallpaper shows". No single constant
+    ///   reproduces the old look, because the old look was not a constant.
+    ///
+    /// Back at 0.99, which is what the desktop was tuned against and still
+    /// looks right. See `docs/colour-and-blending.md`.
+    public static let windowAlpha: Float = 0.99
     /// Selection overlay, drawn on top of the cells.
     public static let selection: RGB = (0.35, 0.55, 0.85)
     public static let selectionAlpha: Float = 0.35
