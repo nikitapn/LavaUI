@@ -1,9 +1,10 @@
 import Foundation
 
 /// sRGB colour with alpha. Components are what a colour picker shows —
-/// `Color(r: 0.5, g: 0, b: 0)` is `#800000`, and that is what the swapchain
-/// should present. The engine linearises at the vertex stage so the sRGB
-/// attachment does not encode the value a second time.
+/// `Color(r: 0.5, g: 0, b: 0)` is `#800000`, and that is what reaches the
+/// screen. Nothing between here and the attachment applies a transfer
+/// function: the whole 2D pipeline works on these encoded values. See
+/// `docs/colour-and-blending.md`.
 public struct Color: Equatable, Sendable, Hashable {
     public var r: Float
     public var g: Float
@@ -26,8 +27,8 @@ public struct Color: Equatable, Sendable, Hashable {
     /// right until the day something sits behind it.
     public static let clear = Color(r: 0, g: 0, b: 0, a: 0)
 
-    /// Pack as authored sRGB RGBA8 (R in the low byte). The renderer decodes
-    /// to linear; do not pre-linearise here or the attachment encodes twice.
+    /// Pack as authored sRGB RGBA8 (R in the low byte). Carried through
+    /// unchanged — do not pre-linearise here, or the colour arrives dark.
     public var rgba8: UInt32 {
         let R = UInt32(clamping: Int((r * 255).rounded()))
         let G = UInt32(clamping: Int((g * 255).rounded()))
@@ -70,7 +71,7 @@ public struct Color: Equatable, Sendable, Hashable {
     /// more than half the light out. See `docs/colour-and-blending.md`.
     ///
     /// Not what to hand to the renderer: the wire format is authored sRGB and
-    /// the vertex stage linearises. Convert back with `fromLinear` first.
+    /// nothing downstream re-encodes. Convert back with `fromLinear` first.
     /// Alpha is a coverage fraction, not light, and is carried through.
     public var linear: Color {
         func f(_ c: Float) -> Float {
@@ -99,8 +100,7 @@ public struct Color: Equatable, Sendable, Hashable {
     /// getting the brightness subtly wrong on the ones near yellow.
     ///
     /// `lightness` is in the same space as `r`/`g`/`b`: authored sRGB, the
-    /// numbers a colour picker shows. The engine linearises them before
-    /// blending so they survive the swapchain encode unchanged.
+    /// numbers a colour picker shows.
     public init(hue: Float, saturation: Float, lightness: Float, alpha: Float = 1) {
         let h = hue - hue.rounded(.down)  // wrap into 0…1
         let s = min(max(saturation, 0), 1)

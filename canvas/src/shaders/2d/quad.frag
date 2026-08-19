@@ -21,6 +21,23 @@
 // may only be applied to premultiplied colour. Averaging straight alpha pulls
 // the colour of fully transparent texels — black — into every edge, which shows
 // up as a dark halo around everything blurred.
+//
+// Everything here is in **sRGB-encoded** space, not linear light: the colour
+// attachment is UNORM, vertex colours arrive as authored, and sampled textures
+// are UNORM too, so no transfer function is applied anywhere in the pipeline.
+//
+// That is deliberate, and it is what the surface handover requires. The engine
+// renders into a dma-buf a wlroots compositor blends with premultiplied
+// ONE / ONE_MINUS_SRC_ALPHA on the raw bytes, in encoded space. Wayland's
+// premultiplied contract therefore lives in *bytes*: a pixel must satisfy
+// `rgb <= a` after encoding. Premultiplying in linear light and letting an
+// sRGB attachment encode on the way out does not — `encode(L*a) > encode(L)*a`
+// for every 0 < a < 1, because the transfer curve is concave — so every
+// partially transparent pixel shipped too bright and the compositor added the
+// excess on top of the desktop. That was a light rim around any antialiased
+// edge crossing onto the transparent part of a surface, clipping to white on
+// pale shapes and invisible on dark ones. Blending in the space the buffer is
+// encoded in is what every other UI toolkit does, and for the same reason.
 layout(location = 0) in vec2      vLocal;
 layout(location = 1) in vec2      vHalfSize;
 layout(location = 2) in float     vRadius;
@@ -123,26 +140,13 @@ void main() {
   } else {
     float cov;
     if (vKind == 1u) {
+      // Coverage straight through. This used to be bent by a luminance-keyed
+      // exponent to undo linear-light blending — the attachment was sRGB, so
+      // half coverage re-encoded to 0.735 and thin stems went pale
+      // dark-on-light. The attachment is UNORM now and the blend unit works
+      // in the same encoded space the coverage is authored in, so 0.5 stays
+      // 0.5 and the correction would be the distortion.
       cov = texture(uTextures[nonuniformEXT(vTextureIndex)], vLocal).r;
-      // Text is the one place linear-correct blending looks wrong. The
-      // attachment is sRGB, so the blend unit works in linear light, and at
-      // half coverage that lands on 0.735 rather than 0.5 once re-encoded:
-      // thin stems go pale dark-on-light and clot light-on-dark. Shape edges
-      // (below) are wide enough that nobody notices; glyph stems are not.
-      //
-      // The blend unit is not ours to change without splitting the render pass
-      // per text batch, so bend the coverage instead. Which way to bend
-      // depends on whether the glyph is darker or lighter than what is behind
-      // it, and the glyph's own lightness stands in for that — UI text sits on
-      // a contrasting background almost by definition. Same trick as Skia's
-      // gamma LUT, minus the table.
-      //
-      // Exponents are tuned by eye. 0.35/2.2 would match a gamma-space blend
-      // exactly at cov = 0.5; both are pulled toward 1.0 to soften it. The
-      // assumption fails for text on a low-contrast or frosted backdrop, which
-      // is where this would have to become a framebuffer fetch.
-      float lum = sqrt(dot(vColor.rgb, vec3(0.2126, 0.7152, 0.0722)));
-      cov = pow(cov, mix(0.45, 2.0, lum));
     } else {
       float d = sdRoundBox(vLocal, vHalfSize, vRadius);
       // A sharp box must not pay the SDF antialias. Pixel centres sit

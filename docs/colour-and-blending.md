@@ -10,100 +10,117 @@ why something looks different here than in Figma.
 |---|---|
 | Authoring (`Color`, hex, a picker) | **sRGB** — `Color(r: 0.5)` is `#808080` |
 | Storage (`Color.rgba8`, vertex attributes) | **sRGB**, 8-bit |
-| Blending (every attachment is `*_SRGB`) | **linear light** |
-| Output (swapchain, exported dmabuf) | **sRGB**, encoded by the attachment |
+| Blending (every attachment is `*_UNORM`) | **sRGB**, the same encoded bytes |
+| Output (swapchain, exported dmabuf) | **sRGB**, stored as-is |
 
-Vertex shaders decode with `srgb.glsl`; the attachment re-encodes on store. So
-a colour makes a round trip and arrives unchanged, but everything that happens
-*between* two colours — alpha compositing, gradients, blur, antialiasing —
-happens on linear values.
+Nothing in the 2D pipeline applies a transfer function. A colour authored as
+`#808080` is packed as `0x80`, interpolated as `0x80`, blended as `0x80` and
+handed to the compositor as `0x80`. Vertex shaders pass colours straight
+through and the attachment stores what the fragment wrote.
+
+This is what CSS, Skia, Cairo/GTK and Qt all do. We are no longer the outlier,
+and a mockup's "90% opacity" now means here what it means in Figma.
+
+The one deliberate exception is the CPU image downscale in
+`Engine::decodeImage`, which uses `stbir_resize_uint8_srgb`. Resampling
+averages *light*, and a big reduction is where getting that wrong is visible
+(the classic too-dark album art). It decodes, resizes and re-encodes inside
+the call; the bytes either side of it are sRGB like everything else.
 
 Alpha is never encoded, here or anywhere. The sRGB curve is a perceptual
-encoding of *luminance*, and alpha is a coverage fraction, not light. The
-Vulkan spec applies the transfer function to RGB only. When alpha behaves
-surprisingly it is never because alpha was encoded — it is because the
-*colours* it was blended against were linear.
+encoding of *luminance*, and alpha is a coverage fraction, not light.
 
-## Why linear
+## Why not linear
 
-Three things need it, and they are not negotiable:
+Blending in linear light is more physically correct, and until 2026-08-19
+that is what this did: every attachment was `*_SRGB`, `srgb.glsl` decoded
+vertex colours, and the attachment re-encoded on store.
 
-- **Blur.** A Gaussian is an average of light. Averaging encoded values
-  darkens the result; the frosted-glass panels would go muddy.
-- **3D lighting.** `Scene3D` shades faces by a light amount. Multiplying is
-  only meaningful on linear values (see the known gap below).
-- **Texture filtering and mipmaps**, which average texels for the same reason
-  a blur does.
+It had to go, because it is incompatible with handing the frame to a
+compositor. A Wayland buffer's alpha is **premultiplied in the buffer's own
+encoding** — the contract is `rgb <= a` on the stored bytes. Premultiplying in
+linear light and encoding afterwards stores `encode(L·a)`, and
 
-## What it costs: alpha does not mean what people expect
+```
+encode(L·a) > encode(L)·a      for every 0 < a < 1
+```
 
-This is the part that surprises everyone, so it gets the space.
+because the transfer curve is concave. Every partially transparent pixel was
+shipped too bright. wlroots then blends those bytes with
+`ONE / ONE_MINUS_SRC_ALPHA` and adds the excess on top of the desktop, which
+is an *additive* overshoot — the result exceeded both the source and the
+background and clipped to white.
 
-Almost every UI toolkit composites alpha on the **encoded** values — CSS and
-every browser, Skia (so Chrome, Android, Flutter), Cairo/GTK, Qt, and most
-Wayland compositors. A designer's mental model of "90% opacity", and every
-mockup handed to you, assumes a gamma-space blend. **We are the outlier.**
+The symptom was a light rim wherever an antialiased edge crossed onto the
+transparent part of a surface: a dock icon or count badge lifting off the
+plate, a rounded window corner. It was invisible at `a = 0` and `a = 1`, where
+the identity holds exactly, and it scaled with the source's brightness, so
+dark shapes looked fine and pale ones shouted. Measured on a white window's
+corner arc over a near-black desktop: the arc read `255,255,255` against a
+window body of `235,237,240`.
 
-The difference is not subtle, because the sRGB encode is near-vertical near
-black: a small linear residue becomes a large encoded one. Black at alpha `a`
-over a wallpaper around 0.8 sRGB:
+There is no way to keep linear blending and fix this short of an extra
+full-screen re-premultiply pass, at 8-bit precision, every frame.
 
-| alpha | what shows through | in a browser |
-|---|---|---|
-| 0.90 | 0.27 — grey haze | 0.08 |
-| 0.96 | 0.17 | 0.03 |
-| 0.98 | 0.11 | 0.02 |
-| 0.99 | 0.07 | 0.01 |
-| 0.995 | 0.04 | 0.004 |
+### What that cost
 
-So **the useful range of a window wash is 0.98–1.0**, and anything below that
-is haze rather than tint. `TerminalPalette.windowAlpha` carries this warning
-at its definition because 0.99 otherwise reads as an absurd value.
+- **Blur** now averages encoded values. A Gaussian is properly an average of
+  light, so frosted panels are slightly different — the same slightly-wrong
+  every browser's `backdrop-filter` is.
+- **Texture filtering and mipmaps** likewise.
+- **Gradients** interpolate in encoded space. For a two-stop ramp between
+  nearby colours the difference is small; a ramp across a hue is where it
+  would show.
 
-The same applies to every `.opacity()` inside a Lava app, and to animated
-fades — a dialog fading 0→1 has a visibly different curve under linear than a
-designer expects.
+### What it did *not* cost
 
-You cannot split the difference. Matching a gamma blend needs
-`encode(B·(1−a)) = B_srgb·(1−α)`, and solving for `a` leaves `B` in the
-answer — the correction depends on what is *behind* the window. Picking the
-blend space is a real choice, not a tunable.
+`Scene3D`. The old version of this document rejected a UNORM main pass on the
+grounds that lighting in gamma space is wrong. That reasoning was mistaken:
+lighting never used the blend unit. `Spatial.swift`'s `litColor` decodes with
+`Color.linear`, multiplies, and re-encodes with `Color.fromLinear` on the CPU,
+then sends an ordinary authored colour down the same wire as everything else.
+It behaved identically before and after — verified by rendering the same scene
+against both builds.
 
-### The alternative we did not take
+## Alpha means what you expect now
 
-A UNORM main pass with explicit linearisation only in the blur would give
-CSS-like alpha, make gradients interpolate like Figma, and remove the text
-hack below. It was rejected because `Scene3D` has lights, and lighting in
-gamma space is wrong in a way no amount of tuning fixes. If the 3D path ever
-goes away, this is worth revisiting.
+The old pipeline made low alpha nearly useless: the sRGB encode is
+near-vertical near black, so a small linear residue became a large encoded
+one, and the useful range of a window wash was 0.98–1.0. That is gone. What
+shows through at alpha `a` is now simply `(1 − a)` of the background.
 
-## Text is deliberately corrected
+**Anything tuned against the old behaviour is now too solid.** A value chosen
+to let 7% of the desktop through was ~0.99 before and is 0.93 now.
+`TerminalPalette.windowAlpha` is the known one; see its comment.
 
-`quad.frag` bends glyph coverage before the blend
-(`pow(cov, mix(0.45, 2.0, lum))`). Linear-correct blending makes thin stems
-pale dark-on-light and clotted light-on-dark; the blend unit is not ours to
-change without splitting the render pass per text batch, so the coverage is
-bent instead. The exponent is chosen from the glyph's own lightness, which
-stands in for the background it contrasts against.
+## Text is no longer corrected
 
-This is the same trick Skia's gamma LUT performs, and the same reason browsers
-blend text in gamma space. It is a deliberate inaccuracy that looks right.
-Shape edges are left alone — they are wide enough that nobody notices.
+`quad.frag` used to bend glyph coverage (`pow(cov, mix(0.45, 2.0, lum))`)
+because linear-correct blending landed half coverage on 0.735 once re-encoded,
+making thin stems pale dark-on-light and clotted light-on-dark. The blend unit
+now works in the space the coverage is authored in, so 0.5 stays 0.5 and the
+correction would be the distortion. It was removed with the format change.
+
+`quad_instance.frag`'s glyph path never had the bend. The two pipelines now
+agree, which they did not before.
 
 ## The compositor blends too, and it is not ours
 
-A window's alpha over the *desktop* is blended by wlroots, not by us, and
-which space that happens in depends on the renderer:
+A window's alpha over the *desktop* is blended by wlroots, not by us.
+Measured on wlroots' **Vulkan** renderer: it samples our `ARGB8888` and blends
+it in **encoded space**, and its output buffer is stored without re-encoding.
+Both the background rect colour and an opaque window fill survive the round
+trip byte-exact, which they could not if a transfer function were applied at
+either end.
 
-- **Vulkan** imports our `ARGB8888` as `B8G8R8A8_SRGB` → blends linear.
-- **GLES2** samples it as plain `RGBA8` → blends gamma, like a browser.
+An older version of this document claimed the Vulkan renderer imports as
+`B8G8R8A8_SRGB` and blends linear. Whatever was once true, it is not the
+behaviour of the renderer we run against — that claim is what made an
+inconsistent pipeline look consistent on paper.
 
-DRM fourccs carry no transfer function, so we cannot influence the choice.
-`start-lava-compositor` asks for Vulkan and `dev-run` used to leave the
-default, which is GLES2 — so a translucency tuned nested looked roughly five
-times more solid than it did on the desktop it shipped to. `dev-run` now pins
-Vulkan. **If the two sessions ever disagree about a translucency again, check
-the renderer banner in each log first.**
+DRM fourccs carry no transfer function, so we cannot influence the choice, and
+now we do not need to: matching the compositor's space is the whole point of
+the change.
 
 ## 3D lighting converts explicitly
 
@@ -113,9 +130,9 @@ colour with `Color.linear`, multiplies there, and re-encodes with
 needed: a light's colour is as much a colour as the surface it falls on.
 
 It converts back rather than emitting linear components because the wire
-format is 8-bit and `spatial.vert` linearises unconditionally. Handing it
-linear values would decode twice *and* spend those 8 bits on highlights
-instead of shadows, which is the one thing sRGB storage exists to avoid.
+format is 8-bit sRGB. Handing it linear values would spend those 8 bits on
+highlights instead of shadows, which is the one thing sRGB storage exists to
+avoid.
 
 This was a bug until 2026-08-14: the multiply ran on authored components, so
 shading landed on `dec(base)·k^2.4` instead of `dec(base)·k` and a face at

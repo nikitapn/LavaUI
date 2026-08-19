@@ -1162,9 +1162,9 @@ final class SpatialRuntime {
             lr += l.r*amount; lg += l.g*amount; lb += l.b*amount
         }
         // Back to authored sRGB before it goes anywhere: the vertex format is
-        // 8-bit and `spatial.vert` linearises what it is given, so handing it
-        // linear components would both decode twice and spend those 8 bits on
-        // the highlights instead of the shadows. `fromLinear` clamps, which is
+        // 8-bit sRGB and nothing downstream re-encodes, so handing it linear
+        // components would arrive dark *and* spend those 8 bits on the
+        // highlights instead of the shadows. `fromLinear` clamps, which is
         // where an overshooting sum of lights ends up.
         let lit = base.linear
         return Color.fromLinear(

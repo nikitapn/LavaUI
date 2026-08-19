@@ -151,7 +151,7 @@ public:
 
     /// GPU-side crop of a dma-buf another driver wrote. Same cache contract
     /// as `uploadTexture`, without a host copy: the importer blits `x,y,w,h`
-    /// into an `R8G8B8A8_SRGB` sampled image. Invalid handle on failure.
+    /// into an `R8G8B8A8_UNORM` sampled image. Invalid handle on failure.
     TextureHandle importDmabufTexture(const std::string &key,
                                       const canvas::DmabufImport &src,
                                       int32_t x, int32_t y, uint32_t w,

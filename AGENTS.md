@@ -90,25 +90,25 @@ Consequences that surprise people:
 
 ### Renderer facts worth knowing before debugging pixels
 
-- **Colours are sRGB** (picker / hex / `Color(r:)`). Vertex shaders
-  linearise (`srgb.glsl`) before blending; the swapchain encodes on the way
-  out, so `Color(r: 0.5)` is `#800000` on screen. They used to be written
-  as linear and encoded twice — `0.28` arrived looking like `0.56` and a
-  palette from a colour wheel came out pastel. Palettes authored against
-  that will read darker until retuned. Do not pre-linearise in
-  `Color.rgba8` or the attachment encodes twice again.
-- **Blending happens in linear light, so alpha does not mean what CSS means
-  by it.** Every attachment is `*_SRGB`, so a translucent black at `a=0.9`
-  lets through 0.27 where a browser would show 0.08 — the useful range of a
-  window wash is 0.98–1.0, not 0.8–1.0. This is not alpha being encoded
-  (it never is, anywhere); it is the colours it was blended against being
-  linear. Same reason text coverage is deliberately bent in `quad.frag`, and
-  the reason a translucency tuned under one wlroots renderer is wrong under
-  the other. **Read `docs/colour-and-blending.md` before picking any alpha
-  value** — it has the numbers, the comparison to other toolkits, and what
-  changed for `Scene3D` when its lighting stopped multiplying authored
-  components (shadows lifted; scenes tuned before 2026-08-14 want less
-  ambient, not more).
+- **Colours are sRGB end to end** (picker / hex / `Color(r:)`). Nothing in
+  the 2D pipeline applies a transfer function: every attachment is `*_UNORM`,
+  vertex colours pass through, and `Color(r: 0.5)` is `#808080` on screen.
+  Do not pre-linearise in `Color.rgba8` — the colour would arrive dark.
+- **Blending happens in sRGB, so alpha means what CSS means by it.** What
+  shows through at alpha `a` is `1 - a` of the background, same as a browser.
+  This changed on 2026-08-19; before that every attachment was `*_SRGB` and
+  blending was linear, which made the useful range of a window wash 0.98–1.0.
+  **Anything tuned against that is now too solid** — `TerminalPalette
+  .windowAlpha` is the known one and carries a note.
+  The reason for the change is the buffer handover, not taste: Wayland's
+  premultiplied contract is on the stored bytes (`rgb <= a`), and
+  premultiplying in linear light then encoding stores `encode(L*a)`, which is
+  strictly greater than `encode(L)*a`. wlroots added the excess over the
+  desktop — a white rim on every antialiased edge that crossed onto the
+  transparent part of a surface. **Read `docs/colour-and-blending.md` before
+  picking any alpha value** — it has the numbers, what the change cost (blur
+  and mipmaps now average encoded values) and what it did not (`Scene3D`
+  lighting converts explicitly on the CPU and is unaffected).
 - **One descriptor set per texture *change*.** Batches are emitted in tree
   order with no sorting, so a grid pairing an atlased icon with a glyph label
   costs two per cell. The pool grows in chunks of `kDescriptorSetsPerChunk`

@@ -11,7 +11,9 @@
 //   5 Shadow        — the same rounded box, faded outwards over `vAux` px.
 //   6 BlurComposite — frosted backdrop, sampled through the same SDF.
 //
-// Output is premultiplied; the pipeline blends ONE / ONE_MINUS_SRC_ALPHA.
+// Output is premultiplied; the pipeline blends ONE / ONE_MINUS_SRC_ALPHA, in
+// sRGB-encoded space rather than linear light — see the note in quad.frag for
+// why the buffer handover requires that.
 
 layout(location = 0) in vec2 vLocal;
 layout(location = 1) in vec2 vHalfSize;

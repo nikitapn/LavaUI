@@ -46,19 +46,19 @@ struct MappedFormat {
 MappedFormat mapDrmFormat(uint32_t fourcc)
 {
   // Same pairing `DmabufImage` exports: little-endian ARGB8888 is
-  // `B8G8R8A8`, ABGR8888 is `R8G8B8A8`. Tagged sRGB so a blit into the
-  // engine's `R8G8B8A8_SRGB` dest copies encoded bytes rather than
-  // treating them as linear and encoding twice — matching the CPU
-  // path, which only swizzles channels.
+  // `B8G8R8A8`, ABGR8888 is `R8G8B8A8`. Tagged UNORM so a blit into the
+  // engine's `R8G8B8A8_UNORM` dest copies encoded bytes rather than
+  // putting a transfer function between the two — matching the CPU path,
+  // which only swizzles channels.
   switch (fourcc) {
   case DRM_FORMAT_ARGB8888:
-    return {VK_FORMAT_B8G8R8A8_SRGB, false};
+    return {VK_FORMAT_B8G8R8A8_UNORM, false};
   case DRM_FORMAT_XRGB8888:
-    return {VK_FORMAT_B8G8R8A8_SRGB, true};
+    return {VK_FORMAT_B8G8R8A8_UNORM, true};
   case DRM_FORMAT_ABGR8888:
-    return {VK_FORMAT_R8G8B8A8_SRGB, false};
+    return {VK_FORMAT_R8G8B8A8_UNORM, false};
   case DRM_FORMAT_XBGR8888:
-    return {VK_FORMAT_R8G8B8A8_SRGB, true};
+    return {VK_FORMAT_R8G8B8A8_UNORM, true};
   default:
     return {};
   }

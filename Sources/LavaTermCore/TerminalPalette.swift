@@ -36,19 +36,14 @@ public enum TerminalPalette {
     public static let defaultBg: RGB = (0, 0, 0)
     /// Window wash over the desktop. 1 is a slab; 0 is a hole.
     ///
-    /// Almost all of the useful range is above 0.98, which is not where a
-    /// number like this normally lives. The compositor blends in linear light
-    /// and then encodes to sRGB, and that curve is near-vertical at the
-    /// bottom: over a wallpaper around 0.8, the desktop coming through reads
-    /// as 0.27 at a=0.90 and still 0.17 at a=0.96 — a grey haze, not a tint.
-    /// 0.99 lands near 0.07, which is the "little desktop through" this file
-    /// has always claimed to describe.
-    ///
-    /// Anything picked before 2026-08-14 was tuned against a nested session
-    /// running wlroots' GLES2 renderer, which blends the encoded values and
-    /// so made every one of these look ~5x more solid than the desktop did.
-    /// `dev-run` pins Vulkan now and the two agree; 0.9959 here would
-    /// reproduce exactly what 0.96 used to look like nested.
+    /// **Needs retuning.** This 0.99 was chosen when blending happened in
+    /// linear light, where the encode curve is near-vertical at the bottom
+    /// and 0.99 let roughly 7% of the desktop through — the "little desktop
+    /// through" this file describes. Since 2026-08-19 the pipeline blends in
+    /// sRGB, where what shows through is simply `1 - a`, so 0.99 is now 1%:
+    /// effectively a slab. **0.93 reproduces the intended look.** Left at the
+    /// old value pending a look at it on a real desktop rather than a silent
+    /// change to how the terminal reads. See `docs/colour-and-blending.md`.
     public static let windowAlpha: Float = 0.99
     /// Selection overlay, drawn on top of the cells.
     public static let selection: RGB = (0.35, 0.55, 0.85)

@@ -244,7 +244,11 @@ void RenderWindow::createSwapchain()
 
   VkSurfaceFormatKHR chosen = formats[0];
   for (const auto &f : formats) {
-    if (f.format == VK_FORMAT_B8G8R8A8_SRGB &&
+    // UNORM to match `colorFormat_`: the frame reaches this image through a
+    // `vkCmdBlitImage`, and blit converts between formats. An sRGB
+    // destination would take the already-encoded resolve as linear and encode
+    // it a second time, washing out the whole window in windowed mode only.
+    if (f.format == VK_FORMAT_B8G8R8A8_UNORM &&
         f.colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR) {
       chosen = f;
       break;

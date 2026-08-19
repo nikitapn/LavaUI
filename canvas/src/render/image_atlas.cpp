@@ -43,7 +43,7 @@ bool ImageAtlas::addPage()
 
   auto page = std::make_unique<Page>();
   device_->createImage(pageSize_, pageSize_, 1, VK_SAMPLE_COUNT_1_BIT,
-                       VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_TILING_OPTIMAL,
+                       VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_TILING_OPTIMAL,
                        VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
                        VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
                        page->image, page->allocation,
@@ -51,10 +51,10 @@ bool ImageAtlas::addPage()
                                       "page"});
   // Straight to shader-read: every later upload transitions in and back out
   // around its own copy, so the page is always in the layout a draw expects.
-  device_->transitionImageLayout(page->image, VK_FORMAT_R8G8B8A8_SRGB,
+  device_->transitionImageLayout(page->image, VK_FORMAT_R8G8B8A8_UNORM,
                                  VK_IMAGE_LAYOUT_UNDEFINED,
                                  VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-  page->view = device_->createImageView(page->image, VK_FORMAT_R8G8B8A8_SRGB,
+  page->view = device_->createImageView(page->image, VK_FORMAT_R8G8B8A8_UNORM,
                                         VK_IMAGE_ASPECT_COLOR_BIT, 1);
   pages_.push_back(std::move(page));
   std::cout << "ImageAtlas: allocated page " << pages_.size() - 1 << "\n";

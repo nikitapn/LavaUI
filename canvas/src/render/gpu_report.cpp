@@ -181,7 +181,7 @@ size_t dumpAtlasPages(RenderDevice &device, const std::string &dir,
       name = "glyph-atlas-gen" + std::to_string(page.generation) + ".png";
     } else {
       image  = atlas.pageImage(page.page);
-      format = VK_FORMAT_R8G8B8A8_SRGB;
+      format = VK_FORMAT_R8G8B8A8_UNORM;
       name   = "image-atlas-page" + std::to_string(page.page) + ".png";
     }
     if (image == VK_NULL_HANDLE) continue;

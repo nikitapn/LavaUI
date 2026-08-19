@@ -34,7 +34,7 @@ struct DmabufImport {
 /// The image is a blit source, not a sampled texture. Modifier-tiled
 /// render targets are not always sampleable, and the caller usually wants
 /// a crop of a full-output capture rather than the whole buffer. Blit
-/// handles both the crop and the FourCC → `R8G8B8A8_SRGB` swizzle.
+/// handles both the crop and the FourCC → `R8G8B8A8_UNORM` swizzle.
 class ImportedDmabuf {
  public:
   /// Imports `src`. Null on any failure, having said why (the first few

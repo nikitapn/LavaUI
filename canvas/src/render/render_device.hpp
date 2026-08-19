@@ -225,7 +225,16 @@ class RenderDevice
   /// Format every window renders into. Fixed, and deliberately not the
   /// swapchain's: the swapchain is a blit destination, so surfaces disagreeing
   /// about their preferred format costs a blit, not a second render pass.
-  VkFormat colorFormat_ = VK_FORMAT_R8G8B8A8_SRGB;
+  ///
+  /// UNORM, not SRGB, and that is a correctness requirement rather than a
+  /// preference — see the note at the top of `quad.frag`. The short of it:
+  /// this image is handed to a compositor that blends premultiplied alpha on
+  /// the raw bytes, so the premultiply has to happen in the same encoded space
+  /// the bytes are in. An sRGB attachment premultiplies in linear light and
+  /// encodes afterwards, which ships `encode(L*a)` where the contract wants
+  /// `encode(L)*a` — always the larger of the two, and the excess showed up as
+  /// a light rim on every antialiased edge over a transparent region.
+  VkFormat colorFormat_ = VK_FORMAT_R8G8B8A8_UNORM;
 
   VkPhysicalDeviceMemoryProperties deviceMemoryProperties_;
   VkRenderPass                     renderPass_ = VK_NULL_HANDLE;
@@ -681,7 +690,7 @@ class RenderDevice
                          uint32_t height);
 
   /// True when `format` can be linearly blitted — the requirement for
-  /// `generateMipmaps`. R8G8B8A8_SRGB does on every GPU we ship on.
+  /// `generateMipmaps`. R8G8B8A8_UNORM does on every GPU we ship on.
   bool formatSupportsLinearBlit(VkFormat format) const;
 
   /// Blit mip 0 down the chain. Every level must already be TRANSFER_DST

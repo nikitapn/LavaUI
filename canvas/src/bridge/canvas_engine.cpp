@@ -672,11 +672,15 @@ DecodedImage finishDecode(stbi_uc *pixels, int w, int h, uint32_t maxPixelSize)
     if (dw < 1) dw = 1;
     if (dh < 1) dh = 1;
 
-    // The texture format is R8G8B8A8_**SRGB**, so the filter has to average in
-    // linear light. Resizing the encoded bytes directly darkens every
-    // downscale — the classic sRGB resampling bug, and very visible on album
-    // art. STBIR_RGBA (not _PM) because stb_image hands back straight,
-    // non-premultiplied alpha.
+    // Resampling averages light, so it has to happen in linear light even
+    // though every byte either side of this call is sRGB-encoded: `_srgb`
+    // decodes, resizes, re-encodes. Averaging the encoded bytes directly
+    // darkens every downscale — the classic sRGB resampling bug, and very
+    // visible on album art. This is the one place a transfer function is
+    // applied at all, and it is a CPU-side resize, not the pipeline: a big
+    // reduction is where the error is worth paying for, unlike the GPU's
+    // one-texel bilinear. STBIR_RGBA (not _PM) because stb_image hands back
+    // straight, non-premultiplied alpha.
     uint8_t *scaled = stbir_resize_uint8_srgb(
       pixels, w, h, 0, nullptr, dw, dh, 0, STBIR_RGBA);
     if (scaled != nullptr) {

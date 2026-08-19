@@ -42,7 +42,7 @@ bool createStandaloneTexture(RenderDevice &device, const std::string &key,
                              VmaAllocation &allocation, VkImageView &view)
 {
   const bool mipsOk =
-    device.formatSupportsLinearBlit(VK_FORMAT_R8G8B8A8_SRGB);
+    device.formatSupportsLinearBlit(VK_FORMAT_R8G8B8A8_UNORM);
   const uint32_t mips = mipsOk ? mipLevelCount(width, height) : 1u;
   const VkDeviceSize imageSize =
     static_cast<VkDeviceSize>(width) * height * 4;
@@ -64,10 +64,10 @@ bool createStandaloneTexture(RenderDevice &device, const std::string &key,
   if (mips > 1) usage |= VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
 
   device.createImage(width, height, mips, VK_SAMPLE_COUNT_1_BIT,
-                     VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_TILING_OPTIMAL, usage,
+                     VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_TILING_OPTIMAL, usage,
                      VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, image, allocation,
                      canvas::GpuTag{canvas::GpuCategory::Texture, 0, key});
-  device.transitionImageLayout(image, VK_FORMAT_R8G8B8A8_SRGB,
+  device.transitionImageLayout(image, VK_FORMAT_R8G8B8A8_UNORM,
                                VK_IMAGE_LAYOUT_UNDEFINED,
                                VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, mips);
   device.copyBufferToImage(stagingBuffer, image, width, height);
@@ -75,13 +75,13 @@ bool createStandaloneTexture(RenderDevice &device, const std::string &key,
     device.generateMipmaps(image, static_cast<int32_t>(width),
                            static_cast<int32_t>(height), mips);
   } else {
-    device.transitionImageLayout(image, VK_FORMAT_R8G8B8A8_SRGB,
+    device.transitionImageLayout(image, VK_FORMAT_R8G8B8A8_UNORM,
                                  VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                                  VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
   }
   device.destroyBuffer(stagingBuffer, stagingAlloc);
 
-  view = device.createImageView(image, VK_FORMAT_R8G8B8A8_SRGB,
+  view = device.createImageView(image, VK_FORMAT_R8G8B8A8_UNORM,
                                 VK_IMAGE_ASPECT_COLOR_BIT, mips);
   return view != VK_NULL_HANDLE;
 }
@@ -98,7 +98,7 @@ bool blitImportedTexture(RenderDevice &device, const std::string &key,
                          VkImageView &view)
 {
   device.createImage(destW, destH, 1, VK_SAMPLE_COUNT_1_BIT,
-                     VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_TILING_OPTIMAL,
+                     VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_TILING_OPTIMAL,
                      VK_IMAGE_USAGE_TRANSFER_DST_BIT |
                        VK_IMAGE_USAGE_SAMPLED_BIT,
                      VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, image, allocation,
@@ -160,7 +160,7 @@ bool blitImportedTexture(RenderDevice &device, const std::string &key,
     .sType      = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
     .image      = image,
     .viewType   = VK_IMAGE_VIEW_TYPE_2D,
-    .format     = VK_FORMAT_R8G8B8A8_SRGB,
+    .format     = VK_FORMAT_R8G8B8A8_UNORM,
     .components = swizzle,
     .subresourceRange =
       {

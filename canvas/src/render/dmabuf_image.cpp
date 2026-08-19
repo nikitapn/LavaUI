@@ -19,22 +19,25 @@ namespace {
 
 /// The formats the export can take, best first.
 ///
-/// Each pair names the same bytes twice: Vulkan's `B8G8R8A8_SRGB` and DRM's
-/// `ARGB8888` describe one little-endian layout, as do `R8G8B8A8_SRGB` and
+/// Each pair names the same bytes twice: Vulkan's `B8G8R8A8_UNORM` and DRM's
+/// `ARGB8888` describe one little-endian layout, as do `R8G8B8A8_UNORM` and
 /// `ABGR8888`. That is what makes the handover a reinterpretation rather than
 /// a conversion.
 ///
-/// The order is the whole point of there being two. `R8G8B8A8_SRGB` is the
+/// The order is the whole point of there being two. `R8G8B8A8_UNORM` is the
 /// format the engine's render passes are built against, so a frame can be
 /// resolved *into* an image of that format — no resolve image per window and
 /// no blit per frame. The other is the same picture in the other byte order,
 /// reachable only through a converting blit, and is here because a consumer
 /// that can import only `ARGB8888` is a consumer this used to work on.
 ///
-/// sRGB rather than UNORM, and it matters on the blit path: `vkCmdBlitImage`
-/// converts between formats, so an UNORM destination would linearise the
-/// `R8G8B8A8_SRGB` source and write it back without re-encoding — a
-/// whole-surface darkening that looks like a blending bug and is not one.
+/// UNORM rather than sRGB, matching `RenderDevice::colorFormat()`. Nothing in
+/// this pipeline applies a transfer function: the bytes are sRGB-encoded from
+/// the moment a colour is authored, and every stage moves them without
+/// touching them. That also keeps the blit path honest — `vkCmdBlitImage`
+/// converts between formats, so a pair that disagreed with the source would
+/// linearise or re-encode a whole surface, which reads as a blending bug and
+/// is not one.
 ///
 /// A rather than X on the DRM side. The two name identical memory and differ
 /// only in whether the fourth channel means anything — and it does: a window
@@ -48,17 +51,25 @@ namespace {
 /// draw list does not answer yet.
 ///
 /// Alpha here is *premultiplied*, which is what Wayland expects and what the
-/// engine already produces: its blend state is `SRC_ALPHA`/`ONE_MINUS_SRC_ALPHA`
-/// for colour and `ONE`/`ONE_MINUS_SRC_ALPHA` for alpha, which onto a
+/// engine already produces: the shaders emit `rgb = C·A` and the blend state
+/// is `ONE`/`ONE_MINUS_SRC_ALPHA` for both colour and alpha, which onto a
 /// transparent clear yields `rgb = C·A, a = A` and composes correctly from
 /// there. See `RenderWindow::setTransparent`.
+///
+/// Premultiplied *in these bytes*, which is why the format may not be sRGB.
+/// wlroots blends this buffer with `ONE`/`ONE_MINUS_SRC_ALPHA` on the raw
+/// bytes, so the contract it enforces is `rgb <= a` after encoding. An sRGB
+/// attachment would premultiply in linear light and encode on store, giving
+/// `encode(C·A)`, which is strictly greater than `encode(C)·A` for every
+/// partial alpha — the compositor then adds the excess over the desktop. See
+/// the note at the top of `quad.frag`.
 struct FormatPair {
   uint32_t drm;
   VkFormat vk;
 };
 constexpr FormatPair kFormats[] = {
-  {DRM_FORMAT_ABGR8888, VK_FORMAT_R8G8B8A8_SRGB},
-  {DRM_FORMAT_ARGB8888, VK_FORMAT_B8G8R8A8_SRGB},
+  {DRM_FORMAT_ABGR8888, VK_FORMAT_R8G8B8A8_UNORM},
+  {DRM_FORMAT_ARGB8888, VK_FORMAT_B8G8R8A8_UNORM},
 };
 
 /// Blit destination only: what an image that is written by a copy needs.

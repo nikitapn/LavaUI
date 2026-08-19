@@ -645,7 +645,7 @@ class RenderWindow {
   VkSwapchainKHR           swapchain_ = VK_NULL_HANDLE;
   std::vector<VkImage>     swapchainImages_;
   std::vector<VkImageView> swapchainImageViews_;
-  VkFormat   swapchainImageFormat_ = VK_FORMAT_B8G8R8A8_SRGB;
+  VkFormat   swapchainImageFormat_ = VK_FORMAT_B8G8R8A8_UNORM;
   VkExtent2D swapchainExtent_{};
 
   /// Per in-flight frame: signals that the acquired image is ready to use.
