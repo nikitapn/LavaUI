@@ -329,7 +329,23 @@ public final class InputChannel: @unchecked Sendable {
     /// input that only becomes
     /// visible on the next tick would be an input that arrives when the next
     /// tick happens to be — which for an idle app is never.
-    public var onArrival: (@Sendable () -> Void)?
+    ///
+    /// Arming it is itself an arrival, for whatever landed while it was nil.
+    /// The reader task starts in `init`, and the compositor answers
+    /// `SubscribeInput` with the opening `Resize` immediately — well before a
+    /// caller finishing its bring-up has got as far as installing this. Without
+    /// the catch-up call that size waits in the queue for some *other* event to
+    /// wake the loop, which for a window nobody has touched yet never comes:
+    /// the window sits at its requested size inside a frame the compositor has
+    /// already placed and sized, with the desktop showing between the two.
+    public var onArrival: (@Sendable () -> Void)? {
+        didSet {
+            lock.lock()
+            let pending = !queue.isEmpty
+            lock.unlock()
+            if pending { onArrival?() }
+        }
+    }
 
     private func enqueue(_ event: WireInputEvent) {
         lock.lock()
