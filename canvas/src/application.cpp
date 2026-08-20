@@ -7,7 +7,6 @@
 
 #include "application.hpp"
 
-#include "util/constants.hpp"
 #include "util/key_codes.hpp"
 #include "render/dmabuf_image.hpp"
 #include "render/imported_dmabuf.hpp"

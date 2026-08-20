@@ -44,7 +44,6 @@ let engineSources: [String] = [
     "render/gpu_ledger.cpp",
     "render/gpu_report.cpp",
     "render/image_atlas.cpp",
-    "render/pipeline.cpp",
     "render/png_encode.cpp",
     "render/quad_renderer.cpp",
     "render/shaders.cpp",

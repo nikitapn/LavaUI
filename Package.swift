@@ -69,7 +69,6 @@ var products: [Product] = [
     .library(name: "SpotifyCore", targets: ["SpotifyCore"]),
     .library(name: "LavaTermCore", targets: ["LavaTermCore"]),
     .library(name: "WeatherCore", targets: ["WeatherCore"]),
-    .library(name: "FBDModel", targets: ["FBDModel"]),
 ]
 
 var targets: [Target] = [
@@ -95,7 +94,6 @@ var targets: [Target] = [
     .target(name: "SpotifyCore"),
     .target(name: "LavaTermCore"),
     .target(name: "WeatherCore"),
-    .target(name: "FBDModel"),
 
     .executableTarget(
         name: "TwoWindows",
@@ -174,11 +172,6 @@ var targets: [Target] = [
                             Target.Dependency("LavaIDL")] : []),
         swiftSettings: interopCxx
     ),
-    .executableTarget(
-        name: "ModifierSpike",
-        dependencies: ["LavaUI"],
-        swiftSettings: interopCxx
-    ),
     .target(
         name: "LavaUI",
         dependencies: [
@@ -217,7 +210,6 @@ var targets: [Target] = [
         dependencies: [
             "LavaUI",
             "LavaHost",
-            "FBDModel",
         ],
         resources: [
             .process("Resources"),
@@ -259,7 +251,6 @@ var targets: [Target] = [
     .testTarget(name: "LavaTextTests", dependencies: ["LavaText"]),
     .testTarget(name: "LavaMenuTests", dependencies: ["LavaMenu"]),
     .testTarget(name: "LavaShellTests", dependencies: ["LavaShell"]),
-    .testTarget(name: "FBDModelTests", dependencies: ["FBDModel"]),
     .testTarget(name: "TraceLoomCoreTests", dependencies: ["TraceLoomCore"]),
     .testTarget(
         name: "LavaUITests",
@@ -288,7 +279,7 @@ if haveNprpc {
     ])
 }
 
-// Post-SwiftCrossUI: C++ interop (CxxCanvas) + FBDModel. No Gtk.
+// Post-SwiftCrossUI: C++ interop (CxxCanvas). No Gtk.
 // LavaUI = declarative View DSL + Yoga + draw list + engine bridge.
 // Canvas engine is built by SwiftPM via the `canvas` package (CxxCanvas).
 let package = Package(
