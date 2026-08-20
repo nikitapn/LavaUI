@@ -4,6 +4,7 @@
 
 #define GLFW_INCLUDE_NONE
 #include <GLFW/glfw3.h>
+#include "window/glfw_compat.hpp"
 
 // ─── X11: skip taskbar / pager, utility window type ─────────────────────────
 #if defined(CANVAS_HAVE_X11)
@@ -83,7 +84,7 @@ void canvasApplyToolWindowHints(GLFWwindow *window)
 {
   if (!window) return;
 
-  const int platform = glfwGetPlatform();
+  const int platform = canvasGlfwPlatform();
 
 #if defined(CANVAS_HAVE_X11)
   if (platform == GLFW_PLATFORM_X11) {

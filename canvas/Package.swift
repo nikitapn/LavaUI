@@ -37,7 +37,6 @@ let engineSources: [String] = [
     "menu/notification.cpp",
     "menu/status_notifier.cpp",
     "render/blur_pass.cpp",
-    "render/compute_physics.cpp",
     "render/dmabuf_image.cpp",
     "render/imported_dmabuf.cpp",
     "render/font.cpp",

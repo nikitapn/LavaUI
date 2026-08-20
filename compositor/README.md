@@ -26,29 +26,36 @@ way to see real KMS output on a machine you would rather not log out of.
 
 ## Start the VM
 
-Host requirements: `qemu-system-x86_64`, `qemu-img`, `curl`, and `xorriso`.
+The QEMU guest is an **install test**, not the day-to-day loop: it runs the
+same `scripts/bootstrap.sh` a Debian box would, including wlroots 0.19 from
+source and NPRPC from GitHub. Nested `scripts/dev-run` is faster when you
+already have a session. Full detail: **[docs/install.md](../docs/install.md)**.
+
+Host requirements: `qemu-system-x86_64`, `qemu-img`, `curl`, and `xorriso`
+(`../scripts/install-deps.sh --vm-host`).
 
 ```sh
-scripts/vm-init
-scripts/vm-run
+../scripts/vm-init
+../scripts/vm-run
 ```
 
-The first boot downloads build dependencies and builds wlroots 0.19.3, so it
-can take several minutes. Watch progress on the serial console. When cloud-init
-finishes, the graphical QEMU window changes to the compositor's dark blue
-background. QEMU's default grab release shortcut is `Ctrl+Alt+G`.
+The first boot downloads build dependencies, Swift and NPRPC, so it can take
+quite a few minutes. Watch progress on the serial console. When the
+compositor unit finishes, the graphical QEMU window is the DRM output.
+QEMU's default grab release shortcut is `Ctrl+Alt+G`.
 
 The source tree is shared read-only with the guest. Restarting the service
 copies the latest source, rebuilds it, and launches it on the virtual DRM GPU:
 
 ```sh
-scripts/vm-ssh sudo systemctl restart compositor
-scripts/vm-ssh sudo journalctl -u compositor -f
+../scripts/vm-ssh sudo systemctl restart lava-compositor
+../scripts/vm-ssh sudo journalctl -u lava-compositor -f
 ```
 
 The development account is `dev` with password `dev`. SSH is forwarded only to
 localhost on port 2222. This deliberately convenient configuration is for an
-isolated development VM, not production.
+isolated development VM, not production. The wrappers `scripts/vm-*` in this
+directory exec the repo-root scripts.
 
 ## The shell
 
@@ -293,15 +300,15 @@ nothing is sampled or blurred per frame.
 
 ```sh
 # Inspect first-boot provisioning
-scripts/vm-ssh cloud-init status --wait
-scripts/vm-ssh sudo journalctl -u cloud-final -f
+../scripts/vm-ssh cloud-init status --wait
+../scripts/vm-ssh sudo journalctl -u cloud-final -f
 
 # Rebuild without restarting
-scripts/vm-ssh sudo /usr/local/sbin/build-compositor
+../scripts/vm-ssh sudo /usr/local/sbin/build-lava
 
 # Reset the guest while retaining the downloaded base image
-rm .vm/compositor.qcow2
-scripts/vm-init
+rm ../.vm/lava.qcow2
+../scripts/vm-init
 ```
 
 If `/dev/kvm` is accessible, `vm-run` uses hardware acceleration. Otherwise it

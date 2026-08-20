@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+# Create (or reuse) the QEMU disk that scripts/vm-run boots. The guest is
+# Ubuntu 24.04 because that is the oldest glibc Swift still publishes, and
+# it is the path that has to build wlroots 0.19 from source — the same
+# scripts/install-deps.sh a Debian box runs.
+#
+#   scripts/vm-init
+#   scripts/vm-run
+set -euo pipefail
+
+here="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck source=lib/lava.sh
+source "$here/lib/lava.sh"
+
+vm_dir="$LAVA_ROOT/.vm"
+base="$vm_dir/ubuntu-24.04-base.img"
+disk="$vm_dir/lava.qcow2"
+seed="$vm_dir/seed.iso"
+image_url=${IMAGE_URL:-https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img}
+
+for tool in curl qemu-img xorriso; do
+  command -v "$tool" >/dev/null || lava_die "missing host tool: $tool (scripts/install-deps.sh --vm-host)"
+done
+
+mkdir -p "$vm_dir"
+if [[ ! -f $base ]]; then
+  lava_info "downloading Ubuntu 24.04 cloud image"
+  curl --fail --location --progress-bar "$image_url" --output "$base"
+fi
+
+if [[ ! -f $disk ]]; then
+  # Swift toolchain + nprpc + two build trees do not fit the old 24G disk.
+  qemu-img create -f qcow2 -F qcow2 -b "$base" "$disk" 48G
+  # New guest, new host keys — drop the last one's fingerprint.
+  rm -f "$vm_dir/known_hosts"
+fi
+
+xorriso -as mkisofs -quiet -output "$seed" -volid cidata -joliet -rock \
+  "$LAVA_ROOT/vm/cloud-init/user-data" \
+  "$LAVA_ROOT/vm/cloud-init/meta-data"
+
+lava_info "VM initialized. Run scripts/vm-run"

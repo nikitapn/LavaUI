@@ -3,6 +3,9 @@
 Freedesktop desktop entries + icons so **LavaLauncher** (and rofi, Plasma, …)
 can find the apps built from this tree.
 
+System packages, NPRPC, Docker and the install-test VM are **not** this
+directory — see `docs/install.md` and `packaging/deps/`.
+
 ## Install
 
 ```bash

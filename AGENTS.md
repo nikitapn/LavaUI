@@ -202,12 +202,18 @@ Sibling checkout often expected:
 …/projects/nprpc/          # NPRPC (optional path dep via Package.swift)
 ```
 
+`scripts/fetch-nprpc.sh` will also clone (or symlink) it at
+`third-party/nprpc`. Meson and Package.swift look in both places.
 Without nprpc, the package still builds; control-plane products
 (`LavaClient`, full client mode) are gated on detecting `nprpc_swift`.
 
 ## Repo map
 
 ```text
+scripts/           bootstrap, install-deps, nprpc fetch/build, Docker, VM
+docker/            Debian 13 + Arch images that run meson test + swift test
+vm/                cloud-init for the QEMU install-test guest
+packaging/deps/    Debian/Arch package lists (source of truth for install-deps)
 Sources/
   LavaUI/          Framework (views, layout host, draw list, fonts, input)
   LavaText/        Editing logic — no C++, no Vulkan (unit-tested hard)
@@ -234,7 +240,6 @@ compositor/        wlroots compositor + canvas surfaces + control plane
 idl/lava.npidl     Control-plane IDL
 docs/              Design notes, API, performance, gaps
 tools/             Agent CLI / MCP over LAVA_AGENT_PORT
-scripts/           RPC stub generation
 Tests/             Headless Swift tests (no GPU required for most)
 ```
 
@@ -247,6 +252,10 @@ Tests/             Headless Swift tests (no GPU required for most)
 ## Build and test
 
 ```bash
+# Clean Debian/Arch machine (packages, wlroots 0.19, nprpc, both builds)
+./scripts/bootstrap.sh --yes          # see docs/install.md
+./scripts/check-env.sh
+
 # App + engine (SwiftPM builds C++ canvas)
 swift build
 swift test
@@ -801,5 +810,6 @@ so headless test runs skip it too.
 | `docs/client-server-gaps.md` | Client vs host feature gaps |
 | `docs/retained-scene-tree.md` | Retained tree / invalidation notes |
 | `docs/nprpc-client-stream-gap.md` | Historical SHM stream bug (resolved) |
+| `docs/install.md` | Debian/Arch bootstrap, NPRPC, Docker, QEMU VM |
 | `compositor/README.md` | Compositor + optional VM workflow |
 | `idl/lava.npidl` | Control plane contract (authoritative) |

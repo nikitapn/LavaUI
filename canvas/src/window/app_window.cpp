@@ -11,6 +11,7 @@
 
 #define GLFW_INCLUDE_VULKAN
 #include <GLFW/glfw3.h>
+#include "window/glfw_compat.hpp"
 #if defined(CANVAS_HAVE_X11)
 #define GLFW_EXPOSE_NATIVE_X11
 #include <GLFW/glfw3native.h>
@@ -444,7 +445,7 @@ uint32_t AppWindow::x11WindowId() const
 {
 #if defined(CANVAS_HAVE_X11)
   if (!glfw_) return 0;
-  if (glfwGetPlatform() != GLFW_PLATFORM_X11) return 0;
+  if (canvasGlfwPlatform() != GLFW_PLATFORM_X11) return 0;
   return static_cast<uint32_t>(glfwGetX11Window(glfw_));
 #else
   return 0;
@@ -508,7 +509,7 @@ void AppWindow::installGlfwCallbacks()
       // every other per-notch number mean the same thing whichever way the app
       // is run.
       constexpr double kWaylandUnitsPerDetent = 1.5;
-      const double scale = glfwGetPlatform() == GLFW_PLATFORM_WAYLAND
+      const double scale = canvasGlfwPlatform() == GLFW_PLATFORM_WAYLAND
                                ? 1.0 / kWaylandUnitsPerDetent
                                : 1.0;
       self->scroll(static_cast<float>(dx * scale),

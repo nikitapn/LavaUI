@@ -1,0 +1,94 @@
+#cloud-config
+# First boot of the Lava install-test VM. Same scripts a person runs on a
+# Debian box: install-deps (including wlroots 0.19 from source), Swift,
+# then bootstrap. The repo is 9p-mounted read-only at /mnt/project.
+users:
+  - default
+  - name: dev
+    groups: [adm, sudo, video, input]
+    shell: /bin/bash
+    sudo: ALL=(ALL) NOPASSWD:ALL
+    lock_passwd: false
+    plain_text_passwd: dev
+ssh_pwauth: true
+package_update: true
+packages:
+  - rsync
+write_files:
+  - path: /etc/systemd/system/lava-compositor.service
+    permissions: '0644'
+    content: |
+      [Unit]
+      Description=Lava compositor (install-test VM)
+      After=seatd.service systemd-user-sessions.service
+      Wants=seatd.service
+      Conflicts=getty@tty1.service
+
+      [Service]
+      Type=simple
+      User=root
+      # Do not set WorkingDirectory=/opt/lava: systemd chdirs there *before*
+      # ExecStartPre, and that tree only exists after build-lava rsyncs it.
+      WorkingDirectory=/root
+      Environment=HOME=/root
+      Environment=PATH=/opt/swift/usr/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin
+      Environment=PKG_CONFIG_PATH=/usr/local/lib/pkgconfig:/usr/local/lib/x86_64-linux-gnu/pkgconfig
+      Environment=XDG_RUNTIME_DIR=/run/compositor
+      Environment=WLR_BACKENDS=drm
+      Environment=WLR_RENDERER=gles2
+      # VirGL has no matching Vulkan ICD. Prefer virtio (Venus); if that is
+      # absent, canvas will take the CPU ICD (see RenderDevice).
+      Environment=WLR_LIBINPUT_NO_DEVICES=1
+      Environment=LIBSEAT_BACKEND=seatd
+      Environment=LAVA_CLIENT=1
+      Environment=LAVA_SHELL_DIR=/opt/lava/.build/release
+      ExecStartPre=/usr/bin/mkdir -p /run/compositor
+      ExecStartPre=/usr/bin/chmod 0700 /run/compositor
+      # Mount + maybe rebuild. After the first successful build this is a
+      # no-op (see scripts/vm-guest-prepare); otherwise Restart=on-failure
+      # would compile for twenty minutes between crashes.
+      ExecStartPre=/usr/local/sbin/build-lava
+      ExecStart=/opt/lava/build-release/compositor/compositor
+      Restart=on-failure
+      RestartSec=5
+      StandardOutput=journal+console
+      StandardError=journal+console
+      TTYPath=/dev/tty1
+
+      [Install]
+      WantedBy=multi-user.target
+  - path: /usr/local/sbin/build-lava
+    permissions: '0755'
+    content: |
+      #!/bin/bash
+      set -euxo pipefail
+      mkdir -p /mnt/project /opt/lava
+      mountpoint -q /mnt/project || \
+        mount -t 9p -o trans=virtio,version=9p2000.L,ro project /mnt/project
+      # Exclude the host's nprpc symlink (it points outside the 9p tree) and
+      # the host's build dirs. The guest keeps its own clones under /opt/lava.
+      rsync -a --delete \
+        --exclude .build --exclude build --exclude build-release \
+        --exclude .vm --exclude compositor/.vm \
+        --exclude third-party/nprpc --exclude third-party/wlroots \
+        --exclude .git \
+        /mnt/project/ /opt/lava/
+      export HOME="${HOME:-/root}"
+      export PATH="/opt/swift/usr/bin:/usr/local/sbin:/usr/sbin:/sbin:/usr/local/bin:${PATH}"
+      export PKG_CONFIG_PATH="/usr/local/lib/pkgconfig:/usr/local/lib/x86_64-linux-gnu/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
+      cd /opt/lava
+      ./scripts/bootstrap.sh --no-deps --release
+  - path: /etc/profile.d/lava.sh
+    permissions: '0644'
+    content: |
+      export PATH="/opt/swift/usr/bin:/usr/local/bin:$PATH"
+      export PKG_CONFIG_PATH="/usr/local/lib/pkgconfig:/usr/local/lib/x86_64-linux-gnu/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
+runcmd:
+  - mkdir -p /mnt/project
+  - mount -t 9p -o trans=virtio,version=9p2000.L,ro project /mnt/project
+  - env HOME=/root /mnt/project/scripts/install-deps.sh --yes
+  - env HOME=/root /mnt/project/scripts/install-swift.sh
+  - systemctl daemon-reload
+  - systemctl enable lava-compositor.service
+  - systemctl start --no-block lava-compositor.service
+final_message: "Lava install-test VM finished cloud-init. Compositor build may still be running (journalctl -u lava-compositor -f)."

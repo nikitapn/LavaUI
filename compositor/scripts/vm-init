@@ -1,29 +1,3 @@
 #!/usr/bin/env bash
-set -euo pipefail
-
-project_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
-vm_dir="$project_root/.vm"
-base="$vm_dir/ubuntu-24.04-base.img"
-disk="$vm_dir/compositor.qcow2"
-seed="$vm_dir/seed.iso"
-image_url=${IMAGE_URL:-https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img}
-
-for tool in curl qemu-img xorriso; do
-  command -v "$tool" >/dev/null || { echo "Missing host tool: $tool" >&2; exit 1; }
-done
-
-mkdir -p "$vm_dir"
-if [[ ! -f "$base" ]]; then
-  echo "Downloading Ubuntu 24.04 cloud image..."
-  curl --fail --location --progress-bar "$image_url" --output "$base"
-fi
-
-if [[ ! -f "$disk" ]]; then
-  qemu-img create -f qcow2 -F qcow2 -b "$base" "$disk" 24G
-fi
-
-xorriso -as mkisofs -quiet -output "$seed" -volid cidata -joliet -rock \
-  "$project_root/vm/cloud-init/user-data" \
-  "$project_root/vm/cloud-init/meta-data"
-
-echo "VM initialized. Run scripts/vm-run"
+# Compatibility wrapper — the VM is a whole-repo install test now.
+exec "$(cd "$(dirname "$0")/../.." && pwd)/scripts/vm-init" "$@"

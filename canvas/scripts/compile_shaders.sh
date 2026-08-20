@@ -32,9 +32,6 @@ shaders=(
   spatial.frag
   blur.vert
   blur.frag
-  compute/integration.comp
-  compute/collision_detect.comp
-  compute/collision_resolve.comp
 )
 
 failed=0

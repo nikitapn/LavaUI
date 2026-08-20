@@ -320,11 +320,15 @@ void RenderWindow::createSwapchain()
   if (hasMode(VK_PRESENT_MODE_MAILBOX_KHR)) {
     presentMode = VK_PRESENT_MODE_MAILBOX_KHR;
     presentName = "MAILBOX";
-  } else if (dev_.fifoLatestReadyEnabled() && hasMode(VK_PRESENT_MODE_FIFO_LATEST_READY_KHR)) {
+  }
+#ifdef VK_KHR_PRESENT_MODE_FIFO_LATEST_READY_EXTENSION_NAME
+  else if (dev_.fifoLatestReadyEnabled() && hasMode(VK_PRESENT_MODE_FIFO_LATEST_READY_KHR)) {
     // Same guarantee as MAILBOX, different spelling.
     presentMode = VK_PRESENT_MODE_FIFO_LATEST_READY_KHR;
     presentName = "FIFO_LATEST_READY";
-  } else if (hasMode(VK_PRESENT_MODE_IMMEDIATE_KHR)) {
+  }
+#endif
+  else if (hasMode(VK_PRESENT_MODE_IMMEDIATE_KHR)) {
     // Ranked above plain FIFO deliberately. FIFO's blocking present is the
     // lag that drove this app off it for pointer work, and IMMEDIATE ran for
     // a long stretch here without tearing being observed. A surface offering
@@ -347,17 +351,23 @@ void RenderWindow::createSwapchain()
     } else if (want == "immediate") {
       requested = VK_PRESENT_MODE_IMMEDIATE_KHR;
       requestedName = "IMMEDIATE";
-    } else if (want == "latest") {
+    }
+#ifdef VK_KHR_PRESENT_MODE_FIFO_LATEST_READY_EXTENSION_NAME
+    else if (want == "latest") {
       requested = VK_PRESENT_MODE_FIFO_LATEST_READY_KHR;
       requestedName = "FIFO_LATEST_READY";
     }
+#endif
     if (requestedName != nullptr) {
+#ifdef VK_KHR_PRESENT_MODE_FIFO_LATEST_READY_EXTENSION_NAME
       if (requested == VK_PRESENT_MODE_FIFO_LATEST_READY_KHR
           && !dev_.fifoLatestReadyEnabled()) {
         std::cout << "Present mode FIFO_LATEST_READY needs "
                   << VK_KHR_PRESENT_MODE_FIFO_LATEST_READY_EXTENSION_NAME
                   << ", which this device does not expose; using " << presentName << "\n";
-      } else if (hasMode(requested)) {
+      } else
+#endif
+      if (hasMode(requested)) {
         presentMode = requested;
         presentName = requestedName;
       } else {

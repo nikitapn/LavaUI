@@ -15,12 +15,24 @@ import PackageDescription
 // above the UI framework anyway.
 //
 // Detected rather than required, because windowed LavaUI apps do not need it.
-let nprpcPath = ProcessInfo.processInfo.environment["NPRPC_SWIFT_PATH"]
-    ?? URL(fileURLWithPath: #filePath)
-        .deletingLastPathComponent()
-        .deletingLastPathComponent()
-        .appendingPathComponent("nprpc/nprpc_swift")
-        .path
+// Same search order as meson and scripts/lib/lava.sh: NPRPC_SWIFT_PATH, then
+// a clone at third-party/nprpc, then a sibling checkout at ../nprpc.
+let nprpcPath: String = {
+    if let env = ProcessInfo.processInfo.environment["NPRPC_SWIFT_PATH"], !env.isEmpty {
+        return env
+    }
+    let repo = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+    let candidates = [
+        repo.appendingPathComponent("third-party/nprpc/nprpc_swift").path,
+        repo.deletingLastPathComponent().appendingPathComponent("nprpc/nprpc_swift").path,
+    ]
+    for path in candidates {
+        if FileManager.default.fileExists(atPath: path + "/Package.swift") {
+            return path
+        }
+    }
+    return candidates[0]
+}()
 let haveNprpc = FileManager.default.fileExists(atPath: nprpcPath + "/Package.swift")
 
 let interopCxx: [SwiftSetting] = [.interoperabilityMode(.Cxx)]

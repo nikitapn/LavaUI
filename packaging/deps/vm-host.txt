@@ -1,0 +1,8 @@
+# Host tools for scripts/vm-init + scripts/vm-run. Not needed to build Lava.
+# The script picks the debian or arch column from the current distro.
+
+# debian | arch
+qemu-system-x86 | qemu-system-x86
+qemu-utils | qemu-img
+xorriso | xorriso
+curl | curl

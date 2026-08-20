@@ -1,0 +1,61 @@
+# Arch Linux packages for LavaUI + compositor + NPRPC.
+# Lines starting with # are comments. A leading ? marks optional.
+
+# ── build ──────────────────────────────────────────────────────────────────
+base-devel
+ca-certificates
+cmake
+curl
+git
+meson
+ninja
+pkgconf
+python
+rsync
+wget
+
+# ── canvas / LavaUI ────────────────────────────────────────────────────────
+boost
+cairo
+freetype2
+glfw
+glib2
+glm
+harfbuzz
+libdbusmenu-glib
+libdrm
+librsvg
+libx11
+vulkan-headers
+vulkan-icd-loader
+
+# ── compositor ─────────────────────────────────────────────────────────────
+glslang
+hwdata
+lcms2
+libdisplay-info
+libglvnd
+libinput
+libliftoff
+libxcb
+libxkbcommon
+pixman
+seatd
+wayland
+wayland-protocols
+xcb-util-wm
+xorg-xwayland
+
+# ── NPRPC ──────────────────────────────────────────────────────────────────
+liburing
+openssl
+
+# ── apps ───────────────────────────────────────────────────────────────────
+libpulse
+
+# ── software Vulkan ────────────────────────────────────────────────────────
+vulkan-swrast
+
+# extra currently ships wlroots0.20; 0.19 is what meson asks for. Install it
+# when the repo still has it, otherwise scripts/build-wlroots.sh compiles 0.19.3.
+?wlroots0.19

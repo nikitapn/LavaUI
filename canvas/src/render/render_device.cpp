@@ -2,6 +2,7 @@
 #include <cassert>
 #include <cstdlib>
 #include <cstring>
+#include <format>
 #include <iostream>
 #include <stdexcept>
 #include <string>
@@ -362,24 +363,80 @@ void RenderDevice::selectSupportedGraphicsCard()
     return VK_SAMPLE_COUNT_1_BIT;
   };
 
-  if (auto found = std::ranges::find_if(devices, isDeviceSuitable);
-      found != devices.end()) {
-    physicalDevice_ = *found;
+  auto adopt = [&](VkPhysicalDevice device) {
+    physicalDevice_ = device;
     vkGetPhysicalDeviceProperties(physicalDevice_, &physicalDeviceProperties_);
     msaaSamples_ = usableSampleCount(physicalDeviceProperties_);
 #if DEBUG_PRINT
     std::cout << physicalDeviceProperties_.deviceName
               << "\n\t MSAA Samples: " << msaaSamples_ << std::endl;
 #endif
+  };
+
+  if (auto found = std::ranges::find_if(devices, isDeviceSuitable);
+      found != devices.end()) {
+    adopt(*found);
   } else if (exportDrmFd_ >= 0) {
-    // Worth naming precisely rather than falling back to the other GPU. On a
-    // hybrid laptop this means the card the consumer renders on has no Vulkan
-    // driver installed, and rendering on the one that does would produce a
-    // buffer nothing on the other side can import.
-    throw std::runtime_error(
-      std::format("No Vulkan device for the GPU behind the given DRM node "
-                  "({} Vulkan device(s) present, none matching)",
-                  devices.size()));
+    // VirGL QEMU guests have a DRM node (virtio-gpu) and a Vulkan device
+    // (lavapipe) that is not that node. Matching would refuse, correctly, on
+    // a hybrid laptop. Here the only ICD is a CPU device, or the caller set
+    // LAVA_CANVAS_ANY_VK=1 for an install-test VM.
+    auto missingExportExts = [&](VkPhysicalDevice device) {
+      uint32_t extensionCount = 0;
+      vkEnumerateDeviceExtensionProperties(
+        device, nullptr, &extensionCount, nullptr);
+      std::vector<VkExtensionProperties> available(extensionCount);
+      vkEnumerateDeviceExtensionProperties(
+        device, nullptr, &extensionCount, available.data());
+      std::set<std::string> required(deviceExtensions.begin(),
+                                     deviceExtensions.end());
+      for (const auto &extension : available) {
+        required.erase(extension.extensionName);
+      }
+      return required;
+    };
+    bool onlySoftware = true;
+    std::string names;
+    for (VkPhysicalDevice device : devices) {
+      VkPhysicalDeviceProperties props {};
+      vkGetPhysicalDeviceProperties(device, &props);
+      if (props.deviceType != VK_PHYSICAL_DEVICE_TYPE_CPU &&
+          props.deviceType != VK_PHYSICAL_DEVICE_TYPE_VIRTUAL_GPU) {
+        onlySoftware = false;
+      }
+      if (!names.empty()) names += ", ";
+      names += props.deviceName;
+      auto missing = missingExportExts(device);
+      if (!missing.empty()) {
+        names += " [missing";
+        for (const auto &ext : missing) names += " " + ext;
+        names += "]";
+      }
+    }
+    const char *any = std::getenv("LAVA_CANVAS_ANY_VK");
+    const bool allowUnmatched =
+      onlySoftware || (any != nullptr && any[0] != '\0' && any[0] != '0');
+    auto fallback = std::ranges::find_if(
+      devices, [&](VkPhysicalDevice d) { return missingExportExts(d).empty(); });
+    if (allowUnmatched && fallback != devices.end()) {
+      VkPhysicalDeviceProperties props {};
+      vkGetPhysicalDeviceProperties(*fallback, &props);
+      std::cerr << "canvas: no Vulkan device matches the compositor DRM node; "
+                   "using "
+                << props.deviceName
+                << (onlySoftware ? " (CPU/virtio ICD)" : " (LAVA_CANVAS_ANY_VK)")
+                << ". Exported buffers may not import.\n";
+      adopt(*fallback);
+    } else {
+      // Worth naming precisely rather than falling back to the other GPU. On a
+      // hybrid laptop this means the card the consumer renders on has no Vulkan
+      // driver installed, and rendering on the one that does would produce a
+      // buffer nothing on the other side can import.
+      throw std::runtime_error(
+        std::format("No Vulkan device for the GPU behind the given DRM node "
+                    "({} device(s): {})",
+                    devices.size(), names));
+    }
   } else {
     throw std::runtime_error("No suitable physical device found!");
   }
@@ -450,6 +507,10 @@ void RenderDevice::createLogicalDevice()
   // Requested here rather than in the suitability check on purpose: adding it
   // to `deviceExtensions` up front would make a GPU that lacks it fail to
   // qualify as a device at all.
+  //
+  // The tokens landed in the Vulkan headers after 1.3.275 (Ubuntu 24.04).
+  // Without them the extension is simply not requested; FIFO still works.
+#ifdef VK_KHR_PRESENT_MODE_FIFO_LATEST_READY_EXTENSION_NAME
   if (presentCapable_) {
     uint32_t extCount = 0;
     vkEnumerateDeviceExtensionProperties(physicalDevice_, nullptr, &extCount, nullptr);
@@ -466,6 +527,7 @@ void RenderDevice::createLogicalDevice()
       }
     }
   }
+#endif
 
   // Also optional, and for the same reason: without it the handover to another
   // driver falls back to a CPU wait, which is slower but not wrong. Requiring
@@ -503,17 +565,23 @@ void RenderDevice::createLogicalDevice()
   }
 
   // Must outlive vkCreateDevice: it is referenced through pNext.
+#ifdef VK_KHR_PRESENT_MODE_FIFO_LATEST_READY_EXTENSION_NAME
   VkPhysicalDevicePresentModeFifoLatestReadyFeaturesKHR fifoLatestReady {
     .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PRESENT_MODE_FIFO_LATEST_READY_FEATURES_KHR,
     .pNext = &descriptorIndexing,
     .presentModeFifoLatestReady = VK_TRUE,
   };
+#endif
 
   VkDeviceCreateInfo deviceCreateInfo = {
     .sType                   = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
+#ifdef VK_KHR_PRESENT_MODE_FIFO_LATEST_READY_EXTENSION_NAME
     .pNext                   = fifoLatestReadyEnabled_
                                  ? static_cast<void *>(&fifoLatestReady)
                                  : static_cast<void *>(&descriptorIndexing),
+#else
+    .pNext                   = &descriptorIndexing,
+#endif
     .queueCreateInfoCount    = 1,
     .pQueueCreateInfos       = &queueCreateInfo,
     .enabledExtensionCount   = static_cast<uint32_t>(deviceExtensions.size()),

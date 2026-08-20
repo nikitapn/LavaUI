@@ -1,0 +1,52 @@
+#!/usr/bin/env bash
+# Boot the install-test VM. The guest mounts this repo read-only over 9p
+# and runs scripts/bootstrap.sh on first start.
+#
+#   scripts/vm-init
+#   scripts/vm-run
+#
+# SSH (user dev / password dev) is forwarded to localhost:2222.
+# QEMU grab-release is Ctrl+Alt+G.
+set -euo pipefail
+
+here="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck source=lib/lava.sh
+source "$here/lib/lava.sh"
+
+vm_dir="$LAVA_ROOT/.vm"
+disk="$vm_dir/lava.qcow2"
+seed="$vm_dir/seed.iso"
+
+[[ -f $disk && -f $seed ]] || lava_die "run scripts/vm-init first"
+command -v qemu-system-x86_64 >/dev/null \
+  || lava_die "missing qemu-system-x86_64 (scripts/install-deps.sh --vm-host)"
+
+accel=tcg
+cpu=max
+if [[ -r /dev/kvm && -w /dev/kvm ]]; then
+  accel=kvm
+  cpu=host
+fi
+
+# Venus (virtio Vulkan) is what makes canvas's DRM match work: VirGL is GLES
+# only, so without venus the guest's one Vulkan device is lavapipe and it
+# does not name the virtio-gpu node. blob+hostmem is what Venus needs for
+# exported dmabufs. Override with VM_GPU if this QEMU rejects the options.
+gpu="${VM_GPU:-virtio-vga-gl,blob=on,venus=on,hostmem=${VM_HOSTMEM:-1G}}"
+
+exec qemu-system-x86_64 \
+  -name lava-install \
+  -machine "q35,accel=$accel" \
+  -cpu "$cpu" \
+  -smp "${VM_CPUS:-4}" \
+  -m "${VM_MEMORY:-8192}" \
+  -drive "if=virtio,format=qcow2,file=$disk" \
+  -drive "if=virtio,format=raw,readonly=on,file=$seed" \
+  -virtfs "local,path=$LAVA_ROOT,mount_tag=project,security_model=none,readonly=on" \
+  -device "$gpu" \
+  -display gtk,gl=on \
+  -device virtio-keyboard-pci \
+  -device virtio-mouse-pci \
+  -netdev user,id=net0,hostfwd=tcp:127.0.0.1:2222-:22 \
+  -device virtio-net-pci,netdev=net0 \
+  -serial mon:stdio

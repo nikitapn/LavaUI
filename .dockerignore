@@ -1,0 +1,31 @@
+.git
+.grok
+.claude
+.vm
+compositor/.vm
+compositor/.cache
+.build
+.build-release
+build
+build-release
+**/.DS_Store
+**/__pycache__
+**/.swiftpm
+**/*.qcow2
+**/*.img
+
+# NPRPC is copied in when present; skip the things a clone does not need
+# and the things that make a sibling checkout enormous.
+third-party/nprpc/.git
+third-party/nprpc/.build*
+third-party/nprpc/third_party/boost*
+third-party/nprpc/third_party/openssl*
+third-party/nprpc/third_party/msquic
+third-party/nprpc/third_party/boringssl
+third-party/nprpc/third_party/ngtcp2
+third-party/nprpc/third_party/nghttp3
+third-party/nprpc/third_party/nghttp2
+third-party/nprpc/node_modules
+third-party/nprpc/examples/live-blog/node_modules
+third-party/nprpc/examples/live-blog/client/build
+third-party/wlroots

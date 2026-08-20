@@ -1,0 +1,75 @@
+# Debian / Ubuntu packages for LavaUI + compositor + NPRPC.
+# Lines starting with # are comments. A leading ? marks optional:
+# install if the distro has it, otherwise the script builds wlroots 0.19.
+#
+# Tested against Debian 13 (trixie), Debian sid, and Ubuntu 24.04.
+# Trixie and Noble ship wlroots 0.17/0.18 — 0.19 is built from source.
+
+# ── build ──────────────────────────────────────────────────────────────────
+build-essential
+# Ubuntu 24.04's default g++ is 13; nprpc needs 14 (C++23 `this Self&`).
+g++-14
+gcc-14
+ca-certificates
+cmake
+curl
+git
+meson
+ninja-build
+pkg-config
+python3
+rsync
+tar
+unzip
+wget
+xz-utils
+
+# ── canvas / LavaUI (SwiftPM + meson) ──────────────────────────────────────
+libcairo2-dev
+libdbusmenu-glib-dev
+libdrm-dev
+libfreetype-dev
+libglfw3-dev
+libglib2.0-dev
+libglm-dev
+libharfbuzz-dev
+librsvg2-dev
+libvulkan-dev
+libx11-dev
+# glfw3native.h includes Xrandr.h when GLFW_EXPOSE_NATIVE_X11 is set.
+libxrandr-dev
+libboost-stacktrace-dev
+
+# ── compositor (wlroots 0.19) ──────────────────────────────────────────────
+hwdata
+libdisplay-info-dev
+libegl-dev
+libgbm-dev
+libgles-dev
+libinput-dev
+libliftoff-dev
+libpixman-1-dev
+libseat-dev
+libsystemd-dev
+libwayland-dev
+libxkbcommon-dev
+# Split out of libxkbcommon on Debian/Ubuntu; meson asks for xkbregistry.pc.
+libxkbregistry-dev
+seatd
+wayland-protocols
+xwayland
+
+# ── NPRPC (shared-memory control plane; no QUIC/HTTP3) ─────────────────────
+libboost-dev
+libboost-program-options-dev
+libssl-dev
+liburing-dev
+
+# ── apps ───────────────────────────────────────────────────────────────────
+libpulse-dev
+
+# ── software Vulkan (Docker, VMs, machines with no GPU) ────────────────────
+mesa-vulkan-drivers
+
+# ── wlroots 0.19 from the archive when it exists (sid / forky) ─────────────
+?libwlroots-0.19-dev

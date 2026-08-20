@@ -1,0 +1,21 @@
+# Extra Debian/Ubuntu packages needed only when building wlroots 0.19 from
+# source (trixie, noble, and anything else that still ships 0.17/0.18).
+# The main debian.txt list already covers wayland / drm / seat / vulkan.
+#
+# Noble's libwayland and wayland-protocols are older than wlroots 0.19
+# wants, so meson wrap-builds both. That wayland wrap needs libxml2 (DTD
+# scanner), libffi and expat.
+
+glslang-tools
+libexpat1-dev
+libffi-dev
+liblcms2-dev
+libxml2-dev
+libxcb-composite0-dev
+libxcb-ewmh-dev
+libxcb-icccm4-dev
+libxcb-image0-dev
+libxcb-render-util0-dev
+libxcb-res0-dev
+libxcb-xinput-dev
+libx11-xcb-dev

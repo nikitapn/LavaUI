@@ -15,7 +15,6 @@ canvas_engine_sources = files(
   'src/menu/notification.cpp',
   'src/menu/status_notifier.cpp',
   'src/render/blur_pass.cpp',
-  'src/render/compute_physics.cpp',
   'src/render/dmabuf_image.cpp',
   'src/render/imported_dmabuf.cpp',
   'src/render/font.cpp',

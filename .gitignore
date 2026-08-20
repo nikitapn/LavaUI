@@ -10,11 +10,16 @@ DerivedData/
 swift-cross-ui
 .claude
 
-# Compositor (meson). `.vm` is ~1GB of QEMU disk images built by scripts/vm-init
+# Compositor (meson). `.vm` is the QEMU disk from scripts/vm-init
 # and `.cache` is meson's; both are regenerable and neither belongs in git.
 compositor/build/
 compositor/.vm/
 compositor/.cache/
+/.vm/
 # Meson build
 build
 build-release
+
+# Cloned by scripts/fetch-nprpc.sh / scripts/build-wlroots.sh, not vendored.
+/third-party/nprpc
+/third-party/wlroots

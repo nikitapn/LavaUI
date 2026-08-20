@@ -11,12 +11,16 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-NPRPC_ROOT="${NPRPC_ROOT:-$(cd "$ROOT/.." && pwd)/nprpc}"
-NPIDL="${NPIDL:-$NPRPC_ROOT/.build_relwith_debinfo/npidl/npidl}"
+# shellcheck source=lib/lava.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/lava.sh"
 
-if [[ ! -x "$NPIDL" ]]; then
-  echo "npidl not found at $NPIDL" >&2
-  echo "Build nprpc first, or set NPIDL=/path/to/npidl." >&2
+if [[ -z "${NPIDL:-}" ]]; then
+  NPIDL="$(lava_find_npidl || true)"
+fi
+
+if [[ ! -x "${NPIDL:-}" ]]; then
+  echo "npidl not found. Build nprpc (scripts/build-nprpc.sh) or set NPIDL=" >&2
+  echo "Looked in third-party/nprpc and ../nprpc." >&2
   exit 1
 fi
 

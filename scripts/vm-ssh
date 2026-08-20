@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+# SSH into the install-test VM (scripts/vm-run). User dev, password dev.
+#
+# Host keys live in .vm/known_hosts, not ~/.ssh/known_hosts: a vm-init
+# makes a new guest and OpenSSH would otherwise treat that as a MITM.
+set -euo pipefail
+
+here="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck source=lib/lava.sh
+source "$here/lib/lava.sh"
+
+mkdir -p "$LAVA_ROOT/.vm"
+exec ssh \
+  -o StrictHostKeyChecking=accept-new \
+  -o UserKnownHostsFile="$LAVA_ROOT/.vm/known_hosts" \
+  -o LogLevel=ERROR \
+  -p 2222 \
+  dev@127.0.0.1 \
+  "$@"

@@ -48,6 +48,18 @@ is enforced by the build graph rather than by discipline.
 
 ## Building
 
+On a clean Debian or Arch machine the whole stack — packages, wlroots 0.19,
+NPRPC, compositor, Swift clients — is:
+
+```bash
+./scripts/bootstrap.sh --yes          # or --release
+./scripts/check-env.sh                # what the build can see
+```
+
+That is documented in **[docs/install.md](docs/install.md)** (Docker images
+and the QEMU install-test VM live there too). The short form if the
+packages are already on the machine:
+
 ```bash
 swift build                   # Swift + C++ canvas engine (SwiftPM compiles both)
 swift run HelloWorld          # demo
@@ -185,17 +197,16 @@ only declare a dependency on **this** repository.
 ### 1. System packages (Linux)
 
 ```bash
-# Arch
-sudo pacman -S vulkan-icd-loader vulkan-headers glfw freetype2 harfbuzz \
-  libdbusmenu-glib
-
-# Debian / Ubuntu
-sudo apt install libvulkan-dev libglfw3-dev libfreetype-dev libharfbuzz-dev \
-  libdbusmenu-glib-dev libglib2.0-dev
+./scripts/install-deps.sh --yes     # Debian/Ubuntu or Arch; see packaging/deps/
 ```
 
+The compositor and NPRPC need more than the engine (wlroots 0.19, Boost,
+liburing, dbusmenu, rsvg, …). `install-deps.sh` is the list. A windowed
+LavaUI app that will never talk to the compositor can get by with Vulkan,
+GLFW, FreeType, HarfBuzz and libdbusmenu-glib alone.
+
 You also need a working Vulkan ICD (e.g. `vulkan-radeon`, `nvidia-utils`,
-`vulkan-intel`) and a Swift 6 toolchain.
+`vulkan-intel`) and a Swift 6.3 toolchain (`scripts/install-swift.sh`).
 
 ### 2. Scaffold an executable package
 
