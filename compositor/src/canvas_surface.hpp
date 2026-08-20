@@ -96,9 +96,11 @@ class CanvasRenderer {
   void releaseImage(const std::string &key);
 
   /// The same, for an image that can never be asked for again — a frost
-  /// snapshot, whose key carries a generation that only goes up. `releaseImage`
-  /// would park it in the dormant set instead, where the byte budget keeps it
-  /// until 256 MiB of dead full-screen snapshots have accumulated.
+  /// snapshot or an Alt+Tab poster, whose key carries a generation that only
+  /// goes up. `releaseImage` would park it in the dormant set instead, where
+  /// the byte budget keeps it until 256 MiB of dead screenshots have
+  /// accumulated. Which they do: measured at 248 MiB of posters, none of them
+  /// nameable, on a desktop that had been up a few hours.
   void discardImage(const std::string &key);
 
   /// How a draw list names another surface as a texture. `fn` is called

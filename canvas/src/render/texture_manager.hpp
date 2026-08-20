@@ -200,10 +200,12 @@ public:
     /// that a key will come back — reopening a window, scrolling a list of
     /// covers back up — and it is a good bet for a path or a content hash. It is
     /// no bet at all for a key with a *generation counter* in it: the
-    /// compositor's frost snapshots are `frost:<surface>:<n>` where `n` only
-    /// goes up, so every release parks a full-screen texture that is provably
-    /// dead. Ten of those is 79 MiB the byte budget will not reclaim until it
-    /// notices 256.
+    /// compositor's frost snapshots are `frost:<surface>:<n>` and its Alt+Tab
+    /// posters `poster:<gen>:<surface>:<side>`, where the counter only goes
+    /// up, so every release parks a texture that is provably dead. Ten frosts
+    /// is 79 MiB the byte budget will not reclaim until it notices 256 — and
+    /// the posters simply fill the 256, at a few megabytes per window per
+    /// Alt+Tab, for a cache that can never hit.
     ///
     /// Still deferred, not immediate: a submitted frame may be sampling it, so
     /// this goes through `destroyImageDeferred` like every other release.

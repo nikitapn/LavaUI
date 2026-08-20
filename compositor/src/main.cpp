@@ -4365,8 +4365,9 @@ class SurfaceRegistry : public lava::CompositorHost {
   }
 
   std::string posterKey(uint32_t surfaceId, uint32_t maxSide) const {
-    // Generation is in the TextureManager key so a dormant entry from the
-    // last session cannot be revived under the same name.
+    // Generation is in the TextureManager key so an entry from the last
+    // session cannot be revived under the same name — which is also why
+    // these are discarded rather than released when the overlay goes.
     return "poster:" + std::to_string(posterGen_) + ":" +
            std::to_string(surfaceId) + ":" + std::to_string(maxSide);
   }
@@ -4429,6 +4430,10 @@ class SurfaceRegistry : public lava::CompositorHost {
     return id;
   }
 
+  // Discard, not release: the generation in the key means nothing can ever
+  // name this again, so the dormant set has nothing to bet on — see
+  // `CanvasRenderer::discardImage`. Parking them instead cost a quarter of a
+  // gigabyte of dead screenshots on a long session, one Alt+Tab at a time.
   void forgetPosters(uint32_t surfaceId) {
     if (renderer_ == nullptr) return;
     for (auto it = posters_.begin(); it != posters_.end();) {
@@ -4436,7 +4441,7 @@ class SurfaceRegistry : public lava::CompositorHost {
         ++it;
         continue;
       }
-      renderer_->releaseImage(
+      renderer_->discardImage(
           posterKey(surfaceId, static_cast<uint32_t>(it->first)));
       it = posters_.erase(it);
     }
@@ -4446,7 +4451,7 @@ class SurfaceRegistry : public lava::CompositorHost {
     if (renderer_ != nullptr) {
       for (const auto &[key, id] : posters_) {
         (void)id;
-        renderer_->releaseImage(posterKey(static_cast<uint32_t>(key >> 32),
+        renderer_->discardImage(posterKey(static_cast<uint32_t>(key >> 32),
                                           static_cast<uint32_t>(key)));
       }
     }
