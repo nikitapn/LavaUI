@@ -1205,6 +1205,21 @@ struct ClientSurface {
   /// a-hole (or a black slab) before the client has drawn. The switcher
   /// is the case that made this load-bearing.
   bool awaitingFirstFrame = false;
+  /// A frame has been rendered from the arena; half of what a reveal needs.
+  bool firstFrameRendered = false;
+  /// Serial of the opening `Resize`, until the client acks it; 0 once it has
+  /// (or once the deadline gave up waiting).
+  ///
+  /// The other half of a reveal. `applyInitialPlacement` usually resizes a
+  /// window away from the size its client asked for, and a first frame drawn
+  /// before that news arrives is laid out for the wrong rectangle — the app
+  /// in one corner of a frame the compositor has already sized, desktop
+  /// showing through the rest. Waiting for the ack means what appears was
+  /// laid out for the window that is actually there.
+  uint32_t revealSerial = 0;
+  /// When to stop waiting for that ack. A client that never answers must
+  /// still end up on screen; see `sweepRevealDeadlines`.
+  std::chrono::steady_clock::time_point revealDeadline{};
 
   /// Whether the compositor title bar is on screen.
   ///
@@ -1719,6 +1734,9 @@ class SurfaceRegistry : public lava::CompositorHost {
     if (placementTimer_ != nullptr) {
       wl_event_source_timer_update(placementTimer_, kPlacementFlushMs);
     }
+    // Armed on demand — a window holding its first frame is the only thing
+    // this has to wake for. See `sweepRevealDeadlines`.
+    revealTimer_ = wl_event_loop_add_timer(loop, on_reveal_timer, this);
   }
 
   /// Snapshots every live window and writes if the map changed. The
@@ -4309,12 +4327,79 @@ class SurfaceRegistry : public lava::CompositorHost {
     }
     if (!surface->canvas->renderFromArena()) return;
     if (surface->awaitingFirstFrame) {
-      surface->awaitingFirstFrame = false;
-      wlr_scene_node_set_enabled(&surface->node->node, true);
+      surface->firstFrameRendered = true;
+      revealIfReady(*surface);
     }
     damage(*surface);
     lava::FrameProbe::frame(id);
     lava::FrameProbe::report();
+  }
+
+  /// Puts a window on screen once its first frame was drawn for the size the
+  /// window actually is.
+  ///
+  /// Two things have to land and either may be second, so this is called from
+  /// both: `present` renders the frame, `inputAcked` confirms the client had
+  /// been told its size before drawing it. Nothing polls — a reveal happens on
+  /// whichever of the two arrives last.
+  void revealIfReady(ClientSurface &surface) {
+    if (!surface.awaitingFirstFrame) return;
+    if (!surface.firstFrameRendered || surface.revealSerial != 0) return;
+    surface.awaitingFirstFrame = false;
+    wlr_scene_node_set_enabled(&surface.node->node, true);
+    damage(surface);
+  }
+
+  void holdReveal(uint32_t id, uint32_t serial) override {
+    ClientSurface *surface = find(id);
+    if (surface == nullptr || !surface->awaitingFirstFrame) return;
+    surface->revealSerial = serial;
+    surface->revealDeadline =
+        std::chrono::steady_clock::now() +
+        std::chrono::milliseconds(kRevealHoldMs);
+    sweepRevealDeadlines();
+  }
+
+  /// Reveals anything that waited long enough, and re-arms for the next
+  /// deadline still outstanding.
+  ///
+  /// The safety net, not the mechanism: an ack normally arrives in under a
+  /// millisecond and `inputAcked` does the reveal. This is for the client that
+  /// never answers — before `InputChannel` fired its hook on arming, *every*
+  /// untouched window was that client — where a window held forever would be a
+  /// worse bug than the one the hold exists to fix. Showing it late and saying
+  /// so in the log is the honest failure.
+  void sweepRevealDeadlines() {
+    const auto now = std::chrono::steady_clock::now();
+    int soonestMs = 0;
+    for (const auto &surface : surfaces_) {
+      if (surface->revealSerial == 0) continue;
+      if (now >= surface->revealDeadline) {
+        wlr_log(WLR_INFO,
+                "window %u: shown without an input ack after %d ms — the "
+                "client never confirmed its size",
+                surface->id, kRevealHoldMs);
+        surface->revealSerial = 0;
+        revealIfReady(*surface);
+        continue;
+      }
+      const int left = std::max<int>(
+          1, static_cast<int>(std::chrono::duration_cast<std::chrono::milliseconds>(
+                 surface->revealDeadline - now)
+                                  .count()));
+      soonestMs = soonestMs == 0 ? left : std::min(soonestMs, left);
+    }
+    if (soonestMs > 0 && revealTimer_ != nullptr) {
+      wl_event_source_timer_update(revealTimer_, soonestMs);
+    }
+  }
+
+  void inputAcked(uint32_t id, uint32_t serial) override {
+    ClientSurface *surface = find(id);
+    if (surface == nullptr || surface->revealSerial == 0) return;
+    if (serial < surface->revealSerial) return;
+    surface->revealSerial = 0;
+    revealIfReady(*surface);
   }
 
   void surfaceSize(uint32_t id, float &outW, float &outH) const override {
@@ -4886,7 +4971,19 @@ class SurfaceRegistry : public lava::CompositorHost {
   /// Last frame of each application. See `applyInitialPlacement`.
   lava::WindowMemory placements_;
   wl_event_source *placementTimer_ = nullptr;
+  wl_event_source *revealTimer_ = nullptr;
   static constexpr int kPlacementFlushMs = 30 * 1000;
+
+  /// How long a window waits for its client to confirm the size it was given
+  /// before being shown anyway. Long enough to cover a cold client's first
+  /// scheduling hop, short enough that a window that will never answer is not
+  /// visibly missing — see `sweepRevealDeadlines`.
+  static constexpr int kRevealHoldMs = 250;
+
+  static int on_reveal_timer(void *data) {
+    static_cast<SurfaceRegistry *>(data)->sweepRevealDeadlines();
+    return 0;
+  }
 
   static int on_placement_timer(void *data) {
     auto *self = static_cast<SurfaceRegistry *>(data);
