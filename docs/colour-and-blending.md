@@ -64,7 +64,7 @@ full-screen re-premultiply pass, at 8-bit precision, every frame.
 
 ### What that cost
 
-- **Blur** now averages encoded values. A Gaussian is properly an average of
+- **Blur** now averages encoded values. A blur is properly an average of
   light, so frosted panels are slightly different — the same slightly-wrong
   every browser's `backdrop-filter` is.
 - **Texture filtering and mipmaps** likewise.

@@ -522,10 +522,26 @@ void QuadRenderer::createPipeline(VkRenderPass renderPass,
     .stencilTestEnable     = VK_FALSE,
   };
 
-  // Premultiplied source (see quad.frag): ONE rather than SRC_ALPHA. Over an
-  // opaque target this is the same image as straight alpha; over the
-  // transparent target that content blur renders into, it is the only form the
-  // Gaussian can then average without dragging transparent black into edges.
+  // Two ONEs, for two unrelated reasons.
+  //
+  // *Colour* is ONE because the source is premultiplied: quad.frag emits
+  // `rgb * a` (see its last line), so the scale by alpha already happened and
+  // SRC_ALPHA would apply it a second time, landing a half-covered fill at
+  // quarter weight.
+  //
+  // *Alpha* is ONE whether or not anything is premultiplied — alpha is never
+  // premultiplied by itself. `over` on that channel is
+  // `a_src + a_dst * (1 - a_src)`, which carries no factor of a_src, so
+  // SRC_ALPHA here would store a^2 and break the `rgb <= a` invariant that
+  // the compositor handover and the blur both read the buffer under. The
+  // Blend::Mask override below scales the two together for the same reason.
+  //
+  // Premultiplying at all is what content blur needs. Over an opaque target
+  // premultiplied and straight alpha are the same image, but content blur
+  // renders a subtree into a target cleared to transparent black, and
+  // everything downstream of that averages texels: the filtered capture blit,
+  // then the Dual Kawase pyramid down and back up. Averaging straight alpha
+  // drags the colour of fully transparent texels — black — into every edge.
   VkPipelineColorBlendAttachmentState blendAttachment{
     .blendEnable         = VK_TRUE,
     .srcColorBlendFactor = VK_BLEND_FACTOR_ONE,

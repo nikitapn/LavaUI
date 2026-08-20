@@ -1978,7 +1978,7 @@ void RenderWindow::replayDrawList(const canvas::DrawList &list, float viewW,
       if (contentScopes.empty()) break;
       const canvas::DrawCommand open = contentScopes.back();
       contentScopes.pop_back();
-      // Punch the source to the outline *before* the Gaussian. A square
+      // Punch the source to the outline *before* the blur. A square
       // capture blurred at a rounded corner pulls the corner's bright
       // wallpaper into the curve as a one-pixel spark.
       if (open.param > 0) {

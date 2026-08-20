@@ -460,7 +460,7 @@ class QuadRenderer {
   vk::Handle<VkPipeline>            pipelineScene_;
   vk::Handle<VkPipeline>            instancePipelineScene_;
   /// Corner mask against the content-blur target, so a frost plate can punch
-  /// its source *before* the Gaussian. Without this the square corner of the
+  /// its source *before* the blur. Without this the square corner of the
   /// capture bleeds into the curve as a bright speck.
   vk::Handle<VkPipeline>            instanceMaskPipelineScene_;
   vk::Handle<VkPipeline>            linePipeline_;

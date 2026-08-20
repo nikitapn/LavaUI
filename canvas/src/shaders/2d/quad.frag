@@ -13,14 +13,19 @@
 // Solid shapes still sample the bound texture (usually a white texel), so one
 // descriptor table is enough.
 //
-// Output is **premultiplied** and the pipeline blends with ONE /
+// Output is **premultiplied** and the pipeline blends colour with ONE /
 // ONE_MINUS_SRC_ALPHA. Over an opaque target that is identical to straight
 // alpha with SRC_ALPHA / ONE_MINUS_SRC_ALPHA, so nothing about the normal path
 // changes. It matters for content blur: that renders a subtree into a target
-// cleared to transparent black and then runs a Gaussian over it, and a Gaussian
-// may only be applied to premultiplied colour. Averaging straight alpha pulls
-// the colour of fully transparent texels — black — into every edge, which shows
-// up as a dark halo around everything blurred.
+// cleared to transparent black, and every stage that follows averages texels —
+// the filtered capture blit, then the Dual Kawase pyramid down and back up. A
+// weighted average may only be taken of premultiplied colour. Averaging
+// straight alpha pulls the colour of fully transparent texels — black — into
+// every edge, which shows up as a dark halo around everything blurred.
+//
+// The *alpha* channel blends ONE / ONE_MINUS_SRC_ALPHA for a separate reason,
+// unrelated to premultiplication: `over` on alpha is `a_s + a_d * (1 - a_s)`,
+// with no factor of a_s on the source term.
 //
 // Everything here is in **sRGB-encoded** space, not linear light: the colour
 // attachment is UNORM, vertex colours arrive as authored, and sampled textures

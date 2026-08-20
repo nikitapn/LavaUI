@@ -856,7 +856,7 @@ the front stays readable; the focused card turns to the camera. Pass
 rather than sharing a centre. The app switcher uses this layout.
 
 `.shadow3D(...)` projects the transformed card silhouette into a shared
-offscreen mask and Gaussian-blurs it. Radius and offset are expressed in screen
+offscreen mask and blurs it. Radius and offset are expressed in screen
 pixels, so the shadow remains visually consistent while the cover moves in
 depth. `Shadow3DStyle` can also be passed when the same configuration is shared
 by many objects. This is a scene-local spatial UI effect, not a general mesh
@@ -864,7 +864,7 @@ shadow map.
 
 `.reflection3D(...)` mirrors the fully transformed object across a horizontal
 world-space plane. The reflection preserves textures, fades with distance from
-the plane, and can use a small shared Gaussian blur for a polished glass-floor
+the plane, and can use a small shared blur for a polished glass-floor
 look. `planeY` should align with the lower edge of objects at rest. Reflections
 are a lightweight planar UI effect rather than a second scene render, so they
 do not reflect arbitrary surrounding geometry.

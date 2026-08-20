@@ -877,7 +877,7 @@ public final class DrawList {
         )
     }
 
-    /// One offscreen Gaussian pass for a Scene3D effect such as a projected
+    /// One offscreen blur pass for a Scene3D effect such as a projected
     /// shadow mask or softened planar reflection.
     /// Avoid nested blur targets: if an ancestor already blurs the whole scene,
     /// the mask is emitted into that target and participates in its blur.

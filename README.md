@@ -414,7 +414,7 @@ activating what it landed on. Placement flips to the other side of the anchor
 when there is no room.
 
 **Blur** comes in two kinds, because "blur this view" and "frost what is behind
-this view" are opposite operations that happen to share a Gaussian.
+this view" are opposite operations that happen to share a blur.
 `.blur(radius:)` softens the view and its children, the way SwiftUI's does;
 `.backdropBlur(radius:)` leaves the view sharp and frosts the window under it,
 which is what glass is made of.
@@ -425,8 +425,8 @@ frame, and composites the result *under* the view's own fill. Content blur
 instead draws the subtree — only the subtree — into an offscreen target cleared
 to transparent, blurs that, and composites it back with its own alpha, so a
 blurred view has a genuinely soft edge and whatever sits behind it shows through
-untouched. That path is why the whole pipeline emits premultiplied alpha: a
-Gaussian over straight alpha averages the colour of fully transparent texels
+untouched. That path is why the whole pipeline emits premultiplied alpha:
+averaging straight alpha pulls the colour of fully transparent texels
 into every edge, which reads as a dark halo around everything blurred.
 
 Width comes from the *downscale*, never from wider tap spacing — the kernel is
