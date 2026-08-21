@@ -1669,19 +1669,33 @@ bool captureForeign(const ClientSurface &surface, int32_t maxSide,
   if (wl == nullptr || wl->buffer == nullptr) return false;
 
   wlr_client_buffer *client = wl->buffer;
-  wlr_buffer *source = client->source != nullptr ? client->source : &client->base;
-  wlr_buffer_lock(source);
+  // The client buffer, never `client->source`, though the two carry the same
+  // pixels: `wlr_client_buffer` forwards both data-ptr access and dmabuf
+  // export straight through to its source.
+  //
+  // The source is the client's own `wl_buffer`, and `wlr_buffer_unlock` emits
+  // `events.release` on *any* transition to zero locks — not only one undoing
+  // a lock wlroots itself took. shm buffers sit at zero between frames:
+  // wlroots uploads them into a texture on commit and releases them at once so
+  // the client can reuse the memory, keeping only a weak pointer. Locking one
+  // here and dropping it again therefore sends a *second* `wl_buffer.release`
+  // for a frame the client already had back and has very likely redrawn into
+  // — GTK3 frees the cairo surface behind it twice and aborts on the
+  // reference count. dmabuf clients never showed this, because their texture
+  // holds a lock of its own and ours was never the last one.
+  wlr_buffer *frame = &client->base;
+  wlr_buffer_lock(frame);
 
   bool ok = false;
   void *data = nullptr;
   uint32_t format = 0;
   size_t stride = 0;
-  if (wlr_buffer_begin_data_ptr_access(source, WLR_BUFFER_DATA_PTR_ACCESS_READ,
+  if (wlr_buffer_begin_data_ptr_access(frame, WLR_BUFFER_DATA_PTR_ACCESS_READ,
                                        &data, &format, &stride)) {
-    ok = encodeForeignRgba(static_cast<const uint8_t *>(data), source->width,
-                           source->height, static_cast<int>(stride), format,
+    ok = encodeForeignRgba(static_cast<const uint8_t *>(data), frame->width,
+                           frame->height, static_cast<int>(stride), format,
                            maxSide, outPng, outW, outH);
-    wlr_buffer_end_data_ptr_access(source);
+    wlr_buffer_end_data_ptr_access(frame);
   }
 
   if (!ok && client->texture != nullptr) {
@@ -1704,7 +1718,7 @@ bool captureForeign(const ClientSurface &surface, int32_t maxSide,
     }
   }
 
-  wlr_buffer_unlock(source);
+  wlr_buffer_unlock(frame);
   return ok;
 }
 
@@ -4806,10 +4820,11 @@ class SurfaceRegistry : public lava::CompositorHost {
       wlr_surface *wl = surface->window->focusSurface();
       if (wl != nullptr && wl->buffer != nullptr) {
         wlr_client_buffer *client = wl->buffer;
-        wlr_buffer *source =
-            client->source != nullptr ? client->source : &client->base;
-        wlr_buffer_lock(source);
-        id = renderer_->importBufferTexture(source, texKey, maxSide);
+        // Not `client->source`: locking the client's own buffer and letting
+        // go would hand it a spurious `wl_buffer.release`. See `captureForeign`.
+        wlr_buffer *frame = &client->base;
+        wlr_buffer_lock(frame);
+        id = renderer_->importBufferTexture(frame, texKey, maxSide);
         if (id <= 0) {
           std::vector<uint8_t> png;
           uint32_t pw = 0, ph = 0;
@@ -4821,7 +4836,7 @@ class SurfaceRegistry : public lava::CompositorHost {
                                               maxSide, ow, oh);
           }
         }
-        wlr_buffer_unlock(source);
+        wlr_buffer_unlock(frame);
       }
     }
 
