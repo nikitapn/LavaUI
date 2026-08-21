@@ -22,6 +22,7 @@ usage: lavactl <command>
   workspace                the workspace on screen right now
   activate <id>            restore, raise and focus a window by surface id
   keyboard                 the keyboard config the compositor is serving
+  bindings                 every shortcut the compositor takes for itself
   focus-app <app-id>       activate this application's window on the current
                            workspace; prints its id, exits 1 if it has none
 
@@ -78,6 +79,17 @@ case "keyboard":
         print("mod-key\t\(k.modKey)")
     } catch {
         die("lavactl: GetKeyboard failed: \(error)", 3)
+    }
+
+case "bindings":
+    // The same table `perform_binding` dispatches through, so this is the
+    // list of shortcuts that *work* rather than a list somebody maintained.
+    do {
+        for b in try DesktopSettings.keyBindings() {
+            print("\(b.modifiers)+\(b.key)\t\(b.action)\t\(b.description)")
+        }
+    } catch {
+        die("lavactl: ListKeyBindings failed: \(error)", 3)
     }
 
 case "activate":

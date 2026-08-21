@@ -943,12 +943,9 @@ interface Compositor {
   /// is not told, because there is nothing it could usefully do with the news
   /// that a `Resize` does not already say.
   ///
-  /// Getting it back is the compositor's business, and at present that means a
-  /// keybinding (Alt+Shift+M restores the most recently minimized window).
-  /// The honest answer is a window list on this interface that a taskbar can
-  /// show and click — the same one `LavaTaskbar` is waiting for — and until it
-  /// exists, minimize is a button an app can offer but a desktop cannot fully
-  /// answer.
+  /// Getting it back is the compositor's business: `ActivateWindow` from a
+  /// taskbar that walked `ListWindows`, or Alt+Shift+M, which brings back
+  /// every window the workspace has hidden.
   void Minimize(surfaceId: in u32) raises(SurfaceNotFound);
 
   /// Changes how deep a panel is, and how much of that depth windows are laid

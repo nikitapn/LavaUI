@@ -276,10 +276,10 @@ ask-to-be-resized, and any way for a client to *learn* its state rather than
 ask for a change to it (`ToggleMaximize` returns the state it ended in, which
 is the whole of what a client can know).
 
-The gap under minimize is bigger than the call: nothing can show a hidden
-window. The compositor keeps a stack and `Alt+Shift+M` pops it, which is a
-keybinding standing in for a window list on this interface that a panel could
-render — the same one `LavaTaskbar` has been waiting for.
+The gap under minimize has since closed: `ListWindows` carries the minimized
+flag and `ActivateWindow` restores one, which is what `LavaTaskbar` clicks.
+`Alt+Shift+M` remains as the keyboard route, and now brings back every window
+the workspace has hidden rather than popping one off a stack.
 
 ## Against the wlroots plan
 

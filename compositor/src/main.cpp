@@ -814,9 +814,18 @@ struct Server {
   void minimizeSurface(ClientSurface &surface);
 
   /// Windows Win+D: hide every window on this workspace, or bring back
-  /// the ones that press hid. A second press restores even if the user
-  /// opened something in between.
+  /// the ones that press hid. What a press does is decided by what is on
+  /// screen now, not by what the last press did — anything visible is
+  /// something to hide, however it got there.
   void toggleShowDesktop();
+
+  /// Windows Win+M: put every window on this workspace away. One-way; the
+  /// undo is Mod+Shift+M, which is `restoreAllWindows`.
+  void hideAllWindows();
+
+  /// Windows Win+Shift+M: bring back every window this workspace has
+  /// hidden, whether Mod+M, Mod+D, or a title-bar button put it there.
+  void restoreAllWindows();
 
   /// Which client surface the keyboard goes to, per workspace, or 0.
   ///
@@ -2067,77 +2076,119 @@ class SurfaceRegistry : public lava::CompositorHost {
       std::erase(minimizedOrder_, surface.id);
       if (surface.backdropBlurRadius > 0.f) scheduleBackdropRefresh();
     }
-    announceWindows();
-    syncShellForFullscreen();
+    if (bulk_ == 0) {
+      announceWindows();
+      syncShellForFullscreen();
+    }
     wlr_log(WLR_INFO, "window %u: %s", surface.id,
             minimized ? "minimized" : "restored");
   }
 
-  /// Un-hides the most recently minimized window *of this workspace* and
-  /// returns it, or null if it has none hidden.
-  ///
-  /// A stack rather than a list, because there is nothing yet that can *show*
-  /// the set — the panel has no window list, so "the one you just put away" is
-  /// the only entry a user could name. When a window list exists this becomes
-  /// its click handler and the stack becomes a detail.
-  ///
-  /// Per workspace for the reason everything else here is: a window belongs to
-  /// one, and restoring one from another workspace would bring back something
-  /// the user cannot see and did not ask for.
-  ClientSurface *restoreLastMinimized() {
-    // Closed while hidden — drop them here, since nothing else walks this.
-    std::erase_if(minimizedOrder_,
-                  [this](uint32_t id) { return find(id) == nullptr; });
-    for (auto it = minimizedOrder_.rbegin(); it != minimizedOrder_.rend();
-         ++it) {
-      ClientSurface *surface = find(*it);
-      if (workspaces_ != nullptr &&
-          surface->workspace != workspaces_->current) {
-        continue;
-      }
-      setMinimized(*surface, false);
-      return surface;
+  /// Holds the shell notifications back while a whole workspace is put away
+  /// or brought out, so it hears the new window set once instead of once per
+  /// window. Mod+D over ten windows otherwise builds and broadcasts ten full
+  /// snapshots, and the taskbar draws every intermediate state on the way to
+  /// the one the user asked for.
+  class BulkChange {
+   public:
+    explicit BulkChange(SurfaceRegistry &registry) : registry_(registry) {
+      ++registry_.bulk_;
     }
-    return nullptr;
+    ~BulkChange() {
+      if (--registry_.bulk_ != 0) return;
+      registry_.announceWindows();
+      registry_.syncShellForFullscreen();
+    }
+    BulkChange(const BulkChange &) = delete;
+    BulkChange &operator=(const BulkChange &) = delete;
+
+   private:
+    SurfaceRegistry &registry_;
+  };
+
+  /// The windows Mod+D and Mod+M act on: this workspace's real ones.
+  /// Panels are the desktop's own furniture, and the Alt+Tab overlay is a
+  /// transient that puts itself away.
+  bool hideable(const ClientSurface &surface) const {
+    if (surface.panel) return false;
+    if (surface.appId == kSwitcherAppId) return false;
+    if (workspaces_ != nullptr && surface.workspace != workspaces_->current) {
+      return false;
+    }
+    return true;
   }
 
   /// Hide every visible window on the current workspace. Remembers them
   /// so `restoreDesktop` can put the same set back.
   void hideDesktop() {
+    BulkChange batch(*this);
     desktopHidden_.clear();
-    std::vector<uint32_t> ids;
     for (const auto &s : surfaces_) {
-      if (s->panel || s->minimized) continue;
-      if (s->appId == kSwitcherAppId) continue;
-      if (workspaces_ != nullptr && s->workspace != workspaces_->current) {
-        continue;
-      }
-      ids.push_back(s->id);
+      if (!hideable(*s) || s->minimized) continue;
+      desktopHidden_.push_back(s->id);
     }
-    for (uint32_t id : ids) {
-      if (ClientSurface *s = find(id)) {
-        setMinimized(*s, true);
-        desktopHidden_.push_back(id);
-      }
+    // Back-most first, so the window that was in front is the last one onto
+    // `minimizedOrder_` and the first back off it: whatever the user was
+    // looking at is what a restore puts in front of them again.
+    for (auto it = desktopHidden_.rbegin(); it != desktopHidden_.rend(); ++it) {
+      if (ClientSurface *s = find(*it)) setMinimized(*s, true);
     }
-    desktopShown_ = !desktopHidden_.empty();
   }
 
   /// Bring back what `hideDesktop` hid. Returns the window that was in
   /// front, or 0 if there was nothing to restore.
   uint32_t restoreDesktop() {
-    const uint32_t front = desktopHidden_.empty() ? 0 : desktopHidden_.front();
+    BulkChange batch(*this);
+    uint32_t front = 0;
     for (auto it = desktopHidden_.rbegin(); it != desktopHidden_.rend(); ++it) {
-      if (ClientSurface *s = find(*it); s != nullptr && s->minimized) {
-        setMinimized(*s, false);
-      }
+      ClientSurface *s = find(*it);
+      // Closed while hidden, brought back another way, or moved to another
+      // workspace since — restoring that last one would put a window the user
+      // cannot see back on a desktop they did not ask about.
+      if (s == nullptr || !s->minimized || !hideable(*s)) continue;
+      setMinimized(*s, false);
+      front = *it;
     }
     desktopHidden_.clear();
-    desktopShown_ = false;
     return front;
   }
 
-  bool desktopShown() const { return desktopShown_; }
+  /// Un-hide every minimized window on this workspace, back-most first.
+  /// Returns the one that should end up focused — the window put away most
+  /// recently — or null if the workspace had none hidden.
+  ClientSurface *restoreAllMinimized() {
+    BulkChange batch(*this);
+    // Closed while hidden — dropped here, since nothing else walks this.
+    std::erase_if(minimizedOrder_,
+                  [this](uint32_t id) { return find(id) == nullptr; });
+    // A copy, because `setMinimized` erases from `minimizedOrder_` as it goes.
+    const std::vector<uint32_t> ids(minimizedOrder_.begin(),
+                                    minimizedOrder_.end());
+    ClientSurface *front = nullptr;
+    for (uint32_t id : ids) {
+      ClientSurface *s = find(id);
+      if (s == nullptr || !hideable(*s)) continue;
+      setMinimized(*s, false);
+      front = s;
+    }
+    desktopHidden_.clear();
+    return front;
+  }
+
+  /// Whether the desktop is bare: nothing on this workspace but the
+  /// wallpaper and the panels.
+  ///
+  /// Asked of the windows rather than remembered in a flag, because a flag
+  /// set by `hideDesktop` goes stale the moment one window comes back by some
+  /// other route — the taskbar, Mod+Shift+M, or simply a new window opening —
+  /// and the next Mod+D would then restore where it should hide. A desktop
+  /// with something on it is one to hide, whoever put that there.
+  bool desktopShown() const {
+    for (const auto &s : surfaces_) {
+      if (hideable(*s) && !s->minimized) return false;
+    }
+    return true;
+  }
 
   bool empty() const { return surfaces_.empty(); }
 
@@ -4986,12 +5037,15 @@ class SurfaceRegistry : public lava::CompositorHost {
   /// Front is topmost. See `raise`, which is what keeps this in step with the
   /// scene graph's own order.
   std::list<std::unique_ptr<ClientSurface>> surfaces_;
-  /// Minimized windows, oldest first — see `restoreLastMinimized`.
+  /// Minimized windows, oldest first — see `restoreAllMinimized`, which
+  /// walks it in that order so the last one hidden comes back on top.
   std::vector<uint32_t> minimizedOrder_;
   /// Ids Mod+D hid, in front-to-back order, so the next press can put
-  /// them back. Empty and `desktopShown_` false is the idle desktop.
+  /// them back. Empty is the idle desktop; whether one *is* shown is
+  /// `desktopShown()`, which asks the windows.
   std::vector<uint32_t> desktopHidden_;
-  bool desktopShown_ = false;
+  /// Nesting depth of `BulkChange`. Non-zero holds the shell notifications.
+  int bulk_ = 0;
   /// The one canvas device. Every surface is a window on it, sharing its
   /// glyph atlas and texture cache.
   lava::CanvasRenderer *renderer_ = nullptr;
@@ -6991,9 +7045,8 @@ enum class BindingAction : uint8_t {
   AppSwitcherBack,
   Terminal,
   Close,
-  Minimize,
-  RestoreLast,
-  ToggleMaximize,
+  MinimizeAll,
+  RestoreAll,
   ShowDesktop,
   Flameshot,
   Fullscreen,
@@ -7062,10 +7115,10 @@ constexpr BindingSpec kBindings[] = {
      "Return", "terminal.open", "Opens LavaTerm"},
     {BindingAction::Close, XKB_KEY_q, XKB_KEY_q, false, false, true, "Q",
      "window.close", "Closes the focused window"},
-    {BindingAction::ToggleMaximize, XKB_KEY_m, XKB_KEY_m, false, false, true, "M",
-     "window.maximize", "Maximizes or restores the focused window"},
-    {BindingAction::RestoreLast, XKB_KEY_m, XKB_KEY_m, true, false, true, "M",
-     "window.restore", "Brings back the window hidden last"},
+    {BindingAction::MinimizeAll, XKB_KEY_m, XKB_KEY_m, false, false, true, "M",
+     "window.minimize-all", "Hides every window on this workspace"},
+    {BindingAction::RestoreAll, XKB_KEY_m, XKB_KEY_m, true, false, true, "M",
+     "window.restore", "Brings back every window this workspace has hidden"},
     {BindingAction::ShowDesktop, XKB_KEY_d, XKB_KEY_d, false, false, true, "D",
      "window.desktop", "Hides every window, or brings them back"},
     {BindingAction::Flameshot, XKB_KEY_s, XKB_KEY_s, true, false, true, "S",
@@ -7146,7 +7199,7 @@ void collect_keyboard_layouts(
   rxkb_context_unref(registry);
 }
 
-/// The window the title-bar buttons and Mod+M act on: decoration focus,
+/// The window the title-bar buttons and Mod+F act on: decoration focus,
 /// not the Lava keyboard target. A Wayland or X11 window has
 /// `focusedSurface() == 0` and is still the one on screen.
 ClientSurface *focusedWindow(Server *server) {
@@ -7231,24 +7284,11 @@ bool perform_binding(Server *server, const BindingSpec &spec,
     }
     return true;
 
-  case BindingAction::Minimize: {
-    if (ClientSurface *focused = focusedWindow(server)) {
-      server->minimizeSurface(*focused);
-    }
+  case BindingAction::MinimizeAll:
+    // One-way, where Mod+D toggles: Windows draws the same line between
+    // Win+M and Win+D, and the undo is the shifted key below.
+    server->hideAllWindows();
     return true;
-  }
-
-  case BindingAction::ToggleMaximize: {
-    ClientSurface *focused = focusedWindow(server);
-    if (focused == nullptr) return false;
-    // Fullscreen already owns the output; drop it first so maximize is
-    // a real rectangle change rather than a flag under a covering game.
-    if (focused->fullscreen) {
-      server->surfaces->setFullscreen(*focused, false);
-    }
-    server->surfaces->setMaximized(*focused, !focused->maximized);
-    return true;
-  }
 
   case BindingAction::ShowDesktop:
     server->toggleShowDesktop();
@@ -7258,12 +7298,8 @@ bool perform_binding(Server *server, const BindingSpec &spec,
     launch_flameshot();
     return true;
 
-  case BindingAction::RestoreLast:
-    if (server->surfaces == nullptr) return false;
-    if (ClientSurface *restored = server->surfaces->restoreLastMinimized()) {
-      server->focusSurface(*restored);
-      server->update_pointer_focus(0);
-    }
+  case BindingAction::RestoreAll:
+    server->restoreAllWindows();
     return true;
 
   case BindingAction::Fullscreen: {
@@ -8449,12 +8485,25 @@ void Server::toggleShowDesktop() {
     update_pointer_focus(0);
     return;
   }
+  hideAllWindows();
+}
+
+void Server::hideAllWindows() {
+  if (surfaces == nullptr) return;
   surfaces->hideDesktop();
   // Nothing on screen to type into. Clearing both halves is the same
   // as the last minimize in a stack of them.
   setFocusedSurface(0);
   surfaces->setFocused(0);
   wlr_seat_keyboard_notify_clear_focus(seat);
+  update_pointer_focus(0);
+}
+
+void Server::restoreAllWindows() {
+  if (surfaces == nullptr) return;
+  ClientSurface *front = surfaces->restoreAllMinimized();
+  if (front == nullptr) return;
+  focusSurface(*front);
   update_pointer_focus(0);
 }
 
