@@ -9367,10 +9367,43 @@ void Server::on_request_cursor(wl_listener *listener, void *data) {
   }
 }
 
+/// Log verbosity from `WLR_LOG`, one of silent/error/info/debug.
+///
+/// False means the value was not understood; `out` still holds a usable
+/// default, so the caller can bring logging up and then complain through it.
+///
+/// Debug is opt-in rather than the default. wlroots at `WLR_DEBUG` narrates
+/// every scene commit and format probe, which buries this compositor's own
+/// INFO lines, and it re-reports failures that can never clear: a hardware
+/// cursor whose format pick no driver on the machine can satisfy is retried,
+/// and logged four lines deep, on every cursor shape change.
+bool log_level_from_env(const char *value, wlr_log_importance &out) {
+  out = WLR_INFO;
+  if (value == nullptr || value[0] == '\0') return true;
+  std::string name(value);
+  for (char &c : name) {
+    c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+  }
+  if (name == "debug") { out = WLR_DEBUG; return true; }
+  if (name == "info") return true;
+  if (name == "error") { out = WLR_ERROR; return true; }
+  if (name == "silent" || name == "quiet") { out = WLR_SILENT; return true; }
+  return false;
+}
+
 } // namespace
 
 int main() {
-  wlr_log_init(WLR_DEBUG, nullptr);
+  // Read before the log is up, reported after — a typo here is worth saying
+  // out loud rather than silently logging less than the user asked for.
+  const char *requestedLog = std::getenv("WLR_LOG");
+  wlr_log_importance logLevel = WLR_INFO;
+  const bool logUnderstood = log_level_from_env(requestedLog, logLevel);
+  wlr_log_init(logLevel, nullptr);
+  if (!logUnderstood) {
+    wlr_log(WLR_ERROR, "WLR_LOG=%s not understood; using info "
+                       "(silent/error/info/debug)", requestedLog);
+  }
 
   // Before backend start, portal start, anything that can wedge the
   // loop. Default 15 s; `LAVA_NO_WATCHDOG=1` or `_MS=0` turns it off.

@@ -55,4 +55,10 @@ if [ -z "$SSH_AUTH_SOCK" ]; then
 	eval "$(ssh-agent -s)"
 fi
 
-exec stdbuf -oL -eL "$COMPOSITOR" >"$HOME/lava-compositor.log" 2>&1
+# tmpfs, so a session's logging never touches the disk. /tmp rather than
+# $XDG_RUNTIME_DIR because systemd removes that when the last session ends —
+# and a compositor that died *is* the session ending, which is exactly when
+# the log still needs reading. Cleared on reboot, which is soon enough.
+LAVA_LOG_FILE="${LAVA_LOG_FILE:-/tmp/lava-compositor-$(id -u).log}"
+
+exec stdbuf -oL -eL "$COMPOSITOR" >"$LAVA_LOG_FILE" 2>&1

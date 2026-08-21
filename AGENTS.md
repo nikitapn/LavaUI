@@ -310,7 +310,8 @@ anywhere.
 | `LAVA_AUTOSTART` | Path to that script, overriding `~/.config/lava/autostart` |
 | `LAVA_COMPOSITOR_IOR` | Client: the compositor reference to use, overriding the one named by `WAYLAND_DISPLAY` |
 | `WLR_BACKENDS=headless` `WLR_RENDERER=vulkan` | Compositor with no screen (see below) |
-| `WLR_LOG=debug` | wlroots + compositor debug logging (popups, scene) |
+| `WLR_LOG=debug` | wlroots + compositor debug logging (popups, scene). silent/error/info/debug; **default info** — debug narrates every scene commit and format probe |
+| `LAVA_LOG_FILE` | Where `start-lava-compositor` sends the session log. Default `/tmp/lava-compositor-$(id -u).log` — tmpfs, and outlives the session that crashed |
 | `LAVA_BOOT_TRACE=1` | Where the time before a client's first frame went |
 | `CANVAS_VK_VALIDATION=1` | Vulkan validation layers |
 | `NPRPC_SWIFT_PATH` | Override path to `nprpc_swift` package |
