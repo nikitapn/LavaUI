@@ -271,8 +271,11 @@ final class MenuSession {
 
     func openMenu(_ id: MenuID) {
         // AboutToShow before presentation so a deferred submenu is asked for
-        // before the first frame that shows the dropdown.
+        // before the first frame that shows the dropdown. Chromium (VSCode,
+        // Teams) only fills File/Edit here, and the boolean it returns does
+        // not tell libdbusmenu to refetch — aboutToShow already GetLayout'd.
         menus?.aboutToShow(id)
+        refreshModel()
         openMenu = id
         // One popover at a time.
         volumeOpen = false

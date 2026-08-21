@@ -319,6 +319,13 @@ compositor Lava uses three paths:
    logs the registrar calls, the lookup (`kde-appmenu` / `registrar-id` /
    `registrar-pid` / `none`), and imported top-level titles.
 
+Chromium (VSCode, Teams, and Chrome's own bar) exports File/Edit with
+`children-display=submenu` and no children. `AboutToShow` fills them and
+returns `needUpdate=false`, so libdbusmenu never refetches. Opening a title
+therefore AboutToShows, GetLayouts the object itself, and rebuilds the
+dropdown before the first frame that shows it. Nested empty submenus under
+that title get the same treatment so "Open Recent" is not a dead header.
+
 **Under the lava compositor that is now solved**, and the answer was smaller
 than the archaeology suggested: the registrar's key is a `u` on the wire and
 nothing on the panel side looks it up in an X server. So a Lava client registers

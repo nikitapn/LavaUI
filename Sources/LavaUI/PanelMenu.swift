@@ -111,6 +111,14 @@ public final class PanelMenu {
     public func aboutToShow(_ id: MenuID) {
         guard let itemId = Int32(id.raw) else { return }
         editor.menuImportAboutToShow(itemId)
+        // Chromium fills the submenu inside AboutToShow and we GetLayout
+        // before returning, so the model has to be rebuilt now — waiting for
+        // the next poll leaves the dropdown empty on the frame that opens it.
+        editor.menuImportPoll()
+        let current = editor.menuImportRevision
+        guard current != revision else { return }
+        revision = current
+        model = buildModel()
     }
 
     // MARK: - Import

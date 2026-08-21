@@ -115,7 +115,9 @@ public:
   void activate(int32_t itemId);
 
   /// "A submenu is about to open." Applications are allowed to fill a submenu
-  /// only when asked, so a menu opened without this can legitimately be empty.
+  /// only when asked. Chromium always returns needUpdate=false from AboutToShow
+  /// even after filling children, so this GetLayouts the object itself rather
+  /// than trusting libdbusmenu to notice.
   void aboutToShow(int32_t itemId);
 
 private:

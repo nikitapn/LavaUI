@@ -318,29 +318,219 @@ struct MenuImportHost::Impl {
     dirty = true;
   }
 
+  /// Chromium/Electron (VSCode, Teams) put File/Edit on the bar with
+  /// `children-display=submenu` and no children. AboutToShow fills them, but
+  /// always returns needUpdate=false, so libdbusmenu never GetLayouts again
+  /// and the dropdown stays empty. Ask the object ourselves and ignore the
+  /// boolean — KDE's importer does the same.
+  bool aboutToShowSync(int32_t id)
+  {
+    if (conn == nullptr || openService.empty() || openPath.empty()) return false;
+    GError *err = nullptr;
+    GVariant *ret = g_dbus_connection_call_sync(
+        conn, openService.c_str(), openPath.c_str(), "com.canonical.dbusmenu",
+        "AboutToShow", g_variant_new("(i)", id), G_VARIANT_TYPE("(b)"),
+        G_DBUS_CALL_FLAGS_NONE, 2000, nullptr, &err);
+    if (ret == nullptr) {
+      if (debug() && err != nullptr) {
+        std::cerr << "canvas: appmenu AboutToShow(" << id << ") "
+                  << err->message << "\n";
+      }
+      if (err) g_error_free(err);
+      return false;
+    }
+    gboolean need = FALSE;
+    g_variant_get(ret, "(b)", &need);
+    g_variant_unref(ret);
+    if (debug()) {
+      std::cerr << "canvas: appmenu AboutToShow id=" << id
+                << " needUpdate=" << (need ? "true" : "false") << "\n";
+    }
+    return true;
+  }
+
+  void parseLayoutNode(GVariant *node, int32_t parentId, bool skipSelf)
+  {
+    if (node == nullptr ||
+        !g_variant_is_of_type(node, G_VARIANT_TYPE("(ia{sv}av)"))) {
+      return;
+    }
+    gint32 id = 0;
+    GVariantIter *props = nullptr;
+    GVariantIter *kids = nullptr;
+    g_variant_get(node, "(ia{sv}av)", &id, &props, &kids);
+
+    Item item;
+    item.id = id;
+    item.parent = parentId;
+    bool visible = true;
+    bool checkable = false;
+    int toggleState = 0;
+    const gchar *key = nullptr;
+    GVariant *value = nullptr;
+    while (g_variant_iter_loop(props, "{&sv}", &key, &value)) {
+      if (g_strcmp0(key, "label") == 0 &&
+          g_variant_is_of_type(value, G_VARIANT_TYPE_STRING)) {
+        item.label = withoutMnemonics(g_variant_get_string(value, nullptr));
+      } else if (g_strcmp0(key, "type") == 0 &&
+                 g_variant_is_of_type(value, G_VARIANT_TYPE_STRING)) {
+        item.separator =
+            g_strcmp0(g_variant_get_string(value, nullptr), "separator") == 0;
+      } else if (g_strcmp0(key, "enabled") == 0 &&
+                 g_variant_is_of_type(value, G_VARIANT_TYPE_BOOLEAN)) {
+        item.enabled = g_variant_get_boolean(value) != FALSE;
+      } else if (g_strcmp0(key, "visible") == 0 &&
+                 g_variant_is_of_type(value, G_VARIANT_TYPE_BOOLEAN)) {
+        visible = g_variant_get_boolean(value) != FALSE;
+      } else if (g_strcmp0(key, "children-display") == 0 &&
+                 g_variant_is_of_type(value, G_VARIANT_TYPE_STRING)) {
+        item.submenu = g_strcmp0(g_variant_get_string(value, nullptr),
+                                 "submenu") == 0;
+      } else if (g_strcmp0(key, "toggle-type") == 0 &&
+                 g_variant_is_of_type(value, G_VARIANT_TYPE_STRING)) {
+        const gchar *t = g_variant_get_string(value, nullptr);
+        checkable = t != nullptr && t[0] != '\0';
+      } else if (g_strcmp0(key, "toggle-state") == 0 &&
+                 g_variant_is_of_type(value, G_VARIANT_TYPE_INT32)) {
+        toggleState = g_variant_get_int32(value);
+      }
+    }
+    g_variant_iter_free(props);
+    if (checkable) item.checked = toggleState == 1 ? 1 : 0;
+
+    if (!skipSelf && visible) items.push_back(item);
+    const int32_t childParent = skipSelf ? -1 : id;
+
+    GVariant *wrap = nullptr;
+    while ((wrap = g_variant_iter_next_value(kids))) {
+      GVariant *child = g_variant_get_variant(wrap);
+      if (child != nullptr) {
+        if (visible || skipSelf) parseLayoutNode(child, childParent, false);
+        g_variant_unref(child);
+      }
+      g_variant_unref(wrap);
+    }
+    g_variant_iter_free(kids);
+  }
+
+  /// Full tree from the application, not libdbusmenu's cached one.
+  bool fetchLayout()
+  {
+    if (conn == nullptr || openService.empty() || openPath.empty()) return false;
+    GError *err = nullptr;
+    GVariant *ret = g_dbus_connection_call_sync(
+        conn, openService.c_str(), openPath.c_str(), "com.canonical.dbusmenu",
+        "GetLayout",
+        g_variant_new("(ii@as)", 0, -1, g_variant_new_strv(nullptr, 0)),
+        G_VARIANT_TYPE("(u(ia{sv}av))"), G_DBUS_CALL_FLAGS_NONE, 2000, nullptr,
+        &err);
+    if (ret == nullptr) {
+      if (err) g_error_free(err);
+      return false;
+    }
+    GVariant *layout = nullptr;
+    guint32 unusedRev = 0;
+    g_variant_get(ret, "(u@(ia{sv}av))", &unusedRev, &layout);
+    g_variant_unref(ret);
+    if (layout == nullptr) return false;
+    items.clear();
+    parseLayoutNode(layout, -1, true);
+    g_variant_unref(layout);
+    mergeToggleProperties();
+    return true;
+  }
+
+  bool hasChild(int32_t parentId) const
+  {
+    for (const Item &it : items) {
+      if (it.parent == parentId) return true;
+    }
+    return false;
+  }
+
+  bool under(int32_t id, int32_t ancestor) const
+  {
+    while (id != -1) {
+      if (id == ancestor) return true;
+      int32_t next = -1;
+      bool found = false;
+      for (const Item &it : items) {
+        if (it.id == id) {
+          next = it.parent;
+          found = true;
+          break;
+        }
+      }
+      if (!found || next == id) break;
+      id = next;
+    }
+    return false;
+  }
+
+  void logLayout() const
+  {
+    std::cerr << "canvas: appmenu layout " << items.size() << " items";
+    for (const Item &it : items) {
+      if (it.parent == -1 && !it.label.empty()) std::cerr << " [" << it.label << "]";
+    }
+    std::cerr << "\n";
+  }
+
   void rebuild()
   {
-    items.clear();
     dirty = false;
     ++revision;
+    if (fetchLayout()) {
+      if (debug()) logLayout();
+      return;
+    }
+    items.clear();
     if (client == nullptr) return;
     DbusmenuMenuitem *root = dbusmenu_client_get_root(client);
     if (root == nullptr) {
-      if (debug()) {
-        std::cerr << "canvas: appmenu layout: no root yet\n";
-      }
+      if (debug()) std::cerr << "canvas: appmenu layout: no root yet\n";
       return;
     }
     append(root, -1);
     mergeToggleProperties();
-    if (debug() || items.empty()) {
-      std::cerr << "canvas: appmenu layout " << items.size() << " items";
-      for (const Item &it : items) {
-        if (it.parent == -1 && !it.label.empty())
-          std::cerr << " [" << it.label << "]";
+    if (debug() || items.empty()) logLayout();
+  }
+
+  /// Fill a submenu Chromium left empty, then any nested empty submenus
+  /// under it so "Open Recent" is not a dead header.
+  void fillSubmenu(int32_t itemId)
+  {
+    if (aboutToShowSync(itemId) && fetchLayout()) {
+      for (int pass = 0; pass < 3; ++pass) {
+        std::vector<int32_t> pending;
+        for (const Item &it : items) {
+          if (!it.submenu || hasChild(it.id)) continue;
+          if (it.id == itemId || under(it.parent, itemId)) pending.push_back(it.id);
+        }
+        if (pending.empty()) break;
+        for (int32_t id : pending) aboutToShowSync(id);
+        fetchLayout();
       }
-      std::cerr << "\n";
+      dirty = false;
+      ++revision;
+      logLayout();
+      return;
     }
+    DbusmenuMenuitem *mi = find(itemId);
+    if (mi == nullptr) return;
+    dbusmenu_menuitem_send_about_to_show(mi, onAboutToShown, nullptr);
+  }
+
+  void sendEvent(int32_t itemId, const char *event)
+  {
+    if (conn == nullptr || openService.empty() || openPath.empty()) return;
+    const guint32 ts = static_cast<guint32>(g_get_real_time() / 1000000);
+    g_dbus_connection_call(
+        conn, openService.c_str(), openPath.c_str(), "com.canonical.dbusmenu",
+        "Event",
+        g_variant_new("(isvu)", itemId, event,
+                      g_variant_new_variant(g_variant_new_int32(0)), ts),
+        nullptr, G_DBUS_CALL_FLAGS_NONE, 1000, nullptr, nullptr, nullptr);
   }
 
   /// Fills in the check state, which the library does not fetch.
@@ -688,22 +878,24 @@ int MenuImportHost::itemChecked(size_t index) const
 void MenuImportHost::activate(int32_t itemId)
 {
   DbusmenuMenuitem *mi = impl_->find(itemId);
-  if (mi == nullptr) return;
-  // `handle_event` on a client-side item is what puts an `Event` on the bus;
-  // the application on the other end runs its handler and, if the menu changed
-  // as a result, sends a layout update back.
-  dbusmenu_menuitem_handle_event(mi, DBUSMENU_MENUITEM_EVENT_ACTIVATED,
-                                 g_variant_new_int32(0),
-                                 static_cast<guint>(g_get_real_time() / 1000000));
+  if (mi != nullptr) {
+    // `handle_event` on a client-side item is what puts an `Event` on the bus;
+    // the application on the other end runs its handler and, if the menu changed
+    // as a result, sends a layout update back.
+    dbusmenu_menuitem_handle_event(
+        mi, DBUSMENU_MENUITEM_EVENT_ACTIVATED, g_variant_new_int32(0),
+        static_cast<guint>(g_get_real_time() / 1000000));
+    return;
+  }
+  // Children fetched via GetLayout after AboutToShow are not in the
+  // DbusmenuClient tree (Chromium never told it to refetch). Event still
+  // works; the id is the application's.
+  impl_->sendEvent(itemId, "clicked");
 }
 
 void MenuImportHost::aboutToShow(int32_t itemId)
 {
-  DbusmenuMenuitem *mi = impl_->find(itemId);
-  if (mi == nullptr) return;
-  // Fire and forget: the reply is a "you should re-read this" that arrives as
-  // a layout update anyway, which `poll` is already watching for.
-  dbusmenu_menuitem_send_about_to_show(mi, Impl::onAboutToShown, nullptr);
+  impl_->fillSubmenu(itemId);
 }
 
 #else // !CANVAS_HAVE_DBUSMENU
