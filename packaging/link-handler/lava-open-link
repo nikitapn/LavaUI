@@ -1,0 +1,40 @@
+#!/bin/sh
+# Open a link in the browser on *this* workspace.
+#
+# The problem this solves is entirely on the browser's side. Chrome is a
+# singleton: a second `google-chrome URL` hands its command line to the running
+# process, which opens the URL in `BrowserList::GetLastActive()` — the window
+# you last touched, on any workspace. Nothing in that path knows what a
+# workspace is, so the compositor never gets a say and the link lands wherever
+# you happened to be before.
+#
+# The compositor already places *new* windows on the workspace that is current
+# when they are created, so the fix is to make Chrome's idea of "last active"
+# agree with where you are before handing it the URL:
+#
+#   · a browser window on this workspace  → focus it, then open a tab in it
+#   · none                                → --new-window, which lands here
+#
+# Install: see packaging/link-handler/README.md.
+
+set -eu
+
+LAVACTL=${LAVACTL:-lavactl}
+BROWSER_APP_ID=${LAVA_BROWSER_APP_ID:-google-chrome}
+BROWSER=${LAVA_BROWSER:-google-chrome-stable}
+# How long to give the browser to notice it has keyboard focus before its
+# other process forwards the URL. Chrome updates last-active from the Wayland
+# focus event, and the two races; a second is far longer than the event takes
+# and still shorter than a cold start.
+SETTLE=${LAVA_BROWSER_SETTLE:-1}
+
+# stdout is the surface id and nothing else — NPRPC's banner goes to stderr.
+if "$LAVACTL" focus-app "$BROWSER_APP_ID" >/dev/null 2>&1; then
+    sleep "$SETTLE"
+    exec "$BROWSER" "$@"
+fi
+
+# Nothing here yet: a new window is created on the current workspace, which is
+# this one. Also the cold-start path — Chrome ignores --new-window when it is
+# the first instance, and opens its one window anyway.
+exec "$BROWSER" --new-window "$@"

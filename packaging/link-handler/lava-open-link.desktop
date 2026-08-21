@@ -1,0 +1,10 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Web Browser (this workspace)
+Comment=Opens links in the browser window on the current workspace
+Exec=lava-open-link %U
+Terminal=false
+NoDisplay=true
+StartupWMClass=google-chrome
+MimeType=x-scheme-handler/http;x-scheme-handler/https;x-scheme-handler/about;x-scheme-handler/unknown;text/html;

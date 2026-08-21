@@ -260,6 +260,36 @@ public enum LavaClient {
         (requestedWidth, requestedHeight)
     }
 
+    /// Connect the control plane and nothing else: no engine, no fonts, no
+    /// surface, no frame loop.
+    ///
+    /// `open` is the path for something that will draw, and it pays for a
+    /// Vulkan client engine and a font bootstrap before it ever reaches the
+    /// compositor. A tool that only asks questions — which windows exist, put
+    /// that one in front — needs none of that, and on a link-handler path it
+    /// is the difference between answering in milliseconds and answering
+    /// after a GPU context.
+    ///
+    /// Idempotent, and safe to call before `open`: both share the one
+    /// connection, because two from a process would be two sets of ring
+    /// buffers for one client.
+    @discardableResult
+    public static func connectControlPlane() -> Bool {
+        if compositor != nil { return true }
+        do {
+            let (proxy, rpc) = try connectToCompositor()
+            proxy.timeout = 10_000
+            compositor = proxy
+            runtime = rpc
+            return true
+        } catch {
+            FileHandle.standardError.write(
+                Data("no compositor (\(error)) — is the renderer running?\n".utf8)
+            )
+            return false
+        }
+    }
+
     /// The compositor's current window list, blocking, without a frame loop.
     ///
     /// For a client that has to *finish* something — capture every poster —

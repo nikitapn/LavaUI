@@ -60,6 +60,7 @@ var products: [Product] = [
     .executable(name: "LavaLauncher", targets: ["LavaLauncher"]),
     .executable(name: "LavaSwitcher", targets: ["LavaSwitcher"]),
     .executable(name: "LavaChooser", targets: ["LavaChooser"]),
+    .executable(name: "lavactl", targets: ["LavaCtl"]),
     .library(name: "LavaUI", targets: ["LavaUI"]),
     .library(name: "LavaHost", targets: ["LavaHost"]),
     .library(name: "LavaText", targets: ["LavaText"]),
@@ -143,6 +144,14 @@ var targets: [Target] = [
         dependencies: ["LavaUI", "LavaShell"]
             + (haveNprpc ? [Target.Dependency("LavaClient"),
                             Target.Dependency("LavaIDL")] : []),
+        swiftSettings: interopCxx
+    ),
+    // The control plane from a shell script: no window, no GPU, one answer
+    // and exit. See Sources/LavaCtl/main.swift.
+    .executableTarget(
+        name: "LavaCtl",
+        dependencies: haveNprpc ? [Target.Dependency("LavaClient"),
+                                   Target.Dependency("LavaIDL")] : [],
         swiftSettings: interopCxx
     ),
     // The screen picker xdg-desktop-portal-wlr shells out to before a screen
