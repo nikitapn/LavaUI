@@ -298,16 +298,26 @@ nice-to-have; v1 can pick once at open.
 
 #### Wayland
 
-AppMenu Registrar historically keys menus by **X11 window id**. On pure
-Wayland Lava uses two paths:
+AppMenu Registrar historically keys menus by **X11 window id**. On this
+compositor Lava uses three paths:
 
 1. **Lava clients** — the registrar's key is a `u` on the wire; clients register
    under their **surface id** (the same id `SubscribeActiveWindow` reports).
-2. **Foreign Wayland clients (Qt/KDE)** — the compositor advertises
+2. **Foreign Wayland clients (Qt6 / Chrome / KDE)** — the compositor advertises
    **`org_kde_kwin_appmenu_manager`**. The client exports dbusmenu as usual and
    calls `set_address(service, path)` on the surface. Focus carries those
    strings to the panel, which opens `DbusmenuClient` on them directly. This is
-   the same protocol Dolphin uses on Plasma; no X11 / Xwayland path.
+   the same protocol Dolphin uses on Plasma.
+3. **X11 / Xwayland clients (Qt5 xcb, GTK with appmenu-gtk-module)** — the app
+   still calls `RegisterWindow(xid, path)` with its X11 window id. Focus
+   reports that XID as `ActiveWindow.surfaceId`, so the panel's registrar
+   lookup matches.
+4. **Qt5 on Wayland** — `libQt5WaylandClient` has no `org_kde_kwin_appmenu`
+   (that is Qt6) and `RegisterWindow` uses `QWindow.winId()`, which is often
+   just `1`. Focus also carries the client's Unix `pid`; the panel matches the
+   registrar entry by that pid when the window id misses. `LAVA_MENU_DEBUG=1`
+   logs the registrar calls, the lookup (`kde-appmenu` / `registrar-id` /
+   `registrar-pid` / `none`), and imported top-level titles.
 
 **Under the lava compositor that is now solved**, and the answer was smaller
 than the archaeology suggested: the registrar's key is a `u` on the wire and
@@ -337,7 +347,7 @@ Three pieces make it work, and each is where it is for a reason:
   different jobs and no process should accidentally do both.
 - **`SubscribeActiveWindow`** on the control plane says *whose* menu. Focus
   belongs to the compositor; a panel guessing would show the wrong app's File
-  menu.
+  menu. It carries the client's pid so Qt5 Wayland menus can be found at all.
 - **`SetPanelThickness`** lets the 32pt strip grow while a dropdown is open
   and shrink afterwards, reserving the strip either way, so windows do not
   move when a menu opens.

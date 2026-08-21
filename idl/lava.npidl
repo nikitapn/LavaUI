@@ -405,6 +405,11 @@ exception AtlasDumpFailed {
 message ActiveWindow {
   /// 0 when nothing is focused — the desktop, or the last window closing.
   /// Panels should read it as "show nothing" rather than "keep the last".
+  ///
+  /// This is the AppMenu registrar key, not always `WindowInfo.surfaceId`.
+  /// Lava clients register under the compositor surface id; X11 / Xwayland
+  /// clients call `RegisterWindow` with their XID, and looking the menu up
+  /// under the compositor id is how those menus never appear.
   surfaceId: u32;
   /// What the window calls itself, so a panel showing a title does not need a
   /// second call to learn it.
@@ -412,11 +417,16 @@ message ActiveWindow {
   /// DBus service that owns this window's `com.canonical.dbusmenu` object.
   /// Filled from the KDE Wayland AppMenu protocol (`org_kde_kwin_appmenu`)
   /// when the focused surface has called `set_address`. Empty for Lava
-  /// clients (they register under `surfaceId` on the AppMenu registrar) and
-  /// for windows that export no menu.
+  /// clients and X11 clients (they register under `surfaceId` on the AppMenu
+  /// registrar) and for windows that export no menu.
   menuService: string;
   /// Object path of that dbusmenu interface. Empty with `menuService`.
   menuObjectPath: string;
+  /// Unix pid of the focused client. Qt5 on Wayland calls `RegisterWindow`
+  /// with `QWindow.winId()`, which is often `1` and never the compositor
+  /// surface id; the panel then matches the registrar entry by this pid.
+  /// 0 when unknown (Lava clients, or a window with no client).
+  pid: u32;
 }
 
 /// One window, as a dock or a task list has to see it.

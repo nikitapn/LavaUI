@@ -144,14 +144,19 @@ final class MenuSession {
     /// Called on the frame loop when the compositor's focus changes.
     func focus(
         surfaceId: UInt32, title: String,
-        menuService: String = "", menuObjectPath: String = ""
+        menuService: String = "", menuObjectPath: String = "",
+        pid: UInt32 = 0
     ) {
         self.title = title
         self.focusedSurface = surfaceId
         // An open menu belongs to the window that is no longer focused.
         closeMenu()
+        FileHandle.standardError.write(
+            Data("LavaTaskbar: focus id=\(surfaceId) pid=\(pid) kde=\(menuService) \(menuObjectPath) title=\(title)\n".utf8)
+        )
         menus?.setActiveWindow(
-            surfaceId, menuService: menuService, menuObjectPath: menuObjectPath
+            surfaceId, menuService: menuService, menuObjectPath: menuObjectPath,
+            pid: pid
         )
         refreshModel()
     }
@@ -203,6 +208,12 @@ final class MenuSession {
         }
         let imported = menus?.model ?? MenuModel()
         hasAppMenu = !imported.menus.isEmpty
+        if hasAppMenu {
+            let titles = imported.menus.map(\.title).joined(separator: ", ")
+            FileHandle.standardError.write(
+                Data("LavaTaskbar: imported [\(titles)]\n".utf8)
+            )
+        }
         var menus = desktop.menus
         menus.append(contentsOf: imported.menus)
         model = MenuModel(menus: menus)
@@ -821,10 +832,11 @@ notifications = Notifications(editor: editor)
 
 // Focus, from the compositor. Delivered on the frame loop, so touching
 // observable state from it is the same as touching it from a click handler.
-LavaClient.onActiveWindow { surfaceId, title, menuService, menuObjectPath in
+LavaClient.onActiveWindow { surfaceId, title, menuService, menuObjectPath, pid in
     session.focus(
         surfaceId: surfaceId, title: title,
-        menuService: menuService, menuObjectPath: menuObjectPath
+        menuService: menuService, menuObjectPath: menuObjectPath,
+        pid: pid
     )
 }
 

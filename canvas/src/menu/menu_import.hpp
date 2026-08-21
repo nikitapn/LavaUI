@@ -68,9 +68,10 @@ public:
   /// coordinates of the menu (KDE Wayland AppMenu / `org_kde_kwin_appmenu`).
   /// The panel opens that object directly. When they are empty, falls back to
   /// the AppMenu registrar entry for `windowId` — what Lava clients use with
-  /// their surface id.
+  /// their surface id — and if that misses, to a registrar entry whose DBus
+  /// sender has `pid`. Qt5 on Wayland registers as window id `1`.
   void setActiveWindow(uint32_t windowId, std::string menuService = {},
-                       std::string menuObjectPath = {});
+                       std::string menuObjectPath = {}, uint32_t pid = 0);
   uint32_t activeWindow() const;
 
   /// Whether the active window has a menu with anything in it.

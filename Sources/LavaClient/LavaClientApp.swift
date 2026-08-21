@@ -669,7 +669,7 @@ public enum LavaClient {
     /// subscription rather than the next change, so a panel that started last
     /// is not blank until the user clicks something.
     public static func onActiveWindow(
-        _ handler: @escaping @Sendable (UInt32, String, String, String) -> Void
+        _ handler: @escaping @Sendable (UInt32, String, String, String, UInt32) -> Void
     ) {
         guard let compositor = Self.compositor else { return }
         let stream: NPRPCBidiStream<FocusAck, ActiveWindow>
@@ -688,8 +688,9 @@ public enum LavaClient {
                     let title = window.title
                     let menuService = window.menuService
                     let menuObjectPath = window.menuObjectPath
+                    let pid = window.pid
                     MainQueue.async {
-                        handler(id, title, menuService, menuObjectPath)
+                        handler(id, title, menuService, menuObjectPath, pid)
                     }
                     // Cheap, and the only thing that keeps the stream's flow
                     // control moving — see `FocusAck`.

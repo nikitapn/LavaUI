@@ -1,5 +1,6 @@
 #include "menu/menu_import.hpp"
 
+#include <cstdlib>
 #include <iostream>
 #include <unordered_map>
 #include <vector>
@@ -83,7 +84,30 @@ struct MenuImportHost::Impl {
   struct Registration {
     std::string service;    ///< The unique bus name that called us.
     std::string objectPath;
+    uint32_t pid = 0;       ///< GetConnectionUnixProcessID of `service`.
   };
+
+  static bool debug() {
+    static const bool on = [] {
+      const char *e = std::getenv("LAVA_MENU_DEBUG");
+      return e != nullptr && e[0] != '\0' && e[0] != '0';
+    }();
+    return on;
+  }
+
+  static uint32_t pidOfSender(GDBusConnection *conn, const gchar *sender) {
+    if (conn == nullptr || sender == nullptr || sender[0] == '\0') return 0;
+    GVariant *ret = g_dbus_connection_call_sync(
+        conn, "org.freedesktop.DBus", "/org/freedesktop/DBus",
+        "org.freedesktop.DBus", "GetConnectionUnixProcessID",
+        g_variant_new("(s)", sender), G_VARIANT_TYPE("(u)"),
+        G_DBUS_CALL_FLAGS_NONE, 1000, nullptr, nullptr);
+    if (ret == nullptr) return 0;
+    guint pid = 0;
+    g_variant_get(ret, "(u)", &pid);
+    g_variant_unref(ret);
+    return pid;
+  }
 
   /// One row of the flattened menu — see the header for why it is flat.
   struct Item {
@@ -105,6 +129,7 @@ struct MenuImportHost::Impl {
   std::unordered_map<uint32_t, Registration> windows;
 
   uint32_t active = 0;
+  uint32_t activePid = 0;
   /// When set, open this DBus object instead of looking up `active` in
   /// `windows`. Filled from the KDE Wayland AppMenu protocol.
   std::string activeService;
@@ -113,6 +138,8 @@ struct MenuImportHost::Impl {
   /// The address the open client was created with, resolved.
   std::string openService;
   std::string openPath;
+  /// Registrar key the open client was resolved from, or 0 for kde-appmenu.
+  uint32_t openWindowId = 0;
   std::vector<Item> items;
   bool dirty = false;
   uint64_t revision = 0;
@@ -133,21 +160,33 @@ struct MenuImportHost::Impl {
       // The *sender's* unique name, not anything it told us: an application
       // that could name its own service could name somebody else's, and the
       // bus already knows who called.
-      self->windows[windowId] = Registration{sender ? sender : "", path ? path : ""};
+      const uint32_t pid = pidOfSender(self->conn, sender);
+      self->windows[windowId] = Registration{
+          sender ? sender : "", path ? path : "", pid};
+      std::cerr << "canvas: appmenu RegisterWindow id=" << windowId
+                << " pid=" << pid << " " << (sender ? sender : "?") << " "
+                << (path ? path : "?") << "\n";
       self->emitRegistered(windowId, sender ? sender : "", path ? path : "");
       // The window this arrives for is often the one already focused: an
       // application registers its menu a moment after its window appears, and
       // by then the panel has long since been told what is active.
-      if (windowId == self->active) self->openClient();
+      //
+      // Qt5 on Wayland registers as id 1, not the compositor surface id, so
+      // also match the sender's pid against the focused client.
+      if (windowId == self->active ||
+          (pid != 0 && pid == self->activePid)) {
+        self->openClient();
+      }
       g_dbus_method_invocation_return_value(invocation, nullptr);
       return;
     }
     if (g_strcmp0(method, "UnregisterWindow") == 0) {
       guint32 windowId = 0;
       g_variant_get(params, "(u)", &windowId);
+      std::cerr << "canvas: appmenu UnregisterWindow id=" << windowId << "\n";
       self->windows.erase(windowId);
       self->emitUnregistered(windowId);
-      if (windowId == self->active) self->closeClient();
+      if (windowId == self->openWindowId) self->closeClient();
       g_dbus_method_invocation_return_value(invocation, nullptr);
       return;
     }
@@ -211,6 +250,9 @@ struct MenuImportHost::Impl {
       client = nullptr;
     }
     items.clear();
+    openService.clear();
+    openPath.clear();
+    openWindowId = 0;
     dirty = false;
     ++revision;
   }
@@ -220,21 +262,45 @@ struct MenuImportHost::Impl {
     closeClient();
     std::string service;
     std::string path;
+    const char *how = "none";
+    uint32_t viaId = 0;
     if (!activeService.empty() && !activePath.empty()) {
       // Explicit address from kde-appmenu — skip the registrar.
       service = activeService;
       path = activePath;
+      how = "kde-appmenu";
     } else {
       auto it = windows.find(active);
-      if (active == 0 || it == windows.end()) return;
-      service = it->second.service;
-      path = it->second.objectPath;
+      if (it != windows.end()) {
+        service = it->second.service;
+        path = it->second.objectPath;
+        viaId = it->first;
+        how = "registrar-id";
+      } else if (activePid != 0) {
+        for (const auto &kv : windows) {
+          if (kv.second.pid != activePid) continue;
+          service = kv.second.service;
+          path = kv.second.objectPath;
+          viaId = kv.first;
+          how = "registrar-pid";
+          break;
+        }
+      }
     }
+
+    std::cerr << "canvas: appmenu open id=" << active << " pid=" << activePid
+              << " via " << how;
+    if (service.empty()) {
+      std::cerr << " (no menu)\n";
+      return;
+    }
+    std::cerr << " " << service << " " << path << "\n";
 
     // Kept for `mergeToggleProperties`, which has to ask the same object for
     // what the library did not.
     openService = service;
     openPath = path;
+    openWindowId = viaId;
 
     client = dbusmenu_client_new(service.c_str(), path.c_str());
     if (client == nullptr) {
@@ -259,9 +325,22 @@ struct MenuImportHost::Impl {
     ++revision;
     if (client == nullptr) return;
     DbusmenuMenuitem *root = dbusmenu_client_get_root(client);
-    if (root == nullptr) return;
+    if (root == nullptr) {
+      if (debug()) {
+        std::cerr << "canvas: appmenu layout: no root yet\n";
+      }
+      return;
+    }
     append(root, -1);
     mergeToggleProperties();
+    if (debug() || items.empty()) {
+      std::cerr << "canvas: appmenu layout " << items.size() << " items";
+      for (const Item &it : items) {
+        if (it.parent == -1 && !it.label.empty())
+          std::cerr << " [" << it.label << "]";
+      }
+      std::cerr << "\n";
+    }
   }
 
   /// Fills in the check state, which the library does not fetch.
@@ -538,13 +617,16 @@ const std::string &MenuImportHost::busName() const { return impl_->busName; }
 
 void MenuImportHost::setActiveWindow(uint32_t windowId,
                                      std::string menuService,
-                                     std::string menuObjectPath)
+                                     std::string menuObjectPath,
+                                     uint32_t pid)
 {
-  if (impl_->active == windowId && impl_->activeService == menuService &&
+  if (impl_->active == windowId && impl_->activePid == pid &&
+      impl_->activeService == menuService &&
       impl_->activePath == menuObjectPath) {
     return;
   }
   impl_->active = windowId;
+  impl_->activePid = pid;
   impl_->activeService = std::move(menuService);
   impl_->activePath = std::move(menuObjectPath);
   impl_->openClient();
@@ -636,7 +718,8 @@ MenuImportHost::~MenuImportHost() = default;
 bool MenuImportHost::start() { return false; }
 bool MenuImportHost::startImportOnly() { return false; }
 const std::string &MenuImportHost::busName() const { return impl_->busName; }
-void MenuImportHost::setActiveWindow(uint32_t, std::string, std::string) {}
+void MenuImportHost::setActiveWindow(uint32_t, std::string, std::string,
+                                     uint32_t) {}
 uint32_t MenuImportHost::activeWindow() const { return 0; }
 bool MenuImportHost::hasMenu() const { return false; }
 void MenuImportHost::poll() {}

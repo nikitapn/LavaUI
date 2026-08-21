@@ -19,6 +19,7 @@ public final class PanelMenu {
     /// Last imported revision, so a poll that changed nothing costs a compare.
     private var revision: UInt64 = 0
     private var lastWindow: UInt32 = 0
+    private var lastPid: UInt32 = 0
     private var lastMenuService = ""
     private var lastMenuObjectPath = ""
 
@@ -52,23 +53,28 @@ public final class PanelMenu {
     /// Show this window's menu. Cheap to call with an unchanged address.
     ///
     /// `menuService` / `menuObjectPath` are the KDE AppMenu DBus coordinates
-    /// for foreign Wayland clients; empty uses the registrar + surface id.
+    /// for foreign Wayland clients; empty uses the registrar + surface id,
+    /// then a registrar entry matching `pid`.
     public func setActiveWindow(
         _ surfaceId: UInt32,
         menuService: String = "",
-        menuObjectPath: String = ""
+        menuObjectPath: String = "",
+        pid: UInt32 = 0
     ) {
         guard isServing else { return }
-        if surfaceId == lastWindow, menuService == lastMenuService,
+        if surfaceId == lastWindow, pid == lastPid,
+           menuService == lastMenuService,
            menuObjectPath == lastMenuObjectPath
         {
             return
         }
         lastWindow = surfaceId
+        lastPid = pid
         lastMenuService = menuService
         lastMenuObjectPath = menuObjectPath
         editor.menuImportSetActiveWindow(
-            surfaceId, menuService: menuService, menuObjectPath: menuObjectPath
+            surfaceId, menuService: menuService, menuObjectPath: menuObjectPath,
+            pid: pid
         )
     }
 

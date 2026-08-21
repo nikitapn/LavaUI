@@ -1081,7 +1081,7 @@ class CompositorImpl final : public ICompositor_Servant {
     // global menu that appears to be broken.
     ActiveWindow current{};
     host_.activeWindow(current.surfaceId, current.title, current.menuService,
-                       current.menuObjectPath);
+                       current.menuObjectPath, current.pid);
     watcher->send(current);
 
     try {
@@ -1420,12 +1420,14 @@ class ControlPlaneImpl final : public ControlPlane {
 
   void postActiveWindow(uint32_t surfaceId, const std::string &title,
                         const std::string &menuService,
-                        const std::string &menuObjectPath) override {
+                        const std::string &menuObjectPath,
+                        uint32_t pid) override {
     ActiveWindow window{};
     window.surfaceId = surfaceId;
     window.title = title;
     window.menuService = menuService;
     window.menuObjectPath = menuObjectPath;
+    window.pid = pid;
     // Queued, never written from here. Two things go wrong when the loop
     // thread does the writing itself, and both were seen: focus changes
     // *inside* an RPC dispatch (`CreateSurface` focuses the window it just

@@ -977,6 +977,7 @@ struct ActiveWindow {
   std::string title;
   std::string menuService;
   std::string menuObjectPath;
+  uint32_t pid;
 };
 
 namespace flat {
@@ -985,6 +986,7 @@ struct ActiveWindow {
   ::nprpc::flat::String title;
   ::nprpc::flat::String menuService;
   ::nprpc::flat::String menuObjectPath;
+  uint32_t pid;
 };
 
 class ActiveWindow_Direct {
@@ -1018,6 +1020,8 @@ public:
   auto menuObjectPath() noexcept { return (::nprpc::flat::Span<char>)base().menuObjectPath; }
   auto menuObjectPath() const noexcept { return (::nprpc::flat::Span<const char>)base().menuObjectPath; }
   auto menuObjectPath_d() noexcept { return ::nprpc::flat::String_Direct1(buffer_, offset_ + offsetof(ActiveWindow, menuObjectPath)); }
+  const uint32_t& pid() const noexcept { return base().pid;}
+  uint32_t& pid() noexcept { return base().pid;}
 };
 } // namespace flat
 
@@ -2133,6 +2137,7 @@ inline ::lava::ActiveWindow deserialize<::lava::ActiveWindow>(::nprpc::flat_buff
   __result.title = (std::string_view)__d.title();
   __result.menuService = (std::string_view)__d.menuService();
   __result.menuObjectPath = (std::string_view)__d.menuObjectPath();
+  __result.pid = __d.pid();
   return __result;
 }
 } // namespace nprpc_stream
@@ -2169,13 +2174,14 @@ namespace nprpc_stream {
 template<>
 inline ::nprpc::flat_buffer serialize<::lava::ActiveWindow>(const ::lava::ActiveWindow& value) {
   ::nprpc::flat_buffer __buf;
-  __buf.prepare(28 + 128);
-  __buf.commit(28);
+  __buf.prepare(32 + 128);
+  __buf.commit(32);
   ::lava::flat::ActiveWindow_Direct __d(__buf, 0);
   __d.surfaceId() = value.surfaceId;
   __d.title(value.title);
   __d.menuService(value.menuService);
   __d.menuObjectPath(value.menuObjectPath);
+  __d.pid() = value.pid;
   return __buf;
 }
 } // namespace nprpc_stream

@@ -873,10 +873,11 @@ std::string Engine::menuImportBusName() { return impl_->menuImport.busName(); }
 
 void Engine::menuImportSetActiveWindow(uint32_t windowId,
                                        std::string menuService,
-                                       std::string menuObjectPath)
+                                       std::string menuObjectPath,
+                                       uint32_t pid)
 {
   impl_->menuImport.setActiveWindow(windowId, std::move(menuService),
-                                    std::move(menuObjectPath));
+                                    std::move(menuObjectPath), pid);
 }
 
 void Engine::menuImportPoll() { impl_->menuImport.poll(); }

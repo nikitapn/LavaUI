@@ -489,9 +489,12 @@ class Engine {
   /// Which name was claimed, or empty.
   std::string menuImportBusName();
   /// Whose menu to show; 0 for none. Optional service/path from kde-appmenu.
+  /// `pid` is the focused client's Unix pid, used when `windowId` is not
+  /// what the application passed to `RegisterWindow` (Qt5 Wayland).
   void menuImportSetActiveWindow(uint32_t windowId,
                                  std::string menuService = {},
-                                 std::string menuObjectPath = {});
+                                 std::string menuObjectPath = {},
+                                 uint32_t pid = 0);
   /// Iterate GLib once. Call every frame while a panel is showing a menu.
   void menuImportPoll();
   /// Bumped whenever the imported menu changes.

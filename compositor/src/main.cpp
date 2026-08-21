@@ -10,7 +10,9 @@
 #include <fstream>
 #include <spawn.h>
 #include <sys/stat.h>
+#include <sys/types.h>
 #include <sys/wait.h>
+#include <unistd.h>
 #include <linux/input-event-codes.h>  // BTN_RIGHT
 #include <cerrno>
 #include <csignal>
@@ -176,6 +178,20 @@ struct FramedWindow {
   /// menus against it, so one that is moved without being told puts them in
   /// the wrong place.
   virtual void placed(int, int, uint32_t, uint32_t) {}
+
+  /// Id the AppMenu registrar is keyed by for this window.
+  ///
+  /// The panel looks the focused window's menu up under this number when
+  /// `org_kde_kwin_appmenu` did not supply a DBus address. Lava clients and
+  /// native Wayland clients register under the compositor surface id
+  /// (`frameId`). X11 clients call `RegisterWindow` with their XID — a
+  /// different number — and looking the menu up under `frameId` is how a
+  /// Qt5 Xwayland app (glogg) exports a menu nobody ever shows.
+  virtual uint32_t appMenuWindowId() const { return frameId; }
+
+  /// Unix pid of the client, or 0. Qt5 on Wayland registers its menu under
+  /// `QWindow.winId()` (often `1`); the panel then matches by this pid.
+  virtual uint32_t clientPid() const { return 0; }
 
   /// Which workspace it is on, and its frame, so the two stay in step.
   uint32_t workspace = 0;
@@ -353,6 +369,17 @@ struct Toplevel : FramedWindow {
 
   wlr_scene_node *contentNode() override { return &scene_tree->node; }
   wlr_surface *focusSurface() override { return xdg_toplevel->base->surface; }
+  uint32_t clientPid() const override {
+    wlr_surface *s = xdg_toplevel != nullptr && xdg_toplevel->base != nullptr
+                         ? xdg_toplevel->base->surface
+                         : nullptr;
+    if (s == nullptr || s->resource == nullptr) return 0;
+    wl_client *client = wl_resource_get_client(s->resource);
+    if (client == nullptr) return 0;
+    pid_t pid = 0;
+    wl_client_get_credentials(client, &pid, nullptr, nullptr);
+    return static_cast<uint32_t>(pid);
+  }
   void requestSize(uint32_t width, uint32_t height) override {
     wlr_xdg_toplevel_set_size(xdg_toplevel, static_cast<int32_t>(width),
                               static_cast<int32_t>(height));
@@ -461,6 +488,13 @@ struct XwaylandSurface : FramedWindow {
     wlr_xwayland_surface_configure(
         xsurface, static_cast<int16_t>(x), static_cast<int16_t>(y),
         static_cast<uint16_t>(width), static_cast<uint16_t>(height));
+  }
+  uint32_t appMenuWindowId() const override {
+    return xsurface != nullptr ? static_cast<uint32_t>(xsurface->window_id)
+                               : frameId;
+  }
+  uint32_t clientPid() const override {
+    return xsurface != nullptr ? static_cast<uint32_t>(xsurface->pid) : 0;
   }
 
   /// Whether this compositor draws the frame. X11's answer to the same
@@ -3404,12 +3438,33 @@ class SurfaceRegistry : public lava::CompositorHost {
     outPath = std::move(addr.objectPath);
   }
 
+  /// Number the panel should look the menu up under on the AppMenu registrar.
+  ///
+  /// Native Wayland clients that speak `org_kde_kwin_appmenu` fill
+  /// `menuService` / `menuObjectPath` instead, and this value is unused.
+  /// Everyone else — Lava clients, Qt5-on-Xwayland, GTK with
+  /// appmenu-gtk-module — keys `RegisterWindow` by `appMenuWindowId()`.
+  static uint32_t menuWindowId(const ClientSurface &surface) {
+    if (surface.window != nullptr) {
+      const uint32_t id = surface.window->appMenuWindowId();
+      if (id != 0) return id;
+    }
+    return surface.id;
+  }
+
   /// Tell every panel which window is focused and where its menu lives.
   void postActive(const ClientSurface &surface) {
     if (control_ == nullptr) return;
     std::string service, path;
     menuAddress(surface, service, path);
-    control_->postActiveWindow(surface.id, surface.title, service, path);
+    const uint32_t registrarId = menuWindowId(surface);
+    const uint32_t pid =
+        surface.window != nullptr ? surface.window->clientPid() : 0;
+    wlr_log(WLR_INFO,
+            "menu: focus surface=%u registrar=%u pid=%u kde=%s %s title='%s'",
+            surface.id, registrarId, pid, service.empty() ? "-" : service.c_str(),
+            path.empty() ? "-" : path.c_str(), surface.title.c_str());
+    control_->postActiveWindow(registrarId, surface.title, service, path, pid);
   }
 
   /// A surface's AppMenu address changed. If it is the focused window, re-post
@@ -4046,15 +4101,20 @@ class SurfaceRegistry : public lava::CompositorHost {
 
   void activeWindow(uint32_t &outSurfaceId, std::string &outTitle,
                     std::string &outMenuService,
-                    std::string &outMenuObjectPath) const override {
+                    std::string &outMenuObjectPath,
+                    uint32_t &outPid) const override {
     outSurfaceId = focused_;
     outTitle.clear();
     outMenuService.clear();
     outMenuObjectPath.clear();
+    outPid = 0;
     for (const auto &surface : surfaces_) {
       if (surface->id == focused_) {
         outTitle = surface->title;
         menuAddress(*surface, outMenuService, outMenuObjectPath);
+        outSurfaceId = menuWindowId(*surface);
+        outPid =
+            surface->window != nullptr ? surface->window->clientPid() : 0;
         return;
       }
     }
