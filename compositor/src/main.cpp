@@ -3321,7 +3321,53 @@ class SurfaceRegistry : public lava::CompositorHost {
       setNodeEnabled(surface.window->contentNode(), false);
     }
 
+    // Everything stacked *above* this window comes down too, and that is the
+    // whole meaning of the word backdrop: the plate is a picture of what is
+    // behind the window, and a window in front of it is not behind it.
+    //
+    // Leaving them in showed each one twice — once sharp, drawn on top where
+    // it belongs, and once blurred underneath, bleeding through wherever the
+    // frosted window is translucent. A dialog over a terminal left a ghost of
+    // itself in the glass, and the panel strip left a smear along the top of
+    // any window that reached under it.
+    //
+    // Restored from what was actually on rather than from the rules that
+    // decide it: those rules live in half a dozen places (`showsBar`,
+    // `applyShadow`, the reveal hold, the minimize path) and re-deriving them
+    // here would be a second copy to keep in step. The window being captured
+    // is the exception below — its plate has to stay off until it is redrawn.
+    std::vector<wlr_scene_node *> lifted;
+    const auto hideIfShown = [&lifted](wlr_scene_node *node) {
+      if (node == nullptr || !node->enabled) return;
+      wlr_scene_node_set_enabled(node, false);
+      lifted.push_back(node);
+    };
+    bool reachedSelf = false;
+    for (const auto &owned : surfaces_) {
+      if (owned.get() == &surface) {
+        reachedSelf = true;
+        continue;
+      }
+      if (!visible(*owned)) continue;
+      // Z order is two rules, not one. Panels sit in their own tree above
+      // every workspace, so a panel is above a window whatever the list says;
+      // otherwise front of the list is front of the stack (see `raise`).
+      const bool above = owned->panel != surface.panel ? owned->panel
+                                                       : !reachedSelf;
+      if (!above) continue;
+      hideIfShown(owned->node != nullptr ? &owned->node->node : nullptr);
+      hideIfShown(owned->barNode != nullptr ? &owned->barNode->node : nullptr);
+      hideIfShown(owned->blurNode != nullptr ? &owned->blurNode->node
+                                             : nullptr);
+      hideIfShown(owned->shadowTree != nullptr ? &owned->shadowTree->node
+                                               : nullptr);
+      if (owned->isForeign() && owned->window != nullptr) {
+        hideIfShown(owned->window->contentNode());
+      }
+    }
+
     wlr_buffer *captured = renderOutputBuffer(output);
+    for (wlr_scene_node *node : lifted) wlr_scene_node_set_enabled(node, true);
     if (surface.node != nullptr) {
       setNodeEnabled(&surface.node->node, !surface.minimized);
     }
@@ -9437,6 +9483,15 @@ int main() {
   server.new_surface.attach(&compositor->events.new_surface, &server,
                             Server::on_new_surface);
   wlr_subcompositor_create(server.display);
+  // Scaling and cropping done by the compositor rather than by the client.
+  //
+  // Not optional in practice: a video player decodes at the film's resolution
+  // and asks for it to be drawn at the window's, and mpv (both `gpu-next` and
+  // `wlshm`) refuses to open a window at all without this — "Compositor
+  // doesn't support the required wp_viewporter protocol". Nothing here has to
+  // implement the scaling; `wlr_scene` already reads the surface's source box
+  // and destination size and hands them to the renderer.
+  wlr_viewporter_create(server.display);
   // The clipboard, and the X11-style middle-click one beside it. Both are
   // only half of what a working selection needs — see `on_request_set_selection`.
   wlr_data_device_manager_create(server.display);
