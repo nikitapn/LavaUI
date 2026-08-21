@@ -182,9 +182,11 @@ renderer = vulkan
 layout = us
 # Compositor shortcut modifier: alt (default) or super (Win key).
 # Also gates mod+drag to move/resize windows.
-# A nested compositor (started with WAYLAND_DISPLAY already set) always
-# uses Alt, so Super+… stays with the host. That override is not written
-# back here.
+# A nested compositor — one with no seat of its own, which is how the
+# backend reports a session running inside another compositor — always uses
+# Alt, so Super+… stays with the host. That override gates dispatch only: it
+# is not written back here, and `GetKeyboard` still reports the configured
+# key rather than the one in force.
 # mod-key = alt
 
 [render]

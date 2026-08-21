@@ -392,9 +392,57 @@ will also kill the shell.
 
 | Cannot | Why | Do instead |
 |---|---|---|
-| Move the real cursor / click the desktop, drag a window edge, right-click for a popup | headless wlroots has no input devices, and there is no virtual-pointer protocol | drive the app's own agent port, or ask the human |
+| Move the real cursor / click the desktop, drag a window edge, right-click for a popup | headless wlroots has no input devices, and there is no virtual-pointer protocol | drive the app's own agent port — or, when the bug is in the compositor's own routing, a throwaway signal hook (below) |
 | See overlay content from the agent | `find`/`layout_tree` walk the main tree; a presented overlay's subtree is detached | click by coordinate |
 | Reach the compositor's scene scroll from a client's agent | agent input is injected into that client's engine | test scene-level behaviour in **windowed** mode, where the app owns the renderer |
+
+### Driving compositor input with a throwaway signal hook
+
+The agent port injects into a client's *own* engine, so it never crosses the
+compositor. That is the right tool for a layout claim and the wrong one for
+anything whose bug lives in the compositor's routing — a keybinding, an input
+region, a `PointerLeave`, panel hover. Those need a real event through
+`route_pointer` / `on_key`, and nothing in the tree can produce one.
+
+What works is a hook compiled in for the length of one investigation and taken
+back out before committing. `wl_event_loop_add_signal` delivers on the loop
+thread, so the handler may call anything the compositor itself calls:
+
+```cpp
+// TEMPORARY PROBE — remove. Also add the signal to the mask in `main`,
+// beside SIGHUP: wl_event_loop_add_signal reads a signalfd, and a signalfd
+// only sees signals that are blocked.
+wl_event_loop_add_signal(
+    wl_display_get_event_loop(server.display), SIGUSR1,
+    [](int, void *data) {
+      auto *server = static_cast<Server *>(data);
+      server->toggleShowDesktop();          // whatever the binding calls
+      return 0;
+    },
+    &server);
+```
+
+For the pointer, warp and then re-run the routing the way real motion does —
+this exercises input-region hit testing and the leave/enter edges, which is
+where such bugs actually are. Signals carry no payload, so read the
+coordinates from a file:
+
+```cpp
+wlr_cursor_warp_closest(server->cursor, nullptr, x, y);
+server->update_pointer_focus(0);
+```
+
+Pair it with a `wlr_log` on whatever the change is about — `SetInputRegion`
+arriving, a window minimizing — and the log becomes the assertion. A flicker
+reads as a burst of alternating states from one warp; fixed, the same sweep
+produces two transitions for the whole pass.
+
+**Reproduce on the old build first.** `git show HEAD:compositor/src/main.cpp >
+compositor/src/main.cpp`, apply the same hook, run the same script, and keep
+the output. Without that half you have only shown that the new code does
+something; you have not shown it was the bug the user reported. Keep the clean
+copy somewhere the test cleanup will not delete — **not** under the
+`XDG_RUNTIME_DIR` you are about to `rm -rf`.
 
 ### Seeing what the compositor drew
 
