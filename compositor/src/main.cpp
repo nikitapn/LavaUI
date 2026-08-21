@@ -271,6 +271,16 @@ struct Output {
   /// (Settings, SIGHUP) has to attach too, or the screen paints the same
   /// origin as the first one — i.e. it mirrors whether you asked it to.
   bool sceneAttached = false;
+  /// Offscreen swapchain the backdrop captures render into, kept between
+  /// them. It used to be created and destroyed per capture, which was fine
+  /// while a capture only happened when a window moved; a frosted window over
+  /// a playing video captures every frame, and allocating and freeing a
+  /// swapchain's worth of dma-bufs at the display's rate is not.
+  ///
+  /// Dropped and rebuilt when the output changes size — a mode switch or a
+  /// scale change — which `renderOutputBuffer` checks on every use.
+  wlr_swapchain *captureChain = nullptr;
+
   /// Whether `wlr_output_lock_attach_render` is held. See `syncScanoutLock`.
   bool compositeLocked = false;
   /// Consecutive frames the covering client has been fenced for. Reset by any
@@ -607,6 +617,37 @@ struct ToplevelDecoration {
   }
 };
 
+/// One live `wl_surface`, watched for the single purpose of telling the frost
+/// above it that the picture underneath changed.
+///
+/// Hooked at the compositor rather than on each shell, because a frame's
+/// pixels do not always arrive on the surface a window is built around. An xdg
+/// toplevel and an X11 window are already two paths, and a client that puts
+/// video in a desynchronised subsurface commits on neither of them — Chromium
+/// and mpv both can. One listener per surface catches all three, and resolving
+/// the root surface is what maps a commit back to a window.
+struct SurfaceWatch {
+  Server      *server;
+  wlr_surface *surface;
+  Listener<SurfaceWatch> commit;
+  Listener<SurfaceWatch> destroy;
+
+  SurfaceWatch(Server *server, wlr_surface *surface)
+      : server(server), surface(surface) {
+    commit.attach(&surface->events.commit, this, on_commit);
+    destroy.attach(&surface->events.destroy, this, on_destroy);
+  }
+  ~SurfaceWatch() {
+    commit.detach();
+    destroy.detach();
+  }
+
+  static void on_commit(wl_listener *listener, void *);
+  static void on_destroy(wl_listener *listener, void *) {
+    delete owner_of<SurfaceWatch>(listener);
+  }
+};
+
 // ─── Keyboard ──────────────────────────────────────────────────────────────
 
 struct Keyboard {
@@ -934,6 +975,7 @@ struct Server {
   void restoreFocus(uint32_t workspace, uint32_t exceptId);
 
   Listener<Server> new_output;
+  Listener<Server> new_surface;
   Listener<Server> new_toplevel;
   Listener<Server> new_popup;
   Listener<Server> new_decoration;
@@ -967,7 +1009,7 @@ struct Server {
   /// that unlinks it does not run.
   void detachListeners() {
     for (Listener<Server> *listener :
-         {&new_output, &new_toplevel, &new_popup, &new_decoration,
+         {&new_output, &new_surface, &new_toplevel, &new_popup, &new_decoration,
           &new_xwayland_surface, &xwayland_ready, &new_input, &cursor_motion,
           &cursor_motion_absolute, &cursor_button, &cursor_axis, &cursor_frame,
           &request_cursor, &new_pointer_constraint, &pointer_focus_change,
@@ -978,6 +1020,7 @@ struct Server {
   }
 
   static void on_new_output(wl_listener *listener, void *data);
+  static void on_new_surface(wl_listener *listener, void *data);
   static void on_new_toplevel(wl_listener *listener, void *data);
   static void on_new_popup(wl_listener *listener, void *data);
   /// The box a popup may be placed in, in the coordinates its positioner
@@ -3162,6 +3205,81 @@ class SurfaceRegistry : public lava::CompositorHost {
     if (node != nullptr) wlr_scene_node_set_enabled(node, on);
   }
 
+  /// The rectangle a window's frost plate covers, in layout space. Empty
+  /// when the window has no frost worth capturing.
+  ///
+  /// `blurW`/`blurH` of 0 means the whole frame — see `ClientSurface::blurX`.
+  wlr_box frostBox(const ClientSurface &surface) const {
+    const int frameW = static_cast<int>(surface.width);
+    const int frameH = surface.frameHeight();
+    if (surface.backdropBlurRadius <= 0.f || frameW < 1 || frameH < 1) {
+      return wlr_box{};
+    }
+    if (!(surface.blurW > 0.f && surface.blurH > 0.f)) {
+      return wlr_box{surface.x, surface.y, frameW, frameH};
+    }
+    return wlr_box{
+        surface.x + static_cast<int>(std::lround(surface.blurX)),
+        surface.y + static_cast<int>(std::lround(surface.blurY)),
+        std::max(1, static_cast<int>(std::lround(surface.blurW))),
+        std::max(1, static_cast<int>(std::lround(surface.blurH)))};
+  }
+
+  /// A Wayland or X11 client painted. Resolves the surface to the window that
+  /// owns it — the pixels may have arrived on a subsurface — and hands it to
+  /// `notePainted`.
+  void noteClientContent(wlr_surface *root) {
+    if (root == nullptr) return;
+    for (const auto &owned : surfaces_) {
+      if (owned->isForeign() && owned->window != nullptr &&
+          owned->window->focusSurface() == root) {
+        notePainted(*owned);
+        return;
+      }
+    }
+  }
+
+  /// `source` painted something new. Marks the frost stale for every window
+  /// whose plate that window is inside of.
+  ///
+  /// **Nothing else notices content.** Every other trigger above is
+  /// *structural* — a window moved, resized, was raised, was minimized,
+  /// changed workspace — and a film playing behind a frosted terminal is none
+  /// of those. So the plate captured the last time the terminal itself was
+  /// touched stayed on screen, and the frost froze on one frame of the film
+  /// until the window was nudged.
+  ///
+  /// Called from both frame paths, because a window's pixels arrive by one of
+  /// two completely separate routes: a foreign client commits a `wl_surface`
+  /// (`SurfaceWatch`), and a Lava client publishes into an arena (`present`).
+  /// Only doing the first would have left the frost frozen over our own
+  /// animating windows.
+  ///
+  /// This is also the only trigger that is rate limited, and the asymmetry is
+  /// the point: a drag has to track the pointer exactly, whereas the plate is
+  /// a heavily low-passed picture of the desktop and resampling it at half the
+  /// film's rate is not visible in it. See `kLiveFrostInterval`.
+  ///
+  /// The overlap test is what keeps an idle desktop idle. Without it every
+  /// clock tick in the panel, and every frame of a video on another workspace,
+  /// would cost a full offscreen composite of the output per frosted window.
+  void notePainted(const ClientSurface &source) {
+    if (server_ == nullptr || backdropContentDirty_) return;
+    if (!visible(source)) return;
+    const wlr_box painted{source.x, source.y, static_cast<int>(source.width),
+                          source.frameHeight()};
+    for (const auto &owned : surfaces_) {
+      if (owned.get() == &source || owned->backdropBlurRadius <= 0.f) continue;
+      if (!visible(*owned) || owned->fullscreen) continue;
+      const wlr_box frost = frostBox(*owned);
+      wlr_box hit{};
+      if (frost.width > 0 && wlr_box_intersection(&hit, &frost, &painted)) {
+        backdropContentDirty_ = true;
+        return;
+      }
+    }
+  }
+
   /// Hide this window (not the others), render the output it sits on,
   /// crop + frost, put the plate back under it.
   void captureBackdrop(ClientSurface &surface) {
@@ -3177,23 +3295,14 @@ class SurfaceRegistry : public lava::CompositorHost {
       return;
     }
 
-    const int frameW = static_cast<int>(surface.width);
-    const int frameH = surface.frameHeight();
-    if (frameW < 1 || frameH < 1) return;
+    const wlr_box frostRect = frostBox(surface);
+    if (frostRect.width < 1 || frostRect.height < 1) return;
 
     const bool regioned = surface.blurW > 0.f && surface.blurH > 0.f;
-    const int frostW =
-        regioned ? std::max(1, static_cast<int>(std::lround(surface.blurW)))
-                 : frameW;
-    const int frostH =
-        regioned ? std::max(1, static_cast<int>(std::lround(surface.blurH)))
-                 : frameH;
-    const int frostX =
-        surface.x +
-        (regioned ? static_cast<int>(std::lround(surface.blurX)) : 0);
-    const int frostY =
-        surface.y +
-        (regioned ? static_cast<int>(std::lround(surface.blurY)) : 0);
+    const int frostW = frostRect.width;
+    const int frostH = frostRect.height;
+    const int frostX = frostRect.x;
+    const int frostY = frostRect.y;
 
     Output *output = outputUnder(frostX + frostW / 2, frostY + frostH / 2);
     if (output == nullptr || output->wlr == nullptr) return;
@@ -3346,13 +3455,22 @@ class SurfaceRegistry : public lava::CompositorHost {
     }
     if (fmt == nullptr) return nullptr;
 
-    wlr_swapchain *chain = wlr_swapchain_create(server_->allocator, w, h, fmt);
-    if (chain == nullptr) return nullptr;
+    if (output->captureChain != nullptr &&
+        (output->captureChain->width != w ||
+         output->captureChain->height != h)) {
+      wlr_swapchain_destroy(output->captureChain);
+      output->captureChain = nullptr;
+    }
+    if (output->captureChain == nullptr) {
+      output->captureChain =
+          wlr_swapchain_create(server_->allocator, w, h, fmt);
+    }
+    if (output->captureChain == nullptr) return nullptr;
 
     wlr_output_state state;
     wlr_output_state_init(&state);
     wlr_scene_output_state_options opts{};
-    opts.swapchain = chain;
+    opts.swapchain = output->captureChain;
     const bool built =
         wlr_scene_output_build_state(output->scene_output, &state, &opts);
     wlr_buffer *locked = nullptr;
@@ -3361,7 +3479,6 @@ class SurfaceRegistry : public lava::CompositorHost {
       wlr_buffer_lock(locked);
     }
     wlr_output_state_finish(&state);
-    wlr_swapchain_destroy(chain);
     wlr_damage_ring_add_whole(&output->scene_output->damage_ring);
     return locked;
   }
@@ -3820,17 +3937,51 @@ class SurfaceRegistry : public lava::CompositorHost {
     wl_display_terminate(server_->display);
   }
 
-  /// Recaptures frosted plates when something behind a window may have
-  /// moved. Cheap when nobody asked: no surface with a radius, nothing
-  /// to do. Called from the output frame callback, before the composite.
+  /// Recaptures frosted plates when what is behind a window may have changed —
+  /// either the window set moved (`backdropBlurDirty_`) or something behind a
+  /// plate painted (`backdropContentDirty_`, rate limited). Cheap when nobody
+  /// asked: no surface with a radius, nothing to do. Called from the output
+  /// frame callback, before the composite.
   void refreshBackdropBlurs() {
-    if (!backdropBlurDirty_ || server_ == nullptr || workspaces_ == nullptr) {
-      return;
+    if (server_ == nullptr || workspaces_ == nullptr) return;
+    bool live = false;
+    if (backdropContentDirty_) {
+      const auto now = std::chrono::steady_clock::now();
+      if (now - lastLiveFrost_ >= kLiveFrostInterval) {
+        lastLiveFrost_ = now;
+        backdropContentDirty_ = false;
+        live = true;
+      } else {
+        // Too soon, but the frame that painted may be the last one — a film
+        // that just paused leaves its final frame on screen and commits
+        // nothing more. Nothing else would wake us to catch up on it, so keep
+        // the output awake for one more turn rather than dropping it.
+        for (Output *output : server_->outputs) {
+          if (output->wlr != nullptr && output->wlr->enabled) {
+            wlr_output_schedule_frame(output->wlr);
+          }
+        }
+      }
     }
+    const bool structural = backdropBlurDirty_;
+    if (!structural && !live) return;
     backdropBlurDirty_ = false;
+    bool anyFrost = false;
     for (auto &owned : surfaces_) {
-      if (owned->backdropBlurRadius > 0.f && !owned->minimized) {
-        captureBackdrop(*owned);
+      if (owned->backdropBlurRadius <= 0.f) continue;
+      anyFrost = true;
+      if (!owned->minimized) captureBackdrop(*owned);
+    }
+    // The last frosted window closed, or gave its radius up. Hand the capture
+    // swapchains back rather than keep a screen's worth of buffers per output
+    // alive for something nobody is going to ask for again. Only worth
+    // checking on a structural pass — a live one has a frosted window by
+    // definition.
+    if (structural && !anyFrost) {
+      for (Output *output : server_->outputs) {
+        if (output->captureChain == nullptr) continue;
+        wlr_swapchain_destroy(output->captureChain);
+        output->captureChain = nullptr;
       }
     }
   }
@@ -4442,6 +4593,7 @@ class SurfaceRegistry : public lava::CompositorHost {
       return;
     }
     if (!surface->canvas->renderFromArena()) return;
+    notePainted(*surface);
     if (surface->awaitingFirstFrame) {
       surface->firstFrameRendered = true;
       revealIfReady(*surface);
@@ -5079,6 +5231,15 @@ class SurfaceRegistry : public lava::CompositorHost {
   uint32_t primaryHeight_ = 0;
   /// Set when a frosted window moved, resized, or asked for a new radius.
   bool backdropBlurDirty_ = false;
+  /// Set by `notePainted` alone: something *behind* a frosted window painted.
+  /// Kept apart from `backdropBlurDirty_` because only this one is rate
+  /// limited — see the comment there.
+  bool backdropContentDirty_ = false;
+  std::chrono::steady_clock::time_point lastLiveFrost_{};
+  /// 30 Hz. A capture is a whole extra composite of the output, so the ceiling
+  /// matters; 30 is where it stops being visible, because the thing being
+  /// resampled has already had every high frequency blurred out of it.
+  static constexpr auto kLiveFrostInterval = std::chrono::milliseconds(33);
   /// `ImageSurface` posters, keyed by `(surfaceId << 32) | maxSide`.
   /// Lives for one switcher session; `posterGen_` is in the texture key
   /// so TextureManager cannot revive last session's pixels.
@@ -5981,6 +6142,10 @@ void Server::applyArrangement() {
 }
 
 Output::~Output() {
+  if (captureChain != nullptr) {
+    wlr_swapchain_destroy(captureChain);
+    captureChain = nullptr;
+  }
   if (compositeLocked) {
     wlr_output_lock_attach_render(wlr, false);
     compositeLocked = false;
@@ -6525,6 +6690,19 @@ void Toplevel::on_unmap(wl_listener *listener, void *) {
   // Whatever is under the cursor now is a different surface, and nothing else
   // will tell the seat so — an unmap is not a pointer event.
   toplevel->server->update_pointer_focus(0);
+}
+
+void SurfaceWatch::on_commit(wl_listener *listener, void *) {
+  auto *watch = owner_of<SurfaceWatch>(listener);
+  // Only new pixels count. Clients commit for plenty of other reasons — a
+  // frame callback, an opaque region, a subsurface moved a pixel — and none of
+  // those change what a plate underneath would capture.
+  if ((watch->surface->current.committed & WLR_SURFACE_STATE_BUFFER) == 0) {
+    return;
+  }
+  if (watch->server->surfaces == nullptr) return;
+  watch->server->surfaces->noteClientContent(
+      wlr_surface_get_root_surface(watch->surface));
 }
 
 void Toplevel::on_commit(wl_listener *listener, void *) {
@@ -7628,6 +7806,13 @@ void Keyboard::on_destroy(wl_listener *listener, void *) {
 void Server::on_new_output(wl_listener *listener, void *data) {
   auto *server = owner_of<Server>(listener);
   new Output(server, static_cast<wlr_output *>(data));
+}
+
+void Server::on_new_surface(wl_listener *listener, void *data) {
+  // Owns itself: the surface outlives nothing here, and the watch deletes
+  // itself when the surface goes. Same shape as `ToplevelDecoration`.
+  new SurfaceWatch(owner_of<Server>(listener),
+                   static_cast<wlr_surface *>(data));
 }
 
 void Server::on_new_toplevel(wl_listener *listener, void *data) {
@@ -9247,6 +9432,10 @@ int main() {
     }
   }
   auto *compositor = wlr_compositor_create(server.display, 6, server.renderer);
+  // Every surface, so that a frosted window can be told when the picture
+  // underneath it moves. See `SurfaceWatch`.
+  server.new_surface.attach(&compositor->events.new_surface, &server,
+                            Server::on_new_surface);
   wlr_subcompositor_create(server.display);
   // The clipboard, and the X11-style middle-click one beside it. Both are
   // only half of what a working selection needs — see `on_request_set_selection`.
