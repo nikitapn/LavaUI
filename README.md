@@ -8,8 +8,7 @@ The current application-facing API is documented in
 
 Views are described the way SwiftUI describes them — a `body` returning nested
 value types — but the whole stack underneath is here: layout via Yoga, text via
-HarfBuzz and FreeType, and a single Vulkan pipeline that draws everything. No
-GTK, no Qt, no ImGui in the widget path.
+HarfBuzz and FreeType, and a single Vulkan pipeline that draws everything.
 
 ```swift
 struct Counter: View {
@@ -23,28 +22,6 @@ struct Counter: View {
     }
 }
 ```
-
-## Layout of the repo
-
-| Target | Contains | Depends on |
-|---|---|---|
-| `LavaText` | Editing logic: cursors, selection, undo, word/line navigation, soft wrap, syntax rules, search | nothing |
-| `LavaMenu` | Application menu IR + declarative DSL (`MenuBar` / `MenuItem`); no drawing | nothing |
-| `LavaUI` | Views, Yoga layout, draw list, fonts, input, theming | `LavaText`, `LavaMenu`, `CxxCanvas`, `CYoga` |
-| `HelloWorld` | Demo app (`DemoExample`) and an FBD diagram editor | `LavaUI`, `FBDModel` |
-| `LavaSwitcher` | 3D Ctrl+Tab / Mod+Tab app switcher (live window posters) | `LavaUI`, `LavaClient` |
-| `LavaSpotify` / `SpotifyApp` | LavaSpotify UI + Connect control of spotifyd | `LavaUI`, `SpotifyCore` |
-| `SpotifyCore` | Spotify Web API, OAuth, cover download (no Vulkan) | nothing |
-| `LavaTerm` / `LavaTermApp` | Terminal emulator (PTY + ANSI + Canvas grid) | `LavaUI`, `LavaTermCore` |
-| `LavaTermCore` | VT grid + ANSI parser (headless, unit-tested) | nothing |
-| `canvas/` (package) | C++ engine (`CxxCanvas`) + Yoga (`CYoga`), built by SwiftPM | system Vulkan/GLFW/FreeType/HarfBuzz |
-| `compositor/` | Wayland compositor and control-plane servant — C++20, built by **meson** rather than SwiftPM | wlroots 0.19, `canvas/`, NPRPC |
-| `LavaTaskbar` `LavaDock` `LavaLauncher` `LavaSettings` `LavaDebug` | The desktop shell — panel, dock, launcher, settings, GPU inspector. Ordinary LavaUI clients, with no privileges the demo does not have | `LavaUI`, `LavaClient` |
-
-`LavaText` and `LavaMenu` having **no dependencies at all** is deliberate:
-editing logic and menu IR are where fiddly correctness lives, and keeping them
-out of reach of Vulkan and C++ interop means they are tested headlessly. That
-is enforced by the build graph rather than by discipline.
 
 ## Building
 
@@ -68,125 +45,11 @@ swift run LavaTerm            # terminal emulator (click the grid, type)
 swift test                    # headless tests, no GPU needed
 ```
 
-**LavaTerm** spawns `$SHELL` on a Linux PTY, parses a useful subset of ANSI/VT
-(SGR colours including 256/truecolour, cursor motion, erase, scroll), and paints
-the cell grid with a monospace `Canvas`. Click the surface once so it takes
-keyboard focus. Paste is Edit → Paste (Ctrl+V).
-
-```bash
-# Windowed (default)
-swift run LavaTerm
-
-# Client of the compositor (same pattern as HelloWorld; needs nprpc + renderer)
-LAVA_CLIENT=1 swift run LavaTerm
-```
-
-Performance is checked separately, against a committed baseline — a correctness
-suite cannot catch a frame that got 40x slower while still drawing the right
-thing:
-
-```bash
-swift build -c release && ./.build/release/LavaBench   # exit 1 on a regression
-```
-
-See **[docs/performance.md](docs/performance.md)** for what it measures, why it
-gates on work *counts* rather than milliseconds, and how to add a scenario.
-
-The Vulkan engine lives under `canvas/` and is a normal SwiftPM C++ target
-(`CxxCanvas`). **Resources are split by owner** and packed by SwiftPM:
-
-| Asset | Target | Location |
-|---|---|---|
-| SPIR-V shaders | `CanvasResources` | `canvas/Sources/CanvasResources/shaders/` |
-| Default fonts | `LavaUI` | `Sources/LavaUI/Resources/fonts/` |
-| Demo images | `HelloWorld` | `Sources/HelloWorld/Resources/` |
-
 System packages: Vulkan, GLFW, FreeType, HarfBuzz (and on Linux for global
 menus: GLib + libdbusmenu-glib). No Meson/Ninja — SwiftPM builds the C++
-engine. SPIR-V is checked in; after editing GLSL run
-`canvas/scripts/compile_shaders.sh` (needs `glslc`).
+engine.
 
-LavaSpotify + spotifyd (PulseAudio, two logins, Connect playback):
-**[docs/lavaspotify.md](docs/lavaspotify.md)**.
-
-Linux only today. `CxxCanvas`/`CYoga` are gated on it, and the engine is
-GLFW + Vulkan.
-
-## The compositor
-
-The repo has a second half: a **Wayland compositor** under `compositor/` —
-C++20 on wlroots 0.19 — that runs a desktop of LavaUI apps, and everything else
-Linux runs alongside them through xdg-shell and Xwayland.
-
-It exists because of what an app costs when it is a *client* of it rather than
-a window on its own:
-
-```bash
-swift run LavaTerm                 # windowed: its own Vulkan device, its own GLFW window
-LAVA_CLIENT=1 swift run LavaTerm   # client: no device, no window, no GPU at all
-```
-
-The client still does body, layout, shaping and emission — the whole framework
-above the pixels. What it does not do is own a renderer: the draw list goes
-into a shared-memory **arena**, a `Present` call says a frame is ready, and the
-compositor draws it. One Vulkan device serves the entire desktop, so the glyph
-atlas, the texture cache and the pipelines are shared by every window on
-screen, and a second window costs its attachments and its exported buffer
-rather than a second copy of the renderer. Pixels never travel over RPC: the
-frame is rendered straight into a dma-buf that wlroots' scene graph shows, and
-handed over with a fence rather than a copy.
-
-The shell is made of the same thing. The panel, the dock, the Alt+P launcher,
-the 3D Ctrl+Tab switcher and the settings panel are LavaUI clients with no
-privilege the demo does not have — they ask the compositor for what they need
-over the control plane (`idl/lava.npidl`, one source of truth for both sides'
-stubs). The compositor starts and supervises the ones a session cannot do
-without, and notices a component that is still running but has stopped drawing,
-which the operating system cannot see.
-
-For everyone else it is an ordinary compositor: xdg-shell and Xwayland,
-server-side decorations for clients that ask and client-side for those that
-draw their own, the seat's clipboard and primary selection (so a copy in
-LavaTerm pastes into Firefox and back), `wlr-data-control` and
-`ext-data-control` for clipboard managers, `screencopy` and `xdg-output` for
-`grim`, pointer constraints and relative pointer for games, an
-`org.freedesktop.impl.portal.Screenshot` on D-Bus, and Print Screen straight to
-the clipboard as PNG.
-
-A fullscreen game is **scanned out, not composited**: `linux-drm-syncobj-v1` is
-advertised, the client's acquire fence rides the atomic commit as `IN_FENCE_FD`,
-and the CRTC waits for the game's own GPU work without anyone copying a frame.
-Only a covering client whose buffer carries no fence is composited, and that
-case is worth the copy: NVIDIA has never honoured the implicit fence hung off a
-dma-buf, so an unfenced buffer there goes to the display while the client is
-still drawing into it. Vsync does not help with that one — it is not a timing
-problem.
-
-```bash
-compositor/scripts/dev-run       # nested in the Wayland session you are in
-compositor/scripts/dev-run -H    # headless, software rendering, no window
-compositor/scripts/dev-run -r    # release build, compositor and shell alike
-compositor/scripts/dev-run -- env LAVA_CLIENT=1 ./.build/debug/LavaTerm
-compositor/scripts/start-lava-compositor setup   # a real session, on a real GPU
-```
-
-It builds both halves — the compositor with meson, the shell with SwiftPM — and
-points one at the other, because that mismatch is otherwise silent: a release
-compositor will happily start a debug dock and leave you measuring one build
-with the other.
-
-Nesting is the development loop: the compositor comes up as a window of your
-existing session, with its own control plane, its own socket and its own window
-memory, so nothing of the session you are sitting in is reachable by accident.
-
-Two things it does not do yet, in case they are what you came for:
-`zwlr_layer_shell_v1` is not advertised (rofi and friends run through Xwayland
-instead), and a Wayland client's corners stay square — rounding those means
-compositing the scene by hand rather than letting `wlr_scene` do it.
-
-The compositor's own README (**[compositor/README.md](compositor/README.md)**)
-carries the rest: configuration, the shell supervisor, window memory, the
-clipboard's hazards, and what `[render] msaa` costs per surface.
+Linux only today.
 
 ## Using LavaUI in a new project
 
@@ -201,7 +64,7 @@ only declare a dependency on **this** repository.
 ```
 
 The compositor and NPRPC need more than the engine (wlroots 0.19, Boost,
-liburing, dbusmenu, rsvg, …). `install-deps.sh` is the list. A windowed
+ dbusmenu, rsvg, …). `install-deps.sh` is the list. A windowed
 LavaUI app that will never talk to the compositor can get by with Vulkan,
 GLFW, FreeType, HarfBuzz and libdbusmenu-glib alone.
 
@@ -316,34 +179,25 @@ let icon = ImageStore.loadAsset(
 
 Put files under `Sources/MyApp/Resources/`.
 
-### Optional products
+## The compositor
 
-The same package also exports headless libraries if you need them without a
-window:
+The repo has a second half: a **Wayland compositor** under `compositor/` —
+C++23 on wlroots 0.19 — that runs a desktop of LavaUI apps, and everything else
+Linux runs alongside them through xdg-shell and Xwayland.
 
-| Product | Use |
-|---|---|
-| `LavaUI` | Full UI (what almost every app wants) |
-| `LavaText` | Text editing logic only |
-| `LavaMenu` | Menu IR / DSL only |
-
-```swift
-.product(name: "LavaText", package: "LavaUI"),
+```bash
+compositor/scripts/dev-run       # nested in the Wayland session you are in
+compositor/scripts/dev-run -H    # headless, software rendering, no window
+compositor/scripts/dev-run -r    # release build, compositor and shell alike
+compositor/scripts/dev-run -- env LAVA_CLIENT=1 ./.build/debug/LavaTerm
+compositor/scripts/start-lava-compositor setup   # a real session, on a real GPU
 ```
 
-The demo prints one line per rendered frame on stdout — idle frames print
-nothing, because idle frames are not rendered:
-
-```
-frame redraw body= 0.00 layout= 0.00 emit= 0.55 present= 0.73 total= 1.31 ms
-frame body   body= 1.41 layout= 5.88 emit= 0.65 present= 0.85 total= 8.83 ms
-```
-
-The first word is how much of body → layout → emit ran. Seeing `body` where
-a drag or an animation should be `redraw` means something over-invalidated,
-which is a lag bug before it is a throughput one. `LAVAUI_DEBUG=1` enables it.
+The compositor's own README (**[compositor/README.md](compositor/README.md)**).
 
 ## How it works
+
+**[How LavaUI draws](https://claude.ai/code/artifact/37c3ea4e-9060-4466-b733-aba3fcdc5dad?org=ffa809c6-f386-4865-a70f-7a16c5df3b89)**
 
 **The view tree is retained; the draw list is immediate.**
 
@@ -383,135 +237,24 @@ nothing about widgets. The rule for what stays in C++: *retain what is
 expensive to build and keyed by content* (the glyph atlas, Vulkan objects);
 *re-emit everything keyed by position or structure*.
 
-## What exists
+## Layout of the repo
 
-**Containers** `HStack` `VStack` `Spacer` `Divider` `ForEach` `ScrollView` —
-flexbox via Yoga, with `if`/`else` and optionals handled by the view builder.
-`Divider()` takes its orientation from the container it lands in.
+| Target | Contains | Depends on |
+|---|---|---|
+| `LavaText` | Editing logic: cursors, selection, undo, word/line navigation, soft wrap, syntax rules, search | nothing |
+| `LavaMenu` | Application menu IR + declarative DSL (`MenuBar` / `MenuItem`); no drawing | nothing |
+| `LavaUI` | Views, Yoga layout, draw list, fonts, input, theming | `LavaText`, `LavaMenu`, `CxxCanvas`, `CYoga` |
+| `HelloWorld` | Demo app (`DemoExample`) and an FBD diagram editor | `LavaUI`, `FBDModel` |
+| `LavaSwitcher` | 3D Ctrl+Tab / Mod+Tab app switcher (live window posters) | `LavaUI`, `LavaClient` |
+| `LavaSpotify` / `SpotifyApp` | LavaSpotify UI + Connect control of spotifyd | `LavaUI`, `SpotifyCore` |
+| `SpotifyCore` | Spotify Web API, OAuth, cover download (no Vulkan) | nothing |
+| `LavaTerm` / `LavaTermApp` | Terminal emulator (PTY + ANSI + Canvas grid) | `LavaUI`, `LavaTermCore` |
+| `LavaTermCore` | VT grid + ANSI parser (headless, unit-tested) | nothing |
+| `canvas/` (package) | C++ engine (`CxxCanvas`) + Yoga (`CYoga`), built by SwiftPM | system Vulkan/GLFW/FreeType/HarfBuzz |
+| `compositor/` | Wayland compositor and control-plane servant — C++23, built by **meson** rather than SwiftPM | wlroots 0.19, `canvas/`, NPRPC |
+| `LavaTaskbar` `LavaDock` `LavaLauncher` `LavaSettings` `LavaDebug` | The desktop shell — panel, dock, launcher, settings, GPU inspector. Ordinary LavaUI clients, with no privileges the demo does not have | `LavaUI`, `LavaClient` |
 
-**Content** `Text` (hover, click, wrapping) · `MarkdownView` (headings, emphasis,
-strong text, code, links, quotes, lists, and fenced code) · `Image` · `DiagramHost`
-· `Button` (animated press and hover) · `Toggle` (animated knob, bound value)
-· `Slider` (drag, optional step and readout)
-· `Canvas` (app-owned paint: Yoga sizes a box, you emit into `DrawList`)
-
-**Input** `TextField` (single and multi-line, soft wrap, selection, clipboard,
-undo) · `EditorView` (line-number gutter, syntax rules, current-line highlight,
-find, vertical and horizontal scrolling)
-
-**Modifiers** `.padding()` `.background()` `.cornerRadius()` `.frame()`
-`.flexGrow()` `.blur()` `.backdropBlur()` `.agentId("…")` — chains collapse
-onto the content's own node, so styling costs no extra layout boxes unless the
-content is a fragment. `.agentId` stamps a stable automation id for the agent
-control plane (see [docs/agent.md](docs/agent.md)).
-
-**Overlays** `.overlay(isPresented:) { … }` anchors content above everything —
-menus, dropdowns, tooltips. Collected during the tree walk and emitted after
-it, so a popup paints over later siblings and escapes any ancestor's scissor
-rect. Input runs the other way round: overlays are hit-tested first, a click
-inside never falls through, and a click outside dismisses instead of
-activating what it landed on. Placement flips to the other side of the anchor
-when there is no room.
-
-**Blur** comes in two kinds, because "blur this view" and "frost what is behind
-this view" are opposite operations that happen to share a blur.
-`.blur(radius:)` softens the view and its children, the way SwiftUI's does;
-`.backdropBlur(radius:)` leaves the view sharp and frosts the window under it,
-which is what glass is made of.
-
-Both emit a barrier into the draw list rather than a shape, and the engine
-interrupts the frame there. Backdrop blur ends the main pass, reads the resolved
-frame, and composites the result *under* the view's own fill. Content blur
-instead draws the subtree — only the subtree — into an offscreen target cleared
-to transparent, blurs that, and composites it back with its own alpha, so a
-blurred view has a genuinely soft edge and whatever sits behind it shows through
-untouched. That path is why the whole pipeline emits premultiplied alpha:
-averaging straight alpha pulls the colour of fully transparent texels
-into every edge, which reads as a dark halo around everything blurred.
-
-Width comes from the *downscale*, never from wider tap spacing — the kernel is
-nine fixed taps, so stretching them over forty pixels does not blur, it stamps
-nine offset copies. The downscale tracks the radius, holding it at about two
-texels: too little and the taps have to reach too far, too much and the bilinear
-upsample shows its own grid. Radii do not share a grid either — one allocation
-is sized for the finest radius in the frame and each blur takes the sub-region it
-needs, so a two-pixel softening and a ten-pixel frost in the same frame are both
-right instead of both being dragged onto the coarser one.
-
-Scopes do not nest, in either kind: an inner one would blur what the outer one
-just composited. On an overlay the backdrop scope is hoisted above the panel's
-chrome, so the glass frosts the window and not its own outline.
-
-**Animation** `Animated<T>` interpolates on the *node*, so a press or hover
-costs a draw-list re-emit and no `body` recompute. `FrameScheduler` holds the
-earliest wake any component asked for; `InvalidationLevel` decides how much of
-body → layout → emit actually has to run.
-
-## Agent control plane
-
-Optional localhost TCP API for automation: Yoga layout dump, region screenshots,
-and synthetic pointer/keyboard input. Handlers run on the UI thread; a socket
-watcher wakes `glfwWaitEvents` so requests do not wait on a mouse tick.
-
-```bash
-LAVA_AGENT_PORT=9876 swift run HelloWorld
-
-python3 tools/lava_agent_cli.py find --query theme-toggle
-python3 tools/lava_agent_cli.py click --sid theme-toggle
-python3 tools/lava_agent_cli.py screenshot_node --sid theme-toggle -o t.png
-```
-
-Stable targets use `.agentId("kebab-name")` (exported as `sid`); untagged nodes
-get a structural path.
-
-**Wire to Grok Build / Claude Code:** start the demo with `LAVA_AGENT_PORT=9876`,
-then use the project MCP configs (`.grok/config.toml`, `.mcp.json`). Details:
-**[docs/agent.md](docs/agent.md#wire-to-grok-build--claude-code)**.
-
-**Transitions** `.transition(.slide(dy: -12))` animates a view appearing and
-disappearing, wherever a reconciler can insert or remove one — an `if`, an
-optional, a `ForEach` row. Leaving is the hard direction: the view describing
-the node is already gone, so the node outlives its own removal in the
-fragment's `departingChildren`, staying in the layout and the draw walk while
-it fades, and inert to input the whole time.
-
-**System** `@State` + `@Binding` with `Observation` · `Theme` (semantic tokens,
-light and dark) · focus, hover, pointer capture, click counting · content
-scaling
-
-**Text** is grapheme-correct throughout. Cursors are `String.Index`, never
-integers, so an arrow key steps over an emoji ZWJ sequence as one unit. Caret
-positions map through HarfBuzz clusters, so ligatures and combining marks
-behave. Shaping happens once, in Swift, and feeds both layout and drawing —
-what is measured cannot drift from what is drawn.
-
-## What is missing
-
-Honest list, roughly in the order it hurts:
-
-- **Animated layout** — a transition fades and offsets, but the space a
-  removed view held collapses in one step at the end rather than shrinking with
-  it. Smooth collapse needs the departing node's Yoga size animated and its
-  content clipped while it shrinks.
-- **Stroked shapes** — the SDF pipeline fills, it does not stroke, so an outline
-  is faked with a filled plate behind an opaque panel. That fake has no answer
-  for a translucent one: a frosted overlay currently gets no border at all,
-  because the plate would show through the glass as a flat wash. One stroke
-  width on the quad vertex would fix it.
-- **Environment** — `Theme.current` and `FontStore.default` are globals. They
-  should be environment defaults, not the only way to set a value.
-- **Per-node invalidation** — a change re-runs the whole tree. Correct, but
-  coarser than it needs to be.
-- **Multi-window** — `LayoutHost`, `FocusManager` and `ViewInvalidation` all
-  assume one window.
-- **IME and BiDi** — Latin-only, deliberately. Fine for a PLC editor; it should
-  be a stated scope rather than a surprise.
-- **Block comments** — syntax highlighting is line-at-a-time, so constructs
-  spanning lines cannot be expressed. That is where a rule list needs to become
-  a stateful lexer.
-
-## Notes
-
-`docs/declarative-ui-plan.md` is the working plan and carries the reasoning
-behind most of the decisions above, including several that were reversed and
-why.
+`LavaText` and `LavaMenu` having **no dependencies at all** is deliberate:
+editing logic and menu IR are where fiddly correctness lives, and keeping them
+out of reach of Vulkan and C++ interop means they are tested headlessly. That
+is enforced by the build graph rather than by discipline.
