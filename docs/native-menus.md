@@ -315,7 +315,10 @@ compositor Lava uses three paths:
 4. **Qt5 on Wayland** — `libQt5WaylandClient` has no `org_kde_kwin_appmenu`
    (that is Qt6) and `RegisterWindow` uses `QWindow.winId()`, which is often
    just `1`. Focus also carries the client's Unix `pid`; the panel matches the
-   registrar entry by that pid when the window id misses. `LAVA_MENU_DEBUG=1`
+   registrar entry by that pid when the window id misses. Electron (Teams,
+   VSCode) does the same with 1, 2, 3, so the registrar keeps every
+   registration rather than a map keyed only by that id — otherwise focusing
+   Teams after VSCode finds no pid and draws no menu. `LAVA_MENU_DEBUG=1`
    logs the registrar calls, the lookup (`kde-appmenu` / `registrar-id` /
    `registrar-pid` / `none`), and imported top-level titles.
 
