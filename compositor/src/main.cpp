@@ -1525,7 +1525,13 @@ void collect_key_bindings(std::vector<lava::CompositorHost::BindingEntry> &out,
 /// Canonical form of `KeyboardConfig::modKey`: "alt" or "super".
 std::string normalize_mod_key(const std::string &value);
 /// WLR modifier bit for the configured shortcut mod.
-uint32_t shortcut_mod_mask(const lava::KeyboardConfig &keyboard);
+/// Which modifier the compositor's own shortcuts answer to.
+///
+/// `nested` forces Alt, and does it here rather than by editing
+/// `config.keyboard.modKey`: overwriting the loaded value made `GetKeyboard`
+/// report something the config file did not say, so the settings app drew the
+/// wrong radio button and could not be argued out of it.
+uint32_t shortcut_mod_mask(const lava::KeyboardConfig &keyboard, bool nested);
 
 /// Every layout this machine's xkb offers, from libxkbregistry.
 void collect_keyboard_layouts(
@@ -3914,14 +3920,11 @@ class SurfaceRegistry : public lava::CompositorHost {
     // and neither is recoverable by typing.
     keyboard.repeatRate = std::clamp(settings.repeatRate, 0, 100);
     keyboard.repeatDelay = std::clamp(settings.repeatDelay, 100, 2000);
-    // Nested: Alt stays the shortcut mod so we do not steal Super from
-    // the host, and we do not write that override into the shared
-    // `lava.conf` or a SIGHUP of the session compositor would pick it up.
-    if (server_->nested) {
-      keyboard.modKey = "alt";
-    } else {
-      keyboard.modKey = normalize_mod_key(settings.modKey);
-    }
+    // Stored and persisted whatever the session is. A nested compositor still
+    // answers to Alt — `shortcut_mod_mask` sees to that — but it says so by
+    // behaving that way, not by writing Alt over the choice in a `lava.conf`
+    // it shares with the real session.
+    keyboard.modKey = normalize_mod_key(settings.modKey);
 
     // Every connected client is sent the new keymap by wlroots as a side
     // effect, so this reaches applications that are already running.
@@ -3936,9 +3939,7 @@ class SurfaceRegistry : public lava::CompositorHost {
         {"keyboard", "repeat-rate", std::to_string(keyboard.repeatRate)},
         {"keyboard", "repeat-delay", std::to_string(keyboard.repeatDelay)},
     };
-    if (!server_->nested) {
-      writes.push_back({"keyboard", "mod-key", keyboard.modKey});
-    }
+    writes.push_back({"keyboard", "mod-key", keyboard.modKey});
     save(writes, outError);
   }
 
@@ -3947,9 +3948,11 @@ class SurfaceRegistry : public lava::CompositorHost {
   }
 
   void keyBindings(std::vector<BindingEntry> &out) const override {
-    // Pass the live mod name so the list matches what will actually fire.
+    // The live mod name, so the list matches what will actually fire — which
+    // in a nested session is Alt whatever the config says.
     const char *mod =
-        (server_ != nullptr && server_->config.keyboard.modKey == "super")
+        (server_ != nullptr && !server_->nested &&
+         server_->config.keyboard.modKey == "super")
             ? "Super"
             : "Alt";
     collect_key_bindings(out, mod);
@@ -6972,7 +6975,10 @@ std::string normalize_mod_key(const std::string &value) {
   return "alt";
 }
 
-uint32_t shortcut_mod_mask(const lava::KeyboardConfig &keyboard) {
+uint32_t shortcut_mod_mask(const lava::KeyboardConfig &keyboard, bool nested) {
+  // Super on the host and Super in here would both fire on one chord, and the
+  // host wins. Alt is free.
+  if (nested) return WLR_MODIFIER_ALT;
   return keyboard.modKey == "super" ? WLR_MODIFIER_LOGO : WLR_MODIFIER_ALT;
 }
 
@@ -7198,7 +7204,8 @@ bool perform_binding(Server *server, const BindingSpec &spec,
     server->beginSwitcherSession(
         spec.ctrl ? static_cast<uint32_t>(WLR_MODIFIER_CTRL)
         : spec.alt ? static_cast<uint32_t>(WLR_MODIFIER_ALT)
-                   : shortcut_mod_mask(server->config.keyboard));
+                   : shortcut_mod_mask(server->config.keyboard,
+                                      server->nested));
     if (server->surfaces != nullptr) {
       if (ClientSurface *existing =
               server->surfaces->findByAppId(kSwitcherAppId)) {
@@ -7463,7 +7470,8 @@ void Keyboard::on_key(wl_listener *listener, void *data) {
   Server *server = keyboard->server;
 
   const uint32_t modifiers = wlr_keyboard_get_modifiers(keyboard->wlr);
-  const uint32_t modMask = shortcut_mod_mask(server->config.keyboard);
+  const uint32_t modMask =
+      shortcut_mod_mask(server->config.keyboard, server->nested);
   if (event->state == WL_KEYBOARD_KEY_STATE_PRESSED) {
     // +8 converts evdev to xkb keycodes; the offset is historical, from X.
     const xkb_keycode_t keycode = event->keycode + 8;
@@ -7828,7 +7836,6 @@ void Server::reloadConfig() {
   const std::string previousDevices = config.drmDevices;
   const std::string previousRenderer = config.renderer;
   config = fresh;
-  if (nested) config.keyboard.modKey = "alt";
 
   if (fresh.drmDevices != previousDevices ||
       fresh.renderer != previousRenderer) {
@@ -8807,7 +8814,8 @@ void Server::on_cursor_button(wl_listener *listener, void *data) {
             : 0;
     ClientSurface *over =
         server->surfaces->windowAt(server->cursor->x, server->cursor->y);
-    if ((modifiers & shortcut_mod_mask(server->config.keyboard)) &&
+    if ((modifiers & shortcut_mod_mask(server->config.keyboard,
+                                       server->nested)) &&
         over != nullptr) {
       server->surfaces->raise(*over);
       // Same entry as a title-bar drag: a maximized window has to come off
@@ -9092,8 +9100,13 @@ int main() {
   // starting a second nm-applet gets a fight over the tray or an immediate
   // exit, and a developer restarting a compositor twenty times an hour wants
   // neither.
-  const bool nested = std::getenv("WAYLAND_DISPLAY") != nullptr ||
-                      std::getenv("DISPLAY") != nullptr;
+  // Decided from the backend wlroots actually creates, below — an
+  // environment variable is not evidence. `DISPLAY` is set in any login shell
+  // that has ever seen an X server, and this compositor starts an Xwayland of
+  // its own, so a real DRM session started from a TTY inherits one and used to
+  // declare itself a guest: shortcuts silently fell back to Alt and the
+  // settings app was told the modifier was Alt when `lava.conf` said Super.
+  bool nested = false;
 
   // Blocked here, before anything else, because `wl_event_loop_add_signal`
   // reads it off a signalfd and a signalfd only sees signals that are blocked.
@@ -9140,17 +9153,17 @@ int main() {
   server.configPath = lava::Config::defaultPath();
   server.config = lava::Config::load(server.configPath);
   server.config.applyEnvironment();
-  // After the file: Super on the host and Super in here would both fire
-  // on the same chord, and the host wins. Alt is free. Not written back.
-  server.nested = nested;
-  if (nested) {
-    server.config.keyboard.modKey = "alt";
-    wlr_log(WLR_INFO,
-            "keyboard: nested session, compositor shortcuts use Alt");
-  }
-
   auto *loop = wl_display_get_event_loop(server.display);
   server.backend = wlr_backend_autocreate(loop, &server.session);
+  // A logind/libseat session is what driving real hardware requires, so its
+  // absence is what "guest" means: the wayland, X11 and headless backends all
+  // run inside somebody else's session and all want the same treatment —
+  // the `.test` portal name, no autostart, and Alt for shortcuts so a chord
+  // does not fire here and on the host at once.
+  nested = server.session == nullptr;
+  server.nested = nested;
+  wlr_log(WLR_INFO, "session: %s",
+          nested ? "nested (no seat; shortcuts use Alt)" : "own seat");
   server.renderer = server.backend ? wlr_renderer_autocreate(server.backend) : nullptr;
   server.allocator = (server.backend && server.renderer)
                          ? wlr_allocator_autocreate(server.backend, server.renderer)

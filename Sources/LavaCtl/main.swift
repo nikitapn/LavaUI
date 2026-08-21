@@ -21,6 +21,7 @@ usage: lavactl <command>
   windows                  every window: id, workspace, focused, app id, title
   workspace                the workspace on screen right now
   activate <id>            restore, raise and focus a window by surface id
+  keyboard                 the keyboard config the compositor is serving
   focus-app <app-id>       activate this application's window on the current
                            workspace; prints its id, exits 1 if it has none
 
@@ -60,6 +61,24 @@ case "windows":
 
 case "workspace":
     print(snapshot().workspace)
+
+case "keyboard":
+    // What the compositor believes, which is not always what lava.conf says:
+    // the file is parsed once at startup, so a disagreement between the two
+    // localises a bug to the load path rather than the settings app.
+    do {
+        let k = try DesktopSettings.keyboard()
+        print("layout\t\(k.layout)")
+        print("variant\t\(k.variant)")
+        print("options\t\(k.options)")
+        print("model\t\(k.model)")
+        print("rules\t\(k.rules)")
+        print("repeat-rate\t\(k.repeatRate)")
+        print("repeat-delay\t\(k.repeatDelay)")
+        print("mod-key\t\(k.modKey)")
+    } catch {
+        die("lavactl: GetKeyboard failed: \(error)", 3)
+    }
 
 case "activate":
     guard args.count == 2, let id = UInt32(args[1]) else {
