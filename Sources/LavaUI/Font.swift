@@ -238,6 +238,65 @@ public final class UIFont: @unchecked Sendable {
         return nil
     }
 
+    /// A fallback chain for a *monospace* primary, in the order it should be
+    /// consulted. Load-only — `useFallbacks` is what attaches it.
+    ///
+    /// An app that loads its own face gets no chain: `FontStore` builds one
+    /// for the UI face and nothing built one for anybody else, so LavaTerm
+    /// drew tofu for every character outside its terminal face. That face is
+    /// chosen for column alignment, which is exactly the property that makes
+    /// it narrow — JetBrains Mono Nerd Font has 11,792 codepoints and not one
+    /// of them is braille, so every spinner frame in Claude Code was a box,
+    /// along with the ✻ ✽ ✢ ⏺ ⎿ ⧉ it prints on most lines.
+    ///
+    /// Broadest fixed-width face first: a substituted glyph brings its own
+    /// advance, and a monospace donor keeps the column grid closer to intact
+    /// than a proportional one. `NotoSansSymbols2` ships with LavaUI, so the
+    /// braille and dingbat holes close even on a machine with nothing else.
+    ///
+    /// Deliberately absent: `NotoColorEmoji`, a CBDT colour-bitmap font the R8
+    /// glyph atlas cannot store. Emoji stay tofu until the atlas grows a
+    /// colour path, and the missing-glyph warning says so.
+    public static func loadMonospaceFallbacks(
+        assetsRoot: String? = LavaResources.root,
+        pixelSize: Float = 16
+    ) -> [UIFont] {
+        // Alternatives within a group, not a chain each: first hit wins.
+        let mono = [
+            "/usr/share/fonts/TTF/IosevkaNerdFontMono-Regular.ttf",
+            "/usr/share/fonts/TTF/DejaVuSansMono.ttf",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
+            "/usr/share/fonts/noto/NotoSansMono-Regular.ttf",
+            "/usr/share/fonts/truetype/noto/NotoSansMono-Regular.ttf",
+            "/usr/share/fonts/TTF/NotoSansMono-Regular.ttf",
+        ]
+        // Unverified on this machine — nothing here draws CJK at all, so
+        // installing one of these is the whole fix for that half.
+        let cjk = [
+            "/usr/share/fonts/noto-cjk/NotoSansMonoCJKsc-Regular.otf",
+            "/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc",
+            "/usr/share/fonts/opentype/noto-cjk/NotoSansCJK-Regular.ttc",
+            "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+            "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc",
+        ]
+
+        func firstOf(_ paths: [String]) -> UIFont? {
+            for path in paths where FileManager.default.fileExists(atPath: path) {
+                if let font = UIFont(path: path, pixelSize: pixelSize) { return font }
+            }
+            return nil
+        }
+
+        var chain: [UIFont] = []
+        if let face = firstOf(mono) { chain.append(face) }
+        if let face = loadSymbols(assetsRoot: assetsRoot, pixelSize: pixelSize) {
+            chain.append(face)
+        }
+        if let face = loadSystemFallback(pixelSize: pixelSize) { chain.append(face) }
+        if let face = firstOf(cjk) { chain.append(face) }
+        return chain
+    }
+
     private static func loadFirstExisting(
         pixelSize: Float,
         relativeTo assetsRoot: String,
@@ -281,6 +340,37 @@ public final class UIFont: @unchecked Sendable {
     /// fix has to be a chain. Set by `FontStore`; empty is fine and means the
     /// old behaviour.
     public internal(set) var fallbacks: [UIFont] = []
+
+    /// Snap substituted glyphs onto a fixed advance, for a caller drawing on a
+    /// character grid.
+    ///
+    /// A terminal emits a whole run of cells as one `DrawList.text` and trusts
+    /// the face's advance to keep the columns. A fallback glyph does not have
+    /// that advance — Iosevka is a 0.5em face and JetBrains Mono a 0.6em one,
+    /// so every substituted character pulled the rest of the line 1.5px left
+    /// at 15px. One symbol in a line is invisible; a run of twenty braille
+    /// cells ended 30px short of where the row above it ended.
+    ///
+    /// Set to the cell width and each substituted glyph is rounded to a whole
+    /// number of cells — never zero — and centred in them. Rounding rather
+    /// than clamping is what keeps a double-width glyph two cells wide.
+    /// `nil`, the default, leaves shaping alone, which is right for
+    /// proportional text.
+    public var cellAdvance: Float?
+
+    /// Point this face at `faces` for characters it cannot draw.
+    ///
+    /// Registration and assignment together on purpose: a substituted glyph
+    /// carries its own face id into the draw list, and an unregistered face
+    /// has id 0 — which resolves to the *primary* and draws whatever glyph
+    /// happens to sit at that index. Two separate calls make that a mistake
+    /// somebody can make; one call does not.
+    public func useFallbacks(_ faces: [UIFont], into editor: Editor?) {
+        if let editor {
+            for face in faces { face.registerWithEngine(editor) }
+        }
+        fallbacks = faces
+    }
 
     /// Shaped run for one line, cached per string. Positions are relative to
     /// the run origin (pen at the baseline); the caller offsets them.
@@ -426,6 +516,12 @@ public final class UIFont: @unchecked Sendable {
                 out.cluster = UInt32(base + Int(glyph.cluster))
                 out.x = glyph.x - pen
                 pen += glyph.advance
+                if let cell = cellAdvance, cell > 0 {
+                    let cells = max(1, (out.advance / cell).rounded())
+                    let snapped = cells * cell
+                    out.x += (snapped - out.advance) / 2
+                    out.advance = snapped
+                }
                 return out
             }
         }

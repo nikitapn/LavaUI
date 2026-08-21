@@ -47,9 +47,24 @@ func loadMonoFont(into editor: Editor) -> UIFont? {
     for path in candidates {
         if let font = UIFont(path: path, pixelSize: 15) {
             _ = font.registerWithEngine(editor)
-            FileHandle.standardError.write(
-                Data("LavaTerm: mono font \(path)\n".utf8)
+            // Without this the terminal draws a tofu box for everything the
+            // face lacks, which for a Nerd Font is all of braille and most
+            // dingbats — Claude Code's spinner and bullets, in other words.
+            font.useFallbacks(
+                UIFont.loadMonospaceFallbacks(pixelSize: 15), into: editor
             )
+            // The grid's own cell width, by the same measurement
+            // `TerminalView` makes, so a glyph borrowed from a narrower face
+            // still occupies exactly one column. Set before anything shapes:
+            // it changes what shaping returns, and runs are cached.
+            let m = font.shapedRun("M").width
+            font.cellAdvance = max(1, m > 0 ? m : font.pixelSize * 0.6)
+            let chain = font.fallbacks
+                .map { ($0.path as NSString).lastPathComponent }
+                .joined(separator: ", ")
+            FileHandle.standardError.write(Data(
+                "LavaTerm: mono font \(path)\nLavaTerm: fallbacks \(chain)\n".utf8
+            ))
             return font
         }
     }
