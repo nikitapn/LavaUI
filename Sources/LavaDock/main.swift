@@ -29,8 +29,10 @@ import Observation
 //     it.
 //
 // Auto-hide falls out of the last one plus `PointerLeave`: hidden, the dock
-// accepts input in a sliver along the screen's edge; the pointer entering it is
-// the reveal, and the pointer leaving the dock is the hide.
+// accepts input in a sliver along the screen's edge; the pointer reaching the
+// part of that sliver the dock is actually under is the reveal, and the pointer
+// leaving the dock is the hide. Those two bounds differ on purpose — see
+// `Dock.revealInset`.
 //
 // Reordering is a captured drag along the plate. The compositor already
 // keeps the pointer on the surface that received the press, so motion
@@ -404,6 +406,36 @@ enum Dock {
     /// How deep the strip is that reveals the dock when the pointer enters it.
     /// One pixel is enough to be *entered*, and too little to be aimed at.
     static let triggerHeight: Float = 3
+    /// How far past the end of the plate the pointer must reach before a
+    /// hidden dock comes out.
+    ///
+    /// The dead zone, and the reason the dock stops flickering along the
+    /// bottom corners of the screen. Hidden, the strip that hears the pointer
+    /// runs the full width; revealed, the region shrinks to the plate. So a
+    /// pointer that triggered a reveal from beyond the plate's ends was
+    /// outside the new region the same instant, was told it had left, and
+    /// hid the dock — which widened the strip, which revealed it again, once
+    /// per motion event for as long as the pointer rested down there.
+    ///
+    /// Coming out on a stricter bound than the one that puts it away is what
+    /// breaks that loop: crossing in costs a real movement, and crossing back
+    /// out costs another.
+    static let revealInset: Float = 16
+
+    /// Whether a pointer at `x` is far enough into the plate to bring the dock
+    /// out. `plate` is the span it will take input in once it is out.
+    ///
+    /// `inset` is 0 for a press, which is its own evidence of intent and
+    /// cannot start the loop above: the compositor keeps the pointer on the
+    /// surface that took the press, so the region cannot move out from under
+    /// it mid-gesture.
+    static func approaching(
+        x: Float, plate: (x: Float, w: Float), inset: Float = revealInset
+    ) -> Bool {
+        // A plate narrower than two insets would have no live zone at all.
+        let inset = min(inset, max(0, plate.w * 0.5 - 1))
+        return x >= plate.x + inset && x <= plate.x + plate.w - inset
+    }
     /// Lift the icon this far (in surface Y, up is smaller) and a drop unpins.
     static let unpinLift: Float = 28
     /// How long neighbours take to make room. Short enough to track the
@@ -566,11 +598,12 @@ struct DockView: View {
                 handleWheel(dx: dx, dy: dy, atX: localX)
             },
             onHover: { inside in
-                // The pointer arriving is the only thing a hidden dock ever
-                // hears: its input region is a three-pixel strip along the
-                // screen's edge, so being hovered at all *is* the approach.
+                // Arriving is necessary but no longer sufficient: the strip
+                // runs the whole width of the screen and the dock only
+                // occupies the middle of it. Whether this counts as an
+                // approach is decided in `paint`, which is the one place that
+                // knows both where the pointer is and where the plate ends.
                 model.pointerInside = inside
-                if inside { reveal() }
             },
             paint: { list, frame in paint(list, frame) }
         )
@@ -679,7 +712,16 @@ struct DockView: View {
     private func handle(_ gesture: CanvasGesture) {
         switch gesture.phase {
         case .began:
-            reveal()
+            if Dock.approaching(
+                x: gesture.localX,
+                plate: rowLayout(
+                    entries: model.entries, drag: model.drag,
+                    surfaceWidth: gesture.frame.w
+                ).plate,
+                inset: 0
+            ) {
+                reveal()
+            }
             if gesture.button == PointerButton.right {
                 openMenu(atX: gesture.localX, frameWidth: gesture.frame.w)
             } else if gesture.button == PointerButton.left {
@@ -827,6 +869,15 @@ struct DockView: View {
             entries: entries, drag: drag, surfaceWidth: frame.w
         )
         let plate = layout.plate
+        // Motion over the strip wakes a client frame, so this runs on every
+        // move the dock hears while it is away — which is how a pointer that
+        // arrived outside the plate still reveals it after sliding along the
+        // edge into range.
+        if !entries.isEmpty, model.pointerInside, !model.revealed,
+           Dock.approaching(x: PointerState.window.x, plate: plate)
+        {
+            reveal()
+        }
         // Where the dock takes clicks is decided *here*, from the geometry it
         // is about to draw with. The two were computed separately once — the
         // plate from the canvas's real width, the region from a width polled
