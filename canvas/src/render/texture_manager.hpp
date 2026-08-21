@@ -102,13 +102,14 @@ private:
 
     /// Atlas eviction runs on slot pressure, never on the byte budget.
     ///
-    /// A cell is at most `cellSize²·4` — 256 KiB at the default — and there are
-    /// only `capacitySlots()` of them, so every cell in the atlas dormant at
-    /// once is still an order of magnitude under a sane byte budget. Waiting
-    /// for bytes would mean the atlas fills, `add()` starts refusing, and every
-    /// further image silently becomes a standalone texture with a descriptor
-    /// bind of its own — which is the batching collapse the atlas exists to
-    /// prevent. Slots are the scarce resource here; bytes are not.
+    /// A cell is at most `ImageAtlas::largestCell()²·4` — 256 KiB — and there
+    /// are only `capacitySlots()` of them, so every cell in the atlas dormant
+    /// at once is still an order of magnitude under a sane byte budget.
+    /// Waiting for bytes would mean the atlas fills, `add()` starts refusing,
+    /// and every further image silently becomes a standalone texture of its
+    /// own. Slots are the scarce resource here; bytes are not — and a slot
+    /// means the same thing in every size class, which is why one number
+    /// still governs all of them.
     static constexpr uint32_t kSlotHighWaterPct = 90;
     static constexpr uint32_t kSlotLowWaterPct = 75;
 

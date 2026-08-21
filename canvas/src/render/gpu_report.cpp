@@ -109,15 +109,19 @@ GpuReport buildGpuReport(RenderDevice &device)
   const ImageAtlas &atlas = TextureManager::getInstance().atlas();
   const uint32_t slotsPerPage = atlas.slotsPerPageCount();
   for (uint32_t i = 0; i < atlas.pageCount(); ++i) {
+    // Per page rather than per atlas: pages belong to different size classes
+    // now, so a report that asked the atlas once would label them all with
+    // whichever class answered.
+    const uint32_t extent = atlas.pageSize(i);
     GpuAtlasPage page;
     page.kind        = GpuAtlasPage::Kind::Image;
     page.page        = i;
-    page.width       = atlas.pageSize();
-    page.height      = atlas.pageSize();
-    page.bytes       = static_cast<uint64_t>(atlas.pageSize()) * atlas.pageSize() * 4;
+    page.width       = extent;
+    page.height      = extent;
+    page.bytes       = static_cast<uint64_t>(extent) * extent * 4;
     page.slotsUsed   = atlas.pageUsedSlots(i);
     page.slotsTotal  = slotsPerPage;
-    page.cellSize    = atlas.cellSize();
+    page.cellSize    = atlas.pageCellSize(i);
     page.fillPercent = percentOf(page.slotsUsed, slotsPerPage);
     report.atlases.push_back(std::move(page));
   }

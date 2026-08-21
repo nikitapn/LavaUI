@@ -53,6 +53,11 @@ func handleKey(_ event: LavaUI.InputEvent) -> Bool {
 /// variable is the whole of the synchronisation.
 enum LauncherLayout {
     nonisolated(unsafe) static var columns: Int = 1
+
+    /// Physical pixels to decode an app icon at, for the width the grid
+    /// actually got. Seeded from the screen in `main` before the first emit,
+    /// then kept honest by the ruler if the surface turns out different.
+    nonisolated(unsafe) static var iconPixels: UInt32 = 192
 }
 
 struct LauncherView: View {
@@ -186,6 +191,9 @@ private struct Ruler: View {
             height: .pt(0),
             paint: { _, frame in
                 LauncherLayout.columns = Grid.columns(width: frame.w)
+                // The ruler *is* the grid box, so this needs no inset maths —
+                // unlike the seed in `main`, which starts from the screen.
+                LauncherLayout.iconPixels = Grid.iconPixels(in: frame.w)
             }
         )
     }
@@ -304,11 +312,17 @@ private struct Icon: View {
             // at whatever resolution it shipped at — which for a 512px icon
             // means it no longer fits an atlas cell and costs a texture
             // binding of its own. See `Image.decodePixels` and `ImageAtlas`.
+            //
+            // It was a flat 192, which is what a 4K screen wants and roughly
+            // 3.3x the pixels a 1080p one draws — 106px there. Oversampling an
+            // atlased image is not free twice over: the decode is larger, and
+            // the pages carry no mips, so what is left is minified by the
+            // bilinear filter alone.
             Image(
                 path: path,
                 width: .pct(Grid.iconFraction * 100),
                 height: .pct(Grid.iconFraction * 100),
-                decodePixels: 192,
+                decodePixels: LauncherLayout.iconPixels,
                 contentMode: .fit
             )
         } else {

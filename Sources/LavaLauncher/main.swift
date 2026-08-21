@@ -109,6 +109,43 @@ enum Grid {
     /// Icon edge as a fraction of the card, so it scales with the cell the
     /// grid hands out. Matches `iconSize / cardWidth` at the minimum size.
     static let iconFraction: Float = iconSize / cardWidth
+
+    /// Sizes an app icon may be decoded at, in physical pixels.
+    ///
+    /// A ladder rather than the exact drawn size, for two reasons. The value
+    /// is part of the decode cache key (`path@N`), so a card that resolves one
+    /// pixel wider between frames would otherwise decode every icon on the
+    /// machine a second time and hold both copies. And these are `ImageAtlas`
+    /// cell sizes, so an icon fills the cell it lands in rather than sitting
+    /// in the corner of a larger one — atlas pages have no mip chain, and an
+    /// icon decoded far above its drawn size is minified with bilinear alone.
+    static let iconPixelRungs: [UInt32] = [64, 128, 192, 256]
+
+    /// The card grid's own box, for a surface `surface` points wide: the
+    /// screen inset and the panel padding come off both sides.
+    static func gridWidth(surface: Float) -> Float {
+        max(cardWidth, surface - (screenInset + padding) * 2)
+    }
+
+    /// Card edge for a grid box `width` points wide.
+    ///
+    /// Repeats `LazyGridNode.laidOutCellWidth` rather than reading it, because
+    /// an icon has to choose a decode size at *emit* — before Yoga runs, and
+    /// so before the grid knows its own cell. Must agree with it, for the same
+    /// reason `columns(width:)` must.
+    static func cardEdge(in width: Float) -> Float {
+        let fit = max(1, Int((width + spacing) / (cardWidth + spacing)))
+        let cols = Float(min(maxColumns, fit))
+        return max(1, (width - spacing * (cols - 1)) / cols)
+    }
+
+    /// Decode size for an icon in a grid box `width` points wide: what it will
+    /// actually be drawn at, rounded up to the next rung. 1080p lands on 128,
+    /// 1440p on 192, 4K on 256.
+    static func iconPixels(in width: Float) -> UInt32 {
+        let edge = cardEdge(in: width) * iconFraction * FontStore.scale.multiplier
+        return iconPixelRungs.first { Float($0) >= edge } ?? iconPixelRungs[iconPixelRungs.count - 1]
+    }
     /// Inset from the screen edge — the gap that leaves the desktop visible
     /// around the launcher instead of a hard full-bleed dim.
     static let screenInset: Float = 36
@@ -174,6 +211,15 @@ guard let editor = LavaClient.open(
     title: "Launcher", frame: .client, fillScreen: true
 ) else { exit(1) }
 BootTrace.mark("compositor connected")
+
+// Seeded here rather than left to the ruler, which only runs at paint and so
+// would be a frame late. A frame late is not a cosmetic problem: the decode
+// size is part of the cache key, so a first frame at the wrong rung decodes
+// every visible icon twice and holds both. `requestedSize` is the screen after
+// `fillScreen`, which is what the surface is about to be.
+LauncherLayout.iconPixels = Grid.iconPixels(
+    in: Grid.gridWidth(surface: LavaClient.requestedSize.width)
+)
 
 // Drained right after the first present, so this runs with a frame genuinely
 // on screen rather than merely built.

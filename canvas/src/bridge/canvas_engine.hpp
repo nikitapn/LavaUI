@@ -397,9 +397,10 @@ class Engine {
   ///
   /// `maxPixelSize` (0 = native) caps the longer edge, preserving aspect. Pass
   /// the size the image will actually be *drawn* at: a 300px cover rendered
-  /// into a 140pt box costs 4.5× the pixels for no visible gain, and — because
-  /// `ImageAtlas` refuses anything wider than one cell — is what pushes every
-  /// such image out of the atlas and onto its own descriptor binding.
+  /// into a 140pt box costs 4.5× the pixels for no visible gain. It also
+  /// decides how the image is stored — `ImageAtlas` picks the tightest of its
+  /// size classes that the decode fits, and refuses anything above the
+  /// largest, which leaves the caller holding a standalone texture.
   static DecodedImage decodeImage(const std::string &path,
                                   uint32_t maxPixelSize = 0);
 
