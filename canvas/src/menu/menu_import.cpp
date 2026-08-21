@@ -59,6 +59,19 @@ constexpr const char *kIntrospection = R"XML(
 /// underscore marks the accelerator letter and a doubled one is a literal.
 /// Drawing them raw is how a menu ends up reading "_File", which is the most
 /// obvious way to look like a menu written by somebody who did not finish.
+/// D-Bus timeouts, split by who is waiting. A synchronous call blocks the
+/// frame loop, so it gets the short one and the caller draws an empty
+/// dropdown if the application misses it; the asynchronous sweep blocks
+/// nobody and can afford to wait for a busy Electron process.
+constexpr int kSyncCallTimeoutMs = 1000;
+constexpr int kAsyncCallTimeoutMs = 2000;
+
+/// How many times `fillSubmenu` re-scans an open dropdown for submenus the
+/// application filled in with more empty submenus. Three is two more levels
+/// than any real menu needs and a hard stop against an application that
+/// answers every AboutToShow with another stub.
+constexpr int kMaxNestedFillPasses = 3;
+
 std::string withoutMnemonics(const char *raw)
 {
   if (raw == nullptr) return {};
@@ -102,19 +115,15 @@ struct MenuImportHost::Impl {
     return on;
   }
 
-  static uint32_t pidOfSender(GDBusConnection *conn, const gchar *sender) {
-    if (conn == nullptr || sender == nullptr || sender[0] == '\0') return 0;
-    GVariant *ret = g_dbus_connection_call_sync(
-        conn, "org.freedesktop.DBus", "/org/freedesktop/DBus",
-        "org.freedesktop.DBus", "GetConnectionUnixProcessID",
-        g_variant_new("(s)", sender), G_VARIANT_TYPE("(u)"),
-        G_DBUS_CALL_FLAGS_NONE, 1000, nullptr, nullptr);
-    if (ret == nullptr) return 0;
-    guint pid = 0;
-    g_variant_get(ret, "(u)", &pid);
-    g_variant_unref(ret);
-    return pid;
-  }
+  /// Is this `Impl` still alive?
+  ///
+  /// Asynchronous D-Bus replies land on the shared default main context,
+  /// which any `MenuImportHost` in the process may be iterating — the panel
+  /// polls the focused window's importer and the tray's, and either can
+  /// outlive the other. A raw `this` in the callback data would be a
+  /// use-after-free the first time a tray icon disappeared mid-call.
+  std::shared_ptr<Impl *> selfRef = std::make_shared<Impl *>(this);
+  ~Impl() { *selfRef = nullptr; }
 
   /// One row of the flattened menu — see the header for why it is flat.
   struct Item {
@@ -134,6 +143,81 @@ struct MenuImportHost::Impl {
   bool nameAcquired = false;
 
   std::vector<Registration> registrations;
+
+  /// One `g_bus_watch_name` per distinct registrant, so a registration dies
+  /// with the process that made it.
+  ///
+  /// Applications overwhelmingly do not call `UnregisterWindow` on the way
+  /// out; they exit. Without this the list only grows, and because Linux
+  /// recycles pids, `findByPid` eventually matches a dead client and points
+  /// `DbusmenuClient` at a bus name nobody owns — a menu bar that goes blank
+  /// for one window with no error anywhere.
+  struct NameWatch {
+    std::string service;
+    guint token = 0;
+  };
+  std::vector<NameWatch> nameWatches;
+  /// Names whose owner went away, drained in `poll`. Not acted on inside the
+  /// GLib callback, because the cleanup unwatches the very watch that is
+  /// running.
+  std::vector<std::string> vanishedNames;
+
+  static void onNameVanished(GDBusConnection * /*conn*/, const gchar *name,
+                             gpointer userData)
+  {
+    Impl *self = static_cast<Impl *>(userData);
+    if (name != nullptr) self->vanishedNames.emplace_back(name);
+  }
+
+  void watchService(const std::string &service)
+  {
+    if (service.empty() || conn == nullptr) return;
+    for (const NameWatch &w : nameWatches) {
+      if (w.service == service) return;
+    }
+    const guint token = g_bus_watch_name_on_connection(
+        conn, service.c_str(), G_BUS_NAME_WATCHER_FLAGS_NONE, nullptr,
+        onNameVanished, this, nullptr);
+    if (token != 0) nameWatches.push_back(NameWatch{service, token});
+  }
+
+  void dropService(const std::string &name)
+  {
+    registrations.erase(
+        std::remove_if(registrations.begin(), registrations.end(),
+                       [&](const Registration &e) { return e.service == name; }),
+        registrations.end());
+    for (size_t i = 0; i < nameWatches.size(); ++i) {
+      if (nameWatches[i].service != name) continue;
+      g_bus_unwatch_name(nameWatches[i].token);
+      nameWatches.erase(nameWatches.begin() + static_cast<ptrdiff_t>(i));
+      break;
+    }
+  }
+
+  void drainVanished()
+  {
+    if (vanishedNames.empty()) return;
+    std::vector<std::string> names;
+    names.swap(vanishedNames);
+    bool reopen = false;
+    for (const std::string &name : names) {
+      const bool wasShowing = openService == name;
+      dropService(name);
+      if (debug()) {
+        std::cerr << "canvas: appmenu " << name << " left the bus ("
+                  << registrations.size() << " live)\n";
+      }
+      if (wasShowing) {
+        closeClient();
+        reopen = true;
+      }
+    }
+    // Electron registers several window ids from one process, and a Qt
+    // application can re-register after a reconnect: the focused window may
+    // still have a menu behind the one that just died.
+    if (reopen) openClient();
+  }
 
   const Registration *findByWindow(uint32_t windowId) const
   {
@@ -156,13 +240,70 @@ struct MenuImportHost::Impl {
 
   void upsert(Registration r)
   {
+    watchService(r.service);
     for (auto &e : registrations) {
       if (e.windowId == r.windowId && e.service == r.service) {
+        // Keep a pid already resolved for this sender: the re-registration
+        // is the same process saying the same thing about a new path.
+        if (r.pid == 0) r.pid = e.pid;
         e = std::move(r);
         return;
       }
     }
     registrations.push_back(std::move(r));
+  }
+
+  /// `GetConnectionUnixProcessID`, off the frame loop.
+  ///
+  /// Asking synchronously inside the `RegisterWindow` handler cost up to a
+  /// second of stalled frames per registration, and applications register in
+  /// bursts at startup. The pid is only needed to *find* a menu later, so the
+  /// registration lands immediately and the pid catches up.
+  struct PidQuery {
+    std::shared_ptr<Impl *> owner;
+    uint32_t windowId = 0;
+    std::string service;
+  };
+
+  void resolvePid(uint32_t windowId, const std::string &service)
+  {
+    if (conn == nullptr || service.empty()) return;
+    auto *query = new PidQuery{selfRef, windowId, service};
+    g_dbus_connection_call(
+        conn, "org.freedesktop.DBus", "/org/freedesktop/DBus",
+        "org.freedesktop.DBus", "GetConnectionUnixProcessID",
+        g_variant_new("(s)", service.c_str()), G_VARIANT_TYPE("(u)"),
+        G_DBUS_CALL_FLAGS_NONE, kAsyncCallTimeoutMs, nullptr, onPidReply,
+        query);
+  }
+
+  static void onPidReply(GObject *source, GAsyncResult *res, gpointer userData)
+  {
+    std::unique_ptr<PidQuery> query(static_cast<PidQuery *>(userData));
+    GVariant *ret = g_dbus_connection_call_finish(G_DBUS_CONNECTION(source),
+                                                  res, nullptr);
+    if (ret == nullptr) return;
+    guint pid = 0;
+    g_variant_get(ret, "(u)", &pid);
+    g_variant_unref(ret);
+    Impl *self = *query->owner;
+    if (self == nullptr || pid == 0) return;
+
+    bool matched = false;
+    for (Registration &e : self->registrations) {
+      if (e.windowId == query->windowId && e.service == query->service) {
+        e.pid = pid;
+        matched = true;
+      }
+    }
+    // Unregistered, or the process died, while the reply was in flight.
+    if (!matched) return;
+    if (debug()) {
+      std::cerr << "canvas: appmenu pid id=" << query->windowId << " pid="
+                << pid << " " << query->service << "\n";
+    }
+    // The focused window may be one whose menu we could not find until now.
+    if (self->openService.empty() && pid == self->activePid) self->openClient();
   }
 
   void removeSenderWindow(uint32_t windowId, const char *sender)
@@ -188,10 +329,39 @@ struct MenuImportHost::Impl {
   std::string openPath;
   /// Registrar key the open client was resolved from, or 0 for kde-appmenu.
   uint32_t openWindowId = 0;
-  /// Last AboutToShow id, so a later GetLayout(0) from libdbusmenu's
-  /// LAYOUT_UPDATED does not replace a filled File menu with the empty stub
-  /// Chromium exports until asked.
+  /// The dropdown the user has open, or 0.
+  ///
+  /// A `LayoutUpdated` while a Chromium menu is open re-runs `fetchLayout`,
+  /// and `GetLayout(0)` hands back the same empty stub it always does — so
+  /// without re-splicing this one subtree the open dropdown blanks on the
+  /// frame the signal arrives. That is the flicker; the rest of the bar can
+  /// wait for the asynchronous sweep.
   int32_t lastShownId = 0;
+  /// Submenus that answered `AboutToShow` and were still empty. The
+  /// application means it, so stop asking — otherwise every rebuild queues
+  /// the same two round trips for a menu that will never have children.
+  std::vector<int32_t> emptyStubs;
+  /// Ids with an asynchronous fill in flight, so a burst of layout updates
+  /// does not queue the same subtree a dozen times over.
+  std::vector<int32_t> fillsInFlight;
+  /// The stub ids the last sweep asked about.
+  ///
+  /// A rebuild that turns up the same set is the same menu arriving again —
+  /// quite possibly *because* we asked, since an `AboutToShow` can itself
+  /// provoke the `LayoutUpdated` that triggers the rebuild. Sweeping it again
+  /// would be a loop with a D-Bus round trip in it. Dropdowns still fill on
+  /// open; this only decides whether to warm them in advance.
+  std::vector<int32_t> sweptStubs;
+  /// Bumped by `closeClient`. An asynchronous reply carrying a stale
+  /// generation belongs to a menu that is no longer on screen.
+  uint64_t generation = 0;
+  /// True for `startImportOnly` — the tray's importer.
+  ///
+  /// The Chromium workarounds are for a *window* menu bar. A tray menu's
+  /// top-level items are the entries themselves, so sweeping them the same
+  /// way would eagerly open every submenu the applet has: nm-applet would
+  /// scan for VPN connections because a panel redrew.
+  bool importOnly = false;
   std::vector<Item> items;
   bool dirty = false;
   uint64_t revision = 0;
@@ -212,28 +382,26 @@ struct MenuImportHost::Impl {
       // The *sender's* unique name, not anything it told us: an application
       // that could name its own service could name somebody else's, and the
       // bus already knows who called.
-      const uint32_t pid = pidOfSender(self->conn, sender);
       Registration reg;
       reg.windowId = windowId;
       reg.service = sender ? sender : "";
       reg.objectPath = path ? path : "";
-      reg.pid = pid;
-      self->upsert(std::move(reg));
-      std::cerr << "canvas: appmenu RegisterWindow id=" << windowId
-                << " pid=" << pid << " " << (sender ? sender : "?") << " "
-                << (path ? path : "?") << " (" << self->registrations.size()
-                << " live)\n";
+      self->upsert(reg);
+      if (debug()) {
+        std::cerr << "canvas: appmenu RegisterWindow id=" << windowId << " "
+                  << (sender ? sender : "?") << " " << (path ? path : "?")
+                  << " (" << self->registrations.size() << " live)\n";
+      }
       self->emitRegistered(windowId, sender ? sender : "", path ? path : "");
       // The window this arrives for is often the one already focused: an
       // application registers its menu a moment after its window appears, and
       // by then the panel has long since been told what is active.
-      //
       // Qt5 on Wayland registers as id 1, not the compositor surface id, so
-      // also match the sender's pid against the focused client.
-      if (windowId == self->active ||
-          (pid != 0 && pid == self->activePid)) {
-        self->openClient();
-      }
+      // finding its menu at all means matching the sender's pid — which is a
+      // round trip away. `onPidReply` opens the client if this turns out to
+      // be the focused process.
+      self->resolvePid(windowId, reg.service);
+      if (windowId == self->active) self->openClient();
       g_dbus_method_invocation_return_value(invocation, nullptr);
       return;
     }
@@ -244,9 +412,11 @@ struct MenuImportHost::Impl {
       const bool showing =
           self->openWindowId == windowId && self->openService == name;
       self->removeSenderWindow(windowId, sender);
-      std::cerr << "canvas: appmenu UnregisterWindow id=" << windowId
-                << " " << (sender ? sender : "?") << " ("
-                << self->registrations.size() << " live)\n";
+      if (debug()) {
+        std::cerr << "canvas: appmenu UnregisterWindow id=" << windowId << " "
+                  << (sender ? sender : "?") << " ("
+                  << self->registrations.size() << " live)\n";
+      }
       self->emitUnregistered(windowId);
       if (showing) self->closeClient();
       g_dbus_method_invocation_return_value(invocation, nullptr);
@@ -316,6 +486,11 @@ struct MenuImportHost::Impl {
     openPath.clear();
     openWindowId = 0;
     lastShownId = 0;
+    emptyStubs.clear();
+    fillsInFlight.clear();
+    sweptStubs.clear();
+    // Anything still in flight is for the menu that just went away.
+    ++generation;
     dirty = false;
     ++revision;
   }
@@ -347,17 +522,20 @@ struct MenuImportHost::Impl {
       }
     }
 
-    std::cerr << "canvas: appmenu open id=" << active << " pid=" << activePid
-              << " via " << how;
-    if (service.empty()) {
-      std::cerr << " (no menu; " << registrations.size() << " live)";
-      for (const auto &r : registrations) {
-        std::cerr << " [id=" << r.windowId << " pid=" << r.pid << "]";
+    if (debug()) {
+      std::cerr << "canvas: appmenu open id=" << active << " pid=" << activePid
+                << " via " << how;
+      if (service.empty()) {
+        std::cerr << " (no menu; " << registrations.size() << " live)";
+        for (const auto &r : registrations) {
+          std::cerr << " [id=" << r.windowId << " pid=" << r.pid << "]";
+        }
+      } else {
+        std::cerr << " " << service << " " << path;
       }
       std::cerr << "\n";
-      return;
     }
-    std::cerr << " " << service << " " << path << "\n";
+    if (service.empty()) return;
 
     // Kept for `mergeToggleProperties`, which has to ask the same object for
     // what the library did not.
@@ -393,7 +571,7 @@ struct MenuImportHost::Impl {
     GVariant *ret = g_dbus_connection_call_sync(
         conn, openService.c_str(), openPath.c_str(), "com.canonical.dbusmenu",
         "AboutToShow", g_variant_new("(i)", id), G_VARIANT_TYPE("(b)"),
-        G_DBUS_CALL_FLAGS_NONE, 2000, nullptr, &err);
+        G_DBUS_CALL_FLAGS_NONE, kSyncCallTimeoutMs, nullptr, &err);
     if (ret == nullptr) {
       if (debug() && err != nullptr) {
         std::cerr << "canvas: appmenu AboutToShow(" << id << ") "
@@ -489,8 +667,8 @@ struct MenuImportHost::Impl {
         conn, openService.c_str(), openPath.c_str(), "com.canonical.dbusmenu",
         "GetLayout",
         g_variant_new("(ii@as)", parentId, -1, g_variant_new_strv(nullptr, 0)),
-        G_VARIANT_TYPE("(u(ia{sv}av))"), G_DBUS_CALL_FLAGS_NONE, 2000, nullptr,
-        &err);
+        G_VARIANT_TYPE("(u(ia{sv}av))"), G_DBUS_CALL_FLAGS_NONE,
+        kSyncCallTimeoutMs, nullptr, &err);
     if (ret == nullptr) {
       if (err) g_error_free(err);
       return nullptr;
@@ -502,15 +680,41 @@ struct MenuImportHost::Impl {
     return layout;
   }
 
+  /// Drop everything below `parentId`, keeping `parentId` itself.
+  ///
+  /// Two passes on purpose. Walking the parent chain from inside a
+  /// `remove_if` predicate reads elements the algorithm has already moved
+  /// from, whose values are unspecified — it happens to work only because
+  /// `Item`'s ids are ints that survive a move. Marking against a stable
+  /// vector first is both correct and one pass instead of one per item.
   void removeDescendants(int32_t parentId)
   {
-    items.erase(std::remove_if(items.begin(), items.end(),
-                               [&](const Item &it) {
-                                 return it.id != parentId &&
-                                        (it.parent == parentId ||
-                                         under(it.parent, parentId));
-                               }),
-                items.end());
+    if (items.empty()) return;
+    std::vector<char> doomed(items.size(), 0);
+    std::vector<int32_t> frontier{parentId};
+    while (!frontier.empty()) {
+      const int32_t parent = frontier.back();
+      frontier.pop_back();
+      for (size_t i = 0; i < items.size(); ++i) {
+        // `doomed` doubles as the visited set, so an application that hands
+        // back a parent cycle costs one pass rather than an infinite loop.
+        if (doomed[i] != 0 || items[i].parent != parent) continue;
+        if (items[i].id == parentId) continue;
+        doomed[i] = 1;
+        frontier.push_back(items[i].id);
+      }
+    }
+    size_t keep = 0;
+    for (size_t i = 0; i < items.size(); ++i) {
+      if (doomed[i] != 0) continue;
+      // Guarded: `items[i] = std::move(items[i])` is self-move-assignment,
+      // which leaves a `std::string` holding an unspecified value — in
+      // practice an empty one. Every row ahead of the first removed child
+      // would lose its label, which for a top-level row is its title.
+      if (keep != i) items[keep] = std::move(items[i]);
+      ++keep;
+    }
+    items.resize(keep);
   }
 
   /// After AboutToShow(id), GetLayout(id) has the children; GetLayout(0) may
@@ -533,7 +737,10 @@ struct MenuImportHost::Impl {
     items.clear();
     parseLayoutNode(layout, -1, true);
     g_variant_unref(layout);
-    mergeToggleProperties();
+    // No `mergeToggleProperties` here: the empty property filter above means
+    // "every property", so `toggle-type` and `toggle-state` came with the
+    // layout. Asking again would be a second synchronous round trip per
+    // rebuild for something already in hand.
     return true;
   }
 
@@ -545,9 +752,16 @@ struct MenuImportHost::Impl {
     return false;
   }
 
+  /// Is `id` somewhere below `ancestor`?
+  ///
+  /// Bounded by the item count. `items` can hold duplicate ids — a splice
+  /// inserts whatever the application sent, and Chromium reuses ids across
+  /// layout revisions — so the first-match lookup below can be redirected
+  /// into an a→b→a cycle. A self-loop check is not enough; a menu that made
+  /// one would hang the frame loop with no way out.
   bool under(int32_t id, int32_t ancestor) const
   {
-    while (id != -1) {
+    for (size_t step = 0; step <= items.size() && id != -1; ++step) {
       if (id == ancestor) return true;
       int32_t next = -1;
       bool found = false;
@@ -573,28 +787,135 @@ struct MenuImportHost::Impl {
     std::cerr << "\n";
   }
 
-  /// Chromium only fills one stub at a time. After AboutToShow(File), Go/Run
-  /// are still empty in GetLayout(0). Fill every empty top-level submenu so
-  /// the titles on the right of the bar are not dead until someone happens
-  /// to open File first.
-  void fillStubTitles()
+  // ─── Asynchronous stub filling ───────────────────────────────────────────
+  //
+  // Chromium only fills one stub at a time: after AboutToShow(File), Go and
+  // Run are still empty in GetLayout(0). Filling them all is what keeps the
+  // right-hand titles from opening onto nothing — but doing it synchronously
+  // meant up to sixteen AboutToShow/GetLayout pairs on the frame loop for
+  // *every* layout update an application sent, and Electron sends them for
+  // ordinary state changes. Sixty-odd seconds of stalled compositor, worst
+  // case, to fetch items nobody is looking at yet.
+  //
+  // The bar has everything it needs to draw without any of this: GetLayout(0)
+  // carries the titles. So the sweep goes out asynchronously and the children
+  // land a few milliseconds later, on the same thread, from `poll`.
+
+  /// One in-flight fill. Copied into the second call so the reply knows what
+  /// it was for even if the menu changed underneath.
+  struct Fill {
+    std::shared_ptr<Impl *> owner;
+    uint64_t generation = 0;
+    int32_t id = 0;
+    std::string service;
+    std::string path;
+  };
+
+  void queueFill(int32_t id)
   {
-    std::vector<int32_t> skip;
-    for (int n = 0; n < 16; ++n) {
-      int32_t stub = -1;
-      for (const Item &it : items) {
-        if (it.parent != -1 || !it.submenu || it.separator || hasChild(it.id)) {
-          continue;
-        }
-        if (std::find(skip.begin(), skip.end(), it.id) != skip.end()) continue;
-        stub = it.id;
+    if (conn == nullptr || openService.empty() || openPath.empty()) return;
+    if (std::find(fillsInFlight.begin(), fillsInFlight.end(), id) !=
+        fillsInFlight.end()) {
+      return;
+    }
+    fillsInFlight.push_back(id);
+    auto *fill = new Fill{selfRef, generation, id, openService, openPath};
+    g_dbus_connection_call(
+        conn, fill->service.c_str(), fill->path.c_str(),
+        "com.canonical.dbusmenu", "AboutToShow", g_variant_new("(i)", id),
+        G_VARIANT_TYPE("(b)"), G_DBUS_CALL_FLAGS_NONE, kAsyncCallTimeoutMs,
+        nullptr, onFillShown, fill);
+  }
+
+  static void onFillShown(GObject *source, GAsyncResult *res, gpointer userData)
+  {
+    std::unique_ptr<Fill> fill(static_cast<Fill *>(userData));
+    GVariant *ret = g_dbus_connection_call_finish(G_DBUS_CONNECTION(source),
+                                                  res, nullptr);
+    // The boolean is `false` on Chromium whether or not anything changed —
+    // that is the whole reason this class asks for the layout itself.
+    if (ret != nullptr) g_variant_unref(ret);
+    Impl *self = *fill->owner;
+    if (self == nullptr || self->conn == nullptr) return;
+    if (self->generation != fill->generation) {
+      return;  // A different menu is on screen now.
+    }
+    auto *next = new Fill(*fill);
+    g_dbus_connection_call(
+        self->conn, next->service.c_str(), next->path.c_str(),
+        "com.canonical.dbusmenu", "GetLayout",
+        g_variant_new("(ii@as)", next->id, -1, g_variant_new_strv(nullptr, 0)),
+        G_VARIANT_TYPE("(u(ia{sv}av))"), G_DBUS_CALL_FLAGS_NONE,
+        kAsyncCallTimeoutMs, nullptr, onFillLayout, next);
+  }
+
+  static void onFillLayout(GObject *source, GAsyncResult *res,
+                           gpointer userData)
+  {
+    std::unique_ptr<Fill> fill(static_cast<Fill *>(userData));
+    GVariant *ret = g_dbus_connection_call_finish(G_DBUS_CONNECTION(source),
+                                                  res, nullptr);
+    Impl *self = *fill->owner;
+    if (self == nullptr || self->generation != fill->generation) {
+      if (ret != nullptr) g_variant_unref(ret);
+      return;
+    }
+    self->fillsInFlight.erase(
+        std::remove(self->fillsInFlight.begin(), self->fillsInFlight.end(),
+                    fill->id),
+        self->fillsInFlight.end());
+    if (ret == nullptr) return;
+
+    GVariant *layout = nullptr;
+    guint32 unusedRev = 0;
+    g_variant_get(ret, "(u@(ia{sv}av))", &unusedRev, &layout);
+    g_variant_unref(ret);
+    if (layout == nullptr) return;
+    // The menu may have been rebuilt while this was in flight. Splicing under
+    // an id that is no longer there would file the children under a parent
+    // nothing reaches, and they would sit in `items` until the next rebuild.
+    bool parentExists = false;
+    for (const Item &it : self->items) {
+      if (it.id == fill->id) {
+        parentExists = true;
         break;
       }
-      if (stub < 0) break;
-      aboutToShowSync(stub);
-      spliceSubtree(stub);
-      if (!hasChild(stub)) skip.push_back(stub);
     }
+    if (!parentExists) {
+      g_variant_unref(layout);
+      return;
+    }
+    self->removeDescendants(fill->id);
+    self->parseLayoutNode(layout, fill->id, true);
+    g_variant_unref(layout);
+
+    if (self->hasChild(fill->id)) {
+      ++self->revision;
+      if (debug()) {
+        std::cerr << "canvas: appmenu filled id=" << fill->id << "\n";
+      }
+    } else {
+      self->emptyStubs.push_back(fill->id);
+    }
+  }
+
+  /// Warm every top-level submenu the application left empty.
+  void queueStubFills()
+  {
+    if (importOnly) return;
+    std::vector<int32_t> stubs;
+    for (const Item &it : items) {
+      if (it.parent != -1 || !it.submenu || it.separator) continue;
+      if (hasChild(it.id)) continue;
+      if (std::find(emptyStubs.begin(), emptyStubs.end(), it.id) !=
+          emptyStubs.end()) {
+        continue;
+      }
+      stubs.push_back(it.id);
+    }
+    if (stubs == sweptStubs) return;
+    sweptStubs = stubs;
+    for (int32_t id : stubs) queueFill(id);
   }
 
   void rebuild()
@@ -602,7 +923,15 @@ struct MenuImportHost::Impl {
     dirty = false;
     ++revision;
     if (fetchLayout()) {
-      fillStubTitles();
+      // The one subtree that cannot wait for the asynchronous sweep: the
+      // dropdown the user is looking at. `GetLayout(0)` just replaced its
+      // children with the empty stub Chromium always exports, and the next
+      // frame draws whatever is in `items`.
+      if (lastShownId != 0 && !hasChild(lastShownId)) {
+        aboutToShowSync(lastShownId);
+        spliceSubtree(lastShownId);
+      }
+      queueStubFills();
       if (debug()) logLayout();
       return;
     }
@@ -614,36 +943,69 @@ struct MenuImportHost::Impl {
       return;
     }
     append(root, -1);
+    // Only on this path. `fetchLayout` asks for the layout with an empty
+    // property filter, which by the DBusMenu spec means *all* properties, so
+    // the toggle state is already parsed; libdbusmenu's fixed property list
+    // is what leaves it missing.
     mergeToggleProperties();
-    if (debug() || items.empty()) logLayout();
+    if (debug()) logLayout();
   }
 
   /// Fill a submenu Chromium left empty, then any nested empty submenus
   /// under it so "Open Recent" is not a dead header.
+  ///
+  /// Synchronous, unlike the bar sweep, and deliberately: this runs when the
+  /// user opens a dropdown, and the very next frame draws it. The cost is
+  /// bounded by the depth of the one subtree being opened — the siblings are
+  /// the asynchronous sweep's job, and asking for them here as well was the
+  /// same work done twice.
   void fillSubmenu(int32_t itemId)
   {
     lastShownId = itemId;
     aboutToShowSync(itemId);
     spliceSubtree(itemId);
-    fillStubTitles();
-    for (int pass = 0; pass < 3; ++pass) {
-      std::vector<int32_t> pending;
-      for (const Item &it : items) {
-        if (!it.submenu || hasChild(it.id)) continue;
-        if (it.id == itemId || under(it.parent, itemId)) pending.push_back(it.id);
+
+    // A tray menu's top-level items *are* its entries, so walking down every
+    // empty one would open submenus the user never pointed at.
+    if (!importOnly) {
+      int pass = 0;
+      for (; pass < kMaxNestedFillPasses; ++pass) {
+        std::vector<int32_t> pending;
+        for (const Item &it : items) {
+          if (!it.submenu || hasChild(it.id)) continue;
+          if (std::find(emptyStubs.begin(), emptyStubs.end(), it.id) !=
+              emptyStubs.end()) {
+            continue;
+          }
+          if (it.id == itemId || under(it.parent, itemId)) {
+            pending.push_back(it.id);
+          }
+        }
+        if (pending.empty()) break;
+        for (int32_t id : pending) {
+          aboutToShowSync(id);
+          spliceSubtree(id);
+          // Asked and still nothing: remember, so the next pass and the next
+          // rebuild do not ask again.
+          if (!hasChild(id)) emptyStubs.push_back(id);
+        }
       }
-      if (pending.empty()) break;
-      for (int32_t id : pending) {
-        aboutToShowSync(id);
-        spliceSubtree(id);
+      if (debug() && pass == kMaxNestedFillPasses) {
+        std::cerr << "canvas: appmenu fill id=" << itemId << " hit the "
+                  << kMaxNestedFillPasses << "-pass limit; deeper submenus "
+                     "fill when opened\n";
       }
     }
-    mergeToggleProperties();
-    dirty = false;
+
+    // No `dirty = false` here. This filled one subtree; it did not answer a
+    // pending layout update, and swallowing one would leave the rest of the
+    // menu showing what the application replaced.
     ++revision;
-    std::cerr << "canvas: appmenu fill id=" << itemId
-              << " children=" << (hasChild(itemId) ? "yes" : "NO") << " -> ";
-    logLayout();
+    if (debug()) {
+      std::cerr << "canvas: appmenu fill id=" << itemId
+                << " children=" << (hasChild(itemId) ? "yes" : "no") << " -> ";
+      logLayout();
+    }
   }
 
   void sendEvent(int32_t itemId, const char *event)
@@ -824,11 +1186,6 @@ struct MenuImportHost::Impl {
     return nullptr;
   }
 
-  /// Somewhere for libdbusmenu to call back into. Nothing here wants the
-  /// reply — the layout update that follows is the answer — but the client
-  /// implementation is not obliged to tolerate a null one, and a crash inside
-  /// a library is a poor way to find out which way it went.
-  static void onAboutToShown(DbusmenuMenuitem * /*mi*/, gpointer /*data*/) {}
 };
 
 MenuImportHost::MenuImportHost() : impl_(std::make_unique<Impl>()) {}
@@ -837,6 +1194,8 @@ MenuImportHost::~MenuImportHost()
 {
   if (!impl_) return;
   impl_->closeClient();
+  for (const auto &watch : impl_->nameWatches) g_bus_unwatch_name(watch.token);
+  impl_->nameWatches.clear();
   if (impl_->objectToken != 0 && impl_->conn != nullptr) {
     g_dbus_connection_unregister_object(impl_->conn, impl_->objectToken);
   }
@@ -846,10 +1205,15 @@ MenuImportHost::~MenuImportHost()
 
 bool MenuImportHost::startImportOnly()
 {
-  // Nothing to do but say yes. `DbusmenuClient` opens its own connection to
-  // the service it is pointed at, so an importer that serves no registrar
-  // needs neither a bus handle of its own nor a name — and claiming one would
-  // take it from the panel's real registrar, which is the same process.
+  // No name: claiming one would take it from the panel's real registrar,
+  // which is the same process. A connection, though, yes — `fetchLayout` and
+  // `aboutToShow` go out on it, and leaving it to be acquired lazily by
+  // whichever call happened to need it first made which code path a tray
+  // menu took depend on how far it had got.
+  impl_->importOnly = true;
+  if (impl_->conn == nullptr) {
+    impl_->conn = g_bus_get_sync(G_BUS_TYPE_SESSION, nullptr, nullptr);
+  }
   return true;
 }
 
@@ -958,6 +1322,9 @@ void MenuImportHost::poll()
   for (int i = 0; i < 64; ++i) {
     if (!g_main_context_iteration(nullptr, FALSE)) break;
   }
+  // After the iteration, not inside a GLib callback: the cleanup unwatches
+  // the name whose watch is what called us.
+  impl_->drainVanished();
   if (impl_->dirty) impl_->rebuild();
 }
 

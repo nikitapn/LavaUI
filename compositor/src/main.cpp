@@ -3460,11 +3460,12 @@ class SurfaceRegistry : public lava::CompositorHost {
     const uint32_t registrarId = menuWindowId(surface);
     const uint32_t pid =
         surface.window != nullptr ? surface.window->clientPid() : 0;
-    wlr_log(WLR_INFO,
+    wlr_log(WLR_DEBUG,
             "menu: focus surface=%u registrar=%u pid=%u kde=%s %s title='%s'",
             surface.id, registrarId, pid, service.empty() ? "-" : service.c_str(),
             path.empty() ? "-" : path.c_str(), surface.title.c_str());
-    control_->postActiveWindow(registrarId, surface.title, service, path, pid);
+    control_->postActiveWindow(surface.id, surface.title, service, path, pid,
+                               registrarId);
   }
 
   /// A surface's AppMenu address changed. If it is the focused window, re-post
@@ -4101,18 +4102,19 @@ class SurfaceRegistry : public lava::CompositorHost {
 
   void activeWindow(uint32_t &outSurfaceId, std::string &outTitle,
                     std::string &outMenuService,
-                    std::string &outMenuObjectPath,
-                    uint32_t &outPid) const override {
+                    std::string &outMenuObjectPath, uint32_t &outPid,
+                    uint32_t &outRegistrarId) const override {
     outSurfaceId = focused_;
     outTitle.clear();
     outMenuService.clear();
     outMenuObjectPath.clear();
     outPid = 0;
+    outRegistrarId = focused_;
     for (const auto &surface : surfaces_) {
       if (surface->id == focused_) {
         outTitle = surface->title;
         menuAddress(*surface, outMenuService, outMenuObjectPath);
-        outSurfaceId = menuWindowId(*surface);
+        outRegistrarId = menuWindowId(*surface);
         outPid =
             surface->window != nullptr ? surface->window->clientPid() : 0;
         return;

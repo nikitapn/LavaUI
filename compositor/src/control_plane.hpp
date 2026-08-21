@@ -329,11 +329,13 @@ struct CompositorHost {
   /// `outMenuService` / `outMenuObjectPath` are the KDE Wayland AppMenu
   /// address for that window's dbusmenu export, or empty when the focused
   /// surface never sent one (Lava clients use the registrar + surface id
-  /// instead). `outPid` is the focused client's Unix pid, or 0.
+  /// instead). `outPid` is the focused client's Unix pid, or 0, and
+  /// `outRegistrarId` the key its menu is registered under — the same number
+  /// as `outSurfaceId` except for X11 clients, which use their XID.
   virtual void activeWindow(uint32_t &outSurfaceId, std::string &outTitle,
                             std::string &outMenuService,
-                            std::string &outMenuObjectPath,
-                            uint32_t &outPid) const = 0;
+                            std::string &outMenuObjectPath, uint32_t &outPid,
+                            uint32_t &outRegistrarId) const = 0;
 
   /// "A frame is committed on this surface" — draw it.
   virtual void present(uint32_t surfaceId) = 0;
@@ -433,7 +435,8 @@ class ControlPlane {
   virtual void postActiveWindow(uint32_t surfaceId, const std::string &title,
                                 const std::string &menuService = {},
                                 const std::string &menuObjectPath = {},
-                                uint32_t pid = 0) = 0;
+                                uint32_t pid = 0,
+                                uint32_t registrarId = 0) = 0;
 
   /// "The system theme changed" — to every Lava client watching.
   virtual void postSystemTheme() = 0;

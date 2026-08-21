@@ -318,16 +318,50 @@ compositor Lava uses three paths:
    registrar entry by that pid when the window id misses. Electron (Teams,
    VSCode) does the same with 1, 2, 3, so the registrar keeps every
    registration rather than a map keyed only by that id — otherwise focusing
-   Teams after VSCode finds no pid and draws no menu. `LAVA_MENU_DEBUG=1`
-   logs the registrar calls, the lookup (`kde-appmenu` / `registrar-id` /
-   `registrar-pid` / `none`), and imported top-level titles.
+   Teams after VSCode finds no pid and draws no menu.
+
+`ActiveWindow` carries the registrar key as its own field, `registrarId`,
+next to the compositor `surfaceId`. They are the same number for everything
+except X11 clients; keeping them apart is what stops a panel correlating
+focus against a window list from silently matching an XID against a surface
+id, in a `u32` namespace where the two can collide.
+
+Because collisions are the normal case (`1`, `2`, `3`), the registrar keeps a
+list rather than a map — and a list needs a way to shrink. Applications
+essentially never call `UnregisterWindow`; they exit. Each distinct registrant
+is therefore watched with `g_bus_watch_name`, and its registrations go when its
+bus name does. Without that the list only grows and, since Linux recycles pids,
+the pid fallback eventually matches a dead client and the bar goes blank for
+one window with nothing in any log.
+
+`LAVA_MENU_DEBUG=1` logs the registrar calls, the lookup (`kde-appmenu` /
+`registrar-id` / `registrar-pid` / `none`), pid resolutions, names leaving the
+bus, and imported top-level titles. The panel and the compositor read the same
+switch.
+
+### Chromium's empty stubs
 
 Chromium (VSCode, Teams, and Chrome's own bar) exports File/Edit with
 `children-display=submenu` and no children. `AboutToShow` fills them and
-returns `needUpdate=false`, so libdbusmenu never refetches. Opening a title
-therefore AboutToShows, GetLayouts the object itself, and rebuilds the
-dropdown before the first frame that shows it. Nested empty submenus under
-that title get the same treatment so "Open Recent" is not a dead header.
+returns `needUpdate=false`, so libdbusmenu never refetches. Two paths fill
+them, split by who is waiting:
+
+- **The dropdown being opened** — synchronously, in `aboutToShow`: AboutToShow,
+  GetLayout the object directly, splice, and rebuild before the first frame
+  that shows it. Nested empty submenus under that title get the same treatment
+  so "Open Recent" is not a dead header. Bounded to three levels, since an
+  application that answers every AboutToShow with another stub would otherwise
+  walk forever.
+- **The rest of the bar** — asynchronously, from `poll`. The titles are already
+  in `GetLayout(0)`, so nothing on screen is waiting for the children; a
+  submenu that answers and is still empty is remembered and not asked again.
+
+The split is the point. Chromium fills one stub at a time, so covering the bar
+means a round trip per title, and doing that synchronously on every
+`LayoutUpdated` — which Electron sends for ordinary state changes — put up to a
+dozen blocking D-Bus calls on the compositor's frame loop. The one subtree that
+genuinely cannot wait is the open dropdown, which `GetLayout(0)` has just
+emptied again; that one is re-spliced in the rebuild.
 
 **Under the lava compositor that is now solved**, and the answer was smaller
 than the archaeology suggested: the registrar's key is a `u` on the wire and

@@ -406,10 +406,9 @@ message ActiveWindow {
   /// 0 when nothing is focused — the desktop, or the last window closing.
   /// Panels should read it as "show nothing" rather than "keep the last".
   ///
-  /// This is the AppMenu registrar key, not always `WindowInfo.surfaceId`.
-  /// Lava clients register under the compositor surface id; X11 / Xwayland
-  /// clients call `RegisterWindow` with their XID, and looking the menu up
-  /// under the compositor id is how those menus never appear.
+  /// The compositor surface id, and the same number `WindowInfo.surfaceId`
+  /// carries. Menus are looked up under `registrarId`, which is not always
+  /// this.
   surfaceId: u32;
   /// What the window calls itself, so a panel showing a title does not need a
   /// second call to learn it.
@@ -427,6 +426,15 @@ message ActiveWindow {
   /// surface id; the panel then matches the registrar entry by this pid.
   /// 0 when unknown (Lava clients, or a window with no client).
   pid: u32;
+  /// The key this window's menu is registered under on the AppMenu registrar.
+  ///
+  /// Equal to `surfaceId` for Lava clients and native Wayland ones, which is
+  /// what they pass to `RegisterWindow`. X11 / Xwayland clients pass their
+  /// XID instead — a different number, in a namespace that can collide with
+  /// compositor surface ids — and looking the menu up under `surfaceId` is
+  /// how those menus never appeared. A panel that wants the *window* wants
+  /// `surfaceId`; only the registrar lookup wants this.
+  registrarId: u32;
 }
 
 /// One window, as a dock or a task list has to see it.

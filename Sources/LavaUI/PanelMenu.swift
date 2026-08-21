@@ -52,29 +52,34 @@ public final class PanelMenu {
 
     /// Show this window's menu. Cheap to call with an unchanged address.
     ///
+    /// `registrarId` is what the window passed to `RegisterWindow` — the
+    /// compositor surface id for Wayland clients, an XID for X11 ones, and
+    /// `ActiveWindow.registrarId` either way. Not the surface id, which for
+    /// an Xwayland window is a number its toolkit has never seen.
+    ///
     /// `menuService` / `menuObjectPath` are the KDE AppMenu DBus coordinates
-    /// for foreign Wayland clients; empty uses the registrar + surface id,
+    /// for foreign Wayland clients; empty uses the registrar + `registrarId`,
     /// then a registrar entry matching `pid`.
     public func setActiveWindow(
-        _ surfaceId: UInt32,
+        _ registrarId: UInt32,
         menuService: String = "",
         menuObjectPath: String = "",
         pid: UInt32 = 0
     ) {
         guard isServing else { return }
-        if surfaceId == lastWindow, pid == lastPid,
+        if registrarId == lastWindow, pid == lastPid,
            menuService == lastMenuService,
            menuObjectPath == lastMenuObjectPath
         {
             return
         }
-        lastWindow = surfaceId
+        lastWindow = registrarId
         lastPid = pid
         lastMenuService = menuService
         lastMenuObjectPath = menuObjectPath
         editor.menuImportSetActiveWindow(
-            surfaceId, menuService: menuService, menuObjectPath: menuObjectPath,
-            pid: pid
+            registrarId, menuService: menuService,
+            menuObjectPath: menuObjectPath, pid: pid
         )
     }
 
@@ -110,11 +115,17 @@ public final class PanelMenu {
     /// legitimately empty — and stay that way until the user gives up.
     public func aboutToShow(_ id: MenuID) {
         guard let itemId = Int32(id.raw) else { return }
+        // Fills the subtree synchronously: Chromium fills it inside
+        // AboutToShow and never says so, so the importer asks for the layout
+        // itself before returning. The model has to be rebuilt now — waiting
+        // for the next poll leaves the dropdown empty on the frame that opens
+        // it.
+        //
+        // No `menuImportPoll` in between. Pumping GLib here would let a
+        // layout update that arrived in the meantime run a rebuild on top of
+        // the subtree just fetched, and the dropdown would open blank about
+        // one time in ten.
         editor.menuImportAboutToShow(itemId)
-        // Chromium fills the submenu inside AboutToShow and we GetLayout
-        // before returning, so the model has to be rebuilt now — waiting for
-        // the next poll leaves the dropdown empty on the frame that opens it.
-        editor.menuImportPoll()
         let current = editor.menuImportRevision
         guard current != revision else { return }
         revision = current

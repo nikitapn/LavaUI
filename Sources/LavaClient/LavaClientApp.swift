@@ -658,18 +658,41 @@ public enum LavaClient {
         }
     }
 
+    /// Which window has focus, and everything a panel needs to show its menu.
+    ///
+    /// A struct rather than a handful of positional arguments because three of
+    /// the five are `UInt32` and two of *those* are window ids that are equal
+    /// for most clients and different for exactly the ones that were broken —
+    /// a swap at a call site would be invisible until someone ran glogg.
+    public struct FocusedWindow: Sendable {
+        /// The compositor surface id. 0 when nothing is focused.
+        public var surfaceId: UInt32 = 0
+        /// What the window calls itself.
+        public var title: String = ""
+        /// DBus service owning the window's dbusmenu, from the KDE Wayland
+        /// AppMenu protocol. Empty unless the client used it.
+        public var menuService: String = ""
+        /// Object path to go with `menuService`.
+        public var menuObjectPath: String = ""
+        /// The client's Unix pid, or 0. The only way to find a Qt5-on-Wayland
+        /// menu, which registers under a window id of its own invention.
+        public var pid: UInt32 = 0
+        /// The key the window's menu is registered under. `surfaceId` for
+        /// Wayland clients; an XID for X11 ones.
+        public var registrarId: UInt32 = 0
+    }
+
     /// The focused window, now and whenever it changes.
     ///
     /// For a panel: a global menu shows the *active* window's menu, and the
     /// compositor is the only process that knows which that is. `handler` runs
-    /// on the frame loop — the same place a view's state may be touched — with
-    /// the surface id (0 for none) and the window's title.
+    /// on the frame loop — the same place a view's state may be touched.
     ///
     /// Call after `run` has a surface. The first call back is the state at
     /// subscription rather than the next change, so a panel that started last
     /// is not blank until the user clicks something.
     public static func onActiveWindow(
-        _ handler: @escaping @Sendable (UInt32, String, String, String, UInt32) -> Void
+        _ handler: @escaping @Sendable (FocusedWindow) -> Void
     ) {
         guard let compositor = Self.compositor else { return }
         let stream: NPRPCBidiStream<FocusAck, ActiveWindow>
@@ -685,13 +708,15 @@ public enum LavaClient {
             do {
                 for try await window in stream.reader {
                     let id = window.surfaceId
-                    let title = window.title
-                    let menuService = window.menuService
-                    let menuObjectPath = window.menuObjectPath
-                    let pid = window.pid
-                    MainQueue.async {
-                        handler(id, title, menuService, menuObjectPath, pid)
-                    }
+                    let focused = FocusedWindow(
+                        surfaceId: id,
+                        title: window.title,
+                        menuService: window.menuService,
+                        menuObjectPath: window.menuObjectPath,
+                        pid: window.pid,
+                        registrarId: window.registrarId
+                    )
+                    MainQueue.async { handler(focused) }
                     // Cheap, and the only thing that keeps the stream's flow
                     // control moving — see `FocusAck`.
                     try? await stream.writer.write(FocusAck(surfaceId: id))

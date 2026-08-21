@@ -627,8 +627,9 @@ public final class Editor: @unchecked Sendable {
     ///
     /// `menuService` / `menuObjectPath` come from the focused window's KDE
     /// Wayland AppMenu address when the compositor has one; empty falls back
-    /// to the AppMenu registrar under `windowId` (Lava clients), then to a
-    /// registrar entry whose DBus sender has `pid` (Qt5 Wayland).
+    /// to the AppMenu registrar under `windowId` — `ActiveWindow.registrarId`,
+    /// which is the surface id for Wayland clients and an XID for X11 ones —
+    /// then to a registrar entry whose DBus sender has `pid` (Qt5 Wayland).
     public func menuImportSetActiveWindow(
         _ windowId: UInt32,
         menuService: String = "",

@@ -93,6 +93,16 @@ enum SystemDialog: Equatable {
     case logout
 }
 
+/// `LAVA_MENU_DEBUG=1`, the same switch the importer reads. Global menus fail
+/// silently by nature — a window that exports nothing and one whose menu we
+/// failed to find look identical from the outside — so the tracing has to be
+/// there, and has to be off.
+let menuDebug: Bool = {
+    guard let value = ProcessInfo.processInfo.environment["LAVA_MENU_DEBUG"]
+    else { return false }
+    return !value.isEmpty && value != "0"
+}()
+
 @Observable
 final class MenuSession {
     /// What the focused window is called. Shown when it has no menu — a
@@ -142,21 +152,25 @@ final class MenuSession {
     }
 
     /// Called on the frame loop when the compositor's focus changes.
-    func focus(
-        surfaceId: UInt32, title: String,
-        menuService: String = "", menuObjectPath: String = "",
-        pid: UInt32 = 0
-    ) {
-        self.title = title
-        self.focusedSurface = surfaceId
+    func focus(_ window: LavaClient.FocusedWindow) {
+        self.title = window.title
+        self.focusedSurface = window.surfaceId
         // An open menu belongs to the window that is no longer focused.
         closeMenu()
-        FileHandle.standardError.write(
-            Data("LavaTaskbar: focus id=\(surfaceId) pid=\(pid) kde=\(menuService) \(menuObjectPath) title=\(title)\n".utf8)
-        )
+        if menuDebug {
+            let line = "LavaTaskbar: focus surface=\(window.surfaceId)"
+                + " registrar=\(window.registrarId) pid=\(window.pid)"
+                + " kde=\(window.menuService) \(window.menuObjectPath)"
+                + " title=\(window.title)\n"
+            FileHandle.standardError.write(Data(line.utf8))
+        }
+        // The *registrar* id, not the surface id: an X11 client registered its
+        // menu under its XID and has never heard of our surface numbering.
         menus?.setActiveWindow(
-            surfaceId, menuService: menuService, menuObjectPath: menuObjectPath,
-            pid: pid
+            window.registrarId,
+            menuService: window.menuService,
+            menuObjectPath: window.menuObjectPath,
+            pid: window.pid
         )
         refreshModel()
     }
@@ -208,7 +222,7 @@ final class MenuSession {
         }
         let imported = menus?.model ?? MenuModel()
         hasAppMenu = !imported.menus.isEmpty
-        if hasAppMenu {
+        if hasAppMenu, menuDebug {
             let titles = imported.menus.map(\.title).joined(separator: ", ")
             FileHandle.standardError.write(
                 Data("LavaTaskbar: imported [\(titles)]\n".utf8)
@@ -273,7 +287,8 @@ final class MenuSession {
         // AboutToShow before presentation so a deferred submenu is asked for
         // before the first frame that shows the dropdown. Chromium (VSCode,
         // Teams) only fills File/Edit here, and the boolean it returns does
-        // not tell libdbusmenu to refetch — aboutToShow already GetLayout'd.
+        // not tell libdbusmenu to refetch — `aboutToShow` has already asked
+        // for the layout itself and rebuilt the model.
         menus?.aboutToShow(id)
         refreshModel()
         openMenu = id
@@ -835,12 +850,8 @@ notifications = Notifications(editor: editor)
 
 // Focus, from the compositor. Delivered on the frame loop, so touching
 // observable state from it is the same as touching it from a click handler.
-LavaClient.onActiveWindow { surfaceId, title, menuService, menuObjectPath, pid in
-    session.focus(
-        surfaceId: surfaceId, title: title,
-        menuService: menuService, menuObjectPath: menuObjectPath,
-        pid: pid
-    )
+LavaClient.onActiveWindow { window in
+    session.focus(window)
 }
 
 Thread.detachNewThread {

@@ -67,9 +67,14 @@ public:
   /// When `menuService` and `menuObjectPath` are non-empty they are the DBus
   /// coordinates of the menu (KDE Wayland AppMenu / `org_kde_kwin_appmenu`).
   /// The panel opens that object directly. When they are empty, falls back to
-  /// the AppMenu registrar entry for `windowId` — what Lava clients use with
-  /// their surface id — and if that misses, to a registrar entry whose DBus
-  /// sender has `pid`. Qt5 on Wayland registers as window id `1`.
+  /// the AppMenu registrar entry for `windowId` — `ActiveWindow.registrarId`,
+  /// which is the surface id for Lava and native Wayland clients and an XID
+  /// for X11 ones — and if that misses, to a registrar entry whose DBus sender
+  /// has `pid`. Qt5 on Wayland registers as window id `1`.
+  ///
+  /// A registration lives only as long as the bus name that made it: pids get
+  /// recycled, and matching a dead client's would point the importer at a menu
+  /// that is not there.
   void setActiveWindow(uint32_t windowId, std::string menuService = {},
                        std::string menuObjectPath = {}, uint32_t pid = 0);
   uint32_t activeWindow() const;
@@ -118,6 +123,12 @@ public:
   /// only when asked. Chromium always returns needUpdate=false from AboutToShow
   /// even after filling children, so this GetLayouts the object itself rather
   /// than trusting libdbusmenu to notice.
+  ///
+  /// Synchronous — the caller is opening a dropdown and the next frame draws
+  /// it — but only for the one subtree named. The rest of the menu bar fills
+  /// asynchronously from `poll`, because doing that synchronously too meant a
+  /// dozen round trips on the frame loop every time an application so much as
+  /// greyed out a menu item.
   void aboutToShow(int32_t itemId);
 
 private:
