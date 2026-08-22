@@ -1949,10 +1949,10 @@ extension DrawList {
         let focused = FocusManager.isFocused(leaf.id)
         let state = leaf.editing
         let rows = state.layout.rows
-        // Row == logical line here: EditorView always sets `wraps = false`
-        // ("code editors scroll horizontally, not wrap"), so indexing the
-        // cache by the same `row` used for `rows[row]` below is safe. A
-        // wrapping editor would need this keyed by logical line instead.
+        // Keyed by logical line, which is what a lexer threads state through
+        // and is no longer the same as `row` — see `EditorView(wraps:)`. The
+        // draw loop maps one to the other through `leaf.logicalLine(ofRow:)`
+        // and clips each row's spans to its own slice of the line.
         //
         // Gated on isStateful so the common rule-list (or no-highlighter)
         // case never pays for `state.lines` — a fresh O(length) split — on
@@ -2021,14 +2021,20 @@ extension DrawList {
                 )
             }
             if leaf.showsGutter, leaf.gutterWidth > 0 {
-                // Right-aligned so numbers stay in a column as they widen.
-                let label = String(row + 1)
-                let labelW = font.shapedRun(label).width
-                text(
-                    label, x: x + leaf.gutterWidth - inset - labelW - 4, y: rowTop,
-                    w: leaf.gutterWidth, h: lineH,
-                    color: style.gutterText, font: font
-                )
+                // Numbers count logical lines, and only the row a line starts
+                // on carries one. While wrapping, numbering every row would
+                // number the wraps — the file would claim more lines than it
+                // has, and every number below the fold would be wrong.
+                if leaf.isLineStart(ofRow: row) {
+                    // Right-aligned so numbers stay in a column as they widen.
+                    let label = String(leaf.logicalLine(ofRow: row) + 1)
+                    let labelW = font.shapedRun(label).width
+                    text(
+                        label, x: x + leaf.gutterWidth - inset - labelW - 4, y: rowTop,
+                        w: leaf.gutterWidth, h: lineH,
+                        color: style.gutterText, font: font
+                    )
+                }
                 if !leaf.decorations.isEmpty {
                     let rowRange = rows[row]
                     // Worst severity wins the gutter glyph when a row has more
@@ -2126,9 +2132,19 @@ extension DrawList {
 
             let lineSpans: [HighlightSpan]
             if let highlighter = leaf.highlighter {
-                lineSpans = highlighter.isStateful
-                    ? leaf.highlightCache.spans(atRow: row)
-                    : highlighter.spans(in: lineText)
+                if highlighter.isStateful {
+                    // The cache is keyed by logical line, because that is the
+                    // unit a lexer threads its state through. A wrapped row is
+                    // a slice of one, so the spans have to be cut down to it
+                    // and re-based — `lineText` here is the row, not the line.
+                    let column = leaf.columnStart(ofRow: row)
+                    let spans = leaf.highlightCache.spans(atRow: leaf.logicalLine(ofRow: row))
+                    lineSpans = leaf.wraps
+                        ? spans.clipped(to: column..<(column + lineText.count))
+                        : spans
+                } else {
+                    lineSpans = highlighter.spans(in: lineText)
+                }
             } else {
                 lineSpans = []
             }

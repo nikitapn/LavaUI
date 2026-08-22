@@ -30,6 +30,34 @@ public struct HighlightSpan: Equatable, Sendable {
     }
 }
 
+extension Array where Element == HighlightSpan {
+    /// The part of a line's spans that falls inside `columns`, re-based so
+    /// offset 0 is the start of that slice.
+    ///
+    /// Soft wrap is what needs this. Spans are produced per *logical line*
+    /// (a stateful lexer cannot do otherwise — its state threads line to
+    /// line), but a wrapped editor draws one visual row at a time and shapes
+    /// each row's own substring, so a span still measured from the start of
+    /// the logical line would colour the wrong characters on every row after
+    /// the first. A token straddling a wrap boundary is clipped into one span
+    /// per row, which is what makes it look continuous across the break.
+    public func clipped(to columns: Range<Int>) -> [HighlightSpan] {
+        guard columns.lowerBound != 0 || !isEmpty else { return [] }
+        var result: [HighlightSpan] = []
+        result.reserveCapacity(count)
+        for span in self {
+            let lower = Swift.max(span.range.lowerBound, columns.lowerBound)
+            let upper = Swift.min(span.range.upperBound, columns.upperBound)
+            guard lower < upper else { continue }
+            result.append(HighlightSpan(
+                range: (lower - columns.lowerBound)..<(upper - columns.lowerBound),
+                styleIndex: span.styleIndex
+            ))
+        }
+        return result
+    }
+}
+
 /// A lexer whose highlighting for line N depends on what came before it — the
 /// gap a per-line `HighlightRule` list cannot close: a block comment or a
 /// string that opens on one line and closes on another.

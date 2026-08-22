@@ -263,6 +263,65 @@ public struct TextEditingState: Equatable {
         affinity = .downstream
     }
 
+    /// Replaces a character range with `replacement`, as one undoable edit.
+    ///
+    /// Offsets rather than `String.Index` because the callers are find/replace
+    /// and an LSP-style edit, and both of those hold offsets from a scan that
+    /// has already finished — see `TextSearch`.
+    public mutating func replace(offsets range: Range<Int>, with replacement: String) {
+        let lo = index(atOffset: range.lowerBound)
+        let hi = index(atOffset: max(range.lowerBound, range.upperBound))
+        replace(lo..<hi, with: replacement)
+    }
+
+    /// Replaces every range in `ranges` with `replacement` and returns how
+    /// many were applied. Ranges are character offsets over the current
+    /// buffer, as `TextSearch.matches` reports them.
+    ///
+    /// **One undo step, not one per match.** That is the whole reason this is
+    /// here rather than in the caller: a replace-all is a single thing the
+    /// user did, and undoing it a match at a time is the behaviour people file
+    /// bugs about. It is done by rewriting the span from the first match to
+    /// the last as a single edit, so the recorded `removed` text is that whole
+    /// span — replacing across a large buffer holds a copy of it in the undo
+    /// history until the history is dropped.
+    ///
+    /// Overlapping ranges are not applied twice: after sorting, any range
+    /// starting before the previous one ended is skipped. Empty ranges are
+    /// skipped too — a zero-width match would otherwise insert `replacement`
+    /// at every position between two real ones.
+    @discardableResult
+    public mutating func replaceAll(
+        _ ranges: [Range<Int>], with replacement: String
+    ) -> Int {
+        var applied: [Range<Int>] = []
+        for range in ranges.sorted(by: { $0.lowerBound < $1.lowerBound })
+        where !range.isEmpty && range.lowerBound >= (applied.last?.upperBound ?? 0) {
+            applied.append(range)
+        }
+        guard let first = applied.first else { return 0 }
+
+        // Walked once, forward, rather than `index(atOffset:)` per match:
+        // that walks from the start of the buffer every call, so replacing
+        // 5,000 matches would cost 5,000 walks of everything before each one.
+        let spanStart = index(atOffset: first.lowerBound)
+        var rebuilt = ""
+        var cursor = first.lowerBound
+        var idx = spanStart
+        for range in applied {
+            if range.lowerBound > cursor {
+                let kept = text.index(idx, offsetBy: range.lowerBound - cursor)
+                rebuilt += text[idx..<kept]
+                idx = kept
+            }
+            rebuilt += replacement
+            idx = text.index(idx, offsetBy: range.upperBound - range.lowerBound)
+            cursor = range.upperBound
+        }
+        replace(spanStart..<idx, with: rebuilt)
+        return applied.count
+    }
+
     // MARK: Undo / redo
 
     public var canUndo: Bool { undoStack.canUndo }

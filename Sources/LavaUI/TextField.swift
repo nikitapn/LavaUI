@@ -193,30 +193,122 @@ extension LeafNode {
     func refreshVisualRows(availableWidth: Float) {
         if wraps, let f = font ?? FontStore.default, availableWidth > 0 {
             let textNow = editing.text
-            guard abs(availableWidth - lastMeasuredWidth) > 0.5 || textNow != lastWrappedText else {
-                return
-            }
+            let widthMoved = abs(availableWidth - lastMeasuredWidth) > 0.5
+            guard widthMoved || textNow != lastWrappedText else { return }
             lastMeasuredWidth = availableWidth
             lastWrappedText = textNow
 
-            let inner = max(8, availableWidth - textInset * 2)
+            // The gutter is not part of the wrap width. Zero for a text
+            // field, which is why this expression serves both.
+            let inner = max(8, availableWidth - gutterWidth - textInset * 2)
+            // A different width breaks every line somewhere else, so nothing
+            // survives it. An edit leaves all but one line alone.
+            let reusableLines = widthMoved ? [] : wrapCacheLines
+            let reusableRows = widthMoved ? [] : wrapCacheRows
+
+            let lines = editing.lines
             var rows: [Range<Int>] = []
+            var logicalLine: [Int] = []
+            var columnStart: [Int] = []
+            var nextRows: [[Range<Int>]] = []
+            nextRows.reserveCapacity(lines.count)
             var base = 0
-            for line in editing.lines {
-                let s = String(line)
-                let advances = f.shapedRun(s).characterAdvances
-                for r in SoftWrap.rows(text: s, advances: advances, maxWidth: inner) {
-                    rows.append((base + r.lowerBound)..<(base + r.upperBound))
+            for (index, line) in lines.enumerated() {
+                let broken: [Range<Int>]
+                if index < reusableLines.count, index < reusableRows.count,
+                   reusableLines[index] == line
+                {
+                    broken = reusableRows[index]
+                } else {
+                    // Shaping is what this whole cache exists to avoid: it is
+                    // the cost of the line, and there are as many lines as
+                    // there are lines.
+                    let s = String(line)
+                    let advances = f.shapedRun(s).characterAdvances
+                    broken = SoftWrap.rows(text: s, advances: advances, maxWidth: inner)
                 }
-                base += s.count + 1  // + the newline that separated them
+                nextRows.append(broken)
+                for r in broken {
+                    rows.append((base + r.lowerBound)..<(base + r.upperBound))
+                    logicalLine.append(index)
+                    columnStart.append(r.lowerBound)
+                }
+                base += line.count + 1  // + the newline that separated them
             }
             editing.setVisualRows(rows)
+            rowLogicalLine = logicalLine
+            rowColumnStart = columnStart
+            wrapCacheLines = lines
+            wrapCacheRows = nextRows
             return
         }
 
         // No wrapping: one row per logical line, cached the same way.
         guard editing.text != lastLogicalRowsText else { return }
         seedLogicalRows()
+    }
+
+    /// Logical line holding visual row `row`. Identity while not wrapping.
+    func logicalLine(ofRow row: Int) -> Int {
+        rowLogicalLine.indices.contains(row) ? rowLogicalLine[row] : row
+    }
+
+    /// Where `row` starts within its own logical line. Zero while not wrapping.
+    func columnStart(ofRow row: Int) -> Int {
+        rowColumnStart.indices.contains(row) ? rowColumnStart[row] : 0
+    }
+
+    /// True when `row` is where its logical line begins — the only row that
+    /// gets a number in the gutter, so continuation rows read as continuations
+    /// rather than as lines of their own.
+    func isLineStart(ofRow row: Int) -> Bool {
+        guard !rowLogicalLine.isEmpty else { return true }
+        guard row > 0 else { return true }
+        return logicalLine(ofRow: row) != logicalLine(ofRow: row - 1)
+    }
+
+    /// First visual row of a zero-based logical line — what "go to line 400"
+    /// has to resolve to once rows and lines are no longer the same thing.
+    func firstRow(ofLine line: Int) -> Int {
+        guard !rowLogicalLine.isEmpty else { return line }
+        return min(rowRunStart(ofLine: line), rowLogicalLine.count - 1)
+    }
+
+    /// Where the run of rows belonging to `line` begins, or the row count when
+    /// `line` is past the end. Unclamped on purpose: `logicalLineRange` needs
+    /// "one past the last row of this line", which a clamped answer cannot
+    /// distinguish from "the last row itself".
+    private func rowRunStart(ofLine line: Int) -> Int {
+        // Rows are ordered by line, so this is a binary search for the first
+        // row of the run belonging to `line`.
+        var low = 0
+        var high = rowLogicalLine.count
+        while low < high {
+            let mid = low + (high - low) / 2
+            if rowLogicalLine[mid] < line { low = mid + 1 } else { high = mid }
+        }
+        return low
+    }
+
+    /// Character range of the whole logical line `row` sits in, newline
+    /// excluded — a gutter click and a go-to-line both select the line, not
+    /// the wrapped fragment the pointer happened to land on.
+    func logicalLineRange(ofRow row: Int) -> Range<Int> {
+        let rows = editing.layout.rows
+        guard !rows.isEmpty else { return 0..<0 }
+        let clamped = max(0, min(row, rows.count - 1))
+        guard !rowLogicalLine.isEmpty else { return rows[clamped] }
+        let line = logicalLine(ofRow: clamped)
+        let first = min(rowRunStart(ofLine: line), rows.count - 1)
+        let last = max(first, min(rowRunStart(ofLine: line + 1), rows.count) - 1)
+        return rows[first].lowerBound..<rows[last].upperBound
+    }
+
+    /// Logical lines in the buffer, off the row table rather than a fresh
+    /// split of the text.
+    var logicalLineCount: Int {
+        if let last = rowLogicalLine.last { return last + 1 }
+        return editing.layout.count
     }
 
     /// Installs one row per logical line and marks the cache current.
@@ -228,6 +320,17 @@ extension LeafNode {
     func seedLogicalRows() {
         lastLogicalRowsText = editing.text
         editing.setVisualRows(VisualLayout.logicalRows(editing.text))
+        // Row *is* logical line now, which the accessors above answer without
+        // a table. Leaving a stale one installed would answer for the wrap
+        // this buffer no longer has.
+        rowLogicalLine = []
+        rowColumnStart = []
+        // `wrapCacheLines` deliberately survives: `EditorView.reconcilePrimitive`
+        // seeds logical rows on *every* text change, to keep the gutter width
+        // honest before the measure pass runs, and a wrapping editor reaches
+        // its re-wrap through that same pass. Clearing here would empty the
+        // cache on exactly the edit it exists to make cheap. It is dropped
+        // when wrapping is turned off — see `EditorView.configure`.
     }
 
     /// Visual rows currently drawn.

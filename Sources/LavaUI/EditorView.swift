@@ -148,6 +148,7 @@ public struct EditorPosition: Equatable, Sendable, Codable {
 public final class EditorController {
     private var revealAction: ((Int) -> Bool)?
     private var captureAction: (() -> EditorPosition?)?
+    private var replaceAction: (([Range<Int>], String) -> Int)?
     private var pendingLine: Int?
     private var pendingPosition: EditorPosition?
 
@@ -167,6 +168,37 @@ public final class EditorController {
 
     /// Where the editor is right now, or nil if it is not mounted.
     public func position() -> EditorPosition? { captureAction?() }
+
+    /// Replaces `ranges` — character offsets, as `TextSearch.matches` gives
+    /// them — with `replacement`, and returns how many were applied. Zero if
+    /// the editor is not mounted.
+    ///
+    /// This exists rather than leaving the app to rewrite the bound `String`
+    /// itself, because doing it through the editor is what makes it *one*
+    /// undo step, keeps the caret and the row table consistent with the new
+    /// buffer, and redraws once instead of per match.
+    ///
+    /// Ranges must come from the buffer as it is now. A `TextSearch` from
+    /// before an edit holds offsets into a document that no longer exists —
+    /// re-run `find` first, which is what `TextSearch` is built to expect.
+    @discardableResult
+    public func replace(_ ranges: [Range<Int>], with replacement: String) -> Int {
+        replaceAction?(ranges, replacement) ?? 0
+    }
+
+    /// Replaces the one match `search` currently sits on. `false` when there
+    /// is no current match, or the editor is not mounted.
+    @discardableResult
+    public func replaceCurrent(_ search: TextSearch, with replacement: String) -> Bool {
+        guard let current = search.current else { return false }
+        return replace([current], with: replacement) == 1
+    }
+
+    /// Replaces every match `search` found. Returns how many.
+    @discardableResult
+    public func replaceAll(_ search: TextSearch, with replacement: String) -> Int {
+        replace(search.matches, with: replacement)
+    }
 
     /// Puts the editor back at `position` on its next reconcile.
     ///
@@ -188,10 +220,12 @@ public final class EditorController {
     fileprivate func install(
         reveal: @escaping (Int) -> Bool,
         capture: @escaping () -> EditorPosition?,
-        restore: @escaping (EditorPosition) -> Bool
+        restore: @escaping (EditorPosition) -> Bool,
+        replace: @escaping ([Range<Int>], String) -> Int
     ) {
         revealAction = reveal
         captureAction = capture
+        replaceAction = replace
         if let pendingPosition, restore(pendingPosition) {
             self.pendingPosition = nil
         }
@@ -207,6 +241,15 @@ public struct EditorView: PrimitiveView {
     public var style: CodeStyle
     public var font: UIFont?
     public var showLineNumbers: Bool
+    /// Break long lines to the box width instead of scrolling horizontally.
+    ///
+    /// Off by default, which is right for code and wrong for prose. A wrapped
+    /// editor has no horizontal scroll at all, numbers logical lines rather
+    /// than the rows it draws, and re-wraps the whole buffer whenever the text
+    /// or the width changes — that last one is O(buffer) and shapes every
+    /// line, so a multi-megabyte document is a real cost per keystroke where
+    /// the same document costs nothing unwrapped.
+    public var wraps: Bool
     public var visibleLines: Int
     public var search: TextSearch
     public var decorations: [EditorDecoration]
@@ -221,6 +264,7 @@ public struct EditorView: PrimitiveView {
         style: CodeStyle = CodeStyle(),
         font: UIFont? = nil,
         showLineNumbers: Bool = true,
+        wraps: Bool = false,
         visibleLines: Int = 12,
         search: TextSearch = TextSearch(),
         decorations: [EditorDecoration] = [],
@@ -232,6 +276,7 @@ public struct EditorView: PrimitiveView {
         self.style = style
         self.font = font
         self.showLineNumbers = showLineNumbers
+        self.wraps = wraps
         self.visibleLines = visibleLines
         self.search = search
         self.decorations = decorations
@@ -278,7 +323,21 @@ public struct EditorView: PrimitiveView {
         leaf.color = style.text
         leaf.fillColor = theme.inset
         leaf.isMultiline = true
-        leaf.wraps = false          // code editors scroll horizontally, not wrap
+        if leaf.wraps != wraps {
+            // Rows are about to mean something different. Drop the staleness
+            // marks both branches of `refreshVisualRows` keep, or the first
+            // pass after the toggle sees the buffer as unchanged and keeps the
+            // table built for the other mode.
+            leaf.lastWrappedText = ""
+            leaf.lastLogicalRowsText = nil
+            leaf.lastMeasuredWidth = 0
+            // Holds `Substring`s of the buffer it wrapped. Keeping them behind
+            // an editor that is no longer wrapping would pin that buffer's
+            // storage for as long as the leaf lives.
+            leaf.wrapCacheLines = []
+            leaf.wrapCacheRows = []
+        }
+        leaf.wraps = wraps
         leaf.highlighter = SyntaxHighlighter(rules: rules)
         leaf.codeStyle = style
         leaf.showsGutter = showLineNumbers
@@ -307,6 +366,19 @@ public struct EditorView: PrimitiveView {
                 guard let leaf else { return false }
                 leaf.apply(position)
                 return true
+            },
+            replace: { [weak leaf] ranges, replacement in
+                guard let leaf else { return 0 }
+                let applied = leaf.editing.replaceAll(ranges, with: replacement)
+                guard applied > 0 else { return 0 }
+                // The edit cleared the row table (see `TextEditingState`), and
+                // the gutter reads it before the next measure pass runs.
+                leaf.seedLogicalRows()
+                leaf.markMeasureDirty()
+                binding.wrappedValue = leaf.editing.text
+                CaretBlink.noteEdit()
+                ViewInvalidation.markDirty()
+                return applied
             }
         )
 
@@ -424,12 +496,16 @@ extension LeafNode {
         ViewInvalidation.markNeedsRedraw()
     }
 
-    /// Selects and centers a one-based physical line in a non-wrapping editor.
+    /// Selects and centers a one-based logical line.
+    ///
+    /// Logical, not the row the editor happens to draw: with wrapping on,
+    /// "line 400" is a line of the file, and the row it starts at is wherever
+    /// the 399 above it happened to break.
     func revealPhysicalLine(_ line: Int, font: UIFont) {
         let rows = editing.layout.rows
         guard !rows.isEmpty else { return }
-        let row = max(0, min(rows.count - 1, line - 1))
-        let range = rows[row]
+        let row = max(0, min(rows.count - 1, firstRow(ofLine: line - 1)))
+        let range = logicalLineRange(ofRow: row)
         editing.setCursor(editing.index(atOffset: range.lowerBound))
         let end = min(range.upperBound + 1, editing.text.count)
         editing.setCursor(editing.index(atOffset: end), extending: true)
@@ -454,18 +530,20 @@ extension LeafNode {
     /// appeared. `seedLogicalRows` is what guarantees the table exists here,
     /// on the mount that runs before any layout pass.
     func measuredGutterWidth(font: UIFont) -> Float {
-        let digits = max(2, String(max(1, editing.layout.count)).count)
+        let digits = max(2, String(max(1, logicalLineCount)).count)
         let sample = String(repeating: "0", count: digits)
         return font.shapedRun(sample).width + textInset * 3
     }
 
-    /// Selects the whole visual row under `localY` — the gutter-click gesture.
+    /// Selects the whole logical line under `localY` — the gutter-click
+    /// gesture. The gutter numbers lines, so clicking one selects a line, even
+    /// where that line is drawn across several wrapped rows.
     func selectRow(atLocalY localY: Float) {
         let y = localY + scrollY
         guard let f = font ?? FontStore.default else { return }
         let rows = editing.layout.rows
         let row = max(0, min(rows.count - 1, Int((y - textInset) / f.lineHeight)))
-        let r = rows[row]
+        let r = logicalLineRange(ofRow: row)
         editing.setCursor(editing.index(atOffset: r.lowerBound))
         // Include the newline so a pasted replacement keeps the line structure.
         let end = min(r.upperBound + 1, editing.text.count)

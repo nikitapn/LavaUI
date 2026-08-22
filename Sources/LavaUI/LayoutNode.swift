@@ -483,7 +483,14 @@ final class LeafNode: YogaBoxNode {
     /// short-circuits on shared storage when nothing changed, which is the
     /// common case here, so this is the one comparison that's actually free
     /// when it matters.
-    private var widestRowCache: (fontIdentity: String, text: String, width: Float)?
+    /// Keyed on `wraps` as well as font and text: the answer is ranked over
+    /// the *row* table, and the same buffer at the same size has entirely
+    /// different rows depending on whether it is being wrapped. Without it,
+    /// turning wrap off left `maxScrollX` reporting the width of rows built to
+    /// fit the viewport — which is to say zero scroll for a line that now
+    /// overflows it.
+    private var widestRowCache:
+        (fontIdentity: String, text: String, wraps: Bool, width: Float)?
 
     /// How many of the longest-by-bytes rows get shaped for real.
     ///
@@ -506,7 +513,9 @@ final class LeafNode: YogaBoxNode {
     /// on a `Substring`, so the scan is effectively free and only the
     /// candidates cost a shaping.
     func widestRowWidth(font: UIFont) -> Float {
-        if let c = widestRowCache, c.fontIdentity == font.identity, c.text == editing.text {
+        if let c = widestRowCache, c.fontIdentity == font.identity, c.text == editing.text,
+           c.wraps == wraps
+        {
             return c.width
         }
         // Both cases rank on the row table layout has already built and
@@ -521,7 +530,7 @@ final class LeafNode: YogaBoxNode {
         let widest = rowTexts(at: picks, rows: rows).reduce(Float(0)) {
             max($0, font.shapedRun($1).width)
         }
-        widestRowCache = (font.identity, editing.text, widest)
+        widestRowCache = (font.identity, editing.text, wraps, widest)
         return widest
     }
 
@@ -633,7 +642,14 @@ final class LeafNode: YogaBoxNode {
     }
 
     func maxScrollX(font: UIFont) -> Float {
-        max(0, widestRowWidth(font: font) - textViewportWidth)
+        // A wrapped row is built to fit the viewport, so there is nothing to
+        // scroll to. Answering here rather than at each caller is what keeps
+        // the wheel, the clamp, the caret-follow and the scroll-eligibility
+        // test from having to agree separately — and it means a leaf switched
+        // to wrapping while scrolled right is pulled back to the margin by the
+        // clamp on its next emit, instead of drawing a blank column.
+        guard !wraps else { return 0 }
+        return max(0, widestRowWidth(font: font) - textViewportWidth)
     }
 
     func scrollByX(_ delta: Float, font: UIFont) {
@@ -862,6 +878,28 @@ final class LeafNode: YogaBoxNode {
     /// leaf, but keeping these apart means one can't accidentally satisfy
     /// the other's staleness check.
     var lastLogicalRowsText: String?
+    /// Logical line each visual row belongs to, and where in that line the row
+    /// starts. Empty while not wrapping, where a row *is* a logical line and
+    /// both answers are `row` and `0` — see `logicalLine(ofRow:)`.
+    ///
+    /// The gutter, the go-to-line jump and a stateful highlighter's spans are
+    /// all stated in logical lines; only the drawing is stated in rows. Built
+    /// alongside the rows themselves, in the one pass that already knows both.
+    var rowLogicalLine: [Int] = []
+    var rowColumnStart: [Int] = []
+    /// Per-logical-line wrap results from the last pass: the line as it was,
+    /// and the rows it broke into (offsets within that line).
+    ///
+    /// Wrapping is the one text operation whose cost is the whole buffer —
+    /// every line has to be shaped to know where it breaks — and it re-runs
+    /// on every edit. A keystroke changes one line, so re-wrapping the file
+    /// meant a 100 KB document paid ~100ms per key and a 1 MB one ~1s. Lines
+    /// whose text is unchanged keep the rows they already had.
+    ///
+    /// `Substring`s, sharing the previous buffer's storage rather than
+    /// copying it, the same as `SyntaxHighlighter.Cache` holds its lines.
+    var wrapCacheLines: [Substring] = []
+    var wrapCacheRows: [[Range<Int>]] = []
     /// Click handler receiving node-local coordinates *and* the node's
     /// absolute origin. The caret needs the former; a drag needs the latter,
     /// because pointer capture delivers window coordinates long after the hit
