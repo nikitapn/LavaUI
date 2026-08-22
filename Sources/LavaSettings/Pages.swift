@@ -26,13 +26,13 @@ struct AppearancePage: View {
                            + "colours. A terminal or a player that paints "
                            + "its own paper is left alone.") {
                     VStack(spacing: 2) {
-                        ForEach(["dark", "light", "nebula"], id: \.self) { name in
+                        ForEach(Theme.builtIns, id: \.name) { entry in
                             PickerRow(
-                                title: name.capitalized,
-                                detail: name,
-                                selected: theme == name
+                                title: entry.title,
+                                detail: entry.summary,
+                                selected: theme == entry.name
                             ) {
-                                store.setThemeName(name)
+                                store.setThemeName(entry.name)
                             }
                         }
                     }

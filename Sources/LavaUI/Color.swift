@@ -51,6 +51,42 @@ public struct Color: Equatable, Sendable, Hashable {
         )
     }
 
+    /// Smallest source-over tint that turns a uniform `base` into this colour.
+    ///
+    /// What the renderer needs for a hover chip: it paints the tint *over*
+    /// the node, glyphs included, so the overlay has to carry as little
+    /// alpha as will still land on `self` when composited with `base`.
+    public func overlay(over base: Color) -> Color {
+        let channels = [(base.r, r), (base.g, g), (base.b, b)]
+        var alpha: Float = 0
+        for (b, t) in channels {
+            let required = t >= b
+                ? (b < 1 ? (t - b) / (1 - b) : 0)
+                : (b > 0 ? (b - t) / b : 0)
+            alpha = max(alpha, required)
+        }
+        alpha = min(max(alpha, 1 / 255), 1)
+        func source(_ b: Float, _ t: Float) -> Float {
+            min(max(0, (t - (1 - alpha) * b) / alpha), 1)
+        }
+        return Color(
+            r: source(base.r, r),
+            g: source(base.g, g),
+            b: source(base.b, b),
+            a: alpha * a
+        )
+    }
+
+    /// Renderer overlay for a hover fill sitting on `surface`.
+    ///
+    /// `hover` is a fill colour. The renderer paints this *over* the whole
+    /// node, so alpha is capped: past ~0.40 the letters take the hover's hue
+    /// and a row of light text on a dark chip turns muddy.
+    public func hoverOverlay(over surface: Color, maxAlpha: Float = 0.40) -> Color {
+        let wash = overlay(over: surface)
+        return wash.a > maxAlpha ? wash.opacity(maxAlpha) : wash
+    }
+
     /// Returns a copy with alpha replaced (0…1). Useful for glass tints on
     /// top of `.blur()`.
     public func opacity(_ alpha: Float) -> Color {

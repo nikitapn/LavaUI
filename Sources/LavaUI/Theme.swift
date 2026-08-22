@@ -164,6 +164,109 @@ public struct Theme: Equatable, Sendable {
         border: Color(r: 0.32, g: 0.28, b: 0.52)
     )
 
+    /// Warm charcoal with copper light, the night-side counterpart to `paper`.
+    ///
+    /// Dark's greys are cool on purpose — they sit behind code and disappear.
+    /// Ember is the same darkness with the colour temperature flipped, so a
+    /// desktop that wants firelight rather than a monitor in a basement has
+    /// somewhere to go that is still a dark theme.
+    public static let ember = Theme(
+        textPrimary: Color(r: 0.96, g: 0.92, b: 0.86),
+        textSecondary: Color(r: 0.70, g: 0.58, b: 0.46),
+        textMuted: Color(r: 0.62, g: 0.50, b: 0.38),
+        textDim: Color(r: 0.52, g: 0.42, b: 0.32),
+        accent: Color(r: 0.94, g: 0.62, b: 0.32),
+        selected: Color(r: 1.00, g: 0.78, b: 0.36),
+        background: Color(r: 0.11, g: 0.07, b: 0.05),
+        panel: Color(r: 0.17, g: 0.11, b: 0.08),
+        inset: Color(r: 0.10, g: 0.07, b: 0.05),
+        canvas: Color(r: 0.13, g: 0.09, b: 0.06),
+        hover: Color(r: 0.36, g: 0.22, b: 0.14),
+        selectionFill: Color(r: 0.52, g: 0.26, b: 0.12),
+        border: Color(r: 0.42, g: 0.28, b: 0.18)
+    )
+
+    /// Deep forest. Green enough to be a choice, quiet enough to put a
+    /// wall of icons on — the same job nebula does in indigo.
+    public static let moss = Theme(
+        textPrimary: Color(r: 0.90, g: 0.94, b: 0.88),
+        textSecondary: Color(r: 0.58, g: 0.68, b: 0.56),
+        textMuted: Color(r: 0.50, g: 0.62, b: 0.50),
+        textDim: Color(r: 0.42, g: 0.52, b: 0.42),
+        accent: Color(r: 0.62, g: 0.86, b: 0.56),
+        selected: Color(r: 0.90, g: 0.82, b: 0.38),
+        background: Color(r: 0.07, g: 0.10, b: 0.08),
+        panel: Color(r: 0.11, g: 0.15, b: 0.12),
+        inset: Color(r: 0.08, g: 0.11, b: 0.09),
+        canvas: Color(r: 0.09, g: 0.13, b: 0.10),
+        hover: Color(r: 0.18, g: 0.28, b: 0.20),
+        selectionFill: Color(r: 0.16, g: 0.38, b: 0.24),
+        border: Color(r: 0.24, g: 0.36, b: 0.26)
+    )
+
+    /// Warm paper. `light` is a cool daylight grey; this is the same
+    /// brightness with the yellow left in, so a page reads as a page
+    /// rather than as a window.
+    public static let paper = Theme(
+        textPrimary: Color(r: 0.18, g: 0.14, b: 0.10),
+        textSecondary: Color(r: 0.46, g: 0.40, b: 0.32),
+        textMuted: Color(r: 0.52, g: 0.46, b: 0.38),
+        textDim: Color(r: 0.58, g: 0.54, b: 0.46),
+        accent: Color(r: 0.62, g: 0.32, b: 0.12),
+        selected: Color(r: 0.52, g: 0.22, b: 0.08),
+        background: Color(r: 0.97, g: 0.95, b: 0.90),
+        panel: Color(r: 0.94, g: 0.91, b: 0.85),
+        inset: Color(r: 1.00, g: 0.99, b: 0.96),
+        canvas: Color(r: 0.92, g: 0.89, b: 0.82),
+        hover: Color(r: 0.88, g: 0.74, b: 0.50),
+        selectionFill: Color(r: 0.90, g: 0.78, b: 0.56),
+        border: Color(r: 0.78, g: 0.72, b: 0.62)
+    )
+
+    /// Near-black with a hard white, for a desktop that wants contrast
+    /// rather than atmosphere. The accent keeps a drop of blue so links
+    /// and focus rings do not disappear into the grey.
+    public static let graphite = Theme(
+        textPrimary: Color(r: 0.96, g: 0.96, b: 0.97),
+        textSecondary: Color(r: 0.62, g: 0.62, b: 0.64),
+        textMuted: Color(r: 0.54, g: 0.54, b: 0.56),
+        textDim: Color(r: 0.46, g: 0.46, b: 0.48),
+        accent: Color(r: 0.70, g: 0.82, b: 1.00),
+        selected: Color(r: 1.00, g: 0.88, b: 0.40),
+        background: Color(r: 0.05, g: 0.05, b: 0.06),
+        panel: Color(r: 0.11, g: 0.11, b: 0.12),
+        inset: Color(r: 0.07, g: 0.07, b: 0.08),
+        canvas: Color(r: 0.08, g: 0.08, b: 0.09),
+        hover: Color(r: 0.28, g: 0.28, b: 0.32),
+        selectionFill: Color(r: 0.20, g: 0.32, b: 0.52),
+        border: Color(r: 0.32, g: 0.32, b: 0.36)
+    )
+
+    /// A built-in palette the desktop can push by name.
+    ///
+    /// `name` is what `lava.conf` and the control plane carry; `title` and
+    /// `summary` are what Settings shows. Keep this list in step with
+    /// `canonicalThemeName` in the compositor — an unknown name is dark.
+    public struct BuiltIn: Equatable, Sendable {
+        public var name: String
+        public var title: String
+        public var summary: String
+        public var theme: Theme
+    }
+
+    /// Palettes the system theme understands, in the order Settings lists them.
+    public static var builtIns: [BuiltIn] {
+        [
+            BuiltIn(name: "dark", title: "Dark", summary: "cool grey", theme: .dark),
+            BuiltIn(name: "light", title: "Light", summary: "daylight", theme: .light),
+            BuiltIn(name: "nebula", title: "Nebula", summary: "indigo", theme: .nebula),
+            BuiltIn(name: "ember", title: "Ember", summary: "warm charcoal", theme: .ember),
+            BuiltIn(name: "moss", title: "Moss", summary: "forest", theme: .moss),
+            BuiltIn(name: "paper", title: "Paper", summary: "cream", theme: .paper),
+            BuiltIn(name: "graphite", title: "Graphite", summary: "high contrast", theme: .graphite),
+        ]
+    }
+
     /// App-wide default theme. `Environment.current.theme` falls through to
     /// this wherever no `.theme(_:)` override is in scope, so setting it still
     /// reaches everything that never opted out — but a subtree wearing
@@ -174,14 +277,9 @@ public struct Theme: Equatable, Sendable {
         }
     }
 
-    /// The three names the compositor's system theme understands.
+    /// The names the compositor's system theme understands.
     public static func named(_ name: String) -> Theme? {
-        switch name {
-        case "dark": return .dark
-        case "light": return .light
-        case "nebula": return .nebula
-        default: return nil
-        }
+        builtIns.first { $0.name == name }?.theme
     }
 
     /// Called after a compositor system-theme push is applied to `current`.

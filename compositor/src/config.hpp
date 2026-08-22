@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <string>
+#include <string_view>
 #include <vector>
 
 /// The compositor's configuration file.
@@ -126,11 +127,22 @@ struct RenderConfig {
 
 /// Which LavaUI `Theme` clients that wear system colours should use.
 ///
-/// A name, not a palette: `dark`, `light`, `nebula`. The colours live in
-/// LavaUI; the compositor only remembers which one the desktop picked.
+/// A name, not a palette. The colours live in LavaUI; the compositor only
+/// remembers which one the desktop picked. Keep this list in step with
+/// `Theme.builtIns` — an unknown name is dark.
 struct ThemeConfig {
   std::string name = "dark";
 };
+
+inline bool isKnownThemeName(std::string_view name) {
+  return name == "dark" || name == "light" || name == "nebula" ||
+         name == "ember" || name == "moss" || name == "paper" ||
+         name == "graphite";
+}
+
+inline std::string canonicalThemeName(std::string_view name) {
+  return isKnownThemeName(name) ? std::string(name) : std::string{"dark"};
+}
 
 /// What the desktop is painted with, behind every window.
 ///

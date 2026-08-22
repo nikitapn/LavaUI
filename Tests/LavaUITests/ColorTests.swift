@@ -110,4 +110,28 @@ final class ColorTests: XCTestCase {
         let back = Color(rgb24: 0x0e_13_1f)
         XCTAssertEqual(back.rgb24, 0x0e_13_1f)
     }
+
+    /// Overlaying `target` itself at 0.18 was the old no-base fallback, and
+    /// for a dark hover token that is a dark wash on a dark panel — a 0.02
+    /// lift nobody could see. Source-over of the smallest tint that *lands*
+    /// on the hover fill is a real chip.
+    func testHoverOverlayOnADarkPanelIsALift() {
+        let panel = Theme.dark.panel
+        let hover = Theme.dark.hover
+        let wash = hover.hoverOverlay(over: panel)
+        let old = hover.opacity(0.18)
+        func compositeLuma(_ over: Color) -> Float {
+            over.a * over.luminance + (1 - over.a) * panel.luminance
+        }
+        XCTAssertGreaterThan(compositeLuma(wash), compositeLuma(old) + 0.04)
+        XCTAssertEqual(compositeLuma(wash), hover.luminance, accuracy: 0.02)
+    }
+
+    /// A saturated hover fill over a light panel would otherwise be a 0.7
+    /// overlay and steal the row's text. The cap keeps glyphs themselves.
+    func testHoverOverlayCapsAStrongFill() {
+        let wash = Theme.light.hover.hoverOverlay(over: Theme.light.panel)
+        XCTAssertLessThanOrEqual(wash.a, 0.40 + 1e-5)
+        XCTAssertGreaterThan(wash.a, 0.10)
+    }
 }

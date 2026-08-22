@@ -17,6 +17,7 @@
 
 #include <wayland-server-core.h>
 
+#include "config.hpp"
 #include "gen/lava.hpp"
 #include "render/draw_command.hpp"
 #include "wlr.hpp"
@@ -465,12 +466,6 @@ struct ThemeWatcher {
 
 using ThemeWatcherPtr = std::shared_ptr<ThemeWatcher>;
 using ThemeBroker = StateBroker<ThemeWatcher, SystemTheme>;
-
-/// The three names LavaUI actually has. Anything else is dark.
-std::string canonicalThemeName(std::string_view name) {
-  if (name == "light" || name == "nebula") return std::string(name);
-  return "dark";
-}
 
 /// How the renderer names a file decoded at a given cap.
 ///

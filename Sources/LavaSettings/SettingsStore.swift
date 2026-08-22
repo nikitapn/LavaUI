@@ -64,7 +64,7 @@ final class SettingsStore {
     var shadowBlur: Float = 0
     var shadowOpacity: Float = 0.35
     var shadowOffsetY: Float = 4
-    /// `dark`, `light`, or `nebula`. What Lava windows that wear
+    /// A `Theme.builtIns` name. What Lava windows that wear
     /// `Theme.current` will paint.
     var themeName = "dark"
 

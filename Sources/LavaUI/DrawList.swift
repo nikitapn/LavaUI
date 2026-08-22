@@ -1383,35 +1383,25 @@ public final class DrawList {
     /// little as possible when the renderer lays the interaction tint over the
     /// complete retained node.
     private func interactionTint(from base: Color, to target: Color) -> Color {
-        let channels = [(base.r, target.r), (base.g, target.g), (base.b, target.b)]
-        var alpha: Float = 0
-        for (b, t) in channels {
-            let required = t >= b
-                ? (b < 1 ? (t - b) / (1 - b) : 0)
-                : (b > 0 ? (b - t) / b : 0)
-            alpha = max(alpha, required)
-        }
-        alpha = min(max(alpha, 1 / 255), 1)
-        func source(_ b: Float, _ t: Float) -> Float {
-            min(max(0, (t - (1 - alpha) * b) / alpha), 1)
-        }
-        return Color(
-            r: source(base.r, target.r),
-            g: source(base.g, target.g),
-            b: source(base.b, target.b),
-            a: alpha * target.a
-        )
+        target.overlay(over: base)
     }
 
     private func hoverTint(base: Color?, target: Color?) -> Color? {
         guard let target else { return nil }
         // A fully transparent fill is not a colour — `.background(.clear)`
         // is how an open-state chip turns off, and treating it as black
-        // made the hover tint a dark slab.
-        guard let base, base.a > 0.01 else {
-            return target.opacity(min(max(target.a, 0.01), 0.18))
+        // made the hover tint a dark slab. Menu rows have no fill of their
+        // own either: they sit on the panel. Overlaying `target` at 0.18
+        // used to be the fallback, which for a dark hover token is a dark
+        // wash on a dark panel and disappears. Assuming the panel as the
+        // surface makes the overlay a lift instead.
+        let surface: Color
+        if let base, base.a > 0.01 {
+            surface = base
+        } else {
+            surface = Theme.current.panel
         }
-        return interactionTint(from: base, to: target)
+        return target.hoverOverlay(over: surface)
     }
 
     private func interactionTints(

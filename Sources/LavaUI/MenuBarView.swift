@@ -100,7 +100,11 @@ public struct MenuBarStyle: Equatable, Sendable {
             titleOpenFill: theme.hover,
             itemPadding: EdgeInsets(top: 3, leading: 8, bottom: 3, trailing: 8),
             itemCornerRadius: 5,
-            itemHover: theme.hover,
+            // `hover` is a one-step lift, right for a dense list and easy to
+            // miss on a two-item dropdown. `selectionFill` is the chip a
+            // selected settings row already wears — the same "this one"
+            // language, under the pointer instead of as a choice.
+            itemHover: theme.selectionFill,
             itemSpacing: 1,
             dropdownPadding: 4,
             dropdownMinWidth: 140,
@@ -136,7 +140,7 @@ public struct MenuBarStyle: Equatable, Sendable {
             titleOpenFill: theme.hover,
             itemPadding: EdgeInsets(top: 4, leading: 10, bottom: 4, trailing: 10),
             itemCornerRadius: 6,
-            itemHover: theme.hover,
+            itemHover: theme.selectionFill,
             itemSpacing: 1,
             dropdownPadding: 4,
             dropdownMinWidth: 0,

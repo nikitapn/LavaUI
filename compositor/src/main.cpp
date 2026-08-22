@@ -4133,8 +4133,7 @@ class SurfaceRegistry : public lava::CompositorHost {
 
   void updateSystemTheme(const std::string &name,
                          std::string &outError) override {
-    std::string taken = name;
-    if (taken != "light" && taken != "nebula") taken = "dark";
+    std::string taken = lava::canonicalThemeName(name);
     if (server_ != nullptr) server_->config.theme.name = taken;
     save({{"theme", "name", taken}}, outError);
     if (control_ != nullptr) control_->postSystemTheme();

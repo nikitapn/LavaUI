@@ -135,8 +135,9 @@ dock = LavaDock
 [theme]
 
 # Which LavaUI Theme every client that uses system colours should wear:
-# dark, light, or nebula. LavaSettings writes this; a SIGHUP reloads it
-# and pushes the new name to every subscribed window.
+# dark, light, nebula, ember, moss, paper, or graphite. LavaSettings
+# writes this; a SIGHUP reloads it and pushes the new name to every
+# subscribed window.
 name = dark
 
 

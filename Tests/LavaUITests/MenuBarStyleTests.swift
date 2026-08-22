@@ -37,6 +37,7 @@ final class MenuBarStyleTests: XCTestCase {
         XCTAssertNotNil(window.stripFill)
         XCTAssertEqual(window.stripHeight, MenuHost.barHeight)
         XCTAssertGreaterThan(window.dropdownMinWidth, 0)
+        XCTAssertEqual(window.itemHover, Theme.dark.selectionFill)
     }
 
     func testPanelDropdownFollowsTheThemeRatherThanAHardcodedWash() {
@@ -45,13 +46,13 @@ final class MenuBarStyleTests: XCTestCase {
         XCTAssertEqual(dark.dropdownBackground.g, Theme.dark.panel.g, accuracy: 0.001)
         XCTAssertEqual(dark.dropdownBackground.b, Theme.dark.panel.b, accuracy: 0.001)
         XCTAssertGreaterThan(dark.dropdownBackground.a, 0.95)
-        XCTAssertEqual(dark.itemHover, Theme.dark.hover)
+        XCTAssertEqual(dark.itemHover, Theme.dark.selectionFill)
         XCTAssertGreaterThan(dark.dropdownCornerRadius, 2)
         XCTAssertNil(dark.dropdownBlur)
 
         let nebula = MenuBarStyle.panel(theme: .nebula)
         XCTAssertEqual(nebula.dropdownBackground.r, Theme.nebula.panel.r, accuracy: 0.001)
-        XCTAssertEqual(nebula.itemHover, Theme.nebula.hover)
+        XCTAssertEqual(nebula.itemHover, Theme.nebula.selectionFill)
     }
 
     func testPanelStyleAsksForFrostWhenTheBridgeIsLive() {
