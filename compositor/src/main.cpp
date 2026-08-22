@@ -1231,6 +1231,12 @@ struct ClientSurface {
   wlr_scene_buffer *blurNode = nullptr;
   std::string blurKey;
   uint32_t blurGen = 0;
+  /// Whether `blurNode` carries a plate that was actually frosted. The key is
+  /// named before the capture is attempted and the capture can fail (no
+  /// dma-buf import, no readback), so the key alone does not answer it — and
+  /// a window revealed onto a plate that was never drawn would put a slab of
+  /// whatever the canvas last held under itself.
+  bool blurPlateReady = false;
 
   /// Whether the compositor draws this window's non-client area.
   ///
@@ -1869,6 +1875,23 @@ class SurfaceRegistry : public lava::CompositorHost {
     return nullptr;
   }
 
+  /// Whether anything this window is made of may be drawn: its content, its
+  /// title bar, its shadow, its frost plate.
+  ///
+  /// A window is four nodes in three trees, each enabled by a rule of its own
+  /// — `syncBar`, `applyShadow`, `captureBackdrop` — and every one of those
+  /// rules used to ask only whether the window was minimized. So the reveal
+  /// hold, which is the second way a whole window can be off screen, covered
+  /// the content node and nothing else: a held window still put its bar, its
+  /// shadow and a blurred picture of the desktop behind it on screen, and the
+  /// plate is why what flashed looked like somebody else's window.
+  ///
+  /// One question with one answer, asked wherever a node of a window's frame
+  /// is switched on. See `revealIfReady`, which is where they all come up.
+  bool frameShown(const ClientSurface &surface) const {
+    return !surface.minimized && !surface.awaitingFirstFrame;
+  }
+
   /// Whether a surface is on screen right now.
   ///
   /// Every hit test goes through this. The scene graph already refuses to draw
@@ -1876,7 +1899,10 @@ class SurfaceRegistry : public lava::CompositorHost {
   /// list, and without this a window on another workspace would still take the
   /// pointer, invisibly, from underneath the one the user can see.
   bool visible(const ClientSurface &surface) const {
-    if (surface.minimized) return false;
+    // A window still holding its first frame is one of those: it occupies its
+    // rectangle in this list while the user can see straight through it, and
+    // a click there belongs to whatever it is not covering yet.
+    if (!frameShown(surface)) return false;
     // Hidden, not gone: a fullscreen window on this workspace owns the
     // output, and the panel staying clickable on top of a game is how
     // fullscreen failed to be fullscreen.
@@ -2113,7 +2139,9 @@ class SurfaceRegistry : public lava::CompositorHost {
       wlr_scene_node_set_enabled(surface.window->contentNode(), !minimized);
       surface.window->setMinimized(minimized);
     } else if (surface.node != nullptr) {
-      wlr_scene_node_set_enabled(&surface.node->node, !minimized);
+      // Not `!minimized`: a window un-minimized while it is still holding its
+      // first frame is still holding it.
+      wlr_scene_node_set_enabled(&surface.node->node, frameShown(surface));
     }
     syncBar(surface);
     if (surface.shadowTree != nullptr) {
@@ -2687,12 +2715,12 @@ class SurfaceRegistry : public lava::CompositorHost {
   }
 
   /// Title bar on screen only when the window is decorated *and* not
-  /// maximized — and not minimized. One place so the three flags cannot
-  /// disagree about whether the strip is visible.
+  /// maximized — and only when the window itself is showing. One place so the
+  /// flags cannot disagree about whether the strip is visible.
   void syncBar(ClientSurface &surface) {
     if (surface.barNode == nullptr) return;
     wlr_scene_node_set_enabled(&surface.barNode->node,
-                               surface.showsBar() && !surface.minimized);
+                               surface.showsBar() && frameShown(surface));
   }
 
   /// Spreads a window over everything a panel has not claimed.
@@ -2731,7 +2759,11 @@ class SurfaceRegistry : public lava::CompositorHost {
   /// not have a taskbar painted across it.
   bool fullscreenCoversShell() const {
     for (const auto &s : surfaces_) {
-      if (s->panel || s->minimized || !coversItsOutput(*s)) continue;
+      // `frameShown` rather than `!minimized`: a window that has not been
+      // revealed yet covers nothing, and taking the panel down for one that
+      // opens fullscreen would blank the strip before there was anything
+      // over it.
+      if (s->panel || !frameShown(*s) || !coversItsOutput(*s)) continue;
       if (workspaces_ != nullptr && s->workspace != workspaces_->current) {
         continue;
       }
@@ -2749,7 +2781,7 @@ class SurfaceRegistry : public lava::CompositorHost {
     const bool hide = fullscreenCoversShell();
     for (auto &s : surfaces_) {
       if (!s->panel || s->node == nullptr) continue;
-      wlr_scene_node_set_enabled(&s->node->node, !hide);
+      wlr_scene_node_set_enabled(&s->node->node, !hide && frameShown(*s));
     }
   }
 
@@ -3033,7 +3065,8 @@ class SurfaceRegistry : public lava::CompositorHost {
     const bool wanted =
         shadowBlur_ > 0.f && !surface.panel && !surface.maximized &&
         !coversItsOutput(surface) && renderer_ != nullptr &&
-        workspaces_ != nullptr && surface.id == focused_ && !surface.minimized;
+        workspaces_ != nullptr && surface.id == focused_ &&
+        frameShown(surface);
     if (!wanted) {
       if (surface.shadowTree != nullptr) {
         wlr_scene_node_set_enabled(&surface.shadowTree->node, false);
@@ -3196,6 +3229,7 @@ class SurfaceRegistry : public lava::CompositorHost {
       surface.blurNode = nullptr;
     }
     surface.blurCanvas.reset();
+    surface.blurPlateReady = false;
     if (renderer_ != nullptr && !surface.blurKey.empty()) {
       // Discarded, not released: this snapshot's key names a generation that
       // will never come round again, so keeping it warm keeps 8 MiB of a
@@ -3382,14 +3416,19 @@ class SurfaceRegistry : public lava::CompositorHost {
 
     wlr_buffer *captured = renderOutputBuffer(output);
     for (wlr_scene_node *node : lifted) wlr_scene_node_set_enabled(node, true);
+    // `frameShown` rather than `!minimized`, and this is the re-derivation the
+    // note above warns about getting wrong: a window whose first frame is
+    // still held is hidden for a second reason, and putting its content node
+    // back on because it is not minimized cancelled the hold outright. The
+    // window that asks for frost is exactly the window being captured here,
+    // so every frosted window revealed itself one output frame after it
+    // opened, whatever it had drawn by then.
     if (surface.node != nullptr) {
-      setNodeEnabled(&surface.node->node, !surface.minimized);
+      setNodeEnabled(&surface.node->node, frameShown(surface));
     }
-    if (surface.barNode != nullptr) {
-      setNodeEnabled(&surface.barNode->node, surface.showsBar());
-    }
+    syncBar(surface);
     if (surface.isForeign() && surface.window != nullptr) {
-      setNodeEnabled(surface.window->contentNode(), !surface.minimized);
+      setNodeEnabled(surface.window->contentNode(), frameShown(surface));
     }
     // Shadow comes back through applyShadow's own rules.
     applyShadow(surface);
@@ -3473,8 +3512,17 @@ class SurfaceRegistry : public lava::CompositorHost {
     }
     wlr_buffer_unlock(captured);
     if (!frosted) return;
+    surface.blurPlateReady = true;
     show_surface(surface.blurNode, *surface.blurCanvas);
-    wlr_scene_node_set_enabled(&surface.blurNode->node, true);
+    // Captured, not shown, while the window is held. The plate is a picture of
+    // the desktop, so a frosted window that put one up before it had drawn
+    // showed a blurred copy of whatever was behind it — a browser window in
+    // the shape of a terminal, which is what the flash on launch actually was.
+    //
+    // Worth capturing anyway: the client is a few milliseconds from its first
+    // frame and the plate is then ready to come up with it, rather than the
+    // window arriving as clear glass and frosting a frame later.
+    wlr_scene_node_set_enabled(&surface.blurNode->node, frameShown(surface));
     placeBackdrop(surface);
   }
 
@@ -4653,6 +4701,8 @@ class SurfaceRegistry : public lava::CompositorHost {
       return;
     }
     if (!surface->canvas->renderFromArena()) return;
+    // `notePainted` is guarded by `visible`, which now knows about the hold:
+    // a window nobody can see yet cannot have changed what is behind anyone.
     notePainted(*surface);
     if (surface->awaitingFirstFrame) {
       surface->firstFrameRendered = true;
@@ -4675,6 +4725,20 @@ class SurfaceRegistry : public lava::CompositorHost {
     if (!surface.firstFrameRendered || surface.revealSerial != 0) return;
     surface.awaitingFirstFrame = false;
     wlr_scene_node_set_enabled(&surface.node->node, true);
+    // The rest of the window comes up in the same breath. Each of these has a
+    // rule of its own that has been answering "no" while the hold was on (see
+    // `frameShown`), and nothing would call them again until the window was
+    // touched — a revealed window with no bar and no shadow until the pointer
+    // crossed it would be the same bug wearing different clothes.
+    syncBar(surface);
+    applyShadow(surface);
+    if (surface.blurNode != nullptr && surface.blurPlateReady) {
+      wlr_scene_node_set_enabled(&surface.blurNode->node, true);
+    }
+    // A window appearing changes what is behind every frosted window it is
+    // now in front of — a frosted panel is above every window by definition,
+    // so this is not only about windows that frost anything themselves.
+    scheduleBackdropRefresh();
     damage(surface);
   }
 
@@ -5228,6 +5292,11 @@ class SurfaceRegistry : public lava::CompositorHost {
       surface->barNode = wlr_scene_buffer_create(parent, surface->bar->buffer());
       if (surface->barNode == nullptr) return 0;
       show_surface(surface->barNode, *surface->bar);
+      // A scene node is born enabled, and the strip is drawn the moment the
+      // window is placed — so without this a server-framed window announced
+      // itself with a title bar hanging over the desktop for as long as the
+      // hold lasted. Held with the content, released with it.
+      syncBar(*surface);
       // Title bars are fully clickable; leave the default accepts-all.
     }
     applyCorners(*surface);
