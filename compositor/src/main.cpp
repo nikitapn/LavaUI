@@ -1297,20 +1297,39 @@ struct ClientSurface {
   /// a-hole (or a black slab) before the client has drawn. The switcher
   /// is the case that made this load-bearing.
   bool awaitingFirstFrame = false;
-  /// A frame has been rendered from the arena; half of what a reveal needs.
+  /// A frame has been rendered from the arena; one third of what a reveal
+  /// needs — see `staleFirstFrame` for the rest.
   bool firstFrameRendered = false;
+  /// The size this client asked for at `CreateSurface`. It lays out for that
+  /// size until the opening `Resize` reaches it, so this is what says whether
+  /// the frames it has drawn so far can be right. 0 for a panel, which is
+  /// told its geometry and never asked for one.
+  uint32_t askedWidth = 0;
+  uint32_t askedHeight = 0;
+  /// Whether the frame being held predates the client hearing its size, in a
+  /// window whose size the compositor changed. Such a frame is laid out for
+  /// the wrong rectangle and is not the one to reveal, ack or no ack.
+  ///
+  /// The ack alone does not settle it. It says the client has *heard* — the
+  /// client acks on consuming the event, before it has laid out again — so a
+  /// frame published before the ack is stale even though the ack arrives.
+  /// Cleared by the first frame published after it, which is by construction
+  /// one the client drew knowing what size it is.
+  bool staleFirstFrame = false;
   /// Serial of the opening `Resize`, until the client acks it; 0 once it has
   /// (or once the deadline gave up waiting).
   ///
-  /// The other half of a reveal. `applyInitialPlacement` usually resizes a
-  /// window away from the size its client asked for, and a first frame drawn
-  /// before that news arrives is laid out for the wrong rectangle — the app
-  /// in one corner of a frame the compositor has already sized, desktop
-  /// showing through the rest. Waiting for the ack means what appears was
-  /// laid out for the window that is actually there.
+  /// Half of what says a frame is current. `applyInitialPlacement` usually
+  /// resizes a window away from the size its client asked for, and a first
+  /// frame drawn before that news arrives is laid out for the wrong rectangle
+  /// — the app in one corner of a frame the compositor has already sized,
+  /// desktop showing through the rest. The ack is the client saying it has
+  /// read the new size; `staleFirstFrame` is what then waits for a frame
+  /// drawn with it.
   uint32_t revealSerial = 0;
-  /// When to stop waiting for that ack. A client that never answers must
-  /// still end up on screen; see `sweepRevealDeadlines`.
+  /// When to stop waiting. A client that never answers, or answers and never
+  /// redraws, must still end up on screen; see `sweepRevealDeadlines`. Zero
+  /// once the hold has been resolved one way or the other.
   std::chrono::steady_clock::time_point revealDeadline{};
 
   /// Whether the compositor title bar is on screen.
@@ -3864,6 +3883,13 @@ class SurfaceRegistry : public lava::CompositorHost {
     if (id == 0) return 0;
     ClientSurface *panel = find(id);
     panel->panel = true;
+    // `openSurface` recorded the size *this* function worked out, which is
+    // not a size the client ever named: `CreatePanel` carries a thickness and
+    // an edge, and the length comes from the output. So a panel has no size
+    // it could have laid out for, and its first frame is stale by definition
+    // until the opening `Resize` reaches it.
+    panel->askedWidth = 0;
+    panel->askedHeight = 0;
     panel->edge = edge;
     panel->appId = appId;
     // A panel that reserves, reserves all of itself — the strip it draws is
@@ -4706,6 +4732,10 @@ class SurfaceRegistry : public lava::CompositorHost {
     notePainted(*surface);
     if (surface->awaitingFirstFrame) {
       surface->firstFrameRendered = true;
+      // Published after the ack, so the client had already consumed the
+      // opening `Resize` when it laid this out. Whatever it drew before that
+      // is behind us — this is the frame the reveal was waiting for.
+      if (surface->revealSerial == 0) surface->staleFirstFrame = false;
       revealIfReady(*surface);
     }
     damage(*surface);
@@ -4716,14 +4746,22 @@ class SurfaceRegistry : public lava::CompositorHost {
   /// Puts a window on screen once its first frame was drawn for the size the
   /// window actually is.
   ///
-  /// Two things have to land and either may be second, so this is called from
-  /// both: `present` renders the frame, `inputAcked` confirms the client had
-  /// been told its size before drawing it. Nothing polls — a reveal happens on
-  /// whichever of the two arrives last.
+  /// Called from both sides of that, because either may be last: `present`
+  /// renders a frame, `inputAcked` says the client has consumed the size it
+  /// was given. Nothing polls. The frame that reveals is the first one to
+  /// arrive after the ack — an ack with a frame already in hand is not
+  /// enough, because that frame was drawn before the client read it.
   void revealIfReady(ClientSurface &surface) {
     if (!surface.awaitingFirstFrame) return;
     if (!surface.firstFrameRendered || surface.revealSerial != 0) return;
+    // Having the ack is not having a frame drawn with it. A client acks on
+    // consuming an event and lays out afterwards, so the frame it published
+    // just before is still the one it drew at the size it asked for — which
+    // is the wrong rectangle whenever placement moved it. `present` clears
+    // this on the first frame that follows the ack.
+    if (surface.staleFirstFrame) return;
     surface.awaitingFirstFrame = false;
+    surface.revealDeadline = {};
     wlr_scene_node_set_enabled(&surface.node->node, true);
     // The rest of the window comes up in the same breath. Each of these has a
     // rule of its own that has been answering "no" while the hold was on (see
@@ -4745,6 +4783,14 @@ class SurfaceRegistry : public lava::CompositorHost {
   void holdReveal(uint32_t id, uint32_t serial) override {
     ClientSurface *surface = find(id);
     if (surface == nullptr || !surface->awaitingFirstFrame) return;
+    // This is the moment the client is first told what size it is, so a frame
+    // it published before now was laid out for the size it asked for. That is
+    // only wrong when the two differ — which they usually do, because
+    // placement restores a remembered frame and the work area is a ceiling,
+    // but not always: a window that got what it asked for has nothing to
+    // redraw and must not be made to wait for a frame that will never come.
+    surface->staleFirstFrame = surface->width != surface->askedWidth ||
+                               surface->height != surface->askedHeight;
     surface->revealSerial = serial;
     surface->revealDeadline =
         std::chrono::steady_clock::now() +
@@ -4756,23 +4802,40 @@ class SurfaceRegistry : public lava::CompositorHost {
   /// deadline still outstanding.
   ///
   /// The safety net, not the mechanism: an ack normally arrives in under a
-  /// millisecond and `inputAcked` does the reveal. This is for the client that
-  /// never answers — before `InputChannel` fired its hook on arming, *every*
-  /// untouched window was that client — where a window held forever would be a
-  /// worse bug than the one the hold exists to fix. Showing it late and saying
-  /// so in the log is the honest failure.
+  /// millisecond and the frame that follows it does the reveal. This is for
+  /// the client that never answers — before `InputChannel` fired its hook on
+  /// arming, *every* untouched window was that client — and for the one that
+  /// answers and then draws nothing more, where a window held forever would
+  /// be a worse bug than the one the hold exists to fix. Showing it late,
+  /// with whatever it did draw, and saying so in the log is the honest
+  /// failure.
   void sweepRevealDeadlines() {
     const auto now = std::chrono::steady_clock::now();
     int soonestMs = 0;
     for (const auto &surface : surfaces_) {
-      if (surface->revealSerial == 0) continue;
+      // Every window still holding, not only those still short of an ack: the
+      // ack can land while the frame it was supposed to vouch for has not
+      // been drawn yet, and that wait needs the same ceiling over it.
+      if (!surface->awaitingFirstFrame) continue;
+      if (surface->revealDeadline == std::chrono::steady_clock::time_point{}) {
+        continue;
+      }
       if (now >= surface->revealDeadline) {
-        wlr_log(WLR_INFO,
-                "window %u: shown without an input ack after %d ms — the "
-                "client never confirmed its size",
-                surface->id, kRevealHoldMs);
+        // Said before the reveal, because the reveal clears the reason.
+        const char *unanswered =
+            surface->revealSerial != 0
+                ? "never confirmed its size"
+                : "never redrew at the size it was given";
+        surface->revealDeadline = {};
         surface->revealSerial = 0;
+        surface->staleFirstFrame = false;
         revealIfReady(*surface);
+        wlr_log(WLR_INFO, "window %u: %s after %d ms — the client %s",
+                surface->id,
+                surface->awaitingFirstFrame
+                    ? "still held, having drawn nothing at all"
+                    : "shown on the hold's deadline",
+                kRevealHoldMs, unanswered);
         continue;
       }
       const int left = std::max<int>(
@@ -5220,6 +5283,11 @@ class SurfaceRegistry : public lava::CompositorHost {
                        bool decorated) {
     if (renderer_ == nullptr || parent == nullptr) return 0;
 
+    // Before the clamp below, because the client is laying out for what it
+    // asked for and not for what it is about to be given. See `askedWidth`.
+    const uint32_t askedW = width;
+    const uint32_t askedH = height;
+
     // A requested size is a request, and the screen is the limit on it. A
     // client asking for more than there is gets what there is: the alternative
     // is a window whose bottom and right are off the display, which is not
@@ -5244,6 +5312,8 @@ class SurfaceRegistry : public lava::CompositorHost {
       return 0;
     }
     surface->id = nextId_++;
+    surface->askedWidth = askedW;
+    surface->askedHeight = askedH;
     // So the surface's whole frame — the arena poll, the render, the scene
     // handover — reports under the number everything else calls it by.
     surface->canvas->setReportedId(surface->id);
