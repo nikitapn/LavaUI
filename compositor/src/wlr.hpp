@@ -2,8 +2,8 @@
 
 // The one place wlroots' C headers enter this C++ program.
 //
-// Two things have to be got right before any of them will compile, and both
-// are easier to fix once here than at every use site.
+// Several things have to be got right before any of them will compile, and
+// each is easier to fix once here than at every use site.
 
 // 1. Every wlroots header opens with `#error` unless this is defined. The name
 //    is a promise about API stability between releases, not about maturity —
@@ -111,5 +111,26 @@ extern "C" {
 #define class xclass
 #include <wlr/xwayland.h>
 #undef class
+
+// 4. `wlr/types/wlr_input_method_v2.h` names a field `delete`. Same problem
+//    as `class` above and the same answer, with one difference worth stating:
+//    `delete` is not merely a keyword here, it is an *operator*, so leaving
+//    the rename in force would silently turn every `delete p;` in the program
+//    into a call to something that does not exist. The window is therefore as
+//    narrow as it can be — one include, nothing else inside it.
+//
+//    Everything this header reaches (`wlr_seat.h`, `wlr/util/box.h`,
+//    `wayland-server-core.h`) is included above, so only its own text is
+//    parsed under the rename and there is no C++ in it to break.
+//
+//    The field is reached as `delete_` in this program. Re-check with
+//    `grep -n '\bdelete\b' wlr/types/wlr_input_method_v2.h` after a wlroots
+//    upgrade — upstream renaming it would make this unnecessary rather than
+//    wrong, and the `delete_` uses would then fail to compile and say so.
+#define delete delete_
+#include <wlr/types/wlr_input_method_v2.h>
+#undef delete
+
+#include <wlr/types/wlr_text_input_v3.h>
 
 }  // extern "C"

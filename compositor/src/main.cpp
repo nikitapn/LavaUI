@@ -227,6 +227,9 @@ struct Workspaces {
   /// Panels are not members of a workspace — a taskbar is on all of them — so
   /// this tree is never disabled.
   wlr_scene_tree *panels = nullptr;
+  /// Input method candidate windows — see `RelayPopup`. Not a member of a
+  /// workspace either: the field being typed into is on the current one.
+  wlr_scene_tree *inputPopups = nullptr;
   /// Whatever a client is dragging, while it is dragging one. Above even the
   /// panels: it hangs off the cursor, and the cursor is over everything.
   wlr_scene_tree *dragIcons = nullptr;
@@ -242,6 +245,10 @@ struct Workspaces {
     }
     wlr_scene_node_set_enabled(&tree[current]->node, true);
     panels = wlr_scene_tree_create(root);
+    // An input method's candidate list. Above the panels because it belongs
+    // to whatever is being typed into and a taskbar must not cover the word
+    // being chosen; below the drag icon, which is on the cursor.
+    inputPopups = wlr_scene_tree_create(root);
     dragIcons = wlr_scene_tree_create(root);
   }
 
@@ -670,6 +677,148 @@ struct Keyboard {
   static void on_destroy(wl_listener *listener, void *data);
 };
 
+// ─── Input method relay ────────────────────────────────────────────────────
+
+struct InputMethodRelay;
+
+/// One `zwp_text_input_v3` — a client saying "there is a text field here".
+///
+/// Wrapped rather than used bare because the protocol's `enter` is the
+/// compositor's to send: wlroots tracks the object and its state, but has no
+/// idea which surface has the keyboard, so nothing tells this client it is
+/// being typed into until we do.
+struct RelayTextInput {
+  InputMethodRelay *relay = nullptr;
+  wlr_text_input_v3 *wlr = nullptr;
+  wl_list link{};
+
+  Listener<RelayTextInput> enable;
+  Listener<RelayTextInput> commit;
+  Listener<RelayTextInput> disable;
+  Listener<RelayTextInput> destroy;
+
+  static void on_enable(wl_listener *listener, void *data);
+  static void on_commit(wl_listener *listener, void *data);
+  static void on_disable(wl_listener *listener, void *data);
+  static void on_destroy(wl_listener *listener, void *data);
+};
+
+/// An input method's own surface — in practice the candidate list, the row of
+/// characters "nihao" could become.
+///
+/// It is not an xdg popup and cannot be: the method is a separate client from
+/// the window being typed into, so it has no parent surface to hang off. The
+/// compositor places it instead, against the cursor rectangle the text field
+/// reported, which is the only thing either side knows about where the caret
+/// actually is.
+struct RelayPopup {
+  InputMethodRelay *relay = nullptr;
+  wlr_input_popup_surface_v2 *wlr = nullptr;
+  wlr_scene_tree *tree = nullptr;
+  wl_list link{};
+
+  Listener<RelayPopup> commit;
+  Listener<RelayPopup> destroy;
+
+  /// Puts it under the caret of the focused field, pulled back onto the
+  /// output if it would hang off the edge. No-op while nothing is focused —
+  /// there is then no caret to be under.
+  void place();
+
+  static void on_commit(wl_listener *listener, void *data);
+  static void on_destroy(wl_listener *listener, void *data);
+};
+
+/// Carries typing between a client's text field and an input method.
+///
+/// wlroots implements both protocols and deliberately does not connect them:
+/// `wlr_text_input_v3` knows what a client's text field wants, and
+/// `wlr_input_method_v2` knows what fcitx5 or ibus produced, but which field
+/// is focused and which method serves it is a compositor policy question, so
+/// every compositor writes this piece. sway's is `input/text_input.c`; this
+/// is the same shape, smaller because there is one seat.
+///
+/// The traffic runs both ways. Down: the focused field's surrounding text,
+/// content type and change cause reach the method so it can be
+/// context-sensitive. Up: the method's preedit, its committed string, and any
+/// surrounding text it wants deleted reach the field. Keys reach the method
+/// first — while it holds a grab, they never reach the client at all, which
+/// is what lets typing "nihao" become 你好 rather than five Latin letters.
+///
+/// Nothing here is LavaUI's path. LavaUI clients take keys from GLFW, which
+/// has no preedit API on any platform, so this serves the GTK, Qt and
+/// Electron windows on the desktop — the ones that already know how.
+struct InputMethodRelay {
+  Server *server = nullptr;
+  wlr_text_input_manager_v3 *textInputs = nullptr;
+  wlr_input_method_manager_v2 *inputMethods = nullptr;
+
+  /// The one input method in play. The protocol allows a client per seat and
+  /// no more; a second is told `unavailable` rather than queued, because two
+  /// methods competing for one keyboard has no sensible resolution.
+  wlr_input_method_v2 *method = nullptr;
+  /// Its keyboard grab, while it holds one. Non-null means keys go here and
+  /// not to the focused client — see `Keyboard::on_key`.
+  wlr_input_method_keyboard_grab_v2 *grab = nullptr;
+  /// Whether the method has been told a field is active.
+  ///
+  /// Tracked here rather than read back off the text input at the moment it
+  /// is needed, because at teardown the two disagree: a client disconnecting
+  /// destroys its surface and its text input in an order nothing guarantees,
+  /// and whichever arrives second finds the first already forgotten. Inferred
+  /// from the text input, that left the method activated for a field that no
+  /// longer existed — fcitx5 holding its candidate window over a closed
+  /// window, and the next real field never activating because it already
+  /// thought it had.
+  bool methodActive = false;
+
+  wl_list textInputList{};  // RelayTextInput.link
+  wl_list popupList{};      // RelayPopup.link
+
+  Listener<InputMethodRelay> new_text_input;
+  Listener<InputMethodRelay> new_input_method;
+  Listener<InputMethodRelay> keyboard_focus_change;
+  Listener<InputMethodRelay> method_commit;
+  Listener<InputMethodRelay> method_grab_keyboard;
+  Listener<InputMethodRelay> method_new_popup;
+  Listener<InputMethodRelay> method_destroy;
+  Listener<InputMethodRelay> grab_destroy;
+
+  void init(Server *server, wl_display *display);
+  void detachListeners();
+
+  /// The text input that currently has both the keyboard and its own
+  /// `enable` — the only one whose state may reach the method.
+  RelayTextInput *focused() const;
+  /// Pushes the focused field's state down to the method, ending in `done`.
+  void sendState(const RelayTextInput &input);
+  /// Tells the method a field is live and hands it that field's state. Sends
+  /// `activate` only on the transition, so a field committing twice does not
+  /// look like two fields.
+  void activate(const RelayTextInput &input);
+  /// The inverse, and a no-op when nothing was activated — which is what
+  /// makes it safe to call from every teardown path without any of them
+  /// having to know what the others already did.
+  void deactivate();
+  /// Sends `leave` and, if it was the active one, deactivates the method.
+  void leave(RelayTextInput &input);
+  /// Re-places every candidate window. Called when the caret moves, which is
+  /// on every commit from the focused field.
+  void placePopups();
+  /// Layout-space origin of the surface that currently has the keyboard, and
+  /// whether one was found at all.
+  bool focusedSurfaceOrigin(int &lx, int &ly) const;
+
+  static void on_new_text_input(wl_listener *listener, void *data);
+  static void on_new_input_method(wl_listener *listener, void *data);
+  static void on_keyboard_focus_change(wl_listener *listener, void *data);
+  static void on_method_commit(wl_listener *listener, void *data);
+  static void on_method_grab_keyboard(wl_listener *listener, void *data);
+  static void on_method_new_popup(wl_listener *listener, void *data);
+  static void on_method_destroy(wl_listener *listener, void *data);
+  static void on_grab_destroy(wl_listener *listener, void *data);
+};
+
 // ─── Server ────────────────────────────────────────────────────────────────
 
 struct Server {
@@ -722,6 +871,10 @@ struct Server {
   /// surface at a dbusmenu export. Looked up when focus changes so the panel
   /// can import without an X11 window id.
   lava::AppMenuManager appmenu;
+  /// Typing between a client's text field and an input method — see
+  /// `InputMethodRelay`. Inert until `main` calls `init`, and inert for good
+  /// on a machine with no input method running.
+  InputMethodRelay inputMethod;
   /// An interactive move or resize in progress, and what it started from.
   ///
   /// Alt+drag rather than window edges: there are no decorations to grab yet,
@@ -1017,6 +1170,7 @@ struct Server {
           &request_set_primary_selection, &request_start_drag, &start_drag}) {
       listener->detach();
     }
+    inputMethod.detachListeners();
   }
 
   static void on_new_output(wl_listener *listener, void *data);
@@ -7144,6 +7298,14 @@ Keyboard::~Keyboard() {
 
 void Keyboard::on_modifiers(wl_listener *listener, void *) {
   auto *keyboard = owner_of<Keyboard>(listener);
+  // An input method holding the keyboard needs the modifiers too, or it
+  // cannot tell Shift+2 from 2 and its own shortcuts stop working.
+  if (auto *grab = keyboard->server->inputMethod.grab) {
+    wlr_input_method_keyboard_grab_v2_set_keyboard(grab, keyboard->wlr);
+    wlr_input_method_keyboard_grab_v2_send_modifiers(grab,
+                                                     &keyboard->wlr->modifiers);
+    return;
+  }
   wlr_seat_set_keyboard(keyboard->server->seat, keyboard->wlr);
   wlr_seat_keyboard_notify_modifiers(keyboard->server->seat,
                                      &keyboard->wlr->modifiers);
@@ -7965,6 +8127,22 @@ void Keyboard::on_key(wl_listener *listener, void *data) {
   }
 
   server->stopKeyRepeat();
+
+  // An input method with a grab sees the key *instead of* the client, which
+  // is the whole point: "nihao" has to reach fcitx5 as five keys and reach
+  // the document as 你好, and it cannot do both. The method decides when the
+  // grab ends — it takes one when a text field activates and drops it when
+  // the field goes away — so there is nothing to arbitrate here.
+  //
+  // Below the compositor's own bindings, which are handled above and have
+  // already returned: Alt+Tab must still switch windows while typing.
+  if (auto *grab = server->inputMethod.grab) {
+    wlr_input_method_keyboard_grab_v2_set_keyboard(grab, keyboard->wlr);
+    wlr_input_method_keyboard_grab_v2_send_key(grab, event->time_msec,
+                                               event->keycode, event->state);
+    return;
+  }
+
   wlr_seat_set_keyboard(server->seat, keyboard->wlr);
   wlr_seat_keyboard_notify_key(server->seat, event->time_msec, event->keycode,
                                event->state);
@@ -7975,6 +8153,403 @@ void Keyboard::on_destroy(wl_listener *listener, void *) {
   Server *server = keyboard->server;
   delete keyboard;
   server->update_seat_capabilities();
+}
+
+// ─── Input method relay ────────────────────────────────────────────────────
+
+void InputMethodRelay::init(Server *owner, wl_display *display) {
+  server = owner;
+  wl_list_init(&textInputList);
+  wl_list_init(&popupList);
+  textInputs = wlr_text_input_manager_v3_create(display);
+  inputMethods = wlr_input_method_manager_v2_create(display);
+  if (textInputs == nullptr || inputMethods == nullptr) {
+    wlr_log(WLR_ERROR, "input method protocols unavailable");
+    return;
+  }
+  new_text_input.attach(&textInputs->events.text_input, this,
+                        InputMethodRelay::on_new_text_input);
+  new_input_method.attach(&inputMethods->events.input_method, this,
+                          InputMethodRelay::on_new_input_method);
+  // The seat's own focus signal rather than a call at the end of
+  // `Server::focus`: focus also moves through `blurAll`, through a layer
+  // surface taking the keyboard, and through a client dying. All of them
+  // reach here, and only this one does.
+  keyboard_focus_change.attach(&server->seat->keyboard_state.events.focus_change,
+                               this,
+                               InputMethodRelay::on_keyboard_focus_change);
+}
+
+void InputMethodRelay::detachListeners() {
+  for (Listener<InputMethodRelay> *listener :
+       {&new_text_input, &new_input_method, &keyboard_focus_change,
+        &method_commit, &method_grab_keyboard, &method_new_popup,
+        &method_destroy, &grab_destroy}) {
+    listener->detach();
+  }
+}
+
+RelayTextInput *InputMethodRelay::focused() const {
+  RelayTextInput *input = nullptr;
+  wl_list_for_each(input, &textInputList, link) {
+    // Both halves matter. A field the client has not enabled is not being
+    // typed into, and a field on an unfocused surface is somebody else's.
+    if (input->wlr->focused_surface != nullptr && input->wlr->current_enabled) {
+      return input;
+    }
+  }
+  return nullptr;
+}
+
+void InputMethodRelay::sendState(const RelayTextInput &input) {
+  if (method == nullptr) return;
+  const wlr_text_input_v3 *wlr = input.wlr;
+
+  // Guarded on the feature bits rather than sent unconditionally: a field
+  // that never set surrounding text has none, and `state.surrounding.text`
+  // is then a null pointer the protocol would carry as an empty string —
+  // which reads to the method as "there is nothing around the cursor" and is
+  // not the same claim as "I cannot tell you".
+  if ((wlr->active_features & WLR_TEXT_INPUT_V3_FEATURE_SURROUNDING_TEXT) != 0) {
+    wlr_input_method_v2_send_surrounding_text(
+        method, wlr->current.surrounding.text, wlr->current.surrounding.cursor,
+        wlr->current.surrounding.anchor);
+  }
+  wlr_input_method_v2_send_text_change_cause(method,
+                                             wlr->current.text_change_cause);
+  if ((wlr->active_features & WLR_TEXT_INPUT_V3_FEATURE_CONTENT_TYPE) != 0) {
+    wlr_input_method_v2_send_content_type(method, wlr->current.content_type.hint,
+                                          wlr->current.content_type.purpose);
+  }
+  wlr_input_method_v2_send_done(method);
+}
+
+void InputMethodRelay::activate(const RelayTextInput &input) {
+  if (method == nullptr) return;
+  if (!methodActive) {
+    wlr_input_method_v2_send_activate(method);
+    methodActive = true;
+  }
+  sendState(input);
+}
+
+void InputMethodRelay::deactivate() {
+  if (method == nullptr || !methodActive) return;
+  wlr_input_method_v2_send_deactivate(method);
+  wlr_input_method_v2_send_done(method);
+  methodActive = false;
+}
+
+void InputMethodRelay::leave(RelayTextInput &input) {
+  if (input.wlr->focused_surface == nullptr) return;
+  // Order matters: the method is told to stand down while the field is still
+  // the focused one, because `send_leave` is what clears that.
+  if (input.wlr->current_enabled) deactivate();
+  wlr_text_input_v3_send_leave(input.wlr);
+}
+
+void InputMethodRelay::on_new_text_input(wl_listener *listener, void *data) {
+  auto *relay = owner_of<InputMethodRelay>(listener);
+  auto *wlr = static_cast<wlr_text_input_v3 *>(data);
+  // One seat here, but the object carries its own, and a text input for a
+  // seat we do not run is not ours to answer for.
+  if (wlr->seat != relay->server->seat) return;
+
+  auto *input = new RelayTextInput();
+  input->relay = relay;
+  input->wlr = wlr;
+  input->enable.attach(&wlr->events.enable, input, RelayTextInput::on_enable);
+  input->commit.attach(&wlr->events.commit, input, RelayTextInput::on_commit);
+  input->disable.attach(&wlr->events.disable, input, RelayTextInput::on_disable);
+  input->destroy.attach(&wlr->events.destroy, input, RelayTextInput::on_destroy);
+  wl_list_insert(&relay->textInputList, &input->link);
+
+  // A field can appear while its window already has the keyboard — a dialog
+  // that creates its entry after mapping, or an input method starting mid
+  // session. Without this it would wait for a focus change that may never
+  // come, and the user would have to click away and back to type.
+  wlr_surface *focus = relay->server->seat->keyboard_state.focused_surface;
+  if (focus != nullptr &&
+      wl_resource_get_client(focus->resource) ==
+          wl_resource_get_client(wlr->resource)) {
+    wlr_text_input_v3_send_enter(wlr, focus);
+  }
+}
+
+void InputMethodRelay::on_keyboard_focus_change(wl_listener *listener,
+                                                void *data) {
+  auto *relay = owner_of<InputMethodRelay>(listener);
+  auto *event = static_cast<wlr_seat_keyboard_focus_change_event *>(data);
+
+  RelayTextInput *input = nullptr;
+  wl_list_for_each(input, &relay->textInputList, link) {
+    if (input->wlr->focused_surface != nullptr) relay->leave(*input);
+    if (event->new_surface == nullptr) continue;
+    if (wl_resource_get_client(event->new_surface->resource) !=
+        wl_resource_get_client(input->wlr->resource)) {
+      continue;
+    }
+    // Enter, not activate. The client decides whether this surface's field is
+    // actually being typed into and answers with `enable`; a window with four
+    // entry boxes has four of these and at most one of them is live.
+    wlr_text_input_v3_send_enter(input->wlr, event->new_surface);
+  }
+}
+
+void InputMethodRelay::on_new_input_method(wl_listener *listener, void *data) {
+  auto *relay = owner_of<InputMethodRelay>(listener);
+  auto *method = static_cast<wlr_input_method_v2 *>(data);
+  if (method->seat != relay->server->seat) return;
+
+  if (relay->method != nullptr) {
+    // Two methods on one keyboard cannot both be right, and the protocol has
+    // a word for it. The existing one keeps the seat.
+    wlr_input_method_v2_send_unavailable(method);
+    return;
+  }
+  relay->method = method;
+  relay->method_commit.attach(&method->events.commit, relay,
+                              InputMethodRelay::on_method_commit);
+  relay->method_grab_keyboard.attach(&method->events.grab_keyboard, relay,
+                                     InputMethodRelay::on_method_grab_keyboard);
+  relay->method_new_popup.attach(&method->events.new_popup_surface, relay,
+                                 InputMethodRelay::on_method_new_popup);
+  relay->method_destroy.attach(&method->events.destroy, relay,
+                               InputMethodRelay::on_method_destroy);
+
+  // A method started while a field was already focused and enabled — the
+  // usual case, since the method is launched by the session and the user is
+  // already in a window. It has missed the `enable` that would have told it.
+  if (RelayTextInput *input = relay->focused()) relay->activate(*input);
+}
+
+void InputMethodRelay::on_method_commit(wl_listener *listener, void *data) {
+  auto *relay = owner_of<InputMethodRelay>(listener);
+  auto *method = static_cast<wlr_input_method_v2 *>(data);
+  if (method != relay->method) return;
+  RelayTextInput *input = relay->focused();
+  if (input == nullptr) return;
+
+  // Deletion first, then the commit, then the preedit — the order the
+  // protocol specifies and the order they have to be applied in: a method
+  // replacing a word deletes what is around the cursor before it inserts.
+  if (method->current.delete_.before_length != 0 ||
+      method->current.delete_.after_length != 0) {
+    wlr_text_input_v3_send_delete_surrounding_text(
+        input->wlr, method->current.delete_.before_length,
+        method->current.delete_.after_length);
+  }
+  if (method->current.commit_text != nullptr) {
+    wlr_text_input_v3_send_commit_string(input->wlr,
+                                         method->current.commit_text);
+  }
+  // Sent even when null, which is how a preedit is *cleared*: whatever the
+  // client is currently showing underlined has to go away when the method
+  // lets go of it.
+  wlr_text_input_v3_send_preedit_string(input->wlr, method->current.preedit.text,
+                                        method->current.preedit.cursor_begin,
+                                        method->current.preedit.cursor_end);
+  wlr_text_input_v3_send_done(input->wlr);
+}
+
+void InputMethodRelay::on_method_grab_keyboard(wl_listener *listener,
+                                               void *data) {
+  auto *relay = owner_of<InputMethodRelay>(listener);
+  auto *grab = static_cast<wlr_input_method_keyboard_grab_v2 *>(data);
+
+  // Whatever the seat is driving, so the method sees the same keymap and
+  // repeat rate the client would have.
+  if (wlr_keyboard *keyboard = wlr_seat_get_keyboard(relay->server->seat)) {
+    wlr_input_method_keyboard_grab_v2_set_keyboard(grab, keyboard);
+  }
+  relay->grab = grab;
+  relay->grab_destroy.attach(&grab->events.destroy, relay,
+                             InputMethodRelay::on_grab_destroy);
+}
+
+void InputMethodRelay::on_grab_destroy(wl_listener *listener, void *) {
+  auto *relay = owner_of<InputMethodRelay>(listener);
+  relay->grab_destroy.detach();
+  relay->grab = nullptr;
+}
+
+void InputMethodRelay::on_method_destroy(wl_listener *listener, void *) {
+  auto *relay = owner_of<InputMethodRelay>(listener);
+  for (Listener<InputMethodRelay> *listener :
+       {&relay->method_commit, &relay->method_grab_keyboard,
+        &relay->method_new_popup, &relay->method_destroy, &relay->grab_destroy}) {
+    listener->detach();
+  }
+  relay->method = nullptr;
+  // Dropped with the method that owned it. Leaving it set would send every
+  // key into a freed grab — the keyboard would stop reaching anything.
+  relay->grab = nullptr;
+  // Nothing to deactivate: the object that would be told is the one going
+  // away. The flag has to be cleared regardless, or the next method to
+  // connect inherits a claim that a field is already active and never sends
+  // its own `activate`.
+  relay->methodActive = false;
+
+  // The focused field keeps its `enter`: the surface still has the keyboard,
+  // and the field is still a field. It simply stops being offered a preedit,
+  // which is the same state it was in before any method existed. Any preedit
+  // it is currently showing is withdrawn, or the last uncommitted syllable
+  // would sit in the document forever.
+  if (RelayTextInput *input = relay->focused()) {
+    wlr_text_input_v3_send_preedit_string(input->wlr, nullptr, 0, 0);
+    wlr_text_input_v3_send_done(input->wlr);
+  }
+}
+
+bool InputMethodRelay::focusedSurfaceOrigin(int &lx, int &ly) const {
+  wlr_surface *focus = server->seat->keyboard_state.focused_surface;
+  if (focus == nullptr) return false;
+  // Through the window list rather than the surface: a `wlr_surface` has no
+  // position of its own, only the scene node showing it does, and the window
+  // is what holds that node — the same reason `Server::focus` looks a
+  // deactivating window up this way.
+  for (FramedWindow *window : server->toplevels) {
+    if (window->focusSurface() != focus) continue;
+    return wlr_scene_node_coords(window->contentNode(), &lx, &ly);
+  }
+  return false;
+}
+
+void RelayPopup::place() {
+  if (tree == nullptr) return;
+  RelayTextInput *input = relay->focused();
+  int lx = 0;
+  int ly = 0;
+  if (input == nullptr || !relay->focusedSurfaceOrigin(lx, ly)) {
+    // Nothing to sit under. Hidden rather than left where it was: a stale
+    // candidate list floating over an unrelated window is worse than none.
+    wlr_scene_node_set_enabled(&tree->node, false);
+    return;
+  }
+  wlr_scene_node_set_enabled(&tree->node, true);
+
+  // Surface-local, as `set_cursor_rectangle` defines it, so the field's own
+  // origin has to be added back.
+  wlr_box caret = input->wlr->current.cursor_rectangle;
+  int x = lx + caret.x;
+  int y = ly + caret.y + caret.height;
+
+  // Below the caret if it fits, above it if not — the same flip every
+  // completion list does, and the reason it matters here is that a caret near
+  // the bottom of the screen is exactly where a long candidate list appears.
+  const int width = wlr->surface->current.width;
+  const int height = wlr->surface->current.height;
+  if (wlr_output *output = wlr_output_layout_output_at(
+          relay->server->output_layout, x, y)) {
+    wlr_box usable{};
+    wlr_output_layout_get_box(relay->server->output_layout, output, &usable);
+    if (usable.width > 0 && usable.height > 0) {
+      if (y + height > usable.y + usable.height) {
+        const int above = ly + caret.y - height;
+        y = above >= usable.y ? above : usable.y + usable.height - height;
+      }
+      if (x + width > usable.x + usable.width) {
+        x = usable.x + usable.width - width;
+      }
+      x = std::max(x, usable.x);
+      y = std::max(y, usable.y);
+    }
+  }
+  wlr_scene_node_set_position(&tree->node, x, y);
+
+  // What the method asked for in return: where the text it is completing
+  // actually is, so it can point an arrow at it or pick a side itself.
+  wlr_box surfaceRelative = caret;
+  wlr_input_popup_surface_v2_send_text_input_rectangle(wlr, &surfaceRelative);
+}
+
+void InputMethodRelay::placePopups() {
+  RelayPopup *popup = nullptr;
+  wl_list_for_each(popup, &popupList, link) { popup->place(); }
+}
+
+void InputMethodRelay::on_method_new_popup(wl_listener *listener, void *data) {
+  auto *relay = owner_of<InputMethodRelay>(listener);
+  auto *wlr = static_cast<wlr_input_popup_surface_v2 *>(data);
+  if (relay->server->workspaces.inputPopups == nullptr) return;
+
+  auto *popup = new RelayPopup();
+  popup->relay = relay;
+  popup->wlr = wlr;
+  popup->tree = wlr_scene_subsurface_tree_create(
+      relay->server->workspaces.inputPopups, wlr->surface);
+  if (popup->tree == nullptr) {
+    delete popup;
+    return;
+  }
+  // Nothing to show until it has committed a buffer, and an empty tree at
+  // 0,0 is a black rectangle in the corner of the screen.
+  wlr_scene_node_set_enabled(&popup->tree->node, false);
+  popup->commit.attach(&wlr->surface->events.commit, popup,
+                       RelayPopup::on_commit);
+  popup->destroy.attach(&wlr->events.destroy, popup, RelayPopup::on_destroy);
+  wl_list_insert(&relay->popupList, &popup->link);
+}
+
+void RelayPopup::on_commit(wl_listener *listener, void *) {
+  auto *popup = owner_of<RelayPopup>(listener);
+  // Its size arrives with its content, and the placement is derived from the
+  // size — a list that grew a row has to move up to keep its top edge.
+  popup->place();
+}
+
+void RelayPopup::on_destroy(wl_listener *listener, void *) {
+  auto *popup = owner_of<RelayPopup>(listener);
+  popup->commit.detach();
+  popup->destroy.detach();
+  // The subsurface tree belongs to the surface being destroyed, and taking it
+  // down here is what stops the scene from holding a node for it.
+  if (popup->tree != nullptr) wlr_scene_node_destroy(&popup->tree->node);
+  wl_list_remove(&popup->link);
+  delete popup;
+}
+
+void RelayTextInput::on_enable(wl_listener *listener, void *) {
+  auto *input = owner_of<RelayTextInput>(listener);
+  InputMethodRelay *relay = input->relay;
+  if (input->wlr->focused_surface == nullptr) return;
+  relay->activate(*input);
+}
+
+void RelayTextInput::on_commit(wl_listener *listener, void *) {
+  auto *input = owner_of<RelayTextInput>(listener);
+  // A commit on a field the client has not enabled is legal and means
+  // nothing to the method: the state it carries is for a field nobody is
+  // typing into.
+  if (!input->wlr->current_enabled) return;
+  input->relay->sendState(*input);
+  // The caret is the one thing that moves while typing, and the candidate
+  // list is placed against it.
+  input->relay->placePopups();
+}
+
+void RelayTextInput::on_disable(wl_listener *listener, void *) {
+  auto *input = owner_of<RelayTextInput>(listener);
+  input->relay->deactivate();
+}
+
+void RelayTextInput::on_destroy(wl_listener *listener, void *) {
+  auto *input = owner_of<RelayTextInput>(listener);
+  InputMethodRelay *relay = input->relay;
+  for (Listener<RelayTextInput> *l :
+       {&input->enable, &input->commit, &input->disable, &input->destroy}) {
+    l->detach();
+  }
+  wl_list_remove(&input->link);
+  delete input;
+
+  // Asked after unlinking, so the answer is about the fields that are left.
+  // A client closing its window destroys the surface and the text input in
+  // an order nothing guarantees, so this is reached with the field's own
+  // state already cleared as often as not — which is why the question is
+  // "is any field still live" rather than "was this one".
+  if (relay->focused() == nullptr) relay->deactivate();
+  relay->placePopups();
 }
 
 // ─── Server ────────────────────────────────────────────────────────────────
@@ -9770,6 +10345,11 @@ int main() {
   server.pointer_focus_change.attach(
       &server.seat->pointer_state.events.focus_change, &server,
       Server::on_pointer_focus_change);
+  // Typing for foreign clients. Publishes both protocols whether or not an
+  // input method ever connects: a client checks for `zwp_text_input_manager_v3`
+  // at startup and will not look again, so it has to be there before fcitx5
+  // is — or before it is installed at all.
+  server.inputMethod.init(&server, server.display);
   server.new_input.attach(&server.backend->events.new_input, &server,
                           Server::on_new_input);
   server.request_cursor.attach(&server.seat->events.request_set_cursor, &server,
