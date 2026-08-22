@@ -414,8 +414,11 @@ extension View {
 
     /// Scissor this view's paint (and its children's) to its layout rect.
     ///
-    /// Yoga still sizes children freely; only drawing is clipped. Use on fixed
-    /// chrome such as a menubar so hover fills cannot spill into content.
+    /// Yoga still sizes children freely; only drawing is clipped. That is
+    /// what makes `.frame(width:).clipped()` on a `Text` work: the glyphs
+    /// keep their intrinsic width, and the extra ink is cut off rather than
+    /// drawn over the next view. Use on fixed chrome such as a menubar so
+    /// hover fills cannot spill into content.
     public func clipped() -> ModifiedView<Self> {
         styled { $0.clipsContent = true }
     }

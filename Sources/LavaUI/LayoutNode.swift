@@ -1073,16 +1073,29 @@ final class LeafNode: YogaBoxNode {
             availWidth: width,
             mode: mode
         )
-        if kind == .text, let limit = textLineLimit, entry.lines.count > limit {
-            var visible = Array(entry.lines.prefix(limit))
-            if let last = visible.indices.last {
-                visible[last] = font.ellipsized(visible[last], availWidth: max(0, width))
+        if kind == .text, let limit = textLineLimit {
+            let constrained = width > 0 && (
+                widthMode == YGMeasureModeExactly || widthMode == YGMeasureModeAtMost
+            )
+            var visible = Array(entry.lines.prefix(max(1, limit)))
+            // `lines.count > limit` is a wrap that ran past the cap. A
+            // *single* long line in a `.frame(width:)` never wraps — there
+            // is nothing to prefix — and used to paint the whole string
+            // past the box. Ellipsize that case too.
+            let overflowed = entry.lines.count > limit
+                || (constrained && entry.width > width)
+            if overflowed, let last = visible.indices.last {
+                visible[last] = font.ellipsized(
+                    visible[last], availWidth: max(0, width - 8)
+                )
             }
             cachedLines = visible
-            return YGSize(
-                width: entry.width + 8,
-                height: font.lineHeight * Float(visible.count) + 4
-            )
+            if overflowed {
+                return YGSize(
+                    width: entry.width + 8,
+                    height: font.lineHeight * Float(visible.count) + 4
+                )
+            }
         }
         cachedLines = entry.lines
         // Padding keeps a slightly larger hit target.

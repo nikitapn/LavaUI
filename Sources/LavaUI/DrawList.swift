@@ -1330,8 +1330,15 @@ public final class DrawList {
                     if let flags {
                         beginNode(leaf.id, x: x, y: y, w: w, h: h, flags: flags)
                     }
-                    WidgetProfiler.measure(leaf.agentId ?? leaf.label) {
-                        emitLeafContents(leaf, x: x, y: y, w: w, h: h)
+                    // Stacks and style boxes already scissor *children* for
+                    // `.clipped()`. A leaf has no children — the overflow is
+                    // its own paint (a `Text` in a narrower `.frame`). Without
+                    // this the glyphs ignore the box and `.clipped()` is a
+                    // no-op on the one view people actually put it on.
+                    withContentClip(leaf.clipsContent, x: x, y: y, w: w, h: h) {
+                        WidgetProfiler.measure(leaf.agentId ?? leaf.label) {
+                            emitLeafContents(leaf, x: x, y: y, w: w, h: h)
+                        }
                     }
                     if flags != nil {
                         endNode(
@@ -1449,7 +1456,25 @@ public final class DrawList {
             // the outer box origin put glyphs at its top-left and left all
             // padding on the bottom/right (most visible on hover fills).
             let lineH = (leaf.font ?? FontStore.default)?.lineHeight ?? 18
-            let lines = leaf.cachedLines.isEmpty ? [leaf.text] : leaf.cachedLines
+            var lines = leaf.cachedLines.isEmpty ? [leaf.text] : leaf.cachedLines
+            // Yoga skips the measure func when both width and height are
+            // set, so `cachedLines` never gets the ellipsis `lineLimit`
+            // asked for. Honour it here against the box we actually have.
+            if leaf.kind == .text, let limit = leaf.textLineLimit {
+                lines = Array(lines.prefix(max(1, limit)))
+                if let font = leaf.font ?? FontStore.default,
+                   let last = lines.indices.last
+                {
+                    let budget = max(
+                        0, w - leaf.padding.leading - leaf.padding.trailing - 8
+                    )
+                    if budget > 0, font.shapedRun(lines[last]).width > budget {
+                        lines[last] = font.ellipsized(
+                            lines[last], availWidth: budget
+                        )
+                    }
+                }
+            }
             let textX = x + leaf.padding.leading
             let textY = y + leaf.padding.top + 2
             var searchStart = leaf.text.startIndex
