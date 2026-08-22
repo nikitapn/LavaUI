@@ -91,6 +91,15 @@ var targets: [Target] = [
             .linkedLibrary("pulse", .when(platforms: [.linux])),
         ]
     ),
+    // sd-bus MPRIS client for the panel media applet (spotifyd and friends).
+    .target(
+        name: "CMpris",
+        path: "Sources/CMpris",
+        publicHeadersPath: "include",
+        linkerSettings: [
+            .linkedLibrary("systemd", .when(platforms: [.linux])),
+        ]
+    ),
     .target(name: "TraceLoomCore"),
     .target(name: "SpotifyCore"),
     .target(name: "LavaTermCore"),
@@ -113,7 +122,7 @@ var targets: [Target] = [
     // out of the same client API an app uses. See Sources/LavaTaskbar.
     .executableTarget(
         name: "LavaTaskbar",
-        dependencies: ["LavaUI", "CPulse"]
+        dependencies: ["LavaUI", "CPulse", "CMpris"]
             + (haveNprpc ? [Target.Dependency("LavaClient"),
                             Target.Dependency("LavaIDL")] : []),
         resources: [

@@ -40,8 +40,10 @@ import Observation
 // calls Activate / ContextMenu on the item; the app draws its own menu window.
 // That is phase 1 of tray support — stock applets without rewriting them.
 //
-// And native applets next to the tray: volume (PulseAudio / PipeWire-Pulse)
-// and a month calendar on the clock — both pure LavaUI popovers.
+// And native applets next to the tray: volume (PulseAudio / PipeWire-Pulse),
+// a month calendar on the clock, and a media chip that talks MPRIS —
+// preferring spotifyd, falling back to any other player on the session
+// bus. Cover, title, next/previous; the same popover contract as volume.
 //
 // What it does not have yet, and why:
 //
@@ -129,6 +131,7 @@ final class MenuSession {
     /// Same rule as `openMenu`: without it, dropdowns paint into dead space.
     var volumeOpen = false
     var calendarOpen = false
+    var playerOpen = false
     /// A tray applet's imported menu. Which applet is the tray's business.
     var trayMenuOpen = false
     /// About / log-out confirm. Not a dropdown: a card placed below the
@@ -295,6 +298,7 @@ final class MenuSession {
         // One popover at a time.
         volumeOpen = false
         calendarOpen = false
+        playerOpen = false
         dialog = .none
         syncInputRegion()
     }
@@ -311,6 +315,7 @@ final class MenuSession {
         if open {
             openMenu = nil
             calendarOpen = false
+            playerOpen = false
             dialog = .none
         }
         syncInputRegion()
@@ -322,6 +327,19 @@ final class MenuSession {
         if open {
             openMenu = nil
             volumeOpen = false
+            playerOpen = false
+            dialog = .none
+        }
+        syncInputRegion()
+    }
+
+    func setPlayerOpen(_ open: Bool) {
+        guard playerOpen != open else { return }
+        playerOpen = open
+        if open {
+            openMenu = nil
+            volumeOpen = false
+            calendarOpen = false
             dialog = .none
         }
         syncInputRegion()
@@ -337,6 +355,7 @@ final class MenuSession {
             openMenu = nil
             volumeOpen = false
             calendarOpen = false
+            playerOpen = false
             dialog = .none
         }
         syncInputRegion()
@@ -349,6 +368,7 @@ final class MenuSession {
             openMenu = nil
             volumeOpen = false
             calendarOpen = false
+            playerOpen = false
             if trayMenuOpen {
                 trayMenuOpen = false
                 tray?.closeMenu()
@@ -382,8 +402,8 @@ final class MenuSession {
 
     /// Whether any strip popover needs the deep hit region.
     private var wantsCapture: Bool {
-        openMenu != nil || volumeOpen || calendarOpen || trayMenuOpen
-            || dialog != .none
+        openMenu != nil || volumeOpen || calendarOpen || playerOpen
+            || trayMenuOpen || dialog != .none
     }
 
     /// Hit-test region: strip when idle, full panel while a menu or volume
@@ -422,6 +442,7 @@ nonisolated(unsafe) let session = MenuSession()
 nonisolated(unsafe) var tray: StatusNotifierTray?
 nonisolated(unsafe) var notifications: Notifications?
 let pulse = PulseSession()
+let mpris = MprisSession()
 
 /// Every popover on the panel — menubar dropdown, tray menu, volume,
 /// calendar — wears this, so a theme change retints all of them and a
@@ -476,6 +497,10 @@ struct TaskbarView: View {
                 // child is the spacer, since the stack distributes leftover
                 // space by flex.
                 HStack(flexGrow: 1, padding: 0) {}
+
+                if mpris.present {
+                    PlayerApplet(mpris: mpris, isOpen: playerOpenBinding)
+                }
 
                 trayStrip
 
@@ -643,6 +668,13 @@ struct TaskbarView: View {
         Binding(
             get: { session.calendarOpen },
             set: { session.setCalendarOpen($0) }
+        )
+    }
+
+    private var playerOpenBinding: Binding<Bool> {
+        Binding(
+            get: { session.playerOpen },
+            set: { session.setPlayerOpen($0) }
         )
     }
 
@@ -826,6 +858,7 @@ guard let brandIcon = ImageStore.loadAsset(
 // finds somewhere to export to. Before `run`, because an app that registers
 // while the panel is still coming up should not have to try twice.
 session.attach(editor: editor, brandIcon: brandIcon)
+mpris.onAbsent = { session.setPlayerOpen(false) }
 
 // One face, loaded once. Building it inside `body` would reopen FreeType
 // every clock tick, and a face that is never `registerWithEngine`'d
