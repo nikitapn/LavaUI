@@ -28,7 +28,6 @@ struct Font::Impl {
   /// than re-reading the path, so it must outlive both — which is why
   /// `unload` clears it last.
   std::vector<uint8_t> bytes;
-  FontDigest digest;
 
   float pixelSize = 0.f;
   float ascent = 0.f;
@@ -73,7 +72,6 @@ struct Font::Impl {
     // Last: everything above was reading these bytes in place.
     bytes.clear();
     bytes.shrink_to_fit();
-    digest = FontDigest{};
     faceCount = 0;
     loadFlags = FT_LOAD_DEFAULT;
   }
@@ -258,7 +256,6 @@ VoidResult Font::loadFaceFromMemory(const uint8_t *bytes, size_t byteCount,
   }
 
   impl_->bytes.assign(bytes, bytes + byteCount);
-  impl_->digest = sha256(impl_->bytes);
   impl_->loadFlags = freetypeLoadFlags(rasterFlags);
 
   FT_Error ftError = FT_Init_FreeType(&impl_->ftLibrary);
@@ -320,7 +317,6 @@ VoidResult Font::loadFaceFromMemory(const uint8_t *bytes, size_t byteCount,
 
 bool Font::isLoaded() const { return impl_->isLoaded(); }
 
-const FontDigest &Font::contentHash() const { return impl_->digest; }
 
 uint32_t Font::faceCount() const { return impl_->faceCount; }
 

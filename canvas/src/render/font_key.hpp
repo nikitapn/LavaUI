@@ -62,6 +62,29 @@ inline FontDigest sha256(const std::vector<uint8_t> &data) {
 /// it: the registry reads the file to hash it, and hands the same bytes on.
 bool readFontFile(const std::string &path, std::vector<uint8_t> &out);
 
+/// The digest of the file at `path`, remembered per file for this process.
+///
+/// Content addressing costs a pass over every byte, and the same bytes get
+/// asked about more than once: a face wanted at two sizes is two keys over one
+/// file, and every client that opens re-registers the faces the last one
+/// already did. A terminal asking for a 12 MiB Nerd Font and a 19 MiB CJK
+/// fallback paid ~100 ms of SHA-256 for answers this process had computed
+/// before.
+///
+/// The memo is keyed on what the filesystem says the file *is* — device,
+/// inode, size, mtime — so a font replaced under a running session hashes
+/// again and gets a new identity, which is the property content addressing
+/// exists for. A path alone would not: `/usr/share/fonts/…` is stable across
+/// exactly the update that changes the bytes.
+///
+/// `out` is filled only on a miss, when the file had to be read anyway; a hit
+/// answers from four numbers and touches no font bytes at all. Callers that
+/// need the bytes regardless must check `out` and read it themselves — which
+/// is the point, since the common caller finds the key already registered and
+/// never needs them.
+bool fontFileDigest(const std::string &path, FontDigest &outDigest,
+                    std::vector<uint8_t> &out);
+
 /// How a glyph is hinted on its way to the atlas.
 ///
 /// Hinting only. The atlas is 8-bit grayscale coverage (`VK_FORMAT_R8_UNORM`),

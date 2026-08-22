@@ -50,20 +50,23 @@ func loadMonoFont(into editor: Editor) -> UIFont? {
             // Without this the terminal draws a tofu box for everything the
             // face lacks, which for a Nerd Font is all of braille and most
             // dingbats — Claude Code's spinner and bullets, in other words.
-            font.useFallbacks(
-                UIFont.loadMonospaceFallbacks(pixelSize: 15), into: editor
-            )
+            //
+            // Named, not loaded: the chain is 31 MiB of Nerd Font and CJK
+            // collection, and loading it here put ~250 ms between the launch
+            // and the window — while a prompt needs none of it. Each face is
+            // read the first time a character misses everything ahead of it.
+            let chain = UIFont.monospaceFallbacks(pixelSize: 15)
+            font.useFallbacks(chain, into: editor)
             // The grid's own cell width, by the same measurement
             // `TerminalView` makes, so a glyph borrowed from a narrower face
             // still occupies exactly one column. Set before anything shapes:
             // it changes what shaping returns, and runs are cached.
             let m = font.shapedRun("M").width
             font.cellAdvance = max(1, m > 0 ? m : font.pixelSize * 0.6)
-            let chain = font.fallbacks
-                .map { ($0.path as NSString).lastPathComponent }
-                .joined(separator: ", ")
+            let named = chain.map(\.name).joined(separator: ", ")
             FileHandle.standardError.write(Data(
-                "LavaTerm: mono font \(path)\nLavaTerm: fallbacks \(chain)\n".utf8
+                ("LavaTerm: mono font \(path)\n"
+                 + "LavaTerm: fallbacks (on demand) \(named)\n").utf8
             ))
             return font
         }

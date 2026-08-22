@@ -104,3 +104,11 @@ draw_arena_test = executable(
   build_by_default: false,
 )
 test('draw arena', draw_arena_test)
+
+font_digest_test = executable(
+  'font_digest_test',
+  ['tests/font_digest_test.cpp', 'src/render/font_key.cpp'],
+  include_directories: canvas_includes,
+  build_by_default: false,
+)
+test('font digest', font_digest_test)

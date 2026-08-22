@@ -137,11 +137,15 @@ struct TextRenderer::Impl {
   /// addressing costs one read and saves the two it replaces.
   int registerFont(const std::string &fontPath, uint32_t pixelSize26_6,
                    uint32_t faceIndex, uint32_t rasterFlags) {
+    // `fontFileDigest` reads the file only when it has to — a face already
+    // hashed once is answered from its stat — so re-registering one costs a
+    // stat and the compare below, not a pass over 19 MiB.
     std::vector<uint8_t> bytes;
-    if (!canvas::readFontFile(fontPath, bytes)) return -1;
+    canvas::FontDigest digest;
+    if (!canvas::fontFileDigest(fontPath, digest, bytes)) return -1;
 
     canvas::FontKey key{
-      .contentHash = canvas::sha256(bytes),
+      .contentHash = digest,
       .faceIndex = faceIndex,
       .pixelSize26_6 = pixelSize26_6,
       .variationsHash = canvas::FontDigest{},
@@ -150,6 +154,10 @@ struct TextRenderer::Impl {
     for (size_t i = 0; i < fontKeys_.size(); ++i) {
       if (fontKeys_[i] == key) return static_cast<int>(i);
     }
+
+    // Not registered at this size, so the bytes are wanted after all. Empty
+    // means the digest came from the memo and nothing has read the file yet.
+    if (bytes.empty() && !canvas::readFontFile(fontPath, bytes)) return -1;
 
     canvas::Font font;
     if (!font.loadFaceFromMemory(bytes.data(), bytes.size(), pixelSize26_6,

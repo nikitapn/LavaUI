@@ -544,9 +544,10 @@ struct Application::Impl
     // one file must not become two ids, and a file whose bytes changed must
     // not keep the old one.
     std::vector<uint8_t> bytes;
-    if (!canvas::readFontFile(path, bytes)) return -1;
+    canvas::FontDigest digest;
+    if (!canvas::fontFileDigest(path, digest, bytes)) return -1;
     const canvas::FontKey key{
-      .contentHash = canvas::sha256(bytes),
+      .contentHash = digest,
       .faceIndex = faceIndex,
       .pixelSize26_6 = pixelSize26_6,
       .variationsHash = canvas::FontDigest{},
@@ -555,6 +556,8 @@ struct Application::Impl
     for (size_t i = 0; i < clientFontKeys.size(); ++i) {
       if (clientFontKeys[i] == key) return static_cast<int>(i);
     }
+
+    if (bytes.empty() && !canvas::readFontFile(path, bytes)) return -1;
 
     canvas::Font font;
     if (!font.loadFaceFromMemory(bytes.data(), bytes.size(), pixelSize26_6,

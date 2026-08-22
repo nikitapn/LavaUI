@@ -162,6 +162,14 @@ public final class UIFont: @unchecked Sendable {
     /// Plain "Noto Sans Symbols" does *not* include U+25B6 / U+23F8 — that is
     /// why the second file is required for play/pause.
     public static func loadSymbols(assetsRoot: String?, pixelSize: Float = 16) -> UIFont? {
+        guard let path = symbolsPath(assetsRoot: assetsRoot) else { return nil }
+        return UIFont(path: path, pixelSize: pixelSize)
+    }
+
+    /// Where `loadSymbols` would load from, without loading it. Splitting the
+    /// two is what lets a fallback chain be named before anything is read —
+    /// see `FontFallback`.
+    public static func symbolsPath(assetsRoot: String?) -> String? {
         var paths: [String] = []
         if let root = assetsRoot {
             let r = root as NSString
@@ -182,14 +190,7 @@ public final class UIFont: @unchecked Sendable {
             "/usr/share/fonts/truetype/noto/NotoSansSymbols2-Regular.ttf",
             "/usr/share/fonts/truetype/noto/NotoSansSymbols-Regular.ttf",
         ]
-        for p in paths {
-            if FileManager.default.fileExists(atPath: p),
-               let font = UIFont(path: p, pixelSize: pixelSize)
-            {
-                return font
-            }
-        }
-        return nil
+        return paths.first { FileManager.default.fileExists(atPath: $0) }
     }
 
     /// A broad-coverage system face, for glyphs the packed ones lack.
@@ -205,6 +206,12 @@ public final class UIFont: @unchecked Sendable {
     /// DejaVu has ~6000 glyphs including arrows, geometric shapes and ⚠;
     /// Liberation and Noto have progressively less.
     public static func loadSystemFallback(pixelSize: Float = 16) -> UIFont? {
+        guard let path = systemFallbackPath() else { return nil }
+        return UIFont(path: path, pixelSize: pixelSize)
+    }
+
+    /// Where `loadSystemFallback` would load from, without loading it.
+    public static func systemFallbackPath() -> String? {
         let roots = [
             "/usr/share/fonts",
             "/usr/local/share/fonts",
@@ -229,9 +236,7 @@ public final class UIFont: @unchecked Sendable {
                     "\(root)/truetype/liberation/\(name)",
                     "\(root)/TTF/\(name)",
                 ] where FileManager.default.fileExists(atPath: candidate) {
-                    if let font = UIFont(path: candidate, pixelSize: pixelSize) {
-                        return font
-                    }
+                    return candidate
                 }
             }
         }
@@ -239,7 +244,8 @@ public final class UIFont: @unchecked Sendable {
     }
 
     /// A fallback chain for a *monospace* primary, in the order it should be
-    /// consulted. Load-only — `useFallbacks` is what attaches it.
+    /// consulted. Names faces; `useFallbacks` attaches it and loading happens
+    /// on the first character that needs one.
     ///
     /// An app that loads its own face gets no chain: `FontStore` builds one
     /// for the UI face and nothing built one for anybody else, so LavaTerm
@@ -257,10 +263,10 @@ public final class UIFont: @unchecked Sendable {
     /// Deliberately absent: `NotoColorEmoji`, a CBDT colour-bitmap font the R8
     /// glyph atlas cannot store. Emoji stay tofu until the atlas grows a
     /// colour path, and the missing-glyph warning says so.
-    public static func loadMonospaceFallbacks(
+    public static func monospaceFallbacks(
         assetsRoot: String? = LavaResources.root,
         pixelSize: Float = 16
-    ) -> [UIFont] {
+    ) -> [FontFallback] {
         // Alternatives within a group, not a chain each: first hit wins.
         let mono = [
             "/usr/share/fonts/TTF/IosevkaNerdFontMono-Regular.ttf",
@@ -280,21 +286,19 @@ public final class UIFont: @unchecked Sendable {
             "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc",
         ]
 
-        func firstOf(_ paths: [String]) -> UIFont? {
-            for path in paths where FileManager.default.fileExists(atPath: path) {
-                if let font = UIFont(path: path, pixelSize: pixelSize) { return font }
-            }
-            return nil
+        // Existence, not loadability: opening these is what this function
+        // exists to avoid, and a file that exists but will not load is
+        // skipped when the chain reaches it (see `fallbackFace`).
+        func firstOf(_ paths: [String]) -> String? {
+            paths.first { FileManager.default.fileExists(atPath: $0) }
         }
 
-        var chain: [UIFont] = []
-        if let face = firstOf(mono) { chain.append(face) }
-        if let face = loadSymbols(assetsRoot: assetsRoot, pixelSize: pixelSize) {
-            chain.append(face)
-        }
-        if let face = loadSystemFallback(pixelSize: pixelSize) { chain.append(face) }
-        if let face = firstOf(cjk) { chain.append(face) }
-        return chain
+        var chain: [String] = []
+        if let path = firstOf(mono) { chain.append(path) }
+        if let path = symbolsPath(assetsRoot: assetsRoot) { chain.append(path) }
+        if let path = systemFallbackPath() { chain.append(path) }
+        if let path = firstOf(cjk) { chain.append(path) }
+        return chain.map { FontFallback(path: $0, pixelSize: pixelSize) }
     }
 
     private static func loadFirstExisting(
@@ -341,6 +345,16 @@ public final class UIFont: @unchecked Sendable {
     /// old behaviour.
     public internal(set) var fallbacks: [UIFont] = []
 
+    /// The rest of the chain, still unloaded — see `FontFallback`. Faces move
+    /// from here into `fallbacks` one at a time, only as far as a character
+    /// actually forces.
+    private var pendingFallbacks: [FontFallback] = []
+
+    /// Where a lazily loaded fallback registers itself. Weak because the font
+    /// outlives nothing and the editor owns the process: a strong reference
+    /// here would be a cycle through `FontStore`'s statics.
+    private weak var fallbackEditor: Editor?
+
     /// Snap substituted glyphs onto a fixed advance, for a caller drawing on a
     /// character grid.
     ///
@@ -358,18 +372,43 @@ public final class UIFont: @unchecked Sendable {
     /// proportional text.
     public var cellAdvance: Float?
 
-    /// Point this face at `faces` for characters it cannot draw.
+    /// Point this face at `chain` for characters it cannot draw.
     ///
-    /// Registration and assignment together on purpose: a substituted glyph
-    /// carries its own face id into the draw list, and an unregistered face
-    /// has id 0 — which resolves to the *primary* and draws whatever glyph
-    /// happens to sit at that index. Two separate calls make that a mistake
-    /// somebody can make; one call does not.
-    public func useFallbacks(_ faces: [UIFont], into editor: Editor?) {
-        if let editor {
-            for face in faces { face.registerWithEngine(editor) }
+    /// Nothing is read here. Each entry is loaded and registered by
+    /// `fallbackFace` when a character reaches it, which for most runs is
+    /// never — see `FontFallback` for what that saves.
+    ///
+    /// The editor is taken here rather than at load time because registration
+    /// and use have to stay together: a substituted glyph carries its own face
+    /// id into the draw list, and an unregistered face has id 0 — which
+    /// resolves to the *primary* and draws whatever glyph happens to sit at
+    /// that index. Handing over the editor once is what lets `fallbackFace`
+    /// refuse to hand out a face it could not register.
+    public func useFallbacks(_ chain: [FontFallback], into editor: Editor?) {
+        pendingFallbacks = chain
+        fallbackEditor = editor
+        fallbacks.removeAll()
+    }
+
+    /// The `index`-th fallback, loading and registering as far down the chain
+    /// as `index` reaches. Nil once the chain is exhausted.
+    ///
+    /// Entries that will not load, or will not register, are dropped rather
+    /// than kept as holes: the chain is a preference order, and a face that
+    /// cannot draw anything is not a preference. Dropping one shifts the rest
+    /// up, which is why this loops rather than indexing `pendingFallbacks`.
+    private func fallbackFace(at index: Int) -> UIFont? {
+        while fallbacks.count <= index {
+            guard !pendingFallbacks.isEmpty else { return nil }
+            let spec = pendingFallbacks.removeFirst()
+            guard let face = UIFont(path: spec.path, pixelSize: spec.pixelSize)
+            else { continue }
+            if let editor = fallbackEditor {
+                guard face.registerWithEngine(editor) else { continue }
+            }
+            fallbacks.append(face)
         }
-        fallbacks = faces
+        return fallbacks[index]
     }
 
     /// Shaped run for one line, cached per string. Positions are relative to
@@ -505,7 +544,12 @@ public final class UIFont: @unchecked Sendable {
     /// character.
     private func substitute(_ piece: String, base: Int) -> [ShapedGlyph]? {
         guard !piece.isEmpty else { return nil }
-        for face in fallbacks {
+        // Through `fallbackFace` rather than over `fallbacks`, so the chain is
+        // only loaded as deep as this character forces it to be. The last
+        // entry is usually a CJK collection nothing here ever asks for.
+        var index = 0
+        while let face = fallbackFace(at: index) {
+            index += 1
             let shaped = face.shapeDirect(piece)
             guard !shaped.isEmpty, !shaped.contains(where: { $0.glyphId == 0 }) else { continue }
             // GPOS offsets only, matching what the caller splices — the pen is
@@ -715,6 +759,33 @@ public struct ContentScale: Equatable, Sendable {
         index = one
         return true
     }
+}
+
+/// A fallback face named rather than loaded.
+///
+/// The chain a primary consults is spelled as file paths because loading one
+/// is the expensive part of starting up, and most of it is never needed:
+/// opening a face reads the whole file and hashes it for its content
+/// address, which for the two faces a terminal wants — a 12 MiB Nerd Font
+/// and a 19 MiB CJK collection — was ~250 ms spent twice, once in the client
+/// to shape with and once in the compositor to rasterize with, before the
+/// window existed. A shell prompt needs none of it.
+///
+/// So the chain is names, and `UIFont.fallbackFace` turns one into a face the
+/// first time a character misses everything ahead of it. A terminal that
+/// never prints braille never loads Iosevka; one that never prints Chinese
+/// never loads Noto CJK.
+public struct FontFallback: Sendable, Equatable {
+    public let path: String
+    public let pixelSize: Float
+
+    public init(path: String, pixelSize: Float) {
+        self.path = path
+        self.pixelSize = pixelSize
+    }
+
+    /// Just the file name, for logs.
+    public var name: String { (path as NSString).lastPathComponent }
 }
 
 /// Default UI font when `Text` does not specify one.

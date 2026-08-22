@@ -144,7 +144,11 @@ Consequences that surprise people:
 - `LAVA_CLIENT=1` → `LavaClient.open` / `LavaClient.run` (not a separate app).
 - Fonts/images are registered with the **compositor**; ids stamped into draw
   commands must be ones the compositor understands. Fonts are
-  **content-addressed** (`FontKey`: hash of bytes, face index, 26.6 size, …).
+  **content-addressed** (`FontKey`: hash of bytes, face index, 26.6 size, …),
+  and that hash is a pass over the whole file — 19 MiB for a CJK collection —
+  so it is memoized per file (`fontFileDigest`) and a **fallback chain is
+  named, not loaded**: `UIFont.useFallbacks` takes `[FontFallback]` and each
+  face is read the first time a character misses everything ahead of it.
 - Draw lists: shared **DrawArena**. Control plane: small RPCs only.
 - **Global menu**: `LavaTaskbar` owns the AppMenu registrar and draws the
   focused window's menu (`canvas/src/menu/menu_import.*` imports it,

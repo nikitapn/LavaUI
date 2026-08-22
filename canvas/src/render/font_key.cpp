@@ -1,8 +1,13 @@
 #include "render/font_key.hpp"
 
+#include <sys/stat.h>
+
 #include <cstdio>
 #include <cstring>
 #include <fstream>
+#include <mutex>
+#include <unordered_map>
+#include <utility>
 
 namespace canvas {
 namespace {
@@ -113,6 +118,61 @@ bool readFontFile(const std::string &path, std::vector<uint8_t> &out) {
   if (!file.read(reinterpret_cast<char *>(out.data()), size)) {
     out.clear();
     return false;
+  }
+  return true;
+}
+
+bool fontFileDigest(const std::string &path, FontDigest &outDigest,
+                    std::vector<uint8_t> &out) {
+  out.clear();
+
+  struct Stamp {
+    dev_t device = 0;
+    ino_t inode = 0;
+    off_t size = 0;
+    timespec modified{};
+
+    bool operator==(const Stamp &other) const {
+      return device == other.device && inode == other.inode &&
+             size == other.size &&
+             modified.tv_sec == other.modified.tv_sec &&
+             modified.tv_nsec == other.modified.tv_nsec;
+    }
+  };
+
+  // Function-local: this is a memo, not a service, and nothing outside wants
+  // to look at it. The mutex is for the two processes' worth of callers this
+  // code is compiled into — a client shaping on its frame loop, a compositor
+  // registering on its own — each of which may register a face from more than
+  // one thread.
+  static std::mutex mutex;
+  static std::unordered_map<std::string, std::pair<Stamp, FontDigest>> memo;
+
+  Stamp stamp;
+  bool stamped = false;
+  struct stat info {};
+  if (::stat(path.c_str(), &info) == 0) {
+    stamp.device = info.st_dev;
+    stamp.inode = info.st_ino;
+    stamp.size = info.st_size;
+    stamp.modified = info.st_mtim;
+    stamped = true;
+
+    std::lock_guard lock(mutex);
+    const auto it = memo.find(path);
+    if (it != memo.end() && it->second.first == stamp) {
+      outDigest = it->second.second;
+      return true;
+    }
+  }
+
+  // A miss, or a file we could not stat — either way the bytes are the only
+  // authority left.
+  if (!readFontFile(path, out)) return false;
+  outDigest = sha256(out);
+  if (stamped) {
+    std::lock_guard lock(mutex);
+    memo[path] = {stamp, outDigest};
   }
   return true;
 }

@@ -130,10 +130,6 @@ class Font {
 
   bool isLoaded() const;
 
-  /// SHA-256 of the bytes this face was loaded from. Empty before a
-  /// successful load.
-  const FontDigest &contentHash() const;
-
   /// How many faces the loaded file contains — 1 for a plain font, more for a
   /// `.ttc`/`.otc` collection. Valid indices are `0 … faceCount() - 1`.
   uint32_t faceCount() const;
