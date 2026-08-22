@@ -83,4 +83,37 @@ final class ClipTests: XCTestCase {
         XCTAssertLessThan(texts[0].w, Float(full.count))
         XCTAssertGreaterThan(texts[0].w, 2)
     }
+
+    /// A width-only frame still reaches the measure function, so the cap is
+    /// applied there rather than at emit. Both paths have to trim.
+    func testLineLimitEllipsizesUnderAWidthOnlyFrame() throws {
+        let full = "Give Life Back to Music"
+        let commands = try emit(
+            Text(full, lineLimit: 1).frame(width: .pt(80))
+        )
+        let texts = commands.filter { $0.kind == .text }
+        XCTAssertEqual(texts.count, 1)
+        XCTAssertLessThan(texts[0].w, Float(full.count))
+        XCTAssertGreaterThan(texts[0].w, 2)
+    }
+
+    /// A `lineLimit` text that nothing constrains keeps every character.
+    ///
+    /// The emit-time trim may only run when layout never measured. It asks
+    /// `shapedRun`, which re-shapes ⏸ and → through the fallback chain, while
+    /// the box came from a C++ measure that saw the primary face alone — so
+    /// against a measured box it reads as overflow that isn't there, and eats
+    /// the tail of a title with room to spare.
+    func testLineLimitDoesNotTrimAnUnconstrainedFallbackRun() throws {
+        let full = "⏸ Give Life ⚠ Back → Music"
+        let limited = try emit(Text(full, lineLimit: 1)).filter { $0.kind == .text }
+        let plain = try emit(Text(full)).filter { $0.kind == .text }
+        XCTAssertEqual(limited.count, 1)
+        XCTAssertEqual(plain.count, 1)
+        XCTAssertEqual(
+            limited[0].w, plain[0].w,
+            "lineLimit alone must not shorten a text nothing constrains"
+        )
+        XCTAssertEqual(limited[0].w, Float(full.count), accuracy: 0.5)
+    }
 }

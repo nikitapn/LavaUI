@@ -1456,15 +1456,27 @@ public final class DrawList {
             // the outer box origin put glyphs at its top-left and left all
             // padding on the bottom/right (most visible on hover fills).
             let lineH = (leaf.font ?? FontStore.default)?.lineHeight ?? 18
-            var lines = leaf.cachedLines.isEmpty ? [leaf.text] : leaf.cachedLines
-            // Yoga skips the measure func when both width and height are
-            // set, so `cachedLines` never gets the ellipsis `lineLimit`
-            // asked for. Honour it here against the box we actually have.
-            if leaf.kind == .text, let limit = leaf.textLineLimit {
+            let measured = !leaf.cachedLines.isEmpty
+            var lines = measured ? leaf.cachedLines : [leaf.text]
+            // Yoga skips the measure func when a frame fixes both width and
+            // height, so `cachedLines` stays empty and the ellipsis
+            // `lineLimit` asked for never ran. Honour it here instead,
+            // against the box we actually have.
+            //
+            // Only when layout never measured, which is what an empty
+            // `cachedLines` says. A measured text already had the cap applied
+            // by `LeafNode.measureForYoga`, and re-deciding here would put the
+            // question to a different oracle: `shapedRun` re-shapes missing
+            // characters through the fallback chain, while the C++
+            // `Font::measure` behind the box sees only the primary face. A
+            // title carrying one ⏸ or → is wider by that gap, so a text at
+            // its own natural width read as overflowing and lost its tail to
+            // an ellipsis it had all the room in the world for.
+            if !measured, leaf.kind == .text, let limit = leaf.textLineLimit,
+               let font = leaf.font ?? FontStore.default
+            {
                 lines = Array(lines.prefix(max(1, limit)))
-                if let font = leaf.font ?? FontStore.default,
-                   let last = lines.indices.last
-                {
+                if let last = lines.indices.last {
                     let budget = max(
                         0, w - leaf.padding.leading - leaf.padding.trailing - 8
                     )

@@ -122,6 +122,18 @@ public final class UIFont: @unchecked Sendable {
     private var shapeCache: [String: [ShapedGlyph]] = [:]
     private var inkBoundsCache: [String: TextInkBounds] = [:]
 
+    /// Trimmed-with-ellipsis lines, keyed by the untrimmed line and the width
+    /// it had to fit. `ellipsized` walks the string a grapheme at a time, and
+    /// the draw list asks for the same answer on every frame.
+    private struct EllipsisKey: Hashable {
+        var text: String
+        /// availWidth snapped to 0.5px, as `TextLayoutCache` snaps its own.
+        var widthQ: Int
+    }
+
+    private var ellipsisCache: [EllipsisKey: String] = [:]
+    private static let ellipsisCacheLimit = 4096
+
     public init?(
         path: String, pixelSize: Float = 16, faceIndex: UInt32 = 0,
         raster: FontRasterFlags = .default
@@ -414,12 +426,13 @@ public final class UIFont: @unchecked Sendable {
     /// Shaped run for one line, cached per string. Positions are relative to
     /// the run origin (pen at the baseline); the caller offsets them.
     ///
-    /// Swift is now the only place text gets shaped: the same run feeds Yoga
-    /// measurement and the draw list, so drawn output cannot drift from what
-    /// was laid out — and the renderer never calls HarfBuzz.
-    ///
-    /// Characters this face lacks are re-shaped through `fallbacks` — see
-    /// `shapeWithFallbacks`.
+    /// This is what the draw list paints, and the renderer never calls
+    /// HarfBuzz itself. It is *not* what Yoga measured: layout goes through
+    /// `measure`, which is C++ `Font::measure` over this face alone. So a run
+    /// carrying characters this face lacks is wider here than the box layout
+    /// derived for it — see `shapeWithFallbacks`, which re-shapes them through
+    /// `fallbacks`. Do not use a shaped width to second-guess a laid-out box:
+    /// the two disagree by a fallback glyph's advance, every time.
     public func shape(_ text: String) -> [ShapedGlyph] {
         if let hit = shapeCache[text] {
             PerfCounters.textShapeHits &+= 1
@@ -628,6 +641,7 @@ public final class UIFont: @unchecked Sendable {
     public func clearShapeCache() {
         shapeCache.removeAll(keepingCapacity: true)
         inkBoundsCache.removeAll(keepingCapacity: true)
+        ellipsisCache.removeAll(keepingCapacity: true)
     }
 
     /// Bounds of the pixels a run actually draws, relative to the baseline.
@@ -678,9 +692,29 @@ public final class UIFont: @unchecked Sendable {
     }
 
     /// Adds an ellipsis while keeping the visible line within `availWidth`.
-    /// Shaped widths are cached, so repeated layout of unchanged labels is
-    /// cheap despite trimming by grapheme cluster.
+    ///
+    /// Memoised, because the answer is asked for far more often than it
+    /// changes: the draw list re-derives it on every frame for a label whose
+    /// layout never measured it, and each derivation walks the string one
+    /// grapheme cluster at a time. The individual shaped widths were already
+    /// cached, so a single step was cheap — but it was still a whole walk
+    /// per label per frame, for a result that only moves when the text or the
+    /// box does.
     func ellipsized(_ text: String, availWidth: Float) -> String {
+        let key = EllipsisKey(text: text, widthQ: Int((availWidth * 2).rounded()))
+        if let hit = ellipsisCache[key] { return hit }
+        let result = trimmedToWidth(text, availWidth: availWidth)
+        // Bounded exactly as `shapeCache` is, and for the same reason: the key
+        // is arbitrary line text, so a view scrolling past thousands of
+        // distinct labels would otherwise grow this without limit.
+        if ellipsisCache.count >= Self.ellipsisCacheLimit {
+            ellipsisCache.removeAll(keepingCapacity: true)
+        }
+        ellipsisCache[key] = result
+        return result
+    }
+
+    private func trimmedToWidth(_ text: String, availWidth: Float) -> String {
         let suffix = "…"
         guard shapedRun(text + suffix).width > availWidth else { return text + suffix }
         var candidate = text.trimmingCharacters(in: .whitespaces)
