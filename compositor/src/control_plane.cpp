@@ -1102,7 +1102,9 @@ class CompositorImpl final : public ICompositor_Servant {
     co_return;
   }
 
-  void Present(uint32_t surfaceId) override { host_.present(surfaceId); }
+  void Present(uint32_t surfaceId, uint32_t serial) override {
+    host_.present(surfaceId, serial);
+  }
 
   void Heartbeat(uint32_t surfaceId) override { host_.heartbeat(surfaceId); }
 
@@ -1129,8 +1131,8 @@ class CompositorImpl final : public ICompositor_Servant {
     //
     // It is also the one event the window's first frame depends on: placement
     // has usually already resized the surface away from the size the client
-    // asked for. So it is serialised, and the reveal waits for the ack — see
-    // `CompositorHost::holdReveal`.
+    // asked for. So it is serialised, and the window stays off screen until a
+    // `Present` arrives carrying that serial — see `CompositorHost::holdReveal`.
     float width = 0.f, height = 0.f;
     host_.surfaceSize(surfaceId, width, height);
     InputEvent opening =
@@ -1142,21 +1144,13 @@ class CompositorImpl final : public ICompositor_Servant {
     host_.holdReveal(surfaceId, openingSerial);
 
     try {
-      // Acks are the client saying how far it has got. The only one anything
-      // waits on is the first to cover the opening `Resize`; after that this
-      // goes back to being a read that keeps flow control moving and ends the
-      // loop when the client goes away.
-      bool holding = true;
+      // Acks are the client saying how far it has *read*. Nothing here waits
+      // on the number — the reveal wants a frame drawn with an event, not an
+      // event received, and `Present` carries that. Reading the stream is
+      // what keeps flow control moving and what makes the loop end when the
+      // client goes away.
       while (auto ack = co_await stream.reader) {
-        if (!holding) continue;
-        const uint32_t serial = ack->serial;
-        if (serial < openingSerial) continue;
-        holding = false;
-        // A resumed coroutine is not on the loop thread the way the call
-        // itself was, and revealing a window touches the scene graph.
-        loop_.post([this, surfaceId, serial] {
-          host_.inputAcked(surfaceId, serial);
-        });
+        (void)ack;
       }
     } catch (...) {
       finish(surfaceId, sub);

@@ -160,6 +160,12 @@ Consequences that surprise people:
 - `Present` and `ScrollUnclaimed` are IDL **`[unreliable]`** — fire-and-forget,
   no reply. Never wait for a response on those (Swift uses
   `sendUnreliable`).
+- **`Present` carries the newest input serial the frame was laid out with**
+  (`InputChannel.consumedSerial`), and a new window stays off screen until one
+  arrives at or past the opening `Resize`. An `InputAck` cannot stand in for
+  it: a client acks on *reading* an event and lays out afterwards, so the frame
+  published just before an ack is one drawn without it. A client that always
+  sends 0 gets windows that appear on the hold's 250 ms deadline instead.
 - NPRPC object timeout defaults to **1s**. Long work (surface create, image
   decode, capture) must raise the proxy timeout, not only a local semaphore.
 - Servants hop to the **Wayland event loop** before touching wlroots/Vulkan.

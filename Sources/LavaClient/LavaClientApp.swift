@@ -188,9 +188,15 @@ public enum LavaClient {
             // Fire and forget, and correct rather than merely cheap: the
             // arena's published sequence already says what is current, so a
             // dropped one costs a frame of latency, never a frame of content.
+            // Read here rather than in the task: this runs on the frame
+            // loop, straight after the frame was laid out, so it names the
+            // input that frame actually reflects. A task that read it later
+            // could pick up an event that arrived in between and claim a
+            // frame knew something it did not.
+            let serial = inputChannel?.consumedSerial ?? 0
             Task.detached { [compositor] in
                 // Unreliable: write and return; no reply waiter (see sendUnreliable).
-                await compositor.present(surfaceId: surfaceID)
+                await compositor.present(surfaceId: surfaceID, serial: serial)
             }
         }) else {
             fail("failed to create arena '\(arenaID)' — is one already running?")

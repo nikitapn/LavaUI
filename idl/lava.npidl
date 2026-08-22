@@ -1278,7 +1278,21 @@ interface Compositor {
   /// Naming the surface is what keeps that property once there is more than
   /// one client: the renderer redraws the window that published, instead of
   /// redrawing every window because *somebody* did.
-  [unreliable] void Present(surfaceId: in u32);
+  ///
+  /// `serial` is the newest `InputEvent` the app had consumed when it laid
+  /// this frame out — 0 before it has consumed any. It is the same number
+  /// `InputAck` carries and means something stricter: an ack says the app has
+  /// *read* an event, and the app reads before it lays out, so a frame
+  /// published just before an ack is still one drawn without it. Riding on
+  /// `Present` puts the answer on the frame itself, where no ordering between
+  /// two streams can get between them.
+  ///
+  /// What needs it is the opening `Resize`: a window is held off screen until
+  /// a frame arrives that was laid out at the size the compositor gave it,
+  /// and this is how a frame says so. Nothing else reads it, and a client
+  /// that always sends 0 is one whose windows appear on the hold's deadline
+  /// rather than on their first good frame.
+  [unreliable] void Present(surfaceId: in u32, serial: in u32);
 
   /// "Nobody in my tree wanted this wheel notch — it is yours again."
   ///

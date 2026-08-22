@@ -1786,7 +1786,7 @@ public:
   virtual void SetArrangement (::nprpc::flat::Span<char> mode) = 0;
   virtual ::nprpc::Task<> SubscribeActiveWindow (::nprpc::BidiStream<FocusAck, ActiveWindow> stream) = 0;
   virtual void DestroySurface (uint32_t surfaceId) = 0;
-  virtual void Present (uint32_t surfaceId) = 0;
+  virtual void Present (uint32_t surfaceId, uint32_t serial) = 0;
   virtual void ScrollUnclaimed (uint32_t surfaceId, float dx, float dy) = 0;
   virtual void Heartbeat (uint32_t surfaceId) = 0;
   virtual ::nprpc::Task<> SubscribeInput (uint32_t surfaceId, ::nprpc::BidiStream<InputAck, InputEvent> stream) = 0;
@@ -1877,7 +1877,7 @@ public:
   std::pair<::nprpc::StreamWriter<FocusAck>, ::nprpc::StreamReader<ActiveWindow>> SubscribeActiveWindow ();
   void DestroySurface (uint32_t surfaceId);
   ::nprpc::Task<void> DestroySurfaceAsync (uint32_t surfaceId, std::stop_token st = {});
-  void Present (uint32_t surfaceId);
+  void Present (uint32_t surfaceId, uint32_t serial);
   void ScrollUnclaimed (uint32_t surfaceId, float dx, float dy);
   void Heartbeat (uint32_t surfaceId);
   std::pair<::nprpc::StreamWriter<InputAck>, ::nprpc::StreamReader<InputEvent>> SubscribeInput (uint32_t surfaceId);

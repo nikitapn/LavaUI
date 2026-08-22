@@ -337,21 +337,19 @@ struct CompositorHost {
                             std::string &outMenuObjectPath, uint32_t &outPid,
                             uint32_t &outRegistrarId) const = 0;
 
-  /// "A frame is committed on this surface" — draw it.
-  virtual void present(uint32_t surfaceId) = 0;
+  /// "A frame is committed on this surface" — draw it. `serial` is the newest
+  /// input the client had consumed when it laid the frame out, which is what
+  /// says whether it knew its size yet; see `holdReveal` and `Present`.
+  virtual void present(uint32_t surfaceId, uint32_t serial) = 0;
 
   /// The size a surface's client should draw at, for the opening `Resize`.
   virtual void surfaceSize(uint32_t surfaceId, float &outW, float &outH) const = 0;
 
   /// "The client has been told what size it is, on event `serial`." The
-  /// window's first reveal waits for `inputAcked` to carry that serial back,
-  /// so the frame the user first sees was laid out for the size the window
-  /// actually is rather than the size the client asked for.
+  /// window's first reveal then waits for a `present` carrying at least that
+  /// serial, so the frame the user first sees was laid out for the size the
+  /// window actually is rather than the size the client asked for.
   virtual void holdReveal(uint32_t surfaceId, uint32_t serial) = 0;
-
-  /// "The client has consumed every event through `serial`." Only sent while
-  /// a reveal is being held — see `holdReveal`.
-  virtual void inputAcked(uint32_t surfaceId, uint32_t serial) = 0;
 
   /// A wheel notch the client's own tree declined. See `ScrollUnclaimed`.
   virtual void scrollUnclaimed(uint32_t surfaceId, float dx, float dy) = 0;

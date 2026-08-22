@@ -376,10 +376,31 @@ public final class InputChannel: @unchecked Sendable {
         lock.lock()
         let events = queue
         queue.removeAll(keepingCapacity: true)
+        if let last = events.last { consumed = last.serial }
         lock.unlock()
         if let last = events.last { acks.yield(last.serial) }
         return events
     }
+
+    /// The newest serial this client has taken out of the queue.
+    ///
+    /// Rides on every `Present` (see `LavaClient.open`), which is what lets
+    /// the compositor tell a frame drawn *with* an event from one drawn just
+    /// before it — the opening `Resize` being the one that matters, since a
+    /// window is held off screen until a frame comes back laid out at the
+    /// size it was given. The ack cannot answer that: it is sent from here,
+    /// on the way *in*, and the frame is laid out afterwards.
+    ///
+    /// Read from the frame loop, written on the same thread inside `drain`,
+    /// but under the lock like everything else here — `enqueue` runs on an
+    /// NPRPC thread and this object has one lock, not one per field.
+    public var consumedSerial: UInt32 {
+        lock.lock()
+        defer { lock.unlock() }
+        return consumed
+    }
+
+    private var consumed: UInt32 = 0
 }
 
 /// Runs an async RPC call to completion from synchronous code.

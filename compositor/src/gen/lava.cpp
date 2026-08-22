@@ -563,8 +563,7 @@ public:
 
 struct lava_M22 {
   uint32_t _1;
-  float _2;
-  float _3;
+  uint32_t _2;
 };
 
 class lava_M22_Direct {
@@ -583,14 +582,14 @@ public:
   }
   const uint32_t& _1() const noexcept { return base()._1;}
   uint32_t& _1() noexcept { return base()._1;}
-  const float& _2() const noexcept { return base()._2;}
-  float& _2() noexcept { return base()._2;}
-  const float& _3() const noexcept { return base()._3;}
-  float& _3() noexcept { return base()._3;}
+  const uint32_t& _2() const noexcept { return base()._2;}
+  uint32_t& _2() noexcept { return base()._2;}
 };
 
 struct lava_M23 {
-  ::nprpc::flat::Vector<::nprpc::flat::String> _1;
+  uint32_t _1;
+  float _2;
+  float _3;
 };
 
 class lava_M23_Direct {
@@ -607,17 +606,16 @@ public:
     , offset_(offset)
   {
   }
-  void _1(std::uint32_t elements_size) { new (&base()._1) ::nprpc::flat::Vector<::nprpc::flat::String>(buffer_, elements_size); }
-  auto _1_d() noexcept { return ::nprpc::flat::Vector_Direct2<::nprpc::flat::String,::nprpc::flat::String_Direct1>(buffer_, offset_ + offsetof(lava_M23, _1)); }
+  const uint32_t& _1() const noexcept { return base()._1;}
+  uint32_t& _1() noexcept { return base()._1;}
+  const float& _2() const noexcept { return base()._2;}
+  float& _2() noexcept { return base()._2;}
+  const float& _3() const noexcept { return base()._3;}
+  float& _3() noexcept { return base()._3;}
 };
 
 struct lava_M24 {
-  uint32_t _1;
-  int32_t _2;
-  int32_t _3;
-  int32_t _4;
-  int32_t _5;
-  int32_t _6;
+  ::nprpc::flat::Vector<::nprpc::flat::String> _1;
 };
 
 class lava_M24_Direct {
@@ -630,6 +628,33 @@ public:
   uint32_t offset() const noexcept { return offset_; }
   void* __data() noexcept { return (void*)&base(); }
   lava_M24_Direct(::nprpc::flat_buffer& buffer, std::uint32_t offset)
+    : buffer_(buffer)
+    , offset_(offset)
+  {
+  }
+  void _1(std::uint32_t elements_size) { new (&base()._1) ::nprpc::flat::Vector<::nprpc::flat::String>(buffer_, elements_size); }
+  auto _1_d() noexcept { return ::nprpc::flat::Vector_Direct2<::nprpc::flat::String,::nprpc::flat::String_Direct1>(buffer_, offset_ + offsetof(lava_M24, _1)); }
+};
+
+struct lava_M25 {
+  uint32_t _1;
+  int32_t _2;
+  int32_t _3;
+  int32_t _4;
+  int32_t _5;
+  int32_t _6;
+};
+
+class lava_M25_Direct {
+  ::nprpc::flat_buffer& buffer_;
+  const std::uint32_t offset_;
+
+  auto& base() noexcept { return *reinterpret_cast<lava_M25*>(reinterpret_cast<std::byte*>(buffer_.data().data()) + offset_); }
+  auto const& base() const noexcept { return *reinterpret_cast<const lava_M25*>(reinterpret_cast<const std::byte*>(buffer_.data().data()) + offset_); }
+public:
+  uint32_t offset() const noexcept { return offset_; }
+  void* __data() noexcept { return (void*)&base(); }
+  lava_M25_Direct(::nprpc::flat_buffer& buffer, std::uint32_t offset)
     : buffer_(buffer)
     , offset_(offset)
   {
@@ -648,30 +673,8 @@ public:
   int32_t& _6() noexcept { return base()._6;}
 };
 
-struct lava_M25 {
-  ::lava::flat::Capture _1;
-};
-
-class lava_M25_Direct {
-  ::nprpc::flat_buffer& buffer_;
-  const std::uint32_t offset_;
-
-  auto& base() noexcept { return *reinterpret_cast<lava_M25*>(reinterpret_cast<std::byte*>(buffer_.data().data()) + offset_); }
-  auto const& base() const noexcept { return *reinterpret_cast<const lava_M25*>(reinterpret_cast<const std::byte*>(buffer_.data().data()) + offset_); }
-public:
-  uint32_t offset() const noexcept { return offset_; }
-  void* __data() noexcept { return (void*)&base(); }
-  lava_M25_Direct(::nprpc::flat_buffer& buffer, std::uint32_t offset)
-    : buffer_(buffer)
-    , offset_(offset)
-  {
-  }
-  auto _1() noexcept { return ::lava::flat::Capture_Direct(buffer_, offset_ + offsetof(lava_M25, _1)); }
-};
-
 struct lava_M26 {
-  uint32_t _1;
-  ::nprpc::flat::String _2;
+  ::lava::flat::Capture _1;
 };
 
 class lava_M26_Direct {
@@ -688,17 +691,12 @@ public:
     , offset_(offset)
   {
   }
-  const uint32_t& _1() const noexcept { return base()._1;}
-  uint32_t& _1() noexcept { return base()._1;}
-  void _2(const char* str) { new (&base()._2) ::nprpc::flat::String(buffer_, str); }
-  void _2(const std::string& str) { new (&base()._2) ::nprpc::flat::String(buffer_, str); }
-  auto _2() noexcept { return (::nprpc::flat::Span<char>)base()._2; }
-  auto _2() const noexcept { return (::nprpc::flat::Span<const char>)base()._2; }
-  auto _2_d() noexcept { return ::nprpc::flat::String_Direct1(buffer_, offset_ + offsetof(lava_M26, _2)); }
+  auto _1() noexcept { return ::lava::flat::Capture_Direct(buffer_, offset_ + offsetof(lava_M26, _1)); }
 };
 
 struct lava_M27 {
-  ::nprpc::flat::Vector<uint8_t> _1;
+  uint32_t _1;
+  ::nprpc::flat::String _2;
 };
 
 class lava_M27_Direct {
@@ -715,15 +713,17 @@ public:
     , offset_(offset)
   {
   }
-  void _1(std::uint32_t elements_size) { new (&base()._1) ::nprpc::flat::Vector<uint8_t>(buffer_, elements_size); }
-  auto _1_d() noexcept { return ::nprpc::flat::Vector_Direct1<uint8_t>(buffer_, offset_ + offsetof(lava_M27, _1)); }
-  auto _1() noexcept { return (::nprpc::flat::Span<uint8_t>)base()._1; }
-  const auto _1() const noexcept { return (::nprpc::flat::Span<const uint8_t>)base()._1; }
+  const uint32_t& _1() const noexcept { return base()._1;}
+  uint32_t& _1() noexcept { return base()._1;}
+  void _2(const char* str) { new (&base()._2) ::nprpc::flat::String(buffer_, str); }
+  void _2(const std::string& str) { new (&base()._2) ::nprpc::flat::String(buffer_, str); }
+  auto _2() noexcept { return (::nprpc::flat::Span<char>)base()._2; }
+  auto _2() const noexcept { return (::nprpc::flat::Span<const char>)base()._2; }
+  auto _2_d() noexcept { return ::nprpc::flat::String_Direct1(buffer_, offset_ + offsetof(lava_M27, _2)); }
 };
 
 struct lava_M28 {
-  uint32_t _1;
-  float _2;
+  ::nprpc::flat::Vector<uint8_t> _1;
 };
 
 class lava_M28_Direct {
@@ -740,14 +740,15 @@ public:
     , offset_(offset)
   {
   }
-  const uint32_t& _1() const noexcept { return base()._1;}
-  uint32_t& _1() noexcept { return base()._1;}
-  const float& _2() const noexcept { return base()._2;}
-  float& _2() noexcept { return base()._2;}
+  void _1(std::uint32_t elements_size) { new (&base()._1) ::nprpc::flat::Vector<uint8_t>(buffer_, elements_size); }
+  auto _1_d() noexcept { return ::nprpc::flat::Vector_Direct1<uint8_t>(buffer_, offset_ + offsetof(lava_M28, _1)); }
+  auto _1() noexcept { return (::nprpc::flat::Span<uint8_t>)base()._1; }
+  const auto _1() const noexcept { return (::nprpc::flat::Span<const uint8_t>)base()._1; }
 };
 
 struct lava_M29 {
-  ::lava::flat::GpuReport _1;
+  uint32_t _1;
+  float _2;
 };
 
 class lava_M29_Direct {
@@ -764,17 +765,14 @@ public:
     , offset_(offset)
   {
   }
-  auto _1() noexcept { return ::lava::flat::GpuReport_Direct(buffer_, offset_ + offsetof(lava_M29, _1)); }
+  const uint32_t& _1() const noexcept { return base()._1;}
+  uint32_t& _1() noexcept { return base()._1;}
+  const float& _2() const noexcept { return base()._2;}
+  float& _2() noexcept { return base()._2;}
 };
 
 struct lava_M30 {
-  uint32_t _1;
-  float _2;
-  float _3;
-  float _4;
-  float _5;
-  float _6;
-  float _7;
+  ::lava::flat::GpuReport _1;
 };
 
 class lava_M30_Direct {
@@ -787,6 +785,33 @@ public:
   uint32_t offset() const noexcept { return offset_; }
   void* __data() noexcept { return (void*)&base(); }
   lava_M30_Direct(::nprpc::flat_buffer& buffer, std::uint32_t offset)
+    : buffer_(buffer)
+    , offset_(offset)
+  {
+  }
+  auto _1() noexcept { return ::lava::flat::GpuReport_Direct(buffer_, offset_ + offsetof(lava_M30, _1)); }
+};
+
+struct lava_M31 {
+  uint32_t _1;
+  float _2;
+  float _3;
+  float _4;
+  float _5;
+  float _6;
+  float _7;
+};
+
+class lava_M31_Direct {
+  ::nprpc::flat_buffer& buffer_;
+  const std::uint32_t offset_;
+
+  auto& base() noexcept { return *reinterpret_cast<lava_M31*>(reinterpret_cast<std::byte*>(buffer_.data().data()) + offset_); }
+  auto const& base() const noexcept { return *reinterpret_cast<const lava_M31*>(reinterpret_cast<const std::byte*>(buffer_.data().data()) + offset_); }
+public:
+  uint32_t offset() const noexcept { return offset_; }
+  void* __data() noexcept { return (void*)&base(); }
+  lava_M31_Direct(::nprpc::flat_buffer& buffer, std::uint32_t offset)
     : buffer_(buffer)
     , offset_(offset)
   {
@@ -969,19 +994,25 @@ bool check_1OutputRequest_1(::nprpc::flat_buffer& buf, lava_M21_Direct& ia) {
 check_failed:
   return false;
 }
-bool check_1Fu322Ff323Ff32(::nprpc::flat_buffer& buf, lava_M22_Direct& ia) {
+bool check_1Fu322Fu32(::nprpc::flat_buffer& buf, lava_M22_Direct& ia) {
+  if (static_cast<std::uint32_t>(buf.size()) < ia.offset() + 8) goto check_failed;
+  return true;
+check_failed:
+  return false;
+}
+bool check_1Fu322Ff323Ff32(::nprpc::flat_buffer& buf, lava_M23_Direct& ia) {
   if (static_cast<std::uint32_t>(buf.size()) < ia.offset() + 12) goto check_failed;
   return true;
 check_failed:
   return false;
 }
-bool check_1Fu322Fi323Fi324Fi325Fi326Fi32(::nprpc::flat_buffer& buf, lava_M24_Direct& ia) {
+bool check_1Fu322Fi323Fi324Fi325Fi326Fi32(::nprpc::flat_buffer& buf, lava_M25_Direct& ia) {
   if (static_cast<std::uint32_t>(buf.size()) < ia.offset() + 24) goto check_failed;
   return true;
 check_failed:
   return false;
 }
-bool check_1Fu322S(::nprpc::flat_buffer& buf, lava_M26_Direct& ia) {
+bool check_1Fu322S(::nprpc::flat_buffer& buf, lava_M27_Direct& ia) {
   if (static_cast<std::uint32_t>(buf.size()) < ia.offset() + 12) goto check_failed;
   {
     if(!ia._2_d()._check_size_align(static_cast<std::uint32_t>(buf.size()))) goto check_failed;
@@ -990,13 +1021,13 @@ bool check_1Fu322S(::nprpc::flat_buffer& buf, lava_M26_Direct& ia) {
 check_failed:
   return false;
 }
-bool check_1Fu322Ff32(::nprpc::flat_buffer& buf, lava_M28_Direct& ia) {
+bool check_1Fu322Ff32(::nprpc::flat_buffer& buf, lava_M29_Direct& ia) {
   if (static_cast<std::uint32_t>(buf.size()) < ia.offset() + 8) goto check_failed;
   return true;
 check_failed:
   return false;
 }
-bool check_1Fu322Ff323Ff324Ff325Ff326Ff327Ff32(::nprpc::flat_buffer& buf, lava_M30_Direct& ia) {
+bool check_1Fu322Ff323Ff324Ff325Ff326Ff327Ff32(::nprpc::flat_buffer& buf, lava_M31_Direct& ia) {
   if (static_cast<std::uint32_t>(buf.size()) < ia.offset() + 28) goto check_failed;
   return true;
 check_failed:
@@ -3222,14 +3253,14 @@ Compositor::DestroySurfaceAsync(uint32_t surfaceId, std::stop_token st) {
   }
 }
 
-void Compositor::Present(uint32_t surfaceId) {
+void Compositor::Present(uint32_t surfaceId, uint32_t serial) {
   ::nprpc::flat_buffer buf;
   auto session = ::nprpc::impl::g_rpc->get_session(this->get_endpoint());
-  std::size_t __wire_size = 36;
+  std::size_t __wire_size = 40;
   if (!::nprpc::impl::g_rpc->prepare_zero_copy_buffer(session->ctx(), buf, __wire_size))
     buf.prepare(__wire_size);
   {
-    buf.commit(36);
+    buf.commit(40);
     static_cast<::nprpc::impl::Header*>(buf.data().data())->msg_id = ::nprpc::impl::MessageId::FunctionCall;
   static_cast<::nprpc::impl::Header*>(buf.data().data())->msg_type =::nprpc::impl::MessageType::Request;
   }
@@ -3238,8 +3269,9 @@ void Compositor::Present(uint32_t surfaceId) {
   __ch.poa_idx() = this->poa_idx();
   __ch.interface_idx() = interface_idx_;
   __ch.function_idx() = 35;
-  lava_M2_Direct _(buf,32);
+  lava_M22_Direct _(buf,32);
   _._1() = surfaceId;
+  _._2() = serial;
   static_cast<::nprpc::impl::Header*>(buf.data().data())->size = static_cast<uint32_t>(buf.size());
   ::nprpc::impl::g_rpc->send_unreliable(this->get_endpoint(), std::move(buf));
 }
@@ -3260,7 +3292,7 @@ void Compositor::ScrollUnclaimed(uint32_t surfaceId, float dx, float dy) {
   __ch.poa_idx() = this->poa_idx();
   __ch.interface_idx() = interface_idx_;
   __ch.function_idx() = 36;
-  lava_M22_Direct _(buf,32);
+  lava_M23_Direct _(buf,32);
   _._1() = surfaceId;
   _._2() = dx;
   _._3() = dy;
@@ -3349,7 +3381,7 @@ std::vector<std::string> Compositor::TakeDroppedPaths(uint32_t surfaceId) {
   if (std_reply != -1) {
     throw ::nprpc::Exception("Unknown Error");
   }
-  lava_M23_Direct out(buf, sizeof(::nprpc::impl::Header));
+  lava_M24_Direct out(buf, sizeof(::nprpc::impl::Header));
     std::vector<std::string> __ret_value;
     {
       auto span = out._1_d()();
@@ -3390,7 +3422,7 @@ Compositor::TakeDroppedPathsAsync(uint32_t surfaceId, std::stop_token st) {
   if (std_reply != -1) {
     throw ::nprpc::Exception("Unknown Error");
   }
-  lava_M23_Direct out(buf, sizeof(::nprpc::impl::Header));
+  lava_M24_Direct out(buf, sizeof(::nprpc::impl::Header));
     std::vector<std::string> __ret_value;
     {
       auto span = out._1_d()();
@@ -3423,7 +3455,7 @@ Capture Compositor::CaptureSurface(uint32_t surfaceId, int32_t x, int32_t y, int
   __ch.poa_idx() = this->poa_idx();
   __ch.interface_idx() = interface_idx_;
   __ch.function_idx() = 40;
-  lava_M24_Direct _(buf,32);
+  lava_M25_Direct _(buf,32);
   _._1() = surfaceId;
   _._2() = x;
   _._3() = y;
@@ -3437,7 +3469,7 @@ Capture Compositor::CaptureSurface(uint32_t surfaceId, int32_t x, int32_t y, int
   if (std_reply != -1) {
     throw ::nprpc::Exception("Unknown Error");
   }
-  lava_M25_Direct out(buf, sizeof(::nprpc::impl::Header));
+  lava_M26_Direct out(buf, sizeof(::nprpc::impl::Header));
     Capture __ret_value;
     __ret_value.width = out._1().width();
     __ret_value.height = out._1().height();
@@ -3467,7 +3499,7 @@ Compositor::CaptureSurfaceAsync(uint32_t surfaceId, int32_t x, int32_t y, int32_
   __ch.poa_idx() = this->poa_idx();
   __ch.interface_idx() = interface_idx_;
   __ch.function_idx() = 40;
-  lava_M24_Direct _(buf,32);
+  lava_M25_Direct _(buf,32);
   _._1() = surfaceId;
   _._2() = x;
   _._3() = y;
@@ -3481,7 +3513,7 @@ Compositor::CaptureSurfaceAsync(uint32_t surfaceId, int32_t x, int32_t y, int32_
   if (std_reply != -1) {
     throw ::nprpc::Exception("Unknown Error");
   }
-  lava_M25_Direct out(buf, sizeof(::nprpc::impl::Header));
+  lava_M26_Direct out(buf, sizeof(::nprpc::impl::Header));
     Capture __ret_value;
     __ret_value.width = out._1().width();
     __ret_value.height = out._1().height();
@@ -3580,7 +3612,7 @@ void Compositor::SetClipboard(uint32_t surfaceId, const std::string& text) {
   __ch.poa_idx() = this->poa_idx();
   __ch.interface_idx() = interface_idx_;
   __ch.function_idx() = 42;
-  lava_M26_Direct _(buf,32);
+  lava_M27_Direct _(buf,32);
   _._1() = surfaceId;
   _._2(text);
   static_cast<::nprpc::impl::Header*>(buf.data().data())->size = static_cast<uint32_t>(buf.size());
@@ -3611,7 +3643,7 @@ Compositor::SetClipboardAsync(uint32_t surfaceId, const std::string& text, std::
   __ch.poa_idx() = this->poa_idx();
   __ch.interface_idx() = interface_idx_;
   __ch.function_idx() = 42;
-  lava_M26_Direct _(buf,32);
+  lava_M27_Direct _(buf,32);
   _._1() = surfaceId;
   _._2(text);
   static_cast<::nprpc::impl::Header*>(buf.data().data())->size = static_cast<uint32_t>(buf.size());
@@ -3710,7 +3742,7 @@ void Compositor::SetPrimarySelection(uint32_t surfaceId, const std::string& text
   __ch.poa_idx() = this->poa_idx();
   __ch.interface_idx() = interface_idx_;
   __ch.function_idx() = 44;
-  lava_M26_Direct _(buf,32);
+  lava_M27_Direct _(buf,32);
   _._1() = surfaceId;
   _._2(text);
   static_cast<::nprpc::impl::Header*>(buf.data().data())->size = static_cast<uint32_t>(buf.size());
@@ -3741,7 +3773,7 @@ Compositor::SetPrimarySelectionAsync(uint32_t surfaceId, const std::string& text
   __ch.poa_idx() = this->poa_idx();
   __ch.interface_idx() = interface_idx_;
   __ch.function_idx() = 44;
-  lava_M26_Direct _(buf,32);
+  lava_M27_Direct _(buf,32);
   _._1() = surfaceId;
   _._2(text);
   static_cast<::nprpc::impl::Header*>(buf.data().data())->size = static_cast<uint32_t>(buf.size());
@@ -3781,7 +3813,7 @@ std::vector<uint8_t> Compositor::GetClipboardPng(uint32_t surfaceId) {
   if (std_reply != -1) {
     throw ::nprpc::Exception("Unknown Error");
   }
-  lava_M27_Direct out(buf, sizeof(::nprpc::impl::Header));
+  lava_M28_Direct out(buf, sizeof(::nprpc::impl::Header));
     std::vector<uint8_t> __ret_value;
     {
       auto span = out._1();
@@ -3818,7 +3850,7 @@ Compositor::GetClipboardPngAsync(uint32_t surfaceId, std::stop_token st) {
   if (std_reply != -1) {
     throw ::nprpc::Exception("Unknown Error");
   }
-  lava_M27_Direct out(buf, sizeof(::nprpc::impl::Header));
+  lava_M28_Direct out(buf, sizeof(::nprpc::impl::Header));
     std::vector<uint8_t> __ret_value;
     {
       auto span = out._1();
@@ -3847,7 +3879,7 @@ void Compositor::SetBackdropBlur(uint32_t surfaceId, float radius) {
   __ch.poa_idx() = this->poa_idx();
   __ch.interface_idx() = interface_idx_;
   __ch.function_idx() = 46;
-  lava_M28_Direct _(buf,32);
+  lava_M29_Direct _(buf,32);
   _._1() = surfaceId;
   _._2() = radius;
   static_cast<::nprpc::impl::Header*>(buf.data().data())->size = static_cast<uint32_t>(buf.size());
@@ -3877,7 +3909,7 @@ Compositor::SetBackdropBlurAsync(uint32_t surfaceId, float radius, std::stop_tok
   __ch.poa_idx() = this->poa_idx();
   __ch.interface_idx() = interface_idx_;
   __ch.function_idx() = 46;
-  lava_M28_Direct _(buf,32);
+  lava_M29_Direct _(buf,32);
   _._1() = surfaceId;
   _._2() = radius;
   static_cast<::nprpc::impl::Header*>(buf.data().data())->size = static_cast<uint32_t>(buf.size());
@@ -3914,7 +3946,7 @@ GpuReport Compositor::GetGpuReport() {
   if (std_reply != -1) {
     throw ::nprpc::Exception("Unknown Error");
   }
-  lava_M29_Direct out(buf, sizeof(::nprpc::impl::Header));
+  lava_M30_Direct out(buf, sizeof(::nprpc::impl::Header));
     GpuReport __ret_value;
     __ret_value.deviceName = (std::string_view)out._1().deviceName();
     __ret_value.samples = out._1().samples();
@@ -4032,7 +4064,7 @@ Compositor::GetGpuReportAsync(std::stop_token st) {
   if (std_reply != -1) {
     throw ::nprpc::Exception("Unknown Error");
   }
-  lava_M29_Direct out(buf, sizeof(::nprpc::impl::Header));
+  lava_M30_Direct out(buf, sizeof(::nprpc::impl::Header));
     GpuReport __ret_value;
     __ret_value.deviceName = (std::string_view)out._1().deviceName();
     __ret_value.samples = out._1().samples();
@@ -4155,7 +4187,7 @@ std::vector<std::string> Compositor::DumpAtlasImages(const std::string& director
   if (std_reply != -1) {
     throw ::nprpc::Exception("Unknown Error");
   }
-  lava_M23_Direct out(buf, sizeof(::nprpc::impl::Header));
+  lava_M24_Direct out(buf, sizeof(::nprpc::impl::Header));
     std::vector<std::string> __ret_value;
     {
       auto span = out._1_d()();
@@ -4197,7 +4229,7 @@ Compositor::DumpAtlasImagesAsync(const std::string& directory, std::stop_token s
   if (std_reply != -1) {
     throw ::nprpc::Exception("Unknown Error");
   }
-  lava_M23_Direct out(buf, sizeof(::nprpc::impl::Header));
+  lava_M24_Direct out(buf, sizeof(::nprpc::impl::Header));
     std::vector<std::string> __ret_value;
     {
       auto span = out._1_d()();
@@ -4230,7 +4262,7 @@ void Compositor::SetBackdropBlurRegion(uint32_t surfaceId, float radius, float x
   __ch.poa_idx() = this->poa_idx();
   __ch.interface_idx() = interface_idx_;
   __ch.function_idx() = 49;
-  lava_M30_Direct _(buf,32);
+  lava_M31_Direct _(buf,32);
   _._1() = surfaceId;
   _._2() = radius;
   _._3() = x;
@@ -4265,7 +4297,7 @@ Compositor::SetBackdropBlurRegionAsync(uint32_t surfaceId, float radius, float x
   __ch.poa_idx() = this->poa_idx();
   __ch.interface_idx() = interface_idx_;
   __ch.function_idx() = 49;
-  lava_M30_Direct _(buf,32);
+  lava_M31_Direct _(buf,32);
   _._1() = surfaceId;
   _._2() = radius;
   _._3() = x;
@@ -5456,16 +5488,16 @@ void ICompositor_Servant::dispatch(::nprpc::SessionContext& ctx, [[maybe_unused]
     }
     case 35: {
       assert(ctx.rx_buffer != nullptr);
-      lava_M2_Direct ia(*ctx.rx_buffer, 32);
-      if ( !check_1Fu32(*ctx.rx_buffer, ia) ) {
+      lava_M22_Direct ia(*ctx.rx_buffer, 32);
+      if ( !check_1Fu322Fu32(*ctx.rx_buffer, ia) ) {
         break;
       }
-      Present(ia._1());
+      Present(ia._1(), ia._2());
       break;
     }
     case 36: {
       assert(ctx.rx_buffer != nullptr);
-      lava_M22_Direct ia(*ctx.rx_buffer, 32);
+      lava_M23_Direct ia(*ctx.rx_buffer, 32);
       if ( !check_1Fu322Ff323Ff32(*ctx.rx_buffer, ia) ) {
         break;
       }
@@ -5519,7 +5551,7 @@ void ICompositor_Servant::dispatch(::nprpc::SessionContext& ctx, [[maybe_unused]
       if (!::nprpc::impl::g_rpc->prepare_zero_copy_buffer(ctx, obuf, __wire_size))
         obuf.prepare(__wire_size);
       obuf.commit(24);
-      lava_M23_Direct oa(obuf,16);
+      lava_M24_Direct oa(obuf,16);
       oa._1(static_cast<uint32_t>(__ret_val.size()));
       {
         auto vdir = oa._1_d();
@@ -5537,7 +5569,7 @@ void ICompositor_Servant::dispatch(::nprpc::SessionContext& ctx, [[maybe_unused]
     }
     case 40: {
       assert(ctx.rx_buffer != nullptr);
-      lava_M24_Direct ia(*ctx.rx_buffer, 32);
+      lava_M25_Direct ia(*ctx.rx_buffer, 32);
       if ( !check_1Fu322Fi323Fi324Fi325Fi326Fi32(*ctx.rx_buffer, ia) ) {
         ::nprpc::impl::make_simple_answer(ctx, ::nprpc::impl::MessageId::Error_BadInput);
         break;
@@ -5586,7 +5618,7 @@ void ICompositor_Servant::dispatch(::nprpc::SessionContext& ctx, [[maybe_unused]
       if (!::nprpc::impl::g_rpc->prepare_zero_copy_buffer(ctx, obuf, __wire_size))
         obuf.prepare(__wire_size);
       obuf.commit(32);
-      lava_M25_Direct oa(obuf,16);
+      lava_M26_Direct oa(obuf,16);
       oa._1().width() = __ret_val.width;
       oa._1().height() = __ret_val.height;
       oa._1().png(static_cast<uint32_t>(__ret_val.png.size()));
@@ -5640,7 +5672,7 @@ void ICompositor_Servant::dispatch(::nprpc::SessionContext& ctx, [[maybe_unused]
     }
     case 42: {
       assert(ctx.rx_buffer != nullptr);
-      lava_M26_Direct ia(*ctx.rx_buffer, 32);
+      lava_M27_Direct ia(*ctx.rx_buffer, 32);
       if ( !check_1Fu322S(*ctx.rx_buffer, ia) ) {
         ::nprpc::impl::make_simple_answer(ctx, ::nprpc::impl::MessageId::Error_BadInput);
         break;
@@ -5711,7 +5743,7 @@ void ICompositor_Servant::dispatch(::nprpc::SessionContext& ctx, [[maybe_unused]
     }
     case 44: {
       assert(ctx.rx_buffer != nullptr);
-      lava_M26_Direct ia(*ctx.rx_buffer, 32);
+      lava_M27_Direct ia(*ctx.rx_buffer, 32);
       if ( !check_1Fu322S(*ctx.rx_buffer, ia) ) {
         ::nprpc::impl::make_simple_answer(ctx, ::nprpc::impl::MessageId::Error_BadInput);
         break;
@@ -5773,7 +5805,7 @@ void ICompositor_Servant::dispatch(::nprpc::SessionContext& ctx, [[maybe_unused]
       if (!::nprpc::impl::g_rpc->prepare_zero_copy_buffer(ctx, obuf, __wire_size))
         obuf.prepare(__wire_size);
       obuf.commit(24);
-      lava_M27_Direct oa(obuf,16);
+      lava_M28_Direct oa(obuf,16);
       oa._1(static_cast<uint32_t>(__ret_val.size()));
       memcpy(oa._1().data(), __ret_val.data(), __ret_val.size() * 1);
       static_cast<::nprpc::impl::Header*>(obuf.data().data())->size = static_cast<uint32_t>(obuf.size());
@@ -5783,7 +5815,7 @@ void ICompositor_Servant::dispatch(::nprpc::SessionContext& ctx, [[maybe_unused]
     }
     case 46: {
       assert(ctx.rx_buffer != nullptr);
-      lava_M28_Direct ia(*ctx.rx_buffer, 32);
+      lava_M29_Direct ia(*ctx.rx_buffer, 32);
       if ( !check_1Fu322Ff32(*ctx.rx_buffer, ia) ) {
         ::nprpc::impl::make_simple_answer(ctx, ::nprpc::impl::MessageId::Error_BadInput);
         break;
@@ -5838,7 +5870,7 @@ void ICompositor_Servant::dispatch(::nprpc::SessionContext& ctx, [[maybe_unused]
       if (!::nprpc::impl::g_rpc->prepare_zero_copy_buffer(ctx, obuf, __wire_size))
         obuf.prepare(__wire_size);
       obuf.commit(176);
-      lava_M29_Direct oa(obuf,16);
+      lava_M30_Direct oa(obuf,16);
       oa._1().deviceName(__ret_val.deviceName);
       oa._1().samples() = __ret_val.samples;
       oa._1().maxSamples() = __ret_val.maxSamples;
@@ -5978,7 +6010,7 @@ void ICompositor_Servant::dispatch(::nprpc::SessionContext& ctx, [[maybe_unused]
       if (!::nprpc::impl::g_rpc->prepare_zero_copy_buffer(ctx, obuf, __wire_size))
         obuf.prepare(__wire_size);
       obuf.commit(24);
-      lava_M23_Direct oa(obuf,16);
+      lava_M24_Direct oa(obuf,16);
       oa._1(static_cast<uint32_t>(__ret_val.size()));
       {
         auto vdir = oa._1_d();
@@ -5996,7 +6028,7 @@ void ICompositor_Servant::dispatch(::nprpc::SessionContext& ctx, [[maybe_unused]
     }
     case 49: {
       assert(ctx.rx_buffer != nullptr);
-      lava_M30_Direct ia(*ctx.rx_buffer, 32);
+      lava_M31_Direct ia(*ctx.rx_buffer, 32);
       if ( !check_1Fu322Ff323Ff324Ff325Ff326Ff327Ff32(*ctx.rx_buffer, ia) ) {
         ::nprpc::impl::make_simple_answer(ctx, ::nprpc::impl::MessageId::Error_BadInput);
         break;
