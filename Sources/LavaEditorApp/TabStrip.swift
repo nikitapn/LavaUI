@@ -42,6 +42,9 @@ enum TabChrome {
     /// Viewport inset where a live drag starts panning the row.
     static let autoScrollEdge: Float = 28
     static let autoScrollSpeed: Float = 8
+    /// Vertical inset of the 1px rule between tabs, so it reads as a
+    /// separator rather than a full-height stitch — same idea as VS Code.
+    static let separatorInset: Float = 8
 
     static var tabY: Float { (barHeight - tabHeight) * 0.5 }
 
@@ -292,11 +295,23 @@ struct TabStrip: View {
 
         if dragging, let live = drag {
             var next = live
+            // Only when it actually moves. `scrollX` is `@DrawState`, whose
+            // setter marks the frame dirty on *every* write — so re-assigning
+            // the same value from inside paint re-dirties the frame being
+            // painted, and the loop renders again immediately instead of
+            // sleeping until the 1/60 wake below. Once the row is panned to
+            // an end this write stops changing anything and never stops
+            // asking, which pinned the client at ~1000 paints a second and
+            // took the compositor with it.
+            let panned: Float
             if local.x < TabChrome.autoScrollEdge {
-                scrollX = max(0, scrollX - TabChrome.autoScrollSpeed)
+                panned = max(0, scrollX - TabChrome.autoScrollSpeed)
             } else if local.x > frame.w - TabChrome.autoScrollEdge {
-                scrollX = min(maxScroll, scrollX + TabChrome.autoScrollSpeed)
+                panned = min(maxScroll, scrollX + TabChrome.autoScrollSpeed)
+            } else {
+                panned = scrollX
             }
+            if panned != scrollX { scrollX = panned }
             let contentLeft = local.x - live.grabOffset + scrollX
             next.pointerX = local.x
             next.dest = TabChrome.slot(
@@ -314,6 +329,7 @@ struct TabStrip: View {
 
         var live: [Int: Animated<Float>] = [:]
         var anySliding = false
+        var tabXs: [Float] = []
 
         for doc in documents {
             guard let target = leftEdges[doc.id] else { continue }
@@ -327,16 +343,25 @@ struct TabStrip: View {
             }
             if anim.step(now) { anySliding = true }
             live[doc.id] = anim
+            let tabX = frame.x + anim.current - scrollX
             paintTab(
                 list, document: doc,
-                x: frame.x + anim.current - scrollX,
+                x: tabX,
                 y: frame.y + TabChrome.tabY,
                 theme: theme, font: font,
+                hovered: isHovered(
+                    tabX: tabX, originX: frame.x, pointer: local
+                ),
                 pointer: local,
                 originX: frame.x
             )
+            tabXs.append(tabX)
         }
         session.tabSlide = live
+        paintSeparators(
+            list, tabXs: tabXs,
+            y: frame.y + TabChrome.tabY, theme: theme
+        )
 
         if dragging, let drag,
            let doc = documents.first(where: { $0.id == drag.documentID })
@@ -346,6 +371,7 @@ struct TabStrip: View {
                 x: frame.x + local.x - drag.grabOffset,
                 y: frame.y + TabChrome.tabY,
                 theme: theme, font: font,
+                hovered: false,
                 pointer: local,
                 originX: frame.x
             )
@@ -384,21 +410,52 @@ struct TabStrip: View {
         return left
     }
 
+    /// Hairline between neighbouring tabs. Skipped across a drag hole so
+    /// the gap itself is the cue, the way VS Code draws a rule on the
+    /// shared edge and nowhere else.
+    private func paintSeparators(
+        _ list: DrawList, tabXs: [Float], y: Float, theme: Theme
+    ) {
+        guard tabXs.count > 1 else { return }
+        let sorted = tabXs.sorted()
+        let inset = TabChrome.separatorInset
+        let h = TabChrome.tabHeight - inset * 2
+        guard h > 0 else { return }
+        for i in 0..<(sorted.count - 1) {
+            let x = sorted[i]
+            let gap = sorted[i + 1] - (x + TabChrome.tabWidth)
+            if gap > TabChrome.tabWidth * 0.5 { continue }
+            list.rect(
+                x: x + TabChrome.tabWidth + TabChrome.spacing * 0.5,
+                y: y + inset,
+                w: 1,
+                h: h,
+                color: theme.border
+            )
+        }
+    }
+
+    private func isHovered(
+        tabX: Float, originX: Float, pointer: (x: Float, y: Float)
+    ) -> Bool {
+        session.tabDrag == nil
+            && pointer.x >= tabX - originX
+            && pointer.x < tabX - originX + TabChrome.tabWidth
+            && pointer.y >= TabChrome.tabY
+            && pointer.y < TabChrome.tabY + TabChrome.tabHeight
+    }
+
     private func paintTab(
         _ list: DrawList, document: EditorDocument,
         x: Float, y: Float,
         theme: Theme, font: UIFont?,
+        hovered: Bool,
         pointer: (x: Float, y: Float),
         originX: Float
     ) {
         let w = TabChrome.tabWidth
         let h = TabChrome.tabHeight
         let isActive = document.id == session.active.id
-        let localX = pointer.x
-        let localY = pointer.y
-        let hovered = session.tabDrag == nil
-            && localX >= x - originX && localX < x - originX + w
-            && localY >= TabChrome.tabY && localY < TabChrome.tabY + h
 
         let fill: Color = {
             if isActive { return theme.background }
@@ -427,7 +484,7 @@ struct TabStrip: View {
 
         let close = TabChrome.closeRect(tabX: x - originX)
         let closeHovered = hovered
-            && TabChrome.contains(close, x: localX, y: localY)
+            && TabChrome.contains(close, x: pointer.x, y: pointer.y)
         if closeHovered {
             list.roundedRect(
                 x: originX + close.x + 2, y: y + (h - close.h) * 0.5,

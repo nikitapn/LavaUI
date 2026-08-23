@@ -71,6 +71,18 @@ public struct State<Value> {
 ///
 /// Do not use `DrawState` for values that change view structure, text outside
 /// the paint closure, or layout; those require ordinary `State`.
+///
+/// **Writing one from inside a paint closure requires a change check.** The
+/// setter raises `.redraw` on every write, unconditionally — it cannot compare,
+/// because `Value` is not `Equatable` here. A write from inside paint therefore
+/// re-dirties the very frame being painted, and the loop renders again at once
+/// rather than sleeping, so an assignment that keeps producing the same value
+/// never stops asking for another frame. The tab strip's auto-scroll hit this:
+/// `scrollX = max(0, scrollX - speed)` is a no-op once the row is panned to its
+/// end, and it pinned the client at ~1000 paints a second — with the compositor
+/// saturated behind it — until the process was killed. Compare first and assign
+/// only on a real change; a value that genuinely moves every frame should pace
+/// itself with `FrameScheduler.requestWake(in:)` instead.
 @propertyWrapper
 public struct DrawState<Value> {
     final class Storage {
