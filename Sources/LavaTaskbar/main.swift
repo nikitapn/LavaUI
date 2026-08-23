@@ -453,7 +453,11 @@ enum TaskbarChrome {
 
 struct TaskbarView: View {
     let brandIcon: UIImage
+    let brandImage: UIImage
     let menuFont: UIFont
+    /// Running text in the About card. Open Sans at the UI size is a label
+    /// face; this is a paragraph, so it gets a reading face at 14px.
+    let bodyFont: UIFont
 
     var body: some View {
         let chrome = TaskbarChrome.style
@@ -699,24 +703,45 @@ struct TaskbarView: View {
         }
     }
 
-    private var aboutCard: some View {
+    /// One ink for the paragraph. Markdown emphasis used to paint
+    /// `textSecondary`, which read as a second, muddier face because this
+    /// leaf cannot switch to italic.
+    private var aboutMarkdownStyle: MarkdownStyle {
         let theme = Theme.current
-        return VStack(width: .pt(600), padding: 0, spacing: 10) {
-            HStack() {
-                Spacer()
-                Text("Lava", color: theme.textPrimary)
-                Spacer()
+        return MarkdownStyle(
+            text: theme.textPrimary,
+            palette: [
+                theme.accent,
+                theme.textPrimary,
+                theme.textPrimary,
+                theme.selected,
+                theme.accent,
+                theme.textDim,
+            ]
+        )
+    }
+
+    private var aboutCard: some View {
+        return ScrollView(.vertical, showsIndicator: false) {
+            VStack(width: .pt(500), padding: 12, spacing: 10) {
+                HStack() {
+                    Spacer()
+                    Image(brandImage, width: .pt(400), contentMode: .fit)
+                    Spacer()
+                }
+                MarkdownView(
+                    "Lava is a free and open-source desktop environment. It is designed to be fast, lightweight, and *ready* to use from the initial launch — no tinkering with the config is needed. It is built by *Claude, Grok and ChatGPT* for Nikita to use. During his life, Nikita has always *struggled with computers* and particularly with *Linux Desktop Environments*. He has tried many, but none of them have been able to provide him with the experience he desires. Then one day, he decided to have Claude build him a new desktop environment, and thus Lava was born, and now Nikita is *not struggling* with computers anymore, and he is *happy*.",
+                    style: aboutMarkdownStyle,
+                    font: bodyFont
+                )
+                HStack(padding: 2) {
+                    Spacer()
+                    Button("Close") { session.setDialog(.none) }
+                }
             }
-            MarkdownView(
-                "Lava is a free and open-source desktop environment. It is designed to be fast, lightweight, and easy to use. It is built by *Claude, Grok and ChatGPT* for Nikita to use. During his life, Nikita has always *struggled with computers* and particularly with *Linux Desktop Environments*. He has tried many (XFCE, KDE, Gnome, Cosmic — *XFCE* was actually good in combination with vala-panel-plugin + plank-reloaded), but none of them have been able to provide him with the experience he desires. Then one day, he decided to have Claude build him a new desktop environment, and thus Lava was born, and now Nikita is *not struggling* with computers anymore, and he is *happy*.",
-            )
-            HStack(padding: 0) {
-                Spacer()
-                Button("Close") { session.setDialog(.none) }
-            }
+            .background(.clear)
+            .agentId("dialog.about")
         }
-        .background(.clear)
-        .agentId("dialog.about")
     }
 
     private var logoutCard: some View {
@@ -830,6 +855,32 @@ func launchDesktopProgram(_ name: String) {
     )
 }
 
+/// Face for a paragraph, not a toolbar.
+///
+/// Open Sans is packed for UI labels. A 16px label face in a 500pt column is
+/// what made the About card look like chrome with a story pasted on. Prefer
+/// Adwaita Sans (Inter, the current GNOME reading face), then Noto Sans,
+/// then the bundled Open Sans at the same 14px.
+func loadReadingFace(pixelSize: Float) -> UIFont? {
+    let paths = [
+        "/usr/share/fonts/Adwaita/AdwaitaSans-Regular.ttf",
+        "/usr/share/fonts/noto/NotoSans-Regular.ttf",
+        "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
+        "/usr/share/fonts/liberation/LiberationSans-Regular.ttf",
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+        "/usr/share/fonts/TTF/DejaVuSans.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+    ]
+    for path in paths {
+        if FileManager.default.fileExists(atPath: path),
+           let font = UIFont(path: path, pixelSize: pixelSize)
+        {
+            return font
+        }
+    }
+    return UIFont.loadUI(assetsRoot: LavaResources.root, pixelSize: pixelSize)
+}
+
 // ─── Bring-up ───────────────────────────────────────────────────────────────
 
 // Nothing at all, and the strip paints its own background instead.
@@ -854,6 +905,15 @@ guard let brandIcon = ImageStore.loadAsset(
     exit(1)
 }
 
+guard let brandImage = ImageStore.loadAsset(
+    named: "lavaui.png", bundle: .module, into: editor
+) else {
+    FileHandle.standardError.write(
+        Data("LavaTaskbar: could not load lavaui.png\n".utf8)
+    )
+    exit(1)
+}
+
 // Owns the registrar from here on, so an application starting after this point
 // finds somewhere to export to. Before `run`, because an app that registers
 // while the panel is still coming up should not have to try twice.
@@ -872,6 +932,14 @@ else {
     exit(1)
 }
 menuFont.registerWithEngine(editor)
+
+guard let bodyFont = loadReadingFace(pixelSize: 14) else {
+    FileHandle.standardError.write(
+        Data("LavaTaskbar: could not load body face\n".utf8)
+    )
+    exit(1)
+}
+bodyFont.registerWithEngine(editor)
 
 // System tray watcher — same timing as the menu registrar.
 tray = StatusNotifierTray(editor: editor)
@@ -917,5 +985,8 @@ Thread.detachNewThread {
 }
 
 LavaClient.run(editor: editor) {
-    TaskbarView(brandIcon: brandIcon, menuFont: menuFont)
+    TaskbarView(
+        brandIcon: brandIcon, brandImage: brandImage,
+        menuFont: menuFont, bodyFont: bodyFont
+    )
 }
