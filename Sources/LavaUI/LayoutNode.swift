@@ -179,6 +179,17 @@ class YogaBoxNode: AnyViewNode {
     /// Pointer image while the pointer is inside this box (`View.cursor(_:)`).
     /// Nil inherits whatever an ancestor asked for, and an arrow if none did.
     var cursor: CursorShape?
+    /// Stroke on this box's own edge, drawn over its children
+    /// (`View.border(_:width:)`).
+    ///
+    /// Here rather than beside `fillColor` on each of `LeafNode`, `StackNode`
+    /// and `StyleBoxNode`, which is where the fill and the corner radius are
+    /// declared three separate times. One field cannot drift; three copies
+    /// have already cost this file a modifier that applied to two of them and
+    /// silently did nothing on the third. Only those three paint it, so
+    /// `ModifiedView.canPaint` still has to gate a border the same way it
+    /// gates a fill — a box that is none of them gets a wrapper that is.
+    var borderStyle: BorderStyle?
 
     /// How far this node's children are drawn from its own origin.
     ///

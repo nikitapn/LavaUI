@@ -38,6 +38,7 @@ final class ViewStyleMergeTests: XCTestCase {
         s.clipsContent = true
         s.isHidden = false
         s.cursor = .resizeUpDown
+        s.border = BorderStyle(Color(r: 0.5, g: 0, b: 0.5), width: 4)
         return s
     }
 

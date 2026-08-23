@@ -106,12 +106,16 @@ void main() {
     coverage = texture(textures[nonuniformEXT(vTextureIndex)], vUv).r;
   } else { // Sdf (kind 0); Mesh never reaches this shader
     float d = sdRoundBox(vLocal, vHalfSize, vRadius);
+    // The antialias width comes from the *unfolded* field — see quad.frag.
+    float aa = max(fwidth(d), 1e-5);
+    // vAux > 0 asks for an outline of that width instead of a fill.
+    if (vAux > 0.0) d = abs(d + vAux * 0.5) - vAux * 0.5;
     // Sharp box: full coverage inside, none outside. SDF AA on r=0
-    // eats ~1px on every edge — see quad.frag.
-    if (vRadius < 0.5) {
-      coverage = d <= 0.0 ? 1.0 : 0.0;
+    // eats ~1px on every edge — see quad.frag, including why a sub-pixel
+    // band is the one case that must antialias instead.
+    if (vRadius < 0.5 && (vAux <= 0.0 || vAux >= 1.0)) {
+      coverage = d <= 1e-4 ? 1.0 : 0.0;
     } else {
-      float aa = max(fwidth(d), 1e-5);
       coverage = 1.0 - smoothstep(-aa, aa, d);
     }
   }

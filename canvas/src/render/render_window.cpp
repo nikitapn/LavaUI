@@ -1788,6 +1788,12 @@ void RenderWindow::replayDrawList(const canvas::DrawList &list, float viewW,
       quads_.pushBox({cmd.x + ox, cmd.y + oy}, {cmd.w, cmd.h}, faded(cmd.color),
                      cmd.aux);
       break;
+    case canvas::DrawCommandKind::StrokedRect:
+      // `param` is 24.8 fixed point — see `StrokedRect` in draw_command.hpp.
+      quads_.pushBoxStroke({cmd.x + ox, cmd.y + oy}, {cmd.w, cmd.h},
+                           faded(cmd.color), cmd.aux,
+                           static_cast<float>(cmd.param) / 256.f);
+      break;
     case canvas::DrawCommandKind::LinearGradientRect: {
       // `param` indexes the frame's gradient array. Out of range means a
       // producer and this renderer disagree about the frame, so fall back to

@@ -911,6 +911,28 @@ void QuadRenderer::pushBox(vec2 topLeft, vec2 size, uint32_t rgba, float radius)
                  half, r, rgba, Kind::Sdf);
 }
 
+void QuadRenderer::pushBoxStroke(vec2 topLeft, vec2 size, uint32_t rgba,
+                                 float radius, float width) {
+  if (size.x <= 0.0f || size.y <= 0.0f || width <= 0.0f) {
+    return;
+  }
+  ensureBatchTexture(glyphAtlasView_);
+  constexpr float kPad = 1.0f;
+
+  const vec2 half{size.x * 0.5f, size.y * 0.5f};
+  const vec2 center{topLeft.x + half.x, topLeft.y + half.y};
+  const vec2 ext{half.x + kPad, half.y + kPad};
+  const float r = std::min(radius, std::min(half.x, half.y));
+  // The band the shader keeps is `-w <= d <= 0`, and no point inside the shape
+  // is deeper than half its shorter side. A border that thick therefore leaves
+  // no hole and is simply a fill; clamping there costs nothing and keeps a
+  // caller's absurd width from being carried into the field.
+  const float w = std::min(width, std::min(half.x, half.y));
+
+  appendInstance({center.x-ext.x, center.y-ext.y}, {ext.x*2.f, ext.y*2.f},
+                 half, r, rgba, Kind::Sdf, w);
+}
+
 void QuadRenderer::pushBoxGradient(vec2 topLeft, vec2 size, uint32_t rgba0,
                                    uint32_t rgba1, float angle, float radius) {
   if (size.x <= 0.0f || size.y <= 0.0f) {

@@ -219,6 +219,28 @@ enum class DrawCommandKind : uint32_t {
   /// `TextureManager::setSurfaceResolver`). Without a resolver the command
   /// draws nothing.
   ImageSurface = 23,
+  /// A rounded rectangle drawn as an outline instead of a fill.
+  ///
+  ///   x, y, w, h = the *outer* edge of the border, not its centreline
+  ///   aux        = corner radius of that outer edge
+  ///   param      = stroke width, 24.8 fixed point (pixels * 256)
+  ///   color      = the stroke's colour
+  ///
+  /// The band lies wholly inside `x,y,w,h`, the way CSS `border` and
+  /// SwiftUI's `.border` do, so a bordered view occupies exactly the rect it
+  /// was laid out in and a caller can hand over the same rect it filled.
+  ///
+  /// `param` carries the width because `aux` is spoken for and this struct is
+  /// full. Fixed point rather than a whole-pixel integer: a hairline on a
+  /// fractional-scale output is 1.25 or 1.5 physical pixels, and rounding
+  /// that is the difference between a border and no border. 1/256 px is far
+  /// below anything a display can show.
+  ///
+  /// Its own kind rather than a `RoundedRect` with a width, so that a reader
+  /// which does not know about it draws *nothing* — the safe failure. Under a
+  /// shared kind the same command would fall through to the fill path and
+  /// paint a solid slab over the content the border was meant to frame.
+  StrokedRect = 24,
 };
 
 /// Bits in `NodeAnimate.color` — which properties the command states.

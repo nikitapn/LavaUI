@@ -1,6 +1,23 @@
 import CYoga
 import Foundation
 
+/// A stroke on a view's own edge, lying inside its layout rect.
+///
+/// Colour and width together in one field, rather than two that merge
+/// separately: a border is one decision. Merged per field, a later
+/// `.border(.red)` in a chain would inherit whatever width an earlier one set
+/// and quietly draw a 4px red frame where the caller asked for a hairline.
+public struct BorderStyle: Equatable {
+    public var color: Color
+    /// Pixels, drawn inward from the layout rect's edge.
+    public var width: Float
+
+    public init(_ color: Color, width: Float = 1) {
+        self.color = color
+        self.width = max(0, width)
+    }
+}
+
 /// Style a modifier pushes onto a node.
 ///
 /// Every field is optional and merging is **per field**: whole-struct
@@ -38,6 +55,9 @@ public struct ViewStyle: Equatable {
     public var isHidden: Bool?
     /// Pointer image over this view. `nil` inherits. See `View.cursor(_:)`.
     public var cursor: CursorShape?
+    /// Stroke on this node's edge, drawn over its children. See
+    /// `View.border(_:width:)`.
+    public var border: BorderStyle?
 
     public init() {}
 
@@ -67,6 +87,7 @@ public struct ViewStyle: Equatable {
         out.clipsContent = clipsContent ?? base.clipsContent
         out.isHidden = isHidden ?? base.isHidden
         out.cursor = cursor ?? base.cursor
+        out.border = border ?? base.border
         return out
     }
 }
@@ -171,7 +192,7 @@ public struct ModifiedView<Content: View>: PrimitiveView {
     /// from what it wraps.
     private static func canPaint(_ style: ViewStyle, on node: any AnyViewNode) -> Bool {
         if style.fill == nil, style.fillGradient == nil, style.hoverFill == nil,
-           style.cornerRadius == nil {
+           style.cornerRadius == nil, style.border == nil {
             return true
         }
         return node is LeafNode || node is StackNode || node is StyleBoxNode
@@ -203,6 +224,7 @@ extension YogaBoxNode {
             base.clipsContent = clipsContent
             base.isHidden = isHidden
             base.cursor = cursor
+            base.border = borderStyle
             styleBaseline = base
         }
         let base = styleBaseline ?? ViewStyle()
@@ -224,6 +246,11 @@ extension YogaBoxNode {
         // removing `.cursor()` has to give the pointer back to whatever the
         // view is sitting in.
         cursor = style.cursor ?? base.cursor
+        // Through the baseline, like blur and cursor rather than like fill:
+        // a border is chrome the modifier owns outright, so dropping the
+        // modifier has to take the stroke off. `fill` is set-if-present
+        // because a primitive may have painted its own.
+        borderStyle = style.border ?? base.border
 
         if let leaf = self as? LeafNode {
             if let fill = style.fill { leaf.fillColor = fill }
@@ -391,6 +418,24 @@ extension View {
         styled { $0.cornerRadius = radius }
     }
 
+    /// Strokes this view's edge, `width` pixels thick, drawn over its content.
+    ///
+    /// ```swift
+    /// Text("Hi").padding(8).border(.purple, width: 4)
+    /// ```
+    ///
+    /// The stroke lies *inside* the layout rect, as in SwiftUI and CSS: the
+    /// view still occupies exactly the space it was laid out in, and a border
+    /// never nudges a sibling. It also follows `.cornerRadius()` — the two
+    /// compose, and the border's inner edge is the true inward offset of the
+    /// rounded shape, so the corners stay concentric.
+    ///
+    /// Order matters the way it does in SwiftUI: `.border()` before
+    /// `.padding()` frames the content, after it frames the padded box.
+    public func border(_ color: Color, width: Float = 1) -> ModifiedView<Self> {
+        styled { $0.border = BorderStyle(color, width: width) }
+    }
+
     public func frame(
         width: Dimension? = nil, height: Dimension? = nil,
         minWidth: Float? = nil, minHeight: Float? = nil
@@ -521,6 +566,11 @@ extension ModifiedView {
 
     public func cornerRadius(_ radius: Float) -> ModifiedView<Content> {
         adding { $0.cornerRadius = radius }
+    }
+
+    /// See `View.border(_:width:)`.
+    public func border(_ color: Color, width: Float = 1) -> ModifiedView<Content> {
+        adding { $0.border = BorderStyle(color, width: width) }
     }
 
     public func clipped() -> ModifiedView<Content> {

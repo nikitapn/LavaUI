@@ -3,6 +3,7 @@
 
 // See quad.vert. Coverage / sample paths:
 //   kind 0 — rounded-box SDF (rect / round-rect / circle / stroked line).
+//            `vAux` > 0 makes it an outline of that width instead of a fill.
 //   kind 1 — glyph coverage from the R8 atlas (`.r` * tint).
 //   kind 2 — full-color image (RGBA sample * tint). The vertex selects an
 //            entry in the frame's bindless descriptor table.
@@ -154,6 +155,22 @@ void main() {
       cov = texture(uTextures[nonuniformEXT(vTextureIndex)], vLocal).r;
     } else {
       float d = sdRoundBox(vLocal, vHalfSize, vRadius);
+      // Taken before the fold below. `abs` creases the field along the middle
+      // of a stroked band, and `fwidth` measured across that crease reports a
+      // slope the geometry does not have — a bright seam down the centre of
+      // any border more than a pixel or two wide.
+      float aa = max(fwidth(d), 1e-5);
+      // `vAux` > 0 asks for an outline of that width rather than a fill.
+      // Folding the distance about a line half a width inside the edge leaves
+      // exactly the band between the edge and `vAux` short of it, so the
+      // border lies wholly within the rect it was given — the same place CSS
+      // and SwiftUI put one. Nothing else changes: the inner boundary is the
+      // true inward offset of the shape, so a rounded rect gets a concentric
+      // arc of radius `vRadius - vAux`, and a border thicker than the radius
+      // fills its corners solid, which is what that offset degenerates to.
+      if (vAux > 0.0) {
+        d = abs(d + vAux * 0.5) - vAux * 0.5;
+      }
       // A sharp box must not pay the SDF antialias. Pixel centres sit
       // 0.5px inside a d=0 edge, so smoothstep(-aa, aa, d) lands around
       // 0.75 and every side of a panel or a fill reads as a 1px hole
@@ -161,10 +178,26 @@ void main() {
       // keep the falloff — that is what the radius is for. The quad
       // is already padded 1px (`pushBox`) so the discarded outside
       // still has fragments to reject.
-      if (vRadius < 0.5) {
-        cov = d <= 0.0 ? 1.0 : 0.0;
+      //
+      // A square border's edges are axis-aligned on both sides of the band,
+      // so it wants the same crisp treatment: antialiasing a whole-pixel
+      // hairline from both directions would halve its alpha and wash it out.
+      //
+      // A band *thinner* than a pixel is the exception, and has to antialias.
+      // Hard coverage can only answer 0 or 1, so the honest rendering of a
+      // half-pixel border — a line at half alpha — is not available to it. It
+      // is worse than that: at width 0.5 the folded distance is exactly 0 at
+      // every pixel centre along the edge, so each of the four sides is
+      // decided by whichever way the rounding falls. That drew a box with one
+      // edge.
+      //
+      // The epsilon covers the same tie for wider bands. Every half-integer
+      // width puts the inner edge on a pixel centre too; without it a 1.5px
+      // border comes out 2px on some sides and 1px on others, for the same
+      // reason and with the same floating-point luck deciding which.
+      if (vRadius < 0.5 && (vAux <= 0.0 || vAux >= 1.0)) {
+        cov = d <= 1e-4 ? 1.0 : 0.0;
       } else {
-        float aa = max(fwidth(d), 1e-5);
         cov = 1.0 - smoothstep(-aa, aa, d);
       }
     }

@@ -52,6 +52,10 @@ public enum DrawKind: UInt32 {
     /// Textured quad sourced from another compositor surface. `param` is
     /// the surface id; `aux` is the longest dest edge (0 = native).
     case imageSurface = 23
+    /// Rounded rect drawn as an outline lying inside `x,y,w,h`. `aux` = the
+    /// outer corner radius, `param` = stroke width in 24.8 fixed point.
+    /// See `StrokedRect` in `draw_command.hpp`.
+    case strokedRect = 24
 }
 
 /// Bits in a `beginNode` command's `color` field. Mirrors
@@ -493,6 +497,29 @@ public final class DrawList {
     /// renderer insets for that, since it is the one that cuts the corners.
     public func opaqueBounds(x: Float, y: Float, w: Float, h: Float) {
         append(kind: .opaqueBounds, x: x, y: y, w: w, h: h, color: .clear)
+    }
+
+    /// An outline of `width` pixels lying *inside* `x,y,w,h`, with the outer
+    /// edge rounded by `radius`.
+    ///
+    /// Inside, not centred on the edge, so a bordered view occupies exactly
+    /// the rect it was laid out in — which is what `.border()` promises and
+    /// what lets this take the same rect and radius as the fill underneath it.
+    ///
+    /// The width crosses to the renderer as 24.8 fixed point because the
+    /// command struct has no float field left. A hairline is 1.25 or 1.5
+    /// physical pixels on a fractional-scale output, so rounding it to whole
+    /// pixels is the difference between a border and none at all.
+    public func strokedRect(
+        x: Float, y: Float, w: Float, h: Float, color: Color,
+        radius: Float = 0, width: Float = 1
+    ) {
+        guard w > 0, h > 0, width > 0 else { return }
+        append(
+            kind: .strokedRect, x: x, y: y, w: w, h: h, color: color,
+            param: UInt32(min(16_777_215, max(1, (width * 256).rounded()))),
+            aux: max(0, radius)
+        )
     }
 
     public func roundedRect(
@@ -1084,6 +1111,26 @@ public final class DrawList {
     /// Three classes declare their own rather than sharing one on the base, so
     /// asking the question needs all three names. Same shape as the fill
     /// branches in `applyViewStyle`.
+    /// Strokes a box's own edge, if `.border()` asked for one.
+    ///
+    /// Called after the box's children and *outside* its content clip. Over
+    /// the children because that is what a border is for — framing what is
+    /// inside it, which a fill drawn first cannot do — and outside the clip
+    /// because the scissor is this box's own rect, so a border sitting on that
+    /// boundary would have its outer half trimmed by it.
+    ///
+    /// Under the renderer's hover/press tint, which `endNode` applies over the
+    /// whole retained node: a border is part of the thing being lit up, not
+    /// something that should stay unlit while its middle brightens.
+    private func emitBorder(_ box: YogaBoxNode, x: Float, y: Float, w: Float, h: Float) {
+        guard let border = box.borderStyle, border.width > 0, border.color.a > 0
+        else { return }
+        strokedRect(
+            x: x, y: y, w: w, h: h, color: border.color,
+            radius: cornerRadius(of: box) ?? 0, width: border.width
+        )
+    }
+
     private func cornerRadius(of node: (any AnyViewNode)?) -> Float? {
         if let leaf = node as? LeafNode { return leaf.cornerRadius }
         if let stack = node as? StackNode { return stack.cornerRadius }
@@ -1270,6 +1317,7 @@ public final class DrawList {
                             emitNode(c, ox: x, oy: y)
                         }
                     }
+                    emitBorder(styled, x: x, y: y, w: w, h: h)
                     if flags != nil {
                         endNode(
                             contentW: w, contentH: h,
@@ -1317,6 +1365,7 @@ public final class DrawList {
                             emitNode(c, ox: x, oy: y)
                         }
                     }
+                    emitBorder(stack, x: x, y: y, w: w, h: h)
                     if flags != nil {
                         endNode(
                             contentW: w, contentH: h,
@@ -1350,6 +1399,7 @@ public final class DrawList {
                             emitLeafContents(leaf, x: x, y: y, w: w, h: h)
                         }
                     }
+                    emitBorder(leaf, x: x, y: y, w: w, h: h)
                     if flags != nil {
                         endNode(
                             contentW: w, contentH: h,

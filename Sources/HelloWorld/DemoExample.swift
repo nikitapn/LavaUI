@@ -319,6 +319,10 @@ public struct DemoExample: View {
             .frame(width: .pct(100), height: .pt(200))
             .background(Gradient(from: Color(r: 1.0, g: 0.0, b: 0.0), to: Color(r: 0.0, g: 1.0, b: 0.0, a: 0), angle: .pi))
 
+            HStack() {
+                Text("Stroked text").border(Color(r: 1.0, g: 0.0, b: 0.0))
+            }
+
             Text("Charts · pie (static Canvas)", color: .accent)
             Text(
                 "Donut tap cycles slices. Live widgets live in the collapsible lab below.",

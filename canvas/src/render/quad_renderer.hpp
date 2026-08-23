@@ -196,6 +196,23 @@ class QuadRenderer {
   /// circle. Coordinates are the box's top-left corner and size, in pixels.
   void pushBox(vec2 topLeft, vec2 size, uint32_t rgba, float radius = 0.0f);
 
+  /// The same box, drawn as an outline of `width` pixels lying *inside* it.
+  ///
+  /// `topLeft`/`size` are the border's outer edge and `radius` that edge's
+  /// corner radius, so a caller can hand this the same rect and radius it
+  /// filled and get a border framing exactly that shape. The inner edge falls
+  /// out of the distance field as the true inward offset: concentric arcs of
+  /// radius `radius - width`, degenerating to solid corners once the border is
+  /// thicker than the radius.
+  ///
+  /// One instance, not four edge quads — an outline is a level set of the
+  /// distance function the fill already evaluates, so the corners join
+  /// correctly and antialias for free. Four plates cannot round a corner at
+  /// all, which is why every border in this UI was until now either square or
+  /// a filled plate with the content punched back on top of it.
+  void pushBoxStroke(vec2 topLeft, vec2 size, uint32_t rgba, float radius,
+                     float width);
+
   /// The same box, filled with a two-stop linear ramp.
   ///
   /// `angle` is in radians, measured from +x towards +y — so 0 runs left to
