@@ -394,4 +394,61 @@ final class EditorSession {
     /// True when anything anywhere is unsaved — what the window asks before
     /// letting itself be closed.
     var hasUnsavedWork: Bool { documents.contains { $0.isModified } }
+
+    // MARK: - Path actions (status-bar context menu)
+
+    /// Puts the active file's filesystem path on the clipboard.
+    func copyActivePath() {
+        guard let url = active.url else { return }
+        ClipboardBridge.write(url.path)
+    }
+
+    /// Opens the active file's folder in the desktop file manager.
+    ///
+    /// The folder, not the file: `FileManager1.ShowItems` would highlight it,
+    /// but that is a blocking D-Bus round trip, and a missing owner looks
+    /// like a hang on the frame that opened the menu. `xdg-open` of the
+    /// directory is what still works when no file manager is listening.
+    func revealActiveInFileManager() {
+        guard let url = active.url else { return }
+        let folder = url.standardizedFileURL.deletingLastPathComponent()
+        guard FileManager.default.fileExists(atPath: folder.path) else {
+            notice = "Folder no longer exists"
+            return
+        }
+        if !FileLocation.open(folder) {
+            notice = "Could not open file location"
+        }
+    }
+}
+
+/// Launch the desktop file manager for a directory. Same shape as
+/// `FileDialog`: a subprocess, not Yoga, not a draw list.
+private enum FileLocation {
+    static func open(_ url: URL) -> Bool {
+        guard let xdgOpen = which("xdg-open") else { return false }
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: xdgOpen)
+        process.arguments = [url.path]
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        do {
+            try process.run()
+            return true
+        } catch {
+            return false
+        }
+    }
+
+    private static func which(_ binary: String) -> String? {
+        for dir in (ProcessInfo.processInfo.environment["PATH"] ?? "")
+            .split(separator: ":")
+        {
+            let candidate = "\(dir)/\(binary)"
+            if FileManager.default.isExecutableFile(atPath: candidate) {
+                return candidate
+            }
+        }
+        return nil
+    }
 }

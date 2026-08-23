@@ -5,6 +5,8 @@ import LavaUI
 /// The window: tabs, the editor, and the bars that come and go around it.
 struct LavaEditorView: View {
     @Bindable var session: EditorSession
+    /// Right-click menu on the status-bar path.
+    @State private var pathMenuOpen = false
 
     /// Height of the tab strip, which is also the title bar.
     private static let barHeight: Float = 38
@@ -221,11 +223,9 @@ struct LavaEditorView: View {
     }
 
     private var statusBar: some View {
-        HStack(height: .pt(26), padding: 6, alignment: .center, spacing: 12) {
-            Text(session.active.url?.path ?? "unsaved", color: .dim, lineLimit: 1)
-                .flexGrow(1)
-                .clipped()
-                .agentId("status-path")
+        let theme = Environment.current.theme
+        return HStack(height: .pt(26), padding: 6, alignment: .center, spacing: 12) {
+            pathLabel(theme: theme)
             if session.active.isModified {
                 Text("modified", color: .accent).agentId("status-modified")
             }
@@ -238,7 +238,69 @@ struct LavaEditorView: View {
             .cursor(.pointer)
             .agentId("status-wrap")
         }
-        .background(Environment.current.theme.panel)
+        .background(theme.panel)
+    }
+
+    /// Path slot: grows to fill, clips a long path, and hosts the context menu.
+    ///
+    /// The menu lives on an `HStack` rather than the `Text` so a short path
+    /// still has a hit target across the leftover status-bar space, and so a
+    /// right-click can be told apart from a left-click (`onPointer`).
+    private func pathLabel(theme: Theme) -> some View {
+        let hasPath = session.active.url != nil
+        return HStack(
+            flexGrow: 1,
+            padding: 0,
+            alignment: .center,
+            onPointer: { _, button in
+                guard button == PointerButton.right else { return }
+                pathMenuOpen = true
+            }
+        ) {
+            Text(session.active.url?.path ?? "unsaved", color: .dim, lineLimit: 1)
+        }
+        .clipped()
+        .hoverBackground(theme.hover)
+        .cornerRadius(3)
+        .cursor(.pointer)
+        .agentId("status-path")
+        .overlay(
+            isPresented: $pathMenuOpen,
+            alignment: .above,
+            style: {
+                var style = MenuBarStyle.standard(theme: theme).overlayStyle
+                style.minWidth = 200
+                return style
+            }()
+        ) {
+            pathMenu(hasPath: hasPath, theme: theme)
+        }
+    }
+
+    private func pathMenu(hasPath: Bool, theme: Theme) -> some View {
+        MenuDropdownPanel(
+            entries: [
+                .item(MenuItemModel(
+                    id: MenuID("path.reveal"),
+                    title: "Open File Location",
+                    isEnabled: hasPath
+                )),
+                .item(MenuItemModel(
+                    id: MenuID("path.copy"),
+                    title: "Copy File Path",
+                    isEnabled: hasPath
+                )),
+            ],
+            onActivate: { id in
+                switch id.raw {
+                case "path.reveal": session.revealActiveInFileManager()
+                case "path.copy": session.copyActivePath()
+                default: break
+                }
+                pathMenuOpen = false
+            },
+            style: .standard(theme: theme)
+        )
     }
 
     /// Counted off the UTF-8 bytes rather than by splitting the buffer:
