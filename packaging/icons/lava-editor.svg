@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title desc">
+  <title id="title">LavaEditor</title>
+  <desc id="desc">Document with a caret on a dark rounded tile — the LavaEditor application icon.</desc>
+  <defs>
+    <linearGradient id="tile" x1="96" y1="64" x2="416" y2="448" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#343866"/>
+      <stop offset="1" stop-color="#171a35"/>
+    </linearGradient>
+    <linearGradient id="paper" x1="140" y1="80" x2="380" y2="430" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#f2f5ff"/>
+      <stop offset="1" stop-color="#c5cce8"/>
+    </linearGradient>
+    <linearGradient id="caret" x1="140" y1="140" x2="380" y2="380" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#7dffb3"/>
+      <stop offset="1" stop-color="#2ecf8a"/>
+    </linearGradient>
+  </defs>
+  <rect x="28" y="28" width="456" height="456" rx="116" fill="url(#tile)"/>
+  <!-- Page with dog-ear -->
+  <path d="M148 116 A28 28 0 0 1 176 88 H288 L368 168 V396 A28 28 0 0 1 340 424 H176 A28 28 0 0 1 148 396 Z" fill="url(#paper)"/>
+  <path d="M288 88 L368 168 H288 Z" fill="#8ab4ff"/>
+  <!-- Lines of text -->
+  <rect x="176" y="196" width="168" height="22" rx="8" fill="#4a5288"/>
+  <rect x="176" y="248" width="196" height="22" rx="8" fill="#5b7cfa"/>
+  <rect x="176" y="300" width="108" height="22" rx="8" fill="#4a5288"/>
+  <rect x="176" y="352" width="148" height="22" rx="8" fill="#4a5288"/>
+  <!-- Caret after the third line -->
+  <rect x="296" y="288" width="14" height="46" rx="7" fill="url(#caret)"/>
+</svg>

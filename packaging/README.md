@@ -12,6 +12,7 @@ directory — see `docs/install.md` and `packaging/deps/`.
 # Build the products you care about (release is what install.sh looks for)
 swift build -c release --product LavaWeather
 swift build -c release --product LavaTerm
+swift build -c release --product LavaEditor
 swift build -c release --product LavaSpotify
 swift build -c release --product TraceLoom
 swift build -c release --product LavaSettings
