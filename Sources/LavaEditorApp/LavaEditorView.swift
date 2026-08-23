@@ -6,6 +6,9 @@ import LavaUI
 struct LavaEditorView: View {
     @Bindable var session: EditorSession
 
+    /// Height of the tab strip, which is also the title bar.
+    private static let barHeight: Float = 38
+
     var body: some View {
         VStack(flexGrow: 1, spacing: 0) {
             tabStrip
@@ -29,8 +32,16 @@ struct LavaEditorView: View {
     /// switched between constantly, and one click beats two. It scrolls
     /// horizontally, because the answer to "twenty files" is a scrollbar and
     /// not a menu.
+    ///
+    /// It is also the title bar. There is no separate strip above it: a
+    /// window whose whole job is the text should not spend two rows of it
+    /// saying so, and every browser reached the same conclusion about tabs.
     private var tabStrip: some View {
-        HStack(height: .pt(34), alignment: .center, spacing: 0) {
+        HStack(height: .pt(Self.barHeight), alignment: .center, spacing: 0) {
+            if WindowBridge.drawsOwnChrome {
+                WindowControls()
+                    .padding(.horizontal, 8)
+            }
             ScrollView(.horizontal) {
                 HStack(padding: 4, alignment: .center, spacing: 2) {
                     ForEach(Array(session.documents.enumerated()), id: \.offset) { entry in
@@ -46,6 +57,7 @@ struct LavaEditorView: View {
                 .agentId("new-document")
         }
         .background(Environment.current.theme.panel)
+        .windowDrag()
     }
 
     private func tab(index: Int, document: EditorDocument) -> some View {
