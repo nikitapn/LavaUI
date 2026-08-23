@@ -75,7 +75,8 @@ final class ScrollNode: YogaBoxNode {
     var contentLength: Float = 0
     /// Latest programmatic reveal. Kept after emission: the renderer uses the
     /// serial to distinguish a repeated frame from a new request.
-    private(set) var revealRequest: (offset: Float, serial: UInt32)?
+    private(set) var revealRequest:
+        (offset: Float, serial: UInt32, immediate: Bool)?
     private var nextRevealSerial: UInt32 = 1
 
     private var insertedLeaves: [any AnyViewNode] = []
@@ -142,6 +143,32 @@ final class ScrollNode: YogaBoxNode {
         }
     }
 
+    /// Where this node will be when the frame now being emitted reaches the
+    /// screen.
+    ///
+    /// Not `scrollOffset`, which is where the renderer last *reported* being.
+    /// A drag in flight has an immediate request outstanding, and the renderer
+    /// applies that while replaying this very frame — so everything derived
+    /// from a position (the band this frame culls to, the span it claims to
+    /// have drawn, whether a further request says anything new) has to be
+    /// derived from here instead. Deriving it from `scrollOffset` means
+    /// spending the drag drawing the place the view is leaving, and then
+    /// telling the renderer that is all there is: a scrollbar amplifies
+    /// pointer motion by `contentLength / track`, so the target is routinely
+    /// further away than one band of overscan and the view crawls after the
+    /// thumb a band per frame.
+    ///
+    /// Bounded by the drag rather than by the request's own lifetime.
+    /// `revealRequest` is kept after emission so that a repeated frame carries
+    /// a repeated serial, and a request outliving the finger that made it must
+    /// not go on standing in for a position the wheel has since moved.
+    var effectiveOffset: Float {
+        guard ScrollbarDrag.isDragging(id), let request = revealRequest,
+              request.immediate
+        else { return scrollOffset }
+        return request.offset
+    }
+
     private func clamped(_ offset: Float) -> Float {
         min(max(0, offset), maxOffset)
     }
@@ -154,14 +181,35 @@ final class ScrollNode: YogaBoxNode {
     /// the subtree transform lives there, and this side only learns where it
     /// ended up, through `adoptRendererOffset`. Writing the field directly
     /// would move the indicator and leave the content where it was.
-    func requestOffset(_ offset: Float) {
+    ///
+    /// `immediate` says the caller is naming a position rather than a
+    /// destination — a finger holding the thumb, not a wheel notch — so the
+    /// renderer should be there on the frame that carries the request instead
+    /// of easing toward it. See `kSceneScrollImmediate`.
+    func requestOffset(_ offset: Float, immediate: Bool = false) {
         let target = clamped(offset)
-        guard abs(target - scrollOffset) > 0.01 else { return }
+        // Against where the next frame puts us, not where the last one
+        // reported: mid-drag those differ by the whole remaining journey, and
+        // comparing against the position would drop a pointer move that
+        // happens to name where the content already is while a stale target is
+        // still outstanding.
+        guard abs(target - effectiveOffset) > 0.01 else { return }
         let serial = nextRevealSerial
         nextRevealSerial &+= 1
         if nextRevealSerial == 0 { nextRevealSerial = 1 }
-        revealRequest = (target, serial)
-        ViewInvalidation.markNeedsRedraw()
+        revealRequest = (target, serial, immediate)
+        // A virtualized child works out what to mount from `desiredSpan`,
+        // which an immediate request has just moved — so it needs the chance
+        // to act on it, the same chance `adoptRendererOffset` gives it when a
+        // position arrives the other way round. Without this the drag culls to
+        // a band the grid has mounted no cells for, `paintedSpan` honestly
+        // narrows to what was mounted, and the view crawls after the thumb
+        // again for want of a layout pass.
+        if immediate && !lazyContent.isEmpty {
+            ViewInvalidation.markNeedsLayout()
+        } else {
+            ViewInvalidation.markNeedsRedraw()
+        }
     }
 
     /// Takes a press that landed on this container's scrollbar, or declines.
@@ -195,7 +243,8 @@ final class ScrollNode: YogaBoxNode {
                     Scrollbar.offset(
                         forAlong: window - origin - grab,
                         travel: m.travel, maxOffset: maximum
-                    )
+                    ),
+                    immediate: true
                 )
             }
             apply(origin + along)
@@ -220,7 +269,7 @@ final class ScrollNode: YogaBoxNode {
         let serial = nextRevealSerial
         nextRevealSerial &+= 1
         if nextRevealSerial == 0 { nextRevealSerial = 1 }
-        revealRequest = (max(0, target), serial)
+        revealRequest = (max(0, target), serial, false)
         ViewInvalidation.markNeedsRedraw()
     }
 
@@ -256,13 +305,17 @@ final class ScrollNode: YogaBoxNode {
     /// assigned in the same place: a band that runs past the end costs
     /// nothing, since both callers clamp against something they can see —
     /// rows for a grid, the real extent for `paintedSpan`.
+    ///
+    /// Centred on `effectiveOffset` rather than on `scrollOffset`, so a drag
+    /// draws where it is going rather than where it has been.
     func desiredSpan(viewport: Float) -> (top: Float, bottom: Float) {
         let overscan = max(
             viewport * Self.overscanFraction, Self.minimumOverscan
         )
+        let position = effectiveOffset
         return (
-            max(0, scrollOffset - overscan),
-            scrollOffset + viewport + overscan
+            max(0, position - overscan),
+            position + viewport + overscan
         )
     }
 
@@ -301,9 +354,13 @@ final class ScrollNode: YogaBoxNode {
         // rows would make the renderer clamp the position *backwards* and
         // yank the view. What is on screen is painted by definition; the next
         // emit widens the rest.
+        //
+        // "On screen" meaning once this frame lands, which during a drag is
+        // the outstanding request and not the last reported position — see
+        // `effectiveOffset`.
         return (
-            min(top, scrollOffset),
-            max(bottom, scrollOffset + viewportLength)
+            min(top, effectiveOffset),
+            max(bottom, effectiveOffset + viewportLength)
         )
     }
 

@@ -159,6 +159,7 @@ enum class DrawCommandKind : uint32_t {
   ///
   ///   x, y  = requested scroll target
   ///   param = request serial; a repeated serial is ignored
+  ///   color = `SceneScrollFlags`
   ///
   /// The serial matters because draw lists are republished: without it every
   /// frame would pull a node back to the selection after the user wheeled it.
@@ -266,6 +267,28 @@ enum SceneAnimationFlags : uint32_t {
   /// so retargeting it mid-flight restarts the clock rather than simply
   /// bending toward the new target the way a decay does.
   kSceneAnimDuration  = 1u << 2,
+};
+
+/// Bits in `NodeScrollTo.color`.
+enum SceneScrollFlags : uint32_t {
+  /// Be there now: set the node's *position* as well as its target, so the
+  /// frame carrying this command already draws at the requested offset
+  /// instead of easing toward it.
+  ///
+  /// The ease exists for a request that names a step — a wheel notch, a
+  /// reveal — where turning a jump into a movement is the renderer's whole
+  /// contribution. A drag names a position instead: the pointer is already
+  /// there, and easing toward it leaves the content `velocity x tau` behind
+  /// the finger for as long as the finger keeps moving. That is not
+  /// smoothing, it is lag, and it is the one input the ease must not touch.
+  ///
+  /// The producer has to have drawn the destination in this same frame — the
+  /// span in this node's `EndNode` must contain it. Nothing verifies that
+  /// here, because the check cannot run yet: `EndNode` arrives later in the
+  /// same list. A producer that asks to be somewhere it did not draw gets
+  /// blank pixels until its next frame, and the step after that pulls it
+  /// back to the edge of what was drawn.
+  kSceneScrollImmediate = 1u << 0,
 };
 
 /// Bits in `BeginNode.color`.

@@ -431,6 +431,14 @@ class RenderWindow {
     /// Last producer scroll request applied. Repeated draw-list frames carry
     /// the same serial and must not override a later wheel gesture.
     uint32_t scrollRequestSerial = 0;
+    /// Set when a replay moved this node outright rather than giving it
+    /// somewhere to travel to — see `kSceneScrollImmediate`. The step reports
+    /// the position once and clears it, because a snap leaves target and
+    /// position already in agreement and so produces no movement for the step
+    /// to notice and pass on. Without it the producer's own idea of the
+    /// offset — what its hit testing and lazy mounting run in — would stay at
+    /// wherever the node was before the drag.
+    bool scrollReport = false;
     /// Last extent an `EndNode` actually reported.
     ///
     /// Retained rather than re-read per frame because the list comes from

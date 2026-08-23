@@ -148,6 +148,89 @@ final class ScrollbarDragTests: XCTestCase {
         )
     }
 
+    // MARK: A drag names a position, not a destination
+
+    /// The renderer eases toward a target, which is right for a wheel notch
+    /// and wrong for a finger: a drag names where the content already has to
+    /// be. See `kSceneScrollImmediate`.
+    func testADragAsksToBeThereRatherThanToTravelThere() throws {
+        let scroll = try mountOverflowing()
+        try XCTUnwrap(host.hitTestClick(x: 300 - 2, y: 30))()
+        PointerCapture.move(x: 298, y: 120)
+
+        let request = try XCTUnwrap(scroll.revealRequest)
+        XCTAssertTrue(
+            request.immediate,
+            "a drag that eases is a drag that trails the pointer"
+        )
+    }
+
+    /// The same request from `reveal` keeps the ease. Nothing is chasing a
+    /// pointer there, and a jump that skips the movement reads as a cut.
+    func testARevealStillTravels() throws {
+        let scroll = try mountOverflowing()
+        scroll.reveal(top: 400, bottom: 440, viewport: 200)
+
+        let request = try XCTUnwrap(scroll.revealRequest)
+        XCTAssertFalse(request.immediate)
+    }
+
+    /// The thumb is chrome this side draws, from a position the renderer
+    /// reports back a frame later. Drawn from that, it lags the finger holding
+    /// it by the whole round trip.
+    func testTheThumbFollowsTheFingerNotTheReadback() throws {
+        let scroll = try mountOverflowing()
+        try XCTUnwrap(host.hitTestClick(x: 300 - 2, y: 30))()
+        PointerCapture.move(x: 298, y: 120)
+
+        let request = try XCTUnwrap(scroll.revealRequest)
+        // Nothing has come back from the renderer yet, which is exactly the
+        // frame in question.
+        XCTAssertEqual(scroll.scrollOffset, 0)
+        XCTAssertEqual(scroll.effectiveOffset, request.offset)
+    }
+
+    /// A scrollbar multiplies pointer travel by `contentLength / track`, so a
+    /// drag routinely asks for further than one band of overscan. Culling to
+    /// the *reported* position draws the band being left behind and then tells
+    /// the renderer that is all there is, which is how the view ends up
+    /// crawling a band per frame after the thumb.
+    func testTheCullBandFollowsTheRequest() throws {
+        let scroll = try mountOverflowing()
+        // Long enough for the band to be the constraint: the overscan floor is
+        // 288pt, and half the track is a jump of 1250. With 480pt of content
+        // the whole thing fits in one band and the question cannot be asked.
+        scroll.contentLength = 2400
+
+        // Inside the thumb (24pt at this ratio), so the grab offset is 10.
+        try XCTUnwrap(host.hitTestClick(x: 300 - 2, y: 10))()
+        PointerCapture.move(x: 298, y: 110)
+
+        let request = try XCTUnwrap(scroll.revealRequest)
+        XCTAssertGreaterThan(request.offset, 1000, "not a jump worth measuring")
+
+        let span = scroll.paintedSpan()
+        XCTAssertLessThanOrEqual(span.top, request.offset)
+        XCTAssertGreaterThanOrEqual(
+            span.bottom, request.offset + scroll.viewportLength,
+            "claimed a span that does not contain where the drag is going"
+        )
+    }
+
+    /// `revealRequest` is kept after emission so a repeated frame carries a
+    /// repeated serial. That must not leave a finished drag standing in for a
+    /// position the wheel has since moved.
+    func testAFinishedDragStopsSpeakingForThePosition() throws {
+        let scroll = try mountOverflowing()
+        try XCTUnwrap(host.hitTestClick(x: 300 - 2, y: 30))()
+        PointerCapture.move(x: 298, y: 120)
+        PointerCapture.release()
+        ScrollbarDrag.end()
+
+        scroll.adoptRendererOffset(x: 0, y: 40)
+        XCTAssertEqual(scroll.effectiveOffset, 40)
+    }
+
     /// A press on bare track jumps there — the usual meaning everywhere else.
     func testPressingTheTrackJumps() throws {
         let scroll = try mountOverflowing()

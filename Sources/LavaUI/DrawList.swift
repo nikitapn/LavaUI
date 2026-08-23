@@ -80,6 +80,19 @@ public struct SceneNodeFlags: OptionSet, Sendable {
     public static let wheel = SceneNodeFlags(rawValue: 1 << 5)
 }
 
+/// Bits in a `scrollNode` command's `color` field. Mirrors
+/// `canvas::SceneScrollFlags`.
+public struct SceneScrollFlags: OptionSet, Sendable {
+    public let rawValue: UInt32
+    public init(rawValue: UInt32) { self.rawValue = rawValue }
+
+    /// Set the node's position, not just its target: this frame draws at the
+    /// requested offset rather than easing toward it. For a request that names
+    /// where the pointer already is, where an ease is lag rather than
+    /// smoothing. See `kSceneScrollImmediate`.
+    public static let immediate = SceneScrollFlags(rawValue: 1 << 0)
+}
+
 /// Which properties a `animateNode` call is stating. Mirrors
 /// `canvas::SceneAnimationFlags`.
 public struct SceneAnimationFlags: OptionSet, Sendable {
@@ -816,13 +829,22 @@ public final class DrawList {
     /// horizontal container should go to zero on the axis it actually scrolls
     /// — so every programmatic scroll of one was a snap back to the start.
     /// A scroll node has one axis, so the other component is genuinely zero.
-    func scrollNode(to offset: Float, axis: ScrollAxis, serial: UInt32) {
+    ///
+    /// `immediate` asks the renderer to be at the offset on this frame rather
+    /// than to ease toward it — see `kSceneScrollImmediate`. Only a caller
+    /// naming a position the user is already pointing at may set it, and only
+    /// if this frame draws that position.
+    func scrollNode(
+        to offset: Float, axis: ScrollAxis, serial: UInt32,
+        immediate: Bool = false
+    ) {
         guard serial != 0 else { return }
         var cmd = canvas.DrawCommand()
         cmd.kind = DrawKind.nodeScrollTo.rawValue
         cmd.x = axis == .horizontal ? max(0, offset) : 0
         cmd.y = axis == .vertical ? max(0, offset) : 0
         cmd.param = serial
+        cmd.color = immediate ? SceneScrollFlags.immediate.rawValue : 0
         appendCommand(cmd)
     }
 
@@ -1243,7 +1265,8 @@ public final class DrawList {
                 beginNode(scroll.id, x: x, y: y, w: w, h: h, flags: flags)
                 if let request = scroll.revealRequest {
                     scrollNode(
-                        to: request.offset, axis: scroll.axis, serial: request.serial
+                        to: request.offset, axis: scroll.axis,
+                        serial: request.serial, immediate: request.immediate
                     )
                 }
                 cullStack.append(viewCull)
@@ -2450,9 +2473,15 @@ extension DrawList {
     fileprivate func emitScrollIndicator(
         _ scroll: ScrollNode, x: Float, y: Float, w: Float, h: Float
     ) {
+        // `effectiveOffset`, not the reported one: while the bar is being
+        // dragged the thumb belongs under the finger holding it, and the
+        // position the renderer last reported is a frame of round trip behind
+        // the request that produced it. Drawing the thumb from the request
+        // pins it to the pointer and leaves the content to arrive, which is
+        // the way round every toolkit does it.
         guard let m = Scrollbar.metrics(
             track: scroll.viewportLength, content: scroll.contentLength,
-            offset: scroll.scrollOffset, maxOffset: scroll.maxOffset
+            offset: scroll.effectiveOffset, maxOffset: scroll.maxOffset
         ) else { return }
         scrollbarThumb(
             axis: scroll.axis, metrics: m, theme: scroll.theme,

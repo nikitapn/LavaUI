@@ -1670,6 +1670,18 @@ void RenderWindow::replayDrawList(const canvas::DrawList &list, float viewW,
       state.scrollRequestSerial = cmd.param;
       state.targetX = std::max(0.f, cmd.x);
       state.targetY = std::max(0.f, cmd.y);
+      if (cmd.color & canvas::kSceneScrollImmediate) {
+        // The running transform as well as the state. `BeginNode` baked
+        // `ox`/`oy` a few commands ago out of the offset this request
+        // supersedes, so setting only the state would draw this frame at the
+        // old position and land the snap one frame late — which is exactly
+        // the frame of lag the flag exists to remove.
+        ox += state.scrollX - state.targetX;
+        oy += state.scrollY - state.targetY;
+        state.scrollX      = state.targetX;
+        state.scrollY      = state.targetY;
+        state.scrollReport = true;
+      }
       sceneResume_ = true;
       break;
     }
@@ -2342,13 +2354,20 @@ bool RenderWindow::advanceSceneAnimations(
     const float dx = state.targetX - state.scrollX;
     const float dy = reachable - state.scrollY;
     if (std::abs(dx) < kSnap && std::abs(dy) < kSnap) {
-      if (dx != 0.f || dy != 0.f) {
-        state.scrollX = state.targetX;
-        state.scrollY = reachable;
+      // Either the last of an approach, or a position the replay set outright
+      // and nobody has told the producer about — see `scrollReport`. The
+      // second has no movement of its own to be noticed by, which is why it
+      // has to be asked for.
+      if (dx != 0.f || dy != 0.f || state.scrollReport) {
+        state.scrollX      = state.targetX;
+        state.scrollY      = reachable;
+        state.scrollReport = false;
         outMoved.push_back({id, state.scrollX, state.scrollY});
       }
       continue;
     }
+    // A step that moves reports where it got to, which covers the snap too.
+    state.scrollReport = false;
     state.scrollX += dx * alpha;
     state.scrollY += dy * alpha;
     outMoved.push_back({id, state.scrollX, state.scrollY});
