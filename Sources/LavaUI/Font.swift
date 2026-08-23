@@ -20,6 +20,19 @@ public struct ShapedGlyph: Equatable, Sendable {
     /// Engine face id, as registered by `registerWithEngine`.
     public var fontId: UInt32
 
+    /// For a glyph the shaper did not produce — see `Font.shapeWithTabs`.
+    init(
+        glyphId: UInt32, cluster: UInt32, x: Float, y: Float,
+        advance: Float, fontId: UInt32
+    ) {
+        self.glyphId = glyphId
+        self.cluster = cluster
+        self.x = x
+        self.y = y
+        self.advance = advance
+        self.fontId = fontId
+    }
+
     init(_ glyph: canvas.PositionedGlyph, fontId: UInt32) {
         self.glyphId = glyph.glyphId
         self.cluster = glyph.cluster
@@ -121,6 +134,7 @@ public final class UIFont: @unchecked Sendable {
     /// so this is what keeps re-emission cheap.
     private var shapeCache: [String: [ShapedGlyph]] = [:]
     private var inkBoundsCache: [String: TextInkBounds] = [:]
+    private var spaceMetricsCache: (glyphId: UInt32, advance: Float)?
 
     /// Trimmed-with-ellipsis lines, keyed by the untrimmed line and the width
     /// it had to fit. `ellipsized` walks the string a grapheme at a time, and
@@ -439,7 +453,7 @@ public final class UIFont: @unchecked Sendable {
             return hit
         }
         PerfCounters.textShapes &+= 1
-        let glyphs = shapeWithFallbacks(text)
+        let glyphs = shapeWithTabs(text)
         // Bounded, because this cache is keyed by line text and used to grow
         // without limit: every distinct line ever shaped stayed in it forever.
         // Scrolling a 166,636-line Android log put an entry per line here and
@@ -485,6 +499,94 @@ public final class UIFont: @unchecked Sendable {
     ///
     /// The common case costs one extra scan of the glyph array and nothing
     /// else: text that shapes cleanly never touches the fallback path.
+    /// Columns a tab advances. Four, matching what Tab inserts.
+    ///
+    /// `nonisolated(unsafe)` for the same reason the bridges in
+    /// `WindowControls` are: set once at startup, read from the main thread
+    /// thereafter.
+    nonisolated(unsafe) public static var tabColumns = 4
+
+    /// Space advance for this face, for sizing a tab. Measured once — it is a
+    /// property of the face, and asking HarfBuzz per tab would shape a space
+    /// for every indent level on every line.
+    private var spaceMetrics: (glyphId: UInt32, advance: Float) {
+        if let cached = spaceMetricsCache { return cached }
+        let shaped = shapeDirect(" ")
+        let measured = shaped.first.map { (glyphId: $0.glyphId, advance: $0.advance) }
+            ?? (glyphId: UInt32(0), advance: pixelSize / 2)
+        spaceMetricsCache = measured
+        return measured
+    }
+
+    /// Shapes `text` with tab characters given a width instead of a glyph.
+    ///
+    /// A tab is in no font's cmap, so HarfBuzz returns `.notdef` for it, every
+    /// fallback face returns `.notdef` too, and the line draws a tofu box per
+    /// indent level. A tab-indented file — a Makefile, Go, plenty of C — was
+    /// unreadable.
+    ///
+    /// The width is a **constant** `tabColumns` spaces, not the distance to the
+    /// next tab stop. A stop would be prettier for a tab in the middle of a
+    /// line, and it is not available: the draw list shapes each syntax-coloured
+    /// segment of a line on its own (see `DrawList.emitCodeLine`), and `text()`
+    /// positions glyphs from the run it shaped, which always starts its pen at
+    /// zero. An advance that depended on where the run began would put the
+    /// drawn glyphs somewhere the caret arithmetic does not agree with — and
+    /// drawing and measurement agreeing by construction is the invariant this
+    /// whole file exists to hold.
+    ///
+    /// It costs nothing where tabs are actually used. Leading indentation
+    /// starts at column zero, where a constant width and a tab stop are the
+    /// same number; only a tab used to align something mid-line differs, and
+    /// there the two disagree about a case no editor here can render correctly
+    /// anyway.
+    ///
+    /// The glyph drawn is a space, so it is invisible and its id is real —
+    /// `.notdef` is what was being drawn before.
+    private func shapeWithTabs(_ text: String) -> [ShapedGlyph] {
+        guard text.utf8.contains(0x09) else { return shapeWithFallbacks(text) }
+
+        let space = spaceMetrics
+        let advance = space.advance * Float(max(1, Self.tabColumns))
+        var result: [ShapedGlyph] = []
+        var byteBase = 0
+        var pen: Float = 0
+
+        // `omittingEmptySubsequences: false` so consecutive tabs — which is
+        // what a second indent level looks like — keep their empty piece and
+        // stay one tab apart.
+        let pieces = text.split(separator: "\t", omittingEmptySubsequences: false)
+        for (index, piece) in pieces.enumerated() {
+            if !piece.isEmpty {
+                // `shapeWithFallbacks` has already laid its own pen out, so
+                // every `x` is absolute within the piece. Shifting them all by
+                // where the piece starts is the whole splice — advancing the
+                // pen inside this loop as well would add each glyph's advance
+                // a second time, and spread the piece out one glyph at a time.
+                let base = pen
+                let glyphs = shapeWithFallbacks(String(piece))
+                for var glyph in glyphs {
+                    glyph.cluster &+= UInt32(byteBase)
+                    glyph.x += base
+                    result.append(glyph)
+                }
+                pen = base + glyphs.reduce(0) { $0 + $1.advance }
+                byteBase += piece.utf8.count
+            }
+            // A tab follows every piece but the last.
+            guard index + 1 < pieces.count else { continue }
+            result.append(
+                ShapedGlyph(
+                    glyphId: space.glyphId, cluster: UInt32(byteBase),
+                    x: pen, y: 0, advance: advance, fontId: engineId
+                )
+            )
+            byteBase += 1
+            pen += advance
+        }
+        return result
+    }
+
     private func shapeWithFallbacks(_ text: String) -> [ShapedGlyph] {
         let primary = shapeDirect(text)
         guard primary.contains(where: { $0.glyphId == 0 }) else {
