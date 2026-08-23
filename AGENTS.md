@@ -298,6 +298,50 @@ was still being drawn out of. A test there is compiled from the sources it
 exercises rather than linked against `libcanvas`, so it stays runnable
 anywhere.
 
+### Two ways the incremental build will lie to you
+
+Neither looks like a build problem, and both cost real time every time they are
+rediscovered.
+
+**`swift build --target X` does not relink.** It compiles `X`, reports `Build
+of target … complete`, and leaves the executable exactly as it was — so every
+launch after it runs the *previous* build:
+
+```bash
+swift build --target LavaEditorApp   # [8/8] Compiling … complete!
+ls -l .build/debug/LavaEditor        # timestamp unchanged
+swift build                          # [2/3] Linking LavaEditor
+```
+
+The symptom is a fix that "does not work": a debug print that never appears, a
+setting that reads the wrong value, behaviour that does not change however
+obviously correct the diff is. Check the binary's mtime before re-reading the
+code. Plain `swift build` links; `--target` alone does not.
+
+**A changed struct layout does not rebuild the modules that read it.** Adding a
+stored property to `TextEditingState` (in `LavaText`) left `LavaUI` compiled
+against the old layout, so `LeafNode` went on reading `editing`'s fields at the
+old offsets. That is memory corruption, and it presents as anything but:
+
+- `EditorPositionTests` died with SIGSEGV inside *XCTest's own teardown*, in
+  `swift_beginAccess`, with no frame of this repo on the stack;
+- an `Array` printed as `[]` while `.isEmpty` evaluated `false`, in the same
+  expression;
+- the symptoms tracked the *size* of the added fields — eight bytes looked
+  fine, twenty-four crashed — which supports a confident and entirely wrong
+  theory about the struct having a size limit. Half an hour went into
+  bisecting that, down to "three inert `Int`s reproduce it", before anyone
+  tried a full rebuild.
+
+After any change to a type's stored properties that another module can see:
+
+```bash
+find Sources Tests -name '*.swift' -exec touch {} + && swift build
+```
+
+Do that before believing a test result. The failure mode is a plausible,
+reproducible, completely fictional bug.
+
 ### Useful environment
 
 | Variable | Effect |
