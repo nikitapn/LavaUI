@@ -46,6 +46,47 @@ final class ModifierReconcileTests: XCTestCase {
         XCTAssertEqual(secondText.id, firstText.id)
     }
 
+    /// A canvas whose width is content-driven, wearing `.flexShrink(1)`.
+    /// The modifier used to snapshot the first width and write it back on
+    /// every later pass, so adding a tab could not grow the strip.
+    func testCanvasWidthGrowsUnderFlexShrink() throws {
+        struct Strip: View {
+            var contentWidth: Float
+            var body: some View {
+                Canvas(
+                    label: "strip",
+                    width: .pt(contentWidth),
+                    height: .pt(20),
+                    paint: { _, _ in }
+                )
+                .flexShrink(1)
+                .clipped()
+                .cursor(.pointer)
+            }
+        }
+
+        let host = LayoutHost()
+        host.setRoot(
+            HStack(height: .pt(20)) {
+                Strip(contentWidth: 200)
+                Spacer()
+            }
+        )
+        var frames = host.calculateLayout(width: 800, height: 40)
+        let first = try XCTUnwrap(frames.first { $0.label == "strip" })
+        XCTAssertEqual(first.w, 200, accuracy: 0.5)
+
+        host.setRoot(
+            HStack(height: .pt(20)) {
+                Strip(contentWidth: 400)
+                Spacer()
+            }
+        )
+        frames = host.calculateLayout(width: 800, height: 40)
+        let second = try XCTUnwrap(frames.first { $0.label == "strip" })
+        XCTAssertEqual(second.w, 400, accuracy: 0.5)
+    }
+
     private func findText(in node: (any AnyViewNode)?) -> (any AnyViewNode)? {
         guard let node else { return nil }
         if node.label.hasPrefix("Text") { return node }

@@ -9,7 +9,7 @@ struct LavaEditorView: View {
     @State private var pathMenuOpen = false
 
     /// Height of the tab strip, which is also the title bar.
-    private static let barHeight: Float = 38
+    private static let barHeight: Float = TabChrome.barHeight
 
     var body: some View {
         VStack(flexGrow: 1, spacing: 0) {
@@ -44,13 +44,12 @@ struct LavaEditorView: View {
                 WindowControls()
                     .padding(.horizontal, 8)
             }
-            ScrollView(.horizontal) {
-                HStack(padding: 4, alignment: .center, spacing: 2) {
-                    ForEach(Array(session.documents.enumerated()), id: \.offset) { entry in
-                        tab(index: entry.offset, document: entry.element)
-                    }
-                }
-            }
+            TabStrip(session: session)
+            // Leftover space (`flexGrow: 1`), never thinner than `dragGrab`
+            // so a full tab row still leaves a window-drag handle.
+            Spacer()
+                .frame(height: .pt(Self.barHeight), minWidth: TabChrome.dragGrab)
+                .windowDrag()
             Text("+", color: .muted, onClick: { session.newDocument() })
                 .padding(8)
                 .hoverBackground(Environment.current.theme.hover)
@@ -59,35 +58,6 @@ struct LavaEditorView: View {
                 .agentId("new-document")
         }
         .background(Environment.current.theme.panel)
-        .windowDrag()
-    }
-
-    private func tab(index: Int, document: EditorDocument) -> some View {
-        let theme = Environment.current.theme
-        let isActive = index == session.activeIndex
-        return HStack(
-            padding: 6, alignment: .center, spacing: 6,
-            onClick: { session.activate(index) }
-        ) {
-            // A dot, not an asterisk in the name: the name is what the user
-            // scans for, and prefixing it moves every tab's first letter.
-            Text(
-                document.isModified ? "•" : " ",
-                color: document.isModified ? .accent : .dim
-            )
-            Text(document.name, color: isActive ? .primary : .muted, lineLimit: 1)
-                .frame(width: .pt(150))
-                .clipped()
-            Text("×", color: .dim, onClick: { session.requestClose(index) })
-                .padding(2)
-                .hoverBackground(theme.hover)
-                .cornerRadius(3)
-                .cursor(.pointer)
-        }
-        .background(isActive ? theme.background : theme.panel)
-        .cornerRadius(4)
-        .cursor(.pointer)
-        .agentId("tab-\(index)")
     }
 
     // MARK: - The editor

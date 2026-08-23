@@ -243,6 +243,26 @@ extension YogaBoxNode {
         }
         applyStyle()
     }
+
+    /// A primitive that changes its own size on reconcile has to write that
+    /// size into the baseline *before* any modifier re-applies.
+    ///
+    /// `applyViewStyle` replays over the first snapshot, not over the node as
+    /// it is now — that is what lets removing `.frame()` restore the original
+    /// rather than leave a stale width. A canvas that grows with its content
+    /// updates `width` every pass; without this, `.flexShrink(1)` (or
+    /// `.clipped()`, `.cursor()`) writes the *first* width back and the box
+    /// never grows. The tab strip stayed one-tab wide after `+` for that
+    /// reason.
+    func syncLayoutBaseline() {
+        guard var base = styleBaseline else { return }
+        base.width = width
+        base.height = height
+        base.minWidth = minWidth
+        base.minHeight = minHeight
+        base.flexGrow = flexGrow
+        styleBaseline = base
+    }
 }
 
 /// The one box a modifier ever creates: for fragments, which have no single

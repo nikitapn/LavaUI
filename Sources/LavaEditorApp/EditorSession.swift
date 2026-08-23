@@ -61,6 +61,20 @@ final class EditorSession {
     let controller = EditorController()
     private var nextID = 1
 
+    /// True while neighbour tabs are still catching up to a hole.
+    /// Drives `continuousRedraw` for the few hundred milliseconds a
+    /// slide lasts — not while the strip is merely sitting there.
+    var tabSliding = false
+    var tabDrag: TabDrag?
+    /// Document id whose close button was pressed; committed on release
+    /// only if the pointer is still on it, so a drag off × cancels.
+    var tabClosePress: Int?
+    /// Per-tab X, so a dest change eases rather than jumps.
+    @ObservationIgnored var tabSlide: [Int: Animated<Float>] = [:]
+    /// Tab the strip should scroll into view on the next paint (a just-opened
+    /// document sitting past the right edge).
+    var tabRevealID: Int?
+
     /// Memo behind `activeLineCount`. Ignored by observation on purpose: it is
     /// derived from state that is already observed, and registering a write
     /// here would invalidate the view from inside the body that read it.
@@ -202,6 +216,7 @@ final class EditorSession {
         activeIndex = documents.count - 1
         controller.restore(.start)
         notice = nil
+        tabRevealID = documents[activeIndex].id
     }
 
     func openFileDialog() {
@@ -248,6 +263,7 @@ final class EditorSession {
             documents.remove(at: scratch)
             if scratch < activeIndex { activeIndex -= 1 }
         }
+        tabRevealID = documents[activeIndex].id
     }
 
     @discardableResult
@@ -312,10 +328,35 @@ final class EditorSession {
             controller.restore(.start)
             return
         }
+        let closingActive = index == activeIndex
+        let activeID = active.id
         documents.remove(at: index)
-        activeIndex = min(activeIndex, documents.count - 1)
-        controller.restore(documents[activeIndex].position ?? .start)
-        loadIfNeeded(activeIndex)
+        if closingActive {
+            activeIndex = min(index, documents.count - 1)
+            controller.restore(documents[activeIndex].position ?? .start)
+            loadIfNeeded(activeIndex)
+        } else if let i = documents.firstIndex(where: { $0.id == activeID }) {
+            activeIndex = i
+        }
+        // Remaining tabs have a new rest X; the canvas eases them there.
+        tabSliding = true
+    }
+
+    /// Drops `id` at `dest` and keeps `activeIndex` on the same document.
+    func reorderTab(id: Int, to dest: Int) {
+        guard let from = documents.firstIndex(where: { $0.id == id }) else {
+            return
+        }
+        let preview = TabChrome.preview(
+            documents: documents, from: from, dest: dest
+        )
+        guard preview.items.map(\.id) != documents.map(\.id) else { return }
+        let activeID = active.id
+        documents = preview.items
+        if let index = documents.firstIndex(where: { $0.id == activeID }) {
+            activeIndex = index
+        }
+        tabSliding = true
     }
 
     /// Resolves the pending question. `save` writes first and keeps the

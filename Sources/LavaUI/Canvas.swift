@@ -156,6 +156,7 @@ public struct Canvas: PrimitiveView {
         leaf.flexGrow = flexGrow
         leaf.minWidth = minWidth
         leaf.minHeight = minHeight
+        leaf.syncLayoutBaseline()
         leaf.applyStyle()
         configure(leaf)
         return leaf
