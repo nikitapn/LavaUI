@@ -277,4 +277,110 @@ final class WrappedWindowTests: XCTestCase {
             "a narrower box has to produce more rows"
         )
     }
+
+    // MARK: Toggling the mode under a scrolled viewport
+
+    /// One pass at `wraps`, re-rooting the tree the way a toggle does.
+    @discardableResult
+    private func pass(wraps: Bool) throws -> LeafNode {
+        host.setRoot(
+            VStack(width: .pt(Self.viewport.w), height: .pt(Self.viewport.h)) {
+                EditorView(text: binding, wraps: wraps, visibleLines: 8)
+            }
+        )
+        _ = host.calculateLayout(width: Self.viewport.w, height: Self.viewport.h)
+        let root = try XCTUnwrap(host.rootNode)
+        let list = DrawList(editor: editor)
+        list.clear()
+        list.emitTree(root, viewportW: Self.viewport.w, viewportH: Self.viewport.h)
+
+        func walk(_ node: any AnyViewNode) -> LeafNode? {
+            if let leaf = node as? LeafNode, leaf.kind == .editor { return leaf }
+            for child in node.childNodes {
+                if let hit = walk(child) { return hit }
+            }
+            return nil
+        }
+        return try XCTUnwrap(walk(root))
+    }
+
+    private func topLine(_ leaf: LeafNode, font: UIFont) -> Int {
+        leaf.logicalLine(ofRow: max(0, Int(leaf.scrollY / font.lineHeight)))
+    }
+
+    /// `scrollY` is pixels over *row* indices, and a row is not a fixed thing.
+    /// Turning wrapping off, row 6,000 stops being the six-thousandth wrapped
+    /// row and becomes line 6,000 — four times further down the file, and on
+    /// a long one the clamp turns that into the end of it. The reader was
+    /// looking at a *line*, and that is what has to survive.
+    func testTurningWrapOffKeepsTheLineAtTheTop() throws {
+        var leaf = try settleWrap()
+        let font = try XCTUnwrap(leaf.font ?? FontStore.default)
+
+        // Somewhere well into the file, where wrapped rows and lines have
+        // diverged enough for the bug to be unmissable.
+        leaf.scrollY = Float(leaf.editing.layout.count / 2) * font.lineHeight
+        leaf = try pass(wraps: true)
+        let before = topLine(leaf, font: font)
+        XCTAssertGreaterThan(before, 100, "not deep enough into the file to be a test")
+
+        leaf = try pass(wraps: false)
+        XCTAssertEqual(topLine(leaf, font: font), before, "wrap off moved the reader")
+    }
+
+    func testTurningWrapOnKeepsTheLineAtTheTop() throws {
+        var leaf = try pass(wraps: false)
+        let font = try XCTUnwrap(leaf.font ?? FontStore.default)
+
+        leaf.scrollY = Float(600) * font.lineHeight
+        leaf = try pass(wraps: false)
+        let before = topLine(leaf, font: font)
+        XCTAssertEqual(before, 600)
+
+        leaf = try pass(wraps: true)
+        XCTAssertEqual(topLine(leaf, font: font), before, "wrap on moved the reader")
+
+        // And it stays put while the rest of the file is broken behind it.
+        var passes = 0
+        while leaf.wrapUnmeasured > 0, passes < 400 {
+            leaf = try pass(wraps: true)
+            passes += 1
+            XCTAssertEqual(
+                topLine(leaf, font: font), before,
+                "the top line moved on refinement pass \(passes)"
+            )
+        }
+    }
+
+    /// A resize re-breaks every line, so it has the same problem and the same
+    /// answer.
+    func testANarrowerBoxKeepsTheLineAtTheTop() throws {
+        var leaf = try settleWrap()
+        let font = try XCTUnwrap(leaf.font ?? FontStore.default)
+        leaf.scrollY = Float(leaf.editing.layout.count / 2) * font.lineHeight
+        leaf = try pass(wraps: true)
+        let before = topLine(leaf, font: font)
+
+        host.setRoot(
+            VStack(width: .pt(180), height: .pt(Self.viewport.h)) {
+                EditorView(text: binding, wraps: true, visibleLines: 8)
+            }
+        )
+        _ = host.calculateLayout(width: 180, height: Self.viewport.h)
+        let root = try XCTUnwrap(host.rootNode)
+        let list = DrawList(editor: editor)
+        list.clear()
+        list.emitTree(root, viewportW: 180, viewportH: Self.viewport.h)
+
+        func walk(_ node: any AnyViewNode) -> LeafNode? {
+            if let leaf = node as? LeafNode, leaf.kind == .editor { return leaf }
+            for child in node.childNodes {
+                if let hit = walk(child) { return hit }
+            }
+            return nil
+        }
+        let narrow = try XCTUnwrap(walk(root))
+        XCTAssertEqual(topLine(narrow, font: font), before, "the resize moved the reader")
+    }
 }
+

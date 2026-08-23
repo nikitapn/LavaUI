@@ -361,6 +361,13 @@ public struct EditorView: PrimitiveView {
         leaf.fillColor = theme.inset
         leaf.isMultiline = true
         if leaf.wraps != wraps {
+            // Before anything is cleared: `rowLogicalLine` still describes the
+            // mode being left, and it is the only thing that can say which
+            // line the reader is looking at.
+            if let f = resolvedFont ?? FontStore.default, f.lineHeight > 0 {
+                leaf.pendingTopLine =
+                    leaf.logicalLine(ofRow: max(0, Int(leaf.scrollY / f.lineHeight)))
+            }
             // Rows are about to mean something different. Drop the staleness
             // marks both branches of `refreshVisualRows` keep, or the first
             // pass after the toggle sees the buffer as unchanged and keeps the

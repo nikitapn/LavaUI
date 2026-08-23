@@ -948,6 +948,15 @@ final class LeafNode: YogaBoxNode {
     /// different, the whole file re-broken, which is the case this plan
     /// exists to avoid.
     var wrapPlanText: String = ""
+    /// Logical line to bring back to the top of the box once the row table
+    /// has been rebuilt under it.
+    ///
+    /// `scrollY` is pixels over *row* indices, and a row is not a fixed thing:
+    /// turn wrapping off and row 6,000 stops being the six-thousandth wrapped
+    /// row and becomes line 6,000, four times further down the file — far
+    /// enough on a long one that the clamp lands on the end of it. A line
+    /// number survives the change; an offset does not.
+    var pendingTopLine: Int?
     /// False where `wrapCacheRows[i]` is that provisional row rather than a
     /// real break. See `refreshVisualRows`.
     var wrapMeasured: [Bool] = []

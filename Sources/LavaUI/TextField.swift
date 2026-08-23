@@ -168,6 +168,19 @@ public struct TextField: PrimitiveView {
     }
 }
 
+/// What a wrap pass should do with the scroll offset it inherits.
+enum WrapAnchor {
+    /// Leave it. An edit has already moved the box to follow the caret.
+    case none
+    /// Keep whichever logical line is at the top there. Rows above the
+    /// viewport multiply as they are broken, and this is what stops the text
+    /// creeping upward under the reader while that happens.
+    case hold
+    /// Bring this logical line to the top — the row table is about to mean
+    /// something different, so the offset naming it cannot survive.
+    case line(Int)
+}
+
 extension LeafNode {
     /// Horizontal padding inside a field, matching the draw-side inset.
     var textInset: Float { theme.controlPadding }
@@ -205,17 +218,44 @@ extension LeafNode {
             // The gutter is not part of the wrap width. Zero for a text
             // field, which is why this expression serves both.
             let inner = max(8, availableWidth - gutterWidth - textInset * 2)
+            // A different width re-breaks every line, so the row a scroll
+            // offset names is about to mean a different line. Whoever is at
+            // the top of the box stays there.
+            if widthMoved, pendingTopLine == nil {
+                pendingTopLine = logicalLine(ofRow: max(0, Int(scrollY / f.lineHeight)))
+            }
+            let anchor: WrapAnchor
+            if let line = pendingTopLine {
+                anchor = .line(line)
+                pendingTopLine = nil
+            } else {
+                // An edit moves the caret, and `followCaret` has already put
+                // the box where it belongs — holding the old top line would
+                // undo that. A refinement moves nothing the reader asked to
+                // move, so it holds.
+                anchor = replanned ? .none : .hold
+            }
             if replanned {
                 planWrap(text: textNow, previous: wrapPlanText, widthMoved: widthMoved)
             }
-            breakWrapWindow(font: f, inner: inner, anchored: !replanned)
+            breakWrapWindow(font: f, inner: inner, anchor: anchor)
             installWrapRows()
             return
         }
 
         // No wrapping: one row per logical line, cached the same way.
-        guard editing.text != lastLogicalRowsText else { return }
+        guard editing.text != lastLogicalRowsText || pendingTopLine != nil else { return }
         seedLogicalRows()
+        // Row *is* line here, so bringing a line back to the top is a
+        // multiplication. Without it, turning wrapping off left an offset
+        // measured in wrapped rows naming a line four times further down —
+        // and on a long file, the clamp turned that into the end of it.
+        if let line = pendingTopLine {
+            pendingTopLine = nil
+            if let f = font ?? FontStore.default {
+                scrollY = max(0, Float(line) * f.lineHeight)
+            }
+        }
     }
 
     // MARK: Soft wrap, one window at a time
@@ -379,13 +419,39 @@ extension LeafNode {
     /// text would creep upward under the reader for as long as the
     /// refinement ran. It is off for the pass that follows a re-plan, where
     /// the caret drives the scroll instead.
-    private func breakWrapWindow(font: UIFont, inner: Float, anchored: Bool) {
-        guard wrapUnmeasured > 0 else { return }
+    private func breakWrapWindow(font: UIFont, inner: Float, anchor: WrapAnchor) {
+        guard !wrapCacheRows.isEmpty else { return }
         let lineHeight = font.lineHeight
         let anchorRow = max(0, Int(scrollY / lineHeight))
-        let anchorFraction = scrollY - Float(anchorRow) * lineHeight
-        let anchorLine = wrapLine(containingRow: anchorRow)
-        let anchorSub = anchorRow - wrapFirstRow(ofLine: anchorLine)
+
+        // Which line to keep at the top of the box, and how far into it.
+        let held: (line: Int, sub: Int, fraction: Float)?
+        switch anchor {
+        case .none:
+            held = nil
+        case .hold:
+            let line = wrapLine(containingRow: anchorRow)
+            held = (
+                line, anchorRow - wrapFirstRow(ofLine: line),
+                scrollY - Float(anchorRow) * lineHeight
+            )
+        case .line(let requested):
+            // From the top of that line: the row the offset used to name
+            // belonged to a table that no longer exists, and so did the
+            // fraction of a row it was part way through.
+            held = (max(0, min(requested, wrapCacheRows.count - 1)), 0, 0)
+        }
+        // Move the box there *before* choosing what to break, so the window is
+        // the one the reader is about to be looking at rather than the one
+        // they were.
+        if let held {
+            scrollY = max(0, Float(wrapFirstRow(ofLine: held.line) + held.sub) * lineHeight)
+        }
+        let anchorLine = held?.line ?? wrapLine(containingRow: anchorRow)
+        guard wrapUnmeasured > 0 else {
+            applyWrapAnchor(held, lineHeight: lineHeight)
+            return
+        }
 
         // Every line contributes at least one row, so a viewport `n` rows tall
         // can never show more than `n` lines starting at the anchor. Measuring
@@ -418,15 +484,21 @@ extension LeafNode {
             }
         }
 
-        if anchored {
-            let sub = min(anchorSub, max(0, wrapCacheRows[anchorLine].count - 1))
-            let row = wrapFirstRow(ofLine: anchorLine) + sub
-            scrollY = max(0, Float(row) * lineHeight + anchorFraction)
-        }
+        applyWrapAnchor(held, lineHeight: lineHeight)
         // One more frame, until there is nothing left to break. Not a body
         // rebuild: nothing the app owns has changed, only how much of the
         // buffer this leaf has looked at.
         if wrapUnmeasured > 0 { ViewInvalidation.markNeedsRedraw() }
+    }
+
+    /// Puts the held line back at the top now that its rows are real.
+    private func applyWrapAnchor(
+        _ held: (line: Int, sub: Int, fraction: Float)?, lineHeight: Float
+    ) {
+        guard let held, wrapCacheRows.indices.contains(held.line) else { return }
+        let sub = min(held.sub, max(0, wrapCacheRows[held.line].count - 1))
+        let row = wrapFirstRow(ofLine: held.line) + sub
+        scrollY = max(0, Float(row) * lineHeight + held.fraction)
     }
 
     private func breakWrapLine(_ index: Int, font: UIFont, inner: Float) {
