@@ -986,13 +986,6 @@ final class LeafNode: YogaBoxNode {
         }
     }
 
-    /// Re-wrap before measuring: row count drives the box height, and
-    /// navigation consults the same rows.
-    func prepareWrap(availableWidth: Float) {
-        guard kind == .textField || kind == .editor else { return }
-        refreshVisualRows(availableWidth: availableWidth)
-    }
-
     /// Install Yoga measure callback (Phase 4). Width/height become auto;
     /// intrinsic size comes from `Font::measure` via `TextLayoutCache`.
     func installTextMeasure() {

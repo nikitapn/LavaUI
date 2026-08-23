@@ -1948,6 +1948,23 @@ extension DrawList {
         let lineH = font.lineHeight
         let focused = FocusManager.isFocused(leaf.id)
         let state = leaf.editing
+
+        // Re-wrap against the box Yoga actually granted, before anything reads
+        // the rows.
+        //
+        // The measure callback also does this, and for an editor that sizes
+        // itself that is where it happens. But Yoga skips the measure function
+        // entirely when a node's width *and* height are both definite, which is
+        // every editor filling a flex box — `EditorView(...).flexGrow(1)` in a
+        // stretched column, which is what an app that is mostly editor looks
+        // like. Such an editor never measured again after its first pass, so
+        // toggling `wraps` on it changed the flag and nothing else.
+        //
+        // Cheap when nothing moved: `refreshVisualRows` compares the width and
+        // the buffer and returns. The width it is given here is the border box,
+        // which is what the measure pass is handed too, so the two agree and
+        // neither invalidates the other's work.
+        leaf.refreshVisualRows(availableWidth: w)
         let rows = state.layout.rows
         // Keyed by logical line, which is what a lexer threads state through
         // and is no longer the same as `row` — see `EditorView(wraps:)`. The
@@ -2076,6 +2093,12 @@ extension DrawList {
         // resolved), so this is cheap while scrolling and expensive on the
         // first frame after a jump. Watching it is how the anchor is known to
         // still be doing its job.
+        // Spans of the logical line the loop is currently inside. Its rows are
+        // consecutive, so one slot is enough — and without it a line wrapped
+        // into twelve rows would be re-highlighted twelve times per frame.
+        var spanLine = -1
+        var spanCache: [HighlightSpan] = []
+
         var cursor = EditorProbe.measure(
             "emit.rowWindow", at: rows[firstRow].lowerBound
         ) {
@@ -2132,18 +2155,39 @@ extension DrawList {
 
             let lineSpans: [HighlightSpan]
             if let highlighter = leaf.highlighter {
-                if highlighter.isStateful {
-                    // The cache is keyed by logical line, because that is the
-                    // unit a lexer threads its state through. A wrapped row is
-                    // a slice of one, so the spans have to be cut down to it
-                    // and re-based — `lineText` here is the row, not the line.
-                    let column = leaf.columnStart(ofRow: row)
-                    let spans = leaf.highlightCache.spans(atRow: leaf.logicalLine(ofRow: row))
-                    lineSpans = leaf.wraps
-                        ? spans.clipped(to: column..<(column + lineText.count))
-                        : spans
+                if !leaf.wraps {
+                    // Row is line: nothing to translate either way.
+                    lineSpans = highlighter.isStateful
+                        ? leaf.highlightCache.spans(atRow: row)
+                        : highlighter.spans(in: lineText)
                 } else {
-                    lineSpans = highlighter.spans(in: lineText)
+                    // Wrapped. Both kinds of highlighter are stated in logical
+                    // lines and this row is a slice of one, so the spans are
+                    // computed for the line and then cut down to the row.
+                    //
+                    // The stateless kind could be run on the row's own text
+                    // instead, and that is wrong in a way that is easy to miss:
+                    // a rule like "a quoted string" or "everything after //"
+                    // needs the start of the line to match at all, and a
+                    // continuation row does not have it. A long string wrapping
+                    // onto a second row had every keyword *inside the string*
+                    // coloured as a keyword there.
+                    let logical = leaf.logicalLine(ofRow: row)
+                    if logical != spanLine {
+                        spanLine = logical
+                        if highlighter.isStateful {
+                            spanCache = leaf.highlightCache.spans(atRow: logical)
+                        } else {
+                            let extent = leaf.logicalLineRange(ofRow: row)
+                            let start = leaf.textIndex(atOffset: extent.lowerBound)
+                            let end = state.text.index(
+                                start, offsetBy: extent.upperBound - extent.lowerBound
+                            )
+                            spanCache = highlighter.spans(in: String(state.text[start..<end]))
+                        }
+                    }
+                    let column = leaf.columnStart(ofRow: row)
+                    lineSpans = spanCache.clipped(to: column..<(column + lineText.count))
                 }
             } else {
                 lineSpans = []

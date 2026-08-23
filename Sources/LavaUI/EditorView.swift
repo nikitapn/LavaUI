@@ -147,6 +147,7 @@ public struct EditorPosition: Equatable, Sendable, Codable {
 /// than a rewrite of `TextField`.
 public final class EditorController {
     private var revealAction: ((Int) -> Bool)?
+    private var revealRangeAction: ((Range<Int>) -> Bool)?
     private var captureAction: (() -> EditorPosition?)?
     private var replaceAction: (([Range<Int>], String) -> Int)?
     private var pendingLine: Int?
@@ -164,6 +165,24 @@ public final class EditorController {
         } else {
             pendingLine = requested
         }
+    }
+
+    /// Selects a character range and scrolls it into view.
+    ///
+    /// The reason this is not `restore(_:)` with the offsets filled in: an
+    /// `EditorPosition` carries a scroll offset, so restoring one moves the
+    /// selection to somewhere the editor is not looking. That is right for
+    /// coming back to a document — the whole point is to land where you were —
+    /// and wrong for a search hit, where the caller knows the offsets and has
+    /// no idea what scroll they correspond to. Only the editor can answer that,
+    /// because only the editor knows how the text is currently broken into
+    /// rows.
+    ///
+    /// Immediate rather than deferred, and false when the editor is not
+    /// mounted — a caller stepping through matches wants to know.
+    @discardableResult
+    public func reveal(range: Range<Int>) -> Bool {
+        revealRangeAction?(range) ?? false
     }
 
     /// Where the editor is right now, or nil if it is not mounted.
@@ -219,11 +238,13 @@ public final class EditorController {
 
     fileprivate func install(
         reveal: @escaping (Int) -> Bool,
+        revealRange: @escaping (Range<Int>) -> Bool,
         capture: @escaping () -> EditorPosition?,
         restore: @escaping (EditorPosition) -> Bool,
         replace: @escaping ([Range<Int>], String) -> Int
     ) {
         revealAction = reveal
+        revealRangeAction = revealRange
         captureAction = capture
         replaceAction = replace
         if let pendingPosition, restore(pendingPosition) {
@@ -357,6 +378,13 @@ public struct EditorView: PrimitiveView {
                 guard let leaf, let font = leaf.font ?? FontStore.default else { return false }
                 leaf.revealPhysicalLine(line, font: font)
                 leaf.focusSelf(binding: binding, onSubmit: nil)
+                CaretBlink.noteEdit()
+                ViewInvalidation.markNeedsRedraw()
+                return true
+            },
+            revealRange: { [weak leaf] range in
+                guard let leaf, let font = leaf.font ?? FontStore.default else { return false }
+                leaf.revealRange(range, font: font)
                 CaretBlink.noteEdit()
                 ViewInvalidation.markNeedsRedraw()
                 return true
@@ -518,6 +546,37 @@ extension LeafNode {
         let contentHeight = Float(rows.count) * font.lineHeight
         scrollY = min(max(0, target), max(0, contentHeight - visibleHeight))
         scrollX = 0
+    }
+
+    /// Selects `range` and brings it on screen, vertically and horizontally.
+    ///
+    /// Centred like `revealPhysicalLine` when it is off screen, and left alone
+    /// when it is already visible: a find-next walking down a screenful of
+    /// matches should not re-centre the view on each one, which reads as the
+    /// text jumping under a search that is barely moving.
+    func revealRange(_ range: Range<Int>, font: UIFont) {
+        let rows = editing.layout.rows
+        guard !rows.isEmpty else { return }
+        let total = rows.last?.upperBound ?? 0
+        let from = max(0, min(range.lowerBound, total))
+        let to = max(from, min(range.upperBound, total))
+
+        editing.setCursor(textIndex(atOffset: from))
+        if to != from { editing.setCursor(textIndex(atOffset: to), extending: true) }
+
+        let row = editing.layout.rowIndex(ofOffset: from)
+        let rowTop = Float(row) * font.lineHeight
+        let visible = viewportHeight > 0
+            ? max(font.lineHeight, viewportHeight - textInset * 2)
+            : Float(max(1, maxLines)) * font.lineHeight
+        if rowTop < scrollY || rowTop + font.lineHeight > scrollY + visible {
+            let target = rowTop - max(0, (visible - font.lineHeight) / 2)
+            let contentHeight = Float(rows.count) * font.lineHeight
+            scrollY = min(max(0, target), max(0, contentHeight - visible))
+        }
+        // A match far along a very long line is invisible without this, and a
+        // no-wrap editor is exactly where that happens.
+        scrollToCaretX(font: font)
     }
 
     /// Gutter wide enough for the highest line number, plus breathing room.

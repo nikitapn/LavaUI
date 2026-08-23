@@ -201,6 +201,51 @@ final class EditorWrapTests: XCTestCase {
         )
     }
 
+    /// An editor that fills a flex box wraps too.
+    ///
+    /// Yoga skips the measure function entirely when a node's width *and*
+    /// height are both definite, which is exactly `EditorView(...).flexGrow(1)`
+    /// in a stretched column — the shape of every app that is mostly editor.
+    /// Such an editor measured once and never again, so `wraps` set the flag
+    /// and nothing else: the toggle appeared to do nothing at all.
+    func testAStretchedEditorStillWraps() throws {
+        let editorNode = try XCTUnwrap(
+            Editor.openClient(width: Self.viewport.w, height: Self.viewport.h)
+        )
+        XCTAssertNotNil(
+            FontStore.bootstrap(assetsRoot: LavaResources.root, pixelSize: 16, into: editorNode)
+        )
+        func settleStretched(wraps: Bool) throws -> LeafNode {
+            host.setRoot(
+                VStack(width: .pt(Self.viewport.w), height: .pt(Self.viewport.h), spacing: 0) {
+                    VStack(flexGrow: 1, spacing: 0) {
+                        EditorView(text: binding, wraps: wraps, visibleLines: 20)
+                            .flexGrow(1)
+                    }
+                }
+            )
+            _ = host.calculateLayout(width: Self.viewport.w, height: Self.viewport.h)
+            let root = try XCTUnwrap(host.rootNode)
+            let list = DrawList(editor: editorNode)
+            list.clear()
+            list.emitTree(root, viewportW: Self.viewport.w, viewportH: Self.viewport.h)
+            func walk(_ node: any AnyViewNode) -> LeafNode? {
+                if let leaf = node as? LeafNode, leaf.kind == .editor { return leaf }
+                for child in node.childNodes { if let hit = walk(child) { return hit } }
+                return nil
+            }
+            return try XCTUnwrap(walk(root))
+        }
+
+        let plain = try settleStretched(wraps: false)
+        XCTAssertEqual(plain.editing.layout.count, 3)
+        let wrapped = try settleStretched(wraps: true)
+        XCTAssertGreaterThan(
+            wrapped.editing.layout.count, 3,
+            "a stretched editor never re-measures, so it has to re-wrap at emit"
+        )
+    }
+
     // MARK: Replace, through the controller
 
     /// Going through the editor rather than rewriting the bound string is what

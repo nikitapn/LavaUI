@@ -444,6 +444,9 @@ extension LeafNode {
         ViewInvalidation.markDirty()
     }
 
+    /// What Tab inserts in an editor. See the `KeyCode.tab` case.
+    static let indentUnit = "    "
+
     private func handleKey(
         _ event: KeyEvent, binding: Binding<String>, onSubmit: (() -> Void)?
     ) -> Bool {
@@ -479,6 +482,32 @@ extension LeafNode {
             } else {
                 onSubmit?()
             }
+        case KeyCode.pageUp, KeyCode.pageDown:
+            guard isMultiline else { return false }
+            // A screenful, minus a row of overlap so the line the eye was on
+            // is still there after the jump — the convention every pager and
+            // editor follows, and what stops a page down from losing the
+            // reader's place.
+            let lineHeight = (font ?? FontStore.default)?.lineHeight ?? 18
+            let screenful = viewportHeight > 0
+                ? Int(viewportHeight / lineHeight)
+                : max(1, maxLines)
+            let step = max(1, screenful - 1)
+            for _ in 0..<step {
+                if event.key == KeyCode.pageUp {
+                    editing.moveUp(extending: shift)
+                } else {
+                    editing.moveDown(extending: shift)
+                }
+            }
+        case KeyCode.tab where kind == .editor && !event.shift:
+            // Spaces, not a tab character. The shaper has no notion of a tab
+            // stop, so a `\t` in the buffer is a character the font has no
+            // glyph for and draws as a tofu box — an editor whose Tab key
+            // produced that would be making the problem worse on purpose.
+            // Four is the common default; Shift+Tab has no outdent yet, so it
+            // falls through to focus traversal rather than pretending.
+            editing.insert(Self.indentUnit)
         case KeyCode.escape:
             FocusManager.resignFocus(id)
         case KeyCode.a where event.control:
