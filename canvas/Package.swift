@@ -178,7 +178,6 @@ let package = Package(
                 // Do not exclude third-party/{stb,vma,freetype}: headerSearchPath
                 // into those trees is required to compile the engine.
                 "main.cpp",
-                "camel.py",
                 "shaders",
             ],
             sources: engineSources,
