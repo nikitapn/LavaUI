@@ -120,6 +120,81 @@ final class SoftWrapTests: XCTestCase {
         }
     }
 
+    /// The byte scan steps eight bytes at a time while nothing interesting is
+    /// in them, so *where* the interesting byte falls within a word is the
+    /// thing that can go wrong. These put a newline, a non-ASCII scalar and a
+    /// CR at every offset in a long buffer, which is the only way that lands
+    /// on every lane and every partial-word tail.
+    func testLineIndexAgreesWithTheWalkAtEveryAlignment() {
+        func reference(_ text: String) -> [Range<Int>] {
+            var rows: [Range<Int>] = []
+            var start = 0
+            var offset = 0
+            for ch in text {
+                if ch == "\n" {
+                    rows.append(start..<offset)
+                    start = offset + 1
+                }
+                offset += 1
+            }
+            rows.append(start..<offset)
+            return rows
+        }
+
+        for filler in ["a", "ab", "abc"] {
+            for length in [1, 7, 8, 9, 15, 16, 17, 31, 64, 129] {
+                let base = String(repeating: filler, count: length)
+                for at in 0...base.count {
+                    // "\r\n" is the one that matters most: Swift counts it as a
+                    // single `Character`, so a scan that skipped past the CR
+                    // and split on the LF would report one line too many —
+                    // and a lone CR alone would not show that, because there
+                    // the byte count and the character count still agree.
+                    for insert in ["\n", "é", "👍", "\r", "\r\n"] {
+                        var text = base
+                        text.insert(
+                            contentsOf: insert,
+                            at: text.index(text.startIndex, offsetBy: at)
+                        )
+                        XCTAssertEqual(
+                            VisualLayout.logicalRows(text), reference(text),
+                            "row table disagrees for \(text.debugDescription)"
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    /// And the byte ranges have to name the same lines the character ranges
+    /// do, or the wrap plan slices the wrong text out of the buffer.
+    func testByteRangesNameTheSameLines() {
+        let cases = [
+            "",
+            "\n",
+            (0..<40).map { "line \($0) with some length to it" }.joined(separator: "\n"),
+            "héllo\nwörld\n👍 emoji here\nplain",
+            "a\n\nb\n\n\nc",
+        ]
+        for text in cases {
+            let index = VisualLayout.lineIndex(text)
+            let bytes = Array(text.utf8)
+            XCTAssertEqual(index.rows.count, index.byteRanges.count, text.debugDescription)
+            for (n, range) in index.byteRanges.enumerated() {
+                let line = String(decoding: bytes[range], as: UTF8.self)
+                XCTAssertFalse(line.contains("\n"), "line \(n) swallowed a newline")
+                XCTAssertEqual(
+                    line.count, index.rows[n].count,
+                    "line \(n) of \(text.debugDescription) disagrees about its length"
+                )
+                XCTAssertEqual(index.line(atByte: range.lowerBound), n)
+                if !range.isEmpty {
+                    XCTAssertEqual(index.line(atByte: range.upperBound - 1), n)
+                }
+            }
+        }
+    }
+
     func testRowIndexAndColumn() {
         let l = VisualLayout(rows: [0..<3, 3..<7])
         XCTAssertEqual(l.rowIndex(ofOffset: 0), 0)

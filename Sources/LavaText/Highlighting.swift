@@ -139,6 +139,15 @@ public struct SyntaxHighlighter {
 
     public var isStateful: Bool { lexer != nil }
 
+    /// True when this highlighter cannot produce a span for anything.
+    ///
+    /// A plain-text document still gets a highlighter — `EditorView` always
+    /// installs one — and asking it about a line means cutting that line out
+    /// of the buffer to hand it over. For a wrapped editor that is a
+    /// `String.Index` walk and a copy per visible logical line, every frame,
+    /// to be told there is nothing to colour.
+    public var isEmpty: Bool { lexer == nil && compiled.isEmpty }
+
     /// `AnyHashable(())` for the rule-list form — it has no real state, but
     /// giving every highlighter *a* value here means a cache can seed the
     /// first line uniformly without special-casing which kind it holds.

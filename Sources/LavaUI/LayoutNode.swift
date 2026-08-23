@@ -937,12 +937,17 @@ final class LeafNode: YogaBoxNode {
     ///
     /// `Substring`s, sharing the previous buffer's storage rather than
     /// copying it, the same as `SyntaxHighlighter.Cache` holds its lines.
-    var wrapCacheLines: [Substring] = []
     var wrapCacheRows: [[Range<Int>]] = []
-    /// Characters in each logical line, from the byte scan rather than from
-    /// breaking it — what an unbroken line contributes as its one provisional
-    /// row, and what turns a line index into a buffer offset.
-    var wrapLineLength: [Int] = []
+    /// The buffer the current plan was built from, for the diff that finds
+    /// which lines an edit touched.
+    ///
+    /// Not `lastWrappedText`, which looks like the same thing and is not:
+    /// that one is a staleness flag, and `afterEdit` *clears* it to force the
+    /// next pass to run. Diffing against it would compare the new buffer with
+    /// an empty one on exactly the pass that follows an edit — every line
+    /// different, the whole file re-broken, which is the case this plan
+    /// exists to avoid.
+    var wrapPlanText: String = ""
     /// False where `wrapCacheRows[i]` is that provisional row rather than a
     /// real break. See `refreshVisualRows`.
     var wrapMeasured: [Bool] = []
@@ -951,11 +956,19 @@ final class LeafNode: YogaBoxNode {
     /// are asked for.
     var wrapUnmeasured = 0
     var wrapCursor = 0
+    /// Line boundaries the plan is stated against, in characters and bytes.
+    ///
+    /// Every line the plan touches is reached through this: its character
+    /// length (what a provisional row covers, and what turns a line index
+    /// into a buffer offset) and its bytes (what the diff against the
+    /// previous buffer works in, and what a line is sliced out of the buffer
+    /// with). Holding it is what lets the wrap pass avoid splitting the
+    /// buffer into `Substring`s at all.
+    var logicalLineIndex = LineIndex()
     /// Rows from the last `seedLogicalRows`, valid while `lastLogicalRowsText`
     /// still matches the buffer. The wrap planner needs exactly this scan, and
     /// on an edit `afterEdit` has just done it — so without somewhere to keep
     /// it, a wrapping editor scanned the buffer twice for every keystroke.
-    var logicalRowCache: [Range<Int>] = []
     /// Click handler receiving node-local coordinates *and* the node's
     /// absolute origin. The caret needs the former; a drag needs the latter,
     /// because pointer capture delivers window coordinates long after the hit

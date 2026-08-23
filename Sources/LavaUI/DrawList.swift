@@ -2154,7 +2154,12 @@ extension DrawList {
             }
 
             let lineSpans: [HighlightSpan]
-            if let highlighter = leaf.highlighter {
+            // A highlighter with no rules and no lexer has nothing to say, and
+            // asking it costs the line: while wrapping, that is an index walk
+            // and a copy per visible logical line, every frame, for an empty
+            // array. `EditorView` installs one unconditionally, so a plain-text
+            // document takes this branch.
+            if let highlighter = leaf.highlighter, !highlighter.isEmpty {
                 if !leaf.wraps {
                     // Row is line: nothing to translate either way.
                     lineSpans = highlighter.isStateful

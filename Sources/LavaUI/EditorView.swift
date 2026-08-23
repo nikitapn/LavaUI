@@ -150,6 +150,7 @@ public final class EditorController {
     private var revealRangeAction: ((Range<Int>) -> Bool)?
     private var captureAction: (() -> EditorPosition?)?
     private var replaceAction: (([Range<Int>], String) -> Int)?
+    private var metricsAction: (() -> (bytes: Int, lines: Int))?
     private var pendingLine: Int?
     private var pendingPosition: EditorPosition?
 
@@ -219,6 +220,19 @@ public final class EditorController {
         replace(search.matches, with: replacement)
     }
 
+    /// How many logical lines the mounted editor is showing, and how many
+    /// bytes that answer was taken from.
+    ///
+    /// For a status bar. The editor has counted the lines already — it needs
+    /// the same number for the gutter — and a caller that recounts is scanning
+    /// a multi-megabyte buffer to learn something a few pointers away. The
+    /// byte count comes back with it because the caller has to check: during a
+    /// document switch the editor still holds the outgoing buffer for a frame,
+    /// and a status bar that believed it would flash the wrong number.
+    ///
+    /// Nil when no editor is mounted.
+    public func metrics() -> (bytes: Int, lines: Int)? { metricsAction?() }
+
     /// Puts the editor back at `position` on its next reconcile.
     ///
     /// Deliberately never immediate. The caller for this is a document switch,
@@ -241,12 +255,14 @@ public final class EditorController {
         revealRange: @escaping (Range<Int>) -> Bool,
         capture: @escaping () -> EditorPosition?,
         restore: @escaping (EditorPosition) -> Bool,
-        replace: @escaping ([Range<Int>], String) -> Int
+        replace: @escaping ([Range<Int>], String) -> Int,
+        metrics: @escaping () -> (bytes: Int, lines: Int)
     ) {
         revealAction = reveal
         revealRangeAction = revealRange
         captureAction = capture
         replaceAction = replace
+        metricsAction = metrics
         if let pendingPosition, restore(pendingPosition) {
             self.pendingPosition = nil
         }
@@ -352,15 +368,14 @@ public struct EditorView: PrimitiveView {
             leaf.lastWrappedText = ""
             leaf.lastLogicalRowsText = nil
             leaf.lastMeasuredWidth = 0
-            // Holds `Substring`s of the buffer it wrapped. Keeping them behind
-            // an editor that is no longer wrapping would pin that buffer's
-            // storage for as long as the leaf lives.
-            leaf.wrapCacheLines = []
+            // The plan describes rows this editor no longer has, and holds a
+            // line table for a buffer it may never look at again.
             leaf.wrapCacheRows = []
-            leaf.wrapLineLength = []
+            leaf.wrapPlanText = ""
             leaf.wrapMeasured = []
             leaf.wrapUnmeasured = 0
             leaf.wrapCursor = 0
+            leaf.logicalLineIndex = LineIndex()
         }
         leaf.wraps = wraps
         leaf.highlighter = SyntaxHighlighter(rules: rules)
@@ -411,6 +426,10 @@ public struct EditorView: PrimitiveView {
                 CaretBlink.noteEdit()
                 ViewInvalidation.markDirty()
                 return applied
+            },
+            metrics: { [weak leaf] in
+                guard let leaf else { return (0, 0) }
+                return (leaf.editing.text.utf8.count, leaf.logicalLineCount)
             }
         )
 

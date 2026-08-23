@@ -71,6 +71,41 @@ public enum CaretAffinity: Equatable, Sendable {
     case upstream
 }
 
+/// Where each logical line sits, in characters and (optionally) in bytes.
+///
+/// Two coordinate systems for the same lines, because the editor genuinely
+/// needs both and they only agree while a buffer is ASCII: rows and carets are
+/// stated in characters, while comparing two buffers or slicing one line out
+/// of one is byte work. `byteRanges` is empty when the caller did not ask for
+/// it — see `VisualLayout.lineIndex`.
+public struct LineIndex: Equatable {
+    /// Character range of each line, its newline excluded.
+    public var rows: [Range<Int>]
+    /// The same lines as byte ranges, or empty.
+    public var byteRanges: [Range<Int>]
+
+    public init(rows: [Range<Int>] = [], byteRanges: [Range<Int>] = []) {
+        self.rows = rows
+        self.byteRanges = byteRanges
+    }
+
+    /// Line containing `byte`, or the last line when it is past the end.
+    ///
+    /// Binary search: an edit is located in bytes and has to be turned into
+    /// line numbers, and doing that by walking would put the buffer's length
+    /// back into the cost of a keystroke.
+    public func line(atByte byte: Int) -> Int {
+        guard !byteRanges.isEmpty else { return 0 }
+        var low = 0
+        var high = byteRanges.count - 1
+        while low < high {
+            let mid = low + (high - low + 1) / 2
+            if byteRanges[mid].lowerBound <= byte { low = mid } else { high = mid - 1 }
+        }
+        return low
+    }
+}
+
 /// Where each visual row begins and ends, in character offsets over the whole
 /// buffer.
 ///
@@ -96,20 +131,43 @@ public struct VisualLayout: Equatable {
     /// buffer felt: every caret draw, hit test, and gutter row rescanned the
     /// whole document.
     public static func logicalRows(_ text: String) -> [Range<Int>] {
-        if let rows = asciiLogicalRows(text) { return rows }
+        lineIndex(text, includingBytes: false).rows
+    }
+
+    /// The same scan, also reporting where each line sits in *bytes*.
+    ///
+    /// Character offsets are what the row table is stated in. Byte offsets
+    /// are what a cheap comparison of two buffers produces, and what slicing
+    /// one line out of the buffer wants — and a wrapping editor needs both on
+    /// every edit, so it asks for them together rather than scanning twice.
+    /// Everything else asks for `logicalRows` and does not pay for the second
+    /// array, which on a 200,000-line log is not a rounding error.
+    public static func lineIndex(
+        _ text: String, includingBytes: Bool = true
+    ) -> LineIndex {
+        if let index = fastLineIndex(text, includingBytes: includingBytes) {
+            return index
+        }
 
         var rows: [Range<Int>] = []
+        var byteRanges: [Range<Int>] = []
         var start = 0
         var offset = 0
+        var byteStart = 0
+        var byteOffset = 0
         for ch in text {
             if ch == "\n" {
                 rows.append(start..<offset)
+                if includingBytes { byteRanges.append(byteStart..<byteOffset) }
                 start = offset + 1
+                byteStart = byteOffset + ch.utf8.count
             }
             offset += 1
+            byteOffset += ch.utf8.count
         }
         rows.append(start..<offset)
-        return rows
+        if includingBytes { byteRanges.append(byteStart..<byteOffset) }
+        return LineIndex(rows: rows, byteRanges: byteRanges)
     }
 
     /// The same scan over raw UTF-8. Nil when it cannot answer, so the caller
@@ -135,9 +193,12 @@ public struct VisualLayout: Equatable {
     /// grapheme cluster, so with CRLF in play a line break is not one
     /// character and the offsets between lines stop lining up — which is not
     /// something a per-line count can repair.
-    private static func asciiLogicalRows(_ text: String) -> [Range<Int>]? {
-        let scanned: [Range<Int>]?? = text.utf8.withContiguousStorageIfAvailable { bytes in
+    private static func fastLineIndex(
+        _ text: String, includingBytes: Bool
+    ) -> LineIndex? {
+        let scanned: LineIndex?? = text.utf8.withContiguousStorageIfAvailable { bytes in
             var rows: [Range<Int>] = []
+            var byteRanges: [Range<Int>] = []
             // Byte where the current line starts, and the character offset of
             // that byte. They diverge on the first non-ASCII line and stay
             // diverged, which is the whole reason both are tracked.
@@ -158,23 +219,58 @@ public struct VisualLayout: Equatable {
                     length = String(decoding: slice, as: UTF8.self).count
                 }
                 rows.append(charStart..<(charStart + length))
+                if includingBytes { byteRanges.append(lineStart..<end) }
                 charStart += length + 1  // + the newline that ended it
                 lineStart = end + 1
                 lineIsASCII = true
                 return true
             }
 
-            for i in 0..<bytes.count {
+            // Eight bytes at a time while nothing interesting is in them.
+            //
+            // Three branches per byte over a 4 MB log is ~3 ms, and it is one
+            // of the few things a keystroke pays in full. The word test below
+            // is the standard "does this word contain a given byte" trick:
+            // subtracting one from a zero byte borrows into its high bit and
+            // nothing else does, so `(v - 0x01..) & ~v & 0x80..` is non-zero
+            // exactly when some byte of `v` is zero. XOR against a repeated
+            // byte first, and that becomes "contains this byte". The high-bit
+            // mask on its own answers "contains a byte ≥ 0x80". Endianness
+            // does not come into it: every test is per byte lane, and the
+            // exact position is found by the byte loop that follows.
+            let ones: UInt64 = 0x0101_0101_0101_0101
+            let highs: UInt64 = 0x8080_8080_8080_8080
+            let stride = MemoryLayout<UInt64>.size
+            let raw = UnsafeRawPointer(bytes.baseAddress!)
+
+            @inline(__always)
+            func containsZeroByte(_ v: UInt64) -> Bool {
+                ((v &- ones) & ~v & highs) != 0
+            }
+
+            var i = 0
+            while i < bytes.count {
+                if i + stride <= bytes.count {
+                    let word = raw.loadUnaligned(fromByteOffset: i, as: UInt64.self)
+                    if word & highs == 0,
+                       !containsZeroByte(word ^ (ones &* 0x0A)),
+                       !containsZeroByte(word ^ (ones &* 0x0D))
+                    {
+                        i += stride
+                        continue
+                    }
+                }
                 let byte = bytes[i]
                 if byte == 0x0D { return nil }
                 if byte >= 0x80 {
                     lineIsASCII = false
-                    continue
+                } else if byte == 0x0A {
+                    _ = closeLine(endingAt: i)
                 }
-                if byte == 0x0A { _ = closeLine(endingAt: i) }
+                i += 1
             }
             _ = closeLine(endingAt: bytes.count)
-            return rows
+            return LineIndex(rows: rows, byteRanges: byteRanges)
         }
         return scanned ?? nil
     }

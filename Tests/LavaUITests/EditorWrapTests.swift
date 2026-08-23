@@ -202,6 +202,51 @@ final class EditorWrapTests: XCTestCase {
         )
     }
 
+    /// The same guarantee, for a keystroke rather than a rebuild.
+    ///
+    /// These are two different paths into the wrap pass and only one of them
+    /// was covered. An edit through the binding *reconciles*; an edit through
+    /// the keyboard goes through `afterEdit`, which clears the staleness
+    /// marks the pass reads. Twice now something has re-wrapped the whole
+    /// file on every key while every test above stayed green.
+    func testTypingReWrapsOnlyTheLineItTouched() throws {
+        box = (0..<60).map { "\($0) " + String(repeating: "wrap ", count: 20) }
+            .joined(separator: "\n")
+        let leaf = try settle(wraps: true)
+        leaf.focusSelf(binding: binding, onSubmit: nil)
+        leaf.editing.setCursor(leaf.editing.text.startIndex)
+
+        let before = PerfCounters.lineWraps
+        _ = FocusManager.handle(character: "x")
+        _ = try settle(wraps: true)
+        let wrapped = PerfCounters.lineWraps - before
+
+        XCTAssertEqual(box.first, "x", "the keystroke did not reach the buffer")
+        XCTAssertLessThanOrEqual(
+            wrapped, 4, "one keystroke re-wrapped \(wrapped) lines"
+        )
+    }
+
+    /// And a keystroke that adds a line, which moves every line index after
+    /// it — the case the reuse has to align rather than match positionally.
+    func testTypingANewlineReWrapsOnlyAroundIt() throws {
+        box = (0..<60).map { "\($0) " + String(repeating: "wrap ", count: 20) }
+            .joined(separator: "\n")
+        let leaf = try settle(wraps: true)
+        leaf.focusSelf(binding: binding, onSubmit: nil)
+        leaf.editing.setCursor(leaf.editing.text.startIndex)
+
+        let before = PerfCounters.lineWraps
+        _ = FocusManager.handle(KeyEvent(key: KeyCode.enter, mods: 0))
+        _ = try settle(wraps: true)
+        let wrapped = PerfCounters.lineWraps - before
+
+        XCTAssertEqual(box.first, "\n", "the keystroke did not reach the buffer")
+        XCTAssertLessThanOrEqual(
+            wrapped, 4, "one newline re-wrapped \(wrapped) lines"
+        )
+    }
+
     /// A different width breaks every line somewhere else, so it cannot reuse.
     func testAWidthChangeReWrapsEverything() throws {
         box = (0..<60).map { "\($0) " + String(repeating: "wrap ", count: 20) }

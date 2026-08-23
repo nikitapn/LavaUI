@@ -205,7 +205,9 @@ extension LeafNode {
             // The gutter is not part of the wrap width. Zero for a text
             // field, which is why this expression serves both.
             let inner = max(8, availableWidth - gutterWidth - textInset * 2)
-            if replanned { planWrap(text: textNow, widthMoved: widthMoved) }
+            if replanned {
+                planWrap(text: textNow, previous: wrapPlanText, widthMoved: widthMoved)
+            }
             breakWrapWindow(font: f, inner: inner, anchored: !replanned)
             installWrapRows()
             return
@@ -248,52 +250,35 @@ extension LeafNode {
     /// Rebuilds the per-line plan for a new buffer or a new width, breaking
     /// nothing: every line that cannot be reused gets one provisional row
     /// covering it whole, and is queued.
-    private func planWrap(text: String, widthMoved: Bool) {
-        let lines = editing.lines
-        // The scan `afterEdit` has just done, when it is still current.
-        let ranges = lastLogicalRowsText == text
-            ? logicalRowCache : VisualLayout.logicalRows(text)
+    private func planWrap(text: String, previous: String, widthMoved: Bool) {
+        // One scan for both coordinate systems, and the one `afterEdit` has
+        // just done when it is still current.
+        let index = lastLogicalRowsText == text && !logicalLineIndex.rows.isEmpty
+            ? logicalLineIndex : VisualLayout.lineIndex(text)
+        logicalLineIndex = index
+        let ranges = index.rows
 
         // A different width breaks every line somewhere else, so nothing
         // survives it. An edit leaves all but one line alone.
-        let reusableLines = widthMoved ? [] : wrapCacheLines
         let reusableRows = widthMoved ? [] : wrapCacheRows
         let reusableMeasured = widthMoved ? [] : wrapMeasured
-
-        // How far the old and new line arrays agree from each end.
-        //
-        // Matching index-for-index is only right while the *number* of lines
-        // holds: type a newline into line 3 of a 200,000-line log and every
-        // line after it shifts by one, so a positional check says all 199,997
-        // changed. An edit is a contiguous region, so the lines before it and
-        // the lines after it are both still there — the standard
-        // common-prefix/common-suffix trim finds them, and what is left
-        // between the two is what actually has to be broken again.
-        var head = 0
-        while head < reusableLines.count, head < lines.count,
-              reusableLines[head] == lines[head] { head += 1 }
-        var tail = 0
-        while tail < reusableLines.count - head, tail < lines.count - head,
-              reusableLines[reusableLines.count - 1 - tail]
-                  == lines[lines.count - 1 - tail] { tail += 1 }
+        let (head, tail) = reusableSpan(
+            previous: previous, text: text, index: index,
+            previousLines: reusableRows.count
+        )
 
         var rows: [[Range<Int>]] = []
         var measured: [Bool] = []
-        var lengths: [Int] = []
-        rows.reserveCapacity(lines.count)
-        measured.reserveCapacity(lines.count)
-        lengths.reserveCapacity(lines.count)
+        rows.reserveCapacity(ranges.count)
+        measured.reserveCapacity(ranges.count)
         var unmeasured = 0
 
-        for index in lines.indices {
-            let length = index < ranges.count ? ranges[index].count : 0
-            lengths.append(length)
-
+        for line in ranges.indices {
             let reusedAt: Int?
-            if index < head {
-                reusedAt = index
-            } else if index >= lines.count - tail {
-                reusedAt = reusableLines.count - (lines.count - index)
+            if line < head {
+                reusedAt = line
+            } else if line >= ranges.count - tail {
+                reusedAt = reusableRows.count - (ranges.count - line)
             } else {
                 reusedAt = nil
             }
@@ -303,18 +288,88 @@ extension LeafNode {
                 rows.append(reusableRows[reusedAt])
                 measured.append(true)
             } else {
-                rows.append([0..<length])
+                rows.append([0..<ranges[line].count])
                 measured.append(false)
                 unmeasured += 1
             }
         }
 
-        wrapCacheLines = lines
         wrapCacheRows = rows
         wrapMeasured = measured
-        wrapLineLength = lengths
         wrapUnmeasured = unmeasured
         wrapCursor = 0
+        wrapPlanText = text
+    }
+
+    /// How many lines at each end of the buffer kept the rows they had.
+    ///
+    /// Found by comparing the two buffers as bytes, not by splitting them
+    /// into lines and comparing those. Splitting materialises a `Substring`
+    /// per line — 11,631 of them on a 4 MB log, on every keystroke — and then
+    /// walks them one at a time to reach a conclusion a single memcmp-speed
+    /// pass reaches: an edit is one contiguous splice, so the bytes before it
+    /// and the bytes after it are unchanged, and the lines those bytes fall
+    /// in are the lines that kept their rows.
+    ///
+    /// The two ends cannot overlap — the suffix search is bounded by what the
+    /// prefix already claimed — so a line is never counted as reusable from
+    /// both directions at once.
+    private func reusableSpan(
+        previous: String, text: String, index: LineIndex, previousLines: Int
+    ) -> (head: Int, tail: Int) {
+        guard previousLines > 0, !previous.isEmpty, !index.byteRanges.isEmpty else {
+            return (0, 0)
+        }
+        let span: (head: Int, tail: Int)? = previous.utf8.withContiguousStorageIfAvailable { old in
+            text.utf8.withContiguousStorageIfAvailable { new -> (Int, Int)? in
+                guard let oldBase = old.baseAddress, let newBase = new.baseAddress else {
+                    return nil
+                }
+                let a = UnsafeRawPointer(oldBase)
+                let b = UnsafeRawPointer(newBase)
+                let word = MemoryLayout<UInt64>.size
+                let limit = min(old.count, new.count)
+
+                // Eight bytes at a time, then bytes for the last partial
+                // word. A keystroke leaves megabytes identical on both sides
+                // of itself, so this loop *is* the cost of locating it — one
+                // byte per iteration made finding one deleted character take
+                // 2.3 ms on a 4 MB log. The answer is the same either way;
+                // the word loop only stops at the word containing the first
+                // difference, and the byte loop below finds it exactly.
+                var prefix = 0
+                while prefix + word <= limit,
+                      a.loadUnaligned(fromByteOffset: prefix, as: UInt64.self)
+                          == b.loadUnaligned(fromByteOffset: prefix, as: UInt64.self)
+                { prefix += word }
+                while prefix < limit, old[prefix] == new[prefix] { prefix += 1 }
+
+                var suffix = 0
+                let tailLimit = limit - prefix
+                while suffix + word <= tailLimit,
+                      a.loadUnaligned(
+                          fromByteOffset: old.count - suffix - word, as: UInt64.self
+                      ) == b.loadUnaligned(
+                          fromByteOffset: new.count - suffix - word, as: UInt64.self
+                      )
+                { suffix += word }
+                while suffix < tailLimit,
+                      old[old.count - 1 - suffix] == new[new.count - 1 - suffix]
+                { suffix += 1 }
+
+                return (prefix, new.count - suffix)
+            } ?? nil
+        } ?? nil
+        guard let (prefixEnd, suffixStart) = span else { return (0, 0) }
+
+        // The line the change starts in is itself changed, so reuse stops
+        // before it; likewise the line the common suffix starts in.
+        let firstTouched = index.line(atByte: prefixEnd)
+        let lastTouched = index.line(atByte: suffixStart)
+        let lineCount = index.rows.count
+        let head = max(0, min(firstTouched, lineCount))
+        let tail = max(0, min(lineCount - 1 - lastTouched, lineCount - head))
+        return (head, tail)
     }
 
     /// Breaks what the viewport can reach, then a chunk of what is left.
@@ -379,11 +434,37 @@ extension LeafNode {
         // Shaping is what this whole plan exists to defer: it is the cost of
         // the line, and there are as many lines as there are lines.
         PerfCounters.lineWraps += 1
-        let s = String(wrapCacheLines[index])
+        let s = wrapLineText(index)
         let advances = font.shapedRun(s).characterAdvances
         wrapCacheRows[index] = SoftWrap.rows(text: s, advances: advances, maxWidth: inner)
         wrapMeasured[index] = true
         wrapUnmeasured -= 1
+    }
+
+    /// Characters in a logical line, from the scan rather than from a fresh
+    /// `count` — that would be a grapheme walk per line, O(buffer) across the
+    /// install and paid even when every line came out of the cache.
+    private func lineLength(_ index: Int) -> Int {
+        let rows = logicalLineIndex.rows
+        return rows.indices.contains(index) ? rows[index].count : 0
+    }
+
+    /// One line, cut out of the buffer by its byte range.
+    ///
+    /// Decoding the bytes rather than slicing with a `String.Index`: reaching
+    /// a line by index means walking there, and a plan that breaks lines all
+    /// over a 4 MB buffer would pay that walk for each of them.
+    private func wrapLineText(_ index: Int) -> String {
+        let ranges = logicalLineIndex.byteRanges
+        guard ranges.indices.contains(index) else { return "" }
+        let range = ranges[index]
+        let sliced: String? = editing.text.utf8.withContiguousStorageIfAvailable {
+            String(decoding: UnsafeBufferPointer(rebasing: $0[range]), as: UTF8.self)
+        }
+        return sliced ?? String(
+            decoding: editing.text.utf8.dropFirst(range.lowerBound).prefix(range.count),
+            as: UTF8.self
+        )
     }
 
     /// Which logical line row `target` falls in, over the plan as it stands.
@@ -428,7 +509,7 @@ extension LeafNode {
             // From the byte scan, not from a fresh `line.count`: that would be
             // a grapheme walk per line, O(buffer) across the loop and paid
             // even on a pass where every line came out of the cache.
-            base += wrapLineLength[index] + 1  // + the newline that ended it
+            base += lineLength(index) + 1  // + the newline that ended it
         }
         editing.setVisualRows(rows)
         rowLogicalLine = logicalLine
@@ -506,17 +587,19 @@ extension LeafNode {
     /// each access and throws the result away.
     func seedLogicalRows() {
         lastLogicalRowsText = editing.text
-        let rows = VisualLayout.logicalRows(editing.text)
         // Kept, not just installed: `planWrap` wants this exact scan, and on
-        // a wrapping editor it runs microseconds after this does.
-        logicalRowCache = rows
-        editing.setVisualRows(rows)
+        // a wrapping editor it runs microseconds after this does. Byte ranges
+        // only when something is going to want them — a buffer this size
+        // makes a second array per keystroke worth not allocating.
+        let index = VisualLayout.lineIndex(editing.text, includingBytes: wraps)
+        logicalLineIndex = index
+        editing.setVisualRows(index.rows)
         // Row *is* logical line now, which the accessors above answer without
         // a table. Leaving a stale one installed would answer for the wrap
         // this buffer no longer has.
         rowLogicalLine = []
         rowColumnStart = []
-        // `wrapCacheLines` deliberately survives: `EditorView.reconcilePrimitive`
+        // The wrap plan deliberately survives: `EditorView.reconcilePrimitive`
         // seeds logical rows on *every* text change, to keep the gutter width
         // honest before the measure pass runs, and a wrapping editor reaches
         // its re-wrap through that same pass. Clearing here would empty the

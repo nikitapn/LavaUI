@@ -126,9 +126,17 @@ final class EditorSession {
         {
             return c.lines
         }
-        // Over contiguous storage where there is any: `reduce` on `String.UTF8View`
-        // goes through the view's iterator a byte at a time, and on a buffer
-        // this size that is an order of magnitude off a straight scan.
+        // The mounted editor has counted these already, for its gutter. Its
+        // answer only counts if it is looking at *this* buffer: during a tab
+        // switch it still holds the outgoing one for a frame.
+        if let metrics = controller.metrics(), metrics.bytes == bytes {
+            lineCountCache = (doc.id, bytes, revision, metrics.lines)
+            return metrics.lines
+        }
+        // Otherwise count them here, over contiguous storage where there is
+        // any: `reduce` on `String.UTF8View` goes through the view's iterator
+        // a byte at a time, and on a buffer this size that is an order of
+        // magnitude off a straight scan.
         let lines: Int
         if bytes == 0 {
             lines = 1
