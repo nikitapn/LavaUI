@@ -92,6 +92,23 @@ public protocol FrameSink: AnyObject {
 
     /// Publishes what was written.
     func commit(_ written: FrameCapacity)
+
+    /// Frames handed over that the consumer has not taken yet.
+    ///
+    /// Back-pressure, and the producer's half of a frame-callback contract:
+    /// a non-zero answer means the last frame has not been picked up, so
+    /// building another one is work nobody asked for. Zero for a sink whose
+    /// consumer is in this process and takes every frame synchronously.
+    ///
+    /// Advisory, never a lock. The signal that clears it can be lost, so a
+    /// caller that waits on this has to give up after a deadline — see
+    /// `DrawArena::framesInFlight`.
+    var framesInFlight: Int { get }
+}
+
+extension FrameSink {
+    /// Nothing is in flight for a sink that has no other process in the loop.
+    public var framesInFlight: Int { 0 }
 }
 
 // ─── In-process ──────────────────────────────────────────────────────────────
@@ -185,6 +202,8 @@ public final class ArenaFrameSink: FrameSink {
         self.onPublish = onPublish
         guard arena.create(std.string(id), capacity.arenaCapacity) else { return nil }
     }
+
+    public var framesInFlight: Int { Int(arena.framesInFlight()) }
 
     /// Name the renderer attaches by, and what the arena has grown to — both
     /// only for logging and tests.

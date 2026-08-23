@@ -220,6 +220,20 @@ class DrawArena {
   /// only once there is a newer frame to point at.
   bool acquireFrame(canvas::DrawList &out);
 
+  /// Frames this producer has published that no consumer has taken yet.
+  ///
+  /// Zero on the consumer side, and zero before anything is published. This is
+  /// the back-pressure signal a producer needs to pace itself: without it a
+  /// client that re-dirties its own frame publishes as fast as it can build a
+  /// draw list, and the compositor is obliged to keep up. Triple buffering
+  /// bounds the *memory* that costs, not the CPU.
+  ///
+  /// A producer should treat a non-zero answer as "wait", but never
+  /// indefinitely — the wake that would clear it can be lost (`Present` is
+  /// unreliable by design), and a producer that blocks forever on a dropped
+  /// datagram is a frozen window. Pair it with a deadline.
+  uint64_t framesInFlight() const;
+
   /// Releases the acquired slot back to the producer. Safe to call without a
   /// matching `acquireFrame`.
   void releaseFrame();

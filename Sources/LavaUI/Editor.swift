@@ -322,6 +322,14 @@ public final class Editor: @unchecked Sendable {
         frameSinks[window] = sink
     }
 
+    /// Frames published for `window` that its consumer has not taken yet.
+    ///
+    /// Zero unless this window publishes to another process. See
+    /// `FrameSink.framesInFlight` — advisory back-pressure, not a lock.
+    public func framesInFlight(window: WindowID = .main) -> Int {
+        frameSinks[window]?.framesInFlight ?? 0
+    }
+
     /// Install face for draw-list text (must match UIFont used for measure).
     @discardableResult
     public func loadFont(path: String, pixelSize: Float) -> Bool {

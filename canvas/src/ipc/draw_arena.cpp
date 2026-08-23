@@ -74,6 +74,23 @@ struct ArenaHeader {
   /// Written before `published`, read after — the release/acquire pair on
   /// `published` is what orders them.
   alignas(64) uint32_t counts[DrawArena::kSlots][5];
+
+  /// Highest sequence the consumer has taken. The frame-callback half of this
+  /// protocol: `published` is the producer saying "here is one", this is the
+  /// consumer saying "I have it", and the difference is how far the producer
+  /// has run ahead.
+  ///
+  /// Deliberately the last field, and deliberately *not* a version bump. Every
+  /// offset above is unchanged, the shared mapping is zero-filled, and the
+  /// header sits inside a page the payload starts after — so a build without
+  /// this field interoperates with one that has it. Old consumer, new
+  /// producer: nobody ever stores, the producer reads 0, sees itself
+  /// permanently ahead, and falls back to its deadline. New consumer, old
+  /// producer: the store lands in padding the producer never reads. Both
+  /// degrade to the behaviour before this existed, which is the point —
+  /// bumping the version would instead make an unpaired compositor refuse the
+  /// arena outright, and a throttle is not worth a black window.
+  alignas(64) std::atomic<uint64_t> consumedSeq;
 };
 
 constexpr uint32_t kNoSlot = 0xffffffffu;
@@ -343,6 +360,7 @@ bool DrawArena::Impl::mapNew(const std::string &name, ArenaCapacity cap,
   h->capGradients       = cap.gradients;
   h->payloadBase        = payloadBase;
   h->slotStride         = stride;
+  h->consumedSeq.store(0, std::memory_order_relaxed);
   h->supersededBy.store(0, std::memory_order_relaxed);
   h->consumerLeft.store(0, std::memory_order_relaxed);
   h->published.store(0, std::memory_order_relaxed);
@@ -679,6 +697,13 @@ bool DrawArena::acquireFrame(canvas::DrawList &out)
   // window resize has to repaint, and the producer may have nothing new to
   // say about it.
   h->acquiredSlot.store(slot, std::memory_order_release);
+  // Tells the producer this frame reached a consumer, which is what lets it
+  // pace itself instead of publishing as fast as it can turn a list over.
+  // Stored on acquire rather than after the frame is drawn: acquiring is the
+  // point the slot stops being the producer's problem, and letting it prepare
+  // the next frame while this one renders is exactly the one frame of
+  // pipelining that keeps the producer off the critical path.
+  h->consumedSeq.store(seq, std::memory_order_release);
   impl_->heldSlot         = slot;
   impl_->lastSeenSequence = seq;
 
@@ -713,6 +738,20 @@ bool DrawArena::acquireFrame(canvas::DrawList &out)
 }
 
 void DrawArena::releaseFrame() { impl_->releaseHeld(); }
+
+uint64_t DrawArena::framesInFlight() const
+{
+  if (!impl_->isProducer || !impl_->current.base) return 0;
+  if (impl_->nextSequence == 0) return 0;
+  const uint64_t published = impl_->nextSequence - 1;
+  const uint64_t consumed =
+    impl_->current.header()->consumedSeq.load(std::memory_order_acquire);
+  // The consumer can be *ahead* across a growth: sequences continue but a
+  // fresh producer mapping restarts `nextSequence` from where it was, and a
+  // torn read is not worth guarding against with a signed subtraction that
+  // could underflow into billions.
+  return consumed >= published ? 0 : published - consumed;
+}
 
 bool DrawArena::isOpen() const { return impl_->current.base != nullptr; }
 

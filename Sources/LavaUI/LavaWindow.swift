@@ -55,6 +55,30 @@ public final class LavaWindow {
     /// Forces a full `.body` pass on the next frame regardless of what
     /// invalidation says — the first frame, and nothing else so far.
     private var dirty = true
+    /// Work consumed while waiting for the consumer to take the last frame.
+    ///
+    /// Held here rather than left raised on the scope: the run loop parks for
+    /// zero time whenever `ViewInvalidation.isDirty`, so leaving the level up
+    /// would turn this wait into a spin — the exact failure the throttle
+    /// exists to prevent.
+    private var deferredWork: InvalidationLevel = .none
+    /// When the current wait for the consumer began, or nil when not waiting.
+    private var publishStallSince: Double?
+
+    /// Longest a frame waits for its consumer before being published anyway.
+    ///
+    /// There has to be one. `Present` is unreliable by design, so the wake
+    /// that would clear the stall can be dropped, and a producer that waits
+    /// forever on a lost datagram is a window that never paints again. Six
+    /// frames at 60Hz: long enough that it is never reached by a compositor
+    /// that is merely busy, short enough to be invisible if it is.
+    private static let publishStallDeadline: Double = 0.1
+    /// How often to re-check while waiting.
+    ///
+    /// A poll, because the consumer clears the stall with a silent store into
+    /// shared memory — there is no wakeup to wait on. What it costs is an
+    /// atomic load and a return, against the draw-list rebuild it replaces.
+    private static let publishPollInterval: Double = 1.0 / 240.0
     private var lastLoggedLayout: (w: Float, h: Float) = (0, 0)
     /// Previous iteration's visibility, so the loop can tell a minimize/restore
     /// edge from a steady state and redraw exactly once.
@@ -217,8 +241,26 @@ public final class LavaWindow {
         WindowScope.withCurrent(scope) {
             let level = ViewInvalidation.consume()
             if dirty { ViewInvalidation.markNeedsBody() }
-            let work = dirty ? InvalidationLevel.body : level
+            var work = dirty ? InvalidationLevel.body : level
             dirty = false
+            work = max(work, deferredWork)
+            deferredWork = .none
+
+            // Back-pressure. A frame that has been published and not yet taken
+            // means the consumer is still busy with the last one, so building
+            // another is work nobody can use — and a producer that keeps
+            // building them anyway runs as fast as it can emit a draw list,
+            // with the consumer obliged to keep up. That is not hypothetical:
+            // one widget re-dirtying its own frame from inside paint pinned a
+            // client at ~1000 frames a second and took the compositor with it.
+            //
+            // The level is taken back rather than left standing, so the run
+            // loop can park. `coarseBodyDirty` is a different flag and is not
+            // disturbed, so a `.body` resumed here still rebuilds properly.
+            if work > .none, stalledOnConsumer() {
+                deferredWork = max(work, ViewInvalidation.consume())
+                return
+            }
 
             // A frame the renderer wants for itself: a tint still fading, a
             // scroll still easing, or one parked at the edge of the content
@@ -247,6 +289,27 @@ public final class LavaWindow {
             // screen — and evicts them straight into a reload.
             ImageStore.endFrame(into: editor)
         }
+    }
+
+    /// Whether the frame already published is still waiting to be picked up.
+    ///
+    /// Advisory. Zero in a windowed app, where the renderer is in this process
+    /// and takes every frame synchronously, so this costs those nothing and
+    /// changes nothing about them.
+    private func stalledOnConsumer() -> Bool {
+        guard editor.framesInFlight(window: id) > 0 else {
+            publishStallSince = nil
+            return false
+        }
+        let now = FrameScheduler.now()
+        let began = publishStallSince ?? now
+        publishStallSince = began
+        guard now - began < Self.publishStallDeadline else {
+            publishStallSince = nil
+            return false
+        }
+        FrameScheduler.requestWake(in: Self.publishPollInterval)
+        return true
     }
 
     /// Resolves hover for a pointer position that was injected rather than

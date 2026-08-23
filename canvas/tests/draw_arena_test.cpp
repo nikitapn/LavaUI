@@ -248,6 +248,46 @@ void lateConsumerJoinsAtTheNewestGeneration()
   CHECK(list.commands[0].kind == 50);
 }
 
+/// Back-pressure: the producer can see whether its last frame was taken.
+///
+/// This is the whole of the frame-callback contract — without it a producer
+/// has no way to tell "the consumer is keeping up" from "the consumer has not
+/// looked in a hundred frames", so a client that re-dirties its own frame
+/// publishes as fast as it can build a draw list.
+void producerSeesWhetherItsFrameWasTaken()
+{
+  const std::string id = uniqueId("inflight");
+  DrawArena producer;
+  CHECK(producer.create(id, kTiny));
+  // Nothing published yet is not a frame in flight.
+  CHECK(producer.framesInFlight() == 0);
+
+  DrawArena consumer;
+  CHECK(consumer.open(id));
+  CHECK(consumer.framesInFlight() == 0);  // consumer side is always zero
+
+  ArenaFrame f = producer.beginFrame();
+  publish(producer, f, 4, 7);
+  CHECK(producer.framesInFlight() == 1);
+
+  // Still one: publishing again without the consumer looking does not
+  // discharge anything, which is exactly the runaway this detects.
+  ArenaFrame f2 = producer.beginFrame();
+  publish(producer, f2, 4, 7);
+  CHECK(producer.framesInFlight() == 2);
+
+  DrawList list;
+  CHECK(consumer.acquireFrame(list));
+  // The consumer takes the newest, so both are discharged at once — it is a
+  // sequence, not a queue.
+  CHECK(producer.framesInFlight() == 0);
+
+  // And a fresh publish is in flight again.
+  ArenaFrame f3 = producer.beginFrame();
+  publish(producer, f3, 4, 7);
+  CHECK(producer.framesInFlight() == 1);
+}
+
 } // namespace
 
 int main()
@@ -258,6 +298,7 @@ int main()
   countsAreClampedToCapacity();
   secondProducerIsRefused();
   lateConsumerJoinsAtTheNewestGeneration();
+  producerSeesWhetherItsFrameWasTaken();
 
   if (failures != 0) {
     std::fprintf(stderr, "%d check(s) failed\n", failures);
