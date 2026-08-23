@@ -155,3 +155,83 @@ final class ReplaceTests: XCTestCase {
         XCTAssertEqual(s.text, "cat cat")
     }
 }
+
+/// The offset↔index cache behind `offset(of:)` / `index(atOffset:)`.
+///
+/// It is a cache, so the only thing worth testing is that it never changes an
+/// answer — including across the edits that are supposed to invalidate it.
+final class OffsetAnchorTests: XCTestCase {
+    private static let text = (1...200).map { "line \($0) of the buffer" }
+        .joined(separator: "\n")
+
+    /// Every offset, in an order that makes the anchor useful and then
+    /// useless: forwards, backwards, and jumping about.
+    func testOffsetsRoundTripInEveryDirection() {
+        var state = TextEditingState(Self.text)
+        let count = Self.text.count
+        let probes = Array(0...count) + Array(0...count).reversed()
+            + stride(from: 0, through: count, by: 37).map { $0 }
+        for offset in probes {
+            let index = state.index(atOffset: offset)
+            XCTAssertEqual(state.offset(of: index), offset)
+        }
+    }
+
+    /// An edit moves every offset after it. The anchor is keyed on `revision`
+    /// precisely so it cannot answer for the buffer it was taken from.
+    func testAnEditInvalidatesTheAnchor() {
+        var state = TextEditingState("hello world")
+        state.setCursor(state.index(atOffset: 11))
+        XCTAssertEqual(state.offset(of: state.focus), 11)
+
+        state.setCursor(state.index(atOffset: 0))
+        state.insert("XXXX")
+        XCTAssertEqual(state.text, "XXXXhello world")
+        // Warm from before the insert would say 11.
+        XCTAssertEqual(state.offset(of: state.text.endIndex), 15)
+        XCTAssertEqual(state.index(atOffset: 4), state.text.index(state.text.startIndex, offsetBy: 4))
+    }
+
+    func testUndoInvalidatesTheAnchorToo() {
+        var state = TextEditingState("abc")
+        state.setCursor(state.text.endIndex)
+        state.insert("defgh")
+        XCTAssertEqual(state.offset(of: state.text.endIndex), 8)
+        XCTAssertTrue(state.undo())
+        XCTAssertEqual(state.offset(of: state.text.endIndex), 3)
+    }
+
+    /// Copies share the cache. A shared `revision` means identical text, so a
+    /// hint taken from one is valid for the other — and diverging must not
+    /// make either of them wrong.
+    func testCopiesThatDivergeStayCorrect() {
+        var a = TextEditingState(Self.text)
+        var b = a
+        _ = a.offset(of: a.index(atOffset: 500))
+        b.setCursor(b.index(atOffset: 0))
+        b.insert("!")
+        XCTAssertEqual(b.offset(of: b.index(atOffset: 501)), 501)
+        XCTAssertEqual(a.offset(of: a.index(atOffset: 500)), 500)
+        XCTAssertEqual(a.text.count + 1, b.text.count)
+    }
+
+    /// Vertical movement is what the anchor exists for; it must land on the
+    /// same rows it always did.
+    func testVerticalMovementIsUnchanged() {
+        var state = TextEditingState(Self.text)
+        state.setVisualRows(VisualLayout.logicalRows(Self.text))
+        state.setCursor(state.index(atOffset: 0))
+        for expected in 1..<50 {
+            state.moveDown()
+            XCTAssertEqual(
+                state.layout.rowIndex(ofOffset: state.offset(of: state.focus)), expected
+            )
+        }
+        for expected in (0..<49).reversed() {
+            state.moveUp()
+            XCTAssertEqual(
+                state.layout.rowIndex(ofOffset: state.offset(of: state.focus)), expected
+            )
+        }
+    }
+}

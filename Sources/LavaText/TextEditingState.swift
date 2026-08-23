@@ -90,10 +90,51 @@ public struct TextEditingState: Equatable {
         return .logical(text)
     }
 
+    /// Last offset↔index pair resolved — see `offset(of:)`.
+    ///
+    /// A **class**, so the two conversions stay non-mutating. That is what
+    /// makes this invisible to every caller: they are `func`s on a value type
+    /// held in a dozen places, and making them `mutating` would both break
+    /// those callers and force each one to hoist its arguments and results
+    /// through locals to avoid overlapping exclusive access to `self`.
+    ///
+    /// Shared by copies of the state, which is safe rather than merely
+    /// tolerable: `revision` is process-unique and changes on every edit, so a
+    /// shared revision means identical text, and a hint taken from one copy is
+    /// exactly as valid for the other. Two copies that have since diverged
+    /// simply take turns missing.
+    private final class IndexAnchor {
+        private(set) var revision: UInt64 = 0
+        private(set) var offset = 0
+        private(set) var index: String.Index
+
+        init(_ index: String.Index) { self.index = index }
+
+        func store(revision: UInt64, offset: Int, index: String.Index) {
+            self.revision = revision
+            self.offset = offset
+            self.index = index
+        }
+    }
+
+    /// Excluded from equality on purpose: it is a cache, so resolving a caret
+    /// offset must not make two equal states unequal. The synthesized `==`
+    /// would compare it by *identity*, which is exactly wrong — two states
+    /// built separately from the same string would differ by their caches.
+    private let indexAnchor: IndexAnchor
+
+    public static func == (lhs: TextEditingState, rhs: TextEditingState) -> Bool {
+        lhs.text == rhs.text && lhs.anchor == rhs.anchor && lhs.focus == rhs.focus
+            && lhs.revision == rhs.revision && lhs.undoStack == rhs.undoStack
+            && lhs.visualRows == rhs.visualRows && lhs.desiredColumn == rhs.desiredColumn
+            && lhs.affinity == rhs.affinity
+    }
+
     public init(_ text: String = "") {
         self.text = text
         self.anchor = text.startIndex
         self.focus = text.startIndex
+        self.indexAnchor = IndexAnchor(text.startIndex)
     }
 
     // MARK: Selection
@@ -424,8 +465,34 @@ public struct TextEditingState: Equatable {
 
     /// Character offset of an index. Characters, not bytes, so the value
     /// stays meaningful across graphemes of differing byte length.
+    /// Character offset of `index`, measured from the last pair resolved.
+    ///
+    /// Both conversions here walk graphemes, so unaided they cost the
+    /// *offset*, not the distance moved. Every vertical move makes one of
+    /// each, so a caret near the end of a large file paid for the whole file
+    /// to move one row — and Page Down, being a row move repeated a screenful
+    /// of times, paid it thirty-odd times over. On a 4.7 MB buffer: 0.68ms per
+    /// page at the top, 187ms twenty-seven thousand rows in, rising linearly
+    /// and without bound. That is the reported symptom exactly — "the farther
+    /// from the beginning, the laggier".
+    ///
+    /// Anchored, the cost is the distance travelled: a row for an arrow key, a
+    /// screenful for a page, and flat with depth. `LeafNode` already does this
+    /// for the draw and drag paths; here it is where the caret itself lives,
+    /// so every caller gets it rather than the two that remembered to.
     public func offset(of index: String.Index) -> Int {
-        text.distance(from: text.startIndex, to: index)
+        let anchor = indexAnchor
+        if anchor.revision == revision {
+            if anchor.index == index { return anchor.offset }
+            // Signed: the caret moves both ways, and `distance` walks
+            // backwards from a later index perfectly well.
+            let resolved = anchor.offset + text.distance(from: anchor.index, to: index)
+            anchor.store(revision: revision, offset: resolved, index: index)
+            return resolved
+        }
+        let resolved = text.distance(from: text.startIndex, to: index)
+        anchor.store(revision: revision, offset: resolved, index: index)
+        return resolved
     }
 
     /// Clamped with `limitedBy:` rather than against `text.count`, because
@@ -436,8 +503,20 @@ public struct TextEditingState: Equatable {
     /// caret. `limitedBy:` costs O(min(offset, length)) and stops at the end.
     public func index(atOffset offset: Int) -> String.Index {
         guard offset > 0 else { return text.startIndex }
-        return text.index(text.startIndex, offsetBy: offset, limitedBy: text.endIndex)
+        let anchor = indexAnchor
+        if anchor.revision == revision {
+            let delta = offset - anchor.offset
+            if delta == 0 { return anchor.index }
+            let limit = delta > 0 ? text.endIndex : text.startIndex
+            if let moved = text.index(anchor.index, offsetBy: delta, limitedBy: limit) {
+                anchor.store(revision: revision, offset: offset, index: moved)
+                return moved
+            }
+        }
+        let resolved = text.index(text.startIndex, offsetBy: offset, limitedBy: text.endIndex)
             ?? text.endIndex
+        anchor.store(revision: revision, offset: offset, index: resolved)
+        return resolved
     }
 
     private func clamp(_ index: String.Index) -> String.Index {
