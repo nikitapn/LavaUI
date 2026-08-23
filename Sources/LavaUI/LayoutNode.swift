@@ -201,6 +201,22 @@ class YogaBoxNode: AnyViewNode {
     /// toolbar that also drags the window is still a button — because
     /// `hitWalk` reaches them first.
     var onBoxPress: ((_ localX: Float, _ localY: Float, _ mods: Int32) -> Void)?
+    /// Chrome this box paints *over* its own content, and which therefore has
+    /// to be offered the pointer before the content is.
+    ///
+    /// `hitWalk` goes children-first, which is right for everything laid out:
+    /// what is nested is on top. A scrollbar is not nested — it is painted
+    /// after the subtree, on the edge of the box, over whatever happens to be
+    /// there — so children-first would hand a press on the thumb to the row
+    /// underneath it.
+    ///
+    /// Returns the action to run, or nil to decline and let the walk carry on
+    /// into the children. An action rather than a `Bool` because a hit test
+    /// must not have side effects: `hitTestClick` is asked on paths that only
+    /// want to know whether *anything* would take the click.
+    var onOverlayPress: ((
+        _ localX: Float, _ localY: Float, _ originX: Float, _ originY: Float
+    ) -> (() -> Void)?)?
 
     init(label: String) {
         self.id = .generate()
@@ -293,6 +309,10 @@ class YogaBoxNode: AnyViewNode {
     }
 
     func collectChildFrames(originX: Float, originY: Float, into frames: inout [LayoutFrame]) {}
+
+    /// Box size from the last layout pass. Zero before there has been one.
+    var boxWidth: Float { YGNodeLayoutGetWidth(yogaStorage) }
+    var boxHeight: Float { YGNodeLayoutGetHeight(yogaStorage) }
 }
 
 // MARK: - Leaf (Text / Spacer / DiagramHost / Empty)
@@ -735,10 +755,37 @@ final class LeafNode: YogaBoxNode {
     /// Box height from the last layout, needed to clamp scrolling and to
     /// decide how many rows fit.
     var viewportHeight: Float = 0
+    /// Box width from the same pass. The gutter and the insets come out of it
+    /// to give `textViewportWidth`; this is the whole box, which is what a
+    /// scrollbar on the right edge is measured from.
+    var viewportWidth: Float = 0
 
     /// Rows that fit in the viewport, at least one.
     func visibleRowCount(lineHeight: Float) -> Int {
         max(1, Int((viewportHeight - textInset * 2) / lineHeight))
+    }
+
+    /// Vertical scrollbar geometry, or nil when the content fits.
+    ///
+    /// On the leaf rather than in the draw list because the drag needs the
+    /// same numbers the paint does, and a drag that computed its own would be
+    /// a second definition of where the thumb is.
+    func verticalScrollbar(font: UIFont) -> Scrollbar.Metrics? {
+        let content = Float(editing.layout.count) * font.lineHeight + textInset * 2
+        return Scrollbar.metrics(
+            track: viewportHeight, content: content,
+            offset: scrollY, maxOffset: maxScrollY(lineHeight: font.lineHeight)
+        )
+    }
+
+    /// Horizontal scrollbar geometry. Always nil while wrapping, where there
+    /// is nothing to scroll to — see `maxScrollX`.
+    func horizontalScrollbar(font: UIFont) -> Scrollbar.Metrics? {
+        let maximum = maxScrollX(font: font)
+        return Scrollbar.metrics(
+            track: textViewportWidth, content: textViewportWidth + maximum,
+            offset: scrollX, maxOffset: maximum
+        )
     }
 
     /// Largest legal scroll offset for the current content.
@@ -2175,6 +2222,13 @@ public final class LayoutHost {
                x < nx || x >= nx + nw || y < ny || y >= ny + nh
             {
                 return nil
+            }
+            // Before the children, and only this: see `onOverlayPress`.
+            if let overlay = box.onOverlayPress,
+               x >= nx, x < nx + nw, y >= ny, y < ny + nh,
+               let action = overlay(x - nx, y - ny, nx, ny)
+            {
+                return action
             }
             // Children front-to-back.
             for child in node.childNodes.reversed() {

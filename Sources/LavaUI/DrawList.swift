@@ -782,11 +782,19 @@ public final class DrawList {
     /// Asks the enclosing retained node to scroll toward a position. The
     /// renderer applies each serial once, so later wheel input is not undone
     /// merely because the same draw list is published again.
-    func scrollNode(to offset: Float, serial: UInt32) {
+    /// Asks the renderer to put an open scroll node at `offset` along `axis`.
+    ///
+    /// The axis is not decoration: the renderer takes a target for *both*
+    /// components of this command, and filling only `y` told it that a
+    /// horizontal container should go to zero on the axis it actually scrolls
+    /// — so every programmatic scroll of one was a snap back to the start.
+    /// A scroll node has one axis, so the other component is genuinely zero.
+    func scrollNode(to offset: Float, axis: ScrollAxis, serial: UInt32) {
         guard serial != 0 else { return }
         var cmd = canvas.DrawCommand()
         cmd.kind = DrawKind.nodeScrollTo.rawValue
-        cmd.y = max(0, offset)
+        cmd.x = axis == .horizontal ? max(0, offset) : 0
+        cmd.y = axis == .vertical ? max(0, offset) : 0
         cmd.param = serial
         appendCommand(cmd)
     }
@@ -1187,7 +1195,9 @@ public final class DrawList {
                     : [.clip, .scrollX, .absoluteCoordinates]
                 beginNode(scroll.id, x: x, y: y, w: w, h: h, flags: flags)
                 if let request = scroll.revealRequest {
-                    scrollNode(to: request.offset, serial: request.serial)
+                    scrollNode(
+                        to: request.offset, axis: scroll.axis, serial: request.serial
+                    )
                 }
                 cullStack.append(viewCull)
                 // The renderer will subtract this from everything below, so
@@ -1984,6 +1994,7 @@ extension DrawList {
         // Yoga may have shrunk the box below the measured height; the clamp
         // and the row window must use what was granted, not what was asked.
         leaf.viewportHeight = h
+        leaf.viewportWidth = w
         leaf.textViewportWidth = max(0, w - leaf.gutterWidth - inset * 2)
 
         // A scroll offset outlives what justified it. The buffer can be
@@ -2077,7 +2088,6 @@ extension DrawList {
             x: x + leaf.gutterWidth, y: y,
             w: max(0, w - leaf.gutterWidth), h: h
         )
-        defer { popClip() }
 
         // A running cursor, advanced by *relative* offset row to row, instead
         // of `state.index(atOffset:)` per row: that walks from the start of
@@ -2222,6 +2232,41 @@ extension DrawList {
                 )
             }
         }
+        popClip()
+
+        // Pass 3 — the scrollbars, over everything and clipped by nothing:
+        // they describe the content, so being scrolled or painted over by it
+        // would be a contradiction.
+        emitEditorScrollbars(leaf, font: font, x: x, y: y, w: w, h: h)
+    }
+
+    /// The editor's own bars.
+    ///
+    /// `ScrollView` gets its indicator from `emitScrollIndicator`, and an
+    /// editor is not a `ScrollView` — it scrolls by moving its own offset and
+    /// re-emitting rather than by a renderer-owned transform, so nothing it
+    /// inherits draws one. The geometry is shared even though the mechanism
+    /// is not: see `Scrollbar`.
+    private func emitEditorScrollbars(
+        _ leaf: LeafNode, font: UIFont, x: Float, y: Float, w: Float, h: Float
+    ) {
+        if let m = leaf.verticalScrollbar(font: font) {
+            scrollbarThumb(
+                axis: .vertical, metrics: m, theme: leaf.theme,
+                active: ScrollbarDrag.isDragging(leaf.id, axis: .vertical),
+                x: x, y: y, w: w, h: h
+            )
+        }
+        if let m = leaf.horizontalScrollbar(font: font) {
+            scrollbarThumb(
+                axis: .horizontal, metrics: m, theme: leaf.theme,
+                active: ScrollbarDrag.isDragging(leaf.id, axis: .horizontal),
+                // The gutter does not scroll, so the horizontal track starts
+                // where the text does.
+                x: x + leaf.gutterWidth, y: y,
+                w: max(0, w - leaf.gutterWidth), h: h
+            )
+        }
     }
 
     /// Underline beneath a decorated span. `wavy` has no dedicated curve
@@ -2355,31 +2400,39 @@ extension DrawList {
     fileprivate func emitScrollIndicator(
         _ scroll: ScrollNode, x: Float, y: Float, w: Float, h: Float
     ) {
-        let thickness: Float = 4
-        let track = scroll.viewportLength
-        guard track > 0, scroll.contentLength > 0 else { return }
-
-        let ratio = min(1, track / scroll.contentLength)
-        let thumb = max(24, track * ratio)
-        let travel = track - thumb
-        let progress = scroll.maxOffset > 0 ? scroll.scrollOffset / scroll.maxOffset : 0
-        let along = travel * min(1, max(0, progress))
-
-        let color = Color(
-            r: scroll.theme.textSecondary.r,
-            g: scroll.theme.textSecondary.g,
-            b: scroll.theme.textSecondary.b,
-            a: 0.55
+        guard let m = Scrollbar.metrics(
+            track: scroll.viewportLength, content: scroll.contentLength,
+            offset: scroll.scrollOffset, maxOffset: scroll.maxOffset
+        ) else { return }
+        scrollbarThumb(
+            axis: scroll.axis, metrics: m, theme: scroll.theme,
+            active: ScrollbarDrag.isDragging(scroll.id),
+            x: x, y: y, w: w, h: h
         )
-        if scroll.axis == .vertical {
+    }
+
+    /// The thumb itself, in the box's own frame.
+    ///
+    /// Drawn brighter while it is being dragged. That is the only feedback a
+    /// bar this thin can give that the pointer has hold of it — without it a
+    /// drag that starts a pixel off the track looks identical to one that
+    /// took, right up until the content fails to move.
+    func scrollbarThumb(
+        axis: ScrollAxis, metrics m: Scrollbar.Metrics, theme: Theme,
+        active: Bool, x: Float, y: Float, w: Float, h: Float
+    ) {
+        let base = theme.textSecondary
+        let color = Color(r: base.r, g: base.g, b: base.b, a: active ? 0.85 : 0.55)
+        let t = Scrollbar.thickness
+        if axis == .vertical {
             roundedRect(
-                x: x + w - thickness - 2, y: y + along,
-                w: thickness, h: thumb, color: color, radius: thickness / 2
+                x: x + w - t - Scrollbar.margin, y: y + m.along,
+                w: t, h: m.thumb, color: color, radius: t / 2
             )
         } else {
             roundedRect(
-                x: x + along, y: y + h - thickness - 2,
-                w: thumb, h: thickness, color: color, radius: thickness / 2
+                x: x + m.along, y: y + h - t - Scrollbar.margin,
+                w: m.thumb, h: t, color: color, radius: t / 2
             )
         }
     }

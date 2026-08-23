@@ -116,6 +116,14 @@ final class ScrollNode: YogaBoxNode {
 
     func registerScrolling() {
         isScrollable = true
+        // The bar is painted after the subtree and sits on the box's edge, so
+        // the pointer has to be offered it before the content — see
+        // `YogaBoxNode.onOverlayPress`.
+        onOverlayPress = { [weak self] localX, localY, originX, originY in
+            self?.scrollbarPress(
+                localX: localX, localY: localY, originX: originX, originY: originY
+            )
+        }
     }
 
     /// Adopts the renderer-owned position. This is read-back, not a second
@@ -139,6 +147,65 @@ final class ScrollNode: YogaBoxNode {
     }
 
     var maxOffset: Float { max(0, contentLength - viewportLength) }
+
+    /// Asks the renderer to put the viewport at `offset`.
+    ///
+    /// Not an assignment to `scrollOffset`: the offset is renderer-owned —
+    /// the subtree transform lives there, and this side only learns where it
+    /// ended up, through `adoptRendererOffset`. Writing the field directly
+    /// would move the indicator and leave the content where it was.
+    func requestOffset(_ offset: Float) {
+        let target = clamped(offset)
+        guard abs(target - scrollOffset) > 0.01 else { return }
+        let serial = nextRevealSerial
+        nextRevealSerial &+= 1
+        if nextRevealSerial == 0 { nextRevealSerial = 1 }
+        revealRequest = (target, serial)
+        ViewInvalidation.markNeedsRedraw()
+    }
+
+    /// Takes a press that landed on this container's scrollbar, or declines.
+    ///
+    /// Same feel as the editor's, from the same geometry: grabbing the thumb
+    /// keeps the grab offset so the content does not jump, and pressing bare
+    /// track jumps there and drags from the middle. See `Scrollbar`.
+    func scrollbarPress(
+        localX: Float, localY: Float, originX: Float, originY: Float
+    ) -> (() -> Void)? {
+        guard showsIndicator, maxOffset > 0 else { return nil }
+        let onBar = axis == .vertical
+            ? Scrollbar.hitsVertical(localX: localX, boxWidth: boxWidth)
+            : Scrollbar.hitsHorizontal(localY: localY, boxHeight: boxHeight)
+        guard onBar, let m = Scrollbar.metrics(
+            track: viewportLength, content: contentLength,
+            offset: scrollOffset, maxOffset: maxOffset
+        ) else { return nil }
+
+        let along = axis == .vertical ? localY : localX
+        let grab = along >= m.along && along < m.along + m.thumb
+            ? along - m.along : m.thumb / 2
+        let origin = axis == .vertical ? originY : originX
+        let maximum = maxOffset
+        return { [weak self] in
+            guard let self else { return }
+            ScrollbarDrag.begin(self.id, axis: self.axis)
+            let apply = { [weak self] (window: Float) in
+                guard let self else { return }
+                self.requestOffset(
+                    Scrollbar.offset(
+                        forAlong: window - origin - grab,
+                        travel: m.travel, maxOffset: maximum
+                    )
+                )
+            }
+            apply(origin + along)
+            PointerCapture.capture(
+                self.id,
+                onMove: { wx, wy in apply(self.axis == .vertical ? wy : wx) },
+                onUp: { ScrollbarDrag.end() }
+            )
+        }
+    }
 
     func reveal(top: Float, bottom: Float, viewport: Float) {
         guard viewport > 0 else { return }

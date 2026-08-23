@@ -468,6 +468,15 @@ public struct EditorView: PrimitiveView {
 
         leaf.onClickLocal = { [weak leaf] localX, localY, originX, originY, _, _ in
             guard let leaf else { return }
+            // Before anything else: the bars are painted over the text, so a
+            // press on one has to be read that way too. Without this, grabbing
+            // the thumb would put the caret behind it.
+            if leaf.beginScrollbarDrag(
+                localX: localX, localY: localY, originX: originX, originY: originY
+            ) {
+                ViewInvalidation.markNeedsRedraw()
+                return
+            }
             leaf.focusSelf(binding: binding, onSubmit: nil)
             // Clicks in the gutter select the whole line, as they do in every
             // editor with one — unless the row is decorated and the app
