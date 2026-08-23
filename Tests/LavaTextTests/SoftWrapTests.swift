@@ -64,10 +64,13 @@ final class SoftWrapTests: XCTestCase {
         XCTAssertEqual(l.count, 3, "a trailing newline leaves an empty last row")
     }
 
-    /// `logicalRows` has a byte-scan fast path that only applies when every
-    /// byte is ASCII and no CR is present. It has to agree with the
-    /// grapheme walk exactly, including on the buffers that disqualify it —
-    /// a wrong row table means glyphs drawn from the wrong offsets.
+    /// `logicalRows` has a byte-scan fast path. It applies per *line* — an
+    /// ASCII line is counted by its byte count and any other line is decoded
+    /// and counted — and the whole buffer falls back to the grapheme walk
+    /// only for CR, which is the one thing that makes a line break stop being
+    /// one character. It has to agree with the walk exactly, including on the
+    /// buffers that disqualify it: a wrong row table means glyphs drawn from
+    /// the wrong offsets.
     func testLogicalRowsMatchGraphemeWalk() {
         func reference(_ text: String) -> [Range<Int>] {
             var rows: [Range<Int>] = []
@@ -95,6 +98,15 @@ final class SoftWrapTests: XCTestCase {
             "héllo\nwörld\n",
             "emoji 👩‍👩‍👧‍👦 here\nnext\n",
             "combining e\u{0301}\nnext",
+            // What a real log looks like: thousands of ASCII lines with a
+            // stray accented word somewhere in the middle. Every line but one
+            // takes the byte count; the odd one out is decoded on its own.
+            (1...50).map { $0 == 27 ? "ligne \($0) déjà vu" : "line \($0)" }
+                .joined(separator: "\n"),
+            // Non-ASCII at the very edges of a line, where a per-line count
+            // is easiest to get off by one.
+            "é\nabc\né",
+            "abcé\n👍\nz",
             // CRLF is one grapheme cluster, so byte offsets are wrong even
             // though every byte is ASCII.
             "a\r\nb\r\nc",

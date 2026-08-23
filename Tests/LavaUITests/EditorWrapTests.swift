@@ -172,13 +172,33 @@ final class EditorWrapTests: XCTestCase {
         _ = try settle(wraps: true)
 
         box.insert("x", at: box.startIndex)
-        let before = PerfCounters.textShapes
+        let before = PerfCounters.lineWraps
         _ = try settle(wraps: true)
-        let shaped = PerfCounters.textShapes - before
+        let shaped = PerfCounters.lineWraps - before
 
         XCTAssertLessThanOrEqual(
             shaped, 4,
             "one keystroke re-wrapped \(shaped) lines; only the edited one should shape"
+        )
+    }
+
+    /// Inserting a whole *line* shifts every line after it by one, so reuse
+    /// matched index-for-index finds nothing to reuse from there on and
+    /// re-shapes the rest of the file. Aligning the cache from both ends keeps
+    /// the cost at the edit, where it belongs.
+    func testInsertingALineReWrapsOnlyAroundTheInsertion() throws {
+        box = (0..<60).map { "\($0) " + String(repeating: "wrap ", count: 20) }
+            .joined(separator: "\n")
+        _ = try settle(wraps: true)
+
+        box.insert(contentsOf: "a brand new line\n", at: box.startIndex)
+        let before = PerfCounters.lineWraps
+        _ = try settle(wraps: true)
+        let wrapped = PerfCounters.lineWraps - before
+
+        XCTAssertLessThanOrEqual(
+            wrapped, 4,
+            "inserting one line re-wrapped \(wrapped) of them"
         )
     }
 
@@ -306,4 +326,102 @@ final class EditorWrapTests: XCTestCase {
         let again = try settle(wraps: false)
         XCTAssertEqual(again.editing.layout.count, 3)
     }
+
+    // MARK: What a keystroke is allowed to throw away
+
+    /// Rows for `text`, wrapped from nothing — the answer an incremental pass
+    /// has to match.
+    private func coldRows(_ text: String) throws -> [Range<Int>] {
+        let saved = box
+        defer { box = saved }
+        box = text
+        let fresh = LayoutHost()
+        let outer = host
+        host = fresh
+        defer { host = outer }
+        return try settle(wraps: true).editing.layout.rows
+    }
+
+    private func rowsAfterEditing(
+        _ edit: (LeafNode) -> Void, expecting text: String
+    ) throws -> [Range<Int>] {
+        let leaf = try settle(wraps: true)
+        leaf.focusSelf(binding: binding, onSubmit: nil)
+        edit(leaf)
+        XCTAssertEqual(box, text, "the edit did not produce the buffer under test")
+        return try settle(wraps: true).editing.layout.rows
+    }
+
+    /// The wrap cache is reused by matching lines against the previous pass.
+    /// Matching them *by index* is only right while the line count holds:
+    /// inserting a line shifts every line after it, and a positional check
+    /// then says they all changed. Reuse has to be aligned from both ends —
+    /// and, more importantly, the rows it produces have to be the rows a cold
+    /// wrap would have produced.
+    func testInsertingALineAheadOfAWrappedLineStillWrapsIt() throws {
+        let expected = "new\n" + Self.text
+        let rows = try rowsAfterEditing({ leaf in
+            leaf.editing.setCursor(leaf.editing.text.startIndex)
+            _ = FocusManager.handle(character: "n")
+            _ = FocusManager.handle(character: "e")
+            _ = FocusManager.handle(character: "w")
+            _ = FocusManager.handle(KeyEvent(key: KeyCode.enter, mods: 0))
+        }, expecting: expected)
+        XCTAssertEqual(rows, try coldRows(expected))
+    }
+
+    func testDeletingALineStillWrapsWhatIsLeft() throws {
+        var lines = Self.text.split(separator: "\n", omittingEmptySubsequences: false)
+        lines.remove(at: 1)
+        let expected = lines.joined(separator: "\n")
+        let rows = try rowsAfterEditing({ leaf in
+            let start = leaf.editing.text.firstIndex(of: "\n")!
+            let next = leaf.editing.text[leaf.editing.text.index(after: start)...]
+                .firstIndex(of: "\n")!
+            leaf.editing.setCursor(start)
+            leaf.editing.setCursor(next, extending: true)
+            _ = FocusManager.handle(KeyEvent(key: KeyCode.backspace, mods: 0))
+        }, expecting: expected)
+        XCTAssertEqual(rows, try coldRows(expected))
+    }
+
+    func testEditingInsideTheWrappedLineRebreaksIt() throws {
+        let expected = "X" + Self.text
+        let rows = try rowsAfterEditing({ leaf in
+            leaf.editing.setCursor(leaf.editing.text.startIndex)
+            _ = FocusManager.handle(character: "X")
+        }, expecting: expected)
+        XCTAssertEqual(rows, try coldRows(expected))
+    }
+
+    /// The other half: a key that only moved the caret must leave the wrap
+    /// marks alone. Clearing them was what made Page Down re-break the whole
+    /// file — 4.4 s a press on a 4 MB log, and paid again on every arrow key.
+    func testACaretMoveKeepsTheWrapCacheWarm() throws {
+        let leaf = try settle(wraps: true)
+        leaf.focusSelf(binding: binding, onSubmit: nil)
+        let rows = leaf.editing.layout.rows
+        let width = leaf.lastMeasuredWidth
+        for key in [KeyCode.down, KeyCode.right, KeyCode.pageDown, KeyCode.end] {
+            _ = FocusManager.handle(KeyEvent(key: key, mods: 0))
+            XCTAssertEqual(
+                leaf.lastWrappedText, leaf.editing.text,
+                "a caret move dropped the wrap mark"
+            )
+            XCTAssertEqual(leaf.lastMeasuredWidth, width, "a caret move dropped the width")
+            XCTAssertEqual(leaf.editing.layout.rows, rows, "rows moved without an edit")
+        }
+    }
+
+    /// And with wrapping off, the same key must not reseed the logical-row
+    /// table — the O(buffer) scan that cost 58 ms a press.
+    func testACaretMoveKeepsTheLogicalRowMarkWarm() throws {
+        let leaf = try settle(wraps: false)
+        leaf.focusSelf(binding: binding, onSubmit: nil)
+        for key in [KeyCode.down, KeyCode.pageDown] {
+            _ = FocusManager.handle(KeyEvent(key: key, mods: 0))
+            XCTAssertEqual(leaf.lastLogicalRowsText, leaf.editing.text)
+        }
+    }
 }
+

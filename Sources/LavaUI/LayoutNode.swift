@@ -492,6 +492,11 @@ final class LeafNode: YogaBoxNode {
     private var widestRowCache:
         (fontIdentity: String, text: String, wraps: Bool, width: Float)?
 
+    /// The candidate rows the cached width was measured from, as index and
+    /// character length interleaved — the second, cheaper key. See
+    /// `widestRowWidth`.
+    private var widestRowShape: [Int] = []
+
     /// How many of the longest-by-bytes rows get shaped for real.
     ///
     /// More than one because byte length is only a proxy: with a proportional
@@ -527,10 +532,35 @@ final class LeafNode: YogaBoxNode {
         let picks = Self.longestIndices(count: rows.count, limit: Self.widestRowCandidates) {
             rows[$0].count
         }
+        // Second key: which rows are the longest, and how long they are.
+        //
+        // The text key above misses on *every* edit, and the miss is not
+        // cheap — `rowTexts` walks the buffer to reach candidates that can be
+        // anywhere in it, which was 45% of what a keystroke cost on a 4 MB
+        // log. But the ranking is integer work over a table layout already
+        // built, so it can be recomputed and compared for microseconds, and
+        // an edit that leaves the longest rows exactly as long as they were
+        // cannot have changed the answer by more than the substitution of
+        // equally many characters — which is the same "a few pixels" this
+        // deliberately tolerates from ranking by length in the first place.
+        var shape: [Int] = []
+        shape.reserveCapacity(picks.count * 2)
+        for pick in picks {
+            shape.append(pick)
+            shape.append(rows[pick].count)
+        }
+        if let c = widestRowCache, c.fontIdentity == font.identity, c.wraps == wraps,
+           widestRowShape == shape
+        {
+            widestRowCache = (font.identity, editing.text, wraps, c.width)
+            return c.width
+        }
+
         let widest = rowTexts(at: picks, rows: rows).reduce(Float(0)) {
             max($0, font.shapedRun($1).width)
         }
         widestRowCache = (font.identity, editing.text, wraps, widest)
+        widestRowShape = shape
         return widest
     }
 
@@ -586,7 +616,16 @@ final class LeafNode: YogaBoxNode {
     /// the same trick `emitEditor` uses for the visible window.
     private func rowTexts(at indices: [Int], rows: [Range<Int>]) -> [String] {
         let text = editing.text
-        let endOffset = text.count
+        // The table's own end, not `text.count`: rows are character offsets
+        // and the last one already ends at the buffer's length, so asking the
+        // string costs a full grapheme walk of it to learn a number that is
+        // sitting in an array — 4 ms of every keystroke on a 4 MB log.
+        //
+        // A stale table can still overshoot the buffer, and this no longer
+        // catches that. It never was what made the overshoot safe: every walk
+        // below is `limitedBy: text.endIndex`, so an offset past the end
+        // saturates and yields an empty row rather than trapping.
+        let endOffset = rows.last?.upperBound ?? 0
         var cursor = text.startIndex
         var cursorOffset = 0
         var out: [String] = []

@@ -229,7 +229,7 @@ struct LavaEditorView: View {
             if session.active.isModified {
                 Text("modified", color: .accent).agentId("status-modified")
             }
-            Text("\(lineCount) lines", color: .dim).agentId("status-lines")
+            Text("\(session.activeLineCount) lines", color: .dim).agentId("status-lines")
             Text(session.active.language.title, color: .dim, onClick: { })
                 .agentId("status-language")
             Text(session.wraps ? "wrap" : "no wrap", color: .dim, onClick: {
@@ -301,14 +301,5 @@ struct LavaEditorView: View {
             },
             style: .standard(theme: theme)
         )
-    }
-
-    /// Counted off the UTF-8 bytes rather than by splitting the buffer:
-    /// `split` on a 10 MB file allocates a substring per line, on every frame
-    /// the status bar draws.
-    private var lineCount: Int {
-        let text = session.active.text
-        if text.isEmpty { return 1 }
-        return text.utf8.reduce(1) { $1 == 0x0A ? $0 + 1 : $0 }
     }
 }

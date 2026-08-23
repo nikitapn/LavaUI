@@ -61,6 +61,12 @@ final class EditorSession {
     let controller = EditorController()
     private var nextID = 1
 
+    /// Memo behind `activeLineCount`. Ignored by observation on purpose: it is
+    /// derived from state that is already observed, and registering a write
+    /// here would invalidate the view from inside the body that read it.
+    @ObservationIgnored
+    private var lineCountCache: (document: Int, bytes: Int, revision: Int, lines: Int)?
+
     init() {
         wraps = AppSettings.bool(forKey: "wraps") ?? false
         showLineNumbers = AppSettings.bool(forKey: "lineNumbers") ?? true
@@ -100,6 +106,41 @@ final class EditorSession {
                 if self.find.isOpen, !self.find.query.isEmpty { self.runSearch() }
             }
         )
+    }
+
+    /// Lines in the document in front, for the status bar.
+    ///
+    /// Counted off the UTF-8 bytes rather than by splitting the buffer, and
+    /// then memoised: the status bar is rebuilt on every frame the window
+    /// draws, and a scan of a 4 MB log is ~4 ms of it — spent to re-answer a
+    /// number that can only have changed if the text did.
+    ///
+    /// Keyed on the byte count as well as `revision`, because a lazily-opened
+    /// tab gets its text from `loadIfNeeded` rather than from the editing
+    /// binding, and so arrives without a revision bump.
+    var activeLineCount: Int {
+        let doc = active
+        let bytes = doc.text.utf8.count
+        if let c = lineCountCache,
+           c.document == doc.id, c.bytes == bytes, c.revision == revision
+        {
+            return c.lines
+        }
+        // Over contiguous storage where there is any: `reduce` on `String.UTF8View`
+        // goes through the view's iterator a byte at a time, and on a buffer
+        // this size that is an order of magnitude off a straight scan.
+        let lines: Int
+        if bytes == 0 {
+            lines = 1
+        } else {
+            lines = doc.text.utf8.withContiguousStorageIfAvailable { buffer in
+                var count = 1
+                for byte in buffer where byte == 0x0A { count += 1 }
+                return count
+            } ?? doc.text.utf8.reduce(1) { $1 == 0x0A ? $0 + 1 : $0 }
+        }
+        lineCountCache = (doc.id, bytes, revision, lines)
+        return lines
     }
 
     var windowTitle: String {

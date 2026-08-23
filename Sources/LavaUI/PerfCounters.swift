@@ -23,6 +23,13 @@ public enum PerfCounters {
     /// number of shaping *requests*, which is the interesting one for emit:
     /// it should track visible rows, not buffer size.
     nonisolated(unsafe) public static var textShapeHits = 0
+    /// Logical lines broken into rows by a soft-wrap pass — the ones the wrap
+    /// cache could not reuse. Shaping alone does not show this: a line whose
+    /// text is unchanged is served from `UIFont`'s shape cache and never
+    /// reaches HarfBuzz, but it still pays for its advances to be laid out and
+    /// its breaks to be found. On an edit this should be a handful; anything
+    /// proportional to the buffer means the cache was thrown away.
+    nonisolated(unsafe) public static var lineWraps = 0
     /// `LeafNode.measureForYoga` calls — Yoga measure-function invocations.
     nonisolated(unsafe) public static var yogaMeasures = 0
     /// `LayoutHost.calculateLayout` calls, including the lazy-window settle
@@ -38,6 +45,7 @@ public enum PerfCounters {
     public static func reset() {
         textShapes = 0
         textShapeHits = 0
+        lineWraps = 0
         yogaMeasures = 0
         layoutPasses = 0
         imageDecodes = 0
@@ -49,6 +57,7 @@ public enum PerfCounters {
         [
             ("shapes", textShapes),
             ("shapeHits", textShapeHits),
+            ("lineWraps", lineWraps),
             ("measures", yogaMeasures),
             ("layouts", layoutPasses),
             ("decodes", imageDecodes),

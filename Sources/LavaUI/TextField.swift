@@ -207,6 +207,24 @@ extension LeafNode {
             let reusableRows = widthMoved ? [] : wrapCacheRows
 
             let lines = editing.lines
+            // How far the old and new line arrays agree from each end.
+            //
+            // Matching index-for-index is only right while the *number* of
+            // lines holds: type a newline into line 3 of a 200,000-line log
+            // and every line after it shifts by one, so a positional check
+            // says all 199,997 changed and re-shapes the file to answer one
+            // keystroke. An edit is a contiguous region, so the lines before
+            // it and the lines after it are both still there — the standard
+            // common-prefix/common-suffix trim finds them, and what is left
+            // between the two is what actually has to be broken again.
+            var head = 0
+            while head < reusableLines.count, head < lines.count,
+                  reusableLines[head] == lines[head] { head += 1 }
+            var tail = 0
+            while tail < reusableLines.count - head, tail < lines.count - head,
+                  reusableLines[reusableLines.count - 1 - tail]
+                      == lines[lines.count - 1 - tail] { tail += 1 }
+
             var rows: [Range<Int>] = []
             var logicalLine: [Int] = []
             var columnStart: [Int] = []
@@ -214,15 +232,22 @@ extension LeafNode {
             nextRows.reserveCapacity(lines.count)
             var base = 0
             for (index, line) in lines.enumerated() {
+                let reusedAt: Int?
+                if index < head {
+                    reusedAt = index
+                } else if index >= lines.count - tail {
+                    reusedAt = reusableLines.count - (lines.count - index)
+                } else {
+                    reusedAt = nil
+                }
                 let broken: [Range<Int>]
-                if index < reusableLines.count, index < reusableRows.count,
-                   reusableLines[index] == line
-                {
-                    broken = reusableRows[index]
+                if let reusedAt, reusableRows.indices.contains(reusedAt) {
+                    broken = reusableRows[reusedAt]
                 } else {
                     // Shaping is what this whole cache exists to avoid: it is
                     // the cost of the line, and there are as many lines as
                     // there are lines.
+                    PerfCounters.lineWraps += 1
                     let s = String(line)
                     let advances = f.shapedRun(s).characterAdvances
                     broken = SoftWrap.rows(text: s, advances: advances, maxWidth: inner)
@@ -233,7 +258,11 @@ extension LeafNode {
                     logicalLine.append(index)
                     columnStart.append(r.lowerBound)
                 }
-                base += line.count + 1  // + the newline that separated them
+                // The rows cover the line exactly, so the last one's end *is*
+                // its character count. `line.count` would be a fresh grapheme
+                // walk of the line — O(buffer) across the loop, paid even on
+                // the pass where every single line came out of the cache.
+                base += (broken.last?.upperBound ?? 0) + 1  // + the newline
             }
             editing.setVisualRows(rows)
             rowLogicalLine = logicalLine
@@ -432,14 +461,32 @@ extension LeafNode {
 
     private func afterEdit() {
         text = editing.text.isEmpty ? placeholder : editing.text
-        // Force soft-wrap to recompute even when the box width is unchanged.
-        lastMeasuredWidth = -1
+        // Force soft-wrap to recompute even though the box width has not
+        // changed. Only the *text* mark is cleared: `lastMeasuredWidth` is
+        // what tells `refreshVisualRows` whether every line has to be broken
+        // again or only the ones that actually changed, and clearing it here
+        // threw away the per-line wrap cache on every keystroke — the whole
+        // file re-shaped to answer an edit to one line of it.
         lastWrappedText = ""
         lastLogicalRowsText = nil
         // Immediate logical-row table so followCaret / measure do not rescan
         // the buffer on every layout access while wrap is pending.
         seedLogicalRows()
         markMeasureDirty()
+        CaretBlink.noteEdit()
+        ViewInvalidation.markDirty()
+    }
+
+    /// A key that moved the caret or the selection and left the buffer alone.
+    ///
+    /// Everything `afterEdit` does beyond this rebuilds row tables, and rows
+    /// do not move when the text does not. Running it after every key is what
+    /// made navigation cost a rescan of the *whole buffer* per press, so the
+    /// cost tracked the file's size rather than the distance travelled: on a
+    /// 3.9 MB log, 58 ms a Page Down with wrapping off — a full
+    /// `VisualLayout.logicalRows` walk — and 4.4 s with it on, because the
+    /// cleared width mark also re-shaped and re-broke all 11,631 lines.
+    private func afterCaretMove() {
         CaretBlink.noteEdit()
         ViewInvalidation.markDirty()
     }
@@ -451,7 +498,10 @@ extension LeafNode {
         _ event: KeyEvent, binding: Binding<String>, onSubmit: (() -> Void)?
     ) -> Bool {
         let shift = event.shift
-        let before = editing.text
+        // The revision, not the text: it is process-unique and bumped by every
+        // mutation, so "did this key edit anything" is an integer compare
+        // instead of a comparison of two multi-megabyte buffers.
+        let before = editing.revision
 
         switch event.key {
         case KeyCode.left:
@@ -537,11 +587,15 @@ extension LeafNode {
             return false
         }
 
-        if editing.text != before { binding.wrappedValue = editing.text }
-        // Refresh row cache *before* followCaret: deletion leaves visualRows
-        // nil (see TextEditingState.replace), and scroll clamping shapes the
-        // widest rows from `layout`.
-        afterEdit()
+        if editing.revision != before {
+            binding.wrappedValue = editing.text
+            // Refresh row cache *before* followCaret: deletion leaves
+            // visualRows nil (see TextEditingState.replace), and scroll
+            // clamping shapes the widest rows from `layout`.
+            afterEdit()
+        } else {
+            afterCaretMove()
+        }
         followCaret()
         return true
     }

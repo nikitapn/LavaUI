@@ -257,3 +257,46 @@ extension TextEditingStateTests {
         XCTAssertFalse(s.hasSelection)
     }
 }
+
+/// `TextEditingState.lines` has a byte-scan fast path that has to cut the
+/// same substrings `Collection.split` would — including on the buffers that
+/// disqualify it. A wrong split means a wrapping editor breaks the wrong
+/// text into rows.
+final class LinesFastPathTests: XCTestCase {
+    func testLinesMatchCharacterSplit() {
+        let cases = [
+            "",
+            "\n",
+            "\n\n\n",
+            "one line",
+            "ab\ncd",
+            "ab\ncd\n",
+            "héllo\nwörld\n",
+            "emoji 👩‍👩‍👧‍👦 here\nnext\n",
+            "combining e\u{0301}\nnext",
+            "a\r\nb\r\nc",
+            "trailing cr\r",
+            (1...200).map { "line \($0)" }.joined(separator: "\n"),
+        ]
+        for text in cases {
+            let state = TextEditingState(text)
+            XCTAssertEqual(
+                state.lines,
+                text.split(separator: "\n", omittingEmptySubsequences: false),
+                "split disagrees for \(text.debugDescription)"
+            )
+        }
+    }
+
+    /// The row table and the line list are read against each other all over
+    /// the editor, so they have to agree about how many lines there are.
+    func testLinesAgreeWithTheRowTable() {
+        for text in ["a\nb\nc", "a\nb\nc\n", "", "\n", "é\nabc\n👍"] {
+            XCTAssertEqual(
+                TextEditingState(text).lines.count,
+                VisualLayout.logicalRows(text).count,
+                "line/row disagreement for \(text.debugDescription)"
+            )
+        }
+    }
+}

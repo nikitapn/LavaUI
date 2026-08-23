@@ -235,3 +235,115 @@ final class OffsetAnchorTests: XCTestCase {
         }
     }
 }
+
+/// The anchor across an edit — `TextEditingState.reseedAnchor`.
+///
+/// An edit bumps `revision`, which is what stops the anchor from answering
+/// for the buffer it was taken from. Left at that, the first question asked
+/// after every keystroke walked the buffer from byte zero. The splice point
+/// is a position the new buffer *does* know, so it is carried over — and
+/// these are the cases where carrying it over must not be allowed to lie.
+final class AnchorAcrossEditTests: XCTestCase {
+    private static let text = (1...400).map { "line \($0) of the buffer" }
+        .joined(separator: "\n")
+
+    /// The property everything else rests on: after any edit, at any depth,
+    /// both conversions still agree with a fresh walk of the new buffer.
+    private func assertConversionsAgree(
+        _ state: TextEditingState, file: StaticString = #filePath, line: UInt = #line
+    ) {
+        let text = state.text
+        let count = text.count
+        for offset in stride(from: 0, through: count, by: max(1, count / 40)) {
+            let expected = text.index(text.startIndex, offsetBy: offset)
+            let got = state.index(atOffset: offset)
+            XCTAssertEqual(got, expected, "index(atOffset: \(offset))", file: file, line: line)
+            XCTAssertEqual(
+                state.offset(of: expected), offset,
+                "offset(of: \(offset))", file: file, line: line
+            )
+        }
+    }
+
+    func testInsertDeepInTheBufferKeepsBothConversionsHonest() {
+        var state = TextEditingState(Self.text)
+        state.setCursor(state.index(atOffset: 6000))
+        state.insert("HELLO")
+        assertConversionsAgree(state)
+    }
+
+    func testDeleteDeepInTheBufferKeepsBothConversionsHonest() {
+        var state = TextEditingState(Self.text)
+        state.setCursor(state.index(atOffset: 6000))
+        for _ in 0..<12 { state.deleteBackward() }
+        assertConversionsAgree(state)
+    }
+
+    /// A run of edits, which is what typing is: each one reseeds on top of
+    /// the last, so an error would compound rather than show up once.
+    func testARunOfEditsDoesNotDrift() {
+        var state = TextEditingState(Self.text)
+        state.setCursor(state.index(atOffset: 5000))
+        for i in 0..<40 {
+            state.insert(i.isMultiple(of: 3) ? "x" : "yz")
+            if i.isMultiple(of: 5) { state.deleteBackward() }
+        }
+        assertConversionsAgree(state)
+    }
+
+    /// The case the boundary check exists for. Typing a combining acute after
+    /// "e" merges two scalars into one `Character`, so the character count of
+    /// everything after the splice shifts by one *more* than the insert — the
+    /// splice point is no longer a boundary, and the anchor must decline to
+    /// carry over rather than be off by one for the rest of the session.
+    func testCombiningMarkTypedOntoALetterDoesNotCorruptOffsets() {
+        var state = TextEditingState("cafe and more text after it")
+        state.setCursor(state.index(atOffset: 4))
+        XCTAssertEqual(state.offset(of: state.focus), 4)
+        state.insert("\u{0301}")
+        XCTAssertEqual(state.text, "café and more text after it")
+        assertConversionsAgree(state)
+    }
+
+    /// The other ASCII-only way clusters merge: an LF landing behind a CR.
+    func testLineFeedTypedBehindACarriageReturnDoesNotCorruptOffsets() {
+        var state = TextEditingState("a\rbcdef")
+        state.setCursor(state.index(atOffset: 2))
+        _ = state.offset(of: state.focus)
+        state.insert("\n")
+        XCTAssertEqual(state.text, "a\r\nbcdef")
+        assertConversionsAgree(state)
+    }
+
+    /// Emoji either side of the splice: multi-scalar clusters that the
+    /// character/byte distinction is easiest to get wrong around.
+    func testEditingBesideEmojiKeepsOffsetsHonest() {
+        var state = TextEditingState("👩‍👩‍👧‍👦 family 🇩🇪 flag e\u{0301} mark")
+        state.setCursor(state.index(atOffset: 8))
+        state.insert("!!")
+        assertConversionsAgree(state)
+        state.setCursor(state.index(atOffset: 1))
+        state.deleteBackward()
+        assertConversionsAgree(state)
+    }
+
+    func testUndoAndRedoKeepOffsetsHonest() {
+        var state = TextEditingState(Self.text)
+        state.setCursor(state.index(atOffset: 4000))
+        state.insert("inserted")
+        XCTAssertTrue(state.undo())
+        assertConversionsAgree(state)
+        XCTAssertTrue(state.redo())
+        assertConversionsAgree(state)
+    }
+
+    /// A replace whose ranges are far apart, applied as one edit.
+    func testReplaceAllKeepsOffsetsHonest() {
+        var state = TextEditingState(Self.text)
+        var search = TextSearch()
+        search.find("buffer", in: state.text)
+        XCTAssertGreaterThan(search.matches.count, 100)
+        XCTAssertGreaterThan(state.replaceAll(search.matches, with: "log"), 100)
+        assertConversionsAgree(state)
+    }
+}

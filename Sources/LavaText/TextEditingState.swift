@@ -277,6 +277,12 @@ public struct TextEditingState: Equatable {
         // UTF-8 offsets, not character offsets: this runs once per keystroke,
         // and `offset(of:)` walks the whole prefix by grapheme. See `TextEdit`.
         let start = utf8Offset(of: range.lowerBound)
+        // Character offset of the splice, taken *before* the buffer moves and
+        // only while the anchor is already live — then it is a few steps from
+        // the caret, and this is what lets the anchor survive the edit. See
+        // the reseed below.
+        let startChar: Int? = indexAnchor.revision == revision
+            ? offset(of: range.lowerBound) : nil
 
         if record {
             undoStack.record(TextEdit(
@@ -297,11 +303,45 @@ public struct TextEditingState: Equatable {
         // `layout` falls back to a live `.logical(text)` until the view's
         // next wrap/seed pass reinstalls a table.
         visualRows = nil
+        reseedAnchor(atUTF8Offset: start, characterOffset: startChar)
         let caret = index(atUTF8Offset: start + replacement.utf8.count)
         focus = caret
         anchor = caret
         desiredColumn = nil
         affinity = .downstream
+    }
+
+    /// Re-establishes the offset↔index anchor on the *new* buffer, at the
+    /// point the edit spliced.
+    ///
+    /// Without this, every edit orphaned the anchor — its revision no longer
+    /// matched — and the next question anyone asked about the caret walked the
+    /// buffer from byte zero to find it. That is the same cost the anchor was
+    /// introduced to remove, reappearing once per keystroke and growing with
+    /// how far into the file the caret is: ~4 ms a character 4 MB in, and
+    /// linear beyond that. Every caller after an edit wants a position at or
+    /// beside the splice, so the splice is exactly where the anchor belongs.
+    ///
+    /// `characterOffset` is the splice's character offset measured before the
+    /// buffer moved, or nil when the anchor was already stale — there is
+    /// nothing to preserve then, and establishing it here would pay the walk
+    /// this exists to avoid.
+    ///
+    /// The prefix bytes are untouched by a splice, so its character count
+    /// carries over — *provided* the splice point is a character boundary on
+    /// both sides of the edit. It was one before (the range came from
+    /// character-space navigation); `String.Index(_:within:)` is the exact
+    /// test for after, and nil means the edit merged clusters across the seam
+    /// (a combining mark typed onto a letter, an LF landing behind a CR). Then
+    /// the count genuinely moved and the anchor is left stale to be rebuilt
+    /// honestly.
+    private func reseedAnchor(atUTF8Offset offset: Int, characterOffset: Int?) {
+        guard let characterOffset else { return }
+        let utf8 = text.utf8
+        guard offset <= utf8.count else { return }
+        let byteIndex = utf8.index(utf8.startIndex, offsetBy: offset)
+        guard let boundary = String.Index(byteIndex, within: text) else { return }
+        indexAnchor.store(revision: revision, offset: characterOffset, index: boundary)
     }
 
     /// Replaces a character range with `replacement`, as one undoable edit.
@@ -390,9 +430,14 @@ public struct TextEditingState: Equatable {
     private mutating func apply(_ edit: TextEdit) {
         let lower = index(atUTF8Offset: edit.offset)
         let upper = index(atUTF8Offset: edit.offset + edit.removed.utf8.count)
+        let startChar: Int? = indexAnchor.revision == revision ? offset(of: lower) : nil
         text.replaceSubrange(lower..<upper, with: edit.inserted)
         revision = Self.nextRevision()
         visualRows = nil
+        // Same reason as `replace`: holding undo down is a run of edits, and
+        // each one otherwise orphans the anchor for the caret query that
+        // follows it.
+        reseedAnchor(atUTF8Offset: edit.offset, characterOffset: startChar)
         let caret = index(atUTF8Offset: edit.offset + edit.inserted.utf8.count)
         focus = caret
         anchor = caret
@@ -608,8 +653,50 @@ extension TextEditingState {
 
     /// Logical lines, split on "\n". A trailing newline yields a final empty
     /// line, which is correct: the caret can sit there.
+    ///
+    /// `Collection.split` compares `Character`s, so it grapheme-breaks the
+    /// whole buffer to find bytes it could have scanned for — on a 4 MB log
+    /// that is ~60 ms, and a wrapping editor asks for this on every keystroke.
+    /// The scan below finds the newlines as bytes and cuts the same
+    /// `Substring`s at them.
     public var lines: [Substring] {
-        text.split(separator: "\n", omittingEmptySubsequences: false)
+        utf8Lines() ?? text.split(separator: "\n", omittingEmptySubsequences: false)
+    }
+
+    /// Newline positions as byte offsets, or nil when a byte scan cannot
+    /// answer.
+    ///
+    /// CR disqualifies the buffer, as everywhere else here: "\r\n" is a single
+    /// `Character`, so a `String.Index` taken at the LF would not be on a
+    /// grapheme boundary and slicing there is not the same split. A lone LF
+    /// always is one, whatever surrounds it, which is what makes this exact
+    /// for every other buffer including non-ASCII ones.
+    private func utf8Lines() -> [Substring]? {
+        let utf8 = text.utf8
+        let scanned: [Int]?? = utf8.withContiguousStorageIfAvailable { bytes in
+            var breaks: [Int] = []
+            for i in 0..<bytes.count {
+                if bytes[i] == 0x0D { return nil }
+                if bytes[i] == 0x0A { breaks.append(i) }
+            }
+            return breaks
+        }
+        guard let breaks = scanned ?? nil else { return nil }
+
+        var result: [Substring] = []
+        result.reserveCapacity(breaks.count + 1)
+        var lineStart = text.startIndex
+        var cursorByte = 0
+        var cursor = utf8.startIndex
+        for position in breaks {
+            let end = utf8.index(cursor, offsetBy: position - cursorByte)
+            result.append(text[lineStart..<end])
+            cursor = utf8.index(after: end)
+            cursorByte = position + 1
+            lineStart = cursor
+        }
+        result.append(text[lineStart...])
+        return result
     }
 
     /// Range of the line containing `index`, excluding its terminator.

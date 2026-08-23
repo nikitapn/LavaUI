@@ -112,9 +112,8 @@ public struct VisualLayout: Equatable {
         return rows
     }
 
-    /// The same scan over raw UTF-8, valid only when every byte is ASCII —
-    /// then a character offset *is* a byte offset and no grapheme breaking is
-    /// needed. Nil when that does not hold, so the caller falls back.
+    /// The same scan over raw UTF-8. Nil when it cannot answer, so the caller
+    /// falls back to the grapheme walk.
     ///
     /// Worth the special case because the `for ch in text` walk above
     /// materialises a `Character` per position, and each one is a small
@@ -123,22 +122,58 @@ public struct VisualLayout: Equatable {
     /// files and config are overwhelmingly ASCII, and anything else still gets
     /// the correct answer from the walk.
     ///
-    /// CR bails out as well as non-ASCII: Swift treats "\r\n" as one grapheme
-    /// cluster, so a buffer that still has CRLF in it breaks the offset
-    /// identity this depends on even though every byte is ASCII.
+    /// **The ASCII test is per line, not per buffer.** A grapheme cluster
+    /// never spans a newline (CRLF excepted, below), so a line's character
+    /// count is a property of that line alone: an ASCII line's is its byte
+    /// count, and any other line is counted by decoding just that line. That
+    /// matters because the all-or-nothing version fell off the fast path for
+    /// the *whole file* on the first non-ASCII byte anywhere in it — one `é`
+    /// in a 4 MB log, and every rescan cost 50 ms instead of 2 ms. Files with
+    /// a stray accented word in them are not the rare case.
+    ///
+    /// CR still bails out for the whole buffer: Swift treats "\r\n" as one
+    /// grapheme cluster, so with CRLF in play a line break is not one
+    /// character and the offsets between lines stop lining up — which is not
+    /// something a per-line count can repair.
     private static func asciiLogicalRows(_ text: String) -> [Range<Int>]? {
         let scanned: [Range<Int>]?? = text.utf8.withContiguousStorageIfAvailable { bytes in
             var rows: [Range<Int>] = []
-            var start = 0
+            // Byte where the current line starts, and the character offset of
+            // that byte. They diverge on the first non-ASCII line and stay
+            // diverged, which is the whole reason both are tracked.
+            var lineStart = 0
+            var charStart = 0
+            var lineIsASCII = true
+
+            @inline(__always)
+            func closeLine(endingAt end: Int) -> Bool {
+                let length: Int
+                if lineIsASCII {
+                    length = end - lineStart
+                } else {
+                    // Only this line is decoded, and only when it needs to be.
+                    let slice = UnsafeBufferPointer(
+                        rebasing: bytes[lineStart..<end]
+                    )
+                    length = String(decoding: slice, as: UTF8.self).count
+                }
+                rows.append(charStart..<(charStart + length))
+                charStart += length + 1  // + the newline that ended it
+                lineStart = end + 1
+                lineIsASCII = true
+                return true
+            }
+
             for i in 0..<bytes.count {
                 let byte = bytes[i]
-                if byte >= 0x80 || byte == 0x0D { return nil }
-                if byte == 0x0A {
-                    rows.append(start..<i)
-                    start = i + 1
+                if byte == 0x0D { return nil }
+                if byte >= 0x80 {
+                    lineIsASCII = false
+                    continue
                 }
+                if byte == 0x0A { _ = closeLine(endingAt: i) }
             }
-            rows.append(start..<bytes.count)
+            _ = closeLine(endingAt: bytes.count)
             return rows
         }
         return scanned ?? nil
