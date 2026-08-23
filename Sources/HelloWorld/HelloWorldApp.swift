@@ -93,6 +93,13 @@ struct HelloWorldApp {
                         ) {
                             session.showBanner.toggle()
                         }
+                        MenuItem(
+                            "Layout Lab",
+                            id: "view.layout-lab",
+                            isChecked: session.showLayoutLab
+                        ) {
+                            session.showLayoutLab.toggle()
+                        }
                         MenuSeparator()
                         MenuItem(
                             "Toggle Theme",

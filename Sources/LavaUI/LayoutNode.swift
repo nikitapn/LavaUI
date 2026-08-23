@@ -148,6 +148,13 @@ class YogaBoxNode: AnyViewNode {
     var padding: EdgeInsets = .zero
     var minWidth: Float = 0
     var minHeight: Float = 0
+    /// Width / height. `0` means unset (`YGUndefined`).
+    ///
+    /// An image with one axis specified and the other auto uses this so Yoga
+    /// can fill the missing side. Stretch in a column does the same: the
+    /// cross axis becomes the column width and height follows the ratio,
+    /// instead of staying at the bitmap's native pixels.
+    var aspectRatio: Float = 0
     /// The node's own settings, captured before any modifier touched it, so a
     /// removed modifier does not leave its effect behind.
     var styleBaseline: ViewStyle?
@@ -254,6 +261,17 @@ class YogaBoxNode: AnyViewNode {
         applyDimension(
             height, setPoint: YGNodeStyleSetHeight, setAuto: YGNodeStyleSetHeightAuto,
             setPercent: YGNodeStyleSetHeightPercent
+        )
+        // Yoga will override a definite box if a ratio is set — an 80×80
+        // image would come out 160×80. Only feed it in when an axis is auto.
+        let ratioLive: Bool = {
+            guard aspectRatio > 0 else { return false }
+            if case .auto = width { return true }
+            if case .auto = height { return true }
+            return false
+        }()
+        YGNodeStyleSetAspectRatio(
+            yogaStorage, ratioLive ? aspectRatio : Float.nan
         )
         // LTR mapping: leading → left, trailing → right. A future layout-
         // direction environment remaps here rather than renaming EdgeInsets.
@@ -366,6 +384,7 @@ final class LeafNode: YogaBoxNode {
     var markdownSpans: [MarkdownSpan] = []
     var markdownStyle: MarkdownStyle?
     var usesTextMeasure = false
+    var usesImageMeasure = false
     /// Editable payload (textField leaves). Lives on the node because a
     /// PrimitiveView has no body, so it never goes through CompositeNode's
     /// @State transplant — the node's own lifetime is the persistence.
@@ -1129,13 +1148,38 @@ final class LeafNode: YogaBoxNode {
         width = .auto
         height = .auto
         applyStyle()
+        installMeasureFunc()
+    }
+
+    /// Intrinsic size for a raster image: both-auto uses the bitmap, one
+    /// specified axis keeps the other auto so `aspectRatio` can fill it.
+    func installImageMeasure() {
+        if usesImageMeasure { return }
+        usesImageMeasure = true
+        installMeasureFunc()
+    }
+
+    func invalidateMeasure() {
+        YGNodeMarkDirty(yogaStorage)
+    }
+
+    private func installMeasureFunc() {
         YGNodeSetContext(yogaStorage, Unmanaged.passUnretained(self).toOpaque())
         YGNodeSetMeasureFunc(yogaStorage, leafTextMeasure)
         YGNodeMarkDirty(yogaStorage)
     }
 
-    func measureForYoga(width: Float, widthMode: YGMeasureMode) -> YGSize {
+    func measureForYoga(
+        width: Float, widthMode: YGMeasureMode,
+        height: Float, heightMode: YGMeasureMode
+    ) -> YGSize {
         PerfCounters.yogaMeasures &+= 1
+        if kind == .image {
+            return measureImage(
+                width: width, widthMode: widthMode,
+                height: height, heightMode: heightMode
+            )
+        }
         // Before the font guard: a rule is the one leaf with no text in it.
         if kind == .divider, let style = dividerStyle {
             let extent = style.thickness + style.spacing * 2
@@ -1269,6 +1313,42 @@ final class LeafNode: YogaBoxNode {
         return YGSize(width: entry.width + 8, height: max(entry.height, font.lineHeight) + 4)
     }
 
+    /// Bitmap as a replaced element: honour an exact axis, otherwise the
+    /// native size, shrinking to an AtMost constraint while keeping the
+    /// pixel aspect. Stretch and a missing axis are Yoga's job via
+    /// `aspectRatio` — this only answers "what is the content".
+    private func measureImage(
+        width: Float, widthMode: YGMeasureMode,
+        height: Float, heightMode: YGMeasureMode
+    ) -> YGSize {
+        let srcW = image?.pixelWidth ?? 0
+        let srcH = image?.pixelHeight ?? 0
+        guard srcW > 0, srcH > 0 else { return YGSize(width: 0, height: 0) }
+        let ratio = srcW / srcH
+        let exactW = widthMode == YGMeasureModeExactly
+        let exactH = heightMode == YGMeasureModeExactly
+        if exactW && exactH {
+            return YGSize(width: width, height: height)
+        }
+        if exactW {
+            return YGSize(width: width, height: width / ratio)
+        }
+        if exactH {
+            return YGSize(width: height * ratio, height: height)
+        }
+        var w = srcW
+        var h = srcH
+        if widthMode == YGMeasureModeAtMost, width > 0, w > width {
+            w = width
+            h = w / ratio
+        }
+        if heightMode == YGMeasureModeAtMost, height > 0, h > height {
+            h = height
+            w = h * ratio
+        }
+        return YGSize(width: w, height: h)
+    }
+
     func markMeasureDirty() {
         if usesTextMeasure {
             YGNodeMarkDirty(yogaStorage)
@@ -1288,7 +1368,10 @@ private func leafTextMeasure(
         return YGSize(width: 0, height: 0)
     }
     let leaf = Unmanaged<LeafNode>.fromOpaque(ctx).takeUnretainedValue()
-    return leaf.measureForYoga(width: width, widthMode: widthMode)
+    return leaf.measureForYoga(
+        width: width, widthMode: widthMode,
+        height: height, heightMode: heightMode
+    )
 }
 
 // MARK: - What the renderer treats as a control

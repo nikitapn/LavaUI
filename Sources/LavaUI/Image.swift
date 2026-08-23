@@ -330,9 +330,14 @@ public enum ImageContentMode: Equatable, Sendable {
 
 /// Raster image laid out as a Yoga leaf and drawn as a textured quad.
 ///
+/// One specified axis keeps the pixel aspect: `Image(logo, width: .pt(80))`
+/// on a 200×100 bitmap is an 80×40 box. Both auto is the native size; both
+/// set is the box `contentMode` paints into.
+///
 /// ```swift
 /// Image(logo, width: .pt(64), height: .pt(64))
 /// Image(icon)  // intrinsic pixel size
+/// Image(photo, width: .pt(120))  // height from aspect
 /// ```
 public struct Image: PrimitiveView {
     public var image: UIImage?
@@ -424,8 +429,8 @@ public struct Image: PrimitiveView {
         let leaf = LeafNode(
             kind: .image,
             label: "Image \(dumpDetail)",
-            width: resolvedWidth,
-            height: resolvedHeight
+            width: width,
+            height: height
         )
         apply(to: leaf)
         leaf.onClick = onClick
@@ -437,8 +442,8 @@ public struct Image: PrimitiveView {
         if let leaf = node as? LeafNode, leaf.kind == .image {
             leaf.update(
                 label: "Image \(dumpDetail)",
-                width: resolvedWidth,
-                height: resolvedHeight,
+                width: width,
+                height: height,
                 color: tint,
                 onClick: onClick
             )
@@ -449,6 +454,7 @@ public struct Image: PrimitiveView {
     }
 
     private func apply(to leaf: LeafNode) {
+        let previous = leaf.image
         leaf.image = image
         leaf.imagePath = path
         leaf.imageDecodePixels = path == nil ? 0 : decodePixels
@@ -456,19 +462,19 @@ public struct Image: PrimitiveView {
         leaf.imagePlaceholderRadius = placeholderCornerRadius
         leaf.imageTint = tint
         leaf.imageContentMode = contentMode
-    }
-
-    /// Auto → intrinsic pixel size so Yoga has a definite box. A path-backed
-    /// image has no intrinsic size to fall back on until it decodes, so `.auto`
-    /// there collapses to zero — which is why the path initialiser demands
-    /// definite dimensions.
-    private var resolvedWidth: Dimension {
-        if case .auto = width, let image { return .point(image.pixelWidth) }
-        return width
-    }
-
-    private var resolvedHeight: Dimension {
-        if case .auto = height, let image { return .point(image.pixelHeight) }
-        return height
+        // Always stored; `applyStyle` only hands it to Yoga while an axis
+        // is auto, so `.frame(width:height:)` can still pin a square box.
+        if let image, image.pixelHeight > 0 {
+            leaf.aspectRatio = image.pixelWidth / image.pixelHeight
+        } else {
+            leaf.aspectRatio = 0
+        }
+        leaf.installImageMeasure()
+        leaf.applyStyle()
+        if previous?.pixelWidth != image?.pixelWidth
+            || previous?.pixelHeight != image?.pixelHeight
+        {
+            leaf.invalidateMeasure()
+        }
     }
 }

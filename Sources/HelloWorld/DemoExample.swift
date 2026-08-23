@@ -221,6 +221,15 @@ public struct DemoExample: View {
                 }
             )
             .agentId("inspector-toggle")
+            Text(
+                session.showLayoutLab ? "[ Widgets ]" : "[ Layout lab ]",
+                color: .muted,
+                onClick: {
+                    session.showLayoutLab.toggle()
+                    bump(session.showLayoutLab ? "layout lab" : "widgets")
+                }
+            )
+            .agentId("layout-lab-toggle")
         }
         // Everything the toolbar does not otherwise use drags the window, and
         // a double-click maximizes it — a title bar's two gestures, on a row
@@ -275,7 +284,11 @@ public struct DemoExample: View {
         // The column's content has outgrown the window for a while; this is
         // what a general ScrollView is for.
         ScrollView {
-            centerContent
+            if session.showLayoutLab {
+                LayoutLab(sample: posters.first ?? brandImage)
+            } else {
+                centerContent
+            }
         }
     }
 

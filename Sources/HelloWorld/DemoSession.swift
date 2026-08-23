@@ -23,6 +23,8 @@ final class DemoSession {
     var showInspector = true
     var showBanner = true
     var lightTheme = false
+    /// Replaces the widget playground with the layout catalog.
+    var showLayoutLab = false
 
     /// Applies `lightTheme` to the global theme. The single writer, so the
     /// label and the colours cannot disagree again.
@@ -41,6 +43,7 @@ final class DemoSession {
         showSidebar = true
         showInspector = true
         showBanner = true
+        showLayoutLab = false
         setTheme(light: false)
     }
 }
