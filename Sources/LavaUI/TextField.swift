@@ -194,87 +194,245 @@ extension LeafNode {
         if wraps, let f = font ?? FontStore.default, availableWidth > 0 {
             let textNow = editing.text
             let widthMoved = abs(availableWidth - lastMeasuredWidth) > 0.5
-            guard widthMoved || textNow != lastWrappedText else { return }
+            let replanned = widthMoved || textNow != lastWrappedText
+            // A pass still owes work even when nothing moved: the plan below
+            // leaves most of the file unbroken and finishes it over the next
+            // few frames.
+            guard replanned || wrapUnmeasured > 0 else { return }
             lastMeasuredWidth = availableWidth
             lastWrappedText = textNow
 
             // The gutter is not part of the wrap width. Zero for a text
             // field, which is why this expression serves both.
             let inner = max(8, availableWidth - gutterWidth - textInset * 2)
-            // A different width breaks every line somewhere else, so nothing
-            // survives it. An edit leaves all but one line alone.
-            let reusableLines = widthMoved ? [] : wrapCacheLines
-            let reusableRows = widthMoved ? [] : wrapCacheRows
-
-            let lines = editing.lines
-            // How far the old and new line arrays agree from each end.
-            //
-            // Matching index-for-index is only right while the *number* of
-            // lines holds: type a newline into line 3 of a 200,000-line log
-            // and every line after it shifts by one, so a positional check
-            // says all 199,997 changed and re-shapes the file to answer one
-            // keystroke. An edit is a contiguous region, so the lines before
-            // it and the lines after it are both still there — the standard
-            // common-prefix/common-suffix trim finds them, and what is left
-            // between the two is what actually has to be broken again.
-            var head = 0
-            while head < reusableLines.count, head < lines.count,
-                  reusableLines[head] == lines[head] { head += 1 }
-            var tail = 0
-            while tail < reusableLines.count - head, tail < lines.count - head,
-                  reusableLines[reusableLines.count - 1 - tail]
-                      == lines[lines.count - 1 - tail] { tail += 1 }
-
-            var rows: [Range<Int>] = []
-            var logicalLine: [Int] = []
-            var columnStart: [Int] = []
-            var nextRows: [[Range<Int>]] = []
-            nextRows.reserveCapacity(lines.count)
-            var base = 0
-            for (index, line) in lines.enumerated() {
-                let reusedAt: Int?
-                if index < head {
-                    reusedAt = index
-                } else if index >= lines.count - tail {
-                    reusedAt = reusableLines.count - (lines.count - index)
-                } else {
-                    reusedAt = nil
-                }
-                let broken: [Range<Int>]
-                if let reusedAt, reusableRows.indices.contains(reusedAt) {
-                    broken = reusableRows[reusedAt]
-                } else {
-                    // Shaping is what this whole cache exists to avoid: it is
-                    // the cost of the line, and there are as many lines as
-                    // there are lines.
-                    PerfCounters.lineWraps += 1
-                    let s = String(line)
-                    let advances = f.shapedRun(s).characterAdvances
-                    broken = SoftWrap.rows(text: s, advances: advances, maxWidth: inner)
-                }
-                nextRows.append(broken)
-                for r in broken {
-                    rows.append((base + r.lowerBound)..<(base + r.upperBound))
-                    logicalLine.append(index)
-                    columnStart.append(r.lowerBound)
-                }
-                // The rows cover the line exactly, so the last one's end *is*
-                // its character count. `line.count` would be a fresh grapheme
-                // walk of the line — O(buffer) across the loop, paid even on
-                // the pass where every single line came out of the cache.
-                base += (broken.last?.upperBound ?? 0) + 1  // + the newline
-            }
-            editing.setVisualRows(rows)
-            rowLogicalLine = logicalLine
-            rowColumnStart = columnStart
-            wrapCacheLines = lines
-            wrapCacheRows = nextRows
+            if replanned { planWrap(text: textNow, widthMoved: widthMoved) }
+            breakWrapWindow(font: f, inner: inner, anchored: !replanned)
+            installWrapRows()
             return
         }
 
         // No wrapping: one row per logical line, cached the same way.
         guard editing.text != lastLogicalRowsText else { return }
         seedLogicalRows()
+    }
+
+    // MARK: Soft wrap, one window at a time
+
+    /// How long a frame will spend breaking lines it does not need yet.
+    ///
+    /// The file still gets wrapped — the row table every consumer reads has
+    /// to cover all of it, and a row has to cover real text, so there is no
+    /// honest way to leave a hole in the middle. What this buys is that none
+    /// of it lands between a keystroke and the frame that answers it: the
+    /// window is exact immediately, and the document's height settles over
+    /// however many frames it takes.
+    ///
+    /// A time budget rather than a line count, because a line's cost is its
+    /// length and a fixed count is either a stall on a log or pointlessly
+    /// timid on source. Four milliseconds leaves the rest of a 60 Hz frame
+    /// for everything else, so the settling is invisible instead of being a
+    /// shorter stall in a different place.
+    /// A `var` so a test can separate the two halves: at zero, a pass
+    /// measures what is on screen and nothing else, which is exactly the
+    /// state the window has to be correct in.
+    nonisolated(unsafe) static var wrapBudget: Double = 0.004
+
+    /// Lines broken between clock reads, so the timing is not most of the
+    /// cost of the loop it is timing.
+    private static let wrapBudgetGranularity = 32
+
+    /// Lines broken either side of the viewport, so a small scroll finds its
+    /// rows already there rather than waiting for the next pass.
+    private static let wrapMargin = 64
+
+    /// Rebuilds the per-line plan for a new buffer or a new width, breaking
+    /// nothing: every line that cannot be reused gets one provisional row
+    /// covering it whole, and is queued.
+    private func planWrap(text: String, widthMoved: Bool) {
+        let lines = editing.lines
+        // The scan `afterEdit` has just done, when it is still current.
+        let ranges = lastLogicalRowsText == text
+            ? logicalRowCache : VisualLayout.logicalRows(text)
+
+        // A different width breaks every line somewhere else, so nothing
+        // survives it. An edit leaves all but one line alone.
+        let reusableLines = widthMoved ? [] : wrapCacheLines
+        let reusableRows = widthMoved ? [] : wrapCacheRows
+        let reusableMeasured = widthMoved ? [] : wrapMeasured
+
+        // How far the old and new line arrays agree from each end.
+        //
+        // Matching index-for-index is only right while the *number* of lines
+        // holds: type a newline into line 3 of a 200,000-line log and every
+        // line after it shifts by one, so a positional check says all 199,997
+        // changed. An edit is a contiguous region, so the lines before it and
+        // the lines after it are both still there — the standard
+        // common-prefix/common-suffix trim finds them, and what is left
+        // between the two is what actually has to be broken again.
+        var head = 0
+        while head < reusableLines.count, head < lines.count,
+              reusableLines[head] == lines[head] { head += 1 }
+        var tail = 0
+        while tail < reusableLines.count - head, tail < lines.count - head,
+              reusableLines[reusableLines.count - 1 - tail]
+                  == lines[lines.count - 1 - tail] { tail += 1 }
+
+        var rows: [[Range<Int>]] = []
+        var measured: [Bool] = []
+        var lengths: [Int] = []
+        rows.reserveCapacity(lines.count)
+        measured.reserveCapacity(lines.count)
+        lengths.reserveCapacity(lines.count)
+        var unmeasured = 0
+
+        for index in lines.indices {
+            let length = index < ranges.count ? ranges[index].count : 0
+            lengths.append(length)
+
+            let reusedAt: Int?
+            if index < head {
+                reusedAt = index
+            } else if index >= lines.count - tail {
+                reusedAt = reusableLines.count - (lines.count - index)
+            } else {
+                reusedAt = nil
+            }
+            if let reusedAt, reusableRows.indices.contains(reusedAt),
+               reusableMeasured.indices.contains(reusedAt), reusableMeasured[reusedAt]
+            {
+                rows.append(reusableRows[reusedAt])
+                measured.append(true)
+            } else {
+                rows.append([0..<length])
+                measured.append(false)
+                unmeasured += 1
+            }
+        }
+
+        wrapCacheLines = lines
+        wrapCacheRows = rows
+        wrapMeasured = measured
+        wrapLineLength = lengths
+        wrapUnmeasured = unmeasured
+        wrapCursor = 0
+    }
+
+    /// Breaks what the viewport can reach, then a chunk of what is left.
+    ///
+    /// `anchored` holds the logical line at the top of the box still: rows
+    /// above the viewport multiply as they are broken, and without this the
+    /// text would creep upward under the reader for as long as the
+    /// refinement ran. It is off for the pass that follows a re-plan, where
+    /// the caret drives the scroll instead.
+    private func breakWrapWindow(font: UIFont, inner: Float, anchored: Bool) {
+        guard wrapUnmeasured > 0 else { return }
+        let lineHeight = font.lineHeight
+        let anchorRow = max(0, Int(scrollY / lineHeight))
+        let anchorFraction = scrollY - Float(anchorRow) * lineHeight
+        let anchorLine = wrapLine(containingRow: anchorRow)
+        let anchorSub = anchorRow - wrapFirstRow(ofLine: anchorLine)
+
+        // Every line contributes at least one row, so a viewport `n` rows tall
+        // can never show more than `n` lines starting at the anchor. Measuring
+        // that many, plus a margin either side, is what makes the window
+        // exact rather than nearly exact.
+        // `viewportHeight` is set by emit, so on the very first pass it is
+        // still zero; the row cap the editor was built with stands in.
+        let box = max(viewportHeight, Float(maxLines) * lineHeight)
+        let onScreen = Int(max(0, box) / lineHeight) + 2
+        let first = max(0, anchorLine - Self.wrapMargin)
+        let last = min(wrapCacheRows.count - 1, anchorLine + onScreen + Self.wrapMargin)
+        if first <= last {
+            for index in first...last { breakWrapLine(index, font: font, inner: inner) }
+        }
+
+        // Then whatever is next, so the scrollbar and the box height converge.
+        if Self.wrapBudget > 0 {
+            let deadline = FrameScheduler.now() + Self.wrapBudget
+            var sinceClockRead = 0
+            while wrapCursor < wrapCacheRows.count {
+                if !wrapMeasured[wrapCursor] {
+                    breakWrapLine(wrapCursor, font: font, inner: inner)
+                    sinceClockRead += 1
+                    if sinceClockRead >= Self.wrapBudgetGranularity {
+                        sinceClockRead = 0
+                        if FrameScheduler.now() >= deadline { wrapCursor += 1; break }
+                    }
+                }
+                wrapCursor += 1
+            }
+        }
+
+        if anchored {
+            let sub = min(anchorSub, max(0, wrapCacheRows[anchorLine].count - 1))
+            let row = wrapFirstRow(ofLine: anchorLine) + sub
+            scrollY = max(0, Float(row) * lineHeight + anchorFraction)
+        }
+        // One more frame, until there is nothing left to break. Not a body
+        // rebuild: nothing the app owns has changed, only how much of the
+        // buffer this leaf has looked at.
+        if wrapUnmeasured > 0 { ViewInvalidation.markNeedsRedraw() }
+    }
+
+    private func breakWrapLine(_ index: Int, font: UIFont, inner: Float) {
+        guard wrapMeasured.indices.contains(index), !wrapMeasured[index] else { return }
+        // Shaping is what this whole plan exists to defer: it is the cost of
+        // the line, and there are as many lines as there are lines.
+        PerfCounters.lineWraps += 1
+        let s = String(wrapCacheLines[index])
+        let advances = font.shapedRun(s).characterAdvances
+        wrapCacheRows[index] = SoftWrap.rows(text: s, advances: advances, maxWidth: inner)
+        wrapMeasured[index] = true
+        wrapUnmeasured -= 1
+    }
+
+    /// Which logical line row `target` falls in, over the plan as it stands.
+    ///
+    /// A running sum rather than the installed `rowLogicalLine`, because this
+    /// is asked *between* a re-plan and the install that follows it, when that
+    /// table still describes the previous buffer.
+    private func wrapLine(containingRow target: Int) -> Int {
+        var row = 0
+        for (index, broken) in wrapCacheRows.enumerated() {
+            row += broken.count
+            if row > target { return index }
+        }
+        return max(0, wrapCacheRows.count - 1)
+    }
+
+    private func wrapFirstRow(ofLine line: Int) -> Int {
+        var row = 0
+        for index in 0..<min(line, wrapCacheRows.count) { row += wrapCacheRows[index].count }
+        return row
+    }
+
+    /// Flattens the plan into the row table everything else reads.
+    private func installWrapRows() {
+        var total = 0
+        for broken in wrapCacheRows { total += broken.count }
+
+        var rows: [Range<Int>] = []
+        var logicalLine: [Int] = []
+        var columnStart: [Int] = []
+        rows.reserveCapacity(total)
+        logicalLine.reserveCapacity(total)
+        columnStart.reserveCapacity(total)
+
+        var base = 0
+        for (index, broken) in wrapCacheRows.enumerated() {
+            for r in broken {
+                rows.append((base + r.lowerBound)..<(base + r.upperBound))
+                logicalLine.append(index)
+                columnStart.append(r.lowerBound)
+            }
+            // From the byte scan, not from a fresh `line.count`: that would be
+            // a grapheme walk per line, O(buffer) across the loop and paid
+            // even on a pass where every line came out of the cache.
+            base += wrapLineLength[index] + 1  // + the newline that ended it
+        }
+        editing.setVisualRows(rows)
+        rowLogicalLine = logicalLine
+        rowColumnStart = columnStart
     }
 
     /// Logical line holding visual row `row`. Identity while not wrapping.
@@ -348,7 +506,11 @@ extension LeafNode {
     /// each access and throws the result away.
     func seedLogicalRows() {
         lastLogicalRowsText = editing.text
-        editing.setVisualRows(VisualLayout.logicalRows(editing.text))
+        let rows = VisualLayout.logicalRows(editing.text)
+        // Kept, not just installed: `planWrap` wants this exact scan, and on
+        // a wrapping editor it runs microseconds after this does.
+        logicalRowCache = rows
+        editing.setVisualRows(rows)
         // Row *is* logical line now, which the accessors above answer without
         // a table. Leaving a stale one installed would answer for the wrap
         // this buffer no longer has.

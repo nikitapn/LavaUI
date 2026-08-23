@@ -86,19 +86,46 @@ public struct ShapedRun {
     /// and a combining mark is a glyph with no advance of its own. Summing by
     /// cluster is what keeps the two aligned.
     public var characterAdvances: [Float] {
-        guard !text.isEmpty else { return [] }
-        var result = [Float](repeating: 0, count: text.count)
-        // Character index for each UTF-8 offset where a character starts.
-        var charOfUTF8: [Int: Int] = [:]
-        for (n, entry) in boundaries.enumerated() where n < text.count {
-            charOfUTF8[entry.utf8] = n
-        }
+        // Hoisted, and this is not a style point: `String.count` is a grapheme
+        // walk of the whole line, and as the `where` clause below it was
+        // re-walked once per boundary — quadratic in the line's length, for a
+        // bound the line's own boundary table already knows. Soft wrap asks
+        // for this once per line, so a 4 MB log paid it 11,631 times over:
+        // turning wrapping on took 4.0 s, nearly all of it here.
+        let count = text.count
+        guard count > 0 else { return [] }
+        var result = [Float](repeating: 0, count: count)
         var current = 0
         for glyph in glyphs {
-            if let mapped = charOfUTF8[Int(glyph.cluster)] { current = mapped }
+            // `boundaries` is already sorted by UTF-8 offset, so this is the
+            // lookup the per-line dictionary was doing — without hashing a few
+            // hundred keys and building a table per line, which is most of
+            // what wrapping a whole file spent its time on. A cluster that is
+            // *not* on a boundary leaves `current` alone, the same as a
+            // dictionary miss did: its glyph belongs to the character that
+            // cluster started inside.
+            if let n = boundaryIndex(ofUTF8: Int(glyph.cluster)), n < count {
+                current = n
+            }
             if current < result.count { result[current] += glyph.advance }
         }
         return result
+    }
+
+    /// Position of `offset` in `boundaries`, or nil when no character starts
+    /// there. Binary search rather than a forward walk: HarfBuzz clusters run
+    /// backwards through a right-to-left run, and a cursor that only moved
+    /// forward would answer for the wrong character there.
+    private func boundaryIndex(ofUTF8 offset: Int) -> Int? {
+        var low = 0
+        var high = boundaries.count
+        while low < high {
+            let mid = low + (high - low) / 2
+            let value = boundaries[mid].utf8
+            if value == offset { return mid }
+            if value < offset { low = mid + 1 } else { high = mid }
+        }
+        return nil
     }
 
     // MARK: Helpers

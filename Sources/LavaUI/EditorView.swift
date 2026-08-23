@@ -357,6 +357,10 @@ public struct EditorView: PrimitiveView {
             // storage for as long as the leaf lives.
             leaf.wrapCacheLines = []
             leaf.wrapCacheRows = []
+            leaf.wrapLineLength = []
+            leaf.wrapMeasured = []
+            leaf.wrapUnmeasured = 0
+            leaf.wrapCursor = 0
         }
         leaf.wraps = wraps
         leaf.highlighter = SyntaxHighlighter(rules: rules)

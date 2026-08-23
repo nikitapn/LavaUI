@@ -939,6 +939,23 @@ final class LeafNode: YogaBoxNode {
     /// copying it, the same as `SyntaxHighlighter.Cache` holds its lines.
     var wrapCacheLines: [Substring] = []
     var wrapCacheRows: [[Range<Int>]] = []
+    /// Characters in each logical line, from the byte scan rather than from
+    /// breaking it — what an unbroken line contributes as its one provisional
+    /// row, and what turns a line index into a buffer offset.
+    var wrapLineLength: [Int] = []
+    /// False where `wrapCacheRows[i]` is that provisional row rather than a
+    /// real break. See `refreshVisualRows`.
+    var wrapMeasured: [Bool] = []
+    /// Lines still provisional, and where the background refinement has got
+    /// to. Zero unmeasured means the plan is complete and no further frames
+    /// are asked for.
+    var wrapUnmeasured = 0
+    var wrapCursor = 0
+    /// Rows from the last `seedLogicalRows`, valid while `lastLogicalRowsText`
+    /// still matches the buffer. The wrap planner needs exactly this scan, and
+    /// on an edit `afterEdit` has just done it — so without somewhere to keep
+    /// it, a wrapping editor scanned the buffer twice for every keystroke.
+    var logicalRowCache: [Range<Int>] = []
     /// Click handler receiving node-local coordinates *and* the node's
     /// absolute origin. The caret needs the former; a drag needs the latter,
     /// because pointer capture delivers window coordinates long after the hit
