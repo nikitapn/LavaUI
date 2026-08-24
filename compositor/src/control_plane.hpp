@@ -127,9 +127,20 @@ struct CompositorHost {
 
 
   /// Limits where a surface takes pointer input. `w` or `h` of 0 restores the
-  /// whole surface. False if the id is unknown.
-  virtual bool setInputRegion(uint32_t surfaceId, int32_t x, int32_t y,
-                              uint32_t w, uint32_t h) = 0;
+  /// One rectangle a surface accepts pointer input in, mirroring `InputRect`
+  /// in the IDL — the same reason `WindowEntry` is a mirror: this header stays
+  /// clear of the generated one.
+  struct InputRect {
+    int32_t x = 0;
+    int32_t y = 0;
+    uint32_t w = 0;
+    uint32_t h = 0;
+  };
+
+  /// Limits where a surface takes pointer input, to the union of `rects`. An
+  /// empty list restores the whole surface. False if the id is unknown.
+  virtual bool setInputRegion(uint32_t surfaceId,
+                              std::vector<InputRect> rects) = 0;
 
   /// Frost the desktop behind this surface. `radius` 0 turns it off.
   /// `w` or `h` of 0 frosts the whole surface; otherwise `x,y,w,h` are a

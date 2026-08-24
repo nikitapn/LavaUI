@@ -490,6 +490,20 @@ message WindowListAck {
   serial: u32;
 }
 
+/// One rectangle a surface accepts pointer input in, in its own coordinates.
+///
+/// Signed origin, unsigned extent: a shell may legitimately describe a strip
+/// that starts left of its own surface — a dock centred on a screen wider than
+/// its content — and a negative width is not a rectangle. Zero on either
+/// extent is a rectangle nothing is inside, which is a way of saying "not
+/// this one" without rebuilding the list.
+message InputRect {
+  x: i32;
+  y: i32;
+  w: u32;
+  h: u32;
+}
+
 /// Whether anything is in the way of a panel.
 ///
 /// What it answers is "is the strip I occupy clear of windows right now",
@@ -1203,14 +1217,24 @@ interface Compositor {
   /// panels are hit-tested above windows — so without this, the empty half of
   /// that strip swallows every click meant for the window underneath.
   ///
-  /// A rectangle rather than a region, because the shapes that need it are
-  /// rectangles: a dock's icon row, a menu's dropdown. A region would be the
-  /// general answer and is what to reach for when a shell wants a hole in the
-  /// middle of itself, which nothing does yet.
+  /// **A list, because one rectangle was not enough.** It was, for as long as
+  /// the shapes that needed it were single runs — a dock's icon row, a menu's
+  /// dropdown. Then the panel grew notifications: cards 380 pt wide at the
+  /// right edge, under a 32 pt strip that spans the screen. Neither rectangle
+  /// contains the other and their union is the whole top of the display, so a
+  /// panel with a toast up claimed every click along the top edge and the
+  /// desktop under it went dead until the notification expired. Two rectangles
+  /// describe it exactly; one cannot describe it at all.
   ///
-  /// `w` or `h` of 0 restores the default, which is the whole surface.
-  void SetInputRegion(surfaceId: in u32, x: in i32, y: in i32,
-                      w: in u32, h: in u32) raises(SurfaceNotFound);
+  /// A point is inside the region if it is inside **any** rectangle. They may
+  /// overlap, and an empty list restores the default, which is the whole
+  /// surface — the answer for every window, which never calls this.
+  ///
+  /// Still rectangles rather than an arbitrary region: what a shell draws is
+  /// rectangles, and a list of them says everything a scanline region would
+  /// without either side owning region arithmetic.
+  void SetInputRegion(surfaceId: in u32, rects: in vector<InputRect>)
+      raises(SurfaceNotFound);
 
   /// The pointer image while the pointer is inside this surface.
   ///

@@ -1156,6 +1156,46 @@ public:
 };
 } // namespace flat
 
+struct InputRect {
+  int32_t x;
+  int32_t y;
+  uint32_t w;
+  uint32_t h;
+};
+
+namespace flat {
+struct InputRect {
+  int32_t x;
+  int32_t y;
+  uint32_t w;
+  uint32_t h;
+};
+
+class InputRect_Direct {
+  ::nprpc::flat_buffer& buffer_;
+  const std::uint32_t offset_;
+
+  auto& base() noexcept { return *reinterpret_cast<InputRect*>(reinterpret_cast<std::byte*>(buffer_.data().data()) + offset_); }
+  auto const& base() const noexcept { return *reinterpret_cast<const InputRect*>(reinterpret_cast<const std::byte*>(buffer_.data().data()) + offset_); }
+public:
+  uint32_t offset() const noexcept { return offset_; }
+  void* __data() noexcept { return (void*)&base(); }
+  InputRect_Direct(::nprpc::flat_buffer& buffer, std::uint32_t offset)
+    : buffer_(buffer)
+    , offset_(offset)
+  {
+  }
+  const int32_t& x() const noexcept { return base().x;}
+  int32_t& x() noexcept { return base().x;}
+  const int32_t& y() const noexcept { return base().y;}
+  int32_t& y() noexcept { return base().y;}
+  const uint32_t& w() const noexcept { return base().w;}
+  uint32_t& w() noexcept { return base().w;}
+  const uint32_t& h() const noexcept { return base().h;}
+  uint32_t& h() noexcept { return base().h;}
+};
+} // namespace flat
+
 struct PanelArea {
   uint32_t serial;
   bool covered;
@@ -1910,7 +1950,7 @@ public:
   virtual ::nprpc::Task<> SubscribePanelArea (uint32_t surfaceId, ::nprpc::BidiStream<PanelAreaAck, PanelArea> stream) = 0;
   virtual ::nprpc::Task<> SubscribeSystemTheme (::nprpc::BidiStream<ThemeAck, SystemTheme> stream) = 0;
   virtual void ActivateWindow (uint32_t surfaceId) = 0;
-  virtual void SetInputRegion (uint32_t surfaceId, int32_t x, int32_t y, uint32_t w, uint32_t h) = 0;
+  virtual void SetInputRegion (uint32_t surfaceId, ::nprpc::flat::Span_ref<flat::InputRect, flat::InputRect_Direct> rects) = 0;
   virtual void SetCursor (uint32_t surfaceId, CursorShape shape) = 0;
   virtual Appearance GetAppearance () = 0;
   virtual void SetAppearance (flat::Appearance_Direct appearance) = 0;
@@ -1987,8 +2027,8 @@ public:
   std::pair<::nprpc::StreamWriter<ThemeAck>, ::nprpc::StreamReader<SystemTheme>> SubscribeSystemTheme ();
   void ActivateWindow (uint32_t surfaceId);
   ::nprpc::Task<void> ActivateWindowAsync (uint32_t surfaceId, std::stop_token st = {});
-  void SetInputRegion (uint32_t surfaceId, int32_t x, int32_t y, uint32_t w, uint32_t h);
-  ::nprpc::Task<void> SetInputRegionAsync (uint32_t surfaceId, int32_t x, int32_t y, uint32_t w, uint32_t h, std::stop_token st = {});
+  void SetInputRegion (uint32_t surfaceId, ::nprpc::flat::Span<const InputRect> rects);
+  ::nprpc::Task<void> SetInputRegionAsync (uint32_t surfaceId, ::nprpc::flat::Span<const InputRect> rects, std::stop_token st = {});
   void SetCursor (uint32_t surfaceId, const CursorShape& shape);
   Appearance GetAppearance ();
   ::nprpc::Task<Appearance> GetAppearanceAsync (std::stop_token st = {});

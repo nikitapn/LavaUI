@@ -144,7 +144,6 @@ final class MenuSession {
     /// and nothing else, where a dropdown wants the whole panel so a click
     /// outside it dismisses. Stealing 600pt of desktop for a toast that is
     /// 90pt tall would be a click nobody meant to give up.
-    @ObservationIgnored private var toastDepth: Float = 0
 
     func attach(editor: Editor, brandIcon: UIImage) {
         self.editor = editor
@@ -392,12 +391,18 @@ final class MenuSession {
         syncInputRegion()
     }
 
-    /// The notification stack changed shape; keep the hit region in step.
+    /// The notification stack changed shape; the hit region follows it.
+    ///
+    /// Deferred by a frame, because the rectangle now comes from the layout
+    /// and the layout has not happened yet: this runs from the D-Bus pump,
+    /// which the frame loop drains *before* it builds the tree. Measuring here
+    /// would size the region to the stack as it was one toast ago — and on the
+    /// first toast there is no node to measure at all.
     func setToasts(_ toasts: [Notifications.Toast]) {
-        let depth = ToastStack.estimatedDepth(of: toasts)
-        guard depth != toastDepth else { return }
-        toastDepth = depth
-        syncInputRegion()
+        let ids = toasts.map(\.id)
+        guard ids != toastIds else { return }
+        toastIds = ids
+        FrameTasks.after { [self] in syncInputRegion() }
     }
 
     /// Whether any strip popover needs the deep hit region.
@@ -406,27 +411,76 @@ final class MenuSession {
             || trayMenuOpen || dialog != .none
     }
 
-    /// Hit-test region: strip when idle, full panel while a menu or volume
-    /// popover is open so the dropdown is clickable and outside clicks dismiss.
+    /// Hit-test region: the strip, plus whatever else is currently claiming
+    /// clicks.
+    ///
+    /// Two rectangles rather than one, and that is the whole point of the list
+    /// form. The strip spans the screen; the notification cards sit at the
+    /// right edge *below* it. Neither contains the other, so the only single
+    /// rectangle covering both is the entire top of the display — which is
+    /// what a toast used to claim, leaving the desktop under it dead to
+    /// clicks until the notification expired.
+    ///
+    /// A menu or popover is still one rectangle covering the whole panel, and
+    /// deliberately: the click that dismisses an open dropdown is the one that
+    /// lands *outside* it, so the panel has to be the thing that receives it.
     private func syncInputRegion() {
         ensureExpanded()
-        let height = wantsCapture
-            ? Self.openHeight
-            : max(Self.stripHeight, min(toastDepth, Self.openHeight))
-        // Width is the surface length; compositor clamps. A large constant is
-        // fine — the panel is always full edge width.
+        // Width is the surface length; the compositor clamps. A large constant
+        // is fine — the panel is always full edge width.
         let width: Float = 8192
-        let region = (x: Float(0), y: Float(0), w: width, h: height)
-        guard region != appliedRegion else { return }
+        var region: [InputRect] = []
+        if wantsCapture {
+            region = [InputRect(x: 0, y: 0, w: UInt32(width),
+                                h: UInt32(Self.openHeight))]
+        } else {
+            region = [InputRect(x: 0, y: 0, w: UInt32(width),
+                                h: UInt32(Self.stripHeight))]
+            if let toasts = toastFrame() {
+                region.append(toasts)
+            }
+        }
+        guard !Self.sameRegion(region, appliedRegion) else { return }
         appliedRegion = region
-        LavaClient.setInputRegion(
-            x: region.x, y: region.y, width: region.w, height: region.h
+        LavaClient.setInputRegion(region)
+    }
+
+    /// Field-by-field, because the generated `InputRect` is not `Equatable`
+    /// and `Sources/LavaIDL` is not ours to hand-edit. The comparison is what
+    /// keeps this to one round trip per actual change rather than one per
+    /// D-Bus pump.
+    private static func sameRegion(_ a: [InputRect], _ b: [InputRect]) -> Bool {
+        a.count == b.count && zip(a, b).allSatisfy {
+            $0.x == $1.x && $0.y == $1.y && $0.w == $1.w && $0.h == $1.h
+        }
+    }
+
+    /// The notification stack's rectangle, as it was actually laid out, or nil
+    /// when there is none on screen.
+    ///
+    /// Measured rather than estimated. The estimate it replaces added up a
+    /// guess per card — two lines of summary, three of body if any, thirty
+    /// points for actions — and erred high on purpose, because a region too
+    /// short means a button on the last card does nothing. Reading the
+    /// committed frame is exact and needs no such margin, and it stops being
+    /// wrong the moment a card's contents wrap differently than the guess
+    /// assumed.
+    private func toastFrame() -> InputRect? {
+        guard !toastIds.isEmpty,
+              let frame = LavaApp.mainLayoutHost?.agentFrame(sid: "notifications"),
+              frame.w > 0, frame.h > 0
+        else { return nil }
+        return InputRect(
+            x: Int32(frame.x.rounded(.down)), y: Int32(frame.y.rounded(.down)),
+            w: UInt32(frame.w.rounded(.up)), h: UInt32(frame.h.rounded(.up))
         )
     }
 
     @ObservationIgnored private var expanded = false
-    @ObservationIgnored private var appliedRegion:
-        (x: Float, y: Float, w: Float, h: Float) = (0, 0, 0, 0)
+    @ObservationIgnored private var appliedRegion: [InputRect] = []
+    /// Which notifications are up, so a pump that changed nothing costs a
+    /// compare rather than a layout read and a round trip.
+    @ObservationIgnored private var toastIds: [UInt32] = []
 
     /// The strip, and how deep the panel surface is for dropdown room.
     ///

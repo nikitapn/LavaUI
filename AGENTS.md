@@ -907,10 +907,26 @@ markup, so nothing prints `<b>` at the user.
 If another daemon already owns the name — dunst, or a desktop this is nested
 inside — the panel says so once and shows nothing rather than fighting for it.
 
-Two known edges: the input region is a single rectangle, so while toasts are up
-the panel claims a band across the top of the screen rather than only the cards
-(`SetInputRegion` would need to take a region for that), and the depth of that
-band is estimated from the toast contents rather than measured.
+Both of the edges this used to have were the same edge, and they are gone.
+`SetInputRegion` takes a **list** of rectangles, so the panel claims its strip
+and the cards and nothing between them — one rectangle could only describe
+their union, which is the whole top of the display, so a toast made every click
+along that edge land on the panel and the desktop under it went dead until the
+notification expired. And the cards' rectangle is now *measured*
+(`MenuSession.toastFrame` reads `agentFrame(sid: "notifications")`) rather than
+guessed at two lines of summary and three of body per card.
+
+Measuring costs one thing worth knowing: the rectangle comes from the layout,
+and `setToasts` runs from the D-Bus pump, which the frame loop drains *before*
+it builds the tree. So the region update is deferred with `FrameTasks.after` —
+reading it inline measures the stack as it was one toast ago, and on the first
+toast there is no node to measure at all.
+
+What remains true is what `ToastStack`'s own comment says: toasts live inside
+the panel's surface, so they cannot be deeper than it is, cannot sit at the
+bottom of the screen, and go with the panel if it restarts. Those are the
+reasons to give notifications their own surfaces one day; the input region was
+not one of them.
 
 ## Starting things with the session
 

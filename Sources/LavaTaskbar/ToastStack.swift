@@ -12,6 +12,14 @@ import LavaUI
 /// What that buys is also what it costs: toasts live inside the panel's
 /// surface, so they cannot be deeper than it is, cannot sit at the bottom of
 /// the screen, and go with the panel if it restarts.
+///
+/// The stack's own rectangle is what the panel claims clicks in — `agentId`
+/// below is how it finds it, and `MenuSession.toastFrame` reads the committed
+/// layout rather than adding up a guess per card. That matters more than it
+/// sounds: the panel's region used to be one rectangle, so a stack at the
+/// right edge and a strip across the screen could only be described by their
+/// union, and every click along the top of the desktop went to the panel
+/// until the notification expired.
 struct ToastStack: View {
     var notifications: Notifications
 
@@ -20,22 +28,6 @@ struct ToastStack: View {
     static let width: Float = 380
     /// Clear of the strip before the first card.
     static let topInset: Float = MenuSession.stripHeight + 8
-
-    /// What the stack is worth reserving clicks for, without measuring it.
-    ///
-    /// The input region is a rectangle set from outside layout, so this has to
-    /// be an estimate; it errs high, because a region too short means a button
-    /// on the last card does nothing while one too tall costs the desktop a
-    /// few clicks it will not miss under a notification.
-    static func estimatedDepth(of toasts: [Notifications.Toast]) -> Float {
-        guard !toasts.isEmpty else { return 0 }
-        let perCard: Float = toasts.reduce(0) { total, toast in
-            let lines = Float(2 + min(6, toast.body.isEmpty ? 0 : 3))
-            let actions: Float = toast.actions.isEmpty ? 0 : 30
-            return total + 24 + lines * 20 + actions + 8
-        }
-        return topInset + perCard
-    }
 
     var body: some View {
         VStack(width: .pt(Self.width), padding: 0, spacing: 8) {

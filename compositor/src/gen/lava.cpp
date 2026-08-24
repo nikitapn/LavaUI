@@ -319,10 +319,7 @@ public:
 
 struct lava_M11 {
   uint32_t _1;
-  int32_t _2;
-  int32_t _3;
-  uint32_t _4;
-  uint32_t _5;
+  ::nprpc::flat::Vector<::lava::flat::InputRect> _2;
 };
 
 class lava_M11_Direct {
@@ -341,14 +338,9 @@ public:
   }
   const uint32_t& _1() const noexcept { return base()._1;}
   uint32_t& _1() noexcept { return base()._1;}
-  const int32_t& _2() const noexcept { return base()._2;}
-  int32_t& _2() noexcept { return base()._2;}
-  const int32_t& _3() const noexcept { return base()._3;}
-  int32_t& _3() noexcept { return base()._3;}
-  const uint32_t& _4() const noexcept { return base()._4;}
-  uint32_t& _4() noexcept { return base()._4;}
-  const uint32_t& _5() const noexcept { return base()._5;}
-  uint32_t& _5() noexcept { return base()._5;}
+  void _2(std::uint32_t elements_size) { new (&base()._2) ::nprpc::flat::Vector<::lava::flat::InputRect>(buffer_, elements_size); }
+  auto _2_d() noexcept { return ::nprpc::flat::Vector_Direct2<::lava::flat::InputRect,::lava::flat::InputRect_Direct>(buffer_, offset_ + offsetof(lava_M11, _2)); }
+  auto _2() noexcept { return ::nprpc::flat::Span_ref<::lava::flat::InputRect, ::lava::flat::InputRect_Direct>(buffer_, base()._2.range(buffer_.data().data())); }
 };
 
 struct lava_M12 {
@@ -982,8 +974,11 @@ bool check_1Fu322Fu323Fu32(::nprpc::flat_buffer& buf, lava_M9_Direct& ia) {
 check_failed:
   return false;
 }
-bool check_1Fu322Fi323Fi324Fu325Fu32(::nprpc::flat_buffer& buf, lava_M11_Direct& ia) {
-  if (static_cast<std::uint32_t>(buf.size()) < ia.offset() + 20) goto check_failed;
+bool check_1Fu322VInputRect(::nprpc::flat_buffer& buf, lava_M11_Direct& ia) {
+  if (static_cast<std::uint32_t>(buf.size()) < ia.offset() + 12) goto check_failed;
+  {
+    if(!ia._2_d()._check_size_align(static_cast<std::uint32_t>(buf.size()))) goto check_failed;
+  }
   return true;
 check_failed:
   return false;
@@ -2097,17 +2092,18 @@ Compositor::ActivateWindowAsync(uint32_t surfaceId, std::stop_token st) {
   }
 }
 
-void Compositor::SetInputRegion(uint32_t surfaceId, int32_t x, int32_t y, uint32_t w, uint32_t h) {
+void Compositor::SetInputRegion(uint32_t surfaceId, ::nprpc::flat::Span<const InputRect> rects) {
   auto& __arena = ::nprpc::impl::tls_bump_arena();
   __arena.reset();
   ::nprpc::flat_buffer buf;
   buf.set_arena(&__arena);
   auto session = ::nprpc::impl::g_rpc->get_session(this->get_endpoint());
-  std::size_t __wire_size = 52;
+  std::size_t __wire_size = 44;
+  __wire_size = ::nprpc::flat::grow_size(__wire_size, 4, static_cast<std::size_t>(rects.size()) * 16);
   if (!::nprpc::impl::g_rpc->prepare_zero_copy_buffer(session->ctx(), buf, __wire_size))
     buf.prepare(__wire_size);
   {
-    buf.commit(52);
+    buf.commit(44);
     static_cast<::nprpc::impl::Header*>(buf.data().data())->msg_id = ::nprpc::impl::MessageId::FunctionCall;
   static_cast<::nprpc::impl::Header*>(buf.data().data())->msg_type =::nprpc::impl::MessageType::Request;
   }
@@ -2118,10 +2114,8 @@ void Compositor::SetInputRegion(uint32_t surfaceId, int32_t x, int32_t y, uint32
   __ch.function_idx() = 16;
   lava_M11_Direct _(buf,32);
   _._1() = surfaceId;
-  _._2() = x;
-  _._3() = y;
-  _._4() = w;
-  _._5() = h;
+  _._2(static_cast<uint32_t>(rects.size()));
+  memcpy(_._2().data(), rects.data(), rects.size() * 16);
   static_cast<::nprpc::impl::Header*>(buf.data().data())->size = static_cast<uint32_t>(buf.size());
   session->send_receive(buf, this->get_timeout());
   auto std_reply = ::nprpc::impl::handle_standart_reply(buf);
@@ -2132,15 +2126,16 @@ void Compositor::SetInputRegion(uint32_t surfaceId, int32_t x, int32_t y, uint32
 }
 
 ::nprpc::Task<void>
-Compositor::SetInputRegionAsync(uint32_t surfaceId, int32_t x, int32_t y, uint32_t w, uint32_t h, std::stop_token st) {
+Compositor::SetInputRegionAsync(uint32_t surfaceId, ::nprpc::flat::Span<const InputRect> rects, std::stop_token st) {
   if (st.stop_requested()) throw nprpc::OperationCancelled();
   ::nprpc::flat_buffer buf;
   auto session = ::nprpc::impl::g_rpc->get_session(this->get_endpoint());
-  std::size_t __wire_size = 52;
+  std::size_t __wire_size = 44;
+  __wire_size = ::nprpc::flat::grow_size(__wire_size, 4, static_cast<std::size_t>(rects.size()) * 16);
   if (!::nprpc::impl::g_rpc->prepare_zero_copy_buffer(session->ctx(), buf, __wire_size))
     buf.prepare(__wire_size);
   {
-    buf.commit(52);
+    buf.commit(44);
     static_cast<::nprpc::impl::Header*>(buf.data().data())->msg_id = ::nprpc::impl::MessageId::FunctionCall;
   static_cast<::nprpc::impl::Header*>(buf.data().data())->msg_type =::nprpc::impl::MessageType::Request;
   }
@@ -2151,10 +2146,8 @@ Compositor::SetInputRegionAsync(uint32_t surfaceId, int32_t x, int32_t y, uint32
   __ch.function_idx() = 16;
   lava_M11_Direct _(buf,32);
   _._1() = surfaceId;
-  _._2() = x;
-  _._3() = y;
-  _._4() = w;
-  _._5() = h;
+  _._2(static_cast<uint32_t>(rects.size()));
+  memcpy(_._2().data(), rects.data(), rects.size() * 16);
   static_cast<::nprpc::impl::Header*>(buf.data().data())->size = static_cast<uint32_t>(buf.size());
   co_await session->send_receive_coro(buf, this->get_timeout(), std::move(st));
   auto std_reply = ::nprpc::impl::handle_standart_reply(buf);
@@ -5220,12 +5213,12 @@ void ICompositor_Servant::dispatch(::nprpc::SessionContext& ctx, [[maybe_unused]
     case 16: {
       assert(ctx.rx_buffer != nullptr);
       lava_M11_Direct ia(*ctx.rx_buffer, 32);
-      if ( !check_1Fu322Fi323Fi324Fu325Fu32(*ctx.rx_buffer, ia) ) {
+      if ( !check_1Fu322VInputRect(*ctx.rx_buffer, ia) ) {
         ::nprpc::impl::make_simple_answer(ctx, ::nprpc::impl::MessageId::Error_BadInput);
         break;
       }
       try {
-        SetInputRegion(ia._1(), ia._2(), ia._3(), ia._4(), ia._5());
+        SetInputRegion(ia._1(), ia._2());
       }
       catch(::lava::SurfaceNotFound& e) {
         assert(ctx.tx_buffer != nullptr);

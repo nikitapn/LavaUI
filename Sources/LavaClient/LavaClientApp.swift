@@ -782,7 +782,8 @@ public enum LavaClient {
         var corner: Float
     }
 
-    /// Limits where this surface takes pointer input, in its own coordinates.
+    /// One rectangle this surface takes pointer input in, in its own
+    /// coordinates.
     ///
     /// For a panel that draws less than it covers — a dock floating over the
     /// desktop is a full-width strip with a few icons in it, and panels are
@@ -792,12 +793,29 @@ public enum LavaClient {
     public static func setInputRegion(
         x: Float, y: Float, width: Float, height: Float
     ) {
+        let empty = width <= 0 || height <= 0
+        setInputRegion(empty ? [] : [
+            InputRect(
+                x: Int32(x), y: Int32(y),
+                w: UInt32(max(0, width)), h: UInt32(max(0, height))
+            )
+        ])
+    }
+
+    /// Every rectangle this surface takes pointer input in. A point counts if
+    /// it is inside **any** of them; an empty list restores the whole surface.
+    ///
+    /// The list form exists because one rectangle could not describe the panel:
+    /// its strip spans the screen and its notification cards sit at the right
+    /// edge under it, so the only single rectangle containing both is the
+    /// whole top of the display — which is what made a toast swallow every
+    /// click along that edge until it expired.
+    public static func setInputRegion(_ rects: [InputRect]) {
         guard let compositor = Self.compositor, surfaceID != 0 else { return }
         report("SetInputRegion") {
             try blockingCall {
                 try await compositor.setInputRegion(
-                    surfaceId: surfaceID, x: Int32(x), y: Int32(y),
-                    w: UInt32(max(0, width)), h: UInt32(max(0, height))
+                    surfaceId: surfaceID, rects: rects
                 )
             }
         }

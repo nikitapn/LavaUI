@@ -847,6 +847,41 @@ public func unmarshal_WindowListAck(buffer: UnsafeRawPointer, offset: Int) -> Wi
   return result
 }
 
+public struct InputRect: Codable, Sendable {
+  public var x: Int32 = 0
+  public var y: Int32 = 0
+  public var w: UInt32 = 0
+  public var h: UInt32 = 0
+
+  public init() {}
+
+  public init(x: Int32, y: Int32, w: UInt32, h: UInt32)   {
+    self.x = x
+    self.y = y
+    self.w = w
+    self.h = h
+  }
+}
+
+
+// MARK: - Marshal InputRect
+public func marshal_InputRect(buffer: FlatBuffer, offset: Int, data: InputRect) {
+  buffer.storeBytes(of: data.x, toByteOffset: offset + 0, as: Int32.self)
+  buffer.storeBytes(of: data.y, toByteOffset: offset + 4, as: Int32.self)
+  buffer.storeBytes(of: data.w, toByteOffset: offset + 8, as: UInt32.self)
+  buffer.storeBytes(of: data.h, toByteOffset: offset + 12, as: UInt32.self)
+}
+
+// MARK: - Unmarshal InputRect
+public func unmarshal_InputRect(buffer: UnsafeRawPointer, offset: Int) -> InputRect {
+  var result = InputRect()
+  result.x = buffer.load(fromByteOffset: offset + 0, as: Int32.self)
+  result.y = buffer.load(fromByteOffset: offset + 4, as: Int32.self)
+  result.w = buffer.load(fromByteOffset: offset + 8, as: UInt32.self)
+  result.h = buffer.load(fromByteOffset: offset + 12, as: UInt32.self)
+  return result
+}
+
 public struct PanelArea: Codable, Sendable {
   public var serial: UInt32 = 0
   public var covered: Bool = false
@@ -1807,19 +1842,13 @@ fileprivate func unmarshal_lava_M10(buffer: UnsafeRawPointer, offset: Int) -> la
 
 fileprivate struct lava_M11: Codable, Sendable {
   public var _1: UInt32 = 0
-  public var _2: Int32 = 0
-  public var _3: Int32 = 0
-  public var _4: UInt32 = 0
-  public var _5: UInt32 = 0
+  public var _2: [InputRect] = []
 
   public init() {}
 
-  public init(_1: UInt32, _2: Int32, _3: Int32, _4: UInt32, _5: UInt32)   {
+  public init(_1: UInt32, _2: [InputRect])   {
     self._1 = _1
     self._2 = _2
-    self._3 = _3
-    self._4 = _4
-    self._5 = _5
   }
 }
 
@@ -1827,20 +1856,18 @@ fileprivate struct lava_M11: Codable, Sendable {
 // MARK: - Marshal lava_M11
 fileprivate func marshal_lava_M11(buffer: FlatBuffer, offset: Int, data: lava_M11) {
   buffer.storeBytes(of: data._1, toByteOffset: offset + 0, as: UInt32.self)
-  buffer.storeBytes(of: data._2, toByteOffset: offset + 4, as: Int32.self)
-  buffer.storeBytes(of: data._3, toByteOffset: offset + 8, as: Int32.self)
-  buffer.storeBytes(of: data._4, toByteOffset: offset + 12, as: UInt32.self)
-  buffer.storeBytes(of: data._5, toByteOffset: offset + 16, as: UInt32.self)
+  NPRPC.marshal_struct_vector(buffer: buffer, offset: offset + 4, vector: data._2, elementSize: 16, elementAlignment: 4) { buf, off, elem in
+    marshal_InputRect(buffer: buf, offset: off, data: elem)
+  }
 }
 
 // MARK: - Unmarshal lava_M11
 fileprivate func unmarshal_lava_M11(buffer: UnsafeRawPointer, offset: Int) -> lava_M11 {
   var result = lava_M11()
   result._1 = buffer.load(fromByteOffset: offset + 0, as: UInt32.self)
-  result._2 = buffer.load(fromByteOffset: offset + 4, as: Int32.self)
-  result._3 = buffer.load(fromByteOffset: offset + 8, as: Int32.self)
-  result._4 = buffer.load(fromByteOffset: offset + 12, as: UInt32.self)
-  result._5 = buffer.load(fromByteOffset: offset + 16, as: UInt32.self)
+  result._2 = NPRPC.unmarshal_struct_vector(buffer: buffer, offset: offset + 4, elementSize: 16) { buf, off in
+    unmarshal_InputRect(buffer: buf, offset: off)
+  }
   return result
 }
 
@@ -2463,7 +2490,7 @@ public protocol CompositorProtocol {
   func subscribePanelArea(surfaceId: UInt32, stream: NPRPCBidiStream<PanelArea, PanelAreaAck>) async throws
   func subscribeSystemTheme(stream: NPRPCBidiStream<SystemTheme, ThemeAck>) async
   func activateWindow(surfaceId: UInt32) throws
-  func setInputRegion(surfaceId: UInt32, x: Int32, y: Int32, w: UInt32, h: UInt32) throws
+  func setInputRegion(surfaceId: UInt32, rects: [InputRect]) throws
   func setCursor(surfaceId: UInt32, shape: CursorShape)
   func getAppearance() -> Appearance
   func setAppearance(appearance: Appearance) throws
@@ -3168,11 +3195,11 @@ final public class Compositor: NPRPCObject, @unchecked Sendable {
     if stdReply != 0 { throw UnexpectedReplyError(message: "Unexpected reply") }
   }
 
-  public func setInputRegion(surfaceId: UInt32, x: Int32, y: Int32, w: UInt32, h: UInt32) async throws   {
+  public func setInputRegion(surfaceId: UInt32, rects: [InputRect]) async throws   {
     // Prepare buffer
     let buffer = FlatBuffer()
-    buffer.prepare(52)
-    buffer.commit(52)
+    buffer.prepare(172)
+    buffer.commit(44)
     guard let bufData = buffer.data else { throw BufferError(message: "Failed to get buffer data") }
 
     // Write message header
@@ -3190,10 +3217,7 @@ final public class Compositor: NPRPCObject, @unchecked Sendable {
     // Marshal input arguments
     var inArgs = lava_M11()
     inArgs._1 = surfaceId
-    inArgs._2 = x
-    inArgs._3 = y
-    inArgs._4 = w
-    inArgs._5 = h
+    inArgs._2 = rects
     marshal_lava_M11(buffer: buffer, offset: 32, data: inArgs)
 
     guard let finalData = buffer.data else { throw BufferError(message: "Failed to get buffer data") }
@@ -4668,7 +4692,7 @@ open class CompositorServant: NPRPCServant, CompositorProtocol, @unchecked Senda
     fatalError("Subclass must implement activateWindow")
   }
 
-  open func setInputRegion(surfaceId: UInt32, x: Int32, y: Int32, w: UInt32, h: UInt32) throws   {
+  open func setInputRegion(surfaceId: UInt32, rects: [InputRect]) throws   {
     fatalError("Subclass must implement setInputRegion")
   }
 
@@ -5482,7 +5506,7 @@ open class CompositorServant: NPRPCServant, CompositorProtocol, @unchecked Senda
         }
       case 16: // SetInputRegion
         // Validate input buffer for untrusted interface
-        guard check_1Fu322Fi323Fi324Fu325Fu32(buffer: data, bufferSize: buffer.size, offset: 32) else         {
+        guard check_1Fu322VInputRect(buffer: data, bufferSize: buffer.size, offset: 32) else         {
           makeSimpleAnswer(buffer: buffer, messageId: impl.MessageId.Error_BadInput)
           return
         }
@@ -5491,7 +5515,7 @@ open class CompositorServant: NPRPCServant, CompositorProtocol, @unchecked Senda
         let ia = unmarshal_lava_M11(buffer: data, offset: 32)
         
         do {
-          try setInputRegion(surfaceId: ia._1, x: ia._2, y: ia._3, w: ia._4, h: ia._5)
+          try setInputRegion(surfaceId: ia._1, rects: ia._2)
           // Send success
           makeSimpleAnswer(buffer: buffer, messageId: impl.MessageId.Success)
         }
@@ -6494,8 +6518,9 @@ fileprivate func check_1Fu322Fu323Fu32(buffer: UnsafeRawPointer, bufferSize: Int
 
 
 // Safety check for lava_M11
-fileprivate func check_1Fu322Fi323Fi324Fu325Fu32(buffer: UnsafeRawPointer, bufferSize: Int, offset: Int) -> Bool {
-  guard NPRPC.check_struct_bounds(bufferSize: bufferSize, offset: offset, structSize: 20) else { return false }
+fileprivate func check_1Fu322VInputRect(buffer: UnsafeRawPointer, bufferSize: Int, offset: Int) -> Bool {
+  guard NPRPC.check_struct_bounds(bufferSize: bufferSize, offset: offset, structSize: 12) else { return false }
+  guard NPRPC.check_vector_bounds(buffer: buffer, bufferSize: bufferSize, offset: offset + 4, elementSize: 16) else { return false }
   return true
 }
 

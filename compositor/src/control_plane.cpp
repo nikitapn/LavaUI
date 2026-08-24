@@ -1114,9 +1114,16 @@ class CompositorImpl final : public ICompositor_Servant {
     if (!host_.activateWindow(surfaceId)) throw SurfaceNotFound(surfaceId);
   }
 
-  void SetInputRegion(uint32_t surfaceId, int32_t x, int32_t y, uint32_t w,
-                      uint32_t h) override {
-    if (!host_.setInputRegion(surfaceId, x, y, w, h)) {
+  void SetInputRegion(
+      uint32_t surfaceId,
+      nprpc::flat::Span_ref<flat::InputRect, flat::InputRect_Direct> rects)
+      override {
+    std::vector<CompositorHost::InputRect> region;
+    region.reserve(rects.size());
+    for (auto rect : rects) {
+      region.push_back({rect.x(), rect.y(), rect.w(), rect.h()});
+    }
+    if (!host_.setInputRegion(surfaceId, std::move(region))) {
       throw SurfaceNotFound(surfaceId);
     }
   }

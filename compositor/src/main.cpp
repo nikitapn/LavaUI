@@ -1386,13 +1386,20 @@ struct ClientSurface {
   /// dialog on whatever opened it.
   uint32_t parentId = 0;
 
-  /// Where this surface takes pointer input, in its own coordinates. Zero
-  /// width or height means the whole surface, which is every window's answer
-  /// and most panels'. See `SetInputRegion`.
-  int32_t inputX = 0;
-  int32_t inputY = 0;
-  uint32_t inputW = 0;
-  uint32_t inputH = 0;
+  /// Where this surface takes pointer input, in its own coordinates. Empty
+  /// means the whole surface, which is every window's answer and most panels'.
+  /// See `SetInputRegion`.
+  ///
+  /// A list because the panel needs two disjoint rectangles at once — its
+  /// strip across the top, and the notification cards at the right — whose
+  /// union is the whole top of the screen. One rectangle could only describe
+  /// that union, which is why a toast used to kill every click along the top
+  /// edge.
+  /// `lava::CompositorHost::InputRect` rather than a type of its own: the
+  /// servant hands these straight through and a second declaration would be a
+  /// conversion for nothing.
+  using InputRect = lava::CompositorHost::InputRect;
+  std::vector<InputRect> inputRects;
 
   /// The pointer image this client asked for, as a `CursorShape` ordinal.
   ///
@@ -1405,9 +1412,17 @@ struct ClientSurface {
   /// accepts input. A dock is a full-width strip with a few icons in it, and
   /// the strip between them belongs to whatever is underneath.
   bool acceptsInput(double sx, double sy) const {
-    if (inputW == 0 || inputH == 0) return true;
-    return sx >= inputX && sy >= inputY && sx < inputX + inputW &&
-           sy < inputY + inputH;
+    if (inputRects.empty()) return true;
+    for (const InputRect &r : inputRects) {
+      // A zero extent is a rectangle nothing is inside — a shell's way of
+      // saying "not this one" without rebuilding the list — and the
+      // comparisons below already answer that, so it needs no special case.
+      if (sx >= r.x && sy >= r.y && sx < r.x + static_cast<double>(r.w) &&
+          sy < r.y + static_cast<double>(r.h)) {
+        return true;
+      }
+    }
+    return false;
   }
 
   /// The drop shadow: nine scene nodes onto one shared image.
@@ -4533,14 +4548,11 @@ class SurfaceRegistry : public lava::CompositorHost {
 
   void setCursor(uint32_t id, uint32_t shape) override;
 
-  bool setInputRegion(uint32_t id, int32_t x, int32_t y, uint32_t w,
-                      uint32_t h) override {
+  bool setInputRegion(uint32_t id,
+                      std::vector<ClientSurface::InputRect> rects) override {
     ClientSurface *surface = find(id);
     if (surface == nullptr) return false;
-    surface->inputX = x;
-    surface->inputY = y;
-    surface->inputW = w;
-    surface->inputH = h;
+    surface->inputRects = std::move(rects);
     // The Lava hit path reads these on every test. The scene path needs the
     // callback installed once; re-bind is cheap and covers a surface that was
     // somehow created without it.
