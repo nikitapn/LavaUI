@@ -3507,11 +3507,15 @@ class SurfaceRegistry : public lava::CompositorHost {
   /// drawn here at all, and the slices are re-laid-out only when the size or
   /// the radius actually differs.
   void applyShadow(ClientSurface &surface) {
+    // Furniture gets none, the same as a panel: a context menu is drawn with
+    // its own plate and corner radius, and it is never the window a shadow is
+    // there to lift off the desktop. The parent above makes a menu's shadow
+    // merely wrong rather than fatal; this is why it should not exist.
     const bool wanted =
-        shadowBlur_ > 0.f && !surface.panel && !surface.maximized &&
-        !coversItsOutput(surface) && renderer_ != nullptr &&
-        workspaces_ != nullptr && surface.id == focused_ &&
-        frameShown(surface);
+        shadowBlur_ > 0.f && !surface.panel && !surface.menu &&
+        !surface.maximized && !coversItsOutput(surface) &&
+        renderer_ != nullptr && workspaces_ != nullptr &&
+        surface.id == focused_ && frameShown(surface);
     if (!wanted) {
       if (surface.shadowTree != nullptr) {
         wlr_scene_node_set_enabled(&surface.shadowTree->node, false);
@@ -3527,8 +3531,14 @@ class SurfaceRegistry : public lava::CompositorHost {
     if (tile == nullptr) return;
 
     if (surface.shadowTree == nullptr) {
-      surface.shadowTree =
-          wlr_scene_tree_create(workspaces_->tree[surface.workspace]);
+      // Beside the window's own node, whichever tree that is. Naming the
+      // workspace here is what aborted the compositor: the context menu is
+      // drawn from the menus tree, so its shadow was created in a workspace
+      // and `placeShadow` then asked wlroots to stack two nodes with
+      // different parents — `wlr_scene_node_place_below`'s one assertion.
+      wlr_scene_node *content = contentNodeOf(surface);
+      if (content == nullptr || content->parent == nullptr) return;
+      surface.shadowTree = wlr_scene_tree_create(content->parent);
       if (surface.shadowTree == nullptr) return;
       for (wlr_scene_buffer *&slice : surface.shadowSlices) {
         slice = wlr_scene_buffer_create(surface.shadowTree, nullptr);
@@ -3619,6 +3629,20 @@ class SurfaceRegistry : public lava::CompositorHost {
     }
   }
 
+  /// The node a surface's own pixels are on: the scene buffer for one of
+  /// ours, the toplevel's content node for a foreign window.
+  ///
+  /// The shadow and the frost are stacked directly against this, and
+  /// `wlr_scene_node_place_below` asserts when the two are not siblings — so
+  /// this is also the answer to which tree either of them must be created in.
+  /// Reading the parent off the node beats naming a tree: a surface that
+  /// lives outside the workspaces (a panel, the context menu) then needs no
+  /// case of its own, and the next tree somebody adds needs none either.
+  static wlr_scene_node *contentNodeOf(const ClientSurface &surface) {
+    if (surface.isForeign()) return surface.window->contentNode();
+    return surface.node != nullptr ? &surface.node->node : nullptr;
+  }
+
   /// Puts the shadow under its window, in position and in the stack.
   void placeShadow(ClientSurface &surface) {
     if (surface.shadowTree == nullptr) return;
@@ -3636,12 +3660,7 @@ class SurfaceRegistry : public lava::CompositorHost {
     // Below this window's own nodes and nothing else's: `lower_to_bottom`
     // would put it under every other window too, so a shadow would fall behind
     // the window it belongs in front of.
-    wlr_scene_node *content = surface.isForeign()
-                                  ? surface.window->contentNode()
-                                  : (surface.node != nullptr
-                                         ? &surface.node->node
-                                         : nullptr);
-    if (content != nullptr) {
+    if (wlr_scene_node *content = contentNodeOf(surface)) {
       wlr_scene_node_place_below(&surface.shadowTree->node, content);
     }
   }
@@ -3654,12 +3673,7 @@ class SurfaceRegistry : public lava::CompositorHost {
     const int py =
         surface.y + (regioned ? static_cast<int>(std::lround(surface.blurY)) : 0);
     wlr_scene_node_set_position(&surface.blurNode->node, px, py);
-    wlr_scene_node *content = surface.isForeign()
-                                  ? surface.window->contentNode()
-                                  : (surface.node != nullptr
-                                         ? &surface.node->node
-                                         : nullptr);
-    if (content != nullptr) {
+    if (wlr_scene_node *content = contentNodeOf(surface)) {
       wlr_scene_node_place_below(&surface.blurNode->node, content);
     }
     if (surface.shadowTree != nullptr) {
@@ -3894,12 +3908,17 @@ class SurfaceRegistry : public lava::CompositorHost {
     srcW = std::max(1, std::min(srcW, captured->width - srcX));
     srcH = std::max(1, std::min(srcH, captured->height - srcY));
 
-    // A panel lives in the panel tree, above every workspace. Parenting
-    // its frost to a workspace would put the plate *behind* the windows
-    // the menu is meant to frost, and `place_below` cannot reach across
-    // trees. Windows stay in their workspace, which is the existing path.
-    wlr_scene_tree *parent = surface.panel ? workspaces_->panels
-                                           : workspaces_->tree[surface.workspace];
+    // Beside the window's own node, whichever tree that is. A panel lives in
+    // the panel tree above every workspace and the context menu in the menus
+    // tree above that; parenting either one's frost to a workspace would put
+    // the plate *behind* the windows it is meant to frost, and `place_below`
+    // cannot reach across trees at all — it asserts.
+    wlr_scene_node *own = contentNodeOf(surface);
+    if (own == nullptr || own->parent == nullptr) {
+      wlr_buffer_unlock(captured);
+      return;
+    }
+    wlr_scene_tree *parent = own->parent;
     const uint32_t destW = static_cast<uint32_t>(frostW);
     const uint32_t destH = static_cast<uint32_t>(frostH);
     if (!surface.blurCanvas) {
@@ -9357,6 +9376,20 @@ void Server::closeContextMenu() {
     surfaces->setFocused(closing.previousFocus);
   } else if (ClientSurface *frame = surfaces->find(closing.previousFrame)) {
     focusSurface(*frame);
+  } else {
+    // Nothing to give it back to — a right-click on bare desktop blurs
+    // everything before the menu opens, so this is the ordinary case, not the
+    // odd one. It still has to be *said*: `showMenu` pointed the focused
+    // surface at the menu, and leaving it there means every later question
+    // about who is focused answers with a surface that is not on screen.
+    //
+    // That is not a cosmetic lie. A workspace switch re-applies the answer
+    // (`surfaces->setFocused(focusedSurface())`), which draws focus chrome for
+    // the menu — and a shadow, in the workspace tree, stacked against a node
+    // in the menus tree. wlroots asserts on that pair, so a menu opened on the
+    // desktop and closed again took the compositor down on the next Mod+N.
+    setFocusedSurface(0);
+    surfaces->setFocused(0);
   }
   // What is under the pointer has not been tracked while the menu covered it.
   update_pointer_focus(0);

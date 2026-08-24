@@ -866,6 +866,26 @@ dereference in the compositor.
 one whenever it dismisses a menu itself, because taking the surface off the
 screen says nothing to the process still drawing into it.
 
+**A menu takes the keyboard focus and has to give it back — all of it.**
+`showMenu` points `Server::focusedSurface_` at the menu so it can receive
+Escape without becoming the active window, and `closeContextMenu` restores
+what it displaced. The case that was missing is the common one: a right-click
+on bare desktop runs `blurAll` first, so there is *nothing* to restore, and the
+menu's id was simply left in place. A surface that is not on screen then
+answers "who is focused" for the rest of the session, and the next workspace
+switch re-applies that answer through `surfaces->setFocused(focusedSurface())`
+— which draws focus chrome for the menu, including a shadow. `applyShadow`
+created it in a workspace tree, `placeShadow` stacked it against the menu's own
+node in the menus tree, and `wlr_scene_node_place_below` asserts on exactly
+that pair. Open a desktop menu, close it, press Mod+2: SIGABRT.
+
+Both halves are fixed, and the second one is the general rule: **anything
+stacked against a surface's own node must be created in that node's parent**,
+which is what `contentNodeOf` is for. Naming a tree instead — `workspaces_
+->tree[surface.workspace]`, or `panel ? panels : workspace` — needs a new case
+for every surface that lives outside the workspaces, and silently grows a
+crash when somebody forgets one.
+
 **The menu surface is furniture, and every "act on a window" path has to be
 told so.** It sits in `surfaces_` alongside real windows, so anything that
 sweeps the list reaches it: `hideDesktop` (Mod+D) minimized it, `minimized`
