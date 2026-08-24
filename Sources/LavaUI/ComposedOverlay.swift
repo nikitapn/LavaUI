@@ -2,29 +2,10 @@ import CYoga
 import Foundation
 
 /// Where composed overlay content sits inside its base view's box.
-public enum OverlayAnchor: Equatable, Sendable {
-    case topLeading, top, topTrailing
-    case leading, center, trailing
-    case bottomLeading, bottom, bottomTrailing
-
-    /// Horizontal placement, as main-axis justification of a row container.
-    var justify: YGJustify {
-        switch self {
-        case .topLeading, .leading, .bottomLeading: return YGJustifyFlexStart
-        case .top, .center, .bottom: return YGJustifyCenter
-        case .topTrailing, .trailing, .bottomTrailing: return YGJustifyFlexEnd
-        }
-    }
-
-    /// Vertical placement, as cross-axis alignment of a row container.
-    var align: YGAlign {
-        switch self {
-        case .topLeading, .top, .topTrailing: return YGAlignFlexStart
-        case .leading, .center, .trailing: return YGAlignCenter
-        case .bottomLeading, .bottom, .bottomTrailing: return YGAlignFlexEnd
-        }
-    }
-}
+///
+/// The same question `.frame(alignment:)` asks, so the same answer: see
+/// `Alignment`, which this named first and now spells.
+public typealias OverlayAnchor = Alignment
 
 /// A base view with content drawn over it, taking no layout space.
 ///

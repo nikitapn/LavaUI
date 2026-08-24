@@ -58,6 +58,16 @@ public struct ViewStyle: Equatable {
     /// Stroke on this node's edge, drawn over its children. See
     /// `View.border(_:width:)`.
     public var border: BorderStyle?
+    /// Where content sits inside a frame bigger than it — see
+    /// `View.frame(width:height:minWidth:minHeight:alignment:)`.
+    ///
+    /// Unlike every other field here, this one changes the *shape* of the
+    /// tree rather than a property of one node: content can only be placed
+    /// inside a box if there is a box distinct from the content, so a frame
+    /// that states an alignment always wraps. `nil` means the frame was never
+    /// asked the question, which is not the same as being asked and answered
+    /// `.center`.
+    public var frameAlignment: Alignment?
 
     public init() {}
 
@@ -78,6 +88,7 @@ public struct ViewStyle: Equatable {
         out.cornerRadius = cornerRadius ?? base.cornerRadius
         out.width = width ?? base.width
         out.height = height ?? base.height
+        out.frameAlignment = frameAlignment ?? base.frameAlignment
         out.minWidth = minWidth ?? base.minWidth
         out.minHeight = minHeight ?? base.minHeight
         out.flexGrow = flexGrow ?? base.flexGrow
@@ -267,6 +278,11 @@ extension YogaBoxNode {
             if let g = style.fillGradient { box.fillGradient = g }
             if let hover = style.hoverFill { box.hoverFill = hover }
             if let radius = style.cornerRadius { box.cornerRadius = radius }
+            // Through the baseline, not set-if-present: a chain that drops the
+            // alignment has to give the stretch back. Only a wrapper can do
+            // this at all — there has to be a box distinct from the content
+            // for the content to be placed inside.
+            box.applyFrameAlignment(style.frameAlignment)
         }
         applyStyle()
     }
@@ -310,16 +326,42 @@ class StyleBoxNode: YogaBoxNode {
     /// still lights up after the first modifier wraps.
     var hoverFill: Color?
     var cornerRadius: Float = 0
+    /// Set by a frame that stated one. See `applyFrameAlignment`.
+    private var frameAlignment: Alignment?
     private var insertedLeaves: [any AnyViewNode] = []
 
     init(content: any AnyViewNode) {
         self.contentNode = content
         super.init(label: "Modified")
-        YGNodeStyleSetFlexDirection(yogaStorage, YGFlexDirectionColumn)
-        YGNodeStyleSetAlignItems(yogaStorage, YGAlignStretch)
+        applyFrameAlignment(nil)
         inheritFlex(from: content)
         applyStyle()
         relink()
+    }
+
+    /// Places content inside this box rather than stretching it to fill.
+    ///
+    /// A row container, so one alignment reaches both axes through the two
+    /// controls Yoga offers: `justifyContent` along the main axis is the
+    /// horizontal half, `alignItems` across it is the vertical half. Same
+    /// arrangement `ComposedOverlay` uses to anchor a badge in a corner, for
+    /// the same reason.
+    ///
+    /// `nil` restores the default a wrapper is built with — a column that
+    /// stretches its child — because a modifier chain can drop the alignment
+    /// on a later frame and leaving the row behind would keep placing content
+    /// that was meant to fill again.
+    fileprivate func applyFrameAlignment(_ alignment: Alignment?) {
+        frameAlignment = alignment
+        guard let alignment else {
+            YGNodeStyleSetFlexDirection(yogaStorage, YGFlexDirectionColumn)
+            YGNodeStyleSetJustifyContent(yogaStorage, YGJustifyFlexStart)
+            YGNodeStyleSetAlignItems(yogaStorage, YGAlignStretch)
+            return
+        }
+        YGNodeStyleSetFlexDirection(yogaStorage, YGFlexDirectionRow)
+        YGNodeStyleSetJustifyContent(yogaStorage, alignment.justify)
+        YGNodeStyleSetAlignItems(yogaStorage, alignment.align)
     }
 
     override var childNodes: [any AnyViewNode] { [contentNode] }
@@ -436,16 +478,46 @@ extension View {
         styled { $0.border = BorderStyle(color, width: width) }
     }
 
+    /// Fix this view's size, and optionally say where its content sits inside
+    /// it.
+    ///
+    /// Without `alignment` the size lands on the view's *own* node: a
+    /// `Text` given `.frame(width: 34)` becomes a 34pt-wide text, and its
+    /// glyphs start at the left edge because that is where a text's glyphs
+    /// start. That is the historical behaviour of this modifier and every
+    /// existing caller depends on it — a `VStack` given a width is expected to
+    /// *be* that width and lay its children out across it, not to sit at its
+    /// natural width inside a wider box.
+    ///
+    /// With `alignment` it is SwiftUI's frame instead: a box of the stated
+    /// size with the content placed inside at its natural size. That needs a
+    /// node the content does not own, so stating an alignment always adds one.
+    /// This is the version to reach for when a label has to sit in the middle
+    /// of a fixed cell — a calendar day, a keypad key, a grid of counts:
+    ///
+    /// ```swift
+    /// Text("24").frame(width: .pt(34), height: .pt(28), alignment: .center)
+    /// ```
+    ///
+    /// The default is `nil` and not `.center` on purpose. SwiftUI centres by
+    /// default because its frame has only ever meant the second thing; here
+    /// the two meanings share a modifier, so the default has to be the one
+    /// that leaves existing layouts alone. `nil` is "never asked", which is
+    /// not the same answer as `.center`.
     public func frame(
         width: Dimension? = nil, height: Dimension? = nil,
-        minWidth: Float? = nil, minHeight: Float? = nil
+        minWidth: Float? = nil, minHeight: Float? = nil,
+        alignment: Alignment? = nil
     ) -> ModifiedView<Self> {
-        styled {
-            $0.width = width
-            $0.height = height
-            $0.minWidth = minWidth
-            $0.minHeight = minHeight
-        }
+        var s = ViewStyle()
+        s.width = width
+        s.height = height
+        s.minWidth = minWidth
+        s.minHeight = minHeight
+        s.frameAlignment = alignment
+        return ModifiedView(
+            content: self, style: s, forceWrapper: alignment != nil
+        )
     }
 
     public func flexGrow(_ value: Float = 1) -> ModifiedView<Self> {
@@ -587,16 +659,26 @@ extension ModifiedView {
         adding { $0.cursor = shape }
     }
 
+    /// See `View.frame(width:height:minWidth:minHeight:alignment:)`.
     public func frame(
         width: Dimension? = nil, height: Dimension? = nil,
-        minWidth: Float? = nil, minHeight: Float? = nil
+        minWidth: Float? = nil, minHeight: Float? = nil,
+        alignment: Alignment? = nil
     ) -> ModifiedView<Content> {
-        adding {
-            $0.width = width
-            $0.height = height
-            $0.minWidth = minWidth
-            $0.minHeight = minHeight
-        }
+        var next = ViewStyle()
+        next.width = width
+        next.height = height
+        next.minWidth = minWidth
+        next.minHeight = minHeight
+        next.frameAlignment = alignment
+        let merged = next.merged(over: style)
+        return ModifiedView(
+            content: content,
+            style: merged,
+            // Once anything in the chain has asked for placement, the box that
+            // does the placing has to exist for the rest of it.
+            forceWrapper: forceWrapper || merged.frameAlignment != nil
+        )
     }
 
     public func flexGrow(_ value: Float = 1) -> ModifiedView<Content> {

@@ -89,7 +89,7 @@ struct CalendarApplet: View {
             HStack(padding: 0, alignment: .center, spacing: 0) {
                 ForEach(Array(weekdays.enumerated()), id: \.offset) { _, name in
                     Text(name, color: theme.textDim)
-                        .frame(width: .pt(34), height: .pt(22))
+                        .frame(width: .pt(34), height: .pt(22), alignment: .center)
                 }
             }
 
@@ -139,9 +139,12 @@ struct CalendarApplet: View {
         }()
         let fill: Color? = isToday ? theme.accent : nil
 
-        // Fixed cell so the grid stays rectangular regardless of digit width.
+        // Fixed cell so the grid stays rectangular regardless of digit width,
+        // and the number placed in the middle of it rather than at its leading
+        // edge — which is where a `Text` starts, and where the highlight drawn
+        // around today would otherwise catch it sitting.
         Text(label, color: color)
-            .frame(width: .pt(34), height: .pt(28))
+            .frame(width: .pt(34), height: .pt(28), alignment: .center)
             .background(fill ?? Color(r: 0, g: 0, b: 0, a: 0))
             .cornerRadius(6)
             .agentId(cell.id)

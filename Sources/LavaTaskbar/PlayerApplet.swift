@@ -117,7 +117,7 @@ struct PlayerApplet: View {
             .frame(width: .pt(size), height: .pt(size))
         } else {
             Text("♫", color: theme.textDim)
-                .frame(width: .pt(size), height: .pt(size))
+                .frame(width: .pt(size), height: .pt(size), alignment: .center)
                 .background(theme.inset)
                 .cornerRadius(radius)
         }

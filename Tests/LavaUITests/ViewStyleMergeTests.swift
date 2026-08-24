@@ -39,6 +39,7 @@ final class ViewStyleMergeTests: XCTestCase {
         s.isHidden = false
         s.cursor = .resizeUpDown
         s.border = BorderStyle(Color(r: 0.5, g: 0, b: 0.5), width: 4)
+        s.frameAlignment = .bottomTrailing
         return s
     }
 

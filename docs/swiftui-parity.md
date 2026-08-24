@@ -117,21 +117,40 @@ High value for apps; moderate plumbing.
 | | |
 |---|---|
 | Status | partial |
-| Today | `width`, `height`, `minWidth`, `minHeight` — no max, no ideal, no alignment |
+| Today | `width`, `height`, `minWidth`, `minHeight`, `alignment` — no max, no ideal |
 
-**Proposed (minimal):**
+**Done: `alignment:`.** `Alignment` is a `HorizontalAlignment` ×
+`VerticalAlignment` pair with the nine named corners as statics, and
+`OverlayAnchor` is now a spelling of it rather than a second copy of the same
+switch. Stating one wraps the content in a `StyleBoxNode` laid out as a row —
+`justifyContent` is the horizontal half, `alignItems` the vertical — so the
+frame keeps its stated size and the content sits inside at its natural one.
+
+The default is `nil`, **not** `.center` as in SwiftUI, because this modifier
+carries two meanings that SwiftUI splits. Without an alignment the size lands on
+the view's own node, which is what every existing caller means by it: a `VStack`
+given a width *is* that width and lays its children across it. With one, it is
+SwiftUI's frame — a box, with the content placed in it. `nil` records "never
+asked", which is not the same answer as `.center`, and is what keeps existing
+layouts still.
+
+Worth knowing: it took a calendar to surface this. `Text` paints its glyphs at
+its box's leading edge, `.frame` made the text's box the whole 34pt cell, and
+the day number sat 4pt left of the highlight drawn around it. There was nowhere
+for the number to be centred *in*.
+
+**Still proposed — max/ideal sizes:**
 
 ```swift
 func frame(
     width: Dimension? = nil, height: Dimension? = nil,
     minWidth: Float? = nil, maxWidth: Float? = nil,
-    minHeight: Float? = nil, maxHeight: Float? = nil
+    minHeight: Float? = nil, maxHeight: Float? = nil,
+    alignment: Alignment? = nil
 ) -> …
 ```
 
-Yoga already has min/max width/height. Alignment inside a larger frame (SwiftUI
-`alignment:`) needs a wrapper box + cross-axis align — do after max sizes if
-needed separately.
+Yoga already has min/max width/height.
 
 ---
 
@@ -319,3 +338,4 @@ horizontal).
 |---|---|
 | 2026-08-08 | Initial inventory from LavaUI sources + api.md + assessment |
 | 2026-08-08 | Tier 0.1 edge-aware padding shipped (`Edge` / `EdgeInsets` / overloads) |
+| 2026-08-24 | Tier 0.6 frame alignment shipped (`Alignment` / `OverlayAnchor`) |
