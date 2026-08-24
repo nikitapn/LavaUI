@@ -162,7 +162,7 @@ else
 endif
 
 
-executable(
+compositor = executable(
   'compositor',
   'src/main.cpp',
   'src/appmenu.cpp',
@@ -219,6 +219,36 @@ executable(
   override_options: ['warning_level=3'],
   install: true,
 )
+
+# Window placement needs a real compositor: who owns an application's
+# remembered frame is decided across the first configure, the placement and
+# the close, and none of those is reachable without a display. The test
+# starts one on the headless backend per scenario and talks xdg-shell to it,
+# so it needs the client half of that protocol.
+xdg_shell_client_h = custom_target(
+  'xdg_shell_client_h',
+  input: protocol_dir / 'stable/xdg-shell/xdg-shell.xml',
+  output: 'xdg-shell-client-protocol.h',
+  command: [wayland_scanner, 'client-header', '@INPUT@', '@OUTPUT@'],
+)
+xdg_shell_client_c = custom_target(
+  'xdg_shell_client_c',
+  input: protocol_dir / 'stable/xdg-shell/xdg-shell.xml',
+  output: 'xdg-shell-protocol.c',
+  command: [wayland_scanner, 'private-code', '@INPUT@', '@OUTPUT@'],
+)
+
+placement_test = executable(
+  'placement_test',
+  ['tests/placement_test.c', xdg_shell_client_h, xdg_shell_client_c],
+  dependencies: [dependency('wayland-client')],
+  build_by_default: false,
+)
+# Three compositor starts, each with sleeps long enough to be sure the
+# grace period has or has not elapsed. Slower than the unit tests by a lot,
+# which is why the timeout is not the default 30 s.
+test('window placement', placement_test, args: [compositor.full_path()],
+     depends: compositor, timeout: 180)
 
 # Headless: the focus MRU is a vector of ids and needs no compositor.
 focus_history_test = executable(
