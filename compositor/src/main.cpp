@@ -5033,6 +5033,30 @@ class SurfaceRegistry : public lava::CompositorHost {
       out.push_back(entry);
     }
 
+    // EDID often lists the same size and rate twice — a 4:3 vs 16:9
+    // picture-aspect flag, or reduced-blanking vs standard — and those
+    // collapse to one `OutputMode` because that is everything the message
+    // carries. Merging current/preferred so a collapsed pair still shows
+    // as the one in use. Not an adjacent-after-sort unique: two modes can
+    // share an area (1920×1080 and 1080×1920) and split a true duplicate.
+    std::vector<ModeEntry> unique;
+    unique.reserve(out.size());
+    for (const ModeEntry &entry : out) {
+      auto it = std::find_if(unique.begin(), unique.end(),
+                             [&](const ModeEntry &seen) {
+                               return seen.width == entry.width &&
+                                      seen.height == entry.height &&
+                                      seen.refresh == entry.refresh;
+                             });
+      if (it == unique.end()) {
+        unique.push_back(entry);
+      } else {
+        it->current = it->current || entry.current;
+        it->preferred = it->preferred || entry.preferred;
+      }
+    }
+    out.swap(unique);
+
     // Biggest first, then fastest. A mode list in the order the display
     // happened to report it reads as random, and the one a person wants is
     // almost always at one end of that ordering.

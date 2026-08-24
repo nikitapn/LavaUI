@@ -1357,6 +1357,10 @@ interface Compositor {
   ///
   /// Separate from `ListOutputs` because a screen has dozens of modes and a
   /// settings app needs them only for the one the user is looking at.
+  /// Modes that match in width, height and refresh are collapsed: EDID
+  /// often lists the same size twice with picture-aspect or blanking flags
+  /// this message does not carry, and a client keying a list on that
+  /// triple would otherwise see duplicate ids.
   vector<OutputMode> ListOutputModes(name: in string) raises(OutputNotFound);
 
   /// Reconfigures a screen, now and for the next session.

@@ -1786,26 +1786,49 @@ final class ForEachFragmentNode<ID: Hashable>: FragmentNode {
     /// Takes children already built by `ForEach.init`, which ran inside the
     /// parent body's observation-tracking scope. Nothing is evaluated here —
     /// see `ForEach` for why that matters.
+    ///
+    /// Keys *should* be unique, but they are not always: a display's EDID
+    /// lists 1024×768@60 twice (picture-aspect / blanking flags we do not
+    /// export) and LavaSettings keyed rows on `width×height@refresh`. The
+    /// first body pass stored both under the same id; the second then built
+    /// `Dictionary(uniqueKeysWithValues:)` from that list and aborted.
+    /// Duplicate keys reuse nodes in encounter order rather than crashing.
     func update<Content: View>(rows: [(id: ID, content: Content)]) {
-        var oldMap = Dictionary(uniqueKeysWithValues: keyed.map { ($0.id, $0.node) })
+        // Reversed, so a bucket pops from the back below: `removeValue`
+        // hands over the only reference to that array, and taking the last
+        // element of it is in place. Reading the bucket out and putting it
+        // back instead would copy it once per row.
+        var oldBuckets: [ID: [any AnyViewNode]] = [:]
+        oldBuckets.reserveCapacity(keyed.count)
+        for entry in keyed.reversed() {
+            oldBuckets[entry.id, default: []].append(entry.node)
+        }
+
         var next: [(id: ID, node: any AnyViewNode)] = []
         next.reserveCapacity(rows.count)
+        var seen: [ID: Int] = [:]
 
         for row in rows {
             let key = row.id
             let childView = row.content
             let childNode: any AnyViewNode
-            if let existing = oldMap.removeValue(forKey: key) {
+            if var bucket = oldBuckets.removeValue(forKey: key),
+               let existing = bucket.popLast() {
+                if !bucket.isEmpty { oldBuckets[key] = bucket }
                 childNode = ViewGraph.reconcile(existing, with: childView)
             } else {
                 childNode = ViewGraph.mount(childView)
             }
             // Structural path uses the ForEach key so list order changes do not
-            // rename other rows (and agents can target `…/item-3/…`).
-            childNode.structuralKey = "k:\(key)"
+            // rename other rows (and agents can target `…/item-3/…`). A second
+            // row with the same id gets a suffix so the two paths stay distinct.
+            let occurrence = seen[key, default: 0]
+            seen[key] = occurrence + 1
+            childNode.structuralKey =
+                occurrence == 0 ? "k:\(key)" : "k:\(key)#\(occurrence)"
             next.append((key, childNode))
         }
-        // Remaining oldMap entries drop out of `keyed` → ARC frees nodes.
+        // Remaining oldBuckets entries drop out of `keyed` → ARC frees nodes.
         keyed = next
         setChildren(next.map(\.node))
         label = "ForEach[\(next.count)]"

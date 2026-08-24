@@ -852,6 +852,8 @@ func formatHz(_ mHz: UInt32) -> String {
 }
 
 /// `ForEach` needs a stable id, and a mode is identified by what it is.
+/// Width, height and refresh are the whole identity the control plane
+/// exports — see `SettingsStore.collapseIndistinguishableModes`.
 extension OutputMode: Identifiable {
     public var id: String { "\(width)x\(height)@\(refresh)" }
 }

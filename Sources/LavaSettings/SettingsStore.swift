@@ -351,7 +351,9 @@ final class SettingsStore {
             return
         }
         do {
-            modes = try DesktopSettings.outputModes(selectedOutput)
+            modes = Self.collapseIndistinguishableModes(
+                try DesktopSettings.outputModes(selectedOutput)
+            )
         } catch {
             modes = []
             note("Could not read the modes for \(selectedOutput): \(error)",
@@ -546,6 +548,35 @@ final class SettingsStore {
         // preferred one, and the list has to show what happened rather than
         // what was asked for.
         reloadOutputs()
+    }
+
+    /// Modes the compositor reports that we cannot tell apart.
+    ///
+    /// EDID often lists the same size and rate twice — a 4:3 vs 16:9
+    /// picture-aspect flag, or reduced-blanking vs standard — and
+    /// `OutputMode` only carries width, height and refresh. `ForEach` keys
+    /// on that triple (`1024x768@60004`), so keeping both rows used to
+    /// crash the second body pass. `SetOutput` cannot ask for one and not
+    /// the other either, so collapsing them is also what the control plane
+    /// can actually do. Current / preferred flags merge so a collapsed
+    /// pair still shows as the one in use.
+    static func collapseIndistinguishableModes(_ modes: [OutputMode]) -> [OutputMode] {
+        var out: [OutputMode] = []
+        var indexById: [String: Int] = [:]
+        out.reserveCapacity(modes.count)
+        for mode in modes {
+            // The same string `ForEach` keys the rows on — the two have
+            // to mean the same thing or a duplicate slips through again.
+            let id = mode.id
+            if let index = indexById[id] {
+                out[index].current = out[index].current || mode.current
+                out[index].preferred = out[index].preferred || mode.preferred
+            } else {
+                indexById[id] = out.count
+                out.append(mode)
+            }
+        }
+        return out
     }
 
     // MARK: - Plumbing

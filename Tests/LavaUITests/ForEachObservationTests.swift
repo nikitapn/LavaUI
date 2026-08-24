@@ -94,3 +94,63 @@ final class ForEachObservationTests: XCTestCase {
         )
     }
 }
+
+/// Duplicate `ForEach` keys must not abort the process.
+///
+/// LavaSettings keyed display modes on `width×height@refresh`. DRM reports
+/// 1024×768@60.004 twice, the first body pass stored both rows under that
+/// id, and the second built `Dictionary(uniqueKeysWithValues:)` from it.
+final class ForEachDuplicateKeyTests: XCTestCase {
+    private struct List: View {
+        var ids: [String]
+        var titles: [String]
+
+        var body: some View {
+            VStack {
+                ForEach(Array(zip(ids, titles)), id: \.0) { pair in
+                    Text(pair.1)
+                }
+            }
+        }
+    }
+
+    private func textNodes(in node: any AnyViewNode) -> [any AnyViewNode] {
+        var out: [any AnyViewNode] = []
+        if node.label.hasPrefix("Text") { out.append(node) }
+        for child in node.childNodes {
+            out.append(contentsOf: textNodes(in: child))
+        }
+        return out
+    }
+
+    /// The crash: mount with a repeated id, then reconcile the same list.
+    func testDuplicateKeysSurviveASecondBodyPass() {
+        let ids = ["1024x768@60004", "1024x768@60004"]
+        let host = LayoutHost()
+        host.setRoot(List(ids: ids, titles: ["a", "b"]))
+        _ = host.calculateLayout(width: 200, height: 80)
+
+        host.setRoot(List(ids: ids, titles: ["a", "b"]))
+        let frames = host.calculateLayout(width: 200, height: 80)
+        let texts = frames.filter { $0.label.hasPrefix("Text") }
+        XCTAssertEqual(texts.count, 2, "both rows stay visible under a shared id")
+    }
+
+    /// Duplicate-id rows reuse nodes in encounter order, so a label change
+    /// on the second row does not remount the first.
+    func testDuplicateKeyRowsKeepIdentityInOrder() throws {
+        let ids = ["1024x768@60004", "1024x768@60004"]
+        let host = LayoutHost()
+        host.setRoot(List(ids: ids, titles: ["a", "b"]))
+        _ = host.calculateLayout(width: 200, height: 80)
+        let first = textNodes(in: try XCTUnwrap(host.rootNode))
+        XCTAssertEqual(first.count, 2)
+
+        host.setRoot(List(ids: ids, titles: ["a", "c"]))
+        _ = host.calculateLayout(width: 200, height: 80)
+        let second = textNodes(in: try XCTUnwrap(host.rootNode))
+        XCTAssertEqual(second.count, 2)
+        XCTAssertEqual(first[0].id, second[0].id)
+        XCTAssertEqual(first[1].id, second[1].id)
+    }
+}
