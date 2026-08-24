@@ -7978,25 +7978,6 @@ void run_autostart() {
   launch_program(shell.c_str(), argv);
 }
 
-void launch_rofi() {
-  char program[] = "rofi";
-  char show[] = "-show";
-  char mode[] = "drun";
-  char *argv[] = {program, show, mode, nullptr};
-
-  // Native rofi-wayland requires zwlr_layer_shell_v1, which this compositor
-  // does not advertise yet. Keep DISPLAY so Rofi uses our lazy Xwayland, but
-  // hide WAYLAND_DISPLAY so it cannot select the unsupported native path.
-  std::vector<char *> x11Environment;
-  for (char **entry = environ; *entry != nullptr; ++entry) {
-    if (std::strncmp(*entry, "WAYLAND_DISPLAY=", 16) != 0) {
-      x11Environment.push_back(*entry);
-    }
-  }
-  x11Environment.push_back(nullptr);
-  launch_program(program, argv, x11Environment.data());
-}
-
 /// Flameshot's interactive capture. The compositor answers the screenshot
 /// portal it talks to — see `ScreenshotPortal`.
 void launch_flameshot() {
@@ -8095,7 +8076,6 @@ uint32_t shortcut_mod_mask(const lava::KeyboardConfig &keyboard, bool nested) {
 /// What a binding does.
 enum class BindingAction : uint8_t {
   Quit,
-  Launcher,
   AppLauncher,
   AppSwitcher,
   AppSwitcherBack,
@@ -8155,8 +8135,6 @@ constexpr BindingSpec kBindings[] = {
     // dialog wants and under the same hand as the desktop mod.
     {BindingAction::Quit, XKB_KEY_BackSpace, XKB_KEY_BackSpace, true, false,
      true, "Backspace", "session.quit", "Ends the session"},
-    {BindingAction::Launcher, XKB_KEY_space, XKB_KEY_space, false, false, true,
-     "Space", "launcher.rofi", "Opens rofi"},
     {BindingAction::AppLauncher, XKB_KEY_p, XKB_KEY_p, false, false, true, "P",
      "launcher.open", "Opens the application launcher"},
     {BindingAction::AppSwitcher, XKB_KEY_Tab, XKB_KEY_Tab, false, true, false,
@@ -8298,10 +8276,6 @@ bool perform_binding(Server *server, const BindingSpec &spec,
     // compositor that has taken the keyboard is hard to leave.
     lava::arm_shutdown_watchdog();
     wl_display_terminate(server->display);
-    return true;
-
-  case BindingAction::Launcher:
-    launch_rofi();
     return true;
 
   case BindingAction::AppLauncher:
