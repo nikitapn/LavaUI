@@ -47,6 +47,11 @@
 #include "focus_history.hpp"
 #include "window_memory.hpp"
 #include "wlr.hpp"
+
+extern "C" {
+#include <wlr/types/wlr_ext_image_capture_source_v1.h>
+#include <wlr/types/wlr_ext_image_copy_capture_v1.h>
+}
 #include "render/png_encode.hpp"
 
 extern char **environ;
@@ -386,6 +391,13 @@ struct Toplevel : FramedWindow {
   Listener<Toplevel> request_minimize;
   Listener<Toplevel> request_move;
   Listener<Toplevel> request_resize;
+
+  /// An xdg-activation request arrived before the first map. Honoured in
+  /// `on_map` so a window that was created to take a call is raised even
+  /// if something else grabbed focus in between. `pendingActivateGesture`
+  /// carries the token's provenance — see `Server::activateSurface`.
+  bool pendingActivate = false;
+  bool pendingActivateGesture = false;
 
   Toplevel(Server *server, wlr_xdg_toplevel *toplevel);
   ~Toplevel();
@@ -830,6 +842,17 @@ struct InputMethodRelay {
   static void on_grab_destroy(wl_listener *listener, void *data);
 };
 
+/// One client's idle-inhibit object. Effect only while its surface is
+/// visible — a Teams call on another workspace must not keep this one
+/// awake. The notifier is told in `Server::syncIdleInhibit`.
+struct IdleInhibitor {
+  Server *server = nullptr;
+  wlr_idle_inhibitor_v1 *wlr = nullptr;
+  Listener<IdleInhibitor> destroy;
+
+  static void on_destroy(wl_listener *listener, void *data);
+};
+
 // ─── Server ────────────────────────────────────────────────────────────────
 
 struct Server {
@@ -1008,6 +1031,40 @@ struct Server {
   /// creates it.
   wlr_xdg_decoration_manager_v1 *decorations = nullptr;
 
+  /// `xdg_activation_v1`: a token from a click or a notification is how a
+  /// client asks to be raised. Without this, Chromium's incoming-call window
+  /// stays buried and Electron never gets the seat it thinks it just took.
+  wlr_xdg_activation_v1 *activation = nullptr;
+  /// `zwp_idle_inhibit_manager_v1`. A visible inhibitor pauses idle timers
+  /// (and would skip DPMS / lock if this compositor had either).
+  wlr_idle_inhibit_manager_v1 *idleInhibit = nullptr;
+  /// `ext_idle_notifier_v1`. Chromium / Electron presence and swayidle
+  /// listen here; `notifyIdleActivity` is the pulse, `set_inhibited` the
+  /// pause.
+  wlr_idle_notifier_v1 *idleNotify = nullptr;
+
+  std::list<std::unique_ptr<IdleInhibitor>> idleInhibitors;
+
+  /// Reset ext-idle-notify timers. Any real input — including a compositor
+  /// binding — is activity.
+  void notifyIdleActivity();
+  /// Recompute whether a visible idle-inhibit is in force.
+  void syncIdleInhibit();
+  /// Raise and unminimize; with `gesture`, also switch workspace and take
+  /// the keyboard. Where an xdg-activation request lands, and the only
+  /// thing that lands here — no other protocol asks to raise a window.
+  ///
+  /// `gesture` is whether a real user action is behind the request: a token
+  /// minted against an input event on this seat. A token with no seat is
+  /// not — any client can mint one of those at any moment — and it gets the
+  /// raise without the rest. A parameter rather than a test inside, because
+  /// the two are the whole of what this does and the caller is the only one
+  /// that knows which it meant.
+  void activateSurface(ClientSurface &surface, bool gesture);
+  /// The window that owns this surface, walking to the root. Null for
+  /// something we do not frame (a popup, a drag icon).
+  ClientSurface *surfaceFromWl(wlr_surface *surface);
+
   /// Gives a window the keyboard and the active frame paint, whichever kind
   /// of window it is. Both halves matter and they are easy to do by halves:
   /// the workspace's keyboard target and the decoration's "this one is
@@ -1161,6 +1218,8 @@ struct Server {
   Listener<Server> request_set_primary_selection;
   Listener<Server> request_start_drag;
   Listener<Server> start_drag;
+  Listener<Server> request_activate;
+  Listener<Server> new_idle_inhibitor;
 
   /// Unhooks everything above, for shutdown.
   ///
@@ -1178,7 +1237,8 @@ struct Server {
           &cursor_motion_absolute, &cursor_button, &cursor_axis, &cursor_frame,
           &request_cursor, &new_pointer_constraint, &pointer_focus_change,
           &active_constraint_destroy, &request_set_selection, &set_selection,
-          &request_set_primary_selection, &request_start_drag, &start_drag}) {
+          &request_set_primary_selection, &request_start_drag, &start_drag,
+          &request_activate, &new_idle_inhibitor}) {
       listener->detach();
     }
     inputMethod.detachListeners();
@@ -1212,6 +1272,8 @@ struct Server {
   void moveDragIcon();
   static void on_request_set_selection(wl_listener *listener, void *data);
   static void on_set_selection(wl_listener *listener, void *data);
+  static void on_request_activate(wl_listener *listener, void *data);
+  static void on_new_idle_inhibitor(wl_listener *listener, void *data);
   static void on_request_set_primary_selection(wl_listener *listener,
                                                void *data);
 
@@ -2167,6 +2229,10 @@ class SurfaceRegistry : public lava::CompositorHost {
     return nullptr;
   }
 
+  /// The window that owns this Wayland surface (root, so a subsurface of
+  /// Chromium still resolves). Null for popups and anything we do not frame.
+  ClientSurface *findByWlSurface(wlr_surface *surface);
+
   /// Whether anything this window is made of may be drawn: its content, its
   /// title bar, its shadow, its frost plate.
   ///
@@ -3004,7 +3070,7 @@ class SurfaceRegistry : public lava::CompositorHost {
     placeShadow(surface);
     placeBackdrop(surface);
     scheduleBackdropRefresh();
-    // Geometry, which the window list does not carry — a dock that hides
+    // Geometry, which the window list does not carry — a dock that hides a strip
     // itself when something is in the way learns about it here and nowhere
     // else. Cheap when nobody has asked: see `postPanelAreas`.
     if (control_ != nullptr && !surface.panel) control_->postPanelAreas();
@@ -4062,6 +4128,9 @@ class SurfaceRegistry : public lava::CompositorHost {
   /// moving between workspaces. Cheap when nobody subscribed, which is the
   /// usual case — the control plane checks before building a snapshot.
   void announceWindows() {
+    // Every reason to tell the shell the window set moved is a reason to
+    // recheck whether a visible client is still holding idle off.
+    if (server_ != nullptr) server_->syncIdleInhibit();
     if (control_ == nullptr) return;
     control_->postWindowList();
     // Every reason to announce the set is also a reason to recheck the
@@ -6100,6 +6169,16 @@ void SurfaceRegistry::setTransient(ClientSurface &surface, bool transient,
   surface.parentId = parentId;
 }
 
+ClientSurface *SurfaceRegistry::findByWlSurface(wlr_surface *surface) {
+  if (surface == nullptr) return nullptr;
+  wlr_surface *root = wlr_surface_get_root_surface(surface);
+  for (auto &s : surfaces_) {
+    if (!s->isForeign() || s->window == nullptr) continue;
+    if (s->window->focusSurface() == root) return s.get();
+  }
+  return nullptr;
+}
+
 bool SurfaceRegistry::hintToplevelConfigure(const std::string &appId,
                                             uint32_t &width, uint32_t &height,
                                             bool &maximized,
@@ -7448,6 +7527,13 @@ void Toplevel::on_map(wl_listener *listener, void *) {
       server->minimizeSurface(*frame);
     }
   }
+  if (toplevel->pendingActivate && toplevel->frameId != 0 &&
+      server->surfaces != nullptr) {
+    toplevel->pendingActivate = false;
+    if (ClientSurface *frame = server->surfaces->find(toplevel->frameId)) {
+      server->activateSurface(*frame, toplevel->pendingActivateGesture);
+    }
+  }
 
   wlr_log(WLR_INFO, "toplevel mapped: app_id=%s title=%s",
           app_id ? app_id : "(none)", title ? title : "(none)");
@@ -8474,6 +8560,7 @@ void Keyboard::on_key(wl_listener *listener, void *data) {
   auto *keyboard = owner_of<Keyboard>(listener);
   auto *event = static_cast<wlr_keyboard_key_event *>(data);
   Server *server = keyboard->server;
+  server->notifyIdleActivity();
 
   const uint32_t modifiers = wlr_keyboard_get_modifiers(keyboard->wlr);
   const uint32_t modMask =
@@ -10038,6 +10125,109 @@ bool Server::beginInteractiveResize(ClientSurface &surface, uint32_t edges,
   return true;
 }
 
+void IdleInhibitor::on_destroy(wl_listener *listener, void *) {
+  auto *self = owner_of<IdleInhibitor>(listener);
+  Server *server = self->server;
+  self->destroy.detach();
+  self->wlr = nullptr;
+  if (server == nullptr) return;
+  server->idleInhibitors.remove_if(
+      [self](const std::unique_ptr<IdleInhibitor> &p) { return p.get() == self; });
+  server->syncIdleInhibit();
+}
+
+void Server::notifyIdleActivity() {
+  if (idleNotify != nullptr && seat != nullptr) {
+    wlr_idle_notifier_v1_notify_activity(idleNotify, seat);
+  }
+}
+
+void Server::syncIdleInhibit() {
+  if (idleNotify == nullptr) return;
+  bool inhibited = false;
+  for (const auto &inh : idleInhibitors) {
+    if (inh->wlr == nullptr || inh->wlr->surface == nullptr) continue;
+    if (!inh->wlr->surface->mapped) continue;
+    ClientSurface *cs = surfaceFromWl(inh->wlr->surface);
+    if (cs == nullptr) {
+      // A mapped subsurface we do not frame: the protocol's "visible".
+      inhibited = true;
+      break;
+    }
+    if (surfaces != nullptr && surfaces->visible(*cs)) {
+      inhibited = true;
+      break;
+    }
+  }
+  wlr_idle_notifier_v1_set_inhibited(idleNotify, inhibited);
+}
+
+ClientSurface *Server::surfaceFromWl(wlr_surface *surface) {
+  if (surfaces == nullptr) return nullptr;
+  return surfaces->findByWlSurface(surface);
+}
+
+void Server::activateSurface(ClientSurface &surface, bool gesture) {
+  if (surface.panel || surface.menu) return;
+  if (surfaces != nullptr) surfaces->setMinimized(surface, false);
+  if (!gesture) {
+    // Raised where it stands. A call window on this workspace comes to the
+    // front and is on screen, which is the whole of what the client asked
+    // for; what it does not get is the user dragged to another workspace or
+    // the keyboard taken out from under whatever they were typing into.
+    // Chromium mints seat-less tokens for a window it never received input
+    // for, so this is the ordinary path and not the odd one.
+    if (surfaces != nullptr) surfaces->raise(surface);
+    return;
+  }
+  if (surface.workspace != workspaces.current) {
+    switchWorkspace(surface.workspace);
+  }
+  focusSurface(surface);
+  update_pointer_focus(0);
+}
+
+void Server::on_request_activate(wl_listener *listener, void *data) {
+  auto *server = owner_of<Server>(listener);
+  auto *event = static_cast<wlr_xdg_activation_v1_request_activate_event *>(data);
+  if (event == nullptr || event->surface == nullptr) return;
+  // wlroots hands us the event for any token the client committed, and it
+  // does not care how that token was obtained. A seat on the token means it
+  // was minted against a real input event — a click on a notification, a
+  // launcher, a taskbar — and is a user gesture. Without one, any client
+  // could pull the user to another workspace and take the keyboard at a
+  // moment of its own choosing.
+  const bool gesture = event->token != nullptr && event->token->seat != nullptr &&
+                       event->token->seat == server->seat;
+  if (ClientSurface *cs = server->surfaceFromWl(event->surface)) {
+    server->activateSurface(*cs, gesture);
+    return;
+  }
+  // Not mapped yet. Remember so `on_map` raises it instead of whoever
+  // happened to have the keyboard while it was being created.
+  wlr_surface *root = wlr_surface_get_root_surface(event->surface);
+  wlr_xdg_surface *xdg = wlr_xdg_surface_try_from_wlr_surface(root);
+  if (xdg == nullptr || xdg->role != WLR_XDG_SURFACE_ROLE_TOPLEVEL) return;
+  auto *tree = static_cast<wlr_scene_tree *>(xdg->data);
+  if (tree == nullptr || tree->node.data == nullptr) return;
+  auto *toplevel =
+      static_cast<Toplevel *>(static_cast<FramedWindow *>(tree->node.data));
+  toplevel->pendingActivate = true;
+  toplevel->pendingActivateGesture = gesture;
+}
+
+void Server::on_new_idle_inhibitor(wl_listener *listener, void *data) {
+  auto *server = owner_of<Server>(listener);
+  auto *wlr = static_cast<wlr_idle_inhibitor_v1 *>(data);
+  if (wlr == nullptr) return;
+  auto inh = std::make_unique<IdleInhibitor>();
+  inh->server = server;
+  inh->wlr = wlr;
+  inh->destroy.attach(&wlr->events.destroy, inh.get(), IdleInhibitor::on_destroy);
+  server->idleInhibitors.push_back(std::move(inh));
+  server->syncIdleInhibit();
+}
+
 bool Server::serverDecorated(wlr_xdg_toplevel *toplevel) const {
   if (decorations == nullptr || toplevel == nullptr) return true;
   wlr_xdg_toplevel_decoration_v1 *decoration = nullptr;
@@ -10300,6 +10490,7 @@ bool Server::route_pointer(uint32_t kind, int32_t button, int32_t mods) {
 void Server::on_cursor_motion(wl_listener *listener, void *data) {
   auto *server = owner_of<Server>(listener);
   auto *event = static_cast<wlr_pointer_motion_event *>(data);
+  server->notifyIdleActivity();
 
   // Relative motion is independent of the visible cursor. In particular it
   // must keep flowing while a locked pointer is stationary: this is the path
@@ -10340,6 +10531,7 @@ void Server::on_cursor_motion_absolute(wl_listener *listener, void *data) {
   auto *server =
       owner_of<Server>(listener);
   auto *event = static_cast<wlr_pointer_motion_absolute_event *>(data);
+  server->notifyIdleActivity();
   if (server->activePointerConstraint == nullptr ||
       server->activePointerConstraint->type !=
           WLR_POINTER_CONSTRAINT_V1_LOCKED) {
@@ -10395,6 +10587,7 @@ void Server::on_active_constraint_destroy(wl_listener *listener, void *) {
 void Server::on_cursor_button(wl_listener *listener, void *data) {
   auto *server = owner_of<Server>(listener);
   auto *event = static_cast<wlr_pointer_button_event *>(data);
+  server->notifyIdleActivity();
 
   const bool pressed = event->state == WL_POINTER_BUTTON_STATE_PRESSED;
   // Left = 0, matching GLFW, which is what the client's event decoding was
@@ -10681,6 +10874,7 @@ void Server::on_cursor_button(wl_listener *listener, void *data) {
 void Server::on_cursor_axis(wl_listener *listener, void *data) {
   auto *server = owner_of<Server>(listener);
   auto *event = static_cast<wlr_pointer_axis_event *>(data);
+  server->notifyIdleActivity();
 
   // Notches, not pixels, and negated: canvas' `Scroll` follows GLFW, where a
   // positive y is a scroll *up*, while wlroots reports a positive delta as
@@ -11065,6 +11259,17 @@ int main() {
   // the in-process portal do not use this — they render the scene
   // themselves — but the protocol is cheap to advertise.
   wlr_screencopy_manager_v1_create(server.display);
+  // Output capture for xdp-wlr / grim via ext-image-copy-capture, which
+  // wlroots implements. wlr-screencopy stays for older clients. There is
+  // no window capture: that source is wlroots 0.20's.
+  if (wlr_ext_image_copy_capture_manager_v1_create(server.display, 1) ==
+      nullptr) {
+    wlr_log(WLR_ERROR, "ext-image-copy-capture: unavailable");
+  }
+  if (wlr_ext_output_image_capture_source_manager_v1_create(server.display,
+                                                            1) == nullptr) {
+    wlr_log(WLR_ERROR, "ext-output-image-capture-source: unavailable");
+  }
 
   server.xdg_shell = wlr_xdg_shell_create(server.display, 5);
   server.new_toplevel.attach(&server.xdg_shell->events.new_toplevel, &server,
@@ -11072,6 +11277,29 @@ int main() {
   server.new_popup.attach(&server.xdg_shell->events.new_popup, &server,
                           Server::on_new_popup);
 
+  // How a notification, a dock, or window.open asks to be raised. Without
+  // this Chromium's meeting window is created and stays behind whatever
+  // had the keyboard.
+  server.activation = wlr_xdg_activation_v1_create(server.display);
+  if (server.activation != nullptr) {
+    server.request_activate.attach(&server.activation->events.request_activate,
+                                   &server, Server::on_request_activate);
+  } else {
+    wlr_log(WLR_ERROR, "xdg-activation: unavailable");
+  }
+  // Pause idle (and, if we ever grew a lock or DPMS, those too) while a
+  // visible client — a call, a video — says it must stay on screen.
+  server.idleInhibit = wlr_idle_inhibit_v1_create(server.display);
+  if (server.idleInhibit != nullptr) {
+    server.new_idle_inhibitor.attach(&server.idleInhibit->events.new_inhibitor,
+                                     &server, Server::on_new_idle_inhibitor);
+  } else {
+    wlr_log(WLR_ERROR, "idle-inhibit: unavailable");
+  }
+  server.idleNotify = wlr_idle_notifier_v1_create(server.display);
+  if (server.idleNotify == nullptr) {
+    wlr_log(WLR_ERROR, "ext-idle-notify: unavailable");
+  }
   // KDE AppMenu: foreign Wayland clients export dbusmenu coordinates here.
   // Before any client can bind, and before surfaces exist so the change
   // callback can resolve a surface to a frame.

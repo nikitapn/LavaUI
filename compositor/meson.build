@@ -29,6 +29,10 @@ foreach xml : [
   # grabs that games rely on for an unbounded first-person camera.
   protocol_dir / 'unstable/pointer-constraints/pointer-constraints-unstable-v1.xml',
   protocol_dir / 'unstable/relative-pointer/relative-pointer-unstable-v1.xml',
+  # ext-image-copy-capture: not bound directly, but the wlroots header for
+  # it includes the generated one. Output capture only — window capture is
+  # wlroots 0.20's, and is not backported here.
+  protocol_dir / 'staging/ext-image-copy-capture/ext-image-copy-capture-v1.xml',
 ]
   protocol_headers += custom_target(
     xml.underscorify() + '_server_h',

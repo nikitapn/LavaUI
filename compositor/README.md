@@ -2,7 +2,16 @@
 
 A C++20 Wayland compositor on wlroots 0.19: the desktop LavaUI apps run on, and
 an ordinary compositor for everything else — xdg-shell, Xwayland, the seat's
-clipboard and primary selection, screencopy, a screenshot portal.
+clipboard and primary selection, screencopy, a screenshot portal,
+xdg-activation, idle-inhibit, ext-idle-notify, and ext-image-copy-capture
+for output capture.
+
+Neither foreign-toplevel protocol is offered. Both exist so that something
+outside the compositor — waybar, a dock, xdp-wlr's window chooser — can see
+or act on a window it does not own, and nothing here is outside: the shell
+reads the window set from the control plane. Window capture is not offered
+either, so there is no chooser to feed; xdp-wlr shares a screen here and not
+a single window.
 
 What is unusual is the client path. A LavaUI app can run with **no GPU at all**:
 it lays out, shapes text and emits a draw list into shared memory, and this
