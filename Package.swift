@@ -60,6 +60,7 @@ var products: [Product] = [
     .executable(name: "LavaDebug", targets: ["LavaDebug"]),
     .executable(name: "LavaLauncher", targets: ["LavaLauncher"]),
     .executable(name: "LavaSwitcher", targets: ["LavaSwitcher"]),
+    .executable(name: "LavaContextMenu", targets: ["LavaContextMenu"]),
     .executable(name: "LavaChooser", targets: ["LavaChooser"]),
     .executable(name: "lavactl", targets: ["LavaCtl"]),
     .library(name: "LavaUI", targets: ["LavaUI"]),
@@ -152,6 +153,17 @@ var targets: [Target] = [
     .executableTarget(
         name: "LavaSwitcher",
         dependencies: ["LavaUI", "LavaShell"]
+            + (haveNprpc ? [Target.Dependency("LavaClient"),
+                            Target.Dependency("LavaIDL")] : []),
+        swiftSettings: interopCxx
+    ),
+    // Right-click on the desktop or a window's title bar. Resident, started
+    // by the compositor, populated over a bidi stream — it draws menus it is
+    // handed and never learns what an item does.
+    // See Sources/LavaContextMenu/main.swift.
+    .executableTarget(
+        name: "LavaContextMenu",
+        dependencies: ["LavaUI", "LavaMenu"]
             + (haveNprpc ? [Target.Dependency("LavaClient"),
                             Target.Dependency("LavaIDL")] : []),
         swiftSettings: interopCxx

@@ -200,6 +200,11 @@ struct ShellConfig {
   /// this one" — which is what a developer running it under a debugger wants.
   std::string panel = "LavaTaskbar";
   std::string dock = "LavaDock";
+  /// The context menu client — what a right-click on the desktop or on a
+  /// window's title bar opens. `off` leaves the desktop with no context menu,
+  /// which is what it had before this existed; the right click still clears
+  /// focus.
+  std::string menu = "LavaContextMenu";
 
   /// Whether to start anything at all. `LAVA_NO_SHELL=1` in the environment
   /// says the same thing without editing a file, for a one-off run.

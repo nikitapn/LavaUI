@@ -372,6 +372,8 @@ Config Config::load(const std::string &path) {
         config.shell.panel = value;
       } else if (key == "dock") {
         config.shell.dock = value;
+      } else if (key == "menu") {
+        config.shell.menu = value;
       } else if (key == "enabled") {
         config.shell.enabled = parseBool(value, true);
       } else {

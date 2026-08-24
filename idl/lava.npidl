@@ -519,6 +519,110 @@ message FocusAck {
   surfaceId: u32;
 }
 
+// ─── Context menus ───────────────────────────────────────────────────────
+//
+// The menu that opens on a right-click over the desktop or over a window's
+// non-client area, and the split here is the same one the whole interface is
+// built on: the **compositor decides what is in it**, a client draws it.
+//
+// That direction surprises people, so it is worth saying why. Every item on
+// this menu acts on something only the compositor owns — the stacking order,
+// the work area, a foreign client's `close` request — and every item's *state*
+// is something only the compositor can answer: whether this window is already
+// maximized, whether it is already on top. A menu process that built its own
+// list would be guessing at both, and the checkmark beside "Always on top"
+// would be a guess it renders as a fact.
+//
+// So the compositor pushes a list of `MenuItem` and gets back the `id` of the
+// one that was chosen. The ids are opaque to the client: it never learns what
+// an item does, it cannot do it, and adding an entry to this menu is a change
+// to the compositor alone.
+
+/// What one row is.
+///
+/// Deliberately three kinds and not a general widget vocabulary. A context
+/// menu that can express more than this stops being a context menu — it
+/// becomes a small application with a layout problem, and the desktop already
+/// has somewhere to put those.
+enum MenuItemKind: u32 {
+  /// Does something and closes the menu.
+  command,
+  /// Does something and closes the menu, and shows `checked` beside itself.
+  /// A *state*, not a preference: the compositor fills it from the window it
+  /// is describing at the moment the menu opens.
+  checkbox,
+  /// A rule. `title`, `id`, `checked` and `shortcut` are ignored.
+  separator,
+};
+
+/// One row of a context menu.
+message MenuItem {
+  /// What the client echoes back in `MenuReply.chosen` when this row is
+  /// picked. Opaque to it, and meaningful only to the compositor that sent
+  /// it. Never 0 for a row that can be chosen — 0 is how a reply says
+  /// "dismissed", so an item with that id would be indistinguishable from
+  /// the user pressing Escape.
+  id: u32;
+  title: string;
+  kind: MenuItemKind;
+  /// Only read for `checkbox`.
+  checked: boolean;
+  /// A greyed row that is still *shown*, which is the point: "Maximize"
+  /// missing from a fullscreen window's menu moves every row below it, and
+  /// a menu whose geometry changes with the window is a menu nobody builds
+  /// muscle memory for.
+  enabled: boolean;
+  /// Right-aligned accelerator label — "Alt+F4". Cosmetic: the compositor
+  /// already has these bindings and the menu never matches on this string.
+  /// Empty for a row with no chord.
+  shortcut: string;
+}
+
+/// Compositor → menu client: "open this, here."
+///
+/// A request with **serial 0 and no items** is the opposite: whatever the
+/// client is showing, it should stop. The compositor sends one whenever it
+/// dismisses a menu itself — a click outside, the window the menu described
+/// closing — because taking the surface off the screen says nothing to the
+/// process still drawing into it. It wants no reply: the session a reply
+/// would answer for is already over.
+message MenuRequest {
+  /// Monotonic. Echoed in `MenuReply`, and the reason the reply can be
+  /// trusted: a menu dismissed by the user at the same moment a second
+  /// right-click opened another one would otherwise answer for the wrong
+  /// menu. A reply naming a serial that is not the open one is dropped.
+  serial: u32;
+  /// Where the pointer was, in layout coordinates — the same space window
+  /// positions are in, not the menu surface's own. The client does not place
+  /// itself with these and could not: it does not know the work area, the
+  /// panels, or which output this landed on. They are here so a menu can be
+  /// drawn knowing which corner it was anchored by, and for the log line
+  /// when one opens somewhere surprising.
+  x: i32;
+  y: i32;
+  /// The window this menu is about, or 0 for the desktop. The client shows
+  /// it in the heading; the compositor is the one that acts on it, and it
+  /// does not need to be told the number back.
+  target: u32;
+  /// What to write above the items — a window title, or empty for no
+  /// heading at all. Not the same as the first item: a heading is not
+  /// clickable and does not move the rows under it when it is absent.
+  title: string;
+  items: vector<MenuItem>;
+}
+
+/// Menu client → compositor: "the user picked this", or "they did not".
+///
+/// One reply per request, always — a menu that closes without one leaves the
+/// compositor holding a pointer grab for a surface nobody is drawing.
+message MenuReply {
+  serial: u32;
+  /// `MenuItem.id`, or 0 for dismissed: Escape, a click outside, or the
+  /// menu being closed under the client because the window it described has
+  /// gone away.
+  chosen: u32;
+}
+
 // ─── GPU memory ──────────────────────────────────────────────────────────
 //
 // What `GetGpuReport` answers with. Every byte figure is what the allocator
@@ -860,6 +964,43 @@ interface Compositor {
   u32 CreatePanel(arenaId: in string, edge: in PanelEdge,
                   thickness: in u32, reserve: in boolean,
                   title: in string, appId: in string) raises(ArenaNotFound);
+
+  /// Asks for the surface a context menu is drawn into.
+  ///
+  /// A third way to create a surface, for the same reason `CreatePanel` was a
+  /// second one: what the caller decides is different again. A window chooses
+  /// its size and the compositor chooses where it goes; a panel chooses its
+  /// depth and the compositor chooses the rest; a menu chooses **neither**.
+  /// It is put where the pointer was, at the size it says it measured, and
+  /// both of those arrive later — with `ShowMenu` — because neither is known
+  /// when the process starts.
+  ///
+  /// What the compositor does differently with one of these is the whole
+  /// reason it is its own kind:
+  ///
+  ///   * it is stacked **above panels**, in its own scene tree. A menu that
+  ///     opened under the taskbar would be a menu the top of the screen
+  ///     cannot use.
+  ///   * it is **hidden** until `ShowMenu` and again after the reply, so a
+  ///     resident menu process costs the desktop nothing between menus —
+  ///     no composite, and nothing in the way of a fullscreen client's
+  ///     direct scanout.
+  ///   * while it is up the compositor holds a **pointer grab**: a press
+  ///     anywhere else dismisses the menu and is swallowed rather than
+  ///     landing in whatever was underneath. That is what every other menu
+  ///     on the desktop does, and doing it here rather than in the client is
+  ///     what makes it work over a foreign window, which a client cannot
+  ///     hit-test.
+  ///   * it is not in the window list, has no title bar, and never appears
+  ///     in the switcher.
+  ///
+  /// `width` and `height` are what the client expects its largest menu to
+  /// need. They size the arena and nothing else — every menu is drawn at the
+  /// size `ShowMenu` names.
+  ///
+  /// One per client. Asking twice returns the surface already open.
+  u32 CreateMenuSurface(arenaId: in string, width: in u32, height: in u32,
+                        appId: in string) raises(ArenaNotFound);
 
   // ─── Window state ──────────────────────────────────────────────────────
   //
@@ -1254,6 +1395,57 @@ interface Compositor {
   /// the keyboard from the window the user is typing in is not, and this
   /// interface deliberately has no call for it.
   bidi_stream<FocusAck, ActiveWindow> SubscribeActiveWindow();
+
+  /// The menu to open, and again every time the user asks for one.
+  ///
+  /// The subscription a **context menu client** holds: right-clicking the
+  /// desktop or a window's non-client area produces a `MenuRequest` here,
+  /// and the client answers with a `MenuReply` naming what was chosen. The
+  /// compositor does the rest — it owns every action on the menu, which is
+  /// why it can be sure the item that was clicked is still a thing that can
+  /// be done.
+  ///
+  /// Bidirectional for the reason the other state streams are, and here the
+  /// reverse half carries real news rather than only flow control: the reply
+  /// *is* the result. See `SubscribePanelArea` for why a `server_stream`
+  /// servant is the wrong shape for anything the compositor's loop pushes.
+  ///
+  /// `surfaceId` is this client's menu surface, from `CreateMenuSurface`.
+  /// Passing an ordinary window is refused: the compositor is about to place
+  /// this surface at the pointer and grab for it, and doing that to somebody's
+  /// text editor is not a request it should honour.
+  ///
+  /// **One subscriber.** A second one is refused rather than fanned out to:
+  /// two processes drawing the desktop's context menu is not a configuration
+  /// with a right answer, and the failure would show up as two menus and one
+  /// grab. The session's own menu client is started like the panel and the
+  /// dock — see `[shell]` in `lava.conf`.
+  ///
+  /// A desktop with nobody subscribed simply has no context menu. The right
+  /// click still clears focus, the way it did before this existed.
+  bidi_stream<MenuReply, MenuRequest> SubscribeMenu(surfaceId: in u32)
+      raises(SurfaceNotFound);
+
+  /// "I have laid out the menu for `serial`; it is `width` × `height`."
+  ///
+  /// The client's half of opening a menu, and the reason the surface is not
+  /// simply shown when the request goes out: only the client can measure the
+  /// list. It has the face, the padding and the shortcut column; the
+  /// compositor has the item strings and no idea what they come to in pixels.
+  ///
+  /// The compositor resizes the surface, places it against the anchor the
+  /// request carried, unconstrains it into the output's work area — flipping
+  /// it above the pointer or left of it rather than letting it run off the
+  /// screen, the same rule `xdg_popup` gets — takes the grab and reveals it.
+  /// The reveal waits for a frame drawn at the new size, like any other
+  /// window's first frame, so a menu never appears at the previous menu's
+  /// dimensions.
+  ///
+  /// Ignored for a `serial` that is not the open request. A client that
+  /// measured a menu the user has already dismissed is not wrong; it is late,
+  /// and the answer to late is nothing at all.
+  void ShowMenu(surfaceId: in u32, serial: in u32, width: in u32,
+                height: in u32) raises(SurfaceNotFound);
 
   /// Gives the surface back: the window closes and the arena is released.
   ///

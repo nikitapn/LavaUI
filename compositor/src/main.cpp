@@ -227,6 +227,15 @@ struct Workspaces {
   /// Panels are not members of a workspace — a taskbar is on all of them — so
   /// this tree is never disabled.
   wlr_scene_tree *panels = nullptr;
+  /// The context menu, and nothing else. Above the panels because a menu
+  /// that opened under the taskbar would be one the top of the screen cannot
+  /// use — and a right-click near an edge is exactly where a menu goes.
+  ///
+  /// Its own tree rather than a raise within `panels`, so the ordering is a
+  /// property of the scene rather than of whatever was raised last: a panel
+  /// that redraws, a dock that reveals itself, or a toast arriving must not
+  /// be able to come up over an open menu.
+  wlr_scene_tree *menus = nullptr;
   /// Input method candidate windows — see `RelayPopup`. Not a member of a
   /// workspace either: the field being typed into is on the current one.
   wlr_scene_tree *inputPopups = nullptr;
@@ -245,6 +254,8 @@ struct Workspaces {
     }
     wlr_scene_node_set_enabled(&tree[current]->node, true);
     panels = wlr_scene_tree_create(root);
+    // The context menu, over the panels it can be opened from.
+    menus = wlr_scene_tree_create(root);
     // An input method's candidate list. Above the panels because it belongs
     // to whatever is being typed into and a taskbar must not cover the word
     // being chosen; below the drag icon, which is on the cursor.
@@ -1252,6 +1263,63 @@ struct Server {
   /// buffer. Does not read GPU memory on this call.
   bool schedulePortalCapture();
 
+
+  // ─── Context menu ────────────────────────────────────────────────────────
+  //
+  // Right-click on the desktop, or on the non-client area of a window. The
+  // compositor decides what is on the menu — every item acts on something it
+  // owns, and every checkmark is state only it can answer for — and a client
+  // draws it. See `SubscribeMenu` in the IDL.
+
+  /// The menu that is open, or the one that has been asked for.
+  struct MenuSession {
+    /// The request the client is answering, and the only serial a reply is
+    /// accepted for. 0 when nothing is open or pending.
+    uint32_t serial = 0;
+    /// The window the menu is about, or 0 for the desktop. Re-checked when
+    /// the reply arrives: a window can close while its menu is up.
+    uint32_t target = 0;
+    int anchorX = 0;
+    int anchorY = 0;
+    /// True once `ShowMenu` has placed it. Between the request and that call
+    /// the client is still measuring and there is nothing on screen — but the
+    /// session is live, so a second right-click supersedes rather than
+    /// stacking.
+    bool shown = false;
+    /// What had the keyboard before, so it can be handed back.
+    ///
+    /// Two numbers because focus is two pieces of state: `previousFocus` is
+    /// the Lava surface that had the keyboard, 0 when a foreign window did,
+    /// and `previousFrame` is the frame that was painted active either way.
+    /// Ids rather than a `wlr_surface *` deliberately — the window can close
+    /// while its own menu is up, and a stale id resolves to nothing where a
+    /// stale pointer resolves to a crash.
+    uint32_t previousFocus = 0;
+    uint32_t previousFrame = 0;
+  };
+
+  MenuSession menu;
+  /// Monotonic, never reused: a reply naming a stale serial is a menu the
+  /// user has already dismissed, and dropping it is the whole point of
+  /// numbering them.
+  uint32_t menuSerial = 0;
+
+  /// Asks the menu client for a menu about `target` (0 = the desktop) at the
+  /// pointer. False when there is no menu client, which is a desktop with no
+  /// context menu rather than an error.
+  bool openContextMenu(int x, int y, uint32_t target);
+
+  /// Takes the menu off the screen and gives the keyboard back. Safe when
+  /// nothing is open.
+  void closeContextMenu();
+
+  /// The client's answer: `chosen` is a `MenuAction`, or 0 for dismissed.
+  void applyMenuChoice(uint32_t serial, uint32_t chosen);
+
+  /// Whether a menu is on screen right now — what the pointer grab and the
+  /// Escape key ask.
+  bool menuIsOpen() const { return menu.serial != 0 && menu.shown; }
+
   std::unique_ptr<lava::ScreenshotPortal> screenshotPortal;
 };
 
@@ -1419,6 +1487,48 @@ struct ClientSurface {
 
   /// Panels have no frame and are laid out by their edge, not by the user.
   bool panel = false;
+
+  /// The surface a context menu is drawn into. See `CreateMenuSurface`.
+  ///
+  /// Not a panel with different furniture: a panel is docked to an edge and
+  /// is always on screen, and this is neither. It lives in its own scene tree
+  /// above them, it is hidden between menus, and while it is up the pointer
+  /// belongs to it. What it shares with a panel is only what it is *not* —
+  /// no title bar, not in the window list, not somewhere the user put a
+  /// window.
+  bool menu = false;
+
+  /// Where this window sits among the others on its workspace.
+  ///
+  /// The desktop's rule is "the last thing clicked is in front", and these are
+  /// the exceptions to it. Enforced by re-raising after every raise
+  /// (`restackRanked`) rather than by a scene tree per rank: a workspace is
+  /// one tree and windows move between workspaces, so that would be eighteen
+  /// trees to keep two bits of ordering.
+  ///
+  /// Ordered, and the order *is* the type — `restackRanked` re-applies the
+  /// ranks in it, lowest first, so each ends up above the one before.
+  enum class StackRank : uint8_t {
+    /// Everything the user opened. Raise order alone decides.
+    Normal,
+    /// "Always on top", from the window's own context menu. The user's
+    /// choice, and it outranks focus.
+    Pinned,
+    /// The desktop's own momentary overlays: the application launcher and the
+    /// app switcher. They cover the screen, they are gone by the next
+    /// keystroke, and underneath a pinned window is the one place they must
+    /// not be — a launcher you cannot see is one you are typing into blind.
+    /// Not a client's to ask for; the compositor knows its own components
+    /// (`isTransientApp`).
+    Overlay,
+  };
+
+  StackRank rank = StackRank::Normal;
+
+  /// Whether the *user* has pinned this window. Not true of an overlay, which
+  /// is above pinned windows without being one — nothing offers to un-pin the
+  /// launcher, and the context menu's checkmark must not claim it is pinned.
+  bool alwaysOnTop() const { return rank == StackRank::Pinned; }
   /// Which edge, for a panel. Meaningless otherwise. Kept rather than inferred
   /// from the position, so the work area does not have to guess.
   uint32_t edge = 0;
@@ -2070,6 +2180,19 @@ class SurfaceRegistry : public lava::CompositorHost {
     // rectangle in this list while the user can see straight through it, and
     // a click there belongs to whatever it is not covering yet.
     if (!frameShown(surface)) return false;
+    // A menu is on screen exactly while its node is enabled, which `placeMenu`
+    // and `hideMenu` are the only things that set. Reading the flag rather
+    // than keeping a second bool beside it is what stops the two drifting —
+    // and a hidden menu that went on answering hit tests would be a dead
+    // rectangle wherever the last one stood, now at the top of the walk.
+    //
+    // Not a member of a workspace, either: the menus tree is never disabled,
+    // so a menu opened on workspace 3 is on screen on workspace 3. It is
+    // created with `workspace = 0`, and the test below would have made it
+    // unclickable everywhere else.
+    if (surface.menu) {
+      return surface.node != nullptr && surface.node->node.enabled;
+    }
     // Hidden, not gone: a fullscreen window on this workspace owns the
     // output, and the panel staying clickable on top of a game is how
     // fullscreen failed to be fullscreen.
@@ -2153,25 +2276,46 @@ class SurfaceRegistry : public lava::CompositorHost {
   /// content rectangle occludes every bar (and every content) behind it. That
   /// is the Z-order the scene graph already draws; hit testing has to match it.
   ///
-  /// Panels are tested before windows, whatever order the list is in, because
-  /// that is where the scene puts them: they live in their own tree, above
-  /// every workspace, and `raise` deliberately never reorders them. Hit
-  /// testing did not know that. It mattered the moment a panel became bigger
-  /// than its strip — a panel grown to hold an open menu is a tall rectangle
-  /// under the window in front of it, so every dropdown row below the window's
-  /// top edge answered to the *window*, and only the first row or two of a
-  /// menu could be clicked at all.
+  /// The context menu is tested before panels, and panels before windows,
+  /// whatever order the list is in — because that is where the scene puts
+  /// them (`Workspaces::init`): three trees, stacked, that `raise` never
+  /// reorders. The list therefore says nothing about where any of them is,
+  /// and the passes have to.
+  ///
+  /// Both exceptions were found the same way, by something being visibly on
+  /// top and not answering the pointer. A panel grown to hold an open dropdown
+  /// is a tall rectangle under the window in front of it, so every row below
+  /// the window's top edge answered to the *window*. The menu was worse,
+  /// because it is on top of everything: a context menu over a foreign window
+  /// drew above it and hovered nothing, while the same menu over bare desktop
+  /// worked — which reads as a stacking bug and is a hit-testing one.
   SurfaceHit hitTest(double lx, double ly) const {
-    if (SurfaceHit hit = hitTestPass(lx, ly, true); hit.surface != nullptr) {
+    if (SurfaceHit hit = hitTestPass(lx, ly, HitLayer::Menu);
+        hit.surface != nullptr) {
       return hit;
     }
-    return hitTestPass(lx, ly, false);
+    if (SurfaceHit hit = hitTestPass(lx, ly, HitLayer::Panel);
+        hit.surface != nullptr) {
+      return hit;
+    }
+    return hitTestPass(lx, ly, HitLayer::Window);
   }
 
  private:
-  SurfaceHit hitTestPass(double lx, double ly, bool panels) const {
+  /// Which of the scene's stacked trees a surface lives in. Declared in the
+  /// order they are stacked, topmost first, which is the order `hitTest`
+  /// walks them in.
+  enum class HitLayer : uint8_t { Menu, Panel, Window };
+
+  static HitLayer layerOf(const ClientSurface &surface) {
+    if (surface.menu) return HitLayer::Menu;
+    if (surface.panel) return HitLayer::Panel;
+    return HitLayer::Window;
+  }
+
+  SurfaceHit hitTestPass(double lx, double ly, HitLayer layer) const {
     for (const auto &s : surfaces_) {
-      if (s->panel != panels || !visible(*s)) continue;
+      if (layerOf(*s) != layer || !visible(*s)) continue;
       double sx = 0, sy = 0;
       // Within one window the bar is drawn above the content.
       if (s->hitBar(lx, ly, sx, sy)) {
@@ -2231,7 +2375,11 @@ class SurfaceRegistry : public lava::CompositorHost {
   /// a compositor-level gesture like Alt+drag needs.
   ClientSurface *windowAt(double lx, double ly) {
     const SurfaceHit top = hitTest(lx, ly);
-    if (top.surface == nullptr || top.surface->panel) return nullptr;
+    // Neither the furniture: Alt+drag must not move the taskbar, and it must
+    // not move an open menu either.
+    if (top.surface == nullptr || top.surface->panel || top.surface->menu) {
+      return nullptr;
+    }
     return top.surface;
   }
 
@@ -2266,7 +2414,10 @@ class SurfaceRegistry : public lava::CompositorHost {
       // A panel is on an edge of the screen by definition and is not the
       // user's to resize; a maximized window has already been given the work
       // area and would fight the next thing that re-applied it.
-      if (!visible(*s) || s->panel || s->maximized || s->fullscreen) continue;
+      if (!visible(*s) || s->panel || s->menu || s->maximized ||
+          s->fullscreen) {
+        continue;
+      }
       const double x0 = s->x, y0 = s->y;
       const double x1 = x0 + s->width, y1 = y0 + s->frameHeight();
       if (lx < x0 - kGrab || lx > x1 + kGrab) continue;
@@ -2572,6 +2723,13 @@ class SurfaceRegistry : public lava::CompositorHost {
                                     workspaces_->current, decorated);
     if (ClientSurface *opened = find(id)) {
       opened->appId = appId;
+      // The desktop's own momentary overlays go above the windows the user
+      // pinned. Decided here, from the compositor's own list of what those
+      // are, rather than asked for: a client that could choose to outrank
+      // "always on top" would make the setting a suggestion.
+      if (isTransientApp(appId)) {
+        opened->rank = ClientSurface::StackRank::Overlay;
+      }
       // A new overlay must not reuse posters from the last Alt+Tab.
       if (appId == kSwitcherAppId) invalidatePosters();
       applyInitialPlacement(*opened);
@@ -2676,12 +2834,32 @@ class SurfaceRegistry : public lava::CompositorHost {
   /// title bar out from under it — they are siblings in one tree, and "on top"
   /// is decided by order alone.
   void raise(ClientSurface &surface) {
-    if (surface.panel) return;  // already above everything, by its own tree
+    // A panel is already above everything by its own tree, and a menu is
+    // above the panels by its own — neither has a place in this ordering.
+    if (surface.panel || surface.menu) return;
+    raiseNodes(surface);
+    bringToFront(surface);
+    // Whatever the user pinned goes back over the top of it. Last, so it
+    // wins over the raise that has just happened — which is the whole
+    // meaning of the flag.
+    restackRanked();
+    syncShellForFullscreen();
+  }
+
+  /// The scene half of a raise: this window's nodes to the top of their tree.
+  ///
+  /// Split out because `restackRank` needs exactly this and not the
+  /// rest of `raise` — going back through `raise` would recurse into the
+  /// restack it was called from.
+  void raiseNodes(ClientSurface &surface) {
     if (surface.isForeign()) {
       wlr_scene_node_raise_to_top(surface.window->contentNode());
     } else if (surface.node != nullptr) {
       wlr_scene_node_raise_to_top(&surface.node->node);
     }
+    // The bar after the contents, or focusing a window would raise its own
+    // title bar out from under it — they are siblings in one tree, and "on
+    // top" is decided by order alone.
     if (surface.barNode != nullptr) {
       wlr_scene_node_raise_to_top(&surface.barNode->node);
     }
@@ -2691,9 +2869,12 @@ class SurfaceRegistry : public lava::CompositorHost {
     placeShadow(surface);
     placeBackdrop(surface);
     scheduleBackdropRefresh();
-    // Front of the list is front of the stack, and the two must not disagree:
-    // the hit tests walk this list and would otherwise answer with a window
-    // that is visibly behind another.
+  }
+
+  /// The list half: front of the list is front of the stack, and the two must
+  /// not disagree — the hit tests walk this list and would otherwise answer
+  /// with a window that is visibly behind another.
+  void bringToFront(ClientSurface &surface) {
     for (auto it = surfaces_.begin(); it != surfaces_.end(); ++it) {
       if (it->get() != &surface) continue;
       auto owned = std::move(*it);
@@ -2701,6 +2882,62 @@ class SurfaceRegistry : public lava::CompositorHost {
       surfaces_.push_front(std::move(owned));
       break;
     }
+  }
+
+  /// Puts the ranked windows back over everything, keeping their order within
+  /// each rank.
+  ///
+  /// Run after every raise, because a raise is `raise_to_top` on one window
+  /// and knows nothing about ranks. A desktop has one or two of these and
+  /// usually none, so the usual cost is the walk that finds nothing.
+  ///
+  /// Lowest rank first, so the higher one is raised over it: the launcher
+  /// opening in front of a pinned window is the whole reason there are two.
+  void restackRanked() {
+    restackRank(ClientSurface::StackRank::Pinned);
+    restackRank(ClientSurface::StackRank::Overlay);
+  }
+
+  /// Ids rather than pointers, and bottom-most first: `bringToFront` reorders
+  /// the list being walked, and raising them in list order would invert them.
+  void restackRank(ClientSurface::StackRank rank) {
+    std::vector<uint32_t> ranked;
+    for (const auto &surface : surfaces_) {
+      if (surface->rank == rank && !surface->panel && !surface->menu) {
+        ranked.push_back(surface->id);
+      }
+    }
+    if (ranked.empty()) return;
+    for (auto it = ranked.rbegin(); it != ranked.rend(); ++it) {
+      if (ClientSurface *surface = find(*it)) {
+        raiseNodes(*surface);
+        bringToFront(*surface);
+      }
+    }
+  }
+
+  /// Pins a window above the rest of its workspace, or stops.
+  ///
+  /// Unpinning moves nothing. The window is simply no longer put back over
+  /// whatever is raised next — dropping it down the stack here would be a
+  /// second change nobody asked for, and the user can still see where they
+  /// left it.
+  void setAlwaysOnTop(ClientSurface &surface, bool onTop) {
+    if (surface.panel || surface.menu) return;
+    // An overlay is above the pinned windows already and nothing offers to
+    // change that: the launcher has no title bar to right-click and is gone
+    // before anyone could.
+    if (surface.rank == ClientSurface::StackRank::Overlay) return;
+    const ClientSurface::StackRank want =
+        onTop ? ClientSurface::StackRank::Pinned
+              : ClientSurface::StackRank::Normal;
+    if (surface.rank == want) return;
+    surface.rank = want;
+    if (onTop) {
+      raiseNodes(surface);
+      bringToFront(surface);
+    }
+    restackRanked();
     syncShellForFullscreen();
   }
 
@@ -3842,6 +4079,11 @@ class SurfaceRegistry : public lava::CompositorHost {
   /// surface is not a `wlr_surface` and the seat has no object for it.
   uint32_t focusedId() const { return focused_; }
 
+  /// Whose bar is drawn active — a foreign window's frame included, which
+  /// `Server::focusedSurface()` cannot express (it holds the *Lava* target,
+  /// and is 0 whenever a foreign window has the keyboard).
+  uint32_t focusedFrame() const { return focused_; }
+
   void setFocused(uint32_t id) {
     if (focused_ == id) return;
     const uint32_t previous = focused_;
@@ -3956,8 +4198,12 @@ class SurfaceRegistry : public lava::CompositorHost {
   void resizeSurface(ClientSurface &surface, uint32_t width, uint32_t height) {
     // A floor, because zero is not a size and a drag can cross the origin.
     // Panels are exempt: a 32-pixel strip is a perfectly good panel, and there
-    // is no drag that could shrink one by accident.
-    const uint32_t floor = surface.panel ? 1u : kMinSurface;
+    // is no drag that could shrink one by accident. A menu is exempt for the
+    // same reason and it is not a nicety — a two-item menu is 60 pixels tall,
+    // and the floor stretched it to 120, so the compositor answered the size
+    // its client measured with a different one and the menu drew a plate with
+    // half a menu in it.
+    const uint32_t floor = surface.panel || surface.menu ? 1u : kMinSurface;
     width = width < floor ? floor : width;
     height = height < floor ? floor : height;
 
@@ -4063,6 +4309,123 @@ class SurfaceRegistry : public lava::CompositorHost {
     return id;
   }
 
+
+  // ─── Context menu ────────────────────────────────────────────────────────
+  //
+  // The surface a right-click opens. `CreateMenuSurface` in the IDL says why
+  // it is its own kind rather than a window a client places for itself; what
+  // is here is the surface half — creating it, sizing it to the menu the
+  // client measured, putting it where the pointer was, and taking it away
+  // again. Who is asked, what is on it and what an item does live on `Server`,
+  // which is where the pointer and the window state already are.
+
+  uint32_t createMenuSurface(const std::string &arenaId, uint32_t width,
+                             uint32_t height,
+                             const std::string &appId) override {
+    if (workspaces_ == nullptr || workspaces_->menus == nullptr) return 0;
+    // One per desktop. A client that lost track of its own surface gets the
+    // one it already has rather than a second invisible surface that nothing
+    // will ever show or close.
+    if (ClientSurface *existing = find(menuSurfaceId_)) return existing->id;
+
+    // Workspace 0 is a formality: this tree is not a workspace's and is never
+    // disabled, so a menu opened on workspace 3 is still drawn.
+    const uint32_t id = openSurface(arenaId, width, height, "Menu",
+                                    workspaces_->menus, 0, false);
+    if (id == 0) return 0;
+    ClientSurface *surface = find(id);
+    surface->menu = true;
+    surface->appId = appId;
+    // Not revealed by the ordinary first-frame path. A menu surface is shown
+    // by `showMenu` and by nothing else; one that appeared when its client
+    // first drew would be a rectangle in the corner of the screen for as long
+    // as the process lived.
+    surface->awaitingFirstFrame = false;
+    surface->revealSerial = 0;
+    surface->revealDeadline = {};
+    if (surface->node != nullptr) {
+      wlr_scene_node_set_enabled(&surface->node->node, false);
+    }
+    // Like a panel, it asked for nothing and is told everything: there is no
+    // size it could have laid out for until a menu arrives.
+    surface->askedWidth = 0;
+    surface->askedHeight = 0;
+    applyCorners(*surface);
+    menuSurfaceId_ = id;
+    wlr_log(WLR_INFO, "menu: surface %u for '%s' (arena %ux%u)", id,
+            appId.c_str(), width, height);
+    return id;
+  }
+
+  bool isMenuSurface(uint32_t id) const override {
+    for (const auto &s : surfaces_) {
+      if (s->id == id) return s->menu;
+    }
+    return false;
+  }
+
+  uint32_t menuSurface() const { return menuSurfaceId_; }
+
+  /// Sizes the menu to what its client measured, puts it at the anchor and
+  /// shows it. Returns where it landed, so the caller can log it.
+  ///
+  /// The client has already drawn this menu at this size — it lays out,
+  /// publishes, and only then calls `ShowMenu` — so there is no reveal to
+  /// hold here and no frame from the previous menu to flash. That ordering is
+  /// the client's contract and the reason this can simply enable the node.
+  void placeMenu(ClientSurface &surface, int anchorX, int anchorY,
+                 uint32_t width, uint32_t height) {
+    resizeSurface(surface, width, height);
+    // Unconstrained in the output the pointer is on, not the primary one: a
+    // right-click on the second screen opens a menu on the second screen.
+    const WorkArea area = workAreaAt(anchorX, anchorY);
+    const int w = static_cast<int>(surface.width);
+    const int h = static_cast<int>(surface.height);
+    const int right = area.x + static_cast<int>(area.width);
+    const int bottom = area.y + static_cast<int>(area.height);
+
+    // Flip before sliding, which is the rule `xdg_popup` unconstraining uses
+    // and the one that keeps a menu off the pointer: a menu that ran past the
+    // bottom is opened *above* the click rather than slid up over it, where
+    // the first item would land under the cursor and the next click would
+    // choose it by accident.
+    int x = anchorX;
+    if (x + w > right) x = anchorX - w;
+    int y = anchorY;
+    if (y + h > bottom) y = anchorY - h;
+    // Slide is the fallback for a menu taller than the screen, which flipping
+    // cannot help. Clamped low last so the top stays visible: the items a
+    // user reads first are up there.
+    x = std::min(x, right - w);
+    y = std::min(y, bottom - h);
+    x = std::max(x, area.x);
+    y = std::max(y, area.y);
+
+    moveSurface(surface, x, y);
+    if (surface.node != nullptr) {
+      wlr_scene_node_set_enabled(&surface.node->node, true);
+      wlr_scene_node_raise_to_top(&surface.node->node);
+    }
+    damage(surface);
+  }
+
+  bool showMenu(uint32_t surfaceId, uint32_t serial, uint32_t width,
+                uint32_t height) override;
+  void menuChosen(uint32_t serial, uint32_t chosen) override;
+  void menuClientLeft(uint32_t surfaceId) override;
+
+  /// Takes the menu off the screen. Safe when none is up.
+  void hideMenu() {
+    ClientSurface *surface = find(menuSurfaceId_);
+    if (surface == nullptr || surface->node == nullptr) return;
+    if (!surface->node->node.enabled) return;
+    wlr_scene_node_set_enabled(&surface->node->node, false);
+    damage(*surface);
+    // What was behind it is behind nothing now, and a frosted panel samples
+    // the desktop rather than its own window.
+    scheduleBackdropRefresh();
+  }
+
   // ─── Window state ────────────────────────────────────────────────────────
   //
   // The other end of the buttons in `Decoration`. A client that draws its own
@@ -4149,6 +4512,10 @@ class SurfaceRegistry : public lava::CompositorHost {
       // The switcher is a regular surface (it needs the keyboard, which a
       // panel never gets) but it is not an application the user opened.
       if (surface->appId == kSwitcherAppId) continue;
+      // Nor is the context menu, which is furniture the way a panel is — and
+      // is invisible most of the time, so a dock listing it would show an
+      // entry for a window nobody can point at.
+      if (surface->menu) continue;
       WindowEntry entry;
       entry.surfaceId = surface->id;
       entry.title = surface->title;
@@ -4616,6 +4983,18 @@ class SurfaceRegistry : public lava::CompositorHost {
       if ((*it)->id != id) continue;
       if ((*it)->appId == kSwitcherAppId) invalidatePosters();
       else forgetPosters(id);
+      // The menu surface going away is the menu client leaving, whether it
+      // said so or its process ended. Anything on screen comes down with it,
+      // and the id is not reused: the next client opens a fresh surface.
+      if (id == menuSurfaceId_) {
+        menuSurfaceId_ = 0;
+        if (server_ != nullptr) server_->closeContextMenu();
+      }
+      // A window with a menu open about it is a window whose menu now names
+      // nothing. Same close, one step removed.
+      if (server_ != nullptr && server_->menu.target == id) {
+        server_->closeContextMenu();
+      }
       rememberPlacement(**it);
       const uint32_t workspace = (*it)->workspace;
       const bool hadFocus =
@@ -5547,6 +5926,10 @@ class SurfaceRegistry : public lava::CompositorHost {
   lava::Decoration decoration_;
   /// Whose bar is drawn active.
   uint32_t focused_ = 0;
+  /// The one context-menu surface, or 0 when no menu client is running. Not
+  /// reused after the client goes: `destroySurface` clears it, and the next
+  /// client's `CreateMenuSurface` opens a fresh one.
+  uint32_t menuSurfaceId_ = 0;
   uint32_t outputWidth_ = 0;
   uint32_t outputHeight_ = 0;
   /// Top-left of the output layout. Not always (0,0): unplugging the
@@ -5683,8 +6066,11 @@ bool SurfaceRegistry::hintToplevelConfigure(const std::string &appId,
 }
 
 void SurfaceRegistry::rememberPlacement(const ClientSurface &surface) {
-  if (surface.panel || surface.appId.empty() || isTransientApp(surface.appId) ||
-      surface.transient) {
+  // A menu is furniture like a panel: it is placed at the pointer every time
+  // and never opens where it last was, so remembering a frame for it would
+  // only be a line in the file nothing reads.
+  if (surface.panel || surface.menu || surface.appId.empty() ||
+      isTransientApp(surface.appId) || surface.transient) {
     return;
   }
   lava::WindowPlacement placement;
@@ -7525,6 +7911,15 @@ bool switcherHasKeyboard(Server *server) {
   return surface != nullptr && surface->appId == kSwitcherAppId;
 }
 
+/// The desktop's settings application, found the way the panel is. Not
+/// supervised: it is something the user opened, and one that exits was closed.
+void launch_settings() {
+  const std::string path = lava::ShellSupervisor::programPath("LavaSettings");
+  std::string program = path;
+  char *argv[] = {program.data(), nullptr};
+  launch_program(program.c_str(), argv);
+}
+
 /// LavaTerm — the desktop's own terminal. Found the same way the panel is, so
 /// a tree build and an installed package both work without a PATH entry.
 void launch_terminal() {
@@ -8777,6 +9172,266 @@ void Server::focus(FramedWindow *window) {
   }
 }
 
+
+// ─── Context menu ──────────────────────────────────────────────────────────
+
+/// What an item on the context menu does.
+///
+/// These numbers travel as `MenuItem.id` and come back as `MenuReply.chosen`.
+/// They mean nothing to the client, which draws strings and reports which one
+/// was clicked — every one of them acts on something only the compositor owns,
+/// which is why the menu is built here and not there.
+enum class MenuAction : uint32_t {
+  None = 0,
+  AlwaysOnTop,
+  Minimize,
+  MaximizeRestore,
+  Fullscreen,
+  Close,
+  NewTerminal,
+  Applications,
+  Settings,
+};
+
+/// `MenuItemKind`'s ordinals, spelled out rather than taken from the generated
+/// header — the window management below has no other reason to include it.
+constexpr uint32_t kMenuCommand = 0;
+constexpr uint32_t kMenuCheckbox = 1;
+constexpr uint32_t kMenuSeparator = 2;
+
+lava::CompositorHost::MenuEntry menuCommand(MenuAction action, std::string title,
+                                      bool enabled = true,
+                                      std::string shortcut = {}) {
+  lava::CompositorHost::MenuEntry entry;
+  entry.id = static_cast<uint32_t>(action);
+  entry.title = std::move(title);
+  entry.kind = kMenuCommand;
+  entry.enabled = enabled;
+  entry.shortcut = std::move(shortcut);
+  return entry;
+}
+
+lava::CompositorHost::MenuEntry menuCheckbox(MenuAction action, std::string title,
+                                       bool checked, bool enabled = true,
+                                       std::string shortcut = {}) {
+  lava::CompositorHost::MenuEntry entry =
+      menuCommand(action, std::move(title), enabled, std::move(shortcut));
+  entry.kind = kMenuCheckbox;
+  entry.checked = checked;
+  return entry;
+}
+
+lava::CompositorHost::MenuEntry menuSeparator() {
+  lava::CompositorHost::MenuEntry entry;
+  entry.kind = kMenuSeparator;
+  return entry;
+}
+
+bool Server::openContextMenu(int x, int y, uint32_t target) {
+  if (control == nullptr || surfaces == nullptr) return false;
+
+  // The label on a row is the chord that actually works, which is not a
+  // constant: the desktop modifier is configurable, and a nested session
+  // forces Alt so the host keeps Super. A menu that advertised Super+Q in a
+  // session where Alt+Q is the binding would be worse than one with no
+  // shortcuts on it at all.
+  const std::string mod =
+      nested ? "Alt" : (config.keyboard.modKey == "super" ? "Super" : "Alt");
+
+  std::vector<lava::CompositorHost::MenuEntry> items;
+  std::string heading;
+
+  if (target != 0) {
+    ClientSurface *surface = surfaces->find(target);
+    // The window closed between the press and here. No menu rather than an
+    // empty one: every item on it would act on nothing.
+    if (surface == nullptr || surface->panel || surface->menu) return false;
+    heading = surface->title;
+
+    // First, because it is the one item on this menu that is not on the title
+    // bar already — the reason a user opens this menu at all.
+    items.push_back(menuCheckbox(MenuAction::AlwaysOnTop, "Always on top",
+                                 surface->alwaysOnTop()));
+    items.push_back(menuSeparator());
+    // Disabled rather than dropped while fullscreen: the rows keep their
+    // places, so the muscle memory for "third item down" survives the state
+    // of the window.
+    items.push_back(
+        menuCommand(MenuAction::Minimize, "Minimize", !surface->fullscreen));
+    items.push_back(menuCommand(MenuAction::MaximizeRestore,
+                                surface->maximized ? "Restore" : "Maximize",
+                                !surface->fullscreen));
+    items.push_back(menuCheckbox(MenuAction::Fullscreen, "Fullscreen",
+                                 surface->fullscreen, true, mod + "+F"));
+    items.push_back(menuSeparator());
+    items.push_back(menuCommand(MenuAction::Close, "Close", true, mod + "+Q"));
+  } else {
+    items.push_back(menuCommand(MenuAction::NewTerminal, "New Terminal", true,
+                                mod + "+Return"));
+    items.push_back(menuCommand(MenuAction::Applications, "Applications…",
+                                true, mod + "+P"));
+    items.push_back(menuSeparator());
+    items.push_back(menuCommand(MenuAction::Settings, "Desktop Settings…"));
+  }
+
+  // A menu that was up is superseded rather than stacked: a second
+  // right-click is a new question, usually about a different window.
+  closeContextMenu();
+
+  const uint32_t serial = ++menuSerial;
+  if (!control->postMenu(serial, x, y, target, heading, items)) {
+    // Nobody is drawing menus — `menu = off` in `[shell]`, or the client is
+    // being restarted. A desktop with no context menu, not a failure.
+    return false;
+  }
+
+  menu = MenuSession{};
+  menu.serial = serial;
+  menu.target = target;
+  menu.anchorX = x;
+  menu.anchorY = y;
+  return true;
+}
+
+void Server::closeContextMenu() {
+  if (menu.serial == 0) return;
+  const MenuSession closing = menu;
+  menu = MenuSession{};
+  if (surfaces != nullptr) surfaces->hideMenu();
+  // Tell the client, or it goes on believing its menu is up: hiding the
+  // surface is enough for the *screen* and says nothing to the process
+  // drawing it. An empty request with serial 0 is the close — see
+  // `MenuRequest` in the IDL — and it wants no reply, because the session it
+  // would answer for is already gone.
+  if (control != nullptr) control->postMenu(0, 0, 0, 0, "", {});
+  // Never placed: the client was still measuring, nothing took the keyboard,
+  // and there is nothing to give back.
+  if (!closing.shown) return;
+
+  // The keyboard goes back where it came from. A Lava surface by its own id;
+  // a foreign window by re-focusing its frame, which is the path that also
+  // re-activates the client and repaints its decoration.
+  if (closing.previousFocus != 0 &&
+      surfaces->find(closing.previousFocus) != nullptr) {
+    setFocusedSurface(closing.previousFocus);
+    surfaces->setFocused(closing.previousFocus);
+  } else if (ClientSurface *frame = surfaces->find(closing.previousFrame)) {
+    focusSurface(*frame);
+  }
+  // What is under the pointer has not been tracked while the menu covered it.
+  update_pointer_focus(0);
+}
+
+void Server::applyMenuChoice(uint32_t serial, uint32_t chosen) {
+  // A reply for a menu that is no longer the open one: the user dismissed it
+  // and opened another, or the window it described went away. Dropping it is
+  // what the serial is for.
+  if (serial == 0 || serial != menu.serial) return;
+  const uint32_t target = menu.target;
+  closeContextMenu();
+  if (chosen == 0) return;  // dismissed
+
+  // Re-resolved after the close, not captured before it: everything below
+  // acts on a window, and the reply arrived some milliseconds after the menu
+  // was drawn. A window that closed in between must not be acted on by id.
+  ClientSurface *surface = target != 0 ? surfaces->find(target) : nullptr;
+
+  // The window actions, guarded once. `chosen` came out of another process,
+  // and while this desktop's own menu client only ever echoes back an id it
+  // was handed, "the client is well behaved" is not something to dereference
+  // a pointer on: a window action naming the *desktop* menu would be a null
+  // `surface` and a crash in the compositor.
+  const bool wantsWindow =
+      chosen >= static_cast<uint32_t>(MenuAction::AlwaysOnTop) &&
+      chosen <= static_cast<uint32_t>(MenuAction::Close);
+  if (wantsWindow && surface == nullptr) {
+    wlr_log(WLR_ERROR, "menu: reply %u names a window action with no window",
+            chosen);
+    return;
+  }
+
+  switch (static_cast<MenuAction>(chosen)) {
+    case MenuAction::AlwaysOnTop:
+      surfaces->setAlwaysOnTop(*surface, !surface->alwaysOnTop());
+      wlr_log(WLR_INFO, "menu: window %u always-on-top %s", target,
+              surface->alwaysOnTop() ? "on" : "off");
+      return;
+    case MenuAction::Minimize:
+      minimizeSurface(*surface);
+      return;
+    case MenuAction::MaximizeRestore:
+      if (surface->fullscreen) return;
+      surfaces->setMaximized(*surface, !surface->maximized);
+      if (surface->isForeign()) {
+        // Told, so the client draws itself as maximized — the same courtesy
+        // the title bar's own button pays it.
+        surface->window->setMaximized(surface->maximized);
+      }
+      return;
+    case MenuAction::Fullscreen:
+      surfaces->setFullscreen(*surface, !surface->fullscreen);
+      return;
+    case MenuAction::Close:
+      // Asked, not killed: a Wayland client still gets to put up its "save
+      // your work?" dialog. Same path as the title bar's close button.
+      surfaces->requestClose(*surface);
+      return;
+    case MenuAction::NewTerminal:
+      launch_terminal();
+      return;
+    case MenuAction::Applications:
+      launch_launcher();
+      return;
+    case MenuAction::Settings:
+      launch_settings();
+      return;
+    case MenuAction::None:
+      return;
+  }
+}
+
+bool SurfaceRegistry::showMenu(uint32_t surfaceId, uint32_t serial,
+                               uint32_t width, uint32_t height) {
+  ClientSurface *surface = find(surfaceId);
+  if (surface == nullptr || !surface->menu) return false;
+  if (server_ == nullptr) return true;
+
+  Server::MenuSession &session = server_->menu;
+  // Late: the user dismissed this menu, or opened another, while the client
+  // was measuring it. Not an error — see `ShowMenu`.
+  if (serial == 0 || serial != session.serial || session.shown) return true;
+
+  placeMenu(*surface, session.anchorX, session.anchorY, width, height);
+  session.shown = true;
+  // Remembered before the menu takes the keyboard, so `closeContextMenu` has
+  // somewhere to give it back to.
+  session.previousFocus = server_->focusedSurface();
+  session.previousFrame = focusedFrame();
+
+  // The keyboard, the switcher's way: the menu receives keys — Escape, the
+  // arrows — without becoming the *active window*. The window the menu is
+  // about keeps its title-bar highlight and stays the one the panel's global
+  // menu is showing, which is what a menu about that window should look like.
+  server_->setFocusedSurface(surfaceId);
+  wlr_seat_keyboard_notify_clear_focus(server_->seat);
+
+  wlr_log(WLR_DEBUG, "menu: serial %u at %d,%d — %ux%u for window %u", serial,
+          surface->x, surface->y, width, height, session.target);
+  return true;
+}
+
+void SurfaceRegistry::menuChosen(uint32_t serial, uint32_t chosen) {
+  if (server_ != nullptr) server_->applyMenuChoice(serial, chosen);
+}
+
+void SurfaceRegistry::menuClientLeft(uint32_t surfaceId) {
+  if (surfaceId != menuSurfaceId_) return;
+  // Whatever is on screen belongs to nobody now: no reply is coming, and the
+  // grab would be held for a surface nothing is drawing.
+  if (server_ != nullptr) server_->closeContextMenu();
+  wlr_log(WLR_INFO, "menu: client for surface %u went away", surfaceId);
+}
+
 void Server::blurAll() {
   // Clicking the desktop means "I am not in any window now", and until this
   // existed there was no way to say it: `focus(nullptr)` returns immediately,
@@ -8925,6 +9580,13 @@ void Server::switchWorkspace(uint32_t index) {
   // rather than letting it run means the pointer does not keep dragging
   // something invisible around the workspace the user just arrived in.
   drag = Drag::None;
+
+  // Same reasoning for an open menu, and it needs saying because the menu
+  // tree is the one thing a workspace switch does *not* hide: it is not a
+  // member of a workspace, so a menu about a window on workspace 1 would
+  // still be on screen on workspace 2, describing something the user can no
+  // longer see and holding the pointer grab while they try to click.
+  closeContextMenu();
 
   // Whatever had the keyboard is hidden now. Clearing first covers both cases
   // at once: the seat is pointed at nothing until something on *this*
@@ -9338,6 +10000,12 @@ void Server::focusSurface(ClientSurface &surface) {
   // `CreatePanel`, not an exception here.
   if (surface.panel) return;
 
+  // A menu already has the keyboard — `showMenu` handed it over when the menu
+  // was placed — and must not become the "active window": the window the menu
+  // is *about* keeps its title-bar highlight and its place on the panel's
+  // global menu, which is what a menu about that window should look like.
+  if (surface.menu) return;
+
   // The switcher takes the keyboard without becoming the "active window".
   // The previous app keeps its title-bar highlight and stays focused in
   // the dock; only input is redirected. A panel already works this way
@@ -9713,6 +10381,23 @@ void Server::on_cursor_button(wl_listener *listener, void *data) {
     return;
   }
 
+  // A menu is up, so it owns the pointer. A press inside it is the menu
+  // client's to handle; a press anywhere else dismisses the menu and is
+  // swallowed rather than landing in whatever was underneath — which is what
+  // every other menu on a desktop does. Here rather than in the client
+  // because a client cannot hit-test a foreign window, and "anywhere else" is
+  // mostly foreign windows.
+  if (pressed && server->menuIsOpen() && server->surfaces != nullptr) {
+    ClientSurface *open =
+        server->surfaces->find(server->surfaces->menuSurface());
+    double mx = 0, my = 0;
+    if (open == nullptr ||
+        !open->hit(server->cursor->x, server->cursor->y, mx, my)) {
+      server->closeContextMenu();
+      return;
+    }
+  }
+
   // The title bar, before anything else. Its buttons are the compositor's and
   // a press there never reaches a client — which is also what lets a window
   // whose client has stopped answering still be closed.
@@ -9722,6 +10407,15 @@ void Server::on_cursor_button(wl_listener *listener, void *data) {
             server->surfaces->frameAt(server->cursor->x, server->cursor->y, bx,
                                       by)) {
       server->focusSurface(*frame);
+      // Right-click on the non-client area is the window's own menu, whatever
+      // part of the strip it lands on. Before `hitTest`, deliberately: without
+      // this, right-clicking the maximize button maximizes, which is a gesture
+      // no desktop has and nobody meant to make.
+      if (event->button == BTN_RIGHT) {
+        server->openContextMenu(static_cast<int>(server->cursor->x),
+                                static_cast<int>(server->cursor->y), frame->id);
+        return;
+      }
       switch (lava::Decoration::hitTest(static_cast<float>(bx),
                                         static_cast<float>(by),
                                         frame->width)) {
@@ -9883,6 +10577,15 @@ void Server::on_cursor_button(wl_listener *listener, void *data) {
       // to resolve to, and blurring on one of those would drop the keyboard
       // every time a menu was clicked.
       server->blurAll();
+      // And the desktop's own menu, if it was the right button. After the
+      // blur, not instead of it: a right-click on the desktop is still a
+      // click on the desktop, and the panel falls back to its own menu the
+      // same as it always did.
+      if (event->button == BTN_RIGHT) {
+        server->openContextMenu(static_cast<int>(server->cursor->x),
+                                static_cast<int>(server->cursor->y), 0);
+        return;
+      }
     } else {
       // Click to focus. A hit that resolves to no window is a popup or an
       // override-redirect menu, which owns its own stacking and focus.
@@ -10526,6 +11229,14 @@ int main() {
     }
     if (want(server.config.shell.dock)) {
       components.push_back({"dock", server.config.shell.dock, {}});
+    }
+    // Supervised like the other two, and for the same reason: a desktop whose
+    // right-click stopped working is broken rather than differently
+    // configured. It is idle almost all the time — it draws when a menu is
+    // open and never otherwise — so the heartbeat that catches a wedged panel
+    // says nothing about this one, and only the process ending restarts it.
+    if (want(server.config.shell.menu)) {
+      components.push_back({"menu", server.config.shell.menu, {}});
     }
     shell.start(wl_display_get_event_loop(server.display), std::move(components));
   } else {

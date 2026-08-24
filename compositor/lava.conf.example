@@ -131,6 +131,15 @@ repeat-delay = 600
 panel = LavaTaskbar
 dock = LavaDock
 
+# The context menu: what a right-click on the desktop, or on a window's title
+# bar, opens. The compositor decides what is *on* the menu — every item acts on
+# something only it owns, and every checkmark is state only it can answer for —
+# and this client draws it and reports what was clicked.
+#
+# `off` leaves the desktop with no context menu, which is what it had before
+# this existed. The right click still clears focus and still does nothing else.
+menu = LavaContextMenu
+
 
 [theme]
 

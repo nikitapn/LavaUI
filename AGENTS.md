@@ -236,6 +236,8 @@ Sources/
   LavaTaskbar/     Client: panel / taskbar (global menu)
   LavaDock/        Client: dock — open windows on this workspace
   LavaSwitcher/    Client: 3D Ctrl+Tab / Mod+Tab app switcher
+  LavaContextMenu/ Client: the right-click menu. The compositor says what is
+                   on it; this draws it and reports what was clicked
   LavaDebug/       Client: where the compositor's VRAM went (`--once` for text)
   HelloWorld/      Demo playground + FBD bits
   LavaTerm*/       Terminal emulator (core headless + app)
@@ -781,6 +783,112 @@ length: a `server_stream` servant in NPRPC is a generator the stream manager
 pulls from, and this data is pushed by the compositor's loop. Read that note
 before adding another state stream.
 
+## The context menu is the compositor's, drawn by a client
+
+Right-click the desktop or a window's title bar and `LavaContextMenu` draws a
+menu. The split is the interesting part, and it is the opposite of what people
+expect: **the compositor decides what is on the menu, and the client only draws
+it.**
+
+Every item acts on something only the compositor owns — the stacking order, the
+work area, a foreign client's `close` request — and every item's *state* is
+something only it can answer: whether this window is already maximized, whether
+it is already on top. A menu process that built its own list would be guessing
+at both, and the checkmark beside "Always on top" would be a guess rendered as
+a fact. So `Server::openContextMenu` builds a `vector<MenuEntry>`, the client
+gets ids it never interprets, and `applyMenuChoice` does the work. Adding an
+item is a change to `main.cpp` alone.
+
+The flow, once per menu:
+
+```text
+BTN_RIGHT on the desktop / a title bar   →  Server::openContextMenu
+  MenuRequest  (serial, x, y, target, items)  ──→  LavaContextMenu
+                                                    lay out, measure the plate
+  ShowMenu     (serial, width, height)        ←──  it is W×H
+  place, unconstrain, grab, reveal
+  MenuReply    (serial, chosen)               ←──  the user clicked a row
+  Server::applyMenuChoice
+```
+
+Four things are worth knowing before changing any of it.
+
+**The menu surface is its own kind** (`CreateMenuSurface`), not a window and
+not a panel. It lives in `Workspaces::menus`, a scene tree above `panels`, so a
+menu opened at the top of the screen is not drawn under the taskbar. It is
+hidden between menus — a resident menu process costs an idle desktop nothing,
+and nothing stands in the way of a fullscreen client's direct scanout. It is
+not in the window list, has no title bar, and takes the keyboard the way the
+switcher does: `setFocusedSurface` without becoming the *active window*, so the
+window the menu is about keeps its title-bar highlight and its place on the
+panel's global menu.
+
+**The pointer grab is the compositor's**, at the top of `on_cursor_button`. A
+press outside the menu dismisses it and is swallowed rather than landing in
+whatever was underneath. It has to be there rather than in the client because
+"outside" is mostly foreign windows, which a client cannot hit-test.
+
+**Drawing on top and being on top are two separate pieces of code**, and this
+is the third time that has cost something here (input regions and the grown
+panel were the first two). `SurfaceRegistry::hitTest` walks
+`HitLayer::Menu` → `Panel` → `Window`, in that order, because the scene stacks
+those three trees in that order and `raise` reorders none of them — so
+`surfaces_` says nothing about where any of them sits. The symptom when they
+disagree reads as a *stacking* bug and is not one: the menu drew over a foreign
+window and hovered nothing, while the same menu over bare desktop worked,
+because over the desktop nothing else claimed the point. `visible()` has the
+matching half — a menu is on screen exactly while its scene node is enabled,
+and it belongs to no workspace — without which a *hidden* menu goes on
+answering for the rectangle the last one stood in, at the top of the walk.
+Adding a fourth tree means adding a fourth pass.
+
+**Only a layout pass knows how big a menu is.** The first version of
+`LavaContextMenu` added up font metrics and paddings, which is a second
+implementation of Yoga that agrees with the first until a face changes: it got
+a three-item menu 30 px too short and the rows drew inside a plate with a
+scrollbar down the side. It now lays out in the arena, reads the plate's
+committed frame (`LavaApp.mainLayoutHost` → `agentFrame(sid:)`), resizes to it,
+lays out again, and only then calls `ShowMenu`. Three frames, all invisible —
+the compositor does not reveal the surface until `ShowMenu` — and each is a
+handful of nodes. **Reset the surface to the arena size before measuring**: the
+plate is laid out inside whatever the surface currently is, which is still the
+*last* menu's size, so without it every menu bigger than the one before it is
+measured against that smaller rectangle and shown at the size of its own
+clipping.
+
+**A reply is another process's input.** `applyMenuChoice` re-resolves the target
+after closing (a window can close while its menu is up), drops a reply whose
+serial is not the open menu's, and guards the window actions against a null
+surface — a reply naming "Maximize" on the *desktop* menu is otherwise a null
+dereference in the compositor.
+
+`MenuRequest` with serial 0 and no items is a **close**: the compositor sends
+one whenever it dismisses a menu itself, because taking the surface off the
+screen says nothing to the process still drawing into it.
+
+### Always on top, and what outranks it
+
+Stacking's exceptions to "the last thing clicked is in front", and the reason
+the context menu was worth building. `ClientSurface::StackRank` is an *ordered*
+three-way — `Normal`, `Pinned`, `Overlay` — enforced by `restackRanked`, which
+runs at the end of every `raise` and re-applies the ranks lowest first, so each
+ends up above the one before. A rank rather than a scene tree per layer:
+a workspace is one tree and windows move between workspaces, so that would be
+eighteen trees to keep two bits of ordering.
+
+`Pinned` is the user's choice, from the window's own context menu. `Overlay` is
+the desktop's own momentary full-screen components — `LavaLauncher` and
+`LavaSwitcher` — which have to be above pinned windows: a launcher you cannot
+see is one you are typing into blind, and Alt+Tab behind a pinned window is
+Alt+Tab you cannot use. It is set in `createSurface` from `isTransientApp`, the
+compositor's own list of what those are, and is deliberately **not** something
+a client can ask for — a client that could outrank "always on top" would make
+the setting a suggestion. `setAlwaysOnTop` refuses an overlay for the same
+reason.
+
+Unpinning moves nothing: the window is simply no longer put back, which leaves
+it where the user can still see it.
+
 ## Notifications
 
 The panel is the session's notification daemon: canvas's `NotificationHost`
@@ -808,10 +916,13 @@ band is estimated from the toast contents rather than measured.
 
 Two layers, and the split is deliberate.
 
-**The desktop's own parts** — panel, dock — are `[shell]` in `lava.conf`, started
-and supervised by `ShellSupervisor`: restarted with backoff, abandoned after
-enough failures, stopped on the way out. A session without them is broken, so
-the compositor treats them as its own.
+**The desktop's own parts** — panel, dock, context menu — are `[shell]` in
+`lava.conf`, started and supervised by `ShellSupervisor`: restarted with
+backoff, abandoned after enough failures, stopped on the way out. A session
+without them is broken, so the compositor treats them as its own. The menu is
+the one that is idle almost all the time — it draws when a menu is open and
+never otherwise — so the heartbeat that catches a wedged panel says nothing
+about it, and only the process ending brings it back.
 
 **The user's programs** — tray applets, an idle inhibitor, a notification
 daemon — go in `~/.config/lava/autostart`, a plain shell script run with
@@ -866,7 +977,9 @@ so headless test runs skip it too.
 | Scene nodes / renderer-owned scroll + hover | `RenderWindow::scrollScene`, `advanceSceneAnimations`, `DrawList.nodeFlags` |
 | Who draws the title bar | `ToplevelDecoration::apply`, `Server::serverDecorated` |
 | Window position / maximize restore | `compositor/src/window_memory.*`, `SurfaceRegistry::applyInitialPlacement` |
-| Popups / context menus | `Server::on_new_popup`, `Popup::on_commit`, `Server::popupBounds` |
+| Popups (a client's own) | `Server::on_new_popup`, `Popup::on_commit`, `Server::popupBounds` |
+| The desktop's context menu | `Server::openContextMenu` / `applyMenuChoice` (what is on it, what it does), `Sources/LavaContextMenu/` (drawing), IDL `SubscribeMenu` |
+| Always on top / overlay stacking | `ClientSurface::StackRank`, `SurfaceRegistry::setAlwaysOnTop`, `restackRanked` |
 | Which pixels of a surface take input | `point_accepts_input` hooks, `ClientSurface::acceptsInput`, `SetInputRegion` |
 | Minimum window size | IDL `SetMinSize`, `SurfaceRegistry::minFor`, `LavaClient.setMinimumSize` |
 | Focus, including clicking the desktop | `Server::focusSurface`, `Server::blurAll` |

@@ -1244,6 +1244,149 @@ public:
 };
 } // namespace flat
 
+enum class MenuItemKind : uint32_t {
+  command,
+  checkbox,
+  separator
+};
+struct MenuItem {
+  uint32_t id;
+  std::string title;
+  MenuItemKind kind;
+  bool checked;
+  bool enabled;
+  std::string shortcut;
+};
+
+namespace flat {
+struct MenuItem {
+  uint32_t id;
+  ::nprpc::flat::String title;
+  MenuItemKind kind;
+  ::nprpc::flat::Boolean checked;
+  ::nprpc::flat::Boolean enabled;
+  ::nprpc::flat::String shortcut;
+};
+
+class MenuItem_Direct {
+  ::nprpc::flat_buffer& buffer_;
+  const std::uint32_t offset_;
+
+  auto& base() noexcept { return *reinterpret_cast<MenuItem*>(reinterpret_cast<std::byte*>(buffer_.data().data()) + offset_); }
+  auto const& base() const noexcept { return *reinterpret_cast<const MenuItem*>(reinterpret_cast<const std::byte*>(buffer_.data().data()) + offset_); }
+public:
+  uint32_t offset() const noexcept { return offset_; }
+  void* __data() noexcept { return (void*)&base(); }
+  MenuItem_Direct(::nprpc::flat_buffer& buffer, std::uint32_t offset)
+    : buffer_(buffer)
+    , offset_(offset)
+  {
+  }
+  const uint32_t& id() const noexcept { return base().id;}
+  uint32_t& id() noexcept { return base().id;}
+  void title(const char* str) { new (&base().title) ::nprpc::flat::String(buffer_, str); }
+  void title(const std::string& str) { new (&base().title) ::nprpc::flat::String(buffer_, str); }
+  auto title() noexcept { return (::nprpc::flat::Span<char>)base().title; }
+  auto title() const noexcept { return (::nprpc::flat::Span<const char>)base().title; }
+  auto title_d() noexcept { return ::nprpc::flat::String_Direct1(buffer_, offset_ + offsetof(MenuItem, title)); }
+  const MenuItemKind& kind() const noexcept { return base().kind;}
+  MenuItemKind& kind() noexcept { return base().kind;}
+  const ::nprpc::flat::Boolean& checked() const noexcept { return base().checked;}
+  ::nprpc::flat::Boolean& checked() noexcept { return base().checked;}
+  const ::nprpc::flat::Boolean& enabled() const noexcept { return base().enabled;}
+  ::nprpc::flat::Boolean& enabled() noexcept { return base().enabled;}
+  void shortcut(const char* str) { new (&base().shortcut) ::nprpc::flat::String(buffer_, str); }
+  void shortcut(const std::string& str) { new (&base().shortcut) ::nprpc::flat::String(buffer_, str); }
+  auto shortcut() noexcept { return (::nprpc::flat::Span<char>)base().shortcut; }
+  auto shortcut() const noexcept { return (::nprpc::flat::Span<const char>)base().shortcut; }
+  auto shortcut_d() noexcept { return ::nprpc::flat::String_Direct1(buffer_, offset_ + offsetof(MenuItem, shortcut)); }
+};
+} // namespace flat
+
+struct MenuRequest {
+  uint32_t serial;
+  int32_t x;
+  int32_t y;
+  uint32_t target;
+  std::string title;
+  std::vector<MenuItem> items;
+};
+
+namespace flat {
+struct MenuRequest {
+  uint32_t serial;
+  int32_t x;
+  int32_t y;
+  uint32_t target;
+  ::nprpc::flat::String title;
+  ::nprpc::flat::Vector<flat::MenuItem> items;
+};
+
+class MenuRequest_Direct {
+  ::nprpc::flat_buffer& buffer_;
+  const std::uint32_t offset_;
+
+  auto& base() noexcept { return *reinterpret_cast<MenuRequest*>(reinterpret_cast<std::byte*>(buffer_.data().data()) + offset_); }
+  auto const& base() const noexcept { return *reinterpret_cast<const MenuRequest*>(reinterpret_cast<const std::byte*>(buffer_.data().data()) + offset_); }
+public:
+  uint32_t offset() const noexcept { return offset_; }
+  void* __data() noexcept { return (void*)&base(); }
+  MenuRequest_Direct(::nprpc::flat_buffer& buffer, std::uint32_t offset)
+    : buffer_(buffer)
+    , offset_(offset)
+  {
+  }
+  const uint32_t& serial() const noexcept { return base().serial;}
+  uint32_t& serial() noexcept { return base().serial;}
+  const int32_t& x() const noexcept { return base().x;}
+  int32_t& x() noexcept { return base().x;}
+  const int32_t& y() const noexcept { return base().y;}
+  int32_t& y() noexcept { return base().y;}
+  const uint32_t& target() const noexcept { return base().target;}
+  uint32_t& target() noexcept { return base().target;}
+  void title(const char* str) { new (&base().title) ::nprpc::flat::String(buffer_, str); }
+  void title(const std::string& str) { new (&base().title) ::nprpc::flat::String(buffer_, str); }
+  auto title() noexcept { return (::nprpc::flat::Span<char>)base().title; }
+  auto title() const noexcept { return (::nprpc::flat::Span<const char>)base().title; }
+  auto title_d() noexcept { return ::nprpc::flat::String_Direct1(buffer_, offset_ + offsetof(MenuRequest, title)); }
+  void items(std::uint32_t elements_size) { new (&base().items) ::nprpc::flat::Vector<flat::MenuItem>(buffer_, elements_size); }
+  auto items_d() noexcept { return ::nprpc::flat::Vector_Direct2<flat::MenuItem,flat::MenuItem_Direct>(buffer_, offset_ + offsetof(MenuRequest, items)); }
+  auto items() noexcept { return ::nprpc::flat::Span_ref<flat::MenuItem, flat::MenuItem_Direct>(buffer_, base().items.range(buffer_.data().data())); }
+};
+} // namespace flat
+
+struct MenuReply {
+  uint32_t serial;
+  uint32_t chosen;
+};
+
+namespace flat {
+struct MenuReply {
+  uint32_t serial;
+  uint32_t chosen;
+};
+
+class MenuReply_Direct {
+  ::nprpc::flat_buffer& buffer_;
+  const std::uint32_t offset_;
+
+  auto& base() noexcept { return *reinterpret_cast<MenuReply*>(reinterpret_cast<std::byte*>(buffer_.data().data()) + offset_); }
+  auto const& base() const noexcept { return *reinterpret_cast<const MenuReply*>(reinterpret_cast<const std::byte*>(buffer_.data().data()) + offset_); }
+public:
+  uint32_t offset() const noexcept { return offset_; }
+  void* __data() noexcept { return (void*)&base(); }
+  MenuReply_Direct(::nprpc::flat_buffer& buffer, std::uint32_t offset)
+    : buffer_(buffer)
+    , offset_(offset)
+  {
+  }
+  const uint32_t& serial() const noexcept { return base().serial;}
+  uint32_t& serial() noexcept { return base().serial;}
+  const uint32_t& chosen() const noexcept { return base().chosen;}
+  uint32_t& chosen() noexcept { return base().chosen;}
+};
+} // namespace flat
+
 struct GpuAllocation {
   uint32_t kind;
   std::string category;
@@ -1757,6 +1900,7 @@ public:
   virtual void ReleaseImage (uint32_t id) = 0;
   virtual uint32_t CreateSurface (::nprpc::flat::Span<char> arenaId, uint32_t width, uint32_t height, ::nprpc::flat::Span<char> title, WindowFrame frame, ::nprpc::flat::Span<char> appId) = 0;
   virtual uint32_t CreatePanel (::nprpc::flat::Span<char> arenaId, PanelEdge edge, uint32_t thickness, ::nprpc::flat::Boolean reserve, ::nprpc::flat::Span<char> title, ::nprpc::flat::Span<char> appId) = 0;
+  virtual uint32_t CreateMenuSurface (::nprpc::flat::Span<char> arenaId, uint32_t width, uint32_t height, ::nprpc::flat::Span<char> appId) = 0;
   virtual void BeginMove (uint32_t surfaceId) = 0;
   virtual void SetMinSize (uint32_t surfaceId, uint32_t minWidth, uint32_t minHeight) = 0;
   virtual bool ToggleMaximize (uint32_t surfaceId) = 0;
@@ -1785,6 +1929,8 @@ public:
   virtual std::string GetArrangement () = 0;
   virtual void SetArrangement (::nprpc::flat::Span<char> mode) = 0;
   virtual ::nprpc::Task<> SubscribeActiveWindow (::nprpc::BidiStream<FocusAck, ActiveWindow> stream) = 0;
+  virtual ::nprpc::Task<> SubscribeMenu (uint32_t surfaceId, ::nprpc::BidiStream<MenuReply, MenuRequest> stream) = 0;
+  virtual void ShowMenu (uint32_t surfaceId, uint32_t serial, uint32_t width, uint32_t height) = 0;
   virtual void DestroySurface (uint32_t surfaceId) = 0;
   virtual void Present (uint32_t surfaceId, uint32_t serial) = 0;
   virtual void ScrollUnclaimed (uint32_t surfaceId, float dx, float dy) = 0;
@@ -1824,6 +1970,8 @@ public:
   ::nprpc::Task<uint32_t> CreateSurfaceAsync (const std::string& arenaId, uint32_t width, uint32_t height, const std::string& title, const WindowFrame& frame, const std::string& appId, std::stop_token st = {});
   uint32_t CreatePanel (const std::string& arenaId, const PanelEdge& edge, uint32_t thickness, bool reserve, const std::string& title, const std::string& appId);
   ::nprpc::Task<uint32_t> CreatePanelAsync (const std::string& arenaId, const PanelEdge& edge, uint32_t thickness, bool reserve, const std::string& title, const std::string& appId, std::stop_token st = {});
+  uint32_t CreateMenuSurface (const std::string& arenaId, uint32_t width, uint32_t height, const std::string& appId);
+  ::nprpc::Task<uint32_t> CreateMenuSurfaceAsync (const std::string& arenaId, uint32_t width, uint32_t height, const std::string& appId, std::stop_token st = {});
   void BeginMove (uint32_t surfaceId);
   ::nprpc::Task<void> BeginMoveAsync (uint32_t surfaceId, std::stop_token st = {});
   void SetMinSize (uint32_t surfaceId, uint32_t minWidth, uint32_t minHeight);
@@ -1875,6 +2023,9 @@ public:
   void SetArrangement (const std::string& mode);
   ::nprpc::Task<void> SetArrangementAsync (const std::string& mode, std::stop_token st = {});
   std::pair<::nprpc::StreamWriter<FocusAck>, ::nprpc::StreamReader<ActiveWindow>> SubscribeActiveWindow ();
+  std::pair<::nprpc::StreamWriter<MenuReply>, ::nprpc::StreamReader<MenuRequest>> SubscribeMenu (uint32_t surfaceId);
+  void ShowMenu (uint32_t surfaceId, uint32_t serial, uint32_t width, uint32_t height);
+  ::nprpc::Task<void> ShowMenuAsync (uint32_t surfaceId, uint32_t serial, uint32_t width, uint32_t height, std::stop_token st = {});
   void DestroySurface (uint32_t surfaceId);
   ::nprpc::Task<void> DestroySurfaceAsync (uint32_t surfaceId, std::stop_token st = {});
   void Present (uint32_t surfaceId, uint32_t serial);
@@ -2188,6 +2339,99 @@ inline ::nprpc::flat_buffer serialize<::lava::ActiveWindow>(const ::lava::Active
   __d.menuObjectPath(value.menuObjectPath);
   __d.pid() = value.pid;
   __d.registrarId() = value.registrarId;
+  return __buf;
+}
+} // namespace nprpc_stream
+
+namespace nprpc_stream {
+template<>
+inline ::lava::MenuRequest deserialize<::lava::MenuRequest>(::nprpc::flat_buffer& buf) {
+  ::nprpc::impl::flat::StreamChunk_Direct __chunk(buf, sizeof(::nprpc::impl::Header));
+  auto __span = __chunk.data();
+  ::nprpc::flat_buffer __elem_buf;
+  auto __mb = __elem_buf.prepare(__span.size());
+  std::memcpy(__mb.data(), __span.data(), __span.size());
+  __elem_buf.commit(__span.size());
+  ::lava::MenuRequest __result;
+  ::lava::flat::MenuRequest_Direct __d(__elem_buf, 0);
+  __result.serial = __d.serial();
+  __result.x = __d.x();
+  __result.y = __d.y();
+  __result.target = __d.target();
+  __result.title = (std::string_view)__d.title();
+  {
+    auto span = __d.items();
+    __result.items.resize(span.size());
+    auto it2 = std::begin(__result.items);
+    for (auto e : span) {
+      (*it2).id = e.id();
+      (*it2).title = (std::string_view)e.title();
+      (*it2).kind = e.kind();
+      (*it2).checked = (bool)e.checked();
+      (*it2).enabled = (bool)e.enabled();
+      (*it2).shortcut = (std::string_view)e.shortcut();
+      ++it2;
+    }
+  }
+  return __result;
+}
+} // namespace nprpc_stream
+
+namespace nprpc_stream {
+template<>
+inline ::lava::MenuReply deserialize<::lava::MenuReply>(::nprpc::flat_buffer& buf) {
+  ::nprpc::impl::flat::StreamChunk_Direct __chunk(buf, sizeof(::nprpc::impl::Header));
+  auto __span = __chunk.data();
+  ::nprpc::flat_buffer __elem_buf;
+  auto __mb = __elem_buf.prepare(__span.size());
+  std::memcpy(__mb.data(), __span.data(), __span.size());
+  __elem_buf.commit(__span.size());
+  ::lava::MenuReply __result;
+  ::lava::flat::MenuReply_Direct __d(__elem_buf, 0);
+  memcpy(&__result, __d.__data(), 8);
+  return __result;
+}
+} // namespace nprpc_stream
+
+namespace nprpc_stream {
+template<>
+inline ::nprpc::flat_buffer serialize<::lava::MenuReply>(const ::lava::MenuReply& value) {
+  ::nprpc::flat_buffer __buf;
+  __buf.prepare(8);
+  __buf.commit(8);
+  ::lava::flat::MenuReply_Direct __d(__buf, 0);
+  memcpy(__d.__data(), &value, 8);
+  return __buf;
+}
+} // namespace nprpc_stream
+
+namespace nprpc_stream {
+template<>
+inline ::nprpc::flat_buffer serialize<::lava::MenuRequest>(const ::lava::MenuRequest& value) {
+  ::nprpc::flat_buffer __buf;
+  __buf.prepare(32 + 128);
+  __buf.commit(32);
+  ::lava::flat::MenuRequest_Direct __d(__buf, 0);
+  __d.serial() = value.serial;
+  __d.x() = value.x;
+  __d.y() = value.y;
+  __d.target() = value.target;
+  __d.title(value.title);
+  __d.items(static_cast<uint32_t>(value.items.size()));
+  {
+    auto span = __d.items();
+    auto it = value.items.begin();
+    for (auto e : span) {
+      auto __ptr = ::nprpc::make_wrapper1(*it);
+        e.id() = __ptr->id;
+        e.title(__ptr->title);
+        e.kind() = __ptr->kind;
+        e.checked() = __ptr->checked;
+        e.enabled() = __ptr->enabled;
+        e.shortcut(__ptr->shortcut);
+      ++it;
+    }
+  }
   return __buf;
 }
 } // namespace nprpc_stream

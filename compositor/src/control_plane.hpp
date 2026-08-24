@@ -83,6 +83,48 @@ struct CompositorHost {
 
   /// Restores, raises and focuses a window. False if the id is unknown.
   virtual bool activateWindow(uint32_t surfaceId) = 0;
+  // ─── Context menu ────────────────────────────────────────────────────────
+  //
+  // The right-click menu. The compositor builds it and acts on it; a client
+  // draws it and reports what was clicked. See `SubscribeMenu` in the IDL for
+  // why the ownership runs that way.
+
+  /// One row, mirroring `MenuItem` in the IDL so this header stays clear of
+  /// the generated one — the same reason `WindowEntry` is a mirror.
+  struct MenuEntry {
+    /// A `MenuAction`. Opaque to the client, which only echoes it back.
+    uint32_t id = 0;
+    std::string title;
+    /// 0 command, 1 checkbox, 2 separator — `MenuItemKind`'s ordinals.
+    uint32_t kind = 0;
+    bool checked = false;
+    bool enabled = true;
+    std::string shortcut;
+  };
+
+  /// Opens the surface a context menu is drawn into. 0 if the arena does not
+  /// exist, or if the compositor has no output to place one on yet.
+  virtual uint32_t createMenuSurface(const std::string &arenaId,
+                                     uint32_t width, uint32_t height,
+                                     const std::string &appId) = 0;
+
+  /// Whether this id is a menu surface — what `SubscribeMenu` checks before
+  /// agreeing to place a client's window at the pointer and grab for it.
+  virtual bool isMenuSurface(uint32_t surfaceId) const = 0;
+
+  /// "The menu for `serial` measured `width` × `height`": place it, take the
+  /// grab, show it. False when the surface is unknown; a stale serial is not
+  /// an error and is simply dropped.
+  virtual bool showMenu(uint32_t surfaceId, uint32_t serial, uint32_t width,
+                        uint32_t height) = 0;
+
+  /// The client's answer. `chosen` is a `MenuEntry::id`, or 0 for dismissed.
+  virtual void menuChosen(uint32_t serial, uint32_t chosen) = 0;
+
+  /// The menu client went away — its stream ended or its process died. Any
+  /// menu still on screen belongs to nobody now and comes down.
+  virtual void menuClientLeft(uint32_t surfaceId) = 0;
+
 
   /// Limits where a surface takes pointer input. `w` or `h` of 0 restores the
   /// whole surface. False if the id is unknown.
@@ -410,6 +452,15 @@ class ControlPlane {
 
   /// Ends every subscription to a surface that has gone away.
   virtual void surfaceGone(uint32_t surfaceId) = 0;
+
+  /// Asks the menu client to open a menu. False when nobody is subscribed,
+  /// which is a desktop with no context menu rather than a failure.
+  ///
+  /// Called from the loop thread, where the right-click was seen. Like every
+  /// other push here it queues and returns — see `StreamPump`.
+  virtual bool postMenu(uint32_t serial, int32_t x, int32_t y, uint32_t target,
+                        const std::string &title,
+                        const std::vector<CompositorHost::MenuEntry> &items) = 0;
 
   /// "The set of windows changed" — to every shell watching. Called from the
   /// loop thread on anything a dock would draw differently.

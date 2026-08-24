@@ -260,6 +260,115 @@ public enum LavaClient {
         }
     }
 
+
+    /// Opens the surface a context menu is drawn into.
+    ///
+    /// Everything `open` does, and then `run` asks for a *menu* surface
+    /// instead of a window. The compositor stacks it above the panels, keeps
+    /// it hidden between menus, places it at the pointer when `showMenu` says
+    /// how big it is, and holds a pointer grab while it is up — see
+    /// `CreateMenuSurface` in the IDL.
+    ///
+    /// - Parameters:
+    ///   - width/height: the largest menu this client expects to draw. They
+    ///     size the arena and nothing else; every menu is shown at the size
+    ///     `showMenu` names. Too small means a menu that cannot grow into its
+    ///     own arena, so err upwards — the arena is host memory, not VRAM.
+    public static func openMenuSurface(
+        title: String,
+        width: Float = 480,
+        height: Float = 720
+    ) -> Editor? {
+        Self.menuSurface = (width, height)
+        // `.client`: a menu with a title bar would be a joke at the user's
+        // expense. The compositor gives one none regardless; saying so here
+        // keeps the client's own layout honest about where its content starts.
+        return open(title: title, width: width, height: height, frame: .client)
+    }
+
+    /// "I have laid out the menu for `serial`; it is `width` × `height`."
+    ///
+    /// Call it **after** publishing a frame at that size — `Editor
+    /// .setClientSize` then a draw — because the compositor reveals the
+    /// surface as soon as this returns and shows whatever the arena holds. A
+    /// client that asks first and draws second flashes the previous menu.
+    public static func showMenu(serial: UInt32, width: Float, height: Float) {
+        guard let compositor = Self.compositor, surfaceID != 0 else { return }
+        report("ShowMenu") {
+            try blockingCall {
+                try await compositor.showMenu(
+                    surfaceId: surfaceID, serial: serial,
+                    width: UInt32(max(1, width.rounded())),
+                    height: UInt32(max(1, height.rounded()))
+                )
+            }
+        }
+    }
+
+    /// The menus this client is asked to draw, and the answers it gives back.
+    ///
+    /// `handler` runs on the frame loop with the request the compositor sent;
+    /// a request with `serial == 0` and no items is a **close** — whatever is
+    /// showing should stop, and no reply is expected (see `MenuRequest`).
+    ///
+    /// The returned closure is how a choice is reported: pass the `MenuItem
+    /// .id` that was clicked, or 0 for dismissed. Exactly one reply per
+    /// request — a menu that closes without one leaves the compositor holding
+    /// a grab for a surface nobody is drawing.
+    public static func onMenuRequest(
+        _ handler: @escaping @Sendable (MenuRequest, @escaping @Sendable (UInt32, UInt32) -> Void) -> Void
+    ) {
+        guard Self.compositor != nil else { return }
+        guard surfaceID != 0 else {
+            // Set up before the surface exists, the way a panel sets up
+            // `onPanelArea`: this subscription is *about* the surface and
+            // cannot be made until there is one. Held until `run` creates it.
+            pendingMenuHandler = handler
+            return
+        }
+        startMenuRequests(handler)
+    }
+
+    nonisolated(unsafe) private static var pendingMenuHandler:
+        (@Sendable (MenuRequest, @escaping @Sendable (UInt32, UInt32) -> Void) -> Void)?
+
+    private static func startMenuRequests(
+        _ handler: @escaping @Sendable (MenuRequest, @escaping @Sendable (UInt32, UInt32) -> Void) -> Void
+    ) {
+        guard let compositor = Self.compositor, surfaceID != 0 else { return }
+        let stream: NPRPCBidiStream<MenuReply, MenuRequest>
+        do {
+            stream = try compositor.subscribeMenu(surfaceId: surfaceID)
+        } catch {
+            FileHandle.standardError.write(
+                Data("SubscribeMenu failed: \(error)\n".utf8)
+            )
+            return
+        }
+        Task.detached {
+            do {
+                for try await request in stream.reader {
+                    // The writer is this task's; the handler runs on the frame
+                    // loop and hands the answer back through here rather than
+                    // writing from the loop thread.
+                    let reply: @Sendable (UInt32, UInt32) -> Void = { serial, chosen in
+                        Task.detached {
+                            try? await stream.writer.write(
+                                MenuReply(serial: serial, chosen: chosen)
+                            )
+                        }
+                    }
+                    MainQueue.async { handler(request, reply) }
+                }
+            } catch {
+                FileHandle.standardError.write(
+                    Data("menu stream ended: \(error)\n".utf8)
+                )
+            }
+            stream.writer.close()
+        }
+    }
+
     /// Size last asked of `CreateSurface`. After `fillScreen: true` this is
     /// the largest enabled output — available before the surface exists.
     public static var requestedSize: (width: Float, height: Float) {
@@ -793,6 +902,12 @@ public enum LavaClient {
                 // is the same surface id either way, which is why the panel
                 // role is a different way to *create* a surface rather than a
                 // different kind of thing to own.
+                if let menu = Self.menuSurface {
+                    return try await compositor.createMenuSurface(
+                        arenaId: arenaID, width: UInt32(menu.width),
+                        height: UInt32(menu.height), appId: Self.appId
+                    )
+                }
                 if let panel = Self.panel {
                     return try await compositor.createPanel(
                         arenaId: arenaID, edge: panel.edge,
@@ -816,6 +931,10 @@ public enum LavaClient {
             if let pending = pendingPanelArea {
                 pendingPanelArea = nil
                 startPanelArea(pending)
+            }
+            if let pending = pendingMenuHandler {
+                pendingMenuHandler = nil
+                startMenuRequests(pending)
             }
         } catch {
             fail("surface setup failed: \(error)")
@@ -1157,6 +1276,9 @@ public enum LavaClient {
     /// What this panel reserves, kept across a thickness change so a caller
     /// growing the panel for a menu does not have to restate it.
     nonisolated(unsafe) private static var panelReserved: Float = 0
+    /// Set by `openMenuSurface`; nil for anything else. The size is the arena
+    /// the menus are drawn into, not a menu's size.
+    nonisolated(unsafe) private static var menuSurface: (width: Float, height: Float)?
     /// The `Rpc` owns the transport — the shared-memory listener, its ring
     /// buffers, the worker threads — and dropping it tears all of that down.
     nonisolated(unsafe) private static var runtime: Rpc?

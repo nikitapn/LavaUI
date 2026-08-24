@@ -216,6 +216,20 @@ public enum LavaApp {
 
     public static var windowCount: Int { windows.count + pendingWindows.count }
 
+    /// The layout host of the window the app started with, once `run` has
+    /// brought it up. Nil before that, and after teardown.
+    ///
+    /// For the app that has to know how big the tree it just laid out actually
+    /// *is* — `agentFrame(sid:)` on a committed layout answers it. A context
+    /// menu is the case this exists for: it has to tell the compositor its
+    /// size before the compositor will place it, and the only honest source
+    /// for that number is the layout pass, not a second pile of font
+    /// arithmetic that agrees with Yoga until a face changes.
+    ///
+    /// Everything else about a window's geometry is told *to* the app. This is
+    /// the one question that runs the other way.
+    public static var mainLayoutHost: LayoutHost? { windows.first?.host }
+
     /// Opens a second window running its own view tree, sharing this process's
     /// GPU, font atlas, texture cache and frame loop.
     ///

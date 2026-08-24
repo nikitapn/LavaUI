@@ -467,6 +467,76 @@ struct ThemeWatcher {
 using ThemeWatcherPtr = std::shared_ptr<ThemeWatcher>;
 using ThemeBroker = StateBroker<ThemeWatcher, SystemTheme>;
 
+
+struct MenuWatcher {
+  explicit MenuWatcher(nprpc::StreamWriter<MenuRequest> &&w)
+      : pump(std::move(w)) {}
+
+  void send(const MenuRequest &request) { pump.post(request); }
+  void close() { pump.close(); }
+  bool done() { return pump.done(); }
+
+  // Coalescing, like the state streams and for a sharper reason: two menus
+  // cannot be open at once. A client far enough behind to have two queued has
+  // already had the first one superseded on the compositor's side, and
+  // drawing it would put a menu on screen that answers for a click the user
+  // made twice ago.
+  StreamPump<MenuRequest, true> pump;
+};
+
+using MenuWatcherPtr = std::shared_ptr<MenuWatcher>;
+
+/// The one context-menu client.
+///
+/// Not a `StateBroker`: this is the single subscription on this interface
+/// where a second subscriber would be *wrong* rather than merely redundant.
+/// Two processes drawing the desktop's context menu is not a configuration
+/// with a right answer — the compositor holds one grab and expects one reply
+/// — so the second one is refused at `SubscribeMenu` and finds out
+/// immediately, instead of both of them drawing and one of them being
+/// ignored.
+class MenuBroker {
+ public:
+  /// False when somebody already has it.
+  bool claim(uint32_t surfaceId, const MenuWatcherPtr &watcher) {
+    std::lock_guard lock(mutex_);
+    if (watcher_ != nullptr && !watcher_->done()) return false;
+    watcher_ = watcher;
+    surfaceId_ = surfaceId;
+    return true;
+  }
+
+  void release(const MenuWatcherPtr &watcher) {
+    std::lock_guard lock(mutex_);
+    if (watcher_ != watcher) return;
+    watcher_ = nullptr;
+    surfaceId_ = 0;
+  }
+
+  /// The menu surface of whoever holds it, or 0.
+  uint32_t surfaceId() {
+    std::lock_guard lock(mutex_);
+    return watcher_ != nullptr ? surfaceId_ : 0;
+  }
+
+  /// Queues a menu. False when nobody is subscribed.
+  bool send(const MenuRequest &request) {
+    MenuWatcherPtr target;
+    {
+      std::lock_guard lock(mutex_);
+      if (watcher_ == nullptr || watcher_->done()) return false;
+      target = watcher_;
+    }
+    target->send(request);
+    return true;
+  }
+
+ private:
+  std::mutex mutex_;
+  MenuWatcherPtr watcher_;
+  uint32_t surfaceId_ = 0;
+};
+
 /// How the renderer names a file decoded at a given cap.
 ///
 /// The same spelling `ImageStore.key` uses on the client, and deliberately so:
@@ -520,9 +590,9 @@ class CompositorImpl final : public ICompositor_Servant {
  public:
   CompositorImpl(CompositorHost &host, LoopQueue &loop, InputBroker &broker,
                  FocusBroker &focus, ListBroker &windows, ThemeBroker &theme,
-                 AreaBroker &areas)
+                 AreaBroker &areas, MenuBroker &menu)
       : host_(host), loop_(loop), broker_(broker), focus_(focus),
-        windows_(windows), theme_(theme), areas_(areas) {}
+        windows_(windows), theme_(theme), areas_(areas), menu_(menu) {}
 
   // ─── Resources ───────────────────────────────────────────────────────────
 
@@ -619,6 +689,69 @@ class CompositorImpl final : public ICompositor_Servant {
                           std::string{appId});
     if (id == 0) throw ArenaNotFound(arena);
     return id;
+  }
+
+
+  // ─── Context menu ────────────────────────────────────────────────────────
+
+  uint32_t CreateMenuSurface(nprpc::flat::Span<char> arenaId, uint32_t width,
+                             uint32_t height,
+                             nprpc::flat::Span<char> appId) override {
+    const std::string arena{arenaId};
+    const uint32_t id =
+        host_.createMenuSurface(arena, width, height, std::string{appId});
+    if (id == 0) throw ArenaNotFound(arena);
+    return id;
+  }
+
+  nprpc::Task<> SubscribeMenu(
+      uint32_t surfaceId,
+      nprpc::BidiStream<MenuReply, MenuRequest> stream) override {
+    // Not merely "does this exist". A menu subscription is what makes the
+    // compositor place a surface under the pointer and grab for it, and doing
+    // that to an ordinary window because a client passed the wrong id is a
+    // desktop that eats clicks.
+    if (!host_.isMenuSurface(surfaceId)) throw SurfaceNotFound(surfaceId);
+
+    auto watcher = std::make_shared<MenuWatcher>(std::move(stream.writer));
+    if (!menu_.claim(surfaceId, watcher)) {
+      watcher->close();
+      wlr_log(WLR_ERROR,
+              "menu: surface %u asked to subscribe, but another client "
+              "already serves the context menu",
+              surfaceId);
+      throw SurfaceNotFound(surfaceId);
+    }
+    wlr_log(WLR_INFO, "menu: surface %u is serving the context menu",
+            surfaceId);
+
+    try {
+      // The whole reverse half is news here, unlike every other subscription
+      // on this interface: the reply *is* the result of the menu. Hopped to
+      // the loop rather than acted on here — this resumes on a stream thread,
+      // and what a menu item does is window management.
+      while (auto reply = co_await stream.reader) {
+        const uint32_t serial = reply->serial;
+        const uint32_t chosen = reply->chosen;
+        loop_.post([this, serial, chosen] { host_.menuChosen(serial, chosen); });
+      }
+    } catch (...) {
+      menu_.release(watcher);
+      watcher->close();
+      loop_.post([this, surfaceId] { host_.menuClientLeft(surfaceId); });
+      throw;
+    }
+    menu_.release(watcher);
+    watcher->close();
+    loop_.post([this, surfaceId] { host_.menuClientLeft(surfaceId); });
+    co_return;
+  }
+
+  void ShowMenu(uint32_t surfaceId, uint32_t serial, uint32_t width,
+                uint32_t height) override {
+    if (!host_.showMenu(surfaceId, serial, width, height)) {
+      throw SurfaceNotFound(surfaceId);
+    }
   }
 
   void DestroySurface(uint32_t surfaceId) override {
@@ -1267,6 +1400,7 @@ class CompositorImpl final : public ICompositor_Servant {
   ListBroker &windows_;
   ThemeBroker &theme_;
   AreaBroker &areas_;
+  MenuBroker &menu_;
 
   /// Registered images, three ways round: what a key resolves to, how many
   /// clients hold it, and which key an id came from. No lock, unlike
@@ -1346,7 +1480,8 @@ class ControlPlaneImpl final : public ControlPlane {
 
     host_ = &host;
     servant_ = std::make_unique<CompositorImpl>(host, queue_, broker_, focus_,
-                                                windows_, theme_, areas_);
+                                                windows_, theme_, areas_,
+                                                menu_);
     const nprpc::ObjectId oid = poa_->activate_object_with_id(
         0, servant_.get(), nprpc::ObjectActivationFlags::shm);
 
@@ -1388,6 +1523,30 @@ class ControlPlaneImpl final : public ControlPlane {
     for (uint32_t id : areas_.panels()) {
       areas_.tell(id, host_->panelCovered(id));
     }
+  }
+
+  bool postMenu(
+      uint32_t serial, int32_t x, int32_t y, uint32_t target,
+      const std::string &title,
+      const std::vector<CompositorHost::MenuEntry> &items) override {
+    MenuRequest request{};
+    request.serial = serial;
+    request.x = x;
+    request.y = y;
+    request.target = target;
+    request.title = title;
+    request.items.reserve(items.size());
+    for (const auto &entry : items) {
+      MenuItem item{};
+      item.id = entry.id;
+      item.title = entry.title;
+      item.kind = static_cast<MenuItemKind>(entry.kind);
+      item.checked = entry.checked;
+      item.enabled = entry.enabled;
+      item.shortcut = entry.shortcut;
+      request.items.push_back(std::move(item));
+    }
+    return menu_.send(request);
   }
 
   void postWindowList() override {
@@ -1436,6 +1595,7 @@ class ControlPlaneImpl final : public ControlPlane {
   ListBroker windows_;
   ThemeBroker theme_;
   AreaBroker areas_;
+  MenuBroker menu_;
   CompositorHost *host_ = nullptr;
   uint32_t listSerial_ = 0;
   uint32_t themeSerial_ = 0;
