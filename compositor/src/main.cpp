@@ -2191,15 +2191,19 @@ class SurfaceRegistry : public lava::CompositorHost {
   /// list, and without this a window on another workspace would still take the
   /// pointer, invisibly, from underneath the one the user can see.
   bool visible(const ClientSurface &surface) const {
-    // A window still holding its first frame is one of those: it occupies its
-    // rectangle in this list while the user can see straight through it, and
-    // a click there belongs to whatever it is not covering yet.
-    if (!frameShown(surface)) return false;
-    // A menu is on screen exactly while its node is enabled, which `placeMenu`
-    // and `hideMenu` are the only things that set. Reading the flag rather
-    // than keeping a second bool beside it is what stops the two drifting —
-    // and a hidden menu that went on answering hit tests would be a dead
-    // rectangle wherever the last one stood, now at the top of the walk.
+    // The menu first, and *before* `frameShown`, because for a menu the node
+    // is the whole answer: `placeMenu` and `hideMenu` are the only things
+    // that enable it, and reading the flag rather than keeping a second bool
+    // beside it is what stops the two drifting. A hidden menu that went on
+    // answering hit tests would be a dead rectangle wherever the last one
+    // stood, now at the top of the walk.
+    //
+    // The ordering is not tidiness. `frameShown` used to get a vote here, and
+    // `placeMenu` enables the node without asking it — so one `hideDesktop`
+    // over the menu surface left `minimized` set for the rest of the session,
+    // and every menu after it was *drawn* and invisible to the pointer. The
+    // guards on `setMinimized` and `hideable` stop that state arising; this
+    // stops it mattering if some other path ever invents it.
     //
     // Not a member of a workspace, either: the menus tree is never disabled,
     // so a menu opened on workspace 3 is on screen on workspace 3. It is
@@ -2208,6 +2212,10 @@ class SurfaceRegistry : public lava::CompositorHost {
     if (surface.menu) {
       return surface.node != nullptr && surface.node->node.enabled;
     }
+    // A window still holding its first frame is one of those: it occupies its
+    // rectangle in this list while the user can see straight through it, and
+    // a click there belongs to whatever it is not covering yet.
+    if (!frameShown(surface)) return false;
     // Hidden, not gone: a fullscreen window on this workspace owns the
     // output, and the panel staying clickable on top of a game is how
     // fullscreen failed to be fullscreen.
@@ -2234,7 +2242,13 @@ class SurfaceRegistry : public lava::CompositorHost {
   /// True when a frontmost fullscreen (including an undecorated X11 window
   /// sized exactly to an output) completely hides this surface.
   bool fullyOccluded(const ClientSurface &surface) const {
-    if (!visible(surface) || surface.panel) return false;
+    // Neither the panels nor the menu: both live in a tree above every
+    // workspace, so nothing on a workspace is in front of them however much
+    // of the output it covers. Saying otherwise costs a menu its frames —
+    // `present` throws them away and `stepAnimations` defers its hover
+    // repaints — which is a menu over a fullscreen window that shows the
+    // *previous* menu and does not light up under the pointer.
+    if (!visible(surface) || surface.panel || surface.menu) return false;
     for (const auto &front : surfaces_) {
       if (front.get() == &surface) return false;
       if (!visible(*front) || front->workspace != surface.workspace) continue;
@@ -2255,7 +2269,10 @@ class SurfaceRegistry : public lava::CompositorHost {
   /// keystroke rather than once per switch.
   void moveToWorkspace(ClientSurface &surface, uint32_t index) {
     if (workspaces_ == nullptr || index >= Workspaces::kCount) return;
-    if (surface.panel || surface.workspace == index) return;
+    // The menu belongs to no workspace — it is drawn from a tree of its own
+    // and closed by every switch. Sending it to workspace 3 would reparent it
+    // out of that tree and into the stacking order of ordinary windows.
+    if (surface.panel || surface.menu || surface.workspace == index) return;
     surface.workspace = index;
     // A Wayland/X11 window has no canvas node — its pixels live on
     // `window->contentNode()`, which `Server::moveFocusedToWorkspace`
@@ -2462,7 +2479,13 @@ class SurfaceRegistry : public lava::CompositorHost {
   /// the pointer out — a hidden window that still hit-tested would take clicks
   /// from whatever the user can actually see.
   void setMinimized(ClientSurface &surface, bool minimized) {
-    if (surface.panel) return;
+    // Furniture, both of them. A menu is shown by `showMenu` and hidden by
+    // `closeContextMenu`, and nothing else may touch whether it is on screen:
+    // `placeMenu` enables the node without consulting `minimized`, so a
+    // minimized menu is one that draws and refuses the pointer. That is not
+    // hypothetical — `hideDesktop` reached this surface, and every context
+    // menu for the rest of that session came up dead.
+    if (surface.panel || surface.menu) return;
     if (surface.minimized == minimized) {
       if (surface.isForeign()) surface.window->setMinimized(minimized);
       return;
@@ -2525,10 +2548,10 @@ class SurfaceRegistry : public lava::CompositorHost {
   };
 
   /// The windows Mod+D and Mod+M act on: this workspace's real ones.
-  /// Panels are the desktop's own furniture, and the Alt+Tab overlay is a
-  /// transient that puts itself away.
+  /// Panels and the context menu are the desktop's own furniture, and the
+  /// Alt+Tab overlay is a transient that puts itself away.
   bool hideable(const ClientSurface &surface) const {
-    if (surface.panel) return false;
+    if (surface.panel || surface.menu) return false;
     if (surface.appId == kSwitcherAppId) return false;
     if (workspaces_ != nullptr && surface.workspace != workspaces_->current) {
       return false;
@@ -3054,7 +3077,10 @@ class SurfaceRegistry : public lava::CompositorHost {
   /// it said 1920×1080, and leaving the panel on top of it is how that
   /// request used to become a movable window of that size.
   void setFullscreen(ClientSurface &surface, bool fullscreen) {
-    if (surface.panel) return;
+    // A menu holds the keyboard focus while it is up (see `showMenu`), so the
+    // fullscreen binding would otherwise land on the menu rather than on the
+    // window it is about.
+    if (surface.panel || surface.menu) return;
     if (surface.fullscreen == fullscreen) {
       // Protocol still wants an ack even when nothing moved.
       if (surface.isForeign()) surface.window->setFullscreen(fullscreen);
@@ -4454,7 +4480,9 @@ class SurfaceRegistry : public lava::CompositorHost {
     ClientSurface *surface = find(id);
     if (surface == nullptr) return false;
     // A panel is placed by its edge and has nothing to restore to.
-    if (!surface->panel) setMaximized(*surface, !surface->maximized);
+    if (!surface->panel && !surface->menu) {
+      setMaximized(*surface, !surface->maximized);
+    }
     outMaximized = surface->maximized;
     return true;
   }
@@ -10124,7 +10152,7 @@ void Server::restoreAllWindows() {
 }
 
 void Server::minimizeSurface(ClientSurface &surface) {
-  if (surfaces == nullptr || surface.panel) return;
+  if (surfaces == nullptr || surface.panel || surface.menu) return;
   const uint32_t workspace = surface.workspace;
   const uint32_t id = surface.id;
   const bool hadFocus =

@@ -866,6 +866,18 @@ dereference in the compositor.
 one whenever it dismisses a menu itself, because taking the surface off the
 screen says nothing to the process still drawing into it.
 
+**The menu surface is furniture, and every "act on a window" path has to be
+told so.** It sits in `surfaces_` alongside real windows, so anything that
+sweeps the list reaches it: `hideDesktop` (Mod+D) minimized it, `minimized`
+stuck for the rest of the session, and `placeMenu` goes on enabling the node
+without consulting it — so every context menu after that one keypress was
+*drawn* and invisible to the pointer, which reads as "the menu stopped
+working after a while". `setMinimized`, `hideable`, `moveToWorkspace`,
+`setFullscreen`, `toggleMaximize` and `fullyOccluded` now refuse it the way
+they already refused panels. The one to copy when adding a path is
+`fullyOccluded`: menus and panels are drawn from trees above every workspace,
+so nothing on a workspace occludes them however much of the output it covers.
+
 ### Always on top, and what outranks it
 
 Stacking's exceptions to "the last thing clicked is in front", and the reason
