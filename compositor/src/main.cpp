@@ -72,6 +72,29 @@ bool isTransientApp(const std::string &appId) {
   return appId == kSwitcherAppId || appId == kLauncherAppId;
 }
 
+/// How long after a window is refused its application's remembered frame it
+/// can still inherit it.
+///
+/// Qt re-creates the window it just mapped and destroys the old one a frame
+/// or two later — 33 ms in the case this was written for — and those two
+/// toplevels are one window. Anything slower is the application opening a
+/// second window, which gets its own size and leaves the frame alone.
+constexpr auto kPlacementGrace = std::chrono::milliseconds(750);
+
+/// Placement tracing, off unless asked for: build with
+/// `-DLAVA_PROBE_PLACEMENT` and grep the session log for `PROBE`.
+///
+/// Kept rather than deleted because window memory is decided across places
+/// that cannot see each other — the first configure, the parent arriving,
+/// the frame being placed, the holder being released — and the question is
+/// always the same one: which of them had what, and when. Reconstructing
+/// that from scratch is most of the work of answering it.
+#ifdef LAVA_PROBE_PLACEMENT
+#define LAVA_PROBE(fmt, ...) wlr_log(WLR_INFO, "PROBE " fmt, __VA_ARGS__)
+#else
+#define LAVA_PROBE(fmt, ...) ((void)0)
+#endif
+
 /// Dialogs, tool windows, splash screens: they share the parent's
 /// `app_id` / WM_CLASS, so the last-frame cache would open them at the
 /// parent's size (and maximized, if that is how the parent last sat).
@@ -1447,6 +1470,11 @@ struct ClientSurface {
   /// Frame id of the parent window, if we know one. Used to centre a
   /// dialog on whatever opened it.
   uint32_t parentId = 0;
+
+  /// When this window asked for its application's remembered frame and was
+  /// refused because another window still held it. Default-constructed when
+  /// it never asked. See `kPlacementGrace`.
+  std::chrono::steady_clock::time_point placementDenied{};
 
   /// Where this surface takes pointer input, in its own coordinates. Empty
   /// means the whole surface, which is every window's answer and most panels'.
@@ -2885,6 +2913,32 @@ class SurfaceRegistry : public lava::CompositorHost {
   bool hintToplevelConfigure(const std::string &appId, uint32_t &width,
                              uint32_t &height, bool &maximized,
                              bool transient = false) const;
+
+  /// Whether a live window other than `except` owns this application's
+  /// remembered frame.
+  ///
+  /// The frame is one slot per `app_id` and there is no way to tell an
+  /// application's main window from the second one it opens — both are
+  /// parentless and share the identity. So the slot is owned rather than
+  /// consulted: the first ordinary window of an application takes it, and
+  /// while that window lives no other window of the same name reads or
+  /// writes it. Double Commander's copy-progress window is the second
+  /// window, and this is what stops it opening at the file manager's size.
+  bool placementHeld(const std::string &appId, uint32_t except = 0) const;
+  /// Make this window its application's frame owner.
+  void takePlacement(ClientSurface &surface);
+  /// Give the frame up, and hand it to a window refused it moments ago —
+  /// which is the toolkit re-creating this very window. See
+  /// `kPlacementGrace`.
+  void releasePlacement(ClientSurface &surface);
+  /// Take the frame for a window that named itself after it was placed.
+  ///
+  /// Ownership is decided at placement, and a window with no `app_id` yet
+  /// cannot own anything. Without this a toolkit that names itself late
+  /// would be placed, run, close, and never write its frame back — the
+  /// window would stop being remembered at all. Nothing moves: the window
+  /// keeps where it was put, it only gains the right to record it.
+  void claimPlacement(ClientSurface &surface);
 
   /// Topmost live window on `workspace` that can take the keyboard.
   ClientSurface *frontOnWorkspace(uint32_t workspace);
@@ -5124,6 +5178,7 @@ class SurfaceRegistry : public lava::CompositorHost {
         server_->closeContextMenu();
       }
       rememberPlacement(**it);
+      releasePlacement(**it);
       const uint32_t workspace = (*it)->workspace;
       const bool hadFocus =
           id == focused_ ||
@@ -6091,6 +6146,10 @@ class SurfaceRegistry : public lava::CompositorHost {
   uint32_t nextId_ = 1;
   /// Last frame of each application. See `applyInitialPlacement`.
   lava::WindowMemory placements_;
+  /// `app_id` -> the window that owns its remembered frame. Entries are not
+  /// pruned eagerly; `placementHeld` checks the id is still a live window,
+  /// so a stale one answers "not held" rather than wrongly refusing.
+  std::unordered_map<std::string, uint32_t> placementHolder_;
   wl_event_source *placementTimer_ = nullptr;
   wl_event_source *revealTimer_ = nullptr;
   static constexpr int kPlacementFlushMs = 30 * 1000;
@@ -6165,6 +6224,9 @@ ClientSurface *SurfaceRegistry::frontOnWorkspace(uint32_t workspace) {
 
 void SurfaceRegistry::setTransient(ClientSurface &surface, bool transient,
                                    uint32_t parentId) {
+  LAVA_PROBE("setTransient: window %u '%s' transient %d -> %d parent=%u",
+             surface.id, surface.title.c_str(), surface.transient ? 1 : 0,
+             transient ? 1 : 0, parentId);
   surface.transient = transient;
   surface.parentId = parentId;
 }
@@ -6187,6 +6249,10 @@ bool SurfaceRegistry::hintToplevelConfigure(const std::string &appId,
   height = 0;
   maximized = false;
   if (appId.empty() || isTransientApp(appId) || transient) return false;
+  // Same rule as `applyInitialPlacement`, one step earlier: a window that
+  // will not be given the frame must not be sized to it either, or it
+  // renders once at the wrong size before being placed at the right one.
+  if (placementHeld(appId)) return false;
   const lava::WindowPlacement *saved = placements_.find(appId);
   if (saved == nullptr) return false;
   if (saved->maximized) {
@@ -6211,6 +6277,11 @@ void SurfaceRegistry::rememberPlacement(const ClientSurface &surface) {
       isTransientApp(surface.appId) || surface.transient) {
     return;
   }
+  // Only the owner writes. Otherwise the copy-progress window — which was
+  // refused the frame on the way in — would still overwrite it on the way
+  // out, and the file manager would reopen at the progress window's size.
+  const auto owner = placementHolder_.find(surface.appId);
+  if (owner == placementHolder_.end() || owner->second != surface.id) return;
   lava::WindowPlacement placement;
   if (surface.fullscreen || surface.maximized) {
     // The floating rectangle, not the work area: otherwise the next
@@ -6229,6 +6300,66 @@ void SurfaceRegistry::rememberPlacement(const ClientSurface &surface) {
   }
   if (!placement.usable()) return;
   placements_.remember(surface.appId, placement);
+}
+
+bool SurfaceRegistry::placementHeld(const std::string &appId,
+                                    uint32_t except) const {
+  const auto it = placementHolder_.find(appId);
+  if (it == placementHolder_.end() || it->second == except) return false;
+  // The id is checked against the live set rather than trusted: a holder
+  // that went away by some path that did not call `releasePlacement` must
+  // not lock its application out of its own frame for the session.
+  for (const auto &s : surfaces_) {
+    if (s->id == it->second) return true;
+  }
+  return false;
+}
+
+void SurfaceRegistry::claimPlacement(ClientSurface &surface) {
+  if (surface.panel || surface.menu || surface.transient) return;
+  if (surface.appId.empty() || isTransientApp(surface.appId)) return;
+  if (placementHeld(surface.appId, surface.id)) return;
+  takePlacement(surface);
+}
+
+void SurfaceRegistry::takePlacement(ClientSurface &surface) {
+  if (surface.appId.empty()) return;
+  placementHolder_[surface.appId] = surface.id;
+  surface.placementDenied = {};
+}
+
+void SurfaceRegistry::releasePlacement(ClientSurface &surface) {
+  const auto it = placementHolder_.find(surface.appId);
+  if (it == placementHolder_.end() || it->second != surface.id) return;
+  placementHolder_.erase(it);
+
+  // Whoever asked for this frame while this window held it, and asked just
+  // now. That is the toolkit mapping the replacement before destroying the
+  // original — the two are one window and the frame should follow. A window
+  // that asked seconds ago is a second window the application opened on
+  // purpose, and it keeps the size it chose.
+  const auto now = std::chrono::steady_clock::now();
+  ClientSurface *heir = nullptr;
+  for (auto &other : surfaces_) {
+    if (other.get() == &surface || other->appId != surface.appId) continue;
+    if (other->transient || other->panel || other->menu) continue;
+    if (other->placementDenied == std::chrono::steady_clock::time_point{}) {
+      continue;
+    }
+    if (now - other->placementDenied > kPlacementGrace) continue;
+    if (heir == nullptr || other->placementDenied > heir->placementDenied) {
+      heir = other.get();
+    }
+  }
+  LAVA_PROBE("release: window %u '%s' gave up '%s'; heir=%u", surface.id,
+             surface.title.c_str(), surface.appId.c_str(),
+             heir != nullptr ? heir->id : 0);
+  if (heir == nullptr) return;
+  takePlacement(*heir);
+  // Only re-place if there is something to re-place it to: with no saved
+  // frame the heir is already where `applyInitialPlacement` put it, and
+  // running it again would cascade a window the user can see.
+  if (placements_.find(heir->appId) != nullptr) applyInitialPlacement(*heir);
 }
 
 void SurfaceRegistry::applyInitialPlacement(ClientSurface &surface) {
@@ -6272,15 +6403,26 @@ void SurfaceRegistry::applyInitialPlacement(ClientSurface &surface) {
   };
 
   // A dialog shares its parent's identity, and restoring the saved frame
-  // is how a viewer opened maximized at the file manager's size. Only
-  // being a child disqualifies a window: counting other windows that
-  // carry this `app_id` cannot tell a genuine second window from the same
-  // window re-created, which is what Qt does between mapping a toplevel
-  // and negotiating its decoration.
+  // is how a viewer opened maximized at the file manager's size. But being
+  // a child is not the only disqualification, because it is not the only
+  // way to be the second window: Double Commander's copy-progress window
+  // has no parent at all and still must not open at the file manager's
+  // size. So the frame is owned rather than looked up — see
+  // `placementHeld`. Counting windows outright cannot work, since a
+  // toolkit re-creating the window it just mapped looks exactly like a
+  // second one; that is what `kPlacementGrace` is for.
+  const bool ordinary = !surface.transient && !surface.appId.empty();
+  const bool held = ordinary && placementHeld(surface.appId, surface.id);
+  if (ordinary && !held) {
+    takePlacement(surface);
+  } else if (held) {
+    surface.placementDenied = std::chrono::steady_clock::now();
+  }
+  LAVA_PROBE("place: window %u '%s' app='%s' ordinary=%d held=%d",
+             surface.id, surface.title.c_str(), surface.appId.c_str(),
+             ordinary ? 1 : 0, held ? 1 : 0);
   const lava::WindowPlacement *saved =
-      !surface.transient && !surface.appId.empty()
-          ? placements_.find(surface.appId)
-          : nullptr;
+      ordinary && !held ? placements_.find(surface.appId) : nullptr;
 
   if (saved == nullptr) {
     // Keep the size the client asked for. Centre on the parent if this
@@ -6680,6 +6822,7 @@ void XwaylandSurface::on_set_class(wl_listener *listener, void *) {
   if (self->frameId == 0 || self->server->surfaces == nullptr) return;
   if (ClientSurface *frame = self->server->surfaces->find(self->frameId)) {
     frame->appId = self->xsurface->xclass ? self->xsurface->xclass : "";
+    self->server->surfaces->claimPlacement(*frame);
     self->server->surfaces->announceWindows();
   }
 }
@@ -7593,6 +7736,12 @@ void Toplevel::on_commit(wl_listener *listener, void *) {
       const bool transient = toplevel->xdg_toplevel->parent != nullptr;
       toplevel->server->surfaces->hintToplevelConfigure(
           app_id ? app_id : "", width, height, maximized, transient);
+      LAVA_PROBE("configure: app_id=%s title=%s transient=%d -> %ux%u "
+                 "maximized=%d",
+                 app_id ? app_id : "(none)",
+                 toplevel->xdg_toplevel->title ? toplevel->xdg_toplevel->title
+                                               : "(none)",
+                 transient ? 1 : 0, width, height, maximized ? 1 : 0);
     }
     wlr_xdg_toplevel_set_size(toplevel->xdg_toplevel,
                               static_cast<int32_t>(width),
@@ -7638,6 +7787,7 @@ void Toplevel::on_set_app_id(wl_listener *listener, void *) {
     // window is already placed; this only corrects the identity the
     // next close will remember under.
     frame->appId = app_id ? app_id : "";
+    toplevel->server->surfaces->claimPlacement(*frame);
     toplevel->server->surfaces->announceWindows();
   }
 }
@@ -7645,6 +7795,14 @@ void Toplevel::on_set_app_id(wl_listener *listener, void *) {
 void Toplevel::on_set_parent(wl_listener *listener, void *) {
   auto *toplevel = owner_of<Toplevel>(listener);
   wlr_xdg_toplevel *parent = toplevel->xdg_toplevel->parent;
+  LAVA_PROBE("set_parent: frame=%u parent=%s initialized=%d app_id=%s "
+             "title=%s",
+             toplevel->frameId, parent != nullptr ? "yes" : "nil",
+             toplevel->xdg_toplevel->base->initialized ? 1 : 0,
+             toplevel->xdg_toplevel->app_id ? toplevel->xdg_toplevel->app_id
+                                            : "(none)",
+             toplevel->xdg_toplevel->title ? toplevel->xdg_toplevel->title
+                                           : "(none)");
   // Before map we have no frame yet. The first configure and
   // `adoptWindow` both re-read `parent`, so marking here is only
   // needed once the window is already placed — otherwise a late
