@@ -9,6 +9,12 @@
 # QUIC, HTTP/3, SSR, JS, tests and the SNI router stay off: the compositor
 # only needs shared-memory RPC plus npidl for stub regeneration. System
 # OpenSSL and Boost are enough; we do not pull BoringSSL or MsQuic.
+#
+# That is also why we build into .build_lava_shm rather than nprpc's
+# .build_relwith_debinfo: its README points `swift test` at that directory
+# and the Swift IntegrationTests need the transports we switch off here.
+# Sharing one directory meant the last build to run silently decided
+# whether those tests could run.
 set -euo pipefail
 
 here="$(cd "$(dirname "$0")" && pwd)"
@@ -30,7 +36,7 @@ done
 "$here/fetch-nprpc.sh"
 root="$(lava_find_nprpc_root)" || lava_die "nprpc sources not found (fetch-nprpc.sh failed?)"
 
-build="${NPRPC_BUILD_DIR:-$root/.build_relwith_debinfo}"
+build="${NPRPC_BUILD_DIR:-$root/.build_lava_shm}"
 if [[ $build != /* ]]; then
   build="$root/$build"
 fi

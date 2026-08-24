@@ -82,6 +82,12 @@ lava_ui_fonts = meson.project_source_root() / 'Sources/LavaUI/Resources/fonts'
 # Search order matches scripts/lib/lava.sh and Package.swift:
 #   -Dnprpc_root=…, then third-party/nprpc, then ../nprpc, then libnprpc
 #   on the default linker path (a cmake --install).
+#
+# .build_lava_shm comes first on purpose. It is the transport-stripped build
+# scripts/build-nprpc.sh produces for us; nprpc's own .build_relwith_debinfo
+# is the full-transport one its README points `swift test` at. Both trees
+# used to claim .build_relwith_debinfo, so whichever built last decided
+# whether the Swift IntegrationTests could open a TCP/QUIC listener at all.
 nprpc_opt = get_option('nprpc_root')
 nprpc_candidates = []
 if nprpc_opt != ''
@@ -105,6 +111,7 @@ cpp = meson.get_compiler('cpp')
 if nprpc_root != ''
   nprpc_lib_dirs = []
   foreach d : [
+    nprpc_root / '.build_lava_shm',
     nprpc_root / '.build_relwith_debinfo',
     nprpc_root / '.build_release',
     nprpc_root / '.build',

@@ -217,6 +217,7 @@ lava_find_nprpc_libdir() {
   [[ -n $root ]] || return 1
   local d
   for d in \
+    "$root/.build_lava_shm" \
     "$root/.build_relwith_debinfo" \
     "$root/.build_release" \
     "$root/.build" \
@@ -243,6 +244,7 @@ lava_find_npidl() {
   [[ -n $root ]] || return 1
   local c
   for c in \
+    "$root/.build_lava_shm/npidl/npidl" \
     "$root/.build_relwith_debinfo/npidl/npidl" \
     "$root/.build_release/npidl/npidl" \
     "$root/.build/npidl/npidl" \
