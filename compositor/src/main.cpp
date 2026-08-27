@@ -193,6 +193,16 @@ struct FramedWindow {
   virtual void requestClose() = 0;
   /// Draw yourself focused, or stop.
   virtual void activate(bool activated) = 0;
+
+  /// Whether this window is blocking input to its parent — a modal dialog.
+  ///
+  /// Asked rather than stored, because both shells keep the answer somewhere
+  /// this can read on demand and neither reports it in a way worth mirroring:
+  /// `xdg_dialog_v1.set_modal` can arrive at any point in a dialog's life, and
+  /// a cached copy would need a listener per dialog to stay honest. Every
+  /// caller here asks during a raise or a focus change, which is late enough
+  /// that "current" and "up to date" are the same thing.
+  virtual bool isModal() const { return false; }
   /// Draw yourself maximized. Cosmetic — the compositor has already moved it.
   virtual void setMaximized(bool) {}
   /// Same, for fullscreen. The compositor has already covered the output.
@@ -451,6 +461,14 @@ struct Toplevel : FramedWindow {
   void activate(bool activated) override {
     wlr_xdg_toplevel_set_activated(xdg_toplevel, activated);
   }
+  /// Null unless the client made an `xdg_dialog_v1` for this toplevel, which
+  /// is the only thing in xdg-shell that says "modal" — the parent link on its
+  /// own means a dialog, not a blocking one.
+  bool isModal() const override {
+    wlr_xdg_dialog_v1 *dialog =
+        wlr_xdg_dialog_v1_try_from_wlr_xdg_toplevel(xdg_toplevel);
+    return dialog != nullptr && dialog->modal;
+  }
   void setMaximized(bool maximized) override {
     wlr_xdg_toplevel_set_maximized(xdg_toplevel, maximized);
   }
@@ -535,6 +553,9 @@ struct XwaylandSurface : FramedWindow {
   void activate(bool activated) override {
     wlr_xwayland_surface_activate(xsurface, activated);
   }
+  /// `_NET_WM_STATE_MODAL`, which X11 has always had — so this half works
+  /// whether or not the client speaks xdg-dialog.
+  bool isModal() const override { return xsurface->modal; }
   void setMaximized(bool maximized) override {
     wlr_xwayland_surface_set_maximized(xsurface, maximized, maximized);
   }
@@ -1445,6 +1466,11 @@ struct ClientSurface {
   /// dragging a title bar is how the two kinds of window drift apart.
   FramedWindow *window = nullptr;
   bool isForeign() const { return window != nullptr; }
+
+  /// Whether a dialog is blocking this window's parent. Only a shell window
+  /// can say so: a LavaUI client draws its dialogs inside its own surface,
+  /// where the compositor has no windows to stack and nothing to answer for.
+  bool isModal() const { return isForeign() && window->isModal(); }
 
   /// The non-client area. Its own surface, so a title change redraws a strip
   /// rather than the window, and hit testing stays a rectangle comparison.
@@ -2986,22 +3012,125 @@ class SurfaceRegistry : public lava::CompositorHost {
     announceWindows();
   }
 
-  /// Brings a window to the front of its workspace, frame and all.
+  /// Brings a window to the front of its workspace, frame and all — and its
+  /// dialogs back over the top of it.
   ///
   /// The bar after the contents, or focusing a window would raise its own
   /// title bar out from under it — they are siblings in one tree, and "on top"
   /// is decided by order alone.
+  ///
+  /// The dialogs matter for one case in particular: a modal file chooser is
+  /// holding its application's input, and a raise that buried it would leave
+  /// the application on screen, focused, and ignoring every key and click —
+  /// which reads as a hang rather than as a dialog waiting somewhere behind.
+  /// So the child follows the parent up instead of the parent passing it.
   void raise(ClientSurface &surface) {
     // A panel is already above everything by its own tree, and a menu is
     // above the panels by its own — neither has a place in this ordering.
     if (surface.panel || surface.menu) return;
     raiseNodes(surface);
     bringToFront(surface);
+    // After the parent, so they land over it, and breadth-first, so a
+    // dialog's own dialog lands over the dialog.
+    for (uint32_t id : descendantsOf(surface)) {
+      ClientSurface *child = find(id);
+      if (child == nullptr) continue;
+      // A minimized modal is the frozen-application trap with an extra step:
+      // the dialog still holds its parent's input, and now there is nothing on
+      // screen to say so — raising the parent would put a window in front of
+      // the user that ignores every key. So a modal comes back out with the
+      // window it blocks.
+      //
+      // Only a modal one. A dialog the user deliberately put away is theirs to
+      // leave away, and un-minimizing it on every raise of the parent would
+      // make it impossible to keep it there.
+      if (child->minimized && child->isModal()) setMinimized(*child, false);
+      raiseNodes(*child);
+      bringToFront(*child);
+    }
     // Whatever the user pinned goes back over the top of it. Last, so it
     // wins over the raise that has just happened — which is the whole
     // meaning of the flag.
     restackRanked();
     syncShellForFullscreen();
+  }
+
+  /// Every window whose parent chain reaches `surface`, breadth-first.
+  ///
+  /// Ids rather than pointers because the caller reorders `surfaces_` as it
+  /// walks the result, which would leave held pointers pointing into a list
+  /// that has moved beneath them.
+  ///
+  /// A window already collected is never collected twice, which is also what
+  /// makes a cycle terminate. xdg-shell rejects a parent loop as a protocol
+  /// error, but nothing rejects one described across shells — an X11 window
+  /// whose `WM_TRANSIENT_FOR` names a window that is transient for it — and
+  /// an unguarded walk of that hangs the compositor rather than misdrawing.
+  std::vector<uint32_t> descendantsOf(const ClientSurface &surface) const {
+    std::vector<uint32_t> found;
+    for (size_t head = 0;; ++head) {
+      const uint32_t parent = head == 0 ? surface.id : found[head - 1];
+      for (const auto &s : surfaces_) {
+        // Furniture is stacked by its own tree and has no place here, and
+        // `surface` itself is skipped so a window naming itself as its own
+        // parent cannot be raised above the raise it is the subject of.
+        if (s->parentId != parent || s->id == surface.id) continue;
+        if (s->panel || s->menu) continue;
+        if (std::find(found.begin(), found.end(), s->id) != found.end()) {
+          continue;
+        }
+        found.push_back(s->id);
+      }
+      if (head >= found.size()) break;
+    }
+    return found;
+  }
+
+  /// The dialog holding `surface`'s input, or null if nothing is.
+  ///
+  /// The deepest one, when a dialog has raised a dialog of its own: that is the
+  /// one the user can actually type into, and the one in between is as blocked
+  /// as the window at the bottom. `descendantsOf` is breadth-first, so the last
+  /// modal it yields is the deepest — two modal siblings on one parent is
+  /// already a client contradicting itself, and either answer is as good.
+  ClientSurface *modalDescendantOf(const ClientSurface &surface) {
+    ClientSurface *found = nullptr;
+    for (uint32_t id : descendantsOf(surface)) {
+      ClientSurface *child = find(id);
+      if (child != nullptr && child->isModal()) found = child;
+    }
+    return found;
+  }
+
+  /// `surface` and every window that has to be put away with it.
+  ///
+  /// A modal dialog and the window it blocks are one task, and minimizing
+  /// either end of that without the other leaves the desktop in a state the
+  /// user cannot act on: the dialog alone belongs to a window nobody can see,
+  /// and the parent alone sits on screen, focused, refusing every key. So both
+  /// ends travel together — downwards to modal dialogs at any depth, upwards
+  /// for as long as what we are standing on is itself modal.
+  ///
+  /// Modal links only. A tool palette or a non-blocking dialog is a window in
+  /// its own right and the user may leave it wherever they like.
+  std::vector<uint32_t> modalGroupOf(ClientSurface &surface) {
+    std::vector<uint32_t> group{surface.id};
+    for (uint32_t id : descendantsOf(surface)) {
+      ClientSurface *child = find(id);
+      if (child != nullptr && child->isModal()) group.push_back(id);
+    }
+    // Stopping on a member already collected is what bounds this: a parent
+    // link that comes back around ends the walk instead of continuing it.
+    for (ClientSurface *walk = &surface; walk != nullptr && walk->isModal();) {
+      ClientSurface *parent = find(walk->parentId);
+      if (parent == nullptr ||
+          std::find(group.begin(), group.end(), parent->id) != group.end()) {
+        break;
+      }
+      group.push_back(parent->id);
+      walk = parent;
+    }
+    return group;
   }
 
   /// The scene half of a raise: this window's nodes to the top of their tree.
@@ -9428,6 +9557,35 @@ wlr_box Server::popupBounds(const wlr_xdg_popup &popup) const {
 
 void Server::focus(FramedWindow *window) {
   if (window == nullptr) return;
+
+  // A modal dialog has this window's input, so giving the window the keyboard
+  // would hand it to a client that is refusing it — every key and click
+  // swallowed, which is what a user reads as a hang. The dialog takes it
+  // instead.
+  //
+  // Here rather than in `focusSurface`, because this is the narrow place every
+  // route to the keyboard passes through: a click on a foreign window's
+  // *content* comes straight here and never sees `focusSurface` at all, which
+  // is the one case that matters most — it is how someone returns to the
+  // window their file chooser is blocking.
+  //
+  // The window still comes up. `raise` lifts it and brings its dialogs over
+  // it on the way, so what changes is only the keyboard, which is the part the
+  // window cannot use anyway.
+  if (surfaces != nullptr && window->frameId != 0) {
+    if (ClientSurface *frame = surfaces->find(window->frameId)) {
+      ClientSurface *modal = surfaces->modalDescendantOf(*frame);
+      // `window` is retargeted rather than recursed into: the deepest modal
+      // has no modal of its own, so there is no second redirect to make, and a
+      // retarget cannot loop however tangled the parent links are.
+      if (modal != nullptr && modal->window != nullptr &&
+          modal->window != window) {
+        surfaces->raise(*frame);
+        window = modal->window;
+      }
+    }
+  }
+
   wlr_surface *surface = window->focusSurface();
   if (surface == nullptr) return;
   wlr_surface *previous = seat->keyboard_state.focused_surface;
@@ -10444,7 +10602,8 @@ void Server::focusSurface(ClientSurface &surface) {
   if (surface.isForeign()) {
     // A foreign window takes the keyboard through the seat, and no client
     // surface may hold it at the same time — both focused would deliver every
-    // key twice.
+    // key twice. `focus` is also where a modal dialog takes the keyboard
+    // instead of the window it is blocking.
     setFocusedSurface(0);
     focus(surface.window);
     return;
@@ -10534,15 +10693,36 @@ void Server::minimizeSurface(ClientSurface &surface) {
   if (surfaces == nullptr || surface.panel || surface.menu) return;
   const uint32_t workspace = surface.workspace;
   const uint32_t id = surface.id;
+  // The dialog blocking this window goes away with it, and so does the window
+  // a blocking dialog is standing in front of. Minimizing only one end does
+  // not even stick: focus falls to the other end, and the raise that comes
+  // with focusing it pulls what was just put away straight back out.
+  const std::vector<uint32_t> group = surfaces->modalGroupOf(surface);
+  const auto inGroup = [&group](uint32_t which) {
+    return std::find(group.begin(), group.end(), which) != group.end();
+  };
+  // Asked of the whole group, not just the window named: minimizing a window
+  // whose dialog holds the keyboard still leaves nobody holding it.
   const bool hadFocus =
-      focusedSurface() == id || surfaces->focusedId() == id;
-  surfaces->setMinimized(surface, true);
+      inGroup(focusedSurface()) || inGroup(surfaces->focusedId());
+  {
+    // One announcement for the group, so a taskbar does not draw the parent
+    // going away and then the dialog going away.
+    SurfaceRegistry::BulkChange batch(*surfaces);
+    for (uint32_t member : group) {
+      ClientSurface *s = surfaces->find(member);
+      if (s == nullptr || s->minimized) continue;
+      surfaces->setMinimized(*s, true);
+      if (s->isForeign()) s->window->activate(false);
+    }
+  }
   // A drag on a window that just vanished would go on moving it invisibly.
-  if (drag != Drag::None && dragSurface == id) drag = Drag::None;
-  if (pendingMove && pendingSurface == id) pendingMove = false;
-  if (surface.isForeign()) surface.window->activate(false);
+  if (drag != Drag::None && inGroup(dragSurface)) drag = Drag::None;
+  if (pendingMove && inGroup(pendingSurface)) pendingMove = false;
   // Somebody has to have the keyboard, and the window that had it
-  // before this one is the one the user is now looking at.
+  // before this one is the one the user is now looking at. Every member of the
+  // group is minimized by now, so `restoreFocus` skips them all and lands on
+  // whatever was behind.
   if (hadFocus) {
     restoreFocus(workspace, id);
   }
@@ -11442,6 +11622,42 @@ int main() {
                                    &server, Server::on_request_activate);
   } else {
     wlr_log(WLR_ERROR, "xdg-activation: unavailable");
+  }
+  // `xdg_dialog_v1`: the only thing in xdg-shell that says a dialog is modal.
+  // A parent link alone does not — a tool palette has one too — and the
+  // difference decides whether focus is redirected to the dialog or left on
+  // the window the user clicked. X11 has carried the same bit as
+  // `_NET_WM_STATE_MODAL` all along, so this is what brings Wayland clients
+  // level rather than a new capability.
+  if (wlr_xdg_wm_dialog_v1_create(server.display, 1) == nullptr) {
+    wlr_log(WLR_ERROR, "xdg-dialog: unavailable");
+  }
+  // Cross-client window parenting. `xdg_toplevel.set_parent` reaches only
+  // toplevels of the same client, so a dialog another process opens on an
+  // application's behalf has no way to say whose dialog it is — and that is
+  // every xdg-desktop-portal file chooser, which is what Chrome and Firefox
+  // open. Without this the chooser arrives parentless and the compositor
+  // stacks it as an unrelated window of an unrelated app.
+  //
+  // The exchange is: the application exports its toplevel and gets a handle,
+  // hands the handle over out of band (the portal's `parent_window` argument,
+  // spelled `wayland:<handle>`), and the dialog's client imports it and
+  // parents to it. wlroots completes the import through
+  // `wlr_xdg_toplevel_set_parent`, so the parent lands in the same
+  // `xdg_toplevel.parent` a same-client `set_parent` would have written and
+  // `Toplevel::on_set_parent` fires unchanged. Nothing downstream needs to
+  // know the parent came from another client.
+  //
+  // Both versions against one registry: v1 and v2 are the same protocol under
+  // two names, and the shared registry is what lets a client exporting over
+  // one be imported by a client using the other.
+  if (wlr_xdg_foreign_registry *registry =
+          wlr_xdg_foreign_registry_create(server.display);
+      registry == nullptr) {
+    wlr_log(WLR_ERROR, "xdg-foreign: registry unavailable");
+  } else if (wlr_xdg_foreign_v1_create(server.display, registry) == nullptr ||
+             wlr_xdg_foreign_v2_create(server.display, registry) == nullptr) {
+    wlr_log(WLR_ERROR, "xdg-foreign: unavailable");
   }
   // Pause idle (and, if we ever grew a lock or DPMS, those too) while a
   // visible client — a call, a video — says it must stay on screen.
