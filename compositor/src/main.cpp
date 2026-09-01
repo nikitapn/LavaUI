@@ -1583,7 +1583,6 @@ struct ClientSurface {
   std::unique_ptr<lava::CanvasSurface> blurCanvas;
   wlr_scene_buffer *blurNode = nullptr;
   std::string blurKey;
-  uint32_t blurGen = 0;
   /// Whether `blurNode` carries a plate that was actually frosted. The key is
   /// named before the capture is attempted and the capture can fail (no
   /// dma-buf import, no readback), so the key alone does not answer it — and
@@ -4188,13 +4187,13 @@ class SurfaceRegistry : public lava::CompositorHost {
       show_surface(surface.blurNode, *surface.blurCanvas);
     }
 
-    // Every refresh is a new full-screen texture, so the one it replaces has to
-    // go rather than go dormant — see `CanvasRenderer::discardImage`. Ten
-    // refreshes of one window used to leave 79 MiB of snapshots resident, none
-    // of which any draw list could name again.
-    if (!surface.blurKey.empty()) renderer_->discardImage(surface.blurKey);
-    surface.blurKey = "frost:" + std::to_string(surface.id) + ":" +
-                      std::to_string(++surface.blurGen);
+    // One name for the life of the window, and the same image under it every
+    // time. `refreshDmabufTexture` overwrites that image rather than allocating
+    // another, which is what this used to do: a generation in the key, a fresh
+    // 5 MiB texture per capture, and the old one discarded — thirty times a
+    // second for as long as anything moved behind the window. A week-old
+    // session had done it 1.4 million times for a single terminal.
+    surface.blurKey = "frost:" + std::to_string(surface.id);
     const float corners = regioned
                               ? surface.blurCorner
                               : (frameIsRoundable(surface) ? cornerRadius_ : 0.f);
@@ -4213,6 +4212,11 @@ class SurfaceRegistry : public lava::CompositorHost {
           surface.blurKey, frost);
     }
     if (!frosted) {
+      // The CPU path uploads through the ordinary texture cache, which would
+      // hand back the picture already sitting under this name. Only the
+      // dma-buf path knows how to overwrite in place, so the fallback drops
+      // the entry and pays for a new image — as every capture used to.
+      renderer_->discardImage(surface.blurKey);
       std::vector<uint8_t> raw;
       const bool read = srcX >= 0 && srcY >= 0 &&
                         lava::readBufferRgba(server_->renderer, captured, srcX,
@@ -5756,8 +5760,7 @@ class SurfaceRegistry : public lava::CompositorHost {
   /// once per switcher session, and once per dock preview — and reusing the
   /// string would hand the TextureManager a key it has just been told to
   /// forget. Counted per entry rather than per session so a single window
-  /// refreshing does not need the whole map to turn over. Same shape as
-  /// `blurGen` on a surface, and for the same reason.
+  /// refreshing does not need the whole map to turn over.
   std::string mintPosterKey(uint32_t surfaceId, uint32_t maxSide) {
     return "poster:" + std::to_string(++posterGen_) + ":" +
            std::to_string(surfaceId) + ":" + std::to_string(maxSide);

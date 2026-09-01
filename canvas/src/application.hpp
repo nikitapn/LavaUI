@@ -288,6 +288,16 @@ public:
                           const canvas::DmabufImport &src, int32_t x,
                           int32_t y, uint32_t w, uint32_t h,
                           uint32_t maxSide = 0);
+  /// The same crop for a name that is captured over and over — a backdrop
+  /// frost plate. Overwrites the image already under `key` when nothing is
+  /// still reading it, instead of allocating another one. See
+  /// `TextureManager::refreshDmabufTexture`.
+  int refreshDmabufTexture(const std::string &key,
+                           const canvas::DmabufImport &src, int32_t x,
+                           int32_t y, uint32_t w, uint32_t h);
+  /// "A frame that samples this texture has been submitted." Tells
+  /// `refreshDmabufTexture` when the image is free to be written over again.
+  void noteTextureSampled(int textureId);
   bool hasTexture(const std::string &key) const;
   /// Takes a reference on an already-resident `key` and reports its size.
   /// Returns the texture id, or -1 if the key is not resident — in which case

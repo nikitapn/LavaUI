@@ -604,6 +604,16 @@ struct Application::Impl
     return h.isValid() ? static_cast<int>(h.id) : -1;
   }
 
+  int refreshDmabufTexture(const std::string &key,
+                           const canvas::DmabufImport &src, int32_t x,
+                           int32_t y, uint32_t w, uint32_t h)
+  {
+    if (!deviceUp) return -1;
+    auto handle = TextureManager::getInstance().refreshDmabufTexture(
+      key, src, x, y, w, h);
+    return handle.isValid() ? static_cast<int>(handle.id) : -1;
+  }
+
   int importDmabufTexture(const std::string &key,
                           const canvas::DmabufImport &src, int32_t x,
                           int32_t y, uint32_t w, uint32_t h, uint32_t maxSide)
@@ -1042,6 +1052,20 @@ void Application::discardTexture(const std::string &key)
 void Application::unloadTexture(const std::string &path)
 {
   impl_->unloadTexture(path);
+}
+
+int Application::refreshDmabufTexture(const std::string &key,
+                                      const canvas::DmabufImport &src,
+                                      int32_t x, int32_t y, uint32_t w,
+                                      uint32_t h)
+{
+  return impl_->refreshDmabufTexture(key, src, x, y, w, h);
+}
+
+void Application::noteTextureSampled(int textureId)
+{
+  if (textureId <= 0) return;
+  TextureManager::getInstance().noteSampled(static_cast<uint32_t>(textureId));
 }
 
 int Application::uploadTexture(const std::string &key, const uint8_t *rgba,

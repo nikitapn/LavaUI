@@ -89,21 +89,19 @@ bool createStandaloneTexture(RenderDevice &device, const std::string &key,
 constexpr VkImageSubresourceRange kBlitColor{
   VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
 
-/// GPU crop + format convert of an imported dma-buf into a sampled texture.
-bool blitImportedTexture(RenderDevice &device, const std::string &key,
-                         const canvas::ImportedDmabuf &src,
-                         int32_t x, int32_t y, uint32_t srcW, uint32_t srcH,
-                         uint32_t destW, uint32_t destH,
-                         VkImage &image, VmaAllocation &allocation,
-                         VkImageView &view)
+/// Records the crop blit into an image that already exists at `destW`×`destH`.
+///
+/// Split out of `blitImportedTexture` because the destination is not always
+/// new: a plate that is recaptured many times a second — the backdrop frost is
+/// the one that does — writes over the image it wrote last time rather than
+/// minting one per capture. The old layout is `UNDEFINED` either way, which
+/// says "none of what is there matters"; what it does *not* say is that
+/// nothing is still reading it, and that is the caller's to know. See
+/// `TextureManager::refreshDmabufTexture`.
+void recordImportBlit(RenderDevice &device, const canvas::ImportedDmabuf &src,
+                      int32_t x, int32_t y, uint32_t srcW, uint32_t srcH,
+                      uint32_t destW, uint32_t destH, VkImage image)
 {
-  device.createImage(destW, destH, 1, VK_SAMPLE_COUNT_1_BIT,
-                     VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_TILING_OPTIMAL,
-                     VK_IMAGE_USAGE_TRANSFER_DST_BIT |
-                       VK_IMAGE_USAGE_SAMPLED_BIT,
-                     VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, image, allocation,
-                     canvas::GpuTag{canvas::GpuCategory::Texture, 0, key});
-
   VkCommandBuffer cmd = device.beginSingleTimeCommands();
   src.recordAcquire(cmd);
 
@@ -151,6 +149,25 @@ bool blitImportedTexture(RenderDevice &device, const std::string &key,
                        VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr, 0,
                        nullptr, 1, &toSample);
   device.endSingleTimeCommands(cmd);
+}
+
+/// GPU crop + format convert of an imported dma-buf into a *new* sampled
+/// texture.
+bool blitImportedTexture(RenderDevice &device, const std::string &key,
+                         const canvas::ImportedDmabuf &src,
+                         int32_t x, int32_t y, uint32_t srcW, uint32_t srcH,
+                         uint32_t destW, uint32_t destH,
+                         VkImage &image, VmaAllocation &allocation,
+                         VkImageView &view)
+{
+  device.createImage(destW, destH, 1, VK_SAMPLE_COUNT_1_BIT,
+                     VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_TILING_OPTIMAL,
+                     VK_IMAGE_USAGE_TRANSFER_DST_BIT |
+                       VK_IMAGE_USAGE_SAMPLED_BIT,
+                     VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, image, allocation,
+                     canvas::GpuTag{canvas::GpuCategory::Texture, 0, key});
+
+  recordImportBlit(device, src, x, y, srcW, srcH, destW, destH, image);
 
   VkComponentMapping swizzle{};
   if (src.opaqueAlpha()) {
@@ -388,8 +405,149 @@ TextureHandle TextureManager::importDmabufTexture(
     textureData->bytes = static_cast<uint64_t>(destW) * destH * 4;
     imageBytes_ += textureData->bytes;
     textureData->ownsImage = true;
+    textureData->opaqueAlpha = imported->opaqueAlpha();
 
     uint32_t textureId = nextId_++;
+    textureData->id = textureId;
+    textureById_[textureId] = textureData.get();
+    textures_[key] = std::move(textureData);
+    return {view, textureId};
+}
+
+void TextureManager::noteSampled(uint32_t textureId)
+{
+    std::lock_guard lock(mutex_);
+    if (device_ == nullptr) return;
+    auto found = textureById_.find(textureId);
+    if (found == textureById_.end()) return;
+    found->second->sampledBefore = device_->pendingSubmissionMark();
+}
+
+TextureHandle TextureManager::refreshDmabufTexture(
+    const std::string &key, const canvas::DmabufImport &src, int32_t x,
+    int32_t y, uint32_t width, uint32_t height)
+{
+    if (!device_ || key.empty() || width == 0 || height == 0) {
+        return {VK_NULL_HANDLE, 0};
+    }
+    if (x < 0 || y < 0 ||
+        static_cast<uint32_t>(x) + width > src.width ||
+        static_cast<uint32_t>(y) + height > src.height) {
+        return {VK_NULL_HANDLE, 0};
+    }
+
+    // Can this be written over, and if so, hold it still while we do.
+    //
+    // The pin matters because everything after this releases the lock:
+    // importing waits on the source, and `endSingleTimeCommands` waits for the
+    // queue to idle. Every window's replay takes this same lock once per image
+    // command, so a blit held under it would hitch every other window on the
+    // desktop thirty times a second. `importDmabufTexture` drops the lock over
+    // its own blit for the same reason.
+    VkImage reusable = VK_NULL_HANDLE;
+    bool viewIsOpaque = false;
+    {
+        std::lock_guard lock(mutex_);
+        if (auto it = textures_.find(key); it != textures_.end()) {
+            TextureData &data = *it->second;
+            const bool sameShape = data.ownsImage && !data.atlased
+                && !data.discard && data.width == width
+                && data.height == height;
+            // A frame that named this texture may still be running. The clock
+            // is a submission index rather than a frame count for the reason
+            // `RenderDevice::collectGarbage` gives: with more than one window,
+            // "three frames have passed" says nothing about the window that
+            // actually sampled it.
+            const bool quiet = lastRetired_ >= data.sampledBefore;
+            if (sameShape && quiet) {
+                reviveLocked(data);
+                ++data.refCount;
+                reusable = data.image;
+                viewIsOpaque = data.opaqueAlpha;
+            }
+        }
+    }
+
+    auto imported = canvas::ImportedDmabuf::create(*device_, src);
+    if (imported) imported->waitReady();
+
+    if (reusable != VK_NULL_HANDLE) {
+        // The view carries the source's alpha swizzle. A capture that
+        // disagrees with the one this view was built for would be sampled
+        // through the wrong mapping, so it has to have a view of its own.
+        const bool usable =
+            imported && imported->opaqueAlpha() == viewIsOpaque;
+        if (usable) {
+            recordImportBlit(*device_, *imported, x, y, width, height, width,
+                             height, reusable);
+        }
+        std::lock_guard lock(mutex_);
+        auto it = textures_.find(key);
+        if (it != textures_.end() && it->second->image == reusable) {
+            if (usable) {
+                TextureData &data = *it->second;
+                data.lastUsed = ++useCounter_;
+                const TextureHandle handle{data.view, data.id, data.uv0,
+                                           data.uv1};
+                unloadLocked(it);  // drop the pin; the caller keeps its own
+                return handle;
+            }
+            unloadLocked(it);
+        }
+        // Fall through and build a new one: either the swizzle changed or the
+        // entry went away while the lock was down.
+    }
+    if (!imported) return {VK_NULL_HANDLE, 0};
+
+    {
+        // Replacing, not overwriting. The old image goes to the deferred
+        // destroy queue exactly as an eviction would, so a frame still holding
+        // its view keeps working until it retires.
+        std::lock_guard lock(mutex_);
+        if (auto it = textures_.find(key); it != textures_.end()) {
+            eraseTextureLocked(it);
+        }
+    }
+
+    VkImage image = VK_NULL_HANDLE;
+    VmaAllocation allocation = VK_NULL_HANDLE;
+    VkImageView view = VK_NULL_HANDLE;
+    if (!blitImportedTexture(*device_, key, *imported, x, y, width, height,
+                             width, height, image, allocation, view)) {
+        return {VK_NULL_HANDLE, 0};
+    }
+
+    std::lock_guard lock(mutex_);
+    if (auto it = textures_.find(key); it != textures_.end()) {
+        // Somebody else got here first. Ours is the one that goes.
+        vkDestroyImageView(device_->getDevice(), view, nullptr);
+        device_->destroyImage(image, allocation);
+        TextureData &data = *it->second;
+        // One reference for the life of the name, not one per call — see the
+        // header. Taking another here would add one every capture, and the
+        // plate's single `discardTexture` at teardown would never reach zero.
+        if (data.refCount == 0) {
+            reviveLocked(data);
+            data.refCount = 1;
+        }
+        data.lastUsed = ++useCounter_;
+        return {data.view, data.id, data.uv0, data.uv1};
+    }
+
+    auto textureData = std::make_unique<TextureData>();
+    textureData->image = image;
+    textureData->allocation = allocation;
+    textureData->view = view;
+    textureData->path = key;
+    textureData->refCount = 1;
+    textureData->width = width;
+    textureData->height = height;
+    textureData->bytes = static_cast<uint64_t>(width) * height * 4;
+    imageBytes_ += textureData->bytes;
+    textureData->ownsImage = true;
+    textureData->opaqueAlpha = imported->opaqueAlpha();
+
+    const uint32_t textureId = nextId_++;
     textureData->id = textureId;
     textureById_[textureId] = textureData.get();
     textures_[key] = std::move(textureData);
@@ -744,6 +902,9 @@ void TextureManager::evictAtlasSlotsLocked() {
 
 void TextureManager::collectGarbage(uint64_t retiredSubmission) {
     std::lock_guard lock(mutex_);
+    // Also what `refreshDmabufTexture` asks before it overwrites an image:
+    // every submission numbered below this one has finished.
+    lastRetired_ = retiredSubmission;
     size_t keep = 0;
     for (const PendingSlot &pending : pendingSlots_) {
         // Only submissions *before* the mark can name the cell; once the

@@ -407,7 +407,15 @@ bool CanvasSurface::frostWithTexture(int id, float radius, float cornerRadius) {
 
   const std::vector<canvas::DrawCommand> commands{begin, image, end};
   const std::vector<canvas::GlyphInstance> glyphs;
-  return renderList(commands, glyphs);
+  if (!renderList(commands, glyphs)) return false;
+  // After the submit, not before: the mark this takes is the one every later
+  // submission exceeds, which is what lets the next capture know this frame's
+  // read of the plate is over and the image can be written again. See
+  // `TextureManager::refreshDmabufTexture`.
+  if (Application *app = renderer_.engine().application()) {
+    app->noteTextureSampled(id);
+  }
+  return true;
 }
 
 bool CanvasSurface::frostFromRgba(const uint8_t *rgba, uint32_t srcW,
@@ -439,7 +447,11 @@ bool CanvasSurface::frostFromDmabuf(const wlr_dmabuf_attributes &src, int srcX,
     desc.offset[i] = src.offset[i];
     desc.stride[i] = src.stride[i];
   }
-  const int id = app->importDmabufTexture(
+  // Refresh, not import: this runs again for the same `key` every time
+  // anything moves behind the window, and a cache lookup would hand back the
+  // picture it took the first time — which is why this used to need a new name,
+  // and a new full-window image, per capture.
+  const int id = app->refreshDmabufTexture(
       key, desc, srcX, srcY, static_cast<uint32_t>(srcW),
       static_cast<uint32_t>(srcH));
   return frostWithTexture(id, radius, cornerRadius);

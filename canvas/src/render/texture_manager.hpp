@@ -60,6 +60,14 @@ private:
         uint32_t atlasSlot = 0;
         vec2 uv0{0.f, 0.f};
         vec2 uv1{1.f, 1.f};
+        /// Submission mark past which nothing can still be sampling this
+        /// texture's contents — see `noteSampled`. Zero means nothing has
+        /// drawn it yet, which is trivially safe to overwrite.
+        uint64_t sampledBefore = 0;
+        /// Whether the view was built with the alpha channel forced to one.
+        /// A refresh from a source that disagrees needs a different view, so
+        /// it cannot reuse this image.
+        bool opaqueAlpha = false;
     };
 
     /// An atlas cell whose entry is gone but whose pixels a frame already
@@ -97,6 +105,10 @@ private:
     uint32_t dormantSlots_ = 0;
     uint64_t cacheHits_ = 0;
     uint64_t evictions_ = 0;
+    /// Newest mark the device's retire clock has passed — every submission
+    /// numbered below it has finished. Fed by `collectGarbage`, read by
+    /// `refreshDmabufTexture`.
+    uint64_t lastRetired_ = 0;
     void *surfaceResolverCtx_ = nullptr;
     int (*surfaceResolver_)(void *, uint32_t, uint32_t) = nullptr;
 
@@ -157,6 +169,51 @@ public:
                                       const canvas::DmabufImport &src,
                                       int32_t x, int32_t y, uint32_t w,
                                       uint32_t h, uint32_t maxSide = 0);
+
+    /// The same import, for a caller that will do it again and again with the
+    /// same name — a backdrop frost plate, recaptured up to thirty times a
+    /// second for as long as anything moves behind the window.
+    ///
+    /// `importDmabufTexture` cannot serve that: it is a *cache*, so a second
+    /// call under a name it already holds returns the pixels from the first
+    /// one. Recapturing therefore meant a new name every time, and a new name
+    /// meant a new full-window image every time — measured at 1.4 million
+    /// allocate-and-destroy cycles of a 4.8 MiB image on a session that had
+    /// been up a week, which is the entire texture cache's eviction count.
+    ///
+    /// So this one overwrites instead. The image, its id and its view all
+    /// survive, which is what makes it invisible to everything downstream: a
+    /// draw list names the same texture id, and the descriptor set built from
+    /// it points at the same view.
+    ///
+    /// Overwriting is only safe once nothing is still sampling what is there,
+    /// and that is what `noteSampled` and the device's retire clock are for.
+    /// The two are a pair: a caller that draws with the returned id and never
+    /// says so leaves the stamp at zero, and every capture then reads as safe
+    /// whether it is or not.
+    /// When the answer is no — a frame that named it is still running, the
+    /// crop changed size, the alpha swizzle changed — the entry is replaced
+    /// the way it always was, which is correct and merely costs what every
+    /// capture used to. Same contract as `pendingSlots_`, which holds an atlas
+    /// cell back for exactly the same reason.
+    ///
+    /// Holds **one** reference for the life of the name, not one per call: the
+    /// caller captures under the same key thousands of times and releases it
+    /// once, so a reference per capture would be a count that never reaches
+    /// zero and an image that is never freed.
+    TextureHandle refreshDmabufTexture(const std::string &key,
+                                       const canvas::DmabufImport &src,
+                                       int32_t x, int32_t y, uint32_t w,
+                                       uint32_t h);
+
+    /// "A frame that samples this texture has been submitted."
+    ///
+    /// Stamps the texture with the mark every later submission will exceed, so
+    /// `refreshDmabufTexture` can tell when the last reader has retired.
+    /// Called *after* the submit, never before: the point of the mark is that
+    /// every submission recorded from here on is one that cannot name what the
+    /// texture held.
+    void noteSampled(uint32_t textureId);
 
     /// How a compositor-side draw list names another surface as a texture.
     ///
