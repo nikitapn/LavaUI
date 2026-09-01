@@ -419,6 +419,11 @@ struct CompositorHost {
                               std::vector<uint8_t> &outPng, uint32_t &outW,
                               uint32_t &outH) = 0;
 
+  /// Drops the cached `ImageSurface` poster for a window, at every size it
+  /// was imported at. Unknown ids have no poster and are a no-op. See
+  /// `ForgetWindowPoster`.
+  virtual void forgetWindowPoster(uint32_t surfaceId) = 0;
+
   /// The seat's selection, as text. Empty when there is none or it is not
   /// text-shaped.
   ///

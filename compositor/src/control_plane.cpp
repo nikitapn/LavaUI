@@ -775,6 +775,10 @@ class CompositorImpl final : public ICompositor_Servant {
     if (!host_.minimize(surfaceId)) throw SurfaceNotFound(surfaceId);
   }
 
+  void ForgetWindowPoster(uint32_t surfaceId) override {
+    host_.forgetWindowPoster(surfaceId);
+  }
+
   void SetMinSize(uint32_t surfaceId, uint32_t minWidth,
                   uint32_t minHeight) override {
     if (!host_.setMinSize(surfaceId, minWidth, minHeight)) {

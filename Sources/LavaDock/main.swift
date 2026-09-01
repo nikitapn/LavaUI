@@ -37,12 +37,12 @@ import Observation
 // Reordering is a captured drag along the plate. The compositor already
 // keeps the pointer on the surface that received the press, so motion
 // after the icon leaves the plate still arrives. What cannot leave is
-// *paint*: the dock is a 110pt strip, and a client cannot draw on the
+// *paint*: the dock is a 138pt strip, and a client cannot draw on the
 // desktop above it. The dragged icon therefore slides on the plate (and
 // lifts a little inside the strip). Dragging off the top of the plate
-// unpins; growing the panel mid-drag with `SetPanelThickness` is how a
-// flying icon that followed the pointer up the screen would be done,
-// and is the same trick the taskbar uses for menus.
+// unpins; a flying icon that followed the pointer up the screen would
+// need `SetPanelThickness`, which is how the window preview next door
+// gets its room — see `WindowPreview.swift`.
 
 /// One entry: an application, and the windows it has open.
 ///
@@ -120,6 +120,8 @@ final class DockModel {
 
     var drag: DockDrag?
     var menu: DockContextMenu?
+    /// The window shelf that is up, if one is. See `WindowPreview.swift`.
+    var preview: DockPreview?
     /// True while neighbour icons are still catching up to a hole.
     /// Drives `continuousRedraw` for the few hundred milliseconds a
     /// slide lasts — not while the dock is merely out.
@@ -144,6 +146,36 @@ final class DockModel {
     /// Last canvas width, so a wheel can resolve which icon it is over.
     @ObservationIgnored var lastFrameWidth: Float = 0
     @ObservationIgnored private var badgeFontCache: UIFont?
+
+    // ─── Window preview ──────────────────────────────────────────────────
+    //
+    // Paint owns the geometry — see `Dock.previewLayout` — and hands the
+    // last one back here, because everything that is not paint (the hit
+    // test for a click, the question "is the pointer still on the shelf")
+    // needs the same rectangles and must not compute a second set from a
+    // frame it has not seen.
+
+    /// The icon the pointer is resting on and since when. Cleared the moment
+    /// it moves to another one, so the delay is per icon rather than per
+    /// visit to the dock.
+    @ObservationIgnored var hoverCandidate: (appId: String, since: Double)?
+    /// Which app a shelf has been *asked* for. Opening grows the panel and
+    /// talks to the compositor, so it happens after the frame rather than
+    /// inside paint; this is what stops paint asking again every frame in
+    /// the meantime.
+    @ObservationIgnored var previewRequest: String?
+    /// One `ImageSurface` name per window on the shelf. Not pixels: the
+    /// compositor resolves these when it replays the draw list.
+    @ObservationIgnored var previewPosters: [UInt32: UIImage] = [:]
+    /// The shelf as it was last painted, for hit-testing.
+    @ObservationIgnored var previewLayout: Dock.PreviewLayout?
+    /// Top of the plate as paint last placed it. The band between it and the
+    /// shelf is a bridge the pointer crosses, and letting go of the shelf
+    /// halfway across it is the bug this avoids.
+    @ObservationIgnored var plateTop: Float = 0
+    /// Panel thickness the compositor currently has. The dock grows for a
+    /// shelf and shrinks again after — see `setPanelHeight`.
+    @ObservationIgnored var panelHeight: Float = Dock.height
 
     func loadCatalog() {
         let installed = DesktopEntry.installed()
@@ -176,6 +208,10 @@ final class DockModel {
         lastWorkspace = workspace
         lastWindows = windows
         rebuildEntries()
+        // A shelf about windows that are no longer a stack is a shelf about
+        // nothing — and closing it is also what shrinks the panel back, which
+        // a workspace switch would otherwise leave grown.
+        syncPreview()
         // The dock is painted by a `Canvas` closure, which reads this model at
         // emit time rather than through a body — so observation has nothing to
         // notice and no frame would be drawn. Asking here is what makes a
@@ -372,6 +408,125 @@ final class DockModel {
         return font
     }
 
+    // ─── Window preview ──────────────────────────────────────────────────
+
+    /// Puts the shelf up for `appId`, growing the panel to make room.
+    ///
+    /// Called after a frame is on screen, never from inside paint: it makes
+    /// two blocking control-plane calls and changes the size the next layout
+    /// runs at, and paint is in the middle of emitting a draw list against
+    /// the old one.
+    func openPreview(_ appId: String) {
+        previewRequest = appId
+        guard let entry = entries.first(where: { $0.appId == appId }),
+              entry.windows.count > 1
+        else { return closePreview() }
+        guard preview?.appId != appId else { return }
+
+        menu = nil
+        hoverCandidate = nil
+        setPanelHeight(Dock.openHeight)
+        bindPosters(of: entry)
+        preview = DockPreview(appId: appId)
+        ViewInvalidation.markNeedsRedraw()
+    }
+
+    /// Names this application's windows as `ImageSurface` posters, and tells
+    /// the compositor to take each one's picture again first.
+    ///
+    /// A poster is a name, not pixels — `UIImage.surfacePoster` costs
+    /// nothing and the compositor imports the window's last dma-buf when it
+    /// replays the draw list. `ForgetWindowPoster` is what makes the picture
+    /// current: the compositor caches one per (window, size) so a shelf is
+    /// one import rather than one per frame, and a dock that lives all
+    /// session would otherwise show, every time, whatever the window looked
+    /// like the first time it was hovered.
+    ///
+    /// Once per open, not per frame. Per frame would be a capture of the
+    /// whole shelf at 60 Hz.
+    private func bindPosters(of entry: DockEntry) {
+        var posters: [UInt32: UIImage] = [:]
+        for window in entry.windows where window.width > 0 && window.height > 0 {
+            LavaClient.forgetWindowPoster(window.surfaceId)
+            posters[window.surfaceId] = UIImage.surfacePoster(
+                surfaceId: window.surfaceId,
+                pixelWidth: Float(window.width),
+                pixelHeight: Float(window.height),
+                maxSide: Dock.previewPosterSide
+            )
+        }
+        previewPosters = posters
+    }
+
+    /// The window set changed under an open shelf.
+    ///
+    /// A window that opened has no poster yet and would draw as its
+    /// application's icon forever; one that closed leaves a name the
+    /// compositor can no longer resolve. Only when the *set* moved — a
+    /// window merely taking focus must not recapture the shelf.
+    private func syncPreview() {
+        guard let open = preview else { return }
+        guard let entry = entries.first(where: { $0.appId == open.appId }),
+              entry.windows.count > 1
+        else { return closePreview() }
+        let shown = Set(previewPosters.keys)
+        let live = Set(
+            entry.windows.filter { $0.width > 0 && $0.height > 0 }
+                .map(\.surfaceId)
+        )
+        if shown != live { bindPosters(of: entry) }
+    }
+
+    func closePreview() {
+        previewRequest = nil
+        hoverCandidate = nil
+        guard preview != nil else { return }
+        preview = nil
+        previewPosters = [:]
+        previewLayout = nil
+        setPanelHeight(Dock.height)
+        ViewInvalidation.markNeedsRedraw()
+    }
+
+    /// Grows or shrinks the surface the dock draws into.
+    ///
+    /// Grown and left grown — the way the taskbar does it for its menus —
+    /// would be wrong here. The taskbar reserves its strip, so the compositor
+    /// knows which part of its tall surface is the panel; a dock reserves
+    /// nothing, and `panelCovered` reads the whole surface of a panel that
+    /// reserves nothing as its strip. A dock left 250pt tall would decide it
+    /// was covered by any window in the bottom quarter of the screen and
+    /// auto-hide from it.
+    ///
+    /// The plate does not move: a bottom panel's origin is `output -
+    /// thickness`, and everything paint draws is measured from the bottom of
+    /// the surface, so the height all appears above the dock.
+    private func setPanelHeight(_ height: Float) {
+        guard panelHeight != height else { return }
+        let grew = height - panelHeight
+        panelHeight = height
+        LavaClient.setPanelThickness(height)
+        // A bottom panel grows upward, so the surface's top edge moved and
+        // every y the client holds is now short by exactly that much. The
+        // pointer has not moved and will send nothing until it does, so
+        // nothing else will correct the last position we were told — and the
+        // very next frame asks whether the pointer is still on the icon that
+        // opened this. Without this it is not: it is 116 points above it, on
+        // a shelf that has not been drawn yet, and the shelf closes on the
+        // frame it opened.
+        let pointer = PointerState.window
+        PointerState.set(x: pointer.x, y: pointer.y + grew)
+        // Locally too, so the first frame at the new height is drawn at it
+        // rather than waiting for the `Resize` the compositor has queued.
+        if let editor {
+            let width = editor.framebufferSize().w
+            editor.setClientSize(
+                width: width > 1 ? width : max(lastFrameWidth, 1920),
+                height: height
+            )
+        }
+    }
+
     func launch(_ id: String) {
         if let entry = entryInfo(for: id) {
             if !entry.launch() {
@@ -398,6 +553,14 @@ enum Dock {
     /// Extra space between the last pin and the first running-only icon.
     static let groupGap: Float = 18
     static let padding: Float = 10
+    /// The plate itself: an icon at rest, with its padding, floating a little
+    /// off the screen's edge rather than sitting flush against it.
+    ///
+    /// Named because the window preview hangs off the top of it, and the
+    /// shelf and the paint that draws the plate must not each have their own
+    /// idea of where that is — see `Dock.previewLayout`.
+    static var plateHeight: Float { iconSize + padding * 2 }
+    static let plateInset: Float = 6
     /// Room above a magnified icon for the name tooltip.
     static let tooltipRoom: Float = 28
     /// Height of the surface. Tall enough for a magnified icon, its
@@ -582,6 +745,7 @@ struct DockView: View {
         _ = model.entries.count
         _ = model.drag?.active
         _ = model.sliding
+        _ = model.preview?.appId
         return Canvas(
             label: "Dock",
             flexGrow: 1,
@@ -712,6 +876,21 @@ struct DockView: View {
     private func handle(_ gesture: CanvasGesture) {
         switch gesture.phase {
         case .began:
+            // The shelf is above the plate and owns every press that lands on
+            // it — including the ones that miss a card, which are how it is
+            // dismissed. Below the plate's top the dock's own handling
+            // continues, so the icon under the shelf still clicks.
+            if model.preview != nil, gesture.localY < model.plateTop {
+                if gesture.button == PointerButton.left,
+                   let card = model.previewLayout?.card(
+                       atX: gesture.localX, y: gesture.localY
+                   )
+                {
+                    LavaClient.activateWindow(card.surfaceId)
+                }
+                model.closePreview()
+                return
+            }
             if Dock.approaching(
                 x: gesture.localX,
                 plate: rowLayout(
@@ -764,12 +943,15 @@ struct DockView: View {
         // is already running.
         guard entry.canPin || !entry.isRunning else { return }
         model.drag = nil
+        model.closePreview()
         model.menu = DockContextMenu(appId: entry.appId, x: x)
         ViewInvalidation.markNeedsRedraw()
     }
 
     private func beginPress(atX x: Float, y: Float, frameWidth: Float) {
         model.menu = nil
+        // A press is a decision; the shelf was an offer.
+        model.closePreview()
         guard let index = entryIndex(atX: x, frameWidth: frameWidth) else {
             model.drag = nil
             return
@@ -892,8 +1074,11 @@ struct DockView: View {
         // Sits on the bottom edge with its own padding, the way a dock does —
         // flush against the screen looks like a strip rather than a thing
         // resting on it.
-        let plateH = Dock.iconSize + Dock.padding * 2
-        let plateY = frame.y + frame.h - plateH - 6
+        let plateH = Dock.plateHeight
+        let plateY = frame.y + frame.h - plateH - Dock.plateInset
+        // Where the shelf hangs from, and the bottom of the band the pointer
+        // crosses to reach it — see `previewHoldsPointer`.
+        model.plateTop = plateY
         let radius = max(WindowBridge.desktopCornerRadius, 12)
 
         list.roundedRect(
@@ -974,13 +1159,114 @@ struct DockView: View {
         if anySliding { FrameScheduler.requestWake(in: 1.0 / 60.0) }
         if model.sliding != anySliding { model.sliding = anySliding }
 
-        if !dragging, model.menu == nil, let hovered {
+        // Where the shelf is comes first, because deciding whether it stays
+        // up is a question about *its* rectangle. Derived here rather than
+        // remembered from the last frame: the frame it opens on has no last
+        // frame to remember, and that is the one where "is the pointer still
+        // on the shelf" gets asked first.
+        let shelf: Dock.PreviewLayout? = {
+            guard let open = model.preview,
+                  let entry = entries.first(where: { $0.appId == open.appId }),
+                  let anchor = layout.centers[entry.appId]
+            else { return nil }
+            return Dock.previewLayout(
+                windows: entry.windows, anchorX: frame.x + anchor, frame: frame
+            )
+        }()
+        model.previewLayout = shelf
+
+        // The pointer's x already picked `hovered`; the shelf also cares
+        // about its y, because the pointer standing *on the shelf* shares a
+        // column with whatever icon is under it and that must not read as
+        // hovering a different application. The band is the icons' own reach
+        // — a magnified icon rises this far and no further, which is what
+        // `previewGap` was sized to clear.
+        let pointerY = PointerState.window.y
+        let onPlate = pointer != nil
+            && pointerY >= plateY + plateH - Dock.padding - Dock.magnifiedSize
+            && pointerY <= plateY + plateH
+        updatePreviewHover(over: onPlate ? hovered?.entry : nil, dragging: dragging)
+
+        if let shelf, let open = model.preview,
+           let entry = entries.first(where: { $0.appId == open.appId })
+        {
+            paintPreview(
+                list, entry: entry, layout: shelf, theme: theme,
+                pointer: PointerState.window
+            )
+        } else if !dragging, model.menu == nil, let hovered {
+            // The names on the shelf are the titles a tooltip would have
+            // said, so the two never show at once.
             paintTooltip(
                 list, title: hovered.entry.title,
                 center: hovered.center, iconTop: hovered.top,
                 frame: frame, theme: theme
             )
         }
+    }
+
+    /// Decides whether a shelf should be up, and for whom.
+    ///
+    /// Runs at paint because that is where the pointer's position and the
+    /// row's geometry are both known — but it never opens or closes anything
+    /// itself. Both of those grow or shrink the panel and make blocking
+    /// control-plane calls, so they are queued for after this frame is on
+    /// screen; `previewRequest` is what keeps paint from asking again on
+    /// every frame in between.
+    private func updatePreviewHover(over entry: DockEntry?, dragging: Bool) {
+        guard model.revealed, !dragging, model.drag == nil, model.menu == nil
+        else { return requestPreview(nil) }
+
+        if let open = model.preview {
+            if let entry, entry.appId != open.appId {
+                // Sliding along the dock to the next stacked icon switches at
+                // once: the pointer already waited out the delay to get the
+                // first shelf, and paying it again per icon reads as lag.
+                requestPreview(entry.windows.count > 1 ? entry.appId : nil)
+            } else if entry == nil, !previewHoldsPointer() {
+                requestPreview(nil)
+            }
+            return
+        }
+
+        guard let entry, entry.windows.count > 1 else {
+            model.hoverCandidate = nil
+            return
+        }
+        let now = FrameScheduler.now()
+        if model.hoverCandidate?.appId != entry.appId {
+            model.hoverCandidate = (entry.appId, now)
+        }
+        let waited = now - (model.hoverCandidate?.since ?? now)
+        if waited >= Dock.previewDelay {
+            requestPreview(entry.appId)
+        } else {
+            // Nothing else would wake the client: the pointer has stopped,
+            // and a dock at rest draws no frames.
+            FrameScheduler.requestWake(in: Dock.previewDelay - waited)
+        }
+    }
+
+    /// Queues "show this application's windows", or nil for "take it down".
+    private func requestPreview(_ appId: String?) {
+        guard model.previewRequest != appId else { return }
+        model.previewRequest = appId
+        FrameTasks.after {
+            if let appId { model.openPreview(appId) } else { model.closePreview() }
+        }
+    }
+
+    /// Whether the pointer is still on the shelf, or on the gap between it
+    /// and the plate.
+    ///
+    /// The gap is part of it on purpose. It is a real 24pt of empty surface
+    /// the pointer has to cross to reach a thumbnail, and a shelf that let go
+    /// halfway across would be a shelf that cannot be clicked.
+    private func previewHoldsPointer() -> Bool {
+        guard let strip = model.previewLayout?.strip else { return false }
+        let pointer = PointerState.window
+        return pointer.x >= strip.x - 8 && pointer.x <= strip.x + strip.w + 8
+            && pointer.y >= strip.y - 8 && pointer.y <= model.plateTop
     }
 
     /// Resting centres for every icon that stays on the plate.
@@ -1153,7 +1439,11 @@ struct DockView: View {
     /// strip so the pointer is not clipped to the icons it started on.
     private func syncInputRegion(plate: (x: Float, w: Float), frame: CanvasFrame,
                                  hasEntries: Bool) {
+        // A shelf claims the whole surface for the same reason a menu does:
+        // the click that dismisses it is the one that lands outside it, so
+        // the panel has to be what receives that click.
         let grabbing = model.drag?.active == true || model.menu != nil
+            || model.preview != nil
         let region: (x: Float, y: Float, w: Float, h: Float)
         if grabbing {
             region = (0, 0, frame.w, frame.h)
@@ -1268,7 +1558,13 @@ LavaClient.onPanelArea { covered in
     // pointer.
     if model.showsBecauseClear {
         model.revealed = true
-    } else if !model.pointerInside, model.drag == nil, model.menu == nil {
+    } else if !model.pointerInside, model.drag == nil, model.menu == nil,
+              model.preview == nil
+    {
+        // A grown panel is a taller panel, and a dock reserves nothing — so
+        // while a shelf is up the compositor reads any window in the bottom
+        // quarter of the screen as covering the dock. It does not; the plate
+        // is where it always was.
         model.revealed = false
     }
     ViewInvalidation.markNeedsRedraw()
@@ -1282,6 +1578,9 @@ PointerState.onLeave = {
         // walks off the strip; do not hide under it.
         if model.drag != nil { return }
         model.pointerInside = false
+        // The pointer is gone, and a shelf is only ever up because it is
+        // here. This is also what shrinks the panel back.
+        model.closePreview()
         guard model.revealed else { return }
         // Nothing to hide behind: the dock is out because the desktop under it
         // is clear, and the pointer wandering off is not a reason to put it

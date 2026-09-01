@@ -1016,7 +1016,8 @@ so headless test runs skip it too.
 | TraceLoom tabs and workspaces | `Sources/TraceLoomApp/{LogDocument,TraceLoomSession}.swift`, `TraceLoomCore/Workspace.swift` |
 | Panel global menu (import side) | `canvas/src/menu/menu_import.*`, `Sources/LavaUI/PanelMenu.swift` |
 | Window list / dock | `SubscribeWindows` in the IDL, `Sources/LavaDock/` |
-| 3D app switcher | `LavaSwitcher`, launched by Ctrl+Tab / Mod+Tab; live posters via `CaptureSurface` |
+| Dock window preview (hover a stack) | `Sources/LavaDock/WindowPreview.swift`; live thumbnails are `ImageSurface`, room comes from `SetPanelThickness`, freshness from `ForgetWindowPoster` |
+| 3D app switcher | `LavaSwitcher`, launched by Ctrl+Tab / Mod+Tab; live posters via `ImageSurface` (the poster cache is dropped when its overlay opens) |
 | Stream delivery to clients | `StreamPump` in `compositor/src/control_plane.cpp` |
 | Why a frame was late | `compositor/src/frame_probe.*` (`LAVA_FRAME_PROBE=1`) |
 | When a frame is drawn (pacing) | `SurfaceRegistry::animate`, `Output::on_frame` |

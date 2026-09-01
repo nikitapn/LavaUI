@@ -637,6 +637,26 @@ public enum LavaClient {
         }
     }
 
+    /// Drops the compositor's cached poster for a window.
+    ///
+    /// A poster is the picture an `ImageSurface` draw command resolves to, and
+    /// the compositor keeps it so a shelf of windows costs one dma-buf import
+    /// rather than one per frame. That cache is what a *long-lived* shell has
+    /// to say something about: the switcher is spawned per invocation and gets
+    /// a clean cache with its overlay, while a dock is here all session and
+    /// would show the same picture the second time an icon is hovered.
+    ///
+    /// Say it once when a preview opens, for the windows about to be drawn —
+    /// not per frame, which would recapture the whole shelf at 60 Hz.
+    public static func forgetWindowPoster(_ surfaceId: UInt32) {
+        guard let compositor = Self.compositor, surfaceId != 0 else { return }
+        report("ForgetWindowPoster") {
+            try blockingCall {
+                try await compositor.forgetWindowPoster(surfaceId: surfaceId)
+            }
+        }
+    }
+
     /// States the smallest this window is willing to be.
     ///
     /// A layout has a size below which it stops being one, and only the

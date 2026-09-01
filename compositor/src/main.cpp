@@ -5749,11 +5749,17 @@ class SurfaceRegistry : public lava::CompositorHost {
                                                               maxSide);
   }
 
-  std::string posterKey(uint32_t surfaceId, uint32_t maxSide) const {
-    // Generation is in the TextureManager key so an entry from the last
-    // session cannot be revived under the same name — which is also why
-    // these are discarded rather than released when the overlay goes.
-    return "poster:" + std::to_string(posterGen_) + ":" +
+  /// A name no poster has worn before.
+  ///
+  /// The generation is what makes a *discarded* poster safe to replace: the
+  /// cache drops entries and re-imports the same window at the same size —
+  /// once per switcher session, and once per dock preview — and reusing the
+  /// string would hand the TextureManager a key it has just been told to
+  /// forget. Counted per entry rather than per session so a single window
+  /// refreshing does not need the whole map to turn over. Same shape as
+  /// `blurGen` on a surface, and for the same reason.
+  std::string mintPosterKey(uint32_t surfaceId, uint32_t maxSide) {
+    return "poster:" + std::to_string(++posterGen_) + ":" +
            std::to_string(surfaceId) + ":" + std::to_string(maxSide);
   }
 
@@ -5762,12 +5768,12 @@ class SurfaceRegistry : public lava::CompositorHost {
     const uint64_t cacheKey =
         (static_cast<uint64_t>(surfaceId) << 32) | maxSide;
     if (const auto it = posters_.find(cacheKey); it != posters_.end()) {
-      return it->second;
+      return it->second.texture;
     }
     ClientSurface *surface = find(surfaceId);
     if (surface == nullptr) return 0;
 
-    const std::string texKey = posterKey(surfaceId, maxSide);
+    const std::string texKey = mintPosterKey(surfaceId, maxSide);
     int id = 0;
 
     if (surface->canvas) {
@@ -5812,7 +5818,7 @@ class SurfaceRegistry : public lava::CompositorHost {
       }
     }
 
-    if (id > 0) posters_[cacheKey] = id;
+    if (id > 0) posters_[cacheKey] = Poster{id, texKey};
     return id;
   }
 
@@ -5821,29 +5827,27 @@ class SurfaceRegistry : public lava::CompositorHost {
   // `CanvasRenderer::discardImage`. Parking them instead cost a quarter of a
   // gigabyte of dead screenshots on a long session, one Alt+Tab at a time.
   void forgetPosters(uint32_t surfaceId) {
-    if (renderer_ == nullptr) return;
     for (auto it = posters_.begin(); it != posters_.end();) {
       if ((it->first >> 32) != surfaceId) {
         ++it;
         continue;
       }
-      renderer_->discardImage(
-          posterKey(surfaceId, static_cast<uint32_t>(it->first)));
+      if (renderer_ != nullptr) renderer_->discardImage(it->second.key);
       it = posters_.erase(it);
     }
   }
 
   void invalidatePosters() {
     if (renderer_ != nullptr) {
-      for (const auto &[key, id] : posters_) {
-        (void)id;
-        renderer_->discardImage(posterKey(static_cast<uint32_t>(key >> 32),
-                                          static_cast<uint32_t>(key)));
+      for (const auto &[cacheKey, poster] : posters_) {
+        (void)cacheKey;
+        renderer_->discardImage(poster.key);
       }
     }
     posters_.clear();
-    ++posterGen_;
   }
+
+  void forgetWindowPoster(uint32_t id) override { forgetPosters(id); }
 
   bool captureSurface(uint32_t id, int32_t x, int32_t y, int32_t w, int32_t h,
                       int32_t maxSide, std::vector<uint8_t> &outPng,
@@ -6289,11 +6293,18 @@ class SurfaceRegistry : public lava::CompositorHost {
   /// matters; 30 is where it stops being visible, because the thing being
   /// resampled has already had every high frequency blurred out of it.
   static constexpr auto kLiveFrostInterval = std::chrono::milliseconds(33);
-  /// `ImageSurface` posters, keyed by `(surfaceId << 32) | maxSide`.
-  /// Lives for one switcher session; `posterGen_` is in the texture key
-  /// so TextureManager cannot revive last session's pixels.
-  std::unordered_map<uint64_t, int> posters_;
-  uint32_t posterGen_ = 1;
+  /// An imported window poster and the TextureManager name it was given.
+  /// The name is kept rather than recomputed because it carries the
+  /// generation this entry was minted with — see `mintPosterKey`.
+  struct Poster {
+    int texture = 0;
+    std::string key;
+  };
+  /// `ImageSurface` posters, keyed by `(surfaceId << 32) | maxSide`. Dropped
+  /// wholesale when the switcher opens or closes, per surface when a window
+  /// goes away, and per surface on `ForgetWindowPoster`.
+  std::unordered_map<uint64_t, Poster> posters_;
+  uint32_t posterGen_ = 0;
   /// Never reused, so a stale id from a closed surface fails to resolve rather
   /// than quietly addressing whatever opened next.
   uint32_t nextId_ = 1;

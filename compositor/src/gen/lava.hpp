@@ -1978,6 +1978,7 @@ public:
   virtual ::nprpc::Task<> SubscribeInput (uint32_t surfaceId, ::nprpc::BidiStream<InputAck, InputEvent> stream) = 0;
   virtual std::vector<std::string> TakeDroppedPaths (uint32_t surfaceId) = 0;
   virtual Capture CaptureSurface (uint32_t surfaceId, int32_t x, int32_t y, int32_t w, int32_t h, int32_t maxSide) = 0;
+  virtual void ForgetWindowPoster (uint32_t surfaceId) = 0;
   virtual std::string GetClipboard (uint32_t surfaceId) = 0;
   virtual void SetClipboard (uint32_t surfaceId, ::nprpc::flat::Span<char> text) = 0;
   virtual std::string GetPrimarySelection (uint32_t surfaceId) = 0;
@@ -2076,6 +2077,8 @@ public:
   ::nprpc::Task<std::vector<std::string>> TakeDroppedPathsAsync (uint32_t surfaceId, std::stop_token st = {});
   Capture CaptureSurface (uint32_t surfaceId, int32_t x, int32_t y, int32_t w, int32_t h, int32_t maxSide);
   ::nprpc::Task<Capture> CaptureSurfaceAsync (uint32_t surfaceId, int32_t x, int32_t y, int32_t w, int32_t h, int32_t maxSide, std::stop_token st = {});
+  void ForgetWindowPoster (uint32_t surfaceId);
+  ::nprpc::Task<void> ForgetWindowPosterAsync (uint32_t surfaceId, std::stop_token st = {});
   std::string GetClipboard (uint32_t surfaceId);
   ::nprpc::Task<std::string> GetClipboardAsync (uint32_t surfaceId, std::stop_token st = {});
   void SetClipboard (uint32_t surfaceId, const std::string& text);

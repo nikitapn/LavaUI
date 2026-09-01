@@ -1659,6 +1659,27 @@ interface Compositor {
                          w: in i32, h: in i32, maxSide: in i32)
       raises(SurfaceNotFound, CaptureFailed);
 
+  /// Forget the cached poster for a window, so the next `ImageSurface` that
+  /// names it imports the buffer that window is showing *now*.
+  ///
+  /// Posters are cached per `(surface, maxSide)` because a shelf of twenty
+  /// windows must not re-import twenty dma-bufs on every frame. The switcher
+  /// never needs to say this: it is spawned per invocation, and the cache is
+  /// dropped when its overlay opens and again when it closes. A dock is the
+  /// opposite kind of client — it lives for the whole session — so hovering
+  /// an icon a second time would otherwise show the picture taken the first
+  /// time, which is a screenshot of the past presented as a preview.
+  ///
+  /// Cheap: dropping a poster costs one texture, and the next resolve is a
+  /// dma-buf import on the same device, not a readback. Say it once when the
+  /// preview opens rather than per frame — a poster re-imported every frame
+  /// is a capture of the whole shelf at 60 Hz.
+  ///
+  /// An unknown id is a no-op rather than an error: a window that closed
+  /// between the hover and this call has no poster to drop, which is the
+  /// answer the caller wanted.
+  void ForgetWindowPoster(surfaceId: in u32);
+
   // ─── Clipboard ─────────────────────────────────────────────────────────
   //
   // For the same reason input is here: the selection belongs to the display
