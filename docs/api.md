@@ -907,6 +907,39 @@ symbol font, content scale, and shape caches.
 values support fade/offset animation with `.linear`, `.easeOut`, or
 `.easeInOut` curves.
 
+`Animated<T>` is the imperative half, for code that paints rather than
+composes — a `Canvas`. It holds a current and a target value, `animate(to:
+duration:curve:)` retargets from wherever the value is now, and `step(_ now:)`
+advances it and returns whether it is still moving.
+
+### Scheduling frames
+
+A frame reaches the screen only when two separate things are true: the loop is
+awake, and the window is dirty. It parks in `pumpEvents` when nothing is
+happening, and `present` emits nothing while the window is clean.
+
+- `ViewInvalidation.markNeedsRedraw()` — and `markNeedsLayout()`,
+  `markNeedsBody()` — say a frame is *needed*. Ordinary state changes do this
+  for you; a `Canvas` that draws from something observation cannot see does
+  not, and has to say so itself.
+- `FrameScheduler.requestWake(in:)` says *when to look again*. It unparks the
+  loop and nothing more.
+- `FrameScheduler.requestRedraw(in:)` does both: it unparks the loop at that
+  deadline and marks the frame due when the deadline arrives.
+
+Use `requestWake` when something else will dirty the window at that moment —
+an `AnimationDriver` tick, a caret blink, a poll that will usually find
+nothing. Use `requestRedraw` when the deadline *is* the event: a hover that
+opens something after a delay, a fade with no view node behind it, anything a
+`Canvas` decides at paint time. Choosing wrong is invisible while the pointer
+keeps moving, because input dirties the window anyway, and shows up the moment
+the user holds still — which for a hover delay is every time.
+
+Both are earliest-wins and single-shot: two callers asking for 500ms and 16ms
+get one wake at 16ms, and an animation that wants another frame asks again
+every frame. `Canvas(continuousRedraw: true)` is the standing version, for a
+canvas that needs a frame for as long as it is on screen.
+
 ## Files, settings, and diagnostics
 
 `FileDialog.openFile`, `openFiles`, and `saveFile` provide native-style file

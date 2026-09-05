@@ -44,9 +44,29 @@ import LavaUI
 /// gone.
 struct DockPreview {
     var appId: String
+    /// Dismissed, and only still here to finish leaving. A closing shelf is
+    /// painted and nothing else: it answers no clicks, holds no input region,
+    /// and does not keep the dock out. See `DockModel.closePreview`.
+    var closing = false
 }
 
 extension Dock {
+    /// How long the shelf takes to arrive, and to leave.
+    ///
+    /// It is a real object appearing over the desktop, and appearing is
+    /// something objects do in a moment rather than instantly — one frame from
+    /// nothing to a full shelf of windows reads as a glitch, which is what it
+    /// looked like. Out is quicker than in: whatever is leaving should get out
+    /// of the way faster than it arrived, or dismissing feels sticky.
+    static let previewFadeIn: Double = 0.14
+    static let previewFadeOut: Double = 0.09
+    /// How far below its resting place the shelf starts, and sinks back to.
+    ///
+    /// Small on purpose. The shelf belongs to the icon under it, so it rises
+    /// out of the dock rather than flying in from anywhere; more than about a
+    /// card's padding stops reading as "out of" and starts reading as "past".
+    static let previewRise: Float = 10
+
     /// How long the pointer has to rest on an icon before the shelf opens.
     ///
     /// Long enough that crossing the dock on the way somewhere else opens
@@ -115,6 +135,23 @@ extension Dock {
     struct PreviewLayout {
         var strip: (x: Float, y: Float, w: Float, h: Float)
         var cards: [PreviewCard]
+
+        /// The same shelf, moved `dy` down the screen.
+        ///
+        /// For paint only. Hit tests keep using the resting rectangles, so a
+        /// click during the 140ms it is arriving lands on the card the user
+        /// aimed at rather than the one that happens to be under the pointer
+        /// mid-flight.
+        func lowered(by dy: Float) -> PreviewLayout {
+            guard dy != 0 else { return self }
+            var copy = self
+            copy.strip.y += dy
+            for index in copy.cards.indices {
+                copy.cards[index].rect.y += dy
+                copy.cards[index].thumb.y += dy
+            }
+            return copy
+        }
 
         /// Which card is at this point, in surface coordinates.
         func card(atX x: Float, y: Float) -> PreviewCard? {
@@ -239,42 +276,57 @@ extension Dock {
 }
 
 extension DockView {
-    /// The shelf: a plate, a card per window, a live picture in each.
+    /// The shelf: a plate, a card per window, a live picture in each — at
+    /// `progress` along its arrival, where 0 is gone and 1 is there.
+    ///
+    /// Everything fades together and the whole thing rides up out of the dock.
+    /// That also covers the frame or two where a poster has been named but not
+    /// yet resolved: such a card draws its application's icon instead, and at
+    /// a fifth of full opacity nobody sees it swap.
     func paintPreview(
         _ list: DrawList, entry: DockEntry, layout: Dock.PreviewLayout,
-        theme: Theme, pointer: (x: Float, y: Float)
+        theme: Theme, pointer: (x: Float, y: Float), progress: Float
     ) {
-        let strip = layout.strip
+        let alpha = max(0, min(1, progress))
+        // Below this it is one more draw list for nothing.
+        guard alpha > 0.01 else { return }
+        let shown = layout.lowered(by: (1 - alpha) * Dock.previewRise)
+
+        let strip = shown.strip
         list.roundedRect(
             x: strip.x, y: strip.y, w: strip.w, h: strip.h,
-            color: Color(r: theme.panel.r, g: theme.panel.g, b: theme.panel.b,
-                         a: 0.96),
+            color: fade(Color(r: theme.panel.r, g: theme.panel.g,
+                              b: theme.panel.b, a: 0.96), alpha),
             radius: Dock.previewStripRadius
         )
         list.strokedRect(
             x: strip.x, y: strip.y, w: strip.w, h: strip.h,
-            color: theme.border.opacity(0.6),
+            color: fade(theme.border.opacity(0.6), alpha),
             radius: Dock.previewStripRadius, width: 1
         )
 
+        // Hovering is asked of the resting shelf, for the same reason clicking
+        // is: what the pointer is on should not depend on how far along the
+        // animation is.
         let hovered = layout.card(atX: pointer.x, y: pointer.y)?.surfaceId
-        for card in layout.cards {
+        for card in shown.cards {
             paintPreviewCard(
                 list, entry: entry, card: card, theme: theme,
-                hovered: card.surfaceId == hovered
+                hovered: card.surfaceId == hovered, alpha: alpha
             )
         }
     }
 
     private func paintPreviewCard(
         _ list: DrawList, entry: DockEntry, card: Dock.PreviewCard,
-        theme: Theme, hovered: Bool
+        theme: Theme, hovered: Bool, alpha: Float
     ) {
         let rect = card.rect
         if hovered || card.focused {
             list.roundedRect(
                 x: rect.x, y: rect.y, w: rect.w, h: rect.h,
-                color: hovered ? theme.hover : theme.selected.opacity(0.5),
+                color: fade(hovered ? theme.hover
+                                    : theme.selected.opacity(0.5), alpha),
                 radius: 8
             )
         }
@@ -286,7 +338,7 @@ extension DockView {
         let thumb = card.thumb
         list.roundedRect(
             x: thumb.x, y: thumb.y, w: thumb.w, h: thumb.h,
-            color: theme.inset, radius: 4
+            color: fade(theme.inset, alpha), radius: 4
         )
         if let poster = model.previewPosters[card.surfaceId] {
             let picture = Dock.fit(
@@ -296,8 +348,9 @@ extension DockView {
             )
             list.image(
                 poster, x: picture.x, y: picture.y, w: picture.w, h: picture.h,
-                tint: card.minimized
-                    ? Color(r: 1, g: 1, b: 1, a: 0.55) : Color(r: 1, g: 1, b: 1)
+                tint: fade(card.minimized
+                    ? Color(r: 1, g: 1, b: 1, a: 0.55)
+                    : Color(r: 1, g: 1, b: 1), alpha)
             )
         } else if let icon = model.icon(for: entry) {
             let side = min(48, min(thumb.w, thumb.h) * 0.6)
@@ -305,12 +358,14 @@ extension DockView {
                 icon,
                 x: thumb.x + (thumb.w - side) * 0.5,
                 y: thumb.y + (thumb.h - side) * 0.5,
-                w: side, h: side
+                w: side, h: side,
+                tint: fade(Color(r: 1, g: 1, b: 1), alpha)
             )
         }
         list.strokedRect(
             x: thumb.x, y: thumb.y, w: thumb.w, h: thumb.h,
-            color: card.focused ? theme.accent : theme.border.opacity(0.7),
+            color: fade(card.focused ? theme.accent
+                                     : theme.border.opacity(0.7), alpha),
             radius: 4, width: card.focused ? 1.5 : 1
         )
 
@@ -326,10 +381,18 @@ extension DockView {
             x: rect.x + (rect.w - textW) * 0.5 - 4,
             y: thumb.y + thumb.h + Dock.previewTitleGap,
             w: textW + 8, h: Dock.previewTitleHeight,
-            color: card.minimized
+            color: fade(card.minimized
                 ? theme.textDim
                 : (card.focused ? theme.textPrimary : theme.textSecondary),
+                alpha),
             font: font
         )
     }
+}
+
+/// A colour dimmed by the shelf's progress, keeping whatever alpha it already
+/// had. There is no group opacity in a draw list — every command carries its
+/// own colour — so fading a panel means fading each thing on it.
+private func fade(_ color: Color, _ alpha: Float) -> Color {
+    alpha >= 1 ? color : color.opacity(color.a * alpha)
 }

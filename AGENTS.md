@@ -58,6 +58,15 @@ Linux + Swift 6 + C++ interop only for anything that links the engine.
 Invalidation levels: `.none` / `.redraw` / `.layout` / `.body`. A pure redraw
 skips body and layout. `LAVAUI_DEBUG=1` prints per-frame stage timings.
 
+**A wake is not a frame.** The loop parks in `pumpEvents`, and `present` emits
+nothing while the window is clean — so `FrameScheduler.requestWake(in:)` on its
+own buys an iteration that does no work. That is correct for anything that
+dirties the window from its own tick (`AnimationDriver`, the caret blink).
+Anything whose *deadline is the event* — a hover delay, a fade a `Canvas`
+drives itself, a timed dismiss — wants `FrameScheduler.requestRedraw(in:)`,
+which also marks the frame due. The difference is invisible while the pointer
+is moving and freezes the instant it stops.
+
 ### The shared renderer (scene tree) — read this before touching scroll or hover
 
 The compositor's canvas is not a dumb blitter. A draw list carries **scene

@@ -172,6 +172,12 @@ public enum LavaApp {
             // the wait (and any more that show up while dispatching).
             main.menuHost?.poll()
 
+            // A frame that came due while the loop was parked. Before the
+            // windows update, so it is part of this iteration rather than
+            // waiting on the next thing to happen — which, for a delay armed
+            // by the pointer coming to rest, may be nothing at all.
+            FrameScheduler.serviceRedraw()
+
             // Input and sizing for every window first, so the animation tick
             // below sees this iteration's visibility rather than last one's.
             // Once per iteration for the whole process, before any window

@@ -368,6 +368,41 @@ public enum FrameScheduler {
     }
 
     public static var hasPendingWake: Bool { deadline != nil }
+
+    // ─── Waking up *with* a frame ────────────────────────────────────────
+
+    /// When a frame is owed, as opposed to merely a wake.
+    nonisolated(unsafe) private static var redrawDeadline: Double?
+
+    /// Requests a *frame* no later than `seconds` from now.
+    ///
+    /// `requestWake` alone is not enough for anything that comes due on its
+    /// own. It unparks the loop, but `present` emits nothing while the window
+    /// is clean, so the loop wakes, finds no work and parks again — and code
+    /// that decides at paint time ("has the pointer rested here long enough
+    /// yet?") never gets asked again. That is invisible for an animation,
+    /// which dirties the window from its own tick, and fatal for a delay: the
+    /// pointer stopping is the whole gesture, so nothing else is coming to
+    /// wake it. Use this whenever the deadline itself is the event.
+    public static func requestRedraw(in seconds: Double) {
+        let at = now() + max(0, seconds)
+        if redrawDeadline == nil || at < redrawDeadline! { redrawDeadline = at }
+        requestWake(in: seconds)
+    }
+
+    /// Marks the owed frame dirty once it is due. Called once per loop
+    /// iteration, after the wait.
+    ///
+    /// A wake that arrives early — unrelated input, an agent, a D-Bus pump —
+    /// re-arms the wake rather than dropping it, because the one that was
+    /// asked for has already been consumed by `timeoutUntilNextWake`.
+    public static func serviceRedraw() {
+        guard let at = redrawDeadline else { return }
+        let t = now()
+        guard t >= at else { return requestWake(in: at - t) }
+        redrawDeadline = nil
+        ViewInvalidation.markNeedsRedraw()
+    }
 }
 
 /// Work deferred until the current frame is on screen.

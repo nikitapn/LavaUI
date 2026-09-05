@@ -129,7 +129,17 @@ final class DockModel {
     var drag: DockDrag?
     var menu: DockContextMenu?
     /// The window shelf that is up, if one is. See `WindowPreview.swift`.
+    /// Still set while one is fading out — ask `livePreview` for the shelf
+    /// that is actually there to be used.
     var preview: DockPreview?
+    /// The shelf as far as everything except paint is concerned. One that has
+    /// been dismissed stops answering the moment it is dismissed, rather than
+    /// at the end of its animation: a click during the fade belongs to
+    /// whatever is behind it, which is what the user was already reaching for.
+    var livePreview: DockPreview? {
+        guard let preview, !preview.closing else { return nil }
+        return preview
+    }
     /// True while neighbour icons are still catching up to a hole.
     /// Drives `continuousRedraw` for the few hundred milliseconds a
     /// slide lasts — not while the dock is merely out.
@@ -205,6 +215,10 @@ final class DockModel {
     /// Panel thickness the compositor currently has. The dock grows for a
     /// shelf and shrinks again after — see `setPanelHeight`.
     @ObservationIgnored var panelHeight: Float = Dock.height
+    /// How far along the shelf's arrival is: 0 gone, 1 there. Paint reads it
+    /// for opacity and for the rise, and stepping it to 0 is what finally
+    /// takes a dismissed shelf down.
+    @ObservationIgnored var previewFade = Animated<Float>(0)
 
     func loadCatalog() {
         let installed = DesktopEntry.installed()
@@ -510,13 +524,34 @@ final class DockModel {
         guard let entry = entries.first(where: { $0.appId == appId }),
               entry.windows.count > 1
         else { return closePreview() }
-        guard preview?.appId != appId else { return }
+
+        // Already this application's shelf. If it was on its way out, catch
+        // it: the pictures are still bound and the panel is still tall, so
+        // coming back is a matter of turning the fade around. A shelf that
+        // blinked out and rebuilt itself here would be the worse answer to
+        // the same flick of the pointer.
+        if var open = preview, open.appId == appId {
+            guard open.closing else { return }
+            open.closing = false
+            preview = open
+            previewFade.animate(
+                to: 1, duration: Dock.previewFadeIn, curve: .easeOut
+            )
+            ViewInvalidation.markNeedsRedraw()
+            return
+        }
 
         menu = nil
         hoverCandidate = nil
         setPanelHeight(Dock.openHeight)
         bindPosters(of: entry)
+        // A shelf switching to the neighbouring icon is already on screen and
+        // stays there; only one arriving from nothing rises.
+        if preview == nil { previewFade.snap(to: 0) }
         preview = DockPreview(appId: appId)
+        previewFade.animate(
+            to: 1, duration: Dock.previewFadeIn, curve: .easeOut
+        )
         ViewInvalidation.markNeedsRedraw()
     }
 
@@ -566,13 +601,34 @@ final class DockModel {
         if shown != live { bindPosters(of: entry) }
     }
 
+    /// Dismisses the shelf. It stops answering now and stops being drawn a
+    /// tenth of a second from now — see `DockView.stepPreviewFade`, which is
+    /// what calls `finishClosePreview`.
     func closePreview() {
         previewRequest = nil
         hoverCandidate = nil
+        guard var open = preview else { return }
+        // Nothing to watch leave: the dock is not on screen, and a fade
+        // nobody can see is a panel that stays tall for no reason.
+        guard revealed else { return finishClosePreview() }
+        guard !open.closing else { return }
+        open.closing = true
+        preview = open
+        previewFade.animate(
+            to: 0, duration: Dock.previewFadeOut, curve: .linear
+        )
+        ViewInvalidation.markNeedsRedraw()
+    }
+
+    /// The end of the fade: the shelf stops existing and the panel goes back
+    /// to being a dock. Runs after a frame, never inside one — it resizes the
+    /// surface and makes a blocking call to do it.
+    func finishClosePreview() {
         guard preview != nil else { return }
         preview = nil
         previewPosters = [:]
         previewLayout = nil
+        previewFade.snap(to: 0)
         setPanelHeight(Dock.height)
         ViewInvalidation.markNeedsRedraw()
     }
@@ -969,9 +1025,9 @@ struct DockView: View {
             // it — including the ones that miss a card, which are how it is
             // dismissed. Below the plate's top the dock's own handling
             // continues, so the icon under the shelf still clicks.
-            if model.preview != nil, gesture.localY < model.plateTop {
+            if model.livePreview != nil, gesture.localY < model.plateTop {
                 if gesture.button == PointerButton.left,
-                   let appId = model.preview?.appId,
+                   let appId = model.livePreview?.appId,
                    let card = model.previewLayout?.card(
                        atX: gesture.localX, y: gesture.localY
                    )
@@ -1158,6 +1214,12 @@ struct DockView: View {
         // clickable strip a few hundred pixels from the icons.
         syncInputRegion(plate: plate, frame: frame, hasEntries: !entries.isEmpty)
 
+        // Before the guard, not after it: the dock hiding is one of the ways a
+        // shelf gets dismissed, and the end of that fade is what gives the
+        // panel its height back. Landing has to happen whether or not there is
+        // anything left to draw it over.
+        stepPreviewFade()
+
         guard model.revealed, !entries.isEmpty else { return }
 
         let theme = Theme.current
@@ -1246,7 +1308,11 @@ struct DockView: View {
             model.separatorSlide = nil
         }
 
-        if anySliding { FrameScheduler.requestWake(in: 1.0 / 60.0) }
+        // A redraw rather than a wake: these positions are computed here, in
+        // paint, and a wake that leaves the window clean draws none of them —
+        // a slide that outlives the pointer's last motion would freeze
+        // halfway. Same reason the shelf's fade asks for one.
+        if anySliding { FrameScheduler.requestRedraw(in: 1.0 / 60.0) }
         if model.sliding != anySliding { model.sliding = anySliding }
 
         // Where the shelf is comes first, because deciding whether it stays
@@ -1282,7 +1348,8 @@ struct DockView: View {
         {
             paintPreview(
                 list, entry: entry, layout: shelf, theme: theme,
-                pointer: PointerState.window
+                pointer: PointerState.window,
+                progress: model.previewFade.current
             )
         } else if !dragging, model.menu == nil, let hovered {
             // The names on the shelf are the titles a tooltip would have
@@ -1308,12 +1375,15 @@ struct DockView: View {
         else { return requestPreview(nil) }
 
         if let open = model.preview {
-            if let entry, entry.appId != open.appId {
+            if let entry, entry.appId != open.appId || open.closing {
                 // Sliding along the dock to the next stacked icon switches at
                 // once: the pointer already waited out the delay to get the
-                // first shelf, and paying it again per icon reads as lag.
+                // first shelf, and paying it again per icon reads as lag. A
+                // shelf still fading out counts as up for the same reason —
+                // it is on screen, so coming back to it is catching it, not
+                // starting over.
                 requestPreview(entry.windows.count > 1 ? entry.appId : nil)
-            } else if entry == nil, !previewHoldsPointer() {
+            } else if entry == nil, !open.closing, !previewHoldsPointer() {
                 requestPreview(nil)
             }
             return
@@ -1332,9 +1402,30 @@ struct DockView: View {
             requestPreview(entry.appId)
         } else {
             // Nothing else would wake the client: the pointer has stopped,
-            // and a dock at rest draws no frames.
-            FrameScheduler.requestWake(in: Dock.previewDelay - waited)
+            // and a dock at rest draws no frames. It has to be a *redraw* —
+            // the decision above is made at paint, so a wake that leaves the
+            // window clean is a wake that never asks again.
+            FrameScheduler.requestRedraw(in: Dock.previewDelay - waited)
         }
+    }
+
+    /// Advances the shelf's arrival or departure, and takes a departed one
+    /// down.
+    ///
+    /// The fade is driven from paint because paint is what draws it, which
+    /// means asking for the next frame has to be a `requestRedraw`: a wake
+    /// alone leaves the window clean, and the loop would park with the shelf
+    /// stopped halfway. Landing is queued for after the frame like every other
+    /// panel resize here — `finishClosePreview` changes the size this very
+    /// draw list is being measured against.
+    private func stepPreviewFade() {
+        guard model.preview != nil else { return }
+        if model.previewFade.step(FrameScheduler.now()) {
+            FrameScheduler.requestRedraw(in: 1.0 / 60.0)
+            return
+        }
+        guard model.preview?.closing == true else { return }
+        FrameTasks.after { model.finishClosePreview() }
     }
 
     /// Queues "show this application's windows", or nil for "take it down".
@@ -1533,7 +1624,7 @@ struct DockView: View {
         // the click that dismisses it is the one that lands outside it, so
         // the panel has to be what receives that click.
         let grabbing = model.drag?.active == true || model.menu != nil
-            || model.preview != nil
+            || model.livePreview != nil
         let region: (x: Float, y: Float, w: Float, h: Float)
         if grabbing {
             region = (0, 0, frame.w, frame.h)
@@ -1650,7 +1741,7 @@ LavaClient.onPanelArea { covered in
     if model.showsBecauseClear {
         model.revealed = true
     } else if !model.pointerInside, model.drag == nil, model.menu == nil,
-              model.preview == nil
+              model.livePreview == nil
     {
         // A grown panel is a taller panel, and a dock reserves nothing — so
         // while a shelf is up the compositor reads any window in the bottom
