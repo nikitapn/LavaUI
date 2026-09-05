@@ -1041,7 +1041,16 @@ public final class DrawList {
         // the clip stack is balanced by now — are not scissored by whatever
         // ancestor the presenter happened to sit inside.
         var compositorFrosted = false
-        for pending in pendingOverlays {
+        // By index, because emitting one overlay can append another: a menu's
+        // submenu is presented from inside the menu's own subtree, and its
+        // anchor is only known once the row it hangs off has been laid out
+        // here. Appended entries are picked up by this same loop, after the
+        // overlay that owns them, which is also the order they have to paint
+        // in.
+        var pendingIndex = 0
+        while pendingIndex < pendingOverlays.count {
+            let pending = pendingOverlays[pendingIndex]
+            pendingIndex += 1
             let att = pending.attachment
             att.layoutAndPlace(
                 anchorX: pending.x, anchorY: pending.y,

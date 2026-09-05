@@ -550,13 +550,12 @@ exists**.
 | Wayland global menu | Not required for v1; use Vulkan fallback |
 | Overlay vs native | Overlay only for fallback and in-canvas UI; command menus prefer OS |
 | `menuH` | Non-zero for Win32 native bar only; Vulkan fallback embeds the strip in the view tree (`menuH` stays 0) |
+| Nested submenus | A second overlay level: the row keeps its children and presents its own `MenuDropdownPanel` beside itself, opening on hover, flipping to the left when the right side is out of room. Overlays nest — `OverlayScan` steps across an attachment root, and `emitTree` walks the pending list by index so one presented from inside another is laid out and painted after it |
 
 ## Open questions
 
 - Exact probe for “Registrar available” (name owner vs successful
   `RegisterWindow`).
-- Whether nested submenus in the Vulkan fallback need a second overlay level
-  or a single sliding panel.
 - Icon support on items (defer; labels first).
 - Whether `LAVA_MENU=dbus|vulkan|auto` is worth documenting for users or only
   for developers.

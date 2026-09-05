@@ -335,6 +335,9 @@ public struct MenuDropdownPanel: View {
     public var entries: [MenuEntry]
     public var onActivate: (MenuID) -> Void
     public var style: MenuBarStyle
+    /// The submenu flown out from this panel, if one is. One at a time: a
+    /// menu is a path down a tree, not a set of open branches.
+    @State private var openSubmenu: MenuID?
 
     public init(
         entries: [MenuEntry],
@@ -366,29 +369,103 @@ public struct MenuDropdownPanel: View {
     @ViewBuilder
     private func rowView(_ row: MenuRow) -> some View {
         let theme = Environment.current.theme
-        let indent = String(repeating: "  ", count: row.indent)
         switch row.kind {
         case .separator:
             Divider()
                 .padding(EdgeInsets(top: 2, leading: 6, bottom: 2, trailing: 6))
-        case .header(let title):
-            Text(indent + title, color: theme.textSecondary)
-                .padding(style.itemPadding)
-                .agentId("menu.\(row.id.raw)")
         case .item(let item):
-            itemRow(item, indentPrefix: indent, theme: theme)
+            itemRow(item, theme: theme)
+        case .submenu(let node):
+            submenuRow(node, theme: theme)
         }
     }
 
+    /// A row that opens a panel of its own beside this one.
+    ///
+    /// Hover opens it, the way a menu bar's titles open on hover once one is
+    /// up: by the time the pointer is resting on a row with an arrow on it,
+    /// the user has said which branch they want. Clicking does the same, for
+    /// a pointer that arrived by keyboard-like jumps or a tap.
     @ViewBuilder
-    private func itemRow(_ item: MenuItemModel, indentPrefix: String, theme: Theme) -> some View {
+    private func submenuRow(_ node: MenuNode, theme: Theme) -> some View {
+        let open = openSubmenu == node.id
+        let nodeID = node.id
+        let activate = onActivate
+        let inner = style
+        let row = HStack(
+            padding: 0,
+            alignment: .center,
+            onClick: { openSubmenu = open ? nil : nodeID },
+            onHover: { inside in if inside { openSubmenu = nodeID } }
+        ) {
+            Text(node.title, color: theme.textPrimary)
+            Spacer()
+            // The arrow is the only thing that says this row is a door rather
+            // than a command, and it is what a person looks for.
+            Text("›", color: open ? theme.textPrimary : theme.textDim)
+        }
+        .padding(style.itemPadding)
+        .cornerRadius(style.itemCornerRadius)
+        .hoverBackground(style.itemHover)
+        .agentId("menu.\(node.id.raw)")
+
+        row.overlay(
+            isPresented: Binding(
+                get: { openSubmenu == nodeID },
+                set: { shown in
+                    if !shown, openSubmenu == nodeID { openSubmenu = nil }
+                }
+            ),
+            placement: Self.flyOut,
+            style: style.overlayStyle
+        ) {
+            MenuDropdownPanel(
+                entries: node.items,
+                onActivate: { id in
+                    // The whole path closes, not just the branch: choosing an
+                    // item is the end of the interaction, and the panel above
+                    // this one is dismissed by whoever presented it.
+                    openSubmenu = nil
+                    activate(id)
+                },
+                style: inner
+            )
+        }
+    }
+
+    /// Beside the row, not under it, with its top edge level with the row's.
+    ///
+    /// Two pixels of overlap on purpose: the pointer has to cross from the row
+    /// into the panel, and a gap is a place for it to land on nothing and
+    /// close what it was reaching for. Flips to the left when the right side
+    /// is out of room, which on a panel menu near the screen's edge is the
+    /// ordinary case rather than the exception.
+    static let flyOut = OverlayPlacement { context in
+        let width = context.idealSize.width
+        let height = context.idealSize.height
+        let right = context.anchor.x + context.anchor.width - 2
+        let left = context.anchor.x - width + 2
+        let x = right + width <= context.viewport.width
+            ? right
+            : max(0, left)
+        // Level with the row it came from, pulled up when the panel would run
+        // off the bottom — a submenu is read from its first item down.
+        let y = min(
+            max(0, context.anchor.y - 4),
+            max(0, context.viewport.height - height)
+        )
+        return OverlayFrame(x: x, y: y, width: width, height: height)
+    }
+
+    @ViewBuilder
+    private func itemRow(_ item: MenuItemModel, theme: Theme) -> some View {
         let enabled = item.isEnabled
         let color = enabled ? theme.textPrimary : theme.textDim
         let check: String = {
             guard let checked = item.isChecked else { return "" }
             return checked ? "✓ " : "  "
         }()
-        let title = indentPrefix + check + item.title
+        let title = check + item.title
         let shortcut = item.shortcut.map(MenuShortcutLabel.format) ?? ""
         let activate = onActivate
         let itemID = item.id
@@ -400,7 +477,11 @@ public struct MenuDropdownPanel: View {
         let row = HStack(
             padding: 0,
             alignment: .center,
-            onClick: enabled ? { activate(itemID) } : nil
+            onClick: enabled ? { activate(itemID) } : nil,
+            // Crossing an ordinary row is leaving the branch: the fly-out it
+            // opened goes with it, or the pointer ends up choosing from a
+            // panel that belongs to a row it has walked past.
+            onHover: { inside in if inside { openSubmenu = nil } }
         ) {
             Text(title, color: color)
             if !shortcut.isEmpty {
@@ -425,26 +506,28 @@ public struct MenuDropdownPanel: View {
         enum Kind {
             case item(MenuItemModel)
             case separator
-            case header(String)
+            case submenu(MenuNode)
         }
 
         var id: MenuID
-        var indent: Int
         var kind: Kind
     }
 
-    static func rows(from entries: [MenuEntry], indent: Int = 0, path: String = "") -> [MenuRow] {
+    /// One level. A submenu stays a row and takes its children with it — it
+    /// opens beside the panel rather than being spilled into it, which is
+    /// what every desktop menu does and the only shape that survives a
+    /// three-deep menu without turning into an indented essay.
+    static func rows(from entries: [MenuEntry], path: String = "") -> [MenuRow] {
         var out: [MenuRow] = []
         for (i, entry) in entries.enumerated() {
             switch entry {
             case .separator:
                 let id = MenuID(path.isEmpty ? "sep-\(i)" : "\(path)/sep-\(i)")
-                out.append(MenuRow(id: id, indent: indent, kind: .separator))
+                out.append(MenuRow(id: id, kind: .separator))
             case .item(let item):
-                out.append(MenuRow(id: item.id, indent: indent, kind: .item(item)))
+                out.append(MenuRow(id: item.id, kind: .item(item)))
             case .submenu(let node):
-                out.append(MenuRow(id: node.id, indent: indent, kind: .header(node.title)))
-                out += rows(from: node.items, indent: indent + 1, path: node.id.raw)
+                out.append(MenuRow(id: node.id, kind: .submenu(node)))
             }
         }
         return out

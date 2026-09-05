@@ -409,6 +409,14 @@ enum OverlayScan {
     ) {
         if let box = node as? OverlayBoxNode, box.attachment.presented {
             out.append(box.attachment)
+            // Across, not down: an overlay's subtree hangs off its attachment
+            // rather than off `childNodes`, so an overlay presented from
+            // inside one — a submenu flying out of a menu — is invisible to a
+            // walk that only follows children. It lands after its presenter,
+            // which is what every caller here means by "topmost last".
+            if let inner = box.attachment.root {
+                collect(inner, into: &out)
+            }
         }
         for child in node.childNodes {
             collect(child, into: &out)
