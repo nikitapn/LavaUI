@@ -1519,6 +1519,8 @@ void RenderWindow::replayDrawList(const canvas::DrawList &list, float viewW,
     uint32_t flags     = 0;
     size_t   recordIndex = 0;
     bool     clipped   = false;
+    /// The scissor in force *inside* this node, so children inherit it.
+    float    clipX0 = -1e9f, clipY0 = -1e9f, clipX1 = 1e9f, clipY1 = 1e9f;
   };
   std::vector<OpenNode> openNodes;
   ++sceneReplayIndex_;
@@ -1603,15 +1605,39 @@ void RenderWindow::replayDrawList(const canvas::DrawList &list, float viewW,
         }
       }
 
+      // What the ancestors allow, before this node narrows it: a node is
+      // hit-testable wherever its own rect is visible, and its own scissor
+      // never trims that.
+      if (!openNodes.empty()) {
+        node.clipX0 = openNodes.back().clipX0;
+        node.clipY0 = openNodes.back().clipY0;
+        node.clipX1 = openNodes.back().clipX1;
+        node.clipY1 = openNodes.back().clipY1;
+      }
+      const float inheritedX0 = node.clipX0;
+      const float inheritedY0 = node.clipY0;
+      const float inheritedX1 = node.clipX1;
+      const float inheritedY1 = node.clipY1;
+
       if (node.flags & canvas::kSceneNodeClip) {
         quads_.pushScissor({node.x, node.y}, {node.w, node.h});
         node.clipped = true;
+        node.clipX0 = std::max(node.clipX0, node.x);
+        node.clipY0 = std::max(node.clipY0, node.y);
+        node.clipX1 = std::min(node.clipX1, node.x + node.w);
+        node.clipY1 = std::min(node.clipY1, node.y + node.h);
       }
 
       node.recordIndex = sceneNodes_.size();
-      sceneNodes_.push_back({node.id, node.x, node.y, node.w, node.h, contentW,
-                             contentH, emittedTop, emittedBottom, hoverTint,
-                             pressTint, node.flags});
+      canvas::SceneNodeRect record{node.id, node.x, node.y, node.w, node.h,
+                                   contentW, contentH, emittedTop,
+                                   emittedBottom, hoverTint, pressTint,
+                                   node.flags};
+      record.clipX0 = inheritedX0;
+      record.clipY0 = inheritedY0;
+      record.clipX1 = inheritedX1;
+      record.clipY1 = inheritedY1;
+      sceneNodes_.push_back(record);
       openNodes.push_back(node);
       break;
     }
@@ -2094,6 +2120,8 @@ bool RenderWindow::updateSceneHover(float pointerX, float pointerY)
       continue;
     if (pointerX < node.x || pointerX >= node.x + node.w) continue;
     if (pointerY < node.y || pointerY >= node.y + node.h) continue;
+    // Drawn there is not the same as visible there — see `clipX0`.
+    if (!node.visibleAt(pointerX, pointerY)) continue;
     hovered = node.id;
   }
   if (hovered == hoveredNode_) return false;
@@ -2143,6 +2171,9 @@ bool RenderWindow::scrollSceneNode(float pointerX, float pointerY,
     if (!(node.flags & (kScrolls | canvas::kSceneNodeWheel))) continue;
     if (pointerX < node.x || pointerX >= node.x + node.w) continue;
     if (pointerY < node.y || pointerY >= node.y + node.h) continue;
+    // Same rule hover follows: a notch belongs to what is under the pointer
+    // on screen, not to a container scrolled out from under a clip.
+    if (!node.visibleAt(pointerX, pointerY)) continue;
 
     if (node.flags & canvas::kSceneNodeWheel) {
       // The producer wants this one. Decline the whole event rather than

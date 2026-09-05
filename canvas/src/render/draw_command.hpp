@@ -340,6 +340,19 @@ struct SceneNodeRect {
   /// also how the renderer knows not to hit-test it.
   uint32_t hoverTint = 0, pressTint = 0;
   uint32_t flags = 0;
+  /// Where this node is allowed to be *seen*: the intersection of the
+  /// scissors its ancestors pushed, in the same absolute pixels as `x`/`y`.
+  ///
+  /// Recorded because a node's rect is where it was drawn, not where it is
+  /// visible, and hit testing wants the second. A menu row scrolled up out of
+  /// its panel keeps a perfectly good rect over whatever is above the panel —
+  /// the menu bar, say — and without this the pointer lands on a row nobody
+  /// can see instead of the title it is actually over.
+  float clipX0 = -1e9f, clipY0 = -1e9f, clipX1 = 1e9f, clipY1 = 1e9f;
+
+  bool visibleAt(float px, float py) const {
+    return px >= clipX0 && px < clipX1 && py >= clipY0 && py < clipY1;
+  }
 };
 
 /// One shaped glyph, positioned in absolute window pixels by Swift. Ships in
