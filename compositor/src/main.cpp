@@ -1671,6 +1671,10 @@ struct ClientSurface {
   /// jump every time a menu opens. See `SetPanelThickness`.
   uint32_t reserved = 0;
 
+  /// A panel whose canvas has been resized and whose *scene* has not caught
+  /// up yet. See `setPanelThickness`.
+  bool pendingPanelGeometry = false;
+
   /// Where a maximized or fullscreen window came from, so restoring is exact.
   bool maximized = false;
   /// Covers the output, including the panel. Distinct from maximize: a
@@ -3485,6 +3489,24 @@ class SurfaceRegistry : public lava::CompositorHost {
     height = primaryHeight_;
   }
 
+  /// Where a panel of this thickness starts.
+  ///
+  /// Origin is the *primary* box, not the layout union and not (0,0):
+  /// unplugging the leftmost monitor leaves the laptop at x=1920, and a
+  /// strip at the origin would sit in the hole. Spanning the union would
+  /// paint the panel across every screen.
+  std::pair<int, int> panelOrigin(const ClientSurface &panel,
+                                  uint32_t thickness) const {
+    return {panel.edge == kPanelRight
+                ? primaryX_ + static_cast<int>(primaryWidth_) -
+                      static_cast<int>(thickness)
+                : primaryX_,
+            panel.edge == kPanelBottom
+                ? primaryY_ + static_cast<int>(primaryHeight_) -
+                      static_cast<int>(thickness)
+                : primaryY_};
+  }
+
   /// Puts a panel back on the primary output's edge, at that edge's length.
   void layoutPanel(ClientSurface &panel) {
     const bool horizontal =
@@ -3493,19 +3515,25 @@ class SurfaceRegistry : public lava::CompositorHost {
     const uint32_t thickness = horizontal ? panel.height : panel.width;
     resizeSurface(panel, horizontal ? primaryWidth_ : thickness,
                   horizontal ? thickness : primaryHeight_);
-    // Origin is the *primary* box, not the layout union and not (0,0):
-    // unplugging the leftmost monitor leaves the laptop at x=1920, and a
-    // strip at the origin would sit in the hole. Spanning the union would
-    // paint the panel across every screen.
-    moveSurface(panel,
-                panel.edge == kPanelRight
-                    ? primaryX_ + static_cast<int>(primaryWidth_) -
-                          static_cast<int>(thickness)
-                    : primaryX_,
-                panel.edge == kPanelBottom
-                    ? primaryY_ + static_cast<int>(primaryHeight_) -
-                          static_cast<int>(thickness)
-                    : primaryY_);
+    const auto [x, y] = panelOrigin(panel, thickness);
+    moveSurface(panel, x, y);
+  }
+
+  /// Puts the scene where the panel's new thickness says, now that the client
+  /// has drawn a frame for it. The other half of `setPanelThickness`.
+  void commitPanelGeometry(ClientSurface &panel) {
+    panel.pendingPanelGeometry = false;
+    if (!panel.canvas) return;
+    panel.width = panel.canvas->width();
+    panel.height = panel.canvas->height();
+    const bool horizontal =
+        panel.edge == kPanelTop || panel.edge == kPanelBottom;
+    const auto [x, y] = panelOrigin(panel, horizontal ? panel.height
+                                                      : panel.width);
+    moveSurface(panel, x, y);
+    // The crop follows the size, and `damage` right after this is what hands
+    // the scene both at once — the new rectangle and the frame drawn for it.
+    if (control_ != nullptr) control_->postPanelAreas();
   }
 
   /// Recomputes the layout union and the primary output's box.
@@ -4803,9 +4831,37 @@ class SurfaceRegistry : public lava::CompositorHost {
     panel->reserved = reserved > thickness ? thickness : reserved;
     const bool horizontal =
         panel->edge == kPanelTop || panel->edge == kPanelBottom;
-    resizeSurface(*panel, horizontal ? primaryWidth_ : thickness,
-                  horizontal ? thickness : primaryHeight_);
-    layoutPanel(*panel);
+    const uint32_t width = horizontal ? primaryWidth_ : thickness;
+    const uint32_t height = horizontal ? thickness : primaryHeight_;
+
+    // Resize the canvas now — the client cannot draw a taller frame until it
+    // has the room — but leave the scene where it is until that frame lands.
+    //
+    // A bottom or right panel's origin is `screen - thickness`, so growing one
+    // moves its top edge up the screen. The frame the client last published
+    // was measured from the old edge, and a canvas draws from its top-left, so
+    // applying the new geometry before a frame exists for it takes the *old*
+    // picture along for the ride: the dock's plate, drawn at the bottom of a
+    // 138pt surface, reappears 116px up a 254pt one — floating in mid-air,
+    // exactly where the window shelf is about to open. One compositor frame of
+    // it, but it lands at the moment the user is looking there, which is what
+    // made opening a preview flash a copy of the dock above the dock.
+    //
+    // Held, there is nothing to see: the same pixels stay in the same place
+    // until `present` swaps in a frame that was drawn for the new size, and
+    // the two changes happen in one commit. See `commitPanelGeometry`.
+    if (panel->canvas && (panel->width != width || panel->height != height)) {
+      if (panel->canvas->resize(width, height)) {
+        panel->pendingPanelGeometry = true;
+        // The `Resize` the client needs is queued by that call; this is what
+        // sends it, and it is the whole reason the frame we are waiting for
+        // will be drawn at all.
+        pump(*panel);
+      }
+    } else {
+      resizeSurface(*panel, width, height);
+      layoutPanel(*panel);
+    }
     // A bottom or right panel grows *into* the screen, so its origin moved;
     // `layoutPanel` has just put it back. What is left is everything that was
     // laid out against the old reservation — which is only the maximized
@@ -5604,6 +5660,11 @@ class SurfaceRegistry : public lava::CompositorHost {
       if (serial >= surface->revealSerial) surface->revealSerial = 0;
       revealIfReady(*surface);
     }
+    // A panel that was resized has been waiting for exactly this frame — the
+    // first one drawn for its new thickness. Moving the scene here rather than
+    // when the resize was asked for is what keeps the old picture still while
+    // it is the only picture there is.
+    if (surface->pendingPanelGeometry) commitPanelGeometry(*surface);
     damage(*surface);
     lava::FrameProbe::frame(id);
     lava::FrameProbe::report();
