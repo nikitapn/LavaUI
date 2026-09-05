@@ -1153,39 +1153,6 @@ struct MenuImportHost::Impl {
     }
   }
 
-  /// The item with this id, resolved against the tree that exists *now*.
-  ///
-  /// Deliberately a walk rather than a map built with the snapshot. The items
-  /// belong to the `DbusmenuClient`, which frees them whenever the application
-  /// changes its menu — so a map of raw pointers is correct only until the
-  /// next layout update, and a click landing in that window used a freed
-  /// object. It crashed inside libdbusmenu, which is the polite version of
-  /// what a use-after-free usually does.
-  ///
-  /// Refcounting the entries would have fixed the crash and kept a subtler
-  /// bug: an item detached from its client is not a menu item any more, and
-  /// sending it an event asks a question about a menu that no longer exists.
-  /// Walking is O(items) on a structure with tens of entries, and it happens
-  /// once per click.
-  DbusmenuMenuitem *find(int32_t id) const
-  {
-    if (client == nullptr) return nullptr;
-    DbusmenuMenuitem *root = dbusmenu_client_get_root(client);
-    return root == nullptr ? nullptr : findIn(root, id);
-  }
-
-  static DbusmenuMenuitem *findIn(DbusmenuMenuitem *parent, int32_t id)
-  {
-    for (GList *node = dbusmenu_menuitem_get_children(parent); node != nullptr;
-         node = node->next) {
-      auto *mi = static_cast<DbusmenuMenuitem *>(node->data);
-      if (mi == nullptr) continue;
-      if (dbusmenu_menuitem_get_id(mi) == id) return mi;
-      if (DbusmenuMenuitem *found = findIn(mi, id)) return found;
-    }
-    return nullptr;
-  }
-
 };
 
 MenuImportHost::MenuImportHost() : impl_(std::make_unique<Impl>()) {}
@@ -1369,19 +1336,25 @@ int MenuImportHost::itemChecked(size_t index) const
 
 void MenuImportHost::activate(int32_t itemId)
 {
-  DbusmenuMenuitem *mi = impl_->find(itemId);
-  if (mi != nullptr) {
-    // `handle_event` on a client-side item is what puts an `Event` on the bus;
-    // the application on the other end runs its handler and, if the menu changed
-    // as a result, sends a layout update back.
-    dbusmenu_menuitem_handle_event(
-        mi, DBUSMENU_MENUITEM_EVENT_ACTIVATED, g_variant_new_int32(0),
-        static_cast<guint>(g_get_real_time() / 1000000));
-    return;
-  }
-  // Children fetched via GetLayout after AboutToShow are not in the
-  // DbusmenuClient tree (Chromium never told it to refetch). Event still
-  // works; the id is the application's.
+  // The `Event` goes out from here, always, rather than through
+  // `dbusmenu_menuitem_handle_event` on the library's copy of the item.
+  //
+  // That call is the *server* half of libdbusmenu — what a server runs when an
+  // Event arrives — and on an item a `DbusmenuClient` built, a bus monitor
+  // catches nothing leaving at all.
+  //
+  // Which path ran used to depend on whether the library had caught up with
+  // the layout yet, so the bug looked like nothing at all until you noticed
+  // what it turned on: click an item the instant the dropdown opens and the id
+  // is not in the client tree, so the `Event` below goes out and the
+  // application does the thing; take the half second it takes to move the
+  // pointer down the list and the library has refetched by then, the lookup
+  // succeeds, and the click disappears. VS Code, whose submenu children exist
+  // only after an `AboutToShow`, was therefore deaf to every click a person
+  // could actually make.
+  //
+  // `openService`/`openPath` are set for every menu that was opened at all, so
+  // there is no case this cannot answer.
   impl_->sendEvent(itemId, "clicked");
 }
 
