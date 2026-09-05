@@ -55,6 +55,9 @@ struct DockEntry: Identifiable {
     var title: String
     var windows: [WindowInfo]
     var pinned: Bool
+    /// The window of this stack that was in front last. Zero until one has
+    /// been. Stamped on by the model — see `DockModel.lastActive`.
+    var lastActiveSurface: UInt32 = 0
 
     var isRunning: Bool { !windows.isEmpty }
     var isFocused: Bool { windows.contains { $0.focused } }
@@ -64,11 +67,16 @@ struct DockEntry: Identifiable {
     var canPin: Bool { DockPins.canPin(appId) }
 
     /// Which window a click should raise: the focused one if this application
-    /// already has it, else the first that is not hidden, else the first.
-    /// Clicking an application should land somewhere predictable rather than
-    /// wherever the compositor happened to list first.
+    /// already has it, else the one that was in front the last time it did,
+    /// else the first that is not hidden, else the first.
+    ///
+    /// The remembered window comes before the first visible one on purpose.
+    /// Coming back to an application means coming back to where you left it,
+    /// and "where you left it" is a stack's second window as often as its
+    /// first — which is all `windows.first` could ever offer.
     var primary: WindowInfo? {
         windows.first { $0.focused }
+            ?? windows.first { $0.surfaceId == lastActiveSurface }
             ?? windows.first { !$0.minimized }
             ?? windows.first
     }
@@ -143,6 +151,27 @@ final class DockModel {
     @ObservationIgnored var catalog: [String: DesktopEntry] = [:]
     @ObservationIgnored private var lastWindows: [WindowInfo] = []
     @ObservationIgnored private var lastWorkspace: UInt32 = 0
+
+    /// Which window of each stack was in front last, by app id.
+    ///
+    /// The compositor knows what is focused *now*; nothing but the dock keeps
+    /// what was focused in an application you have since left, and that is
+    /// exactly what clicking its icon should go back to.
+    @ObservationIgnored private var lastActive: [String: UInt32] = [:]
+    /// Windows each stack has been told to minimize but has not yet been seen
+    /// to, by app id.
+    ///
+    /// Minimizing hands focus to whatever is left, and for a stack of three
+    /// that is twice another window of the same stack: the compositor drops
+    /// focus, walks its history, and lands on this application's next window
+    /// because that is genuinely what the user was in last. Those snapshots
+    /// are true — the window really was in front for a moment — and recording
+    /// them would replace the id the click just saved with the last one the
+    /// stack happened to shed on the way down. So nothing is recorded for a
+    /// stack until every window it was told to put away is away, which is the
+    /// state the click asked for. Windows that closed meanwhile stop counting;
+    /// windows that opened meanwhile were never named and never block.
+    @ObservationIgnored private var minimizingAll: [String: Set<UInt32>] = [:]
     /// Last canvas width, so a wheel can resolve which icon it is over.
     @ObservationIgnored var lastFrameWidth: Float = 0
     @ObservationIgnored private var badgeFontCache: UIFont?
@@ -297,9 +326,69 @@ final class DockModel {
                 next.append(extra)
             }
         }
+        trackActiveWindows(&next)
         entries = next
         if let drag, !next.contains(where: { $0.appId == drag.appId }) {
             self.drag = nil
+        }
+    }
+
+    /// Notes which window is in front of each stack, and stamps what is
+    /// remembered onto the entries so a click can read it off one.
+    private func trackActiveWindows(_ list: inout [DockEntry]) {
+        for entry in list {
+            if let pending = minimizingAll[entry.appId] {
+                let away = entry.windows
+                    .filter { pending.contains($0.surfaceId) }
+                    .allSatisfy(\.minimized)
+                guard away else { continue }
+                minimizingAll[entry.appId] = nil
+            }
+            if let front = entry.windows.first(where: { $0.focused && !$0.minimized }) {
+                lastActive[entry.appId] = front.surfaceId
+            }
+        }
+        // An application that closed takes its memory with it: the next
+        // window it opens is a new one, and reviving a dead surface id would
+        // send a click nowhere. Pinned icons with nothing open count as gone.
+        let open = Set(list.filter(\.isRunning).map(\.appId))
+        lastActive = lastActive.filter { open.contains($0.key) }
+        minimizingAll = minimizingAll.filter { open.contains($0.key) }
+        for index in list.indices {
+            list[index].lastActiveSurface = lastActive[list[index].appId] ?? 0
+        }
+    }
+
+    /// Raises one window and treats it as its stack's front from here on.
+    ///
+    /// The compositor will say so too, a frame later; writing it now is what
+    /// keeps a click that lands mid-minimize from reading the older answer.
+    func activateWindow(_ surfaceId: UInt32, of appId: String) {
+        minimizingAll[appId] = nil
+        lastActive[appId] = surfaceId
+        if let index = entries.firstIndex(where: { $0.appId == appId }) {
+            entries[index].lastActiveSurface = surfaceId
+        }
+        LavaClient.activateWindow(surfaceId)
+    }
+
+    /// Puts a whole stack away, remembering which of it was in front.
+    ///
+    /// Minimizing only the focused window would leave the rest of the
+    /// application on screen, which is not what clicking its icon means: the
+    /// gesture is "put this application away", and the one it comes back to
+    /// is the one it went away from.
+    func minimizeStack(_ entry: DockEntry) {
+        guard let front = entry.windows.first(where: { $0.focused && !$0.minimized })
+        else { return }
+        lastActive[entry.appId] = front.surfaceId
+        if let index = entries.firstIndex(where: { $0.appId == entry.appId }) {
+            entries[index].lastActiveSurface = front.surfaceId
+        }
+        let going = entry.windows.filter { !$0.minimized }
+        minimizingAll[entry.appId] = Set(going.map(\.surfaceId))
+        for window in going {
+            LavaClient.minimizeWindow(window.surfaceId)
         }
     }
 
@@ -390,7 +479,7 @@ final class DockModel {
         let current = entry.windows.firstIndex(where: { $0.focused }) ?? 0
         let count = entry.windows.count
         let next = ((current + step) % count + count) % count
-        LavaClient.activateWindow(entry.windows[next].surfaceId)
+        activateWindow(entry.windows[next].surfaceId, of: appId)
     }
 
     /// Small face for the instance count. Registered the first time we
@@ -882,11 +971,12 @@ struct DockView: View {
             // continues, so the icon under the shelf still clicks.
             if model.preview != nil, gesture.localY < model.plateTop {
                 if gesture.button == PointerButton.left,
+                   let appId = model.preview?.appId,
                    let card = model.previewLayout?.card(
                        atX: gesture.localX, y: gesture.localY
                    )
                 {
-                    LavaClient.activateWindow(card.surfaceId)
+                    model.activateWindow(card.surfaceId, of: appId)
                 }
                 model.closePreview()
                 return
@@ -1468,11 +1558,12 @@ struct DockView: View {
         if let window = entry.primary {
             // Clicking the application you are already in puts it away, which
             // is the gesture every dock has: the icon is a toggle, not a
-            // one-way trip.
+            // one-way trip. The whole stack goes, not just the window on top —
+            // and comes back one window at a time, the one that was in front.
             if window.focused && !window.minimized {
-                LavaClient.minimizeWindow(window.surfaceId)
+                model.minimizeStack(entry)
             } else {
-                LavaClient.activateWindow(window.surfaceId)
+                model.activateWindow(window.surfaceId, of: entry.appId)
             }
             return
         }
