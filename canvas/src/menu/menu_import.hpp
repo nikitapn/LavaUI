@@ -131,6 +131,10 @@ public:
   /// greyed out a menu item.
   void aboutToShow(int32_t itemId);
 
+  /// "The dropdown closed." Stops the open-submenu refresh a rebuild would
+  /// otherwise keep doing for a menu nobody has open.
+  void dropdownClosed();
+
 private:
   struct Impl;
   std::unique_ptr<Impl> impl_;

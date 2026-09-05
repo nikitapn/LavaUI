@@ -132,6 +132,19 @@ public final class PanelMenu {
         model = buildModel()
     }
 
+    /// "The dropdown closed."
+    ///
+    /// Worth saying, because the importer keeps the open one fresh by itself:
+    /// a layout update rebuilds the bar from `GetLayout(0)`, which for a
+    /// Chromium menu hands back the empty stub it always does, so the subtree
+    /// the user is looking at is re-fetched on the spot. Left believing a menu
+    /// is open, it does that for the rest of the session — and asking VS Code
+    /// is what makes VS Code publish another layout.
+    public func closed() {
+        guard isServing else { return }
+        editor.menuImportDropdownClosed()
+    }
+
     // MARK: - Import
 
     private func buildModel() -> MenuModel {

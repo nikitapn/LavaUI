@@ -676,6 +676,10 @@ public final class Editor: @unchecked Sendable {
         engine.menuImportAboutToShow(itemId)
     }
 
+    public func menuImportDropdownClosed() {
+        engine.menuImportDropdownClosed()
+    }
+
     public func appMenuDetach() { engine.appMenuDetach() }
 
     public var appMenuIsAttached: Bool { engine.appMenuIsAttached() }

@@ -937,6 +937,11 @@ void Engine::menuImportAboutToShow(int32_t itemId)
   impl_->menuImport.aboutToShow(itemId);
 }
 
+void Engine::menuImportDropdownClosed()
+{
+  impl_->menuImport.dropdownClosed();
+}
+
 // ─── Status Notifier (system tray) ────────────────────────────────────────
 
 bool Engine::statusNotifierStart() { return impl_->statusNotifier.start(); }

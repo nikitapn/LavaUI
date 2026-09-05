@@ -125,7 +125,15 @@ final class MenuSession {
 
     /// Which top-level menu is open, if any. Kept here rather than in the view
     /// because the panel's *hit region* depends on it — see `openBinding`.
-    var openMenu: MenuID?
+    var openMenu: MenuID? {
+        didSet {
+            // Every path that puts a dropdown away goes through this — the
+            // click-out, a popover taking over, a dialog, a workspace switch.
+            // The importer has to hear it, or it keeps refreshing a menu
+            // nobody is looking at. See `PanelMenu.closed`.
+            if openMenu == nil, oldValue != nil { menus?.closed() }
+        }
+    }
 
     /// Strip popovers that need the deep hit region (volume, calendar, …).
     /// Same rule as `openMenu`: without it, dropdowns paint into dead space.

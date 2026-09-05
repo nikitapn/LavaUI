@@ -514,6 +514,7 @@ class Engine {
   void menuImportActivate(int32_t itemId);
   /// Ask for a submenu's contents before opening it.
   void menuImportAboutToShow(int32_t itemId);
+  void menuImportDropdownClosed();
 
   // ─── Status Notifier (system tray) ─────────────────────────────────────
   //

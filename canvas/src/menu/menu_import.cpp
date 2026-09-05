@@ -344,14 +344,15 @@ struct MenuImportHost::Impl {
   /// Ids with an asynchronous fill in flight, so a burst of layout updates
   /// does not queue the same subtree a dozen times over.
   std::vector<int32_t> fillsInFlight;
-  /// The stub ids the last sweep asked about.
+  /// Whether this menu's stubs have been warmed. Per client, so a new
+  /// window's menu gets its one sweep and a republished one does not.
   ///
   /// A rebuild that turns up the same set is the same menu arriving again —
   /// quite possibly *because* we asked, since an `AboutToShow` can itself
   /// provoke the `LayoutUpdated` that triggers the rebuild. Sweeping it again
   /// would be a loop with a D-Bus round trip in it. Dropdowns still fill on
   /// open; this only decides whether to warm them in advance.
-  std::vector<int32_t> sweptStubs;
+  bool stubsWarmed = false;
   /// Bumped by `closeClient`. An asynchronous reply carrying a stale
   /// generation belongs to a menu that is no longer on screen.
   uint64_t generation = 0;
@@ -488,7 +489,7 @@ struct MenuImportHost::Impl {
     lastShownId = 0;
     emptyStubs.clear();
     fillsInFlight.clear();
-    sweptStubs.clear();
+    stubsWarmed = false;
     // Anything still in flight is for the menu that just went away.
     ++generation;
     dirty = false;
@@ -729,14 +730,62 @@ struct MenuImportHost::Impl {
     return true;
   }
 
+  /// Children an application has already handed over, kept across a refetch
+  /// that would otherwise forget them.
+  ///
+  /// `GetLayout(0)` is the whole menu for most applications and eight empty
+  /// stubs for Chromium's — it exports File and Edit with
+  /// `children-display=submenu` and nothing under them until an `AboutToShow`
+  /// asks. Dropping what those asks returned, every time the layout was
+  /// refetched, did not merely cost the items: it *was* the next refetch. The
+  /// sweep saw eight unfilled stubs again and asked again, VS Code answers an
+  /// `AboutToShow` by republishing its layout, that arrives as a layout update,
+  /// and a menu nobody had open held a dozen D-Bus calls a second for the life
+  /// of the session — with the application re-minting menu ids underneath the
+  /// whole time.
+  ///
+  /// Carried over by id, which is what a DBusMenu id is for: the same id is
+  /// the same item. An application that really changed a submenu either sends
+  /// the new children in the layout — in which case the fresh ones win here —
+  /// or re-mints its ids, in which case there is no id left to carry anything
+  /// over to.
+  void carryOverChildren(const std::vector<Item> &previous)
+  {
+    if (previous.empty()) return;
+    std::vector<int32_t> live;
+    live.reserve(items.size());
+    for (const Item &it : items) live.push_back(it.id);
+    const auto known = [&live](int32_t id) {
+      return std::find(live.begin(), live.end(), id) != live.end();
+    };
+    // Every fresh item that says it opens a submenu and arrived without one.
+    std::vector<int32_t> parents;
+    for (const Item &it : items) {
+      if (it.submenu && !hasChild(it.id)) parents.push_back(it.id);
+    }
+    // Breadth-first, and `parents` grows as deeper levels are carried over —
+    // a submenu inside a submenu was fetched by the same pass that fetched
+    // its parent and is as much worth keeping.
+    for (size_t i = 0; i < parents.size(); ++i) {
+      for (const Item &old : previous) {
+        if (old.parent != parents[i] || known(old.id)) continue;
+        items.push_back(old);
+        live.push_back(old.id);
+        if (old.submenu) parents.push_back(old.id);
+      }
+    }
+  }
+
   /// Full tree from the application, not libdbusmenu's cached one.
   bool fetchLayout()
   {
     GVariant *layout = callGetLayout(0);
     if (layout == nullptr) return false;
-    items.clear();
+    std::vector<Item> previous;
+    previous.swap(items);
     parseLayoutNode(layout, -1, true);
     g_variant_unref(layout);
+    carryOverChildren(previous);
     // No `mergeToggleProperties` here: the empty property filter above means
     // "every property", so `toggle-type` and `toggle-state` came with the
     // layout. Asking again would be a second synchronous round trip per
@@ -899,10 +948,23 @@ struct MenuImportHost::Impl {
     }
   }
 
-  /// Warm every top-level submenu the application left empty.
+  /// Warm every top-level submenu the application left empty. Once.
+  ///
+  /// Once per menu, not once per layout change, and that is the whole of what
+  /// keeps this from running forever. VS Code answers an `AboutToShow` by
+  /// republishing its menu — new ids, empty stubs again — which arrives as a
+  /// layout update, which rebuilds, which used to find eight unfilled stubs
+  /// whose ids differed from the last sweep's and ask again. The desktop sat
+  /// at a dozen D-Bus calls a second with no menu open, and the application
+  /// re-minted the ids under the user's pointer the whole time.
+  ///
+  /// Nothing is lost by asking only once: a dropdown fills itself
+  /// synchronously when it opens — see `fillSubmenu`, which is on the path of
+  /// every click and every hover-to-the-next-title. This is a warm-up, and a
+  /// warm-up that has to be repeated is not one.
   void queueStubFills()
   {
-    if (importOnly) return;
+    if (importOnly || stubsWarmed) return;
     std::vector<int32_t> stubs;
     for (const Item &it : items) {
       if (it.parent != -1 || !it.submenu || it.separator) continue;
@@ -913,8 +975,8 @@ struct MenuImportHost::Impl {
       }
       stubs.push_back(it.id);
     }
-    if (stubs == sweptStubs) return;
-    sweptStubs = stubs;
+    if (stubs.empty()) return;
+    stubsWarmed = true;
     for (int32_t id : stubs) queueFill(id);
   }
 
@@ -1363,6 +1425,16 @@ void MenuImportHost::aboutToShow(int32_t itemId)
   impl_->fillSubmenu(itemId);
 }
 
+void MenuImportHost::dropdownClosed()
+{
+  // The open dropdown is the one thing a rebuild re-fetches by itself, so a
+  // panel that never says a menu closed leaves every later rebuild asking the
+  // application about a menu nobody is looking at — and with VS Code, asking
+  // is what makes it publish a new layout, which is what causes the next
+  // rebuild.
+  impl_->lastShownId = 0;
+}
+
 #else // !CANVAS_HAVE_DBUSMENU
 
 struct MenuImportHost::Impl {
@@ -1391,6 +1463,7 @@ bool MenuImportHost::itemHasSubmenu(size_t) const { return false; }
 int MenuImportHost::itemChecked(size_t) const { return -1; }
 void MenuImportHost::activate(int32_t) {}
 void MenuImportHost::aboutToShow(int32_t) {}
+void MenuImportHost::dropdownClosed() {}
 
 #endif
 
