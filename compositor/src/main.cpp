@@ -4905,6 +4905,58 @@ class SurfaceRegistry : public lava::CompositorHost {
 
   bool activateWindow(uint32_t id) override;
 
+  /// The window a cycle key should land on, or 0 when there is nowhere to go.
+  ///
+  /// `sameApp` is the difference between the two cycles the keyboard has: one
+  /// walks this application's own windows — the stack the dock draws a badge
+  /// for — and the other walks everything on the workspace.
+  ///
+  /// The ring is in **creation order**, which is what surface ids already are,
+  /// and deliberately not the order `surfaces_` is kept in. That one is the
+  /// stacking order and it changes every time a window is focused: a cycle
+  /// following it would put the window you just left back at the front of the
+  /// ring, so a third press would return to where the first started and the
+  /// windows past the second could never be reached at all. Creation order
+  /// does not move under the keys pressing it.
+  ///
+  /// Minimized windows are in the ring, because they are in the stack — the
+  /// badge counts them, the dock's shelf shows them, and `activateWindow`
+  /// restores whatever it lands on. A window you put away is still one of the
+  /// ones you are cycling through.
+  uint32_t cycleTarget(uint32_t from, bool forward, bool sameApp) const {
+    const ClientSurface *anchor = nullptr;
+    for (const auto &surface : surfaces_) {
+      if (surface->id == from) anchor = surface.get();
+    }
+    const uint32_t workspace = anchor != nullptr ? anchor->workspace
+                             : workspaces_ != nullptr ? workspaces_->current
+                                                      : 0;
+    // An application with no id is not an application: two windows that
+    // both say nothing are not two windows of the same thing, and a stack
+    // cycle through them would be a cycle through strangers.
+    if (sameApp && (anchor == nullptr || anchor->appId.empty())) return 0;
+
+    std::vector<uint32_t> ring;
+    for (const auto &surface : surfaces_) {
+      // The same three exclusions the window list makes, for the same
+      // reasons — furniture is not somewhere the keyboard can go.
+      if (surface->panel || surface->menu) continue;
+      if (surface->appId == kSwitcherAppId) continue;
+      if (surface->workspace != workspace) continue;
+      if (sameApp && surface->appId != anchor->appId) continue;
+      ring.push_back(surface->id);
+    }
+    if (ring.size() < 2) return 0;
+    std::sort(ring.begin(), ring.end());
+
+    const auto at = std::find(ring.begin(), ring.end(), from);
+    if (at == ring.end()) return forward ? ring.front() : ring.back();
+    const size_t index = static_cast<size_t>(at - ring.begin());
+    const size_t next = forward ? (index + 1) % ring.size()
+                                : (index + ring.size() - 1) % ring.size();
+    return ring[next];
+  }
+
   void setCursor(uint32_t id, uint32_t shape) override;
 
   bool setInputRegion(uint32_t id,
@@ -8465,6 +8517,10 @@ enum class BindingAction : uint8_t {
   AppLauncher,
   AppSwitcher,
   AppSwitcherBack,
+  StackCycle,
+  StackCycleBack,
+  WindowCycle,
+  WindowCycleBack,
   Terminal,
   Close,
   MinimizeAll,
@@ -8531,6 +8587,29 @@ constexpr BindingSpec kBindings[] = {
      "Tab", "window.switch-alt", "Cycles open windows", true},
     {BindingAction::AppSwitcherBack, XKB_KEY_Tab, XKB_KEY_Tab, true, false, false,
      "Tab", "window.switch-alt-back", "Cycles open windows backwards", true},
+    // The two cycles that show no overlay: Mod+Tab walks the focused
+    // application's own windows, Mod+Left/Right walks the workspace. Both
+    // switch on the press rather than opening the switcher and waiting for
+    // the modifier to come up — the switcher is for looking at what you
+    // have, and these are for the window you already know is next to you.
+    //
+    // Mod+Tab is free because the switcher answers to Ctrl+Tab and Alt+Tab,
+    // neither of which is the desktop mod by default. A session configured
+    // with Alt *as* the mod gets the switcher on that chord instead: the row
+    // above matches first, and one overlay is a better answer to an ambiguous
+    // Alt+Tab than a silent instant switch.
+    {BindingAction::StackCycle, XKB_KEY_Tab, XKB_KEY_Tab, false, false, true,
+     "Tab", "window.cycle-stack",
+     "Moves to this application's next window"},
+    {BindingAction::StackCycleBack, XKB_KEY_Tab, XKB_KEY_Tab, true, false, true,
+     "Tab", "window.cycle-stack-back",
+     "Moves to this application's previous window"},
+    {BindingAction::WindowCycle, XKB_KEY_Right, XKB_KEY_Right, false, false,
+     true, "Right", "window.cycle",
+     "Moves to the next window on this workspace"},
+    {BindingAction::WindowCycleBack, XKB_KEY_Left, XKB_KEY_Left, false, false,
+     true, "Left", "window.cycle-back",
+     "Moves to the previous window on this workspace"},
     {BindingAction::Terminal, XKB_KEY_Return, XKB_KEY_Return, false, false, true,
      "Return", "terminal.open", "Opens LavaTerm"},
     {BindingAction::Close, XKB_KEY_q, XKB_KEY_q, false, false, true, "Q",
@@ -8685,6 +8764,29 @@ bool perform_binding(Server *server, const BindingSpec &spec,
     launch_switcher(spec.action == BindingAction::AppSwitcherBack);
     return true;
 
+  case BindingAction::StackCycle:
+  case BindingAction::StackCycleBack:
+  case BindingAction::WindowCycle:
+  case BindingAction::WindowCycleBack: {
+    if (server->surfaces == nullptr) return false;
+    const bool sameApp = spec.action == BindingAction::StackCycle ||
+                         spec.action == BindingAction::StackCycleBack;
+    const bool forward = spec.action == BindingAction::StackCycle ||
+                         spec.action == BindingAction::WindowCycle;
+    // `focusedWindow`, not `focusedSurface`, for the reason Mod+Q needs it:
+    // a foreign window holds the seat keyboard and leaves the Lava target at
+    // zero, and a cycle anchored on nothing would start from the beginning of
+    // the ring every time the window it should have started from was Chrome.
+    ClientSurface *focused = focusedWindow(server);
+    const uint32_t from = focused != nullptr ? focused->id : 0;
+    const uint32_t target = server->surfaces->cycleTarget(from, forward,
+                                                          sameApp);
+    // Consumed either way. There being one window in the ring is an answer to
+    // the key, not a reason to type a Tab into whatever has focus.
+    if (target != 0) server->surfaces->activateWindow(target);
+    return true;
+  }
+
   case BindingAction::Terminal:
     launch_terminal();
     return true;
@@ -8806,13 +8908,22 @@ bool handle_binding(Server *server, xkb_keysym_t sym, bool shift, bool ctrl,
     } else if (spec.needMod != modDown) {
       continue;
     }
-    // Subsequent Tab while the overlay is up belongs to the overlay — it
-    // is how the user cycles. Eating it here would launch a second process
-    // and the first would never see the key.
-    if ((spec.action == BindingAction::AppSwitcher ||
-         spec.action == BindingAction::AppSwitcherBack) &&
-        switcherHasKeyboard(server)) {
-      return false;
+    // Every chord that moves between windows belongs to the overlay while
+    // the overlay is up — it is how the user cycles. Eating the switcher's
+    // own Tab here would launch a second process and the first would never
+    // see the key; answering one of the instant cycles would raise a window
+    // behind a switcher the user is still choosing from.
+    switch (spec.action) {
+    case BindingAction::AppSwitcher:
+    case BindingAction::AppSwitcherBack:
+    case BindingAction::StackCycle:
+    case BindingAction::StackCycleBack:
+    case BindingAction::WindowCycle:
+    case BindingAction::WindowCycleBack:
+      if (switcherHasKeyboard(server)) return false;
+      break;
+    default:
+      break;
     }
     return perform_binding(server, spec, sym);
   }

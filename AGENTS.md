@@ -244,7 +244,7 @@ Sources/
   LavaSurface/     Client: wallpaper / desktop surface
   LavaTaskbar/     Client: panel / taskbar (global menu)
   LavaDock/        Client: dock — open windows on this workspace
-  LavaSwitcher/    Client: 3D Ctrl+Tab / Mod+Tab app switcher
+  LavaSwitcher/    Client: 3D Ctrl+Tab / Alt+Tab app switcher
   LavaContextMenu/ Client: the right-click menu. The compositor says what is
                    on it; this draws it and reports what was clicked
   LavaDebug/       Client: where the compositor's VRAM went (`--once` for text)
@@ -1026,7 +1026,8 @@ so headless test runs skip it too.
 | Panel global menu (import side) | `canvas/src/menu/menu_import.*`, `Sources/LavaUI/PanelMenu.swift` |
 | Window list / dock | `SubscribeWindows` in the IDL, `Sources/LavaDock/` |
 | Dock window preview (hover a stack) | `Sources/LavaDock/WindowPreview.swift`; live thumbnails are `ImageSurface`, room comes from `SetPanelThickness`, freshness from `ForgetWindowPoster` |
-| 3D app switcher | `LavaSwitcher`, launched by Ctrl+Tab / Mod+Tab; live posters via `ImageSurface` (the poster cache is dropped when its overlay opens) |
+| 3D app switcher | `LavaSwitcher`, launched by Ctrl+Tab / Alt+Tab; live posters via `ImageSurface` (the poster cache is dropped when its overlay opens) |
+| Switching windows with no overlay | `SurfaceRegistry::cycleTarget` + `BindingAction::StackCycle`/`WindowCycle` — Mod+Tab walks the focused app's own windows, Mod+Left/Right the workspace; the ring is creation order, because the stacking order moves under the keys pressing it |
 | Stream delivery to clients | `StreamPump` in `compositor/src/control_plane.cpp` |
 | Why a frame was late | `compositor/src/frame_probe.*` (`LAVA_FRAME_PROBE=1`) |
 | When a frame is drawn (pacing) | `SurfaceRegistry::animate`, `Output::on_frame` |
