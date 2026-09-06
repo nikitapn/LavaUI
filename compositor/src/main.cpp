@@ -6586,7 +6586,11 @@ class SurfaceRegistry : public lava::CompositorHost {
 
 ClientSurface *SurfaceRegistry::frontOnWorkspace(uint32_t workspace) {
   for (auto &surface : surfaces_) {
-    if (surface->panel || surface->minimized) continue;
+    // The context menu is furniture the way a panel is, and it is furniture
+    // that spends most of its life hidden at the top of the stack: offered as
+    // the front window it wins every time, and it is never a window the user
+    // can be sent back to.
+    if (surface->panel || surface->menu || surface->minimized) continue;
     if (surface->workspace != workspace) continue;
     if (isTransientApp(surface->appId)) continue;
     return surface.get();
@@ -10289,10 +10293,17 @@ void Server::recordFocus(const ClientSurface &surface) {
 void Server::restoreFocus(uint32_t workspace, uint32_t exceptId) {
   if (exceptId != 0 && focusedSurface() == exceptId) setFocusedSurface(0);
 
+  // The same set `focusSurface` refuses outright, and it has to stay that
+  // way: a surface it turns down still leaves here saying focus landed, the
+  // search stops, and the clear at the bottom never runs. The context menu is
+  // the one that bit — hidden furniture that `frontOnWorkspace` offered as the
+  // front window — and the window the user had just put away stayed the
+  // focused one, so the panel went on showing a minimized window's menu.
   auto tryFocus = [&](uint32_t id) -> bool {
     if (id == 0 || id == exceptId || surfaces == nullptr) return false;
     ClientSurface *surface = surfaces->find(id);
     if (surface == nullptr || surface->panel || surface->minimized) return false;
+    if (surface->menu) return false;
     if (surface->workspace != workspace) return false;
     if (surface->appId == kSwitcherAppId) return false;
     focusSurface(*surface);
@@ -10314,9 +10325,18 @@ void Server::restoreFocus(uint32_t workspace, uint32_t exceptId) {
     }
   }
   wlr_seat_keyboard_notify_clear_focus(seat);
-  if (surfaces != nullptr &&
-      (surfaces->focusedId() == 0 || surfaces->focusedId() == exceptId)) {
-    surfaces->setFocused(0);
+  // Nothing took it, so nothing may still be holding it. Asked of the surface
+  // rather than of `exceptId` alone, because the window that had focus is not
+  // always the one named: minimizing a window takes its modal dialog with it,
+  // and the dialog is what the keyboard was in. Whatever is left pointed at a
+  // window that is gone or hidden is a compositor answering "who is active?"
+  // with something nobody can see.
+  if (surfaces != nullptr) {
+    const uint32_t held = surfaces->focusedId();
+    const ClientSurface *still = held != 0 ? surfaces->find(held) : nullptr;
+    if (held == exceptId || still == nullptr || still->minimized) {
+      surfaces->setFocused(0);
+    }
   }
   update_pointer_focus(0);
 }
