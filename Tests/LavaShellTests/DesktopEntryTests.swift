@@ -265,3 +265,162 @@ struct SearchTests {
         #expect(DesktopEntry.search("chat", in: entries).map(\.id) == ["a", "z"])
     }
 }
+
+// The right-click menu on a dock icon. Everything here is shaped like a file
+// that is actually installed on this machine — Chrome's two windows, VS Code's
+// empty window, Firefox's private window.
+
+@Suite("Desktop actions")
+struct DesktopActionTests {
+    private let chrome = """
+        [Desktop Entry]
+        Type=Application
+        Name=Google Chrome
+        Exec=/usr/bin/google-chrome-stable %U
+        Icon=google-chrome
+        Actions=new-window;new-private-window;
+
+        [Desktop Action new-window]
+        Name=New Window
+        Exec=/usr/bin/google-chrome-stable --new-window
+
+        [Desktop Action new-private-window]
+        Name=New Incognito Window
+        Exec=/usr/bin/google-chrome-stable --incognito
+        Icon=view-private
+        """
+
+    @Test("the main group lists the actions without reading them")
+    func namesOnly() throws {
+        let entry = try #require(DesktopEntry.parse(text: chrome, id: "chrome"))
+        #expect(entry.actionNames == ["new-window", "new-private-window"])
+        // Still the application, not the last group that mentioned a Name.
+        #expect(entry.name == "Google Chrome")
+        #expect(entry.icon == "google-chrome")
+        // Nothing to go back to: parsed from text, so there is no file.
+        #expect(entry.actions().isEmpty)
+    }
+
+    @Test("reads what each action is called and what it runs")
+    func readsActions() {
+        let actions = DesktopEntry.parseActions(
+            text: chrome, named: ["new-window", "new-private-window"]
+        )
+        #expect(actions.map(\.id) == ["new-window", "new-private-window"])
+        #expect(actions.map(\.name) == ["New Window", "New Incognito Window"])
+        #expect(actions[0].exec
+            == "/usr/bin/google-chrome-stable --new-window")
+        #expect(actions[0].icon.isEmpty)
+        #expect(actions[1].icon == "view-private")
+    }
+
+    @Test("shows them in the order the entry lists, not the file's")
+    func actionsOrder() {
+        // The trap: a menu that reads in file order puts the application
+        // author's second choice first, and does it differently per app.
+        let actions = DesktopEntry.parseActions(text: """
+            [Desktop Entry]
+            Type=Application
+            Name=Editor
+            Exec=editor
+            Actions=window;profile;
+
+            [Desktop Action profile]
+            Name=New Profile
+            Exec=editor --profile
+
+            [Desktop Action window]
+            Name=New Window
+            Exec=editor --new-window
+            """, named: ["window", "profile"])
+        #expect(actions.map(\.id) == ["window", "profile"])
+    }
+
+    @Test("an action group is not the application's own Name and Exec")
+    func mainGroupDoesNotLeak() {
+        // `[Desktop Entry]` closes an action group like any other header —
+        // the case that matters for a file that puts its actions first.
+        let actions = DesktopEntry.parseActions(text: """
+            [Desktop Action new-window]
+            Name=New Window
+            Exec=browser --new-window
+
+            [Desktop Entry]
+            Type=Application
+            Name=Browser
+            Exec=browser
+            """, named: ["new-window"])
+        #expect(actions.count == 1)
+        #expect(actions[0].name == "New Window")
+        #expect(actions[0].exec == "browser --new-window")
+    }
+
+    @Test("a group the entry never listed is not offered")
+    func unlistedGroupIgnored() {
+        let actions = DesktopEntry.parseActions(text: """
+            [Desktop Entry]
+            Type=Application
+            Name=Browser
+            Exec=browser
+            Actions=new-window;
+
+            [Desktop Action new-window]
+            Name=New Window
+            Exec=browser --new-window
+
+            [Desktop Action internal-debug]
+            Name=Debug
+            Exec=browser --debug
+            """, named: ["new-window"])
+        #expect(actions.map(\.id) == ["new-window"])
+    }
+
+    @Test("a name with no group, or a group with no Exec, is dropped")
+    func incompleteActionsDropped() {
+        // Both are real: a packager trims a group and leaves the name in
+        // `Actions=`, and an unrunnable item on a menu is worse than no item.
+        let actions = DesktopEntry.parseActions(text: """
+            [Desktop Entry]
+            Type=Application
+            Name=Browser
+            Exec=browser
+            Actions=missing;nameless;execless;fine;
+
+            [Desktop Action nameless]
+            Exec=browser --thing
+
+            [Desktop Action execless]
+            Name=Does Nothing
+
+            [Desktop Action fine]
+            Name=New Window
+            Exec=browser --new-window
+            """, named: ["missing", "nameless", "execless", "fine"])
+        #expect(actions.map(\.id) == ["fine"])
+    }
+
+    @Test("an action is translated the way the application's name is")
+    func localisedActionName() {
+        // Same ranking as the main group: a translation for a language this
+        // machine is not set to must not displace the plain key.
+        let actions = DesktopEntry.parseActions(text: """
+            [Desktop Action new-window]
+            Name=New Window
+            Name[de]=Neues Fenster
+            Exec=browser --new-window
+            """, named: ["new-window"])
+        #expect(actions.map(\.name) == ["New Window"])
+    }
+
+    @Test("no Actions= is no menu items and no second read")
+    func noActions() throws {
+        let entry = try #require(DesktopEntry.parse(text: """
+            [Desktop Entry]
+            Type=Application
+            Name=Calculator
+            Exec=calculator
+            """, id: "calculator"))
+        #expect(entry.actionNames.isEmpty)
+        #expect(entry.actions().isEmpty)
+    }
+}

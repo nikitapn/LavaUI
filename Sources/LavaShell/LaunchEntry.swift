@@ -138,6 +138,27 @@ extension DesktopEntry {
         }
         return true
     }
+
+    /// Runs one of the entry's `[Desktop Action …]` items.
+    ///
+    /// The action replaces the `Exec` line and nothing else: `Path`,
+    /// `Terminal` and the new session all still come from the entry, because
+    /// an action is the same application being asked to start differently.
+    ///
+    /// No D-Bus in this path. "New Window" on an application that is already
+    /// running works because the command re-execs into the instance that is
+    /// there — which is how the browsers and editors that ship actions all
+    /// behave. An entry with `DBusActivatable=true` would rather be told
+    /// through `org.freedesktop.Application.ActivateAction`, and that is the
+    /// upgrade to make if one ever turns out to need it.
+    @discardableResult
+    public func launch(
+        action: DesktopAction, terminalProgram: String = "alacritty"
+    ) -> Bool {
+        var entry = self
+        entry.exec = action.exec
+        return entry.launch(terminalProgram: terminalProgram)
+    }
 }
 
 // MARK: - Searching
