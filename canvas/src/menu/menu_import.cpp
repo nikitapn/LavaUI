@@ -363,6 +363,8 @@ struct MenuImportHost::Impl {
   /// way would eagerly open every submenu the applet has: nm-applet would
   /// scan for VPN connections because a panel redrew.
   bool importOnly = false;
+  /// Set when a call came back "no such object" — see `noteMenuGone`.
+  bool reopenRequested = false;
   std::vector<Item> items;
   bool dirty = false;
   uint64_t revision = 0;
@@ -490,10 +492,52 @@ struct MenuImportHost::Impl {
     emptyStubs.clear();
     fillsInFlight.clear();
     stubsWarmed = false;
-    // Anything still in flight is for the menu that just went away.
+    // Anything still in flight is for the menu that just went away — a stale
+    // "that address is dead" included, which would otherwise close the menu
+    // that has just replaced it.
+    reopenRequested = false;
     ++generation;
     dirty = false;
     ++revision;
+  }
+
+  /// Give up on a menu object that has stopped existing and look for the
+  /// one that replaced it.
+  ///
+  /// The stale registration goes first, or the re-resolve would pick the same
+  /// dead address straight back up: the application registered that window,
+  /// never unregistered it, and is still on the bus under the same name.
+  /// What is left is either a registration for the window that *is* focused —
+  /// which is the menu the user is pointing at — or nothing, and an empty bar
+  /// is the honest answer to a menu that is gone.
+  void reopenIfGone()
+  {
+    if (!reopenRequested) return;
+    reopenRequested = false;
+    const std::string deadService = openService;
+    const std::string deadPath = openPath;
+    if (deadService.empty()) return;
+    // Confirmed against the one call every menu object must answer. An
+    // application that simply does not implement `AboutToShow` fails the same
+    // way a dead path does, and dropping its menu on that would put the panel
+    // in a re-resolve loop with a round trip in it.
+    if (GVariant *alive = callGetLayout(0)) {
+      g_variant_unref(alive);
+      reopenRequested = false;
+      return;
+    }
+    if (debug()) {
+      std::cerr << "canvas: appmenu " << deadService << " " << deadPath
+                << " is not a menu any more; re-resolving\n";
+    }
+    registrations.erase(
+        std::remove_if(registrations.begin(), registrations.end(),
+                       [&](const Registration &e) {
+                         return e.service == deadService &&
+                                e.objectPath == deadPath;
+                       }),
+        registrations.end());
+    openClient();
   }
 
   void openClient()
@@ -560,6 +604,51 @@ struct MenuImportHost::Impl {
     dirty = true;
   }
 
+  /// Whether an error means the menu object is gone rather than busy.
+  ///
+  /// An application that publishes one menu object per window abandons that
+  /// object when the window closes — and keeps the bus name, because the
+  /// process is still running. Nothing is unregistered, no signal arrives,
+  /// and every later call to that path comes back "no such thing". VS Code
+  /// does exactly this: a session that had shown its menu once went on
+  /// showing the same 180 rows after the window they belonged to was gone,
+  /// while the current menu object answered everything perfectly.
+  ///
+  /// A timeout is not this. The application may be busy, and dropping a live
+  /// menu because one call was slow would be a worse bug than the one this
+  /// fixes — so only the four errors that mean "that address is not a menu"
+  /// count.
+  static bool objectIsGone(const GError *err)
+  {
+    if (err == nullptr) return false;
+    gchar *remote = g_dbus_error_get_remote_error(err);
+    const std::string name = remote != nullptr ? remote : "";
+    g_free(remote);
+    return name == "org.freedesktop.DBus.Error.UnknownMethod" ||
+           name == "org.freedesktop.DBus.Error.UnknownObject" ||
+           name == "org.freedesktop.DBus.Error.UnknownInterface" ||
+           name == "org.freedesktop.DBus.Error.ServiceUnknown" ||
+           name == "org.freedesktop.DBus.Error.NameHasNoOwner";
+  }
+
+  /// Records a call that says the open menu is not there. `poll` checks it.
+  ///
+  /// Deferred rather than acted on here for two reasons. Every caller is in
+  /// the middle of something — `fillSubmenu` is walking `items`, and closing
+  /// the client clears that vector out from under it — and one failed call is
+  /// only a suspicion: GDBus reports a missing object path as `UnknownMethod`,
+  /// which is also what an application with no `AboutToShow` of its own
+  /// returns. `reopenIfGone` is where that gets settled.
+  void noteMenuGone(const GError *err, const char *where)
+  {
+    if (!objectIsGone(err) || openService.empty()) return;
+    if (debug()) {
+      std::cerr << "canvas: appmenu " << where << ": " << openService << " "
+                << openPath << " answered as if it is not there\n";
+    }
+    reopenRequested = true;
+  }
+
   /// Chromium/Electron (VSCode, Teams) put File/Edit on the bar with
   /// `children-display=submenu` and no children. AboutToShow fills them, but
   /// always returns needUpdate=false, so libdbusmenu never GetLayouts again
@@ -578,6 +667,7 @@ struct MenuImportHost::Impl {
         std::cerr << "canvas: appmenu AboutToShow(" << id << ") "
                   << err->message << "\n";
       }
+      noteMenuGone(err, "AboutToShow");
       if (err) g_error_free(err);
       return false;
     }
@@ -671,6 +761,7 @@ struct MenuImportHost::Impl {
         G_VARIANT_TYPE("(u(ia{sv}av))"), G_DBUS_CALL_FLAGS_NONE,
         kSyncCallTimeoutMs, nullptr, &err);
     if (ret == nullptr) {
+      noteMenuGone(err, "GetLayout");
       if (err) g_error_free(err);
       return nullptr;
     }
@@ -879,16 +970,25 @@ struct MenuImportHost::Impl {
   static void onFillShown(GObject *source, GAsyncResult *res, gpointer userData)
   {
     std::unique_ptr<Fill> fill(static_cast<Fill *>(userData));
-    GVariant *ret = g_dbus_connection_call_finish(G_DBUS_CONNECTION(source),
-                                                  res, nullptr);
+    GError *err = nullptr;
+    GVariant *ret =
+        g_dbus_connection_call_finish(G_DBUS_CONNECTION(source), res, &err);
     // The boolean is `false` on Chromium whether or not anything changed —
     // that is the whole reason this class asks for the layout itself.
     if (ret != nullptr) g_variant_unref(ret);
     Impl *self = *fill->owner;
-    if (self == nullptr || self->conn == nullptr) return;
+    if (self == nullptr || self->conn == nullptr) {
+      if (err) g_error_free(err);
+      return;
+    }
     if (self->generation != fill->generation) {
+      if (err) g_error_free(err);
       return;  // A different menu is on screen now.
     }
+    // The bar sweep runs when a window is focused, before anyone opens
+    // anything, so this is usually the first thing to notice a dead menu.
+    self->noteMenuGone(err, "sweep AboutToShow");
+    if (err) g_error_free(err);
     auto *next = new Fill(*fill);
     g_dbus_connection_call(
         self->conn, next->service.c_str(), next->path.c_str(),
@@ -902,13 +1002,17 @@ struct MenuImportHost::Impl {
                            gpointer userData)
   {
     std::unique_ptr<Fill> fill(static_cast<Fill *>(userData));
-    GVariant *ret = g_dbus_connection_call_finish(G_DBUS_CONNECTION(source),
-                                                  res, nullptr);
+    GError *err = nullptr;
+    GVariant *ret =
+        g_dbus_connection_call_finish(G_DBUS_CONNECTION(source), res, &err);
     Impl *self = *fill->owner;
     if (self == nullptr || self->generation != fill->generation) {
       if (ret != nullptr) g_variant_unref(ret);
+      if (err) g_error_free(err);
       return;
     }
+    self->noteMenuGone(err, "sweep GetLayout");
+    if (err) g_error_free(err);
     self->fillsInFlight.erase(
         std::remove(self->fillsInFlight.begin(), self->fillsInFlight.end(),
                     fill->id),
@@ -1045,11 +1149,13 @@ struct MenuImportHost::Impl {
         }
         if (pending.empty()) break;
         for (int32_t id : pending) {
-          aboutToShowSync(id);
-          spliceSubtree(id);
-          // Asked and still nothing: remember, so the next pass and the next
-          // rebuild do not ask again.
-          if (!hasChild(id)) emptyStubs.push_back(id);
+          // Both answers, or neither: a call that failed is not the
+          // application saying the submenu is empty. Caching a failure here
+          // meant one unlucky round trip took an arrow off a menu for the
+          // life of the client, and nothing ever asked again.
+          const bool asked = aboutToShowSync(id);
+          const bool got = spliceSubtree(id);
+          if (asked && got && !hasChild(id)) emptyStubs.push_back(id);
         }
       }
       if (debug() && pass == kMaxNestedFillPasses) {
@@ -1074,12 +1180,32 @@ struct MenuImportHost::Impl {
   {
     if (conn == nullptr || openService.empty() || openPath.empty()) return;
     const guint32 ts = static_cast<guint32>(g_get_real_time() / 1000000);
+    // The reply is read for one reason: a click into a menu object that no
+    // longer exists is the failure a person actually sees — the item lights
+    // up, the application does nothing, and nothing anywhere says why. The
+    // answer does not come back in time to save this click, but it is what
+    // sends the panel looking for the menu that *is* there.
+    auto *fill = new Fill{selfRef, generation, itemId, openService, openPath};
     g_dbus_connection_call(
         conn, openService.c_str(), openPath.c_str(), "com.canonical.dbusmenu",
         "Event",
         g_variant_new("(isvu)", itemId, event,
                       g_variant_new_variant(g_variant_new_int32(0)), ts),
-        nullptr, G_DBUS_CALL_FLAGS_NONE, 1000, nullptr, nullptr, nullptr);
+        nullptr, G_DBUS_CALL_FLAGS_NONE, 1000, nullptr, onEventSent, fill);
+  }
+
+  static void onEventSent(GObject *source, GAsyncResult *res, gpointer userData)
+  {
+    std::unique_ptr<Fill> fill(static_cast<Fill *>(userData));
+    GError *err = nullptr;
+    GVariant *ret =
+        g_dbus_connection_call_finish(G_DBUS_CONNECTION(source), res, &err);
+    if (ret != nullptr) g_variant_unref(ret);
+    Impl *self = *fill->owner;
+    if (self != nullptr && self->generation == fill->generation) {
+      self->noteMenuGone(err, "Event");
+    }
+    if (err) g_error_free(err);
   }
 
   /// Fills in the check state, which the library does not fetch.
@@ -1354,6 +1480,7 @@ void MenuImportHost::poll()
   // After the iteration, not inside a GLib callback: the cleanup unwatches
   // the name whose watch is what called us.
   impl_->drainVanished();
+  impl_->reopenIfGone();
   if (impl_->dirty) impl_->rebuild();
 }
 
