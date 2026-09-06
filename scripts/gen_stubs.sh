@@ -6,8 +6,10 @@
 #
 #   NPIDL=/path/to/npidl scripts/gen_stubs.sh
 #
-# Generated files are checked in, so a clone without nprpc still builds
-# everything except the control plane itself.
+# The output is gitignored, and this is what produces it: a fresh checkout has
+# no Sources/LavaIDL and no compositor/src/gen until this has run.
+# `scripts/bootstrap.sh` runs it in the right place; run it by hand after every
+# edit to idl/lava.npidl.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

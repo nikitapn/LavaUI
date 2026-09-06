@@ -44,8 +44,8 @@ Linux + Swift 6 + C++ interop only for anything that links the engine.
 | Vulkan, fonts, images, arenas | `canvas/` → product `CxxCanvas` |
 | Compositor + control plane servant | `compositor/` |
 | RPC IDL (one source of truth) | `idl/lava.npidl` |
-| Generated Swift stubs | `Sources/LavaIDL` (checked in) |
-| Generated C++ stubs | `compositor/src/gen` (checked in) |
+| Generated Swift stubs | `Sources/LavaIDL` (gitignored; `scripts/gen_stubs.sh`) |
+| Generated C++ stubs | `compositor/src/gen` (gitignored; `scripts/gen_stubs.sh`) |
 | Client connect / Present / input | `Sources/LavaClient` |
 
 ### Frame pipeline (always the same mentally)

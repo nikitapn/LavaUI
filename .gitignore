@@ -23,3 +23,12 @@ build-release
 # Cloned by scripts/fetch-nprpc.sh / scripts/build-wlroots.sh, not vendored.
 /third-party/nprpc
 /third-party/wlroots
+
+# npidl's output from idl/lava.npidl, both languages. Generated rather than
+# vendored: npidl comes out of the same nprpc build the control plane links
+# against, so anything that can build this can regenerate these — and a stub
+# committed against one revision of the IDL and read against another is a
+# desync that compiles. `scripts/bootstrap.sh` runs the generator; by hand it
+# is `scripts/gen_stubs.sh`.
+/Sources/LavaIDL/
+/compositor/src/gen/

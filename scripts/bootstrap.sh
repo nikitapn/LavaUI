@@ -74,6 +74,25 @@ if [[ $do_nprpc -eq 1 ]]; then
   "$here/build-nprpc.sh"
 fi
 
+# The control-plane stubs, in both languages. Generated rather than committed
+# (see .gitignore), so a fresh checkout has neither `Sources/LavaIDL` nor
+# `compositor/src/gen` and neither build system below would find its sources.
+#
+# After the nprpc step on purpose: npidl is built by it. A tree that already
+# has the stubs and no npidl — nprpc installed from a package, tools left out
+# — keeps the ones it has and says so, because regenerating is what this is
+# for and failing to is only fatal when there is nothing there.
+if [[ $do_meson -eq 1 || $do_swift_build -eq 1 ]]; then
+  if "$here/gen_stubs.sh"; then
+    :
+  elif [[ -f "$here/../Sources/LavaIDL/lava.swift" \
+       && -f "$here/../compositor/src/gen/lava.cpp" ]]; then
+    lava_info "npidl not found; keeping the stubs already in the tree"
+  else
+    lava_die "no npidl and no generated stubs — run scripts/build-nprpc.sh"
+  fi
+fi
+
 # Ubuntu splits xkbregistry out of libxkbcommon. --no-deps still has to
 # pick that up or meson dies at compositor/meson.build xkbregistry.
 if [[ $do_meson -eq 1 && $(lava_os) == debian ]]; then
