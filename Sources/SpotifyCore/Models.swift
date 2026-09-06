@@ -185,6 +185,7 @@ public enum SpotifyNav: Hashable, Sendable {
     case home
     case search
     case library
+    case liked
     case album(String)
     case artist(String)
 }

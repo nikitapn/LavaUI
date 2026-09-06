@@ -47,7 +47,7 @@ struct CoverArt: View {
                 path: path,
                 width: .pt(box),
                 height: .pt(box),
-                placeholder: SpotifyTheme.coverPlaceholder,
+                placeholder: Theme.current.inset,
                 placeholderCornerRadius: cornerRadius,
                 contentMode: .fill,
                 onClick: onClick
@@ -58,7 +58,7 @@ struct CoverArt: View {
             // Placeholder while the download runs.
             Text(" ", color: .dim, onClick: onClick)
                 .frame(width: .pt(box), height: .pt(box))
-                .background(SpotifyTheme.coverPlaceholder)
+                .background(Theme.current.inset)
                 .cornerRadius(cornerRadius)
         }
     }

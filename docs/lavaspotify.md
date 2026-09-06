@@ -118,7 +118,8 @@ User tokens are stored at:
 ~/.config/LavaSpotify/tokens.json    # mode 0600
 ```
 
-Non-secret preferences (theme palette id, …) use LavaUI `AppSettings`:
+Non-secret preferences use LavaUI `AppSettings`. Colour follows the desktop
+system theme (LavaSettings), not a per-app palette:
 
 ```
 ~/.config/LavaSpotify/settings.json

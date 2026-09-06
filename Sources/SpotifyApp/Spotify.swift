@@ -15,94 +15,10 @@ struct Spotify: View {
             }
             playerBar
         }
-        .background(SpotifyTheme.theme.background)
-        .overlay(
-            isPresented: Binding(
-                get: { session.isThemePickerPresented },
-                set: { session.isThemePickerPresented = $0 }
-            ),
-            placement: OverlayPlacement { context in
-                let width = min(480, max(320, context.viewport.width - 48))
-                let height = min(context.idealSize.height, context.viewport.height - 48)
-                return OverlayFrame(
-                    x: (context.viewport.width - width) / 2,
-                    y: (context.viewport.height - height) / 2,
-                    width: width,
-                    height: height
-                )
-            },
-            style: OverlayStyle(
-                background: SpotifyTheme.theme.panel,
-                border: SpotifyTheme.theme.accent.opacity(0.55),
-                cornerRadius: 14,
-                padding: 10,
-                minWidth: 320,
-                backdropBlurRadius: 8
-            )
-        ) {
-            themePicker
-        }
+        .background(Theme.current.background)
     }
 
     // MARK: - Sidebar
-
-    @ViewBuilder
-    private var themePicker: some View {
-        VStack(width: .percent(100), padding: 8) {
-            HStack(padding: 6, alignment: .center) {
-                VStack(padding: 1) {
-                    Text("Choose your atmosphere", color: .primary)
-                    Text("Hover or use ↑ ↓ to preview", color: .muted)
-                }
-                Spacer()
-                Text("Esc", color: .dim, onClick: {
-                    session.isThemePickerPresented = false
-                })
-            }
-
-            Divider()
-
-            ForEach(SpotifyTheme.palettes) { palette in
-                themeRow(palette)
-            }
-
-            Text("Enter chooses · Ctrl+T opens or closes", color: .dim)
-                .padding(6)
-        }
-        .agentId("theme-picker")
-    }
-
-    @ViewBuilder
-    private func themeRow(_ palette: SpotifyPalette) -> some View {
-        let index = SpotifyTheme.palettes.firstIndex(where: { $0.id == palette.id }) ?? 0
-        let selected = session.themePickerSelection == index
-        HStack(
-            height: .pt(68), padding: 10, alignment: .center,
-            onClick: { session.chooseTheme(index) },
-            onHover: { inside in
-                if inside { session.previewTheme(index) }
-            }
-        ) {
-            HStack(width: .pt(92), height: .pt(32), padding: 2, alignment: .center) {
-                ForEach(Array(palette.swatches.enumerated()), id: \.offset) { _, color in
-                    VStack(width: .pt(20), height: .pt(28), padding: 0) {}
-                        .background(color)
-                        .cornerRadius(5)
-                }
-            }
-            VStack(flexGrow: 1, padding: 1) {
-                Text(palette.name, color: .primary)
-                Text(palette.subtitle, color: .secondary)
-            }
-            Text(selected ? "Selected" : "", color: .accent)
-                .frame(width: .pt(64))
-        }
-        .background(selected ? SpotifyTheme.theme.selectionFill : SpotifyTheme.theme.inset)
-        .hoverBackground(SpotifyTheme.theme.hover)
-        .cornerRadius(9)
-        .padding(3)
-        .agentId("theme-\(palette.id)")
-    }
 
     @ViewBuilder
     private var sidebar: some View {
@@ -141,9 +57,12 @@ struct Spotify: View {
 
             Text("Playlists", color: .muted)
                 .padding(4)
-            Text("  Liked Songs", color: .secondary, onClick: {
-                session.status = "Liked Songs — needs library scopes later"
-            })
+            navRow(
+                "Liked Songs",
+                selected: isLikedNav,
+                action: { session.goLiked() }
+            )
+            .agentId("nav-liked")
 
             Spacer()
 
@@ -156,11 +75,16 @@ struct Spotify: View {
                 .padding(4)
                 .agentId("status")
         }
-        .background(SpotifyTheme.sidebar)
+        .background(Theme.current.panel)
     }
 
     private var isHome: Bool {
         if case .home = session.nav { return true }
+        return false
+    }
+
+    private var isLikedNav: Bool {
+        if case .liked = session.nav { return true }
         return false
     }
 
@@ -171,7 +95,7 @@ struct Spotify: View {
             onClick: action
         )
         .padding(6)
-        .hoverBackground(SpotifyTheme.cardHover)
+        .hoverBackground(Theme.current.hover)
         .cornerRadius(4)
     }
 
@@ -187,13 +111,15 @@ struct Spotify: View {
                 searchView
             case .library:
                 libraryView
+            case .liked:
+                likedView
             case .album:
                 albumDetailView
             case .artist:
                 artistDetailView
             }
         }
-        .background(SpotifyTheme.theme.background)
+        .background(Theme.current.background)
         .flexGrow(1)
     }
 
@@ -249,7 +175,11 @@ struct Spotify: View {
                     .agentId("home-search-clear")
                 }
             }
-            .background(SpotifyTheme.theme.inset)
+            // `panel`, not `inset`. Inset is a well punched through a card —
+            // on the dark palettes it is within a hundredth of `background`,
+            // so a search bar painted in it is a bar nobody can see.
+            .background(Theme.current.panel)
+            .border(Theme.current.border, width: 1)
             .cornerRadius(10)
             .overlay(
                 isPresented: presented,
@@ -291,7 +221,7 @@ struct Spotify: View {
                 }
                 Text(track.durationLabel, color: .dim)
             }
-            .hoverBackground(SpotifyTheme.cardHover)
+            .hoverBackground(Theme.current.hover)
             .cornerRadius(7)
             .agentId("search-track-\(track.id)")
         }
@@ -324,7 +254,11 @@ struct Spotify: View {
     @ViewBuilder
     private func albumCard(_ album: Album, size: Float) -> some View {
         VStack(
-            width: .pt(size + 12), height: .pt(size + 93), padding: 6,
+            width: .pt(AlbumCardLayout.width(cover: size)),
+            height: .pt(AlbumCardLayout.height(cover: size)),
+            padding: AlbumCardLayout.padding,
+            alignment: .start,
+            spacing: AlbumCardLayout.spacing,
             onClick: { session.openAlbum(album) }
         ) {
             CoverArt(
@@ -339,8 +273,8 @@ struct Spotify: View {
             artistLink(album.artists)
                 .lineLimit(1)
         }
-        .background(SpotifyTheme.theme.panel)
-        .hoverBackground(SpotifyTheme.cardHover)
+        .background(Theme.current.panel)
+        .hoverBackground(Theme.current.hover)
         .cornerRadius(8)
         .agentId("album-\(album.id)")
     }
@@ -349,7 +283,7 @@ struct Spotify: View {
     private func spacedAlbumCard(_ album: Album, size: Float) -> some View {
         // Stack padding is inside its background. This transparent wrapper is
         // intentional: it creates real breathing room between card surfaces.
-        VStack(padding: 4) {
+        VStack(padding: AlbumCardLayout.outerGap) {
             albumCard(album, size: size)
         }
     }
@@ -367,6 +301,9 @@ struct Spotify: View {
                 Button("Go") { session.runSearch() }
                     .agentId("search-go")
             }
+            .background(Theme.current.panel)
+            .border(Theme.current.border, width: 1)
+            .cornerRadius(10)
 
             ScrollView(.vertical) {
                 albumGrid(session.searchResults, size: 128)
@@ -397,18 +334,66 @@ struct Spotify: View {
         // Virtualized, not a wrapping HStack. A library of a few thousand
         // albums built every card on every body pass — ~46ms for a frame that
         // then drew in 0.2ms, because the draw list culls and the mount/layout
-        // path did not. Cell size mirrors `albumCard` (size + 12 wide,
-        // size + 93 tall) plus `spacedAlbumCard`'s 4pt of surrounding gap.
+        // path did not. Cell size is `albumCard` plus `spacedAlbumCard`'s gap.
         LazyVGrid(
             albums,
-            cellWidth: size + 20,
-            cellHeight: size + 101
+            cellWidth: AlbumCardLayout.cellWidth(cover: size),
+            cellHeight: AlbumCardLayout.cellHeight(cover: size)
         ) { album in
             spacedAlbumCard(album, size: size)
         }
     }
 
     // MARK: Artist detail
+
+    @ViewBuilder
+    private var likedView: some View {
+        VStack(flexGrow: 1, padding: 12) {
+            HStack(padding: 8, alignment: .center) {
+                VStack(padding: 2, alignment: .start) {
+                    Text("PLAYLIST", color: .muted)
+                    Text("Liked Songs", color: .primary)
+                        .agentId("liked-title")
+                    Text(
+                        session.isLoggedIn
+                            ? "\(session.likedTracks.count) songs"
+                            : "Log in to see songs you have liked",
+                        color: .dim
+                    )
+                }
+                Spacer()
+                if !session.likedTracks.isEmpty {
+                    Button("Play") { session.playLiked() }
+                        .agentId("play-liked")
+                }
+            }
+
+            if session.isLoading && session.likedTracks.isEmpty {
+                Text("Loading Liked Songs…", color: .secondary)
+                    .agentId("liked-loading")
+            } else if !session.isLoggedIn {
+                Text("Account → Log in", color: .accent, onClick: { session.login() })
+                    .padding(8)
+            } else if session.likedTracks.isEmpty {
+                Text("Songs you like will land here.", color: .secondary)
+                    .padding(8)
+                    .agentId("liked-empty")
+            } else {
+                ScrollView(.vertical) {
+                    VStack(padding: 4) {
+                        ForEach(session.likedTracks) { track in
+                            trackRow(
+                                track,
+                                number: (session.likedTracks.firstIndex(where: {
+                                    $0.id == track.id
+                                }) ?? 0) + 1
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     @ViewBuilder
     private var artistDetailView: some View {
@@ -503,16 +488,23 @@ struct Spotify: View {
     }
 
     @ViewBuilder
-    private func trackRow(_ track: Track) -> some View {
+    private func trackRow(_ track: Track, number: Int? = nil) -> some View {
         let selected = session.nowPlaying?.id == track.id
-        let stripe = track.trackNumber.isMultiple(of: 2)
-            ? SpotifyTheme.theme.inset.opacity(0.52)
-            : SpotifyTheme.theme.panel.opacity(0.72)
+        let index = number ?? track.trackNumber
+        let stripe = index.isMultiple(of: 2)
+            ? Theme.current.inset.opacity(0.52)
+            : Theme.current.panel.opacity(0.72)
         HStack(padding: 6, alignment: .center,
                onClick: { session.selectTrack(track) })
         {
-            Text(String(format: "%2d", track.trackNumber), color: .dim)
+            Text(String(format: "%2d", index), color: .dim)
                 .frame(width: .pt(28))
+            CoverArt(
+                track.album?.preferredCover,
+                size: 40,
+                cornerRadius: 4,
+                editor: session.editor
+            )
             VStack(flexGrow: 1, padding: 1) {
                 Text(track.name, color: selected ? .accent : .primary)
                     .lineLimit(1)
@@ -522,10 +514,11 @@ struct Spotify: View {
                     Spacer()
                 }
             }
+            likeButton(track)
             Text(track.durationLabel, color: .dim)
         }
-        .background(selected ? SpotifyTheme.theme.selectionFill : stripe)
-        .hoverBackground(SpotifyTheme.cardHover)
+        .background(selected ? Theme.current.selectionFill : stripe)
+        .hoverBackground(Theme.current.hover)
         .cornerRadius(6)
         .agentId("track-\(track.id)")
     }
@@ -534,7 +527,7 @@ struct Spotify: View {
 
     @ViewBuilder
     private var playerBar: some View {
-        HStack(height: .pt(112), padding: 10, alignment: .center) {
+        HStack(height: .pt(136), padding: 16, alignment: .center, spacing: 12) {
             // Now playing
             if let track = session.nowPlaying {
                 HStack(
@@ -554,9 +547,10 @@ struct Spotify: View {
                         artistLink(track.artists)
                             .lineLimit(1)
                     }
+                    likeButton(track, id: "np-like")
                     Spacer()
                 }
-                .hoverBackground(SpotifyTheme.cardHover)
+                .hoverBackground(Theme.current.hover)
                 .cornerRadius(7)
                 .agentId("now-playing-album")
             } else {
@@ -568,8 +562,8 @@ struct Spotify: View {
             }
 
             // Transport + seek
-            VStack(flexGrow: 1, padding: 4) {
-                HStack(padding: 4, alignment: .center) {
+            VStack(flexGrow: 1, padding: 0, spacing: 6) {
+                HStack(padding: 0, alignment: .center) {
                     Spacer()
                     Button(
                         "⏮",
@@ -582,9 +576,9 @@ struct Spotify: View {
                     Button(
                         session.isPlaying ? "⏸" : "▶",
                         style: ButtonStyle(
-                            background: SpotifyTheme.green.opacity(0.15),
-                            hover: SpotifyTheme.green.opacity(0.25),
-                            pressed: SpotifyTheme.green.opacity(0.35),
+                            background: Theme.current.accent.opacity(0.15),
+                            hover: Theme.current.accent.opacity(0.25),
+                            pressed: Theme.current.accent.opacity(0.35),
                             foreground: .primary,
                             cornerRadius: 20,
                             padding: 0
@@ -605,7 +599,7 @@ struct Spotify: View {
                         .agentId("next")
                     Spacer()
                 }
-                HStack(padding: 2, alignment: .center) {
+                HStack(padding: 0, alignment: .center) {
                     Text(formatMs(session.progressMs), color: .dim)
                         .frame(width: .pt(40))
                         .agentId("progress-elapsed")
@@ -641,18 +635,18 @@ struct Spotify: View {
                         trackWidth: 96,
                         trackThickness: 4,
                         knobRadius: 6,
-                        activeTrack: SpotifyTheme.green,
-                        inactiveTrack: Color(r: 0.28, g: 0.28, b: 0.28),
-                        knob: Color(r: 1, g: 1, b: 1),
+                        activeTrack: Theme.current.accent,
+                        inactiveTrack: Theme.current.border,
+                        knob: Theme.current.textPrimary,
                         valueWidth: 0
                     ),
-                    isEnabled: session.isLoggedIn && session.selectedDeviceId != nil
+                    isEnabled: session.canControlVolume
                 )
                 .flexGrow(1)
                 .agentId("volume-slider")
             }
         }
-        .background(SpotifyTheme.playerBar)
+        .background(Theme.current.panel)
         .agentId("player-bar")
     }
 
@@ -679,9 +673,9 @@ struct Spotify: View {
                 trackWidth: 220,
                 trackThickness: 4,
                 knobRadius: 6,
-                activeTrack: SpotifyTheme.green,
-                inactiveTrack: Color(r: 0.28, g: 0.28, b: 0.28),
-                knob: Color(r: 1, g: 1, b: 1),
+                activeTrack: Theme.current.accent,
+                inactiveTrack: Theme.current.border,
+                knob: Theme.current.textPrimary,
                 valueWidth: 0
             ),
             isEnabled: hasTrack && session.isLoggedIn
@@ -693,14 +687,41 @@ struct Spotify: View {
     private var secondaryTransportStyle: ButtonStyle {
         ButtonStyle(
             background: Color(r: 0, g: 0, b: 0, a: 0),
-            hover: SpotifyTheme.green.opacity(0.14),
-            pressed: SpotifyTheme.green.opacity(0.24),
+            hover: Theme.current.accent.opacity(0.14),
+            pressed: Theme.current.accent.opacity(0.24),
             foreground: .secondary,
             disabledBackground: Color(r: 0, g: 0, b: 0, a: 0),
             disabledForeground: .dim,
             cornerRadius: 18,
             padding: 0
         )
+    }
+
+    /// Click and hover live on the square, not the glyph. A `Text` with
+    /// `onClick` paints `theme.hover` around its ink box, and a heart sits
+    /// high in that box — the plate looks shifted the moment the pointer
+    /// arrives.
+    ///
+    /// `spacing: 0` is required: the theme's default 8pt stack gap plus
+    /// Text's built-in +8 measure pad overflow a 32pt chip, Yoga packs
+    /// from the start, and the heart leans right.
+    private func likeButton(_ track: Track, id: String? = nil) -> some View {
+        let liked = session.isLiked(track)
+        return HStack(
+            width: .pt(32),
+            height: .pt(32),
+            padding: 0,
+            alignment: .center,
+            spacing: 0,
+            onClick: { session.toggleLike(track) }
+        ) {
+            Spacer()
+            Text(liked ? "♥" : "♡", color: liked ? .accent : .dim)
+            Spacer()
+        }
+        .hoverBackground(Theme.current.hover)
+        .cornerRadius(6)
+        .agentId(id ?? "like-\(track.id)")
     }
 
     private func artistLink(_ artists: [ArtistRef]) -> Text {
@@ -726,11 +747,33 @@ struct Spotify: View {
     private var deviceFooter: String { session.playerFooterLabel }
 }
 
+/// Cover plus a caption that always has room for a two-line name and one
+/// artist line. The old `size + 93` box was exact for a 16px face at the
+/// theme's default stack gap — a wrap ate the artist and sat on the radius.
+private enum AlbumCardLayout {
+    static let padding: Float = 10
+    static let spacing: Float = 4
+    static let outerGap: Float = 4
+
+    static var lineHeight: Float {
+        max(16, FontStore.default?.lineHeight ?? 20)
+    }
+
+    /// Two title lines + one artist line + the two gaps between cover, title,
+    /// and artist, plus a little slack so descenders clear the corner.
+    static var caption: Float { lineHeight * 3 + spacing * 2 + 8 }
+
+    static func width(cover: Float) -> Float { cover + padding * 2 }
+    static func height(cover: Float) -> Float { cover + caption + padding * 2 }
+    static func cellWidth(cover: Float) -> Float { width(cover: cover) + outerGap * 2 }
+    static func cellHeight(cover: Float) -> Float { height(cover: cover) + outerGap * 2 }
+}
+
 // MARK: - Chrome
 
 /// Client title strip: window controls, the product name, a drag handle.
 /// Hidden buttons while maximized (`.windowChrome`); the rest of the row stays
-/// so Theme and the name do not jump. Matches LavaWeather's bar.
+/// so the name does not jump. Matches LavaWeather's bar.
 private struct TitleBar: View {
     @Bindable var session: SpotifySession
 
@@ -746,15 +789,6 @@ private struct TitleBar: View {
                 Text(subtitle, color: .dim)
             }
             Spacer()
-            Text(
-                "Theme",
-                color: .secondary,
-                onClick: { session.showThemePicker() }
-            )
-            .padding(6)
-            .hoverBackground(Theme.current.hover)
-            .cornerRadius(6)
-            .agentId("title-theme")
         }
         .frame(height: .pt(44))
         .background(Theme.current.panel)
@@ -769,6 +803,8 @@ private struct TitleBar: View {
             return "Search"
         case .library:
             return "Library"
+        case .liked:
+            return "Liked Songs"
         case .album:
             return session.detailAlbum?.name ?? ""
         case .artist:

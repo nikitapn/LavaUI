@@ -386,6 +386,78 @@ public final class SpotifyClient: @unchecked Sendable {
         return decoded.asSnapshot()
     }
 
+    // MARK: - Library (Liked Songs)
+
+    /// Saved tracks, newest first. Caps at `maxTracks` to keep the Web API
+    /// budget in check (50 per page).
+    public func listSavedTracks(maxTracks: Int = 200) throws -> [Track] {
+        var all: [Track] = []
+        var offset = 0
+        let pageSize = 50
+        while all.count < maxTracks {
+            let take = min(pageSize, maxTracks - all.count)
+            let data = try apiGet(
+                path: "/v1/me/tracks",
+                query: ["limit": "\(take)", "offset": "\(offset)"],
+                userRequired: true
+            )
+            let page = try JSONDecoder().decode(SavedTracksPage.self, from: data)
+            let batch = page.items.enumerated().compactMap { index, item -> Track? in
+                item.track?.asSearchTrack(fallbackNumber: offset + index + 1)
+            }
+            if batch.isEmpty { break }
+            all.append(contentsOf: batch)
+            if page.next == nil || batch.count < take { break }
+            offset += batch.count
+        }
+        return all
+    }
+
+    public func isSaved(trackId: String) throws -> Bool {
+        let hits = try savedAmong(ids: [trackId])
+        return hits.contains(trackId)
+    }
+
+    public func savedAmong(ids: [String]) throws -> Set<String> {
+        let playable = ids.filter { Track.looksLikeSpotifyId($0) }
+        guard !playable.isEmpty else { return [] }
+        var liked: Set<String> = []
+        var start = 0
+        while start < playable.count {
+            let chunk = Array(playable[start..<min(start + 50, playable.count)])
+            let data = try apiGet(
+                path: "/v1/me/tracks/contains",
+                query: ["ids": chunk.joined(separator: ",")],
+                userRequired: true
+            )
+            let flags = try JSONDecoder().decode([Bool].self, from: data)
+            for (id, flag) in zip(chunk, flags) where flag {
+                liked.insert(id)
+            }
+            start += chunk.count
+        }
+        return liked
+    }
+
+    public func saveTrack(id: String) throws {
+        guard Track.looksLikeSpotifyId(id) else { return }
+        try apiPut(
+            path: "/v1/me/tracks",
+            query: ["ids": id],
+            json: nil,
+            userRequired: true
+        )
+    }
+
+    public func removeSavedTrack(id: String) throws {
+        guard Track.looksLikeSpotifyId(id) else { return }
+        try apiDelete(
+            path: "/v1/me/tracks",
+            query: ["ids": id],
+            userRequired: true
+        )
+    }
+
     // MARK: - Catalog HTTP
 
     private static let searchLimitMax = 10
@@ -519,6 +591,21 @@ public final class SpotifyClient: @unchecked Sendable {
         let (data, status) = (response.data, response.status)
         // 202 = accepted but no active device yet; treat as soft failure message.
         guard status == 204 || status == 200 || status == 202 else {
+            let body = String(data: data, encoding: .utf8) ?? ""
+            throw SpotifyError("HTTP \(status) \(path): \(body.prefix(200))")
+        }
+    }
+
+    private func apiDelete(
+        path: String,
+        query: [String: String],
+        userRequired: Bool
+    ) throws {
+        let response = try apiRequest(
+            method: "DELETE", path: path, query: query, json: nil, userRequired: userRequired
+        )
+        let (data, status) = (response.data, response.status)
+        guard status == 204 || status == 200 else {
             let body = String(data: data, encoding: .utf8) ?? ""
             throw SpotifyError("HTTP \(status) \(path): \(body.prefix(200))")
         }
@@ -732,6 +819,15 @@ private struct APITrack: Decodable {
             album: parent
         )
     }
+}
+
+private struct SavedTracksPage: Decodable {
+    var items: [SavedTrackItem]
+    var next: String?
+}
+
+private struct SavedTrackItem: Decodable {
+    var track: APITrack?
 }
 
 private struct DevicesResponse: Decodable {

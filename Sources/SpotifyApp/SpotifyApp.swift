@@ -13,8 +13,6 @@ struct SpotifyApp {
     static func main() {
         // Shared config root: ~/.config/LavaSpotify/settings.json (Linux).
         AppSettings.configure(appName: "LavaSpotify")
-        SpotifyTheme.restore()
-        Theme.current = SpotifyTheme.theme
 
         // Client-framed by default under the compositor: the window draws its
         // own controls and drag strip (same shape as LavaWeather).
@@ -74,14 +72,7 @@ struct SpotifyApp {
                     MenuItem("Home", id: "view.home") { session.goHome() }
                     MenuItem("Search", id: "view.search") { session.goSearch() }
                     MenuItem("Library", id: "view.library") { session.goLibrary() }
-                    MenuSeparator()
-                    MenuItem(
-                        "Choose Theme…",
-                        id: "view.theme",
-                        shortcut: KeyShortcut(KeyCode.t, .primary)
-                    ) {
-                        session.showThemePicker()
-                    }
+                    MenuItem("Liked Songs", id: "view.liked") { session.goLiked() }
                     MenuSeparator()
                     MenuItem("Zoom In", id: "view.zoom-in") {
                         FontStore.zoomIn(into: editor)
@@ -123,13 +114,8 @@ struct SpotifyApp {
                 }
             }
         }
-        let onRawKey = { (event: LavaUI.InputEvent) in
-            session.handleThemeKey(event)
-        }
-        let root = { Spotify(session: session) }
-
         LavaHost.run(
-            editor: editor, menu: menu, onRawKey: onRawKey, makeRoot: root
+            editor: editor, menu: menu, makeRoot: { Spotify(session: session) }
         )
     }
 }

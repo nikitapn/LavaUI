@@ -8,6 +8,7 @@ private enum SpotifyHistoryDestination {
     case home
     case search
     case library
+    case liked
     case album(Album, tracks: [Track])
     case artist(Artist, albums: [Album])
 }
@@ -27,8 +28,9 @@ final class SpotifySession: @unchecked Sendable {
     var quickSearchResults: [Track] = []
     var isQuickSearching = false
     var libraryAlbums: [Album] = []
-    var isThemePickerPresented = false
-    var themePickerSelection = SpotifyTheme.selectedIndex
+    var likedTracks: [Track] = []
+    /// Track ids known to be in Liked Songs. Optimistic around like/unlike.
+    var likedIds: Set<String> = []
 
     var detailAlbum: Album?
     var detailTracks: [Track] = []
@@ -82,6 +84,8 @@ final class SpotifySession: @unchecked Sendable {
     /// (search click plays the next song on the album). Master subtracts one;
     /// until that ships we Previous once if the first new track is not ours.
     private var pendingOpenUri: PendingOpenUri?
+    private var likedLoadGeneration: UInt64 = 0
+    private var lastLikedCheckId: String?
 
     init(editor: Editor) {
         self.editor = editor
@@ -139,62 +143,6 @@ final class SpotifySession: @unchecked Sendable {
     var progressSliderValue: Float {
         get { Float(min(progressMs, durationMs)) }
         set { scrub(toMs: Int(newValue.rounded())) }
-    }
-
-    // MARK: - Themes
-
-    func showThemePicker() {
-        themePickerSelection = SpotifyTheme.selectedIndex
-        isThemePickerPresented = true
-        FocusManager.clear()
-    }
-
-    func previewTheme(_ index: Int) {
-        guard SpotifyTheme.palettes.indices.contains(index) else { return }
-        themePickerSelection = index
-        // Live preview only — do not write settings until the user commits.
-        SpotifyTheme.apply(index, persist: false)
-    }
-
-    func moveThemeSelection(_ delta: Int) {
-        let count = SpotifyTheme.palettes.count
-        guard count > 0 else { return }
-        previewTheme((themePickerSelection + delta + count) % count)
-    }
-
-    func chooseTheme(_ index: Int) {
-        guard SpotifyTheme.palettes.indices.contains(index) else { return }
-        themePickerSelection = index
-        SpotifyTheme.apply(index, persist: true)
-        isThemePickerPresented = false
-    }
-
-    func handleThemeKey(_ event: InputEvent) -> Bool {
-        guard event.kind == .key, KeyAction.isDown(event.keyAction) else { return false }
-        if event.keyCode == KeyCode.t,
-           KeyMods.contains(event.keyMods, KeyMods.control)
-        {
-            if isThemePickerPresented {
-                isThemePickerPresented = false
-            } else {
-                showThemePicker()
-            }
-            return true
-        }
-        guard isThemePickerPresented else { return false }
-        switch event.keyCode {
-        case KeyCode.up:
-            moveThemeSelection(-1)
-            return true
-        case KeyCode.down:
-            moveThemeSelection(1)
-            return true
-        case KeyCode.enter:
-            chooseTheme(themePickerSelection)
-            return true
-        default:
-            return false
-        }
     }
 
     // MARK: - Bootstrap
@@ -303,6 +251,9 @@ final class SpotifySession: @unchecked Sendable {
             activeDeviceName = nil
             isPlaying = false
         }
+        likedTracks = []
+        likedIds = []
+        lastLikedCheckId = nil
         notice = bootstrapNotice()
         status = "Logged out"
     }
@@ -388,6 +339,140 @@ final class SpotifySession: @unchecked Sendable {
         detailTracks = []
         detailArtist = nil
         artistAlbums = []
+    }
+
+    func goLiked() {
+        if nav != .liked {
+            rememberCurrentDestination()
+            nav = .liked
+            detailAlbum = nil
+            detailTracks = []
+            detailArtist = nil
+            artistAlbums = []
+        }
+        guard isLoggedIn else {
+            likedTracks = []
+            status = "Log in to see Liked Songs"
+            notice = "Account → Log in. Existing sessions need a fresh login so Spotify grants library access."
+            return
+        }
+        if !likedTracks.isEmpty {
+            status = "Liked Songs · \(likedTracks.count)"
+        }
+        loadLikedSongs()
+    }
+
+    func playLiked() {
+        guard let first = likedTracks.first else { return }
+        selectTrack(first)
+    }
+
+    func isLiked(_ track: Track) -> Bool {
+        likedIds.contains(track.id)
+    }
+
+    func toggleLike(_ track: Track? = nil) {
+        let target = track ?? nowPlaying
+        guard let target, Track.looksLikeSpotifyId(target.id) else { return }
+        guard isLoggedIn else {
+            status = "Log in to like songs"
+            notice = "Account → Log in (a fresh login grants library access)"
+            return
+        }
+        let id = target.id
+        let currentlyLiked = likedIds.contains(id)
+        if currentlyLiked {
+            likedIds.remove(id)
+            likedTracks.removeAll { $0.id == id }
+        } else {
+            likedIds.insert(id)
+            if !likedTracks.contains(where: { $0.id == id }) {
+                likedTracks.insert(target, at: 0)
+            }
+        }
+        Thread.detachNewThread { [client, weak self] in
+            do {
+                if currentlyLiked {
+                    try client.removeSavedTrack(id: id)
+                } else {
+                    try client.saveTrack(id: id)
+                }
+            } catch {
+                MainQueue.async { [weak self] in
+                    guard let self else { return }
+                    if currentlyLiked {
+                        self.likedIds.insert(id)
+                        if !self.likedTracks.contains(where: { $0.id == id }) {
+                            self.likedTracks.insert(target, at: 0)
+                        }
+                    } else {
+                        self.likedIds.remove(id)
+                        self.likedTracks.removeAll { $0.id == id }
+                    }
+                    self.notice = "\(error)"
+                    self.status = "Could not update Liked Songs"
+                    self.report("like: \(error)")
+                }
+            }
+        }
+    }
+
+    private func loadLikedSongs() {
+        likedLoadGeneration &+= 1
+        let generation = likedLoadGeneration
+        isLoading = likedTracks.isEmpty
+        if likedTracks.isEmpty {
+            status = "Loading Liked Songs…"
+        }
+        Thread.detachNewThread { [client, weak self] in
+            do {
+                let tracks = try client.listSavedTracks()
+                MainQueue.async { [weak self] in
+                    guard let self, self.likedLoadGeneration == generation else { return }
+                    self.likedTracks = tracks
+                    self.likedIds.formUnion(tracks.map(\.id))
+                    self.isLoading = false
+                    self.status = "Liked Songs · \(tracks.count)"
+                    self.notice = tracks.isEmpty ? "No liked songs yet" : nil
+                }
+            } catch {
+                MainQueue.async { [weak self] in
+                    guard let self, self.likedLoadGeneration == generation else { return }
+                    self.isLoading = false
+                    self.status = "Could not load Liked Songs"
+                    let text = "\(error)"
+                    if text.contains("403") || text.contains("Insufficient") {
+                        self.notice = "Log out and log in again so Spotify can grant library access."
+                    } else {
+                        self.notice = text
+                    }
+                    self.report("liked: \(error)")
+                }
+            }
+        }
+    }
+
+    private func syncLikedFlag(for track: Track) {
+        guard isLoggedIn, Track.looksLikeSpotifyId(track.id) else { return }
+        if likedIds.contains(track.id) { return }
+        guard lastLikedCheckId != track.id else { return }
+        lastLikedCheckId = track.id
+        let id = track.id
+        Thread.detachNewThread { [client, weak self] in
+            do {
+                let liked = try client.isSaved(trackId: id)
+                MainQueue.async { [weak self] in
+                    guard let self else { return }
+                    if liked {
+                        self.likedIds.insert(id)
+                    } else if self.lastLikedCheckId == id {
+                        self.likedIds.remove(id)
+                    }
+                }
+            } catch {
+                // Library scope missing or transient — the heart stays empty.
+            }
+        }
     }
 
     func openAlbum(_ album: Album, rememberingCurrent: Bool = true) {
@@ -481,6 +566,12 @@ final class SpotifySession: @unchecked Sendable {
             detailTracks = []
             detailArtist = nil
             artistAlbums = []
+        case .liked:
+            nav = .liked
+            detailAlbum = nil
+            detailTracks = []
+            detailArtist = nil
+            artistAlbums = []
         case .album(let album, let tracks):
             nav = .album(album.id)
             detailAlbum = album
@@ -509,6 +600,8 @@ final class SpotifySession: @unchecked Sendable {
             destination = .search
         case .library:
             destination = .library
+        case .liked:
+            destination = .liked
         case .album(let id):
             let album = detailAlbum
                 ?? Album(id: id, name: "Album", artists: [], images: [])
@@ -628,6 +721,7 @@ final class SpotifySession: @unchecked Sendable {
         }()
         let previousId = nowPlaying?.id
         nowPlaying = playTrack
+        syncLikedFlag(for: playTrack)
         if usesSpotifyd, let uri = playTrack.uri {
             isPlaying = true
             progressMs = 0
@@ -660,6 +754,9 @@ final class SpotifySession: @unchecked Sendable {
         let queue: [Track] = {
             if detailTracks.contains(where: { $0.id == playTrack.id }) {
                 return detailTracks
+            }
+            if likedTracks.contains(where: { $0.id == playTrack.id }) {
+                return likedTracks
             }
             return [playTrack]
         }()
@@ -1081,6 +1178,7 @@ final class SpotifySession: @unchecked Sendable {
                 // (or we give up). Otherwise the +1 track flashes in the footer.
             } else if nowPlaying?.id != t.id {
                 nowPlaying = t
+                syncLikedFlag(for: t)
                 notice = bootstrapNotice()
                 if mpris.isPlaying {
                     status = "▶ \(t.name) @ \(activeDeviceName ?? "spotifyd")"

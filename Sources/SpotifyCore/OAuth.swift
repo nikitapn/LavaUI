@@ -20,6 +20,8 @@ public final class SpotifyOAuth: @unchecked Sendable {
         "user-read-playback-state",
         "user-modify-playback-state",
         "user-read-currently-playing",
+        "user-library-read",
+        "user-library-modify",
     ].joined(separator: " ")
 
     public let clientId: String
