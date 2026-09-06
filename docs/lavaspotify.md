@@ -1,9 +1,9 @@
 # LavaSpotify setup guide
 
 LavaSpotify is a LavaUI client for browsing Spotify catalog art and controlling
-playback through **Spotify Connect**. Audio is played by **spotifyd** (or any
-other Connect device), not by the LavaUI process and not by the Web Playback
-SDK.
+**spotifyd** over MPRIS (the same session-bus path as the taskbar player chip).
+Audio is played by **spotifyd**, not by the LavaUI process and not by the Web
+Playback SDK. Other Connect devices still work through the Web API as a fallback.
 
 This guide is the full install path for a Linux machine with **PulseAudio**
 (or PipeWire’s Pulse compatibility layer). It records the two logins, the
@@ -14,30 +14,29 @@ does not have to rediscover them.
 
 ```
 LavaSpotify (Swift / LavaUI)
-  │  catalog: client credentials or seed/oembed
-  │  control: user OAuth → Web API Player
+  │  catalog: client credentials or seed/oembed  →  GET /v1/search, /v1/albums/{id}
+  │  transport: session bus MPRIS (same path as the taskbar player chip)
   │
-  ├── GET  /v1/search, /v1/albums/{id}     metadata + covers
-  └── PUT  /v1/me/player/play?device_id=…  start track on a Connect device
-                    │
-                    ▼
-              spotifyd (librespot)
-                    │
-                    ▼
-              PulseAudio / PipeWire
+  ├── OpenUri / PlayPause / Next / SetPosition / Volume
+  │         ▼
+  │   spotifyd (librespot Spirc)  ──►  PulseAudio / PipeWire
+  │
+  └── Web API Player (`/v1/me/player/*`) only if no spotifyd is on the bus
 ```
 
 | Piece | Role |
 | --- | --- |
-| **LavaSpotify** | UI, cover cache, OAuth for the *control* token, Player API |
-| **spotifyd** | Connect speaker; decrypts and plays audio via Pulse |
+| **LavaSpotify** | UI, cover cache, catalog OAuth; transport via MPRIS |
+| **spotifyd** | Connect speaker; decrypts and plays audio via Pulse; MPRIS + Controls |
 | **Web Playback SDK** | Not used (browser + Widevine DRM; wrong stack) |
 
-There are **two independent Spotify logins**:
+Playback does **not** need a LavaSpotify user login when spotifyd is on the
+session bus (`use_mpris = true`). There are still two logins if you want a live
+catalog and a bound Connect device:
 
-1. **LavaSpotify** — authorization-code + PKCE so the app can call `/me/player/*`.
-2. **spotifyd** — `spotifyd authenticate` so the daemon is bound to your account
-   and appears in `GET /me/player/devices`.
+1. **LavaSpotify** — authorization-code + PKCE for live catalog (and as a
+   fallback to `/me/player/*` when controlling a phone or the official client).
+2. **spotifyd** — `spotifyd authenticate` so the daemon is bound to your account.
 
 Zeroconf alone (`Spotifyd@hostname` on the LAN) is not enough for the Web API
 device list. The daemon must finish its own OAuth and stay running.

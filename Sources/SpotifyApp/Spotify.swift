@@ -2,12 +2,13 @@ import Foundation
 import LavaUI
 import SpotifyCore
 
-/// LavaSpotify root: sidebar + main + player bar. UI only — no audio.
+/// LavaSpotify root: title bar, sidebar + main, player bar. UI only — no audio.
 struct Spotify: View {
     @Bindable var session: SpotifySession
 
     var body: some View {
-        VStack(flexGrow: 1, padding: 0) {
+        VStack(flexGrow: 1, padding: 0, spacing: 0) {
+            TitleBar(session: session)
             HStack(flexGrow: 1, padding: 0) {
                 sidebar
                 mainColumn
@@ -106,10 +107,6 @@ struct Spotify: View {
     @ViewBuilder
     private var sidebar: some View {
         VStack(width: .pt(200), padding: 10) {
-            Text("LavaSpotify", color: .accent)
-                .padding(4)
-                .agentId("app-title")
-
             navRow("Home", selected: isHome, action: { session.goHome() })
                 .agentId("nav-home")
             navRow("Search", selected: session.nav == .search, action: { session.goSearch() })
@@ -626,7 +623,7 @@ struct Spotify: View {
                     session.volumePercent == 0 ? "🔇" : "🔊",
                     style: secondaryTransportStyle,
                     font: session.playerControlFont,
-                    isEnabled: session.isLoggedIn && session.selectedDeviceId != nil,
+                    isEnabled: session.canControlVolume,
                     action: {
                         session.setVolume(to: session.volumePercent == 0 ? 50 : 0)
                     }
@@ -726,15 +723,56 @@ struct Spotify: View {
         return String(text.prefix(max(1, limit - 1))).trimmingCharacters(in: .whitespaces) + "…"
     }
 
-    private var deviceFooter: String {
-        if !session.isLoggedIn {
-            return "Log in to play via spotifyd / Connect"
+    private var deviceFooter: String { session.playerFooterLabel }
+}
+
+// MARK: - Chrome
+
+/// Client title strip: window controls, the product name, a drag handle.
+/// Hidden buttons while maximized (`.windowChrome`); the rest of the row stays
+/// so Theme and the name do not jump. Matches LavaWeather's bar.
+private struct TitleBar: View {
+    @Bindable var session: SpotifySession
+
+    var body: some View {
+        HStack(padding: 10, alignment: .center, spacing: 10) {
+            if WindowBridge.drawsOwnChrome {
+                WindowControls()
+                    .windowChrome()
+            }
+            Text("LavaSpotify", color: .primary)
+                .agentId("app-title")
+            if !subtitle.isEmpty {
+                Text(subtitle, color: .dim)
+            }
+            Spacer()
+            Text(
+                "Theme",
+                color: .secondary,
+                onClick: { session.showThemePicker() }
+            )
+            .padding(6)
+            .hoverBackground(Theme.current.hover)
+            .cornerRadius(6)
+            .agentId("title-theme")
         }
-        if let name = session.activeDeviceName
-            ?? session.devices.first(where: { $0.id == session.selectedDeviceId })?.name
-        {
-            return "Connect · \(name)"
+        .frame(height: .pt(44))
+        .background(Theme.current.panel)
+        .windowDrag()
+    }
+
+    private var subtitle: String {
+        switch session.nav {
+        case .home:
+            return ""
+        case .search:
+            return "Search"
+        case .library:
+            return "Library"
+        case .album:
+            return session.detailAlbum?.name ?? ""
+        case .artist:
+            return session.detailArtist?.name ?? ""
         }
-        return "Connect · no device (start spotifyd)"
     }
 }

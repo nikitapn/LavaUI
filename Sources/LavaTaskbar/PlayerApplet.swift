@@ -1,4 +1,5 @@
 import Foundation
+import LavaMpris
 import LavaUI
 
 /// Panel media control: cover + title in the strip, popover with transport.

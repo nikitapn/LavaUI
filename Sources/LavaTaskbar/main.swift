@@ -1,6 +1,7 @@
 import Foundation
 import LavaClient
 import LavaIDL
+import LavaMpris
 import LavaUI
 import Observation
 

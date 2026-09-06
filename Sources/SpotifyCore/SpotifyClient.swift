@@ -174,7 +174,10 @@ public final class SpotifyClient: @unchecked Sendable {
         return (artist, albums)
     }
 
-    // MARK: - Player (Connect / spotifyd)
+    // MARK: - Player (Connect fallback)
+    //
+    // LavaSpotify prefers MPRIS on spotifyd. These endpoints remain for other
+    // Connect devices when no `rs.spotifyd` / MPRIS name is on the session bus.
 
     public func listDevices() throws -> [SpotifyDevice] {
         let data = try apiGet(path: "/v1/me/player/devices", query: [:], userRequired: true)

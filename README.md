@@ -246,7 +246,7 @@ expensive to build and keyed by content* (the glyph atlas, Vulkan objects);
 | `LavaUI` | Views, Yoga layout, draw list, fonts, input, theming | `LavaText`, `LavaMenu`, `CxxCanvas`, `CYoga` |
 | `HelloWorld` | Demo app (`DemoExample`) and an FBD diagram editor | `LavaUI`, `FBDModel` |
 | `LavaSwitcher` | 3D Ctrl+Tab / Mod+Tab app switcher (live window posters) | `LavaUI`, `LavaClient` |
-| `LavaSpotify` / `SpotifyApp` | LavaSpotify UI + Connect control of spotifyd | `LavaUI`, `SpotifyCore` |
+| `LavaSpotify` / `SpotifyApp` | LavaSpotify UI + MPRIS control of spotifyd | `LavaUI`, `SpotifyCore`, `LavaMpris` |
 | `SpotifyCore` | Spotify Web API, OAuth, cover download (no Vulkan) | nothing |
 | `LavaTerm` / `LavaTermApp` | Terminal emulator (PTY + ANSI + Canvas grid) | `LavaUI`, `LavaTermCore` |
 | `LavaTermCore` | VT grid + ANSI parser (headless, unit-tested) | nothing |

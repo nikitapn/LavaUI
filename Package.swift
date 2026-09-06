@@ -102,6 +102,13 @@ var targets: [Target] = [
             .linkedLibrary("systemd", .when(platforms: [.linux])),
         ]
     ),
+    // Swift façade over CMpris. Shared by the panel and LavaSpotify so
+    // transport (next / pause / OpenUri / volume) stays on the session bus.
+    .target(
+        name: "LavaMpris",
+        dependencies: ["CMpris", "LavaUI"],
+        swiftSettings: interopCxx
+    ),
     .target(name: "TraceLoomCore"),
     .target(name: "SpotifyCore"),
     .target(name: "LavaTermCore"),
@@ -124,7 +131,7 @@ var targets: [Target] = [
     // out of the same client API an app uses. See Sources/LavaTaskbar.
     .executableTarget(
         name: "LavaTaskbar",
-        dependencies: ["LavaUI", "CPulse", "CMpris"]
+        dependencies: ["LavaUI", "CPulse", "LavaMpris"]
             + (haveNprpc ? [Target.Dependency("LavaClient"),
                             Target.Dependency("LavaIDL")] : []),
         resources: [
@@ -257,7 +264,8 @@ var targets: [Target] = [
         dependencies: [
             "LavaUI",
             "LavaHost",
-            "SpotifyCore"
+            "SpotifyCore",
+            "LavaMpris",
         ],
         swiftSettings: interopCxx
     ),

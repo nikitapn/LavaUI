@@ -8,9 +8,9 @@ import Glibc
 
 /// Authorization-code + PKCE for user tokens (Player API / spotifyd control).
 ///
-/// Client-credentials alone cannot hit `/me/player/*`. A user must grant
-/// `user-modify-playback-state` (and friends) so we can target spotifyd as a
-/// Connect device.
+/// Client-credentials alone cannot hit `/me/player/*`. Local spotifyd
+/// transport uses MPRIS and does not need these scopes. A user must grant
+/// them only to control other Connect devices via the Web API.
 ///
 /// Redirect: `http://127.0.0.1:<port>/callback` — register the same URI in the
 /// Spotify developer dashboard. Default port is 17321.

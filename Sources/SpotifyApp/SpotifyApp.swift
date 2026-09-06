@@ -3,10 +3,11 @@ import LavaHost
 import LavaUI
 import SpotifyCore
 
-/// LavaSpotify — Spotify-shaped UI + Connect control of spotifyd.
+/// LavaSpotify — Spotify-shaped UI + local control of spotifyd.
 ///
 /// Catalog: client credentials or seed/oembed.
-/// Playback: user OAuth → Player API → spotifyd (or any Connect device).
+/// Playback: MPRIS on the session bus (spotifyd / librespot). The Web API
+/// Player endpoints are only the fallback when no spotifyd is present.
 @main
 struct SpotifyApp {
     static func main() {
@@ -15,10 +16,9 @@ struct SpotifyApp {
         SpotifyTheme.restore()
         Theme.current = SpotifyTheme.theme
 
-        // Client-framed by default under the compositor: the demo's toolbar is
-        // already a 56pt row, and a title bar above it would be a second one
-        // saying less. `LAVA_FRAME=server` puts the compositor's strip back,
-        // which is the comparison worth being able to make in one keystroke.
+        // Client-framed by default under the compositor: the window draws its
+        // own controls and drag strip (same shape as LavaWeather).
+        // `LAVA_FRAME=server` puts the compositor's title bar back.
         let editorOrNil = LavaHost.open(title: "LavaSpotify")
         guard let editor = editorOrNil else { exit(1) }
 
@@ -98,22 +98,22 @@ struct SpotifyApp {
                         let msg = """
                             LavaSpotify + spotifyd
                             ─────────────────────
-                            LavaSpotify login ≠ spotifyd login. Both are needed.
+                            Playback talks to spotifyd over MPRIS (session bus),
+                            not the Web API Player endpoints. Catalog still uses
+                            the Web API (or the seed catalog).
 
-                            A) LavaSpotify (Web API control)
+                            A) spotifyd (the speaker)
+                               1. use_mpris = true in spotifyd.conf
+                               2. spotifyd authenticate
+                               3. systemctl --user restart spotifyd
+                               Play / pause / next / volume / click-a-track
+                               then stay on D-Bus.
+
+                            B) LavaSpotify catalog (optional for transport)
                                1. Dashboard: redirect http://127.0.0.1:17321/callback
                                2. export SPOTIFY_CLIENT_ID / SPOTIFY_CLIENT_SECRET
-                               3. Account → Log in to Spotify
-
-                            B) spotifyd (the actual speaker / Connect device)
-                               Zeroconf alone (Spotifyd@host on LAN) does NOT
-                               list the device on GET /me/player/devices until
-                               spotifyd has credentials for your account:
-                               1. spotifyd authenticate
-                                  (browser OAuth; default port 8000)
-                               2. systemctl --user restart spotifyd
-                               3. Account → Refresh devices
-                                  Expect a name containing “spotifyd”
+                               3. Account → Log in only if you want other
+                                  Connect devices (phone, official client)
 
                             Optional: SPOTIFY_DEVICE_NAME=spotifyd
                             (substring match; default already “spotifyd”)

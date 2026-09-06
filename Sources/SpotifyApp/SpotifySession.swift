@@ -1,4 +1,5 @@
 import Foundation
+import LavaMpris
 import LavaUI
 import Observation
 import SpotifyCore
@@ -13,9 +14,10 @@ private enum SpotifyHistoryDestination {
 
 /// Shared navigation + catalog + Connect playback state for LavaSpotify.
 ///
-/// Playback targets Spotify Connect devices (spotifyd when present) via the
-/// Web API Player endpoints. That needs a **user** OAuth login — client
-/// credentials alone cannot call `/me/player/*`.
+/// Transport prefers local spotifyd over MPRIS (`LavaMpris`) so next / pause /
+/// seek / volume / OpenUri stay on the session bus and do not consume Web API
+/// Player quota. The Player API is the fallback when no spotifyd is on the bus
+/// — that path still needs a **user** OAuth login.
 @Observable
 final class SpotifySession: @unchecked Sendable {
     var nav: SpotifyNav = .home
@@ -56,8 +58,12 @@ final class SpotifySession: @unchecked Sendable {
     let editor: Editor
     /// A larger instance of the media-symbol face for compact player chrome.
     let playerControlFont: UIFont?
+    /// Pinned to spotifyd. Present once the daemon is the active Connect device;
+    /// `controlsPresent` is enough to TransferPlayback + OpenUri.
+    let mpris: MprisSession
 
     private var pollStop = false
+    private var pollStarted = false
     /// Bumped on every scrub so only the latest seek request is sent.
     private var seekGeneration: UInt64 = 0
     /// Bumped for every slider tick so remote volume writes are coalesced.
@@ -71,6 +77,11 @@ final class SpotifySession: @unchecked Sendable {
     private var progressAnchor: Date = .distantPast
     private var progressAnchorMs: Int = 0
     private var navigationHistory: [SpotifyHistoryDestination] = []
+    /// spotifyd 0.4.2 OpenUri of a track loads the album at `track.number` as a
+    /// 0-based index, but that number is 1-based — so it starts one track late
+    /// (search click plays the next song on the album). Master subtracts one;
+    /// until that ships we Previous once if the first new track is not ours.
+    private var pendingOpenUri: PendingOpenUri?
 
     init(editor: Editor) {
         self.editor = editor
@@ -82,12 +93,46 @@ final class SpotifySession: @unchecked Sendable {
         } else {
             self.playerControlFont = FontStore.symbols
         }
+        self.mpris = MprisSession(spotifydOnly: true)
         self.isLoggedIn = client.isUserLoggedIn
+        self.mpris.onUpdate = { [weak self] in
+            self?.adoptMprisSnapshot()
+        }
+    }
+
+    /// spotifyd is on the session bus (active, or Controls only).
+    var usesSpotifyd: Bool { mpris.present || mpris.controlsPresent }
+
+    var canControlVolume: Bool {
+        mpris.present || (isLoggedIn && selectedDeviceId != nil)
+    }
+
+    var canControlPlayback: Bool { usesSpotifyd || isLoggedIn }
+
+    var playerFooterLabel: String {
+        if mpris.present {
+            let name = mpris.identity.isEmpty ? "spotifyd" : mpris.identity
+            return "spotifyd · \(name)"
+        }
+        if mpris.controlsPresent {
+            return "spotifyd · ready"
+        }
+        if !isLoggedIn {
+            return "Start spotifyd, or log in for Connect"
+        }
+        if let name = activeDeviceName
+            ?? devices.first(where: { $0.id == selectedDeviceId })?.name
+        {
+            return "Connect · \(name)"
+        }
+        return "Connect · no device (start spotifyd)"
     }
 
     /// Duration of the current track for the seek slider range (at least 1 ms).
     var durationMs: Int {
-        max(1, nowPlaying?.durationMs ?? 1)
+        let catalog = nowPlaying?.durationMs ?? 0
+        let local = mpris.present ? mpris.lengthMs : 0
+        return max(1, max(catalog, local))
     }
 
     /// Binding-friendly progress in 0…durationMs.
@@ -156,6 +201,7 @@ final class SpotifySession: @unchecked Sendable {
 
     func start() {
         isLoggedIn = client.isUserLoggedIn
+        adoptMprisSnapshot()
         isLoading = true
         status = client.hasCredentials || isLoggedIn
             ? "Loading from Spotify Web API…"
@@ -187,18 +233,25 @@ final class SpotifySession: @unchecked Sendable {
             }
         }
 
+        startPlaybackPolling()
         if isLoggedIn {
             refreshDevices()
-            startPlaybackPolling()
         }
     }
 
     private func bootstrapNotice() -> String? {
+        if mpris.present {
+            let name = mpris.identity.isEmpty ? "spotifyd" : mpris.identity
+            return "Playing via \(name) (local MPRIS)"
+        }
+        if mpris.controlsPresent {
+            return "spotifyd is ready. Play a track — transport stays on the session bus."
+        }
         if !client.hasCredentials && !isLoggedIn {
-            return "Seed mode. Set SPOTIFY_CLIENT_ID/SECRET for live catalog; Account → Log in to control spotifyd."
+            return "Seed mode. Set SPOTIFY_CLIENT_ID/SECRET for live catalog; start spotifyd to play without the Web API."
         }
         if client.hasCredentials && !isLoggedIn {
-            return "Catalog live. Log in (Account menu) to play through spotifyd / Connect."
+            return "Catalog live. Start spotifyd to play locally, or log in to control other Connect devices."
         }
         if isLoggedIn && devices.isEmpty {
             return "Logged in, but no Connect devices. Run: spotifyd authenticate && systemctl --user restart spotifyd"
@@ -227,7 +280,6 @@ final class SpotifySession: @unchecked Sendable {
                     self.status = "Logged in"
                     self.notice = self.bootstrapNotice()
                     self.refreshDevices()
-                    self.startPlaybackPolling()
                     // Refresh catalog with user token if we were on seed-only.
                     self.start()
                 }
@@ -247,11 +299,12 @@ final class SpotifySession: @unchecked Sendable {
         isLoggedIn = false
         devices = []
         selectedDeviceId = nil
-        activeDeviceName = nil
-        isPlaying = false
+        if !mpris.present {
+            activeDeviceName = nil
+            isPlaying = false
+        }
         notice = bootstrapNotice()
         status = "Logged out"
-        pollStop = true
     }
 
     func refreshDevices() {
@@ -472,7 +525,7 @@ final class SpotifySession: @unchecked Sendable {
     /// Connect snapshots normally carry the album directly.
     func openNowPlayingAlbum() {
         guard let track = nowPlaying else { return }
-        if let album = track.album {
+        if let album = track.album, Track.looksLikeSpotifyId(album.id) {
             openAlbum(album)
             return
         }
@@ -573,10 +626,31 @@ final class SpotifySession: @unchecked Sendable {
             }
             return track
         }()
+        let previousId = nowPlaying?.id
         nowPlaying = playTrack
+        if usesSpotifyd, let uri = playTrack.uri {
+            isPlaying = true
+            progressMs = 0
+            progressAnchor = Date()
+            progressAnchorMs = 0
+            let name = mpris.identity.isEmpty ? "spotifyd" : mpris.identity
+            activeDeviceName = name
+            status = "▶ \(playTrack.name) @ \(name)"
+            notice = bootstrapNotice()
+            pendingOpenUri = PendingOpenUri(
+                wantedId: playTrack.id,
+                previousId: previousId,
+                corrected: false,
+                started: Date()
+            )
+            mpris.openUri(uri)
+            return
+        }
         guard isLoggedIn else {
             isPlaying = false
-            status = "Log in to play (Account → Log in to Spotify)"
+            status = usesSpotifyd
+                ? "spotifyd is not ready yet"
+                : "Log in to play (Account → Log in to Spotify)"
             notice = bootstrapNotice()
             return
         }
@@ -634,6 +708,14 @@ final class SpotifySession: @unchecked Sendable {
             selectTrack(t)
             return
         }
+        if usesSpotifyd, Track.looksLikeSpotifyId(album.id) {
+            isPlaying = true
+            let name = mpris.identity.isEmpty ? "spotifyd" : mpris.identity
+            activeDeviceName = name
+            status = "▶ \(album.name) @ \(name)"
+            mpris.openUri(album.uri)
+            return
+        }
         guard isLoggedIn else {
             status = "Log in to play"
             return
@@ -659,6 +741,12 @@ final class SpotifySession: @unchecked Sendable {
     }
 
     func togglePlay() {
+        if usesSpotifyd {
+            mpris.playPause()
+            isPlaying.toggle()
+            status = isPlaying ? "Playing" : "Paused"
+            return
+        }
         guard isLoggedIn else {
             status = "Log in to control playback"
             return
@@ -686,6 +774,11 @@ final class SpotifySession: @unchecked Sendable {
     }
 
     func playNext() {
+        if mpris.present {
+            mpris.next()
+            status = "Skipped →"
+            return
+        }
         guard isLoggedIn else {
             // Local list fallback when not logged in.
             localSkip(+1)
@@ -705,6 +798,11 @@ final class SpotifySession: @unchecked Sendable {
     }
 
     func playPrevious() {
+        if mpris.present {
+            mpris.previous()
+            status = "Skipped ←"
+            return
+        }
         guard isLoggedIn else {
             localSkip(-1)
             return
@@ -747,6 +845,25 @@ final class SpotifySession: @unchecked Sendable {
         seekGeneration &+= 1
         let gen = seekGeneration
         let deviceId = selectedDeviceId
+        if mpris.present {
+            Thread.detachNewThread { [weak self] in
+                Thread.sleep(forTimeInterval: 0.12)
+                guard let self, gen == self.seekGeneration else { return }
+                self.mpris.setPosition(us: Int64(clamped) * 1000)
+                MainQueue.async { [weak self] in
+                    guard let self, gen == self.seekGeneration else { return }
+                    self.progressAnchor = Date()
+                    self.progressAnchorMs = clamped
+                    self.progressMs = clamped
+                }
+                Thread.sleep(forTimeInterval: 0.25)
+                MainQueue.async { [weak self] in
+                    guard let self, gen == self.seekGeneration else { return }
+                    self.isScrubbing = false
+                }
+            }
+            return
+        }
         guard isLoggedIn else {
             isScrubbing = false
             return
@@ -793,6 +910,20 @@ final class SpotifySession: @unchecked Sendable {
         volumeGeneration &+= 1
         let gen = volumeGeneration
         let deviceId = selectedDeviceId
+        if mpris.present {
+            Thread.detachNewThread { [weak self] in
+                Thread.sleep(forTimeInterval: 0.10)
+                guard let self, gen == self.volumeGeneration else { return }
+                self.mpris.setVolume(Double(clamped) / 100.0)
+                Thread.sleep(forTimeInterval: 0.30)
+                MainQueue.async { [weak self] in
+                    guard let self, gen == self.volumeGeneration else { return }
+                    self.pendingVolumePercent = nil
+                    self.isAdjustingVolume = false
+                }
+            }
+            return
+        }
         guard isLoggedIn else {
             pendingVolumePercent = nil
             isAdjustingVolume = false
@@ -832,16 +963,20 @@ final class SpotifySession: @unchecked Sendable {
     // MARK: - Poll Connect state
 
     private func startPlaybackPolling() {
+        if pollStarted {
+            pollStop = false
+            return
+        }
+        pollStarted = true
         pollStop = false
         Thread.detachNewThread { [weak self] in
             var ticks = 0
             while let self, !self.pollStop {
                 Thread.sleep(forTimeInterval: 0.25)
                 ticks += 1
-                guard self.isLoggedIn else { continue }
 
-                // Smooth the bar between API samples while playing, unless the
-                // user is dragging the seek knob.
+                // Smooth the bar between samples while playing, unless the
+                // user is dragging the seek knob. Works for MPRIS and Connect.
                 MainQueue.async { [weak self] in
                     guard let self, !self.isScrubbing, self.isPlaying else { return }
                     let elapsed = Int(Date().timeIntervalSince(self.progressAnchor) * 1000)
@@ -849,8 +984,12 @@ final class SpotifySession: @unchecked Sendable {
                     if next != self.progressMs { self.progressMs = next }
                 }
 
-                // Full Connect snapshot ~every second.
-                guard ticks % 4 == 0 else { continue }
+                // MPRIS is push plus a local Position timer. Polling
+                // GET /me/player while spotifyd is on the bus is what
+                // burned development-mode quota — including the idle
+                // Controls-only state, because the next play will
+                // TransferPlayback anyway.
+                guard self.isLoggedIn, !self.usesSpotifyd, ticks % 4 == 0 else { continue }
                 do {
                     let snap = try self.client.currentPlayback()
                     MainQueue.async { [weak self] in
@@ -911,7 +1050,139 @@ final class SpotifySession: @unchecked Sendable {
         }
     }
 
+    // MARK: - MPRIS (spotifyd)
+
+    private func adoptMprisSnapshot() {
+        if mpris.present {
+            let name = mpris.identity.isEmpty ? "spotifyd" : mpris.identity
+            activeDeviceName = name
+        } else if mpris.controlsPresent, activeDeviceName == nil {
+            activeDeviceName = "spotifyd"
+        }
+
+        if !mpris.present && !mpris.controlsPresent {
+            if selectedDeviceId == nil {
+                activeDeviceName = nil
+            }
+            notice = bootstrapNotice()
+            return
+        }
+        guard mpris.present else {
+            notice = bootstrapNotice()
+            return
+        }
+
+        isPlaying = mpris.isPlaying
+
+        if let t = trackFromMpris() {
+            resolvePendingOpenUri(actualId: t.id)
+            if pendingOpenUri != nil {
+                // Hold the row the user clicked until the daemon lands on it
+                // (or we give up). Otherwise the +1 track flashes in the footer.
+            } else if nowPlaying?.id != t.id {
+                nowPlaying = t
+                notice = bootstrapNotice()
+                if mpris.isPlaying {
+                    status = "▶ \(t.name) @ \(activeDeviceName ?? "spotifyd")"
+                }
+            } else if let current = nowPlaying, current.durationMs <= 1, t.durationMs > 1 {
+                var updated = current
+                updated.durationMs = t.durationMs
+                nowPlaying = updated
+            }
+        }
+
+        if !isScrubbing {
+            let incoming = mpris.positionMs
+            if !isPlaying {
+                progressMs = incoming
+                progressAnchorMs = incoming
+                progressAnchor = Date()
+            } else if abs(incoming - progressMs) > 400 {
+                progressMs = incoming
+                progressAnchorMs = incoming
+                progressAnchor = Date()
+            }
+        }
+
+        if let pending = pendingVolumePercent {
+            if mpris.volumePercent == pending {
+                volumePercent = pending
+                pendingVolumePercent = nil
+                isAdjustingVolume = false
+            }
+        } else if !isAdjustingVolume {
+            volumePercent = mpris.volumePercent
+        }
+    }
+
+    private func resolvePendingOpenUri(actualId: String) {
+        guard var pending = pendingOpenUri else { return }
+        if Date().timeIntervalSince(pending.started) > 5 {
+            pendingOpenUri = nil
+            return
+        }
+        if actualId == pending.wantedId {
+            pendingOpenUri = nil
+            return
+        }
+        // Still the track that was playing before OpenUri — load has not landed.
+        if let prev = pending.previousId, actualId == prev {
+            return
+        }
+        if !pending.corrected {
+            pending.corrected = true
+            pendingOpenUri = pending
+            report("spotifyd OpenUri started one track late; Previous")
+            mpris.previous()
+            return
+        }
+        pendingOpenUri = nil
+    }
+
+    private func trackFromMpris() -> Track? {
+        let id = spotifyId(fromMprisUri: mpris.trackUri, trackId: mpris.trackId)
+        guard let id, Track.looksLikeSpotifyId(id) else { return nil }
+        let images: [CoverImage] = mpris.artURL.isEmpty ? [] : [CoverImage(url: mpris.artURL)]
+        let artists: [ArtistRef] = mpris.artist.isEmpty
+            ? []
+            : [ArtistRef(id: "", name: mpris.artist)]
+        let album: Album? = {
+            if mpris.album.isEmpty && images.isEmpty { return nil }
+            return Album(id: "", name: mpris.album, artists: artists, images: images)
+        }()
+        return Track(
+            id: id,
+            name: mpris.title.isEmpty ? "Unknown" : mpris.title,
+            artists: artists,
+            durationMs: max(1, mpris.lengthMs),
+            trackNumber: 0,
+            album: album
+        )
+    }
+
+    private func spotifyId(fromMprisUri uri: String, trackId: String) -> String? {
+        func id(from source: String) -> String? {
+            if let r = source.range(of: "track:") {
+                return String(source[r.upperBound...])
+            }
+            if let r = source.range(of: "/track/") {
+                return String(source[r.upperBound...])
+            }
+            return nil
+        }
+        if let id = id(from: uri) { return id }
+        return id(from: trackId)
+    }
+
     private func report(_ message: String) {
         FileHandle.standardError.write(Data("LavaSpotify: \(message)\n".utf8))
     }
+}
+
+private struct PendingOpenUri {
+    var wantedId: String
+    var previousId: String?
+    var corrected: Bool
+    var started: Date
 }
