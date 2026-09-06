@@ -1040,7 +1040,11 @@ public final class DrawList {
         // After the main walk, so overlays paint above everything and — because
         // the clip stack is balanced by now — are not scissored by whatever
         // ancestor the presenter happened to sit inside.
-        var compositorFrosted = false
+        // Collected across the whole pass and sent once at the end. Sending
+        // per overlay meant the last one won: a submenu's rect replaced the
+        // menu's, and the frost jumped out from under the menu it flew out of.
+        var frostRects: [BackdropBridge.FrostRect] = []
+        var frostRadius: Float = 0
         // By index, because emitting one overlay can append another: a menu's
         // submenu is presented from inside the menu's own subtree, and its
         // anchor is only known once the row it hangs off has been laid out
@@ -1088,14 +1092,20 @@ public final class DrawList {
             // framebuffer behind the popup is empty, and smearing it is the
             // thing the bridge exists to avoid.
             let compositorGlass = glassRadius != nil
-                && BackdropBridge.frostOverlay != nil
+                && BackdropBridge.frostOverlays != nil
             if compositorGlass, let radius = glassRadius {
-                BackdropBridge.frostOverlay?(
-                    radius,
-                    att.origin.x, att.origin.y, att.size.w, att.size.h,
-                    glassCorner
+                frostRects.append(
+                    BackdropBridge.FrostRect(
+                        x: att.origin.x, y: att.origin.y,
+                        w: att.size.w, h: att.size.h,
+                        cornerRadius: glassCorner
+                    )
                 )
-                compositorFrosted = true
+                // One radius covers the surface, so the strongest wins. Two
+                // popups asking for different blurs is not a shape any of
+                // this draws, and the alternative is a plate that disagrees
+                // with the panel it belongs to.
+                frostRadius = max(frostRadius, radius)
             }
 
             withBlurScope(
@@ -1129,9 +1139,7 @@ public final class DrawList {
                 cullStack = savedCull
             }
         }
-        if !compositorFrosted {
-            BackdropBridge.frostOverlay?(0, 0, 0, 0, 0, 0)
-        }
+        BackdropBridge.frostOverlays?(frostRadius, frostRects)
         pendingOverlays.removeAll(keepingCapacity: true)
         cullStack.removeAll(keepingCapacity: true)
         WidgetProfiler.endFrame()

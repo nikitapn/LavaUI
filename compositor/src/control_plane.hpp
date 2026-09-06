@@ -142,13 +142,23 @@ struct CompositorHost {
   virtual bool setInputRegion(uint32_t surfaceId,
                               std::vector<InputRect> rects) = 0;
 
-  /// Frost the desktop behind this surface. `radius` 0 turns it off.
-  /// `w` or `h` of 0 frosts the whole surface; otherwise `x,y,w,h` are a
-  /// rect in the surface's own coordinates. `cornerRadius` rounds that
-  /// plate so a popup's frost matches the popup.
-  virtual bool setBackdropBlur(uint32_t surfaceId, float radius, float x,
-                               float y, float w, float h,
-                               float cornerRadius) = 0;
+  /// One rectangle of desktop frosted behind a surface, mirroring `FrostRect`
+  /// in the IDL for the same reason `InputRect` above is a mirror.
+  struct FrostRect {
+    float x = 0.f;
+    float y = 0.f;
+    float w = 0.f;
+    float h = 0.f;
+    float cornerRadius = 0.f;
+  };
+
+  /// Frost the desktop behind this surface, one plate per rect. `radius` 0 or
+  /// an empty list turns it off. A rect with `w` or `h` of 0 is the whole
+  /// surface, which is what a window that is itself the glass asks for;
+  /// otherwise it is in the surface's own coordinates, and `cornerRadius`
+  /// rounds its plate so a popup's frost matches the popup.
+  virtual bool setBackdropBlur(uint32_t surfaceId, float radius,
+                               std::vector<FrostRect> rects) = 0;
 
   /// Remembers the pointer image a surface wants, and applies it now if the
   /// pointer is over that surface. `shape` is a `CursorShape` ordinal — an

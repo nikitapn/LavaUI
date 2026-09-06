@@ -311,13 +311,33 @@ public struct OverlayView<Content: View, OverlayContent: View>: PrimitiveView {
 /// — frosting it would smear nothing. The compositor can see the wallpaper
 /// and the windows under that rect, and this is how a popup asks it to.
 public enum BackdropBridge {
-    /// Frost `x,y,w,h` of this surface (layout pixels). `radius` 0 clears.
-    /// `cornerRadius` rounds the frost plate to match the popup.
-    nonisolated(unsafe) public static var frostOverlay:
-        (@Sendable (
-            _ radius: Float, _ x: Float, _ y: Float,
-            _ w: Float, _ h: Float, _ cornerRadius: Float
-        ) -> Void)?
+    /// One rectangle to frost, in this surface's layout pixels.
+    /// `cornerRadius` rounds the plate to match the popup sitting on it.
+    public struct FrostRect: Sendable, Equatable {
+        public var x: Float
+        public var y: Float
+        public var w: Float
+        public var h: Float
+        public var cornerRadius: Float
+
+        public init(
+            x: Float, y: Float, w: Float, h: Float, cornerRadius: Float
+        ) {
+            self.x = x
+            self.y = y
+            self.w = w
+            self.h = h
+            self.cornerRadius = cornerRadius
+        }
+    }
+
+    /// Frost every rect in the list. An empty list, or `radius` 0, clears.
+    ///
+    /// A list because a menu with a fly-out submenu beside it is two
+    /// rectangles with desktop showing between them: one plate cannot be
+    /// both, and their union would frost the gap.
+    nonisolated(unsafe) public static var frostOverlays:
+        (@Sendable (_ radius: Float, _ rects: [FrostRect]) -> Void)?
 }
 
 /// Styling for the floating surface an overlay draws on.

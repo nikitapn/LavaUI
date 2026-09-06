@@ -1571,24 +1571,34 @@ struct ClientSurface {
   /// A canvas surface so the blur runs on the compositing Vulkan device
   /// (`BlurPass`), not a CPU box filter.
   float backdropBlurRadius = 0.f;
-  /// Optional frost rect in surface coordinates. `blurW`/`blurH` of 0
-  /// means the whole surface, which is what a terminal wants. A panel
-  /// dropdown fills these in so the empty 600pt of surface does not
+  /// One frosted rectangle: where it goes, and the plate it is drawn on.
+  ///
+  /// `w`/`h` of 0 means the whole surface, which is what a terminal wants. A
+  /// panel dropdown fills them in so the empty 600pt of surface does not
   /// frost the desktop.
-  float blurX = 0.f;
-  float blurY = 0.f;
-  float blurW = 0.f;
-  float blurH = 0.f;
-  float blurCorner = 0.f;
-  std::unique_ptr<lava::CanvasSurface> blurCanvas;
-  wlr_scene_buffer *blurNode = nullptr;
-  std::string blurKey;
-  /// Whether `blurNode` carries a plate that was actually frosted. The key is
-  /// named before the capture is attempted and the capture can fail (no
-  /// dma-buf import, no readback), so the key alone does not answer it — and
-  /// a window revealed onto a plate that was never drawn would put a slab of
-  /// whatever the canvas last held under itself.
-  bool blurPlateReady = false;
+  struct FrostPlate {
+    float x = 0.f;
+    float y = 0.f;
+    float w = 0.f;
+    float h = 0.f;
+    float corner = 0.f;
+    std::unique_ptr<lava::CanvasSurface> canvas;
+    wlr_scene_buffer *node = nullptr;
+    std::string key;
+    /// Whether `node` carries a plate that was actually frosted. The key is
+    /// named before the capture is attempted and the capture can fail (no
+    /// dma-buf import, no readback), so the key alone does not answer it —
+    /// and a window revealed onto a plate that was never drawn would put a
+    /// slab of whatever the canvas last held under itself.
+    bool ready = false;
+
+    /// A rect of its own, rather than "the whole surface".
+    bool regioned() const { return w > 0.f && h > 0.f; }
+  };
+  /// Empty when nothing is frosted. More than one when a popup has a second
+  /// popup beside it: a menu and its fly-out submenu are two rectangles with
+  /// desktop between them, and one plate cannot be both.
+  std::vector<FrostPlate> frostPlates;
 
   /// Whether the compositor draws this window's non-client area.
   ///
@@ -2412,9 +2422,11 @@ class SurfaceRegistry : public lava::CompositorHost {
                               workspaces_->tree[index]);
       placeShadow(surface);
     }
-    if (surface.blurNode != nullptr) {
-      wlr_scene_node_reparent(&surface.blurNode->node,
-                              workspaces_->tree[index]);
+    if (!surface.frostPlates.empty()) {
+      for (auto &plate : surface.frostPlates) {
+        if (plate.node == nullptr) continue;
+        wlr_scene_node_reparent(&plate.node->node, workspaces_->tree[index]);
+      }
       placeBackdrop(surface);
     }
     scheduleBackdropRefresh();
@@ -2631,10 +2643,12 @@ class SurfaceRegistry : public lava::CompositorHost {
     hoverBar(surface, lava::DecorationHit::Bar);
     if (minimized) {
       minimizedOrder_.push_back(surface.id);
-      // The window node is off; the frost plate is a sibling and would
+      // The window node is off; the frost plates are siblings and would
       // otherwise keep blurring the desktop where the terminal was.
-      if (surface.blurNode != nullptr) {
-        wlr_scene_node_set_enabled(&surface.blurNode->node, false);
+      for (auto &plate : surface.frostPlates) {
+        if (plate.node != nullptr) {
+          wlr_scene_node_set_enabled(&plate.node->node, false);
+        }
       }
     } else {
       std::erase(minimizedOrder_, surface.id);
@@ -2828,7 +2842,9 @@ class SurfaceRegistry : public lava::CompositorHost {
     for (const auto &surface : surfaces_) {
       name(surface->canvas, *surface, "contents");
       name(surface->bar, *surface, "title bar");
-      name(surface->blurCanvas, *surface, "backdrop frost");
+      for (const auto &plate : surface->frostPlates) {
+        name(plate.canvas, *surface, "backdrop frost");
+      }
     }
     // One tile serves every window, so it is named after the shape it holds
     // rather than after any of them.
@@ -3942,35 +3958,47 @@ class SurfaceRegistry : public lava::CompositorHost {
   }
 
   void placeBackdrop(ClientSurface &surface) {
-    if (surface.blurNode == nullptr) return;
-    const bool regioned = surface.blurW > 0.f && surface.blurH > 0.f;
-    const int px =
-        surface.x + (regioned ? static_cast<int>(std::lround(surface.blurX)) : 0);
-    const int py =
-        surface.y + (regioned ? static_cast<int>(std::lround(surface.blurY)) : 0);
-    wlr_scene_node_set_position(&surface.blurNode->node, px, py);
-    if (wlr_scene_node *content = contentNodeOf(surface)) {
-      wlr_scene_node_place_below(&surface.blurNode->node, content);
+    wlr_scene_node *content = contentNodeOf(surface);
+    wlr_scene_node *lowest = nullptr;
+    for (auto &plate : surface.frostPlates) {
+      if (plate.node == nullptr) continue;
+      const wlr_box box = frostBox(surface, plate);
+      wlr_scene_node_set_position(&plate.node->node, box.x, box.y);
+      // Each one lands directly under the content, so the last placed ends up
+      // the lowest of them. Plates do not overlap each other in any layout
+      // that has more than one — a menu and its fly-out sit side by side —
+      // so their order among themselves says nothing.
+      if (content != nullptr) {
+        wlr_scene_node_place_below(&plate.node->node, content);
+      }
+      lowest = &plate.node->node;
     }
-    if (surface.shadowTree != nullptr) {
-      wlr_scene_node_place_below(&surface.shadowTree->node,
-                                 &surface.blurNode->node);
+    if (surface.shadowTree != nullptr && lowest != nullptr) {
+      wlr_scene_node_place_below(&surface.shadowTree->node, lowest);
     }
   }
 
   void clearBackdrop(ClientSurface &surface) {
-    if (surface.blurNode != nullptr) {
-      wlr_scene_node_destroy(&surface.blurNode->node);
-      surface.blurNode = nullptr;
+    for (auto &plate : surface.frostPlates) discardPlate(plate);
+    surface.frostPlates.clear();
+  }
+
+  /// Hands one plate's node, canvas and image back. The rect it was for is the
+  /// caller's to keep or drop — `setBackdropBlur` keeps the geometry and
+  /// throws the pixels away when a plate changes size.
+  void discardPlate(ClientSurface::FrostPlate &plate) {
+    if (plate.node != nullptr) {
+      wlr_scene_node_destroy(&plate.node->node);
+      plate.node = nullptr;
     }
-    surface.blurCanvas.reset();
-    surface.blurPlateReady = false;
-    if (renderer_ != nullptr && !surface.blurKey.empty()) {
+    plate.canvas.reset();
+    plate.ready = false;
+    if (renderer_ != nullptr && !plate.key.empty()) {
       // Discarded, not released: this snapshot's key names a generation that
       // will never come round again, so keeping it warm keeps 8 MiB of a
       // screen that has already changed.
-      renderer_->discardImage(surface.blurKey);
-      surface.blurKey.clear();
+      renderer_->discardImage(plate.key);
+      plate.key.clear();
     }
   }
 
@@ -3988,24 +4016,46 @@ class SurfaceRegistry : public lava::CompositorHost {
     if (node != nullptr) wlr_scene_node_set_enabled(node, on);
   }
 
-  /// The rectangle a window's frost plate covers, in layout space. Empty
-  /// when the window has no frost worth capturing.
+  /// The rectangle one frost plate covers, in layout space. Empty when the
+  /// window has no frost worth capturing.
   ///
-  /// `blurW`/`blurH` of 0 means the whole frame — see `ClientSurface::blurX`.
-  wlr_box frostBox(const ClientSurface &surface) const {
+  /// A plate's `w`/`h` of 0 means the whole frame — see
+  /// `ClientSurface::FrostPlate`.
+  wlr_box frostBox(const ClientSurface &surface,
+                   const ClientSurface::FrostPlate &plate) const {
     const int frameW = static_cast<int>(surface.width);
     const int frameH = surface.frameHeight();
     if (surface.backdropBlurRadius <= 0.f || frameW < 1 || frameH < 1) {
       return wlr_box{};
     }
-    if (!(surface.blurW > 0.f && surface.blurH > 0.f)) {
+    if (!plate.regioned()) {
       return wlr_box{surface.x, surface.y, frameW, frameH};
     }
-    return wlr_box{
-        surface.x + static_cast<int>(std::lround(surface.blurX)),
-        surface.y + static_cast<int>(std::lround(surface.blurY)),
-        std::max(1, static_cast<int>(std::lround(surface.blurW))),
-        std::max(1, static_cast<int>(std::lround(surface.blurH)))};
+    return wlr_box{surface.x + static_cast<int>(std::lround(plate.x)),
+                   surface.y + static_cast<int>(std::lround(plate.y)),
+                   std::max(1, static_cast<int>(std::lround(plate.w))),
+                   std::max(1, static_cast<int>(std::lround(plate.h)))};
+  }
+
+  /// Everything this window frosts, as one box. For "did anything behind it
+  /// paint" — a question about the window, not about any one plate.
+  wlr_box frostBounds(const ClientSurface &surface) const {
+    wlr_box all{};
+    for (const auto &plate : surface.frostPlates) {
+      const wlr_box box = frostBox(surface, plate);
+      if (box.width < 1 || box.height < 1) continue;
+      if (all.width < 1) {
+        all = box;
+        continue;
+      }
+      const int x2 = std::max(all.x + all.width, box.x + box.width);
+      const int y2 = std::max(all.y + all.height, box.y + box.height);
+      all.x = std::min(all.x, box.x);
+      all.y = std::min(all.y, box.y);
+      all.width = x2 - all.x;
+      all.height = y2 - all.y;
+    }
+    return all;
   }
 
   /// A Wayland or X11 client painted. Resolves the surface to the window that
@@ -4054,7 +4104,7 @@ class SurfaceRegistry : public lava::CompositorHost {
     for (const auto &owned : surfaces_) {
       if (owned.get() == &source || owned->backdropBlurRadius <= 0.f) continue;
       if (!visible(*owned) || owned->fullscreen) continue;
-      const wlr_box frost = frostBox(*owned);
+      const wlr_box frost = frostBounds(*owned);
       wlr_box hit{};
       if (frost.width > 0 && wlr_box_intersection(&hit, &frost, &painted)) {
         backdropContentDirty_ = true;
@@ -4072,31 +4122,33 @@ class SurfaceRegistry : public lava::CompositorHost {
       return;
     }
     if (surface.minimized || surface.fullscreen) {
-      if (surface.blurNode != nullptr) {
-        wlr_scene_node_set_enabled(&surface.blurNode->node, false);
+      for (auto &plate : surface.frostPlates) {
+        if (plate.node != nullptr) {
+          wlr_scene_node_set_enabled(&plate.node->node, false);
+        }
       }
       return;
     }
 
-    const wlr_box frostRect = frostBox(surface);
-    if (frostRect.width < 1 || frostRect.height < 1) return;
-
-    const bool regioned = surface.blurW > 0.f && surface.blurH > 0.f;
-    const int frostW = frostRect.width;
-    const int frostH = frostRect.height;
-    const int frostX = frostRect.x;
-    const int frostY = frostRect.y;
-
-    Output *output = outputUnder(frostX + frostW / 2, frostY + frostH / 2);
-    if (output == nullptr || output->wlr == nullptr) return;
+    // Which output each plate is on, resolved before anything is hidden. A
+    // plate whose middle is off every output has nothing to be a picture of.
+    std::vector<std::pair<size_t, Output *>> work;
+    for (size_t i = 0; i < surface.frostPlates.size(); ++i) {
+      const wlr_box box = frostBox(surface, surface.frostPlates[i]);
+      if (box.width < 1 || box.height < 1) continue;
+      Output *on = outputUnder(box.x + box.width / 2, box.y + box.height / 2);
+      if (on == nullptr || on->wlr == nullptr) continue;
+      work.push_back({i, on});
+    }
+    if (work.empty()) return;
 
     setNodeEnabled(surface.node != nullptr ? &surface.node->node : nullptr,
                    false);
     setNodeEnabled(surface.barNode != nullptr ? &surface.barNode->node : nullptr,
                    false);
-    setNodeEnabled(surface.blurNode != nullptr ? &surface.blurNode->node
-                                               : nullptr,
-                   false);
+    for (auto &plate : surface.frostPlates) {
+      setNodeEnabled(plate.node != nullptr ? &plate.node->node : nullptr, false);
+    }
     setNodeEnabled(
         surface.shadowTree != nullptr ? &surface.shadowTree->node : nullptr,
         false);
@@ -4140,8 +4192,9 @@ class SurfaceRegistry : public lava::CompositorHost {
       if (!above) continue;
       hideIfShown(owned->node != nullptr ? &owned->node->node : nullptr);
       hideIfShown(owned->barNode != nullptr ? &owned->barNode->node : nullptr);
-      hideIfShown(owned->blurNode != nullptr ? &owned->blurNode->node
-                                             : nullptr);
+      for (auto &plate : owned->frostPlates) {
+        hideIfShown(plate.node != nullptr ? &plate.node->node : nullptr);
+      }
       hideIfShown(owned->shadowTree != nullptr ? &owned->shadowTree->node
                                                : nullptr);
       if (owned->isForeign() && owned->window != nullptr) {
@@ -4149,7 +4202,18 @@ class SurfaceRegistry : public lava::CompositorHost {
       }
     }
 
-    wlr_buffer *captured = renderOutputBuffer(output);
+    // One offscreen composite per output, however many plates read from it.
+    // Two plates side by side on the same screen — a menu and its submenu —
+    // are two crops of the same picture, and rendering the output twice for
+    // them would double the cost of every frame a fly-out is open on.
+    std::vector<std::pair<Output *, wlr_buffer *>> shots;
+    for (const auto &[index, on] : work) {
+      const bool have = std::any_of(
+          shots.begin(), shots.end(),
+          [on = on](const auto &shot) { return shot.first == on; });
+      if (have) continue;
+      shots.push_back({on, renderOutputBuffer(on)});
+    }
     for (wlr_scene_node *node : lifted) wlr_scene_node_set_enabled(node, true);
     // `frameShown` rather than `!minimized`, and this is the re-derivation the
     // note above warns about getting wrong: a window whose first frame is
@@ -4168,106 +4232,117 @@ class SurfaceRegistry : public lava::CompositorHost {
     // Shadow comes back through applyShadow's own rules.
     applyShadow(surface);
 
-    if (captured == nullptr) return;
-
-    wlr_box layoutBox{};
-    wlr_output_layout_get_box(server_->output_layout, output->wlr, &layoutBox);
-    const float scale = output->wlr->scale > 0.f ? output->wlr->scale : 1.f;
-    const int ix = std::max(frostX, layoutBox.x);
-    const int iy = std::max(frostY, layoutBox.y);
-    const int ix2 = std::min(frostX + frostW, layoutBox.x + layoutBox.width);
-    const int iy2 = std::min(frostY + frostH, layoutBox.y + layoutBox.height);
-    const int srcX = static_cast<int>(std::lround((ix - layoutBox.x) * scale));
-    const int srcY = static_cast<int>(std::lround((iy - layoutBox.y) * scale));
-    int srcW = static_cast<int>(std::lround((ix2 - ix) * scale));
-    int srcH = static_cast<int>(std::lround((iy2 - iy) * scale));
-    srcW = std::max(1, std::min(srcW, captured->width - srcX));
-    srcH = std::max(1, std::min(srcH, captured->height - srcY));
-
     // Beside the window's own node, whichever tree that is. A panel lives in
     // the panel tree above every workspace and the context menu in the menus
     // tree above that; parenting either one's frost to a workspace would put
     // the plate *behind* the windows it is meant to frost, and `place_below`
     // cannot reach across trees at all — it asserts.
     wlr_scene_node *own = contentNodeOf(surface);
-    if (own == nullptr || own->parent == nullptr) {
-      wlr_buffer_unlock(captured);
-      return;
-    }
-    wlr_scene_tree *parent = own->parent;
-    const uint32_t destW = static_cast<uint32_t>(frostW);
-    const uint32_t destH = static_cast<uint32_t>(frostH);
-    if (!surface.blurCanvas) {
-      surface.blurCanvas = renderer_->createSurface(destW, destH);
-      if (!surface.blurCanvas) {
-        wlr_buffer_unlock(captured);
-        return;
+    wlr_scene_tree *parent =
+        own != nullptr ? own->parent : static_cast<wlr_scene_tree *>(nullptr);
+
+    for (const auto &[index, on] : work) {
+      if (parent == nullptr) break;
+      wlr_buffer *captured = nullptr;
+      for (const auto &shot : shots) {
+        if (shot.first == on) captured = shot.second;
       }
-      surface.blurNode =
-          wlr_scene_buffer_create(parent, surface.blurCanvas->buffer());
-      if (surface.blurNode == nullptr) {
-        surface.blurCanvas.reset();
-        wlr_buffer_unlock(captured);
-        return;
+      if (captured == nullptr) continue;
+
+      ClientSurface::FrostPlate &plate = surface.frostPlates[index];
+      const wlr_box frostRect = frostBox(surface, plate);
+      const int frostX = frostRect.x;
+      const int frostY = frostRect.y;
+      const int frostW = frostRect.width;
+      const int frostH = frostRect.height;
+
+      wlr_box layoutBox{};
+      wlr_output_layout_get_box(server_->output_layout, on->wlr, &layoutBox);
+      const float scale = on->wlr->scale > 0.f ? on->wlr->scale : 1.f;
+      const int ix = std::max(frostX, layoutBox.x);
+      const int iy = std::max(frostY, layoutBox.y);
+      const int ix2 = std::min(frostX + frostW, layoutBox.x + layoutBox.width);
+      const int iy2 = std::min(frostY + frostH, layoutBox.y + layoutBox.height);
+      const int srcX = static_cast<int>(std::lround((ix - layoutBox.x) * scale));
+      const int srcY = static_cast<int>(std::lround((iy - layoutBox.y) * scale));
+      int srcW = static_cast<int>(std::lround((ix2 - ix) * scale));
+      int srcH = static_cast<int>(std::lround((iy2 - iy) * scale));
+      srcW = std::max(1, std::min(srcW, captured->width - srcX));
+      srcH = std::max(1, std::min(srcH, captured->height - srcY));
+
+      const uint32_t destW = static_cast<uint32_t>(frostW);
+      const uint32_t destH = static_cast<uint32_t>(frostH);
+      if (!plate.canvas) {
+        plate.canvas = renderer_->createSurface(destW, destH);
+        if (!plate.canvas) continue;
+        plate.node = wlr_scene_buffer_create(parent, plate.canvas->buffer());
+        if (plate.node == nullptr) {
+          plate.canvas.reset();
+          continue;
+        }
+        bind_never_input(plate.node);
+      } else if (plate.canvas->resize(destW, destH)) {
+        show_surface(plate.node, *plate.canvas);
       }
-      bind_never_input(surface.blurNode);
-    } else if (surface.blurCanvas->resize(destW, destH)) {
-      show_surface(surface.blurNode, *surface.blurCanvas);
+
+      // One name for the life of the plate, and the same image under it every
+      // time. `refreshDmabufTexture` overwrites that image rather than
+      // allocating another, which is what this used to do: a generation in the
+      // key, a fresh 5 MiB texture per capture, and the old one discarded —
+      // thirty times a second for as long as anything moved behind the window.
+      // A week-old session had done it 1.4 million times for a single
+      // terminal. The index is in the name because a surface can hold several.
+      plate.key = "frost:" + std::to_string(surface.id) + ":" +
+                  std::to_string(index);
+      const float corners =
+          plate.regioned() ? plate.corner
+                           : (frameIsRoundable(surface) ? cornerRadius_ : 0.f);
+      const float frost = corners > 0.f ? corners + 2.f : 0.f;
+      plate.canvas->setCornerRadius(frost, true, true);
+
+      // Prefer a GPU import of the capture: same DRM node, the other
+      // VkDevice. The CPU path is the fallback when the buffer is shm or
+      // the modifier will not import as a blit source.
+      bool frosted = false;
+      wlr_dmabuf_attributes attribs{};
+      if (srcX >= 0 && srcY >= 0 && wlr_buffer_get_dmabuf(captured, &attribs)) {
+        frosted = plate.canvas->frostFromDmabuf(
+            attribs, srcX, srcY, srcW, srcH, surface.backdropBlurRadius,
+            plate.key, frost);
+      }
+      if (!frosted) {
+        // The CPU path uploads through the ordinary texture cache, which would
+        // hand back the picture already sitting under this name. Only the
+        // dma-buf path knows how to overwrite in place, so the fallback drops
+        // the entry and pays for a new image — as every capture used to.
+        renderer_->discardImage(plate.key);
+        std::vector<uint8_t> raw;
+        const bool read = srcX >= 0 && srcY >= 0 &&
+                          lava::readBufferRgba(server_->renderer, captured,
+                                               srcX, srcY, srcW, srcH, raw);
+        frosted = read && plate.canvas->frostFromRgba(
+                              raw.data(), static_cast<uint32_t>(srcW),
+                              static_cast<uint32_t>(srcH),
+                              surface.backdropBlurRadius, plate.key, frost);
+      }
+      if (!frosted) continue;
+      plate.ready = true;
+      show_surface(plate.node, *plate.canvas);
+      // Captured, not shown, while the window is held. The plate is a picture
+      // of the desktop, so a frosted window that put one up before it had
+      // drawn showed a blurred copy of whatever was behind it — a browser
+      // window in the shape of a terminal, which is what the flash on launch
+      // actually was.
+      //
+      // Worth capturing anyway: the client is a few milliseconds from its
+      // first frame and the plate is then ready to come up with it, rather
+      // than the window arriving as clear glass and frosting a frame later.
+      wlr_scene_node_set_enabled(&plate.node->node, frameShown(surface));
     }
 
-    // One name for the life of the window, and the same image under it every
-    // time. `refreshDmabufTexture` overwrites that image rather than allocating
-    // another, which is what this used to do: a generation in the key, a fresh
-    // 5 MiB texture per capture, and the old one discarded — thirty times a
-    // second for as long as anything moved behind the window. A week-old
-    // session had done it 1.4 million times for a single terminal.
-    surface.blurKey = "frost:" + std::to_string(surface.id);
-    const float corners = regioned
-                              ? surface.blurCorner
-                              : (frameIsRoundable(surface) ? cornerRadius_ : 0.f);
-    const float frost = corners > 0.f ? corners + 2.f : 0.f;
-    surface.blurCanvas->setCornerRadius(frost, true, true);
-
-    // Prefer a GPU import of the capture: same DRM node, the other
-    // VkDevice. The CPU path is the fallback when the buffer is shm or
-    // the modifier will not import as a blit source.
-    bool frosted = false;
-    wlr_dmabuf_attributes attribs{};
-    if (srcX >= 0 && srcY >= 0 &&
-        wlr_buffer_get_dmabuf(captured, &attribs)) {
-      frosted = surface.blurCanvas->frostFromDmabuf(
-          attribs, srcX, srcY, srcW, srcH, surface.backdropBlurRadius,
-          surface.blurKey, frost);
+    for (const auto &shot : shots) {
+      if (shot.second != nullptr) wlr_buffer_unlock(shot.second);
     }
-    if (!frosted) {
-      // The CPU path uploads through the ordinary texture cache, which would
-      // hand back the picture already sitting under this name. Only the
-      // dma-buf path knows how to overwrite in place, so the fallback drops
-      // the entry and pays for a new image — as every capture used to.
-      renderer_->discardImage(surface.blurKey);
-      std::vector<uint8_t> raw;
-      const bool read = srcX >= 0 && srcY >= 0 &&
-                        lava::readBufferRgba(server_->renderer, captured, srcX,
-                                             srcY, srcW, srcH, raw);
-      frosted = read && surface.blurCanvas->frostFromRgba(
-                            raw.data(), static_cast<uint32_t>(srcW),
-                            static_cast<uint32_t>(srcH),
-                            surface.backdropBlurRadius, surface.blurKey,
-                            frost);
-    }
-    wlr_buffer_unlock(captured);
-    if (!frosted) return;
-    surface.blurPlateReady = true;
-    show_surface(surface.blurNode, *surface.blurCanvas);
-    // Captured, not shown, while the window is held. The plate is a picture of
-    // the desktop, so a frosted window that put one up before it had drawn
-    // showed a blurred copy of whatever was behind it — a browser window in
-    // the shape of a terminal, which is what the flash on launch actually was.
-    //
-    // Worth capturing anyway: the client is a few milliseconds from its first
-    // frame and the plate is then ready to come up with it, rather than the
-    // window arriving as clear glass and frosting a frame later.
-    wlr_scene_node_set_enabled(&surface.blurNode->node, frameShown(surface));
     placeBackdrop(surface);
   }
 
@@ -4385,17 +4460,16 @@ class SurfaceRegistry : public lava::CompositorHost {
     // The frost plate is the whole frame, so it takes every corner the
     // outline has. Square frost under a rounded window is the tab in the
     // screenshot.
-    if (surface.blurCanvas) {
+    for (auto &plate : surface.frostPlates) {
+      if (!plate.canvas) continue;
       // One pixel more than the window so the frost's AA sits inside the
       // window's, not beside it as a bright speck. A region frost (panel
       // dropdown) uses the popup's own radius — the panel itself is
       // square, and using that would leave a square plate under a
       // rounded menu.
-      const float plate =
-          (surface.blurW > 0.f && surface.blurH > 0.f) ? surface.blurCorner
-                                                       : radius;
-      const float frost = plate > 0.f ? plate + 2.f : 0.f;
-      surface.blurCanvas->setCornerRadius(frost, true, true);
+      const float corner = plate.regioned() ? plate.corner : radius;
+      const float frost = corner > 0.f ? corner + 2.f : 0.f;
+      plate.canvas->setCornerRadius(frost, true, true);
     }
   }
 
@@ -4971,33 +5045,49 @@ class SurfaceRegistry : public lava::CompositorHost {
     return true;
   }
 
-  bool setBackdropBlur(uint32_t id, float radius, float x, float y, float w,
-                       float h, float cornerRadius) override {
+  bool setBackdropBlur(uint32_t id, float radius,
+                       std::vector<FrostRect> rects) override {
     ClientSurface *surface = find(id);
     if (surface == nullptr) return false;
     const float next = std::clamp(radius, 0.f, 64.f);
-    const float nx = x;
-    const float ny = y;
-    const float nw = std::max(0.f, w);
-    const float nh = std::max(0.f, h);
-    const float nc = std::max(0.f, cornerRadius);
-    if (surface->backdropBlurRadius == next && surface->blurX == nx &&
-        surface->blurY == ny && surface->blurW == nw && surface->blurH == nh &&
-        surface->blurCorner == nc) {
-      return true;
+
+    // Same radius over the same rectangles is the common case by a distance:
+    // a client sends its frost every frame it draws, and a menu that is still
+    // open is still the same menu.
+    bool same = surface->backdropBlurRadius == next &&
+                surface->frostPlates.size() == rects.size();
+    for (size_t i = 0; same && i < rects.size(); ++i) {
+      const auto &had = surface->frostPlates[i];
+      same = had.x == rects[i].x && had.y == rects[i].y &&
+             had.w == std::max(0.f, rects[i].w) &&
+             had.h == std::max(0.f, rects[i].h) &&
+             had.corner == std::max(0.f, rects[i].cornerRadius);
     }
+    if (same) return true;
+
     surface->backdropBlurRadius = next;
-    surface->blurX = nx;
-    surface->blurY = ny;
-    surface->blurW = nw;
-    surface->blurH = nh;
-    surface->blurCorner = nc;
-    if (next <= 0.f) {
+    if (next <= 0.f || rects.empty()) {
       clearBackdrop(*surface);
+    } else {
+      // The plates that survive keep their canvas and their scene node: a
+      // menu whose submenu opened is the same plate at the same place, and
+      // tearing it down to build the same thing again would flash the frost
+      // off for a frame — which is the bug this list exists to fix.
+      for (size_t i = rects.size(); i < surface->frostPlates.size(); ++i) {
+        discardPlate(surface->frostPlates[i]);
+      }
+      surface->frostPlates.resize(rects.size());
+      for (size_t i = 0; i < rects.size(); ++i) {
+        auto &plate = surface->frostPlates[i];
+        plate.x = rects[i].x;
+        plate.y = rects[i].y;
+        plate.w = std::max(0.f, rects[i].w);
+        plate.h = std::max(0.f, rects[i].h);
+        plate.corner = std::max(0.f, rects[i].cornerRadius);
+      }
     }
-    wlr_log(WLR_INFO,
-            "surface %u: backdrop blur %.0f region %.0f,%.0f %.0fx%.0f r=%.0f",
-            id, next, nx, ny, nw, nh, nc);
+    wlr_log(WLR_INFO, "surface %u: backdrop blur %.0f over %zu rect(s)", id,
+            next, surface->frostPlates.size());
     scheduleBackdropRefresh();
     return true;
   }
@@ -5743,8 +5833,10 @@ class SurfaceRegistry : public lava::CompositorHost {
     // crossed it would be the same bug wearing different clothes.
     syncBar(surface);
     applyShadow(surface);
-    if (surface.blurNode != nullptr && surface.blurPlateReady) {
-      wlr_scene_node_set_enabled(&surface.blurNode->node, true);
+    for (auto &plate : surface.frostPlates) {
+      if (plate.node != nullptr && plate.ready) {
+        wlr_scene_node_set_enabled(&plate.node->node, true);
+      }
     }
     // A window appearing changes what is behind every frosted window it is
     // now in front of — a frosted panel is above every window by definition,

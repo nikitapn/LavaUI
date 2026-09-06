@@ -1344,14 +1344,31 @@ class CompositorImpl final : public ICompositor_Servant {
   }
 
   void SetBackdropBlur(uint32_t surfaceId, float radius) override {
-    if (!host_.setBackdropBlur(surfaceId, radius, 0.f, 0.f, 0.f, 0.f, 0.f)) {
+    // One rect, all zeroes: the whole surface, which is this call's meaning.
+    if (!host_.setBackdropBlur(surfaceId, radius, {{}})) {
       throw SurfaceNotFound(surfaceId);
     }
   }
 
   void SetBackdropBlurRegion(uint32_t surfaceId, float radius, float x, float y,
                              float w, float h, float cornerRadius) override {
-    if (!host_.setBackdropBlur(surfaceId, radius, x, y, w, h, cornerRadius)) {
+    if (!host_.setBackdropBlur(surfaceId, radius,
+                               {{x, y, w, h, cornerRadius}})) {
+      throw SurfaceNotFound(surfaceId);
+    }
+  }
+
+  void SetBackdropBlurRegions(
+      uint32_t surfaceId, float radius,
+      nprpc::flat::Span_ref<flat::FrostRect, flat::FrostRect_Direct> rects)
+      override {
+    std::vector<CompositorHost::FrostRect> plates;
+    plates.reserve(rects.size());
+    for (auto rect : rects) {
+      plates.push_back(
+          {rect.x(), rect.y(), rect.w(), rect.h(), rect.cornerRadius()});
+    }
+    if (!host_.setBackdropBlur(surfaceId, radius, std::move(plates))) {
       throw SurfaceNotFound(surfaceId);
     }
   }

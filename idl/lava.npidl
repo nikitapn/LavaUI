@@ -504,6 +504,19 @@ message InputRect {
   h: u32;
 }
 
+/// One rectangle of desktop to frost behind a surface, in its own coordinates.
+///
+/// `w` or `h` of 0 means the whole surface, which is what a window that is
+/// itself the glass asks for. `cornerRadius` rounds the plate so it matches
+/// the popup sitting on it; 0 is square.
+message FrostRect {
+  x: f32;
+  y: f32;
+  w: f32;
+  h: f32;
+  cornerRadius: f32;
+}
+
 /// Whether anything is in the way of a panel.
 ///
 /// What it answers is "is the strip I occupy clear of windows right now",
@@ -1824,4 +1837,22 @@ interface Compositor {
   /// a display that closed. There is no confirm here; the panel asks the
   /// user first.
   void EndSession();
+
+  /// Frost several rectangles of the desktop behind this surface at once.
+  ///
+  /// **A list, because one rectangle was not enough**, and for the reason
+  /// `SetInputRegion` grew one. A menu dropdown is a single rect; a dropdown
+  /// with a fly-out submenu beside it is two, and neither contains the other.
+  /// With one plate between them the second call simply replaced the first,
+  /// so opening a submenu took the frost off the menu it came from. Their
+  /// union is no answer either — the corner between them is desktop nothing
+  /// is drawn over, and frosting it would leave a blurred rectangle hanging
+  /// in mid-air.
+  ///
+  /// Each rect gets its own plate. They may overlap. An empty list turns the
+  /// effect off, the same as `radius` 0. One rect here is exactly
+  /// `SetBackdropBlurRegion`, which stays for callers that only ever have one.
+  void SetBackdropBlurRegions(surfaceId: in u32, radius: in f32,
+                              rects: in vector<FrostRect>)
+      raises(SurfaceNotFound);
 }

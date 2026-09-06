@@ -727,22 +727,19 @@ public enum LavaClient {
         }
     }
 
-    /// Frost a rectangle of the desktop behind this surface.
+    /// Frost rectangles of the desktop behind this surface.
     ///
-    /// `radius` 0 means the popup is gone. That must not wipe a window
+    /// An empty list means every popup is gone. That must not wipe a window
     /// that asked for whole-surface frost (`WindowBackdrop.blur`) — the
-    /// two share one compositor plate, so a clear here restores the
-    /// window radius when there is one. Idle frames (never had a popup)
-    /// send nothing at all.
-    public static func setBackdropBlurRegion(
-        radius: Float, x: Float, y: Float, w: Float, h: Float,
-        cornerRadius: Float
+    /// two share the same plates, so a clear here restores the window
+    /// radius when there is one. Idle frames (never had a popup) send
+    /// nothing at all.
+    public static func setBackdropBlurRegions(
+        radius: Float, rects: [LavaIDL.FrostRect]
     ) {
-        let next = OverlayFrost(
-            radius: max(0, radius), x: x, y: y, w: w, h: h,
-            corner: max(0, cornerRadius)
+        pendingOverlayFrost = OverlayFrost(
+            radius: rects.isEmpty ? 0 : max(0, radius), rects: rects
         )
-        pendingOverlayFrost = next
         flushOverlayFrost()
     }
 
@@ -761,7 +758,7 @@ public enum LavaClient {
         let id = surfaceID
         Task.detached {
             do {
-                if pending.radius == 0 {
+                if pending.radius == 0 || pending.rects.isEmpty {
                     let windowRadius = WindowBackdrop.current.compositorBlurRadius
                     if windowRadius > 0 {
                         try await compositor.setBackdropBlur(
@@ -774,19 +771,17 @@ public enum LavaClient {
                         )
                     }
                 } else {
-                    try await compositor.setBackdropBlurRegion(
+                    try await compositor.setBackdropBlurRegions(
                         surfaceId: id, radius: pending.radius,
-                        x: pending.x, y: pending.y,
-                        w: pending.w, h: pending.h,
-                        cornerRadius: pending.corner
+                        rects: pending.rects
                     )
                 }
             } catch {
                 FileHandle.standardError.write(
-                    Data("SetBackdropBlurRegion failed: \(error)\n".utf8)
+                    Data("SetBackdropBlurRegions failed: \(error)\n".utf8)
                 )
                 MainQueue.async {
-                    BackdropBridge.frostOverlay = nil
+                    BackdropBridge.frostOverlays = nil
                     ViewInvalidation.markDirty()
                 }
             }
@@ -795,11 +790,18 @@ public enum LavaClient {
 
     private struct OverlayFrost: Equatable, Sendable {
         var radius: Float
-        var x: Float
-        var y: Float
-        var w: Float
-        var h: Float
-        var corner: Float
+        var rects: [LavaIDL.FrostRect]
+
+        /// By hand: the generated `FrostRect` is a wire type and carries no
+        /// `Equatable`, and this comparison is what stops a call per frame
+        /// for a menu that has not moved.
+        static func == (a: Self, b: Self) -> Bool {
+            a.radius == b.radius && a.rects.count == b.rects.count
+                && zip(a.rects, b.rects).allSatisfy {
+                    $0.x == $1.x && $0.y == $1.y && $0.w == $1.w
+                        && $0.h == $1.h && $0.cornerRadius == $1.cornerRadius
+                }
+        }
     }
 
     /// One rectangle this surface takes pointer input in, in its own
@@ -1089,10 +1091,15 @@ public enum LavaClient {
         // cleared the window frost a terminal had just asked for, and
         // every frame without a popup then kept it cleared. Idle emits
         // no-op inside `flushOverlayFrost` until a popup actually asks.
-        BackdropBridge.frostOverlay = { radius, x, y, w, h, corner in
-            LavaClient.setBackdropBlurRegion(
-                radius: radius, x: x, y: y, w: w, h: h,
-                cornerRadius: corner
+        BackdropBridge.frostOverlays = { radius, rects in
+            LavaClient.setBackdropBlurRegions(
+                radius: radius,
+                rects: rects.map {
+                    LavaIDL.FrostRect(
+                        x: $0.x, y: $0.y, w: $0.w, h: $0.h,
+                        cornerRadius: $0.cornerRadius
+                    )
+                }
             )
         }
 

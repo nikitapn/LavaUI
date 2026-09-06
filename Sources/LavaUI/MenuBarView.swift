@@ -124,9 +124,9 @@ public struct MenuBarStyle: Equatable, Sendable {
     /// menu read as a stained-glass pane instead of a surface — see
     /// `docs/colour-and-blending.md`. Without compositor frost the useful
     /// band is 0.97–1.0. With frost (a client that filled
-    /// `BackdropBridge.frostOverlay`) the wash can drop so the blur shows.
+    /// `BackdropBridge.frostOverlays`) the wash can drop so the blur shows.
     public static func panel(theme: Theme = Theme.current) -> MenuBarStyle {
-        let frosted = BackdropBridge.frostOverlay != nil
+        let frosted = BackdropBridge.frostOverlays != nil
         let radius = WindowBridge.desktopCornerRadius > 0
             ? WindowBridge.desktopCornerRadius
             : max(theme.cornerRadius, 8)

@@ -56,8 +56,8 @@ final class MenuBarStyleTests: XCTestCase {
     }
 
     func testPanelStyleAsksForFrostWhenTheBridgeIsLive() {
-        BackdropBridge.frostOverlay = { _, _, _, _, _, _ in }
-        defer { BackdropBridge.frostOverlay = nil }
+        BackdropBridge.frostOverlays = { _, _ in }
+        defer { BackdropBridge.frostOverlays = nil }
         let panel = MenuBarStyle.panel(theme: .dark)
         XCTAssertEqual(panel.dropdownBlur, 12)
         XCTAssertGreaterThan(panel.dropdownBackground.a, 0.7)

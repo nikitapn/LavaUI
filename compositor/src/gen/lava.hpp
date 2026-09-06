@@ -1196,6 +1196,50 @@ public:
 };
 } // namespace flat
 
+struct FrostRect {
+  float x;
+  float y;
+  float w;
+  float h;
+  float cornerRadius;
+};
+
+namespace flat {
+struct FrostRect {
+  float x;
+  float y;
+  float w;
+  float h;
+  float cornerRadius;
+};
+
+class FrostRect_Direct {
+  ::nprpc::flat_buffer& buffer_;
+  const std::uint32_t offset_;
+
+  auto& base() noexcept { return *reinterpret_cast<FrostRect*>(reinterpret_cast<std::byte*>(buffer_.data().data()) + offset_); }
+  auto const& base() const noexcept { return *reinterpret_cast<const FrostRect*>(reinterpret_cast<const std::byte*>(buffer_.data().data()) + offset_); }
+public:
+  uint32_t offset() const noexcept { return offset_; }
+  void* __data() noexcept { return (void*)&base(); }
+  FrostRect_Direct(::nprpc::flat_buffer& buffer, std::uint32_t offset)
+    : buffer_(buffer)
+    , offset_(offset)
+  {
+  }
+  const float& x() const noexcept { return base().x;}
+  float& x() noexcept { return base().x;}
+  const float& y() const noexcept { return base().y;}
+  float& y() noexcept { return base().y;}
+  const float& w() const noexcept { return base().w;}
+  float& w() noexcept { return base().w;}
+  const float& h() const noexcept { return base().h;}
+  float& h() noexcept { return base().h;}
+  const float& cornerRadius() const noexcept { return base().cornerRadius;}
+  float& cornerRadius() noexcept { return base().cornerRadius;}
+};
+} // namespace flat
+
 struct PanelArea {
   uint32_t serial;
   bool covered;
@@ -1989,6 +2033,7 @@ public:
   virtual std::vector<std::string> DumpAtlasImages (::nprpc::flat::Span<char> directory) = 0;
   virtual void SetBackdropBlurRegion (uint32_t surfaceId, float radius, float x, float y, float w, float h, float cornerRadius) = 0;
   virtual void EndSession () = 0;
+  virtual void SetBackdropBlurRegions (uint32_t surfaceId, float radius, ::nprpc::flat::Span_ref<flat::FrostRect, flat::FrostRect_Direct> rects) = 0;
 };
 
 class LAVA_API Compositor
@@ -2099,6 +2144,8 @@ public:
   ::nprpc::Task<void> SetBackdropBlurRegionAsync (uint32_t surfaceId, float radius, float x, float y, float w, float h, float cornerRadius, std::stop_token st = {});
   void EndSession ();
   ::nprpc::Task<void> EndSessionAsync (std::stop_token st = {});
+  void SetBackdropBlurRegions (uint32_t surfaceId, float radius, ::nprpc::flat::Span<const FrostRect> rects);
+  ::nprpc::Task<void> SetBackdropBlurRegionsAsync (uint32_t surfaceId, float radius, ::nprpc::flat::Span<const FrostRect> rects, std::stop_token st = {});
 };
 
 namespace helper {
