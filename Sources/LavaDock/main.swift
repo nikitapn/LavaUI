@@ -98,10 +98,39 @@ struct DockDrag {
     var active: Bool
 }
 
-/// Right-click menu, parked at the icon that opened it.
+/// The menu the compositor is showing for one of these icons.
+///
+/// Not the menu itself — the dock does not draw it. `OpenMenu` hands the rows
+/// to the compositor, which places them above every window, takes the pointer,
+/// and answers on `onMenuChoice`; this is what the dock has to remember in
+/// between. See `DockMenu` for why it is not drawn here.
 struct DockContextMenu {
     var appId: String
-    var x: Float
+    /// What the compositor called this menu. The answer names it, and an
+    /// answer for any other one is stale — a menu superseded while its reply
+    /// was in flight.
+    var serial: UInt32
+    /// The application's own `[Desktop Action …]` items, in the order they
+    /// were put on the menu, which is how an id comes back to the action it
+    /// stands for. Read from the desktop entry when the menu opened, so what
+    /// is clicked is what was shown even if the entry changed in between.
+    var actions: [DesktopAction] = []
+}
+
+/// What the rows on that menu mean.
+///
+/// Numbers rather than the strings the dock's own overlay used, because these
+/// cross the control plane: `MenuItem.id` is a `u32` the compositor carries
+/// and never reads. Small fixed ids for the dock's own rows, and a range for
+/// the application's actions, whose count is not known until the menu is
+/// built.
+enum DockMenu {
+    static let open: UInt32 = 1
+    static let pin: UInt32 = 2
+    static let unpin: UInt32 = 3
+    /// The nth `[Desktop Action …]` on the menu. Based well clear of the ids
+    /// above so a menu with no actions and one with several cannot overlap.
+    static let actionBase: UInt32 = 100
 }
 
 @Observable
@@ -127,6 +156,13 @@ final class DockModel {
     var pointerInside = false
 
     var drag: DockDrag?
+    /// The menu the compositor has up for one of these icons, if any.
+    ///
+    /// Set when `OpenMenu` is answered with a serial and cleared when the
+    /// choice comes back — and nowhere else. Its lifetime is the compositor's:
+    /// the menu is not in this surface, so nothing here can dismiss it, and a
+    /// dock that cleared this on its own would go on hovering and revealing
+    /// under a menu that is still on screen.
     var menu: DockContextMenu?
     /// The window shelf that is up, if one is. See `WindowPreview.swift`.
     /// Still set while one is fading out — ask `livePreview` for the shelf
@@ -246,7 +282,6 @@ final class DockModel {
             // A drag belongs to the workspace it started on. Committing it
             // after a switch would write the other desk's pins.
             drag = nil
-            menu = nil
         }
         lastWorkspace = workspace
         lastWindows = windows
@@ -541,7 +576,6 @@ final class DockModel {
             return
         }
 
-        menu = nil
         hoverCandidate = nil
         setPanelHeight(Dock.openHeight)
         bindPosters(of: entry)
@@ -682,6 +716,17 @@ final class DockModel {
             return
         }
         launchSibling(id)
+    }
+
+    /// Runs one of an application's desktop actions. Nothing to fall back on
+    /// if the entry has gone: an action only ever came from one.
+    func launch(_ action: DesktopAction, of id: String) {
+        guard let entry = entryInfo(for: id) else { return }
+        if !entry.launch(action: action) {
+            FileHandle.standardError.write(
+                Data("dock: \(id): action \(action.id) failed\n".utf8)
+            )
+        }
     }
 }
 
@@ -917,83 +962,6 @@ struct DockView: View {
             paint: { list, frame in paint(list, frame) }
         )
         .agentId("dock")
-        .overlay(
-            isPresented: menuBinding,
-            placement: menuPlacement,
-            style: {
-                var s = MenuBarStyle.panel().overlayStyle
-                s.padding = 4
-                s.minWidth = 120
-                return s
-            }()
-        ) {
-            contextMenu
-        }
-    }
-
-    private var menuBinding: Binding<Bool> {
-        Binding(
-            get: { model.menu != nil },
-            set: { open in
-                if !open { model.menu = nil }
-            }
-        )
-    }
-
-    private var menuPlacement: OverlayPlacement {
-        OverlayPlacement { context in
-            let w = max(context.idealSize.width, 120)
-            let h = context.idealSize.height
-            let anchor = model.menu?.x ?? context.anchor.x
-            let x = min(
-                max(8, anchor - 8),
-                max(8, context.viewport.width - w - 8)
-            )
-            let y = max(4, context.viewport.height - h - Dock.iconSize - 22)
-            return OverlayFrame(x: x, y: y, width: w, height: h)
-        }
-    }
-
-    @ViewBuilder
-    private var contextMenu: some View {
-        let appId = model.menu?.appId ?? ""
-        MenuDropdownPanel(
-            entries: menuEntries(for: appId),
-            onActivate: { id in
-                switch id.raw {
-                case "dock.open":
-                    model.launch(appId)
-                case "dock.pin":
-                    model.pin(appId)
-                case "dock.unpin":
-                    model.unpin(appId)
-                default:
-                    break
-                }
-                model.menu = nil
-            },
-            style: .panel()
-        )
-    }
-
-    private func menuEntries(for appId: String) -> [MenuEntry] {
-        let entry = model.entries.first { $0.appId == appId }
-        let pinned = entry?.pinned ?? false
-        let running = entry?.isRunning ?? false
-        var items: [MenuEntry] = []
-        if !running {
-            items.append(.item(MenuItemModel(
-                id: MenuID("dock.open"), title: "Open"
-            )))
-        }
-        if DockPins.canPin(appId) {
-            if !items.isEmpty { items.append(.separator) }
-            items.append(.item(MenuItemModel(
-                id: MenuID(pinned ? "dock.unpin" : "dock.pin"),
-                title: pinned ? "Unpin" : "Pin"
-            )))
-        }
-        return items
     }
 
     /// Brings the dock out. What it accepts input in follows on the next
@@ -1080,22 +1048,124 @@ struct DockView: View {
         return nil
     }
 
+    /// Asks the compositor for a menu on the icon under `x`.
+    ///
+    /// The dock does not draw this. It cannot: a menu has to sit above every
+    /// window, and it has to come down when the user clicks somewhere else —
+    /// which is input that, by definition, never reaches the dock. Both are
+    /// the compositor's already, for its own right-click menu, so the rows go
+    /// over `OpenMenu` and the answer comes back on `onMenuChoice`.
     private func openMenu(atX x: Float, frameWidth: Float) {
         guard let index = entryIndex(atX: x, frameWidth: frameWidth) else {
             return
         }
         let entry = model.entries[index]
-        // Nothing to offer: an anonymous window cannot be pinned, and it
-        // is already running.
-        guard entry.canPin || !entry.isRunning else { return }
+        // Read at open rather than at paint: it is one file, and a menu that
+        // is about to be shown is exactly the moment to find out what is in
+        // it. See `DesktopEntry.actions()`.
+        let actions = model.entryInfo(for: entry.appId)?.actions() ?? []
+        let items = menuItems(for: entry, actions: actions)
+        // Nothing to offer: an anonymous window cannot be pinned, it is
+        // already running, and its entry — if it has one — lists no actions.
+        guard !items.isEmpty else { return }
+
         model.drag = nil
         model.closePreview()
-        model.menu = DockContextMenu(appId: entry.appId, x: x)
+
+        // Anchored to the top of the plate under the icon, in this surface's
+        // own coordinates — the compositor adds where the dock is and flips
+        // the menu above the anchor, because a dock at the bottom edge has no
+        // room below it. Left edge at the icon rather than at the click, so
+        // two right-clicks on the same icon put the menu in the same place.
+        let plate = Dock.plate(
+            entries: model.entries.count,
+            splitAfter: model.entries.prefix { $0.pinned }.count,
+            surfaceWidth: frameWidth
+        )
+        let center = Dock.restingCenter(
+            index: index, plateX: plate.x,
+            splitAfter: model.entries.prefix { $0.pinned }.count,
+            count: model.entries.count
+        )
+        let serial = LavaClient.openMenu(
+            x: center - 8,
+            y: model.panelHeight - Dock.plateHeight - Dock.plateInset,
+            items: items
+        )
+        // 0 is a desktop with no menu client to draw one — see `OpenMenu`.
+        // Nothing was opened, so there is nothing to remember and nothing to
+        // wait for.
+        guard serial != 0 else { return }
+        model.menu = DockContextMenu(
+            appId: entry.appId, serial: serial, actions: actions
+        )
         ViewInvalidation.markNeedsRedraw()
     }
 
-    private func beginPress(atX x: Float, y: Float, frameWidth: Float) {
+    /// The rows, in the order they are shown. Empty means "no menu worth
+    /// opening", which is what an anonymous running window has.
+    private func menuItems(
+        for entry: DockEntry, actions: [DesktopAction]
+    ) -> [LavaIDL.MenuItem] {
+        var items: [LavaIDL.MenuItem] = []
+        func row(_ id: UInt32, _ title: String) -> LavaIDL.MenuItem {
+            LavaIDL.MenuItem(
+                id: id, title: title, kind: .command,
+                checked: false, enabled: true, shortcut: ""
+            )
+        }
+        if !entry.isRunning {
+            items.append(row(DockMenu.open, "Open"))
+        }
+        // The application's own ways to start — "New Window", "New Private
+        // Window" — beside Open, because they are the same kind of thing.
+        // Pin is housekeeping about the dock and belongs below the rule.
+        for (index, action) in actions.enumerated() {
+            items.append(row(DockMenu.actionBase + UInt32(index), action.name))
+        }
+        if entry.canPin {
+            if !items.isEmpty {
+                items.append(LavaIDL.MenuItem(
+                    id: 0, title: "", kind: .separator,
+                    checked: false, enabled: false, shortcut: ""
+                ))
+            }
+            items.append(entry.pinned
+                ? row(DockMenu.unpin, "Unpin")
+                : row(DockMenu.pin, "Pin"))
+        }
+        return items
+    }
+
+    /// What the user picked, or 0 for a menu they dismissed.
+    ///
+    /// Runs on the frame loop — `LavaClient.onMenuChoice` hops it there — and
+    /// is the only place `model.menu` is cleared: the menu belongs to the
+    /// compositor from the moment it opens until this arrives.
+    static func menuChosen(serial: UInt32, chosen: UInt32) {
+        // An answer for a menu that is not the one we are waiting for: it was
+        // superseded while the reply was in flight. Dropping it is what the
+        // serial is for.
+        guard let menu = model.menu, menu.serial == serial else { return }
         model.menu = nil
+        ViewInvalidation.markNeedsRedraw()
+        switch chosen {
+        case 0:
+            return  // dismissed
+        case DockMenu.open:
+            model.launch(menu.appId)
+        case DockMenu.pin:
+            model.pin(menu.appId)
+        case DockMenu.unpin:
+            model.unpin(menu.appId)
+        default:
+            let index = Int(chosen &- DockMenu.actionBase)
+            guard index >= 0, index < menu.actions.count else { return }
+            model.launch(menu.actions[index], of: menu.appId)
+        }
+    }
+
+    private func beginPress(atX x: Float, y: Float, frameWidth: Float) {
         // A press is a decision; the shelf was an offer.
         model.closePreview()
         guard let index = entryIndex(atX: x, frameWidth: frameWidth) else {
@@ -1728,6 +1798,14 @@ LavaClient.onWindowList { workspace, windows in
     // dock having no entries at all is not a dock worth showing.
     model.revealed = model.showsBecauseClear || model.revealed
     ViewInvalidation.markNeedsRedraw()
+}
+
+// The answers to the menus this dock asks for. Subscribed before any menu is
+// opened, and not as a formality: the compositor refuses to open a menu for a
+// client that is not listening, rather than take the pointer for an answer
+// that would go nowhere.
+LavaClient.onMenuChoice { serial, chosen in
+    DockView.menuChosen(serial: serial, chosen: chosen)
 }
 
 // Out when nothing is in the way, hidden when something is. The compositor is

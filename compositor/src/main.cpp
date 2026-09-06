@@ -1385,6 +1385,14 @@ struct Server {
     /// The window the menu is about, or 0 for the desktop. Re-checked when
     /// the reply arrives: a window can close while its menu is up.
     uint32_t target = 0;
+    /// The surface that asked for this menu through `OpenMenu`, or 0 for one
+    /// the compositor opened itself.
+    ///
+    /// It decides what the answer *is*. A menu of the compositor's own is a
+    /// list of things it knows how to do, and the reply is carried out here;
+    /// a client's menu is a list of things only that client understands, and
+    /// the reply is posted back to it unread. See `applyMenuChoice`.
+    uint32_t requester = 0;
     int anchorX = 0;
     int anchorY = 0;
     /// True once `ShowMenu` has placed it. Between the request and that call
@@ -1414,6 +1422,9 @@ struct Server {
   /// pointer. False when there is no menu client, which is a desktop with no
   /// context menu rather than an error.
   bool openContextMenu(int x, int y, uint32_t target);
+  uint32_t openClientMenu(uint32_t surfaceId, int32_t x, int32_t y,
+                          const std::string &title,
+                          const std::vector<lava::CompositorHost::MenuEntry> &items);
 
   /// Takes the menu off the screen and gives the keyboard back. Safe when
   /// nothing is open.
@@ -4829,6 +4840,9 @@ class SurfaceRegistry : public lava::CompositorHost {
 
   bool showMenu(uint32_t surfaceId, uint32_t serial, uint32_t width,
                 uint32_t height) override;
+  uint32_t openClientMenu(
+      uint32_t surfaceId, int32_t x, int32_t y, const std::string &title,
+      const std::vector<lava::CompositorHost::MenuEntry> &items) override;
   void menuChosen(uint32_t serial, uint32_t chosen) override;
   void menuClientLeft(uint32_t surfaceId) override;
 
@@ -5560,6 +5574,13 @@ class SurfaceRegistry : public lava::CompositorHost {
       // next.
       if (server_ != nullptr && server_->pointerTarget == id) {
         server_->pointerTarget = 0;
+      }
+      // A menu this surface asked for outlives it otherwise: the menu client
+      // is a different process and goes on drawing, and the grab would be
+      // held for an answer that has nowhere to go.
+      if (server_ != nullptr && server_->menu.requester == id) {
+        server_->menu.requester = 0;
+        server_->closeContextMenu();
       }
       // Before `surfaceGone`, so a panel hears "nothing is focused" rather
       // than going on showing the menu of a window that has been destroyed.
@@ -10035,10 +10056,62 @@ bool Server::openContextMenu(int x, int y, uint32_t target) {
   return true;
 }
 
+uint32_t Server::openClientMenu(
+    uint32_t surfaceId, int32_t x, int32_t y, const std::string &title,
+    const std::vector<lava::CompositorHost::MenuEntry> &items) {
+  if (control == nullptr || surfaces == nullptr) return 0;
+  ClientSurface *surface = surfaces->find(surfaceId);
+  if (surface == nullptr) return 0;
+  // A menu with nothing on it is a grab with nothing to click. The client has
+  // a bug; the desktop should not wear it.
+  if (items.empty()) return 0;
+  // Not the menu surface itself. It is the surface this would place and grab
+  // for, and a menu anchored to itself is a loop with a pointer grab in it.
+  if (surface->menu) return 0;
+
+  // Surface-local to layout. A panel knows which of its own icons was clicked
+  // and nothing whatever about where it sits on the output — see `OpenMenu`
+  // in the IDL — so the origin is added here, where it is known.
+  const int anchorX = surface->x + x;
+  const int anchorY = surface->y + y;
+
+  // Superseded, exactly as a second right-click supersedes the first. The
+  // client that asked for the old one is told below, inside `closeContextMenu`.
+  closeContextMenu();
+
+  const uint32_t serial = ++menuSerial;
+  if (!control->postMenu(serial, anchorX, anchorY, 0, title, items)) {
+    // No menu client — `menu = off` in `[shell]`, or it is restarting. The
+    // caller gets 0 and can draw nothing, which is what the desktop's own
+    // right-click does in the same situation.
+    return 0;
+  }
+
+  menu = MenuSession{};
+  menu.serial = serial;
+  menu.requester = surfaceId;
+  menu.anchorX = anchorX;
+  menu.anchorY = anchorY;
+  wlr_log(WLR_DEBUG, "menu: serial %u for surface %u at %d,%d (%zu items)",
+          serial, surfaceId, anchorX, anchorY, items.size());
+  return serial;
+}
+
 void Server::closeContextMenu() {
   if (menu.serial == 0) return;
   const MenuSession closing = menu;
   menu = MenuSession{};
+  // A client's menu that ends without an answer — superseded by another, or
+  // the menu client went away — still owes that client a reply. Nothing else
+  // would ever tell it: the surface it was drawn in is not the client's, so
+  // the dismissal is invisible from there, and a dock waiting for an answer
+  // that never comes is a dock whose next right-click does nothing.
+  //
+  // `applyMenuChoice` clears `requester` before it calls this, so a menu that
+  // *was* answered does not also arrive here as a dismissal.
+  if (closing.requester != 0 && control != nullptr) {
+    control->postMenuChoice(closing.requester, closing.serial, 0);
+  }
   if (surfaces != nullptr) surfaces->hideMenu();
   // Tell the client, or it goes on believing its menu is up: hiding the
   // surface is enough for the *screen* and says nothing to the process
@@ -10084,7 +10157,27 @@ void Server::applyMenuChoice(uint32_t serial, uint32_t chosen) {
   // what the serial is for.
   if (serial == 0 || serial != menu.serial) return;
   const uint32_t target = menu.target;
+  const uint32_t requester = menu.requester;
+  // Cleared so the close below does not also report this menu as dismissed —
+  // see `closeContextMenu`.
+  menu.requester = 0;
   closeContextMenu();
+
+  // A menu a client asked for. Every id on it was the client's own and means
+  // nothing here, so the answer goes back unread — including `chosen` 0,
+  // which is the news that the user dismissed it.
+  if (requester != 0) {
+    if (control == nullptr) return;
+    if (!control->postMenuChoice(requester, serial, chosen)) {
+      // The client asked for a menu and then stopped listening — it exited
+      // while the menu was up, or its stream broke. Nothing to do about it
+      // here, but a menu whose answer went nowhere is worth saying once.
+      wlr_log(WLR_ERROR, "menu: answer %u for surface %u went nowhere", chosen,
+              requester);
+    }
+    return;
+  }
+
   if (chosen == 0) return;  // dismissed
 
   // Re-resolved after the close, not captured before it: everything below
@@ -10174,6 +10267,13 @@ bool SurfaceRegistry::showMenu(uint32_t surfaceId, uint32_t serial,
   wlr_log(WLR_DEBUG, "menu: serial %u at %d,%d — %ux%u for window %u", serial,
           surface->x, surface->y, width, height, session.target);
   return true;
+}
+
+uint32_t SurfaceRegistry::openClientMenu(
+    uint32_t surfaceId, int32_t x, int32_t y, const std::string &title,
+    const std::vector<lava::CompositorHost::MenuEntry> &items) {
+  if (server_ == nullptr) return 0;
+  return server_->openClientMenu(surfaceId, x, y, title, items);
 }
 
 void SurfaceRegistry::menuChosen(uint32_t serial, uint32_t chosen) {

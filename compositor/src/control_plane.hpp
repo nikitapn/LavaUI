@@ -118,6 +118,17 @@ struct CompositorHost {
   virtual bool showMenu(uint32_t surfaceId, uint32_t serial, uint32_t width,
                         uint32_t height) = 0;
 
+  /// "Show this menu for `surfaceId`, anchored at `x`,`y` in that surface's
+  /// own coordinates." Returns the serial the answer will name, or 0 when
+  /// there is no menu client to draw it or the surface is unknown.
+  ///
+  /// The compositor decides nothing about what is on this one — see `OpenMenu`
+  /// in the IDL. Every id in `items` is the caller's and comes back to the
+  /// caller untouched.
+  virtual uint32_t openClientMenu(
+      uint32_t surfaceId, int32_t x, int32_t y, const std::string &title,
+      const std::vector<MenuEntry> &items) = 0;
+
   /// The client's answer. `chosen` is a `MenuEntry::id`, or 0 for dismissed.
   virtual void menuChosen(uint32_t serial, uint32_t chosen) = 0;
 
@@ -487,6 +498,18 @@ class ControlPlane {
   virtual bool postMenu(uint32_t serial, int32_t x, int32_t y, uint32_t target,
                         const std::string &title,
                         const std::vector<CompositorHost::MenuEntry> &items) = 0;
+
+  /// The answer to one `OpenMenu`, back to the surface that asked for it.
+  ///
+  /// False when that surface is not listening any more — its process exited
+  /// while its own menu was up, which is a menu nobody needs the answer to.
+  /// Called from the loop thread, like every other push here.
+  virtual bool postMenuChoice(uint32_t surfaceId, uint32_t serial,
+                              uint32_t chosen) = 0;
+
+  /// Whether anyone is listening for `surfaceId`'s menu answers. What
+  /// `OpenMenu` checks before opening a menu whose result would go nowhere.
+  virtual bool menuChoiceSubscribed(uint32_t surfaceId) = 0;
 
   /// "The set of windows changed" — to every shell watching. Called from the
   /// loop thread on anything a dock would draw differently.

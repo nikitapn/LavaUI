@@ -650,6 +650,33 @@ message MenuReply {
   chosen: u32;
 }
 
+/// Compositor → the client that asked for a menu: "the user picked this."
+///
+/// The other end of `OpenMenu`, and the reason that call exists as a pair. A
+/// menu a *client* asked for is one the compositor has no opinion about: the
+/// ids on it mean something to the process that built it and nothing here, so
+/// the answer goes back where the question came from instead of being acted
+/// on. Everything in between is still the compositor's — the placement, the
+/// grab, the dismissal on a click outside — which is the whole point of
+/// asking for one rather than drawing it yourself.
+message MenuChoice {
+  /// The serial `OpenMenu` returned. A client with one menu open at a time can
+  /// ignore it; it is here so a stale answer — the menu was superseded while
+  /// the reply was in flight — is one a client can recognise rather than act
+  /// on.
+  serial: u32;
+  /// `MenuItem.id` as the client spelled it, or 0 for dismissed.
+  chosen: u32;
+}
+
+/// Client → compositor on the same stream: "I have that one."
+///
+/// Flow control and nothing else, the way `WindowListAck` is. The news on this
+/// stream travels the other way.
+message MenuChoiceAck {
+  serial: u32;
+}
+
 // ─── GPU memory ──────────────────────────────────────────────────────────
 //
 // What `GetGpuReport` answers with. Every byte figure is what the allocator
@@ -1854,5 +1881,67 @@ interface Compositor {
   /// `SetBackdropBlurRegion`, which stays for callers that only ever have one.
   void SetBackdropBlurRegions(surfaceId: in u32, radius: in f32,
                               rects: in vector<FrostRect>)
+      raises(SurfaceNotFound);
+
+  // ─── Menus a client asks for ───────────────────────────────────────────
+  //
+  // The context menu, from the other side. Everything above this pair is the
+  // compositor deciding what is on a menu; these two are a client deciding,
+  // and handing the *showing* of it over anyway.
+  //
+  // A panel cannot show its own menu properly and the reason is not layout.
+  // A menu has to sit above every window, be placed against an anchor without
+  // running off the output, take the pointer, and come down when the user
+  // clicks somewhere else — and "somewhere else" is by definition input that
+  // is never delivered to the panel. The dock drew its own for a while: it
+  // grew its surface upward to make room, and a click anywhere outside that
+  // surface left the menu on screen, because nothing told it. None of that is
+  // fixable on the client's side of the boundary. All of it is already solved
+  // on this side, for the menu the compositor opens itself.
+  //
+  // So the split is the one the rest of this interface uses: the client knows
+  // what its menu says and what its rows mean, the compositor knows where a
+  // menu can go and who is allowed to click. `MenuItem.id` is opaque here —
+  // it is echoed back to the client that sent it and read by nobody else.
+
+  /// "Show this menu for me, anchored here."
+  ///
+  /// Returns the serial the answer will name, or 0 when the desktop has no
+  /// menu client to draw it (`menu = off` in `[shell]`, or it is restarting)
+  /// — the same nothing a right-click on the desktop gets, and not an error.
+  ///
+  /// `x` and `y` are in `surfaceId`'s own coordinates, not the output's. A
+  /// panel does not know where it is on screen and has no way to find out;
+  /// what it knows is which of its icons was clicked, and this is that number.
+  /// The compositor adds the surface's origin and unconstrains from there, so
+  /// a menu anchored to the last icon on a dock at the bottom-right opens
+  /// upward and leftward without the client working out that it had to.
+  ///
+  /// Placed below and right of the anchor where there is room, and flipped
+  /// above or left of it where there is not — the same `xdg_popup` rule a
+  /// right-click menu gets. A panel at the bottom edge therefore gets a menu
+  /// that opens upward without asking for it, by anchoring to the top of
+  /// whatever was clicked.
+  ///
+  /// Supersedes whatever menu was up, exactly as a second right-click does.
+  /// A client whose own menu is replaced still gets a `MenuChoice` for it,
+  /// with `chosen` 0.
+  ///
+  /// Subscribe with `SubscribeMenuChoice` **before** calling this. A menu
+  /// opened by a client that is not listening would be a grab the user has to
+  /// click their way out of to reach a result nobody receives, so it is
+  /// refused.
+  u32 OpenMenu(surfaceId: in u32, x: in i32, y: in i32, title: in string,
+               items: in vector<MenuItem>)
+      raises(SurfaceNotFound);
+
+  /// Where the answers to this surface's `OpenMenu` calls arrive.
+  ///
+  /// Per surface, not one-per-desktop like `SubscribeMenu`: every panel may
+  /// have menus of its own, and they are told apart by whose surface asked.
+  /// The stream is the delivery route and the permission at once — see
+  /// `OpenMenu`, which refuses to open a menu for a surface with nobody
+  /// listening.
+  bidi_stream<MenuChoiceAck, MenuChoice> SubscribeMenuChoice(surfaceId: in u32)
       raises(SurfaceNotFound);
 }

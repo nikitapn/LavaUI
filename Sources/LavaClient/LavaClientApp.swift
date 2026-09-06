@@ -369,6 +369,102 @@ public enum LavaClient {
         }
     }
 
+    // ─── Menus this client asks for ────────────────────────────────────────
+    //
+    // The other direction from `onMenuRequest`: that one is the desktop's
+    // menu *renderer*, this is any panel that wants a menu of its own drawn
+    // properly. See `OpenMenu` in the IDL for why a panel cannot do it itself
+    // — the short version is that a menu has to outlive its panel's surface,
+    // sit above every window, and come down on a click the panel never sees.
+
+    /// The answers to this client's own `openMenu` calls.
+    ///
+    /// `handler` runs on the frame loop with the `MenuItem.id` that was
+    /// chosen, or 0 for a menu the user dismissed. Set this **before** opening
+    /// a menu: the compositor refuses to open one for a client that is not
+    /// listening, rather than take a grab for an answer that goes nowhere.
+    public static func onMenuChoice(
+        _ handler: @escaping @Sendable (UInt32, UInt32) -> Void
+    ) {
+        guard Self.compositor != nil else { return }
+        guard surfaceID != 0 else {
+            // Held until `run` creates the surface, like every subscription
+            // that is *about* the surface rather than about the session.
+            pendingMenuChoice = handler
+            return
+        }
+        startMenuChoice(handler)
+    }
+
+    nonisolated(unsafe) private static var pendingMenuChoice:
+        (@Sendable (UInt32, UInt32) -> Void)?
+
+    private static func startMenuChoice(
+        _ handler: @escaping @Sendable (UInt32, UInt32) -> Void
+    ) {
+        guard let compositor = Self.compositor, surfaceID != 0 else { return }
+        let stream: NPRPCBidiStream<MenuChoiceAck, MenuChoice>
+        do {
+            stream = try compositor.subscribeMenuChoice(surfaceId: surfaceID)
+        } catch {
+            FileHandle.standardError.write(
+                Data("SubscribeMenuChoice failed: \(error)\n".utf8)
+            )
+            return
+        }
+        Task.detached {
+            do {
+                for try await choice in stream.reader {
+                    let serial = choice.serial
+                    let chosen = choice.chosen
+                    MainQueue.async { handler(serial, chosen) }
+                    try? await stream.writer.write(MenuChoiceAck(serial: serial))
+                }
+            } catch {
+                FileHandle.standardError.write(
+                    Data("menu choice stream ended: \(error)\n".utf8)
+                )
+            }
+            stream.writer.close()
+        }
+    }
+
+    /// Asks the compositor to show a menu for this surface.
+    ///
+    /// `x` and `y` are in this surface's own coordinates — the point the menu
+    /// hangs off, usually the top of whatever was clicked. The compositor
+    /// places it from there and flips it above the anchor when there is no
+    /// room below, which is what a panel at the bottom edge always wants.
+    ///
+    /// Returns the serial the answer will name, or 0 when there is no menu
+    /// client on this desktop to draw it — a caller that has a fallback can
+    /// use it then, and one that has none has correctly done nothing.
+    ///
+    /// The ids in `items` are this client's own. They come back through
+    /// `onMenuChoice` untouched, and nothing between here and there reads
+    /// them.
+    @discardableResult
+    public static func openMenu(
+        x: Float, y: Float, title: String = "", items: [LavaIDL.MenuItem]
+    ) -> UInt32 {
+        guard let compositor = Self.compositor, surfaceID != 0 else { return 0 }
+        guard !items.isEmpty else { return 0 }
+        do {
+            return try blockingCall {
+                try await compositor.openMenu(
+                    surfaceId: surfaceID,
+                    x: Int32(x.rounded()), y: Int32(y.rounded()),
+                    title: title, items: items
+                )
+            }
+        } catch {
+            FileHandle.standardError.write(
+                Data("OpenMenu failed: \(error)\n".utf8)
+            )
+            return 0
+        }
+    }
+
     /// Size last asked of `CreateSurface`. After `fillScreen: true` this is
     /// the largest enabled output — available before the surface exists.
     public static var requestedSize: (width: Float, height: Float) {
@@ -975,6 +1071,10 @@ public enum LavaClient {
             if let pending = pendingMenuHandler {
                 pendingMenuHandler = nil
                 startMenuRequests(pending)
+            }
+            if let pending = pendingMenuChoice {
+                pendingMenuChoice = nil
+                startMenuChoice(pending)
             }
         } catch {
             fail("surface setup failed: \(error)")

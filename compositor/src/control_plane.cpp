@@ -486,6 +486,93 @@ struct MenuWatcher {
 
 using MenuWatcherPtr = std::shared_ptr<MenuWatcher>;
 
+
+struct ChoiceWatcher {
+  explicit ChoiceWatcher(nprpc::StreamWriter<MenuChoice> &&w)
+      : pump(std::move(w)) {}
+
+  void send(uint32_t serial, uint32_t chosen) {
+    MenuChoice choice{};
+    choice.serial = serial;
+    choice.chosen = chosen;
+    pump.post(choice);
+  }
+
+  void close() { pump.close(); }
+  bool done() { return pump.done(); }
+
+  // Not coalescing, unlike every other stream in this file. These are not
+  // state: two menus answered in quick succession are two answers, and
+  // merging them would drop a command the user gave.
+  StreamPump<MenuChoice, false> pump;
+};
+
+using ChoiceWatcherPtr = std::shared_ptr<ChoiceWatcher>;
+
+/// Where a client's own menu answers go, keyed by the surface that asked.
+///
+/// `AreaBroker`'s shape, and per-surface for the reason `MenuBroker` is not:
+/// that one is the desktop's single menu *renderer*, and this is every panel
+/// that has menus of its own. Two docks would each get their own answers.
+class ChoiceBroker {
+ public:
+  void subscribe(uint32_t surfaceId, const ChoiceWatcherPtr &sub) {
+    std::lock_guard lock(mutex_);
+    subscribers_[surfaceId].push_back(sub);
+  }
+
+  void unsubscribe(uint32_t surfaceId, const ChoiceWatcherPtr &sub) {
+    std::lock_guard lock(mutex_);
+    auto it = subscribers_.find(surfaceId);
+    if (it == subscribers_.end()) return;
+    std::erase(it->second, sub);
+    if (it->second.empty()) subscribers_.erase(it);
+  }
+
+  /// Whether anybody is listening for this surface — what `OpenMenu` refuses
+  /// on, so a menu is never opened for an answer that would go nowhere.
+  bool subscribed(uint32_t surfaceId) {
+    std::lock_guard lock(mutex_);
+    auto it = subscribers_.find(surfaceId);
+    if (it == subscribers_.end()) return false;
+    for (const auto &sub : it->second) {
+      if (!sub->done()) return true;
+    }
+    return false;
+  }
+
+  /// True when the answer went to somebody.
+  bool send(uint32_t surfaceId, uint32_t serial, uint32_t chosen) {
+    std::vector<ChoiceWatcherPtr> targets;
+    {
+      std::lock_guard lock(mutex_);
+      auto it = subscribers_.find(surfaceId);
+      if (it == subscribers_.end()) return false;
+      for (const auto &sub : it->second) {
+        if (!sub->done()) targets.push_back(sub);
+      }
+    }
+    for (const auto &target : targets) target->send(serial, chosen);
+    return !targets.empty();
+  }
+
+  void closeAll(uint32_t surfaceId) {
+    std::vector<ChoiceWatcherPtr> closing;
+    {
+      std::lock_guard lock(mutex_);
+      auto it = subscribers_.find(surfaceId);
+      if (it == subscribers_.end()) return;
+      closing = std::move(it->second);
+      subscribers_.erase(it);
+    }
+    for (const auto &sub : closing) sub->close();
+  }
+
+ private:
+  std::mutex mutex_;
+  std::unordered_map<uint32_t, std::vector<ChoiceWatcherPtr>> subscribers_;
+};
+
 /// The one context-menu client.
 ///
 /// Not a `StateBroker`: this is the single subscription on this interface
@@ -590,9 +677,10 @@ class CompositorImpl final : public ICompositor_Servant {
  public:
   CompositorImpl(CompositorHost &host, LoopQueue &loop, InputBroker &broker,
                  FocusBroker &focus, ListBroker &windows, ThemeBroker &theme,
-                 AreaBroker &areas, MenuBroker &menu)
+                 AreaBroker &areas, MenuBroker &menu, ChoiceBroker &choices)
       : host_(host), loop_(loop), broker_(broker), focus_(focus),
-        windows_(windows), theme_(theme), areas_(areas), menu_(menu) {}
+        windows_(windows), theme_(theme), areas_(areas), menu_(menu),
+        choices_(choices) {}
 
   // ─── Resources ───────────────────────────────────────────────────────────
 
@@ -744,6 +832,63 @@ class CompositorImpl final : public ICompositor_Servant {
     menu_.release(watcher);
     watcher->close();
     loop_.post([this, surfaceId] { host_.menuClientLeft(surfaceId); });
+    co_return;
+  }
+
+  uint32_t OpenMenu(
+      uint32_t surfaceId, int32_t x, int32_t y,
+      nprpc::flat::Span<char> title,
+      nprpc::flat::Span_ref<flat::MenuItem, flat::MenuItem_Direct> items)
+      override {
+    if (!host_.surfaceExists(surfaceId)) throw SurfaceNotFound(surfaceId);
+    // Refused rather than opened blind. A menu for a client that is not
+    // listening is a grab the user has to click their way out of, for an
+    // answer nobody receives — see `OpenMenu` in the IDL.
+    if (!choices_.subscribed(surfaceId)) {
+      wlr_log(WLR_ERROR,
+              "menu: surface %u asked for a menu without subscribing to the "
+              "answers",
+              surfaceId);
+      return 0;
+    }
+
+    std::vector<CompositorHost::MenuEntry> entries;
+    entries.reserve(items.size());
+    for (auto item : items) {
+      CompositorHost::MenuEntry entry;
+      // The client's own id, carried and never read: what it means is the
+      // client's business, and this compositor's job is to hand it back.
+      entry.id = item.id();
+      entry.title = std::string{item.title()};
+      entry.kind = static_cast<uint32_t>(item.kind());
+      entry.checked = item.checked();
+      entry.enabled = item.enabled();
+      entry.shortcut = std::string{item.shortcut()};
+      entries.push_back(std::move(entry));
+    }
+    return host_.openClientMenu(surfaceId, x, y, std::string{title}, entries);
+  }
+
+  nprpc::Task<> SubscribeMenuChoice(
+      uint32_t surfaceId,
+      nprpc::BidiStream<MenuChoiceAck, MenuChoice> stream) override {
+    if (!host_.surfaceExists(surfaceId)) throw SurfaceNotFound(surfaceId);
+
+    auto watcher = std::make_shared<ChoiceWatcher>(std::move(stream.writer));
+    choices_.subscribe(surfaceId, watcher);
+    // Nothing at subscription: unlike every state stream here there is no
+    // "current" menu answer, and the first message is the first menu.
+    try {
+      while (auto ack = co_await stream.reader) {
+        (void)ack;
+      }
+    } catch (...) {
+      choices_.unsubscribe(surfaceId, watcher);
+      watcher->close();
+      throw;
+    }
+    choices_.unsubscribe(surfaceId, watcher);
+    watcher->close();
     co_return;
   }
 
@@ -1429,6 +1574,7 @@ class CompositorImpl final : public ICompositor_Servant {
   ThemeBroker &theme_;
   AreaBroker &areas_;
   MenuBroker &menu_;
+  ChoiceBroker &choices_;
 
   /// Registered images, three ways round: what a key resolves to, how many
   /// clients hold it, and which key an id came from. No lock, unlike
@@ -1509,7 +1655,7 @@ class ControlPlaneImpl final : public ControlPlane {
     host_ = &host;
     servant_ = std::make_unique<CompositorImpl>(host, queue_, broker_, focus_,
                                                 windows_, theme_, areas_,
-                                                menu_);
+                                                menu_, choices_);
     const nprpc::ObjectId oid = poa_->activate_object_with_id(
         0, servant_.get(), nprpc::ObjectActivationFlags::shm);
 
@@ -1539,6 +1685,9 @@ class ControlPlaneImpl final : public ControlPlane {
 
   void surfaceGone(uint32_t surfaceId) override {
     broker_.closeAll(surfaceId);
+    // And its menu answers, for the same reason: the panel that asked for the
+    // menu is the panel that has gone.
+    choices_.closeAll(surfaceId);
     // A panel's area subscription dies with the panel, the same way its input
     // stream does — and it is the only thing that ends this stream from the
     // compositor's side, since nothing else is watching for the client.
@@ -1575,6 +1724,15 @@ class ControlPlaneImpl final : public ControlPlane {
       request.items.push_back(std::move(item));
     }
     return menu_.send(request);
+  }
+
+  bool postMenuChoice(uint32_t surfaceId, uint32_t serial,
+                      uint32_t chosen) override {
+    return choices_.send(surfaceId, serial, chosen);
+  }
+
+  bool menuChoiceSubscribed(uint32_t surfaceId) override {
+    return choices_.subscribed(surfaceId);
   }
 
   void postWindowList() override {
@@ -1624,6 +1782,7 @@ class ControlPlaneImpl final : public ControlPlane {
   ThemeBroker theme_;
   AreaBroker areas_;
   MenuBroker menu_;
+  ChoiceBroker choices_;
   CompositorHost *host_ = nullptr;
   uint32_t listSerial_ = 0;
   uint32_t themeSerial_ = 0;

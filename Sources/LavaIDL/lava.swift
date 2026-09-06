@@ -1117,6 +1117,56 @@ public func unmarshal_MenuReply(buffer: UnsafeRawPointer, offset: Int) -> MenuRe
   return result
 }
 
+public struct MenuChoice: Codable, Sendable {
+  public var serial: UInt32 = 0
+  public var chosen: UInt32 = 0
+
+  public init() {}
+
+  public init(serial: UInt32, chosen: UInt32)   {
+    self.serial = serial
+    self.chosen = chosen
+  }
+}
+
+
+// MARK: - Marshal MenuChoice
+public func marshal_MenuChoice(buffer: FlatBuffer, offset: Int, data: MenuChoice) {
+  buffer.storeBytes(of: data.serial, toByteOffset: offset + 0, as: UInt32.self)
+  buffer.storeBytes(of: data.chosen, toByteOffset: offset + 4, as: UInt32.self)
+}
+
+// MARK: - Unmarshal MenuChoice
+public func unmarshal_MenuChoice(buffer: UnsafeRawPointer, offset: Int) -> MenuChoice {
+  var result = MenuChoice()
+  result.serial = buffer.load(fromByteOffset: offset + 0, as: UInt32.self)
+  result.chosen = buffer.load(fromByteOffset: offset + 4, as: UInt32.self)
+  return result
+}
+
+public struct MenuChoiceAck: Codable, Sendable {
+  public var serial: UInt32 = 0
+
+  public init() {}
+
+  public init(serial: UInt32)   {
+    self.serial = serial
+  }
+}
+
+
+// MARK: - Marshal MenuChoiceAck
+public func marshal_MenuChoiceAck(buffer: FlatBuffer, offset: Int, data: MenuChoiceAck) {
+  buffer.storeBytes(of: data.serial, toByteOffset: offset + 0, as: UInt32.self)
+}
+
+// MARK: - Unmarshal MenuChoiceAck
+public func unmarshal_MenuChoiceAck(buffer: UnsafeRawPointer, offset: Int) -> MenuChoiceAck {
+  var result = MenuChoiceAck()
+  result.serial = buffer.load(fromByteOffset: offset + 0, as: UInt32.self)
+  return result
+}
+
 public struct GpuAllocation: Codable, Sendable {
   public var kind: UInt32 = 0
   public var category: String = ""
@@ -2547,6 +2597,49 @@ fileprivate func unmarshal_lava_M34(buffer: UnsafeRawPointer, offset: Int) -> la
   return result
 }
 
+fileprivate struct lava_M35: Codable, Sendable {
+  public var _1: UInt32 = 0
+  public var _2: Int32 = 0
+  public var _3: Int32 = 0
+  public var _4: String = ""
+  public var _5: [MenuItem] = []
+
+  public init() {}
+
+  public init(_1: UInt32, _2: Int32, _3: Int32, _4: String, _5: [MenuItem])   {
+    self._1 = _1
+    self._2 = _2
+    self._3 = _3
+    self._4 = _4
+    self._5 = _5
+  }
+}
+
+
+// MARK: - Marshal lava_M35
+fileprivate func marshal_lava_M35(buffer: FlatBuffer, offset: Int, data: lava_M35) {
+  buffer.storeBytes(of: data._1, toByteOffset: offset + 0, as: UInt32.self)
+  buffer.storeBytes(of: data._2, toByteOffset: offset + 4, as: Int32.self)
+  buffer.storeBytes(of: data._3, toByteOffset: offset + 8, as: Int32.self)
+  NPRPC.marshal_string(buffer: buffer, offset: offset + 12, string: data._4)
+  NPRPC.marshal_struct_vector(buffer: buffer, offset: offset + 20, vector: data._5, elementSize: 28, elementAlignment: 4) { buf, off, elem in
+    marshal_MenuItem(buffer: buf, offset: off, data: elem)
+  }
+}
+
+// MARK: - Unmarshal lava_M35
+fileprivate func unmarshal_lava_M35(buffer: UnsafeRawPointer, offset: Int) -> lava_M35 {
+  var result = lava_M35()
+  result._1 = buffer.load(fromByteOffset: offset + 0, as: UInt32.self)
+  result._2 = buffer.load(fromByteOffset: offset + 4, as: Int32.self)
+  result._3 = buffer.load(fromByteOffset: offset + 8, as: Int32.self)
+  result._4 = NPRPC.unmarshal_string(buffer: buffer, offset: offset + 12)
+  result._5 = NPRPC.unmarshal_struct_vector(buffer: buffer, offset: offset + 20, elementSize: 28) { buf, off in
+    unmarshal_MenuItem(buffer: buf, offset: off)
+  }
+  return result
+}
+
 public protocol CompositorProtocol {
   func registerFont(path: String, pixelSize26_6: UInt32, faceIndex: UInt32, rasterFlags: UInt32) throws -> UInt32
   func registerImage(path: String, maxPixelSize: UInt32) throws -> ImageInfo
@@ -2604,6 +2697,8 @@ public protocol CompositorProtocol {
   func setBackdropBlurRegion(surfaceId: UInt32, radius: Float, x: Float, y: Float, w: Float, h: Float, cornerRadius: Float) throws
   func endSession()
   func setBackdropBlurRegions(surfaceId: UInt32, radius: Float, rects: [FrostRect]) throws
+  func openMenu(surfaceId: UInt32, x: Int32, y: Int32, title: String, items: [MenuItem]) throws -> UInt32
+  func subscribeMenuChoice(surfaceId: UInt32, stream: NPRPCBidiStream<MenuChoice, MenuChoiceAck>) async throws
 }
 
 // Client proxy for Compositor
@@ -4769,6 +4864,95 @@ final public class Compositor: NPRPCObject, @unchecked Sendable {
     if stdReply != 0 { throw UnexpectedReplyError(message: "Unexpected reply") }
   }
 
+  public func openMenu(surfaceId: UInt32, x: Int32, y: Int32, title: String, items: [MenuItem]) async throws -> UInt32   {
+    // Prepare buffer
+    let buffer = FlatBuffer()
+    buffer.prepare(188)
+    buffer.commit(60)
+    guard let bufData = buffer.data else { throw BufferError(message: "Failed to get buffer data") }
+
+    // Write message header
+    bufData.storeBytes(of: UInt32(0), toByteOffset: 0, as: UInt32.self)  // size (set later)
+    bufData.storeBytes(of: UInt32(0), toByteOffset: 4, as: UInt32.self)  // msg_id: FunctionCall (MessageId enum value 0)
+    bufData.storeBytes(of: UInt32(0), toByteOffset: 8, as: UInt32.self)  // msg_type: Request
+    bufData.storeBytes(of: UInt32(0), toByteOffset: 12, as: UInt32.self) // reserved
+
+    // Write call header
+    bufData.storeBytes(of: poaIdx, toByteOffset: 16, as: UInt16.self)
+    bufData.storeBytes(of: UInt8(0), toByteOffset: 18, as: UInt8.self)  // interface_idx
+    bufData.storeBytes(of: UInt8(56), toByteOffset: 19, as: UInt8.self)  // function_idx
+    bufData.storeBytes(of: objectId, toByteOffset: 24, as: UInt64.self)
+
+    // Marshal input arguments
+    var inArgs = lava_M35()
+    inArgs._1 = surfaceId
+    inArgs._2 = x
+    inArgs._3 = y
+    inArgs._4 = title
+    inArgs._5 = items
+    marshal_lava_M35(buffer: buffer, offset: 32, data: inArgs)
+
+    guard let finalData = buffer.data else { throw BufferError(message: "Failed to get buffer data") }
+    finalData.storeBytes(of: UInt32(buffer.size), toByteOffset: 0, as: UInt32.self)
+
+    // Send and receive
+    try Task.checkCancellation()
+    let responseBuffer = try await sendAsyncReceive(buffer: buffer, timeout: timeout)
+
+    // Handle reply
+    let stdReply = try handleStandardReply(buffer: responseBuffer)
+    if stdReply == 1 { throw lava_throwException(buffer: responseBuffer) }
+    if stdReply != -1 { throw UnexpectedReplyError(message: "Unexpected reply") }
+
+    guard let responseData = responseBuffer.data else { throw BufferError(message: "Failed to get response data") }
+    let out = unmarshal_lava_M2(buffer: responseData, offset: 16)
+    return out._1
+  }
+
+  public func subscribeMenuChoice(surfaceId: UInt32) throws -> NPRPCBidiStream<MenuChoiceAck, MenuChoice>   {
+    let streamId = nprpc_generate_stream_id()
+
+    // Prepare StreamInit buffer
+    let buffer = FlatBuffer()
+    buffer.prepare(52)
+    buffer.commit(52)
+    guard let data = buffer.data else { throw BufferError(message: "Failed to get buffer data") }
+
+    // Write StreamInit message header
+    data.storeBytes(of: UInt32(0), toByteOffset: 0, as: UInt32.self)  // size (set later)
+    data.storeBytes(of: impl.MessageId.StreamInitialization.rawValue, toByteOffset: 4, as: UInt32.self)
+    data.storeBytes(of: impl.MessageType.Request.rawValue, toByteOffset: 8, as: UInt32.self)
+    data.storeBytes(of: UInt32(0), toByteOffset: 12, as: UInt32.self)  // reserved
+
+    // Write StreamInit fields
+    data.storeBytes(of: streamId, toByteOffset: 16, as: UInt64.self)  // offset 0
+    data.storeBytes(of: poaIdx, toByteOffset: 24, as: UInt16.self)  // offset 8
+    data.storeBytes(of: UInt8(0), toByteOffset: 26, as: UInt8.self)  // interface_idx at offset 10
+    data.storeBytes(of: objectId, toByteOffset: 32, as: UInt64.self)  // offset 16 (after 5-byte pad)
+    data.storeBytes(of: UInt8(57), toByteOffset: 40, as: UInt8.self)  // func_idx at offset 24
+    data.storeBytes(of: impl.StreamKind.Bidi.rawValue, toByteOffset: 41, as: UInt8.self)
+    data.storeBytes(of: defaultReaderWindow, toByteOffset: 44, as: UInt32.self)  // initial_credits at offset 28
+
+    // Marshal input arguments
+    var inArgs = lava_M2()
+    inArgs._1 = surfaceId
+    marshal_lava_M2(buffer: buffer, offset: 48, data: inArgs)
+
+    guard let finalData = buffer.data else { throw BufferError(message: "Failed to get buffer data") }
+    finalData.storeBytes(of: UInt32(buffer.size), toByteOffset: 0, as: UInt32.self)
+
+    guard let session = nprpc_object_get_session(self.handle),
+          let streamManager = nprpc_session_get_stream_manager(session) else {
+      throw RuntimeError(message: "Failed to get session for stream")
+    }
+
+    let stream = NPRPC.createStreamManagerBidiStream(streamManager: streamManager, streamId: streamId, buffer: buffer, initialPayloadCapacity: 132, unreliable: false, producerWindow: defaultReaderWindow, serializer: { (buffer: FlatBuffer, offset: Int, value: MenuChoiceAck) in NPRPC.marshal_stream_struct(buffer: buffer, offset: offset, rootSize: 4, value: value) { buf, off, elem in marshal_MenuChoiceAck(buffer: buf, offset: off, data: elem) } }, deserializer: { (data: UnsafeRawPointer, _: Int) in unmarshal_MenuChoice(buffer: data, offset: 0) })
+    let result = nprpc_session_stream_send_init(session, buffer.handle, self.timeout)
+    if result == 1 { throw lava_throwException(buffer: buffer) }
+    if result != 0 { throw RuntimeError(message: "StreamInit failed (code: \(result))") }
+    return stream
+  }
+
 }
 
 // Servant base for Compositor
@@ -5003,6 +5187,14 @@ open class CompositorServant: NPRPCServant, CompositorProtocol, @unchecked Senda
     fatalError("Subclass must implement setBackdropBlurRegions")
   }
 
+  open func openMenu(surfaceId: UInt32, x: Int32, y: Int32, title: String, items: [MenuItem]) throws -> UInt32   {
+    fatalError("Subclass must implement openMenu")
+  }
+
+  open func subscribeMenuChoice(surfaceId: UInt32, stream: NPRPCBidiStream<MenuChoice, MenuChoiceAck>) async throws   {
+    fatalError("Subclass must implement subscribeMenuChoice")
+  }
+
   // Dispatch incoming RPC calls
   public override func dispatch(buffer: FlatBuffer, remoteEndpoint: NPRPCEndpoint)   {
     guard let data = buffer.data else { return }
@@ -5186,6 +5378,53 @@ open class CompositorServant: NPRPCServant, CompositorProtocol, @unchecked Senda
           switch nprpcProbeStreamInit(
             body: { [self] in
               try await self.subscribeInput(surfaceId: ia._1, stream: stream)
+            },
+            installFirstAccess: { stream.reader.onFirstAccess = $0 }
+          ) {
+          case .started:
+            makeSimpleAnswer(buffer: buffer, messageId: impl.MessageId.Success)
+          case .initError(let error):
+            do {
+              throw error
+            } catch let e as SurfaceNotFound {
+              let obuf = buffer
+              obuf.consume(obuf.size)
+              obuf.prepare(24)
+              obuf.commit(24)
+              guard let exData = obuf.data else { return }
+              marshal_SurfaceNotFound(buffer: obuf, offset: 16, data: e)
+              exData.storeBytes(of: UInt32(obuf.size), toByteOffset: 0, as: UInt32.self)
+              exData.storeBytes(of: impl.MessageId.Exception.rawValue, toByteOffset: 4, as: UInt32.self)
+              exData.storeBytes(of: impl.MessageType.Answer.rawValue, toByteOffset: 8, as: UInt32.self)
+            } catch {
+              makeSimpleAnswer(buffer: buffer, messageId: impl.MessageId.Error_Unknown)
+            }
+          }
+        case 57: // SubscribeMenuChoice
+          // Streaming method dispatch
+          guard let data = buffer.data else { return }
+          let streamId = data.load(fromByteOffset: (16 + MemoryLayout<NPRPC.impl.StreamInit>.offset(of: \NPRPC.impl.StreamInit.stream_id)!), as: UInt64.self)
+
+          // Validate input buffer for untrusted interface
+          guard check_1Fu32(buffer: data, bufferSize: buffer.size, offset: 48) else           {
+            makeSimpleAnswer(buffer: buffer, messageId: impl.MessageId.Error_BadInput)
+            return
+          }
+
+          // Unmarshal input arguments
+          let ia = unmarshal_lava_M2(buffer: data, offset: 48)
+
+          guard let sessionCtx = self.sessionContext,
+                let streamManager = nprpc_get_stream_manager(sessionCtx) else {
+            makeSimpleAnswer(buffer: buffer, messageId: impl.MessageId.Error_BadInput)
+            return
+          }
+          let initialCredits = data.load(fromByteOffset: 44, as: UInt32.self)
+          let stream = NPRPC.createStreamManagerBidiStream(streamManager: streamManager, streamId: streamId, buffer: buffer, initialPayloadCapacity: 136, unreliable: false, initialCredits: initialCredits, serializer: { (buffer: FlatBuffer, offset: Int, value: MenuChoice) in NPRPC.marshal_stream_struct(buffer: buffer, offset: offset, rootSize: 8, value: value) { buf, off, elem in marshal_MenuChoice(buffer: buf, offset: off, data: elem) } }, deserializer: { (data: UnsafeRawPointer, _: Int) in unmarshal_MenuChoiceAck(buffer: data, offset: 0) })
+          nprpc_stream_manager_defer_stream_start(streamManager, streamId)
+          switch nprpcProbeStreamInit(
+            body: { [self] in
+              try await self.subscribeMenuChoice(surfaceId: ia._1, stream: stream)
             },
             installFirstAccess: { stream.reader.onFirstAccess = $0 }
           ) {
@@ -6644,6 +6883,47 @@ open class CompositorServant: NPRPCServant, CompositorProtocol, @unchecked Senda
         catch {
           makeSimpleAnswer(buffer: buffer, messageId: impl.MessageId.Error_Unknown)
         }
+      case 56: // OpenMenu
+        // Validate input buffer for untrusted interface
+        guard check_1Fu322Fi323Fi324S5VMenuItem(buffer: data, bufferSize: buffer.size, offset: 32) else         {
+          makeSimpleAnswer(buffer: buffer, messageId: impl.MessageId.Error_BadInput)
+          return
+        }
+
+        // Unmarshal input arguments
+        let ia = unmarshal_lava_M35(buffer: data, offset: 32)
+        
+        do {
+          let __ret_val = try openMenu(surfaceId: ia._1, x: ia._2, y: ia._3, title: ia._4, items: ia._5)
+          // Prepare output buffer
+          let obuf = buffer
+          obuf.consume(obuf.size)
+          obuf.prepare(20)
+          obuf.commit(20)
+          // Marshal output arguments
+          var out_data = lava_M2()
+          out_data._1 = __ret_val
+
+          marshal_lava_M2(buffer: buffer, offset: 16, data: out_data)
+          guard let outData = buffer.data else { return }
+          outData.storeBytes(of: UInt32(buffer.size), toByteOffset: 0, as: UInt32.self)
+          outData.storeBytes(of: impl.MessageId.BlockResponse.rawValue, toByteOffset: 4, as: UInt32.self)
+          outData.storeBytes(of: impl.MessageType.Answer.rawValue, toByteOffset: 8, as: UInt32.self)
+        }
+        catch let e as SurfaceNotFound {
+          let obuf = buffer
+          obuf.consume(obuf.size)
+          obuf.prepare(24)
+          obuf.commit(24)
+          guard let exData = obuf.data else { return }
+          marshal_SurfaceNotFound(buffer: obuf, offset: 16, data: e)
+          exData.storeBytes(of: UInt32(obuf.size), toByteOffset: 0, as: UInt32.self)
+          exData.storeBytes(of: impl.MessageId.Exception.rawValue, toByteOffset: 4, as: UInt32.self)
+          exData.storeBytes(of: impl.MessageType.Answer.rawValue, toByteOffset: 8, as: UInt32.self)
+        }
+        catch {
+          makeSimpleAnswer(buffer: buffer, messageId: impl.MessageId.Error_Unknown)
+        }
       default:
         makeSimpleAnswer(buffer: buffer, messageId: impl.MessageId.Error_UnknownFunctionIdx)
     } // switch
@@ -6841,6 +7121,26 @@ fileprivate func check_1Fu322Ff323Ff324Ff325Ff326Ff327Ff32(buffer: UnsafeRawPoin
 fileprivate func check_1Fu322Ff323VFrostRect(buffer: UnsafeRawPointer, bufferSize: Int, offset: Int) -> Bool {
   guard NPRPC.check_struct_bounds(bufferSize: bufferSize, offset: offset, structSize: 16) else { return false }
   guard NPRPC.check_vector_bounds(buffer: buffer, bufferSize: bufferSize, offset: offset + 8, elementSize: 20) else { return false }
+  return true
+}
+
+
+// Safety check for lava_M35
+fileprivate func check_1Fu322Fi323Fi324S5VMenuItem(buffer: UnsafeRawPointer, bufferSize: Int, offset: Int) -> Bool {
+  guard NPRPC.check_struct_bounds(bufferSize: bufferSize, offset: offset, structSize: 28) else { return false }
+  guard NPRPC.check_string_bounds(buffer: buffer, bufferSize: bufferSize, offset: offset + 12) else { return false }
+  guard NPRPC.check_vector_bounds(buffer: buffer, bufferSize: bufferSize, offset: offset + 20, elementSize: 28) else { return false }
+  do {
+    let relOffset = Int(buffer.load(fromByteOffset: offset + 20, as: UInt32.self))
+    let count = Int(buffer.load(fromByteOffset: offset + 20 + 4, as: UInt32.self))
+    let dataOffset = offset + 20 + relOffset
+    for i in 0..<count {
+      let elemOffset = dataOffset + i * 28
+      guard NPRPC.check_struct_bounds(bufferSize: bufferSize, offset: elemOffset, structSize: 28) else { return false }
+      guard NPRPC.check_string_bounds(buffer: buffer, bufferSize: bufferSize, offset: elemOffset + 4) else { return false }
+      guard NPRPC.check_string_bounds(buffer: buffer, bufferSize: bufferSize, offset: elemOffset + 20) else { return false }
+    }
+  }
   return true
 }
 

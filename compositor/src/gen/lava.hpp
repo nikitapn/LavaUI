@@ -1471,6 +1471,66 @@ public:
 };
 } // namespace flat
 
+struct MenuChoice {
+  uint32_t serial;
+  uint32_t chosen;
+};
+
+namespace flat {
+struct MenuChoice {
+  uint32_t serial;
+  uint32_t chosen;
+};
+
+class MenuChoice_Direct {
+  ::nprpc::flat_buffer& buffer_;
+  const std::uint32_t offset_;
+
+  auto& base() noexcept { return *reinterpret_cast<MenuChoice*>(reinterpret_cast<std::byte*>(buffer_.data().data()) + offset_); }
+  auto const& base() const noexcept { return *reinterpret_cast<const MenuChoice*>(reinterpret_cast<const std::byte*>(buffer_.data().data()) + offset_); }
+public:
+  uint32_t offset() const noexcept { return offset_; }
+  void* __data() noexcept { return (void*)&base(); }
+  MenuChoice_Direct(::nprpc::flat_buffer& buffer, std::uint32_t offset)
+    : buffer_(buffer)
+    , offset_(offset)
+  {
+  }
+  const uint32_t& serial() const noexcept { return base().serial;}
+  uint32_t& serial() noexcept { return base().serial;}
+  const uint32_t& chosen() const noexcept { return base().chosen;}
+  uint32_t& chosen() noexcept { return base().chosen;}
+};
+} // namespace flat
+
+struct MenuChoiceAck {
+  uint32_t serial;
+};
+
+namespace flat {
+struct MenuChoiceAck {
+  uint32_t serial;
+};
+
+class MenuChoiceAck_Direct {
+  ::nprpc::flat_buffer& buffer_;
+  const std::uint32_t offset_;
+
+  auto& base() noexcept { return *reinterpret_cast<MenuChoiceAck*>(reinterpret_cast<std::byte*>(buffer_.data().data()) + offset_); }
+  auto const& base() const noexcept { return *reinterpret_cast<const MenuChoiceAck*>(reinterpret_cast<const std::byte*>(buffer_.data().data()) + offset_); }
+public:
+  uint32_t offset() const noexcept { return offset_; }
+  void* __data() noexcept { return (void*)&base(); }
+  MenuChoiceAck_Direct(::nprpc::flat_buffer& buffer, std::uint32_t offset)
+    : buffer_(buffer)
+    , offset_(offset)
+  {
+  }
+  const uint32_t& serial() const noexcept { return base().serial;}
+  uint32_t& serial() noexcept { return base().serial;}
+};
+} // namespace flat
+
 struct GpuAllocation {
   uint32_t kind;
   std::string category;
@@ -2034,6 +2094,8 @@ public:
   virtual void SetBackdropBlurRegion (uint32_t surfaceId, float radius, float x, float y, float w, float h, float cornerRadius) = 0;
   virtual void EndSession () = 0;
   virtual void SetBackdropBlurRegions (uint32_t surfaceId, float radius, ::nprpc::flat::Span_ref<flat::FrostRect, flat::FrostRect_Direct> rects) = 0;
+  virtual uint32_t OpenMenu (uint32_t surfaceId, int32_t x, int32_t y, ::nprpc::flat::Span<char> title, ::nprpc::flat::Span_ref<flat::MenuItem, flat::MenuItem_Direct> items) = 0;
+  virtual ::nprpc::Task<> SubscribeMenuChoice (uint32_t surfaceId, ::nprpc::BidiStream<MenuChoiceAck, MenuChoice> stream) = 0;
 };
 
 class LAVA_API Compositor
@@ -2146,6 +2208,9 @@ public:
   ::nprpc::Task<void> EndSessionAsync (std::stop_token st = {});
   void SetBackdropBlurRegions (uint32_t surfaceId, float radius, ::nprpc::flat::Span<const FrostRect> rects);
   ::nprpc::Task<void> SetBackdropBlurRegionsAsync (uint32_t surfaceId, float radius, ::nprpc::flat::Span<const FrostRect> rects, std::stop_token st = {});
+  uint32_t OpenMenu (uint32_t surfaceId, int32_t x, int32_t y, const std::string& title, ::nprpc::flat::Span<const MenuItem> items);
+  ::nprpc::Task<uint32_t> OpenMenuAsync (uint32_t surfaceId, int32_t x, int32_t y, const std::string& title, ::nprpc::flat::Span<const MenuItem> items, std::stop_token st = {});
+  std::pair<::nprpc::StreamWriter<MenuChoiceAck>, ::nprpc::StreamReader<MenuChoice>> SubscribeMenuChoice (uint32_t surfaceId);
 };
 
 namespace helper {
@@ -2578,6 +2643,62 @@ inline ::nprpc::flat_buffer serialize<::lava::InputEvent>(const ::lava::InputEve
   __buf.commit(24);
   ::lava::flat::InputEvent_Direct __d(__buf, 0);
   memcpy(__d.__data(), &value, 24);
+  return __buf;
+}
+} // namespace nprpc_stream
+
+namespace nprpc_stream {
+template<>
+inline ::lava::MenuChoice deserialize<::lava::MenuChoice>(::nprpc::flat_buffer& buf) {
+  ::nprpc::impl::flat::StreamChunk_Direct __chunk(buf, sizeof(::nprpc::impl::Header));
+  auto __span = __chunk.data();
+  ::nprpc::flat_buffer __elem_buf;
+  auto __mb = __elem_buf.prepare(__span.size());
+  std::memcpy(__mb.data(), __span.data(), __span.size());
+  __elem_buf.commit(__span.size());
+  ::lava::MenuChoice __result;
+  ::lava::flat::MenuChoice_Direct __d(__elem_buf, 0);
+  memcpy(&__result, __d.__data(), 8);
+  return __result;
+}
+} // namespace nprpc_stream
+
+namespace nprpc_stream {
+template<>
+inline ::lava::MenuChoiceAck deserialize<::lava::MenuChoiceAck>(::nprpc::flat_buffer& buf) {
+  ::nprpc::impl::flat::StreamChunk_Direct __chunk(buf, sizeof(::nprpc::impl::Header));
+  auto __span = __chunk.data();
+  ::nprpc::flat_buffer __elem_buf;
+  auto __mb = __elem_buf.prepare(__span.size());
+  std::memcpy(__mb.data(), __span.data(), __span.size());
+  __elem_buf.commit(__span.size());
+  ::lava::MenuChoiceAck __result;
+  ::lava::flat::MenuChoiceAck_Direct __d(__elem_buf, 0);
+  memcpy(&__result, __d.__data(), 4);
+  return __result;
+}
+} // namespace nprpc_stream
+
+namespace nprpc_stream {
+template<>
+inline ::nprpc::flat_buffer serialize<::lava::MenuChoiceAck>(const ::lava::MenuChoiceAck& value) {
+  ::nprpc::flat_buffer __buf;
+  __buf.prepare(4);
+  __buf.commit(4);
+  ::lava::flat::MenuChoiceAck_Direct __d(__buf, 0);
+  memcpy(__d.__data(), &value, 4);
+  return __buf;
+}
+} // namespace nprpc_stream
+
+namespace nprpc_stream {
+template<>
+inline ::nprpc::flat_buffer serialize<::lava::MenuChoice>(const ::lava::MenuChoice& value) {
+  ::nprpc::flat_buffer __buf;
+  __buf.prepare(8);
+  __buf.commit(8);
+  ::lava::flat::MenuChoice_Direct __d(__buf, 0);
+  memcpy(__d.__data(), &value, 8);
   return __buf;
 }
 } // namespace nprpc_stream
