@@ -21,6 +21,7 @@ usage: lavactl <command>
   windows                  every window: id, workspace, focused, app id, title
   workspace                the workspace on screen right now
   activate <id>            restore, raise and focus a window by surface id
+  minimize <id>            put one window away by surface id
   keyboard                 the keyboard config the compositor is serving
   bindings                 every shortcut the compositor takes for itself
   focus-app <app-id>       activate this application's window on the current
@@ -97,6 +98,12 @@ case "activate":
         die("usage: lavactl activate <surface-id>", 2)
     }
     LavaClient.activateWindow(id)
+
+case "minimize":
+    guard args.count == 2, let id = UInt32(args[1]) else {
+        die("usage: lavactl minimize <surface-id>", 2)
+    }
+    LavaClient.minimizeWindow(id)
 
 case "focus-app":
     guard args.count == 2 else { die("usage: lavactl focus-app <app-id>", 2) }
