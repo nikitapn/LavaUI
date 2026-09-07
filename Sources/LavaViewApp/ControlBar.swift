@@ -46,11 +46,19 @@ struct ControlBar: View {
             // number, and it is where everyone looks for it.
             // Centred, so the number grows symmetrically rather than
             // rightward from a fixed left edge as it goes 40% → 100% → 132%.
+            // `.padding` *before* `.frame`, which is not a stylistic
+            // preference. The other way round means "a 52pt box, and then 4pt
+            // outside it", which one node cannot be — so a wrapper appears,
+            // the hover fill lands on it at 60pt, and the clickable `Text`
+            // keeps its own automatic hover fill at the width of the digits.
+            // Two rounded rectangles, one inside the other, and only the inner
+            // one clickable. Padding first is one node: 60pt to look at, to
+            // hover and to click.
             Text("\(session.zoomPercent)%", color: Theme.current.textSecondary,
                  align: .center,
                  onClick: { session.setMode(.actual) })
-                .frame(width: .pt(52))
                 .padding(4)
+                .frame(width: .pt(60))
                 .hoverBackground(Theme.current.hover)
                 .cornerRadius(4)
                 .cursor(.pointer)

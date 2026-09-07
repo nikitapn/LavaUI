@@ -147,6 +147,15 @@ Consequences that surprise people:
   show it (`LeafNode` / `StackNode` / `StyleBoxNode`) and otherwise wraps in a
   `StyleBoxNode`. Order still matters: `.background()` *after* a modifier that
   wraps applies to the wrapper.
+- **`.padding()` before `.frame(width:)`, not after.** After means "a box of
+  that width, and then padding outside it", which one node cannot be, so a
+  wrapper appears — and then the same split as the trap below: the hover fill
+  lands on the wrapper at the outer size while a clickable `Text` keeps its
+  own automatic `hoverFill` (`Text.init` gives one to anything with an
+  `onClick`) at the width of its glyphs. Two rounded rectangles, one inside
+  the other, and only the inner one clickable. Padding first is one node.
+  `LavaView`'s zoom readout had it both ways round and the pair is worth
+  reading side by side.
 - **Stating `alignment:` on `.frame` moves the click target and nothing says
   so.** It forces a wrapper (`forceWrapper: alignment != nil`), so the width,
   `background`, `hoverBackground` and `cursor` all land on that wrapper — but
