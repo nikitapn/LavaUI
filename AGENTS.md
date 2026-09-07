@@ -1108,6 +1108,7 @@ so headless test runs skip it too.
 | `docs/performance.md` | LavaBench design and baselines |
 | `docs/agent.md` | Runtime agent TCP / MCP control plane |
 | `docs/client-server-gaps.md` | Client vs host feature gaps |
+| `docs/lavaview.md` | LavaView: what it does, what it cannot, and what to add next |
 | `docs/retained-scene-tree.md` | Retained tree / invalidation notes |
 | `docs/nprpc-client-stream-gap.md` | Historical SHM stream bug (resolved) |
 | `docs/install.md` | Debian/Arch bootstrap, NPRPC, Docker, QEMU VM |
