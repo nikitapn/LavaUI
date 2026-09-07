@@ -465,6 +465,30 @@ public final class Editor: @unchecked Sendable {
         }
     }
 
+    /// RGBA8 → baseline JPEG at `quality` (1-100), always at native size.
+    ///
+    /// For writing a transformed photograph back where it came from. PNG is
+    /// the better encoder for everything this framework normally does, and the
+    /// wrong one here: re-encoding a 24-megapixel JPEG losslessly turns six
+    /// megabytes into a hundred and thirty, which is not what anyone means by
+    /// "save".
+    ///
+    /// Alpha is discarded — JPEG has none. Do not route an image that uses it
+    /// through here.
+    public nonisolated static func encodeJpeg(
+        pixels: [UInt8], width: UInt32, height: UInt32, quality: UInt32 = 92
+    ) -> [UInt8]? {
+        let encoded = pixels.withUnsafeBufferPointer { buf -> canvas.DecodedImage in
+            guard let base = buf.baseAddress else { return canvas.DecodedImage() }
+            return canvas.Engine.encodeRgbaJpeg(base, width, height, quality)
+        }
+        let n = encoded.pixels.size()
+        guard n > 0 else { return nil }
+        return [UInt8](unsafeUninitializedCapacity: Int(n)) { buf, written in
+            written = encoded.copyTo(buf.baseAddress, n)
+        }
+    }
+
     /// Whether the engine already has this key resident.
     public func hasImage(key: String) -> Bool {
         engine.hasTexture(std.string(key))

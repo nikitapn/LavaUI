@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title desc">
+  <title id="title">LavaView</title>
+  <desc id="desc">A framed photograph on a dark rounded tile — the LavaView application icon.</desc>
+  <defs>
+    <linearGradient id="tile" x1="96" y1="64" x2="416" y2="448" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#343866"/>
+      <stop offset="1" stop-color="#171a35"/>
+    </linearGradient>
+    <linearGradient id="sky" x1="120" y1="128" x2="392" y2="352" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#8ab4ff"/>
+      <stop offset="1" stop-color="#3f5ba8"/>
+    </linearGradient>
+    <linearGradient id="hill" x1="120" y1="240" x2="392" y2="384" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#7dffb3"/>
+      <stop offset="1" stop-color="#2ecf8a"/>
+    </linearGradient>
+  </defs>
+  <rect x="28" y="28" width="456" height="456" rx="116" fill="url(#tile)"/>
+  <!-- The mat the picture sits on, the way the app draws one -->
+  <rect x="104" y="120" width="304" height="272" rx="20" fill="#0f1020"/>
+  <!-- The picture itself: sky, sun, and two hills -->
+  <rect x="120" y="136" width="272" height="240" rx="10" fill="url(#sky)"/>
+  <circle cx="180" cy="196" r="30" fill="#ffd479"/>
+  <path d="M120 376 V300 L206 224 L288 302 L332 266 L392 320 V376 Z" fill="url(#hill)"/>
+  <rect x="120" y="136" width="272" height="240" rx="10" fill="none" stroke="#4a5288" stroke-width="6"/>
+</svg>

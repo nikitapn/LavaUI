@@ -755,6 +755,25 @@ DecodedImage Engine::encodeRgbaPng(const uint8_t *rgba, uint32_t width,
   return out;
 }
 
+DecodedImage Engine::encodeRgbaJpeg(const uint8_t *rgba, uint32_t width,
+                                    uint32_t height, uint32_t quality)
+{
+  DecodedImage out;
+  if (rgba == nullptr || width == 0 || height == 0) return out;
+  if (!::canvas::encodeRgbaJpeg(rgba, static_cast<int>(width),
+                                static_cast<int>(height),
+                                static_cast<int>(width) * 4,
+                                static_cast<int>(quality), out.pixels) ||
+      out.pixels.empty()) {
+    return DecodedImage{};
+  }
+  // As above: the size is the image the bytes encode, not a description of
+  // `pixels`, which is a JPEG file.
+  out.width = width;
+  out.height = height;
+  return out;
+}
+
 int Engine::uploadTexture(const std::string &key, const uint8_t *rgba,
                           uint32_t width, uint32_t height)
 {

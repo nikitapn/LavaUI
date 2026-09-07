@@ -255,6 +255,9 @@ Sources/
                    (`TraceLoom a.log b.log` opens a tab each;
                     `TraceLoom x.traceloom` reopens a saved workspace)
   Weather*/        LavaWeather (core headless + app; Open-Meteo, no API key)
+  LavaView*/       LavaView — image viewer (core headless + app). Fit / 1:1,
+                   wheel zoom at the cursor, the folder as a cycle, and two
+                   rotate buttons that can write the turn back to the file
   FBDModel/        Function-block diagram model
 canvas/            C++ Vulkan engine + Yoga (SwiftPM C++ targets)
 compositor/        wlroots compositor + canvas surfaces + control plane
@@ -1048,6 +1051,9 @@ so headless test runs skip it too.
 | Terminal reflow on resize | `TerminalScreen.reflow`, `rowWrapped` |
 | Perf scenarios | `Sources/LavaBench/`, `docs/performance.md` |
 | App demos | `Sources/HelloWorld/`, Spotify/TraceLoom/LavaTerm apps |
+| Fit / 1:1 / cursor-anchored zoom | `Sources/LavaViewCore/Viewport.swift` (pure, tested); the app only feeds it the canvas box |
+| Turning pixels, and what a turned photo is saved as | `PixelRotate`, `SaveTarget` in `LavaViewCore`; `Editor.encodeJpeg` / `canvas::encodeRgbaJpeg` are the encoder |
+| Desktop entry for an app that opens files | `packaging/apps.conf` — the tenth field is `MimeType`, and declaring one is what adds `%F` to the Exec |
 
 ## Conventions agents should follow
 

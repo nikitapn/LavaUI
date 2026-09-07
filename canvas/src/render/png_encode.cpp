@@ -84,4 +84,34 @@ bool encodeRgbaPng(const uint8_t *rgba, int width, int height, int stride,
   return true;
 }
 
+bool encodeRgbaJpeg(const uint8_t *rgba, int width, int height, int stride,
+                    int quality, std::vector<uint8_t> &outJpeg) {
+  if (rgba == nullptr || width < 1 || height < 1) return false;
+  if (stride < width * 4) return false;
+
+  // stb's JPEG writer has no stride parameter, so a padded source has to be
+  // packed first. Unlike the PNG path this is not an optimisation — it is the
+  // only way to hand it the rows.
+  std::vector<uint8_t> packed;
+  const uint8_t *pixels = rgba;
+  if (stride != width * 4) {
+    packed.resize(static_cast<size_t>(width) * static_cast<size_t>(height) * 4);
+    for (int y = 0; y < height; ++y) {
+      std::memcpy(packed.data() + static_cast<size_t>(y) * width * 4,
+                  rgba + static_cast<size_t>(y) * stride,
+                  static_cast<size_t>(width) * 4);
+    }
+    pixels = packed.data();
+  }
+
+  outJpeg.clear();
+  PngWriteCtx ctx{&outJpeg};
+  const int q = std::clamp(quality, 1, 100);
+  // Component count 4 tells stb the source layout; it writes YCbCr from the
+  // first three and drops the fourth itself.
+  const int ok =
+      stbi_write_jpg_to_func(pngWriteFunc, &ctx, width, height, 4, pixels, q);
+  return ok != 0 && !outJpeg.empty();
+}
+
 }  // namespace canvas

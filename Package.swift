@@ -49,6 +49,7 @@ var products: [Product] = [
     .executable(name: "TraceLoom", targets: ["TraceLoomApp"]),
     .executable(name: "LavaSpotify", targets: ["SpotifyApp"]),
     .executable(name: "LavaWeather", targets: ["WeatherApp"]),
+    .executable(name: "LavaView", targets: ["LavaViewApp"]),
     .executable(name: "LavaTerm", targets: ["LavaTermApp"]),
     .executable(name: "LavaEditor", targets: ["LavaEditorApp"]),
     .executable(name: "LavaBench", targets: ["LavaBench"]),
@@ -72,6 +73,7 @@ var products: [Product] = [
     .library(name: "SpotifyCore", targets: ["SpotifyCore"]),
     .library(name: "LavaTermCore", targets: ["LavaTermCore"]),
     .library(name: "WeatherCore", targets: ["WeatherCore"]),
+    .library(name: "LavaViewCore", targets: ["LavaViewCore"]),
 ]
 
 var targets: [Target] = [
@@ -113,6 +115,9 @@ var targets: [Target] = [
     .target(name: "SpotifyCore"),
     .target(name: "LavaTermCore"),
     .target(name: "WeatherCore"),
+    // Which pictures are next to this one, and where the picture sits in
+    // the window. No engine — see Sources/LavaViewCore.
+    .target(name: "LavaViewCore"),
 
     .executableTarget(
         name: "TwoWindows",
@@ -288,6 +293,11 @@ var targets: [Target] = [
         swiftSettings: interopCxx
     ),
     .executableTarget(
+        name: "LavaViewApp",
+        dependencies: ["LavaUI", "LavaHost", "LavaViewCore"],
+        swiftSettings: interopCxx
+    ),
+    .executableTarget(
         name: "LavaBench",
         dependencies: ["LavaUI", "LavaText", "TraceLoomCore"],
         swiftSettings: interopCxx
@@ -303,6 +313,7 @@ var targets: [Target] = [
     ),
     .testTarget(name: "LavaTermCoreTests", dependencies: ["LavaTermCore"]),
     .testTarget(name: "WeatherCoreTests", dependencies: ["WeatherCore"]),
+    .testTarget(name: "LavaViewCoreTests", dependencies: ["LavaViewCore"]),
 ]
 
 if haveNprpc {

@@ -1,6 +1,7 @@
 #include "control_plane.hpp"
 
 #include <sys/eventfd.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 #include <condition_variable>
@@ -624,16 +625,47 @@ class MenuBroker {
   uint32_t surfaceId_ = 0;
 };
 
-/// How the renderer names a file decoded at a given cap.
+/// How the renderer names a file decoded at a given cap — and *which version*
+/// of that file it is.
 ///
-/// The same spelling `ImageStore.key` uses on the client, and deliberately so:
-/// the two caches are separate, but a shared spelling is what lets a stall in
-/// one be read against the other without translating.
+/// The first half is the spelling `ImageStore.key` uses on the client, so a
+/// stall in one cache can be read against the other without translating. The
+/// `#size-mtime` suffix is this side only, and it is not cosmetic: the
+/// compositor outlives every client, so a path it decoded once would otherwise
+/// name those pixels for the rest of the session. A client that writes the
+/// file and reopens it — an image viewer saving a rotation, which is where
+/// this was found — got the picture back the way it used to be, as did every
+/// *other* client naming the same path, and restarting the app did not help
+/// because the stale copy was never in the app.
+///
+/// Size and modification time rather than a hash of the contents: hashing
+/// means reading the whole file on every registration, which is the exact cost
+/// the cache exists to avoid. This is what build systems key on, for the same
+/// reason. Nanosecond mtime, so two writes within one second are still two
+/// different images.
+///
+/// Rewriting a file repeatedly therefore leaves the superseded textures
+/// resident. That is correct rather than leaked: they age out against the byte
+/// budget like any other standalone image, and dropping one on sight would
+/// pull it out from under whichever client is still drawing it.
+///
+/// A file that cannot be stat'd keeps the bare key. There is nothing to
+/// version, and the decode below is about to fail and raise `ImageNotFound`.
 std::string image_key(const std::string &path, uint32_t maxPixelSize) {
-  // 0 is the native decode and keys on the bare path, so a caller that never
-  // caps anything gets the path back unchanged.
-  if (maxPixelSize == 0) return path;
-  return path + "@" + std::to_string(maxPixelSize);
+  // 0 is the native decode and adds no cap segment, so a caller that never
+  // caps anything gets the path plus the version suffix and nothing else.
+  std::string key = maxPixelSize == 0
+                        ? path
+                        : path + "@" + std::to_string(maxPixelSize);
+  struct stat st {};
+  if (::stat(path.c_str(), &st) != 0) return key;
+  key += "#";
+  key += std::to_string(static_cast<long long>(st.st_size));
+  key += "-";
+  key += std::to_string(static_cast<long long>(st.st_mtim.tv_sec));
+  key += ".";
+  key += std::to_string(static_cast<long>(st.st_mtim.tv_nsec));
+  return key;
 }
 
 /// How bytes with no path are named: a hash of the content.

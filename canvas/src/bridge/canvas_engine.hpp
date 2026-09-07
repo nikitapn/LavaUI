@@ -419,6 +419,12 @@ class Engine {
   static DecodedImage encodeRgbaPng(const uint8_t *rgba, uint32_t width,
                                     uint32_t height, uint32_t maxSide = 0);
 
+  /// The same, as a baseline JPEG at `quality` (1-100), always at native size.
+  /// For writing back a photograph an app transformed — see `encodeRgbaJpeg`
+  /// in `render/png_encode.hpp` for why PNG is not an option there.
+  static DecodedImage encodeRgbaJpeg(const uint8_t *rgba, uint32_t width,
+                                     uint32_t height, uint32_t quality = 92);
+
   /// Uploads pre-decoded pixels under `key`. Device thread only.
   int uploadTexture(const std::string &key, const uint8_t *rgba,
                     uint32_t width, uint32_t height);

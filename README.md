@@ -42,6 +42,7 @@ swift build                   # Swift + C++ canvas engine (SwiftPM compiles both
 swift run HelloWorld          # demo
 swift run LavaSpotify         # music player (see docs/lavaspotify.md)
 swift run LavaTerm            # terminal emulator (click the grid, type)
+swift run LavaView -- pic.jpg # image viewer (wheel to zoom, arrows for the folder)
 swift test                    # headless tests, no GPU needed
 ```
 
@@ -250,6 +251,8 @@ expensive to build and keyed by content* (the glyph atlas, Vulkan objects);
 | `SpotifyCore` | Spotify Web API, OAuth, cover download (no Vulkan) | nothing |
 | `LavaTerm` / `LavaTermApp` | Terminal emulator (PTY + ANSI + Canvas grid) | `LavaUI`, `LavaTermCore` |
 | `LavaTermCore` | VT grid + ANSI parser (headless, unit-tested) | nothing |
+| `LavaView` / `LavaViewApp` | Image viewer: fit / original size, wheel zoom at the cursor, the folder as a cycle, rotate and save | `LavaUI`, `LavaViewCore` |
+| `LavaViewCore` | Folder ordering, viewport arithmetic, pixel rotation, save-format choice (no Vulkan) | nothing |
 | `canvas/` (package) | C++ engine (`CxxCanvas`) + Yoga (`CYoga`), built by SwiftPM | system Vulkan/GLFW/FreeType/HarfBuzz |
 | `compositor/` | Wayland compositor and control-plane servant — C++23, built by **meson** rather than SwiftPM | wlroots 0.19, `canvas/`, NPRPC |
 | `LavaTaskbar` `LavaDock` `LavaLauncher` `LavaSettings` `LavaDebug` | The desktop shell — panel, dock, launcher, settings, GPU inspector. Ordinary LavaUI clients, with no privileges the demo does not have | `LavaUI`, `LavaClient` |
