@@ -497,7 +497,12 @@ struct Spotify: View {
         HStack(padding: 6, alignment: .center,
                onClick: { session.selectTrack(track) })
         {
-            Text(String(format: "%2d", index), color: .dim)
+            // Right-aligned so the column of numbers lines up on its units
+            // digit. This used to be `%2d`, which pads a single digit with a
+            // space to fake the same thing — and stops working at track 100,
+            // where the padding runs out and the column steps left. Alignment
+            // does not care how many digits there are.
+            Text(String(index), color: .dim, align: .trailing)
                 .frame(width: .pt(28))
             CoverArt(
                 track.album?.preferredCover,
@@ -600,11 +605,14 @@ struct Spotify: View {
                     Spacer()
                 }
                 HStack(padding: 0, alignment: .center) {
-                    Text(formatMs(session.progressMs), color: .dim)
+                    // Centred in their gutters, so crossing 9:59 into 10:00
+                    // widens the number about its own middle instead of
+                    // pushing it sideways from a fixed left edge.
+                    Text(formatMs(session.progressMs), color: .dim, align: .center)
                         .frame(width: .pt(40))
                         .agentId("progress-elapsed")
                     progressSlider
-                    Text(formatMs(session.durationMs), color: .dim)
+                    Text(formatMs(session.durationMs), color: .dim, align: .center)
                         .frame(width: .pt(40))
                         .agentId("progress-duration")
                 }

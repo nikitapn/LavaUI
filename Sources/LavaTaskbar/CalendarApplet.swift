@@ -88,8 +88,8 @@ struct CalendarApplet: View {
             // ── Weekday strip ────────────────────────────────────────────
             HStack(padding: 0, alignment: .center, spacing: 0) {
                 ForEach(Array(weekdays.enumerated()), id: \.offset) { _, name in
-                    Text(name, color: theme.textDim)
-                        .frame(width: .pt(34), height: .pt(22), alignment: .center)
+                    Text(name, color: theme.textDim, align: .center)
+                        .frame(width: .pt(34), height: .pt(22))
                 }
             }
 
@@ -143,8 +143,14 @@ struct CalendarApplet: View {
         // and the number placed in the middle of it rather than at its leading
         // edge — which is where a `Text` starts, and where the highlight drawn
         // around today would otherwise catch it sitting.
-        Text(label, color: color)
-            .frame(width: .pt(34), height: .pt(28), alignment: .center)
+        //
+        // `Text(align:)` rather than `.frame(…, alignment:)`, which is what
+        // this was: the frame's alignment centres by wrapping the text in a
+        // box it does not own, and a month grid is forty-two of those plus
+        // seven in the weekday strip. This places the glyphs inside the cell
+        // that already exists and adds none.
+        Text(label, color: color, align: .center)
+            .frame(width: .pt(34), height: .pt(28))
             .background(fill ?? Color(r: 0, g: 0, b: 0, a: 0))
             .cornerRadius(6)
             .agentId(cell.id)

@@ -499,6 +499,28 @@ extension View {
     /// Text("24").frame(width: .pt(34), height: .pt(28), alignment: .center)
     /// ```
     ///
+    /// **The added node is where the click is not.** Everything stated after
+    /// this modifier — `background`, `hoverBackground`, `cursor` — lands on
+    /// the wrapper, because that is now the outermost node. But whatever made
+    /// the *content* interactive stays on the content: a
+    /// `Text(_:onClick:)` keeps its click on the text, at the text's own
+    /// size. The result is a control that fills 44pt, highlights across 44pt
+    /// and shows a pointer over 44pt, while only the 27pt of glyphs in the
+    /// middle actually respond — and nothing about the call site says so.
+    ///
+    /// So do not reach for this to centre a *clickable* label. `Text` has an
+    /// `align:` of its own, taking this same `Alignment`, that moves the pen
+    /// inside the node that already exists and adds none:
+    ///
+    /// ```swift
+    /// Text("Fit", align: .center, onClick: …).frame(width: .pt(44))
+    /// ```
+    ///
+    /// Prefer it for any text, clickable or not — a grid of cells is a
+    /// wrapper per cell, and `TextAlignmentEquivalenceTests` pins the two
+    /// spellings to the same glyph positions. This modifier remains the right
+    /// one for centring content that is not a text at all.
+    ///
     /// The default is `nil` and not `.center` on purpose. SwiftUI centres by
     /// default because its frame has only ever meant the second thing; here
     /// the two meanings share a modifier, so the default has to be the one

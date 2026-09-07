@@ -1587,8 +1587,61 @@ public final class DrawList {
                     }
                 }
             }
-            let textX = x + leaf.padding.leading
-            let textY = y + leaf.padding.top + 2
+            let textXBase = x + leaf.padding.leading
+            let textYBase = y + leaf.padding.top + 2
+            // Room the glyphs are free to move in, per axis. About zero for a
+            // box shrink-wrapped around its own text — the overwhelmingly
+            // common case — so an unaligned label costs nothing it did not
+            // before.
+            //
+            // Deliberately allowed to go **negative**, for a box smaller than
+            // the line it holds: centring then means overflowing equally at
+            // both ends, which is what a frame's own alignment does and what
+            // makes the two spellings interchangeable. The taskbar's weekday
+            // strip is exactly this — a 22pt cell around a 22pt line — and
+            // clamping the slack at zero put it three pixels lower than the
+            // frame did.
+            //
+            // Both shifts are rounded to a whole pixel, for two reasons.
+            // Glyphs rasterise crisper on the pixel grid than half off it, and
+            // the measure Yoga laid out against is 26.6 fixed point while
+            // `shapedRun` is an exact float — so a box that fits its text
+            // exactly still reports about 1/32pt of slack that is not really
+            // there. Without the rounding, centring a label with nowhere to go
+            // still moved it a 64th of a point.
+            let hSlack: Float = {
+                guard leaf.textAlign.horizontal != .leading,
+                      let font = leaf.font ?? FontStore.default
+                else { return 0 }
+                let inner = w - leaf.padding.leading - leaf.padding.trailing
+                // `DrawList.text` insets the pen by 4 on its own and
+                // `measureForYoga` reserved 4 either side. The widest row is
+                // what a multi-line block has to be placed on, or its rows
+                // would each sit at a different offset.
+                let widest = lines.reduce(Float(0)) {
+                    max($0, font.shapedRun($1).width)
+                }
+                return inner - widest - 8
+            }()
+            let vSlack: Float = {
+                guard leaf.textAlign.vertical != .top else { return 0 }
+                let inner = h - leaf.padding.top - leaf.padding.bottom
+                // `measureForYoga` returns `lineHeight * rows + 4`, two of
+                // which the `+ 2` in `textY` above has already spent.
+                return inner - Float(lines.count) * lineH - 4
+            }()
+            let hShift: Float = switch leaf.textAlign.horizontal {
+            case .leading: 0
+            case .center: (hSlack / 2).rounded()
+            case .trailing: hSlack.rounded()
+            }
+            let vShift: Float = switch leaf.textAlign.vertical {
+            case .top: 0
+            case .center: (vSlack / 2).rounded()
+            case .bottom: vSlack.rounded()
+            }
+            let textX = textXBase + hShift
+            let textY = textYBase + vShift
             var searchStart = leaf.text.startIndex
             for (i, line) in lines.enumerated() {
                 let ly = textY + Float(i) * lineH

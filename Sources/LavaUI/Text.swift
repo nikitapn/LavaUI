@@ -13,6 +13,27 @@ public struct Text: PrimitiveView {
     public var hoverColor: Color?
     public var cornerRadius: Float
     public var lineLimit: Int?
+    /// Where the glyphs sit when the node is wider than they are.
+    ///
+    /// A label that states its own width — `.frame(width:)`, a grid cell, a
+    /// stack that stretches it — is a box with room left over, and until this
+    /// existed the text was always jammed against the leading edge of it.
+    /// The only way to centre one was `.frame(width:alignment:)`, which is a
+    /// different thing entirely: it wraps the text in a box it does not own,
+    /// and that box is where the width, the background, the hover fill and
+    /// the cursor then land, while `onClick` stays on the text inside. The
+    /// control ends up hovering at one size and clicking at another.
+    ///
+    /// So this is deliberately *not* a layout property. It moves the pen
+    /// inside a node that already exists, and adds no node — which is what
+    /// keeps a centred label the same click target as a leading one.
+    ///
+    /// Both axes, and the same `Alignment` the frame takes, so moving a call
+    /// site across is the same word in a different place. The default is
+    /// `.topLeading` rather than `.center`, because top-leading is where a
+    /// text's glyphs have always gone and every existing caller is drawn
+    /// against that.
+    public var align: Alignment
 
     public init(
         _ string: String,
@@ -22,6 +43,7 @@ public struct Text: PrimitiveView {
         hoverColor: Color? = nil,
         cornerRadius: Float = 0,
         lineLimit: Int? = nil,
+        align: Alignment = .topLeading,
         onClick: (() -> Void)? = nil
     ) {
         self.string = string
@@ -34,6 +56,7 @@ public struct Text: PrimitiveView {
             : (hoverFill ?? Environment.current.theme.hover)
         self.cornerRadius = cornerRadius
         self.lineLimit = lineLimit.map { max(1, $0) }
+        self.align = align
     }
 
     /// Resolved face for measure (explicit or environment default).
@@ -59,6 +82,7 @@ public struct Text: PrimitiveView {
         leaf.hoverColor = hoverColor
         leaf.cornerRadius = cornerRadius
         leaf.textLineLimit = lineLimit
+        leaf.textAlign = align
         leaf.font = resolvedFont
         leaf.label = "Text \"\(shortLabel)\""
         leaf.installTextMeasure()
@@ -81,6 +105,9 @@ public struct Text: PrimitiveView {
             leaf.hoverColor = hoverColor
             leaf.cornerRadius = cornerRadius
             leaf.textLineLimit = lineLimit
+            // Paint-only, so it never dirties the measure: where the pen
+            // starts inside the box does not change how wide the box is.
+            leaf.textAlign = align
             leaf.font = resolvedFont
             if !leaf.usesTextMeasure {
                 leaf.installTextMeasure()

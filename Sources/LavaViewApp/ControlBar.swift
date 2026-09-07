@@ -44,7 +44,10 @@ struct ControlBar: View {
             iconButton("−", hint: "Zoom out", id: "zoom-out") { session.stepZoom(-1) }
             // Clicking the percentage is the fastest way back to a known
             // number, and it is where everyone looks for it.
+            // Centred, so the number grows symmetrically rather than
+            // rightward from a fixed left edge as it goes 40% → 100% → 132%.
             Text("\(session.zoomPercent)%", color: Theme.current.textSecondary,
+                 align: .center,
                  onClick: { session.setMode(.actual) })
                 .frame(width: .pt(52))
                 .padding(4)
@@ -106,6 +109,13 @@ struct ControlBar: View {
         return Text(
             title,
             color: active ? theme.textPrimary : theme.textSecondary,
+            // `Text(align:)` and **not** `.frame(width:alignment:)`. The
+            // frame's alignment centres by wrapping this in a box it does not
+            // own — the width, the fill, the hover and the cursor all move out
+            // to that box while `onClick` stays here, so the button ends up
+            // 44pt wide to look at and 27pt wide to click. This moves the pen
+            // inside the node that is already here and adds nothing.
+            align: .center,
             onClick: { session.setMode(mode) }
         )
         .padding(6)

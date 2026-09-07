@@ -147,6 +147,16 @@ Consequences that surprise people:
   show it (`LeafNode` / `StackNode` / `StyleBoxNode`) and otherwise wraps in a
   `StyleBoxNode`. Order still matters: `.background()` *after* a modifier that
   wraps applies to the wrapper.
+- **Stating `alignment:` on `.frame` moves the click target and nothing says
+  so.** It forces a wrapper (`forceWrapper: alignment != nil`), so the width,
+  `background`, `hoverBackground` and `cursor` all land on that wrapper — but
+  a `Text(_:onClick:)` keeps its click on the inner leaf, at the glyphs' own
+  size. Measured on LavaView's mode buttons: 44×39 to look at and hover, 27×27
+  to click, with `hit_test` returning a different node four pixels inside the
+  edge. Use `Text(align:)` instead — same `Alignment`, both axes, moves the pen
+  inside the existing node and adds none; `.frame(alignment:)` stays right for
+  centring something that is not a text. Neither `layout_tree` nor a screenshot
+  shows this — only clicking near the edge does.
 
 ### Client mode rules of thumb
 

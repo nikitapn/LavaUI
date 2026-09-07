@@ -1076,6 +1076,9 @@ final class LeafNode: YogaBoxNode {
     /// Maximum painted/measured rows for a read-only text leaf. `nil` means
     /// all wrapped rows; TextField has its separate `maxLines` policy.
     var textLineLimit: Int?
+    /// Where the glyphs sit when the box is larger than they measure.
+    /// Paint-only — see `Text.align`. Never consulted by the measure.
+    var textAlign: Alignment = .topLeading
 
     /// Raster image leaf payload.
     var image: UIImage?

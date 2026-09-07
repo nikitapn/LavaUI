@@ -117,8 +117,8 @@ struct PlayerApplet: View {
             .cornerRadius(radius)
             .frame(width: .pt(size), height: .pt(size))
         } else {
-            Text("♫", color: theme.textDim)
-                .frame(width: .pt(size), height: .pt(size), alignment: .center)
+            Text("♫", color: theme.textDim, align: .center)
+                .frame(width: .pt(size), height: .pt(size))
                 .background(theme.inset)
                 .cornerRadius(radius)
         }
