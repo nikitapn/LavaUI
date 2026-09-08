@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "render/exif.hpp"
+#include "render/image_load.hpp"
 #include "render/imported_dmabuf.hpp"
 #include "render/render_device.hpp"
 #include "render/texture_manager.hpp"
@@ -577,10 +578,11 @@ TextureHandle TextureManager::loadTexture(const std::string& path) {
         return {it->second->view, it->second->id, it->second->uv0, it->second->uv1};
     }
 
-    // Load image from file
-    int texWidth, texHeight, texChannels;
-    stbi_uc* pixels = stbi_load(path.c_str(), &texWidth, &texHeight, &texChannels, STBI_rgb_alpha);
-    
+    // Load image from file — the same one entry point the engine's own decode
+    // uses, so a format either side can open is a format both can.
+    int texWidth = 0, texHeight = 0;
+    stbi_uc* pixels = canvas::loadImageFile(path, texWidth, texHeight);
+
     if (!pixels) {
         std::cerr << "Failed to load texture: " << path << "\n";
         return {VK_NULL_HANDLE, 0};

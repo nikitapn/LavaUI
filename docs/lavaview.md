@@ -68,6 +68,16 @@ an image that decoded and was then evicted looks identical from here.
   is a real loss and the reason a rotate asks before it overwrites.
 - **Animated GIFs show frame one.** `stbi_load` decodes the first frame and
   stops.
+- **A CR2 opens at the camera's preview size, not the sensor's.** What is shown
+  is the JPEG the camera embedded — the frame that appeared on the back of the
+  body, already white-balanced and tone-mapped, which for looking at
+  photographs is the right image and not a fallback. But the camera chooses how
+  big to embed it: the body this was written against writes 2256x1504 out of a
+  4272x2848 sensor, so `1:1` is 100% of the preview and there is genuine detail
+  in the file that LavaView does not show. Developing the sensor data would
+  mean demosaicing, a colour matrix and a tone curve — a raw converter, not a
+  viewer — and would cost seconds a frame instead of the 15 ms this takes. See
+  `canvas/src/render/raw_preview.cpp`.
 - **Decode is capped at 8192px on the long edge** (`ViewerSession
   .displayDecodeSide`), because `maxImageDimension2D` is only guaranteed to
   4096 and a panorama that fails to upload shows nothing at all. Past that,

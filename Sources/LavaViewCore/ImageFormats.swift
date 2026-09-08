@@ -3,8 +3,9 @@ import Foundation
 /// Which files LavaView will try to open.
 ///
 /// The list is the intersection of what the engine can actually decode — stb
-/// for raster, the SVG rasteriser for vector (`Engine::decodeImage`) — and what
-/// a person would call a picture. It is deliberately not "everything stb
+/// for raster, the SVG rasteriser for vector, the embedded preview for a
+/// camera raw (`Engine::decodeImage`) — and what a person would call a
+/// picture. It is deliberately not "everything stb
 /// compiles in": PSD and PIC are decoded by the same call, but a directory of
 /// layered Photoshop files is not a slideshow, and putting them in the cycle
 /// would mean a Next that lands on something the viewer renders wrongly.
@@ -19,6 +20,10 @@ public enum ImageFormats {
         "png", "jpg", "jpeg", "jpe", "jfif",
         "gif", "bmp", "tga", "hdr", "pnm", "ppm", "pgm", "pbm",
         "svg",
+        // Canon raw. What is shown is the JPEG the camera embedded, not a
+        // development of the sensor data — see `canvas/src/render/raw_preview.cpp`,
+        // and add a format here only alongside `isRawPhoto`.
+        "cr2",
     ]
 
     public static func isImage(path: String) -> Bool {

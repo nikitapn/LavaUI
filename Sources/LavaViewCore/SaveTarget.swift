@@ -56,10 +56,12 @@ public struct SaveTarget: Equatable, Sendable {
             return SaveTarget(path: path, encoding: .png, isFormatChange: false)
         }
 
-        // Everything else — GIF, BMP, TGA, PNM, SVG, or a JPEG that turned out
-        // to carry alpha — becomes a PNG next to the original. Writing a
-        // rasterised PNG over someone's `.svg` would destroy the only copy of
-        // a thing that was never pixels; changing the name is the honest move.
+        // Everything else — GIF, BMP, TGA, PNM, SVG, CR2, or a JPEG that
+        // turned out to carry alpha — becomes a PNG next to the original.
+        // Writing a rasterised PNG over someone's `.svg` would destroy the
+        // only copy of a thing that was never pixels; over a `.cr2` it would
+        // destroy a negative, and replace it with the camera's preview at the
+        // camera's chosen size. Changing the name is the honest move.
         let renamed = ns.deletingPathExtension + ".png"
         return SaveTarget(
             path: renamed, encoding: .png,

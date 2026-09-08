@@ -9,6 +9,7 @@
 #include "menu/notification.hpp"
 #include "menu/status_notifier.hpp"
 #include "render/exif.hpp"
+#include "render/image_load.hpp"
 #include "render/font_key.hpp"
 #include "render/png_encode.hpp"
 #include "render/svg_image.hpp"
@@ -734,10 +735,10 @@ DecodedImage Engine::decodeImage(const std::string &path, uint32_t maxPixelSize,
     return out;
   }
 
-  int w = 0, h = 0, channels = 0;
-  // stbi_load is reentrant and touches no shared state, which is what makes
-  // this callable off the device thread.
-  stbi_uc *pixels = stbi_load(path.c_str(), &w, &h, &channels, 4);
+  int w = 0, h = 0;
+  // Whatever container it is in — see `render/image_load.hpp`. A camera raw
+  // comes back as the camera's own JPEG, decoded here like any other.
+  stbi_uc *pixels = loadImageFile(path, w, h);
   return finishDecode(pixels, w, h, maxPixelSize, readExifOrientation(path),
                       turn);
 }

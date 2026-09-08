@@ -190,6 +190,21 @@ Consequences that surprise people:
   (`nprpc::get_context()`, valid only during dispatch — read it in the
   synchronous prologue of `SubscribeInput`, above the first `co_await`), since
   nprpc has no session id and no disconnect callback.
+- **A camera raw is opened by finding the picture inside it, not by developing
+  it.** A CR2 is a TIFF whose directories hold, among other things, the JPEG the
+  camera's own processor produced — already white-balanced and tone-mapped, and
+  for a viewer the *right* image rather than a fallback. `readRawPreview`
+  (`canvas/src/render/raw_preview.cpp`) walks the directory chain and takes the
+  largest displayable JPEG; `loadImageFile` is the one entry point both decode
+  sites go through, so the engine and the texture cache can never disagree
+  about what a format is. Two traps are load-bearing: the *biggest* JPEG in a
+  CR2 is the sensor data, four times the preview and reached through the same
+  tags, so the frame header is checked and `SOF3` (lossless) refused — and the
+  second-biggest can be an uncompressed block with no SOI at all. Measured on a
+  13.7 MB file: 0.7 ms to find and read the preview, 14 ms to decode it, versus
+  seconds for a real development. The camera decides the preview's size, which
+  is a real ceiling — 2256x1504 out of 4272x2848 on the body this was written
+  against.
 - **`ImageStore.imageIfLoaded` answers nil to two different questions** — the
   decode is still running, and the decode came back with nothing — and starts
   the work over each time it is asked. `ImageStore.isLoading` separates them,

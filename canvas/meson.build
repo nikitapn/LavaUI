@@ -23,8 +23,10 @@ canvas_engine_sources = files(
   'src/render/gpu_ledger.cpp',
   'src/render/gpu_report.cpp',
   'src/render/image_atlas.cpp',
+  'src/render/image_load.cpp',
   'src/render/png_encode.cpp',
   'src/render/quad_renderer.cpp',
+  'src/render/raw_preview.cpp',
   'src/render/shaders.cpp',
   'src/render/svg_image.cpp',
   'src/render/text_renderer.cpp',
@@ -121,3 +123,11 @@ exif_test = executable(
   build_by_default: false,
 )
 test('exif', exif_test)
+
+raw_preview_test = executable(
+  'raw_preview_test',
+  ['tests/raw_preview_test.cpp', 'src/render/raw_preview.cpp'],
+  include_directories: canvas_includes,
+  build_by_default: false,
+)
+test('raw preview', raw_preview_test)
