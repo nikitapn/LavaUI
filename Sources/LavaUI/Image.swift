@@ -212,9 +212,10 @@ public enum ImageStore {
     public static func imageIfLoaded(
         path: String,
         maxPixelSize: UInt32 = 0,
+        turn: ImageTurn = .none,
         into editor: Editor
     ) -> UIImage? {
-        let cacheKey = key(path: path, maxPixelSize: maxPixelSize)
+        let cacheKey = key(path: path, maxPixelSize: maxPixelSize, turn: turn)
         if let hit = cache[cacheKey] {
             touch(hit.image)
             return hit.image
@@ -228,7 +229,7 @@ public enum ImageStore {
         // completion lands on the main queue, which is the only part the
         // bookkeeping below depends on.
         editor.resources.registerImageAsync(
-            path: path, maxPixelSize: maxPixelSize
+            path: path, maxPixelSize: maxPixelSize, turn: turn
         ) { image in
             inFlight.remove(cacheKey)
             guard let img = image else { return }
@@ -326,8 +327,27 @@ public enum ImageStore {
     public static var residentByteCount: Int { residentBytes }
     public static var count: Int { cache.count }
 
-    public static func clearCache() {
+    /// Hands every cached image back to the host and empties the cache.
+    ///
+    /// Called on the way out of `LavaApp.run`, and that is not tidiness. A
+    /// texture the renderer holds for a client is not freed when the client's
+    /// process ends: under a compositor the registration counts a user, and
+    /// there is nothing on the wire tying that user to the process that asked
+    /// — `ReleaseImage` says so itself. So an app that exits with a full cache
+    /// leaves every image it ever opened resident for as long as the *desktop*
+    /// lives. A photograph viewer walking a library measured 2 GiB of that,
+    /// with no viewer running.
+    ///
+    /// It does not close the hole, only the common half of it: an exit through
+    /// the frame loop reaches here, a crash or a kill does not. The other half
+    /// belongs on the compositor's side of the wire, where a registration
+    /// should be leased to the session that made it.
+    public static func releaseAll(into editor: Editor) {
+        for entry in cache.values {
+            editor.resources.releaseImage(key: entry.image.cacheKey)
+        }
         cache.removeAll(keepingCapacity: true)
+        inFlight.removeAll()
         residentBytes = 0
     }
 }

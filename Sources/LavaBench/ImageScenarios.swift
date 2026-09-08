@@ -24,7 +24,7 @@ enum ImageScenarios {
             Scenario(
                 "image.poster-decode-cold",
                 detail: "\(posterCount) covers at \(posterSize)px, empty cache",
-                // One repetition, deliberately. `ImageStore.clearCache()` drops
+                // One repetition, deliberately. `ImageStore.releaseAll` drops
                 // LavaUI's entries but the engine's `TextureManager` keeps its
                 // own ref-counted copy, so repetitions 2..n measure an engine
                 // cache hit — 0.05 ms against the first run's 56 ms. Taking the
@@ -37,7 +37,7 @@ enum ImageScenarios {
                         rec.require(false, "could not write poster fixtures")
                         return
                     }
-                    ImageStore.clearCache()
+                    ImageStore.releaseAll(into: harness.editor)
                     ImageStore.budgetBytes = 256 * 1024 * 1024
                     rec.stage("decode") {
                         for path in paths {
@@ -62,7 +62,7 @@ enum ImageScenarios {
                         rec.require(false, "could not write poster fixtures")
                         return
                     }
-                    ImageStore.clearCache()
+                    ImageStore.releaseAll(into: harness.editor)
                     ImageStore.budgetBytes = 256 * 1024 * 1024
                     for path in paths {          // untimed warm-up
                         _ = ImageStore.load(path: path, into: harness.editor)
@@ -102,7 +102,7 @@ enum ImageScenarios {
                         rec.require(false, "could not write poster fixtures")
                         return
                     }
-                    ImageStore.clearCache()
+                    ImageStore.releaseAll(into: harness.editor)
                     ImageStore.budgetBytes = 32 * posterBytes
                     PerfCounters.reset()
 

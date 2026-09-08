@@ -205,6 +205,11 @@ public enum LavaApp {
 
         for window in windows { window.teardown() }
         windows.removeAll()
+        // Hand the textures back before the process ends. Nothing else will:
+        // a registration outlives the client that made it, so an app that just
+        // exits leaves every image it opened resident in the renderer for the
+        // life of the desktop. See `ImageStore.releaseAll`.
+        if let editor = Self.editor { ImageStore.releaseAll(into: editor) }
         Self.editor = nil
         Self.appRawKey = nil
         agentServer?.close()

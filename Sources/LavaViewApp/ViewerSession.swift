@@ -85,11 +85,6 @@ final class ViewerSession: @unchecked Sendable {
     /// The texture on screen, whether that is the file itself or a turned copy.
     @ObservationIgnored private(set) var texture: UIImage?
 
-    /// Turned textures this session has built, by turn and path. Ours rather
-    /// than `ImageStore`'s: its keys are paths it will try to decode, and a
-    /// synthetic one would put it in a retry loop against a file that does not
-    /// exist.
-    @ObservationIgnored private var turned: [String: UIImage] = [:]
     /// Pictures this session has written. `ImageStore` and the engine's own
     /// texture cache are both keyed by path and neither notices a file
     /// changing underneath them, so after a save the only thing that knows
@@ -214,23 +209,32 @@ final class ViewerSession: @unchecked Sendable {
     /// the "opening" state rather than a hole.
     @discardableResult
     func resolveTexture() -> UIImage? {
-        // A turned picture is its own upload, installed by the worker.
-        if rotation != .none { return texture }
         guard let path = folder.current, loadError == nil else { return nil }
         // A file we wrote ourselves: the caches below still hold what it
-        // looked like before, so answer from what we know.
-        if let ours = writtenBack[path] {
+        // looked like before, so answer from what we know. Only when upright,
+        // because a save leaves the turn spent — the file *is* the turned
+        // picture now.
+        if rotation == .none, let ours = writtenBack[path] {
             adopt(ours)
             return ours
         }
 
+        // The turn goes through the cache like everything else, rather than
+        // being a texture this session owns privately. Three things follow,
+        // and the third is why it changed: it is counted against the cache's
+        // budget instead of growing without bound, the least-recently-drawn
+        // rule sees it, and it is handed back when the app exits — a private
+        // texture would sit in the renderer for the life of the desktop,
+        // because a registration outlives the process that made it.
+        let quarter = rotation.turn
         // Asked *before* `imageIfLoaded`, which starts a decode and would make
         // the answer yes whatever the truth was a moment ago.
         let wasDecoding = ImageStore.isLoading(
-            path: path, maxPixelSize: Self.displayDecodeSide
+            path: path, maxPixelSize: Self.displayDecodeSide, turn: quarter
         )
         if let image = ImageStore.imageIfLoaded(
-            path: path, maxPixelSize: Self.displayDecodeSide, into: editor
+            path: path, maxPixelSize: Self.displayDecodeSide, turn: quarter,
+            into: editor
         ) {
             adopt(image)
             return image
@@ -274,6 +278,8 @@ final class ViewerSession: @unchecked Sendable {
         // is painting it.
         let arrived = awaiting != nil
         emptyReturns = 0
+        // Written only when it is true, because this runs during paint.
+        if status == .turning { status = .ready }
         if arrived {
             awaiting = nil
             mode = .fit
@@ -482,75 +488,26 @@ final class ViewerSession: @unchecked Sendable {
     func rotateRight() { turn(to: rotation.turnedRight()) }
     func rotateLeft() { turn(to: rotation.turnedLeft()) }
 
+    /// Says which way up the picture should be. Nothing is decoded here.
+    ///
+    /// `resolveTexture` asks the cache for the file at this turn on the next
+    /// frame, and hands back what is already on screen until the answer
+    /// arrives — the same hold that stepping through a folder uses, for the
+    /// same reason. Which is why this is four lines and used to be sixty: the
+    /// worker, the completion, the private texture table and the key it was
+    /// spelled with were all a second copy of machinery the picture path
+    /// already had.
     private func turn(to next: Rotation) {
-        guard let path = folder.current, hasImage, !isBusy, !isAwaiting else { return }
+        guard folder.current != nil, hasImage, !isBusy, !isAwaiting else { return }
         rotation = next
         hasUnsavedRotation = next != .none
         notice = nil
         pendingSave = nil
-
-        // Back to upright: whatever `resolveTexture` would have given us is
-        // still the right answer, so drop ours and let it.
-        guard next != .none else {
-            status = .ready
-            texture = nil
-            displaySize = PixelSize(width: 0, height: 0)
-            ViewInvalidation.markDirty()
-            return
-        }
-
-        let key = Self.turnedKey(path: path, rotation: next)
-        if let cached = turned[key] {
-            status = .ready
-            install(cached)
-            return
-        }
-
-        generation += 1
-        let token = generation
-        status = .turning
+        emptyReturns = 0
+        // A decode this size is not instant, and `isBusy` is what stops a
+        // second turn landing on top of the first.
+        status = next == .none ? .ready : .turning
         ViewInvalidation.markDirty()
-
-        // Asked of whoever owns the pixels rather than done here. Windowed
-        // that is a decode on a worker and an upload on the main thread; as a
-        // compositor client it is one call, and the picture is turned on the
-        // side that was going to decode it anyway. The version this replaced
-        // decoded it here, turned it here, encoded a PNG of the result and
-        // sent that through shared memory for the compositor to decode a
-        // second time — seconds of it for a photograph, and a second copy of
-        // every picture held in this process.
-        editor.resources.registerImageAsync(
-            path: path, maxPixelSize: Self.displayDecodeSide, turn: next.turn
-        ) { [weak self] image in
-            self?.finishTurn(token, key: key, image: image)
-        }
-    }
-
-    private func finishTurn(_ token: Int, key: String, image: UIImage?) {
-        guard token == generation else { return }
-        guard let image else {
-            status = .failed("Could not turn \(currentName)")
-            rotation = .none
-            hasUnsavedRotation = false
-            ViewInvalidation.markDirty()
-            return
-        }
-        status = .ready
-        turned[key] = image
-        install(image)
-    }
-
-    private func install(_ image: UIImage) {
-        texture = image
-        displaySize = PixelSize(width: image.pixelWidth, height: image.pixelHeight)
-        // A turn changes which way the picture is long, so a fit computed for
-        // the old shape is wrong; re-place it whatever the mode.
-        recentre()
-        ViewInvalidation.markDirty()
-    }
-
-    private static func turnedKey(path: String, rotation: Rotation) -> String {
-        "lavaview-rot:\(rotation.rawValue):\(path)"
     }
 
     // MARK: - Saving

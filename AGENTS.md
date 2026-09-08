@@ -157,6 +157,19 @@ Consequences that surprise people:
   matters. Atlased entries are outside both, bounded by slot pressure instead.
   A client's own `ImageStore.budgetBytes` is not a VRAM cap: releasing only
   makes an entry dormant on the far side.
+- **A registration outlives the process that made it.** The compositor counts
+  a user per `RegisterImage` and nothing on the wire ties that user to a
+  client, so an app that exits with a full cache leaves every image it ever
+  opened resident for the life of the *desktop* — measured at 2 GiB from a
+  photograph viewer that was no longer running. `ImageStore.releaseAll` on the
+  way out of `LavaApp.run` is what hands them back, which means **an image an
+  app registers outside `ImageStore` is never released at all**: put it in the
+  cache, with `turn:` if it needs one, rather than calling
+  `registerImage` directly and keeping the handle. The other half of the hole
+  — a client that crashes or is killed — is still open, and wants a
+  registration leased to the session that made it (`nprpc::get_context()`
+  identifies one; there is no disconnect callback, so the lease would have to
+  hang off the surface signal that already survives a crashed client).
 - **`ImageStore.imageIfLoaded` answers nil to two different questions** — the
   decode is still running, and the decode came back with nothing — and starts
   the work over each time it is asked. `ImageStore.isLoading` separates them,
