@@ -1,5 +1,7 @@
 #include "control_plane.hpp"
 
+#include <nprpc/session_context.h>
+
 #include <sys/eventfd.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -792,24 +794,13 @@ class CompositorImpl final : public ICompositor_Servant {
     // client that lost track rather than an error — see the IDL.
     auto keyIt = imageKeys_.find(id);
     if (keyIt == imageKeys_.end()) return;
+    // Copied, not referenced: `dropImageUser` may erase the entry under it.
     const std::string key = keyIt->second;
 
-    // Counted here, because the registration above hands two clients the same
-    // id without uploading twice — so the engine's own refcount saw one user
-    // where there are two, and the first release would free a texture the
-    // second is still drawing. Sharing between clients is the compositor's
-    // business, not the engine's, so the count belongs on this side.
-    //
-    // A client that registers twice and releases once leaks its texture until
-    // the session ends. That is the safe direction to be wrong in; fixing it
-    // properly needs per-client accounting, and this call carries no client.
-    auto userIt = imageUsers_.find(key);
-    if (userIt != imageUsers_.end() && --userIt->second > 0) return;
-
-    imageUsers_.erase(key);
-    imageIds_.erase(key);
-    imageKeys_.erase(keyIt);
-    host_.releaseImage(key);
+    // The polite path. Struck off this session's lease first, so the release
+    // that comes when the session ends does not charge for it twice.
+    forgetSessionImage(callingSession(), key);
+    dropImageUser(key);
   }
 
   // ─── Surfaces ────────────────────────────────────────────────────────────
@@ -1470,6 +1461,14 @@ class CompositorImpl final : public ICompositor_Servant {
     // caller has built a subscription around something that never existed.
     if (!host_.surfaceExists(surfaceId)) throw SurfaceNotFound(surfaceId);
 
+    // Read here and nowhere below, because everything above the first
+    // `co_await` still runs inside the dispatch that started this coroutine,
+    // and the context exists only there. After the first suspension this
+    // function is resumed by whichever thread delivered a chunk, with no
+    // caller of its own.
+    const void *session = callingSession();
+    if (session != nullptr) ++sessionSubscriptions_[session];
+
     auto sub = std::make_shared<Subscriber>(std::move(stream.writer));
     broker_.subscribe(surfaceId, sub);
 
@@ -1501,10 +1500,10 @@ class CompositorImpl final : public ICompositor_Servant {
         (void)ack;
       }
     } catch (...) {
-      finish(surfaceId, sub);
+      finish(surfaceId, sub, session);
       throw;
     }
-    finish(surfaceId, sub);
+    finish(surfaceId, sub, session);
     co_return;
   }
 
@@ -1592,13 +1591,122 @@ class CompositorImpl final : public ICompositor_Servant {
   /// what stops a crashed client from leaving a window on screen that nothing
   /// will ever draw into again.
   ///
+  /// It is also the lease on everything else the client asked for. A client
+  /// that crashes, is killed, or simply forgets never sends `ReleaseImage`,
+  /// and its textures would otherwise sit in the cache for the life of the
+  /// compositor — which is a real leak, because the whole point of that cache
+  /// is that a texture outlives the frame that used it.
+  ///
   /// Posted rather than called: a coroutine resumes on whichever thread
   /// delivered the chunk that ended it, and destroying a surface touches the
-  /// scene graph.
-  void finish(uint32_t surfaceId, const SubscriberPtr &sub) {
+  /// scene graph. The image tables are loop-only for the same reason, so the
+  /// release goes in the same lambda rather than beside the call.
+  void finish(uint32_t surfaceId, const SubscriberPtr &sub,
+              const void *session) {
     broker_.unsubscribe(surfaceId, sub);
     sub->close();
-    loop_.post([this, surfaceId] { host_.destroySurface(surfaceId); });
+    loop_.post([this, surfaceId, session] {
+      host_.destroySurface(surfaceId);
+      endSessionLease(session);
+    });
+  }
+
+  /// Who is on the other end of the call being dispatched, or null.
+  ///
+  /// The address of the connection's own `SessionContext`, which lives as long
+  /// as the connection does and is the only per-client identity nprpc offers —
+  /// there is no session id, and no callback when one dies. It is used as a
+  /// name and never dereferenced.
+  ///
+  /// Null when there is no call in progress, which is why this throws-and-
+  /// catches rather than asking: `get_context` has no "is there one" form, and
+  /// a servant method reached from somewhere other than a dispatch would
+  /// otherwise take the compositor down.
+  static const void *callingSession() {
+    try {
+      return &nprpc::get_context();
+    } catch (...) {
+      return nullptr;
+    }
+  }
+
+  /// The last subscription of a session ending: everything it still holds
+  /// goes back.
+  ///
+  /// Counted rather than a flag because a client may have several surfaces,
+  /// and the images belong to the process, not to any one window. A LavaUI
+  /// client cannot outlive its surfaces — `LavaClientApp` exits when its input
+  /// stream closes — which is what makes the last subscription a sound moment
+  /// to call the process gone.
+  void endSessionLease(const void *session) {
+    if (session == nullptr) return;
+    auto it = sessionSubscriptions_.find(session);
+    if (it == sessionSubscriptions_.end()) return;
+    if (--it->second > 0) return;
+    sessionSubscriptions_.erase(it);
+    releaseSessionImages(session);
+  }
+
+  /// Hands back every registration the session never released.
+  ///
+  /// Once each, as many times as it registered, so a client that asked for the
+  /// same picture twice gives up two users and one that shares a texture with
+  /// a client still running takes nothing from it.
+  void releaseSessionImages(const void *session) {
+    auto it = imagesBySession_.find(session);
+    if (it == imagesBySession_.end()) return;
+    const auto held = std::move(it->second);
+    imagesBySession_.erase(it);
+
+    uint32_t handed = 0;
+    for (const auto &[key, count] : held) {
+      for (uint32_t i = 0; i < count; ++i) dropImageUser(key);
+      handed += count;
+    }
+    if (handed != 0) {
+      wlr_log(WLR_INFO, "session gone: %u image registration(s) reclaimed",
+              handed);
+    }
+  }
+
+  /// Notes that `session` holds one more user of `key`.
+  void noteImageUser(const void *session, const std::string &key) {
+    ++imageUsers_[key];
+    if (session != nullptr) ++imagesBySession_[session][key];
+  }
+
+  /// The reverse, without touching the global count: the caller is about to
+  /// drop that itself, and a lease struck off twice would release a texture
+  /// somebody else is drawing.
+  void forgetSessionImage(const void *session, const std::string &key) {
+    if (session == nullptr) return;
+    auto sessionIt = imagesBySession_.find(session);
+    if (sessionIt == imagesBySession_.end()) return;
+    auto keyIt = sessionIt->second.find(key);
+    if (keyIt == sessionIt->second.end()) return;
+    if (--keyIt->second == 0) sessionIt->second.erase(keyIt);
+    if (sessionIt->second.empty()) imagesBySession_.erase(sessionIt);
+  }
+
+  /// One user of `key` gone, and the texture with it if it was the last.
+  ///
+  /// Counted here, because registration hands two clients the same id without
+  /// uploading twice — so the engine's own refcount saw one user where there
+  /// are two, and the first release would free a texture the second is still
+  /// drawing. Sharing between clients is the compositor's business, not the
+  /// engine's, so the count belongs on this side.
+  void dropImageUser(const std::string &key) {
+    auto userIt = imageUsers_.find(key);
+    if (userIt == imageUsers_.end()) return;
+    if (--userIt->second > 0) return;
+
+    imageUsers_.erase(userIt);
+    auto idIt = imageIds_.find(key);
+    if (idIt != imageIds_.end()) {
+      imageKeys_.erase(idIt->second.id);
+      imageIds_.erase(idIt);
+    }
+    host_.releaseImage(key);
   }
 
   /// What `key` was registered as, if anything, counting one more user.
@@ -1610,7 +1718,7 @@ class CompositorImpl final : public ICompositor_Servant {
   const ImageInfo *sharedImage(const std::string &key) {
     auto it = imageIds_.find(key);
     if (it == imageIds_.end()) return nullptr;
-    ++imageUsers_[key];
+    noteImageUser(callingSession(), key);
     return &it->second;
   }
 
@@ -1622,7 +1730,7 @@ class CompositorImpl final : public ICompositor_Servant {
     info.width = width;
     info.height = height;
     imageIds_[key] = info;
-    ++imageUsers_[key];
+    noteImageUser(callingSession(), key);
     // Keyed by the id the client will use, so `ReleaseImage` needs no
     // agreement between the two sides about how a cache key is spelled.
     imageKeys_[id] = key;
@@ -1647,6 +1755,20 @@ class CompositorImpl final : public ICompositor_Servant {
   std::unordered_map<std::string, ImageInfo> imageIds_;
   std::unordered_map<std::string, uint32_t> imageUsers_;
   std::unordered_map<uint32_t, std::string> imageKeys_;
+
+  /// The same registrations again, per client, so a client that dies owes
+  /// nothing. A session appears here from its first registration and leaves
+  /// when its last subscription ends.
+  ///
+  /// Keyed by an address, with the one hazard that implies: a session that
+  /// registers images and never subscribes leaves an entry no `finish` will
+  /// ever clear, and a later connection allocated at the same address would
+  /// inherit it. Harmless in the only direction it can go wrong — what it
+  /// inherits is exactly the set of registrations the dead session leaked, so
+  /// the worst case is that a leak is collected late rather than never.
+  std::unordered_map<const void *, std::unordered_map<std::string, uint32_t>>
+      imagesBySession_;
+  std::unordered_map<const void *, uint32_t> sessionSubscriptions_;
 };
 
 class ControlPlaneImpl final : public ControlPlane {
