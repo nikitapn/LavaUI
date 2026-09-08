@@ -230,3 +230,119 @@ struct OutputTests {
         #expect(!url.lastPathComponent.contains(":"))
     }
 }
+
+@Suite("Typing a label")
+struct TextEditTests {
+    @Test("Typing goes in at the caret")
+    func typing() {
+        var edit = ShotTextEdit()
+        edit.insert("h")
+        edit.insert("i")
+        #expect(edit.text == "hi")
+        #expect(edit.caret == 2)
+    }
+
+    @Test("The caret is a character index, not a byte one")
+    func unicode() {
+        // One backspace deletes one thing somebody typed, whatever it costs to
+        // store. A byte-indexed caret leaves half a character behind here.
+        var edit = ShotTextEdit("café")
+        #expect(edit.caret == 4)
+        edit.backspace()
+        #expect(edit.text == "caf")
+
+        var flag = ShotTextEdit("a🇬🇧b")
+        flag.moveLeft()
+        flag.backspace()
+        #expect(flag.text == "ab")
+    }
+
+    @Test("Editing happens where the caret is, not at the end")
+    func middle() {
+        var edit = ShotTextEdit("ac")
+        edit.moveLeft()
+        edit.insert("b")
+        #expect(edit.text == "abc")
+        #expect(edit.caret == 2)
+
+        edit.moveToStart()
+        edit.deleteForward()
+        #expect(edit.text == "bc")
+    }
+
+    @Test("The caret cannot walk off either end")
+    func bounds() {
+        var edit = ShotTextEdit("ab")
+        edit.moveToStart()
+        edit.moveLeft()
+        edit.moveLeft()
+        #expect(edit.caret == 0)
+        // Called first, then asserted on: `#expect` takes its expression as a
+        // closure, and a mutating call cannot happen inside one.
+        let backspacedAtStart = edit.backspace()
+        #expect(!backspacedAtStart)
+
+        edit.moveToEnd()
+        edit.moveRight()
+        #expect(edit.caret == 2)
+        let deletedAtEnd = edit.deleteForward()
+        #expect(!deletedAtEnd)
+        #expect(edit.text == "ab")
+    }
+
+    @Test("A newline is not a character in a label")
+    func newlines() {
+        // Enter is the commit gesture. A label that could contain one would
+        // be a paragraph, and the second line would draw over the picture
+        // with nothing measuring it.
+        var edit = ShotTextEdit()
+        edit.insert("a")
+        edit.insert("\n")
+        edit.insert("\t")
+        edit.insert("b")
+        #expect(edit.text == "ab")
+    }
+
+    @Test("Pasted text arrives one character at a time, newlines dropped")
+    func pasting() {
+        var edit = ShotTextEdit()
+        edit.insert("two\nlines")
+        #expect(edit.text == "twolines")
+    }
+
+    @Test("The text before the caret is what a renderer measures")
+    func caretMeasurement() {
+        var edit = ShotTextEdit("hello")
+        edit.moveToStart()
+        edit.moveRight()
+        edit.moveRight()
+        #expect(edit.beforeCaret == "he")
+    }
+
+    @Test("An empty or blank label is not a mark")
+    func blankLabels() {
+        var document = ShotDocument()
+        let origin = [ShotPoint(x: 10, y: 10)]
+        document.add(
+            ShotStroke(
+                tool: .text, color: ShotColor.palette[0], width: 4,
+                points: origin, text: ""
+            )
+        )
+        document.add(
+            ShotStroke(
+                tool: .text, color: ShotColor.palette[0], width: 4,
+                points: origin, text: "   "
+            )
+        )
+        #expect(document.isEmpty)
+
+        document.add(
+            ShotStroke(
+                tool: .text, color: ShotColor.palette[0], width: 4,
+                points: origin, text: "note"
+            )
+        )
+        #expect(document.strokes.count == 1)
+    }
+}

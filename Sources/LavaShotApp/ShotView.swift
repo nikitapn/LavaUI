@@ -14,8 +14,23 @@ import LavaUI
 struct ShotView: View {
     let session: ShotSession
 
+    /// Where characters go. There is nothing focusable in this window — it is
+    /// one canvas — so the label being typed is the default target, the same
+    /// arrangement the image viewer uses for a window with one keyboard.
+    private let keyTarget = NodeID.generate()
+
     var body: some View {
-        Canvas(
+        // Re-asserted every body pass rather than once at mount, for the
+        // reason the other single-target apps do it: the alternative is a
+        // lifecycle question whose wrong answer is a window that silently
+        // ignores the keyboard.
+        FocusManager.setDefault(
+            keyTarget,
+            onKey: { _ in false },
+            onChar: { [session] character in session.type(character) }
+        )
+
+        return Canvas(
             label: "shot",
             flexGrow: 1,
             onGesture: handleGesture,
@@ -74,6 +89,21 @@ struct ShotView: View {
             }
             if let drafting = session.drafting, drafting.tool != .select {
                 draw(drafting, list, origin: frame)
+            }
+            if let label = session.label {
+                let at = ShotPoint(
+                    x: frame.x + label.origin.x, y: frame.y + label.origin.y
+                )
+                let color = Color(
+                    r: label.color.r, g: label.color.g, b: label.color.b, a: 1
+                )
+                annotation(
+                    list, label.edit.text, at: at, color: color,
+                    width: label.width,
+                    // Not at export time: the caret is the interface, and the
+                    // label is committed before a capture anyway.
+                    caretAfter: clean ? nil : label.edit.beforeCaret
+                )
             }
             list.popClip()
         }
@@ -182,6 +212,8 @@ struct ShotView: View {
                 x: r.x, y: r.y, w: r.w, h: r.h,
                 color: Color(r: color.r, g: color.g, b: color.b, a: 0.32)
             )
+        case .text:
+            annotation(list, stroke.text, at: a, color: color, width: stroke.width)
         case .blur:
             let r = ShotRect.between(a, b)
             // Content blur, so what comes out is the desktop's own pixels
@@ -222,6 +254,47 @@ struct ShotView: View {
                 )
             }
         }
+    }
+
+    /// A label, drawn where it was clicked, with a caret if one is being
+    /// typed into it.
+    ///
+    /// The point is the *left baseline-ish* corner people expect to type from,
+    /// so the text hangs below and to the right of the click — which is where
+    /// a caret appears in every other program.
+    ///
+    /// A dark plate behind it, always. A screenshot is an arbitrary picture
+    /// and red text on a red button is unreadable; a label that cannot be read
+    /// is worse than no label, and the plate costs one rectangle.
+    private func annotation(
+        _ list: DrawList, _ text: String, at point: ShotPoint, color: Color,
+        width: Float, caretAfter: String? = nil
+    ) {
+        guard let font = Fonts.forStroke(width) else { return }
+        let padX: Float = 6
+        let padY: Float = 3
+        let size = font.measure(text.isEmpty ? " " : text)
+        let boxW = size.width + padX * 2
+        let boxH = font.lineHeight + padY * 2
+
+        if !text.isEmpty || caretAfter != nil {
+            list.roundedRect(
+                x: point.x, y: point.y, w: boxW, h: boxH,
+                color: Palette.labelPlate, radius: 4
+            )
+        }
+        if !text.isEmpty {
+            list.text(
+                text, x: point.x + padX - 4, y: point.y + padY,
+                w: size.width + 8, h: font.lineHeight, color: color, font: font
+            )
+        }
+        guard let before = caretAfter else { return }
+        let caretX = point.x + padX + font.measure(before).width
+        list.rect(
+            x: caretX, y: point.y + padY, w: max(1, width / 3),
+            h: font.lineHeight, color: color
+        )
     }
 
     /// One glyph in the middle of a button.
@@ -365,6 +438,10 @@ struct ShotView: View {
         let text: String
         if let notice = session.notice {
             text = notice
+        } else if session.isTyping {
+            // Enter means something else in here, and this line is the only
+            // place that says what Enter does.
+            text = "Enter finishes the label · Esc discards it"
         } else if session.selection == nil {
             text = "Drag to choose a region · Esc to cancel"
         } else {
@@ -413,4 +490,6 @@ enum Palette {
     static let disabled = Color(r: 0.42, g: 0.44, b: 0.48)
     static let accent = Color(r: 0.35, g: 0.62, b: 0.98)
     static let hint = Color(r: 0.72, g: 0.74, b: 0.78)
+    /// Behind a label, so it stays readable on whatever it was dropped onto.
+    static let labelPlate = Color(r: 0.06, g: 0.06, b: 0.08, a: 0.66)
 }

@@ -25,6 +25,10 @@ struct LavaShotApp {
         ) else { exit(1) }
         Theme.current = .nebula
 
+        // Before the first frame: a label typed into a face that is still
+        // loading draws at the wrong size and jumps when it arrives.
+        Fonts.warm()
+
         let session = ShotSession(editor: editor)
         session.onQuit { [session] in
             // The temporary file the shot was read from goes with the window.
@@ -60,6 +64,13 @@ struct LavaShotApp {
         let control = (mods & KeyMods.control) != 0
         let shift = (mods & KeyMods.shift) != 0
 
+        // A label owns the keyboard while it is open, and it has to: `r`, `e`
+        // and `a` are tool shortcuts the rest of the time, and a tool that
+        // switched tools while somebody typed "arrow" would be unusable.
+        // Escape is the exception it hands back — the first one closes the
+        // label, the second leaves.
+        if session.editKey(event.button, control: control) { return true }
+
         switch event.button {
         case KeyCode.escape:
             session.perform(.cancel)
@@ -78,6 +89,7 @@ struct LavaShotApp {
         // The tools, in the order they sit on the bar. Single letters, because
         // this window owns the keyboard for as long as it is up and there is
         // nothing to type into.
+        case Key.t: session.perform(.tool(.text))
         case Key.r: session.perform(.tool(.rectangle))
         case Key.e: session.perform(.tool(.ellipse))
         case Key.a: session.perform(.tool(.arrow))
@@ -102,6 +114,7 @@ struct LavaShotApp {
         static let p: Int32 = 80
         static let r: Int32 = 82
         static let s: Int32 = 83
+        static let t: Int32 = 84
         static let v: Int32 = 86
         static let y: Int32 = 89
         static let z: Int32 = 90

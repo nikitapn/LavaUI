@@ -38,6 +38,25 @@ final class ShotSession {
     /// is not a mark until the button comes up.
     private(set) var drafting: ShotStroke?
 
+    /// The label being typed, if one is: where it sits, what it says so far,
+    /// and the colour and weight it was started with — so changing the colour
+    /// mid-word does not repaint what is already typed.
+    private(set) var label: Label?
+
+    struct Label {
+        var origin: ShotPoint
+        var edit: ShotTextEdit
+        var color: ShotColor
+        var width: Float
+    }
+
+    /// Whether the keyboard belongs to a label right now.
+    ///
+    /// The single-letter tool shortcuts have to become letters while it does,
+    /// which is the one thing about this tool that is a mode rather than a
+    /// shape — and the bug it ships with if nobody says so.
+    var isTyping: Bool { label != nil }
+
     /// One frame with no interface on it, so the export captures the picture
     /// and the annotations and nothing else. See `beforePaint`.
     ///
@@ -122,6 +141,21 @@ final class ShotSession {
 
     func beginDraw(at point: ShotPoint, screen: ShotRect) {
         notice = nil
+        // A click anywhere finishes whatever was being typed. That is what
+        // clicking away means in every other editor, and the alternative —
+        // a label that stays open while you draw an arrow somewhere else —
+        // leaves a caret blinking over a picture nobody is typing into.
+        commitLabel()
+
+        if tool == .text, selection != nil {
+            label = Label(
+                origin: point, edit: ShotTextEdit(), color: color,
+                width: strokeWidth
+            )
+            ViewInvalidation.markDirty()
+            return
+        }
+
         if tool == .select || selection == nil {
             // The first drag makes the selection whatever tool is chosen: there
             // is nothing to annotate until there is something to keep.
@@ -175,12 +209,78 @@ final class ShotSession {
         document.add(stroke)
     }
 
+    // MARK: - Typing
+
+    /// One character into the open label. Nothing when none is open, which is
+    /// what makes the tool shortcuts work the rest of the time.
+    @discardableResult
+    func type(_ character: Character) -> Bool {
+        guard label != nil else { return false }
+        label?.edit.insert(character)
+        ViewInvalidation.markDirty()
+        return true
+    }
+
+    /// The editing keys, while a label is open. Returns whether it took the
+    /// key — everything it does not take falls through to the tool shortcuts.
+    @discardableResult
+    func editKey(_ key: Int32, control: Bool) -> Bool {
+        guard label != nil else { return false }
+        switch key {
+        case KeyCode.enter:
+            commitLabel()
+        case KeyCode.escape:
+            // Cancels the label, not the tool. A second Escape, with nothing
+            // being typed, leaves LavaShot — which is what somebody pressing
+            // it twice means both times.
+            label = nil
+        case KeyCode.backspace:
+            label?.edit.backspace()
+        case KeyCode.delete:
+            label?.edit.deleteForward()
+        case KeyCode.left:
+            label?.edit.moveLeft()
+        case KeyCode.right:
+            label?.edit.moveRight()
+        case KeyCode.home:
+            label?.edit.moveToStart()
+        case KeyCode.end:
+            label?.edit.moveToEnd()
+        case KeyCode.v where control:
+            // Paste, because a label is often a name or an error somebody
+            // just copied. Text only: pasting a picture into a picture is a
+            // different feature.
+            label?.edit.insert(ClipboardBridge.read())
+        default:
+            return false
+        }
+        ViewInvalidation.markDirty()
+        return true
+    }
+
+    /// Turns the open label into a mark, if it says anything.
+    func commitLabel() {
+        guard let open = label else { return }
+        label = nil
+        document.add(
+            ShotStroke(
+                tool: .text, color: open.color, width: open.width,
+                points: [open.origin], text: open.edit.text
+            )
+        )
+        ViewInvalidation.markDirty()
+    }
+
     // MARK: - The toolbar
 
     func perform(_ action: ShotAction) {
         notice = nil
         switch action {
         case .tool(let picked):
+            // Committed rather than cancelled: picking another tool is not
+            // "throw that away", and a label that vanished because somebody
+            // reached for the arrow next would be a small betrayal.
+            commitLabel()
             tool = picked
         case .color(let index):
             colorIndex = min(max(index, 0), ShotColor.palette.count - 1)
@@ -258,6 +358,10 @@ final class ShotSession {
     private var readyToExport: Bool {
         guard hasShot else { return false }
         guard exporting == nil else { return false }
+        // Whatever was being typed is part of the picture, and the caret
+        // under it is not. Committing here is also what stops a half-typed
+        // label from being photographed with its caret in the file.
+        commitLabel()
         return true
     }
 

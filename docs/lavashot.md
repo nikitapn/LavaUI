@@ -68,16 +68,48 @@ the app, and having them disagree with the engine about what the user was
 shown. Which is why the interface is painted by one `Canvas` rather than built
 from widgets: taking all of it out of the picture is one `if`.
 
+## Labels are the one tool with a mode
+
+`T`, then click, then type. Enter finishes the label and Escape discards it;
+clicking anywhere else, picking another tool, or exporting all finish it too,
+because that is what clicking away means everywhere else.
+
+Nothing rasterises a glyph. `DrawList.text` draws the label through the same
+engine as everything else, and the export photographs the window — so the file
+gets the text for the same reason it gets the arrows. That is the whole reason
+this tool was cheap to add and would have been a project on its own if the
+export rasterised its own pixels.
+
+Two things about it are load-bearing:
+
+- **The keyboard belongs to the label while one is open.** `r`, `e`, `a`, `p`,
+  `h`, `b`, `t` and `v` pick tools the rest of the time, and a screenshot tool
+  that switched to the arrow halfway through the word "arrow" would be
+  unusable. `ShotSession.editKey` runs ahead of the shortcuts and takes what it
+  wants; Escape is the one key it hands back, so a first press closes the label
+  and a second leaves LavaShot.
+- **The caret is an index into characters, not bytes.** One backspace deletes
+  one thing somebody typed, whatever it costs to store — `café` and a flag
+  emoji are in the tests for exactly this.
+
+The label is committed before any export, so a half-typed one is in the file
+and the caret under it is not.
+
+A label has no newlines: Enter is the commit gesture, and a two-line label is a
+paragraph nobody asked for. It carries a dark plate behind it, always — a
+screenshot is an arbitrary picture, red text on a red button cannot be read,
+and a label that cannot be read is worse than no label.
+
 ## What is missing
 
 - **One output.** The shot is the screen the pointer is on. A selection cannot
   span two monitors.
-- **No text tool.** Everything else on the bar draws; typing on a screenshot
-  needs a caret, a field and an editing model over a picture, and it is the one
-  tool that is a feature rather than a shape.
 - **The selection cannot be adjusted.** Drag a new one instead. Handles are
   drawn but are not yet grabbable — `ShotRect.moved` is written and tested and
   has no caller.
+- **A label cannot be edited once it is finished.** Undo and retype. Selecting
+  within one, and clicking an existing label to reopen it, are both the same
+  missing idea: annotations have no identity after they are committed.
 - **No delay or window mode.** `LavaShot --delay 5`, and picking a single
   window rather than a region, are the two things a screenshot tool is usually
   asked for second.

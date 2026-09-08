@@ -104,6 +104,10 @@ public enum ShotTool: String, CaseIterable, Sendable {
     case arrow
     case pen
     case highlight
+    /// A short label typed where it was clicked. The only tool with a mode:
+    /// while one is being typed the keyboard belongs to it, and the letters
+    /// that pick tools have to type instead.
+    case text
     /// Redacts: the region is blurred hard enough that what was under it is
     /// not recoverable by looking. The one tool people reach for under time
     /// pressure, which is why it is not buried.
@@ -119,6 +123,7 @@ public enum ShotTool: String, CaseIterable, Sendable {
         case .arrow: return "↗"
         case .pen: return "✎"
         case .highlight: return "▮"
+        case .text: return "T"
         case .blur: return "▨"
         }
     }
@@ -131,6 +136,7 @@ public enum ShotTool: String, CaseIterable, Sendable {
         case .arrow: return "Arrow"
         case .pen: return "Freehand"
         case .highlight: return "Highlight"
+        case .text: return "Label"
         case .blur: return "Blur out"
         }
     }
@@ -167,16 +173,20 @@ public struct ShotStroke: Equatable, Sendable {
     public var tool: ShotTool
     public var color: ShotColor
     public var width: Float
-    /// Two points for a shape, many for the pen.
+    /// Two points for a shape, many for the pen, one for a label.
     public var points: [ShotPoint]
+    /// What a label says. Empty for every other tool.
+    public var text: String
 
     public init(
-        tool: ShotTool, color: ShotColor, width: Float, points: [ShotPoint]
+        tool: ShotTool, color: ShotColor, width: Float, points: [ShotPoint],
+        text: String = ""
     ) {
         self.tool = tool
         self.color = color
         self.width = width
         self.points = points
+        self.text = text
     }
 
     public var start: ShotPoint { points.first ?? ShotPoint(x: 0, y: 0) }
@@ -189,6 +199,11 @@ public struct ShotStroke: Equatable, Sendable {
         switch tool {
         case .pen: return points.count > 1
         case .select: return false
+        case .text:
+            // A label somebody started and thought better of leaves nothing
+            // behind — including one that is only spaces, which is invisible
+            // and would still take an undo to get rid of.
+            return !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         default:
             let b = bounds
             return b.w >= 2 || b.h >= 2
@@ -385,4 +400,68 @@ public enum ShotOutput {
             .appendingPathComponent("Screenshots")
             .appendingPathComponent("Screenshot \(formatter.string(from: now)).png")
     }
+}
+
+// MARK: - Typing a label
+
+/// A string being typed, and where the caret is in it.
+///
+/// Its own type rather than a `TextField`, because there is no field: a label
+/// on a screenshot is text sitting on a picture, with no box, no scrolling and
+/// nowhere to tab to. What it needs is what somebody typing two words actually
+/// uses — the letters, backspace, the arrow keys — and none of what a text
+/// editor needs.
+///
+/// The caret is an index into `characters`, not into UTF-8: an accented letter
+/// is one thing to delete, however many bytes it takes to store, and getting
+/// that wrong is how a backspace leaves a half-written character behind.
+public struct ShotTextEdit: Equatable, Sendable {
+    public private(set) var characters: [Character] = []
+    /// Between 0 and `characters.count`; `count` means the end.
+    public private(set) var caret: Int = 0
+
+    public init(_ text: String = "") {
+        characters = Array(text)
+        caret = characters.count
+    }
+
+    public var text: String { String(characters) }
+    public var isEmpty: Bool { characters.isEmpty }
+
+    /// The text before the caret, which is what a renderer measures to find
+    /// out where to draw it.
+    public var beforeCaret: String { String(characters.prefix(caret)) }
+
+    public mutating func insert(_ character: Character) {
+        // A newline is the commit gesture, not a character: this is a label,
+        // and a two-line label is a paragraph nobody asked for. Tabs are the
+        // same kind of nothing.
+        guard !character.isNewline, character != "\t" else { return }
+        characters.insert(character, at: caret)
+        caret += 1
+    }
+
+    public mutating func insert(_ string: String) {
+        for character in string { insert(character) }
+    }
+
+    @discardableResult
+    public mutating func backspace() -> Bool {
+        guard caret > 0 else { return false }
+        characters.remove(at: caret - 1)
+        caret -= 1
+        return true
+    }
+
+    @discardableResult
+    public mutating func deleteForward() -> Bool {
+        guard caret < characters.count else { return false }
+        characters.remove(at: caret)
+        return true
+    }
+
+    public mutating func moveLeft() { caret = max(0, caret - 1) }
+    public mutating func moveRight() { caret = min(characters.count, caret + 1) }
+    public mutating func moveToStart() { caret = 0 }
+    public mutating func moveToEnd() { caret = characters.count }
 }
