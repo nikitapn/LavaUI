@@ -649,7 +649,7 @@ namespace {
 /// exactly one call — which file to open versus which bytes to read — and
 /// nothing after it. Takes ownership of `pixels` either way.
 DecodedImage finishDecode(stbi_uc *pixels, int w, int h, uint32_t maxPixelSize,
-                          ExifOrientation orientation)
+                          ExifOrientation orientation, ImageTurn turn)
 {
   DecodedImage out;
   if (pixels == nullptr || w <= 0 || h <= 0) {
@@ -703,12 +703,18 @@ DecodedImage finishDecode(stbi_uc *pixels, int w, int h, uint32_t maxPixelSize,
   // the cap lands on the same number — and this way the turn moves the smaller
   // buffer. See `render/exif.hpp` for why a decoder does this at all.
   applyExifOrientation(out.pixels, out.width, out.height, orientation);
+  // Then what was asked for, on top of what the file said. Two passes rather
+  // than one composed movement: composing them is a table of 32 entries to get
+  // right, this is obviously correct, and the second pass only happens when
+  // somebody has pressed a button on a photograph that also declared a turn.
+  applyExifOrientation(out.pixels, out.width, out.height, asOrientation(turn));
   return out;
 }
 
 }  // namespace
 
-DecodedImage Engine::decodeImage(const std::string &path, uint32_t maxPixelSize)
+DecodedImage Engine::decodeImage(const std::string &path, uint32_t maxPixelSize,
+                                 ImageTurn turn)
 {
   // An SVG has no pixels to load, only a shape to draw — so `maxPixelSize` is
   // not a cap here but the size itself, and the result needs no downscale
@@ -719,6 +725,7 @@ DecodedImage Engine::decodeImage(const std::string &path, uint32_t maxPixelSize)
     DecodedImage out;
     out.pixels = rasterizeSvg(path, maxPixelSize, out.width, out.height);
     if (out.pixels.empty()) return DecodedImage{};
+    applyExifOrientation(out.pixels, out.width, out.height, asOrientation(turn));
     return out;
   }
 
@@ -726,7 +733,8 @@ DecodedImage Engine::decodeImage(const std::string &path, uint32_t maxPixelSize)
   // stbi_load is reentrant and touches no shared state, which is what makes
   // this callable off the device thread.
   stbi_uc *pixels = stbi_load(path.c_str(), &w, &h, &channels, 4);
-  return finishDecode(pixels, w, h, maxPixelSize, readExifOrientation(path));
+  return finishDecode(pixels, w, h, maxPixelSize, readExifOrientation(path),
+                      turn);
 }
 
 DecodedImage Engine::decodeImageData(const uint8_t *bytes, size_t byteCount,
@@ -742,7 +750,7 @@ DecodedImage Engine::decodeImageData(const uint8_t *bytes, size_t byteCount,
   stbi_uc *pixels = stbi_load_from_memory(
     bytes, static_cast<int>(byteCount), &w, &h, &channels, 4);
   return finishDecode(pixels, w, h, maxPixelSize,
-                      readExifOrientation(bytes, byteCount));
+                      readExifOrientation(bytes, byteCount), ImageTurn::none);
 }
 
 DecodedImage Engine::encodeRgbaPng(const uint8_t *rgba, uint32_t width,

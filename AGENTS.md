@@ -138,7 +138,12 @@ Consequences that surprise people:
   its side — the width and height too, which is what the atlas and every
   `1:1` readout are computed from. All eight orientations, mirrors included.
   It costs one 128 KiB read of the file's head per decode, and nothing for the
-  overwhelming majority of files, which declare nothing.
+  overwhelming majority of files, which declare nothing. A caller can ask for
+  a quarter turn of its own on top (`ImageTurn`, on `Engine::decodeImage`,
+  `GPUResourceHost.registerImage` and `RegisterImage` in the IDL) — and should,
+  rather than turning pixels itself: a client has no codec, so a picture it
+  turned would have to be encoded, sent through shared memory and decoded
+  again. The turn is part of a texture's identity, like `maxPixelSize`.
 - **`ImageStore.imageIfLoaded` answers nil to two different questions** — the
   decode is still running, and the decode came back with nothing — and starts
   the work over each time it is asked. `ImageStore.isLoading` separates them,
@@ -1092,7 +1097,7 @@ so headless test runs skip it too.
 | Perf scenarios | `Sources/LavaBench/`, `docs/performance.md` |
 | App demos | `Sources/HelloWorld/`, Spotify/TraceLoom/LavaTerm apps |
 | Fit / 1:1 / cursor-anchored zoom | `Sources/LavaViewCore/Viewport.swift` (pure, tested); the app only feeds it the canvas box |
-| Turning pixels, and what a turned photo is saved as | `PixelRotate`, `SaveTarget` in `LavaViewCore`; `Editor.encodeJpeg` / `canvas::encodeRgbaJpeg` are the encoder |
+| Turning pixels, and what a turned photo is saved as | `canvas/src/render/exif.cpp` turns them, asked for via `ImageTurn`; `Rotation` / `SaveTarget` in `LavaViewCore` decide which turn and which format; `Editor.encodeJpeg` / `canvas::encodeRgbaJpeg` are the encoder |
 | Desktop entry for an app that opens files | `packaging/apps.conf` — the tenth field is `MimeType`, and declaring one is what adds `%F` to the Exec |
 
 ## Conventions agents should follow

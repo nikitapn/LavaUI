@@ -1,5 +1,4 @@
 import Foundation
-import LavaHost
 import LavaUI
 import LavaViewCore
 import Observation
@@ -512,33 +511,24 @@ final class ViewerSession: @unchecked Sendable {
         status = .turning
         ViewInvalidation.markDirty()
 
-        Thread.detachNewThread { [weak self] in
-            let decoded = Editor.decodeImage(
-                path: path, maxPixelSize: Self.displayDecodeSide
-            )
-            let result = decoded.flatMap {
-                PixelRotate.rotate(
-                    pixels: $0.pixels, width: Int($0.width), height: Int($0.height),
-                    by: next
-                )
-            }
-            MainQueue.async { [weak self] in
-                self?.finishTurn(token, key: key, result: result)
-            }
+        // Asked of whoever owns the pixels rather than done here. Windowed
+        // that is a decode on a worker and an upload on the main thread; as a
+        // compositor client it is one call, and the picture is turned on the
+        // side that was going to decode it anyway. The version this replaced
+        // decoded it here, turned it here, encoded a PNG of the result and
+        // sent that through shared memory for the compositor to decode a
+        // second time — seconds of it for a photograph, and a second copy of
+        // every picture held in this process.
+        editor.resources.registerImageAsync(
+            path: path, maxPixelSize: Self.displayDecodeSide, turn: next.turn
+        ) { [weak self] image in
+            self?.finishTurn(token, key: key, image: image)
         }
     }
 
-    private func finishTurn(
-        _ token: Int, key: String,
-        result: (pixels: [UInt8], width: Int, height: Int)?
-    ) {
+    private func finishTurn(_ token: Int, key: String, image: UIImage?) {
         guard token == generation else { return }
-        guard let result,
-              let image = upload(
-                  key: key, pixels: result.pixels,
-                  width: UInt32(result.width), height: UInt32(result.height)
-              )
-        else {
+        guard let image else {
             status = .failed("Could not turn \(currentName)")
             rotation = .none
             hasUnsavedRotation = false
@@ -557,27 +547,6 @@ final class ViewerSession: @unchecked Sendable {
         // the old shape is wrong; re-place it whatever the mode.
         recentre()
         ViewInvalidation.markDirty()
-    }
-
-    /// Gets pixels onto the GPU in whichever mode this process is running in.
-    ///
-    /// Windowed, that is a direct upload. As a compositor client there is no
-    /// device here at all: the pixels have to be encoded and handed over, and
-    /// `Editor.uploadImage` is not the call for it — its remote branch caps at
-    /// 64 pixels, which is right for the tray icon it was written for and
-    /// would turn a photograph into a thumbnail.
-    private func upload(
-        key: String, pixels: [UInt8], width: UInt32, height: UInt32
-    ) -> UIImage? {
-        guard !LavaHost.isClient else {
-            guard let png = Editor.encodePng(
-                pixels: pixels, width: width, height: height
-            ) else { return nil }
-            return editor.resources.registerImage(data: png, maxPixelSize: 0)
-        }
-        return editor.uploadImage(
-            key: key, path: key, pixels: pixels, width: width, height: height
-        )
     }
 
     private static func turnedKey(path: String, rotation: Rotation) -> String {
@@ -649,26 +618,25 @@ final class ViewerSession: @unchecked Sendable {
     private static func encodeRotated(
         from source: String, turn: Rotation, target: SaveTarget
     ) -> SaveResult {
-        guard let decoded = Editor.decodeImage(path: source, maxPixelSize: 0) else {
-            return SaveResult(path: target.path, error: "could not re-read the original")
-        }
-        guard let result = PixelRotate.rotate(
-            pixels: decoded.pixels, width: Int(decoded.width),
-            height: Int(decoded.height), by: turn
+        // The same decoder call the screen is drawn from, at native size and
+        // with the same turn — so what is written is what was being looked at,
+        // by construction rather than by two implementations agreeing.
+        guard let result = Editor.decodeImage(
+            path: source, maxPixelSize: 0, turn: turn.turn
         ) else {
-            return SaveResult(path: target.path, error: "could not turn the pixels")
+            return SaveResult(path: target.path, error: "could not re-read the original")
         }
 
         // Alpha is only knowable from the pixels, and only now are the real
         // ones in hand. A file named `.jpg` that decoded with transparency is
         // re-routed to PNG here rather than saved with black holes in it.
-        let hasAlpha = PixelRotate.hasTransparency(pixels: result.pixels)
+        let hasAlpha = SaveTarget.hasTransparency(pixels: result.pixels)
         let final = hasAlpha && target.isLossy
             ? SaveTarget.inPlace(path: target.path, hasAlpha: true)
             : target
 
-        let w = UInt32(result.width)
-        let h = UInt32(result.height)
+        let w = result.width
+        let h = result.height
         let bytes: [UInt8]?
         switch final.encoding {
         case .png:
@@ -735,5 +703,22 @@ final class ViewerSession: @unchecked Sendable {
         if case .failed = status { status = .ready; changed = true }
         guard changed else { return }
         ViewInvalidation.markDirty()
+    }
+}
+
+/// `LavaViewCore`'s turn, in the framework's.
+///
+/// Two spellings of four cases, and the seam is the point: `Rotation` is what
+/// the viewer reasons about and is tested with no engine at all, `ImageTurn`
+/// is what a decoder can be asked for. Neither module should have to know the
+/// other exists, so the app — which knows both — is where they meet.
+extension Rotation {
+    var turn: ImageTurn {
+        switch self {
+        case .none: .none
+        case .quarter: .clockwise
+        case .half: .half
+        case .threeQuarter: .anticlockwise
+        }
     }
 }

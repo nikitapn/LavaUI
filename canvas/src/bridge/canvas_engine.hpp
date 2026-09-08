@@ -6,6 +6,7 @@
 
 #include "../util/result.hpp"
 #include "../render/draw_command.hpp"
+#include "../render/exif.hpp"
 #include "../render/export_format.hpp"
 
 #include <cstdint>
@@ -401,8 +402,16 @@ class Engine {
   /// decides how the image is stored — `ImageAtlas` picks the tightest of its
   /// size classes that the decode fits, and refuses anything above the
   /// largest, which leaves the caller holding a standalone texture.
+  ///
+  /// `turn` is applied after the orientation the file declares, so it composes
+  /// with what is already on screen rather than with how the sensor read out.
+  /// It is here rather than in the caller because a caller may have no way to
+  /// do it: a compositor client has neither a GPU nor a codec, and turning a
+  /// picture on that side means encoding it, sending it back and decoding it
+  /// again.
   static DecodedImage decodeImage(const std::string &path,
-                                  uint32_t maxPixelSize = 0);
+                                  uint32_t maxPixelSize = 0,
+                                  ImageTurn turn = ImageTurn::none);
 
   /// The same decode, from bytes already in memory — an image that was
   /// downloaded, generated, or unpacked from an archive and never had a path.

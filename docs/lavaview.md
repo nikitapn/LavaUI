@@ -75,7 +75,7 @@ an image that decoded and was then evicted looks identical from here.
   bar marks the size with `~`. Saving is unaffected — it re-decodes at native
   size.
 
-## EXIF orientation, and why it is not in this app
+## Turning a picture, and where it happens
 
 A photograph off a phone carries which way up it is as a tag rather than in its
 pixels, and roughly every phone writes one. Ignoring it meant the most common
@@ -103,10 +103,27 @@ turn cannot express — a gather loop does not care which of the eight it is
 walking, so refusing them, as the plan had it, would have been more code than
 supporting them.
 
+Once that was true of the file's own turn, it was indefensible for the user's.
+The rotate buttons had exactly the pipeline described above as unusable — a
+local decode, a turn in Swift, a PNG of the result through shared memory, and
+the compositor decoding it a second time — so the same quarter turn was free
+when the file asked for it and cost seconds when a person did. `RegisterImage`
+takes an `ImageTurn` now, and `GPUResourceHost.registerImage(path:maxPixelSize:
+turn:)` is what the viewer asks: the client sends a path and a direction, and
+the picture is turned on the side that was going to decode it anyway. In a
+window the same call decodes on a worker and uploads on the main thread, which
+is what that host was always for.
+
+That leaves one implementation of turning pixels in the whole system, and the
+save path uses it too — `Editor.decodeImage(path:maxPixelSize:turn:)` at native
+size. `PixelRotate` is gone, and its absence is the point: a viewer with two
+rotate implementations, one drawing the screen and one writing the file, is
+wrong in the way nobody notices until the file is already saved.
+
 The turn stays **display-only**: nothing writes the file until the user asks.
-Saving after a manual rotate bakes the total — the file's own turn and the
-user's — into the pixels, and the output carries no EXIF at all, so nothing
-downstream turns it a second time.
+Saving bakes the total — the file's own turn and the user's — into the pixels,
+and the output carries no EXIF at all, so nothing downstream turns it a second
+time.
 
 ## Next, in the order I would do them
 

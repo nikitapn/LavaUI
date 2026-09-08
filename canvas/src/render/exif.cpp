@@ -164,8 +164,11 @@ size_t exifBlockInPng(const uint8_t *b, size_t count) {
 ///
 /// The reads stride by a row for anything that turns, and cache badly whatever
 /// order this is written in; making the writes linear is the half worth having.
-/// The same reasoning, and the same loop, as `PixelRotate.rotate` on the Swift
-/// side — which is where a turn the *user* asked for still happens.
+/// One loop for all of it: the turn a file declares and the turn a person asks
+/// for are the same eight movements, and this is the only implementation of
+/// them anywhere — which is the point, because a viewer that turned a
+/// photograph one way on screen and another way into the file it saved would
+/// be wrong in the way nobody notices until the file is already written.
 void gather(const uint8_t *src, int w, int h, ExifOrientation o, uint8_t *dst) {
   const bool swap = swapsAxes(o);
   const int outW = swap ? h : w;
@@ -193,6 +196,16 @@ void gather(const uint8_t *src, int w, int h, ExifOrientation o, uint8_t *dst) {
 }
 
 }  // namespace
+
+ExifOrientation asOrientation(ImageTurn turn) {
+  switch (turn) {
+    case ImageTurn::clockwise: return ExifOrientation::rightTop;
+    case ImageTurn::half: return ExifOrientation::bottomRight;
+    case ImageTurn::anticlockwise: return ExifOrientation::leftBottom;
+    case ImageTurn::none: break;
+  }
+  return ExifOrientation::topLeft;
+}
 
 bool swapsAxes(ExifOrientation o) {
   switch (o) {

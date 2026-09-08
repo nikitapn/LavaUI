@@ -24,9 +24,29 @@ enum class ExifOrientation : uint8_t {
   leftBottom = 8,   ///< 270° clockwise
 };
 
+/// A quarter turn asked for by a person rather than declared by a file.
+///
+/// Clockwise, and named as a direction rather than an angle because that is
+/// what the two buttons on a viewer's bar mean. It is the same movement as
+/// four of the eight orientations above and goes through the same loop; it is
+/// a separate type because the two say different things — an orientation is
+/// how the file is stored, a turn is what somebody pressed.
+enum class ImageTurn : uint8_t {
+  none = 0,
+  clockwise = 1,
+  half = 2,
+  anticlockwise = 3,
+};
+
+/// The orientation that moves the pixels the same way, so a turn needs no
+/// second implementation of anything.
+ExifOrientation asOrientation(ImageTurn turn);
+
 inline bool isIdentity(ExifOrientation o) {
   return o == ExifOrientation::topLeft;
 }
+
+inline bool isIdentity(ImageTurn t) { return t == ImageTurn::none; }
 
 /// Whether width and height swap under it.
 bool swapsAxes(ExifOrientation o);

@@ -37,12 +37,18 @@ public protocol GPUResourceHost: AnyObject, Sendable {
         rasterFlags: UInt32
     ) -> UInt32?
 
-    /// Registers an image, decoded from `path` and capped to `maxPixelSize`
-    /// (0 = native), returning a handle with the id and the decoded size.
+    /// Registers an image, decoded from `path`, capped to `maxPixelSize`
+    /// (0 = native) and quarter-turned by `turn`, returning a handle with the
+    /// id and the decoded size.
     ///
     /// Blocks. For anything an app needs before its first frame — an icon, a
     /// brand mark — where a placeholder would be worse than a stall.
-    func registerImage(path: String, maxPixelSize: UInt32) -> UIImage?
+    ///
+    /// The turn is asked of the host rather than done by the caller because
+    /// one of the two hosts is a compositor the caller cannot decode for — see
+    /// `ImageTurn`. Most callers want none and should use the two-argument
+    /// convenience below.
+    func registerImage(path: String, maxPixelSize: UInt32, turn: ImageTurn) -> UIImage?
 
     /// The same registration off the calling thread, with `completion` run on
     /// the main queue.
@@ -53,7 +59,7 @@ public protocol GPUResourceHost: AnyObject, Sendable {
     /// it touches the device. Remotely the whole thing is one call, and there
     /// is no main-thread half at all.
     func registerImageAsync(
-        path: String, maxPixelSize: UInt32,
+        path: String, maxPixelSize: UInt32, turn: ImageTurn,
         completion: @escaping @Sendable (UIImage?) -> Void
     )
 
@@ -76,6 +82,25 @@ public protocol GPUResourceHost: AnyObject, Sendable {
 }
 
 extension GPUResourceHost {
+    /// The overwhelmingly common case: no turn.
+    ///
+    /// A convenience rather than a defaulted argument because a protocol
+    /// requirement cannot carry one, and every caller but a viewer's rotate
+    /// button wants a picture the way it is stored.
+    public func registerImage(path: String, maxPixelSize: UInt32) -> UIImage? {
+        registerImage(path: path, maxPixelSize: maxPixelSize, turn: .none)
+    }
+
+    public func registerImageAsync(
+        path: String, maxPixelSize: UInt32,
+        completion: @escaping @Sendable (UIImage?) -> Void
+    ) {
+        registerImageAsync(
+            path: path, maxPixelSize: maxPixelSize, turn: .none,
+            completion: completion
+        )
+    }
+
     /// Face 0 of `path` at `pixelSize`, hinted the renderer's default way —
     /// what a caller that just wants a font file at a size should use.
     ///
@@ -95,11 +120,13 @@ extension GPUResourceHost {
     /// remote one, where the call is already a round trip and touches nothing
     /// local. `Editor` overrides this, because it does.
     public func registerImageAsync(
-        path: String, maxPixelSize: UInt32,
+        path: String, maxPixelSize: UInt32, turn: ImageTurn,
         completion: @escaping @Sendable (UIImage?) -> Void
     ) {
         Thread.detachNewThread {
-            let image = self.registerImage(path: path, maxPixelSize: maxPixelSize)
+            let image = self.registerImage(
+                path: path, maxPixelSize: maxPixelSize, turn: turn
+            )
             MainQueue.async { completion(image) }
         }
     }
@@ -108,14 +135,18 @@ extension GPUResourceHost {
 // ─── Built-in renderer ───────────────────────────────────────────────────────
 
 extension Editor: GPUResourceHost {
-    public func registerImage(path: String, maxPixelSize: UInt32) -> UIImage? {
-        // Native size has a shorter path: the engine opens, decodes and
-        // uploads in one call, and the cache key is the bare path.
-        if maxPixelSize == 0 { return loadImage(path: path) }
-        guard let decoded = Editor.decodeImage(path: path, maxPixelSize: maxPixelSize)
-        else { return nil }
+    public func registerImage(
+        path: String, maxPixelSize: UInt32, turn: ImageTurn
+    ) -> UIImage? {
+        // Native size with nothing to turn has a shorter path: the engine
+        // opens, decodes and uploads in one call, and the cache key is the
+        // bare path.
+        if maxPixelSize == 0, turn == .none { return loadImage(path: path) }
+        guard let decoded = Editor.decodeImage(
+            path: path, maxPixelSize: maxPixelSize, turn: turn
+        ) else { return nil }
         return uploadImage(
-            key: ImageStore.key(path: path, maxPixelSize: maxPixelSize),
+            key: ImageStore.key(path: path, maxPixelSize: maxPixelSize, turn: turn),
             path: path,
             pixels: decoded.pixels, width: decoded.width, height: decoded.height
         )
@@ -128,18 +159,22 @@ extension Editor: GPUResourceHost {
     /// frame, and uploading touches the Vulkan device, which is the main
     /// thread's alone.
     public func registerImageAsync(
-        path: String, maxPixelSize: UInt32,
+        path: String, maxPixelSize: UInt32, turn: ImageTurn,
         completion: @escaping @Sendable (UIImage?) -> Void
     ) {
         Thread.detachNewThread {
-            let decoded = Editor.decodeImage(path: path, maxPixelSize: maxPixelSize)
+            let decoded = Editor.decodeImage(
+                path: path, maxPixelSize: maxPixelSize, turn: turn
+            )
             MainQueue.async {
                 guard let decoded else {
                     completion(nil)
                     return
                 }
                 completion(self.uploadImage(
-                    key: ImageStore.key(path: path, maxPixelSize: maxPixelSize),
+                    key: ImageStore.key(
+                        path: path, maxPixelSize: maxPixelSize, turn: turn
+                    ),
                     path: path,
                     pixels: decoded.pixels,
                     width: decoded.width, height: decoded.height

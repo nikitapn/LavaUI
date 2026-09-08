@@ -186,8 +186,12 @@ public final class CompositorResources: GPUResourceHost, @unchecked Sendable {
         }
     }
 
-    public func registerImage(path: String, maxPixelSize: UInt32) -> UIImage? {
-        let key = ImageStore.key(path: path, maxPixelSize: maxPixelSize)
+    public func registerImage(
+        path: String, maxPixelSize: UInt32, turn: LavaUI.ImageTurn
+    ) -> UIImage? {
+        let key = ImageStore.key(
+            path: path, maxPixelSize: maxPixelSize, turn: turn
+        )
         lock.lock()
         let alreadyRefused = refusedKeys.contains(key)
         lock.unlock()
@@ -199,7 +203,7 @@ public final class CompositorResources: GPUResourceHost, @unchecked Sendable {
                 // Longer than the default: this one decodes and uploads a
                 // file on the far side, where `RegisterFont` only opens one.
                 try await compositor.registerImage(
-                    path: path, maxPixelSize: maxPixelSize
+                    path: path, maxPixelSize: maxPixelSize, turn: turn.wireTurn
                 )
             }
         } catch {
@@ -268,6 +272,24 @@ public final class CompositorResources: GPUResourceHost, @unchecked Sendable {
     // round trip that touches nothing local, so a worker thread and a hop back
     // to the main queue is the whole of it. The local host overrides that
     // because its decode and its upload belong on different threads.
+}
+
+/// The wire's word for a turn.
+///
+/// Two enums with the same four cases rather than one shared type, because the
+/// IDL owns what crosses the connection and `LavaUI` owns what an app can ask
+/// for — and an app that is not a compositor client has no IDL at all. They
+/// agree today, and a `rawValue` cast would work today; that is exactly the
+/// kind of agreement that stops being true without anything failing to build.
+extension LavaUI.ImageTurn {
+    var wireTurn: LavaIDL.ImageTurn {
+        switch self {
+        case .none: .none
+        case .clockwise: .clockwise
+        case .half: .half
+        case .anticlockwise: .anticlockwise
+        }
+    }
 }
 
 /// The app's end of `SubscribeInput`: an async stream on one side, a frame

@@ -651,12 +651,39 @@ class MenuBroker {
 ///
 /// A file that cannot be stat'd keeps the bare key. There is nothing to
 /// version, and the decode below is about to fail and raise `ImageNotFound`.
-std::string image_key(const std::string &path, uint32_t maxPixelSize) {
+/// The wire's word for a turn, in the engine's.
+///
+/// Two enums with the same four cases rather than one shared type, because the
+/// IDL owns what crosses the connection and the engine owns what it can do to
+/// a buffer; they are the same today and a `static_cast` would work today, and
+/// that is exactly the kind of agreement that stops being true silently.
+canvas::ImageTurn asEngineTurn(ImageTurn turn) {
+  switch (turn) {
+    case ImageTurn::clockwise: return canvas::ImageTurn::clockwise;
+    case ImageTurn::half: return canvas::ImageTurn::half;
+    case ImageTurn::anticlockwise: return canvas::ImageTurn::anticlockwise;
+    case ImageTurn::none: break;
+  }
+  return canvas::ImageTurn::none;
+}
+
+std::string image_key(const std::string &path, uint32_t maxPixelSize,
+                      canvas::ImageTurn turn) {
   // 0 is the native decode and adds no cap segment, so a caller that never
   // caps anything gets the path plus the version suffix and nothing else.
   std::string key = maxPixelSize == 0
                         ? path
                         : path + "@" + std::to_string(maxPixelSize);
+  // Likewise the turn: no segment when there is none, so every existing key
+  // spells the same as it did and two clients that both want a picture the
+  // right way up still share one texture. A turned one is a *different*
+  // texture, which is the whole reason this is in the name.
+  switch (turn) {
+    case canvas::ImageTurn::clockwise: key += "+90"; break;
+    case canvas::ImageTurn::half: key += "+180"; break;
+    case canvas::ImageTurn::anticlockwise: key += "+270"; break;
+    case canvas::ImageTurn::none: break;
+  }
   struct stat st {};
   if (::stat(path.c_str(), &st) != 0) return key;
   key += "#";
@@ -728,14 +755,16 @@ class CompositorImpl final : public ICompositor_Servant {
     return static_cast<uint32_t>(id);
   }
 
-  ImageInfo RegisterImage(nprpc::flat::Span<char> path,
-                          uint32_t maxPixelSize) override {
+  ImageInfo RegisterImage(nprpc::flat::Span<char> path, uint32_t maxPixelSize,
+                          ImageTurn turn) override {
     const std::string file{path};
-    const std::string key = image_key(file, maxPixelSize);
+    const canvas::ImageTurn quarter = asEngineTurn(turn);
+    const std::string key = image_key(file, maxPixelSize, quarter);
     if (const ImageInfo *known = sharedImage(key)) return *known;
 
     uint32_t width = 0, height = 0;
-    const int id = host_.registerImage(key, file, maxPixelSize, width, height);
+    const int id =
+        host_.registerImage(key, file, maxPixelSize, quarter, width, height);
     if (id <= 0) throw ImageNotFound(file);
     return keepImage(key, static_cast<uint32_t>(id), width, height);
   }

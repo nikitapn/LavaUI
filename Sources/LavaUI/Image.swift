@@ -128,15 +128,19 @@ public enum ImageStore {
         entry.lastUsedOrder = useCounter
     }
 
-    /// Cache identity for a file decoded at a given cap. `0` is the native
-    /// decode and keys on the bare path, so existing callers keep their key.
+    /// Cache identity for a file decoded at a given cap and turn. `0` and
+    /// `.none` add no segment, so existing callers keep their key and two
+    /// callers that both want a picture the right way up share one texture.
     ///
     /// Public because a `GPUResourceHost` outside this module has to stamp
     /// the same key into the `UIImage` it returns — this cache looks entries
     /// up by it, so a host that spelled it differently would register an
     /// image and then miss it on every subsequent frame.
-    public static func key(path: String, maxPixelSize: UInt32) -> String {
-        maxPixelSize == 0 ? path : "\(path)@\(maxPixelSize)"
+    public static func key(
+        path: String, maxPixelSize: UInt32, turn: ImageTurn = .none
+    ) -> String {
+        let capped = maxPixelSize == 0 ? path : "\(path)@\(maxPixelSize)"
+        return turn == .none ? capped : "\(capped)\(turn.keySuffix)"
     }
 
     /// Cache identity for bytes with no path: a hash of the content, so the
@@ -185,8 +189,10 @@ public enum ImageStore {
     /// or a file that will never arrive leaves a stale frame up for ever.
     /// Ask *before* calling `imageIfLoaded` — that call starts a new decode,
     /// after which the answer is trivially yes.
-    public static func isLoading(path: String, maxPixelSize: UInt32 = 0) -> Bool {
-        inFlight.contains(key(path: path, maxPixelSize: maxPixelSize))
+    public static func isLoading(
+        path: String, maxPixelSize: UInt32 = 0, turn: ImageTurn = .none
+    ) -> Bool {
+        inFlight.contains(key(path: path, maxPixelSize: maxPixelSize, turn: turn))
     }
 
     /// Cached image, or nil while it loads.
@@ -323,6 +329,39 @@ public enum ImageStore {
     public static func clearCache() {
         cache.removeAll(keepingCapacity: true)
         residentBytes = 0
+    }
+}
+
+// MARK: - Turning
+
+/// A quarter turn applied to an image as it is decoded.
+///
+/// Clockwise, and a direction rather than an angle because that is what the
+/// two buttons on a viewer's bar mean.
+///
+/// It belongs to the *decode*, not to the drawing, and that is the whole
+/// reason it exists as a parameter: a compositor client has no GPU and no
+/// codec, so a picture it turned itself would have to be encoded, sent through
+/// shared memory and decoded again — a second copy of every picture and
+/// seconds of work for a large one. Asking the thing that is already decoding
+/// costs one pass over a buffer that is already there.
+///
+/// Part of a texture's identity, like `maxPixelSize`: the same photograph
+/// upright and turned is two textures.
+public enum ImageTurn: UInt32, Equatable, Sendable, CaseIterable {
+    case none = 0
+    case clockwise = 1
+    case half = 2
+    case anticlockwise = 3
+
+    /// What this adds to a cache key. Nothing at all when there is no turn.
+    var keySuffix: String {
+        switch self {
+        case .none: ""
+        case .clockwise: "+90"
+        case .half: "+180"
+        case .anticlockwise: "+270"
+        }
     }
 }
 

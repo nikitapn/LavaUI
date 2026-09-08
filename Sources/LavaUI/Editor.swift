@@ -375,11 +375,22 @@ public final class Editor: @unchecked Sendable {
     /// `maxPixelSize` (0 = native) caps the longer edge. Returned `width` and
     /// `height` are the size after any downscale, so the caller sizes its
     /// texture from these rather than from what the file claimed.
+    ///
+    /// `turn` is applied after the orientation the file itself declares — the
+    /// decoder always applies that one — so it composes with what is on screen
+    /// rather than with how the sensor read out. It is done here and not by
+    /// the caller so that there is one implementation of turning pixels in the
+    /// whole system: a viewer that turned a photograph one way on screen and
+    /// another way into the file it wrote would be wrong in the way nobody
+    /// notices until the file is saved.
     public nonisolated static func decodeImage(
         path: String,
-        maxPixelSize: UInt32 = 0
+        maxPixelSize: UInt32 = 0,
+        turn: ImageTurn = .none
     ) -> (pixels: [UInt8], width: UInt32, height: UInt32)? {
-        let decoded = canvas.Engine.decodeImage(std.string(path), maxPixelSize)
+        let decoded = canvas.Engine.decodeImage(
+            std.string(path), maxPixelSize, turn.engineTurn
+        )
         guard decoded.valid() else { return nil }
         return (Self.copyOut(decoded), decoded.width, decoded.height)
     }
@@ -968,4 +979,20 @@ public struct WindowID: Hashable, Sendable {
     /// The window an app opens with, and what every `window:` parameter
     /// defaults to.
     public static let main = WindowID(raw: 0)
+}
+
+/// The engine's word for a turn.
+///
+/// Here rather than beside `ImageTurn` itself because this is the file that
+/// knows what a `canvas` is: the enum is the framework's vocabulary and has to
+/// mean something to a caller whether or not the engine is in the picture.
+extension ImageTurn {
+    var engineTurn: canvas.ImageTurn {
+        switch self {
+        case .none: canvas.ImageTurn.none
+        case .clockwise: canvas.ImageTurn.clockwise
+        case .half: canvas.ImageTurn.half
+        case .anticlockwise: canvas.ImageTurn.anticlockwise
+        }
+    }
 }

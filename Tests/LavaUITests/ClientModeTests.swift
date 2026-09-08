@@ -230,11 +230,15 @@ final class ClientModeTests: XCTestCase {
             return Self.fontID
         }
 
-        func registerImage(path: String, maxPixelSize: UInt32) -> UIImage? {
+        func registerImage(
+            path: String, maxPixelSize: UInt32, turn: ImageTurn
+        ) -> UIImage? {
             imageAsks.append((path, maxPixelSize))
             return UIImage(
                 path: path,
-                cacheKey: ImageStore.key(path: path, maxPixelSize: maxPixelSize),
+                cacheKey: ImageStore.key(
+                    path: path, maxPixelSize: maxPixelSize, turn: turn
+                ),
                 textureId: Self.textureID, pixelWidth: 64, pixelHeight: 48
             )
         }

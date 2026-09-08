@@ -82,9 +82,14 @@ class CanvasRenderer {
   ///
   /// Device-wide for the same reason fonts are: two clients naming the same
   /// asset share one texture, and neither had to send it.
+  ///
+  /// `turn` is a quarter turn the client asked for, applied on top of the one
+  /// the file itself declares. It is done here because the client cannot: it
+  /// has no GPU and no codec, so turning a picture on that side means encoding
+  /// it, sending it back through `RegisterImageData` and decoding it twice.
   int registerImage(const std::string &key, const std::string &path,
-                    uint32_t maxPixelSize, uint32_t &outWidth,
-                    uint32_t &outHeight);
+                    uint32_t maxPixelSize, canvas::ImageTurn turn,
+                    uint32_t &outWidth, uint32_t &outHeight);
 
   /// The same, from encoded bytes that never had a file to be opened from.
   int registerImageData(const std::string &key, const uint8_t *bytes,

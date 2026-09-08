@@ -92,3 +92,20 @@ public struct SaveTarget: Equatable, Sendable {
         return "Overwrite \(name)?"
     }
 }
+
+/// Whether any pixel is not fully opaque.
+///
+/// Asked before saving: JPEG has no alpha channel, so an image that uses one
+/// must not be written as a JPEG whatever its extension says, or the
+/// transparent parts come back black. On `SaveTarget` because that is the only
+/// decision it informs.
+extension SaveTarget {
+    public static func hasTransparency(pixels: [UInt8]) -> Bool {
+        var i = 3
+        while i < pixels.count {
+            if pixels[i] != 255 { return true }
+            i += 4
+        }
+        return false
+    }
+}

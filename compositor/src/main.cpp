@@ -2799,12 +2799,12 @@ class SurfaceRegistry : public lava::CompositorHost {
   }
 
   int registerImage(const std::string &key, const std::string &path,
-                    uint32_t maxPixelSize, uint32_t &outWidth,
-                    uint32_t &outHeight) override {
+                    uint32_t maxPixelSize, canvas::ImageTurn turn,
+                    uint32_t &outWidth, uint32_t &outHeight) override {
     // Straight to the device for the same reason a font is: the texture cache
     // is device-wide, so an asset one client names is already resident for the
     // next, and the id means the same thing to both.
-    return renderer_ ? renderer_->registerImage(key, path, maxPixelSize,
+    return renderer_ ? renderer_->registerImage(key, path, maxPixelSize, turn,
                                                 outWidth, outHeight)
                      : -1;
   }

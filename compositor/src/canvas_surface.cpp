@@ -218,8 +218,8 @@ int upload_decoded(canvas::Engine &engine, const std::string &key,
 
 int CanvasRenderer::registerImage(const std::string &key,
                                   const std::string &path,
-                                  uint32_t maxPixelSize, uint32_t &outWidth,
-                                  uint32_t &outHeight) {
+                                  uint32_t maxPixelSize, canvas::ImageTurn turn,
+                                  uint32_t &outWidth, uint32_t &outHeight) {
   // Already resident — including dormant, which reuses the id and the pixels
   // already on the GPU — so skip the decode entirely.
   if (const int id = engine_.reviveTexture(key, outWidth, outHeight); id > 0)
@@ -229,7 +229,7 @@ int CanvasRenderer::registerImage(const std::string &key,
   // decides whether it fits a cell, and already has the codec. A client that
   // sent pixels would have to have all three.
   return upload_decoded(engine_, key,
-                        canvas::Engine::decodeImage(path, maxPixelSize),
+                        canvas::Engine::decodeImage(path, maxPixelSize, turn),
                         outWidth, outHeight);
 }
 

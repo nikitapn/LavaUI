@@ -6,6 +6,7 @@
 #include <string>
 #include <vector>
 
+#include "render/exif.hpp"
 #include "render/gpu_report.hpp"
 
 struct wl_event_loop;
@@ -52,8 +53,8 @@ struct CompositorHost {
   /// `releaseImage` is given — and `outWidth`/`outHeight` come back as the
   /// *decoded* size, which `maxPixelSize` changes.
   virtual int registerImage(const std::string &key, const std::string &path,
-                            uint32_t maxPixelSize, uint32_t &outWidth,
-                            uint32_t &outHeight) = 0;
+                            uint32_t maxPixelSize, canvas::ImageTurn turn,
+                            uint32_t &outWidth, uint32_t &outHeight) = 0;
 
   /// The same, from encoded bytes (PNG, JPEG, …) rather than a path.
   virtual int registerImageData(const std::string &key, const uint8_t *bytes,

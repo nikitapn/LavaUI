@@ -4,11 +4,12 @@
 // wrote, so what it has to do above all is not read past the buffer — every
 // case here is also run against every truncation of itself, which is the cheap
 // version of a fuzzer and has found more than one off-by-one in code shaped
-// like this. The turn is arithmetic with eight cases and no I/O, so it is
-// checked the way `PixelRotate` is: against a picture small enough to write
-// out by hand, and against the fact that these transforms form a group — a
-// quarter turn four times is where it started, and five of the eight are their
-// own inverse.
+// like this. The turn is arithmetic with eight cases and no I/O, and it is the
+// only implementation of turning pixels in the tree — what a viewer draws and
+// what it saves both come through here — so it is checked against a picture
+// small enough to write out by hand, and against the fact that these
+// transforms form a group: a quarter turn four times is where it started, and
+// five of the eight are their own inverse.
 //
 // No Vulkan, no stb, no file beyond one temporary: an image's metadata is
 // bytes, and a test about it should run anywhere.

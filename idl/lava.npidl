@@ -42,6 +42,24 @@ exception ArenaNotFound {
   arenaId: string;
 }
 
+/// A quarter turn applied to an image as it is decoded.
+///
+/// Clockwise, and stated as a direction rather than an angle because that is
+/// what the two buttons on a viewer's bar mean and there is nothing else this
+/// is for. It is applied *after* the orientation the file itself declares, so
+/// it composes with what the user is already looking at rather than with how
+/// the sensor happened to read out — see `render/exif.hpp`.
+///
+/// Part of a texture's identity, like `maxPixelSize`: the same photograph
+/// upright and turned is two textures, and a client that asks for one must not
+/// be handed the other.
+enum ImageTurn: u32 {
+  none,
+  clockwise,
+  half,
+  anticlockwise,
+};
+
 /// Which screen edge a panel is docked to.
 ///
 /// A panel does not choose where it is, only which side it is on: the
@@ -909,7 +927,15 @@ interface Compositor {
   /// below; a client with a file should still use this one, so that two
   /// clients naming the same asset share a texture without either one having
   /// to send it.
-  ImageInfo RegisterImage(path: in string, maxPixelSize: in u32)
+  /// `turn` is the one operation a client cannot do for itself. It has no GPU
+  /// and, by the paragraph above, no codec — so a client that wanted a
+  /// photograph a quarter turn round would have to decode it, turn the pixels,
+  /// re-encode them and send the result back through `RegisterImageData`: a
+  /// second copy of every picture, seconds of work for a large one, and the
+  /// renderer decoding it twice. The turn is a pass over a buffer that is
+  /// already here, so it happens here.
+  ImageInfo RegisterImage(path: in string, maxPixelSize: in u32,
+                          turn: in ImageTurn)
       raises(ImageNotFound);
 
   /// Registers an image from **encoded bytes** — a PNG or JPEG that was
@@ -931,6 +957,10 @@ interface Compositor {
   /// the renderer open it — so an asset that exists on disk should still go
   /// the other way, and this one is for the image that has nowhere to be
   /// opened from.
+  ///
+  /// No `turn` here, unlike its sibling, and not for a reason of principle:
+  /// nothing has ever wanted one. Add it when something does rather than ship
+  /// a second path through the decoder that no caller exercises.
   ImageInfo RegisterImageData(bytes: in vector<u8>, maxPixelSize: in u32)
       raises(ImageNotFound);
 
