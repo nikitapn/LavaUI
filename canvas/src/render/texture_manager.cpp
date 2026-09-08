@@ -5,6 +5,7 @@
 #include <utility>
 #include <vector>
 
+#include "render/exif.hpp"
 #include "render/imported_dmabuf.hpp"
 #include "render/render_device.hpp"
 #include "render/texture_manager.hpp"
@@ -578,6 +579,23 @@ TextureHandle TextureManager::loadTexture(const std::string& path) {
     if (!pixels) {
         std::cerr << "Failed to load texture: " << path << "\n";
         return {VK_NULL_HANDLE, 0};
+    }
+
+    // The way up the file says it is, before anything measures it: the atlas
+    // decides whether this fits a cell from these dimensions, and a portrait
+    // photograph that arrives claiming to be landscape is asking the wrong
+    // question. `orientedCopy` allocates the way stb does, so the buffer below
+    // is still freed the same way.
+    if (const canvas::ExifOrientation turn = canvas::readExifOrientation(path);
+        !canvas::isIdentity(turn)) {
+        int turnedW = 0, turnedH = 0;
+        if (stbi_uc* turned = canvas::orientedCopy(pixels, texWidth, texHeight,
+                                                   turn, turnedW, turnedH)) {
+            stbi_image_free(pixels);
+            pixels = turned;
+            texWidth = turnedW;
+            texHeight = turnedH;
+        }
     }
 
     // Small enough to pack? A wall of covers then costs one descriptor bind

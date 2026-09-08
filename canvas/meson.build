@@ -16,6 +16,7 @@ canvas_engine_sources = files(
   'src/menu/status_notifier.cpp',
   'src/render/blur_pass.cpp',
   'src/render/dmabuf_image.cpp',
+  'src/render/exif.cpp',
   'src/render/imported_dmabuf.cpp',
   'src/render/font.cpp',
   'src/render/font_key.cpp',
@@ -112,3 +113,11 @@ font_digest_test = executable(
   build_by_default: false,
 )
 test('font digest', font_digest_test)
+
+exif_test = executable(
+  'exif_test',
+  ['tests/exif_test.cpp', 'src/render/exif.cpp'],
+  include_directories: canvas_includes,
+  build_by_default: false,
+)
+test('exif', exif_test)

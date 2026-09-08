@@ -130,6 +130,15 @@ Consequences that surprise people:
   texture rather than nothing. Keep images atlasable: `ImageAtlas` refuses
   anything wider than one 256px cell, so pass `decodePixels`/`maxPixelSize`
   whenever the box is a percentage rather than a point size.
+- **The decoder applies the file's EXIF orientation** and the caller never
+  sees the untouched pixels (`render/exif.cpp`, from `Engine::decodeImage`,
+  `Engine::decodeImageData` and `TextureManager::loadTexture`). A photograph
+  off a phone is stored the way the sensor read it out and carries which way up
+  it belongs as a tag, so a decode that skipped this would return a picture on
+  its side — the width and height too, which is what the atlas and every
+  `1:1` readout are computed from. All eight orientations, mirrors included.
+  It costs one 128 KiB read of the file's head per decode, and nothing for the
+  overwhelming majority of files, which declare nothing.
 - **`ImageStore.imageIfLoaded` answers nil to two different questions** — the
   decode is still running, and the decode came back with nothing — and starts
   the work over each time it is asked. `ImageStore.isLoading` separates them,
@@ -336,11 +345,12 @@ SwiftPM. Scripts under `compositor/scripts/` (`dev-run`, `start-lava-compositor`
 optional QEMU VM).
 
 `meson test -C build` runs the C++ tests under `canvas/tests/`. They cover the
-parts that can be tested without a GPU or a screen — today the draw arena's
-handoff and growth protocol, whose consumer once unmapped a generation a frame
-was still being drawn out of. A test there is compiled from the sources it
-exercises rather than linked against `libcanvas`, so it stays runnable
-anywhere.
+parts that can be tested without a GPU or a screen — the draw arena's handoff
+and growth protocol, whose consumer once unmapped a generation a frame was
+still being drawn out of; the font digest memo; and the EXIF reader, which
+walks offsets a stranger wrote and is therefore run against every truncation of
+every file it is given. A test there is compiled from the sources it exercises
+rather than linked against `libcanvas`, so it stays runnable anywhere.
 
 ### Two ways the incremental build will lie to you
 

@@ -61,8 +61,11 @@ an image that decoded and was then evicted looks identical from here.
 
 ## Known limitations today
 
-- **EXIF orientation is ignored**, so a phone photograph tagged sideways opens
-  sideways. See below; this is a bug wearing a feature's clothes.
+- **Saving drops every other tag.** The JPEG encoder writes no metadata at
+  all, so a photograph that is rotated and saved comes back without its camera,
+  lens, date or coordinates. That is also why the orientation tag needs no
+  clearing — there is no tag in the output to disagree with the pixels — but it
+  is a real loss and the reason a rotate asks before it overwrites.
 - **Animated GIFs show frame one.** `stbi_load` decodes the first frame and
   stops.
 - **Decode is capped at 8192px on the long edge** (`ViewerSession
@@ -72,43 +75,59 @@ an image that decoded and was then evicted looks identical from here.
   bar marks the size with `~`. Saving is unaffected — it re-decodes at native
   size.
 
+## EXIF orientation, and why it is not in this app
+
+A photograph off a phone carries which way up it is as a tag rather than in its
+pixels, and roughly every phone writes one. Ignoring it meant the most common
+source of images on the machine opened sideways, and the user "fixed" it with
+the rotate button — re-encoding a file to correct something that was never
+wrong.
+
+It is fixed in the **decoder** (`canvas/src/render/exif.{hpp,cpp}`, applied in
+`Engine::decodeImage` and `TextureManager::loadTexture`), not here, and that
+placement is the whole design. The roadmap that planned this had it in
+`LavaViewCore` with `PixelRotate` doing the turn, which would have worked
+windowed and been unusable as a compositor client: the app has no GPU there, so
+a turned picture reaches the screen by being PNG-encoded, sent through shared
+memory and decoded again — seconds of that per photograph, and a second copy of
+every picture held in the app besides. Decoding is already the compositor's
+job, and a decoder that ignores the file's own orientation is not missing a
+feature, it is returning the wrong pixels.
+
+What that buys, beyond speed: the app needs no code at all. The read-ahead, the
+cache budget and the byte accounting all go on describing the picture that is
+actually shown; `1:1` and the pixel size in the bar are the picture's, not the
+sensor's; and every other app that loads a JPEG got the same fix for free. All
+eight orientations are handled, including the four mirrored ones that a quarter
+turn cannot express — a gather loop does not care which of the eight it is
+walking, so refusing them, as the plan had it, would have been more code than
+supporting them.
+
+The turn stays **display-only**: nothing writes the file until the user asks.
+Saving after a manual rotate bakes the total — the file's own turn and the
+user's — into the pixels, and the output carries no EXIF at all, so nothing
+downstream turns it a second time.
+
 ## Next, in the order I would do them
 
-### 1. EXIF orientation — correctness, not a feature
+### 1. EXIF panel
 
-A photograph off a phone carries its orientation as a tag rather than in its
-pixels, and roughly every phone writes one. Ignoring it means the single most
-common source of images on the machine opens wrong, and the user "fixes" it
-with the rotate button — writing a re-encoded file to correct something that
-was never wrong.
+Camera, lens, exposure, aperture, ISO, focal length, when it was taken. A side
+panel toggled by `I`, or the bar growing a second row — not a dialog, and not a
+mode.
 
-Cheap, because the hard half exists: `Rotation` and `PixelRotate` already turn
-pixels, and orientations 1/3/6/8 are exactly the quarter turns they implement.
-What is missing is a reader — stb parses no metadata at all. A JPEG APP1
-segment is a TIFF header and a tag list; the orientation tag alone is well under
-a hundred lines of pure Swift, belongs in `LavaViewCore`, and is testable
-against a handful of recorded headers with no GPU and no files.
-
-Two decisions to make deliberately, not by accident:
-
-- The turn is **display-only** until saved, exactly like a manual rotate. A
-  viewer that silently rewrites every photograph it opens is malware with good
-  intentions.
-- Orientations 2/4/5/7 are mirrored, which `PixelRotate` cannot express. Either
-  add a flip or refuse them; refusing is honest and they are vanishingly rare.
-
-### 2. EXIF panel
-
-The same parser, more tags: camera, lens, exposure, aperture, ISO, focal
-length, when it was taken. A side panel toggled by `I`, or the bar growing a
-second row — not a dialog, and not a mode.
+The IFD walk in `canvas/src/render/exif.cpp` is most of a reader already, but
+this one belongs on *this* side of the line rather than in the decoder: an
+orientation changes the pixels a decoder must return, and a lens name does not.
+It is a reader in `LavaViewCore`, tested the way the roadmap originally
+described — pure Swift, recorded headers, no GPU and no files.
 
 The trap is scope: EXIF has hundreds of tags and a maker-note swamp, and the
 answer is a fixed list of the dozen anybody reads. GPS is the one judgement
 call — showing coordinates is useful, resolving them to a place name is a
 network request an image viewer should not be making.
 
-### 3. Resize and save
+### 2. Resize and save
 
 The cheapest of the three obvious ones, because the write path is already
 built: decode native, transform, encode, atomic rename, with `SaveTarget`
@@ -127,7 +146,7 @@ already reports drag gestures, so the missing part is a rubber-band rectangle
 and the arithmetic to map it back to source pixels — which belongs in
 `LavaViewCore` next to `ViewportMath`, for the same reason that is there.
 
-### 4. Animated GIF
+### 3. Animated GIF
 
 No new dependency: `stbi_load_gif_from_memory` returns every frame and a delay
 array in one call. The work is that the pipeline assumes one texture per path,
@@ -143,7 +162,7 @@ decoded pixels and fall back to frame one past it; or add a call that registers
 a whole strip at once. The second is an IDL change — method indices are
 positional, so both stubs regenerate together.
 
-Worth being honest that this is the largest of the four and the one a viewer
+Worth being honest that this is the largest of the three and the one a viewer
 can most defensibly not have.
 
 ## Cheap things that punch above their cost

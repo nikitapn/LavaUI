@@ -8,6 +8,7 @@
 #include "menu/menu_import.hpp"
 #include "menu/notification.hpp"
 #include "menu/status_notifier.hpp"
+#include "render/exif.hpp"
 #include "render/font_key.hpp"
 #include "render/png_encode.hpp"
 #include "render/svg_image.hpp"
@@ -641,12 +642,14 @@ void Engine::unloadTexture(const std::string &path)
 namespace {
 
 /// Everything `decodeImage` does after stb has handed back RGBA8: the cap, the
-/// sRGB-correct downscale, and taking ownership of the buffer.
+/// sRGB-correct downscale, the turn the file asked for, and taking ownership
+/// of the buffer.
 ///
 /// Shared by the file and the memory entry points because the two differ in
 /// exactly one call — which file to open versus which bytes to read — and
 /// nothing after it. Takes ownership of `pixels` either way.
-DecodedImage finishDecode(stbi_uc *pixels, int w, int h, uint32_t maxPixelSize)
+DecodedImage finishDecode(stbi_uc *pixels, int w, int h, uint32_t maxPixelSize,
+                          ExifOrientation orientation)
 {
   DecodedImage out;
   if (pixels == nullptr || w <= 0 || h <= 0) {
@@ -662,6 +665,7 @@ DecodedImage finishDecode(stbi_uc *pixels, int w, int h, uint32_t maxPixelSize)
     stbi_image_free(p);
   };
 
+  bool resized = false;
   const uint32_t longEdge = static_cast<uint32_t>(w > h ? w : h);
   if (maxPixelSize > 0 && longEdge > maxPixelSize) {
     const double scale = static_cast<double>(maxPixelSize) / longEdge;
@@ -686,13 +690,19 @@ DecodedImage finishDecode(stbi_uc *pixels, int w, int h, uint32_t maxPixelSize)
     if (scaled != nullptr) {
       stbi_image_free(pixels);
       adopt(scaled, dw, dh);
-      return out;
+      resized = true;
     }
     // Resize failed (allocation): fall through with the full-size decode
     // rather than dropping the image.
   }
 
-  adopt(pixels, w, h);
+  if (!resized) adopt(pixels, w, h);
+
+  // Last, and after the downscale rather than before it. The result is the
+  // same either way — a quarter turn does not change which edge is longer, so
+  // the cap lands on the same number — and this way the turn moves the smaller
+  // buffer. See `render/exif.hpp` for why a decoder does this at all.
+  applyExifOrientation(out.pixels, out.width, out.height, orientation);
   return out;
 }
 
@@ -716,7 +726,7 @@ DecodedImage Engine::decodeImage(const std::string &path, uint32_t maxPixelSize)
   // stbi_load is reentrant and touches no shared state, which is what makes
   // this callable off the device thread.
   stbi_uc *pixels = stbi_load(path.c_str(), &w, &h, &channels, 4);
-  return finishDecode(pixels, w, h, maxPixelSize);
+  return finishDecode(pixels, w, h, maxPixelSize, readExifOrientation(path));
 }
 
 DecodedImage Engine::decodeImageData(const uint8_t *bytes, size_t byteCount,
@@ -731,7 +741,8 @@ DecodedImage Engine::decodeImageData(const uint8_t *bytes, size_t byteCount,
   // untrusted *file* already went through, which is the honest baseline.
   stbi_uc *pixels = stbi_load_from_memory(
     bytes, static_cast<int>(byteCount), &w, &h, &channels, 4);
-  return finishDecode(pixels, w, h, maxPixelSize);
+  return finishDecode(pixels, w, h, maxPixelSize,
+                      readExifOrientation(bytes, byteCount));
 }
 
 DecodedImage Engine::encodeRgbaPng(const uint8_t *rgba, uint32_t width,

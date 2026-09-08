@@ -38,6 +38,7 @@ let engineSources: [String] = [
     "menu/status_notifier.cpp",
     "render/blur_pass.cpp",
     "render/dmabuf_image.cpp",
+    "render/exif.cpp",
     "render/imported_dmabuf.cpp",
     "render/font.cpp",
     "render/font_key.cpp",
