@@ -17,6 +17,21 @@ struct ViewerView: View {
     /// with exactly one keyboard target, which is what `setDefault` is for.
     private let keyTarget = NodeID.generate()
 
+    /// How long a picture may take to arrive before the window admits it.
+    ///
+    /// The picture on screen is held meanwhile — see `ViewerSession.awaiting`
+    /// — so this is only about whether to *say* anything, and the answer for a
+    /// step that hits the cache must be no. A prefetched neighbour lands in
+    /// the same frame the user pressed Next, and a notice that appeared and
+    /// vanished within one frame would be the flicker this all exists to
+    /// remove, wearing different clothes.
+    private static let arrivalGrace: Double = 0.18
+    /// How often to look again while waiting. A decode lands on a worker and
+    /// wakes the loop itself; a decode that *fails* lands nowhere at all, so
+    /// the only thing that will ever notice is a frame that comes back and
+    /// asks — see `ViewerSession.resolveTexture`.
+    private static let arrivalPoll: Double = 0.25
+
     var body: some View {
         // Re-asserted every body pass rather than once at mount, for the
         // reason the terminal does the same: the alternative is a lifecycle
@@ -105,6 +120,18 @@ struct ViewerView: View {
         // living uses a near-black mat.
         list.rect(x: frame.x, y: frame.y, w: frame.w, h: frame.h, color: Palette.mat)
 
+        // The loop parks until something wakes it, and a picture arriving on a
+        // worker is not always that something, so ask for the frame that will
+        // notice. Before the guard below, because the first picture of all has
+        // nothing to hold and takes the other branch.
+        if let waited = session.awaitingFor {
+            FrameScheduler.requestRedraw(
+                in: waited < Self.arrivalGrace
+                    ? Self.arrivalGrace - waited
+                    : Self.arrivalPoll
+            )
+        }
+
         guard let image = session.resolveTexture() else {
             centred(list, frame, text: waitingText, color: Theme.current.textDim)
             return
@@ -127,6 +154,41 @@ struct ViewerView: View {
         // opaque photograph and showed through every transparent PNG.
         list.strokedRect(x: x - 1, y: y - 1, w: w + 2, h: h + 2, color: Palette.edge)
         list.popClip()
+        arrivalNotice(list, frame)
+    }
+
+    /// Says that the next picture is still coming, over the one that is still
+    /// up.
+    ///
+    /// The alternative — clearing to the mat and centring "Opening…" — is what
+    /// this replaced: stepping through a folder of large photographs flashed
+    /// black between every pair of them, and the flash was longer the bigger
+    /// the picture, which is backwards. A chip along the bottom after
+    /// `arrivalGrace` says the same thing and throws nothing away to say it.
+    private func arrivalNotice(_ list: DrawList, _ frame: CanvasFrame) {
+        guard let waited = session.awaitingFor, waited >= Self.arrivalGrace,
+              let font = Environment.current.font ?? FontStore.default
+        else { return }
+
+        let label = "Opening \(session.awaitingName)…"
+        let size = font.measure(label)
+        let padX: Float = 12
+        let padY: Float = 6
+        let w = size.width + padX * 2
+        let h = font.lineHeight + padY * 2
+        // Bottom centre: the eye is already at the bottom of the window,
+        // where the button that started this is, and the middle of a picture
+        // is the part being looked at.
+        let x = (frame.x + (frame.w - w) / 2).rounded()
+        let y = (frame.y + frame.h - h - 14).rounded()
+        guard w <= frame.w, h <= frame.h else { return }
+
+        list.roundedRect(x: x, y: y, w: w, h: h, color: Palette.notice, radius: h / 2)
+        list.text(
+            label,
+            x: x + padX - 4, y: y + padY, w: size.width + 8, h: font.lineHeight,
+            color: Theme.current.textPrimary, font: font
+        )
     }
 
     /// The grey chequer every image editor puts behind transparency.
@@ -277,4 +339,7 @@ enum Palette {
     static let checkerLight = Color(r: 0.29, g: 0.29, b: 0.31)
     static let checkerDark = Color(r: 0.22, g: 0.22, b: 0.24)
     static let warning = Color(r: 0.95, g: 0.55, b: 0.35)
+    /// The chip that says a picture is on its way. Translucent, because it
+    /// sits over the previous picture and is not a replacement for it.
+    static let notice = Color(r: 0.05, g: 0.05, b: 0.06, a: 0.82)
 }

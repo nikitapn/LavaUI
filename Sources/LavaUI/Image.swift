@@ -177,6 +177,18 @@ public enum ImageStore {
         return img
     }
 
+    /// Whether a decode for this file is running right now.
+    ///
+    /// The one thing `imageIfLoaded`'s nil does not distinguish: still on its
+    /// way, or asked for and come back empty. A caller that keeps the previous
+    /// picture on screen while the next one decodes has to tell those apart,
+    /// or a file that will never arrive leaves a stale frame up for ever.
+    /// Ask *before* calling `imageIfLoaded` — that call starts a new decode,
+    /// after which the answer is trivially yes.
+    public static func isLoading(path: String, maxPixelSize: UInt32 = 0) -> Bool {
+        inFlight.contains(key(path: path, maxPixelSize: maxPixelSize))
+    }
+
     /// Cached image, or nil while it loads.
     ///
     /// Returns nil the first time and decodes on a worker; when the pixels

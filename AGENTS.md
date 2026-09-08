@@ -130,6 +130,17 @@ Consequences that surprise people:
   texture rather than nothing. Keep images atlasable: `ImageAtlas` refuses
   anything wider than one 256px cell, so pass `decodePixels`/`maxPixelSize`
   whenever the box is a percentage rather than a point size.
+- **`ImageStore.imageIfLoaded` answers nil to two different questions** — the
+  decode is still running, and the decode came back with nothing — and starts
+  the work over each time it is asked. `ImageStore.isLoading` separates them,
+  asked *before* the call that would make the answer yes either way. Nothing
+  reports a load failure on its own, so an app that must eventually say "this
+  file will not open" has to notice the difference itself. Count empty answers
+  rather than believing the first: the cache also evicts under
+  `budgetBytes`, and an image that decoded and was then evicted is
+  indistinguishable from one that never decoded. That budget is sized for many
+  small images (256 MB is hundreds of icons, or two 24-megapixel photographs);
+  an app that holds a few large ones raises it — `LavaView` does.
 - **Backdrop blur captures this surface's own framebuffer**
   (`RenderDevice::resolveImage`), never the desktop. A client cannot frost what
   is behind its window; that would need a compositor-side effect.

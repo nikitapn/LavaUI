@@ -32,6 +32,33 @@ beside and rename over — never through the display copy, which is capped. And
 anything destructive asks first, in a bar under the title, the way the
 overwrite confirmation already does.
 
+## Walking the folder without a flash
+
+Two things keep stepping through a folder from strobing, and both are load-
+bearing rather than polish:
+
+- **The neighbours are decoded ahead**, from `ViewerSession.adopt` — the moment
+  a picture lands, not the moment one is asked for, which is a frame too early
+  to know whether it landed. Only when the picture and both its neighbours fit
+  in `ImageStore.budgetBytes` together, or the read-ahead evicts the picture on
+  screen to make room for one nobody is looking at yet. The app raises that
+  budget at start-up: the default is sized for many small images, and one
+  24-megapixel photograph is 96 MB.
+- **The outgoing picture stays up** until the incoming one is decoded
+  (`ViewerSession.awaiting`). Nothing is cleared at the step — texture, size,
+  zoom and offset all still describe what is on screen — and `adopt` swaps the
+  lot in one go, so no frame is ever half of one picture and half of another.
+  After a moment's grace a chip says which file is still coming; a step that
+  hits the read-ahead never shows it.
+
+The wait ends on a decode landing on a worker, which is not an event the loop
+wakes for by itself, so the canvas asks for the frame that will notice
+(`FrameScheduler.requestRedraw`). That same frame is what eventually calls a
+file unreadable: `ImageStore.imageIfLoaded` answers nil both while a decode is
+running and after one came back empty, and `ImageStore.isLoading` is what tells
+those apart. Not on the first empty answer, though — the cache also evicts, and
+an image that decoded and was then evicted looks identical from here.
+
 ## Known limitations today
 
 - **EXIF orientation is ignored**, so a phone photograph tagged sideways opens

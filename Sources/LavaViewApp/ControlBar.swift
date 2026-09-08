@@ -102,7 +102,12 @@ struct ControlBar: View {
         }
     }
 
-    private var canRotate: Bool { session.hasImage && !session.isBusy }
+    /// Not while the next picture is on its way: what is on screen is the
+    /// previous one, and the turn would land on the file the user has already
+    /// stepped to — a rotate you can see aimed at a picture you cannot.
+    private var canRotate: Bool {
+        session.hasImage && !session.isBusy && !session.isAwaiting
+    }
 
     private var separator: some View {
         Divider(.vertical)

@@ -45,6 +45,18 @@ final class ViewerSession: @unchecked Sendable {
     /// Set when the current file will not decode, so Next can step over it.
     private(set) var loadError: String?
 
+    /// The picture the user has moved to but which has not been decoded yet.
+    ///
+    /// While this is set, `texture` still holds the picture that was on screen
+    /// when they stepped, and the canvas goes on drawing it. Cycling through a
+    /// folder of large photographs otherwise blanked to the mat and back for
+    /// every one of them — a black flash between every pair of pictures, which
+    /// is the single worst thing a viewer can do to a folder of photographs.
+    ///
+    /// Observed, unlike the viewport fields below, because the bar reads it:
+    /// rotating the outgoing picture would apply the turn to the incoming one.
+    private(set) var awaiting: String?
+
     /// The turn applied to what is on screen, relative to the file as it was
     /// last read from disk.
     private(set) var rotation: Rotation = .none
@@ -88,11 +100,36 @@ final class ViewerSession: @unchecked Sendable {
     /// user has moved on must not install its result.
     @ObservationIgnored private var generation = 0
 
+    /// When the wait for `awaiting` began. The overlay that says a picture is
+    /// coming is held back for a moment on this, so a cached step — which is
+    /// most of them — shows nothing at all rather than a one-frame flicker.
+    @ObservationIgnored private var awaitingSince: Double = 0
+    /// Decodes started for the current picture that came back with nothing.
+    /// With `ImageStore.isLoading` this is what distinguishes "still coming"
+    /// from "came back empty": `imageIfLoaded` answers nil to both, and
+    /// silently starts the work over.
+    @ObservationIgnored private var emptyReturns = 0
+    /// How many of those before the file is called unreadable.
+    ///
+    /// More than one because an empty return is not proof: `ImageStore` also
+    /// evicts, and an image that decoded and was then evicted under budget
+    /// pressure looks from here exactly like one that never decoded. A file
+    /// that genuinely will not open fails again immediately, so three costs a
+    /// fraction of a second; a cache miss succeeds on the retry and resets
+    /// this to nothing.
+    private static let emptyReturnsBeforeGivingUp = 3
+
     @ObservationIgnored private unowned let editor: Editor
 
     init(editor: Editor, folder: ImageFolder) {
         self.editor = editor
         self.folder = folder
+        // The first picture is a wait like any other: arriving through the
+        // constructor rather than through `show` does not make it decoded, and
+        // the frame that notices a file which will not decode is scheduled off
+        // this.
+        self.awaiting = folder.current
+        self.awaitingSince = FrameScheduler.now()
     }
 
     // MARK: - Reading state
@@ -127,6 +164,16 @@ final class ViewerSession: @unchecked Sendable {
 
     var hasImage: Bool { texture != nil }
     var isBusy: Bool { status == .turning || status == .saving }
+    /// True while the picture on screen is the previous one.
+    var isAwaiting: Bool { awaiting != nil }
+    /// Name of the picture being waited for, for the overlay that says so.
+    var awaitingName: String {
+        (awaiting as NSString?)?.lastPathComponent ?? ""
+    }
+    /// How long that wait has lasted, or nil when nothing is pending.
+    var awaitingFor: Double? {
+        awaiting == nil ? nil : FrameScheduler.now() - awaitingSince
+    }
 
     /// "4032 × 3024", as drawn. Empty until something is on screen.
     ///
@@ -163,9 +210,9 @@ final class ViewerSession: @unchecked Sendable {
         return true
     }
 
-    /// Resolves the texture for this frame. Called from paint; returns nil
-    /// while a decode is in flight, which is the caller's cue to draw the
-    /// "opening" state rather than a hole.
+    /// Resolves the texture for this frame. Called from paint; nil only when
+    /// there is genuinely nothing to draw, which is the caller's cue to draw
+    /// the "opening" state rather than a hole.
     @discardableResult
     func resolveTexture() -> UIImage? {
         // A turned picture is its own upload, installed by the worker.
@@ -177,11 +224,36 @@ final class ViewerSession: @unchecked Sendable {
             adopt(ours)
             return ours
         }
-        guard let image = ImageStore.imageIfLoaded(
+
+        // Asked *before* `imageIfLoaded`, which starts a decode and would make
+        // the answer yes whatever the truth was a moment ago.
+        let wasDecoding = ImageStore.isLoading(
+            path: path, maxPixelSize: Self.displayDecodeSide
+        )
+        if let image = ImageStore.imageIfLoaded(
             path: path, maxPixelSize: Self.displayDecodeSide, into: editor
-        ) else { return nil }
-        adopt(image)
-        return image
+        ) {
+            adopt(image)
+            return image
+        }
+        // Not in the cache, and nothing was decoding it when we asked — so
+        // whatever we started last time came back with nothing. Counted rather
+        // than believed at once, for the reason on `emptyReturnsBeforeGivingUp`.
+        // Something has to count them: otherwise the picture being held stays
+        // up for ever in front of a file that will never arrive, and
+        // `skipUnreadable` — the way out — is never offered.
+        if !wasDecoding {
+            emptyReturns += 1
+            if emptyReturns > Self.emptyReturnsBeforeGivingUp {
+                reportUnreadable()
+                return nil
+            }
+        }
+
+        // Still coming. `texture` is the picture that was on screen when the
+        // user stepped, `displaySize` and the viewport still describe it, so
+        // everything drawn and reported this frame is about the same picture.
+        return texture
     }
 
     /// Installs a texture and, on a genuinely new picture, re-fits it.
@@ -196,9 +268,22 @@ final class ViewerSession: @unchecked Sendable {
         let size = PixelSize(width: image.pixelWidth, height: image.pixelHeight)
         let same = texture?.cacheKey == image.cacheKey && size == displaySize
         texture = image
-        guard !same else { return }
+        // The one being waited for has arrived. It lands fitted: a zoom set on
+        // the picture before it is not a statement about this one. Cleared
+        // only when it was set, because this runs during paint and an
+        // unconditional write to an observed field re-dirties the frame that
+        // is painting it.
+        let arrived = awaiting != nil
+        emptyReturns = 0
+        if arrived {
+            awaiting = nil
+            mode = .fit
+        }
+        guard !same || arrived else { return }
         displaySize = size
         recentre()
+        // Only now is it worth reading ahead — see `prefetchNeighbours`.
+        prefetchNeighbours()
         ViewInvalidation.markDirty()
     }
 
@@ -261,13 +346,15 @@ final class ViewerSession: @unchecked Sendable {
         // next one would silently rotate a folder of photographs one by one.
         rotation = .none
         hasUnsavedRotation = false
-        texture = nil
-        // Fit is the sane landing state for a picture whose size is not known
-        // yet; a free zoom from the previous one means nothing here.
-        mode = .fit
-        displaySize = PixelSize(width: 0, height: 0)
+        // `texture`, `displaySize`, `mode` and the viewport are deliberately
+        // left alone: they describe the picture still on screen, and it stays
+        // on screen until the new one is decoded. `adopt` replaces the lot in
+        // one go when that happens, so no frame is ever drawn from half of one
+        // picture and half of another.
+        awaiting = folder.current
+        awaitingSince = FrameScheduler.now()
+        emptyReturns = 0
         ViewInvalidation.markDirty()
-        prefetchNeighbours()
     }
 
     /// Decodes the pictures on either side once the current one has landed.
@@ -275,10 +362,29 @@ final class ViewerSession: @unchecked Sendable {
     /// The whole reason Next feels instant. `ImageStore`'s budget is what stops
     /// this growing without bound — an entry only goes when the cache is over
     /// it, and never on a frame it was drawn.
+    ///
+    /// Called from `adopt`, and that placement is the fix rather than a detail.
+    /// It used to be called from `show`, one frame *before* the picture it had
+    /// just asked for existed, and its "has the current one landed?" guard was
+    /// therefore false every time — the read-ahead ran only when the picture
+    /// was already cached, which is exactly when nobody needed it. Every step
+    /// through a folder decoded cold.
     private func prefetchNeighbours() {
         guard folder.count > 1 else { return }
+        // Only when this picture and both its neighbours fit in the cache at
+        // once. Past that the read-ahead is self-defeating and then some: the
+        // cache evicts to make room for what is being read ahead, and the
+        // first thing it lets go of is the picture on screen — which is then
+        // decoded again to draw the next frame, in front of a user who has not
+        // touched anything. A picture that large is one nobody steps through
+        // quickly anyway.
+        let bytes = Int(displaySize.width) * Int(displaySize.height) * 4
+        guard bytes * 3 <= ImageStore.budgetBytes else { return }
+        let token = generation
         FrameTasks.after { [weak self] in
-            guard let self, self.texture != nil else { return }
+            // The user may have stepped on while this waited for the frame to
+            // be presented; their neighbours are the ones worth having.
+            guard let self, token == self.generation else { return }
             for step in [1, -1] {
                 guard let path = self.folder.advanced(by: step).current,
                       self.writtenBack[path] == nil
@@ -296,6 +402,9 @@ final class ViewerSession: @unchecked Sendable {
     func reportUnreadable() {
         guard folder.current != nil, loadError == nil else { return }
         loadError = "\(currentName) could not be opened"
+        awaiting = nil
+        texture = nil
+        displaySize = PixelSize(width: 0, height: 0)
         ViewInvalidation.markDirty()
     }
 
@@ -375,7 +484,7 @@ final class ViewerSession: @unchecked Sendable {
     func rotateLeft() { turn(to: rotation.turnedLeft()) }
 
     private func turn(to next: Rotation) {
-        guard let path = folder.current, hasImage, !isBusy else { return }
+        guard let path = folder.current, hasImage, !isBusy, !isAwaiting else { return }
         rotation = next
         hasUnsavedRotation = next != .none
         notice = nil

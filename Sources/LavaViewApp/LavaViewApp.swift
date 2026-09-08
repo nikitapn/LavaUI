@@ -43,6 +43,17 @@ struct LavaViewApp {
         )
         Theme.current = .nebula
 
+        // Room for the picture on screen and the two either side of it.
+        //
+        // The default is sized for an app that shows many small images — a
+        // grid of covers, a row of icons — where 256 MB is hundreds of them.
+        // Here one 24-megapixel photograph is 96 MB, so three of them do not
+        // fit, and the cache would spend the whole session evicting the
+        // picture being looked at to make room for the one being read ahead.
+        // A viewer holds a handful of pictures at most; this is what that
+        // costs, and `ImageStore` still evicts down to it.
+        ImageStore.budgetBytes = 512 * 1024 * 1024
+
         let session = ViewerSession(
             editor: editor, folder: folder(from: CommandLine.arguments.dropFirst())
         )
