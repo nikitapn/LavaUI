@@ -118,6 +118,28 @@ that buffer holds one drop and the next overwrites it. What it copies into is
 a queue rather than a slot, so two quick drops are two drops; bounded at 16,
 so a client that never collects cannot grow the compositor.
 
+**Reopened and closed again, 2026-09-08.** That fix was against the compositor
+of the day, which hosted its windows in GLFW and got its paths from GLFW's drop
+callback. The wlroots compositor that replaced it never grew the other half:
+`TakeDroppedPaths` was `return {}`, so from the moment the desktop became a
+real compositor, dropping a file on a Lava window did nothing at all.
+
+It now reads the drop itself. wlroots cannot deliver one for us — its drop path
+needs a `wl_surface` to have taken the drag focus, and a Lava client has none,
+so as far as Wayland is concerned the pointer is over the compositor — which
+makes the compositor the drop target: on a release during a `wl_data_device`
+drag it pipes `text/uri-list` off the source, reads it asynchronously (a
+compositor that waited on another process would be a compositor that freezes
+when somebody drops a file), and queues the paths for the surface underneath.
+
+A second bug was underneath it, in LavaUI rather than the compositor: the drop
+resolved through `hitTestHover`, which returns exactly one node — the topmost
+thing under the pointer, which is the picture in LavaView and the text in the
+editor, never the view that registered the handler. `DropRouter.deliver` then
+found no handler and dropped it. Drops now resolve through `dropTarget`, which
+walks the hit chain outwards and takes the first handler on it, the way every
+other drag-and-drop implementation means "target".
+
 **Verified with a caveat worth stating.** XDND is not scriptable — a drag
 between two X clients is a protocol conversation no injected event can start
 — so the test synthesizes the drop through `LAVA_TEST_DROP`. That stands in

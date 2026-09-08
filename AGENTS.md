@@ -190,6 +190,20 @@ Consequences that surprise people:
   (`nprpc::get_context()`, valid only during dispatch — read it in the
   synchronous prologue of `SubscribeInput`, above the first `co_await`), since
   nprpc has no session id and no disconnect callback.
+- **A drop on a Lava window is the compositor's to deliver.** wlroots cannot do
+  it: its drop path needs a `wl_surface` to have taken the drag focus, and a
+  client that draws through the control plane has none — as far as Wayland is
+  concerned the pointer is over the compositor. So on a release during a
+  `wl_data_device` drag, `Server::beginDropRead` pipes `text/uri-list` off the
+  source, reads it through the event loop (never synchronously: the source is
+  another process, and waiting on one is how a compositor freezes when somebody
+  drops a file), and queues the paths per surface for `TakeDroppedPaths`. The
+  event and the paths travel separately on purpose — the event says *where*,
+  which picks the view; a path list does not fit a fixed-size `InputEvent`, and
+  most events are not drops. On the LavaUI side a drop resolves through
+  `dropTarget`, which walks the hit chain *outwards*: `hitTestHover` answers
+  with the topmost node, which is the picture in LavaView and the text in the
+  editor, never the view that registered the handler.
 - **A camera raw is opened by finding the picture inside it, not by developing
   it.** A CR2 is a TIFF whose directories hold, among other things, the JPEG the
   camera's own processor produced — already white-balanced and tone-mapped, and
@@ -478,6 +492,7 @@ reproducible, completely fictional bug.
 | `LAVA_IMAGE_BUDGET_MB=N` | Any canvas process: ceiling for standalone image textures, in use and dormant together (default 512) |
 | `LAVA_IMAGE_CACHE_MB=N` | The dormant half of that — the most held on spec when there is room (default 256) |
 | `LAVA_IMAGE_SPECULATION=0`/`1` | Pins the dormant half off/on instead of following the screens. A test lever — see `Server::syncImageSpeculation` |
+| `LAVA_TEST_DROP=a:b:c` | Compositor: files that `kill -USR1` delivers as a synthetic file drop. A Wayland drag needs a real pointer press on a real device, which headless has not — see `Server::deliverTestDrop` |
 | `LAVA_MSAA=N` | Any canvas process: cap multisampling at N (1/2/4/8). Overrides `[render] msaa`; the way to A/B a session without a rebuild |
 | `LAVA_SHARED_DEPTH=0` | Compositor: one depth attachment per window again, for comparing against the shared one |
 | `LAVA_EXPORT_BLIT=1` | Compositor: blit each frame into the exported dma-buf instead of resolving into it, as it did before — the A/B for that change, and the escape hatch where a driver dislikes it |

@@ -1510,7 +1510,7 @@ class CompositorImpl final : public ICompositor_Servant {
 
   std::vector<std::string> TakeDroppedPaths(uint32_t surfaceId) override {
     if (!host_.surfaceExists(surfaceId)) throw SurfaceNotFound(surfaceId);
-    return {};
+    return host_.takeDroppedPaths(surfaceId);
   }
 
   Capture CaptureSurface(uint32_t surfaceId, int32_t x, int32_t y, int32_t w,

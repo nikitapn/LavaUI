@@ -185,6 +185,7 @@ compositor = executable(
   'src/screenshot_portal.cpp',
   'src/window_memory.cpp',
   'src/focus_history.cpp',
+  'src/uri_list.cpp',
   lava_idl_sources,
   protocol_headers,
   protocol_sources,
@@ -266,3 +267,12 @@ focus_history_test = executable(
   build_by_default: false,
 )
 test('focus history', focus_history_test)
+
+# Headless: parsing a dropped URI list is string work and needs nothing.
+uri_list_test = executable(
+  'uri_list_test',
+  ['tests/uri_list_test.cpp', 'src/uri_list.cpp'],
+  include_directories: include_directories('src'),
+  build_by_default: false,
+)
+test('uri list', uri_list_test)

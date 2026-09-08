@@ -64,6 +64,11 @@ struct CompositorHost {
   /// Drops the compositor's reference to `key`.
   virtual void releaseImage(const std::string &key) = 0;
 
+  /// What was dropped on `surfaceId` since the last time it asked, and clears
+  /// it. Empty for a surface nothing was dropped on, which is every surface
+  /// almost all of the time — the client only asks when an event told it to.
+  virtual std::vector<std::string> takeDroppedPaths(uint32_t surfaceId) = 0;
+
   /// One window as a shell sees it. Mirrors `WindowInfo` in the IDL without
   /// dragging the generated header into this one.
   struct WindowEntry {

@@ -528,6 +528,12 @@ void CanvasSurface::keyEvent(int key, int action, int mods) {
   renderer_.engine().keyEvent(key, action, mods, windowId_);
 }
 
+void CanvasSurface::fileDrop(float x, float y) {
+  renderer_.engine().postInputEvent(
+      static_cast<uint32_t>(canvas::InputEventKind::FileDrop), x, y, 0, 0,
+      windowId_);
+}
+
 void CanvasSurface::textInput(const std::string &utf8) {
   renderer_.engine().textInput(utf8, windowId_);
 }

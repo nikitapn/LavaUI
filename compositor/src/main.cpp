@@ -12,6 +12,7 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <sys/wait.h>
+#include <fcntl.h>
 #include <unistd.h>
 #include <linux/input-event-codes.h>  // BTN_RIGHT
 #include <cerrno>
@@ -39,6 +40,7 @@
 #include "decoration.hpp"
 #include "frame_probe.hpp"
 #include "control_plane.hpp"
+#include "uri_list.hpp"
 #include "shell.hpp"
 #include "screenshot_portal.hpp"
 #include "startup_watchdog.hpp"
@@ -1323,6 +1325,20 @@ struct Server {
   void activatePointerConstraint(wlr_pointer_constraint_v1 *constraint);
   static void on_request_start_drag(wl_listener *listener, void *data);
   static void on_start_drag(wl_listener *listener, void *data);
+
+  /// Reads the files being dragged and hands them to the client behind
+  /// `onto`, at `x`,`y` in that surface's own coordinates.
+  ///
+  /// wlroots cannot deliver this for us. Its drop path needs a `wl_surface` to
+  /// have taken the drag focus, and a Lava client does not have one — it draws
+  /// through the control plane, so as far as Wayland is concerned the pointer
+  /// is over the compositor itself. Which makes the compositor the drop
+  /// target: it reads the offer off the source and passes the paths on.
+  void beginDropRead(ClientSurface &onto, float x, float y);
+
+  /// The same delivery, from `LAVA_TEST_DROP` rather than from a drag. See
+  /// `on_test_drop`.
+  void deliverTestDrop();
   /// Keeps the drag icon under the cursor. Does nothing when no client is
   /// dragging anything.
   void moveDragIcon();
@@ -2832,6 +2848,28 @@ class SurfaceRegistry : public lava::CompositorHost {
 
   void releaseImage(const std::string &key) override {
     if (renderer_) renderer_->releaseImage(key);
+  }
+
+  /// Files released over a surface, waiting for the client to ask.
+  ///
+  /// A queue rather than a slot, so two quick drops are two drops, and bounded
+  /// so a client that never collects cannot grow the compositor. Cleared with
+  /// the surface: paths meant for a window that has gone are not for whatever
+  /// opens next.
+  void queueDrop(uint32_t surfaceId, std::vector<std::string> paths) {
+    if (paths.empty()) return;
+    std::vector<std::string> &waiting = drops_[surfaceId];
+    if (waiting.size() >= kMaxQueuedDrops) return;
+    waiting.insert(waiting.end(), std::make_move_iterator(paths.begin()),
+                   std::make_move_iterator(paths.end()));
+  }
+
+  std::vector<std::string> takeDroppedPaths(uint32_t surfaceId) override {
+    auto it = drops_.find(surfaceId);
+    if (it == drops_.end()) return {};
+    std::vector<std::string> out = std::move(it->second);
+    drops_.erase(it);
+    return out;
   }
 
   /// Whether the texture cache may hold released images on spec.
@@ -5564,6 +5602,7 @@ class SurfaceRegistry : public lava::CompositorHost {
       if (server_ != nullptr && server_->menu.target == id) {
         server_->closeContextMenu();
       }
+      drops_.erase(id);
       rememberPlacement(**it);
       releasePlacement(**it);
       const uint32_t workspace = (*it)->workspace;
@@ -6496,6 +6535,11 @@ class SurfaceRegistry : public lava::CompositorHost {
   int bulk_ = 0;
   /// The one canvas device. Every surface is a window on it, sharing its
   /// glyph atlas and texture cache.
+  /// Enough that a hurried double drop is two drops, few enough that a client
+  /// which never collects them costs nothing that matters.
+  static constexpr size_t kMaxQueuedDrops = 16;
+  std::unordered_map<uint32_t, std::vector<std::string>> drops_;
+
   lava::CanvasRenderer *renderer_ = nullptr;
   Workspaces *workspaces_ = nullptr;
   lava::ControlPlane *control_ = nullptr;
@@ -11420,6 +11464,28 @@ void Server::on_cursor_button(wl_listener *listener, void *data) {
     server->pendingMove = false;
   }
 
+  // A `wl_data_device` drag ending: the drop, if it landed on one of ours.
+  //
+  // Before every routing decision below, because a release during a drag is
+  // not a click and must not be treated as the end of one. It is also the only
+  // path that forwards the release to the seat unconditionally: wlroots'
+  // pointer grab is holding the pointer for the duration, and a release it
+  // never sees leaves that grab in place for ever.
+  if (!pressed && server->seat != nullptr && server->seat->drag != nullptr) {
+    if (server->surfaces != nullptr) {
+      double dx = 0, dy = 0;
+      if (ClientSurface *onto = server->surfaces->at(server->cursor->x,
+                                                     server->cursor->y, dx, dy)) {
+        server->beginDropRead(*onto, static_cast<float>(dx),
+                              static_cast<float>(dy));
+      }
+    }
+    wlr_seat_pointer_notify_button(server->seat, event->time_msec,
+                                   event->button, event->state);
+    server->update_pointer_focus(event->time_msec);
+    return;
+  }
+
   // A release always ends a drag, whatever it is over by then.
   if (!pressed && server->drag != Server::Drag::None) {
     const bool answerClient = server->dragFromClient;
@@ -11778,6 +11844,190 @@ void Server::on_start_drag(wl_listener *listener, void *data) {
   server->moveDragIcon();
 }
 
+namespace {
+
+/// Whether the source is offering `mime` at all.
+bool source_offers(wlr_data_source *source, const char *mime) {
+  if (source == nullptr) return false;
+  // Walked by hand rather than with `wl_array_for_each`, whose assignment from
+  // `void *` is a C idiom that does not compile as C++.
+  auto **types = static_cast<char **>(source->mime_types.data);
+  const size_t count = source->mime_types.size / sizeof(char *);
+  for (size_t i = 0; i < count; ++i) {
+    if (types[i] != nullptr && std::strcmp(types[i], mime) == 0) return true;
+  }
+  return false;
+}
+
+/// One drop being read off its source.
+///
+/// Asynchronous because the source is another process: it is handed a pipe and
+/// writes into it whenever it gets round to it, and a compositor that waited
+/// for that would be a compositor that freezes when somebody drops a file.
+struct DropRead {
+  Server *server = nullptr;
+  uint32_t surfaceId = 0;
+  float x = 0.f, y = 0.f;
+  int fd = -1;
+  wl_event_source *readable = nullptr;
+  wl_event_source *deadline = nullptr;
+  std::string text;
+};
+
+/// A URI list is a few hundred bytes. This is not a limit anybody reaches; it
+/// is what stops a source that writes for ever from being able to.
+constexpr size_t kMaxDropBytes = 64 * 1024;
+/// Long enough for a client that is busy, short enough that a source which
+/// never writes does not leak a pipe until the session ends.
+constexpr int kDropReadTimeoutMs = 2000;
+
+void finish_drop_read(DropRead *read, bool deliver) {
+  if (deliver && read->server != nullptr && read->server->surfaces != nullptr) {
+    std::vector<std::string> paths = lava::paths_from_uri_list(read->text);
+    if (!paths.empty()) {
+      if (ClientSurface *onto = read->server->surfaces->find(read->surfaceId)) {
+        wlr_log(WLR_INFO, "drop: %zu file(s) on surface %u", paths.size(),
+                read->surfaceId);
+        read->server->surfaces->queueDrop(read->surfaceId, std::move(paths));
+        // The event last, so the paths are already waiting when the client
+        // asks for them — it asks the moment it sees this.
+        if (onto->canvas) {
+          onto->canvas->fileDrop(read->x, read->y);
+          read->server->surfaces->pump(*onto);
+        }
+      }
+    }
+  }
+  if (read->readable != nullptr) wl_event_source_remove(read->readable);
+  if (read->deadline != nullptr) wl_event_source_remove(read->deadline);
+  if (read->fd >= 0) close(read->fd);
+  delete read;
+}
+
+int drop_read_ready(int fd, uint32_t mask, void *data) {
+  auto *read = static_cast<DropRead *>(data);
+  char chunk[4096];
+  for (;;) {
+    const ssize_t got = ::read(fd, chunk, sizeof(chunk));
+    if (got > 0) {
+      if (read->text.size() + static_cast<size_t>(got) > kMaxDropBytes) {
+        wlr_log(WLR_ERROR, "drop: source wrote more than %zu bytes, refused",
+                kMaxDropBytes);
+        finish_drop_read(read, /*deliver=*/false);
+        return 0;
+      }
+      read->text.append(chunk, static_cast<size_t>(got));
+      continue;
+    }
+    if (got == 0) {  // the source closed its end: that is the whole list
+      finish_drop_read(read, /*deliver=*/true);
+      return 0;
+    }
+    if (errno == EINTR) continue;
+    if (errno == EAGAIN || errno == EWOULDBLOCK) {
+      // Nothing more yet. A hangup with nothing left to read is still the end.
+      if ((mask & WL_EVENT_HANGUP) != 0) finish_drop_read(read, /*deliver=*/true);
+      return 0;
+    }
+    finish_drop_read(read, /*deliver=*/false);
+    return 0;
+  }
+}
+
+int drop_read_timeout(void *data) {
+  auto *read = static_cast<DropRead *>(data);
+  wlr_log(WLR_ERROR, "drop: source never finished writing, gave up");
+  // What arrived is still worth having: a source that wrote the list and then
+  // forgot to close is a real client, not an attack.
+  finish_drop_read(read, /*deliver=*/!read->text.empty());
+  return 0;
+}
+
+}  // namespace
+
+void Server::beginDropRead(ClientSurface &onto, float x, float y) {
+  if (seat == nullptr || seat->drag == nullptr) return;
+  wlr_data_source *source = seat->drag->source;
+  static const char *kUriList = "text/uri-list";
+  // A drag of selected text is not a file drop, and answering one as if it
+  // were would hand every app a list of paths that are not paths.
+  if (!source_offers(source, kUriList)) return;
+
+  int fds[2];
+  if (pipe2(fds, O_CLOEXEC | O_NONBLOCK) != 0) {
+    wlr_log(WLR_ERROR, "drop: no pipe (%s)", std::strerror(errno));
+    return;
+  }
+
+  auto *read = new DropRead;
+  read->server = this;
+  read->surfaceId = onto.id;
+  read->x = x;
+  read->y = y;
+  read->fd = fds[0];
+
+  wl_event_loop *loop = wl_display_get_event_loop(display);
+  read->readable = wl_event_loop_add_fd(loop, fds[0], WL_EVENT_READABLE,
+                                        drop_read_ready, read);
+  read->deadline = wl_event_loop_add_timer(loop, drop_read_timeout, read);
+  if (read->readable == nullptr || read->deadline == nullptr) {
+    close(fds[1]);
+    finish_drop_read(read, /*deliver=*/false);
+    return;
+  }
+  wl_event_source_timer_update(read->deadline, kDropReadTimeoutMs);
+
+  // The write end goes to the source's client, which owns it from here: it
+  // writes the list and closes, and the close is what says the list is whole.
+  wlr_data_source_send(source, kUriList, fds[1]);
+  close(fds[1]);
+  // The source is told the drop happened, so a "move" completes rather than
+  // looking to the sending app like a drag the user abandoned.
+  wlr_data_source_dnd_drop(source);
+}
+
+void Server::deliverTestDrop() {
+  const char *list = std::getenv("LAVA_TEST_DROP");
+  if (list == nullptr || surfaces == nullptr) return;
+
+  std::vector<std::string> paths;
+  std::string_view rest{list};
+  while (!rest.empty()) {
+    const size_t sep = rest.find(':');
+    std::string_view one = rest.substr(0, sep);
+    if (!one.empty()) paths.emplace_back(one);
+    if (sep == std::string_view::npos) break;
+    rest.remove_prefix(sep + 1);
+  }
+  if (paths.empty()) return;
+
+  // Whatever is under the pointer, or else whatever has the keyboard. A
+  // headless session has a cursor at some arbitrary place and no way to move
+  // it, so the second is usually the one that answers.
+  double sx = 0, sy = 0;
+  ClientSurface *onto = surfaces->at(cursor->x, cursor->y, sx, sy);
+  if (onto == nullptr) {
+    onto = surfaces->find(focusedSurface());
+    // The middle of it, not the corner. A drop is delivered to the view under
+    // the point, and the top-left of a client-framed window is its own title
+    // bar — which handles no drops, so aiming there tests nothing and looks
+    // exactly like a drop that never arrived.
+    if (onto != nullptr) {
+      sx = onto->width / 2.0;
+      sy = onto->height / 2.0;
+    }
+  }
+  if (onto == nullptr || !onto->canvas) {
+    wlr_log(WLR_ERROR, "test drop: no Lava surface to drop on");
+    return;
+  }
+  wlr_log(WLR_INFO, "test drop: %zu file(s) on surface %u", paths.size(),
+          onto->id);
+  surfaces->queueDrop(onto->id, std::move(paths));
+  onto->canvas->fileDrop(static_cast<float>(sx), static_cast<float>(sy));
+  surfaces->pump(*onto);
+}
+
 void Server::moveDragIcon() {
   if (seat == nullptr || seat->drag == nullptr) return;
   wlr_drag_icon *icon = seat->drag->icon;
@@ -11912,6 +12162,9 @@ int main() {
     sigaddset(&mask, SIGHUP);
     // SIGUSR2 for the same reason — it dumps the GPU report through the loop.
     sigaddset(&mask, SIGUSR2);
+    // SIGUSR1 likewise: the synthetic file drop. Unblocked and handled through
+    // the loop, or the default action would kill the compositor instead.
+    sigaddset(&mask, SIGUSR1);
     // SIGCHLD for the same reason, and it matters more: the compositor is the
     // parent of the panel and the dock, and `ShellSupervisor` learns one died
     // by reading this off the loop's signalfd. Unblocked, the default
@@ -12297,6 +12550,22 @@ int main() {
   // only a periodic one: the periodic dump rides the output frame, and a desktop
   // with nothing animating on it produces no frames — so the moment you most
   // want to know what is holding 1.4 GB is the moment the timer stops firing.
+  // `kill -USR1` delivers `LAVA_TEST_DROP` as if it had been dragged in.
+  //
+  // A test lever, and the only one available: a Wayland drag is a conversation
+  // between two clients that begins with a real pointer press on a real input
+  // device, and headless wlroots has neither. What this stands in for is
+  // exactly one step — the bytes arriving off the source — and everything
+  // after it, the queue, the event, the RPC, the bridge, the router and the
+  // app's handler, is the shipping path.
+  wl_event_loop_add_signal(
+      wl_display_get_event_loop(server.display), SIGUSR1,
+      [](int, void *data) {
+        static_cast<Server *>(data)->deliverTestDrop();
+        return 0;
+      },
+      &server);
+
   wl_event_loop_add_signal(
       wl_display_get_event_loop(server.display), SIGUSR2,
       [](int, void *data) {

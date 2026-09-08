@@ -33,24 +33,28 @@ than having to build one.
 These block or degrade several of the apps below at once. Doing them first is
 worth more than any single app on the list.
 
-### 1. A file dropped on a Lava window goes nowhere
+### 1. ~~A file dropped on a Lava window goes nowhere~~ — fixed 2026-09-08
 
-`DropTarget.swift`, `DropRouter`, `DropBridge`, the `.fileDrop` event and
-`LavaClientApp`'s provider are all built and all correct.
-`TakeDroppedPaths(surfaceId)` on the compositor — the one call at the end of
-that chain — is `return {}` (`compositor/src/control_plane.cpp:1511`). The
-compositor handles `wl_data_device` drags for foreign clients, so dragging
-between Chrome and VS Code works; nothing routes a drop that lands on a Lava
-surface into the queue that call is supposed to drain.
+**Was:** `DropTarget.swift`, `DropRouter`, `DropBridge`, the `.fileDrop` event
+and `LavaClientApp`'s provider were all built and all correct, and
+`TakeDroppedPaths` on the compositor — the one call at the end of that chain —
+was `return {}`. `docs/client-server-gaps.md` recorded the whole thing as
+fixed, and it was, against the GLFW-hosted compositor that no longer exists;
+the wlroots one never got the other half. So from the moment the desktop became
+a real compositor, dropping a file on a Lava window did nothing.
 
-`docs/client-server-gaps.md` records this as fixed, and it was — against the
-GLFW-hosted compositor that no longer exists. The wlroots one never got the
-other half.
+**Fixed**, and it took two fixes rather than one. The compositor is now the drop
+target — wlroots cannot be, since its drop path needs a `wl_surface` to have
+taken the drag focus and a Lava client has none — so it pipes `text/uri-list`
+off the drag source, reads it without blocking, and queues the paths for the
+surface underneath. Beneath that was a second bug, in LavaUI: drops resolved
+through `hitTestHover`, which returns the topmost node under the pointer rather
+than the one holding the handler, so even a delivered drop went nowhere. See
+`docs/client-server-gaps.md` §3.
 
-A file manager is the app that makes this urgent, but everything wants it:
-dropping a photograph on LavaView, a file on the terminal, an image into Paint.
-**Small** — the LavaUI half is done, the IDL method exists, and what is needed
-is the drop handler in `main.cpp` and a bounded queue.
+Everything wanted this, which is why it was first: a photograph dropped on
+LavaView, a file on the terminal, an image into Paint — and a file manager,
+which is the app that cannot be written without it.
 
 ### 2. The desktop's file picker is a GTK subprocess
 
@@ -206,8 +210,7 @@ Things a desktop is judged on that nobody misses until they reach for them:
 
 Reasoned rather than ranked, and the reasoning is what to argue with:
 
-1. **File drops** (gap 1). Small, already half-built, and everything else
-   assumes it.
+1. ~~**File drops** (gap 1).~~ Done — and it cost two fixes, not one.
 2. **Screenshot + annotate.** Cheap, immediately useful, and it prototypes the
    drawing model Paint needs on a smaller canvas.
 3. **Notes**, probably as a mode of `LavaEditor`. Smallest real app; proves the

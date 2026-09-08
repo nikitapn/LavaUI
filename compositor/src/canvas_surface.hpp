@@ -266,6 +266,14 @@ class CanvasSurface {
   void pointerButton(int button, bool pressed, float x, float y, int mods);
   void pointerScroll(float dx, float dy);
   void keyEvent(int key, int action, int mods);
+
+  /// Files were released over this surface.
+  ///
+  /// The event says a drop happened and *where*, which is what picks the view
+  /// that handles it; the paths do not travel with it, because a list of them
+  /// does not fit a fixed-size `InputEvent` and most events are not drops.
+  /// `SurfaceRegistry::takeDroppedPaths` is the other half.
+  void fileDrop(float x, float y);
   void textInput(const std::string &utf8);
 
   /// Takes one event the renderer has for the client, or false if there are

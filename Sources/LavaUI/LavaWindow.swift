@@ -601,7 +601,7 @@ public final class LavaWindow {
             scroll.adoptRendererOffset(x: ev.x, y: ev.y)
         case .fileDrop:
             DropRouter.deliver(
-                to: host.hitTestHover(x: ev.x, y: ev.y, originY: menuH),
+                to: host.dropTarget(x: ev.x, y: ev.y, originY: menuH),
                 paths: DropBridge.paths(window: id, editor: editor)
             )
         case .text:

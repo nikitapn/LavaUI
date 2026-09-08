@@ -2187,6 +2187,26 @@ public final class LayoutHost {
         return chain
     }
 
+    /// The nearest `.onDrop` handler at this point, innermost first.
+    ///
+    /// Not `hitTestHover`, which resolves exactly one node and is right for a
+    /// highlight and wrong for a drop: the topmost thing under the pointer is
+    /// almost never the view that registered the handler. In LavaView it is
+    /// the picture, in an editor the text — and a child with no interest in
+    /// drops must not swallow the one its parent is waiting for. So the chain
+    /// is walked outwards and the first handler along it wins, which is what
+    /// every other drag-and-drop implementation means by "the drop target".
+    public func dropTarget(
+        x: Float, y: Float, originX: Float = 0, originY: Float = 0
+    ) -> NodeID? {
+        for id in hitTestScrollChain(
+            x: x, y: y, originX: originX, originY: originY
+        ) where DropRouter.hasHandler(id) {
+            return id
+        }
+        return nil
+    }
+
     /// Dismisses everything presented. Returns true if anything was showing,
     /// so a key handler can tell whether it consumed the event.
     @discardableResult
