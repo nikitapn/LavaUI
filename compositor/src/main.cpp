@@ -339,6 +339,10 @@ struct Output {
 
   /// Whether `wlr_output_lock_attach_render` is held. See `syncScanoutLock`.
   bool compositeLocked = false;
+  /// Whether a client owns this output's pixels outright — covering it, and
+  /// fenced, so wlroots scanouts its buffer and nothing here composites a
+  /// desktop onto this screen. Watched by `Server::syncImageSpeculation`.
+  bool scanningOut = false;
   /// Consecutive frames the covering client has been fenced for. Reset by any
   /// frame that is not, which is what makes locking immediate and unlocking
   /// patient — see `syncScanoutLock`.
@@ -1094,6 +1098,14 @@ struct Server {
   void notifyIdleActivity();
   /// Recompute whether a visible idle-inhibit is in force.
   void syncIdleInhibit();
+  /// Tell the texture cache whether holding images on spec is worth it.
+  ///
+  /// It is not while every screen is being scanned out: a game owns the
+  /// pixels, no desktop is being composited, so nothing can revive a dormant
+  /// entry until one is again — and the game is the thing on this GPU that
+  /// wants the memory. A second screen still showing the desktop is enough to
+  /// keep the bet on, because that screen is still drawing from the cache.
+  void syncImageSpeculation();
   /// Raise and unminimize; with `gesture`, also switch workspace and take
   /// the keyboard. Where an xdg-activation request lands, and the only
   /// thing that lands here — no other protocol asks to raise a window.
@@ -2820,6 +2832,12 @@ class SurfaceRegistry : public lava::CompositorHost {
 
   void releaseImage(const std::string &key) override {
     if (renderer_) renderer_->releaseImage(key);
+  }
+
+  /// Whether the texture cache may hold released images on spec.
+  /// `Server::syncImageSpeculation` decides; this only forwards.
+  void setImageSpeculation(bool allowed) {
+    if (renderer_) renderer_->setImageSpeculation(allowed);
   }
 
   /// Periodic VRAM dump under `LAVA_VRAM_STATS`. Called once per output frame;
@@ -7545,6 +7563,13 @@ Output::~Output() {
     compositeLocked = false;
   }
   server->outputs.remove(this);
+  // After the removal, and only if this screen was the reason: a monitor
+  // unplugged mid-game must not leave the cache standing down for a desktop
+  // that is now on somebody else's screen.
+  if (scanningOut) {
+    scanningOut = false;
+    server->syncImageSpeculation();
+  }
   frame.detach();
   request_state.detach();
   destroy.detach();
@@ -7635,6 +7660,17 @@ void Output::syncScanoutLock() {
     wlr_log(WLR_INFO, "output %s: %s", wlr->name,
             lock ? "compositing a covering client"
                  : "direct scanout allowed again");
+  }
+
+  // A covering client that is *not* being composited is one wlroots is
+  // scanning out: it owns this screen, and no desktop is drawn onto it. That
+  // is the moment the texture cache should stop holding pictures on spec —
+  // nothing can revive one until a desktop is composited again, and the thing
+  // that took the screen is usually the thing that wants the memory.
+  const bool nowScanningOut = covering != nullptr && !lock;
+  if (nowScanningOut != scanningOut) {
+    scanningOut = nowScanningOut;
+    server->syncImageSpeculation();
   }
   if (lock) {
     wlr_damage_ring_add_whole(&scene_output->damage_ring);
@@ -10874,6 +10910,37 @@ void Server::syncIdleInhibit() {
   wlr_idle_notifier_v1_set_inhibited(idleNotify, inhibited);
 }
 
+void Server::syncImageSpeculation() {
+  if (surfaces == nullptr) return;
+
+  // `LAVA_IMAGE_SPECULATION=0` pins the cache to standing down and `=1` pins
+  // it on, whatever the screens are doing. Neither is a setting to run a
+  // desktop with: it exists because the state this function computes is
+  // otherwise reachable only by putting a real fullscreen game on a real DRM
+  // output, and a behaviour that cannot be entered on purpose cannot be
+  // measured.
+  static const char *pinned = std::getenv("LAVA_IMAGE_SPECULATION");
+  if (pinned != nullptr) {
+    surfaces->setImageSpeculation(std::string_view(pinned) != "0");
+    return;
+  }
+
+  bool anyScanout = false;
+  bool anyDesktop = false;
+  for (const Output *output : outputs) {
+    if (output->wlr == nullptr || !output->wlr->enabled) continue;
+    if (output->scanningOut) {
+      anyScanout = true;
+    } else {
+      anyDesktop = true;
+    }
+  }
+  // A compositor with no enabled output at all — headless before a mode is
+  // set, every screen off — keeps the cache: there is nothing on the GPU to
+  // stand aside for, and the desktop is a frame away from being drawn again.
+  surfaces->setImageSpeculation(!anyScanout || anyDesktop);
+}
+
 ClientSurface *Server::surfaceFromWl(wlr_surface *surface) {
   if (surfaces == nullptr) return nullptr;
   return surfaces->findByWlSurface(surface);
@@ -12161,6 +12228,10 @@ int main() {
   surfaces.bind(canvas_renderer.get(), &server.workspaces);
   surfaces.bind(&server);
   server.surfaces = &surfaces;
+  // The starting state, which the screens will revise. Only an override makes
+  // it anything other than "hold what the budget allows", but the cache is
+  // told either way rather than left to a default it agrees with by accident.
+  server.syncImageSpeculation();
   // Late AppMenu addresses (Qt often set_address after map) re-notify the
   // panel only when the surface that changed is the focused one.
   server.appmenu.setOnChanged(

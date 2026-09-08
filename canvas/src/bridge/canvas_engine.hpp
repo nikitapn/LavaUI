@@ -391,6 +391,15 @@ class Engine {
   /// ever ask for again. See `TextureManager::discardTexture`.
   void discardTexture(const std::string &key);
 
+  /// Turns the speculative half of the texture cache off and on.
+  ///
+  /// For a host that knows the GPU is wanted for something a cache should
+  /// stand aside for — the compositor calls this while a fullscreen client is
+  /// being scanned out directly. Off reclaims every dormant entry at once;
+  /// on restores the configured allowance and nothing else, since what was
+  /// dropped is re-decoded only if it is asked for again.
+  void setImageSpeculation(bool allowed);
+
   /// Decodes an image file to RGBA8 **without touching RenderDevice**, so it is safe
   /// to call from a worker thread. Empty/`valid()==false` if the file will not
   /// decode. This is the expensive half of loading; `uploadTexture` is the

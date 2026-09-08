@@ -74,7 +74,9 @@ func textReport(_ report: GpuReport, verbose: Bool) -> String {
         + "\(humanBytes(report.imageBudgetBytes)) budget, "
         + "\(humanBytes(report.dormantBytes)) dormant of "
         + "\(humanBytes(report.dormantAllowanceBytes)) allowed"
-    if report.dormantAllowanceBytes < report.dormantBudgetBytes {
+    if !report.speculating {
+        second += " (standing down: the GPU is wanted elsewhere)"
+    } else if report.dormantAllowanceBytes < report.dormantBudgetBytes {
         second += " (squeezed from \(humanBytes(report.dormantBudgetBytes))"
             + " by what is in use)"
     }

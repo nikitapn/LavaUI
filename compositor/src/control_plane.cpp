@@ -1104,6 +1104,7 @@ class CompositorImpl final : public ICompositor_Servant {
     out.dormantBytes       = source.cache.dormantBytes;
     out.dormantBudgetBytes = source.cache.dormantBudgetBytes;
     out.dormantAllowanceBytes = source.cache.dormantAllowanceBytes;
+    out.speculating        = source.cache.speculating;
     out.cacheHits          = source.cache.cacheHits;
     out.cacheEvictions     = source.cache.evictions;
     return out;

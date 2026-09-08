@@ -898,6 +898,12 @@ uint64_t TextureManager::liveBytesLocked() const {
 }
 
 uint64_t TextureManager::dormantAllowanceLocked() const {
+    // Nothing on spec at all while the GPU is wanted elsewhere. Checked before
+    // the arithmetic rather than folded into it, because this is a different
+    // statement: the budget says how much of a bet is affordable, this says
+    // whether there is a bet worth making.
+    if (!speculating_) return 0;
+
     const uint64_t live = liveBytesLocked();
     // What is left under the ceiling once the in-use set has taken its share,
     // never more than the speculative budget itself. At and past the ceiling
@@ -906,6 +912,16 @@ uint64_t TextureManager::dormantAllowanceLocked() const {
     const uint64_t room =
         imageBudgetBytes_ > live ? imageBudgetBytes_ - live : 0;
     return std::min(dormantBudgetBytes_, room);
+}
+
+void TextureManager::setSpeculationAllowed(bool allowed) {
+    std::lock_guard lock(mutex_);
+    if (speculating_ == allowed) return;
+    speculating_ = allowed;
+    // Straight away rather than at the next allocation: the whole point is to
+    // hand the memory over before the thing that wants it starts asking, and
+    // while a game is on screen this cache may not allocate again for hours.
+    if (!allowed) evictDormantLocked();
 }
 
 void TextureManager::chargeImageBytesLocked(uint64_t bytes) {
@@ -993,6 +1009,7 @@ TextureManager::CacheStats TextureManager::cacheStats() const {
     stats.dormantBytes = dormantBytes_;
     stats.dormantBudgetBytes = dormantBudgetBytes_;
     stats.dormantAllowanceBytes = dormantAllowanceLocked();
+    stats.speculating = speculating_;
     stats.atlasBytes = atlas_.allocatedBytes();
     stats.cacheHits = cacheHits_;
     stats.evictions = evictions_;

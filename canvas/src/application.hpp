@@ -279,6 +279,10 @@ public:
   /// Releases `key` and drops it rather than keeping it warm. For an entry that
   /// can never be asked for again — see `TextureManager::discardTexture`.
   void discardTexture(const std::string &key);
+
+  /// Whether the texture cache may hold released images on spec.
+  /// See `TextureManager::setSpeculationAllowed`.
+  void setImageSpeculation(bool allowed);
   /// Uploads pre-decoded RGBA8. Must run on the thread owning the device.
   int uploadTexture(const std::string &key, const uint8_t *rgba,
                     uint32_t width, uint32_t height);

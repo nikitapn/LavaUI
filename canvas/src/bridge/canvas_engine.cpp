@@ -634,6 +634,11 @@ void Engine::discardTexture(const std::string &key)
   impl_->withApp([&](Application &app) { app.discardTexture(key); });
 }
 
+void Engine::setImageSpeculation(bool allowed)
+{
+  impl_->withApp([&](Application &app) { app.setImageSpeculation(allowed); });
+}
+
 void Engine::unloadTexture(const std::string &path)
 {
   impl_->withApp([&](Application &app) { app.unloadTexture(path); });

@@ -133,6 +133,7 @@ GpuReport buildGpuReport(RenderDevice &device)
   report.cache.dormantBytes       = cache.dormantBytes;
   report.cache.dormantBudgetBytes = cache.dormantBudgetBytes;
   report.cache.dormantAllowanceBytes = cache.dormantAllowanceBytes;
+  report.cache.speculating        = cache.speculating;
   report.cache.atlasBytes         = cache.atlasBytes;
   report.cache.cacheHits          = cache.cacheHits;
   report.cache.evictions          = cache.evictions;
@@ -290,7 +291,10 @@ void printGpuReport(const GpuReport &report, std::ostream &out, bool verbose)
   out << "               " << humanBytes(report.cache.liveBytes) << " in use, "
       << humanBytes(report.cache.dormantBytes) << " dormant of "
       << humanBytes(report.cache.dormantAllowanceBytes) << " allowed";
-  if (report.cache.dormantAllowanceBytes < report.cache.dormantBudgetBytes) {
+  if (!report.cache.speculating) {
+    out << " (standing down: the GPU is wanted elsewhere)";
+  } else if (report.cache.dormantAllowanceBytes <
+             report.cache.dormantBudgetBytes) {
     out << " (squeezed from "
         << humanBytes(report.cache.dormantBudgetBytes) << " by what is in use)";
   }

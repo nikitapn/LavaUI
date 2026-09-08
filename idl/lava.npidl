@@ -839,6 +839,11 @@ message GpuReport {
   /// eviction actually runs against, and it reaches zero first.
   dormantBudgetBytes: u64;
   dormantAllowanceBytes: u64;
+  /// Whether the cache is holding anything on spec at all. A zero allowance
+  /// means two unrelated things — the in-use set has taken the whole budget,
+  /// or the cache has been told to stand down because a client is being
+  /// scanned out — and a reader cannot tell them apart from the numbers.
+  speculating: boolean;
   cacheHits: u64;
   cacheEvictions: u64;
 }

@@ -85,6 +85,9 @@ struct GpuTextureCacheReport {
   uint64_t dormantBudgetBytes = 0;
   /// What that ceiling comes to once the in-use set is counted.
   uint64_t dormantAllowanceBytes = 0;
+  /// False while the cache has been told to hold nothing on spec at all,
+  /// which is a zero allowance for a completely different reason.
+  bool speculating            = true;
   uint64_t atlasBytes         = 0;
   uint64_t cacheHits          = 0;
   uint64_t evictions          = 0;

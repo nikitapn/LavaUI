@@ -104,6 +104,14 @@ private:
     uint64_t dormantBytes_ = 0;
     /// The most this will hold speculatively, when there is room for it.
     uint64_t dormantBudgetBytes_ = 256ull * 1024ull * 1024ull;
+    /// Whether a bet on a key coming back is worth making at all right now.
+    ///
+    /// False while something else on this GPU wants the memory more than a
+    /// cache does — a fullscreen game being scanned out, where the desktop is
+    /// not being composited and nothing can revive an entry until it is. The
+    /// dormant allowance is zero for as long as it holds, which costs nothing
+    /// but a re-decode of whatever is shown next.
+    bool speculating_ = true;
     /// The ceiling for standalone images altogether, in use and dormant.
     ///
     /// What a budget can and cannot do here is not symmetric, and the
@@ -167,6 +175,9 @@ public:
         /// What that ceiling actually comes to once the in-use set is counted
         /// against `imageBudgetBytes` — the number eviction is run against.
         uint64_t dormantAllowanceBytes = 0;
+        /// Whether the allowance above is a squeeze or a stand-down — the two
+        /// look identical at zero and have nothing else in common.
+        bool speculating = true;
         uint64_t atlasBytes = 0;
         /// Dormant entries revived without a decode or an upload.
         uint64_t cacheHits = 0;
@@ -268,6 +279,17 @@ public:
     /// Anything that wants to *use* the result wants `reviveTexture`, which
     /// takes the reference under the same lock as the lookup.
     bool hasTexture(const std::string& key) const;
+
+    /// Whether to hold anything on spec, and reclaim it all now if not.
+    ///
+    /// For the caller that knows the GPU is wanted for something better than a
+    /// bet — the compositor turns this off while a client is being scanned out
+    /// directly, because a fullscreen game is the one situation where the
+    /// desktop's cache is both certainly idle and certainly in the way. Safe
+    /// at any moment: a dormant entry is by definition one nothing holds a
+    /// handle to, so this can only cost a decode, never a texture somebody is
+    /// drawing with.
+    void setSpeculationAllowed(bool allowed);
 
     /// Takes a reference on `key` if it is resident, reviving it if dormant.
     ///

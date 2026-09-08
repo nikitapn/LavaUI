@@ -108,6 +108,13 @@ class CanvasRenderer {
   /// nameable, on a desktop that had been up a few hours.
   void discardImage(const std::string &key);
 
+  /// Whether the texture cache may hold released images on spec.
+  ///
+  /// Off while a client owns the output through direct scanout: the desktop
+  /// is not being composited, so nothing can revive a dormant entry until it
+  /// is again, and a fullscreen game is exactly what wants that memory.
+  void setImageSpeculation(bool allowed);
+
   /// How a draw list names another surface as a texture. `fn` is called
   /// from replay with a compositor surface id; 0 means drop the command.
   using SurfaceTextureResolver = int (*)(void *ctx, uint32_t surfaceId,

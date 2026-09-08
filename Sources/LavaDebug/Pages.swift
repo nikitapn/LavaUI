@@ -329,9 +329,15 @@ struct TexturePage: View {
                         color: report.liveBytes > report.imageBudgetBytes
                             ? Theme.current.selected : Theme.current.accent,
                         width: 420)
+                    // Three states, not two: the allowance can be the budget,
+                    // squeezed by what is in use, or nothing at all because a
+                    // client is being scanned out and the cache has stood
+                    // down. The last reads as the second unless it says so.
                     Row(label: "Dormant",
                         value: humanBytes(report.dormantBytes),
-                        detail: report.dormantAllowanceBytes < report.dormantBudgetBytes
+                        detail: !report.speculating
+                            ? "standing down for a fullscreen client"
+                            : report.dormantAllowanceBytes < report.dormantBudgetBytes
                             ? "allowed \(humanBytes(report.dormantAllowanceBytes))"
                               + " of \(humanBytes(report.dormantBudgetBytes))"
                             : "budget \(humanBytes(report.dormantBudgetBytes))")

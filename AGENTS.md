@@ -157,6 +157,19 @@ Consequences that surprise people:
   matters. Atlased entries are outside both, bounded by slot pressure instead.
   A client's own `ImageStore.budgetBytes` is not a VRAM cap: releasing only
   makes an entry dormant on the far side.
+- **The speculative half stands down for a fullscreen client.** A bet that a
+  key comes back is worthless while the desktop is not being drawn, and the
+  client that took the screen is usually what wants the memory — so
+  `Server::syncImageSpeculation` turns `TextureManager`'s dormant allowance to
+  zero while every enabled output is being scanned out, and back on when one
+  is composited again. A second screen still showing a desktop keeps it on:
+  that screen is still drawing from the cache. Measured: 16.5 MiB in three
+  dormant entries goes to zero on the transition, in-use bytes are untouched
+  (they cannot be reclaimed at all), and the only cost is re-decoding whatever
+  is shown next. Reach for this rather than a smaller `LAVA_IMAGE_CACHE_MB`,
+  which taxes the desktop all the time to buy VRAM back for the minutes a game
+  is on screen. `LAVA_IMAGE_SPECULATION=0`/`=1` pins the state, which is the
+  only way to reach it without a real game on a real DRM output.
 - **A registration is leased to the connection that made it.** The compositor
   counts a user per `RegisterImage`, and it used to be that nothing on the
   wire tied that user to a client — so an app that exited with a full cache
@@ -449,6 +462,7 @@ reproducible, completely fictional bug.
 | `LAVA_VRAM_STATS=1` | Compositor: GPU memory report to stderr, every 10s (`=N` for N seconds, `=verbose` for every allocation). Rides the output frame, so an idle desktop stops reporting — `kill -USR2` dumps one on demand |
 | `LAVA_IMAGE_BUDGET_MB=N` | Any canvas process: ceiling for standalone image textures, in use and dormant together (default 512) |
 | `LAVA_IMAGE_CACHE_MB=N` | The dormant half of that — the most held on spec when there is room (default 256) |
+| `LAVA_IMAGE_SPECULATION=0`/`1` | Pins the dormant half off/on instead of following the screens. A test lever — see `Server::syncImageSpeculation` |
 | `LAVA_MSAA=N` | Any canvas process: cap multisampling at N (1/2/4/8). Overrides `[render] msaa`; the way to A/B a session without a rebuild |
 | `LAVA_SHARED_DEPTH=0` | Compositor: one depth attachment per window again, for comparing against the shared one |
 | `LAVA_EXPORT_BLIT=1` | Compositor: blit each frame into the exported dma-buf instead of resolving into it, as it did before — the A/B for that change, and the escape hatch where a driver dislikes it |
@@ -850,7 +864,9 @@ one, and both are worth knowing before "it toggles" is diagnosed again:
 
 Measured with `LAVA_SCANOUT_PROBE=1` against a fullscreen X11 GL client on
 Xwayland 24.1 and NVIDIA 610: fenced on **100% of frames** over minutes, in
-both software and hardware GL. The compositor used to composite every covering
+both software and hardware GL. A covering client that is *not* being
+composited is one being scanned out, and that is also the signal the texture
+cache stands down on — see `Server::syncImageSpeculation`. The compositor used to composite every covering
 X11 client regardless, which cost a full-screen render and a whole-output
 damage on every frame of every fullscreen game.
 

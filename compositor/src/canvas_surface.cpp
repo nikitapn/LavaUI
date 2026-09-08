@@ -253,6 +253,10 @@ void CanvasRenderer::discardImage(const std::string &key) {
   engine_.discardTexture(key);
 }
 
+void CanvasRenderer::setImageSpeculation(bool allowed) {
+  engine_.setImageSpeculation(allowed);
+}
+
 void CanvasRenderer::setSurfaceTextureResolver(void *ctx,
                                                SurfaceTextureResolver fn) {
   TextureManager::getInstance().setSurfaceResolver(ctx, fn);

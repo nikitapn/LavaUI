@@ -1049,6 +1049,11 @@ void Application::discardTexture(const std::string &key)
   TextureManager::getInstance().discardTexture(key);
 }
 
+void Application::setImageSpeculation(bool allowed)
+{
+  TextureManager::getInstance().setSpeculationAllowed(allowed);
+}
+
 void Application::unloadTexture(const std::string &path)
 {
   impl_->unloadTexture(path);
