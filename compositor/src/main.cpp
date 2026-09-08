@@ -8681,13 +8681,20 @@ void run_autostart() {
   launch_program(shell.c_str(), argv);
 }
 
-/// Flameshot's interactive capture. The compositor answers the screenshot
-/// portal it talks to — see `ScreenshotPortal`.
-void launch_flameshot() {
-  char program[] = "flameshot";
-  char gui[] = "gui";
-  char *argv[] = {program, gui, nullptr};
-  launch_program(program, argv);
+/// The desktop's own interactive capture.
+///
+/// Found the way the panel and the dock are rather than on `PATH`: it is a
+/// LavaUI client that ships with this compositor, and a `PATH` lookup would
+/// find whichever copy a distribution installed instead.
+///
+/// This was Flameshot, which still works — it asks xdg-desktop-portal, which
+/// this compositor answers (see `ScreenshotPortal`), and nothing about that
+/// path has been removed. What changed is which one the key opens.
+void launch_shot() {
+  const std::string path = lava::ShellSupervisor::programPath("LavaShot");
+  std::string program = path;
+  char *argv[] = {program.data(), nullptr};
+  launch_program(program.c_str(), argv);
 }
 
 /// The application launcher, which is a LavaUI client rather than a program on
@@ -8791,7 +8798,7 @@ enum class BindingAction : uint8_t {
   MinimizeAll,
   RestoreAll,
   ShowDesktop,
-  Flameshot,
+  CaptureRegion,
   Fullscreen,
   WorkspaceSwitch,
   WorkspaceMove,
@@ -8885,8 +8892,9 @@ constexpr BindingSpec kBindings[] = {
      "window.restore", "Brings back every window this workspace has hidden"},
     {BindingAction::ShowDesktop, XKB_KEY_d, XKB_KEY_d, false, false, true, "D",
      "window.desktop", "Hides every window, or brings them back"},
-    {BindingAction::Flameshot, XKB_KEY_s, XKB_KEY_s, true, false, true, "S",
-     "screen.flameshot", "Opens Flameshot to capture a region"},
+    {BindingAction::CaptureRegion, XKB_KEY_s, XKB_KEY_s, true, false, true,
+     "S", "screen.capture-region",
+     "Opens LavaShot to capture and annotate a region"},
     {BindingAction::Fullscreen, XKB_KEY_f, XKB_KEY_f, false, false, true, "F",
      "window.fullscreen", "Toggles fullscreen on the focused window"},
     {BindingAction::WorkspaceSwitch, XKB_KEY_1, XKB_KEY_9, false, false, true,
@@ -9077,8 +9085,8 @@ bool perform_binding(Server *server, const BindingSpec &spec,
     server->toggleShowDesktop();
     return true;
 
-  case BindingAction::Flameshot:
-    launch_flameshot();
+  case BindingAction::CaptureRegion:
+    launch_shot();
     return true;
 
   case BindingAction::RestoreAll:
