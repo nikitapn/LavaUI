@@ -107,9 +107,11 @@ and a label that cannot be read is worse than no label.
 - **The selection cannot be adjusted.** Drag a new one instead. Handles are
   drawn but are not yet grabbable — `ShotRect.moved` is written and tested and
   has no caller.
-- **A label cannot be edited once it is finished.** Undo and retype. Selecting
-  within one, and clicking an existing label to reopen it, are both the same
-  missing idea: annotations have no identity after they are committed.
+- **A committed annotation has no identity** — nothing can be selected, moved
+  or reopened afterwards; undo and redraw. This is deliberate rather than
+  missing, and it is what Flameshot does too: a mark is made in one gesture,
+  and giving every mark a handle to grab turns a screenshot tool into a
+  drawing program.
 - **No delay or window mode.** `LavaShot --delay 5`, and picking a single
   window rather than a region, are the two things a screenshot tool is usually
   asked for second.
