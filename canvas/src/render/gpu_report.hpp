@@ -77,8 +77,14 @@ struct GpuTextureReport {
 /// The texture cache's own accounting, as opposed to the ledger's.
 struct GpuTextureCacheReport {
   uint64_t imageBytes         = 0;
+  /// The part of `imageBytes` something is pointing at, which no budget can
+  /// reclaim — see `TextureManager::imageBudgetBytes_`.
+  uint64_t liveBytes          = 0;
+  uint64_t imageBudgetBytes   = 0;
   uint64_t dormantBytes       = 0;
   uint64_t dormantBudgetBytes = 0;
+  /// What that ceiling comes to once the in-use set is counted.
+  uint64_t dormantAllowanceBytes = 0;
   uint64_t atlasBytes         = 0;
   uint64_t cacheHits          = 0;
   uint64_t evictions          = 0;

@@ -1108,8 +1108,11 @@ class CompositorImpl final : public ICompositor_Servant {
     }
     out.textureCount       = source.cache.textures;
     out.textureBytes       = source.cache.imageBytes + source.cache.atlasBytes;
+    out.liveBytes          = source.cache.liveBytes;
+    out.imageBudgetBytes   = source.cache.imageBudgetBytes;
     out.dormantBytes       = source.cache.dormantBytes;
     out.dormantBudgetBytes = source.cache.dormantBudgetBytes;
+    out.dormantAllowanceBytes = source.cache.dormantAllowanceBytes;
     out.cacheHits          = source.cache.cacheHits;
     out.cacheEvictions     = source.cache.evictions;
     return out;

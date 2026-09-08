@@ -98,9 +98,37 @@ private:
     /// counted: their pixels live in pages already reported as `atlasBytes`,
     /// and adding both counts the same memory twice.
     uint64_t imageBytes_ = 0;
-    /// The subset of `imageBytes_` at refcount zero — what the budget governs.
+    /// The subset of `imageBytes_` at refcount zero — held on a bet that the
+    /// key comes back, and the only part of the cache that can be reclaimed on
+    /// demand.
     uint64_t dormantBytes_ = 0;
+    /// The most this will hold speculatively, when there is room for it.
     uint64_t dormantBudgetBytes_ = 256ull * 1024ull * 1024ull;
+    /// The ceiling for standalone images altogether, in use and dormant.
+    ///
+    /// What a budget can and cannot do here is not symmetric, and the
+    /// asymmetry is the design. A dormant entry is one nobody is pointing at,
+    /// so it can go the moment the number says so. An entry in *use* is a
+    /// texture id a client is drawing with this frame: freeing it is a
+    /// use-after-free in someone else's process, and there is no protocol for
+    /// asking a client to give one back. So this governs the total by making
+    /// the speculative half give ground — the dormant allowance is whatever is
+    /// left under this after the in-use set is counted, and reaches zero
+    /// before the total does.
+    ///
+    /// Twice the dormant budget, so a light desktop behaves exactly as it did:
+    /// nothing changes until the in-use set is already as large as everything
+    /// the cache would hold on spec. Past that the speculative set shrinks one
+    /// byte per byte in use, and past the whole figure `warnLiveOverBudget`
+    /// says so, because that is the point where nothing is left to reclaim and
+    /// the only remaining lever is whichever client is asking.
+    ///
+    /// Atlased entries are deliberately outside it, like `imageBytes_`: their
+    /// pixels are in pages bounded by slot pressure instead, and one number
+    /// governing two scarcities would serve neither.
+    uint64_t imageBudgetBytes_ = 512ull * 1024ull * 1024ull;
+    /// Said once per crossing, not once per texture.
+    bool liveOverBudgetWarned_ = false;
     /// Atlased entries at refcount zero, still holding their cells.
     uint32_t dormantSlots_ = 0;
     uint64_t cacheHits_ = 0;
@@ -129,8 +157,16 @@ public:
     struct CacheStats {
         /// Standalone owned images; excludes atlas pages, see `atlasBytes`.
         uint64_t imageBytes = 0;
+        /// The part of `imageBytes` something is currently pointing at, and so
+        /// the part no budget can reclaim.
+        uint64_t liveBytes = 0;
+        uint64_t imageBudgetBytes = 0;
         uint64_t dormantBytes = 0;
+        /// The configured ceiling for the speculative set.
         uint64_t dormantBudgetBytes = 0;
+        /// What that ceiling actually comes to once the in-use set is counted
+        /// against `imageBudgetBytes` — the number eviction is run against.
+        uint64_t dormantAllowanceBytes = 0;
         uint64_t atlasBytes = 0;
         /// Dormant entries revived without a decode or an upload.
         uint64_t cacheHits = 0;
@@ -337,6 +373,19 @@ private:
         std::unordered_map<std::string, std::unique_ptr<TextureData>>::iterator;
 
     void unloadLocked(TextureIter it);
+    /// Records a newly resident standalone image and lets the dormant set give
+    /// ground for it.
+    ///
+    /// Every path that grows `imageBytes_` goes through here, because growth is
+    /// exactly when reclaiming matters and the release paths are the only place
+    /// it used to happen — so a session that only ever loaded images watched
+    /// the cache grow past its budget with nothing ever asking it not to.
+    void chargeImageBytesLocked(uint64_t bytes);
+    /// `imageBytes_` minus the dormant part: what is being pointed at.
+    uint64_t liveBytesLocked() const;
+    /// How much the dormant set may hold right now.
+    uint64_t dormantAllowanceLocked() const;
+    void warnIfLiveOverBudgetLocked();
     void markDormantLocked(TextureData &data);
     void reviveLocked(TextureData &data);
     /// Dormant, unpinned entries of one kind, least-recently-used first.

@@ -826,8 +826,19 @@ message GpuReport {
   /// Cache totals, which are the whole cache rather than only the entries sent.
   textureCount: u32;
   textureBytes: u64;
+  /// Standalone images something is currently pointing at, and the ceiling
+  /// they are counted against. The two halves of the cache behave completely
+  /// differently and a single figure hides which one is the problem: dormant
+  /// bytes go when the number says so, in-use bytes are a texture id a client
+  /// is drawing with and there is no way to ask for them back.
+  liveBytes: u64;
+  imageBudgetBytes: u64;
   dormantBytes: u64;
+  /// The configured speculative ceiling, and what it comes to once the in-use
+  /// set has taken its share of `imageBudgetBytes`. The second is the number
+  /// eviction actually runs against, and it reaches zero first.
   dormantBudgetBytes: u64;
+  dormantAllowanceBytes: u64;
   cacheHits: u64;
   cacheEvictions: u64;
 }

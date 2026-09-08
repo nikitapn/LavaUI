@@ -208,6 +208,11 @@ void TextureManager::initialize(RenderDevice& device) {
         const unsigned long long mb = std::strtoull(raw, &end, 10);
         if (end != raw && *end == '\0') dormantBudgetBytes_ = mb * 1024ull * 1024ull;
     }
+    if (const char *raw = std::getenv("LAVA_IMAGE_BUDGET_MB")) {
+        char *end = nullptr;
+        const unsigned long long mb = std::strtoull(raw, &end, 10);
+        if (end != raw && *end == '\0') imageBudgetBytes_ = mb * 1024ull * 1024ull;
+    }
     atlas_.initialize(device);
     std::cout << "TextureManager initialized\n";
 }
@@ -299,7 +304,7 @@ TextureHandle TextureManager::uploadTexture(const std::string& key,
     textureData->width = width;
     textureData->height = height;
     textureData->bytes = static_cast<uint64_t>(width) * height * 4;
-    imageBytes_ += textureData->bytes;
+    chargeImageBytesLocked(textureData->bytes);
     textureData->ownsImage = true;
 
     uint32_t textureId = nextId_++;
@@ -404,7 +409,7 @@ TextureHandle TextureManager::importDmabufTexture(
     textureData->width = destW;
     textureData->height = destH;
     textureData->bytes = static_cast<uint64_t>(destW) * destH * 4;
-    imageBytes_ += textureData->bytes;
+    chargeImageBytesLocked(textureData->bytes);
     textureData->ownsImage = true;
     textureData->opaqueAlpha = imported->opaqueAlpha();
 
@@ -544,7 +549,7 @@ TextureHandle TextureManager::refreshDmabufTexture(
     textureData->width = width;
     textureData->height = height;
     textureData->bytes = static_cast<uint64_t>(width) * height * 4;
-    imageBytes_ += textureData->bytes;
+    chargeImageBytesLocked(textureData->bytes);
     textureData->ownsImage = true;
     textureData->opaqueAlpha = imported->opaqueAlpha();
 
@@ -652,7 +657,7 @@ TextureHandle TextureManager::loadTexture(const std::string& path) {
     textureData->width = texWidth;
     textureData->height = texHeight;
     textureData->bytes = static_cast<uint64_t>(texWidth) * texHeight * 4;
-    imageBytes_ += textureData->bytes;
+    chargeImageBytesLocked(textureData->bytes);
     textureData->ownsImage = true;
 
     uint32_t textureId = nextId_++;
@@ -888,10 +893,53 @@ void TextureManager::eraseByPointerLocked(TextureData *data) {
     ++evictions_;
 }
 
+uint64_t TextureManager::liveBytesLocked() const {
+    return imageBytes_ - std::min(imageBytes_, dormantBytes_);
+}
+
+uint64_t TextureManager::dormantAllowanceLocked() const {
+    const uint64_t live = liveBytesLocked();
+    // What is left under the ceiling once the in-use set has taken its share,
+    // never more than the speculative budget itself. At and past the ceiling
+    // this is zero, and the cache stops betting entirely — which is the whole
+    // of what a budget can enforce against textures it does not own.
+    const uint64_t room =
+        imageBudgetBytes_ > live ? imageBudgetBytes_ - live : 0;
+    return std::min(dormantBudgetBytes_, room);
+}
+
+void TextureManager::chargeImageBytesLocked(uint64_t bytes) {
+    imageBytes_ += bytes;
+    // The new entry is live and not yet in `textures_`, so it is neither a
+    // victim here nor reachable from one; what this reclaims is other people's
+    // dormant pixels, to pay for it.
+    evictDormantLocked();
+    warnIfLiveOverBudgetLocked();
+}
+
+void TextureManager::warnIfLiveOverBudgetLocked() {
+    const uint64_t live = liveBytesLocked();
+    if (live <= imageBudgetBytes_) {
+        liveOverBudgetWarned_ = false;
+        return;
+    }
+    if (liveOverBudgetWarned_) return;
+    liveOverBudgetWarned_ = true;
+    // Worth a line because it is the one cache state nothing else will show:
+    // every dormant entry has already gone, and what is left is in use by
+    // clients this side cannot ask to give anything back.
+    std::cerr << "TextureManager: " << (live >> 20) << " MiB of textures in use, "
+              << "over the " << (imageBudgetBytes_ >> 20) << " MiB budget. "
+              << "Nothing is being held on spec any more; an in-use texture "
+              << "cannot be reclaimed. Raise LAVA_IMAGE_BUDGET_MB, or find the "
+              << "client asking for this.\n";
+}
+
 void TextureManager::evictDormantLocked() {
-    if (dormantBytes_ <= dormantBudgetBytes_) return;
+    const uint64_t allowance = dormantAllowanceLocked();
+    if (dormantBytes_ <= allowance) return;
     for (TextureData *data : dormantVictimsLocked(/*atlased=*/false)) {
-        if (dormantBytes_ <= dormantBudgetBytes_) break;
+        if (dormantBytes_ <= allowance) break;
         eraseByPointerLocked(data);
     }
 }
@@ -940,8 +988,11 @@ TextureManager::CacheStats TextureManager::cacheStats() const {
     std::lock_guard lock(mutex_);
     CacheStats stats;
     stats.imageBytes = imageBytes_;
+    stats.liveBytes = liveBytesLocked();
+    stats.imageBudgetBytes = imageBudgetBytes_;
     stats.dormantBytes = dormantBytes_;
     stats.dormantBudgetBytes = dormantBudgetBytes_;
+    stats.dormantAllowanceBytes = dormantAllowanceLocked();
     stats.atlasBytes = atlas_.allocatedBytes();
     stats.cacheHits = cacheHits_;
     stats.evictions = evictions_;

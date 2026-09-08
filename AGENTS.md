@@ -144,6 +144,19 @@ Consequences that surprise people:
   rather than turning pixels itself: a client has no codec, so a picture it
   turned would have to be encoded, sent through shared memory and decoded
   again. The turn is part of a texture's identity, like `maxPixelSize`.
+- **The texture cache has two budgets and they are not symmetric**
+  (`TextureManager`). A released texture goes *dormant* rather than being
+  freed — pixels stay on the GPU and `reviveTexture` brings it back with no
+  decode and no upload — and the dormant set is capped by
+  `LAVA_IMAGE_CACHE_MB` (256 MB). What is still referenced cannot be capped at
+  all: it is a texture id a client is drawing with, and there is no protocol
+  for asking for one back. So `LAVA_IMAGE_BUDGET_MB` (512 MB) governs the
+  total by squeezing the dormant allowance to whatever is left under it, which
+  hits zero before the total does, and says so on stderr once past that.
+  Reclaiming now runs on *growth* as well as on release, which is when it
+  matters. Atlased entries are outside both, bounded by slot pressure instead.
+  A client's own `ImageStore.budgetBytes` is not a VRAM cap: releasing only
+  makes an entry dormant on the far side.
 - **`ImageStore.imageIfLoaded` answers nil to two different questions** — the
   decode is still running, and the decode came back with nothing — and starts
   the work over each time it is asked. `ImageStore.isLoading` separates them,
@@ -414,6 +427,8 @@ reproducible, completely fictional bug.
 | `LAVA_FRAME_PROBE=1` | Compositor: per-surface frame cost, gaps and stalls |
 | `LAVA_SCANOUT_PROBE=1` | Compositor: per output frame, whether a client covers it and whether that client's buffer is fenced — the input to the direct-scanout decision |
 | `LAVA_VRAM_STATS=1` | Compositor: GPU memory report to stderr, every 10s (`=N` for N seconds, `=verbose` for every allocation). Rides the output frame, so an idle desktop stops reporting — `kill -USR2` dumps one on demand |
+| `LAVA_IMAGE_BUDGET_MB=N` | Any canvas process: ceiling for standalone image textures, in use and dormant together (default 512) |
+| `LAVA_IMAGE_CACHE_MB=N` | The dormant half of that — the most held on spec when there is room (default 256) |
 | `LAVA_MSAA=N` | Any canvas process: cap multisampling at N (1/2/4/8). Overrides `[render] msaa`; the way to A/B a session without a rebuild |
 | `LAVA_SHARED_DEPTH=0` | Compositor: one depth attachment per window again, for comparing against the shared one |
 | `LAVA_EXPORT_BLIT=1` | Compositor: blit each frame into the exported dma-buf instead of resolving into it, as it did before — the A/B for that change, and the escape hatch where a driver dislikes it |

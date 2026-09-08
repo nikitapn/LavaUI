@@ -316,12 +316,28 @@ struct TexturePage: View {
                 Card("Cache") {
                     Row(label: "Entries", value: "\(report.textureCount)",
                         detail: humanBytes(report.textureBytes), emphasis: true)
+                    // In use first, and with its own bar, because it is the
+                    // half nothing can reclaim: a dormant byte goes when the
+                    // budget says so, an in-use byte is a texture a client is
+                    // drawing with.
+                    Row(label: "In use",
+                        value: humanBytes(report.liveBytes),
+                        detail: "budget \(humanBytes(report.imageBudgetBytes))")
+                    Bar(fraction: report.imageBudgetBytes == 0 ? 0
+                            : Double(report.liveBytes)
+                                / Double(report.imageBudgetBytes),
+                        color: report.liveBytes > report.imageBudgetBytes
+                            ? Theme.current.selected : Theme.current.accent,
+                        width: 420)
                     Row(label: "Dormant",
                         value: humanBytes(report.dormantBytes),
-                        detail: "budget \(humanBytes(report.dormantBudgetBytes))")
-                    Bar(fraction: report.dormantBudgetBytes == 0 ? 0
+                        detail: report.dormantAllowanceBytes < report.dormantBudgetBytes
+                            ? "allowed \(humanBytes(report.dormantAllowanceBytes))"
+                              + " of \(humanBytes(report.dormantBudgetBytes))"
+                            : "budget \(humanBytes(report.dormantBudgetBytes))")
+                    Bar(fraction: report.dormantAllowanceBytes == 0 ? 0
                             : Double(report.dormantBytes)
-                                / Double(report.dormantBudgetBytes),
+                                / Double(report.dormantAllowanceBytes),
                         color: Theme.current.textMuted, width: 420)
                     Row(label: "Revived without a decode",
                         value: "\(report.cacheHits)",

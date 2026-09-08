@@ -69,9 +69,16 @@ func textReport(_ report: GpuReport, verbose: Bool) -> String {
 
     out.append("texture cache: \(report.textureCount) entr(ies), "
                + "\(humanBytes(report.textureBytes)) resident, "
-               + "\(humanBytes(report.dormantBytes)) dormant of "
-               + "\(humanBytes(report.dormantBudgetBytes)) budget, "
                + "\(report.cacheHits) hit(s), \(report.cacheEvictions) eviction(s)")
+    var second = "               \(humanBytes(report.liveBytes)) in use of "
+        + "\(humanBytes(report.imageBudgetBytes)) budget, "
+        + "\(humanBytes(report.dormantBytes)) dormant of "
+        + "\(humanBytes(report.dormantAllowanceBytes)) allowed"
+    if report.dormantAllowanceBytes < report.dormantBudgetBytes {
+        second += " (squeezed from \(humanBytes(report.dormantBudgetBytes))"
+            + " by what is in use)"
+    }
+    out.append(second)
 
     guard verbose else { return out.joined(separator: "\n") }
 

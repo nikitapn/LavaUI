@@ -128,8 +128,11 @@ GpuReport buildGpuReport(RenderDevice &device)
 
   const auto cache            = TextureManager::getInstance().cacheStats();
   report.cache.imageBytes         = cache.imageBytes;
+  report.cache.liveBytes          = cache.liveBytes;
+  report.cache.imageBudgetBytes   = cache.imageBudgetBytes;
   report.cache.dormantBytes       = cache.dormantBytes;
   report.cache.dormantBudgetBytes = cache.dormantBudgetBytes;
+  report.cache.dormantAllowanceBytes = cache.dormantAllowanceBytes;
   report.cache.atlasBytes         = cache.atlasBytes;
   report.cache.cacheHits          = cache.cacheHits;
   report.cache.evictions          = cache.evictions;
@@ -277,12 +280,21 @@ void printGpuReport(const GpuReport &report, std::ostream &out, bool verbose)
   }
 
   out << "texture cache: " << report.cache.textures << " entr(ies), "
-      << humanBytes(report.cache.imageBytes) << " standalone + "
+      << humanBytes(report.cache.imageBytes) << " standalone of "
+      << humanBytes(report.cache.imageBudgetBytes) << " budget + "
       << humanBytes(report.cache.atlasBytes) << " atlas, "
-      << humanBytes(report.cache.dormantBytes) << " dormant of "
-      << humanBytes(report.cache.dormantBudgetBytes) << " budget, "
       << report.cache.cacheHits << " hit(s), " << report.cache.evictions
       << " eviction(s)\n";
+  // Split out, because the two halves of that first number behave completely
+  // differently: one is reclaimable and one is what somebody is drawing with.
+  out << "               " << humanBytes(report.cache.liveBytes) << " in use, "
+      << humanBytes(report.cache.dormantBytes) << " dormant of "
+      << humanBytes(report.cache.dormantAllowanceBytes) << " allowed";
+  if (report.cache.dormantAllowanceBytes < report.cache.dormantBudgetBytes) {
+    out << " (squeezed from "
+        << humanBytes(report.cache.dormantBudgetBytes) << " by what is in use)";
+  }
+  out << "\n";
 
   if (!verbose) return;
 
