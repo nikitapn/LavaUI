@@ -50,6 +50,7 @@ var products: [Product] = [
     .executable(name: "LavaSpotify", targets: ["SpotifyApp"]),
     .executable(name: "LavaWeather", targets: ["WeatherApp"]),
     .executable(name: "LavaView", targets: ["LavaViewApp"]),
+    .executable(name: "LavaShot", targets: ["LavaShotApp"]),
     .executable(name: "LavaTerm", targets: ["LavaTermApp"]),
     .executable(name: "LavaEditor", targets: ["LavaEditorApp"]),
     .executable(name: "LavaBench", targets: ["LavaBench"]),
@@ -74,6 +75,7 @@ var products: [Product] = [
     .library(name: "LavaTermCore", targets: ["LavaTermCore"]),
     .library(name: "WeatherCore", targets: ["WeatherCore"]),
     .library(name: "LavaViewCore", targets: ["LavaViewCore"]),
+    .library(name: "LavaShotCore", targets: ["LavaShotCore"]),
 ]
 
 var targets: [Target] = [
@@ -118,6 +120,10 @@ var targets: [Target] = [
     // Which pictures are next to this one, and where the picture sits in
     // the window. No engine — see Sources/LavaViewCore.
     .target(name: "LavaViewCore"),
+    // Selection geometry, the annotation document and the toolbar's own
+    // layout. No engine — the arithmetic a screenshot tool gets wrong is
+    // testable without photographing anything.
+    .target(name: "LavaShotCore"),
 
     .executableTarget(
         name: "TwoWindows",
@@ -298,6 +304,11 @@ var targets: [Target] = [
         swiftSettings: interopCxx
     ),
     .executableTarget(
+        name: "LavaShotApp",
+        dependencies: ["LavaUI", "LavaHost", "LavaShotCore"],
+        swiftSettings: interopCxx
+    ),
+    .executableTarget(
         name: "LavaBench",
         dependencies: ["LavaUI", "LavaText", "TraceLoomCore"],
         swiftSettings: interopCxx
@@ -314,6 +325,7 @@ var targets: [Target] = [
     .testTarget(name: "LavaTermCoreTests", dependencies: ["LavaTermCore"]),
     .testTarget(name: "WeatherCoreTests", dependencies: ["WeatherCore"]),
     .testTarget(name: "LavaViewCoreTests", dependencies: ["LavaViewCore"]),
+    .testTarget(name: "LavaShotCoreTests", dependencies: ["LavaShotCore"]),
 ]
 
 if haveNprpc {

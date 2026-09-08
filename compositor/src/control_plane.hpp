@@ -446,6 +446,17 @@ struct CompositorHost {
                               std::vector<uint8_t> &outPng, uint32_t &outW,
                               uint32_t &outH) = 0;
 
+  /// Writes a PNG of the whole screen the pointer is on to a temporary file
+  /// and answers with its path. `includeSelf` false leaves `surfaceId` — and
+  /// its shadow and frost — out of it; the crop is in framebuffer pixels and
+  /// an empty one means the whole screen. Empty string on failure.
+  virtual std::string captureScreen(uint32_t surfaceId, bool includeSelf,
+                                    int32_t x, int32_t y, int32_t w, int32_t h,
+                                    int32_t maxSide) = 0;
+
+  /// Fills the output with this surface, or restores what it had before.
+  virtual void setSurfaceFullscreen(uint32_t surfaceId, bool on) = 0;
+
   /// Drops the cached `ImageSurface` poster for a window, at every size it
   /// was imported at. Unknown ids have no poster and are a no-op. See
   /// `ForgetWindowPoster`.
@@ -458,6 +469,9 @@ struct CompositorHost {
   /// LavaUI client has no `wl_data_device` of its own, so without these two
   /// its copy and paste would be a private drawer that Firefox cannot see.
   virtual std::string clipboardText() const = 0;
+
+  /// Offers the PNG in `path` as the seat selection, as `image/png`.
+  virtual void setClipboardImageFile(const std::string &path) = 0;
   virtual std::vector<uint8_t> clipboardPng() const = 0;
 
   /// Offers `text` as the seat's selection, replacing what was there.

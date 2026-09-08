@@ -40,6 +40,7 @@
 #include "decoration.hpp"
 #include "frame_probe.hpp"
 #include "control_plane.hpp"
+#include "png_file.hpp"
 #include "uri_list.hpp"
 #include "shell.hpp"
 #include "screenshot_portal.hpp"
@@ -1392,7 +1393,7 @@ struct Server {
   Output *outputAtPoint(int x, int y);
   bool renderOutputPng(Output *output, std::vector<uint8_t> &png,
                        uint32_t &width, uint32_t &height,
-                       const wlr_box *crop = nullptr);
+                       const wlr_box *crop = nullptr, int maxSide = 0);
   /// Ask the output for a new frame so the portal can read the committed
   /// buffer. Does not read GPU memory on this call.
   bool schedulePortalCapture();
@@ -2201,7 +2202,8 @@ bool captureForeign(const ClientSurface &surface, int32_t maxSide,
 /// full buffer left alone.
 bool encodeBufferPng(wlr_buffer *buffer, wlr_renderer *renderer,
                      std::vector<uint8_t> &outPng, uint32_t &outW,
-                     uint32_t &outH, const wlr_box *crop = nullptr) {
+                     uint32_t &outH, const wlr_box *crop = nullptr,
+                     int maxSide = 0) {
   if (buffer == nullptr || renderer == nullptr) return false;
   wlr_buffer_lock(buffer);
 
@@ -2232,8 +2234,8 @@ bool encodeBufferPng(wlr_buffer *buffer, wlr_renderer *renderer,
       const auto *src = static_cast<const uint8_t *>(data) +
                         static_cast<size_t>(y0) * stride +
                         static_cast<size_t>(x0) * 4;
-      ok = encodeForeignRgba(src, cw, ch, static_cast<int>(stride), format, 0,
-                             outPng, outW, outH);
+      ok = encodeForeignRgba(src, cw, ch, static_cast<int>(stride), format,
+                             maxSide, outPng, outW, outH);
     }
     wlr_buffer_end_data_ptr_access(buffer);
   }
@@ -2258,8 +2260,8 @@ bool encodeBufferPng(wlr_buffer *buffer, wlr_renderer *renderer,
             const uint8_t *src = pixels.data() +
                                  static_cast<size_t>(y0) * width * 4 +
                                  static_cast<size_t>(x0) * 4;
-            ok = encodeForeignRgba(src, cw, ch, width * 4, readFormat, 0,
-                                   outPng, outW, outH);
+            ok = encodeForeignRgba(src, cw, ch, width * 4, readFormat,
+                                   maxSide, outPng, outW, outH);
           }
         }
       }
@@ -6133,6 +6135,60 @@ class SurfaceRegistry : public lava::CompositorHost {
     posters_.clear();
   }
 
+  /// The screen as it is right now, without the window that asked for it.
+  ///
+  /// A screenshot tool cannot leave itself out on its own: by the time it can
+  /// call anything its own window is already up, and a shot of the desktop
+  /// with the shot tool in front of it is not a shot of the desktop. So the
+  /// surface's nodes come off for the length of one offscreen composite — the
+  /// same trick the frost capture plays, for the same reason — and go back on
+  /// from what was actually enabled rather than from the rules that would
+  /// decide it.
+  std::string captureScreen(uint32_t surfaceId, bool includeSelf, int32_t x,
+                            int32_t y, int32_t w, int32_t h,
+                            int32_t maxSide) override {
+    if (server_ == nullptr) return {};
+    Output *target = server_->outputForScreenshot();
+    if (target == nullptr) return {};
+
+    std::vector<wlr_scene_node *> lifted;
+    const auto hideIfShown = [&lifted](wlr_scene_node *node) {
+      if (node == nullptr || !node->enabled) return;
+      wlr_scene_node_set_enabled(node, false);
+      lifted.push_back(node);
+    };
+    if (!includeSelf) {
+      if (ClientSurface *self = find(surfaceId)) {
+        hideIfShown(self->node != nullptr ? &self->node->node : nullptr);
+        hideIfShown(self->barNode != nullptr ? &self->barNode->node : nullptr);
+        for (auto &plate : self->frostPlates) {
+          hideIfShown(plate.node != nullptr ? &plate.node->node : nullptr);
+        }
+        hideIfShown(self->shadowTree != nullptr ? &self->shadowTree->node
+                                                : nullptr);
+      }
+    }
+
+    std::vector<uint8_t> png;
+    uint32_t outW = 0, outH = 0;
+    const wlr_box box{x, y, w, h};
+    const bool ok = server_->renderOutputPng(
+        target, png, outW, outH, (w > 0 && h > 0) ? &box : nullptr, maxSide);
+
+    for (wlr_scene_node *node : lifted) wlr_scene_node_set_enabled(node, true);
+
+    if (!ok || png.empty()) return {};
+    std::string path;
+    if (!lava::writeTempPng(png, path)) return {};
+    wlr_log(WLR_INFO, "screen capture: %ux%u PNG (%zu bytes) -> %s", outW, outH,
+            png.size(), path.c_str());
+    return path;
+  }
+
+  void setSurfaceFullscreen(uint32_t surfaceId, bool on) override {
+    if (ClientSurface *surface = find(surfaceId)) setFullscreen(*surface, on);
+  }
+
   void forgetWindowPoster(uint32_t id) override { forgetPosters(id); }
 
   bool captureSurface(uint32_t id, int32_t x, int32_t y, int32_t w, int32_t h,
@@ -6166,6 +6222,17 @@ class SurfaceRegistry : public lava::CompositorHost {
     if (server_ == nullptr) return;
     lava::Clipboard clipboard(server_->display, server_->seat);
     clipboard.set(text);
+  }
+
+  void setClipboardImageFile(const std::string &path) override {
+    if (server_ == nullptr || path.empty()) return;
+    std::vector<uint8_t> png;
+    if (!lava::readFileBytes(path, png) || png.empty()) {
+      wlr_log(WLR_ERROR, "clipboard: cannot read '%s'", path.c_str());
+      return;
+    }
+    lava::Clipboard clipboard(server_->display, server_->seat);
+    clipboard.setImagePng(png);
   }
 
   std::string primarySelectionText() const override {
@@ -7918,7 +7985,7 @@ void Server::requestWindowScreenshot(const ClientSurface &surface) {
 
 bool Server::renderOutputPng(Output *output, std::vector<uint8_t> &png,
                              uint32_t &width, uint32_t &height,
-                             const wlr_box *crop) {
+                             const wlr_box *crop, int maxSide) {
   const int w = output->wlr->width;
   const int h = output->wlr->height;
   if (w <= 0 || h <= 0 || allocator == nullptr) return false;
@@ -7954,7 +8021,8 @@ bool Server::renderOutputPng(Output *output, std::vector<uint8_t> &png,
 
   bool ok = false;
   if (built && state.buffer != nullptr) {
-    ok = encodeBufferPng(state.buffer, renderer, png, width, height, crop);
+    ok = encodeBufferPng(state.buffer, renderer, png, width, height, crop,
+                         maxSide);
   }
   wlr_output_state_finish(&state);
   wlr_swapchain_destroy(chain);

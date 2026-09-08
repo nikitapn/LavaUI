@@ -1745,6 +1745,45 @@ interface Compositor {
                          w: in i32, h: in i32, maxSide: in i32)
       raises(SurfaceNotFound, CaptureFailed);
 
+  /// The whole screen, written to a file, and the path to it.
+  ///
+  /// A *path* and not the bytes, which is the one design decision in this
+  /// call. A shared-memory reply is capped at 512 KiB — a screenful of PNG is
+  /// past that at 1280x720 and nowhere near it at 4K — and a picture that
+  /// sometimes fits is worse than one that never does. Both processes are on
+  /// the same machine and the same filesystem, so the file *is* the transfer,
+  /// and it costs one write and one read instead of a copy through a ring.
+  ///
+  /// It also makes the ordinary case free: the client hands the path straight
+  /// back to `RegisterImage`, and the pixels never leave the compositor at all.
+  ///
+  /// The file is the caller's from the moment this returns — nothing deletes
+  /// it, and a client that takes twenty screenshots and exits leaves twenty
+  /// files in the temporary directory unless it cleans up after itself.
+  ///
+  /// The output the pointer is on, with every window on it, foreign and Lava
+  /// alike, and the wallpaper behind them. Composited into a buffer of its own
+  /// rather than read back from the front buffer, so it costs one offscreen
+  /// frame and needs nothing to be on screen at the time.
+  ///
+  /// `includeSelf` false leaves the *calling* surface out of the picture,
+  /// which is what a screenshot tool wants and cannot arrange for itself: by
+  /// the time it can ask, its own window is already up. Its shadow and its
+  /// frost plate go with it — a window that is not in the shot must not leave
+  /// a soft rectangle where it was.
+  ///
+  /// The crop is in framebuffer pixels and `w`/`h` <= 0 means the whole
+  /// screen. Cropping here rather than in the client is not an optimisation:
+  /// a Lava client has no codec, so a region of a PNG is not something it can
+  /// take for itself.
+  ///
+  /// `maxSide` > 0 downsamples so the longer encoded edge fits. A screenshot
+  /// wants 0: the point of it is the pixels that were there.
+  string CaptureScreen(surfaceId: in u32, includeSelf: in boolean,
+                       x: in i32, y: in i32, w: in i32, h: in i32,
+                       maxSide: in i32)
+      raises(SurfaceNotFound, CaptureFailed);
+
   /// Forget the cached poster for a window, so the next `ImageSurface` that
   /// names it imports the buffer that window is showing *now*.
   ///
@@ -1821,6 +1860,20 @@ interface Compositor {
   void SetPrimarySelection(surfaceId: in u32, text: in string)
       raises(SurfaceNotFound);
 
+  /// Offers the PNG in `path` as the selection, as `image/png`.
+  ///
+  /// A path for the same reason `CaptureScreen` answers with one: a picture
+  /// does not fit in a shared-memory message, and both processes can already
+  /// see the same filesystem. The compositor reads the file once, holds the
+  /// bytes, and hands them to whoever pastes — so the file may be deleted the
+  /// moment this returns.
+  ///
+  /// Not `[unreliable]`, for the reason `SetClipboard` is not: a copy that did
+  /// not happen is discovered in another application, minutes later, by
+  /// somebody who has stopped believing they pressed anything.
+  void SetClipboardImageFile(surfaceId: in u32, path: in string)
+      raises(SurfaceNotFound);
+
   /// PNG of the seat selection, or empty if it holds none or is not an image.
   ///
   /// Same empty-not-error contract as `GetClipboard`. A Print Screen or a
@@ -1828,6 +1881,20 @@ interface Compositor {
   /// empty. The bytes are the file, not a texture id — a terminal that
   /// wants to paste a screenshot writes them out and inserts the path.
   vector<u8> GetClipboardPng(surfaceId: in u32) raises(SurfaceNotFound);
+
+  /// Fills the output with this surface, or gives it back its old geometry.
+  ///
+  /// For a client whose whole purpose is to cover the screen — a screenshot
+  /// tool showing a frozen desktop, a presenter, a lock screen. The
+  /// compositor already does this for foreign windows that ask through
+  /// xdg-shell; this is the same thing said over the control plane, which is
+  /// the only way a Lava client can say anything about its own frame.
+  ///
+  /// The surface is resized to the output and drawn above the panel and the
+  /// dock, with no title bar and no shadow. Turning it off restores what it
+  /// had before, which the compositor remembered rather than the client.
+  void SetFullscreen(surfaceId: in u32, on: in boolean)
+      raises(SurfaceNotFound);
 
   /// Frost the desktop behind this surface.
   ///

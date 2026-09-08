@@ -50,6 +50,18 @@ public enum WindowBridge {
     /// Hides the window without ending it.
     nonisolated(unsafe) public static var minimize: (@Sendable () -> Void)?
 
+    /// Fills the screen with this window, or gives it its old shape back.
+    ///
+    /// Nil in a windowed build, where the window manager owns the decision.
+    /// An app that must cover the screen to do its job — a screenshot tool
+    /// showing a frozen desktop — should check rather than assume: without
+    /// this it is a window like any other, and should say so rather than
+    /// draw a selection over a desktop that is still moving.
+    nonisolated(unsafe) public static var setFullscreen: (@Sendable (Bool) -> Void)?
+
+    /// Whether this window can cover the screen at all.
+    public static var canFullscreen: Bool { setFullscreen != nil }
+
     /// Whether this window has no frame but its own — set by whoever opened
     /// it, because only that call knows what it asked for.
     ///

@@ -926,6 +926,15 @@ public enum ClipboardBridge {
     /// PNG of the seat selection, when it is an image. Nil if the host
     /// cannot read pictures (windowed GLFW) or the selection is text.
     nonisolated(unsafe) public static var imageReader: (() -> [UInt8])?
+    /// Offers the PNG at a path as the selection. Nil if the host cannot hold
+    /// a picture, which is every windowed build: GLFW's clipboard is text and
+    /// nothing else, and a copy that silently did nothing would be discovered
+    /// in another application some minutes later.
+    ///
+    /// A path, like `ScreenCapture`, and for the same reason: a picture does
+    /// not fit in a shared-memory message. The host reads the file before it
+    /// answers, so the caller may delete it immediately.
+    nonisolated(unsafe) public static var imageFileWriter: ((String) -> Void)?
 
     /// The *primary* selection — what middle-click pastes. A second selection,
     /// filled by the act of selecting rather than by a copy command, which is
@@ -941,6 +950,15 @@ public enum ClipboardBridge {
     public static func read() -> String { reader?() ?? "" }
     public static func write(_ text: String) { writer?(text) }
     public static func readImage() -> [UInt8]? { imageReader?() }
+    /// Whether a picture can be copied at all here — worth asking before
+    /// offering the user a Copy button that would do nothing.
+    public static var canWriteImage: Bool { imageFileWriter != nil }
+    @discardableResult
+    public static func writeImage(file path: String) -> Bool {
+        guard let imageFileWriter else { return false }
+        imageFileWriter(path)
+        return true
+    }
     public static func readPrimary() -> String { primaryReader?() ?? "" }
     public static func writePrimary(_ text: String) { primaryWriter?(text) }
 }

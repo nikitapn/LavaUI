@@ -188,10 +188,10 @@ applet would probably serve better than an app.
 
 Things a desktop is judged on that nobody misses until they reach for them:
 
-- **A screenshot tool with annotation.** The compositor already has the whole
-  capture path — `screenshot_portal.cpp`, `CaptureSurface`, `grim` works — and
-  there is no app. Cheap, visible, and it shares a code path with Paint
-  (annotate = draw on a captured buffer). Probably the best value on this page.
+- ~~**A screenshot tool with annotation.**~~ Built — `LavaShot`, see
+  `docs/lavashot.md`. It cost three control-plane calls (`CaptureScreen`,
+  `SetClipboardImageFile`, `SetFullscreen`) and turned up the rule that a
+  picture crosses as a path rather than as bytes.
 - **Trash.** Not optional once a file manager exists; deleting for real is not
   something people forgive.
 - **Archives.** A file manager that cannot look inside a `.zip` feels broken in
@@ -211,8 +211,9 @@ Things a desktop is judged on that nobody misses until they reach for them:
 Reasoned rather than ranked, and the reasoning is what to argue with:
 
 1. ~~**File drops** (gap 1).~~ Done — and it cost two fixes, not one.
-2. **Screenshot + annotate.** Cheap, immediately useful, and it prototypes the
-   drawing model Paint needs on a smaller canvas.
+2. ~~**Screenshot + annotate.**~~ Done. The drawing model it established —
+   strokes in a document, undo, one canvas painting all of it — is what Paint
+   should start from.
 3. **Notes**, probably as a mode of `LavaEditor`. Smallest real app; proves the
    template.
 4. **File explorer, core browsing** — then immediately **the chooser mode**,

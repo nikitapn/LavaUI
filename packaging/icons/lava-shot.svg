@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title desc">
+  <title id="title">LavaShot</title>
+  <desc id="desc">A dashed selection over a screen, with a marked corner — the LavaShot application icon.</desc>
+  <defs>
+    <linearGradient id="tile" x1="96" y1="64" x2="416" y2="448" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#343866"/>
+      <stop offset="1" stop-color="#171a35"/>
+    </linearGradient>
+    <linearGradient id="screen" x1="96" y1="128" x2="416" y2="384" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#2b3157"/>
+      <stop offset="1" stop-color="#191d38"/>
+    </linearGradient>
+  </defs>
+  <rect x="28" y="28" width="456" height="456" rx="116" fill="url(#tile)"/>
+  <!-- The desktop being photographed, dimmed the way the tool dims it -->
+  <rect x="88" y="112" width="336" height="256" rx="18" fill="url(#screen)"/>
+  <rect x="88" y="112" width="336" height="256" rx="18" fill="#0b0d1c" opacity="0.45"/>
+  <!-- The region kept: bright, because everything outside it is not -->
+  <rect x="168" y="168" width="200" height="152" rx="6" fill="#2b3157"/>
+  <rect x="168" y="168" width="200" height="152" rx="6" fill="none"
+        stroke="#5a9dfa" stroke-width="10" stroke-dasharray="26 18" stroke-linecap="round"/>
+  <!-- One annotation, in the colour the tool starts on -->
+  <path d="M204 292 L268 216 L300 262 L336 204" fill="none" stroke="#ee3b3b"
+        stroke-width="16" stroke-linecap="round" stroke-linejoin="round"/>
+  <!-- A corner handle, so it reads as a selection rather than a picture -->
+  <rect x="152" y="152" width="32" height="32" rx="6" fill="#5a9dfa"/>
+  <rect x="352" y="304" width="32" height="32" rx="6" fill="#5a9dfa"/>
+</svg>

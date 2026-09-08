@@ -1524,6 +1524,22 @@ class CompositorImpl final : public ICompositor_Servant {
     return out;
   }
 
+  std::string CaptureScreen(uint32_t surfaceId,
+                            nprpc::flat::Boolean includeSelf, int32_t x,
+                            int32_t y, int32_t w, int32_t h,
+                            int32_t maxSide) override {
+    if (!host_.surfaceExists(surfaceId)) throw SurfaceNotFound(surfaceId);
+    std::string path = host_.captureScreen(
+        surfaceId, static_cast<bool>(includeSelf), x, y, w, h, maxSide);
+    if (path.empty()) throw CaptureFailed(surfaceId);
+    return path;
+  }
+
+  void SetFullscreen(uint32_t surfaceId, nprpc::flat::Boolean on) override {
+    if (!host_.surfaceExists(surfaceId)) throw SurfaceNotFound(surfaceId);
+    host_.setSurfaceFullscreen(surfaceId, static_cast<bool>(on));
+  }
+
   // ─── Clipboard ───────────────────────────────────────────────────────────
 
   std::string GetClipboard(uint32_t surfaceId) override {
@@ -1534,6 +1550,12 @@ class CompositorImpl final : public ICompositor_Servant {
   void SetClipboard(uint32_t surfaceId, nprpc::flat::Span<char> text) override {
     if (!host_.surfaceExists(surfaceId)) throw SurfaceNotFound(surfaceId);
     host_.setClipboardText(std::string(text.begin(), text.end()));
+  }
+
+  void SetClipboardImageFile(uint32_t surfaceId,
+                             nprpc::flat::Span<char> path) override {
+    if (!host_.surfaceExists(surfaceId)) throw SurfaceNotFound(surfaceId);
+    host_.setClipboardImageFile(std::string(path.begin(), path.end()));
   }
 
   std::string GetPrimarySelection(uint32_t surfaceId) override {

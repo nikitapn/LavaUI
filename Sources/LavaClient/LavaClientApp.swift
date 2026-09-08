@@ -1138,6 +1138,20 @@ public enum LavaClient {
         // The other selection — what middle-click pastes. Written whenever a
         // selection is *made* rather than copied, so this one is on the path
         // of a drag ending and is worth being the cheap call that it is.
+        ClipboardBridge.imageFileWriter = { [compositor] path in
+            do {
+                try blockingCall {
+                    try await compositor.setClipboardImageFile(
+                        surfaceId: surfaceID, path: path
+                    )
+                }
+            } catch {
+                FileHandle.standardError.write(
+                    Data("SetClipboardImageFile failed: \(error)\n".utf8)
+                )
+            }
+        }
+
         ClipboardBridge.primaryReader = { [compositor] in
             do {
                 return try blockingCall {
@@ -1227,6 +1241,40 @@ public enum LavaClient {
                 WindowBridge.isMaximized = now
             }
         }
+        WindowBridge.setFullscreen = { [compositor] on in
+            do {
+                try blockingCall {
+                    try await compositor.setFullscreen(
+                        surfaceId: surfaceID, on: on
+                    )
+                }
+            } catch {
+                FileHandle.standardError.write(
+                    Data("SetFullscreen failed: \(error)\n".utf8)
+                )
+            }
+        }
+
+        // The desktop, which only the compositor can see. Ten seconds like the
+        // agent's capture and for the same reason: an offscreen composite of a
+        // whole screen plus a PNG encode of it.
+        ScreenCapture.provider = {
+            [compositor] includeSelf, x, y, w, h, maxSide in
+            do {
+                return try blockingCall(timeout: 10) {
+                    try await compositor.captureScreen(
+                        surfaceId: surfaceID, includeSelf: includeSelf,
+                        x: x, y: y, w: w, h: h, maxSide: maxSide
+                    )
+                }
+            } catch {
+                FileHandle.standardError.write(
+                    Data("CaptureScreen failed: \(error)\n".utf8)
+                )
+                return nil
+            }
+        }
+
         WindowBridge.minimize = { [compositor] in
             report("Minimize") {
                 try blockingCall { try await compositor.minimize(surfaceId: surfaceID) }

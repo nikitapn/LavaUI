@@ -1,5 +1,7 @@
 #include "screenshot_portal.hpp"
 
+#include "png_file.hpp"
+
 #include <cerrno>
 #include <cstdlib>
 #include <cstring>
@@ -60,27 +62,6 @@ bool write_portal_file(const char *busName) {
       << ";\n"
          "UseIn=Lava;\n";
   return static_cast<bool>(out);
-}
-
-bool write_png_file(const std::vector<uint8_t> &png, std::string &outPath) {
-  char tmpl[] = "/tmp/lava-shot-XXXXXX.png";
-  const int fd = ::mkstemps(tmpl, 4);
-  if (fd < 0) return false;
-  const uint8_t *p = png.data();
-  size_t left = png.size();
-  while (left > 0) {
-    const ssize_t n = ::write(fd, p, left);
-    if (n < 0) {
-      ::close(fd);
-      ::unlink(tmpl);
-      return false;
-    }
-    p += static_cast<size_t>(n);
-    left -= static_cast<size_t>(n);
-  }
-  ::close(fd);
-  outPath = tmpl;
-  return true;
 }
 
 /// Fire and forget. Never wait: a compositor that `system()`s
@@ -293,7 +274,7 @@ void ScreenshotPortal::finish(const std::vector<uint8_t> &png, uint32_t width,
                               uint32_t height) {
   if (!hasPending()) return;
   std::string path;
-  if (png.empty() || !write_png_file(png, path)) {
+  if (png.empty() || !writeTempPng(png, path)) {
     fail();
     return;
   }

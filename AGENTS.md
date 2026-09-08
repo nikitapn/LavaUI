@@ -190,6 +190,17 @@ Consequences that surprise people:
   (`nprpc::get_context()`, valid only during dispatch — read it in the
   synchronous prologue of `SubscribeInput`, above the first `co_await`), since
   nprpc has no session id and no disconnect callback.
+- **A picture crosses the control plane as a path, never as bytes.** A
+  shared-memory reply is capped at 512 KiB (`NPRPC_DEFAULT_SHM_MAX_MESSAGE_SIZE`);
+  a screenful of PNG is 1.1 MB at 1280x720 and several times that at 4K. So
+  `CaptureScreen` writes the file and answers with its name, and
+  `SetClipboardImageFile` takes one — `lava::writeTempPng` is the shared half.
+  This is not a workaround: both processes are on the same filesystem, the file
+  *is* the transfer, and the path goes straight back into `RegisterImage`, so
+  the compositor decodes its own file and the pixels never move at all. The
+  file belongs to whoever receives the path, and nothing else deletes it. A
+  call that returns bytes and *sometimes* fits is the shape to avoid — it works
+  in testing and breaks on somebody's 4K monitor.
 - **A drop on a Lava window is the compositor's to deliver.** wlroots cannot do
   it: its drop path needs a `wl_surface` to have taken the drag focus, and a
   client that draws through the control plane has none — as far as Wayland is
@@ -1217,6 +1228,7 @@ so headless test runs skip it too.
 | `docs/client-server-gaps.md` | Client vs host feature gaps |
 | `docs/lavaview.md` | LavaView: what it does, what it cannot, and what to add next |
 | `docs/desktop-apps.md` | What the desktop still lacks, app by app, with costs |
+| `docs/lavashot.md` | LavaShot: the capture path, the export trick, what is missing |
 | `docs/retained-scene-tree.md` | Retained tree / invalidation notes |
 | `docs/nprpc-client-stream-gap.md` | Historical SHM stream bug (resolved) |
 | `docs/install.md` | Debian/Arch bootstrap, NPRPC, Docker, QEMU VM |

@@ -186,6 +186,7 @@ compositor = executable(
   'src/window_memory.cpp',
   'src/focus_history.cpp',
   'src/uri_list.cpp',
+  'src/png_file.cpp',
   lava_idl_sources,
   protocol_headers,
   protocol_sources,

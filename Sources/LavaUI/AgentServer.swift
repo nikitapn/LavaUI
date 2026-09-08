@@ -40,6 +40,22 @@ public enum ScreenshotBridge {
         if let provider { return provider(x, y, w, h, maxSide) }
         return editor.capturePngBase64(x: x, y: y, w: w, h: h, maxSide: maxSide)
     }
+
+    /// The same region as PNG bytes, for an app rather than for the agent.
+    ///
+    /// Decoded from the base64 the path above produces, which costs one pass
+    /// over a few megabytes. Worth it rather than a second capture path: this
+    /// is called when somebody saves a screenshot, not per frame, and the
+    /// engine's own capture hands back a C string either way.
+    public static func captureRegion(
+        x: Int32, y: Int32, w: Int32, h: Int32, editor: Editor
+    ) -> [UInt8]? {
+        guard let shot = capture(
+            x: x, y: y, w: w, h: h, maxSide: 0, editor: editor
+        ) else { return nil }
+        guard let data = Data(base64Encoded: shot.b64) else { return nil }
+        return [UInt8](data)
+    }
 }
 
 /// Callbacks the host app provides so the server stays UI-framework-agnostic.
