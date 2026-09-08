@@ -137,11 +137,27 @@ struct ViewerView: View {
             return
         }
 
+        // Snapped to whole pixels *here*, and nowhere else. The viewport stays
+        // continuous — a wheel zoom anchors on the pointer and a drag pans by
+        // fractions of one — but what is handed to the draw list must land on
+        // the grid, and at `1:1` that is the difference between the viewer's
+        // central promise and a lie. `ViewportMath.centered` puts the picture
+        // at `(box - image) / 2`, which is a half pixel whenever that
+        // difference is odd, and a half-pixel offset means every texel is
+        // sampled from between two of them: a hard edge measured 240 → 130 →
+        // 20 where the file has 240 → 20. "Original size" was softening the
+        // pixels it exists to show exactly.
+        //
+        // The size is snapped too, so the far edges land on the grid like the
+        // near ones. That shifts the drawn scale by under half a pixel across
+        // the whole picture, which no one can see, and it is what makes the
+        // hairline below one pixel wide everywhere instead of one on two sides
+        // and two on the others.
         let place = session.placement
-        let w = session.displaySize.width * place.scale
-        let h = session.displaySize.height * place.scale
-        let x = frame.x + place.offsetX
-        let y = frame.y + place.offsetY
+        let w = max(1, (session.displaySize.width * place.scale).rounded())
+        let h = max(1, (session.displaySize.height * place.scale).rounded())
+        let x = (frame.x + place.offsetX).rounded()
+        let y = (frame.y + place.offsetY).rounded()
 
         // Clipped to the canvas: at any zoom past fit the picture is larger
         // than its box, and without this it would paint over the control bar.
@@ -332,7 +348,14 @@ enum Palette {
     /// The mat behind the picture. Not `theme.canvas` — this has to stay dark
     /// under a light theme too, because it is a viewing surround, not chrome.
     static let mat = Color(r: 0.07, g: 0.07, b: 0.08)
-    static let edge = Color(r: 0.30, g: 0.30, b: 0.33)
+    /// The hairline around the picture. Quiet on purpose: it is there so a
+    /// photograph that is black at its edges still reads as a rectangle
+    /// against a near-black mat, and that needs a seam, not a border. At 0.30
+    /// it was +59 over the mat — more contrast than it has against most
+    /// photographs, so it looked like something drawn *around* the picture
+    /// rather than the edge of it. This is +25, which disappears into anything
+    /// that is not nearly as dark as the surround.
+    static let edge = Color(r: 0.17, g: 0.17, b: 0.19)
     /// The chequer behind transparency. Mid greys rather than the usual white
     /// pair: this viewer's mat is near-black, and a white chequer would be the
     /// brightest thing in the window.
