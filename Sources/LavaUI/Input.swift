@@ -25,6 +25,7 @@ public enum KeyCode {
     public static let o: Int32 = 79
     public static let p: Int32 = 80
     public static let q: Int32 = 81
+    public static let r: Int32 = 82
     public static let s: Int32 = 83
     public static let t: Int32 = 84
     public static let v: Int32 = 86

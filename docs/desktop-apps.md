@@ -146,7 +146,9 @@ SMB, MTP and FTP at once) or `libcurl` for the two or three protocols you
 actually want. Retrofitting that seam later is the expensive version.
 
 **Large.** Sequence it: browse and open → the chooser mode → operations and
-Trash → watching → remote.
+Trash → watching → remote. The first of those is `LavaExplorer` —
+`docs/lavaexplorer.md` — a one-pane window that lists a folder and opens
+files, with no delete on purpose.
 
 ### Paint — the most self-contained thing on the list
 

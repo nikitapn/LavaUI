@@ -388,6 +388,8 @@ Sources/
   LavaView*/       LavaView — image viewer (core headless + app). Fit / 1:1,
                    wheel zoom at the cursor, the folder as a cycle, and two
                    rotate buttons that can write the turn back to the file
+  LavaExplorer*/   File manager (core headless + app). One pane, places plus
+                   a details list; browse and open, no delete
   FBDModel/        Function-block diagram model
 canvas/            C++ Vulkan engine + Yoga (SwiftPM C++ targets)
 compositor/        wlroots compositor + canvas surfaces + control plane
@@ -1163,6 +1165,7 @@ so headless test runs skip it too.
 | Dropdown / one-of-many switcher | `Sources/LavaUI/ComboBox.swift` |
 | Restoring where an editor was | `EditorPosition`, `EditorController.position()/restore(_:)` |
 | TraceLoom tabs and workspaces | `Sources/TraceLoomApp/{LogDocument,TraceLoomSession}.swift`, `TraceLoomCore/Workspace.swift` |
+| File explorer browse / list | `Sources/LavaExplorerCore`, `Sources/LavaExplorerApp` |
 | Panel global menu (import side) | `canvas/src/menu/menu_import.*`, `Sources/LavaUI/PanelMenu.swift` |
 | Window list / dock | `SubscribeWindows` in the IDL, `Sources/LavaDock/` |
 | Dock window preview (hover a stack) | `Sources/LavaDock/WindowPreview.swift`; live thumbnails are `ImageSurface`, room comes from `SetPanelThickness`, freshness from `ForgetWindowPoster` |
@@ -1229,6 +1232,7 @@ so headless test runs skip it too.
 | `docs/lavaview.md` | LavaView: what it does, what it cannot, and what to add next |
 | `docs/desktop-apps.md` | What the desktop still lacks, app by app, with costs |
 | `docs/lavashot.md` | LavaShot: the capture path, the export trick, what is missing |
+| `docs/lavaexplorer.md` | LavaExplorer: browse and open, what it will not do yet |
 | `docs/retained-scene-tree.md` | Retained tree / invalidation notes |
 | `docs/nprpc-client-stream-gap.md` | Historical SHM stream bug (resolved) |
 | `docs/install.md` | Debian/Arch bootstrap, NPRPC, Docker, QEMU VM |

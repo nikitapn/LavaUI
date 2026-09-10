@@ -51,6 +51,7 @@ var products: [Product] = [
     .executable(name: "LavaWeather", targets: ["WeatherApp"]),
     .executable(name: "LavaView", targets: ["LavaViewApp"]),
     .executable(name: "LavaShot", targets: ["LavaShotApp"]),
+    .executable(name: "LavaExplorer", targets: ["LavaExplorerApp"]),
     .executable(name: "LavaTerm", targets: ["LavaTermApp"]),
     .executable(name: "LavaEditor", targets: ["LavaEditorApp"]),
     .executable(name: "LavaBench", targets: ["LavaBench"]),
@@ -76,6 +77,7 @@ var products: [Product] = [
     .library(name: "WeatherCore", targets: ["WeatherCore"]),
     .library(name: "LavaViewCore", targets: ["LavaViewCore"]),
     .library(name: "LavaShotCore", targets: ["LavaShotCore"]),
+    .library(name: "LavaExplorerCore", targets: ["LavaExplorerCore"]),
 ]
 
 var targets: [Target] = [
@@ -124,6 +126,9 @@ var targets: [Target] = [
     // tools. No engine — the arithmetic a screenshot tool gets wrong is
     // testable without photographing anything.
     .target(name: "LavaShotCore"),
+    // Folder listing, sort, history and the FileSource seam. No engine —
+    // a file manager that lists the wrong names is a test, not a screenshot.
+    .target(name: "LavaExplorerCore"),
 
     .executableTarget(
         name: "TwoWindows",
@@ -309,6 +314,11 @@ var targets: [Target] = [
         swiftSettings: interopCxx
     ),
     .executableTarget(
+        name: "LavaExplorerApp",
+        dependencies: ["LavaUI", "LavaHost", "LavaExplorerCore", "LavaShell"],
+        swiftSettings: interopCxx
+    ),
+    .executableTarget(
         name: "LavaBench",
         dependencies: ["LavaUI", "LavaText", "TraceLoomCore"],
         swiftSettings: interopCxx
@@ -326,6 +336,7 @@ var targets: [Target] = [
     .testTarget(name: "WeatherCoreTests", dependencies: ["WeatherCore"]),
     .testTarget(name: "LavaViewCoreTests", dependencies: ["LavaViewCore"]),
     .testTarget(name: "LavaShotCoreTests", dependencies: ["LavaShotCore"]),
+    .testTarget(name: "LavaExplorerCoreTests", dependencies: ["LavaExplorerCore"]),
 ]
 
 if haveNprpc {

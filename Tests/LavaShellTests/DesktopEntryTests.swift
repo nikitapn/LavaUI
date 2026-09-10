@@ -30,6 +30,23 @@ struct DesktopEntryParsingTests {
         #expect(entry.keywords == ["Internet", "WWW", "Browser"])
         #expect(entry.startupWMClass == "firefox")
         #expect(!entry.terminal)
+        #expect(entry.mimeTypes.isEmpty)
+    }
+
+    @Test("reads MimeType as a list, including a wildcard")
+    func readsMimeTypes() throws {
+        let entry = try #require(DesktopEntry.parse(text: """
+            [Desktop Entry]
+            Type=Application
+            Name=LavaView
+            Exec=LavaView %F
+            MimeType=image/png;image/jpeg;image/*;
+            """, id: "LavaView"))
+        #expect(entry.mimeTypes == ["image/png", "image/jpeg", "image/*"])
+        #expect(entry.handles("image/png"))
+        #expect(entry.handles("image/webp"))
+        #expect(!entry.handles("text/plain"))
+        #expect(entry.desktopFileId == "LavaView.desktop")
     }
 
     @Test("ignores everything after the first group")
@@ -204,6 +221,21 @@ struct ExecTests {
     @Test("collapses runs of whitespace")
     func collapsesWhitespace() {
         #expect(entry("  app   --flag  ").command() == ["app", "--flag"])
+    }
+
+    @Test("file codes become the path, and a line with none still gets it")
+    func fillsFileCodes() {
+        #expect(entry("firefox %u").command(files: ["/tmp/a.png"])
+                    == ["firefox", "file:///tmp/a.png"])
+        #expect(entry("code %F").command(files: ["/a", "/b"])
+                    == ["code", "/a", "/b"])
+        #expect(entry("view %f").command(files: ["/one.png", "/two.png"])
+                    == ["view", "/one.png"])
+        // No placeholder: Open With still has to hand the file over.
+        #expect(entry("weird-app").command(files: ["/tmp/x"])
+                    == ["weird-app", "/tmp/x"])
+        // Empty files still drop the codes, which is the launcher case.
+        #expect(entry("code %F").command() == ["code"])
     }
 }
 

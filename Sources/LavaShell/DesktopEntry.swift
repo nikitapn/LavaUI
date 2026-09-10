@@ -46,6 +46,10 @@ public struct DesktopEntry: Sendable, Identifiable, Equatable {
     /// finds Firefox even though the word appears nowhere in its name.
     public var categories: [String]
     public var keywords: [String]
+    /// MIME types this application claims, from `MimeType=`. Empty if it
+    /// never said. Used by a file manager's Open With list; a launcher does
+    /// not care.
+    public var mimeTypes: [String] = []
     /// The window class this application's windows actually report, when that
     /// differs from the entry's id. The field exists precisely because the two
     /// often disagree, and it is the only reason an X11 window under Wayland
@@ -61,8 +65,61 @@ public struct DesktopEntry: Sendable, Identifiable, Equatable {
     /// Empty for an entry parsed from text rather than from a file.
     public var path: String = ""
 
+    public init(
+        id: String,
+        name: String,
+        genericName: String = "",
+        comment: String = "",
+        icon: String = "",
+        exec: String,
+        workingDirectory: String = "",
+        terminal: Bool = false,
+        categories: [String] = [],
+        keywords: [String] = [],
+        mimeTypes: [String] = [],
+        startupWMClass: String = "",
+        actionNames: [String] = [],
+        path: String = ""
+    ) {
+        self.id = id
+        self.name = name
+        self.genericName = genericName
+        self.comment = comment
+        self.icon = icon
+        self.exec = exec
+        self.workingDirectory = workingDirectory
+        self.terminal = terminal
+        self.categories = categories
+        self.keywords = keywords
+        self.mimeTypes = mimeTypes
+        self.startupWMClass = startupWMClass
+        self.actionNames = actionNames
+        self.path = path
+    }
+
     public static func == (a: DesktopEntry, b: DesktopEntry) -> Bool {
         a.id == b.id
+    }
+
+    /// What `xdg-mime default` wants: the id plus `.desktop`.
+    public var desktopFileId: String { "\(id).desktop" }
+
+    /// Whether `Exec=` takes files or URLs. An app that does not is still
+    /// launchable, but handing it a path is a guess.
+    public var acceptsFiles: Bool {
+        exec.contains("%f") || exec.contains("%F")
+            || exec.contains("%u") || exec.contains("%U")
+    }
+
+    /// `MimeType=` match, including `image/*` against `image/png`.
+    public func handles(_ mime: String) -> Bool {
+        for type in mimeTypes {
+            if type == mime { return true }
+            if type.hasSuffix("/*"), mime.hasPrefix(type.dropLast(1)) {
+                return true
+            }
+        }
+        return false
     }
 }
 
@@ -216,6 +273,7 @@ extension DesktopEntry {
         static let terminal       = Array("Terminal".utf8)
         static let categories     = Array("Categories".utf8)
         static let keywords       = Array("Keywords".utf8)
+        static let mimeType       = Array("MimeType".utf8)
         static let startupWMClass = Array("StartupWMClass".utf8)
         static let actions        = Array("Actions".utf8)
         static let name           = Array("Name".utf8)
@@ -256,7 +314,7 @@ extension DesktopEntry {
 
         var isApplication = false
         var exec = "", icon = "", path = "", tryExec = "", startupWMClass = ""
-        var categories = "", keywords = "", actions = ""
+        var categories = "", keywords = "", actions = "", mimeType = ""
         var terminal = false
         var name = Localised(), genericName = Localised(), comment = Localised()
 
@@ -338,6 +396,7 @@ extension DesktopEntry {
             else if isKey(Key.path), path.isEmpty { path = value() }
             else if isKey(Key.categories), categories.isEmpty { categories = value() }
             else if isKey(Key.keywords), keywords.isEmpty { keywords = value() }
+            else if isKey(Key.mimeType), mimeType.isEmpty { mimeType = value() }
             else if isKey(Key.actions), actions.isEmpty { actions = value() }
             else if isKey(Key.startupWMClass), startupWMClass.isEmpty {
                 startupWMClass = value()
@@ -369,6 +428,7 @@ extension DesktopEntry {
             terminal: terminal,
             categories: split(categories),
             keywords: split(keywords),
+            mimeTypes: split(mimeType),
             startupWMClass: startupWMClass,
             actionNames: split(actions)
         )

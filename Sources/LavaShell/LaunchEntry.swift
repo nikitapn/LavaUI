@@ -16,7 +16,14 @@ extension DesktopEntry {
     /// handed the literal string `%F` opens a file by that name.
     ///
     /// Empty if the line is empty, which the parser has already rejected.
-    public func command() -> [String] {
+    ///
+    /// `files` fills `%f` / `%F` / `%u` / `%U`. A launcher opening an app
+    /// with no document passes `[]` and the codes are dropped — leaving them
+    /// in would hand an editor the literal string `%F`. A file manager
+    /// opening a document passes the path; if the line has no file code at
+    /// all, the paths are appended, which is what "Open With" has to do for
+    /// an `Exec=` that forgot the placeholder.
+    public func command(files: [String] = []) -> [String] {
         var argv: [String] = []
         var current = ""
         var haveCurrent = false
@@ -52,14 +59,43 @@ extension DesktopEntry {
         if haveCurrent { argv.append(current) }
 
         var out: [String] = []
+        var sawFileCode = false
         for argument in argv {
             // A field code standing alone is dropped; `%%` is a literal
             // percent, and anything else with a percent in it keeps its shape.
             if argument.count == 2, argument.hasPrefix("%") {
-                if argument == "%%" { out.append("%") }
+                if argument == "%%" {
+                    out.append("%")
+                    continue
+                }
+                if !files.isEmpty {
+                    switch argument {
+                    case "%f":
+                        sawFileCode = true
+                        if let first = files.first { out.append(first) }
+                    case "%F":
+                        sawFileCode = true
+                        out.append(contentsOf: files)
+                    case "%u":
+                        sawFileCode = true
+                        if let first = files.first {
+                            out.append(URL(fileURLWithPath: first).absoluteString)
+                        }
+                    case "%U":
+                        sawFileCode = true
+                        out.append(contentsOf: files.map {
+                            URL(fileURLWithPath: $0).absoluteString
+                        })
+                    default:
+                        break
+                    }
+                }
                 continue
             }
             out.append(argument.replacingOccurrences(of: "%%", with: "%"))
+        }
+        if !files.isEmpty, !sawFileCode {
+            out.append(contentsOf: files)
         }
         return out
     }
@@ -74,8 +110,10 @@ extension DesktopEntry {
     ///
     /// Returns false if there was nothing runnable in the entry.
     @discardableResult
-    public func launch(terminalProgram: String = "alacritty") -> Bool {
-        var argv = command()
+    public func launch(
+        files: [String] = [], terminalProgram: String = "alacritty"
+    ) -> Bool {
+        var argv = command(files: files)
         guard !argv.isEmpty else { return false }
 
         // A command-line program with a desktop entry. Without a terminal it

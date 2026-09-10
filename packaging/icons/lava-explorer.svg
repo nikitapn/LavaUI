@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title desc">
+  <title id="title">LavaExplorer</title>
+  <desc id="desc">A manila folder on a dark rounded tile — the LavaExplorer application icon.</desc>
+  <defs>
+    <linearGradient id="tile" x1="96" y1="64" x2="416" y2="448" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#343866"/>
+      <stop offset="1" stop-color="#171a35"/>
+    </linearGradient>
+    <linearGradient id="tab" x1="120" y1="140" x2="260" y2="200" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#ffd479"/>
+      <stop offset="1" stop-color="#e0a23a"/>
+    </linearGradient>
+    <linearGradient id="body" x1="120" y1="200" x2="400" y2="380" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#ffcc66"/>
+      <stop offset="1" stop-color="#d4892a"/>
+    </linearGradient>
+  </defs>
+  <rect x="28" y="28" width="456" height="456" rx="116" fill="url(#tile)"/>
+  <!-- Tab -->
+  <path d="M120 214 H208 L248 174 H120 Z" fill="url(#tab)"/>
+  <!-- Body -->
+  <path d="M120 214 H392 A20 20 0 0 1 412 234 V354 A20 20 0 0 1 392 374 H120 A20 20 0 0 1 100 354 V234 A20 20 0 0 1 120 214 Z" fill="url(#body)"/>
+  <!-- Lip -->
+  <path d="M100 250 H412 V354 A20 20 0 0 1 392 374 H120 A20 20 0 0 1 100 354 Z" fill="#c47a22"/>
+  <path d="M112 262 H400 V346 A12 12 0 0 1 388 358 H124 A12 12 0 0 1 112 346 Z" fill="#8ab4ff" opacity="0.35"/>
+</svg>

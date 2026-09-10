@@ -43,6 +43,7 @@ swift run HelloWorld          # demo
 swift run LavaSpotify         # music player (see docs/lavaspotify.md)
 swift run LavaTerm            # terminal emulator (click the grid, type)
 swift run LavaView -- pic.jpg # image viewer (wheel to zoom, arrows for the folder)
+swift run LavaExplorer        # file manager (browse and open; no delete)
 swift test                    # headless tests, no GPU needed
 ```
 
