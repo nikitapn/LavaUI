@@ -50,12 +50,13 @@ struct LavaShotApp {
         )
     }
 
-    /// Escape cancels, Enter copies, Ctrl+S saves, Ctrl+Shift+S asks where.
+    /// Escape cancels, Enter or Ctrl+C copies, Ctrl+S saves, Ctrl+Shift+S asks
+    /// where.
     ///
-    /// Raw rather than through `FocusManager` because nothing here is
-    /// focusable: the whole window is one canvas, and a screenshot overlay
-    /// that needed to be clicked before it answered the keyboard would be one
-    /// nobody could cancel.
+    /// Raw rather than through `FocusManager` because nothing here is a
+    /// text field: the canvas is not focusable and the toolbar is a row of
+    /// glyphs, and a screenshot overlay that needed to be clicked before it
+    /// answered the keyboard would be one nobody could cancel.
     private static func keys(_ event: InputEvent, session: ShotSession) -> Bool {
         // `x > 0` is a press; releases repeat the same key and would fire
         // everything twice.
@@ -75,6 +76,8 @@ struct LavaShotApp {
         case KeyCode.escape:
             session.perform(.cancel)
         case KeyCode.enter:
+            session.perform(.copy)
+        case KeyCode.c where control:
             session.perform(.copy)
         case Key.s where control && shift:
             session.saveAs()

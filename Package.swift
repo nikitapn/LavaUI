@@ -120,8 +120,8 @@ var targets: [Target] = [
     // Which pictures are next to this one, and where the picture sits in
     // the window. No engine — see Sources/LavaViewCore.
     .target(name: "LavaViewCore"),
-    // Selection geometry, the annotation document and the toolbar's own
-    // layout. No engine — the arithmetic a screenshot tool gets wrong is
+    // Selection geometry, the annotation document, and the names of the
+    // tools. No engine — the arithmetic a screenshot tool gets wrong is
     // testable without photographing anything.
     .target(name: "LavaShotCore"),
 

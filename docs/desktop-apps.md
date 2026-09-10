@@ -212,8 +212,8 @@ Reasoned rather than ranked, and the reasoning is what to argue with:
 
 1. ~~**File drops** (gap 1).~~ Done — and it cost two fixes, not one.
 2. ~~**Screenshot + annotate.**~~ Done. The drawing model it established —
-   strokes in a document, undo, one canvas painting all of it — is what Paint
-   should start from.
+   strokes in a document, undo, a canvas for the picture and a layout overlay
+   for the chrome — is what Paint should start from.
 3. **Notes**, probably as a mode of `LavaEditor`. Smallest real app; proves the
    template.
 4. **File explorer, core browsing** — then immediately **the chooser mode**,

@@ -2,21 +2,22 @@ import Foundation
 import LavaShotCore
 import LavaUI
 
-/// The whole interface: one canvas the size of the screen.
+/// The whole interface: the frozen desktop, painted, with chrome laid over it.
 ///
-/// Everything is painted rather than laid out, which is deliberate and not
-/// laziness. The window is a frozen photograph of somebody's desktop with a
-/// selection over it and a toolbar floating above that, and at the moment of
-/// export the toolbar has to *not be there* — the export is a capture of this
-/// very window, so anything the engine drew is in the picture. One `if` around
-/// one paint call takes the entire interface out of the result; a real widget
-/// tree would have to be dismantled and rebuilt around the same instant.
+/// The canvas is the picture — the shot, the dim, the marks, the selection
+/// outline. The toolbar and the hint sit on top as an ordinary layout overlay,
+/// which is what makes adding a button a view rather than another paint path
+/// and another hit test. At export time both halves of the interface come off
+/// with the same boolean: the overlay is hidden, and the canvas skips the dim
+/// and the outline, so the frame the compositor photographs is the picture
+/// with nothing of the tool left on it.
 struct ShotView: View {
     let session: ShotSession
 
-    /// Where characters go. There is nothing focusable in this window — it is
-    /// one canvas — so the label being typed is the default target, the same
-    /// arrangement the image viewer uses for a window with one keyboard.
+    /// Where characters go. The canvas is not focusable, and neither is a
+    /// toolbar of clickable glyphs, so the label being typed is the default
+    /// target — the same arrangement the image viewer uses for a window with
+    /// one keyboard.
     private let keyTarget = NodeID.generate()
 
     var body: some View {
@@ -37,6 +38,16 @@ struct ShotView: View {
             paint: paint
         )
         .background(Palette.behind)
+        .overlay(alignment: .bottom, inset: 24) {
+            // Hidden rather than omitted so the overlay node stays put.
+            // Dropping it for a frame remounts the strip afterwards, which
+            // is wasted work for something that is coming straight back if
+            // the export fails. `isExporting` is not observed — it is written
+            // from inside a paint — so the hide is driven by the `markDirty`
+            // export already does.
+            ShotChrome(session: session)
+                .hidden(session.isExporting)
+        }
     }
 
     // MARK: - Painting
@@ -113,8 +124,6 @@ struct ShotView: View {
         if let region = selection, !region.isEmpty {
             outline(list, region: region, origin: frame)
         }
-        toolbar(list, screen: screen, origin: frame)
-        hint(list, frame: frame, screen: screen)
     }
 
     /// Four rectangles around the selection, or one over everything.
@@ -297,27 +306,8 @@ struct ShotView: View {
         )
     }
 
-    /// One glyph in the middle of a button.
-    private func centred(
-        _ list: DrawList, _ glyph: String, in frame: ShotRect,
-        origin: CanvasFrame, color: Color
-    ) {
-        guard let font = Environment.current.font ?? FontStore.default else {
-            return
-        }
-        let size = font.measure(glyph)
-        list.text(
-            glyph,
-            // `text` insets the pen by 4 to match the old renderer, so the
-            // centring has to take that back out.
-            x: origin.x + frame.x + (frame.w - size.width) / 2 - 4,
-            y: origin.y + frame.y + (frame.h - font.lineHeight) / 2,
-            w: size.width + 8, h: font.lineHeight, color: color, font: font
-        )
-    }
-
     /// Text at a point, with the default face. The draw list wants a box; a
-    /// label on a floating toolbar has no box, so it gets a generous one.
+    /// size readout on a selection has no box, so it gets a generous one.
     private func label(
         _ list: DrawList, _ string: String, x: Float, y: Float, color: Color
     ) {
@@ -375,46 +365,167 @@ struct ShotView: View {
         list.polygon([(x: b.x, y: b.y), left, right], color: color)
     }
 
-    // MARK: - Toolbar
+    // MARK: - Input
 
-    private func toolbar(_ list: DrawList, screen: ShotRect, origin: CanvasFrame) {
-        let (plate, buttons) = ShotToolbar.layout(in: screen)
-        list.roundedRect(
-            x: origin.x + plate.x, y: origin.y + plate.y,
-            w: plate.w, h: plate.h, color: Palette.plate, radius: 10
-        )
-        for button in buttons {
-            let bx = origin.x + button.frame.x
-            let by = origin.y + button.frame.y
-            let on = isActive(button.action)
-            if on {
-                list.roundedRect(
-                    x: bx, y: by, w: button.frame.w, h: button.frame.h,
-                    color: Palette.accent, radius: 7
-                )
-            }
-            var color = on ? Palette.plate : Palette.glyph
-            if case .color(let index) = button.action {
-                let swatch = ShotColor.palette[index]
-                color = Color(r: swatch.r, g: swatch.g, b: swatch.b, a: 1)
-            }
-            if !isEnabled(button.action) { color = Palette.disabled }
-            // Measured rather than nudged by a constant: the buttons shrink on
-            // a narrow screen, and a glyph centred by guesswork drifts out of
-            // its own button as soon as they do.
-            centred(list, button.glyph, in: button.frame, origin: origin, color: color)
+    private func handleGesture(_ gesture: CanvasGesture) {
+        let point = ShotPoint(x: gesture.localX, y: gesture.localY)
+        let screen = ShotRect(x: 0, y: 0, w: gesture.frame.w, h: gesture.frame.h)
+
+        // Toolbar clicks never arrive here: the overlay is a real node, hit-
+        // tested before the canvas, so a press on a button is that button's.
+        switch gesture.phase {
+        case .began:
+            session.beginDraw(at: point, screen: screen)
+        case .moved:
+            session.continueDraw(to: point, screen: screen)
+        case .ended:
+            session.endDraw()
         }
+    }
+}
 
-        // The stroke weight, as itself: a dot the size of the line that will
-        // be drawn, which says more than a number would.
-        if let thicker = buttons.first(where: { $0.action == .thicker }) {
-            let dot = session.strokeWidth
+/// The hint and the tool strip, floating over the canvas.
+///
+/// Grouped the way the painted bar was — tools, colours, weight, history,
+/// export — because that is where the muscle memory is. Clicks on the plate
+/// itself are swallowed so a miss that lands in the padding does not start a
+/// selection under the chrome.
+private struct ShotChrome: View {
+    let session: ShotSession
+
+    private static let button: Float = 34
+
+    var body: some View {
+        VStack(alignment: .center, spacing: 8, onClick: {}) {
+            Text(hint, color: Palette.hint)
+            HStack(padding: 8, alignment: .center, spacing: 4) {
+                tools
+                separator
+                colors
+                separator
+                weight
+                separator
+                history
+                separator
+                output
+            }
+            .background(Palette.plate)
+            .cornerRadius(10)
+        }
+    }
+
+    private var hint: String {
+        if let notice = session.notice {
+            return notice
+        }
+        if session.isTyping {
+            // Enter means something else in here, and this line is the only
+            // place that says what Enter does.
+            return "Enter finishes the label · Esc discards it"
+        }
+        if session.selection == nil {
+            return "Drag to choose a region · Esc to cancel"
+        }
+        return "Enter or Ctrl+C copies · Ctrl+S saves · Esc cancels"
+    }
+
+    private var tools: some View {
+        HStack(alignment: .center, spacing: 4) {
+            ForEach(Array(ShotTool.allCases), id: \.self) { tool in
+                chromeButton(.tool(tool))
+            }
+        }
+    }
+
+    private var colors: some View {
+        HStack(alignment: .center, spacing: 4) {
+            ForEach(Array(ShotColor.palette.indices), id: \.self) { index in
+                chromeButton(.color(index))
+            }
+        }
+    }
+
+    private var weight: some View {
+        HStack(alignment: .center, spacing: 4) {
+            chromeButton(.thinner)
+            widthPreview
+            chromeButton(.thicker)
+        }
+    }
+
+    private var history: some View {
+        HStack(alignment: .center, spacing: 4) {
+            chromeButton(.undo)
+            chromeButton(.redo)
+        }
+    }
+
+    private var output: some View {
+        HStack(alignment: .center, spacing: 4) {
+            chromeButton(.copy)
+            chromeButton(.save)
+            chromeButton(.cancel)
+        }
+    }
+
+    private var separator: some View {
+        Divider(.vertical, style: DividerStyle(
+            spacing: 6, color: Palette.glyph.opacity(0.28)
+        ))
+        .frame(height: .pt(20))
+    }
+
+    /// The stroke weight, as itself: a dot the size of the line that will
+    /// be drawn, which says more than a number would.
+    private var widthPreview: some View {
+        let width = session.strokeWidth
+        return Canvas(
+            label: "stroke-width",
+            width: .pt(Self.button),
+            height: .pt(Self.button)
+        ) { list, frame in
             list.circle(
-                cx: origin.x + thicker.frame.x + thicker.frame.w / 2,
-                cy: origin.y + thicker.frame.maxY + 7,
-                radius: max(1.5, dot / 2), color: Palette.glyph
+                cx: frame.x + frame.w / 2,
+                cy: frame.y + frame.h / 2,
+                radius: max(1.5, width / 2),
+                color: Palette.glyph
             )
         }
+        .flexShrink(0)
+        .agentId("stroke-width")
+    }
+
+    private func chromeButton(_ action: ShotAction) -> some View {
+        let active = isActive(action)
+        let enabled = isEnabled(action)
+        let color: Color
+        if !enabled {
+            color = Palette.disabled
+        } else if case .color(let index) = action {
+            let swatch = ShotColor.palette[index]
+            color = Color(r: swatch.r, g: swatch.g, b: swatch.b, a: 1)
+        } else {
+            color = active ? Palette.plate : Palette.glyph
+        }
+        // `Text(align:)` and **not** `.frame(alignment:)`. The frame's
+        // alignment would wrap this in a box it does not own, and the click
+        // would stay on the glyph while the hover filled the 34pt cell.
+        return Text(
+            action.glyph,
+            color: color,
+            hoverFill: enabled ? (active ? Palette.accent : Palette.hover) : nil,
+            cornerRadius: 7,
+            align: .center,
+            onClick: enabled ? { session.perform(action) } : nil
+        )
+        .padding(6)
+        .frame(width: .pt(Self.button), height: .pt(Self.button))
+        .background(active ? Palette.accent : Color.clear)
+        .hoverBackground(enabled ? (active ? Palette.accent : Palette.hover) : Color.clear)
+        .cornerRadius(7)
+        .cursor(enabled ? .pointer : .arrow)
+        .flexShrink(0)
+        .agentId(id(for: action))
     }
 
     private func isActive(_ action: ShotAction) -> Bool {
@@ -430,48 +541,23 @@ struct ShotView: View {
         case .undo: return session.document.canUndo
         case .redo: return session.document.canRedo
         case .copy, .save: return session.selection != nil
+        case .thinner: return session.widthIndex > 0
+        case .thicker: return session.widthIndex < ShotOutput.widths.count - 1
         default: return true
         }
     }
 
-    private func hint(_ list: DrawList, frame: CanvasFrame, screen: ShotRect) {
-        let text: String
-        if let notice = session.notice {
-            text = notice
-        } else if session.isTyping {
-            // Enter means something else in here, and this line is the only
-            // place that says what Enter does.
-            text = "Enter finishes the label · Esc discards it"
-        } else if session.selection == nil {
-            text = "Drag to choose a region · Esc to cancel"
-        } else {
-            text = "Enter copies · Ctrl+S saves · Esc cancels"
-        }
-        let (plate, _) = ShotToolbar.layout(in: screen)
-        label(
-            list, text, x: frame.x + screen.w / 2 - Float(text.count) * 3.2,
-            y: frame.y + plate.y - 26, color: Palette.hint
-        )
-    }
-
-    // MARK: - Input
-
-    private func handleGesture(_ gesture: CanvasGesture) {
-        let point = ShotPoint(x: gesture.localX, y: gesture.localY)
-        let screen = ShotRect(x: 0, y: 0, w: gesture.frame.w, h: gesture.frame.h)
-
-        switch gesture.phase {
-        case .began:
-            let (_, buttons) = ShotToolbar.layout(in: screen)
-            if let action = ShotToolbar.hit(buttons, x: point.x, y: point.y) {
-                session.perform(action)
-                return
-            }
-            session.beginDraw(at: point, screen: screen)
-        case .moved:
-            session.continueDraw(to: point, screen: screen)
-        case .ended:
-            session.endDraw()
+    private func id(for action: ShotAction) -> String {
+        switch action {
+        case .tool(let tool): return "tool-\(tool.rawValue)"
+        case .color(let index): return "color-\(index)"
+        case .thinner: return "thinner"
+        case .thicker: return "thicker"
+        case .undo: return "undo"
+        case .redo: return "redo"
+        case .copy: return "copy"
+        case .save: return "save"
+        case .cancel: return "cancel"
         }
     }
 }
@@ -486,6 +572,7 @@ enum Palette {
     static let behind = Color(r: 0.05, g: 0.05, b: 0.06)
     static let dim = Color(r: 0.03, g: 0.03, b: 0.05, a: 0.55)
     static let plate = Color(r: 0.10, g: 0.11, b: 0.13, a: 0.96)
+    static let hover = Color(r: 0.20, g: 0.22, b: 0.26, a: 0.96)
     static let glyph = Color(r: 0.90, g: 0.91, b: 0.94)
     static let disabled = Color(r: 0.42, g: 0.44, b: 0.48)
     static let accent = Color(r: 0.35, g: 0.62, b: 0.98)

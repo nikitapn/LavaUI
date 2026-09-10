@@ -311,7 +311,7 @@ final class ShotSession {
     /// means writing a line renderer, an ellipse renderer and a glyph
     /// rasteriser to draw a second time what the engine has already drawn
     /// once — and having them disagree. The window is showing exactly the
-    /// wanted result already; the only thing wrong with it is the toolbar on
+    /// wanted result already; the only thing wrong with it is the chrome on
     /// top, and that is one boolean.
     func copy() {
         guard readyToExport else { return }

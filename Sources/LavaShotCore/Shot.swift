@@ -3,10 +3,10 @@ import Foundation
 /// The parts of a screenshot tool that are arithmetic rather than drawing.
 ///
 /// Kept away from the engine for the reason `LavaViewCore` is: a rectangle
-/// normalised the wrong way round, a toolbar whose buttons do not line up with
-/// where the clicks land, or a filename that overwrites yesterday's shot are
-/// all bugs you can write a test for, and all bugs that are miserable to find
-/// by taking screenshots and looking at them.
+/// normalised the wrong way round, a filename that overwrites yesterday's shot,
+/// or a label whose caret walks by bytes instead of characters are all bugs
+/// you can write a test for, and all bugs that are miserable to find by taking
+/// screenshots and looking at them.
 
 // MARK: - Geometry
 
@@ -96,7 +96,7 @@ public struct ShotRect: Equatable, Sendable {
 // MARK: - Annotations
 
 /// What the pointer draws.
-public enum ShotTool: String, CaseIterable, Sendable {
+public enum ShotTool: String, CaseIterable, Hashable, Sendable {
     /// Move and resize the selection rather than drawing on it.
     case select
     case rectangle
@@ -247,7 +247,12 @@ public struct ShotDocument: Sendable {
 // MARK: - The toolbar
 
 /// A button on the strip along the bottom.
-public enum ShotAction: Equatable, Sendable {
+///
+/// Glyphs are from the blocks the interface font actually covers — geometric
+/// shapes and arrows. The obvious characters for undo / copy / save
+/// (U+293A ⤺, U+29C9 ⧉, U+2913 ⤓) are in neither OpenSans nor any fallback
+/// here, and a toolbar of tofu boxes is worse than an approximate icon.
+public enum ShotAction: Equatable, Hashable, Sendable {
     case tool(ShotTool)
     case color(Int)
     case thinner
@@ -257,122 +262,33 @@ public enum ShotAction: Equatable, Sendable {
     case copy
     case save
     case cancel
-}
 
-public struct ShotButton: Equatable, Sendable {
-    public var action: ShotAction
-    public var frame: ShotRect
-    public var glyph: String
-    public var title: String
-}
-
-/// Where the buttons are, and what is under a click.
-///
-/// Laid out here rather than with Yoga because this toolbar floats over a
-/// frozen picture of somebody's desktop: it is painted by the same canvas that
-/// paints the shot, so that one draw call can be skipped at export time and
-/// take the whole interface out of the exported image with it.
-public enum ShotToolbar {
-    public static let buttonSize: Float = 34
-    public static let gap: Float = 4
-    public static let groupGap: Float = 14
-    public static let padding: Float = 8
-    public static var height: Float { buttonSize + padding * 2 }
-
-    /// The strip, centred along the bottom of `screen`.
-    ///
-    /// Shrinks rather than overflows. Nineteen buttons at their natural size
-    /// are 812 points wide, which is wider than an 800-point screen — and a
-    /// toolbar that hangs off both edges takes its Cancel button with it. The
-    /// buttons scale together so the hit test keeps matching the paint.
-    public static func layout(in screen: ShotRect, colors: Int = ShotColor.palette.count)
-        -> (plate: ShotRect, buttons: [ShotButton])
-    {
-        var items: [(ShotAction, String, String)] = []
-
-        for tool in ShotTool.allCases {
-            items.append((.tool(tool), tool.glyph, tool.title))
+    public var glyph: String {
+        switch self {
+        case .tool(let tool): return tool.glyph
+        case .color: return "■"
+        case .thinner: return "─"
+        case .thicker: return "━"
+        case .undo: return "↺"
+        case .redo: return "↻"
+        case .copy: return "▤"
+        case .save: return "↓"
+        case .cancel: return "⨯"
         }
-        for index in 0..<colors {
-            items.append((.color(index), "■", "Colour"))
-        }
-        items.append((.thinner, "─", "Thinner"))
-        items.append((.thicker, "━", "Thicker"))
-        // Glyphs from the blocks the interface font actually covers —
-        // geometric shapes and arrows. The obvious characters for these
-        // (U+293A ⤺, U+29C9 ⧉, U+2913 ⤓) are in neither OpenSans nor any
-        // fallback here, and a toolbar of tofu boxes is worse than an
-        // approximate icon.
-        items.append((.undo, "↺", "Undo"))
-        items.append((.redo, "↻", "Redo"))
-        items.append((.copy, "▤", "Copy to clipboard"))
-        items.append((.save, "↓", "Save a file"))
-        items.append((.cancel, "⨯", "Cancel"))
-        // A gap before each group, so seven tools, six colours and the rest do
-        // not read as one undifferentiated row of nineteen glyphs.
-        let groupStarts: Set<Int> = [
-            ShotTool.allCases.count,
-            ShotTool.allCases.count + colors,
-            ShotTool.allCases.count + colors + 2,
-            ShotTool.allCases.count + colors + 4,
-        ]
-
-        let natural = { (unit: Float, gapSize: Float, groupSize: Float, pad: Float) -> Float in
-            var total = pad * 2
-            for index in items.indices {
-                if index > 0 { total += groupStarts.contains(index) ? groupSize : gapSize }
-                total += unit
-            }
-            return total
-        }
-
-        // Everything scales together, so the hit test and the paint keep
-        // reading the same numbers. `margin` keeps the plate off the edges of
-        // a screen it only just fits on.
-        let margin: Float = 16
-        let full = natural(buttonSize, gap, groupGap, padding)
-        let room = max(1, screen.w - margin * 2)
-        let scale = min(1, room / full)
-
-        let unit = buttonSize * scale
-        let gapSize = gap * scale
-        let groupSize = groupGap * scale
-        let pad = padding * scale
-        let total = natural(unit, gapSize, groupSize, pad)
-        let plateHeight = unit + pad * 2
-
-        let plate = ShotRect(
-            x: (screen.w - total) / 2 + screen.x,
-            y: screen.maxY - plateHeight - 24 * scale,
-            w: total, h: plateHeight
-        )
-
-        var buttons: [ShotButton] = []
-        var cursor = plate.x + pad
-        for (index, item) in items.enumerated() {
-            if index > 0 { cursor += groupStarts.contains(index) ? groupSize : gapSize }
-            buttons.append(
-                ShotButton(
-                    action: item.0,
-                    frame: ShotRect(
-                        x: cursor, y: plate.y + pad, w: unit, h: unit
-                    ),
-                    glyph: item.1, title: item.2
-                )
-            )
-            cursor += unit
-        }
-        return (plate, buttons)
     }
 
-    public static func hit(_ buttons: [ShotButton], x: Float, y: Float)
-        -> ShotAction?
-    {
-        let point = ShotPoint(x: x, y: y)
-        for button in buttons where button.frame.contains(point) {
-            return button.action
+    public var title: String {
+        switch self {
+        case .tool(let tool): return tool.title
+        case .color: return "Colour"
+        case .thinner: return "Thinner"
+        case .thicker: return "Thicker"
+        case .undo: return "Undo"
+        case .redo: return "Redo"
+        case .copy: return "Copy to clipboard"
+        case .save: return "Save a file"
+        case .cancel: return "Cancel"
         }
-        return nil
     }
 }
 

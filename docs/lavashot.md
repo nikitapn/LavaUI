@@ -2,12 +2,12 @@
 
 Run it and it photographs the desktop, then covers the desktop with the
 photograph. Everything after that happens on a picture: drag a region, draw on
-it, and press Enter to copy or Ctrl+S to save. The windows underneath are still
+it, and press Enter or Ctrl+C to copy or Ctrl+S to save. The windows underneath are still
 there and still running, and nothing the tool does touches them.
 
 | Concern | Where |
 |---|---|
-| Selection geometry, the annotation document, the toolbar's layout | `Sources/LavaShotCore` (no engine, unit-tested) |
+| Selection geometry, the annotation document, toolbar actions | `Sources/LavaShotCore` (no engine, unit-tested) |
 | The overlay, the drawing, the export | `Sources/LavaShotApp` |
 | Compositing the screen, cropping it, holding the clipboard | `CaptureScreen`, `SetClipboardImageFile`, `SetFullscreen` |
 
@@ -53,8 +53,8 @@ with it is the interface on top. So the export hides the interface, lets one
 frame be drawn, and captures *that*:
 
 1. A click or a key sets the pending job and asks for a redraw.
-2. The paint that follows draws the picture and the marks and stops — no dim,
-   no selection outline, no toolbar — then asks for one more frame.
+2. The overlay chrome is hidden and the paint draws the picture and the marks
+   and stops — no dim, no selection outline — then asks for one more frame.
 3. The next paint runs when the clean frame has been presented, and captures
    the screen cropped to the selection, this time with `includeSelf: true`.
 
@@ -65,8 +65,11 @@ the frame before it, toolbar and all.
 The alternative — drawing the annotations a second time into a pixel buffer —
 means writing a line renderer, an ellipse renderer and a glyph rasteriser in
 the app, and having them disagree with the engine about what the user was
-shown. Which is why the interface is painted by one `Canvas` rather than built
-from widgets: taking all of it out of the picture is one `if`.
+shown. The picture itself (shot, marks, dim, selection outline) stays on one
+`Canvas` for that reason. The toolbar and the hint are a composed overlay on
+top of it — ordinary Lava layout, hit-tested before the canvas — and
+`.hidden(isExporting)` takes them off the same boolean that skips the dim and
+the outline. Adding a button is adding a view.
 
 ## Labels are the one tool with a mode
 

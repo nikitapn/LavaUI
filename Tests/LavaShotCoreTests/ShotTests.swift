@@ -136,70 +136,27 @@ struct DocumentTests {
     }
 }
 
-@Suite("Toolbar")
+@Suite("Toolbar actions")
 struct ToolbarTests {
-    private let screen = ShotRect(x: 0, y: 0, w: 1920, h: 1080)
-
-    @Test("Every button is inside the plate that draws behind it")
-    func buttonsInsidePlate() {
-        let (plate, buttons) = ShotToolbar.layout(in: screen)
-        #expect(!buttons.isEmpty)
-        for button in buttons {
-            #expect(button.frame.x >= plate.x)
-            #expect(button.frame.maxX <= plate.maxX + 0.001)
-            #expect(button.frame.y >= plate.y)
-            #expect(button.frame.maxY <= plate.maxY + 0.001)
-        }
-    }
-
-    @Test("Buttons do not overlap, in order, left to right")
-    func buttonsDoNotOverlap() {
-        let (_, buttons) = ShotToolbar.layout(in: screen)
-        for i in 1..<buttons.count {
-            #expect(buttons[i].frame.x >= buttons[i - 1].frame.maxX)
-        }
-    }
-
-    @Test("A click lands on the button that was drawn there")
-    func hitTesting() {
-        let (_, buttons) = ShotToolbar.layout(in: screen)
-        // The whole point of laying the strip out here rather than with a
-        // layout engine: the paint and the hit test read the same numbers,
-        // and a toolbar whose clicks are one button to the left of its icons
-        // is the failure this rules out.
-        for button in buttons {
-            let cx = button.frame.x + button.frame.w / 2
-            let cy = button.frame.y + button.frame.h / 2
-            #expect(ShotToolbar.hit(buttons, x: cx, y: cy) == button.action)
-        }
-    }
-
-    @Test("A click off the strip hits nothing")
-    func missing() {
-        let (plate, buttons) = ShotToolbar.layout(in: screen)
-        #expect(ShotToolbar.hit(buttons, x: 5, y: 5) == nil)
-        #expect(ShotToolbar.hit(buttons, x: plate.x - 20, y: plate.y + 10) == nil)
-        #expect(ShotToolbar.hit(buttons, x: plate.x + 10, y: plate.y - 20) == nil)
-    }
-
-    @Test("The strip is centred and on screen, from a phone to a wall")
-    func centred() {
-        for width in [Float(800), 1280, 1920, 3840] {
-            let bounds = ShotRect(x: 0, y: 0, w: width, h: width * 0.6)
-            let (plate, _) = ShotToolbar.layout(in: bounds)
-            #expect(plate.x >= 0)
-            #expect(plate.maxX <= width + 0.001)
-            #expect(abs((plate.x + plate.w / 2) - width / 2) < 0.5)
-            #expect(plate.maxY <= bounds.maxY)
-        }
-    }
-
-    @Test("Every tool has a button")
-    func everyTool() {
-        let (_, buttons) = ShotToolbar.layout(in: screen)
+    @Test("Every tool has a glyph and a title")
+    func toolsAreLabeled() {
         for tool in ShotTool.allCases {
-            #expect(buttons.contains { $0.action == .tool(tool) })
+            #expect(!tool.glyph.isEmpty)
+            #expect(!tool.title.isEmpty)
+            #expect(ShotAction.tool(tool).glyph == tool.glyph)
+            #expect(ShotAction.tool(tool).title == tool.title)
         }
+    }
+
+    @Test("Chrome actions are labeled")
+    func chromeIsLabeled() {
+        for action: ShotAction in [
+            .thinner, .thicker, .undo, .redo, .copy, .save, .cancel,
+        ] {
+            #expect(!action.glyph.isEmpty)
+            #expect(!action.title.isEmpty)
+        }
+        #expect(ShotAction.color(0).glyph == "■")
     }
 }
 
