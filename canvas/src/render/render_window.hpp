@@ -461,6 +461,8 @@ class RenderWindow {
     /// at the speed a pointer actually crosses a list.
     float hoverAmount = 0.f;
     float pressAmount = 0.f;
+    /// `kSceneNodeHoverSnap`: drop hoverAmount the frame the pointer leaves.
+    bool hoverSnap = false;
 
     // ─── Producer-declared animation ────────────────────────────────────
     //

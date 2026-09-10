@@ -407,6 +407,7 @@ public struct MenuDropdownPanel: View {
         .padding(style.itemPadding)
         .cornerRadius(style.itemCornerRadius)
         .hoverBackground(style.itemHover)
+        .hoverSnap()
         .agentId("menu.\(node.id.raw)")
 
         row.overlay(
@@ -494,7 +495,7 @@ public struct MenuDropdownPanel: View {
         .agentId("menu.\(item.id.raw)")
 
         if enabled {
-            row.hoverBackground(style.itemHover)
+            row.hoverBackground(style.itemHover).hoverSnap()
         } else {
             row
         }

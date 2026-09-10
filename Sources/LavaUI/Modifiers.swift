@@ -55,6 +55,8 @@ public struct ViewStyle: Equatable {
     public var isHidden: Bool?
     /// Pointer image over this view. `nil` inherits. See `View.cursor(_:)`.
     public var cursor: CursorShape?
+    /// Snap hover off rather than ease it. See `View.hoverSnap(_:)`.
+    public var hoverSnap: Bool?
     /// Stroke on this node's edge, drawn over its children. See
     /// `View.border(_:width:)`.
     public var border: BorderStyle?
@@ -98,6 +100,7 @@ public struct ViewStyle: Equatable {
         out.clipsContent = clipsContent ?? base.clipsContent
         out.isHidden = isHidden ?? base.isHidden
         out.cursor = cursor ?? base.cursor
+        out.hoverSnap = hoverSnap ?? base.hoverSnap
         out.border = border ?? base.border
         return out
     }
@@ -235,6 +238,7 @@ extension YogaBoxNode {
             base.clipsContent = clipsContent
             base.isHidden = isHidden
             base.cursor = cursor
+            base.hoverSnap = hoverSnap
             base.border = borderStyle
             styleBaseline = base
         }
@@ -257,6 +261,7 @@ extension YogaBoxNode {
         // removing `.cursor()` has to give the pointer back to whatever the
         // view is sitting in.
         cursor = style.cursor ?? base.cursor
+        hoverSnap = style.hoverSnap ?? base.hoverSnap ?? false
         // Through the baseline, like blur and cursor rather than like fill:
         // a border is chrome the modifier owns outright, so dropping the
         // modifier has to take the stroke off. `fill` is set-if-present
@@ -454,6 +459,16 @@ extension View {
 
     public func hoverBackground(_ color: Color) -> ModifiedView<Self> {
         styled { $0.hoverFill = color }
+    }
+
+    /// When true, the hover chip vanishes the frame the pointer leaves.
+    ///
+    /// Default hover eases out, which is right for a button and wrong for a
+    /// dense list: twenty full-width rows still fading is a trail. File lists
+    /// and menu items opt out. It is not `.transition()`, which animates a
+    /// view arriving or leaving, not the pointer moving across one.
+    public func hoverSnap(_ snap: Bool = true) -> ModifiedView<Self> {
+        styled { $0.hoverSnap = snap }
     }
 
     public func cornerRadius(_ radius: Float) -> ModifiedView<Self> {
@@ -656,6 +671,11 @@ extension ModifiedView {
 
     public func hoverBackground(_ color: Color) -> ModifiedView<Content> {
         adding { $0.hoverFill = color }
+    }
+
+    /// See `View.hoverSnap(_:)`.
+    public func hoverSnap(_ snap: Bool = true) -> ModifiedView<Content> {
+        adding { $0.hoverSnap = snap }
     }
 
     public func cornerRadius(_ radius: Float) -> ModifiedView<Content> {

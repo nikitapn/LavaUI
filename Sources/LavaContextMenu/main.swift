@@ -284,7 +284,7 @@ struct ContextMenuView: View {
             .agentId("menu.item.\(item.id)")
 
             if item.enabled {
-                content.hoverBackground(style.itemHover)
+                content.hoverBackground(style.itemHover).hoverSnap()
             } else {
                 content
             }

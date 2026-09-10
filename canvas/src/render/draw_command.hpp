@@ -316,6 +316,11 @@ enum SceneNodeFlags : uint32_t {
   /// can know the difference between "nothing here wants the wheel" and
   /// "something here wants it and this process cannot see what".
   kSceneNodeWheel = 1u << 5,
+  /// Do not ease the hover tint off. A full-width row that fades out over
+  /// a third of a second leaves a trail when the pointer sweeps a list;
+  /// a button that snaps off is the same chip, just not stacked twenty
+  /// deep. Default (flag clear) still eases both ways.
+  kSceneNodeHoverSnap = 1u << 6,
 };
 
 /// One node's scroll offset, on its way back to the producer.

@@ -1548,6 +1548,8 @@ void RenderWindow::replayDrawList(const canvas::DrawList &list, float viewW,
       OpenNode node;
       node.id       = cmd.param;
       node.flags    = cmd.color;
+      sceneState_[node.id].hoverSnap =
+        (node.flags & canvas::kSceneNodeHoverSnap) != 0;
       node.parentOx      = ox;
       node.parentOy      = oy;
       node.parentOpacity = opacity;
@@ -2254,7 +2256,10 @@ bool RenderWindow::advanceSceneAnimations(
   // Asymmetric on purpose. A highlight that fades *in* slowly reads as lag —
   // the pointer is already there and the interface has not agreed yet —
   // while one that fades *out* quickly reads as a flicker when the pointer
-  // crosses a list. Fast to acknowledge, unhurried to let go.
+  // crosses a list. Fast to acknowledge, unhurried to let go — except on
+  // nodes that set `kSceneNodeHoverSnap`, which drop the tint the frame
+  // the pointer leaves. A file-list row or a menu item is that node:
+  // lingering full-width chips stack into a trail. A button is not.
   constexpr double kTintFadeIn  = 0.055;
   constexpr double kTintFadeOut = 0.12;
   /// One step of 8-bit alpha. Below this the difference cannot be drawn, so
@@ -2289,7 +2294,14 @@ bool RenderWindow::advanceSceneAnimations(
     const float hoverTarget = hoveredNode_ == id ? 1.f : 0.f;
     const float pressTarget =
       pressedNode_ == id && hoveredNode_ == id ? 1.f : 0.f;
-    if (easeTint(state.hoverAmount, hoverTarget)) animating = true;
+    if (hoverTarget == 0.f && state.hoverSnap) {
+      if (state.hoverAmount != 0.f) {
+        state.hoverAmount = 0.f;
+        animating         = true;
+      }
+    } else if (easeTint(state.hoverAmount, hoverTarget)) {
+      animating = true;
+    }
     if (easeTint(state.pressAmount, pressTarget)) animating = true;
 
     // Producer-declared properties. The producer named a destination and

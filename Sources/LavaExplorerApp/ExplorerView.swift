@@ -276,6 +276,7 @@ private struct FileRow: View {
         let menuX = session.menuX
         let menuY = session.menuY
         return HStack(
+            height: .pt(28),
             padding: 4,
             alignment: .center,
             spacing: 8,
@@ -312,6 +313,7 @@ private struct FileRow: View {
         .frame(width: .pct(100))
         .background(on ? theme.selectionFill : Color.clear)
         .hoverBackground(on ? theme.selectionFill : theme.hover)
+        .hoverSnap()
         .cursor(.pointer)
         .agentId("file-\(entry.name)")
         .overlay(

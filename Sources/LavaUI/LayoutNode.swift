@@ -186,6 +186,9 @@ class YogaBoxNode: AnyViewNode {
     /// Pointer image while the pointer is inside this box (`View.cursor(_:)`).
     /// Nil inherits whatever an ancestor asked for, and an arrow if none did.
     var cursor: CursorShape?
+    /// When true, the renderer drops this node's hover tint the frame the
+    /// pointer leaves, instead of easing it out. See `View.hoverSnap(_:)`.
+    var hoverSnap: Bool = false
     /// Stroke on this box's own edge, drawn over its children
     /// (`View.border(_:width:)`).
     ///

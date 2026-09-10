@@ -78,6 +78,9 @@ public struct SceneNodeFlags: OptionSet, Sendable {
     /// This node handles the wheel itself, so the renderer must not scroll an
     /// enclosing container on its behalf. See `ScrollRouter`.
     public static let wheel = SceneNodeFlags(rawValue: 1 << 5)
+    /// Snap the hover tint off instead of easing it. Dense full-width rows
+    /// need this; a button does not. See `kSceneNodeHoverSnap`.
+    public static let hoverSnap = SceneNodeFlags(rawValue: 1 << 6)
 }
 
 /// Bits in a `scrollNode` command's `color` field. Mirrors
@@ -1332,7 +1335,8 @@ public final class DrawList {
                 ) {
                     let interactive = styled.hoverFill != nil
                     let flags = nodeFlags(
-                        for: styled.id, interactive: interactive
+                        for: styled.id, interactive: interactive,
+                        hoverSnap: styled.hoverSnap
                     )
                     if let flags {
                         beginNode(styled.id, x: x, y: y, w: w, h: h, flags: flags)
@@ -1379,7 +1383,8 @@ public final class DrawList {
                     cornerRadius: stack.cornerRadius
                 ) {
                     let flags = nodeFlags(
-                        for: stack.id, interactive: stack.isRendererInteractive
+                        for: stack.id, interactive: stack.isRendererInteractive,
+                        hoverSnap: stack.hoverSnap
                     )
                     if let flags {
                         beginNode(stack.id, x: x, y: y, w: w, h: h, flags: flags)
@@ -1425,7 +1430,10 @@ public final class DrawList {
                     cornerRadius: leaf.cornerRadius
                 ) {
                     let interaction = interactionTints(for: leaf)
-                    let flags = nodeFlags(for: leaf.id, interactive: interaction.isInteractive)
+                    let flags = nodeFlags(
+                        for: leaf.id, interactive: interaction.isInteractive,
+                        hoverSnap: leaf.hoverSnap
+                    )
                     if let flags {
                         beginNode(leaf.id, x: x, y: y, w: w, h: h, flags: flags)
                     }
@@ -1476,12 +1484,15 @@ public final class DrawList {
     /// container enclosing it, scrolls that, and the widget's handler never
     /// runs. A `Scene3D` inside a `ScrollView` is the case that shows it: the
     /// wheel is supposed to move the camera.
-    private func nodeFlags(for id: NodeID, interactive: Bool) -> SceneNodeFlags? {
+    private func nodeFlags(
+        for id: NodeID, interactive: Bool, hoverSnap: Bool = false
+    ) -> SceneNodeFlags? {
         let claimsWheel = ScrollRouter.claimsWheel(id)
         guard interactive || claimsWheel else { return nil }
         var flags: SceneNodeFlags = [.absoluteCoordinates]
         if interactive { flags.insert(.hitTest) }
         if claimsWheel { flags.insert(.wheel) }
+        if hoverSnap { flags.insert(.hoverSnap) }
         return flags
     }
 
