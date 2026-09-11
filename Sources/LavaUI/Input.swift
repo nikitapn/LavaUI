@@ -167,6 +167,12 @@ public enum InputEventKind: UInt32, Sendable, Equatable {
     /// The window was maximized or restored. `button` = 1 maximized, 0
     /// restored. See `WindowState` in `draw_command.hpp`.
     case windowState = 14
+    /// A drag offering files is over this window at `x`/`y`. See `DragOver`
+    /// in `draw_command.hpp` — and `View.onDrop(targeted:springLoaded:perform:)`,
+    /// which is what it drives.
+    case dragOver = 15
+    /// The drag left this window, or ended anywhere. No payload.
+    case dragLeave = 16
 }
 
 /// One polled event from `Editor.pollInputEvent`.

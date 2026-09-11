@@ -27,8 +27,13 @@ LAVA_CLIENT=1 swift run LavaExplorer -- ~/Pictures
 - Back / Forward / Up, Alt+arrows, Backspace to go up.
 - Hidden names stay out until View → Show Hidden Files (or Ctrl+H).
 - Enter opens the selected row. A drop of a path navigates there.
-- Drop files on a tab — this window's own rows included — to copy them into
-  that tab's folder. Names already there get one question for the whole
+- Drop files — from another app, or rows dragged out of this window,
+  another pane included — to copy them: onto a folder row, into that folder;
+  onto a pane's list, into the folder the pane shows; onto a tab or a place
+  in the sidebar, into its folder. What the drag is aimed at lights up. A
+  drag that rests on a tab for a moment opens it, so a folder inside is
+  there to drop on. Letting a row go in the folder it came from does
+  nothing. Names already there get one question for the whole
   drop: Replace (a folder is merged into, not swapped out), Keep Both
   ("report (2).pdf"), Skip, or Cancel. A file is replaced only once its copy
   is complete. The copy runs off the frame loop, and every tab showing that

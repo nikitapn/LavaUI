@@ -1380,7 +1380,12 @@ public enum LavaClient {
                     // that tints have already repainted, and
                     // `ScrollNode.adoptRendererOffset` asks for layout when
                     // lazy content has to mount or an indicator has to move.
-                    if kind != .nodeHover, kind != .nodeScroll { wantsFrame = true }
+                    // `.dragOver` likewise: one arrives per pointer move while a
+                    // drag crosses the window, and a target that changes state
+                    // invalidates through the app's own observed properties.
+                    if kind != .nodeHover, kind != .nodeScroll, kind != .dragOver {
+                        wantsFrame = true
+                    }
                     editor.postInputEvent(
                         LavaUI.InputEvent(
                             kind: kind,

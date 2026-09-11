@@ -382,14 +382,83 @@ public enum ScrollRouter {
 public enum DropRouter {
     nonisolated(unsafe) private static var handlers: [NodeID: ([String]) -> Void] = [:]
 
-    public static func register(_ id: NodeID, handler: @escaping ([String]) -> Void) {
-        handlers[id] = handler
+    /// What a drop target wants to hear while a drag is over it, before any
+    /// drop — see `View.onDrop(targeted:springLoaded:perform:)`.
+    struct Hover {
+        var targeted: ((Bool) -> Void)?
+        var springLoaded: (() -> Void)?
     }
 
-    public static func unregister(_ id: NodeID) { handlers[id] = nil }
+    nonisolated(unsafe) private static var hovers: [NodeID: Hover] = [:]
+    /// The target the drag is over now, and since when.
+    nonisolated(unsafe) private static var hovered: NodeID?
+    nonisolated(unsafe) private static var hoveredSince: Double = 0
+    nonisolated(unsafe) private static var sprung = false
+
+    /// How long a drag rests on a spring-loaded target before it opens. Long
+    /// enough that sweeping across a row of tabs opens none of them; short
+    /// enough that waiting on one does not feel like being ignored.
+    public static let springDelay: Double = 0.6
+
+    public static func register(_ id: NodeID, handler: @escaping ([String]) -> Void) {
+        handlers[id] = handler
+        hovers[id] = nil
+    }
+
+    static func register(
+        _ id: NodeID, hover: Hover, handler: @escaping ([String]) -> Void
+    ) {
+        handlers[id] = handler
+        hovers[id] = hover
+    }
+
+    public static func unregister(_ id: NodeID) {
+        handlers[id] = nil
+        hovers[id] = nil
+    }
 
     static func unregisterAll(ids: Set<NodeID>) {
-        for id in ids { handlers[id] = nil }
+        for id in ids {
+            handlers[id] = nil
+            hovers[id] = nil
+        }
+        if let hovered, ids.contains(hovered) { self.hovered = nil }
+    }
+
+    /// A drag is over `target` — the nearest drop handler under it, or nil
+    /// over nothing that takes drops. Tells the old target it lost the drag
+    /// and the new one it has it, and restarts the spring.
+    static func dragOver(_ target: NodeID?) {
+        guard target != hovered else { return }
+        if let old = hovered { hovers[old]?.targeted?(false) }
+        hovered = target
+        sprung = false
+        hoveredSince = FrameScheduler.now()
+        guard let target, let hover = hovers[target] else { return }
+        hover.targeted?(true)
+        if hover.springLoaded != nil { FrameScheduler.requestWake(in: springDelay) }
+    }
+
+    /// The drag left, or ended — dropped here or anywhere else.
+    static func dragLeave() {
+        dragOver(nil)
+    }
+
+    /// Opens a spring-loaded target the drag has rested on long enough. Once
+    /// per visit. Called every turn of the frame loop, because a drag that has
+    /// stopped moving sends nothing — resting is exactly the case.
+    static func tickSpring(now: Double = FrameScheduler.now()) {
+        guard let hovered, !sprung, let spring = hovers[hovered]?.springLoaded else {
+            return
+        }
+        let waited = now - hoveredSince
+        guard waited >= springDelay else {
+            FrameScheduler.requestWake(in: springDelay - waited)
+            return
+        }
+        sprung = true
+        spring()
+        ViewInvalidation.markNeedsRedraw()
     }
 
     /// So hit-testing can treat a drop-registered box as a valid target even

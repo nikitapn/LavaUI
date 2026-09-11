@@ -1306,7 +1306,8 @@ struct Server {
           &request_cursor, &new_pointer_constraint, &pointer_focus_change,
           &active_constraint_destroy, &request_set_selection, &set_selection,
           &request_set_primary_selection, &request_start_drag, &start_drag,
-          &request_activate, &new_idle_inhibitor, &lava_drag_destroy}) {
+          &request_activate, &new_idle_inhibitor, &lava_drag_destroy,
+          &any_drag_destroy}) {
       listener->detach();
     }
     inputMethod.detachListeners();
@@ -1371,6 +1372,16 @@ struct Server {
   wlr_seat_client lavaDragSeatClient{};
   /// The running Lava drag's end, which is when its chip comes down.
   Listener<Server> lava_drag_destroy;
+
+  /// The surface a drag offering files is over, as far as `DragOver` has told
+  /// it — 0 for none. Kept so it can be told the drag has gone, whether by
+  /// moving on to something else or by ending, wherever it ends.
+  uint32_t dragOverSurface = 0;
+  /// Tells `dragOverSurface` the drag has gone, and forgets it.
+  void endDragOver();
+  /// Any drag's end — a foreign client's as well as a Lava one's.
+  Listener<Server> any_drag_destroy;
+  static void on_any_drag_destroy(wl_listener *listener, void *data);
   static void on_request_set_selection(wl_listener *listener, void *data);
   static void on_set_selection(wl_listener *listener, void *data);
   static void on_request_activate(wl_listener *listener, void *data);
@@ -11464,12 +11475,40 @@ bool Server::route_pointer(uint32_t kind, int32_t button, int32_t mods) {
   }
   pointerOver = nowOver;
 
+  // A drag crossing from one of our surfaces to anything else: the one it
+  // left hears so. Apart from the pointer's own leave because a drag is a
+  // question the surface may answer — a folder lights up, a tab opens — and
+  // an answer left standing after the drag has gone is a lie.
+  if (seat != nullptr && seat->drag != nullptr && dragOverSurface != 0 &&
+      dragOverSurface != nowOver) {
+    endDragOver();
+  }
+
   if (surface == nullptr) return false;
   // Through the renderer, not around it — the hover under this pointer is its
   // to answer. See the input section of `CanvasSurface`.
   if (kind == static_cast<uint32_t>(canvas::InputEventKind::MouseMove)) {
     surface->canvas->pointerMove(static_cast<float>(sx),
                                  static_cast<float>(sy));
+    // And where the drag is, when one is over it. Only for a drag that
+    // offers files: dragging selected text across a window must not open its
+    // tabs.
+    const auto offersFiles = [](wlr_data_source *source) {
+      if (source == nullptr) return false;
+      auto **types = static_cast<char **>(source->mime_types.data);
+      const size_t count = source->mime_types.size / sizeof(char *);
+      for (size_t i = 0; i < count; ++i) {
+        if (types[i] != nullptr && std::strcmp(types[i], "text/uri-list") == 0) {
+          return true;
+        }
+      }
+      return false;
+    };
+    if (seat != nullptr && seat->drag != nullptr &&
+        offersFiles(seat->drag->source)) {
+      dragOverSurface = surface->id;
+      surface->canvas->dragOver(static_cast<float>(sx), static_cast<float>(sy));
+    }
   }
   (void)button;
   (void)mods;
@@ -11971,6 +12010,25 @@ void Server::on_request_start_drag(wl_listener *listener, void *data) {
   }
 }
 
+void Server::endDragOver() {
+  if (dragOverSurface == 0) return;
+  const uint32_t id = dragOverSurface;
+  dragOverSurface = 0;
+  if (surfaces == nullptr) return;
+  if (ClientSurface *over = surfaces->find(id); over != nullptr && over->canvas) {
+    over->canvas->dragLeave();
+    surfaces->pump(*over);
+  }
+}
+
+void Server::on_any_drag_destroy(wl_listener *listener, void *) {
+  auto *server = owner_of<Server>(listener);
+  // Unhooked inside the signal: wlroots asserts nothing is still listening
+  // the moment it has finished emitting it.
+  server->any_drag_destroy.detach();
+  server->endDragOver();
+}
+
 /// The drag is running: give the icon somewhere to be drawn.
 ///
 /// A drag with no icon is legal and common — a client may drag with only the
@@ -11978,6 +12036,11 @@ void Server::on_request_start_drag(wl_listener *listener, void *data) {
 void Server::on_start_drag(wl_listener *listener, void *data) {
   auto *server = owner_of<Server>(listener);
   auto *drag = static_cast<wlr_drag *>(data);
+  // Every drag, before the icon check turns most of them away: the surface a
+  // drag was over has to hear that it ended, whoever started it and whether
+  // or not it drew an icon.
+  server->any_drag_destroy.attach(&drag->events.destroy, server,
+                                  Server::on_any_drag_destroy);
   if (drag->icon == nullptr || server->workspaces.dragIcons == nullptr) return;
 
   wlr_scene_tree *tree =

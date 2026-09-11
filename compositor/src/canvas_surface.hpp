@@ -280,6 +280,13 @@ class CanvasSurface {
   /// does not fit a fixed-size `InputEvent` and most events are not drops.
   /// `SurfaceRegistry::takeDroppedPaths` is the other half.
   void fileDrop(float x, float y);
+
+  /// A drag offering files is over this surface at `x`,`y`, or has left it.
+  /// See `DragOver` in `draw_command.hpp`. The drop itself is still
+  /// `fileDrop`; these are what lets a target light up before it.
+  void dragOver(float x, float y);
+  void dragLeave();
+
   void textInput(const std::string &utf8);
 
   /// Takes one event the renderer has for the client, or false if there are

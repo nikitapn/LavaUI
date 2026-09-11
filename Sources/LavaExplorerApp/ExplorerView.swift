@@ -14,7 +14,8 @@ enum PaneChrome {
 
 /// Places on the left; on the right, one or more panes, each a browser of its
 /// own — tabs, an address bar and a details list. Drag a tab to the edge of a
-/// pane to split it, or into another pane to move it there.
+/// pane to split it, or into another pane to move it there. Drag a file onto
+/// a folder, a pane, a tab or a place to copy it there.
 struct ExplorerView: View {
     @Bindable var session: ExplorerSession
 
@@ -96,7 +97,8 @@ private struct PaneView: View {
 }
 
 /// Where a dragged tab would go if it were let go of now, over the pane it
-/// would go to: half the pane for a split, all of it for a move.
+/// would go to: half the pane for a split, all of it for a move, a bar in the
+/// gap for a place in the strip.
 private struct PaneDropPreview: View {
     @Bindable var session: ExplorerSession
     let paneID: Int
@@ -128,6 +130,27 @@ private struct PaneDropPreview: View {
             list.roundedRect(x: x, y: y, w: w, h: h, color: theme.accent.opacity(0.16), radius: 8)
             list.strokedRect(
                 x: x, y: y, w: w, h: h, color: theme.accent.opacity(0.7), radius: 8, width: 2
+            )
+        }
+    }
+}
+
+/// A list a drag of files is aimed at: an outline just inside its edge, so
+/// the rows under the pointer stay readable.
+private struct DropOutline: View {
+    let active: Bool
+
+    var body: some View {
+        Canvas(label: "drop-outline", width: .pct(100), height: .pct(100)) { list, frame in
+            guard active else { return }
+            let theme = Theme.current
+            let x = frame.x + 3
+            let y = frame.y + 3
+            let w = max(0, frame.w - 6)
+            let h = max(0, frame.h - 6)
+            list.roundedRect(x: x, y: y, w: w, h: h, color: theme.accent.opacity(0.08), radius: 6)
+            list.strokedRect(
+                x: x, y: y, w: w, h: h, color: theme.accent.opacity(0.7), radius: 6, width: 2
             )
         }
     }
@@ -262,6 +285,7 @@ private struct TabStrip: View {
         let on = tab.id == pane.tabs.currentID
         let theme = Theme.current
         let titleColor = on && active ? theme.textPrimary : theme.textSecondary
+        let aimedAt = session.dropHover == .tab(tab.id)
         return HStack(
             padding: 0,
             alignment: .center,
@@ -290,6 +314,7 @@ private struct TabStrip: View {
         .padding(8)
         .frame(height: .pt(PaneChrome.tabHeight))
         .underlay { TabShape(active: on) }
+        .background(aimedAt ? theme.accent.opacity(0.28) : Color.clear)
         .hoverBackground(on ? Color.clear : theme.hover)
         .cornerRadius(6)
         .cursor(.pointer)
@@ -299,7 +324,12 @@ private struct TabStrip: View {
         .scrollIntoView(when: on)
         .onFrame { frame in session.noteTabFrame(tab.id, frame) }
         .onDragGesture { value in session.dragTab(tab.id, value) }
-        .onDrop { urls in session.dropOnTab(id: tab.id, urls) }
+        // A file carried to a tab lights it; resting on it opens it, so the
+        // folders inside are there to be dropped on.
+        .onDrop(
+            targeted: { session.setDropHover(.tab(tab.id), $0) },
+            springLoaded: { session.selectTab(id: tab.id) }
+        ) { urls in session.dropOnTab(id: tab.id, urls) }
         .agentId("tab-\(tab.id)")
     }
 }
@@ -480,23 +510,35 @@ private struct Sidebar: View {
                 Text("PLACES", color: Theme.current.textDim)
                     .padding(6)
                 ForEach(session.places) { place in
-                    let on = FolderHistory.normalize(place.path) == session.listing.path
-                    Text(
-                        place.title,
-                        color: on ? Theme.current.textPrimary : Theme.current.textSecondary,
-                        onClick: { session.go(place.path) }
-                    )
-                    .padding(8)
-                    .background(on ? Theme.current.selectionFill : Color.clear)
-                    .hoverBackground(on ? Theme.current.selectionFill : Theme.current.hover)
-                    .cornerRadius(6)
-                    .cursor(.pointer)
-                    .agentId("place-\(place.title.lowercased())")
+                    placeRow(place)
                 }
                 Spacer()
             }
         }
         .background(Theme.current.panel)
+    }
+
+    private func placeRow(_ place: Place) -> some View {
+        let theme = Theme.current
+        let on = FolderHistory.normalize(place.path) == session.listing.path
+        let aimedAt = session.dropHover == .place(place.path)
+        let fill = aimedAt
+            ? theme.accent.opacity(0.28)
+            : (on ? theme.selectionFill : Color.clear)
+        return Text(
+            place.title,
+            color: on ? theme.textPrimary : theme.textSecondary,
+            onClick: { session.go(place.path) }
+        )
+        .padding(8)
+        .background(fill)
+        .hoverBackground(on ? theme.selectionFill : theme.hover)
+        .cornerRadius(6)
+        .cursor(.pointer)
+        .onDrop(targeted: { session.setDropHover(.place(place.path), $0) }) { urls in
+            session.dropOnPlace(place, urls)
+        }
+        .agentId("place-\(place.title.lowercased())")
     }
 }
 
@@ -512,6 +554,7 @@ private struct FilePane: View {
         let selectedIndex = tab.selected.flatMap { selected in
             listing.entries.firstIndex { $0.path == selected }
         }
+        let paneID = self.paneID
         return VStack(flexGrow: 1, padding: 0, spacing: 0) {
             header
             if let error = listing.error {
@@ -541,6 +584,12 @@ private struct FilePane: View {
                 .flexGrow(1)
             }
         }
+        // Anywhere in the list that is not a folder: into the folder the pane
+        // is showing. A folder row is its own target, and wins.
+        .onDrop(targeted: { session.setDropHover(.pane(paneID), $0) }) { urls in
+            session.dropInPane(paneID, urls)
+        }
+        .overlayLayer { DropOutline(active: session.dropHover == .pane(paneID)) }
     }
 
     private var header: some View {
@@ -575,11 +624,29 @@ private struct FileRow: View {
     let selected: Bool
 
     var body: some View {
+        // A folder takes a drop into itself. A file does not, and a drop on it
+        // falls through to the list behind — the folder being shown.
+        if entry.isDirectory {
+            row.onDrop(
+                targeted: { session.setDropHover(.folder(paneID: paneID, path: entry.path), $0) }
+            ) { urls in
+                session.dropInFolder(entry, urls)
+            }
+        } else {
+            row
+        }
+    }
+
+    private var row: some View {
         let on = selected
         let theme = Theme.current
         let menuX = session.menuX
         let menuY = session.menuY
         let paneID = self.paneID
+        let aimedAt = session.dropHover == .folder(paneID: paneID, path: entry.path)
+        let fill = aimedAt
+            ? theme.accent.opacity(0.28)
+            : (on ? theme.selectionFill : Color.clear)
         return HStack(
             height: .pt(28),
             padding: 4,
@@ -616,7 +683,7 @@ private struct FileRow: View {
                 .frame(width: .pt(148))
         }
         .frame(width: .pct(100))
-        .background(on ? theme.selectionFill : Color.clear)
+        .background(fill)
         .hoverBackground(on ? theme.selectionFill : theme.hover)
         .hoverSnap()
         .cursor(.pointer)

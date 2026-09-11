@@ -527,6 +527,16 @@ enum class InputEventKind : uint32_t {
   /// new size; this says *why*, so a toolbar can vanish without guessing
   /// from the framebuffer dimensions.
   WindowState = 14,
+  /// A drag offering files is over this surface. `x`/`y` = where.
+  ///
+  /// Not a `MouseMove`: nothing is pressed from this surface's side of a drag
+  /// — the drag's source owns the button — and a move is taken for hover.
+  /// This is the question a drop target gets to answer before the drop: a
+  /// folder lights up under it, a tab opens after the drag has rested on it.
+  /// Sent by whoever owns the pointer; a windowed app has no source for it.
+  DragOver = 15,
+  /// The drag left this surface, or ended anywhere. No payload.
+  DragLeave = 16,
 };
 
 struct InputEvent {

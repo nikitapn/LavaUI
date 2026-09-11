@@ -214,7 +214,15 @@ Consequences that surprise people:
   most events are not drops. On the LavaUI side a drop resolves through
   `dropTarget`, which walks the hit chain *outwards*: `hitTestHover` answers
   with the topmost node, which is the picture in LavaView and the text in the
-  editor, never the view that registered the handler.
+  editor, never the view that registered the handler. Before the drop, the
+  compositor sends `DragOver` (with position) to the Lava surface under a drag
+  offering `text/uri-list`, and `DragLeave` when it moves off or the drag ends
+  anywhere — `any_drag_destroy` hangs off every drag for that. LavaUI resolves
+  `DragOver` through the same `dropTarget` and drives
+  `.onDrop(targeted:springLoaded:)`: `targeted` on the edge of being aimed at,
+  `springLoaded` once the drag has rested `DropRouter.springDelay`, ticked
+  every loop turn because a resting drag sends nothing. A windowed app gets
+  neither — GLFW has no drag-over.
 - **A drag out of a Lava window is the compositor starting one.** The mirror of
   the above: `StartDrag` makes the compositor the `wl_data_device` source
   (`compositor/src/drag.cpp`), offering `text/uri-list` as a copy, under a

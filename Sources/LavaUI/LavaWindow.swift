@@ -217,6 +217,10 @@ public final class LavaWindow {
                 processInputEvent(ev)
             }
 
+            // Every turn, not only on input: a drag that has come to rest on a
+            // spring-loaded target sends nothing, and resting is the gesture.
+            DropRouter.tickSpring()
+
             // After input and after menu activations, so a scale change from
             // any of them re-measures before this frame lays out.
             syncTextMetrics()
@@ -672,7 +676,14 @@ public final class LavaWindow {
                   let scroll = findNode(nodeID, in: host.rootNode) as? ScrollNode
             else { break }
             scroll.adoptRendererOffset(x: ev.x, y: ev.y)
+        case .dragOver:
+            DropRouter.dragOver(host.dropTarget(x: ev.x, y: ev.y, originY: menuH))
+        case .dragLeave:
+            DropRouter.dragLeave()
         case .fileDrop:
+            // The drag is over before the paths arrive; a target still lit
+            // would stay lit on the far side of its own drop.
+            DropRouter.dragLeave()
             DropRouter.deliver(
                 to: host.dropTarget(x: ev.x, y: ev.y, originY: menuH),
                 paths: DropBridge.paths(window: id, editor: editor)

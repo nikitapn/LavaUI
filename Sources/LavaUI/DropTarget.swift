@@ -4,7 +4,9 @@ import Foundation
 //
 // Delivery is a `DropRouter` lookup at the moment a `.fileDrop` `InputEvent`
 // arrives (see `LavaApp.run`), resolved the same way hover is — the node
-// under the cursor when the files were released.
+// under the cursor when the files were released. While the drag is still in
+// the air, `.dragOver` events resolve the same way and drive `targeted` and
+// `springLoaded`.
 
 #if canImport(CYoga)
 
@@ -30,10 +32,23 @@ public enum DropBridge {
 /// Registers `perform` as the drop handler for the content's root layout box.
 public struct DropTargetView<Content: View>: PrimitiveView {
     public var perform: ([URL]) -> Void
+    public var targeted: ((Bool) -> Void)?
+    public var springLoaded: (() -> Void)?
     public var content: Content
 
     public init(perform: @escaping ([URL]) -> Void, content: Content) {
+        self.init(targeted: nil, springLoaded: nil, perform: perform, content: content)
+    }
+
+    public init(
+        targeted: ((Bool) -> Void)?,
+        springLoaded: (() -> Void)?,
+        perform: @escaping ([URL]) -> Void,
+        content: Content
+    ) {
         self.perform = perform
+        self.targeted = targeted
+        self.springLoaded = springLoaded
         self.content = content
     }
 
@@ -55,7 +70,7 @@ public struct DropTargetView<Content: View>: PrimitiveView {
         // Wrapper created for fragment content.
         if let box = node as? StyleBoxNode, box.label == "DropTarget" {
             box.updateContent(ViewGraph.reconcile(box.contentNode, with: content))
-            DropRouter.register(box.id) { [perform] in perform($0.map(URL.init(fileURLWithPath:))) }
+            register(box.id)
             return box
         }
         // Content was a single box we stamped last time.
@@ -73,16 +88,41 @@ public struct DropTargetView<Content: View>: PrimitiveView {
             wrapper.label = "DropTarget"
             box = wrapper
         }
-        DropRouter.register(box.id) { [perform] in perform($0.map(URL.init(fileURLWithPath:))) }
+        register(box.id)
         return box
+    }
+
+    private func register(_ id: NodeID) {
+        let perform = self.perform
+        DropRouter.register(
+            id,
+            hover: DropRouter.Hover(targeted: targeted, springLoaded: springLoaded)
+        ) { perform($0.map(URL.init(fileURLWithPath:))) }
     }
 }
 
 extension View {
     /// Runs `perform` with the dropped file paths (as `URL`s) when the user
     /// releases an OS drag over this view.
-    public func onDrop(perform: @escaping ([URL]) -> Void) -> DropTargetView<Self> {
-        DropTargetView(perform: perform, content: self)
+    ///
+    /// While a drag is still over it: `targeted` hears `true` as the drag
+    /// becomes aimed at this view and `false` as it leaves, is dropped, or
+    /// ends elsewhere — the place to light a target up. `springLoaded` runs
+    /// once the drag has rested here for `DropRouter.springDelay`, the way a
+    /// tab or a folder opens under a file being carried to it. Both need a
+    /// compositor to say where a drag is; a windowed app gets the drop alone.
+    ///
+    /// Nested targets resolve innermost first, like the drop itself: a folder
+    /// row inside a list is its own target, a file row is not and the list
+    /// behind it answers.
+    public func onDrop(
+        targeted: ((Bool) -> Void)? = nil,
+        springLoaded: (() -> Void)? = nil,
+        perform: @escaping ([URL]) -> Void
+    ) -> DropTargetView<Self> {
+        DropTargetView(
+            targeted: targeted, springLoaded: springLoaded, perform: perform, content: self
+        )
     }
 }
 
@@ -90,7 +130,11 @@ extension View {
 
 extension View {
     /// No-op without Yoga (stubs).
-    public func onDrop(perform: @escaping ([URL]) -> Void) -> Self { self }
+    public func onDrop(
+        targeted: ((Bool) -> Void)? = nil,
+        springLoaded: (() -> Void)? = nil,
+        perform: @escaping ([URL]) -> Void
+    ) -> Self { self }
 }
 
 #endif

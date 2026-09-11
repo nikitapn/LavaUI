@@ -570,6 +570,18 @@ void CanvasSurface::fileDrop(float x, float y) {
       windowId_);
 }
 
+void CanvasSurface::dragOver(float x, float y) {
+  renderer_.engine().postInputEvent(
+      static_cast<uint32_t>(canvas::InputEventKind::DragOver), x, y, 0, 0,
+      windowId_);
+}
+
+void CanvasSurface::dragLeave() {
+  renderer_.engine().postInputEvent(
+      static_cast<uint32_t>(canvas::InputEventKind::DragLeave), 0.f, 0.f, 0, 0,
+      windowId_);
+}
+
 void CanvasSurface::textInput(const std::string &utf8) {
   renderer_.engine().textInput(utf8, windowId_);
 }

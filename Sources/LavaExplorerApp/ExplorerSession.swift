@@ -630,31 +630,82 @@ final class ExplorerSession: @unchecked Sendable {
     /// racing the first for the same names.
     @ObservationIgnored private var copying = false
 
-    /// Files dropped on a tab: copied into that tab's folder.
-    ///
-    /// A copy and never a move, like the drag out of a row: nothing here can
-    /// put a moved file back, and there is no Trash yet to find it in.
+    /// What a drag carrying files is aimed at, for the view to light up.
+    /// Observed, and written only as the target changes.
+    enum DropHover: Equatable {
+        case folder(paneID: Int, path: String)
+        case pane(Int)
+        case tab(Int)
+        case place(String)
+    }
+
+    var dropHover: DropHover?
+
+    func setDropHover(_ target: DropHover, _ on: Bool) {
+        if on {
+            if dropHover != target { dropHover = target }
+        } else if dropHover == target {
+            dropHover = nil
+        }
+    }
+
+    // Every drop that lands somewhere in a pane is a copy into a folder; these
+    // only say which folder. A copy and never a move, like the drag out of a
+    // row: nothing here can put a moved file back, and there is no Trash yet
+    // to find it in.
+
+    /// Into that tab's folder — whichever pane the tab is in.
     func dropOnTab(id: Int, _ urls: [URL]) {
-        ownDrag = []
-        dismissContext()
         guard let tab = layout.tab(id: id) else { return }
+        copyDropped(urls, into: tab.listing.path, title: tab.title)
+    }
+
+    /// Into the folder a pane is showing: a drop on its list, not on a folder
+    /// in it.
+    func dropInPane(_ paneID: Int, _ urls: [URL]) {
+        guard let pane = layout.pane(id: paneID) else { return }
+        let tab = pane.tabs.current
+        copyDropped(urls, into: tab.listing.path, title: tab.title)
+    }
+
+    /// Into a folder row.
+    func dropInFolder(_ entry: FileEntry, _ urls: [URL]) {
+        copyDropped(urls, into: entry.path, title: entry.name)
+    }
+
+    /// Into a place in the sidebar.
+    func dropOnPlace(_ place: Place, _ urls: [URL]) {
+        copyDropped(urls, into: place.path, title: place.title)
+    }
+
+    private func copyDropped(_ urls: [URL], into directory: String, title: String) {
+        let own = !ownDrag.isEmpty && urls.map(\.path) == ownDrag
+        ownDrag = []
+        dropHover = nil
+        dismissContext()
         guard !copying, pendingCopy == nil else {
             notice = "Still copying — drop again when it is done"
             ViewInvalidation.markDirty()
             return
         }
-        let plan = CopyPlan.make(
-            sources: urls.map(\.path), into: tab.listing.path, source: source
-        )
+        let plan = CopyPlan.make(sources: urls.map(\.path), into: directory, source: source)
         guard !plan.items.isEmpty else {
-            notice = Self.refusalNotice(plan, folder: tab.title)
+            // A row picked up and let go of in the folder it came from is a
+            // drag that changed its mind, not something to report.
+            let changedItsMind = own && plan.refused.allSatisfy {
+                if case .alreadyThere = $0 { return true }
+                return false
+            }
+            if !changedItsMind {
+                notice = Self.refusalNotice(plan, folder: title)
+            }
             ViewInvalidation.markDirty()
             return
         }
         if plan.clashes.isEmpty {
-            startCopy(plan, choice: .skip, folderTitle: tab.title)
+            startCopy(plan, choice: .skip, folderTitle: title)
         } else {
-            pendingCopy = PendingCopy(plan: plan, folderTitle: tab.title)
+            pendingCopy = PendingCopy(plan: plan, folderTitle: title)
             ViewInvalidation.markDirty()
         }
     }
