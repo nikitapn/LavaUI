@@ -13,6 +13,9 @@ struct ExplorerView: View {
         VStack(flexGrow: 1, padding: 0, spacing: 0) {
             TabStrip(session: session)
             Toolbar(session: session)
+            if let pending = session.pendingCopy {
+                ClashBar(session: session, pending: pending)
+            }
             HSplitView(
                 fraction: $session.sidebarFraction,
                 minLeading: 140,
@@ -29,6 +32,41 @@ struct ExplorerView: View {
     }
 }
 
+// MARK: - Clashes
+
+/// One question for a drop whose names are partly taken, across the window
+/// under the toolbar — where the folder it is about is still in view, the
+/// same reason LavaEditor asks about unsaved changes in a bar and not a
+/// dialog.
+private struct ClashBar: View {
+    @Bindable var session: ExplorerSession
+    let pending: ExplorerSession.PendingCopy
+
+    var body: some View {
+        let clashes = pending.plan.clashes
+        let total = pending.plan.items.count
+        let message = clashes.count == 1 && total == 1
+            ? "\u{201C}\(clashes[0].name)\u{201D} is already in \(pending.folderTitle)."
+            : "\(clashes.count) of \(ExplorerSession.items(total)) are already in "
+                + "\(pending.folderTitle)."
+        return HStack(padding: 8, alignment: .center, spacing: 8) {
+            Text(message, color: Theme.current.textPrimary, lineLimit: 1)
+                .flexShrink(1)
+                .agentId("clash-message")
+            Spacer()
+            Button("Replace") { session.resolveCopy(.replace) }
+                .agentId("clash-replace")
+            Button("Keep Both") { session.resolveCopy(.keepBoth) }
+                .agentId("clash-keep-both")
+            Button("Skip") { session.resolveCopy(.skip) }
+                .agentId("clash-skip")
+            Button("Cancel") { session.resolveCopy(nil) }
+                .agentId("clash-cancel")
+        }
+        .background(Theme.current.selectionFill)
+    }
+}
+
 // MARK: - Tabs
 
 /// Folder names along the top, the way Explorer and every browser do it.
@@ -40,9 +78,14 @@ private struct TabStrip: View {
     @Bindable var session: ExplorerSession
 
     static let height: Float = 36
+    /// Shorter than the strip: the gap above is what makes the active tab
+    /// read as a tab rather than a stripe.
+    static let tabHeight: Float = 30
 
     var body: some View {
-        HStack(height: .pt(Self.height), padding: 0, alignment: .center, spacing: 4) {
+        // Bottom-aligned, so every tab stands on the strip's lower edge — the
+        // rule the active one opens into the toolbar through.
+        HStack(height: .pt(Self.height), padding: 0, alignment: .end, spacing: 4) {
             if WindowBridge.drawsOwnChrome {
                 WindowControls()
                     .windowChrome()
@@ -68,7 +111,7 @@ private struct TabStrip: View {
                 .frame(height: .pt(Self.height), minWidth: 48)
                 .windowDrag()
         }
-        .background(Theme.current.panel)
+        .underlay { StripBackdrop() }
     }
 
     private func tabChip(_ tab: ExplorerTab) -> some View {
@@ -104,12 +147,90 @@ private struct TabStrip: View {
             .agentId("close-tab-\(tab.id)")
         }
         .padding(8)
-        .background(on ? theme.background : Color.clear)
-        .hoverBackground(on ? theme.background : theme.hover)
+        .frame(height: .pt(Self.tabHeight))
+        .underlay { TabShape(active: on) }
+        .hoverBackground(on ? Color.clear : theme.hover)
         .cornerRadius(6)
         .cursor(.pointer)
         .flexShrink(1)
+        .onDrop { urls in session.dropOnTab(id: tab.id, urls) }
         .agentId("tab-\(tab.id)")
+    }
+}
+
+/// Behind the tabs: the strip's own fill, and the rule along its bottom edge
+/// that the active tab breaks.
+private struct StripBackdrop: View {
+    var body: some View {
+        Canvas(label: "tab-strip", width: .pct(100), height: .pct(100)) { list, frame in
+            let theme = Theme.current
+            list.rect(x: frame.x, y: frame.y, w: frame.w, h: frame.h, color: theme.background)
+            list.rect(
+                x: frame.x, y: frame.y + frame.h - 1, w: frame.w, h: 1,
+                color: theme.border
+            )
+        }
+    }
+}
+
+/// The active tab's plate and outline; nothing for the others.
+///
+/// One outline around the tab and the toolbar together, the way Chrome and
+/// Firefox draw it. The plate is the toolbar's colour and runs down over the
+/// strip's rule, so the rule stops at the tab's sides and the outline carries
+/// on up, over and back down. `.border` cannot say this: it strokes four
+/// sides, and the point is the open fourth.
+private struct TabShape: View {
+    let active: Bool
+
+    var body: some View {
+        Canvas(label: "tab-shape", width: .pct(100), height: .pct(100)) { list, frame in
+            guard active else { return }
+            let theme = Theme.current
+            TabOutline.paint(list, frame: frame, fill: theme.panel, line: theme.border)
+        }
+    }
+}
+
+private enum TabOutline {
+    static let radius: Float = 7
+
+    static func paint(_ list: DrawList, frame: CanvasFrame, fill: Color, line: Color) {
+        let r = min(radius, frame.w * 0.5, frame.h)
+        // Rounded on top only: the plate runs a radius past the bottom and the
+        // clip cuts its lower corners off square, flush with the toolbar.
+        list.pushClip(x: frame.x, y: frame.y, w: frame.w, h: frame.h)
+        list.roundedRect(
+            x: frame.x, y: frame.y, w: frame.w, h: frame.h + r, color: fill, radius: r
+        )
+        list.popClip()
+        list.polyline(points(frame: frame, radius: r), color: line)
+    }
+
+    /// Up the left side, round the top, down the right side, ending on the
+    /// strip's bottom edge where its rule takes over. Half-pixel centres, so a
+    /// one-pixel line lands on one row of pixels rather than across two.
+    static func points(frame: CanvasFrame, radius r: Float) -> [(x: Float, y: Float)] {
+        let left = frame.x + 0.5
+        let right = frame.x + frame.w - 0.5
+        let top = frame.y + 0.5
+        let bottom = frame.y + frame.h
+        var out: [(x: Float, y: Float)] = [(left, bottom)]
+        arc(into: &out, cx: left + r, cy: top + r, r: r, from: .pi, to: .pi * 1.5)
+        arc(into: &out, cx: right - r, cy: top + r, r: r, from: .pi * 1.5, to: .pi * 2)
+        out.append((right, bottom))
+        return out
+    }
+
+    private static func arc(
+        into out: inout [(x: Float, y: Float)],
+        cx: Float, cy: Float, r: Float, from start: Float, to end: Float
+    ) {
+        let steps = 6
+        for step in 0...steps {
+            let t = start + (end - start) * Float(step) / Float(steps)
+            out.append((cx + r * cos(t), cy + r * sin(t)))
+        }
     }
 }
 

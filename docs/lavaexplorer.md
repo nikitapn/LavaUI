@@ -27,6 +27,12 @@ LAVA_CLIENT=1 swift run LavaExplorer -- ~/Pictures
 - Back / Forward / Up, Alt+arrows, Backspace to go up.
 - Hidden names stay out until View → Show Hidden Files (or Ctrl+H).
 - Enter opens the selected row. A drop of a path navigates there.
+- Drop files on a tab — this window's own rows included — to copy them into
+  that tab's folder. Names already there get one question for the whole
+  drop: Replace (a folder is merged into, not swapped out), Keep Both
+  ("report (2).pdf"), Skip, or Cancel. A file is replaced only once its copy
+  is complete. The copy runs off the frame loop, and every tab showing that
+  folder reloads when it finishes. No progress bar yet.
 - Copy Path puts a filesystem path on the clipboard. It does not copy the file.
 - Right-click: Open, Open With, Set Default App, and stubs for copy/delete.
 - Drag a row out and drop it on another window — LavaView, a terminal, VS
@@ -60,8 +66,8 @@ file.
 
 ## What it does not
 
-- **Delete, trash, rename, new folder, copy, move.** On the context menu
-  as labelled stubs. A file manager that can throw things away without a
+- **Delete, trash, rename, new folder, move — and copy from the menu.** On
+  the context menu as labelled stubs; the only write is a drop on a tab. A file manager that can throw things away without a
   bin is how people lose work; `FileSource` has no `delete` so the method
   cannot be called by accident.
 - **Thumbnails.** The list is glyphs. Icon view with `ImageStore` is the

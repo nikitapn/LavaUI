@@ -8,8 +8,12 @@ import Observation
 ///
 /// Opening a file leaves this process: `xdg-open` is the desktop's handler,
 /// the same way the editor reveals a path. Opening a folder stays here.
+///
+/// Unchecked `Sendable` for the reason LavaView's session is: every property
+/// is read and written on the frame loop, and the one piece of work that
+/// leaves it — a copy — hands its result back through `MainQueue.async`.
 @Observable
-final class ExplorerSession {
+final class ExplorerSession: @unchecked Sendable {
     var tabSet: ExplorerTabs
     var notice: String?
     var sidebarFraction: Float = 0.22
@@ -442,6 +446,113 @@ final class ExplorerSession {
         default:
             dismissContext()
         }
+    }
+
+    // MARK: - Copying
+
+    /// A drop some of whose names are already taken, waiting on one answer
+    /// for all of them. See `ClashChoice` for why one.
+    struct PendingCopy {
+        var plan: CopyPlan
+        var folderTitle: String
+    }
+
+    /// Up while the clash bar is showing. Observed: the bar is drawn from it.
+    var pendingCopy: PendingCopy?
+    /// A copy is running on its worker. A second drop waits rather than
+    /// racing the first for the same names.
+    @ObservationIgnored private var copying = false
+
+    /// Files dropped on a tab: copied into that tab's folder.
+    ///
+    /// A copy and never a move, like the drag out of a row: nothing here can
+    /// put a moved file back, and there is no Trash yet to find it in.
+    func dropOnTab(id: Int, _ urls: [URL]) {
+        ownDrag = []
+        dismissContext()
+        guard let tab = tabSet.tab(id: id) else { return }
+        guard !copying, pendingCopy == nil else {
+            notice = "Still copying — drop again when it is done"
+            ViewInvalidation.markDirty()
+            return
+        }
+        let plan = CopyPlan.make(
+            sources: urls.map(\.path), into: tab.listing.path, source: source
+        )
+        guard !plan.items.isEmpty else {
+            notice = Self.refusalNotice(plan, folder: tab.title)
+            ViewInvalidation.markDirty()
+            return
+        }
+        if plan.clashes.isEmpty {
+            startCopy(plan, choice: .skip, folderTitle: tab.title)
+        } else {
+            pendingCopy = PendingCopy(plan: plan, folderTitle: tab.title)
+            ViewInvalidation.markDirty()
+        }
+    }
+
+    /// The clash bar's answer. Nil is Cancel: nothing is copied, not even the
+    /// items that did not clash — the drop was one decision.
+    func resolveCopy(_ choice: ClashChoice?) {
+        guard let pending = pendingCopy else { return }
+        pendingCopy = nil
+        guard let choice else {
+            ViewInvalidation.markDirty()
+            return
+        }
+        startCopy(pending.plan, choice: choice, folderTitle: pending.folderTitle)
+    }
+
+    private func startCopy(_ plan: CopyPlan, choice: ClashChoice, folderTitle: String) {
+        copying = true
+        notice = "Copying \(Self.items(plan.items.count)) to \(folderTitle)…"
+        ViewInvalidation.markDirty()
+        // Off the frame loop: a folder of photos takes as long as the disk
+        // takes, and the window has to keep answering while it does.
+        Thread.detachNewThread { [weak self] in
+            let outcome = FileCopier.run(plan, clashes: choice)
+            MainQueue.async { [weak self] in
+                self?.finishCopy(outcome, directory: plan.directory, folderTitle: folderTitle)
+            }
+        }
+    }
+
+    private func finishCopy(_ outcome: CopyOutcome, directory: String, folderTitle: String) {
+        copying = false
+        let source = self.source
+        // Every tab on that folder, not just the one dropped on: the same
+        // folder open twice should not disagree about what is in it.
+        tabSet.updateTabs(showing: directory) { $0.reload(from: source) }
+        if let failure = outcome.failures.first {
+            let name = (failure.path as NSString).lastPathComponent
+            let more = outcome.failures.count > 1
+                ? " (and \(outcome.failures.count - 1) more)" : ""
+            notice = "Copied \(Self.items(outcome.copied)) to \(folderTitle); "
+                + "\(name): \(failure.message)\(more)"
+        } else if outcome.copied == 0 {
+            notice = "Nothing copied to \(folderTitle)"
+        } else {
+            notice = "Copied \(Self.items(outcome.copied)) to \(folderTitle)"
+        }
+        ViewInvalidation.markDirty()
+    }
+
+    private static func refusalNotice(_ plan: CopyPlan, folder: String) -> String {
+        switch plan.refused.first {
+        case .alreadyThere?:
+            return "Already in \(folder)"
+        case .intoItself(let path)?:
+            return "Cannot copy \((path as NSString).lastPathComponent) into itself"
+        case .missing(let path)?:
+            return "\((path as NSString).lastPathComponent) is not there any more"
+        case nil:
+            return "Nothing to copy"
+        }
+    }
+
+    static func items(_ count: Int) -> String {
+        count == 1 ? "1 item" : "\(count) items"
     }
 
     /// What this window last started dragging out.

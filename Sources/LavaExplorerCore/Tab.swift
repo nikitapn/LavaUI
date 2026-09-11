@@ -98,6 +98,20 @@ public struct ExplorerTabs: Equatable, Sendable {
         body(&tabs[activeIndex])
     }
 
+    public func tab(id: Int) -> ExplorerTab? {
+        tabs.first { $0.id == id }
+    }
+
+    /// Every tab showing `directory`. A folder that changed on disk has to
+    /// change wherever it is open, not only in the tab that changed it.
+    public mutating func updateTabs(
+        showing directory: String, _ body: (inout ExplorerTab) -> Void
+    ) {
+        for index in tabs.indices where tabs[index].listing.path == directory {
+            body(&tabs[index])
+        }
+    }
+
     public mutating func select(id: Int) {
         guard let index = tabs.firstIndex(where: { $0.id == id }) else { return }
         activeIndex = index
