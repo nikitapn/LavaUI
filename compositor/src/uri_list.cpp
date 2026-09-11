@@ -64,4 +64,27 @@ std::vector<std::string> paths_from_uri_list(const std::string &text) {
   return out;
 }
 
+std::string uri_list_from_paths(const std::vector<std::string> &paths) {
+  std::string out;
+  for (const std::string &path : paths) {
+    if (path.empty() || path.front() != '/') continue;
+    out += "file://";
+    for (unsigned char c : path) {
+      // Unreserved, plus `/` which is the path separator rather than data.
+      if ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
+          (c >= '0' && c <= '9') || c == '-' || c == '.' || c == '_' ||
+          c == '~' || c == '/') {
+        out.push_back(static_cast<char>(c));
+      } else {
+        static const char kHex[] = "0123456789ABCDEF";
+        out.push_back('%');
+        out.push_back(kHex[c >> 4]);
+        out.push_back(kHex[c & 0xf]);
+      }
+    }
+    out += "\r\n";
+  }
+  return out;
+}
+
 }  // namespace lava

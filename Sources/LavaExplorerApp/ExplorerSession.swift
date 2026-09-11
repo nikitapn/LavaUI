@@ -444,9 +444,31 @@ final class ExplorerSession {
         }
     }
 
+    /// What this window last started dragging out.
+    ///
+    /// `.onDrop` covers the whole window, so a row let go of where it was
+    /// picked up comes straight back as a drop — and a drop navigates, so a
+    /// folder dragged a few pixels and released would open itself. Not
+    /// observed: nothing draws it.
+    @ObservationIgnored var ownDrag: [String] = []
+
+    /// The paths a drag of `entry` carries. Selects it first, the way every
+    /// file manager selects what is being dragged.
+    func dragPaths(for entry: FileEntry) -> [String] {
+        dismissContext()
+        tabSet.updateCurrent { $0.selected = entry.path }
+        ownDrag = [entry.path]
+        return ownDrag
+    }
+
     /// A drop is a place to go, not a copy. Copying files is an operation
     /// this sketch does not do.
     func acceptDrop(_ urls: [URL]) {
+        let paths = urls.map(\.path)
+        if !ownDrag.isEmpty, paths == ownDrag {
+            ownDrag = []
+            return
+        }
         guard let url = urls.first else { return }
         go(url.path)
     }

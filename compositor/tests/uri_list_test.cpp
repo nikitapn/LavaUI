@@ -13,6 +13,7 @@
 #include <vector>
 
 using lava::paths_from_uri_list;
+using lava::uri_list_from_paths;
 
 namespace {
 
@@ -91,12 +92,22 @@ void hostileInputIsRefused() {
 
 }  // namespace
 
+void roundTrip() {
+  const std::vector<std::string> files = {
+      "/tmp/a.png", "/tmp/my photo.jpg", "/tmp/\xC3\xA9t\xC3\xA9.jpg"};
+  expect(uri_list_from_paths(files), files, "encode then decode is identity");
+  expect(uri_list_from_paths({}), {}, "nothing in, nothing out");
+  expect(uri_list_from_paths({"relative", "/tmp/ok"}), {"/tmp/ok"},
+         "a relative path is not a file URI and is skipped");
+}
+
 int main() {
   theOrdinaryCase();
   escapesAreDecoded();
   authoritiesAreHandled();
   everythingElseIsIgnored();
   hostileInputIsRefused();
+  roundTrip();
 
   if (failures == 0) std::printf("uri list: all checks passed\n");
   return failures == 0 ? 0 : 1;

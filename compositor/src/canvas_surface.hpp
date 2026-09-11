@@ -208,6 +208,12 @@ class CanvasSurface {
   bool renderList(const std::vector<canvas::DrawCommand> &commands,
                   const std::vector<canvas::GlyphInstance> &glyphs);
 
+  /// The same, with every side buffer a client's list can carry — mesh
+  /// vertices and gradients as well as glyphs. What a drag chip is drawn
+  /// with: a client emitted it, but it arrives whole on a call rather than
+  /// through an arena, and it is drawn once.
+  bool renderList(const canvas::DrawList &list);
+
   /// CPU fallback: uploads `rgba` (`srcW`×`srcH`) as a texture, draws it
   /// across this surface, and runs the content-blur pass at `radius`.
   /// Prefer `frostFromDmabuf` when the capture is a dma-buf.

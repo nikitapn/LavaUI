@@ -316,6 +316,9 @@ private struct FileRow: View {
         .hoverSnap()
         .cursor(.pointer)
         .agentId("file-\(entry.name)")
+        .onFileDrag(paths: { session.dragPaths(for: entry) }) {
+            FileDragChip(entry: entry)
+        }
         .overlay(
             isPresented: Binding(
                 get: { session.contextEntry?.path == entry.path },
@@ -342,6 +345,26 @@ private struct FileRow: View {
                 FileContextMenu(session: session, entry: entry)
             }
         }
+    }
+}
+
+/// What follows the pointer while a row is dragged out: the row's glyph and
+/// name, on a plate. Ordinary views — the compositor draws them once and moves
+/// the result, so nothing here has to know it ends up as a texture.
+private struct FileDragChip: View {
+    let entry: FileEntry
+
+    var body: some View {
+        let theme = Theme.current
+        return HStack(padding: 8, alignment: .center, spacing: 8) {
+            Text(
+                entry.isDirectory ? "▣" : "▤",
+                color: entry.isDirectory ? theme.accent : theme.textDim
+            )
+            Text(entry.name, color: theme.textPrimary, lineLimit: 1)
+        }
+        .background(theme.panel)
+        .cornerRadius(6)
     }
 }
 

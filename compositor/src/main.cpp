@@ -38,6 +38,7 @@
 #include "clipboard.hpp"
 #include "config.hpp"
 #include "decoration.hpp"
+#include "drag.hpp"
 #include "frame_probe.hpp"
 #include "control_plane.hpp"
 #include "png_file.hpp"
@@ -1067,6 +1068,14 @@ struct Server {
   bool beginInteractiveResize(ClientSurface &surface, uint32_t edges,
                               bool fromClient = false);
 
+  /// Starts a `wl_data_device` drag offering `paths` as `text/uri-list`,
+  /// with `chip` drawn once and hung off the cursor. False when there is no
+  /// button down to carry it, or the pointer already belongs to a move or
+  /// another drag. See `StartDrag`.
+  bool startFileDrag(ClientSurface &surface,
+                     const std::vector<std::string> &paths,
+                     const lava::CompositorHost::DragChip &chip);
+
   /// Whether this compositor draws the frame for `toplevel`.
   ///
   /// It does when the client asked through xdg-decoration, because the answer
@@ -1297,7 +1306,7 @@ struct Server {
           &request_cursor, &new_pointer_constraint, &pointer_focus_change,
           &active_constraint_destroy, &request_set_selection, &set_selection,
           &request_set_primary_selection, &request_start_drag, &start_drag,
-          &request_activate, &new_idle_inhibitor}) {
+          &request_activate, &new_idle_inhibitor, &lava_drag_destroy}) {
       listener->detach();
     }
     inputMethod.detachListeners();
@@ -1340,9 +1349,28 @@ struct Server {
   /// The same delivery, from `LAVA_TEST_DROP` rather than from a drag. See
   /// `on_test_drop`.
   void deliverTestDrop();
-  /// Keeps the drag icon under the cursor. Does nothing when no client is
-  /// dragging anything.
+  /// Keeps the drag icon — a Wayland client's, or a Lava chip — under the
+  /// cursor. Does nothing when nothing is being dragged.
   void moveDragIcon();
+  /// Takes down the chip a Lava `StartDrag` hung on the cursor.
+  void clearLavaDragChip();
+  static void on_lava_drag_destroy(wl_listener *listener, void *data);
+
+  /// The chip a Lava `StartDrag` hangs on the cursor, while that drag runs.
+  ///
+  /// A canvas surface of its own, drawn once when the drag starts and only
+  /// moved after. Null for any other drag, and for a Lava drag that sent no
+  /// chip.
+  std::unique_ptr<lava::CanvasSurface> lavaDragChip;
+  wlr_scene_buffer *lavaDragChipNode = nullptr;
+  /// Where the chip's top-left sits relative to the cursor.
+  float lavaDragChipX = 0.f;
+  float lavaDragChipY = 0.f;
+  /// Stands in for the Wayland client a drag needs and a Lava app is not —
+  /// see `lava::init_drag_seat_client`. Lives as long as the seat.
+  wlr_seat_client lavaDragSeatClient{};
+  /// The running Lava drag's end, which is when its chip comes down.
+  Listener<Server> lava_drag_destroy;
   static void on_request_set_selection(wl_listener *listener, void *data);
   static void on_set_selection(wl_listener *listener, void *data);
   static void on_request_activate(wl_listener *listener, void *data);
@@ -4924,6 +4952,34 @@ class SurfaceRegistry : public lava::CompositorHost {
   // means.
 
   bool beginMove(uint32_t id) override;
+
+  bool startDrag(uint32_t id, const std::vector<std::string> &paths,
+                 const DragChip &chip) override;
+
+  /// A drag chip, drawn once into a surface of its own — see `StartDrag`.
+  ///
+  /// Null without a device, for an empty chip, or if it would not draw. A
+  /// drag without a chip is still a drag, so none of those is an error.
+  std::unique_ptr<lava::CanvasSurface> renderDragChip(const DragChip &chip) {
+    if (renderer_ == nullptr || chip.commands.empty() || chip.width == 0 ||
+        chip.height == 0) {
+      return nullptr;
+    }
+    std::unique_ptr<lava::CanvasSurface> surface =
+        renderer_->createSurface(chip.width, chip.height);
+    if (!surface) return nullptr;
+    canvas::DrawList list;
+    list.commands = chip.commands.data();
+    list.commandCount = chip.commands.size();
+    list.glyphs = chip.glyphs.data();
+    list.glyphCount = chip.glyphs.size();
+    list.meshVertices = chip.meshVertices.data();
+    list.meshVertexCount = chip.meshVertices.size();
+    list.gradients = chip.gradients.data();
+    list.gradientCount = chip.gradients.size();
+    if (!surface->renderList(list)) return nullptr;
+    return surface;
+  }
 
   bool toggleMaximize(uint32_t id, bool &outMaximized) override {
     ClientSurface *surface = find(id);
@@ -11328,6 +11384,20 @@ bool SurfaceRegistry::beginMove(uint32_t id) {
   return true;
 }
 
+bool SurfaceRegistry::startDrag(uint32_t id,
+                                const std::vector<std::string> &paths,
+                                const DragChip &chip) {
+  ClientSurface *surface = find(id);
+  if (surface == nullptr) return false;
+  // True means "the surface is yours", as for `beginMove`: no button down,
+  // nothing selected, or a drag already running are harmless mistakes, and
+  // none of them says anything about the window.
+  if (server_ != nullptr && !paths.empty()) {
+    server_->startFileDrag(*surface, paths, chip);
+  }
+  return true;
+}
+
 bool SurfaceRegistry::activateWindow(uint32_t id) {
   ClientSurface *surface = find(id);
   if (surface == nullptr || surface->panel) return false;
@@ -12104,8 +12174,94 @@ void Server::deliverTestDrop() {
   surfaces->pump(*onto);
 }
 
+bool Server::startFileDrag(ClientSurface &surface,
+                           const std::vector<std::string> &paths,
+                           const lava::CompositorHost::DragChip &chip) {
+  if (seat == nullptr || surfaces == nullptr) return false;
+  // Nothing to carry it, or the pointer is already spoken for: a window being
+  // moved holds it, and so does a drag that is already running.
+  if (pointerButtonsDown == 0 || seat->drag != nullptr || drag != Drag::None) {
+    wlr_log(WLR_DEBUG, "drag: surface %u asked with %s, ignored", surface.id,
+            pointerButtonsDown == 0   ? "no button down"
+            : seat->drag != nullptr ? "a drag already running"
+                                    : "a window move running");
+    return false;
+  }
+  // `lastPressedButton` is numbered from zero, which is the Linux code less
+  // `BTN_LEFT` — see `on_cursor_button`.
+  const uint32_t button =
+      0x110u + static_cast<uint32_t>(std::max(0, lastPressedButton));
+  const auto now = std::chrono::duration_cast<std::chrono::milliseconds>(
+      std::chrono::steady_clock::now().time_since_epoch());
+  wlr_drag *started = lava::start_file_drag(
+      seat, display, &lavaDragSeatClient, button,
+      static_cast<uint32_t>(now.count()), paths);
+  if (started == nullptr) return false;
+  wlr_log(WLR_INFO, "drag: %zu file(s) out of surface %u", paths.size(),
+          surface.id);
+
+  // The release the client is never going to see, as for a move: the button
+  // is the drag's until it comes up, and that release goes to whatever it
+  // lands on rather than to the window the drag left.
+  if (!surface.isForeign() && surface.canvas) {
+    surface.canvas->pointerButton(
+        lastPressedButton, false, static_cast<float>(cursor->x - surface.x),
+        static_cast<float>(cursor->y - surface.contentY()), 0);
+    surfaces->pump(surface);
+  }
+  pointerTarget = 0;
+
+  clearLavaDragChip();
+  if (workspaces.dragIcons != nullptr) {
+    lavaDragChip = surfaces->renderDragChip(chip);
+  }
+  if (lavaDragChip) {
+    lavaDragChipNode =
+        wlr_scene_buffer_create(workspaces.dragIcons, lavaDragChip->buffer());
+    if (lavaDragChipNode != nullptr) {
+      show_surface(lavaDragChipNode, *lavaDragChip);
+      // Never somewhere a hit test lands. The drop is for what is under the
+      // chip, and a chip hung at a negative offset sits under the hotspot.
+      lavaDragChipNode->point_accepts_input =
+          [](wlr_scene_buffer *, double *, double *) { return false; };
+      lavaDragChipX = chip.offsetX;
+      lavaDragChipY = chip.offsetY;
+    } else {
+      lavaDragChip.reset();
+    }
+  }
+  lava_drag_destroy.attach(&started->events.destroy, this,
+                           Server::on_lava_drag_destroy);
+  moveDragIcon();
+  return true;
+}
+
+void Server::clearLavaDragChip() {
+  // The node before the surface: a scene node still holding the buffer of a
+  // surface that has gone shows memory already back in the export pool.
+  if (lavaDragChipNode != nullptr) {
+    wlr_scene_node_destroy(&lavaDragChipNode->node);
+    lavaDragChipNode = nullptr;
+  }
+  lavaDragChip.reset();
+}
+
+void Server::on_lava_drag_destroy(wl_listener *listener, void *) {
+  auto *server = owner_of<Server>(listener);
+  // Unhooked inside the signal: wlroots asserts nothing is still listening
+  // the moment it has finished emitting it.
+  server->lava_drag_destroy.detach();
+  server->clearLavaDragChip();
+}
+
 void Server::moveDragIcon() {
   if (seat == nullptr || seat->drag == nullptr) return;
+  if (lavaDragChipNode != nullptr) {
+    wlr_scene_node_set_position(
+        &lavaDragChipNode->node,
+        static_cast<int>(std::lround(cursor->x + lavaDragChipX)),
+        static_cast<int>(std::lround(cursor->y + lavaDragChipY)));
+  }
   wlr_drag_icon *icon = seat->drag->icon;
   if (icon == nullptr || icon->data == nullptr) return;
   auto *tree = static_cast<wlr_scene_tree *>(icon->data);
@@ -12499,6 +12655,11 @@ int main() {
                              Server::on_cursor_frame);
 
   server.seat = wlr_seat_create(server.display, "seat0");
+  // Before any drag can start: a Lava window dragging files out is this
+  // compositor starting the drag on its behalf, under a stand-in client.
+  if (server.seat != nullptr) {
+    lava::init_drag_seat_client(server.seat, &server.lavaDragSeatClient);
+  }
   server.relativePointers =
       wlr_relative_pointer_manager_v1_create(server.display);
   server.pointerConstraints =
@@ -12786,6 +12947,9 @@ int main() {
     control.reset();
   }
   server.detachListeners();
+  // A drag chip is a canvas surface, and the renderer it was drawn on does not
+  // outlive this function.
+  server.clearLavaDragChip();
   // The backend by hand, before the display rather than with it.
   //
   // `wl_display_destroy` tears down its globals first and its event loop

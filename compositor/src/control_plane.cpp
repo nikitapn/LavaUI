@@ -1513,6 +1513,74 @@ class CompositorImpl final : public ICompositor_Servant {
     return host_.takeDroppedPaths(surfaceId);
   }
 
+  /// How much drag chip the compositor will draw. A chip names what is being
+  /// dragged — the client caps its own at 480 px — so these are far past
+  /// anything real and exist only so a bad list cannot ask for a huge
+  /// surface or a long render.
+  static constexpr uint32_t kMaxDragChipSide = 1024;
+  static constexpr size_t kMaxDragChipCommands = 4096;
+  static constexpr size_t kMaxDragChipGlyphs = 16384;
+  static constexpr size_t kMaxDragChipVertices = 16384;
+  static constexpr size_t kMaxDragChipGradients = 256;
+
+  /// `bytes` as whole `T`s, copied out of the message. False when the length
+  /// is not a whole number of them, or is more than `limit`.
+  template <typename T>
+  static bool copy_structs(nprpc::flat::Span<uint8_t> bytes, size_t limit,
+                           std::vector<T> &out) {
+    if (bytes.size() % sizeof(T) != 0) return false;
+    const size_t count = bytes.size() / sizeof(T);
+    if (count > limit) return false;
+    out.resize(count);
+    if (count > 0) std::memcpy(out.data(), bytes.data(), bytes.size());
+    return true;
+  }
+
+  void StartDrag(
+      uint32_t surfaceId,
+      nprpc::flat::Span_ref<nprpc::flat::String, nprpc::flat::String_Direct1>
+          paths,
+      flat::DragImage_Direct chip) override {
+    if (!host_.surfaceExists(surfaceId)) throw SurfaceNotFound(surfaceId);
+    std::vector<std::string> files;
+    files.reserve(paths.size());
+    for (auto path : paths) {
+      files.emplace_back(std::string_view(path()));
+    }
+
+    // The chip is a client's draw list, and the renderer trusts a list's
+    // counts only as far as the arrays it was handed — so the arrays are
+    // checked here, where they stop being bytes. One that fails costs the
+    // chip, never the drag: the cursor alone still shows what is happening.
+    CompositorHost::DragChip image;
+    image.width = chip.width();
+    image.height = chip.height();
+    image.offsetX = chip.offsetX();
+    image.offsetY = chip.offsetY();
+    const bool sane =
+        image.width > 0 && image.height > 0 &&
+        image.width <= kMaxDragChipSide && image.height <= kMaxDragChipSide &&
+        std::abs(image.offsetX) <= kMaxDragChipSide &&
+        std::abs(image.offsetY) <= kMaxDragChipSide &&
+        copy_structs(chip.commands(), kMaxDragChipCommands, image.commands) &&
+        copy_structs(chip.glyphs(), kMaxDragChipGlyphs, image.glyphs) &&
+        copy_structs(chip.meshVertices(), kMaxDragChipVertices,
+                     image.meshVertices) &&
+        copy_structs(chip.gradients(), kMaxDragChipGradients, image.gradients);
+    if (!sane) {
+      if (chip.commands().size() != 0) {
+        wlr_log(WLR_ERROR,
+                "drag: surface %u sent a %ux%u chip that does not hold "
+                "together; dragging without it",
+                surfaceId, image.width, image.height);
+      }
+      image = {};
+    }
+    if (!host_.startDrag(surfaceId, files, image)) {
+      throw SurfaceNotFound(surfaceId);
+    }
+  }
+
   Capture CaptureSurface(uint32_t surfaceId, int32_t x, int32_t y, int32_t w,
                          int32_t h, int32_t maxSide) override {
     if (!host_.surfaceExists(surfaceId)) throw SurfaceNotFound(surfaceId);

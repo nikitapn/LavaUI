@@ -859,6 +859,33 @@ message Capture {
   png: vector<u8>;
 }
 
+/// What hangs off the cursor during a drag out of a Lava window, as the
+/// client drew it. See `StartDrag`.
+///
+/// A draw list rather than a picture, for the reason every frame is one: the
+/// client has no GPU to rasterise with, and a chip's commands are a few
+/// kilobytes where its pixels would be hundreds. The client lays its views
+/// out at their natural size and emits them with the chip's top-left at 0,0;
+/// `width` × `height` is what that came to.
+///
+/// The arrays are canvas's `DrawCommand` (32 bytes), `GlyphInstance` (16),
+/// `MeshVertex` (8) and `GradientDesc` (16), raw — both ends compile against
+/// `draw_command.hpp`, and the compositor refuses any array that is not a
+/// whole number of them. Font and image ids in them are the device-wide ids
+/// the client already registered, so a chip can carry text and pictures.
+///
+/// `offsetX`/`offsetY` place its top-left relative to the pointer.
+message DragImage {
+  width: u32;
+  height: u32;
+  offsetX: f32;
+  offsetY: f32;
+  commands: vector<u8>;
+  glyphs: vector<u8>;
+  meshVertices: vector<u8>;
+  gradients: vector<u8>;
+}
+
 /// One raw input event, renderer → app.
 ///
 /// Field-for-field the shape of `canvas::InputEvent`, deliberately: the
@@ -1716,6 +1743,34 @@ interface Compositor {
   /// twice for the same drop is a client that would process the files twice.
   /// The queue is per surface, so a client falling behind delays only itself.
   vector<string> TakeDroppedPaths(surfaceId: in u32) raises(SurfaceNotFound);
+
+  /// Starts a file drag from this window. The pointer must already be down.
+  ///
+  /// A Lava client has no `wl_data_device`, so it cannot originate a Wayland
+  /// drag itself. This is the compositor becoming the source: it offers
+  /// `text/uri-list` the same way a foreign client does, which is what makes
+  /// a drop land in another Lava window *and* in VSCode, Nautilus, and the
+  /// rest. Incoming drops were already this compositor's job (see
+  /// `TakeDroppedPaths`); this is the other direction. Offered as a copy
+  /// only — see `lava::start_file_drag`.
+  ///
+  /// `chip` is what hangs off the cursor: the client's own views, laid out
+  /// and emitted into a list of their own (see `DragImage`). The compositor
+  /// draws it **once** into a small canvas surface in the scene's drag tree
+  /// — where a Wayland client's icon surface goes — and after that only
+  /// moves the surface. One render for the whole drag, however far the
+  /// pointer travels, and the chip can be anything a view can be. It is not
+  /// a second window and it is not pixels: a client still has no GPU, and a
+  /// picture still does not cross NPRPC. No commands is a drag with no chip.
+  ///
+  /// Empty `paths` is a no-op rather than an error: a client that asked with
+  /// nothing selected has made a harmless mistake.
+  ///
+  /// Ignored when no button is down, like `BeginMove`. From the next line
+  /// the pointer is the compositor's: a synthetic release is delivered so
+  /// the client does not hold a capture that nothing will ever end.
+  void StartDrag(surfaceId: in u32, paths: in vector<string>,
+                 chip: in DragImage) raises(SurfaceNotFound);
 
   /// A PNG of what this window currently looks like.
   ///

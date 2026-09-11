@@ -1324,6 +1324,38 @@ public enum LavaClient {
             }
         }
 
+        // And out. Blocking for the reason `beginDrag` is: the compositor
+        // takes the pointer as it answers, and the release it hands back has
+        // to arrive after this call rather than race it.
+        DragBridge.startFileDrag = { [compositor] paths, chip, offsetX, offsetY in
+            // A chip too big for one message is dropped rather than failing
+            // the drag: the cursor alone still says what is happening.
+            let image: DragImage
+            if let chip, chip.byteCount <= DragChipImage.maxWireBytes {
+                image = DragImage(
+                    width: chip.width, height: chip.height,
+                    offsetX: offsetX, offsetY: offsetY,
+                    commands: chip.commands, glyphs: chip.glyphs,
+                    meshVertices: chip.meshVertices, gradients: chip.gradients
+                )
+            } else {
+                image = DragImage()
+            }
+            do {
+                try blockingCall {
+                    try await compositor.startDrag(
+                        surfaceId: surfaceID, paths: paths, chip: image
+                    )
+                }
+                return true
+            } catch {
+                FileHandle.standardError.write(
+                    Data("StartDrag failed: \(error)\n".utf8)
+                )
+                return false
+            }
+        }
+
         // Events arrive on an NPRPC thread and are consumed on the frame
         // loop's, which is what `MainQueue` is for — it hops the work over and
         // wakes the loop out of `pumpEvents` on the way. Draining inside that

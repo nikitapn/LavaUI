@@ -29,6 +29,10 @@ LAVA_CLIENT=1 swift run LavaExplorer -- ~/Pictures
 - Enter opens the selected row. A drop of a path navigates there.
 - Copy Path puts a filesystem path on the clipboard. It does not copy the file.
 - Right-click: Open, Open With, Set Default App, and stubs for copy/delete.
+- Drag a row out and drop it on another window — LavaView, a terminal, VS
+  Code, a browser's upload box. A chip with the row's glyph and name follows
+  the pointer. Offered as a copy only; let go on the window it came from and
+  nothing happens.
 - Tabs: each has its own folder and Back stack. Ctrl+T / Ctrl+W, Ctrl+Tab,
   the plus on the strip, Ctrl+click a folder, or Open in New Tab. Closing
   the last tab closes the window. Several paths on the command line open
@@ -64,6 +68,9 @@ file.
   next visual step, not this one.
 - **inotify.** Reload is a key (Ctrl+R) and a menu item.
 - **A second window.** One surface per process; navigate in place.
+- **Dragging within the window.** Nothing takes a drop on a folder row yet, so
+  a row dragged onto another folder is not moved or copied there — a drop
+  anywhere still navigates. One row at a time, because selection is one row.
 - **The chooser mode.** `FileDialog` still shells out to zenity. The browsing
   core is what that mode should sit on, once it exists.
 - **Archives, removable media, search, remote.** Later.

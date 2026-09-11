@@ -473,6 +473,42 @@ bool CanvasSurface::renderList(
   return true;
 }
 
+bool CanvasSurface::renderList(const canvas::DrawList &list) {
+  canvas::Engine &engine = renderer_.engine();
+  // Into the engine's own buffers rather than through `submitDrawList`, which
+  // has no slot for gradients — and a chip's plate is exactly where one
+  // turns up.
+  engine.ensureDrawListCapacity(list.commandCount, list.glyphCount,
+                                list.meshVertexCount, list.spatialVertexCount,
+                                list.gradientCount, windowId_);
+  if (list.commandCount > 0) {
+    std::copy_n(list.commands, list.commandCount,
+                engine.drawCommandData(windowId_));
+  }
+  if (list.glyphCount > 0) {
+    std::copy_n(list.glyphs, list.glyphCount, engine.drawGlyphData(windowId_));
+  }
+  if (list.meshVertexCount > 0) {
+    std::copy_n(list.meshVertices, list.meshVertexCount,
+                engine.drawMeshVertexData(windowId_));
+  }
+  if (list.spatialVertexCount > 0) {
+    std::copy_n(list.spatialVertices, list.spatialVertexCount,
+                engine.drawSpatialVertexData(windowId_));
+  }
+  if (list.gradientCount > 0) {
+    std::copy_n(list.gradients, list.gradientCount,
+                engine.drawGradientData(windowId_));
+  }
+  engine.commitDrawList(list.commandCount, list.glyphCount,
+                        list.meshVertexCount, list.spatialVertexCount,
+                        list.gradientCount, windowId_);
+  if (!engine.renderFrame(windowId_)) return false;
+  captureFence();
+  drawn_ = engine.frameCounter(windowId_);
+  return true;
+}
+
 bool CanvasSurface::attachArena(const std::string &id) {
   // Failure is not logged: a caller may retry on a timer until a client turns
   // up, and an error line per attempt would bury the one that matters.

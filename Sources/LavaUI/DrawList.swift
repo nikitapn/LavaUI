@@ -185,10 +185,17 @@ public final class DrawList {
         gradients: 16
     )
 
-    public init(editor: Editor, window: WindowID = .main) {
+    public convenience init(editor: Editor, window: WindowID = .main) {
+        self.init(editor: editor, window: window, sink: editor.frames(for: window))
+    }
+
+    /// A list whose frame goes to `sink` instead of to a window — a drag
+    /// chip, captured into memory to be sent rather than shown. See
+    /// `DragChipCapture`.
+    init(editor: Editor, window: WindowID = .main, sink: any FrameSink) {
         self.editor = editor
         self.window = window
-        self.sink = editor.frames(for: window)
+        self.sink = sink
         let buffers = sink.beginFrame(minimum: Self.initialCapacity)
         commandStorage = buffers?.commands ?? Self.nowhere()
         glyphStorage = buffers?.glyphs ?? Self.nowhere()
@@ -1146,6 +1153,23 @@ public final class DrawList {
         pendingOverlays.removeAll(keepingCapacity: true)
         cullStack.removeAll(keepingCapacity: true)
         WidgetProfiler.endFrame()
+    }
+
+    /// Emits a tree that belongs to no window, with its top-left at 0,0.
+    ///
+    /// A drag chip. Not `emitTree`, which also starts a frame for the window
+    /// — resetting node visibility, ageing scene ids, beginning a profile —
+    /// and doing any of that between two of the window's own frames would
+    /// have the next one misjudge what it last drew. Overlays are left out: a
+    /// chip is a picture, and nothing on it can be opened.
+    func emitDetached(_ root: any AnyViewNode, width: Float, height: Float) {
+        pendingOverlays.removeAll(keepingCapacity: true)
+        cullStack.removeAll(keepingCapacity: true)
+        cullStack.append(CullRect(x0: 0, y0: 0, x1: width, y1: height))
+        retainedShift = (0, 0)
+        emitNode(root, ox: 0, oy: 0)
+        pendingOverlays.removeAll(keepingCapacity: true)
+        cullStack.removeAll(keepingCapacity: true)
     }
 
     /// A node's corner radius, wherever it happens to keep it.

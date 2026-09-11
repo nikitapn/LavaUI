@@ -52,6 +52,27 @@ public final class LavaWindow {
     /// every hit test and emit origin below refers to it.
     private let menuH: Float = 0
 
+    /// A left press on a `.onFileDrag` view that has not yet travelled far
+    /// enough to be a drag: the source, and where the press was.
+    private var pendingFileDrag: (source: NodeID, x: Float, y: Float)?
+
+    /// Starts the OS drag a press on `source` turned into.
+    ///
+    /// The chip is captured now rather than when the view was built: it is
+    /// laid out and drawn once, and a chip per row would be a list's worth of
+    /// layouts for the one row anybody drags.
+    private func beginFileDrag(from source: NodeID) {
+        guard let entry = FileDragRouter.entry(source),
+              let start = DragBridge.startFileDrag
+        else { return }
+        let paths = entry.paths()
+        guard !paths.isEmpty else { return }
+        let chip = entry.chip.flatMap { mount in
+            DragChipCapture.capture(mount(), editor: editor)
+        }
+        _ = start(paths, chip, entry.offsetX, entry.offsetY)
+    }
+
     /// Forces a full `.body` pass on the next frame regardless of what
     /// invalidation says — the first frame, and nothing else so far.
     private var dirty = true
@@ -381,6 +402,7 @@ public final class LavaWindow {
         if let root = host.rootNode { collectIDs(root, into: &ids) }
         ScrollRouter.unregisterAll(ids: ids)
         DropRouter.unregisterAll(ids: ids)
+        FileDragRouter.unregisterAll(ids: ids)
         HoverState.unregisterAll(ids: ids)
         PointerCapture.discard(ids: ids)
         AnimationDriver.unregisterAll(in: scope)
@@ -499,6 +521,14 @@ public final class LavaWindow {
     private func processInputEvent(_ ev: InputEvent) {
         switch ev.kind {
         case .mouseDown:
+            // Looked up before the click handler, which may rebuild the view
+            // under the pointer — a row selecting itself, say.
+            pendingFileDrag = nil
+            if ev.button == 0, DragBridge.startFileDrag != nil,
+               let source = host.fileDragSource(x: ev.x, y: ev.y, originY: menuH)
+            {
+                pendingFileDrag = (source, ev.x, ev.y)
+            }
             if let action = host.hitTestClick(
                 x: ev.x, y: ev.y, originX: 0, originY: menuH, mods: ev.mods,
                 button: ev.button
@@ -535,6 +565,22 @@ public final class LavaWindow {
             if !syncFramebufferSize() { ViewInvalidation.markNeedsRedraw() }
         case .mouseMove:
             PointerState.set(x: ev.x, y: ev.y)
+            if let pending = pendingFileDrag {
+                let dx = ev.x - pending.x
+                let dy = ev.y - pending.y
+                if PointerCapture.isActive {
+                    // Something inside the source took the press for itself —
+                    // a slider on the row, being dragged as a slider.
+                    pendingFileDrag = nil
+                } else if dx * dx + dy * dy >= FileDrag.threshold * FileDrag.threshold {
+                    pendingFileDrag = nil
+                    beginFileDrag(from: pending.source)
+                    // The pointer is the compositor's from here, and the
+                    // release it sends back ends the press. Nothing below
+                    // should treat this as an ordinary move.
+                    break
+                }
+            }
             if PointerCapture.isActive {
                 PointerCapture.move(x: ev.x, y: ev.y - menuH)
             } else if LocalHoverTargets.isInUse {
@@ -547,6 +593,7 @@ public final class LavaWindow {
                 _ = host.hitTestHover(x: ev.x, y: ev.y, originY: menuH)
             }
         case .mouseUp:
+            pendingFileDrag = nil
             PointerCapture.release()
         case .scroll:
             // Renderer-owned ScrollViews consume this before it reaches us, so

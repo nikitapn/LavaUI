@@ -6,6 +6,7 @@
 #include <string>
 #include <vector>
 
+#include "render/draw_command.hpp"
 #include "render/exif.hpp"
 #include "render/gpu_report.hpp"
 
@@ -68,6 +69,28 @@ struct CompositorHost {
   /// it. Empty for a surface nothing was dropped on, which is every surface
   /// almost all of the time — the client only asks when an event told it to.
   virtual std::vector<std::string> takeDroppedPaths(uint32_t surfaceId) = 0;
+
+  /// A drag chip as the client emitted it: a draw list with its origin at
+  /// the chip's top-left, `width` × `height` pixels, hung `offsetX`,
+  /// `offsetY` from the pointer. Mirrors `DragImage` in the IDL, already
+  /// checked by the servant. No commands means no chip.
+  struct DragChip {
+    uint32_t width = 0;
+    uint32_t height = 0;
+    float offsetX = 0.f;
+    float offsetY = 0.f;
+    std::vector<canvas::DrawCommand> commands;
+    std::vector<canvas::GlyphInstance> glyphs;
+    std::vector<canvas::MeshVertex> meshVertices;
+    std::vector<canvas::GradientDesc> gradients;
+  };
+
+  /// Starts a file drag from `surfaceId`. False only if the surface is gone.
+  /// A missing button, empty paths, or a drag already running are no-ops
+  /// that still return true — see `StartDrag`.
+  virtual bool startDrag(uint32_t surfaceId,
+                         const std::vector<std::string> &paths,
+                         const DragChip &chip) = 0;
 
   /// One window as a shell sees it. Mirrors `WindowInfo` in the IDL without
   /// dragging the generated header into this one.

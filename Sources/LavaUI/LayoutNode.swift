@@ -2210,6 +2210,20 @@ public final class LayoutHost {
         return nil
     }
 
+    /// The nearest `.onFileDrag` source at this point, found the way
+    /// `dropTarget` finds a drop target and for the same reason: the press
+    /// lands on a row's label, and it is the row that registered.
+    public func fileDragSource(
+        x: Float, y: Float, originX: Float = 0, originY: Float = 0
+    ) -> NodeID? {
+        for id in hitTestScrollChain(
+            x: x, y: y, originX: originX, originY: originY
+        ) where FileDragRouter.hasSource(id) {
+            return id
+        }
+        return nil
+    }
+
     /// Dismisses everything presented. Returns true if anything was showing,
     /// so a key handler can tell whether it consumed the event.
     @discardableResult

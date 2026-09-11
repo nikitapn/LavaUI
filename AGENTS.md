@@ -215,6 +215,19 @@ Consequences that surprise people:
   `dropTarget`, which walks the hit chain *outwards*: `hitTestHover` answers
   with the topmost node, which is the picture in LavaView and the text in the
   editor, never the view that registered the handler.
+- **A drag out of a Lava window is the compositor starting one.** The mirror of
+  the above: `StartDrag` makes the compositor the `wl_data_device` source
+  (`compositor/src/drag.cpp`), offering `text/uri-list` as a copy, under a
+  stand-in `wlr_seat_client` — `wlr_drag_create` needs one and a Lava app is not
+  a Wayland client. The held button is told to the seat first: presses on Lava
+  surfaces never reach it, and wlroots' drag grab drops only on the release of
+  the button it believes started the drag, so without that every drop on a
+  Wayland client is a silent cancel. The chip is not pixels. LavaUI lays the
+  `.onFileDrag { … }` views out at their natural size and emits them into a list
+  of their own (`DragChipCapture`, `DrawList.emitDetached`); the compositor
+  draws that once into a `CanvasSurface` in `dragIcons` and only moves the node
+  after. The source frees itself from `dnd_finish`, deferred to idle — wlroots
+  destroys a cancelled source only when that callback exists.
 - **A camera raw is opened by finding the picture inside it, not by developing
   it.** A CR2 is a TIFF whose directories hold, among other things, the JPEG the
   camera's own processor produced — already white-balanced and tone-mapped, and

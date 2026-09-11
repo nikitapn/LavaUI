@@ -180,6 +180,7 @@ compositor = executable(
   'src/clipboard.cpp',
   'src/config.cpp',
   'src/decoration.cpp',
+  'src/drag.cpp',
   'src/frame_probe.cpp',
   'src/shell.cpp',
   'src/screenshot_portal.cpp',

@@ -19,4 +19,12 @@ namespace lava {
 /// same file, and no other authority is a local path at all.
 std::vector<std::string> paths_from_uri_list(const std::string &text);
 
+/// The inverse of `paths_from_uri_list`: local paths as a `text/uri-list`.
+///
+/// Absolute paths only — a relative one would become an authority after
+/// `file://`, which is not a file and which `paths_from_uri_list` would
+/// then refuse. Percent-encoded, because a space in a filename has to
+/// survive a pipe to a client that decodes RFC 2483.
+std::string uri_list_from_paths(const std::vector<std::string> &paths);
+
 }  // namespace lava
