@@ -326,6 +326,23 @@ class YogaBoxNode: AnyViewNode {
         }
     }
 
+    /// Every hit walk passes through this box as if it were not there — its
+    /// children included. For a layer painted over content that must not take
+    /// the content's input (`.overlayLayer`), and under content that should
+    /// not answer for a press the content declined (`.underlay`).
+    var ignoresInput = false
+
+    /// `.scrollIntoView(when:)`: whether this box last asked to be in view,
+    /// and whether that ask is still waiting for a layout pass to act on it.
+    /// The first is what makes the second an edge rather than a level — see
+    /// `ScrollReveal`.
+    var revealWanted = false
+    var revealPending = false
+
+    /// Told where layout put this box, in window coordinates, after every
+    /// layout pass that reaches it. See `View.onFrame(perform:)`.
+    var onFrame: ((CanvasFrame) -> Void)?
+
     func collectFrames(originX: Float, originY: Float, into frames: inout [LayoutFrame]) {
         // Nothing here is on screen, and the frames its children still carry
         // are where they were when it last was. An agent searching the tree
@@ -336,6 +353,7 @@ class YogaBoxNode: AnyViewNode {
         let w = YGNodeLayoutGetWidth(yogaStorage)
         let h = YGNodeLayoutGetHeight(yogaStorage)
         frames.append(LayoutFrame(label: label, x: x, y: y, w: w, h: h))
+        onFrame?(CanvasFrame(x: x, y: y, w: w, h: h))
         let shift = childOffset
         collectChildFrames(originX: x - shift.x, originY: y - shift.y, into: &frames)
     }
@@ -1951,6 +1969,12 @@ public final class LayoutHost {
             settlePasses += 1
         }
 
+        // After the geometry is final, so a view that asked to be scrolled
+        // into sight is measured where it will actually be drawn.
+        if ScrollReveal.anyPending {
+            ScrollReveal.resolve(in: root)
+        }
+
         var frames: [LayoutFrame] = []
         boxes[0].collectFrames(originX: 0, originY: 0, into: &frames)
         lastFrames = frames
@@ -2244,7 +2268,7 @@ public final class LayoutHost {
         // not answer either, or a pane nobody can see takes the clicks meant
         // for the one in front of it.
         if let box = node as? YogaBoxNode,
-           box.transitionState?.isLeaving == true || box.isHidden
+           box.transitionState?.isLeaving == true || box.isHidden || box.ignoresInput
         {
             return nil
         }
@@ -2310,7 +2334,7 @@ public final class LayoutHost {
         into chain: inout [NodeID]
     ) -> Bool {
         if let box = node as? YogaBoxNode,
-           box.transitionState?.isLeaving == true || box.isHidden
+           box.transitionState?.isLeaving == true || box.isHidden || box.ignoresInput
         {
             return false
         }
@@ -2365,7 +2389,7 @@ public final class LayoutHost {
         // tree no longer describes; clicking through to something hidden runs
         // one the user cannot see.
         if let box = node as? YogaBoxNode,
-           box.transitionState?.isLeaving == true || box.isHidden
+           box.transitionState?.isLeaving == true || box.isHidden || box.ignoresInput
         {
             return nil
         }

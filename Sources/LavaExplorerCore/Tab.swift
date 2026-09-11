@@ -119,16 +119,71 @@ public struct ExplorerTabs: Equatable, Sendable {
 
     /// Inserts after the active tab and selects it.
     public mutating func open(path: String, source: any FileSource) {
+        open(path: path, source: source, id: nextID)
+    }
+
+    /// The same, under an id the caller allocated.
+    ///
+    /// A window with several panes numbers tabs for all of them — see
+    /// `PaneLayout` — because a tab keeps its id when it moves between panes.
+    public mutating func open(path: String, source: any FileSource, id: Int) {
+        let base = tabs.isEmpty ? nil : current
         let tab = ExplorerTab.open(
-            id: nextID, path: path, source: source,
-            showHidden: current.showHidden,
-            sort: current.sort,
-            sortDescending: current.sortDescending
+            id: id, path: path, source: source,
+            showHidden: base?.showHidden ?? false,
+            sort: base?.sort ?? .name,
+            sortDescending: base?.sortDescending ?? false
         )
-        nextID += 1
-        let insert = min(activeIndex + 1, tabs.count)
-        tabs.insert(tab, at: insert)
-        activeIndex = insert
+        insert(tab)
+    }
+
+    /// Puts `tab` after the active one and selects it.
+    public mutating func insert(_ tab: ExplorerTab) {
+        let at = tabs.isEmpty ? 0 : min(activeIndex + 1, tabs.count)
+        tabs.insert(tab, at: at)
+        activeIndex = at
+        nextID = max(nextID, tab.id + 1)
+    }
+
+    /// Puts `tab` at `index`, clamped to the strip, and selects it.
+    public mutating func insert(_ tab: ExplorerTab, at index: Int) {
+        let at = min(max(0, index), tabs.count)
+        tabs.insert(tab, at: at)
+        activeIndex = at
+        nextID = max(nextID, tab.id + 1)
+    }
+
+    /// Moves a tab into gap `gap` of the strip **as it is now** — 0 before the
+    /// first tab, `tabs.count` after the last — and selects it.
+    ///
+    /// Gaps rather than destination indices because that is what a pointer
+    /// over a strip names: the space between two tabs. The two gaps either
+    /// side of the tab itself leave it where it is, and say so with false.
+    @discardableResult
+    public mutating func move(id: Int, toGap gap: Int) -> Bool {
+        guard let from = tabs.firstIndex(where: { $0.id == id }) else { return false }
+        let clamped = min(max(0, gap), tabs.count)
+        guard clamped != from, clamped != from + 1 else { return false }
+        let tab = tabs.remove(at: from)
+        let to = clamped > from ? clamped - 1 : clamped
+        tabs.insert(tab, at: to)
+        activeIndex = to
+        return true
+    }
+
+    /// Takes a tab out. Unlike `close`, the strip may be left empty: the pane
+    /// holding it decides what an empty strip means.
+    public mutating func remove(id: Int) -> ExplorerTab? {
+        guard let index = tabs.firstIndex(where: { $0.id == id }) else { return nil }
+        let tab = tabs.remove(at: index)
+        if tabs.isEmpty {
+            activeIndex = 0
+        } else if index < activeIndex {
+            activeIndex -= 1
+        } else if activeIndex >= tabs.count {
+            activeIndex = tabs.count - 1
+        }
+        return tab
     }
 
     /// Removes the tab. Returns false when it was the last one, so the

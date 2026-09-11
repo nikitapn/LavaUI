@@ -2064,6 +2064,12 @@ extension DrawList {
             ofOffset: state.offset(of: state.focus), affinity: state.affinity
         )
 
+        // Across, as well as down: a row that fits vertically can still run
+        // past the right edge — a long path in an address bar narrowed by a
+        // split drew straight over the button beside it. The ring is outside
+        // this, so a focused field keeps its whole outline.
+        pushClip(x: x, y: y, w: w, h: h)
+        defer { popClip() }
         for (row, rowRange) in rows.enumerated() {
             let lineTop = firstTop + Float(row) * lineH
             // Same rule as the editor: draw only rows that fully fit, so a

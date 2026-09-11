@@ -4,22 +4,31 @@ import LavaShell
 import LavaUI
 import Observation
 
-/// The folder on screen, how it is sorted, and which row is selected.
+/// The folders on screen, how they are laid out in panes, and which row is
+/// selected where.
 ///
 /// Opening a file leaves this process: `xdg-open` is the desktop's handler,
 /// the same way the editor reveals a path. Opening a folder stays here.
+///
+/// Every command without a pane of its own — a key, a menu item, a toolbar
+/// button — acts on the **active** pane. A press anywhere inside a pane makes
+/// it active before the press itself runs (`.onAnyPress`), which is what lets
+/// the rest of this file keep talking about "the current tab".
 ///
 /// Unchecked `Sendable` for the reason LavaView's session is: every property
 /// is read and written on the frame loop, and the one piece of work that
 /// leaves it — a copy — hands its result back through `MainQueue.async`.
 @Observable
 final class ExplorerSession: @unchecked Sendable {
-    var tabSet: ExplorerTabs
+    var layout: PaneLayout
     var notice: String?
     var sidebarFraction: Float = 0.22
-    /// Right-clicked row. Nil closes the overlay; the binding lives here
-    /// because a `LazyVStack` cell does not keep `@State` when it unmounts.
+    /// Right-clicked row, and the pane it was in. Nil closes the overlay; the
+    /// binding lives here because a `LazyVStack` cell does not keep `@State`
+    /// when it unmounts. The pane matters because one folder can be open in
+    /// two panes, and the same path would otherwise open two menus.
     var contextEntry: FileEntry?
+    var contextPaneID: Int?
     /// Window coordinates of the right-click. `.below` pins the menu to the
     /// row's leading edge; a context menu belongs under the pointer.
     var menuX: Float = 0
@@ -50,7 +59,7 @@ final class ExplorerSession: @unchecked Sendable {
             tabs.open(path: path, source: source)
         }
         if !paths.isEmpty { tabs.select(id: 1) }
-        self.tabSet = tabs
+        self.layout = PaneLayout(tabs: tabs)
     }
 
     convenience init(
@@ -60,6 +69,12 @@ final class ExplorerSession: @unchecked Sendable {
         places: [Place]? = nil
     ) {
         self.init(paths: [path], source: source, openFile: openFile, places: places)
+    }
+
+    /// The active pane's tabs.
+    var tabSet: ExplorerTabs {
+        get { layout.activeTabs }
+        set { layout.activeTabs = newValue }
     }
 
     var history: FolderHistory { tabSet.current.history }
@@ -104,6 +119,156 @@ final class ExplorerSession: @unchecked Sendable {
             parts.append(entry.name)
         }
         return parts.joined(separator: " · ")
+    }
+
+    // MARK: - Panes
+
+    func activatePane(_ id: Int) {
+        guard layout.activePaneID != id else { return }
+        layout.activate(pane: id)
+        ViewInvalidation.markDirty()
+    }
+
+    /// One pane's address bar, which is not necessarily the active one's: a
+    /// field shows what its own pane is on.
+    func pathDraft(in paneID: Int) -> String {
+        layout.pane(id: paneID)?.tabs.current.pathDraft ?? ""
+    }
+
+    func setPathDraft(_ value: String, in paneID: Int) {
+        layout.updatePane(id: paneID) { pane in
+            pane.tabs.updateCurrent { $0.pathDraft = value }
+        }
+    }
+
+    func splitFraction(_ splitID: Int) -> Binding<Float> {
+        Binding(
+            get: { [unowned self] in layout.fraction(split: splitID) ?? 0.5 },
+            set: { [unowned self] in layout.setFraction(split: splitID, $0) }
+        )
+    }
+
+    // MARK: - Dragging a tab
+
+    /// Where a dragged tab would land: into `paneID`, or into a new pane on
+    /// `side` of it. Over a strip, `gap` is the place among its tabs and
+    /// `caretX` the window x the preview marks it at.
+    struct TabDropTarget: Equatable {
+        var paneID: Int
+        var side: PaneSide?
+        var gap: Int? = nil
+        var caretX: Float? = nil
+    }
+
+    struct TabDrag: Equatable {
+        var tabID: Int
+        var title: String
+        /// Nil over anywhere a drop would do nothing — outside every pane, or
+        /// into the pane the tab is already in.
+        var target: TabDropTarget?
+    }
+
+    /// Observed, and written only when the target changes: the drop preview
+    /// is drawn from it. The ghost that follows the pointer is redrawn on
+    /// every move without it.
+    var tabDrag: TabDrag?
+    /// Where each pane and each tab was laid out, reported by the views
+    /// themselves. Not observed — they change on layout, and nothing is drawn
+    /// from them directly.
+    @ObservationIgnored private var paneFrames: [Int: PaneRect] = [:]
+    @ObservationIgnored private var tabFrames: [Int: PaneRect] = [:]
+
+    func notePaneFrame(_ paneID: Int, _ frame: CanvasFrame) {
+        paneFrames[paneID] = PaneRect(x: frame.x, y: frame.y, w: frame.w, h: frame.h)
+    }
+
+    func noteTabFrame(_ tabID: Int, _ frame: CanvasFrame) {
+        tabFrames[tabID] = PaneRect(x: frame.x, y: frame.y, w: frame.w, h: frame.h)
+    }
+
+    func dragTab(_ tabID: Int, _ value: DragGestureValue) {
+        switch value.phase {
+        case .began:
+            guard let tab = layout.tab(id: tabID) else { return }
+            dismissContext()
+            // A strip the wheel scrolled has moved its tabs without a layout
+            // pass, so their frames are where they were before it scrolled.
+            // One pass puts them right before the pointer asks where a gap is.
+            ViewInvalidation.markNeedsLayout()
+            tabDrag = TabDrag(
+                tabID: tabID, title: tab.title,
+                target: dropTarget(for: tabID, x: value.x, y: value.y)
+            )
+        case .changed:
+            guard var drag = tabDrag, drag.tabID == tabID else { return }
+            let target = dropTarget(for: tabID, x: value.x, y: value.y)
+            guard target != drag.target else { return }
+            drag.target = target
+            tabDrag = drag
+        case .ended:
+            guard let drag = tabDrag, drag.tabID == tabID else { return }
+            tabDrag = nil
+            if let target = drag.target {
+                if let side = target.side {
+                    layout.splitTab(tabID, beside: target.paneID, on: side)
+                } else {
+                    layout.moveTab(tabID, to: target.paneID, gap: target.gap)
+                }
+                // A pane or tab that has gone must not still be aimed at by a
+                // stale frame the next time a tab is dragged.
+                let livePanes = Set(layout.panes.map(\.id))
+                paneFrames = paneFrames.filter { livePanes.contains($0.key) }
+                let liveTabs = Set(layout.panes.flatMap { $0.tabs.tabs.map(\.id) })
+                tabFrames = tabFrames.filter { liveTabs.contains($0.key) }
+            }
+            ViewInvalidation.markDirty()
+        }
+    }
+
+    private func dropTarget(for tabID: Int, x: Float, y: Float) -> TabDropTarget? {
+        for pane in layout.panes {
+            guard let rect = paneFrames[pane.id], rect.contains(x: x, y: y) else {
+                continue
+            }
+            if y < rect.y + PaneChrome.stripHeight {
+                return stripTarget(for: tabID, in: pane, rect: rect, x: x)
+            }
+            let side = PaneDropZone.side(
+                atX: x, y: y, in: rect, stripHeight: PaneChrome.stripHeight
+            )
+            guard layout.canDrop(tab: tabID, on: pane.id, side: side) else { return nil }
+            return TabDropTarget(paneID: pane.id, side: side)
+        }
+        return nil
+    }
+
+    /// Over a pane's strip: a place among its tabs — a reorder in the tab's
+    /// own pane, a position in another's.
+    private func stripTarget(
+        for tabID: Int, in pane: ExplorerPane, rect: PaneRect, x: Float
+    ) -> TabDropTarget? {
+        let spans = pane.tabs.tabs.compactMap { tabFrames[$0.id] }.map { (x: $0.x, w: $0.w) }
+        // Every tab has to have reported, or the count is off and so is every
+        // gap after the one that did not. Into the pane is still a fair answer.
+        guard spans.count == pane.tabs.tabs.count else {
+            guard layout.canDrop(tab: tabID, on: pane.id, side: nil) else { return nil }
+            return TabDropTarget(paneID: pane.id, side: nil)
+        }
+        let gap = PaneDropZone.gap(atX: x, tabSpans: spans)
+        guard layout.canDrop(tab: tabID, on: pane.id, side: nil, gap: gap) else { return nil }
+        // In the middle of the spacing between two tabs, or just past the last.
+        let caret: Float
+        if gap < spans.count {
+            caret = spans[gap].x - 2
+        } else if let last = spans.last {
+            caret = last.x + last.w + 2
+        } else {
+            caret = rect.x + 4
+        }
+        return TabDropTarget(
+            paneID: pane.id, side: nil, gap: gap,
+            caretX: min(max(caret, rect.x + 2), rect.x + rect.w - 2)
+        )
     }
 
     // MARK: - Navigation
@@ -201,19 +366,19 @@ final class ExplorerSession: @unchecked Sendable {
 
     func selectTab(id: Int) {
         dismissContext()
-        tabSet.select(id: id)
+        layout.selectTab(id)
         ViewInvalidation.markDirty()
     }
 
     func newTab(path: String? = nil) {
         dismissContext()
-        tabSet.open(path: path ?? history.path, source: source)
+        layout.openTab(path: path ?? history.path, source: source)
         ViewInvalidation.markDirty()
     }
 
     func closeTab(id: Int) {
         dismissContext()
-        if !tabSet.close(id: id) {
+        if !layout.closeTab(id) {
             requestClose()
             return
         }
@@ -251,12 +416,14 @@ final class ExplorerSession: @unchecked Sendable {
         menuX = pointer.x
         menuY = pointer.y
         contextEntry = entry
+        contextPaneID = layout.activePaneID
         ViewInvalidation.markDirty()
     }
 
     func dismissContext() {
         guard contextEntry != nil else { return }
         contextEntry = nil
+        contextPaneID = nil
         ViewInvalidation.markDirty()
     }
 
@@ -470,7 +637,7 @@ final class ExplorerSession: @unchecked Sendable {
     func dropOnTab(id: Int, _ urls: [URL]) {
         ownDrag = []
         dismissContext()
-        guard let tab = tabSet.tab(id: id) else { return }
+        guard let tab = layout.tab(id: id) else { return }
         guard !copying, pendingCopy == nil else {
             notice = "Still copying — drop again when it is done"
             ViewInvalidation.markDirty()
@@ -521,9 +688,10 @@ final class ExplorerSession: @unchecked Sendable {
     private func finishCopy(_ outcome: CopyOutcome, directory: String, folderTitle: String) {
         copying = false
         let source = self.source
-        // Every tab on that folder, not just the one dropped on: the same
-        // folder open twice should not disagree about what is in it.
-        tabSet.updateTabs(showing: directory) { $0.reload(from: source) }
+        // Every tab on that folder in every pane, not just the one dropped
+        // on: the same folder open twice should not disagree about what is in
+        // it.
+        layout.updateTabs(showing: directory) { $0.reload(from: source) }
         if let failure = outcome.failures.first {
             let name = (failure.path as NSString).lastPathComponent
             let more = outcome.failures.count > 1

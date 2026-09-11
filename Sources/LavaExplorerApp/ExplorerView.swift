@@ -3,19 +3,23 @@ import LavaExplorerCore
 import LavaShell
 import LavaUI
 
-/// Classic one-pane file manager: places on the left, a details list on the
-/// right, an address bar along the top. Not dual-pane, not a spatial window
-/// per folder — Thunar and Explorer, not Midnight Commander.
+/// Measurements a pane's chrome and the drop logic have to agree on.
+enum PaneChrome {
+    /// The tab strip, and the sidebar's title row beside it.
+    static let stripHeight: Float = 36
+    /// Shorter than the strip: the gap above is what makes the active tab
+    /// read as a tab rather than a stripe.
+    static let tabHeight: Float = 30
+}
+
+/// Places on the left; on the right, one or more panes, each a browser of its
+/// own — tabs, an address bar and a details list. Drag a tab to the edge of a
+/// pane to split it, or into another pane to move it there.
 struct ExplorerView: View {
     @Bindable var session: ExplorerSession
 
     var body: some View {
         VStack(flexGrow: 1, padding: 0, spacing: 0) {
-            TabStrip(session: session)
-            Toolbar(session: session)
-            if let pending = session.pendingCopy {
-                ClashBar(session: session, pending: pending)
-            }
             HSplitView(
                 fraction: $session.sidebarFraction,
                 minLeading: 140,
@@ -23,21 +27,153 @@ struct ExplorerView: View {
             ) {
                 Sidebar(session: session)
             } trailing: {
-                FilePane(session: session)
+                PaneTree.build(session, session.layout.root)
+            }
+            if let pending = session.pendingCopy {
+                ClashBar(session: session, pending: pending)
             }
             StatusBar(session: session)
         }
         .background(Theme.current.background)
         .onDrop { urls in session.acceptDrop(urls) }
+        .overlayLayer { TabGhost(session: session) }
+    }
+}
+
+// MARK: - Panes
+
+/// The split tree as views. Erased at the recursion: a split of splits is a
+/// type that contains itself.
+private enum PaneTree {
+    static func build(_ session: ExplorerSession, _ node: PaneNode) -> AnyView {
+        switch node {
+        case .pane(let pane):
+            return AnyView(PaneView(session: session, paneID: pane.id))
+        case .split(let split):
+            let fraction = session.splitFraction(split.id)
+            switch split.axis {
+            case .horizontal:
+                return AnyView(
+                    HSplitView(fraction: fraction, minLeading: 240, minTrailing: 240) {
+                        build(session, split.first)
+                    } trailing: {
+                        build(session, split.second)
+                    }
+                )
+            case .vertical:
+                return AnyView(
+                    VSplitView(fraction: fraction, minTop: 160, minBottom: 160) {
+                        build(session, split.first)
+                    } bottom: {
+                        build(session, split.second)
+                    }
+                )
+            }
+        }
+    }
+}
+
+private struct PaneView: View {
+    @Bindable var session: ExplorerSession
+    let paneID: Int
+
+    var body: some View {
+        let pane = session.layout.pane(id: paneID)
+        let active = session.layout.activePaneID == paneID
+        return VStack(flexGrow: 1, padding: 0, spacing: 0) {
+            if let pane {
+                TabStrip(session: session, pane: pane, active: active)
+                Toolbar(session: session, paneID: paneID, tab: pane.tabs.current)
+                FilePane(session: session, paneID: paneID, tab: pane.tabs.current)
+            }
+        }
+        // Before anything in the pane handles the press, so the row, button
+        // or field it lands on already acts on this pane.
+        .onAnyPress { _ in session.activatePane(paneID) }
+        .onFrame { frame in session.notePaneFrame(paneID, frame) }
+        .overlayLayer { PaneDropPreview(session: session, paneID: paneID) }
+    }
+}
+
+/// Where a dragged tab would go if it were let go of now, over the pane it
+/// would go to: half the pane for a split, all of it for a move.
+private struct PaneDropPreview: View {
+    @Bindable var session: ExplorerSession
+    let paneID: Int
+
+    var body: some View {
+        let target = session.tabDrag?.target
+        let shown = target?.paneID == paneID
+        let side = shown ? target?.side : nil
+        return Canvas(label: "drop-preview", width: .pct(100), height: .pct(100)) { list, frame in
+            guard shown else { return }
+            let theme = Theme.current
+            if let caretX = target?.caretX {
+                // Among the tabs: a bar in the gap it would take. Not a wash
+                // over the pane — nothing about the pane changes.
+                list.roundedRect(
+                    x: caretX - 1, y: frame.y + 4, w: 2, h: PaneChrome.stripHeight - 8,
+                    color: theme.accent, radius: 1
+                )
+                return
+            }
+            let area = PaneDropZone.preview(
+                for: side, in: PaneRect(x: frame.x, y: frame.y, w: frame.w, h: frame.h)
+            )
+            let inset: Float = 4
+            let x = area.x + inset
+            let y = area.y + inset
+            let w = max(0, area.w - inset * 2)
+            let h = max(0, area.h - inset * 2)
+            list.roundedRect(x: x, y: y, w: w, h: h, color: theme.accent.opacity(0.16), radius: 8)
+            list.strokedRect(
+                x: x, y: y, w: w, h: h, color: theme.accent.opacity(0.7), radius: 8, width: 2
+            )
+        }
+    }
+}
+
+/// The tab being dragged, under the pointer. Drawn over the whole window so
+/// it can cross from one pane to another.
+private struct TabGhost: View {
+    @Bindable var session: ExplorerSession
+
+    var body: some View {
+        let drag = session.tabDrag
+        return Canvas(label: "tab-ghost", width: .pct(100), height: .pct(100)) { list, frame in
+            guard let drag else { return }
+            let theme = Theme.current
+            let font = FontStore.default
+            let pointer = PointerState.window
+            let w: Float = 160
+            let h = PaneChrome.tabHeight
+            // Beside the pointer, but inside the window: splitting to the
+            // right edge is exactly where a ghost hung off the right of the
+            // pointer would be cut in half.
+            let x = min(max(frame.x, pointer.x + 12), frame.x + frame.w - w - 4)
+            let y = min(max(frame.y, pointer.y + 8), frame.y + frame.h - h - 4)
+            let lineHeight = font?.lineHeight ?? 16
+            list.roundedRect(x: x, y: y, w: w, h: h, color: theme.panel.opacity(0.92), radius: 6)
+            list.strokedRect(
+                x: x, y: y, w: w, h: h,
+                color: drag.target == nil ? theme.border : theme.accent,
+                radius: 6, width: 1
+            )
+            list.pushClip(x: x + 10, y: y, w: w - 20, h: h)
+            list.text(
+                drag.title, x: x + 10, y: y + (h - lineHeight) * 0.5,
+                w: w - 20, h: lineHeight, color: theme.textPrimary, font: font
+            )
+            list.popClip()
+        }
     }
 }
 
 // MARK: - Clashes
 
 /// One question for a drop whose names are partly taken, across the window
-/// under the toolbar — where the folder it is about is still in view, the
-/// same reason LavaEditor asks about unsaved changes in a bar and not a
-/// dialog.
+/// under the panes — where the folder it is about is still in view, the same
+/// reason LavaEditor asks about unsaved changes in a bar and not a dialog.
 private struct ClashBar: View {
     @Bindable var session: ExplorerSession
     let pending: ExplorerSession.PendingCopy
@@ -69,31 +205,39 @@ private struct ClashBar: View {
 
 // MARK: - Tabs
 
-/// Folder names along the top, the way Explorer and every browser do it.
-///
-/// The window buttons live here rather than on the path row: a second
-/// cluster of close/min/max next to Back is two things that look like
-/// chrome. Leftover space after the plus is the drag handle.
+/// One pane's folder names, the way Explorer and every browser do it. Drag a
+/// tab to move it; leftover space after the plus is the window drag handle.
 private struct TabStrip: View {
     @Bindable var session: ExplorerSession
-
-    static let height: Float = 36
-    /// Shorter than the strip: the gap above is what makes the active tab
-    /// read as a tab rather than a stripe.
-    static let tabHeight: Float = 30
+    let pane: ExplorerPane
+    /// Whether this is the pane commands act on. Its tab titles read brighter.
+    let active: Bool
 
     var body: some View {
         // Bottom-aligned, so every tab stands on the strip's lower edge — the
         // rule the active one opens into the toolbar through.
-        HStack(height: .pt(Self.height), padding: 0, alignment: .end, spacing: 4) {
-            if WindowBridge.drawsOwnChrome {
-                WindowControls()
-                    .windowChrome()
-                    .padding(8)
+        HStack(
+            height: .pt(PaneChrome.stripHeight), padding: 0, alignment: .end, spacing: 4
+        ) {
+            // As wide as its tabs and no wider, so the plus sits right after
+            // the last one; it shrinks — and scrolls — only once they do not
+            // fit. A scroll view fills its parent by default, which would park
+            // the plus at the far edge of an almost empty strip.
+            ScrollView(.horizontal, showsIndicator: false) {
+                HStack(
+                    height: .pt(PaneChrome.stripHeight), padding: 0,
+                    alignment: .end, spacing: 4
+                ) {
+                    // Not a bare `Spacer`: a spacer grows, and one on each
+                    // side of the tabs is how they ended up centred.
+                    Spacer(flexGrow: 0).frame(width: .pt(4), height: .pt(PaneChrome.stripHeight))
+                    ForEach(pane.tabs.tabs) { tab in
+                        tabChip(tab)
+                    }
+                }
             }
-            ForEach(session.tabSet.tabs) { tab in
-                tabChip(tab)
-            }
+            .flexGrow(0)
+            .flexShrink(1)
             Text(
                 "+",
                 color: Theme.current.textSecondary,
@@ -108,15 +252,16 @@ private struct TabStrip: View {
             .flexShrink(0)
             .agentId("new-tab")
             Spacer()
-                .frame(height: .pt(Self.height), minWidth: 48)
+                .frame(height: .pt(PaneChrome.stripHeight), minWidth: 48)
                 .windowDrag()
         }
         .underlay { StripBackdrop() }
     }
 
     private func tabChip(_ tab: ExplorerTab) -> some View {
-        let on = tab.id == session.tabSet.currentID
+        let on = tab.id == pane.tabs.currentID
         let theme = Theme.current
+        let titleColor = on && active ? theme.textPrimary : theme.textSecondary
         return HStack(
             padding: 0,
             alignment: .center,
@@ -130,11 +275,7 @@ private struct TabStrip: View {
                 session.selectTab(id: tab.id)
             }
         ) {
-            Text(
-                tab.title,
-                color: on ? theme.textPrimary : theme.textSecondary,
-                lineLimit: 1
-            )
+            Text(tab.title, color: titleColor, lineLimit: 1)
             Text(
                 "×",
                 color: theme.textDim,
@@ -147,12 +288,17 @@ private struct TabStrip: View {
             .agentId("close-tab-\(tab.id)")
         }
         .padding(8)
-        .frame(height: .pt(Self.tabHeight))
+        .frame(height: .pt(PaneChrome.tabHeight))
         .underlay { TabShape(active: on) }
         .hoverBackground(on ? Color.clear : theme.hover)
         .cornerRadius(6)
         .cursor(.pointer)
-        .flexShrink(1)
+        // Tabs keep their width and the strip scrolls, rather than a crowd of
+        // tabs being squeezed down to a row of "…".
+        .flexShrink(0)
+        .scrollIntoView(when: on)
+        .onFrame { frame in session.noteTabFrame(tab.id, frame) }
+        .onDragGesture { value in session.dragTab(tab.id, value) }
         .onDrop { urls in session.dropOnTab(id: tab.id, urls) }
         .agentId("tab-\(tab.id)")
     }
@@ -238,21 +384,30 @@ private enum TabOutline {
 
 private struct Toolbar: View {
     @Bindable var session: ExplorerSession
+    let paneID: Int
+    /// This pane's current tab — not necessarily the active pane's.
+    let tab: ExplorerTab
 
     var body: some View {
-        HStack(padding: 8, alignment: .center, spacing: 8) {
-            navButton("◀", enabled: session.history.canGoBack, id: "back") {
+        let draft = Binding(
+            get: { session.pathDraft(in: paneID) },
+            set: { session.setPathDraft($0, in: paneID) }
+        )
+        return HStack(padding: 8, alignment: .center, spacing: 8) {
+            navButton("◀", enabled: tab.history.canGoBack, id: "back") {
                 session.goBack()
             }
-            navButton("▶", enabled: session.history.canGoForward, id: "forward") {
+            navButton("▶", enabled: tab.history.canGoForward, id: "forward") {
                 session.goForward()
             }
-            navButton("▲", enabled: session.history.canGoUp, id: "up") {
+            navButton("▲", enabled: tab.history.canGoUp, id: "up") {
                 session.goUp()
             }
             TextField(
-                text: $session.pathDraft,
+                text: draft,
                 placeholder: "Path",
+                // The field was pressed to be typed in, which made this pane
+                // the active one — so the session's own draft is this one.
                 onSubmit: { session.go(session.pathDraft) }
             )
             .padding(6)
@@ -261,16 +416,16 @@ private struct Toolbar: View {
             .flexGrow(1)
             .agentId("path-field")
             Text(
-                session.showHidden ? "Hidden" : "Hidden",
-                color: session.showHidden
+                "Hidden",
+                color: tab.showHidden
                     ? Theme.current.textPrimary : Theme.current.textSecondary,
                 align: .center,
                 onClick: { session.toggleHidden() }
             )
             .padding(6)
-            .background(session.showHidden ? Theme.current.selectionFill : Color.clear)
+            .background(tab.showHidden ? Theme.current.selectionFill : Color.clear)
             .hoverBackground(
-                session.showHidden ? Theme.current.selectionFill : Theme.current.hover
+                tab.showHidden ? Theme.current.selectionFill : Theme.current.hover
             )
             .cornerRadius(4)
             .cursor(.pointer)
@@ -301,28 +456,45 @@ private struct Toolbar: View {
 
 // MARK: - Sidebar
 
+/// Places, under a title row that holds the window buttons — the one strip
+/// that is always in the top-left corner, however the panes are split.
 private struct Sidebar: View {
     @Bindable var session: ExplorerSession
 
     var body: some View {
-        VStack(flexGrow: 1, padding: 8, spacing: 2) {
-            Text("PLACES", color: Theme.current.textDim)
-                .padding(6)
-            ForEach(session.places) { place in
-                let on = FolderHistory.normalize(place.path) == session.listing.path
-                Text(
-                    place.title,
-                    color: on ? Theme.current.textPrimary : Theme.current.textSecondary,
-                    onClick: { session.go(place.path) }
-                )
-                .padding(8)
-                .background(on ? Theme.current.selectionFill : Color.clear)
-                .hoverBackground(on ? Theme.current.selectionFill : Theme.current.hover)
-                .cornerRadius(6)
-                .cursor(.pointer)
-                .agentId("place-\(place.title.lowercased())")
+        VStack(flexGrow: 1, padding: 0, spacing: 0) {
+            HStack(
+                height: .pt(PaneChrome.stripHeight), padding: 0,
+                alignment: .center, spacing: 0
+            ) {
+                if WindowBridge.drawsOwnChrome {
+                    WindowControls()
+                        .windowChrome()
+                        .padding(8)
+                }
+                Spacer()
+                    .frame(height: .pt(PaneChrome.stripHeight), minWidth: 24)
+                    .windowDrag()
             }
-            Spacer()
+            VStack(flexGrow: 1, padding: 8, spacing: 2) {
+                Text("PLACES", color: Theme.current.textDim)
+                    .padding(6)
+                ForEach(session.places) { place in
+                    let on = FolderHistory.normalize(place.path) == session.listing.path
+                    Text(
+                        place.title,
+                        color: on ? Theme.current.textPrimary : Theme.current.textSecondary,
+                        onClick: { session.go(place.path) }
+                    )
+                    .padding(8)
+                    .background(on ? Theme.current.selectionFill : Color.clear)
+                    .hoverBackground(on ? Theme.current.selectionFill : Theme.current.hover)
+                    .cornerRadius(6)
+                    .cursor(.pointer)
+                    .agentId("place-\(place.title.lowercased())")
+                }
+                Spacer()
+            }
         }
         .background(Theme.current.panel)
     }
@@ -332,16 +504,22 @@ private struct Sidebar: View {
 
 private struct FilePane: View {
     @Bindable var session: ExplorerSession
+    let paneID: Int
+    let tab: ExplorerTab
 
     var body: some View {
-        VStack(flexGrow: 1, padding: 0, spacing: 0) {
+        let listing = tab.listing
+        let selectedIndex = tab.selected.flatMap { selected in
+            listing.entries.firstIndex { $0.path == selected }
+        }
+        return VStack(flexGrow: 1, padding: 0, spacing: 0) {
             header
-            if let error = session.listing.error {
+            if let error = listing.error {
                 Text(error, color: Theme.current.textDim)
                     .padding(16)
                     .agentId("listing-error")
                 Spacer()
-            } else if session.listing.entries.isEmpty {
+            } else if listing.entries.isEmpty {
                 Text("This folder is empty", color: Theme.current.textDim)
                     .padding(16)
                     .agentId("listing-empty")
@@ -349,12 +527,15 @@ private struct FilePane: View {
             } else {
                 ScrollView(.vertical) {
                     LazyVStack(
-                        session.listing.entries,
+                        listing.entries,
                         rowHeight: 28,
                         spacing: 0,
-                        scrollTarget: session.selectedIndex
+                        scrollTarget: selectedIndex
                     ) { entry in
-                        FileRow(session: session, entry: entry)
+                        FileRow(
+                            session: session, paneID: paneID, entry: entry,
+                            selected: tab.selected == entry.path
+                        )
                     }
                 }
                 .flexGrow(1)
@@ -375,8 +556,8 @@ private struct FilePane: View {
     }
 
     private func sortHeader(_ sort: FileSort) -> some View {
-        let on = session.sort == sort
-        let mark = on ? (session.sortDescending ? " ▼" : " ▲") : ""
+        let on = tab.sort == sort
+        let mark = on ? (tab.sortDescending ? " ▼" : " ▲") : ""
         return Text(
             sort.title + mark,
             color: on ? Theme.current.textPrimary : Theme.current.textDim,
@@ -389,13 +570,16 @@ private struct FilePane: View {
 
 private struct FileRow: View {
     @Bindable var session: ExplorerSession
+    let paneID: Int
     let entry: FileEntry
+    let selected: Bool
 
     var body: some View {
-        let on = session.selected == entry.path
+        let on = selected
         let theme = Theme.current
         let menuX = session.menuX
         let menuY = session.menuY
+        let paneID = self.paneID
         return HStack(
             height: .pt(28),
             padding: 4,
@@ -442,7 +626,10 @@ private struct FileRow: View {
         }
         .overlay(
             isPresented: Binding(
-                get: { session.contextEntry?.path == entry.path },
+                get: {
+                    session.contextEntry?.path == entry.path
+                        && session.contextPaneID == paneID
+                },
                 set: { shown in
                     if !shown, session.contextEntry?.path == entry.path {
                         session.dismissContext()
@@ -462,7 +649,7 @@ private struct FileRow: View {
                 return style
             }()
         ) {
-            if session.contextEntry?.path == entry.path {
+            if session.contextEntry?.path == entry.path, session.contextPaneID == paneID {
                 FileContextMenu(session: session, entry: entry)
             }
         }

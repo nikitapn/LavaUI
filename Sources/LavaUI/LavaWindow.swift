@@ -403,6 +403,8 @@ public final class LavaWindow {
         ScrollRouter.unregisterAll(ids: ids)
         DropRouter.unregisterAll(ids: ids)
         FileDragRouter.unregisterAll(ids: ids)
+        DragGestureRouter.unregisterAll(ids: ids)
+        PressObserverRouter.unregisterAll(ids: ids)
         HoverState.unregisterAll(ids: ids)
         PointerCapture.discard(ids: ids)
         AnimationDriver.unregisterAll(in: scope)
@@ -529,6 +531,18 @@ public final class LavaWindow {
             {
                 pendingFileDrag = (source, ev.x, ev.y)
             }
+            // A drag gesture, found the same way and for the same reason.
+            DragGestureRouter.press(
+                source: ev.button == 0
+                    ? host.dragGestureSource(x: ev.x, y: ev.y, originY: menuH) : nil,
+                x: ev.x, y: ev.y
+            )
+            // Everything that asked to hear about a press in here, before the
+            // press itself runs: a pane that becomes active has to be active
+            // by the time the row it was clicked on asks which pane it is in.
+            for id in host.pressObservers(x: ev.x, y: ev.y, originY: menuH) {
+                PressObserverRouter.notify(id, button: ev.button)
+            }
             if let action = host.hitTestClick(
                 x: ev.x, y: ev.y, originX: 0, originY: menuH, mods: ev.mods,
                 button: ev.button
@@ -565,6 +579,15 @@ public final class LavaWindow {
             if !syncFramebufferSize() { ViewInvalidation.markNeedsRedraw() }
         case .mouseMove:
             PointerState.set(x: ev.x, y: ev.y)
+            if DragGestureRouter.move(
+                x: ev.x, y: ev.y, captured: PointerCapture.isActive
+            ) {
+                // The move is the gesture's: no hover walk, no file drag
+                // starting from the same press.
+                pendingFileDrag = nil
+                ViewInvalidation.markNeedsRedraw()
+                break
+            }
             if let pending = pendingFileDrag {
                 let dx = ev.x - pending.x
                 let dy = ev.y - pending.y
@@ -594,6 +617,9 @@ public final class LavaWindow {
             }
         case .mouseUp:
             pendingFileDrag = nil
+            if DragGestureRouter.release(x: ev.x, y: ev.y) {
+                ViewInvalidation.markNeedsRedraw()
+            }
             PointerCapture.release()
         case .scroll:
             // Renderer-owned ScrollViews consume this before it reaches us, so

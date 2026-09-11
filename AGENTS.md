@@ -228,6 +228,23 @@ Consequences that surprise people:
   draws that once into a `CanvasSurface` in `dragIcons` and only moves the node
   after. The source frees itself from `dnd_finish`, deferred to idle — wlroots
   destroys a cancelled source only when that callback exists.
+- **In-window gestures resolve through the hit chain, not the click walk.**
+  `.onDragGesture`, `.onAnyPress`, `.onDrop` and `.onFileDrag` all walk
+  `hitTestScrollChain` *outwards* from the press, so a view keeps its own
+  handler and still gets dragged, and a container hears presses its rows take
+  (`Sources/LavaUI/DragGesture.swift`). A press something inside captured — a
+  slider — never becomes a gesture. `.onFrame` reports a box's window-space
+  rect from layout (store it; do not mutate the tree from there). `.underlay`
+  and `.overlayLayer` pin an inert layer to a box's edges; inert means
+  `ignoresInput`, which every hit walk skips — without it a layer over a pane
+  hides the pane from all four of the lookups above. `AnyView` is for
+  recursion (a split tree); a change of underlying type remounts the subtree.
+  `.scrollIntoView(when:)` asks the nearest `ScrollView` for a view on the
+  edge of its condition turning true, resolved by a layout pass that runs only
+  while a request is pending — an edge, so the container can still be scrolled
+  away from it. A `ScrollView` fills its parent by default; one that should be
+  as wide as its content until it overflows (a tab strip) needs
+  `.flexGrow(0).flexShrink(1)`.
 - **A camera raw is opened by finding the picture inside it, not by developing
   it.** A CR2 is a TIFF whose directories hold, among other things, the JPEG the
   camera's own processor produced — already white-balanced and tone-mapped, and

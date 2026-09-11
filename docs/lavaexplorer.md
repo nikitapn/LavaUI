@@ -42,7 +42,18 @@ LAVA_CLIENT=1 swift run LavaExplorer -- ~/Pictures
 - Tabs: each has its own folder and Back stack. Ctrl+T / Ctrl+W, Ctrl+Tab,
   the plus on the strip, Ctrl+click a folder, or Open in New Tab. Closing
   the last tab closes the window. Several paths on the command line open
-  one tab each.
+  one tab each. Tabs keep their width; a strip that runs out of room scrolls
+  (the wheel over it), and the selected tab is scrolled into view when it
+  changes. Drag a tab along a strip to reorder it — a bar marks the gap — or
+  onto another pane's strip to put it at that place there.
+- Panes: drag a tab and the pane under the pointer shows where it would
+  land. Near an edge — the outer quarter — is a new pane on that side,
+  halving that pane; the middle or a pane's tab strip moves the tab into that
+  pane. Splits nest in either direction and their dividers drag. Each pane
+  has its own tabs, address bar and list; a press anywhere in a pane makes it
+  the one keys, menus, the sidebar and the status bar act on. A pane that
+  loses its last tab closes. The window buttons live on the sidebar's title
+  row, the one strip that stays in the corner however the panes are split.
 
 Opening a file on double-click is `xdg-open`, which honours the default
 handler. Right-click offers **Open With** (launch this once) and **Set
