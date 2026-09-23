@@ -21,6 +21,8 @@ RUNTIME_IMAGE="nprpc-runtime:latest"
 DEV_IMAGE="nprpc-dev:latest"
 REMOTE_TMP_DIR="/tmp/lavaui-docs-release"
 HTTP3=1
+SHM_CHANNEL="lavaui_docs"
+SHM_DIR="/dev/shm/npquicrouter"
 BUILD_API=1
 
 usage() {
@@ -45,6 +47,12 @@ routes the hostname to --port on the server's loopback.
   --dev-image <name>        Image docs-server is compiled in (default: nprpc-dev:latest).
                             Must be the image the runtime image was built from.
   --no-http3                Serve HTTPS only
+  --shm-channel <name>      npquicrouter shared-memory channel for HTTP/3
+                            (default: lavaui_docs). The router's route must name it
+                            as shm_ingress_channel and shm_egress_channel.
+  --no-shm                  Plain loopback UDP to the router instead
+  --shm-dir <path>          npquicrouter's shared-memory directory, mounted as the
+                            container's /dev/shm (default: /dev/shm/npquicrouter)
   --skip-api                Reuse the existing api.json instead of running scripts/docs-api.sh
 
 The certificate must exist on the server before the first deploy:
@@ -68,6 +76,9 @@ while [ $# -gt 0 ]; do
     --runtime-image) RUNTIME_IMAGE="$2"; shift ;;
     --dev-image) DEV_IMAGE="$2"; shift ;;
     --no-http3) HTTP3=0 ;;
+    --shm-channel) SHM_CHANNEL="$2"; shift ;;
+    --no-shm) SHM_CHANNEL="" ;;
+    --shm-dir) SHM_DIR="$2"; shift ;;
     --skip-api) BUILD_API=0 ;;
     --help|-h) usage; exit 0 ;;
     *) echo "Unknown argument: $1" >&2; usage >&2; exit 1 ;;
@@ -155,6 +166,8 @@ ssh "$SSH_TARGET" \
   CONTAINER_NAME="$CONTAINER_NAME" \
   HOSTNAME="$HOSTNAME" \
   HTTP3="$HTTP3" \
+  SHM_CHANNEL="$SHM_CHANNEL" \
+  SHM_DIR="$SHM_DIR" \
   IMAGE_NAME="$IMAGE_NAME" \
   PORT="$PORT" \
   REMOTE_TMP_DIR="$REMOTE_TMP_DIR" \
@@ -179,11 +192,29 @@ docker build -t "$IMAGE_NAME" \
   --build-arg NPRPC_RUNTIME_IMAGE="$RUNTIME_TAG" \
   "$REMOTE_TMP_DIR"
 
+# SIGTERM first, with time to finish: a process killed mid-operation can
+# strand state it shares with npquicrouter. rm -f alone is a SIGKILL.
+docker stop -t 15 "$CONTAINER_NAME" >/dev/null 2>&1 || true
 docker rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
 
 # Root inside the container, only so it can read certbot's root-owned key; the
 # filesystem is read-only and every capability but binding :443 is dropped.
 # Ports are published on loopback only: npquicrouter is the public entry.
+#
+# HTTP/3 goes through npquicrouter's shared-memory rings: its directory is
+# mounted as /dev/shm (the directory, never the ring files, whose inodes the
+# router replaces on every restart). The directory's group grants access:
+# the rings are 0660 and root here has no CAP_DAC_OVERRIDE.
+SHM_ARGS=()
+if [ "$HTTP3" = 1 ] && [ -n "$SHM_CHANNEL" ]; then
+  if [ ! -d "$SHM_DIR" ]; then
+    echo "npquicrouter's shared-memory directory $SHM_DIR does not exist; see" >&2
+    echo "nprpc/npquicrouter/README.md, or deploy with --no-shm." >&2
+    exit 1
+  fi
+  SHM_ARGS=(-v "$SHM_DIR:/dev/shm" --group-add "$(stat -c %g "$SHM_DIR")"
+            -e "DOCS_SHM_CHANNEL=$SHM_CHANNEL")
+fi
 docker run -d \
   --name "$CONTAINER_NAME" \
   --restart unless-stopped \
@@ -198,6 +229,7 @@ docker run -d \
   -e "DOCS_TLS_CERT=/certs/live/$CERT_NAME/fullchain.pem" \
   -e "DOCS_TLS_KEY=/certs/live/$CERT_NAME/privkey.pem" \
   -e "DOCS_HTTP3=$HTTP3" \
+  "${SHM_ARGS[@]}" \
   "$IMAGE_NAME"
 
 rm -rf "$REMOTE_TMP_DIR" "$REMOTE_TMP_DIR.tar.gz"
@@ -221,5 +253,8 @@ cat <<EOF
 Deployed: https://$HOSTNAME/
 
 npquicrouter needs a route for it (once), in its config's "routes":
-  { "sni": "$HOSTNAME", "tcp_backend": "127.0.0.1:$PORT", "udp_backend": "127.0.0.1:$PORT" }
+  { "sni": "$HOSTNAME", "tcp_backend": "127.0.0.1:$PORT", "udp_backend": "127.0.0.1:$PORT",
+    "shm_ingress_channel": "$SHM_CHANNEL", "shm_egress_channel": "$SHM_CHANNEL",
+    "shm_ingress_ring_kib": 512, "shm_egress_ring_kib": 1024 }
+(Without --shm-channel, leave out the four shm_ fields.)
 EOF
