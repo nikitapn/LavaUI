@@ -3,6 +3,7 @@
 #
 #   docs-server   release build, compiled in nprpc-dev
 #   templates/    Mustache templates
+#   articles/     long-form HTML pages
 #   web/          static root (CSS, scripts)
 #   api.json      from scripts/docs-api.sh
 ARG NPRPC_RUNTIME_IMAGE=nprpc-runtime:latest
@@ -10,6 +11,7 @@ FROM ${NPRPC_RUNTIME_IMAGE}
 
 COPY docs-server /app/docs-server
 COPY templates /app/templates
+COPY articles /app/articles
 COPY web /app/web
 COPY api.json /app/api.json
 

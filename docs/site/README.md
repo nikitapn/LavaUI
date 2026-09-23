@@ -48,6 +48,27 @@ links. A relative link to anything else (`issues.md`, `../AGENTS.md`) goes to
 the file on GitHub. The reading order at the top of the sidebar is
 `Site.guideOrder`; the rest are alphabetical.
 
+### Articles
+
+`articles/<slug>.html` is a long-form page that needs more than Markdown
+gives: figures, inline SVG diagrams, a layout of its own. Each is an HTML
+*fragment*, not a document. The site's layout wraps it, and htmx swaps it into
+`#content` like any other page, so it has no `<html>`, no `<style>` and no
+script of its own. Its styles are the `.essay` rules at the end of
+`web/style.css`, built on the site's colour tokens so that it follows the
+light and dark themes. SVG fills name tokens (`var(--hot)`, `var(--cool)`)
+rather than colours for the same reason.
+
+The title in the sidebar and on the home page is the text of the `<h1>`. The
+summary is the `.standfirst` paragraph. The page is served at
+`/article/<slug>`. `DOCS_TEMPLATE_RELOAD=1` re-reads articles as well as
+templates.
+
+`how-lavaui-draws.html` is ported from a standalone page. That page embedded
+JetBrains Mono (OFL) subsets as data URIs, and the diagrams were laid out
+against its metrics. The same subsets are now in `web/fonts/` and are used
+only inside `.essay`.
+
 ## Layout
 
 | Path | What |
@@ -56,6 +77,7 @@ the file on GitHub. The reading order at the top of the sidebar is
 | `Sources/DocsWeb` | routing, view models, template loading. `Site.swift` holds what differs from NPRPC's site: name, module list and order, guide order, the GitHub base URL. |
 | `Sources/docs-server` | the executable |
 | `templates/` | Mustache; `layout` wraps every full page |
+| `articles/` | long-form HTML fragments, served at `/article/<slug>` |
 | `web/` | static root: `style.css`, `code.js` (syntax highlighting), `vendor/` (htmx, highlight.js) |
 
 To pick up a fix from NPRPC's site, copy the changed files across. Keep
@@ -69,6 +91,7 @@ To pick up a fix from NPRPC's site, copy the changed files across. Keep
   anchor.
 - `/api/idl`: the control plane.
 - `/guide/<name>`: `guides/<name>.md`.
+- `/article/<slug>`: `articles/<slug>.html`.
 - `/search?q=`: the header box fetches a short list as you type.
 
 Inline code that names exactly one symbol, like `` `VStack` ``, becomes a
@@ -79,12 +102,12 @@ link to it.
 | Variable | Default |
 |---|---|
 | `DOCS_API` | `../../.build/docs/api.json` |
-| `DOCS_ROOT` | current directory (holds `templates/` and `web/`) |
+| `DOCS_ROOT` | current directory (holds `templates/`, `articles/` and `web/`) |
 | `DOCS_PORT` | `8080` |
 | `DOCS_HOSTNAME` | `localhost` |
 | `DOCS_TLS_CERT`, `DOCS_TLS_KEY` | unset: plain HTTP. `SIGHUP` re-reads them. |
 | `DOCS_HTTP3` | unset; `1` also serves HTTP/3 (needs TLS) |
-| `DOCS_TEMPLATE_RELOAD` | unset; `1` re-reads templates per request |
+| `DOCS_TEMPLATE_RELOAD` | unset; `1` re-reads templates and articles per request |
 
 ## Deploying
 

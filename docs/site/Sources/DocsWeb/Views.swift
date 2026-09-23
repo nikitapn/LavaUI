@@ -23,8 +23,22 @@ struct LayoutView {
     let content: String
     let brand: String
     let modules: [NavItem]
+    let articles: [NavItem]
     let guides: [NavItem]
     let query: String
+    let has_articles: Bool
+
+    init(title: String, content: String, brand: String, modules: [NavItem],
+         articles: [NavItem], guides: [NavItem], query: String) {
+        self.title = title
+        self.content = content
+        self.brand = brand
+        self.modules = modules
+        self.articles = articles
+        self.guides = guides
+        self.query = query
+        has_articles = !articles.isEmpty
+    }
 }
 
 struct ParamView {
@@ -203,9 +217,28 @@ struct ModuleCard {
     let documented: Int
 }
 
+struct ArticleCard {
+    let title: String
+    let summary: String?
+    let url: String
+}
+
 struct HomeView {
     let modules: [ModuleCard]
+    let articles: [ArticleCard]
     let guides: [NavItem]
+    let has_articles: Bool
+
+    init(modules: [ModuleCard], articles: [ArticleCard], guides: [NavItem]) {
+        self.modules = modules
+        self.articles = articles
+        self.guides = guides
+        has_articles = !articles.isEmpty
+    }
+}
+
+struct ArticleView {
+    let html: String
 }
 
 struct GuideView {

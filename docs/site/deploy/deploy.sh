@@ -131,7 +131,7 @@ STAGE=$(mktemp -d)
 trap 'rm -rf "$STAGE"' EXIT
 mkdir -p "$STAGE/context"
 cp "$SITE_DIR/.build-docker/release/docs-server" "$STAGE/context/"
-cp -a "$SITE_DIR/templates" "$SITE_DIR/web" "$STAGE/context/"
+cp -a "$SITE_DIR/templates" "$SITE_DIR/articles" "$SITE_DIR/web" "$STAGE/context/"
 cp "$API_JSON" "$STAGE/context/api.json"
 cp "$DEPLOY_DIR/Dockerfile" "$STAGE/context/"
 tar -C "$STAGE/context" -czf "$STAGE/lavaui-docs.tar.gz" .

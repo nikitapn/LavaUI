@@ -23,6 +23,20 @@
   {{/modules}}
 </section>
 
+{{#has_articles}}
+<section>
+  <h2 class="section-title">Articles</h2>
+  <ul class="item-list">
+    {{#articles}}
+    <li>
+      <a href="{{url}}">{{title}}</a>
+      {{#summary}}<p class="summary">{{summary}}</p>{{/summary}}
+    </li>
+    {{/articles}}
+  </ul>
+</section>
+{{/has_articles}}
+
 <section>
   <h2 class="section-title">Guides</h2>
   <ul class="link-list">

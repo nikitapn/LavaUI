@@ -6,13 +6,13 @@
 //
 //   DOCS_API        api.json from `scripts/docs-api.sh`
 //                   (default ../../.build/docs/api.json)
-//   DOCS_ROOT       directory holding templates/ and web/ (default: .)
+//   DOCS_ROOT       directory holding templates/, articles/ and web/ (default: .)
 //   DOCS_PORT       HTTP port (default 8080)
 //   DOCS_HOSTNAME   public hostname (default localhost)
 //   DOCS_TLS_CERT   with DOCS_TLS_KEY, serve HTTPS instead; SIGHUP re-reads
 //                   them, so a certbot renewal needs no restart
 //   DOCS_HTTP3=1    also serve HTTP/3 on the same port (needs TLS)
-//   DOCS_TEMPLATE_RELOAD=1  re-read templates on every request
+//   DOCS_TEMPLATE_RELOAD=1  re-read templates and articles on every request
 //
 // SIGINT and SIGTERM stop the server.
 
@@ -37,6 +37,7 @@ do {
     let store = try DocsStore(path: apiPath)
     let site = try DocsSite(store: store,
                             templateDirectory: root + "/templates",
+                            articleDirectory: root + "/articles",
                             hotReload: env["DOCS_TEMPLATE_RELOAD"] == "1")
 
     var http = RpcBuilder()
@@ -59,6 +60,7 @@ do {
     log("LavaUI docs: \(scheme)://\(hostname):\(port)/")
     log("  api.json:  \(apiPath) (reloaded when it changes)")
     log("  templates: \(site.templateNames.joined(separator: ", "))")
+    log("  articles:  \(site.articleNames.joined(separator: ", "))")
 
     // Signal sources only fire once the default action is disabled.
     var signalSources: [DispatchSourceSignal] = []

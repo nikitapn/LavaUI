@@ -48,11 +48,16 @@ public struct DocsSite: Sendable {
 
     private let store: DocsStore
     private let library: TemplateLibrary
+    private let articles: ArticleStore
 
-    public init(store: DocsStore, templateDirectory: String, hotReload: Bool = false) throws {
+    public init(store: DocsStore, templateDirectory: String, articleDirectory: String,
+                hotReload: Bool = false) throws {
         self.store = store
         self.library = try TemplateLibrary(directory: templateDirectory, hotReload: hotReload)
+        self.articles = ArticleStore(directory: articleDirectory, reload: hotReload)
     }
+
+    public var articleNames: [String] { articles.all.map(\.slug) }
 
     public var templateNames: [String] { library.templateNames }
 
@@ -73,6 +78,8 @@ public struct DocsSite: Sendable {
         case nil:
             let view = HomeView(
                 modules: moduleCards(index),
+                articles: articles.all.map { ArticleCard(title: $0.title, summary: $0.summary,
+                                                         url: "/article/" + $0.slug) },
                 guides: guideNav(index))
             return page("home", view, title: Site.homeTitle, index: index, fragment: fragment)
 
@@ -105,6 +112,13 @@ public struct DocsSite: Sendable {
             return page("guide", GuideView(title: guide.title, html: html, file: guide.file,
                                            source: Site.repository + guide.file),
                         title: guide.title, index: index, fragment: fragment)
+
+        case "article":
+            guard parts.count == 2, let article = articles.article(slug: parts[1]) else {
+                return notFound(index: index, fragment: fragment)
+            }
+            return page("article", ArticleView(html: article.html), title: article.title,
+                        index: index, fragment: fragment)
 
         case "search":
             let query = request.queryItems["q"] ?? ""
@@ -185,6 +199,7 @@ public struct DocsSite: Sendable {
         let layout = LayoutView(
             title: fullTitle, content: content,
             brand: Site.name, modules: apiNav(index),
+            articles: articles.all.map { NavItem(title: $0.title, url: "/article/" + $0.slug) },
             guides: guideNav(index), query: query)
         guard let html = library.render(layout, withTemplate: "layout") else {
             return templateMissing("layout")

@@ -28,6 +28,12 @@
       <ul>
         {{#modules}}<li><a href="{{url}}">{{title}}</a></li>{{/modules}}
       </ul>
+      {{#has_articles}}
+      <h2>Articles</h2>
+      <ul>
+        {{#articles}}<li><a href="{{url}}">{{title}}</a></li>{{/articles}}
+      </ul>
+      {{/has_articles}}
       <h2>Guides</h2>
       <ul>
         {{#guides}}<li><a href="{{url}}">{{title}}</a></li>{{/guides}}

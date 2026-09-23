@@ -1,0 +1,267 @@
+<!-- Served at /article/how-lavaui-draws. A fragment: the site's layout wraps
+     it, and its styles are `.essay` in web/style.css. The title and summary
+     on the home page come from the <h1> and the .standfirst. -->
+<article class="essay">
+<header class="essay-head">
+  <p class="eyebrow">LavaUI</p>
+  <h1>How LavaUI draws</h1>
+  <p class="standfirst">A Swift UI framework for a Wayland desktop where <strong>applications have no renderer at all</strong>. They write draw commands into shared memory and stop. One process owns the GPU for the whole desktop.</p>
+</header>
+
+<div class="figures">
+    <div class="fig"><b>80 ms</b><span>from <code>exec</code> to a mapped, sized window</span></div>
+    <div class="fig"><b>403 KiB</b><span>shared memory per application</span></div>
+    <div class="fig"><b>0.23 ms</b><span>mean cost to record and submit a frame</span></div>
+    <div class="fig"><b>1</b><span>Vulkan device, desktop-wide</span></div>
+  </div>
+
+
+<section>
+  <p class="stage">Stage one — the application</p>
+  <h2>You write views, not draw calls</h2>
+  <p>The authoring layer is what you'd expect if you've written SwiftUI: value-type views, state that invalidates what depends on it, modifiers that wrap rather than mutate. Layout is Flexbox, via Yoga.</p>
+
+  <figure>
+<pre><code class="language-swift">struct Counter: View {
+    @State private var count = 0
+
+    var body: some View {
+        VStack(padding: 16, spacing: 8) {
+            Text("Tapped \(count) times")
+            Button("Tap") { count += 1 }
+        }
+        .background(Theme.current.panel)
+        .frame(width: .pct(100))
+    }
+}</code></pre>
+    <figcaption>Nothing here knows whether it will be drawn by this process or another one. That's the whole trick.</figcaption>
+  </figure>
+
+  <p>A body pass doesn't produce pixels or GPU state. It produces a flat array of draw commands — <code>Rect</code>, <code>RoundedRect</code>, <code>Text</code>, <code>Image</code>, <code>Mesh</code>, clip and blur scopes — written once, into memory another process is already mapped to.</p>
+
+  <p>Text is shaped on this side, and only on this side. The command carries positioned glyph indices; the renderer's whole job is resolving those to atlas rectangles. A drawn run therefore cannot drift from the run that was measured during layout, because they are the same run.</p>
+</section>
+
+<section>
+  <p class="stage">Stage two — the boundary</p>
+  <h2>The draw arena</h2>
+  <p>A draw list isn't a message. Its size isn't known when the frame starts, because it grows <em>during</em> emit as the tree turns out bigger than last time. Put that through a ring buffer and you either reserve a worst case every frame or copy the finished list in.</p>
+
+  <p>So the transport is a mapping, not a queue. The UI writes draw commands exactly once, directly into the memory the renderer will read them from.</p>
+
+  <div class="diagram">
+    <svg viewBox="0 0 560 190" role="img" aria-label="An application writes draw commands into one of three slots in a shared-memory arena; the compositor reads a different slot and draws it with the GPU.">
+      <rect x="1" y="34" width="126" height="86" rx="3" fill="var(--cool-soft)" stroke="var(--cool)" stroke-width="1.5"/>
+      <text x="64" y="63" text-anchor="middle" class="dlabel" fill="var(--cool)">application</text>
+      <text x="64" y="82" text-anchor="middle" class="dsub" fill="var(--muted)">views → layout</text>
+      <text x="64" y="96" text-anchor="middle" class="dsub" fill="var(--muted)">→ draw commands</text>
+      <text x="64" y="136" text-anchor="middle" class="dsub" fill="var(--faint)">no GPU context</text>
+
+      <path d="M133 77 H176" stroke="var(--cool)" stroke-width="1.5" fill="none"/>
+      <path d="M172 72.5 L179 77 L172 81.5 Z" fill="var(--cool)"/>
+      <text x="154" y="66" text-anchor="middle" class="dsub" fill="var(--faint)">write</text>
+
+      <rect x="186" y="18" width="188" height="118" rx="3" fill="none" stroke="var(--rule)" stroke-width="1.5"/>
+      <text x="280" y="36" text-anchor="middle" class="dlabel" fill="var(--ink)">draw arena</text>
+      <text x="280" y="50" text-anchor="middle" class="dsub" fill="var(--faint)">403 KiB · mapped by both</text>
+
+      <rect x="199" y="60" width="50" height="40" rx="2" fill="var(--cool-soft)" stroke="var(--cool)" stroke-width="1.5"/>
+      <text x="224" y="84" text-anchor="middle" class="dsub" fill="var(--cool)">writing</text>
+      <rect x="255" y="60" width="50" height="40" rx="2" fill="none" stroke="var(--rule)" stroke-width="1.5" stroke-dasharray="3 3"/>
+      <text x="280" y="84" text-anchor="middle" class="dsub" fill="var(--faint)">spare</text>
+      <rect x="311" y="60" width="50" height="40" rx="2" fill="var(--hot-soft)" stroke="var(--hot)" stroke-width="1.5"/>
+      <text x="336" y="84" text-anchor="middle" class="dsub" fill="var(--hot)">reading</text>
+      <text x="280" y="122" text-anchor="middle" class="dsub" fill="var(--faint)" textLength="176" lengthAdjust="spacingAndGlyphs">three slots — neither side ever waits</text>
+
+      <path d="M381 77 H424" stroke="var(--hot)" stroke-width="1.5" fill="none"/>
+      <path d="M420 72.5 L427 77 L420 81.5 Z" fill="var(--hot)"/>
+      <text x="402" y="66" text-anchor="middle" class="dsub" fill="var(--faint)">read</text>
+
+      <rect x="433" y="34" width="126" height="86" rx="3" fill="var(--hot-soft)" stroke="var(--hot)" stroke-width="1.5"/>
+      <text x="496" y="63" text-anchor="middle" class="dlabel" fill="var(--hot)">compositor</text>
+      <text x="496" y="82" text-anchor="middle" class="dsub" fill="var(--muted)">one Vulkan device</text>
+      <text x="496" y="96" text-anchor="middle" class="dsub" fill="var(--muted)">for every window</text>
+      <text x="559" y="136" text-anchor="end" class="dsub" fill="var(--faint)">draws · composites · scans out</text>
+    </svg>
+  </div>
+
+  <p>Three slots, one producer, one consumer, no blocking in either direction. The producer writes a slot that is neither the one it published last nor the one the consumer says it holds — with three slots exactly one such slot always exists. A producer never waits on a slow renderer; a renderer never sees a frame torn out from under it.</p>
+
+  <p>Two details are worth more than they look:</p>
+
+  <ul>
+    <li><strong>Every offset is derived, never transmitted.</strong> The consumer reads no pointer and no offset out of shared memory — only capacities, which it clamps. A hostile producer can lie about how much it wrote and still cannot make the reader compute an address outside the mapping.</li>
+    <li><strong>Growth needs no control channel.</strong> A frame that outgrows the arena can't be finished in it and can't be abandoned either, since emit is already half done. The producer creates a larger mapping, copies the partial frame across, carries on writing — and records the new generation in the old header, where the consumer is already looking.</li>
+  </ul>
+
+  <p class="pull">A frame costs one write into memory that was already mapped. Not a serialize, not a copy, not a round trip.</p>
+</section>
+
+<section>
+  <p class="stage">Stage three — the renderer</p>
+  <h2>One renderer for the whole desktop</h2>
+  <p>Every Lava window on screen is drawn by the same Vulkan device, in the compositor. Applications initialise no graphics API, negotiate no swapchain, compile no pipelines, and hold no GPU memory.</p>
+
+  <p>Which is where the startup number comes from. 80 ms from <code>exec</code> to a mapped, correctly sized window — measured on a terminal emulator that also forks a shell and loads a font in that window. There is no device enumeration in the path, because the device came up once, with the desktop.</p>
+
+  <p>It pays elsewhere too. Glyph atlases and image atlases are per-desktop rather than per-process, so the second application to ask for a font pays nothing for it. And the effects that are genuinely expensive — backdrop blur, drop shadows as signed-distance falloff rather than image passes — are written once against one device instead of once per toolkit.</p>
+
+  <h2 class="essay-sub">The retained half</h2>
+  <p>An immediate-mode draw list has a ceiling: nothing can move without the application. Scroll, hover, a caret — each costs a wake, a full re-emit, and a round trip. Invisible with one client; on a desktop it's the difference between a window that scrolls and a window that is frozen.</p>
+
+  <p>So part of the list is retained. A <em>node</em> is a command with an identity, and identity is what lets the renderer keep state against it — scroll offset, hover amount, animation targets. The renderer scrolls the subtree and redraws without waking anyone. A renderer that ignored nodes entirely would draw exactly the same frame, which is what made them safe to add.</p>
+</section>
+
+<section>
+  <p class="stage">The whole path</p>
+  <h2>Where all of it sits</h2>
+  <p>Lava is a wlroots compositor, so foreign clients — GTK, Qt, anything X11 through XWayland — connect over ordinary Wayland and are composited the ordinary way. Lava's own applications take a second path alongside it, and the two meet in the scene graph.</p>
+
+  <div class="diagram">
+    <svg viewBox="0 0 880 616" role="img" aria-label="Layer diagram. Lava applications publish draw lists into a shared-memory arena and speak RPC over a control plane. Foreign Wayland and X11 clients connect through libwayland and XWayland. Inside the compositor, the canvas engine renders Lava windows on its own Vulkan device and hands the result to wlroots as a dma-buf with a fence; wlroots composites everything on a second Vulkan device and scans out through DRM and KMS.">
+      <defs>
+        <marker id="ah-cool" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M0 0 L8 4 L0 8 Z" fill="var(--cool)"/>
+        </marker>
+        <marker id="ah-hot" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M0 0 L8 4 L0 8 Z" fill="var(--hot)"/>
+        </marker>
+        <marker id="ah-muted" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M0 0 L8 4 L0 8 Z" fill="var(--muted)"/>
+        </marker>
+      </defs>
+
+      <!-- clients -->
+      <rect x="12" y="12" width="270" height="62" rx="3" fill="var(--cool-soft)" stroke="var(--cool)" stroke-width="1.5"/>
+      <text x="147" y="35" text-anchor="middle" class="dlabel" fill="var(--cool)">Lava application</text>
+      <text x="147" y="52" text-anchor="middle" class="dsub" fill="var(--muted)">Swift · LavaUI · Yoga layout</text>
+      <text x="147" y="65" text-anchor="middle" class="dsub" fill="var(--faint)">no Vulkan, no swapchain</text>
+
+      <rect x="305" y="12" width="270" height="62" rx="3" fill="none" stroke="var(--rule)" stroke-width="1.5"/>
+      <text x="440" y="35" text-anchor="middle" class="dlabel" fill="var(--ink)">GTK / Qt application</text>
+      <text x="440" y="52" text-anchor="middle" class="dsub" fill="var(--muted)">libwayland-client · Mesa</text>
+      <text x="440" y="65" text-anchor="middle" class="dsub" fill="var(--faint)">renders on its own device</text>
+
+      <rect x="598" y="12" width="270" height="62" rx="3" fill="none" stroke="var(--rule)" stroke-width="1.5"/>
+      <text x="733" y="35" text-anchor="middle" class="dlabel" fill="var(--ink)">X11 application</text>
+      <text x="733" y="52" text-anchor="middle" class="dsub" fill="var(--muted)">libX11 / XCB</text>
+
+      <!-- transport -->
+      <rect x="12" y="104" width="130" height="46" rx="3" fill="var(--surface)" stroke="var(--cool)" stroke-width="1.5"/>
+      <text x="77" y="123" text-anchor="middle" class="dlabel" fill="var(--cool)">draw arena</text>
+      <text x="77" y="138" text-anchor="middle" class="dsub" fill="var(--faint)">shared memory</text>
+
+      <rect x="152" y="104" width="130" height="46" rx="3" fill="var(--surface)" stroke="var(--cool)" stroke-width="1.5"/>
+      <text x="217" y="123" text-anchor="middle" class="dlabel" fill="var(--cool)">control plane</text>
+      <text x="217" y="138" text-anchor="middle" class="dsub" fill="var(--faint)">RPC · input · theme</text>
+
+      <rect x="305" y="104" width="270" height="46" rx="3" fill="var(--surface)" stroke="var(--rule)" stroke-width="1.5"/>
+      <text x="440" y="123" text-anchor="middle" class="dlabel" fill="var(--ink)">wl_surface</text>
+      <text x="440" y="138" text-anchor="middle" class="dsub" fill="var(--faint)">buffers as dma-buf, allocated by GBM</text>
+
+      <rect x="598" y="104" width="270" height="46" rx="3" fill="var(--surface)" stroke="var(--rule)" stroke-width="1.5"/>
+      <text x="733" y="123" text-anchor="middle" class="dlabel" fill="var(--ink)">XWayland</text>
+      <text x="733" y="138" text-anchor="middle" class="dsub" fill="var(--faint)">translates X to Wayland</text>
+
+      <path d="M77 78 V100" stroke="var(--cool)" stroke-width="1.5" marker-end="url(#ah-cool)"/>
+      <path d="M217 78 V100" stroke="var(--cool)" stroke-width="1.5" marker-end="url(#ah-cool)" marker-start="url(#ah-cool)"/>
+      <path d="M440 78 V100" stroke="var(--muted)" stroke-width="1.5" marker-end="url(#ah-muted)"/>
+      <path d="M733 78 V100" stroke="var(--muted)" stroke-width="1.5" marker-end="url(#ah-muted)"/>
+
+      <path d="M77 154 V186" stroke="var(--cool)" stroke-width="1.5" marker-end="url(#ah-cool)"/>
+      <path d="M217 154 V186" stroke="var(--cool)" stroke-width="1.5" marker-end="url(#ah-cool)" marker-start="url(#ah-cool)"/>
+      <path d="M440 154 V186" stroke="var(--muted)" stroke-width="1.5" marker-end="url(#ah-muted)"/>
+      <path d="M733 154 V186" stroke="var(--muted)" stroke-width="1.5" marker-end="url(#ah-muted)"/>
+
+      <!-- compositor -->
+      <rect x="12" y="188" width="856" height="210" rx="3" fill="none" stroke="var(--hot)" stroke-width="1.5"/>
+      <text x="30" y="210" class="dlabel" fill="var(--hot)">Lava compositor</text>
+      <text x="160" y="210" class="dsub" fill="var(--faint)">one process · owns the GPU for the desktop</text>
+
+      <rect x="30" y="228" width="290" height="120" rx="3" fill="var(--hot-soft)" stroke="var(--hot)" stroke-width="1.5"/>
+      <text x="175" y="251" text-anchor="middle" class="dlabel" fill="var(--hot)">canvas engine</text>
+      <text x="175" y="270" text-anchor="middle" class="dsub" fill="var(--muted)">reads every arena</text>
+      <text x="175" y="285" text-anchor="middle" class="dsub" fill="var(--muted)">draw commands → quads, glyphs</text>
+      <text x="175" y="300" text-anchor="middle" class="dsub" fill="var(--muted)">shared glyph + image atlases</text>
+      <text x="175" y="322" text-anchor="middle" class="dlabel" fill="var(--ink)">Vulkan device #1</text>
+      <text x="175" y="337" text-anchor="middle" class="dsub" fill="var(--faint)">renders into an exported image</text>
+
+      <rect x="560" y="228" width="290" height="120" rx="3" fill="var(--hot-soft)" stroke="var(--hot)" stroke-width="1.5"/>
+      <text x="705" y="251" text-anchor="middle" class="dlabel" fill="var(--hot)">wlroots</text>
+      <text x="705" y="270" text-anchor="middle" class="dsub" fill="var(--muted)">libwayland-server · wlr_scene</text>
+      <text x="705" y="285" text-anchor="middle" class="dsub" fill="var(--muted)">allocator: GBM · backend: DRM</text>
+      <text x="705" y="300" text-anchor="middle" class="dsub" fill="var(--muted)">libinput for keyboard and pointer</text>
+      <text x="705" y="322" text-anchor="middle" class="dlabel" fill="var(--ink)">Vulkan device #2</text>
+      <text x="705" y="337" text-anchor="middle" class="dsub" fill="var(--faint)">composites every surface</text>
+
+      <path d="M324 288 H556" stroke="var(--hot)" stroke-width="1.5" marker-end="url(#ah-hot)"/>
+      <text x="440" y="272" text-anchor="middle" class="dlabel" fill="var(--hot)">dma-buf</text>
+      <text x="440" y="305" text-anchor="middle" class="dsub" fill="var(--muted)">ARGB8888, premultiplied</text>
+      <text x="440" y="319" text-anchor="middle" class="dsub" fill="var(--muted)">+ sync_file fence</text>
+      <text x="440" y="333" text-anchor="middle" class="dsub" fill="var(--faint)">no copy, no readback</text>
+
+      <text x="440" y="373" text-anchor="middle" class="dsub" fill="var(--faint)">every window — Lava, GTK and X11 alike — is a node in the same scene graph</text>
+
+      <!-- user / kernel -->
+      <path d="M12 420 H868" stroke="var(--rule)" stroke-width="1"/>
+      <text x="12" y="415" class="dsub" fill="var(--faint)">user mode</text>
+      <text x="12" y="435" class="dsub" fill="var(--faint)">kernel mode</text>
+
+      <path d="M705 402 V446" stroke="var(--hot)" stroke-width="1.5" marker-end="url(#ah-hot)"/>
+      <path d="M175 446 V402" stroke="var(--cool)" stroke-width="1.5" marker-end="url(#ah-cool)"/>
+      <text x="770" y="440" text-anchor="middle" class="dsub" fill="var(--faint)">scan out</text>
+      <text x="108" y="440" text-anchor="middle" class="dsub" fill="var(--faint)">input</text>
+
+      <!-- kernel -->
+      <rect x="12" y="448" width="856" height="66" rx="3" fill="var(--sunken)" stroke="var(--rule)" stroke-width="1.5"/>
+      <text x="30" y="470" class="dlabel" fill="var(--ink)">Linux kernel</text>
+      <rect x="150" y="458" width="130" height="44" rx="2" fill="var(--surface)" stroke="var(--rule)" stroke-width="1.5"/>
+      <text x="215" y="478" text-anchor="middle" class="dlabel" fill="var(--ink)">evdev</text>
+      <text x="215" y="492" text-anchor="middle" class="dsub" fill="var(--faint)">input devices</text>
+      <rect x="470" y="458" width="130" height="44" rx="2" fill="var(--surface)" stroke="var(--rule)" stroke-width="1.5"/>
+      <text x="535" y="478" text-anchor="middle" class="dlabel" fill="var(--ink)">DRM</text>
+      <text x="535" y="492" text-anchor="middle" class="dsub" fill="var(--faint)">buffers, fences</text>
+      <rect x="620" y="458" width="130" height="44" rx="2" fill="var(--surface)" stroke="var(--rule)" stroke-width="1.5"/>
+      <text x="685" y="478" text-anchor="middle" class="dlabel" fill="var(--ink)">KMS</text>
+      <text x="685" y="492" text-anchor="middle" class="dsub" fill="var(--faint)">modes, planes</text>
+
+      <path d="M535 518 V546" stroke="var(--muted)" stroke-width="1.5" marker-end="url(#ah-muted)" marker-start="url(#ah-muted)"/>
+      <path d="M215 546 V518" stroke="var(--muted)" stroke-width="1.5" marker-end="url(#ah-muted)"/>
+      <path d="M685 518 V546" stroke="var(--muted)" stroke-width="1.5" marker-end="url(#ah-muted)"/>
+
+      <!-- hardware -->
+      <rect x="12" y="548" width="856" height="56" rx="3" fill="var(--sunken)" stroke="var(--rule)" stroke-width="1.5"/>
+      <text x="30" y="570" class="dlabel" fill="var(--ink)">Hardware</text>
+      <text x="215" y="572" text-anchor="middle" class="dsub" fill="var(--muted)">keyboard · mouse · touchpad</text>
+      <text x="215" y="587" text-anchor="middle" class="dsub" fill="var(--faint)">USB, I²C</text>
+      <text x="535" y="572" text-anchor="middle" class="dsub" fill="var(--muted)">GPU &amp; video memory</text>
+      <text x="535" y="587" text-anchor="middle" class="dsub" fill="var(--faint)">both devices, one card</text>
+      <text x="685" y="572" text-anchor="middle" class="dsub" fill="var(--muted)">display controller</text>
+      <text x="685" y="587" text-anchor="middle" class="dsub" fill="var(--faint)">scanout</text>
+    </svg>
+  </div>
+
+  <p>The two Vulkan devices are the part people ask about. The canvas engine creates its own instance rather than borrowing wlroots' renderer, so it can allocate exactly the images it wants to export and keep its pipelines, atlases and blur targets under its own lifetime. The two only ever meet as a dma-buf handle plus a fence — the frame never leaves the GPU, and neither device ever waits on the other's queue.</p>
+
+  <p>The middle column isn't only for foreign toolkits, either. A Lava application started <em>without</em> client mode takes exactly that path instead — which is the subject of the next section.</p>
+</section>
+
+<section>
+  <p class="stage">Honestly</p>
+  <h2>What it costs</h2>
+  <p>Centralising the renderer centralises its failures: a bug in one draw path is a bug on every window, and a compositor that dies takes the session with it. The wire format is a real compatibility surface — a command kind means the same thing in both processes or nothing works, and both processes are versioned together for exactly that reason.</p>
+
+  <p>Two Vulkan devices on one GPU is a real cost too: the handoff has to be fenced correctly every frame, and a missed fence is a torn window rather than an error message.</p>
+
+  <h2 class="essay-sub">Threads are not processes</h2>
+  <p>Drawing is parallel. Each window gets its own worker in the frame group and leases its own <code>VkQueue</code> for its lifetime, so windows record and submit concurrently rather than queueing behind one another. Throughput was never the thing centralising costs you.</p>
+
+  <p>Containment is. A worker thread is not a sandbox: a runaway client's draw list is rasterised on the compositor's own pool, competing with every other window, and a GPU fault in one window's worker lands in the compositor's address space. Chromium spends an IPC hop and an extra copy per frame to get isolation and parallelism both. This buys the parallelism and not the isolation — which is the honest shape of the trade, and worth stating plainly rather than filing under performance.</p>
+
+  <p>It isn't all-or-nothing, though, and that's the part that rescues it. Client mode is a runtime choice, not an architecture. Start the same binary without <code>LAVA_CLIENT=1</code> and the renderer initialises <em>in the application's own process</em> — its own Vulkan device, its own swapchain, an ordinary window like any other toolkit's. Same views, same layout, same draw list; it simply never crosses a process boundary.</p>
+
+  <p>So an application doing serious 3D, or anything that would rather own its frame pacing than share a thread pool, opts out and pays the ordinary price: no 80 ms start, no shared atlases, a graphics stack of its own. Everything else — a terminal, a settings panel, a dock — stays on the shared renderer, where those costs are exactly the ones worth avoiding. The desktop runs both at once, and the scene graph doesn't care which is which.</p>
+
+  <p class="close">LavaUI is part of Lava, a Wayland desktop written in Swift and C++ — compositor, shell and applications in one tree.</p>
+</section>
+</article>

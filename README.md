@@ -199,7 +199,7 @@ The compositor's own README (**[compositor/README.md](compositor/README.md)**).
 
 ## How it works
 
-**[How LavaUI draws](https://claude.ai/code/artifact/37c3ea4e-9060-4466-b733-aba3fcdc5dad?org=ffa809c6-f386-4865-a70f-7a16c5df3b89)**
+**[How LavaUI draws](https://lavaui.nikitapn.com/article/how-lavaui-draws)**
 
 **The view tree is retained; the draw list is immediate.**
 
