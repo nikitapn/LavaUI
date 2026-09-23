@@ -1264,6 +1264,8 @@ so headless test runs skip it too.
 |---|---|
 | `README.md` | Build, run, depend on LavaUI from another package |
 | `docs/api.md` | Application-facing LavaUI API |
+| `docs/getting-started.md` | From an empty package to a running window |
+| `docs/site/README.md` | The docs site (lavaui.nikitapn.com): `scripts/docs-api.sh`, guides, deploy |
 | `docs/performance.md` | LavaBench design and baselines |
 | `docs/agent.md` | Runtime agent TCP / MCP control plane |
 | `docs/client-server-gaps.md` | Client vs host feature gaps |

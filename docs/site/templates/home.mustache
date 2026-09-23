@@ -1,0 +1,31 @@
+<article class="prose">
+  <h1>LavaUI documentation</h1>
+  <p class="lead">
+    LavaUI is a declarative UI framework in Swift that draws with Vulkan. Views
+    are written the way SwiftUI writes them; underneath, Yoga lays them out,
+    HarfBuzz shapes the text and one pipeline draws everything, in a window of
+    its own or as a client of the Lava compositor.
+  </p>
+  <p>
+    New here? Start with <a href="/guide/getting-started">Getting started</a>,
+    then the <a href="/guide/api">API guide</a>. The reference below is
+    generated from the source's <code>///</code> comments.
+  </p>
+</article>
+
+<section class="cards">
+  {{#modules}}
+  <a class="card" href="{{url}}">
+    <h2>{{title}}</h2>
+    {{#summary}}<p class="card-summary">{{summary}}</p>{{/summary}}
+    <p>{{symbols}} declarations · {{documented}} documented</p>
+  </a>
+  {{/modules}}
+</section>
+
+<section>
+  <h2 class="section-title">Guides</h2>
+  <ul class="link-list">
+    {{#guides}}<li><a href="{{url}}">{{title}}</a></li>{{/guides}}
+  </ul>
+</section>
