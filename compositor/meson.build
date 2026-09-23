@@ -112,9 +112,6 @@ if nprpc_root != ''
   nprpc_lib_dirs = []
   foreach d : [
     nprpc_root / '.build_lava_shm',
-    nprpc_root / '.build_relwith_debinfo',
-    nprpc_root / '.build_release',
-    nprpc_root / '.build',
     nprpc_root / 'lib',
     nprpc_root / 'lib64',
     nprpc_root / 'lib/x86_64-linux-gnu',

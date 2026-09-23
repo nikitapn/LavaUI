@@ -464,7 +464,7 @@ LAVA_CLIENT=1 swift run LavaSurface
 LAVA_CLIENT=1 swift run HelloWorld
 
 # Regenerate RPC stubs after editing idl/lava.npidl
-NPIDL=…/nprpc/.build_relwith_debinfo/npidl/npidl scripts/gen_stubs.sh
+NPIDL=…/nprpc/.build_lava_shm/npidl/npidl scripts/gen_stubs.sh
 ```
 
 System needs: Vulkan ICD, GLFW, FreeType, HarfBuzz; for global menus

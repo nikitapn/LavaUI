@@ -218,8 +218,6 @@ lava_find_nprpc_libdir() {
   local d
   for d in \
     "$root/.build_lava_shm" \
-    "$root/.build_relwith_debinfo" \
-    "$root/.build_release" \
     "$root/.build" \
     "$root/lib" \
     "$root/lib64" \
@@ -245,9 +243,6 @@ lava_find_npidl() {
   local c
   for c in \
     "$root/.build_lava_shm/npidl/npidl" \
-    "$root/.build_relwith_debinfo/npidl/npidl" \
-    "$root/.build_release/npidl/npidl" \
-    "$root/.build/npidl/npidl" \
     "$root/bin/npidl"
   do
     if [[ -x $c ]]; then
