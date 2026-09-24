@@ -433,11 +433,15 @@ public enum LavaApp {
                     editor.injectPointerMove(x: x, y: y)
                     main.noteInjectedPointer(x: x, y: y)
                 },
-                injectClick: { x, y, button in
+                injectClick: { x, y, button, mods in
                     editor.injectPointerMove(x: x, y: y)
                     main.noteInjectedPointer(x: x, y: y)
-                    editor.injectPointerButton(button: button, pressed: true, x: x, y: y)
-                    editor.injectPointerButton(button: button, pressed: false, x: x, y: y)
+                    editor.injectPointerButton(
+                        button: button, pressed: true, x: x, y: y, mods: mods
+                    )
+                    editor.injectPointerButton(
+                        button: button, pressed: false, x: x, y: y, mods: mods
+                    )
                 },
                 injectPointerButton: { x, y, button, pressed in
                     // A press with no move before it still has to say where it

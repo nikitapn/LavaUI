@@ -77,6 +77,7 @@ struct LavaExplorerApp {
                 ) { session.reload() }
             }
             Menu("Edit", id: "edit") {
+                MenuItem("Select All", id: "edit.select-all") { session.selectAll() }
                 MenuItem("Copy Path", id: "edit.copy-path") {
                     session.copySelectedPath()
                 }
@@ -138,10 +139,12 @@ struct LavaExplorerApp {
             session.activate()
         case KeyCode.backspace where !typing && !control:
             session.goUp()
-        case KeyCode.up where !typing:
-            session.moveSelection(by: -1)
+        case KeyCode.up where !typing && !alt:
+            session.moveSelection(by: -1, extending: shift)
         case KeyCode.down where !typing:
-            session.moveSelection(by: 1)
+            session.moveSelection(by: 1, extending: shift)
+        case KeyCode.a where control && !typing:
+            session.selectAll()
         case KeyCode.left where alt:
             session.goBack()
         case KeyCode.right where alt:
@@ -166,6 +169,8 @@ struct LavaExplorerApp {
             session.deleteSelected(permanently: shift)
         case KeyCode.escape where session.pendingErase != nil:
             session.resolveErase(false)
+        case KeyCode.escape where !typing && session.selectedEntries.count > 1:
+            session.clearSelection()
         case KeyCode.l where control:
             // The field is already there; focusing it is a click. Ctrl+L
             // still reloads the draft from the current path so a half-typed

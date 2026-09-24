@@ -687,9 +687,9 @@ void AppWindow::pointerMove(float x, float y)
     }
   }
 
-  // mods is only ever non-zero from the live GLFW callback below — injected
-  // clicks (Application::pointerButton, used by Swift/agent input) have no
-  // modifier source and keep the 0 default.
+  // mods comes from the live GLFW callback below, or from an agent click
+  // that asked for one (Application::pointerButton) — the only way a
+  // scripted Ctrl+click or Shift+click can reach a view.
 void AppWindow::pointerButton(int button, bool pressed, float x, float y, int mods)
 {
     // Pressed feedback is the primary button's alone: a scene node lights up

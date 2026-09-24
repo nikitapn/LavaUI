@@ -1108,8 +1108,8 @@ void Application::pointerMove(float x, float y, uint32_t windowId) {
 }
 
 void Application::pointerButton(int button, bool pressed, float x, float y,
-                                uint32_t windowId) {
-  if (AppWindow *w = impl_->win(windowId)) w->pointerButton(button, pressed, x, y);
+                                uint32_t windowId, int mods) {
+  if (AppWindow *w = impl_->win(windowId)) w->pointerButton(button, pressed, x, y, mods);
 }
 
 void Application::keyEvent(int key, int action, int mods, uint32_t windowId) {

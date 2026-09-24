@@ -625,6 +625,7 @@ public final class LavaWindow {
                 ViewInvalidation.markNeedsRedraw()
             }
             PointerCapture.release()
+            PointerRelease.fire()
         case .scroll:
             // Renderer-owned ScrollViews consume this before it reaches us, so
             // arriving here means a node under the pointer declared a wheel
@@ -664,6 +665,7 @@ public final class LavaWindow {
             // which for a dock that hides when the pointer leaves is the
             // difference between working and not.
             PointerCapture.release()
+            PointerRelease.fire()
             HoverState.clear()
             PointerState.left()
             // Hand the arrow back on the way out. A window that kept its

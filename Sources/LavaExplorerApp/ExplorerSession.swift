@@ -107,6 +107,16 @@ final class ExplorerSession: @unchecked Sendable {
         return listing.entries.first { $0.path == selected }
     }
 
+    /// What an operation acts on: every selected row, in list order.
+    var selectedEntries: [FileEntry] { tabSet.current.selectedEntries }
+
+    /// The selection if `entry` is in it, otherwise `entry` alone — a
+    /// right-click on a row outside the selection is about that row.
+    func targets(for entry: FileEntry) -> [FileEntry] {
+        let selection = selectedEntries
+        return selection.contains(entry) ? selection : [entry]
+    }
+
     var status: String {
         if let notice { return notice }
         if let error = listing.error { return error }
@@ -120,7 +130,10 @@ final class ExplorerSession: @unchecked Sendable {
             parts.append(files == 1 ? "1 file" : "\(files) files")
         }
         if parts.isEmpty { parts.append("Empty") }
-        if let entry = selectedEntry {
+        let count = tabSet.current.selection.count
+        if count > 1 {
+            parts.append("\(count) selected")
+        } else if let entry = selectedEntry {
             parts.append(entry.name)
             // Where Restore would put it, which the list has no column for.
             if inTrash, let item = trash.item(trashedPath: entry.path) {
@@ -439,19 +452,67 @@ final class ExplorerSession: @unchecked Sendable {
         ViewInvalidation.markDirty()
     }
 
-    func click(_ entry: FileEntry, clicks: Int) {
+    /// A press on a row that is one of several selected: the rest stay
+    /// selected until the release, so the press can still become a drag of
+    /// all of them. Cleared when that drag starts.
+    @ObservationIgnored private var collapseOnRelease: String?
+
+    /// A left press on a row. Ctrl toggles it, Shift selects the range from
+    /// the anchor, Ctrl+Shift adds that range; a double-click opens.
+    func click(_ entry: FileEntry, clicks: Int, mods: Int32 = 0) {
         dismissContext()
-        if clicks >= 2 {
-            tabSet.updateCurrent { $0.selected = entry.path }
+        notice = nil
+        let control = KeyMods.contains(mods, KeyMods.control)
+        let shift = KeyMods.contains(mods, KeyMods.shift)
+        let path = entry.path
+        if clicks >= 2, !control, !shift {
+            tabSet.updateCurrent { $0.selected = path }
             activate()
-        } else {
-            select(entry)
+            return
         }
+        let order = listing.entries.map(\.path)
+        tabSet.updateCurrent { tab in
+            if shift {
+                tab.selection.extend(to: path, in: order, adding: control)
+            } else if control {
+                tab.selection.toggle(path)
+            } else if tab.selection.contains(path), tab.selection.count > 1 {
+                collapseOnRelease = path
+                PointerRelease.next { [weak self] in self?.collapse(to: path) }
+            } else {
+                tab.selected = path
+            }
+        }
+        ViewInvalidation.markDirty()
+    }
+
+    private func collapse(to path: String) {
+        guard collapseOnRelease == path else { return }
+        collapseOnRelease = nil
+        tabSet.updateCurrent { $0.selected = path }
+        ViewInvalidation.markDirty()
+    }
+
+    func selectAll() {
+        dismissContext()
+        let order = listing.entries.map(\.path)
+        tabSet.updateCurrent { $0.selection.selectAll(order) }
+        ViewInvalidation.markDirty()
+    }
+
+    func clearSelection() {
+        tabSet.updateCurrent { $0.selection.clear() }
+        ViewInvalidation.markDirty()
     }
 
     func openContext(_ entry: FileEntry) {
         notice = nil
-        tabSet.updateCurrent { $0.selected = entry.path }
+        collapseOnRelease = nil
+        // Right-clicking one of the selected rows is about all of them;
+        // any other row is selected alone first.
+        if !tabSet.current.selection.contains(entry.path) {
+            tabSet.updateCurrent { $0.selected = entry.path }
+        }
         let pointer = PointerState.window
         menuX = pointer.x
         menuY = pointer.y
@@ -467,12 +528,21 @@ final class ExplorerSession: @unchecked Sendable {
         ViewInvalidation.markDirty()
     }
 
-    func moveSelection(by step: Int) {
+    /// Up/Down move the lead row; with `extending` (Shift) the selection
+    /// runs from the anchor to wherever the lead lands.
+    func moveSelection(by step: Int, extending: Bool = false) {
         guard !listing.entries.isEmpty else { return }
         let current = selectedIndex ?? (step > 0 ? -1 : listing.entries.count)
         let next = min(max(0, current + step), listing.entries.count - 1)
         let path = listing.entries[next].path
-        tabSet.updateCurrent { $0.selected = path }
+        let order = listing.entries.map(\.path)
+        tabSet.updateCurrent { tab in
+            if extending {
+                tab.selection.extend(to: path, in: order)
+            } else {
+                tab.selected = path
+            }
+        }
         ViewInvalidation.markDirty()
     }
 
@@ -491,10 +561,11 @@ final class ExplorerSession: @unchecked Sendable {
         ViewInvalidation.markDirty()
     }
 
+    /// One path per line for several rows; the folder itself for none.
     func copySelectedPath() {
-        let path = selected ?? listing.path
-        ClipboardBridge.write(path)
-        notice = "Copied path"
+        let paths = selectedEntries.map(\.path)
+        ClipboardBridge.write(paths.isEmpty ? listing.path : paths.joined(separator: "\n"))
+        notice = paths.count > 1 ? "Copied \(paths.count) paths" : "Copied path"
         dismissContext()
         ViewInvalidation.markDirty()
     }
@@ -638,7 +709,6 @@ final class ExplorerSession: @unchecked Sendable {
             dismissContext()
             if entry.isDirectory { newTab(path: entry.path) }
         case "ctx.copy-path":
-            tabSet.updateCurrent { $0.selected = entry.path }
             copySelectedPath()
         case "ctx.copy": stub("Copy")
         case "ctx.cut": stub("Cut")
@@ -646,13 +716,13 @@ final class ExplorerSession: @unchecked Sendable {
         case "ctx.rename": stub("Rename")
         case "ctx.trash":
             dismissContext()
-            moveToTrash([entry.path])
+            moveToTrash(targets(for: entry).map(\.path))
         case "ctx.delete":
             dismissContext()
-            askToErase([entry])
+            askToErase(targets(for: entry))
         case "ctx.restore":
             dismissContext()
-            restore([entry])
+            restore(targets(for: entry))
         default:
             dismissContext()
         }
@@ -666,11 +736,12 @@ final class ExplorerSession: @unchecked Sendable {
     /// Trash, asks and then removes it for good.
     func deleteSelected(permanently: Bool) {
         dismissContext()
-        guard let entry = selectedEntry else { return }
+        let entries = selectedEntries
+        guard !entries.isEmpty else { return }
         if permanently || inTrash {
-            askToErase([entry])
+            askToErase(entries)
         } else {
-            moveToTrash([entry.path])
+            moveToTrash(entries.map(\.path))
         }
     }
 
@@ -1009,12 +1080,20 @@ final class ExplorerSession: @unchecked Sendable {
     /// observed: nothing draws it.
     @ObservationIgnored var ownDrag: [String] = []
 
-    /// The paths a drag of `entry` carries. Selects it first, the way every
+    /// The paths a drag of `entry` carries: the whole selection when the row
+    /// is part of it, otherwise the row alone, selected first — the way every
     /// file manager selects what is being dragged.
     func dragPaths(for entry: FileEntry) -> [String] {
         dismissContext()
-        tabSet.updateCurrent { $0.selected = entry.path }
-        ownDrag = [entry.path]
+        // It became a drag, so the press on one of several rows keeps them.
+        collapseOnRelease = nil
+        let selection = selectedEntries
+        if selection.contains(entry) {
+            ownDrag = selection.map(\.path)
+        } else {
+            tabSet.updateCurrent { $0.selected = entry.path }
+            ownDrag = [entry.path]
+        }
         return ownDrag
     }
 

@@ -445,10 +445,11 @@ void Engine::pointerMove(float x, float y, uint32_t windowId)
   impl_->withApp([&](Application &app) { app.pointerMove(x, y, windowId); });
 }
 
-void Engine::pointerButton(int button, bool pressed, float x, float y, uint32_t windowId)
+void Engine::pointerButton(int button, bool pressed, float x, float y, uint32_t windowId,
+                           int mods)
 {
   impl_->withApp([&](Application &app) {
-    app.pointerButton(button, pressed, x, y, windowId);
+    app.pointerButton(button, pressed, x, y, windowId, mods);
   });
 }
 

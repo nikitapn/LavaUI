@@ -90,6 +90,8 @@ def handle_tool(name: str, arguments: dict[str, Any]) -> dict:
                     p[k] = str(arguments[k])
             if "id" in arguments:
                 p["id"] = int(arguments["id"])
+            if "mods" in arguments:
+                p["mods"] = int(arguments["mods"])
             r = agent_call(name, p)
         elif name == "scroll":
             p = {"dx": float(arguments.get("dx", 0.0)), "dy": float(arguments["dy"])}
@@ -222,6 +224,10 @@ TOOLS = [
                 "id": {"type": "integer"},
                 "query": {"type": "string"},
                 "button": {"type": "integer", "default": 0},
+                "mods": {
+                    "type": "integer", "default": 0,
+                    "description": "Modifiers held for the click: 1 shift, 2 ctrl, 4 alt",
+                },
             },
         },
     },

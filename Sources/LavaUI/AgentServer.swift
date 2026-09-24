@@ -71,7 +71,8 @@ public struct AgentHost {
     ) -> (label: String, sid: String, x: Float, y: Float, w: Float, h: Float)?
     public var find: (_ query: String, _ limit: Int) -> [[String: Any]]
     public var injectMove: (_ x: Float, _ y: Float) -> Void
-    public var injectClick: (_ x: Float, _ y: Float, _ button: Int32) -> Void
+    /// `mods` is `KeyMods`, so a script can Ctrl+click or Shift+click.
+    public var injectClick: (_ x: Float, _ y: Float, _ button: Int32, _ mods: Int32) -> Void
     public var injectPointerButton: (
         _ x: Float, _ y: Float, _ button: Int32, _ pressed: Bool
     ) -> Void
@@ -94,7 +95,7 @@ public struct AgentHost {
         ) -> (label: String, sid: String, x: Float, y: Float, w: Float, h: Float)?,
         find: @escaping (_ query: String, _ limit: Int) -> [[String: Any]],
         injectMove: @escaping (_ x: Float, _ y: Float) -> Void,
-        injectClick: @escaping (_ x: Float, _ y: Float, _ button: Int32) -> Void,
+        injectClick: @escaping (_ x: Float, _ y: Float, _ button: Int32, _ mods: Int32) -> Void,
         injectPointerButton: @escaping (
             _ x: Float, _ y: Float, _ button: Int32, _ pressed: Bool
         ) -> Void,
@@ -446,7 +447,8 @@ public final class AgentServer: @unchecked Sendable {
                 let cx = f.x + f.w * 0.5
                 let cy = f.y + f.h * 0.5
                 let button = Int32(intParam(params, "button", default: 0))
-                host.injectClick(cx, cy, button)
+                let mods = Int32(intParam(params, "mods", default: 0))
+                host.injectClick(cx, cy, button, mods)
                 host.settle()
                 return [
                     "x": cx, "y": cy, "button": button,
@@ -459,7 +461,8 @@ public final class AgentServer: @unchecked Sendable {
             let x = floatParam(params, "x")
             let y = floatParam(params, "y")
             let button = Int32(intParam(params, "button", default: 0))
-            host.injectClick(x, y, button)
+            let mods = Int32(intParam(params, "mods", default: 0))
+            host.injectClick(x, y, button, mods)
             host.settle()
             return ["x": x, "y": y, "button": button]
 

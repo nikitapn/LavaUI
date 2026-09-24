@@ -314,7 +314,8 @@ public:
   // ─── Input bridge (canvas-local coords, GLFW-style key codes) ───────────
 
   void pointerMove(float x, float y, uint32_t windowId = 0);
-  void pointerButton(int button, bool pressed, float x, float y, uint32_t windowId = 0);
+  void pointerButton(int button, bool pressed, float x, float y, uint32_t windowId = 0,
+                     int mods = 0);
   void keyEvent(int key, int action, int mods, uint32_t windowId = 0);
   void textInput(const std::string &utf8, uint32_t windowId = 0);
   /// Synthetic wheel/trackpad delta; same coalescing queue as hardware scroll.

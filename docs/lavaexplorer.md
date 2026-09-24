@@ -29,6 +29,14 @@ LAVA_CLIENT=1 swift run LavaExplorer -- ~/Pictures
 - Back / Forward / Up, Alt+arrows, Backspace to go up.
 - Hidden names stay out until View → Show Hidden Files (or Ctrl+H).
 - Enter opens the selected row. A drop of a path navigates there.
+- Several rows at once: Ctrl+click adds or removes one, Shift+click selects
+  the range from the last row clicked, Ctrl+Shift+click adds that range,
+  Shift+Up/Down grows it from the keyboard, Ctrl+A takes the whole folder
+  and Escape lets go. Delete, Move to Trash, Delete Permanently, Restore,
+  Copy Path (one per line) and a drag act on all of them; the drag's chip
+  says how many more it carries. Pressing one of several selected rows keeps
+  the rest until the button comes up, so the group can be dragged, and a
+  right-click on a row outside the selection is about that row alone.
 - Drop files — from another app, or rows dragged out of this window,
   another pane included — to copy them: onto a folder row, into that folder;
   onto a pane's list, into the folder the pane shows; onto a tab or a place
@@ -64,7 +72,7 @@ LAVA_CLIENT=1 swift run LavaExplorer -- ~/Pictures
   the pointer. Offered as a copy only; let go on the window it came from and
   nothing happens.
 - Tabs: each has its own folder and Back stack. Ctrl+T / Ctrl+W, Ctrl+Tab,
-  the plus on the strip, Ctrl+click a folder, or Open in New Tab. Closing
+  the plus on the strip, middle-click a folder, or Open in New Tab. Closing
   the last tab closes the window. Several paths on the command line open
   one tab each. Tabs keep their width; a strip that runs out of room scrolls
   (the wheel over it), and the selected tab is scrolled into view when it
@@ -107,8 +115,8 @@ file.
   no `delete`: throwing away goes through `TrashCan`, and removing for good
   through `FileEraser`, which only the confirmed paths reach.
 - **Undo.** Restore from the Trash is the way back; there is no Ctrl+Z.
-- **More than one row at a time.** Selection is one row, so Delete is one
-  item; `TrashCan` and the erase path already take lists.
+- **Rubber-band selection.** Rows are picked with the keyboard and
+  Ctrl/Shift+click; dragging on empty space does not draw a box yet.
 - **Thumbnails.** The list is glyphs. Icon view with `ImageStore` is the
   next visual step, not this one.
 - **inotify.** Reload is a key (Ctrl+R) and a menu item.

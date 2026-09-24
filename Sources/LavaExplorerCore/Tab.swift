@@ -7,7 +7,7 @@ public struct ExplorerTab: Equatable, Identifiable, Sendable {
     public let id: Int
     public var history: FolderHistory
     public var listing: FolderListing
-    public var selected: String?
+    public var selection = FileSelection()
     public var pathDraft: String
     public var showHidden: Bool
     public var sort: FileSort
@@ -26,11 +26,25 @@ public struct ExplorerTab: Equatable, Identifiable, Sendable {
         self.id = id
         self.history = history
         self.listing = listing
-        self.selected = selected
+        if let selected { selection.select(selected) }
         self.pathDraft = pathDraft ?? listing.path
         self.showHidden = showHidden
         self.sort = sort
         self.sortDescending = sortDescending
+    }
+
+    /// The row the keyboard is on. Setting it selects that row alone, which is
+    /// what every caller that thinks in one row means.
+    public var selected: String? {
+        get { selection.lead }
+        set {
+            if let newValue { selection.select(newValue) } else { selection.clear() }
+        }
+    }
+
+    /// Selected entries in list order.
+    public var selectedEntries: [FileEntry] {
+        listing.entries.filter { selection.contains($0.path) }
     }
 
     public var title: String {
@@ -50,9 +64,7 @@ public struct ExplorerTab: Equatable, Identifiable, Sendable {
             descending: sortDescending
         )
         pathDraft = listing.path
-        if let selected, !listing.entries.contains(where: { $0.path == selected }) {
-            self.selected = nil
-        }
+        selection.keep(only: Set(listing.entries.map(\.path)))
     }
 
     /// A tab on `path`, listing already loaded.

@@ -573,9 +573,12 @@ public final class Editor: @unchecked Sendable {
         engine.pointerMove(x, y)
     }
 
-    /// Inject mouse button. `button` is GLFW-style (0 = left).
-    public func injectPointerButton(button: Int32, pressed: Bool, x: Float, y: Float) {
-        engine.pointerButton(button, pressed, x, y)
+    /// Inject mouse button. `button` is GLFW-style (0 = left); `mods` too
+    /// (`KeyMods`), for a scripted Ctrl+click or Shift+click.
+    public func injectPointerButton(
+        button: Int32, pressed: Bool, x: Float, y: Float, mods: Int32 = 0
+    ) {
+        engine.pointerButton(button, pressed, x, y, 0, mods)
     }
 
     /// Inject wheel/trackpad delta (notches), same coalescing queue as real scroll.

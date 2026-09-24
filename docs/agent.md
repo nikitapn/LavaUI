@@ -38,6 +38,11 @@ python3 tools/lava_agent_cli.py pointer_up --x 900 --y 450
 `--query` and use the resolved node center, like `click`. The MCP server exposes
 the same two operations.
 
+`click` takes `--mods` (`KeyMods`: 1 Shift, 2 Ctrl, 4 Alt) for the modifiers
+held during the press — a Ctrl+click or Shift+click. Holding a modifier with
+`key` does not do it: an injected key press is released straight away, and a
+press reads its modifiers from its own event.
+
 ## Stable ids (`sid`)
 
 Process-local `NodeID` (`id` in the tree) changes every launch. Agents could

@@ -301,7 +301,9 @@ class Engine {
 
   /// Inject synthetic pointer events (same queue as GLFW callbacks).
   void pointerMove(float x, float y, uint32_t windowId = 0);
-  void pointerButton(int button, bool pressed, float x, float y, uint32_t windowId = 0);
+  /// `mods` is GLFW-style, for an agent click that means Ctrl+click.
+  void pointerButton(int button, bool pressed, float x, float y, uint32_t windowId = 0,
+                     int mods = 0);
   /// Inject wheel/trackpad delta (notches), coalesced with real scroll input.
   void pointerScroll(float dx, float dy, uint32_t windowId = 0);
 

@@ -207,6 +207,32 @@ enum LocalHoverTargets {
     }
 }
 
+/// Runs something once, on the next release of the pointer.
+///
+/// For a press that means one thing if it turns into a drag and another if
+/// it does not. A press on one of several selected rows keeps them all
+/// selected, so they can be dragged together — and collapses the selection
+/// to that row only if the button comes back up without a drag. Unlike
+/// `PointerCapture`, waiting for the release takes nothing from the press:
+/// a file drag or a gesture still starts from it. The action runs after a
+/// drag's release too, so it has to check for itself whether it still
+/// applies.
+public enum PointerRelease {
+    nonisolated(unsafe) private static var pending: [() -> Void] = []
+
+    public static func next(_ action: @escaping () -> Void) {
+        pending.append(action)
+    }
+
+    static func fire() {
+        guard !pending.isEmpty else { return }
+        let actions = pending
+        pending = []
+        for action in actions { action() }
+        ViewInvalidation.markNeedsRedraw()
+    }
+}
+
 /// Routes pointer motion to whichever node started a drag.
 ///
 /// Without capture, a drag that leaves the field's bounds would stop extending

@@ -71,6 +71,7 @@ def main() -> int:
     cl.add_argument("--id", type=int)
     cl.add_argument("--query")
     cl.add_argument("--button", type=int, default=0)
+    cl.add_argument("--mods", type=int, default=0, help="KeyMods: 1 shift, 2 ctrl, 4 alt")
     for phase in ("pointer_down", "pointer_up"):
         pp = sub.add_parser(phase)
         pp.add_argument("--x", type=float)
@@ -158,6 +159,8 @@ def main() -> int:
         if args.y is not None:
             payload["y"] = args.y
         payload["button"] = args.button
+        if getattr(args, "mods", 0):
+            payload["mods"] = args.mods
     elif args.cmd == "scroll":
         if args.sid:
             payload["sid"] = args.sid

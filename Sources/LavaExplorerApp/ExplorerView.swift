@@ -604,7 +604,7 @@ private struct FilePane: View {
                     ) { entry in
                         FileRow(
                             session: session, paneID: paneID, entry: entry,
-                            selected: tab.selected == entry.path
+                            selected: tab.selection.contains(entry.path)
                         )
                     }
                 }
@@ -756,13 +756,17 @@ private struct FileRow: View {
                     session.openContext(entry)
                     return
                 }
-                guard button == PointerButton.left else { return }
-                if KeyMods.contains(mods, KeyMods.control), entry.isDirectory {
-                    session.newTab(path: entry.path)
+                // Middle-click opens a folder in a new tab, as in a browser;
+                // Ctrl+click is selection, as in every file manager.
+                if button == PointerButton.middle {
+                    if entry.isDirectory { session.newTab(path: entry.path) }
                     return
                 }
+                guard button == PointerButton.left else { return }
                 let p = PointerState.window
-                session.click(entry, clicks: ClickCounter.register(x: p.x, y: p.y))
+                session.click(
+                    entry, clicks: ClickCounter.register(x: p.x, y: p.y), mods: mods
+                )
             }
         ) {
             Text(
@@ -788,7 +792,8 @@ private struct FileRow: View {
         .cursor(.pointer)
         .agentId("file-\(entry.name)")
         .onFileDrag(paths: { session.dragPaths(for: entry) }) {
-            FileDragChip(entry: entry)
+            // Built after `paths`, so it knows how many went with this row.
+            FileDragChip(entry: entry, others: max(0, session.ownDrag.count - 1))
         }
         .overlay(
             isPresented: Binding(
@@ -827,6 +832,8 @@ private struct FileRow: View {
 /// the result, so nothing here has to know it ends up as a texture.
 private struct FileDragChip: View {
     let entry: FileEntry
+    /// How many more rows the drag carries besides this one.
+    var others: Int = 0
 
     var body: some View {
         let theme = Theme.current
@@ -836,6 +843,12 @@ private struct FileDragChip: View {
                 color: entry.isDirectory ? theme.accent : theme.textDim
             )
             Text(entry.name, color: theme.textPrimary, lineLimit: 1)
+            if others > 0 {
+                Text("+\(others)", color: theme.textPrimary)
+                    .padding(EdgeInsets(top: 0, leading: 4, bottom: 0, trailing: 4))
+                    .background(theme.accent)
+                    .cornerRadius(8)
+            }
         }
         .background(theme.panel)
         .cornerRadius(6)
@@ -865,6 +878,8 @@ private struct FileContextMenu: View {
         handlers: [DesktopEntry], defaultId: String?
     ) -> [MenuEntry] {
         if session.inTrash { return trashEntries }
+        let many = session.targets(for: entry).count
+        let what = many > 1 ? " \(many) Items" : ""
         var items: [MenuEntry] = [
             .item(MenuItemModel(id: MenuID("ctx.open"), title: "Open")),
             .item(MenuItemModel(
@@ -889,9 +904,9 @@ private struct FileContextMenu: View {
         items.append(.item(MenuItemModel(id: MenuID("ctx.paste"), title: "Paste")))
         items.append(.separator)
         items.append(.item(MenuItemModel(id: MenuID("ctx.rename"), title: "Rename")))
-        items.append(.item(MenuItemModel(id: MenuID("ctx.trash"), title: "Move to Trash")))
+        items.append(.item(MenuItemModel(id: MenuID("ctx.trash"), title: "Move\(what) to Trash")))
         items.append(.item(MenuItemModel(
-            id: MenuID("ctx.delete"), title: "Delete Permanently"
+            id: MenuID("ctx.delete"), title: "Delete\(what) Permanently"
         )))
         items.append(.separator)
         items.append(.item(MenuItemModel(
@@ -902,11 +917,15 @@ private struct FileContextMenu: View {
 
     /// Something in the Trash is there to be put back or got rid of.
     private var trashEntries: [MenuEntry] {
-        [
-            .item(MenuItemModel(id: MenuID("ctx.restore"), title: "Restore")),
+        let many = session.targets(for: entry).count
+        let what = many > 1 ? " \(many) Items" : ""
+        return [
+            .item(MenuItemModel(id: MenuID("ctx.restore"), title: "Restore\(what)")),
             .item(MenuItemModel(id: MenuID("ctx.open"), title: "Open")),
             .separator,
-            .item(MenuItemModel(id: MenuID("ctx.delete"), title: "Delete Permanently")),
+            .item(MenuItemModel(
+                id: MenuID("ctx.delete"), title: "Delete\(what) Permanently"
+            )),
             .separator,
             .item(MenuItemModel(id: MenuID("ctx.copy-path"), title: "Copy Path")),
         ]
