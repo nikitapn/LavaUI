@@ -1595,8 +1595,19 @@ void RenderWindow::replayDrawList(const canvas::DrawList &list, float viewW,
       uint32_t pressTint = 0;
       if (const auto it = sceneState_.find(node.id); it != sceneState_.end()) {
         // Subtracted: scrolling down moves the content up.
-        ox -= it->second.scrollX;
-        oy -= it->second.scrollY;
+        //
+        // Rounded to whole pixels, because what is under this is drawn with a
+        // linear sampler. An eased scroll passes through a different fraction
+        // every frame, and a glyph placed at y + 0.5 spreads each row of its
+        // ink over two rows of the frame at half strength — a 1px stroke (the
+        // rules of a ▤ in a file list) pulsed from crisp to faint and back
+        // with every frame of a wheel scroll, which read as blinking. A drag
+        // of the thumb holds each position for a frame or more and hid it.
+        // The state keeps full precision; only where it is drawn is snapped,
+        // so the easing is still smooth at one pixel a step and hit testing is
+        // off by half a pixel at most.
+        ox -= std::round(it->second.scrollX);
+        oy -= std::round(it->second.scrollY);
         if (it->second.extentKnown) {
           contentW      = it->second.contentW;
           contentH      = it->second.contentH;
@@ -1704,8 +1715,9 @@ void RenderWindow::replayDrawList(const canvas::DrawList &list, float viewW,
         // supersedes, so setting only the state would draw this frame at the
         // old position and land the snap one frame late — which is exactly
         // the frame of lag the flag exists to remove.
-        ox += state.scrollX - state.targetX;
-        oy += state.scrollY - state.targetY;
+        // Rounded both sides, as `BeginNode` applied it.
+        ox += std::round(state.scrollX) - std::round(state.targetX);
+        oy += std::round(state.scrollY) - std::round(state.targetY);
         state.scrollX      = state.targetX;
         state.scrollY      = state.targetY;
         state.scrollReport = true;
