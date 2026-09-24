@@ -22,11 +22,15 @@ struct LavaExplorerApp {
         AppSettings.configure(appName: "LavaExplorer")
         let chooser = ChooserRequest.parse(Array(CommandLine.arguments.dropFirst()))
 
-        // A picker is a dialog: a little smaller, and named for what it asks.
+        // A picker is a dialog: a little smaller, named for what it asks, and
+        // opened as a dialog of the window that asked — so the compositor
+        // centres it there and neither gives it the explorer's remembered
+        // size nor lets it overwrite that size when it closes.
         guard let editor = LavaHost.open(
             title: chooser?.title ?? "LavaExplorer",
             width: chooser == nil ? Layout.initialWidth : 860,
-            height: chooser == nil ? Layout.initialHeight : 560
+            height: chooser == nil ? Layout.initialHeight : 560,
+            dialogParent: chooser.map { $0.parent ?? 0 }
         ) else { exit(1) }
 
         LavaHost.setMinimumSize(

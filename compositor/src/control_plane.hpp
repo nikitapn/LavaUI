@@ -215,9 +215,14 @@ struct CompositorHost {
   /// bar. A bool rather than the generated enum so this header stays
   /// independent of the stubs, the same way `createPanel` takes `edge` as an
   /// integer.
+  ///
+  /// `dialog` opens it as a transient window of `parentId` (0 for none): no
+  /// remembered frame is read or written for it, and it is centred over its
+  /// parent. See `CreateDialogSurface` in the IDL.
   virtual uint32_t createSurface(const std::string &arenaId, uint32_t width,
                                  uint32_t height, const std::string &title,
-                                 bool decorated, const std::string &appId) = 0;
+                                 bool decorated, const std::string &appId,
+                                 bool dialog = false, uint32_t parentId = 0) = 0;
   /// Opens a panel docked to `edge`, `thickness` deep. 0 if the arena does
   /// not exist. `reserve` asks that windows be laid out around it.
   virtual uint32_t createPanel(const std::string &arenaId, uint32_t edge,

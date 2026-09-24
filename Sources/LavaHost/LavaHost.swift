@@ -20,7 +20,8 @@ public enum LavaHost {
         title: String,
         assetsRoot: String? = nil,
         width: Float = 1280,
-        height: Float = 800
+        height: Float = 800,
+        dialogParent: UInt32? = nil
     ) -> Editor? {
         guard isClient else {
             return LavaApp.open(
@@ -32,9 +33,12 @@ public enum LavaHost {
         #if LAVA_HAS_CLIENT
         let serverFrame =
             ProcessInfo.processInfo.environment["LAVA_FRAME"] == "server"
+        // A dialog is the compositor's notion; a windowed app has no
+        // compositor of ours to tell, so `dialogParent` is client-only.
         return LavaClient.open(
             title: title, width: width, height: height,
-            frame: serverFrame ? .server : .client
+            frame: serverFrame ? .server : .client,
+            dialogParent: dialogParent
         )
         #else
         FileHandle.standardError.write(

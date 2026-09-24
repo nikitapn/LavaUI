@@ -2999,7 +2999,8 @@ class SurfaceRegistry : public lava::CompositorHost {
 
   uint32_t createSurface(const std::string &arenaId, uint32_t width,
                          uint32_t height, const std::string &title,
-                         bool decorated, const std::string &appId) override {
+                         bool decorated, const std::string &appId,
+                         bool dialog, uint32_t parentId) override {
     if (workspaces_ == nullptr) return 0;
     // On whichever workspace is current, because that is where the user was
     // when they asked for it.
@@ -3017,6 +3018,12 @@ class SurfaceRegistry : public lava::CompositorHost {
       }
       // A new overlay must not reuse posters from the last Alt+Tab.
       if (appId == kSwitcherAppId) invalidatePosters();
+      // Before placement, which is what reads it: a dialog neither takes its
+      // application's remembered frame nor, on closing, leaves its own.
+      if (dialog) {
+        opened->transient = true;
+        opened->parentId = find(parentId) != nullptr ? parentId : 0;
+      }
       applyInitialPlacement(*opened);
     }
     // A window that opens is the window the user is now looking at, and it

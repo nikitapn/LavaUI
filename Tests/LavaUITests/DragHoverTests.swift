@@ -56,10 +56,10 @@ final class FileDialogArgumentTests: XCTestCase {
                 filters: [FileDialog.Filter(name: "PNG", extensions: ["png"])],
                 defaultName: "shot.png"
             ),
-            output: "/tmp/o", start: "/home/me"
+            output: "/tmp/o", start: "/home/me", parent: 42
         )
         XCTAssertEqual(args, [
-            "--choose=save", "--title=Export", "--output=/tmp/o",
+            "--choose=save", "--title=Export", "--output=/tmp/o", "--parent=42",
             "--filter=PNG|png", "--filter=All files|", "--filename=shot.png", "/home/me",
         ])
     }

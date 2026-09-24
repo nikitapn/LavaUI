@@ -56,7 +56,10 @@ LAVA_CLIENT=1 swift run LavaExplorer -- ~/Pictures
   the last tab all mean "nothing chosen". The answer goes to the file named
   by `--output`, one path per line — never stdout, which the app fills with
   whatever it likes. It opens where the caller's last dialog chose from,
-  else home. Everything else — tabs, panes, New Folder, rename, the Trash —
+  else home. Under the compositor it is a *dialog* of the window that asked
+  (`--parent`, from `CreateDialogSurface`): centred over it, kept above it,
+  and at its own 860×560 — it neither takes the explorer's remembered size
+  nor leaves its own behind for the explorer. Everything else — tabs, panes, New Folder, rename, the Trash —
   works inside it.
 - Rows do not light up under the pointer. A list scrolled under a still
   pointer slides row after row beneath it, and a tint that follows reads as

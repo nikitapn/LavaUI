@@ -818,6 +818,18 @@ class CompositorImpl final : public ICompositor_Servant {
     return id;
   }
 
+  uint32_t CreateDialogSurface(nprpc::flat::Span<char> arenaId, uint32_t width,
+                               uint32_t height, nprpc::flat::Span<char> title,
+                               WindowFrame frame, nprpc::flat::Span<char> appId,
+                               uint32_t parentId) override {
+    const std::string arena{arenaId};
+    const uint32_t id = host_.createSurface(
+        arena, width, height, std::string{title}, frame == WindowFrame::server,
+        std::string{appId}, /*dialog=*/true, parentId);
+    if (id == 0) throw ArenaNotFound(arena);
+    return id;
+  }
+
   uint32_t CreatePanel(nprpc::flat::Span<char> arenaId, PanelEdge edge,
                        uint32_t thickness, nprpc::flat::Boolean reserve,
                        nprpc::flat::Span<char> title,

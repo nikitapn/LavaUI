@@ -8,8 +8,9 @@ import Testing
         let request = try #require(ChooserRequest.parse([
             "--choose=save", "--title=Export Image", "--output=/tmp/answer",
             "--filter=PNG image|png", "--filter=JPEG|jpg, .JPEG ,*.jpe",
-            "--filter=All files|", "--filename=shot.png", "/home/me",
+            "--filter=All files|", "--filename=shot.png", "--parent=42", "/home/me",
         ]))
+        #expect(request.parent == 42)
         #expect(request.mode == .save)
         #expect(request.title == "Export Image")
         #expect(request.output == "/tmp/answer")

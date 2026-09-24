@@ -2112,4 +2112,21 @@ interface Compositor {
   /// listening.
   bidi_stream<MenuChoiceAck, MenuChoice> SubscribeMenuChoice(surfaceId: in u32)
       raises(SurfaceNotFound);
+
+  /// `CreateSurface` for a dialog: a window that belongs to another.
+  ///
+  /// A dialog neither takes nor leaves its application's remembered frame —
+  /// a file picker opened at the file manager's size, and resizing it resized
+  /// the file manager next time — and it opens centred over `parentId` rather
+  /// than where the application last was. `parentId` is any surface, another
+  /// client's included: the picker is a process of its own, and the window it
+  /// answers to is the one that asked. 0, or a surface that has gone, is a
+  /// dialog with nothing to centre on.
+  ///
+  /// Added last rather than as a flag on `CreateSurface`, so that a client
+  /// built before it still speaks to a compositor built after it.
+  u32 CreateDialogSurface(arenaId: in string, width: in u32, height: in u32,
+                          title: in string, frame: in WindowFrame,
+                          appId: in string, parentId: in u32)
+      raises(ArenaNotFound);
 }

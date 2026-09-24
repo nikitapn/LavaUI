@@ -49,6 +49,11 @@ public enum FileDialog {
         run(Request(mode: .save, title: title, filters: filters, defaultName: defaultName)).first
     }
 
+    /// The calling window's compositor surface, set by `LavaClient`: the
+    /// picker opens as a dialog of it, centred over it and kept above it.
+    /// Nil in a windowed app, whose picker is a dialog of nothing.
+    nonisolated(unsafe) public static var parentSurface: (() -> UInt32?)?
+
     /// Where the next dialog opens: wherever the last one chose from, so a
     /// second Open… lands where the first left off. The process's working
     /// directory is `/` for anything a launcher started, which is nowhere.
@@ -82,13 +87,14 @@ public enum FileDialog {
     // MARK: LavaExplorer
 
     static func explorerArguments(
-        _ request: Request, output: String, start: String
+        _ request: Request, output: String, start: String, parent: UInt32? = nil
     ) -> [String] {
         var args = [
             "--choose=\(request.mode.rawValue)",
             "--title=\(request.title)",
             "--output=\(output)",
         ]
+        if let parent { args.append("--parent=\(parent)") }
         args += request.filters.map {
             "--filter=\($0.name)|" + $0.extensions.joined(separator: ",")
         }
@@ -107,7 +113,9 @@ public enum FileDialog {
         let start = lastDirectory ?? NSHomeDirectory()
         let process = Process()
         process.executableURL = URL(fileURLWithPath: binary)
-        process.arguments = explorerArguments(request, output: output, start: start)
+        process.arguments = explorerArguments(
+            request, output: output, start: start, parent: parentSurface?()
+        )
         // The explorer's own chatter is not the caller's business.
         process.standardOutput = FileHandle.nullDevice
         process.standardError = FileHandle.nullDevice

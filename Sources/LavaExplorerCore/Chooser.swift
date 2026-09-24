@@ -55,16 +55,20 @@ public struct ChooserRequest: Equatable, Sendable {
     public var suggestedName: String?
     /// Where the answer is written.
     public var output: String?
+    /// The compositor surface of the window that asked, when it has one: the
+    /// picker opens as its dialog, centred over it.
+    public var parent: UInt32?
 
     public init(
         mode: Mode, title: String? = nil, filters: [Filter] = [],
-        suggestedName: String? = nil, output: String? = nil
+        suggestedName: String? = nil, output: String? = nil, parent: UInt32? = nil
     ) {
         self.mode = mode
         self.title = title ?? (mode == .save ? "Save File" : "Open File")
         self.filters = filters
         self.suggestedName = suggestedName
         self.output = output
+        self.parent = parent
     }
 
     /// Nil when the command line asks for no chooser — the explorer as itself.
@@ -74,6 +78,7 @@ public struct ChooserRequest: Equatable, Sendable {
         var filters: [Filter] = []
         var name: String?
         var output: String?
+        var parent: UInt32?
         for argument in arguments {
             guard argument.hasPrefix("--"), let eq = argument.firstIndex(of: "=") else { continue }
             let key = String(argument[argument.index(argument.startIndex, offsetBy: 2)..<eq])
@@ -84,12 +89,14 @@ public struct ChooserRequest: Equatable, Sendable {
             case "filter": if let filter = Filter.parse(value) { filters.append(filter) }
             case "filename": name = value
             case "output": output = value
+            case "parent": parent = UInt32(value)
             default: break
             }
         }
         guard let mode else { return nil }
         return ChooserRequest(
-            mode: mode, title: title, filters: filters, suggestedName: name, output: output
+            mode: mode, title: title, filters: filters, suggestedName: name, output: output,
+            parent: parent
         )
     }
 

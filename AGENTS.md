@@ -342,6 +342,12 @@ Consequences that surprise people:
   dropdown). A client registers under its **surface id**, not an X11 id — so
   client-mode apps no longer fall back to an in-window menubar. See
   `docs/native-menus.md`.
+- A window can be a **dialog** of another surface, any client's:
+  `CreateDialogSurface` (`LavaClient.open(dialogParent:)`, `LavaHost.open`
+  the same). The compositor marks it transient, so it neither reads nor
+  writes its app's remembered frame, and centres it over the parent. The
+  file picker is the user: `FileDialog` passes the calling window's surface
+  as `--parent` to `LavaExplorer --choose`.
 - Window frame is the **client's** choice at `CreateSurface`:
   `LavaClient.open(frame: .client)` gets no compositor title bar, and the app
   places `WindowControls()` / `.windowDrag()` itself (`Sources/LavaUI/

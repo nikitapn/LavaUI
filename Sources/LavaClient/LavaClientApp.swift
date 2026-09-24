@@ -57,12 +57,17 @@ public enum LavaClient {
         width: Float = 1280,
         height: Float = 800,
         frame: WindowFrame = .server,
-        fillScreen: Bool = false
+        fillScreen: Bool = false,
+        dialogParent: UInt32? = nil
     ) -> Editor? {
         Self.title = title
         Self.requestedWidth = width
         Self.requestedHeight = height
         Self.frame = frame
+        Self.dialogParent = dialogParent
+        // A picker this app opens is a dialog of this window. Read when the
+        // picker is asked for, by which time the surface exists.
+        FileDialog.parentSurface = { Self.surfaceID == 0 ? nil : Self.surfaceID }
         FileHandle.standardError.write(
             Data("lava fonts: \(LavaResources.fontsDirectory)\n".utf8)
         )
@@ -1052,6 +1057,14 @@ public enum LavaClient {
                         appId: Self.appId
                     )
                 }
+                if let parent = Self.dialogParent {
+                    return try await compositor.createDialogSurface(
+                        arenaId: arenaID,
+                        width: UInt32(requestedWidth), height: UInt32(requestedHeight),
+                        title: title, frame: Self.frame, appId: Self.appId,
+                        parentId: parent
+                    )
+                }
                 return try await compositor.createSurface(
                     arenaId: arenaID,
                     width: UInt32(requestedWidth), height: UInt32(requestedHeight),
@@ -1500,6 +1513,10 @@ public enum LavaClient {
     /// closest thing a process has to an identity without being told one.
     nonisolated(unsafe) private static var appId =
         ProcessInfo.processInfo.processName
+    /// Non-nil opens the window as a dialog of that surface (0: of none) —
+    /// no remembered frame, centred over its parent. See
+    /// `CreateDialogSurface`.
+    nonisolated(unsafe) private static var dialogParent: UInt32?
     /// Set by `openPanel`; nil for an ordinary window.
     nonisolated(unsafe) private static var panel:
         (edge: PanelEdge, thickness: Float, reserve: Bool)?
