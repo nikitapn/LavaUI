@@ -1411,6 +1411,10 @@ struct Server {
   /// hand the same event to a Wayland client: the two focus models are
   /// separate and an event belongs to exactly one of them.
   bool route_pointer(uint32_t kind, int32_t button, int32_t mods);
+  /// The client surface the pointer was over hears it left, unless it is
+  /// `nowOver`. See `route_pointer`, and the resize band, which takes the
+  /// pointer from a surface without going through it.
+  void leaveClientSurface(uint32_t nowOver);
 
   /// Print Screen: copy the output under the cursor onto the seat selection
   /// as a PNG. Tries an offscreen render first so the buffer is not the
@@ -2662,21 +2666,35 @@ class SurfaceRegistry : public lava::CompositorHost {
   /// window with no title bar has no spare pixels to give up, and an app whose
   /// own scrollbar sits four pixels from the edge should not find the last
   /// four of them belonging to the compositor. Nothing is drawn there — the
-  /// band is over whatever is behind the window, which is why this is only
-  /// asked when the ordinary hit test found nothing at all. That refusal is
-  /// deliberate: an invisible band that took precedence over a *visible*
-  /// window underneath would resize a window the user was not pointing at.
+  /// band is over whatever is behind the window.
+  ///
+  /// **Stacking decides, not whether anything is there.** The band is at its
+  /// window's depth: it wins over windows *behind* that window and loses to
+  /// anything in front of it. The first version answered only where the hit
+  /// test found nothing at all, which made the band exist over bare desktop
+  /// and nowhere else — a window sitting on top of another could not be
+  /// resized by its corner, because the corner's band was over the window
+  /// underneath. That refusal was guarding against the right thing (a band
+  /// taking a click from a window the user was pointing at) with the wrong
+  /// test: a window in front is walked first and stops the search, so its
+  /// pixels still belong to it.
   ClientSurface *borderAt(double lx, double ly, uint32_t &outEdges) {
     outEdges = 0;
-    if (hitTest(lx, ly).kind != SurfaceHitKind::None) return nullptr;
+    const SurfaceHit top = hitTest(lx, ly);
+    // The panels and menus are above every window, so nothing under them has
+    // a band there. Their own edges are not the user's to drag.
+    if (top.surface != nullptr && layerOf(*top.surface) != HitLayer::Window) {
+      return nullptr;
+    }
+    // Front to back, the order `hitTestPass` walks — the list is the stack.
     for (const auto &s : surfaces_) {
-      // A panel is on an edge of the screen by definition and is not the
-      // user's to resize; a maximized window has already been given the work
-      // area and would fight the next thing that re-applied it.
-      if (!visible(*s) || s->panel || s->menu || s->maximized ||
-          s->fullscreen) {
-        continue;
-      }
+      if (!visible(*s) || layerOf(*s) != HitLayer::Window) continue;
+      // The window the point is on. It is in front of every band after it,
+      // and its own interior is its own.
+      if (s.get() == top.surface) return nullptr;
+      // A maximized window has already been given the work area and would
+      // fight the next thing that re-applied it; fullscreen has no edges.
+      if (s->maximized || s->fullscreen) continue;
       const double x0 = s->x, y0 = s->y;
       const double x1 = x0 + s->width, y1 = y0 + s->frameHeight();
       if (lx < x0 - kGrab || lx > x1 + kGrab) continue;
@@ -2687,10 +2705,9 @@ class SurfaceRegistry : public lava::CompositorHost {
       if (lx >= x1) hit |= edges::kRight;
       if (ly <= y0) hit |= edges::kTop;
       if (ly >= y1) hit |= edges::kBottom;
-      // Inside on both axes means the point is in the window, which the hit
-      // test above has already ruled out — but a window whose content is
-      // covered by nothing still owns its own interior, so refuse rather than
-      // return an empty edge set.
+      // Inside on both axes, yet not what the hit test found: the window's
+      // input region leaves this point out. That is a hole the window cut on
+      // purpose, not an edge.
       if (hit == 0) continue;
       outEdges = hit;
       return s.get();
@@ -11167,6 +11184,29 @@ void Server::update_pointer_focus(uint32_t time_msec) {
     }
   }
 
+  // Just outside a window's edge: the resize band. Only the cursor changes —
+  // the grab itself waits for a press — and it is the one piece of feedback
+  // that makes an invisible affordance discoverable at all.
+  //
+  // Before the title bars and the client surfaces, because the band is over
+  // *other* windows: a window's corner resting on another window's content
+  // or title bar is where it is most often grabbed. Asked after them, those
+  // answered first and the band only ever existed over bare desktop.
+  // `borderAt` still refuses wherever a window in front owns the point. Not
+  // during a drag-and-drop, which is carrying something to what is under it.
+  if (surfaces != nullptr && seat->drag == nullptr) {
+    uint32_t hitEdges = 0;
+    if (surfaces->borderAt(cursor->x, cursor->y, hitEdges) != nullptr) {
+      // Whatever is under the band hears the pointer went: a title bar's
+      // lit button, and a Lava client's hover, would otherwise stay on.
+      surfaces->hoverFrames(-1e9, -1e9);
+      leaveClientSurface(0);
+      wlr_cursor_set_xcursor(cursor, cursor_mgr, resize_cursor(hitEdges));
+      wlr_seat_pointer_clear_focus(seat);
+      return;
+    }
+  }
+
   // The frame before the content. A title bar belongs to the compositor, so
   // its hover is answered here and never reaches the client.
   if (surfaces != nullptr && surfaces->hoverFrames(cursor->x, cursor->y)) {
@@ -11190,18 +11230,6 @@ void Server::update_pointer_focus(uint32_t time_msec) {
     wlr_cursor_set_xcursor(cursor, cursor_mgr, client_cursor(shape));
     wlr_seat_pointer_clear_focus(seat);
     return;
-  }
-
-  // Just outside a window's edge: the resize band. Only the cursor changes —
-  // the grab itself waits for a press — and it is the one piece of feedback
-  // that makes an invisible affordance discoverable at all.
-  if (surfaces != nullptr) {
-    uint32_t hitEdges = 0;
-    if (surfaces->borderAt(cursor->x, cursor->y, hitEdges) != nullptr) {
-      wlr_cursor_set_xcursor(cursor, cursor_mgr, resize_cursor(hitEdges));
-      wlr_seat_pointer_clear_focus(seat);
-      return;
-    }
   }
 
   double sx = 0, sy = 0;
@@ -11787,16 +11815,8 @@ bool SurfaceRegistry::minimize(uint32_t id) {
   return true;
 }
 
-bool Server::route_pointer(uint32_t kind, int32_t button, int32_t mods) {
-  if (surfaces == nullptr || control == nullptr) return false;
-  double sx = 0, sy = 0;
-  ClientSurface *surface = surfaces->at(cursor->x, cursor->y, sx, sy);
-
-  // The surface the pointer *was* over hears that it left. Without it a client
-  // sees only the last position inside itself and has to assume the pointer is
-  // still there: hovers stay lit after the cursor has gone, and a dock that
-  // reveals itself on approach never learns to hide.
-  const uint32_t nowOver = surface != nullptr ? surface->id : 0;
+void Server::leaveClientSurface(uint32_t nowOver) {
+  if (surfaces == nullptr || control == nullptr) return;
   if (pointerOver != 0 && pointerOver != nowOver) {
     if (ClientSurface *left = surfaces->find(pointerOver)) {
       if (left->canvas) {
@@ -11821,6 +11841,18 @@ bool Server::route_pointer(uint32_t kind, int32_t button, int32_t mods) {
       dragOverSurface != nowOver) {
     endDragOver();
   }
+}
+
+bool Server::route_pointer(uint32_t kind, int32_t button, int32_t mods) {
+  if (surfaces == nullptr || control == nullptr) return false;
+  double sx = 0, sy = 0;
+  ClientSurface *surface = surfaces->at(cursor->x, cursor->y, sx, sy);
+
+  // The surface the pointer *was* over hears that it left. Without it a client
+  // sees only the last position inside itself and has to assume the pointer is
+  // still there: hovers stay lit after the cursor has gone, and a dock that
+  // reveals itself on approach never learns to hide.
+  leaveClientSurface(surface != nullptr ? surface->id : 0);
 
   if (surface == nullptr) return false;
   // Through the renderer, not around it — the hover under this pointer is its
@@ -12063,8 +12095,31 @@ void Server::on_cursor_button(wl_listener *listener, void *data) {
     }
   }
 
-  // The title bar, before anything else. Its buttons are the compositor's and
-  // a press there never reaches a client — which is also what lets a window
+  // A window's outer edge, which is a resize grip whether or not the window
+  // has a frame — and the only one a client-framed window has. The band sits
+  // at its window's depth: over the windows behind it, never over one in
+  // front. See `borderAt`. Before the title bar for the reason the motion
+  // path gives: the bar under a band belongs to the window behind.
+  if (pressed && server->surfaces != nullptr) {
+    uint32_t hitEdges = 0;
+    if (ClientSurface *edge = server->surfaces->borderAt(
+            server->cursor->x, server->cursor->y, hitEdges)) {
+      server->focusSurface(*edge);
+      server->drag = Server::Drag::Resize;
+      server->dragEdges = hitEdges;
+      server->dragSurface = edge->id;
+      server->dragStartX = server->cursor->x;
+      server->dragStartY = server->cursor->y;
+      server->dragOriginX = edge->x;
+      server->dragOriginY = edge->y;
+      server->dragOriginW = edge->width;
+      server->dragOriginH = edge->height;
+      return;
+    }
+  }
+
+  // The title bar, before anything but a band. Its buttons are the
+  // compositor's and a press there never reaches a client — which is also what lets a window
   // whose client has stopped answering still be closed.
   if (pressed && server->surfaces != nullptr) {
     double bx = 0, by = 0;
@@ -12124,28 +12179,6 @@ void Server::on_cursor_button(wl_listener *listener, void *data) {
           return;
         }
       }
-    }
-  }
-
-  // A window's outer edge, which is a resize grip whether or not the window
-  // has a frame — and the only one a client-framed window has. Answered only
-  // where the ordinary hit test found nothing, so the band never takes a click
-  // from a window the user can actually see. See `borderAt`.
-  if (pressed && server->surfaces != nullptr) {
-    uint32_t hitEdges = 0;
-    if (ClientSurface *edge = server->surfaces->borderAt(
-            server->cursor->x, server->cursor->y, hitEdges)) {
-      server->focusSurface(*edge);
-      server->drag = Server::Drag::Resize;
-      server->dragEdges = hitEdges;
-      server->dragSurface = edge->id;
-      server->dragStartX = server->cursor->x;
-      server->dragStartY = server->cursor->y;
-      server->dragOriginX = edge->x;
-      server->dragOriginY = edge->y;
-      server->dragOriginW = edge->width;
-      server->dragOriginH = edge->height;
-      return;
     }
   }
 
