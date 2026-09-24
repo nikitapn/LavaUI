@@ -8754,7 +8754,15 @@ void Toplevel::on_request_maximize(wl_listener *listener, void *) {
       // The same maximize the title bar button does, so a window maximized
       // from its own menu and one maximized from its frame end up in the same
       // state — including remembering where to restore to.
-      toplevel->server->surfaces->setMaximized(*frame, !frame->maximized);
+      //
+      // What the client asked for, never a toggle. `set_maximized` and
+      // `unset_maximized` are two requests that name a state, and a client
+      // is free to send the one it is already in: a browser leaving
+      // fullscreen re-asserts "maximized" to put its window back, and a
+      // toggle turned that into un-maximizing a window that was maximized
+      // when fullscreen began.
+      toplevel->server->surfaces->setMaximized(
+          *frame, toplevel->xdg_toplevel->requested.maximized);
       wlr_xdg_toplevel_set_maximized(toplevel->xdg_toplevel, frame->maximized);
     }
   }
