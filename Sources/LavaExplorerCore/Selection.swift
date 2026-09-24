@@ -75,6 +75,16 @@ public struct FileSelection: Equatable, Sendable {
         if lead == nil, paths.count == 1 { lead = paths.first }
     }
 
+    /// Every path put through `transform` — for a folder that was renamed or
+    /// moved under the rows that are selected.
+    public func mapped(_ transform: (String) -> String) -> FileSelection {
+        var out = self
+        out.paths = Set(paths.map(transform))
+        out.lead = lead.map(transform)
+        out.anchor = anchor.map(transform)
+        return out
+    }
+
     /// The selected paths in the order the list shows them.
     public func ordered(_ order: [String]) -> [String] {
         order.filter { paths.contains($0) }

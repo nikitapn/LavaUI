@@ -871,6 +871,8 @@ final class ExplorerSession: @unchecked Sendable {
                 return
             }
             let folder = (path as NSString).deletingLastPathComponent
+            // A tab open inside a renamed folder follows it.
+            layout.rebaseTabs(from: draft.path, to: path, source: source)
             reloadAfterChange(in: [folder])
             undoHistory.record(.renamed(from: draft.path, to: path))
             // It moves to wherever its new name sorts, and stays selected.
@@ -923,6 +925,11 @@ final class ExplorerSession: @unchecked Sendable {
             return
         }
         reloadAfterChange(in: reversal.folders)
+        // The inverse describes what was just done, so its relocations are
+        // where things went now.
+        for move in reversal.inverse?.relocations ?? [] {
+            layout.rebaseTabs(from: move.from, to: move.to, source: source)
+        }
         let done = reversal.inverse?.count ?? 0
         var text = (redo ? "Redo: " : "Undo: ") + Self.describeReversal(of: change, count: done)
         if let failure = reversal.failures.first {
@@ -941,6 +948,8 @@ final class ExplorerSession: @unchecked Sendable {
         case .copied: count == 1 ? "moved the copy to the Trash" : "moved \(count) copies to the Trash"
         case .created: count == 1 ? "moved the new folder to the Trash" : "moved \(count) new folders to the Trash"
         case .renamed(let from, _): "renamed back to \u{201C}\((from as NSString).lastPathComponent)\u{201D}"
+        case .moved: "moved \(items(count)) back"
+        case .combined: "reversed \(items(count))"
         }
     }
 
@@ -1161,9 +1170,10 @@ final class ExplorerSession: @unchecked Sendable {
         }
     }
 
-    // Every drop that lands somewhere in a pane is a copy into a folder; these
-    // only say which folder. A copy and never a move, like the drag out of a
-    // row — except onto the Trash, which moves it there.
+    // Every drop that lands somewhere in a pane goes into a folder; these only
+    // say which folder. Moved when it is on the same filesystem as that
+    // folder and copied when it is not, which is Explorer's rule — and onto
+    // the Trash, thrown away.
 
     /// Into that tab's folder — whichever pane the tab is in.
     func dropOnTab(id: Int, _ urls: [URL]) {
@@ -1204,7 +1214,9 @@ final class ExplorerSession: @unchecked Sendable {
             ViewInvalidation.markDirty()
             return
         }
-        let plan = CopyPlan.make(sources: urls.map(\.path), into: directory, source: source)
+        let plan = CopyPlan.make(
+            sources: urls.map(\.path), into: directory, source: source, moveWithinDevice: true
+        )
         guard !plan.items.isEmpty else {
             // A row picked up and let go of in the folder it came from is a
             // drag that changed its mind, not something to report.
@@ -1240,38 +1252,61 @@ final class ExplorerSession: @unchecked Sendable {
 
     private func startCopy(_ plan: CopyPlan, choice: ClashChoice, folderTitle: String) {
         copying = true
-        notice = "Copying \(Self.items(plan.items.count)) to \(folderTitle)…"
+        let verb = plan.moveCount == plan.items.count ? "Moving" : "Copying"
+        notice = "\(verb) \(Self.items(plan.items.count)) to \(folderTitle)…"
         ViewInvalidation.markDirty()
         // Off the frame loop: a folder of photos takes as long as the disk
         // takes, and the window has to keep answering while it does.
         Thread.detachNewThread { [weak self] in
             let outcome = FileCopier.run(plan, clashes: choice)
             MainQueue.async { [weak self] in
-                self?.finishCopy(outcome, directory: plan.directory, folderTitle: folderTitle)
+                self?.finishCopy(outcome, plan: plan, folderTitle: folderTitle)
             }
         }
     }
 
-    private func finishCopy(_ outcome: CopyOutcome, directory: String, folderTitle: String) {
+    private func finishCopy(_ outcome: CopyOutcome, plan: CopyPlan, folderTitle: String) {
         copying = false
-        undoHistory.record(.copied(outcome.created))
-        let source = self.source
-        // Every tab on that folder in every pane, not just the one dropped
-        // on: the same folder open twice should not disagree about what is in
-        // it.
-        layout.updateTabs(showing: directory) { $0.reload(from: source) }
+        // One drop is one step to undo, however it split between moving and
+        // copying.
+        var changes: [FileChange] = []
+        if !outcome.moves.isEmpty { changes.append(.moved(outcome.moves)) }
+        if !outcome.created.isEmpty { changes.append(.copied(outcome.created)) }
+        if changes.count == 1 {
+            undoHistory.record(changes[0])
+        } else if !changes.isEmpty {
+            undoHistory.record(.combined(changes))
+        }
+        // A moved folder with a tab open inside it takes the tab along.
+        for move in outcome.moves {
+            layout.rebaseTabs(from: move.from, to: move.to, source: source)
+        }
+        // Every tab on the folder dropped on — and, for a move, the folders
+        // things left — in every pane: the same folder open twice should not
+        // disagree about what is in it.
+        let left = plan.items.filter(\.moves).map {
+            ($0.source as NSString).deletingLastPathComponent
+        }
+        reloadAfterChange(in: [plan.directory] + left)
+        notice = Self.dropNotice(outcome, folder: folderTitle)
+        ViewInvalidation.markDirty()
+    }
+
+    private static func dropNotice(_ outcome: CopyOutcome, folder: String) -> String {
+        var done: [String] = []
+        if outcome.moved > 0 { done.append("moved \(items(outcome.moved))") }
+        if outcome.copied > 0 { done.append("copied \(items(outcome.copied))") }
+        var text = done.isEmpty
+            ? "Nothing was dropped into \(folder)"
+            : done.joined(separator: " and ") + " to \(folder)"
+        text = text.prefix(1).uppercased() + text.dropFirst()
         if let failure = outcome.failures.first {
             let name = (failure.path as NSString).lastPathComponent
             let more = outcome.failures.count > 1
                 ? " (and \(outcome.failures.count - 1) more)" : ""
-            notice = "Copied \(Self.items(outcome.copied)) to \(folderTitle); "
-                + "\(name): \(failure.message)\(more)"
-        } else if outcome.copied == 0 {
-            notice = "Nothing copied to \(folderTitle)"
-        } else {
-            notice = "Copied \(Self.items(outcome.copied)) to \(folderTitle)"
+            text += "; \(name): \(failure.message)\(more)"
         }
-        ViewInvalidation.markDirty()
+        return text
     }
 
     private static func refusalNotice(_ plan: CopyPlan, folder: String) -> String {
@@ -1279,7 +1314,7 @@ final class ExplorerSession: @unchecked Sendable {
         case .alreadyThere?:
             return "Already in \(folder)"
         case .intoItself(let path)?:
-            return "Cannot copy \((path as NSString).lastPathComponent) into itself"
+            return "Cannot put \((path as NSString).lastPathComponent) inside itself"
         case .missing(let path)?:
             return "\((path as NSString).lastPathComponent) is not there any more"
         case nil:

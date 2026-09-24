@@ -65,7 +65,7 @@ LAVA_CLIENT=1 swift run LavaExplorer -- ~/Pictures
   the rest until the button comes up, so the group can be dragged, and a
   right-click on a row outside the selection is about that row alone.
 - Drop files — from another app, or rows dragged out of this window,
-  another pane included — to copy them: onto a folder row, into that folder;
+  another pane included — to put them in a folder: onto a folder row, into that folder;
   onto a pane's list, into the folder the pane shows; onto a tab or a place
   in the sidebar, into its folder. What the drag is aimed at lights up. A
   drag that rests on a tab for a moment opens it, so a folder inside is
@@ -75,6 +75,16 @@ LAVA_CLIENT=1 swift run LavaExplorer -- ~/Pictures
   ("report (2).pdf"), Skip, or Cancel. A file is replaced only once its copy
   is complete. The copy runs off the frame loop, and every tab showing that
   folder reloads when it finishes. No progress bar yet.
+- Moved or copied is Explorer's rule: a drop on the same filesystem moves
+  (a rename — instant, whatever the size), one onto another drive copies,
+  and a drop of both kinds does each. Replace on a move renames a file over
+  the old one in one step and merges a folder in, removing the emptied
+  source. A rename that fails across a mount the check did not see falls
+  back to a copy and leaves the original. Ctrl+Z moves things back, and a
+  mixed drop is one undo.
+- A tab open inside a folder that is renamed or moved — by this window, or
+  by its undo — follows it: its path, its Back and Forward, and its
+  selection.
 - Copy Path puts a filesystem path on the clipboard. It does not copy the file.
 - Right-click: Open, Open With, Set Default App, Move to Trash, Delete
   Permanently, Rename, and stubs for copy, cut and paste.
@@ -136,8 +146,11 @@ file.
 
 ## What it does not
 
-- **Move, cut and paste — and copy from the menu.** On the context menu as
-  labelled stubs. Writes are a drop (a copy), New Folder, Rename, the Trash
+- **Cut and paste, copy from the menu, and Ctrl/Shift on a drop.** Cut,
+  copy and paste are on the context menu as labelled stubs. A drop cannot
+  yet be forced to copy (Ctrl) or to move (Shift): nothing in LavaUI tracks
+  which modifiers are held while a drag is over the window. Writes are a
+  drop (a move or a copy), New Folder, Rename, the Trash
   (a rename), and a removal that has been asked about. `FileSource` still has
   no `delete`: throwing away goes through `TrashCan`, and removing for good
   through `FileEraser`, which only the confirmed paths reach.

@@ -12,6 +12,10 @@ public struct FolderVisit: Equatable, Sendable {
         self.selection = selection
         self.scrollOffset = scrollOffset
     }
+
+    func rebased(_ move: (String) -> String) -> FolderVisit {
+        FolderVisit(path: move(path), selection: selection.mapped(move), scrollOffset: scrollOffset)
+    }
 }
 
 /// Where we are, and the two stacks that make Back and Forward mean something.
@@ -76,6 +80,26 @@ public struct FolderHistory: Equatable, Sendable {
         guard canGoUp else { return }
         let parent = (path as NSString).deletingLastPathComponent
         _ = visit(parent.isEmpty ? "/" : parent, leaving: leaving)
+    }
+
+    /// A folder was renamed or moved from `old` to `new`: wherever this
+    /// history is, was, or would go forward to inside it follows it there.
+    /// Without this a tab open inside a renamed folder went on asking for the
+    /// old path and said "Not found".
+    public mutating func rebase(from old: String, to new: String) {
+        let move = { (path: String) in Self.rebased(path, from: old, to: new) }
+        path = move(path)
+        backward = backward.map { $0.rebased(move) }
+        forward = forward.map { $0.rebased(move) }
+    }
+
+    /// `path` with the prefix `old` swapped for `new`, when it is `old` or
+    /// somewhere below it; otherwise `path` unchanged.
+    public static func rebased(_ path: String, from old: String, to new: String) -> String {
+        if path == old { return new }
+        let prefix = old == "/" ? "/" : old + "/"
+        guard path.hasPrefix(prefix) else { return path }
+        return new + "/" + path.dropFirst(prefix.count)
     }
 
     private func here(_ state: FolderVisit?) -> FolderVisit {

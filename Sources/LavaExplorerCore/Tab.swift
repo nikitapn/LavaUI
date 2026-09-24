@@ -67,6 +67,20 @@ public struct ExplorerTab: Equatable, Identifiable, Sendable {
         selection.keep(only: Set(listing.entries.map(\.path)))
     }
 
+    /// A folder was renamed or moved: this tab follows it if it is in it, or
+    /// was, or has rows selected that were. Reloads only when the folder it
+    /// shows is one of those. Returns whether anything changed.
+    @discardableResult
+    public mutating func rebase(from old: String, to new: String, source: any FileSource) -> Bool {
+        let before = history
+        let selectionBefore = selection
+        history.rebase(from: old, to: new)
+        selection = selection.mapped { FolderHistory.rebased($0, from: old, to: new) }
+        let moved = history.path != before.path
+        if moved { reload(from: source) }
+        return moved || history != before || selection != selectionBefore
+    }
+
     // MARK: Moving
 
     /// Where the list should be scrolled after a move.

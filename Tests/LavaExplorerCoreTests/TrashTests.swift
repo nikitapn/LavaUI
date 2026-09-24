@@ -446,3 +446,147 @@ private final class Desk {
         #expect(desk.read(new) == "first")
     }
 }
+
+@Suite struct FollowTests {
+    @Test func aTabInsideARenamedFolderFollowsIt() throws {
+        let desk = try Desk()
+        try desk.file(desk.home + "/Work/2026/q3/report.txt")
+        let source = LocalFileSource()
+        var tab = ExplorerTab.open(id: 1, path: desk.home + "/Work", source: source)
+        tab.open(desk.home + "/Work/2026", scroll: 0, source: source)
+        tab.open(desk.home + "/Work/2026/q3", scroll: 0, source: source)
+        tab.selected = desk.home + "/Work/2026/q3/report.txt"
+
+        let renamed = try Rename.rename(desk.home + "/Work/2026", to: "Year 2026")
+        let followed = tab.rebase(from: desk.home + "/Work/2026", to: renamed, source: source)
+        #expect(followed)
+
+        #expect(tab.listing.path == renamed + "/q3")
+        #expect(tab.listing.error == nil)
+        #expect(tab.selected == renamed + "/q3/report.txt")
+        // Back walks the renamed path too, and lands on the renamed folder.
+        tab.back(scroll: 0, source: source)
+        #expect(tab.listing.path == renamed)
+        tab.back(scroll: 0, source: source)
+        #expect(tab.listing.path == desk.home + "/Work")
+    }
+
+    @Test func aTabElsewhereIsLeftAlone() throws {
+        let desk = try Desk()
+        try desk.file(desk.home + "/A/x.txt")
+        try desk.file(desk.home + "/AB/y.txt")
+        let source = LocalFileSource()
+        var tab = ExplorerTab.open(id: 1, path: desk.home + "/AB", source: source)
+        // "/A" is a prefix of "/AB" as a string, not as a path.
+        let followed = tab.rebase(from: desk.home + "/A", to: desk.home + "/C", source: source)
+        #expect(!followed)
+        #expect(tab.listing.path == desk.home + "/AB")
+    }
+}
+
+@Suite struct MoveTests {
+    /// Everything under `drive` is another filesystem.
+    private func devices(_ desk: Desk) -> (String) -> UInt64? {
+        let drive = desk.drive
+        return { $0 == drive || $0.hasPrefix(drive + "/") ? 2 : 1 }
+    }
+
+    @Test func aDropOnTheSameDiskMovesAndAcrossDisksCopies() throws {
+        let desk = try Desk()
+        let near = try desk.file(desk.home + "/in/near.txt", "n")
+        let far = try desk.file(desk.drive + "/far.txt", "f")
+        try FileManager.default.createDirectory(atPath: desk.home + "/out", withIntermediateDirectories: true)
+        let plan = CopyPlan.make(
+            sources: [near, far], into: desk.home + "/out", source: LocalFileSource(),
+            moveWithinDevice: true, deviceOf: devices(desk)
+        )
+        #expect(plan.items.map(\.moves) == [true, false])
+
+        let outcome = FileCopier.run(plan, clashes: .skip)
+        #expect(outcome.moved == 1 && outcome.copied == 1)
+        #expect(!desk.exists(near), "moved: gone from where it was")
+        #expect(desk.exists(far), "copied: still where it was")
+        #expect(desk.read(desk.home + "/out/near.txt") == "n")
+        #expect(desk.read(desk.home + "/out/far.txt") == "f")
+        #expect(outcome.moves == [FileMove(from: near, to: desk.home + "/out/near.txt")])
+    }
+
+    @Test func aMovedClashKeepsBothOrReplacesOrMerges() throws {
+        let desk = try Desk()
+        let out = desk.home + "/out"
+        try desk.file(out + "/a.txt", "old a")
+        try desk.file(out + "/Pics/old.jpg", "o")
+        try desk.file(out + "/Pics/same.jpg", "old same")
+        let a = try desk.file(desk.home + "/in/a.txt", "new a")
+        try desk.file(desk.home + "/in/Pics/new.jpg", "n")
+        try desk.file(desk.home + "/in/Pics/same.jpg", "new same")
+        let pics = desk.home + "/in/Pics"
+
+        let keep = FileCopier.run(
+            CopyPlan.make(sources: [a], into: out, source: LocalFileSource(), moveWithinDevice: true,
+                          deviceOf: devices(desk)),
+            clashes: .keepBoth
+        )
+        #expect(keep.moves.map(\.to) == [out + "/a (2).txt"])
+        #expect(desk.read(out + "/a.txt") == "old a")
+
+        let merged = FileCopier.run(
+            CopyPlan.make(sources: [pics], into: out, source: LocalFileSource(), moveWithinDevice: true,
+                          deviceOf: devices(desk)),
+            clashes: .replace
+        )
+        #expect(merged.moved == 1 && merged.failures.isEmpty)
+        #expect(merged.moves.isEmpty, "a merge cannot be undone as a move back")
+        #expect(desk.read(out + "/Pics/old.jpg") == "o", "a merge keeps what was there")
+        #expect(desk.read(out + "/Pics/new.jpg") == "n")
+        #expect(desk.read(out + "/Pics/same.jpg") == "new same")
+        #expect(!desk.exists(pics), "the emptied source is gone")
+    }
+
+    @Test func undoMovesBackAndWillNotOverwrite() throws {
+        let desk = try Desk()
+        let can = desk.can()
+        let src = try desk.file(desk.home + "/in/doc.txt", "d")
+        let plan = CopyPlan.make(
+            sources: [src], into: desk.home, source: LocalFileSource(), moveWithinDevice: true,
+            deviceOf: devices(desk)
+        )
+        let outcome = FileCopier.run(plan, clashes: .skip)
+        var history = FileUndoHistory()
+        history.record(.moved(outcome.moves))
+
+        let undone = history.undo(using: can)
+        #expect(undone?.1.failures.isEmpty == true)
+        #expect(desk.read(src) == "d")
+        #expect(!desk.exists(desk.home + "/doc.txt"))
+        #expect(undone?.1.inverse?.relocations == [FileMove(from: desk.home + "/doc.txt", to: src)])
+
+        let redone = history.redo(using: can)
+        #expect(redone?.1.failures.isEmpty == true)
+        #expect(desk.exists(desk.home + "/doc.txt"))
+        try desk.file(src, "someone else's")
+        let blocked = history.undo(using: can)
+        #expect(blocked?.1.failures.count == 1)
+        #expect(desk.read(src) == "someone else's")
+    }
+
+    @Test func aDropThatMovedAndCopiedIsOneUndo() throws {
+        let desk = try Desk()
+        let can = desk.can()
+        let near = try desk.file(desk.home + "/in/near.txt")
+        let far = try desk.file(desk.drive + "/far.txt")
+        let out = desk.home + "/out"
+        try FileManager.default.createDirectory(atPath: out, withIntermediateDirectories: true)
+        let outcome = FileCopier.run(
+            CopyPlan.make(sources: [near, far], into: out, source: LocalFileSource(),
+                          moveWithinDevice: true, deviceOf: devices(desk)),
+            clashes: .skip
+        )
+        var history = FileUndoHistory()
+        history.record(.combined([.moved(outcome.moves), .copied(outcome.created)]))
+        _ = history.undo(using: can)
+        #expect(desk.exists(near), "the move went back")
+        #expect(!desk.exists(out + "/far.txt"), "the copy went to the Trash")
+        #expect(!history.canUndo)
+    }
+}

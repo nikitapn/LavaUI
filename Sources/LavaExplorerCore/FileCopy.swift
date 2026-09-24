@@ -1,5 +1,9 @@
 import Foundation
 
+#if canImport(Glibc)
+import Glibc
+#endif
+
 /// Files dropped on a folder, sorted into what happens to each — before
 /// anything is touched.
 ///
@@ -16,6 +20,10 @@ public struct CopyPlan: Equatable, Sendable {
         /// Something by this name is already in the destination — or an
         /// earlier item in the same drop will have put it there.
         public var clashes: Bool
+        /// Moved rather than copied: it is on the same filesystem as the
+        /// folder it was dropped on, which is when Explorer moves too. A move
+        /// there is a rename — instant, and nothing is left behind twice.
+        public var moves: Bool = false
     }
 
     public enum Refusal: Equatable, Sendable {
@@ -33,11 +41,18 @@ public struct CopyPlan: Equatable, Sendable {
     public var refused: [Refusal]
 
     public var clashes: [Item] { items.filter(\.clashes) }
+    public var moveCount: Int { items.filter(\.moves).count }
 
+    /// With `moveWithinDevice`, an item on the target's filesystem is moved
+    /// and anything else copied — Explorer's rule for a drop. `deviceOf` is
+    /// injectable for the same reason it is in `TrashCan`.
     public static func make(
-        sources: [String], into directory: String, source files: any FileSource
+        sources: [String], into directory: String, source files: any FileSource,
+        moveWithinDevice: Bool = false,
+        deviceOf: (String) -> UInt64? = TrashCan.device(of:)
     ) -> CopyPlan {
         let target = CopyPaths.normalize(directory)
+        let targetDevice = moveWithinDevice ? deviceOf(target) : nil
         var plan = CopyPlan(directory: target, items: [], refused: [])
         var seen = Set<String>()
         var names = Set<String>()
@@ -59,8 +74,12 @@ public struct CopyPlan: Equatable, Sendable {
             let name = (path as NSString).lastPathComponent
             let taken = files.exists(CopyPaths.join(target, name)) || names.contains(name)
             names.insert(name)
+            let moves = targetDevice != nil && deviceOf(path) == targetDevice
             plan.items.append(
-                Item(source: path, name: name, isDirectory: entry.isDirectory, clashes: taken)
+                Item(
+                    source: path, name: name, isDirectory: entry.isDirectory,
+                    clashes: taken, moves: moves
+                )
             )
         }
         return plan
@@ -89,6 +108,11 @@ public struct CopyOutcome: Equatable, Sendable {
     /// again. A replaced file or a merged folder is not in it: the old one is
     /// gone, and taking the new one away would not bring it back.
     public var created: [String] = []
+    /// How many items were moved; `copied` counts copies only.
+    public var moved = 0
+    /// Moves Undo can take back: each to a name that was free. A move that
+    /// replaced something is counted but not here, like a replacing copy.
+    public var moves: [FileMove] = []
 
     public init() {}
 }
@@ -136,6 +160,11 @@ public enum FileCopier {
         var outcome = CopyOutcome()
         for item in plan.items {
             let destination = CopyPaths.join(plan.directory, item.name)
+            if item.moves, move(item, to: destination, clashes: choice, plan: plan,
+                                outcome: &outcome, fileManager: fileManager)
+            {
+                continue
+            }
             do {
                 // Asked again rather than read off the plan: the disk may
                 // have changed since, and an earlier item in this drop can
@@ -171,6 +200,83 @@ public enum FileCopier {
             }
         }
         return outcome
+    }
+
+    /// Moves one item. False when it turned out not to be movable after all —
+    /// a rename across filesystems the device check did not see, a bind mount
+    /// say — and the caller copies it instead, leaving the original.
+    private static func move(
+        _ item: CopyPlan.Item, to destination: String, clashes choice: ClashChoice,
+        plan: CopyPlan, outcome: inout CopyOutcome, fileManager: FileManager
+    ) -> Bool {
+        do {
+            guard TrashCan.lexists(destination) else {
+                guard try moveByRename(item.source, destination) else { return false }
+                outcome.moved += 1
+                outcome.moves.append(FileMove(from: item.source, to: destination))
+                return true
+            }
+            switch choice {
+            case .skip:
+                outcome.skipped += 1
+            case .keepBoth:
+                let name = CopyNaming.keepBoth(
+                    item.name, isDirectory: item.isDirectory, in: plan.directory,
+                    exists: { TrashCan.lexists($0) }
+                )
+                let free = CopyPaths.join(plan.directory, name)
+                guard try moveByRename(item.source, free) else { return false }
+                outcome.moved += 1
+                outcome.moves.append(FileMove(from: item.source, to: free))
+            case .replace:
+                guard try moveReplacing(item.source, destination, fileManager: fileManager)
+                else { return false }
+                outcome.moved += 1
+            }
+        } catch let error as FileAccessError {
+            outcome.failures.append(error)
+        } catch {
+            outcome.failures.append(
+                FileAccessError(path: item.source, message: error.localizedDescription)
+            )
+        }
+        return true
+    }
+
+    /// `rename(2)`, false on EXDEV so the caller can fall back to a copy.
+    static func moveByRename(_ from: String, _ to: String) throws -> Bool {
+        if Glibc.rename(from, to) == 0 { return true }
+        if errno == EXDEV { return false }
+        throw FileAccessError(path: from, message: String(cString: strerror(errno)))
+    }
+
+    /// The move form of `replace`: a file over a file is one atomic rename; a
+    /// folder over a folder is merged into, child by child, and the emptied
+    /// source removed.
+    static func moveReplacing(
+        _ source: String, _ destination: String, fileManager: FileManager
+    ) throws -> Bool {
+        let sourceIsDir = TrashCan.isDirectory(source)
+        let destinationIsDir = TrashCan.isDirectory(destination)
+        guard sourceIsDir == destinationIsDir else {
+            throw FileAccessError(
+                path: destination,
+                message: destinationIsDir
+                    ? "A folder with that name is in the way"
+                    : "A file with that name is in the way"
+            )
+        }
+        guard sourceIsDir else { return try moveByRename(source, destination) }
+        for child in try fileManager.contentsOfDirectory(atPath: source) {
+            let from = CopyPaths.join(source, child)
+            let to = CopyPaths.join(destination, child)
+            let done = TrashCan.lexists(to)
+                ? try moveReplacing(from, to, fileManager: fileManager)
+                : try moveByRename(from, to)
+            guard done else { return false }
+        }
+        try fileManager.removeItem(atPath: source)
+        return true
     }
 
     /// Replaces `destination` with a copy of `source`.

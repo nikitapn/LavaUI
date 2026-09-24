@@ -1,9 +1,20 @@
 import Foundation
 
+/// One item that went from one place to another.
+public struct FileMove: Equatable, Sendable {
+    public var from: String
+    public var to: String
+
+    public init(from: String, to: String) {
+        self.from = from
+        self.to = to
+    }
+}
+
 /// Something this window did to the disk that it can take back.
 ///
 /// Every undo here is a trip through the Trash, one way or the other, or a
-/// rename back, and that is the rule that decides what is on the list. Moving to the Trash is undone
+/// rename or move back, and that is the rule that decides what is on the list. Moving to the Trash is undone
 /// by restoring; restoring is undone by moving back; a copy is undone by
 /// moving the copies to the Trash — never by deleting them, so an undo that
 /// was a mistake is itself recoverable, and redo is the same operation seen
@@ -21,12 +32,18 @@ public enum FileChange: Equatable, Sendable {
     case created([String])
     /// Given another name in the same folder.
     case renamed(from: String, to: String)
+    /// Moved by a drop, within one filesystem.
+    case moved([FileMove])
+    /// One drop that moved some things and copied others: one step to undo.
+    case combined([FileChange])
 
     public var count: Int {
         switch self {
         case .trashed(let items): items.count
         case .restored(let paths), .copied(let paths), .created(let paths): paths.count
         case .renamed: 1
+        case .moved(let moves): moves.count
+        case .combined(let changes): changes.reduce(0) { $0 + $1.count }
         }
     }
 }
@@ -42,6 +59,17 @@ public struct FileChangeReversal: Equatable, Sendable {
 }
 
 extension FileChange {
+    /// What went from one path to another in this change, for tabs to follow:
+    /// a renamed or moved folder with a tab open inside it.
+    public var relocations: [FileMove] {
+        switch self {
+        case .renamed(let from, let to): [FileMove(from: from, to: to)]
+        case .moved(let moves): moves
+        case .combined(let changes): changes.flatMap(\.relocations)
+        default: []
+        }
+    }
+
     public func reversed(using trash: TrashCan) -> FileChangeReversal {
         var failures: [FileAccessError] = []
         switch self {
@@ -60,6 +88,50 @@ extension FileChange {
                 inverse: restored.isEmpty ? nil : .restored(restored),
                 failures: failures,
                 folders: restored.map { ($0 as NSString).deletingLastPathComponent }
+            )
+        case .moved(let moves):
+            var back: [FileMove] = []
+            for move in moves {
+                // Never over something that has since taken the old place.
+                if TrashCan.lexists(move.from) {
+                    failures.append(FileAccessError(
+                        path: move.from,
+                        message: "Something new is at \u{201C}\((move.from as NSString).lastPathComponent)\u{201D}"
+                    ))
+                    continue
+                }
+                do {
+                    try FileManager.default.createDirectory(
+                        atPath: (move.from as NSString).deletingLastPathComponent,
+                        withIntermediateDirectories: true
+                    )
+                    try FileManager.default.moveItem(atPath: move.to, toPath: move.from)
+                    back.append(FileMove(from: move.to, to: move.from))
+                } catch {
+                    failures.append(FileAccessError(path: move.to, message: error.localizedDescription))
+                }
+            }
+            return FileChangeReversal(
+                inverse: back.isEmpty ? nil : .moved(back),
+                failures: failures,
+                folders: back.flatMap {
+                    [($0.from as NSString).deletingLastPathComponent,
+                     ($0.to as NSString).deletingLastPathComponent]
+                }
+            )
+        case .combined(let changes):
+            // Last done, first undone.
+            var inverses: [FileChange] = []
+            var folders: [String] = []
+            for change in changes.reversed() {
+                let reversal = change.reversed(using: trash)
+                if let inverse = reversal.inverse { inverses.append(inverse) }
+                failures += reversal.failures
+                folders += reversal.folders
+            }
+            return FileChangeReversal(
+                inverse: inverses.isEmpty ? nil : .combined(inverses),
+                failures: failures, folders: folders
             )
         case .renamed(let from, let to):
             let back = (from as NSString).lastPathComponent

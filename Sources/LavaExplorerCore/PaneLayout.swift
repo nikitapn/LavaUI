@@ -141,6 +141,17 @@ public struct PaneLayout: Equatable, Sendable {
         }
     }
 
+    /// Every tab in every pane follows a folder that was renamed or moved.
+    public mutating func rebaseTabs(from old: String, to new: String, source: any FileSource) {
+        for pane in panes {
+            updatePane(id: pane.id) { pane in
+                for tab in pane.tabs.tabs {
+                    pane.tabs.updateTab(id: tab.id) { $0.rebase(from: old, to: new, source: source) }
+                }
+            }
+        }
+    }
+
     public mutating func setFraction(split id: Int, _ value: Float) {
         root = Self.mapSplit(root, id: id) { $0.fraction = min(max(value, 0.05), 0.95) }
     }
