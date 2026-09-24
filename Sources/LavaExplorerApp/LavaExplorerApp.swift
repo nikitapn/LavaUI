@@ -71,6 +71,8 @@ struct LavaExplorerApp {
                     "Close Tab", id: "file.close-tab",
                     shortcut: KeyShortcut(KeyCode.w, .primary)
                 ) { session.closeTab(id: session.tabSet.currentID) }
+                // Ctrl+Shift+N in `keys`, for the reason Delete is there.
+                MenuItem("New Folder", id: "file.new-folder") { session.startNewFolder() }
                 MenuItem(
                     "Reload", id: "file.reload",
                     shortcut: KeyShortcut(KeyCode.r, .primary)
@@ -137,6 +139,12 @@ struct LavaExplorerApp {
         let shift = (mods & KeyMods.shift) != 0
         let typing = FocusManager.focusedID != nil
 
+        // Before the field gets it: Escape in the new folder's name is
+        // "never mind", not "stop typing".
+        if event.button == KeyCode.escape, session.newFolderDraft != nil {
+            session.cancelNewFolder()
+            return true
+        }
         if typing && !control && !alt { return false }
 
         switch event.button {
@@ -150,6 +158,8 @@ struct LavaExplorerApp {
             session.moveSelection(by: 1, extending: shift)
         case KeyCode.a where control && !typing:
             session.selectAll()
+        case KeyCode.n where control && shift:
+            session.startNewFolder()
         case KeyCode.z where control && !typing:
             if shift { session.redo() } else { session.undo() }
         case KeyCode.y where control && !typing:

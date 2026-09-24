@@ -17,11 +17,13 @@ public enum FileChange: Equatable, Sendable {
     case restored([String])
     /// New files and folders a copy made.
     case copied([String])
+    /// Folders made with New Folder.
+    case created([String])
 
     public var count: Int {
         switch self {
         case .trashed(let items): items.count
-        case .restored(let paths), .copied(let paths): paths.count
+        case .restored(let paths), .copied(let paths), .created(let paths): paths.count
         }
     }
 }
@@ -56,7 +58,7 @@ extension FileChange {
                 failures: failures,
                 folders: restored.map { ($0 as NSString).deletingLastPathComponent }
             )
-        case .restored(let paths), .copied(let paths):
+        case .restored(let paths), .copied(let paths), .created(let paths):
             var trashed: [TrashItem] = []
             for path in paths {
                 do {

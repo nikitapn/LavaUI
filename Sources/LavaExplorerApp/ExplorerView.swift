@@ -469,6 +469,20 @@ private struct Toolbar: View {
             .cornerRadius(4)
             .flexGrow(1)
             .agentId("path-field")
+            // A press anywhere in a pane makes it the active one first, so
+            // the session's current tab is this one by the time this runs.
+            let canMake = !TrashPath.isTrash(tab.listing.path) && tab.listing.error == nil
+            Text(
+                "New Folder",
+                color: canMake ? Theme.current.textSecondary : Theme.current.textDim,
+                align: .center,
+                onClick: canMake ? { session.startNewFolder() } : nil
+            )
+            .padding(6)
+            .hoverBackground(canMake ? Theme.current.hover : Color.clear)
+            .cornerRadius(4)
+            .cursor(canMake ? .pointer : .arrow)
+            .agentId("new-folder")
             Text(
                 "Hidden",
                 color: tab.showHidden
@@ -584,6 +598,11 @@ private struct FilePane: View {
                 trashBar(empty: listing.entries.isEmpty)
             }
             header
+            if let draft = session.newFolderDraft, draft.tabID == tab.id,
+               draft.directory == listing.path
+            {
+                NewFolderRow(session: session)
+            }
             if let error = listing.error {
                 Text(error, color: Theme.current.textDim)
                     .padding(16)
@@ -708,6 +727,37 @@ private struct FilePane: View {
     }
 }
 
+/// The name of a folder about to be made, typed in place at the top of the
+/// list. Enter makes it; Escape, or going somewhere else, forgets it.
+private struct NewFolderRow: View {
+    @Bindable var session: ExplorerSession
+
+    var body: some View {
+        let theme = Theme.current
+        return HStack(
+            height: .pt(FileListMetrics.rowHeight + 8),
+            padding: FileListMetrics.sidePadding,
+            alignment: .center,
+            spacing: FileListMetrics.gap
+        ) {
+            Text("▣", color: theme.accent)
+                .frame(width: .pt(18))
+            TextField(
+                text: session.newFolderName,
+                autoFocus: true,
+                selectsAllOnFocus: true,
+                onSubmit: { session.commitNewFolder() }
+            )
+            .flexGrow(1)
+            .agentId("new-folder-name")
+            Text("Enter to create · Esc to cancel", color: theme.textDim, lineLimit: 1)
+                .flexShrink(1)
+        }
+        .frame(width: .pct(100))
+        .background(theme.selectionFill.opacity(0.5))
+    }
+}
+
 /// Shared by the header and the rows, which have to agree for a column's
 /// separator to sit in the gap the rows leave before it.
 enum FileListMetrics {
@@ -788,11 +838,11 @@ private struct FileRow: View {
             Text(Formatters.modified(entry.modified), color: theme.textDim, lineLimit: 1)
                 .frame(width: .pt(session.columns.modified))
         }
+        // No hover tint. A list scrolled under a still pointer slides row
+        // after row beneath it, and a tint that follows reads as the list
+        // flickering — which is why file managers do not light rows up.
         .frame(width: .pct(100))
         .background(fill)
-        .hoverBackground(on ? theme.selectionFill : theme.hover)
-        .hoverSnap()
-        .cursor(.pointer)
         .agentId("file-\(entry.name)")
         .onFileDrag(paths: { session.dragPaths(for: entry) }) {
             // Built after `paths`, so it knows how many went with this row.

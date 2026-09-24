@@ -344,3 +344,48 @@ private final class Desk {
         #expect(!history.canUndo)
     }
 }
+
+@Suite struct NewFolderTests {
+    @Test func theOfferedNameIsOneThatIsFree() throws {
+        let desk = try Desk()
+        let dir = desk.home + "/work"
+        try FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        let exists: (String) -> Bool = { TrashCan.lexists($0) }
+        #expect(NewFolder.freeName(in: dir, exists: exists) == "New Folder")
+        _ = try NewFolder.make(named: "New Folder", in: dir)
+        #expect(NewFolder.freeName(in: dir, exists: exists) == "New Folder (2)")
+    }
+
+    @Test func aFolderIsMadeAndNothingIsEverMergedInto() throws {
+        let desk = try Desk()
+        let dir = desk.home
+        let path = try NewFolder.make(named: "  Photos 2026 ", in: dir)
+        #expect(path == dir + "/Photos 2026", "spaces at the ends are trimmed")
+        #expect(TrashCan.isDirectory(path))
+        #expect(throws: FileAccessError.self) { try NewFolder.make(named: "Photos 2026", in: dir) }
+        try desk.file(dir + "/notes")
+        #expect(throws: FileAccessError.self) { try NewFolder.make(named: "notes", in: dir) }
+    }
+
+    @Test func namesTheFilesystemRefusesAreRefusedFirst() {
+        #expect(NewFolder.problem(with: "") != nil)
+        #expect(NewFolder.problem(with: ".") != nil)
+        #expect(NewFolder.problem(with: "..") != nil)
+        #expect(NewFolder.problem(with: "a/b") != nil)
+        #expect(NewFolder.problem(with: String(repeating: "é", count: 128)) != nil)
+        #expect(NewFolder.problem(with: ".hidden") == nil)
+        #expect(NewFolder.problem(with: "Отчёты 2026") == nil)
+    }
+
+    @Test func undoingANewFolderMovesItToTheTrash() throws {
+        let desk = try Desk()
+        let can = desk.can()
+        let path = try NewFolder.make(named: "Scratch", in: desk.home)
+        var history = FileUndoHistory()
+        history.record(.created([path]))
+        let undone = history.undo(using: can)
+        #expect(undone?.1.failures.isEmpty == true)
+        #expect(!desk.exists(path))
+        #expect(can.items().map(\.originalPath) == [path])
+    }
+}

@@ -32,10 +32,19 @@ LAVA_CLIENT=1 swift run LavaExplorer -- ~/Pictures
   Up selects the folder you came out of, with a few rows above it. Each tab
   keeps its own place in its list, across tab switches and moves between
   panes.
+- New Folder (the toolbar button, File → New Folder, Ctrl+Shift+N) opens a
+  row at the top of the list with "New Folder" selected — or "New Folder
+  (2)" when that is taken — to type over. Enter makes it and selects it
+  where it sorts; Escape, or going to another folder, forgets it. Nothing is
+  made until Enter, and a name already there is refused rather than merged
+  into. Not in the Trash.
+- Rows do not light up under the pointer. A list scrolled under a still
+  pointer slides row after row beneath it, and a tint that follows reads as
+  flicker; selection is the only fill a row has.
 - Ctrl+Z undoes, Ctrl+Shift+Z (or Ctrl+Y) redoes, and both are on the Edit
   menu. Every undo goes through the Trash: a move to the Trash is undone by
   restoring, a restore by moving back, and a copy by moving the new copies
-  to the Trash — never by deleting them, so an undo made by mistake is
+  to the Trash — never by deleting them (a new folder likewise), so an undo made by mistake is
   itself recoverable. Deleting for good cannot be undone, and neither can a
   file a copy replaced: the old contents are gone. Fifty steps, per window.
 - Hidden names stay out until View → Show Hidden Files (or Ctrl+H).
@@ -120,7 +129,7 @@ file.
 
 ## What it does not
 
-- **Rename, new folder, move, cut and paste — and copy from the menu.** On
+- **Rename, move, cut and paste — and copy from the menu.** On
   the context menu as labelled stubs. Writes are a drop (a copy), the Trash
   (a rename), and a removal that has been asked about. `FileSource` still has
   no `delete`: throwing away goes through `TrashCan`, and removing for good

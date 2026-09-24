@@ -38,6 +38,10 @@ public struct TextField: PrimitiveView {
     /// field that re-took focus on every reconcile would steal the caret back
     /// from wherever the user had since put it.
     public var autoFocus: Bool = false
+    /// With `autoFocus`: arrive with the whole text selected, so typing
+    /// replaces a suggested value rather than appending to it — the name a
+    /// new folder is offered under.
+    public var selectsAllOnFocus: Bool = false
     /// Overrides `Theme.focusRingStyle` when set.
     public var focusRing: FocusRingStyle?
     public var focusRingWidth: Float?
@@ -51,6 +55,7 @@ public struct TextField: PrimitiveView {
         maxLines: Int = 8,
         wraps: Bool = false,
         autoFocus: Bool = false,
+        selectsAllOnFocus: Bool = false,
         focusRing: FocusRingStyle? = nil,
         focusRingWidth: Float? = nil,
         focusRingColor: Color? = nil,
@@ -63,6 +68,7 @@ public struct TextField: PrimitiveView {
         self.maxLines = maxLines
         self.wraps = wraps
         self.autoFocus = autoFocus
+        self.selectsAllOnFocus = selectsAllOnFocus
         self.focusRing = focusRing
         self.focusRingWidth = focusRingWidth
         self.focusRingColor = focusRingColor
@@ -80,6 +86,7 @@ public struct TextField: PrimitiveView {
         leaf.installTextMeasure()
         if autoFocus, FocusManager.focusedID == nil {
             leaf.focusSelf(binding: _text, onSubmit: onSubmit)
+            if selectsAllOnFocus { leaf.editing.selectAll() }
         }
         return leaf
     }

@@ -361,6 +361,8 @@ final class ExplorerSession: @unchecked Sendable {
     ) {
         dismissContext()
         notice = nil
+        // Leaving the folder leaves the name that was being typed for it.
+        if newFolderDraft?.tabID == tabSet.currentID { cancelNewFolder() }
         let tabID = tabSet.currentID
         let position = scrollPosition(for: tabID)
         let source = self.source
@@ -739,6 +741,86 @@ final class ExplorerSession: @unchecked Sendable {
         }
     }
 
+    // MARK: - New folder
+
+    /// A folder being named, in a row at the top of one pane's list. Nothing
+    /// is made until Enter: a folder that exists while it is still being
+    /// named has to be renamed once it is, and Escape would have to delete it.
+    struct NewFolderDraft: Equatable {
+        var paneID: Int
+        var tabID: Int
+        var directory: String
+        var name: String
+    }
+
+    var newFolderDraft: NewFolderDraft?
+
+    func startNewFolder() {
+        dismissContext()
+        let tab = tabSet.current
+        guard !TrashPath.isTrash(tab.listing.path) else {
+            notice = "Folders cannot be made in the Trash"
+            ViewInvalidation.markDirty()
+            return
+        }
+        guard tab.listing.error == nil else { return }
+        let directory = tab.listing.path
+        let source = self.source
+        // The field focuses itself only when nothing else has the keyboard,
+        // and the address bar may.
+        FocusManager.clear()
+        newFolderDraft = NewFolderDraft(
+            paneID: layout.activePaneID, tabID: tab.id, directory: directory,
+            name: NewFolder.freeName(in: directory, exists: { source.exists($0) })
+        )
+        notice = nil
+        ViewInvalidation.markDirty()
+    }
+
+    var newFolderName: Binding<String> {
+        Binding(
+            get: { [unowned self] in newFolderDraft?.name ?? "" },
+            set: { [unowned self] in newFolderDraft?.name = $0 }
+        )
+    }
+
+    func commitNewFolder() {
+        guard let draft = newFolderDraft else { return }
+        do {
+            let path = try NewFolder.make(named: draft.name, in: draft.directory)
+            newFolderDraft = nil
+            FocusManager.clear()
+            reloadAfterChange(in: [draft.directory])
+            undoHistory.record(.created([path]))
+            // Selected where it landed in the sort, and scrolled to.
+            if layout.tab(id: draft.tabID)?.listing.path == draft.directory,
+               let paneID = layout.paneID(containingTab: draft.tabID)
+            {
+                layout.updatePane(id: paneID) { pane in
+                    pane.tabs.updateTab(id: draft.tabID) { $0.selected = path }
+                }
+                if let index = layout.tab(id: draft.tabID)?.listing.entries
+                    .firstIndex(where: { $0.path == path })
+                {
+                    let row = FileListMetrics.rowHeight
+                    scrollPosition(for: draft.tabID).scroll(to: max(0, Float(index - 3) * row))
+                }
+            }
+            notice = "Created \u{201C}\((path as NSString).lastPathComponent)\u{201D}"
+        } catch {
+            // The row stays, with what was typed, to be fixed and tried again.
+            notice = (error as? FileAccessError)?.message ?? error.localizedDescription
+        }
+        ViewInvalidation.markDirty()
+    }
+
+    func cancelNewFolder() {
+        guard newFolderDraft != nil else { return }
+        newFolderDraft = nil
+        FocusManager.clear()
+        ViewInvalidation.markDirty()
+    }
+
     // MARK: - Undo
 
     /// Trash, restore and copy, each reversible through the Trash — see
@@ -778,6 +860,7 @@ final class ExplorerSession: @unchecked Sendable {
         case .trashed: "put back \(items(count)) from the Trash"
         case .restored: "moved \(items(count)) back to the Trash"
         case .copied: count == 1 ? "moved the copy to the Trash" : "moved \(count) copies to the Trash"
+        case .created: count == 1 ? "moved the new folder to the Trash" : "moved \(count) new folders to the Trash"
         }
     }
 
