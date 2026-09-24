@@ -147,6 +147,10 @@ public final class Editor: @unchecked Sendable {
     /// It starts hidden. Draw a frame into it, then `setVisible(true, window:)`
     /// — showing a window before its first frame presents an undefined
     /// swapchain image, which looks like a flash of garbage.
+    ///
+    /// A client engine accepts this too: the window is an arena and an input
+    /// queue, and nothing on screen. Asking the compositor for a surface is
+    /// `LavaApp.openWindow`, which is what an app should call.
     public func openWindow(
         width: Float = 800, height: Float = 600, title: String
     ) -> WindowID? {
@@ -320,6 +324,16 @@ public final class Editor: @unchecked Sendable {
     /// halfway emitted.
     public func publishFrames(to sink: any FrameSink, window: WindowID = .main) {
         frameSinks[window] = sink
+    }
+
+    /// Drops the sink `publishFrames` installed, and the arena it owns.
+    ///
+    /// A closed client window that left its sink behind would keep a
+    /// shared-memory mapping for a surface nobody is drawing. The engine
+    /// window and the sink are separate objects; closing one does not drop
+    /// the other.
+    public func stopPublishingFrames(window: WindowID) {
+        frameSinks.removeValue(forKey: window)
     }
 
     /// Frames published for `window` that its consumer has not taken yet.
@@ -978,6 +992,10 @@ public struct WindowID: Hashable, Sendable {
     let raw: UInt32
 
     init(raw: UInt32) { self.raw = raw }
+
+    /// Engine id. `0` names the window the app started with; an id from
+    /// `openWindow` is never zero and is never reused.
+    public var rawValue: UInt32 { raw }
 
     /// The window an app opens with, and what every `window:` parameter
     /// defaults to.

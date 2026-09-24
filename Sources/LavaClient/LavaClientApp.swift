@@ -67,7 +67,13 @@ public enum LavaClient {
         Self.dialogParent = dialogParent
         // A picker this app opens is a dialog of this window. Read when the
         // picker is asked for, by which time the surface exists.
-        FileDialog.parentSurface = { Self.surfaceID == 0 ? nil : Self.surfaceID }
+        // Read when a picker is asked for, by which time a second window may
+        // be the one asking. The window the app started with is the fallback
+        // for a call that has no window current.
+        FileDialog.parentSurface = {
+            let id = Self.callingSurface()
+            return id == 0 ? nil : id
+        }
         FileHandle.standardError.write(
             Data("lava fonts: \(LavaResources.fontsDirectory)\n".utf8)
         )
@@ -303,6 +309,42 @@ public enum LavaClient {
             try blockingCall {
                 try await compositor.showMenu(
                     surfaceId: surfaceID, serial: serial,
+                    width: UInt32(max(1, width.rounded())),
+                    height: UInt32(max(1, height.rounded()))
+                )
+            }
+        }
+    }
+
+    /// The compositor surface for one of this process's windows. The window
+    /// the process started with is the root menu; a fly-out is an extra.
+    public static func compositorSurface(for window: WindowID) -> UInt32 {
+        if window == .main { return surfaceID }
+        return extraSurfaces[window.rawValue]?.surface ?? 0
+    }
+
+    /// "This fly-out measured `width` × `height`. Hang it off `row`."
+    ///
+    /// `row` is in `parent`'s coordinates — the plate the row was drawn on,
+    /// which is the root menu for the first branch and the previous branch
+    /// after that. A stale serial is ignored by the compositor; a surface it
+    /// has already destroyed answers `SurfaceNotFound`, which is the same
+    /// fact told a second way and not a failure to report.
+    public static func showSubmenu(
+        window: WindowID, parent: UInt32, serial: UInt32,
+        row: LayoutFrame, width: Float, height: Float
+    ) {
+        guard let compositor = Self.compositor else { return }
+        let surface = compositorSurface(for: window)
+        guard surface != 0, parent != 0 else { return }
+        report("ShowSubmenu") {
+            try blockingCall {
+                try await compositor.showSubmenu(
+                    surfaceId: surface, parentId: parent, serial: serial,
+                    rowX: Int32(row.x.rounded()),
+                    rowY: Int32(row.y.rounded()),
+                    rowW: UInt32(max(1, row.w.rounded())),
+                    rowH: UInt32(max(1, row.h.rounded())),
                     width: UInt32(max(1, width.rounded())),
                     height: UInt32(max(1, height.rounded()))
                 )
@@ -838,25 +880,32 @@ public enum LavaClient {
     public static func setBackdropBlurRegions(
         radius: Float, rects: [LavaIDL.FrostRect]
     ) {
+        // The window whose frame is being emitted. A second window frosting
+        // its own popup must not rewrite the first window's plates.
         pendingOverlayFrost = OverlayFrost(
+            surface: callingSurface(),
             radius: rects.isEmpty ? 0 : max(0, radius), rects: rects
         )
         flushOverlayFrost()
     }
 
     private static func flushOverlayFrost() {
-        guard let compositor = Self.compositor, surfaceID != 0,
+        guard let compositor = Self.compositor,
               let pending = pendingOverlayFrost
         else { return }
-        guard lastOverlayFrost != pending else { return }
+        let id = pending.surface != 0 ? pending.surface : surfaceID
+        guard id != 0 else { return }
+        // Per surface. One slot for the whole process made an idle frame of
+        // the other window look like "the popup just closed" and cleared it,
+        // then the next frame of the window that actually has one put it back.
+        guard lastOverlayFrost[id] != pending else { return }
 
-        let hadOverlay = lastOverlayFrost.map { $0.radius > 0 } ?? false
-        lastOverlayFrost = pending
+        let hadOverlay = lastOverlayFrost[id].map { $0.radius > 0 } ?? false
+        lastOverlayFrost[id] = pending
 
         // Nothing to tell the compositor: no popup is up, and none was.
         if pending.radius == 0 && !hadOverlay { return }
 
-        let id = surfaceID
         Task.detached {
             do {
                 if pending.radius == 0 || pending.rects.isEmpty {
@@ -890,14 +939,17 @@ public enum LavaClient {
     }
 
     private struct OverlayFrost: Equatable, Sendable {
+        var surface: UInt32
         var radius: Float
         var rects: [LavaIDL.FrostRect]
 
         /// By hand: the generated `FrostRect` is a wire type and carries no
         /// `Equatable`, and this comparison is what stops a call per frame
-        /// for a menu that has not moved.
+        /// for a menu that has not moved. The surface is part of it so one
+        /// window's plates do not count as another's.
         static func == (a: Self, b: Self) -> Bool {
-            a.radius == b.radius && a.rects.count == b.rects.count
+            a.surface == b.surface && a.radius == b.radius
+                && a.rects.count == b.rects.count
                 && zip(a.rects, b.rects).allSatisfy {
                     $0.x == $1.x && $0.y == $1.y && $0.w == $1.w
                         && $0.h == $1.h && $0.cornerRadius == $1.cornerRadius
@@ -1196,9 +1248,10 @@ public enum LavaClient {
         // reason: the renderer owns the offset, so this is a nudge rather than
         // a fact, and the wheel arrives in bursts that must not each cost the
         // frame loop a round trip.
-        ScrollBridge.handBack = { [compositor] dx, dy in
+        ScrollBridge.handBack = { [compositor] dx, dy, window in
+            let surface = Self.surface(forWindow: window)
             Task.detached {
-                await compositor.scrollUnclaimed(surfaceId: surfaceID, dx: dx, dy: dy)
+                await compositor.scrollUnclaimed(surfaceId: surface, dx: dx, dy: dy)
             }
         }
 
@@ -1207,10 +1260,11 @@ public enum LavaClient {
         // hand-back is — this is on the pointer's path, it arrives in bursts as
         // the pointer crosses a toolbar, and a round trip per crossing would
         // sit between the pointer and the next frame.
-        CursorBridge.request = { [compositor] shape in
+        CursorBridge.request = { [compositor] shape, window in
+            let surface = Self.surface(forWindow: window)
             let resolved = LavaIDL.CursorShape(rawValue: shape) ?? .arrow
             Task.detached {
-                await compositor.setCursor(surfaceId: surfaceID, shape: resolved)
+                await compositor.setCursor(surfaceId: surface, shape: resolved)
             }
         }
 
@@ -1242,23 +1296,26 @@ public enum LavaClient {
         // the pointer, and a detached task would let the release race it.
         WindowBridge.drawsOwnChrome = Self.frame == .client
         WindowBridge.beginDrag = { [compositor] in
+            let surface = Self.callingSurface()
             report("BeginMove") {
-                try blockingCall { try await compositor.beginMove(surfaceId: surfaceID) }
+                try blockingCall { try await compositor.beginMove(surfaceId: surface) }
             }
         }
         WindowBridge.toggleMaximize = { [compositor] in
+            let surface = Self.callingSurface()
             report("ToggleMaximize") {
                 let now = try blockingCall {
-                    try await compositor.toggleMaximize(surfaceId: surfaceID)
+                    try await compositor.toggleMaximize(surfaceId: surface)
                 }
                 WindowBridge.isMaximized = now
             }
         }
         WindowBridge.setFullscreen = { [compositor] on in
+            let surface = Self.callingSurface()
             do {
                 try blockingCall {
                     try await compositor.setFullscreen(
-                        surfaceId: surfaceID, on: on
+                        surfaceId: surface, on: on
                     )
                 }
             } catch {
@@ -1273,10 +1330,11 @@ public enum LavaClient {
         // whole screen plus a PNG encode of it.
         ScreenCapture.provider = {
             [compositor] includeSelf, x, y, w, h, maxSide in
+            let surface = Self.callingSurface()
             do {
                 return try blockingCall(timeout: 10) {
                     try await compositor.captureScreen(
-                        surfaceId: surfaceID, includeSelf: includeSelf,
+                        surfaceId: surface, includeSelf: includeSelf,
                         x: x, y: y, w: w, h: h, maxSide: maxSide
                     )
                 }
@@ -1289,8 +1347,9 @@ public enum LavaClient {
         }
 
         WindowBridge.minimize = { [compositor] in
+            let surface = Self.callingSurface()
             report("Minimize") {
-                try blockingCall { try await compositor.minimize(surfaceId: surfaceID) }
+                try blockingCall { try await compositor.minimize(surfaceId: surface) }
             }
         }
 
@@ -1321,13 +1380,14 @@ public enum LavaClient {
         }
 
         // Same shape again: the `FileDrop` event crosses on the stream, its
-        // paths do not fit in it, and this is the call that carries them. The
-        // window id is ignored because a client has exactly one surface — the
-        // day it has two, this closure is where that becomes a lookup.
-        DropBridge.provider = { [compositor] _ in
+        // paths do not fit in it, and this is the call that carries them.
+        // The window id is which surface was dropped on — a second window
+        // has its own queue.
+        DropBridge.provider = { [compositor] window in
+            let surface = Self.surface(forWindow: window)
             do {
                 return try blockingCall {
-                    try await compositor.takeDroppedPaths(surfaceId: surfaceID)
+                    try await compositor.takeDroppedPaths(surfaceId: surface)
                 }
             } catch {
                 FileHandle.standardError.write(
@@ -1340,7 +1400,8 @@ public enum LavaClient {
         // And out. Blocking for the reason `beginDrag` is: the compositor
         // takes the pointer as it answers, and the release it hands back has
         // to arrive after this call rather than race it.
-        DragBridge.startFileDrag = { [compositor] paths, chip, offsetX, offsetY in
+        DragBridge.startFileDrag = { [compositor] paths, chip, offsetX, offsetY, window in
+            let surface = Self.surface(forWindow: window)
             // A chip too big for one message is dropped rather than failing
             // the drag: the cursor alone still says what is happening.
             let image: DragImage
@@ -1357,7 +1418,7 @@ public enum LavaClient {
             do {
                 try blockingCall {
                     try await compositor.startDrag(
-                        surfaceId: surfaceID, paths: paths, chip: image
+                        surfaceId: surface, paths: paths, chip: image
                     )
                 }
                 return true
@@ -1374,46 +1435,10 @@ public enum LavaClient {
         // wakes the loop out of `pumpEvents` on the way. Draining inside that
         // hop is also the honest moment to ack: the serial then means "the
         // tree has seen it", not "the socket has".
-        input.onArrival = {
-            MainQueue.async {
-                var wantsFrame = false
-                for event in input.drain() {
-                    let kind = InputEventKind(rawValue: event.kind) ?? .none
-                    if kind == .windowState {
-                        WindowBridge.isMaximized = event.button != 0
-                    }
-                    // Read-back, not news. `.nodeHover` and `.nodeScroll` are
-                    // the renderer telling us what it already drew, and the
-                    // compositor emits one of each per frame of an eased
-                    // scroll — so treating them as repaint requests makes this
-                    // process publish a full draw list for every frame the
-                    // compositor drew *without* it, which is the whole point
-                    // of renderer-owned motion given away. Both invalidate for
-                    // themselves where they have to: `HoverState.set` documents
-                    // that tints have already repainted, and
-                    // `ScrollNode.adoptRendererOffset` asks for layout when
-                    // lazy content has to mount or an indicator has to move.
-                    // `.dragOver` likewise: one arrives per pointer move while a
-                    // drag crosses the window, and a target that changes state
-                    // invalidates through the app's own observed properties.
-                    if kind != .nodeHover, kind != .nodeScroll, kind != .dragOver {
-                        wantsFrame = true
-                    }
-                    editor.postInputEvent(
-                        LavaUI.InputEvent(
-                            kind: kind,
-                            x: event.x, y: event.y,
-                            button: event.button, mods: event.mods
-                        )
-                    )
-                }
-                // Input is not a repaint request on its own — the loop
-                // consumes it and then asks invalidation what to do — but the
-                // frame it produces has to be asked for, because nothing in
-                // the queue does it.
-                if wantsFrame { ViewInvalidation.markNeedsRedraw() }
-            }
-        }
+        // `.windowState` is applied by the window that receives the event,
+        // inside its own scope. Setting the flag here would write the first
+        // window's copy, because this hop has no window current.
+        watchInput(input, window: .main, editor: editor)
 
         // The stream is the surface's lease. When it ends — the user closed
         // the window from the compositor side, the compositor went away, the
@@ -1431,6 +1456,25 @@ public enum LavaClient {
             + "(\(sink.mappedBytes / 1024) KiB), "
             + "corner radius \(Int(WindowBridge.desktopCornerRadius))\n"
         FileHandle.standardError.write(Data(banner.utf8))
+
+        // Before the loop, so a window opened from the first frame has a
+        // surface to draw into. Nil again is unnecessary: `run` does not
+        // return until the process is leaving.
+        LavaApp.ClientSurfaceBridge.open = { width, height, title, anchor, blur in
+            Self.openExtraSurface(
+                editor: editor, width: width, height: height, title: title,
+                anchor: anchor, backdropBlur: blur
+            )
+        }
+        LavaApp.ClientSurfaceBridge.openMenuPlate = { width, height, blur in
+            Self.openExtraSurface(
+                editor: editor, width: width, height: height, title: "Menu",
+                anchor: nil, backdropBlur: blur, submenu: true
+            )
+        }
+        LavaApp.ClientSurfaceBridge.close = { window in
+            Self.closeExtraSurface(editor: editor, window: window)
+        }
 
         LavaApp.run(editor: editor, menu: menu, onRawKey: onRawKey, makeRoot: makeRoot)
         // Frame-loop return (client chrome X, `LavaApp.closeWindow`, …).
@@ -1463,6 +1507,13 @@ public enum LavaClient {
     /// button, or the stream ended first), `DestroySurface` is a no-op error
     /// we ignore.
     private static func releaseSurface() {
+        let extras = extraSurfaces
+        extraSurfaces.removeAll()
+        for extra in extras.values {
+            editorForExtras?.stopPublishingFrames(window: extra.window)
+            destroyCompositorSurface(extra.surface)
+            extra.input?.close()
+        }
         let id = surfaceID
         let compositor = Self.compositor
         let input = inputChannel
@@ -1481,6 +1532,237 @@ public enum LavaClient {
         inputChannel = nil
     }
 
+    /// The compositor surface a call made from a window should name.
+    ///
+    /// `0` is the window the app started with. Anything else is a window
+    /// `openWindow` added, and a raw id we have never seen — a call from
+    /// outside any window — falls back to the first surface rather than
+    /// failing the gesture.
+    private static func surface(forWindow raw: UInt32) -> UInt32 {
+        if raw != 0, let extra = extraSurfaces[raw], extra.surface != 0 {
+            return extra.surface
+        }
+        return surfaceID
+    }
+
+    /// `surface(forWindow:)` for whichever window is current on the frame loop.
+    private static func callingSurface() -> UInt32 {
+        surface(forWindow: LavaApp.currentWindow.rawValue)
+    }
+
+    /// Drains one surface's input into one engine window.
+    ///
+    /// Read-back is not a repaint request. `.nodeHover` and `.nodeScroll` are
+    /// the renderer telling us what it already drew, and the compositor emits
+    /// one of each per frame of an eased scroll — so treating them as repaint
+    /// requests makes this process publish a full draw list for every frame
+    /// the compositor drew *without* it. `.dragOver` is the same shape: one
+    /// arrives per pointer move, and a target that changes state invalidates
+    /// through the app's own observed properties.
+    private static func watchInput(
+        _ input: InputChannel, window: WindowID, editor: Editor
+    ) {
+        input.onArrival = {
+            MainQueue.async {
+                var wantsFrame = false
+                for event in input.drain() {
+                    let kind = InputEventKind(rawValue: event.kind) ?? .none
+                    if kind != .nodeHover, kind != .nodeScroll, kind != .dragOver {
+                        wantsFrame = true
+                    }
+                    editor.postInputEvent(
+                        LavaUI.InputEvent(
+                            kind: kind,
+                            x: event.x, y: event.y,
+                            button: event.button, mods: event.mods
+                        ),
+                        window: window
+                    )
+                }
+                // Input is not a repaint request on its own — the loop
+                // consumes it and then asks invalidation what to do — but the
+                // frame it produces has to be asked for, because nothing in
+                // the queue does it.
+                if wantsFrame { ViewInvalidation.markNeedsRedraw() }
+            }
+        }
+    }
+
+    /// A second surface. One arena, one input stream, one engine window.
+    ///
+    /// The stream ending closes that window and nothing else. The stream on
+    /// the window the app started with is the process's lease; this one is
+    /// not, or closing a mirror would quit the app.
+    private static func openExtraSurface(
+        editor: Editor, width: Float, height: Float, title: String,
+        anchor: LavaApp.SurfaceAnchor?, backdropBlur: Float,
+        submenu: Bool = false
+    ) -> WindowID? {
+        guard let compositor = Self.compositor else { return nil }
+        guard let window = editor.openWindow(
+            width: width, height: height, title: title
+        ) else { return nil }
+
+        let arenaName = "\(arenaID)-\(window.rawValue)"
+        let extra = ExtraSurface(window: window)
+        // The sink owns the callback, and the callback has to name this
+        // surface. A strong capture would keep both alive after the window
+        // closed, which is the mapping `stopPublishingFrames` exists to drop.
+        guard let sink = ArenaFrameSink(id: arenaName, onPublish: { [weak extra] in
+            guard let extra else { return }
+            let surface = extra.surface
+            guard surface != 0 else { return }
+            let serial = extra.input?.consumedSerial ?? 0
+            Task.detached {
+                await compositor.present(surfaceId: surface, serial: serial)
+            }
+        }) else {
+            editor.closeWindow(window)
+            FileHandle.standardError.write(
+                Data("openWindow: arena '\(arenaName)' already exists\n".utf8)
+            )
+            return nil
+        }
+
+        let surface: UInt32
+        let w = UInt32(max(1, width.rounded()))
+        let h = UInt32(max(1, height.rounded()))
+        do {
+            surface = try blockingCall(timeout: 10) {
+                if submenu {
+                    // Hidden until ShowSubmenu. A popup would place it under
+                    // the panel anchor and show it before it was measured.
+                    return try await compositor.createSubmenuSurface(
+                        arenaId: arenaName, width: w, height: h
+                    )
+                }
+                if let anchor {
+                    // Of the window this process started with. A popup does
+                    // not know where that window is; the anchor is in its
+                    // coordinates and the compositor adds the origin.
+                    return try await compositor.createPopupSurface(
+                        arenaId: arenaName, width: w, height: h, title: title,
+                        parentId: surfaceID,
+                        anchorX: Int32(anchor.x.rounded()),
+                        anchorY: Int32(anchor.y.rounded()),
+                        anchorW: UInt32(max(0, anchor.w.rounded())),
+                        anchorH: UInt32(max(0, anchor.h.rounded()))
+                    )
+                }
+                return try await compositor.createSurface(
+                    arenaId: arenaName, width: w, height: h,
+                    title: title, frame: Self.frame, appId: Self.appId
+                )
+            }
+        } catch {
+            editor.closeWindow(window)
+            FileHandle.standardError.write(
+                Data("openWindow: CreateSurface failed: \(error)\n".utf8)
+            )
+            return nil
+        }
+        guard surface != 0 else {
+            editor.closeWindow(window)
+            FileHandle.standardError.write(
+                Data("openWindow: CreateSurface returned no surface\n".utf8)
+            )
+            return nil
+        }
+        extra.surface = surface
+        // Whenever the caller asked — a popup or a menu fly-out. The wash on
+        // top has to be translucent or the plate is painted and then covered.
+        // The corner is not a parameter: the compositor cuts the plate to
+        // the same radius as the window mask, or the two disagree. A hidden
+        // fly-out is not captured until `ShowSubmenu` places it.
+        if backdropBlur > 0 {
+            do {
+                try blockingCall {
+                    try await compositor.setBackdropBlur(
+                        surfaceId: surface, radius: backdropBlur
+                    )
+                }
+            } catch {
+                FileHandle.standardError.write(
+                    Data("openWindow: backdrop blur failed: \(error)\n".utf8)
+                )
+            }
+        }
+
+        let input: InputChannel
+        do {
+            input = InputChannel(
+                stream: try compositor.subscribeInput(surfaceId: surface)
+            )
+        } catch {
+            destroyCompositorSurface(surface)
+            editor.closeWindow(window)
+            FileHandle.standardError.write(
+                Data("openWindow: SubscribeInput failed: \(error)\n".utf8)
+            )
+            return nil
+        }
+        extra.input = input
+        editor.publishFrames(to: sink, window: window)
+        extraSurfaces[window.rawValue] = extra
+        editorForExtras = editor
+        watchInput(input, window: window, editor: editor)
+
+        Thread.detachNewThread {
+            while !input.isClosed { Thread.sleep(forTimeInterval: 0.05) }
+            MainQueue.async {
+                // We closed it on the way out: the entry is already gone,
+                // and asking the loop to close the window again would reap
+                // a tree that has already been torn down.
+                guard Self.extraSurfaces[window.rawValue] != nil else { return }
+                LavaApp.closeWindow(window)
+            }
+        }
+
+        FileHandle.standardError.write(
+            Data("client surface \(surface) for window \(window.rawValue)\n".utf8)
+        )
+        return window
+    }
+
+    /// Drops the compositor half of a window `openWindow` added.
+    ///
+    /// Idempotent. The engine window is closed by `LavaApp`, which is also
+    /// who calls this — doing both here would close it twice.
+    private static func closeExtraSurface(editor: Editor, window: WindowID) {
+        guard let extra = extraSurfaces.removeValue(forKey: window.rawValue)
+        else { return }
+        editor.stopPublishingFrames(window: window)
+        destroyCompositorSurface(extra.surface)
+        extra.input?.close()
+        extra.surface = 0
+    }
+
+    private static func destroyCompositorSurface(_ id: UInt32) {
+        guard id != 0, let compositor = Self.compositor else { return }
+        do {
+            try blockingCall {
+                try await compositor.destroySurface(surfaceId: id)
+            }
+        } catch {
+            // Already gone is the ordinary race: the stream ending destroys
+            // the surface, and so does the client that noticed.
+        }
+    }
+
+    /// One extra surface. A class because `Present` reads the id from the
+    /// publish callback, which is created before `CreateSurface` returns.
+    private final class ExtraSurface: @unchecked Sendable {
+        let window: WindowID
+        var surface: UInt32 = 0
+        var input: InputChannel?
+        init(window: WindowID) { self.window = window }
+    }
+
+    nonisolated(unsafe) private static var extraSurfaces: [UInt32: ExtraSurface] = [:]
+    /// The editor `openExtraSurface` published into. `quit` drops every
+    /// extra arena even when the frame loop did not reap the windows.
+    nonisolated(unsafe) private static var editorForExtras: Editor?
+
     /// Set once, before the first publish can read it. See `run`.
     nonisolated(unsafe) private static var surfaceID: UInt32 = 0
     /// A minimum size stated before the surface existed. See `setMinimumSize`.
@@ -1489,7 +1771,7 @@ public enum LavaClient {
     nonisolated(unsafe) private static var pendingBackdropBlur: Float?
     /// Popup frost last sent / last asked, so emit can call every frame.
     nonisolated(unsafe) private static var pendingOverlayFrost: OverlayFrost?
-    nonisolated(unsafe) private static var lastOverlayFrost: OverlayFrost?
+    nonisolated(unsafe) private static var lastOverlayFrost: [UInt32: OverlayFrost] = [:]
     /// Input lease for `quit()` / compositor-side close. Set in `run`.
     nonisolated(unsafe) private static var inputChannel: InputChannel?
     /// Handed from `open` to `run`. Statics rather than a returned handle so

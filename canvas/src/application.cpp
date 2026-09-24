@@ -473,26 +473,38 @@ struct Application::Impl
     }
   }
 
-  /// Opens an additional window on the same device. Returns its id, or 0.
+  /// Opens an additional window. Returns its id, or 0.
   ///
-  /// The window starts hidden: showing it before the producer has drawn a
-  /// frame into it means presenting an undefined swapchain image, which reads
-  /// as a flash of garbage. The caller shows it after the first repaint.
+  /// A windowed app gets another swapchain on the same device, and it starts
+  /// hidden: showing it before the producer has drawn a frame into it means
+  /// presenting an undefined swapchain image. The caller shows it after the
+  /// first repaint.
+  ///
+  /// A client has no device. What it can open is the other half of an
+  /// `AppWindow` — an arena and an input queue — which is all a process that
+  /// draws into someone else's surface needs. The compositor surface itself
+  /// is not this call's to create; the caller asks for one and publishes into
+  /// the arena. Refusing here used to be the whole answer, and it was also
+  /// the crash this guard replaced: building a GLFW window and then reaching
+  /// into a device that was never initialised.
   uint32_t openWindow(int w, int h, const std::string &title)
   {
-    // A client has no device, and every step below needs one: `AppWindow`
-    // builds a real GLFW window and a swapchain, and `bringUpWindow` reaches
-    // straight into `device.textRenderer()`. Without this the call gets far
-    // enough to open a window in the *client's* process before dying on an
-    // uninitialised device — a crash that looks like a renderer bug.
-    //
-    // 0 is what a failed open already means, so callers need no new case.
-    // Opening a second window as a client needs a surface from the
-    // compositor; see docs/client-server-gaps.md.
     if (!deviceUp) {
-      std::cerr << "Application::openWindow: no device — a client cannot open "
-                   "\"" << title << "\" itself\n";
-      return 0;
+      // No window yet means init never happened, not "we are a client".
+      // A client window is the one `initClient` already pushed, and it has
+      // no renderer — that is how the two are told apart.
+      if (windows.empty() || windows.front()->hasRenderer()) {
+        std::cerr << "Application::openWindow: no device — cannot open \""
+                  << title << "\"\n";
+        return 0;
+      }
+      auto window = std::make_unique<AppWindow>(nextWindowId, w, h);
+      const uint32_t id = window->id();
+      windows.push_back(std::move(window));
+      ++nextWindowId;
+      std::cout << "Window " << id << " open (client): " << w << "x" << h
+                << " \"" << title << "\"\n";
+      return id;
     }
     try {
       auto window = std::make_unique<AppWindow>(device, nextWindowId, w, h, title);
@@ -517,8 +529,9 @@ struct Application::Impl
     for (auto it = windows.begin(); it != windows.end(); ++it) {
       if ((*it)->id() != windowId) continue;
       // Its GPU work has to be done before its attachments go, and a sibling
-      // may be mid-frame against the same queue.
-      device.waitForAllFramesInFlight();
+      // may be mid-frame against the same queue. A client window has no GPU
+      // work and no device — waiting on one is the crash `openWindow` refuses.
+      if (deviceUp) device.waitForAllFramesInFlight();
       windows.erase(it);
       // After the window, so nothing is still drawing into it. Kept for the
       // next window of this size rather than destroyed — see `exportPool`. A

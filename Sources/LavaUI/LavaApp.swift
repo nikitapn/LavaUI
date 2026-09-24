@@ -227,6 +227,16 @@ public enum LavaApp {
 
     public static var windowCount: Int { windows.count + pendingWindows.count }
 
+    /// The layout host of one open window, once `run` has brought it up.
+    ///
+    /// A fly-out measures itself the same way the root menu does — the plate's
+    /// frame after a layout pass — and that frame lives on the fly-out's own
+    /// host, not the window the process started with.
+    public static func layoutHost(for id: WindowID) -> LayoutHost? {
+        if let window = windows.first(where: { $0.id == id }) { return window.host }
+        return pendingWindows.first(where: { $0.id == id })?.host
+    }
+
     /// The layout host of the window the app started with, once `run` has
     /// brought it up. Nil before that, and after teardown.
     ///
@@ -241,8 +251,59 @@ public enum LavaApp {
     /// the one question that runs the other way.
     public static var mainLayoutHost: LayoutHost? { windows.first?.host }
 
+    /// A rectangle in the parent surface's own coordinates. A popup hangs
+    /// just below it; the compositor turns that into a position on screen,
+    /// because the client does not know where its window is.
+    public struct SurfaceAnchor: Sendable {
+        public var x: Float
+        public var y: Float
+        public var w: Float
+        public var h: Float
+
+        public init(x: Float, y: Float, w: Float, h: Float) {
+            self.x = x
+            self.y = y
+            self.w = w
+            self.h = h
+        }
+
+        public init(_ frame: LayoutFrame) {
+            self.init(x: frame.x, y: frame.y, w: frame.w, h: frame.h)
+        }
+    }
+
+    /// How a client turns `openWindow` into a compositor surface.
+    ///
+    /// Both nil in a windowed app and in a test: the engine opens the window
+    /// itself. A client has no device, so the second view tree still lives
+    /// here but the pixels and the input belong to a surface the compositor
+    /// creates. `LavaClient` fills these for the duration of `run`.
+    public enum ClientSurfaceBridge {
+        /// Create the engine window, its arena and its compositor surface.
+        /// The anchor, when there is one, makes a borderless popup of the
+        /// window the app started with rather than another cascaded window.
+        /// The last argument is the backdrop-blur radius in pixels; 0 is
+        /// no frost. Nil means the surface could not be opened.
+        nonisolated(unsafe) public static var open:
+            ((Float, Float, String, SurfaceAnchor?, Float) -> WindowID?)?
+        /// A hidden menu fly-out: width, height, backdrop-blur radius. The
+        /// compositor places it later, beside a row, so creating it must not
+        /// put a window on screen. Nil in a windowed app, which has no menu
+        /// compositor to ask.
+        nonisolated(unsafe) public static var openMenuPlate:
+            ((Float, Float, Float) -> WindowID?)?
+        /// The view tree is gone. Drop the compositor surface. Idempotent.
+        nonisolated(unsafe) public static var close: ((WindowID) -> Void)?
+    }
+
     /// Opens a second window running its own view tree, sharing this process's
     /// GPU, font atlas, texture cache and frame loop.
+    ///
+    /// Under a compositor this is a second surface, not a second process: its
+    /// own arena and its own input stream, closed without ending the app.
+    /// That only happens when `ClientSurfaceBridge` is installed, which
+    /// `LavaClient.run` does. A client that calls `Editor.openWindow` directly
+    /// gets the arena and the queue and nothing on screen.
     ///
     /// Safe to call from a button handler: the window is created immediately
     /// but brought up at the end of the current frame, so it never draws
@@ -270,13 +331,102 @@ public enum LavaApp {
             )
             return nil
         }
-        guard let id = editor.openWindow(width: width, height: height, title: title)
-        else {
+        // A client bridge replaces the engine open rather than wrapping it:
+        // the bridge is what creates the engine window, because it has to
+        // exist before the arena can be attached, and creating it twice
+        // would be two windows for one click.
+        guard let id = openEngineWindow(
+            editor: editor, title: title, width: width, height: height,
+            anchor: nil, backdropBlur: 0
+        ) else { return nil }
+        return adopt(
+            editor: editor, id: id, title: title, onClose: onClose,
+            makeRoot: makeRoot
+        )
+    }
+
+    /// A borderless popup of the window the app started with, placed just
+    /// below `anchor` (a rectangle in that window) and dismissed by a press
+    /// that misses it.
+    ///
+    /// The anchor is this window's own coordinates. Where that window sits
+    /// on the screen is the compositor's, and so is the press that lands
+    /// somewhere else — a client cannot hit-test a foreign window. Under a
+    /// window manager that is not ours this is an ordinary second window;
+    /// the placement and the dismiss are compositor work.
+    ///
+    /// `backdropBlur` is the frost behind the popup, in pixels. 0 leaves it
+    /// off. The plate is cut to the window's own corner radius, the same
+    /// mask as the popup, so the two are one outline. A windowed app ignores
+    /// the radius: nothing there can see the desktop behind the window.
+    @discardableResult
+    public static func openPopup<V: View>(
+        title: String,
+        width: Float = 280,
+        height: Float = 240,
+        anchor: SurfaceAnchor,
+        backdropBlur: Float = 0,
+        onClose: (() -> Void)? = nil,
+        makeRoot: @escaping () -> V
+    ) -> WindowID? {
+        guard let editor else {
             FileHandle.standardError.write(
-                Data("openWindow: engine refused \"\(title)\"\n".utf8)
+                Data("openPopup: no running LavaApp\n".utf8)
             )
             return nil
         }
+        guard let id = openEngineWindow(
+            editor: editor, title: title, width: width, height: height,
+            anchor: anchor, backdropBlur: backdropBlur
+        ) else { return nil }
+        return adopt(
+            editor: editor, id: id, title: title, onClose: onClose,
+            makeRoot: makeRoot
+        )
+    }
+
+    /// A menu fly-out: its own window, hidden until the compositor places it.
+    ///
+    /// Not `openPopup`. A popup hangs below an anchor the panel named, and
+    /// this hangs beside a row of a menu the compositor is already showing.
+    /// Where that is — and which side of the row still fits on the work
+    /// area — is decided when the plate has been measured, not here.
+    ///
+    /// `backdropBlur` frosts the desktop behind the plate, as `openPopup`'s
+    /// does, and comes up with it: the compositor captures when it places
+    /// the plate, not before. 0 leaves it off.
+    @discardableResult
+    public static func openMenuPlate<V: View>(
+        width: Float,
+        height: Float,
+        backdropBlur: Float = 0,
+        onClose: (() -> Void)? = nil,
+        makeRoot: @escaping () -> V
+    ) -> WindowID? {
+        guard let editor else {
+            FileHandle.standardError.write(
+                Data("openMenuPlate: no running LavaApp\n".utf8)
+            )
+            return nil
+        }
+        let id: WindowID?
+        if let open = ClientSurfaceBridge.openMenuPlate {
+            id = open(width, height, max(0, backdropBlur))
+        } else {
+            id = editor.openWindow(width: width, height: height, title: "Menu")
+        }
+        guard let id else { return nil }
+        return adopt(
+            editor: editor, id: id, title: "Menu", onClose: onClose,
+            makeRoot: makeRoot
+        )
+    }
+
+    /// Puts a window the engine already opened onto the frame loop.
+    private static func adopt<V: View>(
+        editor: Editor, id: WindowID, title: String,
+        onClose: (() -> Void)?, makeRoot: @escaping () -> V
+    ) -> WindowID {
         let scope = WindowScope(label: title, windowID: id)
         WindowScope.register(scope)
         let window = LavaWindow(
@@ -291,6 +441,27 @@ public enum LavaApp {
         return id
     }
 
+    /// The engine window, and — when this process is a client — the
+    /// compositor surface. Nil when neither could be opened.
+    private static func openEngineWindow(
+        editor: Editor, title: String, width: Float, height: Float,
+        anchor: SurfaceAnchor?, backdropBlur: Float
+    ) -> WindowID? {
+        let id: WindowID?
+        if let open = ClientSurfaceBridge.open {
+            id = open(width, height, title, anchor, max(0, backdropBlur))
+        } else {
+            id = editor.openWindow(width: width, height: height, title: title)
+        }
+        guard let id else {
+            FileHandle.standardError.write(
+                Data("openWindow: could not open \"\(title)\"\n".utf8)
+            )
+            return nil
+        }
+        return id
+    }
+
     /// Closes a window this app opened. Closing the window the app started
     /// with ends `run`, the same as its titlebar X.
     ///
@@ -301,7 +472,19 @@ public enum LavaApp {
             window.requestClose()
             FrameScheduler.requestWake(in: 0)
         }
+        // Not yet in the loop's list, so nothing will reap it. Drop it the
+        // way reap would, or its surface stays up and its scope stays
+        // registered.
+        let dropped = pendingWindows.filter { $0.id == id }
         pendingWindows.removeAll { $0.id == id }
+        for window in dropped { retire(window) }
+    }
+
+    /// Engine window and compositor surface, after the tree has been detached.
+    private static func retire(_ window: LavaWindow) {
+        window.teardown()
+        editor?.closeWindow(window.id)
+        ClientSurfaceBridge.close?(window.id)
     }
 
     /// Whether `id` is still open.
@@ -343,11 +526,16 @@ public enum LavaApp {
             // Quitting: tear every window down, not just the one clicked —
             // including any a handler asked for this same frame, which would
             // otherwise be brought up into an app that is already leaving.
-            for window in pendingWindows { editor?.closeWindow(window.id) }
+            // The window the app started with is not closed here. Ending
+            // `run` is what drops its surface, and closing it twice races
+            // the compositor's own close.
+            let opening = pendingWindows
             pendingWindows.removeAll()
+            for window in opening { retire(window) }
             for window in windows { window.teardown() }
             for window in windows where window.id != .main {
                 editor?.closeWindow(window.id)
+                ClientSurfaceBridge.close?(window.id)
             }
             windows.removeAll()
             return
@@ -358,8 +546,7 @@ public enum LavaApp {
                 survivors.append(window)
                 continue
             }
-            window.teardown()
-            editor?.closeWindow(window.id)
+            retire(window)
         }
         windows = survivors
     }

@@ -46,6 +46,13 @@ public final class WindowScope {
     /// For diagnostics only — the window title, typically.
     public let label: String
 
+    /// Whether this window currently fills the work area.
+    ///
+    /// Per window. A single flag made maximizing one window hide the chrome
+    /// of every other window in the process, because `WindowBridge.isMaximized`
+    /// is what a title strip reads and there used to be only one strip.
+    var maximized = false
+
     /// The engine window this scope drives.
     ///
     /// Here rather than only on `LavaWindow` so a view can ask which window it

@@ -87,12 +87,10 @@ enum DesktopMenuID {
     static let logout = MenuID("desktop.logout")
 }
 
-/// What the system menu is showing besides a dropdown: a card on the
-/// panel itself. One at a time, same as the other popovers — the hit
-/// region has to cover it, and two cards on a 32pt strip would stack.
+/// A confirm drawn on the panel itself. About is a window of its own —
+/// a card this tall does not belong in the strip's surface.
 enum SystemDialog: Equatable {
     case none
-    case about
     case logout
 }
 
@@ -136,17 +134,27 @@ final class MenuSession {
         }
     }
 
-    /// Strip popovers that need the deep hit region (volume, calendar, …).
-    /// Same rule as `openMenu`: without it, dropdowns paint into dead space.
-    var volumeOpen = false
-    var calendarOpen = false
-    var playerOpen = false
-    /// A tray applet's imported menu. Which applet is the tray's business.
-    var trayMenuOpen = false
-    /// About / log-out confirm. Not a dropdown: a card placed below the
-    /// strip, because a one-item confirm inside the menu itself would
-    /// fire the action on the same click that opened it.
+    /// Log-out confirm. A popup, not a row of the menu that opened it:
+    /// confirming and choosing are different gestures.
     var dialog: SystemDialog = .none
+
+    /// The About window, if it is up. A second click does not open another.
+    @ObservationIgnored var aboutWindow: WindowID?
+    /// The volume window, if it is up. Clicking the speaker again closes it.
+    @ObservationIgnored var volumeWindow: WindowID?
+    /// The calendar window, if it is up. Clicking the clock again closes it.
+    @ObservationIgnored var calendarWindow: WindowID?
+    /// The player window, if it is up.
+    @ObservationIgnored var playerWindow: WindowID?
+    /// The log-out confirm, if it is up.
+    @ObservationIgnored var logoutWindow: WindowID?
+    /// The menu the compositor is drawing for us, if one is.
+    @ObservationIgnored var hosted: HostedMenu?
+    /// Rows that had not arrived yet. Filled from the pump.
+    @ObservationIgnored var pendingMenu: PendingMenu?
+    /// What About draws. Set once the assets exist, before `run`.
+    @ObservationIgnored var aboutImage: UIImage?
+    @ObservationIgnored var aboutFont: UIFont?
 
     /// How far down the surface the notification stack currently reaches, or
     /// 0 for none. Not `wantsCapture`: a toast needs its own pixels clickable
@@ -186,24 +194,19 @@ final class MenuSession {
         refreshModel()
     }
 
-    /// Pumps DBus, publishes a new model when there is one, and keeps the
-    /// panel's hit region in step with whether a menu is open.
+    /// Pumps DBus and publishes a new model when there is one. Menus are
+    /// not drawn here, so this no longer grows the panel to hold one.
     func poll() {
-        // Surface id exists only after `LavaClient.run` creates it; the first
-        // poll is the earliest safe moment to expand the panel for menus.
-        ensureExpanded()
-        guard let menus else {
-            syncInputRegion()
-            return
-        }
-        if menus.poll() { refreshModel() }
-        syncInputRegion()
+        if menus?.poll() == true { refreshModel() }
+        _ = tray?.poll()
+        flushPendingMenu()
+        syncSurface()
     }
 
     func activate(_ id: MenuID) {
         switch id {
         case DesktopMenuID.about:
-            setDialog(.about)
+            openAbout()
         case DesktopMenuID.settings:
             closeMenu()
             launchDesktopProgram("LavaSettings")
@@ -261,6 +264,25 @@ final class MenuSession {
                     .item(MenuItemModel(
                         id: DesktopMenuID.about, title: "About Lava"
                     )),
+                    .submenu(MenuNode(
+                        id: MenuID("desktop.session"),
+                        title: "Session",
+                        items: [
+                            .item(MenuItemModel(
+                                id: MenuID("desktop.session.lock"), title: "Lock Screen"
+                            )),
+                            .submenu(MenuNode(
+                                id: MenuID("desktop.session.more"),
+                                title: "More",
+                                items: [
+                                    .item(MenuItemModel(
+                                        id: MenuID("desktop.session.more.a"),
+                                        title: "Nested item"
+                                    )),
+                                ]
+                            )),
+                        ]
+                    )),
                     .item(MenuItemModel(
                         id: DesktopMenuID.settings, title: "Settings…"
                     )),
@@ -282,17 +304,14 @@ final class MenuSession {
 
     @ObservationIgnored var brandIcon: MenuIcon?
 
-    // ─── Opening a menu without resizing the surface ─────────────────────
+    // ─── Menus the compositor draws ──────────────────────────────────────
     //
-    // In-window menus sit inside a tall window; the dropdown just paints below
-    // the strip. A panel that is only 32pt tall cannot do that — the overlay
-    // would layout against a 32pt viewport, clip, then jump when the surface
-    // grew. That read as a blink and a bad transition.
-    //
-    // So the panel is expanded *once* to `openHeight` (reservation stays the
-    // strip) and only the input region changes: closed → strip only (clicks
-    // fall through to windows below); open → full surface (clicks outside the
-    // dropdown dismiss). Same idea as the dock's trigger strip.
+    // The strip is 32pt and it stays that. A dropdown does not fit in it,
+    // and growing the surface to hold one is a transparent window over the
+    // top of the screen. The rows go through `OpenMenu`: the same path as
+    // a right-click on the desktop, drawn by the menu client, placed and
+    // dismissed by the compositor. This process only knows what the rows
+    // say.
 
     func openMenu(_ id: MenuID) {
         // AboutToShow before presentation so a deferred submenu is asked for
@@ -303,101 +322,386 @@ final class MenuSession {
         menus?.aboutToShow(id)
         refreshModel()
         openMenu = id
-        // One popover at a time.
-        volumeOpen = false
-        calendarOpen = false
-        playerOpen = false
-        dialog = .none
-        syncInputRegion()
+        closePlayer()
+        if dialog != .none { setDialog(.none) }
+        if presentBar(id) {
+            pendingMenu = nil
+        } else {
+            pendingMenu = .bar(id)
+        }
     }
 
     func closeMenu() {
         guard openMenu != nil else { return }
         openMenu = nil
-        syncInputRegion()
     }
 
-    func setVolumeOpen(_ open: Bool) {
-        guard volumeOpen != open else { return }
-        volumeOpen = open
-        if open {
-            openMenu = nil
-            calendarOpen = false
-            playerOpen = false
-            dialog = .none
+    /// The pump, after the importer and the tray have had a turn. A menu
+    /// whose rows were empty at the click is asked again until they arrive.
+    func flushPendingMenu() {
+        guard let pending = pendingMenu else {
+            noteTray()
+            return
         }
-        syncInputRegion()
+        switch pending {
+        case .bar(let id):
+            if presentBar(id) { pendingMenu = nil }
+        case .tray(let key, let x, let y):
+            if presentTray(key: key, x: x, y: y) { pendingMenu = nil }
+        }
+        noteTray()
     }
 
-    func setCalendarOpen(_ open: Bool) {
-        guard calendarOpen != open else { return }
-        calendarOpen = open
-        if open {
-            openMenu = nil
-            volumeOpen = false
-            playerOpen = false
-            dialog = .none
+    /// A tray icon asked for its menu. The rows usually arrive a poll
+    /// later; opening with nothing is a grab the user cannot use.
+    func noteTray() {
+        guard let tray = tray, let key = tray.openMenuKey else { return }
+        if hosted?.trayKey == key { return }
+        if case .tray(let pending, _, _) = pendingMenu, pending == key { return }
+        let frame = LavaApp.mainLayoutHost?.agentFrame(sid: "tray.\(key)")
+        let x = frame?.x ?? 0
+        let y = (frame?.y ?? 0) + (frame?.h ?? Self.stripHeight)
+        if presentTray(key: key, x: x, y: y) {
+            pendingMenu = nil
+        } else {
+            pendingMenu = .tray(key: key, x: x, y: y)
         }
-        syncInputRegion()
     }
 
-    func setPlayerOpen(_ open: Bool) {
-        guard playerOpen != open else { return }
-        playerOpen = open
-        if open {
-            openMenu = nil
-            volumeOpen = false
-            calendarOpen = false
-            dialog = .none
+    /// The answer to a menu this panel asked for. A serial that is not the
+    /// one up is the menu a newer one replaced, and it is not a dismissal
+    /// of the newer one.
+    func menuChosen(serial: UInt32, chosen: UInt32) {
+        guard let hosted, hosted.serial == serial else { return }
+        let action = hosted.actions[chosen]
+        let trayKey = hosted.trayKey
+        self.hosted = nil
+        guard chosen != 0, let action else {
+            pendingMenu = nil
+            if trayKey != nil {
+                tray?.closeMenu()
+            } else {
+                openMenu = nil
+            }
+            return
         }
-        syncInputRegion()
+        switch action {
+        case .barItem(let id):
+            openMenu = nil
+            activate(id)
+        case .trayItem(let id):
+            tray?.activateMenuItem(id)
+            tray?.closeMenu()
+        }
     }
 
-    /// An applet's own menu, open in the tray strip. The tray holds which
-    /// item it belongs to; all this needs to know is that the panel has to
-    /// keep the clicks.
-    func setTrayMenuOpen(_ open: Bool) {
-        guard trayMenuOpen != open else { return }
-        trayMenuOpen = open
-        if open {
-            openMenu = nil
-            volumeOpen = false
-            calendarOpen = false
-            playerOpen = false
-            dialog = .none
+    @discardableResult
+    private func presentBar(_ id: MenuID) -> Bool {
+        // Branches an application fills only when asked. One pass is the
+        // menu the user opened; the passes after that are the branches that
+        // pass just filled in. Four is a menu deeper than the ones this
+        // panel has seen, and a branch that is still empty after that stays
+        // a row — an empty fly-out is a worse answer than a door that does
+        // not open yet.
+        warmSubmenus(tray: false) {
+            model.menus.first { $0.id == id }?.items ?? []
         }
-        syncInputRegion()
+        guard let menu = model.menus.first(where: { $0.id == id }),
+              !menu.items.isEmpty
+        else { return false }
+        let (x, y) = anchor(for: "menu.\(id.raw)")
+        return present(
+            menu.items, title: menu.title, x: x, y: y, tray: false, trayKey: nil
+        )
+    }
+
+    @discardableResult
+    private func presentTray(key: String, x: Float, y: Float) -> Bool {
+        warmSubmenus(tray: true) { tray?.menuEntries ?? [] }
+        guard let entries = tray?.menuEntries, !entries.isEmpty else { return false }
+        return present(entries, title: "", x: x, y: y, tray: true, trayKey: key)
+    }
+
+    /// `aboutToShow` on every submenu that has not been asked yet.
+    ///
+    /// Application menus fill the branch before the call returns. Tray
+    /// menus answer on the bus, and `poll` is what copies that answer into
+    /// `menuEntries` — which is why this reads the entries again after each
+    /// pass instead of walking the list it started with.
+    private func warmSubmenus(tray isTray: Bool, entries: () -> [MenuEntry]) {
+        var seen = Set<MenuID>()
+        for _ in 0..<4 {
+            let ids = Self.submenuIDs(in: entries()).filter { seen.insert($0).inserted }
+            if ids.isEmpty { break }
+            for id in ids {
+                if isTray { tray?.aboutToShow(id) }
+                else { menus?.aboutToShow(id) }
+            }
+            if isTray { _ = tray?.poll() }
+        }
+    }
+
+    private static func submenuIDs(in entries: [MenuEntry]) -> [MenuID] {
+        var ids: [MenuID] = []
+        func walk(_ entries: [MenuEntry]) {
+            for entry in entries {
+                guard case .submenu(let node) = entry else { continue }
+                ids.append(node.id)
+                walk(node.items)
+            }
+        }
+        walk(entries)
+        return ids
+    }
+
+    @discardableResult
+    private func present(
+        _ entries: [MenuEntry], title: String, x: Float, y: Float,
+        tray: Bool, trayKey: String?
+    ) -> Bool {
+        let converted = MenuWire.convert(entries, tray: tray)
+        guard !converted.items.isEmpty else { return false }
+        let serial = LavaClient.openMenu(
+            x: x, y: y, title: title, items: converted.items
+        )
+        guard serial != 0 else {
+            FileHandle.standardError.write(
+                Data("LavaTaskbar: no menu client — menu not shown\n".utf8)
+            )
+            return false
+        }
+        hosted = HostedMenu(
+            serial: serial, actions: converted.actions, x: x, y: y, trayKey: trayKey
+        )
+        return true
+    }
+
+    private func anchor(for sid: String) -> (Float, Float) {
+        if let frame = LavaApp.mainLayoutHost?.agentFrame(sid: sid) {
+            return (frame.x, frame.y + frame.h)
+        }
+        return (0, Self.stripHeight)
+    }
+
+    private func openLogout() {
+        if let id = logoutWindow, LavaApp.isWindowOpen(id) { return }
+        let panelW = editor?.framebufferSize().w ?? 1280
+        let width = LogoutWindow.width
+        let anchor = LavaApp.SurfaceAnchor(
+            x: max(8, (panelW - width) / 2),
+            y: 0,
+            w: width,
+            h: Self.stripHeight
+        )
+        var opened: WindowID?
+        opened = LavaApp.openPopup(
+            title: "Log Out",
+            width: width,
+            height: LogoutWindow.height,
+            anchor: anchor,
+            backdropBlur: TaskbarChrome.popupBlurRadius,
+            onClose: {
+                if let id = opened, session.logoutWindow == id {
+                    session.logoutWindow = nil
+                    if session.dialog != .none { session.dialog = .none }
+                }
+            }
+        ) {
+            LogoutWindow()
+        }
+        logoutWindow = opened
+    }
+
+    /// "About Lava" as a window of this process. Already up means leave it:
+    /// a second copy would be the same card twice, and the one that is up
+    /// has its own close.
+    func openAbout() {
+        closeMenu()
+        if dialog != .none { setDialog(.none) }
+        if let id = aboutWindow, LavaApp.isWindowOpen(id) { return }
+        guard let image = aboutImage, let font = aboutFont else { return }
+        let panelW = editor?.framebufferSize().w ?? 1280
+        let width: Float = 560
+        // Centred under the strip. The compositor places the popup below
+        // this rectangle and keeps it on the output.
+        let anchor = LavaApp.SurfaceAnchor(
+            x: max(8, (panelW - width) / 2),
+            y: 0,
+            w: width,
+            h: Self.stripHeight
+        )
+        var opened: WindowID?
+        opened = LavaApp.openPopup(
+            title: "About Lava",
+            width: width,
+            height: 520,
+            anchor: anchor,
+            backdropBlur: TaskbarChrome.popupBlurRadius,
+            onClose: {
+                if let id = opened, session.aboutWindow == id {
+                    session.aboutWindow = nil
+                }
+            }
+        ) {
+            AboutWindow(image: image, font: font)
+        }
+        aboutWindow = opened
+    }
+
+    /// Speaker click. Opens the volume window, or closes it when it is
+    /// already the thing on screen — the same toggle the dropdown used,
+    /// without the panel having to catch the click that dismisses it.
+    func toggleVolume() {
+        if let id = volumeWindow, LavaApp.isWindowOpen(id) {
+            LavaApp.closeWindow(id)
+            return
+        }
+        closeMenu()
+        let panelW = editor?.framebufferSize().w ?? 1280
+        // The speaker, in this panel. Missing — the first frame has not
+        // laid out yet — is the right-hand end of the strip, which is
+        // where the icon lives.
+        let anchor: LavaApp.SurfaceAnchor
+        if let icon = LavaApp.mainLayoutHost?.agentFrame(sid: "applet.volume") {
+            anchor = LavaApp.SurfaceAnchor(icon)
+        } else {
+            anchor = LavaApp.SurfaceAnchor(
+                x: panelW - 48, y: 0, w: 40, h: Self.stripHeight
+            )
+        }
+        var opened: WindowID?
+        opened = LavaApp.openPopup(
+            title: "Volume",
+            width: 280,
+            height: 180,
+            anchor: anchor,
+            backdropBlur: TaskbarChrome.popupBlurRadius,
+            onClose: {
+                if let id = opened, session.volumeWindow == id {
+                    session.volumeWindow = nil
+                }
+            }
+        ) {
+            VolumeWindow(pulse: pulse)
+        }
+        volumeWindow = opened
+    }
+
+    /// Clock click. Opens the calendar under the clock, or closes it when
+    /// it is already up. A press that misses the popup is the compositor's
+    /// to swallow — the panel does not grow to catch it.
+    func toggleCalendar() {
+        if let id = calendarWindow, LavaApp.isWindowOpen(id) {
+            LavaApp.closeWindow(id)
+            return
+        }
+        closeMenu()
+        let panelW = editor?.framebufferSize().w ?? 1280
+        let anchor: LavaApp.SurfaceAnchor
+        if let clock = LavaApp.mainLayoutHost?.agentFrame(sid: "applet.calendar") {
+            anchor = LavaApp.SurfaceAnchor(clock)
+        } else {
+            anchor = LavaApp.SurfaceAnchor(
+                x: panelW - 180, y: 0, w: 160, h: Self.stripHeight
+            )
+        }
+        var opened: WindowID?
+        opened = LavaApp.openPopup(
+            title: "Calendar",
+            width: CalendarWindow.width,
+            height: CalendarWindow.height,
+            anchor: anchor,
+            backdropBlur: TaskbarChrome.popupBlurRadius,
+            onClose: {
+                if let id = opened, session.calendarWindow == id {
+                    session.calendarWindow = nil
+                }
+            }
+        ) {
+            CalendarWindow()
+        }
+        calendarWindow = opened
+    }
+
+    func togglePlayer() {
+        if let id = playerWindow, LavaApp.isWindowOpen(id) {
+            LavaApp.closeWindow(id)
+            return
+        }
+        let panelW = editor?.framebufferSize().w ?? 1280
+        let anchor: LavaApp.SurfaceAnchor
+        if let chip = LavaApp.mainLayoutHost?.agentFrame(sid: "applet.player") {
+            anchor = LavaApp.SurfaceAnchor(chip)
+        } else {
+            anchor = LavaApp.SurfaceAnchor(
+                x: panelW * 0.5, y: 0, w: 120, h: Self.stripHeight
+            )
+        }
+        var opened: WindowID?
+        opened = LavaApp.openPopup(
+            title: "Player",
+            width: PlayerWindow.width,
+            height: PlayerWindow.height,
+            anchor: anchor,
+            backdropBlur: TaskbarChrome.popupBlurRadius,
+            onClose: {
+                if let id = opened, session.playerWindow == id {
+                    session.playerWindow = nil
+                }
+            }
+        ) {
+            PlayerWindow(mpris: mpris)
+        }
+        playerWindow = opened
+    }
+
+    func closePlayer() {
+        guard let id = playerWindow, LavaApp.isWindowOpen(id) else { return }
+        LavaApp.closeWindow(id)
     }
 
     func setDialog(_ next: SystemDialog) {
         guard dialog != next else { return }
         dialog = next
-        if next != .none {
-            openMenu = nil
-            volumeOpen = false
-            calendarOpen = false
-            playerOpen = false
-            if trayMenuOpen {
-                trayMenuOpen = false
-                tray?.closeMenu()
+        if next == .none {
+            if let id = logoutWindow, LavaApp.isWindowOpen(id) {
+                LavaApp.closeWindow(id)
+            }
+            return
+        }
+        openMenu = nil
+        closePlayer()
+        tray?.closeMenu()
+        openLogout()
+    }
+
+    /// The strip, plus the notification stack when there is one.
+    ///
+    /// Menus do not figure in it: those are a surface of their own. A toast
+    /// still lives in this one, so the surface grows to the stack and
+    /// shrinks back when the last card goes — never to the old fixed depth
+    /// a dropdown used to need.
+    private func syncSurface() {
+        let height = surfaceHeight()
+        if height != appliedHeight {
+            appliedHeight = height
+            LavaClient.setPanelThickness(height)
+            if let editor {
+                let size = editor.framebufferSize()
+                let width = size.w > 1 ? size.w : 1920
+                editor.setClientSize(width: width, height: height)
             }
         }
         syncInputRegion()
     }
 
-    /// Grows the panel to menu depth once, keeps the strip reservation, and
-    /// updates the local layout size so the first open does not wait on a
-    /// Resize stream event.
-    private func ensureExpanded() {
-        guard !expanded else { return }
-        expanded = true
-        LavaClient.setPanelThickness(Self.openHeight)
-        if let editor {
-            let size = editor.framebufferSize()
-            let width = size.w > 1 ? size.w : 1920
-            editor.setClientSize(width: width, height: Self.openHeight)
-        }
-        syncInputRegion()
+    private func surfaceHeight() -> Float {
+        guard !toastIds.isEmpty else { return Self.stripHeight }
+        let estimate = Self.stripHeight + 16 + Float(toastIds.count) * 180
+        guard appliedHeight + 1 >= estimate,
+              let frame = toastFrame(), frame.h > 40
+        else { return max(appliedHeight, estimate) }
+        return max(Self.stripHeight, Float(frame.y) + Float(frame.h) + 8)
     }
 
     /// The notification stack changed shape; the hit region follows it.
@@ -411,13 +715,7 @@ final class MenuSession {
         let ids = toasts.map(\.id)
         guard ids != toastIds else { return }
         toastIds = ids
-        FrameTasks.after { [self] in syncInputRegion() }
-    }
-
-    /// Whether any strip popover needs the deep hit region.
-    private var wantsCapture: Bool {
-        openMenu != nil || volumeOpen || calendarOpen || playerOpen
-            || trayMenuOpen || dialog != .none
+        FrameTasks.after { [self] in syncSurface() }
     }
 
     /// Hit-test region: the strip, plus whatever else is currently claiming
@@ -434,20 +732,13 @@ final class MenuSession {
     /// deliberately: the click that dismisses an open dropdown is the one that
     /// lands *outside* it, so the panel has to be the thing that receives it.
     private func syncInputRegion() {
-        ensureExpanded()
         // Width is the surface length; the compositor clamps. A large constant
         // is fine — the panel is always full edge width.
         let width: Float = 8192
-        var region: [InputRect] = []
-        if wantsCapture {
-            region = [InputRect(x: 0, y: 0, w: UInt32(width),
-                                h: UInt32(Self.openHeight))]
-        } else {
-            region = [InputRect(x: 0, y: 0, w: UInt32(width),
+        var region = [InputRect(x: 0, y: 0, w: UInt32(width),
                                 h: UInt32(Self.stripHeight))]
-            if let toasts = toastFrame() {
-                region.append(toasts)
-            }
+        if let toasts = toastFrame() {
+            region.append(toasts)
         }
         guard !Self.sameRegion(region, appliedRegion) else { return }
         appliedRegion = region
@@ -485,7 +776,7 @@ final class MenuSession {
         )
     }
 
-    @ObservationIgnored private var expanded = false
+    @ObservationIgnored private var appliedHeight: Float = MenuSession.stripHeight
     @ObservationIgnored private var appliedRegion: [InputRect] = []
     /// Which notifications are up, so a pump that changed nothing costs a
     /// compare rather than a layout read and a round trip.
@@ -498,7 +789,6 @@ final class MenuSession {
     /// than any menubar depth while staying under the smallest display anyone
     /// runs this on.
     static let stripHeight: Float = 32
-    static let openHeight: Float = 600
 }
 
 nonisolated(unsafe) let session = MenuSession()
@@ -512,6 +802,18 @@ let mpris = MprisSession()
 /// frost/radius tweak is not four call sites.
 enum TaskbarChrome {
     static var style: MenuBarStyle { .panel() }
+
+    /// About, the volume card and the calendar, over the compositor's frost.
+    ///
+    /// A menu row stays near opaque (`MenuBarStyle.panel`) because a
+    /// column of labels has to read as solid. These cards can sit lower
+    /// so the desktop comes through — and not so low that `textDim`,
+    /// which is the sink name, falls into a bright wallpaper.
+    static var popupWash: Color { Theme.current.panel.opacity(0.88) }
+
+    /// Same radius a menu dropdown asks for. The plate's *corner* is not
+    /// this — the compositor cuts it to the window's own corner radius.
+    static let popupBlurRadius: Float = 12
 }
 
 struct TaskbarView: View {
@@ -524,10 +826,10 @@ struct TaskbarView: View {
 
     var body: some View {
         let chrome = TaskbarChrome.style
-        // The strip is what paints; the surface is always tall enough for a
-        // dropdown (see MenuSession.ensureExpanded). Transparent below the
-        // strip so the desktop shows through; input region is strip-only when
-        // closed so those pixels do not steal clicks.
+        // The strip is what paints. The surface is the strip, and grows only
+        // while a notification stack needs the room under it. Transparent
+        // below the strip so the desktop shows through; the input region is
+        // the strip plus the cards, and nothing else.
         //
         // Horizontal inset only: 10pt on every edge of a 32pt bar left
         // 12pt for the icon and the titles overflowed the row.
@@ -546,7 +848,8 @@ struct TaskbarView: View {
                     openMenuID: openBinding,
                     onActivate: { session.activate($0) },
                     style: chrome,
-                    icons: [DesktopMenuID.root: brandIcon]
+                    icons: [DesktopMenuID.root: brandIcon],
+                    externalMenus: true
                 )
                 .font(menuFont)
 
@@ -566,15 +869,15 @@ struct TaskbarView: View {
                 HStack(flexGrow: 1, padding: 0) {}
 
                 if mpris.present {
-                    PlayerApplet(mpris: mpris, isOpen: playerOpenBinding)
+                    PlayerApplet(mpris: mpris)
                 }
 
                 trayStrip
 
-                // Native sound control before the clock — scroll, mute, popover.
-                VolumeApplet(pulse: pulse, isOpen: volumeOpenBinding)
+                // Native sound control before the clock — scroll, mute, window.
+                VolumeApplet(pulse: pulse)
 
-                CalendarApplet(clockText: clock.text, isOpen: calendarOpenBinding)
+                CalendarApplet(clockText: clock.text)
             }
             .padding(.horizontal, 10)
             .background(Theme.current.background)
@@ -591,13 +894,6 @@ struct TaskbarView: View {
                         .padding(EdgeInsets(top: 8, leading: 0, bottom: 0, trailing: 10))
                 }
             }
-        }
-        .overlay(
-            isPresented: dialogBinding,
-            placement: SystemDialogChrome.placement,
-            style: SystemDialogChrome.style
-        ) {
-            systemDialog
         }
     }
 
@@ -618,10 +914,11 @@ struct TaskbarView: View {
     @ViewBuilder
     private func trayIcon(_ item: StatusNotifierTray.TrayItem) -> some View {
         // Stack owns the hit target so left and right both work. Both may end
-        // in the item's DBusMenu, drawn here rather than by the applet: an
-        // SNI item has no window of its own, and the ones that implement no
-        // methods at all — nm-applet, and most of libappindicator's users —
-        // have nothing but that menu to offer.
+        // in the item's DBusMenu. The panel does not draw it: `OpenMenu`
+        // hands the rows to the compositor, the same way a right-click on
+        // the desktop does. An SNI item has no window of its own, and the
+        // ones that implement no methods at all — nm-applet, and most of
+        // libappindicator's users — have nothing but that menu to offer.
         HStack(
             padding: 0,
             alignment: .center,
@@ -630,20 +927,11 @@ struct TaskbarView: View {
                 // A second click on the icon whose menu is open closes it,
                 // which is what every panel does and what the pointer already
                 // suggests by dismissing on click-out.
-                if tray.openMenuKey == item.key {
-                    session.setTrayMenuOpen(false)
-                    tray.closeMenu()
-                    return
-                }
-                let opened: Bool
                 if button == PointerButton.right {
-                    opened = tray.contextMenu(item)
+                    tray.contextMenu(item)
                 } else if button == PointerButton.left {
-                    opened = tray.activate(item)
-                } else {
-                    opened = false
+                    tray.activate(item)
                 }
-                session.setTrayMenuOpen(opened)
             }
         ) {
             // Fixed 22pt so a large IconPixmap does not blow the strip height.
@@ -661,55 +949,9 @@ struct TaskbarView: View {
         .hoverBackground(TaskbarChrome.style.titleHover)
         .cornerRadius(6)
         .agentId("tray.\(item.key)")
-        .overlay(
-            isPresented: trayMenuBinding(item),
-            alignment: .below,
-            style: TaskbarChrome.style.overlayStyle
-        ) {
-            trayMenu
-        }
     }
 
-    /// The open applet menu, drawn with the same panel a menu-bar dropdown
-    /// uses — an imported menu is an imported menu, whether it came from the
-    /// focused window or from an icon in the tray.
-    @ViewBuilder
-    private var trayMenu: some View {
-        let entries = tray?.menuEntries ?? []
-        if entries.isEmpty {
-            // The applet was asked and has not answered yet. Saying so beats
-            // an empty box that looks like a menu with nothing in it.
-            Text("…", color: Theme.current.textDim)
-        } else {
-            MenuDropdownPanel(
-                entries: entries,
-                onActivate: { id in
-                    tray?.activateMenuItem(id)
-                    session.setTrayMenuOpen(false)
-                    tray?.closeMenu()
-                },
-                style: TaskbarChrome.style
-            )
-        }
-    }
-
-    /// Open state for one item's menu. Setting it false is the click-out
-    /// path — the overlay dismisses itself, and the tray has to hear about it
-    /// or the next click on the icon would be treated as a re-open.
-    private func trayMenuBinding(
-        _ item: StatusNotifierTray.TrayItem
-    ) -> Binding<Bool> {
-        Binding(
-            get: { tray?.openMenuKey == item.key },
-            set: { open in
-                guard !open else { return }
-                session.setTrayMenuOpen(false)
-                tray?.closeMenu()
-            }
-        )
-    }
-
-    /// The strip's open-menu state, with the input region attached to it.
+    /// The strip's open-menu state. The menu itself is the compositor's.
     private var openBinding: Binding<MenuID?> {
         Binding(
             get: { session.openMenu },
@@ -723,93 +965,47 @@ struct TaskbarView: View {
         )
     }
 
-    /// Volume popover visibility — same input-region plumbing as the menubar.
-    private var volumeOpenBinding: Binding<Bool> {
-        Binding(
-            get: { session.volumeOpen },
-            set: { session.setVolumeOpen($0) }
-        )
-    }
+}
 
-    private var calendarOpenBinding: Binding<Bool> {
-        Binding(
-            get: { session.calendarOpen },
-            set: { session.setCalendarOpen($0) }
-        )
-    }
+/// About, as a popup. Same glass as the volume card: a translucent wash
+/// over the compositor's frost, not the panel's opaque background.
+struct AboutWindow: View {
+    var image: UIImage
+    var font: UIFont
 
-    private var playerOpenBinding: Binding<Bool> {
-        Binding(
-            get: { session.playerOpen },
-            set: { session.setPlayerOpen($0) }
-        )
-    }
-
-    private var dialogBinding: Binding<Bool> {
-        Binding(
-            get: { session.dialog != .none },
-            set: { open in
-                if !open { session.setDialog(.none) }
+    var body: some View {
+        VStack(padding: 12, spacing: 10) {
+            HStack {
+                Spacer()
+                Image(image, width: .pt(400), contentMode: .fit)
+                Spacer()
             }
-        )
-    }
-
-    @ViewBuilder
-    private var systemDialog: some View {
-        switch session.dialog {
-        case .about:
-            aboutCard
-        case .logout:
-            logoutCard
-        case .none:
-            EmptyView()
+            Text(
+                "Lava is a free and open-source desktop environment. " +
+                "It is designed to be fast, lightweight, and ready to use from the initial launch " +
+                "— no tinkering with the config is needed. It is built by Claude, Grok and ChatGPT " +
+                "for Nikita to use. During his life, Nikita has always struggled with computers and " +
+                "particularly with Linux Desktop Environments. He has tried many, but none of them " +
+                "have been able to provide him with the experience he desires. Then one day, he decided " +
+                "to have Claude build him a new desktop environment, and thus Lava was born, and now " +
+                "Nikita is not struggling with computers anymore, and he is happy."
+            )
         }
+        .flexGrow(1)
+        .background(TaskbarChrome.popupWash)
+        .agentId("dialog.about")
     }
+}
 
-    /// One ink for the paragraph. Markdown emphasis used to paint
-    /// `textSecondary`, which read as a second, muddier face because this
-    /// leaf cannot switch to italic.
-    private var aboutMarkdownStyle: MarkdownStyle {
+/// Log out, as a popup. Confirming is not a menu row: the menu that offered
+/// it has already closed, and the card is the question.
+struct LogoutWindow: View {
+    static let width: Float = 360
+    static let height: Float = 150
+
+    var body: some View {
         let theme = Theme.current
-        return MarkdownStyle(
-            text: theme.textPrimary,
-            palette: [
-                theme.accent,
-                theme.textPrimary,
-                theme.textPrimary,
-                theme.selected,
-                theme.accent,
-                theme.textDim,
-            ]
-        )
-    }
-
-    private var aboutCard: some View {
-        return ScrollView(.vertical, showsIndicator: false) {
-            VStack(width: .pt(500), padding: 12, spacing: 10) {
-                HStack() {
-                    Spacer()
-                    Image(brandImage, width: .pt(400), contentMode: .fit)
-                    Spacer()
-                }
-                MarkdownView(
-                    "Lava is a free and open-source desktop environment. It is designed to be fast, lightweight, and *ready* to use from the initial launch — no tinkering with the config is needed. It is built by *Claude, Grok and ChatGPT* for Nikita to use. During his life, Nikita has always *struggled with computers* and particularly with *Linux Desktop Environments*. He has tried many, but none of them have been able to provide him with the experience he desires. Then one day, he decided to have Claude build him a new desktop environment, and thus Lava was born, and now Nikita is *not struggling* with computers anymore, and he is *happy*.",
-                    style: aboutMarkdownStyle,
-                    font: bodyFont
-                )
-                HStack(padding: 2) {
-                    Spacer()
-                    Button("Close") { session.setDialog(.none) }
-                }
-            }
-            .background(.clear)
-            .agentId("dialog.about")
-        }
-    }
-
-    private var logoutCard: some View {
-        let theme = Theme.current
-        return VStack(width: .pt(SystemDialogChrome.width), padding: 0, spacing: 12) {
+        VStack(padding: 0, spacing: 12) {
             Text("Log out?", color: theme.textPrimary)
             Text(
                 "This ends the session and closes every window.",
@@ -832,39 +1028,10 @@ struct TaskbarView: View {
                 }
             }
         }
-        .background(.clear)
+        .padding(16)
+        .frame(width: .pt(Self.width), height: .pt(Self.height))
+        .background(TaskbarChrome.popupWash)
         .agentId("dialog.logout")
-    }
-}
-
-/// Shared chrome for the About / Log Out cards. Placed just under the
-/// strip and centred, so a confirm is a thing on the desktop rather than
-/// a second row in the menu that opened it.
-enum SystemDialogChrome {
-    static let width: Float = 340
-
-    static var placement: OverlayPlacement {
-        OverlayPlacement { context in
-            let gap: Float = 12
-            let width = min(
-                max(context.idealSize.width, Self.width),
-                max(1, context.viewport.width - gap * 2)
-            )
-            let height = context.idealSize.height
-            return OverlayFrame(
-                x: max(gap, (context.viewport.width - width) / 2),
-                y: MenuSession.stripHeight + gap,
-                width: width,
-                height: height
-            )
-        }
-    }
-
-    static var style: OverlayStyle {
-        var s = TaskbarChrome.style.overlayStyle
-        s.padding = 16
-        s.minWidth = width
-        return s
     }
 }
 
@@ -981,7 +1148,7 @@ guard let brandImage = ImageStore.loadAsset(
 // finds somewhere to export to. Before `run`, because an app that registers
 // while the panel is still coming up should not have to try twice.
 session.attach(editor: editor, brandIcon: brandIcon)
-mpris.onAbsent = { session.setPlayerOpen(false) }
+mpris.onAbsent = { session.closePlayer() }
 
 // One face, loaded once. Building it inside `body` would reopen FreeType
 // every clock tick, and a face that is never `registerWithEngine`'d
@@ -1003,6 +1170,8 @@ guard let bodyFont = loadReadingFace(pixelSize: 14) else {
     exit(1)
 }
 bodyFont.registerWithEngine(editor)
+session.aboutImage = brandImage
+session.aboutFont = bodyFont
 
 // System tray watcher — same timing as the menu registrar.
 tray = StatusNotifierTray(editor: editor)
@@ -1035,7 +1204,6 @@ Thread.detachNewThread {
     while true {
         MainQueue.async {
             session.poll()
-            _ = tray?.poll()
             // Notifications ride the same context, and they need it for more
             // than delivery: an expiry is a clock nobody else is watching, so
             // a stack that stopped being polled would stay on screen forever.
@@ -1045,6 +1213,12 @@ Thread.detachNewThread {
         }
         Thread.sleep(forTimeInterval: 0.05)
     }
+}
+
+// Before any menu is opened. The compositor refuses `OpenMenu` for a
+// surface that is not listening — a grab whose answer would go nowhere.
+LavaClient.onMenuChoice { serial, chosen in
+    session.menuChosen(serial: serial, chosen: chosen)
 }
 
 LavaClient.run(editor: editor) {

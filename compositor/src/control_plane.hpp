@@ -129,6 +129,9 @@ struct CompositorHost {
     bool checked = false;
     bool enabled = true;
     std::string shortcut;
+    /// 0 for a root row. Otherwise the submenu row this one sits under.
+    /// See `MenuItem.parent` in the IDL.
+    uint32_t parent = 0;
   };
 
   /// Opens the surface a context menu is drawn into. 0 if the arena does not
@@ -146,6 +149,19 @@ struct CompositorHost {
   /// an error and is simply dropped.
   virtual bool showMenu(uint32_t surfaceId, uint32_t serial, uint32_t width,
                         uint32_t height) = 0;
+
+  /// A hidden fly-out plate. 0 when there is no menus tree to put it in.
+  /// See `CreateSubmenuSurface`.
+  virtual uint32_t createSubmenuSurface(const std::string &arenaId,
+                                        uint32_t width, uint32_t height) = 0;
+
+  /// Place a measured fly-out beside a row. False when the surface is
+  /// unknown or not a submenu plate. A stale serial is dropped, not an error.
+  /// See `ShowSubmenu`.
+  virtual bool showSubmenu(uint32_t surfaceId, uint32_t parentId,
+                           uint32_t serial, int32_t rowX, int32_t rowY,
+                           uint32_t rowW, uint32_t rowH, uint32_t width,
+                           uint32_t height) = 0;
 
   /// "Show this menu for `surfaceId`, anchored at `x`,`y` in that surface's
   /// own coordinates." Returns the serial the answer will name, or 0 when
@@ -229,6 +245,14 @@ struct CompositorHost {
                                uint32_t thickness, bool reserve,
                                const std::string &title,
                                const std::string &appId) = 0;
+
+  /// A borderless popup of `parentId`, placed under `anchor` and dismissed
+  /// by a press that misses it. 0 if the arena or the parent does not exist.
+  /// See `CreatePopupSurface`.
+  virtual uint32_t createPopupSurface(
+      const std::string &arenaId, uint32_t width, uint32_t height,
+      const std::string &title, uint32_t parentId, int32_t anchorX,
+      int32_t anchorY, uint32_t anchorW, uint32_t anchorH) = 0;
 
   virtual bool destroySurface(uint32_t surfaceId) = 0;
   virtual bool surfaceExists(uint32_t surfaceId) const = 0;
@@ -545,7 +569,8 @@ class ControlPlane {
   /// other push here it queues and returns — see `StreamPump`.
   virtual bool postMenu(uint32_t serial, int32_t x, int32_t y, uint32_t target,
                         const std::string &title,
-                        const std::vector<CompositorHost::MenuEntry> &items) = 0;
+                        const std::vector<CompositorHost::MenuEntry> &items,
+                        uint32_t maxHeight) = 0;
 
   /// The answer to one `OpenMenu`, back to the surface that asked for it.
   ///

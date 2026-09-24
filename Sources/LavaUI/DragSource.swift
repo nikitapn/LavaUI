@@ -48,8 +48,10 @@ public enum DragBridge {
     /// True when the request was delivered — not that a drag started, which is
     /// the compositor's to decide: the button may already be up, or another
     /// drag running.
+    /// The last argument is the engine window the drag started in.
     public typealias Provider = (
-        _ paths: [String], _ chip: DragChipImage?, _ offsetX: Float, _ offsetY: Float
+        _ paths: [String], _ chip: DragChipImage?, _ offsetX: Float, _ offsetY: Float,
+        _ window: UInt32
     ) -> Bool
 
     nonisolated(unsafe) public static var startFileDrag: Provider?

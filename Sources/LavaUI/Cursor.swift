@@ -54,9 +54,11 @@ extension View {
 /// fills `request` at connect. Unfilled, the windowed path is used, which is
 /// the right default for a window and a no-op in a test.
 public enum CursorBridge {
-    /// Filled by `LavaClient`. Takes the raw shape so the framework's enum
-    /// does not have to be visible to the IDL layer.
-    nonisolated(unsafe) public static var request: (@Sendable (UInt32) -> Void)?
+    /// Filled by `LavaClient`. The shape, then the engine window it was
+    /// resolved in (`WindowID.rawValue`), so a second surface sets the
+    /// pointer for itself and not for the window the app started with.
+    /// The raw shape keeps the framework's enum out of the IDL layer.
+    nonisolated(unsafe) public static var request: (@Sendable (UInt32, UInt32) -> Void)?
 
     /// What the pointer is showing right now, so that hovering across a
     /// hundred nodes that all want an arrow costs one call, not a hundred.
@@ -70,7 +72,7 @@ public enum CursorBridge {
         guard shape != current else { return }
         current = shape
         if let request {
-            request(shape.rawValue)
+            request(shape.rawValue, window.raw)
             return
         }
         editor.setCursor(shape, window: window)

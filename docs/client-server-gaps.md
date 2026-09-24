@@ -9,12 +9,11 @@ is missing is no longer obvious from using it. Typing works, scrolling works,
 images work — so the holes are the ones you find by reaching for something
 three weeks later.
 
-**Status, same day.** All eight are closed or reduced — the original six, plus
-two found while closing them. The dead-client case went to nprpc's new
-shared-memory liveness detection; the rest are here. What is left is a feature
-rather than a break: a client's *second* window. Each entry keeps its original
-description under **Was:** — the point of the list is what the shape of the
-thing was, not just that it is gone.
+**Status.** All eight are closed, and so is the feature that was left after
+them: a client's second window. The dead-client case went to nprpc's new
+shared-memory liveness detection; the rest are here. Each entry keeps its
+original description under **Was:** — the point of the list is what the shape
+of the thing was, not just that it is gone.
 
 A pattern worth naming, because it predicts the next one. Four of the eight
 were the same mistake in different clothes: a question the renderer answers
@@ -148,22 +147,21 @@ the bridge, the router and the handler are all the shipping path. Two files
 dropped on the target arrive as `dropped 2: alpha.txt, beta.pdf`; a drop
 aimed at empty space reaches no handler.
 
-### 4. A client cannot open a second window — still open, but no longer a crash
+### 4. ~~A client cannot open a second window~~ — fixed
 
-`LavaClient` creates exactly one arena and one surface, and `LavaApp.openWindow`
-*was* worse than unsupported — it was unguarded. It reached
+**Was:** `LavaClient` created exactly one arena and one surface, and
+`LavaApp.openWindow` was worse than unsupported — it was unguarded. It reached
 `Application::openWindow`, which builds a real `AppWindow` (a GLFW window, in
 the *client* process) and then calls `bringUpWindow` → `device.textRenderer()`
 on a device that was never initialised.
 
-**Half-fixed:** `Application::openWindow` now checks `deviceUp` and returns 0,
-which is what a failed open already meant, so no caller grows a case.
-
-The feature is still missing, and the protocol is already fine with it — a
-surface per arena, one input stream each, and the IDL says a client with two
-windows gets two streams. What is absent is the plumbing above: `LavaClient`
-would have to create a second arena, ask for a second surface, and route a
-second input stream into the right `WindowScope`.
+**Fixed:** a client window is the other half of an `AppWindow`, an arena and
+an input queue, which is what `openWindow` creates when there is no device.
+`LavaApp.openWindow` under `LavaClient.run` asks for a second surface and a
+second `SubscribeInput`, and routes that stream into the window it already
+drives. Closing the window destroys that surface only. The window the app
+started with is still the process's lease. The protocol already said a client
+with two windows gets two streams.
 
 ### 5. ~~Images have to be files on disk~~ — fixed
 

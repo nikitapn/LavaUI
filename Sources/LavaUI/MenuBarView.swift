@@ -197,19 +197,27 @@ public struct MenuBarStrip: View {
     /// Already-decoded pictures for icon titles, keyed by menu id. A
     /// `MenuIcon.path` is used when this has nothing for that id.
     public var icons: [MenuID: UIImage]
+    /// The dropdown is not drawn into this surface.
+    ///
+    /// A 32pt panel has nowhere under the title to put one. The binding
+    /// still tracks which title is open — hover moves between them — and
+    /// whoever owns it asks the compositor to draw the menu.
+    public var externalMenus: Bool
 
     public init(
         model: MenuModel,
         openMenuID: Binding<MenuID?>,
         onActivate: @escaping (MenuID) -> Void,
         style: MenuBarStyle = .standard(),
-        icons: [MenuID: UIImage] = [:]
+        icons: [MenuID: UIImage] = [:],
+        externalMenus: Bool = false
     ) {
         self.model = model
         self.openMenuID = openMenuID
         self.onActivate = onActivate
         self.style = style
         self.icons = icons
+        self.externalMenus = externalMenus
     }
 
     public var body: some View {
@@ -275,16 +283,18 @@ public struct MenuBarStrip: View {
         .cornerRadius(style.titleCornerRadius)
         .agentId("menu.\(menu.id.raw)")
         .overlay(
-            isPresented: Binding(
-                get: { binding.wrappedValue == menuID },
-                set: { presented in
-                    if presented {
-                        binding.wrappedValue = menuID
-                    } else if binding.wrappedValue == menuID {
-                        binding.wrappedValue = nil
+            isPresented: externalMenus
+                ? .constant(false)
+                : Binding(
+                    get: { binding.wrappedValue == menuID },
+                    set: { presented in
+                        if presented {
+                            binding.wrappedValue = menuID
+                        } else if binding.wrappedValue == menuID {
+                            binding.wrappedValue = nil
+                        }
                     }
-                }
-            ),
+                ),
             style: style.overlayStyle
         ) {
             MenuDropdownPanel(
@@ -536,8 +546,8 @@ public struct MenuDropdownPanel: View {
 }
 
 /// Human-readable shortcut for menu rows (Ctrl+S, etc.).
-enum MenuShortcutLabel {
-    static func format(_ shortcut: KeyShortcut) -> String {
+public enum MenuShortcutLabel {
+    public static func format(_ shortcut: KeyShortcut) -> String {
         var parts: [String] = []
         let mods = shortcut.resolvedMods()
         if mods & MenuKeyMods.control != 0 { parts.append("Ctrl") }

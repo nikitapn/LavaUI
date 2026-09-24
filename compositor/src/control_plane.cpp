@@ -830,6 +830,19 @@ class CompositorImpl final : public ICompositor_Servant {
     return id;
   }
 
+  uint32_t CreatePopupSurface(nprpc::flat::Span<char> arenaId, uint32_t width,
+                              uint32_t height, nprpc::flat::Span<char> title,
+                              uint32_t parentId, int32_t anchorX,
+                              int32_t anchorY, uint32_t anchorW,
+                              uint32_t anchorH) override {
+    const std::string arena{arenaId};
+    const uint32_t id = host_.createPopupSurface(
+        arena, width, height, std::string{title}, parentId, anchorX, anchorY,
+        anchorW, anchorH);
+    if (id == 0) throw ArenaNotFound(arena);
+    return id;
+  }
+
   uint32_t CreatePanel(nprpc::flat::Span<char> arenaId, PanelEdge edge,
                        uint32_t thickness, nprpc::flat::Boolean reserve,
                        nprpc::flat::Span<char> title,
@@ -928,6 +941,7 @@ class CompositorImpl final : public ICompositor_Servant {
       entry.checked = item.checked();
       entry.enabled = item.enabled();
       entry.shortcut = std::string{item.shortcut()};
+      entry.parent = item.parent();
       entries.push_back(std::move(entry));
     }
     return host_.openClientMenu(surfaceId, x, y, std::string{title}, entries);
@@ -959,6 +973,23 @@ class CompositorImpl final : public ICompositor_Servant {
   void ShowMenu(uint32_t surfaceId, uint32_t serial, uint32_t width,
                 uint32_t height) override {
     if (!host_.showMenu(surfaceId, serial, width, height)) {
+      throw SurfaceNotFound(surfaceId);
+    }
+  }
+
+  uint32_t CreateSubmenuSurface(nprpc::flat::Span<char> arenaId, uint32_t width,
+                                uint32_t height) override {
+    const std::string arena{arenaId};
+    const uint32_t id = host_.createSubmenuSurface(arena, width, height);
+    if (id == 0) throw ArenaNotFound(arena);
+    return id;
+  }
+
+  void ShowSubmenu(uint32_t surfaceId, uint32_t parentId, uint32_t serial,
+                   int32_t rowX, int32_t rowY, uint32_t rowW, uint32_t rowH,
+                   uint32_t width, uint32_t height) override {
+    if (!host_.showSubmenu(surfaceId, parentId, serial, rowX, rowY, rowW, rowH,
+                           width, height)) {
       throw SurfaceNotFound(surfaceId);
     }
   }
@@ -1994,13 +2025,15 @@ class ControlPlaneImpl final : public ControlPlane {
   bool postMenu(
       uint32_t serial, int32_t x, int32_t y, uint32_t target,
       const std::string &title,
-      const std::vector<CompositorHost::MenuEntry> &items) override {
+      const std::vector<CompositorHost::MenuEntry> &items,
+      uint32_t maxHeight) override {
     MenuRequest request{};
     request.serial = serial;
     request.x = x;
     request.y = y;
     request.target = target;
     request.title = title;
+    request.maxHeight = maxHeight;
     request.items.reserve(items.size());
     for (const auto &entry : items) {
       MenuItem item{};
@@ -2010,6 +2043,7 @@ class ControlPlaneImpl final : public ControlPlane {
       item.checked = entry.checked;
       item.enabled = entry.enabled;
       item.shortcut = entry.shortcut;
+      item.parent = entry.parent;
       request.items.push_back(std::move(item));
     }
     return menu_.send(request);

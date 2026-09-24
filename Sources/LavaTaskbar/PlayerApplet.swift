@@ -5,15 +5,13 @@ import LavaUI
 /// Panel media control: cover + title in the strip, popover with transport.
 ///
 /// Talks to whatever is on MPRIS, preferring spotifyd. Hidden when nothing
-/// is. `isOpen` is owned by the panel so the compositor input region covers
-/// the dropdown — same contract as volume and the calendar.
+/// is. The transport is a popup — the strip is 32pt, and the cover does
+/// not fit there.
 struct PlayerApplet: View {
     var mpris: MprisSession
-    var isOpen: Binding<Bool>
 
     var body: some View {
         let theme = Theme.current
-        let open = isOpen
         let playing = mpris.isPlaying
         return HStack(
             height: .pt(36),
@@ -24,7 +22,7 @@ struct PlayerApplet: View {
                 if button == PointerButton.right {
                     mpris.playPause()
                 } else if button == PointerButton.left {
-                    open.wrappedValue.toggle()
+                    session.togglePlayer()
                 }
             },
             onWheel: { _, dy in mpris.skipByWheel(dy: dy) }
@@ -36,67 +34,6 @@ struct PlayerApplet: View {
         .hoverBackground(TaskbarChrome.style.titleHover)
         .cornerRadius(6)
         .agentId("applet.player")
-        .overlay(
-            isPresented: isOpen,
-            alignment: .below,
-            style: {
-                var s = TaskbarChrome.style.overlayStyle
-                s.padding = 10
-                s.minWidth = 240
-                return s
-            }()
-        ) {
-            popover
-        }
-    }
-
-    @ViewBuilder
-    private var popover: some View {
-        let theme = Theme.current
-        VStack(padding: 4, spacing: 10) {
-            HStack(padding: 0, alignment: .center, spacing: 10) {
-                cover(size: 72, radius: 6)
-                VStack(padding: 0, alignment: .start, spacing: 4) {
-                    Text(
-                        mpris.title.isEmpty ? mpris.stripTitle : mpris.title,
-                        color: theme.textPrimary,
-                        lineLimit: 2
-                    )
-                    if !mpris.artistLine.isEmpty {
-                        Text(mpris.artistLine, color: theme.textSecondary, lineLimit: 2)
-                    }
-                    Text(
-                        mpris.isPlaying ? "Playing" : (mpris.status.isEmpty ? "" : mpris.status),
-                        color: theme.textDim
-                    )
-                }
-                .frame(width: .pt(160))
-            }
-
-            Divider()
-
-            HStack(padding: 0, alignment: .center, spacing: 8) {
-                Spacer()
-                transport("‹‹", enabled: mpris.canGoPrevious, id: "player.prev") {
-                    mpris.previous()
-                }
-                transport(
-                    mpris.isPlaying ? "❚❚" : "▶",
-                    enabled: mpris.canPlay || mpris.canPause,
-                    id: "player.playpause"
-                ) {
-                    mpris.playPause()
-                }
-                transport("››", enabled: mpris.canGoNext, id: "player.next") {
-                    mpris.next()
-                }
-                Spacer()
-            }
-
-            if !mpris.identity.isEmpty {
-                Text(mpris.identity, color: theme.textDim)
-            }
-        }
     }
 
     @ViewBuilder
@@ -158,5 +95,115 @@ struct PlayerApplet: View {
         )
         .frame(width: .pt(Self.maxTitleWidth))
         .clipped()
+    }
+}
+
+/// Transport for whatever is playing. Same glass as the other popups:
+/// the panel is 32pt and this does not fit in it.
+struct PlayerWindow: View {
+    var mpris: MprisSession
+
+    static let width: Float = 300
+    static let height: Float = 210
+
+    var body: some View {
+        let theme = Theme.current
+        VStack(padding: 4, spacing: 10) {
+            HStack(padding: 0, alignment: .center, spacing: 10) {
+                PlayerArt(mpris: mpris, size: 72, radius: 6)
+                VStack(padding: 0, alignment: .start, spacing: 4) {
+                    Text(
+                        mpris.title.isEmpty ? mpris.stripTitle : mpris.title,
+                        color: theme.textPrimary,
+                        lineLimit: 2
+                    )
+                    if !mpris.artistLine.isEmpty {
+                        Text(mpris.artistLine, color: theme.textSecondary, lineLimit: 2)
+                    }
+                    Text(
+                        mpris.isPlaying ? "Playing" : (mpris.status.isEmpty ? "" : mpris.status),
+                        color: theme.textDim
+                    )
+                }
+                .frame(width: .pt(160))
+            }
+
+            Divider()
+
+            HStack(padding: 0, alignment: .center, spacing: 8) {
+                Spacer()
+                transport("‹‹", enabled: mpris.canGoPrevious, id: "player.prev") {
+                    mpris.previous()
+                }
+                transport(
+                    mpris.isPlaying ? "❚❚" : "▶",
+                    enabled: mpris.canPlay || mpris.canPause,
+                    id: "player.playpause"
+                ) {
+                    mpris.playPause()
+                }
+                transport("››", enabled: mpris.canGoNext, id: "player.next") {
+                    mpris.next()
+                }
+                Spacer()
+            }
+
+            if !mpris.identity.isEmpty {
+                Text(mpris.identity, color: theme.textDim)
+            }
+        }
+        .padding(12)
+        .frame(width: .pt(Self.width), height: .pt(Self.height))
+        .background(TaskbarChrome.popupWash)
+        .agentId("player.window")
+    }
+
+    private func transport(
+        _ label: String, enabled: Bool, id: String, action: @escaping () -> Void
+    ) -> some View {
+        let theme = Theme.current
+        return HStack(
+            padding: 0,
+            alignment: .center,
+            onClick: enabled ? action : nil
+        ) {
+            Text(label, color: enabled ? theme.textPrimary : theme.textDim)
+        }
+        .padding(EdgeInsets(top: 6, leading: 14, bottom: 6, trailing: 14))
+        .hoverBackground(enabled ? theme.hover : .clear)
+        .cornerRadius(6)
+        .agentId(id)
+    }
+}
+
+/// Album art, shared by the strip chip and the popup. A missing picture is
+/// a note on the inset fill rather than an empty box.
+private struct PlayerArt: View {
+    var mpris: MprisSession
+    var size: Float
+    var radius: Float
+
+    var body: some View {
+        let theme = Theme.current
+        let url = mpris.artURL
+        if let path = ArtCache.pathIfReady(for: url, onReady: {
+            MainQueue.async { ViewInvalidation.markNeedsBody() }
+        }) {
+            Image(
+                path: path,
+                width: .pt(size),
+                height: .pt(size),
+                placeholder: theme.inset,
+                placeholderCornerRadius: radius,
+                contentMode: .fill
+            )
+            .cornerRadius(radius)
+            .frame(width: .pt(size), height: .pt(size))
+        } else {
+            Text("♫", color: theme.textDim, align: .center)
+                .frame(width: .pt(size), height: .pt(size))
+                .background(theme.inset)
+                .cornerRadius(radius)
+        }
     }
 }

@@ -88,9 +88,16 @@ public enum WindowBridge {
     ///
     /// Writing it marks the tree for a body pass, so a strip that reads
     /// this disappears on the same frame the window grows.
-    nonisolated(unsafe) public static var isMaximized = false {
-        didSet {
-            if isMaximized != oldValue { ViewInvalidation.markNeedsBody() }
+    public static var isMaximized: Bool {
+        get { WindowScope.currentOrMain.maximized }
+        set {
+            // No window is current when a pump writes this ahead of the
+            // frame. That is the first window, which is what the flag meant
+            // when there was only one.
+            let scope = WindowScope.current ?? WindowScope.main
+            guard scope.maximized != newValue else { return }
+            scope.maximized = newValue
+            WindowScope.withCurrent(scope) { ViewInvalidation.markNeedsBody() }
         }
     }
 

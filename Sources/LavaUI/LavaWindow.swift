@@ -70,7 +70,7 @@ public final class LavaWindow {
         let chip = entry.chip.flatMap { mount in
             DragChipCapture.capture(mount(), editor: editor)
         }
-        _ = start(paths, chip, entry.offsetX, entry.offsetY)
+        _ = start(paths, chip, entry.offsetX, entry.offsetY, id.raw)
     }
 
     /// Forces a full `.body` pass on the next frame regardless of what

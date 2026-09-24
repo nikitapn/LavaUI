@@ -315,11 +315,13 @@ public enum PointerCapture {
 /// Same shape as `ClipboardBridge`, `DropBridge` and `ScreenshotBridge`, and
 /// unset means windowed.
 public enum ScrollBridge {
-    nonisolated(unsafe) public static var handBack: (@Sendable (Float, Float) -> Void)?
+    /// `dx`, `dy`, then the engine window the notch was declined in.
+    nonisolated(unsafe) public static var handBack:
+        (@Sendable (Float, Float, UInt32) -> Void)?
 
     static func unclaimed(dx: Float, dy: Float, window: WindowID, editor: Editor) {
         if let handBack {
-            handBack(dx, dy)
+            handBack(dx, dy, window.raw)
             return
         }
         _ = editor.scrollSceneUnclaimed(dx: dx, dy: dy, window: window)

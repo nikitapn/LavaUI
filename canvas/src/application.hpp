@@ -116,11 +116,13 @@ public:
   // Zero means "the first window", so single-window callers never mention it.
   // Ids are handed out by openWindow and never reused.
 
-  /// Opens an additional window on the same device — same font atlas, same
-  /// texture cache, same GPU. Returns its id, or 0 on failure.
+  /// Opens an additional window. Returns its id, or 0 on failure.
   ///
-  /// It starts hidden. Show it with `setWindowVisible` once a frame has been
-  /// drawn into it, or the compositor presents an undefined swapchain image.
+  /// On a device, it shares the font atlas, the texture cache and the GPU,
+  /// and it starts hidden: show it with `setWindowVisible` once a frame has
+  /// been drawn, or the swapchain presents an undefined image. A client has
+  /// no device; the window is an arena and an input queue, and whoever called
+  /// this still has to ask the compositor for a surface.
   uint32_t openWindow(int width, int height, const std::string &title);
 
   /// Closes one window; the device and every other window survive.

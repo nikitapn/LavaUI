@@ -2,12 +2,10 @@ import LavaUI
 
 /// The notification stack, drawn at the top right of the panel's own surface.
 ///
-/// Not a window of its own, and that is the whole design: the panel is already
-/// a full-width surface that reaches `MenuSession.openHeight` down the screen
-/// with an input region it deepens whenever something is open. A toast is the
-/// same problem as a dropdown — paint below the strip, take clicks while it is
-/// up, hand them back when it goes — so it costs no new surface, no new
-/// protocol and no second process.
+/// Not a window of its own. The panel is the strip, and while a toast is up
+/// the surface grows to the stack and no further — the reservation stays
+/// the 32pt strip, and the input region is the strip plus the cards. A
+/// dropdown does not use this room; those are drawn by the menu client.
 ///
 /// What that buys is also what it costs: toasts live inside the panel's
 /// surface, so they cannot be deeper than it is, cannot sit at the bottom of

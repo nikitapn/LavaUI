@@ -585,10 +585,11 @@ message FocusAck {
 
 /// What one row is.
 ///
-/// Deliberately three kinds and not a general widget vocabulary. A context
-/// menu that can express more than this stops being a context menu — it
+/// Four kinds and not a general widget vocabulary. A context menu that can
+/// express checkboxes, text fields and icons stops being a context menu — it
 /// becomes a small application with a layout problem, and the desktop already
-/// has somewhere to put those.
+/// has somewhere to put those. `submenu` is the one addition, and it is a
+/// *branch*, not a widget: the rows under it are the same three kinds again.
 enum MenuItemKind: u32 {
   /// Does something and closes the menu.
   command,
@@ -598,6 +599,13 @@ enum MenuItemKind: u32 {
   checkbox,
   /// A rule. `title`, `id`, `checked` and `shortcut` are ignored.
   separator,
+  /// Opens the rows whose `parent` is this `id`, beside this row.
+  ///
+  /// Not a choice. Hovering or clicking it does not close the menu and does
+  /// not produce a `MenuReply` — the branch is drawn by the menu client and
+  /// placed by the compositor (`ShowSubmenu`). `id` is still never 0, because
+  /// that is how a child names its parent.
+  submenu,
 };
 
 /// One row of a context menu.
@@ -621,6 +629,15 @@ message MenuItem {
   /// already has these bindings and the menu never matches on this string.
   /// Empty for a row with no chord.
   shortcut: string;
+  /// 0 for a row of the root menu. Otherwise the `id` of the `submenu` row
+  /// this row sits under.
+  ///
+  /// The list is flat because the wire has no recursion; the menu client
+  /// builds the tree. A row whose parent is not a `submenu` in this same
+  /// list is dropped rather than shown at the root — a parent that does not
+  /// exist is a bug in the sender, and promoting the row would put a VPN's
+  /// "Disconnect" next to "About".
+  parent: u32;
 }
 
 /// Compositor → menu client: "open this, here."
@@ -654,6 +671,15 @@ message MenuRequest {
   /// clickable and does not move the rows under it when it is absent.
   title: string;
   items: vector<MenuItem>;
+  /// The most this menu may be tall, in pixels: the work area of the output
+  /// it opened on, which is the screen minus the panels that reserve a strip.
+  ///
+  /// A list taller than this scrolls inside the plate, and the size named in
+  /// `ShowMenu` / `ShowSubmenu` is the capped one. The compositor also
+  /// refuses to place a plate taller than the work area, so a client that
+  /// ignores this is clipped rather than drawn off the bottom of the screen.
+  /// 0 means nothing was said — a close request, which has no menu to cap.
+  maxHeight: u32;
 }
 
 /// Menu client → compositor: "the user picked this", or "they did not".
@@ -2095,6 +2121,12 @@ interface Compositor {
   /// A client whose own menu is replaced still gets a `MenuChoice` for it,
   /// with `chosen` 0.
   ///
+  /// `items` is a tree written flat. A row with `parent` 0 is the root menu;
+  /// a row of kind `submenu` names the branch, and the rows under it carry
+  /// that row's `id` as their `parent`. The menu client flies a branch out
+  /// beside its row (`ShowSubmenu`); this call still opens one menu, and a
+  /// second call still supersedes it. A branch is not a second `OpenMenu`.
+  ///
   /// Subscribe with `SubscribeMenuChoice` **before** calling this. A menu
   /// opened by a client that is not listening would be a grab the user has to
   /// click their way out of to reach a result nobody receives, so it is
@@ -2129,4 +2161,74 @@ interface Compositor {
                           title: in string, frame: in WindowFrame,
                           appId: in string, parentId: in u32)
       raises(ArenaNotFound);
+
+  /// A borderless popup of `parentId`, hanging off `anchor`.
+  ///
+  /// The sound slider and the About card. A window was the wrong shape for
+  /// both: a title bar, a place in the window list, and a position the
+  /// compositor picks by cascading. What they are is a menu that is not a
+  /// list of rows — the panel draws the contents, and the compositor does
+  /// the three things a client cannot. The anchor is a rectangle in the
+  /// parent's own coordinates (the icon); the popup is placed just below
+  /// it, shifted so it stays on the output, and flipped above the anchor
+  /// when there is no room below. It is not in the window list, it does
+  /// not take focus, and it has no frame.
+  ///
+  /// While it is up, a press that misses it dismisses it and is swallowed.
+  /// "Misses it" is mostly other windows, which the panel cannot hit-test,
+  /// so the grab lives here — the same reason the context menu's does.
+  /// Dismissing destroys the surface; the client's input stream ending is
+  /// how it learns, which is already how a window learns it was closed.
+  ///
+  /// Added last, like `CreateDialogSurface`, so an older client still
+  /// speaks to a compositor that has it.
+  u32 CreatePopupSurface(arenaId: in string, width: in u32, height: in u32,
+                         title: in string, parentId: in u32,
+                         anchorX: in i32, anchorY: in i32,
+                         anchorW: in u32, anchorH: in u32)
+      raises(ArenaNotFound);
+
+  /// A fly-out plate for the menu client. Hidden until `ShowSubmenu`.
+  ///
+  /// The root menu is `CreateMenuSurface`, one per client. A submenu is a
+  /// second surface — its own size, its own place — because a fly-out is a
+  /// rectangle that has to sit beside a row and flip to the left of it when
+  /// the right side would leave the work area, and only the compositor knows
+  /// the work area. Drawing both plates into the root surface would mean
+  /// resizing that surface out from under its anchor every time a branch
+  /// opened.
+  ///
+  /// The same kind of surface as the root menu: above panels, no frame, not
+  /// in the window list, invisible until it is placed. `width` and `height`
+  /// size the arena the client measures in, not the plate on screen.
+  ///
+  /// Added last, like `CreatePopupSurface`, so an older client still speaks
+  /// to a compositor that has it. An older menu client simply never calls
+  /// it, and a submenu row it does not understand stays a row.
+  u32 CreateSubmenuSurface(arenaId: in string, width: in u32, height: in u32)
+      raises(ArenaNotFound);
+
+  /// "This plate measured `width` × `height`. Hang it off the row."
+  ///
+  /// `rowX`, `rowY`, `rowW`, `rowH` are the row in `parentId`'s own
+  /// coordinates. `parentId` is the root menu, or the submenu the row is
+  /// drawn on — a branch of a branch hangs off the plate it came from, not
+  /// off the root, or the third level would open beside the first.
+  ///
+  /// Placed just to the right of the row, overlapping it by a couple of
+  /// pixels so the pointer can cross from the row into the plate without
+  /// landing on the desktop in between. When that side would leave the work
+  /// area, and the left side has more room, it flips. Vertically it lines up
+  /// with the row and slides up to stay on the work area; a plate taller
+  /// than the work area is shortened to it. The client was told `maxHeight`
+  /// and should already be scrolling, so the shortening is the backstop, not
+  /// the design.
+  ///
+  /// Ignored when `serial` is not the open menu. A client that finished
+  /// measuring a branch the user has already left is late, and the answer
+  /// to late is nothing at all — the same rule as `ShowMenu`.
+  void ShowSubmenu(surfaceId: in u32, parentId: in u32, serial: in u32,
+                   rowX: in i32, rowY: in i32, rowW: in u32, rowH: in u32,
+                   width: in u32, height: in u32)
+      raises(SurfaceNotFound);
 }

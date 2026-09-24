@@ -71,15 +71,12 @@ This is not a separate project from the file explorer — a chooser is a file
 explorer with a different bottom bar. Build the browsing core once and let both
 use it.
 
-### 3. A client still cannot open a second window
+### 3. ~~A client still cannot open a second window~~ — fixed
 
-Open since the client/server audit (`docs/client-server-gaps.md` §4).
-`LavaClient` creates one arena and one surface. A file manager wants a second
-folder window, a notes app wants a detached note, an editor wants a second file
-side by side. Every app on the list below is shaped around this limit today.
-
-**Medium**, and structural rather than fiddly: arenas, surfaces and the input
-subscription are all one-per-process assumptions in `LavaClientApp`.
+`LavaApp.openWindow` from a client opens a real second surface: its own arena,
+its own input stream, closed without ending the process. See
+`docs/client-server-gaps.md` §4. The apps below were written when that did not
+exist, and they still open one window; the framework no longer forces it.
 
 ## The apps, assessed
 

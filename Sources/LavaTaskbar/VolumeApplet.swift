@@ -2,14 +2,13 @@ import Foundation
 import LavaUI
 
 /// Panel sound control: speaker glyph, scroll to change volume, click for a
-/// popover with slider + mute. Talks to PulseAudio via `PulseSession`.
+/// window with slider + mute. Talks to PulseAudio via `PulseSession`.
 ///
-/// `isOpen` is owned by the panel (not local `@State`) so opening the popover
-/// deepens the compositor input region — otherwise the panel only receives
-/// hits on the 32pt strip and the dropdown paints into dead space.
+/// The window is a surface of this process, not a dropdown painted into the
+/// strip. The strip is 32pt; a slider does not fit there, and growing the
+/// panel to hold it is what made the top of the screen a transparent window.
 struct VolumeApplet: View {
     var pulse: PulseSession
-    var isOpen: Binding<Bool>
 
     var body: some View {
         // Read on the body path so Observation invalidates when Pulse posts
@@ -17,13 +16,10 @@ struct VolumeApplet: View {
         let volume = pulse.volume
         let muted = pulse.muted
         let theme = Theme.current
-        let open = isOpen
 
         // Presenter height must reach the strip bottom. A short 22pt canvas is
-        // centred in the 32pt bar, so "overlay below" started mid-strip and the
-        // popover sat a few pixels into the taskbar (calendar is fine — padded
-        // text already fills the cross-axis). Match that with padding + a full
-        // strip-tall hit box; the glyph still paints inside the canvas.
+        // centred in the 32pt bar, so a hit box that stopped at the glyph
+        // missed the padding around it.
         HStack(height: .pt(36), padding: 0, alignment: .center) {
             Canvas(
                 label: "volume",
@@ -34,7 +30,7 @@ struct VolumeApplet: View {
                     if gesture.button == PointerButton.right {
                         pulse.toggleMute()
                     } else if gesture.button == PointerButton.left {
-                        open.wrappedValue.toggle()
+                        session.toggleVolume()
                     }
                 },
                 onWheel: { _, dy, _, _ in
@@ -57,24 +53,22 @@ struct VolumeApplet: View {
         .hoverBackground(TaskbarChrome.style.titleHover)
         .cornerRadius(6)
         .agentId("applet.volume")
-        .overlay(
-            isPresented: isOpen,
-            alignment: .below,
-            style: {
-                var s = TaskbarChrome.style.overlayStyle
-                s.padding = 10
-                s.minWidth = 200
-                return s
-            }()
-        ) {
-            volumePopover
-        }
     }
+}
 
-    @ViewBuilder
-    private var volumePopover: some View {
+/// The sound window. Same process as the panel, so it reads `PulseSession`
+/// directly — a second process would have to be told the level on every tick.
+///
+/// The wash is the frosted menu's, not an opaque fill. The compositor
+/// frosts the desktop behind this surface; a solid background would hide
+/// that plate completely. `WindowBackdrop` cannot say so per window — the
+/// panel is `.none` and that setting is the whole process.
+struct VolumeWindow: View {
+    var pulse: PulseSession
+
+    var body: some View {
         let theme = Theme.current
-        VStack(padding: 4, spacing: 10) {
+        VStack(flexGrow: 1, padding: 16, spacing: 10) {
             HStack(padding: 0, alignment: .center, spacing: 8) {
                 Text(
                     pulse.muted ? "Muted" : "Volume",
@@ -106,7 +100,11 @@ struct VolumeApplet: View {
             if !pulse.isReady {
                 Text("Connecting to PulseAudio…", color: theme.textDim)
             }
+
+            Spacer()
         }
+        .background(TaskbarChrome.popupWash)
+        .agentId("volume.window")
     }
 }
 

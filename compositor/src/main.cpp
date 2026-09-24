@@ -1717,6 +1717,18 @@ struct ClientSurface {
   /// window.
   bool menu = false;
 
+  /// A fly-out of the menu, not the menu itself. `menu` is also set, so it
+  /// lives in the same tree and is refused by every "act on a window" path;
+  /// this bit is what keeps `CreateMenuSurface`'s one surface — the one
+  /// `SubscribeMenu` is about — distinct from the plates hung off it.
+  bool submenu = false;
+
+  /// A popup the panel drew itself (the volume slider, About) rather than
+  /// the context-menu client. `menu` is what keeps it out of the window
+  /// list and above the panels; this is what makes a press that misses it
+  /// destroy it. The context menu has its own grab and is not one of these.
+  bool popup = false;
+
   /// Where this window sits among the others on its workspace.
   ///
   /// The desktop's rule is "the last thing clicked is in front", and these are
@@ -3040,6 +3052,82 @@ class SurfaceRegistry : public lava::CompositorHost {
     return id;
   }
 
+  /// See `CreatePopupSurface`. A window that hangs off an icon: no frame,
+  /// no focus, and a press that misses it is the close.
+  uint32_t createPopupSurface(const std::string &arenaId, uint32_t width,
+                              uint32_t height, const std::string &title,
+                              uint32_t parentId, int32_t anchorX,
+                              int32_t anchorY, uint32_t anchorW,
+                              uint32_t anchorH) override {
+    if (workspaces_ == nullptr || workspaces_->menus == nullptr) return 0;
+    ClientSurface *parent = find(parentId);
+    if (parent == nullptr) return 0;
+    // The menus tree, above the panels: a popup under the taskbar's own
+    // transparent surface would be drawn and then covered by it, and a
+    // click on the slider would land on the panel.
+    const uint32_t id = openSurface(arenaId, width, height, title,
+                                    workspaces_->menus, 0, false);
+    if (id == 0) return 0;
+    ClientSurface *opened = find(id);
+    if (opened == nullptr) return 0;
+    opened->appId = parent->appId;
+    opened->menu = true;
+    opened->popup = true;
+    opened->parentId = parentId;
+    placePopup(*opened, *parent, anchorX, anchorY, anchorW, anchorH);
+    wlr_log(WLR_INFO, "popup: surface %u '%s' of %u at %d,%d %ux%u", id,
+            title.c_str(), parentId, opened->x, opened->y, opened->width,
+            opened->height);
+    return id;
+  }
+
+  /// Just below the anchor, which is a rectangle in the parent's own
+  /// coordinates. Off the right edge, the popup's right lines up with the
+  /// anchor's — a speaker at the end of the panel — and off the bottom it
+  /// flips above the anchor instead of sliding up over the icon.
+  void placePopup(ClientSurface &surface, const ClientSurface &parent,
+                  int32_t anchorX, int32_t anchorY, uint32_t anchorW,
+                  uint32_t anchorH) {
+    constexpr int kGap = 6;
+    const int w = static_cast<int>(surface.width);
+    const int h = static_cast<int>(surface.height);
+    int x = parent.x + anchorX;
+    int y = parent.y + anchorY + static_cast<int>(anchorH) + kGap;
+    const WorkArea area = workAreaAt(parent.x + anchorX, parent.y + anchorY);
+    const int right = area.x + static_cast<int>(area.width);
+    const int bottom = area.y + static_cast<int>(area.height);
+    if (x + w > right) {
+      x = parent.x + anchorX + static_cast<int>(anchorW) - w;
+    }
+    if (y + h > bottom) {
+      y = parent.y + anchorY - h - kGap;
+    }
+    x = std::max(area.x, std::min(x, std::max(area.x, right - w)));
+    y = std::max(area.y, std::min(y, std::max(area.y, bottom - h)));
+    moveSurface(surface, x, y);
+  }
+
+  /// A press landed at `lx, ly`. Every popup it missed is closed. True
+  /// when the press missed all of them, which is the caller's cue to
+  /// swallow it — delivering it as well would both dismiss the popup and
+  /// activate whatever was underneath.
+  ///
+  /// A press inside one popup still dismisses the others, and is not
+  /// swallowed: that popup is what the press was for.
+  bool dismissPopups(double lx, double ly) {
+    std::vector<uint32_t> close;
+    bool inside = false;
+    for (const auto &s : surfaces_) {
+      if (!s->popup || !visible(*s)) continue;
+      double sx = 0, sy = 0;
+      if (s->hit(lx, ly, sx, sy)) inside = true;
+      else close.push_back(s->id);
+    }
+    if (close.empty()) return false;
+    for (uint32_t id : close) destroySurface(id);
+    return !inside;
+  }
+
   /// Frames a Wayland window: a title bar, a place in the stack, a workspace.
   ///
   /// Everything an ordinary application gets from this compositor comes from
@@ -4098,6 +4186,25 @@ class SurfaceRegistry : public lava::CompositorHost {
     surface.frostPlates.clear();
   }
 
+  /// Takes the plates off screen and keeps them. The window is going out of
+  /// sight, not giving its frost up, and the next capture brings them back.
+  void hidePlates(ClientSurface &surface) {
+    for (auto &plate : surface.frostPlates) {
+      if (plate.node != nullptr) {
+        wlr_scene_node_set_enabled(&plate.node->node, false);
+      }
+    }
+  }
+
+  /// Which scene tree a surface is drawn from, lowest first. The trees stack
+  /// in this order and nothing reorders them, so a surface in a higher one
+  /// is in front of every surface in a lower one.
+  static int stackLayer(const ClientSurface &surface) {
+    if (surface.menu) return 2;
+    if (surface.panel) return 1;
+    return 0;
+  }
+
   /// Hands one plate's node, canvas and image back. The rect it was for is the
   /// caller's to keep or drop — `setBackdropBlur` keeps the geometry and
   /// throws the pixels away when a plate changes size.
@@ -4236,12 +4343,13 @@ class SurfaceRegistry : public lava::CompositorHost {
       clearBackdrop(surface);
       return;
     }
-    if (surface.minimized || surface.fullscreen) {
-      for (auto &plate : surface.frostPlates) {
-        if (plate.node != nullptr) {
-          wlr_scene_node_set_enabled(&plate.node->node, false);
-        }
-      }
+    // A menu between openings is hidden, not minimized: its node is off and
+    // nothing else says so. Capturing it would put the plate back up where
+    // the last menu stood — and the restore below would switch the menu's
+    // own node back on with it, since `frameShown` knows nothing of menus.
+    if (surface.minimized || surface.fullscreen ||
+        (surface.menu && !visible(surface))) {
+      hidePlates(surface);
       return;
     }
 
@@ -4299,11 +4407,16 @@ class SurfaceRegistry : public lava::CompositorHost {
         continue;
       }
       if (!visible(*owned)) continue;
-      // Z order is two rules, not one. Panels sit in their own tree above
-      // every workspace, so a panel is above a window whatever the list says;
-      // otherwise front of the list is front of the stack (see `raise`).
-      const bool above = owned->panel != surface.panel ? owned->panel
-                                                       : !reachedSelf;
+      // Z order is two rules, not one. Each tree is above the one before it
+      // whatever the list says — menus over panels over workspaces — and
+      // within a tree the front of the list is the front of the stack (see
+      // `raise`). A frosted popup that treated the panel as above it had a
+      // plate with no panel in it, and the windows raised since the menu
+      // surface was created came out of the context menu's frost.
+      const int ownedLayer = stackLayer(*owned);
+      const int selfLayer = stackLayer(surface);
+      const bool above = ownedLayer != selfLayer ? ownedLayer > selfLayer
+                                                 : !reachedSelf;
       if (!above) continue;
       hideIfShown(owned->node != nullptr ? &owned->node->node : nullptr);
       hideIfShown(owned->barNode != nullptr ? &owned->barNode->node : nullptr);
@@ -4409,10 +4522,7 @@ class SurfaceRegistry : public lava::CompositorHost {
       // terminal. The index is in the name because a surface can hold several.
       plate.key = "frost:" + std::to_string(surface.id) + ":" +
                   std::to_string(index);
-      const float corners =
-          plate.regioned() ? plate.corner
-                           : (frameIsRoundable(surface) ? cornerRadius_ : 0.f);
-      const float frost = corners > 0.f ? corners + 2.f : 0.f;
+      const float frost = frostCornerRadius(surface, plate);
       plate.canvas->setCornerRadius(frost, true, true);
 
       // Prefer a GPU import of the capture: same DRM node, the other
@@ -4577,15 +4687,29 @@ class SurfaceRegistry : public lava::CompositorHost {
     // screenshot.
     for (auto &plate : surface.frostPlates) {
       if (!plate.canvas) continue;
-      // One pixel more than the window so the frost's AA sits inside the
-      // window's, not beside it as a bright speck. A region frost (panel
-      // dropdown) uses the popup's own radius — the panel itself is
-      // square, and using that would leave a square plate under a
-      // rounded menu.
-      const float corner = plate.regioned() ? plate.corner : radius;
-      const float frost = corner > 0.f ? corner + 2.f : 0.f;
-      plate.canvas->setCornerRadius(frost, true, true);
+      plate.canvas->setCornerRadius(frostCornerRadius(surface, plate), true,
+                                    true);
     }
+  }
+
+  /// The radius a frost plate is cut to.
+  ///
+  /// A region plate (a menu dropdown) uses the corner the client named —
+  /// the panel itself is square, and using that would leave a square plate
+  /// under a rounded menu. A whole-surface plate uses the window's own
+  /// radius, the same number `applyCorners` masks the content with.
+  ///
+  /// Two extra pixels on a window tuck the frost's antialiasing under an
+  /// opaque fill, so it does not sit beside the window as a bright speck.
+  /// Anything in the menus tree — a popup, the context menu, a fly-out —
+  /// *is* the glass: those two pixels are a second curve, and through a
+  /// translucent wash they show.
+  float frostCornerRadius(const ClientSurface &surface,
+                          const ClientSurface::FrostPlate &plate) const {
+    const float window = frameIsRoundable(surface) ? cornerRadius_ : 0.f;
+    const float corner = plate.regioned() ? plate.corner : window;
+    if (corner <= 0.f) return 0.f;
+    return surface.menu ? corner : corner + 2.f;
   }
 
   /// Whether this window's whole outline is the compositor's to shape.
@@ -4890,6 +5014,35 @@ class SurfaceRegistry : public lava::CompositorHost {
     return id;
   }
 
+  uint32_t createSubmenuSurface(const std::string &arenaId, uint32_t width,
+                                uint32_t height) override {
+    if (workspaces_ == nullptr || workspaces_->menus == nullptr) return 0;
+    // Same tree as the root menu, and hidden the same way: a plate that
+    // appeared at the cascade position while the client was still measuring
+    // it would be a rectangle in the corner for a frame.
+    const uint32_t id = openSurface(arenaId, width, height, "Menu",
+                                    workspaces_->menus, 0, false);
+    if (id == 0) return 0;
+    ClientSurface *surface = find(id);
+    surface->menu = true;
+    surface->submenu = true;
+    if (ClientSurface *root = find(menuSurfaceId_)) {
+      surface->appId = root->appId;
+    }
+    surface->awaitingFirstFrame = false;
+    surface->revealSerial = 0;
+    surface->revealDeadline = {};
+    if (surface->node != nullptr) {
+      wlr_scene_node_set_enabled(&surface->node->node, false);
+    }
+    surface->askedWidth = 0;
+    surface->askedHeight = 0;
+    applyCorners(*surface);
+    wlr_log(WLR_DEBUG, "menu: submenu surface %u (arena %ux%u)", id, width,
+            height);
+    return id;
+  }
+
   bool isMenuSurface(uint32_t id) const override {
     for (const auto &s : surfaces_) {
       if (s->id == id) return s->menu;
@@ -4908,10 +5061,24 @@ class SurfaceRegistry : public lava::CompositorHost {
   /// the client's contract and the reason this can simply enable the node.
   void placeMenu(ClientSurface &surface, int anchorX, int anchorY,
                  uint32_t width, uint32_t height) {
-    resizeSurface(surface, width, height);
     // Unconstrained in the output the pointer is on, not the primary one: a
     // right-click on the second screen opens a menu on the second screen.
     const WorkArea area = workAreaAt(anchorX, anchorY);
+    // A plate taller than the work area hangs off the bottom no matter how
+    // it is flipped: flipping puts it above the anchor, and the clamp then
+    // pins the top to the work area with the extra height still past the
+    // bottom. The client was told this height (`MenuRequest.maxHeight`) and
+    // scrolls; shortening here is what a client that did not is clipped by
+    // instead of painted off the screen.
+    uint32_t fittedW = width;
+    uint32_t fittedH = height;
+    if (area.height > 0 && fittedH > area.height) fittedH = area.height;
+    if (area.width > 0 && fittedW > area.width) fittedW = area.width;
+    if (fittedW != width || fittedH != height) {
+      wlr_log(WLR_DEBUG, "menu: plate %ux%u capped to %ux%u", width, height,
+              fittedW, fittedH);
+    }
+    resizeSurface(surface, fittedW, fittedH);
     const int w = static_cast<int>(surface.width);
     const int h = static_cast<int>(surface.height);
     const int right = area.x + static_cast<int>(area.width);
@@ -4944,6 +5111,9 @@ class SurfaceRegistry : public lava::CompositorHost {
 
   bool showMenu(uint32_t surfaceId, uint32_t serial, uint32_t width,
                 uint32_t height) override;
+  bool showSubmenu(uint32_t surfaceId, uint32_t parentId, uint32_t serial,
+                   int32_t rowX, int32_t rowY, uint32_t rowW, uint32_t rowH,
+                   uint32_t width, uint32_t height) override;
   uint32_t openClientMenu(
       uint32_t surfaceId, int32_t x, int32_t y, const std::string &title,
       const std::vector<lava::CompositorHost::MenuEntry> &items) override;
@@ -4956,10 +5126,107 @@ class SurfaceRegistry : public lava::CompositorHost {
     if (surface == nullptr || surface->node == nullptr) return;
     if (!surface->node->node.enabled) return;
     wlr_scene_node_set_enabled(&surface->node->node, false);
+    // Its frost too. The plates are siblings of the node in the menus tree,
+    // so switching the menu off leaves them up as a blurred rectangle where
+    // it stood.
+    hidePlates(*surface);
     damage(*surface);
     // What was behind it is behind nothing now, and a frosted panel samples
     // the desktop rather than its own window.
     scheduleBackdropRefresh();
+  }
+
+  /// Whether the pointer is inside the open menu or one of its fly-outs.
+  ///
+  /// The root plate alone is not the menu once a branch is open: a press on
+  /// the branch is the menu's, and a press that misses every plate is the
+  /// dismiss. A hidden plate — still measuring, or already taken down — does
+  /// not count, which is what `visible` is for.
+  bool menuHit(double lx, double ly) {
+    auto inside = [&](const ClientSurface &s) {
+      if (!visible(s)) return false;
+      double sx = 0, sy = 0;
+      return s.hit(lx, ly, sx, sy);
+    };
+    if (ClientSurface *root = find(menuSurfaceId_);
+        root != nullptr && inside(*root)) {
+      return true;
+    }
+    for (uint32_t id : submenus_) {
+      if (ClientSurface *branch = find(id);
+          branch != nullptr && inside(*branch)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /// Drops every fly-out. Safe when there are none.
+  ///
+  /// Destroyed rather than hidden: a branch is created for one opening and
+  /// the client closes its window when the menu goes, but the compositor is
+  /// the one that knows the menu is over, and a plate left hidden still owns
+  /// a canvas. `std::list` keeps the caller's iterator valid across an erase
+  /// of some other element, which is why this may run from inside
+  /// `destroySurface` of the root menu.
+  void closeSubmenus() {
+    const std::vector<uint32_t> ids = submenus_;
+    submenus_.clear();
+    for (uint32_t id : ids) {
+      if (find(id) != nullptr) destroySurface(id);
+    }
+  }
+
+  /// Beside the row, overlapping it by two pixels so the pointer can cross.
+  ///
+  /// Right when that side has room, otherwise left — whichever fits, and the
+  /// roomier of the two when neither does. Vertically level with the row,
+  /// slid up so the plate stays in the work area. A submenu is read from its
+  /// first item down, so it does not flip above the row the way the root
+  /// menu flips above the click.
+  void placeSubmenu(ClientSurface &child, const ClientSurface &parent,
+                    int rowX, int rowY, uint32_t rowW, uint32_t /*rowH*/,
+                    uint32_t width, uint32_t height) {
+    constexpr int kOverlap = 2;
+    const int anchorX = parent.x + rowX;
+    const int anchorY = parent.y + rowY;
+    const WorkArea area = workAreaAt(anchorX, anchorY);
+    uint32_t fittedW = width;
+    uint32_t fittedH = height;
+    if (area.height > 0 && fittedH > area.height) fittedH = area.height;
+    if (area.width > 0 && fittedW > area.width) fittedW = area.width;
+    resizeSurface(child, fittedW, fittedH);
+
+    const int w = static_cast<int>(child.width);
+    const int h = static_cast<int>(child.height);
+    const int right = area.x + static_cast<int>(area.width);
+    const int bottom = area.y + static_cast<int>(area.height);
+    const int rowRight = anchorX + static_cast<int>(rowW);
+    const int roomRight = right - rowRight;
+    const int roomLeft = anchorX - area.x;
+    int x;
+    if (roomRight >= w - kOverlap || roomRight >= roomLeft) {
+      x = rowRight - kOverlap;
+    } else {
+      x = anchorX - w + kOverlap;
+    }
+    // Level with the row, a few pixels up so the first item sits on the row
+    // that opened it rather than a step below. Then slid, never flipped:
+    // the items a user reads first are the top of the branch.
+    int y = anchorY - 4;
+    if (y + h > bottom) y = bottom - h;
+    if (y < area.y) y = area.y;
+    if (x + w > right) x = right - w;
+    if (x < area.x) x = area.x;
+
+    moveSurface(child, x, y);
+    if (child.node != nullptr) {
+      wlr_scene_node_set_enabled(&child.node->node, true);
+      wlr_scene_node_raise_to_top(&child.node->node);
+    }
+    damage(child);
+    wlr_log(WLR_DEBUG, "menu: submenu %u of %u at %d,%d %ux%u", child.id,
+            parent.id, child.x, child.y, child.width, child.height);
   }
 
   // ─── Window state ────────────────────────────────────────────────────────
@@ -5277,6 +5544,13 @@ class SurfaceRegistry : public lava::CompositorHost {
     bool anyFrost = false;
     for (auto &owned : surfaces_) {
       if (owned->backdropBlurRadius <= 0.f) continue;
+      // A resident menu keeps its radius between openings. Hidden, it is not
+      // a reason to hold a capture swapchain per output for the rest of the
+      // session.
+      if (owned->menu && !visible(*owned)) {
+        hidePlates(*owned);
+        continue;
+      }
       anyFrost = true;
       if (!owned->minimized) captureBackdrop(*owned);
     }
@@ -5666,6 +5940,7 @@ class SurfaceRegistry : public lava::CompositorHost {
       if ((*it)->id != id) continue;
       if ((*it)->appId == kSwitcherAppId) invalidatePosters();
       else forgetPosters(id);
+      std::erase(submenus_, id);
       // The menu surface going away is the menu client leaving, whether it
       // said so or its process ended. Anything on screen comes down with it,
       // and the id is not reused: the next client opens a fresh surface.
@@ -6702,6 +6977,9 @@ class SurfaceRegistry : public lava::CompositorHost {
   /// reused after the client goes: `destroySurface` clears it, and the next
   /// client's `CreateMenuSurface` opens a fresh one.
   uint32_t menuSurfaceId_ = 0;
+  /// Fly-outs of the open menu, in the order they were shown. Cleared when
+  /// the menu comes down; the surfaces themselves are destroyed with it.
+  std::vector<uint32_t> submenus_;
   uint32_t outputWidth_ = 0;
   uint32_t outputHeight_ = 0;
   /// Top-left of the output layout. Not always (0,0): unplugging the
@@ -10287,7 +10565,8 @@ bool Server::openContextMenu(int x, int y, uint32_t target) {
   closeContextMenu();
 
   const uint32_t serial = ++menuSerial;
-  if (!control->postMenu(serial, x, y, target, heading, items)) {
+  const uint32_t maxHeight = surfaces->workAreaAt(x, y).height;
+  if (!control->postMenu(serial, x, y, target, heading, items, maxHeight)) {
     // Nobody is drawing menus — `menu = off` in `[shell]`, or the client is
     // being restarted. A desktop with no context menu, not a failure.
     return false;
@@ -10325,7 +10604,9 @@ uint32_t Server::openClientMenu(
   closeContextMenu();
 
   const uint32_t serial = ++menuSerial;
-  if (!control->postMenu(serial, anchorX, anchorY, 0, title, items)) {
+  const uint32_t maxHeight = surfaces->workAreaAt(anchorX, anchorY).height;
+  if (!control->postMenu(serial, anchorX, anchorY, 0, title, items,
+                         maxHeight)) {
     // No menu client — `menu = off` in `[shell]`, or it is restarting. The
     // caller gets 0 and can draw nothing, which is what the desktop's own
     // right-click does in the same situation.
@@ -10343,6 +10624,10 @@ uint32_t Server::openClientMenu(
 }
 
 void Server::closeContextMenu() {
+  // Before the early return. A menu that was never shown can still have a
+  // branch the client created while measuring, and `menu.serial` is already
+  // 0 when this runs from the root surface being destroyed.
+  if (surfaces != nullptr) surfaces->closeSubmenus();
   if (menu.serial == 0) return;
   const MenuSession closing = menu;
   menu = MenuSession{};
@@ -10363,7 +10648,7 @@ void Server::closeContextMenu() {
   // drawing it. An empty request with serial 0 is the close — see
   // `MenuRequest` in the IDL — and it wants no reply, because the session it
   // would answer for is already gone.
-  if (control != nullptr) control->postMenu(0, 0, 0, 0, "", {});
+  if (control != nullptr) control->postMenu(0, 0, 0, 0, "", {}, 0);
   // Never placed: the client was still measuring, nothing took the keyboard,
   // and there is nothing to give back.
   if (!closing.shown) return;
@@ -10511,6 +10796,35 @@ bool SurfaceRegistry::showMenu(uint32_t surfaceId, uint32_t serial,
 
   wlr_log(WLR_DEBUG, "menu: serial %u at %d,%d — %ux%u for window %u", serial,
           surface->x, surface->y, width, height, session.target);
+  return true;
+}
+
+bool SurfaceRegistry::showSubmenu(uint32_t surfaceId, uint32_t parentId,
+                                  uint32_t serial, int32_t rowX, int32_t rowY,
+                                  uint32_t rowW, uint32_t rowH, uint32_t width,
+                                  uint32_t height) {
+  ClientSurface *child = find(surfaceId);
+  // Not a submenu plate: refusing is how a window id that wandered in here
+  // does not get moved to the pointer and raised over the desktop.
+  if (child == nullptr || !child->submenu) return false;
+  if (server_ == nullptr) return true;
+  // Late, or a menu that was never this one. Not an error — see `ShowSubmenu`.
+  if (serial == 0 || serial != server_->menu.serial) return true;
+  ClientSurface *parent = find(parentId);
+  // The root menu, or a branch already shown. A row on a plate that has
+  // gone is a branch the user has already left.
+  const bool parentIsMenu =
+      parent != nullptr &&
+      (parent->id == menuSurfaceId_ ||
+       std::find(submenus_.begin(), submenus_.end(), parent->id) !=
+           submenus_.end());
+  if (!parentIsMenu) return true;
+
+  placeSubmenu(*child, *parent, rowX, rowY, rowW, rowH, width, height);
+  if (std::find(submenus_.begin(), submenus_.end(), surfaceId) ==
+      submenus_.end()) {
+    submenus_.push_back(surfaceId);
+  }
   return true;
 }
 
@@ -11723,6 +12037,17 @@ void Server::on_cursor_button(wl_listener *listener, void *data) {
     return;
   }
 
+  // A panel popup (volume, About) owns the pointer the same way a menu
+  // does, and for the same reason: the press that should close it lands
+  // on some other window, which the panel cannot hit-test. Before the
+  // context-menu grab, so a popup and a menu are not two answers to one
+  // press — the popup goes first, and a press that misses it never
+  // reaches whatever opened the menu.
+  if (pressed && server->surfaces != nullptr &&
+      server->surfaces->dismissPopups(server->cursor->x, server->cursor->y)) {
+    return;
+  }
+
   // A menu is up, so it owns the pointer. A press inside it is the menu
   // client's to handle; a press anywhere else dismisses the menu and is
   // swallowed rather than landing in whatever was underneath — which is what
@@ -11730,11 +12055,9 @@ void Server::on_cursor_button(wl_listener *listener, void *data) {
   // because a client cannot hit-test a foreign window, and "anywhere else" is
   // mostly foreign windows.
   if (pressed && server->menuIsOpen() && server->surfaces != nullptr) {
-    ClientSurface *open =
-        server->surfaces->find(server->surfaces->menuSurface());
-    double mx = 0, my = 0;
-    if (open == nullptr ||
-        !open->hit(server->cursor->x, server->cursor->y, mx, my)) {
+    // The root plate or any fly-out. A press on a branch is the menu's; a
+    // press that misses every plate dismisses the whole stack.
+    if (!server->surfaces->menuHit(server->cursor->x, server->cursor->y)) {
       server->closeContextMenu();
       return;
     }

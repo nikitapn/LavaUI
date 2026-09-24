@@ -96,6 +96,58 @@ final class ClientModeTests: XCTestCase {
         XCTAssertNil(editor.pollInputEvent())
     }
 
+    /// A second window is another arena and another input queue, not a GLFW
+    /// window. It used to reach `bringUpWindow` on a device that was never
+    /// initialised. Its input must not land in the window the app started
+    /// with, and closing it must leave that window open.
+    func testClientOpensASecondWindow() throws {
+        let editor = try openClient(width: 800, height: 600)
+        let second = try XCTUnwrap(
+            editor.openWindow(width: 400, height: 300, title: "other"),
+            "a client should open another window without a device"
+        )
+        XCTAssertNotEqual(second, .main)
+        XCTAssertEqual(editor.windowCount, 2)
+        XCTAssertEqual(editor.framebufferSize().w, 800)
+        XCTAssertEqual(editor.framebufferSize().h, 600)
+        XCTAssertEqual(editor.framebufferSize(window: second).w, 400)
+        XCTAssertEqual(editor.framebufferSize(window: second).h, 300)
+
+        editor.postInputEvent(
+            InputEvent(kind: .mouseMove, x: 12, y: 34, button: 0),
+            window: second
+        )
+        let seen = try XCTUnwrap(
+            editor.pollInputEvent(window: second),
+            "input posted to the second window never arrived"
+        )
+        XCTAssertEqual(seen.kind, .mouseMove)
+        XCTAssertEqual(seen.x, 12)
+        XCTAssertEqual(seen.y, 34)
+        XCTAssertNil(
+            editor.pollInputEvent(),
+            "the second window's input reached the first"
+        )
+
+        editor.setClientSize(width: 500, height: 320, window: second)
+        XCTAssertEqual(
+            editor.framebufferSize().w, 800,
+            "resizing the second window resized the first"
+        )
+        XCTAssertEqual(editor.framebufferSize(window: second).w, 500)
+        XCTAssertEqual(editor.framebufferSize(window: second).h, 320)
+
+        editor.closeWindow(second)
+        XCTAssertEqual(editor.windowCount, 1)
+        XCTAssertEqual(editor.framebufferSize().w, 800)
+        editor.postInputEvent(
+            InputEvent(kind: .mouseMove, x: 1, y: 1, button: 0),
+            window: second
+        )
+        XCTAssertNil(editor.pollInputEvent(window: second))
+        XCTAssertNil(editor.pollInputEvent())
+    }
+
     /// Injection is a client's whole input path rather than a test affordance
     /// over a real one, which is what lets the agent server drive a client
     /// with no compositor on the other end.

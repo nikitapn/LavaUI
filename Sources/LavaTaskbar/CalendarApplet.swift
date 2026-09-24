@@ -1,51 +1,39 @@
 import Foundation
 import LavaUI
 
-/// Clock label that opens a month calendar. Same popover + input-region
-/// contract as the volume applet — `isOpen` is owned by the panel.
+/// Clock label. The month grid is a popup of its own — the strip is 32pt,
+/// and a calendar does not fit there.
 struct CalendarApplet: View {
     var clockText: String
-    var isOpen: Binding<Bool>
-
-    /// First day of the month currently shown. Local `@State` so paging does
-    /// not force the panel session to know about calendars.
-    @State private var visibleMonth: Date = CalendarMonth.startOfMonth(Date())
 
     var body: some View {
         let theme = Theme.current
-        let open = isOpen
 
         Text(
             clockText,
             color: theme.textPrimary,
-            onClick: {
-                if !open.wrappedValue {
-                    // Re-open on "today" so a left-over page is not sticky.
-                    visibleMonth = CalendarMonth.startOfMonth(Date())
-                }
-                open.wrappedValue.toggle()
-            }
+            onClick: { session.toggleCalendar() }
         )
         .padding(4)
         .hoverBackground(TaskbarChrome.style.titleHover)
         .cornerRadius(6)
         .agentId("applet.calendar")
-        .overlay(
-            isPresented: isOpen,
-            alignment: .below,
-            style: {
-                var s = TaskbarChrome.style.overlayStyle
-                s.padding = 12
-                s.minWidth = 260
-                return s
-            }()
-        ) {
-            calendarPopover
-        }
     }
+}
 
-    @ViewBuilder
-    private var calendarPopover: some View {
+/// The month grid. A fresh window each time it opens, so the page starts
+/// on today — paging only lasts as long as the popup does.
+///
+/// Same glass as the volume card. `WindowBackdrop` is the whole process
+/// and the panel is `.none`, so the wash has to be this view's.
+struct CalendarWindow: View {
+    static let width: Float = 276
+    static let height: Float = 320
+
+    /// First day of the month currently shown.
+    @State private var visibleMonth: Date = CalendarMonth.startOfMonth(Date())
+
+    var body: some View {
         let theme = Theme.current
         let cal = Calendar.current
         let today = Date()
@@ -120,6 +108,10 @@ struct CalendarApplet: View {
                 .agentId("calendar.today")
             }
         }
+        .padding(12)
+        .frame(width: .pt(Self.width), height: .pt(Self.height))
+        .background(TaskbarChrome.popupWash)
+        .agentId("calendar.window")
     }
 
     @ViewBuilder
