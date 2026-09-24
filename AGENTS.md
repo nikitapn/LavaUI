@@ -250,7 +250,9 @@ Consequences that surprise people:
   `.scrollIntoView(when:)` asks the nearest `ScrollView` for a view on the
   edge of its condition turning true, resolved by a layout pass that runs only
   while a request is pending — an edge, so the container can still be scrolled
-  away from it. A `ScrollView` fills its parent by default; one that should be
+  away from it. While a drag gesture runs, the draw list leaves every hover
+  tint out (`DragGestureRouter.isActive` in `endNode`), so nothing lights up
+  under a pointer that is carrying something. A `ScrollView` fills its parent by default; one that should be
   as wide as its content until it overflows (a tab strip) needs
   `.flexGrow(0).flexShrink(1)`.
 - **A camera raw is opened by finding the picture inside it, not by developing

@@ -402,6 +402,13 @@ final class LeafNode: YogaBoxNode {
     var theme: Theme = Theme.current
     /// Last layout lines from Font measure cache (for multi-line emit).
     var cachedLines: [String] = []
+    /// The width a `lineLimit` text's `cachedLines` were cut for — infinity
+    /// for an unconstrained probe, which cut nothing. Yoga
+    /// measures one text several times — a flex basis, a shrink, the final
+    /// box — and may answer the last from its own cache without calling
+    /// back, so the lines left here are the *last measure's*, not
+    /// necessarily the box's. Emit compares and cuts again when they differ.
+    var cachedLinesWidth: Float?
     var markdownSpans: [MarkdownSpan] = []
     var markdownStyle: MarkdownStyle?
     var usesTextMeasure = false
@@ -1308,23 +1315,16 @@ final class LeafNode: YogaBoxNode {
             availWidth: width,
             mode: mode
         )
+        cachedLinesWidth = nil
         if kind == .text, let limit = textLineLimit {
             let constrained = width > 0 && (
                 widthMode == YGMeasureModeExactly || widthMode == YGMeasureModeAtMost
             )
-            var visible = Array(entry.lines.prefix(max(1, limit)))
-            // `lines.count > limit` is a wrap that ran past the cap. A
-            // *single* long line in a `.frame(width:)` never wraps — there
-            // is nothing to prefix — and used to paint the whole string
-            // past the box. Ellipsize that case too.
-            let overflowed = entry.lines.count > limit
-                || (constrained && entry.width > width)
-            if overflowed, let last = visible.indices.last {
-                visible[last] = font.ellipsized(
-                    visible[last], availWidth: max(0, width - 8)
-                )
-            }
+            let (visible, overflowed) = Self.limitLines(
+                entry, text: text, limit: limit, width: width, constrained: constrained, font: font
+            )
             cachedLines = visible
+            cachedLinesWidth = constrained ? width : .infinity
             if overflowed {
                 return YGSize(
                     width: entry.width + 8,
@@ -1335,6 +1335,58 @@ final class LeafNode: YogaBoxNode {
         cachedLines = entry.lines
         // Padding keeps a slightly larger hit target.
         return YGSize(width: entry.width + 8, height: max(entry.height, font.lineHeight) + 4)
+    }
+
+    /// The rows a `lineLimit` text shows at `width`, the last one ellipsized
+    /// when there was more.
+    static func limitLines(
+        _ entry: TextLayoutCache.Entry, text: String, limit: Int, width: Float,
+        constrained: Bool, font: UIFont
+    ) -> (lines: [String], overflowed: Bool) {
+        let shown = max(1, limit)
+        var visible = Array(entry.lines.prefix(shown))
+        // `lines.count > limit` is a wrap that ran past the cap. A *single*
+        // long line in a `.frame(width:)` never wraps — there is nothing to
+        // prefix — and used to paint the whole string past the box. Ellipsize
+        // that case too.
+        //
+        // Against the text's *natural* width: a constrained measure reports
+        // its width clamped to what it was offered, so `entry.width` never
+        // exceeds `width` and a name with no space to break at was drawn
+        // whole, across the column beside it. The unconstrained measure is
+        // the oracle the box was sized by, so a text at its own width still
+        // reads as fitting.
+        let natural = constrained
+            ? TextLayoutCache.shared.layout(font: font, text: text, availWidth: 0, mode: 0).width
+            : 0
+        let overflowed = entry.lines.count > limit
+            || (constrained && natural > width)
+        if overflowed, let last = visible.indices.last {
+            // Cut the rest of the text, not the last wrapped row. The wrap
+            // breaks at a space, so a one-line "a photo.jpg" in a box a little
+            // too narrow wrapped as "a" / "photo.jpg" and showed "a…" with the
+            // room for most of the name still empty beside it.
+            let rest = entry.lines[last...].joined(separator: " ")
+            visible[last] = font.ellipsized(rest, availWidth: max(0, width - 8))
+        }
+        return (visible, overflowed)
+    }
+
+    /// `cachedLines` for a box `width` wide, re-cut if the last measure was
+    /// for another width. See `cachedLinesWidth`.
+    func linesForBox(contentWidth width: Float) -> [String] {
+        guard kind == .text, let limit = textLineLimit, let cut = cachedLinesWidth,
+              abs(cut - width) > 0.5, width > 0,
+              let font = font ?? FontStore.default
+        else { return cachedLines }
+        let entry = TextLayoutCache.shared.layout(
+            font: font, text: text, availWidth: width, mode: 1
+        )
+        cachedLines = Self.limitLines(
+            entry, text: text, limit: limit, width: width, constrained: true, font: font
+        ).lines
+        cachedLinesWidth = width
+        return cachedLines
     }
 
     /// Bitmap as a replaced element: honour an exact axis, otherwise the

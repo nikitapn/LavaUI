@@ -24,6 +24,8 @@ LAVA_CLIENT=1 swift run LavaExplorer -- ~/Pictures
   command line.
 - Places: Home, the XDG user directories that exist, Computer (`/`).
 - Details list: name, size, date. Folders first. Click a column to sort.
+  Drag the line between two headings to resize: Size and Modified keep
+  their widths, Name takes what is left, and every pane shares one set.
 - Back / Forward / Up, Alt+arrows, Backspace to go up.
 - Hidden names stay out until View → Show Hidden Files (or Ctrl+H).
 - Enter opens the selected row. A drop of a path navigates there.

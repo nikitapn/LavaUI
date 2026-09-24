@@ -788,7 +788,11 @@ public final class DrawList {
         cmd.y = contentH
         cmd.w = emittedTop
         cmd.h = emittedBottom
-        cmd.color = hoverTint?.rgba8 ?? 0
+        // No hover while something is being dragged: the pointer is carrying
+        // a separator or a tab, not pointing at the rows it sweeps across.
+        // The press tint stays, so whatever the drag started on still reads
+        // as held.
+        cmd.color = DragGestureRouter.isActive ? 0 : (hoverTint?.rgba8 ?? 0)
         cmd.param = pressTint?.rgba8 ?? 0
         // Renderer hover/press tints honour this so a rounded row does
         // not grow a square highlight. See `EndNode.aux`.
@@ -1592,7 +1596,11 @@ public final class DrawList {
             // padding on the bottom/right (most visible on hover fills).
             let lineH = (leaf.font ?? FontStore.default)?.lineHeight ?? 18
             let measured = !leaf.cachedLines.isEmpty
-            var lines = measured ? leaf.cachedLines : [leaf.text]
+            var lines = measured
+                ? leaf.linesForBox(
+                    contentWidth: w - leaf.padding.leading - leaf.padding.trailing
+                )
+                : [leaf.text]
             // Yoga skips the measure func when a frame fixes both width and
             // height, so `cachedLines` stays empty and the ellipsis
             // `lineLimit` asked for never ran. Honour it here instead,

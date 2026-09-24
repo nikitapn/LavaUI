@@ -592,16 +592,60 @@ private struct FilePane: View {
         .overlayLayer { DropOutline(active: session.dropHover == .pane(paneID)) }
     }
 
+    /// The row's geometry, so a column's heading and its separators sit
+    /// where the rows put that column: the same side padding, and each
+    /// separator the width of the gap between two cells.
     private var header: some View {
-        HStack(padding: 8, alignment: .center, spacing: 8) {
+        let columns = session.columns
+        let paneID = self.paneID
+        return HStack(
+            height: .pt(FileListMetrics.headerHeight), alignment: .center, spacing: 0
+        ) {
             sortHeader(.name)
+                .padding(.leading, FileListMetrics.sidePadding)
                 .flexGrow(1)
+                .flexShrink(1)
+            columnEdge(.nameSize)
             sortHeader(.size)
-                .frame(width: .pt(88))
+                .frame(width: .pt(columns.size))
+            columnEdge(.sizeModified)
             sortHeader(.modified)
-                .frame(width: .pt(148))
+                .frame(width: .pt(columns.modified))
         }
+        .padding(.horizontal, FileListMetrics.sidePadding)
         .background(Theme.current.panel)
+        .onFrame { frame in
+            session.noteColumnRoom(
+                paneID,
+                frame.w - 2 * FileListMetrics.sidePadding - 2 * FileListMetrics.gap
+            )
+        }
+    }
+
+    /// A line between two headings that drags the boundary between them. The
+    /// box is the whole gap, full height; the line is what shows.
+    private func columnEdge(_ edge: ListColumns.Edge) -> some View {
+        let theme = Theme.current
+        let dragging = session.columnDrag == edge
+        let line: Float = dragging ? 2 : 1
+        let paneID = self.paneID
+        return HStack(
+            width: .pt(FileListMetrics.gap),
+            height: .pct(100),
+            alignment: .center,
+            spacing: 0
+        ) {
+            Spacer(flexGrow: 0)
+                .frame(width: .pt(line), height: .pt(18))
+                .background(dragging ? theme.accent : theme.border)
+        }
+        .padding(.leading, (FileListMetrics.gap - line) / 2)
+        .hoverBackground(theme.hover)
+        .cursor(.resizeLeftRight)
+        .onDragGesture(minimumDistance: 1) { value in
+            session.dragColumnEdge(edge, in: paneID, value)
+        }
+        .agentId("column-edge-\(edge == .nameSize ? "size" : "modified")")
     }
 
     private func sortHeader(_ sort: FileSort) -> some View {
@@ -615,6 +659,14 @@ private struct FilePane: View {
         .cursor(.pointer)
         .agentId("sort-\(sort.rawValue)")
     }
+}
+
+/// Shared by the header and the rows, which have to agree for a column's
+/// separator to sit in the gap the rows leave before it.
+private enum FileListMetrics {
+    static let headerHeight: Float = 32
+    static let sidePadding: Float = 4
+    static let gap: Float = 8
 }
 
 private struct FileRow: View {
@@ -649,9 +701,9 @@ private struct FileRow: View {
             : (on ? theme.selectionFill : Color.clear)
         return HStack(
             height: .pt(28),
-            padding: 4,
+            padding: FileListMetrics.sidePadding,
             alignment: .center,
-            spacing: 8,
+            spacing: FileListMetrics.gap,
             onPointer: { mods, button in
                 if button == PointerButton.right {
                     session.openContext(entry)
@@ -677,10 +729,10 @@ private struct FileRow: View {
                 lineLimit: 1
             )
             .flexGrow(1)
-            Text(entry.sizeLabel, color: theme.textDim)
-                .frame(width: .pt(88))
-            Text(Formatters.modified(entry.modified), color: theme.textDim)
-                .frame(width: .pt(148))
+            Text(entry.sizeLabel, color: theme.textDim, lineLimit: 1)
+                .frame(width: .pt(session.columns.size))
+            Text(Formatters.modified(entry.modified), color: theme.textDim, lineLimit: 1)
+                .frame(width: .pt(session.columns.modified))
         }
         .frame(width: .pct(100))
         .background(fill)

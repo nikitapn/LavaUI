@@ -148,6 +148,37 @@ final class ExplorerSession: @unchecked Sendable {
         )
     }
 
+    // MARK: - Column widths
+
+    /// One set of widths for every pane, the way a file manager keeps its
+    /// columns per window rather than per folder.
+    var columns = ListColumns()
+    /// The edge being dragged, and the widths when the drag began: the drag
+    /// reports a translation from its start, so it is applied to those.
+    var columnDrag: ListColumns.Edge?
+    @ObservationIgnored private var columnsAtDragStart = ListColumns()
+    /// Each pane's header width, spacing and padding already taken out.
+    @ObservationIgnored private var columnRoom: [Int: Float] = [:]
+
+    func noteColumnRoom(_ paneID: Int, _ width: Float) {
+        columnRoom[paneID] = width
+    }
+
+    func dragColumnEdge(_ edge: ListColumns.Edge, in paneID: Int, _ value: DragGestureValue) {
+        switch value.phase {
+        case .began:
+            columnsAtDragStart = columns
+            columnDrag = edge
+        case .changed, .ended:
+            guard columnDrag == edge else { return }
+            let next = columnsAtDragStart.dragging(
+                edge, by: value.translationX, nameRoom: columnRoom[paneID]
+            )
+            if next != columns { columns = next }
+            if value.phase == .ended { columnDrag = nil }
+        }
+    }
+
     // MARK: - Dragging a tab
 
     /// Where a dragged tab would land: into `paneID`, or into a new pane on

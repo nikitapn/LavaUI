@@ -818,7 +818,9 @@ public final class UIFont: @unchecked Sendable {
 
     private func trimmedToWidth(_ text: String, availWidth: Float) -> String {
         let suffix = "…"
-        guard shapedRun(text + suffix).width > availWidth else { return text + suffix }
+        // A text that fits is not shortened. Returning it with "…" appended,
+        // as this once did, printed a whole name and then claimed it was cut.
+        guard shapedRun(text).width > availWidth else { return text }
         var candidate = text.trimmingCharacters(in: .whitespaces)
         while !candidate.isEmpty {
             candidate.removeLast()

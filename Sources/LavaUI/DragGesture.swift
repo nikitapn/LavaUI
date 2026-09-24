@@ -88,6 +88,9 @@ enum DragGestureRouter {
         guard dx * dx + dy * dy >= distance * distance else { return false }
         pending = nil
         active = press
+        // The draw list leaves hover tints out while a gesture is active, and
+        // a gesture that changes no state of its own would not repaint.
+        ViewInvalidation.markNeedsRedraw()
         press.entry.perform(value(.began, from: press, x: x, y: y))
         return true
     }
@@ -97,6 +100,7 @@ enum DragGestureRouter {
         pending = nil
         guard let gesture = active else { return false }
         active = nil
+        ViewInvalidation.markNeedsRedraw()
         gesture.entry.perform(value(.ended, from: gesture, x: x, y: y))
         return true
     }
