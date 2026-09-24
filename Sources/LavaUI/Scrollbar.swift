@@ -93,6 +93,10 @@ enum ScrollbarDrag {
         ViewInvalidation.markNeedsRedraw()
     }
 
+    /// Any thumb held, anywhere. Hover is left out of the frame meanwhile —
+    /// see `DrawList.endNode`.
+    static var isActive: Bool { owner != nil }
+
     static func isDragging(_ node: NodeID, axis: ScrollAxis) -> Bool {
         owner?.node == node && owner?.axis == axis
     }

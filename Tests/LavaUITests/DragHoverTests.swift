@@ -39,4 +39,11 @@ final class DragHoverTests: XCTestCase {
         XCTAssertTrue(DragGestureRouter.release(x: 20, y: 0))
         XCTAssertTrue(try hoverTints().contains { $0 != 0 }, "and back once it ends")
     }
+
+    func testHoverTintsAreLeftOutWhileAScrollbarThumbIsHeld() throws {
+        ScrollbarDrag.begin(NodeID.generate(), axis: .vertical)
+        XCTAssertEqual(try hoverTints().filter { $0 != 0 }, [])
+        ScrollbarDrag.end()
+        XCTAssertTrue(try hoverTints().contains { $0 != 0 })
+    }
 }

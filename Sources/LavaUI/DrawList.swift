@@ -789,10 +789,12 @@ public final class DrawList {
         cmd.w = emittedTop
         cmd.h = emittedBottom
         // No hover while something is being dragged: the pointer is carrying
-        // a separator or a tab, not pointing at the rows it sweeps across.
-        // The press tint stays, so whatever the drag started on still reads
-        // as held.
-        cmd.color = DragGestureRouter.isActive ? 0 : (hoverTint?.rgba8 ?? 0)
+        // a separator, a tab or a scrollbar thumb, not pointing at the rows it
+        // sweeps across. The press tint stays, so whatever the drag started
+        // on still reads as held. Both sources repaint when they begin and
+        // end, which is what puts the tints back.
+        let suspended = DragGestureRouter.isActive || ScrollbarDrag.isActive
+        cmd.color = suspended ? 0 : (hoverTint?.rgba8 ?? 0)
         cmd.param = pressTint?.rgba8 ?? 0
         // Renderer hover/press tints honour this so a rounded row does
         // not grow a square highlight. See `EndNode.aux`.
