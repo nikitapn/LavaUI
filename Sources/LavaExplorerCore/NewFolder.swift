@@ -25,7 +25,7 @@ public enum NewFolder {
     /// mean something, more than a name's 255 bytes — plus an empty one.
     /// Spaces at the ends are trimmed by the caller, not refused here.
     public static func problem(with name: String) -> String? {
-        if name.isEmpty { return "A folder needs a name" }
+        if name.isEmpty { return "A name cannot be empty" }
         if name == "." || name == ".." { return "\u{201C}\(name)\u{201D} is taken by the system" }
         if name.contains("/") { return "A name cannot contain \u{201C}/\u{201D}" }
         if name.contains("\0") { return "A name cannot contain a null character" }
@@ -48,5 +48,47 @@ public enum NewFolder {
             throw FileAccessError(path: path, message: message)
         }
         return path
+    }
+}
+
+/// Giving something in a folder another name.
+public enum Rename {
+    /// How much of `name` a rename selects to begin with: all of it for a
+    /// folder, the part before the extension for a file — "report" of
+    /// "report.pdf", which is what gets retyped far more often than the
+    /// type. A dotfile's leading dot is not an extension.
+    public static func stemLength(of name: String, isDirectory: Bool) -> Int {
+        let (stem, ext) = CopyNaming.split(name, isDirectory: isDirectory)
+        return ext.isEmpty ? name.count : stem.count
+    }
+
+    /// Renames `path` in place and returns its new path. The same name is no
+    /// change; a name something else already has is refused, never replaced.
+    public static func rename(_ path: String, to raw: String) throws -> String {
+        let name = raw.trimmingCharacters(in: .whitespaces)
+        if let problem = NewFolder.problem(with: name) {
+            throw FileAccessError(path: path, message: problem)
+        }
+        let directory = (path as NSString).deletingLastPathComponent
+        let destination = CopyPaths.join(directory, name)
+        if destination == path { return path }
+        // On a case-insensitive filesystem "a" → "A" finds "A" already there,
+        // and it is the same file: that one is a rename, not a clash.
+        if TrashCan.lexists(destination), !sameFile(path, destination) {
+            throw FileAccessError(
+                path: destination, message: "\u{201C}\(name)\u{201D} is already here"
+            )
+        }
+        guard Glibc.rename(path, destination) == 0 else {
+            throw FileAccessError(path: path, message: String(cString: strerror(errno)))
+        }
+        return destination
+    }
+
+    static func sameFile(_ a: String, _ b: String) -> Bool {
+        var sa = stat()
+        var sb = stat()
+        guard lstat(a, &sa) == 0, lstat(b, &sb) == 0 else { return false }
+        return sa.st_dev == sb.st_dev && sa.st_ino == sb.st_ino
     }
 }

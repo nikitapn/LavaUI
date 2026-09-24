@@ -49,6 +49,9 @@ public enum KeyCode {
     public static let pageUp: Int32 = 266
     public static let pageDown: Int32 = 267
     public static let insert: Int32 = 260
+    /// F1–F12 are 290–301 in GLFW, and so here.
+    public static func function(_ n: Int32) -> Int32 { 289 + n }
+    public static let f2: Int32 = 291
     public static let kp0: Int32 = 320
     public static let kpSub: Int32 = 333
     public static let kpAdd: Int32 = 334

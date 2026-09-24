@@ -363,6 +363,7 @@ final class ExplorerSession: @unchecked Sendable {
         notice = nil
         // Leaving the folder leaves the name that was being typed for it.
         if newFolderDraft?.tabID == tabSet.currentID { cancelNewFolder() }
+        if renameDraft?.tabID == tabSet.currentID { cancelRename() }
         let tabID = tabSet.currentID
         let position = scrollPosition(for: tabID)
         let source = self.source
@@ -726,7 +727,9 @@ final class ExplorerSession: @unchecked Sendable {
         case "ctx.copy": stub("Copy")
         case "ctx.cut": stub("Cut")
         case "ctx.paste": stub("Paste")
-        case "ctx.rename": stub("Rename")
+        case "ctx.rename":
+            dismissContext()
+            startRename(entry)
         case "ctx.trash":
             dismissContext()
             moveToTrash(targets(for: entry).map(\.path))
@@ -757,6 +760,7 @@ final class ExplorerSession: @unchecked Sendable {
 
     func startNewFolder() {
         dismissContext()
+        cancelRename()
         let tab = tabSet.current
         guard !TrashPath.isTrash(tab.listing.path) else {
             notice = "Folders cannot be made in the Trash"
@@ -821,6 +825,81 @@ final class ExplorerSession: @unchecked Sendable {
         ViewInvalidation.markDirty()
     }
 
+    // MARK: - Rename
+
+    /// A row whose name is being edited in place.
+    struct RenameDraft: Equatable {
+        var tabID: Int
+        var path: String
+        var name: String
+    }
+
+    var renameDraft: RenameDraft?
+
+    /// F2 or Rename: the lead row, or `entry` when a menu names one.
+    func startRename(_ entry: FileEntry? = nil) {
+        dismissContext()
+        guard let entry = entry ?? selectedEntry else { return }
+        guard !inTrash else {
+            notice = "Restore it first to rename it"
+            ViewInvalidation.markDirty()
+            return
+        }
+        cancelNewFolder()
+        FocusManager.clear()
+        tabSet.updateCurrent { $0.selected = entry.path }
+        renameDraft = RenameDraft(tabID: tabSet.currentID, path: entry.path, name: entry.name)
+        notice = nil
+        ViewInvalidation.markDirty()
+    }
+
+    var renameName: Binding<String> {
+        Binding(
+            get: { [unowned self] in renameDraft?.name ?? "" },
+            set: { [unowned self] in renameDraft?.name = $0 }
+        )
+    }
+
+    func commitRename() {
+        guard let draft = renameDraft else { return }
+        do {
+            let path = try Rename.rename(draft.path, to: draft.name)
+            renameDraft = nil
+            FocusManager.clear()
+            guard path != draft.path else {
+                ViewInvalidation.markDirty()
+                return
+            }
+            let folder = (path as NSString).deletingLastPathComponent
+            reloadAfterChange(in: [folder])
+            undoHistory.record(.renamed(from: draft.path, to: path))
+            // It moves to wherever its new name sorts, and stays selected.
+            if let paneID = layout.paneID(containingTab: draft.tabID) {
+                layout.updatePane(id: paneID) { pane in
+                    pane.tabs.updateTab(id: draft.tabID) { $0.selected = path }
+                }
+            }
+            if let index = layout.tab(id: draft.tabID)?.listing.entries
+                .firstIndex(where: { $0.path == path })
+            {
+                let row = FileListMetrics.rowHeight
+                scrollPosition(for: draft.tabID).scroll(to: max(0, Float(index - 3) * row))
+            }
+            notice = "Renamed to \u{201C}\((path as NSString).lastPathComponent)\u{201D}"
+        } catch {
+            // The field stays open with what was typed, to be fixed.
+            notice = (error as? FileAccessError)?.message ?? error.localizedDescription
+        }
+        ViewInvalidation.markDirty()
+    }
+
+    func cancelRename() {
+        guard renameDraft != nil else { return }
+        renameDraft = nil
+        FocusManager.clear()
+        ViewInvalidation.markDirty()
+    }
+
     // MARK: - Undo
 
     /// Trash, restore and copy, each reversible through the Trash — see
@@ -861,6 +940,7 @@ final class ExplorerSession: @unchecked Sendable {
         case .restored: "moved \(items(count)) back to the Trash"
         case .copied: count == 1 ? "moved the copy to the Trash" : "moved \(count) copies to the Trash"
         case .created: count == 1 ? "moved the new folder to the Trash" : "moved \(count) new folders to the Trash"
+        case .renamed(let from, _): "renamed back to \u{201C}\((from as NSString).lastPathComponent)\u{201D}"
         }
     }
 

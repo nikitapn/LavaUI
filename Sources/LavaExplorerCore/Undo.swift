@@ -2,8 +2,8 @@ import Foundation
 
 /// Something this window did to the disk that it can take back.
 ///
-/// Every undo here is a trip through the Trash, one way or the other, and that
-/// is the rule that decides what is on the list. Moving to the Trash is undone
+/// Every undo here is a trip through the Trash, one way or the other, or a
+/// rename back, and that is the rule that decides what is on the list. Moving to the Trash is undone
 /// by restoring; restoring is undone by moving back; a copy is undone by
 /// moving the copies to the Trash — never by deleting them, so an undo that
 /// was a mistake is itself recoverable, and redo is the same operation seen
@@ -19,11 +19,14 @@ public enum FileChange: Equatable, Sendable {
     case copied([String])
     /// Folders made with New Folder.
     case created([String])
+    /// Given another name in the same folder.
+    case renamed(from: String, to: String)
 
     public var count: Int {
         switch self {
         case .trashed(let items): items.count
         case .restored(let paths), .copied(let paths), .created(let paths): paths.count
+        case .renamed: 1
         }
     }
 }
@@ -58,6 +61,19 @@ extension FileChange {
                 failures: failures,
                 folders: restored.map { ($0 as NSString).deletingLastPathComponent }
             )
+        case .renamed(let from, let to):
+            let back = (from as NSString).lastPathComponent
+            do {
+                let restored = try Rename.rename(to, to: back)
+                return FileChangeReversal(
+                    inverse: .renamed(from: to, to: restored), failures: [],
+                    folders: [(restored as NSString).deletingLastPathComponent]
+                )
+            } catch {
+                let failure = (error as? FileAccessError)
+                    ?? FileAccessError(path: to, message: error.localizedDescription)
+                return FileChangeReversal(inverse: nil, failures: [failure], folders: [])
+            }
         case .restored(let paths), .copied(let paths), .created(let paths):
             var trashed: [TrashItem] = []
             for path in paths {

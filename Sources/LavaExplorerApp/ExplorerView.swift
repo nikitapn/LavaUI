@@ -622,7 +622,7 @@ private struct FilePane: View {
                         scrollTarget: selectedIndex
                     ) { entry in
                         FileRow(
-                            session: session, paneID: paneID, entry: entry,
+                            session: session, paneID: paneID, tabID: tab.id, entry: entry,
                             selected: tab.selection.contains(entry.path)
                         )
                     }
@@ -745,7 +745,7 @@ private struct NewFolderRow: View {
             TextField(
                 text: session.newFolderName,
                 autoFocus: true,
-                selectsAllOnFocus: true,
+                selectionOnFocus: .all,
                 onSubmit: { session.commitNewFolder() }
             )
             .flexGrow(1)
@@ -772,6 +772,7 @@ enum FileListMetrics {
 private struct FileRow: View {
     @Bindable var session: ExplorerSession
     let paneID: Int
+    let tabID: Int
     let entry: FileEntry
     let selected: Bool
 
@@ -827,12 +828,27 @@ private struct FileRow: View {
                 color: entry.isDirectory ? theme.accent : theme.textDim
             )
             .frame(width: .pt(18))
-            Text(
-                entry.name,
-                color: theme.textPrimary,
-                lineLimit: 1
-            )
-            .flexGrow(1)
+            if let draft = session.renameDraft, draft.path == entry.path,
+               draft.tabID == tabID
+            {
+                TextField(
+                    text: session.renameName,
+                    autoFocus: true,
+                    selectionOnFocus: .leading(
+                        Rename.stemLength(of: entry.name, isDirectory: entry.isDirectory)
+                    ),
+                    onSubmit: { session.commitRename() }
+                )
+                .flexGrow(1)
+                .agentId("rename-field")
+            } else {
+                Text(
+                    entry.name,
+                    color: theme.textPrimary,
+                    lineLimit: 1
+                )
+                .flexGrow(1)
+            }
             Text(entry.sizeLabel, color: theme.textDim, lineLimit: 1)
                 .frame(width: .pt(session.columns.size))
             Text(Formatters.modified(entry.modified), color: theme.textDim, lineLimit: 1)
@@ -908,8 +924,8 @@ private struct FileDragChip: View {
     }
 }
 
-/// Right-click menu. Open / Open With / Set Default, Move to Trash and
-/// Delete Permanently are real; copy, cut, paste and rename are labelled
+/// Right-click menu. Open / Open With / Set Default, Rename, Move to Trash
+/// and Delete Permanently are real; copy, cut and paste are labelled
 /// stubs — they set a notice rather than touching the disk. In the Trash it
 /// is Restore and Delete Permanently instead.
 private struct FileContextMenu: View {

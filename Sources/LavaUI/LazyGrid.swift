@@ -141,7 +141,13 @@ where Data.Index == Int {
             maxColumns: maxColumns,
             alignment: alignment,
             scrollTarget: scrollTarget,
-            makeCell: { index in content(data[data.startIndex + index]) }
+            makeCell: { index in content(data[data.startIndex + index]) },
+            identify: { index in
+                guard let element = data[data.startIndex + index] as? any Identifiable else {
+                    return nil
+                }
+                return lazyCellIdentity(element)
+            }
         )
     }
 }
@@ -189,13 +195,22 @@ where Data.Index == Int {
 /// directly, so the item's own `.frame`/`.padding` cannot fight the placement.
 /// Positioning the item itself meant its `applyStyle()` could reset the geometry
 /// out from under us — the same way an overlay's padding was reset once.
+/// Opens the existential, which `id` needs.
+private func lazyCellIdentity<T: Identifiable>(_ value: T) -> AnyHashable {
+    AnyHashable(value.id)
+}
+
 final class LazyCellNode: YogaBoxNode {
     private(set) var item: any AnyViewNode
     let index: Int
+    /// The element's `id`, when it has one: what says the cell at this index
+    /// still shows the same thing after the data changed.
+    let identity: AnyHashable?
 
-    init(index: Int, item: any AnyViewNode) {
+    init(index: Int, item: any AnyViewNode, identity: AnyHashable? = nil) {
         self.index = index
         self.item = item
+        self.identity = identity
         super.init(label: "LazyCell[\(index)]")
         structuralKey = "\(index)"
         YGNodeStyleSetPositionType(yogaStorage, YGPositionTypeAbsolute)
@@ -203,6 +218,13 @@ final class LazyCellNode: YogaBoxNode {
     }
 
     override var childNodes: [any AnyViewNode] { [item] }
+
+    /// The same element with new content: reconciled, so what lives in the
+    /// cell's nodes — a focused field, its caret — lives on.
+    func update(_ view: any View) {
+        item = ViewGraph.reconcile(item, with: view)
+        relink()
+    }
 
     func place(x: Float, y: Float, w: Float, h: Float) {
         YGNodeStyleSetPosition(yogaStorage, YGEdgeLeft, x)
@@ -243,6 +265,7 @@ final class LazyGridNode: YogaBoxNode {
     private var scrollTarget: Int?
     private var revealedTarget: Int?
     private var makeCell: (Int) -> any View = { _ in EmptyView() }
+    private var identify: (Int) -> AnyHashable? = { _ in nil }
 
     /// The scroll container that decides what is visible. Set by
     /// `ScrollNode.relink`; nil means this is not inside one.
@@ -287,7 +310,8 @@ final class LazyGridNode: YogaBoxNode {
         maxColumns: Int?,
         alignment: StackAlignment,
         scrollTarget: Int?,
-        makeCell: @escaping (Int) -> any View
+        makeCell: @escaping (Int) -> any View,
+        identify: @escaping (Int) -> AnyHashable? = { _ in nil }
     ) {
         let geometryChanged =
             self.cellWidth != cellWidth
@@ -304,6 +328,7 @@ final class LazyGridNode: YogaBoxNode {
         self.alignment = alignment
         self.scrollTarget = scrollTarget
         self.makeCell = makeCell
+        self.identify = identify
         // Even an identical index range now yields different views, because the
         // closure closed over new data.
         contentDirty = true
@@ -437,9 +462,22 @@ final class LazyGridNode: YogaBoxNode {
     }
 
     private func remount(to range: Range<Int>) {
-        // Drop everything outside the new window. On a content change drop the
-        // survivors too: same index, different element.
-        for (index, cell) in cells where !range.contains(index) || contentDirty {
+        // Drop everything outside the new window. On a content change a
+        // survivor is reconciled when it still shows the same element — same
+        // `id` — and dropped otherwise: same index, different element, and
+        // the new one must not inherit the old one's state.
+        //
+        // Remounting every visible cell on every change is what this used to
+        // do, and it is invisible until a cell holds something alive. A field
+        // being typed into in a row lost its focus and its caret to the fresh
+        // copy of itself on the first keystroke, because each keystroke is a
+        // change to the data.
+        for (index, cell) in cells {
+            if range.contains(index), !contentDirty { continue }
+            if range.contains(index), let id = cell.identity, id == identify(index) {
+                cell.update(makeCell(index))
+                continue
+            }
             YGNodeRemoveChild(yogaStorage, cell.yogaStorage)
             cells.removeValue(forKey: index)
         }
@@ -447,7 +485,9 @@ final class LazyGridNode: YogaBoxNode {
         let cellW = laidOutCellWidth
         let cellH = laidOutCellHeight
         for index in range where cells[index] == nil {
-            let cell = LazyCellNode(index: index, item: ViewGraph.mount(makeCell(index)))
+            let cell = LazyCellNode(
+                index: index, item: ViewGraph.mount(makeCell(index)), identity: identify(index)
+            )
             cells[index] = cell
             YGNodeInsertChild(yogaStorage, cell.yogaStorage, YGNodeGetChildCount(yogaStorage))
         }

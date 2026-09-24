@@ -88,6 +88,8 @@ struct LavaExplorerApp {
                 MenuItem("Copy Path", id: "edit.copy-path") {
                     session.copySelectedPath()
                 }
+                // F2 in `keys`, for the reason Delete is there.
+                MenuItem("Rename", id: "edit.rename") { session.startRename() }
                 MenuSeparator()
                 // Delete itself is handled in `keys`: a menu shortcut would
                 // take it from the address bar while a path is being edited.
@@ -145,6 +147,10 @@ struct LavaExplorerApp {
             session.cancelNewFolder()
             return true
         }
+        if event.button == KeyCode.escape, session.renameDraft != nil {
+            session.cancelRename()
+            return true
+        }
         if typing && !control && !alt { return false }
 
         switch event.button {
@@ -158,6 +164,8 @@ struct LavaExplorerApp {
             session.moveSelection(by: 1, extending: shift)
         case KeyCode.a where control && !typing:
             session.selectAll()
+        case KeyCode.f2 where !typing:
+            session.startRename()
         case KeyCode.n where control && shift:
             session.startNewFolder()
         case KeyCode.z where control && !typing:

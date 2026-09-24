@@ -389,3 +389,60 @@ private final class Desk {
         #expect(can.items().map(\.originalPath) == [path])
     }
 }
+
+@Suite struct RenameTests {
+    @Test func aFileOffersItsNameUpToTheExtension() {
+        #expect(Rename.stemLength(of: "report.pdf", isDirectory: false) == 6)
+        #expect(Rename.stemLength(of: "archive.tar.gz", isDirectory: false) == 11)
+        #expect(Rename.stemLength(of: ".bashrc", isDirectory: false) == 7)
+        #expect(Rename.stemLength(of: "Makefile", isDirectory: false) == 8)
+        #expect(Rename.stemLength(of: "photos.2026", isDirectory: true) == 11)
+    }
+
+    @Test func aRenameStaysInItsFolderAndRefusesToReplace() throws {
+        let desk = try Desk()
+        let old = try desk.file(desk.home + "/draft.txt", "d")
+        try desk.file(desk.home + "/final.txt", "f")
+
+        #expect(throws: FileAccessError.self) { try Rename.rename(old, to: "final.txt") }
+        #expect(desk.read(desk.home + "/final.txt") == "f")
+        #expect(throws: FileAccessError.self) { try Rename.rename(old, to: "../escape.txt") }
+        #expect(try Rename.rename(old, to: "draft.txt") == old, "the same name is no change")
+
+        let new = try Rename.rename(old, to: " v2.txt ")
+        #expect(new == desk.home + "/v2.txt")
+        #expect(desk.read(new) == "d")
+        #expect(!desk.exists(old))
+    }
+
+    @Test func undoRenamesBackAndRedoAgain() throws {
+        let desk = try Desk()
+        let can = desk.can()
+        let old = try desk.file(desk.home + "/a.txt")
+        let new = try Rename.rename(old, to: "b.txt")
+        var history = FileUndoHistory()
+        history.record(.renamed(from: old, to: new))
+
+        let undone = history.undo(using: can)
+        #expect(undone?.1.failures.isEmpty == true)
+        #expect(desk.exists(old) && !desk.exists(new))
+        let redone = history.redo(using: can)
+        #expect(redone?.1.failures.isEmpty == true)
+        #expect(desk.exists(new) && !desk.exists(old))
+    }
+
+    @Test func undoWillNotRenameOverSomethingNew() throws {
+        let desk = try Desk()
+        let can = desk.can()
+        let old = try desk.file(desk.home + "/a.txt", "first")
+        let new = try Rename.rename(old, to: "b.txt")
+        try desk.file(old, "someone else's")
+        var history = FileUndoHistory()
+        history.record(.renamed(from: old, to: new))
+
+        let undone = history.undo(using: can)
+        #expect(undone?.1.failures.count == 1)
+        #expect(desk.read(old) == "someone else's")
+        #expect(desk.read(new) == "first")
+    }
+}

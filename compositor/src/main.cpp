@@ -8668,6 +8668,11 @@ int glfw_key(xkb_keysym_t sym) {
   }
   if (sym >= XKB_KEY_A && sym <= XKB_KEY_Z) return static_cast<int>(sym);
   if (sym >= XKB_KEY_0 && sym <= XKB_KEY_9) return static_cast<int>(sym);
+  // F1–F12 are GLFW 290–301, and contiguous in both. F2 renames in a file
+  // manager; without these every function key reached a client as key 0.
+  if (sym >= XKB_KEY_F1 && sym <= XKB_KEY_F12) {
+    return 290 + static_cast<int>(sym - XKB_KEY_F1);
+  }
   // Modifiers: the app switcher commits on Control/Alt/Super release, and
   // without these the release arrives as key 0.
   switch (sym) {

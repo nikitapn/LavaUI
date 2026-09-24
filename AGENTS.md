@@ -255,7 +255,11 @@ Consequences that surprise people:
   under a pointer that is carrying something. `ScrollView(position:)` takes a `ScrollPosition`, a reference the app keeps
   that follows the renderer's offset without an observed write per frame, and
   `scroll(to:)` jumps there after the next layout — against the new content's
-  length, and before a lazy list picks its rows. A `ScrollView` fills its parent by default; one that should be
+  length, and before a lazy list picks its rows. A lazy list whose elements
+  are `Identifiable` reconciles a visible cell that still shows the same `id`
+  when the data changes, instead of rebuilding it — without that, a field in
+  a row lost focus and caret to a fresh copy of itself on every keystroke.
+  A `ScrollView` fills its parent by default; one that should be
   as wide as its content until it overflows (a tab strip) needs
   `.flexGrow(0).flexShrink(1)`.
 - **A camera raw is opened by finding the picture inside it, not by developing

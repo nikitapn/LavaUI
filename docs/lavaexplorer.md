@@ -5,8 +5,8 @@ details list on the right, an address bar along the top. Double-click a
 folder to go in; double-click a file and the desktop opens it.
 
 This started as the **browse and open** slice from `docs/desktop-apps.md`.
-It now copies by drop and throws away into the desktop's Trash; rename,
-cut and paste are still to come.
+It now copies by drop, makes and renames folders and files, and throws
+away into the desktop's Trash; cut and paste are still to come.
 
 ```bash
 swift run LavaExplorer
@@ -38,14 +38,21 @@ LAVA_CLIENT=1 swift run LavaExplorer -- ~/Pictures
   where it sorts; Escape, or going to another folder, forgets it. Nothing is
   made until Enter, and a name already there is refused rather than merged
   into. Not in the Trash.
+- F2 (or Rename on the right-click menu or the Edit menu) turns the row's
+  name into a field, with the name up to its extension selected — "report"
+  of "report.pdf" — for a folder all of it. Enter renames it in place and
+  keeps it selected where it now sorts; Escape, or going elsewhere, leaves
+  it as it was. A name something else already has is refused, never
+  replaced. Ctrl+Z renames it back, unless something has since taken the
+  old name. Not in the Trash: restore it first.
 - Rows do not light up under the pointer. A list scrolled under a still
   pointer slides row after row beneath it, and a tint that follows reads as
   flicker; selection is the only fill a row has.
 - Ctrl+Z undoes, Ctrl+Shift+Z (or Ctrl+Y) redoes, and both are on the Edit
-  menu. Every undo goes through the Trash: a move to the Trash is undone by
-  restoring, a restore by moving back, and a copy by moving the new copies
-  to the Trash — never by deleting them (a new folder likewise), so an undo made by mistake is
-  itself recoverable. Deleting for good cannot be undone, and neither can a
+  menu. Every undo goes through the Trash or is a rename back: a move to the
+  Trash is undone by restoring, a restore by moving back, a copy or a new
+  folder by moving it to the Trash — never by deleting it — and a rename by
+  renaming back, so an undo made by mistake is itself recoverable. Deleting for good cannot be undone, and neither can a
   file a copy replaced: the old contents are gone. Fifty steps, per window.
 - Hidden names stay out until View → Show Hidden Files (or Ctrl+H).
 - Enter opens the selected row. A drop of a path navigates there.
@@ -70,7 +77,7 @@ LAVA_CLIENT=1 swift run LavaExplorer -- ~/Pictures
   folder reloads when it finishes. No progress bar yet.
 - Copy Path puts a filesystem path on the clipboard. It does not copy the file.
 - Right-click: Open, Open With, Set Default App, Move to Trash, Delete
-  Permanently, and stubs for copy, cut, paste and rename.
+  Permanently, Rename, and stubs for copy, cut and paste.
 - Delete (or Move to Trash, or a drop on the Trash place) throws the
   selection away into the freedesktop Trash — the one Nautilus, Dolphin,
   Thunar and `gio trash` share, so each restores what the others threw
@@ -117,8 +124,8 @@ CLI. Picking LavaExplorer writes a user `.desktop` under
 `~/.local/share/applications` if packaging has not installed one yet, then
 runs `xdg-mime default`.
 
-Copy, cut, paste, rename and delete are on the menu as stubs: they say so
-in the status bar and do not touch the disk.
+Copy, cut and paste are on the menu as stubs: they say so in the status
+bar and do not touch the disk.
 
 MIME type and the default handler are read in-process (extension table and
 `mimeapps.list`). Asking `gio` / `xdg-mime` from the menu body spawned a
@@ -129,8 +136,8 @@ file.
 
 ## What it does not
 
-- **Rename, move, cut and paste — and copy from the menu.** On
-  the context menu as labelled stubs. Writes are a drop (a copy), the Trash
+- **Move, cut and paste — and copy from the menu.** On the context menu as
+  labelled stubs. Writes are a drop (a copy), New Folder, Rename, the Trash
   (a rename), and a removal that has been asked about. `FileSource` still has
   no `delete`: throwing away goes through `TrashCan`, and removing for good
   through `FileEraser`, which only the confirmed paths reach.
