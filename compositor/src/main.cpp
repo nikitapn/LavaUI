@@ -8696,6 +8696,16 @@ uint32_t glfw_mods(uint32_t modifiers) {
   return out;
 }
 
+/// The modifiers held on the seat's keyboard right now, GLFW-style, for a
+/// pointer button. A click is only a Ctrl+click if the client is told so:
+/// a Lava window gets its keys and its buttons as separate events, and the
+/// button's own event is the one a view reads its modifiers from.
+int32_t pointer_mods(wlr_seat *seat) {
+  wlr_keyboard *keyboard = wlr_seat_get_keyboard(seat);
+  if (!keyboard) return 0;
+  return static_cast<int32_t>(glfw_mods(wlr_keyboard_get_modifiers(keyboard)));
+}
+
 /// Starts a program without blocking the Wayland event loop.
 ///
 /// The child inherits WAYLAND_DISPLAY and DISPLAY from the compositor. The
@@ -11850,7 +11860,8 @@ void Server::on_cursor_button(wl_listener *listener, void *data) {
         // of — and a menu item, which fires on release, never fired at all.
         server->pointerTarget = over->id;
         over->canvas->pointerButton(button, true, static_cast<float>(sx),
-                                    static_cast<float>(sy), 0);
+                                    static_cast<float>(sy),
+                                    pointer_mods(server->seat));
         server->surfaces->pump(*over);
         return;
       }
@@ -11877,7 +11888,8 @@ void Server::on_cursor_button(wl_listener *listener, void *data) {
       // slightly low still lands inside it.
       target->canvas->pointerButton(
           button, false, static_cast<float>(server->cursor->x - target->x),
-          static_cast<float>(server->cursor->y - target->contentY()), 0);
+          static_cast<float>(server->cursor->y - target->contentY()),
+          pointer_mods(server->seat));
       server->surfaces->pump(*target);
       return;
     }

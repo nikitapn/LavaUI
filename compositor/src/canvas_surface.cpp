@@ -552,8 +552,7 @@ void CanvasSurface::pointerMove(float x, float y) {
 
 void CanvasSurface::pointerButton(int button, bool pressed, float x, float y,
                                   int mods) {
-  renderer_.engine().pointerButton(button, pressed, x, y, windowId_);
-  (void)mods;  // The engine takes modifiers on keys, not on buttons.
+  renderer_.engine().pointerButton(button, pressed, x, y, windowId_, mods);
 }
 
 void CanvasSurface::pointerScroll(float dx, float dy) {
