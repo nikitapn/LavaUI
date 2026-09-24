@@ -2027,6 +2027,17 @@ public final class LayoutHost {
             ScrollReveal.resolve(in: root)
         }
 
+        // Last, so a remembered position wins over a reveal made against the
+        // offset the view is leaving. A lazy list then settles again, to
+        // mount the rows for where it now is before anything is emitted.
+        if ScrollPositions.anyPending, ScrollPositions.resolve(in: root) {
+            var passes = 0
+            while settleLazyWindows(root), passes < 3 {
+                YGNodeCalculateLayout(yogaRoot, w, h, YGDirectionLTR)
+                passes += 1
+            }
+        }
+
         var frames: [LayoutFrame] = []
         boxes[0].collectFrames(originX: 0, originY: 0, into: &frames)
         lastFrames = frames

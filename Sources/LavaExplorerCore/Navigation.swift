@@ -1,14 +1,32 @@
 import Foundation
 
+/// A folder as it was when it was left: which rows were selected and how far
+/// down the list was scrolled. What Back puts back.
+public struct FolderVisit: Equatable, Sendable {
+    public var path: String
+    public var selection: FileSelection
+    public var scrollOffset: Float
+
+    public init(path: String, selection: FileSelection = FileSelection(), scrollOffset: Float = 0) {
+        self.path = path
+        self.selection = selection
+        self.scrollOffset = scrollOffset
+    }
+}
+
 /// Where we are, and the two stacks that make Back and Forward mean something.
 ///
 /// A visit pushes the current path and clears the future — the same rule as a
 /// browser. Reloading the folder you are already in is not a visit: it would
 /// fill the back stack with copies of here.
+///
+/// Each entry on the stacks remembers the folder as it was left — selection
+/// and scroll — so Back from a child lands on the row it was opened from,
+/// where it was on screen, rather than at the top of the parent.
 public struct FolderHistory: Equatable, Sendable {
     public private(set) var path: String
-    private var backward: [String]
-    private var forward: [String]
+    private var backward: [FolderVisit]
+    private var forward: [FolderVisit]
 
     public init(path: String) {
         self.path = Self.normalize(path)
@@ -21,34 +39,49 @@ public struct FolderHistory: Equatable, Sendable {
     /// The Trash is not inside anything.
     public var canGoUp: Bool { path != "/" && !TrashPath.isTrash(path) }
 
-    /// Move to `next` if it is a different folder. Returns whether anything
-    /// changed, so a caller that reloads on same-path can tell the two apart.
+    /// Move to `next` if it is a different folder, remembering `leaving` as
+    /// the state of the folder being left. Returns whether anything changed,
+    /// so a caller that reloads on same-path can tell the two apart.
     @discardableResult
-    public mutating func visit(_ next: String) -> Bool {
+    public mutating func visit(_ next: String, leaving: FolderVisit? = nil) -> Bool {
         let next = Self.normalize(next)
         guard next != path else { return false }
-        backward.append(path)
+        backward.append(here(leaving))
         forward.removeAll()
         path = next
         return true
     }
 
-    public mutating func goBack() {
-        guard let prev = backward.popLast() else { return }
-        forward.append(path)
-        path = prev
+    /// Returns the folder gone back to, as it was left.
+    @discardableResult
+    public mutating func goBack(leaving: FolderVisit? = nil) -> FolderVisit? {
+        guard let previous = backward.popLast() else { return nil }
+        forward.append(here(leaving))
+        path = previous.path
+        return previous
     }
 
-    public mutating func goForward() {
-        guard let next = forward.popLast() else { return }
-        backward.append(path)
-        path = next
+    @discardableResult
+    public mutating func goForward(leaving: FolderVisit? = nil) -> FolderVisit? {
+        guard let next = forward.popLast() else { return nil }
+        backward.append(here(leaving))
+        path = next.path
+        return next
     }
 
-    public mutating func goUp() {
+    /// Up is a visit to the parent. The folder being left is what the parent
+    /// should have selected, and the caller does that — the history only
+    /// says where it went.
+    public mutating func goUp(leaving: FolderVisit? = nil) {
         guard canGoUp else { return }
         let parent = (path as NSString).deletingLastPathComponent
-        _ = visit(parent.isEmpty ? "/" : parent)
+        _ = visit(parent.isEmpty ? "/" : parent, leaving: leaving)
+    }
+
+    private func here(_ state: FolderVisit?) -> FolderVisit {
+        guard var state else { return FolderVisit(path: path) }
+        state.path = path
+        return state
     }
 
     /// `~`, `.`, `..`, and duplicate slashes become one absolute path.

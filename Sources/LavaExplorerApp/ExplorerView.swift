@@ -595,10 +595,10 @@ private struct FilePane: View {
                     .agentId("listing-empty")
                 Spacer()
             } else {
-                ScrollView(.vertical) {
+                ScrollView(.vertical, position: session.scrollPosition(for: tab.id)) {
                     LazyVStack(
                         listing.entries,
-                        rowHeight: 28,
+                        rowHeight: FileListMetrics.rowHeight,
                         spacing: 0,
                         scrollTarget: selectedIndex
                     ) { entry in
@@ -710,8 +710,11 @@ private struct FilePane: View {
 
 /// Shared by the header and the rows, which have to agree for a column's
 /// separator to sit in the gap the rows leave before it.
-private enum FileListMetrics {
+enum FileListMetrics {
     static let headerHeight: Float = 32
+    /// Every row is this tall, which is what lets the list be lazy and a
+    /// row's place in it be worked out from its index.
+    static let rowHeight: Float = 28
     static let sidePadding: Float = 4
     static let gap: Float = 8
 }
@@ -747,7 +750,7 @@ private struct FileRow: View {
             ? theme.accent.opacity(0.28)
             : (on ? theme.selectionFill : Color.clear)
         return HStack(
-            height: .pt(28),
+            height: .pt(FileListMetrics.rowHeight),
             padding: FileListMetrics.sidePadding,
             alignment: .center,
             spacing: FileListMetrics.gap,

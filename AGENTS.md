@@ -252,7 +252,10 @@ Consequences that surprise people:
   while a request is pending — an edge, so the container can still be scrolled
   away from it. While a drag gesture runs or a scrollbar thumb is held, the
   draw list leaves every hover tint out (`endNode`), so nothing lights up
-  under a pointer that is carrying something. A `ScrollView` fills its parent by default; one that should be
+  under a pointer that is carrying something. `ScrollView(position:)` takes a `ScrollPosition`, a reference the app keeps
+  that follows the renderer's offset without an observed write per frame, and
+  `scroll(to:)` jumps there after the next layout — against the new content's
+  length, and before a lazy list picks its rows. A `ScrollView` fills its parent by default; one that should be
   as wide as its content until it overflows (a tab strip) needs
   `.flexGrow(0).flexShrink(1)`.
 - **A camera raw is opened by finding the picture inside it, not by developing

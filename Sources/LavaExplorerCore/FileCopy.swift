@@ -85,6 +85,10 @@ public struct CopyOutcome: Equatable, Sendable {
     public var copied = 0
     public var skipped = 0
     public var failures: [FileAccessError] = []
+    /// What the copy made that was not there before — what Undo can take away
+    /// again. A replaced file or a merged folder is not in it: the old one is
+    /// gone, and taking the new one away would not bring it back.
+    public var created: [String] = []
 
     public init() {}
 }
@@ -139,6 +143,7 @@ public enum FileCopier {
                 guard fileManager.fileExists(atPath: destination) else {
                     try fileManager.copyItem(atPath: item.source, toPath: destination)
                     outcome.copied += 1
+                    outcome.created.append(destination)
                     continue
                 }
                 switch choice {
@@ -149,10 +154,10 @@ public enum FileCopier {
                         item.name, isDirectory: item.isDirectory, in: plan.directory,
                         exists: { fileManager.fileExists(atPath: $0) }
                     )
-                    try fileManager.copyItem(
-                        atPath: item.source, toPath: CopyPaths.join(plan.directory, name)
-                    )
+                    let copy = CopyPaths.join(plan.directory, name)
+                    try fileManager.copyItem(atPath: item.source, toPath: copy)
                     outcome.copied += 1
+                    outcome.created.append(copy)
                 case .replace:
                     try replace(source: item.source, destination: destination, fileManager: fileManager)
                     outcome.copied += 1

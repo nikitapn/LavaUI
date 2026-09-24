@@ -16,15 +16,20 @@ public struct ScrollView<Content: View>: PrimitiveView {
     public var content: Content
     /// Draw a thin position indicator while the content overflows.
     public var showsIndicator: Bool
+    /// Where the view is, kept up to date as it scrolls, and a way to put it
+    /// somewhere. See `ScrollPosition`.
+    public var position: ScrollPosition?
 
     public init(
         _ axis: ScrollAxis = .vertical,
         showsIndicator: Bool = true,
+        position: ScrollPosition? = nil,
         @ViewBuilder content: () -> Content
     ) {
         self.axis = axis
         self.content = content()
         self.showsIndicator = showsIndicator
+        self.position = position
     }
 
     public var dumpDetail: String { "\(axis)" }
@@ -40,6 +45,7 @@ public struct ScrollView<Content: View>: PrimitiveView {
         let node = ScrollNode(axis: axis, content: ViewGraph.mount(content))
         node.showsIndicator = showsIndicator
         node.registerScrolling()
+        node.bind(position)
         return node
     }
 
@@ -49,7 +55,64 @@ public struct ScrollView<Content: View>: PrimitiveView {
         }
         scroll.showsIndicator = showsIndicator
         scroll.updateContent(ViewGraph.reconcile(scroll.contentNode, with: content))
+        scroll.bind(position)
         return scroll
+    }
+}
+
+/// Where a `ScrollView` is — for an app that has to remember it and put it
+/// back: a folder list returning to the row it was opened from, or a tab
+/// whose list should not come back scrolled to where another tab left it.
+///
+/// A reference the app keeps, one per place it wants remembered, and not a
+/// binding: the offset is the renderer's and changes every frame of a scroll,
+/// and an observed value would rebuild the app's body on each of them.
+/// `offset` follows the renderer without anyone being told. `scroll(to:)`
+/// puts the view there after the next layout — once the content's new length
+/// is known, so an offset saved in a long folder is not clamped against the
+/// short one being left — and before a lazy list decides which rows to mount,
+/// so the first frame there is already full. It jumps rather than eases: the
+/// point is to be where you were, not to be seen travelling there.
+///
+/// Handing a `ScrollView` a different position puts it where that one was.
+public final class ScrollPosition: @unchecked Sendable {
+    /// Where the view last was, in points from the top (or leading edge).
+    public internal(set) var offset: Float
+    var pending: Float?
+
+    public init(offset: Float = 0) {
+        self.offset = offset
+    }
+
+    public func scroll(to offset: Float) {
+        pending = max(0, offset)
+        ScrollPositions.anyPending = true
+        ViewInvalidation.markNeedsLayout()
+    }
+
+    public func scrollToTop() { scroll(to: 0) }
+}
+
+enum ScrollPositions {
+    nonisolated(unsafe) static var anyPending = false
+
+    /// Puts every scroll container with a pending position there. True when
+    /// one of them holds lazy content, which then has rows to mount for
+    /// where it now is.
+    static func resolve(in root: any AnyViewNode) -> Bool {
+        anyPending = false
+        return walk(root)
+    }
+
+    private static func walk(_ node: any AnyViewNode) -> Bool {
+        var remount = false
+        if let scroll = node as? ScrollNode, scroll.applyPendingPosition() {
+            remount = true
+        }
+        for child in node.childNodes where walk(child) {
+            remount = true
+        }
+        return remount
     }
 }
 
@@ -115,6 +178,49 @@ final class ScrollNode: YogaBoxNode {
         relink()
     }
 
+    private(set) var position: ScrollPosition?
+
+    /// A different position object is a different place — another tab's list
+    /// in this same box — so the view goes to where that one was.
+    func bind(_ next: ScrollPosition?) {
+        guard next !== position else { return }
+        position = next
+        guard let next else { return }
+        if next.pending == nil { next.scroll(to: next.offset) }
+        ScrollPositions.anyPending = true
+    }
+
+    /// Jumps to the position's pending offset, measured against the layout
+    /// just computed. True when lazy content has to settle again for it.
+    func applyPendingPosition() -> Bool {
+        guard let position, let wanted = position.pending else { return false }
+        position.pending = nil
+        let vertical = axis == .vertical
+        viewportLength = vertical
+            ? YGNodeLayoutGetHeight(yogaStorage) : YGNodeLayoutGetWidth(yogaStorage)
+        var extent: Float = 0
+        for index in 0..<YGNodeGetChildCount(yogaStorage) {
+            guard let child = YGNodeGetChild(yogaStorage, index) else { continue }
+            extent = max(extent, vertical
+                ? YGNodeLayoutGetTop(child) + YGNodeLayoutGetHeight(child)
+                : YGNodeLayoutGetLeft(child) + YGNodeLayoutGetWidth(child))
+        }
+        contentLength = extent
+        let target = clamped(wanted)
+        // Assigned here as well as requested — unlike `requestOffset` — so
+        // that lazy rows are mounted for where the view is going on the very
+        // frame that takes it there. The request is immediate, so the
+        // renderer is there on that frame too, and the two cannot disagree.
+        scrollOffset = target
+        position.offset = target
+        let serial = nextRevealSerial
+        nextRevealSerial &+= 1
+        if nextRevealSerial == 0 { nextRevealSerial = 1 }
+        revealRequest = (target, serial, true)
+        ViewInvalidation.markNeedsRedraw()
+        return !lazyContent.isEmpty
+    }
+
     func registerScrolling() {
         isScrollable = true
         // The bar is painted after the subtree and sits on the box's edge, so
@@ -134,6 +240,7 @@ final class ScrollNode: YogaBoxNode {
         let next = clamped(axis == .horizontal ? x : y)
         guard next != scrollOffset else { return }
         scrollOffset = next
+        position?.offset = next
         if !lazyContent.isEmpty {
             ViewInvalidation.markNeedsLayout()
         } else if showsIndicator {

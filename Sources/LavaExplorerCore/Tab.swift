@@ -67,6 +67,70 @@ public struct ExplorerTab: Equatable, Identifiable, Sendable {
         selection.keep(only: Set(listing.entries.map(\.path)))
     }
 
+    // MARK: Moving
+
+    /// Where the list should be scrolled after a move.
+    public enum ScrollLanding: Equatable, Sendable {
+        /// Exactly where it was when this folder was left.
+        case offset(Float)
+        /// A folder seen fresh starts at its top.
+        case top
+        /// Wherever shows the selected row — Up, which knows which row but
+        /// not where the parent was scrolled.
+        case reveal
+    }
+
+    /// Opens `path`, remembering this folder as it is — `scroll` is where its
+    /// list is. Nil when `path` is where the tab already is and nothing was
+    /// selected: that is a reload, and the list stays put.
+    @discardableResult
+    public mutating func open(
+        _ path: String, select: String? = nil, scroll: Float, source: any FileSource
+    ) -> ScrollLanding? {
+        let leaving = FolderVisit(path: history.path, selection: selection, scrollOffset: scroll)
+        if history.visit(path, leaving: leaving) || listing.path != history.path {
+            selected = select
+            reload(from: source)
+            return select == nil ? .top : .reveal
+        }
+        if let select {
+            selected = select
+            return .reveal
+        }
+        reload(from: source)
+        return nil
+    }
+
+    public mutating func back(scroll: Float, source: any FileSource) -> ScrollLanding? {
+        let leaving = FolderVisit(path: history.path, selection: selection, scrollOffset: scroll)
+        guard let visit = history.goBack(leaving: leaving) else { return nil }
+        return land(on: visit, source: source)
+    }
+
+    public mutating func forward(scroll: Float, source: any FileSource) -> ScrollLanding? {
+        let leaving = FolderVisit(path: history.path, selection: selection, scrollOffset: scroll)
+        guard let visit = history.goForward(leaving: leaving) else { return nil }
+        return land(on: visit, source: source)
+    }
+
+    /// The parent, with the folder just left selected in it.
+    public mutating func up(scroll: Float, source: any FileSource) -> ScrollLanding? {
+        guard history.canGoUp else { return nil }
+        let child = history.path
+        let leaving = FolderVisit(path: child, selection: selection, scrollOffset: scroll)
+        history.goUp(leaving: leaving)
+        selected = child
+        reload(from: source)
+        return .reveal
+    }
+
+    private mutating func land(on visit: FolderVisit, source: any FileSource) -> ScrollLanding {
+        selection = visit.selection
+        // The reload drops whatever has gone from the folder since.
+        reload(from: source)
+        return .offset(visit.scrollOffset)
+    }
+
     /// A tab on `path`, listing already loaded.
     public static func open(
         id: Int, path: String, source: any FileSource,

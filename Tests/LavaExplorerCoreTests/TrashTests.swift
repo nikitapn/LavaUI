@@ -253,3 +253,94 @@ private final class Desk {
         #expect(tab.listing.entries.count == 1)
     }
 }
+
+@Suite struct UndoTests {
+    @Test func undoingATrashPutsItBackAndRedoThrowsItAwayAgain() throws {
+        let desk = try Desk()
+        let can = desk.can()
+        let path = try desk.file(desk.home + "/plan.txt", "p")
+        var history = FileUndoHistory()
+        history.record(.trashed([try can.trash(path)]))
+
+        let undoneResult = history.undo(using: can)
+        let undone = try #require(undoneResult)
+        #expect(undone.1.failures.isEmpty)
+        #expect(desk.read(path) == "p")
+        #expect(history.canRedo)
+
+        let redoneResult = history.redo(using: can)
+        let redone = try #require(redoneResult)
+        #expect(redone.1.failures.isEmpty)
+        #expect(!desk.exists(path))
+        #expect(can.items().map(\.originalPath) == [path])
+        #expect(history.canUndo, "and that can be undone in turn")
+    }
+
+    @Test func undoingACopyMovesTheCopiesToTheTrashNotAway() throws {
+        let desk = try Desk()
+        let can = desk.can()
+        try desk.file(desk.home + "/from/a.txt", "a")
+        try desk.file(desk.home + "/from/b.txt", "b")
+        try FileManager.default.createDirectory(
+            atPath: desk.home + "/to", withIntermediateDirectories: true
+        )
+        try desk.file(desk.home + "/to/b.txt", "old b")
+        let plan = CopyPlan.make(
+            sources: [desk.home + "/from/a.txt", desk.home + "/from/b.txt"],
+            into: desk.home + "/to", source: LocalFileSource()
+        )
+        let outcome = FileCopier.run(plan, clashes: .keepBoth)
+        #expect(outcome.created == [desk.home + "/to/a.txt", desk.home + "/to/b (2).txt"])
+
+        var history = FileUndoHistory()
+        history.record(.copied(outcome.created))
+        let undoneResult = history.undo(using: can)
+        let undone = try #require(undoneResult)
+        #expect(undone.1.inverse?.count == 2)
+        #expect(!desk.exists(desk.home + "/to/a.txt"))
+        #expect(!desk.exists(desk.home + "/to/b (2).txt"))
+        #expect(desk.read(desk.home + "/to/b.txt") == "old b", "what was there before stays")
+        #expect(can.items().count == 2, "the copies are in the Trash, not gone")
+    }
+
+    @Test func aReplacedFileIsNotSomethingUndoCanTakeAway() throws {
+        let desk = try Desk()
+        try desk.file(desk.home + "/from/b.txt", "new")
+        try desk.file(desk.home + "/to/b.txt", "old")
+        let plan = CopyPlan.make(
+            sources: [desk.home + "/from/b.txt"], into: desk.home + "/to",
+            source: LocalFileSource()
+        )
+        let outcome = FileCopier.run(plan, clashes: .replace)
+        #expect(outcome.copied == 1)
+        #expect(outcome.created.isEmpty)
+    }
+
+    @Test func somethingNewClearsRedo() throws {
+        let desk = try Desk()
+        let can = desk.can()
+        var history = FileUndoHistory()
+        history.record(.trashed([try can.trash(try desk.file(desk.home + "/1.txt"))]))
+        _ = history.undo(using: can)
+        #expect(history.canRedo)
+        history.record(.trashed([try can.trash(try desk.file(desk.home + "/2.txt"))]))
+        #expect(!history.canRedo)
+    }
+
+    @Test func anUndoThatCannotHappenSaysWhyAndLeavesNothingToRedo() throws {
+        let desk = try Desk()
+        let can = desk.can()
+        let path = try desk.file(desk.home + "/gone.txt")
+        let item = try can.trash(path)
+        _ = can.empty()
+        var history = FileUndoHistory()
+        history.record(.trashed([item]))
+
+        let undoneResult = history.undo(using: can)
+        let undone = try #require(undoneResult)
+        #expect(undone.1.failures.count == 1)
+        #expect(undone.1.inverse == nil)
+        #expect(!history.canRedo)
+        #expect(!history.canUndo)
+    }
+}

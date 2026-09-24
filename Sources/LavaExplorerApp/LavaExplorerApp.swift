@@ -77,6 +77,11 @@ struct LavaExplorerApp {
                 ) { session.reload() }
             }
             Menu("Edit", id: "edit") {
+                // Ctrl+Z and Ctrl+Shift+Z are handled in `keys`, which leaves
+                // them to the address bar while it is being typed in.
+                MenuItem("Undo", id: "edit.undo") { session.undo() }
+                MenuItem("Redo", id: "edit.redo") { session.redo() }
+                MenuSeparator()
                 MenuItem("Select All", id: "edit.select-all") { session.selectAll() }
                 MenuItem("Copy Path", id: "edit.copy-path") {
                     session.copySelectedPath()
@@ -145,6 +150,10 @@ struct LavaExplorerApp {
             session.moveSelection(by: 1, extending: shift)
         case KeyCode.a where control && !typing:
             session.selectAll()
+        case KeyCode.z where control && !typing:
+            if shift { session.redo() } else { session.undo() }
+        case KeyCode.y where control && !typing:
+            session.redo()
         case KeyCode.left where alt:
             session.goBack()
         case KeyCode.right where alt:

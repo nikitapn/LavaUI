@@ -332,59 +332,70 @@ final class ExplorerSession: @unchecked Sendable {
         let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
         let landing = FolderHistory.landing(argument: trimmed, source: source)
-        let source = self.source
-        tabSet.updateCurrent { tab in
-            if tab.history.visit(landing.directory)
-                || tab.listing.path != landing.directory
-            {
-                tab.selected = landing.select
-                tab.reload(from: source)
-            } else if let select = landing.select {
-                tab.selected = select
-            } else {
-                tab.reload(from: source)
-            }
+        move { tab, scroll, source in
+            tab.open(landing.directory, select: landing.select, scroll: scroll, source: source)
         }
-        ViewInvalidation.markDirty()
     }
 
     func goBack() {
         guard history.canGoBack else { return }
-        dismissContext()
-        notice = nil
-        let source = self.source
-        tabSet.updateCurrent { tab in
-            tab.history.goBack()
-            tab.selected = nil
-            tab.reload(from: source)
-        }
-        ViewInvalidation.markDirty()
+        move { tab, scroll, source in tab.back(scroll: scroll, source: source) }
     }
 
     func goForward() {
         guard history.canGoForward else { return }
+        move { tab, scroll, source in tab.forward(scroll: scroll, source: source) }
+    }
+
+    /// To the parent, with the folder just left selected in it.
+    func goUp() {
+        guard history.canGoUp else { return }
+        move { tab, scroll, source in tab.up(scroll: scroll, source: source) }
+    }
+
+    /// Runs a move of the active tab, handing it where the list is scrolled
+    /// so the folder being left is remembered as it was, then puts the list
+    /// wherever the move says.
+    private func move(
+        _ body: (inout ExplorerTab, Float, any FileSource) -> ExplorerTab.ScrollLanding?
+    ) {
         dismissContext()
         notice = nil
+        let tabID = tabSet.currentID
+        let position = scrollPosition(for: tabID)
         let source = self.source
-        tabSet.updateCurrent { tab in
-            tab.history.goForward()
-            tab.selected = nil
-            tab.reload(from: source)
+        var landing: ExplorerTab.ScrollLanding?
+        tabSet.updateCurrent { tab in landing = body(&tab, position.offset, source) }
+        switch landing {
+        case .offset(let offset)?:
+            position.scroll(to: offset)
+        case .top?:
+            position.scrollToTop()
+        case .reveal?:
+            // A few rows of the parent above it, so it reads as "here is where
+            // you were" rather than a row pinned to the top edge. By index,
+            // because every row is the same height and nothing has to be
+            // measured for it.
+            if let index = selectedIndex {
+                let row = FileListMetrics.rowHeight
+                position.scroll(to: max(0, Float(index - 3) * row))
+            }
+        case nil:
+            break
         }
         ViewInvalidation.markDirty()
     }
 
-    func goUp() {
-        guard history.canGoUp else { return }
-        dismissContext()
-        notice = nil
-        let source = self.source
-        tabSet.updateCurrent { tab in
-            tab.history.goUp()
-            tab.selected = nil
-            tab.reload(from: source)
-        }
-        ViewInvalidation.markDirty()
+    /// One per tab, so each keeps its own place in its list — and follows
+    /// the tab into another pane. Not observed: it changes every frame of a
+    /// scroll, and nothing is drawn from it.
+    @ObservationIgnored private var scrollPositions: [Int: ScrollPosition] = [:]
+
+    func scrollPosition(for tabID: Int) -> ScrollPosition {
+        if let position = scrollPositions[tabID] { return position }
+        let position = ScrollPosition()
+        scrollPositions[tabID] = position
+        return position
     }
 
     func goHome() {
@@ -728,6 +739,48 @@ final class ExplorerSession: @unchecked Sendable {
         }
     }
 
+    // MARK: - Undo
+
+    /// Trash, restore and copy, each reversible through the Trash — see
+    /// `FileChange`. Not observed: nothing is drawn from it.
+    @ObservationIgnored private(set) var undoHistory = FileUndoHistory()
+
+    func undo() { step(redo: false) }
+    func redo() { step(redo: true) }
+
+    private func step(redo: Bool) {
+        dismissContext()
+        guard !copying, !erasing else {
+            notice = "Wait for the copy or delete to finish"
+            ViewInvalidation.markDirty()
+            return
+        }
+        let result = redo ? undoHistory.redo(using: trash) : undoHistory.undo(using: trash)
+        guard let (change, reversal) = result else {
+            notice = redo ? "Nothing to redo" : "Nothing to undo"
+            ViewInvalidation.markDirty()
+            return
+        }
+        reloadAfterChange(in: reversal.folders)
+        let done = reversal.inverse?.count ?? 0
+        var text = (redo ? "Redo: " : "Undo: ") + Self.describeReversal(of: change, count: done)
+        if let failure = reversal.failures.first {
+            let name = (failure.path as NSString).lastPathComponent
+            text += done > 0 ? "; " : ""
+            text += "\u{201C}\(name)\u{201D}: \(failure.message)"
+        }
+        notice = text
+        ViewInvalidation.markDirty()
+    }
+
+    private static func describeReversal(of change: FileChange, count: Int) -> String {
+        switch change {
+        case .trashed: "put back \(items(count)) from the Trash"
+        case .restored: "moved \(items(count)) back to the Trash"
+        case .copied: count == 1 ? "moved the copy to the Trash" : "moved \(count) copies to the Trash"
+        }
+    }
+
     // MARK: - Trash
 
     var inTrash: Bool { TrashPath.isTrash(listing.path) }
@@ -761,6 +814,7 @@ final class ExplorerSession: @unchecked Sendable {
             }
         }
         reloadAfterChange(in: moved.map(\.originalFolder))
+        undoHistory.record(.trashed(moved))
         if let failure = failures.first {
             let name = (failure.path as NSString).lastPathComponent
             notice = "Could not move \u{201C}\(name)\u{201D} to the Trash: \(failure.message)"
@@ -791,6 +845,7 @@ final class ExplorerSession: @unchecked Sendable {
         }
         let folders = restored.map { ($0 as NSString).deletingLastPathComponent }
         reloadAfterChange(in: folders)
+        undoHistory.record(.restored(restored))
         if let failure = failures.first {
             notice = "Could not restore: \(failure.message)"
         } else if restored.count == 1 {
@@ -1036,6 +1091,7 @@ final class ExplorerSession: @unchecked Sendable {
 
     private func finishCopy(_ outcome: CopyOutcome, directory: String, folderTitle: String) {
         copying = false
+        undoHistory.record(.copied(outcome.created))
         let source = self.source
         // Every tab on that folder in every pane, not just the one dropped
         // on: the same folder open twice should not disagree about what is in

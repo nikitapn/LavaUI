@@ -26,7 +26,18 @@ LAVA_CLIENT=1 swift run LavaExplorer -- ~/Pictures
 - Details list: name, size, date. Folders first. Click a column to sort.
   Drag the line between two headings to resize: Size and Modified keep
   their widths, Name takes what is left, and every pane shares one set.
-- Back / Forward / Up, Alt+arrows, Backspace to go up.
+- Back / Forward / Up, Alt+arrows, Backspace to go up. Back and Forward
+  land on a folder as it was left — the same rows selected, scrolled to
+  exactly where it was — so Back from a folder you opened puts you on it.
+  Up selects the folder you came out of, with a few rows above it. Each tab
+  keeps its own place in its list, across tab switches and moves between
+  panes.
+- Ctrl+Z undoes, Ctrl+Shift+Z (or Ctrl+Y) redoes, and both are on the Edit
+  menu. Every undo goes through the Trash: a move to the Trash is undone by
+  restoring, a restore by moving back, and a copy by moving the new copies
+  to the Trash — never by deleting them, so an undo made by mistake is
+  itself recoverable. Deleting for good cannot be undone, and neither can a
+  file a copy replaced: the old contents are gone. Fifty steps, per window.
 - Hidden names stay out until View → Show Hidden Files (or Ctrl+H).
 - Enter opens the selected row. A drop of a path navigates there.
 - Several rows at once: Ctrl+click adds or removes one, Shift+click selects
@@ -114,7 +125,6 @@ file.
   (a rename), and a removal that has been asked about. `FileSource` still has
   no `delete`: throwing away goes through `TrashCan`, and removing for good
   through `FileEraser`, which only the confirmed paths reach.
-- **Undo.** Restore from the Trash is the way back; there is no Ctrl+Z.
 - **Rubber-band selection.** Rows are picked with the keyboard and
   Ctrl/Shift+click; dragging on empty space does not draw a box yet.
 - **Thumbnails.** The list is glyphs. Icon view with `ImageStore` is the
