@@ -341,6 +341,13 @@ struct Output {
   /// scale change — which `renderOutputBuffer` checks on every use.
   wlr_swapchain *captureChain = nullptr;
 
+  /// On because it is the last screen standing, not because the config says
+  /// so. Set by `Server::enforceOutputFloor` when every output is off — the
+  /// laptop panel a user disabled in favour of an external monitor, after the
+  /// monitor's cable came out — and cleared as soon as a screen that is on
+  /// for its own sake comes back, which puts the config's answer back too.
+  /// Never written to the config: it is the situation, not a preference.
+  bool forcedOn = false;
   /// Whether `wlr_output_lock_attach_render` is held. See `syncScanoutLock`.
   bool compositeLocked = false;
   /// Whether a client owns this output's pixels outright — covering it, and
@@ -1244,6 +1251,24 @@ struct Server {
   /// Places every enabled output: stacked at the origin for mirror,
   /// side by side (or at saved non-overlapping positions) for extend.
   void applyArrangement();
+
+  /// At least one screen is on, always. A config that disables the laptop
+  /// panel is written with an external monitor in mind, and when that monitor
+  /// is unplugged the session would otherwise go on running on no screen at
+  /// all — with nothing left to reach Settings through. So when every output
+  /// is off, one is turned on regardless of its block (a built-in panel
+  /// first), and when a screen that is on by its own config returns, the
+  /// stand-in goes back to what the config says.
+  ///
+  /// Deferred to idle rather than run inline: the DRM backend announces every
+  /// connector one after another at startup, and deciding after the first
+  /// one would light the panel for the instant before the monitor appears.
+  void scheduleOutputFloor();
+  void enforceOutputFloor();
+  wl_event_source *outputFloorIdle = nullptr;
+  /// Set on the way out, before the backend destroys every output — none of
+  /// those is an unplug, and nothing should be turned on in reply.
+  bool outputsTearingDown = false;
 
   /// Shows workspace `index` and hands it the keyboard. A no-op if it is
   /// already current, so a repeated shortcut costs nothing.
@@ -7889,7 +7914,8 @@ wlr_output_layout_output *Output::applyConfig() {
 
   wlr_output_state state;
   wlr_output_state_init(&state);
-  wlr_output_state_set_enabled(&state, cfg == nullptr || cfg->enabled);
+  const bool wanted = forcedOn || cfg == nullptr || cfg->enabled;
+  wlr_output_state_set_enabled(&state, wanted);
 
   if (wlr_output_mode *mode = pick_mode(wlr, cfg)) {
     wlr_output_state_set_mode(&state, mode);
@@ -7927,7 +7953,11 @@ wlr_output_layout_output *Output::applyConfig() {
   }
   wlr_output_state_finish(&state);
 
-  if (cfg != nullptr && !cfg->enabled) {
+  // Whatever this did, it may have left no screen on — or brought back one
+  // that lets a stand-in go dark again.
+  server->scheduleOutputFloor();
+
+  if (!wanted) {
     wlr_log(WLR_INFO, "output %s: disabled by config", wlr->name);
     wlr_output_layout_remove(server->output_layout, wlr);
     sceneAttached = false;
@@ -7935,8 +7965,11 @@ wlr_output_layout_output *Output::applyConfig() {
     return nullptr;
   }
 
-  wlr_log(WLR_INFO, "output %s: running %dx%d@%.3fHz scale %.2f", wlr->name,
-          wlr->width, wlr->height, wlr->refresh / 1000.0, wlr->scale);
+  wlr_log(WLR_INFO, "output %s: running %dx%d@%.3fHz scale %.2f%s", wlr->name,
+          wlr->width, wlr->height, wlr->refresh / 1000.0, wlr->scale,
+          forcedOn && cfg != nullptr && !cfg->enabled
+              ? " (the config disables it; on because no other screen is)"
+              : "");
 
   server->applyArrangement();
   return wlr_output_layout_get(server->output_layout, wlr);
@@ -8232,6 +8265,83 @@ void Output::on_destroy(wl_listener *listener, void *) {
   }
   delete output;
   if (server->surfaces != nullptr) server->surfaces->refreshFromLayout();
+  // An unplug. If that was the only screen on, another has to take over.
+  server->scheduleOutputFloor();
+}
+
+void Server::scheduleOutputFloor() {
+  if (outputsTearingDown || outputFloorIdle != nullptr) return;
+  outputFloorIdle = wl_event_loop_add_idle(
+      wl_display_get_event_loop(display),
+      [](void *data) { static_cast<Server *>(data)->enforceOutputFloor(); },
+      this);
+}
+
+namespace {
+
+/// A panel built into the machine: the screen that is still there when every
+/// cable has been pulled, so the one to fall back to.
+bool is_builtin_panel(const wlr_output *output) {
+  if (output->name == nullptr) return false;
+  const std::string_view name = output->name;
+  return name.starts_with("eDP") || name.starts_with("LVDS") ||
+         name.starts_with("DSI");
+}
+
+}  // namespace
+
+void Server::enforceOutputFloor() {
+  // An idle source is gone once it has fired; this one is spent.
+  outputFloorIdle = nullptr;
+  if (outputsTearingDown) return;
+
+  bool ownEnabled = false;
+  bool anyEnabled = false;
+  for (Output *output : outputs) {
+    if (!output->wlr->enabled) continue;
+    anyEnabled = true;
+    if (!output->forcedOn) ownEnabled = true;
+  }
+
+  if (ownEnabled) {
+    // A screen the config wants is on, so a stand-in is not needed any more.
+    // Copied first: `applyConfig` goes through `applyArrangement`, which does
+    // not touch the list, but nothing here should depend on that.
+    std::vector<Output *> standIns;
+    for (Output *output : outputs) {
+      if (output->forcedOn) standIns.push_back(output);
+    }
+    for (Output *output : standIns) {
+      output->forcedOn = false;
+      wlr_log(WLR_INFO, "output %s: another screen is on; back to the config",
+              output->wlr->name);
+      output->applyConfig();
+    }
+    return;
+  }
+  // A stand-in already holds the floor.
+  if (anyEnabled) return;
+
+  std::vector<Output *> candidates;
+  for (Output *output : outputs) {
+    if (is_builtin_panel(output->wlr)) candidates.push_back(output);
+  }
+  for (Output *output : outputs) {
+    if (!is_builtin_panel(output->wlr)) candidates.push_back(output);
+  }
+  for (Output *output : candidates) {
+    // Already tried and still dark: the commit failed, and asking again on
+    // every idle would spin.
+    if (output->forcedOn) continue;
+    output->forcedOn = true;
+    wlr_log(WLR_INFO, "output %s: no screen is on; turning this one on",
+            output->wlr->name);
+    output->applyConfig();
+    if (output->wlr->enabled) return;
+  }
+  if (!outputs.empty()) {
+    wlr_log(WLR_ERROR, "output: no screen could be turned on");
+  }
 }
 
 void Output::on_commit(wl_listener *listener, void *data) {
@@ -13418,6 +13528,11 @@ int main() {
   // Only reachable at all since SIGTERM stopped killing the process outright,
   // which is why it survived this long: the quit binding hit it, and quitting
   // by keyboard is not what anyone does to a compositor that is their session.
+  server.outputsTearingDown = true;
+  if (server.outputFloorIdle != nullptr) {
+    wl_event_source_remove(server.outputFloorIdle);
+    server.outputFloorIdle = nullptr;
+  }
   wlr_backend_destroy(server.backend);
   wl_display_destroy(server.display);
   return EXIT_SUCCESS;

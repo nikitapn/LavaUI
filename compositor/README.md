@@ -235,6 +235,13 @@ is 3D and charts — the switcher's shelf, a `Mesh`/`Polyline` plot, an FBD
 diagram. Requires a restart: the render passes and pipelines are built against
 it.
 
+`enabled = false` on an output is honoured only while some other screen is on.
+When the last lit screen goes — the external monitor of a laptop whose own
+panel is disabled, unplugged — the compositor turns one back on (a built-in
+`eDP`/`LVDS`/`DSI` panel first), and turns it off again as soon as a screen
+the config does want comes back. Nothing is written to the file; the log says
+which screen is on as a stand-in.
+
 `corner-radius` applies to what the compositor draws — LavaUI clients and the
 title bars above them — and takes effect on `SIGHUP` without restarting
 anything, because it is a number the renderer reads per frame rather than a
