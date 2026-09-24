@@ -4,9 +4,9 @@ Thunar and Explorer, not Midnight Commander: a places list on the left, a
 details list on the right, an address bar along the top. Double-click a
 folder to go in; double-click a file and the desktop opens it.
 
-This is the **browse and open** slice from `docs/desktop-apps.md`. There is
-no delete, no trash, no rename, no copy of the files themselves. Those wait
-until the operations are safe enough to put in front of a whole disk.
+This started as the **browse and open** slice from `docs/desktop-apps.md`.
+It now copies by drop and throws away into the desktop's Trash; rename,
+cut and paste are still to come.
 
 ```bash
 swift run LavaExplorer
@@ -41,7 +41,24 @@ LAVA_CLIENT=1 swift run LavaExplorer -- ~/Pictures
   is complete. The copy runs off the frame loop, and every tab showing that
   folder reloads when it finishes. No progress bar yet.
 - Copy Path puts a filesystem path on the clipboard. It does not copy the file.
-- Right-click: Open, Open With, Set Default App, and stubs for copy/delete.
+- Right-click: Open, Open With, Set Default App, Move to Trash, Delete
+  Permanently, and stubs for copy, cut, paste and rename.
+- Delete (or Move to Trash, or a drop on the Trash place) throws the
+  selection away into the freedesktop Trash — the one Nautilus, Dolphin,
+  Thunar and `gio trash` share, so each restores what the others threw
+  away. It is a rename, never a copy: a file on another drive goes to that
+  drive's `.Trash-$uid` (or an administrator's sticky `.Trash/$uid`), with
+  its path recorded relative to the drive. A file that cannot be trashed —
+  a drive with no room for a trash, say — is left alone and the status bar
+  says Shift+Delete removes it for good.
+- The Trash is a place (`trash:///`): everything in every trash directory
+  on the machine, under the names it had, with the date it was deleted. The
+  status bar says where the selected item came from. Right-click Restore
+  puts it back, recreating its folder if that went too, and refuses rather
+  than overwrite something new by that name. Empty Trash empties all of it.
+- Shift+Delete, Delete inside the Trash, Delete Permanently and Empty Trash
+  remove for good, and each asks first in a bar along the bottom (Escape is
+  Cancel). The removal runs off the frame loop.
 - Drag a row out and drop it on another window — LavaView, a terminal, VS
   Code, a browser's upload box. A chip with the row's glyph and name follows
   the pointer. Offered as a copy only; let go on the window it came from and
@@ -84,17 +101,18 @@ file.
 
 ## What it does not
 
-- **Delete, trash, rename, new folder, move — and copy from the menu.** On
-  the context menu as labelled stubs; the only write is a drop on a tab. A file manager that can throw things away without a
-  bin is how people lose work; `FileSource` has no `delete` so the method
-  cannot be called by accident.
+- **Rename, new folder, move, cut and paste — and copy from the menu.** On
+  the context menu as labelled stubs. Writes are a drop (a copy), the Trash
+  (a rename), and a removal that has been asked about. `FileSource` still has
+  no `delete`: throwing away goes through `TrashCan`, and removing for good
+  through `FileEraser`, which only the confirmed paths reach.
+- **Undo.** Restore from the Trash is the way back; there is no Ctrl+Z.
+- **More than one row at a time.** Selection is one row, so Delete is one
+  item; `TrashCan` and the erase path already take lists.
 - **Thumbnails.** The list is glyphs. Icon view with `ImageStore` is the
   next visual step, not this one.
 - **inotify.** Reload is a key (Ctrl+R) and a menu item.
 - **A second window.** One surface per process; navigate in place.
-- **Dragging within the window.** Nothing takes a drop on a folder row yet, so
-  a row dragged onto another folder is not moved or copied there — a drop
-  anywhere still navigates. One row at a time, because selection is one row.
 - **The chooser mode.** `FileDialog` still shells out to zenity. The browsing
   core is what that mode should sit on, once it exists.
 - **Archives, removable media, search, remote.** Later.
@@ -102,5 +120,7 @@ file.
 ## The `FileSource` seam
 
 `list` and `stat` (as `entries(in:)` and `entry(at:)`), implemented first for
-the local disk. A later SFTP or gvfs source is another type. Write and
-delete stay off the protocol until Trash is real.
+the local disk. A later SFTP or gvfs source is another type.
+`TrashListingSource` wraps one and answers for `trash:///` as well; entries
+listed there keep their real path in the trash's `files/`, which is what
+opens, drags and restores. Write and delete stay off the protocol.

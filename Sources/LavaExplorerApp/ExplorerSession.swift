@@ -38,16 +38,21 @@ final class ExplorerSession: @unchecked Sendable {
 
     let places: [Place]
     let applications: [DesktopEntry]
+    /// The disk, and the Trash as one more folder on it (`trash:///`).
     let source: any FileSource
+    let trash: TrashCan
     let openFile: (String) -> Bool
 
     init(
         paths: [String],
         source: any FileSource = LocalFileSource(),
         openFile: @escaping (String) -> Bool = OpenLocation.file,
-        places: [Place]? = nil
+        places: [Place]? = nil,
+        trash: TrashCan = TrashCan()
     ) {
+        let source = TrashListingSource(base: source, trash: trash)
         self.source = source
+        self.trash = trash
         self.openFile = openFile
         self.places = places ?? Places.standard()
         self.applications = Self.loadApplications()
@@ -117,6 +122,10 @@ final class ExplorerSession: @unchecked Sendable {
         if parts.isEmpty { parts.append("Empty") }
         if let entry = selectedEntry {
             parts.append(entry.name)
+            // Where Restore would put it, which the list has no column for.
+            if inTrash, let item = trash.item(trashedPath: entry.path) {
+                parts.append("from \(item.originalFolder)")
+            }
         }
         return parts.joined(separator: " · ")
     }
@@ -597,12 +606,7 @@ final class ExplorerSession: @unchecked Sendable {
 
     func stub(_ verb: String) {
         dismissContext()
-        switch verb {
-        case "Delete":
-            notice = "Delete is not implemented — not until Trash exists"
-        default:
-            notice = "\(verb) is not implemented yet"
-        }
+        notice = "\(verb) is not implemented yet"
         ViewInvalidation.markDirty()
     }
 
@@ -640,9 +644,197 @@ final class ExplorerSession: @unchecked Sendable {
         case "ctx.cut": stub("Cut")
         case "ctx.paste": stub("Paste")
         case "ctx.rename": stub("Rename")
-        case "ctx.delete": stub("Delete")
+        case "ctx.trash":
+            dismissContext()
+            moveToTrash([entry.path])
+        case "ctx.delete":
+            dismissContext()
+            askToErase([entry])
+        case "ctx.restore":
+            dismissContext()
+            restore([entry])
         default:
             dismissContext()
+        }
+    }
+
+    // MARK: - Trash
+
+    var inTrash: Bool { TrashPath.isTrash(listing.path) }
+
+    /// Delete throws the selection away; Shift+Delete, or Delete inside the
+    /// Trash, asks and then removes it for good.
+    func deleteSelected(permanently: Bool) {
+        dismissContext()
+        guard let entry = selectedEntry else { return }
+        if permanently || inTrash {
+            askToErase([entry])
+        } else {
+            moveToTrash([entry.path])
+        }
+    }
+
+    /// A rename per file, so it runs here rather than on a worker: it is done
+    /// before the next frame whatever the size of what is thrown away.
+    func moveToTrash(_ paths: [String]) {
+        guard !paths.isEmpty else { return }
+        var moved: [TrashItem] = []
+        var failures: [FileAccessError] = []
+        for path in paths {
+            do {
+                moved.append(try trash.trash(path))
+            } catch let error as FileAccessError {
+                failures.append(error)
+            } catch {
+                failures.append(FileAccessError(path: path, message: error.localizedDescription))
+            }
+        }
+        reloadAfterChange(in: moved.map(\.originalFolder))
+        if let failure = failures.first {
+            let name = (failure.path as NSString).lastPathComponent
+            notice = "Could not move \u{201C}\(name)\u{201D} to the Trash: \(failure.message)"
+                + " — Shift+Delete deletes it for good"
+        } else if moved.count == 1 {
+            notice = "Moved \u{201C}\(moved[0].name)\u{201D} to the Trash"
+        } else {
+            notice = "Moved \(Self.items(moved.count)) to the Trash"
+        }
+        ViewInvalidation.markDirty()
+    }
+
+    func restore(_ entries: [FileEntry]) {
+        var restored: [String] = []
+        var failures: [FileAccessError] = []
+        for entry in entries {
+            guard let item = trash.item(trashedPath: entry.path) else {
+                failures.append(FileAccessError(path: entry.path, message: "Not in the Trash any more"))
+                continue
+            }
+            do {
+                restored.append(try trash.restore(item))
+            } catch let error as FileAccessError {
+                failures.append(error)
+            } catch {
+                failures.append(FileAccessError(path: entry.path, message: error.localizedDescription))
+            }
+        }
+        let folders = restored.map { ($0 as NSString).deletingLastPathComponent }
+        reloadAfterChange(in: folders)
+        if let failure = failures.first {
+            notice = "Could not restore: \(failure.message)"
+        } else if restored.count == 1 {
+            let name = (restored[0] as NSString).lastPathComponent
+            notice = "Restored \u{201C}\(name)\u{201D} to \(folders[0])"
+        } else {
+            notice = "Restored \(Self.items(restored.count))"
+        }
+        ViewInvalidation.markDirty()
+    }
+
+    /// Removing for good waits on a yes. Observed: the bar is drawn from it.
+    struct PendingErase {
+        enum What {
+            /// Files outside the Trash — Shift+Delete.
+            case files([String])
+            /// Things in the Trash, by their path in `files/`.
+            case trashed([String])
+            case everything
+        }
+
+        var what: What
+        var message: String
+    }
+
+    var pendingErase: PendingErase?
+    @ObservationIgnored private var erasing = false
+
+    func askToErase(_ entries: [FileEntry]) {
+        guard !entries.isEmpty, !erasing else { return }
+        let named = entries.count == 1
+            ? "\u{201C}\(entries[0].name)\u{201D}" : Self.items(entries.count)
+        let paths = entries.map(\.path)
+        let inTrash = entries.allSatisfy { trash.item(trashedPath: $0.path) != nil }
+        pendingErase = PendingErase(
+            what: inTrash ? .trashed(paths) : .files(paths),
+            message: "Delete \(named) for good? This cannot be undone."
+        )
+        ViewInvalidation.markDirty()
+    }
+
+    func askToEmptyTrash() {
+        dismissContext()
+        guard !erasing else { return }
+        let count = trash.items().count
+        guard count > 0 else {
+            notice = "The Trash is empty"
+            ViewInvalidation.markDirty()
+            return
+        }
+        pendingErase = PendingErase(
+            what: .everything,
+            message: "Delete \(Self.items(count)) in the Trash for good? This cannot be undone."
+        )
+        ViewInvalidation.markDirty()
+    }
+
+    /// The erase bar's answer.
+    func resolveErase(_ confirmed: Bool) {
+        guard let pending = pendingErase else { return }
+        pendingErase = nil
+        guard confirmed else {
+            ViewInvalidation.markDirty()
+            return
+        }
+        erasing = true
+        notice = "Deleting…"
+        ViewInvalidation.markDirty()
+        let trash = self.trash
+        // Off the frame loop, like a copy: removing a tree walks all of it.
+        Thread.detachNewThread { [weak self] in
+            let failures: [FileAccessError]
+            var folders: [String] = []
+            switch pending.what {
+            case .files(let paths):
+                failures = FileEraser.erase(paths)
+                folders = paths.map { ($0 as NSString).deletingLastPathComponent }
+            case .trashed(let paths):
+                failures = paths.compactMap { path in
+                    guard let item = trash.item(trashedPath: path) else { return nil }
+                    do {
+                        try trash.erase(item)
+                        return nil
+                    } catch {
+                        return FileAccessError(path: path, message: error.localizedDescription)
+                    }
+                }
+            case .everything:
+                failures = trash.empty()
+            }
+            let changed = folders
+            MainQueue.async { [weak self] in
+                self?.finishErase(failures, folders: changed)
+            }
+        }
+    }
+
+    private func finishErase(_ failures: [FileAccessError], folders: [String]) {
+        erasing = false
+        reloadAfterChange(in: folders)
+        if let failure = failures.first {
+            let name = (failure.path as NSString).lastPathComponent
+            notice = "Could not delete \u{201C}\(name)\u{201D}: \(failure.message)"
+        } else {
+            notice = "Deleted"
+        }
+        ViewInvalidation.markDirty()
+    }
+
+    /// Every tab on any of `folders`, and every tab on the Trash, which
+    /// changes whenever anything goes in or comes out.
+    private func reloadAfterChange(in folders: [String]) {
+        let source = self.source
+        for folder in Set(folders + [TrashPath.uri]) {
+            layout.updateTabs(showing: FolderHistory.normalize(folder)) { $0.reload(from: source) }
         }
     }
 
@@ -682,8 +874,7 @@ final class ExplorerSession: @unchecked Sendable {
 
     // Every drop that lands somewhere in a pane is a copy into a folder; these
     // only say which folder. A copy and never a move, like the drag out of a
-    // row: nothing here can put a moved file back, and there is no Trash yet
-    // to find it in.
+    // row — except onto the Trash, which moves it there.
 
     /// Into that tab's folder — whichever pane the tab is in.
     func dropOnTab(id: Int, _ urls: [URL]) {
@@ -714,6 +905,11 @@ final class ExplorerSession: @unchecked Sendable {
         ownDrag = []
         dropHover = nil
         dismissContext()
+        // Dropped on the Trash is thrown away, not copied into it.
+        if TrashPath.isTrash(directory) {
+            moveToTrash(urls.map(\.path))
+            return
+        }
         guard !copying, pendingCopy == nil else {
             notice = "Still copying — drop again when it is done"
             ViewInvalidation.markDirty()

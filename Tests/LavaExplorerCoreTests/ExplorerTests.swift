@@ -264,15 +264,15 @@ struct TabTests {
 
 @Suite("Places")
 struct PlaceTests {
-    @Test("Home and Computer always appear")
+    @Test("Home, Computer and the Trash always appear")
     func always() {
         let places = Places.standard(
             home: "/home/somebody",
             userDirs: "",
             exists: { _ in false }
         )
-        #expect(places.map(\.title) == ["Home", "Computer"])
-        #expect(places.map(\.path) == ["/home/somebody", "/"])
+        #expect(places.map(\.title) == ["Home", "Computer", "Trash"])
+        #expect(places.map(\.path) == ["/home/somebody", "/", "trash:///"])
     }
 
     @Test("XDG user dirs that exist are listed, $HOME expanded")
@@ -291,7 +291,7 @@ struct PlaceTests {
                     || $0 == "/home/somebody" || $0 == "/"
             }
         )
-        #expect(places.map(\.title) == ["Home", "Desktop", "Documents", "Computer"])
+        #expect(places.map(\.title) == ["Home", "Desktop", "Documents", "Computer", "Trash"])
         #expect(places.contains { $0.path == "/mnt/papers" })
         #expect(!places.contains { $0.title == "Downloads" })
     }

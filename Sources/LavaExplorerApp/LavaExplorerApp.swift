@@ -5,10 +5,10 @@ import LavaUI
 
 /// LavaExplorer — one folder, as a list.
 ///
-/// Browse and open. There is no delete, no trash, no rename, and no copy of
-/// the files themselves: those wait until the operations are safe enough to
-/// put in front of a whole disk. A double-click on a folder goes in; a
-/// double-click on a file asks the desktop to open it.
+/// Browse and open, copy by dropping, and throw away into the desktop's
+/// Trash — the freedesktop one, shared with every other file manager. No
+/// rename yet. A double-click on a folder goes in; a double-click on a file
+/// asks the desktop to open it.
 enum Layout {
     static let initialWidth: Float = 960
     static let initialHeight: Float = 640
@@ -80,6 +80,18 @@ struct LavaExplorerApp {
                 MenuItem("Copy Path", id: "edit.copy-path") {
                     session.copySelectedPath()
                 }
+                MenuSeparator()
+                // Delete itself is handled in `keys`: a menu shortcut would
+                // take it from the address bar while a path is being edited.
+                MenuItem("Move to Trash", id: "edit.trash") {
+                    session.deleteSelected(permanently: false)
+                }
+                MenuItem("Delete Permanently", id: "edit.delete") {
+                    session.deleteSelected(permanently: true)
+                }
+                MenuItem("Empty Trash", id: "edit.empty-trash") {
+                    session.askToEmptyTrash()
+                }
             }
             Menu("View", id: "view") {
                 MenuItem("Show Hidden Files", id: "view.hidden") {
@@ -103,6 +115,7 @@ struct LavaExplorerApp {
                 MenuSeparator()
                 MenuItem("Home", id: "go.home") { session.goHome() }
                 MenuItem("Computer", id: "go.computer") { session.go("/") }
+                MenuItem("Trash", id: "go.trash") { session.go(TrashPath.uri) }
             }
         }
     }
@@ -150,7 +163,9 @@ struct LavaExplorerApp {
         case KeyCode.pageUp where control:
             session.cycleTab(by: -1)
         case KeyCode.delete where !typing:
-            session.stub("Delete")
+            session.deleteSelected(permanently: shift)
+        case KeyCode.escape where session.pendingErase != nil:
+            session.resolveErase(false)
         case KeyCode.l where control:
             // The field is already there; focusing it is a click. Ctrl+L
             // still reloads the draft from the current path so a half-typed

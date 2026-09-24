@@ -428,8 +428,8 @@ Sources/
   LavaView*/       LavaView — image viewer (core headless + app). Fit / 1:1,
                    wheel zoom at the cursor, the folder as a cycle, and two
                    rotate buttons that can write the turn back to the file
-  LavaExplorer*/   File manager (core headless + app). One pane, places plus
-                   a details list; browse and open, no delete
+  LavaExplorer*/   File manager (core headless + app). Split panes and tabs,
+                   copy by drop, the freedesktop Trash; no rename yet
   FBDModel/        Function-block diagram model
 canvas/            C++ Vulkan engine + Yoga (SwiftPM C++ targets)
 compositor/        wlroots compositor + canvas surfaces + control plane

@@ -18,7 +18,8 @@ public struct FolderHistory: Equatable, Sendable {
 
     public var canGoBack: Bool { !backward.isEmpty }
     public var canGoForward: Bool { !forward.isEmpty }
-    public var canGoUp: Bool { path != "/" }
+    /// The Trash is not inside anything.
+    public var canGoUp: Bool { path != "/" && !TrashPath.isTrash(path) }
 
     /// Move to `next` if it is a different folder. Returns whether anything
     /// changed, so a caller that reloads on same-path can tell the two apart.
@@ -45,6 +46,7 @@ public struct FolderHistory: Equatable, Sendable {
     }
 
     public mutating func goUp() {
+        guard canGoUp else { return }
         let parent = (path as NSString).deletingLastPathComponent
         _ = visit(parent.isEmpty ? "/" : parent)
     }
@@ -52,6 +54,8 @@ public struct FolderHistory: Equatable, Sendable {
     /// `~`, `.`, `..`, and duplicate slashes become one absolute path.
     public static func normalize(_ path: String) -> String {
         let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
+        // An address, not a path: standardizing would make it "trash:".
+        if TrashPath.isTrash(trimmed) { return TrashPath.uri }
         let expanded = (trimmed as NSString).expandingTildeInPath
         let standardized = (expanded as NSString).standardizingPath
         return standardized.isEmpty ? "/" : standardized
@@ -93,7 +97,8 @@ public struct Place: Equatable, Sendable, Identifiable {
 }
 
 public enum Places {
-    /// Home, the XDG user directories that actually exist, then the machine.
+    /// Home, the XDG user directories that actually exist, the machine, and
+    /// the Trash.
     ///
     /// Missing folders are skipped rather than shown greyed: a place that
     /// cannot be opened is a lie, and this app has no "create this folder"
@@ -123,6 +128,7 @@ public enum Places {
             places.append(Place(title: title, path: path))
         }
         places.append(Place(title: "Computer", path: "/"))
+        places.append(Place(title: "Trash", path: TrashPath.uri))
         return places
     }
 

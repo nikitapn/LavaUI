@@ -33,6 +33,9 @@ struct ExplorerView: View {
             if let pending = session.pendingCopy {
                 ClashBar(session: session, pending: pending)
             }
+            if let pending = session.pendingErase {
+                EraseBar(session: session, pending: pending)
+            }
             StatusBar(session: session)
         }
         .background(Theme.current.background)
@@ -197,6 +200,27 @@ private struct TabGhost: View {
 /// One question for a drop whose names are partly taken, across the window
 /// under the panes — where the folder it is about is still in view, the same
 /// reason LavaEditor asks about unsaved changes in a bar and not a dialog.
+/// "Delete this for good?" — the one question before anything is removed
+/// rather than thrown away. Escape is Cancel.
+private struct EraseBar: View {
+    @Bindable var session: ExplorerSession
+    let pending: ExplorerSession.PendingErase
+
+    var body: some View {
+        HStack(padding: 8, alignment: .center, spacing: 8) {
+            Text(pending.message, color: Theme.current.textPrimary, lineLimit: 1)
+                .flexShrink(1)
+                .agentId("erase-message")
+            Spacer()
+            Button("Delete") { session.resolveErase(true) }
+                .agentId("erase-confirm")
+            Button("Cancel") { session.resolveErase(false) }
+                .agentId("erase-cancel")
+        }
+        .background(Theme.current.selectionFill)
+    }
+}
+
 private struct ClashBar: View {
     @Bindable var session: ExplorerSession
     let pending: ExplorerSession.PendingCopy
@@ -556,6 +580,9 @@ private struct FilePane: View {
         }
         let paneID = self.paneID
         return VStack(flexGrow: 1, padding: 0, spacing: 0) {
+            if TrashPath.isTrash(listing.path) {
+                trashBar(empty: listing.entries.isEmpty)
+            }
             header
             if let error = listing.error {
                 Text(error, color: Theme.current.textDim)
@@ -648,11 +675,31 @@ private struct FilePane: View {
         .agentId("column-edge-\(edge == .nameSize ? "size" : "modified")")
     }
 
+    /// What the Trash is and the one thing to do with all of it. Restore is
+    /// per item, on the right-click.
+    private func trashBar(empty: Bool) -> some View {
+        HStack(padding: 8, alignment: .center, spacing: 8) {
+            Text(
+                "Right-click an item to put it back where it came from",
+                color: Theme.current.textDim, lineLimit: 1
+            )
+            .flexShrink(1)
+            Spacer()
+            if !empty {
+                Button("Empty Trash") { session.askToEmptyTrash() }
+                    .agentId("empty-trash")
+            }
+        }
+    }
+
     private func sortHeader(_ sort: FileSort) -> some View {
         let on = tab.sort == sort
         let mark = on ? (tab.sortDescending ? " ▼" : " ▲") : ""
+        // In the Trash the date is when it was thrown away.
+        let title = sort == .modified && TrashPath.isTrash(tab.listing.path)
+            ? "Deleted" : sort.title
         return Text(
-            sort.title + mark,
+            title + mark,
             color: on ? Theme.current.textPrimary : Theme.current.textDim,
             onClick: { session.setSort(sort) }
         )
@@ -795,9 +842,10 @@ private struct FileDragChip: View {
     }
 }
 
-/// Right-click menu. Open / Open With / Set Default are real; copy and
-/// delete are labelled stubs — they set a notice rather than touching the
-/// disk.
+/// Right-click menu. Open / Open With / Set Default, Move to Trash and
+/// Delete Permanently are real; copy, cut, paste and rename are labelled
+/// stubs — they set a notice rather than touching the disk. In the Trash it
+/// is Restore and Delete Permanently instead.
 private struct FileContextMenu: View {
     @Bindable var session: ExplorerSession
     let entry: FileEntry
@@ -816,6 +864,7 @@ private struct FileContextMenu: View {
     private func entries(
         handlers: [DesktopEntry], defaultId: String?
     ) -> [MenuEntry] {
+        if session.inTrash { return trashEntries }
         var items: [MenuEntry] = [
             .item(MenuItemModel(id: MenuID("ctx.open"), title: "Open")),
             .item(MenuItemModel(
@@ -840,12 +889,27 @@ private struct FileContextMenu: View {
         items.append(.item(MenuItemModel(id: MenuID("ctx.paste"), title: "Paste")))
         items.append(.separator)
         items.append(.item(MenuItemModel(id: MenuID("ctx.rename"), title: "Rename")))
-        items.append(.item(MenuItemModel(id: MenuID("ctx.delete"), title: "Delete")))
+        items.append(.item(MenuItemModel(id: MenuID("ctx.trash"), title: "Move to Trash")))
+        items.append(.item(MenuItemModel(
+            id: MenuID("ctx.delete"), title: "Delete Permanently"
+        )))
         items.append(.separator)
         items.append(.item(MenuItemModel(
             id: MenuID("ctx.copy-path"), title: "Copy Path"
         )))
         return items
+    }
+
+    /// Something in the Trash is there to be put back or got rid of.
+    private var trashEntries: [MenuEntry] {
+        [
+            .item(MenuItemModel(id: MenuID("ctx.restore"), title: "Restore")),
+            .item(MenuItemModel(id: MenuID("ctx.open"), title: "Open")),
+            .separator,
+            .item(MenuItemModel(id: MenuID("ctx.delete"), title: "Delete Permanently")),
+            .separator,
+            .item(MenuItemModel(id: MenuID("ctx.copy-path"), title: "Copy Path")),
+        ]
     }
 
     private func appItems(

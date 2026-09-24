@@ -35,6 +35,7 @@ public struct ExplorerTab: Equatable, Identifiable, Sendable {
 
     public var title: String {
         let path = listing.path
+        if TrashPath.isTrash(path) { return "Trash" }
         let name = (path as NSString).lastPathComponent
         if name.isEmpty || path == "/" { return "Computer" }
         return name

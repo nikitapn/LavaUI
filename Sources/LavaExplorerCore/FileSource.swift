@@ -5,8 +5,9 @@ import Foundation
 /// Local first, and only listing plus identity. `docs/desktop-apps.md` wants
 /// this seam from the first commit so a later SFTP or gvfs source is another
 /// type rather than a retrofit. It also wants `write` and `delete` on the
-/// protocol. Those are omitted on purpose: this app does not throw files away,
-/// and a method nobody is allowed to call is a method somebody will call.
+/// protocol. Those are omitted on purpose: a listing has no business
+/// removing anything. Throwing away is `TrashCan`, and removing for good is
+/// `FileEraser`, reached only once the user has said yes.
 public protocol FileSource: Sendable {
     /// Direct children of `directory`. Unsorted, including hidden names;
     /// filtering and ordering belong to `FolderListing`.
