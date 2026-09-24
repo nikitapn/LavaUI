@@ -12,6 +12,7 @@
 #include "render/dmabuf_image.hpp"
 #include "render/draw_command.hpp"
 #include "render/imported_dmabuf.hpp"
+#include "render/render_window.hpp"
 #include "render/texture_manager.hpp"
 
 namespace lava {
@@ -95,6 +96,18 @@ DmabufBuffer *DmabufBuffer::create(const canvas::DmabufImage *image) {
 }
 
 // ─── CanvasRenderer ────────────────────────────────────────────────────────
+
+void CanvasRenderer::setScrollEasing(int32_t milliseconds) {
+  ::RenderWindow::setScrollEasing(
+      static_cast<double>(milliseconds < 0 ? 0 : milliseconds) / 1000.0);
+  // What is in force, which `LAVA_SCROLL_EASING` may have overruled.
+  const double effective = ::RenderWindow::scrollEasing();
+  if (effective <= 0.0) {
+    wlr_log(WLR_INFO, "render: scroll easing off");
+  } else {
+    wlr_log(WLR_INFO, "render: scroll easing %.0f ms", effective * 1000.0);
+  }
+}
 
 std::unique_ptr<CanvasRenderer> CanvasRenderer::create(wlr_renderer *renderer,
                                                       uint32_t sampleCap) {

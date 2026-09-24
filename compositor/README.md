@@ -203,6 +203,11 @@ layout = us
 # clamped to what the GPU supports. A memory setting as much as a quality one —
 # see below.
 # msaa = 4
+# How long a wheel scroll takes to settle, in milliseconds (default 75): the
+# time constant of the ease, so it is mostly there in that long. `off` (or 0)
+# is no easing — each notch lands in one frame. Re-read on SIGHUP, and
+# LAVA_SCROLL_EASING overrides it for one process.
+# scroll-easing = 75
 
 [appearance]
 # Window corner radius in pixels. 0 (the default) is square; clamped to 64.

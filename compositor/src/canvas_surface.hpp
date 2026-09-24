@@ -55,6 +55,10 @@ class CanvasRenderer {
   /// `sampleCap` is `[render] msaa` from the config — it has to be settled here
   /// because the device's render passes are built against it and every surface
   /// opened later inherits it. 0 keeps the engine default.
+  /// `[render] scroll-easing`, for every surface: see
+  /// `RenderWindow::setScrollEasing` (canvas).
+  static void setScrollEasing(int32_t milliseconds);
+
   static std::unique_ptr<CanvasRenderer> create(wlr_renderer *renderer,
                                                 uint32_t sampleCap = 0);
 

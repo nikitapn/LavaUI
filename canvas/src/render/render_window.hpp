@@ -47,6 +47,14 @@ class DmabufImage;
 /// shared cache/lifetime operations are synchronized by RenderDevice.
 class RenderWindow {
  public:
+  /// How long a scroll takes to settle — the time constant of its ease, in
+  /// seconds. 0 turns the easing off: each wheel notch lands where it is
+  /// going on the frame that receives it. Process-wide, because it is a
+  /// preference about how scrolling feels rather than about any one window;
+  /// `LAVA_SCROLL_EASING` (milliseconds, or `off`) overrides whatever is set.
+  static void setScrollEasing(double seconds);
+  static double scrollEasing();
+
   /// CPU/GPU overlap: while the GPU draws slot N, the CPU builds slot N+1.
   static constexpr uint32_t kMaxFramesInFlight = 2;
 

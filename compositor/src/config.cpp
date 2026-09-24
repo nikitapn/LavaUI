@@ -323,6 +323,14 @@ Config Config::load(const std::string &path) {
         // typos, and 64 is a request no device will honour anyway.
         const int32_t samples = std::atoi(value.c_str());
         config.render.msaa = samples < 1 ? 1 : (samples > 8 ? 8 : samples);
+      } else if (key == "scroll-easing") {
+        // "off" is the reading anybody would try first; a number is ms.
+        if (value == "off" || value == "none" || value == "false") {
+          config.render.scrollEasingMs = 0;
+        } else {
+          const int32_t ms = std::atoi(value.c_str());
+          config.render.scrollEasingMs = ms < 0 ? 0 : (ms > 2000 ? 2000 : ms);
+        }
       } else {
         known = false;
       }

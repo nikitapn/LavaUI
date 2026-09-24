@@ -1,6 +1,8 @@
 #include <unistd.h>
 
 #include <algorithm>
+#include <atomic>
+#include <optional>
 #include <chrono>
 #include <array>
 #include <cassert>
@@ -2242,6 +2244,38 @@ bool RenderWindow::scrollSceneNode(float pointerX, float pointerY,
   return false;
 }
 
+namespace {
+// 1/e every 75ms, so a scroll arrives in about a fifth of a second — see
+// `advanceSceneAnimations`.
+constexpr double kDefaultScrollEasing = 0.075;
+std::atomic<double> gScrollEasing{kDefaultScrollEasing};
+
+/// `LAVA_SCROLL_EASING`: milliseconds, or `off`/`none`/`0`. Nothing, or
+/// something unreadable, is no override.
+std::optional<double> scrollEasingOverride() {
+  const char *raw = std::getenv("LAVA_SCROLL_EASING");
+  if (raw == nullptr || *raw == '\0') return std::nullopt;
+  const std::string value(raw);
+  if (value == "off" || value == "none") return 0.0;
+  char *end = nullptr;
+  const double ms = std::strtod(raw, &end);
+  if (end == raw || ms < 0.0) return std::nullopt;
+  return std::min(ms, 2000.0) / 1000.0;
+}
+}  // namespace
+
+void RenderWindow::setScrollEasing(double seconds)
+{
+  gScrollEasing.store(std::clamp(seconds, 0.0, 2.0));
+}
+
+double RenderWindow::scrollEasing()
+{
+  // Read once: it is asked every frame.
+  static const std::optional<double> override = scrollEasingOverride();
+  return override ? *override : gScrollEasing.load();
+}
+
 bool RenderWindow::advanceSceneAnimations(
   double now, std::vector<canvas::SceneNodeOffset> &outMoved,
   std::vector<uint32_t> &outFinished)
@@ -2253,7 +2287,9 @@ bool RenderWindow::advanceSceneAnimations(
   // Framed as a decay rather than a duration on purpose: a new notch mid-flight
   // moves the target and the same curve keeps running, where a fixed-duration
   // tween would have to decide whether to restart, extend, or blend.
-  constexpr double kTau = 0.075;
+  // The default is `kDefaultScrollEasing`; see `scrollEasing` for how it is
+  // changed, and for 0.
+  const double kTau = scrollEasing();
   /// Below this the animation is over. Half a pixel cannot be seen, and
   /// chasing the last of an exponential would repaint forever.
   constexpr float kSnap = 0.5f;
@@ -2262,8 +2298,11 @@ bool RenderWindow::advanceSceneAnimations(
   sceneAnimationTime_ = now;
   // Frame-rate independent: the fraction covered depends on elapsed time, not
   // on how many times this happened to be called.
+  // No easing is the whole distance at once — on the frame the notch
+  // arrives, even the first one, which has no elapsed time to scale by.
   const float alpha =
-    dt > 0.0 ? static_cast<float>(1.0 - std::exp(-dt / kTau)) : 0.f;
+    kTau <= 0.0 ? 1.f
+    : dt > 0.0 ? static_cast<float>(1.0 - std::exp(-dt / kTau)) : 0.f;
 
   // Asymmetric on purpose. A highlight that fades *in* slowly reads as lag —
   // the pointer is already there and the interface has not agreed yet —

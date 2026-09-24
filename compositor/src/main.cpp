@@ -10574,6 +10574,8 @@ void Server::reloadConfig() {
   for (Output *output : outputs) {
     output->applyConfig();
   }
+  // Read per frame by every surface, so it takes on the next scroll.
+  lava::CanvasRenderer::setScrollEasing(config.render.scrollEasingMs);
   for (Keyboard *keyboard : keyboards) {
     // Every client is sent the new keymap by wlroots as a side effect, so a
     // layout change reaches applications that are already running.
@@ -12801,6 +12803,7 @@ int main() {
   // connects. Surfaces are windows on it.
   auto canvas_renderer = lava::CanvasRenderer::create(
       server.renderer, static_cast<uint32_t>(server.config.render.msaa));
+  lava::CanvasRenderer::setScrollEasing(server.config.render.scrollEasingMs);
   SurfaceRegistry surfaces;
   surfaces.bind(canvas_renderer.get(), &server.workspaces);
   surfaces.bind(&server);

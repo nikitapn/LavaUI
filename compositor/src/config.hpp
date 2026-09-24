@@ -123,6 +123,12 @@ struct RenderConfig {
   /// 4 is the default for that reason; drop to 2 on a memory-tight machine and
   /// look at a corner before deciding it was free.
   int32_t msaa = 4;
+  /// How long a wheel scroll takes to settle, in milliseconds: the time
+  /// constant of the ease the renderer runs, so a scroll is most of the way
+  /// there in this long and done in about three times it. 0 (`off`) is no
+  /// easing — each notch lands in one frame. Applies to every surface the
+  /// compositor draws, and is re-read on SIGHUP.
+  int32_t scrollEasingMs = 75;
 };
 
 /// Which LavaUI `Theme` clients that wear system colours should use.

@@ -560,6 +560,7 @@ reproducible, completely fictional bug.
 | `LAVA_IMAGE_SPECULATION=0`/`1` | Pins the dormant half off/on instead of following the screens. A test lever — see `Server::syncImageSpeculation` |
 | `LAVA_TEST_DROP=a:b:c` | Compositor: files that `kill -USR1` delivers as a synthetic file drop. A Wayland drag needs a real pointer press on a real device, which headless has not — see `Server::deliverTestDrop` |
 | `LAVA_MSAA=N` | Any canvas process: cap multisampling at N (1/2/4/8). Overrides `[render] msaa`; the way to A/B a session without a rebuild |
+| `LAVA_SCROLL_EASING=N` | Any canvas process: how long a wheel scroll takes to settle, in ms (`off`/0: each notch lands in one frame). Overrides `[render] scroll-easing` (default 75) |
 | `LAVA_SHARED_DEPTH=0` | Compositor: one depth attachment per window again, for comparing against the shared one |
 | `LAVA_EXPORT_BLIT=1` | Compositor: blit each frame into the exported dma-buf instead of resolving into it, as it did before — the A/B for that change, and the escape hatch where a driver dislikes it |
 | `LAVA_BLUR_SHIFT=N` | Any canvas process: octaves below the window the blur pyramid starts at (0/1/2). 0 captures at window size, as it did before |
