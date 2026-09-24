@@ -20,10 +20,13 @@ enum Layout {
 struct LavaExplorerApp {
     static func main() {
         AppSettings.configure(appName: "LavaExplorer")
+        let chooser = ChooserRequest.parse(Array(CommandLine.arguments.dropFirst()))
 
+        // A picker is a dialog: a little smaller, and named for what it asks.
         guard let editor = LavaHost.open(
-            title: "LavaExplorer",
-            width: Layout.initialWidth, height: Layout.initialHeight
+            title: chooser?.title ?? "LavaExplorer",
+            width: chooser == nil ? Layout.initialWidth : 860,
+            height: chooser == nil ? Layout.initialHeight : 560
         ) else { exit(1) }
 
         LavaHost.setMinimumSize(
@@ -33,9 +36,14 @@ struct LavaExplorerApp {
 
         let paths = CommandLine.arguments.dropFirst().filter { !$0.hasPrefix("-") }
         let session = ExplorerSession(
-            paths: paths.isEmpty ? [NSHomeDirectory()] : Array(paths)
+            paths: paths.isEmpty ? [NSHomeDirectory()] : Array(paths),
+            chooser: chooser
         )
-        session.requestClose = { editor.requestClose() }
+        // Closing the last tab of a picker is Cancel, not a window left open
+        // with nothing in it.
+        session.requestClose = chooser == nil
+            ? { editor.requestClose() }
+            : { session.cancelChoosing() }
 
         LavaHost.run(
             editor: editor,
@@ -43,6 +51,9 @@ struct LavaExplorerApp {
             onRawKey: { event in keys(event, session: session) },
             makeRoot: { ExplorerView(session: session) }
         )
+        // The window closed with no choice made. The caller looks at the
+        // answer file, not at this, but a picker that was closed did cancel.
+        if chooser != nil { exit(1) }
     }
 
     private static func menu(session: ExplorerSession, editor: Editor) -> MenuBar {
@@ -149,6 +160,19 @@ struct LavaExplorerApp {
         }
         if event.button == KeyCode.escape, session.renameDraft != nil {
             session.cancelRename()
+            return true
+        }
+        if event.button == KeyCode.escape, session.pendingOverwrite != nil {
+            session.resolveOverwrite(false)
+            return true
+        }
+        // A picker's Escape is Cancel, as in every dialog — the name field
+        // being focused included.
+        if event.button == KeyCode.escape, session.chooser != nil,
+           session.pendingErase == nil, session.newFolderDraft == nil,
+           session.selectedEntries.count <= 1
+        {
+            session.cancelChoosing()
             return true
         }
         if typing && !control && !alt { return false }

@@ -45,6 +45,19 @@ LAVA_CLIENT=1 swift run LavaExplorer -- ~/Pictures
   it as it was. A name something else already has is refused, never
   replaced. Ctrl+Z renames it back, unless something has since taken the
   old name. Not in the Trash: restore it first.
+- **The desktop's file picker.** `FileDialog` — Open… and Save As… in every
+  Lava app — runs `LavaExplorer --choose=open|open-multiple|save` instead of
+  zenity: the same window with a bar along the bottom. Open shows what is
+  picked (several rows with `open-multiple`); a folder is gone into, a file
+  double-clicked is the answer. Save has a name field with the stem
+  selected; a file clicked puts its name there, and saving over one asks
+  first. The app's filters are a dropdown (with "All files" after them),
+  and folders always show. Cancel, Escape, closing the window or closing
+  the last tab all mean "nothing chosen". The answer goes to the file named
+  by `--output`, one path per line — never stdout, which the app fills with
+  whatever it likes. It opens where the caller's last dialog chose from,
+  else home. Everything else — tabs, panes, New Folder, rename, the Trash —
+  works inside it.
 - Rows do not light up under the pointer. A list scrolled under a still
   pointer slides row after row beneath it, and a tint that follows reads as
   flicker; selection is the only fill a row has.
@@ -160,8 +173,6 @@ file.
   next visual step, not this one.
 - **inotify.** Reload is a key (Ctrl+R) and a menu item.
 - **A second window.** One surface per process; navigate in place.
-- **The chooser mode.** `FileDialog` still shells out to zenity. The browsing
-  core is what that mode should sit on, once it exists.
 - **Archives, removable media, search, remote.** Later.
 
 ## The `FileSource` seam

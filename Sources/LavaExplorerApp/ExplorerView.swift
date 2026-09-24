@@ -36,6 +36,12 @@ struct ExplorerView: View {
             if let pending = session.pendingErase {
                 EraseBar(session: session, pending: pending)
             }
+            if let target = session.pendingOverwrite {
+                OverwriteBar(session: session, target: target)
+            }
+            if let chooser = session.chooser {
+                ChooserBar(session: session, chooser: chooser)
+            }
             StatusBar(session: session)
         }
         .background(Theme.current.background)
@@ -200,6 +206,93 @@ private struct TabGhost: View {
 /// One question for a drop whose names are partly taken, across the window
 /// under the panes — where the folder it is about is still in view, the same
 /// reason LavaEditor asks about unsaved changes in a bar and not a dialog.
+/// The picker's own row: what is being opened or the name to save under,
+/// which files to show, and the two ways out. Only when another app started
+/// this window as its file chooser.
+private struct ChooserBar: View {
+    @Bindable var session: ExplorerSession
+    let chooser: ChooserRequest
+
+    var body: some View {
+        let theme = Theme.current
+        let saving = chooser.mode == .save
+        let answer = session.openAnswer
+        let picked: String = {
+            guard let answer else { return "Choose a file" }
+            if answer.count > 1 { return ExplorerSession.items(answer.count) }
+            return (answer[0] as NSString).lastPathComponent
+        }()
+        let canConfirm = saving
+            ? !session.saveName.trimmingCharacters(in: .whitespaces).isEmpty
+            : answer != nil || session.selectedEntries.contains(where: \.isDirectory)
+        return HStack(padding: 10, alignment: .center, spacing: 10) {
+            if saving {
+                Text("Name", color: theme.textSecondary)
+                TextField(
+                    text: $session.saveName,
+                    autoFocus: true,
+                    selectionOnFocus: .leading(
+                        Rename.stemLength(of: session.saveName, isDirectory: false)
+                    ),
+                    onSubmit: { session.confirmChoice() }
+                )
+                .flexGrow(1)
+                .agentId("chooser-name")
+            } else {
+                Text(picked, color: answer == nil ? theme.textDim : theme.textPrimary, lineLimit: 1)
+                    .flexGrow(1)
+                    .flexShrink(1)
+                    .agentId("chooser-picked")
+            }
+            if chooser.filters.count > 1 {
+                ComboBox(
+                    selection: Binding(
+                        get: { session.chooserFilterIndex },
+                        set: { session.setChooserFilter($0) }
+                    ),
+                    items: chooser.filters.enumerated().map { index, filter in
+                        ComboBoxItem(filter.name, tag: index)
+                    },
+                    width: .pt(200)
+                )
+                .agentId("chooser-filter")
+            } else if let only = chooser.filters.first {
+                Text(only.name, color: theme.textDim, lineLimit: 1)
+            }
+            Button("Cancel") { session.cancelChoosing() }
+                .agentId("chooser-cancel")
+            Button(saving ? "Save" : "Open") {
+                if canConfirm { session.confirmChoice() }
+            }
+            .agentId("chooser-confirm")
+        }
+        .background(theme.panel)
+    }
+}
+
+/// Save over a file already there — asked, never assumed.
+private struct OverwriteBar: View {
+    @Bindable var session: ExplorerSession
+    let target: String
+
+    var body: some View {
+        let name = (target as NSString).lastPathComponent
+        return HStack(padding: 8, alignment: .center, spacing: 8) {
+            Text(
+                "\u{201C}\(name)\u{201D} already exists. Replace it?",
+                color: Theme.current.textPrimary, lineLimit: 1
+            )
+            .flexShrink(1)
+            Spacer()
+            Button("Replace") { session.resolveOverwrite(true) }
+                .agentId("overwrite-replace")
+            Button("Cancel") { session.resolveOverwrite(false) }
+                .agentId("overwrite-cancel")
+        }
+        .background(Theme.current.selectionFill)
+    }
+}
+
 /// "Delete this for good?" — the one question before anything is removed
 /// rather than thrown away. Escape is Cancel.
 private struct EraseBar: View {

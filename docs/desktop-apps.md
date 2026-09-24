@@ -56,7 +56,11 @@ Everything wanted this, which is why it was first: a photograph dropped on
 LavaView, a file on the terminal, an image into Paint — and a file manager,
 which is the app that cannot be written without it.
 
-### 2. The desktop's file picker is a GTK subprocess
+### 2. ~~The desktop's file picker is a GTK subprocess~~ — done
+
+`FileDialog` now runs LavaExplorer's chooser mode (`docs/lavaexplorer.md`),
+and zenity is only the fallback when no explorer is installed. What follows
+is how it was.
 
 `FileDialog` shells out to `zenity` (`Sources/LavaUI/FileDialog.swift:5`), and
 says so honestly. It works, and it is the single most visible seam in the whole
@@ -218,8 +222,8 @@ Reasoned rather than ranked, and the reasoning is what to argue with:
    for the chrome — is what Paint should start from.
 3. **Notes**, probably as a mode of `LavaEditor`. Smallest real app; proves the
    template.
-4. **File explorer, core browsing** — then immediately **the chooser mode**,
-   which retires the zenity seam and pays back across every app.
+4. ~~**File explorer, core browsing** — then immediately **the chooser mode**,
+   which retires the zenity seam and pays back across every app.~~ Done.
 5. **Paint**, reusing whatever the screenshot annotator established.
 6. **Music browser over MPRIS.** No decoder, no audio stack.
 7. **File operations, Trash, watching, archives, media.** The unglamorous half

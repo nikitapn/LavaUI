@@ -47,3 +47,20 @@ final class DragHoverTests: XCTestCase {
         XCTAssertTrue(try hoverTints().contains { $0 != 0 })
     }
 }
+
+final class FileDialogArgumentTests: XCTestCase {
+    func testTheExplorerIsAskedWhatZenityWas() {
+        let args = FileDialog.explorerArguments(
+            FileDialog.Request(
+                mode: .save, title: "Export",
+                filters: [FileDialog.Filter(name: "PNG", extensions: ["png"])],
+                defaultName: "shot.png"
+            ),
+            output: "/tmp/o", start: "/home/me"
+        )
+        XCTAssertEqual(args, [
+            "--choose=save", "--title=Export", "--output=/tmp/o",
+            "--filter=PNG|png", "--filter=All files|", "--filename=shot.png", "/home/me",
+        ])
+    }
+}

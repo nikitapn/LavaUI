@@ -141,6 +141,14 @@ public struct PaneLayout: Equatable, Sendable {
         }
     }
 
+    public mutating func updateAllTabs(_ body: (inout ExplorerTab) -> Void) {
+        for pane in panes {
+            updatePane(id: pane.id) { pane in
+                for tab in pane.tabs.tabs { pane.tabs.updateTab(id: tab.id, body) }
+            }
+        }
+    }
+
     /// Every tab in every pane follows a folder that was renamed or moved.
     public mutating func rebaseTabs(from old: String, to new: String, source: any FileSource) {
         for pane in panes {

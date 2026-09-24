@@ -42,15 +42,26 @@ final class ExplorerSession: @unchecked Sendable {
     let source: any FileSource
     let trash: TrashCan
     let openFile: (String) -> Bool
+    /// Set when another app started this window as its file picker.
+    let chooser: ChooserRequest?
+    /// Which of the chooser's filters is showing; switched in place.
+    let chooserFilter: FilteredSource.Filter
 
     init(
         paths: [String],
         source: any FileSource = LocalFileSource(),
         openFile: @escaping (String) -> Bool = OpenLocation.file,
         places: [Place]? = nil,
-        trash: TrashCan = TrashCan()
+        trash: TrashCan = TrashCan(),
+        chooser: ChooserRequest? = nil
     ) {
-        let source = TrashListingSource(base: source, trash: trash)
+        let filter = FilteredSource.Filter(chooser?.filters.first)
+        let source = TrashListingSource(
+            base: FilteredSource(base: source, filter: filter), trash: trash
+        )
+        self.chooser = chooser
+        self.chooserFilter = filter
+        self.saveName = chooser?.suggestedName ?? ""
         self.source = source
         self.trash = trash
         self.openFile = openFile
@@ -497,6 +508,10 @@ final class ExplorerSession: @unchecked Sendable {
                 tab.selected = path
             }
         }
+        // Save: a file clicked is a name to save over, as in every picker.
+        if chooser?.mode == .save, !entry.isDirectory, !control, !shift {
+            saveName = entry.name
+        }
         ViewInvalidation.markDirty()
     }
 
@@ -566,6 +581,16 @@ final class ExplorerSession: @unchecked Sendable {
         notice = nil
         if entry.isDirectory {
             go(entry.path)
+            return
+        }
+        // Picking, not opening: a file the app asked for is the answer.
+        if let chooser {
+            if chooser.mode == .save {
+                saveName = entry.name
+                confirmChoice()
+            } else {
+                confirmChoice()
+            }
             return
         }
         if openFile(entry.path) {
@@ -742,6 +767,81 @@ final class ExplorerSession: @unchecked Sendable {
         default:
             dismissContext()
         }
+    }
+
+    // MARK: - Chooser
+
+    /// Save: the name in the bar. Observed — the field is drawn from it.
+    var saveName: String
+    var chooserFilterIndex = 0
+    /// Save over something already there, waiting on a yes.
+    var pendingOverwrite: String?
+
+    func setChooserFilter(_ index: Int) {
+        guard let chooser, chooser.filters.indices.contains(index) else { return }
+        chooserFilterIndex = index
+        chooserFilter.current = chooser.filters[index]
+        let source = self.source
+        layout.updateAllTabs { $0.reload(from: source) }
+        ViewInvalidation.markDirty()
+    }
+
+    /// What Open would answer with right now; nil greys the button.
+    var openAnswer: [String]? {
+        chooser?.openAnswer(selected: selectedEntries)
+    }
+
+    /// Open or Save. Open on a folder goes into it; Save over a file asks.
+    func confirmChoice() {
+        guard let chooser else { return }
+        switch chooser.mode {
+        case .open, .openMultiple:
+            if let answer = chooser.openAnswer(selected: selectedEntries) {
+                finishChoosing(answer)
+            } else if let folder = selectedEntries.first(where: \.isDirectory) {
+                go(folder.path)
+            }
+        case .save:
+            do {
+                let target = try chooser.saveTarget(name: saveName, in: listing.path)
+                if TrashCan.isDirectory(target) {
+                    go(target)
+                    saveName = chooser.suggestedName ?? ""
+                } else if source.exists(target) {
+                    pendingOverwrite = target
+                } else {
+                    finishChoosing([target])
+                }
+            } catch {
+                notice = (error as? FileAccessError)?.message ?? error.localizedDescription
+            }
+        }
+        ViewInvalidation.markDirty()
+    }
+
+    func resolveOverwrite(_ replace: Bool) {
+        guard let target = pendingOverwrite else { return }
+        pendingOverwrite = nil
+        if replace { finishChoosing([target]) }
+        ViewInvalidation.markDirty()
+    }
+
+    /// Cancel, Escape and closing the window all come here — as does
+    /// closing the last tab. No answer is the answer.
+    func cancelChoosing() {
+        exit(1)
+    }
+
+    private func finishChoosing(_ paths: [String]) {
+        do {
+            try chooser?.deliver(paths)
+        } catch {
+            notice = "Could not hand the choice back: \(error.localizedDescription)"
+            ViewInvalidation.markDirty()
+            return
+        }
+        // The caller is blocked on this process; leaving is the reply.
+        exit(0)
     }
 
     // MARK: - New folder

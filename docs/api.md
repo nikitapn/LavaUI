@@ -943,8 +943,11 @@ canvas that needs a frame for as long as it is on screen.
 ## Files, settings, and diagnostics
 
 `FileDialog.openFile`, `openFiles`, and `saveFile` provide native-style file
-selection. The current backend is Linux `zenity`; calls block until selection
-or cancellation and return no result when unavailable or cancelled.
+selection. The picker is LavaExplorer in its chooser mode
+(`LavaExplorer --choose=open|open-multiple|save`), found at `LAVA_FILE_CHOOSER`,
+beside the app's own binary, or on `PATH`; without it, `zenity`
+(`LAVA_FILE_CHOOSER=zenity` forces that). Calls block until selection or
+cancellation and return no result when unavailable or cancelled.
 
 `AppSettings.configure(appName:)` selects the application settings file.
 `string`, `int`, `bool`, `double`, and generic `Codable` getters/setters are
@@ -967,7 +970,8 @@ SwiftUI. Notable current boundaries are:
 - Linux is the working platform today.
 - Stack main-axis justification is not yet present; use `Spacer`.
 - Lazy containers require fixed cell/row heights.
-- `FileDialog` currently depends on `zenity`.
+- `FileDialog` runs its picker as a separate process and blocks the caller
+  meanwhile; the calling window does not repaint until it returns.
 - A plain `for` loop is unavailable in `@ViewBuilder`; identity requires
   `ForEach`.
 - `Canvas` drawing uses absolute window coordinates.

@@ -427,7 +427,7 @@ public struct TrashCan: Sendable {
         return lstat(path, &st) == 0
     }
 
-    static func isDirectory(_ path: String) -> Bool {
+    public static func isDirectory(_ path: String) -> Bool {
         var st = stat()
         return lstat(path, &st) == 0 && (st.st_mode & S_IFMT) == S_IFDIR
     }

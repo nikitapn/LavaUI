@@ -167,7 +167,7 @@ struct LavaEditorView: View {
     }
 
     /// The unsaved-changes question, in the window rather than in a dialog.
-    /// A zenity modal would work, but this keeps the file it is asking about
+    /// A modal in another window would work, but this keeps the file it is asking about
     /// visible behind it — which is the information the answer depends on.
     private var unsavedBar: some View {
         HStack(padding: 8, alignment: .center, spacing: 8) {
