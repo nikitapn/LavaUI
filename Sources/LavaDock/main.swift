@@ -751,6 +751,11 @@ enum Dock {
     /// idea of where that is — see `Dock.previewLayout`.
     static var plateHeight: Float { iconSize + padding * 2 }
     static let plateInset: Float = 6
+    /// The compositor's frost under the plate, in layout pixels.
+    static let frostRadius: Float = 12
+    /// The plate's wash over that frost. Lower than the unfrosted plate's, or
+    /// the frost is only a rumour under it. Tuned by eye, not arithmetic.
+    static let frostedPlateAlpha: Float = 0.6
     /// Room above a magnified icon for the name tooltip.
     static let tooltipRoom: Float = 28
     /// Height of the surface. Tall enough for a magnified icon, its
@@ -1303,10 +1308,16 @@ struct DockView: View {
         model.plateTop = plateY
         let radius = max(WindowBridge.desktopCornerRadius, 12)
 
+        // The compositor's frost, not `beginBackdropBlur`: that samples this
+        // surface's own framebuffer, and behind the shelf it is empty.
+        let frosted = list.frostDesktop(
+            x: frame.x + plate.x, y: plateY, w: plate.w, h: plateH,
+            radius: Dock.frostRadius, cornerRadius: radius
+        )
         list.roundedRect(
             x: frame.x + plate.x, y: plateY, w: plate.w, h: plateH,
             color: Color(r: theme.panel.r, g: theme.panel.g, b: theme.panel.b,
-                         a: 0.88),
+                         a: frosted ? Dock.frostedPlateAlpha : 0.88),
             radius: radius
         )
 

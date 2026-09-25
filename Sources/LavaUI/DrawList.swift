@@ -146,6 +146,13 @@ public final class DrawList {
     /// Overlays found during the current walk, emitted once it finishes.
     private var pendingOverlays: [PendingOverlay] = []
 
+    /// Desktop frost asked for by `frostDesktop` during the current walk. Sent
+    /// with the overlays' rects at the end of the pass, because the bridge
+    /// takes the whole list at once — a rect sent on its own would be wiped by
+    /// the overlays' (usually empty) list a moment later.
+    private var desktopFrost: [BackdropBridge.FrostRect] = []
+    private var desktopFrostRadius: Float = 0
+
     /// Fade applied to everything appended, for transitions. A multiplier
     /// rather than a value so nested transitions compose.
     private var alphaMultiplier: Float = 1
@@ -924,6 +931,29 @@ public final class DrawList {
         )
     }
 
+    /// Frost the *desktop* under this rect, when a compositor is there to do
+    /// it. Returns false when there is not (a windowed app), and the caller
+    /// falls back to `beginBackdropBlur`.
+    ///
+    /// For glass that is not an overlay: a dock's shelf, a panel's strip. On
+    /// those surfaces the framebuffer behind the shape is empty, and in-window
+    /// backdrop blur would only smear that. `x,y,w,h` are window space.
+    @discardableResult
+    public func frostDesktop(
+        x: Float, y: Float, w: Float, h: Float, radius: Float,
+        cornerRadius: Float = 0
+    ) -> Bool {
+        guard BackdropBridge.frostOverlays != nil else { return false }
+        guard w > 0, h > 0, radius > 0 else { return true }
+        desktopFrost.append(
+            BackdropBridge.FrostRect(
+                x: x, y: y, w: w, h: h, cornerRadius: cornerRadius
+            )
+        )
+        desktopFrostRadius = max(desktopFrostRadius, radius)
+        return true
+    }
+
     public func endBackdropBlur() {
         append(
             kind: .endBackdropBlur, x: 0, y: 0, w: 0, h: 0,
@@ -1042,6 +1072,8 @@ public final class DrawList {
         viewportH: Float
     ) {
         pendingOverlays.removeAll(keepingCapacity: true)
+        desktopFrost.removeAll(keepingCapacity: true)
+        desktopFrostRadius = 0
         cullStack.removeAll(keepingCapacity: true)
         cullStack.append(CullRect(x0: 0, y0: 0, x1: viewportW, y1: viewportH))
         retainedShift = (0, 0)
@@ -1059,8 +1091,8 @@ public final class DrawList {
         // Collected across the whole pass and sent once at the end. Sending
         // per overlay meant the last one won: a submenu's rect replaced the
         // menu's, and the frost jumped out from under the menu it flew out of.
-        var frostRects: [BackdropBridge.FrostRect] = []
-        var frostRadius: Float = 0
+        var frostRects = desktopFrost
+        var frostRadius = desktopFrostRadius
         // By index, because emitting one overlay can append another: a menu's
         // submenu is presented from inside the menu's own subtree, and its
         // anchor is only known once the row it hangs off has been laid out

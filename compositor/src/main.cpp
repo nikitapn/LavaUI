@@ -2786,8 +2786,12 @@ class SurfaceRegistry : public lava::CompositorHost {
       }
     } else {
       std::erase(minimizedOrder_, surface.id);
-      if (surface.backdropBlurRadius > 0.f) scheduleBackdropRefresh();
     }
+    // Either way, not only for a frosted window coming back: this window was
+    // behind, or is now behind, whatever else is frosted. The dock's plate
+    // kept the picture of a window Mod+D had put away until something
+    // unrelated asked for a refresh. Nothing to recapture costs nothing.
+    scheduleBackdropRefresh();
     if (bulk_ == 0) {
       announceWindows();
       syncShellForFullscreen();
