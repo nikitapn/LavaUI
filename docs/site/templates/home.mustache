@@ -6,6 +6,72 @@
     HarfBuzz shapes the text and one pipeline draws everything, in a window of
     its own or as a client of the Lava compositor.
   </p>
+
+  <h2>Why this exists</h2>
+  <p>
+    Writing a native application for Linux is a mess. There are two toolkits
+    that matter, Qt in C++ and GTK in C, and both carry decades of history
+    that shows the moment you open their documentation: object systems bolted
+    onto languages that did not have them, signal and slot plumbing, a build
+    step of their own, and a model of UI where you construct widgets and then
+    keep them in sync with your data by hand. Neither feels like how UI is
+    written anywhere else any more.
+  </p>
+  <p>
+    The desktops built on top of them were not much better. Every one I tried
+    was either bloated or buried under settings — a panel for everything, and
+    none of the defaults quite right. XFCE came closest: small, fast, gets out
+    of the way. But it is X11 only, and that is not where Linux is going.
+  </p>
+  <p>
+    So Lava is both halves: a UI framework, and a desktop written with it.
+  </p>
+
+  <h2>Why Swift, and why SwiftUI-shaped</h2>
+  <p>
+    Honestly, for the fun of it. Apple supports Swift on Linux properly, and
+    it seemed like a good joke to borrow — steal, partially replicate — the
+    shape of their framework: <code>body</code>, <code>@State</code>, stacks
+    and modifiers, a view that is a function of its data. The joke turned out
+    to work. Swift's C++ interop means the renderer can stay in C++ and
+    Vulkan while the application code reads like SwiftUI.
+  </p>
+  <p>
+    The look follows the same taste. The design is openly macOS-inspired,
+    because I think it is the best one there is.
+  </p>
+
+  <h2>What the desktop does differently</h2>
+  <p>
+    Lava's compositor is opinionated rather than configurable. A few things it
+    does that I missed everywhere else:
+  </p>
+  <ul>
+    <li>
+      <strong>A dock per workspace.</strong> Each workspace keeps its own set
+      of pinned icons, so work and personal life live on separate desks and
+      do not bleed into each other.
+    </li>
+    <li>
+      <strong>Links open where you are.</strong> Click a link in Teams on
+      workspace 2 and it opens in the browser window on workspace 2 — not in
+      whichever browser window happened to be used last, on some other
+      workspace. That one annoyed the hell out of me on XFCE.
+    </li>
+    <li>
+      <strong>Keybindings borrowed from dwm, hardcoded.</strong> Mod+P opens
+      the launcher, Mod+Return a terminal, Mod+Q closes a window, Mod+1…9
+      switches workspace and Mod+Shift+1…9 sends a window there. The mod is
+      Alt by default, as in dwm, or Super if you prefer — and that is about
+      as far as the configuration goes.
+    </li>
+  </ul>
+  <p>
+    Overall, the desktop does what most people need, nothing more, and does
+    it fast.
+  </p>
+
+  <h2>Documentation</h2>
   <p>
     New here? Start with <a href="/guide/getting-started">Getting started</a>,
     then the <a href="/guide/api">API guide</a>. The reference below is

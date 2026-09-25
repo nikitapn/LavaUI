@@ -755,7 +755,7 @@ enum Dock {
     static let frostRadius: Float = 12
     /// The plate's wash over that frost. Lower than the unfrosted plate's, or
     /// the frost is only a rumour under it. Tuned by eye, not arithmetic.
-    static let frostedPlateAlpha: Float = 0.6
+    static let frostedPlateAlpha: Float = 0.80
     /// Room above a magnified icon for the name tooltip.
     static let tooltipRoom: Float = 28
     /// Height of the surface. Tall enough for a magnified icon, its
@@ -1312,7 +1312,7 @@ struct DockView: View {
         // surface's own framebuffer, and behind the shelf it is empty.
         let frosted = list.frostDesktop(
             x: frame.x + plate.x, y: plateY, w: plate.w, h: plateH,
-            radius: Dock.frostRadius, cornerRadius: radius
+            radius: Dock.frostRadius, cornerRadius: radius - 4
         )
         list.roundedRect(
             x: frame.x + plate.x, y: plateY, w: plate.w, h: plateH,
