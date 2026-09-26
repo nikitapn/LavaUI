@@ -17,26 +17,40 @@ public struct MenuBarStyle: Equatable, Sendable {
     /// Forced strip height. `nil` sizes to the titles, which is what a
     /// panel wants when the strip itself is already a fixed 32pt.
     public var stripHeight: Float?
+    /// Inset around each text title.
     public var titlePadding: EdgeInsets
     /// Inset around an icon-only title. Tighter than `titlePadding` so a
     /// 18pt mark does not sit in a text-sized chip.
     public var iconPadding: EdgeInsets
+    /// Corner radius of a title's hover and open fill, in points.
     public var titleCornerRadius: Float
+    /// Fill under a title while the pointer is over it.
     public var titleHover: Color
     /// Fill under an open title, so the chip stays lit after the pointer
     /// has moved into the dropdown.
     public var titleOpenFill: Color
+    /// Inset around each dropdown row.
     public var itemPadding: EdgeInsets
+    /// Corner radius of a row's hover fill, in points.
     public var itemCornerRadius: Float
+    /// Fill under a row while the pointer is over it.
     public var itemHover: Color
+    /// Space between dropdown rows, in points.
     public var itemSpacing: Float
+    /// Space between the dropdown's edge and its rows, in points.
     public var dropdownPadding: Float
+    /// Narrowest the dropdown is drawn, in points.
     public var dropdownMinWidth: Float
+    /// Fill behind the dropdown.
     public var dropdownBackground: Color
+    /// Outline of the dropdown, or `nil` for none.
     public var dropdownBorder: Color?
+    /// Corner radius of the dropdown, in points.
     public var dropdownCornerRadius: Float
+    /// Radius of the frosted-glass blur behind the dropdown, or `nil` for a plain fill.
     public var dropdownBlur: Float?
 
+    /// Creates a style from every metric. `standard()` and `panel()` are the usual starting points.
     public init(
         stripFill: Color?,
         stripHeight: Float?,
@@ -154,13 +168,18 @@ public struct MenuBarStyle: Equatable, Sendable {
 
 /// Wraps app content with an in-window menu strip when `model` is non-empty.
 public struct MenuChromeRoot<Content: View>: View {
+    /// The menus to show. With none, the strip is left out and only `content` shows.
     public var model: MenuModel
+    /// Called with the item's id when a menu item is chosen.
     public var onActivate: (MenuID) -> Void
+    /// How the strip and its dropdowns look.
     public var style: MenuBarStyle
+    /// The app's own content, laid out under the strip.
     public var content: Content
 
     @State private var openMenuID: MenuID? = nil
 
+    /// Wraps `content` under a menu strip for `model`.
     public init(
         model: MenuModel,
         onActivate: @escaping (MenuID) -> Void,
@@ -190,9 +209,13 @@ public struct MenuChromeRoot<Content: View>: View {
 
 /// Top-level titles in a fixed-height strip; each opens a dropdown overlay.
 public struct MenuBarStrip: View {
+    /// The menus whose titles the strip shows.
     public var model: MenuModel
+    /// The id of the menu whose dropdown is open, or `nil`.
     public var openMenuID: Binding<MenuID?>
+    /// Called with the item's id when a menu item is chosen.
     public var onActivate: (MenuID) -> Void
+    /// How the strip and its dropdowns look.
     public var style: MenuBarStyle
     /// Already-decoded pictures for icon titles, keyed by menu id. A
     /// `MenuIcon.path` is used when this has nothing for that id.
@@ -204,6 +227,7 @@ public struct MenuBarStrip: View {
     /// whoever owns it asks the compositor to draw the menu.
     public var externalMenus: Bool
 
+    /// Creates a strip. Every parameter matches the property of the same name.
     public init(
         model: MenuModel,
         openMenuID: Binding<MenuID?>,
@@ -342,13 +366,17 @@ public struct MenuBarStrip: View {
 
 /// Popup body for one top-level menu (items, separators, nested submenus).
 public struct MenuDropdownPanel: View {
+    /// The rows of the menu, submenus included.
     public var entries: [MenuEntry]
+    /// Called with the item's id when a row is chosen.
     public var onActivate: (MenuID) -> Void
+    /// How the dropdown looks.
     public var style: MenuBarStyle
     /// The submenu flown out from this panel, if one is. One at a time: a
     /// menu is a path down a tree, not a set of open branches.
     @State private var openSubmenu: MenuID?
 
+    /// Creates the dropdown body for `entries`.
     public init(
         entries: [MenuEntry],
         onActivate: @escaping (MenuID) -> Void,
@@ -547,6 +575,7 @@ public struct MenuDropdownPanel: View {
 
 /// Human-readable shortcut for menu rows (Ctrl+S, etc.).
 public enum MenuShortcutLabel {
+    /// The shortcut as menus show it, such as `Ctrl+Shift+S`.
     public static func format(_ shortcut: KeyShortcut) -> String {
         var parts: [String] = []
         let mods = shortcut.resolvedMods()

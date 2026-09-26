@@ -8,10 +8,12 @@ import Foundation
 /// `.border(.red)` in a chain would inherit whatever width an earlier one set
 /// and quietly draw a 4px red frame where the caller asked for a hairline.
 public struct BorderStyle: Equatable {
+    /// The stroke colour.
     public var color: Color
     /// Pixels, drawn inward from the layout rect's edge.
     public var width: Float
 
+    /// Creates a border. A negative width is treated as zero.
     public init(_ color: Color, width: Float = 1) {
         self.color = color
         self.width = max(0, width)
@@ -26,6 +28,7 @@ public struct BorderStyle: Equatable {
 public struct ViewStyle: Equatable {
     /// Per-edge inset. `nil` means "leave the node's baseline alone".
     public var padding: EdgeInsets?
+    /// Flat background colour.
     public var fill: Color?
     /// A two-stop linear fill, which wins over `fill` when both are set.
     ///
@@ -33,13 +36,21 @@ public struct ViewStyle: Equatable {
     /// places that only ever want a flat colour, and widening it would make
     /// every one of them handle a case it has no use for.
     public var fillGradient: Gradient?
+    /// Fill drawn over the background while the pointer is over the node.
     public var hoverFill: Color?
+    /// Corner radius of the background, hover fill and border, in points.
     public var cornerRadius: Float?
+    /// Width of the box.
     public var width: Dimension?
+    /// Height of the box.
     public var height: Dimension?
+    /// Smallest width layout may give the box, in points.
     public var minWidth: Float?
+    /// Smallest height layout may give the box, in points.
     public var minHeight: Float?
+    /// Share of the parent's leftover main-axis space the box takes.
     public var flexGrow: Float?
+    /// How much the box gives up when the parent's main axis overflows; 0 never shrinks.
     public var flexShrink: Float?
     /// Backdrop blur radius in pixels under this node's rect. `nil` = off.
     /// Emits `BeginBackdropBlur` / `EndBackdropBlur` around the node's paint
@@ -71,6 +82,7 @@ public struct ViewStyle: Equatable {
     /// `.center`.
     public var frameAlignment: Alignment?
 
+    /// Creates a style that sets nothing.
     public init() {}
 
     /// `self` wins where both define a field.
@@ -118,7 +130,9 @@ public struct ViewStyle: Equatable {
 /// the same side of that boundary still collapse, avoiding SwiftUI's cost of a
 /// wrapper for every modifier.
 public struct ModifiedView<Content: View>: PrimitiveView {
+    /// The view being styled.
     public var content: Content
+    /// The style fields this modifier sets; unset fields leave the view's own.
     public var style: ViewStyle
     /// Some modifier boundaries are layout-significant. In particular,
     /// `.frame(...).padding(...)` needs an outer Yoga box: putting both values
@@ -126,6 +140,7 @@ public struct ModifiedView<Content: View>: PrimitiveView {
     /// surrounding it.
     var forceWrapper: Bool
 
+    /// Wraps `content` with `style`. Usually created by a modifier such as `.padding(_:)`.
     public init(content: Content, style: ViewStyle, forceWrapper: Bool = false) {
         self.content = content
         self.style = style
@@ -444,6 +459,7 @@ extension View {
         styled { $0.padding = insets }
     }
 
+    /// Fills the view's box with `color`, behind its content.
     public func background(_ color: Color) -> ModifiedView<Self> {
         styled { $0.fill = color }
     }
@@ -457,6 +473,8 @@ extension View {
         styled { $0.fillGradient = gradient; $0.fill = gradient.from }
     }
 
+    /// Fills the view's box with `color` while the pointer is over it. The
+    /// renderer draws the fill, so hovering costs the app no frame.
     public func hoverBackground(_ color: Color) -> ModifiedView<Self> {
         styled { $0.hoverFill = color }
     }
@@ -471,6 +489,7 @@ extension View {
         styled { $0.hoverSnap = snap }
     }
 
+    /// Rounds the corners of the view's background, hover fill and border.
     public func cornerRadius(_ radius: Float) -> ModifiedView<Self> {
         styled { $0.cornerRadius = radius }
     }
@@ -557,10 +576,14 @@ extension View {
         )
     }
 
+    /// Lets the view take a share of the parent's leftover main-axis space.
+    /// With every sibling at 1, the space is split evenly.
     public func flexGrow(_ value: Float = 1) -> ModifiedView<Self> {
         styled { $0.flexGrow = value }
     }
 
+    /// How much the view gives up when its parent overflows along the main axis.
+    /// 0 keeps its size; larger values give up proportionally more.
     public func flexShrink(_ value: Float) -> ModifiedView<Self> {
         styled { $0.flexShrink = value }
     }
@@ -649,10 +672,12 @@ extension ModifiedView {
         padding(.all(amount))
     }
 
+    /// See `View.padding(_:_:)`. After another modifier, adds a box outside it.
     public func padding(_ edges: Edge, _ amount: Float) -> ModifiedView<ModifiedView<Content>> {
         padding(EdgeInsets(edges, amount))
     }
 
+    /// See `View.padding(_:)`. After another modifier, adds a box outside it.
     public func padding(_ insets: EdgeInsets) -> ModifiedView<ModifiedView<Content>> {
         var outer = ViewStyle()
         outer.padding = insets
@@ -661,14 +686,17 @@ extension ModifiedView {
         )
     }
 
+    /// See `View.background(_:)`.
     public func background(_ color: Color) -> ModifiedView<Content> {
         adding { $0.fill = color }
     }
 
+    /// See `View.background(_:)`.
     public func background(_ gradient: Gradient) -> ModifiedView<Content> {
         adding { $0.fillGradient = gradient; $0.fill = gradient.from }
     }
 
+    /// See `View.hoverBackground(_:)`.
     public func hoverBackground(_ color: Color) -> ModifiedView<Content> {
         adding { $0.hoverFill = color }
     }
@@ -678,6 +706,7 @@ extension ModifiedView {
         adding { $0.hoverSnap = snap }
     }
 
+    /// See `View.cornerRadius(_:)`.
     public func cornerRadius(_ radius: Float) -> ModifiedView<Content> {
         adding { $0.cornerRadius = radius }
     }
@@ -687,6 +716,7 @@ extension ModifiedView {
         adding { $0.border = BorderStyle(color, width: width) }
     }
 
+    /// See `View.clipped()`.
     public func clipped() -> ModifiedView<Content> {
         adding { $0.clipsContent = true }
     }
@@ -723,18 +753,22 @@ extension ModifiedView {
         )
     }
 
+    /// See `View.flexGrow(_:)`.
     public func flexGrow(_ value: Float = 1) -> ModifiedView<Content> {
         adding { $0.flexGrow = value }
     }
 
+    /// See `View.flexShrink(_:)`.
     public func flexShrink(_ value: Float) -> ModifiedView<Content> {
         adding { $0.flexShrink = value }
     }
 
+    /// See `View.blur(radius:)`.
     public func blur(radius: Float = 8) -> ModifiedView<Content> {
         adding { $0.contentBlurRadius = max(0.5, radius) }
     }
 
+    /// See `View.backdropBlur(radius:)`.
     public func backdropBlur(radius: Float = 8) -> ModifiedView<Content> {
         adding { $0.backdropBlurRadius = max(0.5, radius) }
     }

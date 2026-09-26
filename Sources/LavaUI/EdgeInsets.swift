@@ -6,19 +6,28 @@
 /// the right; a future layout-direction environment would remap at the Yoga
 /// boundary rather than renaming these cases.
 public struct Edge: OptionSet, Equatable, Sendable, Hashable {
+    /// The edge bits.
     public let rawValue: UInt8
 
+    /// Creates an edge set from its bits.
     public init(rawValue: UInt8) {
         self.rawValue = rawValue
     }
 
+    /// The top edge.
     public static let top = Edge(rawValue: 1 << 0)
+    /// The leading edge: left, since layout is left to right.
     public static let leading = Edge(rawValue: 1 << 1)
+    /// The bottom edge.
     public static let bottom = Edge(rawValue: 1 << 2)
+    /// The trailing edge: right, since layout is left to right.
     public static let trailing = Edge(rawValue: 1 << 3)
 
+    /// The leading and trailing edges.
     public static let horizontal: Edge = [.leading, .trailing]
+    /// The top and bottom edges.
     public static let vertical: Edge = [.top, .bottom]
+    /// All four edges.
     public static let all: Edge = [.top, .leading, .bottom, .trailing]
 }
 
@@ -28,11 +37,16 @@ public struct Edge: OptionSet, Equatable, Sendable, Hashable {
 /// `YGNodeStyleSetPadding` on each edge. Prefer the static constructors over
 /// spelling four zeros by hand.
 public struct EdgeInsets: Equatable, Sendable, Hashable {
+    /// Inset from the top edge, in points.
     public var top: Float
+    /// Inset from the leading (left) edge, in points.
     public var leading: Float
+    /// Inset from the bottom edge, in points.
     public var bottom: Float
+    /// Inset from the trailing (right) edge, in points.
     public var trailing: Float
 
+    /// Creates insets from one value per edge, zero by default.
     public init(
         top: Float = 0,
         leading: Float = 0,
@@ -55,16 +69,20 @@ public struct EdgeInsets: Equatable, Sendable, Hashable {
         )
     }
 
+    /// No inset on any edge.
     public static let zero = EdgeInsets()
 
+    /// The same inset on all four edges.
     public static func all(_ value: Float) -> EdgeInsets {
         EdgeInsets(top: value, leading: value, bottom: value, trailing: value)
     }
 
+    /// The same inset on the leading and trailing edges; top and bottom stay zero.
     public static func horizontal(_ value: Float) -> EdgeInsets {
         EdgeInsets(leading: value, trailing: value)
     }
 
+    /// The same inset on the top and bottom edges; leading and trailing stay zero.
     public static func vertical(_ value: Float) -> EdgeInsets {
         EdgeInsets(top: value, bottom: value)
     }

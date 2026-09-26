@@ -14,6 +14,7 @@ public enum LavaResources {
         return FileManager.default.currentDirectoryPath
     }
 
+    /// The bundled `fonts` directory under `root`.
     public static var fontsDirectory: String {
         (root as NSString).appendingPathComponent("fonts")
     }

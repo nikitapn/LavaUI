@@ -41,10 +41,14 @@ import Foundation
 /// and scroll position belong anyway.
 public struct LazyVGrid<Data: RandomAccessCollection, Content: View>: PrimitiveView
 where Data.Index == Int {
+    /// The elements, one cell each.
     public var data: Data
     /// Cell width in points. `nil` means one full-width column (`LazyVStack`).
     public var cellWidth: Float?
+    /// Height of every cell, in points. Fixed, which is what lets the grid work out
+    /// which cells are visible without measuring any of them.
     public var cellHeight: Float
+    /// Space between cells, horizontally and vertically, in points.
     public var spacing: Float
     /// Never lay out more than this many columns, whatever the width allows.
     ///
@@ -60,6 +64,7 @@ where Data.Index == Int {
     /// Index whose cell should remain visible as keyboard selection moves.
     /// Nil leaves scrolling entirely under pointer/wheel control.
     public var scrollTarget: Int?
+    /// Builds the cell for one element. Called only for elements that are on screen.
     public var content: (Data.Element) -> Content
 
     /// - Parameter alignment: what to do with the width left over after the
@@ -159,12 +164,19 @@ where Data.Index == Int {
 /// survive scrolling.
 public struct LazyVStack<Data: RandomAccessCollection, Content: View>: View
 where Data.Index == Int {
+    /// The elements, one row each.
     public var data: Data
+    /// Height of every row, in points.
     public var rowHeight: Float
+    /// Space between rows, in points.
     public var spacing: Float
+    /// Index whose row should stay visible as keyboard selection moves, or `nil`
+    /// to leave scrolling to the pointer and wheel.
     public var scrollTarget: Int?
+    /// Builds the row for one element. Called only for elements that are on screen.
     public var content: (Data.Element) -> Content
 
+    /// Creates a lazy list. Every parameter matches the property of the same name.
     public init(
         _ data: Data,
         rowHeight: Float,

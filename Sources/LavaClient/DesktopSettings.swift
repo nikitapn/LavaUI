@@ -84,6 +84,7 @@ public enum DesktopSettings {
 
     // MARK: - Keyboard
 
+    /// The keyboard as xkb is currently set up: layouts, options, repeat rate and the compositor's modifier key.
     public static func keyboard() throws -> KeyboardSettings {
         try call { try await $0.getKeyboard() }
     }
@@ -145,6 +146,7 @@ public enum DesktopSettings {
 
     // MARK: - Display
 
+    /// The outputs (monitors) the compositor knows, with their modes and placement.
     public static func outputs() throws -> [OutputInfo] {
         try call { try await $0.listOutputs() }
     }
@@ -219,6 +221,7 @@ public enum DesktopSettings {
 
 /// What a settings call can fail with that is worth showing a user.
 public enum SettingsError: Error, CustomStringConvertible {
+    /// The app is not a client of a Lava compositor, so there is nobody to ask.
     case noCompositor
 
     public var description: String {

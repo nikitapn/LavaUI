@@ -10,6 +10,7 @@ import Foundation
 
 /// Stable identity for a retained node (lifetime of the node object).
 public struct NodeID: Hashable, Sendable {
+    /// The counter value behind this id. Unique within the process, never reused.
     public let raw: UInt64
 
     /// Process-wide counter; UI construction is single-threaded (frame loop).
@@ -18,6 +19,7 @@ public struct NodeID: Hashable, Sendable {
     }
     private static let counter = Counter()
 
+    /// Returns a fresh id, one greater than the last one handed out.
     public static func generate() -> NodeID {
         let raw = counter.value
         counter.value += 1
@@ -27,14 +29,23 @@ public struct NodeID: Hashable, Sendable {
 
 /// A declarative UI description.
 public protocol View {
+    /// The view type `body` returns. Primitive views, which draw themselves, use `Never`.
     associatedtype Body: View
 
+    /// The content of this view, built from other views.
+    ///
+    /// Evaluated whenever the view's state or inputs change, so keep it free of
+    /// side effects. Primitive views (`PrimitiveView`) do not use it.
     @ViewBuilder var body: Body { get }
 
+    /// A text rendering of this view's structure, one line per view, for debugging.
+    ///
+    /// - Parameter indent: Nesting depth of this view; each level indents two spaces.
     func structureLines(indent: Int) -> [String]
 }
 
 extension View {
+    /// Prints `structureLines(indent:)` to standard error.
     public func dumpStructure(indent: Int = 0) {
         for line in structureLines(indent: indent) {
             FileHandle.standardError.write(Data((line + "\n").utf8))
@@ -45,6 +56,9 @@ extension View {
         defaultStructureLines(indent: indent)
     }
 
+    /// The structure dump every composite view gets: its own type name, then its
+    /// `body` one level deeper. Call it from a custom `structureLines(indent:)`
+    /// that wants to add to the default rather than replace it.
     public func defaultStructureLines(indent: Int) -> [String] {
         var lines = [Dump.line(indent, "\(type(of: self))")]
         lines += body.structureLines(indent: indent + 1)
@@ -75,6 +89,8 @@ public protocol PrimitiveMount {
 
 /// Marker for views that own content directly (`Body == Never`).
 public protocol PrimitiveView: View, PrimitiveMount where Body == Never {
+    /// Extra text shown after the type name in `structureLines(indent:)`, such as
+    /// a label or an id. Empty by default.
     var dumpDetail: String { get }
 }
 

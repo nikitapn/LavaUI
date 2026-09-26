@@ -2,18 +2,28 @@ import Foundation
 
 /// Semantic styles emitted by the small Markdown parser.
 public enum MarkdownSpanStyle: Int, Equatable, Sendable {
+    /// A heading line (`# …`), covering the whole line.
     case heading
+    /// `**strong**` text.
     case strong
+    /// `*emphasis*` or `_emphasis_` text.
     case emphasis
+    /// Inline `` `code` `` or a line inside a fenced block.
     case code
+    /// The text of a `[link](url)`. The URL is dropped.
     case link
+    /// A quote line (`> …`), covering the whole line.
     case quote
 }
 
+/// A styled range of a `MarkdownDocument`'s display text.
 public struct MarkdownSpan: Equatable, Sendable {
+    /// The styled characters, as character offsets into the display text.
     public var range: Range<Int>
+    /// How the range is styled.
     public var style: MarkdownSpanStyle
 
+    /// Creates a span.
     public init(range: Range<Int>, style: MarkdownSpanStyle) {
         self.range = range
         self.style = style
@@ -23,9 +33,13 @@ public struct MarkdownSpan: Equatable, Sendable {
 /// Display text with Markdown delimiters removed and styles mapped to
 /// character offsets in that display text.
 public struct MarkdownDocument: Equatable, Sendable {
+    /// The text to show: the source with its Markdown delimiters removed, bullets
+    /// drawn as `•` and quotes prefixed with `│`.
     public var text: String
+    /// The styled ranges of `text`, sorted by start.
     public var spans: [MarkdownSpan]
 
+    /// Creates a document.
     public init(text: String, spans: [MarkdownSpan]) {
         self.text = text
         self.spans = spans
@@ -38,6 +52,8 @@ public struct MarkdownDocument: Equatable, Sendable {
 /// bullets, quotes, fenced/inline code, emphasis, strong text, and links.
 /// Unknown syntax remains visible instead of being discarded.
 public enum MarkdownParser {
+    /// Parses `source` into display text and styled spans. Never fails: syntax it
+    /// does not recognise is left in the text as written.
     public static func parse(_ source: String) -> MarkdownDocument {
         var output = ""
         var spans: [MarkdownSpan] = []

@@ -14,10 +14,14 @@ public struct Transition: Equatable, Sendable {
     public var fades: Bool
     /// Where the view comes from and returns to, relative to its final place.
     public var offsetX: Float
+    /// Vertical offset the view comes from and returns to. See `offsetX`.
     public var offsetY: Float
+    /// How long the arrival or departure takes, in seconds.
     public var duration: Double
+    /// How progress maps onto time.
     public var curve: AnimationCurve
 
+    /// Creates a transition. The default is a short fade.
     public init(
         fades: Bool = true,
         offsetX: Float = 0,
@@ -32,6 +36,7 @@ public struct Transition: Equatable, Sendable {
         self.curve = curve
     }
 
+    /// A plain fade, with no movement.
     public static let opacity = Transition()
 
     /// Slides in from `dy` above (negative) or below (positive), fading.
@@ -102,9 +107,12 @@ final class TransitionState {
 /// `ModifiedView`, so a transition costs no extra layout box unless the content
 /// is a fragment with no single node to carry it.
 public struct TransitionView<Content: View>: PrimitiveView {
+    /// The view that transitions in and out.
     public var content: Content
+    /// How it arrives and leaves.
     public var transition: Transition
 
+    /// Attaches `transition` to `content`. Usually spelled `.transition(_:)`.
     public init(content: Content, transition: Transition) {
         self.content = content
         self.transition = transition

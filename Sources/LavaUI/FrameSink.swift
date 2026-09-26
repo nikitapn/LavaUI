@@ -5,14 +5,19 @@ import Foundation
 /// much was written", because those two are compared constantly and one type
 /// makes the comparison a line rather than four.
 public struct FrameCapacity: Equatable, Sendable {
+    /// Draw commands.
     public var commands = 0
+    /// Shaped glyph instances.
     public var glyphs = 0
+    /// 2D mesh vertices, for polygons and polylines.
     public var meshVertices = 0
+    /// 3D vertices, for `Scene3D`.
     public var spatialVertices = 0
     /// Gradient descriptors. One per gradient rather than per quad, so this
     /// stays small even on a screen full of them.
     public var gradients = 0
 
+    /// Creates a set of counts, zero by default.
     public init(
         commands: Int = 0, glyphs: Int = 0,
         meshVertices: Int = 0, spatialVertices: Int = 0, gradients: Int = 0
@@ -27,13 +32,20 @@ public struct FrameCapacity: Equatable, Sendable {
 
 /// Where the frame being built actually lives.
 public struct FrameBuffers {
+    /// Where draw commands are written.
     public var commands: UnsafeMutablePointer<canvas.DrawCommand>
+    /// Where glyph instances are written.
     public var glyphs: UnsafeMutablePointer<canvas.GlyphInstance>
+    /// Where mesh vertices are written.
     public var meshVertices: UnsafeMutablePointer<canvas.MeshVertex>
+    /// Where 3D vertices are written.
     public var spatialVertices: UnsafeMutablePointer<canvas.SpatialVertex>
+    /// Where gradient descriptors are written.
     public var gradients: UnsafeMutablePointer<canvas.GradientDesc>
+    /// How many of each the buffers have room for.
     public var capacity: FrameCapacity
 
+    /// Wraps storage a sink has claimed.
     public init(
         commands: UnsafeMutablePointer<canvas.DrawCommand>,
         glyphs: UnsafeMutablePointer<canvas.GlyphInstance>,
@@ -122,6 +134,7 @@ public final class EngineFrameSink: FrameSink {
     /// when a growth may have reallocated them.
     private var buffers: FrameBuffers?
 
+    /// Creates the sink for one of `editor`'s windows.
     public init(editor: Editor, window: WindowID) {
         self.editor = editor
         self.window = window
@@ -203,11 +216,13 @@ public final class ArenaFrameSink: FrameSink {
         guard arena.create(std.string(id), capacity.arenaCapacity) else { return nil }
     }
 
+    /// Frames published that the renderer has not yet taken.
     public var framesInFlight: Int { Int(arena.framesInFlight()) }
 
     /// Name the renderer attaches by, and what the arena has grown to — both
     /// only for logging and tests.
     public var generation: UInt32 { arena.generation() }
+    /// Bytes of shared memory the arena currently maps.
     public var mappedBytes: Int { arena.mappedBytes() }
 
     public func beginFrame(minimum: FrameCapacity) -> FrameBuffers? {

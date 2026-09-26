@@ -21,28 +21,37 @@ import Foundation
 /// or with no picker installed — callers should treat all three the same way
 /// ("no file chosen"), not surface them as distinct errors.
 public enum FileDialog {
+    /// A named group of file types the picker can restrict itself to, such as
+    /// "Images" with `["png", "jpg"]`.
     public struct Filter {
+        /// The group's name as the picker shows it.
         public var name: String
+        /// Extensions without the dot, such as `"png"`.
         public var extensions: [String]
 
+        /// Creates a filter.
         public init(name: String, extensions: [String]) {
             self.name = name
             self.extensions = extensions
         }
     }
 
+    /// Asks for one existing file. `nil` when cancelled or no picker is available.
     public static func openFile(
         title: String = "Open File", filters: [Filter] = []
     ) -> URL? {
         run(Request(mode: .open, title: title, filters: filters)).first
     }
 
+    /// Asks for any number of existing files. Empty when cancelled or no picker is available.
     public static func openFiles(
         title: String = "Open Files", filters: [Filter] = []
     ) -> [URL] {
         run(Request(mode: .openMultiple, title: title, filters: filters))
     }
 
+    /// Asks where to save a file, suggesting `defaultName`. `nil` when cancelled
+    /// or no picker is available.
     public static func saveFile(
         title: String = "Save File", filters: [Filter] = [], defaultName: String? = nil
     ) -> URL? {

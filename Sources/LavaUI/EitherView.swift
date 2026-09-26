@@ -1,13 +1,19 @@
 /// `if` / `else` — fragment (no flex wrapper). Identity is on the branch node.
 public struct EitherView<First: View, Second: View>: PrimitiveView {
+    /// Which branch was taken, holding that branch's view.
     public enum Storage {
+        /// The `if` branch.
         case first(First)
+        /// The `else` branch.
         case second(Second)
     }
 
+    /// The branch this view shows.
     public var storage: Storage
 
+    /// The `if` branch was taken. Produced by `ViewBuilder.buildEither(first:)`.
     public init(first: First) { storage = .first(first) }
+    /// The `else` branch was taken. Produced by `ViewBuilder.buildEither(second:)`.
     public init(second: Second) { storage = .second(second) }
 
     public func structureLines(indent: Int = 0) -> [String] {

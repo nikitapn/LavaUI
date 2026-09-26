@@ -1,6 +1,8 @@
 /// Text label primitive — Phase 4: Yoga measure via `canvas::Font` + layout cache.
 public struct Text: PrimitiveView {
+    /// The text shown. `\n` starts a new line.
     public var string: String
+    /// Colour of the glyphs.
     public var color: Color
     /// `nil` → `FontStore.default` (global UI face).
     public var font: UIFont?
@@ -10,8 +12,15 @@ public struct Text: PrimitiveView {
     /// for clickable text, since an unclickable label highlighting on hover
     /// would be lying about being interactive.
     public var hoverFill: Color?
+    /// Text colour meant for when the pointer is over the text.
+    ///
+    /// Setting it makes the text a hover target and drops the default hover fill
+    /// a clickable text gets; the glyphs themselves are not yet recoloured.
     public var hoverColor: Color?
+    /// Corner radius of the hover fill, in points.
     public var cornerRadius: Float
+    /// Most lines shown before the text is cut off with an ellipsis, or `nil` for
+    /// no limit. Values below 1 are treated as 1.
     public var lineLimit: Int?
     /// Where the glyphs sit when the node is wider than they are.
     ///
@@ -35,6 +44,10 @@ public struct Text: PrimitiveView {
     /// against that.
     public var align: Alignment
 
+    /// Creates a text label.
+    ///
+    /// A text with an `onClick` gets the theme's hover fill unless it is given one
+    /// (or a `hoverColor`).
     public init(
         _ string: String,
         color: Color = .primary,

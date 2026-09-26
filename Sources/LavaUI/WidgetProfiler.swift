@@ -16,6 +16,7 @@ import Foundation
 /// find; a widget's *whole* paint is the right unit; a `Canvas` doing
 /// something expensive internally still shows up as one number on one row.
 public enum WidgetProfiler {
+    /// Whether profiling is on: `LAVAUI_PROFILE=1` in the environment at launch.
     public static let isEnabled: Bool =
         ProcessInfo.processInfo.environment["LAVAUI_PROFILE"] == "1"
 

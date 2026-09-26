@@ -18,11 +18,17 @@ import Foundation
 /// Chip-local: the list is emitted with the chip's top-left at 0,0, and
 /// `width` × `height` is what it laid out to, in pixels.
 public struct DragChipImage: Sendable, Equatable {
+    /// Width the chip laid out to, in pixels.
     public var width: UInt32
+    /// Height the chip laid out to, in pixels.
     public var height: UInt32
+    /// The chip's draw commands (canvas `DrawCommand`s), as bytes.
     public var commands: [UInt8]
+    /// The glyph instances the commands refer to (canvas `GlyphInstance`s), as bytes.
     public var glyphs: [UInt8]
+    /// Mesh vertices the commands refer to (canvas `MeshVertex`es), as bytes.
     public var meshVertices: [UInt8]
+    /// Gradient descriptions the commands refer to (canvas `GradientDesc`s), as bytes.
     public var gradients: [UInt8]
 
     /// Past this a chip is not sent, and the drag goes ahead with the cursor
@@ -30,6 +36,7 @@ public struct DragChipImage: Sendable, Equatable {
     /// big is a window, not a chip.
     public static let maxWireBytes = 256 * 1024
 
+    /// Total size of the four arrays, compared against `maxWireBytes`.
     public var byteCount: Int {
         commands.count + glyphs.count + meshVertices.count + gradients.count
     }
@@ -54,6 +61,8 @@ public enum DragBridge {
         _ window: UInt32
     ) -> Bool
 
+    /// Installed by a compositor client to carry the drag to the compositor.
+    /// `nil`, as in a windowed app, makes `.onFileDrag` do nothing.
     nonisolated(unsafe) public static var startFileDrag: Provider?
 }
 
@@ -97,10 +106,15 @@ enum FileDragRouter {
 /// Registers the content's root layout box as something files can be dragged
 /// out of.
 public struct FileDragSourceView<Content: View, Chip: View>: PrimitiveView {
+    /// Asked for the paths to drag when a drag starts.
     public var paths: () -> [String]
+    /// Builds the chip that follows the pointer, or `nil` for the bare cursor.
     public var chip: (() -> Chip)?
+    /// Horizontal distance from the pointer to the chip's top-left, in pixels.
     public var offsetX: Float
+    /// Vertical distance from the pointer to the chip's top-left, in pixels.
     public var offsetY: Float
+    /// The view files can be dragged out of.
     public var content: Content
 
     public var dumpDetail: String { "onFileDrag" }

@@ -3,15 +3,23 @@ import Foundation
 /// Style palette for `EditorView`. Rules carry style *indices*; this maps them
 /// to colours, so a theme change restyles code without touching any rule.
 public struct CodeStyle {
+    /// Colour of text no rule matched.
     public var text: Color
+    /// Colour of the line numbers.
     public var gutterText: Color
+    /// Fill behind the line-number gutter.
     public var gutterBackground: Color
+    /// Fill behind the line the caret is on.
     public var currentLine: Color
+    /// Fill behind every search match.
     public var searchMatch: Color
+    /// Fill behind the search match the search is currently on.
     public var currentSearchMatch: Color
     /// Indexed by `HighlightRule.styleIndex`; out-of-range falls back to `text`.
     public var palette: [Color]
 
+    /// Creates a palette. Colours left `nil` come from the current theme, apart
+    /// from the two search fills, which have fixed amber defaults.
     public init(
         text: Color = .primary,
         gutterText: Color? = nil,
@@ -40,7 +48,14 @@ public struct CodeStyle {
 /// and gutter glyph so a caller can skip both and just say what kind of
 /// thing this is.
 public enum DiagnosticSeverity: Sendable, Equatable {
-    case error, warning, info, hint
+    /// Something is wrong: red, with a dot in the gutter.
+    case error
+    /// Something may be wrong: amber, with a triangle.
+    case warning
+    /// Worth knowing: blue, with a dot.
+    case info
+    /// A suggestion: grey, with a small dot.
+    case hint
 
     var defaultColor: Color {
         switch self {
@@ -76,8 +91,11 @@ public enum DiagnosticSeverity: Sendable, Equatable {
 /// zigzag segments — there is no dedicated curve primitive, and a handful of
 /// `line()` calls per decorated span is cheap enough not to need one.
 public enum DecorationUnderline: Sendable, Equatable {
+    /// No underline; the gutter icon and colour still show.
     case none
+    /// A straight line under the range.
     case straight
+    /// A zigzag line under the range, as spell checkers and compilers draw.
     case wavy
 }
 
@@ -87,13 +105,22 @@ public enum DecorationUnderline: Sendable, Equatable {
 /// not `String.Index` — indices aren't `Sendable` or stable across edits,
 /// offsets from a fresh parse always are.
 public struct EditorDecoration: Sendable, Equatable {
+    /// The decorated characters, as character offsets into the editor's text.
     public var range: Range<Int>
+    /// How serious it is. Decides the default colour and gutter icon and, when
+    /// several decorations share a row, which one the gutter shows.
     public var severity: DiagnosticSeverity
+    /// How the range is underlined.
     public var underline: DecorationUnderline
+    /// Text drawn in the gutter of the range's first row, or `nil` for the severity's default.
     public var gutterIcon: String?
+    /// Colour of the underline and gutter icon, or `nil` for the severity's default.
     public var color: Color?
+    /// The diagnostic's text. The editor does not draw it; it is for the app, for
+    /// instance in `onDecorationTap`.
     public var message: String?
 
+    /// Creates a decoration. `nil` colour and icon take the severity's defaults.
     public init(
         range: Range<Int>,
         severity: DiagnosticSeverity = .error,
@@ -122,12 +149,16 @@ public struct EditorDecoration: Sendable, Equatable {
 /// that no longer exists is not a position, it is a crash waiting for the
 /// wrong buffer; an offset is merely clamped.
 public struct EditorPosition: Equatable, Sendable, Codable {
+    /// Horizontal scroll offset, in pixels.
     public var scrollX: Float
+    /// Vertical scroll offset, in pixels.
     public var scrollY: Float
     /// Selection ends, in character offsets. Equal means a plain caret.
     public var anchor: Int
+    /// The end of the selection the caret is at. See `anchor`.
     public var focus: Int
 
+    /// Creates a position. The default is the top of the buffer with the caret at 0.
     public init(scrollX: Float = 0, scrollY: Float = 0, anchor: Int = 0, focus: Int = 0) {
         self.scrollX = scrollX
         self.scrollY = scrollY
@@ -135,16 +166,16 @@ public struct EditorPosition: Equatable, Sendable, Codable {
         self.focus = focus
     }
 
+    /// The top of the buffer, caret at the first character, nothing selected.
     public static let start = EditorPosition()
 }
 
-/// A code editor: line-number gutter, current-line highlight, rule-based
-/// syntax colouring, and find-match highlighting.
+/// Commands for a mounted `EditorView`: reveal a line or range, read and
+/// restore its position, replace search matches.
 ///
-/// Everything about the *buffer* — cursor, selection, undo, wrapping, grapheme
-/// correctness — is `TextEditingState`, unchanged and already tested. This
-/// type is presentation plus a gutter, which is why it is a component rather
-/// than a rewrite of `TextField`.
+/// Create one, keep it (in `@State` or a model), and pass it to the view's
+/// `controller:`. Calls made while no editor is mounted return `nil`, `false`
+/// or zero — except `reveal(line:)` and `restore(_:)`, which wait for one.
 public final class EditorController {
     private var revealAction: ((Int) -> Bool)?
     private var revealRangeAction: ((Range<Int>) -> Bool)?
@@ -154,6 +185,7 @@ public final class EditorController {
     private var pendingLine: Int?
     private var pendingPosition: EditorPosition?
 
+    /// Creates a controller that is not yet attached to any editor.
     public init() {}
 
     /// Select and reveal a one-based physical line. If the editor is not
@@ -272,11 +304,23 @@ public final class EditorController {
     }
 }
 
+/// A code editor: line-number gutter, current-line highlight, rule-based
+/// syntax colouring, and find-match highlighting.
+///
+/// Everything about the *buffer* — cursor, selection, undo, wrapping, grapheme
+/// correctness — is `TextEditingState`, unchanged and already tested. This
+/// type is presentation plus a gutter, which is why it is a component rather
+/// than a rewrite of `TextField`.
 public struct EditorView: PrimitiveView {
+    /// The text being edited.
     @Binding public var text: String
+    /// Syntax colouring rules, applied per line. Each rule's `styleIndex` picks a colour from `style.palette`.
     public var rules: [HighlightRule]
+    /// Colours for text, gutter, current line and search matches.
     public var style: CodeStyle
+    /// The editor's font, or `nil` for the environment's.
     public var font: UIFont?
+    /// Whether to draw the line-number gutter.
     public var showLineNumbers: Bool
     /// Break long lines to the box width instead of scrolling horizontally.
     ///
@@ -287,14 +331,19 @@ public struct EditorView: PrimitiveView {
     /// line, so a multi-megabyte document is a real cost per keystroke where
     /// the same document costs nothing unwrapped.
     public var wraps: Bool
+    /// Most lines the editor grows to show before it scrolls. Layout can give it less.
     public var visibleLines: Int
+    /// The find state whose matches are highlighted.
     public var search: TextSearch
+    /// Diagnostics to underline and mark in the gutter.
     public var decorations: [EditorDecoration]
     /// Fired when the user clicks a decorated row's gutter icon, instead of
     /// the default "select the whole row" gutter click.
     public var onDecorationTap: ((EditorDecoration) -> Void)?
+    /// Handle for revealing lines, restoring positions and replacing matches.
     public var controller: EditorController?
 
+    /// Creates an editor bound to `text`. Every parameter matches the property of the same name.
     public init(
         text: Binding<String>,
         rules: [HighlightRule] = [],
@@ -321,6 +370,7 @@ public struct EditorView: PrimitiveView {
         self.controller = controller
     }
 
+    /// The font the editor draws with: `font`, or the environment's when that is `nil`.
     public var resolvedFont: UIFont? { font ?? Environment.current.font }
 
     public var dumpDetail: String {

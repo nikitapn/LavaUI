@@ -3,7 +3,10 @@ import Foundation
 
 // LavaUI — declarative UI + canvas engine bridge.
 //
-// Swift wrapper over `canvas::Engine` — direct C++ interop, no C shim.
+/// The engine: windows, renderer, fonts, images, clipboard and the D-Bus hosts
+/// a desktop panel needs.
+///
+/// Swift wrapper over `canvas::Engine` — direct C++ interop, no C shim.
 ///
 /// This used to wrap a flat `canvas::swiftEditor*` free-function API (a
 /// `SwiftEditor*` opaque handle passed to every call) because Swift's C++
@@ -33,6 +36,15 @@ public final class Editor: @unchecked Sendable {
 
     private init() {}
 
+    /// Opens a window with its own Vulkan renderer and shows it.
+    ///
+    /// Returns `nil` when the window or the renderer cannot be created; the
+    /// engine logs why on standard error.
+    /// - Parameters:
+    /// - assetsRoot: Directory holding the engine's shaders and bundled fonts.
+    /// - width: Initial width of the window, in pixels.
+    /// - height: Initial height of the window, in pixels.
+    /// - title: The window title.
     public static func open(
         assetsRoot: String,
         width: Int32 = 1280,
@@ -122,6 +134,8 @@ public final class Editor: @unchecked Sendable {
         )
     }
 
+    /// Whether the main window is still open — false once the user has closed it
+    /// or `requestClose()` was called.
     public var isOpen: Bool { engine.isOpen() }
 
     /// Ask the frame loop to exit (GLFW should-close). Safe from menu actions.
@@ -210,6 +224,7 @@ public final class Editor: @unchecked Sendable {
         engine.scrollSceneUnclaimed(dx, dy, window.raw)
     }
 
+    /// Shows or hides a window without closing it.
     public func setVisible(_ visible: Bool, window: WindowID = .main) {
         engine.setWindowVisible(visible, window.raw)
     }
@@ -253,6 +268,7 @@ public final class Editor: @unchecked Sendable {
         engine.attachDrawArena(std.string(id), window.raw)
     }
 
+    /// Stops driving `window` from a draw arena; the inverse of `attachDrawArena(id:window:)`.
     public func detachDrawArena(window: WindowID = .main) {
         engine.detachDrawArena(window.raw)
     }
@@ -287,6 +303,8 @@ public final class Editor: @unchecked Sendable {
         )
     }
 
+    /// Publishes a finished frame to the window `list` was created for.
+    /// The list must belong to this editor.
     public func submitDrawList(_ list: DrawList) {
         precondition(list.editor === self, "a DrawList belongs to its creating Editor")
         list.publish()
@@ -358,6 +376,15 @@ public final class Editor: @unchecked Sendable {
         set { engine.setClipboardText(std.string(newValue)) }
     }
 
+    /// Loads one face of a font file at a size, returning its font id, or `nil`
+    /// when the file cannot be loaded.
+    ///
+    /// Idempotent per file *contents* (`canvas::FontKey`), not per path.
+    /// - Parameters:
+    /// - path: The font file.
+    /// - pixelSize26_6: The size in 26.6 fixed point: pixels × 64.
+    /// - faceIndex: Which face of a collection (`.ttc`); 0 for a single-face file.
+    /// - rasterFlags: A `canvas::RasterFlags` hinting selection.
     public func registerFont(
         path: String, pixelSize26_6: UInt32, faceIndex: UInt32,
         rasterFlags: UInt32
@@ -701,13 +728,17 @@ public final class Editor: @unchecked Sendable {
         )
     }
 
+    /// Runs the menu importer's GLib loop once. Call every frame while a panel is
+    /// showing an imported menu.
     public func menuImportPoll() { engine.menuImportPoll() }
 
     /// Changes whenever the imported menu does.
     public var menuImportRevision: UInt64 { engine.menuImportRevision() }
 
+    /// How many rows the imported menu has. See `menuImportItem(_:)`.
     public var menuImportItemCount: Int { Int(engine.menuImportItemCount()) }
 
+    /// One row of the imported menu, by index in `0..<menuImportItemCount`.
     public func menuImportItem(_ index: Int) -> ImportedMenuItem {
         ImportedMenuItem(
             id: engine.menuImportItemId(index),
@@ -720,38 +751,56 @@ public final class Editor: @unchecked Sendable {
         )
     }
 
+    /// Runs a row of the imported menu, in the application that owns it.
     public func menuImportActivate(_ itemId: Int32) {
         engine.menuImportActivate(itemId)
     }
 
+    /// Asks the owning application to fill a submenu before it is opened.
     public func menuImportAboutToShow(_ itemId: Int32) {
         engine.menuImportAboutToShow(itemId)
     }
 
+    /// Tells the importer the dropdown closed, so it stops refreshing a submenu nobody has open.
     public func menuImportDropdownClosed() {
         engine.menuImportDropdownClosed()
     }
 
+    /// Withdraws this window's exported menu from the global menu registrar.
     public func appMenuDetach() { engine.appMenuDetach() }
 
+    /// Whether this window's menu is currently exported to a global menu.
     public var appMenuIsAttached: Bool { engine.appMenuIsAttached() }
 
+    /// Runs the exported menu's GLib loop once. Call once per frame.
     public func appMenuPoll() { engine.appMenuPoll() }
 
+    /// Starts rebuilding the exported menu. Follow with `appMenuBeginMenu`,
+    /// `appMenuAddItem` and friends, then `appMenuCommitUpdate()`.
     public func appMenuBeginUpdate() { engine.appMenuBeginUpdate() }
 
+    /// Opens a top-level menu in the exported menu being rebuilt. Close it with `appMenuEndMenu()`.
     public func appMenuBeginMenu(id: String, title: String) {
         engine.appMenuBeginMenu(std.string(id), std.string(title))
     }
 
+    /// Closes the menu `appMenuBeginMenu(id:title:)` opened.
     public func appMenuEndMenu() { engine.appMenuEndMenu() }
 
+    /// Adds an item to the open menu.
+    /// - Parameters:
+    /// - id: Returned by `appMenuPopActivation()` when the panel activates the item.
+    /// - title: The item's label.
+    /// - enabled: Whether it can be activated.
+    /// - checked: -1 not checkable, 0 unchecked, 1 checked.
     public func appMenuAddItem(id: String, title: String, enabled: Bool, checked: Int32) {
         engine.appMenuAddItem(std.string(id), std.string(title), enabled, Int32(checked))
     }
 
+    /// Adds a separator to the open menu.
     public func appMenuAddSeparator() { engine.appMenuAddSeparator() }
 
+    /// Publishes the menu built since `appMenuBeginUpdate()`.
     public func appMenuCommitUpdate() { engine.appMenuCommitUpdate() }
 
     /// Panel-activated MenuID raw string, or empty if the queue is empty.
@@ -766,14 +815,20 @@ public final class Editor: @unchecked Sendable {
     @discardableResult
     public func statusNotifierStart() -> Bool { engine.statusNotifierStart() }
 
+    /// Whether the tray is live, either owning `org.kde.StatusNotifierWatcher` or
+    /// following another desktop's.
     public var statusNotifierIsServing: Bool { engine.statusNotifierIsServing() }
 
+    /// Runs the tray's GLib loop once. Call every frame while the panel is up.
     public func statusNotifierPoll() { engine.statusNotifierPoll() }
 
+    /// Changes whenever the item list or any item's display data does.
     public var statusNotifierRevision: UInt64 { engine.statusNotifierRevision() }
 
+    /// How many tray items there are. See `statusNotifierItem(_:)`.
     public var statusNotifierItemCount: Int { Int(engine.statusNotifierItemCount()) }
 
+    /// One tray item, by index in `0..<statusNotifierItemCount`.
     public func statusNotifierItem(_ index: Int) -> StatusNotifierItemInfo {
         let i = index
         return StatusNotifierItemInfo(
@@ -792,20 +847,25 @@ public final class Editor: @unchecked Sendable {
         )
     }
 
+    /// Sends the item a left click (`Activate`). The coordinates are screen
+    /// pixels, which many items ignore.
     public func statusNotifierActivate(_ key: String, x: Int32 = 0, y: Int32 = 0) {
         engine.statusNotifierActivate(std.string(key), x, y)
     }
 
+    /// Asks the item to show its own context menu (`ContextMenu`), for a right click.
     public func statusNotifierContextMenu(_ key: String, x: Int32 = 0, y: Int32 = 0) {
         engine.statusNotifierContextMenu(std.string(key), x, y)
     }
 
+    /// Sends the item a middle click (`SecondaryActivate`).
     public func statusNotifierSecondaryActivate(
         _ key: String, x: Int32 = 0, y: Int32 = 0
     ) {
         engine.statusNotifierSecondaryActivate(std.string(key), x, y)
     }
 
+    /// Sends the item a scroll of `delta` steps, `"vertical"` or `"horizontal"`.
     public func statusNotifierScroll(
         _ key: String, delta: Int32, orientation: String = "vertical"
     ) {
@@ -814,16 +874,23 @@ public final class Editor: @unchecked Sendable {
 
     // ─── Notifications ───────────────────────────────────────────────────
 
+    /// Claims `org.freedesktop.Notifications` and starts serving. False when the
+    /// session already has a notification daemon, or has no bus.
     public func notificationsStart() -> Bool { engine.notificationsStart() }
 
+    /// Whether this process is serving notifications.
     public var notificationsIsServing: Bool { engine.notificationsIsServing() }
 
+    /// Pumps the notification bus and retires expired notifications. Call every frame.
     public func notificationsPoll() { engine.notificationsPoll() }
 
+    /// Changes whenever the set of notifications or any of their contents does.
     public var notificationsRevision: UInt64 { engine.notificationsRevision() }
 
+    /// How many notifications are live. See `notification(_:)`.
     public var notificationsCount: Int { Int(engine.notificationsCount()) }
 
+    /// One live notification, by index in `0..<notificationsCount`.
     public func notification(_ index: Int) -> NotificationInfo {
         NotificationInfo(
             id: engine.notificationId(index),
@@ -840,24 +907,31 @@ public final class Editor: @unchecked Sendable {
         )
     }
 
+    /// The key of a notification's action — what `notificationInvokeAction(_:key:)`
+    /// takes. `index` is the notification's position, `action` the action's.
     public func notificationActionKey(_ index: Int, action: Int) -> String {
         String(engine.notificationActionKey(index, action))
     }
 
+    /// The label shown for a notification's action.
     public func notificationActionLabel(_ index: Int, action: Int) -> String {
         String(engine.notificationActionLabel(index, action))
     }
 
+    /// Invokes the action named `key` on notification `id` and closes the notification.
     public func notificationInvokeAction(_ id: UInt32, key: String) {
         engine.notificationInvokeAction(id, std.string(key))
     }
 
+    /// Closes notification `id`, as dismissed by the user.
     public func notificationDismiss(_ id: UInt32) {
         engine.notificationDismiss(id)
     }
 
+    /// Closes every notification.
     public func notificationDismissAll() { engine.notificationDismissAll() }
 
+    /// Holds every notification's countdown while `paused` — the pointer is over the stack.
     public func notificationsSetPaused(_ paused: Bool) {
         engine.notificationsSetPaused(paused)
     }
@@ -880,16 +954,21 @@ public final class Editor: @unchecked Sendable {
         engine.statusNotifierOpenMenu(std.string(key))
     }
 
+    /// Drops the tray menu `statusNotifierOpenMenu(_:)` opened. The item is not told.
     public func statusNotifierCloseMenu() { engine.statusNotifierCloseMenu() }
 
+    /// Changes when the open tray menu's layout does, including when it first
+    /// arrives: a menu is empty until the application answers.
     public var statusNotifierMenuRevision: UInt64 {
         engine.statusNotifierMenuRevision()
     }
 
+    /// How many rows the open tray menu has.
     public var statusNotifierMenuItemCount: Int {
         Int(engine.statusNotifierMenuItemCount())
     }
 
+    /// One row of the open tray menu, by index in `0..<statusNotifierMenuItemCount`.
     public func statusNotifierMenuItem(_ index: Int) -> ImportedMenuItem {
         ImportedMenuItem(
             id: engine.statusNotifierMenuItemId(index),
@@ -902,10 +981,12 @@ public final class Editor: @unchecked Sendable {
         )
     }
 
+    /// Runs a row of the open tray menu, in the application that owns it.
     public func statusNotifierMenuActivate(_ itemId: Int32) {
         engine.statusNotifierMenuActivate(itemId)
     }
 
+    /// Asks the owning application to fill a tray submenu before it is opened.
     public func statusNotifierMenuAboutToShow(_ itemId: Int32) {
         engine.statusNotifierMenuAboutToShow(itemId)
     }
@@ -926,19 +1007,26 @@ public final class Editor: @unchecked Sendable {
 public struct StatusNotifierItemInfo: Equatable, Sendable {
     /// `uniqueName/objectPath` — stable activate key.
     public var key: String
+    /// The application's own id for the item (`Id`), often its desktop id.
     public var id: String
+    /// The item's tooltip or display title.
     public var title: String
+    /// `"Passive"`, `"Active"` or `"NeedsAttention"`.
     public var status: String
+    /// Theme icon name. Empty when the item provides only pixels.
     public var iconName: String
     /// Resolved filesystem path for `iconName`, when found.
     public var iconPath: String
+    /// Whether a left click should open the menu rather than activate (`ItemIsMenu`).
     public var isMenu: Bool
     /// The item exports a DBusMenu.
     public var hasMenu: Bool
     /// A left click has nowhere to go but that menu — the item said
     /// `ItemIsMenu`, or never implemented `Activate`.
     public var prefersMenu: Bool
+    /// Width of `iconRgba`, in pixels.
     public var iconWidth: Int
+    /// Height of `iconRgba`, in pixels.
     public var iconHeight: Int
     /// RGBA8 pixels when the item published `IconPixmap`.
     public var iconRgba: [UInt8]
@@ -948,19 +1036,25 @@ public struct StatusNotifierItemInfo: Equatable, Sendable {
 public struct NotificationInfo: Equatable, Sendable {
     /// The protocol's id, which is what actions and closing speak in.
     public var id: UInt32
+    /// The sending application's name.
     public var appName: String
+    /// The notification's title line.
     public var summary: String
     public var body: String
     /// Resolved file for `app_icon` or the `image-path` hint.
     public var iconPath: String
     /// Pixels from the `image-data` hint, RGBA8, when the sender sent its own.
     public var iconWidth: Int
+    /// Height of `iconRgba`, in pixels.
     public var iconHeight: Int
+    /// RGBA8 pixels from the `image-data` hint; empty when there are none.
     public var iconRgba: [UInt8]
     /// 0 low, 1 normal, 2 critical.
     public var urgency: UInt8
     /// Milliseconds left, or 0 when it waits for the user instead.
     public var remainingMs: Int64
+    /// How many actions the notification offers. Read them with
+    /// `Editor.notificationActionKey(_:action:)` and `notificationActionLabel(_:action:)`.
     public var actionCount: Int
 }
 
@@ -970,10 +1064,15 @@ public struct NotificationInfo: Equatable, Sendable {
 /// the interop boundary in — `parent` is another row's `id`, or -1 at the top
 /// level. `PanelMenu` is what turns a run of these into a tree.
 public struct ImportedMenuItem: Equatable, Sendable {
+    /// DBusMenu's id for this row.
     public var id: Int32
+    /// The `id` of the row this one is inside, or -1 at the top level.
     public var parent: Int32
+    /// The row's text.
     public var label: String
+    /// Whether the row can be activated.
     public var isEnabled: Bool
+    /// Whether the row is a separator rather than an item.
     public var isSeparator: Bool
     /// Opens a submenu. Its children may not have been fetched yet — the
     /// application is entitled to fill them only when asked.

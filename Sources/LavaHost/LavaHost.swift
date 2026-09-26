@@ -9,6 +9,7 @@ import LavaClient
 /// This stays above LavaUI so the framework does not acquire NPRPC or a
 /// compositor dependency merely to support application entry points.
 public enum LavaHost {
+    /// Whether `LAVA_CLIENT=1` is set, which makes `open` go through the compositor.
     public static var isClient: Bool {
         ProcessInfo.processInfo.environment["LAVA_CLIENT"] == "1"
     }

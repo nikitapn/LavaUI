@@ -12,7 +12,9 @@ import Foundation
 /// is what `YGOverflowScroll` buys: without it Yoga compresses children to fit
 /// the container and there is nothing left to scroll.
 public struct ScrollView<Content: View>: PrimitiveView {
+    /// The direction the content scrolls.
     public var axis: ScrollAxis
+    /// The content, laid out at its natural size along `axis`.
     public var content: Content
     /// Draw a thin position indicator while the content overflows.
     public var showsIndicator: Bool
@@ -20,6 +22,7 @@ public struct ScrollView<Content: View>: PrimitiveView {
     /// somewhere. See `ScrollPosition`.
     public var position: ScrollPosition?
 
+    /// Creates a scroll view. Every parameter matches the property of the same name.
     public init(
         _ axis: ScrollAxis = .vertical,
         showsIndicator: Bool = true,
@@ -80,16 +83,21 @@ public final class ScrollPosition: @unchecked Sendable {
     public internal(set) var offset: Float
     var pending: Float?
 
+    /// Creates a position at `offset` points from the start.
     public init(offset: Float = 0) {
         self.offset = offset
     }
 
+    /// Moves the view to `offset` points from the start after the next layout,
+    /// without easing. Negative offsets are treated as zero; offsets past the end
+    /// are clamped against the content's length.
     public func scroll(to offset: Float) {
         pending = max(0, offset)
         ScrollPositions.anyPending = true
         ViewInvalidation.markNeedsLayout()
     }
 
+    /// Moves the view back to the start. Same as `scroll(to: 0)`.
     public func scrollToTop() { scroll(to: 0) }
 }
 
@@ -116,8 +124,11 @@ enum ScrollPositions {
     }
 }
 
+/// The direction a `ScrollView` scrolls.
 public enum ScrollAxis: Equatable, Sendable {
+    /// Top to bottom.
     case vertical
+    /// Left to right.
     case horizontal
 }
 

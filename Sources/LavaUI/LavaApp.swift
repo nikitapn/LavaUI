@@ -225,6 +225,7 @@ public enum LavaApp {
     nonisolated(unsafe) private static var editor: Editor?
     nonisolated(unsafe) private static var appRawKey: ((InputEvent) -> Bool)?
 
+    /// How many windows are open, counting ones opened this frame that are not yet on screen.
     public static var windowCount: Int { windows.count + pendingWindows.count }
 
     /// The layout host of one open window, once `run` has brought it up.
@@ -255,11 +256,16 @@ public enum LavaApp {
     /// just below it; the compositor turns that into a position on screen,
     /// because the client does not know where its window is.
     public struct SurfaceAnchor: Sendable {
+        /// Left edge, in the parent surface's pixels.
         public var x: Float
+        /// Top edge, in the parent surface's pixels.
         public var y: Float
+        /// Width, in pixels.
         public var w: Float
+        /// Height, in pixels.
         public var h: Float
 
+        /// Creates an anchor from a rectangle.
         public init(x: Float, y: Float, w: Float, h: Float) {
             self.x = x
             self.y = y
@@ -267,6 +273,7 @@ public enum LavaApp {
             self.h = h
         }
 
+        /// Creates an anchor from a view's laid-out frame.
         public init(_ frame: LayoutFrame) {
             self.init(x: frame.x, y: frame.y, w: frame.w, h: frame.h)
         }

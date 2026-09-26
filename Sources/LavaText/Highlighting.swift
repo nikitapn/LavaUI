@@ -6,12 +6,16 @@ import Foundation
 /// should not grow one. The view owns a palette and resolves indices against
 /// it, which also means a theme swap restyles code without touching rules.
 public struct HighlightRule: Equatable, Sendable {
+    /// A regular expression (`NSRegularExpression` syntax) matched against each
+    /// line. An invalid pattern is dropped, costing only its own highlighting.
     public var pattern: String
+    /// Which palette entry colours the matched text.
     public var styleIndex: Int
     /// Higher wins where spans overlap. Keywords should outrank identifiers;
     /// comments and strings should outrank both.
     public var priority: Int
 
+    /// Creates a rule.
     public init(pattern: String, styleIndex: Int, priority: Int = 0) {
         self.pattern = pattern
         self.styleIndex = styleIndex
@@ -21,9 +25,12 @@ public struct HighlightRule: Equatable, Sendable {
 
 /// A styled character range within one line.
 public struct HighlightSpan: Equatable, Sendable {
+    /// The styled characters, as character offsets within the line.
     public var range: Range<Int>   // character offsets within the line
+    /// Which palette entry colours the range.
     public var styleIndex: Int
 
+    /// Creates a span.
     public init(range: Range<Int>, styleIndex: Int) {
         self.range = range
         self.styleIndex = styleIndex
@@ -72,8 +79,12 @@ extension Array where Element == HighlightSpan {
 /// is what keeps re-chaining it on every keystroke from costing the whole
 /// file instead of just the lines a change actually invalidated.
 public protocol StatefulLexer {
+    /// The lexer's context carried from one line to the next.
     associatedtype State: Hashable
+    /// The state the first line of a document starts in.
     static var initialState: State { get }
+    /// Highlights one line, given the state the previous line ended in. Returns
+    /// the line's spans and the state the next line starts in.
     func highlight(_ line: String, state: State) -> (spans: [HighlightSpan], nextState: State)
 }
 
@@ -114,10 +125,12 @@ private struct AnyStatefulLexer {
 /// `isStateful` is `false` for it, and every stateful-only entry point
 /// degrades to the obvious single-line answer when called on it anyway.
 public struct SyntaxHighlighter {
+    /// The rules this highlighter applies. Empty for one built from a lexer.
     public var rules: [HighlightRule]
     private let compiled: [(regex: NSRegularExpression, rule: HighlightRule)]
     private let lexer: AnyStatefulLexer?
 
+    /// Creates a highlighter that applies `rules` to each line independently.
     public init(rules: [HighlightRule]) {
         self.rules = rules
         // Invalid patterns are dropped rather than thrown: a bad rule should
@@ -131,12 +144,14 @@ public struct SyntaxHighlighter {
         self.lexer = nil
     }
 
+    /// Creates a highlighter that runs `lexer`, carrying its state line to line.
     public init<L: StatefulLexer>(lexer: L) {
         self.rules = []
         self.compiled = []
         self.lexer = AnyStatefulLexer(lexer)
     }
 
+    /// Whether this highlighter was built from a `StatefulLexer`.
     public var isStateful: Bool { lexer != nil }
 
     /// True when this highlighter cannot produce a span for anything.
@@ -264,6 +279,7 @@ public struct SyntaxHighlighter {
         private var startStates: [AnyHashable] = []
         private var lineSpans: [[HighlightSpan]] = []
 
+        /// Creates an empty cache.
         public init() {}
 
         /// Spans for `row`, valid only immediately after `update(lines:with:)`
@@ -272,6 +288,9 @@ public struct SyntaxHighlighter {
             lineSpans.indices.contains(row) ? lineSpans[row] : []
         }
 
+        /// Brings the cache up to date with `newLines`, re-lexing only from the first
+        /// changed line until the lexer's state converges with what was cached. A
+        /// rule-list highlighter clears the cache instead, since it needs none.
         public mutating func update(lines newLines: [Substring], with highlighter: SyntaxHighlighter) {
             guard highlighter.isStateful else {
                 // The rule-list form doesn't need this cache — spans(in:) is

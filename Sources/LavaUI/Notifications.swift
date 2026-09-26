@@ -18,12 +18,16 @@ public final class Notifications {
         /// The protocol's id — what `ActionInvoked` and `NotificationClosed`
         /// speak in, and what a replacement reuses.
         public var id: UInt32
+        /// The sending application's name.
         public var appName: String
+        /// The title line.
         public var summary: String
         public var body: String
+        /// The notification's icon, or `nil` to show `fallback` instead.
         public var image: UIImage?
         /// First letter of the application's name, for when there is no icon.
         public var fallback: String
+        /// How urgent the sender says it is.
         public var urgency: Urgency
         /// Buttons, in the order the sender gave them. The conventional
         /// `default` action is not here — it is what clicking the body does.
@@ -34,16 +38,24 @@ public final class Notifications {
         /// body invokes. Without one, that click just dismisses.
         public var hasDefaultAction: Bool
 
+        /// One of a notification's buttons.
         public struct Action: Equatable, Identifiable {
+            /// What is sent back to the application when the button is pressed.
             public var key: String
+            /// The button's text.
             public var label: String
+            /// The action's identity, which is its `key`.
             public var id: String { key }
         }
     }
 
+    /// A notification's urgency, as the protocol numbers it.
     public enum Urgency: UInt8, Equatable {
+        /// Low: routine, informational.
         case low = 0
+        /// Normal: the default.
         case normal = 1
+        /// Critical: drawn red, and never expires on its own.
         case critical = 2
     }
 
@@ -58,8 +70,11 @@ public final class Notifications {
     /// nested inside — in which case that daemon draws them and this shows
     /// nothing.
     public private(set) var isServing = false
+    /// The live notifications, oldest first.
     public private(set) var toasts: [Toast] = []
 
+    /// Starts serving `org.freedesktop.Notifications` through `editor`, unless
+    /// another daemon already has the name (see `isServing`).
     public init(editor: Editor) {
         self.editor = editor
         isServing = editor.notificationsStart()
@@ -93,14 +108,17 @@ public final class Notifications {
         }
     }
 
+    /// Presses one of the toast's buttons: tells the sender, then closes the toast.
     public func invoke(_ toast: Toast, action: Toast.Action) {
         editor.notificationInvokeAction(toast.id, key: action.key)
     }
 
+    /// Closes the toast, as dismissed by the user.
     public func dismiss(_ toast: Toast) {
         editor.notificationDismiss(toast.id)
     }
 
+    /// Closes every toast.
     public func dismissAll() {
         editor.notificationDismissAll()
     }

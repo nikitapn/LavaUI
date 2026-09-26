@@ -24,7 +24,9 @@ public enum OverlayAlignment: Equatable, Sendable {
 
 /// Geometry available when placing a detached overlay.
 public struct OverlayPlacementContext: Sendable {
+    /// The presenting view's frame, in window coordinates.
     public var anchor: OverlayFrame
+    /// The window's frame: the area the overlay must fit in.
     public var viewport: OverlayFrame
     /// Natural size measured from the overlay's content before placement.
     public var idealSize: (width: Float, height: Float)
@@ -32,11 +34,16 @@ public struct OverlayPlacementContext: Sendable {
 
 /// A detached overlay's resolved frame in window coordinates.
 public struct OverlayFrame: Equatable, Sendable {
+    /// Left edge, in window pixels.
     public var x: Float
+    /// Top edge, in window pixels.
     public var y: Float
+    /// Width, in pixels.
     public var width: Float
+    /// Height, in pixels.
     public var height: Float
 
+    /// Creates a frame from its origin and size.
     public init(x: Float, y: Float, width: Float, height: Float) {
         self.x = x
         self.y = y
@@ -53,6 +60,8 @@ public struct OverlayFrame: Equatable, Sendable {
 public struct OverlayPlacement: @unchecked Sendable {
     let resolve: @Sendable (OverlayPlacementContext) -> OverlayFrame
 
+    /// Creates a placement from a function of the presenter, viewport and the
+    /// content's natural size.
     public init(
         _ resolve: @escaping @Sendable (OverlayPlacementContext) -> OverlayFrame
     ) {
@@ -206,14 +215,21 @@ final class OverlayBoxNode: StyleBoxNode {
 
 /// `content.overlay(isPresented:) { ... }`
 public struct OverlayView<Content: View, OverlayContent: View>: PrimitiveView {
+    /// The presenting view, laid out normally.
     public var content: Content
+    /// The popup's content.
     public var overlayContent: OverlayContent
+    /// Whether the popup is shown. Set to `false` when it is dismissed by a click
+    /// outside or Escape.
     public var isPresented: Binding<Bool>
+    /// Where the popup sits relative to the presenter, when `placement` is `nil`.
     public var alignment: OverlayAlignment
+    /// Custom placement that replaces `alignment`, or `nil`.
     public var placement: OverlayPlacement?
     /// Panel styling for the floating surface itself.
     public var style: OverlayStyle
 
+    /// Creates a popup overlay. Usually spelled `.overlay(isPresented:alignment:style:content:)`.
     public init(
         content: Content,
         isPresented: Binding<Bool>,
@@ -314,12 +330,18 @@ public enum BackdropBridge {
     /// One rectangle to frost, in this surface's layout pixels.
     /// `cornerRadius` rounds the plate to match the popup sitting on it.
     public struct FrostRect: Sendable, Equatable {
+        /// Left edge, in the surface's layout pixels.
         public var x: Float
+        /// Top edge, in the surface's layout pixels.
         public var y: Float
+        /// Width, in pixels.
         public var w: Float
+        /// Height, in pixels.
         public var h: Float
+        /// Corner radius of the frosted plate, matching the popup on it.
         public var cornerRadius: Float
 
+        /// Creates a rectangle to frost.
         public init(
             x: Float, y: Float, w: Float, h: Float, cornerRadius: Float
         ) {
@@ -342,15 +364,20 @@ public enum BackdropBridge {
 
 /// Styling for the floating surface an overlay draws on.
 public struct OverlayStyle {
+    /// Fill of the panel.
     public var background: Color
     /// nil draws no outline.
     public var border: Color?
+    /// Corner radius of the panel, in points.
     public var cornerRadius: Float
+    /// Space between the panel's edge and the content, in points.
     public var padding: Float
+    /// Narrowest the panel is drawn, in points.
     public var minWidth: Float
     /// Blur applied to everything behind the complete resolved popup frame.
     public var backdropBlurRadius: Float?
 
+    /// Creates a style. Colours and radius left `nil` come from the current theme.
     public init(
         background: Color? = nil,
         border: Color? = nil,

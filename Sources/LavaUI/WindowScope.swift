@@ -61,6 +61,7 @@ public final class WindowScope {
     /// place, as the rest of this type.
     public let windowID: WindowID
 
+    /// Creates the state for one window. `label` is for diagnostics only.
     public init(label: String, windowID: WindowID = .main) {
         self.label = label
         self.windowID = windowID
@@ -102,6 +103,7 @@ public final class WindowScope {
         registry.append(scope)
     }
 
+    /// Removes a closing window from the registry that broadcasts reach.
     public static func unregister(_ scope: WindowScope) {
         registry.removeAll { $0 === scope }
     }

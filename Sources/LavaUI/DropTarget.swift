@@ -21,6 +21,9 @@ import Foundation
 /// an empty list: an app that never heard of a compositor should not have to
 /// install anything.
 public enum DropBridge {
+    /// Installed by a compositor client: returns the paths the compositor holds
+    /// for the given engine window's latest drop. `nil`, as in a windowed app,
+    /// reads them from the engine instead.
     nonisolated(unsafe) public static var provider: (@Sendable (UInt32) -> [String])?
 
     static func paths(window: WindowID, editor: Editor) -> [String] {
@@ -31,15 +34,23 @@ public enum DropBridge {
 
 /// Registers `perform` as the drop handler for the content's root layout box.
 public struct DropTargetView<Content: View>: PrimitiveView {
+    /// Called with the dropped files when a drag is released over the view.
     public var perform: ([URL]) -> Void
+    /// Called with `true` when a drag becomes aimed at the view and `false` when it
+    /// leaves, drops or ends elsewhere. Needs a compositor.
     public var targeted: ((Bool) -> Void)?
+    /// Called once a drag has rested over the view for `DropRouter.springDelay`.
+    /// Needs a compositor.
     public var springLoaded: (() -> Void)?
+    /// The view that accepts drops.
     public var content: Content
 
+    /// Makes `content` a drop target with no drag-over callbacks.
     public init(perform: @escaping ([URL]) -> Void, content: Content) {
         self.init(targeted: nil, springLoaded: nil, perform: perform, content: content)
     }
 
+    /// Makes `content` a drop target. Usually spelled `.onDrop(targeted:springLoaded:perform:)`.
     public init(
         targeted: ((Bool) -> Void)?,
         springLoaded: (() -> Void)?,

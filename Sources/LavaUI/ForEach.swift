@@ -45,6 +45,9 @@ public struct ForEach<
     /// One built child per element, in order, with the key it is identified by.
     public var rows: [(id: ID, content: Content)]
 
+    /// Builds one child per element of `data`, identified by the element's
+    /// value at `id`. Keys must be unique; a child whose key survives a rebuild
+    /// keeps its node and state.
     public init(
         _ data: Data,
         id: KeyPath<Data.Element, ID>,
@@ -79,6 +82,7 @@ public struct ForEach<
 }
 
 extension ForEach where Data.Element: Identifiable, ID == Data.Element.ID {
+    /// Builds one child per element of `data`, identified by the element's `id`.
     public init(
         _ data: Data,
         @ViewBuilder content: (Data.Element) -> Content

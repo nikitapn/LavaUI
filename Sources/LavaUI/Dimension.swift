@@ -12,6 +12,8 @@ public enum Dimension: Equatable, Sendable, Hashable {
     /// further than whatever `minWidth`/`minHeight` says separately.
     case percent(Float)
 
+    /// Shorthand for `.point(value)`.
     public static func pt(_ value: Float) -> Dimension { .point(value) }
+    /// Shorthand for `.percent(value)`.
     public static func pct(_ value: Float) -> Dimension { .percent(value) }
 }

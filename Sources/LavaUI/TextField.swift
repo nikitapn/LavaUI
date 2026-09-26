@@ -14,9 +14,13 @@ import Foundation
 /// outline). Pass `focusRing:` / `focusRingWidth:` / `focusRingColor:` to
 /// override per field — e.g. `.underline` for the historical top+bottom bars.
 public struct TextField: PrimitiveView {
+    /// The text being edited.
     @Binding public var text: String
+    /// Dim text shown while the field is empty.
     public var placeholder: String
+    /// The field's font, or `nil` for the environment's.
     public var font: UIFont?
+    /// Called when Enter is pressed in a single-line field.
     public var onSubmit: (() -> Void)?
     /// When true, Enter inserts a newline instead of submitting, and the box
     /// grows to fit its lines. Hard line breaks only for now — soft wrap is a
@@ -43,17 +47,36 @@ public struct TextField: PrimitiveView {
     /// offered name, or a file's name up to its extension when renaming.
     public var selectionOnFocus: FocusSelection = .none
 
+    /// What `autoFocus` selects when the field takes focus.
     public enum FocusSelection: Equatable, Sendable {
+        /// Nothing is selected.
         case none
+        /// The whole text.
         case all
         /// The first this many characters: "report" of "report.pdf".
         case leading(Int)
     }
     /// Overrides `Theme.focusRingStyle` when set.
     public var focusRing: FocusRingStyle?
+    /// Width of the focus ring, overriding the theme's.
     public var focusRingWidth: Float?
+    /// Colour of the focus ring, overriding the theme's.
     public var focusRingColor: Color?
 
+    /// Creates a text field.
+    /// - Parameters:
+    /// - text: The text being edited.
+    /// - placeholder: Dim text shown while the field is empty.
+    /// - font: The field's font; `nil` uses the environment's.
+    /// - multiline: Whether Enter inserts a newline rather than submitting.
+    /// - maxLines: Most lines a multiline field grows to before it scrolls.
+    /// - wraps: Whether a multiline field breaks long lines at its width.
+    /// - autoFocus: Whether the field takes focus when it mounts.
+    /// - selectionOnFocus: What `autoFocus` selects.
+    /// - focusRing: The focus chrome; `nil` uses the theme's.
+    /// - focusRingWidth: Width of the focus ring; `nil` uses the theme's.
+    /// - focusRingColor: Colour of the focus ring; `nil` uses the theme's.
+    /// - onSubmit: Called when Enter is pressed in a single-line field.
     public init(
         text: Binding<String>,
         placeholder: String = "",
@@ -82,6 +105,7 @@ public struct TextField: PrimitiveView {
         self.onSubmit = onSubmit
     }
 
+    /// The font the field draws with: `font`, or the environment's when that is `nil`.
     public var resolvedFont: UIFont? { font ?? Environment.current.font }
 
     public var dumpDetail: String { "\"\(text)\"" }
@@ -947,7 +971,9 @@ extension LeafNode {
 /// Indirection so `LavaUI` views can reach the clipboard without every view
 /// carrying an `Editor` reference. The app installs this once at startup.
 public enum ClipboardBridge {
+    /// Reads the clipboard's text. Installed by the host app.
     nonisolated(unsafe) public static var reader: (() -> String)?
+    /// Replaces the clipboard's text. Installed by the host app.
     nonisolated(unsafe) public static var writer: ((String) -> Void)?
     /// PNG of the seat selection, when it is an image. Nil if the host
     /// cannot read pictures (windowed GLFW) or the selection is text.
@@ -971,21 +997,29 @@ public enum ClipboardBridge {
     /// protocols under a compositor and the host wires whichever it has: left
     /// nil, primary simply does nothing, and middle-click pastes nothing.
     nonisolated(unsafe) public static var primaryReader: (() -> String)?
+    /// Sets the primary selection, as selecting text does.
     nonisolated(unsafe) public static var primaryWriter: ((String) -> Void)?
 
+    /// The clipboard's text, or empty when no reader is installed.
     public static func read() -> String { reader?() ?? "" }
+    /// Puts `text` on the clipboard. Does nothing when no writer is installed.
     public static func write(_ text: String) { writer?(text) }
+    /// The clipboard's picture as PNG bytes, or `nil` when there is none or it cannot be read here.
     public static func readImage() -> [UInt8]? { imageReader?() }
     /// Whether a picture can be copied at all here — worth asking before
     /// offering the user a Copy button that would do nothing.
     public static var canWriteImage: Bool { imageFileWriter != nil }
+    /// Puts the PNG at `path` on the clipboard. Returns `false` when this host
+    /// cannot hold a picture. The file may be deleted as soon as this returns.
     @discardableResult
     public static func writeImage(file path: String) -> Bool {
         guard let imageFileWriter else { return false }
         imageFileWriter(path)
         return true
     }
+    /// The primary selection's text, or empty when there is none here.
     public static func readPrimary() -> String { primaryReader?() ?? "" }
+    /// Sets the primary selection. Does nothing when this host has none.
     public static func writePrimary(_ text: String) { primaryWriter?(text) }
 }
 

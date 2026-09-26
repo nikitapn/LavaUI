@@ -1,8 +1,10 @@
 /// Heterogeneous children from a multi-statement `@ViewBuilder` block.
 /// Fragment: expands into the parent flex container (not a Yoga box).
 public struct TupleView<each Content: View>: PrimitiveView {
+    /// The child views, in the order they were written.
     public var content: (repeat each Content)
 
+    /// Groups `content` as siblings. Produced by `ViewBuilder.buildBlock`.
     public init(content: (repeat each Content)) {
         self.content = content
     }
