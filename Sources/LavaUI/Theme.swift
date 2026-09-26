@@ -25,9 +25,13 @@ public enum FocusRingStyle: Equatable, Sendable {
 /// frozen constants.
 public struct Theme: Equatable, Sendable {
     // MARK: Text
+    /// Body text.
     public var textPrimary: Color
+    /// Labels, captions and other text one step down from the body.
     public var textSecondary: Color
+    /// Placeholders and hints.
     public var textMuted: Color
+    /// The faintest text: disabled menu items, shortcut hints, quotes.
     public var textDim: Color
     /// Emphasis for headings and focus rings.
     public var accent: Color
@@ -49,7 +53,9 @@ public struct Theme: Equatable, Sendable {
     public var selectionFill: Color
 
     // MARK: Borders and metrics
+    /// Colour of outlines and dividers.
     public var border: Color
+    /// Width of outlines and dividers, in points.
     public var borderWidth: Float
     /// Default corner radius for panels and controls. 0 gives hard corners.
     public var cornerRadius: Float
@@ -57,6 +63,7 @@ public struct Theme: Equatable, Sendable {
     public var controlPadding: Float
     /// Default distance between adjacent views in a stack when its spacing is `nil`.
     public var stackSpacing: Float
+    /// Width of the text caret, in points.
     public var caretWidth: Float
     /// Shape of the focused-field chrome. Defaults to a full rounded outline.
     public var focusRingStyle: FocusRingStyle
@@ -65,6 +72,7 @@ public struct Theme: Equatable, Sendable {
     /// Focus ring colour. `nil` uses `accent`.
     public var focusRingColor: Color?
 
+    /// Creates a theme. Every parameter matches the property of the same name.
     public init(
         textPrimary: Color, textSecondary: Color, textMuted: Color, textDim: Color,
         accent: Color, selected: Color,
@@ -118,6 +126,7 @@ public struct Theme: Equatable, Sendable {
         border: Color(r: 0.28, g: 0.30, b: 0.35)
     )
 
+    /// A light palette: dark text on pale surfaces.
     public static let light = Theme(
         textPrimary: Color(r: 0.12, g: 0.13, b: 0.16),
         textSecondary: Color(r: 0.40, g: 0.42, b: 0.46),
@@ -248,9 +257,13 @@ public struct Theme: Equatable, Sendable {
     /// `summary` are what Settings shows. Keep this list in step with
     /// `canonicalThemeName` in the compositor — an unknown name is dark.
     public struct BuiltIn: Equatable, Sendable {
+        /// The name `lava.conf` and the control plane use.
         public var name: String
+        /// The name Settings shows.
         public var title: String
+        /// One line describing the palette, for Settings.
         public var summary: String
+        /// The palette itself.
         public var theme: Theme
     }
 
@@ -293,11 +306,17 @@ extension Color {
     // Resolved through the environment's theme, so these stay valid names at
     // call sites while becoming swappable — globally via `Theme.current`, or
     // per subtree via `.theme(_:)`.
+    /// The theme's body text colour (`textPrimary`).
     public static var primary: Color { Environment.current.theme.textPrimary }
+    /// The theme's secondary text colour (`textSecondary`).
     public static var secondary: Color { Environment.current.theme.textSecondary }
+    /// The theme's accent colour.
     public static var accent: Color { Environment.current.theme.accent }
+    /// The theme's list-selection colour.
     public static var selected: Color { Environment.current.theme.selected }
+    /// The theme's muted text colour (`textMuted`).
     public static var muted: Color { Environment.current.theme.textMuted }
+    /// The theme's faintest text colour (`textDim`).
     public static var dim: Color { Environment.current.theme.textDim }
 }
 
@@ -328,6 +347,7 @@ public enum WindowBackdrop: Sendable {
     /// useful alphas are well below 1; see `docs/colour-and-blending.md`.
     case blur(radius: Float, tint: Color)
 
+    /// What every window paints behind its content. Read on every frame, so a change shows on the next redraw.
     nonisolated(unsafe) public static var current: WindowBackdrop = .theme
 
     /// Frosted glass with a dark wash that still lets the desktop through.

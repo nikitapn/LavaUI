@@ -28,6 +28,8 @@ public enum ScreenCapture {
         _ maxSide: Int32
     ) -> String?
 
+    /// Installed by a compositor client to capture through the compositor. `nil`
+    /// in a windowed build, where there is no desktop to capture.
     nonisolated(unsafe) public static var provider: Provider?
 
     /// Whether the desktop can be captured here at all.

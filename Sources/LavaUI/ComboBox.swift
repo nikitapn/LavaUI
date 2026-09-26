@@ -7,14 +7,22 @@ import Foundation
 /// separate id: two rows with the same tag would be the same choice, and
 /// `ForEach` would be right to complain about it.
 public struct ComboBoxItem<Tag: Hashable>: Identifiable {
+    /// The value this row stands for, written to the combo box's selection when it is picked.
     public var tag: Tag
+    /// The row's text.
     public var title: String
     /// Dim trailing text — a path, a count, a kind. Drawn after the title and
     /// truncated first, so it never pushes the title out of the row.
     public var detail: String?
 
+    /// The row's identity, which is its `tag`.
     public var id: Tag { tag }
 
+    /// Creates a row.
+    /// - Parameters:
+    /// - title: The row's text.
+    /// - tag: The value picking this row selects.
+    /// - detail: Dim trailing text, or `nil` for none.
     public init(_ title: String, tag: Tag, detail: String? = nil) {
         self.title = title
         self.tag = tag
@@ -46,7 +54,9 @@ public struct ComboBoxItem<Tag: Hashable>: Identifiable {
 /// leaf nodes (`TextField`, `EditorView`) and would have to grow a focusable
 /// container first.
 public struct ComboBox<Tag: Hashable>: View {
+    /// The selected tag. Picking a row writes that row's tag here.
     @Binding public var selection: Tag
+    /// The choices, in the order they are listed.
     public var items: [ComboBoxItem<Tag>]
     /// Shown when nothing matches `selection` — an empty list, or a tag that
     /// was removed from under the binding.
@@ -60,6 +70,7 @@ public struct ComboBox<Tag: Hashable>: View {
 
     @State private var isOpen = false
 
+    /// Creates a combo box. Every parameter matches the property of the same name.
     public init(
         selection: Binding<Tag>,
         items: [ComboBoxItem<Tag>],

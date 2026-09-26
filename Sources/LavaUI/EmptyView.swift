@@ -1,4 +1,9 @@
+/// A view that shows nothing and takes no space.
+///
+/// What an empty `@ViewBuilder` block or an `if` with no `else` produces. It
+/// still occupies a slot in its parent, sized zero.
 public struct EmptyView: PrimitiveView {
+    /// Creates an empty view.
     public init() {}
 
     public var dumpDetail: String { "(empty)" }

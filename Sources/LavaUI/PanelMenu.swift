@@ -36,6 +36,8 @@ public final class PanelMenu {
     /// only LavaUI ones.
     public var busName: String { editor.menuImportBusName }
 
+    /// Claims an AppMenu registrar name on the session bus through `editor`, and
+    /// starts importing the focused application's menu. See `isServing`.
     public init(editor: Editor) {
         self.editor = editor
         isServing = editor.menuImportStart()

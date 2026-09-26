@@ -11,12 +11,17 @@ import Foundation
 /// field you were editing still focused. A single process-wide focus would
 /// also mean a key event delivered to one window reaching a field in another.
 public enum FocusManager {
+    /// The node holding keyboard focus in the current window, or `nil`.
     public static var focusedID: NodeID? { WindowScope.currentOrMain.focused }
 
+    /// Whether `id` holds keyboard focus in the current window.
     public static func isFocused(_ id: NodeID) -> Bool {
         WindowScope.currentOrMain.focused == id
     }
 
+    /// Gives `id` keyboard focus in the current window, routing key events to
+    /// `onKey` and typed characters to `onChar`. Each handler returns whether it
+    /// consumed the input.
     public static func focus(
         _ id: NodeID,
         onKey: @escaping (KeyEvent) -> Bool,
@@ -29,11 +34,13 @@ public enum FocusManager {
         scope.charHandler = onChar
     }
 
+    /// Clears focus if `id` holds it; does nothing otherwise.
     public static func resignFocus(_ id: NodeID) {
         guard WindowScope.currentOrMain.focused == id else { return }
         clear()
     }
 
+    /// Clears focus in the current window, so keys go to the default handler, if any.
     public static func clear() {
         let scope = WindowScope.currentOrMain
         if scope.focused != nil { ViewInvalidation.markDirty() }
@@ -81,6 +88,8 @@ public enum FocusManager {
         return scope.defaultKeyHandler?(event) ?? false
     }
 
+    /// Routes a typed character to the focused node, or to the default handler
+    /// when nothing is focused. Returns true if it was consumed.
     @discardableResult
     public static func handle(character: Character) -> Bool {
         let scope = WindowScope.currentOrMain
@@ -91,19 +100,27 @@ public enum FocusManager {
 
 /// A key transition, decoded from the raw engine event.
 public struct KeyEvent {
+    /// The GLFW key code (`GLFW_KEY_*`).
     public let key: Int32
+    /// Modifier bits held with the key; see `KeyMods`.
     public let mods: Int32
+    /// Whether this is an auto-repeat of a held key rather than a fresh press.
     public let isRepeat: Bool
 
+    /// Creates a key event.
     public init(key: Int32, mods: Int32, isRepeat: Bool = false) {
         self.key = key
         self.mods = mods
         self.isRepeat = isRepeat
     }
 
+    /// Whether Shift was held.
     public var shift: Bool { KeyMods.contains(mods, KeyMods.shift) }
+    /// Whether Control was held.
     public var control: Bool { KeyMods.contains(mods, KeyMods.control) }
+    /// Whether Alt was held.
     public var alt: Bool { KeyMods.contains(mods, KeyMods.alt) }
+    /// Whether Super (the Windows or Command key) was held.
     public var superKey: Bool { KeyMods.contains(mods, KeyMods.superKey) }
 }
 
@@ -120,14 +137,18 @@ public struct KeyEvent {
 /// drew*, since two windows both showing a caret would otherwise consume each
 /// other's flips and one of them would stop blinking.
 public enum CaretBlink {
+    /// One full blink, in seconds: shown for the first half, hidden for the second.
     public static let period: Double = 1.0
     nonisolated(unsafe) private static var lastEditAt: Double = 0
 
+    /// Records an edit, which holds the caret solid for half a second so it is
+    /// visible while typing.
     public static func noteEdit() {
         lastEditAt = now()
         WindowScope.currentOrMain.caretLastPhase = true
     }
 
+    /// Whether the caret should be drawn right now.
     public static var isVisible: Bool {
         let t = now()
         // Solid for half a second after typing.
@@ -167,7 +188,10 @@ public enum CaretBlink {
 public enum PointerState {
     nonisolated(unsafe) private static var last: (x: Float, y: Float) = (0, 0)
 
+    /// Records the pointer's position, in window coordinates. The frame loop calls
+    /// this on every move.
     public static func set(x: Float, y: Float) { last = (x, y) }
+    /// The last known pointer position, in window coordinates.
     public static var window: (x: Float, y: Float) { last }
 
     /// Called when the pointer leaves this window entirely.
@@ -220,6 +244,7 @@ enum LocalHoverTargets {
 public enum PointerRelease {
     nonisolated(unsafe) private static var pending: [() -> Void] = []
 
+    /// Runs `action` once, the next time the pointer is released.
     public static func next(_ action: @escaping () -> Void) {
         pending.append(action)
     }
@@ -243,8 +268,13 @@ public enum PointerCapture {
     nonisolated(unsafe) private static var moveHandler: ((Float, Float) -> Void)?
     nonisolated(unsafe) private static var upHandler: (() -> Void)?
 
+    /// Whether some node holds the pointer capture.
     public static var isActive: Bool { owner != nil }
 
+    /// Routes pointer motion to `id` until release, wherever the pointer goes.
+    ///
+    /// `onMove` gets window coordinates. `onUp` runs on release, after the
+    /// capture is dropped, so it may start another capture.
     public static func capture(
         _ id: NodeID,
         onMove: @escaping (Float, Float) -> Void,
@@ -269,6 +299,7 @@ public enum PointerCapture {
         moveHandler?(x, y)
     }
 
+    /// Ends the capture and runs its `onUp`. The frame loop calls this on release.
     public static func release() {
         // Cleared *before* the handler runs, so an `onUp` that chains straight
         // into another capture — a drag that hands off to a second phase —
@@ -362,6 +393,7 @@ public enum ScrollRouter {
         handlers[id] = Entry(handler: handler, canScroll: canScroll)
     }
 
+    /// Removes `id`'s wheel handler.
     public static func unregister(_ id: NodeID) { handlers[id] = nil }
 
     /// Whether this node has wheel behaviour of its own.
@@ -428,6 +460,7 @@ public enum DropRouter {
     /// enough that waiting on one does not feel like being ignored.
     public static let springDelay: Double = 0.6
 
+    /// Makes `id` a drop target: `handler` runs with the dropped paths.
     public static func register(_ id: NodeID, handler: @escaping ([String]) -> Void) {
         handlers[id] = handler
         hovers[id] = nil
@@ -440,6 +473,7 @@ public enum DropRouter {
         hovers[id] = hover
     }
 
+    /// Removes `id`'s drop handler and drag-over callbacks.
     public static func unregister(_ id: NodeID) {
         handlers[id] = nil
         hovers[id] = nil
@@ -511,6 +545,7 @@ public enum ClickCounter {
     /// Generous enough for a deliberate double click, tight enough that two
     /// separate clicks on the same spot are not merged.
     public static let interval: Double = 0.4
+    /// Farthest apart, in pixels, two clicks can land and still count as one multi-click.
     public static let slop: Float = 4
 
     nonisolated(unsafe) private static var lastAt: Double = 0
@@ -553,12 +588,15 @@ public enum HoverState {
     /// process-wide, so one map serves every window.
     nonisolated(unsafe) private static var handlers: [NodeID: (Bool) -> Void] = [:]
 
+    /// Whether `id` is the node under the pointer.
     public static func isHovered(_ id: NodeID) -> Bool { hovered == id }
 
+    /// Calls `handler` with `true` when the pointer enters `id` and `false` when it leaves.
     public static func register(_ id: NodeID, handler: @escaping (Bool) -> Void) {
         handlers[id] = handler
     }
 
+    /// Removes `id`'s hover handler.
     public static func unregister(_ id: NodeID) { handlers[id] = nil }
 
     /// Forgets a closing window's nodes. Clears the hover outright if it was
@@ -586,5 +624,6 @@ public enum HoverState {
         return true
     }
 
+    /// Forgets the hovered node, calling its handler with `false`.
     public static func clear() { set(nil) }
 }

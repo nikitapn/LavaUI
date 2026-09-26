@@ -1,16 +1,25 @@
 import Foundation
 
+/// A point, direction or per-axis scale in a `Scene3D`'s world.
+///
+/// +x is right, +y up and +z toward the default camera, which sits on the
+/// +z axis looking at the origin. Writable as an array literal: `[0, 1, 0]`.
 public struct Vector3: Equatable, Sendable, Animatable,
     ExpressibleByArrayLiteral
 {
+    /// The x component.
     public var x: Float
+    /// The y component.
     public var y: Float
+    /// The z component.
     public var z: Float
 
+    /// Creates a vector; missing components are zero.
     public init(_ x: Float = 0, _ y: Float = 0, _ z: Float = 0) {
         self.x = x; self.y = y; self.z = z
     }
 
+    /// Creates a vector from up to three literals, `[x, y, z]`; missing ones are zero.
     public init(arrayLiteral elements: Float...) {
         self.init(
             elements.indices.contains(0) ? elements[0] : 0,
@@ -19,6 +28,7 @@ public struct Vector3: Equatable, Sendable, Animatable,
         )
     }
 
+    /// Interpolates each component linearly.
     public static func interpolate(_ from: Vector3, _ to: Vector3, _ t: Float) -> Vector3 {
         Vector3(
             Float.interpolate(from.x, to.x, t),
@@ -28,20 +38,33 @@ public struct Vector3: Equatable, Sendable, Animatable,
     }
 }
 
+/// An angle, stored in radians.
 public struct Angle3D: Equatable, Sendable {
+    /// The angle in radians.
     public var radians: Float
+    /// No rotation.
     public static let zero = Angle3D(radians: 0)
+    /// An angle given in radians.
     public static func radians(_ value: Float) -> Angle3D { Angle3D(radians: value) }
+    /// An angle given in degrees.
     public static func degrees(_ value: Float) -> Angle3D {
         Angle3D(radians: value * .pi / 180)
     }
 }
 
+/// Where an object sits in the world, how it is turned and how big it is.
+///
+/// Applied to the object's own geometry as scale, then rotation about x, y
+/// and z in that order, then translation.
 public struct Transform3D: Equatable, Sendable {
+    /// Translation, in world units.
     public var position: Vector3
+    /// Rotation about the x, y and z axes, in radians, applied in that order.
     public var rotation: Vector3
+    /// Scale along each axis; `[1, 1, 1]` is the object's own size.
     public var scale: Vector3
 
+    /// Creates a transform. The default leaves the object as it is.
     public init(
         position: Vector3 = Vector3(0, 0, 0),
         rotation: Vector3 = Vector3(0, 0, 0),
@@ -51,13 +74,20 @@ public struct Transform3D: Equatable, Sendable {
     }
 }
 
+/// A perspective camera: where it is, what it looks at, and how wide it sees.
 public struct Camera3D: Equatable, Sendable {
+    /// Where the camera is, in world units.
     public var position: Vector3
+    /// The point the camera looks at; also what orbit controls turn around.
     public var target: Vector3
+    /// Vertical field of view.
     public var fieldOfView: Angle3D
+    /// Distance to the near clipping plane. Anything closer is not drawn.
     public var near: Float
+    /// Distance to the far clipping plane. Anything farther is not drawn.
     public var far: Float
 
+    /// A camera on the +z axis looking at the origin, with a 42° field of view.
     public static func perspective(
         position: Vector3 = [0, 0, 7], target: Vector3 = [0, 0, 0],
         fieldOfView: Angle3D = .degrees(42), near: Float = 0.05, far: Float = 100
@@ -69,18 +99,32 @@ public struct Camera3D: Equatable, Sendable {
     }
 }
 
+/// How a `Scene3D`'s camera follows the pointer: drag to orbit, Shift-drag to
+/// pan, wheel to zoom.
 public struct CameraControls3D: Equatable, Sendable {
+    /// Radians of orbit per pixel dragged.
     public var orbitSensitivity: Float
+    /// Pan distance per pixel dragged, as a fraction of the distance to the target.
     public var panSensitivity: Float
+    /// How strongly one wheel notch zooms. The distance is multiplied by
+    /// `exp(-notches × zoomSensitivity)`.
     public var zoomSensitivity: Float
+    /// Closest the camera may zoom to its target.
     public var minimumDistance: Float
+    /// Farthest the camera may zoom from its target.
     public var maximumDistance: Float
+    /// Lowest the camera may orbit, looking up at the target.
     public var minimumPitch: Angle3D
+    /// Highest the camera may orbit, looking down at the target.
     public var maximumPitch: Angle3D
+    /// Whether a released drag keeps the camera moving and slowing down.
     public var inertia: Bool
     /// Fraction of drag velocity retained per 60 Hz frame.
     public var deceleration: Float
 
+    /// Creates controls. Values are clamped into sense: sensitivities to zero or
+    /// more, the maximum distance to at least the minimum, the pitch limits into
+    /// order and the deceleration into 0–0.999.
     public init(
         orbitSensitivity: Float = 0.006,
         panSensitivity: Float = 0.0018,
@@ -103,6 +147,7 @@ public struct CameraControls3D: Equatable, Sendable {
         self.deceleration = min(0.999, max(0, deceleration))
     }
 
+    /// Orbit controls with the default sensitivities and the given distance limits.
     public static func orbit(
         minimumDistance: Float = 2, maximumDistance: Float = 20,
         inertia: Bool = true
@@ -115,14 +160,21 @@ public struct CameraControls3D: Equatable, Sendable {
     }
 }
 
+/// How a 3D object moves to a new transform.
+///
+/// Attach with `.animation3D(_:)`. Without one, a changed transform takes
+/// effect in the next frame.
 public struct SpatialAnimation: Equatable, Sendable {
+    /// How long the move takes, in seconds.
     public var duration: Double
+    /// How progress maps onto time.
     public var curve: AnimationCurve
     /// When false, world x jumps to the new pose and only y/z, rotation,
     /// and scale interpolate. A bookshelf can keep the focused cover
     /// planted at the camera centre instead of sliding the whole shelf.
     public var animatesPosition: Bool
 
+    /// Creates an animation.
     public init(
         duration: Double = 0.22, curve: AnimationCurve = .easeOut,
         animatesPosition: Bool = true
@@ -139,6 +191,7 @@ public struct SpatialAnimation: Equatable, Sendable {
         return copy
     }
 
+    /// An eased transition of `duration` seconds.
     public static func smooth(
         duration: Double = 0.22, curve: AnimationCurve = .easeOut
     ) -> SpatialAnimation {
@@ -168,11 +221,16 @@ public struct SpatialAnimation: Equatable, Sendable {
     }
 }
 
+/// How a 3D object's faces are coloured.
 public struct Material3D: Sendable {
+    /// Colour of the front face.
     public var color: Color
+    /// Picture drawn on the front face (+z), or `nil` for the flat `color`.
     public var frontTexture: UIImage?
+    /// Colour of the other faces of a box: its edges, sides and back.
     public var edgeColor: Color
 
+    /// Creates a material. `edgeColor` defaults to `color`.
     public init(
         color: Color = Color(r: 1, g: 1, b: 1),
         texture: UIImage? = nil,
@@ -183,6 +241,7 @@ public struct Material3D: Sendable {
         self.edgeColor = edgeColor ?? color
     }
 
+    /// A cover picture on the front with dark edges, for album and poster cards.
     public static func albumCover(
         front: UIImage, edgeColor: Color = Color(r: 0.12, g: 0.12, b: 0.14)
     ) -> Material3D {
@@ -190,13 +249,21 @@ public struct Material3D: Sendable {
     }
 }
 
+/// A soft shadow under a 3D object, drawn on the screen rather than cast in
+/// the world.
 public struct Shadow3DStyle: Equatable, Sendable {
+    /// Colour of the shadow.
     public var color: Color
+    /// Blur radius of the shadow, in pixels.
     public var radius: Float
+    /// Horizontal offset of the shadow from the object, in pixels.
     public var offsetX: Float
+    /// Vertical offset of the shadow from the object, in pixels. Positive is down.
     public var offsetY: Float
+    /// Opacity of the shadow, 0–1.
     public var opacity: Float
 
+    /// Creates a shadow style. The opacity is clamped to 0–1.
     public init(
         color: Color = Color(r: 0, g: 0, b: 0), radius: Float = 16,
         offsetX: Float = 7, offsetY: Float = 11, opacity: Float = 0.32
@@ -209,13 +276,18 @@ public struct Shadow3DStyle: Equatable, Sendable {
     }
 }
 
+/// A mirror image of a 3D object in a horizontal floor, fading with distance.
 public struct Reflection3DStyle: Equatable, Sendable {
     /// Horizontal world-space plane across which geometry is mirrored.
     public var planeY: Float
+    /// Opacity of the reflection where it meets the plane, 0–1.
     public var opacity: Float
+    /// Distance from the plane, in world units, over which the reflection fades out.
     public var fadeDistance: Float
+    /// Blur applied to the reflection, in pixels.
     public var blurRadius: Float
 
+    /// Creates a reflection style.
     public init(
         planeY: Float = -0.75, opacity: Float = 0.3,
         fadeDistance: Float = 1.6, blurRadius: Float = 1.5
@@ -227,9 +299,13 @@ public struct Reflection3DStyle: Equatable, Sendable {
     }
 }
 
+/// A position in a 3D catalog layout, as `CatalogLayout3D` and
+/// `BookshelfLayout3D` compute it.
 public struct CatalogPose3D: Equatable, Sendable {
+    /// The transform for the item.
     public var transform: Transform3D
 
+    /// Creates a pose.
     public init(transform: Transform3D = Transform3D()) {
         self.transform = transform
     }
@@ -238,14 +314,22 @@ public struct CatalogPose3D: Equatable, Sendable {
 /// A reusable album/poster shelf that adds depth and fans neighboring items
 /// around a focused cover while keeping the unfocused catalog in one row.
 public struct CatalogLayout3D: Equatable, Sendable {
+    /// Distance between neighbouring items' centres, in world units.
     public var spacing: Float
+    /// How far the focused item comes forward, toward the camera.
     public var focusDepth: Float
+    /// How far the focused item rises.
     public var focusLift: Float
+    /// Scale of the focused item.
     public var focusScale: Float
+    /// Extra distance neighbours move aside to make room for the focused item.
     public var neighborSpread: Float
+    /// How far each further neighbour steps back, up to four steps.
     public var neighborDepthStep: Float
+    /// How much the neighbours turn toward the focused item.
     public var fanAngle: Angle3D
 
+    /// Creates a layout. Negative spacing and steps are clamped to zero.
     public init(
         spacing: Float = 1.6,
         focusDepth: Float = 0.55,
@@ -264,6 +348,7 @@ public struct CatalogLayout3D: Equatable, Sendable {
         self.fanAngle = fanAngle
     }
 
+    /// A shelf with the default spread and depth, tuned for album covers.
     public static func focusedShelf(
         spacing: Float = 1.6,
         focusDepth: Float = 0.55,
@@ -277,6 +362,8 @@ public struct CatalogLayout3D: Equatable, Sendable {
         )
     }
 
+    /// The pose of item `index` of `itemCount`, with `focusedIndex` focused, or no
+    /// item focused when it is `nil`. The row is centred on x = 0.
     public func pose(
         at index: Int, itemCount: Int, focusedIndex: Int?
     ) -> CatalogPose3D {
@@ -332,10 +419,14 @@ public struct BookshelfLayout3D: Equatable, Sendable {
     /// Yaw of a book in the stack. Large enough to read as a spine-on-shelf
     /// pose; small enough that the cover is still visible.
     public var bookAngle: Angle3D
+    /// How far the focused item comes forward, toward the camera.
     public var focusDepth: Float
+    /// How far the focused item rises.
     public var focusLift: Float
+    /// Scale of the focused item.
     public var focusScale: Float
 
+    /// Creates a layout.
     public init(
         stackOrigin: Float = 1.05,
         stackPitch: Float = 0.16,
@@ -354,6 +445,7 @@ public struct BookshelfLayout3D: Equatable, Sendable {
         self.focusScale = max(0.01, focusScale)
     }
 
+    /// Bookshelf stacks with the default depth and focus.
     public static func bookStacks(
         stackOrigin: Float = 1.05,
         stackPitch: Float = 0.16,
@@ -364,6 +456,9 @@ public struct BookshelfLayout3D: Equatable, Sendable {
         )
     }
 
+    /// The pose of item `index` of `itemCount`, with `focusedIndex` at x = 0 and
+    /// facing the camera. `itemHeight` stands the books on a shelf at y = 0;
+    /// pass 0 to centre them on y = 0 instead.
     public func pose(
         at index: Int, itemCount: Int, focusedIndex: Int?,
         itemHeight: Float = 0
@@ -390,6 +485,8 @@ public struct BookshelfLayout3D: Equatable, Sendable {
         return CatalogPose3D(transform: transform)
     }
 
+    /// A camera distance that keeps the camera outside the stacks, for
+    /// `CameraControls3D.minimumDistance`.
     public func recommendedMinimumCameraDistance(
         itemCount: Int, itemWidth: Float, itemHeight: Float,
         clearance: Float = 2.2
@@ -404,28 +501,44 @@ public struct BookshelfLayout3D: Equatable, Sendable {
     }
 }
 
+/// Content of a `Scene3D`: objects, lights and groups of them.
+///
+/// Unlike `View`, a 3D view has no body and no state of its own. It flattens
+/// into `SpatialElement`s the scene draws, and the `…3D` modifiers set their
+/// transform, material and behaviour.
 public protocol View3D {
+    /// The objects this view contributes, with its modifiers applied.
     func spatialElements() -> [SpatialElement]
 }
 
+/// Builds the content of a `Scene3D`, `ForEach3D` or `SpatialGroup3D` from
+/// 3D views, with `if`, `if`/`else` and `for` supported.
 @resultBuilder
 public enum View3DBuilder {
+    /// Flattens one 3D view into its elements.
     public static func buildExpression<V: View3D>(_ value: V) -> [SpatialElement] {
         value.spatialElements()
     }
+    /// Joins the elements of each statement, in order.
     public static func buildBlock(_ components: [SpatialElement]...) -> [SpatialElement] {
         components.flatMap { $0 }
     }
+    /// An `if` without `else`: its elements, or none.
     public static func buildOptional(_ component: [SpatialElement]?) -> [SpatialElement] {
         component ?? []
     }
+    /// The `if` branch of an `if`/`else`.
     public static func buildEither(first: [SpatialElement]) -> [SpatialElement] { first }
+    /// The `else` branch of an `if`/`else`.
     public static func buildEither(second: [SpatialElement]) -> [SpatialElement] { second }
+    /// A `for` loop: every iteration's elements, in order.
     public static func buildArray(_ components: [[SpatialElement]]) -> [SpatialElement] {
         components.flatMap { $0 }
     }
 }
 
+/// One drawable object or light, with everything the modifiers have set on it.
+/// Built by `Plane3D`, `Box3D` and the light views; not constructed directly.
 public struct SpatialElement: View3D {
     enum Geometry: Equatable {
         case plane(width: Float, height: Float)
@@ -447,8 +560,13 @@ public struct SpatialElement: View3D {
     public func spatialElements() -> [SpatialElement] { [self] }
 }
 
+/// Light that reaches every face equally, whatever way it points.
+///
+/// A scene with no ambient light gets one at intensity 0.3, and one with no
+/// directional light gets a default `DirectionalLight3D`.
 public struct AmbientLight3D: View3D {
     private var element: SpatialElement
+    /// Creates an ambient light. `intensity` below zero is treated as zero.
     public init(color: Color = Color(r: 1, g: 1, b: 1), intensity: Float = 0.3) {
         element = SpatialElement(
             id: AnyHashable("lavaui.ambient-light"),
@@ -458,8 +576,14 @@ public struct AmbientLight3D: View3D {
     public func spatialElements() -> [SpatialElement] { [element] }
 }
 
+/// Light arriving from one direction, like the sun: faces turned toward it are brighter.
 public struct DirectionalLight3D: View3D {
     private var element: SpatialElement
+    /// Creates a directional light.
+    /// - Parameters:
+    /// - direction: The way the light travels, from the light toward the scene.
+    /// - color: The light's colour.
+    /// - intensity: The light's strength; below zero is treated as zero.
     public init(
         direction: Vector3 = [-0.4, -0.7, -1],
         color: Color = Color(r: 1, g: 1, b: 1), intensity: Float = 0.9
@@ -473,8 +597,12 @@ public struct DirectionalLight3D: View3D {
     public func spatialElements() -> [SpatialElement] { [element] }
 }
 
+/// A flat rectangle in the x–y plane, facing +z.
 public struct Plane3D: View3D {
     private var element: SpatialElement
+    /// Creates a plane. `id` identifies the object across rebuilds, which is what
+    /// lets it animate between transforms and report hover and taps. Sizes are
+    /// in world units.
     public init<ID: Hashable>(
         id: ID, width: Float = 1, height: Float = 1, color: Color = .accent
     ) {
@@ -486,8 +614,13 @@ public struct Plane3D: View3D {
     public func spatialElements() -> [SpatialElement] { [element] }
 }
 
+/// A box. With a `Material3D`, the front face (+z) shows its picture and the
+/// other faces its edge colour; without one, every face is `color`.
 public struct Box3D: View3D {
     private var element: SpatialElement
+    /// Creates a box. `id` identifies the object across rebuilds, which is what
+    /// lets it animate between transforms and report hover and taps. Sizes are
+    /// in world units; the default is a thin card.
     public init<ID: Hashable>(
         id: ID, width: Float = 1, height: Float = 1, depth: Float = 0.08,
         color: Color = .accent
@@ -508,9 +641,11 @@ private struct ModifiedView3D<Base: View3D>: View3D {
 }
 
 extension View3D {
+    /// Replaces the transform.
     public func transform3D(_ value: Transform3D) -> some View3D {
         ModifiedView3D(base: self) { $0.transform = value }
     }
+    /// Places the object at item `index` of a focused shelf. See `CatalogLayout3D.pose(at:itemCount:focusedIndex:)`.
     public func catalog3D(
         index: Int, itemCount: Int, focusedIndex: Int?,
         layout: CatalogLayout3D = .focusedShelf()
@@ -519,6 +654,7 @@ extension View3D {
             at: index, itemCount: itemCount, focusedIndex: focusedIndex
         ).transform)
     }
+    /// Places the object at item `index` of a bookshelf. See `BookshelfLayout3D.pose(at:itemCount:focusedIndex:itemHeight:)`.
     public func catalog3D(
         index: Int, itemCount: Int, focusedIndex: Int?,
         itemHeight: Float = 0,
@@ -529,36 +665,49 @@ extension View3D {
             itemHeight: itemHeight
         ).transform)
     }
+    /// Replaces the position.
     public func position(_ value: Vector3) -> some View3D {
         ModifiedView3D(base: self) { $0.transform.position = value }
     }
+    /// Moves the object by the given amounts, in world units, from where it is.
     public func offset3D(x: Float = 0, y: Float = 0, z: Float = 0) -> some View3D {
         ModifiedView3D(base: self) {
             $0.transform.position.x += x; $0.transform.position.y += y
             $0.transform.position.z += z
         }
     }
+    /// Scales the object uniformly.
     public func scale3D(_ value: Float) -> some View3D {
         ModifiedView3D(base: self) { $0.transform.scale = [value, value, value] }
     }
+    /// Scales the object by a different amount along each axis.
     public func scale3D(_ value: Vector3) -> some View3D {
         ModifiedView3D(base: self) { $0.transform.scale = value }
     }
+    /// Replaces the rotation with `angle` about `axis`.
+    ///
+    /// Stored as Euler angles (`axis × angle`), which is exact for a rotation
+    /// about one of the coordinate axes — `[0, 1, 0]` and the like — and an
+    /// approximation for any other axis.
     public func rotation3D(angle: Angle3D, axis: Vector3) -> some View3D {
         ModifiedView3D(base: self) {
             $0.transform.rotation = [axis.x * angle.radians, axis.y * angle.radians,
                                      axis.z * angle.radians]
         }
     }
+    /// Animates changes to the object's transform. See `SpatialAnimation`.
     public func animation3D(_ animation: SpatialAnimation = .smooth()) -> some View3D {
         ModifiedView3D(base: self) { $0.animation = animation }
     }
+    /// Sets how the object's faces are coloured.
     public func material3D(_ material: Material3D) -> some View3D {
         ModifiedView3D(base: self) { $0.material = material }
     }
+    /// Draws a soft shadow under the object.
     public func shadow3D(_ style: Shadow3DStyle = Shadow3DStyle()) -> some View3D {
         ModifiedView3D(base: self) { $0.shadow = style }
     }
+    /// Draws a soft shadow under the object. See `Shadow3DStyle`.
     public func shadow3D(
         color: Color = Color(r: 0, g: 0, b: 0), radius: Float = 16,
         offsetX: Float = 7, offsetY: Float = 11, opacity: Float = 0.32
@@ -568,11 +717,13 @@ extension View3D {
             offsetY: offsetY, opacity: opacity
         ))
     }
+    /// Mirrors the object in a horizontal floor.
     public func reflection3D(
         _ style: Reflection3DStyle = Reflection3DStyle()
     ) -> some View3D {
         ModifiedView3D(base: self) { $0.reflection = style }
     }
+    /// Mirrors the object in a horizontal floor. See `Reflection3DStyle`.
     public func reflection3D(
         planeY: Float = -0.75, opacity: Float = 0.3,
         fadeDistance: Float = 1.6, blurRadius: Float = 1.5
@@ -582,19 +733,28 @@ extension View3D {
             fadeDistance: fadeDistance, blurRadius: blurRadius
         ))
     }
+    /// Calls `action` with `true` when the pointer moves onto the object and
+    /// `false` when it leaves.
     public func onHover3D(_ action: @escaping (Bool) -> Void) -> some View3D {
         ModifiedView3D(base: self) { $0.onHover = action }
     }
+    /// Calls `action` when the object is clicked. With camera controls on, a drag
+    /// of four pixels or more orbits instead and does not count as a click.
     public func onTap3D(_ action: @escaping () -> Void) -> some View3D {
         ModifiedView3D(base: self) { $0.onTap = action }
     }
 }
 
+/// One group of 3D views per element of a collection.
 public struct ForEach3D<Data: RandomAccessCollection, ID: Hashable, Content: View3D>: View3D {
+    /// The elements, one group each.
     public var data: Data
+    /// The key path identifying each element.
     public var id: KeyPath<Data.Element, ID>
+    /// Builds the group for one element.
     public var content: (Data.Element) -> Content
 
+    /// Builds one group of 3D views per element of `data`.
     public init(
         _ data: Data, id: KeyPath<Data.Element, ID>,
         @View3DBuilder content: @escaping (Data.Element) -> [SpatialElement]
@@ -608,8 +768,10 @@ public struct ForEach3D<Data: RandomAccessCollection, ID: Hashable, Content: Vie
     }
 }
 
+/// Several 3D views treated as one, so a modifier applies to all of them.
 public struct SpatialGroup3D: View3D {
     var elements: [SpatialElement]
+    /// Groups the views in `content`.
     public init(@View3DBuilder content: () -> [SpatialElement]) { elements = content() }
     init(_ elements: [SpatialElement]) { self.elements = elements }
     public func spatialElements() -> [SpatialElement] { elements }
@@ -640,14 +802,26 @@ private struct SpatialProjectedObject {
     var triangles: [SpatialProjectedVertex] { batches.flatMap(\.triangles) }
 }
 
+/// A viewport onto 3D content: cards, boxes and lights, drawn with depth,
+/// perspective and simple lighting, and optionally orbited with the pointer.
+///
+/// Objects are identified by the ids given to `Plane3D` and `Box3D`, so a
+/// rebuild with new transforms moves them rather than replacing them, and
+/// `.animation3D(_:)` eases the move.
 public struct Scene3D: PrimitiveView {
+    /// The camera the scene is seen through. With `cameraControls`, the pointer moves it.
     public var camera: Camera3D
+    /// How the pointer orbits, pans and zooms the camera, or `nil` for a fixed camera.
     public var cameraControls: CameraControls3D?
+    /// Width of the viewport.
     public var width: Dimension
+    /// Height of the viewport.
     public var height: Dimension
+    /// Share of the parent's leftover main-axis space the viewport takes.
     public var flexGrow: Float
     var elements: [SpatialElement]
 
+    /// Creates a scene. Every parameter matches the property of the same name.
     public init(
         camera: Camera3D = .perspective(), width: Dimension = .auto,
         height: Dimension = .auto, flexGrow: Float = 0,

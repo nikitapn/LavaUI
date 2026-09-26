@@ -6,11 +6,21 @@ import Foundation
 /// gate continuous work — live charts, `AnimationDriver` widgets — so a long
 /// scroll is not paying redraws while the section is collapsed.
 public struct Expand<Content: View>: View {
+    /// The header text, shown after the chevron.
     public var title: String
+    /// Whether the content is showing. Clicking the header toggles it.
     public var isExpanded: Binding<Bool>
+    /// Colours, chevrons, paddings and the reveal transition.
     public var style: ExpandStyle
+    /// What the disclosure shows while expanded.
     public var content: Content
 
+    /// Creates a disclosure.
+    /// - Parameters:
+    /// - title: The header text.
+    /// - isExpanded: Whether the content shows; the header toggles it.
+    /// - style: Colours and metrics; the default follows the theme.
+    /// - content: What shows while expanded. It is not mounted while collapsed.
     public init(
         _ title: String,
         isExpanded: Binding<Bool>,
@@ -59,18 +69,30 @@ public struct Expand<Content: View>: View {
 
 /// Colours and metrics for an `Expand` disclosure.
 public struct ExpandStyle {
+    /// Header glyph while collapsed.
     public var collapsedChevron: String
+    /// Header glyph while expanded.
     public var expandedChevron: String
+    /// Colour of the header text.
     public var titleColor: Color
+    /// Fill inside the outline.
     public var background: Color
+    /// Colour of the outline.
     public var border: Color
+    /// Fill under the header while the pointer is over it.
     public var hoverFill: Color
+    /// Corner radius of the outline, in points.
     public var cornerRadius: Float
+    /// Width of the outline, in points.
     public var borderWidth: Float
+    /// Space around the header text, in points.
     public var headerPadding: Float
+    /// Space around the content, in points.
     public var contentPadding: Float
+    /// How the content appears and disappears.
     public var transition: Transition
 
+    /// Creates a style. Colours and radius left `nil` come from the current theme.
     public init(
         collapsedChevron: String = "›",
         // U+02C7 caron, not U+02C5 down arrowhead: the latter is absent from

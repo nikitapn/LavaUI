@@ -17,13 +17,19 @@ import Foundation
 /// stderr about once a second, so a drag or a scroll can be watched live rather
 /// than reconstructed from a trace afterwards.
 public enum EditorProbe {
+    /// Whether the probe is on: `LAVA_EDITOR_PROBE=1` in the environment at launch.
     public static let isEnabled: Bool =
         ProcessInfo.processInfo.environment["LAVA_EDITOR_PROBE"] == "1"
 
+    /// One span's totals over a reporting window.
     public struct Sample {
+        /// The span's name.
         public var name: String
+        /// How many times it ran.
         public var calls: Int
+        /// Time spent in it altogether, in milliseconds.
         public var totalMs: Double
+        /// The slowest single call, in milliseconds.
         public var maxMs: Double
         /// Mean buffer offset the calls were working at, or nil when the span
         /// does not depend on a position. This is the column that says whether

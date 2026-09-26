@@ -10,12 +10,16 @@ import Foundation
 /// names deliberately mirror `PositionedGlyph` so everything doing caret and
 /// advance arithmetic reads unchanged.
 public struct ShapedGlyph: Equatable, Sendable {
+    /// Glyph index within the face named by `fontId`.
     public var glyphId: UInt32
     /// Byte offset into the shaped string (HarfBuzz cluster), rebased onto the
     /// parent string when this glyph came from a substituted run.
     public var cluster: UInt32
+    /// Pen position of the glyph relative to the run's origin, in pixels.
     public var x: Float
+    /// Vertical offset of the glyph from the baseline, in pixels.
     public var y: Float
+    /// How far the pen moves after this glyph, in pixels.
     public var advance: Float
     /// Engine face id, as registered by `registerWithEngine`.
     public var fontId: UInt32
@@ -78,17 +82,21 @@ public enum FontHinting: UInt32, Sendable {
 public struct FontRasterFlags: Equatable, Sendable {
     private static let forceAutohintBit: UInt32 = 0x10
 
+    /// How the face is fitted to the pixel grid.
     public var hinting: FontHinting
     /// Force FreeType's autohinter over the font's own bytecode.
     public var forceAutohint: Bool
 
+    /// Creates flags from a hinting mode and whether to force the autohinter.
     public init(hinting: FontHinting = .normal, forceAutohint: Bool = false) {
         self.hinting = hinting
         self.forceAutohint = forceAutohint
     }
 
+    /// The font's own hinting, no forced autohinter.
     public static let `default` = FontRasterFlags()
 
+    /// The packed `canvas::RasterFlags` word the renderer reads.
     public var raw: UInt32 {
         hinting.rawValue | (forceAutohint ? Self.forceAutohintBit : 0)
     }
@@ -103,11 +111,17 @@ public struct FontRasterFlags: Equatable, Sendable {
 /// everything except the path, and disagree about the path on purpose: this
 /// side needs a name to look up, that side needs a fact to trust.
 public final class UIFont: @unchecked Sendable {
+    /// The font file.
     public let path: String
+    /// The size, in pixels.
     public let pixelSize: Float
     /// Which face inside a `.ttc`/`.otc` collection. 0 for a plain font file.
     public let faceIndex: UInt32
+    /// Hinting selection the face is rasterized with.
     public let raster: FontRasterFlags
+    /// A string naming path, face, size and hinting together, used as this
+    /// process's cache key for the face. Not the renderer's identity, which
+    /// hashes the file's contents.
     public let identity: String
 
     /// The size as FreeType and HarfBuzz both count it: pixels times 64.
@@ -121,8 +135,11 @@ public final class UIFont: @unchecked Sendable {
     /// Move-only C++ font; only touched on the UI thread.
     private var raw: canvas.Font
 
+    /// Distance from one baseline to the next, in pixels.
     public private(set) var lineHeight: Float = 16
+    /// Distance from the baseline up to the top of the tallest glyphs, in pixels.
     public private(set) var ascent: Float = 12
+    /// Distance from the baseline down to the bottom of the lowest glyphs, in pixels.
     public private(set) var descent: Float = 4
 
     /// Id of this face in the engine's font registry. Stamped into every
@@ -148,6 +165,12 @@ public final class UIFont: @unchecked Sendable {
     private var ellipsisCache: [EllipsisKey: String] = [:]
     private static let ellipsisCacheLimit = 4096
 
+    /// Loads one face of a font file. Returns `nil` if the file cannot be loaded.
+    /// - Parameters:
+    /// - path: The font file.
+    /// - pixelSize: The size, in pixels. Stored at 1/64 pixel precision.
+    /// - faceIndex: Which face of a collection; 0 for a single-face file.
+    /// - raster: Hinting selection.
     public init?(
         path: String, pixelSize: Float = 16, faceIndex: UInt32 = 0,
         raster: FontRasterFlags = .default
@@ -351,6 +374,7 @@ public final class UIFont: @unchecked Sendable {
         return nil
     }
 
+    /// The size of `text` shaped on a single line, in pixels.
     public func measure(_ text: String) -> (width: Float, height: Float) {
         let m = raw.measure(std.string(text))
         return (m.width, m.height)
@@ -844,12 +868,18 @@ public struct ContentScale: Equatable, Sendable {
     /// Multipliers of the bootstrap base size (e.g. 16 → 12…32).
     public static let defaultMultipliers: [Float] = [0.75, 1.0, 1.25, 1.5, 1.75, 2.0]
 
+    /// The zoom steps, as multipliers of `basePixelSize`, smallest first.
     public let multipliers: [Float]
     /// Index into `multipliers` (clamped).
     public private(set) var index: Int
     /// Face size at multiplier 1.0.
     public let basePixelSize: Float
 
+    /// Creates a scale.
+    /// - Parameters:
+    /// - basePixelSize: The face size at multiplier 1.
+    /// - multipliers: The zoom steps, smallest first.
+    /// - index: The starting step, clamped; `nil` starts at the 1.0 step, or the middle one if there is none.
     public init(
         basePixelSize: Float = 16,
         multipliers: [Float] = ContentScale.defaultMultipliers,
@@ -866,6 +896,7 @@ public struct ContentScale: Equatable, Sendable {
         }
     }
 
+    /// The active step's multiplier.
     public var multiplier: Float { multipliers[index] }
 
     /// Integer FT pixel size for the active step (min 1).
@@ -873,9 +904,12 @@ public struct ContentScale: Equatable, Sendable {
         max(1, (basePixelSize * multiplier).rounded())
     }
 
+    /// Whether there is a larger step.
     public var canZoomIn: Bool { index < multipliers.count - 1 }
+    /// Whether there is a smaller step.
     public var canZoomOut: Bool { index > 0 }
 
+    /// Moves one step larger. Returns `false` at the largest step.
     @discardableResult
     public mutating func zoomIn() -> Bool {
         guard canZoomIn else { return false }
@@ -883,6 +917,7 @@ public struct ContentScale: Equatable, Sendable {
         return true
     }
 
+    /// Moves one step smaller. Returns `false` at the smallest step.
     @discardableResult
     public mutating func zoomOut() -> Bool {
         guard canZoomOut else { return false }
@@ -890,6 +925,8 @@ public struct ContentScale: Equatable, Sendable {
         return true
     }
 
+    /// Returns to the 1.0 step (or the first, if there is none). Returns `false`
+    /// if it was already there.
     @discardableResult
     public mutating func reset() -> Bool {
         let one = multipliers.firstIndex(where: { abs($0 - 1) < 0.001 }) ?? 0
@@ -914,9 +951,12 @@ public struct ContentScale: Equatable, Sendable {
 /// never prints braille never loads Iosevka; one that never prints Chinese
 /// never loads Noto CJK.
 public struct FontFallback: Sendable, Equatable {
+    /// The font file.
     public let path: String
+    /// The size to load it at, in pixels.
     public let pixelSize: Float
 
+    /// Names a fallback face; nothing is read until a character needs it.
     public init(path: String, pixelSize: Float) {
         self.path = path
         self.pixelSize = pixelSize
@@ -1086,8 +1126,11 @@ public enum FontStore {
 /// Keyed on (text, font, quantized width, mode). Yoga measure is chatty;
 /// this is the main Phase 4 perf lever.
 public final class TextLayoutCache: @unchecked Sendable {
+    /// The cache text layout goes through.
     public static let shared = TextLayoutCache()
 
+    /// What a cached layout is looked up by: the text, the font's `identity`,
+    /// the available width and the Yoga measure mode.
     public struct Key: Hashable {
         var text: String
         var fontId: String
@@ -1096,31 +1139,46 @@ public final class TextLayoutCache: @unchecked Sendable {
         var mode: Int
     }
 
+    /// A measured text layout.
     public struct Entry {
+        /// Width of the widest line, in pixels.
         public var width: Float
+        /// Total height of the lines, in pixels.
         public var height: Float
+        /// The text broken into the lines it lays out as.
         public var lines: [String]
     }
 
     private var map: [Key: Entry] = [:]
+    /// Lookups answered from the cache since the last `resetStats()`.
     public private(set) var hits: Int = 0
+    /// Lookups that had to measure since the last `resetStats()`.
     public private(set) var misses: Int = 0
 
+    /// Zeroes `hits` and `misses`.
     public func resetStats() {
         hits = 0
         misses = 0
     }
 
+    /// Drops every cached layout and zeroes the statistics.
     public func clear() {
         map.removeAll(keepingCapacity: true)
         resetStats()
     }
 
+    /// Fraction of lookups answered from the cache; 1 when there have been none.
     public var hitRate: Double {
         let t = hits + misses
         return t == 0 ? 1 : Double(hits) / Double(t)
     }
 
+    /// Measures and wraps `text`, from the cache when this exact question was
+    /// asked before.
+    ///
+    /// `mode` is the Yoga measure mode: 0 undefined (one line per `\n`,
+    /// `availWidth` ignored), 1 exactly and 2 at most (wrap to `availWidth`).
+    /// Widths are compared at half-pixel precision.
     public func layout(
         font: UIFont,
         text: String,

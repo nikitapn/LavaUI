@@ -51,20 +51,25 @@ public enum AppSettings {
         return configRoot(for: name)
     }
 
+    /// The settings file itself: `directoryURL` followed by `settings.json`.
     public static var fileURL: URL {
         directoryURL.appendingPathComponent("settings.json")
     }
 
     // MARK: - Scalars
 
+    /// The string stored under `key`, or `nil` if the key is missing or holds another type.
     public static func string(forKey key: String) -> String? {
         value(forKey: key) as? String
     }
 
+    /// Stores `value` under `key` and writes the file.
     public static func set(_ value: String, forKey key: String) {
         setValue(value, forKey: key)
     }
 
+    /// The integer stored under `key`, or `nil` if the key is missing or holds something else.
+    /// Numbers stored as doubles are truncated and numeric strings are parsed.
     public static func int(forKey key: String) -> Int? {
         switch value(forKey: key) {
         case let i as Int: return i
@@ -75,10 +80,13 @@ public enum AppSettings {
         }
     }
 
+    /// Stores `value` under `key` and writes the file.
     public static func set(_ value: Int, forKey key: String) {
         setValue(value, forKey: key)
     }
 
+    /// The Boolean stored under `key`, or `nil` if the key is missing or holds something else.
+    /// Also accepts numbers and the strings `true`/`false`, `1`/`0` and `yes`/`no`.
     public static func bool(forKey key: String) -> Bool? {
         switch value(forKey: key) {
         case let b as Bool: return b
@@ -93,10 +101,13 @@ public enum AppSettings {
         }
     }
 
+    /// Stores `value` under `key` and writes the file.
     public static func set(_ value: Bool, forKey key: String) {
         setValue(value, forKey: key)
     }
 
+    /// The number stored under `key`, or `nil` if the key is missing or holds something else.
+    /// Integers are widened and numeric strings are parsed.
     public static func double(forKey key: String) -> Double? {
         switch value(forKey: key) {
         case let d as Double: return d
@@ -107,12 +118,15 @@ public enum AppSettings {
         }
     }
 
+    /// Stores `value` under `key` and writes the file.
     public static func set(_ value: Double, forKey key: String) {
         setValue(value, forKey: key)
     }
 
     // MARK: - Codable
 
+    /// Decodes the value stored under `key` as `T`, or returns `nil` when the key
+    /// is missing or does not decode.
     public static func value<T: Decodable>(forKey key: String, as type: T.Type) -> T? {
         lock.lock()
         ensureLoadedLocked()
@@ -135,6 +149,9 @@ public enum AppSettings {
         return try? JSONDecoder().decode(T.self, from: data)
     }
 
+    /// Stores any `Encodable` value under `key` as JSON and writes the file.
+    /// Strings and numbers are stored as plain JSON scalars. A value that does not
+    /// encode is silently dropped.
     public static func set<T: Encodable>(_ value: T, forKey key: String) {
         if let s = value as? String {
             setValue(s, forKey: key)
@@ -160,6 +177,7 @@ public enum AppSettings {
 
     // MARK: - Bookkeeping
 
+    /// Deletes `key` and writes the file. Does nothing if the key is not there.
     public static func remove(_ key: String) {
         lock.lock()
         ensureLoadedLocked()
@@ -168,6 +186,7 @@ public enum AppSettings {
         lock.unlock()
     }
 
+    /// Deletes every key and writes an empty settings file.
     public static func removeAll() {
         lock.lock()
         ensureLoadedLocked()

@@ -7,17 +7,24 @@ import Foundation
 /// worse than no match at all — it would highlight, and navigate to, text that
 /// has moved.
 public struct TextSearch: Equatable {
+    /// What was last searched for; empty when there is no search.
     public private(set) var query: String = ""
+    /// Whether the last search matched case exactly.
     public private(set) var caseSensitive: Bool = false
     /// Character offsets over the whole buffer.
     public private(set) var matches: [Range<Int>] = []
+    /// Index into `matches` of the current match, or `nil` when there are none.
     public private(set) var currentIndex: Int?
 
+    /// Creates an inactive search.
     public init() {}
 
+    /// Whether a search is in effect.
     public var isActive: Bool { !query.isEmpty }
+    /// How many matches there are.
     public var count: Int { matches.count }
 
+    /// The current match's range, or `nil` when there are none.
     public var current: Range<Int>? {
         guard let i = currentIndex, matches.indices.contains(i) else { return nil }
         return matches[i]
@@ -38,6 +45,7 @@ public struct TextSearch: Equatable {
             : (matches.firstIndex { $0.lowerBound >= caret } ?? 0)
     }
 
+    /// Ends the search, dropping every match.
     public mutating func clear() {
         query = ""
         matches = []
@@ -50,6 +58,7 @@ public struct TextSearch: Equatable {
         currentIndex = ((currentIndex ?? -1) + 1) % matches.count
     }
 
+    /// Moves to the previous match, wrapping round to the last from the first.
     public mutating func previous() {
         guard !matches.isEmpty else { return }
         let i = currentIndex ?? 0

@@ -24,6 +24,8 @@ import Observation
 /// a dependency, so this is both the storage *and* the change source.
 @Observable
 public final class StateStorage<Value> {
+    /// The stored value. Reading it inside a `body` makes that body depend on it;
+    /// writing it re-runs the bodies that read it.
     public var value: Value
     init(_ value: Value) { self.value = value }
 }
@@ -44,10 +46,13 @@ final class StateBox<Value> {
 public struct State<Value> {
     let box: StateBox<Value>
 
+    /// Creates the state with its initial value. Used only the first time the view
+    /// mounts; after that the stored value wins.
     public init(wrappedValue: Value) {
         box = StateBox(StateStorage(wrappedValue))
     }
 
+    /// The current value. Setting it invalidates the bodies that read it.
     public var wrappedValue: Value {
         get { box.storage.value }
         nonmutating set { box.storage.value = newValue }
@@ -96,10 +101,13 @@ public struct DrawState<Value> {
 
     let box: Box
 
+    /// Creates the state with its initial value. Used only the first time the view
+    /// mounts; after that the stored value wins.
     public init(wrappedValue: Value) {
         box = Box(Storage(wrappedValue))
     }
 
+    /// The current value. Setting it asks for a redraw, never a body pass.
     public var wrappedValue: Value {
         get { box.storage.value }
         nonmutating set {
@@ -115,11 +123,14 @@ public struct Binding<Value> {
     private let get: () -> Value
     private let set: (Value) -> Void
 
+    /// Creates a binding from a getter and a setter.
     public init(get: @escaping () -> Value, set: @escaping (Value) -> Void) {
         self.get = get
         self.set = set
     }
 
+    /// The value, read and written through the binding's closures. A write also
+    /// asks for a redraw.
     public var wrappedValue: Value {
         get { get() }
         nonmutating set {
@@ -142,6 +153,7 @@ public struct Binding<Value> {
         }
     }
 
+    /// The binding itself, so `$binding` can be passed on.
     public var projectedValue: Binding<Value> { self }
 
     /// A binding that never changes. For previews and for controls that are
@@ -207,6 +219,7 @@ enum StateTransfer {
 /// re-run every `body` and every `Mirror`-based state transplant sixty times a
 /// second just to change a pixel value.
 public enum InvalidationLevel: Int, Comparable, Sendable {
+    /// Nothing to do.
     case none = 0
     /// Re-emit the draw list. Layout and view values are unchanged.
     case redraw = 1
@@ -215,6 +228,7 @@ public enum InvalidationLevel: Int, Comparable, Sendable {
     /// Recompute bodies, reconcile, lay out, emit.
     case body = 3
 
+    /// Orders levels by how much work they imply.
     public static func < (a: Self, b: Self) -> Bool { a.rawValue < b.rawValue }
 }
 
@@ -227,6 +241,7 @@ public enum InvalidationLevel: Int, Comparable, Sendable {
 /// `ViewInvalidation` can hold a dirty node without depending on its
 /// generic view type.
 public protocol BodyRecomputable: AnyObject {
+    /// Re-runs this node's `body` against the view value it already holds.
     func recomputeBody()
 
     /// Which window this node's tree belongs to, captured when it mounted.
@@ -241,6 +256,7 @@ public protocol BodyRecomputable: AnyObject {
 }
 
 extension BodyRecomputable {
+    /// No scope of its own: fall back to the ambient window.
     public var invalidationScope: WindowScope? { nil }
 }
 
@@ -334,7 +350,9 @@ public enum ViewInvalidation {
         return Array(scope.dirtyBodyNodes.values)
     }
 
+    /// Whether the current window has any invalidation pending.
     public static var isDirty: Bool { WindowScope.currentOrMain.pending != .none }
+    /// How much work the current window has pending.
     public static var level: InvalidationLevel { WindowScope.currentOrMain.pending }
 }
 
@@ -348,6 +366,7 @@ public enum ViewInvalidation {
 public enum FrameScheduler {
     nonisolated(unsafe) private static var deadline: Double?
 
+    /// Seconds since boot, on a monotonic clock. The time base for every deadline here.
     public static func now() -> Double {
         Double(DispatchTime.now().uptimeNanoseconds) / 1_000_000_000
     }
@@ -367,6 +386,7 @@ public enum FrameScheduler {
         return max(0, at - now())
     }
 
+    /// Whether some wake-up has been requested and not yet consumed.
     public static var hasPendingWake: Bool { deadline != nil }
 
     // ─── Waking up *with* a frame ────────────────────────────────────────
@@ -421,6 +441,7 @@ public enum FrameScheduler {
 public enum FrameTasks {
     nonisolated(unsafe) private static var queue: [() -> Void] = []
 
+    /// Runs `work` on the main thread after the current frame has been presented.
     public static func after(_ work: @escaping () -> Void) {
         queue.append(work)
         // The loop may be about to block forever in `pumpEvents`; without this
@@ -438,6 +459,7 @@ public enum FrameTasks {
         for work in pending { work() }
     }
 
+    /// Whether any deferred work is waiting to run.
     public static var hasPending: Bool { !queue.isEmpty }
 }
 

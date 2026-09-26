@@ -2,16 +2,22 @@ import Foundation
 
 /// A value that can be interpolated between two endpoints.
 public protocol Animatable {
+    /// The value a fraction `t` of the way from `from` to `to`.
+    ///
+    /// `t` is 0 at `from` and 1 at `to`. It can leave that range — a spring
+    /// overshoots — and implementations should extrapolate rather than clamp.
     static func interpolate(_ from: Self, _ to: Self, _ t: Float) -> Self
 }
 
 extension Float: Animatable {
+    /// Linear interpolation.
     public static func interpolate(_ from: Float, _ to: Float, _ t: Float) -> Float {
         from + (to - from) * t
     }
 }
 
 extension Color: Animatable {
+    /// Interpolates each channel, alpha included, linearly in sRGB.
     public static func interpolate(_ from: Color, _ to: Color, _ t: Float) -> Color {
         Color(
             r: from.r + (to.r - from.r) * t,
@@ -22,11 +28,14 @@ extension Color: Animatable {
     }
 }
 
+/// How an animation's progress maps onto time.
 public enum AnimationCurve: Equatable, Sendable {
+    /// Constant speed from start to end.
     case linear
     /// Fast out, settling in — the right default for a press or hover, where
     /// the response should feel immediate and the settle should not.
     case easeOut
+    /// Slow at both ends, fastest in the middle.
     case easeInOut
     /// A damped harmonic response. `response` is the undamped period in
     /// seconds; lower values react faster. Values below one for
@@ -75,19 +84,23 @@ public enum AnimationCurve: Equatable, Sendable {
 /// whole tree — `Mirror`-based state transplant included — sixty times a second
 /// to change a colour.
 public struct Animated<T: Animatable> {
+    /// The value to draw this frame.
     public private(set) var current: T
+    /// The value being animated toward; equal to `current` once the animation settles.
     public private(set) var target: T
     private var origin: T
     private var startedAt: Double = 0
     private var duration: Double = 0
     private var curve: AnimationCurve = .easeOut
 
+    /// Starts at rest on `value`.
     public init(_ value: T) {
         current = value
         target = value
         origin = value
     }
 
+    /// Whether an animation is in flight.
     public var isAnimating: Bool { duration > 0 }
 
     /// Starts moving toward `value`. Retargeting mid-flight restarts from
@@ -189,6 +202,10 @@ public enum AnimationDriver {
     /// Steppers keyed by node, returning whether that node is still animating.
     nonisolated(unsafe) private static var active: [NodeID: Entry] = [:]
 
+    /// Registers `step` to run once per frame for node `id`, replacing any
+    /// stepper it already had. `step` returns `false` once the node has settled,
+    /// which removes it. Also asks for the next frame, so an animation started
+    /// during mount or reconcile does not wait for unrelated input.
     public static func register(_ id: NodeID, step: @escaping () -> Bool) {
         active[id] = Entry(step: step, scope: .currentOrMain)
         // Registering has to ask for the next frame itself, because `tick()`
@@ -200,6 +217,7 @@ public enum AnimationDriver {
         FrameScheduler.requestWake(in: 1.0 / 60.0)
     }
 
+    /// Removes node `id`'s stepper, if it has one. Call when the node goes away.
     public static func unregister(_ id: NodeID) { active[id] = nil }
 
     /// Drops every animation belonging to a closing window. By scope rather
@@ -209,6 +227,7 @@ public enum AnimationDriver {
         active = active.filter { $0.value.scope !== scope }
     }
 
+    /// Whether any node still has an animation in flight.
     public static var isAnimating: Bool { !active.isEmpty }
 
     /// Call once after a frame has emitted, i.e. after `NodeVisibility` was

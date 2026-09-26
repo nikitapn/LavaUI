@@ -91,6 +91,8 @@ extension GPUResourceHost {
         registerImage(path: path, maxPixelSize: maxPixelSize, turn: .none)
     }
 
+    /// Registers an image off the calling thread with no turn; `completion` runs
+    /// on the main queue. See `registerImageAsync(path:maxPixelSize:turn:completion:)`.
     public func registerImageAsync(
         path: String, maxPixelSize: UInt32,
         completion: @escaping @Sendable (UIImage?) -> Void

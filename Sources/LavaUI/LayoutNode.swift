@@ -10,8 +10,11 @@ import Observation
 // - Fragments (TupleView / Either / Optional / ForEach / Composite) have
 //   yoga == nil and splice children into the parent flex container.
 
+/// The main axis of a stack: the direction its children are laid out in.
 public enum FlexDirection {
+    /// Children left to right.
     case row
+    /// Children top to bottom.
     case column
 
     var yoga: YGFlexDirection {
@@ -33,13 +36,20 @@ extension StackAlignment {
     }
 }
 
+/// Where one node landed in the last layout pass, in window coordinates.
 public struct LayoutFrame: Sendable, Equatable {
+    /// The node's label: its type, or the name it was given.
     public var label: String
+    /// Left edge, in window pixels.
     public var x: Float
+    /// Top edge, in window pixels.
     public var y: Float
+    /// Width, in pixels.
     public var w: Float
+    /// Height, in pixels.
     public var h: Float
 
+    /// The label, position and size on one line, for logs.
     public var description: String {
         String(format: "%@  (%.1f, %.1f) %.1f×%.1f", label, x, y, w, h)
     }
@@ -47,13 +57,21 @@ public struct LayoutFrame: Sendable, Equatable {
 
 // MARK: - Node protocol
 
+/// A node in the retained tree: what a view mounts into and is reconciled against.
+///
+/// Views are rebuilt every frame; nodes persist, own the Yoga layout box and
+/// the visual state, and keep their `id` for as long as they live. Apps meet
+/// nodes through `PrimitiveMount` and the layout queries on `LayoutHost`.
 public protocol AnyViewNode: AnyObject {
+    /// This node's identity, stable for its whole life.
     var id: NodeID { get }
+    /// A short name for the node, shown in the layout tree and dumps.
     var label: String { get }
     /// Non-nil for layout boxes (stacks, text, spacer…). Nil for fragments.
     var yoga: YGNodeRef? { get }
     /// Direct retained children (not flattened).
     var childNodes: [any AnyViewNode] { get }
+    /// True while this node's `body` is being re-evaluated. Always false for primitives.
     var needsBodyRecompute: Bool { get set }
 
     /// Author-assigned agent id (`.agentId("…")`). Stable across process runs.
@@ -64,6 +82,7 @@ public protocol AnyViewNode: AnyObject {
     /// structural `sid` fallbacks for untagged nodes.
     var structuralKey: String? { get set }
 
+    /// Appends this node's frame, and its subtree's, to `into`, offset by the origin.
     func collectFrames(originX: Float, originY: Float, into: inout [LayoutFrame])
 }
 
@@ -1918,18 +1937,25 @@ public final class LayoutHost {
     private var root: (any AnyViewNode)?
     /// Generations of setRoot — for tests / dumps.
     public private(set) var reconcileCount = 0
+    /// How many times `setRoot` mounted a fresh tree rather than reconciling.
     public private(set) var mountCount = 0
 
     /// Committed layout from the last `calculateLayout` (hit-test / queries read this).
     public private(set) var lastFrames: [LayoutFrame] = []
+    /// The width passed to the last `calculateLayout(width:height:)`.
     public private(set) var lastLayoutWidth: Float = 0
+    /// The height passed to the last `calculateLayout(width:height:)`.
     public private(set) var lastLayoutHeight: Float = 0
     private var layoutValid = false
 
+    /// Creates a host with no tree.
     public init() {}
 
+    /// The root node's id, or `nil` before the first `setRoot`.
     public var rootID: NodeID? { root?.id }
 
+    /// Makes `view` the root: reconciled against the current tree when there is
+    /// one, mounted fresh otherwise. The next layout pass lays it out.
     public func setRoot<V: View>(_ view: V) {
         if let existing = root {
             root = ViewGraph.reconcile(existing, with: view)
@@ -2075,6 +2101,7 @@ public final class LayoutHost {
         }
     }
 
+    /// Lays out at `width` × `height` and prints every frame to standard error.
     public func dumpFrames(width: Float, height: Float) {
         let frames = calculateLayout(width: width, height: height)
         FileHandle.standardError.write(
@@ -2092,6 +2119,7 @@ public final class LayoutHost {
         FileHandle.standardError.write(Data("--- end layout ---\n".utf8))
     }
 
+    /// The root of the retained tree, or `nil` before the first `setRoot`.
     public var rootNode: (any AnyViewNode)? { root }
 
     /// Frames from the most recent layout, for frames that only redraw.

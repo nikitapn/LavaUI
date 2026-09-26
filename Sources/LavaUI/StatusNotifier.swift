@@ -9,11 +9,17 @@ import Observation
 /// list of `TrayItem`s with uploaded textures, and forward clicks.
 @Observable
 public final class StatusNotifierTray {
+    /// One tray icon, ready to draw.
     public struct TrayItem: Identifiable {
+        /// The item's identity, which is its `key`.
         public var id: String { key }
+        /// `uniqueName/objectPath` on the session bus; what every call about the item takes.
         public var key: String
+        /// The item's tooltip or display title.
         public var title: String
+        /// `"Passive"`, `"Active"` or `"NeedsAttention"`.
         public var status: String
+        /// Whether the item says a left click should open its menu (`ItemIsMenu`).
         public var isMenu: Bool
         /// Exports a DBusMenu the panel can draw.
         public var hasMenu: Bool
@@ -30,9 +36,14 @@ public final class StatusNotifierTray {
     /// Last uploaded pixmap key → texture, so we do not re-upload every poll.
     private var pixmapKeys: [String: String] = [:]
 
+    /// Whether the tray is live: owning `org.kde.StatusNotifierWatcher`, or
+    /// following the one another desktop owns.
     public private(set) var isServing = false
+    /// The tray items, in the order the host lists them.
     public private(set) var items: [TrayItem] = []
 
+    /// Starts the tray through `editor`: owns the watcher name if it is free,
+    /// follows the existing one otherwise.
     public init(editor: Editor) {
         self.editor = editor
         isServing = editor.statusNotifierStart()
@@ -112,9 +123,11 @@ public final class StatusNotifierTray {
     /// One at a time: a tray menu is a popup, and the pointer that opens a
     /// second one closed the first.
     public private(set) var openMenuKey: String?
+    /// Rows of the open menu. Empty until the applet answers, which `poll()` picks up.
     public private(set) var menuEntries: [MenuEntry] = []
     private var menuRevision: UInt64 = 0
 
+    /// Opens `item`'s menu. Returns `false` if it exports none — activate it instead.
     @discardableResult
     public func openMenu(_ item: TrayItem) -> Bool {
         guard item.hasMenu, editor.statusNotifierOpenMenu(item.key) else {
@@ -128,6 +141,7 @@ public final class StatusNotifierTray {
         return true
     }
 
+    /// Closes the open tray menu. The applet is not told.
     public func closeMenu() {
         guard openMenuKey != nil else { return }
         openMenuKey = nil
@@ -155,6 +169,7 @@ public final class StatusNotifierTray {
         )
     }
 
+    /// Sends the item `delta` vertical scroll steps.
     public func scroll(_ item: TrayItem, delta: Int32) {
         editor.statusNotifierScroll(item.key, delta: delta)
     }

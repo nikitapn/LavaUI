@@ -42,6 +42,7 @@ public enum PerfCounters {
     /// and over shows up here long before it shows up as a slow frame.
     nonisolated(unsafe) public static var imageEvictions = 0
 
+    /// Zeroes every counter. Call at the start of the span being measured.
     public static func reset() {
         textShapes = 0
         textShapeHits = 0

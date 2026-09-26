@@ -21,8 +21,11 @@ import Foundation
 /// and an app inventing a fourth would be inventing a window state nothing
 /// else in the desktop understands.
 public enum WindowControlKind: Sendable, Equatable, CaseIterable {
+    /// Close the window. Closing the one the app started with ends the app.
     case close
+    /// Minimize the window.
     case minimize
+    /// Maximize the window, or restore it if it already is.
     case maximize
 }
 
@@ -156,8 +159,11 @@ public struct WindowControlsStyle: Sendable, Equatable {
     public var size: Float
     /// Gap between controls.
     public var spacing: Float
+    /// Fill of the close control.
     public var close: Color
+    /// Fill of the minimize control.
     public var minimize: Color
+    /// Fill of the maximize control.
     public var maximize: Color
     /// Fill while the pointer is down on a control. A darkened version of the
     /// control's own colour reads as "pressed" without a second palette.
@@ -168,6 +174,7 @@ public struct WindowControlsStyle: Sendable, Equatable {
     /// suits a dense toolbar where the cluster is small.
     public var glyphOnHoverOnly: Bool
 
+    /// Creates a style. The defaults are red, amber and green circles 12 points across.
     public init(
         size: Float = 12,
         spacing: Float = 8,
@@ -275,12 +282,15 @@ enum WindowControlPainter {
 /// close button is how a user changes their mind, and a window that closed on
 /// the press would not let them.
 public struct WindowControlButton: View {
+    /// Which control this is.
     public var kind: WindowControlKind
+    /// Size, colours and glyph behaviour.
     public var style: WindowControlsStyle
 
     @DrawState private var hovered = false
     @DrawState private var pressed = false
 
+    /// Creates one control.
     public init(_ kind: WindowControlKind, style: WindowControlsStyle = WindowControlsStyle()) {
         self.kind = kind
         self.style = style
@@ -300,12 +310,15 @@ public struct WindowControlButton: View {
 /// resized simply does not list `.maximize` rather than showing a button that
 /// lies.
 public struct WindowControls: View {
+    /// Which controls to show, in order.
     public var kinds: [WindowControlKind]
+    /// Size, colours and glyph behaviour.
     public var style: WindowControlsStyle
 
     @DrawState private var hovered = false
     @DrawState private var pressed: WindowControlKind?
 
+    /// Creates the cluster. List only the controls the window supports.
     public init(
         _ kinds: [WindowControlKind] = [.close, .minimize, .maximize],
         style: WindowControlsStyle = WindowControlsStyle()
@@ -387,6 +400,7 @@ private func control(
 /// somewhere this app will never hear about. That is why nothing here tracks a
 /// drag — there is none to track on this side.
 public struct WindowDragArea<Content: View>: PrimitiveView {
+    /// The view that drags the window.
     public var content: Content
     /// Whether a double-click toggles maximize, the way a title bar does.
     public var doubleClickMaximizes: Bool
@@ -396,6 +410,7 @@ public struct WindowDragArea<Content: View>: PrimitiveView {
     /// chrome should not have its own idea of what a double-click is.
     private static var doubleClickInterval: Double { 0.4 }
 
+    /// Makes `content` a handle that moves the window. Usually spelled `.windowDrag()`.
     public init(content: Content, doubleClickMaximizes: Bool = true) {
         self.content = content
         self.doubleClickMaximizes = doubleClickMaximizes

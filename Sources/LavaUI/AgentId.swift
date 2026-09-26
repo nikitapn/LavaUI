@@ -11,9 +11,12 @@ import Foundation
 
 /// Attaches a stable agent id to the content's root layout box.
 public struct AgentIdentifiedView<Content: View>: PrimitiveView {
+    /// The id agents address this view by.
     public var agentId: String
+    /// The view the id is attached to.
     public var content: Content
 
+    /// Attaches `agentId` to `content`. Usually spelled `.agentId(_:)`.
     public init(agentId: String, content: Content) {
         self.agentId = agentId
         self.content = content

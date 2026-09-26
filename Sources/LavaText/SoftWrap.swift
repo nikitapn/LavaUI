@@ -84,6 +84,7 @@ public struct LineIndex: Equatable {
     /// The same lines as byte ranges, or empty.
     public var byteRanges: [Range<Int>]
 
+    /// Creates an index from character ranges and, optionally, byte ranges.
     public init(rows: [Range<Int>] = [], byteRanges: [Range<Int>] = []) {
         self.rows = rows
         self.byteRanges = byteRanges
@@ -113,8 +114,11 @@ public struct LineIndex: Equatable {
 /// — caret, hit test, selection, vertical movement — has to use *this* rather
 /// than newline positions.
 public struct VisualLayout: Equatable {
+    /// Character range of each visual row over the whole buffer, in order.
     public var rows: [Range<Int>]
 
+    /// Creates a layout from row ranges. An empty list becomes a single empty row,
+    /// so there is always a row for the caret.
     public init(rows: [Range<Int>]) {
         self.rows = rows.isEmpty ? [0..<0] : rows
     }
@@ -275,6 +279,7 @@ public struct VisualLayout: Equatable {
         return scanned ?? nil
     }
 
+    /// How many visual rows there are.
     public var count: Int { rows.count }
 
     /// Row containing `offset`.
@@ -333,6 +338,8 @@ public struct VisualLayout: Equatable {
         return low
     }
 
+    /// The caret's column within its row: characters from the row's start to `offset`.
+    /// `affinity` picks the row at a wrap boundary, as for `rowIndex(ofOffset:affinity:)`.
     public func column(ofOffset offset: Int, affinity: CaretAffinity = .downstream) -> Int {
         let row = rows[rowIndex(ofOffset: offset, affinity: affinity)]
         return max(0, offset - row.lowerBound)

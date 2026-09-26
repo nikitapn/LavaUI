@@ -17,8 +17,11 @@ import Foundation
 /// `anchor` is where a selection started, `focus` is the moving end and where
 /// the caret is drawn. They are equal when there is no selection.
 public struct TextEditingState: Equatable {
+    /// The buffer.
     public private(set) var text: String
+    /// Where the selection started: the end that stays put while it is extended.
     public private(set) var anchor: String.Index
+    /// The moving end of the selection, where the caret is drawn.
     public private(set) var focus: String.Index
 
     /// Which version of the *content* this is. Changes on every edit, and
@@ -123,6 +126,7 @@ public struct TextEditingState: Equatable {
     /// built separately from the same string would differ by their caches.
     private let indexAnchor: IndexAnchor
 
+    /// Compares text, selection, history and layout. The index caches are left out.
     public static func == (lhs: TextEditingState, rhs: TextEditingState) -> Bool {
         lhs.text == rhs.text && lhs.anchor == rhs.anchor && lhs.focus == rhs.focus
             && lhs.revision == rhs.revision && lhs.undoStack == rhs.undoStack
@@ -130,6 +134,7 @@ public struct TextEditingState: Equatable {
             && lhs.affinity == rhs.affinity
     }
 
+    /// Creates a state holding `text`, with the caret at the start.
     public init(_ text: String = "") {
         self.text = text
         self.anchor = text.startIndex
@@ -139,6 +144,7 @@ public struct TextEditingState: Equatable {
 
     // MARK: Selection
 
+    /// Whether anything is selected.
     public var hasSelection: Bool { anchor != focus }
 
     /// Selection in document order, regardless of drag direction.
@@ -146,6 +152,7 @@ public struct TextEditingState: Equatable {
         anchor <= focus ? anchor..<focus : focus..<anchor
     }
 
+    /// The selected text; empty when nothing is selected.
     public var selectedText: String { String(text[selectedRange]) }
 
     /// Selects the word containing `index` — what a double-click should do.
@@ -184,6 +191,7 @@ public struct TextEditingState: Equatable {
         return lower..<upper
     }
 
+    /// Selects the whole buffer.
     public mutating func selectAll() {
         anchor = text.startIndex
         focus = text.endIndex
@@ -194,6 +202,8 @@ public struct TextEditingState: Equatable {
     /// Collapses to the caret end, as typing or a plain arrow key should.
     public mutating func clearSelection() { anchor = focus }
 
+    /// Moves the caret to `index`, clamped to the buffer. With `extending`, the
+    /// anchor stays and the selection grows or shrinks to meet it.
     public mutating func setCursor(_ index: String.Index, extending: Bool = false) {
         focus = clamp(index)
         if !extending { anchor = focus }
@@ -203,6 +213,8 @@ public struct TextEditingState: Equatable {
 
     // MARK: Movement
 
+    /// Moves the caret one character left. Without `extending`, a selection
+    /// collapses to its start instead.
     public mutating func moveLeft(extending: Bool = false) {
         // A plain left arrow with a selection collapses to its start rather
         // than moving — matching every other editor.
@@ -219,6 +231,8 @@ public struct TextEditingState: Equatable {
         affinity = .downstream
     }
 
+    /// Moves the caret one character right. Without `extending`, a selection
+    /// collapses to its end instead.
     public mutating func moveRight(extending: Bool = false) {
         if hasSelection, !extending {
             focus = selectedRange.upperBound
@@ -233,6 +247,7 @@ public struct TextEditingState: Equatable {
         affinity = .downstream
     }
 
+    /// Moves the caret to the start of the buffer.
     public mutating func moveToStart(extending: Bool = false) {
         focus = text.startIndex
         if !extending { anchor = focus }
@@ -240,6 +255,7 @@ public struct TextEditingState: Equatable {
         affinity = .downstream
     }
 
+    /// Moves the caret to the end of the buffer.
     public mutating func moveToEnd(extending: Bool = false) {
         focus = text.endIndex
         if !extending { anchor = focus }
@@ -247,6 +263,7 @@ public struct TextEditingState: Equatable {
         affinity = .downstream
     }
 
+    /// Moves the caret to the start of the word before it, as Ctrl+Left does.
     public mutating func moveWordLeft(extending: Bool = false) {
         focus = wordBoundary(before: focus)
         if !extending { anchor = focus }
@@ -254,6 +271,7 @@ public struct TextEditingState: Equatable {
         affinity = .downstream
     }
 
+    /// Moves the caret past the end of the word after it, as Ctrl+Right does.
     public mutating func moveWordRight(extending: Bool = false) {
         focus = wordBoundary(after: focus)
         if !extending { anchor = focus }
@@ -405,9 +423,13 @@ public struct TextEditingState: Equatable {
 
     // MARK: Undo / redo
 
+    /// Whether there is an edit to undo.
     public var canUndo: Bool { undoStack.canUndo }
+    /// Whether there is an undone edit to redo.
     public var canRedo: Bool { undoStack.canRedo }
 
+    /// Undoes the last edit, putting the selection back where it was before it.
+    /// Returns `false` when there is nothing to undo.
     @discardableResult
     public mutating func undo() -> Bool {
         guard let edit = undoStack.popUndo() else { return false }
@@ -418,6 +440,7 @@ public struct TextEditingState: Equatable {
         return true
     }
 
+    /// Redoes the last undone edit. Returns `false` when there is nothing to redo.
     @discardableResult
     public mutating func redo() -> Bool {
         guard let edit = undoStack.popRedo() else { return false }
@@ -445,11 +468,13 @@ public struct TextEditingState: Equatable {
 
     // MARK: Editing
 
+    /// Replaces the selection with `string`, or inserts it at the caret.
     public mutating func insert(_ string: String) {
         guard !string.isEmpty || hasSelection else { return }
         replace(selectedRange, with: string)
     }
 
+    /// Deletes the selection, or the character before the caret (Backspace).
     public mutating func deleteBackward() {
         if hasSelection {
             deleteSelection()
@@ -461,6 +486,7 @@ public struct TextEditingState: Equatable {
         replace(text.index(before: focus)..<focus, with: "")
     }
 
+    /// Deletes the selection, or the character after the caret (Delete).
     public mutating func deleteForward() {
         if hasSelection {
             deleteSelection()
@@ -470,6 +496,7 @@ public struct TextEditingState: Equatable {
         replace(focus..<text.index(after: focus), with: "")
     }
 
+    /// Deletes the selection, or back to the start of the previous word (Ctrl+Backspace).
     public mutating func deleteWordBackward() {
         if hasSelection {
             deleteSelection()
@@ -770,6 +797,7 @@ extension TextEditingState {
         affinity = .downstream
     }
 
+    /// Moves the caret to the end of its visual row (End).
     public mutating func moveToLineEnd(extending: Bool = false) {
         let l = layout
         let row = l.rows[l.rowIndex(ofOffset: offset(of: focus), affinity: affinity)]
@@ -807,6 +835,8 @@ extension TextEditingState {
         desiredColumn = target
     }
 
+    /// Moves down one row, keeping the column the vertical movement started from.
+    /// From the last row, moves to the end of the buffer.
     public mutating func moveDown(extending: Bool = false) {
         let l = layout
         let here = offset(of: focus)

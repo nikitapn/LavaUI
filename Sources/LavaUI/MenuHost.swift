@@ -29,11 +29,16 @@ public final class MenuHost {
     /// client used to fall back to drawing its own strip.
     nonisolated(unsafe) public static var exportWindowId: UInt32 = 0
 
+    /// Holds the menu model and runs item actions.
     public let controller = MenuController()
+    /// Which backend shows the menu, chosen once at init.
     public private(set) var backend: MenuBackendKind = .vulkan
     private let editor: Editor
     private var lastApplied: MenuModel?
 
+    /// Creates the menu host for `editor`'s window and picks a backend: the global
+    /// menu when a registrar is on the session bus (or `LAVA_MENU=dbus`), the
+    /// in-window strip otherwise.
     public init(editor: Editor) {
         self.editor = editor
         self.backend = Self.selectBackend(editor: editor)
@@ -79,11 +84,14 @@ public final class MenuHost {
         return changed
     }
 
+    /// Rebuilds the menu from a `@MenuBarBuilder` block. Returns whether the model changed.
     @discardableResult
     public func update(@MenuBarBuilder _ content: () -> [Menu]) -> Bool {
         update(MenuBar(content: content))
     }
 
+    /// Runs the action of item `id` and asks for a redraw. Returns `false` if the
+    /// item is disabled or has no action.
     @discardableResult
     public func activate(_ id: MenuID) -> Bool {
         guard let item = controller.model.item(id: id) else {
@@ -93,6 +101,8 @@ public final class MenuHost {
         return invalidating(controller.activate(id))
     }
 
+    /// Runs the item whose shortcut matches this key and modifiers, if any, and
+    /// asks for a redraw. Returns whether one ran.
     @discardableResult
     public func activate(
         matchingKey key: Int32,
@@ -123,8 +133,10 @@ public final class MenuHost {
         }
     }
 
+    /// The current menu model.
     public var model: MenuModel { controller.model }
 
+    /// Whether the menu has no top-level menus.
     public var isEmpty: Bool { model.menus.isEmpty }
 
     /// Default strip height in layout pixels (Vulkan backend only).

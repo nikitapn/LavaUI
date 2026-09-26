@@ -18,6 +18,8 @@ public struct AnyView: PrimitiveView {
     private let linesImpl: (Int) -> [String]
     private let typeName: String
 
+    /// Erases `view`'s type. Wrapping an `AnyView` returns it unchanged rather
+    /// than nesting a second wrapper.
     public init<V: View>(_ view: V) {
         // Erasing an erased view would stack wrappers for nothing.
         if let erased = view as? AnyView {

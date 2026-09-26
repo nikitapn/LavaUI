@@ -2,8 +2,11 @@ import CYoga
 
 /// Horizontal placement of content inside a box larger than it.
 public enum HorizontalAlignment: Equatable, Sendable {
+    /// Content hugs the leading (left) edge.
     case leading
+    /// Content is centred horizontally.
     case center
+    /// Content hugs the trailing (right) edge.
     case trailing
 
     /// As main-axis justification of a **row** container.
@@ -18,8 +21,11 @@ public enum HorizontalAlignment: Equatable, Sendable {
 
 /// Vertical placement of content inside a box larger than it.
 public enum VerticalAlignment: Equatable, Sendable {
+    /// Content hugs the top edge.
     case top
+    /// Content is centred vertically.
     case center
+    /// Content hugs the bottom edge.
     case bottom
 
     /// As cross-axis alignment of a **row** container.
@@ -47,22 +53,34 @@ public enum VerticalAlignment: Equatable, Sendable {
 /// members, which pattern-match the same way in an `if` and compose the way an
 /// enum cannot.
 public struct Alignment: Equatable, Sendable {
+    /// Placement along the horizontal axis.
     public var horizontal: HorizontalAlignment
+    /// Placement along the vertical axis.
     public var vertical: VerticalAlignment
 
+    /// Creates an alignment from one choice per axis.
     public init(horizontal: HorizontalAlignment, vertical: VerticalAlignment) {
         self.horizontal = horizontal
         self.vertical = vertical
     }
 
+    /// The top-left corner.
     public static let topLeading = Alignment(horizontal: .leading, vertical: .top)
+    /// Centred along the top edge.
     public static let top = Alignment(horizontal: .center, vertical: .top)
+    /// The top-right corner.
     public static let topTrailing = Alignment(horizontal: .trailing, vertical: .top)
+    /// Centred along the left edge.
     public static let leading = Alignment(horizontal: .leading, vertical: .center)
+    /// Centred on both axes.
     public static let center = Alignment(horizontal: .center, vertical: .center)
+    /// Centred along the right edge.
     public static let trailing = Alignment(horizontal: .trailing, vertical: .center)
+    /// The bottom-left corner.
     public static let bottomLeading = Alignment(horizontal: .leading, vertical: .bottom)
+    /// Centred along the bottom edge.
     public static let bottom = Alignment(horizontal: .center, vertical: .bottom)
+    /// The bottom-right corner.
     public static let bottomTrailing = Alignment(
         horizontal: .trailing, vertical: .bottom
     )

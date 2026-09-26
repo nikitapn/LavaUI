@@ -4,14 +4,24 @@ import Foundation
 
 // Phase 3 — immediate draw list. C++ owns `canvas::DrawCommand` layout.
 
+/// What one draw command draws. Mirrors `canvas::DrawCommandKind` in
+/// `draw_command.hpp`, which documents how each kind uses the command's fields.
 public enum DrawKind: UInt32 {
+    /// Filled rectangle.
     case rect = 0
+    /// Filled rectangle with rounded corners; `aux` is the corner radius.
     case roundedRect = 1
+    /// A run of shaped glyphs. `param` is the first glyph and `w` the glyph count.
     case text = 2
+    /// Filled circle centred on `x,y`; `aux` is the radius.
     case circle = 3
+    /// Line from `x,y` to `w,h`.
     case line = 4
+    /// Starts clipping to `x,y,w,h`, intersected with any clip already in force.
     case pushClip = 5
+    /// Ends the innermost clip.
     case popClip = 6
+    /// Textured quad. `param` is the texture id and `color` a tint.
     case image = 7
     /// Flush UI so far, blur the resolve under x,y,w,h (`aux` = radius px).
     case beginBackdropBlur = 8
@@ -21,6 +31,7 @@ public enum DrawKind: UInt32 {
     /// of the frame, blur it, and composite it back over x,y,w,h with its own
     /// alpha (`aux` = radius px).
     case beginContentBlur = 10
+    /// Closes the scope a `beginContentBlur` opened.
     case endContentBlur = 11
     /// Filled arbitrary polygon. `param`/`w` index into `meshVertices`
     /// (first index, count); `aux` 0 fans around vertex 0, 1 triangulates
@@ -28,6 +39,7 @@ public enum DrawKind: UInt32 {
     case mesh = 12
     /// Connected 1px line strip. `param`/`w` index into `meshVertices`.
     case polyline = 13
+    /// Depth-tested 3D triangles from a `Scene3D`, indexing the frame's spatial vertices.
     case spatialTriangles = 14
     /// Rounded rect filled with a two-stop linear ramp. `aux` = radius,
     /// `param` = index into the frame's gradients, `color` = the start colour
@@ -44,6 +56,7 @@ public enum DrawKind: UInt32 {
     case nodeAnimate = 18
     /// Retargets the enclosing scroll node once per request serial.
     case nodeScrollTo = 20
+    /// Clears depth inside one `Scene3D` viewport before its triangles.
     case spatialBegin = 15
     /// Declares `x,y,w,h` of this frame fully opaque. Draws nothing; lets a
     /// compositor stop blending the surface and skip what is behind it.
@@ -61,7 +74,9 @@ public enum DrawKind: UInt32 {
 /// Bits in a `beginNode` command's `color` field. Mirrors
 /// `canvas::SceneNodeFlags`.
 public struct SceneNodeFlags: OptionSet, Sendable {
+    /// The flag bits.
     public let rawValue: UInt32
+    /// Creates a flag set from its bits.
     public init(rawValue: UInt32) { self.rawValue = rawValue }
 
     /// Clip children to the node's viewport, moving with the node.
@@ -70,7 +85,10 @@ public struct SceneNodeFlags: OptionSet, Sendable {
     /// events inside it move the subtree without the producer hearing about
     /// it, or being woken to redraw.
     public static let scrollY = SceneNodeFlags(rawValue: 1 << 1)
+    /// The renderer owns a horizontal scroll offset for this node. See `scrollY`.
     public static let scrollX = SceneNodeFlags(rawValue: 1 << 2)
+    /// Report hover for this node even when it declares no hover tint, so a
+    /// hover callback can hear about it.
     public static let hitTest = SceneNodeFlags(rawValue: 1 << 3)
     /// Commands inside the node use LavaUI's window-space coordinates. The
     /// renderer applies only retained transforms, not the node origin again.
@@ -86,7 +104,9 @@ public struct SceneNodeFlags: OptionSet, Sendable {
 /// Bits in a `scrollNode` command's `color` field. Mirrors
 /// `canvas::SceneScrollFlags`.
 public struct SceneScrollFlags: OptionSet, Sendable {
+    /// The flag bits.
     public let rawValue: UInt32
+    /// Creates a flag set from its bits.
     public init(rawValue: UInt32) { self.rawValue = rawValue }
 
     /// Set the node's position, not just its target: this frame draws at the
@@ -99,10 +119,14 @@ public struct SceneScrollFlags: OptionSet, Sendable {
 /// Which properties a `animateNode` call is stating. Mirrors
 /// `canvas::SceneAnimationFlags`.
 public struct SceneAnimationFlags: OptionSet, Sendable {
+    /// The flag bits.
     public let rawValue: UInt32
+    /// Creates a flag set from its bits.
     public init(rawValue: UInt32) { self.rawValue = rawValue }
 
+    /// The call states a target opacity.
     public static let opacity = SceneAnimationFlags(rawValue: 1 << 0)
+    /// The call states a target translation.
     public static let translate = SceneAnimationFlags(rawValue: 1 << 1)
     /// Read the time value as a duration rather than a decay constant — see
     /// `kSceneAnimDuration` in `draw_command.hpp`.
@@ -129,18 +153,22 @@ public final class DrawList {
     /// so strings never cross the boundary.
     private var glyphStorage: UnsafeMutablePointer<canvas.GlyphInstance>
     private var glyphCapacity: Int
+    /// How many shaped glyphs this frame has emitted so far.
     public private(set) var glyphCount = 0
 
     /// Polygon vertices in absolute window pixels; `Mesh` commands index this
     /// the same way `Text` indexes `glyphs`.
     private var meshVertexStorage: UnsafeMutablePointer<canvas.MeshVertex>
     private var meshVertexCapacity: Int
+    /// How many mesh vertices this frame has emitted so far.
     public private(set) var meshVertexCount = 0
     private var spatialVertexStorage: UnsafeMutablePointer<canvas.SpatialVertex>
     private var spatialVertexCapacity: Int
+    /// How many 3D (`Scene3D`) vertices this frame has emitted so far.
     public private(set) var spatialVertexCount = 0
     private var gradientStorage: UnsafeMutablePointer<canvas.GradientDesc>
     private var gradientCapacity: Int
+    /// How many gradients this frame has emitted so far.
     public private(set) var gradientCount = 0
 
     /// Overlays found during the current walk, emitted once it finishes.
@@ -192,6 +220,7 @@ public final class DrawList {
         gradients: 16
     )
 
+    /// Creates a list that writes into `window`'s draw arena.
     public convenience init(editor: Editor, window: WindowID = .main) {
         self.init(editor: editor, window: window, sink: editor.frames(for: window))
     }
@@ -507,6 +536,7 @@ public final class DrawList {
         appendCommand(cmd)
     }
 
+    /// Fills a rectangle. Coordinates are window pixels.
     public func rect(x: Float, y: Float, w: Float, h: Float, color: Color) {
         append(kind: .rect, x: x, y: y, w: w, h: h, color: color)
     }
@@ -552,6 +582,9 @@ public final class DrawList {
         )
     }
 
+    /// Fills a rectangle with rounded corners.
+    ///
+    /// `radius` is the corner radius in pixels; the edges are anti-aliased.
     public func roundedRect(
         x: Float, y: Float, w: Float, h: Float, color: Color, radius: Float = 4
     ) {
@@ -618,6 +651,7 @@ public final class DrawList {
         )
     }
 
+    /// Fills a circle centred on `cx`,`cy`.
     public func circle(cx: Float, cy: Float, radius: Float, color: Color) {
         append(kind: .circle, x: cx, y: cy, w: 0, h: 0, color: color, aux: radius)
     }
@@ -732,14 +766,6 @@ public final class DrawList {
         )
     }
 
-    /// Opens a scene node — a subtree the renderer can move on its own.
-    ///
-    /// `id` is yours to assign and must be stable across frames: it is what
-    /// the renderer keys its retained state on, so an id that changes between
-    /// frames scrolls back to the top on every one.
-    /// Not routed through `append`, unlike every primitive: `color` here is a
-    /// flags bitfield, and `append` exists to put a *colour* through the
-    /// opacity multiplier. Fading a node would turn `scrollY` into `clip`.
     /// Opens a node for a view, taking its scene id from its `NodeID`.
     ///
     /// The overload views should use: reconciliation already keeps `NodeID`
@@ -755,6 +781,15 @@ public final class DrawList {
         )
     }
 
+    /// Opens a scene node — a subtree the renderer can move on its own.
+    ///
+    /// `id` is yours to assign and must be stable across frames: it is what
+    /// the renderer keys its retained state on, so an id that changes between
+    /// frames scrolls back to the top on every one. Close it with `endNode`.
+    ///
+    /// Not routed through `append`, unlike every primitive: `color` here is a
+    /// flags bitfield, and `append` exists to put a *colour* through the
+    /// opacity multiplier. Fading a node would turn `scrollY` into `clip`.
     public func beginNode(
         id: UInt32, x: Float, y: Float, w: Float, h: Float,
         flags: SceneNodeFlags = []
@@ -871,10 +906,16 @@ public final class DrawList {
         appendCommand(cmd)
     }
 
+    /// Clips everything drawn until the matching `popClip` to this rectangle,
+    /// intersected with any clip already in force.
+    ///
+    /// A rectangle with no area clears the clip to the whole window instead of
+    /// hiding everything, so check for an empty rectangle before calling this.
     public func pushClip(x: Float, y: Float, w: Float, h: Float) {
         append(kind: .pushClip, x: x, y: y, w: w, h: h, color: .primary)
     }
 
+    /// Ends the innermost `pushClip`.
     public func popClip() {
         append(kind: .popClip, x: 0, y: 0, w: 0, h: 0, color: .primary)
     }
@@ -954,6 +995,7 @@ public final class DrawList {
         return true
     }
 
+    /// Closes the scope a `beginBackdropBlur` opened.
     public func endBackdropBlur() {
         append(
             kind: .endBackdropBlur, x: 0, y: 0, w: 0, h: 0,
@@ -973,6 +1015,8 @@ public final class DrawList {
         )
     }
 
+    /// Ends the content blur scope `beginContentBlur` opened: everything drawn
+    /// since is blurred and composited back.
     public func endContentBlur() {
         append(
             kind: .endContentBlur, x: 0, y: 0, w: 0, h: 0,
