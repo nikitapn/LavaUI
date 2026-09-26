@@ -53,7 +53,7 @@ do {
     if tls {
         http = http.ssl(certFile: env["DOCS_TLS_CERT"]!, keyFile: env["DOCS_TLS_KEY"]!)
         if env["DOCS_HTTP3"] == "1" {
-            http = http.enableHttp3().http3Workers(1)
+            http = http.enableHttp3().http3Workers(1).http3Compression()
             // One name for both rings: the router's route uses it as this
             // site's ingress and egress channel alike.
             if let channel = env["DOCS_SHM_CHANNEL"], !channel.isEmpty {
