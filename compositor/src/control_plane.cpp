@@ -1717,6 +1717,12 @@ class CompositorImpl final : public ICompositor_Servant {
 
   void EndSession() override { host_.endSession(); }
 
+  void SetBackdropRefraction(uint32_t surfaceId, float px) override {
+    if (!host_.setBackdropRefraction(surfaceId, px)) {
+      throw SurfaceNotFound(surfaceId);
+    }
+  }
+
  private:
   /// The subscription is the surface's lease.
   ///

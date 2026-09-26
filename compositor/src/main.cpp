@@ -1679,6 +1679,10 @@ struct ClientSurface {
   /// A canvas surface so the blur runs on the compositing Vulkan device
   /// (`BlurPass`), not a CPU box filter.
   float backdropBlurRadius = 0.f;
+  /// Glass refraction at the rim of every plate, in pixels; 0 is flat. The
+  /// client's choice (`SetBackdropRefraction`): a menu reads as glass, a
+  /// terminal whose whole window is frosted just looks warped.
+  float backdropRefractPx = 0.f;
   /// One frosted rectangle: where it goes, and the plate it is drawn on.
   ///
   /// `w`/`h` of 0 means the whole surface, which is what a terminal wants. A
@@ -4579,7 +4583,7 @@ class SurfaceRegistry : public lava::CompositorHost {
       if (srcX >= 0 && srcY >= 0 && wlr_buffer_get_dmabuf(captured, &attribs)) {
         frosted = plate.canvas->frostFromDmabuf(
             attribs, srcX, srcY, srcW, srcH, surface.backdropBlurRadius,
-            plate.key, frost);
+            plate.key, frost, surface.backdropRefractPx);
       }
       if (!frosted) {
         // The CPU path uploads through the ordinary texture cache, which would
@@ -4594,7 +4598,8 @@ class SurfaceRegistry : public lava::CompositorHost {
         frosted = read && plate.canvas->frostFromRgba(
                               raw.data(), static_cast<uint32_t>(srcW),
                               static_cast<uint32_t>(srcH),
-                              surface.backdropBlurRadius, plate.key, frost);
+                              surface.backdropBlurRadius, plate.key, frost,
+                              surface.backdropRefractPx);
       }
       if (!frosted) continue;
       plate.ready = true;
@@ -5548,6 +5553,18 @@ class SurfaceRegistry : public lava::CompositorHost {
     wlr_log(WLR_INFO, "surface %u: backdrop blur %.0f over %zu rect(s)", id,
             next, surface->frostPlates.size());
     scheduleBackdropRefresh();
+    return true;
+  }
+
+  bool setBackdropRefraction(uint32_t id, float px) override {
+    ClientSurface *surface = find(id);
+    if (surface == nullptr) return false;
+    const float next = std::clamp(px, 0.f, 64.f);
+    if (surface->backdropRefractPx == next) return true;
+    surface->backdropRefractPx = next;
+    // The bend is baked into the plate, so an existing one has to be drawn
+    // again to show it.
+    if (!surface->frostPlates.empty()) scheduleBackdropRefresh();
     return true;
   }
 

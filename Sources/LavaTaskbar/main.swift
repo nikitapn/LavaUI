@@ -500,6 +500,7 @@ final class MenuSession {
             height: LogoutWindow.height,
             anchor: anchor,
             backdropBlur: TaskbarChrome.popupBlurRadius,
+            refraction: TaskbarChrome.popupRefraction,
             onClose: {
                 if let id = opened, session.logoutWindow == id {
                     session.logoutWindow = nil
@@ -537,6 +538,7 @@ final class MenuSession {
             height: 520,
             anchor: anchor,
             backdropBlur: TaskbarChrome.popupBlurRadius,
+            refraction: TaskbarChrome.popupRefraction,
             onClose: {
                 if let id = opened, session.aboutWindow == id {
                     session.aboutWindow = nil
@@ -576,6 +578,7 @@ final class MenuSession {
             height: 180,
             anchor: anchor,
             backdropBlur: TaskbarChrome.popupBlurRadius,
+            refraction: TaskbarChrome.popupRefraction,
             onClose: {
                 if let id = opened, session.volumeWindow == id {
                     session.volumeWindow = nil
@@ -612,6 +615,7 @@ final class MenuSession {
             height: CalendarWindow.height,
             anchor: anchor,
             backdropBlur: TaskbarChrome.popupBlurRadius,
+            refraction: TaskbarChrome.popupRefraction,
             onClose: {
                 if let id = opened, session.calendarWindow == id {
                     session.calendarWindow = nil
@@ -644,6 +648,7 @@ final class MenuSession {
             height: PlayerWindow.height,
             anchor: anchor,
             backdropBlur: TaskbarChrome.popupBlurRadius,
+            refraction: TaskbarChrome.popupRefraction,
             onClose: {
                 if let id = opened, session.playerWindow == id {
                     session.playerWindow = nil
@@ -814,6 +819,9 @@ enum TaskbarChrome {
     /// Same radius a menu dropdown asks for. The plate's *corner* is not
     /// this — the compositor cuts it to the window's own corner radius.
     static let popupBlurRadius: Float = 12
+    /// How far the rim of that glass bends, in pixels — the context menu's,
+    /// so a dropdown and a right-click menu are the same slab.
+    static let popupRefraction: Float = 28
 }
 
 struct TaskbarView: View {

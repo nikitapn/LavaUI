@@ -2231,4 +2231,18 @@ interface Compositor {
                    rowX: in i32, rowY: in i32, rowW: in u32, rowH: in u32,
                    width: in u32, height: in u32)
       raises(SurfaceNotFound);
+
+  /// Bend the rim of this surface's frost like glass, by up to `px` pixels.
+  ///
+  /// A separate switch from `SetBackdropBlur` because the same frost is right
+  /// for two things that want different edges: a menu is a small slab of
+  /// glass and reads better refracted, while a terminal whose whole window is
+  /// frosted just looks warped at the edges. 0 is flat, and where every
+  /// surface starts. Kept on the surface like the blur radius, so it may be
+  /// sent before or after the frost is turned on.
+  ///
+  /// Last in the interface on purpose: indices are positional, and appending
+  /// is what keeps clients built against the older stubs working.
+  void SetBackdropRefraction(surfaceId: in u32, px: in f32)
+      raises(SurfaceNotFound);
 }

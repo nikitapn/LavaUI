@@ -87,10 +87,44 @@ void main() {
     float d = sdRoundBox(vLocal, vHalfSize, vRadius);
     float aa = max(fwidth(d), 1e-5);
     float coverage = 1.0 - smoothstep(-aa, aa, d);
-    vec4 sampled = texture(textures[nonuniformEXT(vTextureIndex)], vUv) * vColor;
+    if (coverage <= 0.001) discard;
+
+    // vAux > 0: glass refraction of that many pixels at the rim (backdrop
+    // frost only — content blur passes 0 and composites unchanged).
+    vec2 uv = vUv;
+    vec3 rimAdd = vec3(0.0);
+    float refractPx = vAux;
+    if (refractPx > 0.0) {
+      // Outward normal of the rounded box, analytic: a screen-space
+      // gradient of `d` is quantized per 2x2 quad and shimmers.
+      vec2 q = abs(vLocal) - vHalfSize + vRadius;
+      vec2 n = (max(q.x, q.y) > 0.0) ? normalize(max(q, 0.0))
+                                     : (q.x > q.y ? vec2(1.0, 0.0) : vec2(0.0, 1.0));
+      n *= sign(vLocal);
+
+      // Bezel: 0 deep inside → 1 at the edge. Circular profile, so the
+      // middle stays flat and only the rim bends.
+      const float bezel = 20.0;
+      float t = clamp(1.0 + d / bezel, 0.0, 1.0);
+      float bend = 1.0 - sqrt(1.0 - t * t);
+
+      // Local px → backdrop UV (the quad is axis-aligned and affine).
+      vec2 j = vec2(dFdx(vUv.x) / max(abs(dFdx(vLocal.x)), 1e-8),
+                    dFdy(vUv.y) / max(abs(dFdy(vLocal.y)), 1e-8));
+      // Inward, so the read never leaves the captured rect.
+      uv -= n * (refractPx * bend) * j;
+
+      // Thin directional rim, lit from the top left (y points down).
+      float band = 1.0 - smoothstep(0.0, 1.5, -d);
+      float lit  = max(dot(n, normalize(vec2(-0.6, -0.8))), 0.0);
+      float back = max(dot(n, normalize(vec2( 0.6,  0.8))), 0.0);
+      rimAdd = vec3(band * (0.45 * lit + 0.15 * back));
+    }
+
+    vec4 sampled = texture(textures[nonuniformEXT(vTextureIndex)], uv) * vColor;
     float a = sampled.a * coverage;
     if (a <= 0.001) discard;
-    outColor = vec4(sampled.rgb * a, a);
+    outColor = vec4(min(sampled.rgb + rimAdd, vec3(1.0)) * a, a);
     return;
   }
 

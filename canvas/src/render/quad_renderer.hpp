@@ -317,7 +317,8 @@ class QuadRenderer {
   /// composites a subtree's own silhouette and has no panel to match.
   void pushBlurResultImage(vec2 topLeft, vec2 size, vec2 uv0, vec2 uv1,
                            float cornerRadius = 0.f,
-                           uint32_t rgba = 0xffffffffu);
+                           uint32_t rgba = 0xffffffffu,
+                           float refractPx = 0.f);
 
   void end();
 

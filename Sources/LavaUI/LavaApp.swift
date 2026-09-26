@@ -282,16 +282,18 @@ public enum LavaApp {
         /// Create the engine window, its arena and its compositor surface.
         /// The anchor, when there is one, makes a borderless popup of the
         /// window the app started with rather than another cascaded window.
-        /// The last argument is the backdrop-blur radius in pixels; 0 is
-        /// no frost. Nil means the surface could not be opened.
+        /// The last two arguments are the backdrop-blur radius and the glass
+        /// refraction at its rim, in pixels; 0 is no frost / a flat rim. Nil
+        /// means the surface could not be opened.
         nonisolated(unsafe) public static var open:
-            ((Float, Float, String, SurfaceAnchor?, Float) -> WindowID?)?
-        /// A hidden menu fly-out: width, height, backdrop-blur radius. The
+            ((Float, Float, String, SurfaceAnchor?, Float, Float) -> WindowID?)?
+        /// A hidden menu fly-out: width, height, backdrop-blur radius,
+        /// refraction. The
         /// compositor places it later, beside a row, so creating it must not
         /// put a window on screen. Nil in a windowed app, which has no menu
         /// compositor to ask.
         nonisolated(unsafe) public static var openMenuPlate:
-            ((Float, Float, Float) -> WindowID?)?
+            ((Float, Float, Float, Float) -> WindowID?)?
         /// The view tree is gone. Drop the compositor surface. Idempotent.
         nonisolated(unsafe) public static var close: ((WindowID) -> Void)?
     }
@@ -337,7 +339,7 @@ public enum LavaApp {
         // would be two windows for one click.
         guard let id = openEngineWindow(
             editor: editor, title: title, width: width, height: height,
-            anchor: nil, backdropBlur: 0
+            anchor: nil, backdropBlur: 0, refraction: 0
         ) else { return nil }
         return adopt(
             editor: editor, id: id, title: title, onClose: onClose,
@@ -359,6 +361,9 @@ public enum LavaApp {
     /// off. The plate is cut to the window's own corner radius, the same
     /// mask as the popup, so the two are one outline. A windowed app ignores
     /// the radius: nothing there can see the desktop behind the window.
+    ///
+    /// `refraction` bends the frost's rim like glass, by up to that many
+    /// pixels; 0 is flat. Only meaningful with `backdropBlur`.
     @discardableResult
     public static func openPopup<V: View>(
         title: String,
@@ -366,6 +371,7 @@ public enum LavaApp {
         height: Float = 240,
         anchor: SurfaceAnchor,
         backdropBlur: Float = 0,
+        refraction: Float = 0,
         onClose: (() -> Void)? = nil,
         makeRoot: @escaping () -> V
     ) -> WindowID? {
@@ -377,7 +383,7 @@ public enum LavaApp {
         }
         guard let id = openEngineWindow(
             editor: editor, title: title, width: width, height: height,
-            anchor: anchor, backdropBlur: backdropBlur
+            anchor: anchor, backdropBlur: backdropBlur, refraction: refraction
         ) else { return nil }
         return adopt(
             editor: editor, id: id, title: title, onClose: onClose,
@@ -394,12 +400,13 @@ public enum LavaApp {
     ///
     /// `backdropBlur` frosts the desktop behind the plate, as `openPopup`'s
     /// does, and comes up with it: the compositor captures when it places
-    /// the plate, not before. 0 leaves it off.
+    /// the plate, not before. 0 leaves it off. `refraction` is `openPopup`'s.
     @discardableResult
     public static func openMenuPlate<V: View>(
         width: Float,
         height: Float,
         backdropBlur: Float = 0,
+        refraction: Float = 0,
         onClose: (() -> Void)? = nil,
         makeRoot: @escaping () -> V
     ) -> WindowID? {
@@ -411,7 +418,7 @@ public enum LavaApp {
         }
         let id: WindowID?
         if let open = ClientSurfaceBridge.openMenuPlate {
-            id = open(width, height, max(0, backdropBlur))
+            id = open(width, height, max(0, backdropBlur), max(0, refraction))
         } else {
             id = editor.openWindow(width: width, height: height, title: "Menu")
         }
@@ -445,11 +452,14 @@ public enum LavaApp {
     /// compositor surface. Nil when neither could be opened.
     private static func openEngineWindow(
         editor: Editor, title: String, width: Float, height: Float,
-        anchor: SurfaceAnchor?, backdropBlur: Float
+        anchor: SurfaceAnchor?, backdropBlur: Float, refraction: Float
     ) -> WindowID? {
         let id: WindowID?
         if let open = ClientSurfaceBridge.open {
-            id = open(width, height, title, anchor, max(0, backdropBlur))
+            id = open(
+                width, height, title, anchor, max(0, backdropBlur),
+                max(0, refraction)
+            )
         } else {
             id = editor.openWindow(width: width, height: height, title: title)
         }

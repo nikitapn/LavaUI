@@ -753,6 +753,10 @@ enum Dock {
     static let plateInset: Float = 6
     /// The compositor's frost under the plate, in layout pixels.
     static let frostRadius: Float = 12
+    /// How far the rim of that frost bends, in pixels. Less than a menu's:
+    /// the shelf is one icon tall, and at 28 its top and bottom edges read
+    /// from the middle of the plate and the whole shelf looks like a lens.
+    static let frostRefraction: Float = 20
     /// The plate's wash over that frost. Lower than the unfrosted plate's, or
     /// the frost is only a rumour under it. Tuned by eye, not arithmetic.
     static let frostedPlateAlpha: Float = 0.80
@@ -1862,5 +1866,9 @@ PointerState.onLeave = {
         ViewInvalidation.markNeedsRedraw()
     }
 }
+
+// The shelf's frost is a plate on this surface (`frostDesktop`), so the
+// surface's refraction is the shelf's. Remembered until `run` has an id.
+LavaClient.setBackdropRefraction(px: Dock.frostRefraction)
 
 LavaClient.run(editor: editor) { DockView() }

@@ -94,4 +94,14 @@ public enum LavaHost {
         }
         #endif
     }
+
+    /// Bend the rim of that frost like glass, by up to `px` pixels; 0 is flat
+    /// and the default. Client mode only, like the frost itself.
+    public static func setBackdropRefraction(px: Float) {
+        #if LAVA_HAS_CLIENT
+        if isClient {
+            LavaClient.setBackdropRefraction(px: px)
+        }
+        #endif
+    }
 }

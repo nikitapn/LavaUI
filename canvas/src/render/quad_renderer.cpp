@@ -1230,7 +1230,7 @@ void QuadRenderer::closeSegment() {
 
 void QuadRenderer::pushBlurResultImage(vec2 topLeft, vec2 size, vec2 uv0,
                                          vec2 uv1, float cornerRadius,
-                                         uint32_t rgba)
+                                         uint32_t rgba, float refractPx)
 {
   if (size.x <= 0.0f || size.y <= 0.0f) {
     return;
@@ -1261,7 +1261,7 @@ void QuadRenderer::pushBlurResultImage(vec2 topLeft, vec2 size, vec2 uv0,
     const vec2 u1{uv1.x + uvPerPx.x * kPad, uv1.y + uvPerPx.y * kPad};
 
     appendInstance({center.x-ext.x, center.y-ext.y}, {ext.x*2.f,ext.y*2.f},
-                   half, r, rgba, Kind::BlurComposite, 0.f, u0, u1);
+                   half, r, rgba, Kind::BlurComposite, refractPx, u0, u1);
   }
   flushBatch();
   if (!batches_.empty()) {

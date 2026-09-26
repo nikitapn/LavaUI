@@ -48,6 +48,9 @@ enum class DrawCommandKind : uint32_t {
   /// x,y,w,h with its own alpha. `aux` = radius in pixels. Where backdrop blur
   /// frosts what is *behind* a view, this softens the view itself.
   BeginContentBlur = 10,
+  /// `aux` = glass refraction at the composite's rim, in pixels; 0 is flat.
+  /// Only the compositor's frost plates set it — LavaUI always sends 0, so a
+  /// `.blur()` never bends.
   EndContentBlur = 11,
   /// Filled arbitrary polygon (custom region — pie/donut wedges, etc.).
   /// param = first vertex index, w = vertex count, into the mesh-vertex side

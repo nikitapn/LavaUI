@@ -400,7 +400,8 @@ void CanvasSurface::setCornerRadius(float radius, bool top, bool bottom) {
   renderer_.engine().setWindowCornerRadius(radius, top, bottom, windowId_);
 }
 
-bool CanvasSurface::frostWithTexture(int id, float radius, float cornerRadius) {
+bool CanvasSurface::frostWithTexture(int id, float radius, float cornerRadius,
+                                     float refractPx) {
   if (id <= 0) return false;
 
   canvas::DrawCommand begin{};
@@ -421,6 +422,7 @@ bool CanvasSurface::frostWithTexture(int id, float radius, float cornerRadius) {
 
   canvas::DrawCommand end{};
   end.kind = static_cast<uint32_t>(canvas::DrawCommandKind::EndContentBlur);
+  end.aux = std::max(0.f, refractPx);
 
   const std::vector<canvas::DrawCommand> commands{begin, image, end};
   const std::vector<canvas::GlyphInstance> glyphs;
@@ -437,17 +439,18 @@ bool CanvasSurface::frostWithTexture(int id, float radius, float cornerRadius) {
 
 bool CanvasSurface::frostFromRgba(const uint8_t *rgba, uint32_t srcW,
                                   uint32_t srcH, float radius,
-                                  const std::string &key, float cornerRadius) {
+                                  const std::string &key, float cornerRadius,
+                                  float refractPx) {
   if (rgba == nullptr || srcW < 1 || srcH < 1 || key.empty()) return false;
   const int id =
       renderer_.engine().uploadTexture(key, rgba, srcW, srcH);
-  return frostWithTexture(id, radius, cornerRadius);
+  return frostWithTexture(id, radius, cornerRadius, refractPx);
 }
 
 bool CanvasSurface::frostFromDmabuf(const wlr_dmabuf_attributes &src, int srcX,
                                     int srcY, int srcW, int srcH, float radius,
                                     const std::string &key,
-                                    float cornerRadius) {
+                                    float cornerRadius, float refractPx) {
   if (srcW < 1 || srcH < 1 || key.empty() || src.n_planes < 1) return false;
   Application *app = renderer_.engine().application();
   if (app == nullptr) return false;
@@ -471,7 +474,7 @@ bool CanvasSurface::frostFromDmabuf(const wlr_dmabuf_attributes &src, int srcX,
   const int id = app->refreshDmabufTexture(
       key, desc, srcX, srcY, static_cast<uint32_t>(srcW),
       static_cast<uint32_t>(srcH));
-  return frostWithTexture(id, radius, cornerRadius);
+  return frostWithTexture(id, radius, cornerRadius, refractPx);
 }
 
 bool CanvasSurface::renderList(

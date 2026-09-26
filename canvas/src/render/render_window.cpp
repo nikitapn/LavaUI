@@ -1394,7 +1394,7 @@ void RenderWindow::setViewTransform(float zoom, float panX, float panY)
 
 void RenderWindow::pushBlurComposite(float x, float y, float w, float h,
                                      float viewW, float viewH, float radius,
-                                     float cornerRadius)
+                                     float cornerRadius, float refractPx)
 {
   if (w <= 0.f || h <= 0.f || viewW <= 0.f || viewH <= 0.f) return;
   const vec2 uv = blur_.uvScaleFor(radius);
@@ -1402,7 +1402,7 @@ void RenderWindow::pushBlurComposite(float x, float y, float w, float h,
     {x, y}, {w, h},
     {x / viewW * uv.x, y / viewH * uv.y},
     {(x + w) / viewW * uv.x, (y + h) / viewH * uv.y}, cornerRadius,
-    0xffffffffu);
+    0xffffffffu, refractPx);
 }
 
 namespace {
@@ -2012,8 +2012,13 @@ void RenderWindow::replayDrawList(const canvas::DrawList &list, float viewW,
       outBoundaries.push_back({Boundary::Kind::Backdrop, radius});
       // `param` is the corner radius of the surface this frost sits under —
       // whole pixels, which is all a corner is ever specified in.
+      // EXPERIMENT: glass refraction on backdrop frost only. Content blur
+      // shares the composite kind and must not bend; a real API would carry
+      // the strength on the command rather than a constant here.
+      constexpr float kBackdropRefractPx = 28.f;
       pushBlurComposite(cmd.x + ox, cmd.y + oy, cmd.w, cmd.h, viewW, viewH,
-                        radius, static_cast<float>(cmd.param));
+                        radius, static_cast<float>(cmd.param),
+                        kBackdropRefractPx);
       break;
     }
     case canvas::DrawCommandKind::EndBackdropBlur:
@@ -2058,8 +2063,12 @@ void RenderWindow::replayDrawList(const canvas::DrawList &list, float viewW,
       const float y0 = std::max(0.f, open.y - pad);
       const float x1 = std::min(viewW, open.x + open.w + pad);
       const float y1 = std::min(viewH, open.y + open.h + pad);
+      // Refraction rides on the End: the rim it bends is the composite's
+      // outline, which is only the view's own edge on a surface that is
+      // nothing but the frost (a compositor plate). Padded by 3σ anywhere
+      // else, the bend would land in the fade outside the view.
       pushBlurComposite(x0, y0, x1 - x0, y1 - y0, viewW, viewH, radius,
-                        static_cast<float>(open.param));
+                        static_cast<float>(open.param), std::max(0.f, cmd.aux));
       break;
     }
     }

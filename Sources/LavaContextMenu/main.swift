@@ -62,6 +62,10 @@ enum ContextMenu {
     /// the surface, so the compositor's whole-surface frost is exactly its
     /// outline, cut to the window corner the plate is drawn with.
     static let backdropBlur: Float = 12
+    /// How far the rim of that glass bends, in pixels. A menu is a small slab
+    /// and reads as glass with it; a frosted window edge to edge does not,
+    /// which is why the compositor leaves it off unless asked.
+    static let refraction: Float = 28
 }
 
 /// One fly-out this menu has open. `depth` 0 hangs off the root plate.
@@ -156,6 +160,7 @@ final class MenuModel {
             width: ContextMenu.arenaWidth,
             height: ContextMenu.measureHeight,
             backdropBlur: ContextMenu.backdropBlur,
+            refraction: ContextMenu.refraction,
             makeRoot: {
                 BranchMenuView(
                     plate: plate,
@@ -598,6 +603,7 @@ WindowBackdrop.current = .none
 // Remembered until `run` has a surface. Set once: the root surface lives for
 // the whole session and is only hidden between menus, and the compositor
 // keeps the radius with it.
+LavaClient.setBackdropRefraction(px: ContextMenu.refraction)
 LavaClient.setBackdropBlur(radius: ContextMenu.backdropBlur)
 
 // Before `run`, which is where the surface is created: the subscription is
