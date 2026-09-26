@@ -23,14 +23,31 @@ struct WeatherView: View {
                 VStack(padding: 20, spacing: 18) {
                     Hero(session: session)
                     if !session.hours.isEmpty {
-                        Section("NEXT 24 HOURS") { HourStrip(session: session) }
+                        Section("NEXT 24 HOURS") {
+                            // One pane of glass for the strip, not one per
+                            // card: every backdrop blur is a pass break.
+                            VStack(padding: 8, spacing: 0) { HourStrip(session: session) }
+                                .glassPanel()
+                        }
                     }
                     if !session.days.isEmpty {
-                        Section("THIS WEEK") { WeekList(session: session) }
+                        Section("THIS WEEK") {
+                            WeekList(session: session)
+                                .padding(6)
+                                .glassPanel()
+                        }
                     }
                 }
             }
             .flexGrow(1)
+        }
+        // Behind everything, the title bar included: the sky runs to the top
+        // edge, and the scroll area slides the glass across a sky that stays.
+        .underlay {
+            SkyBackdrop(
+                sky: session.forecast?.current.code.sky ?? .clear,
+                isDay: session.forecast?.current.isDay ?? true
+            )
         }
         .background(Theme.current.background)
         .overlay(
@@ -60,35 +77,34 @@ private struct TitleBar: View {
                 WindowControls()
                     .windowChrome()
             }
-            Text(session.place.name, color: Theme.current.textPrimary)
+            Text(session.place.name, color: Ink.primary)
                 .agentId("place-name")
-            Text(session.place.country, color: Theme.current.textDim)
+            Text(session.place.country, color: Ink.dim)
             Spacer()
             if session.status == .loading {
-                Text("Updating…", color: Theme.current.textDim)
+                Text("Updating…", color: Ink.dim)
             }
             Text(
                 session.units == .metric ? "°C" : "°F",
-                color: Theme.current.textSecondary,
+                color: Ink.secondary,
                 onClick: { session.units = session.units == .metric ? .imperial : .metric }
             )
             .padding(6)
-            .hoverBackground(Theme.current.hover)
+            .hoverBackground(Ink.hover)
             .cornerRadius(6)
             .agentId("units-toggle")
             Text("Search", color: .accent, onClick: { session.isSearchPresented = true })
                 .padding(6)
-                .hoverBackground(Theme.current.hover)
+                .hoverBackground(Ink.hover)
                 .cornerRadius(6)
                 .agentId("open-search")
-            Text("Refresh", color: Theme.current.textSecondary, onClick: { session.reload() })
+            Text("Refresh", color: Ink.secondary, onClick: { session.reload() })
                 .padding(6)
-                .hoverBackground(Theme.current.hover)
+                .hoverBackground(Ink.hover)
                 .cornerRadius(6)
                 .agentId("refresh")
         }
         .frame(height: .pt(44))
-        .background(Theme.current.panel)
         .windowDrag()
     }
 }
@@ -105,7 +121,7 @@ private struct Section<Content: View>: View {
 
     var body: some View {
         VStack(padding: 0, spacing: 8) {
-            Text(title, color: Theme.current.textDim)
+            Text(title, color: Ink.dim)
             content
         }
     }
@@ -135,13 +151,13 @@ private struct Hero: View {
                     VStack(padding: 0, spacing: 4) {
                         Text(
                             units.temperatureLabel(current.temperature),
-                            color: Theme.current.textPrimary, font: Fonts.hero
+                            color: Ink.primary, font: Fonts.hero
                         )
                         .agentId("current-temp")
-                        Text(current.code.summary, color: Theme.current.textSecondary)
+                        Text(current.code.summary, color: Ink.secondary)
                         Text(
                             "Feels like \(units.temperatureLabel(current.feelsLike))",
-                            color: Theme.current.textDim
+                            color: Ink.dim
                         )
                     }
                     Spacer()
@@ -158,11 +174,10 @@ private struct Hero: View {
                     }
                 }
             } else if session.status == .loading {
-                Text("Loading the forecast…", color: Theme.current.textSecondary)
+                Text("Loading the forecast…", color: Ink.secondary)
             }
         }
-        .background(Theme.current.panel)
-        .cornerRadius(14)
+        .glassPanel()
     }
 }
 
@@ -177,8 +192,8 @@ private struct Detail: View {
 
     var body: some View {
         HStack(padding: 0, alignment: .center, spacing: 8) {
-            Text(label, color: Theme.current.textDim)
-            Text(value, color: Theme.current.textSecondary)
+            Text(label, color: Ink.dim)
+            Text(value, color: Ink.secondary)
         }
     }
 }
@@ -221,7 +236,7 @@ private struct HourStrip: View {
                         padding: Self.cardPadding, alignment: .center,
                         spacing: Self.cardSpacing
                     ) {
-                        Text(hour.hourLabel, color: Theme.current.textDim)
+                        Text(hour.hourLabel, color: Ink.dim)
                         SkyIcon(
                             sky: hour.code.sky,
                             isDay: isDaylight(hour),
@@ -229,15 +244,15 @@ private struct HourStrip: View {
                         )
                         Text(
                             units.temperatureLabel(hour.temperature),
-                            color: Theme.current.textPrimary
+                            color: Ink.primary
                         )
                         Text(
                             hour.precipitationChance > 0 ? "\(hour.precipitationChance)%" : " ",
                             color: Color(r: 0.45, g: 0.72, b: 0.98)
                         )
                     }
-                    .background(Theme.current.panel)
-                    .cornerRadius(10)
+                    .background(Glass.tile)
+                    .cornerRadius(12)
                 }
             }
         }
@@ -271,7 +286,7 @@ private struct WeekList: View {
                 HStack(padding: 10, alignment: .center, spacing: 12) {
                     Text(
                         entry.offset == 0 ? "Today" : day.weekdayLabel,
-                        color: Theme.current.textPrimary
+                        color: Ink.primary
                     )
                     .frame(width: .pt(56))
                     SkyIcon(sky: day.code.sky, size: 26)
@@ -280,14 +295,16 @@ private struct WeekList: View {
                         color: Color(r: 0.45, g: 0.72, b: 0.98)
                     )
                     .frame(width: .pt(44))
-                    Text(day.code.summary, color: Theme.current.textDim)
+                    Text(day.code.summary, color: Ink.dim)
                     Spacer()
-                    Text(units.temperatureLabel(day.low), color: Theme.current.textDim)
+                    Text(units.temperatureLabel(day.low), color: Ink.dim)
                     TemperatureBar(day: day, lo: range.lo, hi: range.hi)
-                    Text(units.temperatureLabel(day.high), color: Theme.current.textPrimary)
+                    Text(units.temperatureLabel(day.high), color: Ink.primary)
                 }
-                .background(Theme.current.panel)
-                .cornerRadius(10)
+                // Alternate rows only: a lift on every row would be a grid of
+                // boxes again, and the glass is the container now.
+                .background(entry.offset % 2 == 0 ? Glass.tile : .clear)
+                .cornerRadius(12)
             }
         }
     }
@@ -314,7 +331,7 @@ private struct TemperatureBar: View {
                 let x1 = frame.x + Float((day.high - lo) / span) * frame.w
                 draw.roundedRect(
                     x: frame.x, y: frame.y + 2, w: frame.w, h: 4,
-                    color: Theme.current.inset, radius: 2
+                    color: Glass.track, radius: 2
                 )
                 draw.roundedRect(
                     x: x0, y: frame.y, w: max(4, x1 - x0), h: 8,
