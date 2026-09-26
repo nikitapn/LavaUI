@@ -82,6 +82,19 @@ code, pre { font-family: var(--mono); font-size: 0.9em; }
 .brand span { color: var(--accent); font-weight: 500; }
 
 .search { position: relative; flex: 1; max-width: 32rem; }
+
+/* Pushed to the far right by its auto margin, whatever the search takes. */
+.repo {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  color: var(--muted);
+  font-weight: 500;
+  white-space: nowrap;
+}
+.repo:hover { color: var(--text); text-decoration: none; }
+@media (max-width: 40rem) { .repo span { display: none; } }
 .search input {
   width: 100%;
   padding: 0.5rem 0.8rem;
@@ -248,6 +261,29 @@ h1 .kind { font-size: 0.8rem; vertical-align: 0.35em; }
 .prose table { border-collapse: collapse; margin: 1rem 0; display: block; overflow-x: auto; }
 .prose th, .prose td { padding: 0.4rem 0.7rem; border: 1px solid var(--border); text-align: left; }
 .prose blockquote { margin: 1rem 0; padding: 0 1rem; border-left: 3px solid var(--border); color: var(--muted); }
+
+/* The home page's screenshot. Wider than the reading measure: at 48rem a
+   1920-wide desktop shrinks until its text is a texture. */
+.showcase { max-width: 64rem; margin: 1.5rem 0 2rem; }
+.showcase img {
+  display: block; width: 100%; height: auto;
+  border: 1px solid var(--border); border-radius: 10px; box-shadow: var(--shadow);
+}
+.showcase figcaption { margin-top: 0.6rem; font-size: 0.85rem; color: var(--muted); }
+.showcase a { display: block; cursor: zoom-in; }
+
+/* The enlarged screenshot (web/lightbox.js). As big as the viewport allows,
+   never past its own pixels: a 1920 capture upscaled on a 4K screen is blur. */
+.lightbox {
+  padding: 0; border: 0; background: none;
+  max-width: 96vw; max-height: 94vh; overflow: visible; cursor: zoom-out;
+}
+.lightbox img {
+  display: block; max-width: min(96vw, 1920px); max-height: 94vh;
+  width: auto; height: auto; border-radius: 10px;
+  box-shadow: 0 12px 48px rgb(0 0 0 / 45%);
+}
+.lightbox::backdrop { background: rgb(10 11 14 / 80%); backdrop-filter: blur(6px); }
 .guide { max-width: 52rem; }
 
 a.xref code { color: var(--accent); }

@@ -6,7 +6,22 @@
     HarfBuzz shapes the text and one pipeline draws everything, in a window of
     its own or as a client of the Lava compositor.
   </p>
+</article>
 
+<figure class="showcase">
+  {{! hx-boost off: htmx would otherwise fetch the JPEG into #content. }}
+  <a href="/desktop.jpg" data-lightbox hx-boost="false" aria-label="Enlarge the screenshot">
+    <img src="/desktop.jpg" width="1920" height="1080"
+         alt="The Lava desktop: LavaWeather's glass panels over a sky gradient, a frosted LavaTerm running neofetch, the panel's calendar dropdown and the dock" />
+  </a>
+  <figcaption>
+    The Lava desktop. The weather app, the terminal, the
+    panel with its global menu and calendar, and the dock are all LavaUI,
+    running as clients of the Lava compositor.
+  </figcaption>
+</figure>
+
+<article class="prose">
   <h2>Why this exists</h2>
   <p>
     Writing a native application for Linux is a mess. There are two toolkits
