@@ -2,13 +2,24 @@
 // SPDX-License-Identifier: MIT
 
 import DocsModel
+import Foundation
 
 /// What makes this LavaUI's site rather than NPRPC's. DocsModel is the NPRPC
 /// site's unchanged, so fixes there carry over by copying the directory; the
 /// differences are kept here and in the templates.
 enum Site {
     static let name = "LavaUI"
-    static let homeTitle = "LavaUI documentation"
+    /// The words someone looking for this would type, rather than its name —
+    /// "LavaUI documentation" only matched people who already knew it.
+    static let homeTitle = "LavaUI — SwiftUI-style UI framework for Linux, drawn with Vulkan"
+    static let homeDescription =
+        "A declarative UI framework in Swift for Linux: SwiftUI-style views, Yoga layout, "
+        + "HarfBuzz text and a Vulkan renderer — and a Wayland desktop built with it."
+    /// Where the site is served, for canonical links, the sitemap and link
+    /// previews. `DOCS_BASE_URL` overrides it (a staging host, a local run).
+    static let defaultBaseURL = "https://lavaui.nikitapn.com"
+    /// The link-preview picture, relative to the static root.
+    static let previewImage = "/desktop.jpg"
     /// Guides link to notes the site does not carry (`issues.md`,
     /// `../AGENTS.md`); those go to the repository instead of a 404.
     static let repository = "https://github.com/nikitapn/LavaUI/blob/main/"
@@ -40,6 +51,44 @@ enum Site {
             $0.lang == lang.id && ($0.qualified == namespace || $0.qualified.hasPrefix(prefix))
         }
         return (all.count, all.filter { !$0.doc.isEmpty }.count)
+    }
+
+    /// Rendered HTML as one line of plain text for a meta description:
+    /// tags gone, the entities the renderers emit decoded, whitespace
+    /// collapsed, and cut at a word near `limit` characters — about what a
+    /// results page shows before it truncates on its own.
+    static func plainText(_ html: String, limit: Int = 160) -> String? {
+        // Blocks end in a space, inline tags in nothing: `<code>@State</code>,`
+        // is "@State," — a space for every tag reads "@State ,".
+        var text = html.replacingOccurrences(
+            of: "</(p|li|h[1-6]|div|td|th|pre|blockquote)>|<br\\s*/?>", with: " ",
+            options: .regularExpression)
+        text = text.replacingOccurrences(of: "<[^>]+>", with: "", options: .regularExpression)
+        for (entity, char) in [("&lt;", "<"), ("&gt;", ">"), ("&quot;", "\""), ("&#39;", "'"),
+                               ("&#x27;", "'"), ("&nbsp;", " "), ("&amp;", "&")] {
+            text = text.replacingOccurrences(of: entity, with: char)
+        }
+        text = text.replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+            .trimmingCharacters(in: .whitespaces)
+        guard !text.isEmpty else { return nil }
+        guard text.count > limit else { return text }
+        let cut = text.prefix(limit)
+        // A whole sentence if one ends in the back half; otherwise a word
+        // boundary and an ellipsis to say the text goes on.
+        if let end = cut.lastIndex(where: { ".!?".contains($0) }),
+           cut.distance(from: cut.startIndex, to: end) >= limit / 2 {
+            return String(cut[...end])
+        }
+        let word = cut.lastIndex(of: " ").map { cut[..<$0] } ?? cut
+        return word.trimmingCharacters(in: CharacterSet(charactersIn: " ,;:—-")) + "…"
+    }
+
+    /// A guide's first paragraph, which is where every guide says what it is.
+    static func firstParagraph(_ html: String) -> String? {
+        guard let r = html.range(of: "(?s)<p>.*?</p>", options: .regularExpression) else {
+            return nil
+        }
+        return plainText(String(html[r]))
     }
 
     /// Relative `href`s and `src`s left in a guide after DocsModel rewrote

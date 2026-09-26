@@ -2,3 +2,6 @@
 .swiftpm/
 Package.resolved
 .build-docker/
+
+web/BingSiteAuth.xml
+web/google568e958548a3c50d.html

@@ -4,6 +4,18 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>{{title}}</title>
+  {{#description}}<meta name="description" content="{{description}}" />{{/description}}
+  {{#robots}}<meta name="robots" content="{{robots}}" />{{/robots}}
+  {{#canonical}}<link rel="canonical" href="{{canonical}}" />{{/canonical}}
+  {{! Link previews (Mastodon, Slack, Hacker News readers, …): the desktop
+      screenshot on every page, since it says more than any one title. }}
+  <meta property="og:site_name" content="{{brand}}" />
+  <meta property="og:type" content="website" />
+  <meta property="og:title" content="{{title}}" />
+  {{#description}}<meta property="og:description" content="{{description}}" />{{/description}}
+  {{#canonical}}<meta property="og:url" content="{{canonical}}" />{{/canonical}}
+  <meta property="og:image" content="{{image}}" />
+  <meta name="twitter:card" content="summary_large_image" />
   <link rel="stylesheet" href="/style.css" />
   <script src="/vendor/htmx.min.js" defer></script>
   <script type="module" src="/code.js"></script>

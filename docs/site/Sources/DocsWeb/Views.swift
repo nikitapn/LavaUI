@@ -18,9 +18,28 @@ struct NavItem {
     let url: String
 }
 
+/// What a page tells search engines and link previews about itself — the
+/// `<head>` half of a page, which htmx never swaps and only a full load reads.
+struct PageMeta {
+    /// Plain text for `<meta name="description">`; nil leaves the tag out and
+    /// the search engine picks its own snippet.
+    var description: String?
+    /// False for pages with nothing worth ranking: search results, a 404, an
+    /// API page whose declarations carry no documentation.
+    var indexable = true
+}
+
 struct LayoutView {
     let title: String
     let content: String
+    let description: String?
+    /// Absolute URL of this page, for `rel=canonical` and `og:url`; nil on a
+    /// 404, which is not the page at any URL.
+    let canonical: String?
+    /// Absolute URL of the link-preview picture.
+    let image: String
+    /// "noindex", or nil for a page search engines may list.
+    let robots: String?
     let brand: String
     let modules: [NavItem]
     let articles: [NavItem]
@@ -28,10 +47,15 @@ struct LayoutView {
     let query: String
     let has_articles: Bool
 
-    init(title: String, content: String, brand: String, modules: [NavItem],
-         articles: [NavItem], guides: [NavItem], query: String) {
+    init(title: String, content: String, meta: PageMeta, canonical: String?, image: String,
+         brand: String, modules: [NavItem], articles: [NavItem], guides: [NavItem],
+         query: String) {
         self.title = title
         self.content = content
+        description = meta.description
+        self.canonical = canonical
+        self.image = image
+        robots = meta.indexable ? nil : "noindex"
         self.brand = brand
         self.modules = modules
         self.articles = articles

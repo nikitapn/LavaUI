@@ -9,6 +9,8 @@
 //   DOCS_ROOT       directory holding templates/, articles/ and web/ (default: .)
 //   DOCS_PORT       HTTP port (default 8080)
 //   DOCS_HOSTNAME   public hostname (default localhost)
+//   DOCS_BASE_URL   where the site is reached, for canonical links, the
+//                   sitemap and link previews (default https://lavaui.nikitapn.com)
 //   DOCS_TLS_CERT   with DOCS_TLS_KEY, serve HTTPS instead; SIGHUP re-reads
 //                   them, so a certbot renewal needs no restart
 //   DOCS_HTTP3=1    also serve HTTP/3 on the same port (needs TLS)
@@ -40,7 +42,8 @@ do {
     let site = try DocsSite(store: store,
                             templateDirectory: root + "/templates",
                             articleDirectory: root + "/articles",
-                            hotReload: env["DOCS_TEMPLATE_RELOAD"] == "1")
+                            hotReload: env["DOCS_TEMPLATE_RELOAD"] == "1",
+                            baseURL: env["DOCS_BASE_URL"])
 
     var http = RpcBuilder()
         .setLogLevel(.warn)

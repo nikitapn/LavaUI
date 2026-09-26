@@ -49,10 +49,15 @@ public struct DocsSite: Sendable {
     private let store: DocsStore
     private let library: TemplateLibrary
     private let articles: ArticleStore
+    /// Scheme and host the site is reached at, no trailing slash.
+    private let baseURL: String
 
     public init(store: DocsStore, templateDirectory: String, articleDirectory: String,
-                hotReload: Bool = false) throws {
+                hotReload: Bool = false, baseURL: String? = nil) throws {
         self.store = store
+        var base = baseURL ?? Site.defaultBaseURL
+        while base.hasSuffix("/") { base.removeLast() }
+        self.baseURL = base
         self.library = try TemplateLibrary(directory: templateDirectory, hotReload: hotReload)
         self.articles = ArticleStore(directory: articleDirectory, reload: hotReload)
     }
@@ -73,6 +78,14 @@ public struct DocsSite: Sendable {
         let parts = request.path.split(separator: "/").map {
             String($0).removingPercentEncoding ?? String($0)
         }
+        // Every page names itself by the path it was asked for, without the
+        // query: a search's `?q=` is the only query the site has, and search
+        // pages are not indexed anyway.
+        // One spelling per page: `/api/swift/` and `/api/swift` both answer,
+        // and two canonical URLs for one page is what canonical is there to
+        // prevent.
+        var path = request.path
+        while path.count > 1 && path.hasSuffix("/") { path.removeLast() }
 
         switch parts.first {
         case nil:
@@ -81,15 +94,26 @@ public struct DocsSite: Sendable {
                 articles: articles.all.map { ArticleCard(title: $0.title, summary: $0.summary,
                                                          url: "/article/" + $0.slug) },
                 guides: guideNav(index))
-            return page("home", view, title: Site.homeTitle, index: index, fragment: fragment)
+            return page("home", view, title: Site.homeTitle, index: index, fragment: fragment,
+                        path: path, meta: PageMeta(description: Site.homeDescription))
+
+        // Served here rather than from the static root so their URLs come
+        // from the same base as the canonical links.
+        case "robots.txt" where parts.count == 1:
+            return robots()
+        case "sitemap.xml" where parts.count == 1:
+            return sitemap(index)
 
         case "api":
             guard parts.count >= 2, let language = Language.named(parts[1]) else {
                 return notFound(index: index, fragment: fragment)
             }
             if parts.count == 2 {
+                let description = Site.languageSummaries[language.id]
+                    ?? "API reference for \(Site.title(of: language)) in LavaUI."
                 return page("lang", LangView(language: language, index: index),
-                            title: "\(Site.title(of: language)) API", index: index, fragment: fragment)
+                            title: "\(Site.title(of: language)) API", index: index, fragment: fragment,
+                            path: path, meta: PageMeta(description: description))
             }
             let components = Array(parts.dropFirst(2))
             guard let p = index.page(lang: language.id, components: components) else {
@@ -98,11 +122,19 @@ public struct DocsSite: Sendable {
                 let view = LangView(language: language, index: index,
                                     namespace: components.joined(separator: language.separator))
                 guard !view.namespaces.isEmpty else { return notFound(index: index, fragment: fragment) }
-                return page("lang", view, title: view.title, index: index, fragment: fragment)
+                let module = Site.modules.first { $0.name == view.title }?.summary
+                let description = module.map { "\(view.title): \($0)" }
+                    ?? "API reference for \(view.title): \(view.symbols) declarations."
+                // "LavaUI · LavaUI" says nothing; "LavaUI module" says what the page is.
+                let kind = language.id == "swift" && !view.title.contains(language.separator)
+                    ? "module" : "API"
+                return page("lang", view, title: "\(view.title) \(kind)", index: index,
+                            fragment: fragment, path: path, meta: PageMeta(description: description))
             }
             let view = SymbolPageView(page: p, index: index)
-            return page("symbol", view, title: "\(p.components.joined(separator: language.separator)) — \(Site.title(of: language))",
-                        index: index, fragment: fragment)
+            let name = p.components.joined(separator: language.separator)
+            return page("symbol", view, title: "\(name) — \(Site.title(of: language))",
+                        index: index, fragment: fragment, path: path, meta: symbolMeta(p, name: name, index: index))
 
         case "guide":
             guard parts.count == 2, let guide = index.guide(slug: parts[1]) else {
@@ -111,14 +143,16 @@ public struct DocsSite: Sendable {
             let html = Site.linkOutside(guide.html, from: guide.file)
             return page("guide", GuideView(title: guide.title, html: html, file: guide.file,
                                            source: Site.repository + guide.file),
-                        title: guide.title, index: index, fragment: fragment)
+                        title: guide.title, index: index, fragment: fragment,
+                        path: path, meta: PageMeta(description: Site.firstParagraph(guide.html)))
 
         case "article":
             guard parts.count == 2, let article = articles.article(slug: parts[1]) else {
                 return notFound(index: index, fragment: fragment)
             }
             return page("article", ArticleView(html: article.html), title: article.title,
-                        index: index, fragment: fragment)
+                        index: index, fragment: fragment, path: path,
+                        meta: PageMeta(description: article.summary.flatMap { Site.plainText($0) }))
 
         case "search":
             let query = request.queryItems["q"] ?? ""
@@ -130,7 +164,8 @@ public struct DocsSite: Sendable {
             }
             let view = SearchView(query: query, index: index, limit: Self.pageResults)
             return page("search", view, title: "Search: \(query)", index: index,
-                        fragment: fragment, query: query)
+                        fragment: fragment, path: path, meta: PageMeta(indexable: false),
+                        query: query)
 
         default:
             // Assets (/style.css, /vendor/htmx.min.js) go to the static root.
@@ -185,8 +220,50 @@ public struct DocsSite: Sendable {
         return cards
     }
 
+    /// A declaration's page: its first summary for the snippet, and indexed
+    /// only if something on it is documented. An undocumented page is a
+    /// signature and nothing else, and hundreds of those are what makes a
+    /// search engine think less of the whole site.
+    private func symbolMeta(_ page: Page, name: String, index: DocsIndex) -> PageMeta {
+        let symbols = page.symbolIds.compactMap { index.symbols[$0] }
+        let summary = symbols.lazy.map(\.summary_html).first { !$0.isEmpty }
+        return PageMeta(
+            description: summary.flatMap { Site.plainText("\(name) — " + $0) },
+            indexable: symbols.contains { !$0.doc.isEmpty })
+    }
+
+    private func robots() -> PageResponse {
+        // /search is a page per query, all of them near-empty.
+        let text = "User-agent: *\nDisallow: /search\n\nSitemap: \(baseURL)/sitemap.xml\n"
+        return PageResponse(status: 200, headers: ["content-type": "text/plain; charset=utf-8"],
+                            body: Array(text.utf8))
+    }
+
+    /// Every page worth indexing: home, guides, articles, the API overviews
+    /// and each documented declaration. No `lastmod` — nothing here knows
+    /// when a page's source last changed, and a wrong date is worse than none.
+    private func sitemap(_ index: DocsIndex) -> PageResponse {
+        var paths = ["/"]
+        paths += guideNav(index).map(\.url)
+        paths += articles.all.map { "/article/" + $0.slug }
+        paths += moduleCards(index).map(\.url)
+        paths += index.pages.values
+            .filter { $0.symbolIds.contains { !(index.symbols[$0]?.doc.isEmpty ?? true) } }
+            .map(index.pageURL)
+            .sorted()
+        var xml = #"<?xml version="1.0" encoding="UTF-8"?>"# + "\n"
+            + #"<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">"# + "\n"
+        for path in paths {
+            xml += "  <url><loc>\(escape(baseURL + path))</loc></url>\n"
+        }
+        xml += "</urlset>\n"
+        return PageResponse(status: 200, headers: ["content-type": "application/xml; charset=utf-8"],
+                            body: Array(xml.utf8))
+    }
+
     private func page(_ template: String, _ view: Any, title: String, index: DocsIndex,
-                      fragment: Bool, query: String = "", status: Int = 200) -> PageResponse {
+                      fragment: Bool, path: String?, meta: PageMeta, query: String = "",
+                      status: Int = 200) -> PageResponse {
         guard let content = library.render(view, withTemplate: template) else {
             return templateMissing(template)
         }
@@ -197,7 +274,8 @@ public struct DocsSite: Sendable {
             return PageResponse(html: "<title>\(escape(fullTitle))</title>\n" + content, status: status)
         }
         let layout = LayoutView(
-            title: fullTitle, content: content,
+            title: fullTitle, content: content, meta: meta,
+            canonical: path.map { baseURL + $0 }, image: baseURL + Site.previewImage,
             brand: Site.name, modules: apiNav(index),
             articles: articles.all.map { NavItem(title: $0.title, url: "/article/" + $0.slug) },
             guides: guideNav(index), query: query)
@@ -216,7 +294,7 @@ public struct DocsSite: Sendable {
 
     private func notFound(index: DocsIndex, fragment: Bool) -> PageResponse {
         page("not_found", NavItem(title: "", url: ""), title: "Not found", index: index,
-             fragment: fragment, status: 404)
+             fragment: fragment, path: nil, meta: PageMeta(indexable: false), status: 404)
     }
 
     private func templateMissing(_ name: String) -> PageResponse {
