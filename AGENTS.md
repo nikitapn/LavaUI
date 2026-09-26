@@ -1212,7 +1212,7 @@ so headless test runs skip it too.
 | Compositor windows / input / workspaces | `compositor/src/main.cpp` |
 | Compositor config (`lava.conf`) | `compositor/src/config.*`, `compositor/README.md` |
 | Window corner rounding | `QuadRenderer::pushCornerMask`, `quad.frag` kind 4 |
-| Window shadows (focused only) | `SurfaceRegistry::applyShadow`, `quad.frag` kind 5 |
+| Window shadows (focused strongest) | `SurfaceRegistry::applyShadow`, `quad.frag` kind 5 |
 | Window chrome an app draws itself | `Sources/LavaUI/WindowControls.swift` |
 | Pointer image (`.cursor(_:)`) | `Sources/LavaUI/Cursor.swift`, `AppWindow::setCursorShape`, IDL `SetCursor` |
 | Draggable panes | `Sources/LavaUI/SplitView.swift` |

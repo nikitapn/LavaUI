@@ -1664,9 +1664,10 @@ struct ClientSurface {
   /// else moves, enables and reparents, exactly as it did the single node this
   /// replaces.
   ///
-  /// Only the focused window's is enabled. That is the whole feature: it says
-  /// which window is active in the place the user is already looking, instead
-  /// of a tinted border they have to go and check.
+  /// Every window has one; the focused window's is drawn at full strength and
+  /// the rest at `shadowInactive_` of it, as scene-buffer opacity over the same
+  /// tile. The difference says which window is active in the place the user is
+  /// already looking, instead of a tinted border they have to go and check.
   wlr_scene_tree *shadowTree = nullptr;
   std::array<wlr_scene_buffer *, 9> shadowSlices{};
   /// What the slices were last laid out for, so a move does not redo a resize's
@@ -4060,7 +4061,8 @@ class SurfaceRegistry : public lava::CompositorHost {
         shadowBlur_ > 0.f && !surface.panel && !surface.menu &&
         !surface.maximized && !coversItsOutput(surface) &&
         renderer_ != nullptr && workspaces_ != nullptr &&
-        surface.id == focused_ && frameShown(surface);
+        (surface.id == focused_ || shadowInactive_ > 0.f) &&
+        frameShown(surface);
     if (!wanted) {
       if (surface.shadowTree != nullptr) {
         wlr_scene_node_set_enabled(&surface.shadowTree->node, false);
@@ -4103,8 +4105,24 @@ class SurfaceRegistry : public lava::CompositorHost {
       surface.shadowH = frameH;
       surface.shadowRadius = radius;
     }
+    // One tile for both strengths: the weaker shadow is the same picture
+    // composited at lower opacity, so focus changing costs no draw at all.
+    const float opacity = surface.id == focused_ ? 1.f : shadowInactive_;
+    for (wlr_scene_buffer *slice : surface.shadowSlices) {
+      if (slice != nullptr) wlr_scene_buffer_set_opacity(slice, opacity);
+    }
     wlr_scene_node_set_enabled(&surface.shadowTree->node, true);
     placeShadow(surface);
+  }
+
+  /// How strong an unfocused window's shadow is, as a fraction of the focused
+  /// one's. Separate from `setAppearance` because it is a `lava.conf` setting
+  /// only — the settings app's appearance call does not carry it.
+  void setInactiveShadow(float fraction) {
+    const float next = std::clamp(fraction, 0.f, 1.f);
+    if (shadowInactive_ == next) return;
+    shadowInactive_ = next;
+    for (auto &surface : surfaces_) applyShadow(*surface);
   }
 
   /// Points the nine slices at their parts of the tile and stretches them.
@@ -7033,6 +7051,8 @@ class SurfaceRegistry : public lava::CompositorHost {
   std::vector<ShadowTile> shadowTiles_;
   float shadowOpacity_ = 0.35f;
   float shadowOffsetY_ = 4.f;
+  /// An unfocused window's shadow, as a fraction of the focused one's.
+  float shadowInactive_ = 0.45f;
   lava::Decoration decoration_;
   /// Whose bar is drawn active.
   uint32_t focused_ = 0;
@@ -11060,6 +11080,7 @@ void Server::reloadConfig() {
         static_cast<float>(config.appearance.shadowBlur),
         config.appearance.shadowOpacity,
         static_cast<float>(config.appearance.shadowOffsetY));
+    surfaces->setInactiveShadow(config.appearance.shadowInactive);
     if (surfaces->control()) surfaces->control()->postSystemTheme();
   }
   // A hand-edited wallpaper, on the same signal as everything else. A picture
@@ -13327,6 +13348,7 @@ int main() {
       static_cast<float>(server.config.appearance.shadowBlur),
       server.config.appearance.shadowOpacity,
       static_cast<float>(server.config.appearance.shadowOffsetY));
+  surfaces.setInactiveShadow(server.config.appearance.shadowInactive);
   surfaces.start(wl_display_get_event_loop(server.display));
 
   // Before the control plane, not after it: the socket's name is what tells

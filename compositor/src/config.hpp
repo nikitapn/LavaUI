@@ -86,9 +86,11 @@ struct AppearanceConfig {
 
   /// How far a window's shadow reaches, in pixels. 0 turns shadows off.
   ///
-  /// Only the focused window casts one, which is the point: it says which
-  /// window is active without tinting a border, and it says it in the one
-  /// place the eye is already looking. Unlike rounding, this works for
+  /// Every window casts one, and the focused window's is the strongest —
+  /// see `shadowInactive`. That difference is what says which window is
+  /// active without tinting a border, in the one place the eye is already
+  /// looking, while the rest still sit on the desktop rather than being
+  /// pasted onto it. Unlike rounding, this works for
   /// Wayland clients too — a shadow is drawn *behind* a window and needs
   /// nothing from its buffer.
   int32_t shadowBlur = 0;
@@ -100,6 +102,11 @@ struct AppearanceConfig {
   /// How far the shadow is pushed down, in pixels. Light comes from above, so
   /// a shadow sitting exactly under its window reads as a glow instead.
   int32_t shadowOffsetY = 4;
+
+  /// An unfocused window's shadow as a fraction of the focused one's, 0…1.
+  /// 0 is the old behaviour, a shadow under the focused window only. Plasma's
+  /// split, roughly: every window lifted off the desktop, the active one more.
+  float shadowInactive = 0.45f;
 };
 
 /// How the compositor's own renderer is set up.

@@ -354,6 +354,10 @@ Config Config::load(const std::string &path) {
         const double opacity = std::atof(value.c_str());
         config.appearance.shadowOpacity =
           static_cast<float>(opacity < 0.0 ? 0.0 : (opacity > 1.0 ? 1.0 : opacity));
+      } else if (key == "shadow-inactive") {
+        const double fraction = std::atof(value.c_str());
+        config.appearance.shadowInactive = static_cast<float>(
+          fraction < 0.0 ? 0.0 : (fraction > 1.0 ? 1.0 : fraction));
       } else if (key == "shadow-offset-y") {
         const int32_t offset = std::atoi(value.c_str());
         config.appearance.shadowOffsetY =

@@ -212,10 +212,13 @@ layout = us
 [appearance]
 # Window corner radius in pixels. 0 (the default) is square; clamped to 64.
 corner-radius = 10
-# Drop shadow under the *focused* window. blur 0 (the default) turns it off.
+# Drop shadow under every window. blur 0 (the default) turns it off.
 shadow-blur = 24
 shadow-opacity = 0.35
 shadow-offset-y = 4
+# An unfocused window's shadow as a fraction of the focused one's. 0 puts a
+# shadow under the focused window only.
+shadow-inactive = 0.45
 
 [output DP-3]
 mode = 2560x1440@144
@@ -311,8 +314,10 @@ whose other two stay sharp, and the shadow behind it could match one end or the
 other but not both — square all the way round is the version that looks
 finished rather than half-applied.
 
-The shadow is cast by the **focused window only**, which is what says a window
-is active — no border tint to go and look for. Unlike rounding it works for
+Every window casts a shadow, and the **focused window's is the strongest** —
+the others are the same shadow at `shadow-inactive` of its strength. That
+difference is what says a window is active, with no border tint to go and look
+for. Unlike rounding it works for
 Wayland clients as well, because a shadow is drawn on a surface *behind* the
 window and needs nothing from the window's own pixels. It is a shape rather
 than a blurred picture of anything: the compositor knows the rectangle a window
