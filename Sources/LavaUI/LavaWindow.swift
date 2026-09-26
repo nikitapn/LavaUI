@@ -14,11 +14,13 @@ import Foundation
 /// `FocusManager.focus(…)` with no window in scope and still land in the right
 /// one. See `WindowScope`.
 public final class LavaWindow {
+    /// Which of the editor's windows this is.
     public let id: WindowID
 
     /// Framework state that used to be process-global.
     public let scope: WindowScope
 
+    /// Owns this window's view tree and runs its layout.
     public let host = LayoutHost()
 
     let editor: Editor

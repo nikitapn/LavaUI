@@ -16,11 +16,14 @@ import Foundation
 /// receive a drop. Give the layer `.pct(100)` in both axes and it is exactly
 /// the base's size.
 public struct LayeredView<Content: View, Layer: View>: PrimitiveView {
+    /// The base view, which alone decides the size of the box.
     public var content: Content
+    /// The inert layer drawn under or over the base.
     public var layer: Layer
     /// Over the content rather than under it.
     public var above: Bool
 
+    /// Pins `layer` to `content`'s box. Usually spelled `.underlay(_:)` or `.overlayLayer(_:)`.
     public init(content: Content, layer: Layer, above: Bool) {
         self.content = content
         self.layer = layer

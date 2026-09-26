@@ -2,11 +2,16 @@ import Foundation
 
 /// Absolute layout box handed to a custom paint callback (window pixels).
 public struct CanvasFrame: Sendable, Equatable {
+    /// Left edge, in window pixels.
     public var x: Float
+    /// Top edge, in window pixels.
     public var y: Float
+    /// Width, in pixels.
     public var w: Float
+    /// Height, in pixels.
     public var h: Float
 
+    /// Creates a frame from its origin and size.
     public init(x: Float, y: Float, w: Float, h: Float) {
         self.x = x
         self.y = y
@@ -29,12 +34,16 @@ public enum CanvasGesturePhase: Sendable, Equatable {
 
 /// One pointer event delivered to a `Canvas`'s `onGesture`.
 public struct CanvasGesture: Sendable, Equatable {
+    /// Whether the button went down, the pointer moved while held, or the button came up.
     public var phase: CanvasGesturePhase
     /// Relative to the canvas's own top-left, matching `CanvasFrame`. Can go
     /// negative, or past `w`/`h`, once a drag leaves the box.
     public var localX: Float
+    /// Vertical position relative to the canvas's top edge. See `localX`.
     public var localY: Float
+    /// Horizontal position in window pixels.
     public var windowX: Float
+    /// Vertical position in window pixels.
     public var windowY: Float
     /// Current absolute canvas geometry, identical to the frame passed to
     /// `paint`. This makes local coordinates reversible without app-owned
@@ -83,20 +92,34 @@ public struct CanvasGesture: Sendable, Equatable {
 ///   is for the ones that draw the difference themselves, and it is also what
 ///   makes the canvas resolvable as a hover target at all.
 public struct Canvas: PrimitiveView {
+    /// Name shown in the layout tree and to agents.
     public var label: String
+    /// Width of the box. `.auto` leaves it to the parent and `flexGrow`.
     public var width: Dimension
+    /// Height of the box. `.auto` leaves it to the parent and `flexGrow`.
     public var height: Dimension
+    /// Share of the parent's leftover main-axis space this canvas takes; 0 takes none.
     public var flexGrow: Float
+    /// Smallest width layout may give the box, in points.
     public var minWidth: Float
+    /// Smallest height layout may give the box, in points.
     public var minHeight: Float
     /// When true, this leaf asks for ~60fps redraws via `AnimationDriver`.
     public var continuousRedraw: Bool
+    /// Called when a button goes down on the canvas — on the press, not the release.
     public var onTap: (() -> Void)?
+    /// Called for every press, drag and release on the canvas. See `CanvasGesture`.
     public var onGesture: ((CanvasGesture) -> Void)?
+    /// Called on a wheel scroll over the canvas, with the deltas in notches and
+    /// the pointer's position relative to the canvas's top-left.
     public var onWheel: ((_ dx: Float, _ dy: Float, _ localX: Float, _ localY: Float) -> Void)?
+    /// Called with `true` when the pointer enters the canvas and `false` when it leaves.
     public var onHover: ((Bool) -> Void)?
+    /// Draws the canvas. Called on every emit with the canvas's window-space frame.
+    /// Emit commands into the `DrawList`; anything drawn outside the frame is not clipped.
     public var paint: (DrawList, CanvasFrame) -> Void
 
+    /// Creates a canvas. Every parameter matches the property of the same name.
     public init(
         label: String = "Canvas",
         width: Dimension = .auto,

@@ -1,7 +1,9 @@
 /// Non-exhaustive `if` — fragment (no flex wrapper).
 public struct OptionalView<Content: View>: PrimitiveView {
+    /// The content when the condition held, or `nil` to show nothing.
     public var content: Content?
 
+    /// Wraps an optional view. Produced by `ViewBuilder.buildOptional(_:)`.
     public init(_ content: Content?) {
         self.content = content
     }

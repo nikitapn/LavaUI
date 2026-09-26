@@ -2,12 +2,24 @@ import Foundation
 
 /// A clickable control whose hover and press feedback is owned by the renderer.
 public struct Button: PrimitiveView {
+    /// The label drawn on the button.
     public var title: String
+    /// Called when the button is clicked. Not called while disabled.
     public var action: () -> Void
+    /// The label's font, or `nil` to use the environment's font.
     public var font: UIFont?
+    /// Colours, corner radius and padding.
     public var style: ButtonStyle
+    /// Whether the button responds to clicks. A disabled button draws in the style's disabled colours.
     public var isEnabled: Bool
 
+    /// Creates a button with a text label.
+    /// - Parameters:
+    /// - title: The label.
+    /// - style: Colours and metrics; the default follows the current theme.
+    /// - font: The label's font; `nil` uses the environment's.
+    /// - isEnabled: Whether clicks call `action`.
+    /// - action: Called on click.
     public init(
         _ title: String,
         style: ButtonStyle = ButtonStyle(),
@@ -22,6 +34,7 @@ public struct Button: PrimitiveView {
         self.action = action
     }
 
+    /// The font the label is drawn in: `font`, or the environment's when that is `nil`.
     public var resolvedFont: UIFont? { font ?? Environment.current.font }
 
     public var dumpDetail: String { "\"\(title)\"\(isEnabled ? "" : " disabled")" }
@@ -76,18 +89,29 @@ public struct Button: PrimitiveView {
 
 /// Colours and metrics for a `Button`.
 public struct ButtonStyle {
+    /// The fill at rest.
     public var background: Color
+    /// The fill under the pointer.
     public var hover: Color
+    /// The fill while pressed.
     public var pressed: Color
+    /// The label colour.
     public var foreground: Color
+    /// The fill while disabled.
     public var disabledBackground: Color
+    /// The label colour while disabled.
     public var disabledForeground: Color
+    /// Corner radius of the fill, in points.
     public var cornerRadius: Float
+    /// Space between the label and the edge of the fill, on every side, in points.
     public var padding: Float
     /// How long the fill takes to reach a new state. Short enough to feel
     /// immediate; long enough to read as a transition rather than a jump.
     public var duration: Double
 
+    /// Creates a style. Any colour left `nil` comes from the current theme:
+    /// `panel` at rest, `hover` under the pointer, `accent` pressed, and
+    /// `textPrimary` / `textSecondary` for the label.
     public init(
         background: Color? = nil,
         hover: Color? = nil,

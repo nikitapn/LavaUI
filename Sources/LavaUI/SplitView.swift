@@ -37,10 +37,15 @@ public struct VSplitView<Top: View, Bottom: View>: PrimitiveView {
     public var fraction: Binding<Float>?
     /// Used only at mount, when there is no binding to read.
     public var initialFraction: Float
+    /// Shortest the top pane may be dragged, in points.
     public var minTop: Float
+    /// Shortest the bottom pane may be dragged, in points.
     public var minBottom: Float
+    /// How the divider looks and how wide its grab strip is.
     public var style: SplitStyle
+    /// The upper pane.
     public var top: Top
+    /// The lower pane.
     public var bottom: Bottom
 
     /// Split driven by app state, so it can be persisted or set from elsewhere.
@@ -127,14 +132,24 @@ public struct VSplitView<Top: View, Bottom: View>: PrimitiveView {
 /// }
 /// ```
 public struct HSplitView<Leading: View, Trailing: View>: PrimitiveView {
+    /// Where the app keeps the split: the leading pane's share of the width the
+    /// two panes share, written when a drag ends. `nil` leaves the value on the
+    /// node, which lives as long as the view does.
     public var fraction: Binding<Float>?
+    /// The leading pane's share of the width, used only at mount, when there is no binding to read.
     public var initialFraction: Float
+    /// Narrowest the leading pane may be dragged, in points.
     public var minLeading: Float
+    /// Narrowest the trailing pane may be dragged, in points.
     public var minTrailing: Float
+    /// How the divider looks and how wide its grab strip is.
     public var style: SplitStyle
+    /// The left pane.
     public var leading: Leading
+    /// The right pane.
     public var trailing: Trailing
 
+    /// Split driven by app state, so it can be persisted or set from elsewhere.
     public init(
         fraction: Binding<Float>,
         minLeading: Float = 80,
@@ -152,6 +167,7 @@ public struct HSplitView<Leading: View, Trailing: View>: PrimitiveView {
         self.trailing = trailing()
     }
 
+    /// Split the view keeps for itself, starting at `initialFraction`.
     public init(
         initialFraction: Float = 0.5,
         minLeading: Float = 80,
@@ -210,6 +226,7 @@ public struct SplitStyle {
     public var thickness: Float
     /// The rule drawn down the middle of that strip.
     public var lineThickness: Float
+    /// Colour of the rule.
     public var color: Color
     /// Hover tint target. The renderer paints this one (see `hoverFill`), so
     /// pointing at the divider costs no round trip.
@@ -219,6 +236,7 @@ public struct SplitStyle {
     /// hover would drop out exactly when the feedback matters most.
     public var active: Color
 
+    /// Creates a style. Colours and the rule's thickness left `nil` come from the current theme.
     public init(
         thickness: Float = 9,
         lineThickness: Float? = nil,

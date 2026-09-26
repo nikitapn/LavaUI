@@ -32,6 +32,8 @@ public enum ScreenshotBridge {
         _ x: Int32, _ y: Int32, _ w: Int32, _ h: Int32, _ maxSide: Int32
     ) -> (b64: String, w: Int32, h: Int32)?
 
+    /// Set by a compositor client so agent screenshots come from the compositor.
+    /// `nil` (the default) reads back the app's own framebuffer.
     nonisolated(unsafe) public static var provider: Provider?
 
     static func capture(
@@ -60,24 +62,33 @@ public enum ScreenshotBridge {
 
 /// Callbacks the host app provides so the server stays UI-framework-agnostic.
 public struct AgentHost {
+    /// The window's framebuffer size in pixels.
     public var framebufferSize: () -> (w: Float, h: Float)
     /// Force layout+present; should also drain any injected input first.
     public var settle: () -> Void
+    /// The layout tree as JSON, at most `maxDepth` levels deep (the agent's `layout_tree`).
     public var layoutTreeJSON: (_ maxDepth: Int) -> String
+    /// The label of the topmost node at a window point, or `nil` over nothing (the agent's `hit_test`).
     public var hitLabel: (_ x: Float, _ y: Float) -> String?
     /// Resolve a frame by sid/agentId, label, process id, or first `find` hit.
     public var resolveFrame: (
         _ sid: String?, _ label: String?, _ id: UInt64?, _ query: String?
     ) -> (label: String, sid: String, x: Float, y: Float, w: Float, h: Float)?
+    /// Up to `limit` nodes whose label, sid or text matches `query`, as JSON objects (the agent's `find`).
     public var find: (_ query: String, _ limit: Int) -> [[String: Any]]
+    /// Delivers a synthetic pointer move to the window.
     public var injectMove: (_ x: Float, _ y: Float) -> Void
     /// `mods` is `KeyMods`, so a script can Ctrl+click or Shift+click.
     public var injectClick: (_ x: Float, _ y: Float, _ button: Int32, _ mods: Int32) -> Void
+    /// Delivers a synthetic press (`pressed == true`) or release of `button` at a point.
     public var injectPointerButton: (
         _ x: Float, _ y: Float, _ button: Int32, _ pressed: Bool
     ) -> Void
+    /// Delivers a synthetic wheel scroll, in notches.
     public var injectScroll: (_ dx: Float, _ dy: Float) -> Void
+    /// Delivers a synthetic key event: a GLFW key code, action and `KeyMods` bits.
     public var injectKey: (_ key: Int32, _ action: Int32, _ mods: Int32) -> Void
+    /// Delivers typed text, as if entered on the keyboard.
     public var injectText: (_ text: String) -> Void
     /// Capture pixels only (caller settles when needed).
     /// Returns base64 PNG plus encoded size (after optional downsample).
@@ -85,6 +96,7 @@ public struct AgentHost {
         _ x: Int32, _ y: Int32, _ w: Int32, _ h: Int32, _ maxSide: Int32
     ) -> (b64: String, w: Int32, h: Int32)?
 
+    /// Creates a host from one closure per agent capability.
     public init(
         framebufferSize: @escaping () -> (w: Float, h: Float),
         settle: @escaping () -> Void,
@@ -122,11 +134,18 @@ public struct AgentHost {
     }
 }
 
+/// A local automation server: newline-delimited JSON over TCP on 127.0.0.1.
+///
+/// `LavaApp` starts one when `LAVA_AGENT_PORT` is set; see `docs/agent.md` for
+/// the protocol. Requests are handled on the UI thread from `poll()`, so the
+/// handlers may touch layout and rendering. A watcher thread only wakes the
+/// frame loop when a socket becomes readable.
 public final class AgentServer: @unchecked Sendable {
     private let host: AgentHost
     private var listenFd: Int32 = -1
     private var clientFd: Int32 = -1
     private var inBuf = Data()
+    /// The TCP port the server listens on.
     public private(set) var port: UInt16 = 0
 
     /// Thread-safe: called from the poll watcher to unblock `pumpEvents`.
@@ -135,6 +154,14 @@ public final class AgentServer: @unchecked Sendable {
     private var stopWatcher = false
     private var watcherThread: Thread?
 
+    /// Binds 127.0.0.1:`port` and starts listening.
+    ///
+    /// Returns `nil` when `port` is zero or the port cannot be bound.
+    /// - Parameters:
+    /// - host: What the requests act on.
+    /// - port: The port to listen on.
+    /// - wakeMainLoop: Called from the watcher thread when a request is waiting,
+    /// to unblock the frame loop's `pumpEvents`. Must be thread-safe.
     public init?(
         host: AgentHost,
         port: UInt16,
@@ -158,6 +185,7 @@ public final class AgentServer: @unchecked Sendable {
 
     deinit { close() }
 
+    /// Stops the watcher thread and closes the listening and client sockets.
     public func close() {
         stopWatcher = true
         // Unblock select so the watcher can exit.

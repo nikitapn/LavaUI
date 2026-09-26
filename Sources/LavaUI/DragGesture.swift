@@ -13,24 +13,32 @@ import Foundation
 // was clicked in. The click walk can give either of them one handler. The
 // chain gives both.
 
+/// Where an `.onDragGesture` is in its lifetime.
 public enum DragGesturePhase: Equatable, Sendable {
     /// The press has travelled `minimumDistance`. Carries where it is now.
     case began
+    /// The pointer moved while held, after `.began`.
     case changed
     /// Released. Always follows a `.began`.
     case ended
 }
 
+/// One step of an `.onDragGesture`, delivered to its handler.
 public struct DragGestureValue: Equatable, Sendable {
+    /// Which step of the gesture this is.
     public var phase: DragGesturePhase
     /// Where the press went down, in window coordinates.
     public var startX: Float
+    /// Vertical position of the press. See `startX`.
     public var startY: Float
     /// Where the pointer is now, in window coordinates.
     public var x: Float
+    /// Vertical position of the pointer now. See `x`.
     public var y: Float
 
+    /// Horizontal distance from the press to the pointer.
     public var translationX: Float { x - startX }
+    /// Vertical distance from the press to the pointer.
     public var translationY: Float { y - startY }
 }
 

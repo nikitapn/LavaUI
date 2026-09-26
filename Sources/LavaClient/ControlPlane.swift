@@ -165,6 +165,7 @@ public final class CompositorResources: GPUResourceHost, @unchecked Sendable {
     /// client that outlives the file being fixed can be restarted.
     private var refusedKeys: Set<String> = []
 
+    /// Creates a host that registers resources with `compositor`.
     public init(_ compositor: Compositor) { self.compositor = compositor }
 
     public func registerFont(
@@ -304,6 +305,8 @@ public final class InputChannel: @unchecked Sendable {
     private var ended = false
     private let acks: AsyncStream<UInt32>.Continuation
 
+    /// Wraps the input stream from `SubscribeInput` and starts acknowledging
+    /// events as they are consumed.
     public init(stream: NPRPCBidiStream<InputAck, WireInputEvent>) {
         // Depth one, because an ack is cumulative: "I have consumed through
         // N" makes every earlier ack redundant. Coalescing here is what keeps
@@ -460,11 +463,18 @@ public func blockingCall<T>(
     return try outcome!.get()
 }
 
+/// Why connecting to the compositor's control plane failed.
 public enum ControlPlaneError: Error, CustomStringConvertible {
+    /// No reference file at `path`. `running` lists the reference files of the
+    /// sessions that are running, so the message can name them.
     case noCompositor(path: String, running: [String])
+    /// The reference file does not hold a usable object reference.
     case badReference(String)
+    /// None of the reference's endpoints could be selected.
     case noEndpoint(String)
+    /// The reference names an object that is not a `lava.Compositor`.
     case classMismatch
+    /// The compositor did not answer in time.
     case timedOut
 
     public var description: String {

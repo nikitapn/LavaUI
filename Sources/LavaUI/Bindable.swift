@@ -60,14 +60,18 @@ extension Binding {
 @propertyWrapper
 @dynamicMemberLookup
 public struct Bindable<Value: AnyObject> {
+    /// The model the bindings are projected from.
     public var wrappedValue: Value
 
+    /// Wraps `wrappedValue`. Called by `@Bindable var model = …`.
     public init(wrappedValue: Value) {
         self.wrappedValue = wrappedValue
     }
 
+    /// The wrapper itself, so `$model.property` goes through the dynamic-member subscript.
     public var projectedValue: Bindable<Value> { self }
 
+    /// A binding to one property of the model: what `$model.property` returns.
     public subscript<Subject>(
         dynamicMember keyPath: ReferenceWritableKeyPath<Value, Subject>
     ) -> Binding<Subject> {

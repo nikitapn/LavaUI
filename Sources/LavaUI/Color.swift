@@ -6,11 +6,16 @@ import Foundation
 /// function: the whole 2D pipeline works on these encoded values. See
 /// `docs/colour-and-blending.md`.
 public struct Color: Equatable, Sendable, Hashable {
+    /// Red, 0–1, sRGB-encoded.
     public var r: Float
+    /// Green, 0–1, sRGB-encoded.
     public var g: Float
+    /// Blue, 0–1, sRGB-encoded.
     public var b: Float
+    /// Opacity, 0 (transparent) to 1 (opaque). Straight, not premultiplied.
     public var a: Float
 
+    /// Creates a colour from sRGB-encoded channels in 0–1.
     public init(r: Float, g: Float, b: Float, a: Float = 1) {
         self.r = r
         self.g = g
@@ -267,6 +272,7 @@ public struct Color: Equatable, Sendable, Hashable {
         return (R << 16) | (G << 8) | B
     }
 
+    /// Creates a colour from a packed `0xRRGGBB` value, such as `0x1e90ff`.
     public init(rgb24: UInt32, alpha: Float = 1) {
         self.init(
             r: Float((rgb24 >> 16) & 0xff) / 255,

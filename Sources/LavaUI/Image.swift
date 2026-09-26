@@ -16,8 +16,11 @@ public final class UIImage: @unchecked Sendable {
     /// avatar and for a 200pt hero are two different textures and must not
     /// evict or alias each other.
     public let cacheKey: String
+    /// The engine texture the image draws from; 0 for a `surfaceId` poster.
     public let textureId: UInt32
+    /// Width of the decoded bitmap, in pixels.
     public let pixelWidth: Float
+    /// Height of the decoded bitmap, in pixels.
     public let pixelHeight: Float
     /// Compositor surface this poster should sample, or 0 for a normal
     /// TextureManager id in `textureId`. A GPU-less client cannot import
@@ -26,6 +29,9 @@ public final class UIImage: @unchecked Sendable {
     /// Longest dest edge for a `surfaceId` poster; 0 is native.
     public let surfaceMaxSide: UInt32
 
+    /// Wraps a texture that has already been loaded. Apps normally get images from
+    /// `ImageStore` or `Editor.loadImage(path:)` rather than calling this.
+    /// `cacheKey` defaults to `path`.
     public init(
         path: String,
         cacheKey: String? = nil,
@@ -62,6 +68,7 @@ public final class UIImage: @unchecked Sendable {
         )
     }
 
+    /// The decoded bitmap's size, in pixels.
     public var size: (w: Float, h: Float) { (pixelWidth, pixelHeight) }
 }
 
@@ -325,6 +332,7 @@ public enum ImageStore {
 
     /// Bytes currently held, for tests and diagnostics.
     public static var residentByteCount: Int { residentBytes }
+    /// How many images the cache holds.
     public static var count: Int { cache.count }
 
     /// Hands every cached image back to the host and empties the cache.
@@ -369,9 +377,13 @@ public enum ImageStore {
 /// Part of a texture's identity, like `maxPixelSize`: the same photograph
 /// upright and turned is two textures.
 public enum ImageTurn: UInt32, Equatable, Sendable, CaseIterable {
+    /// Upright, as decoded (after the file's own EXIF orientation).
     case none = 0
+    /// A quarter turn clockwise.
     case clockwise = 1
+    /// Upside down.
     case half = 2
+    /// A quarter turn anticlockwise.
     case anticlockwise = 3
 
     /// What this adds to a cache key. Nothing at all when there is no turn.
@@ -411,18 +423,29 @@ public enum ImageContentMode: Equatable, Sendable {
 /// Image(photo, width: .pt(120))  // height from aspect
 /// ```
 public struct Image: PrimitiveView {
+    /// The image to draw, or `nil` when the view was created from a path.
     public var image: UIImage?
     /// Set instead of `image` by the path initialiser — see its doc comment.
     public var path: String?
+    /// Fill drawn while a path-based image is still loading, or `nil` for nothing.
     public var placeholder: Color?
+    /// Corner radius of the placeholder fill, in points.
     public var placeholderCornerRadius: Float = 0
+    /// Width of the box. With the other axis `.auto`, the other follows the bitmap's aspect.
     public var width: Dimension
+    /// Height of the box. With the other axis `.auto`, the other follows the bitmap's aspect.
     public var height: Dimension
     /// Multiplied with sample RGBA (white = no tint).
     public var tint: Color
+    /// How the bitmap maps into the box.
     public var contentMode: ImageContentMode
+    /// Called when the image is clicked.
     public var onClick: (() -> Void)?
 
+    /// Draws an image that is already loaded.
+    ///
+    /// Leave both sizes `.auto` for the bitmap's own size, or give one and the
+    /// other follows its aspect.
     public init(
         _ image: UIImage,
         width: Dimension = .auto,

@@ -13,7 +13,9 @@ import Foundation
 /// uses, hit-testing and drawing agree by construction — the invariant
 /// `font.hpp` exists to protect, extended to the caret.
 public struct ShapedRun {
+    /// The shaped string.
     public let text: String
+    /// The glyphs, in visual order, with their clusters as UTF-8 offsets into `text`.
     public let glyphs: [ShapedGlyph]
 
     /// Grapheme boundaries as UTF-8 offsets. HarfBuzz clusters are aligned to
@@ -22,6 +24,7 @@ public struct ShapedRun {
     /// cluster is snapped through this table.
     private let boundaries: [(utf8: Int, index: String.Index)]
 
+    /// Wraps glyphs shaped from `text`, and builds the grapheme table carets snap to.
     public init(text: String, glyphs: [ShapedGlyph]) {
         self.text = text
         self.glyphs = glyphs

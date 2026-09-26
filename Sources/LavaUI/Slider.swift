@@ -12,16 +12,22 @@ import Foundation
 /// better as a neighbouring `Text` than as a bundled string — which is the
 /// opposite of `Toggle`, where the label *is* part of what you click.
 public struct Slider: PrimitiveView {
+    /// The value the knob shows and dragging writes.
     public var value: Binding<Float>
+    /// The values the track spans, left end to right end.
     public var range: ClosedRange<Float>
     /// Quantisation. nil is continuous.
     public var step: Float?
     /// Renders a readout to the right of the track. nil draws no readout.
     public var format: ((Float) -> String)?
+    /// Colours and metrics.
     public var style: SliderStyle
+    /// Font of the readout, or `nil` for the environment's.
     public var font: UIFont?
+    /// Whether the slider can be dragged. A disabled slider draws in the style's disabled colours.
     public var isEnabled: Bool
 
+    /// Creates a slider. Every parameter matches the property of the same name.
     public init(
         value: Binding<Float>,
         in range: ClosedRange<Float> = 0...1,
@@ -40,6 +46,7 @@ public struct Slider: PrimitiveView {
         self.isEnabled = isEnabled
     }
 
+    /// The readout's font: `font`, or the environment's when that is `nil`.
     public var resolvedFont: UIFont? { font ?? Environment.current.font }
 
     public var dumpDetail: String {
@@ -190,23 +197,35 @@ private func ensureSliderGeometry(_ leaf: LeafNode) {}
 public struct SliderStyle {
     /// Track length when nothing stretches it.
     public var trackWidth: Float
+    /// Thickness of the track, in points.
     public var trackThickness: Float
+    /// Radius of the knob at rest, in points.
     public var knobRadius: Float
     /// Knob size multiplier while hovered or dragged.
     public var knobHoverScale: Float
+    /// The track to the left of the knob, the part that is "filled".
     public var activeTrack: Color
+    /// The track to the right of the knob.
     public var inactiveTrack: Color
+    /// Colour of the knob.
     public var knob: Color
+    /// Colour of the whole track while disabled.
     public var disabledTrack: Color
+    /// Colour of the knob while disabled.
     public var disabledKnob: Color
+    /// Colour of the readout.
     public var foreground: Color
+    /// Colour of the readout while disabled.
     public var disabledForeground: Color
+    /// Space between the track and the readout, in points.
     public var valueGap: Float
     /// Space reserved for the readout, wide enough that its text changing
     /// width cannot resize the track mid-drag.
     public var valueWidth: Float
+    /// How long the knob takes to grow or shrink on hover, in seconds.
     public var duration: Double
 
+    /// Creates a style. Colours left `nil` come from the current theme.
     public init(
         trackWidth: Float = 140,
         trackThickness: Float = 4,

@@ -31,9 +31,13 @@ public typealias OverlayAnchor = Alignment
 /// - **Anchored.** Yoga edge insets do the placement, so it survives resizes
 ///   without a re-layout pass of its own.
 public struct ComposedOverlayView<Content: View, OverlayContent: View>: PrimitiveView {
+    /// The base view, which alone decides the size of the box.
     public var content: Content
+    /// The view floated over the base.
     public var overlayContent: OverlayContent
+    /// Which point of the base view's box the overlay is pinned to.
     public var anchor: OverlayAnchor
+    /// Distance in points between the overlay and the anchored edges. A centred axis ignores it.
     public var inset: Float
     /// Panel styling for the floating surface, or nil to draw no surface at
     /// all — a bare badge or button that is only its own content.
@@ -46,6 +50,7 @@ public struct ComposedOverlayView<Content: View, OverlayContent: View>: Primitiv
     /// every floating button in the codebase.
     public var style: OverlayStyle?
 
+    /// Creates an overlay. Usually spelled `.overlay(alignment:inset:style:content:)`.
     public init(
         content: Content,
         overlayContent: OverlayContent,

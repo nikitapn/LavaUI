@@ -12,8 +12,11 @@ import Foundation
 /// ColorPicker(color: $fill)
 /// ```
 public struct ColorPicker: View {
+    /// The colour being edited.
     @Binding public var color: Color
+    /// Whether to show an opacity slider.
     public var showsAlpha: Bool
+    /// Whether to show a hex text field.
     public var showsHex: Bool
 
     /// Last saturated hue, so dragging through white does not snap the
@@ -21,6 +24,7 @@ public struct ColorPicker: View {
     @State private var lastHue: Float = 0
     @State private var hexText: String = ""
 
+    /// Creates a picker bound to `color`.
     public init(
         color: Binding<Color>,
         showsAlpha: Bool = false,

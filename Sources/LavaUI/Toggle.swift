@@ -8,12 +8,18 @@ import Foundation
 /// animates, because `configure` retargets from the bound value on every
 /// reconcile rather than only from the click handler.
 public struct Toggle: PrimitiveView {
+    /// Text drawn after the switch. Clicking it flips the switch too.
     public var label: String
+    /// Whether the switch is on. Clicking writes the opposite value.
     public var isOn: Binding<Bool>
+    /// Colours, size and timing.
     public var style: ToggleStyle
+    /// The label's font, or `nil` for the environment's.
     public var font: UIFont?
+    /// Whether clicks flip the switch. A disabled toggle draws in the style's disabled colours.
     public var isEnabled: Bool
 
+    /// Creates a toggle. Every parameter matches the property of the same name.
     public init(
         _ label: String = "",
         isOn: Binding<Bool>,
@@ -28,6 +34,7 @@ public struct Toggle: PrimitiveView {
         self.isEnabled = isEnabled
     }
 
+    /// The label's font: `font`, or the environment's when that is `nil`.
     public var resolvedFont: UIFont? { font ?? Environment.current.font }
 
     public var dumpDetail: String {
@@ -110,21 +117,32 @@ public struct Toggle: PrimitiveView {
 
 /// Colours and metrics for a `Toggle`.
 public struct ToggleStyle {
+    /// Width of the track, in points.
     public var trackWidth: Float
+    /// Height of the track, in points. The knob is sized to fit inside it.
     public var trackHeight: Float
     /// Gap between the knob and the track edge, on both sides.
     public var knobInset: Float
+    /// Colour of the track while off.
     public var offTrack: Color
+    /// Colour of the track while on.
     public var onTrack: Color
     /// nil means "contrast automatically against the track".
     public var knob: Color?
+    /// Colour of the track while disabled.
     public var disabledTrack: Color
+    /// Colour of the knob while disabled.
     public var disabledKnob: Color
+    /// Colour of the label.
     public var foreground: Color
+    /// Colour of the label while disabled.
     public var disabledForeground: Color
+    /// Space between the switch and its label, in points.
     public var labelGap: Float
+    /// How long the knob takes to slide across, in seconds.
     public var duration: Double
 
+    /// Creates a style. Colours left `nil` come from the current theme.
     public init(
         trackWidth: Float = 36,
         trackHeight: Float = 20,

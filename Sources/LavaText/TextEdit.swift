@@ -31,8 +31,10 @@ public struct TextEdit: Equatable {
     /// Selection at the moment before the edit, so undo restores not just the
     /// text but where the user was. Restoring text alone feels broken.
     public var anchorBefore: Int
+    /// The other end of the selection before the edit. See `anchorBefore`.
     public var focusBefore: Int
 
+    /// Creates an edit. Offsets are UTF-8 byte offsets.
     public init(
         offset: Int, removed: String, inserted: String,
         anchorBefore: Int, focusBefore: Int
@@ -67,11 +69,16 @@ public struct UndoStack: Equatable {
     private var undoable: [TextEdit] = []
     private var redoable: [TextEdit] = []
 
+    /// Creates an empty history.
     public init() {}
 
+    /// Whether there is an edit to undo.
     public var canUndo: Bool { !undoable.isEmpty }
+    /// Whether there is an undone edit to redo.
     public var canRedo: Bool { !redoable.isEmpty }
 
+    /// Records a new edit, merging it into the previous one when the two read as
+    /// one action (typing on through a word, say). Clears the redo history.
     public mutating func record(_ edit: TextEdit) {
         // Any fresh edit invalidates the redo branch — the future it described
         // no longer exists.
@@ -84,18 +91,23 @@ public struct UndoStack: Equatable {
         undoable.append(edit)
     }
 
+    /// Takes the most recent edit off the undo history and moves it to redo.
+    /// Returns it, still in its forward form: apply its `inverted` to undo it.
     public mutating func popUndo() -> TextEdit? {
         guard let edit = undoable.popLast() else { return nil }
         redoable.append(edit)
         return edit
     }
 
+    /// Takes the most recently undone edit and moves it back to undo. Returns it
+    /// to be applied again.
     public mutating func popRedo() -> TextEdit? {
         guard let edit = redoable.popLast() else { return nil }
         undoable.append(edit)
         return edit
     }
 
+    /// Forgets all history.
     public mutating func clear() {
         undoable.removeAll()
         redoable.removeAll()

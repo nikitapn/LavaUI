@@ -3,7 +3,10 @@
 /// `.theme(_:)` / `.font(_:)` — those globals are the environment's
 /// defaults now, not the only way to set a value.
 public struct EnvironmentValues {
+    /// The colour theme views read their defaults from. Set with `.theme(_:)`.
     public var theme: Theme
+    /// The font text views use when they are not given one, or `nil` for
+    /// `FontStore.default`. Set with `.font(_:)`.
     public var font: UIFont?
 }
 
@@ -68,6 +71,7 @@ public enum Environment {
 /// mount/reconcile call — i.e. for its whole subtree, not just its own
 /// node. Delegates entirely to `content`'s node; this adds no Yoga node.
 public struct EnvironmentModifiedView<Content: View>: PrimitiveView {
+    /// The subtree the override applies to.
     public var content: Content
     var overrideTheme: Theme?
     var overrideFont: UIFont?

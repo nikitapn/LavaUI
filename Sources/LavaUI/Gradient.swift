@@ -10,7 +10,9 @@
 /// Both stops carry their own alpha, so a fade to transparent is an ordinary
 /// gradient with `to: .clear` rather than a separate mechanism.
 public struct Gradient: Equatable, Sendable {
+    /// The colour at the start of the ramp.
     public var from: Color
+    /// The colour at the end of the ramp.
     public var to: Color
     /// Radians, from +x towards +y: 0 runs left to right, `.pi / 2` top to
     /// bottom. The ramp spans the box exactly whatever the angle and whatever
@@ -18,6 +20,7 @@ public struct Gradient: Equatable, Sendable {
     /// than being sheared by it.
     public var angle: Float
 
+    /// Creates a gradient. The default angle runs top to bottom.
     public init(from: Color, to: Color, angle: Float = .pi / 2) {
         self.from = from
         self.to = to

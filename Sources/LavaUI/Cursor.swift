@@ -17,6 +17,7 @@ public enum CursorShape: UInt32, Equatable, Sendable, CaseIterable {
     case text = 1
     /// The "this activates something" hand.
     case pointer = 2
+    /// A thin cross, for picking a point or a pixel.
     case crosshair = 3
     /// Horizontal drag: a vertical divider, a column edge.
     case resizeLeftRight = 4
