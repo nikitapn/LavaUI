@@ -16,6 +16,11 @@
   {{#canonical}}<meta property="og:url" content="{{canonical}}" />{{/canonical}}
   <meta property="og:image" content="{{image}}" />
   <meta name="twitter:card" content="summary_large_image" />
+  {{! The flame from docs/assets/lavaui-icon.svg. The .ico is for whatever
+      asks for /favicon.ico without reading the page. }}
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+  <link rel="icon" href="/favicon.ico" sizes="16x16 32x32 48x48" />
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
   <link rel="stylesheet" href="/style.css" />
   <script src="/vendor/htmx.min.js" defer></script>
   <script type="module" src="/code.js"></script>
