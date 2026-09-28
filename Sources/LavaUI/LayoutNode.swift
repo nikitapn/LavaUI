@@ -184,6 +184,9 @@ class YogaBoxNode: AnyViewNode {
     /// Backdrop blur radius from `.backdropBlur(radius:)`. Emitted as Begin/End
     /// BackdropBlur around this node's paint (see DrawList).
     var backdropBlurRadius: Float?
+    /// From `.backdropBlur(radius:adaptation:)`: how far a bright backdrop is
+    /// compressed under the frost. `nil` is the default, full strength.
+    var backdropAdaptation: Float?
     /// Content blur radius from `.blur(radius:)`. Same bookends, different
     /// subject: the engine renders this node's own paint offscreen and blurs
     /// that, rather than blurring what was already behind it.

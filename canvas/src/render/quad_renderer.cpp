@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <array>
 #include <chrono>
 #include <cmath>
@@ -1230,7 +1231,8 @@ void QuadRenderer::closeSegment() {
 
 void QuadRenderer::pushBlurResultImage(vec2 topLeft, vec2 size, vec2 uv0,
                                          vec2 uv1, float cornerRadius,
-                                         uint32_t rgba, float refractPx)
+                                         uint32_t rgba, float refractPx,
+                                         float adapt)
 {
   if (size.x <= 0.0f || size.y <= 0.0f) {
     return;
@@ -1244,9 +1246,21 @@ void QuadRenderer::pushBlurResultImage(vec2 topLeft, vec2 size, vec2 uv0,
   const vec2 half{size.x * 0.5f, size.y * 0.5f};
   const float r = std::min(std::max(cornerRadius, 0.f), std::min(half.x, half.y));
 
-  if (r <= 0.f) {
+  // The strength rides in the far ramp colour's alpha, which a composite
+  // otherwise never reads (its gradient axis is zero). 8 bits is plenty for
+  // a knob tuned by eye.
+  const uint32_t adaptBits =
+      static_cast<uint32_t>(std::clamp(adapt, 0.f, 1.f) * 255.f + 0.5f) << 24;
+
+  if (r <= 0.f && adaptBits == 0) {
     appendInstance(topLeft, size, {0.f,0.f}, 0.f, rgba, Kind::Image,
                    0.f, uv0, uv1);
+  } else if (r <= 0.f) {
+    // Square, but adapting: only the composite kind knows how. No bleed —
+    // the shader gives r=0 a hard edge, so there is nothing to antialias.
+    appendInstance(topLeft, size, {size.x * 0.5f, size.y * 0.5f}, 0.f, rgba,
+                   Kind::BlurComposite, refractPx, uv0, uv1);
+    instances_.back().color1 = adaptBits;
   } else {
     // A pixel of bleed for the SDF to antialias into, exactly as `pushBox`
     // takes. The UV rect is extended by the same pixel in texture units so
@@ -1262,6 +1276,7 @@ void QuadRenderer::pushBlurResultImage(vec2 topLeft, vec2 size, vec2 uv0,
 
     appendInstance({center.x-ext.x, center.y-ext.y}, {ext.x*2.f,ext.y*2.f},
                    half, r, rgba, Kind::BlurComposite, refractPx, u0, u1);
+    instances_.back().color1 = adaptBits;
   }
   flushBatch();
   if (!batches_.empty()) {

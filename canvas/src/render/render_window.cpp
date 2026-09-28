@@ -1394,7 +1394,8 @@ void RenderWindow::setViewTransform(float zoom, float panX, float panY)
 
 void RenderWindow::pushBlurComposite(float x, float y, float w, float h,
                                      float viewW, float viewH, float radius,
-                                     float cornerRadius, float refractPx)
+                                     float cornerRadius, float refractPx,
+                                     float adapt)
 {
   if (w <= 0.f || h <= 0.f || viewW <= 0.f || viewH <= 0.f) return;
   const vec2 uv = blur_.uvScaleFor(radius);
@@ -1402,7 +1403,7 @@ void RenderWindow::pushBlurComposite(float x, float y, float w, float h,
     {x, y}, {w, h},
     {x / viewW * uv.x, y / viewH * uv.y},
     {(x + w) / viewW * uv.x, (y + h) / viewH * uv.y}, cornerRadius,
-    0xffffffffu, refractPx);
+    0xffffffffu, refractPx, adapt);
 }
 
 namespace {
@@ -2016,9 +2017,11 @@ void RenderWindow::replayDrawList(const canvas::DrawList &list, float viewW,
       // shares the composite kind and must not bend; a real API would carry
       // the strength on the command rather than a constant here.
       constexpr float kBackdropRefractPx = 28.f;
+      // Adaptive strength is the colour's alpha byte (R is the low byte).
       pushBlurComposite(cmd.x + ox, cmd.y + oy, cmd.w, cmd.h, viewW, viewH,
                         radius, static_cast<float>(cmd.param),
-                        kBackdropRefractPx);
+                        kBackdropRefractPx,
+                        static_cast<float>(cmd.color >> 24) / 255.f);
       break;
     }
     case canvas::DrawCommandKind::EndBackdropBlur:
@@ -2067,8 +2070,13 @@ void RenderWindow::replayDrawList(const canvas::DrawList &list, float viewW,
       // outline, which is only the view's own edge on a surface that is
       // nothing but the frost (a compositor plate). Padded by 3σ anywhere
       // else, the bend would land in the fade outside the view.
+      // Adaptive strength on the End, in 1/255ths, beside the refraction
+      // and for the same reason: only a compositor plate — an opaque capture
+      // of the desktop — sets it. A `.blur()` composites a subtree's own
+      // silhouette, and compressing that would just grey the view.
       pushBlurComposite(x0, y0, x1 - x0, y1 - y0, viewW, viewH, radius,
-                        static_cast<float>(open.param), std::max(0.f, cmd.aux));
+                        static_cast<float>(open.param), std::max(0.f, cmd.aux),
+                        static_cast<float>(std::min(cmd.param, 255u)) / 255.f);
       break;
     }
     }

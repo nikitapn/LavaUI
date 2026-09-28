@@ -954,20 +954,25 @@ public final class DrawList {
     }
 
     /// Barrier: engine flushes UI drawn so far, blurs under this rect, composites.
-    /// `color` is unused by the engine (tint the glass with a following fill).
+    /// The colour's RGB is unused by the engine (tint the glass with a
+    /// following fill); its alpha carries `adaptation`.
     ///
     /// `cornerRadius` is the radius of the surface that will be drawn over the
     /// frost. The composite is the one piece of a rounded glass panel the
     /// panel's own fill cannot hide — it is underneath it — so a square one
     /// shows as four bright tabs around the shape.
+    ///
+    /// `adaptation` (0…1) is how far a bright backdrop is pulled down toward
+    /// light grey, per pixel, so glass over a white page still separates from
+    /// it. It travels as the command colour's alpha.
     public func beginBackdropBlur(
         x: Float, y: Float, w: Float, h: Float, radius: Float,
-        cornerRadius: Float = 0
+        cornerRadius: Float = 0, adaptation: Float = 1
     ) {
         guard w > 0, h > 0, radius > 0 else { return }
         append(
             kind: .beginBackdropBlur, x: x, y: y, w: w, h: h,
-            color: Color(r: 1, g: 1, b: 1),
+            color: Color(r: 1, g: 1, b: 1, a: min(max(adaptation, 0), 1)),
             param: UInt32(max(0, cornerRadius.rounded())), aux: radius
         )
     }
@@ -1056,6 +1061,7 @@ public final class DrawList {
         backdrop backdropRadius: Float?,
         x: Float, y: Float, w: Float, h: Float,
         cornerRadius: Float = 0,
+        adaptation: Float? = nil,
         body: () -> Void
     ) {
         guard w > 0, h > 0, !insideBlurScope else { return body() }
@@ -1070,7 +1076,7 @@ public final class DrawList {
             insideBlurScope = true
             beginBackdropBlur(
                 x: x, y: y, w: w, h: h, radius: radius,
-                cornerRadius: cornerRadius
+                cornerRadius: cornerRadius, adaptation: adaptation ?? 1
             )
             body()
             endBackdropBlur()
@@ -1166,6 +1172,9 @@ public final class DrawList {
             let glassChild = overlayRoot.childNodes.first as? YogaBoxNode
             let glassRadius = overlayRoot.backdropBlurRadius
                 ?? glassChild?.backdropBlurRadius
+            let glassAdaptation = overlayRoot.backdropBlurRadius != nil
+                ? overlayRoot.backdropAdaptation
+                : glassChild?.backdropAdaptation
 
             // Which shape the frost is cut to. Normally the panel's own, since
             // the frost rect *is* the panel — but a "transparent shell" panel
@@ -1203,7 +1212,7 @@ public final class DrawList {
             withBlurScope(
                 content: nil, backdrop: compositorGlass ? nil : glassRadius,
                 x: att.origin.x, y: att.origin.y, w: att.size.w, h: att.size.h,
-                cornerRadius: glassCorner
+                cornerRadius: glassCorner, adaptation: glassAdaptation
             ) {
                 // Outline first, one pixel proud on every side, so the panel's
                 // own fill covers the middle of it — which is exactly why a
@@ -1437,7 +1446,8 @@ public final class DrawList {
                     content: styled.contentBlurRadius,
                     backdrop: styled.backdropBlurRadius,
                     x: x, y: y, w: w, h: h,
-                    cornerRadius: styled.cornerRadius
+                    cornerRadius: styled.cornerRadius,
+                    adaptation: styled.backdropAdaptation
                 ) {
                     let interactive = styled.hoverFill != nil
                     let flags = nodeFlags(
@@ -1486,7 +1496,8 @@ public final class DrawList {
                     content: stack.contentBlurRadius,
                     backdrop: stack.backdropBlurRadius,
                     x: x, y: y, w: w, h: h,
-                    cornerRadius: stack.cornerRadius
+                    cornerRadius: stack.cornerRadius,
+                    adaptation: stack.backdropAdaptation
                 ) {
                     let flags = nodeFlags(
                         for: stack.id, interactive: stack.isRendererInteractive,
@@ -1533,7 +1544,8 @@ public final class DrawList {
                     content: leaf.contentBlurRadius,
                     backdrop: leaf.backdropBlurRadius,
                     x: x, y: y, w: w, h: h,
-                    cornerRadius: leaf.cornerRadius
+                    cornerRadius: leaf.cornerRadius,
+                    adaptation: leaf.backdropAdaptation
                 ) {
                     let interaction = interactionTints(for: leaf)
                     let flags = nodeFlags(

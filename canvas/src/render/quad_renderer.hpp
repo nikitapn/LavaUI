@@ -315,10 +315,16 @@ class QuadRenderer {
   /// rounded panel shows four bright tabs the panel never covers. Zero keeps
   /// the plain rectangular quad, which is what a content blur wants — that one
   /// composites a subtree's own silhouette and has no panel to match.
+  ///
+  /// `adapt` (0…1) compresses a bright backdrop toward a light grey, so glass
+  /// over a white page still reads as glass. Per pixel, from the blurred
+  /// sample itself — see the BlurComposite branch of `quad_instance.frag`.
+  /// Only for an opaque source: a content blur's own silhouette passes 0.
   void pushBlurResultImage(vec2 topLeft, vec2 size, vec2 uv0, vec2 uv1,
                            float cornerRadius = 0.f,
                            uint32_t rgba = 0xffffffffu,
-                           float refractPx = 0.f);
+                           float refractPx = 0.f,
+                           float adapt = 0.f);
 
   void end();
 

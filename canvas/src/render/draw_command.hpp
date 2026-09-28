@@ -40,6 +40,11 @@ enum class DrawCommandKind : uint32_t {
   /// *under* the panel's own fill and so is the one part of a rounded glass
   /// panel that the fill cannot cover — square corners on it show as bright
   /// tabs poking out from behind the shape.
+  ///
+  /// `color`'s alpha byte = adaptive strength, 0…255: how far a bright
+  /// backdrop is compressed toward light grey so the glass still reads over a
+  /// white page. RGB is ignored. A producer that predates this sends white,
+  /// which is full strength — the intended default.
   BeginBackdropBlur = 8,
   /// Closes a blur scope (bookkeeping / future nesting). No GPU work yet.
   EndBackdropBlur = 9,
@@ -49,8 +54,9 @@ enum class DrawCommandKind : uint32_t {
   /// frosts what is *behind* a view, this softens the view itself.
   BeginContentBlur = 10,
   /// `aux` = glass refraction at the composite's rim, in pixels; 0 is flat.
-  /// Only the compositor's frost plates set it — LavaUI always sends 0, so a
-  /// `.blur()` never bends.
+  /// `param` = adaptive strength, 0…255, as on `BeginBackdropBlur`.
+  /// Only the compositor's frost plates set either — LavaUI always sends 0,
+  /// so a `.blur()` never bends and is never greyed.
   EndContentBlur = 11,
   /// Filled arbitrary polygon (custom region — pie/donut wedges, etc.).
   /// param = first vertex index, w = vertex count, into the mesh-vertex side

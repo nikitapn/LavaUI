@@ -35,6 +35,10 @@ layout(location = 7) flat out uint vTextureIndex;
 /// 1 where this quad carries a gradient, 0 otherwise. Gates the dither in the
 /// fragment shader, so text and images are never touched by it.
 layout(location = 8) flat out float vDither;
+/// BlurComposite only: how far to compress a bright backdrop, 0…1. Rides in
+/// `inColor1.a`, which a composite never reads as a ramp end — its
+/// `inGradAxis` is zero. See `QuadRenderer::pushBlurResultImage`.
+layout(location = 9) flat out float vAdapt;
 
 void main() {
   const vec2 corners[6] = vec2[6](
@@ -62,6 +66,7 @@ void main() {
   float t = clamp(dot(corner, inGradAxis) + inGradBias, 0.0, 1.0);
   vColor = mix(inColor, inColor1, t);
   vDither = dot(inGradAxis, inGradAxis) > 0.0 ? 1.0 : 0.0;
+  vAdapt = inKind == 6u ? inColor1.a : 0.0;
   vKind = inKind;
   vAux = inAux;
   vUv = mix(inUv0, inUv1, corner);

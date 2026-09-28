@@ -24,8 +24,16 @@ layout(location = 5) flat in float vAux;
 layout(location = 6) in vec2 vUv;
 layout(location = 7) flat in uint vTextureIndex;
 layout(location = 8) flat in float vDither;
+layout(location = 9) flat in float vAdapt;
 layout(binding = 0) uniform sampler2D textures[];
 layout(location = 0) out vec4 outColor;
+
+/// Adaptive frost (`vAdapt`): backdrop luma below the knee is left alone,
+/// and at full strength white comes out at the ceiling. Tuned by eye against
+/// the HelloWorld glass demo, not derived — low enough that light text on the
+/// glass stays legible over a white page, high enough to still read as glass.
+const float kAdaptKnee = 0.45;
+const float kAdaptCeiling = 0.62;
 
 float sdRoundBox(vec2 p, vec2 b, float r) {
   vec2 q = abs(p) - b + r;
@@ -86,7 +94,11 @@ void main() {
   if (vKind == 6u) { // BlurComposite
     float d = sdRoundBox(vLocal, vHalfSize, vRadius);
     float aa = max(fwidth(d), 1e-5);
-    float coverage = 1.0 - smoothstep(-aa, aa, d);
+    // A square composite only reaches this kind to adapt (see
+    // `pushBlurResultImage`), and must keep the hard edge the plain image
+    // path gives it — SDF antialiasing on r=0 eats a pixel all round.
+    float coverage = vRadius < 0.5 ? (d <= 1e-4 ? 1.0 : 0.0)
+                                   : 1.0 - smoothstep(-aa, aa, d);
     if (coverage <= 0.001) discard;
 
     // vAux > 0: glass refraction of that many pixels at the rim (backdrop
@@ -124,7 +136,38 @@ void main() {
     vec4 sampled = texture(textures[nonuniformEXT(vTextureIndex)], uv) * vColor;
     float a = sampled.a * coverage;
     if (a <= 0.001) discard;
-    outColor = vec4(min(sampled.rgb + rimAdd, vec3(1.0)) * a, a);
+
+    // Bright-backdrop compression. Frost over a white page blurs to white,
+    // and white glass on white is no glass at all: the panel's own tint adds
+    // nothing, its edge vanishes, and light text on it is unreadable. The
+    // sample *is* a local average of the backdrop — that is what a blur is —
+    // so the decision is made here, per pixel, rather than from one average
+    // of the whole panel: a panel straddling a white window and a dark
+    // wallpaper adapts on each side, and nothing flips as windows move.
+    //
+    // A soft-knee highlight compressor on luma: untouched below `kAdaptKnee`,
+    // then `knee + x / (1 + k·x)`, which leaves the knee with slope 1 (no
+    // visible seam), rises monotonically (a brighter backdrop never comes out
+    // darker — a plain mix toward a ceiling does exactly that, and inverts
+    // highlights), and lands white on `top`. Colour is scaled rather than
+    // mixed toward grey, so a bright yellow stays yellow.
+    //
+    // Luma of sRGB-encoded values, deliberately: blending happens in encoded
+    // space (see quad.frag), so this is the brightness the eye is shown.
+    vec3 rgb = sampled.rgb;
+    float hi = 0.0;
+    float luma = dot(rgb, vec3(0.2126, 0.7152, 0.0722));
+    if (vAdapt > 0.0 && luma > kAdaptKnee) {
+      float top = mix(1.0, kAdaptCeiling, vAdapt);
+      float x = luma - kAdaptKnee;
+      float k = 1.0 / (top - kAdaptKnee) - 1.0 / (1.0 - kAdaptKnee);
+      rgb *= (kAdaptKnee + x / (1.0 + k * x)) / luma;
+      hi = smoothstep(kAdaptKnee, 1.0, luma) * vAdapt;
+    }
+    // The rim lightens the edge, which is exactly what cannot show on a
+    // bright backdrop — so as the backdrop brightens it turns into a shade.
+    vec3 rim = mix(rimAdd, -rimAdd * 0.6, hi);
+    outColor = vec4(clamp(rgb + rim, 0.0, 1.0) * a, a);
     return;
   }
 

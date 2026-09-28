@@ -56,6 +56,9 @@ public struct ViewStyle: Equatable {
     /// Emits `BeginBackdropBlur` / `EndBackdropBlur` around the node's paint
     /// so earlier UI is frosted and this node's fill + children stay sharp.
     public var backdropBlurRadius: Float?
+    /// How far a bright backdrop is pulled toward light grey under the frost,
+    /// 0…1. `nil` = full strength. See `View.backdropBlur(radius:adaptation:)`.
+    public var backdropAdaptation: Float?
     /// Content blur radius in pixels. `nil` = off. Blurs this node's own paint,
     /// the way SwiftUI's `.blur()` does, rather than what is behind it.
     public var contentBlurRadius: Float?
@@ -108,6 +111,7 @@ public struct ViewStyle: Equatable {
         out.flexGrow = flexGrow ?? base.flexGrow
         out.flexShrink = flexShrink ?? base.flexShrink
         out.backdropBlurRadius = backdropBlurRadius ?? base.backdropBlurRadius
+        out.backdropAdaptation = backdropAdaptation ?? base.backdropAdaptation
         out.contentBlurRadius = contentBlurRadius ?? base.contentBlurRadius
         out.clipsContent = clipsContent ?? base.clipsContent
         out.isHidden = isHidden ?? base.isHidden
@@ -249,6 +253,7 @@ extension YogaBoxNode {
             base.flexGrow = flexGrow
             base.flexShrink = flexShrink
             base.backdropBlurRadius = backdropBlurRadius
+            base.backdropAdaptation = backdropAdaptation
             base.contentBlurRadius = contentBlurRadius
             base.clipsContent = clipsContent
             base.isHidden = isHidden
@@ -269,6 +274,7 @@ extension YogaBoxNode {
         // Unlike fill (set-if-present), blur clears when the modifier is gone:
         // fall back through the baseline so removing `.blur()` actually turns it off.
         backdropBlurRadius = style.backdropBlurRadius ?? base.backdropBlurRadius
+        backdropAdaptation = style.backdropAdaptation ?? base.backdropAdaptation
         contentBlurRadius = style.contentBlurRadius ?? base.contentBlurRadius
         clipsContent = style.clipsContent ?? base.clipsContent ?? false
         isHidden = style.isHidden ?? base.isHidden ?? false
@@ -605,8 +611,20 @@ extension View {
     /// result, then draws this view's fill and children sharp on top. Typical
     /// use: `.background(Color(...).opacity(0.15)).backdropBlur(radius: 6)` on
     /// a panel or overlay so chrome reads as glass.
-    public func backdropBlur(radius: Float = 8) -> ModifiedView<Self> {
-        styled { $0.backdropBlurRadius = max(0.5, radius) }
+    ///
+    /// `adaptation` keeps the glass visible over a bright backdrop. Frost over
+    /// a white page blurs to white, and the panel disappears into it; at 1 the
+    /// renderer pulls the brightest part of the backdrop down toward light
+    /// grey, pixel by pixel from the blurred sample, so a panel straddling a
+    /// white window and a dark one adapts on each side. Mid-tones and darks
+    /// are left alone. 0 is plain frost.
+    public func backdropBlur(
+        radius: Float = 8, adaptation: Float = 1
+    ) -> ModifiedView<Self> {
+        styled {
+            $0.backdropBlurRadius = max(0.5, radius)
+            $0.backdropAdaptation = min(max(adaptation, 0), 1)
+        }
     }
 
     /// Scissor this view's paint (and its children's) to its layout rect.
@@ -768,8 +786,13 @@ extension ModifiedView {
         adding { $0.contentBlurRadius = max(0.5, radius) }
     }
 
-    /// See `View.backdropBlur(radius:)`.
-    public func backdropBlur(radius: Float = 8) -> ModifiedView<Content> {
-        adding { $0.backdropBlurRadius = max(0.5, radius) }
+    /// See `View.backdropBlur(radius:adaptation:)`.
+    public func backdropBlur(
+        radius: Float = 8, adaptation: Float = 1
+    ) -> ModifiedView<Content> {
+        adding {
+            $0.backdropBlurRadius = max(0.5, radius)
+            $0.backdropAdaptation = min(max(adaptation, 0), 1)
+        }
     }
 }

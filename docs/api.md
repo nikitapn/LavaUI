@@ -528,7 +528,7 @@ Modifiers apply to any `View`:
 | `.flexShrink(Float)` | Contraction priority |
 | `.clipped()` | Scissor this view and its descendants to its layout box |
 | `.blur(radius:)` | Blur this view's own rendered content |
-| `.backdropBlur(radius:)` | Blur content already painted behind the view |
+| `.backdropBlur(radius:adaptation:)` | Blur content already painted behind the view. `adaptation` (0…1, default 1) compresses a bright backdrop so the glass still shows over a white page |
 | `.theme(Theme)` | Override the theme for this subtree |
 | `.font(UIFont)` | Override the font for this subtree |
 | `.transition(Transition)` | Animate insertion/removal appearance |

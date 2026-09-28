@@ -423,6 +423,10 @@ bool CanvasSurface::frostWithTexture(int id, float radius, float cornerRadius,
   canvas::DrawCommand end{};
   end.kind = static_cast<uint32_t>(canvas::DrawCommandKind::EndContentBlur);
   end.aux = std::max(0.f, refractPx);
+  // Full adaptive strength: a plate is an opaque capture of the desktop, and
+  // a dock or a popup frosted over a white window is exactly the case it is
+  // for — without it the glass blurs to white and disappears.
+  end.param = 255;
 
   const std::vector<canvas::DrawCommand> commands{begin, image, end};
   const std::vector<canvas::GlyphInstance> glyphs;

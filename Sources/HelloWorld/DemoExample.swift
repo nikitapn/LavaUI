@@ -80,6 +80,10 @@ public struct DemoExample: View {
     @State private var picked = Color(r: 0.22, g: 0.48, b: 0.86)
     @State private var showMenu = false
     @State private var showGlass = false
+    /// Glass demo: a white page under the panel instead of the colour strip.
+    @State private var glassOnWhite = false
+    /// Glass demo: `.backdropBlur(adaptation:)` 1 vs 0, to compare.
+    @State private var glassAdaptive = true
     /// Neon EQ showcase — continuous animation while true.
     @State private var pulsePlaying = true
     /// Selected donut wedge (`nil` = show title in the hole).
@@ -463,12 +467,16 @@ public struct DemoExample: View {
                 color: .secondary
             )
             // Saturated strip so frost is obvious; glass overlay anchors here.
+            // "White page" swaps most of it for white — the backdrop plain
+            // frost disappears into — and keeps two swatches at the end, so
+            // the panel straddles both and adapts on each side separately.
             HStack(height: .pt(72), padding: 4) {
                 ForEach(Array(DemoPalette.swatches.enumerated()), id: \.offset) { i, c in
+                    let white = glassOnWhite && i < 4
                     VStack(flexGrow: 1, padding: 4) {
-                        Text("\(i + 1)", color: .primary)
+                        Text("\(i + 1)", color: white ? Color(r: 0.2, g: 0.2, b: 0.2) : .primary)
                     }
-                    .background(c)
+                    .background(white ? Color(r: 1, g: 1, b: 1) : c)
                     .cornerRadius(6)
                 }
             }.blur(radius: 5)
@@ -478,6 +486,8 @@ public struct DemoExample: View {
                     bump(showGlass ? "glass on" : "glass off")
                 }
 
+                Toggle("White page", isOn: $glassOnWhite)
+                Toggle("Adaptive", isOn: $glassAdaptive)
                 Text("(glass opens on the colour strip)", color: .dim)
                 Spacer()
             }
@@ -495,7 +505,12 @@ public struct DemoExample: View {
             ) {
                 VStack(padding: 4) {
                     Text("Frosted panel", color: .primary)
-                    Text("backdrop blur · radius 10", color: .secondary)
+                    Text(
+                        glassAdaptive
+                            ? "backdrop blur · radius 10 · adaptive"
+                            : "backdrop blur · radius 10 · plain",
+                        color: .secondary
+                    )
                     Text("Close", color: .accent, onClick: {
                         showGlass = false
                         bump("glass off")
@@ -505,7 +520,7 @@ public struct DemoExample: View {
                 // Stronger tint so glass reads even when the blur is subtle.
                 .background(Color(r: 0.95, g: 0.96, b: 1.0).opacity(0.28))
                 .cornerRadius(12)
-                .backdropBlur(radius: 10)
+                .backdropBlur(radius: 10, adaptation: glassAdaptive ? 1 : 0)
             }
 
             Text("Button · animated press + hover", color: .accent)

@@ -34,6 +34,7 @@ final class ViewStyleMergeTests: XCTestCase {
         s.flexGrow = 1
         s.flexShrink = 0
         s.backdropBlurRadius = 6
+        s.backdropAdaptation = 0.5
         s.contentBlurRadius = 5
         s.clipsContent = true
         s.isHidden = false
