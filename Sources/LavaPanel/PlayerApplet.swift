@@ -167,7 +167,7 @@ struct PlayerWindow: View {
             alignment: .center,
             onClick: enabled ? action : nil
         ) {
-            Text(label, color: enabled ? theme.textPrimary : theme.textDim)
+            Text(label, color: enabled ? theme.textPrimary : theme.textDim, align: .center)
         }
         .padding(EdgeInsets(top: 6, leading: 14, bottom: 6, trailing: 14))
         .hoverBackground(enabled ? theme.hover : .clear)
