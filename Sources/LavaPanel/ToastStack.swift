@@ -28,11 +28,15 @@ struct ToastStack: View {
     static let topInset: Float = MenuSession.stripHeight + 8
 
     var body: some View {
-        VStack(width: .pt(Self.width), padding: 0, spacing: 8) {
+        // `.frame`, not `VStack(width:)`: a column that states its own width
+        // is painted `theme.panel`, the cards' own colour, which filled the
+        // gaps between them and made the stack read as one slab.
+        VStack(padding: 0, spacing: 8) {
             ForEach(notifications.toasts) { toast in
                 ToastCard(toast: toast, notifications: notifications)
             }
         }
+        .frame(width: .pt(Self.width))
         .agentId("notifications")
     }
 }
@@ -79,7 +83,7 @@ private struct ToastCard: View {
                     padding: 0, alignment: .center,
                     onClick: { model.dismiss(item) }
                 ) {
-                    Text("✕", color: theme.textDim)
+                    Text("✕", color: theme.textDim, align: .center)
                 }
                 .padding(4)
                 .cornerRadius(4)
