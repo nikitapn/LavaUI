@@ -1,9 +1,6 @@
 # LavaUI API guide
 
 This document describes the application-facing LavaUI API as it exists today.
-LavaUI uses SwiftUI-shaped value descriptions, Yoga layout, retained view nodes,
-and a Vulkan renderer. It is currently a Linux framework; some declarations are
-compiled only when `CxxCanvas` is available.
 
 ```swift
 import LavaUI

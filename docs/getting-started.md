@@ -1,11 +1,5 @@
 # Getting started
 
-LavaUI is a declarative UI framework in Swift. Views are written the way
-SwiftUI writes them: a `body` of nested value types, `@State`, stacks and
-modifiers. Everything under them belongs to LavaUI: Yoga lays them out,
-HarfBuzz and FreeType shape and rasterize the text, and one Vulkan pipeline
-draws the result.
-
 This page takes you from an empty directory to a running window. The
 [API guide](api.md) covers the rest.
 
