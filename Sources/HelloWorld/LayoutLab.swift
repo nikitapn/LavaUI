@@ -57,7 +57,6 @@ struct LayoutLab: View {
             caption("80×80 box, contentMode .fill")
             specimen(theme: theme, id: "layout-lab-image-fill") {
                 Image(sample, width: .pt(80), height: .pt(80), contentMode: .fill)
-                    .clipped()
             }
             caption(".frame(width: 120) on an intrinsic image")
             specimen(theme: theme, id: "layout-lab-image-frame-width") {

@@ -1926,11 +1926,17 @@ public final class DrawList {
                 srcW: img.pixelWidth, srcH: img.pixelHeight,
                 mode: leaf.imageContentMode
             )
+            // `.fill` overshoots the box on one axis by design; the overshoot
+            // is meant to be cropped, not drawn over the neighbours. A square
+            // picture in a square box never shows this, a 16:9 thumbnail does.
+            let overflows = dest.w > w + 0.5 || dest.h > h + 0.5
+            if overflows { pushClip(x: x, y: y, w: w, h: h) }
             self.image(
                 img,
                 x: dest.x, y: dest.y, w: dest.w, h: dest.h,
                 tint: leaf.imageTint
             )
+            if overflows { popClip() }
         }
     }
 
