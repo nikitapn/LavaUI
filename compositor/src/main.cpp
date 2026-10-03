@@ -9,6 +9,7 @@
 #include <format>
 #include <fstream>
 #include <spawn.h>
+#include <sys/random.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <sys/wait.h>
@@ -49,6 +50,8 @@
 #include "backdrop_blur.hpp"
 #include "background.hpp"
 #include "focus_history.hpp"
+#include "lock_auth.hpp"
+#include "logind.hpp"
 #include "window_memory.hpp"
 #include "wlr.hpp"
 
@@ -127,6 +130,10 @@ bool x11IsTransient(const wlr_xwayland_surface *surface) {
 /// Pid of a switcher we spawned and have not reaped. Stops Ctrl+Tab during
 /// the ~200 ms to first frame from launching a second overlay.
 std::atomic<pid_t> g_switcherPid{-1};
+
+/// Pid of the lock screen we spawned and have not reaped, so a restart can
+/// put away one that is still running but has stopped drawing.
+std::atomic<pid_t> g_lockPid{-1};
 
 /// A `wl_listener` that remembers what owns it.
 ///
@@ -284,6 +291,11 @@ struct Workspaces {
   /// Whatever a client is dragging, while it is dragging one. Above even the
   /// panels: it hangs off the cursor, and the cursor is over everything.
   wlr_scene_tree *dragIcons = nullptr;
+  /// The session lock: a black curtain over every output and the lock
+  /// screen's surface on it. Over everything — the drag icon included,
+  /// because a drag can be in flight when the lock arrives and what it
+  /// carries is somebody's file name. Disabled unless locked.
+  wlr_scene_tree *lock = nullptr;
   uint32_t current = 0;
 
   void init(wlr_scene_tree *root) {
@@ -303,6 +315,8 @@ struct Workspaces {
     // being chosen; below the drag icon, which is on the cursor.
     inputPopups = wlr_scene_tree_create(root);
     dragIcons = wlr_scene_tree_create(root);
+    lock = wlr_scene_tree_create(root);
+    wlr_scene_node_set_enabled(&lock->node, false);
   }
 
   wlr_scene_tree *currentTree() const { return tree[current]; }
@@ -350,6 +364,9 @@ struct Output {
   bool forcedOn = false;
   /// Whether `wlr_output_lock_attach_render` is held. See `syncScanoutLock`.
   bool compositeLocked = false;
+  /// Turned off for idling by `Server::setScreensPowered`, and so the one to
+  /// turn back on — as opposed to off because its config block says so.
+  bool poweredDown = false;
   /// Whether a client owns this output's pixels outright — covering it, and
   /// fenced, so wlroots scanouts its buffer and nothing here composites a
   /// desktop onto this screen. Watched by `Server::syncImageSpeculation`.
@@ -1535,6 +1552,107 @@ struct Server {
   bool menuIsOpen() const { return menu.serial != 0 && menu.shown; }
 
   std::unique_ptr<lava::ScreenshotPortal> screenshotPortal;
+
+  // ─── Idle, screen power and the session lock ─────────────────────────────
+  //
+  // The lock is a state of the compositor, not a window. While `locked`:
+  //
+  //   * a black curtain over every output sits at the top of the scene
+  //     (`Workspaces::lock`), so what is behind it is never drawn — whether or
+  //     not the lock screen managed to start;
+  //   * pointer and keyboard reach the lock screen's surface and nothing else,
+  //     gated at the handlers rather than by focus, so no path that sets focus
+  //     can hand a key to a window;
+  //   * every binding is refused but the VT switch;
+  //   * it ends only through `unlockSession`, which the password check and
+  //     logind's `Unlock` call, and nothing a client can ask for.
+  //
+  // The lock screen itself is a LavaUI client started per lock with a token
+  // in its environment. It collects a password and is told the answer.
+
+  bool locked = false;
+  /// The lock screen's surface, or 0 while it has none — not yet started,
+  /// starting, or dead and about to be started again.
+  uint32_t lockSurfaceId = 0;
+  /// What `CreateLockSurface` must present. Fresh per start, empty unlocked.
+  std::string lockToken;
+  /// When the lock screen was last started, and how many times this lock.
+  int64_t lockStartedAt = 0;
+  uint32_t lockStarts = 0;
+  /// Wrong passwords this lock, for the lock screen to show.
+  uint32_t lockFailures = 0;
+  /// What PAM said about the last attempt. See `LockState.message`.
+  std::string lockMessage;
+  /// The keyboard state the lock screen was last told, so a key that changes
+  /// it — Caps Lock, Num Lock, the layout toggle — can be told again.
+  bool lockToldCaps = false;
+  bool lockToldNum = false;
+  std::string lockToldLayout;
+  /// The key or button that woke the screens, swallowed along with its
+  /// release. 0 for none. A key pressed at a dark screen is a request to see
+  /// it, not the first character of a password.
+  uint32_t wakeKey = 0;
+  uint32_t wakeButton = 0;
+  /// A check is in flight; attempts until it answers are dropped.
+  bool lockChecking = false;
+  /// Bumped at every lock and unlock, so a PAM answer that arrives after the
+  /// lock it was for has ended cannot end the next one.
+  uint64_t lockGeneration = 0;
+  std::string lockUser;
+  /// The foreign window that had the keyboard when the lock began. A frame
+  /// id, not a pointer: the window can close while the session is locked.
+  uint32_t lockPreviousFrame = 0;
+  wlr_scene_rect *lockCurtain = nullptr;
+  /// Ticks once a second while locked, to restart a lock screen that died or
+  /// never drew.
+  wl_event_source *lockTimer = nullptr;
+  /// Where the PAM worker hands its answer back to the loop.
+  int lockAnswerFd[2] = {-1, -1};
+  wl_event_source *lockAnswerSource = nullptr;
+
+  /// Monotonic ms of the last real input, and the timer that compares it to
+  /// the `[idle]` limits.
+  int64_t lastActivityMs = 0;
+  int64_t lockedAtMs = 0;
+  wl_event_source *idleTimer = nullptr;
+  /// Whether `syncIdleInhibit` last found a visible inhibitor.
+  bool idleInhibited = false;
+  /// Whether `setScreensPowered(false)` has the outputs off.
+  bool screensOff = false;
+
+  lava::Logind logind;
+  /// Lets a delay inhibitor go once the curtain is on screen.
+  wl_event_source *sleepRelease = nullptr;
+
+  void initLock(wl_event_loop *loop);
+  void lockSession(const char *why);
+  void unlockSession(const char *why);
+  /// Spawns the lock screen with a new token, putting away any previous one.
+  void startLockScreen();
+  void postLockState(uint32_t status);
+  /// The lock screen subscribed; tell it where things stand.
+  void lockClientJoined();
+  /// A password from the lock screen. Starts a check unless one is running.
+  void lockAttempt(uint32_t surfaceId, std::string password);
+  void finishLockCheck(uint64_t generation, bool ok, std::string message);
+  /// Tells the lock screen if Caps Lock, Num Lock or the layout changed.
+  void syncLockIndicators();
+  /// The lock screen's surface, and the cursor in its coordinates, when the
+  /// cursor is on it.
+  ClientSurface *lockSurfaceAtCursor(double &sx, double &sy);
+  /// Pointer motion while locked: to the lock screen, or to nothing.
+  void lockedPointerMotion();
+  void lockedPointerButton(bool pressed, int32_t button);
+  void lockedPointerAxis(float dx, float dy);
+
+  void setScreensPowered(bool on);
+  /// Re-arms `idleTimer` for whichever `[idle]` deadline comes next.
+  void armIdleTimer();
+  void idleTick();
+  static int on_idle_timer(void *data);
+  static int on_lock_timer(void *data);
+  static int on_lock_answer(int fd, uint32_t mask, void *data);
+  static int on_sleep_release(void *data);
 };
 
 // ─── Client surfaces ───────────────────────────────────────────────────────
@@ -1756,6 +1874,19 @@ struct ClientSurface {
   /// this bit is what keeps `CreateMenuSurface`'s one surface — the one
   /// `SubscribeMenu` is about — distinct from the plates hung off it.
   bool submenu = false;
+
+  /// The lock screen's surface. See `CreateLockSurface`.
+  ///
+  /// Its own tree, above every other, and out of every hit test: while the
+  /// session is locked the pointer and keyboard reach it through
+  /// `Server::lockedPointer` and the locked branch of `on_key` and through
+  /// nothing else, and while it is unlocked there is no such surface.
+  bool lock = false;
+
+  /// Not a window: a panel, a menu or the lock screen. What every "act on a
+  /// window" path refuses — minimize, maximize, move to a workspace, the
+  /// window list, remembered placement.
+  bool furniture() const { return panel || menu || lock; }
 
   /// A popup the panel drew itself (the volume slider, About) rather than
   /// the context-menu client. `menu` is what keeps it out of the window
@@ -2468,7 +2599,7 @@ class SurfaceRegistry : public lava::CompositorHost {
     // so a menu opened on workspace 3 is on screen on workspace 3. It is
     // created with `workspace = 0`, and the test below would have made it
     // unclickable everywhere else.
-    if (surface.menu) {
+    if (surface.menu || surface.lock) {
       return surface.node != nullptr && surface.node->node.enabled;
     }
     // A window still holding its first frame is one of those: it occupies its
@@ -2507,7 +2638,7 @@ class SurfaceRegistry : public lava::CompositorHost {
     // `present` throws them away and `stepAnimations` defers its hover
     // repaints — which is a menu over a fullscreen window that shows the
     // *previous* menu and does not light up under the pointer.
-    if (!visible(surface) || surface.panel || surface.menu) return false;
+    if (!visible(surface) || surface.furniture()) return false;
     for (const auto &front : surfaces_) {
       if (front.get() == &surface) return false;
       if (!visible(*front) || front->workspace != surface.workspace) continue;
@@ -2531,7 +2662,7 @@ class SurfaceRegistry : public lava::CompositorHost {
     // The menu belongs to no workspace — it is drawn from a tree of its own
     // and closed by every switch. Sending it to workspace 3 would reparent it
     // out of that tree and into the stacking order of ordinary windows.
-    if (surface.panel || surface.menu || surface.workspace == index) return;
+    if (surface.furniture() || surface.workspace == index) return;
     surface.workspace = index;
     // A Wayland/X11 window has no canvas node — its pixels live on
     // `window->contentNode()`, which `Server::moveFocusedToWorkspace`
@@ -2598,9 +2729,11 @@ class SurfaceRegistry : public lava::CompositorHost {
   /// Which of the scene's stacked trees a surface lives in. Declared in the
   /// order they are stacked, topmost first, which is the order `hitTest`
   /// walks them in.
-  enum class HitLayer : uint8_t { Menu, Panel, Window };
+  /// `Lock` is never walked: see `ClientSurface::lock`.
+  enum class HitLayer : uint8_t { Lock, Menu, Panel, Window };
 
   static HitLayer layerOf(const ClientSurface &surface) {
+    if (surface.lock) return HitLayer::Lock;
     if (surface.menu) return HitLayer::Menu;
     if (surface.panel) return HitLayer::Panel;
     return HitLayer::Window;
@@ -2670,7 +2803,7 @@ class SurfaceRegistry : public lava::CompositorHost {
     const SurfaceHit top = hitTest(lx, ly);
     // Neither the furniture: Alt+drag must not move the taskbar, and it must
     // not move an open menu either.
-    if (top.surface == nullptr || top.surface->panel || top.surface->menu) {
+    if (top.surface == nullptr || top.surface->furniture()) {
       return nullptr;
     }
     return top.surface;
@@ -2759,7 +2892,7 @@ class SurfaceRegistry : public lava::CompositorHost {
     // minimized menu is one that draws and refuses the pointer. That is not
     // hypothetical — `hideDesktop` reached this surface, and every context
     // menu for the rest of that session came up dead.
-    if (surface.panel || surface.menu) return;
+    if (surface.furniture()) return;
     if (surface.minimized == minimized) {
       if (surface.isForeign()) surface.window->setMinimized(minimized);
       return;
@@ -2831,7 +2964,7 @@ class SurfaceRegistry : public lava::CompositorHost {
   /// Panels and the context menu are the desktop's own furniture, and the
   /// Alt+Tab overlay is a transient that puts itself away.
   bool hideable(const ClientSurface &surface) const {
-    if (surface.panel || surface.menu) return false;
+    if (surface.furniture()) return false;
     if (surface.appId == kSwitcherAppId) return false;
     if (workspaces_ != nullptr && surface.workspace != workspaces_->current) {
       return false;
@@ -3300,7 +3433,7 @@ class SurfaceRegistry : public lava::CompositorHost {
   void raise(ClientSurface &surface) {
     // A panel is already above everything by its own tree, and a menu is
     // above the panels by its own — neither has a place in this ordering.
-    if (surface.panel || surface.menu) return;
+    if (surface.furniture()) return;
     raiseNodes(surface);
     bringToFront(surface);
     // After the parent, so they land over it, and breadth-first, so a
@@ -3348,7 +3481,7 @@ class SurfaceRegistry : public lava::CompositorHost {
         // `surface` itself is skipped so a window naming itself as its own
         // parent cannot be raised above the raise it is the subject of.
         if (s->parentId != parent || s->id == surface.id) continue;
-        if (s->panel || s->menu) continue;
+        if (s->furniture()) continue;
         if (std::find(found.begin(), found.end(), s->id) != found.end()) {
           continue;
         }
@@ -3463,7 +3596,7 @@ class SurfaceRegistry : public lava::CompositorHost {
   void restackRank(ClientSurface::StackRank rank) {
     std::vector<uint32_t> ranked;
     for (const auto &surface : surfaces_) {
-      if (surface->rank == rank && !surface->panel && !surface->menu) {
+      if (surface->rank == rank && !surface->furniture()) {
         ranked.push_back(surface->id);
       }
     }
@@ -3483,7 +3616,7 @@ class SurfaceRegistry : public lava::CompositorHost {
   /// second change nobody asked for, and the user can still see where they
   /// left it.
   void setAlwaysOnTop(ClientSurface &surface, bool onTop) {
-    if (surface.panel || surface.menu) return;
+    if (surface.furniture()) return;
     // An overlay is above the pinned windows already and nothing offers to
     // change that: the launcher has no title bar to right-click and is gone
     // before anyone could.
@@ -3602,7 +3735,7 @@ class SurfaceRegistry : public lava::CompositorHost {
     // A menu holds the keyboard focus while it is up (see `showMenu`), so the
     // fullscreen binding would otherwise land on the menu rather than on the
     // window it is about.
-    if (surface.panel || surface.menu) return;
+    if (surface.furniture()) return;
     if (surface.fullscreen == fullscreen) {
       // Protocol still wants an ack even when nothing moved.
       if (surface.isForeign()) surface.window->setFullscreen(fullscreen);
@@ -4058,7 +4191,7 @@ class SurfaceRegistry : public lava::CompositorHost {
     // there to lift off the desktop. The parent above makes a menu's shadow
     // merely wrong rather than fatal; this is why it should not exist.
     const bool wanted =
-        shadowBlur_ > 0.f && !surface.panel && !surface.menu &&
+        shadowBlur_ > 0.f && !surface.furniture() &&
         !surface.maximized && !coversItsOutput(surface) &&
         renderer_ != nullptr && workspaces_ != nullptr &&
         (surface.id == focused_ || shadowInactive_ > 0.f) &&
@@ -4268,6 +4401,7 @@ class SurfaceRegistry : public lava::CompositorHost {
   /// in this order and nothing reorders them, so a surface in a higher one
   /// is in front of every surface in a lower one.
   static int stackLayer(const ClientSurface &surface) {
+    if (surface.lock) return 3;
     if (surface.menu) return 2;
     if (surface.panel) return 1;
     return 0;
@@ -4787,8 +4921,8 @@ class SurfaceRegistry : public lava::CompositorHost {
   /// False for a maximized window: it is flush to the work area, the
   /// same reason a panel is square.
   static bool frameIsRoundable(const ClientSurface &surface) {
-    return !surface.isForeign() && !surface.panel && !surface.maximized &&
-           !surface.fullscreen;
+    return !surface.isForeign() && !surface.panel && !surface.lock &&
+           !surface.maximized && !surface.fullscreen;
   }
 
   /// Redraws the title bar. Cheap — a strip, from commands built here.
@@ -4929,7 +5063,7 @@ class SurfaceRegistry : public lava::CompositorHost {
     // and the floor stretched it to 120, so the compositor answered the size
     // its client measured with a different one and the menu drew a plate with
     // half a menu in it.
-    const uint32_t floor = surface.panel || surface.menu ? 1u : kMinSurface;
+    const uint32_t floor = surface.furniture() ? 1u : kMinSurface;
     width = width < floor ? floor : width;
     height = height < floor ? floor : height;
 
@@ -5120,6 +5254,136 @@ class SurfaceRegistry : public lava::CompositorHost {
   }
 
   uint32_t menuSurface() const { return menuSurfaceId_; }
+
+  // ─── Session lock ────────────────────────────────────────────────────────
+  //
+  // The surface half of the lock: making the lock screen's surface and
+  // putting it over the screen. Whether the session is locked, and what ends
+  // it, is `Server`'s — see `Server::lockSession`.
+
+  uint32_t createLockSurface(const std::string &arenaId, uint32_t width,
+                             uint32_t height, const std::string &token,
+                             std::string &outReason) override {
+    if (server_ == nullptr || workspaces_ == nullptr ||
+        workspaces_->lock == nullptr) {
+      outReason = "no compositor to lock";
+      return 0;
+    }
+    if (!server_->locked) {
+      outReason = "the session is not locked";
+      return 0;
+    }
+    // Compared in full, and the token is long and random: this is the check
+    // that keeps any other client from drawing a password prompt over the
+    // curtain and reading what is typed into it.
+    if (token.empty() || token != server_->lockToken) {
+      wlr_log(WLR_ERROR, "lock: refused a lock surface with the wrong token");
+      outReason = "not the lock screen this lock started";
+      return 0;
+    }
+    // A lock screen asking twice gets a fresh surface; the old one would be a
+    // second, dead copy over the first.
+    if (server_->lockSurfaceId != 0) destroySurface(server_->lockSurfaceId);
+
+    const uint32_t id = openSurface(arenaId, width, height, "Lock",
+                                    workspaces_->lock, 0, false);
+    if (id == 0) {
+      outReason = "no arena '" + arenaId + "'";
+      return 0;
+    }
+    ClientSurface *surface = find(id);
+    surface->lock = true;
+    surface->appId = "LavaLock";
+    // It asked for nothing it could lay out against: the output decides.
+    surface->askedWidth = 0;
+    surface->askedHeight = 0;
+    applyCorners(*surface);
+    // The screen the pointer is on, which is the one being looked at. The
+    // other screens keep only the curtain.
+    int x = primaryX_;
+    int y = primaryY_;
+    uint32_t w = primaryWidth_;
+    uint32_t h = primaryHeight_;
+    if (server_->cursor != nullptr) {
+      outputBoxAt(static_cast<int>(server_->cursor->x),
+                  static_cast<int>(server_->cursor->y), x, y, w, h);
+    }
+    moveSurface(*surface, x, y);
+    resizeSurface(*surface, w, h);
+    server_->lockSurfaceId = id;
+    // It may have been started before the pointer last moved; whatever is
+    // under it now is this surface, and it should hear so.
+    server_->update_pointer_focus(0);
+    wlr_log(WLR_INFO, "lock: surface %u at %d,%d %ux%u", id, x, y, w, h);
+    return id;
+  }
+
+  bool isLockSurface(uint32_t id) const override {
+    return server_ != nullptr && id != 0 && id == server_->lockSurfaceId;
+  }
+
+  void lockClientJoined(uint32_t surfaceId) override {
+    if (!isLockSurface(surfaceId)) return;
+    server_->lockClientJoined();
+  }
+
+  void idleSettings(uint32_t &outLockAfter, uint32_t &outScreenOffAfter,
+                    uint32_t &outScreenOffLocked,
+                    bool &outLockOnSuspend) const override {
+    const lava::IdleConfig idle =
+        server_ != nullptr ? server_->config.idle : lava::IdleConfig{};
+    outLockAfter = idle.lockAfter;
+    outScreenOffAfter = idle.screenOffAfter;
+    outScreenOffLocked = idle.screenOffLocked;
+    outLockOnSuspend = idle.lockOnSuspend;
+  }
+
+  void updateIdle(uint32_t lockAfter, uint32_t screenOffAfter,
+                  uint32_t screenOffLocked, bool lockOnSuspend,
+                  std::string &outError) override {
+    if (server_ == nullptr) return;
+    // The parser's ceiling, so the file and the running session agree.
+    constexpr uint32_t kDay = 86400;
+    lava::IdleConfig &idle = server_->config.idle;
+    idle.lockAfter = std::min(lockAfter, kDay);
+    idle.screenOffAfter = std::min(screenOffAfter, kDay);
+    idle.screenOffLocked = std::min(screenOffLocked, kDay);
+    if (idle.lockOnSuspend != lockOnSuspend) {
+      idle.lockOnSuspend = lockOnSuspend;
+      // The delay is what gives the lock time to reach the screen before a
+      // suspend; nobody asking for that is a delay nobody should hold.
+      if (lockOnSuspend) {
+        server_->logind.takeSleepDelay();
+      } else {
+        server_->logind.releaseSleepDelay();
+      }
+    }
+    server_->armIdleTimer();
+    save({{"idle", "lock", formatDuration(idle.lockAfter)},
+          {"idle", "screen-off", formatDuration(idle.screenOffAfter)},
+          {"idle", "screen-off-locked", formatDuration(idle.screenOffLocked)},
+          {"idle", "lock-on-suspend", lockOnSuspend ? "on" : "off"}},
+         outError);
+  }
+
+  void lockSession() override {
+    if (server_ != nullptr) server_->lockSession("requested");
+  }
+
+  /// Seconds as `lava.conf` spells them for a person: `off`, `10m`, `90s`.
+  static std::string formatDuration(uint32_t seconds) {
+    if (seconds == 0) return "off";
+    if (seconds % 60 == 0) return std::to_string(seconds / 60) + "m";
+    return std::to_string(seconds) + "s";
+  }
+
+  void lockAttempt(uint32_t surfaceId, std::string password) override {
+    if (server_ == nullptr) {
+      lava::wipe(password);
+      return;
+    }
+    server_->lockAttempt(surfaceId, std::move(password));
+  }
 
   /// Sizes the menu to what its client measured, puts it at the anchor and
   /// shows it. Returns where it landed, so the caller can log it.
@@ -5339,7 +5603,7 @@ class SurfaceRegistry : public lava::CompositorHost {
     ClientSurface *surface = find(id);
     if (surface == nullptr) return false;
     // A panel is placed by its edge and has nothing to restore to.
-    if (!surface->panel && !surface->menu) {
+    if (!surface->furniture()) {
       setMaximized(*surface, !surface->maximized);
     }
     outMaximized = surface->maximized;
@@ -5445,7 +5709,7 @@ class SurfaceRegistry : public lava::CompositorHost {
       // Nor is the context menu, which is furniture the way a panel is — and
       // is invisible most of the time, so a dock listing it would show an
       // entry for a window nobody can point at.
-      if (surface->menu) continue;
+      if (surface->menu || surface->lock) continue;
       WindowEntry entry;
       entry.surfaceId = surface->id;
       entry.title = surface->title;
@@ -5496,7 +5760,7 @@ class SurfaceRegistry : public lava::CompositorHost {
     for (const auto &surface : surfaces_) {
       // The same three exclusions the window list makes, for the same
       // reasons — furniture is not somewhere the keyboard can go.
-      if (surface->panel || surface->menu) continue;
+      if (surface->furniture()) continue;
       if (surface->appId == kSwitcherAppId) continue;
       if (surface->workspace != workspace) continue;
       if (sameApp && surface->appId != anchor->appId) continue;
@@ -6028,6 +6292,12 @@ class SurfaceRegistry : public lava::CompositorHost {
       if (id == menuSurfaceId_) {
         menuSurfaceId_ = 0;
         if (server_ != nullptr) server_->closeContextMenu();
+      }
+      // The lock screen's surface going is the lock screen gone — usually
+      // because it was told it was done, otherwise because it died. The lock
+      // itself stays; `on_lock_timer` starts another.
+      if (server_ != nullptr && id == server_->lockSurfaceId) {
+        server_->lockSurfaceId = 0;
       }
       // A window with a menu open about it is a window whose menu now names
       // nothing. Same close, one step removed.
@@ -7175,7 +7445,7 @@ ClientSurface *SurfaceRegistry::frontOnWorkspace(uint32_t workspace) {
     // that spends most of its life hidden at the top of the stack: offered as
     // the front window it wins every time, and it is never a window the user
     // can be sent back to.
-    if (surface->panel || surface->menu || surface->minimized) continue;
+    if (surface->furniture() || surface->minimized) continue;
     if (surface->workspace != workspace) continue;
     if (isTransientApp(surface->appId)) continue;
     return surface.get();
@@ -7234,7 +7504,7 @@ void SurfaceRegistry::rememberPlacement(const ClientSurface &surface) {
   // A menu is furniture like a panel: it is placed at the pointer every time
   // and never opens where it last was, so remembering a frame for it would
   // only be a line in the file nothing reads.
-  if (surface.panel || surface.menu || surface.appId.empty() ||
+  if (surface.furniture() || surface.appId.empty() ||
       isTransientApp(surface.appId) || surface.transient) {
     return;
   }
@@ -7277,7 +7547,7 @@ bool SurfaceRegistry::placementHeld(const std::string &appId,
 }
 
 void SurfaceRegistry::claimPlacement(ClientSurface &surface) {
-  if (surface.panel || surface.menu || surface.transient) return;
+  if (surface.furniture() || surface.transient) return;
   if (surface.appId.empty() || isTransientApp(surface.appId)) return;
   if (placementHeld(surface.appId, surface.id)) return;
   takePlacement(surface);
@@ -7303,7 +7573,7 @@ void SurfaceRegistry::releasePlacement(ClientSurface &surface) {
   ClientSurface *heir = nullptr;
   for (auto &other : surfaces_) {
     if (other.get() == &surface || other->appId != surface.appId) continue;
-    if (other->transient || other->panel || other->menu) continue;
+    if (other->transient || other->furniture()) continue;
     if (other->placementDenied == std::chrono::steady_clock::time_point{}) {
       continue;
     }
@@ -7624,7 +7894,8 @@ void XwaylandSurface::on_map(wl_listener *listener, void *) {
     wlr_scene_node_set_position(&self->scene_tree->node, self->xsurface->x,
                                 self->xsurface->y);
     wlr_scene_node_raise_to_top(&self->scene_tree->node);
-    if (wlr_xwayland_surface_override_redirect_wants_focus(self->xsurface)) {
+    if (!server->locked &&
+        wlr_xwayland_surface_override_redirect_wants_focus(self->xsurface)) {
       self->previousClientFocus = server->focusedSurface();
       server->setFocusedSurface(0);
       if (server->surfaces != nullptr) server->surfaces->setFocused(0);
@@ -9045,6 +9316,20 @@ void Keyboard::applyKeymap(const lava::KeyboardConfig &config) {
               config.options.c_str(), groups);
     }
     wlr_keyboard_set_keymap(wlr, keymap);
+    // A new keymap is a new xkb state with every lock off, and Num Lock off
+    // makes the keypad a set of arrows — so a password typed there types
+    // nothing at all, while its Enter still submits. On, unless the config
+    // says otherwise. A nested session's host overrides this with its own.
+    if (config.numlock) {
+      const xkb_mod_index_t num =
+          xkb_keymap_mod_get_index(keymap, XKB_MOD_NAME_NUM);
+      if (num != XKB_MOD_INVALID) {
+        wlr_keyboard_modifiers mods = wlr->modifiers;
+        mods.locked |= 1u << num;
+        wlr_keyboard_notify_modifiers(wlr, mods.depressed, mods.latched,
+                                      mods.locked, mods.group);
+      }
+    }
     xkb_keymap_unref(keymap);
   }
   xkb_context_unref(context);
@@ -9060,6 +9345,9 @@ Keyboard::~Keyboard() {
 
 void Keyboard::on_modifiers(wl_listener *listener, void *) {
   auto *keyboard = owner_of<Keyboard>(listener);
+  // The lock screen reads modifiers from the key events themselves; a Wayland
+  // client must not even learn Shift went down.
+  if (keyboard->server->locked) return;
   // An input method holding the keyboard needs the modifiers too, or it
   // cannot tell Shift+2 from 2 and its own shortcuts stop working.
   if (auto *grab = keyboard->server->inputMethod.grab) {
@@ -9347,6 +9635,7 @@ enum class BindingAction : uint8_t {
   WorkspaceMove,
   SwitchVt,
   Screenshot,
+  Lock,
 };
 
 /// One shortcut: which keys reach it, and what to call it.
@@ -9444,6 +9733,8 @@ constexpr BindingSpec kBindings[] = {
      "1 … 9", "workspace.switch", "Shows that workspace"},
     {BindingAction::WorkspaceMove, XKB_KEY_1, XKB_KEY_9, true, false, true,
      "1 … 9", "workspace.move", "Sends the focused window to that workspace"},
+    {BindingAction::Lock, XKB_KEY_l, XKB_KEY_l, false, false, true, "L",
+     "session.lock", "Locks the session"},
     {BindingAction::SwitchVt, XKB_KEY_F1, XKB_KEY_F10, false, true, true,
      "F1 … F10", "session.vt", "Switches to that virtual terminal"},
     {BindingAction::Screenshot, XKB_KEY_Print, XKB_KEY_Print, false, false,
@@ -9673,6 +9964,10 @@ bool perform_binding(Server *server, const BindingSpec &spec,
   case BindingAction::Screenshot:
     server->requestScreenshot();
     return true;
+
+  case BindingAction::Lock:
+    server->lockSession("Mod+L");
+    return true;
   }
   return false;
 }
@@ -9689,6 +9984,22 @@ bool handle_binding(Server *server, xkb_keysym_t sym, bool shift, bool ctrl,
   // per spelling.
   if (sym == XKB_KEY_KP_Enter) sym = XKB_KEY_Return;
   if (sym == XKB_KEY_ISO_Left_Tab) sym = XKB_KEY_Tab;
+
+  // Locked, the one shortcut is the way to a text console — which is also
+  // the way to `loginctl unlock-session` when the lock screen cannot start.
+  // Everything else would act on a desktop nobody has unlocked: a switcher
+  // drawn under the curtain, a terminal opened behind it, a screenshot of it.
+  if (server->locked) {
+    for (const BindingSpec &spec : kBindings) {
+      if (spec.action != BindingAction::SwitchVt) continue;
+      if (sym < spec.first || sym > spec.last) continue;
+      if (spec.shift != shift || spec.ctrl != ctrl || spec.needMod != modDown) {
+        continue;
+      }
+      return perform_binding(server, spec, sym);
+    }
+    return false;
+  }
 
   // Print Screen is the key, not a chord — handled here rather than from
   // the table because it has to fire whatever the desktop modifier is
@@ -9812,7 +10123,9 @@ int Server::on_key_repeat(void *data) {
   }
   // Focus moved, or the surface died, or the user is no longer on this
   // workspace — all mean the held key no longer has a home.
-  if (server->keyRepeatSurface != server->focusedSurface()) {
+  const uint32_t keyTarget =
+      server->locked ? server->lockSurfaceId : server->focusedSurface();
+  if (server->keyRepeatSurface != keyTarget) {
     server->stopKeyRepeat();
     return 0;
   }
@@ -9847,7 +10160,22 @@ void Keyboard::on_key(wl_listener *listener, void *data) {
   auto *keyboard = owner_of<Keyboard>(listener);
   auto *event = static_cast<wlr_keyboard_key_event *>(data);
   Server *server = keyboard->server;
+  const bool waking = server->screensOff;
   server->notifyIdleActivity();
+
+  // The key that woke the screens wakes them and does nothing else, and its
+  // release goes with it. Typed, it was the first character of a password
+  // the user could not see the field of — the commonest way to get a correct
+  // password refused.
+  if (waking && event->state == WL_KEYBOARD_KEY_STATE_PRESSED) {
+    server->wakeKey = event->keycode + 1;
+    return;
+  }
+  if (server->wakeKey == event->keycode + 1 &&
+      event->state == WL_KEYBOARD_KEY_STATE_RELEASED) {
+    server->wakeKey = 0;
+    return;
+  }
 
   const uint32_t modifiers = wlr_keyboard_get_modifiers(keyboard->wlr);
   const uint32_t modMask =
@@ -9915,14 +10243,38 @@ void Keyboard::on_key(wl_listener *listener, void *data) {
   // is what a shortcut or an arrow is; `Text` is the character the layout
   // produced, which is the only thing that knows about shift, dead keys or a
   // non-US keymap.
-  if (server->focusedSurface() != 0) {
+  // Locked, every key that was not a binding is the lock screen's, or
+  // nobody's while it is starting. Never a Wayland client's, never an input
+  // method's: a password typed through fcitx would be a password fcitx saw.
+  //
+  // And only once it is on screen. Before its first frame its own key handler
+  // may not exist yet, so the first characters of a password typed straight
+  // after Mod+L would be dropped while the rest arrived — a wrong password
+  // with the right number of dots.
+  uint32_t keyTarget = server->focusedSurface();
+  if (server->locked) {
+    keyTarget = 0;
+    if (ClientSurface *lock = server->surfaces != nullptr
+                                  ? server->surfaces->find(server->lockSurfaceId)
+                                  : nullptr;
+        lock != nullptr && server->surfaces->visible(*lock)) {
+      keyTarget = lock->id;
+    }
+    // Caps Lock, Num Lock and the layout toggle all change what the next key
+    // types, and the lock screen shows each — after this key has moved them.
+    server->syncLockIndicators();
+  }
+  if (server->locked && keyTarget == 0) {
+    server->stopKeyRepeat();
+    return;
+  }
+  if (keyTarget != 0) {
     const bool pressed = event->state == WL_KEYBOARD_KEY_STATE_PRESSED;
     const xkb_keysym_t *syms = nullptr;
     const int count = xkb_state_key_get_syms(keyboard->wlr->xkb_state,
                                              event->keycode + 8, &syms);
     const int32_t mods = static_cast<int32_t>(glfw_mods(modifiers));
-    if (ClientSurface *target =
-            server->surfaces->find(server->focusedSurface())) {
+    if (ClientSurface *target = server->surfaces->find(keyTarget)) {
       // Prefer the first keysym for repeat tracking — multi-sym keys are
       // rare and the first is what we deliver first.
       const int glfwKey = count > 0 ? glfw_key(syms[0]) : 0;
@@ -10559,6 +10911,9 @@ wlr_box Server::popupBounds(const wlr_xdg_popup &popup) const {
 
 void Server::focus(FramedWindow *window) {
   if (window == nullptr) return;
+  // Nothing takes the keyboard while locked — a window mapping, an
+  // activation token, a dialog appearing. `unlockSession` gives it back.
+  if (locked) return;
 
   // A modal dialog has this window's input, so giving the window the keyboard
   // would hand it to a client that is refusing it — every key and click
@@ -10707,7 +11062,7 @@ bool Server::openContextMenu(int x, int y, uint32_t target) {
     ClientSurface *surface = surfaces->find(target);
     // The window closed between the press and here. No menu rather than an
     // empty one: every item on it would act on nothing.
-    if (surface == nullptr || surface->panel || surface->menu) return false;
+    if (surface == nullptr || surface->furniture()) return false;
     heading = surface->title;
 
     // First, because it is the one item on this menu that is not on the title
@@ -11054,6 +11409,8 @@ void Server::reloadConfig() {
   const std::string previousDevices = config.drmDevices;
   const std::string previousRenderer = config.renderer;
   config = fresh;
+  // New `[idle]` limits count from the activity already seen, not from now.
+  armIdleTimer();
 
   if (fresh.drmDevices != previousDevices ||
       fresh.renderer != previousRenderer) {
@@ -11141,7 +11498,7 @@ void Server::restoreFocus(uint32_t workspace, uint32_t exceptId) {
     if (id == 0 || id == exceptId || surfaces == nullptr) return false;
     ClientSurface *surface = surfaces->find(id);
     if (surface == nullptr || surface->panel || surface->minimized) return false;
-    if (surface->menu) return false;
+    if (surface->menu || surface->lock) return false;
     if (surface->workspace != workspace) return false;
     if (surface->appId == kSwitcherAppId) return false;
     focusSurface(*surface);
@@ -11300,6 +11657,13 @@ const char *resize_cursor(uint32_t hitEdges) {
 }
 
 void Server::update_pointer_focus(uint32_t time_msec) {
+  // Locked, the pointer is the lock screen's or nobody's. Before anything
+  // below, every branch of which hands motion to some window.
+  if (locked) {
+    lockedPointerMotion();
+    return;
+  }
+
   // Whatever is being dragged hangs off the cursor, wherever the rest of
   // this decides the motion belongs.
   moveDragIcon();
@@ -11597,14 +11961,80 @@ void IdleInhibitor::on_destroy(wl_listener *listener, void *) {
   server->syncIdleInhibit();
 }
 
+namespace {
+
+int64_t monotonicMs() {
+  timespec ts{};
+  clock_gettime(CLOCK_MONOTONIC, &ts);
+  return int64_t{ts.tv_sec} * 1000 + ts.tv_nsec / 1'000'000;
+}
+
+/// Sixteen random bytes as hex. What the lock screen's environment carries
+/// and `CreateLockSurface` has to repeat.
+std::string freshLockToken() {
+  unsigned char bytes[16] = {};
+  size_t filled = 0;
+  while (filled < sizeof(bytes)) {
+    const ssize_t got =
+        ::getrandom(bytes + filled, sizeof(bytes) - filled, 0);
+    if (got < 0) {
+      if (errno == EINTR) continue;
+      return {};
+    }
+    filled += static_cast<size_t>(got);
+  }
+  static constexpr char kHex[] = "0123456789abcdef";
+  std::string out;
+  out.reserve(sizeof(bytes) * 2);
+  for (unsigned char b : bytes) {
+    out.push_back(kHex[b >> 4]);
+    out.push_back(kHex[b & 15]);
+  }
+  return out;
+}
+
+/// How long a freshly started lock screen may take to put up a surface
+/// before it is started again. Generous for a cold page cache, short enough
+/// that a lock screen that cannot start is noticed while the user is still
+/// looking at the black screen.
+constexpr int64_t kLockStartGraceMs = 8'000;
+
+/// The least time between two starts, doubling per start up to the cap. A
+/// lock screen that dies on start must not become a fork loop.
+constexpr int64_t kLockRestartMinMs = 1'000;
+constexpr int64_t kLockRestartMaxMs = 30'000;
+
+/// `LockStatus` in the IDL, in its order. Spelled here because this file does
+/// not see the generated header; `postLockState` carries the number across.
+/// The PAM worker's answer, as it crosses the pipe back to the loop.
+struct LockAnswer {
+  uint64_t generation;
+  uint8_t ok;
+  char message[480];
+};
+
+enum LockStatusCode : uint32_t {
+  kLockLocked = 0,
+  kLockChecking = 1,
+  kLockRejected = 2,
+  kLockUnlocked = 3,
+};
+
+}  // namespace
+
 void Server::notifyIdleActivity() {
   if (idleNotify != nullptr && seat != nullptr) {
     wlr_idle_notifier_v1_notify_activity(idleNotify, seat);
   }
+  lastActivityMs = monotonicMs();
+  // Any input wakes the screens. Which input does not matter — a key or a
+  // nudge of the mouse — and it is still delivered: over a lock screen it is
+  // the first character of the password, which is what people type to wake
+  // one.
+  if (screensOff) setScreensPowered(true);
 }
 
 void Server::syncIdleInhibit() {
-  if (idleNotify == nullptr) return;
   bool inhibited = false;
   for (const auto &inh : idleInhibitors) {
     if (inh->wlr == nullptr || inh->wlr->surface == nullptr) continue;
@@ -11620,7 +12050,516 @@ void Server::syncIdleInhibit() {
       break;
     }
   }
-  wlr_idle_notifier_v1_set_inhibited(idleNotify, inhibited);
+  if (inhibited != idleInhibited) {
+    idleInhibited = inhibited;
+    // The timers count from the last activity, and the time a video played
+    // was not idle time: resume from now, not from before it started.
+    if (!inhibited) lastActivityMs = monotonicMs();
+    armIdleTimer();
+  }
+  if (idleNotify != nullptr) {
+    wlr_idle_notifier_v1_set_inhibited(idleNotify, inhibited);
+  }
+}
+
+// ─── Idle, screen power and the session lock ─────────────────────────────────
+
+void Server::initLock(wl_event_loop *loop) {
+  lastActivityMs = monotonicMs();
+  lockUser = lava::lockUserName();
+
+  // Black, and far larger than any arrangement of screens, so an output
+  // plugged in while locked is covered without anybody resizing anything.
+  static constexpr float kBlack[4] = {0.f, 0.f, 0.f, 1.f};
+  constexpr int kReach = 1 << 15;
+  lockCurtain =
+      wlr_scene_rect_create(workspaces.lock, 2 * kReach, 2 * kReach, kBlack);
+  if (lockCurtain != nullptr) {
+    wlr_scene_node_set_position(&lockCurtain->node, -kReach, -kReach);
+  }
+
+  idleTimer = wl_event_loop_add_timer(loop, on_idle_timer, this);
+  lockTimer = wl_event_loop_add_timer(loop, on_lock_timer, this);
+  sleepRelease = wl_event_loop_add_timer(loop, on_sleep_release, this);
+  if (::pipe2(lockAnswerFd, O_CLOEXEC | O_NONBLOCK) == 0) {
+    lockAnswerSource = wl_event_loop_add_fd(loop, lockAnswerFd[0],
+                                            WL_EVENT_READABLE, on_lock_answer,
+                                            this);
+  }
+
+  // Not for a nested compositor: the session logind would name is the one
+  // running outside this one. See `Logind`.
+  if (!nested) {
+    lava::Logind::Handlers handlers;
+    handlers.lock = [this] { lockSession("logind"); };
+    handlers.unlock = [this] { unlockSession("logind"); };
+    handlers.prepareForSleep = [this](bool going) {
+      if (!going) {
+        // Awake again: hold the next suspend back too, so it gets the same
+        // chance to lock first.
+        if (config.idle.lockOnSuspend) logind.takeSleepDelay();
+        // And light the screens: a resume is the user coming back.
+        notifyIdleActivity();
+        return;
+      }
+      if (!config.idle.lockOnSuspend) return;
+      lockSession("suspend");
+      // The curtain is a scene node and goes out with the next frame on every
+      // output. A short wait covers that; logind's own limit covers a
+      // compositor that never gets round to it.
+      if (sleepRelease != nullptr) {
+        wl_event_source_timer_update(sleepRelease, 250);
+      } else {
+        logind.releaseSleepDelay();
+      }
+    };
+    if (logind.start(loop, std::move(handlers)) && config.idle.lockOnSuspend) {
+      logind.takeSleepDelay();
+    }
+  }
+
+  armIdleTimer();
+}
+
+void Server::armIdleTimer() {
+  if (idleTimer == nullptr) return;
+  const lava::IdleConfig &idle = config.idle;
+  const int64_t now = monotonicMs();
+  int64_t next = 0;  // ms from now; 0 = nothing to wait for
+  auto consider = [&](uint32_t limitSeconds, int64_t since) {
+    if (limitSeconds == 0) return;
+    const int64_t due = since + int64_t{limitSeconds} * 1000 - now;
+    const int64_t wait = due > 0 ? due : 1;
+    if (next == 0 || wait < next) next = wait;
+  };
+  if (locked) {
+    if (!screensOff) {
+      const uint32_t limit =
+          idle.screenOffLocked != 0 ? idle.screenOffLocked : idle.screenOffAfter;
+      consider(limit, std::max(lastActivityMs, lockedAtMs));
+    }
+  } else if (!idleInhibited) {
+    consider(idle.lockAfter, lastActivityMs);
+    if (!screensOff) consider(idle.screenOffAfter, lastActivityMs);
+  }
+  // Clamped to an int of ms, and checked at least once a minute anyway: a
+  // tick that finds nothing due re-arms for what is left, which is what
+  // makes activity cost a timestamp rather than a timer update.
+  if (next == 0 || next > 60'000) next = 60'000;
+  wl_event_source_timer_update(idleTimer, static_cast<int>(next));
+}
+
+void Server::idleTick() {
+  const lava::IdleConfig &idle = config.idle;
+  const int64_t now = monotonicMs();
+  if (locked) {
+    const uint32_t limit =
+        idle.screenOffLocked != 0 ? idle.screenOffLocked : idle.screenOffAfter;
+    const int64_t since = std::max(lastActivityMs, lockedAtMs);
+    if (limit != 0 && !screensOff && now - since >= int64_t{limit} * 1000) {
+      setScreensPowered(false);
+    }
+  } else if (!idleInhibited) {
+    const int64_t idleFor = now - lastActivityMs;
+    if (idle.lockAfter != 0 && idleFor >= int64_t{idle.lockAfter} * 1000) {
+      lockSession("idle");
+    }
+    // Checked after a possible lock rather than instead of it: with
+    // `screen-off` shorter than `lock` the screens go out first and the lock
+    // follows on time behind them.
+    if (!locked && idle.screenOffAfter != 0 && !screensOff &&
+        idleFor >= int64_t{idle.screenOffAfter} * 1000) {
+      setScreensPowered(false);
+    }
+  }
+  armIdleTimer();
+}
+
+int Server::on_idle_timer(void *data) {
+  static_cast<Server *>(data)->idleTick();
+  return 0;
+}
+
+void Server::setScreensPowered(bool on) {
+  if (on == !screensOff) return;
+  screensOff = !on;
+  for (Output *output : outputs) {
+    if (output->wlr == nullptr) continue;
+    // Only what this turned off comes back on, so a screen the config
+    // disabled stays disabled however the idle state goes.
+    if (on && !output->poweredDown) continue;
+    if (!on && !output->wlr->enabled) continue;
+    wlr_output_state state;
+    wlr_output_state_init(&state);
+    wlr_output_state_set_enabled(&state, on);
+    if (!wlr_output_commit_state(output->wlr, &state)) {
+      wlr_log(WLR_ERROR, "idle: could not turn %s %s", output->wlr->name,
+              on ? "on" : "off");
+    } else {
+      output->poweredDown = !on;
+      if (on) wlr_output_schedule_frame(output->wlr);
+    }
+    wlr_output_state_finish(&state);
+  }
+  wlr_log(WLR_INFO, "idle: screens %s", on ? "on" : "off");
+  // Nothing is being drawn while they are off, so a cache betting that
+  // something will be is betting on nothing.
+  syncImageSpeculation();
+  armIdleTimer();
+}
+
+void Server::lockSession(const char *why) {
+  if (locked) return;
+  locked = true;
+  ++lockGeneration;
+  lockFailures = 0;
+  lockMessage.clear();
+  lockChecking = false;
+  lockStarts = 0;
+  lockedAtMs = monotonicMs();
+
+  // Everything in flight belongs to a desktop that is about to be covered.
+  // A menu would stay up under the curtain with a grab on it; a held key
+  // would go on repeating into a window; the switcher waits for a modifier
+  // release that now goes elsewhere.
+  closeContextMenu();
+  stopKeyRepeat();
+  switcherHold = 0;
+  drag = Drag::None;
+  pendingMove = false;
+  pointerTarget = 0;
+  pointerGrabbed = false;
+  leaveClientSurface(0);
+
+  // Remembered so unlocking hands the keyboard back where it was, then taken
+  // from every Wayland client: the curtain stops them being seen, and this
+  // stops them hearing a key that is already down.
+  lockPreviousFrame = 0;
+  if (wlr_surface *had = seat->keyboard_state.focused_surface) {
+    for (FramedWindow *window : toplevels) {
+      if (window->focusSurface() == had) {
+        lockPreviousFrame = window->frameId;
+        break;
+      }
+    }
+  }
+  // A drag-and-drop running now would end on a release nobody delivers;
+  // cancelling it is what a drag does when its target goes away.
+  if (seat->drag != nullptr) wlr_seat_pointer_end_grab(seat);
+  activatePointerConstraint(nullptr);
+  wlr_seat_keyboard_notify_clear_focus(seat);
+  wlr_seat_pointer_notify_clear_focus(seat);
+  wlr_cursor_set_xcursor(cursor, cursor_mgr, "default");
+
+  wlr_scene_node_raise_to_top(&workspaces.lock->node);
+  wlr_scene_node_set_enabled(&workspaces.lock->node, true);
+  logind.setLockedHint(true);
+  wlr_log(WLR_INFO, "lock: locked (%s)", why);
+
+  startLockScreen();
+  if (lockTimer != nullptr) wl_event_source_timer_update(lockTimer, 1000);
+  armIdleTimer();
+}
+
+void Server::unlockSession(const char *why) {
+  if (!locked) return;
+  locked = false;
+  ++lockGeneration;
+  lockChecking = false;
+  lockToken.clear();
+  stopKeyRepeat();
+  if (lockTimer != nullptr) wl_event_source_timer_update(lockTimer, 0);
+
+  // The surface going is what ends the lock screen: its input stream is its
+  // lease. The signal is for one that has stopped listening to it.
+  if (lockSurfaceId != 0 && surfaces != nullptr) {
+    surfaces->destroySurface(lockSurfaceId);
+  }
+  lockSurfaceId = 0;
+  if (const pid_t pid = g_lockPid.load(); pid > 0) ::kill(pid, SIGTERM);
+
+  wlr_scene_node_set_enabled(&workspaces.lock->node, false);
+  logind.setLockedHint(false);
+  wlr_log(WLR_INFO, "lock: unlocked (%s)", why);
+
+  // The keyboard goes back where it was. A Lava window never lost it —
+  // `focusedByWorkspace` was not touched, only bypassed — so only a Wayland
+  // one has to be given it again.
+  if (focusedSurface() == 0 && lockPreviousFrame != 0 && surfaces != nullptr) {
+    if (ClientSurface *frame = surfaces->find(lockPreviousFrame)) {
+      if (frame->isForeign() && frame->workspace == workspaces.current) {
+        focus(frame->window);
+      }
+    }
+  }
+  lockPreviousFrame = 0;
+  setScreensPowered(true);
+  lastActivityMs = monotonicMs();
+  update_pointer_focus(0);
+  armIdleTimer();
+}
+
+void Server::startLockScreen() {
+  const std::string &program = config.shell.lock;
+  if (program.empty() || program == "off") {
+    wlr_log(WLR_INFO,
+            "lock: no lock screen configured; the session stays locked "
+            "until `loginctl unlock-session`");
+    return;
+  }
+  // Whatever is left of the last one: still running and not drawing, or
+  // drawing a surface the token below will no longer open.
+  if (const pid_t pid = g_lockPid.exchange(-1); pid > 0) ::kill(pid, SIGKILL);
+  if (lockSurfaceId != 0 && surfaces != nullptr) {
+    surfaces->destroySurface(lockSurfaceId);
+    lockSurfaceId = 0;
+  }
+
+  lockToken = freshLockToken();
+  if (lockToken.empty()) {
+    wlr_log(WLR_ERROR, "lock: no randomness for a token; not starting %s",
+            program.c_str());
+    return;
+  }
+
+  const std::string path = lava::ShellSupervisor::programPath(program);
+  std::vector<std::string> env;
+  for (char **e = environ; e != nullptr && *e != nullptr; ++e) {
+    if (std::strncmp(*e, "LAVA_LOCK_TOKEN=", 16) == 0) continue;
+    env.emplace_back(*e);
+  }
+  env.push_back("LAVA_LOCK_TOKEN=" + lockToken);
+  std::vector<char *> envp;
+  envp.reserve(env.size() + 1);
+  for (std::string &entry : env) envp.push_back(entry.data());
+  envp.push_back(nullptr);
+  std::string argv0 = path;
+  char *argv[] = {argv0.data(), nullptr};
+
+  pid_t pid = -1;
+  lockStartedAt = monotonicMs();
+  ++lockStarts;
+  const int error =
+      lava::ShellSupervisor::spawnAtHome(&pid, argv0.c_str(), argv, envp.data());
+  // The token is in the child now; this copy of the environment is not.
+  for (std::string &entry : env) lava::wipe(entry);
+  if (error != 0) {
+    wlr_log(WLR_ERROR, "lock: could not start %s: %s", path.c_str(),
+            std::strerror(error));
+    return;
+  }
+  g_lockPid = pid;
+  wlr_log(WLR_INFO, "lock: started %s (pid %d)", path.c_str(),
+          static_cast<int>(pid));
+  std::thread([pid] {
+    int status = 0;
+    while (waitpid(pid, &status, 0) < 0 && errno == EINTR) {
+    }
+    pid_t expected = pid;
+    g_lockPid.compare_exchange_strong(expected, -1);
+  }).detach();
+}
+
+int Server::on_lock_timer(void *data) {
+  auto *server = static_cast<Server *>(data);
+  if (!server->locked) return 0;
+  wl_event_source_timer_update(server->lockTimer, 1000);
+  if (server->lockSurfaceId != 0) return 0;
+  const std::string &program = server->config.shell.lock;
+  if (program.empty() || program == "off") return 0;
+
+  // No surface: never drew, or drew and died (its surface goes with its
+  // input stream). Started again once it has had its grace, and no sooner
+  // than the backoff says.
+  const int64_t since = monotonicMs() - server->lockStartedAt;
+  const uint32_t doublings = std::min<uint32_t>(server->lockStarts, 5);
+  const int64_t backoff = std::min<int64_t>(
+      kLockRestartMinMs << (doublings > 0 ? doublings - 1 : 0),
+      kLockRestartMaxMs);
+  const bool running = g_lockPid.load() > 0;
+  if (running && since < kLockStartGraceMs) return 0;
+  if (since < backoff) return 0;
+  wlr_log(WLR_ERROR, "lock: lock screen %s; starting it again",
+          running ? "has not drawn" : "is gone");
+  server->startLockScreen();
+  return 0;
+}
+
+void Server::lockClientJoined() {
+  postLockState(lockChecking ? kLockChecking : kLockLocked);
+}
+
+void Server::postLockState(uint32_t status) {
+  if (control == nullptr) return;
+  lava::LockInfo info;
+  info.status = status;
+  info.failures = lockFailures;
+  info.user = lockUser;
+  info.message = lockMessage;
+  // No keyboard, nothing to warn about: a missing Num Lock is not an off one.
+  info.numLock = true;
+  if (wlr_keyboard *keyboard = wlr_seat_get_keyboard(seat);
+      keyboard != nullptr && keyboard->xkb_state != nullptr) {
+    xkb_state *state = keyboard->xkb_state;
+    info.capsLock = xkb_state_mod_name_is_active(
+                        state, XKB_MOD_NAME_CAPS, XKB_STATE_MODS_LOCKED) > 0;
+    info.numLock = xkb_state_mod_name_is_active(
+                       state, XKB_MOD_NAME_NUM, XKB_STATE_MODS_LOCKED) > 0;
+    // Named only when there is a choice: with one layout the name is noise.
+    if (xkb_keymap_num_layouts(keyboard->keymap) > 1) {
+      const xkb_layout_index_t active =
+          xkb_state_serialize_layout(state, XKB_STATE_LAYOUT_EFFECTIVE);
+      if (const char *name = xkb_keymap_layout_get_name(keyboard->keymap,
+                                                        active)) {
+        info.layout = name;
+      }
+    }
+  }
+  lockToldCaps = info.capsLock;
+  lockToldNum = info.numLock;
+  lockToldLayout = info.layout;
+  control->postLockState(info);
+}
+
+void Server::syncLockIndicators() {
+  if (!locked) return;
+  wlr_keyboard *keyboard = wlr_seat_get_keyboard(seat);
+  if (keyboard == nullptr || keyboard->xkb_state == nullptr) return;
+  xkb_state *state = keyboard->xkb_state;
+  const bool caps = xkb_state_mod_name_is_active(
+                        state, XKB_MOD_NAME_CAPS, XKB_STATE_MODS_LOCKED) > 0;
+  const bool num = xkb_state_mod_name_is_active(
+                       state, XKB_MOD_NAME_NUM, XKB_STATE_MODS_LOCKED) > 0;
+  std::string layout;
+  if (xkb_keymap_num_layouts(keyboard->keymap) > 1) {
+    const xkb_layout_index_t active =
+        xkb_state_serialize_layout(state, XKB_STATE_LAYOUT_EFFECTIVE);
+    if (const char *name = xkb_keymap_layout_get_name(keyboard->keymap, active)) {
+      layout = name;
+    }
+  }
+  if (caps == lockToldCaps && num == lockToldNum && layout == lockToldLayout) {
+    return;
+  }
+  postLockState(lockChecking ? kLockChecking : kLockLocked);
+}
+
+void Server::lockAttempt(uint32_t surfaceId, std::string password) {
+  if (!locked || surfaceId != lockSurfaceId || lockChecking ||
+      lockAnswerFd[1] < 0) {
+    lava::wipe(password);
+    return;
+  }
+  lockChecking = true;
+  lockMessage.clear();
+  postLockState(kLockChecking);
+  // Off the loop: a wrong password costs PAM's fail delay, seconds of it,
+  // and the desktop has to go on drawing — the lock screen's spinner most of
+  // all. The answer comes back through the pipe tagged with the lock it was
+  // for.
+  const uint64_t generation = lockGeneration;
+  const int answerFd = lockAnswerFd[1];
+  std::thread([user = lockUser, password = std::move(password), generation,
+               answerFd]() mutable {
+    LockAnswer answer{};
+    answer.generation = generation;
+    std::string said;
+    answer.ok = lava::checkPassword(user, password, said) ? 1 : 0;
+    std::snprintf(answer.message, sizeof answer.message, "%s", said.c_str());
+    // One write, well under PIPE_BUF, so it arrives whole or not at all.
+    [[maybe_unused]] ssize_t written = ::write(answerFd, &answer, sizeof answer);
+  }).detach();
+}
+
+int Server::on_lock_answer(int fd, uint32_t, void *data) {
+  auto *server = static_cast<Server *>(data);
+  LockAnswer answer{};
+  while (::read(fd, &answer, sizeof answer) == sizeof answer) {
+    answer.message[sizeof answer.message - 1] = '\0';
+    server->finishLockCheck(answer.generation, answer.ok != 0, answer.message);
+  }
+  return 0;
+}
+
+void Server::finishLockCheck(uint64_t generation, bool ok,
+                             std::string message) {
+  // An answer for a lock that has already ended — logind unlocked it while
+  // PAM was thinking — must not end the one after it.
+  if (!locked || generation != lockGeneration) return;
+  lockChecking = false;
+  lockMessage = std::move(message);
+  if (ok) {
+    postLockState(kLockUnlocked);
+    unlockSession("password");
+    return;
+  }
+  ++lockFailures;
+  wlr_log(WLR_INFO, "lock: wrong password (%u this lock)", lockFailures);
+  postLockState(kLockRejected);
+}
+
+int Server::on_sleep_release(void *data) {
+  static_cast<Server *>(data)->logind.releaseSleepDelay();
+  return 0;
+}
+
+ClientSurface *Server::lockSurfaceAtCursor(double &sx, double &sy) {
+  if (surfaces == nullptr || lockSurfaceId == 0) return nullptr;
+  ClientSurface *surface = surfaces->find(lockSurfaceId);
+  if (surface == nullptr || !surfaces->visible(*surface)) return nullptr;
+  sx = cursor->x - surface->x;
+  sy = cursor->y - surface->contentY();
+  if (sx < 0 || sy < 0 || sx >= surface->width || sy >= surface->height) {
+    return nullptr;
+  }
+  return surface;
+}
+
+void Server::lockedPointerMotion() {
+  double sx = 0, sy = 0;
+  ClientSurface *surface = lockSurfaceAtCursor(sx, sy);
+  leaveClientSurface(surface != nullptr ? surface->id : 0);
+  wlr_seat_pointer_notify_clear_focus(seat);
+  if (surface == nullptr) {
+    wlr_cursor_set_xcursor(cursor, cursor_mgr, "default");
+    return;
+  }
+  surface->canvas->pointerMove(static_cast<float>(sx), static_cast<float>(sy));
+  surfaces->pump(*surface);
+  wlr_cursor_set_xcursor(cursor, cursor_mgr,
+                         client_cursor(surface->cursorShape));
+}
+
+void Server::lockedPointerButton(bool pressed, int32_t button) {
+  if (surfaces == nullptr) return;
+  if (pressed) {
+    double sx = 0, sy = 0;
+    ClientSurface *surface = lockSurfaceAtCursor(sx, sy);
+    pointerTarget = surface != nullptr ? surface->id : 0;
+    if (surface == nullptr) return;
+    surface->canvas->pointerButton(button, true, static_cast<float>(sx),
+                                   static_cast<float>(sy), pointer_mods(seat));
+    surfaces->pump(*surface);
+    return;
+  }
+  // The release goes where the press went, as everywhere else — and only if
+  // that was the lock screen.
+  if (pointerTarget == 0 || pointerTarget != lockSurfaceId) return;
+  ClientSurface *target = surfaces->find(pointerTarget);
+  pointerTarget = 0;
+  if (target == nullptr) return;
+  target->canvas->pointerButton(
+      button, false, static_cast<float>(cursor->x - target->x),
+      static_cast<float>(cursor->y - target->contentY()), pointer_mods(seat));
+  surfaces->pump(*target);
+}
+
+void Server::lockedPointerAxis(float dx, float dy) {
+  double sx = 0, sy = 0;
+  ClientSurface *surface = lockSurfaceAtCursor(sx, sy);
+  if (surface == nullptr) return;
+  surface->canvas->pointerScroll(dx, dy);
+  surfaces->pump(*surface);
 }
 
 void Server::syncImageSpeculation() {
@@ -11660,7 +12599,7 @@ ClientSurface *Server::surfaceFromWl(wlr_surface *surface) {
 }
 
 void Server::activateSurface(ClientSurface &surface, bool gesture) {
-  if (surface.panel || surface.menu) return;
+  if (surface.furniture() || locked) return;
   if (surfaces != nullptr) surfaces->setMinimized(surface, false);
   if (!gesture) {
     // Raised where it stands. A call window on this workspace comes to the
@@ -11739,6 +12678,8 @@ bool Server::serverDecorated(wlr_xdg_toplevel *toplevel) const {
 
 void Server::focusSurface(ClientSurface &surface) {
   if (surfaces == nullptr) return;
+  // See `focus`.
+  if (locked) return;
   // A panel is not a window and clicking one does not change which window the
   // user is in. This is what a desktop means by a panel — layer-shell spells
   // it `keyboard_interactivity: none` — and here it is load-bearing rather
@@ -11868,7 +12809,7 @@ void Server::restoreAllWindows() {
 }
 
 void Server::minimizeSurface(ClientSurface &surface) {
-  if (surfaces == nullptr || surface.panel || surface.menu) return;
+  if (surfaces == nullptr || surface.furniture()) return;
   const uint32_t workspace = surface.workspace;
   const uint32_t id = surface.id;
   // The dialog blocking this window goes away with it, and so does the window
@@ -12147,7 +13088,19 @@ void Server::on_active_constraint_destroy(wl_listener *listener, void *) {
 void Server::on_cursor_button(wl_listener *listener, void *data) {
   auto *server = owner_of<Server>(listener);
   auto *event = static_cast<wlr_pointer_button_event *>(data);
+  const bool waking = server->screensOff;
   server->notifyIdleActivity();
+  // A click at a dark screen is the same as a key at one: a way to wake it,
+  // not a click on whatever turns out to be under the pointer.
+  if (waking && event->state == WL_POINTER_BUTTON_STATE_PRESSED) {
+    server->wakeButton = event->button;
+    return;
+  }
+  if (server->wakeButton != 0 && server->wakeButton == event->button &&
+      event->state == WL_POINTER_BUTTON_STATE_RELEASED) {
+    server->wakeButton = 0;
+    return;
+  }
 
   const bool pressed = event->state == WL_POINTER_BUTTON_STATE_PRESSED;
   // Left = 0, matching GLFW, which is what the client's event decoding was
@@ -12166,6 +13119,13 @@ void Server::on_cursor_button(wl_listener *listener, void *data) {
   // than at the bottom, because a release leaves this function by whichever
   // of half a dozen paths matches what it was over.
   if (server->pointerButtonsDown == 0) server->pointerGrabbed = false;
+
+  // Counted above even while locked, so a button held across the unlock is
+  // still known to be down; delivered only to the lock screen.
+  if (server->locked) {
+    server->lockedPointerButton(pressed, lavaButton);
+    return;
+  }
 
   // A click that never became a drag: remember it for double-click on
   // our title bar, and let a client-originated press still see its release.
@@ -12469,6 +13429,16 @@ void Server::on_cursor_axis(wl_listener *listener, void *data) {
   auto *server = owner_of<Server>(listener);
   auto *event = static_cast<wlr_pointer_axis_event *>(data);
   server->notifyIdleActivity();
+  if (server->locked) {
+    const float notches = static_cast<float>(
+        event->delta_discrete != 0 ? -event->delta_discrete / 120.0
+                                   : -event->delta / 15.0);
+    const bool horizontal =
+        event->orientation == WL_POINTER_AXIS_HORIZONTAL_SCROLL;
+    server->lockedPointerAxis(horizontal ? notches : 0.f,
+                              horizontal ? 0.f : notches);
+    return;
+  }
 
   // Notches, not pixels, and negated: canvas' `Scroll` follows GLFW, where a
   // positive y is a scroll *up*, while wlroots reports a positive delta as
@@ -12510,6 +13480,7 @@ void Server::on_cursor_axis(wl_listener *listener, void *data) {
 
 void Server::on_cursor_frame(wl_listener *listener, void *) {
   auto *server = owner_of<Server>(listener);
+  if (server->locked) return;
   // Groups the events above into one atomic update for the client.
   wlr_seat_pointer_notify_frame(server->seat);
 }
@@ -13379,6 +14350,10 @@ int main() {
     wlr_log(WLR_ERROR, "no control plane — LavaUI clients cannot connect");
   }
 
+  // Idle timers, screen power, the lock and logind. After the control plane,
+  // which is how the lock screen hears its answers.
+  server.initLock(wl_display_get_event_loop(server.display));
+
   // `kill -HUP` re-reads the config. The event loop delivers it, so it lands
   // on the loop thread like everything else rather than in a signal handler
   // where almost nothing here would be safe to call.
@@ -13542,6 +14517,9 @@ int main() {
   // told to go while its socket still works exits cleanly rather than dying of
   // a broken connection.
   shell.stop();
+  // A session ending while locked ends its lock screen too: it is ours, and
+  // nobody else will tell it.
+  if (const pid_t pid = g_lockPid.load(); pid > 0) ::kill(pid, SIGTERM);
   // The bus watch lives on this display's loop.
   server.screenshotPortal.reset();
   wl_display_destroy_clients(server.display);

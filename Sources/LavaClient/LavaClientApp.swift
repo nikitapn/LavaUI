@@ -297,6 +297,81 @@ public enum LavaClient {
         return open(title: title, width: width, height: height, frame: .client)
     }
 
+    // ─── Session lock ───────────────────────────────────────────────────────
+    //
+    // The lock screen's half of the lock. The compositor locks, keeps the
+    // curtain up, routes every key here and checks the password itself; this
+    // process draws a field and reports what was typed. See
+    // `CreateLockSurface` and `SubscribeLock` in the IDL.
+
+    /// Opens the lock screen's surface: above everything, the size of the
+    /// screen the pointer is on, and the only thing that hears input while
+    /// the session is locked.
+    ///
+    /// Nil unless this process was started by the compositor for a lock —
+    /// `LAVA_LOCK_TOKEN` is how it says so, and the token is taken out of the
+    /// environment here so nothing this process starts inherits it.
+    public static func openLockSurface(title: String = "Lock") -> Editor? {
+        guard let token = ProcessInfo.processInfo.environment["LAVA_LOCK_TOKEN"],
+              !token.isEmpty
+        else { return nil }
+        unsetenv("LAVA_LOCK_TOKEN")
+        Self.lockToken = token
+        return open(title: title, frame: .client, fillScreen: true)
+    }
+
+    /// Where the lock stands, every time it changes. Runs on the frame loop.
+    /// The first call comes as soon as the surface exists.
+    public static func onLockState(_ handler: @escaping @Sendable (LockState) -> Void) {
+        guard Self.compositor != nil else { return }
+        guard surfaceID != 0 else {
+            pendingLockHandler = handler
+            return
+        }
+        startLockStream(handler)
+    }
+
+    /// "Is this the password?" The answer arrives through `onLockState`.
+    /// Dropped by the compositor while an earlier attempt is still being
+    /// checked.
+    public static func submitPassword(_ password: String) {
+        guard let writer = lockWriter else { return }
+        Task.detached {
+            try? await writer.write(LockAttempt(password: password))
+        }
+    }
+
+    nonisolated(unsafe) private static var lockToken: String?
+    nonisolated(unsafe) private static var pendingLockHandler:
+        (@Sendable (LockState) -> Void)?
+    nonisolated(unsafe) private static var lockWriter: NPRPCStreamWriter<LockAttempt>?
+
+    private static func startLockStream(_ handler: @escaping @Sendable (LockState) -> Void) {
+        guard let compositor = Self.compositor, surfaceID != 0 else { return }
+        let stream: NPRPCBidiStream<LockAttempt, LockState>
+        do {
+            stream = try compositor.subscribeLock(surfaceId: surfaceID)
+        } catch {
+            FileHandle.standardError.write(
+                Data("SubscribeLock failed: \(error)\n".utf8)
+            )
+            return
+        }
+        lockWriter = stream.writer
+        Task.detached {
+            do {
+                for try await state in stream.reader {
+                    MainQueue.async { handler(state) }
+                }
+            } catch {
+                FileHandle.standardError.write(
+                    Data("lock stream ended: \(error)\n".utf8)
+                )
+            }
+            stream.writer.close()
+        }
+    }
+
     /// "I have laid out the menu for `serial`; it is `width` × `height`."
     ///
     /// Call it **after** publishing a frame at that size — `Editor
@@ -1117,6 +1192,12 @@ public enum LavaClient {
                 // is the same surface id either way, which is why the panel
                 // role is a different way to *create* a surface rather than a
                 // different kind of thing to own.
+                if let token = Self.lockToken {
+                    return try await compositor.createLockSurface(
+                        arenaId: arenaID, width: UInt32(requestedWidth),
+                        height: UInt32(requestedHeight), token: token
+                    )
+                }
                 if let menu = Self.menuSurface {
                     return try await compositor.createMenuSurface(
                         arenaId: arenaID, width: UInt32(menu.width),
@@ -1163,6 +1244,10 @@ public enum LavaClient {
             if let pending = pendingMenuChoice {
                 pendingMenuChoice = nil
                 startMenuChoice(pending)
+            }
+            if let pending = pendingLockHandler {
+                pendingLockHandler = nil
+                startLockStream(pending)
             }
         } catch {
             fail("surface setup failed: \(error)")

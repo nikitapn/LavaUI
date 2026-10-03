@@ -39,6 +39,8 @@ libinput
 libliftoff
 libxcb
 libxkbcommon
+# The compositor checks the lock screen's password itself (lock_auth.cpp).
+pam
 pixman
 seatd
 wayland

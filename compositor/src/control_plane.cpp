@@ -627,6 +627,64 @@ class MenuBroker {
   uint32_t surfaceId_ = 0;
 };
 
+struct LockWatcher {
+  explicit LockWatcher(nprpc::StreamWriter<LockState> &&w)
+      : pump(std::move(w)) {}
+
+  void send(const LockState &state) { pump.post(state); }
+  void close() { pump.close(); }
+  bool done() { return pump.done(); }
+
+  // Coalescing: this is state, and a lock screen behind by two answers wants
+  // the newer one.
+  StreamPump<LockState, true> pump;
+};
+
+using LockWatcherPtr = std::shared_ptr<LockWatcher>;
+
+/// The one lock screen listening, if any.
+///
+/// `MenuBroker`'s shape, except that a newcomer replaces whoever was there
+/// rather than being refused. Only the process holding the lock's token can
+/// make a lock surface at all, so a second subscriber is that process again —
+/// restarted after a crash, with the old stream not yet noticed as dead.
+class LockBroker {
+ public:
+  void claim(uint32_t surfaceId, const LockWatcherPtr &watcher) {
+    LockWatcherPtr previous;
+    {
+      std::lock_guard lock(mutex_);
+      previous = std::move(watcher_);
+      watcher_ = watcher;
+      surfaceId_ = surfaceId;
+    }
+    if (previous != nullptr && previous != watcher) previous->close();
+  }
+
+  void release(const LockWatcherPtr &watcher) {
+    std::lock_guard lock(mutex_);
+    if (watcher_ != watcher) return;
+    watcher_ = nullptr;
+    surfaceId_ = 0;
+  }
+
+  bool send(const LockState &state) {
+    LockWatcherPtr target;
+    {
+      std::lock_guard lock(mutex_);
+      if (watcher_ == nullptr || watcher_->done()) return false;
+      target = watcher_;
+    }
+    target->send(state);
+    return true;
+  }
+
+ private:
+  std::mutex mutex_;
+  LockWatcherPtr watcher_;
+  uint32_t surfaceId_ = 0;
+};
+
 /// How the renderer names a file decoded at a given cap — and *which version*
 /// of that file it is.
 ///
@@ -738,10 +796,11 @@ class CompositorImpl final : public ICompositor_Servant {
  public:
   CompositorImpl(CompositorHost &host, LoopQueue &loop, InputBroker &broker,
                  FocusBroker &focus, ListBroker &windows, ThemeBroker &theme,
-                 AreaBroker &areas, MenuBroker &menu, ChoiceBroker &choices)
+                 AreaBroker &areas, MenuBroker &menu, ChoiceBroker &choices,
+                 LockBroker &lock)
       : host_(host), loop_(loop), broker_(broker), focus_(focus),
         windows_(windows), theme_(theme), areas_(areas), menu_(menu),
-        choices_(choices) {}
+        choices_(choices), lock_(lock) {}
 
   // ─── Resources ───────────────────────────────────────────────────────────
 
@@ -1723,6 +1782,70 @@ class CompositorImpl final : public ICompositor_Servant {
     }
   }
 
+  // ─── Session lock ────────────────────────────────────────────────────────
+
+  uint32_t CreateLockSurface(nprpc::flat::Span<char> arenaId, uint32_t width,
+                             uint32_t height,
+                             nprpc::flat::Span<char> token) override {
+    std::string reason;
+    const uint32_t id = host_.createLockSurface(
+        std::string{arenaId}, width, height, std::string{token}, reason);
+    if (id == 0) throw LockRefused(reason);
+    return id;
+  }
+
+  IdleSettings GetIdle() override {
+    IdleSettings out{};
+    bool lockOnSuspend = true;
+    host_.idleSettings(out.lockAfter, out.screenOffAfter, out.screenOffLocked,
+                       lockOnSuspend);
+    out.lockOnSuspend = lockOnSuspend;
+    return out;
+  }
+
+  void SetIdle(flat::IdleSettings_Direct idle) override {
+    std::string error;
+    host_.updateIdle(idle.lockAfter(), idle.screenOffAfter(),
+                     idle.screenOffLocked(),
+                     static_cast<bool>(idle.lockOnSuspend()), error);
+    if (!error.empty()) throw SettingsWriteFailed(host_.configPath(), error);
+  }
+
+  void LockSession() override { host_.lockSession(); }
+
+  nprpc::Task<> SubscribeLock(
+      uint32_t surfaceId,
+      nprpc::BidiStream<LockAttempt, LockState> stream) override {
+    // The lock surface and nothing else: this is the stream passwords travel
+    // on, and only the process the compositor started for the lock could
+    // have made that surface.
+    if (!host_.isLockSurface(surfaceId)) throw SurfaceNotFound(surfaceId);
+
+    auto watcher = std::make_shared<LockWatcher>(std::move(stream.writer));
+    lock_.claim(surfaceId, watcher);
+    // Still inside the dispatch, so still on the loop.
+    host_.lockClientJoined(surfaceId);
+
+    try {
+      // Attempts are hopped to the loop like menu replies. Checking one does
+      // not happen there — PAM blocks for seconds on a wrong password — but
+      // deciding whether to start a check, and what the lock is now, does.
+      while (auto attempt = co_await stream.reader) {
+        loop_.post([this, surfaceId,
+                    password = std::move(attempt->password)]() mutable {
+          host_.lockAttempt(surfaceId, std::move(password));
+        });
+      }
+    } catch (...) {
+      lock_.release(watcher);
+      watcher->close();
+      throw;
+    }
+    lock_.release(watcher);
+    watcher->close();
+    co_return;
+  }
+
  private:
   /// The subscription is the surface's lease.
   ///
@@ -1887,6 +2010,7 @@ class CompositorImpl final : public ICompositor_Servant {
   AreaBroker &areas_;
   MenuBroker &menu_;
   ChoiceBroker &choices_;
+  LockBroker &lock_;
 
   /// Registered images, three ways round: what a key resolves to, how many
   /// clients hold it, and which key an id came from. No lock, unlike
@@ -1981,7 +2105,7 @@ class ControlPlaneImpl final : public ControlPlane {
     host_ = &host;
     servant_ = std::make_unique<CompositorImpl>(host, queue_, broker_, focus_,
                                                 windows_, theme_, areas_,
-                                                menu_, choices_);
+                                                menu_, choices_, lock_);
     const nprpc::ObjectId oid = poa_->activate_object_with_id(
         0, servant_.get(), nprpc::ObjectActivationFlags::shm);
 
@@ -2055,6 +2179,18 @@ class ControlPlaneImpl final : public ControlPlane {
     return menu_.send(request);
   }
 
+  bool postLockState(const LockInfo &info) override {
+    LockState state{};
+    state.status = static_cast<LockStatus>(info.status);
+    state.failures = info.failures;
+    state.user = info.user;
+    state.message = info.message;
+    state.capsLock = info.capsLock;
+    state.numLock = info.numLock;
+    state.layout = info.layout;
+    return lock_.send(state);
+  }
+
   bool postMenuChoice(uint32_t surfaceId, uint32_t serial,
                       uint32_t chosen) override {
     return choices_.send(surfaceId, serial, chosen);
@@ -2112,6 +2248,7 @@ class ControlPlaneImpl final : public ControlPlane {
   AreaBroker areas_;
   MenuBroker menu_;
   ChoiceBroker choices_;
+  LockBroker lock_;
   CompositorHost *host_ = nullptr;
   uint32_t listSerial_ = 0;
   uint32_t themeSerial_ = 0;

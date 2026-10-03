@@ -157,6 +157,8 @@ struct SettingsContent: View {
                     KeyboardPage(store: store)
                 case .display:
                     DisplayPage(store: store)
+                case .lock:
+                    LockPage(store: store)
                 }
 
                 Spacer()

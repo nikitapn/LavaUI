@@ -1,0 +1,14 @@
+#%PAM-1.0
+#
+# The Lava session lock. The compositor checks the password the lock screen
+# collects, as the user it runs as — see compositor/src/lock_auth.cpp.
+#
+# Optional: without this file the compositor uses the `login` service, which
+# asks for the same password. Install it to give the lock its own stack:
+#
+#     sudo install -m 644 packaging/pam/lava-lock /etc/pam.d/lava-lock
+#
+# Authentication only. A lock screen has no business opening a session or
+# changing a password, and `include login` gives it exactly the checks a
+# console login would make — `pam_unix` on every distribution.
+auth include login

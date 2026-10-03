@@ -843,6 +843,147 @@ private struct ModeList: View {
 /// places on a flat 60 Hz is noise. So: the fraction only when there is one,
 /// and no rate at all when the backend does not report one, which a nested or
 /// headless output genuinely does not.
+// ─── Lock & Screen ──────────────────────────────────────────────────────────
+
+/// When the session locks, when the screens go off, and a way to lock now.
+///
+/// Durations are a short list rather than a slider: nobody wants a lock at
+/// seven minutes forty, and a list says "never" as plainly as it says "ten
+/// minutes". A value `lava.conf` holds that is not on the list is listed too,
+/// so the page never shows a selection the desktop does not have.
+struct LockPage: View {
+    let store: SettingsStore
+
+    static let idleChoices: [UInt32] = [0, 60, 120, 300, 600, 900, 1800, 3600]
+    static let lockedChoices: [UInt32] = [15, 30, 60, 120, 300, 0]
+
+    var body: some View {
+        let lockAfter = store.lockAfter
+        let screenOff = store.screenOffAfter
+        let screenOffLocked = store.screenOffLocked
+        let onSuspend = store.lockOnSuspend
+        let mod = store.modKey == "super" ? "Super" : "Alt"
+
+        return VStack(spacing: 18) {
+            SettingGroup("Lock") {
+                SettingRow(
+                    "Lock after",
+                    "How long without a key or the mouse before the session "
+                    + "locks and asks for your password. A playing video "
+                    + "holds this off."
+                ) {
+                    DurationList(
+                        choices: Self.idleChoices, selected: lockAfter,
+                        zeroTitle: "Never"
+                    ) { store.setLockAfter($0) }
+                }
+
+                SettingRow(
+                    "Lock before suspend",
+                    "So the machine wakes up locked rather than on the "
+                    + "desktop it went to sleep on."
+                ) {
+                    VStack(spacing: 2) {
+                        PickerRow(title: "On", detail: "", selected: onSuspend) {
+                            store.setLockOnSuspend(true)
+                        }
+                        PickerRow(title: "Off", detail: "", selected: !onSuspend) {
+                            store.setLockOnSuspend(false)
+                        }
+                    }
+                }
+
+                SettingRow("Lock now", "\(mod)+L does the same from anywhere.") {
+                    HStack {
+                        // A filled, clickable text rather than a `Button`,
+                        // whose fill does not show on this card. Padding
+                        // before anything else so it stays one node, and the
+                        // click target is the fill.
+                        Text(
+                            "Lock the session",
+                            color: Theme.current.textPrimary,
+                            hoverFill: Theme.current.accent,
+                            cornerRadius: 6,
+                            onClick: { store.lockNow() }
+                        )
+                        .padding(10)
+                        .background(Theme.current.selectionFill)
+                        .cornerRadius(6)
+                        Spacer()
+                    }
+                }
+            }
+
+            SettingGroup("Screens") {
+                SettingRow(
+                    "Turn screens off after",
+                    screenOff != 0 && lockAfter != 0 && screenOff < lockAfter
+                        ? "Before the lock: the screens go dark first and the "
+                          + "session locks on time behind them."
+                        : "How long without input before every screen goes "
+                          + "dark. Any key or movement brings them back."
+                ) {
+                    DurationList(
+                        choices: Self.idleChoices, selected: screenOff,
+                        zeroTitle: "Never"
+                    ) { store.setScreenOffAfter($0) }
+                }
+
+                SettingRow(
+                    "When locked",
+                    "A lock screen nobody is typing into does not need to stay "
+                    + "lit. The key that wakes the screens is not typed."
+                ) {
+                    DurationList(
+                        choices: Self.lockedChoices, selected: screenOffLocked,
+                        zeroTitle: "Same as above"
+                    ) { store.setScreenOffLocked($0) }
+                }
+            }
+        }
+    }
+}
+
+/// One row per duration, the selected one marked.
+private struct DurationList: View {
+    let choices: [UInt32]
+    let selected: UInt32
+    let zeroTitle: String
+    let pick: (UInt32) -> Void
+
+    var body: some View {
+        // The configured value joins the list when it is not one of ours, in
+        // order, so a hand-written `lock = 7m` is shown rather than lost.
+        var rows = choices
+        if !rows.contains(selected) {
+            rows.append(selected)
+            rows.sort { ($0 == 0 ? UInt32.max : $0) < ($1 == 0 ? UInt32.max : $1) }
+            if choices.first == 0 { rows.removeAll { $0 == 0 }; rows.insert(0, at: 0) }
+        }
+        return VStack(spacing: 2) {
+            ForEach(rows, id: \.self) { seconds in
+                PickerRow(
+                    title: seconds == 0 ? zeroTitle : Self.describe(seconds),
+                    detail: "",
+                    selected: seconds == selected
+                ) { pick(seconds) }
+            }
+        }
+    }
+
+    static func describe(_ seconds: UInt32) -> String {
+        if seconds % 3600 == 0 {
+            let hours = seconds / 3600
+            return hours == 1 ? "1 hour" : "\(hours) hours"
+        }
+        if seconds % 60 == 0 {
+            let minutes = seconds / 60
+            return minutes == 1 ? "1 minute" : "\(minutes) minutes"
+        }
+        return "\(seconds) seconds"
+    }
+}
+
 func formatHz(_ mHz: UInt32) -> String {
     guard mHz > 0 else { return "no rate reported" }
     if mHz % 1000 == 0 { return "\(mHz / 1000) Hz" }

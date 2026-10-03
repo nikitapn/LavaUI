@@ -11,6 +11,7 @@ enum SettingsSection: String, CaseIterable, Sendable {
     case background
     case keyboard
     case display
+    case lock
 
     var title: String {
         switch self {
@@ -18,6 +19,7 @@ enum SettingsSection: String, CaseIterable, Sendable {
         case .background: return "Background"
         case .keyboard: return "Keyboard"
         case .display: return "Display"
+        case .lock: return "Lock & Screen"
         }
     }
 
@@ -29,6 +31,7 @@ enum SettingsSection: String, CaseIterable, Sendable {
         case .background: return "Picture or colour"
         case .keyboard: return "Layout, repeat, shortcuts"
         case .display: return "Screens, arrangement, primary"
+        case .lock: return "Lock, screens off, suspend"
         }
     }
 }
@@ -119,6 +122,14 @@ final class SettingsStore {
         var id: String { code }
     }
 
+    // MARK: Lock & Screen
+
+    /// `[idle]`, in seconds; 0 is never. See `IdleSettings`.
+    var lockAfter: UInt32 = 600
+    var screenOffAfter: UInt32 = 900
+    var screenOffLocked: UInt32 = 60
+    var lockOnSuspend = true
+
     // MARK: Display
 
     var outputs: [OutputInfo] = []
@@ -164,6 +175,7 @@ final class SettingsStore {
             apply(keyboard)
 
             bindings = try DesktopSettings.keyBindings()
+            if let idle = try? DesktopSettings.idle() { apply(idle) }
             if let mode = try? DesktopSettings.arrangement() {
                 arrangement = mode
             }
@@ -221,6 +233,56 @@ final class SettingsStore {
             }
         }
         pictures = found
+    }
+
+    // MARK: - Writing lock & screen
+
+    /// Pushes all four together and reads back what was kept, like
+    /// `pushAppearance`: the compositor caps each at a day.
+    func pushIdle() {
+        guard connected else { return }
+        let wanted = IdleSettings(
+            lockAfter: lockAfter,
+            screenOffAfter: screenOffAfter,
+            screenOffLocked: screenOffLocked,
+            lockOnSuspend: lockOnSuspend
+        )
+        do {
+            try DesktopSettings.setIdle(wanted)
+            clearStatus()
+        } catch {
+            report(error)
+        }
+        if let taken = try? DesktopSettings.idle() { apply(taken) }
+    }
+
+    func setLockAfter(_ seconds: UInt32) {
+        lockAfter = seconds
+        pushIdle()
+    }
+
+    func setScreenOffAfter(_ seconds: UInt32) {
+        screenOffAfter = seconds
+        pushIdle()
+    }
+
+    func setScreenOffLocked(_ seconds: UInt32) {
+        screenOffLocked = seconds
+        pushIdle()
+    }
+
+    func setLockOnSuspend(_ on: Bool) {
+        lockOnSuspend = on
+        pushIdle()
+    }
+
+    func lockNow() {
+        guard connected else { return }
+        do {
+            try DesktopSettings.lockSession()
+        } catch {
+            report(error)
+        }
     }
 
     // MARK: - Writing the background
@@ -586,6 +648,13 @@ final class SettingsStore {
         shadowBlur = appearance.shadowBlur
         shadowOpacity = appearance.shadowOpacity
         shadowOffsetY = appearance.shadowOffsetY
+    }
+
+    private func apply(_ idle: IdleSettings) {
+        lockAfter = idle.lockAfter
+        screenOffAfter = idle.screenOffAfter
+        screenOffLocked = idle.screenOffLocked
+        lockOnSuspend = idle.lockOnSuspend
     }
 
     private func apply(_ wallpaper: Wallpaper) {

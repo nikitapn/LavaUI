@@ -49,6 +49,32 @@ bool parseBool(const std::string &value, bool fallback) {
   return fallback;
 }
 
+/// "10m", "90s", "1h", "600" (seconds) or "off". Nullopt for anything else,
+/// so a typo is reported rather than read as "never".
+std::optional<uint32_t> parseDuration(const std::string &value) {
+  if (value == "off" || value == "never" || value == "none" || value == "0") {
+    return 0u;
+  }
+  char *end = nullptr;
+  const double amount = std::strtod(value.c_str(), &end);
+  if (end == value.c_str() || amount < 0) return std::nullopt;
+  const std::string unit = trim(end);
+  double scale = 1;
+  if (unit.empty() || unit == "s" || unit == "sec") {
+    scale = 1;
+  } else if (unit == "m" || unit == "min") {
+    scale = 60;
+  } else if (unit == "h") {
+    scale = 3600;
+  } else {
+    return std::nullopt;
+  }
+  const double seconds = amount * scale;
+  // A day is past any idle timeout anybody means, and keeps the arithmetic
+  // well inside 32 bits of milliseconds.
+  return static_cast<uint32_t>(seconds > 86400 ? 86400 : seconds);
+}
+
 /// "1920x1080@74.973", "1920x1080@75Hz", "1920x1080", or "preferred".
 ///
 /// The rate is written in Hz because that is what a monitor is sold as, and
@@ -300,6 +326,8 @@ Config Config::load(const std::string &path) {
         config.keyboard.repeatRate = std::atoi(value.c_str());
       } else if (key == "repeat-delay") {
         config.keyboard.repeatDelay = std::atoi(value.c_str());
+      } else if (key == "numlock" || key == "num-lock") {
+        config.keyboard.numlock = parseBool(value, true);
       } else if (key == "mod-key" || key == "mod") {
         // "super", "logo", "win", "meta" all mean the Win key. Anything else
         // (including empty) is Alt — the historical default.
@@ -386,8 +414,28 @@ Config Config::load(const std::string &path) {
         config.shell.dock = value;
       } else if (key == "menu") {
         config.shell.menu = value;
+      } else if (key == "lock") {
+        config.shell.lock = value;
       } else if (key == "enabled") {
         config.shell.enabled = parseBool(value, true);
+      } else {
+        known = false;
+      }
+    } else if (section == "idle") {
+      if (key == "lock" || key == "lock-after") {
+        const auto seconds = parseDuration(value);
+        known = seconds.has_value();
+        if (known) config.idle.lockAfter = *seconds;
+      } else if (key == "screen-off" || key == "screen-off-after") {
+        const auto seconds = parseDuration(value);
+        known = seconds.has_value();
+        if (known) config.idle.screenOffAfter = *seconds;
+      } else if (key == "screen-off-locked") {
+        const auto seconds = parseDuration(value);
+        known = seconds.has_value();
+        if (known) config.idle.screenOffLocked = *seconds;
+      } else if (key == "lock-on-suspend") {
+        config.idle.lockOnSuspend = parseBool(value, true);
       } else {
         known = false;
       }

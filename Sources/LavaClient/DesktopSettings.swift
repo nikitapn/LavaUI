@@ -48,6 +48,25 @@ public enum DesktopSettings {
         try call { try await $0.setAppearance(appearance: appearance) }
     }
 
+    // MARK: - Idle and lock
+
+    /// When the session locks and the screens go off. Seconds; 0 is never.
+    public static func idle() throws -> IdleSettings {
+        try call { try await $0.getIdle() }
+    }
+
+    /// Sets them, immediately and for the next session. The timers count
+    /// from the input already seen, so a shorter `lockAfter` than the idle
+    /// time so far locks at once.
+    public static func setIdle(_ idle: IdleSettings) throws {
+        try call { try await $0.setIdle(idle: idle) }
+    }
+
+    /// Locks the session now, as Mod+L does.
+    public static func lockSession() throws {
+        try call { try await $0.lockSession() }
+    }
+
     /// The system colour theme name (`dark` / `light` / `nebula`).
     public static func systemTheme() throws -> SystemTheme {
         try call { try await $0.getSystemTheme() }

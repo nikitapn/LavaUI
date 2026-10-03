@@ -51,6 +51,8 @@ libliftoff-dev
 libpixman-1-dev
 libseat-dev
 libsystemd-dev
+# The compositor checks the lock screen's password itself (lock_auth.cpp).
+libpam0g-dev
 libwayland-dev
 libxkbcommon-dev
 # Split out of libxkbcommon on Debian/Ubuntu; meson asks for xkbregistry.pc.

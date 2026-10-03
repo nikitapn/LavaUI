@@ -541,6 +541,49 @@ struct CompositorHost {
 
   /// Ends the session. Same path as the compositor's quit binding.
   virtual void endSession() = 0;
+
+  // ─── Session lock ────────────────────────────────────────────────────────
+
+  /// The lock screen's surface. 0 with `outReason` filled when refused: not
+  /// locked, or `token` is not the one the lock screen was started with.
+  virtual uint32_t createLockSurface(const std::string &arenaId,
+                                     uint32_t width, uint32_t height,
+                                     const std::string &token,
+                                     std::string &outReason) = 0;
+
+  /// Whether this id is the lock surface — what `SubscribeLock` checks.
+  virtual bool isLockSurface(uint32_t surfaceId) const = 0;
+
+  /// The lock screen subscribed: tell it where things stand. Called on the
+  /// loop, inside the dispatch, so the answer is the first thing it reads.
+  virtual void lockClientJoined(uint32_t surfaceId) = 0;
+
+  /// One password attempt, on the loop. `password` is the host's from here,
+  /// including the job of wiping it.
+  virtual void lockAttempt(uint32_t surfaceId, std::string password) = 0;
+
+  /// `[idle]`, in seconds; 0 is never. See `IdleSettings` in the IDL.
+  virtual void idleSettings(uint32_t &outLockAfter, uint32_t &outScreenOffAfter,
+                            uint32_t &outScreenOffLocked,
+                            bool &outLockOnSuspend) const = 0;
+  /// Applies, re-arms the timers, then saves. `outError` is a failed save.
+  virtual void updateIdle(uint32_t lockAfter, uint32_t screenOffAfter,
+                          uint32_t screenOffLocked, bool lockOnSuspend,
+                          std::string &outError) = 0;
+  /// Locks the session, as Mod+L does.
+  virtual void lockSession() = 0;
+};
+
+/// What the lock screen is told. `LockState` in the IDL; `status` is a
+/// `LockStatus`.
+struct LockInfo {
+  uint32_t status = 0;
+  uint32_t failures = 0;
+  std::string user;
+  std::string message;
+  bool capsLock = false;
+  bool numLock = false;
+  std::string layout;
 };
 
 class ControlPlane {
@@ -615,6 +658,9 @@ class ControlPlane {
 
   /// "The system theme changed" — to every Lava client watching.
   virtual void postSystemTheme() = 0;
+
+  /// The lock's state, to the lock screen. False when it is not listening.
+  virtual bool postLockState(const LockInfo &info) = 0;
 
   /// Which session this compositor is: the name of its Wayland socket, which
   /// is what tells a nested compositor from the one it is running inside.

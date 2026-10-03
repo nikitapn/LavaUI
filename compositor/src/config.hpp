@@ -66,6 +66,9 @@ struct KeyboardConfig {
   /// Also gates mod+drag. Kept as a string so `lava.conf` and the settings
   /// app share one vocabulary rather than inventing an enum each.
   std::string modKey = "alt";
+  /// Num Lock on when a keyboard appears. Off, the keypad types arrows —
+  /// which at a lock screen means digits that silently go nowhere.
+  bool numlock = true;
 };
 
 /// How the desktop looks, as opposed to what the machine is.
@@ -218,10 +221,36 @@ struct ShellConfig {
   /// which is what it had before this existed; the right click still clears
   /// focus.
   std::string menu = "LavaContextMenu";
+  /// The lock screen. Not supervised like the three above — it runs only
+  /// while the session is locked, and the compositor starts it again itself
+  /// if it dies then (see `Server::lockWatchdog`). `off` keeps the lock
+  /// itself: the screen goes black and stays locked, and only
+  /// `loginctl unlock-session` from another console ends it.
+  std::string lock = "LavaLock";
 
   /// Whether to start anything at all. `LAVA_NO_SHELL=1` in the environment
   /// says the same thing without editing a file, for a one-off run.
   bool enabled = true;
+};
+
+/// `[idle]`: what happens when nobody touches the machine.
+///
+/// Seconds, 0 for never. Written in the file as `10m`, `90s` or a bare number
+/// of seconds. Activity is any real input; a visible idle inhibitor — a video
+/// playing — holds both timers off the way it holds off anything else that
+/// listens to `ext_idle_notifier_v1`.
+struct IdleConfig {
+  /// Lock the session after this long.
+  uint32_t lockAfter = 10 * 60;
+  /// Turn the screens off after this long.
+  uint32_t screenOffAfter = 15 * 60;
+  /// Once locked, turn the screens off after only this long. A lock screen
+  /// nobody is typing into does not need to be lit for the rest of the
+  /// `screen-off` timer, and this is also what makes Mod+L followed by
+  /// walking away put the screens out.
+  uint32_t screenOffLocked = 60;
+  /// Lock before the machine suspends, so it wakes up locked.
+  bool lockOnSuspend = true;
 };
 
 struct Config {
@@ -251,6 +280,7 @@ struct Config {
   BackgroundConfig background;
   ThemeConfig theme;
   ShellConfig shell;
+  IdleConfig idle;
   std::vector<OutputConfig> outputs;
 
   /// Where the file lives: `$LAVA_CONFIG`, else

@@ -60,6 +60,8 @@ extern "C" {
 #include <wlr/types/wlr_idle_inhibit_v1.h>
 #include <wlr/types/wlr_idle_notify_v1.h>
 #include <wlr/interfaces/wlr_buffer.h>
+// `wlr_keyboard_notify_modifiers`: Num Lock on for a new keyboard.
+#include <wlr/interfaces/wlr_keyboard.h>
 #include <wlr/render/drm_format_set.h>
 #include <wlr/types/wlr_buffer.h>
 #include <wlr/util/edges.h>

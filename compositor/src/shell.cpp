@@ -224,17 +224,23 @@ int ShellSupervisor::on_sigchld(int, void *data) {
 }
 
 void ShellSupervisor::reap() {
-  // Every exited child, not just ours: this is the only SIGCHLD handler in the
-  // process, and a launcher started from a key binding leaves a zombie
-  // otherwise. Its own waiter thread may win the race, which is fine — one of
-  // the two collects it and the other sees ECHILD.
-  for (;;) {
+  // Ours only, each by its pid — never `waitpid(-1)`. This runs on the loop,
+  // and the loop is not the only thread here with children: the lock's
+  // password check runs PAM on a worker, and `pam_unix` checks a password by
+  // running `unix_chkpwd` and reading its exit status. Collecting every child
+  // collected that one too, now and then, before PAM could — and PAM, finding
+  // no child, called the right password wrong and paid the fail delay for it.
+  //
+  // Nothing is left behind by this. Every other spawn here — the launcher,
+  // the switcher, the lock screen, a binding's terminal — has a thread
+  // waiting on its own pid, and wlroots waits on Xwayland itself.
+  for (Supervised &supervised : supervised_) {
+    if (supervised.pid <= 0) continue;
     int status = 0;
-    const pid_t pid = ::waitpid(-1, &status, WNOHANG);
-    if (pid <= 0) break;
-
-    Supervised *entry = byPid(pid);
-    if (entry == nullptr) continue;
+    if (::waitpid(supervised.pid, &status, WNOHANG) != supervised.pid) {
+      continue;
+    }
+    Supervised *entry = &supervised;
 
     entry->pid = -1;
     if (stopping_) continue;

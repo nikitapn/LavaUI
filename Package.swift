@@ -64,6 +64,7 @@ var products: [Product] = [
     .executable(name: "LavaLauncher", targets: ["LavaLauncher"]),
     .executable(name: "LavaSwitcher", targets: ["LavaSwitcher"]),
     .executable(name: "LavaContextMenu", targets: ["LavaContextMenu"]),
+    .executable(name: "LavaLock", targets: ["LavaLock"]),
     .executable(name: "LavaChooser", targets: ["LavaChooser"]),
     .executable(name: "lavactl", targets: ["LavaCtl"]),
     .library(name: "LavaUI", targets: ["LavaUI"]),
@@ -187,6 +188,16 @@ var targets: [Target] = [
     .executableTarget(
         name: "LavaContextMenu",
         dependencies: ["LavaUI", "LavaMenu"]
+            + (haveNprpc ? [Target.Dependency("LavaClient"),
+                            Target.Dependency("LavaIDL")] : []),
+        swiftSettings: interopCxx
+    ),
+    // The lock screen. Started by the compositor per lock, never by hand: it
+    // draws the password field, the compositor checks the password.
+    // See Sources/LavaLock/main.swift.
+    .executableTarget(
+        name: "LavaLock",
+        dependencies: ["LavaUI"]
             + (haveNprpc ? [Target.Dependency("LavaClient"),
                             Target.Dependency("LavaIDL")] : []),
         swiftSettings: interopCxx

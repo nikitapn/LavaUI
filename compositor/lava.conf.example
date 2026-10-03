@@ -140,6 +140,28 @@ dock = LavaDock
 # this existed. The right click still clears focus and still does nothing else.
 menu = LavaContextMenu
 
+# The lock screen, which asks for your password while the session is locked.
+# It only runs then, and is started again if it dies while locked. The lock is
+# the compositor's, not this program's: with `lock = off` the screen just goes
+# black and stays locked until `loginctl unlock-session` from another console.
+lock = LavaLock
+
+
+[idle]
+
+# What happens when nobody touches the machine. `10m`, `90s`, `1h`, a bare
+# number of seconds, or `off`. Any real input counts as activity; a window that
+# inhibits idling (a playing video) holds both timers off.
+lock = 10m
+screen-off = 15m
+
+# Once locked, the screens go off after only this long. Mod+L and walking away
+# puts them out without waiting for `screen-off`.
+screen-off-locked = 1m
+
+# Lock before suspending, so the machine wakes up locked.
+lock-on-suspend = on
+
 
 [theme]
 

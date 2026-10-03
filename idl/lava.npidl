@@ -942,6 +942,74 @@ message InputAck {
   serial: u32;
 }
 
+/// Where the session lock is, as the lock screen needs to draw it.
+///
+/// The lock is the compositor's, not the lock screen's: it begins when the
+/// compositor decides to lock, holds whatever the lock screen does — crashes
+/// included — and ends only when a password the compositor checked itself
+/// turns out to be right. The lock screen is told; it never decides.
+enum LockStatus: u32 {
+  /// Waiting for a password.
+  locked,
+  /// An attempt is being checked. PAM takes its time on a wrong one, on
+  /// purpose, so this can last a couple of seconds.
+  checking,
+  /// The last attempt was wrong. Still locked; type again.
+  rejected,
+  /// The password was right. The surface is about to be destroyed, which is
+  /// what ends the lock screen's process.
+  unlocked,
+};
+
+/// Compositor → lock screen.
+message LockState {
+  status: LockStatus;
+  /// Wrong attempts since this lock began, so a lock screen can say so.
+  failures: u32;
+  /// The account whose password is asked for — the user the compositor runs
+  /// as, which is the only one it can check.
+  user: string;
+  /// What PAM said about the last attempt, if anything: `pam_faillock`'s
+  /// "the account is locked" is the one that matters, because while it holds
+  /// even the right password is refused and nothing else would say why.
+  message: string;
+  /// The keyboard as the compositor reads it — the lock screen has no way to
+  /// ask, and a password typed with Caps Lock on, Num Lock off or the other
+  /// layout active is a wrong password nobody can see the reason for.
+  capsLock: boolean;
+  numLock: boolean;
+  /// The active xkb layout's name, "English (US)". Empty with only one.
+  layout: string;
+}
+
+/// Lock screen → compositor: "is this the password?"
+///
+/// The only thing a lock screen can say. There is deliberately no call that
+/// unlocks: a process that could ask for that could be any process.
+message LockAttempt {
+  password: string;
+}
+
+/// `[idle]` in `lava.conf`: when the session locks and the screens go off.
+/// Seconds; 0 is never.
+message IdleSettings {
+  /// Lock after this long without input.
+  lockAfter: u32;
+  /// Screens off after this long without input.
+  screenOffAfter: u32;
+  /// Once locked, screens off after only this long. 0 falls back to
+  /// `screenOffAfter`.
+  screenOffLocked: u32;
+  /// Lock before the machine suspends, so it wakes up locked.
+  lockOnSuspend: boolean;
+}
+
+/// `CreateLockSurface` was refused: the session is not locked, or the caller
+/// is not the lock screen the compositor started for this lock.
+exception LockRefused {
+  reason: string;
+}
+
 interface Compositor {
   // ─── Resources ─────────────────────────────────────────────────────────
   //
@@ -2245,4 +2313,46 @@ interface Compositor {
   /// is what keeps clients built against the older stubs working.
   void SetBackdropRefraction(surfaceId: in u32, px: in f32)
       raises(SurfaceNotFound);
+
+  /// The lock screen's surface: above everything, covering the screen the
+  /// pointer is on, and the only surface that hears any input while locked.
+  ///
+  /// Only while locked, and only for the process the compositor started for
+  /// this lock: `token` is what it found in `LAVA_LOCK_TOKEN`. Anything else
+  /// is refused — a second surface that looked like a lock screen would be a
+  /// password prompt somebody else is reading.
+  ///
+  /// `width` and `height` size the arena; the surface is given the output's
+  /// size and told so by the opening `Resize`, like a panel.
+  u32 CreateLockSurface(arenaId: in string, width: in u32, height: in u32,
+                        token: in string)
+      raises(LockRefused);
+
+  /// Password attempts one way, the lock's state the other.
+  ///
+  /// The state is sent once on subscribing and again after every attempt. An
+  /// attempt sent while one is still being checked is dropped, not queued: a
+  /// lock screen that let somebody type ahead of PAM's delay would turn it
+  /// into a queue rather than a delay.
+  ///
+  /// When the answer is `unlocked` the compositor destroys the surface, and
+  /// with it the lock screen's input stream, which is what ends its process.
+  bidi_stream<LockAttempt, LockState> SubscribeLock(surfaceId: in u32)
+      raises(SurfaceNotFound);
+
+  /// When the session locks and the screens go off. See `IdleSettings`.
+  IdleSettings GetIdle();
+
+  /// Sets them, immediately and for the next session — the timers re-arm
+  /// from the input already seen, so lowering `lockAfter` below the idle time
+  /// so far locks at once. Applied first, saved second, like every setter
+  /// here.
+  void SetIdle(idle: in IdleSettings) raises(SettingsWriteFailed);
+
+  /// Locks the session now, as Mod+L does.
+  ///
+  /// Any client may ask, and that is safe in a way its opposite would not be:
+  /// locking only ever takes the desktop away, and getting it back still
+  /// takes the password the compositor checks. There is no `UnlockSession`.
+  void LockSession();
 }

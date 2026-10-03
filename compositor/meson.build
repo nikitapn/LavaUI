@@ -167,6 +167,8 @@ else
 endif
 
 
+pam_dep = cpp.find_library('pam', has_headers: ['security/pam_appl.h'])
+
 compositor = executable(
   'compositor',
   'src/main.cpp',
@@ -181,6 +183,8 @@ compositor = executable(
   'src/frame_probe.cpp',
   'src/shell.cpp',
   'src/screenshot_portal.cpp',
+  'src/lock_auth.cpp',
+  'src/logind.cpp',
   'src/window_memory.cpp',
   'src/focus_history.cpp',
   'src/uri_list.cpp',
@@ -213,6 +217,10 @@ compositor = executable(
     # already pulled in through wlroots; we talk to it directly so the
     # capture stays on the compositor thread.
     dependency('libsystemd'),
+    # The password that ends a session lock is checked here, not by the lock
+    # screen — see `lock_auth.hpp`. Linux-PAM ships no pkg-config file on
+    # every distribution, so it is found as a library.
+    pam_dep,
   ],
   # wlroots guards every header behind this. It is not opt-in extra features:
   # without it `wlr/backend.h` is a hard #error, so nothing compiles at all.

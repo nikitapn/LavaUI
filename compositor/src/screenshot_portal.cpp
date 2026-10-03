@@ -10,6 +10,8 @@
 #include <spawn.h>
 #include <string>
 #include <sys/stat.h>
+#include <sys/wait.h>
+#include <thread>
 #include <unistd.h>
 
 #include <systemd/sd-bus.h>
@@ -80,7 +82,15 @@ void spawn_no_wait(const char *file, char *const argv[]) {
   if (err != 0) {
     wlr_log(WLR_ERROR, "screenshot portal: spawn %s: %s", file,
             std::strerror(err));
+    return;
   }
+  // Collected by a thread of its own: the compositor reaps only the children
+  // it knows by pid (see `ShellSupervisor::reap`), and this one is not
+  // supervised. The thread waits, the loop does not.
+  std::thread([pid] {
+    while (::waitpid(pid, nullptr, 0) < 0 && errno == EINTR) {
+    }
+  }).detach();
 }
 
 }  // namespace
