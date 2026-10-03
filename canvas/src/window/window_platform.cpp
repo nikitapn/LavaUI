@@ -6,7 +6,7 @@
 #include <GLFW/glfw3.h>
 #include "window/glfw_compat.hpp"
 
-// ─── X11: skip taskbar / pager, utility window type ─────────────────────────
+// ─── X11: skip panel / pager, utility window type ─────────────────────────
 #if defined(CANVAS_HAVE_X11)
 #define GLFW_EXPOSE_NATIVE_X11
 #include <GLFW/glfw3native.h>
@@ -58,7 +58,7 @@ static void applyX11ToolWindowHints(GLFWwindow *window)
 }
 #endif
 
-// ─── Win32: WS_EX_TOOLWINDOW (no taskbar button) ────────────────────────────
+// ─── Win32: WS_EX_TOOLWINDOW (no panel button) ────────────────────────────
 #if defined(_WIN32)
 #define GLFW_EXPOSE_NATIVE_WIN32
 #include <GLFW/glfw3native.h>
@@ -101,7 +101,7 @@ void canvasApplyToolWindowHints(GLFWwindow *window)
 #endif
 
   if (platform == GLFW_PLATFORM_WAYLAND) {
-    // Wayland has no portable “skip taskbar” request. The window may still
+    // Wayland has no portable “skip panel” request. The window may still
     // appear in the overview/dock as its own surface. Grouping under the
     // host app_id is the best we can do (set at create time via
     // GLFW_WAYLAND_APP_ID). Log once so this isn't mysterious.
@@ -110,7 +110,7 @@ void canvasApplyToolWindowHints(GLFWwindow *window)
       warned = true;
       std::cerr
         << "canvas: Wayland cannot hide a surface from the dock/overview; "
-           "X11 skip-taskbar hints do not apply.\n";
+           "X11 skip-panel hints do not apply.\n";
     }
   }
 }

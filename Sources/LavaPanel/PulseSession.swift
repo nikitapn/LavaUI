@@ -41,11 +41,11 @@ final class PulseSession: @unchecked Sendable {
             unmanaged.release()
             box = nil
             FileHandle.standardError.write(
-                Data("LavaTaskbar: PulseAudio unavailable\n".utf8)
+                Data("LavaPanel: PulseAudio unavailable\n".utf8)
             )
         } else {
             FileHandle.standardError.write(
-                Data("LavaTaskbar: PulseAudio connected\n".utf8)
+                Data("LavaPanel: PulseAudio connected\n".utf8)
             )
         }
     }

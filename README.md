@@ -256,7 +256,7 @@ expensive to build and keyed by content* (the glyph atlas, Vulkan objects);
 | `LavaViewCore` | Folder ordering, viewport arithmetic, pixel rotation, save-format choice (no Vulkan) | nothing |
 | `canvas/` (package) | C++ engine (`CxxCanvas`) + Yoga (`CYoga`), built by SwiftPM | system Vulkan/GLFW/FreeType/HarfBuzz |
 | `compositor/` | Wayland compositor and control-plane servant — C++23, built by **meson** rather than SwiftPM | wlroots 0.19, `canvas/`, NPRPC |
-| `LavaTaskbar` `LavaDock` `LavaLauncher` `LavaSettings` `LavaDebug` | The desktop shell — panel, dock, launcher, settings, GPU inspector. Ordinary LavaUI clients, with no privileges the demo does not have | `LavaUI`, `LavaClient` |
+| `LavaPanel` `LavaDock` `LavaLauncher` `LavaSettings` `LavaDebug` | The desktop shell — panel, dock, launcher, settings, GPU inspector. Ordinary LavaUI clients, with no privileges the demo does not have | `LavaUI`, `LavaClient` |
 
 `LavaText` and `LavaMenu` having **no dependencies at all** is deliberate:
 editing logic and menu IR are where fiddly correctness lives, and keeping them

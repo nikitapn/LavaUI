@@ -192,7 +192,7 @@ final class TextAlignmentTests: XCTestCase {
 /// `Text(align:)` against `.frame(…, alignment:)` — the same picture, one
 /// fewer node.
 ///
-/// This is the test that lets the taskbar's calendar and media applet move
+/// This is the test that lets the panel's calendar and media applet move
 /// across without being run. Those cells state a *height* as well as a width,
 /// so the frame was centring them on both axes; a horizontal-only replacement
 /// would have quietly moved every day number to the top of its cell. Equality
@@ -324,7 +324,7 @@ final class TextAlignmentEquivalenceTests: XCTestCase {
     }
 
     /// Vertical placement is the half a horizontal-only fix would have missed
-    /// — and the reason the taskbar's cells could not simply take
+    /// — and the reason the panel's cells could not simply take
     /// `HorizontalAlignment`. Bottom too, so `.center` is not passing by
     /// being the only case wired up.
     func testVerticalPlacementMovesTheGlyphsDown() throws {

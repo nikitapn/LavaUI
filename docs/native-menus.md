@@ -370,7 +370,7 @@ under its **surface id** — the number the compositor already uses to name its
 window, and the same number it reports as focused.
 
 ```text
-    app (LavaUI client)                     LavaTaskbar
+    app (LavaUI client)                     LavaPanel
     ────────────────────                    ───────────
     DbusmenuServer at                       owns the registrar name
     /com/canonical/menu/<surfaceId>  ──┐    (canonical, else org.lavaui.…)

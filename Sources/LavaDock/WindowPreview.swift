@@ -20,7 +20,7 @@ import LavaUI
 //   * `SetPanelThickness`. The dock's strip is 138pt and a shelf of
 //     thumbnails is not. The panel grows to `Dock.openHeight` while the
 //     preview is up and shrinks when it comes down — grown *and left* grown
-//     the way the taskbar's is would be wrong here, because a dock reserves
+//     the way the panel's is would be wrong here, because a dock reserves
 //     nothing, and `panelCovered` reads the whole surface of a panel that
 //     reserves nothing as its strip. A permanently tall dock would decide it
 //     was covered by any window in the bottom quarter of the screen and

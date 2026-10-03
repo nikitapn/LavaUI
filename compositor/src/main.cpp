@@ -273,11 +273,11 @@ struct Workspaces {
   static constexpr uint32_t kCount = 9;
 
   wlr_scene_tree *tree[kCount] = {};
-  /// Panels are not members of a workspace — a taskbar is on all of them — so
+  /// Panels are not members of a workspace — a panel is on all of them — so
   /// this tree is never disabled.
   wlr_scene_tree *panels = nullptr;
   /// The context menu, and nothing else. Above the panels because a menu
-  /// that opened under the taskbar would be one the top of the screen cannot
+  /// that opened under the panel would be one the top of the screen cannot
   /// use — and a right-click near an edge is exactly where a menu goes.
   ///
   /// Its own tree rather than a raise within `panels`, so the ordering is a
@@ -311,7 +311,7 @@ struct Workspaces {
     // The context menu, over the panels it can be opened from.
     menus = wlr_scene_tree_create(root);
     // An input method's candidate list. Above the panels because it belongs
-    // to whatever is being typed into and a taskbar must not cover the word
+    // to whatever is being typed into and a panel must not cover the word
     // being chosen; below the drag icon, which is on the cursor.
     inputPopups = wlr_scene_tree_create(root);
     dragIcons = wlr_scene_tree_create(root);
@@ -2115,7 +2115,7 @@ void show_surface(wlr_scene_buffer *node, lava::CanvasSurface &surface) {
 // `SetInputRegion` is how a panel or dock says "only this rectangle is mine".
 // The Lava hit path (`hitTest` / `acceptsInput`) has always honoured it. The
 // *scene* did not: `wlr_scene_node_at` walks buffers top-down and treats every
-// opaque-or-not canvas node as a hard occluder. A taskbar that is 600 px tall
+// opaque-or-not canvas node as a hard occluder. A panel that is 600 px tall
 // so menus can paint into it — with only the top 32 px accepting input — was
 // still a 600 px scene buffer above every window, so `surface_at` returned
 // null for GTK and friends and the seat never got `pointer.enter`. No enter,
@@ -2801,7 +2801,7 @@ class SurfaceRegistry : public lava::CompositorHost {
   /// a compositor-level gesture like Alt+drag needs.
   ClientSurface *windowAt(double lx, double ly) {
     const SurfaceHit top = hitTest(lx, ly);
-    // Neither the furniture: Alt+drag must not move the taskbar, and it must
+    // Neither the furniture: Alt+drag must not move the panel, and it must
     // not move an open menu either.
     if (top.surface == nullptr || top.surface->furniture()) {
       return nullptr;
@@ -2941,7 +2941,7 @@ class SurfaceRegistry : public lava::CompositorHost {
   /// Holds the shell notifications back while a whole workspace is put away
   /// or brought out, so it hears the new window set once instead of once per
   /// window. Mod+D over ten windows otherwise builds and broadcasts ten full
-  /// snapshots, and the taskbar draws every intermediate state on the way to
+  /// snapshots, and the panel draws every intermediate state on the way to
   /// the one the user asked for.
   class BulkChange {
    public:
@@ -3034,7 +3034,7 @@ class SurfaceRegistry : public lava::CompositorHost {
   ///
   /// Asked of the windows rather than remembered in a flag, because a flag
   /// set by `hideDesktop` goes stale the moment one window comes back by some
-  /// other route — the taskbar, Mod+Shift+M, or simply a new window opening —
+  /// other route — the panel, Mod+Shift+M, or simply a new window opening —
   /// and the next Mod+D would then restore where it should hide. A desktop
   /// with something on it is one to hide, whoever put that there.
   bool desktopShown() const {
@@ -3246,7 +3246,7 @@ class SurfaceRegistry : public lava::CompositorHost {
     if (workspaces_ == nullptr || workspaces_->menus == nullptr) return 0;
     ClientSurface *parent = find(parentId);
     if (parent == nullptr) return 0;
-    // The menus tree, above the panels: a popup under the taskbar's own
+    // The menus tree, above the panels: a popup under the panel's own
     // transparent surface would be drawn and then covered by it, and a
     // click on the slider would land on the panel.
     const uint32_t id = openSurface(arenaId, width, height, title,
@@ -3856,7 +3856,7 @@ class SurfaceRegistry : public lava::CompositorHost {
   ///
   /// Any such window, not only the focused one: a game that is still
   /// fullscreen underneath a raised terminal is still a game that should
-  /// not have a taskbar painted across it.
+  /// not have a panel painted across it.
   bool fullscreenCoversShell() const {
     for (const auto &s : surfaces_) {
       // `frameShown` rather than `!minimized`: a window that has not been
@@ -3876,7 +3876,7 @@ class SurfaceRegistry : public lava::CompositorHost {
   ///
   /// Panels live in a tree created after the workspaces, so they draw on
   /// top of every window. Disabling their nodes is what makes fullscreen
-  /// actually cover the screen rather than sit under the taskbar.
+  /// actually cover the screen rather than sit under the panel.
   void syncShellForFullscreen() {
     const bool hide = fullscreenCoversShell();
     for (auto &s : surfaces_) {
@@ -5129,8 +5129,8 @@ class SurfaceRegistry : public lava::CompositorHost {
     const uint32_t w = horizontal ? primaryWidth_ : thickness;
     const uint32_t h = horizontal ? thickness : primaryHeight_;
 
-    // Into the panel tree, which no workspace switch ever disables — a taskbar
-    // that vanished on Alt+2 would be a strange sort of taskbar. Undecorated,
+    // Into the panel tree, which no workspace switch ever disables — a panel
+    // that vanished on Alt+2 would be a strange sort of panel. Undecorated,
     // because there is nothing on a panel to drag, close or maximize.
     const uint32_t id =
         openSurface(arenaId, w, h, title, workspaces_->panels, 0, false);
@@ -5701,7 +5701,7 @@ class SurfaceRegistry : public lava::CompositorHost {
     outWindows.clear();
     for (const auto &surface : surfaces_) {
       // Panels are furniture, not windows. A dock listing itself, and the
-      // taskbar beside it, would be a dock listing the desktop's own parts.
+      // panel beside it, would be a dock listing the desktop's own parts.
       if (surface->panel) continue;
       // The switcher is a regular surface (it needs the keyboard, which a
       // panel never gets) but it is not an application the user opened.
@@ -6425,7 +6425,7 @@ class SurfaceRegistry : public lava::CompositorHost {
       const ClientSurface &other = *s;
       if (other.id == id) continue;
       // Another panel is furniture, not a window: a dock does not hide from
-      // the taskbar, and two panels that overlap have already agreed to.
+      // the panel, and two panels that overlap have already agreed to.
       if (other.panel) continue;
       // Minimized is not on screen, and neither is another workspace's.
       if (other.minimized) continue;
@@ -12625,7 +12625,7 @@ void Server::on_request_activate(wl_listener *listener, void *data) {
   // wlroots hands us the event for any token the client committed, and it
   // does not care how that token was obtained. A seat on the token means it
   // was minted against a real input event — a click on a notification, a
-  // launcher, a taskbar — and is a user gesture. Without one, any client
+  // launcher, a panel — and is a user gesture. Without one, any client
   // could pull the user to another workspace and take the keyboard at a
   // moment of its own choosing.
   const bool gesture = event->token != nullptr && event->token->seat != nullptr &&
@@ -12825,7 +12825,7 @@ void Server::minimizeSurface(ClientSurface &surface) {
   const bool hadFocus =
       inGroup(focusedSurface()) || inGroup(surfaces->focusedId());
   {
-    // One announcement for the group, so a taskbar does not draw the parent
+    // One announcement for the group, so a panel does not draw the parent
     // going away and then the dialog going away.
     SurfaceRegistry::BulkChange batch(*surfaces);
     for (uint32_t member : group) {

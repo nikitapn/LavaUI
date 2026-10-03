@@ -146,7 +146,7 @@ LavaPulse *lava_pulse_create(LavaPulseUpdateFn cb, void *user)
   }
 
   pa_mainloop_api *api = pa_threaded_mainloop_get_api(p->loop);
-  p->ctx = pa_context_new(api, "LavaTaskbar");
+  p->ctx = pa_context_new(api, "LavaPanel");
   if (p->ctx == NULL) {
     pa_threaded_mainloop_free(p->loop);
     free(p);

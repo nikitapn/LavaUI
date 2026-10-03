@@ -232,7 +232,7 @@ public enum LavaClient {
     ///     A request, like a window's size — the real one arrives as the
     ///     opening `Resize`, which is also how a panel learns its length.
     ///   - reserve: ask that windows be laid out around this panel rather than
-    ///     under it. What a taskbar wants; an overlay does not.
+    ///     under it. What a panel wants; an overlay does not.
     public static func openPanel(
         title: String,
         edge: PanelEdge = .top,

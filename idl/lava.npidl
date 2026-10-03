@@ -1170,7 +1170,7 @@ interface Compositor {
   /// What differs is what the compositor does with it. A panel gets no title
   /// bar — there is nothing to drag, close or maximize — it is stacked above
   /// ordinary windows, and if `reserve` is set, windows are laid out inside
-  /// what is left rather than under it. A taskbar wants that; an overlay that
+  /// what is left rather than under it. A panel wants that; an overlay that
   /// floats over the desktop does not.
   ///
   /// `thickness` is in the direction the panel is *not* long: height for a
@@ -1200,7 +1200,7 @@ interface Compositor {
   /// reason it is its own kind:
   ///
   ///   * it is stacked **above panels**, in its own scene tree. A menu that
-  ///     opened under the taskbar would be a menu the top of the screen
+  ///     opened under the panel would be a menu the top of the screen
   ///     cannot use.
   ///   * it is **hidden** until `ShowMenu` and again after the reply, so a
   ///     resident menu process costs the desktop nothing between menus —
@@ -1306,7 +1306,7 @@ interface Compositor {
   /// that a `Resize` does not already say.
   ///
   /// Getting it back is the compositor's business: `ActivateWindow` from a
-  /// taskbar that walked `ListWindows`, or Alt+Shift+M, which brings back
+  /// panel that walked `ListWindows`, or Alt+Shift+M, which brings back
   /// every window the workspace has hidden.
   void Minimize(surfaceId: in u32) raises(SurfaceNotFound);
 

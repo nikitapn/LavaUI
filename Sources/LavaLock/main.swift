@@ -318,7 +318,7 @@ func face(_ pixelSize: Float) -> UIFont? {
 
 let fonts = Fonts(clock: face(96), date: face(24), body: face(20))
 // Touched only from the frame loop; the closures that reach it hop there
-// first. Same arrangement as the taskbar's clock.
+// first. Same arrangement as the panel's clock.
 nonisolated(unsafe) let model = LockModel()
 model.tick()
 

@@ -15,7 +15,7 @@ struct CalendarApplet: View {
             onClick: { session.toggleCalendar() }
         )
         .padding(4)
-        .hoverBackground(TaskbarChrome.style.titleHover)
+        .hoverBackground(PanelChrome.style.titleHover)
         .cornerRadius(6)
         .agentId("applet.calendar")
     }
@@ -110,7 +110,7 @@ struct CalendarWindow: View {
         }
         .padding(12)
         .frame(width: .pt(Self.width), height: .pt(Self.height))
-        .background(TaskbarChrome.popupWash)
+        .background(PanelChrome.popupWash)
         .agentId("calendar.window")
     }
 

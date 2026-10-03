@@ -336,7 +336,7 @@ Consequences that surprise people:
   named, not loaded**: `UIFont.useFallbacks` takes `[FontFallback]` and each
   face is read the first time a character misses everything ahead of it.
 - Draw lists: shared **DrawArena**. Control plane: small RPCs only.
-- **Global menu**: `LavaTaskbar` owns the AppMenu registrar and draws the
+- **Global menu**: `LavaPanel` owns the AppMenu registrar and draws the
   focused window's menu (`canvas/src/menu/menu_import.*` imports it,
   `SubscribeActiveWindow` says whose, `SetPanelThickness` makes room for the
   dropdown). A client registers under its **surface id**, not an X11 id — so
@@ -425,7 +425,7 @@ Sources/
   LavaIDL/         Generated NPRPC Swift stubs (do not hand-edit long-term)
   LavaBench/       Perf suite vs committed baseline
   LavaSurface/     Client: wallpaper / desktop surface
-  LavaTaskbar/     Client: panel / taskbar (global menu)
+  LavaPanel/       Client: panel (global menu)
   LavaDock/        Client: dock — open windows on this workspace
   LavaSwitcher/    Client: 3D Ctrl+Tab / Alt+Tab app switcher
   LavaContextMenu/ Client: the right-click menu. The compositor says what is
@@ -1020,7 +1020,7 @@ Four things are worth knowing before changing any of it.
 
 **The menu surface is its own kind** (`CreateMenuSurface`), not a window and
 not a panel. It lives in `Workspaces::menus`, a scene tree above `panels`, so a
-menu opened at the top of the screen is not drawn under the taskbar. It is
+menu opened at the top of the screen is not drawn under the panel. It is
 hidden between menus — a resident menu process costs an idle desktop nothing,
 and nothing stands in the way of a fullscreen client's direct scanout. It is
 not in the window list, has no title bar, and takes the keyboard the way the
@@ -1130,7 +1130,7 @@ it where the user can still see it.
 
 The panel is the session's notification daemon: canvas's `NotificationHost`
 owns `org.freedesktop.Notifications`, `Notifications` in LavaUI is the
-view-model, and `ToastStack` in LavaTaskbar draws the cards at the top right of
+view-model, and `ToastStack` in LavaPanel draws the cards at the top right of
 the panel's own surface — no second process, no new surface kind, because the
 panel already has a full-width one that reaches `MenuSession.openHeight` down
 the screen for dropdowns.

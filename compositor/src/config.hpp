@@ -214,7 +214,7 @@ struct Setting {
 struct ShellConfig {
   /// Program names or paths. Empty, or the word `off`, means "do not start
   /// this one" — which is what a developer running it under a debugger wants.
-  std::string panel = "LavaTaskbar";
+  std::string panel = "LavaPanel";
   std::string dock = "LavaDock";
   /// The context menu client — what a right-click on the desktop or on a
   /// window's title bar opens. `off` leaves the desktop with no context menu,

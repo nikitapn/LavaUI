@@ -8,7 +8,7 @@ import Observation
 // The desktop's top panel, as an ordinary LavaUI client.
 //
 //   terminal 1:  compositor/scripts/dev-run
-//   terminal 2:  swift run LavaTaskbar
+//   terminal 2:  swift run LavaPanel
 //   terminal 3:  swift run LavaSurface
 //
 // Nothing here is privileged. It publishes draw lists into a shared arena and
@@ -84,6 +84,8 @@ enum DesktopMenuID {
     static let settings = MenuID("desktop.settings")
     static let launcher = MenuID("desktop.launcher")
     static let terminal = MenuID("desktop.terminal")
+    static let session = MenuID("desktop.session")
+    static let lock = MenuID("desktop.session.lock")
     static let logout = MenuID("desktop.logout")
 }
 
@@ -177,7 +179,7 @@ final class MenuSession {
         // An open menu belongs to the window that is no longer focused.
         closeMenu()
         if menuDebug {
-            let line = "LavaTaskbar: focus surface=\(window.surfaceId)"
+            let line = "LavaPanel: focus surface=\(window.surfaceId)"
                 + " registrar=\(window.registrarId) pid=\(window.pid)"
                 + " kde=\(window.menuService) \(window.menuObjectPath)"
                 + " title=\(window.title)\n"
@@ -216,6 +218,12 @@ final class MenuSession {
         case DesktopMenuID.terminal:
             closeMenu()
             launchDesktopProgram("LavaTerm")
+        case DesktopMenuID.lock:
+            closeMenu()
+            // The compositor's lock, the one Mod+L takes. Nothing to report
+            // on failure that the user would not already see: the screen
+            // either locked or it did not.
+            try? DesktopSettings.lockSession()
         case DesktopMenuID.logout:
             setDialog(.logout)
         default:
@@ -239,7 +247,7 @@ final class MenuSession {
         if hasAppMenu, menuDebug {
             let titles = imported.menus.map(\.title).joined(separator: ", ")
             FileHandle.standardError.write(
-                Data("LavaTaskbar: imported [\(titles)]\n".utf8)
+                Data("LavaPanel: imported [\(titles)]\n".utf8)
             )
         }
         var menus = desktop.menus
@@ -264,25 +272,6 @@ final class MenuSession {
                     .item(MenuItemModel(
                         id: DesktopMenuID.about, title: "About Lava"
                     )),
-                    .submenu(MenuNode(
-                        id: MenuID("desktop.session"),
-                        title: "Session",
-                        items: [
-                            .item(MenuItemModel(
-                                id: MenuID("desktop.session.lock"), title: "Lock Screen"
-                            )),
-                            .submenu(MenuNode(
-                                id: MenuID("desktop.session.more"),
-                                title: "More",
-                                items: [
-                                    .item(MenuItemModel(
-                                        id: MenuID("desktop.session.more.a"),
-                                        title: "Nested item"
-                                    )),
-                                ]
-                            )),
-                        ]
-                    )),
                     .item(MenuItemModel(
                         id: DesktopMenuID.settings, title: "Settings…"
                     )),
@@ -294,8 +283,19 @@ final class MenuSession {
                         id: DesktopMenuID.terminal, title: "Terminal"
                     )),
                     .separator,
-                    .item(MenuItemModel(
-                        id: DesktopMenuID.logout, title: "Log Out…"
+                    // Last, where leaving belongs: both end what the user is
+                    // doing, one until the password and one for good.
+                    .submenu(MenuNode(
+                        id: DesktopMenuID.session,
+                        title: "Session",
+                        items: [
+                            .item(MenuItemModel(
+                                id: DesktopMenuID.lock, title: "Lock Screen"
+                            )),
+                            .item(MenuItemModel(
+                                id: DesktopMenuID.logout, title: "Log Out…"
+                            )),
+                        ]
                     )),
                 ]
             ),
@@ -410,8 +410,10 @@ final class MenuSession {
               !menu.items.isEmpty
         else { return false }
         let (x, y) = anchor(for: "menu.\(id.raw)")
+        // No header: the menu hangs from the title that was just clicked, and
+        // a first row repeating it is a row that does nothing.
         return present(
-            menu.items, title: menu.title, x: x, y: y, tray: false, trayKey: nil
+            menu.items, title: "", x: x, y: y, tray: false, trayKey: nil
         )
     }
 
@@ -466,7 +468,7 @@ final class MenuSession {
         )
         guard serial != 0 else {
             FileHandle.standardError.write(
-                Data("LavaTaskbar: no menu client — menu not shown\n".utf8)
+                Data("LavaPanel: no menu client — menu not shown\n".utf8)
             )
             return false
         }
@@ -499,8 +501,8 @@ final class MenuSession {
             width: width,
             height: LogoutWindow.height,
             anchor: anchor,
-            backdropBlur: TaskbarChrome.popupBlurRadius,
-            refraction: TaskbarChrome.popupRefraction,
+            backdropBlur: PanelChrome.popupBlurRadius,
+            refraction: PanelChrome.popupRefraction,
             onClose: {
                 if let id = opened, session.logoutWindow == id {
                     session.logoutWindow = nil
@@ -537,8 +539,8 @@ final class MenuSession {
             width: width,
             height: 520,
             anchor: anchor,
-            backdropBlur: TaskbarChrome.popupBlurRadius,
-            refraction: TaskbarChrome.popupRefraction,
+            backdropBlur: PanelChrome.popupBlurRadius,
+            refraction: PanelChrome.popupRefraction,
             onClose: {
                 if let id = opened, session.aboutWindow == id {
                     session.aboutWindow = nil
@@ -577,8 +579,8 @@ final class MenuSession {
             width: 280,
             height: 180,
             anchor: anchor,
-            backdropBlur: TaskbarChrome.popupBlurRadius,
-            refraction: TaskbarChrome.popupRefraction,
+            backdropBlur: PanelChrome.popupBlurRadius,
+            refraction: PanelChrome.popupRefraction,
             onClose: {
                 if let id = opened, session.volumeWindow == id {
                     session.volumeWindow = nil
@@ -614,8 +616,8 @@ final class MenuSession {
             width: CalendarWindow.width,
             height: CalendarWindow.height,
             anchor: anchor,
-            backdropBlur: TaskbarChrome.popupBlurRadius,
-            refraction: TaskbarChrome.popupRefraction,
+            backdropBlur: PanelChrome.popupBlurRadius,
+            refraction: PanelChrome.popupRefraction,
             onClose: {
                 if let id = opened, session.calendarWindow == id {
                     session.calendarWindow = nil
@@ -647,8 +649,8 @@ final class MenuSession {
             width: PlayerWindow.width,
             height: PlayerWindow.height,
             anchor: anchor,
-            backdropBlur: TaskbarChrome.popupBlurRadius,
-            refraction: TaskbarChrome.popupRefraction,
+            backdropBlur: PanelChrome.popupBlurRadius,
+            refraction: PanelChrome.popupRefraction,
             onClose: {
                 if let id = opened, session.playerWindow == id {
                     session.playerWindow = nil
@@ -805,7 +807,7 @@ let mpris = MprisSession()
 /// Every popover on the panel — menubar dropdown, tray menu, volume,
 /// calendar — wears this, so a theme change retints all of them and a
 /// frost/radius tweak is not four call sites.
-enum TaskbarChrome {
+enum PanelChrome {
     static var style: MenuBarStyle { .panel() }
 
     /// About, the volume card and the calendar, over the compositor's frost.
@@ -824,7 +826,7 @@ enum TaskbarChrome {
     static let popupRefraction: Float = 28
 }
 
-struct TaskbarView: View {
+struct PanelView: View {
     let brandIcon: UIImage
     let brandImage: UIImage
     let menuFont: UIFont
@@ -833,7 +835,7 @@ struct TaskbarView: View {
     let bodyFont: UIFont
 
     var body: some View {
-        let chrome = TaskbarChrome.style
+        let chrome = PanelChrome.style
         // The strip is what paints. The surface is the strip, and grows only
         // while a notification stack needs the room under it. Transparent
         // below the strip so the desktop shows through; the input region is
@@ -954,7 +956,7 @@ struct TaskbarView: View {
                     .padding(4)
             }
         }
-        .hoverBackground(TaskbarChrome.style.titleHover)
+        .hoverBackground(PanelChrome.style.titleHover)
         .cornerRadius(6)
         .agentId("tray.\(item.key)")
     }
@@ -1000,7 +1002,7 @@ struct AboutWindow: View {
             )
         }
         .flexGrow(1)
-        .background(TaskbarChrome.popupWash)
+        .background(PanelChrome.popupWash)
         .agentId("dialog.about")
     }
 }
@@ -1038,7 +1040,7 @@ struct LogoutWindow: View {
         }
         .padding(16)
         .frame(width: .pt(Self.width), height: .pt(Self.height))
-        .background(TaskbarChrome.popupWash)
+        .background(PanelChrome.popupWash)
         .agentId("dialog.logout")
     }
 }
@@ -1089,7 +1091,7 @@ func launchDesktopProgram(_ name: String) {
         }
     }
     FileHandle.standardError.write(
-        Data("LavaTaskbar: could not launch \(name)\n".utf8)
+        Data("LavaPanel: could not launch \(name)\n".utf8)
     )
 }
 
@@ -1138,7 +1140,7 @@ guard let brandIcon = ImageStore.loadAsset(
     named: "lavaui-icon.svg", bundle: .module, into: editor
 ) else {
     FileHandle.standardError.write(
-        Data("LavaTaskbar: could not load lavaui-icon.svg\n".utf8)
+        Data("LavaPanel: could not load lavaui-icon.svg\n".utf8)
     )
     exit(1)
 }
@@ -1147,7 +1149,7 @@ guard let brandImage = ImageStore.loadAsset(
     named: "lavaui.png", bundle: .module, into: editor
 ) else {
     FileHandle.standardError.write(
-        Data("LavaTaskbar: could not load lavaui.png\n".utf8)
+        Data("LavaPanel: could not load lavaui.png\n".utf8)
     )
     exit(1)
 }
@@ -1165,7 +1167,7 @@ mpris.onAbsent = { session.closePlayer() }
 guard let menuFont = UIFont.loadUI(assetsRoot: LavaResources.root, pixelSize: 12)
 else {
     FileHandle.standardError.write(
-        Data("LavaTaskbar: could not load menu face\n".utf8)
+        Data("LavaPanel: could not load menu face\n".utf8)
     )
     exit(1)
 }
@@ -1173,7 +1175,7 @@ menuFont.registerWithEngine(editor)
 
 guard let bodyFont = loadReadingFace(pixelSize: 14) else {
     FileHandle.standardError.write(
-        Data("LavaTaskbar: could not load body face\n".utf8)
+        Data("LavaPanel: could not load body face\n".utf8)
     )
     exit(1)
 }
@@ -1230,7 +1232,7 @@ LavaClient.onMenuChoice { serial, chosen in
 }
 
 LavaClient.run(editor: editor) {
-    TaskbarView(
+    PanelView(
         brandIcon: brandIcon, brandImage: brandImage,
         menuFont: menuFont, bodyFont: bodyFont
     )

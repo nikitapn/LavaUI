@@ -277,7 +277,7 @@ the renderer owns the pointer.
 
 **Fixed:** the global menu. `x11WindowId()` is still 0 without a window, but
 the registrar's key never needed to be an X11 id — a client registers under
-its surface id, `LavaTaskbar` owns the registrar and imports the layout, and
+its surface id, `LavaPanel` owns the registrar and imports the layout, and
 `SubscribeActiveWindow` tells it whose menu to show. A client-mode app now
 picks the `dbusMenu` backend rather than degrading to an in-window bar. See
 `docs/native-menus.md`.
@@ -297,7 +297,7 @@ ask for a change to it (`ToggleMaximize` returns the state it ended in, which
 is the whole of what a client can know).
 
 The gap under minimize has since closed: `ListWindows` carries the minimized
-flag and `ActivateWindow` restores one, which is what `LavaTaskbar` clicks.
+flag and `ActivateWindow` restores one, which is what `LavaPanel` clicks.
 `Alt+Shift+M` remains as the keyboard route, and now brings back every window
 the workspace has hidden rather than popping one off a stack.
 

@@ -169,7 +169,7 @@ than pick numbers, or the two disagree in the same frame; `blur == 0` means
 the desktop casts none and neither should the app.
 
 Minimize hides the window without ending it. Getting it back is the
-compositor's business: a taskbar walks `ListWindows` and calls
+compositor's business: a panel walks `ListWindows` and calls
 `ActivateWindow`, or `Alt+Shift+M` brings back everything the workspace has
 hidden at once.
 

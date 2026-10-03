@@ -679,8 +679,8 @@ final class DockModel {
 
     /// Grows or shrinks the surface the dock draws into.
     ///
-    /// Grown and left grown — the way the taskbar does it for its menus —
-    /// would be wrong here. The taskbar reserves its strip, so the compositor
+    /// Grown and left grown — the way the panel does it for its menus —
+    /// would be wrong here. The panel reserves its strip, so the compositor
     /// knows which part of its tall surface is the panel; a dock reserves
     /// nothing, and `panelCovered` reads the whole surface of a panel that
     /// reserves nothing as its strip. A dock left 250pt tall would decide it

@@ -1730,7 +1730,7 @@ public final class DrawList {
             // Deliberately allowed to go **negative**, for a box smaller than
             // the line it holds: centring then means overflowing equally at
             // both ends, which is what a frame's own alignment does and what
-            // makes the two spellings interchangeable. The taskbar's weekday
+            // makes the two spellings interchangeable. The panel's weekday
             // strip is exactly this — a 22pt cell around a 22pt line — and
             // clamping the slack at zero put it three pixels lower than the
             // frame did.

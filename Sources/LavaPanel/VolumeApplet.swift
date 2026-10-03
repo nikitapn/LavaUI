@@ -50,7 +50,7 @@ struct VolumeApplet: View {
             )
         }
         .padding(2)
-        .hoverBackground(TaskbarChrome.style.titleHover)
+        .hoverBackground(PanelChrome.style.titleHover)
         .cornerRadius(6)
         .agentId("applet.volume")
     }
@@ -103,7 +103,7 @@ struct VolumeWindow: View {
 
             Spacer()
         }
-        .background(TaskbarChrome.popupWash)
+        .background(PanelChrome.popupWash)
         .agentId("volume.window")
     }
 }

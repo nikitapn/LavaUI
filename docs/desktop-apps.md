@@ -14,7 +14,7 @@ Twenty-odd products, and the shape of them matters more than the count:
 
 | | |
 |---|---|
-| Shell | `LavaShell`, `LavaDock`, `LavaTaskbar` (clock, calendar, tray, volume, MPRIS chip), `LavaLauncher`, `LavaSwitcher`, `LavaContextMenu`, `LavaMenu` |
+| Shell | `LavaShell`, `LavaDock`, `LavaPanel` (clock, calendar, tray, volume, MPRIS chip), `LavaLauncher`, `LavaSwitcher`, `LavaContextMenu`, `LavaMenu` |
 | Apps | `LavaTerm`, `LavaEditor`, `LavaView`, `LavaWeather`, `LavaSpotify`, `TraceLoom`, `LavaSettings` |
 | Tools | `LavaDebug`, `LavaBench`, `LavaCtl`, `LavaChooser` |
 | Framework | `LavaUI` (25k lines), the C++ `canvas` engine, the compositor, `nprpc` control plane |
@@ -110,7 +110,7 @@ Recommendation: use mpv. Revisit only if the seam actually bothers you.
 ### Music player — build the browser, not the player
 
 Same trick, and here it is stronger, because the control half already exists.
-`CMpris`, `LavaMpris` and the taskbar's `PlayerApplet` already speak MPRIS;
+`CMpris`, `LavaMpris` and the panel's `PlayerApplet` already speak MPRIS;
 `CPulse` already does volume. What is missing is not playback — it is a library:
 scanning a music folder, reading ID3 tags, and a browse-and-queue UI.
 
@@ -177,7 +177,7 @@ of the value for a fraction of the work.
 
 ### Clock — mostly already there
 
-The panel has a clock and a month calendar (`LavaTaskbar/CalendarApplet.swift`).
+The panel has a clock and a month calendar (`LavaPanel/CalendarApplet.swift`).
 What a clock *app* adds is alarms, timers, a stopwatch and world clocks. Alarms
 are the only part with real substance, and their cost is not the UI — it is
 needing something alive when the app is not: a background service, a wake

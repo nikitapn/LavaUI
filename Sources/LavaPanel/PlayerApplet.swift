@@ -31,7 +31,7 @@ struct PlayerApplet: View {
             titleLabel(playing: playing, theme: theme)
         }
         .padding(EdgeInsets(top: 0, leading: 4, bottom: 0, trailing: 6))
-        .hoverBackground(TaskbarChrome.style.titleHover)
+        .hoverBackground(PanelChrome.style.titleHover)
         .cornerRadius(6)
         .agentId("applet.player")
     }
@@ -154,7 +154,7 @@ struct PlayerWindow: View {
         }
         .padding(12)
         .frame(width: .pt(Self.width), height: .pt(Self.height))
-        .background(TaskbarChrome.popupWash)
+        .background(PanelChrome.popupWash)
         .agentId("player.window")
     }
 

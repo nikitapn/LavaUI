@@ -1,7 +1,7 @@
 # LavaSpotify setup guide
 
 LavaSpotify is a LavaUI client for browsing Spotify catalog art and controlling
-**spotifyd** over MPRIS (the same session-bus path as the taskbar player chip).
+**spotifyd** over MPRIS (the same session-bus path as the panel player chip).
 Audio is played by **spotifyd**, not by the LavaUI process and not by the Web
 Playback SDK. Other Connect devices still work through the Web API as a fallback.
 
@@ -15,7 +15,7 @@ does not have to rediscover them.
 ```
 LavaSpotify (Swift / LavaUI)
   │  catalog: client credentials or seed/oembed  →  GET /v1/search, /v1/albums/{id}
-  │  transport: session bus MPRIS (same path as the taskbar player chip)
+  │  transport: session bus MPRIS (same path as the panel player chip)
   │
   ├── OpenUri / PlayPause / Next / SetPosition / Volume
   │         ▼
