@@ -155,6 +155,16 @@ final class DockModel {
     /// two possible reasons and only one of them is the pointer's.
     var pointerInside = false
 
+    /// Whether another window's file drag is over the dock. The compositor
+    /// says so with `DragOver`, which only reaches a view registered with
+    /// `.onDrop` — so the dock is one, for the sake of hearing it.
+    var fileDragOver = false
+    /// The window a file drag is resting on — through an icon or a shelf
+    /// card — since when, and whether it has already been brought forward.
+    /// Per window, like `hoverCandidate` is per icon: `DropRouter`'s own
+    /// spring is per drop target, and the whole dock is one.
+    @ObservationIgnored var springCandidate: (surfaceId: UInt32, since: Double, sprung: Bool)?
+
     var drag: DockDrag?
     /// The menu the compositor has up for one of these icons, if any.
     ///
@@ -718,6 +728,34 @@ final class DockModel {
         launchSibling(id)
     }
 
+    /// Opens dropped files with an application, the way dropping a document
+    /// on a dock icon does everywhere else.
+    ///
+    /// Through `Exec=` and nothing cleverer: a running application is started
+    /// again with the files, and the ones that keep a single instance (the
+    /// browsers, the editors) hand them to the window that is already open.
+    /// An entry whose `Exec=` takes no files is refused rather than handed
+    /// paths it never asked for. With no entry at all it is one of our own
+    /// programs, and those all take paths as arguments.
+    func open(_ files: [String], with id: String) {
+        guard !files.isEmpty else { return }
+        if let entry = entryInfo(for: id) {
+            guard entry.acceptsFiles else {
+                FileHandle.standardError.write(
+                    Data("dock: \(id) does not open files\n".utf8)
+                )
+                return
+            }
+            if !entry.launch(files: files) {
+                FileHandle.standardError.write(
+                    Data("dock: opening files with \(id) failed\n".utf8)
+                )
+            }
+            return
+        }
+        launchSibling(id, arguments: files)
+    }
+
     /// Runs one of an application's desktop actions. Nothing to fall back on
     /// if the entry has gone: an action only ever came from one.
     func launch(_ action: DesktopAction, of id: String) {
@@ -971,6 +1009,17 @@ struct DockView: View {
             paint: { list, frame in paint(list, frame) }
         )
         .agentId("dock")
+        // `targeted` is what makes resting a drag on an icon bring its window
+        // forward — see `updateDragSpring`. A drop opens the files with
+        // whatever it landed on.
+        .onDrop(
+            targeted: { over in
+                model.fileDragOver = over
+                if !over { model.springCandidate = nil }
+                ViewInvalidation.markNeedsRedraw()
+            },
+            perform: { urls in drop(urls.map(\.path)) }
+        )
     }
 
     /// Brings the dock out. What it accepts input in follows on the next
@@ -1036,6 +1085,31 @@ struct DockView: View {
         case .ended:
             endPress(atX: gesture.localX, y: gesture.localY,
                      frameWidth: gesture.frame.w)
+        }
+    }
+
+    /// Which application a drop landed on: a shelf card's, or the icon's
+    /// under it. The handler is told the paths and not where, so this reads
+    /// the pointer — the drag's last motion is where the button came up.
+    private func drop(_ files: [String]) {
+        let pointer = PointerState.window
+        let appId: String? = {
+            if let open = model.livePreview,
+               model.previewLayout?.card(atX: pointer.x, y: pointer.y) != nil
+            {
+                return open.appId
+            }
+            guard pointer.y >= model.plateTop,
+                  let index = entryIndex(atX: pointer.x, frameWidth: model.lastFrameWidth)
+            else { return nil }
+            return model.entries[index].appId
+        }()
+        guard let appId else { return }
+        // Not inside the input handler: launching forks, and the shelf may
+        // still be up and needs to come down first.
+        FrameTasks.after {
+            model.closePreview()
+            model.open(files, with: appId)
         }
     }
 
@@ -1427,6 +1501,7 @@ struct DockView: View {
             && pointerY >= plateY + plateH - Dock.padding - Dock.magnifiedSize
             && pointerY <= plateY + plateH
         updatePreviewHover(over: onPlate ? hovered?.entry : nil, dragging: dragging)
+        updateDragSpring(over: onPlate ? hovered?.entry : nil, shelf: shelf)
 
         if let shelf, let open = model.preview,
            let entry = entries.first(where: { $0.appId == open.appId })
@@ -1492,6 +1567,57 @@ struct DockView: View {
             // window clean is a wake that never asks again.
             FrameScheduler.requestRedraw(in: Dock.previewDelay - waited)
         }
+    }
+
+    /// Brings a window forward once a file drag has rested on it for
+    /// `DropRouter.springDelay` — the way a folder opens under a file carried
+    /// to it. Once per visit.
+    ///
+    /// What "it" is depends on the stack. A single window springs from its
+    /// icon. A stack of several does not: resting on its icon opens the shelf
+    /// the way hovering does, and the cards spring instead — raising the
+    /// stack's front window would be a guess at which one the file is for.
+    /// An application that is not running is left alone, since starting one
+    /// is not what a pause means.
+    ///
+    /// Decided at paint for the same reason as the shelf: only paint knows
+    /// what is under the pointer. The motion of a drag reaches the dock as
+    /// ordinary pointer moves; `fileDragOver` is what says it is a drag.
+    private func updateDragSpring(over entry: DockEntry?, shelf: Dock.PreviewLayout?) {
+        guard model.fileDragOver, model.revealed else {
+            model.springCandidate = nil
+            return
+        }
+        let target: (surfaceId: UInt32, appId: String, inFront: Bool)?
+        if let open = model.livePreview,
+           let card = shelf?.card(atX: PointerState.window.x, y: PointerState.window.y)
+        {
+            target = (card.surfaceId, open.appId, card.focused && !card.minimized)
+        } else if let entry, entry.windows.count == 1, let window = entry.primary {
+            target = (window.surfaceId, entry.appId, window.focused && !window.minimized)
+        } else {
+            target = nil
+        }
+        guard let target else {
+            model.springCandidate = nil
+            return
+        }
+        let now = FrameScheduler.now()
+        if model.springCandidate?.surfaceId != target.surfaceId {
+            model.springCandidate = (target.surfaceId, now, false)
+        }
+        guard let candidate = model.springCandidate, !candidate.sprung else { return }
+        let waited = now - candidate.since
+        guard waited >= DropRouter.springDelay else {
+            // A resting drag sends nothing, and the decision is made here —
+            // so a redraw, not a wake. See `FrameScheduler.requestRedraw`.
+            FrameScheduler.requestRedraw(in: DropRouter.springDelay - waited)
+            return
+        }
+        model.springCandidate?.sprung = true
+        if target.inFront { return }
+        // After the frame, like every other control-plane call made from here.
+        FrameTasks.after { model.activateWindow(target.surfaceId, of: target.appId) }
     }
 
     /// Advances the shelf's arrival or departure, and takes a departed one
@@ -1751,7 +1877,7 @@ struct DockView: View {
 
 /// Starts a sibling desktop program when there is no `.desktop` file —
 /// LavaTerm, LavaSettings — the same lookup the panel uses.
-func launchSibling(_ name: String) {
+func launchSibling(_ name: String, arguments: [String] = []) {
     let candidates: [String] = {
         var paths: [String] = []
         if let selfPath = CommandLine.arguments.first {
@@ -1772,9 +1898,10 @@ func launchSibling(_ name: String) {
                 continue
             }
             process.executableURL = url
+            process.arguments = arguments
         } else {
             process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-            process.arguments = [path]
+            process.arguments = [path] + arguments
         }
         process.standardOutput = FileHandle.nullDevice
         process.standardError = FileHandle.nullDevice
