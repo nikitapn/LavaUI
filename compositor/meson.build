@@ -181,6 +181,7 @@ compositor = executable(
   'src/decoration.cpp',
   'src/drag.cpp',
   'src/frame_probe.cpp',
+  'src/game_probe.cpp',
   'src/shell.cpp',
   'src/screenshot_portal.cpp',
   'src/lock_auth.cpp',

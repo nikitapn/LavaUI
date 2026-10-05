@@ -553,7 +553,7 @@ reproducible, completely fictional bug.
 | `LAVAUI_PROFILE=1` | Per-widget paint profiling via agent `profile` |
 | `LAVA_EDITOR_PROBE=1` | Editor hot paths (hit test, caret, selection, emit) with the buffer offset each was working at — see `EditorProbe` |
 | `LAVA_FRAME_PROBE=1` | Compositor: per-surface frame cost, gaps and stalls |
-| `LAVA_SCANOUT_PROBE=1` | Compositor: per output frame, whether a client covers it and whether that client's buffer is fenced — the input to the direct-scanout decision |
+| `LAVA_SCANOUT_PROBE=1` | Compositor: per output frame, whether a client covers it and whether that client's buffer is fenced — the input to the direct-scanout decision. Plus, every 2 s, what became of the covering client's frames (`lava::GameProbe`): commit rate and gaps, how long after each commit its GPU work signalled, frames replaced before any flip, scanout vs composite, and how many refreshes each frame stayed on screen (exact on DRM, from the vblank counter; headless has no vblanks) |
 | `LAVA_VRAM_STATS=1` | Compositor: GPU memory report to stderr, every 10s (`=N` for N seconds, `=verbose` for every allocation). Rides the output frame, so an idle desktop stops reporting — `kill -USR2` dumps one on demand |
 | `LAVA_IMAGE_BUDGET_MB=N` | Any canvas process: ceiling for standalone image textures, in use and dormant together (default 512) |
 | `LAVA_IMAGE_CACHE_MB=N` | The dormant half of that — the most held on spec when there is room (default 256) |
@@ -955,9 +955,15 @@ one, and both are worth knowing before "it toggles" is diagnosed again:
 - A buffer commit with no acquire point is a **protocol error** once the
   surface has a `wp_linux_drm_syncobj_surface_v1`. A client cannot fence some
   frames and not others.
-- wlroots **ignores bufferless commits** when moving the state, so a
-  damage-only or frame-callback commit does not clear the fence of the buffer
-  that is actually on screen.
+- A damage-only or frame-callback commit does not clear the fence of the
+  buffer that is actually on screen — but only because
+  `SurfaceWatch::keepAcquireFence` puts it back. wlroots 0.19 moves the syncobj
+  state on *every* commit (fixed upstream in fd870f6d), and the scene then
+  drops its wait timeline too, so the next frame read the buffer without
+  waiting for the client's GPU. A GPU-bound game at 45 fps on a 75 Hz screen
+  showed half-drawn frames in bands, and the composite lock flapped every few
+  seconds; a game with headroom finished each frame before the vblank and hid
+  it.
 
 Measured with `LAVA_SCANOUT_PROBE=1` against a fullscreen X11 GL client on
 Xwayland 24.1 and NVIDIA 610: fenced on **100% of frames** over minutes, in

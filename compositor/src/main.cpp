@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cctype>
 #include <chrono>
@@ -41,6 +42,7 @@
 #include "decoration.hpp"
 #include "drag.hpp"
 #include "frame_probe.hpp"
+#include "game_probe.hpp"
 #include "control_plane.hpp"
 #include "png_file.hpp"
 #include "uri_list.hpp"
@@ -334,6 +336,11 @@ struct Output {
   Listener<Output> request_state;
   Listener<Output> destroy;
   Listener<Output> commit;
+  /// Only with `LAVA_SCANOUT_PROBE` — see `lava::GameProbe`.
+  Listener<Output> present;
+  /// The client covering this output, as `syncScanoutLock` found it, for the
+  /// commit that follows in the same frame callback. Null outside it.
+  wlr_surface *probeCovering = nullptr;
 
   /// Set by Print Screen only; cleared when the next committed buffer has
   /// been copied to the clipboard. The screenshot portal must not set this
@@ -399,9 +406,10 @@ struct Output {
   /// This used to composite *every* covering X11 client, fenced or not, on the
   /// theory that the fence came and went from frame to frame and the flipping
   /// would jitter. It does not come and go: the protocol makes a buffer commit
-  /// without an acquire point a protocol error, and wlroots ignores bufferless
-  /// commits when it moves the state — so the fence on record is the fence of
-  /// the buffer actually on screen. `LAVA_SCANOUT_PROBE=1` counts it; measured
+  /// without an acquire point a protocol error. wlroots 0.19 does clear the
+  /// state on a bufferless commit, which made it flap every few seconds, but
+  /// `SurfaceWatch::keepAcquireFence` puts it back — so the fence on record is
+  /// the fence of the buffer actually on screen. `LAVA_SCANOUT_PROBE=1` counts it; measured
   /// against a fullscreen X11 GL client on Xwayland 24.1 and NVIDIA 610, it is
   /// fenced on 100% of frames over minutes. What the theory cost was a
   /// full-screen composite, and a whole-output damage, on every frame of every
@@ -430,6 +438,7 @@ struct Output {
   static void on_request_state(wl_listener *listener, void *data);
   static void on_destroy(wl_listener *listener, void *data);
   static void on_commit(wl_listener *listener, void *data);
+  static void on_present(wl_listener *listener, void *data);
 };
 
 // ─── Toplevel ──────────────────────────────────────────────────────────────
@@ -732,23 +741,156 @@ struct ToplevelDecoration {
 /// video in a desynchronised subsurface commits on neither of them — Chromium
 /// and mpv both can. One listener per surface catches all three, and resolving
 /// the root surface is what maps a commit back to a window.
+///
+/// It also keeps the acquire fence of the buffer on screen, which wlroots 0.19
+/// loses — see `keepAcquireFence`. That half depends on running *before* the
+/// scene's own commit listener, and it does: this is attached at
+/// `new_surface`, and every `wlr_scene_surface` is created later.
 struct SurfaceWatch {
   Server      *server;
   wlr_surface *surface;
   Listener<SurfaceWatch> commit;
   Listener<SurfaceWatch> destroy;
+  /// Only with `LAVA_SCANOUT_PROBE`: when the client *sent* each commit, which
+  /// wlroots may hold until its acquire point exists.
+  Listener<SurfaceWatch> clientCommit;
+  /// The acquire point of the last commit that attached a buffer — a ref of
+  /// our own, so the timeline outlives the surface state forgetting it.
+  wlr_drm_syncobj_timeline *acquireTimeline = nullptr;
+  uint64_t acquirePoint = 0;
+  /// `LAVA_SCANOUT_PROBE`: waits for each applied buffer's acquire point to
+  /// *signal* (wlroots only waited for it to exist), to time the client's GPU
+  /// against its own commit. Several at once, because a client that pipelines
+  /// commits the next frame before the last one's GPU work is done — and
+  /// dropping the older wait would leave out exactly the slow frames.
+  struct GpuWait {
+    wlr_drm_syncobj_timeline_waiter waiter{};
+    SurfaceWatch *watch = nullptr;
+    bool active = false;
+    int64_t appliedAtUs = 0;
+  };
+  std::array<GpuWait, 4> gpuWaits{};
 
   SurfaceWatch(Server *server, wlr_surface *surface)
       : server(server), surface(surface) {
     commit.attach(&surface->events.commit, this, on_commit);
     destroy.attach(&surface->events.destroy, this, on_destroy);
+    if (lava::GameProbe::on()) {
+      clientCommit.attach(&surface->events.client_commit, this,
+                          on_client_commit);
+    }
   }
   ~SurfaceWatch() {
+    stopGpuWaits();
+    lava::GameProbe::forget(surface);
+    forgetAcquireFence();
     commit.detach();
     destroy.detach();
+    clientCommit.detach();
+  }
+
+  /// wlroots 0.19 moves the `linux-drm-syncobj` state on *every* commit, so a
+  /// bufferless one — a frame callback, a damage-only commit, both of which
+  /// Xwayland sends while it paces a game — leaves the buffer still on screen
+  /// with no acquire point. The scene re-reads that state on every commit and
+  /// clears its wait timeline with it, so the next frame scans out (or
+  /// composites) the buffer without waiting for the client's GPU work. Since
+  /// the commit was applied as soon as the point *materialised*, not when it
+  /// signalled, that work may not be done: a GPU-bound game is visibly read
+  /// half-drawn, frames interleaved in bands, and one that finishes a frame
+  /// well inside a refresh never shows it. It also made `syncScanoutLock`
+  /// see an unfenced client every few seconds and flap between scanout and
+  /// composite.
+  ///
+  /// Fixed upstream after 0.19 (wlroots fd870f6d, "ignore commits that did
+  /// not attach a buffer"); on a wlroots with that fix the state is never
+  /// empty here and this does nothing. Putting the point back is correct, not
+  /// a guess: it is the fence of exactly the buffer still attached, and the
+  /// next buffer commit's state move unrefs what we put there.
+  void keepAcquireFence() {
+    wlr_linux_drm_syncobj_surface_v1_state *state =
+        wlr_linux_drm_syncobj_v1_get_surface_state(surface);
+    if (state == nullptr) {
+      // No syncobj surface (any more): implicit sync, nothing to keep.
+      forgetAcquireFence();
+      return;
+    }
+    if ((surface->current.committed & WLR_SURFACE_STATE_BUFFER) != 0) {
+      forgetAcquireFence();
+      if (state->acquire_timeline != nullptr) {
+        acquireTimeline = wlr_drm_syncobj_timeline_ref(state->acquire_timeline);
+        acquirePoint = state->acquire_point;
+      }
+      return;
+    }
+    // `surface->buffer`, not `current.buffer`: wlroots drops the latter at the
+    // end of every commit, so on a bufferless one it is always null here —
+    // which is how the first version of this restored nothing at all.
+    if (state->acquire_timeline == nullptr && acquireTimeline != nullptr &&
+        surface->buffer != nullptr) {
+      state->acquire_timeline = wlr_drm_syncobj_timeline_ref(acquireTimeline);
+      state->acquire_point = acquirePoint;
+    }
+  }
+  void stopGpuWaits() {
+    for (GpuWait &wait : gpuWaits) {
+      if (!wait.active) continue;
+      wlr_drm_syncobj_timeline_waiter_finish(&wait.waiter);
+      wait.active = false;
+    }
+  }
+  void timeGpu() {
+    if (!lava::GameProbe::watching(surface)) return;
+    GpuWait *slot = nullptr;
+    size_t inFlight = 0;
+    for (GpuWait &wait : gpuWaits) {
+      if (wait.active) {
+        ++inFlight;
+      } else if (slot == nullptr) {
+        slot = &wait;
+      }
+    }
+    // The frame before this one is still being drawn: the client committed
+    // ahead of its GPU. Not a loss on its own — the flip waits on the fence.
+    if (inFlight > 0) lava::GameProbe::gpuBehind(surface);
+    if (slot == nullptr) return;  // four deep; the oldest will report
+    const wlr_linux_drm_syncobj_surface_v1_state *state =
+        wlr_linux_drm_syncobj_v1_get_surface_state(surface);
+    if (state == nullptr || state->acquire_timeline == nullptr) return;
+    timespec ts{};
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    slot->watch = this;
+    slot->appliedAtUs = int64_t(ts.tv_sec) * 1'000'000 + ts.tv_nsec / 1000;
+    slot->active = wlr_drm_syncobj_timeline_waiter_init(
+        &slot->waiter, state->acquire_timeline, state->acquire_point, 0,
+        wl_display_get_event_loop(wl_client_get_display(
+            wl_resource_get_client(surface->resource))),
+        on_gpu_signalled);
+  }
+  static void on_gpu_signalled(wlr_drm_syncobj_timeline_waiter *waiter) {
+    // `waiter` is the first member, so this is the slot.
+    auto *wait = reinterpret_cast<GpuWait *>(waiter);
+    timespec ts{};
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    const int64_t now = int64_t(ts.tv_sec) * 1'000'000 + ts.tv_nsec / 1000;
+    wlr_drm_syncobj_timeline_waiter_finish(&wait->waiter);
+    wait->active = false;
+    lava::GameProbe::gpuSignalled(wait->watch->surface, now - wait->appliedAtUs);
+  }
+
+  void forgetAcquireFence() {
+    if (acquireTimeline != nullptr) wlr_drm_syncobj_timeline_unref(acquireTimeline);
+    acquireTimeline = nullptr;
+    acquirePoint = 0;
   }
 
   static void on_commit(wl_listener *listener, void *);
+  static void on_client_commit(wl_listener *listener, void *) {
+    auto *watch = owner_of<SurfaceWatch>(listener);
+    lava::GameProbe::clientCommit(
+        watch->surface,
+        (watch->surface->pending.committed & WLR_SURFACE_STATE_BUFFER) != 0);
+  }
   static void on_destroy(wl_listener *listener, void *) {
     delete owner_of<SurfaceWatch>(listener);
   }
@@ -8213,6 +8355,9 @@ Output::Output(Server *server, wlr_output *output)
   request_state.attach(&wlr->events.request_state, this, on_request_state);
   destroy.attach(&wlr->events.destroy, this, on_destroy);
   commit.attach(&wlr->events.commit, this, on_commit);
+  if (lava::GameProbe::on()) {
+    present.attach(&wlr->events.present, this, on_present);
+  }
 
   wlr_output_init_render(wlr, server->allocator, server->renderer);
   describe_output(wlr);
@@ -8399,6 +8544,7 @@ Output::~Output() {
   request_state.detach();
   destroy.detach();
   commit.detach();
+  present.detach();
 }
 
 namespace {
@@ -8428,13 +8574,6 @@ bool node_covers_box(wlr_scene_node *node, int width, int height,
 void Output::syncScanoutLock() {
   wlr_box box{};
   wlr_output_layout_get_box(server->output_layout, wlr, &box);
-
-  // `LAVA_SCANOUT_PROBE=1` answers the question this function is built around:
-  // does the covering client attach an acquire fence on *every* frame, or only
-  // on some? "Only on some" is what forces a blanket composite, and it is a
-  // claim about a particular client on a particular driver — not something to
-  // assume in either direction.
-  static const bool probe = std::getenv("LAVA_SCANOUT_PROBE") != nullptr;
 
   // Whoever owns this output's pixels. X11 is looked at first only because it
   // is the case that produced the bug; both kinds are then asked the same
@@ -8501,22 +8640,10 @@ void Output::syncScanoutLock() {
     wlr_damage_ring_add_whole(&scene_output->damage_ring);
   }
 
-  if (probe) {
-    static uint64_t totalFenced = 0, totalUnfenced = 0, frames = 0;
-    static auto reported = std::chrono::steady_clock::now();
-    if (covering != nullptr) (fenced ? totalFenced : totalUnfenced) += 1;
-    ++frames;
-    const auto now = std::chrono::steady_clock::now();
-    if (now - reported > std::chrono::seconds(2)) {
-      reported = now;
-      wlr_log(WLR_INFO,
-              "scanout probe: %" PRIu64 " frame(s), covering client fenced on "
-              "%" PRIu64 ", unfenced on %" PRIu64 ", composite %s",
-              frames, totalFenced, totalUnfenced,
-              compositeLocked ? "forced" : "not forced");
-      frames = totalFenced = totalUnfenced = 0;
-    }
-  }
+  // `LAVA_SCANOUT_PROBE=1`: does the covering client attach an acquire fence
+  // on every frame, and what happens to its frames after that.
+  probeCovering = covering;
+  lava::GameProbe::covering(covering, fenced, lock);
 }
 
 void Output::on_frame(wl_listener *listener, void *) {
@@ -8537,6 +8664,8 @@ void Output::on_frame(wl_listener *listener, void *) {
   // on this thread, if the renderer cannot hand the wait to the GPU.
   const int64_t started = lava::FrameProbe::on() ? lava::FrameProbe::now() : 0;
   wlr_scene_output_commit(output->scene_output, nullptr);
+  output->probeCovering = nullptr;
+  lava::GameProbe::report();
   lava::StartupWatchdog::dismiss();
   lava::FrameProbe::record(0, lava::FrameProbe::Stage::Render, started);
   lava::FrameProbe::frame(0);
@@ -8552,6 +8681,21 @@ void Output::on_frame(wl_listener *listener, void *) {
   // concerned, settled. An animation that is still running has to keep the
   // output awake itself or it stops one frame in.
   if (animating) wlr_output_schedule_frame(output->wlr);
+}
+
+void Output::on_present(wl_listener *listener, void *data) {
+  auto *event = static_cast<wlr_output_event_present *>(data);
+  const int64_t whenUs = int64_t(event->when.tv_sec) * 1'000'000 +
+                         event->when.tv_nsec / 1000;
+  // Headless (and some nested backends) leave the period out; the mode's
+  // rate is the next best thing to divide a gap by.
+  const auto *output = owner_of<Output>(listener);
+  int refreshNs = event->refresh;
+  if (refreshNs <= 0 && output->wlr->refresh > 0) {
+    refreshNs = int(1'000'000'000'000LL / output->wlr->refresh);
+  }
+  lava::GameProbe::present(event->commit_seq, event->presented, whenUs,
+                           event->seq, refreshNs);
 }
 
 void Output::on_request_state(wl_listener *listener, void *data) {
@@ -8662,6 +8806,27 @@ void Output::on_commit(wl_listener *listener, void *data) {
   if (event->state == nullptr) return;
   if ((event->state->committed & WLR_OUTPUT_STATE_BUFFER) == 0) return;
   if (event->state->buffer == nullptr) return;
+
+  if (wlr_surface *covering = output->probeCovering;
+      covering != nullptr && lava::GameProbe::watching(covering)) {
+    // Scanned out when the flip carries the client's own buffer; wlroots
+    // hands the DRM backend the source rather than the client wrapper.
+    const wlr_client_buffer *current = covering->buffer;
+    const bool scanout =
+        current != nullptr && (event->state->buffer == &current->base ||
+                               event->state->buffer == current->source);
+    bool gpuDone = true;
+    const wlr_linux_drm_syncobj_surface_v1_state *sync =
+        wlr_linux_drm_syncobj_v1_get_surface_state(covering);
+    if (sync != nullptr && sync->acquire_timeline != nullptr) {
+      bool signalled = false;
+      if (wlr_drm_syncobj_timeline_check(sync->acquire_timeline,
+                                         sync->acquire_point, 0, &signalled)) {
+        gpuDone = signalled;
+      }
+    }
+    lava::GameProbe::outputCommit(output->wlr->commit_seq, scanout, gpuDone);
+  }
 
   Server *server = output->server;
   const bool printScreen = output->pendingScreenshot;
@@ -9034,6 +9199,11 @@ void Toplevel::on_unmap(wl_listener *listener, void *) {
 
 void SurfaceWatch::on_commit(wl_listener *listener, void *) {
   auto *watch = owner_of<SurfaceWatch>(listener);
+  watch->keepAcquireFence();
+  const bool newBuffer =
+      (watch->surface->current.committed & WLR_SURFACE_STATE_BUFFER) != 0;
+  lava::GameProbe::applied(watch->surface, newBuffer);
+  if (newBuffer) watch->timeGpu();
   // Only new pixels count. Clients commit for plenty of other reasons — a
   // frame callback, an opaque region, a subsurface moved a pixel — and none of
   // those change what a plate underneath would capture.
