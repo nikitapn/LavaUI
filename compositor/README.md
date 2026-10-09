@@ -77,17 +77,19 @@ a configuration.
 Two failures, handled separately because they look nothing alike. A component
 that **ends** is seen through `SIGCHLD`, which the compositor gets because it
 is the parent. A component that is **still running and has stopped drawing** is
-invisible to the operating system, so clients say so themselves: every LavaUI
-client sends `Heartbeat` every two seconds, from inside its frame loop rather
-than from the thread that times it — a beat that has to pass through the loop
-that draws is the only kind that proves the loop is turning. Miss enough of
-them and the component is asked to go, then made to.
+invisible to the operating system, so clients say so themselves: the panel and
+the dock are started with `LAVA_HEARTBEAT=1`, and a LavaUI client that sees it
+sends `Heartbeat` every two seconds, from inside its frame loop rather than
+from the thread that times it — a beat that has to pass through the loop that
+draws is the only kind that proves the loop is turning. Miss enough of them and
+the component is asked to go, then made to. The context menu is supervised for
+its process ending only: it is idle by design, and its silence means nothing.
 
 Either way it comes back, after a delay that grows if it keeps happening
 (250 ms → 20 s) and with a point past which the compositor stops trying and
-says why. Only the components it started are watched; every other client sends
-heartbeats too and they are ignored, so there is no supervised mode for a
-client to get wrong.
+says why. No other client beats at all — a wakeup every two seconds from every
+window on the desktop, to a compositor that is not listening, is idle cost a
+laptop pays for nothing.
 
 `[shell]` in the config points them elsewhere or turns one off, and
 `LAVA_NO_SHELL=1` turns the lot off for one run — which is what you want when

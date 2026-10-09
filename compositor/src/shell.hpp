@@ -47,6 +47,13 @@ struct ShellComponent {
   /// The `app_id` its surfaces carry, which is how a heartbeat is matched back
   /// to the component that sent it. Empty means "same as the program".
   std::string appId;
+  /// Whether silence means wedged. A watched component is started with
+  /// `LAVA_HEARTBEAT=1`, which is the only thing that makes a client beat at
+  /// all, and is restarted when the beats stop. One that is idle by design —
+  /// the context menu draws only while a menu is open — is watched for its
+  /// process ending and nothing else, and costs no wakeups to prove it is
+  /// alive.
+  bool watched = true;
 };
 
 class ShellSupervisor {

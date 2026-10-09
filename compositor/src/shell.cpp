@@ -173,10 +173,22 @@ void ShellSupervisor::spawn(Supervised &entry) {
   std::string program = path;
   char *argv[] = {program.data(), nullptr};
 
+  // The compositor's environment, plus the one word that asks for beats. A
+  // client is not otherwise told whether anyone listens, and every client
+  // that is not one of these — which is nearly all of them — has no reason
+  // to wake every two seconds to say so.
+  static char heartbeatOn[] = "LAVA_HEARTBEAT=1";
+  std::vector<char *> envp;
+  for (char **e = environ; *e != nullptr; ++e) {
+    if (std::strncmp(*e, "LAVA_HEARTBEAT=", 15) != 0) envp.push_back(*e);
+  }
+  if (entry.component.watched) envp.push_back(heartbeatOn);
+  envp.push_back(nullptr);
+
   pid_t pid = -1;
   // `p` so a bare name still finds something on PATH; `resolve` has already
   // preferred anything nearer. Home cwd: see spawnAtHome.
-  const int error = spawnAtHome(&pid, program.c_str(), argv, environ);
+  const int error = spawnAtHome(&pid, program.c_str(), argv, envp.data());
   if (error != 0) {
     wlr_log(WLR_ERROR, "shell: cannot start %s (%s): %s",
             entry.component.role.c_str(), program.c_str(),
@@ -311,6 +323,9 @@ void ShellSupervisor::tick() {
       }
       continue;
     }
+
+    // Not asked to beat, so its silence says nothing.
+    if (!entry.component.watched) continue;
 
     // Silence. Measured from the last beat, or from the start for a component
     // that has never sent one — a client that never gets as far as drawing is

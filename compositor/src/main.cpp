@@ -14707,7 +14707,8 @@ int main() {
     // open and never otherwise — so the heartbeat that catches a wedged panel
     // says nothing about this one, and only the process ending restarts it.
     if (want(server.config.shell.menu)) {
-      components.push_back({"menu", server.config.shell.menu, {}});
+      components.push_back(
+          {"menu", server.config.shell.menu, {}, /*watched=*/false});
     }
     shell.start(wl_display_get_event_loop(server.display), std::move(components));
   } else {

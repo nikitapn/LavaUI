@@ -1552,10 +1552,17 @@ public enum LavaClient {
         // the window from the compositor side, the compositor went away, the
         // client was evicted — the surface goes with it and there is nothing
         // left to draw into.
-        Thread.detachNewThread {
-            while !input.isClosed { Thread.sleep(forTimeInterval: 0.05) }
-            FileHandle.standardError.write(Data("surface closed — exiting\n".utf8))
-            exit(0)
+        input.onClose = {
+            // Off the thread that noticed — an NPRPC worker, or whoever
+            // closed it — because `exit` runs every atexit handler, and one
+            // of those waiting on the transport this thread belongs to would
+            // never return.
+            Thread.detachNewThread {
+                FileHandle.standardError.write(
+                    Data("surface closed — exiting\n".utf8)
+                )
+                exit(0)
+            }
         }
 
         startHeartbeat(compositor)
@@ -1824,8 +1831,7 @@ public enum LavaClient {
         editorForExtras = editor
         watchInput(input, window: window, editor: editor)
 
-        Thread.detachNewThread {
-            while !input.isClosed { Thread.sleep(forTimeInterval: 0.05) }
+        input.onClose = {
             MainQueue.async {
                 // We closed it on the way out: the entry is already gone,
                 // and asking the loop to close the window again would reap
@@ -1945,11 +1951,16 @@ public enum LavaClient {
     /// loop that draws is still turning. An app deadlocked in its own view
     /// tree looks perfectly healthy to `waitpid` and stops beating here.
     ///
-    /// Every client does this; only the components the compositor started are
-    /// watched, and a client is not told which it is. That keeps the rule
-    /// simple — there is no supervised mode to get wrong — at the cost of a
-    /// datagram every two seconds from windows nobody is watching.
+    /// Only when asked. The compositor starts the components it watches —
+    /// the panel and the dock — with `LAVA_HEARTBEAT=1`, and nothing else
+    /// beats: a wakeup every two seconds from every window on the desktop, to
+    /// tell a compositor that is not listening, is exactly the kind of idle
+    /// cost a battery notices. Taken out of the environment once read, so a
+    /// program the panel launches does not inherit a duty it was never given.
     private static func startHeartbeat(_ compositor: Compositor) {
+        let asked = ProcessInfo.processInfo.environment["LAVA_HEARTBEAT"]
+        unsetenv("LAVA_HEARTBEAT")
+        guard let asked, !asked.isEmpty, asked != "0" else { return }
         let surface = surfaceID
         guard surface != 0 else { return }
         Thread.detachNewThread {

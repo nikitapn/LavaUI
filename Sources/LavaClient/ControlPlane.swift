@@ -380,10 +380,39 @@ public final class InputChannel: @unchecked Sendable {
         notify?()
     }
 
+    /// Called once, on whichever thread noticed, when the stream ends —
+    /// from either side.
+    ///
+    /// The stream is the surface's lease, so this is how a client learns its
+    /// window is gone. It used to be a thread asking `isClosed` twenty times a
+    /// second for the life of the process, which is twenty wakeups a second
+    /// from every idle app on the desktop to watch for an event that happens
+    /// once. Arming it after the stream has already ended calls it at once.
+    public var onClose: (@Sendable () -> Void)? {
+        get {
+            lock.lock()
+            defer { lock.unlock() }
+            return closeHandler
+        }
+        set {
+            lock.lock()
+            let already = ended
+            closeHandler = already ? nil : newValue
+            lock.unlock()
+            if already { newValue?() }
+        }
+    }
+
+    private var closeHandler: (@Sendable () -> Void)?
+
     private func finish() {
         lock.lock()
+        let first = !ended
         ended = true
+        let handler = closeHandler
+        closeHandler = nil
         lock.unlock()
+        if first { handler?() }
     }
 
     /// True once the renderer has gone away — the app's cue to stop drawing
