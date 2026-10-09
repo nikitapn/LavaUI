@@ -48,8 +48,21 @@ export LAVA_SHELL_DIR="${LAVA_SHELL_DIR:-$ROOT/.build/release}"
 # compositor reads [core] from lava.conf before it creates the backend.
 export WLR_BACKENDS="${WLR_BACKENDS:-drm,libinput}"
 export WLR_RENDERER="${WLR_RENDERER:-vulkan}"
-export LAVA_FRAME_PROBE="${LAVA_FRAME_PROBE:-1}"
 export LAVA_CLIENT=1
+
+# Debugging switches, off by default. Uncomment what you need.
+#export LAVA_FRAME_PROBE=1            # per-surface frame cost, gaps, stalls
+#export LAVA_SCANOUT_PROBE=1          # direct-scanout decision and fence state
+#export LAVA_VRAM_STATS=1             # GPU memory report every 10s (=verbose for every allocation)
+#export WLR_LOG=debug                 # wlroots + compositor debug logging (very chatty)
+#export WLR_SCENE_DEBUG_DAMAGE=highlight   # highlight what each frame recomposites
+#export LAVA_FULL_DAMAGE=1            # damage whole buffers; A/B for stale pixels
+#export LAVA_BOOT_TRACE=1             # where the time before a client's first frame went
+#export CANVAS_VK_VALIDATION=1        # Vulkan validation layers
+#export LAVA_MSAA=2                   # cap multisampling (1/2/4/8)
+#export LAVA_IMAGE_SPECULATION=0      # pin the dormant image cache off (1 = on)
+#export LAVA_NO_AUTOSTART=1           # skip ~/.config/lava/autostart
+#export LAVA_NO_SHELL=1               # do not start panel/dock/wallpaper
 
 if [ -z "$SSH_AUTH_SOCK" ]; then
 	eval "$(ssh-agent -s)"
