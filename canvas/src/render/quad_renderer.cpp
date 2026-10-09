@@ -1372,6 +1372,112 @@ void QuadRenderer::end() {
       std::chrono::steady_clock::now() - uploadStart).count());
 }
 
+void QuadRenderer::accumulateDamage(canvas::FrameDamage &damage) const
+{
+  using canvas::FrameDamage;
+  // The camera moves everything after the fact; nothing below accounts for it.
+  if (viewZoom_ != 1.f || viewPanX_ != 0.f || viewPanY_ != 0.f) {
+    damage.markAll();
+    return;
+  }
+  // A frame cut into segments is one that blurs: the composite samples what
+  // was drawn *around* it as well, which no per-tile tally can follow.
+  if (segmentEnds_.size() > 1) {
+    damage.markAll();
+    return;
+  }
+
+  // Slot → the view and sampler it was bound to. A slot index is only this
+  // frame's numbering, so it says nothing across frames; the handles do.
+  const auto &fr = frames_[activeFrameSlot_];
+  std::vector<uint64_t> slotHash(fr.nextTextureIndex, 0);
+  for (const auto &[key, slot] : fr.textureSlots) {
+    if (slot < slotHash.size()) {
+      const uint64_t handles[2] = {reinterpret_cast<uint64_t>(key.view),
+                                   reinterpret_cast<uint64_t>(key.sampler)};
+      slotHash[slot] = FrameDamage::hashBytes(handles, sizeof handles, 0);
+    }
+  }
+  const auto textureHash = [&](uint32_t slot) {
+    return slot < slotHash.size() ? slotHash[slot] : uint64_t{0};
+  };
+
+  // How far a pixel can be touched past the geometry that produced it: one,
+  // for the antialiased edge and a sample position straddling a boundary.
+  constexpr float kPad = 1.f;
+
+  for (const Batch &batch : batches_) {
+    if (batch.sampleBlurResult || batch.geometry == Batch::Geometry::SpatialTriangles ||
+        batch.geometry == Batch::Geometry::SpatialBegin) {
+      damage.markAll();
+      return;
+    }
+    const float sx0 = static_cast<float>(batch.scissor.offset.x);
+    const float sy0 = static_cast<float>(batch.scissor.offset.y);
+    const float sx1 = sx0 + static_cast<float>(batch.scissor.extent.width);
+    const float sy1 = sy0 + static_cast<float>(batch.scissor.extent.height);
+    if (sx1 <= sx0 || sy1 <= sy0) continue;  // scissored away entirely
+    // The scissor, the pipeline and the geometry kind decide pixels as much
+    // as the vertices do: the same quad clipped elsewhere is another picture.
+    const int32_t batchKey[6] = {batch.scissor.offset.x, batch.scissor.offset.y,
+                                 static_cast<int32_t>(batch.scissor.extent.width),
+                                 static_cast<int32_t>(batch.scissor.extent.height),
+                                 static_cast<int32_t>(batch.geometry),
+                                 batch.mask ? 1 : 0};
+    const uint64_t seed = FrameDamage::hashBytes(batchKey, sizeof batchKey, 0);
+    const auto add = [&](float x0, float y0, float x1, float y1, uint64_t h) {
+      damage.add(std::max(x0 - kPad, sx0), std::max(y0 - kPad, sy0),
+                 std::min(x1 + kPad, sx1), std::min(y1 + kPad, sy1), h);
+    };
+
+    switch (batch.geometry) {
+    case Batch::Geometry::Instances:
+      for (uint32_t i = 0; i < batch.instanceCount; ++i) {
+        Instance inst = instances_[batch.firstInstance + i];
+        const uint64_t tex = textureHash(inst.textureIndex);
+        inst.textureIndex = 0;
+        const uint64_t h =
+          FrameDamage::mix(FrameDamage::hashBytes(&inst, sizeof inst, seed), tex);
+        add(inst.topLeft.x, inst.topLeft.y, inst.topLeft.x + inst.size.x,
+            inst.topLeft.y + inst.size.y, h);
+      }
+      break;
+    case Batch::Geometry::IndexedTriangles:
+    case Batch::Geometry::LineStrip: {
+      // One shape as a whole: its vertices hashed in draw order, over the box
+      // they span. Meshes are few, so the box being loose costs nothing.
+      float x0 = 1e30f, y0 = 1e30f, x1 = -1e30f, y1 = -1e30f;
+      uint64_t h = seed;
+      const auto fold = [&](const Vertex &source) {
+        Vertex v = source;
+        const uint64_t tex = textureHash(v.textureIndex);
+        v.textureIndex = 0;
+        h = FrameDamage::mix(FrameDamage::hashBytes(&v, sizeof v, h), tex);
+        x0 = std::min(x0, v.pos.x);
+        y0 = std::min(y0, v.pos.y);
+        x1 = std::max(x1, v.pos.x);
+        y1 = std::max(y1, v.pos.y);
+      };
+      if (batch.geometry == Batch::Geometry::IndexedTriangles) {
+        for (uint32_t i = 0; i < batch.indexCount; ++i) {
+          const uint32_t index = indices_[batch.firstIndex + i];
+          if (index < vertices_.size()) fold(vertices_[index]);
+        }
+      } else {
+        for (uint32_t i = 0; i < batch.vertexCount; ++i) {
+          fold(vertices_[batch.firstVertex + i]);
+        }
+      }
+      if (x1 >= x0 && y1 >= y0) add(x0, y0, x1, y1, h);
+      break;
+    }
+    case Batch::Geometry::SpatialTriangles:
+    case Batch::Geometry::SpatialBegin:
+      break;  // handled above
+    }
+  }
+}
+
 void QuadRenderer::setViewTransform(float zoom, float panX, float panY)
 {
   viewZoom_ = zoom > 0.f ? zoom : 1.f;

@@ -2193,15 +2193,49 @@ struct ClientSurface {
 ///     loop, where it cost every other client the same milliseconds — and now
 ///     hands over the point that will be signalled instead. Waiting is the
 ///     scene's job from here.
-void show_surface(wlr_scene_buffer *node, lava::CanvasSurface &surface) {
-  if (node == nullptr) return;
+///
+/// And **the damage**: which part of the buffer changed since it was last
+/// shown, which canvas works out by comparing what each frame submitted (see
+/// `canvas::FrameDamage`). Without it the scene recomposites the whole window
+/// on the output for every frame — a terminal's whole rectangle for a caret
+/// blink. Taken on every call, because it drains: a frame whose damage was
+/// taken and dropped is pixels the output never hears about.
+///
+/// Returns the extents of what was damaged, in surface pixels — empty when
+/// nothing changed — for anyone who cares whether *these* pixels moved, which
+/// is what the frost behind other windows wants to know.
+wlr_box show_surface(wlr_scene_buffer *node, lava::CanvasSurface &surface) {
+  if (node == nullptr) return {};
   const lava::CanvasSurface::FrameFence fence = surface.frameFence();
+
+  static thread_local std::vector<canvas::DamageRect> rects;
+  const bool partial = surface.takeDamage(rects) &&
+                       // A buffer the node is not showing yet holds none of the
+                       // pixels outside the damage.
+                       node->buffer == surface.buffer();
+  pixman_region32_t damage;
+  pixman_region32_init(&damage);
+  wlr_box extents{0, 0, static_cast<int>(surface.width()),
+                  static_cast<int>(surface.height())};
+  if (partial) {
+    for (const canvas::DamageRect &r : rects) {
+      pixman_region32_union_rect(&damage, &damage, r.x, r.y,
+                                 static_cast<unsigned>(r.width),
+                                 static_cast<unsigned>(r.height));
+    }
+    const pixman_box32_t *box = pixman_region32_extents(&damage);
+    extents = pixman_region32_not_empty(&damage)
+                  ? wlr_box{box->x1, box->y1, box->x2 - box->x1,
+                            box->y2 - box->y1}
+                  : wlr_box{};
+  }
   const wlr_scene_buffer_set_buffer_options options{
-      .damage = nullptr,
+      .damage = partial ? &damage : nullptr,
       .wait_timeline = fence.timeline,
       .wait_point = fence.point,
   };
   wlr_scene_buffer_set_buffer_with_options(node, surface.buffer(), &options);
+  pixman_region32_fini(&damage);
 
   const wlr_fbox source{
       .x = 0,
@@ -2250,6 +2284,7 @@ void show_surface(wlr_scene_buffer *node, lava::CanvasSurface &surface) {
   // is also what restores the default — so the unset case needs no branch.
   wlr_scene_buffer_set_opaque_region(node, &opaque);
   pixman_region32_fini(&opaque);
+  return extents;
 }
 
 // ─── Scene-graph input regions ─────────────────────────────────────────────
@@ -4662,14 +4697,41 @@ class SurfaceRegistry : public lava::CompositorHost {
   /// The overlap test is what keeps an idle desktop idle. Without it every
   /// clock tick in the panel, and every frame of a video on another workspace,
   /// would cost a full offscreen composite of the output per frosted window.
-  void notePainted(const ClientSurface &source) {
+  ///
+  /// `changed` narrows it to the part that actually moved, in layout
+  /// coordinates, when the caller knows: a spinner in one corner of a big
+  /// window should not refrost a window that only overlaps the other corner.
+  ///
+  /// And only a window *behind* the frosted one counts. One in front of it
+  /// paints over the frost rather than under it, so nothing it does can
+  /// change the picture the plate is of — but an X11 window covering a
+  /// frosted terminal used to refrost it at 30 Hz for every blink of its own
+  /// caret. `surfaces_` is front-first among the workspace windows, which is
+  /// what the walk below reads; furniture is drawn from trees above every
+  /// workspace, so it is in front of any window and behind none.
+  void notePainted(const ClientSurface &source,
+                   const wlr_box *changed = nullptr) {
     if (server_ == nullptr || backdropContentDirty_) return;
     if (!visible(source)) return;
-    const wlr_box painted{source.x, source.y, static_cast<int>(source.width),
-                          source.frameHeight()};
+    if (changed != nullptr && wlr_box_empty(changed)) return;
+    const wlr_box painted =
+        changed != nullptr
+            ? *changed
+            : wlr_box{source.x, source.y, static_cast<int>(source.width),
+                      source.frameHeight()};
+    bool passedSource = false;
     for (const auto &owned : surfaces_) {
-      if (owned.get() == &source || owned->backdropBlurRadius <= 0.f) continue;
+      if (owned.get() == &source) {
+        passedSource = true;
+        continue;
+      }
+      if (owned->backdropBlurRadius <= 0.f) continue;
       if (!visible(*owned) || owned->fullscreen) continue;
+      // Furniture against furniture is left as it was: the menus and panels
+      // trees order those, not this list, so neither can be ruled out.
+      if (!owned->furniture() && (source.furniture() || passedSource)) {
+        continue;
+      }
       const wlr_box frost = frostBounds(*owned);
       wlr_box hit{};
       if (frost.width > 0 && wlr_box_intersection(&hit, &frost, &painted)) {
@@ -6696,13 +6758,19 @@ class SurfaceRegistry : public lava::CompositorHost {
   /// Tells wlroots the surface's contents changed, and when they will have
   /// finished changing. Same buffer, so without this it keeps showing the
   /// texture it already uploaded — see `show_surface`.
-  void damage(ClientSurface &surface) {
-    if (!surface.canvas) return;
+  /// Shows the surface's newest frame. Returns what changed in it, in layout
+  /// coordinates — empty when nothing did. See `show_surface`.
+  wlr_box damage(ClientSurface &surface) {
+    if (!surface.canvas) return {};
     const int64_t started =
         lava::FrameProbe::on() ? lava::FrameProbe::now() : 0;
-    show_surface(surface.node, *surface.canvas);
+    wlr_box changed = show_surface(surface.node, *surface.canvas);
     lava::FrameProbe::record(surface.id, lava::FrameProbe::Stage::Scene,
                              started);
+    if (wlr_box_empty(&changed)) return {};
+    changed.x += surface.x;
+    changed.y += surface.contentY();
+    return changed;
   }
 
   void present(uint32_t id, uint32_t serial) override {
@@ -6713,9 +6781,6 @@ class SurfaceRegistry : public lava::CompositorHost {
       return;
     }
     if (!surface->canvas->renderFromArena()) return;
-    // `notePainted` is guarded by `visible`, which now knows about the hold:
-    // a window nobody can see yet cannot have changed what is behind anyone.
-    notePainted(*surface);
     if (surface->awaitingFirstFrame) {
       surface->firstFrameRendered = true;
       // The frame saying which input it was drawn with. At or past the
@@ -6729,7 +6794,13 @@ class SurfaceRegistry : public lava::CompositorHost {
     // when the resize was asked for is what keeps the old picture still while
     // it is the only picture there is.
     if (surface->pendingPanelGeometry) commitPanelGeometry(*surface);
-    damage(*surface);
+    const wlr_box changed = damage(*surface);
+    // `notePainted` is guarded by `visible`, which now knows about the hold:
+    // a window nobody can see yet cannot have changed what is behind anyone.
+    // A frame that revealed the window was already shown by `revealIfReady`,
+    // which drained its damage, so `changed` is empty here — and the reveal
+    // has asked for the frost to be redone on its own account.
+    notePainted(*surface, &changed);
     lava::FrameProbe::frame(id);
     lava::FrameProbe::report();
   }

@@ -8,6 +8,7 @@
 
 #include "render/draw_command.hpp"
 #include "render/export_format.hpp"
+#include "render/frame_damage.hpp"
 #include "render/gpu_report.hpp"
 #include "util/result.hpp"
 
@@ -193,6 +194,9 @@ public:
   /// See `RenderWindow::opaqueBounds`.
   bool opaqueBounds(uint32_t windowId, float &x, float &y, float &w,
                     float &h) const;
+
+  /// See `RenderWindow::takeDamage`.
+  bool takeFrameDamage(uint32_t windowId, std::vector<canvas::DamageRect> &out);
 
   /// Brackets a set of `repaint` calls that may run concurrently, one thread
   /// per window.

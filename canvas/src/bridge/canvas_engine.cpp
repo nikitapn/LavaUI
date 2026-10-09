@@ -413,6 +413,13 @@ bool Engine::opaqueBounds(uint32_t windowId, float &x, float &y, float &w,
     [&](Application &app) { return app.opaqueBounds(windowId, x, y, w, h); });
 }
 
+bool Engine::takeFrameDamage(uint32_t windowId,
+                             std::vector<canvas::DamageRect> &out)
+{
+  return impl_->withApp(
+    [&](Application &app) { return app.takeFrameDamage(windowId, out); });
+}
+
 void Engine::readPixels(uint8_t *dst, size_t dstSize)
 {
   impl_->withApp([&](Application &app) { app.readPixels(dst, dstSize); });

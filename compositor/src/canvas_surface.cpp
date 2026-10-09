@@ -566,6 +566,10 @@ bool CanvasSurface::opaqueBounds(float &x, float &y, float &w,
   return renderer_.engine().opaqueBounds(windowId_, x, y, w, h);
 }
 
+bool CanvasSurface::takeDamage(std::vector<canvas::DamageRect> &out) {
+  return renderer_.engine().takeFrameDamage(windowId_, out);
+}
+
 void CanvasSurface::pointerMove(float x, float y) {
   renderer_.engine().pointerMove(x, y, windowId_);
 }

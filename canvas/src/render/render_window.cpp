@@ -1370,9 +1370,27 @@ void RenderWindow::setExportTarget(canvas::DmabufImage *target)
   // Anything still running was recorded against the old destination.
   waitForAllFrames();
   exportTarget_ = target;
+  // A new buffer holds none of what the last frame drew.
+  damage_.invalidate();
   // Which image the frame lands in has just changed, and with it whether this
   // window owns one at all.
   syncResolveTarget();
+}
+
+bool RenderWindow::takeDamage(std::vector<canvas::DamageRect> &out)
+{
+  // The escape hatch, and the A/B: every frame damaged whole, as before.
+  static const bool fullDamage = [] {
+    const char *v = std::getenv("LAVA_FULL_DAMAGE");
+    return v != nullptr && *v != '\0' && std::strcmp(v, "0") != 0;
+  }();
+  if (windowed_ || exportTarget_ == nullptr || fullDamage) {
+    out.clear();
+    damage_.take(out);  // still drain it, so turning the hatch on is clean
+    out.clear();
+    return false;
+  }
+  return damage_.take(out);
 }
 
 int RenderWindow::takeFrameFence()
@@ -1468,6 +1486,7 @@ void RenderWindow::replayDrawList(const canvas::DrawList &list, float viewW,
   // Cleared per replay, not carried: a claim is about the frame that made it,
   // and a producer that stops sending one is saying it is no longer opaque.
   opaqueX_ = opaqueY_ = opaqueW_ = opaqueH_ = 0.f;
+  sampledLiveSurface_ = false;
   // Pin the complete submitted working set before resolving any view. This is
   // per window: another window may advance its cache while this one simply
   // replays the retained frame it already owns.
@@ -1478,6 +1497,7 @@ void RenderWindow::replayDrawList(const canvas::DrawList &list, float viewW,
     if (kind == canvas::DrawCommandKind::Image && command.param != 0)
       textureIds.insert(command.param);
     else if (kind == canvas::DrawCommandKind::ImageSurface && command.param != 0) {
+      sampledLiveSurface_ = true;
       const uint32_t maxSide =
         command.aux > 0.f ? static_cast<uint32_t>(command.aux) : 0u;
       if (const int id = TextureManager::getInstance().resolveSurfaceTexture(
@@ -1487,6 +1507,7 @@ void RenderWindow::replayDrawList(const canvas::DrawList &list, float viewW,
       }
     } else if (kind == canvas::DrawCommandKind::SpatialTriangles) {
       if (command.y == 1.f) {
+        sampledLiveSurface_ = true;
         const uint32_t surfaceId = textureIdFromFloat(command.x);
         const uint32_t maxSide =
           command.aux > 0.f ? static_cast<uint32_t>(command.aux) : 0u;
@@ -2586,6 +2607,17 @@ void RenderWindow::render(const canvas::DrawList &list)
   quads_.setReplayCpuUs(static_cast<uint64_t>(
     std::chrono::duration_cast<std::chrono::microseconds>(
       std::chrono::steady_clock::now() - replayStart).count()));
+
+  // Only a frame somebody composites partially is worth the tally. Counted
+  // before the submit, and kept if the submit throws: the next frame is then
+  // compared against one that never reached the buffer, and the difference
+  // between the two is still in what is pending.
+  if (!windowed_ && exportTarget_ != nullptr) {
+    damage_.begin(ext.width, ext.height);
+    if (anyBlur || sampledLiveSurface_) damage_.markAll();
+    else quads_.accumulateDamage(damage_);
+    damage_.end();
+  }
 
   submitFrame(
     [&](VkCommandBuffer commandBuffer, u32 /*imageIndex*/) {

@@ -146,7 +146,18 @@ class RenderWindow {
   ///
   /// Off by default: a window that presents to a swapchain, or that is read
   /// back as a PNG, wants a background rather than a hole.
-  void setTransparent(bool transparent) { transparent_ = transparent; }
+  void setTransparent(bool transparent)
+  {
+    if (transparent != transparent_) damage_.invalidate();
+    transparent_ = transparent;
+  }
+
+  /// What changed in this window's exported frames since the last call, in
+  /// window pixels. False means all of it. See `canvas::FrameDamage`.
+  ///
+  /// Only an exported window keeps the tally — a swapchain presents whole
+  /// frames, and nobody else asks — so anything else always answers false.
+  bool takeDamage(std::vector<canvas::DamageRect> &out);
 
   /// Whole-window camera applied at draw time (layout pixels → screen).
   /// Per window: two views of the same document can sit at different zooms.
@@ -652,6 +663,12 @@ class RenderWindow {
   uint32_t    ownerId_  = 0;
   /// See `setTransparent`.
   bool        transparent_ = false;
+
+  /// Per-tile tally of what each exported frame submitted. See `takeDamage`.
+  canvas::FrameDamage damage_;
+  /// Set by replay when the frame samples another surface's live buffer,
+  /// whose pixels change without anything in this list changing.
+  bool        sampledLiveSurface_ = false;
 
   /// Where frames go when this window is neither presenting nor being read
   /// back on the CPU. Borrowed; see `setExportTarget`.

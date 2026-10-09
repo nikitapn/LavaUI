@@ -20,6 +20,7 @@ canvas_engine_sources = files(
   'src/render/imported_dmabuf.cpp',
   'src/render/font.cpp',
   'src/render/font_key.cpp',
+  'src/render/frame_damage.cpp',
   'src/render/gpu_ledger.cpp',
   'src/render/gpu_report.cpp',
   'src/render/image_atlas.cpp',
@@ -131,3 +132,11 @@ raw_preview_test = executable(
   build_by_default: false,
 )
 test('raw preview', raw_preview_test)
+
+frame_damage_test = executable(
+  'frame_damage_test',
+  ['tests/frame_damage_test.cpp', 'src/render/frame_damage.cpp'],
+  include_directories: canvas_includes,
+  build_by_default: false,
+)
+test('frame damage', frame_damage_test)

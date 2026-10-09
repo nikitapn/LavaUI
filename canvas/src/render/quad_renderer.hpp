@@ -29,6 +29,7 @@
 
 #include "render/vulkan_ptr.hpp"
 #include "render/draw_command.hpp"
+#include "render/frame_damage.hpp"
 #include "util/types.hpp"
 
 class RenderDevice;
@@ -363,6 +364,13 @@ class QuadRenderer {
   /// `intoSceneTarget` picks the pipeline built for the content-blur pass.
   void drawSegment(VkCommandBuffer commandBuffer, uint32_t segmentIndex,
                    bool intoSceneTarget = false);
+
+  /// Folds everything this frame submitted into `damage`, tile by tile, after
+  /// `end()`. Each quad, mesh and line counts with its scissor, its pipeline
+  /// and the texture it samples — by view, since the slot index is only this
+  /// frame's numbering. Anything whose pixels cannot be told from its inputs
+  /// (a blur composite, a depth-tested scene) damages the whole frame.
+  void accumulateDamage(canvas::FrameDamage &damage) const;
 
   size_t quadCount() const { return instances_.size() + vertices_.size() / 4; }
   size_t batchCount() const { return batches_.size(); }

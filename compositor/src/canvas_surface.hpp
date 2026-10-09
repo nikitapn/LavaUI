@@ -356,6 +356,12 @@ class CanvasSurface {
   /// See `DrawCommandKind::OpaqueBounds`.
   bool opaqueBounds(float &x, float &y, float &w, float &h) const;
 
+  /// What changed in this surface's buffer since the last call, in surface
+  /// pixels, or false for all of it. Draining: each change is reported once,
+  /// so the caller has to hand every answer to the scene.
+  /// See `Engine::takeFrameDamage`.
+  bool takeDamage(std::vector<canvas::DamageRect> &out);
+
  private:
   /// Content-blur pass over an already-uploaded texture. Shared by the
   /// CPU and dma-buf frost paths.

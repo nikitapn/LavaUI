@@ -8,6 +8,7 @@
 #include "../render/draw_command.hpp"
 #include "../render/exif.hpp"
 #include "../render/export_format.hpp"
+#include "../render/frame_damage.hpp"
 
 #include <cstdint>
 #include <cstring>
@@ -280,6 +281,16 @@ class Engine {
   /// see `DrawCommandKind::OpaqueBounds`.
   bool opaqueBounds(uint32_t windowId, float &x, float &y, float &w,
                     float &h) const;
+
+  /// The part of this window that changed since the last call, in window
+  /// pixels: every exported frame drawn in between, unioned. False means all
+  /// of it — the first frame, a resize, a blur, or a frame whose pixels
+  /// depend on something its draw list cannot show. True with nothing in
+  /// `out` means no pixel changed.
+  ///
+  /// What a compositor hands its scene as damage instead of the whole buffer,
+  /// so a blinking caret recomposites a caret. See `canvas::FrameDamage`.
+  bool takeFrameDamage(uint32_t windowId, std::vector<canvas::DamageRect> &out);
   void readPixels(uint8_t *dst, size_t dstSize);
 
   /// Agent/automation: capture resolve as PNG (base64). Empty on failure.

@@ -803,6 +803,15 @@ bool Application::opaqueBounds(uint32_t windowId, float &x, float &y, float &w,
   return win->renderWindow().opaqueBounds(x, y, w, h);
 }
 
+bool Application::takeFrameDamage(uint32_t windowId,
+                                  std::vector<canvas::DamageRect> &out)
+{
+  out.clear();
+  AppWindow *win = impl_->win(windowId);
+  if (win == nullptr || !win->hasRenderer()) return false;
+  return win->renderWindow().takeDamage(out);
+}
+
 uint32_t Application::windowIdAt(size_t index) const
 {
   if (index >= impl_->windows.size()) return 0;
