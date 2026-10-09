@@ -139,18 +139,14 @@ public enum LavaApp {
             // Agent wake posts an empty GLFW event, so we can still block
             // forever when idle (zero CPU) and still answer TCP immediately.
             //
-            // Exception: DBusMenu. The panel issues synchronous D-Bus calls
-            // (GetLayout / AboutToShow) on the session bus; those only complete
-            // when we iterate GLib. Blocking forever in glfwWaitEvents with no
-            // other wake source freezes the whole panel/session. Cap the wait
-            // and pump GLib on both sides of the wait.
+            // DBusMenu included: the panel's synchronous calls (GetLayout /
+            // AboutToShow) only complete when GLib is iterated, and a loop
+            // blocked forever with nothing to wake it froze the panel. It used
+            // to cap this wait at 20 ms; `GLibPump` now wakes it through
+            // `MainQueue` when a call actually arrives.
             var wake = FrameScheduler.timeoutUntilNextWake()
             if MainQueue.hasPending || ViewInvalidation.isDirty || FrameTasks.hasPending {
                 wake = 0
-            }
-            if main.menuHost?.needsDBusPump == true {
-                let cap = MenuHost.dbusPumpInterval
-                if wake < 0 || wake > cap { wake = cap }
             }
             // Clear any D-Bus work already queued before parking in GLFW.
             main.menuHost?.poll()

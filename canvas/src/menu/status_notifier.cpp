@@ -875,6 +875,10 @@ void StatusNotifierHost::poll()
   impl_->flushPendingRefreshes();
   while (g_main_context_iteration(nullptr, FALSE)) {
   }
+  // And whatever this iteration marked. The next poll used to be 50 ms away
+  // whatever happened; now it is whenever the bus next says something, which
+  // for a quiet applet that just changed its icon may be never.
+  impl_->flushPendingRefreshes();
   // The open menu rides the same GLib context, but the importer keeps its own
   // dirty flag and only rebuilds its flattened items when told to look.
   if (impl_->menuStarted) impl_->menu.poll();

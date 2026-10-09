@@ -698,6 +698,11 @@ final class MenuSession {
                 let width = size.w > 1 ? size.w : 1920
                 editor.setClientSize(width: width, height: height)
             }
+            // A first toast grows the surface to an estimate, because there is
+            // no stack to measure until it has been laid out at a size it fits
+            // in. Measure again once it has: this used to fall out of the next
+            // D-Bus poll 50 ms later, and the poll no longer runs unasked.
+            FrameTasks.after { [self] in syncSurface() }
         }
         syncInputRegion()
     }
@@ -1205,24 +1210,21 @@ Thread.detachNewThread {
 }
 
 // DBus has no frame clock of its own, and the traffic goes both ways: this is
-// what answers an application's `GetLayout` as much as what collects it. 20 Hz
-// because a menu appearing 50ms after the application published it is
-// imperceptible, and because a panel that iterated GLib per frame would be
-// doing it 60 times a second to find nothing. Same loop pumps the tray
-// watcher — one GLib context for both.
-Thread.detachNewThread {
-    while true {
-        MainQueue.async {
-            session.poll()
-            // Notifications ride the same context, and they need it for more
-            // than delivery: an expiry is a clock nobody else is watching, so
-            // a stack that stopped being polled would stay on screen forever.
-            if notifications?.poll() == true {
-                session.setToasts(notifications?.toasts ?? [])
-            }
-        }
-        Thread.sleep(forTimeInterval: 0.05)
+// what answers an application's `GetLayout` as much as what collects it. It
+// used to run from a 50 ms timer, twenty wakeups a second to find nothing;
+// `GLibPump` runs it when the bus actually delivers something. Same pump for
+// the tray watcher — one GLib context for both.
+GLibPump.add {
+    session.poll()
+    // Notifications ride the same context, and they need it for more than
+    // delivery: an expiry is a clock nobody else is watching, so a stack that
+    // stopped being polled would stay on screen forever. That is why this
+    // says when it next has to run — the pump sleeps until then if nothing
+    // else arrives.
+    if notifications?.poll() == true {
+        session.setToasts(notifications?.toasts ?? [])
     }
+    return notifications?.nextExpiryMs
 }
 
 // Before any menu is opened. The compositor refuses `OpenMenu` for a

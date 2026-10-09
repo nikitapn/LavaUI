@@ -1,4 +1,5 @@
 #include "menu/menu_import.hpp"
+#include "menu/glib_wait.hpp"
 
 #include <algorithm>
 #include <cstdlib>
@@ -1464,6 +1465,11 @@ void MenuImportHost::setActiveWindow(uint32_t windowId,
   impl_->activeService = std::move(menuService);
   impl_->activePath = std::move(menuObjectPath);
   impl_->openClient();
+  // Called from the frame loop, not from GLib: the bar has to be rebuilt —
+  // emptied, at least, when the window that took focus has no menu — and
+  // that happens in `poll`, which runs when GLib wakes the panel. Without a
+  // wake it would wait for the next unrelated D-Bus message.
+  canvas::wakeGLibWaiter();
 }
 
 uint32_t MenuImportHost::activeWindow() const { return impl_->active; }

@@ -46,6 +46,13 @@ public final class MenuHost {
             FileHandle.standardError.write(
                 Data("LavaUI: menubar backend = dbusMenu (global panel)\n".utf8)
             )
+            // The panel's GetLayout / AboutToShow / Event calls wake the loop
+            // through this, rather than the loop waking every 20 ms in case
+            // one came.
+            GLibPump.add { [weak self] in
+                self?.poll()
+                return nil
+            }
         } else {
             FileHandle.standardError.write(
                 Data("LavaUI: menubar backend = vulkan (in-window)\n".utf8)
@@ -59,12 +66,10 @@ public final class MenuHost {
     }
 
     /// DBusMenu replies (GetLayout / AboutToShow / Event) only run when the
-    /// GLib main context is iterated. The panel blocks on those calls — if we
-    /// sit forever in `glfwWaitEvents` without pumping GLib, XFCE freezes.
+    /// GLib main context is iterated. The panel blocks on those calls — an app
+    /// that sat in `glfwWaitEvents` without anything to wake it for them froze
+    /// XFCE. `GLibPump` is what wakes it now.
     public var needsDBusPump: Bool { backend == .dbusMenu }
-
-    /// Cap for `pumpEvents` idle wait while a global menu is exported (seconds).
-    public static let dbusPumpInterval: Double = 0.02
 
     /// Rebuild IR from a menubar description. Pushes to DBus when that backend
     /// is active. Returns whether the platform-facing model changed.

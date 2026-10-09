@@ -585,6 +585,13 @@ class Engine {
   bool notificationsIsServing() const;
   /// Pumps the bus *and* retires whatever expired. Every frame.
   void notificationsPoll();
+  /// Milliseconds until the next toast runs out, or -1 if none is counting
+  /// down (none shown, all persistent, or the stack is paused).
+  int64_t notificationsNextExpiryMs() const;
+
+  /// See `canvas::waitForGLibEvents`. Static: GLib's default context is the
+  /// process's, not an engine's, and the thread that waits has no engine.
+  static bool waitForGLibEvents(int64_t timeoutMs);
   uint64_t notificationsRevision() const;
   size_t notificationsCount() const;
   uint32_t notificationId(size_t index) const;

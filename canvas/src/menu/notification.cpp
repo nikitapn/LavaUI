@@ -1,4 +1,5 @@
 #include "menu/notification.hpp"
+#include "menu/glib_wait.hpp"
 
 #include <algorithm>
 #include <cstring>
@@ -501,6 +502,19 @@ void NotificationHost::poll()
   impl_->expire();
 }
 
+int64_t NotificationHost::nextExpiryMs() const
+{
+  if (!impl_->owned || impl_->paused) return -1;
+  const int64_t now = nowMs();
+  int64_t next = -1;
+  for (const auto &item : impl_->items) {
+    if (item.expiresAt == 0) continue;
+    const int64_t left = std::max<int64_t>(0, item.expiresAt - now);
+    if (next < 0 || left < next) next = left;
+  }
+  return next;
+}
+
 uint64_t NotificationHost::revision() const { return impl_->revision; }
 
 size_t NotificationHost::count() const { return impl_->items.size(); }
@@ -601,11 +615,15 @@ void NotificationHost::invokeAction(uint32_t id, const std::string &key)
   // Then gone. A sender that wants it to stay says so by sending it again,
   // and every other daemon behaves this way.
   impl_->close(id, NotificationHost::CloseReason::Dismissed);
+  // These three are clicks, not bus traffic: the stack is re-read in the
+  // panel's poll, which runs when GLib wakes it, and nothing here does.
+  wakeGLibWaiter();
 }
 
 void NotificationHost::dismiss(uint32_t id)
 {
   impl_->close(id, CloseReason::Dismissed);
+  wakeGLibWaiter();
 }
 
 void NotificationHost::dismissAll()
@@ -614,6 +632,7 @@ void NotificationHost::dismissAll()
   ids.reserve(impl_->items.size());
   for (const auto &item : impl_->items) ids.push_back(item.id);
   for (uint32_t id : ids) impl_->close(id, CloseReason::Dismissed);
+  wakeGLibWaiter();
 }
 
 void NotificationHost::setPaused(bool paused)
@@ -629,6 +648,9 @@ void NotificationHost::setPaused(bool paused)
       item.expiresAt = now + item.remainingWhenPaused;
     }
   }
+  // The panel sleeps until the next expiry it was told about, and while
+  // paused there was none. Resuming sets new ones; wake it to hear them.
+  if (!paused) wakeGLibWaiter();
 }
 
 bool NotificationHost::isPaused() const { return impl_->paused; }
@@ -643,6 +665,7 @@ NotificationHost::~NotificationHost() = default;
 bool NotificationHost::start() { return false; }
 bool NotificationHost::isServing() const { return false; }
 void NotificationHost::poll() {}
+int64_t NotificationHost::nextExpiryMs() const { return -1; }
 uint64_t NotificationHost::revision() const { return 0; }
 size_t NotificationHost::count() const { return 0; }
 uint32_t NotificationHost::id(size_t) const { return 0; }

@@ -883,6 +883,8 @@ public final class Editor: @unchecked Sendable {
 
     /// Pumps the notification bus and retires expired notifications. Call every frame.
     public func notificationsPoll() { engine.notificationsPoll() }
+    /// See `Engine::notificationsNextExpiryMs`.
+    public var notificationsNextExpiryMs: Int64 { engine.notificationsNextExpiryMs() }
 
     /// Changes whenever the set of notifications or any of their contents does.
     public var notificationsRevision: UInt64 { engine.notificationsRevision() }

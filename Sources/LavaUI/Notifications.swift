@@ -98,6 +98,14 @@ public final class Notifications {
         return true
     }
 
+    /// Milliseconds until `poll` next has a toast to retire, or nil if none is
+    /// counting down. What a pump that sleeps between polls sleeps for.
+    public var nextExpiryMs: Int64? {
+        guard isServing else { return nil }
+        let ms = editor.notificationsNextExpiryMs
+        return ms < 0 ? nil : ms
+    }
+
     /// A click on the body: the `default` action if the sender offered one,
     /// and otherwise just gone.
     public func activate(_ toast: Toast) {

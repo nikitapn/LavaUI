@@ -1,4 +1,5 @@
 #include "bridge/canvas_engine.hpp"
+#include "menu/glib_wait.hpp"
 
 #include <stb_image.h>
 #include <stb_image_resize2.h>
@@ -1179,6 +1180,16 @@ bool Engine::notificationsIsServing() const
 }
 
 void Engine::notificationsPoll() { impl_->notifications.poll(); }
+
+int64_t Engine::notificationsNextExpiryMs() const
+{
+  return impl_->notifications.nextExpiryMs();
+}
+
+bool Engine::waitForGLibEvents(int64_t timeoutMs)
+{
+  return canvas::waitForGLibEvents(timeoutMs);
+}
 
 uint64_t Engine::notificationsRevision() const
 {

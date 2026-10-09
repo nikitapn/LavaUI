@@ -66,6 +66,11 @@ public:
   /// notification that outstays it is the most visible bug this can have.
   void poll();
 
+  /// Milliseconds until `poll` next has something to retire, or -1 if
+  /// nothing is counting down. What a caller that sleeps between polls
+  /// sleeps for.
+  int64_t nextExpiryMs() const;
+
   /// Bumped when the list changes in any way a panel would redraw for.
   uint64_t revision() const;
 

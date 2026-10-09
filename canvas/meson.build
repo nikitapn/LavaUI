@@ -11,6 +11,7 @@ canvas_engine_sources = files(
   'src/bridge/canvas_engine.cpp',
   'src/ipc/draw_arena.cpp',
   'src/menu/app_menu.cpp',
+  'src/menu/glib_wait.cpp',
   'src/menu/menu_import.cpp',
   'src/menu/notification.cpp',
   'src/menu/status_notifier.cpp',
