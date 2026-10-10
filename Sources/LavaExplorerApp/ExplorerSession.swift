@@ -83,12 +83,31 @@ final class ExplorerSession: @unchecked Sendable {
         }
         if !paths.isEmpty { tabs.select(id: 1) }
         self.layout = PaneLayout(tabs: tabs)
+        thumbnails.onChange = { [weak self] in
+            self?.thumbnailRevision &+= 1
+            ViewInvalidation.markDirty()
+        }
         if watchFolders {
             watcher = FolderWatcher { [weak self] changed in
                 MainQueue.async { [weak self] in self?.foldersChanged(changed) }
             }
             syncWatches()
         }
+    }
+
+    // MARK: - Thumbnails
+
+    /// Made on workers and kept in the shared cache; see `ThumbnailLoader`.
+    @ObservationIgnored let thumbnails = ThumbnailLoader()
+    /// Bumped when thumbnails arrive, so the rows that asked draw again.
+    var thumbnailRevision = 0
+
+    /// What a row draws in place of its glyph, or nil for the glyph. The
+    /// first ask queues the work.
+    func thumbnail(for entry: FileEntry) -> String? {
+        if ThumbnailCache.drawsItself(entry) { return entry.path }
+        _ = thumbnailRevision
+        return thumbnails.path(for: entry)
     }
 
     // MARK: - Watching
@@ -101,7 +120,6 @@ final class ExplorerSession: @unchecked Sendable {
     /// Trash is its home `files` folder, where everything thrown away from
     /// the home drive goes; a trash on another drive is not watched.
     private func syncWatches() {
-        guard let watcher else { return }
         var folders = Set<String>()
         for pane in layout.panes {
             for tab in pane.tabs.tabs {
@@ -113,7 +131,9 @@ final class ExplorerSession: @unchecked Sendable {
                 }
             }
         }
-        watcher.watch(folders)
+        watcher?.watch(folders)
+        // The same set is what thumbnails are still wanted for.
+        thumbnails.retain(folders: folders)
     }
 
     /// Reloads every tab on a folder that changed. A reload keeps the

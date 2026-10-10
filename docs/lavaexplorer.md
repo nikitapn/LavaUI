@@ -45,6 +45,22 @@ LAVA_CLIENT=1 swift run LavaExplorer -- ~/Pictures
   it as it was. A name something else already has is refused, never
   replaced. Ctrl+Z renames it back, unless something has since taken the
   old name. Not in the Trash: restore it first.
+- **Thumbnails.** A picture's row shows the picture. Thumbnails come from
+  the freedesktop cache (`~/.cache/thumbnails`) shared with every other file
+  manager — so a folder GNOME already browsed has them at once — and what is
+  missing is made by `ThumbnailLoader` on a few workers in this process,
+  newest request first, and written back for everybody (`ThumbnailCache`:
+  MD5 of the URI escaped as GLib escapes it, `Thumb::URI` and
+  `Thumb::MTime` in the PNG, matched against all 1,842 thumbnails GNOME had
+  written on the machine this was built on). A picture that will not decode
+  is recorded under `fail/lava-explorer` and not tried again until it
+  changes. The compositor is given the 128-pixel PNG, never the photograph.
+  Each is shown through a link named after the picture's version
+  (`$XDG_RUNTIME_DIR/lava-thumbnails`), because every image cache on the way
+  to the screen keys on the path it is given: a photo edited while its folder
+  is open gets a new name, and so a new thumbnail. SVG is drawn from the file
+  instead — sharper at 22 px than any thumbnail, and the only place it can
+  be rasterised is the compositor, the one build that links librsvg.
 - **Folders that keep up by themselves.** Every folder on screen, in any
   tab or pane, is watched with inotify (`FolderWatcher`), and a change on
   disk — a download finishing, another program saving, a terminal's `rm` —
@@ -212,8 +228,8 @@ file.
   through `FileEraser`, which only the confirmed paths reach.
 - **Rubber-band selection.** Rows are picked with the keyboard and
   Ctrl/Shift+click; dragging on empty space does not draw a box yet.
-- **Thumbnails.** The list is glyphs. Icon view with `ImageStore` is the
-  next visual step, not this one.
+- **An icon view.** Thumbnails are in the list, at 22 px; a grid of large
+  ones is the next step, on the same loader and the same cache.
 - **A second window.** One surface per process; navigate in place.
 - **Browsing inside an archive.** It is extracted or it is not; there is no
   looking around in one first.

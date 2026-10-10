@@ -923,7 +923,7 @@ private struct NewFolderRow: View {
             spacing: FileListMetrics.gap
         ) {
             Text("▣", color: theme.accent)
-                .frame(width: .pt(18))
+                .frame(width: .pt(FileListMetrics.iconSize))
             TextField(
                 text: session.newFolderName,
                 autoFocus: true,
@@ -948,6 +948,8 @@ enum FileListMetrics {
     /// row's place in it be worked out from its index.
     static let rowHeight: Float = 28
     static let sidePadding: Float = 4
+    /// The glyph's column, and the box a thumbnail is fitted into.
+    static let iconSize: Float = 22
     static let gap: Float = 8
 }
 
@@ -1005,11 +1007,20 @@ private struct FileRow: View {
                 )
             }
         ) {
-            Text(
-                entry.isDirectory ? "▣" : "▤",
-                color: entry.isDirectory ? theme.accent : theme.textDim
-            )
-            .frame(width: .pt(18))
+            if let thumbnail = session.thumbnail(for: entry) {
+                Image(
+                    path: thumbnail,
+                    width: .pt(FileListMetrics.iconSize),
+                    height: .pt(FileListMetrics.iconSize),
+                    contentMode: .fit
+                )
+            } else {
+                Text(
+                    entry.isDirectory ? "▣" : "▤",
+                    color: entry.isDirectory ? theme.accent : theme.textDim
+                )
+                .frame(width: .pt(FileListMetrics.iconSize))
+            }
             if let draft = session.renameDraft, draft.path == entry.path,
                draft.tabID == tabID
             {
