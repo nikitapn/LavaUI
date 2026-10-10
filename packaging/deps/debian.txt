@@ -64,8 +64,6 @@ xwayland
 # ── NPRPC (shared-memory control plane; no QUIC/HTTP3) ─────────────────────
 libboost-dev
 libboost-program-options-dev
-libssl-dev
-liburing-dev
 
 # ── apps ───────────────────────────────────────────────────────────────────
 libpulse-dev

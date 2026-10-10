@@ -48,10 +48,6 @@ wayland-protocols
 xcb-util-wm
 xorg-xwayland
 
-# ── NPRPC ──────────────────────────────────────────────────────────────────
-liburing
-openssl
-
 # ── apps ───────────────────────────────────────────────────────────────────
 libpulse
 libarchive

@@ -42,7 +42,7 @@ They cover four groups, not just the engine:
 
 - **canvas / LavaUI** — Vulkan, GLFW, FreeType, HarfBuzz, GLM, GLib, libdbusmenu-glib, librsvg, cairo, X11, libdrm, Boost.Stacktrace
 - **compositor** — wlroots 0.19, wayland, xkbcommon, pixman, libseat, libinput, libdisplay-info, libliftoff, libsystemd, seatd, Xwayland
-- **NPRPC** — Boost headers + program_options, OpenSSL, liburing
+- **NPRPC** — Boost headers + program_options
 - **apps** — libpulse (panel volume)
 
 Software Vulkan (`mesa-vulkan-drivers` / `vulkan-swrast`) is installed so Docker and VMs have lavapipe. A real machine still needs its vendor ICD (`vulkan-radeon`, `nvidia-utils`, `vulkan-intel`).
