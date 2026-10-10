@@ -240,7 +240,7 @@ var targets: [Target] = [
     // rather than asking it questions. See Sources/LavaSettings/main.swift.
     .executableTarget(
         name: "LavaSettings",
-        dependencies: ["LavaUI"]
+        dependencies: ["LavaUI", "LavaFindCore"]
             + (haveNprpc ? [Target.Dependency("LavaClient"),
                             Target.Dependency("LavaIDL")] : []),
         swiftSettings: interopCxx

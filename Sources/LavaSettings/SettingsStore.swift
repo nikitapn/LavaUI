@@ -12,6 +12,7 @@ enum SettingsSection: String, CaseIterable, Sendable {
     case keyboard
     case display
     case lock
+    case search
 
     var title: String {
         switch self {
@@ -20,6 +21,7 @@ enum SettingsSection: String, CaseIterable, Sendable {
         case .keyboard: return "Keyboard"
         case .display: return "Display"
         case .lock: return "Lock & Screen"
+        case .search: return "Search"
         }
     }
 
@@ -32,6 +34,7 @@ enum SettingsSection: String, CaseIterable, Sendable {
         case .keyboard: return "Layout, repeat, shortcuts"
         case .display: return "Screens, arrangement, primary"
         case .lock: return "Lock, screens off, suspend"
+        case .search: return "Where LavaFind looks"
         }
     }
 }

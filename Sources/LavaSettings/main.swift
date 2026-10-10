@@ -31,7 +31,7 @@ import LavaUI
 WindowBackdrop.current = .theme
 
 guard let editor = LavaClient.open(
-    title: "Settings", width: 900, height: 640, frame: .client
+    title: "Settings", width: 900, height: 700, frame: .client
 ) else { exit(1) }
 
 let store = SettingsStore()
@@ -39,6 +39,9 @@ let store = SettingsStore()
 // frame already has the desktop's real values in it rather than the defaults
 // this process happened to start with.
 store.loadCore()
+// The index is another daemon, asked separately; its page works (as a file
+// editor) even when that daemon is not running.
+indexSettings.load()
 
 LavaClient.run(editor: editor) { SettingsWindow(store: store) }
 

@@ -51,13 +51,17 @@ struct SettingsSidebar: View {
             .frame(height: .pt(40))
             .windowChrome()
 
-            VStack(padding: 10, spacing: 3) {
-                ForEach(SettingsSection.allCases, id: \.self) { section in
-                    SidebarRow(section: section, store: store)
+            // Scrolls, because six pages with two-line subtitles are taller
+            // than the window can be made, and the compositor reopens it at
+            // whatever size it was last left — so no opening size settles it.
+            ScrollView(indicatorInset: 6) {
+                VStack(padding: 10, spacing: 3) {
+                    ForEach(SettingsSection.allCases, id: \.self) { section in
+                        SidebarRow(section: section, store: store)
+                    }
                 }
             }
-
-            Spacer()
+            .flexGrow(1)
         }
         .background(Theme.current.panel)
     }
@@ -159,6 +163,8 @@ struct SettingsContent: View {
                     DisplayPage(store: store)
                 case .lock:
                     LockPage(store: store)
+                case .search:
+                    SearchPage(store: store)
                 }
 
                 Spacer()
@@ -176,8 +182,11 @@ struct StatusBar: View {
         let message = store.status
         return HStack(padding: 12, alignment: .center, spacing: 8) {
             Text(
-                message.isEmpty ? "Changes apply immediately and are saved to lava.conf."
-                                : message,
+                message.isEmpty
+                    ? (store.section == .search
+                        ? "Changes apply immediately and are saved to index.conf."
+                        : "Changes apply immediately and are saved to lava.conf.")
+                    : message,
                 color: message.isEmpty
                     ? Theme.current.textDim
                     : (store.statusIsError ? Theme.current.accent

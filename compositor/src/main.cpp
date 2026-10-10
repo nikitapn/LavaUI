@@ -2725,6 +2725,18 @@ class SurfaceRegistry : public lava::CompositorHost {
     return nullptr;
   }
 
+  /// The application's window, brought to this workspace and activated:
+  /// what a key that opens a *single-window* app should do the second time
+  /// it is pressed. Brought here rather than followed, because the key is a
+  /// request for the app on the screen being looked at. False when the app
+  /// has no window, which is the caller's cue to start it.
+  bool bringAppHere(const std::string &appId) {
+    ClientSurface *surface = findByAppId(appId);
+    if (surface == nullptr || surface->panel || surface->furniture()) return false;
+    if (workspaces_ != nullptr) moveToWorkspace(*surface, workspaces_->current);
+    return activateWindow(surface->id);
+  }
+
   ClientSurface *findByAppId(const std::string &appId) {
     if (appId.empty()) return nullptr;
     for (auto &s : surfaces_) {
@@ -9814,6 +9826,16 @@ void launch_find() {
   launch_program(program.c_str(), argv);
 }
 
+/// Settings: brought forward if it is already open — one settings window is
+/// the only sensible number — and started otherwise.
+void open_settings(Server *server) {
+  if (server->surfaces != nullptr && server->surfaces->bringAppHere("LavaSettings")) return;
+  const std::string path = lava::ShellSupervisor::programPath("LavaSettings");
+  std::string program = path;
+  char *argv[] = {program.data(), nullptr};
+  launch_program(program.c_str(), argv);
+}
+
 /// The 3D app switcher. Spawned per invocation like the launcher: a LavaUI
 /// client is on screen in ~200 ms, and holding one resident for the time
 /// nobody is switching would be an arena and a surface for nothing.
@@ -9896,6 +9918,7 @@ enum class BindingAction : uint8_t {
   Quit,
   AppLauncher,
   FileSearch,
+  Settings,
   AppSwitcher,
   AppSwitcherBack,
   StackCycle,
@@ -9965,6 +9988,9 @@ constexpr BindingSpec kBindings[] = {
     // that has one, and nothing here used it. Not F: that is fullscreen.
     {BindingAction::FileSearch, XKB_KEY_space, XKB_KEY_space, false, false,
      true, "Space", "files.find", "Searches files by name"},
+    // Plain S; Mod+Shift+S is the region capture below.
+    {BindingAction::Settings, XKB_KEY_s, XKB_KEY_s, false, false, true, "S",
+     "settings.open", "Opens Settings, or brings it forward"},
     {BindingAction::AppSwitcher, XKB_KEY_Tab, XKB_KEY_Tab, false, true, false,
      "Tab", "window.switch", "Cycles open windows"},
     {BindingAction::AppSwitcherBack, XKB_KEY_Tab, XKB_KEY_Tab, true, true, false,
@@ -10138,6 +10164,10 @@ bool perform_binding(Server *server, const BindingSpec &spec,
 
   case BindingAction::FileSearch:
     launch_find();
+    return true;
+
+  case BindingAction::Settings:
+    open_settings(server);
     return true;
 
   case BindingAction::AppSwitcher:
