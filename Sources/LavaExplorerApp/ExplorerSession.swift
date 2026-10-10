@@ -22,7 +22,11 @@ import Observation
 /// `MainQueue.async`.
 @Observable
 final class ExplorerSession: @unchecked Sendable {
-    var layout: PaneLayout
+    /// Every change to which folders are on screen passes through here, which
+    /// makes it the one place the watcher can be kept in step with them.
+    var layout: PaneLayout {
+        didSet { syncWatches() }
+    }
     var notice: String?
     var sidebarFraction: Float = 0.22
     /// Right-clicked row, and the pane it was in. Nil closes the overlay; the
@@ -55,7 +59,8 @@ final class ExplorerSession: @unchecked Sendable {
         openFile: @escaping (String) -> Bool = OpenLocation.file,
         places: [Place]? = nil,
         trash: TrashCan = TrashCan(),
-        chooser: ChooserRequest? = nil
+        chooser: ChooserRequest? = nil,
+        watchFolders: Bool = true
     ) {
         let filter = FilteredSource.Filter(chooser?.filters.first)
         let source = TrashListingSource(
@@ -78,6 +83,51 @@ final class ExplorerSession: @unchecked Sendable {
         }
         if !paths.isEmpty { tabs.select(id: 1) }
         self.layout = PaneLayout(tabs: tabs)
+        if watchFolders {
+            watcher = FolderWatcher { [weak self] changed in
+                MainQueue.async { [weak self] in self?.foldersChanged(changed) }
+            }
+            syncWatches()
+        }
+    }
+
+    // MARK: - Watching
+
+    /// Tells the session when a folder on screen changes on disk; see
+    /// `FolderWatcher`. Nil when inotify is unavailable — Ctrl+R still works.
+    @ObservationIgnored private var watcher: FolderWatcher?
+
+    /// What the watcher should be watching: every folder any tab is on. The
+    /// Trash is its home `files` folder, where everything thrown away from
+    /// the home drive goes; a trash on another drive is not watched.
+    private func syncWatches() {
+        guard let watcher else { return }
+        var folders = Set<String>()
+        for pane in layout.panes {
+            for tab in pane.tabs.tabs {
+                let path = tab.listing.path
+                if TrashPath.isTrash(path) {
+                    folders.insert(trash.home.files)
+                } else if path.hasPrefix("/") {
+                    folders.insert(path)
+                }
+            }
+        }
+        watcher.watch(folders)
+    }
+
+    /// Reloads every tab on a folder that changed. A reload keeps the
+    /// selection on the rows that are still there, so a file appearing beside
+    /// the one being looked at moves nothing.
+    private func foldersChanged(_ folders: Set<String>) {
+        let source = self.source
+        for folder in folders {
+            if folder == trash.home.files {
+                layout.updateTabs(showing: TrashPath.uri) { $0.reload(from: source) }
+            }
+            layout.updateTabs(showing: folder) { $0.reload(from: source) }
+        }
+        ViewInvalidation.markDirty()
     }
 
     convenience init(

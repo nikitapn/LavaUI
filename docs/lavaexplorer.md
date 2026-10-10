@@ -45,6 +45,17 @@ LAVA_CLIENT=1 swift run LavaExplorer -- ~/Pictures
   it as it was. A name something else already has is refused, never
   replaced. Ctrl+Z renames it back, unless something has since taken the
   old name. Not in the Trash: restore it first.
+- **Folders that keep up by themselves.** Every folder on screen, in any
+  tab or pane, is watched with inotify (`FolderWatcher`), and a change on
+  disk — a download finishing, another program saving, a terminal's `rm` —
+  reloads the tabs showing it, keeping the selection on rows that are still
+  there. A burst is one reload: the report waits for 150 ms of quiet, and at
+  most a second, so a folder that never stops changing still refreshes
+  about once a second. It watches names, not sizes — no `IN_MODIFY`, which
+  fires per write — so a file being written shows its final size when it is
+  closed. The Trash tab follows the home Trash; a trash on another drive is
+  not watched. Ctrl+R is still there for anything else (a network mount,
+  where inotify hears nothing), which is why there is no refresh button.
 - **Extract Here.** Double-clicking an archive does it, as Archive Utility
   does on a Mac (Open With is still on the menu); so does the context menu
   of anything named like an archive, and the File menu for the selection. One thing at the top of the
@@ -203,7 +214,6 @@ file.
   Ctrl/Shift+click; dragging on empty space does not draw a box yet.
 - **Thumbnails.** The list is glyphs. Icon view with `ImageStore` is the
   next visual step, not this one.
-- **inotify.** Reload is a key (Ctrl+R) and a menu item.
 - **A second window.** One surface per process; navigate in place.
 - **Browsing inside an archive.** It is extracted or it is not; there is no
   looking around in one first.
