@@ -25,7 +25,10 @@ final class ExplorerSession: @unchecked Sendable {
     /// Every change to which folders are on screen passes through here, which
     /// makes it the one place the watcher can be kept in step with them.
     var layout: PaneLayout {
-        didSet { syncWatches() }
+        didSet {
+            syncWatches()
+            applyRememberedViews()
+        }
     }
     var notice: String?
     var sidebarFraction: Float = 0.22
@@ -93,6 +96,7 @@ final class ExplorerSession: @unchecked Sendable {
             }
             syncWatches()
         }
+        applyRememberedViews()
     }
 
     // MARK: - Thumbnails
@@ -114,12 +118,57 @@ final class ExplorerSession: @unchecked Sendable {
 
     var viewMode: FileViewMode { tabSet.current.viewMode }
 
-    /// List or icons, for the current tab; tabs opened from it follow.
+    /// List or icons, for the current tab; tabs opened from it follow. Also
+    /// remembered for the folder, so it opens this way again — see
+    /// `FolderViewMemory`.
     func setViewMode(_ mode: FileViewMode) {
         dismissContext()
         guard viewMode != mode else { return }
         tabSet.updateCurrent { $0.viewMode = mode }
+        rememberView(mode, for: listing.path)
         ViewInvalidation.markDirty()
+    }
+
+    private static let viewMemoryKey = "folderViews"
+    @ObservationIgnored private var viewMemory =
+        AppSettings.value(forKey: viewMemoryKey, as: FolderViewMemory.self) ?? FolderViewMemory()
+    /// The folder each tab was in when its remembered view was last looked
+    /// up, so arriving somewhere applies the memory once and switching away
+    /// from it afterwards is not undone on the next change to `layout`.
+    @ObservationIgnored private var viewAppliedAt: [Int: String] = [:]
+
+    private func rememberView(_ mode: FileViewMode, for folder: String) {
+        // Not the Trash: it is not a folder anybody chose a view for so much
+        // as a place things pass through, and its path is not on disk.
+        guard folder.hasPrefix("/") else { return }
+        viewMemory.remember(mode, for: folder)
+        AppSettings.set(viewMemory, forKey: Self.viewMemoryKey)
+    }
+
+    /// A tab that has arrived in a folder with a remembered view takes it.
+    /// Run from `layout`'s `didSet`, which every way of arriving somewhere —
+    /// a click, Back, a new tab, the address bar — passes through.
+    private func applyRememberedViews() {
+        var changes: [Int: FileViewMode] = [:]
+        for pane in layout.panes {
+            for tab in pane.tabs.tabs where viewAppliedAt[tab.id] != tab.listing.path {
+                viewAppliedAt[tab.id] = tab.listing.path
+                if let mode = viewMemory.mode(for: tab.listing.path), mode != tab.viewMode {
+                    changes[tab.id] = mode
+                }
+            }
+        }
+        guard !changes.isEmpty else { return }
+        layout.updateAllTabs { tab in
+            if let mode = changes[tab.id] { tab.viewMode = mode }
+        }
+    }
+
+    /// A moved or renamed folder keeps its view, and so do the folders in it.
+    private func rebaseRememberedViews(from old: String, to new: String) {
+        let before = viewMemory
+        viewMemory.rebase(from: old, to: new)
+        if viewMemory != before { AppSettings.set(viewMemory, forKey: Self.viewMemoryKey) }
     }
 
     /// Columns the icon view has in each pane, from its width — so Up and
@@ -1085,6 +1134,7 @@ final class ExplorerSession: @unchecked Sendable {
             let folder = (path as NSString).deletingLastPathComponent
             // A tab open inside a renamed folder follows it.
             layout.rebaseTabs(from: draft.path, to: path, source: source)
+            rebaseRememberedViews(from: draft.path, to: path)
             reloadAfterChange(in: [folder])
             undoHistory.record(.renamed(from: draft.path, to: path))
             // It moves to wherever its new name sorts, and stays selected.
@@ -1141,6 +1191,7 @@ final class ExplorerSession: @unchecked Sendable {
         // where things went now.
         for move in reversal.inverse?.relocations ?? [] {
             layout.rebaseTabs(from: move.from, to: move.to, source: source)
+            rebaseRememberedViews(from: move.from, to: move.to)
         }
         let done = reversal.inverse?.count ?? 0
         var text = (redo ? "Redo: " : "Undo: ") + Self.describeReversal(of: change, count: done)
@@ -1860,6 +1911,7 @@ final class ExplorerSession: @unchecked Sendable {
         // A moved folder with a tab open inside it takes the tab along.
         for move in outcome.moves {
             layout.rebaseTabs(from: move.from, to: move.to, source: source)
+            rebaseRememberedViews(from: move.from, to: move.to)
         }
         // Every tab on the folder dropped on — and, for a move, the folders
         // things left — in every pane: the same folder open twice should not

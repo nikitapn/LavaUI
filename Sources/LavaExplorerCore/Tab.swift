@@ -1,7 +1,7 @@
 import Foundation
 
 /// How a tab lays its folder out.
-public enum FileViewMode: String, Equatable, Sendable {
+public enum FileViewMode: String, Codable, Equatable, Sendable {
     /// Rows with columns: name, size, date.
     case list
     /// A grid of tiles, each a thumbnail or an icon over the name.

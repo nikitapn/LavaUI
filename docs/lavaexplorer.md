@@ -68,8 +68,13 @@ LAVA_CLIENT=1 swift run LavaExplorer -- ~/Pictures
   scale makes 80 points more than 128 pixels. It is the list's row with
   different insides: selection, double-click, the context menu, dragging out,
   dropping into a folder and F2 are the same code. Arrows move by tile and by
-  row; a new tab opens in the mode of the one it came from. No header in it —
-  sorting is on the View menu.
+  row. No header in it — sorting is on the View menu.
+  **Remembered per folder** (`FolderViewMemory`, in the app's
+  `settings.json`): switching a folder's view records it, and any tab that
+  arrives there later — this launch or the next — opens it that way. A
+  folder never switched follows the tab that walked into it; a moved or
+  renamed folder keeps its choice, and so does everything under it. The
+  last 1,000 choices are kept.
 - **Folders that keep up by themselves.** Every folder on screen, in any
   tab or pane, is watched with inotify (`FolderWatcher`), and a change on
   disk — a download finishing, another program saving, a terminal's `rm` —
