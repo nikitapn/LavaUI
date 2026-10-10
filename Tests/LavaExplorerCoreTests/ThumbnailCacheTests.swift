@@ -39,6 +39,9 @@ import Testing
         let tagged = PNGText.insert(["Thumb::URI": "file:///x.png", "Thumb::MTime": "12.000003"], into: png)
         #expect(PNGText.read(tagged) == ["Thumb::URI": "file:///x.png", "Thumb::MTime": "12.000003"])
         #expect(PNGText.read(png).isEmpty)
+        #expect(PNGText.size(of: png)! == (1, 1))
+        #expect(PNGText.size(of: tagged)! == (1, 1), "text chunks go after IHDR, so the size stays put")
+        #expect(PNGText.size(of: Array("not a png at all, really".utf8)) == nil)
         #expect(PNGText.read(Array("not a png".utf8)).isEmpty)
         // A chunk claiming more bytes than there are stops the walk.
         var truncated = tagged

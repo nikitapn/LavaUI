@@ -239,6 +239,15 @@ public enum PNGText {
         return found
     }
 
+    /// The image's size in pixels, from `IHDR` — which the format puts first,
+    /// so the first 24 bytes of the file are enough. Nil for anything else.
+    public static func size(of png: [UInt8]) -> (width: Int, height: Int)? {
+        guard png.count >= 24, Array(png[0..<8]) == signature,
+              String(decoding: png[12..<16], as: UTF8.self) == "IHDR"
+        else { return nil }
+        return (Int(bigEndian32(png, 16)), Int(bigEndian32(png, 20)))
+    }
+
     /// `png` with a `tEXt` chunk per entry, placed straight after `IHDR`.
     /// Returned unchanged if it is not a PNG.
     public static func insert(_ text: [String: String], into png: [UInt8]) -> [UInt8] {

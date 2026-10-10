@@ -988,7 +988,16 @@ enum FileListMetrics {
 /// The icon view's cell: how big a tile is, and what is inside it.
 enum TileMetrics {
     static let width: Float = 112
-    static let height: Float = 132
+    static let padding: Float = 6
+    /// Room for the picture, two lines of name and the gaps between — from
+    /// the font, which the display scale sizes. A fixed number fitted the
+    /// font it was tried with, and the second line ran off the bottom of the
+    /// tile at a larger one.
+    static var height: Float {
+        let line = FontStore.default?.lineHeight ?? 20
+        // `+ 4`: what a text box measures beyond its rows.
+        return padding + icon + padding + 2 * line + 4 + padding
+    }
     /// Space between tiles, both ways. `ExplorerSession.noteGridWidth` works
     /// out the column count from it, the same way `LazyVGrid` does.
     static let spacing: Float = 4
@@ -998,7 +1007,7 @@ enum TileMetrics {
     /// The width a thumbnail is fitted into: the tile's, less its padding. A
     /// landscape photo — most of them — would otherwise be fitted to a square
     /// and shown at two thirds of the width there is.
-    static let pictureWidth: Float = width - 12
+    static let pictureWidth: Float = width - 2 * padding
 
     /// The cache size to ask for: the "large" thumbnails once the box is
     /// more pixels across than a "normal" one has, which is any scale above
@@ -1133,7 +1142,7 @@ private struct FileRow: View {
         ) {
             if let thumbnail = session.thumbnail(for: entry) {
                 Image(
-                    path: thumbnail,
+                    path: thumbnail.path,
                     width: .pt(FileListMetrics.iconSize),
                     height: .pt(FileListMetrics.iconSize),
                     contentMode: .fit
@@ -1163,24 +1172,46 @@ private struct FileRow: View {
         .background(fill)
     }
 
+    /// The picture at its own proportions, standing on the name: a box the
+    /// shape of the thumbnail, at the bottom of the picture area. Fitted
+    /// *inside* a fixed box instead, a landscape photo floated in the middle
+    /// of empty space above and below it, and the name looked pushed down.
+    /// Never larger than the thumbnail's own pixels — a 48-pixel icon is not
+    /// improved by being blown up to 80.
+    private func picture(_ thumbnail: Thumbnail) -> some View {
+        var width = TileMetrics.pictureWidth
+        var height = TileMetrics.icon
+        if thumbnail.width > 0, thumbnail.height > 0 {
+            let scale = min(
+                width / thumbnail.width, height / thumbnail.height,
+                1 / FontStore.scale.multiplier
+            )
+            width = (thumbnail.width * scale).rounded()
+            height = (thumbnail.height * scale).rounded()
+        }
+        return VStack(alignment: .center, spacing: 0) {
+            Spacer()
+            Image(
+                path: thumbnail.path, width: .pt(width), height: .pt(height),
+                contentMode: .fit
+            )
+        }
+        .frame(width: .pt(TileMetrics.pictureWidth), height: .pt(TileMetrics.icon))
+    }
+
     private var tileContent: some View {
         let theme = Theme.current
-        let inner = TileMetrics.width - 12
+        let inner = TileMetrics.pictureWidth
         return VStack(
             width: .pt(TileMetrics.width),
             height: .pt(TileMetrics.height),
-            padding: 6,
+            padding: TileMetrics.padding,
             alignment: .center,
-            spacing: 6,
+            spacing: TileMetrics.padding,
             onPointer: pointer
         ) {
             if let thumbnail = session.thumbnail(for: entry, size: TileMetrics.thumbnailSize) {
-                Image(
-                    path: thumbnail,
-                    width: .pt(TileMetrics.pictureWidth),
-                    height: .pt(TileMetrics.icon),
-                    contentMode: .fit
-                )
+                picture(thumbnail)
             } else {
                 BigIcon(entry: entry, size: TileMetrics.icon)
             }

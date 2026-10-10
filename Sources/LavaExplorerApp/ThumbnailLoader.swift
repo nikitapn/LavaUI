@@ -35,13 +35,23 @@ import Glibc
 /// the picture, and every image cache on the way to the screen keys on the
 /// path it is given, so a photo edited while the folder is open would go on
 /// showing its old thumbnail. A new version is a new name.
+/// A thumbnail to draw: where it is, and its size in pixels — which a tile
+/// needs before the picture arrives, to fit the box to it rather than fit it
+/// inside a box. Zero size for a picture whose size is not known (an SVG drawn
+/// from its file); the whole box is then its own.
+struct Thumbnail: Equatable, Sendable {
+    var path: String
+    var width: Float = 0
+    var height: Float = 0
+}
+
 final class ThumbnailLoader: @unchecked Sendable {
     /// Called on the main queue when answers have arrived, once per batch.
     var onChange: () -> Void = {}
 
     private enum State {
         case pending
-        case ready(String)
+        case ready(Thumbnail)
         case none
     }
 
@@ -59,7 +69,7 @@ final class ThumbnailLoader: @unchecked Sendable {
     private let wake = DispatchSemaphore(value: 0)
     private var queue: [(key: Key, version: Date?)] = []
     private var queued: Set<Key> = []
-    private var finished: [(key: Key, version: Date?, display: String?)] = []
+    private var finished: [(key: Key, version: Date?, display: Thumbnail?)] = []
     private var flushScheduled = false
 
     private let cacheRoot = ThumbnailCache.root
@@ -86,7 +96,7 @@ final class ThumbnailLoader: @unchecked Sendable {
 
     /// The path to draw for `entry`, or nil — no thumbnail yet, or none to
     /// be had. Main thread.
-    func path(for entry: FileEntry, size: ThumbnailCache.Size = .normal) -> String? {
+    func thumbnail(for entry: FileEntry, size: ThumbnailCache.Size = .normal) -> Thumbnail? {
         guard ThumbnailCache.wants(entry, root: cacheRoot) else { return nil }
         let key = Key(path: entry.path, size: size)
         if let known = states[key], known.version == entry.modified {
@@ -142,11 +152,11 @@ final class ThumbnailLoader: @unchecked Sendable {
 
     /// The thumbnail's display path, made if it has to be. Nil when the
     /// picture will not decode.
-    private func thumbnail(of path: String, size: ThumbnailCache.Size) -> String? {
+    private func thumbnail(of path: String, size: ThumbnailCache.Size) -> Thumbnail? {
         guard let stamp = ThumbnailCache.Stamp(ofFileAt: path) else { return nil }
         let cached = ThumbnailCache.path(for: path, size: size, root: cacheRoot)
         if ThumbnailCache.isValid(thumbnail: cached, of: path, stamp: stamp) {
-            return display(cached, size: size, stamp: stamp)
+            return display(cached, size: size, stamp: stamp, pixels: Self.pixelSize(of: cached))
         }
         let failure = ThumbnailCache.failurePath(for: path, root: cacheRoot)
         if ThumbnailCache.isValid(thumbnail: failure, of: path, stamp: stamp) { return nil }
@@ -168,7 +178,15 @@ final class ThumbnailLoader: @unchecked Sendable {
             // still has a thumbnail to show this once; it just is not kept.
             return nil
         }
-        return display(cached, size: size, stamp: stamp)
+        return display(cached, size: size, stamp: stamp, pixels: PNGText.size(of: png))
+    }
+
+    /// The first 24 bytes of a PNG, for its size.
+    private static func pixelSize(of path: String) -> (width: Int, height: Int)? {
+        guard let file = FileHandle(forReadingAtPath: path) else { return nil }
+        defer { try? file.close() }
+        guard let head = try? file.read(upToCount: 24) else { return nil }
+        return PNGText.size(of: Array(head))
     }
 
     /// The standard's failure record is a PNG like any thumbnail, carrying
@@ -182,17 +200,22 @@ final class ThumbnailLoader: @unchecked Sendable {
     /// the type's comment. The cache file itself when there is no runtime
     /// folder to put a link in.
     private func display(
-        _ thumbnail: String, size: ThumbnailCache.Size, stamp: ThumbnailCache.Stamp
-    ) -> String {
-        guard let linkFolder else { return thumbnail }
+        _ thumbnail: String, size: ThumbnailCache.Size, stamp: ThumbnailCache.Stamp,
+        pixels: (width: Int, height: Int)?
+    ) -> Thumbnail {
+        var shown = Thumbnail(
+            path: thumbnail,
+            width: Float(pixels?.width ?? 0), height: Float(pixels?.height ?? 0)
+        )
+        guard let linkFolder else { return shown }
         // The size is in the name: both sizes of one picture share its MD5.
         let name = (thumbnail as NSString).lastPathComponent.dropLast(4)
         let link = "\(linkFolder)/\(name)-\(size.rawValue)-\(stamp.text).png"
-        if symlink(thumbnail, link) != 0, errno != EEXIST { return thumbnail }
-        return link
+        if symlink(thumbnail, link) == 0 || errno == EEXIST { shown.path = link }
+        return shown
     }
 
-    private func deliver(_ key: Key, _ version: Date?, _ display: String?) {
+    private func deliver(_ key: Key, _ version: Date?, _ display: Thumbnail?) {
         lock.lock()
         finished.append((key, version, display))
         let schedule = !flushScheduled

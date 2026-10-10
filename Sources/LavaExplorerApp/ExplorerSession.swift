@@ -104,10 +104,10 @@ final class ExplorerSession: @unchecked Sendable {
 
     /// What a row draws in place of its glyph, or nil for the glyph. The
     /// first ask queues the work.
-    func thumbnail(for entry: FileEntry, size: ThumbnailCache.Size = .normal) -> String? {
-        if ThumbnailCache.drawsItself(entry) { return entry.path }
+    func thumbnail(for entry: FileEntry, size: ThumbnailCache.Size = .normal) -> Thumbnail? {
+        if ThumbnailCache.drawsItself(entry) { return Thumbnail(path: entry.path) }
         _ = thumbnailRevision
-        return thumbnails.path(for: entry, size: size)
+        return thumbnails.thumbnail(for: entry, size: size)
     }
 
     // MARK: - View mode
