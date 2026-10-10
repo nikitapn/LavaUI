@@ -5,6 +5,7 @@
 // Uses the real thread, the real inotify and the Reader the RPC answers
 // with. Nothing is mocked; the only thing missing is the RPC itself.
 
+#include "config.hpp"
 #include "indexer.hpp"
 #include "store.hpp"
 
@@ -190,6 +191,41 @@ int main() {
     check(waitFor([&] { return indexer.idle(); }), "empty config settles");
     Reader reader(db);
     check(paths(reader, "quarterly").empty(), "unconfigured root forgotten");
+  }
+
+  // ── the config edited while running, the way Settings saves it ──
+  {
+    const fs::path second = base / "second";
+    touch(second / "Music/song.flac");
+    touch(second / "Music/skipme/hidden-by-exclude.flac");
+    const fs::path conf = base / "conf/index.conf";
+    fs::create_directories(conf.parent_path());
+    auto save = [&](const std::string &text) {
+      // Written beside and renamed over, as Settings and most editors do.
+      std::ofstream(conf.string() + ".tmp") << text;
+      fs::rename(conf.string() + ".tmp", conf);
+    };
+    save("root = " + root.string() + "\n");
+    Indexer indexer(loadConfig(conf.string()), db, nullptr, conf.string());
+    indexer.start();
+    check(waitFor([&] { return indexer.idle(); }), "config run settles");
+    Reader reader(db);
+    check(!paths(reader, "quarterly").empty(), "the configured root is indexed");
+
+    save("root = " + root.string() + "\nroot = " + second.string() + "\nexclude = skipme\n");
+    check(waitFor([&] { return paths(reader, "song").size() == 1; }),
+          "a root added to the config is crawled without a restart");
+    check(paths(reader, "hidden-by-exclude").empty(), "and its excludes apply");
+    check(waitFor([&] { return indexer.status().size() == 2; }), "status lists both roots");
+
+    save("root = " + second.string() + "\n");
+    check(waitFor([&] { return paths(reader, "quarterly").empty(); }),
+          "a root removed from the config takes its rows with it");
+    check(waitFor([&] { return paths(reader, "hidden-by-exclude").size() == 1; }),
+          "and a dropped exclude lets its folder back in");
+    touch(second / "Music/later.flac");
+    check(waitFor([&] { return paths(reader, "later").size() == 1; }),
+          "the remaining root is still watched after the reload");
   }
 
   fs::remove_all(base);

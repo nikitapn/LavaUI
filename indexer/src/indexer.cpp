@@ -18,6 +18,7 @@
 #include <cstdio>
 #include <cstring>
 #include <deque>
+#include <filesystem>
 #include <fstream>
 #include <mutex>
 #include <optional>
@@ -88,6 +89,7 @@ bool sameMetadata(const Row &a, const Row &b) {
 
 struct Indexer::Impl {
   Config config;
+  std::string configPath;
   std::string dbPath;
   ChangeFn onChange;
 
@@ -128,6 +130,8 @@ struct Indexer::Impl {
 
   int xbelWd = -1;
   std::string xbelPath, xbelName;
+  int configWd = -1;
+  std::string configName;
 
   bool inTx = false;
   Clock::time_point txStarted;
@@ -179,6 +183,18 @@ struct Indexer::Impl {
     xbelWd = inotify_add_watch(inotifyFd, xbelPath.substr(0, slash).c_str(),
                                IN_CLOSE_WRITE | IN_MOVED_TO | IN_ONLYDIR);
     importXbel();
+
+    // Its directory too, for the reason the xbel's is: an editor (and
+    // Settings) saves by writing beside and renaming over. Created if
+    // missing, or a config written for the first time would go unheard.
+    if (!configPath.empty()) {
+      const std::filesystem::path p(configPath);
+      std::error_code ignored;
+      std::filesystem::create_directories(p.parent_path(), ignored);
+      configName = p.filename().string();
+      configWd = inotify_add_watch(inotifyFd, p.parent_path().c_str(),
+                                   IN_CLOSE_WRITE | IN_MOVED_TO | IN_ONLYDIR);
+    }
 
     checkRoots(true);
     publish();
@@ -509,6 +525,7 @@ struct Indexer::Impl {
     };
     std::unordered_map<uint32_t, From> movedFrom;
     bool xbelDirty = false;
+    bool configDirty = false;
 
     for (const Event &ev : batch) {
       if (ev.mask & IN_Q_OVERFLOW) {
@@ -518,6 +535,7 @@ struct Indexer::Impl {
         continue;
       }
       if (ev.wd == xbelWd && ev.name == xbelName) xbelDirty = true;
+      if (ev.wd == configWd && ev.name == configName) configDirty = true;
       auto w = byWd.find(ev.wd);
       if (w == byWd.end()) continue;
       if (ev.mask & IN_IGNORED) {
@@ -572,7 +590,64 @@ struct Indexer::Impl {
     }
     if (xbelDirty) importXbel();
     commitTx();
+    // After the commit: a reload syncs the root table in a transaction of
+    // its own.
+    if (configDirty) reloadConfig();
     if (entriesChanged) markChanged(true);
+  }
+
+  // ── config ──
+
+  /// Applies an edited config without a restart. Roots that stay keep their
+  /// rows, watches and state; a removed root's rows go (the `root` row's
+  /// cascade); an added one is checked against the mount table and crawled.
+  /// A change to the excludes re-checks every root, which drops what is now
+  /// excluded and picks up what no longer is.
+  void reloadConfig() {
+    Config next = loadConfig(configPath);
+    const bool filterChanged = next.excludes != config.excludes || next.hidden != config.hidden;
+    if (!filterChanged && next.roots == config.roots) return;
+    std::fprintf(stderr, "lava-index: %s changed; %zu roots\n", configPath.c_str(),
+                 next.roots.size());
+    config = std::move(next);
+    const auto ids = store->syncRoots(config.roots);
+
+    // Old index → new, or -1 for a root that is gone. Watches and the queue
+    // name roots by index, so both are remapped rather than rebuilt.
+    std::vector<long> remap(live.size(), -1);
+    std::vector<Root> nextLive;
+    for (const std::string &p : config.roots) {
+      long old = -1;
+      for (size_t i = 0; i < live.size(); ++i)
+        if (live[i].state.path == p) old = static_cast<long>(i);
+      if (old >= 0) {
+        remap[static_cast<size_t>(old)] = static_cast<long>(nextLive.size());
+        nextLive.push_back(std::move(live[static_cast<size_t>(old)]));
+      } else {
+        Root r;
+        r.state.path = p;
+        nextLive.push_back(std::move(r));
+      }
+      nextLive.back().state.id = ids.at(p);
+    }
+    for (size_t i = 0; i < remap.size(); ++i) {
+      if (remap[i] < 0) {
+        std::fprintf(stderr, "lava-index: no longer indexing %s\n", live[i].state.path.c_str());
+        dropRootWatches(i);
+      }
+    }
+    for (auto &[wd, watch] : byWd) watch.root = static_cast<size_t>(remap[watch.root]);
+    std::deque<size_t> queue;
+    for (size_t i : reconcileQueue)
+      if (remap[i] >= 0) queue.push_back(static_cast<size_t>(remap[i]));
+    reconcileQueue.swap(queue);
+    live = std::move(nextLive);
+
+    if (filterChanged)
+      for (size_t i = 0; i < live.size(); ++i) queueReconcile(i);
+    // New roots come up offline and are queued from here once found.
+    checkRoots(false);
+    entriesChanged = true;
   }
 
   /// Makes one name's row match the disk: insert, update, or remove.
@@ -590,12 +665,12 @@ struct Indexer::Impl {
       if (row) removeEntry(*row);
       return;
     }
-    if (row && row->kind != disk->kind) {
-      removeEntry(*row);
-      row.reset();
-    }
+    // A name that changed kind — a file replaced by a folder — is a new
+    // entry: its old row and everything under it go first.
+    const bool known = row && row->kind == disk->kind;
+    if (row && !known) removeEntry(*row);
     int64_t id;
-    if (row) {
+    if (known) {
       id = row->id;
       if (!sameMetadata(*row, *disk)) {
         disk->id = id;
@@ -680,8 +755,11 @@ struct Indexer::Impl {
   }
 };
 
-Indexer::Indexer(Config config, std::string dbPath, ChangeFn onChange) : impl_(new Impl) {
+Indexer::Indexer(Config config, std::string dbPath, ChangeFn onChange,
+                 std::string configPath)
+    : impl_(new Impl) {
   impl_->config = std::move(config);
+  impl_->configPath = std::move(configPath);
   impl_->dbPath = std::move(dbPath);
   impl_->onChange = std::move(onChange);
 }

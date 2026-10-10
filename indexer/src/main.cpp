@@ -301,7 +301,7 @@ int main(int argc, char **argv) {
 
   ChangeBroker broker;
   Indexer indexer(std::move(config), dbPath,
-                  [&broker](bool recentOnly) { broker.broadcast(recentOnly); });
+                  [&broker](bool recentOnly) { broker.broadcast(recentOnly); }, configPath);
   try {
     indexer.start();
   } catch (const std::exception &e) {

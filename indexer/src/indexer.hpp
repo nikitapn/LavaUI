@@ -35,7 +35,11 @@ class Indexer {
   /// `recentOnly` is true when no entry changed, only the recent list.
   using ChangeFn = std::function<void(bool recentOnly)>;
 
-  Indexer(Config config, std::string dbPath, ChangeFn onChange);
+  /// `configPath`, when given, is watched: an edit to it — by hand, or by
+  /// Settings — adds and removes roots and re-applies the excludes while the
+  /// daemon runs. Empty means the config is fixed for the process's life.
+  Indexer(Config config, std::string dbPath, ChangeFn onChange,
+          std::string configPath = {});
   ~Indexer();
   Indexer(const Indexer &) = delete;
   Indexer &operator=(const Indexer &) = delete;
