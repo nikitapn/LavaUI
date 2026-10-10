@@ -17,6 +17,7 @@ swift build -c release --product LavaEditor
 swift build -c release --product LavaSpotify
 swift build -c release --product TraceLoom
 swift build -c release --product LavaSettings
+swift build -c release --product LavaFind     # needs lava-index (below)
 
 # Register everything listed in apps.conf
 packaging/install.sh

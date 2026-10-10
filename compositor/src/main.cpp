@@ -76,9 +76,12 @@ constexpr const char *kSwitcherAppId = "LavaSwitcher";
 /// The launcher is a fill-screen overlay spawned per invocation. Remembering
 /// it would reopen a "window" the user never placed.
 constexpr const char *kLauncherAppId = "LavaLauncher";
+/// File search: the same kind of overlay as the launcher, for the same
+/// reasons — spawned per use, fill-screen, gone after one answer.
+constexpr const char *kFindAppId = "LavaFind";
 
 bool isTransientApp(const std::string &appId) {
-  return appId == kSwitcherAppId || appId == kLauncherAppId;
+  return appId == kSwitcherAppId || appId == kLauncherAppId || appId == kFindAppId;
 }
 
 /// How long after a window is refused its application's remembered frame it
@@ -9802,6 +9805,15 @@ void launch_launcher() {
   launch_program(program.c_str(), argv);
 }
 
+/// File search over lava-index. A LavaUI client like the launcher, found the
+/// same way.
+void launch_find() {
+  const std::string path = lava::ShellSupervisor::programPath("LavaFind");
+  std::string program = path;
+  char *argv[] = {program.data(), nullptr};
+  launch_program(program.c_str(), argv);
+}
+
 /// The 3D app switcher. Spawned per invocation like the launcher: a LavaUI
 /// client is on screen in ~200 ms, and holding one resident for the time
 /// nobody is switching would be an arena and a surface for nothing.
@@ -9883,6 +9895,7 @@ uint32_t shortcut_mod_mask(const lava::KeyboardConfig &keyboard, bool nested) {
 enum class BindingAction : uint8_t {
   Quit,
   AppLauncher,
+  FileSearch,
   AppSwitcher,
   AppSwitcherBack,
   StackCycle,
@@ -9948,6 +9961,10 @@ constexpr BindingSpec kBindings[] = {
      true, "Backspace", "session.quit", "Ends the session"},
     {BindingAction::AppLauncher, XKB_KEY_p, XKB_KEY_p, false, false, true, "P",
      "launcher.open", "Opens the application launcher"},
+    // Space because it is the chord file search has on every other desktop
+    // that has one, and nothing here used it. Not F: that is fullscreen.
+    {BindingAction::FileSearch, XKB_KEY_space, XKB_KEY_space, false, false,
+     true, "Space", "files.find", "Searches files by name"},
     {BindingAction::AppSwitcher, XKB_KEY_Tab, XKB_KEY_Tab, false, true, false,
      "Tab", "window.switch", "Cycles open windows"},
     {BindingAction::AppSwitcherBack, XKB_KEY_Tab, XKB_KEY_Tab, true, true, false,
@@ -10117,6 +10134,10 @@ bool perform_binding(Server *server, const BindingSpec &spec,
 
   case BindingAction::AppLauncher:
     launch_launcher();
+    return true;
+
+  case BindingAction::FileSearch:
+    launch_find();
     return true;
 
   case BindingAction::AppSwitcher:

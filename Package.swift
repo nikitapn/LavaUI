@@ -61,6 +61,7 @@ var products: [Product] = [
     .executable(name: "LavaDock", targets: ["LavaDock"]),
     .executable(name: "LavaSettings", targets: ["LavaSettings"]),
     .executable(name: "LavaDebug", targets: ["LavaDebug"]),
+    .executable(name: "LavaFind", targets: ["LavaFind"]),
     .executable(name: "LavaLauncher", targets: ["LavaLauncher"]),
     .executable(name: "LavaSwitcher", targets: ["LavaSwitcher"]),
     .executable(name: "LavaContextMenu", targets: ["LavaContextMenu"]),
@@ -77,6 +78,7 @@ var products: [Product] = [
     .library(name: "LavaTermCore", targets: ["LavaTermCore"]),
     .library(name: "WeatherCore", targets: ["WeatherCore"]),
     .library(name: "LavaViewCore", targets: ["LavaViewCore"]),
+    .library(name: "LavaFindCore", targets: ["LavaFindCore"]),
     .library(name: "LavaShotCore", targets: ["LavaShotCore"]),
     .library(name: "LavaExplorerCore", targets: ["LavaExplorerCore"]),
     .library(name: "LavaArchive", targets: ["LavaArchive"]),
@@ -124,6 +126,9 @@ var targets: [Target] = [
     // Which pictures are next to this one, and where the picture sits in
     // the window. No engine — see Sources/LavaViewCore.
     .target(name: "LavaViewCore"),
+    // What a search row says about a file: size, date, badge, `~` paths,
+    // the match highlight. No engine — see Sources/LavaFindCore.
+    .target(name: "LavaFindCore"),
     // Selection geometry, the annotation document, and the names of the
     // tools. No engine — the arithmetic a screenshot tool gets wrong is
     // testable without photographing anything.
@@ -236,6 +241,15 @@ var targets: [Target] = [
     .executableTarget(
         name: "LavaSettings",
         dependencies: ["LavaUI"]
+            + (haveNprpc ? [Target.Dependency("LavaClient"),
+                            Target.Dependency("LavaIDL")] : []),
+        swiftSettings: interopCxx
+    ),
+    // File search over lava-index (indexer/). Spawned per use like the
+    // launcher. See Sources/LavaFind/main.swift.
+    .executableTarget(
+        name: "LavaFind",
+        dependencies: ["LavaUI", "LavaFindCore"]
             + (haveNprpc ? [Target.Dependency("LavaClient"),
                             Target.Dependency("LavaIDL")] : []),
         swiftSettings: interopCxx
@@ -358,6 +372,7 @@ var targets: [Target] = [
     .testTarget(name: "LavaTermCoreTests", dependencies: ["LavaTermCore"]),
     .testTarget(name: "WeatherCoreTests", dependencies: ["WeatherCore"]),
     .testTarget(name: "LavaViewCoreTests", dependencies: ["LavaViewCore"]),
+    .testTarget(name: "LavaFindCoreTests", dependencies: ["LavaFindCore"]),
     .testTarget(name: "LavaShotCoreTests", dependencies: ["LavaShotCore"]),
     .testTarget(name: "LavaExplorerCoreTests", dependencies: ["LavaExplorerCore"]),
     .testTarget(name: "LavaArchiveTests", dependencies: ["LavaArchive", "CArchive"]),

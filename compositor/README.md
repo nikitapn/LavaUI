@@ -131,6 +131,10 @@ arena for the time nobody is launching anything. It is found in the same places
 a supervised component is — beside the compositor, then this repo's SwiftPM
 build directory, then PATH.
 
+**Mod+Space** opens file search (`LavaFind`), the same kind of one-shot
+overlay. It asks the per-user `lava-index` daemon rather than the disk, and
+says so when the daemon is not running — see `packaging/README.md`.
+
 **Ctrl+Tab** (and **Mod+Tab**) opens the 3D app switcher, the same way: a
 one-shot `LavaSwitcher` client. Keep the modifier down and press Tab again
 to cycle, Shift+Tab to go backwards, then release to activate. Escape
