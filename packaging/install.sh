@@ -5,6 +5,7 @@
 #   packaging/install.sh LavaTerm LavaSpotify
 #   packaging/install.sh --list
 #   packaging/install.sh --no-default # do not become the default file handler
+#   packaging/install.sh lava-index   # just the file index service
 #   LAVA_BIN_DIR=.build/debug packaging/install.sh
 #
 # An app that declares a MimeType in apps.conf is also registered as the
@@ -20,6 +21,14 @@
 #
 # Default binary root is this repo's release build. Override with LAVA_BIN_DIR
 # (absolute or relative to the repo) when installing a debug tree.
+#
+# Services are installed alongside the apps (or by name). Today that is one:
+#   lava-index  the file index daemon, built by meson, not SwiftPM
+#     ~/.local/bin/lava-index, lava-index-query  →  binaries (symlinks)
+#     ~/.config/systemd/user/lava-index.service   enabled and (re)started
+#     ~/.config/lava/index.conf                   only if there is none yet
+#   Binaries come from LAVA_MESON_DIR (default: build-release, the tree
+#   start-lava-compositor runs the compositor from).
 set -euo pipefail
 
 here="$(cd "$(dirname "$0")" && pwd)"
@@ -30,6 +39,10 @@ icons_src="$here/icons"
 bin_root="${LAVA_BIN_DIR:-$repo/.build/release}"
 if [[ $bin_root != /* ]]; then
   bin_root="$repo/$bin_root"
+fi
+meson_root="${LAVA_MESON_DIR:-$repo/build-release}"
+if [[ $meson_root != /* ]]; then
+  meson_root="$repo/$meson_root"
 fi
 
 apps_dir="${XDG_DATA_HOME:-$HOME/.local/share}/applications"
@@ -105,6 +118,82 @@ list_apps() {
       "${products[$i]}" "${icons[$i]}" \
       "$([[ ${clients[$i]} == 1 ]] && echo client || echo windowed)"
   done
+  local svc
+  for svc in "${services[@]}"; do
+    printf '%-14s  %-12s  %s\n' "$svc" - "user service"
+  done
+}
+
+# Not apps: no window, no desktop entry, no icon. Installed by name or with
+# everything else.
+services=(lava-index)
+
+is_service() {
+  local want=$1 svc
+  for svc in "${services[@]}"; do
+    [[ $svc == "$want" ]] && return 0
+  done
+  return 1
+}
+
+# ─── Install a service ──────────────────────────────────────────────────────
+
+install_index() {
+  local daemon="$meson_root/indexer/lava-index"
+  local query="$meson_root/indexer/lava-index-query"
+  if [[ ! -x $daemon || ! -x $query ]]; then
+    echo "skip lava-index: no executables under $meson_root/indexer" >&2
+    echo "  build:  meson setup build-release --buildtype=release   # once" >&2
+    echo "          ninja -C build-release indexer/lava-index indexer/lava-index-query" >&2
+    return 1
+  fi
+
+  local config_dir="${XDG_CONFIG_HOME:-$HOME/.config}"
+  local unit_dir="$config_dir/systemd/user"
+  local conf="$config_dir/lava/index.conf"
+  mkdir -p "$local_bin" "$unit_dir" "$config_dir/lava"
+
+  ln -sfn "$(readlink -f "$daemon")" "$local_bin/lava-index"
+  ln -sfn "$(readlink -f "$query")" "$local_bin/lava-index-query"
+  # The unit runs ~/.local/bin/lava-index, so a rebuild in place is picked up
+  # by a restart and nothing here has to be re-run for it.
+  sed "s|@REPO@|$repo|g" "$here/systemd/lava-index.service" >"$unit_dir/lava-index.service"
+  chmod 644 "$unit_dir/lava-index.service"
+
+  # Never overwrite: the config is the user's list of folders, and the
+  # example is only somewhere to start.
+  local conf_note="kept"
+  if [[ ! -e $conf ]]; then
+    cp "$here/index.conf.example" "$conf"
+    conf_note="new, from packaging/index.conf.example"
+  fi
+
+  echo "  lava-index"
+  echo "    bin      $local_bin/lava-index -> $(readlink -f "$daemon")"
+  echo "    bin      $local_bin/lava-index-query -> $(readlink -f "$query")"
+  echo "    unit     $unit_dir/lava-index.service"
+  echo "    config   $conf ($conf_note)"
+
+  if command -v systemctl >/dev/null 2>&1 && systemctl --user show-environment >/dev/null 2>&1; then
+    systemctl --user daemon-reload
+    systemctl --user enable lava-index.service >/dev/null 2>&1 || true
+    # Restart, not start: an install is usually a new binary, and a running
+    # daemon would go on serving the old one.
+    if systemctl --user restart lava-index.service; then
+      echo "    service  enabled, running"
+    else
+      echo "    service  failed to start — journalctl --user -u lava-index" >&2
+      return 1
+    fi
+  else
+    echo "    service  no systemd user session; add 'lava-index &' to ~/.config/lava/autostart" >&2
+  fi
+}
+
+install_service() {
+  case $1 in
+    lava-index) install_index ;;
+  esac
 }
 
 # ─── Install one ────────────────────────────────────────────────────────────
@@ -281,13 +370,17 @@ load_catalog
 
 targets=("$@")
 if [[ ${#targets[@]} -eq 0 ]]; then
-  targets=("${products[@]}")
+  targets=("${products[@]}" "${services[@]}")
 fi
 
-echo "installing into XDG dirs (bin root: $bin_root)"
+echo "installing into XDG dirs (bin root: $bin_root, meson root: $meson_root)"
 failed=0
 for product in "${targets[@]}"; do
-  install_one "$product" || failed=$((failed + 1))
+  if is_service "$product"; then
+    install_service "$product" || failed=$((failed + 1))
+  else
+    install_one "$product" || failed=$((failed + 1))
+  fi
 done
 
 if command -v gtk-update-icon-cache >/dev/null 2>&1; then

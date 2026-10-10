@@ -1,0 +1,21 @@
+# ~/.config/lava/index.conf — what lava-index indexes.
+#
+# packaging/install.sh copies this into place when there is no config yet;
+# after editing, `systemctl --user restart lava-index`.
+#
+# One root per line. ~ is your home directory. A root on a disk that is not
+# always mounted is fine: it is reported offline while it is gone, keeps its
+# entries, and is re-checked when it comes back.
+root = ~/Documents
+root = ~/Downloads
+root = ~/Pictures
+root = ~/Videos
+root = ~/Music
+root = ~/Desktop
+
+# Names never descended into, on top of the built-in list (.git,
+# node_modules, build, .cache, …).
+#exclude = Steam
+
+# Index names starting with a dot. Off by default.
+#hidden = no

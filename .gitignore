@@ -32,3 +32,4 @@ build-release
 # is `scripts/gen_stubs.sh`.
 /Sources/LavaIDL/
 /compositor/src/gen/
+/indexer/src/gen/

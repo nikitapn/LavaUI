@@ -1,0 +1,23 @@
+# The per-user file index (indexer/, idl/index.npidl). Installed and enabled
+# by packaging/install.sh.
+#
+# A user service rather than a [shell] component of the compositor: the index
+# belongs to the user, not to a session — a nested compositor searches the
+# same files as the outer one — and it should go on noticing changes while
+# no session is running at all. It refuses to run twice, so starting it from
+# somewhere else as well is harmless.
+[Unit]
+Description=Lava file index
+Documentation=file://@REPO@/idl/index.npidl
+
+[Service]
+ExecStart=%h/.local/bin/lava-index
+Restart=on-failure
+RestartSec=5
+# A first crawl reads a lot of directories. Behind everything else, it costs
+# nothing anybody notices; ahead of it, it is a stutter in whatever is open.
+Nice=10
+IOSchedulingClass=idle
+
+[Install]
+WantedBy=default.target

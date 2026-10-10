@@ -22,3 +22,5 @@ project(
 # needs, so the lists can be kept in step by reading them.
 subdir('canvas')
 subdir('compositor')
+# The file index daemon. After the compositor, whose nprpc detection it reuses.
+subdir('indexer')

@@ -36,4 +36,13 @@ mkdir -p "$ROOT/compositor/src/gen"
 echo "npidl --cpp    →  compositor/src/gen"
 "$NPIDL" --cpp --output-dir "$ROOT/compositor/src/gen" "$ROOT/idl/lava.npidl"
 
+# The file index (indexer/) is a second interface in its own module,
+# `lava.index`. Its Swift stubs land beside the compositor's in LavaIDL, which
+# is where a client already looks; the C++ ones are the daemon's own.
+echo "npidl --swift  →  Sources/LavaIDL (index)"
+"$NPIDL" --swift --output-dir "$ROOT/Sources/LavaIDL" "$ROOT/idl/index.npidl"
+mkdir -p "$ROOT/indexer/src/gen"
+echo "npidl --cpp    →  indexer/src/gen"
+"$NPIDL" --cpp --output-dir "$ROOT/indexer/src/gen" "$ROOT/idl/index.npidl"
+
 echo "done"

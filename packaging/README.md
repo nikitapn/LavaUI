@@ -61,3 +61,23 @@ Find the type names with `gio info -a standard::content-type FILE`. Not with
 `xdg-mime query filetype`, which shells out to file(1) and can answer with a
 name shared-mime-info does not use — registering that spelling silently
 associates nothing.
+
+## The file index service
+
+`lava-index` is not an app: no window, no desktop entry. It is the per-user
+daemon behind file search (`indexer/`, `idl/index.npidl`), built by meson
+rather than SwiftPM, and installed as a **systemd user service**:
+
+```bash
+ninja -C build-release indexer/lava-index indexer/lava-index-query
+packaging/install.sh lava-index      # also part of a plain packaging/install.sh
+```
+
+| Path | What |
+|---|---|
+| `~/.local/bin/lava-index`, `lava-index-query` | Symlinks to the build |
+| `~/.config/systemd/user/lava-index.service` | Enabled, and restarted on every install |
+| `~/.config/lava/index.conf` | Which folders — copied from `index.conf.example` only if missing |
+
+After editing the config: `systemctl --user restart lava-index`. To see what it
+is doing: `lava-index-query status`, `journalctl --user -u lava-index`.

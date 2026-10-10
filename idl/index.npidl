@@ -1,0 +1,171 @@
+// LavaIndex: the per-user file index, and how the search window asks it.
+//
+// A separate interface from `lava.Compositor`, and a separate process, on
+// purpose. The index does disk I/O — a crawl, a reconcile after a mount, a
+// write per inotify event — and none of that belongs on the compositor's
+// Wayland loop. It is also per *user*, not per session: a nested compositor
+// searches the same files as the outer one, so the reference is published as
+// $XDG_RUNTIME_DIR/lava-index.ior with no session in the name, unlike
+// `lava-compositor-<session>.ior`.
+//
+// The same rule as the control plane holds, in its own terms: replies are
+// pages, never "everything". A shared-memory reply is capped at 512 KiB, and
+// a home directory has millions of entries — a call that returns all matches
+// would work on a test tree and fail on a real one.
+//
+// The database behind it is described in `indexer/schema.sql`, which is the
+// daemon's private format; this file is the contract.
+
+module lava.index;
+
+/// What an entry is. Symlinks are listed but never followed, so a link to `/`
+/// inside a root does not index the machine.
+enum EntryKind: u32 {
+  file,
+  directory,
+  symlink,
+};
+
+/// The coarse filter a search can be narrowed to.
+///
+/// Decided by extension in the daemon, so every client agrees on what a
+/// "video" is. `any` is no filter.
+enum Category: u32 {
+  any,
+  folders,
+  documents,
+  images,
+  videos,
+  audio,
+  archives,
+};
+
+/// One row of a result.
+message Hit {
+  /// Stable while the file stays where it is; a rename keeps it. Not stable
+  /// across a rebuild of the index, so never store it — store the path.
+  id: u64;
+  path: string;
+  kind: EntryKind;
+  /// Bytes. 0 for a directory.
+  size: u64;
+  /// Seconds since the epoch. Sub-second precision is in the index; nothing
+  /// that shows "Oct 2" needs it on the wire.
+  mtime: i64;
+  /// Lowercased extension, no dot: the badge in the search window ("PDF",
+  /// "MP4"). Empty for none.
+  ext: string;
+  /// Where the query matched in the *name* (the last path component), as a
+  /// UTF-8 byte range, for highlighting. Zero length when it did not match
+  /// the name itself — a recent item, or an empty query.
+  matchStart: u32;
+  matchLength: u32;
+  /// When the user last opened it, seconds since the epoch; 0 if never.
+  /// Part of the ranking, and what lets a client say "opened yesterday".
+  lastOpened: i64;
+}
+
+message SearchResult {
+  hits: vector<Hit>;
+  /// True when more matched than `limit` let through. Not a count: counting
+  /// every match of "a" across a few million names is the expensive part of
+  /// the query, and the window has no use for the number.
+  truncated: boolean;
+}
+
+/// A root as the daemon sees it now, for the footer ("Searching ~
+/// (Documents, Videos, …)") and for a settings page.
+message RootStatus {
+  path: string;
+  /// The path is mounted and readable. A root that is not keeps its entries
+  /// — they are still answers, just ones that cannot be opened right now.
+  online: boolean;
+  /// Changes are being watched. False for a read-only mount, where nothing
+  /// can change from this side and only a reconcile on remount notices what
+  /// changed from another OS; true again when it comes back writable.
+  watched: boolean;
+  /// A crawl or reconcile is running over this root.
+  scanning: boolean;
+  entries: u64;
+  /// When the last reconcile finished, seconds since the epoch; 0 if never.
+  lastReconcile: i64;
+}
+
+message IndexStatus {
+  roots: vector<RootStatus>;
+}
+
+/// Daemon → client: the index changed, so a result being shown may be stale.
+///
+/// Deliberately says nothing about *what* changed. A search window re-runs
+/// its current query, which costs milliseconds; a precise delta would need
+/// the daemon to know every open query and re-evaluate each against every
+/// event, for a list that is on screen for seconds. Coalesced — at most a few
+/// a second, however fast files change — so a build tree being rewritten does
+/// not turn into a stream of redraws.
+message IndexChanged {
+  /// Monotonic. Echoed in `IndexChangedAck`.
+  serial: u32;
+  /// Only `recent` changed; a client showing search hits can ignore it.
+  recentOnly: boolean;
+}
+
+/// Client → daemon: "I have refreshed for this one."
+message IndexChangedAck {
+  serial: u32;
+}
+
+exception RootNotFound {
+  path: string;
+}
+
+interface Index {
+  /// Names containing `query`, best first, at most `limit` of them.
+  ///
+  /// Case- and accent-insensitive substring match, then ranked in the daemon:
+  /// a name that starts with the query, then one with a word that does, then
+  /// any other match — each tier nudged by how recently it was opened and how
+  /// shallow it sits. One or two characters fall back to a prefix match,
+  /// since a trigram index has nothing to say below three.
+  ///
+  /// Called per keystroke. A query is a few milliseconds, the round trip
+  /// microseconds, so there is no cancellation: a client that typed past a
+  /// result simply drops the stale reply.
+  ///
+  /// `limit` is clamped to 100. A page of hits at typical path lengths is a
+  /// few tens of KiB; the clamp keeps a page of pathological ones under the
+  /// shared-memory reply cap.
+  ///
+  /// An empty query is not an error and returns no hits; the window shows
+  /// `Recent` instead.
+  SearchResult Search(query: in string, category: in Category, limit: in u32);
+
+  /// What the user opened last, newest first. Existing paths only — one that
+  /// has since gone is pruned when this is asked, not shown.
+  vector<Hit> Recent(limit: in u32);
+
+  /// "I just opened this." How Lava's own apps feed `Recent` without writing
+  /// GTK's recently-used.xbel; other apps' opens arrive through that file.
+  ///
+  /// `appId` is recorded as the source, for nothing more than debugging.
+  /// Fire-and-forget: opening a file must not wait on the index.
+  [unreliable] void NoteOpened(path: in string, appId: in string);
+
+  IndexStatus Status();
+
+  /// Reconcile a root now, as if it had just been mounted.
+  ///
+  /// The daemon already does this on every change it can see in
+  /// /proc/self/mountinfo; this is for the ones it cannot — a volume repaired
+  /// from another OS and remounted by hand at the same path, with the same
+  /// options. Returns at once; `Status` says when it is done.
+  void Rescan(path: in string) raises(RootNotFound);
+
+  /// Pushed when the index changes; see `IndexChanged`.
+  ///
+  /// Bidirectional for the reason `Compositor.SubscribePanelArea` gives: a
+  /// `server_stream` servant is a generator the stream manager pulls, and
+  /// this is pushed by the daemon when the watcher sees something. The
+  /// bidirectional form is the one that hands the servant a writer it keeps.
+  bidi_stream<IndexChangedAck, IndexChanged> SubscribeChanges();
+}
