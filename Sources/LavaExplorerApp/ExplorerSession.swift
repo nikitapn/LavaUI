@@ -1,4 +1,5 @@
 import Foundation
+import LavaArchive
 import LavaExplorerCore
 import LavaShell
 import LavaUI
@@ -16,8 +17,9 @@ import Observation
 /// the rest of this file keep talking about "the current tab".
 ///
 /// Unchecked `Sendable` for the reason LavaView's session is: every property
-/// is read and written on the frame loop, and the one piece of work that
-/// leaves it — a copy — hands its result back through `MainQueue.async`.
+/// is read and written on the frame loop, and the work that leaves it — a
+/// copy, a delete, an extraction — hands its result back through
+/// `MainQueue.async`.
 @Observable
 final class ExplorerSession: @unchecked Sendable {
     var layout: PaneLayout
@@ -764,6 +766,9 @@ final class ExplorerSession: @unchecked Sendable {
         case "ctx.restore":
             dismissContext()
             restore(targets(for: entry))
+        case "ctx.extract-here":
+            dismissContext()
+            extractHere(targets(for: entry))
         default:
             dismissContext()
         }
@@ -1013,8 +1018,8 @@ final class ExplorerSession: @unchecked Sendable {
 
     private func step(redo: Bool) {
         dismissContext()
-        guard !copying, !erasing else {
-            notice = "Wait for the copy or delete to finish"
+        guard !copying, !erasing, !extracting else {
+            notice = "Wait for the copy, delete or extraction to finish"
             ViewInvalidation.markDirty()
             return
         }
@@ -1047,6 +1052,7 @@ final class ExplorerSession: @unchecked Sendable {
         case .restored: "moved \(items(count)) back to the Trash"
         case .copied: count == 1 ? "moved the copy to the Trash" : "moved \(count) copies to the Trash"
         case .created: count == 1 ? "moved the new folder to the Trash" : "moved \(count) new folders to the Trash"
+        case .extracted: count == 1 ? "moved what was extracted to the Trash" : "moved \(count) extractions to the Trash"
         case .renamed(let from, _): "renamed back to \u{201C}\((from as NSString).lastPathComponent)\u{201D}"
         case .moved: "moved \(items(count)) back"
         case .combined: "reversed \(items(count))"
@@ -1234,6 +1240,108 @@ final class ExplorerSession: @unchecked Sendable {
         for folder in Set(folders + [TrashPath.uri]) {
             layout.updateTabs(showing: FolderHistory.normalize(folder)) { $0.reload(from: source) }
         }
+    }
+
+    // MARK: - Archives
+
+    /// An extraction is running on its worker. A second waits rather than
+    /// queueing: two at once would only fight over the disk.
+    @ObservationIgnored private var extracting = false
+
+    /// Extract Here, for every archive among `entries` — each beside itself,
+    /// by `ArchiveUnpacker`'s rule. Anything that is not an archive by name
+    /// is passed over; a selection of three zips and a text file means the
+    /// three zips.
+    func extractHere(_ entries: [FileEntry]) {
+        let archives = entries.filter(ArchiveUnpacker.looksLikeArchive)
+        guard !archives.isEmpty else { return }
+        guard !extracting else {
+            notice = "Still extracting — try again when it is done"
+            ViewInvalidation.markDirty()
+            return
+        }
+        extracting = true
+        let what = archives.count == 1
+            ? "\u{201C}\(archives[0].name)\u{201D}" : Self.items(archives.count)
+        notice = "Extracting \(what)…"
+        ViewInvalidation.markDirty()
+        Thread.detachNewThread { [weak self] in
+            var results: [(FileEntry, Result<ArchiveUnpacker.Outcome, any Error>)] = []
+            for (index, archive) in archives.enumerated() {
+                let folder = (archive.path as NSString).deletingLastPathComponent
+                let step = archives.count > 1 ? " (\(index + 1) of \(archives.count))" : ""
+                // One notice per percent, not one per block: a block is 64 KiB
+                // and a frame per block would be the window's whole budget.
+                var shown = -1
+                let result = Result {
+                    try ArchiveUnpacker.extractHere(archive.path, into: folder) { progress in
+                        let percent = Int(progress.fraction * 100)
+                        if percent != shown {
+                            shown = percent
+                            let text = "Extracting \u{201C}\(archive.name)\u{201D}\(step)… \(percent)%"
+                            MainQueue.async { [weak self] in self?.showProgress(text) }
+                        }
+                        return true
+                    }
+                }
+                results.append((archive, result))
+            }
+            let finished = results
+            MainQueue.async { [weak self] in self?.finishExtract(finished) }
+        }
+    }
+
+    private func showProgress(_ text: String) {
+        // A late percentage must not paint over the result.
+        guard extracting else { return }
+        notice = text
+        ViewInvalidation.markDirty()
+    }
+
+    private func finishExtract(
+        _ results: [(FileEntry, Result<ArchiveUnpacker.Outcome, any Error>)]
+    ) {
+        extracting = false
+        var made: [String] = []
+        var problems: [String] = []
+        for (archive, result) in results {
+            switch result {
+            case .success(let outcome):
+                if let path = outcome.result { made.append(path) }
+                let failures = outcome.extraction.failures
+                if let failure = failures.first {
+                    let more = failures.count > 1 ? " (and \(failures.count - 1) more)" : ""
+                    let name = (failure.path as NSString).lastPathComponent
+                    problems.append("\(name): \(failure.message)\(more)")
+                } else if outcome.result == nil {
+                    problems.append("\(archive.name) is empty")
+                }
+            case .failure(let error):
+                let message = (error as? ArchiveError)?.message
+                    ?? (error as? FileAccessError)?.message
+                    ?? error.localizedDescription
+                problems.append("\(archive.name): \(message)")
+            }
+        }
+        if !made.isEmpty { undoHistory.record(.extracted(made)) }
+        reloadAfterChange(in: results.map { ($0.0.path as NSString).deletingLastPathComponent })
+        // The result selected, if the folder it went into is still the one
+        // on screen — the user may have gone elsewhere while it ran.
+        if let last = made.last,
+           FolderHistory.normalize(listing.path)
+               == FolderHistory.normalize((last as NSString).deletingLastPathComponent)
+        {
+            tabSet.updateCurrent { $0.selected = last }
+        }
+        var text: String
+        switch made.count {
+        case 0: text = "Nothing was extracted"
+        case 1: text = "Extracted to \u{201C}\((made[0] as NSString).lastPathComponent)\u{201D}"
+        default: text = "Extracted \(made.count) archives"
+        }
+        if let problem = problems.first { text += "; " + problem }
+        notice = text
+        ViewInvalidation.markDirty()
     }
 
     // MARK: - Copying

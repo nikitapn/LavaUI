@@ -45,6 +45,14 @@ LAVA_CLIENT=1 swift run LavaExplorer -- ~/Pictures
   it as it was. A name something else already has is refused, never
   replaced. Ctrl+Z renames it back, unless something has since taken the
   old name. Not in the Trash: restore it first.
+- **Extract Here.** On the context menu of anything named like an archive,
+  and in the File menu for the selection. One thing at the top of the
+  archive comes out under its own name; several go in a folder named after
+  the archive. A taken name gets "(2)" — nothing is ever overwritten,
+  because it is unpacked into a hidden folder beside the archive first and
+  renamed into place (`ArchiveUnpacker`). Progress is in the status line;
+  Ctrl+Z puts the result in the Trash. Reading is libarchive's, so zip,
+  tar in every compression, 7z, rar and iso all open — see `LavaArchive`.
 - **The desktop's file picker.** `FileDialog` — Open… and Save As… in every
   Lava app — runs `LavaExplorer --choose=open|open-multiple|save` instead of
   zenity: the same window with a bar along the bottom. Open shows what is
@@ -176,7 +184,11 @@ file.
   next visual step, not this one.
 - **inotify.** Reload is a key (Ctrl+R) and a menu item.
 - **A second window.** One surface per process; navigate in place.
-- **Archives, removable media, search, remote.** Later.
+- **The rest of archives.** No Compress… yet (`Archive.create` is
+  written and tested; the menu and a name prompt are not), no browsing inside
+  one as a folder, no passphrase for an encrypted zip, and no Cancel — the
+  callback can stop an extraction, but nothing on screen asks it to.
+- **Removable media, search, remote.** Later.
 
 ## The `FileSource` seam
 

@@ -420,6 +420,7 @@ Sources/
   LavaUI/          Framework (views, layout host, draw list, fonts, input)
   LavaText/        Editing logic — no C++, no Vulkan (unit-tested hard)
   LavaMenu/        Menu DSL / IR — no drawing
+  LavaArchive/     libarchive: list / extract / create, blocking, no engine
   LavaClient/      Compositor client library
   LavaHost/        Runtime window/compositor selection for app entry points
   LavaIDL/         Generated NPRPC Swift stubs (do not hand-edit long-term)

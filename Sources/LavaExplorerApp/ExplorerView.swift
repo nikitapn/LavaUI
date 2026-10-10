@@ -1060,6 +1060,12 @@ private struct FileContextMenu: View {
             title: "Set Default App",
             items: appItems(handlers, prefix: "ctx.set-default.", defaultId: defaultId)
         )))
+        if session.targets(for: entry).contains(where: ArchiveUnpacker.looksLikeArchive) {
+            items.append(.separator)
+            items.append(.item(MenuItemModel(
+                id: MenuID("ctx.extract-here"), title: "Extract Here"
+            )))
+        }
         items.append(.separator)
         items.append(.item(MenuItemModel(id: MenuID("ctx.copy"), title: "Copy")))
         items.append(.item(MenuItemModel(id: MenuID("ctx.cut"), title: "Cut")))

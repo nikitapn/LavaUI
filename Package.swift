@@ -130,7 +130,7 @@ var targets: [Target] = [
     .target(name: "LavaShotCore"),
     // Folder listing, sort, history and the FileSource seam. No engine —
     // a file manager that lists the wrong names is a test, not a screenshot.
-    .target(name: "LavaExplorerCore"),
+    .target(name: "LavaExplorerCore", dependencies: ["LavaArchive"]),
     // libarchive, for reading and writing zip, tar and the rest. A system
     // library like CPulse, but header-only on our side: nothing to compile.
     .systemLibrary(

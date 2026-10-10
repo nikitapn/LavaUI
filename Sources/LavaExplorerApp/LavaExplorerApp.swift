@@ -88,6 +88,9 @@ struct LavaExplorerApp {
                 ) { session.closeTab(id: session.tabSet.currentID) }
                 // Ctrl+Shift+N in `keys`, for the reason Delete is there.
                 MenuItem("New Folder", id: "file.new-folder") { session.startNewFolder() }
+                MenuItem("Extract Here", id: "file.extract-here") {
+                    session.extractHere(session.selectedEntries)
+                }
                 MenuItem(
                     "Reload", id: "file.reload",
                     shortcut: KeyShortcut(KeyCode.r, .primary)
