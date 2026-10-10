@@ -196,6 +196,14 @@ extension DesktopEntry {
         directories.append(contentsOf: system.split(separator: ":")
             .filter { !$0.isEmpty }
             .map { String($0) + "/applications" })
+        var flatpak: [String] = []
+        if let home = environment["HOME"] {
+            flatpak.append(home + "/.local/share/flatpak/exports/share/applications")
+        }
+        flatpak.append("/var/lib/flatpak/exports/share/applications")
+        for path in flatpak where !directories.contains(path) {
+            directories.append(path)
+        }
         return directories
     }
 
