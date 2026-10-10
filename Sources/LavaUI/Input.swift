@@ -25,18 +25,30 @@ public enum KeyCode {
     public static let equal: Int32 = 61
     /// The A key. Letter keys are their uppercase ASCII codes, so `a + n` is the nth letter.
     public static let a: Int32 = 65
+    /// The B key.
+    public static let b: Int32 = 66
     /// The C key.
     public static let c: Int32 = 67
     /// The D key.
     public static let d: Int32 = 68
+    /// The E key.
+    public static let e: Int32 = 69
     /// The F key.
     public static let f: Int32 = 70
     /// The G key.
     public static let g: Int32 = 71
     /// The H key.
     public static let h: Int32 = 72
+    /// The I key.
+    public static let i: Int32 = 73
+    /// The J key.
+    public static let j: Int32 = 74
+    /// The K key.
+    public static let k: Int32 = 75
     /// The L key.
     public static let l: Int32 = 76
+    /// The M key.
+    public static let m: Int32 = 77
     /// The N key.
     public static let n: Int32 = 78
     /// The O key.
@@ -51,6 +63,8 @@ public enum KeyCode {
     public static let s: Int32 = 83
     /// The T key.
     public static let t: Int32 = 84
+    /// The U key.
+    public static let u: Int32 = 85
     /// The V key.
     public static let v: Int32 = 86
     /// The W key.

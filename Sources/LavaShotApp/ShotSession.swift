@@ -206,7 +206,13 @@ final class ShotSession {
     }
 
     /// The editing keys, while a label is open. Returns whether it took the
-    /// key — everything it does not take falls through to the tool shortcuts.
+    /// key — only a Control chord it has no use for falls through to the
+    /// shortcuts.
+    ///
+    /// Every other key is taken whether it does anything or not. The letters
+    /// themselves arrive separately, as text (`type`), and the key event that
+    /// comes with each one would otherwise reach the tool shortcuts: typing
+    /// "arrow" picked the arrow, which committed the label at "".
     @discardableResult
     func editKey(_ key: Int32, control: Bool) -> Bool {
         guard label != nil else { return false }
@@ -236,7 +242,7 @@ final class ShotSession {
             // different feature.
             label?.edit.insert(ClipboardBridge.read())
         default:
-            return false
+            return !control
         }
         ViewInvalidation.markDirty()
         return true

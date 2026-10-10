@@ -62,8 +62,8 @@ struct LavaShotApp {
 
         // A label owns the keyboard while it is open, and it has to: `r`, `e`
         // and `a` are tool shortcuts the rest of the time, and a tool that
-        // switched tools while somebody typed "arrow" would be unusable.
-        // Escape is the exception it hands back — the first one closes the
+        // switched tools while somebody typed "arrow" would be unusable. Only
+        // chords get past it — Ctrl+Z, Ctrl+C. The first Escape closes the
         // label, the second leaves.
         if session.editKey(event.button, control: control) { return true }
 
@@ -74,47 +74,31 @@ struct LavaShotApp {
             session.perform(.copy)
         case KeyCode.c where control:
             session.perform(.copy)
-        case Key.s where control && shift:
+        case KeyCode.s where control && shift:
             session.saveAs()
-        case Key.s where control:
+        case KeyCode.s where control:
             session.perform(.save)
-        case Key.z where control && shift:
+        case KeyCode.z where control && shift:
             session.perform(.redo)
-        case Key.z where control:
+        case KeyCode.z where control:
             session.perform(.undo)
-        case Key.y where control:
+        case KeyCode.y where control:
             session.perform(.redo)
         // The tools, in the order they sit on the bar. Single letters, because
-        // this window owns the keyboard for as long as it is up and there is
-        // nothing to type into.
-        case Key.t: session.perform(.tool(.text))
-        case Key.r: session.perform(.tool(.rectangle))
-        case Key.e: session.perform(.tool(.ellipse))
-        case Key.a: session.perform(.tool(.arrow))
-        case Key.p: session.perform(.tool(.pen))
-        case Key.h: session.perform(.tool(.highlight))
-        case Key.b: session.perform(.tool(.blur))
-        case Key.v: session.perform(.tool(.select))
+        // this window owns the keyboard for as long as it is up, and outside
+        // an open label there is nothing to type into.
+        case KeyCode.t: session.perform(.tool(.text))
+        case KeyCode.r: session.perform(.tool(.rectangle))
+        case KeyCode.e: session.perform(.tool(.ellipse))
+        case KeyCode.a: session.perform(.tool(.arrow))
+        case KeyCode.p: session.perform(.tool(.pen))
+        case KeyCode.h: session.perform(.tool(.highlight))
+        case KeyCode.b: session.perform(.tool(.blur))
+        case KeyCode.v: session.perform(.tool(.select))
         default:
             return false
         }
         return true
     }
 
-    /// The letters this app binds. `KeyCode` names the keys every app needs;
-    /// these are GLFW's values for the rest of the alphabet, which is what the
-    /// compositor forwards.
-    private enum Key {
-        static let a: Int32 = 65
-        static let b: Int32 = 66
-        static let e: Int32 = 69
-        static let h: Int32 = 72
-        static let p: Int32 = 80
-        static let r: Int32 = 82
-        static let s: Int32 = 83
-        static let t: Int32 = 84
-        static let v: Int32 = 86
-        static let y: Int32 = 89
-        static let z: Int32 = 90
-    }
 }

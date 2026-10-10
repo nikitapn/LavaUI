@@ -344,7 +344,6 @@ struct ShotView: View {
         _ list: DrawList, from a: ShotPoint, to b: ShotPoint, width: Float,
         color: Color
     ) {
-        list.line(x1: a.x, y1: a.y, x2: b.x, y2: b.y, color: color, width: width)
         let dx = b.x - a.x
         let dy = b.y - a.y
         let length = max(0.001, (dx * dx + dy * dy).squareRoot())
@@ -354,13 +353,26 @@ struct ShotView: View {
         let ux = dx / length
         let uy = dy / length
         let spread: Float = 0.45
+        let cosS = cos(spread)
+        let sinS = sin(spread)
         let left = (
-            x: b.x - (ux * cos(spread) - uy * sin(spread)) * head,
-            y: b.y - (uy * cos(spread) + ux * sin(spread)) * head
+            x: b.x - (ux * cosS - uy * sinS) * head,
+            y: b.y - (uy * cosS + ux * sinS) * head
         )
         let right = (
-            x: b.x - (ux * cos(spread) + uy * sin(spread)) * head,
-            y: b.y - (uy * cos(spread) - ux * sin(spread)) * head
+            x: b.x - (ux * cosS + uy * sinS) * head,
+            y: b.y - (uy * cosS - ux * sinS) * head
+        )
+        // The shaft stops inside the head rather than at its tip: a thick line
+        // run to the point pokes its square end out past the triangle. The
+        // head's base sits `head * cos(spread)` back from `b` (the sines
+        // cancel between `left` and `right`), and the shaft runs a couple of
+        // pixels past that so no seam shows between the two. Never further
+        // back than `a`: a short arrow is all head.
+        let shaftEnd = min(length, max(0, head * cosS - 2))
+        list.line(
+            x1: a.x, y1: a.y, x2: b.x - ux * shaftEnd, y2: b.y - uy * shaftEnd,
+            color: color, width: width
         )
         list.polygon([(x: b.x, y: b.y), left, right], color: color)
     }
