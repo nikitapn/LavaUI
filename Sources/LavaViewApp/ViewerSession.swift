@@ -1,4 +1,5 @@
 import Foundation
+import LavaHost
 import LavaUI
 import LavaViewCore
 import Observation
@@ -328,6 +329,10 @@ final class ViewerSession: @unchecked Sendable {
             return
         }
         show(next)
+        // A drop or the Open dialog is a file the user chose. Stepping through
+        // the folder with the arrows is not reported: paging past two hundred
+        // holiday photos would push everything else out of Recent.
+        if let opened = folder.current { LavaHost.noteOpened(opened, appId: "LavaView") }
     }
 
     func openDialog() {

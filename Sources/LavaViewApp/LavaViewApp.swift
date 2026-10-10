@@ -57,6 +57,13 @@ struct LavaViewApp {
         let session = ViewerSession(
             editor: editor, folder: folder(from: CommandLine.arguments.dropFirst())
         )
+        // The picture the user opened, for LavaFind's Recent. After `open`,
+        // which is what starts the connection this rides in client mode, and
+        // only for an explicit argument: a bare launch shows no picture.
+        if CommandLine.arguments.dropFirst().contains(where: { !$0.hasPrefix("-") }),
+           let opened = session.folder.current {
+            LavaHost.noteOpened(opened, appId: "LavaView")
+        }
 
         LavaHost.run(
             editor: editor,

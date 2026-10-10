@@ -96,6 +96,19 @@ public enum LavaHost {
         #endif
     }
 
+    /// Tells the file index the user opened `path`, so it shows under Recent
+    /// in LavaFind. Both modes: a windowed app opens files too. Does nothing
+    /// without the control plane, or without a running `lava-index`, and
+    /// never waits for either.
+    ///
+    /// Call it for an open the *user* asked for — a double-click, a file on
+    /// the command line — not for every file an app touches on the way.
+    public static func noteOpened(_ path: String, appId: String) {
+        #if LAVA_HAS_CLIENT
+        FileIndex.noteOpened(path, appId: appId)
+        #endif
+    }
+
     /// Bend the rim of that frost like glass, by up to `px` pixels; 0 is flat
     /// and the default. Client mode only, like the frost itself.
     public static func setBackdropRefraction(px: Float) {

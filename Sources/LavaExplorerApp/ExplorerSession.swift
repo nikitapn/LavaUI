@@ -1,6 +1,7 @@
 import Foundation
 import LavaArchive
 import LavaExplorerCore
+import LavaHost
 import LavaShell
 import LavaUI
 import Observation
@@ -788,6 +789,9 @@ final class ExplorerSession: @unchecked Sendable {
             return
         }
         if app.launch(files: [entry.path]) {
+            if !entry.isDirectory {
+                LavaHost.noteOpened(entry.path, appId: "LavaExplorer")
+            }
             return
         }
         notice = "Could not open with \(app.name)"
@@ -1997,6 +2001,10 @@ final class ExplorerSession: @unchecked Sendable {
 }
 
 /// `xdg-open` for a file the user double-clicked.
+///
+/// Also where the open is reported to the file index, for LavaFind's Recent:
+/// here rather than in `activate`, so a session built with a stand-in
+/// `openFile` — a test — never writes into the user's real index.
 enum OpenLocation {
     static func file(_ path: String) -> Bool {
         guard let xdgOpen = which("xdg-open") else { return false }
@@ -2007,6 +2015,7 @@ enum OpenLocation {
         process.standardError = FileHandle.nullDevice
         do {
             try process.run()
+            LavaHost.noteOpened(path, appId: "LavaExplorer")
             return true
         } catch {
             return false

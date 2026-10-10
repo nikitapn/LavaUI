@@ -1990,7 +1990,10 @@ public enum LavaClient {
     nonisolated(unsafe) private static var menuSurface: (width: Float, height: Float)?
     /// The `Rpc` owns the transport — the shared-memory listener, its ring
     /// buffers, the worker threads — and dropping it tears all of that down.
-    nonisolated(unsafe) private static var runtime: Rpc?
+    ///
+    /// Internal rather than private so `FileIndex` can tell whether there is
+    /// one to ride, or has to start its own (a windowed app).
+    nonisolated(unsafe) static var runtime: Rpc?
 
     /// How often to say "still drawing". The compositor waits several of
     /// these before concluding anything, so this is a cheap number rather than
