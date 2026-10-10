@@ -1,4 +1,5 @@
 import Foundation
+import LavaArchive
 import LavaExplorerCore
 import LavaShell
 import LavaUI
@@ -38,6 +39,12 @@ struct ExplorerView: View {
             }
             if let target = session.pendingOverwrite {
                 OverwriteBar(session: session, target: target)
+            }
+            if let draft = session.compressDraft {
+                CompressBar(session: session, draft: draft)
+            }
+            if let request = session.passwordRequest {
+                PasswordBar(session: session, request: request)
             }
             if let chooser = session.chooser {
                 ChooserBar(session: session, chooser: chooser)
@@ -265,6 +272,88 @@ private struct ChooserBar: View {
                 if canConfirm { session.confirmChoice() }
             }
             .agentId("chooser-confirm")
+        }
+        .background(theme.panel)
+    }
+}
+
+/// A locked zip, asking for its password. Enter is Extract, Escape is
+/// Cancel; a wrong password asks again, with the field empty.
+private struct PasswordBar: View {
+    @Bindable var session: ExplorerSession
+    let request: ExplorerSession.PasswordRequest
+
+    var body: some View {
+        let theme = Theme.current
+        let name = "\u{201C}\(request.archive.name)\u{201D}"
+        let message = request.wrong
+            ? "That password does not open \(name). Try again:"
+            : "\(name) is locked. Password:"
+        return HStack(padding: 10, alignment: .center, spacing: 10) {
+            Text(message, color: theme.textPrimary, lineLimit: 1)
+                .flexShrink(1)
+                .agentId("password-message")
+            TextField(
+                text: session.passwordBinding,
+                autoFocus: true,
+                secure: true,
+                onSubmit: { session.submitPassword() }
+            )
+            .flexGrow(1)
+            .agentId("password-field")
+            Button("Cancel") { session.cancelPassword() }
+                .agentId("password-cancel")
+            Button("Extract") { session.submitPassword() }
+                .agentId("password-confirm")
+        }
+        .background(theme.selectionFill)
+    }
+}
+
+/// Compress…: what to call the archive, what kind, and — for a zip — a
+/// password. Enter in either field is Compress; Escape is Cancel.
+private struct CompressBar: View {
+    @Bindable var session: ExplorerSession
+    let draft: ExplorerSession.CompressDraft
+
+    var body: some View {
+        let theme = Theme.current
+        let what = draft.sources.count == 1
+            ? "\u{201C}\((draft.sources[0] as NSString).lastPathComponent)\u{201D}"
+            : ExplorerSession.items(draft.sources.count)
+        return HStack(padding: 10, alignment: .center, spacing: 10) {
+            Text("Compress \(what) as", color: theme.textSecondary, lineLimit: 1)
+                .flexShrink(1)
+            TextField(
+                text: session.compressName,
+                autoFocus: true,
+                selectionOnFocus: .all,
+                onSubmit: { session.confirmCompress() }
+            )
+            .flexGrow(1)
+            .agentId("compress-name")
+            ComboBox(
+                selection: session.compressFormat,
+                items: ArchiveFormat.allCases.map {
+                    ComboBoxItem($0.title, tag: $0, detail: "." + $0.fileExtension)
+                },
+                width: .pt(170)
+            )
+            .agentId("compress-format")
+            if draft.format.supportsPassword {
+                TextField(
+                    text: session.compressPassword,
+                    placeholder: "Password (optional)",
+                    secure: true,
+                    onSubmit: { session.confirmCompress() }
+                )
+                .frame(width: .pt(170))
+                .agentId("compress-password")
+            }
+            Button("Cancel") { session.cancelCompress() }
+                .agentId("compress-cancel")
+            Button("Compress") { session.confirmCompress() }
+                .agentId("compress-confirm")
         }
         .background(theme.panel)
     }
@@ -1060,12 +1149,15 @@ private struct FileContextMenu: View {
             title: "Set Default App",
             items: appItems(handlers, prefix: "ctx.set-default.", defaultId: defaultId)
         )))
+        items.append(.separator)
         if session.targets(for: entry).contains(where: ArchiveUnpacker.looksLikeArchive) {
-            items.append(.separator)
             items.append(.item(MenuItemModel(
                 id: MenuID("ctx.extract-here"), title: "Extract Here"
             )))
         }
+        items.append(.item(MenuItemModel(
+            id: MenuID("ctx.compress"), title: "Compress\(what)\u{2026}"
+        )))
         items.append(.separator)
         items.append(.item(MenuItemModel(id: MenuID("ctx.copy"), title: "Copy")))
         items.append(.item(MenuItemModel(id: MenuID("ctx.cut"), title: "Cut")))

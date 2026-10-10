@@ -294,6 +294,61 @@ private func writeRawTar(_ path: String, _ entries: [RawEntry]) throws {
     }
 }
 
+@Suite struct ArchivePasswordTests {
+    @Test func aZipWithAPasswordOpensOnlyWithIt() throws {
+        let scratch = try Scratch()
+        try scratch.write("src/secret.txt", "the plans")
+        let archive = scratch.path("locked.zip")
+        _ = try Archive.create(
+            archive, format: .zip, from: [scratch.path("src/secret.txt")], password: "hunter2"
+        )
+
+        let listed = try Archive.list(archive)
+        #expect(listed.map(\.path) == ["secret.txt"], "names are not encrypted, only contents")
+        #expect(listed.first?.isEncrypted == true)
+        let raw = try #require(FileManager.default.contents(atPath: archive))
+        #expect(raw.range(of: Data("the plans".utf8)) == nil, "the contents are not stored as they are")
+
+        try scratch.mkdir("none")
+        let without = try Archive.extract(archive, into: scratch.path("none"))
+        #expect(without.needsPassword)
+        #expect(!without.wrongPassword)
+        #expect(without.failures.isEmpty, "a question, not a failure")
+        #expect(!scratch.exists("none/secret.txt"))
+
+        try scratch.mkdir("wrong")
+        let wrong = try Archive.extract(archive, into: scratch.path("wrong"), password: "nope")
+        #expect(wrong.extracted == 0)
+        #expect(wrong.wrongPassword)
+        #expect(!wrong.needsPassword)
+        #expect(!scratch.exists("wrong/secret.txt"), "a wrong password leaves no half file")
+
+        try scratch.mkdir("right")
+        let right = try Archive.extract(archive, into: scratch.path("right"), password: "hunter2")
+        #expect(right.failures.isEmpty)
+        #expect(!right.needsPassword && !right.wrongPassword)
+        #expect(scratch.read("right/secret.txt") == "the plans")
+    }
+
+    @Test func onlyAZipTakesAPassword() throws {
+        let scratch = try Scratch()
+        try scratch.write("a.txt", "a")
+        #expect(throws: ArchiveError.self) {
+            try Archive.create(
+                scratch.path("a.7z"), format: .sevenZip, from: [scratch.path("a.txt")],
+                password: "x"
+            )
+        }
+        #expect(!scratch.exists("a.7z"))
+        // Empty is no password, not a refusal.
+        _ = try Archive.create(
+            scratch.path("a.tar"), format: .tar, from: [scratch.path("a.txt")], password: ""
+        )
+        #expect(scratch.exists("a.tar"))
+        #expect(ArchiveFormat.allCases.filter(\.supportsPassword) == [.zip])
+    }
+}
+
 @Suite struct ArchiveNamingTests {
     @Test func safeRelativeKeepsInsideNamesAndRefusesTheRest() {
         #expect(ArchivePaths.safeRelative("a/b.txt") == "a/b.txt")

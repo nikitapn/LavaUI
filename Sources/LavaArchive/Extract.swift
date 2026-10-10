@@ -25,6 +25,11 @@ public struct ExtractOutcome: Equatable, Sendable {
     /// Stopped by the progress callback. What was written up to then stays,
     /// and is in `created`; the entry being written when it stopped does not.
     public var cancelled = false
+    /// Stopped at the first encrypted entry, with no password to open it.
+    /// Ask for one and run again; what came before it was written.
+    public var needsPassword = false
+    /// Stopped because the password given does not open the archive.
+    public var wrongPassword = false
 
     public init() {}
 }
@@ -43,6 +48,13 @@ extension Archive {
     /// are setuid bits; permissions are what the archive says less the umask,
     /// as `tar` does for anyone but root. Modification times are kept.
     ///
+    /// `password` opens an encrypted zip. Without one, extraction stops at the
+    /// first encrypted entry and says so (`needsPassword`); with a wrong one
+    /// it stops there too (`wrongPassword`) — a caller asks and runs again,
+    /// rather than getting an archive's worth of identical failures. Only zip
+    /// is decrypted: libarchive can *see* an encrypted 7z or rar entry but
+    /// not open it, and that is a plain failure, since no password would help.
+    ///
     /// With `replace` false, a name that is already taken is skipped — a
     /// folder is merged into, never skipped, since its contents are asked
     /// about one by one. With it true, files are overwritten.
@@ -52,18 +64,20 @@ extension Archive {
     /// outcome and ends the run: there is no next header to find after it.
     public static func extract(
         _ path: String, into directory: String, replace: Bool = false,
+        password: String? = nil,
         progress: ((ArchiveProgress) -> Bool)? = nil
     ) throws -> ExtractOutcome {
         try withUTF8Locale {
             try extractUnlocked(
-                path, into: directory, replace: replace, progress: progress
+                path, into: directory, replace: replace, password: password,
+                progress: progress
             )
         }
     }
 
     private static func extractUnlocked(
         _ path: String, into directory: String, replace: Bool,
-        progress: ((ArchiveProgress) -> Bool)?
+        password: String?, progress: ((ArchiveProgress) -> Bool)?
     ) throws -> ExtractOutcome {
         // Resolved, because the symlink check below covers every component of
         // the name it is given — including the folder's own, which may well
@@ -79,7 +93,7 @@ extension Archive {
               isDir.boolValue
         else { throw ArchiveError(path: directory, message: "Not a folder") }
 
-        let reader = try ArchiveReader(path: path)
+        let reader = try ArchiveReader(path: path, password: password)
         let total = (try? FileManager.default.attributesOfItem(atPath: path)[.size]
             as? Int64) ?? 0
         guard let disk = archive_write_disk_new() else {
@@ -125,10 +139,17 @@ extension Archive {
                 continue
             }
             if entry.isEncrypted {
-                outcome.failures.append(
-                    ArchiveError(path: relative, message: "Encrypted — not supported yet")
-                )
-                continue
+                let format = archive_format(reader.handle) & ARCHIVE_FORMAT_BASE_MASK
+                guard format == ARCHIVE_FORMAT_ZIP else {
+                    outcome.failures.append(ArchiveError(
+                        path: relative, message: "Encrypted, and only an encrypted zip can be opened"
+                    ))
+                    continue
+                }
+                if password?.isEmpty ?? true {
+                    outcome.needsPassword = true
+                    break
+                }
             }
             if entry.kind == .hardlink {
                 guard let target = entry.linkTarget.flatMap(ArchivePaths.safeRelative)
@@ -177,11 +198,17 @@ extension Archive {
                 )
                 if read == ARCHIVE_EOF { break }
                 if read < ARCHIVE_WARN {
-                    outcome.failures.append(
-                        ArchiveError(path: relative, message: ArchiveText.error(reader.handle))
-                    )
+                    let message = ArchiveText.error(reader.handle)
                     archive_write_finish_entry(disk)
                     unlink(destination)
+                    // libarchive's word for it, from both zip ciphers. Asked
+                    // of the message because the code is the same as for a
+                    // corrupt entry, which a new password would not fix.
+                    if entry.isEncrypted, message.lowercased().contains("passphrase") {
+                        outcome.wrongPassword = true
+                        break entries
+                    }
+                    outcome.failures.append(ArchiveError(path: relative, message: message))
                     if read == ARCHIVE_FATAL { break entries }
                     continue entries
                 }

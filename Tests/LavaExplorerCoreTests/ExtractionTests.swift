@@ -131,6 +131,33 @@ private final class Scratch {
         #expect(scratch.names("out") == ["fake.zip"])
     }
 
+    @Test func anEncryptedZipIsAllOrNothingOnThePassword() throws {
+        let scratch = try Scratch()
+        try scratch.file("src/plain.txt", "visible")
+        try scratch.file("src/secret.txt", "hidden")
+        let archive = scratch.path("out/mixed.zip")
+        try FileManager.default.createDirectory(atPath: scratch.path("out"), withIntermediateDirectories: true)
+        _ = try Archive.create(
+            archive, format: .zip,
+            from: [scratch.path("src/plain.txt"), scratch.path("src/secret.txt")],
+            password: "pw"
+        )
+
+        let asked = try ArchiveUnpacker.extractHere(archive, into: scratch.path("out"))
+        #expect(asked.result == nil)
+        #expect(asked.extraction.needsPassword)
+        #expect(scratch.names("out") == ["mixed.zip"], "nothing half-done is left to find")
+
+        let wrong = try ArchiveUnpacker.extractHere(archive, into: scratch.path("out"), password: "no")
+        #expect(wrong.result == nil)
+        #expect(wrong.extraction.wrongPassword)
+        #expect(scratch.names("out") == ["mixed.zip"])
+
+        let right = try ArchiveUnpacker.extractHere(archive, into: scratch.path("out"), password: "pw")
+        #expect(right.result == scratch.path("out/mixed"))
+        #expect(scratch.read("out/mixed/secret.txt") == "hidden")
+    }
+
     @Test func extractHereIsOfferedByName() {
         #expect(ArchiveUnpacker.looksLikeArchive(FileEntry(path: "/a/x.tar.gz", isDirectory: false)))
         #expect(ArchiveUnpacker.looksLikeArchive(FileEntry(path: "/a/X.ZIP", isDirectory: false)))

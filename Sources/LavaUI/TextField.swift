@@ -62,6 +62,8 @@ public struct TextField: PrimitiveView {
     public var focusRingWidth: Float?
     /// Colour of the focus ring, overriding the theme's.
     public var focusRingColor: Color?
+    /// Shows a dot per character instead of the text — a password.
+    public var isSecure: Bool
 
     /// Creates a text field.
     /// - Parameters:
@@ -76,6 +78,8 @@ public struct TextField: PrimitiveView {
     /// - focusRing: The focus chrome; `nil` uses the theme's.
     /// - focusRingWidth: Width of the focus ring; `nil` uses the theme's.
     /// - focusRingColor: Colour of the focus ring; `nil` uses the theme's.
+    /// - secure: Shows a dot per character instead of the text, and refuses
+    ///   copy, cut and undo. Single-line only.
     /// - onSubmit: Called when Enter is pressed in a single-line field.
     public init(
         text: Binding<String>,
@@ -89,6 +93,7 @@ public struct TextField: PrimitiveView {
         focusRing: FocusRingStyle? = nil,
         focusRingWidth: Float? = nil,
         focusRingColor: Color? = nil,
+        secure: Bool = false,
         onSubmit: (() -> Void)? = nil
     ) {
         self._text = text
@@ -102,18 +107,26 @@ public struct TextField: PrimitiveView {
         self.focusRing = focusRing
         self.focusRingWidth = focusRingWidth
         self.focusRingColor = focusRingColor
+        self.isSecure = secure && !multiline
         self.onSubmit = onSubmit
     }
 
     /// The font the field draws with: `font`, or the environment's when that is `nil`.
     public var resolvedFont: UIFont? { font ?? Environment.current.font }
 
-    public var dumpDetail: String { "\"\(text)\"" }
+    public var dumpDetail: String {
+        isSecure ? "\(text.count) hidden characters" : "\"\(text)\""
+    }
 
     public func mountPrimitive() -> any AnyViewNode {
         let leaf = LeafNode(kind: .textField, label: "TextField", width: .auto, height: .auto)
         configure(leaf)
-        leaf.editing = TextEditingState(text)
+        if isSecure {
+            leaf.secureText = Array(text)
+            leaf.editing = TextEditingState(LeafNode.masked(text.count))
+        } else {
+            leaf.editing = TextEditingState(text)
+        }
         leaf.installTextMeasure()
         if autoFocus, FocusManager.focusedID == nil {
             leaf.focusSelf(binding: _text, onSubmit: onSubmit)
@@ -138,10 +151,17 @@ public struct TextField: PrimitiveView {
         guard let leaf = node as? LeafNode, leaf.kind == .textField else {
             return mountPrimitive()
         }
+        // Turning masking on or off is a different field, not an edit.
+        guard isSecure == (leaf.secureText != nil) else { return mountPrimitive() }
         // The binding is the source of truth for *content*; the node owns the
         // cursor. Only resync when the outside value actually diverged, or an
         // in-progress edit would have its caret reset on every frame.
-        if leaf.editing.text != text {
+        if let real = leaf.secureText {
+            if String(real) != text {
+                leaf.secureText = Array(text)
+                leaf.editing.setText(LeafNode.masked(text.count), keepingCursor: true)
+            }
+        } else if leaf.editing.text != text {
             leaf.editing.setText(text, keepingCursor: true)
         }
         configure(leaf)
@@ -772,6 +792,55 @@ extension LeafNode {
         }
     }
 
+    // MARK: Secure fields
+    //
+    // A secure field's buffer is dots, so everything that measures, draws or
+    // hit-tests it — the caret, the selection, scrolling — works unchanged
+    // and never sees the password. The real characters live beside it in
+    // `secureText`, and each edit is folded into them afterwards.
+    //
+    // That needs no knowledge of *which* edit ran. Before it, every character
+    // was a dot; after it, whatever is not a dot was just typed or pasted, and
+    // it sits as one run ending at the caret. Where the edit started is the
+    // earlier of the old selection's start and the start of that run — the
+    // caret itself for Backspace, which inserts nothing and moves left — and
+    // how much it removed is what the dot count lost.
+
+    static let secureMask: Character = "\u{2022}"
+
+    static func masked(_ count: Int) -> String {
+        String(repeating: secureMask, count: count)
+    }
+
+    /// The selection's start and the length, in characters, before an edit.
+    func secureSnapshot() -> (start: Int, count: Int)? {
+        guard secureText != nil else { return nil }
+        let shown = editing.text
+        return (shown.distance(from: shown.startIndex, to: editing.selectedRange.lowerBound), shown.count)
+    }
+
+    /// The text the binding should now hold. For a secure field, folds the
+    /// edit into `secureText` and puts dots back where it typed.
+    func committedText(after before: (start: Int, count: Int)?) -> String {
+        guard let before, var real = secureText else { return editing.text }
+        let shown = editing.text
+        let typed = shown.filter { $0 != Self.secureMask }
+        let caret = shown.distance(from: shown.startIndex, to: editing.focus)
+        let start = max(0, min(before.start, caret - typed.count, real.count))
+        let removed = max(0, min(before.count - (shown.count - typed.count), real.count - start))
+        real.replaceSubrange(start..<start + removed, with: typed)
+        secureText = real
+        // Typing a dot itself reads as "nothing typed" above; the redraw
+        // below drops it, so what is shown never disagrees with what is held.
+        let mask = Self.masked(real.count)
+        if shown != mask {
+            let caretAfter = min(start + typed.count, real.count)
+            editing.setText(mask)
+            editing.setCursor(mask.index(mask.startIndex, offsetBy: caretAfter))
+        }
+        return String(real)
+    }
+
     func focusSelf(binding: Binding<String>, onSubmit: (() -> Void)?) {
         FocusManager.focus(
             id,
@@ -781,8 +850,9 @@ extension LeafNode {
             },
             onChar: { [weak self] character in
                 guard let self else { return false }
+                let before = self.secureSnapshot()
                 self.editing.insert(String(character))
-                binding.wrappedValue = self.editing.text
+                binding.wrappedValue = self.committedText(after: before)
                 self.afterEdit()
                 return true
             }
@@ -869,6 +939,15 @@ extension LeafNode {
         // mutation, so "did this key edit anything" is an integer compare
         // instead of a comparison of two multi-megabyte buffers.
         let before = editing.revision
+        let secureBefore = secureSnapshot()
+        // A password goes nowhere but its binding: not onto the clipboard, as
+        // dots or otherwise. Undo is refused too — it restores the dots it
+        // remembers, which say nothing about which characters they were.
+        if secureText != nil, event.control,
+           [KeyCode.c, KeyCode.x, KeyCode.z, KeyCode.y].contains(event.key)
+        {
+            return true
+        }
 
         switch event.key {
         case KeyCode.left:
@@ -955,7 +1034,7 @@ extension LeafNode {
         }
 
         if editing.revision != before {
-            binding.wrappedValue = editing.text
+            binding.wrappedValue = committedText(after: secureBefore)
             // Refresh row cache *before* followCaret: deletion leaves
             // visualRows nil (see TextEditingState.replace), and scroll
             // clamping shapes the widest rows from `layout`.

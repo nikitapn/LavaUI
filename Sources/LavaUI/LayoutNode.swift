@@ -439,6 +439,9 @@ final class LeafNode: YogaBoxNode {
     /// PrimitiveView has no body, so it never goes through CompositeNode's
     /// @State transplant — the node's own lifetime is the persistence.
     var editing = TextEditingState("")
+    /// What a secure field really holds, while `editing` holds a dot per
+    /// character. Nil for every other field. See `TextField(secure:)`.
+    var secureText: [Character]?
     /// Last character offset resolved to a `String.Index`, and the buffer
     /// version it was resolved against.
     ///
@@ -2608,6 +2611,7 @@ final class LeafNode: AnyViewNode {
     var onClick: (() -> Void)?
     var onClickLocal: ((Float, Float, Float, Float) -> Void)?
     var editing = TextEditingState("")
+    var secureText: [Character]?
     var placeholder = ""
     var isMultiline = false
     var maxLines = 8

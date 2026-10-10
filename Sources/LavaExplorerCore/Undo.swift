@@ -32,6 +32,8 @@ public enum FileChange: Equatable, Sendable {
     case created([String])
     /// What Extract Here put next to an archive: one item or one folder each.
     case extracted([String])
+    /// Archives Compress… wrote.
+    case archived([String])
     /// Given another name in the same folder.
     case renamed(from: String, to: String)
     /// Moved by a drop, within one filesystem.
@@ -43,7 +45,7 @@ public enum FileChange: Equatable, Sendable {
         switch self {
         case .trashed(let items): items.count
         case .restored(let paths), .copied(let paths), .created(let paths),
-             .extracted(let paths): paths.count
+             .extracted(let paths), .archived(let paths): paths.count
         case .renamed: 1
         case .moved(let moves): moves.count
         case .combined(let changes): changes.reduce(0) { $0 + $1.count }
@@ -150,7 +152,7 @@ extension FileChange {
                 return FileChangeReversal(inverse: nil, failures: [failure], folders: [])
             }
         case .restored(let paths), .copied(let paths), .created(let paths),
-             .extracted(let paths):
+             .extracted(let paths), .archived(let paths):
             var trashed: [TrashItem] = []
             for path in paths {
                 do {

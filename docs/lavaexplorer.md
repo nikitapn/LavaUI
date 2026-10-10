@@ -45,14 +45,31 @@ LAVA_CLIENT=1 swift run LavaExplorer -- ~/Pictures
   it as it was. A name something else already has is refused, never
   replaced. Ctrl+Z renames it back, unless something has since taken the
   old name. Not in the Trash: restore it first.
-- **Extract Here.** On the context menu of anything named like an archive,
-  and in the File menu for the selection. One thing at the top of the
+- **Extract Here.** Double-clicking an archive does it, as Archive Utility
+  does on a Mac (Open With is still on the menu); so does the context menu
+  of anything named like an archive, and the File menu for the selection. One thing at the top of the
   archive comes out under its own name; several go in a folder named after
   the archive. A taken name gets "(2)" — nothing is ever overwritten,
   because it is unpacked into a hidden folder beside the archive first and
   renamed into place (`ArchiveUnpacker`). Progress is in the status line;
   Ctrl+Z puts the result in the Trash. Reading is libarchive's, so zip,
   tar in every compression, 7z, rar and iso all open — see `LavaArchive`.
+  A locked zip asks for its password in a bar (a wrong one asks again;
+  several locked archives are asked about in turn), and is extracted whole
+  or not at all: the run stops at the first encrypted entry and throws away
+  what it had, so a cancelled prompt leaves nothing behind. Only zip is
+  decrypted — an encrypted 7z or rar is a plain failure, because libarchive
+  can see the encryption but not undo it.
+- **Compress….** The selection into one archive beside it, from the
+  context menu or File. A bar asks for the name (one item is named after
+  itself, several after their folder), the format — zip, tar plain or with
+  gzip, bzip2, xz or zstd, 7z — and, for a zip only, a password: WinZip
+  AES-256, which 7-Zip and every libarchive tool open and Windows' built-in
+  zip support does not. Names inside an encrypted zip stay readable; only
+  contents are encrypted. The archive is written under a hidden name and
+  renamed when complete, a taken name gets "(2)" before the whole extension,
+  and Ctrl+Z puts it in the Trash. The password field is
+  `TextField(secure:)`: dots on screen, no copy, cut or undo.
 - **The desktop's file picker.** `FileDialog` — Open… and Save As… in every
   Lava app — runs `LavaExplorer --choose=open|open-multiple|save` instead of
   zenity: the same window with a bar along the bottom. Open shows what is
@@ -184,10 +201,9 @@ file.
   next visual step, not this one.
 - **inotify.** Reload is a key (Ctrl+R) and a menu item.
 - **A second window.** One surface per process; navigate in place.
-- **The rest of archives.** No Compress… yet (`Archive.create` is
-  written and tested; the menu and a name prompt are not), no browsing inside
-  one as a folder, no passphrase for an encrypted zip, and no Cancel — the
-  callback can stop an extraction, but nothing on screen asks it to.
+- **The rest of archives.** No browsing inside one as a folder, and no
+  Cancel for either direction — the callback can stop the work, but nothing
+  on screen asks it to.
 - **Removable media, search, remote.** Later.
 
 ## The `FileSource` seam

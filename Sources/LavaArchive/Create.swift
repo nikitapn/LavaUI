@@ -34,23 +34,40 @@ extension Archive {
     /// Refuses a destination that already exists; choosing a free name is the
     /// caller's (`CopyNaming.keepBoth` in the explorer).
     ///
+    /// With a `password`, every file's contents are encrypted with WinZip
+    /// AES-256. Zip only (`ArchiveFormat.supportsPassword`): libarchive's 7z
+    /// and tar writers have no encryption. The names stay readable — zip
+    /// encrypts contents, never the directory — which is worth knowing before
+    /// a file name is the secret.
+    ///
     /// Throws when the archive cannot be written at all — the folder is not
-    /// writable, the disk filled up.
+    /// writable, the disk filled up — or a password was given for a format
+    /// that cannot hold one.
     public static func create(
         _ archivePath: String, format: ArchiveFormat, from sources: [String],
+        password: String? = nil,
         progress: ((ArchiveProgress) -> Bool)? = nil
     ) throws -> CreateOutcome {
         try withUTF8Locale {
-            try createUnlocked(archivePath, format: format, from: sources, progress: progress)
+            try createUnlocked(
+                archivePath, format: format, from: sources, password: password,
+                progress: progress
+            )
         }
     }
 
     private static func createUnlocked(
         _ archivePath: String, format: ArchiveFormat, from sources: [String],
-        progress: ((ArchiveProgress) -> Bool)?
+        password: String?, progress: ((ArchiveProgress) -> Bool)?
     ) throws -> CreateOutcome {
         guard !lexists(archivePath) else {
             throw ArchiveError(path: archivePath, message: "Already exists")
+        }
+        let password = password.flatMap { $0.isEmpty ? nil : $0 }
+        if password != nil, !format.supportsPassword {
+            throw ArchiveError(
+                path: archivePath, message: "A \(format.fileExtension) cannot have a password"
+            )
         }
         let folder = (archivePath as NSString).deletingLastPathComponent
         let name = (archivePath as NSString).lastPathComponent
@@ -62,6 +79,17 @@ extension Archive {
         }
         defer { archive_write_free(writer) }
         try configure(writer, format: format, path: archivePath)
+        if let password {
+            // AES rather than the original zip cipher, which is broken to
+            // the point of being a formality. The cost is the reader: Windows'
+            // own zip support and Info-ZIP `unzip` open only the old one; 7-Zip,
+            // libarchive and every Linux archive tool open this.
+            guard archive_write_set_options(writer, "zip:encryption=aes256") == ARCHIVE_OK,
+                  archive_write_set_passphrase(writer, password) == ARCHIVE_OK
+            else {
+                throw ArchiveError(path: archivePath, message: ArchiveText.error(writer))
+            }
+        }
         guard archive_write_open_filename(writer, temporary) == ARCHIVE_OK else {
             throw ArchiveError(path: archivePath, message: ArchiveText.error(writer))
         }

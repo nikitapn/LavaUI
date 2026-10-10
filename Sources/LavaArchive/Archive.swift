@@ -71,8 +71,7 @@ public struct ArchiveEntry: Equatable, Sendable {
     /// The permission bits, `mode & 0o7777`.
     public var permissions: UInt16
     public var linkTarget: String?
-    /// Stored encrypted; extracting it needs a passphrase this does not ask
-    /// for yet, and fails.
+    /// Stored encrypted: extracting it needs `extract(password:)`.
     public var isEncrypted: Bool
 
     public init(
@@ -127,6 +126,7 @@ public struct ArchiveError: Error, Equatable, Sendable {
         self.path = path
         self.message = message
     }
+
 }
 
 /// Where a long operation has got to. Return false from the callback to stop.
@@ -181,6 +181,23 @@ public enum ArchiveFormat: String, CaseIterable, Equatable, Sendable {
             (".tar", .tar), (".zip", .zip), (".7z", .sevenZip),
         ]
         return suffixes.first { lower.hasSuffix($0.0) }?.1
+    }
+
+    /// Whether `create` can encrypt it. Zip only: libarchive writes no
+    /// encrypted 7z or tar.
+    public var supportsPassword: Bool { self == .zip }
+
+    /// What a menu calls it.
+    public var title: String {
+        switch self {
+        case .zip: "Zip"
+        case .tar: "Tar (uncompressed)"
+        case .tarGzip: "Tar + gzip"
+        case .tarBzip2: "Tar + bzip2"
+        case .tarXz: "Tar + xz"
+        case .tarZstd: "Tar + zstd"
+        case .sevenZip: "7-Zip"
+        }
     }
 
     /// The name without the archive's extension: what "Extract here" calls
@@ -271,7 +288,7 @@ final class ArchiveReader {
     let handle: OpaquePointer
     let path: String
 
-    init(path: String) throws {
+    init(path: String, password: String? = nil) throws {
         guard let handle = archive_read_new() else {
             throw ArchiveError(path: path, message: "Out of memory")
         }
@@ -284,6 +301,9 @@ final class ArchiveReader {
         // which here is "C". UTF-8 is the right guess for anything made this
         // century on a machine that is not Windows.
         archive_read_set_options(handle, "hdrcharset=UTF-8")
+        if let password, !password.isEmpty {
+            archive_read_add_passphrase(handle, password)
+        }
         // 64 KiB blocks: big enough that the read syscalls are noise.
         // Every property is set by now, so a throw still runs `deinit`,
         // which is what frees the handle.

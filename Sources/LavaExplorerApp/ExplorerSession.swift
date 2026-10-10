@@ -595,6 +595,12 @@ final class ExplorerSession: @unchecked Sendable {
             }
             return
         }
+        // An archive opens the way Archive Utility opens one: into a folder
+        // beside it. Open With is still on the menu for anything else.
+        if !inTrash, ArchiveUnpacker.looksLikeArchive(entry) {
+            extractHere([entry])
+            return
+        }
         if openFile(entry.path) {
             return
         }
@@ -769,6 +775,8 @@ final class ExplorerSession: @unchecked Sendable {
         case "ctx.extract-here":
             dismissContext()
             extractHere(targets(for: entry))
+        case "ctx.compress":
+            startCompress(targets(for: entry))
         default:
             dismissContext()
         }
@@ -1018,8 +1026,8 @@ final class ExplorerSession: @unchecked Sendable {
 
     private func step(redo: Bool) {
         dismissContext()
-        guard !copying, !erasing, !extracting else {
-            notice = "Wait for the copy, delete or extraction to finish"
+        guard !copying, !erasing, !extracting, !compressing else {
+            notice = "Wait for the copy, delete or archive to finish"
             ViewInvalidation.markDirty()
             return
         }
@@ -1053,6 +1061,7 @@ final class ExplorerSession: @unchecked Sendable {
         case .copied: count == 1 ? "moved the copy to the Trash" : "moved \(count) copies to the Trash"
         case .created: count == 1 ? "moved the new folder to the Trash" : "moved \(count) new folders to the Trash"
         case .extracted: count == 1 ? "moved what was extracted to the Trash" : "moved \(count) extractions to the Trash"
+        case .archived: count == 1 ? "moved the new archive to the Trash" : "moved \(count) new archives to the Trash"
         case .renamed(let from, _): "renamed back to \u{201C}\((from as NSString).lastPathComponent)\u{201D}"
         case .moved: "moved \(items(count)) back"
         case .combined: "reversed \(items(count))"
@@ -1248,33 +1257,86 @@ final class ExplorerSession: @unchecked Sendable {
     /// queueing: two at once would only fight over the disk.
     @ObservationIgnored private var extracting = false
 
+    /// A locked zip, waiting on its password. Observed: the bar is drawn
+    /// from it.
+    struct PasswordRequest {
+        var archive: FileEntry
+        /// The last password tried did not open it.
+        var wrong: Bool
+        var password = ""
+    }
+
+    var passwordRequest: PasswordRequest?
+    /// Locked archives still to ask about, after the one being asked about:
+    /// a selection of several is asked about one at a time. Each carries
+    /// whether its last try was wrong.
+    @ObservationIgnored private var passwordQueue: [(FileEntry, Bool)] = []
+
     /// Extract Here, for every archive among `entries` — each beside itself,
     /// by `ArchiveUnpacker`'s rule. Anything that is not an archive by name
     /// is passed over; a selection of three zips and a text file means the
-    /// three zips.
+    /// three zips. A locked one is asked about afterwards.
     func extractHere(_ entries: [FileEntry]) {
         let archives = entries.filter(ArchiveUnpacker.looksLikeArchive)
         guard !archives.isEmpty else { return }
-        guard !extracting else {
+        guard !extracting, passwordRequest == nil else {
             notice = "Still extracting — try again when it is done"
             ViewInvalidation.markDirty()
             return
         }
+        runExtraction(archives.map { ($0, nil) })
+    }
+
+    var passwordBinding: Binding<String> {
+        Binding(
+            get: { [unowned self] in passwordRequest?.password ?? "" },
+            set: { [unowned self] in passwordRequest?.password = $0 }
+        )
+    }
+
+    /// Extract with what was typed. Nothing typed is not an attempt.
+    func submitPassword() {
+        guard let request = passwordRequest, !request.password.isEmpty else { return }
+        passwordRequest = nil
+        FocusManager.clear()
+        runExtraction([(request.archive, request.password)])
+    }
+
+    /// Leave this one locked, and ask about the next.
+    func cancelPassword() {
+        guard let request = passwordRequest else { return }
+        passwordRequest = nil
+        FocusManager.clear()
+        notice = "Left \u{201C}\(request.archive.name)\u{201D} unextracted"
+        askNextPassword()
+        ViewInvalidation.markDirty()
+    }
+
+    private func askNextPassword() {
+        guard passwordRequest == nil, !passwordQueue.isEmpty else { return }
+        let (archive, wrong) = passwordQueue.removeFirst()
+        passwordRequest = PasswordRequest(archive: archive, wrong: wrong)
+        ViewInvalidation.markDirty()
+    }
+
+    private func runExtraction(_ jobs: [(FileEntry, String?)]) {
         extracting = true
-        let what = archives.count == 1
-            ? "\u{201C}\(archives[0].name)\u{201D}" : Self.items(archives.count)
+        let what = jobs.count == 1
+            ? "\u{201C}\(jobs[0].0.name)\u{201D}" : Self.items(jobs.count)
         notice = "Extracting \(what)…"
         ViewInvalidation.markDirty()
         Thread.detachNewThread { [weak self] in
             var results: [(FileEntry, Result<ArchiveUnpacker.Outcome, any Error>)] = []
-            for (index, archive) in archives.enumerated() {
+            for (index, (archive, password)) in jobs.enumerated() {
                 let folder = (archive.path as NSString).deletingLastPathComponent
-                let step = archives.count > 1 ? " (\(index + 1) of \(archives.count))" : ""
+                let step = jobs.count > 1 ? " (\(index + 1) of \(jobs.count))" : ""
                 // One notice per percent, not one per block: a block is 64 KiB
                 // and a frame per block would be the window's whole budget.
                 var shown = -1
                 let result = Result {
-                    try ArchiveUnpacker.extractHere(archive.path, into: folder) { progress in
+                    try ArchiveUnpacker.extractHere(
+                        archive.path, into: folder, password: password
+                    ) { progress in
                         let percent = Int(progress.fraction * 100)
                         if percent != shown {
                             shown = percent
@@ -1304,9 +1366,14 @@ final class ExplorerSession: @unchecked Sendable {
         extracting = false
         var made: [String] = []
         var problems: [String] = []
+        var locked: [(FileEntry, Bool)] = []
         for (archive, result) in results {
             switch result {
             case .success(let outcome):
+                if outcome.extraction.needsPassword || outcome.extraction.wrongPassword {
+                    locked.append((archive, outcome.extraction.wrongPassword))
+                    continue
+                }
                 if let path = outcome.result { made.append(path) }
                 let failures = outcome.extraction.failures
                 if let failure = failures.first {
@@ -1333,14 +1400,171 @@ final class ExplorerSession: @unchecked Sendable {
         {
             tabSet.updateCurrent { $0.selected = last }
         }
-        var text: String
-        switch made.count {
-        case 0: text = "Nothing was extracted"
-        case 1: text = "Extracted to \u{201C}\((made[0] as NSString).lastPathComponent)\u{201D}"
-        default: text = "Extracted \(made.count) archives"
+        if made.isEmpty, problems.isEmpty, !locked.isEmpty {
+            // The bar is the whole message.
+            notice = nil
+        } else {
+            var text: String
+            switch made.count {
+            case 0: text = "Nothing was extracted"
+            case 1: text = "Extracted to \u{201C}\((made[0] as NSString).lastPathComponent)\u{201D}"
+            default: text = "Extracted \(made.count) archives"
+            }
+            if let problem = problems.first { text += "; " + problem }
+            notice = text
         }
-        if let problem = problems.first { text += "; " + problem }
+        // A wrong try is asked again before anything still waiting.
+        passwordQueue.insert(contentsOf: locked, at: 0)
+        askNextPassword()
+        ViewInvalidation.markDirty()
+    }
+
+    // MARK: - Compress
+
+    /// Compress…, waiting on a name and a format. Observed: the bar is drawn
+    /// from it.
+    struct CompressDraft {
+        var sources: [String]
+        var directory: String
+        var name: String
+        var format: ArchiveFormat
+        /// Zip only; the field is not shown for anything else, and what was
+        /// typed is dropped if the format changes away from zip.
+        var password = ""
+    }
+
+    var compressDraft: CompressDraft?
+    /// The format picked last time, offered first next time.
+    @ObservationIgnored private var lastCompressFormat: ArchiveFormat = .zip
+    @ObservationIgnored private var compressing = false
+
+    /// Opens the Compress bar for `entries`, which become one archive in the
+    /// folder they are in.
+    func startCompress(_ entries: [FileEntry]) {
+        dismissContext()
+        guard !entries.isEmpty else { return }
+        guard !inTrash else {
+            notice = "Restore it first — nothing is compressed out of the Trash"
+            ViewInvalidation.markDirty()
+            return
+        }
+        let paths = entries.map(\.path)
+        compressDraft = CompressDraft(
+            sources: paths,
+            directory: (paths[0] as NSString).deletingLastPathComponent,
+            name: ArchivePacker.suggestedName(for: paths),
+            format: lastCompressFormat
+        )
+        ViewInvalidation.markDirty()
+    }
+
+    func cancelCompress() {
+        compressDraft = nil
+        FocusManager.clear()
+        ViewInvalidation.markDirty()
+    }
+
+    var compressName: Binding<String> {
+        Binding(
+            get: { [unowned self] in compressDraft?.name ?? "" },
+            set: { [unowned self] in compressDraft?.name = $0 }
+        )
+    }
+
+    var compressPassword: Binding<String> {
+        Binding(
+            get: { [unowned self] in compressDraft?.password ?? "" },
+            set: { [unowned self] in compressDraft?.password = $0 }
+        )
+    }
+
+    var compressFormat: Binding<ArchiveFormat> {
+        Binding(
+            get: { [unowned self] in compressDraft?.format ?? lastCompressFormat },
+            set: { [unowned self] format in
+                compressDraft?.format = format
+                if !format.supportsPassword { compressDraft?.password = "" }
+                ViewInvalidation.markDirty()
+            }
+        )
+    }
+
+    func confirmCompress() {
+        guard let draft = compressDraft else { return }
+        guard ArchivePacker.isUsableName(draft.name) else {
+            notice = "An archive needs a name, without a slash in it"
+            ViewInvalidation.markDirty()
+            return
+        }
+        guard !compressing else {
+            notice = "Still compressing — try again when it is done"
+            ViewInvalidation.markDirty()
+            return
+        }
+        compressDraft = nil
+        FocusManager.clear()
+        lastCompressFormat = draft.format
+        compressing = true
+        let target = ArchivePacker.destination(
+            named: draft.name, format: draft.format, in: draft.directory
+        )
+        let name = (target as NSString).lastPathComponent
+        let password = draft.format.supportsPassword && !draft.password.isEmpty
+            ? draft.password : nil
+        notice = "Compressing \u{201C}\(name)\u{201D}…"
+        ViewInvalidation.markDirty()
+        Thread.detachNewThread { [weak self] in
+            var shown = -1
+            let result = Result {
+                try Archive.create(
+                    target, format: draft.format, from: draft.sources, password: password
+                ) { progress in
+                    let percent = Int(progress.fraction * 100)
+                    if percent != shown {
+                        shown = percent
+                        let text = "Compressing \u{201C}\(name)\u{201D}… \(percent)%"
+                        MainQueue.async { [weak self] in self?.showCompressProgress(text) }
+                    }
+                    return true
+                }
+            }
+            MainQueue.async { [weak self] in
+                self?.finishCompress(result, target: target, count: draft.sources.count)
+            }
+        }
+    }
+
+    private func showCompressProgress(_ text: String) {
+        guard compressing else { return }
         notice = text
+        ViewInvalidation.markDirty()
+    }
+
+    private func finishCompress(
+        _ result: Result<CreateOutcome, any Error>, target: String, count: Int
+    ) {
+        compressing = false
+        let directory = (target as NSString).deletingLastPathComponent
+        let name = (target as NSString).lastPathComponent
+        switch result {
+        case .success(let outcome):
+            undoHistory.record(.archived([target]))
+            reloadAfterChange(in: [directory])
+            if FolderHistory.normalize(listing.path) == FolderHistory.normalize(directory) {
+                tabSet.updateCurrent { $0.selected = target }
+            }
+            var text = "Compressed \(Self.items(count)) to \u{201C}\(name)\u{201D}"
+            if let failure = outcome.failures.first {
+                let more = outcome.failures.count > 1
+                    ? " (and \(outcome.failures.count - 1) more)" : ""
+                text += "; left out \((failure.path as NSString).lastPathComponent): "
+                    + "\(failure.message)\(more)"
+            }
+            notice = text
+        case .failure(let error):
+            let message = (error as? ArchiveError)?.message ?? error.localizedDescription
+            notice = "Could not compress to \u{201C}\(name)\u{201D}: \(message)"
+        }
         ViewInvalidation.markDirty()
     }
 

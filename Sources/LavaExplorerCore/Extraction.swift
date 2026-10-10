@@ -34,10 +34,12 @@ public enum ArchiveUnpacker {
     ///
     /// Throws only when there is nothing to show for it: the archive cannot
     /// be opened, or the folder cannot be written to. A run cancelled from
-    /// `progress` returns with `result` nil and the half-extracted contents
-    /// removed.
+    /// `progress`, or stopped for a password (`extraction.needsPassword`,
+    /// `.wrongPassword`), returns with `result` nil and the half-extracted
+    /// contents removed — an archive is extracted whole or not at all, so
+    /// asking for a password and running again starts from nothing.
     public static func extractHere(
-        _ archive: String, into directory: String,
+        _ archive: String, into directory: String, password: String? = nil,
         progress: ((ArchiveProgress) -> Bool)? = nil
     ) throws -> Outcome {
         let name = (archive as NSString).lastPathComponent
@@ -55,13 +57,17 @@ public enum ArchiveUnpacker {
 
         let extraction: ExtractOutcome
         do {
-            extraction = try Archive.extract(archive, into: staging, progress: progress)
+            extraction = try Archive.extract(
+                archive, into: staging, password: password, progress: progress
+            )
         } catch {
             try? FileManager.default.removeItem(atPath: staging)
             throw error
         }
         let landed = (try? FileManager.default.contentsOfDirectory(atPath: staging)) ?? []
-        guard !extraction.cancelled, !landed.isEmpty else {
+        guard !extraction.cancelled, !extraction.needsPassword,
+              !extraction.wrongPassword, !landed.isEmpty
+        else {
             try? FileManager.default.removeItem(atPath: staging)
             return Outcome(result: nil, extraction: extraction)
         }

@@ -91,6 +91,9 @@ struct LavaExplorerApp {
                 MenuItem("Extract Here", id: "file.extract-here") {
                     session.extractHere(session.selectedEntries)
                 }
+                MenuItem("Compress\u{2026}", id: "file.compress") {
+                    session.startCompress(session.selectedEntries)
+                }
                 MenuItem(
                     "Reload", id: "file.reload",
                     shortcut: KeyShortcut(KeyCode.r, .primary)
@@ -171,6 +174,14 @@ struct LavaExplorerApp {
         }
         if event.button == KeyCode.escape, session.pendingOverwrite != nil {
             session.resolveOverwrite(false)
+            return true
+        }
+        if event.button == KeyCode.escape, session.compressDraft != nil {
+            session.cancelCompress()
+            return true
+        }
+        if event.button == KeyCode.escape, session.passwordRequest != nil {
+            session.cancelPassword()
             return true
         }
         // A picker's Escape is Cancel, as in every dialog — the name field
