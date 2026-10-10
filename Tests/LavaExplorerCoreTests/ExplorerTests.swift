@@ -223,6 +223,19 @@ struct TabTests {
         #expect(tabs.current.title == "a")
     }
 
+    @Test("A new tab looks like the one it was opened from")
+    func viewModeIsInherited() {
+        var tabs = ExplorerTabs(tab: ExplorerTab.open(
+            id: 1, path: "/home", source: sample()
+        ))
+        #expect(tabs.current.viewMode == .list)
+        tabs.updateCurrent { $0.viewMode = .icons }
+        tabs.open(path: "/home/pics", source: sample())
+        #expect(tabs.current.viewMode == .icons)
+        tabs.select(id: 1)
+        #expect(tabs.current.viewMode == .icons, "the tab it came from keeps its own")
+    }
+
     @Test("Closing a tab to the left keeps the same folder selected")
     func closeShiftsIndex() {
         var tabs = ExplorerTabs(tab: ExplorerTab.open(

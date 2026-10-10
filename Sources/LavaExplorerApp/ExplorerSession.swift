@@ -104,10 +104,39 @@ final class ExplorerSession: @unchecked Sendable {
 
     /// What a row draws in place of its glyph, or nil for the glyph. The
     /// first ask queues the work.
-    func thumbnail(for entry: FileEntry) -> String? {
+    func thumbnail(for entry: FileEntry, size: ThumbnailCache.Size = .normal) -> String? {
         if ThumbnailCache.drawsItself(entry) { return entry.path }
         _ = thumbnailRevision
-        return thumbnails.path(for: entry)
+        return thumbnails.path(for: entry, size: size)
+    }
+
+    // MARK: - View mode
+
+    var viewMode: FileViewMode { tabSet.current.viewMode }
+
+    /// List or icons, for the current tab; tabs opened from it follow.
+    func setViewMode(_ mode: FileViewMode) {
+        dismissContext()
+        guard viewMode != mode else { return }
+        tabSet.updateCurrent { $0.viewMode = mode }
+        ViewInvalidation.markDirty()
+    }
+
+    /// Columns the icon view has in each pane, from its width — so Up and
+    /// Down move a row of tiles rather than one.
+    @ObservationIgnored private var gridColumns: [Int: Int] = [:]
+
+    /// The same sum `LazyVGrid` does with the same numbers.
+    func noteGridWidth(_ paneID: Int, _ width: Float) {
+        gridColumns[paneID] = max(
+            1, Int((width + TileMetrics.spacing) / (TileMetrics.width + TileMetrics.spacing))
+        )
+    }
+
+    /// Up and Down: a row in the list, a row of tiles in the icon view.
+    func moveVertically(by rows: Int, extending: Bool = false) {
+        let columns = viewMode == .icons ? (gridColumns[layout.activePaneID] ?? 1) : 1
+        moveSelection(by: rows * columns, extending: extending)
     }
 
     // MARK: - Watching

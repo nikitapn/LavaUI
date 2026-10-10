@@ -665,6 +665,19 @@ private struct Toolbar: View {
             .cornerRadius(4)
             .cursor(canMake ? .pointer : .arrow)
             .agentId("new-folder")
+            // Names the view it switches to, as a button does — the one in
+            // use needs no label, it is on screen.
+            Text(
+                tab.viewMode == .icons ? "List" : "Icons",
+                color: Theme.current.textSecondary,
+                align: .center,
+                onClick: { session.setViewMode(tab.viewMode == .icons ? .list : .icons) }
+            )
+            .padding(6)
+            .hoverBackground(Theme.current.hover)
+            .cornerRadius(4)
+            .cursor(.pointer)
+            .agentId("toggle-view")
             Text(
                 "Hidden",
                 color: tab.showHidden
@@ -779,7 +792,9 @@ private struct FilePane: View {
             if TrashPath.isTrash(listing.path) {
                 trashBar(empty: listing.entries.isEmpty)
             }
-            header
+            // Columns to sort by and resize belong to rows; the icon view
+            // sorts from the View menu.
+            if tab.viewMode == .list { header }
             if let draft = session.newFolderDraft, draft.tabID == tab.id,
                draft.directory == listing.path
             {
@@ -795,6 +810,23 @@ private struct FilePane: View {
                     .padding(16)
                     .agentId("listing-empty")
                 Spacer()
+            } else if tab.viewMode == .icons {
+                ScrollView(.vertical, position: session.scrollPosition(for: tab.id)) {
+                    LazyVGrid(
+                        listing.entries,
+                        cellWidth: TileMetrics.width,
+                        cellHeight: TileMetrics.height,
+                        spacing: TileMetrics.spacing,
+                        scrollTarget: selectedIndex
+                    ) { entry in
+                        FileRow(
+                            session: session, paneID: paneID, tabID: tab.id, entry: entry,
+                            selected: tab.selection.contains(entry.path), tile: true
+                        )
+                    }
+                }
+                .flexGrow(1)
+                .onFrame { frame in session.noteGridWidth(paneID, frame.w) }
             } else {
                 ScrollView(.vertical, position: session.scrollPosition(for: tab.id)) {
                     LazyVStack(
@@ -953,59 +985,151 @@ enum FileListMetrics {
     static let gap: Float = 8
 }
 
+/// The icon view's cell: how big a tile is, and what is inside it.
+enum TileMetrics {
+    static let width: Float = 112
+    static let height: Float = 132
+    /// Space between tiles, both ways. `ExplorerSession.noteGridWidth` works
+    /// out the column count from it, the same way `LazyVGrid` does.
+    static let spacing: Float = 4
+    /// The height a thumbnail is fitted into, and the side of the shapes
+    /// drawn for everything else.
+    static let icon: Float = 80
+    /// The width a thumbnail is fitted into: the tile's, less its padding. A
+    /// landscape photo — most of them — would otherwise be fitted to a square
+    /// and shown at two thirds of the width there is.
+    static let pictureWidth: Float = width - 12
+
+    /// The cache size to ask for: the "large" thumbnails once the box is
+    /// more pixels across than a "normal" one has, which is any scale above
+    /// 1.28.
+    static var thumbnailSize: ThumbnailCache.Size {
+        pictureWidth * FontStore.scale.multiplier > Float(ThumbnailCache.Size.normal.pixels)
+            ? .large : .normal
+    }
+}
+
+/// What a tile shows when there is no picture to show: a folder as a block of
+/// the accent colour, anything else as a page with its extension on it.
+/// Shapes rather than the list's glyphs scaled up — those come from a fallback
+/// symbol face that a font loaded at another size would not carry.
+private struct BigIcon: View {
+    let entry: FileEntry
+    let size: Float
+
+    var body: some View {
+        let theme = Theme.current
+        let ext = (entry.name as NSString).pathExtension.uppercased()
+        // Sized with `.frame`, not `VStack(width:)`: a column that states its
+        // own width is painted `theme.panel`, which put a grey square behind
+        // every icon.
+        return VStack(alignment: .center, spacing: 0) {
+            Spacer()
+            if entry.isDirectory {
+                Spacer(flexGrow: 0)
+                    .frame(width: .pt(size * 0.86), height: .pt(size * 0.64))
+                    .background(theme.accent.opacity(0.8))
+                    .cornerRadius(8)
+            } else {
+                VStack(
+                    width: .pt(size * 0.62), height: .pt(size * 0.8),
+                    alignment: .center, spacing: 0
+                ) {
+                    Spacer()
+                    Text(String(ext.prefix(5)), color: theme.textSecondary, lineLimit: 1)
+                    Spacer()
+                }
+                .background(theme.inset)
+                .cornerRadius(6)
+            }
+            Spacer()
+        }
+        .frame(width: .pt(size), height: .pt(size))
+    }
+}
+
 private struct FileRow: View {
     @Bindable var session: ExplorerSession
     let paneID: Int
     let tabID: Int
     let entry: FileEntry
     let selected: Bool
+    /// A tile in the icon view rather than a row in the list. The two differ
+    /// only in what is inside: selection, clicks, the context menu, dragging
+    /// out and dropping in are the same code for both.
+    var tile = false
 
     var body: some View {
         // A folder takes a drop into itself. A file does not, and a drop on it
         // falls through to the list behind — the folder being shown.
         if entry.isDirectory {
-            row.onDrop(
+            item.onDrop(
                 targeted: { session.setDropHover(.folder(paneID: paneID, path: entry.path), $0) }
             ) { urls in
                 session.dropInFolder(entry, urls)
             }
         } else {
-            row
+            item
         }
     }
 
-    private var row: some View {
-        let on = selected
+    @ViewBuilder private var item: some View {
+        if tile {
+            decorated(tileContent)
+        } else {
+            decorated(rowContent)
+        }
+    }
+
+    private var fill: Color {
         let theme = Theme.current
-        let menuX = session.menuX
-        let menuY = session.menuY
-        let paneID = self.paneID
         let aimedAt = session.dropHover == .folder(paneID: paneID, path: entry.path)
-        let fill = aimedAt
+        return aimedAt
             ? theme.accent.opacity(0.28)
-            : (on ? theme.selectionFill : Color.clear)
+            : (selected ? theme.selectionFill : Color.clear)
+    }
+
+    private var renaming: Bool {
+        guard let draft = session.renameDraft else { return false }
+        return draft.path == entry.path && draft.tabID == tabID
+    }
+
+    private func pointer(_ mods: Int32, _ button: Int32) {
+        if button == PointerButton.right {
+            session.openContext(entry)
+            return
+        }
+        // Middle-click opens a folder in a new tab, as in a browser;
+        // Ctrl+click is selection, as in every file manager.
+        if button == PointerButton.middle {
+            if entry.isDirectory { session.newTab(path: entry.path) }
+            return
+        }
+        guard button == PointerButton.left else { return }
+        let p = PointerState.window
+        session.click(entry, clicks: ClickCounter.register(x: p.x, y: p.y), mods: mods)
+    }
+
+    private var renameField: some View {
+        TextField(
+            text: session.renameName,
+            autoFocus: true,
+            selectionOnFocus: .leading(
+                Rename.stemLength(of: entry.name, isDirectory: entry.isDirectory)
+            ),
+            onSubmit: { session.commitRename() }
+        )
+        .agentId("rename-field")
+    }
+
+    private var rowContent: some View {
+        let theme = Theme.current
         return HStack(
             height: .pt(FileListMetrics.rowHeight),
             padding: FileListMetrics.sidePadding,
             alignment: .center,
             spacing: FileListMetrics.gap,
-            onPointer: { mods, button in
-                if button == PointerButton.right {
-                    session.openContext(entry)
-                    return
-                }
-                // Middle-click opens a folder in a new tab, as in a browser;
-                // Ctrl+click is selection, as in every file manager.
-                if button == PointerButton.middle {
-                    if entry.isDirectory { session.newTab(path: entry.path) }
-                    return
-                }
-                guard button == PointerButton.left else { return }
-                let p = PointerState.window
-                session.click(
-                    entry, clicks: ClickCounter.register(x: p.x, y: p.y), mods: mods
-                )
-            }
+            onPointer: pointer
         ) {
             if let thumbnail = session.thumbnail(for: entry) {
                 Image(
@@ -1021,26 +1145,11 @@ private struct FileRow: View {
                 )
                 .frame(width: .pt(FileListMetrics.iconSize))
             }
-            if let draft = session.renameDraft, draft.path == entry.path,
-               draft.tabID == tabID
-            {
-                TextField(
-                    text: session.renameName,
-                    autoFocus: true,
-                    selectionOnFocus: .leading(
-                        Rename.stemLength(of: entry.name, isDirectory: entry.isDirectory)
-                    ),
-                    onSubmit: { session.commitRename() }
-                )
-                .flexGrow(1)
-                .agentId("rename-field")
+            if renaming {
+                renameField.flexGrow(1)
             } else {
-                Text(
-                    entry.name,
-                    color: theme.textPrimary,
-                    lineLimit: 1
-                )
-                .flexGrow(1)
+                Text(entry.name, color: theme.textPrimary, lineLimit: 1)
+                    .flexGrow(1)
             }
             Text(entry.sizeLabel, color: theme.textDim, lineLimit: 1)
                 .frame(width: .pt(session.columns.size))
@@ -1052,40 +1161,84 @@ private struct FileRow: View {
         // flickering — which is why file managers do not light rows up.
         .frame(width: .pct(100))
         .background(fill)
-        .agentId("file-\(entry.name)")
-        .onFileDrag(paths: { session.dragPaths(for: entry) }) {
-            // Built after `paths`, so it knows how many went with this row.
-            FileDragChip(entry: entry, others: max(0, session.ownDrag.count - 1))
-        }
-        .overlay(
-            isPresented: Binding(
-                get: {
-                    session.contextEntry?.path == entry.path
-                        && session.contextPaneID == paneID
-                },
-                set: { shown in
-                    if !shown, session.contextEntry?.path == entry.path {
-                        session.dismissContext()
-                    }
-                }
-            ),
-            placement: OverlayPlacement { context in
-                let width = context.idealSize.width
-                let height = context.idealSize.height
-                let x = min(max(0, menuX), max(0, context.viewport.width - width))
-                let y = min(max(0, menuY), max(0, context.viewport.height - height))
-                return OverlayFrame(x: x, y: y, width: width, height: height)
-            },
-            style: {
-                var style = MenuBarStyle.standard(theme: theme).overlayStyle
-                style.minWidth = 220
-                return style
-            }()
+    }
+
+    private var tileContent: some View {
+        let theme = Theme.current
+        let inner = TileMetrics.width - 12
+        return VStack(
+            width: .pt(TileMetrics.width),
+            height: .pt(TileMetrics.height),
+            padding: 6,
+            alignment: .center,
+            spacing: 6,
+            onPointer: pointer
         ) {
-            if session.contextEntry?.path == entry.path, session.contextPaneID == paneID {
-                FileContextMenu(session: session, entry: entry)
+            if let thumbnail = session.thumbnail(for: entry, size: TileMetrics.thumbnailSize) {
+                Image(
+                    path: thumbnail,
+                    width: .pt(TileMetrics.pictureWidth),
+                    height: .pt(TileMetrics.icon),
+                    contentMode: .fit
+                )
+            } else {
+                BigIcon(entry: entry, size: TileMetrics.icon)
+            }
+            if renaming {
+                renameField.frame(width: .pt(inner))
+            } else {
+                // Two lines, centred under the picture: most names fit, and a
+                // long one shows its start and enough of the rest to tell it
+                // from its neighbours.
+                Text(entry.name, color: theme.textPrimary, lineLimit: 2, align: .top)
+                    .frame(width: .pt(inner))
             }
         }
+        .background(fill)
+        .cornerRadius(6)
+    }
+
+    /// What rows and tiles have in common, around whichever they are.
+    private func decorated<Content: View>(_ content: Content) -> some View {
+        let theme = Theme.current
+        let menuX = session.menuX
+        let menuY = session.menuY
+        let paneID = self.paneID
+        return content
+            .agentId("file-\(entry.name)")
+            .onFileDrag(paths: { session.dragPaths(for: entry) }) {
+                // Built after `paths`, so it knows how many went with this row.
+                FileDragChip(entry: entry, others: max(0, session.ownDrag.count - 1))
+            }
+            .overlay(
+                isPresented: Binding(
+                    get: {
+                        session.contextEntry?.path == entry.path
+                            && session.contextPaneID == paneID
+                    },
+                    set: { shown in
+                        if !shown, session.contextEntry?.path == entry.path {
+                            session.dismissContext()
+                        }
+                    }
+                ),
+                placement: OverlayPlacement { context in
+                    let width = context.idealSize.width
+                    let height = context.idealSize.height
+                    let x = min(max(0, menuX), max(0, context.viewport.width - width))
+                    let y = min(max(0, menuY), max(0, context.viewport.height - height))
+                    return OverlayFrame(x: x, y: y, width: width, height: height)
+                },
+                style: {
+                    var style = MenuBarStyle.standard(theme: theme).overlayStyle
+                    style.minWidth = 220
+                    return style
+                }()
+            ) {
+                if session.contextEntry?.path == entry.path, session.contextPaneID == paneID {
+                    FileContextMenu(session: session, entry: entry)
+                }
+            }
     }
 }
 

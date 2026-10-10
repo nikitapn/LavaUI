@@ -1,5 +1,13 @@
 import Foundation
 
+/// How a tab lays its folder out.
+public enum FileViewMode: String, Equatable, Sendable {
+    /// Rows with columns: name, size, date.
+    case list
+    /// A grid of tiles, each a thumbnail or an icon over the name.
+    case icons
+}
+
 /// One folder, with its own history. Windows Explorer's tabs are this:
 /// switching does not throw away Back, and a second look at Pictures does
 /// not steal the first tab's place in Downloads.
@@ -12,6 +20,7 @@ public struct ExplorerTab: Equatable, Identifiable, Sendable {
     public var showHidden: Bool
     public var sort: FileSort
     public var sortDescending: Bool
+    public var viewMode: FileViewMode = .list
 
     public init(
         id: Int,
@@ -230,7 +239,11 @@ public struct ExplorerTabs: Equatable, Sendable {
             sort: base?.sort ?? .name,
             sortDescending: base?.sortDescending ?? false
         )
-        insert(tab)
+        var opened = tab
+        // A new tab looks like the one it was opened from, as it already
+        // shows hidden files and sorts like it.
+        opened.viewMode = base?.viewMode ?? .list
+        insert(opened)
     }
 
     /// Puts `tab` after the active one and selects it.

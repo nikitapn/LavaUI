@@ -138,6 +138,10 @@ struct LavaExplorerApp {
                 MenuItem("Sort by Date", id: "view.sort-modified") {
                     session.setSort(.modified)
                 }
+                // Ctrl+1 / Ctrl+2 in `keys`, which leaves them to a field
+                // being typed in.
+                MenuItem("As List", id: "view.list") { session.setViewMode(.list) }
+                MenuItem("As Icons", id: "view.icons") { session.setViewMode(.icons) }
             }
             Menu("Go", id: "go") {
                 MenuItem("Back", id: "go.back") { session.goBack() }
@@ -201,9 +205,20 @@ struct LavaExplorerApp {
         case KeyCode.backspace where !typing && !control:
             session.goUp()
         case KeyCode.up where !typing && !alt:
-            session.moveSelection(by: -1, extending: shift)
+            session.moveVertically(by: -1, extending: shift)
         case KeyCode.down where !typing:
+            session.moveVertically(by: 1, extending: shift)
+        // Across, in the icon view only: in the list there is nothing beside
+        // a row, and Alt+Left/Right are Back and Forward in both.
+        case KeyCode.left where !typing && !alt && session.viewMode == .icons:
+            session.moveSelection(by: -1, extending: shift)
+        case KeyCode.right where !typing && !alt && session.viewMode == .icons:
             session.moveSelection(by: 1, extending: shift)
+        // Ctrl+1 and Ctrl+2, as Nautilus and Dolphin have them.
+        case KeyCode.key1 where control:
+            session.setViewMode(.list)
+        case KeyCode.key1 + 1 where control:
+            session.setViewMode(.icons)
         case KeyCode.a where control && !typing:
             session.selectAll()
         case KeyCode.f2 where !typing:

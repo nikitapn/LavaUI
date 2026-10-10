@@ -47,13 +47,19 @@ final class ThumbnailLoader: @unchecked Sendable {
 
     /// Main thread only: what each file's row should show, for the version
     /// of the file it was asked about.
-    private var states: [String: (version: Date?, state: State)] = [:]
+    private var states: [Key: (version: Date?, state: State)] = [:]
+
+    /// A file at a size: the list and the icon view want different ones.
+    private struct Key: Hashable {
+        var path: String
+        var size: ThumbnailCache.Size
+    }
 
     private let lock = NSLock()
     private let wake = DispatchSemaphore(value: 0)
-    private var queue: [(path: String, version: Date?)] = []
-    private var queued: Set<String> = []
-    private var finished: [(path: String, version: Date?, display: String?)] = []
+    private var queue: [(key: Key, version: Date?)] = []
+    private var queued: Set<Key> = []
+    private var finished: [(key: Key, version: Date?, display: String?)] = []
     private var flushScheduled = false
 
     private let cacheRoot = ThumbnailCache.root
@@ -80,16 +86,17 @@ final class ThumbnailLoader: @unchecked Sendable {
 
     /// The path to draw for `entry`, or nil — no thumbnail yet, or none to
     /// be had. Main thread.
-    func path(for entry: FileEntry) -> String? {
+    func path(for entry: FileEntry, size: ThumbnailCache.Size = .normal) -> String? {
         guard ThumbnailCache.wants(entry, root: cacheRoot) else { return nil }
-        if let known = states[entry.path], known.version == entry.modified {
+        let key = Key(path: entry.path, size: size)
+        if let known = states[key], known.version == entry.modified {
             if case .ready(let display) = known.state { return display }
             return nil
         }
-        states[entry.path] = (entry.modified, .pending)
+        states[key] = (entry.modified, .pending)
         lock.lock()
-        if queued.insert(entry.path).inserted {
-            queue.append((entry.path, entry.modified))
+        if queued.insert(key).inserted {
+            queue.append((key, entry.modified))
             wake.signal()
         }
         lock.unlock()
@@ -100,18 +107,18 @@ final class ThumbnailLoader: @unchecked Sendable {
     /// on screen. A decode already running finishes; its answer is kept.
     func retain(folders: Set<String>) {
         lock.lock()
-        let dropped = queue.filter { !folders.contains(Self.folder(of: $0.path)) }
-        queue.removeAll { !folders.contains(Self.folder(of: $0.path)) }
-        for job in dropped { queued.remove(job.path) }
+        let dropped = queue.filter { !folders.contains(Self.folder(of: $0.key.path)) }
+        queue.removeAll { !folders.contains(Self.folder(of: $0.key.path)) }
+        for job in dropped { queued.remove(job.key) }
         lock.unlock()
         guard !dropped.isEmpty else { return }
         // Forgotten, so coming back asks again rather than waiting on a job
         // that is no longer queued.
-        let paths = dropped.map(\.path)
+        let keys = dropped.map(\.key)
         MainQueue.async { [weak self] in
             guard let self else { return }
-            for path in paths {
-                if case .pending? = self.states[path]?.state { self.states[path] = nil }
+            for key in keys {
+                if case .pending? = self.states[key]?.state { self.states[key] = nil }
             }
         }
     }
@@ -126,42 +133,42 @@ final class ThumbnailLoader: @unchecked Sendable {
                 lock.unlock()
                 continue
             }
-            queued.remove(job.path)
+            queued.remove(job.key)
             lock.unlock()
-            let display = thumbnail(of: job.path)
-            deliver(job.path, job.version, display)
+            let display = thumbnail(of: job.key.path, size: job.key.size)
+            deliver(job.key, job.version, display)
         }
     }
 
     /// The thumbnail's display path, made if it has to be. Nil when the
     /// picture will not decode.
-    private func thumbnail(of path: String) -> String? {
+    private func thumbnail(of path: String, size: ThumbnailCache.Size) -> String? {
         guard let stamp = ThumbnailCache.Stamp(ofFileAt: path) else { return nil }
-        let normal = ThumbnailCache.path(for: path, size: .normal, root: cacheRoot)
-        if ThumbnailCache.isValid(thumbnail: normal, of: path, stamp: stamp) {
-            return display(normal, stamp: stamp)
+        let cached = ThumbnailCache.path(for: path, size: size, root: cacheRoot)
+        if ThumbnailCache.isValid(thumbnail: cached, of: path, stamp: stamp) {
+            return display(cached, size: size, stamp: stamp)
         }
         let failure = ThumbnailCache.failurePath(for: path, root: cacheRoot)
         if ThumbnailCache.isValid(thumbnail: failure, of: path, stamp: stamp) { return nil }
 
-        let size = ThumbnailCache.Size.normal.pixels
-        guard let decoded = Editor.decodeImage(path: path, maxPixelSize: size),
+        let pixels = size.pixels
+        guard let decoded = Editor.decodeImage(path: path, maxPixelSize: pixels),
               let png = Editor.encodePng(
                   pixels: decoded.pixels, width: decoded.width, height: decoded.height,
-                  maxSide: size
+                  maxSide: pixels
               )
         else {
             recordFailure(at: failure, of: path, stamp: stamp)
             return nil
         }
         do {
-            try ThumbnailCache.write(png: png, to: normal, of: path, stamp: stamp)
+            try ThumbnailCache.write(png: png, to: cached, of: path, stamp: stamp)
         } catch {
             // A cache that cannot be written — a read-only home, a full disk —
             // still has a thumbnail to show this once; it just is not kept.
             return nil
         }
-        return display(normal, stamp: stamp)
+        return display(cached, size: size, stamp: stamp)
     }
 
     /// The standard's failure record is a PNG like any thumbnail, carrying
@@ -174,17 +181,20 @@ final class ThumbnailLoader: @unchecked Sendable {
     /// `thumbnail`, under a name with this version of the picture in it. See
     /// the type's comment. The cache file itself when there is no runtime
     /// folder to put a link in.
-    private func display(_ thumbnail: String, stamp: ThumbnailCache.Stamp) -> String {
+    private func display(
+        _ thumbnail: String, size: ThumbnailCache.Size, stamp: ThumbnailCache.Stamp
+    ) -> String {
         guard let linkFolder else { return thumbnail }
+        // The size is in the name: both sizes of one picture share its MD5.
         let name = (thumbnail as NSString).lastPathComponent.dropLast(4)
-        let link = "\(linkFolder)/\(name)-\(stamp.text).png"
+        let link = "\(linkFolder)/\(name)-\(size.rawValue)-\(stamp.text).png"
         if symlink(thumbnail, link) != 0, errno != EEXIST { return thumbnail }
         return link
     }
 
-    private func deliver(_ path: String, _ version: Date?, _ display: String?) {
+    private func deliver(_ key: Key, _ version: Date?, _ display: String?) {
         lock.lock()
-        finished.append((path, version, display))
+        finished.append((key, version, display))
         let schedule = !flushScheduled
         flushScheduled = true
         lock.unlock()
@@ -202,12 +212,12 @@ final class ThumbnailLoader: @unchecked Sendable {
         flushScheduled = false
         lock.unlock()
         var changed = false
-        for (path, version, display) in batch {
+        for (key, version, display) in batch {
             // An answer for a version nobody is asking about any more — the
             // file changed while it was being decoded — is dropped; the row
             // has already asked about the new one.
-            guard let current = states[path], current.version == version else { continue }
-            states[path] = (version, display.map(State.ready) ?? .none)
+            guard let current = states[key], current.version == version else { continue }
+            states[key] = (version, display.map(State.ready) ?? .none)
             changed = changed || display != nil
         }
         if changed { onChange() }

@@ -61,6 +61,15 @@ LAVA_CLIENT=1 swift run LavaExplorer -- ~/Pictures
   is open gets a new name, and so a new thumbnail. SVG is drawn from the file
   instead — sharper at 22 px than any thumbnail, and the only place it can
   be rasterised is the compositor, the one build that links librsvg.
+- **An icon view.** Per tab, from the toolbar, the View menu or Ctrl+1 /
+  Ctrl+2: a lazy grid of 112×132 tiles, each the picture's thumbnail or a
+  shape for what it is — a folder block, a page with the extension on it —
+  over two lines of name. The "large" (256 px) thumbnails once the display
+  scale makes 80 points more than 128 pixels. It is the list's row with
+  different insides: selection, double-click, the context menu, dragging out,
+  dropping into a folder and F2 are the same code. Arrows move by tile and by
+  row; a new tab opens in the mode of the one it came from. No header in it —
+  sorting is on the View menu.
 - **Folders that keep up by themselves.** Every folder on screen, in any
   tab or pane, is watched with inotify (`FolderWatcher`), and a change on
   disk — a download finishing, another program saving, a terminal's `rm` —
@@ -228,8 +237,6 @@ file.
   through `FileEraser`, which only the confirmed paths reach.
 - **Rubber-band selection.** Rows are picked with the keyboard and
   Ctrl/Shift+click; dragging on empty space does not draw a box yet.
-- **An icon view.** Thumbnails are in the list, at 22 px; a grid of large
-  ones is the next step, on the same loader and the same cache.
 - **A second window.** One surface per process; navigate in place.
 - **Browsing inside an archive.** It is extracted or it is not; there is no
   looking around in one first.
