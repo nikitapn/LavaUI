@@ -60,6 +60,10 @@ LAVA_CLIENT=1 swift run LavaExplorer -- ~/Pictures
   what it had, so a cancelled prompt leaves nothing behind. Only zip is
   decrypted — an encrypted 7z or rar is a plain failure, because libarchive
   can see the encryption but not undo it.
+  Both directions show progress in the status line with a Cancel beside it,
+  which stops at the next 64 KiB block and leaves nothing: an extraction's
+  staging folder and a compression's hidden file are removed. Cancelling
+  one of several archives leaves the ones already done and starts no more.
 - **Compress….** The selection into one archive beside it, from the
   context menu or File. A bar asks for the name (one item is named after
   itself, several after their folder), the format — zip, tar plain or with
@@ -201,9 +205,8 @@ file.
   next visual step, not this one.
 - **inotify.** Reload is a key (Ctrl+R) and a menu item.
 - **A second window.** One surface per process; navigate in place.
-- **The rest of archives.** No browsing inside one as a folder, and no
-  Cancel for either direction — the callback can stop the work, but nothing
-  on screen asks it to.
+- **Browsing inside an archive.** It is extracted or it is not; there is no
+  looking around in one first.
 - **Removable media, search, remote.** Later.
 
 ## The `FileSource` seam

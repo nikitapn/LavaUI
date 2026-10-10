@@ -1233,7 +1233,14 @@ private struct StatusBar: View {
     var body: some View {
         HStack(padding: 8, alignment: .center, spacing: 8) {
             Text(session.status, color: Theme.current.textDim, lineLimit: 1)
+                .flexShrink(1)
                 .agentId("status")
+            if session.archiveWorkRunning {
+                Text("Cancel", color: Theme.current.accent, onClick: {
+                    session.cancelArchiveWork()
+                })
+                .agentId("archive-cancel")
+            }
             Spacer()
             Text(session.title, color: Theme.current.textSecondary)
         }

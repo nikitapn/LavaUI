@@ -1253,6 +1253,30 @@ final class ExplorerSession: @unchecked Sendable {
 
     // MARK: - Archives
 
+    /// The Cancel in the status line, while an extraction or a compression is
+    /// running. Observed: the button is drawn from it.
+    private(set) var archiveWorkRunning = false
+    /// Read by the worker's progress callback, written from the frame loop.
+    @ObservationIgnored private var archiveCancel = CancelFlag()
+
+    /// Stops the extraction or compression that is running, at its next
+    /// block. Nothing half-done is left: an extraction's staging folder and a
+    /// compression's hidden file are both removed by the step that notices.
+    func cancelArchiveWork() {
+        guard archiveWorkRunning else { return }
+        archiveCancel.cancel()
+        notice = "Cancelling…"
+        ViewInvalidation.markDirty()
+    }
+
+    /// Starts a new piece of archive work with a flag of its own, so a Cancel
+    /// that lands as one finishes cannot stop the next.
+    private func beginArchiveWork() -> CancelFlag {
+        archiveCancel = CancelFlag()
+        archiveWorkRunning = true
+        return archiveCancel
+    }
+
     /// An extraction is running on its worker. A second waits rather than
     /// queueing: two at once would only fight over the disk.
     @ObservationIgnored private var extracting = false
@@ -1321,6 +1345,7 @@ final class ExplorerSession: @unchecked Sendable {
 
     private func runExtraction(_ jobs: [(FileEntry, String?)]) {
         extracting = true
+        let cancel = beginArchiveWork()
         let what = jobs.count == 1
             ? "\u{201C}\(jobs[0].0.name)\u{201D}" : Self.items(jobs.count)
         notice = "Extracting \(what)…"
@@ -1328,6 +1353,9 @@ final class ExplorerSession: @unchecked Sendable {
         Thread.detachNewThread { [weak self] in
             var results: [(FileEntry, Result<ArchiveUnpacker.Outcome, any Error>)] = []
             for (index, (archive, password)) in jobs.enumerated() {
+                // The rest of a selection goes with a Cancel, not only the
+                // archive it landed in.
+                if cancel.isCancelled { break }
                 let folder = (archive.path as NSString).deletingLastPathComponent
                 let step = jobs.count > 1 ? " (\(index + 1) of \(jobs.count))" : ""
                 // One notice per percent, not one per block: a block is 64 KiB
@@ -1343,33 +1371,40 @@ final class ExplorerSession: @unchecked Sendable {
                             let text = "Extracting \u{201C}\(archive.name)\u{201D}\(step)… \(percent)%"
                             MainQueue.async { [weak self] in self?.showProgress(text) }
                         }
-                        return true
+                        return !cancel.isCancelled
                     }
                 }
                 results.append((archive, result))
             }
             let finished = results
-            MainQueue.async { [weak self] in self?.finishExtract(finished) }
+            let cancelled = cancel.isCancelled
+            MainQueue.async { [weak self] in
+                self?.finishExtract(finished, cancelled: cancelled)
+            }
         }
     }
 
     private func showProgress(_ text: String) {
-        // A late percentage must not paint over the result.
-        guard extracting else { return }
+        // A late percentage must not paint over the result, or over
+        // "Cancelling…".
+        guard extracting, !archiveCancel.isCancelled else { return }
         notice = text
         ViewInvalidation.markDirty()
     }
 
     private func finishExtract(
-        _ results: [(FileEntry, Result<ArchiveUnpacker.Outcome, any Error>)]
+        _ results: [(FileEntry, Result<ArchiveUnpacker.Outcome, any Error>)],
+        cancelled: Bool
     ) {
         extracting = false
+        archiveWorkRunning = false
         var made: [String] = []
         var problems: [String] = []
         var locked: [(FileEntry, Bool)] = []
         for (archive, result) in results {
             switch result {
             case .success(let outcome):
+                if outcome.extraction.cancelled { continue }
                 if outcome.extraction.needsPassword || outcome.extraction.wrongPassword {
                     locked.append((archive, outcome.extraction.wrongPassword))
                     continue
@@ -1399,6 +1434,16 @@ final class ExplorerSession: @unchecked Sendable {
                == FolderHistory.normalize((last as NSString).deletingLastPathComponent)
         {
             tabSet.updateCurrent { $0.selected = last }
+        }
+        if cancelled {
+            // What finished before the Cancel stays, and says so; the one it
+            // landed in left nothing, and nothing after it was started.
+            notice = made.isEmpty
+                ? "Cancelled — nothing was extracted"
+                : "Cancelled after extracting \(made.count == 1 ? "1 archive" : "\(made.count) archives")"
+            passwordQueue.removeAll()
+            ViewInvalidation.markDirty()
+            return
         }
         if made.isEmpty, problems.isEmpty, !locked.isEmpty {
             // The bar is the whole message.
@@ -1505,6 +1550,7 @@ final class ExplorerSession: @unchecked Sendable {
         FocusManager.clear()
         lastCompressFormat = draft.format
         compressing = true
+        let cancel = beginArchiveWork()
         let target = ArchivePacker.destination(
             named: draft.name, format: draft.format, in: draft.directory
         )
@@ -1525,7 +1571,7 @@ final class ExplorerSession: @unchecked Sendable {
                         let text = "Compressing \u{201C}\(name)\u{201D}… \(percent)%"
                         MainQueue.async { [weak self] in self?.showCompressProgress(text) }
                     }
-                    return true
+                    return !cancel.isCancelled
                 }
             }
             MainQueue.async { [weak self] in
@@ -1535,7 +1581,7 @@ final class ExplorerSession: @unchecked Sendable {
     }
 
     private func showCompressProgress(_ text: String) {
-        guard compressing else { return }
+        guard compressing, !archiveCancel.isCancelled else { return }
         notice = text
         ViewInvalidation.markDirty()
     }
@@ -1544,9 +1590,12 @@ final class ExplorerSession: @unchecked Sendable {
         _ result: Result<CreateOutcome, any Error>, target: String, count: Int
     ) {
         compressing = false
+        archiveWorkRunning = false
         let directory = (target as NSString).deletingLastPathComponent
         let name = (target as NSString).lastPathComponent
         switch result {
+        case .success(let outcome) where outcome.cancelled:
+            notice = "Cancelled — \u{201C}\(name)\u{201D} was not made"
         case .success(let outcome):
             undoHistory.record(.archived([target]))
             reloadAfterChange(in: [directory])
@@ -1823,5 +1872,25 @@ enum OpenLocation {
             }
         }
         return nil
+    }
+}
+
+/// A Cancel that crosses threads: set on the frame loop, read by a worker
+/// between blocks. A lock rather than an atomic because it is read once per
+/// 64 KiB, where the difference is nothing.
+final class CancelFlag: @unchecked Sendable {
+    private let lock = NSLock()
+    private var cancelled = false
+
+    var isCancelled: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return cancelled
+    }
+
+    func cancel() {
+        lock.lock()
+        cancelled = true
+        lock.unlock()
     }
 }
