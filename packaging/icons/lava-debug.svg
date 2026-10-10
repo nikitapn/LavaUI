@@ -1,0 +1,54 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title desc">
+  <title id="title">LavaDebug</title>
+  <desc id="desc">A memory chip whose die is a bar chart of what it holds — the LavaDebug application icon.</desc>
+  <defs>
+    <linearGradient id="tile" x1="96" y1="64" x2="416" y2="448" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#343866"/>
+      <stop offset="1" stop-color="#171a35"/>
+    </linearGradient>
+    <linearGradient id="chip" x1="132" y1="132" x2="380" y2="380" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#2b3157"/>
+      <stop offset="1" stop-color="#191d38"/>
+    </linearGradient>
+    <linearGradient id="pin" x1="0" y1="0" x2="0" y2="1">
+      <stop stop-color="#c5cce8"/>
+      <stop offset="1" stop-color="#8a93b8"/>
+    </linearGradient>
+  </defs>
+  <rect x="28" y="28" width="456" height="456" rx="116" fill="url(#tile)"/>
+  <!-- Pins, five a side, drawn first so the package sits over their roots -->
+  <g fill="url(#pin)">
+    <rect x="164" y="100" width="20" height="48" rx="6"/>
+    <rect x="205" y="100" width="20" height="48" rx="6"/>
+    <rect x="246" y="100" width="20" height="48" rx="6"/>
+    <rect x="287" y="100" width="20" height="48" rx="6"/>
+    <rect x="328" y="100" width="20" height="48" rx="6"/>
+    <rect x="164" y="364" width="20" height="48" rx="6"/>
+    <rect x="205" y="364" width="20" height="48" rx="6"/>
+    <rect x="246" y="364" width="20" height="48" rx="6"/>
+    <rect x="287" y="364" width="20" height="48" rx="6"/>
+    <rect x="328" y="364" width="20" height="48" rx="6"/>
+    <rect x="100" y="164" width="48" height="20" rx="6"/>
+    <rect x="100" y="205" width="48" height="20" rx="6"/>
+    <rect x="100" y="246" width="48" height="20" rx="6"/>
+    <rect x="100" y="287" width="48" height="20" rx="6"/>
+    <rect x="100" y="328" width="48" height="20" rx="6"/>
+    <rect x="364" y="164" width="48" height="20" rx="6"/>
+    <rect x="364" y="205" width="48" height="20" rx="6"/>
+    <rect x="364" y="246" width="48" height="20" rx="6"/>
+    <rect x="364" y="287" width="48" height="20" rx="6"/>
+    <rect x="364" y="328" width="48" height="20" rx="6"/>
+  </g>
+  <!-- The package -->
+  <rect x="132" y="132" width="248" height="248" rx="30" fill="url(#chip)"
+        stroke="#5a9dfa" stroke-opacity="0.45" stroke-width="6"/>
+  <!-- The die is the report: who holds how much, one bar each -->
+  <g>
+    <rect x="164" y="232" width="34" height="112" rx="8" fill="#5a9dfa"/>
+    <rect x="214" y="184" width="34" height="160" rx="8" fill="#ee3b3b"/>
+    <rect x="264" y="264" width="34" height="80" rx="8" fill="#f5b544"/>
+    <rect x="314" y="298" width="34" height="46" rx="8" fill="#4fd1a5"/>
+  </g>
+  <!-- Notch marking pin one, as every package has -->
+  <circle cx="166" cy="166" r="10" fill="#c5cce8" opacity="0.8"/>
+</svg>
