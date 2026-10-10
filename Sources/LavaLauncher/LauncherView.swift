@@ -75,7 +75,9 @@ struct LauncherView: View {
 
         VStack(flexGrow: 1, padding: Grid.screenInset) {
             VStack(flexGrow: 1, padding: 0) {
-                ScrollView {
+                // The bar keeps clear of the panel's rounded corners; the
+                // cards still scroll right up to the edge under them.
+                ScrollView(indicatorInset: Grid.panelRadius) {
                     VStack(padding: Grid.padding, spacing: 12) {
                         // Keeps the first row clear of the floating search;
                         // when the user scrolls, cards pass under the pill.

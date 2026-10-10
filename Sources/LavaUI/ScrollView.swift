@@ -18,6 +18,12 @@ public struct ScrollView<Content: View>: PrimitiveView {
     public var content: Content
     /// Draw a thin position indicator while the content overflows.
     public var showsIndicator: Bool
+    /// How far the indicator's track stops short of each end of the box.
+    ///
+    /// The bar sits on the box's edge, so inside a rounded container it runs
+    /// over the corners — pass the container's corner radius. The content is
+    /// not inset: it still scrolls to the edge, under the curve.
+    public var indicatorInset: Float
     /// Where the view is, kept up to date as it scrolls, and a way to put it
     /// somewhere. See `ScrollPosition`.
     public var position: ScrollPosition?
@@ -26,12 +32,14 @@ public struct ScrollView<Content: View>: PrimitiveView {
     public init(
         _ axis: ScrollAxis = .vertical,
         showsIndicator: Bool = true,
+        indicatorInset: Float = 0,
         position: ScrollPosition? = nil,
         @ViewBuilder content: () -> Content
     ) {
         self.axis = axis
         self.content = content()
         self.showsIndicator = showsIndicator
+        self.indicatorInset = indicatorInset
         self.position = position
     }
 
@@ -47,6 +55,7 @@ public struct ScrollView<Content: View>: PrimitiveView {
     public func mountPrimitive() -> any AnyViewNode {
         let node = ScrollNode(axis: axis, content: ViewGraph.mount(content))
         node.showsIndicator = showsIndicator
+        node.indicatorInset = indicatorInset
         node.registerScrolling()
         node.bind(position)
         return node
@@ -57,6 +66,7 @@ public struct ScrollView<Content: View>: PrimitiveView {
             return mountPrimitive()
         }
         scroll.showsIndicator = showsIndicator
+        scroll.indicatorInset = indicatorInset
         scroll.updateContent(ViewGraph.reconcile(scroll.contentNode, with: content))
         scroll.bind(position)
         return scroll
@@ -136,6 +146,8 @@ final class ScrollNode: YogaBoxNode {
     let axis: ScrollAxis
     private(set) var contentNode: any AnyViewNode
     var showsIndicator = true
+    /// See `ScrollView.indicatorInset`.
+    var indicatorInset: Float = 0
 
     /// Captured from `Environment.current.theme` at mount/reconcile — the
     /// scroll-indicator paint runs later, as a separate pass with no
@@ -342,15 +354,15 @@ final class ScrollNode: YogaBoxNode {
         let onBar = axis == .vertical
             ? Scrollbar.hitsVertical(localX: localX, boxWidth: boxWidth)
             : Scrollbar.hitsHorizontal(localY: localY, boxHeight: boxHeight)
-        guard onBar, let m = Scrollbar.metrics(
-            track: viewportLength, content: contentLength,
-            offset: scrollOffset, maxOffset: maxOffset
-        ) else { return nil }
+        guard onBar, let m = indicatorMetrics(offset: scrollOffset) else {
+            return nil
+        }
 
-        let along = axis == .vertical ? localY : localX
+        // Track coordinates from here on, which start `indicatorInset` in.
+        let along = (axis == .vertical ? localY : localX) - indicatorInset
         let grab = along >= m.along && along < m.along + m.thumb
             ? along - m.along : m.thumb / 2
-        let origin = axis == .vertical ? originY : originX
+        let origin = (axis == .vertical ? originY : originX) + indicatorInset
         let maximum = maxOffset
         return { [weak self] in
             guard let self else { return }
@@ -372,6 +384,16 @@ final class ScrollNode: YogaBoxNode {
                 onUp: { ScrollbarDrag.end() }
             )
         }
+    }
+
+    /// The indicator's geometry, for the paint and the press alike — two
+    /// copies of the inset is a thumb drawn somewhere other than where it is
+    /// grabbed. Nil when there is nothing to indicate.
+    func indicatorMetrics(offset: Float) -> Scrollbar.Metrics? {
+        Scrollbar.metrics(
+            track: viewportLength - indicatorInset * 2, content: contentLength,
+            offset: offset, maxOffset: maxOffset
+        )
     }
 
     func reveal(top: Float, bottom: Float, viewport: Float) {

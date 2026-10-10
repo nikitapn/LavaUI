@@ -2696,14 +2696,17 @@ extension DrawList {
         // the request that produced it. Drawing the thumb from the request
         // pins it to the pointer and leaves the content to arrive, which is
         // the way round every toolkit does it.
-        guard let m = Scrollbar.metrics(
-            track: scroll.viewportLength, content: scroll.contentLength,
-            offset: scroll.effectiveOffset, maxOffset: scroll.maxOffset
-        ) else { return }
+        guard let m = scroll.indicatorMetrics(offset: scroll.effectiveOffset)
+        else { return }
+        // The thumb is placed along the track, which starts `indicatorInset`
+        // in from the box — so it is handed the track's box, not the node's.
+        let inset = scroll.indicatorInset
+        let vertical = scroll.axis == .vertical
         scrollbarThumb(
             axis: scroll.axis, metrics: m, theme: scroll.theme,
             active: ScrollbarDrag.isDragging(scroll.id),
-            x: x, y: y, w: w, h: h
+            x: vertical ? x : x + inset, y: vertical ? y + inset : y,
+            w: vertical ? w : w - inset * 2, h: vertical ? h - inset * 2 : h
         )
     }
 
