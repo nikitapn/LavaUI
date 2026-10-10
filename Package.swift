@@ -79,6 +79,7 @@ var products: [Product] = [
     .library(name: "LavaViewCore", targets: ["LavaViewCore"]),
     .library(name: "LavaShotCore", targets: ["LavaShotCore"]),
     .library(name: "LavaExplorerCore", targets: ["LavaExplorerCore"]),
+    .library(name: "LavaArchive", targets: ["LavaArchive"]),
 ]
 
 var targets: [Target] = [
@@ -130,6 +131,17 @@ var targets: [Target] = [
     // Folder listing, sort, history and the FileSource seam. No engine —
     // a file manager that lists the wrong names is a test, not a screenshot.
     .target(name: "LavaExplorerCore"),
+    // libarchive, for reading and writing zip, tar and the rest. A system
+    // library like CPulse, but header-only on our side: nothing to compile.
+    .systemLibrary(
+        name: "CArchive",
+        path: "Sources/CArchive",
+        pkgConfig: "libarchive",
+        providers: [.apt(["libarchive-dev"])]
+    ),
+    // List, extract, create — blocking, for a worker thread. No engine, so
+    // hostile archives are a unit test. See Sources/LavaArchive/Archive.swift.
+    .target(name: "LavaArchive", dependencies: ["CArchive"]),
 
     .executableTarget(
         name: "TwoWindows",
@@ -348,6 +360,7 @@ var targets: [Target] = [
     .testTarget(name: "LavaViewCoreTests", dependencies: ["LavaViewCore"]),
     .testTarget(name: "LavaShotCoreTests", dependencies: ["LavaShotCore"]),
     .testTarget(name: "LavaExplorerCoreTests", dependencies: ["LavaExplorerCore"]),
+    .testTarget(name: "LavaArchiveTests", dependencies: ["LavaArchive", "CArchive"]),
 ]
 
 if haveNprpc {

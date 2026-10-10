@@ -69,6 +69,7 @@ liburing-dev
 
 # ── apps ───────────────────────────────────────────────────────────────────
 libpulse-dev
+libarchive-dev
 
 # ── software Vulkan (Docker, VMs, machines with no GPU) ────────────────────
 mesa-vulkan-drivers
