@@ -22,6 +22,13 @@ enum FindStyle {
     static let topFraction: Float = 0.18
 
     static var surface: Color { Theme.current.background.opacity(0.97) }
+    /// The plate over the compositor's frost. Translucent enough to show the
+    /// blur, opaque enough to read a path against whatever is behind it — by
+    /// eye, against a wallpaper; see docs/colour-and-blending.md before
+    /// changing it by arithmetic.
+    static var glass: Color { Theme.current.background.opacity(0.72) }
+    /// Blur of the desktop behind the bar and the panel, in pixels.
+    static let frostRadius: Float = 14
     static var raised: Color { Theme.current.panel }
     static var line: Color { Theme.current.border }
     static var dim: Color { Theme.current.textDim }
@@ -99,9 +106,9 @@ private struct SearchBar: View {
             .background(.clear)
             KeyChip("esc")
         }
-        .background(FindStyle.surface)
         .border(FindStyle.accent.opacity(0.75), width: 1.5)
         .cornerRadius(FindStyle.radius)
+        .underlay { Frost() }
     }
 }
 
@@ -123,11 +130,15 @@ private struct ResultsPanel: View {
         VStack(spacing: 0) {
             Header()
             Rows()
+            // A rule rather than a filled footer: a fill reaches the panel's
+            // edge, and the panel's rounding does not clip it, so over glass
+            // its square corners showed outside the round ones.
+            Divider(style: DividerStyle(thickness: 1, spacing: 0, color: FindStyle.line))
             Footer()
         }
-        .background(FindStyle.surface)
         .border(FindStyle.line, width: 1)
         .cornerRadius(FindStyle.radius)
+        .underlay { Frost() }
     }
 }
 
@@ -306,7 +317,36 @@ private struct Footer: View {
                  color: FindStyle.dim, font: FindFonts.mono, lineLimit: 1)
         }
         .padding(EdgeInsets(top: 12, leading: 18, bottom: 12, trailing: 18))
-        .background(FindStyle.raised.opacity(0.35))
+    }
+}
+
+/// The glass under the bar and the panel: the compositor's blur of the
+/// desktop behind this box, and a translucent plate over it.
+///
+/// Per box rather than one plate for the card, so the 12 pt between the bar
+/// and the list stays clear desktop. Both rects go to the compositor in one
+/// `SetBackdropBlurRegions` per frame, and only on frames where one moved —
+/// the list growing as results arrive is a new rect on the frame it grows.
+///
+/// With no compositor to ask (a windowed run), `frostDesktop` says so and
+/// the plate is drawn nearly opaque instead: in-window blur would only smear
+/// this surface's own empty framebuffer.
+private struct Frost: View {
+    var body: some View {
+        Canvas(
+            label: "Frost", width: .pct(100), height: .pct(100),
+            paint: { draw, frame in
+                let frosted = draw.frostDesktop(
+                    x: frame.x, y: frame.y, w: frame.w, h: frame.h,
+                    radius: FindStyle.frostRadius, cornerRadius: FindStyle.radius
+                )
+                draw.roundedRect(
+                    x: frame.x, y: frame.y, w: frame.w, h: frame.h,
+                    color: frosted ? FindStyle.glass : FindStyle.surface,
+                    radius: FindStyle.radius
+                )
+            }
+        )
     }
 }
 
@@ -321,8 +361,16 @@ private struct Magnifier: View {
             paint: { draw, frame in
                 let cx = frame.x + 9
                 let cy = frame.y + 9
-                draw.circle(cx: cx, cy: cy, radius: 7, color: color)
-                draw.circle(cx: cx, cy: cy, radius: 5, color: FindStyle.surface)
+                // A ring, not a disc with a disc on it: over frosted glass a
+                // filled middle is a dark blob in the desktop's colours.
+                let steps = 40
+                func circle(_ r: Float) -> [(x: Float, y: Float)] {
+                    (0...steps).map { i in
+                        let a = Float(i) / Float(steps) * 2 * .pi
+                        return (cx + r * cos(a), cy + r * sin(a))
+                    }
+                }
+                draw.ring(inner: circle(5), outer: circle(7), color: color)
                 draw.line(
                     x1: cx + 4.5, y1: cy + 4.5, x2: frame.x + 20, y2: frame.y + 20,
                     color: color, width: 2.2
