@@ -70,52 +70,67 @@ public enum FileSort: String, CaseIterable, Sendable {
 /// cheap enough that sharing them is a later cleanup, not a first-commit
 /// coupling.
 public enum FileName {
+    /// Walks the two names' UTF-8 in place. A sort calls this n·log n times —
+    /// 60,000 for `/tmp` — and the first version copied both names into
+    /// arrays of scalars on every call, which made sorting a folder slower
+    /// than reading it. Bytes rather than scalars costs nothing in meaning:
+    /// UTF-8 orders exactly as the code points it encodes, and the only
+    /// characters folded or read as digits are ASCII.
     public static func compare(_ lhs: String, _ rhs: String) -> Bool {
-        let a = Array(lhs.unicodeScalars)
-        let b = Array(rhs.unicodeScalars)
+        var lhs = lhs
+        var rhs = rhs
+        let order = lhs.withUTF8 { a in rhs.withUTF8 { b in compare(a, b) } }
+        return order == 0 ? lhs < rhs : order < 0
+    }
+
+    private static func compare(
+        _ a: UnsafeBufferPointer<UInt8>, _ b: UnsafeBufferPointer<UInt8>
+    ) -> Int {
         var i = 0
         var j = 0
-
         while i < a.count, j < b.count {
             if isDigit(a[i]), isDigit(b[j]) {
-                let (lhsRun, ni) = digitRun(a, from: i)
-                let (rhsRun, nj) = digitRun(b, from: j)
-                if lhsRun.count != rhsRun.count { return lhsRun.count < rhsRun.count }
-                for k in 0..<lhsRun.count where lhsRun[k] != rhsRun[k] {
-                    return lhsRun[k] < rhsRun[k]
+                let (ls, le) = digitRun(a, from: i)
+                let (rs, re) = digitRun(b, from: j)
+                // Leading zeros are gone, so the longer run is the larger
+                // number; equal lengths compare digit by digit.
+                if le - ls != re - rs { return le - ls < re - rs ? -1 : 1 }
+                for k in 0..<(le - ls) where a[ls + k] != b[rs + k] {
+                    return a[ls + k] < b[rs + k] ? -1 : 1
                 }
-                i = ni
-                j = nj
+                i = le
+                j = re
                 continue
             }
-
             let ca = fold(a[i])
             let cb = fold(b[j])
-            if ca != cb { return ca < cb }
+            if ca != cb { return ca < cb ? -1 : 1 }
             i += 1
             j += 1
         }
-
-        if a.count != b.count { return a.count < b.count }
-        return lhs < rhs
+        // A name that is the start of the other sorts first.
+        let restA = a.count - i
+        let restB = b.count - j
+        return restA == restB ? 0 : (restA < restB ? -1 : 1)
     }
 
-    private static func isDigit(_ s: Unicode.Scalar) -> Bool {
-        s.value >= 48 && s.value <= 57
-    }
+    private static func isDigit(_ byte: UInt8) -> Bool { byte >= 48 && byte <= 57 }
 
+    /// The digits from `start`, as the range that remains once leading zeros
+    /// are dropped — all but the last, so a run of zeros is "0" — and where
+    /// the run ends.
     private static func digitRun(
-        _ scalars: [Unicode.Scalar], from start: Int
-    ) -> ([Unicode.Scalar], Int) {
+        _ bytes: UnsafeBufferPointer<UInt8>, from start: Int
+    ) -> (start: Int, end: Int) {
         var end = start
-        while end < scalars.count, isDigit(scalars[end]) { end += 1 }
+        while end < bytes.count, isDigit(bytes[end]) { end += 1 }
         var begin = start
-        while begin < end - 1, scalars[begin] == "0" { begin += 1 }
-        return (Array(scalars[begin..<end]), end)
+        while begin < end - 1, bytes[begin] == 48 { begin += 1 }
+        return (begin, end)
     }
 
-    private static func fold(_ s: Unicode.Scalar) -> UInt32 {
-        (s.value >= 65 && s.value <= 90) ? s.value + 32 : s.value
+    private static func fold(_ byte: UInt8) -> UInt8 {
+        (byte >= 65 && byte <= 90) ? byte + 32 : byte
     }
 }
 

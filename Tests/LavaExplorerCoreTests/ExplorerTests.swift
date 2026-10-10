@@ -76,6 +76,18 @@ struct NameTests {
         )
     }
 
+    @Test("Leading zeros, prefixes and names that are not ASCII")
+    func edges() {
+        #expect(FileName.compare("a001", "a1b"), "a name that runs out first sorts first")
+        #expect(FileName.compare("file007", "file8"))
+        #expect(FileName.compare("file0", "file00") || FileName.compare("file00", "file0"),
+                "equal numbers still have an order, by bytes")
+        #expect(FileName.compare("report", "report 2"))
+        #expect(FileName.compare("zebra", "ä"), "non-ASCII sorts after ASCII, by code point")
+        #expect(FileName.compare("файл 2", "файл 10"))
+        #expect(!FileName.compare("same", "same"))
+    }
+
     @Test("Case does not split a folder into two blocks")
     func folding() {
         #expect(
