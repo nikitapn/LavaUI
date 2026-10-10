@@ -1297,6 +1297,16 @@ interface Compositor {
   /// panel would hide the one thing on screen meant to always be reachable.
   boolean ToggleMaximize(surfaceId: in u32) raises(SurfaceNotFound);
 
+  /// Maximizes the window, or puts it back, whichever it is now.
+  ///
+  /// The one time a client *does* know the answer is the one it is asking
+  /// for: a window that opens maximized (`LavaClient.open(fillScreen:
+  /// .maximized)` — the launcher, the switcher). A toggle there would be a
+  /// guess about the state it opened in, and the compositor restores a
+  /// remembered frame — maximized included — before the client says anything,
+  /// so the guess can be wrong. Naming the state cannot.
+  void SetMaximized(surfaceId: in u32, on: in boolean) raises(SurfaceNotFound);
+
   /// Hides the window without ending it. The client keeps its surface, its
   /// arena and its input stream.
   ///

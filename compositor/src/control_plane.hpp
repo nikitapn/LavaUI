@@ -295,6 +295,9 @@ struct CompositorHost {
   /// Fills the work area or restores; `outMaximized` is the state it ended in.
   virtual bool toggleMaximize(uint32_t surfaceId, bool &outMaximized) = 0;
 
+  /// Maximizes or restores; false when there is no such surface.
+  virtual bool setMaximized(uint32_t surfaceId, bool on) = 0;
+
   /// Hides the window without ending it.
   virtual bool minimize(uint32_t surfaceId) = 0;
 

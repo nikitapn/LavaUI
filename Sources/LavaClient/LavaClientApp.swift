@@ -35,7 +35,14 @@ public enum LavaClient {
     public enum ScreenFill: Sendable {
         /// The screen less whatever the shell reserves — the panel stays,
         /// and so does the window list. The launcher and the switcher.
-        case workArea
+        ///
+        /// Maximized, not merely sized to fit: a window that happens to be
+        /// the work area's size is still an ordinary window, with rounded
+        /// corners and a drop shadow — and a shadow's middle is a dark fill,
+        /// which under an overlay that leaves parts of itself clear dims the
+        /// desktop it meant to show. Maximized also keeps it fitted when the
+        /// work area changes under it.
+        case maximized
         /// The whole output, panel included: the window is fullscreen from
         /// the frame it first appears in. Something that photographs or
         /// replaces the desktop — LavaShot.
@@ -62,7 +69,7 @@ public enum LavaClient {
     ///     works for the request and is a lie to the layout: the tree lays out
     ///     once at the size that was asked for, so a virtualised list
     ///     materialises every row a 4K window would show before being told the
-    ///     window is a quarter of that. `.workArea` is then clamped by the
+    ///     window is a quarter of that. `.maximized` is then fitted by the
     ///     compositor to what the shell leaves free; `.output` is made
     ///     fullscreen before the window is ever shown — see `ScreenFill`.
     public static func open(
@@ -79,6 +86,7 @@ public enum LavaClient {
         Self.frame = frame
         Self.dialogParent = dialogParent
         Self.startsFullscreen = fillScreen == .output
+        Self.startsMaximized = fillScreen == .maximized
         // A picker this app opens is a dialog of this window. Read when the
         // picker is asked for, by which time the surface exists.
         // Read when a picker is asked for, by which time a second window may
@@ -331,7 +339,7 @@ public enum LavaClient {
         else { return nil }
         unsetenv("LAVA_LOCK_TOKEN")
         Self.lockToken = token
-        return open(title: title, frame: .client, fillScreen: .workArea)
+        return open(title: title, frame: .client, fillScreen: .maximized)
     }
 
     /// Where the lock stands, every time it changes. Runs on the frame loop.
@@ -1256,6 +1264,19 @@ public enum LavaClient {
                     }
                 }
             }
+            // Same slot, same reason. Named rather than toggled: the
+            // compositor may already have restored a remembered maximized
+            // frame, and a toggle would undo it. Furniture is refused, so the
+            // lock screen stays the size it is.
+            if Self.startsMaximized {
+                report("SetMaximized") {
+                    try blockingCall {
+                        try await compositor.setMaximized(
+                            surfaceId: surfaceID, on: true
+                        )
+                    }
+                }
+            }
             inputChannel = InputChannel(
                 stream: try compositor.subscribeInput(surfaceId: surfaceID)
             )
@@ -1947,6 +1968,8 @@ public enum LavaClient {
     nonisolated(unsafe) private static var frame: WindowFrame = .server
     /// `fillScreen: .output`. Applied once, before the input stream opens.
     nonisolated(unsafe) private static var startsFullscreen = false
+    /// `fillScreen: .maximized`. Applied at the same moment.
+    nonisolated(unsafe) private static var startsMaximized = false
     /// What this application calls itself, for a dock looking for its icon.
     /// The executable's name unless the app says otherwise, which is the
     /// closest thing a process has to an identity without being told one.

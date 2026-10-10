@@ -1144,6 +1144,12 @@ class CompositorImpl final : public ICompositor_Servant {
     return maximized;
   }
 
+  void SetMaximized(uint32_t surfaceId, nprpc::flat::Boolean on) override {
+    if (!host_.setMaximized(surfaceId, static_cast<bool>(on))) {
+      throw SurfaceNotFound(surfaceId);
+    }
+  }
+
   void Minimize(uint32_t surfaceId) override {
     if (!host_.minimize(surfaceId)) throw SurfaceNotFound(surfaceId);
   }

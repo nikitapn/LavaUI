@@ -188,11 +188,6 @@ enum Grid {
 // a full-surface backdrop would fill the margins too and kill the gap.
 WindowBackdrop.current = .none
 
-// Indigo rather than the editor greys. A launcher is nearly all surface, and a
-// neutral panel over somebody's wallpaper reads as a smudge on it. See
-// `Theme.nebula`.
-Theme.current = .nebula
-
 // `LAVA_BOOT_TRACE=1` says where the time before the first frame went. This is
 // the client that most needs it: everything else opens a window and draws,
 // while a launcher first has to find out what is installed on the machine.
@@ -208,7 +203,7 @@ BootTrace.mark("desktop entries read (\(model.all.count))")
 // on the machine, and looks up every icon, before the window turns out to be a
 // quarter of that. `.client` because a launcher with a title bar is a dialog.
 guard let editor = LavaClient.open(
-    title: "Launcher", frame: .client, fillScreen: .workArea
+    title: "Launcher", frame: .client, fillScreen: .maximized
 ) else { exit(1) }
 BootTrace.mark("compositor connected")
 

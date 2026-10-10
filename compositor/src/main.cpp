@@ -5825,6 +5825,15 @@ class SurfaceRegistry : public lava::CompositorHost {
     return true;
   }
 
+  bool setMaximized(uint32_t id, bool on) override {
+    ClientSurface *surface = find(id);
+    if (surface == nullptr) return false;
+    // Same refusal as the toggle: a panel, a menu or the lock is placed by
+    // the compositor and has nothing to restore to.
+    if (!surface->furniture()) setMaximized(*surface, on);
+    return true;
+  }
+
   bool minimize(uint32_t id) override;
 
   bool setMinSize(uint32_t id, uint32_t minWidth, uint32_t minHeight) override {
