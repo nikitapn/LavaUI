@@ -31,6 +31,17 @@ import NPRPC
 /// lease, so when the user closes the window or the compositor stops, there is
 /// nothing left to draw into.
 public enum LavaClient {
+    /// How much of the screen `open(fillScreen:)` asks for.
+    public enum ScreenFill: Sendable {
+        /// The screen less whatever the shell reserves — the panel stays,
+        /// and so does the window list. The launcher and the switcher.
+        case workArea
+        /// The whole output, panel included: the window is fullscreen from
+        /// the frame it first appears in. Something that photographs or
+        /// replaces the desktop — LavaShot.
+        case output
+    }
+
     /// - Parameters:
     ///   - title: names the window the compositor opens, and the arena.
     ///   - width/height: a *request*. The window manager has the last word,
@@ -44,20 +55,22 @@ public enum LavaClient {
     ///     `WindowControls()` and `.windowDrag()` wherever its own design wants
     ///     them — or nowhere, for an overlay that should have no chrome at all.
     ///   - fillScreen: ask for the whole screen, whatever size it is. Replaces
-    ///     `width`/`height` with the largest screen the compositor has, which
+    ///     `width`/`height` with the screen the compositor names primary, which
     ///     is both a better *request* and — the reason this exists — a
     ///     truthful size to lay out at while the opening `Resize` is in
     ///     flight. Asking for something deliberately bigger than any screen
     ///     works for the request and is a lie to the layout: the tree lays out
     ///     once at the size that was asked for, so a virtualised list
     ///     materialises every row a 4K window would show before being told the
-    ///     window is a quarter of that.
+    ///     window is a quarter of that. `.workArea` is then clamped by the
+    ///     compositor to what the shell leaves free; `.output` is made
+    ///     fullscreen before the window is ever shown — see `ScreenFill`.
     public static func open(
         title: String,
         width: Float = 1280,
         height: Float = 800,
         frame: WindowFrame = .server,
-        fillScreen: Bool = false,
+        fillScreen: ScreenFill? = nil,
         dialogParent: UInt32? = nil
     ) -> Editor? {
         Self.title = title
@@ -65,6 +78,7 @@ public enum LavaClient {
         Self.requestedHeight = height
         Self.frame = frame
         Self.dialogParent = dialogParent
+        Self.startsFullscreen = fillScreen == .output
         // A picker this app opens is a dialog of this window. Read when the
         // picker is asked for, by which time the surface exists.
         // Read when a picker is asked for, by which time a second window may
@@ -143,7 +157,7 @@ public enum LavaClient {
         // list has done the expensive half of it for rows that were never on
         // screen. Failure leaves the requested size alone, which is the
         // behaviour this replaces.
-        if fillScreen {
+        if fillScreen != nil {
             report("ListOutputs") {
                 let outputs = try blockingCall { try await compositor.listOutputs() }
                 // The primary if the compositor has one, otherwise the
@@ -317,7 +331,7 @@ public enum LavaClient {
         else { return nil }
         unsetenv("LAVA_LOCK_TOKEN")
         Self.lockToken = token
-        return open(title: title, frame: .client, fillScreen: true)
+        return open(title: title, frame: .client, fillScreen: .workArea)
     }
 
     /// Where the lock stands, every time it changes. Runs on the frame loop.
@@ -587,8 +601,8 @@ public enum LavaClient {
         }
     }
 
-    /// Size last asked of `CreateSurface`. After `fillScreen: true` this is
-    /// the largest enabled output — available before the surface exists.
+    /// Size last asked of `CreateSurface`. After `fillScreen` this is the
+    /// primary output, or failing that the largest enabled one — available before the surface exists.
     public static var requestedSize: (width: Float, height: Float) {
         (requestedWidth, requestedHeight)
     }
@@ -1225,6 +1239,22 @@ public enum LavaClient {
                     width: UInt32(requestedWidth), height: UInt32(requestedHeight),
                     title: title, frame: Self.frame, appId: Self.appId
                 )
+            }
+            // Between creating the surface and subscribing to its input, and
+            // nowhere later: the opening `Resize` goes out on subscription,
+            // and a window held for its first frame is not shown until a frame
+            // has caught up with it. Fullscreen by then, the opening size *is*
+            // the output and the first frame anyone sees is drawn at it. Asked
+            // for on the first paint instead, the window appears at its
+            // requested size with the panel over it and then jumps.
+            if Self.startsFullscreen {
+                report("SetFullscreen") {
+                    try blockingCall {
+                        try await compositor.setFullscreen(
+                            surfaceId: surfaceID, on: true
+                        )
+                    }
+                }
             }
             inputChannel = InputChannel(
                 stream: try compositor.subscribeInput(surfaceId: surfaceID)
@@ -1915,6 +1945,8 @@ public enum LavaClient {
     nonisolated(unsafe) private static var requestedHeight: Float = 800
     /// Who draws the non-client area. Read once, at `CreateSurface`.
     nonisolated(unsafe) private static var frame: WindowFrame = .server
+    /// `fillScreen: .output`. Applied once, before the input stream opens.
+    nonisolated(unsafe) private static var startsFullscreen = false
     /// What this application calls itself, for a dock looking for its icon.
     /// The executable's name unless the app says otherwise, which is the
     /// closest thing a process has to an identity without being told one.

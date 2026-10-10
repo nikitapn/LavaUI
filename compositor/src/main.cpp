@@ -6835,6 +6835,10 @@ class SurfaceRegistry : public lava::CompositorHost {
     // now in front of — a frosted panel is above every window by definition,
     // so this is not only about windows that frost anything themselves.
     scheduleBackdropRefresh();
+    // A window made fullscreen before its first frame (`fillScreen: .output`)
+    // was refused the panel's place by `fullscreenCoversShell` while it was
+    // still held; this is the moment it starts covering anything.
+    syncShellForFullscreen();
     damage(surface);
   }
 

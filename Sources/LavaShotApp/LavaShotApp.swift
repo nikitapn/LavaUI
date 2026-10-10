@@ -1,5 +1,5 @@
 import Foundation
-import LavaHost
+import LavaClient
 import LavaShotCore
 import LavaUI
 
@@ -20,8 +20,8 @@ struct LavaShotApp {
     static func main() {
         AppSettings.configure(appName: "LavaShot")
 
-        guard let editor = LavaHost.open(
-            title: "LavaShot", width: 1280, height: 720
+        guard let editor = LavaClient.open(
+            title: "LavaShot", frame: .client, fillScreen: .output
         ) else { exit(1) }
         Theme.current = .nebula
 
@@ -38,12 +38,7 @@ struct LavaShotApp {
             editor.requestClose()
         }
 
-        // Going fullscreen and taking the shot happen on the first frame, not
-        // here: the bridges that do both are installed by `LavaHost.run`, and
-        // nothing exists to ask until it has been called. See
-        // `ShotSession.ensureReady`.
-
-        LavaHost.run(
+        LavaClient.run(
             editor: editor,
             onRawKey: { event in keys(event, session: session) },
             makeRoot: { ShotView(session: session) }

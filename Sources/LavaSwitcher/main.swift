@@ -280,7 +280,7 @@ func handleKey(_ event: LavaUI.InputEvent) -> Bool {
 WindowBackdrop.current = .blur(radius: 12)
 
 guard let editor = LavaClient.open(
-    title: "Switcher", frame: .client, fillScreen: true
+    title: "Switcher", frame: .client, fillScreen: .workArea
 ) else { exit(1) }
 
 model.editor = editor

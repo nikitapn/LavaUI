@@ -64,7 +64,6 @@ final class ShotSession {
     /// and observed state written there re-dirties the frame being painted.
     @ObservationIgnored private var exporting: Exporting?
     @ObservationIgnored private var exportArmed = false
-    @ObservationIgnored private var askedFullscreen = false
     @ObservationIgnored private var askedCapture = false
 
     /// Whether this frame is the clean one. Read by the view to leave the dim,
@@ -93,22 +92,7 @@ final class ShotSession {
 
     /// Covers the screen, then photographs it — on the first frame, not at
     /// startup.
-    ///
-    /// The bridges this needs are installed by `LavaHost.run`, which has not
-    /// been called yet while `main` is still assembling things; asking earlier
-    /// gets a nil provider and a window that never went fullscreen. So the
-    /// first paint does it, in two steps a frame apart: fullscreen first, so
-    /// the shot is taken with this window already the size of the output and
-    /// the compositor's exclusion doing the work — a window that grew *after*
-    /// the shot would leave a rectangle of stale desktop in the middle of it.
-    func ensureReady() {
-        if !askedFullscreen {
-            askedFullscreen = true
-            WindowBridge.setFullscreen?(true)
-            ViewInvalidation.markNeedsRedraw()
-            FrameScheduler.requestWake(in: 0.05)
-            return
-        }
+    func ensureCapture() {
         guard !askedCapture else { return }
         askedCapture = true
         capture()
@@ -343,7 +327,7 @@ final class ShotSession {
     /// frame; the second pass runs when that clean frame has been presented,
     /// and captures it.
     func beforePaint(screen: ShotRect, scale: Float) {
-        ensureReady()
+        ensureCapture()
         guard exporting != nil else { return }
         if exportArmed {
             exportArmed = false

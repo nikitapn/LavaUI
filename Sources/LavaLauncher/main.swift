@@ -208,7 +208,7 @@ BootTrace.mark("desktop entries read (\(model.all.count))")
 // on the machine, and looks up every icon, before the window turns out to be a
 // quarter of that. `.client` because a launcher with a title bar is a dialog.
 guard let editor = LavaClient.open(
-    title: "Launcher", frame: .client, fillScreen: true
+    title: "Launcher", frame: .client, fillScreen: .workArea
 ) else { exit(1) }
 BootTrace.mark("compositor connected")
 
