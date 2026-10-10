@@ -1742,20 +1742,20 @@ public final class DrawList {
             // exactly still reports about 1/32pt of slack that is not really
             // there. Without the rounding, centring a label with nowhere to go
             // still moved it a 64th of a point.
-            let hSlack: Float = {
-                guard leaf.textAlign.horizontal != .leading,
-                      let font = leaf.font ?? FontStore.default
-                else { return 0 }
-                let inner = w - leaf.padding.leading - leaf.padding.trailing
+            // Per row: centring or right-aligning a wrapped label means each
+            // row on its own, the way `text-align` does it — placing the block
+            // by its widest row left every shorter row hanging off the same
+            // left edge, which reads as left-aligned text in a centred box.
+            // One row, which is nearly every label, is the same either way.
+            let alignFont = leaf.textAlign.horizontal == .leading
+                ? nil : (leaf.font ?? FontStore.default)
+            let inner = w - leaf.padding.leading - leaf.padding.trailing
+            func hSlack(_ line: String) -> Float {
+                guard let alignFont else { return 0 }
                 // `DrawList.text` insets the pen by 4 on its own and
-                // `measureForYoga` reserved 4 either side. The widest row is
-                // what a multi-line block has to be placed on, or its rows
-                // would each sit at a different offset.
-                let widest = lines.reduce(Float(0)) {
-                    max($0, font.shapedRun($1).width)
-                }
-                return inner - widest - 8
-            }()
+                // `measureForYoga` reserved 4 either side.
+                return inner - alignFont.shapedRun(line).width - 8
+            }
             let vSlack: Float = {
                 guard leaf.textAlign.vertical != .top else { return 0 }
                 let inner = h - leaf.padding.top - leaf.padding.bottom
@@ -1763,21 +1763,23 @@ public final class DrawList {
                 // which the `+ 2` in `textY` above has already spent.
                 return inner - Float(lines.count) * lineH - 4
             }()
-            let hShift: Float = switch leaf.textAlign.horizontal {
-            case .leading: 0
-            case .center: (hSlack / 2).rounded()
-            case .trailing: hSlack.rounded()
+            func hShift(_ line: String) -> Float {
+                switch leaf.textAlign.horizontal {
+                case .leading: 0
+                case .center: (hSlack(line) / 2).rounded()
+                case .trailing: hSlack(line).rounded()
+                }
             }
             let vShift: Float = switch leaf.textAlign.vertical {
             case .top: 0
             case .center: (vSlack / 2).rounded()
             case .bottom: vSlack.rounded()
             }
-            let textX = textXBase + hShift
             let textY = textYBase + vShift
             var searchStart = leaf.text.startIndex
             for (i, line) in lines.enumerated() {
                 let ly = textY + Float(i) * lineH
+                let textX = textXBase + hShift(line)
                 if leaf.kind == .markdown, let style = leaf.markdownStyle,
                    let range = leaf.text.range(of: line, range: searchStart..<leaf.text.endIndex)
                 {
