@@ -6,6 +6,7 @@
 #include <string>
 #include <vector>
 
+#include "bridge/canvas_engine.hpp"
 #include "render/draw_command.hpp"
 #include "render/exif.hpp"
 #include "render/gpu_report.hpp"
@@ -61,6 +62,18 @@ struct CompositorHost {
   virtual int registerImageData(const std::string &key, const uint8_t *bytes,
                                 size_t byteCount, uint32_t maxPixelSize,
                                 uint32_t &outWidth, uint32_t &outHeight) = 0;
+
+  /// The two halves of `registerImage`, for a caller that decodes elsewhere
+  /// (`Images`, off the loop). Both are loop-only: they touch the device.
+  ///
+  /// The texture id of `key` if the device still holds it — drawn by someone
+  /// or dormant — or 0, in which case the caller has a decode to do.
+  virtual int reviveImage(const std::string &key, uint32_t &outWidth,
+                          uint32_t &outHeight) = 0;
+  /// Uploads pixels decoded off the loop as `key`. Texture id, or -1.
+  virtual int uploadImage(const std::string &key,
+                          const canvas::DecodedImage &decoded,
+                          uint32_t &outWidth, uint32_t &outHeight) = 0;
 
   /// Drops the compositor's reference to `key`.
   virtual void releaseImage(const std::string &key) = 0;

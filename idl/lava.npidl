@@ -2355,4 +2355,44 @@ interface Compositor {
   /// locking only ever takes the desktop away, and getting it back still
   /// takes the password the compositor checks. There is no `UnlockSession`.
   void LockSession();
+
+  /// The `Images` object: the same two registrations as above, decoded off
+  /// the compositor's event loop. A client asks once and uses it for every
+  /// image from then on; see `Images`.
+  ///
+  /// Handed out here rather than published beside this object's reference,
+  /// because it is this object's to give: one reference to find, and a client
+  /// that reached this compositor has reached its images too. Last in the
+  /// interface, so a client built before it still speaks to a compositor
+  /// built after it — and a client that gets an error back from an older
+  /// compositor falls back to `RegisterImage` here.
+  void GetImages(images: out object);
+}
+
+/// Image registration that does not stop the desktop.
+///
+/// `RegisterImage` on `Compositor` decodes on the compositor's event loop,
+/// because every call on that object is dispatched there — and a decode is the
+/// one call in the interface that is not microseconds. A 24-megapixel JPEG is a
+/// quarter of a second of `stbi_load`, during which no window on the desktop
+/// draws a frame; a folder of thumbnails asks for thirty at once.
+///
+/// This object lives on a POA of its own with no loop executor, so a call runs
+/// on an RPC worker thread. It visits the loop twice, briefly — once to find
+/// an image already registered or still resident, once to upload the pixels
+/// and record the lease — and decodes in between, on the worker. Several
+/// decode at once; the loop never waits for any of them.
+///
+/// Same arguments, same answers and the same identity as the `Compositor`
+/// methods: an image registered through either is one texture, released with
+/// `Compositor.ReleaseImage`, and counted against the same connection.
+interface Images {
+  /// `Compositor.RegisterImage`, decoded off the loop.
+  ImageInfo RegisterImage(path: in string, maxPixelSize: in u32,
+                          turn: in ImageTurn)
+      raises(ImageNotFound);
+
+  /// `Compositor.RegisterImageData`, decoded off the loop.
+  ImageInfo RegisterImageData(bytes: in vector<u8>, maxPixelSize: in u32)
+      raises(ImageNotFound);
 }

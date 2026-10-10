@@ -3260,6 +3260,17 @@ class SurfaceRegistry : public lava::CompositorHost {
                      : -1;
   }
 
+  int reviveImage(const std::string &key, uint32_t &outWidth,
+                  uint32_t &outHeight) override {
+    return renderer_ ? renderer_->reviveImage(key, outWidth, outHeight) : 0;
+  }
+
+  int uploadImage(const std::string &key, const canvas::DecodedImage &decoded,
+                  uint32_t &outWidth, uint32_t &outHeight) override {
+    return renderer_ ? renderer_->uploadImage(key, decoded, outWidth, outHeight)
+                     : -1;
+  }
+
   void releaseImage(const std::string &key) override {
     if (renderer_) renderer_->releaseImage(key);
   }

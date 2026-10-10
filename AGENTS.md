@@ -362,6 +362,18 @@ Consequences that surprise people:
   it: a client acks on *reading* an event and lays out afterwards, so the frame
   published just before an ack is one drawn without it. A client that always
   sends 0 gets windows that appear on the hold's 250 ms deadline instead.
+- **Images are decoded off the compositor's loop.** Every `Compositor` call
+  is dispatched on the Wayland loop (the POA's executor), and a decode is the
+  one call that is not microseconds — a 24-megapixel JPEG held the loop for
+  609 ms, with no window drawing. So `Compositor.GetImages` hands out an
+  `Images` object living on a second POA with no executor: its
+  `RegisterImage` / `RegisterImageData` run on the RPC pool and visit the loop
+  only to look up and to upload (`ImagesImpl`, `LoopQueue::call`), which
+  brought the same photo to 70–100 ms — the upload of 96 MB of RGBA, which is
+  what is left. Leases, ids and `ReleaseImage` are shared with `Compositor`.
+  `CompositorResources` uses it, and falls back to `Compositor` against a
+  compositor too old to have it. A new call that does real work belongs on
+  that POA, not on `Compositor`.
 - NPRPC object timeout defaults to **1s**. Long work (surface create, image
   decode, capture) must raise the proxy timeout, not only a local semaphore.
 - Servants hop to the **Wayland event loop** before touching wlroots/Vulkan.

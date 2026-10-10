@@ -11,6 +11,8 @@
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
+#include <future>
+#include <optional>
 #include <mutex>
 #include <thread>
 #include <string_view>
@@ -69,6 +71,34 @@ class LoopQueue {
 
   bool onLoopThread() const {
     return std::this_thread::get_id() == loopThread_;
+  }
+
+  /// Runs `work` on the loop and waits for its answer. For a worker that has
+  /// something to do there in the middle of something it does not — `Images`
+  /// decoding between two visits. Inline when already on the loop, which
+  /// would otherwise wait for itself. Exceptions come back with the answer.
+  ///
+  /// Never from the loop to a worker and back: the loop does not wait on
+  /// anyone, which is what makes waiting on it safe.
+  template <typename F>
+  auto call(F &&work) -> decltype(work()) {
+    using Result = decltype(work());
+    if (onLoopThread()) return work();
+    auto done = std::make_shared<std::promise<Result>>();
+    auto answer = done->get_future();
+    post([done, &work] {
+      try {
+        if constexpr (std::is_void_v<Result>) {
+          work();
+          done->set_value();
+        } else {
+          done->set_value(work());
+        }
+      } catch (...) {
+        done->set_exception(std::current_exception());
+      }
+    });
+    return answer.get();
   }
 
  private:
@@ -821,20 +851,22 @@ class CompositorImpl final : public ICompositor_Servant {
     const std::string file{path};
     const canvas::ImageTurn quarter = asEngineTurn(turn);
     const std::string key = image_key(file, maxPixelSize, quarter);
-    if (const ImageInfo *known = sharedImage(key)) return *known;
+    const void *session = callingSession();
+    if (const ImageInfo *known = sharedImage(key, session)) return *known;
 
     uint32_t width = 0, height = 0;
     const int id =
         host_.registerImage(key, file, maxPixelSize, quarter, width, height);
     if (id <= 0) throw ImageNotFound(file);
-    return keepImage(key, static_cast<uint32_t>(id), width, height);
+    return keepImage(key, static_cast<uint32_t>(id), width, height, session);
   }
 
   ImageInfo RegisterImageData(nprpc::flat::Span<uint8_t> bytes,
                               uint32_t maxPixelSize) override {
     const auto *data = static_cast<const uint8_t *>(bytes.data());
     const std::string key = image_content_key(data, bytes.size(), maxPixelSize);
-    if (const ImageInfo *known = sharedImage(key)) return *known;
+    const void *session = callingSession();
+    if (const ImageInfo *known = sharedImage(key, session)) return *known;
 
     uint32_t width = 0, height = 0;
     const int id = host_.registerImageData(key, data, bytes.size(),
@@ -845,7 +877,7 @@ class CompositorImpl final : public ICompositor_Servant {
       throw ImageNotFound("<" + std::to_string(bytes.size()) +
                           " bytes in memory>");
     }
-    return keepImage(key, static_cast<uint32_t>(id), width, height);
+    return keepImage(key, static_cast<uint32_t>(id), width, height, session);
   }
 
   void ReleaseImage(uint32_t id) override {
@@ -861,6 +893,48 @@ class CompositorImpl final : public ICompositor_Servant {
     forgetSessionImage(callingSession(), key);
     dropImageUser(key);
   }
+
+  void GetImages(nprpc::detail::flat::ObjectId_Direct images) override {
+    nprpc::ObjectId::assign_to_direct(imagesRef_, images);
+  }
+
+  /// The `Images` object `GetImages` hands out. Set once, before any client
+  /// can have connected.
+  void setImagesReference(const nprpc::ObjectId &ref) { imagesRef_ = ref; }
+
+  // The loop's two parts of an `Images` registration. Loop only — `Images`
+  // reaches them through `LoopQueue::call` — and each takes the session its
+  // caller read during its own dispatch.
+
+  /// Already registered, or still resident on the device: the answer, and
+  /// one more user for it. Nullopt means there is a decode to do.
+  std::optional<ImageInfo> findImage(const std::string &key,
+                                     const void *session) {
+    if (const ImageInfo *known = sharedImage(key, session)) return *known;
+    uint32_t width = 0, height = 0;
+    const int id = host_.reviveImage(key, width, height);
+    if (id <= 0) return std::nullopt;
+    return keepImage(key, static_cast<uint32_t>(id), width, height, session);
+  }
+
+  /// Uploads what a worker decoded. Nullopt if the upload failed.
+  ///
+  /// Asks again first: two clients — or one, twice — can decode the same key
+  /// at once, and the second to arrive is a user of the first one's texture,
+  /// not a second texture under the same name.
+  std::optional<ImageInfo> storeImage(const std::string &key,
+                                      const canvas::DecodedImage &decoded,
+                                      const void *session) {
+    if (const ImageInfo *known = sharedImage(key, session)) return *known;
+    uint32_t width = 0, height = 0;
+    const int id = host_.uploadImage(key, decoded, width, height);
+    if (id <= 0) return std::nullopt;
+    return keepImage(key, static_cast<uint32_t>(id), width, height, session);
+  }
+
+  /// The connection the current dispatch is for. Public for `Images`, which
+  /// reads it the same way and must read it at the same moment.
+  static const void *sessionOfCall() { return callingSession(); }
 
   // ─── Surfaces ────────────────────────────────────────────────────────────
 
@@ -1978,22 +2052,25 @@ class CompositorImpl final : public ICompositor_Servant {
   /// loop. Not just an optimisation: a desktop's second client asking for an
   /// asset the first already has is the normal case, and it should cost a
   /// lookup.
-  const ImageInfo *sharedImage(const std::string &key) {
+  /// `session` is passed rather than read: `Images` calls this from a job it
+  /// posted to the loop, where no dispatch is running and `get_context()`
+  /// names nobody — the caller read it while its own dispatch was.
+  const ImageInfo *sharedImage(const std::string &key, const void *session) {
     auto it = imageIds_.find(key);
     if (it == imageIds_.end()) return nullptr;
-    noteImageUser(callingSession(), key);
+    noteImageUser(session, key);
     return &it->second;
   }
 
   /// Records a freshly uploaded texture and returns what the client is told.
   ImageInfo keepImage(const std::string &key, uint32_t id, uint32_t width,
-                      uint32_t height) {
+                      uint32_t height, const void *session) {
     ImageInfo info;
     info.id = id;
     info.width = width;
     info.height = height;
     imageIds_[key] = info;
-    noteImageUser(callingSession(), key);
+    noteImageUser(session, key);
     // Keyed by the id the client will use, so `ReleaseImage` needs no
     // agreement between the two sides about how a cache key is spelled.
     imageKeys_[id] = key;
@@ -2017,6 +2094,7 @@ class CompositorImpl final : public ICompositor_Servant {
   /// `InputBroker` — every method that touches these is dispatched onto the
   /// loop by the POA, and a lock would suggest otherwise.
   std::unordered_map<std::string, ImageInfo> imageIds_;
+  nprpc::ObjectId imagesRef_;
   std::unordered_map<std::string, uint32_t> imageUsers_;
   std::unordered_map<uint32_t, std::string> imageKeys_;
 
@@ -2035,6 +2113,60 @@ class CompositorImpl final : public ICompositor_Servant {
   std::unordered_map<const void *, uint32_t> sessionSubscriptions_;
 };
 
+
+/// `Images`: registration that decodes on an RPC worker, not on the loop.
+///
+/// Activated on a POA of its own with no dispatch executor, so nprpc runs each
+/// call on its thread pool. The loop is visited twice per miss, through
+/// `LoopQueue::call` — once to find the image already registered or still
+/// resident, once to upload — and the decode, which is nearly all of the
+/// time, happens between the two with the loop free to draw.
+///
+/// Everything it records goes through `CompositorImpl`, on the loop, so an
+/// image registered here and one registered through `Compositor` are the same
+/// texture with the same lease, released the same way.
+class ImagesImpl final : public IImages_Servant {
+ public:
+  ImagesImpl(CompositorImpl &compositor, LoopQueue &loop)
+      : compositor_(compositor), loop_(loop) {}
+
+  ImageInfo RegisterImage(nprpc::flat::Span<char> path, uint32_t maxPixelSize,
+                          ImageTurn turn) override {
+    const std::string file{path};
+    const canvas::ImageTurn quarter = asEngineTurn(turn);
+    const std::string key = image_key(file, maxPixelSize, quarter);
+    // Read here, during this dispatch: on the loop there is none.
+    const void *session = CompositorImpl::sessionOfCall();
+    if (auto known = loop_.call([&] { return compositor_.findImage(key, session); }))
+      return *known;
+    const canvas::DecodedImage decoded =
+        canvas::Engine::decodeImage(file, maxPixelSize, quarter);
+    if (!decoded.valid()) throw ImageNotFound(file);
+    if (auto stored = loop_.call([&] { return compositor_.storeImage(key, decoded, session); }))
+      return *stored;
+    throw ImageNotFound(file);
+  }
+
+  ImageInfo RegisterImageData(nprpc::flat::Span<uint8_t> bytes,
+                              uint32_t maxPixelSize) override {
+    const auto *data = static_cast<const uint8_t *>(bytes.data());
+    const std::string key = image_content_key(data, bytes.size(), maxPixelSize);
+    const void *session = CompositorImpl::sessionOfCall();
+    if (auto known = loop_.call([&] { return compositor_.findImage(key, session); }))
+      return *known;
+    const canvas::DecodedImage decoded =
+        canvas::Engine::decodeImageData(data, bytes.size(), maxPixelSize);
+    const std::string what = "<" + std::to_string(bytes.size()) + " bytes in memory>";
+    if (!decoded.valid()) throw ImageNotFound(what);
+    if (auto stored = loop_.call([&] { return compositor_.storeImage(key, decoded, session); }))
+      return *stored;
+    throw ImageNotFound(what);
+  }
+
+ private:
+  CompositorImpl &compositor_;
+  LoopQueue &loop_;
+};
 class ControlPlaneImpl final : public ControlPlane {
  public:
   ~ControlPlaneImpl() override {
@@ -2068,8 +2200,10 @@ class ControlPlaneImpl final : public ControlPlane {
       return false;
     }
     // One thread per concurrent client conversation, plus room for the input
-    // streams, which live as long as their surfaces do.
-    rpc_->start_thread_pool(4);
+    // streams, which live as long as their surfaces do — and since `Images`,
+    // for decodes, which hold a thread for as long as one takes. Six leaves
+    // the old four free while two pictures decode.
+    rpc_->start_thread_pool(6);
 
     // Servants land on the compositor's loop, not on the shared-memory ring
     // thread. This is the rule "anything touching the scene runs on the loop"
@@ -2108,6 +2242,28 @@ class ControlPlaneImpl final : public ControlPlane {
                                                 menu_, choices_, lock_);
     const nprpc::ObjectId oid = poa_->activate_object_with_id(
         0, servant_.get(), nprpc::ObjectActivationFlags::shm);
+
+    // `Images` on a POA with no executor, so its calls stay on the RPC pool
+    // and only visit the loop — see `ImagesImpl`. Off the transport thread
+    // too: a decode blocks for as long as a decode takes, and the ring it
+    // arrived on carries every other client's calls.
+    imagesPoa_ = rpc_->create_poa()
+                     .with_max_objects(1)
+                     // Persistent, like the compositor's own: it lives as
+                     // long as the process, not as long as one connection.
+                     .with_lifespan(nprpc::PoaPolicy::Lifespan::Persistent)
+                     .with_object_id_policy(
+                         nprpc::PoaPolicy::ObjectIdPolicy::UserSupplied)
+                     .with_transport_affinity(
+                         nprpc::PoaPolicy::TransportAffinity::NeverBlockTransport)
+                     .build();
+    if (imagesPoa_ == nullptr) {
+      wlr_log(WLR_ERROR, "control plane: could not create the images POA");
+      return false;
+    }
+    images_ = std::make_unique<ImagesImpl>(*servant_, queue_);
+    servant_->setImagesReference(imagesPoa_->activate_object_with_id(
+        0, images_.get(), nprpc::ObjectActivationFlags::shm));
 
     // The reference as a string: everything a client needs to reach this
     // object, shared-memory endpoint included, on one line of text. A file
@@ -2255,6 +2411,9 @@ class ControlPlaneImpl final : public ControlPlane {
   nprpc::Rpc *rpc_ = nullptr;
   nprpc::Poa *poa_ = nullptr;
   std::unique_ptr<CompositorImpl> servant_;
+  nprpc::Poa *imagesPoa_ = nullptr;
+  /// After `servant_`, so it goes first: it holds a reference to it.
+  std::unique_ptr<ImagesImpl> images_;
   std::string publishedPath_;
 };
 

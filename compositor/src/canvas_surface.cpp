@@ -258,6 +258,18 @@ int CanvasRenderer::registerImageData(const std::string &key,
       outWidth, outHeight);
 }
 
+int CanvasRenderer::reviveImage(const std::string &key, uint32_t &outWidth,
+                                uint32_t &outHeight) {
+  const int id = engine_.reviveTexture(key, outWidth, outHeight);
+  return id > 0 ? id : 0;
+}
+
+int CanvasRenderer::uploadImage(const std::string &key,
+                                const canvas::DecodedImage &decoded,
+                                uint32_t &outWidth, uint32_t &outHeight) {
+  return upload_decoded(engine_, key, decoded, outWidth, outHeight);
+}
+
 void CanvasRenderer::releaseImage(const std::string &key) {
   engine_.unloadTexture(key);
 }

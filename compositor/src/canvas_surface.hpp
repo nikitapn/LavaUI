@@ -95,6 +95,14 @@ class CanvasRenderer {
                     uint32_t maxPixelSize, canvas::ImageTurn turn,
                     uint32_t &outWidth, uint32_t &outHeight);
 
+  /// `registerImage` split in two, for a decode done on another thread: the
+  /// id of `key` if the device still has it (in use or dormant), else 0; and
+  /// the upload of pixels already decoded, else -1. Loop only.
+  int reviveImage(const std::string &key, uint32_t &outWidth,
+                  uint32_t &outHeight);
+  int uploadImage(const std::string &key, const canvas::DecodedImage &decoded,
+                  uint32_t &outWidth, uint32_t &outHeight);
+
   /// The same, from encoded bytes that never had a file to be opened from.
   int registerImageData(const std::string &key, const uint8_t *bytes,
                         size_t byteCount, uint32_t maxPixelSize,

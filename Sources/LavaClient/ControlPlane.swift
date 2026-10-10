@@ -165,8 +165,45 @@ public final class CompositorResources: GPUResourceHost, @unchecked Sendable {
     /// client that outlives the file being fixed can be restarted.
     private var refusedKeys: Set<String> = []
 
+    /// Where images are registered: the compositor's `Images`, which decodes
+    /// off its event loop, asked for once on the first image. Nil until then,
+    /// and nil after it against a compositor too old to have one — every
+    /// image then goes through `Compositor` as it always did, which works and
+    /// stalls the desktop for the length of each decode.
+    private var images: Images?
+    private var askedForImages = false
+
     /// Creates a host that registers resources with `compositor`.
     public init(_ compositor: Compositor) { self.compositor = compositor }
+
+    private func imageHost() -> Images? {
+        lock.lock()
+        if askedForImages {
+            defer { lock.unlock() }
+            return images
+        }
+        lock.unlock()
+        var found: Images?
+        do {
+            let object = try blockingCall { [compositor] in try await compositor.getImages() }
+            found = narrow(object, to: Images.self)
+            // What `Compositor` is given, for what it is given it for: a
+            // decode takes as long as the file is large.
+            found?.timeout = 10_000
+        } catch {
+            FileHandle.standardError.write(
+                Data("GetImages failed (\(error)); images decode on the compositor's loop\n".utf8)
+            )
+        }
+        lock.lock()
+        // Two threads can both have asked; the first answer stands.
+        if !askedForImages {
+            askedForImages = true
+            images = found
+        }
+        defer { lock.unlock() }
+        return images
+    }
 
     public func registerFont(
         path: String, pixelSize26_6: UInt32, faceIndex: UInt32,
@@ -200,10 +237,16 @@ public final class CompositorResources: GPUResourceHost, @unchecked Sendable {
 
         let info: ImageInfo
         do {
+            let images = imageHost()
             info = try blockingCall(timeout: 10) { [compositor] in
                 // Longer than the default: this one decodes and uploads a
                 // file on the far side, where `RegisterFont` only opens one.
-                try await compositor.registerImage(
+                if let images {
+                    return try await images.registerImage(
+                        path: path, maxPixelSize: maxPixelSize, turn: turn.wireTurn
+                    )
+                }
+                return try await compositor.registerImage(
                     path: path, maxPixelSize: maxPixelSize, turn: turn.wireTurn
                 )
             }
@@ -230,11 +273,17 @@ public final class CompositorResources: GPUResourceHost, @unchecked Sendable {
     public func registerImage(data: [UInt8], maxPixelSize: UInt32) -> UIImage? {
         let info: ImageInfo
         do {
+            let images = imageHost()
             info = try blockingCall(timeout: 10) { [compositor] in
                 // Same budget as the path form, and it buys the same thing:
                 // a decode and an upload on the far side. The transfer itself
                 // is a memcpy into a ring the compositor is already mapped to.
-                try await compositor.registerImageData(
+                if let images {
+                    return try await images.registerImageData(
+                        bytes: data, maxPixelSize: maxPixelSize
+                    )
+                }
+                return try await compositor.registerImageData(
                     bytes: data, maxPixelSize: maxPixelSize
                 )
             }
