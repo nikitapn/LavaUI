@@ -223,15 +223,23 @@ private struct ChooserBar: View {
     var body: some View {
         let theme = Theme.current
         let saving = chooser.mode == .save
-        let answer = session.openAnswer
+        let choosingFolder = chooser.mode == .folder
+        let answer = choosingFolder ? session.folderAnswer.map { [$0] } : session.openAnswer
         let picked: String = {
+            if choosingFolder {
+                // Named, so it is plain whether Choose means the highlighted
+                // folder or the one being looked at.
+                guard let folder = answer?.first else { return "Not a folder to choose" }
+                return (folder as NSString).lastPathComponent.isEmpty
+                    ? folder : (folder as NSString).lastPathComponent
+            }
             guard let answer else { return "Choose a file" }
             if answer.count > 1 { return ExplorerSession.items(answer.count) }
             return (answer[0] as NSString).lastPathComponent
         }()
         let canConfirm = saving
             ? !session.saveName.trimmingCharacters(in: .whitespaces).isEmpty
-            : answer != nil || session.selectedEntries.contains(where: \.isDirectory)
+            : answer != nil || (!choosingFolder && session.selectedEntries.contains(where: \.isDirectory))
         return HStack(padding: 10, alignment: .center, spacing: 10) {
             if saving {
                 Text("Name", color: theme.textSecondary)
@@ -268,7 +276,7 @@ private struct ChooserBar: View {
             }
             Button("Cancel") { session.cancelChoosing() }
                 .agentId("chooser-cancel")
-            Button(saving ? "Save" : "Open") {
+            Button(saving ? "Save" : choosingFolder ? "Choose" : "Open") {
                 if canConfirm { session.confirmChoice() }
             }
             .agentId("chooser-confirm")

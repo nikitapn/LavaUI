@@ -66,7 +66,9 @@ final class ExplorerSession: @unchecked Sendable {
         chooser: ChooserRequest? = nil,
         watchFolders: Bool = true
     ) {
-        let filter = FilteredSource.Filter(chooser?.filters.first)
+        let filter = FilteredSource.Filter(
+            chooser?.mode == .folder ? .folders : chooser?.filters.first
+        )
         let source = TrashListingSource(
             base: FilteredSource(base: source, filter: filter), trash: trash
         )
@@ -956,6 +958,11 @@ final class ExplorerSession: @unchecked Sendable {
         chooser?.openAnswer(selected: selectedEntries)
     }
 
+    /// What Choose would answer with right now, in folder mode.
+    var folderAnswer: String? {
+        chooser?.folderAnswer(selected: selectedEntries, showing: listing.path)
+    }
+
     /// Open or Save. Open on a folder goes into it; Save over a file asks.
     func confirmChoice() {
         guard let chooser else { return }
@@ -966,6 +973,8 @@ final class ExplorerSession: @unchecked Sendable {
             } else if let folder = selectedEntries.first(where: \.isDirectory) {
                 go(folder.path)
             }
+        case .folder:
+            if let answer = folderAnswer { finishChoosing([answer]) }
         case .save:
             do {
                 let target = try chooser.saveTarget(name: saveName, in: listing.path)

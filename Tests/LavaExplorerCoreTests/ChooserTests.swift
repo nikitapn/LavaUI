@@ -30,6 +30,27 @@ import Testing
             .shows(FileEntry(path: "/a/anything", isDirectory: false)))
     }
 
+    @Test func aFolderChooserListsFoldersAndAnswersWithOne() throws {
+        let request = try #require(ChooserRequest.parse(["--choose=folder", "/home/me"]))
+        #expect(request.mode == .folder)
+        #expect(request.title == "Choose Folder")
+        let folders = ChooserRequest.Filter.folders
+        #expect(folders.shows(FileEntry(path: "/d/sub", isDirectory: true)))
+        #expect(!folders.shows(FileEntry(path: "/d/a.txt", isDirectory: false)),
+                "a file is not a possible answer")
+
+        let sub = FileEntry(path: "/d/sub", isDirectory: true)
+        let other = FileEntry(path: "/d/other", isDirectory: true)
+        #expect(request.folderAnswer(selected: [sub], showing: "/d") == "/d/sub",
+                "the highlighted folder")
+        #expect(request.folderAnswer(selected: [], showing: "/d") == "/d",
+                "nothing highlighted: the folder being shown")
+        #expect(request.folderAnswer(selected: [sub, other], showing: "/d") == "/d",
+                "two highlighted is no one folder: the one being shown")
+        #expect(request.folderAnswer(selected: [], showing: TrashPath.uri) == nil,
+                "the Trash is nowhere to choose")
+    }
+
     @Test func openAnswersWithFilesNeverFolders() {
         let single = ChooserRequest(mode: .open)
         let many = ChooserRequest(mode: .openMultiple)

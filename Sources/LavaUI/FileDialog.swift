@@ -50,6 +50,12 @@ public enum FileDialog {
         run(Request(mode: .openMultiple, title: title, filters: filters))
     }
 
+    /// Asks for one existing folder. `nil` when cancelled or no picker is
+    /// available.
+    public static func openFolder(title: String = "Choose Folder") -> URL? {
+        run(Request(mode: .folder, title: title, filters: [])).first
+    }
+
     /// Asks where to save a file, suggesting `defaultName`. `nil` when cancelled
     /// or no picker is available.
     public static func saveFile(
@@ -69,7 +75,7 @@ public enum FileDialog {
     nonisolated(unsafe) private static var lastDirectory: String?
 
     struct Request {
-        enum Mode: String { case open, openMultiple = "open-multiple", save }
+        enum Mode: String { case open, openMultiple = "open-multiple", save, folder }
         var mode: Mode
         var title: String
         var filters: [Filter]
@@ -85,7 +91,9 @@ public enum FileDialog {
             chosen = runZenity(request)
         }
         if let first = chosen.first {
-            lastDirectory = first.deletingLastPathComponent().path
+            // A chosen folder is itself where the next dialog should start.
+            lastDirectory = request.mode == .folder
+                ? first.path : first.deletingLastPathComponent().path
         }
         return chosen
         #else
@@ -173,6 +181,8 @@ public enum FileDialog {
         case .save:
             args += ["--save", "--confirm-overwrite"]
             if let name = request.defaultName { args.append("--filename=\(name)") }
+        case .folder:
+            args.append("--directory")
         }
         args += request.filters.map {
             "--file-filter=\($0.name) | " + $0.extensions.map { "*.\($0)" }.joined(separator: " ")

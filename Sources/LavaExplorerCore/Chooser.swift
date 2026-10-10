@@ -14,6 +14,9 @@ public struct ChooserRequest: Equatable, Sendable {
         case open
         case openMultiple = "open-multiple"
         case save
+        /// A folder rather than a file: where to index, where to export to.
+        /// Only folders are listed, and the answer is a folder.
+        case folder
     }
 
     /// "Images | png, jpg": which files are shown. Folders always are — they
@@ -30,8 +33,20 @@ public struct ChooserRequest: Equatable, Sendable {
                 .filter { !$0.isEmpty }
         }
 
+        /// Folders and nothing else, for `Mode.folder`: a file is not a
+        /// possible answer, so listing one is only something to misclick.
+        public var foldersOnly = false
+
+        public static let folders: Filter = {
+            var filter = Filter(name: "Folders", extensions: [])
+            filter.foldersOnly = true
+            return filter
+        }()
+
         public func shows(_ entry: FileEntry) -> Bool {
-            if entry.isDirectory || extensions.isEmpty { return true }
+            if entry.isDirectory { return true }
+            if foldersOnly { return false }
+            if extensions.isEmpty { return true }
             let ext = (entry.name as NSString).pathExtension.lowercased()
             return extensions.contains(ext)
         }
@@ -64,7 +79,13 @@ public struct ChooserRequest: Equatable, Sendable {
         suggestedName: String? = nil, output: String? = nil, parent: UInt32? = nil
     ) {
         self.mode = mode
-        self.title = title ?? (mode == .save ? "Save File" : "Open File")
+        self.title = title ?? {
+            switch mode {
+            case .save: return "Save File"
+            case .folder: return "Choose Folder"
+            case .open, .openMultiple: return "Open File"
+            }
+        }()
         self.filters = filters
         self.suggestedName = suggestedName
         self.output = output
@@ -107,6 +128,16 @@ public struct ChooserRequest: Equatable, Sendable {
         let files = selected.filter { !$0.isDirectory }.map(\.path)
         guard !files.isEmpty else { return nil }
         return mode == .openMultiple ? files : [files[0]]
+    }
+
+    /// The folder a Choose answers with: the one folder selected, or — with
+    /// none — the folder being shown, which is where the user has navigated
+    /// to and is the obvious meaning of "this one". Nil in the Trash, which
+    /// is not anywhere to choose.
+    public func folderAnswer(selected: [FileEntry], showing directory: String) -> String? {
+        let folders = selected.filter(\.isDirectory)
+        let answer = folders.count == 1 ? folders[0].path : directory
+        return TrashPath.isTrash(answer) ? nil : answer
     }
 
     /// Where a Save goes: `name` in `directory`, or why it cannot.
