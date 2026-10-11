@@ -206,6 +206,10 @@ enum CursorShape: u32 {
   resizeLeftRight,
   /// Vertical drag: a horizontal divider, a row edge.
   resizeUpDown,
+  /// No image at all while the pointer is over the view that asked: a video
+  /// in fullscreen with its controls faded. Last, so a compositor that
+  /// predates it reads an unknown shape and shows its default arrow.
+  hidden,
 };
 
 /// The surface id is not one this compositor handed out, or its client has

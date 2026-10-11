@@ -1227,6 +1227,9 @@ struct Server {
   /// every `SetCursor`, since what prompts one is the pointer arriving
   /// somewhere it already is.
   void applyCursorFor(const ClientSurface &surface);
+  /// A client's `CursorShape` on the real pointer, `hidden` included. The
+  /// caller has already decided the pointer is that client's to set.
+  void setClientCursor(uint32_t shape);
 
   /// Starts an interactive move of a client-framed window, as a title bar
   /// press does for a decorated one. False when there is no button down to
@@ -11979,6 +11982,9 @@ void Server::moveFocusedToWorkspace(uint32_t index) {
 /// every theme has had them for decades. The double-headed splitter cursors
 /// (`col-resize`, `row-resize`) would read better and are not universal, so a
 /// divider gets the one-sided arrow every theme can draw.
+/// `CursorShape.hidden` in the IDL: no image, so not a name in this table.
+constexpr uint32_t kClientCursorHidden = 6;
+
 const char *client_cursor(uint32_t shape) {
   switch (shape) {
     case 1: return "text";
@@ -12106,7 +12112,7 @@ void Server::update_pointer_focus(uint32_t time_msec) {
         shape = over->cursorShape;
       }
     }
-    wlr_cursor_set_xcursor(cursor, cursor_mgr, client_cursor(shape));
+    setClientCursor(shape);
     wlr_seat_pointer_clear_focus(seat);
     return;
   }
@@ -12139,7 +12145,18 @@ void Server::applyCursorFor(const ClientSurface &surface) {
   // that asks while a drag is live is asking about a pointer the compositor
   // has already given to something else.
   if (pointerOver != surface.id || drag != Drag::None) return;
-  wlr_cursor_set_xcursor(cursor, cursor_mgr, client_cursor(surface.cursorShape));
+  setClientCursor(surface.cursorShape);
+}
+
+void Server::setClientCursor(uint32_t shape) {
+  // Hidden is no image rather than an image of nothing. Leaving the surface
+  // sets one again on whatever the pointer reaches, so nothing has to undo
+  // this — a client cannot strand the desktop without a pointer.
+  if (shape == kClientCursorHidden) {
+    wlr_cursor_unset_image(cursor);
+    return;
+  }
+  wlr_cursor_set_xcursor(cursor, cursor_mgr, client_cursor(shape));
 }
 
 void Server::armInteractiveMove(ClientSurface &surface, bool fromClient) {
@@ -12881,8 +12898,7 @@ void Server::lockedPointerMotion() {
   }
   surface->canvas->pointerMove(static_cast<float>(sx), static_cast<float>(sy));
   surfaces->pump(*surface);
-  wlr_cursor_set_xcursor(cursor, cursor_mgr,
-                         client_cursor(surface->cursorShape));
+  setClientCursor(surface->cursorShape);
 }
 
 void Server::lockedPointerButton(bool pressed, int32_t button) {

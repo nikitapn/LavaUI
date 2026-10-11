@@ -282,6 +282,8 @@ class AppWindow {
   /// nothing. The producer already de-duplicates; this covers the other
   /// callers (and a second window with its own pointer history).
   uint32_t cursorShape_ = 0;
+  /// `CursorShape.hidden`: an input mode rather than one of `cursors_`.
+  static constexpr uint32_t kCursorHidden = 6;
 
   /// Client-only size and close flag. A rendered window keeps both in the
   /// renderer — the swapchain extent and GLFW's should-close — and asking two

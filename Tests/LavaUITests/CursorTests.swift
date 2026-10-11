@@ -129,5 +129,6 @@ final class CursorTests: XCTestCase {
         XCTAssertEqual(CursorShape.crosshair.rawValue, 3)
         XCTAssertEqual(CursorShape.resizeLeftRight.rawValue, 4)
         XCTAssertEqual(CursorShape.resizeUpDown.rawValue, 5)
+        XCTAssertEqual(CursorShape.hidden.rawValue, 6)
     }
 }

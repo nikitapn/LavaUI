@@ -84,6 +84,8 @@ public struct ViewStyle: Equatable {
     /// asked the question, which is not the same as being asked and answered
     /// `.center`.
     public var frameAlignment: Alignment?
+    /// See `View.onHover(_:)`.
+    public var hoverRegion: HoverRegionAction?
 
     /// Creates a style that sets nothing.
     public init() {}
@@ -118,6 +120,7 @@ public struct ViewStyle: Equatable {
         out.cursor = cursor ?? base.cursor
         out.hoverSnap = hoverSnap ?? base.hoverSnap
         out.border = border ?? base.border
+        out.hoverRegion = hoverRegion ?? base.hoverRegion
         return out
     }
 }
@@ -224,8 +227,10 @@ public struct ModifiedView<Content: View>: PrimitiveView {
     /// lose the fill. Layout is unchanged because `StyleBoxNode` inherits flex
     /// from what it wraps.
     private static func canPaint(_ style: ViewStyle, on node: any AnyViewNode) -> Bool {
+        // A hover region needs a node the renderer hit-tests, which is the
+        // same three kinds that can paint — so it is decided the same way.
         if style.fill == nil, style.fillGradient == nil, style.hoverFill == nil,
-           style.cornerRadius == nil, style.border == nil {
+           style.cornerRadius == nil, style.border == nil, style.hoverRegion == nil {
             return true
         }
         return node is LeafNode || node is StackNode || node is StyleBoxNode
@@ -288,6 +293,9 @@ extension YogaBoxNode {
         // modifier has to take the stroke off. `fill` is set-if-present
         // because a primitive may have painted its own.
         borderStyle = style.border ?? base.border
+        // Never in the baseline: no primitive declares a region of its own, so
+        // the modifier's absence means none.
+        hoverRegion = style.hoverRegion?.action
 
         if let leaf = self as? LeafNode {
             if let fill = style.fill { leaf.fillColor = fill }

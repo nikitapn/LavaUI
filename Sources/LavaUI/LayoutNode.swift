@@ -208,6 +208,10 @@ class YogaBoxNode: AnyViewNode {
     /// Pointer image while the pointer is inside this box (`View.cursor(_:)`).
     /// Nil inherits whatever an ancestor asked for, and an arrow if none did.
     var cursor: CursorShape?
+    /// `View.onHover(_:)`: called with whether the pointer is over this node
+    /// or anything inside it. Resolved by `HoverRegions`, not by the hover
+    /// walk, which only ever names the innermost node.
+    var hoverRegion: ((Bool) -> Void)?
     /// When true, the renderer drops this node's hover tint the frame the
     /// pointer leaves, instead of easing it out. See `View.hoverSnap(_:)`.
     var hoverSnap: Bool = false
@@ -1501,19 +1505,21 @@ extension LeafNode {
     var isRendererInteractive: Bool {
         if kind == .button, buttonStyle != nil, isEnabled { return true }
         return hoverFill != nil || hoverColor != nil || onHover != nil
-            || cursor != nil
+            || cursor != nil || hoverRegion != nil
     }
 }
 
 extension StackNode {
     var isRendererInteractive: Bool {
         hoverFill != nil || onHover != nil || onClick != nil || onPointer != nil
-            || cursor != nil
+            || cursor != nil || hoverRegion != nil
     }
 }
 
 extension StyleBoxNode {
-    var isRendererInteractive: Bool { hoverFill != nil || cursor != nil }
+    var isRendererInteractive: Bool {
+        hoverFill != nil || cursor != nil || hoverRegion != nil
+    }
 }
 
 // MARK: - Stack container (HStack / VStack only)

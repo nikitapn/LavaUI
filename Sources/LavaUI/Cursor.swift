@@ -23,6 +23,11 @@ public enum CursorShape: UInt32, Equatable, Sendable, CaseIterable {
     case resizeLeftRight = 4
     /// Vertical drag: a horizontal divider, a row edge.
     case resizeUpDown = 5
+    /// No pointer at all, while it is over this view — a video in fullscreen
+    /// once its controls have faded. Any movement that should bring it back
+    /// has to be answered by the view, which changes its cursor again: the
+    /// renderer hides the image, it does not stop delivering motion.
+    case hidden = 6
 }
 
 extension View {

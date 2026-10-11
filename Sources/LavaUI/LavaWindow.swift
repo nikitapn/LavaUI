@@ -363,7 +363,9 @@ public final class LavaWindow {
     /// it does not.
     func noteInjectedPointer(x: Float, y: Float) {
         WindowScope.withCurrent(scope) {
-            HoverState.set(host.hitTestSceneHover(x: x, y: y, originY: menuH))
+            let hovered = host.hitTestSceneHover(x: x, y: y, originY: menuH)
+            HoverState.set(hovered)
+            HoverRegions.update(hovered: hovered, in: host.rootNode)
         }
     }
 
@@ -436,6 +438,20 @@ public final class LavaWindow {
     ///
     /// Assumes `scope` is already current; every caller above goes through
     /// `withCurrent`.
+    /// A body pass can change what the node under a resting pointer asks for —
+    /// a video that hides the cursor once its controls fade, a region that has
+    /// just appeared under the pointer — and both are otherwise only resolved
+    /// when the hovered node changes, which a pointer at rest never makes it
+    /// do. Only for a hovered node in *this* window: resolving another
+    /// window's node here would find nothing and hand the pointer an arrow.
+    private func reresolvePointerState() {
+        guard let hovered = HoverState.current, let root = host.rootNode,
+              CursorBridge.resolve(hovered, in: root) != nil
+        else { return }
+        CursorBridge.hover(hovered, in: root, window: id, editor: editor)
+        HoverRegions.update(hovered: hovered, in: root)
+    }
+
     private func renderFrame(_ level: InvalidationLevel) {
         syncFramebufferSize(invalidate: false)
         let bodyW = width
@@ -466,6 +482,7 @@ public final class LavaWindow {
             } else {
                 installRootImpl()
             }
+            reresolvePointerState()
         }
         let t1 = enableDebug ? FrameScheduler.now() : 0
         let frames = level >= .layout
@@ -668,6 +685,7 @@ public final class LavaWindow {
         case .nodeHover:
             let hovered = SceneNodeIdentity.node(for: UInt32(bitPattern: ev.button))
             HoverState.set(hovered)
+            HoverRegions.update(hovered: hovered, in: host.rootNode)
             // The pointer image belongs to the same event: this is the only
             // thing that says the pointer entered a different view, in either
             // run mode.
@@ -683,6 +701,7 @@ public final class LavaWindow {
             PointerCapture.release()
             PointerRelease.fire()
             HoverState.clear()
+            HoverRegions.update(hovered: nil, in: host.rootNode)
             PointerState.left()
             // Hand the arrow back on the way out. A window that kept its
             // resize cursor after the pointer left would be setting the image

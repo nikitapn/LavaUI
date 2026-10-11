@@ -427,6 +427,19 @@ void AppWindow::setCursorShape(uint32_t shape)
   // A client window: no GLFW window, no pointer here to set. The producer
   // asks the compositor instead — see `SetCursor` in the IDL.
   if (glfw_ == nullptr) return;
+  // Hidden is an input mode in GLFW, not a cursor image, and the two are
+  // independent: the image set while hidden is the one shown when it comes
+  // back. So every other shape first makes sure the pointer is visible.
+  if (shape == kCursorHidden) {
+    if (cursorShape_ == kCursorHidden) return;
+    cursorShape_ = kCursorHidden;
+    glfwSetInputMode(glfw_, GLFW_CURSOR, GLFW_CURSOR_HIDDEN);
+    return;
+  }
+  if (cursorShape_ == kCursorHidden) {
+    glfwSetInputMode(glfw_, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
+    cursorShape_ = UINT32_MAX;
+  }
   if (shape >= cursors_.size()) shape = 0;
   if (shape == cursorShape_ && cursors_[shape] != nullptr) return;
   cursorShape_ = shape;

@@ -459,8 +459,14 @@ grabBar.cursor(.resizeUpDown)
 `CursorShape` is `.arrow`, `.text`, `.pointer`, `.crosshair`,
 `.resizeLeftRight`, `.resizeUpDown` — the shapes that exist both in GLFW's
 standard cursors and in every X11 cursor theme, so a windowed app and a client
-show the same thing. The innermost view under the pointer that states one wins;
+show the same thing — and `.hidden`, which shows no pointer at all while it is
+over the view (GLFW's hidden input mode; `wlr_cursor_unset_image` under the
+compositor). The innermost view under the pointer that states one wins;
 ancestors cover the gaps.
+
+A view may change its cursor with the pointer at rest — a fullscreen video
+hiding it once its controls fade — and it is picked up on the next body pass,
+not only when the pointer next moves.
 
 `TextField` and `EditorView` state `.text` for themselves; everything else is
 the app's call. The modifier is applied *over* a control's own setting, so
@@ -475,6 +481,23 @@ to the compositor, which stores it against the surface and applies it while the
 pointer is inside — the compositor's own affordances (resize band, title bar,
 an active drag) still win, and the preference is dropped the moment the pointer
 leaves.
+
+### Hover over an area
+
+```swift
+ControlBar()
+    .onHover { inside in session.pointerOnBar = inside }
+```
+
+`.onHover` reports whether the pointer is over the view *or anything inside
+it*: `true` on the way in, `false` once it has left them all, and nothing while
+it moves from one child to another. That is the difference from
+`.hoverBackground`, which tints the one innermost node — right for a button,
+wrong for a bar that must not hide from under a pointer resting on its play
+button. Nested regions enter outermost first and leave innermost first.
+
+Like a cursor, a region is a hit-testable node, so the pointer on its bare
+background still counts as on it.
 
 ### Scrolling and lazy content
 
@@ -519,6 +542,8 @@ Modifiers apply to any `View`:
 | `.padding(EdgeInsets)` | Fully specified per-edge inset |
 | `.background(Color)` | Box fill |
 | `.hoverBackground(Color)` | Fill while hovered |
+| `.onHover { inside in }` | Pointer entered / left this view and everything in it |
+| `.cursor(CursorShape?)` | Pointer image over this view, `.hidden` included |
 | `.cornerRadius(Float)` | Rounded box corners |
 | `.frame(width:height:minWidth:minHeight:)` | Yoga dimensions and minimums |
 | `.flexGrow(Float)` | Main-axis growth, default argument `1` |

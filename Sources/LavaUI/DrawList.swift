@@ -1449,7 +1449,11 @@ public final class DrawList {
                     cornerRadius: styled.cornerRadius,
                     adaptation: styled.backdropAdaptation
                 ) {
-                    let interactive = styled.hoverFill != nil
+                    // A region with no tint still has to be a hit-test node:
+                    // over its bare background, it is the only thing the
+                    // renderer can name as hovered. `cursor` is left out, as
+                    // it always was — see `isRendererInteractive`.
+                    let interactive = styled.hoverFill != nil || styled.hoverRegion != nil
                     let flags = nodeFlags(
                         for: styled.id, interactive: interactive,
                         hoverSnap: styled.hoverSnap
