@@ -88,13 +88,28 @@ public struct ReaderViewport: Equatable, Sendable {
         return next
     }
 
+    /// `zoom` on the tile grid's steps — the zoom a viewport may actually
+    /// have, because tiles are rendered at those and drawn 1:1.
+    ///
+    /// Everything that solves for a scroll from a zoom has to solve with this
+    /// one, not the zoom it was asked for. Rounding afterwards moves the page
+    /// by `scroll × error`: nothing at the top of a document, and up to a few
+    /// dozen pixels on page sixty, in a different direction every frame —
+    /// which is what a fit-width resize looked like.
+    public static func quantized(
+        _ zoom: Double, rounding: FloatingPointRoundingRule = .toNearestOrAwayFromZero
+    ) -> Double {
+        let clamped = min(max(zoom, zoomRange.lowerBound), zoomRange.upperBound)
+        return TileGrid.scale(ofKey: TileGrid.scaleKey(forScale: clamped, rounding: rounding))
+    }
+
     /// Zoomed to `zoom` with the document point under (`anchorX`, `anchorY`)
     /// staying under it — the wheel's zoom, at the pointer.
     public func zoomed(
         to zoom: Double, anchorX: Double, anchorY: Double,
         _ layout: PageLayout, boxWidth: Double, boxHeight: Double
     ) -> ReaderViewport {
-        let target = min(max(zoom, Self.zoomRange.lowerBound), Self.zoomRange.upperBound)
+        let target = Self.quantized(zoom)
         let point = documentPoint(layout, boxWidth: boxWidth, x: anchorX, y: anchorY)
         var next = ReaderViewport(zoom: target, scrollX: 0, scrollY: 0)
         // Solve for the scroll that puts `point` back at the anchor. Sideways
@@ -150,6 +165,25 @@ public struct ReaderViewport: Equatable, Sendable {
     }
 
     // ─── Fitting ─────────────────────────────────────────────────────────
+
+    /// The viewport at a new fitted `zoom`, with document point `top` (in
+    /// points) at the top of the window.
+    ///
+    /// `top` is passed rather than read from the scroll because a resize
+    /// refits on every frame, and a scroll is whole pixels: deriving the
+    /// anchor from the last frame's rounded scroll lets half a pixel of error
+    /// a frame add up over a drag. The caller keeps one `top` for the whole
+    /// of it. The zoom is rounded *down* onto the grid, so a page fitted to
+    /// the width is never a fraction of a pixel wider than the window.
+    public func refitted(
+        to zoom: Double, keepingTop top: Double, _ layout: PageLayout,
+        boxWidth: Double, boxHeight: Double
+    ) -> ReaderViewport {
+        let target = Self.quantized(zoom, rounding: .down)
+        var next = ReaderViewport(zoom: target, scrollX: scrollX, scrollY: (top * target).rounded())
+        next = next.clamped(layout, boxWidth: boxWidth, boxHeight: boxHeight)
+        return next
+    }
 
     /// The zoom at which the widest page fills the window's width.
     public static func fitWidth(_ layout: PageLayout, boxWidth: Double) -> Double {

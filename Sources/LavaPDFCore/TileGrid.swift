@@ -46,10 +46,13 @@ public enum TileGrid {
     /// preview included, and nowhere near where a page's pixel size overflows.
     public static let scaleKeys = 16...32768
 
-    /// The key for rendering at `scale` pixels per point.
-    public static func scaleKey(forScale scale: Double) -> Int {
+    /// The key for rendering at `scale` pixels per point — the nearest, or
+    /// with `.down` the largest not above it.
+    public static func scaleKey(
+        forScale scale: Double, rounding: FloatingPointRoundingRule = .toNearestOrAwayFromZero
+    ) -> Int {
         guard scale > 0, scale.isFinite else { return keysPerUnit }
-        let key = Int((scale * Double(keysPerUnit)).rounded())
+        let key = Int((scale * Double(keysPerUnit)).rounded(rounding))
         return min(max(key, scaleKeys.lowerBound), scaleKeys.upperBound)
     }
 

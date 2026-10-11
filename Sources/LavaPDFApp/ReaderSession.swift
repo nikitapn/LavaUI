@@ -151,6 +151,7 @@ final class ReaderSession: @unchecked Sendable {
             tiles.reset(documents: workers)
             mode = .fitWidth
             viewport = ReaderViewport()
+            fitAnchor = nil
             applyMode()
             currentPage = 0
             LavaHost.noteOpened(path, appId: "LavaPDF")
@@ -187,16 +188,30 @@ final class ReaderSession: @unchecked Sendable {
     func setBox(width: Float, height: Float) {
         let w = Double(width), h = Double(height)
         guard w != boxWidth || h != boxHeight else { return }
-        // Keep what was at the top of the window there: a reader resized
-        // mid-chapter should not jump back to the start of it.
-        let topPoint = viewport.scrollY / viewport.zoom
         boxWidth = w
         boxHeight = h
-        if mode != .free {
-            viewport.zoom = fittedZoom
-            viewport.scrollY = topPoint * viewport.zoom
-        }
+        if mode != .free { refit() } else { settle() }
+    }
+
+    /// The document point a fit keeps at the top of the window, and the
+    /// scroll it last produced. A resize refits on every frame, and taking
+    /// the point afresh from each frame's rounded scroll lets the rounding
+    /// add up — the page crept by tens of pixels over one drag. So the point
+    /// is kept, and stays valid exactly as long as nothing else has moved
+    /// the scroll: a scroll or a zoom by the user leaves a different
+    /// `scrollY`, and the next refit takes a new point from where they left it.
+    @ObservationIgnored private var fitAnchor: (top: Double, scrollY: Double)?
+
+    /// Re-applies the fit, keeping what was at the top of the window there:
+    /// a reader resized mid-chapter should not jump back to the start of it.
+    private func refit() {
+        let top = fitAnchor.flatMap { $0.scrollY == viewport.scrollY ? $0.top : nil }
+            ?? viewport.scrollY / viewport.zoom
+        viewport = viewport.refitted(
+            to: fittedZoom, keepingTop: top, layout, boxWidth: boxWidth, boxHeight: boxHeight
+        )
         settle()
+        fitAnchor = (top, viewport.scrollY)
     }
 
     private var fittedZoom: Double {
@@ -287,10 +302,7 @@ final class ReaderSession: @unchecked Sendable {
 
     private func applyMode() {
         guard boxWidth > 0, mode != .free else { return settle() }
-        let topPoint = viewport.scrollY / viewport.zoom
-        viewport.zoom = fittedZoom
-        viewport.scrollY = topPoint * viewport.zoom
-        settle()
+        refit()
     }
 
     /// Clamps, and mirrors into the observed labels whatever changed. Every

@@ -62,6 +62,38 @@ final class ReaderViewportTests: XCTestCase {
         XCTAssertEqual(ReaderViewport(zoom: actual).percent, 100)
     }
 
+    /// A fit-width resize, deep in a long document: the window's top stays
+    /// on the same line of text to within half a pixel, however long the drag.
+    /// The first version rounded the zoom after solving for the scroll, from
+    /// the previous frame's rounded scroll, and wandered by up to 120 px.
+    func testRefitDuringAResizeDoesNotWander() {
+        let long = PageLayout(pageSizes: Array(repeating: PageSize(width: 595, height: 842), count: 130))
+        var viewport = ReaderViewport(zoom: ReaderViewport.fitWidth(long, boxWidth: 1000))
+        viewport.scrollY = (long.frames[60].y * viewport.zoom).rounded()
+        let top = viewport.scrollY / viewport.zoom
+        var worst = 0.0
+        for width in stride(from: 1000.0, through: 1400, by: 3) {
+            viewport = viewport.refitted(
+                to: ReaderViewport.fitWidth(long, boxWidth: width), keepingTop: top,
+                long, boxWidth: width, boxHeight: 700
+            )
+            XCTAssertLessThanOrEqual(long.width * viewport.zoom, width, "never wider than the window")
+            worst = max(worst, abs(viewport.scrollY - top * viewport.zoom))
+        }
+        XCTAssertLessThanOrEqual(worst, 0.5)
+    }
+
+    /// Wheel zoom deep in a document keeps the point under the pointer to
+    /// within a pixel, now that the zoom it solves with is the one it lands on.
+    func testZoomDeepInADocumentKeepsTheAnchor() {
+        let long = PageLayout(pageSizes: Array(repeating: PageSize(width: 595, height: 842), count: 130))
+        let start = ReaderViewport(zoom: 1.5, scrollX: 0, scrollY: (long.frames[90].y * 1.5).rounded())
+        let before = start.documentPoint(long, boxWidth: 900, x: 400, y: 300)
+        let after = start.zoomed(to: 1.5 * 1.1, anchorX: 400, anchorY: 300, long, boxWidth: 900, boxHeight: 700)
+        let again = after.documentPoint(long, boxWidth: 900, x: 400, y: 300)
+        XCTAssertEqual(again.y * after.zoom, before.y * after.zoom, accuracy: 1)
+    }
+
     func testShowingAndRevealing() {
         let start = ReaderViewport(zoom: 1)
         XCTAssertEqual(start.showing(page: 1, layout, boxWidth: 640, boxHeight: 500).scrollY, 830 - 12)
