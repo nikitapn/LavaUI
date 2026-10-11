@@ -45,7 +45,7 @@ struct ReaderBar: View {
     private func button(
         _ label: String, id: String, on: Bool = false, action: @escaping () -> Void
     ) -> some View {
-        Text(label, color: on ? .accent : Theme.current.textPrimary, onClick: action)
+        Text(label, color: on ? .accent : Theme.current.textPrimary, align: .center, onClick: action)
             .padding(6)
             .hoverBackground(Theme.current.hover)
             .cornerRadius(4)

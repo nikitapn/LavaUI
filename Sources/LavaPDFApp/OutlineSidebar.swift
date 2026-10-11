@@ -43,6 +43,7 @@ struct OutlineSidebar: View {
                      onClick: { session.toggleExpanded(index) })
                     .padding(EdgeInsets(top: 4, leading: 4, bottom: 4, trailing: 4))
                     .frame(width: .pt(20))
+                    .cursor(.pointer)
                     .agentId("outline-toggle-\(index)")
             } else {
                 Text(" ").frame(width: .pt(20))
@@ -54,6 +55,7 @@ struct OutlineSidebar: View {
                 .padding(EdgeInsets(top: 5, leading: 6, bottom: 5, trailing: 6))
                 .flexGrow(1)
                 .flexShrink(1)
+                .cursor(item.target == nil ? nil : .pointer)
                 .agentId("outline-\(index)")
         }
         .padding(EdgeInsets(top: 0, leading: Float(item.depth) * Self.indent, bottom: 0, trailing: 0))

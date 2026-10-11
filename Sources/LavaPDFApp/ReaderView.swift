@@ -49,6 +49,8 @@ struct ReaderView: View {
             minHeight: 80,
             onGesture: handleGesture,
             onWheel: { dx, dy, x, y in session.wheel(dx: dx, dy: dy, atX: x, atY: y) },
+            // A hand over a link, and the canvas's text cursor everywhere else.
+            onPointerMove: { x, y in session.link(atX: x, y: y) != nil ? .pointer : nil },
             paint: paint
         )
         .flexGrow(1)
