@@ -123,13 +123,22 @@ Consequences that surprise people:
   picking any alpha value** — it has the numbers, what the change cost (blur
   and mipmaps now average encoded values) and what it did not (`Scene3D`
   lighting converts explicitly on the CPU and is unaffected).
-- **One descriptor set per texture *change*.** Batches are emitted in tree
-  order with no sorting, so a grid pairing an atlased icon with a glyph label
-  costs two per cell. The pool grows in chunks of `kDescriptorSetsPerChunk`
-  (64) up to `kMaxDescriptorChunks`; past that it warns and draws the *wrong*
-  texture rather than nothing. Keep images atlasable: `ImageAtlas` refuses
-  anything wider than one 256px cell, so pass `decodePixels`/`maxPixelSize`
-  whenever the box is a percentage rather than a point size.
+- **Textures are bindless: a slot per distinct texture per frame, not a
+  descriptor set per texture change.** Each frame in flight has one table of
+  `kDesiredBindlessTextures` (4096) combined image samplers, or fewer if the
+  device's `maxPerStageDescriptorSampledImages` says so, with the last slot
+  kept for blur (`QuadRenderer::setupDescriptors`). The index rides on the
+  vertex and the instance, so switching texture no longer ends a batch, and
+  a grid of icons and labels costs nothing extra for alternating them. A frame
+  that wants more distinct textures than the table holds draws the white
+  placeholder for the rest of them (`textureSlot`): warned once per process,
+  counted per frame under `LAVA_RENDER_STATS` (`textureSlotOverflows`), and
+  over as soon as a frame needs fewer. Atlasing is now about memory and
+  descriptor writes, not batching — one `VkImage` per page instead of per
+  entry, one write per frame instead of per visible entry; `ImageAtlas` takes
+  nothing wider than its 256px cell, and its header says when an image belongs
+  in it at all. A reader's tiles, 512px and a few dozen a frame, deliberately
+  do not.
 - **The decoder applies the file's EXIF orientation** and the caller never
   sees the untouched pixels (`render/exif.cpp`, from `Engine::decodeImage`,
   `Engine::decodeImageData` and `TextureManager::loadTexture`). A photograph
