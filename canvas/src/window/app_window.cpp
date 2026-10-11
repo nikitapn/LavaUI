@@ -512,8 +512,17 @@ void AppWindow::installGlfwCallbacks()
       const double scale = canvasGlfwPlatform() == GLFW_PLATFORM_WAYLAND
                                ? 1.0 / kWaylandUnitsPerDetent
                                : 1.0;
+      // Asked of GLFW as the wheel turns rather than remembered from key
+      // callbacks, for the reason `scroll` gives.
+      int mods = 0;
+      if (glfwGetKey(w, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS ||
+          glfwGetKey(w, GLFW_KEY_RIGHT_SHIFT) == GLFW_PRESS)
+        mods |= 0x0001;
+      if (glfwGetKey(w, GLFW_KEY_LEFT_CONTROL) == GLFW_PRESS ||
+          glfwGetKey(w, GLFW_KEY_RIGHT_CONTROL) == GLFW_PRESS)
+        mods |= 0x0002;
       self->scroll(static_cast<float>(dx * scale),
-                   static_cast<float>(dy * scale));
+                   static_cast<float>(dy * scale), mods);
     });
 
     glfwSetCharCallback(win, [](GLFWwindow *w, unsigned int codepoint) {
@@ -799,7 +808,7 @@ void AppWindow::textInput(const std::string &utf8)
     }
   }
 
-void AppWindow::scroll(float dx, float dy)
+void AppWindow::scroll(float dx, float dy, int knownMods)
   {
     // Offered to the scene graph first. If a node took it, the wheel moved a
     // subtree the renderer owns and the producer is not involved at all —
@@ -816,18 +825,28 @@ void AppWindow::scroll(float dx, float dy)
     ev.x = dx;
     ev.y = dy;
     // Modifiers travel with the event so Ctrl+wheel can be distinguished
-    // without Swift tracking key state itself.
-    int mods = 0;
-    if (shiftDown_) mods |= 0x0001;
-    if (ctrlDown_) mods |= 0x0002;
+    // without Swift tracking key state itself — and come from whoever can see
+    // the keyboard *now* when they can. The tracked pair is a memory of key
+    // events, and a Ctrl released while the press's window was not the one
+    // being told (focus moved, a release that went elsewhere) stays down in
+    // it for good: a reader then zoomed on every notch after its first
+    // Ctrl+wheel and never scrolled again.
+    int mods = knownMods;
+    if (mods < 0) {
+      mods = 0;
+      if (shiftDown_) mods |= 0x0001;
+      if (ctrlDown_) mods |= 0x0002;
+    }
     ev.button = mods;
     {
       std::lock_guard lock(inputMu_);
       // Coalesce: only the accumulated delta matters, and a wheel can emit
-      // faster than the frame loop consumes.
+      // faster than the frame loop consumes. Never across a modifier change,
+      // or a plain notch folds into a queued Ctrl one and zooms.
       if (!inputEvents_.empty() &&
           inputEvents_.back().kind ==
-            static_cast<uint32_t>(canvas::InputEventKind::Scroll)) {
+            static_cast<uint32_t>(canvas::InputEventKind::Scroll) &&
+          inputEvents_.back().button == ev.button) {
         inputEvents_.back().x += ev.x;
         inputEvents_.back().y += ev.y;
       } else {

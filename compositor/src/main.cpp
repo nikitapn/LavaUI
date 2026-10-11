@@ -12878,7 +12878,7 @@ void Server::lockedPointerAxis(float dx, float dy) {
   double sx = 0, sy = 0;
   ClientSurface *surface = lockSurfaceAtCursor(sx, sy);
   if (surface == nullptr) return;
-  surface->canvas->pointerScroll(dx, dy);
+  surface->canvas->pointerScroll(dx, dy, pointer_mods(seat));
   surfaces->pump(*surface);
 }
 
@@ -13785,8 +13785,12 @@ void Server::on_cursor_axis(wl_listener *listener, void *data) {
       // The renderer may take this notch itself — a scrollable node under the
       // pointer moves without the client hearing about it, which is what lets
       // a list scroll while the process that drew it is stopped.
+      // With the keyboard's modifiers as they are now, like a button's:
+      // the canvas's own memory of Ctrl is only as good as the last release
+      // that reached that window.
       over->canvas->pointerScroll(horizontal ? notches : 0.f,
-                                  horizontal ? 0.f : notches);
+                                  horizontal ? 0.f : notches,
+                                  pointer_mods(server->seat));
       server->surfaces->pump(*over);
       return;
     }

@@ -283,7 +283,8 @@ class CanvasSurface {
 
   void pointerMove(float x, float y);
   void pointerButton(int button, bool pressed, float x, float y, int mods);
-  void pointerScroll(float dx, float dy);
+  /// `mods` as the wheel turned (GLFW bits) — see `Engine::pointerScroll`.
+  void pointerScroll(float dx, float dy, int mods);
   void keyEvent(int key, int action, int mods);
 
   /// Files were released over this surface.

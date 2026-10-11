@@ -173,7 +173,9 @@ class AppWindow {
   void keyEvent(int key, int action, int mods);
   void textInput(const std::string &utf8);
   void charInput(unsigned int codepoint);
-  void scroll(float dx, float dy);
+  /// `mods` as the wheel turned, or -1 for the ones tracked from key events
+  /// — see `Engine::pointerScroll`.
+  void scroll(float dx, float dy, int mods = -1);
 
   /// Scrolls a retained container with a notch the producer did not want.
   ///

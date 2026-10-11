@@ -325,7 +325,7 @@ public:
   void keyEvent(int key, int action, int mods, uint32_t windowId = 0);
   void textInput(const std::string &utf8, uint32_t windowId = 0);
   /// Synthetic wheel/trackpad delta; same coalescing queue as hardware scroll.
-  void scroll(float dx, float dy, uint32_t windowId = 0);
+  void scroll(float dx, float dy, uint32_t windowId = 0, int mods = -1);
 
   // Copies the frame repaint() just rendered (RGBA8) into dst. dst must be
   // at least width*height*4 bytes.

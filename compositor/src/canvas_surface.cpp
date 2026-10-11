@@ -591,8 +591,8 @@ void CanvasSurface::pointerButton(int button, bool pressed, float x, float y,
   renderer_.engine().pointerButton(button, pressed, x, y, windowId_, mods);
 }
 
-void CanvasSurface::pointerScroll(float dx, float dy) {
-  renderer_.engine().pointerScroll(dx, dy, windowId_);
+void CanvasSurface::pointerScroll(float dx, float dy, int mods) {
+  renderer_.engine().pointerScroll(dx, dy, windowId_, mods);
 }
 
 void CanvasSurface::keyEvent(int key, int action, int mods) {

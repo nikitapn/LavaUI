@@ -1142,8 +1142,8 @@ void Application::textInput(const std::string &utf8, uint32_t windowId) {
   if (AppWindow *w = impl_->win(windowId)) w->textInput(utf8);
 }
 
-void Application::scroll(float dx, float dy, uint32_t windowId) {
-  if (AppWindow *w = impl_->win(windowId)) w->scroll(dx, dy);
+void Application::scroll(float dx, float dy, uint32_t windowId, int mods) {
+  if (AppWindow *w = impl_->win(windowId)) w->scroll(dx, dy, mods);
 }
 
 void Application::readPixels(uint8_t *dst, size_t dstSize, uint32_t windowId) {

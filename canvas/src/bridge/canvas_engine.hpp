@@ -316,7 +316,11 @@ class Engine {
   void pointerButton(int button, bool pressed, float x, float y, uint32_t windowId = 0,
                      int mods = 0);
   /// Inject wheel/trackpad delta (notches), coalesced with real scroll input.
-  void pointerScroll(float dx, float dy, uint32_t windowId = 0);
+  /// `mods` is the modifier state *as the wheel turned* (`KeyMods` bits), or
+  /// -1 to use what the window last saw in key events. A host that knows the
+  /// keyboard passes it: a remembered Ctrl is only as good as the last
+  /// release that happened to reach this window.
+  void pointerScroll(float dx, float dy, uint32_t windowId = 0, int32_t mods = -1);
 
   /// Inject keyboard / text (GLFW key codes; action 0/1/2 = release/press/repeat).
   void keyEvent(int key, int action, int mods, uint32_t windowId = 0);
