@@ -50,16 +50,12 @@ final class ReaderSession: @unchecked Sendable {
 
     // MARK: - Selection
 
-    /// One page's worth: a drag that leaves its page stops at that page's
-    /// edge. Selecting across pages is a feature still to write.
-    struct Selection: Equatable {
-        var page: Int
-        var anchor: Int
-        var head: Int
-        var range: ClosedRange<Int> { min(anchor, head)...max(anchor, head) }
-    }
-
-    @ObservationIgnored private(set) var selection: Selection?
+    /// From where a drag started to where it is now, across as many pages as
+    /// it crossed — see `DocumentSelection`.
+    @ObservationIgnored private(set) var selection: DocumentSelection?
+    /// Where the pointer was on the last move of a selecting drag, in the
+    /// canvas's own coordinates — outside it, while the drag is scrolling.
+    @ObservationIgnored private var dragPointer: (x: Float, y: Float)?
     @ObservationIgnored private var pageText: [Int: PageText] = [:]
 
     // MARK: - Outline
@@ -407,11 +403,24 @@ final class ReaderSession: @unchecked Sendable {
         return (page, point.x - frame.x, point.y - frame.y)
     }
 
-    /// The same, but clamped onto `page`, for a drag that has left it.
-    private func point(onPage page: Int, x: Float, y: Float) -> (x: Double, y: Double) {
+    /// The character a drag at a window position means: on the page under
+    /// it, or — in a gap, a margin, or past the window's edge while the drag
+    /// scrolls — the nearest page, with the point clamped onto it. Nil only
+    /// when that page has no text.
+    private func position(x: Float, y: Float) -> TextPosition? {
         let point = viewport.documentPoint(layout, boxWidth: boxWidth, x: Double(x), y: Double(y))
+        guard let page = layout.nearestPage(toY: point.y),
+              let text = text(page: page), !text.isEmpty
+        else { return nil }
         let frame = layout.frames[page]
-        return (min(max(point.x - frame.x, 0), frame.width), min(max(point.y - frame.y, 0), frame.height))
+        let px = min(max(point.x - frame.x, 0), frame.width)
+        // Above a page is its start and below it is its end, whatever the
+        // nearest line says — a drag that has left the bottom of a page has
+        // selected all of it, not just as far as the nearest word.
+        if point.y < frame.y { return TextPosition(page: page, index: 0) }
+        if point.y > frame.maxY { return TextPosition(page: page, index: text.characters.count - 1) }
+        guard let index = text.index(nearestX: px, y: point.y - frame.y) else { return nil }
+        return TextPosition(page: page, index: index)
     }
 
     func beginSelection(x: Float, y: Float, clickCount: Int) {
@@ -423,24 +432,31 @@ final class ReaderSession: @unchecked Sendable {
             return
         }
         if clickCount >= 2, let word = text.word(containing: index) {
-            selection = Selection(page: hit.page, anchor: word.lowerBound, head: word.upperBound)
+            selection = DocumentSelection(
+                anchor: TextPosition(page: hit.page, index: word.lowerBound),
+                head: TextPosition(page: hit.page, index: word.upperBound)
+            )
         } else {
-            selection = Selection(page: hit.page, anchor: index, head: index)
+            let at = TextPosition(page: hit.page, index: index)
+            selection = DocumentSelection(anchor: at, head: at)
             // Nothing selected until the pointer moves: a plain click is a
             // click, not a one-character selection.
             pressOnly = true
         }
+        dragPointer = (x, y)
         ViewInvalidation.markNeedsRedraw()
     }
 
     @ObservationIgnored private var pressOnly = false
 
     func extendSelection(x: Float, y: Float) {
-        guard var current = selection, let text = text(page: current.page) else { return }
-        let point = point(onPage: current.page, x: x, y: y)
-        guard let index = text.index(nearestX: point.x, y: point.y) else { return }
+        guard var current = selection else { return }
+        dragPointer = (x, y)
+        // A page with no text — a scan, a full-page figure — holds the head
+        // where it was rather than losing the selection.
+        guard let head = position(x: x, y: y) else { return }
         pressOnly = false
-        current.head = index
+        current.head = head
         selection = current
         ViewInvalidation.markNeedsRedraw()
     }
@@ -448,6 +464,7 @@ final class ReaderSession: @unchecked Sendable {
     func endSelection() {
         if pressOnly { selection = nil }
         pressOnly = false
+        dragPointer = nil
         // The primary selection, as every X and Wayland reader does: select,
         // then middle-click into a terminal.
         if let text = selectedText { ClipboardBridge.primaryWriter?(text) }
@@ -457,12 +474,63 @@ final class ReaderSession: @unchecked Sendable {
     func clearSelection() {
         selection = nil
         pressOnly = false
+        dragPointer = nil
         ViewInvalidation.markNeedsRedraw()
     }
 
+    /// A selecting drag held past the top or bottom of the window scrolls,
+    /// faster the further out it is, and keeps going while the pointer rests
+    /// there — which sends no events, so paint drives it: this is called once
+    /// a frame, and says whether to ask for the next.
+    ///
+    /// Without it a selection could never be longer than a window, and a page
+    /// is usually taller than one.
+    func autoScroll(now: Double) -> Bool {
+        // Plain storage, not `@DrawState`: written every frame of a scroll,
+        // and a draw-state write from paint asks for the frame being painted.
+        let elapsed = lastAutoScroll.map { now - $0 } ?? 1.0 / 60
+        lastAutoScroll = nil
+        guard let pointer = dragPointer, selection != nil, !pressOnly else { return false }
+        let past: Double
+        if pointer.y < 0 { past = Double(pointer.y) }
+        else if Double(pointer.y) > boxHeight { past = Double(pointer.y) - boxHeight }
+        else { return false }
+        // Pixels a second: a crawl just past the edge, a page a second at
+        // a couple of hundred pixels out.
+        let speed = past.sign == .minus ? -min(4000, 120 + 10 * -past) : min(4000, 120 + 10 * past)
+        let before = viewport.scrollY
+        viewport.scrollY += speed * min(elapsed, 0.05)
+        settle()
+        // At either end of the document there is nowhere to go, and asking
+        // for another frame would spin.
+        guard viewport.scrollY != before else { return false }
+        lastAutoScroll = now
+        extendSelection(x: pointer.x, y: pointer.y)
+        return true
+    }
+
+    @ObservationIgnored private var lastAutoScroll: Double?
+
+    /// The text on `page` that is selected, if any.
+    func selectedRange(onPage page: Int) -> ClosedRange<Int>? {
+        guard let selection, selection.pages.contains(page), let text = text(page: page)
+        else { return nil }
+        return selection.range(onPage: page, count: text.characters.count)
+    }
+
+    /// What a copy puts on the clipboard: each page's part, a line break
+    /// between pages. Reads the text of every page the selection covers, so a
+    /// select-all of a long document pays for that here, once.
     var selectedText: String? {
-        guard let selection, let text = text(page: selection.page) else { return nil }
-        let copied = text.text(in: selection.range)
+        guard let selection else { return nil }
+        var parts: [String] = []
+        for page in selection.pages {
+            guard let text = text(page: page),
+                  let range = selection.range(onPage: page, count: text.characters.count)
+            else { continue }
+            parts.append(text.text(in: range))
+        }
+        let copied = parts.joined(separator: "\n")
         return copied.isEmpty ? nil : copied
     }
 
@@ -471,11 +539,11 @@ final class ReaderSession: @unchecked Sendable {
         ClipboardBridge.writer?(text)
     }
 
-    /// The whole page under the middle of the window, Ctrl+A style. A
-    /// document-wide select-all is the cross-page selection this lacks.
-    func selectPage() {
-        guard let text = text(page: currentPage), !text.isEmpty else { return }
-        selection = Selection(page: currentPage, anchor: 0, head: text.characters.count - 1)
+    /// Ctrl+A: the whole document, stated without reading any of it — the
+    /// text is read when it is drawn or copied.
+    func selectAll() {
+        guard pageCount > 0 else { return }
+        selection = .all(pageCount: pageCount)
         ViewInvalidation.markNeedsRedraw()
     }
 

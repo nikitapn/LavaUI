@@ -219,6 +219,12 @@ struct ReaderView: View {
 
         drawScrollbar(list, frame)
         tiles.want(wanted, sizes: sizes)
+
+        // A drag resting past the window's edge sends nothing, so the frame
+        // that scrolls it asks for the next one itself.
+        if session.autoScroll(now: FrameScheduler.now()) {
+            FrameScheduler.requestRedraw(in: 1.0 / 60)
+        }
     }
 
     /// Search matches under the selection, the current match brightest.
@@ -227,8 +233,8 @@ struct ReaderView: View {
         screenX: (Double) -> Float, screenY: (Double) -> Float
     ) {
         let matches = session.matches(onPage: page)
-        let selection = session.selection?.page == page ? session.selection : nil
-        guard !matches.isEmpty || selection != nil, let text = session.text(page: page) else { return }
+        let selected = session.selectedRange(onPage: page)
+        guard !matches.isEmpty || selected != nil, let text = session.text(page: page) else { return }
 
         func fill(_ boxes: [Box], _ color: Color) {
             for box in boxes {
@@ -240,7 +246,7 @@ struct ReaderView: View {
         for match in matches {
             fill(text.boxes(for: match.range), match.current ? Palette.currentMatch : Palette.match)
         }
-        if let selection { fill(text.boxes(for: selection.range), Palette.selection) }
+        if let selected { fill(text.boxes(for: selected), Palette.selection) }
     }
 
     // MARK: - Scrollbar

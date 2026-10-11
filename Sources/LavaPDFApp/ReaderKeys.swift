@@ -21,7 +21,7 @@ enum ReaderKeys {
             case KeyCode.f: session.openFind()
             case KeyCode.g: session.findNext(shift ? -1 : 1)
             case KeyCode.c: session.copySelection()
-            case KeyCode.a: session.selectPage()
+            case KeyCode.a: session.selectAll()
             case KeyCode.o: session.openDialog()
             case KeyCode.equal, KeyCode.kpAdd: session.stepZoom(1)
             case KeyCode.minus, KeyCode.kpSub: session.stepZoom(-1)
