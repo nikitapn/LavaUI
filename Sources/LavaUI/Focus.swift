@@ -380,6 +380,10 @@ public enum ScrollRouter {
     /// Modifier state carried on the scroll event, so handlers do not have to
     /// track key state themselves.
     nonisolated(unsafe) public private(set) static var shiftHeld = false
+    /// Control, likewise: Ctrl+wheel is zoom in every reader and browser, and
+    /// a handler that has to watch key events to know that is one that gets it
+    /// wrong the first time the window loses focus mid-press.
+    nonisolated(unsafe) public private(set) static var controlHeld = false
 
     /// `canScroll` is the nested-scroll policy: a container already pinned at
     /// its end reports false and the notch continues out to the next eligible
@@ -415,6 +419,7 @@ public enum ScrollRouter {
         to chain: [NodeID], dx: Float, dy: Float, mods: Int32 = 0
     ) -> Bool {
         shiftHeld = KeyMods.contains(mods, KeyMods.shift)
+        controlHeld = KeyMods.contains(mods, KeyMods.control)
         for id in chain {
             guard let entry = handlers[id] else { continue }
             // Evaluated after `shiftHeld` is published, since eligibility can

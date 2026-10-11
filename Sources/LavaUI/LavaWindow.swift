@@ -196,13 +196,18 @@ public final class LavaWindow {
                 }
                 FileHandle.standardError.write(Data("--- end structure ---\n".utf8))
             }
-            renderFrame(.body)
-            // Keep `pending` in sync with the dirty-node state `renderFrame`
-            // just drained via `consumeDirtyBodyNodes()` — this path bypasses
-            // the normal `consume()`-driven loop, so without this the level
-            // would sit stale at its initial default and the first real
+            // Clear the initial `.body` *before* the frame that acts on it, as
+            // the normal loop does. This path bypasses that loop, and without
+            // it the level would sit stale at its default, so the first real
             // `consume()` would see `.body` with nothing left to act on.
+            //
+            // Before, not after: consuming once the frame was out also threw
+            // away whatever that frame raised itself — and the first paint is
+            // exactly when a canvas learns its own size. A reader whose zoom
+            // label is computed from that size said "100%" over a page fitted
+            // at 119% until something else happened to rebuild the bar.
             _ = ViewInvalidation.consume()
+            renderFrame(.body)
             editor.renderFrame(window: id)
         }
         editor.setVisible(true, window: id)
