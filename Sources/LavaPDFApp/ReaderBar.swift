@@ -86,3 +86,45 @@ struct FindBar: View {
             .agentId(id)
     }
 }
+
+/// Under the bar when a file asks for a password: which file, the field, and
+/// whether the last try was wrong. A bar rather than a dialog, like the find
+/// bar, so whatever was already open stays readable behind the question.
+struct PasswordBar: View {
+    @Bindable var session: ReaderSession
+
+    var body: some View {
+        HStack(padding: 8, alignment: .center, spacing: 10) {
+            Text(prompt, color: session.passwordRejected ? Palette.warning : Theme.current.textSecondary)
+                .agentId("password-prompt")
+            TextField(
+                text: $session.passwordEntry, placeholder: "Password",
+                autoFocus: true, secure: true,
+                onSubmit: { session.submitPassword() }
+            )
+            .frame(width: .pt(240))
+            .agentId("password-field")
+            Text("Open", color: .accent, align: .center, onClick: { session.submitPassword() })
+                .padding(4)
+                .hoverBackground(Theme.current.hover)
+                .cornerRadius(4)
+                .cursor(.pointer)
+                .agentId("password-open")
+            Spacer()
+            Text("Cancel", color: Theme.current.textDim, align: .center, onClick: { session.cancelPassword() })
+                .padding(4)
+                .hoverBackground(Theme.current.hover)
+                .cornerRadius(4)
+                .cursor(.pointer)
+                .agentId("password-cancel")
+        }
+        .background(Theme.current.panel)
+    }
+
+    private var prompt: String {
+        let name = ((session.locked ?? "") as NSString).lastPathComponent
+        return session.passwordRejected
+            ? "Wrong password for \(name)"
+            : "\(name) is password-protected"
+    }
+}

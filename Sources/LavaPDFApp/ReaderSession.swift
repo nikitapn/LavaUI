@@ -93,13 +93,46 @@ final class ReaderSession: @unchecked Sendable {
 
     // MARK: - Opening
 
-    func open(path: String) {
+    // MARK: - Passwords
+
+    /// A file that asked for a password and is waiting for one, while the bar
+    /// that asks is up.
+    private(set) var locked: String?
+    /// What is typed into that bar. Cleared the moment it is tried, right or
+    /// wrong, so a password never outlives the attempt in the view tree.
+    var passwordEntry = ""
+    /// The last attempt was wrong — the bar says so instead of just
+    /// reappearing empty.
+    private(set) var passwordRejected = false
+    /// The password that opened the document on screen, for the copies of it
+    /// that open later: each render worker's, the glib handle's, a search's.
+    /// In memory only, for as long as that document is open; never written
+    /// anywhere, and not handed to anything that records what was opened.
+    @ObservationIgnored private var password: String?
+
+    func submitPassword() {
+        guard let path = locked else { return }
+        let attempt = passwordEntry
+        passwordEntry = ""
+        open(path: path, password: attempt)
+    }
+
+    func cancelPassword() {
+        locked = nil
+        passwordEntry = ""
+        passwordRejected = false
+    }
+
+    func open(path: String, password: String? = nil) {
         do {
-            let document = try PDFDocument(path: path)
+            let document = try PDFDocument(path: path, password: password)
             var workers: [PDFDocument] = []
             for _ in 0..<tiles.workerCount {
-                workers.append(try PDFDocument(path: path))
+                workers.append(try PDFDocument(path: path, password: password))
             }
+            self.password = password
+            locked = nil
+            passwordRejected = false
             self.document = document
             self.path = path
             fileName = document.title ?? (path as NSString).lastPathComponent
@@ -121,6 +154,13 @@ final class ReaderSession: @unchecked Sendable {
             applyMode()
             currentPage = 0
             LavaHost.noteOpened(path, appId: "LavaPDF")
+        } catch .locked {
+            // Asked for rather than reported: a locked file is one the user
+            // can open, and the document already on screen, if any, stays
+            // there until they do.
+            locked = path
+            passwordRejected = password != nil
+            openError = nil
         } catch {
             openError = switch error {
             case .notFound: "\((path as NSString).lastPathComponent) does not exist"
@@ -586,6 +626,7 @@ final class ReaderSession: @unchecked Sendable {
     /// a page at a time so the first is shown before the last page is read.
     private func search(_ needle: String) {
         guard let path else { return }
+        let password = password
         clearSearch()
         searchedQuery = needle
         searching = true
@@ -594,7 +635,7 @@ final class ReaderSession: @unchecked Sendable {
         // Strong: the session lives as long as the window, and a weak
         // capture cannot cross into the posts below in Swift 6.
         Thread.detachNewThread { [self] in
-            guard let document = try? PDFDocument(path: path) else {
+            guard let document = try? PDFDocument(path: path, password: password) else {
                 MainQueue.async { [self] in searching = false }
                 return
             }

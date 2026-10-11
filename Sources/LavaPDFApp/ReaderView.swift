@@ -26,6 +26,7 @@ struct ReaderView: View {
         )
         return VStack(flexGrow: 1, spacing: 0) {
             ReaderBar(session: session)
+            if session.locked != nil { PasswordBar(session: session) }
             if session.findOpen { FindBar(session: session) }
             HStack(flexGrow: 1, spacing: 0) {
                 if session.sidebarOpen, !session.outline.isEmpty {
@@ -130,7 +131,9 @@ struct ReaderView: View {
         session.setBox(width: frame.w, height: frame.h)
         list.rect(x: frame.x, y: frame.y, w: frame.w, h: frame.h, color: Palette.mat)
         guard session.hasDocument else {
-            centred(list, frame, text: session.openError ?? "No document — drop a PDF here, or press Ctrl+O")
+            centred(list, frame, text: session.locked != nil
+                ? "Enter the password above to open it"
+                : session.openError ?? "No document — drop a PDF here, or press Ctrl+O")
             return
         }
 
@@ -303,4 +306,5 @@ enum Palette {
     static let match = Color(r: 1.0, g: 0.85, b: 0.1, a: 0.40)
     static let currentMatch = Color(r: 1.0, g: 0.55, b: 0.0, a: 0.55)
     static let scrollThumb = Color(r: 1, g: 1, b: 1, a: 0.35)
+    static let warning = Color(r: 0.95, g: 0.55, b: 0.35)
 }

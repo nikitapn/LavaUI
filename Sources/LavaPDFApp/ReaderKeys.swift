@@ -44,6 +44,8 @@ enum ReaderKeys {
         case KeyCode.space: session.page(shift ? -1 : 1)
         case KeyCode.home: session.goToStart()
         case KeyCode.end: session.goToEnd()
+        case KeyCode.escape where session.locked != nil:
+            session.cancelPassword()
         case KeyCode.escape:
             if session.findOpen { session.closeFind() } else { session.clearSelection() }
         case KeyCode.f3: session.findNext(shift ? -1 : 1)
