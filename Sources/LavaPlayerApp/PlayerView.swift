@@ -14,11 +14,28 @@ struct PlayerView: View {
             onChar: { _ in false }
         )
 
+        // The same transport bar in one of two places. Windowed, it is a row
+        // under the video, and the video is laid out around it. Fullscreen, it
+        // floats over the video's bottom edge and takes no space — so showing
+        // and hiding it never resizes the video, which would make mpv render
+        // at a new size and the picture jump every time the pointer moved.
         return VStack(flexGrow: 1, spacing: 0) {
-            if session.barsVisible && !session.fullscreen { TitleBar(session: session) }
+            if !session.fullscreen { TitleBar(session: session) }
             if let error = session.error { errorBar(error) }
             screen
-            if session.barsVisible { TransportBar(session: session) }
+                .overlay(alignment: .bottom, inset: TransportBar.floatingInset) {
+                    if session.fullscreen && session.barsVisible {
+                        // A point width, not a percentage: an overlay's plate
+                        // sizes to its content, so there is no width above it
+                        // for a percentage to be of.
+                        TransportBar(session: session, floating: true)
+                            .frame(width: .pt(max(0, min(
+                                TransportBar.floatingMaxWidth,
+                                session.screenWidth - TransportBar.floatingInset * 2
+                            ))))
+                    }
+                }
+            if !session.fullscreen { TransportBar(session: session, floating: false) }
         }
         .background(Palette.mat)
         .onDrop { urls in session.open(paths: urls.map(\.path)) }
@@ -46,8 +63,8 @@ struct PlayerView: View {
                 }
             },
             onWheel: { _, dy, _, _ in session.nudgeVolume(Double(dy) * 5) },
-            onPointerMove: { _, _ in
-                session.noteActivity()
+            onPointerMove: { _, y in
+                session.notePointer(y: y)
                 return nil
             },
             paint: paint
@@ -58,6 +75,7 @@ struct PlayerView: View {
 
     private func paint(_ list: DrawList, _ frame: CanvasFrame) {
         session.player.setSize(width: frame.w, height: frame.h)
+        session.noteScreen(width: frame.w, height: frame.h)
         session.updateBars()
         list.rect(x: frame.x, y: frame.y, w: frame.w, h: frame.h, color: Palette.mat)
 

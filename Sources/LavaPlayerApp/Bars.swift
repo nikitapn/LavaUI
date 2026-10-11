@@ -40,8 +40,18 @@ struct TitleBar: View {
 /// an hour or more ticks past each minute.
 struct TransportBar: View {
     @Bindable var session: PlayerSession
+    /// Over the video in fullscreen, rather than a row under it: translucent
+    /// and rounded, so it reads as laid on the picture.
+    var floating: Bool
 
     static let height: Float = 44
+    /// How far the floating bar sits in from the screen's edges.
+    static let floatingInset: Float = 16
+    /// The floating bar's width on a screen wide enough for it, centred. Its
+    /// own content is ~650 pt, so the rest — all of it the seek track, the
+    /// only thing in the row that stretches — is what makes it worth floating.
+    /// Edge to edge on a 2560-wide screen was a seek bar you had to travel to.
+    static let floatingMaxWidth: Float = 1000
 
     var body: some View {
         HStack(height: .pt(Self.height), padding: 8, alignment: .center, spacing: 6) {
@@ -88,7 +98,8 @@ struct TransportBar: View {
                 session.toggleFullscreen()
             }
         }
-        .background(Theme.current.panel)
+        .background(floating ? Theme.current.panel.opacity(0.85) : Theme.current.panel)
+        .cornerRadius(floating ? 10 : 0)
     }
 
     private var playGlyph: String {
