@@ -1,0 +1,154 @@
+import Foundation
+import LavaHost
+import LavaPlayerCore
+import LavaUI
+import Observation
+
+/// What the window shows, and the things a button can ask for.
+///
+/// Observed, so a change to anything here rebuilds the bars. The frame itself
+/// is not here: it changes every video frame, and the paint closure reads it
+/// from `Player` directly — a body pass per frame to move a texture id would
+/// be pure waste.
+@Observable
+final class PlayerSession: @unchecked Sendable {
+    private(set) var playlist = Playlist()
+    private(set) var state = Player.State()
+    private(set) var error: String?
+
+    /// Whether the window covers the screen. The bars hide while it does,
+    /// and come back while the pointer moves.
+    private(set) var fullscreen = false
+    /// When the pointer last moved over the video, for the bars' auto-hide.
+    @ObservationIgnored private var lastPointerMove: Double = 0
+    private(set) var barsVisible = true
+
+    @ObservationIgnored let player: Player
+
+    init(host: any GPUResourceHost, playlist: Playlist) {
+        player = Player(host: host)
+        self.playlist = playlist
+        player.onState = { [unowned self] next in
+            state = next
+            if next.position != nil { error = nil }
+        }
+        player.onEndOfFile = { [unowned self] in endOfFile() }
+        player.onError = { [unowned self] message in
+            error = "Could not play \(currentName): \(message)"
+        }
+    }
+
+    func start() -> Bool {
+        guard player.start() else { return false }
+        if let current = playlist.current { player.load(current) }
+        return true
+    }
+
+    // MARK: - Reading
+
+    var currentName: String {
+        guard let path = playlist.current else { return "LavaPlayer" }
+        if path.contains("://") { return state.title ?? path }
+        return (path as NSString).lastPathComponent
+    }
+
+    var hasMedia: Bool { playlist.current != nil }
+    var hasVideo: Bool { state.videoWidth > 0 && state.videoHeight > 0 }
+
+    /// 0…1 along the seek bar; 0 when the length is not known.
+    var progress: Float {
+        guard let duration = state.duration, duration > 0,
+              let position = state.position
+        else { return 0 }
+        return Float(min(1, max(0, position / duration)))
+    }
+
+    // MARK: - Opening
+
+    func open(paths: [String]) {
+        let next = Playlist.from(paths: paths)
+        guard let current = next.current else { return }
+        playlist = next
+        error = nil
+        player.load(current)
+        LavaHost.noteOpened(current, appId: "LavaPlayer")
+    }
+
+    func openDialog() {
+        let urls = FileDialog.openFiles(
+            title: "Open Video",
+            filters: [.init(name: "Media", extensions: MediaFormats.dialogExtensions)]
+        )
+        guard !urls.isEmpty else { return }
+        open(paths: urls.map(\.path))
+    }
+
+    func step(_ by: Int) {
+        let next = playlist.stepped(by: by)
+        guard next.index != playlist.index, let current = next.current else { return }
+        playlist = next
+        error = nil
+        player.load(current)
+    }
+
+    private func endOfFile() {
+        if playlist.playsThrough, playlist.hasNext { step(1) }
+    }
+
+    // MARK: - Transport
+
+    func togglePause() { player.togglePause() }
+    func seek(fraction: Float) {
+        guard let duration = state.duration, duration > 0 else { return }
+        player.seek(to: Double(fraction) * duration)
+    }
+    func seek(by seconds: Double) { player.seek(by: seconds) }
+    func setVolume(_ volume: Float) { player.setVolume(Double(volume)) }
+    func nudgeVolume(_ by: Double) { player.setVolume(state.volume + by) }
+    func toggleMute() { player.toggleMute() }
+    func stepFrame(_ direction: Int) { player.stepFrame(direction) }
+
+    // MARK: - Fullscreen and the bars
+
+    static let barsLinger: Double = 2.5
+
+    func toggleFullscreen() {
+        guard let set = WindowBridge.setFullscreen else {
+            WindowBridge.toggleMaximize?()
+            return
+        }
+        fullscreen.toggle()
+        set(fullscreen)
+        noteActivity()
+    }
+
+    func leaveFullscreen() {
+        guard fullscreen else { return }
+        toggleFullscreen()
+    }
+
+    /// The pointer moved: show the bars, and look again when they are due to
+    /// go. `requestRedraw`, not `requestWake` — nothing else will dirty the
+    /// window when the pointer stops, and the deadline *is* the event.
+    func noteActivity() {
+        lastPointerMove = FrameScheduler.now()
+        if !barsVisible { barsVisible = true }
+        if fullscreen { FrameScheduler.requestRedraw(in: Self.barsLinger + 0.05) }
+    }
+
+    /// From paint: hide the bars once the pointer has rested long enough.
+    /// Only in fullscreen, and never while paused — a paused video with no
+    /// controls on it looks like a frozen one.
+    func updateBars() {
+        let wanted = !fullscreen || state.paused || !hasMedia
+            || FrameScheduler.now() - lastPointerMove < Self.barsLinger
+        if wanted != barsVisible {
+            barsVisible = wanted
+            ViewInvalidation.markDirty()
+        }
+    }
+
+    func dismissError() { error = nil }
+
+    func shutdown() { player.stop() }
+}

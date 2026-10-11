@@ -51,6 +51,7 @@ var products: [Product] = [
     .executable(name: "LavaWeather", targets: ["WeatherApp"]),
     .executable(name: "LavaView", targets: ["LavaViewApp"]),
     .executable(name: "LavaPDF", targets: ["LavaPDFApp"]),
+    .executable(name: "LavaPlayer", targets: ["LavaPlayerApp"]),
     .executable(name: "LavaShot", targets: ["LavaShotApp"]),
     .executable(name: "LavaExplorer", targets: ["LavaExplorerApp"]),
     .executable(name: "LavaTerm", targets: ["LavaTermApp"]),
@@ -84,6 +85,7 @@ var products: [Product] = [
     .library(name: "LavaExplorerCore", targets: ["LavaExplorerCore"]),
     .library(name: "LavaArchive", targets: ["LavaArchive"]),
     .library(name: "LavaPDFCore", targets: ["LavaPDFCore"]),
+    .library(name: "LavaPlayerCore", targets: ["LavaPlayerCore"]),
 ]
 
 var targets: [Target] = [
@@ -190,6 +192,24 @@ var targets: [Target] = [
     // and what a drag across a page selects. No engine — a reader that
     // selects the wrong words is a test, not a screenshot.
     .target(name: "LavaPDFCore", dependencies: ["CLavaPDF"]),
+    // libmpv, for LavaPlayer. Nothing to compile, like CPoppler.
+    .systemLibrary(
+        name: "CMpv",
+        path: "Sources/CMpv",
+        pkgConfig: "mpv",
+        providers: [.apt(["libmpv-dev"])]
+    ),
+    // mpv's render thread: a windowless GL context on the compositor's GPU,
+    // rendering into dma-bufs the compositor imports. C, for the reason
+    // CLavaPDF is. See Sources/CLavaVideo/include/lava_video.h.
+    .target(
+        name: "CLavaVideo",
+        dependencies: ["CMpv"],
+        linkerSettings: [.linkedLibrary("EGL"), .linkedLibrary("gbm")]
+    ),
+    // The queue and the clock: what plays next, and how a time is written.
+    // No mpv — what a player *decides* is a test, not a screenshot.
+    .target(name: "LavaPlayerCore"),
 
     .executableTarget(
         name: "TwoWindows",
@@ -394,6 +414,11 @@ var targets: [Target] = [
         swiftSettings: interopCxx
     ),
     .executableTarget(
+        name: "LavaPlayerApp",
+        dependencies: ["LavaUI", "LavaHost", "LavaPlayerCore", "CLavaVideo", "CMpv"],
+        swiftSettings: interopCxx
+    ),
+    .executableTarget(
         name: "LavaShotApp",
         dependencies: ["LavaUI", "LavaHost", "LavaShotCore"],
         swiftSettings: interopCxx
@@ -421,6 +446,7 @@ var targets: [Target] = [
     .testTarget(name: "WeatherCoreTests", dependencies: ["WeatherCore"]),
     .testTarget(name: "LavaViewCoreTests", dependencies: ["LavaViewCore"]),
     .testTarget(name: "LavaPDFCoreTests", dependencies: ["LavaPDFCore"]),
+    .testTarget(name: "LavaPlayerCoreTests", dependencies: ["LavaPlayerCore"]),
     .testTarget(name: "LavaFindCoreTests", dependencies: ["LavaFindCore"]),
     .testTarget(name: "LavaShotCoreTests", dependencies: ["LavaShotCore"]),
     .testTarget(name: "LavaExplorerCoreTests", dependencies: ["LavaExplorerCore"]),

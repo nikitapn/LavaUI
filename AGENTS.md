@@ -220,7 +220,28 @@ Consequences that surprise people:
   reply *is* the "done reading" signal, so a client must not reuse the region
   before it. And an upload is never content-addressed: its key is
   `pixels:<n>`, and release *discards* it instead of parking it dormant. No
-  in-place update exists yet; a video player will want one.
+  in-place update exists here; video does not come this way (next point).
+- **Video frames are dma-bufs the client renders on the compositor's GPU**
+  (`Images.GetVideoTarget` / `AttachVideoBuffer` / `ShowVideoBuffer`, the
+  first IDL calls to carry an `fd`). libmpv has no Vulkan render API — only
+  OpenGL and software — so `Sources/CLavaVideo` runs mpv's GL renderer on a
+  windowless EGL context opened on the render node the compositor names,
+  into three GBM buffers allocated with a modifier the compositor said it
+  can import. Each is handed over once; per frame the client `glFinish`es and
+  names one, and the compositor blits it into a texture it keeps per buffer
+  (`TextureManager::refreshFromImported`), overwriting in place unless a frame
+  in flight still samples it. Three things are load-bearing. **There is no
+  acquire fence** — NVIDIA does not honour implicit ones, so the client's own
+  wait is the fence, and it costs only the client's render thread. **The
+  reply is the release**, as with `UploadPixels`. And a client draw list's
+  textures are stamped with the frame's submission index
+  (`TextureManager::noteWindowSampled`): before that, a texture only the
+  compositor's own frost ever refreshed was "never sampled" from a client's
+  point of view, and would have been overwritten under the frame drawing it.
+  Measured headless at 1100×600: 0.77 ms a round trip, the copy included, and
+  in 600 frames not one texture replaced rather than overwritten. Where the
+  path will not come up — windowed, no EGL extension, a refused import — the
+  bridge falls back to mpv's software renderer and `uploadPixels`.
 - **A drop on a Lava window is the compositor's to deliver.** wlroots cannot do
   it: its drop path needs a `wl_surface` to have taken the drag focus, and a
   client that draws through the control plane has none — as far as Wayland is
@@ -480,6 +501,9 @@ Sources/
                    uploaded with `uploadPixels`; select, copy, find; the
                    outline and links through poppler-glib (poppler-cpp has
                    neither), web links only for http/https/mailto
+  LavaPlayer*/     Video player on libmpv (core headless + app). mpv renders
+                   into dma-bufs on the compositor's GPU through CLavaVideo's
+                   EGL bridge; software frames when it cannot
   LavaExplorer*/   File manager (core headless + app). Split panes and tabs,
                    copy by drop, the freedesktop Trash; no rename yet
   FBDModel/        Function-block diagram model
@@ -586,6 +610,7 @@ reproducible, completely fictional bug.
 | Variable | Effect |
 |---|---|
 | `LAVA_CLIENT=1` | App as compositor client |
+| `LAVA_PLAYER_MPV="a=b c=d"` | LavaPlayer: extra mpv options, as `mpv --a=b` would take them (`ao=null` for a silent test run) |
 | `LAVA_FRAME=server` | HelloWorld: compositor title bar instead of its own chrome |
 | `LAVA_AGENT_PORT=9876` | Local agent TCP server (layout / input / screenshots) |
 | `LAVAUI_DEBUG=1` | Per-frame body/layout/emit/present timings |
@@ -1293,6 +1318,7 @@ so headless test runs skip it too.
 | App demos | `Sources/HelloWorld/`, Spotify/TraceLoom/LavaTerm apps |
 | Fit / 1:1 / cursor-anchored zoom | `Sources/LavaViewCore/Viewport.swift` (pure, tested); the app only feeds it the canvas box |
 | Turning pixels, and what a turned photo is saved as | `canvas/src/render/exif.cpp` turns them, asked for via `ImageTurn`; `Rotation` / `SaveTarget` in `LavaViewCore` decide which turn and which format; `Editor.encodeJpeg` / `canvas::encodeRgbaJpeg` are the encoder |
+| Video frames from a client's GPU (dma-buf → compositor texture) | `Sources/CLavaVideo` (EGL + GBM + mpv), IDL `AttachVideoBuffer`, `CanvasRenderer::attachVideoBuffer`, `TextureManager::refreshFromImported` |
 | Desktop entry for an app that opens files | `packaging/apps.conf` — the tenth field is `MimeType`, and declaring one is what adds `%F` to the Exec |
 
 ## Conventions agents should follow

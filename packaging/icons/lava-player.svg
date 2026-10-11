@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title desc">
+  <title id="title">LavaPlayer</title>
+  <desc id="desc">A play triangle on a screen with a progress bar, on a dark rounded tile — the LavaPlayer application icon.</desc>
+  <defs>
+    <linearGradient id="tile" x1="96" y1="64" x2="416" y2="448" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#343866"/>
+      <stop offset="1" stop-color="#171a35"/>
+    </linearGradient>
+    <linearGradient id="play" x1="210" y1="170" x2="330" y2="300" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#ff9a6b"/>
+      <stop offset="1" stop-color="#ff4f7a"/>
+    </linearGradient>
+  </defs>
+  <rect x="28" y="28" width="456" height="456" rx="116" fill="url(#tile)"/>
+  <!-- The screen: black, as the app's mat is -->
+  <rect x="96" y="124" width="320" height="220" rx="20" fill="#05060d"/>
+  <path d="M222 182 L318 234 L222 286 Z" fill="url(#play)" stroke="url(#play)" stroke-width="14" stroke-linejoin="round"/>
+  <!-- The transport bar under it: played, the knob, and what is left -->
+  <rect x="96" y="372" width="320" height="10" rx="5" fill="#4a5288"/>
+  <rect x="96" y="372" width="196" height="10" rx="5" fill="#8ab4ff"/>
+  <circle cx="292" cy="377" r="16" fill="#e8ecff"/>
+</svg>
