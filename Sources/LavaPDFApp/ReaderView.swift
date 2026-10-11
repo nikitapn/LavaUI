@@ -157,6 +157,8 @@ struct ReaderView: View {
 
         var wanted: [TileKey] = []
         var sharp: [TileKey] = []
+        var drawn: [TileKey] = []
+        var previews: Set<Int> = []
         list.pushClip(x: frame.x, y: frame.y, w: frame.w, h: frame.h)
         for page in layout.pages(intersecting: visible) {
             let pageFrame = layout.frames[page]
@@ -170,25 +172,51 @@ struct ReaderView: View {
             list.rect(x: x0 + 2, y: y0 + 3, w: x1 - x0, h: y1 - y0, color: Palette.shadow)
             list.rect(x: x0, y: y0, w: x1 - x0, h: y1 - y0, color: Palette.paper)
 
-            let resident = tiles.tiles(ofPage: page, nearest: scaleKey)
-            // A page seen for the first time gets a quarter-scale picture of
-            // the whole of it first: one cheap render that turns a blank page
-            // into a soft one while the sharp tiles come in.
-            if resident.isEmpty {
-                let preview = TileGrid.previewKey(for: scaleKey)
-                wanted += TileGrid.tiles(
-                    page: page, size: size, scaleKey: preview,
-                    visible: Box(x: 0, y: 0, width: size.width, height: size.height)
-                )
-            }
             let onPage = Box(
                 x: visible.x - pageFrame.x, y: visible.y - pageFrame.y,
                 width: visible.width, height: visible.height
             )
             let needed = TileGrid.tiles(page: page, size: size, scaleKey: scaleKey, visible: onPage)
             sharp += needed
+            let preview = TileGrid.previewKey(for: scaleKey)
+            previews.insert(preview)
 
-            for (key, image) in resident {
+            // What to draw: the tiles at this zoom, and only where one of them
+            // has not arrived, something to stand in for it — the nearest
+            // other scale that has that spot, over the page's preview.
+            // Everything else resident is left undrawn, which is what lets it
+            // go: drawing every scale a page had ever been rendered at kept
+            // all of them alive and put 279 textures in each frame after a
+            // minute of resizing.
+            let resident = tiles.resident(ofPage: page)
+            let current = Set(resident.lazy.filter { $0.key.scaleKey == scaleKey }.map(\.key))
+            let holes = needed.filter { !current.contains($0) }
+                .map { TileGrid.pointRect(of: $0, size: size) }
+            var layers: [(key: TileKey, image: UIImage)] = []
+            if !holes.isEmpty {
+                func covers(_ key: TileKey) -> Bool {
+                    let rect = TileGrid.pointRect(of: key, size: size)
+                    return holes.contains { $0.intersects(rect) }
+                }
+                let ratio = { (key: Int) in abs(log(Double(key) / Double(scaleKey))) }
+                let others = resident.filter { $0.key.scaleKey != scaleKey && covers($0.key) }
+                let nearest = others.filter { $0.key.scaleKey != preview }
+                    .min { ratio($0.key.scaleKey) < ratio($1.key.scaleKey) }?.key.scaleKey
+                layers += others.filter { $0.key.scaleKey == preview }
+                if let nearest { layers += others.filter { $0.key.scaleKey == nearest } }
+                // A page seen for the first time gets a quarter-scale picture of
+                // the whole of it first: one cheap render that turns a blank
+                // page into a soft one while the sharp tiles come in.
+                if !resident.contains(where: { $0.key.scaleKey == preview }) {
+                    wanted += TileGrid.tiles(
+                        page: page, size: size, scaleKey: preview,
+                        visible: Box(x: 0, y: 0, width: size.width, height: size.height)
+                    )
+                }
+            }
+            layers += resident.filter { current.contains($0.key) }
+
+            for (key, image) in layers {
                 guard TileGrid.pointRect(of: key, size: size).intersects(onPage) else { continue }
                 // From the page's snapped corner in the tile's own pixels,
                 // scaled by how far its scale is from the zoom: exactly 1 for
@@ -200,6 +228,7 @@ struct ReaderView: View {
                 let tx1 = x0 + (Float(rect.x + rect.width) * factor).rounded()
                 let ty1 = y0 + (Float(rect.y + rect.height) * factor).rounded()
                 list.image(image, x: tx0, y: ty0, w: tx1 - tx0, h: ty1 - ty0)
+                drawn.append(key)
             }
 
             highlights(list, page: page, pageFrame: pageFrame, screenX: screenX, screenY: screenY)
@@ -222,6 +251,16 @@ struct ReaderView: View {
 
         drawScrollbar(list, frame)
         tiles.want(wanted, sizes: sizes)
+        let now = FrameScheduler.now()
+        tiles.markDrawn(drawn, at: now)
+        // The zoom on screen and its previews stay however long they go
+        // undrawn — scrolling back should find them — and everything else
+        // goes after a few seconds of not being looked at.
+        if tiles.sweep(now: now, keep: { key in
+            key.scaleKey == scaleKey || previews.contains(key.scaleKey)
+        }) {
+            FrameScheduler.requestRedraw(in: 3.5)
+        }
 
         // A drag resting past the window's edge sends nothing, so the frame
         // that scrolls it asks for the next one itself.

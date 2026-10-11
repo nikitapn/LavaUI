@@ -22,6 +22,8 @@ final class TileStore: @unchecked Sendable {
         let image: UIImage
         let bytes: Int
         var lastUsed: UInt64
+        /// When it was last drawn, for `sweep`.
+        var lastDrawn: Double
     }
 
     /// What the textures may add up to before the least recently drawn go.
@@ -40,6 +42,7 @@ final class TileStore: @unchecked Sendable {
     private var byPage: [Int: Set<TileKey>] = [:]
     private var residentBytes = 0
     private var frame: UInt64 = 0
+    private var lastSweep: Double = 0
 
     // Shared, under `lock`.
     private let lock = NSCondition()
@@ -89,24 +92,54 @@ final class TileStore: @unchecked Sendable {
 
     func has(_ key: TileKey) -> Bool { resident[key] != nil }
 
-    /// The resident tiles of `page`, furthest from `scaleKey` first — the
-    /// order to draw them in, so the tiles of the zoom on screen land on top
-    /// of whatever stands in for them: a preview below, and the zoom just left
-    /// in either direction. Marks each as used this frame.
-    func tiles(ofPage page: Int, nearest scaleKey: Int) -> [(key: TileKey, image: UIImage)] {
+    /// The resident tiles of `page`, every scale, in no order. Marks nothing:
+    /// what counts as used is what paint actually draws — see `markDrawn`.
+    func resident(ofPage page: Int) -> [(key: TileKey, image: UIImage)] {
         guard let keys = byPage[page] else { return [] }
-        var result: [(key: TileKey, image: UIImage)] = []
-        result.reserveCapacity(keys.count)
+        return keys.compactMap { key in resident[key].map { (key, $0.image) } }
+    }
+
+    /// The tiles this frame drew. Only these are safe from eviction, so a
+    /// scale nobody is looking at any more stops being kept alive by being
+    /// on a visible page.
+    func markDrawn(_ keys: [TileKey], at now: Double) {
         for key in keys {
             guard var entry = resident[key] else { continue }
             entry.lastUsed = frame
+            entry.lastDrawn = now
             resident[key] = entry
-            result.append((key, entry.image))
         }
-        return result.sorted {
-            (-abs($0.key.scaleKey - scaleKey), $0.key.row, $0.key.column)
-                < (-abs($1.key.scaleKey - scaleKey), $1.key.row, $1.key.column)
+    }
+
+    /// Frees tiles nobody has drawn for `idle` seconds, except those `keep`
+    /// names — whatever budget is left.
+    ///
+    /// The budget alone is not enough. A resize in fit-width is a new zoom
+    /// on nearly every frame, and so a new set of tiles; each set stops being
+    /// drawn the moment the next lands, and all of them waited for the 256 MiB
+    /// line before any went. That is a quarter of a gigabyte of the
+    /// compositor's textures for pictures of the page at sizes it was briefly.
+    ///
+    /// Returns whether something is left to expire, so paint can ask for the
+    /// frame that frees it: an idle window paints nothing, and a sweep that
+    /// waited for the next scroll would leave a resize's leftovers resident
+    /// for as long as the reader sat still.
+    @discardableResult
+    func sweep(now: Double, idle: Double = 3, keep: (TileKey) -> Bool) -> Bool {
+        var waiting = false
+        let due = now - lastSweep >= 0.5
+        if due { lastSweep = now }
+        for (key, entry) in resident where !keep(key) {
+            guard due, now - entry.lastDrawn > idle else {
+                waiting = true
+                continue
+            }
+            host.releaseImage(key: entry.image.cacheKey)
+            resident[key] = nil
+            byPage[key.page]?.remove(key)
+            residentBytes -= entry.bytes
         }
+        return waiting
     }
 
     /// What this frame wants, most wanted first. Replaces whatever was queued.
@@ -226,7 +259,9 @@ final class TileStore: @unchecked Sendable {
                 residentBytes -= old.bytes
             }
             let bytes = Int(image.pixelWidth) * Int(image.pixelHeight) * 4
-            resident[key] = Entry(image: image, bytes: bytes, lastUsed: frame)
+            resident[key] = Entry(
+                image: image, bytes: bytes, lastUsed: frame, lastDrawn: FrameScheduler.now()
+            )
             byPage[key.page, default: []].insert(key)
             residentBytes += bytes
         }
