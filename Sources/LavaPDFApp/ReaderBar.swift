@@ -17,10 +17,16 @@ struct ReaderBar: View {
             if !session.outline.isEmpty {
                 button("☰", id: "sidebar", on: session.sidebarOpen) { session.toggleSidebar() }
             }
-            Text(session.hasDocument ? session.fileName : "LavaPDF", color: Theme.current.textPrimary)
+            // The one thing on the bar whose length nobody chose for it, so the
+            // one thing that gives way: truncated, before any control moves.
+            Text(session.hasDocument ? session.fileName : "LavaPDF", color: Theme.current.textPrimary,
+                 lineLimit: 1)
+                .flexShrink(1)
                 .agentId("title")
+            // Room to grab the window by even when the title has taken the
+            // rest — enough for a pointer, not so much the title shows nothing.
             Spacer()
-                .frame(height: .pt(Self.height), minWidth: 48)
+                .frame(height: .pt(Self.height), minWidth: 24)
                 .windowDrag()
             if session.hasDocument {
                 Text("\(session.currentPage + 1) / \(session.pageCount)", color: Theme.current.textDim)
@@ -65,7 +71,9 @@ struct FindBar: View {
                 autoFocus: true, selectionOnFocus: .all,
                 onSubmit: { session.findNext() }
             )
+            // Shrinks rather than pushing the steps off a narrow window.
             .frame(width: .pt(280))
+            .flexShrink(1)
             .agentId("find-field")
             Text(session.findStatus, color: Theme.current.textDim)
                 .agentId("find-status")
@@ -93,30 +101,38 @@ struct FindBar: View {
 struct PasswordBar: View {
     @Bindable var session: ReaderSession
 
+    /// Two rows: the file's name is as long as whoever named it wanted, and
+    /// sharing a row with the field it pushed the field off a narrow window.
+    /// On its own line it truncates instead, and the field always fits.
     var body: some View {
-        HStack(padding: 8, alignment: .center, spacing: 10) {
-            Text(prompt, color: session.passwordRejected ? Palette.warning : Theme.current.textSecondary)
+        VStack(padding: 8, spacing: 6) {
+            Text(prompt, color: session.passwordRejected ? Palette.warning : Theme.current.textSecondary,
+                 lineLimit: 1)
+                .flexShrink(1)
                 .agentId("password-prompt")
-            TextField(
-                text: $session.passwordEntry, placeholder: "Password",
-                autoFocus: true, secure: true,
-                onSubmit: { session.submitPassword() }
-            )
-            .frame(width: .pt(240))
-            .agentId("password-field")
-            Text("Open", color: .accent, align: .center, onClick: { session.submitPassword() })
-                .padding(4)
-                .hoverBackground(Theme.current.hover)
-                .cornerRadius(4)
-                .cursor(.pointer)
-                .agentId("password-open")
-            Spacer()
-            Text("Cancel", color: Theme.current.textDim, align: .center, onClick: { session.cancelPassword() })
-                .padding(4)
-                .hoverBackground(Theme.current.hover)
-                .cornerRadius(4)
-                .cursor(.pointer)
-                .agentId("password-cancel")
+            HStack(alignment: .center, spacing: 10) {
+                TextField(
+                    text: $session.passwordEntry, placeholder: "Password",
+                    autoFocus: true, secure: true,
+                    onSubmit: { session.submitPassword() }
+                )
+                .frame(width: .pt(240))
+                .flexShrink(1)
+                .agentId("password-field")
+                Text("Open", color: .accent, align: .center, onClick: { session.submitPassword() })
+                    .padding(4)
+                    .hoverBackground(Theme.current.hover)
+                    .cornerRadius(4)
+                    .cursor(.pointer)
+                    .agentId("password-open")
+                Spacer()
+                Text("Cancel", color: Theme.current.textDim, align: .center, onClick: { session.cancelPassword() })
+                    .padding(4)
+                    .hoverBackground(Theme.current.hover)
+                    .cornerRadius(4)
+                    .cursor(.pointer)
+                    .agentId("password-cancel")
+            }
         }
         .background(Theme.current.panel)
     }
