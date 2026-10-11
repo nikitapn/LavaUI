@@ -1,4 +1,7 @@
 #include "canvas_surface.hpp"
+extern "C" {
+#include <drm_fourcc.h>
+}
 
 #include <unistd.h>
 
@@ -165,6 +168,8 @@ std::unique_ptr<CanvasRenderer> CanvasRenderer::create(wlr_renderer *renderer,
 
 CanvasRenderer::~CanvasRenderer() {
   TextureManager::getInstance().setSurfaceResolver(nullptr, nullptr);
+  // Before the device closes: an import is a VkImage on it.
+  while (!videoBuffers_.empty()) detachVideoBuffer(videoBuffers_.begin()->first);
   engine_.close();
 }
 
@@ -314,6 +319,59 @@ int CanvasRenderer::importBufferTexture(wlr_buffer *buffer,
   const int id = app->importDmabufTexture(
       key, desc, 0, 0, desc.width, desc.height, maxSide);
   return id > 0 ? id : 0;
+}
+
+void CanvasRenderer::videoTarget(std::string &renderNode,
+                                 std::vector<uint64_t> &modifiers) {
+  Application *app = engine_.application();
+  if (app == nullptr) return;
+  renderNode = app->renderNode();
+  modifiers = app->importableModifiers(DRM_FORMAT_ABGR8888);
+}
+
+uint32_t CanvasRenderer::attachVideoBuffer(const canvas::DmabufImport &src) {
+  Application *app = engine_.application();
+  if (app == nullptr || src.planeCount != 1 || src.fd[0] < 0) {
+    if (src.fd[0] >= 0) close(src.fd[0]);
+    return 0;
+  }
+  auto imported = app->importDmabuf(src);
+  if (!imported) {
+    close(src.fd[0]);
+    return 0;
+  }
+  const uint32_t handle = nextVideoBuffer_++;
+  VideoBuffer &buffer = videoBuffers_[handle];
+  buffer.imported = std::move(imported);
+  buffer.fd = src.fd[0];
+  // One texture per buffer rather than one per stream: a client cycles
+  // through its buffers, so the texture a buffer last filled was drawn frames
+  // ago and is normally free to be overwritten in place.
+  buffer.key = "video:" + std::to_string(handle);
+  return handle;
+}
+
+int CanvasRenderer::showVideoBuffer(uint32_t handle, uint32_t &outWidth,
+                                    uint32_t &outHeight) {
+  Application *app = engine_.application();
+  auto it = videoBuffers_.find(handle);
+  if (app == nullptr || it == videoBuffers_.end()) return -1;
+  const canvas::ImportedDmabuf &imported = *it->second.imported;
+  const int id = app->refreshFromImported(it->second.key, imported);
+  outWidth = imported.width();
+  outHeight = imported.height();
+  return id;
+}
+
+void CanvasRenderer::detachVideoBuffer(uint32_t handle) {
+  auto it = videoBuffers_.find(handle);
+  if (it == videoBuffers_.end()) return;
+  // Discarded, not released: the key names an import that is about to go,
+  // so nothing could ever revive a dormant copy.
+  engine_.discardTexture(it->second.key);
+  it->second.imported.reset();
+  if (it->second.fd >= 0) close(it->second.fd);
+  videoBuffers_.erase(it);
 }
 
 // ─── CanvasSurface ─────────────────────────────────────────────────────────

@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include "bridge/canvas_engine.hpp"
@@ -28,6 +29,11 @@
 ///     stops a second client from costing a second Vulkan device.
 ///   * `CanvasSurface` is one client's window: its own attachments, its own
 ///     exported image, its own arena. That is what a surface should cost.
+namespace canvas {
+class ImportedDmabuf;
+struct DmabufImport;
+}
+
 namespace lava {
 
 /// A `canvas::DmabufImage` presented to wlroots as a buffer.
@@ -139,6 +145,25 @@ class CanvasRenderer {
   int importBufferTexture(wlr_buffer *buffer, const std::string &key,
                           uint32_t maxSide);
 
+  // ─── Video buffers ──────────────────────────────────────────────────────
+  //
+  // A client's dma-bufs, imported once and copied into a texture each time
+  // the client says one holds a new frame. Loop only, like everything that
+  // touches the device. See `Images.AttachVideoBuffer` in the IDL.
+
+  /// The render node and the ABGR8888 modifiers a video buffer may have.
+  void videoTarget(std::string &renderNode, std::vector<uint64_t> &modifiers);
+
+  /// Imports `src` (single plane; `src.fd[0]` is adopted). Handle, or 0.
+  uint32_t attachVideoBuffer(const canvas::DmabufImport &src);
+
+  /// Copies the buffer's current contents into its texture. The id, or -1
+  /// for an unknown handle or a failed copy.
+  int showVideoBuffer(uint32_t handle, uint32_t &outWidth, uint32_t &outHeight);
+
+  /// The import and its texture. Unknown handles are ignored.
+  void detachVideoBuffer(uint32_t handle);
+
   canvas::Engine &engine() { return engine_; }
 
   /// What is in VRAM and who asked for it — see `canvas/render/gpu_report.hpp`.
@@ -169,6 +194,16 @@ class CanvasRenderer {
   canvas::Engine engine_;
   int drmFd_ = -1;
   bool fencedHandover_ = false;
+
+  struct VideoBuffer {
+    std::unique_ptr<canvas::ImportedDmabuf> imported;
+    /// The client's descriptor, kept for as long as the import: the import
+    /// holds a dup of its own, but `ImportedDmabuf` remembers this number.
+    int fd = -1;
+    std::string key;
+  };
+  std::unordered_map<uint32_t, VideoBuffer> videoBuffers_;
+  uint32_t nextVideoBuffer_ = 1;
 };
 
 /// One client's window.

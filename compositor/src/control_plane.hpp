@@ -82,6 +82,20 @@ struct CompositorHost {
   /// freed, not left dormant. See `TextureManager::discardTexture`.
   virtual void discardImage(const std::string &key) = 0;
 
+  /// `Images.GetVideoTarget`: the renderer's render node and the ABGR8888
+  /// modifiers it imports.
+  virtual void videoTarget(std::string &renderNode,
+                           std::vector<uint64_t> &modifiers) = 0;
+  /// Imports a client's single-plane dma-buf, adopting `fd` whatever the
+  /// outcome. A handle, or 0.
+  virtual uint32_t attachVideoBuffer(int fd, uint32_t width, uint32_t height,
+                                     uint32_t fourcc, uint64_t modifier,
+                                     uint32_t offset, uint32_t stride) = 0;
+  /// Copies the buffer into its texture. Texture id, or -1.
+  virtual int showVideoBuffer(uint32_t handle, uint32_t &outWidth,
+                              uint32_t &outHeight) = 0;
+  virtual void detachVideoBuffer(uint32_t handle) = 0;
+
   /// What was dropped on `surfaceId` since the last time it asked, and clears
   /// it. Empty for a surface nothing was dropped on, which is every surface
   /// almost all of the time — the client only asks when an event told it to.

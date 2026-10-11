@@ -150,6 +150,9 @@ void recordImportBlit(RenderDevice &device, const canvas::ImportedDmabuf &src,
   vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
                        VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr, 0,
                        nullptr, 1, &toSample);
+  // Handed back, for the import that is used again: a video buffer the client
+  // renders into next, which the next blit acquires from `GENERAL` again.
+  src.recordRelease(cmd);
   device.endSingleTimeCommands(cmd);
 }
 
@@ -437,9 +440,22 @@ TextureHandle TextureManager::refreshDmabufTexture(
     if (!device_ || key.empty() || width == 0 || height == 0) {
         return {VK_NULL_HANDLE, 0};
     }
-    if (x < 0 || y < 0 ||
-        static_cast<uint32_t>(x) + width > src.width ||
-        static_cast<uint32_t>(y) + height > src.height) {
+    auto imported = canvas::ImportedDmabuf::create(*device_, src);
+    if (imported) imported->waitReady();
+    return refreshFromImported(key, imported.get(), x, y, width, height);
+}
+
+TextureHandle TextureManager::refreshFromImported(
+    const std::string &key, const canvas::ImportedDmabuf *imported, int32_t x,
+    int32_t y, uint32_t width, uint32_t height)
+{
+    if (!device_ || key.empty() || width == 0 || height == 0) {
+        return {VK_NULL_HANDLE, 0};
+    }
+    if (imported != nullptr &&
+        (x < 0 || y < 0 ||
+         static_cast<uint32_t>(x) + width > imported->width() ||
+         static_cast<uint32_t>(y) + height > imported->height())) {
         return {VK_NULL_HANDLE, 0};
     }
 
@@ -474,9 +490,6 @@ TextureHandle TextureManager::refreshDmabufTexture(
             }
         }
     }
-
-    auto imported = canvas::ImportedDmabuf::create(*device_, src);
-    if (imported) imported->waitReady();
 
     if (reusable != VK_NULL_HANDLE) {
         // The view carries the source's alpha swizzle. A capture that
@@ -826,6 +839,21 @@ void TextureManager::updateWindowTextureReferences(
     sweepDiscardedLocked();
     evictDormantLocked();
     evictAtlasSlotsLocked();
+}
+
+void TextureManager::noteWindowSampled(const void *window,
+                                       uint64_t submission) {
+    std::lock_guard lock(mutex_);
+    auto found = windowTextures_.find(window);
+    if (found == windowTextures_.end()) return;
+    // `lastRetired_` counts submissions *below* it as finished, so the frame
+    // numbered `submission` is over once it reaches one past.
+    for (uint32_t id : found->second) {
+        auto texture = textureById_.find(id);
+        if (texture == textureById_.end()) continue;
+        texture->second->sampledBefore =
+            std::max(texture->second->sampledBefore, submission + 1);
+    }
 }
 
 void TextureManager::removeWindowTextureReferences(const void *window) {

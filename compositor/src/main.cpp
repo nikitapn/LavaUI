@@ -62,6 +62,7 @@ extern "C" {
 #include <wlr/types/wlr_ext_image_copy_capture_v1.h>
 }
 #include "render/png_encode.hpp"
+#include "render/imported_dmabuf.hpp"
 
 extern char **environ;
 
@@ -3292,6 +3293,40 @@ class SurfaceRegistry : public lava::CompositorHost {
 
   void discardImage(const std::string &key) override {
     if (renderer_) renderer_->discardImage(key);
+  }
+
+  void videoTarget(std::string &renderNode,
+                   std::vector<uint64_t> &modifiers) override {
+    if (renderer_) renderer_->videoTarget(renderNode, modifiers);
+  }
+
+  uint32_t attachVideoBuffer(int fd, uint32_t width, uint32_t height,
+                             uint32_t fourcc, uint64_t modifier,
+                             uint32_t offset, uint32_t stride) override {
+    if (!renderer_) {
+      close(fd);
+      return 0;
+    }
+    canvas::DmabufImport src{};
+    src.width = width;
+    src.height = height;
+    src.drmFormat = fourcc;
+    src.modifier = modifier;
+    src.planeCount = 1;
+    src.fd[0] = fd;
+    src.offset[0] = offset;
+    src.stride[0] = stride;
+    return renderer_->attachVideoBuffer(src);
+  }
+
+  int showVideoBuffer(uint32_t handle, uint32_t &outWidth,
+                      uint32_t &outHeight) override {
+    return renderer_ ? renderer_->showVideoBuffer(handle, outWidth, outHeight)
+                     : -1;
+  }
+
+  void detachVideoBuffer(uint32_t handle) override {
+    if (renderer_) renderer_->detachVideoBuffer(handle);
   }
 
   /// Files released over a surface, waiting for the client to ask.

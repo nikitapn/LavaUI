@@ -1089,6 +1089,34 @@ int Application::refreshDmabufTexture(const std::string &key,
   return impl_->refreshDmabufTexture(key, src, x, y, w, h);
 }
 
+std::unique_ptr<canvas::ImportedDmabuf> Application::importDmabuf(
+  const canvas::DmabufImport &src)
+{
+  if (!impl_->deviceUp) return nullptr;
+  return canvas::ImportedDmabuf::create(impl_->device, src);
+}
+
+int Application::refreshFromImported(const std::string &key,
+                                     const canvas::ImportedDmabuf &imported)
+{
+  if (!impl_->deviceUp) return -1;
+  auto handle = TextureManager::getInstance().refreshFromImported(
+    key, &imported, 0, 0, imported.width(), imported.height());
+  return handle.isValid() ? static_cast<int>(handle.id) : -1;
+}
+
+std::string Application::renderNode()
+{
+  if (!impl_->deviceUp) return {};
+  return canvas::ImportedDmabuf::renderNode(impl_->device);
+}
+
+std::vector<uint64_t> Application::importableModifiers(uint32_t fourcc)
+{
+  if (!impl_->deviceUp) return {};
+  return canvas::ImportedDmabuf::importableModifiers(impl_->device, fourcc);
+}
+
 void Application::noteTextureSampled(int textureId)
 {
   if (textureId <= 0) return;

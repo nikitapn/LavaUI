@@ -906,6 +906,62 @@ class PixelArenas {
   uint32_t next_ = 1;
 };
 
+/// Which connection attached which video buffer.
+///
+/// The imports themselves live in the renderer and are touched on the loop
+/// only; this is the part RPC workers need — "is this handle yours" — so it
+/// is locked, like `PixelArenas`. A handle is a small integer, and naming
+/// another client's must neither show nor drop its frames.
+class VideoLeases {
+ public:
+  /// Three is what a player cycles through; the rest is room to replace a set
+  /// at a new size before the old one is detached.
+  static constexpr size_t kPerSession = 8;
+
+  bool full(const void *session) const {
+    std::lock_guard lock(mutex_);
+    size_t held = 0;
+    for (const auto &[handle, owner] : owners_) held += owner == session;
+    return held >= kPerSession;
+  }
+
+  void add(const void *session, uint32_t handle) {
+    std::lock_guard lock(mutex_);
+    owners_[handle] = session;
+  }
+
+  bool owns(const void *session, uint32_t handle) const {
+    std::lock_guard lock(mutex_);
+    auto it = owners_.find(handle);
+    return it != owners_.end() && it->second == session;
+  }
+
+  /// Forgets `handle` if `session` holds it; true if it did.
+  bool remove(const void *session, uint32_t handle) {
+    std::lock_guard lock(mutex_);
+    auto it = owners_.find(handle);
+    if (it == owners_.end() || it->second != session) return false;
+    owners_.erase(it);
+    return true;
+  }
+
+  /// Everything `session` held, forgotten.
+  std::vector<uint32_t> dropSession(const void *session) {
+    std::lock_guard lock(mutex_);
+    std::vector<uint32_t> dropped;
+    std::erase_if(owners_, [&](const auto &item) {
+      if (item.second != session) return false;
+      dropped.push_back(item.first);
+      return true;
+    });
+    return dropped;
+  }
+
+ private:
+  mutable std::mutex mutex_;
+  std::unordered_map<uint32_t, const void *> owners_;
+};
+
 InputEvent make_event(uint32_t kind, float x, float y, int32_t button,
                       int32_t mods) {
   InputEvent event{};
@@ -1034,6 +1090,12 @@ class CompositorImpl final : public ICompositor_Servant {
   /// The pixel arenas `Images` attaches. Kept here so a session ending —
   /// which only this side hears about — closes them with its images.
   PixelArenas &pixelArenas() { return pixelArenas_; }
+
+  /// Video buffers `Images` attached, by connection, for the same reason.
+  VideoLeases &videoLeases() { return videoLeases_; }
+
+  /// The renderer, for `Images`' video calls. Loop only, like every use of it.
+  CompositorHost &host() { return host_; }
 
   // ─── Surfaces ────────────────────────────────────────────────────────────
 
@@ -2090,6 +2152,12 @@ class CompositorImpl final : public ICompositor_Servant {
     if (const size_t closed = pixelArenas_.dropSession(session)) {
       wlr_log(WLR_INFO, "session gone: %zu pixel arena(s) closed", closed);
     }
+    const std::vector<uint32_t> videos = videoLeases_.dropSession(session);
+    for (uint32_t handle : videos) host_.detachVideoBuffer(handle);
+    if (!videos.empty()) {
+      wlr_log(WLR_INFO, "session gone: %zu video buffer(s) detached",
+              videos.size());
+    }
   }
 
   /// Hands back every registration the session never released.
@@ -2227,6 +2295,7 @@ class CompositorImpl final : public ICompositor_Servant {
       imagesBySession_;
   std::unordered_map<const void *, uint32_t> sessionSubscriptions_;
   PixelArenas pixelArenas_;
+  VideoLeases videoLeases_;
 };
 
 
@@ -2320,6 +2389,73 @@ class ImagesImpl final : public IImages_Servant {
     // Not the region's fault, but the only refusal the call declares; the
     // reason says which it was.
     throw PixelRegionInvalid("the renderer could not upload it");
+  }
+
+  VideoTarget GetVideoTarget() override {
+    VideoTarget target;
+    loop_.call([&] {
+      compositor_.host().videoTarget(target.renderNode, target.modifiers);
+    });
+    return target;
+  }
+
+  /// The import is on the loop — it creates a VkImage — but it is one
+  /// `vkAllocateMemory` against memory that already exists, not a decode.
+  uint32_t AttachVideoBuffer(::nprpc::UniqueFd dmabuf,
+                             flat::VideoBufferLayout_Direct layout) override {
+    const void *session = CompositorImpl::sessionOfCall();
+    if (!dmabuf) throw VideoBufferInvalid("no descriptor arrived with the call");
+    if (compositor_.videoLeases().full(session)) {
+      throw VideoBufferInvalid("a client may hold " +
+                               std::to_string(VideoLeases::kPerSession));
+    }
+    if (layout.width() == 0 || layout.height() == 0 ||
+        layout.width() > 16384 || layout.height() > 16384 ||
+        layout.stride() < layout.width() * 4) {
+      throw VideoBufferInvalid("layout does not describe a buffer");
+    }
+    const int fd = dmabuf.release();
+    const uint32_t width = layout.width(), height = layout.height();
+    const uint32_t fourcc = layout.fourcc(), offset = layout.planeOffset();
+    const uint32_t stride = layout.stride();
+    const uint64_t modifier = layout.modifier();
+    const uint32_t handle = loop_.call([&] {
+      const uint32_t made = compositor_.host().attachVideoBuffer(
+          fd, width, height, fourcc, modifier, offset, stride);
+      // Recorded on the loop, in the same visit: a session that ends between
+      // the import and the record would otherwise leak the import.
+      if (made != 0) compositor_.videoLeases().add(session, made);
+      return made;
+    });
+    if (handle == 0) {
+      throw VideoBufferInvalid("the renderer could not import it");
+    }
+    wlr_log(WLR_INFO, "video buffer %u: %ux%u fourcc %08x modifier 0x%016llx",
+            handle, width, height, fourcc,
+            static_cast<unsigned long long>(modifier));
+    return handle;
+  }
+
+  ImageInfo ShowVideoBuffer(uint32_t handle) override {
+    const void *session = CompositorImpl::sessionOfCall();
+    if (!compositor_.videoLeases().owns(session, handle)) {
+      throw VideoBufferInvalid("video buffer " + std::to_string(handle) +
+                               " is not this connection's");
+    }
+    ImageInfo info;
+    const int id = loop_.call([&] {
+      return compositor_.host().showVideoBuffer(handle, info.width,
+                                                info.height);
+    });
+    if (id <= 0) throw VideoBufferInvalid("the renderer could not copy it");
+    info.id = static_cast<uint32_t>(id);
+    return info;
+  }
+
+  void DetachVideoBuffer(uint32_t handle) override {
+    const void *session = CompositorImpl::sessionOfCall();
+    if (!compositor_.videoLeases().remove(session, handle)) return;
+    loop_.call([&] { compositor_.host().detachVideoBuffer(handle); });
   }
 
  private:

@@ -4,6 +4,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#include <algorithm>
 #include <atomic>
 #include <cstdint>
 #include <format>
@@ -442,6 +443,80 @@ void ImportedDmabuf::recordAcquire(VkCommandBuffer cmd) const
   vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
                        VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0,
                        nullptr, 1, &acquire);
+}
+
+void ImportedDmabuf::recordRelease(VkCommandBuffer cmd) const
+{
+  VkImageMemoryBarrier release{
+    .sType               = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+    .srcAccessMask       = VK_ACCESS_TRANSFER_READ_BIT,
+    .dstAccessMask       = 0,
+    .oldLayout           = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+    .newLayout           = VK_IMAGE_LAYOUT_GENERAL,
+    .srcQueueFamilyIndex = device_->graphicsQueueFamily(),
+    .dstQueueFamilyIndex = VK_QUEUE_FAMILY_EXTERNAL,
+    .image               = image_,
+    .subresourceRange    = kWholeImage,
+  };
+  vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                       VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 0, 0, nullptr, 0,
+                       nullptr, 1, &release);
+}
+
+std::vector<uint64_t> ImportedDmabuf::importableModifiers(RenderDevice &device,
+                                                          uint32_t      fourcc)
+{
+  std::vector<uint64_t> found;
+  const MappedFormat mapped = mapDrmFormat(fourcc);
+  if (mapped.vk == VK_FORMAT_UNDEFINED || !device.canImportDmabuf()) {
+    return found;
+  }
+  VkDrmFormatModifierPropertiesListEXT list{
+    .sType = VK_STRUCTURE_TYPE_DRM_FORMAT_MODIFIER_PROPERTIES_LIST_EXT,
+  };
+  VkFormatProperties2 props{
+    .sType = VK_STRUCTURE_TYPE_FORMAT_PROPERTIES_2,
+    .pNext = &list,
+  };
+  vkGetPhysicalDeviceFormatProperties2(device.physicalDevice(), mapped.vk,
+                                       &props);
+  std::vector<VkDrmFormatModifierPropertiesEXT> entries(
+    list.drmFormatModifierCount);
+  list.pDrmFormatModifierProperties = entries.data();
+  vkGetPhysicalDeviceFormatProperties2(device.physicalDevice(), mapped.vk,
+                                       &props);
+  for (const auto &entry : entries) {
+    // Single-plane only: `create` refuses disjoint planes, and a compression
+    // modifier's second plane is metadata that a producer would have to
+    // agree about too.
+    if (entry.drmFormatModifierPlaneCount != 1) continue;
+    if (modifierImportable(device.physicalDevice(), mapped.vk,
+                           entry.drmFormatModifier)) {
+      found.push_back(entry.drmFormatModifier);
+    }
+  }
+  // `create` falls back to a linear image when the modifier path refuses, so
+  // linear is importable whether or not the driver lists it — and it is the
+  // one layout two drivers always agree on.
+  if (std::find(found.begin(), found.end(), DRM_FORMAT_MOD_LINEAR) ==
+      found.end()) {
+    found.push_back(DRM_FORMAT_MOD_LINEAR);
+  }
+  return found;
+}
+
+std::string ImportedDmabuf::renderNode(RenderDevice &device)
+{
+  VkPhysicalDeviceDrmPropertiesEXT drm{
+    .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DRM_PROPERTIES_EXT,
+  };
+  VkPhysicalDeviceProperties2 props{
+    .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2,
+    .pNext = &drm,
+  };
+  vkGetPhysicalDeviceProperties2(device.physicalDevice(), &props);
+  if (!drm.hasRender) return {};
+  return std::format("/dev/dri/renderD{}", drm.renderMinor);
 }
 
 }  // namespace canvas

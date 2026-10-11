@@ -253,6 +253,28 @@ public:
                                        int32_t x, int32_t y, uint32_t w,
                                        uint32_t h);
 
+    /// `refreshDmabufTexture` from an import the caller keeps.
+    ///
+    /// For a producer that writes the same few buffers over and over — a
+    /// video player's — where importing per frame would be a
+    /// `vkAllocateMemory` per frame for memory that never changes. No wait:
+    /// the caller has already been told the producer finished. Null
+    /// `imported` fails the way a failed import does.
+    TextureHandle refreshFromImported(const std::string &key,
+                                      const canvas::ImportedDmabuf *imported,
+                                      int32_t x, int32_t y, uint32_t w,
+                                      uint32_t h);
+
+    /// `noteSampled` for everything a window's draw list names, with the
+    /// submission index that frame claimed.
+    ///
+    /// The compositor knows which textures its own frost plate samples and
+    /// says so; a *client's* draw list names whatever it likes, and only the
+    /// window replaying it knows. Without this a refreshed texture a client
+    /// draws — a video frame — reads as never sampled, and is overwritten
+    /// under the frame that is sampling it.
+    void noteWindowSampled(const void *window, uint64_t submission);
+
     /// "A frame that samples this texture has been submitted."
     ///
     /// Stamps the texture with the mark every later submission will exceed, so

@@ -14,6 +14,7 @@
 
 namespace canvas {
 class DmabufImage;
+class ImportedDmabuf;
 struct DmabufImport;
 }
 
@@ -305,6 +306,19 @@ public:
   int refreshDmabufTexture(const std::string &key,
                            const canvas::DmabufImport &src, int32_t x,
                            int32_t y, uint32_t w, uint32_t h);
+  /// Imports a dma-buf to be read again and again — a video buffer — rather
+  /// than once. Null on failure; `src`'s fds stay the caller's.
+  std::unique_ptr<canvas::ImportedDmabuf> importDmabuf(
+    const canvas::DmabufImport &src);
+  /// Copies the whole of `imported` into the texture named `key`, overwriting
+  /// it when nothing is still sampling it. Texture id, or -1. See
+  /// `TextureManager::refreshFromImported`.
+  int refreshFromImported(const std::string &key,
+                          const canvas::ImportedDmabuf &imported);
+  /// What a producer must allocate for `importDmabuf` to take it: this
+  /// device's render node, and the modifiers of `fourcc` it can import.
+  std::string renderNode();
+  std::vector<uint64_t> importableModifiers(uint32_t fourcc);
   /// "A frame that samples this texture has been submitted." Tells
   /// `refreshDmabufTexture` when the image is free to be written over again.
   void noteTextureSampled(int textureId);

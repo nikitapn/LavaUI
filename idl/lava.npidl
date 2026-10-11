@@ -103,6 +103,41 @@ message PixelRegion {
   format: PixelFormat;
 }
 
+/// A video buffer the compositor would not take: the handle is not one this
+/// connection attached, the layout is not one it can import, or the
+/// connection cannot carry a file descriptor at all.
+exception VideoBufferInvalid {
+  reason: string;
+}
+
+/// Where a client must render a frame for the compositor to sample it
+/// without a copy through the CPU: which GPU, and which layouts of
+/// `DRM_FORMAT_ABGR8888` that GPU can import.
+///
+/// The client allocates on `renderNode` because a dma-buf from another GPU
+/// is a buffer this device cannot read — on a laptop with two, that is the
+/// usual way to get it wrong. `modifiers` is what the compositor can blit
+/// from; the client's allocator picks one it can also render to.
+message VideoTarget {
+  /// `/dev/dri/renderD*` of the compositor's device. Empty if it has none
+  /// it can name, in which case there is no video path.
+  renderNode: string;
+  modifiers: vector<u64>;
+}
+
+/// The layout of one single-plane dma-buf the client allocated: what
+/// `gbm_bo_get_*` says about it. The fd itself travels beside the message.
+message VideoBufferLayout {
+  width: u32;
+  height: u32;
+  /// A DRM FourCC; `ABGR8888` or `XBGR8888` (`RGBA` in memory order).
+  fourcc: u32;
+  modifier: u64;
+  /// Byte offset of the plane. Not `offset`; see `PixelRegion`.
+  planeOffset: u32;
+  stride: u32;
+}
+
 /// Which screen edge a panel is docked to.
 ///
 /// A panel does not choose where it is, only which side it is on: the
@@ -2503,11 +2538,54 @@ interface Images {
   /// `TextureManager::discardTexture`). Counted against `LAVA_IMAGE_BUDGET_MB`
   /// like any other standalone texture.
   ///
-  /// There is no in-place update yet. A tile pool or a video would want one,
-  /// so that a frame is a copy rather than an allocation and a descriptor
-  /// set. The texture cache has no way to overwrite a texture that frames in
-  /// flight may still be sampling, and that is the work to do when something
-  /// needs it.
+  /// There is no in-place update here. A tile pool would want one, so that a
+  /// tile is a copy rather than an allocation. Video has its own path, which
+  /// does overwrite in place — `AttachVideoBuffer` below — because a frame
+  /// there is a dma-buf on the GPU already and never needed to be pixels.
   ImageInfo UploadPixels(region: in PixelRegion)
       raises(PixelArenaNotFound, PixelRegionInvalid);
+
+  // ─── Video ─────────────────────────────────────────────────────────────
+  //
+  // For frames a client renders on the GPU — a video player, today — where
+  // even a pixel arena would be a readback and an upload per frame. The
+  // client allocates a few dma-bufs on the compositor's own device, hands
+  // each one over once, and from then on names which of them holds a
+  // finished frame. Still no pixels on RPC: what crosses is a descriptor,
+  // once, over the shared-memory channel's socket.
+
+  /// The device and layouts a video buffer must have. See `VideoTarget`.
+  VideoTarget GetVideoTarget();
+
+  /// Imports one dma-buf and returns the handle `ShowVideoBuffer` names it
+  /// by. The compositor keeps its own reference to the memory, so the client
+  /// may close `dmabuf` once this returns; the import lives until
+  /// `DetachVideoBuffer`, or until the session's last input subscription
+  /// ends, like a pixel arena.
+  ///
+  /// A handful per connection — a player needs three — since each is an
+  /// imported allocation on the compositor's device.
+  u32 AttachVideoBuffer(dmabuf: in fd, layout: in VideoBufferLayout)
+      raises(VideoBufferInvalid);
+
+  /// "The buffer holds a finished frame": the compositor copies it into the
+  /// texture it keeps for that buffer and returns the texture's id, for an
+  /// `Image` command like any other.
+  ///
+  /// **Finished means finished on the GPU** — the client has waited for its
+  /// own rendering (a `glFinish`, or a fence) before calling. There is no
+  /// acquire fence on the wire because the drivers this runs on do not agree
+  /// about implicit ones, and the client's wait is off everybody's loop.
+  ///
+  /// **The reply is the release.** The copy is complete before it is sent, so
+  /// the client may render into the buffer again as soon as it arrives —
+  /// the same contract as `UploadPixels`.
+  ///
+  /// The id is usually the same from one call to the next for the same
+  /// buffer, but not always: a texture a frame in flight is still sampling is
+  /// replaced rather than overwritten. Use the id this returns, every time.
+  ImageInfo ShowVideoBuffer(handle: in u32) raises(VideoBufferInvalid);
+
+  /// Drops the import and its texture. Unknown handles are ignored.
+  void DetachVideoBuffer(handle: in u32);
 }

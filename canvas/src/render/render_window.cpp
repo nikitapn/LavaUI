@@ -2604,6 +2604,10 @@ void RenderWindow::render(const canvas::DrawList &list)
   std::vector<Boundary> boundaries;
   const auto replayStart = std::chrono::steady_clock::now();
   replayDrawList(list, viewW, viewH, boundaries);
+  // Replay has just named this frame's textures; this is the index the frame
+  // will be submitted under.
+  TextureManager::getInstance().noteWindowSampled(
+    this, slotSubmission_[currentFrame_]);
   quads_.setReplayCpuUs(static_cast<uint64_t>(
     std::chrono::duration_cast<std::chrono::microseconds>(
       std::chrono::steady_clock::now() - replayStart).count()));

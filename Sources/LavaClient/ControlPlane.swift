@@ -436,6 +436,70 @@ public final class CompositorResources: GPUResourceHost, @unchecked Sendable {
     // because its decode and its upload belong on different threads.
 }
 
+// ─── Video ──────────────────────────────────────────────────────────────────
+
+extension CompositorResources: VideoFrameHost {
+    public func videoTarget() -> LavaUI.VideoTarget? {
+        guard let images = imageHost() else { return nil }
+        do {
+            let target = try blockingCall { try await images.getVideoTarget() }
+            guard !target.renderNode.isEmpty, !target.modifiers.isEmpty else {
+                return nil
+            }
+            return LavaUI.VideoTarget(
+                renderNode: target.renderNode, modifiers: target.modifiers
+            )
+        } catch {
+            // A compositor from before the call answers with an error; so
+            // does one whose connection cannot carry a descriptor. Neither is
+            // worth more than the one line: the app falls back to pixels.
+            FileHandle.standardError.write(
+                Data("GetVideoTarget failed (\(error)); no video path\n".utf8)
+            )
+            return nil
+        }
+    }
+
+    public func attachVideoBuffer(fd: Int32, layout: LavaUI.VideoBufferLayout) -> UInt32? {
+        guard let images = imageHost() else { return nil }
+        var wire = LavaIDL.VideoBufferLayout()
+        wire.width = layout.width
+        wire.height = layout.height
+        wire.fourcc = layout.fourcc
+        wire.modifier = layout.modifier
+        wire.planeOffset = layout.offset
+        wire.stride = layout.stride
+        do {
+            return try blockingCall(timeout: 5) { [wire] in
+                try await images.attachVideoBuffer(dmabuf: fd, layout: wire)
+            }
+        } catch {
+            FileHandle.standardError.write(
+                Data("AttachVideoBuffer(\(layout.width)x\(layout.height)) failed: \(error)\n".utf8)
+            )
+            return nil
+        }
+    }
+
+    public func showVideoBuffer(_ handle: UInt32) -> VideoFrame? {
+        guard let images = imageHost() else { return nil }
+        do {
+            let info = try blockingCall { try await images.showVideoBuffer(handle: handle) }
+            return VideoFrame(textureId: info.id, width: info.width, height: info.height)
+        } catch {
+            FileHandle.standardError.write(
+                Data("ShowVideoBuffer(\(handle)) failed: \(error)\n".utf8)
+            )
+            return nil
+        }
+    }
+
+    public func detachVideoBuffer(_ handle: UInt32) {
+        guard let images = imageHost() else { return }
+        _ = try? blockingCall { try await images.detachVideoBuffer(handle: handle) }
+    }
+}
+
 /// The wire's word for a turn.
 ///
 /// Two enums with the same four cases rather than one shared type, because the

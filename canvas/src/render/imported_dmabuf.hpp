@@ -2,6 +2,8 @@
 
 #include <cstdint>
 #include <memory>
+#include <string>
+#include <vector>
 
 #include <vulkan/vulkan.h>
 
@@ -64,6 +66,23 @@ class ImportedDmabuf {
   /// `TRANSFER_SRC_OPTIMAL`. `GENERAL` is the layout a compositor's
   /// renderer typically releases in.
   void recordAcquire(VkCommandBuffer cmd) const;
+
+  /// The reverse of `recordAcquire`, after the read: back to `GENERAL` and to
+  /// the foreign queue. What makes one import reusable across frames — the
+  /// producer writes it again between two blits, and the next acquire says
+  /// `GENERAL` because that is what this left.
+  void recordRelease(VkCommandBuffer cmd) const;
+
+  /// The layouts of `fourcc` this device can import as a blit source, for a
+  /// producer choosing how to allocate. Empty for a FourCC it cannot map.
+  static std::vector<uint64_t> importableModifiers(RenderDevice &device,
+                                                   uint32_t      fourcc);
+
+  /// `/dev/dri/renderD<n>` of `device`, or empty when the driver does not
+  /// say (no `VK_EXT_physical_device_drm`). A producer must allocate there:
+  /// on a machine with two GPUs, a buffer from the other one is not
+  /// importable here at all.
+  static std::string renderNode(RenderDevice &device);
 
  private:
   ImportedDmabuf() = default;
