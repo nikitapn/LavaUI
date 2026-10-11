@@ -1,0 +1,457 @@
+import Foundation
+import LavaHost
+import LavaPDFCore
+import LavaUI
+import Observation
+
+/// Everything the window shows: which document, how far down, how big, what is
+/// selected and what a search found.
+///
+/// The repo's usual split: the arithmetic is `LavaPDFCore` and tested there,
+/// and this is the part that owns threads, textures and files. Every property
+/// is written on the main thread; workers deliver through `MainQueue`.
+@Observable
+final class ReaderSession: @unchecked Sendable {
+    enum ZoomMode: Equatable {
+        case fitWidth
+        case fitPage
+        /// A number the user chose, by wheel or by `+`/`-`.
+        case free
+    }
+
+    // MARK: - What is open
+
+    private(set) var path: String?
+    private(set) var fileName = ""
+    private(set) var pageCount = 0
+    private(set) var openError: String?
+    /// The page under the middle of the window, for the bar. Written from
+    /// paint only when it changes, so a scroll within a page rebuilds nothing.
+    private(set) var currentPage = 0
+    private(set) var mode: ZoomMode = .fitWidth
+    private(set) var zoomPercent = 100
+
+    /// The main thread's own copy of the document, for text. Separate from
+    /// the workers', because poppler serialises everything on one document,
+    /// and a press that waited behind a 200 ms render would feel broken.
+    @ObservationIgnored private(set) var document: PDFDocument?
+    @ObservationIgnored private(set) var layout = PageLayout(pageSizes: [])
+    @ObservationIgnored let tiles: TileStore
+
+    // MARK: - Viewport
+    //
+    // Not observed: a scroll writes these every notch, and nothing in the
+    // bar but the page number and the zoom label is computed from them —
+    // and those two are mirrored into observed fields only when they change.
+
+    @ObservationIgnored private(set) var viewport = ReaderViewport()
+    @ObservationIgnored private(set) var boxWidth: Double = 0
+    @ObservationIgnored private(set) var boxHeight: Double = 0
+
+    // MARK: - Selection
+
+    /// One page's worth: a drag that leaves its page stops at that page's
+    /// edge. Selecting across pages is a feature still to write.
+    struct Selection: Equatable {
+        var page: Int
+        var anchor: Int
+        var head: Int
+        var range: ClosedRange<Int> { min(anchor, head)...max(anchor, head) }
+    }
+
+    @ObservationIgnored private(set) var selection: Selection?
+    @ObservationIgnored private var pageText: [Int: PageText] = [:]
+
+    // MARK: - Find
+
+    var findOpen = false
+    var query = ""
+    private(set) var matches: [(page: Int, range: ClosedRange<Int>)] = []
+    private(set) var matchIndex: Int?
+    /// Still looking through the pages after the first matches arrived.
+    private(set) var searching = false
+    @ObservationIgnored private var searchGeneration = 0
+
+    init(host: any GPUResourceHost, uploadsOffMain: Bool) {
+        // Two workers: enough that a page that takes 200 ms does not hold up
+        // the one next to it, few enough that each owns a parsed copy of the
+        // document without that being a cost anybody notices.
+        tiles = TileStore(host: host, uploadsOffMain: uploadsOffMain, workers: 2)
+    }
+
+    // MARK: - Opening
+
+    func open(path: String) {
+        do {
+            let document = try PDFDocument(path: path)
+            var workers: [PDFDocument] = []
+            for _ in 0..<tiles.workerCount {
+                workers.append(try PDFDocument(path: path))
+            }
+            self.document = document
+            self.path = path
+            fileName = document.title ?? (path as NSString).lastPathComponent
+            pageCount = document.pageCount
+            openError = nil
+            layout = PageLayout(pageSizes: document.pageSizes)
+            pageText.removeAll()
+            selection = nil
+            clearSearch()
+            tiles.reset(documents: workers)
+            mode = .fitWidth
+            viewport = ReaderViewport()
+            applyMode()
+            currentPage = 0
+            LavaHost.noteOpened(path, appId: "LavaPDF")
+        } catch {
+            openError = switch error {
+            case .notFound: "\((path as NSString).lastPathComponent) does not exist"
+            case .locked: "\((path as NSString).lastPathComponent) is password-protected"
+            case .unreadable: "\((path as NSString).lastPathComponent) is not a PDF this can read"
+            }
+        }
+        ViewInvalidation.markDirty()
+    }
+
+    func openDialog() {
+        guard let url = FileDialog.openFile(
+            title: "Open PDF", filters: [.init(name: "PDF documents", extensions: ["pdf"])]
+        ) else { return }
+        open(path: url.path)
+    }
+
+    var hasDocument: Bool { document != nil }
+
+    // MARK: - The box
+
+    /// Paint reports the canvas size first thing. A fit follows the window;
+    /// a free zoom keeps its number and only its scroll is re-clamped.
+    func setBox(width: Float, height: Float) {
+        let w = Double(width), h = Double(height)
+        guard w != boxWidth || h != boxHeight else { return }
+        // Keep what was at the top of the window there: a reader resized
+        // mid-chapter should not jump back to the start of it.
+        let topPoint = viewport.scrollY / viewport.zoom
+        boxWidth = w
+        boxHeight = h
+        if mode != .free {
+            viewport.zoom = fittedZoom
+            viewport.scrollY = topPoint * viewport.zoom
+        }
+        settle()
+    }
+
+    private var fittedZoom: Double {
+        switch mode {
+        case .fitWidth: ReaderViewport.fitWidth(layout, boxWidth: boxWidth)
+        case .fitPage: ReaderViewport.fitPage(layout, boxWidth: boxWidth, boxHeight: boxHeight)
+        case .free: viewport.zoom
+        }
+    }
+
+    // MARK: - Moving
+
+    /// One wheel notch scrolls this many pixels — the renderer's own detent
+    /// (`kPixelsPerNotch`), so the reader scrolls at the speed every other
+    /// list on the desktop does.
+    static let pixelsPerNotch = 72.0
+
+    func wheel(dx: Float, dy: Float, atX x: Float, atY y: Float) {
+        guard hasDocument else { return }
+        if ScrollRouter.controlHeld {
+            // 10% a notch, at the pointer. Multiplicative, so a zoom feels the
+            // same at 50% as at 400%.
+            zoom(to: viewport.zoom * pow(1.1, Double(dy)), anchorX: Double(x), anchorY: Double(y))
+            return
+        }
+        // A wheel has only a Y axis; Shift turns it sideways, as everywhere.
+        if ScrollRouter.shiftHeld {
+            scroll(dx: -Double(dy) * Self.pixelsPerNotch, dy: 0)
+        } else {
+            scroll(dx: -Double(dx) * Self.pixelsPerNotch, dy: -Double(dy) * Self.pixelsPerNotch)
+        }
+    }
+
+    func scroll(dx: Double, dy: Double) {
+        viewport.scrollX += dx
+        viewport.scrollY += dy
+        settle()
+    }
+
+    /// A screenful, less a line's worth so the reader keeps their place.
+    func page(_ direction: Int) {
+        scroll(dx: 0, dy: Double(direction) * max(boxHeight - Self.pixelsPerNotch, boxHeight / 2))
+    }
+
+    func goTo(page: Int) {
+        viewport = viewport.showing(
+            page: min(max(0, page), pageCount - 1), layout, boxWidth: boxWidth, boxHeight: boxHeight
+        )
+        settle()
+    }
+
+    func goToStart() { viewport.scrollY = 0; settle() }
+    func goToEnd() { viewport.scrollY = .infinity; settle() }
+
+    /// Scrollbar drag: `fraction` of the way down the column.
+    func scroll(toFraction fraction: Double) {
+        let travel = layout.height * viewport.zoom - boxHeight
+        viewport.scrollY = max(0, travel) * min(max(fraction, 0), 1)
+        settle()
+    }
+
+    // MARK: - Zoom
+
+    func setMode(_ next: ZoomMode) {
+        mode = next
+        applyMode()
+    }
+
+    /// `+`/`-`: the ladder, about the middle of the window.
+    func stepZoom(_ direction: Int) {
+        zoom(to: ReaderViewport.stepped(viewport.zoom, by: direction),
+             anchorX: boxWidth / 2, anchorY: boxHeight / 2)
+    }
+
+    func actualSize() {
+        zoom(to: ReaderViewport.actualSize, anchorX: boxWidth / 2, anchorY: boxHeight / 2)
+    }
+
+    private func zoom(to zoom: Double, anchorX: Double, anchorY: Double) {
+        guard hasDocument else { return }
+        mode = .free
+        viewport = viewport.zoomed(
+            to: zoom, anchorX: anchorX, anchorY: anchorY, layout,
+            boxWidth: boxWidth, boxHeight: boxHeight
+        )
+        settle()
+    }
+
+    private func applyMode() {
+        guard boxWidth > 0, mode != .free else { return settle() }
+        let topPoint = viewport.scrollY / viewport.zoom
+        viewport.zoom = fittedZoom
+        viewport.scrollY = topPoint * viewport.zoom
+        settle()
+    }
+
+    /// Clamps, and mirrors into the observed labels whatever changed. Every
+    /// move ends here.
+    private func settle() {
+        viewport = viewport.clamped(layout, boxWidth: boxWidth, boxHeight: boxHeight)
+        // On the tile grid's own steps and on whole pixels, or the tiles
+        // rendered for this zoom are drawn a hair off their size, or between
+        // two pixels, and resampled: the softness rendering at the exact zoom
+        // exists to avoid.
+        viewport.zoom = TileGrid.scale(ofKey: TileGrid.scaleKey(forScale: viewport.zoom))
+        viewport.scrollX = viewport.scrollX.rounded()
+        viewport.scrollY = viewport.scrollY.rounded()
+        let percent = viewport.percent
+        let page = viewport.currentPage(layout, boxWidth: boxWidth, boxHeight: boxHeight)
+        guard percent != zoomPercent || page != currentPage else {
+            ViewInvalidation.markNeedsRedraw()
+            return
+        }
+        zoomPercent = percent
+        currentPage = page
+        // Raised by hand, not left to observation: `setBox` gets here from
+        // paint, and a write made while painting does not schedule the body
+        // pass the bar needs. Raising it is not enough on its own either — the
+        // loop parks once this frame is out, and a pending level is not a
+        // wake — so ask for the iteration that will act on it.
+        ViewInvalidation.markDirty()
+        FrameScheduler.requestWake(in: 0)
+    }
+
+    // MARK: - Text
+
+    /// The text of `page`, read once and kept. A few milliseconds a page, on
+    /// the main thread's own document, so it never waits behind a render.
+    func text(page: Int) -> PageText? {
+        if let known = pageText[page] { return known }
+        guard let document else { return nil }
+        let text = document.text(page: page)
+        pageText[page] = text
+        return text
+    }
+
+    /// Where a window position lands: the page and the point on it.
+    func pagePoint(x: Float, y: Float) -> (page: Int, x: Double, y: Double)? {
+        let point = viewport.documentPoint(layout, boxWidth: boxWidth, x: Double(x), y: Double(y))
+        guard let page = layout.page(atX: point.x, y: point.y) else { return nil }
+        let frame = layout.frames[page]
+        return (page, point.x - frame.x, point.y - frame.y)
+    }
+
+    /// The same, but clamped onto `page`, for a drag that has left it.
+    private func point(onPage page: Int, x: Float, y: Float) -> (x: Double, y: Double) {
+        let point = viewport.documentPoint(layout, boxWidth: boxWidth, x: Double(x), y: Double(y))
+        let frame = layout.frames[page]
+        return (min(max(point.x - frame.x, 0), frame.width), min(max(point.y - frame.y, 0), frame.height))
+    }
+
+    func beginSelection(x: Float, y: Float, clickCount: Int) {
+        guard let hit = pagePoint(x: x, y: y),
+              let text = text(page: hit.page),
+              let index = text.index(nearestX: hit.x, y: hit.y)
+        else {
+            clearSelection()
+            return
+        }
+        if clickCount >= 2, let word = text.word(containing: index) {
+            selection = Selection(page: hit.page, anchor: word.lowerBound, head: word.upperBound)
+        } else {
+            selection = Selection(page: hit.page, anchor: index, head: index)
+            // Nothing selected until the pointer moves: a plain click is a
+            // click, not a one-character selection.
+            pressOnly = true
+        }
+        ViewInvalidation.markNeedsRedraw()
+    }
+
+    @ObservationIgnored private var pressOnly = false
+
+    func extendSelection(x: Float, y: Float) {
+        guard var current = selection, let text = text(page: current.page) else { return }
+        let point = point(onPage: current.page, x: x, y: y)
+        guard let index = text.index(nearestX: point.x, y: point.y) else { return }
+        pressOnly = false
+        current.head = index
+        selection = current
+        ViewInvalidation.markNeedsRedraw()
+    }
+
+    func endSelection() {
+        if pressOnly { selection = nil }
+        pressOnly = false
+        // The primary selection, as every X and Wayland reader does: select,
+        // then middle-click into a terminal.
+        if let text = selectedText { ClipboardBridge.primaryWriter?(text) }
+        ViewInvalidation.markNeedsRedraw()
+    }
+
+    func clearSelection() {
+        selection = nil
+        pressOnly = false
+        ViewInvalidation.markNeedsRedraw()
+    }
+
+    var selectedText: String? {
+        guard let selection, let text = text(page: selection.page) else { return nil }
+        let copied = text.text(in: selection.range)
+        return copied.isEmpty ? nil : copied
+    }
+
+    func copySelection() {
+        guard let text = selectedText else { return }
+        ClipboardBridge.writer?(text)
+    }
+
+    /// The whole page under the middle of the window, Ctrl+A style. A
+    /// document-wide select-all is the cross-page selection this lacks.
+    func selectPage() {
+        guard let text = text(page: currentPage), !text.isEmpty else { return }
+        selection = Selection(page: currentPage, anchor: 0, head: text.characters.count - 1)
+        ViewInvalidation.markNeedsRedraw()
+    }
+
+    // MARK: - Find
+
+    func openFind() {
+        findOpen = true
+    }
+
+    func closeFind() {
+        findOpen = false
+        clearSearch()
+        ViewInvalidation.markNeedsRedraw()
+    }
+
+    private func clearSearch() {
+        searchGeneration += 1
+        matches = []
+        matchIndex = nil
+        searching = false
+    }
+
+    /// Enter in the find field: search afresh for a new query, otherwise step
+    /// to the next match.
+    func findNext(_ direction: Int = 1) {
+        guard hasDocument, !query.isEmpty else { return }
+        if query != searchedQuery {
+            search(query)
+            return
+        }
+        guard !matches.isEmpty else { return }
+        let count = matches.count
+        matchIndex = ((matchIndex ?? (direction > 0 ? -1 : 0)) + direction + count) % count
+        reveal(matchIndex!)
+    }
+
+    @ObservationIgnored private var searchedQuery = ""
+
+    /// Every page, on a worker with a document of its own, matches arriving
+    /// a page at a time so the first is shown before the last page is read.
+    private func search(_ needle: String) {
+        guard let path else { return }
+        clearSearch()
+        searchedQuery = needle
+        searching = true
+        let generation = searchGeneration
+        let pages = pageCount
+        // Strong: the session lives as long as the window, and a weak
+        // capture cannot cross into the posts below in Swift 6.
+        Thread.detachNewThread { [self] in
+            guard let document = try? PDFDocument(path: path) else {
+                MainQueue.async { [self] in searching = false }
+                return
+            }
+            for page in 0..<pages {
+                let found = document.text(page: page).find(needle)
+                guard !found.isEmpty else { continue }
+                MainQueue.async { [self] in
+                    guard searchGeneration == generation else { return }
+                    let first = self.matches.isEmpty
+                    self.matches.append(contentsOf: found.map { (page, $0) })
+                    if first {
+                        self.matchIndex = 0
+                        self.reveal(0)
+                    }
+                    ViewInvalidation.markNeedsRedraw()
+                }
+            }
+            MainQueue.async { [self] in
+                guard searchGeneration == generation else { return }
+                searching = false
+            }
+        }
+    }
+
+    private func reveal(_ index: Int) {
+        let match = matches[index]
+        guard let text = text(page: match.page),
+              let box = text.boxes(for: match.range).first
+        else { return }
+        let frame = layout.frames[match.page]
+        let documentBox = Box(x: frame.x + box.x, y: frame.y + box.y, width: box.width, height: box.height)
+        viewport = viewport.revealing(documentBox, layout, boxWidth: boxWidth, boxHeight: boxHeight)
+        settle()
+    }
+
+    /// Matches on `page`, and which of them — if any — is the current one.
+    func matches(onPage page: Int) -> [(range: ClosedRange<Int>, current: Bool)] {
+        guard !matches.isEmpty else { return [] }
+        var result: [(range: ClosedRange<Int>, current: Bool)] = []
+        for (index, match) in matches.enumerated() where match.page == page {
+            result.append((match.range, index == matchIndex))
+        }
+        return result
+    }
+
+    var findStatus: String {
+        if query.isEmpty || query != searchedQuery { return "" }
+        if matches.isEmpty { return searching ? "Searching…" : "No matches" }
+        let position = (matchIndex ?? 0) + 1
+        return searching ? "\(position) of \(matches.count)…" : "\(position) of \(matches.count)"
+    }
+}

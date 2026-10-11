@@ -50,6 +50,7 @@ var products: [Product] = [
     .executable(name: "LavaSpotify", targets: ["SpotifyApp"]),
     .executable(name: "LavaWeather", targets: ["WeatherApp"]),
     .executable(name: "LavaView", targets: ["LavaViewApp"]),
+    .executable(name: "LavaPDF", targets: ["LavaPDFApp"]),
     .executable(name: "LavaShot", targets: ["LavaShotApp"]),
     .executable(name: "LavaExplorer", targets: ["LavaExplorerApp"]),
     .executable(name: "LavaTerm", targets: ["LavaTermApp"]),
@@ -359,6 +360,11 @@ var targets: [Target] = [
     .executableTarget(
         name: "LavaViewApp",
         dependencies: ["LavaUI", "LavaHost", "LavaViewCore"],
+        swiftSettings: interopCxx
+    ),
+    .executableTarget(
+        name: "LavaPDFApp",
+        dependencies: ["LavaUI", "LavaHost", "LavaPDFCore"],
         swiftSettings: interopCxx
     ),
     .executableTarget(

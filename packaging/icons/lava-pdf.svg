@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title desc">
+  <title id="title">LavaPDF</title>
+  <desc id="desc">A page of text with a folded corner on a dark rounded tile — the LavaPDF application icon.</desc>
+  <defs>
+    <linearGradient id="tile" x1="96" y1="64" x2="416" y2="448" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#5a2f3a"/>
+      <stop offset="1" stop-color="#24131c"/>
+    </linearGradient>
+  </defs>
+  <rect x="28" y="28" width="456" height="456" rx="116" fill="url(#tile)"/>
+  <!-- The page, with its corner folded the way paper is -->
+  <path d="M148 104 H318 L372 158 V408 H148 Z" fill="#f6f3ee"/>
+  <path d="M318 104 V158 H372 Z" fill="#d8d1c6"/>
+  <!-- Lines of text, one of them selected the way the reader highlights -->
+  <rect x="178" y="190" width="164" height="14" rx="7" fill="#3a3340"/>
+  <rect x="178" y="226" width="164" height="14" rx="7" fill="#3a3340"/>
+  <rect x="170" y="254" width="148" height="30" rx="6" fill="#4d84ff" fill-opacity="0.45"/>
+  <rect x="178" y="262" width="132" height="14" rx="7" fill="#3a3340"/>
+  <rect x="178" y="298" width="164" height="14" rx="7" fill="#3a3340"/>
+  <rect x="178" y="334" width="104" height="14" rx="7" fill="#3a3340"/>
+</svg>

@@ -465,10 +465,10 @@ Sources/
   LavaView*/       LavaView — image viewer (core headless + app). Fit / 1:1,
                    wheel zoom at the cursor, the folder as a cycle, and two
                    rotate buttons that can write the turn back to the file
-  LavaPDFCore/     PDF model, headless: poppler through CLavaPDF's C API
-                   (no C++ interop above it), page text with selection and
-                   search, continuous layout, tiles at √2 zoom levels.
-                   Renders BGRX for `uploadPixels`; no app yet
+  LavaPDF*/        PDF reader (core headless + app). Poppler through
+                   CLavaPDF's C API, so no C++ interop above it; tiles at the
+                   exact zoom, rendered a window per page on two workers and
+                   uploaded with `uploadPixels`; select, copy, find
   LavaExplorer*/   File manager (core headless + app). Split panes and tabs,
                    copy by drop, the freedesktop Trash; no rename yet
   FBDModel/        Function-block diagram model
