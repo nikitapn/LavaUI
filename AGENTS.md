@@ -1286,7 +1286,7 @@ so headless test runs skip it too.
 | Minimum window size | IDL `SetMinSize`, `SurfaceRegistry::minFor`, `LavaClient.setMinimumSize` |
 | Focus, including clicking the desktop | `Server::focusSurface`, `Server::blurAll` |
 | Print Screen → clipboard | `Server::requestScreenshot`, `Clipboard::setImagePng` |
-| Texture batching / descriptor budget | `QuadRenderer::bindTexture`, `ImageAtlas` |
+| Bindless texture table / its overflow | `QuadRenderer::textureSlot`, `ImageAtlas` |
 | Blur (backdrop + content) | `BlurPass`, `quad.frag` kinds 2/6, `DrawList.withBlurScope` |
 | Terminal reflow on resize | `TerminalScreen.reflow`, `rowWrapped` |
 | Perf scenarios | `Sources/LavaBench/`, `docs/performance.md` |
