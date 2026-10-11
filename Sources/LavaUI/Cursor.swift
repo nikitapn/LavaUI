@@ -115,7 +115,8 @@ public enum CursorBridge {
     static func resolve(
         _ id: NodeID, in node: any AnyViewNode
     ) -> CursorShape?? {
-        let own = (node as? YogaBoxNode)?.cursor
+        var own = (node as? YogaBoxNode)?.cursor
+        if let leaf = node as? LeafNode, let asked = leaf.pointerCursor { own = asked }
         if node.id == id { return .some(own) }
         for child in node.childNodes {
             guard let inner = resolve(id, in: child) else { continue }

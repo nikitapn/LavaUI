@@ -520,6 +520,12 @@ final class LeafNode: YogaBoxNode {
         }
     }
 
+    /// The cursor `onPointerMove` last asked for at the pointer's position, or
+    /// nil for the node's own. Read by `CursorBridge.resolve` ahead of the
+    /// static `.cursor`, which cannot know that this part of the canvas is a
+    /// link and that one is not.
+    var pointerCursor: CursorShape?
+
     deinit {
         // A leaf can go away with its handler still installed — an unmount, a
         // window closing — and the count has to come back down, or the walk

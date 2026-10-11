@@ -115,6 +115,16 @@ public struct Canvas: PrimitiveView {
     public var onWheel: ((_ dx: Float, _ dy: Float, _ localX: Float, _ localY: Float) -> Void)?
     /// Called with `true` when the pointer enters the canvas and `false` when it leaves.
     public var onHover: ((Bool) -> Void)?
+    /// Called as the pointer moves over the canvas with no button held, with
+    /// its position relative to the canvas's top-left. Returns the cursor to
+    /// show there, or nil for the canvas's own `.cursor`.
+    ///
+    /// For a canvas whose pointer depends on what is under it — a link in a
+    /// document, a handle in a diagram. The renderer says which *node* is
+    /// hovered and can never say where inside one, so this is the one hover
+    /// question that comes back to the app, and only for canvases that ask.
+    /// Runs on every coalesced move, so keep it to a lookup.
+    public var onPointerMove: ((_ localX: Float, _ localY: Float) -> CursorShape?)?
     /// Draws the canvas. Called on every emit with the canvas's window-space frame.
     /// Emit commands into the `DrawList`; anything drawn outside the frame is not clipped.
     public var paint: (DrawList, CanvasFrame) -> Void
@@ -132,6 +142,7 @@ public struct Canvas: PrimitiveView {
         onGesture: ((CanvasGesture) -> Void)? = nil,
         onWheel: ((_ dx: Float, _ dy: Float, _ localX: Float, _ localY: Float) -> Void)? = nil,
         onHover: ((Bool) -> Void)? = nil,
+        onPointerMove: ((_ localX: Float, _ localY: Float) -> CursorShape?)? = nil,
         paint: @escaping (DrawList, CanvasFrame) -> Void
     ) {
         self.label = label
@@ -145,6 +156,7 @@ public struct Canvas: PrimitiveView {
         self.onGesture = onGesture
         self.onWheel = onWheel
         self.onHover = onHover
+        self.onPointerMove = onPointerMove
         self.paint = paint
     }
 
@@ -275,6 +287,18 @@ public struct Canvas: PrimitiveView {
             }
         } else {
             ScrollRouter.unregister(leaf.id)
+        }
+
+        if let move = onPointerMove {
+            // The local walk only stops at a leaf that is a hover target, and
+            // an empty `onHover` is what makes one — the wheel's trick above.
+            if leaf.onHover == nil { leaf.onHover = { _ in } }
+            leaf.onPointerHoverLocal = { [weak leaf] x, y in
+                leaf?.pointerCursor = move(x, y)
+            }
+        } else if leaf.onPointerHoverLocal != nil {
+            leaf.onPointerHoverLocal = nil
+            leaf.pointerCursor = nil
         }
 
         leaf.syncContinuousRedraw()

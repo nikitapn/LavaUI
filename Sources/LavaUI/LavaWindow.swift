@@ -625,6 +625,15 @@ public final class LavaWindow {
                 // discarded: two answers to "what is hovered" is a bug
                 // waiting for the frame where they disagree.
                 _ = host.hitTestHover(x: ev.x, y: ev.y, originY: menuH)
+                // A widget may have just changed its mind about the cursor
+                // without the hovered node changing — a canvas whose pointer
+                // went onto a link — and the cursor is otherwise only resolved
+                // when it does. Asked of the renderer's hovered node, so there
+                // is still one answer to what is under the pointer; only the
+                // shape is asked again. `apply` drops a repeat of the shape.
+                CursorBridge.hover(
+                    HoverState.current, in: host.rootNode, window: id, editor: editor
+                )
             }
         case .mouseUp:
             pendingFileDrag = nil

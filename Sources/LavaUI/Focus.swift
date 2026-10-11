@@ -596,6 +596,9 @@ public enum HoverState {
     /// Whether `id` is the node under the pointer.
     public static func isHovered(_ id: NodeID) -> Bool { hovered == id }
 
+    /// The node under the pointer, as the renderer last said.
+    static var current: NodeID? { hovered }
+
     /// Calls `handler` with `true` when the pointer enters `id` and `false` when it leaves.
     public static func register(_ id: NodeID, handler: @escaping (Bool) -> Void) {
         handlers[id] = handler
