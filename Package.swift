@@ -82,6 +82,7 @@ var products: [Product] = [
     .library(name: "LavaShotCore", targets: ["LavaShotCore"]),
     .library(name: "LavaExplorerCore", targets: ["LavaExplorerCore"]),
     .library(name: "LavaArchive", targets: ["LavaArchive"]),
+    .library(name: "LavaPDFCore", targets: ["LavaPDFCore"]),
 ]
 
 var targets: [Target] = [
@@ -147,6 +148,21 @@ var targets: [Target] = [
     // List, extract, create — blocking, for a worker thread. No engine, so
     // hostile archives are a unit test. See Sources/LavaArchive/Archive.swift.
     .target(name: "LavaArchive", dependencies: ["CArchive"]),
+    // poppler-cpp, for opening, rendering and reading PDFs. Like CArchive,
+    // nothing to compile: it is here for the pkg-config flags and the link.
+    .systemLibrary(
+        name: "CPoppler",
+        path: "Sources/CPoppler",
+        pkgConfig: "poppler-cpp",
+        providers: [.apt(["libpoppler-cpp-dev"])]
+    ),
+    // The one C++ file that talks to poppler, behind a C API so the model
+    // above it needs no interop. See Sources/CLavaPDF/include/lava_pdf.h.
+    .target(name: "CLavaPDF", dependencies: ["CPoppler"]),
+    // Pages, tiles, and the text on a page: what to render, at what scale,
+    // and what a drag across a page selects. No engine — a reader that
+    // selects the wrong words is a test, not a screenshot.
+    .target(name: "LavaPDFCore", dependencies: ["CLavaPDF"]),
 
     .executableTarget(
         name: "TwoWindows",
@@ -372,6 +388,7 @@ var targets: [Target] = [
     .testTarget(name: "LavaTermCoreTests", dependencies: ["LavaTermCore"]),
     .testTarget(name: "WeatherCoreTests", dependencies: ["WeatherCore"]),
     .testTarget(name: "LavaViewCoreTests", dependencies: ["LavaViewCore"]),
+    .testTarget(name: "LavaPDFCoreTests", dependencies: ["LavaPDFCore"]),
     .testTarget(name: "LavaFindCoreTests", dependencies: ["LavaFindCore"]),
     .testTarget(name: "LavaShotCoreTests", dependencies: ["LavaShotCore"]),
     .testTarget(name: "LavaExplorerCoreTests", dependencies: ["LavaExplorerCore"]),

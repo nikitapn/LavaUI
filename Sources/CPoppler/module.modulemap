@@ -1,0 +1,5 @@
+module CPoppler [system] {
+    header "shim.h"
+    link "poppler-cpp"
+    export *
+}

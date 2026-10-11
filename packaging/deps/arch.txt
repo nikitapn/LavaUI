@@ -51,6 +51,7 @@ xorg-xwayland
 # ── apps ───────────────────────────────────────────────────────────────────
 libpulse
 libarchive
+poppler
 
 # ── software Vulkan ────────────────────────────────────────────────────────
 vulkan-swrast
