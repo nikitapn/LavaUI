@@ -4,25 +4,16 @@ import LavaUI
 /// The keyboard. Every binding is one a reader already has from a browser or
 /// another PDF viewer; nothing is invented.
 enum ReaderKeys {
-    /// GLFW codes `KeyCode` does not list.
-    private enum Extra {
-        static let a: Int32 = 65
-        static let c: Int32 = 67
-        static let f: Int32 = 70
-        static let g: Int32 = 71
-        static let f3: Int32 = 292
-    }
-
     static func handle(_ event: KeyEvent, session: ReaderSession) -> Bool {
         let primary = KeyMods.contains(event.mods, KeyMods.control)
         let shift = KeyMods.contains(event.mods, KeyMods.shift)
 
         if primary {
             switch event.key {
-            case Extra.f: session.openFind()
-            case Extra.g: session.findNext(shift ? -1 : 1)
-            case Extra.c: session.copySelection()
-            case Extra.a: session.selectPage()
+            case KeyCode.f: session.openFind()
+            case KeyCode.g: session.findNext(shift ? -1 : 1)
+            case KeyCode.c: session.copySelection()
+            case KeyCode.a: session.selectPage()
             case KeyCode.o: session.openDialog()
             case KeyCode.equal, KeyCode.kpAdd: session.stepZoom(1)
             case KeyCode.minus, KeyCode.kpSub: session.stepZoom(-1)
@@ -47,7 +38,7 @@ enum ReaderKeys {
         case KeyCode.end: session.goToEnd()
         case KeyCode.escape:
             if session.findOpen { session.closeFind() } else { session.clearSelection() }
-        case Extra.f3: session.findNext(shift ? -1 : 1)
+        case KeyCode.f3: session.findNext(shift ? -1 : 1)
         default: return false
         }
         return true

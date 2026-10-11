@@ -106,8 +106,30 @@ public enum KeyCode {
     public static let insert: Int32 = 260
     /// F1–F12 are 290–301 in GLFW, and so here.
     public static func function(_ n: Int32) -> Int32 { 289 + n }
+    /// F1. Same as `function(1)`.
+    public static let f1: Int32 = 290
     /// F2. Same as `function(2)`.
     public static let f2: Int32 = 291
+    /// F3. Same as `function(3)`.
+    public static let f3: Int32 = 292
+    /// F4. Same as `function(4)`.
+    public static let f4: Int32 = 293
+    /// F5. Same as `function(5)`.
+    public static let f5: Int32 = 294
+    /// F6. Same as `function(6)`.
+    public static let f6: Int32 = 295
+    /// F7. Same as `function(7)`.
+    public static let f7: Int32 = 296
+    /// F8. Same as `function(8)`.
+    public static let f8: Int32 = 297
+    /// F9. Same as `function(9)`.
+    public static let f9: Int32 = 298
+    /// F10. Same as `function(10)`.
+    public static let f10: Int32 = 299
+    /// F11. Same as `function(11)`.
+    public static let f11: Int32 = 300
+    /// F12. Same as `function(12)`.
+    public static let f12: Int32 = 301
     /// Keypad 0. Keypad digits follow on: `kp0 + n`.
     public static let kp0: Int32 = 320
     /// Keypad `-`.
