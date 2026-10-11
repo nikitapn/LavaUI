@@ -30,6 +30,20 @@
 // mapping, because the consumer does not read any pointer or offset from
 // shared memory at all.
 //
+// What it does not survive is the producer *shrinking* the object under the
+// mapping: `ftruncate` to less than the consumer mapped, and the next read past
+// the new end is a SIGBUS in the compositor. Nothing here does that — the one
+// `ftruncate` is in `create`, before any consumer exists, and growth is a new
+// generation under a new name — so it takes a client doing it on purpose. That
+// is left open deliberately, for now: a client runs as the compositor's user
+// and can already `kill` it, so truncation grants nothing a hostile one lacks.
+// It stops being true for a client that cannot signal the compositor (a
+// sandbox with its own pid namespace), and then the fix is a sealed memfd
+// (`F_SEAL_SHRINK`), which needs fd passing on the control plane. The pixel
+// arena could dodge this with `pread`; an arena read in place cannot. A
+// SIGBUS handler that maps zero pages over the hole, as libwayland does for
+// `wl_shm`, is the fallback if sealing is ever out of reach.
+//
 // # Handoff
 //
 // Triple buffered, single producer, single consumer, no blocking in either
