@@ -49,6 +49,20 @@ public enum FocusManager {
         scope.charHandler = nil
     }
 
+    /// Gives focus back if the node holding it is no longer in the tree.
+    ///
+    /// Nothing else does. A view has no unmount hook that reaches here, so a
+    /// text field removed while focused — a password bar that closes once the
+    /// password worked, a find bar shut by its own button — kept the window's
+    /// keyboard for good: every key after it went to a closure for a field
+    /// that no longer existed, and the window's default target, the reader's
+    /// shortcuts, never heard another one. Asked before each key is routed,
+    /// which is rare enough that a walk of the tree costs nothing.
+    static func releaseIfGone(_ isMounted: (NodeID) -> Bool) {
+        guard let id = WindowScope.currentOrMain.focused, !isMounted(id) else { return }
+        clear()
+    }
+
     /// Declares where keys go when *nothing* is focused.
     ///
     /// For a window whose whole purpose is one keyboard target — a terminal,

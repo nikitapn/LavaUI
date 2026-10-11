@@ -2351,6 +2351,21 @@ public final class LayoutHost {
         return nil
     }
 
+    /// Whether `id` is a node of this tree, counting what is presented in
+    /// overlays — whose subtrees hang off their attachments rather than off
+    /// `childNodes`, the same way `OverlayScan` walks them.
+    func contains(_ id: NodeID) -> Bool {
+        guard let root else { return false }
+        func walk(_ node: any AnyViewNode) -> Bool {
+            if node.id == id { return true }
+            if let box = node as? OverlayBoxNode, box.attachment.presented,
+               let inner = box.attachment.root, walk(inner)
+            { return true }
+            return node.childNodes.contains { walk($0) }
+        }
+        return walk(root)
+    }
+
     /// Dismisses everything presented. Returns true if anything was showing,
     /// so a key handler can tell whether it consumed the event.
     @discardableResult

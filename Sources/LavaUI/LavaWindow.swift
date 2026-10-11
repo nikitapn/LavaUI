@@ -707,10 +707,12 @@ public final class LavaWindow {
                 paths: DropBridge.paths(window: id, editor: editor)
             )
         case .text:
+            FocusManager.releaseIfGone { host.contains($0) }
             if let scalar = Unicode.Scalar(UInt32(bitPattern: ev.button)) {
                 _ = FocusManager.handle(character: Character(scalar))
             }
         case .key:
+            FocusManager.releaseIfGone { host.contains($0) }
             if onRawKey?(ev) == true { break }
             let isPress = ev.x > 0
             if isPress, ev.button == KeyCode.escape, host.dismissOverlays() { break }
