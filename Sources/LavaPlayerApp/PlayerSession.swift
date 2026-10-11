@@ -21,19 +21,17 @@ final class PlayerSession: @unchecked Sendable {
     private(set) var fullscreen = false
     /// When the pointer last moved over the video, for the bars' auto-hide.
     @ObservationIgnored private var lastPointerMove: Double = 0
-    /// Whether the pointer was last seen in the strip the floating bar
-    /// covers. A pointer resting *on* the bar sends the video no moves at all,
-    /// so this is the only way to know not to hide the bar from under it.
-    @ObservationIgnored private var pointerInBarZone = false
-    /// The video box's height, from the last paint, for the zone above.
-    @ObservationIgnored private var screenHeight: Float = 0
-    /// Its width, which the floating bar is laid out from — observed, so a
-    /// change rebuilds the bar. It changes only when the screen does.
+    /// Whether the pointer is on the floating bar, from its `onHover`. A
+    /// pointer resting there sends the video no moves at all, so without this
+    /// the bar would hide from under the hand using it.
+    @ObservationIgnored private var pointerOnBar = false
+    /// The video box's width, which the floating bar is laid out from —
+    /// observed, so a change rebuilds the bar. It changes only when the
+    /// screen does.
     private(set) var screenWidth: Float = 0
 
     /// From paint, every frame; only a change does anything.
-    func noteScreen(width: Float, height: Float) {
-        screenHeight = height
+    func noteScreen(width: Float) {
         if width != screenWidth {
             screenWidth = width
             ViewInvalidation.markDirty()
@@ -186,16 +184,10 @@ final class PlayerSession: @unchecked Sendable {
     /// The pointer moved: show the bars, and look again when they are due to
     /// go. `requestRedraw`, not `requestWake` — nothing else will dirty the
     /// window when the pointer stops, and the deadline *is* the event.
-    /// The pointer moved over the video, `y` from its top.
-    ///
-    /// The zone reaches well above the bar because the video never sees the
-    /// pointer *on* the bar — only on its way there. A pointer heading down to
-    /// the bar crosses the band and leaves the flag set; one that leaves the
-    /// band upwards clears it. Only a flick that jumps the whole band in one
-    /// event slips through, and then the bar hides on the usual timer.
-    func notePointer(y: Float) {
-        let zone = TransportBar.height + TransportBar.floatingInset + 96
-        pointerInBarZone = screenHeight > 0 && y >= screenHeight - zone
+    func noteBarHover(_ inside: Bool) {
+        pointerOnBar = inside
+        // Leaving the bar is activity too: the pointer is on the video now,
+        // and the bars owe it the full linger before they go.
         noteActivity()
     }
 
@@ -209,13 +201,17 @@ final class PlayerSession: @unchecked Sendable {
     /// Only in fullscreen, and never while paused — a paused video with no
     /// controls on it looks like a frozen one.
     func updateBars() {
-        let wanted = !fullscreen || state.paused || !hasMedia || pointerInBarZone
+        let wanted = !fullscreen || state.paused || !hasMedia || pointerOnBar
             || FrameScheduler.now() - lastPointerMove < Self.barsLinger
         if wanted != barsVisible {
             barsVisible = wanted
             ViewInvalidation.markDirty()
         }
     }
+
+    /// No pointer over a fullscreen video once its controls have gone, the
+    /// way every player does it; the next move brings both back.
+    var hidesCursor: Bool { fullscreen && !barsVisible }
 
     func dismissError() { error = nil }
 

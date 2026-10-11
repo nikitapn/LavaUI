@@ -33,6 +33,7 @@ struct PlayerView: View {
                                 TransportBar.floatingMaxWidth,
                                 session.screenWidth - TransportBar.floatingInset * 2
                             ))))
+                            .onHover { session.noteBarHover($0) }
                     }
                 }
             if !session.fullscreen { TransportBar(session: session, floating: false) }
@@ -63,19 +64,23 @@ struct PlayerView: View {
                 }
             },
             onWheel: { _, dy, _, _ in session.nudgeVolume(Double(dy) * 5) },
-            onPointerMove: { _, y in
-                session.notePointer(y: y)
+            onPointerMove: { _, _ in
+                session.noteActivity()
                 return nil
             },
             paint: paint
         )
         .flexGrow(1)
+        // Stated even when it is the arrow: a view with a cursor is one the
+        // renderer reports as hovered, and the hidden cursor is resolved from
+        // that — over a view it never names, there is nothing to hide it on.
+        .cursor(session.hidesCursor ? .hidden : .arrow)
         .agentId("video")
     }
 
     private func paint(_ list: DrawList, _ frame: CanvasFrame) {
         session.player.setSize(width: frame.w, height: frame.h)
-        session.noteScreen(width: frame.w, height: frame.h)
+        session.noteScreen(width: frame.w)
         session.updateBars()
         list.rect(x: frame.x, y: frame.y, w: frame.w, h: frame.h, color: Palette.mat)
 
