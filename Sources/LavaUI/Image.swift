@@ -172,6 +172,30 @@ public enum ImageStore {
         return "mem:\(String(hash, radix: 16))-\(data.count)-\(maxPixelSize)"
     }
 
+    /// Cache identity for pixels the caller rasterised: a counter, because
+    /// nothing else would ever ask for the same ones, and hashing a tile to
+    /// find that out costs more than the tile.
+    ///
+    /// Not one of this cache's keys: an upload is owned by whoever made it and
+    /// released by them, never looked up. The prefix is how a host tells, on
+    /// release, that the texture should be freed rather than kept dormant —
+    /// see `GPUResourceHost.uploadPixels`.
+    public static func pixelKey() -> String {
+        pixelKeyLock.lock()
+        defer { pixelKeyLock.unlock() }
+        pixelKeyCounter += 1
+        return "\(pixelKeyPrefix)\(pixelKeyCounter)"
+    }
+
+    /// Whether `key` came from `pixelKey()`.
+    public static func isPixelKey(_ key: String) -> Bool {
+        key.hasPrefix(pixelKeyPrefix)
+    }
+
+    private static let pixelKeyPrefix = "pixels:"
+    private static let pixelKeyLock = NSLock()
+    nonisolated(unsafe) private static var pixelKeyCounter: UInt64 = 0
+
     /// Cached image, loaded synchronously. Kept for assets an app needs before
     /// its first frame — an icon, a brand mark — where a placeholder would be
     /// worse than a stall.
@@ -395,6 +419,20 @@ public enum ImageTurn: UInt32, Equatable, Sendable, CaseIterable {
         case .anticlockwise: "+270"
         }
     }
+}
+
+/// Byte order of one pixel handed to `GPUResourceHost.uploadPixels`, in
+/// memory order.
+///
+/// The four that real rasterisers write, so a caller never swizzles: poppler's
+/// Splash writes `bgrx8`, cairo's ARGB32 is `bgra8` on a little-endian
+/// machine. Encoded sRGB, like every colour here. The `a` formats are straight
+/// alpha; the `x` formats are opaque and their fourth byte is ignored.
+public enum PixelFormat: UInt32, Equatable, Sendable, CaseIterable {
+    case rgba8 = 0
+    case bgra8 = 1
+    case rgbx8 = 2
+    case bgrx8 = 3
 }
 
 // MARK: - Content mode

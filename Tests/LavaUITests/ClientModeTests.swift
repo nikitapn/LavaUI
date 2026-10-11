@@ -269,6 +269,8 @@ final class ClientModeTests: XCTestCase {
         var fontAsks: [(path: String, pixelSize26_6: UInt32)] = []
         var imageAsks: [(path: String, maxPixelSize: UInt32)] = []
         var dataAsks: [(byteCount: Int, maxPixelSize: UInt32)] = []
+        var pixelAsks: [(width: UInt32, height: UInt32, stride: UInt32,
+                         format: PixelFormat)] = []
         var released: [String] = []
 
         static let fontID: UInt32 = 4242
@@ -301,6 +303,18 @@ final class ClientModeTests: XCTestCase {
             return UIImage(
                 path: key, cacheKey: key,
                 textureId: Self.textureID, pixelWidth: 64, pixelHeight: 48
+            )
+        }
+
+        func uploadPixels(
+            _ pixels: UnsafeRawBufferPointer, width: UInt32, height: UInt32,
+            stride: UInt32, format: PixelFormat
+        ) -> UIImage? {
+            pixelAsks.append((width, height, stride, format))
+            let key = ImageStore.pixelKey()
+            return UIImage(
+                path: key, cacheKey: key, textureId: Self.textureID,
+                pixelWidth: Float(width), pixelHeight: Float(height)
             )
         }
 
@@ -342,6 +356,27 @@ final class ClientModeTests: XCTestCase {
         // The second ask is a cache hit, not a second registration.
         _ = ImageStore.load(path: "/pretend/art.png", into: editor)
         XCTAssertEqual(host.imageAsks.count, 1, "cache missed its own entry")
+    }
+
+    /// Raw pixels take the same seam, and must not be encoded on the way:
+    /// the stride and format reach the host as the caller gave them, which is
+    /// what lets the compositor pack them in the one copy it makes anyway.
+    func testInstalledHostTakesRawPixels() throws {
+        let editor = try openClient()
+        let host = StubHost()
+        editor.resources = host
+
+        let tile = [UInt8](repeating: 0x80, count: 20 * 2 + 12)
+        let image = try XCTUnwrap(tile.withUnsafeBytes {
+            editor.uploadPixels($0, width: 3, height: 3, stride: 20, format: .bgrx8)
+        })
+        XCTAssertEqual(image.textureId, StubHost.textureID)
+        XCTAssertEqual(host.pixelAsks.count, 1)
+        XCTAssertEqual(host.pixelAsks.first?.stride, 20)
+        XCTAssertEqual(host.pixelAsks.first?.format, .bgrx8)
+        XCTAssertTrue(ImageStore.isPixelKey(image.cacheKey))
+        XCTAssertNotEqual(ImageStore.pixelKey(), ImageStore.pixelKey(),
+                          "two uploads must never share a key")
     }
 
     /// Restoring the default is what a test needs and what a misconfigured

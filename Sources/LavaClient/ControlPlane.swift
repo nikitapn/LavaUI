@@ -173,6 +173,20 @@ public final class CompositorResources: GPUResourceHost, @unchecked Sendable {
     private var images: Images?
     private var askedForImages = false
 
+    /// The shared memory raw pixels go through, and the handle the compositor
+    /// gave it. One arena, replaced by a bigger one when an upload outgrows
+    /// it, and every upload holds `pixelLock` from the copy in to the reply —
+    /// the reply is what says the region is free again, so two uploads cannot
+    /// share it. That serialises a client's uploads, which costs little: the
+    /// compositor uploads one at a time on its loop anyway.
+    private let pixelLock = NSLock()
+    private var pixelArena = canvas.ipc.PixelArena()
+    private var pixelArenaHandle: UInt32 = 0
+    private var pixelArenaSerial = 0
+    /// Set when the compositor would not attach one — too old to have the
+    /// call, most likely — so the refusal is said once, not per tile.
+    private var pixelsUnavailable = false
+
     /// Creates a host that registers resources with `compositor`.
     public init(_ compositor: Compositor) { self.compositor = compositor }
 
@@ -307,6 +321,104 @@ public final class CompositorResources: GPUResourceHost, @unchecked Sendable {
         )
     }
 
+    public func uploadPixels(
+        _ pixels: UnsafeRawBufferPointer, width: UInt32, height: UInt32,
+        stride: UInt32, format: LavaUI.PixelFormat
+    ) -> UIImage? {
+        guard width > 0, height > 0, UInt64(stride) >= UInt64(width) * 4,
+              let base = pixels.baseAddress?.assumingMemoryBound(to: UInt8.self)
+        else { return nil }
+        // Rows as the caller laid them out, padding and all: the compositor
+        // packs them as it reads, so repacking here would be a second copy.
+        let span = UInt64(stride) * UInt64(height - 1) + UInt64(width) * 4
+        guard UInt64(pixels.count) >= span else { return nil }
+        guard let images = imageHost() else { return nil }
+
+        pixelLock.lock()
+        defer { pixelLock.unlock() }
+        guard let arena = pixelArenaFitting(Int(span), images: images),
+              pixelArena.write(0, base, Int(span))
+        else { return nil }
+
+        var region = PixelRegion()
+        region.arena = arena
+        region.byteOffset = 0
+        region.width = width
+        region.height = height
+        region.stride = stride
+        region.format = format.wireFormat
+        let info: ImageInfo
+        do {
+            // A timeout here leaves the compositor perhaps still reading while
+            // the next upload writes: a torn tile, not a fault — it reads with
+            // `pread`, never through a mapping.
+            info = try blockingCall(timeout: 10) { [region] in
+                try await images.uploadPixels(region: region)
+            }
+        } catch {
+            FileHandle.standardError.write(
+                Data("UploadPixels(\(width)x\(height)) failed: \(error)\n".utf8)
+            )
+            return nil
+        }
+        let key = ImageStore.pixelKey()
+        lock.lock()
+        idsByKey[key] = info.id
+        lock.unlock()
+        return UIImage(
+            path: key, cacheKey: key, textureId: info.id,
+            pixelWidth: Float(info.width), pixelHeight: Float(info.height)
+        )
+    }
+
+    /// The handle of an attached arena of at least `bytes`, making one if the
+    /// current one is too small. Called under `pixelLock`.
+    ///
+    /// Grows to at least double, so a reader zooming in does not attach a new
+    /// arena per tile size, and starts at 8 MiB, which is a 1024² tile twice.
+    private func pixelArenaFitting(_ bytes: Int, images: Images) -> UInt32? {
+        if pixelArenaHandle != 0, pixelArena.size() >= bytes { return pixelArenaHandle }
+        if pixelsUnavailable { return nil }
+
+        let megabyte = 1 << 20
+        let wanted = max(bytes, pixelArena.size() * 2, 8 * megabyte)
+        let capacity = (wanted + megabyte - 1) / megabyte * megabyte
+        pixelArenaSerial += 1
+        // Named the way draw arenas are, for whoever is reading /dev/shm — and
+        // only until the attach below, after which the name is gone.
+        let app = ProcessInfo.processInfo.processName
+            .replacingOccurrences(of: "/", with: "-")
+            .replacingOccurrences(of: " ", with: "-")
+        let session = ControlPlane.sessionName.map { "\($0)-" } ?? ""
+        var fresh = canvas.ipc.PixelArena()
+        guard fresh.create(
+            std.string("\(app)-\(session)\(getpid())-\(pixelArenaSerial)"), capacity
+        ) else { return nil }
+
+        let name = String(fresh.name())
+        let handle: UInt32
+        do {
+            handle = try blockingCall { try await images.attachPixelArena(name: name) }
+        } catch {
+            pixelsUnavailable = true
+            FileHandle.standardError.write(
+                Data("AttachPixelArena failed (\(error)); no raw pixel uploads\n".utf8)
+            )
+            return nil
+        }
+        // The compositor holds the open file now, so the name can go: a
+        // client killed from here on leaves nothing behind in /dev/shm.
+        fresh.unlinkName()
+
+        let old = pixelArenaHandle
+        pixelArena = fresh
+        pixelArenaHandle = handle
+        if old != 0 {
+            Task.detached { try? await images.detachPixelArena(arena: old) }
+        }
+        return handle
+    }
+
     public func releaseImage(key: String) {
         lock.lock()
         let id = idsByKey.removeValue(forKey: key)
@@ -338,6 +450,18 @@ extension LavaUI.ImageTurn {
         case .clockwise: .clockwise
         case .half: .half
         case .anticlockwise: .anticlockwise
+        }
+    }
+}
+
+/// The wire's word for a pixel format, for the reason `wireTurn` gives.
+extension LavaUI.PixelFormat {
+    var wireFormat: LavaIDL.PixelFormat {
+        switch self {
+        case .rgba8: .rgba8
+        case .bgra8: .bgra8
+        case .rgbx8: .rgbx8
+        case .bgrx8: .bgrx8
         }
     }
 }

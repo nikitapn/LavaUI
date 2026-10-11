@@ -60,6 +60,49 @@ enum ImageTurn: u32 {
   anticlockwise,
 };
 
+/// The client's pixel arena could not be opened, or the handle does not name
+/// one this connection attached.
+exception PixelArenaNotFound {
+  name: string;
+}
+
+/// A region of a pixel arena that does not describe pixels inside it: the
+/// rectangle runs past the end of the arena, the stride is shorter than a
+/// row, or a side is zero or too large. Distinct from `PixelArenaNotFound`
+/// because the arena is fine and the caller's arithmetic is not.
+exception PixelRegionInvalid {
+  reason: string;
+}
+
+/// Byte order of one pixel in a pixel arena, named in memory order.
+///
+/// The four that real rasterisers write, so the client never swizzles:
+/// poppler's Splash writes `bgrx8`, cairo's ARGB32 is `bgra8` on a
+/// little-endian machine. Encoded sRGB like every other colour here
+/// (`docs/colour-and-blending.md`). The `a` formats are straight alpha; the
+/// `x` formats are opaque, and the fourth byte is ignored rather than trusted
+/// to be 0xff.
+enum PixelFormat: u32 {
+  rgba8,
+  bgra8,
+  rgbx8,
+  bgrx8,
+};
+
+/// One rectangle of pixels inside an attached pixel arena.
+message PixelRegion {
+  /// From `Images.AttachPixelArena`.
+  arena: u32;
+  /// Byte offset of the first row. Not `offset`, which every generated
+  /// `_Direct` accessor already has and would collide with.
+  byteOffset: u64;
+  width: u32;
+  height: u32;
+  /// Bytes from one row to the next, at least `width * 4`.
+  stride: u32;
+  format: PixelFormat;
+}
+
 /// Which screen edge a panel is docked to.
 ///
 /// A panel does not choose where it is, only which side it is on: the
@@ -2405,4 +2448,66 @@ interface Images {
   /// `Compositor.RegisterImageData`, decoded off the loop.
   ImageInfo RegisterImageData(bytes: in vector<u8>, maxPixelSize: in u32)
       raises(ImageNotFound);
+
+  // ─── Raw pixels ────────────────────────────────────────────────────────
+  //
+  // For pixels the client rasterised itself — a PDF page, a chart, a frame of
+  // anything — where `RegisterImageData` would mean encoding a picture only
+  // so the renderer can decode it again, and a reply that cannot carry a
+  // 1024² tile anyway (512 KiB per shared-memory message). The pixels go
+  // through a shared-memory object the client creates and fills; this
+  // interface only names regions of it, which keeps the rule at the top of
+  // the file: no pixels on RPC.
+
+  /// Opens a shared-memory object the client created, and returns the handle
+  /// later calls name it by.
+  ///
+  /// The client creates it and the renderer attaches, the same direction as
+  /// a draw arena and for the same reason: the client knows how much it
+  /// needs. `name` is the `shm_open` name and must begin `/lava-pixels-`, so
+  /// this cannot be used to open some other mapping by name. The client may
+  /// `shm_unlink` it as soon as this returns: what the renderer holds is
+  /// the open file, not the name, so a client that is later killed leaves
+  /// nothing behind in `/dev/shm`.
+  ///
+  /// **Read, never mapped.** The renderer reads each region with `pread`, so
+  /// a client that truncates the object under it gets a short read and
+  /// `PixelRegionInvalid`, where a mapping would have taken the compositor
+  /// down with SIGBUS.
+  ///
+  /// Leased to the connection like a registration, and closed with everything
+  /// else when the session's last input subscription ends. A few per
+  /// connection at most, since each is an open file in the compositor; a
+  /// client that outgrows its arena attaches a bigger one and detaches the
+  /// old one.
+  u32 AttachPixelArena(name: in string) raises(PixelArenaNotFound);
+
+  /// Closes it. Images already uploaded from it stay valid: they are
+  /// textures now, and nothing about them refers back to the arena. A handle
+  /// already detached, or never attached, is ignored, as `ReleaseImage` does.
+  void DetachPixelArena(arena: in u32);
+
+  /// Uploads one region of an attached arena as a new texture, and returns
+  /// its id and size.
+  ///
+  /// **The region is lent for the length of the call and no longer.** By the
+  /// time the reply arrives the pixels have been read, and the client may
+  /// write over them straight away. That is the whole synchronisation
+  /// protocol: there is no fence or "done reading" message, because the reply
+  /// already serves as one.
+  ///
+  /// **Not content-addressed, and not idempotent.** Hashing four megabytes to
+  /// find a tile nobody else will ever ask for is pure cost, so every call is
+  /// a new texture. `Compositor.ReleaseImage` *discards* it rather than
+  /// letting it go dormant, since no later call could name it again (see
+  /// `TextureManager::discardTexture`). Counted against `LAVA_IMAGE_BUDGET_MB`
+  /// like any other standalone texture.
+  ///
+  /// There is no in-place update yet. A tile pool or a video would want one,
+  /// so that a frame is a copy rather than an allocation and a descriptor
+  /// set. The texture cache has no way to overwrite a texture that frames in
+  /// flight may still be sampling, and that is the work to do when something
+  /// needs it.
+  ImageInfo UploadPixels(region: in PixelRegion)
+      raises(PixelArenaNotFound, PixelRegionInvalid);
 }

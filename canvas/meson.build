@@ -10,6 +10,7 @@ canvas_engine_sources = files(
   'src/application.cpp',
   'src/bridge/canvas_engine.cpp',
   'src/ipc/draw_arena.cpp',
+  'src/ipc/pixel_arena.cpp',
   'src/menu/app_menu.cpp',
   'src/menu/glib_wait.cpp',
   'src/menu/menu_import.cpp',
@@ -109,6 +110,14 @@ draw_arena_test = executable(
   build_by_default: false,
 )
 test('draw arena', draw_arena_test)
+
+pixel_arena_test = executable(
+  'pixel_arena_test',
+  ['tests/pixel_arena_test.cpp', 'src/ipc/pixel_arena.cpp'],
+  include_directories: canvas_includes,
+  build_by_default: false,
+)
+test('pixel arena', pixel_arena_test)
 
 font_digest_test = executable(
   'font_digest_test',

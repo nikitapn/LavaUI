@@ -6,6 +6,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#include <atomic>
 #include <condition_variable>
 #include <deque>
 #include <cstdio>
@@ -24,6 +25,7 @@
 
 #include "config.hpp"
 #include "gen/lava.hpp"
+#include "ipc/pixel_arena.hpp"
 #include "render/draw_command.hpp"
 #include "wlr.hpp"
 
@@ -811,6 +813,99 @@ std::string image_content_key(const uint8_t *bytes, size_t count,
          std::to_string(maxPixelSize);
 }
 
+/// How a raw-pixel upload is named: a counter, never content.
+///
+/// No other key starts this way, and `dropImageUser` reads the prefix to
+/// *discard* such a texture rather than park it: nothing can ever name it
+/// again, so a dormant copy would only be memory the budget has to notice.
+constexpr std::string_view kPixelKeyPrefix = "pixels:";
+
+std::string pixel_key() {
+  static std::atomic<uint64_t> next{1};
+  return std::string(kPixelKeyPrefix) + std::to_string(next.fetch_add(1));
+}
+
+canvas::ipc::PixelFormat asArenaFormat(PixelFormat format) {
+  // Value for value, but spelled out: an unknown wire value has to fail the
+  // layout check rather than become a valid format by accident.
+  switch (format) {
+    case PixelFormat::rgba8: return canvas::ipc::PixelFormat::Rgba8;
+    case PixelFormat::bgra8: return canvas::ipc::PixelFormat::Bgra8;
+    case PixelFormat::rgbx8: return canvas::ipc::PixelFormat::Rgbx8;
+    case PixelFormat::bgrx8: return canvas::ipc::PixelFormat::Bgrx8;
+  }
+  return static_cast<canvas::ipc::PixelFormat>(~0u);
+}
+
+/// The pixel arenas clients attached, by handle.
+///
+/// Locked rather than loop-only like the image tables, because almost all of
+/// its traffic is on RPC workers: attach, detach and every read come through
+/// `Images`, and only a session ending arrives from the loop. A reader is
+/// shared out for the length of one read, so a detach racing an upload closes
+/// the file after the read rather than under it.
+class PixelArenas {
+ public:
+  /// Each is an open file in the compositor, and a client needs one, or two
+  /// for the moment it moves to a bigger one.
+  static constexpr size_t kPerSession = 4;
+
+  /// The handle, or 0 if the name would not open or the session has its fill.
+  uint32_t attach(const void *session, const std::string &name) {
+    canvas::ipc::PixelArenaReader reader;
+    if (!reader.open(name)) return 0;
+    std::lock_guard lock(mutex_);
+    size_t held = 0;
+    for (const auto &[handle, entry] : arenas_) held += entry.session == session;
+    if (held >= kPerSession) {
+      wlr_log(WLR_ERROR, "pixel arena %s refused: a client may hold %zu",
+              name.c_str(), kPerSession);
+      return 0;
+    }
+    if (next_ == 0) next_ = 1;
+    const uint32_t handle = next_++;
+    arenas_.emplace(handle,
+                    Entry{session, std::make_shared<const canvas::ipc::PixelArenaReader>(
+                                       std::move(reader))});
+    return handle;
+  }
+
+  /// Only the session's own: a handle is a small integer, and guessing
+  /// another client's must not close it.
+  void detach(const void *session, uint32_t handle) {
+    std::lock_guard lock(mutex_);
+    auto it = arenas_.find(handle);
+    if (it != arenas_.end() && it->second.session == session) arenas_.erase(it);
+  }
+
+  /// Null unless `handle` is one `session` attached. Reading another
+  /// client's pixels by guessing its handle is the thing this refuses.
+  std::shared_ptr<const canvas::ipc::PixelArenaReader>
+  find(const void *session, uint32_t handle) const {
+    std::lock_guard lock(mutex_);
+    auto it = arenas_.find(handle);
+    if (it == arenas_.end() || it->second.session != session) return nullptr;
+    return it->second.reader;
+  }
+
+  /// Closes everything `session` still had attached.
+  size_t dropSession(const void *session) {
+    std::lock_guard lock(mutex_);
+    return std::erase_if(arenas_, [session](const auto &item) {
+      return item.second.session == session;
+    });
+  }
+
+ private:
+  struct Entry {
+    const void *session = nullptr;
+    std::shared_ptr<const canvas::ipc::PixelArenaReader> reader;
+  };
+  mutable std::mutex mutex_;
+  std::unordered_map<uint32_t, Entry> arenas_;
+  uint32_t next_ = 1;
+};
+
 InputEvent make_event(uint32_t kind, float x, float y, int32_t button,
                       int32_t mods) {
   InputEvent event{};
@@ -935,6 +1030,10 @@ class CompositorImpl final : public ICompositor_Servant {
   /// The connection the current dispatch is for. Public for `Images`, which
   /// reads it the same way and must read it at the same moment.
   static const void *sessionOfCall() { return callingSession(); }
+
+  /// The pixel arenas `Images` attaches. Kept here so a session ending —
+  /// which only this side hears about — closes them with its images.
+  PixelArenas &pixelArenas() { return pixelArenas_; }
 
   // ─── Surfaces ────────────────────────────────────────────────────────────
 
@@ -1988,6 +2087,9 @@ class CompositorImpl final : public ICompositor_Servant {
     if (--it->second > 0) return;
     sessionSubscriptions_.erase(it);
     releaseSessionImages(session);
+    if (const size_t closed = pixelArenas_.dropSession(session)) {
+      wlr_log(WLR_INFO, "session gone: %zu pixel arena(s) closed", closed);
+    }
   }
 
   /// Hands back every registration the session never released.
@@ -2049,7 +2151,11 @@ class CompositorImpl final : public ICompositor_Servant {
       imageKeys_.erase(idIt->second.id);
       imageIds_.erase(idIt);
     }
-    host_.releaseImage(key);
+    if (key.starts_with(kPixelKeyPrefix)) {
+      host_.discardImage(key);
+    } else {
+      host_.releaseImage(key);
+    }
   }
 
   /// What `key` was registered as, if anything, counting one more user.
@@ -2080,7 +2186,10 @@ class CompositorImpl final : public ICompositor_Servant {
     // Keyed by the id the client will use, so `ReleaseImage` needs no
     // agreement between the two sides about how a cache key is spelled.
     imageKeys_[id] = key;
-    wlr_log(WLR_INFO, "image %u: %ux%u '%s'", id, width, height, key.c_str());
+    // A raw upload is a tile, and a reader makes hundreds of them, so those go
+    // to debug. A registration names a file someone may be looking for.
+    wlr_log(key.starts_with(kPixelKeyPrefix) ? WLR_DEBUG : WLR_INFO,
+            "image %u: %ux%u '%s'", id, width, height, key.c_str());
     return info;
   }
 
@@ -2117,6 +2226,7 @@ class CompositorImpl final : public ICompositor_Servant {
   std::unordered_map<const void *, std::unordered_map<std::string, uint32_t>>
       imagesBySession_;
   std::unordered_map<const void *, uint32_t> sessionSubscriptions_;
+  PixelArenas pixelArenas_;
 };
 
 
@@ -2167,6 +2277,49 @@ class ImagesImpl final : public IImages_Servant {
     if (auto stored = loop_.call([&] { return compositor_.storeImage(key, decoded, session); }))
       return *stored;
     throw ImageNotFound(what);
+  }
+
+  uint32_t AttachPixelArena(nprpc::flat::Span<char> name) override {
+    const std::string arena{name};
+    const uint32_t handle =
+        compositor_.pixelArenas().attach(CompositorImpl::sessionOfCall(), arena);
+    if (handle == 0) throw PixelArenaNotFound(arena);
+    return handle;
+  }
+
+  void DetachPixelArena(uint32_t arena) override {
+    compositor_.pixelArenas().detach(CompositorImpl::sessionOfCall(), arena);
+  }
+
+  /// Read on this worker, uploaded on the loop, like a decode with the
+  /// decode replaced by a `pread`. The reply is what tells the client the
+  /// region is free again, so it must not be sent before the read is done —
+  /// which, with the read on this thread, it cannot be.
+  ImageInfo UploadPixels(flat::PixelRegion_Direct region) override {
+    const void *session = CompositorImpl::sessionOfCall();
+    const auto reader = compositor_.pixelArenas().find(session, region.arena());
+    if (!reader) {
+      throw PixelArenaNotFound("pixel arena " + std::to_string(region.arena()));
+    }
+    canvas::ipc::PixelLayout layout;
+    layout.offset = region.byteOffset();
+    layout.width = region.width();
+    layout.height = region.height();
+    layout.stride = region.stride();
+    layout.format = asArenaFormat(region.format());
+
+    canvas::DecodedImage pixels;
+    if (const char *why = reader->read(layout, pixels.pixels)) {
+      throw PixelRegionInvalid(why);
+    }
+    pixels.width = layout.width;
+    pixels.height = layout.height;
+    const std::string key = pixel_key();
+    if (auto stored = loop_.call([&] { return compositor_.storeImage(key, pixels, session); }))
+      return *stored;
+    // Not the region's fault, but the only refusal the call declares; the
+    // reason says which it was.
+    throw PixelRegionInvalid("the renderer could not upload it");
   }
 
  private:

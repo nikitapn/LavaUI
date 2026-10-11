@@ -78,6 +78,10 @@ struct CompositorHost {
   /// Drops the compositor's reference to `key`.
   virtual void releaseImage(const std::string &key) = 0;
 
+  /// The same, for a key nothing can ask for again (a raw-pixel upload):
+  /// freed, not left dormant. See `TextureManager::discardTexture`.
+  virtual void discardImage(const std::string &key) = 0;
+
   /// What was dropped on `surfaceId` since the last time it asked, and clears
   /// it. Empty for a surface nothing was dropped on, which is every surface
   /// almost all of the time — the client only asks when an event told it to.

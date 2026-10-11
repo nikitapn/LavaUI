@@ -32,6 +32,7 @@ let engineSources: [String] = [
     "application.cpp",
     "bridge/canvas_engine.cpp",
     "ipc/draw_arena.cpp",
+    "ipc/pixel_arena.cpp",
     "menu/app_menu.cpp",
     "menu/glib_wait.cpp",
     "menu/menu_import.cpp",

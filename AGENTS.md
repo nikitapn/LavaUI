@@ -201,6 +201,17 @@ Consequences that surprise people:
   file belongs to whoever receives the path, and nothing else deletes it. A
   call that returns bytes and *sometimes* fits is the shape to avoid — it works
   in testing and breaks on somebody's 4K monitor.
+- **Pixels a client rasterised itself go through a pixel arena**
+  (`canvas/src/ipc/pixel_arena.*`, `Images.AttachPixelArena` /
+  `UploadPixels`, `GPUResourceHost.uploadPixels`). Still not bytes on RPC:
+  the client writes into a `/lava-pixels-*` shm object, unlinks the name once
+  the compositor has attached, and the call names a region. Three things are
+  load-bearing. The compositor `pread`s rather than maps, so a client that
+  truncates the object gets an error, not a SIGBUS in the compositor. The
+  reply *is* the "done reading" signal, so a client must not reuse the region
+  before it. And an upload is never content-addressed: its key is
+  `pixels:<n>`, and release *discards* it instead of parking it dormant. No
+  in-place update exists yet; a video player will want one.
 - **A drop on a Lava window is the compositor's to deliver.** wlroots cannot do
   it: its drop path needs a `wl_surface` to have taken the drag focus, and a
   client that draws through the control plane has none — as far as Wayland is

@@ -3290,6 +3290,10 @@ class SurfaceRegistry : public lava::CompositorHost {
     if (renderer_) renderer_->releaseImage(key);
   }
 
+  void discardImage(const std::string &key) override {
+    if (renderer_) renderer_->discardImage(key);
+  }
+
   /// Files released over a surface, waiting for the client to ask.
   ///
   /// A queue rather than a slot, so two quick drops are two drops, and bounded

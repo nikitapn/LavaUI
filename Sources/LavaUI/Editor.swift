@@ -560,6 +560,21 @@ public final class Editor: @unchecked Sendable {
         engine.unloadTexture(std.string(path))
     }
 
+    /// Frees `key` rather than leaving it dormant — for a texture nothing will
+    /// ask for by name again. See `TextureManager::discardTexture`.
+    func discardImage(key: String) {
+        engine.discardTexture(std.string(key))
+    }
+
+    /// Packed RGBA8 at `rgba` onto the device as `key`, with no copy on the way
+    /// — `uploadImage` takes an array, which a caller holding a pointer would
+    /// have to make. Texture id, or ≤ 0.
+    func uploadTexture(
+        key: String, rgba: UnsafePointer<UInt8>, width: UInt32, height: UInt32
+    ) -> Int32 {
+        engine.uploadTexture(std.string(key), rgba, width, height)
+    }
+
 
     /// Raw input: mouse, resize, key (see `InputEventKind`).
     public func pollInputEvent(window: WindowID = .main) -> InputEvent? {

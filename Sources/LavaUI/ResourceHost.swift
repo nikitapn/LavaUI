@@ -1,3 +1,4 @@
+import CxxCanvas
 import Foundation
 
 /// Who names the things that live on a GPU.
@@ -74,6 +75,28 @@ public protocol GPUResourceHost: AnyObject, Sendable {
     ///
     /// Blocks, like its sibling.
     func registerImage(data: [UInt8], maxPixelSize: UInt32) -> UIImage?
+
+    /// Uploads pixels the caller rasterised itself — a PDF page, a chart —
+    /// as a new texture.
+    ///
+    /// `pixels` holds `height` rows `stride` bytes apart, the last of which
+    /// needs only `width * 4`. The bytes are read before this returns, so the
+    /// caller may reuse its buffer at once. Nil if the buffer is shorter than
+    /// that, or the host could not take it.
+    ///
+    /// **Every call is a new texture**, under a key from
+    /// `ImageStore.pixelKey()`, and `releaseImage(key:)` frees it rather than
+    /// keeping it dormant: nothing could ever ask for the same pixels again.
+    /// Not cached by `ImageStore`; the caller owns the handle and releases it.
+    ///
+    /// Blocks. Under a compositor this is a copy into shared memory and one
+    /// round trip, from any thread. The built-in renderer uploads to its own
+    /// device, which is the main thread's alone, so on `Editor` call it from
+    /// there.
+    func uploadPixels(
+        _ pixels: UnsafeRawBufferPointer, width: UInt32, height: UInt32,
+        stride: UInt32, format: PixelFormat
+    ) -> UIImage?
 
     /// Drops one reference to a registered image. `key` is the `cacheKey`
     /// from the handle, not the bare path — the same file at two decode sizes
@@ -200,7 +223,60 @@ extension Editor: GPUResourceHost {
         )
     }
 
-    public func releaseImage(key: String) { unloadImage(path: key) }
+    public func uploadPixels(
+        _ pixels: UnsafeRawBufferPointer, width: UInt32, height: UInt32,
+        stride: UInt32, format: PixelFormat
+    ) -> UIImage? {
+        // A client has no device. Unlike `uploadImage`, nothing here needs
+        // encoding first: the compositor takes the pixels as they are.
+        if let remote = remoteResources {
+            return remote.uploadPixels(
+                pixels, width: width, height: height, stride: stride, format: format
+            )
+        }
+        var layout = canvas.ipc.PixelLayout()
+        layout.offset = 0
+        layout.width = width
+        layout.height = height
+        layout.stride = stride
+        layout.format = canvas.ipc.PixelFormat(rawValue: format.rawValue)!
+        // The same check the compositor makes against its arena, here against
+        // the caller's buffer, so the two hosts refuse the same calls.
+        guard let base = pixels.baseAddress?.assumingMemoryBound(to: UInt8.self),
+              canvas.ipc.checkPixelLayout(layout, UInt64(pixels.count)) == nil
+        else { return nil }
+
+        let key = ImageStore.pixelKey()
+        let packed = format == .rgba8 && UInt64(stride) == UInt64(width) * 4
+        let id: Int32
+        if packed {
+            id = uploadTexture(key: key, rgba: base, width: width, height: height)
+        } else {
+            var rgba = [UInt8](repeating: 0, count: Int(width) * Int(height) * 4)
+            id = rgba.withUnsafeMutableBufferPointer { out in
+                canvas.ipc.packRgba(base, layout, out.baseAddress!)
+                return uploadTexture(
+                    key: key, rgba: UnsafePointer(out.baseAddress!),
+                    width: width, height: height
+                )
+            }
+        }
+        guard id > 0 else { return nil }
+        return UIImage(
+            path: key, cacheKey: key, textureId: UInt32(id),
+            pixelWidth: Float(width), pixelHeight: Float(height)
+        )
+    }
+
+    public func releaseImage(key: String) {
+        // Freed outright: see `uploadPixels`. Dormant, it would sit in the
+        // cache under a name nothing will say again until the budget noticed.
+        if ImageStore.isPixelKey(key) {
+            discardImage(key: key)
+        } else {
+            unloadImage(path: key)
+        }
+    }
 
     /// Who names GPU resources for the frames this editor produces.
     ///
