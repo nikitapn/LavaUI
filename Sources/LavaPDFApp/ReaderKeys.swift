@@ -7,6 +7,14 @@ enum ReaderKeys {
     static func handle(_ event: KeyEvent, session: ReaderSession) -> Bool {
         let primary = KeyMods.contains(event.mods, KeyMods.control)
         let shift = KeyMods.contains(event.mods, KeyMods.shift)
+        let alt = KeyMods.contains(event.mods, KeyMods.alt)
+
+        // Back after following a link: the browser's key, and the mouse's
+        // back button's key on most desktops.
+        if alt, event.key == KeyCode.left {
+            session.goBack()
+            return true
+        }
 
         if primary {
             switch event.key {
@@ -39,6 +47,7 @@ enum ReaderKeys {
         case KeyCode.escape:
             if session.findOpen { session.closeFind() } else { session.clearSelection() }
         case KeyCode.f3: session.findNext(shift ? -1 : 1)
+        case KeyCode.f9: session.toggleSidebar()
         default: return false
         }
         return true

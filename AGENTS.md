@@ -468,7 +468,9 @@ Sources/
   LavaPDF*/        PDF reader (core headless + app). Poppler through
                    CLavaPDF's C API, so no C++ interop above it; tiles at the
                    exact zoom, rendered a window per page on two workers and
-                   uploaded with `uploadPixels`; select, copy, find
+                   uploaded with `uploadPixels`; select, copy, find; the
+                   outline and links through poppler-glib (poppler-cpp has
+                   neither), web links only for http/https/mailto
   LavaExplorer*/   File manager (core headless + app). Split panes and tabs,
                    copy by drop, the freedesktop Trash; no rename yet
   FBDModel/        Function-block diagram model

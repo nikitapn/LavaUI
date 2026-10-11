@@ -27,7 +27,12 @@ struct ReaderView: View {
         return VStack(flexGrow: 1, spacing: 0) {
             ReaderBar(session: session)
             if session.findOpen { FindBar(session: session) }
-            pages
+            HStack(flexGrow: 1, spacing: 0) {
+                if session.sidebarOpen, !session.outline.isEmpty {
+                    OutlineSidebar(session: session)
+                }
+                pages
+            }
         }
         .background(Theme.current.background)
         .onDrop { urls in
@@ -55,6 +60,9 @@ struct ReaderView: View {
 
     /// What the press that is in progress is doing.
     private enum Drag {
+        /// Pressed on a link: followed on release, unless the pointer moves
+        /// far enough first to make it a selection instead.
+        case link(PageLink, x: Float, y: Float)
         case selecting
         /// Holding the scrollbar thumb, `grab` pixels below its top.
         case scrollbar(grab: Float)
@@ -77,16 +85,33 @@ struct ReaderView: View {
                 dragScrollbar(to: gesture.localY - grab, frame: frame)
                 return
             }
+            if gesture.clickCount == 1, let link = session.link(atX: gesture.localX, y: gesture.localY) {
+                drag = .link(link, x: gesture.localX, y: gesture.localY)
+                return
+            }
             drag = .selecting
             session.beginSelection(x: gesture.localX, y: gesture.localY, clickCount: gesture.clickCount)
         case .moved:
             switch drag {
+            case .link(_, let x, let y):
+                // Selecting text that happens to be a link — a reference, a
+                // URL printed in the text — is a drag that starts on it.
+                guard abs(gesture.localX - x) + abs(gesture.localY - y) > 4 else { return }
+                drag = .selecting
+                session.beginSelection(x: x, y: y, clickCount: 1)
+                session.extendSelection(x: gesture.localX, y: gesture.localY)
             case .selecting: session.extendSelection(x: gesture.localX, y: gesture.localY)
             case .scrollbar(let grab): dragScrollbar(to: gesture.localY - grab, frame: frame)
             case nil: break
             }
         case .ended:
-            if case .selecting = drag { session.endSelection() }
+            switch drag {
+            case .selecting: session.endSelection()
+            case .link(let link, _, _):
+                session.clearSelection()
+                session.follow(link.target)
+            default: break
+            }
             drag = nil
         }
     }

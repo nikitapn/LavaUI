@@ -56,6 +56,8 @@ struct LavaPDFApp {
                         MenuItem("Find…", id: "edit.find") { session.openFind() }
                     }
                     Menu("View", id: "view") {
+                        MenuItem("Contents", id: "view.contents") { session.toggleSidebar() }
+                        MenuSeparator()
                         MenuItem("Fit Width", id: "view.fit-width") { session.setMode(.fitWidth) }
                         MenuItem("Fit Page", id: "view.fit-page") { session.setMode(.fitPage) }
                         MenuItem("Actual Size", id: "view.actual") { session.actualSize() }
@@ -64,6 +66,8 @@ struct LavaPDFApp {
                         MenuItem("Zoom Out", id: "view.zoom-out") { session.stepZoom(-1) }
                     }
                     Menu("Go", id: "go") {
+                        MenuItem("Back", id: "go.back") { session.goBack() }
+                        MenuSeparator()
                         MenuItem("First Page", id: "go.first") { session.goToStart() }
                         MenuItem("Last Page", id: "go.last") { session.goToEnd() }
                         MenuItem("Next Page", id: "go.next") { session.goTo(page: session.currentPage + 1) }

@@ -159,7 +159,33 @@ var targets: [Target] = [
     ),
     // The one C++ file that talks to poppler, behind a C API so the model
     // above it needs no interop. See Sources/CLavaPDF/include/lava_pdf.h.
-    .target(name: "CLavaPDF", dependencies: ["CPoppler"]),
+    // poppler-glib for the outline and links, which poppler-cpp lacks.
+    //
+    // Named by what it needs rather than by `poppler-glib`, on purpose:
+    // SwiftPM reads .pc files itself, and poppler-glib.pc continues its
+    // `Requires.private` over three lines with backslashes, which that
+    // parser gives up on without a word — every flag from it was simply
+    // missing. GObject's .pc brings GLib's include paths, CCairo brings
+    // cairo's, the bridge includes poppler's glib header by full path, and
+    // links the library by name below — a modulemap's `link` only counts
+    // when Swift imports the module, which a C target never does.
+    .systemLibrary(
+        name: "CPopplerGlib",
+        path: "Sources/CPopplerGlib",
+        pkgConfig: "gobject-2.0",
+        providers: [.apt(["libpoppler-glib-dev"])]
+    ),
+    .systemLibrary(
+        name: "CCairo",
+        path: "Sources/CCairo",
+        pkgConfig: "cairo",
+        providers: [.apt(["libcairo2-dev"])]
+    ),
+    .target(
+        name: "CLavaPDF",
+        dependencies: ["CPoppler", "CPopplerGlib", "CCairo"],
+        linkerSettings: [.linkedLibrary("poppler-glib")]
+    ),
     // Pages, tiles, and the text on a page: what to render, at what scale,
     // and what a drag across a page selects. No engine — a reader that
     // selects the wrong words is a test, not a screenshot.

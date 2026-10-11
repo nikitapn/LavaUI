@@ -1,11 +1,17 @@
 #include "lava_pdf.h"
 
-#include <poppler-document.h>
-#include <poppler-global.h>
-#include <poppler-page-renderer.h>
-#include <poppler-page.h>
+// By full path, both of them. poppler-cpp and poppler-glib each ship a
+// `poppler-page.h` and a `poppler-document.h`, and both directories are on
+// the include path, so a bare name means whichever pkg-config listed first.
+// Their own includes are quoted, which resolve beside the including file.
+#include <poppler/cpp/poppler-document.h>
+#include <poppler/cpp/poppler-global.h>
+#include <poppler/cpp/poppler-page-renderer.h>
+#include <poppler/cpp/poppler-page.h>
+#include <poppler/glib/poppler.h>
 
 #include <algorithm>
+#include <cmath>
 #include <cstdlib>
 #include <cstring>
 #include <memory>
@@ -15,7 +21,32 @@
 
 struct LavaPDFDocument {
   std::mutex lock;
+  std::string path;
+  std::string password;
   std::unique_ptr<poppler::document> document;
+  /// The glib handle, for the outline and links — opened the first time
+  /// either is asked for, because a document only being rendered (every
+  /// worker's) never needs it.
+  PopplerDocument *glib = nullptr;
+  bool glibTried = false;
+
+  ~LavaPDFDocument() {
+    if (glib != nullptr) g_object_unref(glib);
+  }
+
+  PopplerDocument *glibDocument() {
+    if (glibTried) return glib;
+    glibTried = true;
+    GError *error = nullptr;
+    gchar *uri = g_filename_to_uri(path.c_str(), nullptr, &error);
+    if (uri != nullptr) {
+      glib = poppler_document_new_from_file(
+          uri, password.empty() ? nullptr : password.c_str(), &error);
+      g_free(uri);
+    }
+    if (error != nullptr) g_error_free(error);
+    return glib;
+  }
   /// Created on first use and kept: a page is cheap to keep and not free to
   /// make, and a viewer asks for the same few over and over.
   std::vector<std::unique_ptr<poppler::page>> pages;
@@ -81,6 +112,8 @@ LavaPDFDocument *lava_pdf_open(const char *path, const char *password,
   if (document->is_locked()) return fail(LAVA_PDF_OPEN_LOCKED);
 
   auto *result = new LavaPDFDocument;
+  result->path = path;
+  result->password = secret;
   result->document = std::move(document);
   result->pages.resize(static_cast<size_t>(std::max(0, result->document->pages())));
   if (status != nullptr) *status = LAVA_PDF_OPEN_OK;
@@ -200,5 +233,180 @@ char *lava_pdf_title(LavaPDFDocument *document) {
 }
 
 void lava_pdf_free_string(char *string) { std::free(string); }
+
+}  // extern "C"
+
+// ─── Outline and links, through poppler-glib ─────────────────────────────────
+
+namespace {
+
+char *copyString(const char *text) {
+  if (text == nullptr) return nullptr;
+  const size_t length = std::strlen(text);
+  auto *out = static_cast<char *>(std::malloc(length + 1));
+  if (out != nullptr) std::memcpy(out, text, length + 1);
+  return out;
+}
+
+LavaPDFTarget nowhere() {
+  return LavaPDFTarget{-1, NAN, NAN, nullptr};
+}
+
+/// A destination as a page and a point from that page's top-left. Named ones
+/// are looked up first; a page number of 0 is poppler saying it found none.
+///
+/// The point is only worked out for an upright page. A destination's
+/// coordinates are in the page's unrotated user space, and turning them by
+/// /Rotate is exactly the arithmetic whose mistakes go unnoticed until
+/// someone's scanned landscape thesis jumps to the wrong paragraph — so a
+/// turned page gets its top instead, which is never wrong, only less precise.
+LavaPDFTarget resolve(PopplerDocument *document, const PopplerDest *dest,
+                      poppler::document &cpp) {
+  if (dest == nullptr) return nowhere();
+  PopplerDest *named = nullptr;
+  if (dest->type == POPPLER_DEST_NAMED && dest->named_dest != nullptr) {
+    named = poppler_document_find_dest(document, dest->named_dest);
+    dest = named;
+  }
+  LavaPDFTarget target = nowhere();
+  if (dest != nullptr && dest->page_num > 0 && dest->page_num <= cpp.pages()) {
+    target.page = dest->page_num - 1;
+    std::unique_ptr<poppler::page> page(cpp.create_page(target.page));
+    if (page && page->orientation() == poppler::page::portrait) {
+      // Crop box top in user space, measured downwards — the y of every
+      // other coordinate this file hands out.
+      const poppler::rectf crop = page->page_rect(poppler::crop_box);
+      const bool hasTop = dest->change_top || dest->type == POPPLER_DEST_FITH ||
+                          dest->type == POPPLER_DEST_FITBH || dest->type == POPPLER_DEST_FITR;
+      const bool hasLeft = dest->change_left || dest->type == POPPLER_DEST_FITV ||
+                           dest->type == POPPLER_DEST_FITBV || dest->type == POPPLER_DEST_FITR;
+      if (hasTop) target.y = static_cast<float>(crop.y() + crop.height() - dest->top);
+      if (hasLeft) target.x = static_cast<float>(dest->left - crop.x());
+    }
+  }
+  if (named != nullptr) poppler_dest_free(named);
+  return target;
+}
+
+LavaPDFTarget targetOf(PopplerDocument *document, const PopplerAction *action,
+                       poppler::document &cpp) {
+  if (action == nullptr) return nowhere();
+  switch (action->type) {
+    case POPPLER_ACTION_GOTO_DEST:
+      return resolve(document, action->goto_dest.dest, cpp);
+    case POPPLER_ACTION_URI: {
+      LavaPDFTarget target = nowhere();
+      target.uri = copyString(action->uri.uri);
+      return target;
+    }
+    default:
+      // Another file, a named action (NextPage, Print…), JavaScript, a
+      // form submission: none of them is somewhere this reader goes.
+      return nowhere();
+  }
+}
+
+void flatten(PopplerDocument *document, PopplerIndexIter *iter, int depth,
+             poppler::document &cpp, std::vector<LavaPDFOutlineItem> &out) {
+  if (iter == nullptr) return;
+  do {
+    PopplerAction *action = poppler_index_iter_get_action(iter);
+    LavaPDFOutlineItem item{};
+    item.depth = depth;
+    item.open = poppler_index_iter_is_open(iter) ? 1 : 0;
+    item.title = copyString(action != nullptr && action->any.title != nullptr
+                                ? action->any.title : "");
+    item.target = targetOf(document, action, cpp);
+    if (action != nullptr) poppler_action_free(action);
+    out.push_back(item);
+    // Depth is bounded by the file, and a hostile file can nest without
+    // limit; past this nobody is reading a table of contents anyway.
+    if (depth < 32) {
+      PopplerIndexIter *child = poppler_index_iter_get_child(iter);
+      flatten(document, child, depth + 1, cpp, out);
+      if (child != nullptr) poppler_index_iter_free(child);
+    }
+  } while (poppler_index_iter_next(iter));
+}
+
+template <typename T>
+T *toMalloc(const std::vector<T> &items, size_t *count) {
+  if (count != nullptr) *count = 0;
+  if (items.empty()) return nullptr;
+  auto *out = static_cast<T *>(std::malloc(items.size() * sizeof(T)));
+  if (out == nullptr) return nullptr;
+  std::memcpy(out, items.data(), items.size() * sizeof(T));
+  if (count != nullptr) *count = items.size();
+  return out;
+}
+
+}  // namespace
+
+extern "C" {
+
+LavaPDFOutlineItem *lava_pdf_outline(LavaPDFDocument *document, size_t *count) {
+  if (count != nullptr) *count = 0;
+  if (document == nullptr) return nullptr;
+  std::lock_guard guard(document->lock);
+  PopplerDocument *glib = document->glibDocument();
+  if (glib == nullptr) return nullptr;
+  std::vector<LavaPDFOutlineItem> items;
+  PopplerIndexIter *iter = poppler_index_iter_new(glib);
+  flatten(glib, iter, 0, *document->document, items);
+  if (iter != nullptr) poppler_index_iter_free(iter);
+  return toMalloc(items, count);
+}
+
+void lava_pdf_free_outline(LavaPDFOutlineItem *items, size_t count) {
+  if (items == nullptr) return;
+  for (size_t i = 0; i < count; ++i) {
+    std::free(const_cast<char *>(items[i].title));
+    std::free(const_cast<char *>(items[i].target.uri));
+  }
+  std::free(items);
+}
+
+LavaPDFLink *lava_pdf_page_links(LavaPDFDocument *document, int index, size_t *count) {
+  if (count != nullptr) *count = 0;
+  if (document == nullptr) return nullptr;
+  std::lock_guard guard(document->lock);
+  PopplerDocument *glib = document->glibDocument();
+  if (glib == nullptr || index < 0 || index >= poppler_document_get_n_pages(glib))
+    return nullptr;
+  PopplerPage *page = poppler_document_get_page(glib, index);
+  if (page == nullptr) return nullptr;
+
+  // glib's areas are in points from the bottom-left of the page as it is
+  // shown, crop box and rotation already applied — and so is its size — so
+  // the one flip left is the y axis.
+  double width = 0, height = 0;
+  poppler_page_get_size(page, &width, &height);
+
+  std::vector<LavaPDFLink> links;
+  GList *mapping = poppler_page_get_link_mapping(page);
+  // Walked from the end: glib builds the list by prepending, so it comes
+  // back in the reverse of the page's order — and the order is what says
+  // which of two overlapping links is on top.
+  for (GList *node = g_list_last(mapping); node != nullptr; node = node->prev) {
+    auto *link = static_cast<PopplerLinkMapping *>(node->data);
+    LavaPDFTarget target = targetOf(glib, link->action, *document->document);
+    if (target.page < 0 && target.uri == nullptr) continue;
+    const PopplerRectangle &area = link->area;
+    const double x1 = std::min(area.x1, area.x2), x2 = std::max(area.x1, area.x2);
+    const double y1 = std::min(area.y1, area.y2), y2 = std::max(area.y1, area.y2);
+    links.push_back(LavaPDFLink{static_cast<float>(x1), static_cast<float>(height - y2),
+                                static_cast<float>(x2 - x1), static_cast<float>(y2 - y1),
+                                target});
+  }
+  poppler_page_free_link_mapping(mapping);
+  g_object_unref(page);
+  return toMalloc(links, count);
+}
+
+void lava_pdf_free_links(LavaPDFLink *links, size_t count) {
+  if (links == nullptr) return;
+  for (size_t i = 0; i < count; ++i) std::free(const_cast<char *>(links[i].target.uri));
+  std::free(links);
+}
 
 }  // extern "C"

@@ -62,6 +62,22 @@ final class ReaderSession: @unchecked Sendable {
     @ObservationIgnored private(set) var selection: Selection?
     @ObservationIgnored private var pageText: [Int: PageText] = [:]
 
+    // MARK: - Outline
+
+    private(set) var outline = Outline(items: [])
+    var sidebarOpen = false
+    private(set) var expanded: Set<Int> = []
+    /// The entry for where the top of the window is. Mirrored like the page
+    /// number: written only when it changes.
+    private(set) var currentSection: Int?
+
+    // MARK: - Links
+
+    @ObservationIgnored private var pageLinks: [Int: [PageLink]] = [:]
+    /// Where each followed link was followed from, most recent last, so Back
+    /// returns to the paragraph that had the link in it.
+    @ObservationIgnored private var history: [ReaderViewport] = []
+
     // MARK: - Find
 
     var findOpen = false
@@ -95,6 +111,12 @@ final class ReaderSession: @unchecked Sendable {
             openError = nil
             layout = PageLayout(pageSizes: document.pageSizes)
             pageText.removeAll()
+            pageLinks.removeAll()
+            history.removeAll()
+            outline = document.outline()
+            expanded = outline.initiallyExpanded
+            sidebarOpen = !outline.isEmpty
+            currentSection = nil
             selection = nil
             clearSearch()
             tiles.reset(documents: workers)
@@ -248,12 +270,13 @@ final class ReaderSession: @unchecked Sendable {
         viewport.scrollY = viewport.scrollY.rounded()
         let percent = viewport.percent
         let page = viewport.currentPage(layout, boxWidth: boxWidth, boxHeight: boxHeight)
-        guard percent != zoomPercent || page != currentPage else {
+        guard percent != zoomPercent || page != currentPage || sectionChanged() else {
             ViewInvalidation.markNeedsRedraw()
             return
         }
         zoomPercent = percent
         currentPage = page
+        updateSection()
         // Raised by hand, not left to observation: `setBox` gets here from
         // paint, and a write made while painting does not schedule the body
         // pass the bar needs. Raising it is not enough on its own either — the
@@ -261,6 +284,107 @@ final class ReaderSession: @unchecked Sendable {
         // wake — so ask for the iteration that will act on it.
         ViewInvalidation.markDirty()
         FrameScheduler.requestWake(in: 0)
+    }
+
+    // MARK: - Outline
+
+    /// The section at the top of the window — a little below it, so a heading
+    /// that has just scrolled into the first line counts as the one you are
+    /// reading.
+    private func section() -> Int? {
+        guard !outline.isEmpty, !layout.frames.isEmpty else { return nil }
+        let top = viewport.visible(layout, boxWidth: boxWidth, boxHeight: boxHeight).y + 24 / viewport.zoom
+        let pages = layout.pages(intersecting: Box(x: 0, y: top, width: 1, height: 1))
+        let page = pages.isEmpty ? min(layout.frames.count - 1, max(0, currentPage)) : pages.lowerBound
+        return outline.current(page: page, y: top - layout.frames[page].y)
+    }
+
+    private func sectionChanged() -> Bool { section() != currentSection }
+
+    private func updateSection() {
+        let next = section()
+        if next != currentSection { currentSection = next }
+    }
+
+    func toggleSidebar() {
+        sidebarOpen.toggle()
+    }
+
+    func toggleExpanded(_ index: Int) {
+        if expanded.contains(index) { expanded.remove(index) } else { expanded.insert(index) }
+    }
+
+    /// The rows the sidebar shows — with the current section's parents opened,
+    /// so where you are is always somewhere you can see.
+    var visibleOutlineRows: [Int] {
+        var open = expanded
+        if let currentSection { open.formUnion(outline.ancestors(of: currentSection)) }
+        return outline.visible(expanded: open)
+    }
+
+    func choose(outlineItem index: Int) {
+        guard outline.items.indices.contains(index), let target = outline.items[index].target
+        else { return }
+        follow(target, remember: false)
+    }
+
+    // MARK: - Links
+
+    func links(page: Int) -> [PageLink] {
+        if let known = pageLinks[page] { return known }
+        guard let document else { return [] }
+        let links = document.links(page: page)
+        pageLinks[page] = links
+        return links
+    }
+
+    /// The link under a window position, if any.
+    func link(atX x: Float, y: Float) -> PageLink? {
+        guard let hit = pagePoint(x: x, y: y) else { return nil }
+        return links(page: hit.page).link(atX: hit.x, y: hit.y)
+    }
+
+    /// Goes where `target` says: somewhere in this document, scrolled so the
+    /// place is near the top; or a web address, handed to the desktop.
+    func follow(_ target: PDFTarget, remember: Bool = true) {
+        switch target {
+        case .page(let page, let x, let y):
+            guard layout.frames.indices.contains(page) else { return }
+            if remember {
+                history.append(viewport)
+                if history.count > 64 { history.removeFirst() }
+            }
+            let frame = layout.frames[page]
+            // A little room above the place, as a heading is meant to be read.
+            viewport.scrollY = (frame.y + (y ?? 0)) * viewport.zoom - (y == nil ? 12 : 24)
+            if let x, mode == .free {
+                viewport.scrollX = (frame.x + x) * viewport.zoom - 24
+            }
+            settle()
+        case .uri(let uri):
+            open(uri: uri)
+        }
+    }
+
+    /// Back to where the last followed link was followed from.
+    func goBack() {
+        guard let previous = history.popLast() else { return }
+        viewport.scrollX = previous.scrollX
+        viewport.scrollY = previous.scrollY * viewport.zoom / previous.zoom
+        settle()
+    }
+
+    /// Web and mail addresses only. A PDF is somebody else's file, and
+    /// `xdg-open` on whatever scheme it names — `file:`, `smb:`, a custom
+    /// handler — is a document deciding what to run.
+    private func open(uri: String) {
+        guard let url = URL(string: uri), let scheme = url.scheme?.lowercased(),
+              ["http", "https", "mailto"].contains(scheme)
+        else { return }
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+        process.arguments = ["xdg-open", url.absoluteString]
+        try? process.run()
     }
 
     // MARK: - Text

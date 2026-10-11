@@ -114,6 +114,54 @@ public final class PDFDocument: @unchecked Sendable {
         return RenderedPixels(bytes: bytes, width: width, height: height, stride: stride)
     }
 
+    /// The table of contents, read once and kept by the caller. Empty for a
+    /// document that has none, which is most short ones.
+    public func outline() -> Outline {
+        var count = 0
+        guard let raw = lava_pdf_outline(handle, &count) else { return Outline(items: []) }
+        defer { lava_pdf_free_outline(raw, count) }
+        return Outline(items: UnsafeBufferPointer(start: raw, count: count).map { item in
+            Outline.Item(
+                title: item.title.map { Self.tidy(String(cString: $0)) } ?? "",
+                depth: Int(item.depth),
+                target: Self.target(item.target),
+                startsOpen: item.open != 0
+            )
+        })
+    }
+
+    /// The links on `page`, in the order the page lists them.
+    public func links(page: Int) -> [PageLink] {
+        guard page >= 0, page < pageCount else { return [] }
+        var count = 0
+        guard let raw = lava_pdf_page_links(handle, Int32(page), &count) else { return [] }
+        defer { lava_pdf_free_links(raw, count) }
+        return UnsafeBufferPointer(start: raw, count: count).compactMap { link in
+            guard let target = Self.target(link.target) else { return nil }
+            return PageLink(
+                box: Box(x: Double(link.x), y: Double(link.y),
+                         width: Double(link.width), height: Double(link.height)),
+                target: target
+            )
+        }
+    }
+
+    private static func target(_ raw: LavaPDFTarget) -> PDFTarget? {
+        if let uri = raw.uri { return .uri(String(cString: uri)) }
+        guard raw.page >= 0 else { return nil }
+        return .page(
+            Int(raw.page),
+            x: raw.x.isNaN ? nil : Double(raw.x),
+            y: raw.y.isNaN ? nil : Double(raw.y)
+        )
+    }
+
+    /// Outline titles come out of LaTeX and word processors with line breaks
+    /// and runs of spaces in them, which a one-line row cannot show.
+    private static func tidy(_ title: String) -> String {
+        title.split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
+    }
+
     /// The text on `page`, a box per character. Empty for a page that has
     /// none — a scan, or a page of drawings.
     public func text(page: Int) -> PageText {

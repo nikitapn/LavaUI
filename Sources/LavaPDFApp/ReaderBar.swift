@@ -14,6 +14,9 @@ struct ReaderBar: View {
             if WindowBridge.drawsOwnChrome {
                 WindowControls().windowChrome()
             }
+            if !session.outline.isEmpty {
+                button("☰", id: "sidebar", on: session.sidebarOpen) { session.toggleSidebar() }
+            }
             Text(session.hasDocument ? session.fileName : "LavaPDF", color: Theme.current.textPrimary)
                 .agentId("title")
             Spacer()

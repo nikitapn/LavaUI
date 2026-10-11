@@ -69,6 +69,7 @@ libboost-program-options-dev
 libpulse-dev
 libarchive-dev
 libpoppler-cpp-dev
+libpoppler-glib-dev
 
 # ── software Vulkan (Docker, VMs, machines with no GPU) ────────────────────
 mesa-vulkan-drivers
