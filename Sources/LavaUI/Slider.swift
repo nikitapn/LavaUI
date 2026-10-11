@@ -26,6 +26,14 @@ public struct Slider: PrimitiveView {
     public var font: UIFont?
     /// Whether the slider can be dragged. A disabled slider draws in the style's disabled colours.
     public var isEnabled: Bool
+    /// `true` when a press starts a drag, `false` when the button comes up.
+    ///
+    /// For a value that is expensive to apply exactly — a video seek, which
+    /// decodes from the previous keyframe — and cheap to apply roughly: the
+    /// caller does the cheap thing for each move and the exact one once, here.
+    /// `true` comes before the press's own value, so every value the drag
+    /// writes — the jump to where it was pressed included — is inside the pair.
+    public var onEditingChanged: ((Bool) -> Void)?
 
     /// Creates a slider. Every parameter matches the property of the same name.
     public init(
@@ -35,9 +43,11 @@ public struct Slider: PrimitiveView {
         format: ((Float) -> String)? = nil,
         style: SliderStyle = SliderStyle(),
         font: UIFont? = nil,
-        isEnabled: Bool = true
+        isEnabled: Bool = true,
+        onEditingChanged: ((Bool) -> Void)? = nil
     ) {
         self.value = value
+        self.onEditingChanged = onEditingChanged
         self.range = range
         self.step = step
         self.format = format
@@ -101,10 +111,12 @@ public struct Slider: PrimitiveView {
         }
 
         let commit = self.commit
+        let editing = self.onEditingChanged
         leaf.onClickLocal = { [weak leaf] localX, _, originX, _, _, _ in
             guard let leaf, leaf.isEnabled else { return }
             leaf.isPressed = true
             leaf.retargetSliderKnob(active: true)
+            editing?(true)
             // Pressing anywhere on the track jumps there, then drags — the
             // behaviour every desktop slider has.
             commit(leaf, localX)
@@ -119,6 +131,7 @@ public struct Slider: PrimitiveView {
                     commit(leaf, windowX - originX)
                 },
                 onUp: { [weak leaf] in
+                    editing?(false)
                     guard let leaf else { return }
                     leaf.isPressed = false
                     leaf.retargetSliderKnob(active: HoverState.isHovered(leaf.id))

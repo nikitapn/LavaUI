@@ -55,7 +55,7 @@ struct TransportBar: View {
                 session.step(1)
             }
             Text(
-                Clock.pair(position: session.state.position, duration: session.state.duration),
+                Clock.pair(position: session.shownPosition, duration: session.state.duration),
                 color: Theme.current.textSecondary,
                 align: .center
             )
@@ -67,7 +67,8 @@ struct TransportBar: View {
                     set: { session.seek(fraction: $0) }
                 ),
                 in: 0...1,
-                isEnabled: session.state.duration != nil
+                isEnabled: session.state.duration != nil,
+                onEditingChanged: { session.seekBarEditing($0) }
             )
             .flexGrow(1)
             .agentId("seek")

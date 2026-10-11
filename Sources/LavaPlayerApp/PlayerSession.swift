@@ -55,8 +55,18 @@ final class PlayerSession: @unchecked Sendable {
     var hasMedia: Bool { playlist.current != nil }
     var hasVideo: Bool { state.videoWidth > 0 && state.videoHeight > 0 }
 
+    /// Where the seek bar is being dragged to, 0…1; nil when it is not.
+    ///
+    /// While set, the bar and the clock show this rather than mpv's position.
+    /// A drag seeks to keyframes, so mpv reports the keyframe it landed on —
+    /// and a knob that followed that would jump back from under the pointer.
+    private(set) var scrub: Float?
+    /// The seek bar is held. `scrub` is nil until the first value arrives.
+    @ObservationIgnored private var scrubbing = false
+
     /// 0…1 along the seek bar; 0 when the length is not known.
     var progress: Float {
+        if let scrub { return scrub }
         guard let duration = state.duration, duration > 0,
               let position = state.position
         else { return 0 }
@@ -98,9 +108,37 @@ final class PlayerSession: @unchecked Sendable {
     // MARK: - Transport
 
     func togglePause() { player.togglePause() }
+    /// What the clock reads: the drag target while scrubbing.
+    var shownPosition: Double? {
+        if let scrub, let duration = state.duration { return Double(scrub) * duration }
+        return state.position
+    }
+
+    /// From the seek bar. While it is held, a keyframe seek per move: mpv
+    /// shows the nearest keyframe at once, where an exact seek decodes from
+    /// that keyframe up to the frame and is cancelled by the next move before
+    /// it gets there. The exact seek happens once, on release — so a click,
+    /// which is a press and a release, still lands on the frame.
     func seek(fraction: Float) {
         guard let duration = state.duration, duration > 0 else { return }
-        player.seek(to: Double(fraction) * duration)
+        guard scrubbing else {
+            player.seek(to: Double(fraction) * duration, exact: true)
+            return
+        }
+        // Pointer moves outnumber pixels of travel; a seek to where mpv is
+        // already going is work it would only throw away.
+        guard fraction != scrub else { return }
+        scrub = fraction
+        player.seek(to: Double(fraction) * duration, exact: false)
+    }
+
+    func seekBarEditing(_ editing: Bool) {
+        scrubbing = editing
+        guard !editing, let target = scrub else { return }
+        scrub = nil
+        if let duration = state.duration, duration > 0 {
+            player.seek(to: Double(target) * duration, exact: true)
+        }
     }
     func seek(by seconds: Double) { player.seek(by: seconds) }
     func setVolume(_ volume: Float) { player.setVolume(Double(volume)) }

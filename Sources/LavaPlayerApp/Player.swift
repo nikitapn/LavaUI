@@ -280,8 +280,10 @@ final class Player: @unchecked Sendable {
         command(["cycle", "pause"])
     }
 
-    func seek(to seconds: Double) {
-        command(["seek", String(max(0, seconds)), "absolute"])
+    /// `exact: false` lands on a keyframe near `seconds` and shows it at once;
+    /// `exact: true` decodes on from that keyframe to the frame itself.
+    func seek(to seconds: Double, exact: Bool) {
+        command(["seek", String(max(0, seconds)), exact ? "absolute+exact" : "absolute+keyframes"])
     }
 
     func seek(by seconds: Double) {
