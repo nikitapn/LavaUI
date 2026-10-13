@@ -2659,6 +2659,19 @@ void RenderWindow::render(const canvas::DrawList &list)
   // will be submitted under.
   TextureManager::getInstance().noteWindowSampled(
     this, slotSubmission_[currentFrame_]);
+  // The blur result's slot in the texture table is written now, before a
+  // command is recorded — not after each capture, where it used to be. By
+  // then the table is bound for the segments already drawn, and updating a
+  // bound set without UPDATE_AFTER_BIND invalidates the command buffer: the
+  // validation layer reported it on every frame that blurred. Writing it early
+  // is the same answer, since a frame has one result image however many
+  // blurs it runs (`ensureSize` above is the only thing that replaces it) —
+  // each capture overwrites its pixels, which the draws between them read in
+  // order. Same condition as the boundaries below, so a frame that cannot
+  // blur still leaves the view unset and skips its composites.
+  if (anyBlur && blur_.ready() && blur_.sceneReady()) {
+    quads_.setBlurResultView(blur_.resultView(), blur_.sampler());
+  }
   quads_.setReplayCpuUs(static_cast<uint64_t>(
     std::chrono::duration_cast<std::chrono::microseconds>(
       std::chrono::steady_clock::now() - replayStart).count()));
@@ -2701,7 +2714,6 @@ void RenderWindow::render(const canvas::DrawList &list)
           blur_.captureAndBlur(commandBuffer, frameImage(),
                                VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                                extent.width, extent.height, b.radius);
-          quads_.setBlurResultView(blur_.resultView(), blur_.sampler());
           beginMainRenderPass(commandBuffer, /*clear=*/false);
           quads_.drawSegment(commandBuffer, segment);
           break;
@@ -2722,7 +2734,6 @@ void RenderWindow::render(const canvas::DrawList &list)
                                VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                                blur_.captureWidth(), blur_.captureHeight(),
                                b.radius);
-          quads_.setBlurResultView(blur_.resultView(), blur_.sampler());
           beginMainRenderPass(commandBuffer, /*clear=*/false);
           quads_.drawSegment(commandBuffer, segment);
           break;

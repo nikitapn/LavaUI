@@ -335,6 +335,8 @@ class QuadRenderer {
 
   /// Bind the BlurPass result for batches created with pushBlurResultImage.
   /// Optional sampler (e.g. clamp-to-edge from BlurPass); null → default.
+  /// Writes the texture table, so call it before recording starts — after
+  /// `begin`, which clears it, and before the first `drawSegment` binds it.
   void setBlurResultView(VkImageView view, VkSampler sampler = VK_NULL_HANDLE);
 
   /// How much smaller the content-blur capture target is than the window.
