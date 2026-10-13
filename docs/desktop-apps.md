@@ -80,7 +80,14 @@ exist, and they still open one window; the framework no longer forces it.
 
 ## The apps, assessed
 
-### Video player — do not build one
+### Video player — built, though not the way this said
+
+**Update:** built — `LavaPlayer`, see `docs/lavaplayer.md`. The objection below
+stands, and the player respects it: frames do not cross shared memory and the
+compositor has no codec. What this section missed is that the client need not
+draw on the CPU at all. mpv renders with GL on the compositor's own GPU into
+dma-bufs the client allocated there, and the compositor imports those
+(`AttachVideoBuffer`), at 0.77 ms a frame. The original assessment follows.
 
 The instinct that this fights the design is right, and the conclusion that it
 needs codecs in the compositor is not.
@@ -201,8 +208,8 @@ Things a desktop is judged on that nobody misses until they reach for them:
   a way that is hard to explain and easy to notice.
 - **Removable media.** Plugging in a USB stick and having nothing happen is the
   single most "this is not finished" moment a desktop has.
-- **A document viewer.** PDFs are the format people are handed. Poppler is a
-  real dependency but a well-behaved one.
+- ~~**A document viewer.**~~ Built — `LavaPDF`, on poppler's C API (and
+  poppler-glib for the outline and links, which poppler-cpp lacks).
 - **File search.** The launcher finds apps; nothing finds files.
 - **Session and power.** Log out, suspend, restart — a menu somewhere, and
   whatever `LavaSettings` does not already cover.

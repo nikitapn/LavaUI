@@ -239,9 +239,15 @@ Consequences that surprise people:
   compositor's own frost ever refreshed was "never sampled" from a client's
   point of view, and would have been overwritten under the frame drawing it.
   Measured headless at 1100×600: 0.77 ms a round trip, the copy included, and
-  in 600 frames not one texture replaced rather than overwritten. Where the
+  in 600 frames not one texture replaced rather than overwritten. A resize
+  is a new set of buffers, and **the old set is kept until the app has
+  presented a frame from the new one** (`lava_video_shown`): detaching
+  discards the textures the window's last draw list still names, and freed
+  first the video area went black for a frame or two on every resize. Where the
   path will not come up — windowed, no EGL extension, a refused import — the
-  bridge falls back to mpv's software renderer and `uploadPixels`.
+  bridge falls back to mpv's software renderer and `uploadPixels`. The rest —
+  seeking, the fullscreen bar, subtitles and track buttons — is in
+  `docs/lavaplayer.md`.
 - **A drop on a Lava window is the compositor's to deliver.** wlroots cannot do
   it: its drop path needs a `wl_surface` to have taken the drag focus, and a
   client that draws through the control plane has none — as far as Wayland is
@@ -503,9 +509,13 @@ Sources/
                    neither), web links only for http/https/mailto
   LavaPlayer*/     Video player on libmpv (core headless + app). mpv renders
                    into dma-bufs on the compositor's GPU through CLavaVideo's
-                   EGL bridge; software frames when it cannot
+                   EGL bridge; software frames when it cannot. Subtitle and
+                   audio tracks from CC / language buttons (right click lists)
+  LavaShot*/       Screenshot tool (core headless + app): freezes the screen
+                   with `CaptureScreen`, select and annotate, copy or save.
+                   Client mode only
   LavaExplorer*/   File manager (core headless + app). Split panes and tabs,
-                   copy by drop, the freedesktop Trash; no rename yet
+                   copy by drop, rename, the freedesktop Trash
   FBDModel/        Function-block diagram model
 canvas/            C++ Vulkan engine + Yoga (SwiftPM C++ targets)
 compositor/        wlroots compositor + canvas surfaces + control plane
@@ -1319,6 +1329,7 @@ so headless test runs skip it too.
 | Fit / 1:1 / cursor-anchored zoom | `Sources/LavaViewCore/Viewport.swift` (pure, tested); the app only feeds it the canvas box |
 | Turning pixels, and what a turned photo is saved as | `canvas/src/render/exif.cpp` turns them, asked for via `ImageTurn`; `Rotation` / `SaveTarget` in `LavaViewCore` decide which turn and which format; `Editor.encodeJpeg` / `canvas::encodeRgbaJpeg` are the encoder |
 | Video frames from a client's GPU (dma-buf → compositor texture) | `Sources/CLavaVideo` (EGL + GBM + mpv), IDL `AttachVideoBuffer`, `CanvasRenderer::attachVideoBuffer`, `TextureManager::refreshFromImported` |
+| LavaPlayer controls, tracks, subtitles | `Sources/LavaPlayerApp` (`Bars.swift` for the track buttons, `PlayerKeys.swift`), `Track` in `LavaPlayerCore` |
 | Desktop entry for an app that opens files | `packaging/apps.conf` — the tenth field is `MimeType`, and declaring one is what adds `%F` to the Exec |
 
 ## Conventions agents should follow
@@ -1360,6 +1371,7 @@ so headless test runs skip it too.
 | `docs/lavaview.md` | LavaView: what it does, what it cannot, and what to add next |
 | `docs/desktop-apps.md` | What the desktop still lacks, app by app, with costs |
 | `docs/lavashot.md` | LavaShot: the capture path, the export trick, what is missing |
+| `docs/lavaplayer.md` | LavaPlayer: how a frame reaches the screen, seeking, subtitles and tracks, keys |
 | `docs/lavaexplorer.md` | LavaExplorer: browse and open, what it will not do yet |
 | `docs/retained-scene-tree.md` | Retained tree / invalidation notes |
 | `docs/nprpc-client-stream-gap.md` | Historical SHM stream bug (resolved) |

@@ -53,6 +53,7 @@ libpulse
 libarchive
 poppler
 poppler-glib
+mpv
 
 # ── software Vulkan ────────────────────────────────────────────────────────
 vulkan-swrast

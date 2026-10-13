@@ -43,13 +43,24 @@ swift run HelloWorld          # demo
 swift run LavaSpotify         # music player (see docs/lavaspotify.md)
 swift run LavaTerm            # terminal emulator (click the grid, type)
 swift run LavaView -- pic.jpg # image viewer (wheel to zoom, arrows for the folder)
-swift run LavaExplorer        # file manager (browse and open; no delete)
+swift run LavaPDF -- doc.pdf  # PDF reader (zoom, select and copy, find, outline)
+swift run LavaPlayer -- a.mkv # video player on libmpv (see docs/lavaplayer.md)
+swift run LavaExplorer        # file manager (tabs, panes, copy by drop, Trash)
 swift test                    # headless tests, no GPU needed
 ```
 
+Two more need the compositor (`LAVA_CLIENT=1`, see below), because what they
+show only it can see:
+
+```bash
+swift run LavaShot            # freeze the screen, select, annotate, copy or save (docs/lavashot.md)
+swift run LavaDebug           # where the compositor's VRAM went; --once prints text
+```
+
 System packages: Vulkan, GLFW, FreeType, HarfBuzz (and on Linux for global
-menus: GLib + libdbusmenu-glib). No Meson/Ninja — SwiftPM builds the C++
-engine.
+menus: GLib + libdbusmenu-glib); the apps add poppler (LavaPDF), libmpv, EGL
+and GBM (LavaPlayer). `packaging/deps/` is the full list. No Meson/Ninja —
+SwiftPM builds the C++ engine.
 
 Linux only today.
 
@@ -254,6 +265,12 @@ expensive to build and keyed by content* (the glyph atlas, Vulkan objects);
 | `LavaTermCore` | VT grid + ANSI parser (headless, unit-tested) | nothing |
 | `LavaView` / `LavaViewApp` | Image viewer: fit / original size, wheel zoom at the cursor, the folder as a cycle, rotate and save | `LavaUI`, `LavaViewCore` |
 | `LavaViewCore` | Folder ordering, viewport arithmetic, pixel rotation, save-format choice (no Vulkan) | nothing |
+| `LavaPDF` / `LavaPDFApp` | PDF reader: pages rasterised by poppler in tiles on worker threads, selection, copy, find, outline and links | `LavaUI`, `LavaHost`, `LavaPDFCore` |
+| `LavaPDFCore` | The document through poppler's C API, page layout, tile grid, viewport, text selection, outline (no Vulkan) | `CLavaPDF` (poppler) |
+| `LavaPlayer` / `LavaPlayerApp` | Video player on libmpv: frames rendered into dma-bufs on the compositor's GPU, subtitle and audio tracks, fullscreen controls | `LavaUI`, `LavaHost`, `LavaPlayerCore`, `CLavaVideo` (mpv, EGL, GBM) |
+| `LavaPlayerCore` | Playlist and folder order, the clock, media and subtitle formats, track labels (no Vulkan) | nothing |
+| `LavaShot` / `LavaShotApp` | Screenshot tool: freezes the screen, select a region, annotate, copy or save. Client mode only | `LavaUI`, `LavaHost`, `LavaShotCore` |
+| `LavaShotCore` | Selection geometry, the annotation document, toolbar actions (no Vulkan) | nothing |
 | `canvas/` (package) | C++ engine (`CxxCanvas`) + Yoga (`CYoga`), built by SwiftPM | system Vulkan/GLFW/FreeType/HarfBuzz |
 | `compositor/` | Wayland compositor and control-plane servant — C++23, built by **meson** rather than SwiftPM | wlroots 0.19, `canvas/`, NPRPC |
 | `LavaPanel` `LavaDock` `LavaLauncher` `LavaSettings` `LavaDebug` | The desktop shell — panel, dock, launcher, settings, GPU inspector. Ordinary LavaUI clients, with no privileges the demo does not have | `LavaUI`, `LavaClient` |
