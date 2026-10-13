@@ -7,6 +7,9 @@ project(
   # is a level nobody looks at.
   # C is for wayland-scanner private-code (appmenu protocol) only.
   default_options: ['cpp_std=c++23', 'warning_level=1', 'werror=false'],
+  # wlroots is a subproject with patches of ours on top (third-party/
+  # wlroots.wrap); it sits beside the other trees the compositor builds from.
+  subproject_dir: 'third-party',
 )
 
 # Why meson builds canvas at all, when SwiftPM already does.

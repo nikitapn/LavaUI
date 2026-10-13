@@ -1,6 +1,29 @@
-wlroots = dependency('wlroots-0.19', version: '>=0.19.0', required: false)
-if not wlroots.found()
-  wlroots = dependency('wlroots', version: '>=0.19.0')
+# Vendored by default, because the patches matter on real hardware: without
+# the first one an NVIDIA output of a hybrid laptop never gets a hardware
+# cursor (see third-party/README.md). Static, so it cannot be confused with an
+# installed libwlroots at run time.
+if get_option('wlroots') == 'vendored'
+  wlroots_proj = subproject('wlroots', default_options: [
+    'default_library=static',
+    'examples=false',
+    'werror=false',
+    'xwayland=enabled',
+  ])
+  wlroots = wlroots_proj.get_variable('wlroots')
+  # Meson applies `diff_files` only when it fetches. A checkout that was
+  # already there — an older scripts/build-wlroots.sh used this directory —
+  # is taken as it is, and would build an unpatched wlroots without a word.
+  if not import('fs').read(
+      meson.project_source_root() / 'third-party/wlroots/backend/drm/drm.c'
+    ).contains('drm_cursor_copy_to_dumb')
+    error('third-party/wlroots is not the patched tree. Remove it and run '
+      + 'setup again, or use -Dwlroots=system.')
+  endif
+else
+  wlroots = dependency('wlroots-0.19', version: '>=0.19.0', required: false)
+  if not wlroots.found()
+    wlroots = dependency('wlroots', version: '>=0.19.0')
+  endif
 endif
 
 # Wayland protocols are XML, not headers. `wayland-scanner` turns each one into

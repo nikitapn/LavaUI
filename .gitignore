@@ -21,8 +21,13 @@ build
 build-release
 
 # Cloned by scripts/fetch-nprpc.sh / scripts/build-wlroots.sh, not vendored.
+# third-party/wlroots is meson's checkout of wlroots.wrap; the wrap and the
+# patches in packagefiles/ are what is committed.
 /third-party/nprpc
 /third-party/wlroots
+/third-party/wlroots-system
+/third-party/packagecache
+/third-party/.wraplock
 
 # npidl's output from idl/lava.npidl, both languages. Generated rather than
 # vendored: npidl comes out of the same nprpc build the control plane links

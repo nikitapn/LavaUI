@@ -85,6 +85,35 @@ bool isTransientApp(const std::string &appId) {
   return appId == kSwitcherAppId || appId == kLauncherAppId || appId == kFindAppId;
 }
 
+/// `wlr_scene_output_build_state` into a buffer of our own, with the pointer
+/// left out.
+///
+/// `build_state` ends by drawing every *software* cursor into whatever it
+/// rendered, and an output has one whenever its hardware cursor was refused —
+/// on a hybrid laptop that is the NVIDIA output on every frame, because its
+/// cursor plane takes only LINEAR and its Vulkan renderer cannot draw one.
+/// So frost picked up the pointer wherever it was over a plate, and a cropped
+/// screenshot showed it on one screen and not the other. Hidden for the call
+/// only: nothing here is committed, and both callers damage the whole ring
+/// afterwards, so the next real frame draws it again.
+bool buildStateWithoutCursor(wlr_scene_output *sceneOutput,
+                             wlr_output_state *state,
+                             const wlr_scene_output_state_options *opts) {
+  wlr_output *output = sceneOutput->output;
+  std::vector<wlr_output_cursor *> hidden;
+  wlr_output_cursor *cursor = nullptr;
+  wl_list_for_each(cursor, &output->cursors, link) {
+    if (cursor->enabled && cursor->visible &&
+        output->hardware_cursor != cursor) {
+      cursor->visible = false;
+      hidden.push_back(cursor);
+    }
+  }
+  const bool built = wlr_scene_output_build_state(sceneOutput, state, opts);
+  for (wlr_output_cursor *each : hidden) each->visible = true;
+  return built;
+}
+
 /// How long after a window is refused its application's remembered frame it
 /// can still inherit it.
 ///
@@ -5102,8 +5131,8 @@ class SurfaceRegistry : public lava::CompositorHost {
     wlr_output_state_init(&state);
     wlr_scene_output_state_options opts{};
     opts.swapchain = output->captureChain;
-    const bool built =
-        wlr_scene_output_build_state(output->scene_output, &state, &opts);
+    const bool built = buildStateWithoutCursor(output->scene_output, &state,
+                                               &opts);
     wlr_buffer *locked = nullptr;
     if (built && state.buffer != nullptr) {
       locked = state.buffer;
@@ -9165,7 +9194,7 @@ bool Server::renderOutputPng(Output *output, std::vector<uint8_t> &png,
   wlr_scene_output_state_options opts{};
   opts.swapchain = chain;
   const bool built =
-      wlr_scene_output_build_state(output->scene_output, &state, &opts);
+      buildStateWithoutCursor(output->scene_output, &state, &opts);
 
   bool ok = false;
   if (built && state.buffer != nullptr) {

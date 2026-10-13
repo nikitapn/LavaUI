@@ -1,0 +1,283 @@
+From 59bf6cbc4fa08c91a45becad299494532fa7417d Mon Sep 17 00:00:00 2001
+From: Nikita Pennie <nikitapnn1@gmail.com>
+Date: Tue, 13 Oct 2026 19:16:15 +0200
+Subject: [PATCH] backend/drm: copy cursor on the CPU when the mgpu renderer
+ cannot render it
+
+In multi-GPU setups the cursor is blitted on the secondary GPU, which needs
+the secondary renderer to render to a format/modifier the cursor plane
+accepts. On NVIDIA that intersection is empty: nvidia-drm cursor planes
+only take LINEAR, and the NVIDIA Vulkan driver only renders to its
+block-linear modifiers. Every cursor image then fails with "Failed to pick
+cursor plane format" and the output falls back to software cursors.
+
+The cursor buffer from the primary GPU is LINEAR already (implicit
+modifiers are stripped from mgpu_formats), so copy it on the CPU into a
+LINEAR dumb buffer on the secondary device instead. DMA_BUF_IOCTL_SYNC
+waits for the primary GPU's implicit fences, as the blit path relies on.
+The copy is at most a few hundred KiB and only happens when the cursor
+image changes, not when it moves.
+---
+ backend/drm/backend.c     |   3 +
+ backend/drm/drm.c         | 157 +++++++++++++++++++++++++++++++++++---
+ include/backend/drm/drm.h |   5 ++
+ 3 files changed, 153 insertions(+), 12 deletions(-)
+
+diff --git a/backend/drm/backend.c b/backend/drm/backend.c
+index 5a545b19..57098df4 100644
+--- a/backend/drm/backend.c
++++ b/backend/drm/backend.c
+@@ -7,6 +7,7 @@
+ #include <wlr/backend/interface.h>
+ #include <wlr/backend/session.h>
+ #include <wlr/interfaces/wlr_output.h>
++#include <wlr/render/allocator.h>
+ #include <wlr/util/log.h>
+ #include <xf86drm.h>
+ #include "backend/drm/drm.h"
+@@ -64,6 +65,8 @@ static void backend_destroy(struct wlr_backend *backend) {
+ 		drm_fb_destroy(fb);
+ 	}
+ 
++	wlr_allocator_destroy(drm->cursor_dumb_allocator);
++
+ 	free(drm->name);
+ 	wlr_session_close_file(drm->session, drm->dev);
+ 	wl_event_source_remove(drm->drm_event);
+diff --git a/backend/drm/drm.c b/backend/drm/drm.c
+index 054c24a4..f14aa80f 100644
+--- a/backend/drm/drm.c
++++ b/backend/drm/drm.c
+@@ -1,19 +1,26 @@
+ #include <assert.h>
+ #include <drm_fourcc.h>
+ #include <drm_mode.h>
++#include <errno.h>
+ #include <fcntl.h>
+ #include <inttypes.h>
++#include <linux/dma-buf.h>
+ #include <stdint.h>
+ #include <stdio.h>
+ #include <stdlib.h>
+ #include <string.h>
+ #include <strings.h>
++#include <sys/ioctl.h>
++#include <sys/mman.h>
+ #include <time.h>
++#include <unistd.h>
+ #include <wayland-server-core.h>
+ #include <wayland-util.h>
+ #include <wlr/backend/interface.h>
+ #include <wlr/interfaces/wlr_output.h>
++#include <wlr/render/allocator.h>
+ #include <wlr/render/drm_syncobj.h>
++#include <wlr/render/swapchain.h>
+ #include <wlr/render/wlr_renderer.h>
+ #include <wlr/util/box.h>
+ #include <wlr/util/log.h>
+@@ -24,6 +31,9 @@
+ #include "backend/drm/fb.h"
+ #include "backend/drm/iface.h"
+ #include "backend/drm/util.h"
++#include "render/allocator/drm_dumb.h"
++#include "render/drm_format_set.h"
++#include "render/pixel_format.h"
+ #include "types/wlr_output.h"
+ #include "util/env.h"
+ #include "config.h"
+@@ -368,6 +378,8 @@ static void drm_plane_finish_surface(struct wlr_drm_plane *plane) {
+ 	drm_fb_clear(&plane->current_fb);
+ 
+ 	finish_drm_surface(&plane->mgpu_surf);
++	wlr_swapchain_destroy(plane->cursor_dumb_swapchain);
++	plane->cursor_dumb_swapchain = NULL;
+ }
+ 
+ void finish_drm_resources(struct wlr_drm_backend *drm) {
+@@ -1082,6 +1094,126 @@ const drmModeModeInfo *wlr_drm_mode_get_info(struct wlr_output_mode *wlr_mode) {
+ 	return &mode->drm_mode;
+ }
+ 
++static bool dmabuf_sync(int fd, uint64_t flags) {
++	struct dma_buf_sync sync = { .flags = flags };
++	while (ioctl(fd, DMA_BUF_IOCTL_SYNC, &sync) != 0) {
++		if (errno != EINTR && errno != EAGAIN) {
++			wlr_log_errno(WLR_DEBUG, "DMA_BUF_IOCTL_SYNC failed");
++			return false;
++		}
++	}
++	return true;
++}
++
++/**
++ * Copy a cursor image into a LINEAR dumb buffer on this device, on the CPU.
++ *
++ * The multi-GPU cursor path normally blits on the secondary GPU, which needs
++ * that GPU's renderer to draw into something its cursor plane can scan out.
++ * That is not always possible: nvidia-drm cursor planes take only LINEAR,
++ * and NVIDIA's Vulkan driver renders only to its block-linear modifiers. The
++ * cursor buffer from the primary GPU is LINEAR already (implicit modifiers
++ * are stripped from mgpu_formats), so the bytes can go across directly. It is
++ * at most a few hundred KiB and only changes with the cursor image.
++ *
++ * DMA_BUF_IOCTL_SYNC waits for the primary GPU's implicit fences, which the
++ * blit path relies on too.
++ */
++static struct wlr_buffer *drm_cursor_copy_to_dumb(struct wlr_drm_backend *drm,
++		struct wlr_drm_plane *plane, struct wlr_buffer *src) {
++	struct wlr_dmabuf_attributes dmabuf;
++	if (!wlr_buffer_get_dmabuf(src, &dmabuf) || dmabuf.n_planes != 1 ||
++			dmabuf.modifier != DRM_FORMAT_MOD_LINEAR) {
++		wlr_log(WLR_DEBUG, "Cursor buffer is not a single-plane LINEAR DMA-BUF");
++		return NULL;
++	}
++	if (!wlr_drm_format_set_has(&plane->formats, dmabuf.format, DRM_FORMAT_MOD_LINEAR)) {
++		wlr_log(WLR_DEBUG, "Cursor plane does not take LINEAR 0x%"PRIX32, dmabuf.format);
++		return NULL;
++	}
++	const struct wlr_pixel_format_info *info = drm_get_pixel_format_info(dmabuf.format);
++	if (info == NULL || pixel_format_info_pixels_per_block(info) != 1) {
++		return NULL;
++	}
++	const size_t row_bytes = (size_t)dmabuf.width * info->bytes_per_block;
++
++	if (drm->cursor_dumb_allocator == NULL) {
++		// The allocator closes the FD it is given
++		int fd = fcntl(drm->fd, F_DUPFD_CLOEXEC, 0);
++		if (fd < 0) {
++			wlr_log_errno(WLR_ERROR, "Failed to duplicate DRM FD");
++			return NULL;
++		}
++		drm->cursor_dumb_allocator = wlr_drm_dumb_allocator_create(fd);
++		if (drm->cursor_dumb_allocator == NULL) {
++			close(fd);
++			return NULL;
++		}
++	}
++
++	struct wlr_swapchain *swapchain = plane->cursor_dumb_swapchain;
++	if (swapchain != NULL && (swapchain->width != dmabuf.width ||
++			swapchain->height != dmabuf.height ||
++			swapchain->format.format != dmabuf.format)) {
++		wlr_swapchain_destroy(swapchain);
++		swapchain = plane->cursor_dumb_swapchain = NULL;
++	}
++	if (swapchain == NULL) {
++		struct wlr_drm_format format = { .format = dmabuf.format };
++		if (!wlr_drm_format_add(&format, DRM_FORMAT_MOD_LINEAR)) {
++			return NULL;
++		}
++		swapchain = wlr_swapchain_create(drm->cursor_dumb_allocator,
++			dmabuf.width, dmabuf.height, &format);
++		wlr_drm_format_finish(&format);
++		if (swapchain == NULL) {
++			return NULL;
++		}
++		plane->cursor_dumb_swapchain = swapchain;
++	}
++
++	struct wlr_buffer *dst = wlr_swapchain_acquire(swapchain);
++	if (dst == NULL) {
++		return NULL;
++	}
++
++	void *dst_data;
++	uint32_t dst_format;
++	size_t dst_stride;
++	if (!wlr_buffer_begin_data_ptr_access(dst, WLR_BUFFER_DATA_PTR_ACCESS_WRITE,
++			&dst_data, &dst_format, &dst_stride)) {
++		wlr_buffer_unlock(dst);
++		return NULL;
++	}
++
++	bool ok = false;
++	const size_t map_size = dmabuf.offset[0] + (size_t)dmabuf.stride[0] * dmabuf.height;
++	void *src_map = mmap(NULL, map_size, PROT_READ, MAP_SHARED, dmabuf.fd[0], 0);
++	if (src_map == MAP_FAILED) {
++		wlr_log_errno(WLR_DEBUG, "Failed to mmap cursor DMA-BUF");
++	} else {
++		if (dmabuf_sync(dmabuf.fd[0], DMA_BUF_SYNC_START | DMA_BUF_SYNC_READ)) {
++			const uint8_t *src_row = (const uint8_t *)src_map + dmabuf.offset[0];
++			uint8_t *dst_row = dst_data;
++			for (int y = 0; y < dmabuf.height; y++) {
++				memcpy(dst_row, src_row, row_bytes);
++				src_row += dmabuf.stride[0];
++				dst_row += dst_stride;
++			}
++			dmabuf_sync(dmabuf.fd[0], DMA_BUF_SYNC_END | DMA_BUF_SYNC_READ);
++			ok = true;
++		}
++		munmap(src_map, map_size);
++	}
++	wlr_buffer_end_data_ptr_access(dst);
++
++	if (!ok) {
++		wlr_buffer_unlock(dst);
++		return NULL;
++	}
++	return dst;
++}
++
+ static bool drm_connector_set_cursor(struct wlr_output *output,
+ 		struct wlr_buffer *buffer, int hotspot_x, int hotspot_y) {
+ 	struct wlr_drm_connector *conn = get_drm_connector_from_output(output);
+@@ -1125,20 +1257,21 @@ static bool drm_connector_set_cursor(struct wlr_output *output,
+ 		struct wlr_buffer *local_buf;
+ 		if (drm->mgpu_renderer.wlr_rend) {
+ 			struct wlr_drm_format format = {0};
+-			if (!drm_plane_pick_render_format(plane, &format, &drm->mgpu_renderer)) {
+-				wlr_log(WLR_ERROR, "Failed to pick cursor plane format");
+-				return false;
+-			}
+-
+-			bool ok = init_drm_surface(&plane->mgpu_surf, &drm->mgpu_renderer,
+-				buffer->width, buffer->height, &format);
+-			wlr_drm_format_finish(&format);
+-			if (!ok) {
+-				return false;
++			if (drm_plane_pick_render_format(plane, &format, &drm->mgpu_renderer)) {
++				bool ok = init_drm_surface(&plane->mgpu_surf, &drm->mgpu_renderer,
++					buffer->width, buffer->height, &format);
++				wlr_drm_format_finish(&format);
++				if (!ok) {
++					return false;
++				}
++
++				local_buf = drm_surface_blit(&plane->mgpu_surf, buffer, NULL, 0);
++			} else {
++				local_buf = drm_cursor_copy_to_dumb(drm, plane, buffer);
+ 			}
+-
+-			local_buf = drm_surface_blit(&plane->mgpu_surf, buffer, NULL, 0);
+ 			if (local_buf == NULL) {
++				wlr_drm_conn_log(conn, WLR_DEBUG, "Failed to copy cursor "
++					"to the secondary GPU, falling back to software cursor");
+ 				return false;
+ 			}
+ 		} else {
+diff --git a/include/backend/drm/drm.h b/include/backend/drm/drm.h
+index 9409b7b1..32d1665b 100644
+--- a/include/backend/drm/drm.h
++++ b/include/backend/drm/drm.h
+@@ -26,6 +26,9 @@ struct wlr_drm_plane {
+ 
+ 	/* Only initialized on multi-GPU setups */
+ 	struct wlr_drm_surface mgpu_surf;
++	/* Multi-GPU cursor planes whose formats the blit renderer cannot render
++	 * to: LINEAR dumb buffers filled on the CPU instead */
++	struct wlr_swapchain *cursor_dumb_swapchain;
+ 
+ 	/* Buffer submitted to the kernel, will be presented on next vblank */
+ 	struct wlr_drm_fb *queued_fb;
+@@ -123,6 +126,8 @@ struct wlr_drm_backend {
+ 	uint64_t cursor_width, cursor_height;
+ 
+ 	struct wlr_drm_format_set mgpu_formats;
++	/* Created on first use, for cursor_dumb_swapchain */
++	struct wlr_allocator *cursor_dumb_allocator;
+ 
+ 	bool supports_tearing_page_flips;
+ };
+-- 
+2.55.0
+

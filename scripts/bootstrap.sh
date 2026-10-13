@@ -130,7 +130,10 @@ if [[ $do_meson -eq 1 ]]; then
   # Swift always emits Clang flags, and gcc-14 rejects -target / -fblocks.
   if [[ ! -f $build/build.ninja ]]; then
     rm -rf "$build"
-    CC="$cc" CXX="$cxx" meson setup "$build" --buildtype="$meson_type" "${nprpc_args[@]}"
+    # --wrap-mode: Debian's meson defaults to nodownload, which refuses the
+    # vendored wlroots subproject (third-party/wlroots.wrap).
+    CC="$cc" CXX="$cxx" meson setup "$build" --buildtype="$meson_type" \
+      --wrap-mode=default "${nprpc_args[@]}"
   elif [[ ${#nprpc_args[@]} -gt 0 ]]; then
     meson configure "$build" "${nprpc_args[@]}" || true
   fi

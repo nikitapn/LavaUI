@@ -560,7 +560,14 @@ GLib + libdbusmenu-glib. SPIR-V is checked in; after GLSL edits run
 `canvas/scripts/compile_shaders.sh`.
 
 Compositor is **Meson** (`meson setup build && ninja -C build`), separate from
-SwiftPM. Scripts under `compositor/scripts/` (`dev-run`, `start-lava-compositor`,
+SwiftPM. It links a **patched wlroots 0.19.3 statically** by default, fetched
+into `third-party/wlroots` from `third-party/wlroots.wrap` on first setup —
+`-Dwlroots=system` for the installed one; the patches and why are in
+`third-party/README.md`. Anything that renders an output offscreen (frost,
+`CaptureScreen`) goes through `buildStateWithoutCursor`: `build_state` draws
+software cursors into whatever it renders, and an output whose hardware cursor
+was refused has one on every frame. Headless fakes a hardware cursor, so it
+never shows this — `wlr_output_lock_software_cursors` reproduces it. Scripts under `compositor/scripts/` (`dev-run`, `start-lava-compositor`,
 optional QEMU VM).
 
 `meson test -C build` runs the C++ tests under `canvas/tests/`. They cover the

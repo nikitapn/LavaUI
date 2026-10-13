@@ -2,6 +2,9 @@
 # Build wlroots 0.19 from source into /usr/local. Used when the distro still
 # ships 0.17/0.18 (Debian 13, Ubuntu 24.04). Arch has wlroots0.19 and skips
 # this. Override the tag with LAVA_WLROOTS_VERSION.
+#
+# Only `-Dwlroots=system` links what this installs. The default build uses
+# the patched subproject in third-party/wlroots.wrap instead.
 set -euo pipefail
 
 here="$(cd "$(dirname "$0")" && pwd)"
@@ -33,7 +36,9 @@ url="https://gitlab.freedesktop.org/wlroots/wlroots.git"
 src="${LAVA_WLROOTS_SRC:-}"
 if [[ -z $src ]]; then
   if mkdir -p "$LAVA_ROOT/third-party" 2>/dev/null && [[ -w $LAVA_ROOT/third-party ]]; then
-    src="$LAVA_ROOT/third-party/wlroots"
+    # Not third-party/wlroots: that is meson's checkout of the patched
+    # subproject (third-party/wlroots.wrap), and must not be an unpatched tree.
+    src="$LAVA_ROOT/third-party/wlroots-system"
   else
     src="/var/tmp/lava-wlroots-$tag"
   fi

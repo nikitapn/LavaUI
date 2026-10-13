@@ -6,3 +6,12 @@ option(
     + 'third-party/nprpc, then ../nprpc, then a system libnprpc. Supplies '
     + 'the control plane; without it the compositor still builds.',
 )
+option(
+  'wlroots',
+  type: 'combo',
+  choices: ['vendored', 'system'],
+  value: 'vendored',
+  description: 'vendored: wlroots 0.19.3 from third-party/wlroots.wrap with '
+    + 'our patches, linked statically (fetched on first setup). system: the '
+    + 'installed wlroots-0.19, without them.',
+)
