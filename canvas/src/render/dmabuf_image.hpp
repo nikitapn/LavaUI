@@ -163,6 +163,18 @@ class DmabufImage {
   /// Whether `publishFence` can do anything at all.
   bool fenced() const { return semaphore_ != VK_NULL_HANDLE; }
 
+  /// Everything the buffer's readers and writers have hung on it, as one
+  /// sync_file — what the next frame must wait for before it writes. -1 when
+  /// there is nothing pending or the kernel cannot say. The caller owns the fd.
+  ///
+  /// The release half of the handover. There is one buffer per window, drawn
+  /// over in place, so without this a frame could be written while the
+  /// consumer is still compositing the one before it. The consumer has to put
+  /// its read fences there for this to see them: wlroots' Vulkan renderer does
+  /// on its own only when its pass has no signal timeline, and the compositor
+  /// adds them for the passes that do (`fenceCanvasReaders`).
+  int exportReaderFences() const;
+
  private:
   DmabufImage() = default;
 

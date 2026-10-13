@@ -3,6 +3,8 @@ extern "C" {
 #include <drm_fourcc.h>
 }
 
+#include <linux/dma-buf.h>
+#include <sys/ioctl.h>
 #include <unistd.h>
 
 #include <algorithm>
@@ -96,6 +98,26 @@ DmabufBuffer *DmabufBuffer::create(const canvas::DmabufImage *image) {
   wlr_buffer_init(&self->base, &kBufferImpl, static_cast<int>(image->width()),
                   static_cast<int>(image->height()));
   return self;
+}
+
+DmabufBuffer *DmabufBuffer::from(wlr_buffer *buffer) {
+  return buffer != nullptr && buffer->impl == &kBufferImpl ? from_buffer(buffer)
+                                                           : nullptr;
+}
+
+bool attachDmabufFence(wlr_buffer *buffer, int syncFile, uint32_t flags) {
+  wlr_dmabuf_attributes attribs{};
+  if (syncFile < 0 || !wlr_buffer_get_dmabuf(buffer, &attribs)) return false;
+  bool ok = true;
+  for (int i = 0; i < attribs.n_planes; ++i) {
+    // Planes of one buffer usually share an fd; importing twice into the
+    // same reservation adds the same fence twice, which costs nothing.
+    dma_buf_import_sync_file import{.flags = flags, .fd = syncFile};
+    if (ioctl(attribs.fd[i], DMA_BUF_IOCTL_IMPORT_SYNC_FILE, &import) != 0) {
+      ok = false;
+    }
+  }
+  return ok;
 }
 
 // ─── CanvasRenderer ────────────────────────────────────────────────────────

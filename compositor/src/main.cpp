@@ -16,6 +16,7 @@
 #include <sys/wait.h>
 #include <fcntl.h>
 #include <unistd.h>
+#include <linux/dma-buf.h>
 #include <linux/input-event-codes.h>  // BTN_RIGHT
 #include <cerrno>
 #include <csignal>
@@ -112,6 +113,72 @@ bool buildStateWithoutCursor(wlr_scene_output *sceneOutput,
   const bool built = wlr_scene_output_build_state(sceneOutput, state, opts);
   for (wlr_output_cursor *each : hidden) each->visible = true;
   return built;
+}
+
+/// Tells the canvas buffers a render just read when that render is done.
+///
+/// Canvas draws each window into one shared buffer, in place, and the frame
+/// after this one may be submitted while this composite is still sampling it.
+/// Canvas waits for the buffer's implicit read fences before writing
+/// (`DmabufImage::exportReaderFences`), and wlroots' Vulkan renderer hangs one
+/// on every buffer it samples — but only when the pass has no signal timeline
+/// of its own. This puts back what wlroots then leaves out, from the point
+/// the pass signals instead.
+///
+/// Today that never happens, and only by accident: `Output` creates its scene
+/// output before `wlr_output_init_render`, the scene finds no renderer, and
+/// gives up on explicit sync for the output — so the state has no wait
+/// timeline and this returns at once. Reorder those two and every real DRM
+/// output gets a timeline, and without this the canvas buffers would carry no
+/// read fences at all. Checked by doing exactly that, nested.
+///
+/// `written` is a buffer the render wrote that someone else reads next — a
+/// frost capture, read by canvas through its write fences — and gets the
+/// same point as a writer, which wlroots likewise skips under a timeline.
+void fenceCanvasReaders(wlr_scene_output *sceneOutput,
+                        const wlr_output_state &state,
+                        wlr_buffer *written = nullptr) {
+  if (state.wait_timeline == nullptr ||
+      (state.committed & WLR_OUTPUT_STATE_BUFFER) == 0 ||
+      state.buffer == nullptr) {
+    return;
+  }
+  // A canvas buffer scanned out directly has the display as its reader, and
+  // no render fence says when that stops. Not something this can mend.
+  if (lava::DmabufBuffer::from(state.buffer) != nullptr) return;
+  const int fence = wlr_drm_syncobj_timeline_export_sync_file(
+      state.wait_timeline, state.wait_point);
+  if (fence < 0) return;
+
+  if (written != nullptr) {
+    lava::attachDmabufFence(written, fence, DMA_BUF_SYNC_WRITE);
+  }
+
+  // Every canvas buffer on this output, rather than exactly the ones the pass
+  // sampled: that list is private to the scene. Fencing one the pass skipped
+  // costs its next frame a GPU wait of at most one composite; missing one is
+  // the race this exists to close.
+  struct Walk {
+    wlr_box output;
+    int fence;
+  } walk{{sceneOutput->x, sceneOutput->y, 0, 0}, fence};
+  wlr_output_effective_resolution(sceneOutput->output, &walk.output.width,
+                                  &walk.output.height);
+  wlr_scene_node_for_each_buffer(
+      &sceneOutput->scene->tree.node,
+      [](wlr_scene_buffer *node, int lx, int ly, void *data) {
+        auto *walk = static_cast<Walk *>(data);
+        if (lava::DmabufBuffer::from(node->buffer) == nullptr) return;
+        const wlr_box box{
+            lx, ly,
+            node->dst_width > 0 ? node->dst_width : node->buffer->width,
+            node->dst_height > 0 ? node->dst_height : node->buffer->height};
+        wlr_box overlap{};
+        if (!wlr_box_intersection(&overlap, &box, &walk->output)) return;
+        lava::attachDmabufFence(node->buffer, walk->fence, DMA_BUF_SYNC_READ);
+      },
+      &walk);
+  close(fence);
 }
 
 /// How long after a window is refused its application's remembered frame it
@@ -5133,6 +5200,9 @@ class SurfaceRegistry : public lava::CompositorHost {
     opts.swapchain = output->captureChain;
     const bool built = buildStateWithoutCursor(output->scene_output, &state,
                                                &opts);
+    // Canvas reads the capture back through its write fences — see
+    // `ImportedDmabuf::waitReady`.
+    if (built) fenceCanvasReaders(output->scene_output, state, state.buffer);
     wlr_buffer *locked = nullptr;
     if (built && state.buffer != nullptr) {
       locked = state.buffer;
@@ -8569,6 +8639,9 @@ wlr_output_mode *pick_mode(wlr_output *output, const lava::OutputConfig *cfg) {
   return best;
 }
 
+// The scene output is created before `wlr_output_init_render`, so the scene
+// sees no renderer and never syncs this output explicitly. Changing that
+// order changes how canvas buffers are fenced — see `fenceCanvasReaders`.
 Output::Output(Server *server, wlr_output *output)
     : server(server), wlr(output),
       scene_output(wlr_scene_output_create(server->scene, output)) {
@@ -8884,7 +8957,17 @@ void Output::on_frame(wl_listener *listener, void *) {
   // removed would end up — the scene waits for a client's acquire fence here,
   // on this thread, if the renderer cannot hand the wait to the GPU.
   const int64_t started = lava::FrameProbe::on() ? lava::FrameProbe::now() : 0;
-  wlr_scene_output_commit(output->scene_output, nullptr);
+  // `wlr_scene_output_commit`, opened up for the one thing it hides: the
+  // state, whose wait timeline is when this composite stops reading.
+  if (wlr_scene_output_needs_frame(output->scene_output)) {
+    wlr_output_state state;
+    wlr_output_state_init(&state);
+    if (wlr_scene_output_build_state(output->scene_output, &state, nullptr)) {
+      fenceCanvasReaders(output->scene_output, state);
+      wlr_output_commit_state(output->wlr, &state);
+    }
+    wlr_output_state_finish(&state);
+  }
   output->probeCovering = nullptr;
   lava::GameProbe::report();
   lava::StartupWatchdog::dismiss();
@@ -9195,6 +9278,7 @@ bool Server::renderOutputPng(Output *output, std::vector<uint8_t> &png,
   opts.swapchain = chain;
   const bool built =
       buildStateWithoutCursor(output->scene_output, &state, &opts);
+  if (built) fenceCanvasReaders(output->scene_output, state);
 
   bool ok = false;
   if (built && state.buffer != nullptr) {

@@ -49,7 +49,16 @@ struct DmabufBuffer {
   /// The returned buffer is owned by the caller; drop it with
   /// `wlr_buffer_drop`. It does not take ownership of `image`.
   static DmabufBuffer *create(const canvas::DmabufImage *image);
+
+  /// `buffer` as a canvas buffer, or null when it is anything else.
+  static DmabufBuffer *from(wlr_buffer *buffer);
 };
+
+/// Hangs `syncFile` on every plane of `buffer` as an implicit fence —
+/// `DMA_BUF_SYNC_READ` for a reader, `DMA_BUF_SYNC_WRITE` for a writer. Does
+/// not take the fd. Best effort: false if the buffer is not a dma-buf or the
+/// kernel refused.
+bool attachDmabufFence(wlr_buffer *buffer, int syncFile, uint32_t flags);
 
 class CanvasSurface;
 

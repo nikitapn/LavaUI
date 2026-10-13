@@ -686,6 +686,14 @@ class RenderWindow {
 
   /// Per in-flight frame: signals that the acquired image is ready to use.
   VkSemaphore imageAvailableSemaphores_[kMaxFramesInFlight]{};
+  /// Per in-flight frame: the exported buffer's readers, imported for one
+  /// wait. Per slot rather than per image because a temporary import is only
+  /// legal into a semaphore no pending submit uses, and the slot's fence is
+  /// what says that. See `waitForReaders`.
+  VkSemaphore readerSemaphores_[kMaxFramesInFlight]{};
+  /// Imports the exported buffer's pending readers into this slot's semaphore,
+  /// or returns null when there is nothing to wait for.
+  VkSemaphore waitForReaders(uint32_t frame);
   /// Per *swapchain image* (not frame slot): submit → present wait. Reusing a
   /// frame-slot semaphore is illegal until that image is re-acquired; see
   /// https://docs.vulkan.org/guide/latest/swapchain_semaphore_reuse.html

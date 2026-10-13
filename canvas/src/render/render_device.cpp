@@ -559,7 +559,12 @@ void RenderDevice::createLogicalDevice()
     exportSyncFd_ = haveExtension &&
                     (semaphoreProps.externalSemaphoreFeatures &
                      VK_EXTERNAL_SEMAPHORE_FEATURE_EXPORTABLE_BIT) != 0;
-    if (exportSyncFd_) {
+    // The other direction: the consumer's reads, waited for on the GPU before
+    // the next frame writes. Optional on the same terms.
+    importSyncFd_ = haveExtension &&
+                    (semaphoreProps.externalSemaphoreFeatures &
+                     VK_EXTERNAL_SEMAPHORE_FEATURE_IMPORTABLE_BIT) != 0;
+    if (exportSyncFd_ || importSyncFd_) {
       deviceExtensions.push_back(VK_KHR_EXTERNAL_SEMAPHORE_FD_EXTENSION_NAME);
     }
   }
@@ -620,10 +625,17 @@ void RenderDevice::createLogicalDevice()
         vkGetDeviceProcAddr(device_, "vkGetSemaphoreFdKHR"));
       exportSyncFd_ = getSemaphoreFd_ != nullptr;
     }
+    if (importSyncFd_) {
+      importSemaphoreFd_ = reinterpret_cast<PFN_vkImportSemaphoreFdKHR>(
+        vkGetDeviceProcAddr(device_, "vkImportSemaphoreFdKHR"));
+      importSyncFd_ = importSemaphoreFd_ != nullptr;
+    }
     std::cout << "dmabuf export ready on '"
               << physicalDeviceProperties_.deviceName << "'; handover is "
               << (exportSyncFd_ ? "fenced (sync_file)"
                                 : "a CPU wait (no sync_file export)")
+              << (importSyncFd_ ? ", reads waited for on the GPU"
+                                : ", reads not waited for (no sync_file import)")
               << '\n';
   }
 

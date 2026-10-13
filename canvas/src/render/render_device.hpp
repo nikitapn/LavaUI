@@ -146,6 +146,9 @@ class RenderDevice
   /// `VK_KHR_external_semaphore_fd` is not the same as supporting the handle
   /// type, and the fallback is correct, just slower.
   bool exportSyncFd_ = false;
+  /// True when a sync_file can be waited on by a submit — what lets a frame
+  /// wait for the consumer to stop reading the buffer it is about to write.
+  bool importSyncFd_ = false;
   /// See `setExportFenceHonoured`. A property of the consumer, so it is set
   /// from outside and never inferred here.
   bool exportFenceHonoured_ = false;
@@ -153,6 +156,7 @@ class RenderDevice
   PFN_vkGetMemoryFdPropertiesKHR getMemoryFdProperties_ = nullptr;
   PFN_vkGetImageDrmFormatModifierPropertiesEXT getModifierProps_ = nullptr;
   PFN_vkGetSemaphoreFdKHR getSemaphoreFd_ = nullptr;
+  PFN_vkImportSemaphoreFdKHR importSemaphoreFd_ = nullptr;
 
   /// Whether `device` is the GPU behind `exportDrmFd_`.
   bool matchesExportDrmDevice(VkPhysicalDevice device) const;
@@ -364,6 +368,8 @@ class RenderDevice
   bool canImportDmabuf() const { return getMemoryFdProperties_ != nullptr; }
   /// True when the handover can be fenced rather than waited on.
   bool canExportSyncFd() const { return exportSyncFd_; }
+  /// True when a frame can wait on the GPU for an exported buffer's readers.
+  bool canImportSyncFd() const { return importSyncFd_; }
 
   /// Whether the consumer waits on the fence an exported frame publishes.
   ///
@@ -393,6 +399,10 @@ class RenderDevice
     return getModifierProps_;
   }
   PFN_vkGetSemaphoreFdKHR getSemaphoreFd() const { return getSemaphoreFd_; }
+  PFN_vkImportSemaphoreFdKHR importSemaphoreFd() const
+  {
+    return importSemaphoreFd_;
+  }
 
   VkFormat colorFormat() const { return colorFormat_; }
 

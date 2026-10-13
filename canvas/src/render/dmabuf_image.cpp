@@ -541,6 +541,20 @@ void DmabufImage::recordRelease(VkCommandBuffer cmd, uint32_t srcQueueFamily,
                        nullptr, 1, &release);
 }
 
+int DmabufImage::exportReaderFences() const
+{
+  if (fd_[0] < 0) return -1;
+  // WRITE asks for what a writer must wait for, which is every fence on the
+  // buffer — the readers', and our own last frame's, which is already ordered
+  // on this queue and costs nothing to wait for again.
+  dma_buf_export_sync_file exp {
+    .flags = DMA_BUF_SYNC_WRITE,
+    .fd    = -1,
+  };
+  if (ioctl(fd_[0], DMA_BUF_IOCTL_EXPORT_SYNC_FILE, &exp) != 0) return -1;
+  return exp.fd;
+}
+
 int DmabufImage::publishFence()
 {
   if (semaphore_ == VK_NULL_HANDLE) return -1;

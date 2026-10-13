@@ -149,6 +149,10 @@ RenderWindow::~RenderWindow()
       vkDestroySemaphore(dev, imageAvailableSemaphores_[i], nullptr);
       imageAvailableSemaphores_[i] = VK_NULL_HANDLE;
     }
+    if (readerSemaphores_[i] != VK_NULL_HANDLE) {
+      vkDestroySemaphore(dev, readerSemaphores_[i], nullptr);
+      readerSemaphores_[i] = VK_NULL_HANDLE;
+    }
     if (inFlightFences_[i] != VK_NULL_HANDLE) {
       vkDestroyFence(dev, inFlightFences_[i], nullptr);
       inFlightFences_[i] = VK_NULL_HANDLE;
@@ -961,18 +965,31 @@ void RenderWindow::submitFrame(
     .pCommandBuffers    = &cmd,
   };
 
-  VkPipelineStageFlags waitStage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+  VkSemaphore waits[2];
+  VkPipelineStageFlags waitStages[2];
+  uint32_t waitCount = 0;
   // Present-wait semaphore is keyed by swapchain image index, not frame slot.
   VkSemaphore renderFinished = VK_NULL_HANDLE;
   if (windowed_) {
     assert(swapImageIndex < renderFinishedSemaphores_.size());
     renderFinished = renderFinishedSemaphores_[swapImageIndex];
-    submitInfo.waitSemaphoreCount = 1;
-    submitInfo.pWaitSemaphores = &imageAvailableSemaphores_[frame];
-    submitInfo.pWaitDstStageMask = &waitStage;
+    waits[waitCount] = imageAvailableSemaphores_[frame];
+    waitStages[waitCount++] = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
     submitInfo.signalSemaphoreCount = 1;
     submitInfo.pSignalSemaphores = &renderFinished;
   }
+  // The consumer may still be compositing the last frame out of the buffer
+  // this one writes. Only the writes into it wait: a resolve is a colour
+  // attachment write, a blur frame's copy is a transfer, and everything before
+  // either still runs.
+  if (VkSemaphore readers = waitForReaders(frame); readers != VK_NULL_HANDLE) {
+    waits[waitCount] = readers;
+    waitStages[waitCount++] = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
+                              VK_PIPELINE_STAGE_TRANSFER_BIT;
+  }
+  submitInfo.waitSemaphoreCount = waitCount;
+  submitInfo.pWaitSemaphores = waits;
+  submitInfo.pWaitDstStageMask = waitStages;
 
   // The handover fence, if this device can produce one. Signalled by the same
   // submit that writes the shared image, exported just below and attached to
@@ -1095,6 +1112,40 @@ void RenderWindow::readPixels(uint8_t *dst, size_t dstSize)
   if (stagingBufferMapped_ == nullptr) return;
   size_t n = std::min(dstSize, static_cast<size_t>(stagingBufferSize_));
   memcpy(dst, stagingBufferMapped_, n);
+}
+
+VkSemaphore RenderWindow::waitForReaders(uint32_t frame)
+{
+  if (!exportTarget_ || !dev_.canImportSyncFd()) return VK_NULL_HANDLE;
+  const int fence = exportTarget_->exportReaderFences();
+  if (fence < 0) return VK_NULL_HANDLE;
+
+  VkSemaphore &semaphore = readerSemaphores_[frame];
+  if (semaphore == VK_NULL_HANDLE) {
+    VkSemaphoreCreateInfo info {.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
+    if (vkCreateSemaphore(dev_.getDevice(), &info, nullptr, &semaphore) !=
+        VK_SUCCESS) {
+      semaphore = VK_NULL_HANDLE;
+      close(fence);
+      return VK_NULL_HANDLE;
+    }
+  }
+  // Temporary: the payload is consumed by the one wait and the semaphore goes
+  // back to unsignalled, ready for this slot's next frame. Legal because the
+  // slot's fence was waited on before this frame was recorded, so no pending
+  // submit still names the semaphore. A successful import takes the fd.
+  VkImportSemaphoreFdInfoKHR import {
+    .sType      = VK_STRUCTURE_TYPE_IMPORT_SEMAPHORE_FD_INFO_KHR,
+    .semaphore  = semaphore,
+    .flags      = VK_SEMAPHORE_IMPORT_TEMPORARY_BIT,
+    .handleType = VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_SYNC_FD_BIT,
+    .fd         = fence,
+  };
+  if (dev_.importSemaphoreFd()(dev_.getDevice(), &import) != VK_SUCCESS) {
+    close(fence);
+    return VK_NULL_HANDLE;
+  }
+  return semaphore;
 }
 
 void RenderWindow::captureFrame(uint8_t *dst, size_t dstSize)
