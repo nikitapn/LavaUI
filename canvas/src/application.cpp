@@ -612,11 +612,20 @@ struct Application::Impl
 
   int refreshDmabufTexture(const std::string &key,
                            const canvas::DmabufImport &src, int32_t x,
-                           int32_t y, uint32_t w, uint32_t h)
+                           int32_t y, uint32_t w, uint32_t h,
+                           uint32_t windowId)
   {
     if (!deviceUp) return -1;
+    TextureManager::BlitQueue queue;
+    if (windowId != 0) {
+      if (AppWindow *w = win(windowId)) {
+        queue.queue = w->renderWindow().queue();
+        queue.mutex = w->renderWindow().queueMutex();
+      }
+    }
     auto handle = TextureManager::getInstance().refreshDmabufTexture(
-      key, src, x, y, w, h);
+      key, src, x, y, w, h,
+      queue.queue != VK_NULL_HANDLE ? &queue : nullptr);
     return handle.isValid() ? static_cast<int>(handle.id) : -1;
   }
 
@@ -1058,9 +1067,9 @@ void Application::unloadTexture(const std::string &path)
 int Application::refreshDmabufTexture(const std::string &key,
                                       const canvas::DmabufImport &src,
                                       int32_t x, int32_t y, uint32_t w,
-                                      uint32_t h)
+                                      uint32_t h, uint32_t windowId)
 {
-  return impl_->refreshDmabufTexture(key, src, x, y, w, h);
+  return impl_->refreshDmabufTexture(key, src, x, y, w, h, windowId);
 }
 
 std::unique_ptr<canvas::ImportedDmabuf> Application::importDmabuf(

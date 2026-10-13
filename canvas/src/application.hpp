@@ -289,9 +289,14 @@ public:
   /// frost plate. Overwrites the image already under `key` when nothing is
   /// still reading it, instead of allocating another one. See
   /// `TextureManager::refreshDmabufTexture`.
+  ///
+  /// `windowId`, when non-zero, is the window that will sample the result:
+  /// the copy is then submitted on its queue and the call does not wait for
+  /// the GPU. See `TextureManager::refreshDmabufTexture`.
   int refreshDmabufTexture(const std::string &key,
                            const canvas::DmabufImport &src, int32_t x,
-                           int32_t y, uint32_t w, uint32_t h);
+                           int32_t y, uint32_t w, uint32_t h,
+                           uint32_t windowId = 0);
   /// Imports a dma-buf to be read again and again — a video buffer — rather
   /// than once. Null on failure; `src`'s fds stay the caller's.
   std::unique_ptr<canvas::ImportedDmabuf> importDmabuf(

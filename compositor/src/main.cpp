@@ -2043,6 +2043,9 @@ struct ClientSurface {
   /// A canvas surface so the blur runs on the compositing Vulkan device
   /// (`BlurPass`), not a CPU box filter.
   float backdropBlurRadius = 0.f;
+  /// Something behind this window's frost painted since it was captured.
+  /// Only these are recaptured on a live pass — see `notePainted`.
+  bool frostStale = false;
   /// Glass refraction at the rim of every plate, in pixels; 0 is flat. The
   /// client's choice (`SetBackdropRefraction`): a menu reads as glass, a
   /// terminal whose whole window is frosted just looks warped.
@@ -4881,9 +4884,14 @@ class SurfaceRegistry : public lava::CompositorHost {
   /// caret. `surfaces_` is front-first among the workspace windows, which is
   /// what the walk below reads; furniture is drawn from trees above every
   /// workspace, so it is in front of any window and behind none.
+  ///
+  /// Marks each frosted window it reaches rather than the desktop as a whole:
+  /// a refresh used to recapture every frosted window on the screen because
+  /// one of them had something move behind it, and each recapture is a full
+  /// offscreen composite of the output.
   void notePainted(const ClientSurface &source,
                    const wlr_box *changed = nullptr) {
-    if (server_ == nullptr || backdropContentDirty_) return;
+    if (server_ == nullptr) return;
     if (!visible(source)) return;
     if (changed != nullptr && wlr_box_empty(changed)) return;
     const wlr_box painted =
@@ -4904,11 +4912,12 @@ class SurfaceRegistry : public lava::CompositorHost {
       if (!owned->furniture() && (source.furniture() || passedSource)) {
         continue;
       }
+      if (owned->frostStale) continue;
       const wlr_box frost = frostBounds(*owned);
       wlr_box hit{};
       if (frost.width > 0 && wlr_box_intersection(&hit, &frost, &painted)) {
+        owned->frostStale = true;
         backdropContentDirty_ = true;
-        return;
       }
     }
   }
@@ -6322,7 +6331,11 @@ class SurfaceRegistry : public lava::CompositorHost {
         continue;
       }
       anyFrost = true;
-      if (!owned->minimized) captureBackdrop(*owned);
+      // A structural pass takes everything; a live one only what painted
+      // under. The flag is cleared either way: a capture is a capture.
+      const bool due = structural || owned->frostStale;
+      owned->frostStale = false;
+      if (due && !owned->minimized) captureBackdrop(*owned);
     }
     // The last frosted window closed, or gave its radius up. Hand the capture
     // swapchains back rather than keep a screen's worth of buffers per output

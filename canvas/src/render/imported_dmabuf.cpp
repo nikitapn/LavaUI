@@ -399,6 +399,30 @@ ImportedDmabuf::~ImportedDmabuf()
   }
 }
 
+bool ImportedDmabuf::exportWriteFence(int &fd) const
+{
+  fd = -1;
+  if (waitFd_ < 0) return false;
+  // READ asks for what a reader must wait for: the writers.
+  dma_buf_export_sync_file exp{
+    .flags = DMA_BUF_SYNC_READ,
+    .fd    = -1,
+  };
+  if (ioctl(waitFd_, DMA_BUF_IOCTL_EXPORT_SYNC_FILE, &exp) != 0) return false;
+  fd = exp.fd;
+  return true;
+}
+
+bool ImportedDmabuf::attachReadFence(int syncFile) const
+{
+  if (waitFd_ < 0 || syncFile < 0) return false;
+  dma_buf_import_sync_file import{
+    .flags = DMA_BUF_SYNC_READ,
+    .fd    = static_cast<__s32>(syncFile),
+  };
+  return ioctl(waitFd_, DMA_BUF_IOCTL_IMPORT_SYNC_FILE, &import) == 0;
+}
+
 void ImportedDmabuf::waitReady(int timeoutMs) const
 {
   if (waitFd_ < 0) return;

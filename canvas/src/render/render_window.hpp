@@ -694,6 +694,15 @@ class RenderWindow {
   /// Imports the exported buffer's pending readers into this slot's semaphore,
   /// or returns null when there is nothing to wait for.
   VkSemaphore waitForReaders(uint32_t frame);
+
+ public:
+  /// The queue this window submits on, and the mutex that guards it — for
+  /// work that has to be ordered before this window's next frame without a
+  /// semaphore between them, as the frost blit is. See `leaseGraphicsQueue`.
+  VkQueue queue() const { return queue_; }
+  std::mutex *queueMutex() const { return queueMutex_; }
+
+ private:
   /// Per *swapchain image* (not frame slot): submit → present wait. Reusing a
   /// frame-slot semaphore is illegal until that image is re-acquired; see
   /// https://docs.vulkan.org/guide/latest/swapchain_semaphore_reuse.html

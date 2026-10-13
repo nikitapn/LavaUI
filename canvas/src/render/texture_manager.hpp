@@ -90,6 +90,21 @@ private:
     uint32_t nextId_ = 1; // Start from 1, 0 means invalid
     ImageAtlas atlas_;
     mutable std::mutex mutex_;
+
+    /// A frost blit submitted without waiting for it — see
+    /// `submitAsyncBlitLocked`. Everything here lives until `fence` signals.
+    struct PendingBlit {
+        VkFence fence = VK_NULL_HANDLE;
+        VkCommandBuffer cmd = VK_NULL_HANDLE;
+        VkSemaphore wait = VK_NULL_HANDLE;    // the capture's writes
+        VkSemaphore signal = VK_NULL_HANDLE;  // exported to the capture as a read
+        VkImage target = VK_NULL_HANDLE;
+        std::unique_ptr<canvas::ImportedDmabuf> source;
+    };
+    /// Taken after `mutex_` where both are held, never before it.
+    std::mutex blitMutex_;
+    VkCommandPool blitPool_ = VK_NULL_HANDLE;
+    std::vector<PendingBlit> pendingBlits_;
     std::unordered_map<const void *, std::unordered_set<uint32_t>> windowTextures_;
     std::unordered_map<uint32_t, uint32_t> windowUsers_;
     std::vector<PendingSlot> pendingSlots_;
@@ -248,10 +263,26 @@ public:
     /// caller captures under the same key thousands of times and releases it
     /// once, so a reference per capture would be a count that never reaches
     /// zero and an image that is never freed.
+    ///
+    /// `async`, when given, is the queue whatever samples the result submits
+    /// on. The overwrite is then submitted there without the CPU waiting —
+    /// neither for the producer to finish writing (the submit waits for its
+    /// fence on the GPU) nor for the blit (the producer is told when our read
+    /// is done through a fence on its buffer, and the next frame on that
+    /// queue runs after the blit by submission order). Without it, or where
+    /// the device cannot pass fences as sync_files, both waits are on the CPU
+    /// as before. The frost plate is the caller: a capture per frosted window
+    /// per frame, and waiting for each was 13–40 ms of the compositor's frame
+    /// with four to eight frosted terminals repainting.
+    struct BlitQueue {
+        VkQueue queue = VK_NULL_HANDLE;
+        std::mutex *mutex = nullptr;
+    };
     TextureHandle refreshDmabufTexture(const std::string &key,
                                        const canvas::DmabufImport &src,
                                        int32_t x, int32_t y, uint32_t w,
-                                       uint32_t h);
+                                       uint32_t h,
+                                       const BlitQueue *async = nullptr);
 
     /// `refreshDmabufTexture` from an import the caller keeps.
     ///
@@ -413,6 +444,25 @@ public:
     void collectGarbage(uint64_t retiredSubmission);
 
 private:
+    /// `refreshFromImported`, with the frost path's async option. `owner`
+    /// holds the import and is moved from when a blit is left pending.
+    TextureHandle refreshImported(
+        const std::string &key, const canvas::ImportedDmabuf *imported,
+        int32_t x, int32_t y, uint32_t w, uint32_t h, const BlitQueue *async,
+        std::unique_ptr<canvas::ImportedDmabuf> *owner);
+    /// Submits the overwrite of `image` and returns without waiting. False
+    /// when it could not, in which case nothing was submitted and `source` is
+    /// still the caller's.
+    bool submitAsyncBlit(const BlitQueue &queue,
+                         std::unique_ptr<canvas::ImportedDmabuf> &source,
+                         int32_t x, int32_t y, uint32_t w, uint32_t h,
+                         VkImage image);
+    /// Frees what finished blits held; with `waitAll`, waits for all first.
+    void reapBlitsLocked(bool waitAll);
+    /// Waits for every pending blit into `image`. Before `image` is freed.
+    void waitBlitsInto(VkImage image);
+    void destroyBlitPoolLocked();
+
     using TextureIter =
         std::unordered_map<std::string, std::unique_ptr<TextureData>>::iterator;
 

@@ -62,6 +62,15 @@ class ImportedDmabuf {
   /// than stall the compositor indefinitely.
   void waitReady(int timeoutMs = 250) const;
 
+  /// The producer's pending writes as one sync_file, for a submit to wait on
+  /// instead of the CPU waiting in `waitReady`. `fd` is -1 when nothing is
+  /// pending. False when the kernel cannot say, and the caller must wait.
+  bool exportWriteFence(int &fd) const;
+
+  /// Hangs `syncFile` on the buffer as a reader's fence, so its producer does
+  /// not write it again until our read has finished. Does not take the fd.
+  bool attachReadFence(int syncFile) const;
+
   /// Queue-acquires from the foreign device and leaves the image in
   /// `TRANSFER_SRC_OPTIMAL`. `GENERAL` is the layout a compositor's
   /// renderer typically releases in.

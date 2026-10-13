@@ -1,6 +1,7 @@
 #include <iostream>
 #include <cstring>
 #include <algorithm>
+#include <unistd.h>
 #include <cstdlib>
 #include <utility>
 #include <vector>
@@ -100,11 +101,11 @@ constexpr VkImageSubresourceRange kBlitColor{
 /// says "none of what is there matters"; what it does *not* say is that
 /// nothing is still reading it, and that is the caller's to know. See
 /// `TextureManager::refreshDmabufTexture`.
-void recordImportBlit(RenderDevice &device, const canvas::ImportedDmabuf &src,
-                      int32_t x, int32_t y, uint32_t srcW, uint32_t srcH,
-                      uint32_t destW, uint32_t destH, VkImage image)
+void recordImportBlitCommands(VkCommandBuffer cmd,
+                              const canvas::ImportedDmabuf &src, int32_t x,
+                              int32_t y, uint32_t srcW, uint32_t srcH,
+                              uint32_t destW, uint32_t destH, VkImage image)
 {
-  VkCommandBuffer cmd = device.beginSingleTimeCommands();
   src.recordAcquire(cmd);
 
   VkImageMemoryBarrier toDst{
@@ -118,7 +119,13 @@ void recordImportBlit(RenderDevice &device, const canvas::ImportedDmabuf &src,
     .image               = image,
     .subresourceRange    = kBlitColor,
   };
-  vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+  // After the last blit into this image and the last frame that sampled it.
+  // Nothing to say while every blit waited on the CPU; with the frost blit
+  // left pending (`submitAsyncBlit`), the one before may still be running.
+  toDst.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+  vkCmdPipelineBarrier(cmd,
+                       VK_PIPELINE_STAGE_TRANSFER_BIT |
+                         VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
                        VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0,
                        nullptr, 1, &toDst);
 
@@ -153,6 +160,14 @@ void recordImportBlit(RenderDevice &device, const canvas::ImportedDmabuf &src,
   // Handed back, for the import that is used again: a video buffer the client
   // renders into next, which the next blit acquires from `GENERAL` again.
   src.recordRelease(cmd);
+}
+
+void recordImportBlit(RenderDevice &device, const canvas::ImportedDmabuf &src,
+                      int32_t x, int32_t y, uint32_t srcW, uint32_t srcH,
+                      uint32_t destW, uint32_t destH, VkImage image)
+{
+  VkCommandBuffer cmd = device.beginSingleTimeCommands();
+  recordImportBlitCommands(cmd, src, x, y, srcW, srcH, destW, destH, image);
   device.endSingleTimeCommands(cmd);
 }
 
@@ -224,6 +239,8 @@ void TextureManager::initialize(RenderDevice& device) {
 void TextureManager::cleanUp() {
     std::lock_guard lock(mutex_);
     std::cout << "TextureManager cleaning up " << textures_.size() << " textures\n";
+    // Before any image goes: a frost blit may still be writing one.
+    destroyBlitPoolLocked();
     
     // Clean up all textures
     for (auto& [path, textureData] : textures_) {
@@ -435,20 +452,210 @@ void TextureManager::noteSampled(uint32_t textureId)
 
 TextureHandle TextureManager::refreshDmabufTexture(
     const std::string &key, const canvas::DmabufImport &src, int32_t x,
-    int32_t y, uint32_t width, uint32_t height)
+    int32_t y, uint32_t width, uint32_t height, const BlitQueue *async)
 {
     if (!device_ || key.empty() || width == 0 || height == 0) {
         return {VK_NULL_HANDLE, 0};
     }
     auto imported = canvas::ImportedDmabuf::create(*device_, src);
-    if (imported) imported->waitReady();
-    return refreshFromImported(key, imported.get(), x, y, width, height);
+    // Async waits on the GPU, or on the CPU at the point it finds it cannot.
+    if (imported && async == nullptr) imported->waitReady();
+    return refreshImported(key, imported.get(), x, y, width, height, async,
+                           async != nullptr ? &imported : nullptr);
+}
+
+bool TextureManager::submitAsyncBlit(
+    const BlitQueue &queue, std::unique_ptr<canvas::ImportedDmabuf> &source,
+    int32_t x, int32_t y, uint32_t width, uint32_t height, VkImage image)
+{
+    if (!source || queue.queue == VK_NULL_HANDLE || queue.mutex == nullptr ||
+        !device_->canImportSyncFd() || !device_->canExportSyncFd()) {
+        return false;
+    }
+    int ready = -1;
+    if (!source->exportWriteFence(ready)) return false;
+
+    VkDevice dev = device_->getDevice();
+    std::lock_guard lock(blitMutex_);
+    reapBlitsLocked(false);
+
+    if (blitPool_ == VK_NULL_HANDLE) {
+        VkCommandPoolCreateInfo poolInfo{
+            .sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
+            .flags = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT,
+            .queueFamilyIndex = device_->graphicsQueueFamily(),
+        };
+        if (vkCreateCommandPool(dev, &poolInfo, nullptr, &blitPool_) !=
+            VK_SUCCESS) {
+            blitPool_ = VK_NULL_HANDLE;
+            if (ready >= 0) close(ready);
+            return false;
+        }
+    }
+
+    PendingBlit blit;
+    blit.target = image;
+    const auto abandon = [&]() {
+        if (blit.cmd != VK_NULL_HANDLE) vkFreeCommandBuffers(dev, blitPool_, 1, &blit.cmd);
+        if (blit.fence != VK_NULL_HANDLE) vkDestroyFence(dev, blit.fence, nullptr);
+        if (blit.wait != VK_NULL_HANDLE) vkDestroySemaphore(dev, blit.wait, nullptr);
+        if (blit.signal != VK_NULL_HANDLE) vkDestroySemaphore(dev, blit.signal, nullptr);
+        if (ready >= 0) close(ready);
+        return false;
+    };
+
+    VkFenceCreateInfo fenceInfo{.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
+    if (vkCreateFence(dev, &fenceInfo, nullptr, &blit.fence) != VK_SUCCESS) {
+        blit.fence = VK_NULL_HANDLE;
+        return abandon();
+    }
+    VkSemaphoreCreateInfo plain{.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
+    if (ready >= 0) {
+        if (vkCreateSemaphore(dev, &plain, nullptr, &blit.wait) != VK_SUCCESS) {
+            blit.wait = VK_NULL_HANDLE;
+            return abandon();
+        }
+        VkImportSemaphoreFdInfoKHR import{
+            .sType = VK_STRUCTURE_TYPE_IMPORT_SEMAPHORE_FD_INFO_KHR,
+            .semaphore = blit.wait,
+            .flags = VK_SEMAPHORE_IMPORT_TEMPORARY_BIT,
+            .handleType = VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_SYNC_FD_BIT,
+            .fd = ready,
+        };
+        if (device_->importSemaphoreFd()(dev, &import) != VK_SUCCESS) {
+            return abandon();
+        }
+        ready = -1;  // the import took it
+    }
+    VkExportSemaphoreCreateInfo exportable{
+        .sType = VK_STRUCTURE_TYPE_EXPORT_SEMAPHORE_CREATE_INFO,
+        .handleTypes = VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_SYNC_FD_BIT,
+    };
+    VkSemaphoreCreateInfo signalInfo{
+        .sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO,
+        .pNext = &exportable,
+    };
+    if (vkCreateSemaphore(dev, &signalInfo, nullptr, &blit.signal) !=
+        VK_SUCCESS) {
+        blit.signal = VK_NULL_HANDLE;
+        return abandon();
+    }
+
+    VkCommandBufferAllocateInfo alloc{
+        .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
+        .commandPool = blitPool_,
+        .level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
+        .commandBufferCount = 1,
+    };
+    if (vkAllocateCommandBuffers(dev, &alloc, &blit.cmd) != VK_SUCCESS) {
+        blit.cmd = VK_NULL_HANDLE;
+        return abandon();
+    }
+    VkCommandBufferBeginInfo begin{
+        .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+        .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
+    };
+    vkBeginCommandBuffer(blit.cmd, &begin);
+    recordImportBlitCommands(blit.cmd, *source, x, y, width, height, width,
+                             height, image);
+    vkEndCommandBuffer(blit.cmd);
+
+    const VkPipelineStageFlags waitStage = VK_PIPELINE_STAGE_TRANSFER_BIT;
+    VkSubmitInfo submit{
+        .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
+        .waitSemaphoreCount = blit.wait != VK_NULL_HANDLE ? 1u : 0u,
+        .pWaitSemaphores = &blit.wait,
+        .pWaitDstStageMask = &waitStage,
+        .commandBufferCount = 1,
+        .pCommandBuffers = &blit.cmd,
+        .signalSemaphoreCount = 1,
+        .pSignalSemaphores = &blit.signal,
+    };
+    {
+        std::lock_guard queueLock(*queue.mutex);
+        if (vkQueueSubmit(queue.queue, 1, &submit, blit.fence) != VK_SUCCESS) {
+            return abandon();
+        }
+    }
+
+    // The producer must not write this buffer again until our read is done.
+    // If that cannot be said, wait here instead — rare, and correct.
+    VkSemaphoreGetFdInfoKHR get{
+        .sType = VK_STRUCTURE_TYPE_SEMAPHORE_GET_FD_INFO_KHR,
+        .semaphore = blit.signal,
+        .handleType = VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_SYNC_FD_BIT,
+    };
+    int done = -1;
+    bool told = device_->getSemaphoreFd()(dev, &get, &done) == VK_SUCCESS;
+    if (told && done >= 0) {
+        told = source->attachReadFence(done);
+        close(done);
+    }
+    if (!told) vkWaitForFences(dev, 1, &blit.fence, VK_TRUE, UINT64_MAX);
+
+    blit.source = std::move(source);
+    pendingBlits_.push_back(std::move(blit));
+    return true;
+}
+
+void TextureManager::reapBlitsLocked(bool waitAll)
+{
+    if (pendingBlits_.empty() || !device_) return;
+    VkDevice dev = device_->getDevice();
+    std::erase_if(pendingBlits_, [&](PendingBlit &blit) {
+        if (waitAll) {
+            vkWaitForFences(dev, 1, &blit.fence, VK_TRUE, UINT64_MAX);
+        } else if (vkGetFenceStatus(dev, blit.fence) != VK_SUCCESS) {
+            return false;
+        }
+        vkFreeCommandBuffers(dev, blitPool_, 1, &blit.cmd);
+        vkDestroyFence(dev, blit.fence, nullptr);
+        if (blit.wait != VK_NULL_HANDLE) vkDestroySemaphore(dev, blit.wait, nullptr);
+        vkDestroySemaphore(dev, blit.signal, nullptr);
+        blit.source.reset();
+        return true;
+    });
+}
+
+void TextureManager::waitBlitsInto(VkImage image)
+{
+    std::lock_guard lock(blitMutex_);
+    if (pendingBlits_.empty() || !device_) return;
+    for (PendingBlit &blit : pendingBlits_) {
+        if (blit.target == image) {
+            vkWaitForFences(device_->getDevice(), 1, &blit.fence, VK_TRUE,
+                            UINT64_MAX);
+        }
+    }
+    reapBlitsLocked(false);
+}
+
+void TextureManager::destroyBlitPoolLocked()
+{
+    std::lock_guard lock(blitMutex_);
+    reapBlitsLocked(true);
+    if (blitPool_ != VK_NULL_HANDLE && device_) {
+        vkDestroyCommandPool(device_->getDevice(), blitPool_, nullptr);
+    }
+    blitPool_ = VK_NULL_HANDLE;
 }
 
 TextureHandle TextureManager::refreshFromImported(
     const std::string &key, const canvas::ImportedDmabuf *imported, int32_t x,
     int32_t y, uint32_t width, uint32_t height)
 {
+    return refreshImported(key, imported, x, y, width, height, nullptr,
+                           nullptr);
+}
+
+TextureHandle TextureManager::refreshImported(
+    const std::string &key, const canvas::ImportedDmabuf *imported, int32_t x,
+    int32_t y, uint32_t width, uint32_t height, const BlitQueue *async,
+    std::unique_ptr<canvas::ImportedDmabuf> *owner)
+{
+    // Whether the producer's writes still have to be waited for on the CPU
+    // before a blit that does not wait for them itself.
+    bool mustWait = owner != nullptr;
     if (!device_ || key.empty() || width == 0 || height == 0) {
         return {VK_NULL_HANDLE, 0};
     }
@@ -498,8 +705,17 @@ TextureHandle TextureManager::refreshFromImported(
         const bool usable =
             imported && imported->opaqueAlpha() == viewIsOpaque;
         if (usable) {
-            recordImportBlit(*device_, *imported, x, y, width, height, width,
-                             height, reusable);
+            const bool submitted =
+                async != nullptr && owner != nullptr && *owner &&
+                submitAsyncBlit(*async, *owner, x, y, width, height, reusable);
+            if (!submitted) {
+                if (mustWait) {
+                    imported->waitReady();
+                    mustWait = false;
+                }
+                recordImportBlit(*device_, *imported, x, y, width, height,
+                                 width, height, reusable);
+            }
         }
         std::lock_guard lock(mutex_);
         auto it = textures_.find(key);
@@ -518,6 +734,7 @@ TextureHandle TextureManager::refreshFromImported(
         // entry went away while the lock was down.
     }
     if (!imported) return {VK_NULL_HANDLE, 0};
+    if (mustWait) imported->waitReady();
 
     {
         // Replacing, not overwriting. The old image goes to the deferred
@@ -894,6 +1111,9 @@ void TextureManager::eraseTextureLocked(TextureIter it) {
                                  device_ ? device_->pendingSubmissionMark() : 0});
     } else if (data.ownsImage) {
         imageBytes_ -= std::min(imageBytes_, data.bytes);
+        // Deferred destruction counts window submissions; a frost blit is not
+        // one, so one still writing this image is waited for here.
+        waitBlitsInto(data.image);
         if (device_)
             device_->destroyImageDeferred(data.image, data.allocation, data.view);
     }

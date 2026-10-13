@@ -567,9 +567,12 @@ bool CanvasSurface::frostFromDmabuf(const wlr_dmabuf_attributes &src, int srcX,
   // anything moves behind the window, and a cache lookup would hand back the
   // picture it took the first time — which is why this used to need a new name,
   // and a new full-window image, per capture.
+  //
+  // On this surface's queue, without waiting: the plate's own frame, drawn
+  // next, is what samples it, and runs after the copy by submission order.
   const int id = app->refreshDmabufTexture(
       key, desc, srcX, srcY, static_cast<uint32_t>(srcW),
-      static_cast<uint32_t>(srcH));
+      static_cast<uint32_t>(srcH), windowId_);
   return frostWithTexture(id, radius, cornerRadius, refractPx);
 }
 
