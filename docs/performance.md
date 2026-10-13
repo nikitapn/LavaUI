@@ -349,10 +349,56 @@ once, which is correct: it really did travel that far.
 - **Many clients.** Every number above is one. If a renderer driving 10–20
   surfaces does not stay flat, partial lists get a real justification. A
   multi-threaded renderer is the other answer to that question, and probably
-  the better one — Vulkan is built for it, one `VkQueue` per thread, and it
-  scales with windows rather than with what changed inside them.
+  the better one — it scales with windows rather than with what changed inside
+  them. It existed once; see the next section.
 - **Content that cannot be culled.** Everything here is bounded by the viewport
   because it is 2D and rectangular. That is an assumption, not a law.
+
+### Recording windows in parallel
+
+Nothing records command buffers on more than one thread today — not in the
+compositor, not in a windowed app, on any GPU. It was built (`eb09fbb`, "Render
+windows in parallel, one worker per window") and then lost its only caller:
+`Editor.renderFrames` drove `DispatchQueue.concurrentPerform` over the dirty
+windows for ArenaDemo, the Swift-hosted compositor, and nothing else. ArenaDemo
+went in `ecebbbc`; the entry points went later, unused. Since then the C++
+compositor draws surfaces one `renderFrame` at a time on its event loop, and
+`LavaWindow` does the same for each of an app's windows.
+
+What is still there, because it is the expensive part and costs nothing
+serially:
+
+- each window owns its command pool, fences and descriptor sets;
+- each window leases a `VkQueue` round-robin (`leaseGraphicsQueue`) — sixteen
+  graphics queues on the RTX 3060 here, one on RADV, so on AMD every window
+  shares one;
+- `RenderDevice`'s frame lock has a shared side for windows drawing and an
+  exclusive side for the cross-window steps;
+- those steps — a resize, growing the glyph atlas, freeing images no window
+  references — are split out as `Application::prepareFrames` /
+  `retireFrames`, which `repaint` runs around every frame.
+
+What bringing it back takes: a bracket that runs `prepareFrames` once, the
+windows' `repaint`s on workers, and `retireFrames` once — with a flag (it was
+an atomic `frameGroup`, release on begin and acquire in `repaint`) telling
+`repaint` not to run them itself. `git show eb09fbb` has all of it. Two things
+have changed since and must be dealt with first:
+
+- **Shared depth.** The compositor gives every surface one depth image
+  (`RenderDevice::setSharedDepth`), which is only legal while surfaces are
+  drawn one at a time. Parallel surfaces need it off, or one per worker.
+- **The compositor's loop.** Recording can move to workers; what follows a
+  frame cannot — `CanvasSurface` publishing its fence to the scene, damage,
+  anything touching wlroots stays on the event loop.
+
+Queues and threads answer different questions. Threads buy CPU time:
+replaying the draw list and recording. Queues only give the GPU independent
+streams to schedule, and a frame is still the same work on the same GPU, so
+they do nothing for one heavy client making the rest late — that wants
+per-client budgets and queue priority. Measured before deciding: headless,
+LavaTerm's render step was 0.32 ms a frame, so this pays only once several
+heavy surfaces are dirty in the same frame. Run `LAVA_FRAME_PROBE=1` on a
+busy desktop first.
 
 ### Reproducing
 

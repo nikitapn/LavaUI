@@ -69,9 +69,8 @@ struct Engine::Impl {
         if constexpr (std::is_void_v<R>) return;
         else return R{};
       }
-      // No lock, and no longer because there is only one thread — there is
-      // not. `renderFrame` runs one worker per window inside a frame group,
-      // and the control plane calls in on RPC threads besides.
+      // No lock, and not because there is only one thread — there is not:
+      // the control plane calls in on RPC threads while the frame loop draws.
       //
       // What makes this safe is that the lookup is read-only: the window list
       // is built and torn down on the frame loop's thread, between groups,
@@ -276,16 +275,6 @@ bool Engine::renderFrame(uint32_t windowId)
   // Straight to the Application rather than through CanvasWindowHost: the host
   // only ever knew about one window, and a frame is per window.
   return impl_->withApp([&](Application &app) { return app.repaint(windowId); });
-}
-
-void Engine::beginFrameGroup()
-{
-  impl_->withApp([](Application &app) { app.beginFrameGroup(); });
-}
-
-void Engine::endFrameGroup()
-{
-  impl_->withApp([](Application &app) { app.endFrameGroup(); });
 }
 
 bool Engine::attachDrawArena(const std::string &id, uint32_t windowId)

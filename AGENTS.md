@@ -888,9 +888,10 @@ in flight and rebuilds every window's framebuffer before returning. Eight canvas
 windows: 80 MiB → 12 MiB, and it stays 12 however many windows open.
 
 **It is only legal because the compositor renders serially** — one
-`renderFrame` at a time from its event loop. An app that repaints N windows on N
-threads inside `beginFrameGroup` must not enable it, and does not: the switch is
-set in `initExported`, the compositor path. Two windows each drawing
+`renderFrame` at a time from its event loop. Nothing records on more than one
+thread today; whatever brings that back must leave this off (see "Recording
+windows in parallel" in `docs/performance.md`). The switch is set in
+`initExported`, the compositor path. Two windows each drawing
 depth-tested 3D render *byte-identically* with it on and off, which is the test
 that proves nothing leaks between them.
 

@@ -95,12 +95,6 @@ struct Application::Impl
   /// and not any one surface.
   std::vector<canvas::ExportFormatSupport> exportFormats;
 
-  /// True between `beginFrameGroup` and `endFrameGroup`. Written on the main
-  /// thread while nothing is drawing and read by every render worker, so the
-  /// release/acquire pair is what publishes the prepare step's effects — the
-  /// resized swapchain, the regrown atlas — to the threads about to draw.
-  std::atomic<bool> frameGroup{false};
-
   /// Client-mode font numbering, standing in for the atlas the device would
   /// own. Same contract as `TextRenderer::registerFont`: an index, stable per
   /// `canvas::FontKey`, -1 if the file will not load.
@@ -234,9 +228,8 @@ struct Application::Impl
       // the sample count it settles.
       device.setSampleCap(sampleCap);
       // One depth attachment for every surface rather than one each. Legal
-      // here and only here: a consumer of exported frames drives surfaces one
-      // `renderFrame` at a time — see `RenderDevice::setSharedDepth`, and
-      // `Application::beginFrameGroup`, which is the caller that must not.
+      // because surfaces are drawn one `renderFrame` at a time — see
+      // `RenderDevice::setSharedDepth`.
       device.setSharedDepth(true);
       device.init("2d shenanigans!", /*presentCapable=*/false);
       deviceUp = true;
@@ -871,7 +864,7 @@ uint32_t Application::x11WindowId(uint32_t windowId) const {
   return w ? w->x11WindowId() : 0;
 }
 
-/// The device-wide half of a frame. See `Application::beginFrameGroup`.
+/// The device-wide half of a frame. See the header.
 void Application::prepareFrames()
 {
   // Resize first: growing the atlas waits on frames in flight, and a window
@@ -891,26 +884,7 @@ void Application::retireFrames()
   TextureManager::getInstance().collectGarbage(retired);
 }
 
-void Application::beginFrameGroup()
-{
-  impl_->frameGroup.store(true, std::memory_order_release);
-  prepareFrames();
-}
-
-void Application::endFrameGroup()
-{
-  retireFrames();
-  impl_->frameGroup.store(false, std::memory_order_release);
-}
-
 bool Application::repaint(uint32_t windowId) {
-  // Inside a group the caller has already prepared, and will retire when
-  // every window is done. Doing either here would be the exact cross-window
-  // reach the group exists to keep out of a running frame.
-  if (impl_->frameGroup.load(std::memory_order_acquire)) {
-    AppWindow *w = impl_->win(windowId);
-    return w && w->repaint();
-  }
   prepareFrames();
   AppWindow *w = impl_->win(windowId);
   const bool ok = w && w->repaint();

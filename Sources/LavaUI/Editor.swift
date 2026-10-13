@@ -235,26 +235,6 @@ public final class Editor: @unchecked Sendable {
         engine.renderFrame(window.raw)
     }
 
-    /// Renders several windows at once, one thread per window.
-    ///
-    /// A frame is mostly the window's own — its command pool, its fences, its
-    /// buffers — but not entirely: picking up a resize, growing the shared
-    /// glyph atlas and freeing images no window references any more all reach
-    /// across every window at once. Those run here, before and after the
-    /// group, because none of them is safe while a window is recording.
-    ///
-    /// Rendering one window at a time needs none of this — `renderFrame`
-    /// brackets itself.
-    public func renderFrames(_ windows: [WindowID]) {
-        guard !windows.isEmpty else { return }
-        engine.beginFrameGroup()
-        // Runs work on this thread too, so a single dirty window costs no hop.
-        DispatchQueue.concurrentPerform(iterations: windows.count) { index in
-            engine.renderFrame(windows[index].raw)
-        }
-        engine.endFrameGroup()
-    }
-
     // ─── Shared-memory arena ─────────────────────────────────────────────
 
     /// Drives this window from a draw arena another process writes, instead

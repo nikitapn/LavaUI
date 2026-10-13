@@ -232,11 +232,6 @@ class Engine {
   /// Render and present one frame.
   bool renderFrame(uint32_t windowId = 0);
 
-  /// Brackets `renderFrame` calls that run concurrently, one thread per
-  /// window. See `Application::beginFrameGroup` for what this buys and what
-  /// it requires. A caller rendering one window at a time needs neither.
-  void beginFrameGroup();
-  void endFrameGroup();
 
   /// Renders this window from a shared-memory draw arena written by another
   /// process (`canvas::ipc::DrawArena`), instead of from a draw list

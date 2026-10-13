@@ -478,10 +478,11 @@ class RenderDevice
   /// Releases anything queued by `destroyImageDeferred` whose submission has
   /// retired *in every window*.
   ///
-  /// Called once per frame group, between frames — not at the end of a
-  /// window's own frame. Asking whether a submission has retired means reading
-  /// every window's fences, and a window that is submitting on another thread
-  /// owns its fence exclusively while it does.
+  /// Called between frames (`Application::retireFrames`) — not inside a
+  /// window's own. Asking whether a submission has retired means reading
+  /// every window's fences, and a window that is submitting owns its fence
+  /// exclusively while it does, which matters again the moment windows draw
+  /// on more than one thread.
   ///
   /// Returns the retire mark it computed: the oldest submission still running
   /// anywhere, so anything stamped at or below it is provably unreferenced.
@@ -577,9 +578,9 @@ class RenderDevice
   /// **Only legal when windows never render at the same time.** Two windows
   /// recording into one depth image is exactly the race the per-window images
   /// prevented, and nothing here can detect it. A compositor qualifies: it
-  /// renders surfaces one `renderFrame` at a time from its event loop. An app
-  /// using `Application::beginFrameGroup` to repaint N windows on N threads does
-  /// not, and must leave this off.
+  /// renders surfaces one `renderFrame` at a time from its event loop, and so
+  /// does every app today. Anything that brings back parallel recording must
+  /// leave this off — see docs/performance.md.
   ///
   /// Off by default for that reason, and `LAVA_SHARED_DEPTH=0` turns it off
   /// again for a caller that wants to compare.
