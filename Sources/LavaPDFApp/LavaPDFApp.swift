@@ -41,7 +41,7 @@ struct LavaPDFApp {
             editor: editor,
             menu: {
                 MenuBar {
-                    Menu("LavaPDF", id: "app") {
+                    Menu("Reader", id: "app") {
                         MenuItem(
                             "Quit", id: "app.quit", shortcut: KeyShortcut(KeyCode.q, .primary)
                         ) { editor.requestClose() }

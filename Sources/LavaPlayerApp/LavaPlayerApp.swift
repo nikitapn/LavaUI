@@ -57,7 +57,7 @@ struct LavaPlayerApp {
             editor: editor,
             menu: {
                 MenuBar {
-                    Menu("LavaPlayer", id: "app") {
+                    Menu("Player", id: "app") {
                         MenuItem(
                             "Quit", id: "app.quit",
                             shortcut: KeyShortcut(KeyCode.q, .primary)

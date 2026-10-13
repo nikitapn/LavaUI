@@ -34,7 +34,7 @@ struct SpotifyApp {
 
         let menu = {
             MenuBar {
-                Menu("LavaSpotify", id: "app") {
+                Menu("Spotify", id: "app") {
                     MenuItem("About LavaSpotify", id: "app.about") {
                         FileHandle.standardError.write(
                             Data(

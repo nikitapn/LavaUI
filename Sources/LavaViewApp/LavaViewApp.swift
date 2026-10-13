@@ -69,7 +69,7 @@ struct LavaViewApp {
             editor: editor,
             menu: {
                 MenuBar {
-                    Menu("LavaView", id: "app") {
+                    Menu("Viewer", id: "app") {
                         MenuItem("About LavaView", id: "app.about") {
                             FileHandle.standardError.write(Data(
                                 "LavaView · an image viewer built on LavaUI\n".utf8

@@ -24,7 +24,7 @@ struct LavaEditorApp {
             editor: editor,
             menu: {
                 MenuBar {
-                    Menu("LavaEditor", id: "app") {
+                    Menu("Editor", id: "app") {
                         MenuItem("About LavaEditor", id: "app.about") {
                             FileHandle.standardError.write(
                                 Data("LavaEditor · a plain text editor built on LavaUI\n".utf8)

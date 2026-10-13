@@ -62,7 +62,7 @@ struct LavaExplorerApp {
 
     private static func menu(session: ExplorerSession, editor: Editor) -> MenuBar {
         MenuBar {
-            Menu("LavaExplorer", id: "app") {
+            Menu("Explorer", id: "app") {
                 MenuItem("About LavaExplorer", id: "app.about") {
                     FileHandle.standardError.write(Data(
                         "LavaExplorer · a folder, as a list\n".utf8

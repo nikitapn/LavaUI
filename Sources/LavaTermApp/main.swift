@@ -93,7 +93,7 @@ FrameTasks.after {
 
 let menu = {
     MenuBar {
-        Menu("LavaTerm", id: "app") {
+        Menu("Terminal", id: "app") {
             MenuItem("About LavaTerm", id: "app.about") {
                 FileHandle.standardError.write(
                     Data("LavaTerm · LavaUI terminal emulator\n".utf8)
