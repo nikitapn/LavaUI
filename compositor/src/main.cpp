@@ -2192,6 +2192,11 @@ struct ClientSurface {
   /// maximized window leaves the work area, a fullscreen one does not.
   bool fullscreen = false;
   bool deferredWhileOccluded = false;
+  /// The client published a frame that has not been drawn yet, and the
+  /// newest input serial among those it presented since the last one that
+  /// was. Drawn at the next output frame, not on arrival — see `present`.
+  bool presentPending = false;
+  uint32_t presentSerial = 0;
   int restoreX = 0;
   int restoreY = 0;
   uint32_t restoreW = 0;
@@ -6989,9 +6994,51 @@ class SurfaceRegistry : public lava::CompositorHost {
     return changed;
   }
 
+  /// A client published a frame. Noted here and drawn at the next output
+  /// frame (`flushPresents`), not now.
+  ///
+  /// Drawing on arrival drew every frame a client published, and a client is
+  /// not paced by the display: a terminal under load presented about a
+  /// hundred times a second against a 60 Hz output, and the compositor
+  /// rendered each one — some forty percent of its GPU work going into frames
+  /// that were replaced before any composite read them. The arena is triple
+  /// buffered, so a frame not drawn is simply superseded by the next; the one
+  /// drawn is always the newest, rendered just before the composite that
+  /// shows it, so nothing reaches the screen later than it did.
   void present(uint32_t id, uint32_t serial) override {
     ClientSurface *surface = find(id);
     if (surface == nullptr || !surface->canvas) return;
+    surface->presentPending = true;
+    // Newest wins, as the frames do: the one drawn is the newest, and this is
+    // the input it was laid out with.
+    surface->presentSerial = serial;
+    animate();
+  }
+
+  /// Draws every frame `present` set aside, once per surface. Called from
+  /// `Output::on_frame` ahead of the composite, and from the animation timer
+  /// when there is no output to pace against. With two screens the first
+  /// frame event takes them all, so a surface is drawn at the faster
+  /// screen's rate — still never more than once per refresh of either.
+  void flushPresents() {
+    // Collected first: drawing can reveal a window, and a reveal can raise
+    // it, which reorders `surfaces_` under a walk. Nothing here adds or
+    // removes a surface, so the pointers stay good.
+    pendingScratch_.clear();
+    for (const auto &owned : surfaces_) {
+      if (owned->presentPending) pendingScratch_.push_back(owned.get());
+    }
+    for (ClientSurface *surface : pendingScratch_) {
+      surface->presentPending = false;
+      drawPresented(*surface, surface->presentSerial);
+    }
+  }
+
+  /// What `present` used to do on arrival: draw the newest frame and show it.
+  void drawPresented(ClientSurface &surfaceRef, uint32_t serial) {
+    ClientSurface *surface = &surfaceRef;
+    const uint32_t id = surface->id;
+    if (!surface->canvas) return;
     if (fullyOccluded(*surface)) {
       if (surface->canvas->consumeArena()) surface->deferredWhileOccluded = true;
       return;
@@ -7859,6 +7906,8 @@ class SurfaceRegistry : public lava::CompositorHost {
   /// costing two redraws; 2 ms leaves headroom to 500 Hz.
   static constexpr int64_t kMinStepUs = 2000;
   wl_event_source *animation_ = nullptr;
+  /// `flushPresents`' list, kept so a frame does not allocate one.
+  std::vector<ClientSurface *> pendingScratch_;
   int64_t lastStepAt_ = 0;
   bool animating_ = false;
 
@@ -7866,6 +7915,9 @@ class SurfaceRegistry : public lava::CompositorHost {
     auto *self = static_cast<SurfaceRegistry *>(data);
     // Re-armed only while something wanted this frame. An idle desktop stops
     // asking, which is the difference between an animation and a busy loop.
+    // A frame `present` set aside has to be drawn here when there is no
+    // output whose frame event would have.
+    self->flushPresents();
     if (self->stepAnimations()) self->animate();
     return 0;
   }
@@ -8949,7 +9001,14 @@ void Output::on_frame(wl_listener *listener, void *) {
   const bool animating = output->server->surfaces != nullptr &&
                          output->server->surfaces->stepAnimations();
   if (output->server->surfaces != nullptr) {
+    // Frost first, from the frames already drawn, then the client frames that
+    // arrived since — newest only, see `SurfaceRegistry::present` — so the
+    // composite below shows them. The other way round the frost capture
+    // waits on the CPU for every render the flush just queued: with four
+    // frosted terminals repainting, 13–18 ms of a 16.7 ms frame. The price is
+    // frost one frame behind what is under it, which a blur hides.
     output->server->surfaces->refreshBackdropBlurs();
+    output->server->surfaces->flushPresents();
   }
   output->syncScanoutLock();
   // Composite is surface 0 in the probe: it is the desktop's own frame rather
