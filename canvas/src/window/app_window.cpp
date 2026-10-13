@@ -133,7 +133,10 @@ bool AppWindow::repaint()
       // A producer that has published nothing since the last repaint leaves
       // `arenaFrame_` alone, so a resize or an expose still redraws the frame
       // we are holding rather than an empty one.
-      if (arena_->acquireFrame(arenaFrame_)) arenaHasFrame_ = true;
+      if (arena_->acquireFrame(arenaFrame_)) {
+        arenaHasFrame_ = true;
+        ++arenaFramesTaken_;
+      }
       if (!arenaHasFrame_) return true;
       if (canvas::traceFrames()) {
         std::cerr << "arena frame: cmds=" << arenaFrame_.commandCount
@@ -311,6 +314,7 @@ bool AppWindow::pollDrawArena()
   if (!arena_) return false;
   if (!arena_->acquireFrame(arenaFrame_)) return false;
   arenaHasFrame_ = true;
+  ++arenaFramesTaken_;
   return true;
 }
 

@@ -177,6 +177,8 @@ public:
   /// Takes the next frame a producer has published into this window's arena,
   /// without drawing it. See `AppWindow::pollDrawArena`.
   bool pollDrawArena(uint32_t windowId = 0);
+  /// See `AppWindow::arenaFramesTaken`.
+  uint64_t arenaFramesTaken(uint32_t windowId = 0) const;
 
   /// Frames this window has actually drawn, or 0 if it has no renderer.
   ///

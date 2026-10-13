@@ -263,6 +263,8 @@ class Engine {
   /// it, and says whether there was one. What a polling consumer asks before
   /// deciding to render. See `AppWindow::pollDrawArena`.
   bool pollDrawArena(uint32_t windowId = 0);
+  /// See `AppWindow::arenaFramesTaken`.
+  uint64_t arenaFramesTaken(uint32_t windowId = 0) const;
 
   /// Frames this window has actually drawn. See `Application::frameCounter` —
   /// it does not advance on a repaint that found nothing new to draw, which is

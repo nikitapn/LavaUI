@@ -278,12 +278,12 @@ class InputBroker {
     if (it->second.empty()) subscribers_.erase(it);
   }
 
-  void broadcast(uint32_t surfaceId, InputEvent event) {
+  uint32_t broadcast(uint32_t surfaceId, InputEvent event) {
     std::vector<SubscriberPtr> targets;
     {
       std::lock_guard lock(mutex_);
       auto it = subscribers_.find(surfaceId);
-      if (it == subscribers_.end()) return;
+      if (it == subscribers_.end()) return 0;
       event.serial = ++serial_;
       targets = it->second;
     }
@@ -291,6 +291,7 @@ class InputBroker {
     // these is a queue append — see `StreamPump`, which is where the promise
     // that it cannot block lives.
     for (const auto &sub : targets) sub->send(event);
+    return event.serial;
   }
 
   /// A serial for an event sent straight to one subscriber rather than
@@ -2593,9 +2594,9 @@ class ControlPlaneImpl final : public ControlPlane {
     return true;
   }
 
-  void postInput(uint32_t surfaceId, uint32_t kind, float x, float y,
-                 int32_t button, int32_t mods) override {
-    broker_.broadcast(surfaceId, make_event(kind, x, y, button, mods));
+  uint32_t postInput(uint32_t surfaceId, uint32_t kind, float x, float y,
+                     int32_t button, int32_t mods) override {
+    return broker_.broadcast(surfaceId, make_event(kind, x, y, button, mods));
   }
 
   void surfaceGone(uint32_t surfaceId) override {

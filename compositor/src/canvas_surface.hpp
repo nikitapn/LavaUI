@@ -303,6 +303,10 @@ class CanvasSurface {
   /// contents are still correct and still on screen.
   bool renderFromArena();
   bool consumeArena();
+  /// See `AppWindow::arenaFramesTaken`.
+  uint64_t arenaFramesTaken() const {
+    return renderer_.engine().arenaFramesTaken(windowId_);
+  }
 
   // ─── Input ───────────────────────────────────────────────────────────────
   //

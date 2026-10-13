@@ -390,6 +390,12 @@ bool Engine::pollDrawArena(uint32_t windowId)
     [&](Application &app) { return app.pollDrawArena(windowId); });
 }
 
+uint64_t Engine::arenaFramesTaken(uint32_t windowId) const
+{
+  return impl_->withApp(
+    [&](Application &app) { return app.arenaFramesTaken(windowId); });
+}
+
 uint64_t Engine::frameCounter(uint32_t windowId) const
 {
   return impl_->withApp(

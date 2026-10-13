@@ -144,6 +144,10 @@ class AppWindow {
   /// anything new?". Asking here first turns an idle client into an idle
   /// renderer instead of a full redraw every poll.
   bool pollDrawArena();
+  /// Arena frames taken so far, by `repaint` or `pollDrawArena`. Lets a
+  /// consumer tell "nothing new was published" from "something else already
+  /// took the new frame" — both make `pollDrawArena` answer no.
+  uint64_t arenaFramesTaken() const { return arenaFramesTaken_; }
   void detachDrawArena();
   bool hasDrawArena() const { return arena_ != nullptr; }
 
@@ -302,6 +306,7 @@ class AppWindow {
   /// flashing an empty window.
   canvas::DrawList arenaFrame_{};
   bool             arenaHasFrame_ = false;
+  uint64_t         arenaFramesTaken_ = 0;
 
   // Immediate draw list, authored by the producer each dirty frame.
   std::vector<canvas::DrawCommand>   drawCmds_;

@@ -2188,6 +2188,9 @@ struct ClientSurface {
   /// A panel whose canvas has been resized and whose *scene* has not caught
   /// up yet. See `setPanelThickness`.
   bool pendingPanelGeometry = false;
+  /// When it started waiting — a client that never reports a serial still
+  /// gets its geometry, on the same deadline a held window gets revealed on.
+  std::chrono::steady_clock::time_point panelGeometrySince{};
 
   /// Where a maximized or fullscreen window came from, so restoring is exact.
   bool maximized = false;
@@ -2200,6 +2203,17 @@ struct ClientSurface {
   /// was. Drawn at the next output frame, not on arrival — see `present`.
   bool presentPending = false;
   uint32_t presentSerial = 0;
+  /// Serial of the newest `Resize` sent to this surface's client. A frame
+  /// presented at or past it was laid out for the size the surface is now —
+  /// what a panel's held geometry waits for. See `commitPanelGeometry`.
+  uint32_t resizeSerial = 0;
+  /// Drawn by `flushPresents` this output frame, so the animation step that
+  /// follows need not draw it again — that render already advanced it.
+  bool drawnThisFrame = false;
+  /// `arenaFramesTaken` when the first undrawn `Present` arrived. A draw for
+  /// some other reason in between — a resize, a restyle — takes the frame
+  /// itself; this is how `drawPresented` knows it was taken, not missing.
+  uint64_t presentMark = 0;
   int restoreX = 0;
   int restoreY = 0;
   uint32_t restoreW = 0;
@@ -6106,6 +6120,9 @@ class SurfaceRegistry : public lava::CompositorHost {
     // the two changes happen in one commit. See `commitPanelGeometry`.
     if (panel->canvas && (panel->width != width || panel->height != height)) {
       if (panel->canvas->resize(width, height)) {
+        if (!panel->pendingPanelGeometry) {
+          panel->panelGeometrySince = std::chrono::steady_clock::now();
+        }
         panel->pendingPanelGeometry = true;
         // The `Resize` the client needs is queued by that call; this is what
         // sends it, and it is the whole reason the frame we are waiting for
@@ -6909,8 +6926,13 @@ class SurfaceRegistry : public lava::CompositorHost {
     if (control_ == nullptr || !surface.canvas) return;
     canvas::InputEvent event{};
     while (surface.canvas->pollEvent(event)) {
-      control_->postInput(surface.id, event.kind, event.x, event.y,
-                          event.button, event.mods);
+      const uint32_t serial =
+          control_->postInput(surface.id, event.kind, event.x, event.y,
+                              event.button, event.mods);
+      if (serial != 0 &&
+          event.kind == static_cast<uint32_t>(canvas::InputEventKind::Resize)) {
+        surface.resizeSerial = serial;
+      }
       lava::FrameProbe::input(surface.id);
     }
   }
@@ -6976,12 +6998,24 @@ class SurfaceRegistry : public lava::CompositorHost {
         }
         continue;
       }
+      // Nor into a panel holding its new size: the same old-layout-in-new-size
+      // picture `drawPresented` refuses to show. Kept for after the commit,
+      // and the step keeps running so the commit is not waited on for long.
+      if (surface->pendingPanelGeometry) {
+        if (surface->canvas->takeInternalRepaint()) {
+          surface->deferredWhileOccluded = true;
+        }
+        again = true;
+        continue;
+      }
       if (surface->deferredWhileOccluded) {
         surface->deferredWhileOccluded = false;
         if (surface->canvas->redraw()) damage(*surface);
       }
       if (!surface->canvas->takeInternalRepaint()) continue;
-      if (surface->canvas->redraw()) damage(*surface);
+      if (!surface->drawnThisFrame && surface->canvas->redraw()) {
+        damage(*surface);
+      }
       drain(*surface);
       again = true;
     }
@@ -7021,6 +7055,9 @@ class SurfaceRegistry : public lava::CompositorHost {
   void present(uint32_t id, uint32_t serial) override {
     ClientSurface *surface = find(id);
     if (surface == nullptr || !surface->canvas) return;
+    if (!surface->presentPending) {
+      surface->presentMark = surface->canvas->arenaFramesTaken();
+    }
     surface->presentPending = true;
     // Newest wins, as the frames do: the one drawn is the newest, and this is
     // the input it was laid out with.
@@ -7039,15 +7076,29 @@ class SurfaceRegistry : public lava::CompositorHost {
     // removes a surface, so the pointers stay good.
     pendingScratch_.clear();
     for (const auto &owned : surfaces_) {
+      // Reset here rather than where it is read: the step that reads it can
+      // skip a turn (two screens), and every step follows a flush.
+      owned->drawnThisFrame = false;
       if (owned->presentPending) pendingScratch_.push_back(owned.get());
     }
     for (ClientSurface *surface : pendingScratch_) {
       surface->presentPending = false;
+      surface->drawnThisFrame = true;
       drawPresented(*surface, surface->presentSerial);
     }
   }
 
   /// What `present` used to do on arrival: draw the newest frame and show it.
+  /// A panel whose new size is waiting for a frame drawn for it, and has not
+  /// had one yet — `serial` being the newest input the frame was laid out
+  /// with. Past the deadline nothing is held: a client that reports no
+  /// serials still gets its geometry.
+  bool geometryHeld(const ClientSurface &surface, uint32_t serial) const {
+    return surface.pendingPanelGeometry && serial < surface.resizeSerial &&
+           std::chrono::steady_clock::now() - surface.panelGeometrySince <=
+               std::chrono::milliseconds(kRevealHoldMs);
+  }
+
   void drawPresented(ClientSurface &surfaceRef, uint32_t serial) {
     ClientSurface *surface = &surfaceRef;
     const uint32_t id = surface->id;
@@ -7056,7 +7107,25 @@ class SurfaceRegistry : public lava::CompositorHost {
       if (surface->canvas->consumeArena()) surface->deferredWhileOccluded = true;
       return;
     }
-    if (!surface->canvas->renderFromArena()) return;
+    // Laid out for the size the panel had before it asked for another. The
+    // canvas already has the new size and the scene still shows the old
+    // picture at the old place (see `setPanelThickness`) — so drawing this
+    // frame would draw the old layout into the new size, and showing it would
+    // crop that at the old origin. A dock shrinking from its preview showed
+    // the empty top of the taller layout: the whole dock gone for a frame.
+    // Taken and dropped; the frame drawn for the new size is next.
+    if (geometryHeld(*surface, serial)) {
+      surface->canvas->consumeArena();
+      return;
+    }
+    // Nothing new to draw is not always nothing presented: a resize or a
+    // restyle that redrew this surface since the `Present` took the frame
+    // already. What the frame commits — the reveal, a panel's new geometry,
+    // the frost behind it — is still owed for it then.
+    if (!surface->canvas->renderFromArena() &&
+        surface->canvas->arenaFramesTaken() == surface->presentMark) {
+      return;
+    }
     if (surface->awaitingFirstFrame) {
       surface->firstFrameRendered = true;
       // The frame saying which input it was drawn with. At or past the
@@ -7069,7 +7138,18 @@ class SurfaceRegistry : public lava::CompositorHost {
     // first one drawn for its new thickness. Moving the scene here rather than
     // when the resize was asked for is what keeps the old picture still while
     // it is the only picture there is.
-    if (surface->pendingPanelGeometry) commitPanelGeometry(*surface);
+    //
+    // Only for a frame laid out after the `Resize` that announced it, which
+    // the frame's serial says. The panel animates, so it presents nearly
+    // every frame, and the one drawn next after the resize is often one it
+    // published before hearing of it — committed, that is the old picture at
+    // the new origin: the dock's plate a hundred pixels up the screen for a
+    // frame as the preview shelf opened. Drawing frames at the output's pace
+    // made that likely: a frame presented just before the resize used to be
+    // drawn on arrival, before the geometry was pending at all.
+    if (surface->pendingPanelGeometry && !geometryHeld(*surface, serial)) {
+      commitPanelGeometry(*surface);
+    }
     const wlr_box changed = damage(*surface);
     // `notePainted` is guarded by `visible`, which now knows about the hold:
     // a window nobody can see yet cannot have changed what is behind anyone.
@@ -9011,17 +9091,24 @@ void Output::on_frame(wl_listener *listener, void *) {
   // here, before the composite, so that its clock is the display's and the
   // buffer it produces goes out in *this* commit rather than waiting for the
   // next one. See `SurfaceRegistry::animate` for why not a timer.
-  const bool animating = output->server->surfaces != nullptr &&
-                         output->server->surfaces->stepAnimations();
+  bool animating = false;
   if (output->server->surfaces != nullptr) {
+    SurfaceRegistry &surfaces = *output->server->surfaces;
     // Frost first, from the frames already drawn, then the client frames that
     // arrived since — newest only, see `SurfaceRegistry::present` — so the
     // composite below shows them. The other way round the frost capture
     // waits on the CPU for every render the flush just queued: with four
     // frosted terminals repainting, 13–18 ms of a 16.7 ms frame. The price is
     // frost one frame behind what is under it, which a blur hides.
-    output->server->surfaces->refreshBackdropBlurs();
-    output->server->surfaces->flushPresents();
+    surfaces.refreshBackdropBlurs();
+    // Client frames before the renderer's own animation step, never after:
+    // drawing takes the newest frame out of the arena, so a hover tint's
+    // redraw that ran first swallowed the frame `flushPresents` was there to
+    // draw — and with it the panel geometry, reveal and frost that only a
+    // presented frame commits. A dock under the pointer, which is always
+    // easing something, lost exactly the frame that resized it.
+    surfaces.flushPresents();
+    animating = surfaces.stepAnimations();
   }
   output->syncScanoutLock();
   // Composite is surface 0 in the probe: it is the desktop's own frame rather

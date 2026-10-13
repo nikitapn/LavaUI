@@ -643,8 +643,12 @@ class ControlPlane {
   /// `canvas::InputEventKind` says they mean — the compositor forwards and
   /// interprets nothing, which is what makes this a field copy rather than a
   /// protocol.
-  virtual void postInput(uint32_t surfaceId, uint32_t kind, float x, float y,
-                         int32_t button, int32_t mods) = 0;
+  ///
+  /// Returns the serial the event went out with, which is what a later
+  /// `Present` is compared against to ask "was this frame laid out after
+  /// that?" — 0 when nobody is subscribed and nothing went out.
+  virtual uint32_t postInput(uint32_t surfaceId, uint32_t kind, float x,
+                             float y, int32_t button, int32_t mods) = 0;
 
   /// Ends every subscription to a surface that has gone away.
   virtual void surfaceGone(uint32_t surfaceId) = 0;

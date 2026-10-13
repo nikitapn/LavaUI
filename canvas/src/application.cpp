@@ -790,6 +790,12 @@ bool Application::pollDrawArena(uint32_t windowId)
   return w != nullptr && w->pollDrawArena();
 }
 
+uint64_t Application::arenaFramesTaken(uint32_t windowId) const
+{
+  const AppWindow *w = impl_->win(windowId);
+  return w != nullptr ? w->arenaFramesTaken() : 0;
+}
+
 uint64_t Application::frameCounter(uint32_t windowId) const
 {
   AppWindow *w = impl_->win(windowId);
