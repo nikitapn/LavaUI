@@ -18,6 +18,16 @@ public enum MediaFormats {
         "mka", "wv",
     ]
 
+    /// Text and bitmap subtitle files mpv reads. One of these dropped on the
+    /// window is loaded into the video playing, not opened in its place.
+    public static let subtitles: Set<String> = [
+        "srt", "ass", "ssa", "vtt", "sub", "idx", "sup", "smi", "lrc",
+    ]
+
+    public static func isSubtitle(path: String) -> Bool {
+        subtitles.contains((path as NSString).pathExtension.lowercased())
+    }
+
     public static func isMedia(path: String) -> Bool {
         let ext = (path as NSString).pathExtension.lowercased()
         return video.contains(ext) || audio.contains(ext)

@@ -79,6 +79,44 @@ struct LavaPlayerApp {
                         MenuSeparator()
                         MenuItem("Mute", id: "playback.mute") { session.toggleMute() }
                     }
+                    Menu("Subtitles", id: "subtitles") {
+                        MenuItem(
+                            "Off", id: "subtitles.off",
+                            isEnabled: !session.subtitleTracks.isEmpty,
+                            isChecked: session.selectedSubtitle == nil
+                        ) { session.selectSubtitles(nil) }
+                        for track in session.subtitleTracks {
+                            MenuItem(
+                                track.label, id: "subtitles.track.\(track.id)",
+                                isChecked: track.isSelected
+                            ) { session.selectSubtitles(track.id) }
+                        }
+                        MenuSeparator()
+                        MenuItem(
+                            "Show Subtitles", id: "subtitles.visible",
+                            isEnabled: session.selectedSubtitle != nil,
+                            isChecked: session.state.subtitlesVisible
+                        ) { session.toggleSubtitlesVisible() }
+                        MenuItem("Earlier by 0.1 s", id: "subtitles.earlier") {
+                            session.nudgeSubtitleDelay(-0.1)
+                        }
+                        MenuItem("Later by 0.1 s", id: "subtitles.later") {
+                            session.nudgeSubtitleDelay(0.1)
+                        }
+                        MenuSeparator()
+                        MenuItem(
+                            "Load Subtitle File…", id: "subtitles.load",
+                            isEnabled: session.hasMedia
+                        ) { session.openSubtitlesDialog() }
+                    }
+                    Menu("Audio", id: "audio") {
+                        for track in session.audioTracks {
+                            MenuItem(
+                                track.label, id: "audio.track.\(track.id)",
+                                isChecked: track.isSelected
+                            ) { session.selectAudio(track.id) }
+                        }
+                    }
                     Menu("View", id: "view") {
                         MenuItem("Fullscreen", id: "view.fullscreen") {
                             session.toggleFullscreen()

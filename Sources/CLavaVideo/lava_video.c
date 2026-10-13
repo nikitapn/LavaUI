@@ -846,6 +846,10 @@ LavaVideo *lava_video_create(LavaVideoTarget target,
   mpv_set_option_string(video->mpv, "keep-open", "yes");
   mpv_set_option_string(video->mpv, "idle", "yes");
   mpv_set_option_string(video->mpv, "hwdec", "auto-safe");
+  // Any subtitle file whose name contains the video's, not only the exact
+  // name: `Movie.2019.en.forced.srt` beside `Movie.2019.mkv` is the usual
+  // shape of a downloaded one.
+  mpv_set_option_string(video->mpv, "sub-auto", "fuzzy");
   for (size_t i = 0; i < option_count; ++i) {
     const char *pair = options[i];
     const char *equals = strchr(pair, '=');

@@ -38,6 +38,8 @@ final class PlayerSession: @unchecked Sendable {
         }
     }
     private(set) var barsVisible = true
+    @ObservationIgnored private var subtitleMargin = PlayerSession.defaultSubtitleMargin
+    static let defaultSubtitleMargin = 22
 
     @ObservationIgnored let player: Player
 
@@ -91,7 +93,21 @@ final class PlayerSession: @unchecked Sendable {
 
     // MARK: - Opening
 
+    /// A drop or a command line. Subtitle files among the paths are loaded
+    /// into what is playing instead: dropping `Movie.srt` on a playing
+    /// `Movie.mkv` means "with these", never "play this text file".
     func open(paths: [String]) {
+        let subtitles = paths.filter(MediaFormats.isSubtitle(path:))
+        let media = paths.filter { !MediaFormats.isSubtitle(path: $0) }
+        if media.isEmpty {
+            guard hasMedia else { return }
+            for path in subtitles { player.addSubtitles(path) }
+            return
+        }
+        openMedia(media)
+    }
+
+    private func openMedia(_ paths: [String]) {
         let next = Playlist.from(paths: paths)
         guard let current = next.current else { return }
         playlist = next
@@ -107,6 +123,15 @@ final class PlayerSession: @unchecked Sendable {
         )
         guard !urls.isEmpty else { return }
         open(paths: urls.map(\.path))
+    }
+
+    func openSubtitlesDialog() {
+        guard hasMedia else { return }
+        let urls = FileDialog.openFiles(
+            title: "Load Subtitles",
+            filters: [.init(name: "Subtitles", extensions: MediaFormats.subtitles.sorted())]
+        )
+        for url in urls { player.addSubtitles(url.path) }
     }
 
     func step(_ by: Int) {
@@ -162,6 +187,32 @@ final class PlayerSession: @unchecked Sendable {
     func toggleMute() { player.toggleMute() }
     func stepFrame(_ direction: Int) { player.stepFrame(direction) }
 
+    // MARK: - Tracks
+
+    var subtitleTracks: [Track] { state.tracks.of(.subtitle) }
+    var audioTracks: [Track] { state.tracks.of(.audio) }
+    var selectedSubtitle: Int? { state.tracks.selected(.subtitle) }
+
+    func selectSubtitles(_ id: Int?) { player.select(.subtitle, id: id) }
+    func selectAudio(_ id: Int) { player.select(.audio, id: id) }
+    func cycleSubtitles(backwards: Bool = false) { player.cycleSubtitles(backwards: backwards) }
+    func cycleAudio() { player.cycleAudio() }
+    func toggleSubtitlesVisible() { player.toggleSubtitlesVisible() }
+
+    /// The CC button's list. Holds the floating bar up while it is open: a
+    /// menu whose button hid from under it would be left pointing at nothing.
+    private(set) var subtitleMenuOpen = false
+    func toggleSubtitleMenu() {
+        subtitleMenuOpen.toggle()
+        noteActivity()
+    }
+    func closeSubtitleMenu() {
+        guard subtitleMenuOpen else { return }
+        subtitleMenuOpen = false
+        noteActivity()
+    }
+    func nudgeSubtitleDelay(_ seconds: Double) { player.nudgeSubtitleDelay(seconds) }
+
     // MARK: - Fullscreen and the bars
 
     static let barsLinger: Double = 2.5
@@ -202,11 +253,27 @@ final class PlayerSession: @unchecked Sendable {
     /// controls on it looks like a frozen one.
     func updateBars() {
         let wanted = !fullscreen || state.paused || !hasMedia || pointerOnBar
+            || subtitleMenuOpen
             || FrameScheduler.now() - lastPointerMove < Self.barsLinger
         if wanted != barsVisible {
             barsVisible = wanted
             ViewInvalidation.markDirty()
         }
+    }
+
+    /// From paint, with the video box's height. While the floating bar is
+    /// up, subtitles move above it — what mpv's own controller does — and
+    /// back down when it goes. Only text subtitles, and ASS ones only where
+    /// their style leaves the margin to the player.
+    func placeSubtitles(screenHeight: Float) {
+        var margin = Self.defaultSubtitleMargin
+        if fullscreen, barsVisible, screenHeight > 0 {
+            let clear = TransportBar.floatingInset + TransportBar.height + 8
+            margin = max(margin, Int((clear * 720 / screenHeight).rounded(.up)))
+        }
+        guard margin != subtitleMargin else { return }
+        subtitleMargin = margin
+        player.setSubtitleMargin(margin)
     }
 
     /// No pointer over a fullscreen video once its controls have gone, the

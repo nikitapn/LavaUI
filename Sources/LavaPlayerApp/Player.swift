@@ -1,6 +1,7 @@
 import CLavaVideo
 import CMpv
 import Foundation
+import LavaPlayerCore
 import LavaUI
 
 /// mpv, and the frames it draws on their way to the screen.
@@ -32,6 +33,9 @@ final class Player: @unchecked Sendable {
         var idle = true
         var videoWidth: Int = 0
         var videoHeight: Int = 0
+        /// Every stream of the file, subtitles loaded from files included.
+        var tracks: [Track] = []
+        var subtitlesVisible = true
     }
 
     /// The frame to draw: a texture the renderer already holds.
@@ -312,6 +316,42 @@ final class Player: @unchecked Sendable {
         command([direction < 0 ? "frame-back-step" : "frame-step"])
     }
 
+    // MARK: - Tracks
+    //
+    // Through `osd-msg`, so mpv says what it did on the picture — "Subtitles:
+    // (2) English", "Sub delay: 100 ms" — in the same frame the change shows
+    // up in. A command from the API is silent otherwise.
+
+    /// nil turns that kind off.
+    func select(_ kind: Track.Kind, id: Int?) {
+        let property = kind == .audio ? "aid" : kind == .video ? "vid" : "sid"
+        command(["osd-msg", "set", property, id.map(String.init) ?? "no"])
+    }
+
+    /// The next subtitle track, wrapping through off — mpv's `j`.
+    func cycleSubtitles(backwards: Bool) {
+        command(["osd-msg", "cycle", "sub", backwards ? "down" : "up"])
+    }
+
+    func cycleAudio() { command(["osd-msg", "cycle", "audio"]) }
+
+    func toggleSubtitlesVisible() { command(["osd-msg", "cycle", "sub-visibility"]) }
+
+    func nudgeSubtitleDelay(_ seconds: Double) {
+        command(["osd-msg", "add", "sub-delay", String(seconds)])
+    }
+
+    /// How far up from the bottom subtitles sit, in mpv's units: pixels of a
+    /// 720-line screen, scaled to the real one. mpv's default is 22.
+    func setSubtitleMargin(_ margin: Int) {
+        command(["no-osd", "set", "sub-margin-y", String(margin)])
+    }
+
+    /// Loads a subtitle file into what is playing, and shows it.
+    func addSubtitles(_ path: String) {
+        command(["osd-msg", "sub-add", path, "select"])
+    }
+
     private func command(_ arguments: [String]) {
         guard let mpv else { return }
         _ = withCStrings(arguments + [nil]) { pointers in
@@ -335,7 +375,7 @@ final class Player: @unchecked Sendable {
 
     private enum Watched: UInt64, CaseIterable {
         case position = 1, duration, pause, volume, mute, title, eof, idle,
-             width, height
+             width, height, tracks, subtitlesVisible
 
         var name: String {
             switch self {
@@ -349,15 +389,18 @@ final class Player: @unchecked Sendable {
             case .idle: "idle-active"
             case .width: "dwidth"
             case .height: "dheight"
+            case .tracks: "track-list"
+            case .subtitlesVisible: "sub-visibility"
             }
         }
 
         var format: mpv_format {
             switch self {
             case .position, .duration, .volume: MPV_FORMAT_DOUBLE
-            case .pause, .mute, .eof, .idle: MPV_FORMAT_FLAG
+            case .pause, .mute, .eof, .idle, .subtitlesVisible: MPV_FORMAT_FLAG
             case .title: MPV_FORMAT_STRING
             case .width, .height: MPV_FORMAT_INT64
+            case .tracks: MPV_FORMAT_NODE
             }
         }
     }
@@ -426,12 +469,55 @@ final class Player: @unchecked Sendable {
         case .idle: state.idle = flag()
         case .width: state.videoWidth = int()
         case .height: state.videoHeight = int()
+        case .subtitlesVisible: state.subtitlesVisible = present ? flag() : true
+        case .tracks:
+            state.tracks = present
+                ? Self.tracks(change.data.assumingMemoryBound(to: mpv_node.self).pointee)
+                : []
         case .title:
             state.title = present
                 ? change.data.assumingMemoryBound(to: UnsafePointer<CChar>?.self).pointee
                     .map { String(cString: $0) }
                 : nil
         }
+    }
+}
+
+extension Player {
+    /// mpv's `track-list`: an array of maps, one per stream. Anything not
+    /// shaped like that — a field of an unexpected type, a kind this app does
+    /// not show — is skipped rather than trusted.
+    static func tracks(_ node: mpv_node) -> [Track] {
+        guard node.format == MPV_FORMAT_NODE_ARRAY, let list = node.u.list else { return [] }
+        var tracks: [Track] = []
+        for i in 0..<Int(list.pointee.num) {
+            let entry = list.pointee.values[i]
+            guard entry.format == MPV_FORMAT_NODE_MAP, let map = entry.u.list else { continue }
+            var fields: [String: mpv_node] = [:]
+            for j in 0..<Int(map.pointee.num) {
+                guard let key = map.pointee.keys?[j] else { continue }
+                fields[String(cString: key)] = map.pointee.values[j]
+            }
+            func string(_ key: String) -> String? {
+                guard let value = fields[key], value.format == MPV_FORMAT_STRING,
+                      let text = value.u.string else { return nil }
+                return String(cString: text)
+            }
+            func flag(_ key: String) -> Bool {
+                guard let value = fields[key], value.format == MPV_FORMAT_FLAG else { return false }
+                return value.u.flag != 0
+            }
+            guard let idNode = fields["id"], idNode.format == MPV_FORMAT_INT64,
+                  let kind = string("type").flatMap(Track.Kind.init(rawValue:))
+            else { continue }
+            tracks.append(Track(
+                id: Int(idNode.u.int64), kind: kind, title: string("title"),
+                language: string("lang"), codec: string("codec"),
+                isExternal: flag("external"), isSelected: flag("selected"),
+                isDefault: flag("default"), isForced: flag("forced")
+            ))
+        }
+        return tracks
     }
 }
 

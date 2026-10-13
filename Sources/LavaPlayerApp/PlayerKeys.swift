@@ -7,6 +7,7 @@ enum PlayerKeys {
         static let period: Int32 = 46
         static let nine: Int32 = 57
         static let zero: Int32 = 48
+        static let three: Int32 = 51
     }
 
     static func handle(_ event: KeyEvent, session: PlayerSession) -> Bool {
@@ -30,6 +31,19 @@ enum PlayerKeys {
             session.nudgeVolume(-5)
         case KeyCode.m:
             session.toggleMute()
+        // Subtitles: `j` the next track (`J` the one before), `v` show or
+        // hide, `z`/`x` earlier/later by 100 ms. `#` (Shift+3) the next audio
+        // track. All mpv's.
+        case KeyCode.j:
+            session.cycleSubtitles(backwards: event.shift)
+        case KeyCode.v:
+            session.toggleSubtitlesVisible()
+        case KeyCode.z:
+            session.nudgeSubtitleDelay(-0.1)
+        case KeyCode.x:
+            session.nudgeSubtitleDelay(0.1)
+        case Extra.three where event.shift:
+            session.cycleAudio()
         case Extra.period:
             session.stepFrame(1)
         case Extra.comma:

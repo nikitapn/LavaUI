@@ -52,6 +52,14 @@ struct PlayerView: View {
             onGesture: { gesture in
                 guard gesture.phase == .began, gesture.button == PointerButton.left else { return }
                 FocusManager.clear()
+                // An open menu takes the click that closes it, as menus do.
+                // The overlay cannot do this itself here: it lets a click
+                // outside reach a real target, and the video is one that
+                // covers everything.
+                if session.subtitleMenuOpen {
+                    session.closeSubtitleMenu()
+                    return
+                }
                 // A click pauses and a double-click goes fullscreen, the
                 // convention every desktop player shares. The first click of
                 // a double has already paused, so the second un-pauses it on
@@ -82,6 +90,7 @@ struct PlayerView: View {
         session.player.setSize(width: frame.w, height: frame.h)
         session.noteScreen(width: frame.w)
         session.updateBars()
+        session.placeSubtitles(screenHeight: frame.h)
         list.rect(x: frame.x, y: frame.y, w: frame.w, h: frame.h, color: Palette.mat)
 
         guard session.hasMedia else {
