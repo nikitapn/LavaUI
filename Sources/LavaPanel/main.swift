@@ -89,6 +89,20 @@ enum DesktopMenuID {
     static let logout = MenuID("desktop.logout")
 }
 
+/// The Window menu every focused window gets, whatever it exports itself.
+///
+/// What a title bar's right-click offers, for windows that have no title
+/// bar — a Lava app drawing its own chrome has no non-client area to click.
+/// The compositor does the work; the panel only knows which window is
+/// active. Not numeric, so no id here can be mistaken for a DBusMenu item
+/// when it lands in an application's own Window menu.
+enum WindowMenuID {
+    static let root = MenuID("window")
+    static let alwaysOnTop = MenuID("window.always-on-top")
+    static let center = MenuID("window.center")
+    static let close = MenuID("window.close")
+}
+
 /// A confirm drawn on the panel itself. About is a window of its own —
 /// a card this tall does not belong in the strip's surface.
 enum SystemDialog: Equatable {
@@ -114,6 +128,8 @@ final class MenuSession {
     var title = ""
     /// Non-zero while a real window owns focus. Zero is the desktop itself.
     var focusedSurface: UInt32 = 0
+    /// Whether that window is pinned, for the Window menu's checkmark.
+    var focusedOnTop = false
     var model = MenuModel()
 
     /// The importer is not observable state: it is the machinery that produces
@@ -176,11 +192,13 @@ final class MenuSession {
     func focus(_ window: LavaClient.FocusedWindow) {
         self.title = window.title
         self.focusedSurface = window.surfaceId
+        self.focusedOnTop = window.alwaysOnTop
         // An open menu belongs to the window that is no longer focused.
         closeMenu()
         if menuDebug {
             let line = "LavaPanel: focus surface=\(window.surfaceId)"
                 + " registrar=\(window.registrarId) pid=\(window.pid)"
+                + " onTop=\(window.alwaysOnTop)"
                 + " kde=\(window.menuService) \(window.menuObjectPath)"
                 + " title=\(window.title)\n"
             FileHandle.standardError.write(Data(line.utf8))
@@ -226,6 +244,19 @@ final class MenuSession {
             try? DesktopSettings.lockSession()
         case DesktopMenuID.logout:
             setDialog(.logout)
+        // On the window that was focused when the menu opened — which is
+        // still the focused one: the panel takes no focus to draw a menu.
+        case WindowMenuID.alwaysOnTop:
+            closeMenu()
+            if focusedSurface != 0 {
+                LavaClient.setAlwaysOnTop(focusedSurface, !focusedOnTop)
+            }
+        case WindowMenuID.center:
+            closeMenu()
+            if focusedSurface != 0 { LavaClient.centerWindow(focusedSurface) }
+        case WindowMenuID.close:
+            closeMenu()
+            if focusedSurface != 0 { LavaClient.closeWindow(focusedSurface) }
         default:
             menus?.activate(id)
             closeMenu()
@@ -251,8 +282,28 @@ final class MenuSession {
             )
         }
         var menus = desktop.menus
-        menus.append(contentsOf: imported.menus)
+        menus.append(
+            contentsOf: imported.adding(shellMenu: Self.windowMenu(onTop: focusedOnTop)).menus
+        )
         model = MenuModel(menus: menus)
+    }
+
+    /// Before Help, or merged into the app's own Window menu — see
+    /// `MenuModel.adding(shellMenu:)`.
+    static func windowMenu(onTop: Bool) -> MenuNode {
+        MenuNode(
+            id: WindowMenuID.root,
+            title: "Window",
+            items: [
+                .item(MenuItemModel(
+                    id: WindowMenuID.alwaysOnTop, title: "Always on Top",
+                    isChecked: onTop
+                )),
+                .item(MenuItemModel(id: WindowMenuID.center, title: "Center on Screen")),
+                .separator,
+                .item(MenuItemModel(id: WindowMenuID.close, title: "Close")),
+            ]
+        )
     }
 
     /// Whether the focused window exported titles of its own. The strip

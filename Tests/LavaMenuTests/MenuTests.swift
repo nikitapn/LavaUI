@@ -243,4 +243,41 @@ final class MenuTests: XCTestCase {
         XCTAssertEqual(model.menus[0].title, "Lava")
         XCTAssertNil(model.menus[1].icon)
     }
+
+    // MARK: - A shell's menu in an application's bar
+
+    private func node(_ title: String, _ ids: [String] = []) -> MenuNode {
+        MenuNode(
+            id: MenuID(title.lowercased()), title: title,
+            items: ids.map { .item(MenuItemModel(id: MenuID($0), title: $0)) }
+        )
+    }
+
+    func testShellMenuGoesBeforeHelp() {
+        let bar = MenuModel(menus: [node("File"), node("Edit"), node("_Help")])
+        let out = bar.adding(shellMenu: node("Window", ["top"]))
+        XCTAssertEqual(out.menus.map(\.title), ["File", "Edit", "Window", "_Help"])
+    }
+
+    func testShellMenuGoesLastWithoutHelp() {
+        let bar = MenuModel(menus: [node("File"), node("View")])
+        let out = bar.adding(shellMenu: node("Window", ["top"]))
+        XCTAssertEqual(out.menus.map(\.title), ["File", "View", "Window"])
+    }
+
+    func testShellMenuMergesIntoTheAppsOwnWindowMenu() {
+        let bar = MenuModel(menus: [node("File"), node("&Window", ["zoom"]), node("Help")])
+        let out = bar.adding(shellMenu: node("Window", ["top"]))
+        XCTAssertEqual(out.menus.map(\.title), ["File", "&Window", "Help"])
+        XCTAssertEqual(out.menus[1].items, [
+            .item(MenuItemModel(id: MenuID("zoom"), title: "zoom")),
+            .separator,
+            .item(MenuItemModel(id: MenuID("top"), title: "top")),
+        ])
+    }
+
+    func testShellMenuInAnEmptyBarIsTheBar() {
+        let out = MenuModel().adding(shellMenu: node("Window", ["top"]))
+        XCTAssertEqual(out.menus.map(\.title), ["Window"])
+    }
 }

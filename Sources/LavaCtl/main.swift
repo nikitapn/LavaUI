@@ -22,6 +22,9 @@ usage: lavactl <command>
   workspace                the workspace on screen right now
   activate <id>            restore, raise and focus a window by surface id
   minimize <id>            put one window away by surface id
+  pin <id> on|off          keep a window above the rest of its workspace, or stop
+  center <id>              move a window to the middle of its screen
+  close <id>               ask a window to close, as its close button would
   keyboard                 the keyboard config the compositor is serving
   bindings                 every shortcut the compositor takes for itself
   focus-app <app-id>       activate this application's window on the current
@@ -104,6 +107,24 @@ case "minimize":
         die("usage: lavactl minimize <surface-id>", 2)
     }
     LavaClient.minimizeWindow(id)
+
+case "pin":
+    guard args.count == 3, let id = UInt32(args[1]), ["on", "off"].contains(args[2]) else {
+        die("usage: lavactl pin <surface-id> on|off", 2)
+    }
+    LavaClient.setAlwaysOnTop(id, args[2] == "on")
+
+case "center":
+    guard args.count == 2, let id = UInt32(args[1]) else {
+        die("usage: lavactl center <surface-id>", 2)
+    }
+    LavaClient.centerWindow(id)
+
+case "close":
+    guard args.count == 2, let id = UInt32(args[1]) else {
+        die("usage: lavactl close <surface-id>", 2)
+    }
+    LavaClient.closeWindow(id)
 
 case "focus-app":
     guard args.count == 2 else { die("usage: lavactl focus-app <app-id>", 2) }

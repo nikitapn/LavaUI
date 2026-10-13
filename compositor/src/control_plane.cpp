@@ -1315,6 +1315,20 @@ class CompositorImpl final : public ICompositor_Servant {
     if (!host_.minimize(surfaceId)) throw SurfaceNotFound(surfaceId);
   }
 
+  void SetAlwaysOnTop(uint32_t surfaceId, nprpc::flat::Boolean on) override {
+    if (!host_.setAlwaysOnTop(surfaceId, static_cast<bool>(on))) {
+      throw SurfaceNotFound(surfaceId);
+    }
+  }
+
+  void CenterWindow(uint32_t surfaceId) override {
+    if (!host_.centerWindow(surfaceId)) throw SurfaceNotFound(surfaceId);
+  }
+
+  void CloseWindow(uint32_t surfaceId) override {
+    if (!host_.closeWindow(surfaceId)) throw SurfaceNotFound(surfaceId);
+  }
+
   void ForgetWindowPoster(uint32_t surfaceId) override {
     host_.forgetWindowPoster(surfaceId);
   }
@@ -2672,8 +2686,9 @@ class ControlPlaneImpl final : public ControlPlane {
   void postActiveWindow(uint32_t surfaceId, const std::string &title,
                         const std::string &menuService,
                         const std::string &menuObjectPath, uint32_t pid,
-                        uint32_t registrarId) override {
+                        uint32_t registrarId, bool alwaysOnTop) override {
     ActiveWindow window{};
+    window.alwaysOnTop = alwaysOnTop;
     window.surfaceId = surfaceId;
     window.title = title;
     window.menuService = menuService;

@@ -877,6 +877,38 @@ public enum LavaClient {
         }
     }
 
+    /// Pins a window above the rest of its workspace, or stops, by surface
+    /// id. The focused window's state comes back on `onActiveWindow`.
+    public static func setAlwaysOnTop(_ surfaceId: UInt32, _ on: Bool) {
+        guard let compositor = Self.compositor else { return }
+        report("SetAlwaysOnTop") {
+            try blockingCall {
+                try await compositor.setAlwaysOnTop(surfaceId: surfaceId, on: on)
+            }
+        }
+    }
+
+    /// Moves a window to the middle of its output's work area, by surface id.
+    public static func centerWindow(_ surfaceId: UInt32) {
+        guard let compositor = Self.compositor else { return }
+        report("CenterWindow") {
+            try blockingCall {
+                try await compositor.centerWindow(surfaceId: surfaceId)
+            }
+        }
+    }
+
+    /// Asks a window to close, by surface id — politely, as its title bar's
+    /// close button would.
+    public static func closeWindow(_ surfaceId: UInt32) {
+        guard let compositor = Self.compositor else { return }
+        report("CloseWindow") {
+            try blockingCall {
+                try await compositor.closeWindow(surfaceId: surfaceId)
+            }
+        }
+    }
+
     /// Drops the compositor's cached poster for a window.
     ///
     /// A poster is the picture an `ImageSurface` draw command resolves to, and
@@ -1137,6 +1169,8 @@ public enum LavaClient {
         /// The key the window's menu is registered under. `surfaceId` for
         /// Wayland clients; an XID for X11 ones.
         public var registrarId: UInt32 = 0
+        /// Pinned above the rest of its workspace.
+        public var alwaysOnTop = false
     }
 
     /// The focused window, now and whenever it changes.
@@ -1171,7 +1205,8 @@ public enum LavaClient {
                         menuService: window.menuService,
                         menuObjectPath: window.menuObjectPath,
                         pid: window.pid,
-                        registrarId: window.registrarId
+                        registrarId: window.registrarId,
+                        alwaysOnTop: window.alwaysOnTop
                     )
                     MainQueue.async { handler(focused) }
                     // Cheap, and the only thing that keeps the stream's flow

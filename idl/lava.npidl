@@ -535,6 +535,10 @@ message ActiveWindow {
   /// how those menus never appeared. A panel that wants the *window* wants
   /// `surfaceId`; only the registrar lookup wants this.
   registrarId: u32;
+  /// Whether the window is pinned above the rest of its workspace — the
+  /// state of the checkmark on the panel's Window menu. Re-posted when it
+  /// changes, from that menu or from the title bar's.
+  alwaysOnTop: boolean;
 }
 
 /// One window, as a dock or a task list has to see it.
@@ -2459,6 +2463,29 @@ interface Compositor {
   /// built after it — and a client that gets an error back from an older
   /// compositor falls back to `RegisterImage` here.
   void GetImages(images: out object);
+
+  // ── The panel's Window menu ──────────────────────────────────────────────
+  //
+  // What a window's title-bar context menu does, for a window with no title
+  // bar: a Lava client that draws its own chrome has no non-client area to
+  // right-click. The panel offers them for whichever window is active, and
+  // any client may ask for any window — the same as `Minimize` — because
+  // each is something the user could already do to it by hand. After
+  // `GetImages`, so the calls before it keep their indices.
+
+  /// Pins a window above the rest of its workspace, or stops. An overlay
+  /// (the launcher, the switcher) is above pinned windows already and is
+  /// left alone.
+  void SetAlwaysOnTop(surfaceId: in u32, on: in boolean) raises(SurfaceNotFound);
+
+  /// Moves a window to the middle of the work area of the output it is on.
+  /// Nothing for a maximized or fullscreen window, which has nowhere to go.
+  void CenterWindow(surfaceId: in u32) raises(SurfaceNotFound);
+
+  /// Asks a window to close: a Wayland or X11 client gets its close request
+  /// and may still ask to save; a Lava client's surface ends, as the title
+  /// bar's close button does.
+  void CloseWindow(surfaceId: in u32) raises(SurfaceNotFound);
 }
 
 /// Image registration that does not stop the desktop.

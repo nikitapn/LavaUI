@@ -3877,6 +3877,9 @@ class SurfaceRegistry : public lava::CompositorHost {
     }
     restackRanked();
     syncShellForFullscreen();
+    // The panel's Window menu draws a checkmark from this, and the change can
+    // come from the title bar's menu as well as from that one.
+    if (surface.id == focused_) postActive(surface);
   }
 
   /// Puts both of a window's nodes where its frame origin says they go.
@@ -5288,7 +5291,7 @@ class SurfaceRegistry : public lava::CompositorHost {
             surface.id, registrarId, pid, service.empty() ? "-" : service.c_str(),
             path.empty() ? "-" : path.c_str(), surface.title.c_str());
     control_->postActiveWindow(surface.id, surface.title, service, path, pid,
-                               registrarId);
+                               registrarId, surface.alwaysOnTop());
   }
 
   /// A surface's AppMenu address changed. If it is the focused window, re-post
@@ -5892,6 +5895,43 @@ class SurfaceRegistry : public lava::CompositorHost {
   }
 
   bool minimize(uint32_t id) override;
+
+  bool setAlwaysOnTop(uint32_t id, bool on) override {
+    ClientSurface *surface = find(id);
+    if (surface == nullptr) return false;
+    setAlwaysOnTop(*surface, on);
+    return true;
+  }
+
+  /// The middle of the work area of the output the window is on, as a first
+  /// launch places it. A maximized or fullscreen window is left where it is:
+  /// it already fills the area this would centre it in.
+  bool centerWindow(uint32_t id) override {
+    ClientSurface *surface = find(id);
+    if (surface == nullptr) return false;
+    if (surface->furniture() || surface->maximized || surface->fullscreen) {
+      return true;
+    }
+    const WorkArea area =
+        workAreaAt(surfaceCenterX(*surface), surfaceCenterY(*surface));
+    const int roomX =
+        static_cast<int>(area.width) - static_cast<int>(surface->width);
+    const int roomY =
+        static_cast<int>(area.height) - surface->frameHeight();
+    moveSurface(*surface, area.x + std::max(0, roomX) / 2,
+                area.y + std::max(0, roomY) / 2);
+    // Remembered, as the end of a drag is: centring is where the user put it.
+    rememberPlacement(*surface);
+    return true;
+  }
+
+  bool closeWindow(uint32_t id) override {
+    ClientSurface *surface = find(id);
+    if (surface == nullptr) return false;
+    if (surface->furniture()) return true;
+    requestClose(*surface);
+    return true;
+  }
 
   bool setMinSize(uint32_t id, uint32_t minWidth, uint32_t minHeight) override {
     ClientSurface *surface = find(id);

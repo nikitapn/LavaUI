@@ -319,6 +319,12 @@ struct CompositorHost {
   /// Hides the window without ending it.
   virtual bool minimize(uint32_t surfaceId) = 0;
 
+  /// The panel's Window menu — see `SetAlwaysOnTop`, `CenterWindow` and
+  /// `CloseWindow` in the IDL. False when there is no such surface.
+  virtual bool setAlwaysOnTop(uint32_t surfaceId, bool on) = 0;
+  virtual bool centerWindow(uint32_t surfaceId) = 0;
+  virtual bool closeWindow(uint32_t surfaceId) = 0;
+
   /// Re-thickens a panel, reserving `reserved` of it. False when the surface
   /// is unknown or is not a panel. See `SetPanelThickness`.
   /// The client's own floor for its window, in pixels. Zero means no opinion
@@ -688,7 +694,8 @@ class ControlPlane {
                                 const std::string &menuService = {},
                                 const std::string &menuObjectPath = {},
                                 uint32_t pid = 0,
-                                uint32_t registrarId = 0) = 0;
+                                uint32_t registrarId = 0,
+                                bool alwaysOnTop = false) = 0;
 
   /// "The system theme changed" — to every Lava client watching.
   virtual void postSystemTheme() = 0;

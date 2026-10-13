@@ -1207,6 +1207,14 @@ reason.
 Unpinning moves nothing: the window is simply no longer put back, which leaves
 it where the user can still see it.
 
+A Lava app that draws its own chrome has no title bar to right-click, so the
+panel adds a **Window menu** to every focused window's global menu — Always on
+Top, Center on Screen, Close — through `SetAlwaysOnTop`, `CenterWindow` and
+`CloseWindow` (also `lavactl pin|center|close`). It goes before Help, or into
+the app's own Window menu if it has one (`MenuModel.adding(shellMenu:)`), and
+its checkmark is `ActiveWindow.alwaysOnTop`, which `setAlwaysOnTop` re-posts
+for the focused window whichever menu made the change.
+
 ## Notifications
 
 The panel is the session's notification daemon: canvas's `NotificationHost`
@@ -1316,6 +1324,7 @@ so headless test runs skip it too.
 | Window position / maximize restore | `compositor/src/window_memory.*`, `SurfaceRegistry::applyInitialPlacement` |
 | Popups (a client's own) | `Server::on_new_popup`, `Popup::on_commit`, `Server::popupBounds` |
 | The desktop's context menu | `Server::openContextMenu` / `applyMenuChoice` (what is on it, what it does), `Sources/LavaContextMenu/` (drawing), IDL `SubscribeMenu` |
+| The panel's Window menu (any focused window) | `MenuSession.windowMenu` in `Sources/LavaPanel/main.swift`, `SurfaceRegistry::centerWindow` / `closeWindow` |
 | Always on top / overlay stacking | `ClientSurface::StackRank`, `SurfaceRegistry::setAlwaysOnTop`, `restackRanked` |
 | Which pixels of a surface take input | `point_accepts_input` hooks, `ClientSurface::acceptsInput`, `SetInputRegion` |
 | Minimum window size | IDL `SetMinSize`, `SurfaceRegistry::minFor`, `LavaClient.setMinimumSize` |

@@ -157,6 +157,33 @@ public struct MenuModel: Equatable, Sendable {
         menus.flatMap { $0.allItems }
     }
 
+    /// `menu` added where a menubar convention puts it, for a menu the
+    /// *shell* contributes to every application's bar — the panel's Window
+    /// menu.
+    ///
+    /// Merged into the application's own menu of the same title when there is
+    /// one (after a separator), so a bar never shows two "Window" menus.
+    /// Otherwise just before "Help", which stays last everywhere; otherwise
+    /// at the end. Titles compare without mnemonic markers, since an imported
+    /// GTK or Qt menu spells them `_Window` and `&Help`.
+    public func adding(shellMenu menu: MenuNode) -> MenuModel {
+        func plain(_ title: String) -> String {
+            title.replacingOccurrences(of: "_", with: "")
+                .replacingOccurrences(of: "&", with: "")
+                .lowercased()
+        }
+        var menus = self.menus
+        if let same = menus.firstIndex(where: { plain($0.title) == plain(menu.title) }) {
+            if !menus[same].items.isEmpty { menus[same].items.append(.separator) }
+            menus[same].items.append(contentsOf: menu.items)
+        } else if let help = menus.firstIndex(where: { plain($0.title) == "help" }) {
+            menus.insert(menu, at: help)
+        } else {
+            menus.append(menu)
+        }
+        return MenuModel(menus: menus)
+    }
+
     /// The item with id `id`, searched through every menu and submenu.
     public func item(id: MenuID) -> MenuItemModel? {
         for menu in menus {

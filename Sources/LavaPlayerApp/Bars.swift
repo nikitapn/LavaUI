@@ -138,8 +138,9 @@ struct TransportBar: View {
             )
             .flexGrow(1)
         }
-        // Audio's is wider: three capitals do not fit in the CC button.
-        .frame(width: .pt(subtitles ? 34 : 44))
+        // Audio's is wider: three capitals do not fit in the CC button, and
+        // at 44 `ENG` was cut to `E…`.
+        .frame(width: .pt(subtitles ? 34 : 52))
         .hoverBackground(Theme.current.hover)
         .cornerRadius(4)
         .cursor(.pointer)
