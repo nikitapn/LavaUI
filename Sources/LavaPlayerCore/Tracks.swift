@@ -66,6 +66,15 @@ public struct Track: Equatable, Sendable {
         return text
     }
 
+    /// A few letters for a button: the language tag in capitals (`ENG`,
+    /// `PT` for `pt-BR`), or the number when the file names none.
+    public var badge: String {
+        let tag = language?.trimmingCharacters(in: .whitespaces) ?? ""
+        guard !tag.isEmpty, tag != "und" else { return "#\(id)" }
+        let primary = tag.split(whereSeparator: { $0 == "-" || $0 == "_" }).first ?? ""
+        return String(primary.prefix(3)).uppercased()
+    }
+
     /// `eng` → `English`, through the system's own names; a tag it does not
     /// know is shown as it is rather than dropped.
     static func languageName(_ tag: String) -> String? {
@@ -79,6 +88,15 @@ public struct Track: Equatable, Sendable {
 
 extension Array where Element == Track {
     public func of(_ kind: Track.Kind) -> [Track] { filter { $0.kind == kind } }
+
+    /// The track of `kind` after the selected one, wrapping — never "none".
+    /// For audio, where stepping onto silence is not what anyone means.
+    public func next(_ kind: Track.Kind) -> Int? {
+        let tracks = of(kind)
+        guard !tracks.isEmpty else { return nil }
+        guard let at = tracks.firstIndex(where: \.isSelected) else { return tracks[0].id }
+        return tracks[(at + 1) % tracks.count].id
+    }
 
     /// The id of the selected track of `kind`, or nil for none.
     public func selected(_ kind: Track.Kind) -> Int? {

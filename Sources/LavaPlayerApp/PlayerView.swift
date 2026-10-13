@@ -56,8 +56,8 @@ struct PlayerView: View {
                 // The overlay cannot do this itself here: it lets a click
                 // outside reach a real target, and the video is one that
                 // covers everything.
-                if session.subtitleMenuOpen {
-                    session.closeSubtitleMenu()
+                if session.trackMenu != nil {
+                    session.closeTrackMenu()
                     return
                 }
                 // A click pauses and a double-click goes fullscreen, the

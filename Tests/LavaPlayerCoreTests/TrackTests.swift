@@ -49,6 +49,24 @@ final class TrackTests: XCTestCase {
         XCTAssertEqual(tracks.of(.subtitle).count, 2)
     }
 
+    func testBadgeIsTheLanguageInCapitalsOrTheNumber() {
+        XCTAssertEqual(Track(id: 1, kind: .audio, language: "eng").badge, "ENG")
+        XCTAssertEqual(Track(id: 1, kind: .audio, language: "pt-BR").badge, "PT")
+        XCTAssertEqual(Track(id: 2, kind: .audio, language: "und").badge, "#2")
+        XCTAssertEqual(Track(id: 3, kind: .audio).badge, "#3")
+    }
+
+    func testNextWrapsAndNeverLandsOnNone() {
+        let tracks = [
+            Track(id: 1, kind: .audio),
+            Track(id: 2, kind: .audio, isSelected: true),
+            Track(id: 1, kind: .subtitle, isSelected: true),
+        ]
+        XCTAssertEqual(tracks.next(.audio), 1)
+        XCTAssertEqual([Track(id: 1, kind: .audio), Track(id: 2, kind: .audio)].next(.audio), 1)
+        XCTAssertNil([Track]().next(.audio))
+    }
+
     func testSubtitleFilesAreKnownByExtension() {
         XCTAssertTrue(MediaFormats.isSubtitle(path: "/v/Movie.en.SRT"))
         XCTAssertFalse(MediaFormats.isSubtitle(path: "/v/Movie.mkv"))

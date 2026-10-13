@@ -333,8 +333,6 @@ final class Player: @unchecked Sendable {
         command(["osd-msg", "cycle", "sub", backwards ? "down" : "up"])
     }
 
-    func cycleAudio() { command(["osd-msg", "cycle", "audio"]) }
-
     func toggleSubtitlesVisible() { command(["osd-msg", "cycle", "sub-visibility"]) }
 
     func nudgeSubtitleDelay(_ seconds: Double) {

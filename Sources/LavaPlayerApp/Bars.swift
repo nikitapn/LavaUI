@@ -82,8 +82,11 @@ struct TransportBar: View {
             )
             .flexGrow(1)
             .agentId("seek")
+            if session.audioTracks.count > 1 {
+                trackButton(.audio)
+            }
             if !session.subtitleTracks.isEmpty {
-                subtitlesButton
+                trackButton(.subtitle)
             }
             iconButton(session.state.muted ? "🔇" : "🔊", id: "mute", enabled: session.hasMedia) {
                 session.toggleMute()
@@ -105,37 +108,46 @@ struct TransportBar: View {
         .cornerRadius(floating ? 10 : 0)
     }
 
-    /// CC: a left click cycles, the way `j` does — through off — and a right
-    /// click lists every track. A stack's `onPointer` rather than a `Text`'s
-    /// `onClick`, which answers every button the same: a right click would
-    /// cycle *and* open the list. Lit while a track is showing.
-    private var subtitlesButton: some View {
-        HStack(
+    /// A track button: a left click steps to the next track, a right click
+    /// lists them all. A stack's `onPointer` rather than a `Text`'s
+    /// `onClick`, which answers every button the same — a right click would
+    /// step *and* open the list.
+    ///
+    /// CC is lit while a subtitle track is showing and steps through off, as
+    /// mpv's `j` does. Audio reads the language playing and never steps onto
+    /// silence.
+    private func trackButton(_ kind: Track.Kind) -> some View {
+        let subtitles = kind == .subtitle
+        let label = subtitles ? "CC" : session.selectedAudio?.badge ?? "—"
+        let lit = subtitles && session.selectedSubtitle != nil
+        return HStack(
             padding: 6, alignment: .center,
             onPointer: { _, button in
                 if button == PointerButton.left {
-                    session.cycleSubtitles()
+                    if subtitles { session.cycleSubtitles() } else { session.cycleAudio() }
                 } else if button == PointerButton.right {
-                    session.toggleSubtitleMenu()
+                    session.toggleTrackMenu(kind)
                 }
             }
         ) {
             Text(
-                "CC",
-                color: session.selectedSubtitle != nil ? .accent : Theme.current.textSecondary,
+                label,
+                color: lit ? .accent : Theme.current.textSecondary,
+                lineLimit: 1,
                 align: .center
             )
             .flexGrow(1)
         }
-        .frame(width: .pt(34))
+        // Audio's is wider: three capitals do not fit in the CC button.
+        .frame(width: .pt(subtitles ? 34 : 44))
         .hoverBackground(Theme.current.hover)
         .cornerRadius(4)
         .cursor(.pointer)
-        .agentId("subtitles")
+        .agentId(subtitles ? "subtitles" : "audio")
         .overlay(
             isPresented: Binding(
-                get: { session.subtitleMenuOpen },
-                set: { if !$0 { session.closeSubtitleMenu() } }
+                get: { session.trackMenu == kind },
+                set: { if !$0, session.trackMenu == kind { session.closeTrackMenu() } }
             ),
             placement: OverlayPlacement { context in
                 // Above the button, its right edge on the button's:
@@ -155,7 +167,7 @@ struct TransportBar: View {
                 return style
             }()
         ) {
-            if session.subtitleMenuOpen { SubtitleMenu(session: session) }
+            if session.trackMenu == kind { TrackMenu(session: session, kind: kind) }
         }
     }
 
@@ -183,48 +195,56 @@ struct TransportBar: View {
     }
 }
 
-/// The CC button's right-click menu: every subtitle track, off, and a file.
-/// The same choices as the menubar's Subtitles menu, from one place.
-private struct SubtitleMenu: View {
+/// A track button's right-click menu. Subtitles: off, every track, and a
+/// file. Audio: every track. The same choices as the menubar's, from one place.
+private struct TrackMenu: View {
     @Bindable var session: PlayerSession
+    let kind: Track.Kind
 
     var body: some View {
         MenuDropdownPanel(
             entries: entries,
             onActivate: { id in
-                session.closeSubtitleMenu()
+                session.closeTrackMenu()
                 switch id.raw {
-                case "cc.off": session.selectSubtitles(nil)
-                case "cc.load": session.openSubtitlesDialog()
-                case let raw where raw.hasPrefix("cc.track."):
-                    if let track = Int(raw.dropFirst("cc.track.".count)) {
+                case "track.off": session.selectSubtitles(nil)
+                case "track.load": session.openSubtitlesDialog()
+                case let raw where raw.hasPrefix("track.id."):
+                    guard let track = Int(raw.dropFirst("track.id.".count)) else { break }
+                    if kind == .subtitle {
                         session.selectSubtitles(track)
+                    } else {
+                        session.selectAudio(track)
                     }
                 default: break
                 }
             },
             style: .standard(theme: Theme.current)
         )
-        .agentId("subtitle-menu")
+        .agentId(kind == .subtitle ? "subtitle-menu" : "audio-menu")
     }
 
     private var entries: [MenuEntry] {
-        var items: [MenuEntry] = [
-            .item(MenuItemModel(
-                id: MenuID("cc.off"), title: "Off",
-                isChecked: session.selectedSubtitle == nil
-            )),
-        ]
-        for track in session.subtitleTracks {
+        let tracks = kind == .subtitle ? session.subtitleTracks : session.audioTracks
+        var items: [MenuEntry] = []
+        if kind == .subtitle {
             items.append(.item(MenuItemModel(
-                id: MenuID("cc.track.\(track.id)"), title: track.label,
+                id: MenuID("track.off"), title: "Off",
+                isChecked: session.selectedSubtitle == nil
+            )))
+        }
+        for track in tracks {
+            items.append(.item(MenuItemModel(
+                id: MenuID("track.id.\(track.id)"), title: track.label,
                 isChecked: track.isSelected
             )))
         }
-        items.append(.separator)
-        items.append(.item(MenuItemModel(
-            id: MenuID("cc.load"), title: "Load Subtitle File\u{2026}"
-        )))
+        if kind == .subtitle {
+            items.append(.separator)
+            items.append(.item(MenuItemModel(
+                id: MenuID("track.load"), title: "Load Subtitle File\u{2026}"
+            )))
+        }
         return items
     }
 }

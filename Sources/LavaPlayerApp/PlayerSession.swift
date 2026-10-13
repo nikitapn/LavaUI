@@ -196,19 +196,25 @@ final class PlayerSession: @unchecked Sendable {
     func selectSubtitles(_ id: Int?) { player.select(.subtitle, id: id) }
     func selectAudio(_ id: Int) { player.select(.audio, id: id) }
     func cycleSubtitles(backwards: Bool = false) { player.cycleSubtitles(backwards: backwards) }
-    func cycleAudio() { player.cycleAudio() }
+    /// The next audio track, wrapping. Not mpv's `cycle audio`, which steps
+    /// onto "no audio" on the way round.
+    func cycleAudio() {
+        if let next = state.tracks.next(.audio) { player.select(.audio, id: next) }
+    }
+    var selectedAudio: Track? { audioTracks.first(where: \.isSelected) }
     func toggleSubtitlesVisible() { player.toggleSubtitlesVisible() }
 
-    /// The CC button's list. Holds the floating bar up while it is open: a
-    /// menu whose button hid from under it would be left pointing at nothing.
-    private(set) var subtitleMenuOpen = false
-    func toggleSubtitleMenu() {
-        subtitleMenuOpen.toggle()
+    /// Which track button's list is open, if either. Holds the floating bar
+    /// up while it is: a menu whose button hid from under it would be left
+    /// pointing at nothing.
+    private(set) var trackMenu: Track.Kind?
+    func toggleTrackMenu(_ kind: Track.Kind) {
+        trackMenu = trackMenu == kind ? nil : kind
         noteActivity()
     }
-    func closeSubtitleMenu() {
-        guard subtitleMenuOpen else { return }
-        subtitleMenuOpen = false
+    func closeTrackMenu() {
+        guard trackMenu != nil else { return }
+        trackMenu = nil
         noteActivity()
     }
     func nudgeSubtitleDelay(_ seconds: Double) { player.nudgeSubtitleDelay(seconds) }
@@ -253,7 +259,7 @@ final class PlayerSession: @unchecked Sendable {
     /// controls on it looks like a frozen one.
     func updateBars() {
         let wanted = !fullscreen || state.paused || !hasMedia || pointerOnBar
-            || subtitleMenuOpen
+            || trackMenu != nil
             || FrameScheduler.now() - lastPointerMove < Self.barsLinger
         if wanted != barsVisible {
             barsVisible = wanted
