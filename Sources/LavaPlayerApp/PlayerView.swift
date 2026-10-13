@@ -101,6 +101,7 @@ struct PlayerView: View {
                 x: frame.x + (frame.w - dw) / 2, y: frame.y + (frame.h - dh) / 2,
                 w: dw, h: dh
             )
+            session.player.noteDrawn(current)
         }
         if !session.hasVideo, session.state.position != nil {
             // Audio: mpv draws black. Say what is playing rather than show a

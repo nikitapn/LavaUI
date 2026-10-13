@@ -38,21 +38,22 @@ final class Player: @unchecked Sendable {
     enum Frame {
         /// In the compositor, by id. Nothing to release: the buffer it was
         /// copied from is ours, and its texture lives as long as the buffer.
-        case video(VideoFrame)
+        /// `buffer` is the bridge's name for that buffer, for `noteDrawn`.
+        case video(VideoFrame, buffer: UInt32)
         /// Uploaded from memory, as a texture of its own that must be
         /// released when it is replaced.
         case pixels(UIImage)
 
         var textureId: UInt32 {
             switch self {
-            case .video(let frame): frame.textureId
+            case .video(let frame, _): frame.textureId
             case .pixels(let image): image.textureId
             }
         }
 
         var size: (width: Float, height: Float) {
             switch self {
-            case .video(let frame): (Float(frame.width), Float(frame.height))
+            case .video(let frame, _): (Float(frame.width), Float(frame.height))
             case .pixels(let image): (image.pixelWidth, image.pixelHeight)
             }
         }
@@ -201,7 +202,7 @@ final class Player: @unchecked Sendable {
     private func present(_ handle: UInt32) {
         guard let frame = videoHost?.showVideoBuffer(handle) else { return }
         lock.lock()
-        latest = .video(frame)
+        latest = .video(frame, buffer: handle)
         lock.unlock()
         MainQueue.async { ViewInvalidation.markNeedsRedraw() }
     }
@@ -248,6 +249,17 @@ final class Player: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         return latest
+    }
+
+    /// Paint drew `frame`. Once that frame is presented, the bridge may let go
+    /// of buffers of an older size — it keeps them until then, because until
+    /// then the window's draw list still names their textures.
+    func noteDrawn(_ frame: Frame) {
+        guard case .video(_, let buffer) = frame else { return }
+        FrameTasks.after { [weak self] in
+            guard let video = self?.video else { return }
+            lava_video_shown(video, buffer)
+        }
     }
 
     /// The box the video is drawn in, in pixels. mpv renders at this size,

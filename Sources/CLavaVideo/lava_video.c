@@ -11,6 +11,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include <unistd.h>
 
 #include <EGL/egl.h>
@@ -35,6 +36,13 @@
 // `present` is the release, so two would do; the third costs one frame of
 // memory and buys slack on a busy desktop.
 #define BUFFER_COUNT 3
+
+// How long the box must keep one size before buffers are made for it. A
+// window edge being dragged changes it every motion event, and a set of
+// buffers is three allocations, three imports and three textures on the far
+// side; until then mpv goes on drawing into the old set, and the app fits that
+// to the box. 100 ms is under what reads as a lag once the hand stops.
+#define SETTLE_NS 100000000ll
 
 typedef void (*PFN_glGenTextures)(GLsizei, GLuint *);
 typedef void (*PFN_glDeleteTextures)(GLsizei, const GLuint *);
@@ -72,6 +80,12 @@ struct LavaVideo {
   bool redraw_pending;
   bool quit;
   uint32_t want_width, want_height;
+  int64_t size_changed_at;  // CLOCK_MONOTONIC ns of the last change
+  // The newest buffer the app has presented a frame of, and whether the
+  // render thread is waiting to hear one (see `retired`).
+  uint32_t shown_handle;
+  bool shown_pending;
+  bool awaiting_shown;
 
   // Set once by the render thread before `ready` is signalled.
   pthread_mutex_t ready_lock;
@@ -110,6 +124,15 @@ struct LavaVideo {
   Buffer buffers[BUFFER_COUNT];
   uint32_t buffer_width, buffer_height;
   int next_buffer;
+  // The set before a resize, kept until the app has presented a frame from
+  // the new one. Detaching a buffer discards its texture, and until then the
+  // window's draw list still names the old ones. Freed first, as it used to
+  // be, the video area went black for a frame or two on every resize — 9 of
+  // 400 captures across six fullscreen toggles, and none with this.
+  Buffer retired[BUFFER_COUNT];
+  bool has_retired;
+  // Whether the app has drawn from `buffers` yet.
+  bool current_shown;
 
   // Pixel mode.
   void *pixels;
@@ -316,9 +339,43 @@ static void free_buffer(LavaVideo *video, Buffer *buffer) {
   buffer->image = EGL_NO_IMAGE_KHR;
 }
 
+static void free_set(LavaVideo *video, Buffer *set) {
+  for (int i = 0; i < BUFFER_COUNT; ++i) free_buffer(video, &set[i]);
+}
+
+static void free_retired(LavaVideo *video) {
+  if (!video->has_retired) return;
+  free_set(video, video->retired);
+  video->has_retired = false;
+  pthread_mutex_lock(&video->lock);
+  video->awaiting_shown = false;
+  pthread_mutex_unlock(&video->lock);
+}
+
 static void free_buffers(LavaVideo *video) {
-  for (int i = 0; i < BUFFER_COUNT; ++i) free_buffer(video, &video->buffers[i]);
+  free_set(video, video->buffers);
+  free_retired(video);
   video->buffer_width = video->buffer_height = 0;
+}
+
+static bool in_set(const Buffer *set, uint32_t handle) {
+  for (int i = 0; i < BUFFER_COUNT; ++i) {
+    if (handle != 0 && set[i].handle == handle) return true;
+  }
+  return false;
+}
+
+/// Takes in what `lava_video_shown` said, and lets the old set go once the
+/// app has drawn from the new one.
+static void absorb_shown(LavaVideo *video) {
+  pthread_mutex_lock(&video->lock);
+  const uint32_t shown = video->shown_handle;
+  video->shown_pending = false;
+  pthread_mutex_unlock(&video->lock);
+  if (!video->current_shown && in_set(video->buffers, shown)) {
+    video->current_shown = true;
+  }
+  if (video->current_shown) free_retired(video);
 }
 
 /// The modifiers both sides take: the renderer can import it, and EGL can
@@ -434,7 +491,30 @@ static bool make_buffer(LavaVideo *video, Buffer *buffer, uint32_t width,
 }
 
 static bool make_buffers(LavaVideo *video, uint32_t width, uint32_t height) {
-  free_buffers(video);
+  absorb_shown(video);
+  if (video->buffer_width == 0) {
+    // Nothing on screen to protect: the first set, or after a failure.
+  } else if (video->has_retired && !video->current_shown) {
+    // The app is still drawing the retired set, and this one was never
+    // seen: it is the one to drop.
+    free_set(video, video->buffers);
+  } else {
+    free_retired(video);
+    memcpy(video->retired, video->buffers, sizeof video->buffers);
+    video->has_retired = true;
+    pthread_mutex_lock(&video->lock);
+    video->awaiting_shown = true;
+    pthread_mutex_unlock(&video->lock);
+  }
+  for (int i = 0; i < BUFFER_COUNT; ++i) {
+    video->buffers[i].handle = 0;
+    video->buffers[i].fd = -1;
+    video->buffers[i].image = EGL_NO_IMAGE_KHR;
+    video->buffers[i].bo = NULL;
+    video->buffers[i].texture = video->buffers[i].fbo = 0;
+  }
+  video->current_shown = false;
+  video->buffer_width = video->buffer_height = 0;
   for (int i = 0; i < BUFFER_COUNT; ++i) {
     if (!make_buffer(video, &video->buffers[i], width, height)) {
       free_buffers(video);
@@ -596,6 +676,12 @@ static void render_pixels(LavaVideo *video, uint32_t width, uint32_t height) {
   mpv_render_context_report_swap(video->render);
 }
 
+static int64_t now_ns(void) {
+  struct timespec now;
+  clock_gettime(CLOCK_MONOTONIC, &now);
+  return (int64_t)now.tv_sec * 1000000000ll + now.tv_nsec;
+}
+
 static void signal_ready(LavaVideo *video, bool failed) {
   pthread_mutex_lock(&video->ready_lock);
   video->ready = true;
@@ -625,10 +711,23 @@ static void *render_main(void *arg) {
                                          video);
   signal_ready(video, false);
 
+  // When the box last changed size and buffers were not yet made for it:
+  // the render thread wakes at `settle_at` to make them, playing or not.
+  int64_t settle_at = 0;
   for (;;) {
     pthread_mutex_lock(&video->lock);
-    while (!video->quit && !video->update_pending && !video->redraw_pending) {
-      pthread_cond_wait(&video->wake, &video->lock);
+    while (!video->quit && !video->update_pending && !video->redraw_pending &&
+           !video->shown_pending &&
+           (settle_at == 0 || now_ns() < settle_at)) {
+      if (settle_at == 0) {
+        pthread_cond_wait(&video->wake, &video->lock);
+      } else {
+        const struct timespec until = {
+            .tv_sec = settle_at / 1000000000ll,
+            .tv_nsec = settle_at % 1000000000ll,
+        };
+        pthread_cond_timedwait(&video->wake, &video->lock, &until);
+      }
     }
     if (video->quit) {
       pthread_mutex_unlock(&video->lock);
@@ -636,15 +735,33 @@ static void *render_main(void *arg) {
     }
     const bool update = video->update_pending;
     bool draw = video->redraw_pending;
+    const bool shown = video->shown_pending;
     video->update_pending = false;
     video->redraw_pending = false;
-    const uint32_t width = video->want_width;
-    const uint32_t height = video->want_height;
+    uint32_t width = video->want_width;
+    uint32_t height = video->want_height;
+    const int64_t changed_at = video->size_changed_at;
     pthread_mutex_unlock(&video->lock);
 
+    if (shown) absorb_shown(video);
     if (update) {
       const uint64_t flags = mpv_render_context_update(video->render);
       draw = draw || (flags & MPV_RENDER_UPDATE_FRAME);
+    }
+    if (video->dmabuf && video->buffer_width != 0 &&
+        (width != video->buffer_width || height != video->buffer_height)) {
+      const int64_t due = changed_at + SETTLE_NS;
+      if (now_ns() < due) {
+        // Still moving: the old set, at the old size, until it stops.
+        settle_at = due;
+        width = video->buffer_width;
+        height = video->buffer_height;
+      } else {
+        settle_at = 0;
+        draw = true;
+      }
+    } else {
+      settle_at = 0;
     }
     if (!draw || width == 0 || height == 0) continue;
 
@@ -684,9 +801,16 @@ LavaVideo *lava_video_create(LavaVideoTarget target,
   for (int i = 0; i < BUFFER_COUNT; ++i) {
     video->buffers[i].fd = -1;
     video->buffers[i].image = EGL_NO_IMAGE_KHR;
+    video->retired[i].fd = -1;
+    video->retired[i].image = EGL_NO_IMAGE_KHR;
   }
   pthread_mutex_init(&video->lock, NULL);
-  pthread_cond_init(&video->wake, NULL);
+  // Monotonic, so the settle deadline is not moved by a clock change.
+  pthread_condattr_t wake_attr;
+  pthread_condattr_init(&wake_attr);
+  pthread_condattr_setclock(&wake_attr, CLOCK_MONOTONIC);
+  pthread_cond_init(&video->wake, &wake_attr);
+  pthread_condattr_destroy(&wake_attr);
   pthread_mutex_init(&video->ready_lock, NULL);
   pthread_cond_init(&video->ready_cond, NULL);
 
@@ -797,6 +921,7 @@ void lava_video_set_size(LavaVideo *video, uint32_t width, uint32_t height) {
   if (width != video->want_width || height != video->want_height) {
     video->want_width = width;
     video->want_height = height;
+    video->size_changed_at = now_ns();
     video->redraw_pending = true;
     pthread_cond_signal(&video->wake);
   }
@@ -807,5 +932,17 @@ void lava_video_redraw(LavaVideo *video) {
   pthread_mutex_lock(&video->lock);
   video->redraw_pending = true;
   pthread_cond_signal(&video->wake);
+  pthread_mutex_unlock(&video->lock);
+}
+
+void lava_video_shown(LavaVideo *video, uint32_t handle) {
+  pthread_mutex_lock(&video->lock);
+  video->shown_handle = handle;
+  // Only worth a wake while an old set is waiting on it; otherwise this is
+  // every frame, and the render thread has nothing to do with the answer.
+  if (video->awaiting_shown && !video->shown_pending) {
+    video->shown_pending = true;
+    pthread_cond_signal(&video->wake);
+  }
   pthread_mutex_unlock(&video->lock);
 }

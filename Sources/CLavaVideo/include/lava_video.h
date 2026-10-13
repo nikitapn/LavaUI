@@ -112,6 +112,12 @@ void lava_video_set_size(LavaVideo *video, uint32_t width, uint32_t height);
 /// Draw the current frame again, for a buffer the renderer lost.
 void lava_video_redraw(LavaVideo *video);
 
+/// The app has presented a frame drawn from buffer `handle` (the one
+/// `present` named). After a resize the buffers of the old size are kept
+/// until this names one of the new — the app's last frame still draws them.
+/// Cheap to call every frame.
+void lava_video_shown(LavaVideo *video, uint32_t handle);
+
 #ifdef __cplusplus
 }
 #endif
