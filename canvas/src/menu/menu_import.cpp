@@ -466,8 +466,17 @@ struct MenuImportHost::Impl {
 
   // ─── Importing one window's menu ───────────────────────────────────────
 
-  static void onLayoutUpdated(DbusmenuClient * /*client*/, guint /*revision*/,
-                              gint /*parent*/, gpointer userData)
+  /// The client's `layout-updated`, which carries nothing — not the D-Bus
+  /// signal's revision and parent (`client.h`: `void (*layout_updated)(void)`).
+  ///
+  /// Declared with those two for months, which put `userData` in the wrong
+  /// register: every layout update set a byte somewhere on the stack and
+  /// left this menu as it was. Only the first layout ever arrived, through
+  /// `root-changed`. VS Code re-mints every id each time one of its windows
+  /// takes focus, so its menu went stale on the first refocus — every
+  /// `AboutToShow` and `Event` after that named an id it no longer had, the
+  /// submenus stayed empty and no click did anything.
+  static void onLayoutUpdated(DbusmenuClient * /*client*/, gpointer userData)
   {
     static_cast<Impl *>(userData)->dirty = true;
   }

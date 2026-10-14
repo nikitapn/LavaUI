@@ -11829,12 +11829,19 @@ bool SurfaceRegistry::showMenu(uint32_t surfaceId, uint32_t serial,
   session.previousFocus = server_->focusedSurface();
   session.previousFrame = focusedFrame();
 
-  // The keyboard, the switcher's way: the menu receives keys — Escape, the
-  // arrows — without becoming the *active window*. The window the menu is
-  // about keeps its title-bar highlight and stays the one the panel's global
-  // menu is showing, which is what a menu about that window should look like.
+  // The keys, without becoming the *active window*: the menu receives Escape
+  // and the arrows, and the window the menu is about keeps its title-bar
+  // highlight and stays the one the panel's global menu is showing.
+  //
+  // The seat's keyboard focus is left where it was. `on_key` delivers to the
+  // focused Lava surface and returns before the seat, so nothing reaches a
+  // Wayland window twice — and clearing it is a `wl_keyboard.leave`, which
+  // an application reads as losing focus. Electron runs a global-menu command
+  // in its focused window and drops it when there is none, so every item on
+  // VS Code's menu did nothing; and VS Code re-mints its menu ids each time a
+  // window regains focus, so closing the menu also invalidated the one the
+  // panel was holding.
   server_->setFocusedSurface(surfaceId);
-  wlr_seat_keyboard_notify_clear_focus(server_->seat);
 
   wlr_log(WLR_DEBUG, "menu: serial %u at %d,%d — %ux%u for window %u", serial,
           surface->x, surface->y, width, height, session.target);
