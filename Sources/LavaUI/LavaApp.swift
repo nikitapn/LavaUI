@@ -145,7 +145,11 @@ public enum LavaApp {
             // to cap this wait at 20 ms; `GLibPump` now wakes it through
             // `MainQueue` when a call actually arrives.
             var wake = FrameScheduler.timeoutUntilNextWake()
-            if MainQueue.hasPending || ViewInvalidation.isDirty || FrameTasks.hasPending {
+            // Not for deferred work while a frame is held for its consumer:
+            // that work is waiting for the frame, and the stall polls on its
+            // own wake. Zero here would spin for as long as the stall lasts.
+            let tasksReady = FrameTasks.hasPending && !windows.contains(where: { $0.holdsFrame })
+            if MainQueue.hasPending || ViewInvalidation.isDirty || tasksReady {
                 wake = 0
             }
             // Clear any D-Bus work already queued before parking in GLFW.
@@ -193,7 +197,15 @@ public enum LavaApp {
             reapClosedWindows()
             // After present, so anything queued from an input handler this
             // iteration got its "before" frame on screen first.
-            FrameTasks.drain()
+            //
+            // And only once that frame exists. A window waiting for its
+            // consumer to take the last one did not lay out, and work promised
+            // "after the frame" read the tree as it was before: the context
+            // menu measured a menu that had not been built yet, found no plate,
+            // and was never shown. The stall ends within `publishStallDeadline`.
+            if !windows.contains(where: { $0.holdsFrame }) {
+                FrameTasks.drain()
+            }
             // A handler may have asked for a window; bring it up before the
             // loop parks again, or it would stay blank until the next event.
             bringUpPendingWindows()

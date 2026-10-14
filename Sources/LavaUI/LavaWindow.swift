@@ -85,6 +85,9 @@ public final class LavaWindow {
     /// would turn this wait into a spin — the exact failure the throttle
     /// exists to prevent.
     private var deferredWork: InvalidationLevel = .none
+    /// A frame is owed and held back for the consumer — see `FrameTasks`,
+    /// whose "after the frame" has to wait for it.
+    var holdsFrame: Bool { deferredWork > .none }
     /// When the current wait for the consumer began, or nil when not waiting.
     private var publishStallSince: Double?
 
