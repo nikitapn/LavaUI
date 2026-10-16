@@ -1150,6 +1150,12 @@ public final class TextLayoutCache: @unchecked Sendable {
     }
 
     private var map: [Key: Entry] = [:]
+    /// Bounded as `UIFont.shapeCache` is, and for the same reason: the key is
+    /// arbitrary text. Unbounded, a panel printing the focused window's title
+    /// kept every title it had ever shown — a terminal's spinner, every
+    /// browser tab — at every width it had been measured at: 250 MB of heap
+    /// after two days.
+    private static let limit = 4096
     /// Lookups answered from the cache since the last `resetStats()`.
     public private(set) var hits: Int = 0
     /// Lookups that had to measure since the last `resetStats()`.
@@ -1211,7 +1217,7 @@ public final class TextLayoutCache: @unchecked Sendable {
                     height: font.lineHeight * Float(max(wrapped.count, 1)),
                     lines: wrapped
                 )
-                map[key] = entry
+                store(entry, for: key)
                 return entry
             }
         } else {
@@ -1219,7 +1225,14 @@ public final class TextLayoutCache: @unchecked Sendable {
         }
 
         let entry = Entry(width: metrics.width, height: metrics.height, lines: lines)
-        map[key] = entry
+        store(entry, for: key)
         return entry
+    }
+
+    private func store(_ entry: Entry, for key: Key) {
+        if map.count >= Self.limit {
+            map.removeAll(keepingCapacity: true)
+        }
+        map[key] = entry
     }
 }

@@ -407,22 +407,15 @@ public final class LavaWindow {
     /// Detaches this window's nodes from the registries that outlive it.
     ///
     /// Those registries are keyed by `NodeID` and shared process-wide, which
-    /// is correct — ids are unique, so windows cannot collide — but it means
-    /// nothing drops an entry when a tree goes away. Node `deinit` does not
-    /// do it either, and never had to: with one window the tree lived as long
-    /// as the process. Now it does not, and the handlers are closures that
-    /// capture their nodes, so leaving them behind would keep the whole closed
+    /// is correct — ids are unique, so windows cannot collide. A box node
+    /// forgets its own entries when it is freed (`YogaBoxNode.deinit`), but a
+    /// handler may capture its node, and then the node is never freed while
+    /// the entry holds it; leaving those behind would keep the whole closed
     /// tree alive and let a wheel event route into it.
     func teardown() {
         var ids: Set<NodeID> = []
         if let root = host.rootNode { collectIDs(root, into: &ids) }
-        ScrollRouter.unregisterAll(ids: ids)
-        DropRouter.unregisterAll(ids: ids)
-        FileDragRouter.unregisterAll(ids: ids)
-        DragGestureRouter.unregisterAll(ids: ids)
-        PressObserverRouter.unregisterAll(ids: ids)
-        HoverState.unregisterAll(ids: ids)
-        PointerCapture.discard(ids: ids)
+        NodeRegistries.forget(ids)
         AnimationDriver.unregisterAll(in: scope)
         WindowScope.unregister(scope)
         onClose?()
@@ -864,5 +857,19 @@ extension InvalidationLevel {
         case .layout: return "layout"
         case .body: return "body"
         }
+    }
+}
+
+/// Every process-wide registry keyed by `NodeID`, in one place, so the paths
+/// that drop nodes cannot drift apart on which ones they clear.
+enum NodeRegistries {
+    static func forget(_ ids: Set<NodeID>) {
+        ScrollRouter.unregisterAll(ids: ids)
+        DropRouter.unregisterAll(ids: ids)
+        FileDragRouter.unregisterAll(ids: ids)
+        DragGestureRouter.unregisterAll(ids: ids)
+        PressObserverRouter.unregisterAll(ids: ids)
+        HoverState.unregisterAll(ids: ids)
+        PointerCapture.discard(ids: ids)
     }
 }

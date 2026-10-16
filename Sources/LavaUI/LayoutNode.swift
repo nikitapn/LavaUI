@@ -272,6 +272,11 @@ class YogaBoxNode: AnyViewNode {
     }
 
     deinit {
+        // A long-lived window mounts and drops nodes all the time — a toast,
+        // a row scrolled out — and the registries would otherwise keep every
+        // handler such a node ever registered, for the life of the process:
+        // a notification daemon gained one per notification.
+        NodeRegistries.forget([id])
         // Detaches from parent automatically (YGNodeFree).
         YGNodeFree(yogaStorage)
     }
@@ -1728,10 +1733,35 @@ class FragmentNode: AnyViewNode {
 /// than `CompositeNode<V>`, avoiding the generic metatype Sendable warning.
 private final class BodyInvalidationToken: @unchecked Sendable {
     weak var node: (any BodyRecomputable)?
+    /// Set once the registration this token belongs to has fired, which is
+    /// also when `withObservationTracking` removed it from every registrar.
+    var fired = false
 
     init(_ node: any BodyRecomputable) {
         self.node = node
     }
+}
+
+/// A property every body registration reads, so the registration can be
+/// retired on purpose.
+///
+/// `withObservationTracking` cancels a registration — in every registrar it
+/// reached — only when one of the properties it tracked changes, and offers
+/// no other way to cancel it. A body re-run because its *parent* reconciled
+/// leaves the previous registration armed, and so does a node that unmounts.
+/// On a property that never changes — a long-lived model's flag — those
+/// pile up in that model's registrar for the life of the process: the panel
+/// gained one a second. Writing here fires the stale one, which cancels it
+/// everywhere.
+private final class ObservationRetirement: Observable, @unchecked Sendable {
+    private let registrar = ObservationRegistrar()
+
+    /// The key path read and written; it holds nothing.
+    var marker: Int { 0 }
+
+    func read() { registrar.access(self, keyPath: \.marker) }
+
+    func fire() { registrar.withMutation(of: self, keyPath: \.marker) {} }
 }
 
 final class CompositeNode<V: View>: FragmentNode, BodyRecomputable, @unchecked Sendable {
@@ -1808,15 +1838,38 @@ final class CompositeNode<V: View>: FragmentNode, BodyRecomputable, @unchecked S
     ///   implicitly here, because every re-render recomputes bodies. A path
     ///   that skips `computeBody()` would silently unsubscribe that node.
     private func computeBody() -> V.Body {
+        retireObservation()
         var body: V.Body!
         let invalidation = BodyInvalidationToken(self)
+        let retirement = self.retirement
         withObservationTracking {
+            retirement.read()
             body = view.body
         } onChange: { [invalidation] in
+            invalidation.fired = true
             guard let node = invalidation.node else { return }
             ViewInvalidation.markBodyDirty(node)
         }
+        registration = invalidation
         return body
+    }
+
+    /// See `ObservationRetirement`.
+    private let retirement = ObservationRetirement()
+    /// The registration the last `computeBody` installed.
+    private var registration: BodyInvalidationToken?
+
+    /// Cancels the last registration if nothing has fired it yet. Detached
+    /// from this node first, so the forced fire dirties nothing.
+    private func retireObservation() {
+        guard let old = registration, !old.fired else { return }
+        old.node = nil
+        registration = nil
+        retirement.fire()
+    }
+
+    deinit {
+        retireObservation()
     }
 }
 

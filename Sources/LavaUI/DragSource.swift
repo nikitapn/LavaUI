@@ -247,11 +247,7 @@ enum DragChipCapture {
     private static func release(_ root: any AnyViewNode) {
         var ids: Set<NodeID> = []
         collect(root, into: &ids)
-        ScrollRouter.unregisterAll(ids: ids)
-        DropRouter.unregisterAll(ids: ids)
-        HoverState.unregisterAll(ids: ids)
-        FileDragRouter.unregisterAll(ids: ids)
-        PointerCapture.discard(ids: ids)
+        NodeRegistries.forget(ids)
     }
 
     private static func collect(_ node: any AnyViewNode, into ids: inout Set<NodeID>) {
