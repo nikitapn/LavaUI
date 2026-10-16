@@ -208,6 +208,17 @@ compositor/scripts/start-lava-compositor setup   # a real session, on a real GPU
 
 The compositor's own README (**[compositor/README.md](compositor/README.md)**).
 
+**Arch: install `perl-file-mimeinfo`.** Outside a desktop that sets
+`XDG_CURRENT_DESKTOP`, `xdg-mime` and `xdg-open` fall back to `mimetype`, and
+without it to `file --mime-type`, which only sniffs content: a `.log` file
+comes out `text/plain` instead of `text/x-log`, so a `text/x-log` default
+never fires. `mimetype` uses the shared-mime-info globs, like `gio`.
+
+```bash
+sudo pacman -S perl-file-mimeinfo
+xdg-mime query filetype some.log   # text/x-log
+```
+
 ## How it works
 
 **[How LavaUI draws](https://lavaui.nikitapn.com/article/how-lavaui-draws)**

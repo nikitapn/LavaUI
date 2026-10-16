@@ -41,6 +41,8 @@ libxcb
 libxkbcommon
 # The compositor checks the lock screen's password itself (lock_auth.cpp).
 pam
+# xdg-mime/xdg-open need `mimetype` to map *.log to text/x-log without a DE.
+perl-file-mimeinfo
 pixman
 seatd
 wayland
