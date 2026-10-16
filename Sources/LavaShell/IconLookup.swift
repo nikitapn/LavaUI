@@ -19,7 +19,7 @@ public enum IconLookup {
     /// Steam's icon under `~/.local/share/flatpak/exports/share/icons`, and
     /// that path is on `XDG_DATA_DIRS` — searching only the three classic
     /// roots is why the launcher drew an S.
-    private static var iconRoots: [String] {
+    static func iconRoots(environment env: [String: String]) -> [String] {
         var roots: [String] = []
         var seen = Set<String>()
         func add(_ path: String) {
@@ -27,7 +27,6 @@ public enum IconLookup {
             seen.insert(path)
             roots.append(path)
         }
-        let env = ProcessInfo.processInfo.environment
         if let home = env["XDG_DATA_HOME"], !home.isEmpty {
             add(home + "/icons")
         } else if let home = env["HOME"] {
@@ -221,10 +220,13 @@ public enum IconLookup {
     /// and six of them exist here — the other nine were being asked about
     /// thirty times per icon, which is most of a stat storm spent confirming
     /// that Papirus is not installed.
-    private static let themeDirectories: [String] = {
+    private static var themeDirectories: [String] {
+        if let cachedThemeDirectories { return cachedThemeDirectories }
+        let roots = rootsOverride
+            ?? iconRoots(environment: ProcessInfo.processInfo.environment)
         var found: [String] = []
         for theme in themes {
-            for root in iconRoots {
+            for root in roots {
                 let base = "\(root)/\(theme)"
                 var isDirectory: ObjCBool = false
                 if FileManager.default.fileExists(
@@ -234,8 +236,26 @@ public enum IconLookup {
                 }
             }
         }
+        cachedThemeDirectories = found
         return found
-    }()
+    }
+
+    nonisolated(unsafe) private static var cachedThemeDirectories: [String]?
+
+    /// Icon roots to search instead of the machine's, or nil for the machine's.
+    nonisolated(unsafe) private static var rootsOverride: [String]?
+
+    /// Searches only `roots` — and not `/usr/share/pixmaps` either — so a test
+    /// answers from the tree it built rather than from whatever the machine
+    /// running it happens to have installed. Nil goes back to the machine's.
+    /// Forgets every cached answer, the entry list included.
+    static func useIconRoots(_ roots: [String]?) {
+        rootsOverride = roots
+        cachedThemeDirectories = nil
+        cachedEntries = nil
+        iconPathCache.removeAll()
+        namePathCache.removeAll()
+    }
 
     /// Sizes to try, best first. A raster icon is a compromise made by whoever
     /// packaged it, so this asks for the big ones before the small.
@@ -281,9 +301,11 @@ public enum IconLookup {
         // The pre-theme dumping ground, still where a surprising number of
         // applications put their only icon. After every theme now rather than
         // after the first one, which is the order the comment always claimed.
-        for path in ["/usr/share/pixmaps/\(name).svg",
-                     "/usr/share/pixmaps/\(name).png"] where hit(path) {
-            return path
+        if rootsOverride == nil {
+            for path in ["/usr/share/pixmaps/\(name).svg",
+                         "/usr/share/pixmaps/\(name).png"] where hit(path) {
+                return path
+            }
         }
 
         BootTrace.count("icon: not found")
