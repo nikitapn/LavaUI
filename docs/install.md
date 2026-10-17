@@ -45,6 +45,12 @@ They cover four groups, not just the engine:
 - **NPRPC** — Boost headers + program_options
 - **apps** — libpulse (panel volume), libarchive (LavaExplorer's archives)
 
+On Arch the list includes `perl-file-mimeinfo`. Outside a desktop that sets
+`XDG_CURRENT_DESKTOP`, `xdg-mime` and `xdg-open` fall back to `mimetype`, and
+without it to `file --mime-type`, which only sniffs content: a `.log` file
+comes out `text/plain` instead of `text/x-log`, so a `text/x-log` default
+never fires. `xdg-mime query filetype some.log` should say `text/x-log`.
+
 Software Vulkan (`mesa-vulkan-drivers` / `vulkan-swrast`) is installed so Docker and VMs have lavapipe. A real machine still needs its vendor ICD (`vulkan-radeon`, `nvidia-utils`, `vulkan-intel`).
 
 `scripts/install-deps.sh --vm-host` adds qemu and xorriso for the install-test VM.

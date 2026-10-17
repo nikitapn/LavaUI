@@ -1,14 +1,7 @@
 # LavaUI
 
-A declarative UI framework in Swift, rendering through Vulkan.
-
-The current application-facing API is documented in
-**[docs/api.md](docs/api.md)**. Coding agents: start from
-**[AGENTS.md](AGENTS.md)** (architecture, layout, build, conventions).
-
-Views are described the way SwiftUI describes them — a `body` returning nested
-value types — but the whole stack underneath is here: layout via Yoga, text via
-HarfBuzz and FreeType, and a single Vulkan pipeline that draws everything.
+A declarative UI framework for Swift on Linux, with its own GPU renderer — and
+a Wayland desktop built on top of it.
 
 ```swift
 struct Counter: View {
@@ -23,270 +16,110 @@ struct Counter: View {
 }
 ```
 
-## Building
+If you have written SwiftUI, this will look familiar: views are small structs
+with a `body`, state lives in `@State`, and the framework redraws what changed.
+Everything underneath — layout, text, rendering — is part of this repository.
 
-On a clean Debian or Arch machine the whole stack — packages, wlroots 0.19,
-NPRPC, compositor, Swift clients — is:
+The repo has two halves:
 
-```bash
-./scripts/bootstrap.sh --yes          # or --release
-./scripts/check-env.sh                # what the build can see
-```
+- **The framework** (`LavaUI`) — for writing desktop apps in Swift.
+- **The Lava desktop** — a Wayland compositor with a panel, dock, launcher and
+  a set of apps, all written with LavaUI. Ordinary Linux apps run on it too.
 
-That is documented in **[docs/install.md](docs/install.md)** (Docker images
-and the QEMU install-test VM live there too). The short form if the
-packages are already on the machine:
+Linux only for now.
 
-```bash
-swift build                   # Swift + C++ canvas engine (SwiftPM compiles both)
-swift run HelloWorld          # demo
-swift run LavaSpotify         # music player (see docs/lavaspotify.md)
-swift run LavaTerm            # terminal emulator (click the grid, type)
-swift run LavaView -- pic.jpg # image viewer (wheel to zoom, arrows for the folder)
-swift run LavaPDF -- doc.pdf  # PDF reader (zoom, select and copy, find, outline)
-swift run LavaPlayer -- a.mkv # video player on libmpv (see docs/lavaplayer.md)
-swift run LavaExplorer        # file manager (tabs, panes, copy by drop, Trash)
-swift test                    # headless tests, no GPU needed
-```
+## Quick start
 
-Two more need the compositor (`LAVA_CLIENT=1`, see below), because what they
-show only it can see:
+On Debian or Arch:
 
 ```bash
-swift run LavaShot            # freeze the screen, select, annotate, copy or save (docs/lavashot.md)
-swift run LavaDebug           # where the compositor's VRAM went; --once prints text
+git clone https://github.com/nikitapn/LavaUI.git && cd LavaUI
+./scripts/bootstrap.sh --yes      # installs everything, builds everything
+swift run HelloWorld              # the demo
 ```
 
-System packages: Vulkan, GLFW, FreeType, HarfBuzz (and on Linux for global
-menus: GLib + libdbusmenu-glib); the apps add poppler (LavaPDF), libmpv, EGL
-and GBM (LavaPlayer). `packaging/deps/` is the full list. No Meson/Ninja —
-SwiftPM builds the C++ engine.
+[docs/install.md](docs/install.md) explains what that does, and how to install
+only what the framework needs.
 
-Linux only today.
+## Using LavaUI in your app
 
-## Using LavaUI in a new project
-
-LavaUI is a normal SwiftPM product of this repo. SwiftPM also builds the nested
-`canvas` package (C++ engine + shader resources) from the same checkout — you
-only declare a dependency on **this** repository.
-
-### 1. System packages (Linux)
-
-```bash
-./scripts/install-deps.sh --yes     # Debian/Ubuntu or Arch; see packaging/deps/
-```
-
-The compositor and NPRPC need more than the engine (wlroots 0.19, Boost,
- dbusmenu, rsvg, …). `install-deps.sh` is the list. A windowed
-LavaUI app that will never talk to the compositor can get by with Vulkan,
-GLFW, FreeType, HarfBuzz and libdbusmenu-glib alone.
-
-You also need a working Vulkan ICD (e.g. `vulkan-radeon`, `nvidia-utils`,
-`vulkan-intel`) and a Swift 6.3 toolchain (`scripts/install-swift.sh`).
-
-### 2. Scaffold an executable package
-
-```bash
-mkdir MyApp && cd MyApp
-swift package init --type executable
-```
-
-### 3. Depend on LavaUI from GitHub
-
-Edit `Package.swift`:
+Add the package to your `Package.swift` and open a window:
 
 ```swift
-// swift-tools-version: 6.0
-import PackageDescription
-
-let package = Package(
-    name: "MyApp",
-    platforms: [.macOS(.v13)], // ignored on Linux; keeps the manifest valid
-    products: [
-        .executable(name: "MyApp", targets: ["MyApp"]),
-    ],
-    dependencies: [
-        // Prefer a tag once you pin releases:
-        // .package(url: "https://github.com/nikitapn/LavaUI.git", from: "0.1.0"),
-        .package(url: "https://github.com/nikitapn/LavaUI.git", branch: "main"),
-    ],
-    targets: [
-        .executableTarget(
-            name: "MyApp",
-            dependencies: [
-                // Package identity = last path component of the URL ("LavaUI").
-                .product(name: "LavaUI", package: "LavaUI"),
-            ],
-            swiftSettings: [
-                // Required: LavaUI talks to the C++ engine via C++ interop.
-                .interoperabilityMode(.Cxx),
-            ]
-        ),
-    ],
-    // Match the engine (std::expected / C++23).
-    cxxLanguageStandard: .gnucxx2b
-)
-```
-
-Local clone instead of GitHub:
-
-```swift
-.package(path: "../LavaUI"),  // folder name becomes the package id
-// then: .product(name: "LavaUI", package: "LavaUI")
-```
-
-### 4. Minimal `main`
-
-Replace the generated source with something like
-`Sources/MyApp/MyApp.swift`:
-
-```swift
-import Foundation
 import LavaUI
 
 @main
 struct MyApp {
     static func main() {
-        guard let editor = LavaApp.open(title: "My App") else {
-            exit(1)
-        }
+        guard let editor = LavaApp.open(title: "My App") else { return }
         LavaApp.run(editor: editor) {
-            VStack(padding: 12) {
-                Text("hello from LavaUI", color: .accent)
-            }
+            Text("hello from LavaUI", color: .accent)
         }
     }
 }
-
 ```
 
-### 5. Build and run
+**[Getting started](docs/getting-started.md)** walks through it from an empty
+directory, including the one manifest setting the package needs.
+
+## Apps
+
+Every one of these is a LavaUI app and runs with `swift run <name>`:
+
+| App | What it is |
+|---|---|
+| `HelloWorld` | Demo of the framework's views |
+| `LavaTerm` | Terminal emulator |
+| `LavaEditor` | Text editor |
+| `LavaExplorer` | File manager — tabs, split panes, Trash |
+| `LavaView` | Image viewer |
+| `LavaPDF` | PDF reader |
+| `LavaPlayer` | Video player |
+| `LavaSpotify` | Spotify player |
+| `LavaWeather` | Weather |
+| `TraceLoom` | Log viewer with an AI assistant |
+| `LavaShot` | Screenshot and annotation tool *(needs the Lava desktop)* |
+
+The desktop itself — `LavaPanel`, `LavaDock`, `LavaLauncher`, `LavaSwitcher`,
+`LavaSettings` — is made of LavaUI apps as well.
+
+## The Lava desktop
 
 ```bash
-swift build
-swift run MyApp
+compositor/scripts/dev-run                       # try it in a window, inside your current session
+compositor/scripts/start-lava-compositor setup   # install it as a real session
 ```
 
-SwiftPM will fetch this repo (including `canvas/`), compile Yoga + the Vulkan
-engine, pack checked-in SPIR-V and default fonts, and link system libraries via
-pkg-config. You do **not** need Meson, Ninja, or a prebuilt `libcanvas`.
+See [compositor/README.md](compositor/README.md).
 
-### App-owned assets
+## Documentation
 
-Framework fonts and engine shaders ship with LavaUI / canvas. **Your** images
-belong on your executable:
+| | |
+|---|---|
+| [Getting started](docs/getting-started.md) | From an empty package to a running window |
+| [API guide](docs/api.md) | Views, layout, modifiers, theming, animation |
+| [SwiftUI parity](docs/swiftui-parity.md) | What carries over from SwiftUI and what differs |
+| [How it works](docs/architecture.md) | The rendering pipeline and the repo layout |
+| [Installing](docs/install.md) | Packages, Docker, the test VM |
+| [Performance](docs/performance.md) | Benchmarks and baselines |
+| [AGENTS.md](AGENTS.md) | The in-depth guide for contributors and coding agents |
 
-```swift
-// Package.swift — on the MyApp target:
-resources: [
-    .process("Resources"),
-],
+The docs site is at [lavaui.nikitapn.com](https://lavaui.nikitapn.com).
 
-// Load at runtime:
-let icon = ImageStore.loadAsset(
-    named: "icon.png",
-    bundle: .module,
-    into: editor
-)
-```
+## Built with
 
-Put files under `Sources/MyApp/Resources/`.
+- **Swift 6** with C++ interop, and **C++23** for the engine and compositor
+- **Vulkan** — rendering
+- **Yoga** — flexbox layout
+- **FreeType** and **HarfBuzz** — fonts and text shaping
+- **GLFW** — windows, when an app runs on its own
+- **wlroots** — the compositor
+- **NPRPC** — communication between apps and the compositor
+- **poppler** (PDF), **libmpv** (video), **libarchive** (archives),
+  **librsvg** (icons)
 
-## The compositor
+The full package lists are in [packaging/deps/](packaging/deps/).
 
-The repo has a second half: a **Wayland compositor** under `compositor/` —
-C++23 on wlroots 0.19 — that runs a desktop of LavaUI apps, and everything else
-Linux runs alongside them through xdg-shell and Xwayland.
+## License
 
-```bash
-compositor/scripts/dev-run       # nested in the Wayland session you are in
-compositor/scripts/dev-run -H    # headless, software rendering, no window
-compositor/scripts/dev-run -r    # release build, compositor and shell alike
-compositor/scripts/dev-run -- env LAVA_CLIENT=1 ./.build/debug/LavaTerm
-compositor/scripts/start-lava-compositor setup   # a real session, on a real GPU
-```
-
-The compositor's own README (**[compositor/README.md](compositor/README.md)**).
-
-**Arch: install `perl-file-mimeinfo`.** Outside a desktop that sets
-`XDG_CURRENT_DESKTOP`, `xdg-mime` and `xdg-open` fall back to `mimetype`, and
-without it to `file --mime-type`, which only sniffs content: a `.log` file
-comes out `text/plain` instead of `text/x-log`, so a `text/x-log` default
-never fires. `mimetype` uses the shared-mime-info globs, like `gio`.
-
-```bash
-sudo pacman -S perl-file-mimeinfo
-xdg-mime query filetype some.log   # text/x-log
-```
-
-## How it works
-
-**[How LavaUI draws](https://lavaui.nikitapn.com/article/how-lavaui-draws)**
-
-**The view tree is retained; the draw list is immediate.**
-
-A `View` is a struct rebuilt whenever something changes. Behind it sits a
-persistent node tree that owns identity, `@State` storage, Yoga nodes, cached
-text measurements, and observation subscriptions. Rebuilding a view does not
-rebuild that tree — it reconciles against it.
-
-Identity is **structural**: the tree's shape is encoded in its types, so
-`TupleView<Text, Button>` reconciles positionally with no keys and no diffing.
-Only `EitherView` (an `if`) and `ForEach` (keyed) need real reconciliation.
-
-Each frame that something changed:
-
-```
-body recompute (only nodes whose observed state changed)
-  → Yoga layout (only dirty subtrees)
-    → draw list emission (a flat POD buffer)
-      → one Vulkan pipeline, in index order
-```
-
-**The loop is frame-driven, not event-driven.** A state change sets a dirty
-flag; nothing walks the graph synchronously. The loop blocks in
-`glfwWaitEvents` until input arrives, so an idle window costs nothing.
-
-**Everything draws through one ordered batch stream.** Rectangles, rounded
-rectangles, circles, stroked segments and glyphs share the quad pipeline:
-shapes use a rounded-box signed distance field and glyphs sample an R8 atlas.
-Large connected polylines switch to a dedicated `LINE_STRIP` pipeline and then
-switch back without leaving the stream. Paint order remains emission order — a
-caret can cover its own glyphs and a popup can cover a chart. Batches break on
-scissor, texture, or pipeline changes.
-
-**Swift owns everything above the pixels.** Layout, hit testing, text shaping,
-and input routing are Swift. C++ receives a draw command buffer and knows
-nothing about widgets. The rule for what stays in C++: *retain what is
-expensive to build and keyed by content* (the glyph atlas, Vulkan objects);
-*re-emit everything keyed by position or structure*.
-
-## Layout of the repo
-
-| Target | Contains | Depends on |
-|---|---|---|
-| `LavaText` | Editing logic: cursors, selection, undo, word/line navigation, soft wrap, syntax rules, search | nothing |
-| `LavaMenu` | Application menu IR + declarative DSL (`MenuBar` / `MenuItem`); no drawing | nothing |
-| `LavaUI` | Views, Yoga layout, draw list, fonts, input, theming | `LavaText`, `LavaMenu`, `CxxCanvas`, `CYoga` |
-| `HelloWorld` | Demo app (`DemoExample`) and an FBD diagram editor | `LavaUI`, `FBDModel` |
-| `LavaSwitcher` | 3D Ctrl+Tab / Mod+Tab app switcher (live window posters) | `LavaUI`, `LavaClient` |
-| `LavaSpotify` / `SpotifyApp` | LavaSpotify UI + MPRIS control of spotifyd | `LavaUI`, `SpotifyCore`, `LavaMpris` |
-| `SpotifyCore` | Spotify Web API, OAuth, cover download (no Vulkan) | nothing |
-| `LavaTerm` / `LavaTermApp` | Terminal emulator (PTY + ANSI + Canvas grid) | `LavaUI`, `LavaTermCore` |
-| `LavaTermCore` | VT grid + ANSI parser (headless, unit-tested) | nothing |
-| `LavaView` / `LavaViewApp` | Image viewer: fit / original size, wheel zoom at the cursor, the folder as a cycle, rotate and save | `LavaUI`, `LavaViewCore` |
-| `LavaViewCore` | Folder ordering, viewport arithmetic, pixel rotation, save-format choice (no Vulkan) | nothing |
-| `LavaPDF` / `LavaPDFApp` | PDF reader: pages rasterised by poppler in tiles on worker threads, selection, copy, find, outline and links | `LavaUI`, `LavaHost`, `LavaPDFCore` |
-| `LavaPDFCore` | The document through poppler's C API, page layout, tile grid, viewport, text selection, outline (no Vulkan) | `CLavaPDF` (poppler) |
-| `LavaPlayer` / `LavaPlayerApp` | Video player on libmpv: frames rendered into dma-bufs on the compositor's GPU, subtitle and audio tracks, fullscreen controls | `LavaUI`, `LavaHost`, `LavaPlayerCore`, `CLavaVideo` (mpv, EGL, GBM) |
-| `LavaPlayerCore` | Playlist and folder order, the clock, media and subtitle formats, track labels (no Vulkan) | nothing |
-| `LavaShot` / `LavaShotApp` | Screenshot tool: freezes the screen, select a region, annotate, copy or save. Client mode only | `LavaUI`, `LavaHost`, `LavaShotCore` |
-| `LavaShotCore` | Selection geometry, the annotation document, toolbar actions (no Vulkan) | nothing |
-| `canvas/` (package) | C++ engine (`CxxCanvas`) + Yoga (`CYoga`), built by SwiftPM | system Vulkan/GLFW/FreeType/HarfBuzz |
-| `compositor/` | Wayland compositor and control-plane servant — C++23, built by **meson** rather than SwiftPM | wlroots 0.19, `canvas/`, NPRPC |
-| `LavaPanel` `LavaDock` `LavaLauncher` `LavaSettings` `LavaDebug` | The desktop shell — panel, dock, launcher, settings, GPU inspector. Ordinary LavaUI clients, with no privileges the demo does not have | `LavaUI`, `LavaClient` |
-
-`LavaText` and `LavaMenu` having **no dependencies at all** is deliberate:
-editing logic and menu IR are where fiddly correctness lives, and keeping them
-out of reach of Vulkan and C++ interop means they are tested headlessly. That
-is enforced by the build graph rather than by discipline.
+MIT — see [LICENSE](LICENSE).
