@@ -1,5 +1,5 @@
 {
-  "notes" : "Wheel arbitration: a node with its own wheel handler is declared to the renderer so an enclosing retained ScrollView stops swallowing its notches. Harness.emit now clears the draw list as a real frame does — drawCommands was previously the running total of every scenario benched before it, which is why it drops from thousands to a per-scenario figure.",
+  "notes" : "Wheel arbitration: a node with its own wheel handler is declared to the renderer so an enclosing retained ScrollView stops swallowing its notches. Harness.emit now clears the draw list as a real frame does — drawCommands was previously the running total of every scenario benched before it, which is why it drops from thousands to a per-scenario figure. | 2026-10-22: term.ingest-* added from a release run on the same laptop (AMD Renoir), merged in rather than the whole file re-recorded.",
   "recordedAt" : "2026-08-04T18:56:59Z",
   "scenarios" : {
     "editor.open-10mb" : {
@@ -131,6 +131,22 @@
         "body" : 0.003,
         "emit" : 0.05,
         "layout" : 0.242
+      }
+    },
+    "term.ingest-plain-8mb" : {
+      "counters" : {
+        "bytes" : 8388632
+      },
+      "stages" : {
+        "feed" : 127.575
+      }
+    },
+    "term.ingest-sgr-8mb" : {
+      "counters" : {
+        "bytes" : 8388666
+      },
+      "stages" : {
+        "feed" : 267.27
       }
     },
     "text.delete-selection-mid-buffer" : {

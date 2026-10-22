@@ -41,6 +41,7 @@ public final class TerminalSession: @unchecked Sendable {
     @ObservationIgnored var geometry: TerminalGeometry?
 
     private var pty: PtySession?
+    @ObservationIgnored private let inbox = PtyInbox()
     private var lastCols = 80
     private var lastRows = 24
 
@@ -55,8 +56,8 @@ public final class TerminalSession: @unchecked Sendable {
         let session = PtySession(
             onData: { [weak self] data in
                 guard let self else { return }
-                MainQueue.async { [self] in
-                    self.ingest(data)
+                if self.inbox.push(data) {
+                    MainQueue.async { [self] in self.ingestSlice() }
                 }
             },
             onExit: { [weak self] code in
@@ -80,6 +81,7 @@ public final class TerminalSession: @unchecked Sendable {
     }
 
     public func stop() {
+        inbox.close()
         pty?.stop()
         pty = nil
     }
@@ -349,8 +351,30 @@ public final class TerminalSession: @unchecked Sendable {
 
     // MARK: - Private
 
-    private func ingest(_ data: Data) {
-        screen.feed(data)
+    /// How long one turn of the loop parses before letting a frame out, and
+    /// the bytes it takes at a time while it does.
+    private static let ingestBudget: Double = 0.004
+    private static let ingestStep = 64 << 10
+
+    /// Parses what the reader has delivered, for at most `ingestBudget`, and
+    /// leaves the rest for the next turn — posting itself again so the loop
+    /// does not park on a backlog. The frame between two slices is what keeps
+    /// a terminal under a firehose drawing at the display's rate.
+    private func ingestSlice() {
+        let start = ProcessInfo.processInfo.systemUptime
+        var any = false
+        while let data = inbox.take(max: Self.ingestStep) {
+            screen.feed(data)
+            any = true
+            if ProcessInfo.processInfo.systemUptime - start >= Self.ingestBudget { break }
+        }
+        if any { afterFeed() }
+        if inbox.finishSlice() {
+            MainQueue.async { [self] in self.ingestSlice() }
+        }
+    }
+
+    private func afterFeed() {
         if let clip = screen.pendingClipboard {
             screen.pendingClipboard = nil
             ClipboardBridge.write(clip)

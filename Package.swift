@@ -430,7 +430,7 @@ var targets: [Target] = [
     ),
     .executableTarget(
         name: "LavaBench",
-        dependencies: ["LavaUI", "LavaText", "TraceLoomCore"],
+        dependencies: ["LavaUI", "LavaText", "TraceLoomCore", "LavaTermCore"],
         swiftSettings: interopCxx
     ),
     .testTarget(name: "LavaTextTests", dependencies: ["LavaText"]),

@@ -83,6 +83,7 @@ var scenarios =
     + ListScenarios.all()
     + ImageScenarios.all()
     + TraceLoomScenarios.all()
+    + TermScenarios.all()
 
 if !options.filters.isEmpty {
     scenarios = scenarios.filter { s in options.filters.contains { s.name.contains($0) } }

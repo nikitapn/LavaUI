@@ -1,5 +1,15 @@
 import Foundation
 
+/// Where the parser delivers what it read. `TerminalScreen` is the real one;
+/// `feed(_:) -> [Output]` collects into an array for tests.
+protocol AnsiSink: AnyObject {
+    func perform(_ op: AnsiParser.Output)
+    /// A run of printable ASCII (0x20…0x7E) read in ground state — almost all
+    /// of what a busy program prints, handed over whole rather than as one
+    /// `.print` per byte.
+    func printASCII(_ bytes: UnsafeBufferPointer<UInt8>)
+}
+
 /// Streaming ANSI / VT100 parser. Feeds printable characters and control
 /// sequences into a `TerminalScreen`.
 ///
@@ -68,47 +78,96 @@ public final class AnsiParser: @unchecked Sendable {
     }
 
     private var state: State = .ground
-    private var csiParams = ""
+    /// CSI parameters as they arrive, already numbers: a `String` built a
+    /// `Character` at a time and split at the final was most of what a
+    /// colour escape cost. `csiPart` is the one being read; a part with
+    /// anything but digits in it reads as 0, as `Int("")`/`Int("2 ")` did.
+    private var csiParts: [Int] = []
+    private var csiPart = 0
+    private var csiPartValid = true
+    /// Anything at all after the private marker — `CSI m` with nothing in it
+    /// is a reset, `CSI 0 m` the same by another road.
+    private var csiAny = false
     private var csiPrivate = false
     private var oscBuffer = ""
+    /// The start of a UTF-8 character the last chunk ended in the middle of.
+    /// The PTY is read in fixed-size chunks, so a multi-byte character lands
+    /// across two of them now and then, and decoding each half alone printed
+    /// U+FFFD for the first and garbage for the second.
+    private var pendingUTF8: [UInt8] = []
 
     public init() {}
 
     public func reset() {
         state = .ground
-        csiParams = ""
-        csiPrivate = false
+        resetCSI()
         oscBuffer = ""
+        pendingUTF8 = []
     }
 
     /// Parse a chunk of bytes from the PTY (UTF-8). Invalid sequences become U+FFFD.
     public func feed(_ data: Data) -> [Output] {
+        let collector = Collector()
+        feed(data, into: collector)
+        return collector.out
+    }
+
+    private final class Collector: AnsiSink {
         var out: [Output] = []
-        var i = data.startIndex
-        while i < data.endIndex {
+        func perform(_ op: Output) { out.append(op) }
+        func printASCII(_ bytes: UnsafeBufferPointer<UInt8>) {
+            for b in bytes { out.append(.print(Unicode.Scalar(b))) }
+        }
+    }
+
+    func feed(_ data: Data, into sink: AnsiSink) {
+        if !pendingUTF8.isEmpty {
+            var joined = Data(pendingUTF8)
+            pendingUTF8 = []
+            joined.append(data)
+            joined.withUnsafeBytes { feed($0.bindMemory(to: UInt8.self), into: sink) }
+            return
+        }
+        data.withUnsafeBytes { feed($0.bindMemory(to: UInt8.self), into: sink) }
+    }
+
+    private func feed(_ bytes: UnsafeBufferPointer<UInt8>, into sink: AnsiSink) {
+        let n = bytes.count
+        var i = 0
+        while i < n {
             // Multi-byte UTF-8 only in ground: control sequences are byte-oriented.
             if state == .ground {
-                let byte = data[i]
-                if byte < 0x80 {
-                    out.append(contentsOf: consumeGround(Unicode.Scalar(byte)))
-                    i = data.index(after: i)
+                let byte = bytes[i]
+                if byte >= 0x20 && byte < 0x7F {
+                    var end = i + 1
+                    while end < n, bytes[end] >= 0x20, bytes[end] < 0x7F { end += 1 }
+                    sink.printASCII(UnsafeBufferPointer(rebasing: bytes[i..<end]))
+                    i = end
                     continue
                 }
-                if let (scalar, next) = decodeUTF8(data, from: i) {
-                    out.append(contentsOf: consumeGround(scalar))
+                if byte < 0x80 {
+                    for op in consumeGround(Unicode.Scalar(byte)) { sink.perform(op) }
+                    i += 1
+                    continue
+                }
+                switch decodeUTF8(bytes, from: i) {
+                case .scalar(let scalar, let next):
+                    for op in consumeGround(scalar) { sink.perform(op) }
                     i = next
-                } else {
-                    out.append(.print(Unicode.Scalar(0xFFFD)!))
-                    i = data.index(after: i)
+                case .incomplete:
+                    pendingUTF8 = Array(bytes[i..<n])
+                    return
+                case .invalid:
+                    sink.perform(.print(Unicode.Scalar(0xFFFD)!))
+                    i += 1
                 }
                 continue
             }
 
-            let byte = data[i]
-            i = data.index(after: i)
-            out.append(contentsOf: consumeControl(Unicode.Scalar(byte)))
+            let byte = bytes[i]
+            i += 1
+            for op in consumeControl(Unicode.Scalar(byte)) { sink.perform(op) }
         }
-        return out
     }
 
     // MARK: - State machine
@@ -157,23 +216,34 @@ public final class AnsiParser: @unchecked Sendable {
 
         case .csi:
             let v = s.value
-            if csiParams.isEmpty && (v == 0x3F || v == 0x3E || v == 0x3C || v == 0x3D) {
+            if !csiAny && !csiPrivate && (v == 0x3F || v == 0x3E || v == 0x3C || v == 0x3D) {
                 csiPrivate = true
-                csiParams.append(Character(s))
                 return []
             }
-            if (v >= 0x30 && v <= 0x3F) || v == 0x3B {
-                csiParams.append(Character(s))
+            if v >= 0x30 && v <= 0x39 {
+                csiAny = true
+                // Past this a part would not have parsed as an `Int` either.
+                if csiPart > 100_000_000 { csiPartValid = false }
+                csiPart = csiPart &* 10 &+ Int(v - 0x30)
                 return []
             }
-            // Intermediate bytes
-            if v >= 0x20 && v <= 0x2F {
-                csiParams.append(Character(s))
+            if v == 0x3B {
+                csiAny = true
+                csiParts.append(csiPartValid ? csiPart : 0)
+                csiPart = 0
+                csiPartValid = true
+                return []
+            }
+            // `:` and markers past the first, and intermediate bytes: kept in
+            // the part they land in, which then reads as 0.
+            if (v >= 0x3A && v <= 0x3F) || (v >= 0x20 && v <= 0x2F) {
+                csiAny = true
+                csiPartValid = false
                 return []
             }
             // Final byte
             state = .ground
-            return [parseCSI(final: Character(s))]
+            return [parseCSI(final: s)]
 
         case .osc:
             if s.value == 0x07 {
@@ -256,8 +326,7 @@ public final class AnsiParser: @unchecked Sendable {
         switch v {
         case 0x5B:  // [
             state = .csi
-            csiParams = ""
-            csiPrivate = false
+            resetCSI()
             return []
         case 0x5D:  // ]
             state = .osc
@@ -305,14 +374,19 @@ public final class AnsiParser: @unchecked Sendable {
         }
     }
 
-    private func parseCSI(final: Character) -> Output {
-        // Strip private-mode marker for params
-        var raw = csiParams
-        if csiPrivate, let first = raw.first, "?><=".contains(first) {
-            raw = String(raw.dropFirst())
-        }
-        let parts = raw.split(separator: ";", omittingEmptySubsequences: false)
-            .map { Int($0) ?? 0 }
+    private func resetCSI() {
+        csiParts.removeAll(keepingCapacity: true)
+        csiPart = 0
+        csiPartValid = true
+        csiAny = false
+        csiPrivate = false
+    }
+
+    private func parseCSI(final: Unicode.Scalar) -> Output {
+        // One part even when nothing was sent, as splitting "" gave [""].
+        csiParts.append(csiPartValid ? csiPart : 0)
+        let parts = csiParts
+        let empty = !csiAny
 
         func p(_ i: Int, default d: Int = 1) -> Int {
             if i < parts.count {
@@ -347,7 +421,7 @@ public final class AnsiParser: @unchecked Sendable {
         case "K": return .eraseLine(parts.first ?? 0)
         case "m":
             // Empty CSI m is reset
-            let list = raw.isEmpty ? [0] : parts
+            let list = empty ? [0] : parts
             return .setGraphics(list)
         case "S": return .scrollUp(p(0))
         case "T": return .scrollDown(p(0))
@@ -375,26 +449,32 @@ public final class AnsiParser: @unchecked Sendable {
 
     // MARK: - UTF-8
 
-    private func decodeUTF8(_ data: Data, from start: Data.Index) -> (Unicode.Scalar, Data.Index)? {
-        let b0 = data[start]
+    private enum Decoded {
+        case scalar(Unicode.Scalar, next: Int)
+        /// Valid so far, but the chunk ends before the character does.
+        case incomplete
+        case invalid
+    }
+
+    private func decodeUTF8(_ bytes: UnsafeBufferPointer<UInt8>, from start: Int) -> Decoded {
+        let b0 = bytes[start]
         let len: Int
         let mask: UInt8
         switch b0 {
         case 0xC0...0xDF: len = 2; mask = 0x1F
         case 0xE0...0xEF: len = 3; mask = 0x0F
         case 0xF0...0xF7: len = 4; mask = 0x07
-        default: return nil
+        default: return .invalid
         }
-        var i = start
         var value = UInt32(b0 & mask)
-        for _ in 1..<len {
-            i = data.index(after: i)
-            guard i < data.endIndex else { return nil }
-            let b = data[i]
-            guard (b & 0xC0) == 0x80 else { return nil }
+        for k in 1..<len {
+            let i = start + k
+            guard i < bytes.count else { return .incomplete }
+            let b = bytes[i]
+            guard (b & 0xC0) == 0x80 else { return .invalid }
             value = (value << 6) | UInt32(b & 0x3F)
         }
-        guard let scalar = Unicode.Scalar(value) else { return nil }
-        return (scalar, data.index(after: i))
+        guard let scalar = Unicode.Scalar(value) else { return .invalid }
+        return .scalar(scalar, next: start + len)
     }
 }

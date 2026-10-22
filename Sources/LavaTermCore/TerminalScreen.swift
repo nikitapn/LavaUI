@@ -4,8 +4,22 @@ import Foundation
 public final class TerminalScreen: @unchecked Sendable {
     public private(set) var cols: Int
     public private(set) var rows: Int
-    /// Row-major cells of the *active* buffer (main or alternate).
-    public private(set) var cells: [TerminalCell]
+    /// Row-major cells of the *active* buffer (main or alternate), the
+    /// visible rows only. A copy: the screen itself goes through `grid`.
+    public var cells: [TerminalCell] {
+        Array(grid[index(0, 0)..<index(rows, 0)])
+    }
+    /// The active buffer, with `spareRows` more rows than are visible, and
+    /// the visible ones starting `origin` rows in. A line feed at the bottom
+    /// of the screen moves `origin` instead of the screen: moving every row up
+    /// by one was a memmove of the whole grid per line, most of what printing
+    /// a fast program's output cost — and it grows with the window, so a
+    /// maximized terminal paid several times what the benchmark shows. The
+    /// rows go back to the start once the spares run out, one move per
+    /// `spareRows` lines.
+    private var grid: [TerminalCell]
+    private var origin = 0
+    private static let spareRows = 64
     public private(set) var cursorCol: Int = 0
     public private(set) var cursorRow: Int = 0
     public private(set) var cursorVisible: Bool = true
@@ -60,6 +74,10 @@ public final class TerminalScreen: @unchecked Sendable {
     /// assume.
     private var scrollback: [[TerminalCell]] = []
     private let maxScrollbackLines = 10_000
+    /// History is trimmed this many lines at a time once past the cap, not one
+    /// per line feed: `removeFirst` shifts the whole array, and at the cap that
+    /// was ten thousand moves for every line a busy program printed.
+    private let scrollbackTrimBatch = 1_024
 
     // ─── Soft wraps ──────────────────────────────────────────────────────
     //
@@ -81,7 +99,8 @@ public final class TerminalScreen: @unchecked Sendable {
     public init(cols: Int = 80, rows: Int = 24) {
         self.cols = max(1, cols)
         self.rows = max(1, rows)
-        self.cells = Array(repeating: .empty, count: self.cols * self.rows)
+        self.grid = Array(
+            repeating: .empty, count: self.cols * (self.rows + Self.spareRows))
         self.rowWrapped = Array(repeating: false, count: self.rows)
         self.scrollBottom = self.rows - 1
     }
@@ -98,9 +117,9 @@ public final class TerminalScreen: @unchecked Sendable {
             // sees SIGWINCH; rewrapping vim's window into continuation lines
             // would produce something no program ever intended, for the one
             // frame before it repainted anyway.
-            cells = resizeBuffer(
+            setGrid(resizeBuffer(
                 cells, fromCols: cols, fromRows: rows, toCols: nc, toRows: nr
-            )
+            ), width: nc)
             rowWrapped = Array(repeating: false, count: nr)
             if let saved = mainCells {
                 mainCells = resizeBuffer(
@@ -163,9 +182,9 @@ public final class TerminalScreen: @unchecked Sendable {
             ))
         }
         for r in 0..<rows {
-            let base = r * cols
+            let base = index(r, 0)
             source.append(WrappedRow(
-                cells: Array(cells[base..<(base + cols)]),
+                cells: Array(grid[base..<(base + cols)]),
                 wrapped: r < rowWrapped.count && rowWrapped[r]
             ))
         }
@@ -272,7 +291,7 @@ public final class TerminalScreen: @unchecked Sendable {
             wrapped[r] = out[index].wrapped
         }
 
-        cells = grid
+        setGrid(grid, width: nc)
         rowWrapped = wrapped
         scrollback = history
         scrollbackWrapped = historyWrapped
@@ -327,7 +346,31 @@ public final class TerminalScreen: @unchecked Sendable {
 
     public func cell(row: Int, col: Int) -> TerminalCell {
         guard row >= 0, row < rows, col >= 0, col < cols else { return .empty }
-        return cells[row * cols + col]
+        return grid[index(row, col)]
+    }
+
+    /// Where a visible cell is in `grid`.
+    @inline(__always)
+    private func index(_ row: Int, _ col: Int) -> Int {
+        (origin + row) * cols + col
+    }
+
+    /// Installs `visible` — exactly the visible rows, `width` cells each — as
+    /// the active buffer, with the spare rows after it. The width is passed
+    /// because a resize installs the new grid before `cols` changes.
+    private func setGrid(_ visible: [TerminalCell], width: Int) {
+        var next = visible
+        next.append(contentsOf: repeatElement(.empty, count: width * Self.spareRows))
+        grid = next
+        origin = 0
+    }
+
+    /// Fills visible cells `from..<to` (indices into `grid`).
+    private func fill(_ from: Int, _ to: Int, with cell: TerminalCell) {
+        guard to > from else { return }
+        grid.withUnsafeMutableBufferPointer { g in
+            (g.baseAddress! + from).update(repeating: cell, count: to - from)
+        }
     }
 
     /// The cell at a viewport row, honouring `viewOffset`.
@@ -339,7 +382,7 @@ public final class TerminalScreen: @unchecked Sendable {
         guard row >= 0, row < rows, col >= 0, col < cols else { return .empty }
         let offset = onAlternateScreen ? 0 : viewOffset
         if offset == 0 {
-            return cells[row * cols + col]
+            return grid[index(row, col)]
         }
         // Combined buffer: scrollback lines, then the live screen.
         // Viewport starts `offset` lines above the bottom of that buffer.
@@ -354,7 +397,7 @@ public final class TerminalScreen: @unchecked Sendable {
         }
         let liveRow = lineIndex - history
         guard liveRow >= 0, liveRow < rows else { return .empty }
-        return cells[liveRow * cols + col]
+        return grid[index(liveRow, col)]
     }
 
     /// True when the viewport is not glued to the live bottom.
@@ -380,9 +423,7 @@ public final class TerminalScreen: @unchecked Sendable {
 
     /// Ingest PTY output.
     public func feed(_ data: Data) {
-        for op in parser.feed(data) {
-            apply(op)
-        }
+        parser.feed(data, into: self)
     }
 
     /// Ingest a UTF-8 string (tests / scripted input).
@@ -557,7 +598,7 @@ public final class TerminalScreen: @unchecked Sendable {
         guard !onAlternateScreen else {
             // Already on alt: clear it, which is what a second 1049h from a
             // nested tool should do rather than stacking another buffer.
-            for i in cells.indices { cells[i] = .empty }
+            fill(index(0, 0), index(rows, 0), with: .empty)
             for r in rowWrapped.indices { rowWrapped[r] = false }
             cursorCol = 0
             cursorRow = 0
@@ -571,7 +612,7 @@ public final class TerminalScreen: @unchecked Sendable {
         mainCursorRow = cursorRow
         mainScrollTop = scrollTop
         mainScrollBottom = scrollBottom
-        cells = Array(repeating: .empty, count: cols * rows)
+        setGrid(Array(repeating: .empty, count: cols * rows), width: cols)
         rowWrapped = Array(repeating: false, count: rows)
         cursorCol = 0
         cursorRow = 0
@@ -590,7 +631,7 @@ public final class TerminalScreen: @unchecked Sendable {
             }
             return
         }
-        cells = saved
+        setGrid(saved, width: cols)
         rowWrapped = mainRowWrapped ?? Array(repeating: false, count: rows)
         if rowWrapped.count != rows {
             rowWrapped = Array(repeating: false, count: rows)
@@ -609,6 +650,38 @@ public final class TerminalScreen: @unchecked Sendable {
         onAlternateScreen = false
     }
 
+    /// `put` for a run, a row segment at a time under one exclusive access —
+    /// per character, the checked subscript and the property reads around it
+    /// were most of what printing cost.
+    private func putASCII(_ bytes: UnsafeBufferPointer<UInt8>) {
+        let width = cols
+        var cell = TerminalCell(
+            scalar: " ", fg: currentFg, bg: currentBg,
+            bold: bold, inverse: inverse, underline: underline)
+        var i = 0
+        while i < bytes.count {
+            if cursorCol >= width {
+                if cursorRow >= 0, cursorRow < rowWrapped.count {
+                    rowWrapped[cursorRow] = true
+                }
+                cursorCol = 0
+                lineFeed()
+            }
+            let col = cursorCol
+            let take = min(bytes.count - i, width - col)
+            let start = index(cursorRow, col)
+            let from = i
+            grid.withUnsafeMutableBufferPointer { grid in
+                for k in 0..<take {
+                    cell.scalar = Unicode.Scalar(bytes[from + k])
+                    grid[start + k] = cell
+                }
+            }
+            cursorCol = col + take
+            i += take
+        }
+    }
+
     private func put(_ s: Unicode.Scalar) {
         // C1 / control shouldn't land here
         if s.value < 0x20 || s.value == 0x7F { return }
@@ -621,8 +694,7 @@ public final class TerminalScreen: @unchecked Sendable {
             cursorCol = 0
             lineFeed()
         }
-        let idx = cursorRow * cols + cursorCol
-        cells[idx] = TerminalCell(
+        grid[index(cursorRow, cursorCol)] = TerminalCell(
             scalar: s,
             fg: currentFg,
             bg: currentBg,
@@ -658,13 +730,9 @@ public final class TerminalScreen: @unchecked Sendable {
         // that starts mid-screen is an editor viewport; those lines are not
         // scrollback.
         if !onAlternateScreen && top == 0 {
-            var line = Array(repeating: TerminalCell.empty, count: width)
-            for c in 0..<width {
-                line[c] = cells[c]
-            }
-            scrollback.append(line)
+            scrollback.append(Array(grid[index(0, 0)..<index(1, 0)]))
             scrollbackWrapped.append(rowWrapped.first ?? false)
-            if scrollback.count > maxScrollbackLines {
+            if scrollback.count > maxScrollbackLines + scrollbackTrimBatch {
                 let drop = scrollback.count - maxScrollbackLines
                 scrollback.removeFirst(drop)
                 scrollbackWrapped.removeFirst(min(drop, scrollbackWrapped.count))
@@ -677,19 +745,37 @@ public final class TerminalScreen: @unchecked Sendable {
                 viewOffset = min(viewOffset + 1, scrollback.count)
             }
         }
-        for r in top..<bottom {
-            let dst = r * width
-            let src = (r + 1) * width
-            for c in 0..<width {
-                cells[dst + c] = cells[src + c]
+        // One move for the block, under one exclusive access. Cell by cell it
+        // was a whole screen of checked subscripts per line feed — 95% of what
+        // ingesting a fast program's output cost. Cells hold no references,
+        // so the move is a plain memmove.
+        let blank = blankCell()
+        if top == 0 && bottom == rows - 1 {
+            // The whole screen: the window onto `grid` moves down a row.
+            if origin + rows + 1 > grid.count / width {
+                let from = origin * width
+                grid.withUnsafeMutableBufferPointer { grid in
+                    let base = grid.baseAddress!
+                    base.update(from: base + from, count: rows * width)
+                }
+                origin = 0
             }
-            rowWrapped[r] = rowWrapped[r + 1]
+            origin += 1
+            fill(index(bottom, 0), index(bottom + 1, 0), with: blank)
+        } else {
+            let at = origin * width
+            grid.withUnsafeMutableBufferPointer { grid in
+                let base = grid.baseAddress! + at
+                (base + top * width).update(
+                    from: base + (top + 1) * width, count: (bottom - top) * width)
+                (base + bottom * width).update(repeating: blank, count: width)
+            }
         }
-        let last = bottom * width
-        for c in 0..<width {
-            cells[last + c] = blankCell()
+        rowWrapped.withUnsafeMutableBufferPointer { wrapped in
+            let base = wrapped.baseAddress!
+            (base + top).update(from: base + top + 1, count: bottom - top)
+            base[bottom] = false
         }
-        rowWrapped[bottom] = false
     }
 
     private func scrollDown() {
@@ -697,19 +783,20 @@ public final class TerminalScreen: @unchecked Sendable {
         let top = scrollTop
         let bottom = scrollBottom
         if top > bottom { return }
-        for r in stride(from: bottom, through: top + 1, by: -1) {
-            let dst = r * width
-            let src = (r - 1) * width
-            for c in 0..<width {
-                cells[dst + c] = cells[src + c]
-            }
-            rowWrapped[r] = rowWrapped[r - 1]
+        // As `scrollUp`, the other way.
+        let blank = blankCell()
+        let at = origin * width
+        grid.withUnsafeMutableBufferPointer { grid in
+            let base = grid.baseAddress! + at
+            (base + (top + 1) * width).update(
+                from: base + top * width, count: (bottom - top) * width)
+            (base + top * width).update(repeating: blank, count: width)
         }
-        let first = top * width
-        for c in 0..<width {
-            cells[first + c] = blankCell()
+        rowWrapped.withUnsafeMutableBufferPointer { wrapped in
+            let base = wrapped.baseAddress!
+            (base + top + 1).update(from: base + top, count: bottom - top)
+            base[top] = false
         }
-        rowWrapped[top] = false
     }
 
     private func eraseDisplay(_ mode: Int) {
@@ -719,7 +806,7 @@ public final class TerminalScreen: @unchecked Sendable {
         case 1:
             eraseFromStartToCursor()
         default:
-            for i in cells.indices { cells[i] = blankCell() }
+            fill(index(0, 0), index(rows, 0), with: blankCell())
             for r in rowWrapped.indices { rowWrapped[r] = false }
             if mode == 3 {
                 // CSI 3 J — clear scrollback, xterm extension.
@@ -732,98 +819,109 @@ public final class TerminalScreen: @unchecked Sendable {
     }
 
     private func eraseLine(_ mode: Int) {
-        let base = cursorRow * cols
+        let base = index(cursorRow, 0)
         // Clearing to the end of a row is the program saying the line stops
         // here, so it no longer continues into the next one.
         if mode != 1, cursorRow < rowWrapped.count { rowWrapped[cursorRow] = false }
         switch mode {
         case 0:
-            for c in cursorCol..<cols { cells[base + c] = blankCell() }
+            for c in cursorCol..<cols { grid[base + c] = blankCell() }
         case 1:
-            for c in 0...cursorCol where c < cols { cells[base + c] = blankCell() }
+            for c in 0...cursorCol where c < cols { grid[base + c] = blankCell() }
         default:
-            for c in 0..<cols { cells[base + c] = blankCell() }
+            for c in 0..<cols { grid[base + c] = blankCell() }
         }
     }
 
     private func eraseFromCursorToEnd() {
         eraseLine(0)
         if cursorRow + 1 < rows {
-            for i in ((cursorRow + 1) * cols)..<cells.count {
-                cells[i] = blankCell()
-            }
+            fill(index(cursorRow + 1, 0), index(rows, 0), with: blankCell())
             for r in (cursorRow + 1)..<rows { rowWrapped[r] = false }
         }
     }
 
     private func eraseFromStartToCursor() {
         if cursorRow > 0 {
-            for i in 0..<(cursorRow * cols) {
-                cells[i] = blankCell()
-            }
+            fill(index(0, 0), index(cursorRow, 0), with: blankCell())
         }
         eraseLine(1)
     }
 
     private func deleteChars(_ n: Int) {
-        let base = cursorRow * cols
+        let base = index(cursorRow, 0)
         let count = min(n, cols - cursorCol)
         for c in cursorCol..<(cols - count) {
-            cells[base + c] = cells[base + c + count]
+            grid[base + c] = grid[base + c + count]
         }
         for c in (cols - count)..<cols {
-            cells[base + c] = blankCell()
+            grid[base + c] = blankCell()
         }
     }
 
     private func insertChars(_ n: Int) {
-        let base = cursorRow * cols
+        let base = index(cursorRow, 0)
         let count = min(n, cols - cursorCol)
         for c in stride(from: cols - 1, through: cursorCol + count, by: -1) {
-            cells[base + c] = cells[base + c - count]
+            grid[base + c] = grid[base + c - count]
         }
         for c in cursorCol..<(cursorCol + count) {
-            cells[base + c] = blankCell()
+            grid[base + c] = blankCell()
         }
     }
 
     private func eraseChars(_ n: Int) {
-        let base = cursorRow * cols
+        let base = index(cursorRow, 0)
         let end = min(cols, cursorCol + n)
         for c in cursorCol..<end {
-            cells[base + c] = blankCell()
+            grid[base + c] = blankCell()
         }
     }
 
+    /// DL. Only inside the scroll region, as every terminal does it: outside
+    /// it the count went negative, and with the cursor two rows from the
+    /// bottom `cursorRow...(scrollBottom - count)` was `1...0` — a trap, so
+    /// `\n` then `CSI 2 M` on a three-row screen took the terminal down.
     private func deleteLines(_ n: Int) {
-        let count = min(n, scrollBottom - cursorRow + 1)
+        guard n > 0, cursorRow >= scrollTop, cursorRow <= scrollBottom else { return }
+        let top = cursorRow
+        let bottom = scrollBottom
+        let count = min(n, bottom - top + 1)
         let width = cols
-        for r in cursorRow...(scrollBottom - count) {
-            let dst = r * width
-            let src = (r + count) * width
-            for c in 0..<width { cells[dst + c] = cells[src + c] }
-            rowWrapped[r] = rowWrapped[r + count]
+        let blank = blankCell()
+        let at = origin * width
+        grid.withUnsafeMutableBufferPointer { grid in
+            let base = grid.baseAddress! + at
+            (base + top * width).update(
+                from: base + (top + count) * width, count: (bottom - top + 1 - count) * width)
+            (base + (bottom - count + 1) * width).update(repeating: blank, count: count * width)
         }
-        for r in (scrollBottom - count + 1)...scrollBottom {
-            let base = r * width
-            for c in 0..<width { cells[base + c] = blankCell() }
-            rowWrapped[r] = false
+        rowWrapped.withUnsafeMutableBufferPointer { wrapped in
+            let base = wrapped.baseAddress!
+            (base + top).update(from: base + top + count, count: bottom - top + 1 - count)
+            (base + bottom - count + 1).update(repeating: false, count: count)
         }
     }
 
+    /// IL. The same rules as `deleteLines`, the other way.
     private func insertLines(_ n: Int) {
-        let count = min(n, scrollBottom - cursorRow + 1)
+        guard n > 0, cursorRow >= scrollTop, cursorRow <= scrollBottom else { return }
+        let top = cursorRow
+        let bottom = scrollBottom
+        let count = min(n, bottom - top + 1)
         let width = cols
-        for r in stride(from: scrollBottom, through: cursorRow + count, by: -1) {
-            let dst = r * width
-            let src = (r - count) * width
-            for c in 0..<width { cells[dst + c] = cells[src + c] }
-            rowWrapped[r] = rowWrapped[r - count]
+        let blank = blankCell()
+        let at = origin * width
+        grid.withUnsafeMutableBufferPointer { grid in
+            let base = grid.baseAddress! + at
+            (base + (top + count) * width).update(
+                from: base + top * width, count: (bottom - top + 1 - count) * width)
+            (base + top * width).update(repeating: blank, count: count * width)
         }
-        for r in cursorRow..<(cursorRow + count) {
-            let base = r * width
-            for c in 0..<width { cells[base + c] = blankCell() }
-            rowWrapped[r] = false
+        rowWrapped.withUnsafeMutableBufferPointer { wrapped in
+            let base = wrapped.baseAddress!
+            (base + top + count).update(from: base + top, count: bottom - top + 1 - count)
+            (base + top).update(repeating: false, count: count)
         }
     }
 
@@ -919,3 +1017,9 @@ public final class TerminalScreen: @unchecked Sendable {
         underline = false
     }
 }
+
+extension TerminalScreen: AnsiSink {
+    func perform(_ op: AnsiParser.Output) { apply(op) }
+    func printASCII(_ bytes: UnsafeBufferPointer<UInt8>) { putASCII(bytes) }
+}
+

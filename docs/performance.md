@@ -107,6 +107,18 @@ produce noise, not signal; re-record locally before trusting a comparison.
 | `list.*` | `LazyVGrid` virtualization — mount only what the viewport shows |
 | `image.*` | `ImageStore` decode, cache hits, and eviction under a scrolling grid |
 | `traceloom.*` | `TraceParser` over a large log |
+| `term.*` | `TerminalScreen.feed` — parsing and applying PTY output, in the reader's 8 KiB chunks |
+
+`term.*` is the ceiling on how fast a terminal drains a program that writes
+as fast as it can. It started at 16.9 s for 8 MiB of plain lines (0.5 MB/s):
+every line feed moved the whole grid a cell at a time through checked
+subscripts, and the parser built an array per byte. Bulk moves, a grid that
+scrolls by moving its origin, printable runs handed over whole and CSI
+parameters read as numbers brought it to about 125 ms plain and 265 ms with a
+colour escape on every word. Not the same thing as the frame rate: that is
+`PtyInbox` in LavaTerm, which parses a slice per loop turn so a frame goes out
+between them, and blocks the reader at 1 MiB so a firehose waits instead of
+filling memory.
 
 `editor.open-200-lines` is a control: if it moves, the regression is fixed
 overhead in the editor path and not anything size-dependent, which is a
