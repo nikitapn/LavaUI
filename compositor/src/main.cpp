@@ -27,6 +27,7 @@
 #include <iostream>
 #include <list>
 #include <memory>
+#include <optional>
 #include <thread>
 #include <unordered_map>
 #include <vector>
@@ -2191,6 +2192,15 @@ struct ClientSurface {
   /// When it started waiting — a client that never reports a serial still
   /// gets its geometry, on the same deadline a held window gets revealed on.
   std::chrono::steady_clock::time_point panelGeometrySince{};
+  /// Frost asked for while the geometry above was held, applied with it. A
+  /// client sends its plates as it draws, so the frame drawn for the new size
+  /// names them in the new size's coordinates — measured from the old origin,
+  /// the dock's plate was cropped from where the preview had been.
+  struct HeldFrost {
+    float radius = 0.f;
+    std::vector<lava::CompositorHost::FrostRect> rects;
+  };
+  std::optional<HeldFrost> heldFrost;
 
   /// Where a maximized or fullscreen window came from, so restoring is exact.
   bool maximized = false;
@@ -4292,6 +4302,12 @@ class SurfaceRegistry : public lava::CompositorHost {
   /// has drawn a frame for it. The other half of `setPanelThickness`.
   void commitPanelGeometry(ClientSurface &panel) {
     panel.pendingPanelGeometry = false;
+    // Before the move, which places the plates from these.
+    if (panel.heldFrost) {
+      ClientSurface::HeldFrost held = std::move(*panel.heldFrost);
+      panel.heldFrost.reset();
+      applyBackdropBlur(panel, held.radius, std::move(held.rects));
+    }
     if (!panel.canvas) return;
     panel.width = panel.canvas->width();
     panel.height = panel.canvas->height();
@@ -6246,6 +6262,20 @@ class SurfaceRegistry : public lava::CompositorHost {
                        std::vector<FrostRect> rects) override {
     ClientSurface *surface = find(id);
     if (surface == nullptr) return false;
+    // Rects in the coordinates of a size the scene does not show yet: kept
+    // for `commitPanelGeometry`, the newest winning.
+    if (surface->pendingPanelGeometry) {
+      surface->heldFrost = ClientSurface::HeldFrost{radius, std::move(rects)};
+      return true;
+    }
+    applyBackdropBlur(*surface, radius, std::move(rects));
+    return true;
+  }
+
+  void applyBackdropBlur(ClientSurface &surfaceRef, float radius,
+                         std::vector<FrostRect> rects) {
+    ClientSurface *surface = &surfaceRef;
+    const uint32_t id = surface->id;
     const float next = std::clamp(radius, 0.f, 64.f);
 
     // Same radius over the same rectangles is the common case by a distance:
@@ -6260,7 +6290,7 @@ class SurfaceRegistry : public lava::CompositorHost {
              had.h == std::max(0.f, rects[i].h) &&
              had.corner == std::max(0.f, rects[i].cornerRadius);
     }
-    if (same) return true;
+    if (same) return;
 
     surface->backdropBlurRadius = next;
     if (next <= 0.f || rects.empty()) {
@@ -6286,7 +6316,6 @@ class SurfaceRegistry : public lava::CompositorHost {
     wlr_log(WLR_INFO, "surface %u: backdrop blur %.0f over %zu rect(s)", id,
             next, surface->frostPlates.size());
     scheduleBackdropRefresh();
-    return true;
   }
 
   bool setBackdropRefraction(uint32_t id, float px) override {
