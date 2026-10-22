@@ -1,0 +1,104 @@
+From: Nikita Pennie <nikitapnn1@gmail.com>
+Date: Thu, 22 Oct 2026 23:00:00 +0200
+Subject: [PATCH] scene: render only a given region for offscreen captures
+
+A compositor that frosts the desktop behind a window renders the output
+offscreen into a swapchain of its own and crops the window's rectangle out
+of it. wlr_scene_output_build_state renders the whole output for that —
+the custom swapchain's buffers are unknown to the damage ring, so the ring
+returns full damage — and rotating the ring with a buffer the output never
+shows leaves its history wrong, so the caller has to damage the whole ring
+afterwards and the output's next real frame is a full composite too.
+
+Add wlr_scene_output_state_options.render_region: when set, render exactly
+that region (buffer coordinates), leave the damage ring and the dmabuf
+feedback debounce untouched, and skip direct scan-out and damage debugging.
+---
+diff --git a/include/wlr/types/wlr_scene.h b/include/wlr/types/wlr_scene.h
+index 2292f1f..054ae8d 100644
+--- a/include/wlr/types/wlr_scene.h
++++ b/include/wlr/types/wlr_scene.h
+@@ -560,6 +560,15 @@ struct wlr_scene_output_state_options {
+ 	 * wlr_output_state or output size if not specified.
+ 	 */
+ 	struct wlr_swapchain *swapchain;
++
++	/**
++	 * Render only this region, in buffer coordinates, and leave the rest of
++	 * the buffer as it was. The damage ring is neither read nor rotated, and
++	 * direct scan-out is not attempted. Meant for an offscreen capture of part
++	 * of the output into a custom swapchain, which should not disturb what the
++	 * output's own next frame redraws.
++	 */
++	const pixman_region32_t *render_region;
+ };
+ 
+ /**
+diff --git a/types/scene/wlr_scene.c b/types/scene/wlr_scene.c
+index e823d62..e6fb6a2 100644
+--- a/types/scene/wlr_scene.c
++++ b/types/scene/wlr_scene.c
+@@ -2064,7 +2064,9 @@ bool wlr_scene_output_build_state(struct wlr_scene_output *scene_output,
+ 	}
+ 
+ 	struct wlr_output *output = scene_output->output;
++	const pixman_region32_t *render_region = options->render_region;
+ 	enum wlr_scene_debug_damage_option debug_damage =
++		render_region ? WLR_SCENE_DEBUG_DAMAGE_NONE :
+ 		scene_output->scene->debug_damage_option;
+ 
+ 	struct render_data render_data = {
+@@ -2167,12 +2169,14 @@ bool wlr_scene_output_build_state(struct wlr_scene_output *scene_output,
+ 	// - There are no color transforms that need to be applied
+ 	// - Damage highlight debugging is not enabled
+ 	enum scene_direct_scanout_result scanout_result = SCANOUT_INELIGIBLE;
+-	if (options->color_transform == NULL && list_len == 1
++	if (render_region == NULL && options->color_transform == NULL && list_len == 1
+ 			&& debug_damage != WLR_SCENE_DEBUG_DAMAGE_HIGHLIGHT) {
+ 		scanout_result = scene_entry_try_direct_scanout(&list_data[0], state, &render_data);
+ 	}
+ 
+-	if (scanout_result == SCANOUT_INELIGIBLE) {
++	if (render_region != NULL) {
++		// A capture says nothing about whether the output could scan out.
++	} else if (scanout_result == SCANOUT_INELIGIBLE) {
+ 		if (scene_output->dmabuf_feedback_debounce > 0) {
+ 			// We cannot scan out, so count down towards sending composition dmabuf feedback
+ 			scene_output->dmabuf_feedback_debounce--;
+@@ -2243,8 +2247,13 @@ bool wlr_scene_output_build_state(struct wlr_scene_output *scene_output,
+ 	render_data.render_pass = render_pass;
+ 
+ 	pixman_region32_init(&render_data.damage);
+-	wlr_damage_ring_rotate_buffer(&scene_output->damage_ring, buffer,
+-		&render_data.damage);
++	if (render_region != NULL) {
++		pixman_region32_intersect_rect(&render_data.damage, render_region,
++			0, 0, buffer->width, buffer->height);
++	} else {
++		wlr_damage_ring_rotate_buffer(&scene_output->damage_ring, buffer,
++			&render_data.damage);
++	}
+ 
+ 	pixman_region32_t background;
+ 	pixman_region32_init(&background);
+@@ -2300,7 +2309,8 @@ bool wlr_scene_output_build_state(struct wlr_scene_output *scene_output,
+ 			// feedback, and on composition we wait until it hits zero again. If we knew that an
+ 			// entry could never be a scanout candidate, we could send feedback to it
+ 			// unconditionally without debounce, but for now it is all or nothing
+-			if (scene_output->dmabuf_feedback_debounce == 0 && buffer->primary_output == scene_output) {
++			if (render_region == NULL && scene_output->dmabuf_feedback_debounce == 0 &&
++					buffer->primary_output == scene_output) {
+ 				struct wlr_linux_dmabuf_feedback_v1_init_options options = {
+ 					.main_renderer = output->renderer,
+ 					.scanout_primary_output = NULL,
+@@ -2335,7 +2345,9 @@ bool wlr_scene_output_build_state(struct wlr_scene_output *scene_output,
+ 
+ 		// if we failed to render the buffer, it will have undefined contents
+ 		// Trash the damage ring
+-		wlr_damage_ring_add_whole(&scene_output->damage_ring);
++		if (render_region == NULL) {
++			wlr_damage_ring_add_whole(&scene_output->damage_ring);
++		}
+ 		return false;
+ 	}
+ 

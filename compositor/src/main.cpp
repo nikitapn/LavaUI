@@ -96,8 +96,8 @@ bool isTransientApp(const std::string &appId) {
 /// cursor plane takes only LINEAR and its Vulkan renderer cannot draw one.
 /// So frost picked up the pointer wherever it was over a plate, and a cropped
 /// screenshot showed it on one screen and not the other. Hidden for the call
-/// only: nothing here is committed, and both callers damage the whole ring
-/// afterwards, so the next real frame draws it again.
+/// only: nothing here is committed, and the output's own buffers were never
+/// drawn without it.
 bool buildStateWithoutCursor(wlr_scene_output *sceneOutput,
                              wlr_output_state *state,
                              const wlr_scene_output_state_options *opts) {
@@ -5113,13 +5113,28 @@ class SurfaceRegistry : public lava::CompositorHost {
     // Two plates side by side on the same screen — a menu and its submenu —
     // are two crops of the same picture, and rendering the output twice for
     // them would double the cost of every frame a fly-out is open on.
+    //
+    // And only the part of it the plates are crops of. A terminal's plate is a
+    // fraction of a 2560x1600 output, and rendering the rest of the screen for
+    // it was most of what a capture cost.
     std::vector<std::pair<Output *, wlr_buffer *>> shots;
     for (const auto &[index, on] : work) {
       const bool have = std::any_of(
           shots.begin(), shots.end(),
           [on = on](const auto &shot) { return shot.first == on; });
       if (have) continue;
-      shots.push_back({on, renderOutputBuffer(on)});
+      pixman_region32_t region;
+      pixman_region32_init(&region);
+      for (const auto &[other, at] : work) {
+        if (at != on) continue;
+        const wlr_box src = plateSourceBox(surface, surface.frostPlates[other],
+                                           *on);
+        // A pixel of slack for the rounding in `plateSourceBox`.
+        pixman_region32_union_rect(&region, &region, src.x - 1, src.y - 1,
+                                   src.width + 2, src.height + 2);
+      }
+      shots.push_back({on, renderOutputBuffer(on, &region)});
+      pixman_region32_fini(&region);
     }
     for (wlr_scene_node *node : lifted) wlr_scene_node_set_enabled(node, true);
     // `frameShown` rather than `!minimized`, and this is the re-derivation the
@@ -5158,24 +5173,14 @@ class SurfaceRegistry : public lava::CompositorHost {
 
       ClientSurface::FrostPlate &plate = surface.frostPlates[index];
       const wlr_box frostRect = frostBox(surface, plate);
-      const int frostX = frostRect.x;
-      const int frostY = frostRect.y;
       const int frostW = frostRect.width;
       const int frostH = frostRect.height;
 
-      wlr_box layoutBox{};
-      wlr_output_layout_get_box(server_->output_layout, on->wlr, &layoutBox);
-      const float scale = on->wlr->scale > 0.f ? on->wlr->scale : 1.f;
-      const int ix = std::max(frostX, layoutBox.x);
-      const int iy = std::max(frostY, layoutBox.y);
-      const int ix2 = std::min(frostX + frostW, layoutBox.x + layoutBox.width);
-      const int iy2 = std::min(frostY + frostH, layoutBox.y + layoutBox.height);
-      const int srcX = static_cast<int>(std::lround((ix - layoutBox.x) * scale));
-      const int srcY = static_cast<int>(std::lround((iy - layoutBox.y) * scale));
-      int srcW = static_cast<int>(std::lround((ix2 - ix) * scale));
-      int srcH = static_cast<int>(std::lround((iy2 - iy) * scale));
-      srcW = std::max(1, std::min(srcW, captured->width - srcX));
-      srcH = std::max(1, std::min(srcH, captured->height - srcY));
+      const wlr_box src = plateSourceBox(surface, plate, *on);
+      const int srcX = src.x;
+      const int srcY = src.y;
+      const int srcW = std::max(1, std::min(src.width, captured->width - srcX));
+      const int srcH = std::max(1, std::min(src.height, captured->height - srcY));
 
       const uint32_t destW = static_cast<uint32_t>(frostW);
       const uint32_t destH = static_cast<uint32_t>(frostH);
@@ -5251,6 +5256,25 @@ class SurfaceRegistry : public lava::CompositorHost {
     placeBackdrop(surface);
   }
 
+  /// Where in `on`'s buffer a plate is cropped from: its frost box, clipped
+  /// to the output and scaled to buffer pixels.
+  wlr_box plateSourceBox(const ClientSurface &surface,
+                         const ClientSurface::FrostPlate &plate,
+                         const Output &on) const {
+    const wlr_box frost = frostBox(surface, plate);
+    wlr_box layoutBox{};
+    wlr_output_layout_get_box(server_->output_layout, on.wlr, &layoutBox);
+    const float scale = on.wlr->scale > 0.f ? on.wlr->scale : 1.f;
+    const int ix = std::max(frost.x, layoutBox.x);
+    const int iy = std::max(frost.y, layoutBox.y);
+    const int ix2 = std::min(frost.x + frost.width, layoutBox.x + layoutBox.width);
+    const int iy2 = std::min(frost.y + frost.height, layoutBox.y + layoutBox.height);
+    return wlr_box{static_cast<int>(std::lround((ix - layoutBox.x) * scale)),
+                   static_cast<int>(std::lround((iy - layoutBox.y) * scale)),
+                   static_cast<int>(std::lround((ix2 - ix) * scale)),
+                   static_cast<int>(std::lround((iy2 - iy) * scale))};
+  }
+
   Output *outputUnder(int lx, int ly) const {
     if (server_ == nullptr || server_->output_layout == nullptr) return nullptr;
     wlr_output *at =
@@ -5263,7 +5287,14 @@ class SurfaceRegistry : public lava::CompositorHost {
   }
 
   /// One offscreen composite of `output`. The caller unlocks the buffer.
-  wlr_buffer *renderOutputBuffer(Output *output) {
+  ///
+  /// With `region` (buffer pixels) only that much is drawn and the rest of
+  /// the buffer is whatever an earlier capture left there; the output's damage
+  /// ring is left alone, so its next real frame redraws only what changed.
+  /// Without, the whole output, and the ring is spent — that render rotated
+  /// it with a buffer the output never shows.
+  wlr_buffer *renderOutputBuffer(Output *output,
+                                 const pixman_region32_t *region = nullptr) {
     if (output == nullptr || output->wlr == nullptr ||
         server_ == nullptr || server_->allocator == nullptr) {
       return nullptr;
@@ -5304,6 +5335,15 @@ class SurfaceRegistry : public lava::CompositorHost {
     wlr_output_state_init(&state);
     wlr_scene_output_state_options opts{};
     opts.swapchain = output->captureChain;
+    // A transformed output's buffer is not in layout orientation, and the
+    // crop box is computed as though it were.
+#ifdef LAVA_WLR_RENDER_REGION
+    const bool partial =
+        region != nullptr && output->wlr->transform == WL_OUTPUT_TRANSFORM_NORMAL;
+    if (partial) opts.render_region = region;
+#else
+    const bool partial = false;
+#endif
     const bool built = buildStateWithoutCursor(output->scene_output, &state,
                                                &opts);
     // Canvas reads the capture back through its write fences — see
@@ -5315,7 +5355,7 @@ class SurfaceRegistry : public lava::CompositorHost {
       wlr_buffer_lock(locked);
     }
     wlr_output_state_finish(&state);
-    wlr_damage_ring_add_whole(&output->scene_output->damage_ring);
+    if (!partial) wlr_damage_ring_add_whole(&output->scene_output->damage_ring);
     return locked;
   }
 

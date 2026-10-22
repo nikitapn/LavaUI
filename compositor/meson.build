@@ -19,7 +19,17 @@ if get_option('wlroots') == 'vendored'
     error('third-party/wlroots is not the patched tree. Remove it and run '
       + 'setup again, or use -Dwlroots=system.')
   endif
+  # A tree from before the second patch: delete it and set up again, since
+  # meson will not apply a patch to a checkout it did not just fetch.
+  if not import('fs').read(
+      meson.project_source_root() / 'third-party/wlroots/types/scene/wlr_scene.c'
+    ).contains('render_region')
+    error('third-party/wlroots lacks the render_region patch. Remove it and '
+      + 'run setup again, or use -Dwlroots=system.')
+  endif
+  wlroots_args = ['-DLAVA_WLR_RENDER_REGION=1']
 else
+  wlroots_args = []
   wlroots = dependency('wlroots-0.19', version: '>=0.19.0', required: false)
   if not wlroots.found()
     wlroots = dependency('wlroots', version: '>=0.19.0')
@@ -251,7 +261,7 @@ compositor = executable(
   # The name is a promise about API stability across releases, not about
   # maturity — every compositor built on wlroots defines it. Per target rather
   # than project-wide because canvas neither needs nor should see it.
-  cpp_args: [
+  cpp_args: wlroots_args + [
     '-DWLR_USE_UNSTABLE',
     '-DLAVA_CANVAS_ASSETS="' + canvas_assets + '"',
     '-DLAVA_UI_FONTS="' + lava_ui_fonts + '"',

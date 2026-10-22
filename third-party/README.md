@@ -54,6 +54,17 @@ The patches:
   instead. Upstream has only
   [!5478](https://gitlab.freedesktop.org/wlroots/wlroots/-/merge_requests/5478),
   which gives up on the hardware cursor sooner and more quietly.
+- `0002-scene-render-only-a-region…` — adds `render_region` to
+  `wlr_scene_output_state_options`. Frost is a crop of an offscreen render
+  of the output, and `wlr_scene_output_build_state` could only render all
+  of it: a custom swapchain's buffers are unknown to the damage ring, which
+  then returns full damage, and rotating the ring with them left its history
+  wrong — so the compositor damaged the whole ring after every capture and
+  the output's next real frame was a full composite as well. With a region
+  the render is that region alone and the ring is not touched. Dragging a
+  frosted terminal at 2560x1600: GPU busy 31% → 17% with two terminals,
+  56% → 33% with sixteen. `-Dwlroots=system` builds without it and renders
+  whole outputs, as before (`LAVA_WLR_RENDER_REGION`).
 
 When the system build is wanted and `pkg-config` cannot see `wlroots-0.19`,
 `scripts/build-wlroots.sh` clones 0.19.3 into `third-party/wlroots-system`
