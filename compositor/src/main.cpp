@@ -2047,6 +2047,9 @@ struct ClientSurface {
   /// Something behind this window's frost painted since it was captured.
   /// Only these are recaptured on a live pass — see `notePainted`.
   bool frostStale = false;
+  /// Something in front of this frost moved, or this window did: recaptured
+  /// on the next output frame, outside the live rate limit.
+  bool frostMoved = false;
   /// Glass refraction at the rim of every plate, in pixels; 0 is flat. The
   /// client's choice (`SetBackdropRefraction`): a menu reads as glass, a
   /// terminal whose whole window is frosted just looks warped.
@@ -4029,12 +4032,13 @@ class SurfaceRegistry : public lava::CompositorHost {
   /// Moves a window. Every node, because a frame, its content and the shadow
   /// under them are one window and only ever move together.
   void moveSurface(ClientSurface &surface, int x, int y) {
+    const wlr_box was = paintedBounds(surface);
     surface.x = x;
     surface.y = y;
     place(surface);
     placeShadow(surface);
     placeBackdrop(surface);
-    scheduleBackdropRefresh();
+    noteMoved(surface, was);
     // Geometry, which the window list does not carry — a dock that hides a strip
     // itself when something is in the way learns about it here and nowhere
     // else. Cheap when nobody has asked: see `postPanelAreas`.
@@ -4929,6 +4933,16 @@ class SurfaceRegistry : public lava::CompositorHost {
             ? *changed
             : wlr_box{source.x, source.y, static_cast<int>(source.width),
                       source.frameHeight()};
+    if (markFrostInFront(source, painted, false)) backdropContentDirty_ = true;
+  }
+
+  /// Flags the frost of every window in front of `source` whose plates reach
+  /// into `box` — the windows whose picture of the desktop has `source` in it.
+  /// `moved` picks the flag: a move is recaptured on the next frame, a paint
+  /// at the live rate. True when anything was flagged.
+  bool markFrostInFront(const ClientSurface &source, const wlr_box &box,
+                        bool moved) {
+    bool any = false;
     bool passedSource = false;
     for (const auto &owned : surfaces_) {
       if (owned.get() == &source) {
@@ -4942,12 +4956,60 @@ class SurfaceRegistry : public lava::CompositorHost {
       if (!owned->furniture() && (source.furniture() || passedSource)) {
         continue;
       }
-      if (owned->frostStale) continue;
+      bool &flag = moved ? owned->frostMoved : owned->frostStale;
+      if (flag) continue;
       const wlr_box frost = frostBounds(*owned);
       wlr_box hit{};
-      if (frost.width > 0 && wlr_box_intersection(&hit, &frost, &painted)) {
-        owned->frostStale = true;
-        backdropContentDirty_ = true;
+      if (frost.width > 0 && wlr_box_intersection(&hit, &frost, &box)) {
+        flag = true;
+        any = true;
+      }
+    }
+    return any;
+  }
+
+  /// What a window puts on screen: its frame and the shadow around it.
+  wlr_box paintedBounds(const ClientSurface &surface) const {
+    wlr_box box{surface.x, surface.y, static_cast<int>(surface.width),
+                surface.frameHeight()};
+    if (surface.shadowTree == nullptr) return box;
+    for (const auto &tile : shadowTiles_) {
+      if (tile.radius != surface.shadowRadius) continue;
+      const int dy = static_cast<int>(shadowOffsetY_);
+      box.x -= tile.pad;
+      box.y -= tile.pad - std::min(dy, 0);
+      box.width += 2 * tile.pad;
+      box.height += 2 * tile.pad + std::abs(dy);
+      break;
+    }
+    return box;
+  }
+
+  /// `surface` moved from `was`. Its own frost is a picture of somewhere else
+  /// now, and the frost of the windows in front of it had it in the old place
+  /// or will have it in the new one — nobody else's changed. A structural
+  /// refresh here recaptured every frosted window on the screen on every
+  /// motion event of a drag: one full composite of the output each, and with
+  /// ten frosted terminals that was more than a frame's worth of GPU.
+  ///
+  /// Furniture and anything not on screen keep the structural pass: a panel
+  /// moves when it changes size, rarely, and a hidden window's plates are
+  /// recaptured when it is shown anyway.
+  void noteMoved(ClientSurface &surface, const wlr_box &was) {
+    if (surface.furniture() || !visible(surface)) {
+      scheduleBackdropRefresh();
+      return;
+    }
+    bool any = surface.backdropBlurRadius > 0.f;
+    if (any) surface.frostMoved = true;
+    any |= markFrostInFront(surface, was, true);
+    any |= markFrostInFront(surface, paintedBounds(surface), true);
+    if (!any) return;
+    backdropMoveDirty_ = true;
+    if (server_ == nullptr) return;
+    for (Output *output : server_->outputs) {
+      if (output->wlr != nullptr && output->wlr->enabled) {
+        wlr_output_schedule_frame(output->wlr);
       }
     }
   }
@@ -6364,8 +6426,10 @@ class SurfaceRegistry : public lava::CompositorHost {
       }
     }
     const bool structural = backdropBlurDirty_;
-    if (!structural && !live) return;
+    const bool moved = backdropMoveDirty_;
+    if (!structural && !live && !moved) return;
     backdropBlurDirty_ = false;
+    backdropMoveDirty_ = false;
     bool anyFrost = false;
     for (auto &owned : surfaces_) {
       if (owned->backdropBlurRadius <= 0.f) continue;
@@ -6378,10 +6442,14 @@ class SurfaceRegistry : public lava::CompositorHost {
       }
       anyFrost = true;
       // A structural pass takes everything; a live one only what painted
-      // under. The flag is cleared either way: a capture is a capture.
-      const bool due = structural || owned->frostStale;
+      // under, a move only what it passed. Both flags go with any capture:
+      // a capture is a capture.
+      const bool due = structural || owned->frostMoved ||
+                       (live && owned->frostStale);
+      if (!due) continue;
       owned->frostStale = false;
-      if (due && !owned->minimized) captureBackdrop(*owned);
+      owned->frostMoved = false;
+      if (!owned->minimized) captureBackdrop(*owned);
     }
     // The last frosted window closed, or gave its radius up. Hand the capture
     // swapchains back rather than keep a screen's worth of buffers per output
@@ -7953,6 +8021,9 @@ class SurfaceRegistry : public lava::CompositorHost {
   /// Kept apart from `backdropBlurDirty_` because only this one is rate
   /// limited — see the comment there.
   bool backdropContentDirty_ = false;
+  /// Set by `noteMoved`: a window moved past some frost. Not rate limited —
+  /// the plate of a window being dragged has to keep up with it.
+  bool backdropMoveDirty_ = false;
   std::chrono::steady_clock::time_point lastLiveFrost_{};
   /// 30 Hz. A capture is a whole extra composite of the output, so the ceiling
   /// matters; 30 is where it stops being visible, because the thing being
