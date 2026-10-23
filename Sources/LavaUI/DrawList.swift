@@ -69,6 +69,23 @@ public enum DrawKind: UInt32 {
     /// outer corner radius, `param` = stroke width in 24.8 fixed point.
     /// See `StrokedRect` in `draw_command.hpp`.
     case strokedRect = 24
+    /// Glass on the next fill, image or backdrop: `aux` = refraction in px,
+    /// `param` = rim strength in 1/255ths, `w` = an image's corner radius.
+    /// See `Glass` in `draw_command.hpp`.
+    case glass = 25
+
+    /// Whether a `glass` prefix in front of this kind is consumed by it. The
+    /// renderer's list, in `render_window.cpp`; anything else would leave the
+    /// prefix for a later command.
+    var takesGlass: Bool {
+        switch self {
+        case .rect, .roundedRect, .linearGradientRect, .image, .imageSurface,
+             .beginBackdropBlur:
+            return true
+        default:
+            return false
+        }
+    }
 }
 
 /// Bits in a `beginNode` command's `color` field. Mirrors
@@ -187,6 +204,16 @@ public final class DrawList {
 
     /// True inside any blur scope, of either kind. See `withBlurScope`.
     private var insideBlurScope = false
+
+    /// Glass for the next command that can take it, held rather than written.
+    ///
+    /// The wire's `Glass` is a prefix consumed by whatever fill, image or
+    /// backdrop comes next — so one written ahead of a primitive that then
+    /// decides to draw nothing (a zero size, an image not loaded yet) would
+    /// land on some unrelated view further down the list. `append` writes it
+    /// only immediately before a command that consumes it, and `withGlass`
+    /// drops it whatever happened. See `Glass` in `draw_command.hpp`.
+    private var heldGlass: (refraction: Float, rim: Float, corner: Float)?
 
     /// Axis-aligned cull region in window pixels. Starts as the framebuffer;
     /// each `ScrollView` intersects it with its scissor so off-screen scroll
@@ -516,6 +543,16 @@ public final class DrawList {
         param: UInt32 = 0,
         aux: Float = 0
     ) {
+        if let glass = heldGlass, kind.takesGlass {
+            heldGlass = nil
+            var prefix = canvas.DrawCommand()
+            prefix.kind = DrawKind.glass.rawValue
+            prefix.w = glass.corner
+            prefix.color = Color(r: 1, g: 1, b: 1).rgba8
+            prefix.param = UInt32((min(max(glass.rim, 0), 1) * 255).rounded())
+            prefix.aux = glass.refraction
+            appendCommand(prefix)
+        }
         var cmd = canvas.DrawCommand()
         cmd.kind = kind.rawValue
         cmd.x = x
@@ -970,10 +1007,22 @@ public final class DrawList {
         cornerRadius: Float = 0, adaptation: Float = 1
     ) {
         guard w > 0, h > 0, radius > 0 else { return }
+        appendBackdropBlur(
+            x: x, y: y, w: w, h: h, radius: radius,
+            cornerRadius: cornerRadius, adaptation: adaptation
+        )
+    }
+
+    /// `beginBackdropBlur` without its guard on the radius: zero is a sharp
+    /// capture, which means something only to glass held in front of it.
+    private func appendBackdropBlur(
+        x: Float, y: Float, w: Float, h: Float, radius: Float,
+        cornerRadius: Float, adaptation: Float
+    ) {
         append(
             kind: .beginBackdropBlur, x: x, y: y, w: w, h: h,
             color: Color(r: 1, g: 1, b: 1, a: min(max(adaptation, 0), 1)),
-            param: UInt32(max(0, cornerRadius.rounded())), aux: radius
+            param: UInt32(max(0, cornerRadius.rounded())), aux: max(0, radius)
         )
     }
 
@@ -998,6 +1047,21 @@ public final class DrawList {
         )
         desktopFrostRadius = max(desktopFrostRadius, radius)
         return true
+    }
+
+    /// Runs `body` with glass on the first fill, image or backdrop it draws,
+    /// and on nothing else. `rim` overrides the effect's own, for a backdrop
+    /// whose rim a fill on top is going to draw instead.
+    private func withGlass(
+        _ glass: GlassEffect?, rim: Float? = nil, cornerRadius: Float = 0,
+        body: () -> Void
+    ) {
+        guard let glass, glass.refraction > 0 || (rim ?? glass.rim) > 0 else {
+            return body()
+        }
+        heldGlass = (glass.refraction, rim ?? glass.rim, max(0, cornerRadius))
+        body()
+        heldGlass = nil
     }
 
     /// Closes the scope a `beginBackdropBlur` opened.
@@ -1056,12 +1120,20 @@ public final class DrawList {
     /// Content wins over backdrop on the same node: `.blur()` is a statement
     /// about this view, and a frosted backdrop under a view that is itself
     /// being softened is not something you can see.
+    ///
+    /// Glass that bends opens a backdrop scope of its own when the node asked
+    /// for no blur — radius zero, a sharp capture — since bending needs
+    /// something captured to bend. Its rim goes on the node's fill when it has
+    /// one (`fillsOver`), which is drawn over the backdrop; on the backdrop it
+    /// would be under the tint.
     private func withBlurScope(
         content contentRadius: Float?,
         backdrop backdropRadius: Float?,
         x: Float, y: Float, w: Float, h: Float,
         cornerRadius: Float = 0,
         adaptation: Float? = nil,
+        glass: GlassEffect? = nil,
+        fillsOver: Bool = false,
         body: () -> Void
     ) {
         guard w > 0, h > 0, !insideBlurScope else { return body() }
@@ -1072,12 +1144,14 @@ public final class DrawList {
             body()
             endContentBlur()
             insideBlurScope = false
-        } else if let radius = backdropRadius, radius > 0 {
+        } else if (backdropRadius ?? 0) > 0 || (glass?.refraction ?? 0) > 0 {
             insideBlurScope = true
-            beginBackdropBlur(
-                x: x, y: y, w: w, h: h, radius: radius,
-                cornerRadius: cornerRadius, adaptation: adaptation ?? 1
-            )
+            withGlass(glass, rim: fillsOver ? 0 : nil) {
+                appendBackdropBlur(
+                    x: x, y: y, w: w, h: h, radius: backdropRadius ?? 0,
+                    cornerRadius: cornerRadius, adaptation: adaptation ?? 1
+                )
+            }
             body()
             endBackdropBlur()
             insideBlurScope = false
@@ -1209,10 +1283,18 @@ public final class DrawList {
                 frostRadius = max(frostRadius, radius)
             }
 
+            // Glass hoists with the blur, from the same node, for the same
+            // reason: the scope it would open is the one already open here.
+            // Not over the compositor's frost — that bends the desktop itself,
+            // by the refraction the client set on its surface.
+            let glassNode: YogaBoxNode? = overlayRoot.glass != nil
+                ? overlayRoot : (glassChild?.glass != nil ? glassChild : nil)
             withBlurScope(
                 content: nil, backdrop: compositorGlass ? nil : glassRadius,
                 x: att.origin.x, y: att.origin.y, w: att.size.w, h: att.size.h,
-                cornerRadius: glassCorner, adaptation: glassAdaptation
+                cornerRadius: glassCorner, adaptation: glassAdaptation,
+                glass: compositorGlass ? nil : glassNode?.glass,
+                fillsOver: paintsFill(glassNode)
             ) {
                 // Outline first, one pixel proud on every side, so the panel's
                 // own fill covers the middle of it — which is exactly why a
@@ -1293,6 +1375,21 @@ public final class DrawList {
         if let stack = node as? StackNode { return stack.cornerRadius }
         if let box = node as? StyleBoxNode { return box.cornerRadius }
         return nil
+    }
+
+    /// Whether a box draws a fill of its own, which is where its glass rim
+    /// goes. Same three node types as `cornerRadius(of:)`.
+    private func paintsFill(_ node: (any AnyViewNode)?) -> Bool {
+        if let leaf = node as? LeafNode {
+            return leaf.fillColor != nil || leaf.fillGradient != nil
+        }
+        if let stack = node as? StackNode {
+            return stack.fillColor != nil || stack.fillGradient != nil
+        }
+        if let box = node as? StyleBoxNode {
+            return box.fillColor != nil || box.fillGradient != nil
+        }
+        return false
     }
 
     private struct PendingOverlay {
@@ -1447,7 +1544,9 @@ public final class DrawList {
                     backdrop: styled.backdropBlurRadius,
                     x: x, y: y, w: w, h: h,
                     cornerRadius: styled.cornerRadius,
-                    adaptation: styled.backdropAdaptation
+                    adaptation: styled.backdropAdaptation,
+                    glass: styled.glass,
+                    fillsOver: styled.fillGradient != nil || styled.fillColor != nil
                 ) {
                     // A region with no tint still has to be a hit-test node:
                     // over its bare background, it is the only thing the
@@ -1461,19 +1560,21 @@ public final class DrawList {
                     if let flags {
                         beginNode(styled.id, x: x, y: y, w: w, h: h, flags: flags)
                     }
-                    if let g = styled.fillGradient {
-                        linearGradientRect(
-                            x: x, y: y, w: w, h: h, from: g.from, to: g.to,
-                            angle: g.angle, radius: styled.cornerRadius
-                        )
-                    } else if let fill = styled.fillColor {
-                        if styled.cornerRadius > 0 {
-                            roundedRect(
-                                x: x, y: y, w: w, h: h,
-                                color: fill, radius: styled.cornerRadius
+                    withGlass(styled.glass) {
+                        if let g = styled.fillGradient {
+                            linearGradientRect(
+                                x: x, y: y, w: w, h: h, from: g.from, to: g.to,
+                                angle: g.angle, radius: styled.cornerRadius
                             )
-                        } else {
-                            rect(x: x, y: y, w: w, h: h, color: fill)
+                        } else if let fill = styled.fillColor {
+                            if styled.cornerRadius > 0 {
+                                roundedRect(
+                                    x: x, y: y, w: w, h: h,
+                                    color: fill, radius: styled.cornerRadius
+                                )
+                            } else {
+                                rect(x: x, y: y, w: w, h: h, color: fill)
+                            }
                         }
                     }
                     withContentClip(styled.clipsContent, x: x, y: y, w: w, h: h) {
@@ -1501,7 +1602,9 @@ public final class DrawList {
                     backdrop: stack.backdropBlurRadius,
                     x: x, y: y, w: w, h: h,
                     cornerRadius: stack.cornerRadius,
-                    adaptation: stack.backdropAdaptation
+                    adaptation: stack.backdropAdaptation,
+                    glass: stack.glass,
+                    fillsOver: stack.fillGradient != nil || stack.fillColor != nil
                 ) {
                     let flags = nodeFlags(
                         for: stack.id, interactive: stack.isRendererInteractive,
@@ -1511,19 +1614,21 @@ public final class DrawList {
                         beginNode(stack.id, x: x, y: y, w: w, h: h, flags: flags)
                     }
                     let fill = stack.fillColor
-                    if let g = stack.fillGradient {
-                        linearGradientRect(
-                            x: x, y: y, w: w, h: h, from: g.from, to: g.to,
-                            angle: g.angle, radius: stack.cornerRadius
-                        )
-                    } else if let fill {
-                        if stack.cornerRadius > 0 {
-                            roundedRect(
-                                x: x, y: y, w: w, h: h,
-                                color: fill, radius: stack.cornerRadius
+                    withGlass(stack.glass) {
+                        if let g = stack.fillGradient {
+                            linearGradientRect(
+                                x: x, y: y, w: w, h: h, from: g.from, to: g.to,
+                                angle: g.angle, radius: stack.cornerRadius
                             )
-                        } else {
-                            rect(x: x, y: y, w: w, h: h, color: fill)
+                        } else if let fill {
+                            if stack.cornerRadius > 0 {
+                                roundedRect(
+                                    x: x, y: y, w: w, h: h,
+                                    color: fill, radius: stack.cornerRadius
+                                )
+                            } else {
+                                rect(x: x, y: y, w: w, h: h, color: fill)
+                            }
                         }
                     }
                     withContentClip(stack.clipsContent, x: x, y: y, w: w, h: h) {
@@ -1549,7 +1654,11 @@ public final class DrawList {
                     backdrop: leaf.backdropBlurRadius,
                     x: x, y: y, w: w, h: h,
                     cornerRadius: leaf.cornerRadius,
-                    adaptation: leaf.backdropAdaptation
+                    adaptation: leaf.backdropAdaptation,
+                    // A picture is what its glass bends; capturing what is
+                    // behind it would only be covered by it.
+                    glass: leaf.kind == .image ? nil : leaf.glass,
+                    fillsOver: leaf.fillGradient != nil || leaf.fillColor != nil
                 ) {
                     let interaction = interactionTints(for: leaf)
                     let flags = nodeFlags(
@@ -1664,19 +1773,21 @@ public final class DrawList {
     ) {
         // Hover wins over the base fill; both honour the radius.
         let leafFill = leaf.fillColor
-        if let g = leaf.fillGradient {
-            linearGradientRect(
-                x: x, y: y, w: w, h: h, from: g.from, to: g.to,
-                angle: g.angle, radius: leaf.cornerRadius
-            )
-        } else if let fill = leafFill {
-            if leaf.cornerRadius > 0 {
-                roundedRect(
-                    x: x, y: y, w: w, h: h,
-                    color: fill, radius: leaf.cornerRadius
+        withGlass(leaf.glass) {
+            if let g = leaf.fillGradient {
+                linearGradientRect(
+                    x: x, y: y, w: w, h: h, from: g.from, to: g.to,
+                    angle: g.angle, radius: leaf.cornerRadius
                 )
-            } else {
-                rect(x: x, y: y, w: w, h: h, color: fill)
+            } else if let fill = leafFill {
+                if leaf.cornerRadius > 0 {
+                    roundedRect(
+                        x: x, y: y, w: w, h: h,
+                        color: fill, radius: leaf.cornerRadius
+                    )
+                } else {
+                    rect(x: x, y: y, w: w, h: h, color: fill)
+                }
             }
         }
         if (leaf.kind == .text || leaf.kind == .markdown), !leaf.text.isEmpty {
@@ -1937,11 +2048,13 @@ public final class DrawList {
             // picture in a square box never shows this, a 16:9 thumbnail does.
             let overflows = dest.w > w + 0.5 || dest.h > h + 0.5
             if overflows { pushClip(x: x, y: y, w: w, h: h) }
-            self.image(
-                img,
-                x: dest.x, y: dest.y, w: dest.w, h: dest.h,
-                tint: leaf.imageTint
-            )
+            withGlass(leaf.glass, cornerRadius: leaf.cornerRadius) {
+                self.image(
+                    img,
+                    x: dest.x, y: dest.y, w: dest.w, h: dest.h,
+                    tint: leaf.imageTint
+                )
+            }
             if overflows { popClip() }
         }
     }

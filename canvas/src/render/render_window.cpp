@@ -1463,8 +1463,8 @@ void RenderWindow::setViewTransform(float zoom, float panX, float panY)
 
 void RenderWindow::pushBlurComposite(float x, float y, float w, float h,
                                      float viewW, float viewH, float radius,
-                                     float cornerRadius, float refractPx,
-                                     float adapt)
+                                     float cornerRadius,
+                                     QuadRenderer::Glass glass, float adapt)
 {
   if (w <= 0.f || h <= 0.f || viewW <= 0.f || viewH <= 0.f) return;
   const vec2 uv = blur_.uvScaleFor(radius);
@@ -1472,7 +1472,7 @@ void RenderWindow::pushBlurComposite(float x, float y, float w, float h,
     {x, y}, {w, h},
     {x / viewW * uv.x, y / viewH * uv.y},
     {(x + w) / viewW * uv.x, (y + h) / viewH * uv.y}, cornerRadius,
-    0xffffffffu, refractPx, adapt);
+    0xffffffffu, glass, adapt, radius <= 0.f && sharpGlass_);
 }
 
 namespace {
@@ -1611,6 +1611,22 @@ void RenderWindow::replayDrawList(const canvas::DrawList &list, float viewW,
   // producer's arrays, so nothing is copied.
   const auto faded = [&opacity](uint32_t color) {
     return opacity >= 1.f ? color : withScaledAlpha(color, opacity);
+  };
+
+  // A `Glass` prefix waiting for the command it belongs to. Taken by the next
+  // fill, image or backdrop and cleared there, so it can never leak onto a
+  // later quad — see `DrawCommandKind::Glass`.
+  QuadRenderer::Glass pendingGlass;
+  const auto takeGlass = [&pendingGlass] {
+    const QuadRenderer::Glass glass = pendingGlass;
+    pendingGlass = {};
+    return glass;
+  };
+  // Runs one push with the pending glass set, and clears it after.
+  const auto withGlass = [&](auto &&push) {
+    quads_.setGlass(takeGlass());
+    push();
+    quads_.setGlass({});
   };
 
   // Must match the slot waitForInFlightFrame() just freed / submit will use.
@@ -1907,13 +1923,23 @@ void RenderWindow::replayDrawList(const canvas::DrawList &list, float viewW,
       opacity           = node.parentOpacity;
       break;
     }
+    case canvas::DrawCommandKind::Glass:
+      pendingGlass = {
+        .refractPx = std::max(0.f, cmd.aux),
+        .rim = static_cast<float>(std::min(cmd.param, 255u)) / 255.f,
+        .cornerRadius = std::max(0.f, cmd.w)};
+      break;
     case canvas::DrawCommandKind::Rect:
-      quads_.pushBox({cmd.x + ox, cmd.y + oy}, {cmd.w, cmd.h}, faded(cmd.color),
-                     0.f);
+      withGlass([&] {
+        quads_.pushBox({cmd.x + ox, cmd.y + oy}, {cmd.w, cmd.h},
+                       faded(cmd.color), 0.f);
+      });
       break;
     case canvas::DrawCommandKind::RoundedRect:
-      quads_.pushBox({cmd.x + ox, cmd.y + oy}, {cmd.w, cmd.h}, faded(cmd.color),
-                     cmd.aux);
+      withGlass([&] {
+        quads_.pushBox({cmd.x + ox, cmd.y + oy}, {cmd.w, cmd.h},
+                       faded(cmd.color), cmd.aux);
+      });
       break;
     case canvas::DrawCommandKind::StrokedRect:
       // `param` is 24.8 fixed point — see `StrokedRect` in draw_command.hpp.
@@ -1928,12 +1954,16 @@ void RenderWindow::replayDrawList(const canvas::DrawList &list, float viewW,
       // carries it precisely so this case has something honest to draw.
       if (cmd.param < list.gradientCount && list.gradients != nullptr) {
         const canvas::GradientDesc &g = list.gradients[cmd.param];
-        quads_.pushBoxGradient({cmd.x + ox, cmd.y + oy}, {cmd.w, cmd.h},
-                               faded(g.color0), faded(g.color1), g.angle,
-                               cmd.aux);
+        withGlass([&] {
+          quads_.pushBoxGradient({cmd.x + ox, cmd.y + oy}, {cmd.w, cmd.h},
+                                 faded(g.color0), faded(g.color1), g.angle,
+                                 cmd.aux);
+        });
       } else {
-        quads_.pushBox({cmd.x + ox, cmd.y + oy}, {cmd.w, cmd.h},
-                       faded(cmd.color), cmd.aux);
+        withGlass([&] {
+          quads_.pushBox({cmd.x + ox, cmd.y + oy}, {cmd.w, cmd.h},
+                         faded(cmd.color), cmd.aux);
+        });
       }
       break;
     }
@@ -2056,6 +2086,9 @@ void RenderWindow::replayDrawList(const canvas::DrawList &list, float viewW,
       break;
     case canvas::DrawCommandKind::Image:
     case canvas::DrawCommandKind::ImageSurface: {
+      // Taken up front: an image that turns out not to be drawable still
+      // consumed its prefix, or the glass would land on whatever came next.
+      const QuadRenderer::Glass glass = takeGlass();
       uint32_t texId = cmd.param;
       if (static_cast<canvas::DrawCommandKind>(cmd.kind) ==
           canvas::DrawCommandKind::ImageSurface) {
@@ -2073,26 +2106,28 @@ void RenderWindow::replayDrawList(const canvas::DrawList &list, float viewW,
       // shared page, and sampling the whole page would draw the neighbours.
       vec2 uv0, uv1;
       tm.getTextureUV(texId, uv0, uv1);
+      quads_.setGlass(glass);
       quads_.pushImage({cmd.x + ox, cmd.y + oy}, {cmd.w, cmd.h}, uv0, uv1,
                        faded(cmd.color), view);
+      quads_.setGlass({});
       break;
     }
     case canvas::DrawCommandKind::BeginBackdropBlur: {
       // Split so the GPU can end pass → blur → continue. The next segment
       // opens with a full-frame-UV composite of the glass rect.
       quads_.closeSegment();
-      const float radius = cmd.aux > 0.f ? cmd.aux : 8.f;
+      // Glass, if the view asked for it, comes from the prefix. Only glass
+      // makes a zero radius mean anything: a sharp capture to bend. Without
+      // it zero is a producer that said nothing, and 8 is what it always got.
+      const QuadRenderer::Glass glass = takeGlass();
+      const float radius =
+        cmd.aux > 0.f ? cmd.aux : (glass.active() ? 0.f : 8.f);
       outBoundaries.push_back({Boundary::Kind::Backdrop, radius});
       // `param` is the corner radius of the surface this frost sits under —
       // whole pixels, which is all a corner is ever specified in.
-      // EXPERIMENT: glass refraction on backdrop frost only. Content blur
-      // shares the composite kind and must not bend; a real API would carry
-      // the strength on the command rather than a constant here.
-      constexpr float kBackdropRefractPx = 28.f;
       // Adaptive strength is the colour's alpha byte (R is the low byte).
       pushBlurComposite(cmd.x + ox, cmd.y + oy, cmd.w, cmd.h, viewW, viewH,
-                        radius, static_cast<float>(cmd.param),
-                        kBackdropRefractPx,
+                        radius, static_cast<float>(cmd.param), glass,
                         static_cast<float>(cmd.color >> 24) / 255.f);
       break;
     }
@@ -2146,8 +2181,13 @@ void RenderWindow::replayDrawList(const canvas::DrawList &list, float viewW,
       // and for the same reason: only a compositor plate — an opaque capture
       // of the desktop — sets it. A `.blur()` composites a subtree's own
       // silhouette, and compressing that would just grey the view.
+      // A plate has no fill of its own to draw a rim on, so it bends and
+      // lights in one.
+      const float refractPx = std::max(0.f, cmd.aux);
       pushBlurComposite(x0, y0, x1 - x0, y1 - y0, viewW, viewH, radius,
-                        static_cast<float>(open.param), std::max(0.f, cmd.aux),
+                        static_cast<float>(open.param),
+                        {.refractPx = refractPx,
+                         .rim = refractPx > 0.f ? 1.f : 0.f},
                         static_cast<float>(std::min(cmd.param, 255u)) / 255.f);
       break;
     }
@@ -2593,12 +2633,22 @@ void RenderWindow::render(const canvas::DrawList &list)
   // coarser grid rather than forcing the fine one down to theirs.
   float finestRadius = BlurPass::kMaxRadius;
   bool  anyBlur      = false;
+  // A backdrop with no radius right after a `Glass` prefix: glass over a
+  // sharp backdrop, which bends a window-sized capture rather than the
+  // pyramid's half-size one. The same test replay makes for the radius.
+  bool  anySharp     = false;
   for (size_t cmdIndex = 0; cmdIndex < list.commandCount; ++cmdIndex) {
     const auto kind =
       static_cast<canvas::DrawCommandKind>(list.commands[cmdIndex].kind);
     if (kind != canvas::DrawCommandKind::BeginBackdropBlur &&
         kind != canvas::DrawCommandKind::BeginContentBlur) {
       continue;
+    }
+    if (kind == canvas::DrawCommandKind::BeginBackdropBlur && cmdIndex > 0 &&
+        list.commands[cmdIndex].aux <= 0.f &&
+        static_cast<canvas::DrawCommandKind>(list.commands[cmdIndex - 1].kind) ==
+          canvas::DrawCommandKind::Glass) {
+      anySharp = true;
     }
     anyBlur = true;
     const float aux = list.commands[cmdIndex].aux;
@@ -2644,8 +2694,10 @@ void RenderWindow::render(const canvas::DrawList &list)
   const float viewW = static_cast<float>(ext.width);
   const float viewH = static_cast<float>(ext.height);
 
+  sharpGlass_ = false;
   if (anyBlur) {
     blur_.ensureSize(ext.width, ext.height, finestRadius);
+    sharpGlass_ = anySharp && blur_.ensureSharp();
     // A content blur draws its subtree into the capture target, which is
     // smaller than the window — told here rather than inside the blur, because
     // it is the quad renderer that records the viewport.
@@ -2671,6 +2723,7 @@ void RenderWindow::render(const canvas::DrawList &list)
   // blur still leaves the view unset and skips its composites.
   if (anyBlur && blur_.ready() && blur_.sceneReady()) {
     quads_.setBlurResultView(blur_.resultView(), blur_.sampler());
+    if (sharpGlass_) quads_.setSharpResultView(blur_.sharpView(), blur_.sampler());
   }
   quads_.setReplayCpuUs(static_cast<uint64_t>(
     std::chrono::duration_cast<std::chrono::microseconds>(

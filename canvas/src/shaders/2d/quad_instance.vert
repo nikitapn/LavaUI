@@ -16,6 +16,9 @@ layout(location = 9) in uint inTextureIndex;
 layout(location = 10) in vec4 inColor1;
 layout(location = 11) in vec2 inGradAxis;
 layout(location = 12) in float inGradBias;
+// Glass: x = refraction at the rim in px, y = specular rim strength. Zero on
+// every quad without it. See QuadRenderer::Glass.
+layout(location = 13) in vec2 inGlass;
 
 layout(push_constant) uniform Push {
   vec2 viewport;
@@ -39,6 +42,13 @@ layout(location = 8) flat out float vDither;
 /// `inColor1.a`, which a composite never reads as a ramp end — its
 /// `inGradAxis` is zero. See `QuadRenderer::pushBlurResultImage`.
 layout(location = 9) flat out float vAdapt;
+layout(location = 10) flat out vec2 vGlass;
+/// Texture units per local pixel, for bending a sample by a distance in
+/// pixels. Constant across the quad — the UV rect is spread over its size —
+/// so it is worked out once here rather than per fragment from derivatives,
+/// which are undefined in the non-uniform branches and after the discards the
+/// fragment shader reaches it through.
+layout(location = 11) flat out vec2 vUvPerPx;
 
 void main() {
   const vec2 corners[6] = vec2[6](
@@ -70,6 +80,8 @@ void main() {
   vKind = inKind;
   vAux = inAux;
   vUv = mix(inUv0, inUv1, corner);
+  vGlass = inGlass;
+  vUvPerPx = (inUv1 - inUv0) / max(inSize, vec2(1e-6));
   vTextureIndex = inTextureIndex;
   gl_Position = vec4(screen.x / pc.viewport.x * 2.0 - 1.0,
                      screen.y / pc.viewport.y * 2.0 - 1.0, 0.0, 1.0);

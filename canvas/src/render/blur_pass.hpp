@@ -78,6 +78,20 @@ class BlurPass {
   bool         sceneReady() const { return sceneFb_ != VK_NULL_HANDLE; }
 
   VkImageView resultView() const { return levels_[0].view; }
+
+  /// A window-sized copy of the frame, for glass that bends without blurring.
+  ///
+  /// The pyramid starts `captureShift` octaves down, which is free for a blur
+  /// — what it downsamples it is about to smear anyway — and plainly visible
+  /// for a capture nothing smears: text under sharp glass came out soft. So
+  /// this one is the window's own size, and allocated only by a frame that
+  /// asks for it: 4 bytes a pixel, 7.9 MiB at 1080p, that no blurred window
+  /// and no window without sharp glass pays. Freed with the pyramid when the
+  /// window resizes, and made again at the new size by the next frame that
+  /// wants it. Call before recording; false when it could not be made, and
+  /// a radius-0 capture then falls back to the pyramid's first level.
+  bool ensureSharp();
+  VkImageView sharpView() const { return sharpView_; }
   VkSampler sampler() const { return sampler_; }
 
   /// Always 1×1: the upsample lands back at window size.
@@ -119,6 +133,7 @@ class BlurPass {
 
   void createImages(uint32_t width, uint32_t height);
   void destroyImages();
+  void destroySharp();
   void createPipeline();
   void createSampler();
   void createSceneRenderPass();
@@ -141,6 +156,10 @@ class BlurPass {
   VkImageView   sceneView_ = VK_NULL_HANDLE;
   VkFramebuffer  sceneFb_ = VK_NULL_HANDLE;
   VkRenderPass   sceneRenderPass_ = VK_NULL_HANDLE;
+
+  VkImage       sharpImage_ = VK_NULL_HANDLE;
+  VmaAllocation sharpAlloc_ = VK_NULL_HANDLE;
+  VkImageView   sharpView_ = VK_NULL_HANDLE;
 
   VkRenderPass   renderPass_ = VK_NULL_HANDLE;
   VkDescriptorSetLayout setLayout_ = VK_NULL_HANDLE;

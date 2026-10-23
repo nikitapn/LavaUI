@@ -191,6 +191,8 @@ class YogaBoxNode: AnyViewNode {
     /// subject: the engine renders this node's own paint offscreen and blurs
     /// that, rather than blurring what was already behind it.
     var contentBlurRadius: Float?
+    /// From `.glassEffect(refraction:rim:)`: glass on this node's own paint.
+    var glass: GlassEffect?
     /// When true, paint (and children) is scissored to this box's layout rect.
     /// Yoga still allows overflow for measure; we clip at emit only — used by
     /// the menubar strip so a title's hover fill cannot paint over content.

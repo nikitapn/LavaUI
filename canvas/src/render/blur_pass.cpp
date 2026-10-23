@@ -3,6 +3,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
+#include <iostream>
 
 #include "render/blur_pass.hpp"
 #include "render/shaders.hpp"
@@ -240,8 +241,45 @@ void BlurPass::cleanUp()
   }
 }
 
+void BlurPass::destroySharp()
+{
+  if (sharpView_ != VK_NULL_HANDLE) {
+    vkDestroyImageView(device_.getDevice(), sharpView_, nullptr);
+    sharpView_ = VK_NULL_HANDLE;
+  }
+  device_.destroyImage(sharpImage_, sharpAlloc_);
+}
+
+bool BlurPass::ensureSharp()
+{
+  if (sharpView_ != VK_NULL_HANDLE) return true;
+  if (fullWidth_ < 1 || fullHeight_ < 1) return false;
+  // New, so no frame in flight can name it — no wait needed, unlike a resize.
+  try {
+    device_.createImage(
+      fullWidth_, fullHeight_, 1, VK_SAMPLE_COUNT_1_BIT, format_,
+      VK_IMAGE_TILING_OPTIMAL,
+      VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+      VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, sharpImage_, sharpAlloc_,
+      canvas::GpuTag{canvas::GpuCategory::BlurScratch, ownerWindowId(),
+                     "glass capture"});
+    sharpView_ = device_.createImageView(sharpImage_, format_,
+                                         VK_IMAGE_ASPECT_COLOR_BIT, 1);
+  } catch (const std::exception &e) {
+    std::cerr << "canvas: glass capture (" << fullWidth_ << "x" << fullHeight_
+              << ") not allocated, glass bends the half-size capture: "
+              << e.what() << "\n";
+    destroySharp();
+    return false;
+  }
+  return true;
+}
+
 void BlurPass::destroyImages()
 {
+  // Window-sized, so it goes with the pyramid on a resize; the next frame
+  // that wants it makes it again at the new size.
+  destroySharp();
   VkDevice device = device_.getDevice();
   for (auto &lv : levels_) {
     if (lv.fb != VK_NULL_HANDLE) {
@@ -578,11 +616,21 @@ void BlurPass::captureAndBlur(VkCommandBuffer cmd, VkImage src,
 {
   if (!ready() || levelCount_ < 2) return;
 
+  // A radius of zero is glass over a sharp backdrop: the capture alone, with
+  // no pass after it — into the window-sized image when there is one, and
+  // otherwise into the pyramid's first level, which is as sharp as an octave
+  // down can be.
+  const bool sharp = radius <= 0.f && sharpImage_ != VK_NULL_HANDLE;
+  const Level target =
+    sharp ? Level{.image = sharpImage_, .w = fullWidth_, .h = fullHeight_}
+          : levels_[0];
   const uint32_t iters =
-    std::min(iterationsFor(radius), levelCount_ > 0 ? levelCount_ - 1 : 0);
-  if (iters < 1) return;
+    radius <= 0.f
+      ? 0u
+      : std::min(iterationsFor(radius), levelCount_ > 0 ? levelCount_ - 1 : 0);
+  if (iters < 1 && radius > 0.f) return;
 
-  imageBarrier(cmd, levels_[0].image, VK_IMAGE_LAYOUT_UNDEFINED,
+  imageBarrier(cmd, target.image, VK_IMAGE_LAYOUT_UNDEFINED,
                VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                VK_ACCESS_SHADER_READ_BIT, VK_ACCESS_TRANSFER_WRITE_BIT,
                VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
@@ -602,14 +650,16 @@ void BlurPass::captureAndBlur(VkCommandBuffer cmd, VkImage src,
                    {static_cast<int32_t>(srcW), static_cast<int32_t>(srcH), 1}},
     .dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
     .dstOffsets = {{0, 0, 0},
-                   {static_cast<int32_t>(levels_[0].w),
-                    static_cast<int32_t>(levels_[0].h), 1}},
+                   {static_cast<int32_t>(target.w),
+                    static_cast<int32_t>(target.h), 1}},
   };
+  // Nearest when the sizes agree: a one-to-one copy, not a resample.
+  const bool oneToOne = target.w == srcW && target.h == srcH;
   vkCmdBlitImage(cmd, src, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                 levels_[0].image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1,
-                 &blit, VK_FILTER_LINEAR);
+                 target.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1,
+                 &blit, oneToOne ? VK_FILTER_NEAREST : VK_FILTER_LINEAR);
 
-  imageBarrier(cmd, levels_[0].image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+  imageBarrier(cmd, target.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT,
                VK_PIPELINE_STAGE_TRANSFER_BIT,

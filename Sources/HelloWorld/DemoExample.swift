@@ -150,6 +150,24 @@ public struct DemoExample: View {
     /// A menu row: hover highlight, click, and it closes the menu after acting.
     /// Dismissing here rather than in the framework keeps the overlay unopinionated
     /// about whether picking something should close it — a checklist would not.
+    /// One pane of the `.glassEffect()` demo. The same card either way; only
+    /// whether it also asks for a blur differs.
+    @ViewBuilder
+    private func glassCard(_ title: String, blur: Bool) -> some View {
+        let card = VStack(flexGrow: 1, padding: 14) {
+            Text("Glass", color: .primary)
+            Text(title, color: .secondary)
+        }
+        .background(Color(r: 1, g: 1, b: 1).opacity(0.06))
+        .cornerRadius(18)
+        .glassEffect(refraction: 20)
+        if blur {
+            card.backdropBlur(radius: 10)
+        } else {
+            card
+        }
+    }
+
     private func menuItem(_ title: String, action: @escaping () -> Void) -> some View {
         Text(title, color: .primary, onClick: {
             action()
@@ -481,14 +499,14 @@ public struct DemoExample: View {
                 }
             }.blur(radius: 5)
             HStack(padding: 2) {
-                Button(showGlass ? "Hide glass" : "Show glass") {
+                Button(showGlass ? "Hide frost" : "Show frost") {
                     showGlass.toggle()
                     bump(showGlass ? "glass on" : "glass off")
                 }
 
                 Toggle("White page", isOn: $glassOnWhite)
                 Toggle("Adaptive", isOn: $glassAdaptive)
-                Text("(glass opens on the colour strip)", color: .dim)
+                Text("(frost panel opens on the colour strip)", color: .dim)
                 Spacer()
             }
             .overlay(
@@ -521,6 +539,30 @@ public struct DemoExample: View {
                 .background(Color(r: 0.95, g: 0.96, b: 1.0).opacity(0.28))
                 .cornerRadius(12)
                 .backdropBlur(radius: 10, adaptation: glassAdaptive ? 1 : 0)
+            }
+
+            Text("Glass · .glassEffect()", color: .accent)
+            Text(
+                "Bends what is behind at the rim and lights it. Blur is a separate choice.",
+                color: .secondary
+            )
+            // Hard edges and text under the cards, so the bend and the colour
+            // fringe at the rim have something to show.
+            HStack(height: .pt(120), padding: 16, spacing: 16) {
+                glassCard("sharp backdrop", blur: false)
+                glassCard("+ .backdropBlur(radius: 10)", blur: true)
+            }
+            .underlay {
+                HStack(spacing: 0) {
+                    ForEach(Array(DemoPalette.swatches.enumerated()), id: \.offset) { i, c in
+                        VStack(flexGrow: 1, padding: 6) {
+                            Text("LAVA \(i + 1)", color: .primary)
+                            Spacer()
+                            Text("glass", color: Color(r: 0.1, g: 0.1, b: 0.1))
+                        }
+                        .background(c)
+                    }
+                }
             }
 
             Text("Button · animated press + hover", color: .accent)

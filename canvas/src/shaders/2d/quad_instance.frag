@@ -11,6 +11,9 @@
 //   5 Shadow        — the same rounded box, faded outwards over `vAux` px.
 //   6 BlurComposite — frosted backdrop, sampled through the same SDF.
 //
+// Sdf, Image and BlurComposite also take glass (`vGlass`, zero when off): the
+// two that sample a texture bend it at the rim, and all three light the rim.
+//
 // Output is premultiplied; the pipeline blends ONE / ONE_MINUS_SRC_ALPHA, in
 // sRGB-encoded space rather than linear light — see the note in quad.frag for
 // why the buffer handover requires that.
@@ -25,6 +28,8 @@ layout(location = 6) in vec2 vUv;
 layout(location = 7) flat in uint vTextureIndex;
 layout(location = 8) flat in float vDither;
 layout(location = 9) flat in float vAdapt;
+layout(location = 10) flat in vec2 vGlass;
+layout(location = 11) flat in vec2 vUvPerPx;
 layout(binding = 0) uniform sampler2D textures[];
 layout(location = 0) out vec4 outColor;
 
@@ -34,10 +39,77 @@ layout(location = 0) out vec4 outColor;
 /// glass stays legible over a white page, high enough to still read as glass.
 const float kAdaptKnee = 0.45;
 const float kAdaptCeiling = 0.62;
+/// How far red and blue part from green on a refracting rim, as a fraction of
+/// the displacement there. From shaderplay's glass.frag, tuned by eye.
+const float kDispersion = 0.12;
 
 float sdRoundBox(vec2 p, vec2 b, float r) {
   vec2 q = abs(p) - b + r;
   return min(max(q.x, q.y), 0.0) + length(max(q, 0.0)) - r;
+}
+
+// ─── Glass ───────────────────────────────────────────────────────────────────
+//
+// A rim of `kBezel` pixels inside the outline, curved like a quarter circle:
+// flat across the face, steepest at the edge. What sits under it is bent
+// inward along the outline's normal, and it catches a light from the top left.
+
+const float kBezel = 20.0;
+
+/// How steep the rim is here, 0 on the face to 1 at the outline, and the
+/// outward normal it bends along.
+///
+/// The normal is analytic — a screen-space gradient of `d` is quantized per
+/// 2x2 quad and shimmers — and taken from a box rounded by at least the bezel
+/// rather than by the outline's own radius. The outline's own normal snaps from
+/// one axis to the other along a corner's diagonal, and a bezel wider than the
+/// corner shows that miter as a seam through everything below. Past the bezel
+/// `bend` is zero, so where this normal goes to zero nothing reads it.
+float glassBend(float d, out vec2 n) {
+  float rn = min(max(vRadius, kBezel), min(vHalfSize.x, vHalfSize.y));
+  vec2 qn = max(abs(vLocal) - vHalfSize + rn, 0.0);
+  n = qn / max(length(qn), 1e-6) * sign(vLocal);
+  float t = clamp(1.0 + d / kBezel, 0.0, 1.0);
+  return 1.0 - sqrt(1.0 - t * t);
+}
+
+/// How much white the rim adds here, 0…1, at strength `vGlass.y`.
+///
+/// Specular along the whole rim rather than at its outline: a tight lobe
+/// facing the light from the top left (y points down), a weaker one on the far
+/// side, both fading as the bezel flattens into the face. Plus a thin line at
+/// the outline itself, all the way round.
+float glassRim(float d, vec2 n, float bend) {
+  float facing = dot(n, normalize(vec2(-0.6, -0.8)));
+  float spec = pow(abs(facing), 6.0) * (facing > 0.0 ? 1.0 : 0.45);
+  float band = 1.0 - smoothstep(0.0, 1.5, -d);
+  return clamp((0.55 * spec * bend + 0.25 * band) * vGlass.y, 0.0, 1.0);
+}
+
+/// This quad's texture at `vUv`, bent inward at the rim by up to `vGlass.x`
+/// pixels — inward, so the read never leaves the rect the UVs describe.
+///
+/// Red bends a little less than green and blue a little more, so edges in
+/// what is under the glass fringe where the rim bends them hardest. On the
+/// flat face the offset is zero and the two extra taps are skipped.
+vec4 glassSample(vec2 n, float bend) {
+  vec2 offset = n * (vGlass.x * bend) * vUvPerPx;
+  vec2 uv = vUv - offset;
+  vec4 s = texture(textures[nonuniformEXT(vTextureIndex)], uv);
+  if (offset != vec2(0.0)) {
+    vec2 disperse = offset * kDispersion;
+    s.r = texture(textures[nonuniformEXT(vTextureIndex)], uv + disperse).r;
+    s.b = texture(textures[nonuniformEXT(vTextureIndex)], uv - disperse).b;
+  }
+  return s;
+}
+
+/// White at `rim` laid over a premultiplied colour. Over, not added: added
+/// light on a translucent fill would store rgb above alpha, which the buffer
+/// handover forbids (see quad.frag) and wlroots draws as a bright fringe.
+vec4 overRim(vec4 premultiplied, float rim) {
+  return vec4(premultiplied.rgb * (1.0 - rim) + rim,
+              premultiplied.a + rim * (1.0 - premultiplied.a));
 }
 
 // Interleaved gradient noise (Jimenez). Cheap, and stable across drivers in a
@@ -94,46 +166,27 @@ void main() {
   if (vKind == 6u) { // BlurComposite
     float d = sdRoundBox(vLocal, vHalfSize, vRadius);
     float aa = max(fwidth(d), 1e-5);
-    // A square composite only reaches this kind to adapt (see
+    // A square composite only reaches this kind to adapt or for glass (see
     // `pushBlurResultImage`), and must keep the hard edge the plain image
     // path gives it — SDF antialiasing on r=0 eats a pixel all round.
     float coverage = vRadius < 0.5 ? (d <= 1e-4 ? 1.0 : 0.0)
                                    : 1.0 - smoothstep(-aa, aa, d);
     if (coverage <= 0.001) discard;
 
-    // vAux > 0: glass refraction of that many pixels at the rim (backdrop
-    // frost only — content blur passes 0 and composites unchanged).
-    vec2 uv = vUv;
+    // Glass bends the backdrop at the rim (a compositor plate's refraction,
+    // or a view's `.glassEffect()`); a content blur has none and composites
+    // unchanged.
+    vec4 sampled;
     vec3 rimAdd = vec3(0.0);
-    float refractPx = vAux;
-    if (refractPx > 0.0) {
-      // Outward normal of the rounded box, analytic: a screen-space
-      // gradient of `d` is quantized per 2x2 quad and shimmers.
-      vec2 q = abs(vLocal) - vHalfSize + vRadius;
-      vec2 n = (max(q.x, q.y) > 0.0) ? normalize(max(q, 0.0))
-                                     : (q.x > q.y ? vec2(1.0, 0.0) : vec2(0.0, 1.0));
-      n *= sign(vLocal);
-
-      // Bezel: 0 deep inside → 1 at the edge. Circular profile, so the
-      // middle stays flat and only the rim bends.
-      const float bezel = 20.0;
-      float t = clamp(1.0 + d / bezel, 0.0, 1.0);
-      float bend = 1.0 - sqrt(1.0 - t * t);
-
-      // Local px → backdrop UV (the quad is axis-aligned and affine).
-      vec2 j = vec2(dFdx(vUv.x) / max(abs(dFdx(vLocal.x)), 1e-8),
-                    dFdy(vUv.y) / max(abs(dFdy(vLocal.y)), 1e-8));
-      // Inward, so the read never leaves the captured rect.
-      uv -= n * (refractPx * bend) * j;
-
-      // Thin directional rim, lit from the top left (y points down).
-      float band = 1.0 - smoothstep(0.0, 1.5, -d);
-      float lit  = max(dot(n, normalize(vec2(-0.6, -0.8))), 0.0);
-      float back = max(dot(n, normalize(vec2( 0.6,  0.8))), 0.0);
-      rimAdd = vec3(band * (0.45 * lit + 0.15 * back));
+    if (vGlass != vec2(0.0)) {
+      vec2 n;
+      float bend = glassBend(d, n);
+      sampled = glassSample(n, bend);
+      rimAdd = vec3(glassRim(d, n, bend));
+    } else {
+      sampled = texture(textures[nonuniformEXT(vTextureIndex)], vUv);
     }
-
-    vec4 sampled = texture(textures[nonuniformEXT(vTextureIndex)], uv) * vColor;
+    sampled *= vColor;
     float a = sampled.a * coverage;
     if (a <= 0.001) discard;
 
@@ -172,6 +225,23 @@ void main() {
   }
 
   if (vKind == 2u) { // Image
+    if (vGlass != vec2(0.0)) {
+      // Glass on a picture bends the picture itself, and cuts it to the
+      // outline the rim is measured from. Hard-edged when square, as the
+      // plain path is.
+      float d = sdRoundBox(vLocal, vHalfSize, vRadius);
+      float aa = max(fwidth(d), 1e-5);
+      float coverage = vRadius < 0.5 ? (d <= 1e-4 ? 1.0 : 0.0)
+                                     : 1.0 - smoothstep(-aa, aa, d);
+      if (coverage <= 0.001) discard;
+      vec2 n;
+      float bend = glassBend(d, n);
+      vec4 c = glassSample(n, bend) * vColor;
+      float a = c.a * coverage;
+      outColor = overRim(vec4(c.rgb * a, a), glassRim(d, n, bend) * coverage);
+      if (outColor.a <= 0.001) discard;
+      return;
+    }
     vec4 c = texture(textures[nonuniformEXT(vTextureIndex)], vUv) * vColor;
     if (c.a <= 0.001) discard;
     outColor = vec4(c.rgb * c.a, c.a);
@@ -179,10 +249,18 @@ void main() {
   }
 
   float coverage;
+  float rim = 0.0;
   if (vKind == 1u) { // Glyph
     coverage = texture(textures[nonuniformEXT(vTextureIndex)], vUv).r;
   } else { // Sdf (kind 0); Mesh never reaches this shader
     float d = sdRoundBox(vLocal, vHalfSize, vRadius);
+    // A fill has nothing under it to bend, so glass on one is the rim alone —
+    // drawn over the tint, which is why a glass view puts it here and not
+    // on the backdrop beneath, where the tint would bury it.
+    if (vGlass.y > 0.0) {
+      vec2 n;
+      rim = glassRim(d, n, glassBend(d, n));
+    }
     // The antialias width comes from the *unfolded* field — see quad.frag.
     float aa = max(fwidth(d), 1e-5);
     // vAux > 0 asks for an outline of that width instead of a fill.
@@ -199,4 +277,5 @@ void main() {
   if (coverage <= 0.0) discard;
   vec4 c = vec4(vColor.rgb, vColor.a * coverage);
   outColor = vec4(dither(c.rgb * c.a), c.a);
+  if (rim > 0.0) outColor = overRim(outColor, rim * coverage);
 }

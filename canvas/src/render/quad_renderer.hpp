@@ -52,6 +52,20 @@ inline uint32_t withScaledAlpha(uint32_t rgba, float k)
   return (rgba & 0x00ffffffu) | (static_cast<uint32_t>(scaled) << 24);
 }
 
+/// A view's glass, as the draw list's `Glass` prefix describes it.
+///
+/// Read by the kinds that can show it — `Sdf` draws the rim, `Image` bends its
+/// own pixels and draws the rim, `BlurComposite` bends the backdrop — and
+/// ignored by the rest. Outside `QuadRenderer` only so that its members can
+/// default an argument of this type: inside the class they cannot yet.
+struct QuadGlass {
+  float refractPx = 0.f;
+  float rim = 0.f;
+  /// The outline an image is cut to. Fills and composites have their own.
+  float cornerRadius = 0.f;
+  bool active() const { return refractPx > 0.f || rim > 0.f; }
+};
+
 class QuadRenderer {
  public:
   struct FrameStats {
@@ -162,8 +176,18 @@ class QuadRenderer {
     /// Ramp offset, so `t = dot(corner, gradAxis) + gradBias` lands in 0…1
     /// across the quad whichever way the gradient points.
     float gradBias = 0.f;
+
+    /// Glass on this quad: `x` bends what it samples at the rim by that many
+    /// pixels, `y` is the strength of the specular rim. Zero is no glass, and
+    /// every quad that predates it is zero. See `Glass`.
+    vec2 glass{0.f, 0.f};
   };
-  static_assert(sizeof(Instance) == 76, "QuadInstance ABI changed");
+  static_assert(sizeof(Instance) == 84, "QuadInstance ABI changed");
+
+  using Glass = QuadGlass;
+  /// Set around the one push it belongs to and cleared after, the way the
+  /// draw list's prefix is consumed by the one command after it.
+  void setGlass(Glass glass) { glass_ = glass; }
 
   explicit QuadRenderer(RenderDevice &device) : device_{device} {}
 
@@ -321,11 +345,20 @@ class QuadRenderer {
   /// over a white page still reads as glass. Per pixel, from the blurred
   /// sample itself — see the BlurComposite branch of `quad_instance.frag`.
   /// Only for an opaque source: a content blur's own silhouette passes 0.
+  ///
+  /// `glass` bends the composite at its rim and lights it — a compositor
+  /// plate's `SetBackdropRefraction`, or a view's `.glassEffect()`. It is
+  /// stated here rather than taken from `setGlass` because the plate path has
+  /// no draw-list prefix to take it from.
+  ///
+  /// `sharp` samples the window-sized capture of unblurred glass instead of
+  /// the blur result. See `BlurPass::ensureSharp`.
   void pushBlurResultImage(vec2 topLeft, vec2 size, vec2 uv0, vec2 uv1,
                            float cornerRadius = 0.f,
                            uint32_t rgba = 0xffffffffu,
-                           float refractPx = 0.f,
-                           float adapt = 0.f);
+                           Glass glass = {},
+                           float adapt = 0.f,
+                           bool sharp = false);
 
   void end();
 
@@ -338,6 +371,9 @@ class QuadRenderer {
   /// Writes the texture table, so call it before recording starts — after
   /// `begin`, which clears it, and before the first `drawSegment` binds it.
   void setBlurResultView(VkImageView view, VkSampler sampler = VK_NULL_HANDLE);
+  /// The same for the window-sized capture sharp glass bends
+  /// (`BlurPass::sharpView`), which a composite asks for with `sharp`.
+  void setSharpResultView(VkImageView view, VkSampler sampler = VK_NULL_HANDLE);
 
   /// How much smaller the content-blur capture target is than the window.
   ///
@@ -506,6 +542,7 @@ class QuadRenderer {
   vk::Handle<VkDescriptorSetLayout> descriptorSetLayout_;
   uint32_t maxBindlessTextures_ = 0;
   uint32_t blurTextureIndex_ = 0;
+  uint32_t sharpTextureIndex_ = 0;
   /// Slot holding the 1x1 white placeholder, claimed first every frame so a
   /// frame that exhausts the table still has somewhere valid to point.
   uint32_t fallbackTextureIndex_ = 0;
@@ -524,6 +561,7 @@ class QuadRenderer {
   VkSampler      glyphAtlasSampler_ = VK_NULL_HANDLE;
   VkImageView    currentBatchTexture_ = VK_NULL_HANDLE;
   uint32_t       currentTextureIndex_ = 0;
+  Glass          glass_;
 
   // CPU-side build arena (copied into frames_[slot] on end()).
   std::vector<Vertex>   vertices_;

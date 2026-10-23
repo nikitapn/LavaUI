@@ -155,10 +155,13 @@ void QuadRenderer::setupDescriptors() {
     kDesiredBindlessTextures,
     std::min(limits.maxPerStageDescriptorSampledImages,
              limits.maxDescriptorSetSampledImages));
-  if (maxBindlessTextures_ < 2) {
-    throw std::runtime_error("GPU exposes fewer than two sampled-image descriptors");
+  if (maxBindlessTextures_ < 3) {
+    throw std::runtime_error("GPU exposes fewer than three sampled-image descriptors");
   }
+  // The top two slots are the blur result and the sharp glass capture; every
+  // other texture of a frame takes a slot below them.
   blurTextureIndex_ = maxBindlessTextures_ - 1;
+  sharpTextureIndex_ = maxBindlessTextures_ - 2;
 
   VkDescriptorSetLayoutBinding samplerBinding{
     .binding         = 0,
@@ -246,7 +249,7 @@ uint32_t QuadRenderer::textureSlot(VkImageView view, VkSampler sampler) {
   if (const auto found = fr.textureSlots.find(key); found != fr.textureSlots.end()) {
     return found->second;
   }
-  if (fr.nextTextureIndex >= blurTextureIndex_) {
+  if (fr.nextTextureIndex >= sharpTextureIndex_) {
     // Draw the placeholder rather than throw. This is reachable input — the
     // table is `maxPerStageDescriptorSampledImages` wide, and the Vulkan floor
     // for that is 16, so "enough textures in one frame" is as much a property
@@ -264,7 +267,7 @@ uint32_t QuadRenderer::textureSlot(VkImageView view, VkSampler sampler) {
     if (!warned) {
       warned = true;
       std::cerr << "canvas: bindless texture table exhausted ("
-                << blurTextureIndex_ << " slots); drawing the placeholder for "
+                << sharpTextureIndex_ << " slots); drawing the placeholder for "
                    "the rest of this frame. Reported once per process; "
                    "LAVA_RENDER_STATS counts every occurrence.\n";
     }
@@ -619,7 +622,7 @@ void QuadRenderer::createInstancePipeline(VkRenderPass renderPass,
 
   VkVertexInputBindingDescription binding{0, sizeof(Instance),
                                            VK_VERTEX_INPUT_RATE_INSTANCE};
-  std::array<VkVertexInputAttributeDescription, 13> attrs{
+  std::array<VkVertexInputAttributeDescription, 14> attrs{
     VkVertexInputAttributeDescription{0,0,VK_FORMAT_R32G32_SFLOAT,offsetof(Instance,topLeft)},
     VkVertexInputAttributeDescription{1,0,VK_FORMAT_R32G32_SFLOAT,offsetof(Instance,size)},
     VkVertexInputAttributeDescription{2,0,VK_FORMAT_R32G32_SFLOAT,offsetof(Instance,halfSize)},
@@ -632,7 +635,8 @@ void QuadRenderer::createInstancePipeline(VkRenderPass renderPass,
     VkVertexInputAttributeDescription{9,0,VK_FORMAT_R32_UINT,offsetof(Instance,textureIndex)},
     VkVertexInputAttributeDescription{10,0,VK_FORMAT_R8G8B8A8_UNORM,offsetof(Instance,color1)},
     VkVertexInputAttributeDescription{11,0,VK_FORMAT_R32G32_SFLOAT,offsetof(Instance,gradAxis)},
-    VkVertexInputAttributeDescription{12,0,VK_FORMAT_R32_SFLOAT,offsetof(Instance,gradBias)}};
+    VkVertexInputAttributeDescription{12,0,VK_FORMAT_R32_SFLOAT,offsetof(Instance,gradBias)},
+    VkVertexInputAttributeDescription{13,0,VK_FORMAT_R32G32_SFLOAT,offsetof(Instance,glass)}};
   VkPipelineVertexInputStateCreateInfo vi{
     .sType=VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
     .vertexBindingDescriptionCount=1,.pVertexBindingDescriptions=&binding,
@@ -882,7 +886,8 @@ void QuadRenderer::appendInstance(vec2 topLeft, vec2 size, vec2 halfSize,
   instances_.push_back(Instance{
     .topLeft=topLeft,.size=size,.halfSize=halfSize,.radius=radius,.aux=aux,
     .uv0=uv0,.uv1=uv1,.color=rgba,.kind=static_cast<uint32_t>(kind),
-    .textureIndex=currentTextureIndex_});
+    .textureIndex=currentTextureIndex_,
+    .glass={glass_.refractPx, glass_.rim}});
 }
 
 void QuadRenderer::ensureBatchTexture(VkImageView view)
@@ -983,7 +988,8 @@ void QuadRenderer::pushBoxGradient(vec2 topLeft, vec2 size, uint32_t rgba0,
     .topLeft={center.x-ext.x, center.y-ext.y}, .size=quad, .halfSize=half,
     .radius=r, .aux=0.f, .uv0={0.f,0.f}, .uv1={0.f,0.f}, .color=rgba0,
     .kind=static_cast<uint32_t>(Kind::Sdf), .textureIndex=currentTextureIndex_,
-    .color1=rgba1, .gradAxis=axis, .gradBias=bias});
+    .color1=rgba1, .gradAxis=axis, .gradBias=bias,
+    .glass={glass_.refractPx, glass_.rim}});
 }
 
 void QuadRenderer::pushCornerMask(vec2 topLeft, vec2 size, float radius) {
@@ -1141,6 +1147,16 @@ void QuadRenderer::pushImage(vec2 topLeft, vec2 size, vec2 uv0, vec2 uv1,
     return;
   }
   ensureBatchTexture(textureView);
+  if (glass_.active()) {
+    // Glass needs the outline the shader measures the rim from, which a plain
+    // image never states. No bleed: the picture ends where its pixels do, and
+    // a quad grown past them would sample the texture's clamped edge.
+    const vec2 half{size.x * 0.5f, size.y * 0.5f};
+    const float r = std::min(std::max(glass_.cornerRadius, 0.f),
+                             std::min(half.x, half.y));
+    appendInstance(topLeft, size, half, r, rgba, Kind::Image, 0.f, uv0, uv1);
+    return;
+  }
   appendInstance(topLeft, size, {0.f,0.f}, 0.f, rgba, Kind::Image,
                  0.f, uv0, uv1);
 }
@@ -1231,8 +1247,8 @@ void QuadRenderer::closeSegment() {
 
 void QuadRenderer::pushBlurResultImage(vec2 topLeft, vec2 size, vec2 uv0,
                                          vec2 uv1, float cornerRadius,
-                                         uint32_t rgba, float refractPx,
-                                         float adapt)
+                                         uint32_t rgba, Glass glass,
+                                         float adapt, bool sharp)
 {
   if (size.x <= 0.0f || size.y <= 0.0f) {
     return;
@@ -1241,7 +1257,7 @@ void QuadRenderer::pushBlurResultImage(vec2 topLeft, vec2 size, vec2 uv0,
   // atlas/SDF geometry into the same descriptor bind.
   flushBatch();
   currentBatchTexture_ = whiteImageView_;  // unused when sampleBlurResult
-  currentTextureIndex_ = blurTextureIndex_;
+  currentTextureIndex_ = sharp ? sharpTextureIndex_ : blurTextureIndex_;
 
   const vec2 half{size.x * 0.5f, size.y * 0.5f};
   const float r = std::min(std::max(cornerRadius, 0.f), std::min(half.x, half.y));
@@ -1252,14 +1268,19 @@ void QuadRenderer::pushBlurResultImage(vec2 topLeft, vec2 size, vec2 uv0,
   const uint32_t adaptBits =
       static_cast<uint32_t>(std::clamp(adapt, 0.f, 1.f) * 255.f + 0.5f) << 24;
 
-  if (r <= 0.f && adaptBits == 0) {
+  // Stated for this quad alone, whatever a draw-list prefix left set.
+  const Glass saved = glass_;
+  glass_ = glass;
+  if (r <= 0.f && adaptBits == 0 && !glass.active()) {
+    glass_ = {};
     appendInstance(topLeft, size, {0.f,0.f}, 0.f, rgba, Kind::Image,
                    0.f, uv0, uv1);
   } else if (r <= 0.f) {
-    // Square, but adapting: only the composite kind knows how. No bleed —
-    // the shader gives r=0 a hard edge, so there is nothing to antialias.
+    // Square, but adapting or glass: only the composite kind knows how. No
+    // bleed — the shader gives r=0 a hard edge, so there is nothing to
+    // antialias.
     appendInstance(topLeft, size, {size.x * 0.5f, size.y * 0.5f}, 0.f, rgba,
-                   Kind::BlurComposite, refractPx, uv0, uv1);
+                   Kind::BlurComposite, 0.f, uv0, uv1);
     instances_.back().color1 = adaptBits;
   } else {
     // A pixel of bleed for the SDF to antialias into, exactly as `pushBox`
@@ -1275,9 +1296,10 @@ void QuadRenderer::pushBlurResultImage(vec2 topLeft, vec2 size, vec2 uv0,
     const vec2 u1{uv1.x + uvPerPx.x * kPad, uv1.y + uvPerPx.y * kPad};
 
     appendInstance({center.x-ext.x, center.y-ext.y}, {ext.x*2.f,ext.y*2.f},
-                   half, r, rgba, Kind::BlurComposite, refractPx, u0, u1);
+                   half, r, rgba, Kind::BlurComposite, 0.f, u0, u1);
     instances_.back().color1 = adaptBits;
   }
+  glass_ = saved;
   flushBatch();
   if (!batches_.empty()) {
     batches_.back().sampleBlurResult = true;
@@ -1285,6 +1307,13 @@ void QuadRenderer::pushBlurResultImage(vec2 topLeft, vec2 size, vec2 uv0,
   currentBatchTexture_ =
     glyphAtlasView_ != VK_NULL_HANDLE ? glyphAtlasView_ : whiteImageView_;
   currentTextureIndex_ = textureSlot(currentBatchTexture_);
+}
+
+void QuadRenderer::setSharpResultView(VkImageView view, VkSampler sampler) {
+  if (view != VK_NULL_HANDLE) {
+    writeTextureSlot(sharpTextureIndex_, view,
+                     sampler != VK_NULL_HANDLE ? sampler : sampler_);
+  }
 }
 
 void QuadRenderer::setBlurResultView(VkImageView view, VkSampler sampler) {

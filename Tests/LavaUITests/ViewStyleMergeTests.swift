@@ -36,6 +36,7 @@ final class ViewStyleMergeTests: XCTestCase {
         s.backdropBlurRadius = 6
         s.backdropAdaptation = 0.5
         s.contentBlurRadius = 5
+        s.glass = GlassEffect(refraction: 12, rim: 0.5)
         s.clipsContent = true
         s.isHidden = false
         s.cursor = .resizeUpDown

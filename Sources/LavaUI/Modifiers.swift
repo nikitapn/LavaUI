@@ -20,6 +20,20 @@ public struct BorderStyle: Equatable {
     }
 }
 
+/// What `.glassEffect(refraction:rim:)` asked for.
+public struct GlassEffect: Equatable {
+    /// How far the very edge bends what is under it, in pixels.
+    public var refraction: Float
+    /// Strength of the light the rim catches, 0…1.
+    public var rim: Float
+
+    /// Creates a glass description. Negative values are treated as zero.
+    public init(refraction: Float = 20, rim: Float = 1) {
+        self.refraction = max(0, refraction)
+        self.rim = min(max(rim, 0), 1)
+    }
+}
+
 /// Style a modifier pushes onto a node.
 ///
 /// Every field is optional and merging is **per field**: whole-struct
@@ -62,6 +76,8 @@ public struct ViewStyle: Equatable {
     /// Content blur radius in pixels. `nil` = off. Blurs this node's own paint,
     /// the way SwiftUI's `.blur()` does, rather than what is behind it.
     public var contentBlurRadius: Float?
+    /// Glass on this node's own paint. `nil` = off. See `View.glassEffect`.
+    public var glass: GlassEffect?
     /// Scissor paint to this node's layout rect (SwiftUI `.clipped()`).
     public var clipsContent: Bool?
     /// Take this subtree out of layout and drawing without unmounting it.
@@ -115,6 +131,7 @@ public struct ViewStyle: Equatable {
         out.backdropBlurRadius = backdropBlurRadius ?? base.backdropBlurRadius
         out.backdropAdaptation = backdropAdaptation ?? base.backdropAdaptation
         out.contentBlurRadius = contentBlurRadius ?? base.contentBlurRadius
+        out.glass = glass ?? base.glass
         out.clipsContent = clipsContent ?? base.clipsContent
         out.isHidden = isHidden ?? base.isHidden
         out.cursor = cursor ?? base.cursor
@@ -260,6 +277,7 @@ extension YogaBoxNode {
             base.backdropBlurRadius = backdropBlurRadius
             base.backdropAdaptation = backdropAdaptation
             base.contentBlurRadius = contentBlurRadius
+            base.glass = glass
             base.clipsContent = clipsContent
             base.isHidden = isHidden
             base.cursor = cursor
@@ -281,6 +299,7 @@ extension YogaBoxNode {
         backdropBlurRadius = style.backdropBlurRadius ?? base.backdropBlurRadius
         backdropAdaptation = style.backdropAdaptation ?? base.backdropAdaptation
         contentBlurRadius = style.contentBlurRadius ?? base.contentBlurRadius
+        glass = style.glass ?? base.glass
         clipsContent = style.clipsContent ?? base.clipsContent ?? false
         isHidden = style.isHidden ?? base.isHidden ?? false
         // Through the baseline like blur, not set-if-present like fill:
@@ -635,6 +654,28 @@ extension View {
         }
     }
 
+    /// Makes this view a pane of glass.
+    ///
+    /// What is behind the view is bent at its rim, as if seen through a lens
+    /// whose edge curves away, with a little colour fringing where it bends
+    /// hardest; and the rim catches a light from the top left, drawn over the
+    /// view's own fill so a tint does not bury it.
+    ///
+    /// Blur is a separate choice. Alone, this bends a sharp copy of what is
+    /// behind; with `.backdropBlur(radius:)` as well, it bends the frost.
+    /// On an image it bends the picture itself, and cuts it to the view's
+    /// corner radius. Children are not glass — a glass panel's buttons are
+    /// drawn sharp on top of it.
+    ///
+    /// `refraction` is how far, in pixels, the very edge bends what is under
+    /// it (the bend fades to nothing 20 px in); `rim` is the strength of the
+    /// light, 0…1. In a client of the compositor it is still this window's own
+    /// content that bends — glass over the *desktop* is the compositor's frost
+    /// and its `SetBackdropRefraction`.
+    public func glassEffect(refraction: Float = 20, rim: Float = 1) -> ModifiedView<Self> {
+        styled { $0.glass = GlassEffect(refraction: refraction, rim: rim) }
+    }
+
     /// Scissor this view's paint (and its children's) to its layout rect.
     ///
     /// Yoga still sizes children freely; only drawing is clipped. That is
@@ -802,5 +843,10 @@ extension ModifiedView {
             $0.backdropBlurRadius = max(0.5, radius)
             $0.backdropAdaptation = min(max(adaptation, 0), 1)
         }
+    }
+
+    /// See `View.glassEffect(refraction:rim:)`.
+    public func glassEffect(refraction: Float = 20, rim: Float = 1) -> ModifiedView<Content> {
+        adding { $0.glass = GlassEffect(refraction: refraction, rim: rim) }
     }
 }

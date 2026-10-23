@@ -251,6 +251,29 @@ enum class DrawCommandKind : uint32_t {
   /// shared kind the same command would fall through to the fill path and
   /// paint a solid slab over the content the border was meant to frame.
   StrokedRect = 24,
+  /// Glass on the *next* fill, image or backdrop — a prefix, not a scope.
+  ///
+  ///   aux   = refraction at the rim, in pixels (0: the rim does not bend)
+  ///   param = strength of the specular rim, in 1/255ths (0: no rim)
+  ///   w     = corner radius of the glass, read only by an `Image`, which
+  ///           carries none of its own
+  ///
+  /// Consumed by the first `Rect`, `RoundedRect`, `LinearGradientRect`,
+  /// `Image`, `ImageSurface` or `BeginBackdropBlur` after it, whichever that
+  /// is, and by nothing else. Each does what it can with it: a backdrop bends
+  /// and disperses what it captured, an image bends its own pixels, and a
+  /// fill — which has nothing under it to bend — draws the rim alone. A fill
+  /// is drawn *over* the backdrop, so a glass view puts its rim there and
+  /// the tint does not bury it.
+  ///
+  /// A prefix rather than a field because this struct is full, and rather
+  /// than a scope because glass belongs to one view's own paint: a scope
+  /// would put a rim on every button inside the panel. A `BeginBackdropBlur`
+  /// that consumes one may carry `aux = 0`, which then means capture without
+  /// blurring — glass over a sharp backdrop.
+  ///
+  /// A reader that predates it skips it, and the view draws without glass.
+  Glass = 25,
 };
 
 /// Bits in `NodeAnimate.color` — which properties the command states.
