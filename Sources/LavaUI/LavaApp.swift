@@ -379,6 +379,15 @@ public enum LavaApp {
     ///
     /// `refraction` bends the frost's rim like glass, by up to that many
     /// pixels; 0 is flat. Only meaningful with `backdropBlur`.
+    ///
+    /// Both are for frosting the whole popup. The views inside can say it
+    /// themselves instead: in a window whose backdrop is the desktop
+    /// (`WindowBackdrop.showsDesktop`), `.backdropBlur(radius:)` on any view
+    /// asks the compositor to frost that view's rectangle, cut to its corner
+    /// radius, and `.glassEffect(refraction:)` bends that plate alone — so two
+    /// siblings can be a flat frost and a bent one, with desktop between them.
+    /// A view that asks for glass without a blur gets only the rim: a plate is
+    /// a blur, and there is no sharp one.
     @discardableResult
     public static func openPopup<V: View>(
         title: String,

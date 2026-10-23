@@ -2065,6 +2065,9 @@ struct ClientSurface {
     float w = 0.f;
     float h = 0.f;
     float corner = 0.f;
+    /// This plate's own bend; negative takes the surface's
+    /// `backdropRefractPx`. See `refractionOf`.
+    float refraction = -1.f;
     std::unique_ptr<lava::CanvasSurface> canvas;
     wlr_scene_buffer *node = nullptr;
     std::string key;
@@ -5217,7 +5220,7 @@ class SurfaceRegistry : public lava::CompositorHost {
       if (srcX >= 0 && srcY >= 0 && wlr_buffer_get_dmabuf(captured, &attribs)) {
         frosted = plate.canvas->frostFromDmabuf(
             attribs, srcX, srcY, srcW, srcH, surface.backdropBlurRadius,
-            plate.key, frost, surface.backdropRefractPx);
+            plate.key, frost, refractionOf(surface, plate));
       }
       if (!frosted) {
         // The CPU path uploads through the ordinary texture cache, which would
@@ -5233,7 +5236,7 @@ class SurfaceRegistry : public lava::CompositorHost {
                               raw.data(), static_cast<uint32_t>(srcW),
                               static_cast<uint32_t>(srcH),
                               surface.backdropBlurRadius, plate.key, frost,
-                              surface.backdropRefractPx);
+                              refractionOf(surface, plate));
       }
       if (!frosted) continue;
       plate.ready = true;
@@ -5413,6 +5416,14 @@ class SurfaceRegistry : public lava::CompositorHost {
       plate.canvas->setCornerRadius(frostCornerRadius(surface, plate), true,
                                     true);
     }
+  }
+
+  /// How far a plate's rim bends: its own, when the client said
+  /// (`SetBackdropGlassRegions`), and otherwise the surface's.
+  static float refractionOf(const ClientSurface &surface,
+                            const ClientSurface::FrostPlate &plate) {
+    return plate.refraction >= 0.f ? std::min(plate.refraction, 64.f)
+                                   : surface.backdropRefractPx;
   }
 
   /// The radius a frost plate is cut to.
@@ -6390,7 +6401,8 @@ class SurfaceRegistry : public lava::CompositorHost {
       same = had.x == rects[i].x && had.y == rects[i].y &&
              had.w == std::max(0.f, rects[i].w) &&
              had.h == std::max(0.f, rects[i].h) &&
-             had.corner == std::max(0.f, rects[i].cornerRadius);
+             had.corner == std::max(0.f, rects[i].cornerRadius) &&
+             had.refraction == rects[i].refraction;
     }
     if (same) return;
 
@@ -6413,6 +6425,7 @@ class SurfaceRegistry : public lava::CompositorHost {
         plate.w = std::max(0.f, rects[i].w);
         plate.h = std::max(0.f, rects[i].h);
         plate.corner = std::max(0.f, rects[i].cornerRadius);
+        plate.refraction = rects[i].refraction;
       }
     }
     wlr_log(WLR_INFO, "surface %u: backdrop blur %.0f over %zu rect(s)", id,

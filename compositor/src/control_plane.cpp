@@ -2030,6 +2030,21 @@ class CompositorImpl final : public ICompositor_Servant {
     }
   }
 
+  void SetBackdropGlassRegions(
+      uint32_t surfaceId, float radius,
+      nprpc::flat::Span_ref<flat::GlassFrostRect, flat::GlassFrostRect_Direct>
+          rects) override {
+    std::vector<CompositorHost::FrostRect> plates;
+    plates.reserve(rects.size());
+    for (auto rect : rects) {
+      plates.push_back({rect.x(), rect.y(), rect.w(), rect.h(),
+                        rect.cornerRadius(), rect.refraction()});
+    }
+    if (!host_.setBackdropBlur(surfaceId, radius, std::move(plates))) {
+      throw SurfaceNotFound(surfaceId);
+    }
+  }
+
   void EndSession() override { host_.endSession(); }
 
   void SetBackdropRefraction(uint32_t surfaceId, float px) override {

@@ -237,6 +237,10 @@ struct CompositorHost {
     float w = 0.f;
     float h = 0.f;
     float cornerRadius = 0.f;
+    /// This plate's own bend, in pixels. Negative takes the surface's
+    /// `setBackdropRefraction`, which is what every rect of the older call
+    /// gets. See `SetBackdropGlassRegions`.
+    float refraction = -1.f;
   };
 
   /// Frost the desktop behind this surface, one plate per rect. `radius` 0 or

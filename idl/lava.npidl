@@ -621,6 +621,22 @@ message FrostRect {
   cornerRadius: f32;
 }
 
+/// A `FrostRect` that also says how far its own rim bends, for
+/// `SetBackdropGlassRegions`. `refraction` is in pixels; 0 is flat, and a
+/// negative value takes the surface's `SetBackdropRefraction`.
+///
+/// A message of its own rather than a field on `FrostRect`, which would change
+/// the layout `SetBackdropBlurRegions` reads and break every client built
+/// against the older stubs.
+message GlassFrostRect {
+  x: f32;
+  y: f32;
+  w: f32;
+  h: f32;
+  cornerRadius: f32;
+  refraction: f32;
+}
+
 /// Whether anything is in the way of a panel.
 ///
 /// What it answers is "is the strip I occupy clear of windows right now",
@@ -2486,6 +2502,22 @@ interface Compositor {
   /// and may still ask to save; a Lava client's surface ends, as the title
   /// bar's close button does.
   void CloseWindow(surfaceId: in u32) raises(SurfaceNotFound);
+
+  /// `SetBackdropBlurRegions` with a refraction per rectangle.
+  ///
+  /// `SetBackdropRefraction` is one number for the surface, and a popup can
+  /// hold two views of glass that want different edges — a frosted row
+  /// beside one that bends, which is what `.backdropBlur` and `.glassEffect`
+  /// on two siblings say. Each plate is drawn on its own already; this only
+  /// lets each carry its own bend. A rectangle whose `refraction` is negative
+  /// bends by the surface's, as every plate of the older call does.
+  ///
+  /// Last in the interface, like `SetBackdropRefraction` and for the same
+  /// reason. A client facing a compositor without it falls back to
+  /// `SetBackdropBlurRegions` and gets one bend for the surface.
+  void SetBackdropGlassRegions(surfaceId: in u32, radius: in f32,
+                               rects: in vector<GlassFrostRect>)
+      raises(SurfaceNotFound);
 }
 
 /// Image registration that does not stop the desktop.

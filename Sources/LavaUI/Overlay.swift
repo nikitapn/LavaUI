@@ -340,16 +340,22 @@ public enum BackdropBridge {
         public var h: Float
         /// Corner radius of the frosted plate, matching the popup on it.
         public var cornerRadius: Float
+        /// How far this plate's rim bends, in pixels: a view's
+        /// `.glassEffect(refraction:)`, or 0 for plain frost. Negative takes
+        /// the surface's own (`LavaClient.setBackdropRefraction`).
+        public var refraction: Float
 
         /// Creates a rectangle to frost.
         public init(
-            x: Float, y: Float, w: Float, h: Float, cornerRadius: Float
+            x: Float, y: Float, w: Float, h: Float, cornerRadius: Float,
+            refraction: Float = -1
         ) {
             self.x = x
             self.y = y
             self.w = w
             self.h = h
             self.cornerRadius = cornerRadius
+            self.refraction = refraction
         }
     }
 

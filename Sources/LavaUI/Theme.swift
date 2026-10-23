@@ -375,4 +375,21 @@ public enum WindowBackdrop: Sendable {
         default: return 0
         }
     }
+
+    /// Whether what shows behind a translucent view is the desktop rather
+    /// than something this window painted — so a `.backdropBlur` view, in a
+    /// client of the compositor, asks the compositor to frost its rectangle
+    /// instead of capturing this window's own framebuffer, which is empty
+    /// there. The panel, the dock and their popups (`.none`); a translucent
+    /// colour, too.
+    ///
+    /// Not `.blur`: that window is frosted edge to edge already, by the same
+    /// plates a region would replace.
+    public var showsDesktop: Bool {
+        switch self {
+        case .none: return true
+        case .color(let c): return c.a < 1
+        case .theme, .blur: return false
+        }
+    }
 }
