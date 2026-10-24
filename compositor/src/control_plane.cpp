@@ -2054,6 +2054,12 @@ class CompositorImpl final : public ICompositor_Servant {
     }
   }
 
+  void SetBackdropFrost(uint32_t surfaceId, float frost) override {
+    if (!host_.setBackdropFrost(surfaceId, frost)) {
+      throw SurfaceNotFound(surfaceId);
+    }
+  }
+
   // ─── Session lock ────────────────────────────────────────────────────────
 
   uint32_t CreateLockSurface(nprpc::flat::Span<char> arenaId, uint32_t width,

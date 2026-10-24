@@ -75,15 +75,21 @@ float glassBend(float d, out vec2 n) {
 
 /// How much white the rim adds here, 0…1, at strength `vGlass.y`.
 ///
-/// Specular along the whole rim rather than at its outline: a tight lobe
-/// facing the light from the top left (y points down), a weaker one on the far
-/// side, both fading as the bezel flattens into the face. Plus a thin line at
-/// the outline itself, all the way round.
+/// Light along the whole rim rather than at its outline, from the top left (y
+/// points down) and weaker on the far side, fading as the bezel flattens into
+/// the face. Plus a thin line at the outline itself, all the way round.
+///
+/// Plain Lambert, `|facing|` to the first power. A tight lobe (shaderplay's
+/// sixth power) pooled at the two corners whose normals point along the light
+/// and left the edges between them nearly dark — on a menu, two bright spots.
+/// A tighter power cannot fix that, since `facing` is 1 at those corners
+/// whatever it is raised to: the spot is set by the strength, and the edges
+/// by the power.
 float glassRim(float d, vec2 n, float bend) {
   float facing = dot(n, normalize(vec2(-0.6, -0.8)));
-  float spec = pow(abs(facing), 6.0) * (facing > 0.0 ? 1.0 : 0.45);
+  float spec = abs(facing) * (facing > 0.0 ? 1.0 : 0.45);
   float band = 1.0 - smoothstep(0.0, 1.5, -d);
-  return clamp((0.55 * spec * bend + 0.25 * band) * vGlass.y, 0.0, 1.0);
+  return clamp((0.45 * spec * bend + 0.25 * band) * vGlass.y, 0.0, 1.0);
 }
 
 /// This quad's texture at `vUv`, bent inward at the rim by up to `vGlass.x`

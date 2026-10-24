@@ -2520,6 +2520,17 @@ interface Compositor {
   void SetBackdropGlassRegions(surfaceId: in u32, radius: in f32,
                                rects: in vector<GlassFrostRect>)
       raises(SurfaceNotFound);
+
+  /// The grain of frosted glass on every plate of this surface, 0…1 — the
+  /// whole-surface counterpart of `GlassFrostRect.frost`, as
+  /// `SetBackdropRefraction` is of its `refraction`. For a surface that is
+  /// frosted edge to edge by `SetBackdropBlur`: a menu, a popup. A plate with
+  /// a frost of its own takes whichever is stronger. 0, where every surface
+  /// starts, is no grain.
+  ///
+  /// Last in the interface, for the reason `SetBackdropRefraction` gives.
+  void SetBackdropFrost(surfaceId: in u32, frost: in f32)
+      raises(SurfaceNotFound);
 }
 
 /// Image registration that does not stop the desktop.

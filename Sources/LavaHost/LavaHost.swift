@@ -118,4 +118,14 @@ public enum LavaHost {
         }
         #endif
     }
+
+    /// Give that frost the grain of frosted glass, 0…1; 0 is none and the
+    /// default. Client mode only, like the frost itself.
+    public static func setBackdropFrost(_ frost: Float) {
+        #if LAVA_HAS_CLIENT
+        if isClient {
+            LavaClient.setBackdropFrost(frost)
+        }
+        #endif
+    }
 }

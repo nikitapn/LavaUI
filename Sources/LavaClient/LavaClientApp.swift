@@ -986,6 +986,27 @@ public enum LavaClient {
         flushBackdropRefraction()
     }
 
+    /// Give this window's frost the grain of frosted glass, 0…1; 0 is none,
+    /// and the default. For a slab of glass — a menu, a popover — the same
+    /// way `setBackdropRefraction` is. Remembered until the surface exists.
+    public static func setBackdropFrost(_ frost: Float) {
+        pendingBackdropFrost = min(max(frost, 0), 1)
+        flushBackdropFrost()
+    }
+
+    private static func flushBackdropFrost() {
+        guard let compositor = Self.compositor, surfaceID != 0,
+              let frost = pendingBackdropFrost
+        else { return }
+        report("SetBackdropFrost") {
+            try blockingCall {
+                try await compositor.setBackdropFrost(
+                    surfaceId: surfaceID, frost: frost
+                )
+            }
+        }
+    }
+
     private static func flushBackdropRefraction() {
         guard let compositor = Self.compositor, surfaceID != 0,
               let px = pendingBackdropRefraction
@@ -1364,6 +1385,7 @@ public enum LavaClient {
             // Anything the application asked for before it had a surface.
             flushMinimumSize()
             flushBackdropRefraction()
+            flushBackdropFrost()
             flushBackdropBlur()
             if let pending = pendingPanelArea {
                 pendingPanelArea = nil
@@ -1709,18 +1731,19 @@ public enum LavaClient {
         // surface to draw into. Nil again is unnecessary: `run` does not
         // return until the process is leaving.
         LavaApp.ClientSurfaceBridge.open = {
-            width, height, title, anchor, blur, refraction in
+            width, height, title, anchor, blur, refraction, frost in
             Self.openExtraSurface(
                 editor: editor, width: width, height: height, title: title,
-                anchor: anchor, backdropBlur: blur, refraction: refraction
+                anchor: anchor, backdropBlur: blur, refraction: refraction,
+                frost: frost
             )
         }
         LavaApp.ClientSurfaceBridge.openMenuPlate = {
-            width, height, blur, refraction in
+            width, height, blur, refraction, frost in
             Self.openExtraSurface(
                 editor: editor, width: width, height: height, title: "Menu",
                 anchor: nil, backdropBlur: blur, refraction: refraction,
-                submenu: true
+                frost: frost, submenu: true
             )
         }
         LavaApp.ClientSurfaceBridge.close = { window in
@@ -1847,7 +1870,7 @@ public enum LavaClient {
     private static func openExtraSurface(
         editor: Editor, width: Float, height: Float, title: String,
         anchor: LavaApp.SurfaceAnchor?, backdropBlur: Float,
-        refraction: Float = 0, submenu: Bool = false
+        refraction: Float = 0, frost: Float = 0, submenu: Bool = false
     ) -> WindowID? {
         guard let compositor = Self.compositor else { return nil }
         guard let window = editor.openWindow(
@@ -1944,6 +1967,17 @@ public enum LavaClient {
                     Data("openWindow: backdrop blur failed: \(error)\n".utf8)
                 )
             }
+            // On its own, after the blur: a compositor older than the call
+            // still frosts, only without the grain.
+            if frost > 0 {
+                report("SetBackdropFrost") {
+                    try blockingCall {
+                        try await compositor.setBackdropFrost(
+                            surfaceId: surface, frost: frost
+                        )
+                    }
+                }
+            }
         }
 
         let input: InputChannel
@@ -2030,6 +2064,8 @@ public enum LavaClient {
     nonisolated(unsafe) private static var pendingBackdropBlur: Float?
     /// The same, for `setBackdropRefraction`.
     nonisolated(unsafe) private static var pendingBackdropRefraction: Float?
+    /// The same, for `setBackdropFrost`.
+    nonisolated(unsafe) private static var pendingBackdropFrost: Float?
     /// Popup frost last sent / last asked, so emit can call every frame.
     nonisolated(unsafe) private static var pendingOverlayFrost: OverlayFrost?
     nonisolated(unsafe) private static var lastOverlayFrost: [UInt32: OverlayFrost] = [:]

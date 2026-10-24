@@ -158,7 +158,7 @@ public struct MenuBarStyle: Equatable, Sendable {
             itemSpacing: 1,
             dropdownPadding: 4,
             dropdownMinWidth: 0,
-            dropdownBackground: theme.panel.opacity(frosted ? 0.97 : 0.98),
+            dropdownBackground: theme.panel.opacity(frosted ? 0.70 : 0.90),
             dropdownBorder: theme.border,
             dropdownCornerRadius: radius,
             dropdownBlur: frosted ? 12 : nil

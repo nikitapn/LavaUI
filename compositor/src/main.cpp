@@ -2054,6 +2054,8 @@ struct ClientSurface {
   /// client's choice (`SetBackdropRefraction`): a menu reads as glass, a
   /// terminal whose whole window is frosted just looks warped.
   float backdropRefractPx = 0.f;
+  /// The grain of frosted glass on every plate, 0…1 (`SetBackdropFrost`).
+  float backdropFrost = 0.f;
   /// One frosted rectangle: where it goes, and the plate it is drawn on.
   ///
   /// `w`/`h` of 0 means the whole surface, which is what a terminal wants. A
@@ -5222,7 +5224,8 @@ class SurfaceRegistry : public lava::CompositorHost {
       if (srcX >= 0 && srcY >= 0 && wlr_buffer_get_dmabuf(captured, &attribs)) {
         frosted = plate.canvas->frostFromDmabuf(
             attribs, srcX, srcY, srcW, srcH, surface.backdropBlurRadius,
-            plate.key, frost, refractionOf(surface, plate), plate.frost);
+            plate.key, frost, refractionOf(surface, plate),
+            frostOf(surface, plate));
       }
       if (!frosted) {
         // The CPU path uploads through the ordinary texture cache, which would
@@ -5238,7 +5241,8 @@ class SurfaceRegistry : public lava::CompositorHost {
                               raw.data(), static_cast<uint32_t>(srcW),
                               static_cast<uint32_t>(srcH),
                               surface.backdropBlurRadius, plate.key, frost,
-                              refractionOf(surface, plate), plate.frost);
+                              refractionOf(surface, plate),
+                              frostOf(surface, plate));
       }
       if (!frosted) continue;
       plate.ready = true;
@@ -5426,6 +5430,13 @@ class SurfaceRegistry : public lava::CompositorHost {
                             const ClientSurface::FrostPlate &plate) {
     return plate.refraction >= 0.f ? std::min(plate.refraction, 64.f)
                                    : surface.backdropRefractPx;
+  }
+
+  /// How much grain a plate has: its own (`GlassFrostRect.frost`) or the
+  /// surface's (`SetBackdropFrost`), whichever is stronger.
+  static float frostOf(const ClientSurface &surface,
+                       const ClientSurface::FrostPlate &plate) {
+    return std::max(plate.frost, surface.backdropFrost);
   }
 
   /// The radius a frost plate is cut to.
@@ -6445,6 +6456,17 @@ class SurfaceRegistry : public lava::CompositorHost {
     surface->backdropRefractPx = next;
     // The bend is baked into the plate, so an existing one has to be drawn
     // again to show it.
+    if (!surface->frostPlates.empty()) scheduleBackdropRefresh();
+    return true;
+  }
+
+  bool setBackdropFrost(uint32_t id, float frost) override {
+    ClientSurface *surface = find(id);
+    if (surface == nullptr) return false;
+    const float next = std::clamp(frost, 0.f, 1.f);
+    if (surface->backdropFrost == next) return true;
+    surface->backdropFrost = next;
+    // Baked into the plate, like the bend.
     if (!surface->frostPlates.empty()) scheduleBackdropRefresh();
     return true;
   }

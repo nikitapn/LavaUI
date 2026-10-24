@@ -257,6 +257,10 @@ struct CompositorHost {
   /// 0 is flat, which is also where every surface starts.
   virtual bool setBackdropRefraction(uint32_t surfaceId, float px) = 0;
 
+  /// The grain of frosted glass on this surface's frost plates, 0…1; 0 is
+  /// none, which is also where every surface starts.
+  virtual bool setBackdropFrost(uint32_t surfaceId, float frost) = 0;
+
   /// Remembers the pointer image a surface wants, and applies it now if the
   /// pointer is over that surface. `shape` is a `CursorShape` ordinal — an
   /// integer rather than the generated enum, the same way `createPanel` takes
