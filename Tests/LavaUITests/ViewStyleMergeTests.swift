@@ -45,6 +45,7 @@ final class ViewStyleMergeTests: XCTestCase {
         s.frameAlignment = .bottomTrailing
         s.hoverRegion = HoverRegionAction { _ in }
         s.tooltip = "tip"
+        s.tooltipPlacement = .leading
         return s
     }
 

@@ -246,7 +246,9 @@ public final class DrawList {
     private var retainedShift: (x: Float, y: Float) = (0, 0)
     /// The tooltip anchor's rect, if this frame's walk passed it. See
     /// `Tooltips`.
-    private var pendingTooltip: (text: String, x: Float, y: Float, w: Float, h: Float)?
+    private var pendingTooltip: (
+        text: String, placement: TooltipPlacement, x: Float, y: Float, w: Float, h: Float
+    )?
 
     /// Where this frame lives and who gets it. The engine's own buffers
     /// unless the editor was told otherwise — see `Editor.frames`.
@@ -1382,7 +1384,8 @@ public final class DrawList {
         // about the row.
         if let tip = pendingTooltip, Tooltips.isVisible(at: FrameScheduler.now()) {
             emitTooltip(
-                tip.text, anchorX: tip.x, anchorY: tip.y, anchorW: tip.w, anchorH: tip.h,
+                tip.text, placement: tip.placement,
+                anchorX: tip.x, anchorY: tip.y, anchorW: tip.w, anchorH: tip.h,
                 viewportW: viewportW, viewportH: viewportH
             )
         }
@@ -1506,7 +1509,9 @@ public final class DrawList {
             // Always register, even if the anchor is culled — the popup may
             // still sit on-screen after placement.
             if node.id == Tooltips.anchor, let label = box.tooltip {
-                pendingTooltip = (label, x - retainedShift.x, y - retainedShift.y, w, h)
+                pendingTooltip = (
+                    label, box.tooltipPlacement, x - retainedShift.x, y - retainedShift.y, w, h
+                )
             }
             if let presenter = node as? OverlayBoxNode, presenter.attachment.presented {
                 // Anchored where the presenter will be *seen*, not where it is

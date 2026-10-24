@@ -216,6 +216,7 @@ class YogaBoxNode: AnyViewNode {
     var hoverRegion: ((Bool) -> Void)?
     /// `View.tooltip(_:)`. Resolved by `Tooltips`, from the same hover.
     var tooltip: String?
+    var tooltipPlacement: TooltipPlacement = .below
     /// When true, the renderer drops this node's hover tint the frame the
     /// pointer leaves, instead of easing it out. See `View.hoverSnap(_:)`.
     var hoverSnap: Bool = false

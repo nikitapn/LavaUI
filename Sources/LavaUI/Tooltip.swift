@@ -25,18 +25,41 @@ extension View {
     /// IconButton("folder-plus") { session.startNewFolder() }
     ///     .tooltip("New Folder")
     /// ```
-    public func tooltip(_ text: String) -> ModifiedView<Self> {
+    ///
+    /// `placement` is the side it prefers; it takes the opposite one when
+    /// the window has no room there. A tooltip is drawn inside its window,
+    /// so in a window as short as a panel's strip neither below nor above
+    /// fits — `.leading` or `.trailing` does, level with the view.
+    public func tooltip(
+        _ text: String, placement: TooltipPlacement = .below
+    ) -> ModifiedView<Self> {
         var style = ViewStyle()
         style.tooltip = text
+        style.tooltipPlacement = placement
         return ModifiedView(content: self, style: style)
     }
 }
 
+/// Which side of its view a tooltip goes.
+public enum TooltipPlacement: Sendable, Equatable {
+    /// Under the view, centred on it; above when there is no room below.
+    case below
+    /// Over the view, centred on it; below when there is no room above.
+    case above
+    /// To its left, level with it; to its right when there is no room.
+    case leading
+    /// To its right, level with it; to its left when there is no room.
+    case trailing
+}
+
 extension ModifiedView {
-    /// See `View.tooltip(_:)`.
-    public func tooltip(_ text: String) -> ModifiedView<Content> {
+    /// See `View.tooltip(_:placement:)`.
+    public func tooltip(
+        _ text: String, placement: TooltipPlacement = .below
+    ) -> ModifiedView<Content> {
         var next = ViewStyle()
         next.tooltip = text
+        next.tooltipPlacement = placement
         return ModifiedView(
             content: content, style: next.merged(over: style),
             forceWrapper: forceWrapper
@@ -122,10 +145,11 @@ enum Tooltips {
 }
 
 extension DrawList {
-    /// The label, under its anchor or over it when there is no room below,
-    /// pulled back inside the window at the sides.
+    /// The label on its anchor's `placement` side, or the opposite one when
+    /// there is no room, then pulled back inside the window.
     func emitTooltip(
-        _ text: String, anchorX: Float, anchorY: Float, anchorW: Float, anchorH: Float,
+        _ text: String, placement: TooltipPlacement = .below,
+        anchorX: Float, anchorY: Float, anchorW: Float, anchorH: Float,
         viewportW: Float, viewportH: Float
     ) {
         guard !text.isEmpty, let font = FontStore.default else { return }
@@ -135,11 +159,11 @@ extension DrawList {
         let gap: Float = 6
         let w = font.shapedRun(text).width + padX * 2
         let h = font.lineHeight + padY * 2
-        var x = anchorX + (anchorW - w) / 2
-        x = max(4, min(x, viewportW - w - 4))
-        var y = anchorY + anchorH + gap
-        if y + h > viewportH - 4 { y = anchorY - gap - h }
-        y = max(4, y)
+        let (x, y) = Self.tooltipOrigin(
+            placement: placement, w: w, h: h, gap: gap,
+            anchorX: anchorX, anchorY: anchorY, anchorW: anchorW, anchorH: anchorH,
+            viewportW: viewportW, viewportH: viewportH
+        )
         // Outline as a plate one pixel proud, as overlays draw theirs: a
         // `panel` label over `panel` chrome is otherwise only its shadow.
         roundedRect(
@@ -152,5 +176,40 @@ extension DrawList {
             text, x: x + padX - 4, y: y + padY, w: w, h: font.lineHeight,
             color: theme.textPrimary, font: font
         )
+    }
+
+    /// Where a `w`×`h` label goes: the preferred side, the opposite one when
+    /// that runs out of the window, then clamped 4px inside it.
+    static func tooltipOrigin(
+        placement: TooltipPlacement, w: Float, h: Float, gap: Float,
+        anchorX: Float, anchorY: Float, anchorW: Float, anchorH: Float,
+        viewportW: Float, viewportH: Float
+    ) -> (x: Float, y: Float) {
+        let margin: Float = 4
+        var x: Float
+        var y: Float
+        switch placement {
+        case .below, .above:
+            x = anchorX + (anchorW - w) / 2
+            let below = anchorY + anchorH + gap
+            let above = anchorY - gap - h
+            if placement == .below {
+                y = below + h > viewportH - margin ? above : below
+            } else {
+                y = above < margin ? below : above
+            }
+        case .leading, .trailing:
+            y = anchorY + (anchorH - h) / 2
+            let left = anchorX - gap - w
+            let right = anchorX + anchorW + gap
+            if placement == .leading {
+                x = left < margin ? right : left
+            } else {
+                x = right + w > viewportW - margin ? left : right
+            }
+        }
+        x = max(margin, min(x, viewportW - w - margin))
+        y = max(margin, min(y, viewportH - h - margin))
+        return (x, y)
     }
 }

@@ -107,6 +107,8 @@ public struct ViewStyle: Equatable {
     public var hoverRegion: HoverRegionAction?
     /// See `View.tooltip(_:)`.
     public var tooltip: String?
+    /// Which side of the view the tooltip goes. See `TooltipPlacement`.
+    public var tooltipPlacement: TooltipPlacement?
 
     /// Creates a style that sets nothing.
     public init() {}
@@ -144,6 +146,9 @@ public struct ViewStyle: Equatable {
         out.border = border ?? base.border
         out.hoverRegion = hoverRegion ?? base.hoverRegion
         out.tooltip = tooltip ?? base.tooltip
+        // With its text: a tooltip restated outside does not keep the inner
+        // one's side.
+        out.tooltipPlacement = tooltip != nil ? tooltipPlacement : base.tooltipPlacement
         return out
     }
 }
@@ -324,6 +329,7 @@ extension YogaBoxNode {
         hoverRegion = style.hoverRegion?.action
         // Never in the baseline either, for the same reason.
         tooltip = style.tooltip
+        tooltipPlacement = style.tooltipPlacement ?? .below
 
         if let leaf = self as? LeafNode {
             if let fill = style.fill { leaf.fillColor = fill }
