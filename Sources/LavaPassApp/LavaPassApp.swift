@@ -21,6 +21,20 @@ struct LavaPassApp {
             MenuBar {
                 Menu("Vault", id: "vault") {
                     MenuItem("Open…", id: "vault.open", shortcut: KeyShortcut(KeyCode.o, .primary)) { session.chooseVault() }
+                    Menu("Most Recent", id: "vault.recent") {
+                        if session.recentVaults.isEmpty {
+                            MenuItem("No Recent Vaults", id: "vault.recent.empty", isEnabled: false) {}
+                        }
+                        for (index, path) in session.recentVaults.enumerated() {
+                            MenuItem(path, id: "vault.recent.\(index)", isEnabled: !session.busy && session.draft == nil) {
+                                session.openRecentVault(path)
+                            }
+                        }
+                        MenuSeparator()
+                        MenuItem("Clear Recent Vaults", id: "vault.recent.clear", isEnabled: !session.recentVaults.isEmpty) {
+                            session.clearRecentVaults()
+                        }
+                    }
                     MenuItem("New Vault…", id: "vault.new") { session.newVault() }
                     MenuItem("Save KDBX 4 Copy…", id: "vault.copy", isEnabled: session.snapshot?.canSaveCopy == true && !session.busy) { session.saveCopy() }
                     MenuSeparator()

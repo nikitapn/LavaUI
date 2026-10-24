@@ -14,6 +14,13 @@ Open an existing vault, enter its master password and optional key file, and
 choose Unlock. New Vault creates a KDBX 4.1 file with the library's Argon2id
 default and AES-256 encryption. A new vault never overwrites an existing file.
 
+The start page and **Vault → Most Recent** list the ten most recently unlocked
+vaults, newest first, and retain the list across restarts. Select one to return
+to its unlock form; switching locks the previous vault and clears its password
+and key-file selection. Full paths distinguish files with the same name.
+**Clear Recent Vaults** removes the list without deleting files or keyring secrets.
+Only vault paths are stored in the recent list.
+
 Groups appear at the left; search matches titles, usernames, URLs, and group
 names. New Entry and Edit support title, username, password, URL, notes, and
 group. Notes is optional multiline text: it is visible in the entry details,

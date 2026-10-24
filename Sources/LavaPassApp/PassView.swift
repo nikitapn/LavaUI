@@ -49,11 +49,11 @@ struct PassView: View {
         HStack(height: .pt(48), padding: 8, alignment: .center, spacing: 8) {
             if WindowBridge.drawsOwnChrome { WindowControls(beforeClose: { session.lock() }) }
             VaultMark(size: 24, color: Theme.current.accent)
-            Text(session.isDemo ? "LavaPass · Demo" : "LavaPass", color: Theme.current.textPrimary)
+            Text(session.isDemo ? "Vault · Demo" : "Vault", color: Theme.current.textPrimary)
             if let vault = session.snapshot {
                 Text("/  \(vault.name)", color: Theme.current.textDim, lineLimit: 1).flexShrink(1)
             }
-            Spacer().windowDrag()
+            Spacer()
             Button("Open…", isEnabled: !session.busy && !session.isDemo) { session.chooseVault() }
                 .agentId("open-vault")
             if session.snapshot != nil {
@@ -64,58 +64,88 @@ struct PassView: View {
             }
         }
         .background(Theme.current.panel)
+        .windowDrag()
     }
 
     private var unlockScreen: some View {
-        VStack(flexGrow: 1, padding: 24, alignment: .center, spacing: 16) {
-            Spacer()
-            Text(session.creating ? "Create an encrypted vault" : "Your passwords. Your vault.", color: Theme.current.textPrimary)
-            Text("KeePass-compatible KDBX files, on your own disk", color: Theme.current.textDim)
-            VStack(padding: 0, spacing: 10) {
-                Text("Vault", color: Theme.current.textSecondary)
-                TextField(text: $session.vaultPath, placeholder: "Choose an existing .kdbx file")
-                    .agentId("vault-path")
-                if !session.creating {
-                    HStack(padding: 0, alignment: .center, spacing: 8) {
-                        Button("Key File…", isEnabled: !session.busy && !session.isDemo) { session.chooseKeyFile() }
-                        Text(session.keyFilePath.isEmpty ? "Optional" : (session.keyFilePath as NSString).lastPathComponent,
-                             color: Theme.current.textDim, lineLimit: 1).flexShrink(1)
-                        if !session.keyFilePath.isEmpty {
-                            Button("Clear", isEnabled: !session.busy) { session.keyFilePath = "" }
+        ScrollView(.vertical) {
+            VStack(flexGrow: 1, padding: 24, alignment: .center, spacing: 16) {
+                Spacer()
+                Text(session.creating ? "Create an encrypted vault" : "Your passwords. Your vault.", color: Theme.current.textPrimary)
+                Text("KeePass-compatible KDBX files, on your own disk", color: Theme.current.textDim)
+                VStack(padding: 0, spacing: 10) {
+                    if !session.creating && !session.recentVaults.isEmpty {
+                        HStack(padding: 0, alignment: .center, spacing: 8) {
+                            Text("Most Recent", color: Theme.current.textSecondary)
+                            Spacer()
+                            Button("Clear", isEnabled: !session.busy) { session.clearRecentVaults() }
                         }
+                        ScrollView(.vertical, showsIndicator: false) {
+                            VStack(padding: 0, spacing: 4) {
+                                ForEach(Array(session.recentVaults.enumerated()), id: \.offset) { item in
+                                    let path = item.element
+                                    HStack(padding: 8, alignment: .center, spacing: 8,
+                                           onClick: { session.openRecentVault(path) }) {
+                                        VStack(padding: 0, spacing: 2) {
+                                            Text((path as NSString).lastPathComponent, color: Theme.current.textPrimary, lineLimit: 1)
+                                            Text((path as NSString).deletingLastPathComponent, color: Theme.current.textDim, lineLimit: 1)
+                                        }
+                                    }
+                                    .background(session.vaultPath == path ? Theme.current.selectionFill : Color.clear)
+                                    .hoverBackground(Theme.current.hover)
+                                    .cornerRadius(6)
+                                    .cursor(.pointer)
+                                    .agentId("recent-vault-\(item.offset)")
+                                }
+                            }
+                        }
+                        .frame(height: .pt(Float(min(session.recentVaults.count, 2)) * 64))
                     }
-                }
-                Text("Master password", color: Theme.current.textSecondary)
-                TextField(text: $session.masterPassword, placeholder: "Master password", secure: true,
-                          onSubmit: { session.unlock() })
-                    .agentId("master-password")
-                if session.creating {
-                    TextField(text: $session.confirmation, placeholder: "Confirm master password", secure: true,
-                              onSubmit: { session.unlock() })
-                        .agentId("master-confirmation")
-                }
-                Toggle("Remember master password in desktop keyring", isOn: $session.rememberMaster, isEnabled: !session.isDemo && !session.busy)
-                HStack(padding: 0, alignment: .center, spacing: 8) {
-                    Button("New Vault…", isEnabled: !session.busy && !session.isDemo) { session.newVault() }
-                    Spacer()
+                    Text("Vault", color: Theme.current.textSecondary)
+                    TextField(text: $session.vaultPath, placeholder: "Choose an existing .kdbx file")
+                        .agentId("vault-path")
                     if !session.creating {
-                        Button("Use Keyring", isEnabled: !session.busy && !session.vaultPath.isEmpty && !session.isDemo) {
-                            session.unlock(fromKeyring: true)
+                        HStack(padding: 0, alignment: .center, spacing: 8) {
+                            Button("Key File…", isEnabled: !session.busy && !session.isDemo) { session.chooseKeyFile() }
+                            Text(session.keyFilePath.isEmpty ? "Optional" : (session.keyFilePath as NSString).lastPathComponent,
+                                 color: Theme.current.textDim, lineLimit: 1).flexShrink(1)
+                            if !session.keyFilePath.isEmpty {
+                                Button("Clear", isEnabled: !session.busy) { session.keyFilePath = "" }
+                            }
                         }
-                        .agentId("keyring-unlock")
                     }
-                    Button(session.creating ? "Create Vault" : "Unlock", isEnabled: !session.busy && !session.vaultPath.isEmpty) {
-                        session.unlock()
+                    Text("Master password", color: Theme.current.textSecondary)
+                    TextField(text: $session.masterPassword, placeholder: "Master password", secure: true,
+                              onSubmit: { session.unlock() })
+                        .agentId("master-password")
+                    if session.creating {
+                        TextField(text: $session.confirmation, placeholder: "Confirm master password", secure: true,
+                                  onSubmit: { session.unlock() })
+                            .agentId("master-confirmation")
                     }
-                    .agentId("unlock-vault")
+                    Toggle("Remember master password in desktop keyring", isOn: $session.rememberMaster, isEnabled: !session.isDemo && !session.busy)
+                    HStack(padding: 0, alignment: .center, spacing: 8) {
+                        Button("New Vault…", isEnabled: !session.busy && !session.isDemo) { session.newVault() }
+                        Spacer()
+                        if !session.creating {
+                            Button("Use Keyring", isEnabled: !session.busy && !session.vaultPath.isEmpty && !session.isDemo) {
+                                session.unlock(fromKeyring: true)
+                            }
+                            .agentId("keyring-unlock")
+                        }
+                        Button(session.creating ? "Create Vault" : "Unlock", isEnabled: !session.busy && !session.vaultPath.isEmpty) {
+                            session.unlock()
+                        }
+                        .agentId("unlock-vault")
+                    }
+                    if !session.creating && !session.vaultPath.isEmpty {
+                        Button("Forget Remembered Password", isEnabled: !session.busy && !session.isDemo) { session.forgetMaster() }
+                    }
                 }
-                if !session.creating && !session.vaultPath.isEmpty {
-                    Button("Forget Remembered Password", isEnabled: !session.busy && !session.isDemo) { session.forgetMaster() }
-                }
+                .frame(width: .pt(550))
+                Spacer()
+                Text("Locks after 5 minutes of inactivity. Copied passwords clear after 30 seconds.", color: Theme.current.textDim)
             }
-            .frame(width: .pt(550))
-            Spacer()
-            Text("Locks after 5 minutes of inactivity. Copied passwords clear after 30 seconds.", color: Theme.current.textDim)
         }
     }
 

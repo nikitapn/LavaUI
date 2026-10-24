@@ -16,6 +16,7 @@ final class PassSession: @unchecked Sendable {
     let isDemo: Bool
     private let demoPath: String?
     var vaultPath = AppSettings.string(forKey: "lastVault") ?? ""
+    var recentVaults: [String] = []
     var keyFilePath = ""
     var masterPassword = ""
     var confirmation = ""
@@ -43,6 +44,10 @@ final class PassSession: @unchecked Sendable {
         isDemo = demo
         let demoDirectory = FileManager.default.temporaryDirectory.appendingPathComponent("lavapass-demo-\(UUID())")
         demoPath = demo ? demoDirectory.appendingPathComponent("Demo Vault.kdbx").path : nil
+        if !demo {
+            recentVaults = Array((AppSettings.value(forKey: "recentVaults", as: [String].self)
+                ?? (vaultPath.isEmpty ? [] : [vaultPath])).prefix(10))
+        }
         if demo { try? FileManager.default.createDirectory(at: demoDirectory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700]) }
         if let demoPath {
             vaultPath = demoPath; creating = true; masterPassword = "demo"; confirmation = "demo"
@@ -81,10 +86,33 @@ final class PassSession: @unchecked Sendable {
         guard !isDemo else { return }
         guard !busy, draft == nil else { notice = "Save or cancel the current entry first"; return }
         performDialog({ FileDialog.openFile(title: "Open KeePass Vault", filters: [.init(name: "KeePass Vault", extensions: ["kdbx"])]) }) { session, url in
-            session.lock(); session.creating = false; session.vaultPath = url.path
-            session.keyFilePath = ""; session.notice = nil
+            session.openRecentVault(url.path)
         }
     }
+    func openRecentVault(_ path: String) {
+        guard !isDemo, !busy else { return }
+        guard draft == nil else { notice = "Save or cancel the current entry first"; return }
+        lock()
+        creating = false; vaultPath = path; keyFilePath = ""; notice = nil
+        activity()
+    }
+
+    func clearRecentVaults() {
+        guard !isDemo else { return }
+        recentVaults = []
+        AppSettings.set(recentVaults, forKey: "recentVaults")
+    }
+
+    private func rememberVault(_ path: String) {
+        guard !isDemo else { return }
+        let canonical = URL(fileURLWithPath: path).standardizedFileURL.resolvingSymlinksInPath().path
+        recentVaults.removeAll { $0 == canonical }
+        recentVaults.insert(canonical, at: 0)
+        recentVaults = Array(recentVaults.prefix(10))
+        AppSettings.set(recentVaults, forKey: "recentVaults")
+        AppSettings.set(canonical, forKey: "lastVault")
+    }
+
     func newVault() {
         guard !isDemo else { return }
         guard !busy, draft == nil else { notice = "Save or cancel the current entry first"; return }
@@ -176,7 +204,7 @@ final class PassSession: @unchecked Sendable {
                     self.busy = false; self.snapshot = result; self.vaultPath = result.path
                     self.creating = false; self.masterPassword = ""; self.confirmation = ""
                     self.notice = statusMessage; self.activity()
-                    AppSettings.set(result.path, forKey: "lastVault")
+                    self.rememberVault(result.path)
                     ViewInvalidation.markDirty()
                 }
             } catch {
@@ -378,7 +406,7 @@ final class PassSession: @unchecked Sendable {
                             }
                         }
                         if !update.entries.contains(where: { $0.id == self.selectedEntry }) { self.selectedEntry = nil }
-                        AppSettings.set(update.path, forKey: "lastVault")
+                        self.rememberVault(update.path)
                         self.attachmentPendingRemoval = nil
                         self.entryContent = nil
                         self.loadEntryContent()
