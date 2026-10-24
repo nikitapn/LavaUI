@@ -90,6 +90,8 @@ struct LauncherView: View {
             }
             .background(scrim)
             .cornerRadius(Grid.panelRadius)
+            .backdropBlur(radius: 10)
+            .glassEffect(refraction: 0, frost: 1)
             // On the panel, not on the padded box around it, so the gap is
             // measured from the panel's own edge — anchored outside, the pill
             // floats in the desktop ring and straddles the border.
@@ -266,7 +268,8 @@ private struct AppCard: View {
             isSelected ? tint(saturation: 0.75, lightness: 0.24)
                        : tint(saturation: 0.55, lightness: hovered ? 0.16 : 0.10)
         )
-        .cornerRadius(14)
+        .cornerRadius(70)
+        .glassEffect(refraction: 0, rim: 1, frost: 0)
     }
 }
 
@@ -291,7 +294,7 @@ extension AppCard {
             hue: Float(hash % 3600) / 3600,
             saturation: saturation,
             lightness: lightness
-        )
+        ).opacity(0.75)
     }
 }
 
