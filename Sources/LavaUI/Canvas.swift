@@ -274,12 +274,13 @@ public struct Canvas: PrimitiveView {
         }
 
         if let wheel = onWheel {
-            // Keeps the canvas resolvable as the hover target despite having
-            // no hover fill of its own — an empty handler is that signal (see
-            // `hoverWalk`). Wheel routing no longer depends on this, since
-            // `hitTestScrollChain` collects boxes rather than hover targets,
-            // but hover and capture still do.
-            if leaf.onHover == nil { leaf.onHover = { _ in } }
+            // No placeholder `onHover` here, though there used to be one. The
+            // wheel reaches the canvas through `hitTestScrollChain`, which
+            // collects boxes rather than hover targets, and a gesture through
+            // the click path — so all the placeholder still did was make the
+            // canvas a hit-test node, the innermost one under the pointer, and
+            // take the hover from whatever it sits in. The panel's speaker lost
+            // its hover fill to its own scroll-to-change-volume that way.
             ScrollRouter.register(leaf.id) { [weak leaf] dx, dy in
                 guard let leaf else { return }
                 let p = PointerState.window
@@ -291,7 +292,7 @@ public struct Canvas: PrimitiveView {
 
         if let move = onPointerMove {
             // The local walk only stops at a leaf that is a hover target, and
-            // an empty `onHover` is what makes one — the wheel's trick above.
+            // an empty `onHover` is what makes one.
             if leaf.onHover == nil { leaf.onHover = { _ in } }
             leaf.onPointerHoverLocal = { [weak leaf] x, y in
                 leaf?.pointerCursor = move(x, y)
