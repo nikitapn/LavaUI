@@ -228,6 +228,8 @@ public struct SplitStyle {
     public var lineThickness: Float
     /// Colour of the rule.
     public var color: Color
+    /// Resting fill of the grab strip, so the rule does not float in a transparent gutter.
+    public var background: Color
     /// Hover tint target. The renderer paints this one (see `hoverFill`), so
     /// pointing at the divider costs no round trip.
     public var hover: Color
@@ -241,6 +243,7 @@ public struct SplitStyle {
         thickness: Float = 9,
         lineThickness: Float? = nil,
         color: Color? = nil,
+        background: Color? = nil,
         hover: Color? = nil,
         active: Color? = nil
     ) {
@@ -248,6 +251,7 @@ public struct SplitStyle {
         self.thickness = thickness
         self.lineThickness = lineThickness ?? theme.borderWidth
         self.color = color ?? theme.border
+        self.background = background ?? theme.panel
         self.hover = hover ?? theme.hover
         self.active = active ?? theme.accent.opacity(0.35)
     }
@@ -438,7 +442,7 @@ final class SplitNode: YogaBoxNode {
         handle.dividerAxis = axis == .vertical ? .horizontal : .vertical
         // A divider that shrank would vanish, and this one is also the control.
         handle.flexShrink = 0
-        handle.fillColor = isDragging ? style.active : nil
+        handle.fillColor = isDragging ? style.active : style.background
         handle.hoverFill = style.hover
         handle.cursor = axis == .vertical ? .resizeUpDown : .resizeLeftRight
         handle.applyStyle()

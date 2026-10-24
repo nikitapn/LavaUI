@@ -236,8 +236,12 @@ LAVA_CLIENT=1 swift run LavaExplorer -- ~/Pictures
   loses its last tab closes. The window buttons live on the sidebar's title
   row, the one strip that stays in the corner however the panes are split.
 
-Opening a file on double-click is `xdg-open`, which honours the default
-handler. Right-click offers **Open With** (launch this once) and **Set
+Double-clicking launches the saved default `.desktop` application directly,
+using the same MIME lookup as the context menu. MIME aliases such as
+`video/x-matroska` and `video/matroska` are treated as the same type, and
+`.log` files use `text/x-log`. If no installed default is found, or the filename
+has an unknown type, Explorer falls back to `xdg-open` for content detection.
+Right-click offers **Open With** (launch this once) and **Set
 Default App** (writes `xdg-mime default`, so the next double-click uses
 that app). Both lists come from installed `.desktop` files that claimed
 the file's MIME type — `inode/directory` for a folder, so this is also

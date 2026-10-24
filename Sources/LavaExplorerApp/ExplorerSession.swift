@@ -10,7 +10,7 @@ import Observation
 /// The folders on screen, how they are laid out in panes, and which row is
 /// selected where.
 ///
-/// Opening a file leaves this process: `xdg-open` is the desktop's handler,
+/// Opening a file leaves this process: the desktop's saved handler,
 /// the same way the editor reveals a path. Opening a folder stays here.
 ///
 /// Every command without a pane of its own — a key, a menu item, a toolbar
@@ -869,6 +869,7 @@ final class ExplorerSession: @unchecked Sendable {
     }
 
     func openContext(_ entry: FileEntry) {
+        MimeApps.invalidateDefaults()
         notice = nil
         collapseOnRelease = nil
         // Right-clicking one of the selected rows is about all of them;
@@ -1078,7 +1079,7 @@ final class ExplorerSession: @unchecked Sendable {
     }
 
     func defaultHandlerId(for entry: FileEntry) -> String? {
-        MimeApps.defaultHandler(for: mimeType(of: entry))
+        MimeApps.preferredApplication(for: mimeType(of: entry), applications: applications)?.desktopFileId
     }
 
     func performContext(_ id: String, entry: FileEntry) {
@@ -2297,13 +2298,23 @@ final class ExplorerSession: @unchecked Sendable {
     }
 }
 
-/// `xdg-open` for a file the user double-clicked.
+/// The same default application the context menu shows, with xdg-open as fallback.
 ///
 /// Also where the open is reported to the file index, for LavaFind's Recent:
 /// here rather than in `activate`, so a session built with a stand-in
 /// `openFile` — a test — never writes into the user's real index.
 enum OpenLocation {
     static func file(_ path: String) -> Bool {
+        MimeApps.invalidateDefaults()
+        let mime = MimeApps.type(of: path, isDirectory: false)
+        // Unknown extensions still need the desktop's content sniffing; do
+        // not launch a generic octet-stream default for a guessed type.
+        if mime != "application/octet-stream",
+           let app = MimeApps.preferredApplication(for: mime, applications: DesktopEntry.installed()) {
+            guard app.launch(files: [path]) else { return false }
+            LavaHost.noteOpened(path, appId: "LavaExplorer")
+            return true
+        }
         guard let xdgOpen = which("xdg-open") else { return false }
         let process = Process()
         process.executableURL = URL(fileURLWithPath: xdgOpen)

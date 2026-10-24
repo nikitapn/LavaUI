@@ -969,11 +969,11 @@ private struct Sidebar: View {
         _ title: String, icon: String, expanded: Bool, toggle: @escaping () -> Void
     ) -> some View {
         HStack(padding: 0, alignment: .center, spacing: 8, onClick: toggle) {
-            DisclosureChevron(isExpanded: expanded, color: Theme.current.textDim)
             Glyph(name: icon, color: Theme.current.textDim, size: 18)
             Text(title, color: Theme.current.textDim, lineLimit: 1)
                 .flexShrink(1)
             Spacer()
+            DisclosureChevron(isExpanded: expanded, color: Theme.current.textDim)
         }
         .padding(EdgeInsets(top: 8, leading: 10, bottom: 8, trailing: 10))
         .hoverBackground(Theme.current.hover)

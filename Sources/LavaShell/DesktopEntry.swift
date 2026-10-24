@@ -113,7 +113,9 @@ public struct DesktopEntry: Sendable, Identifiable, Equatable {
 
     /// `MimeType=` match, including `image/*` against `image/png`.
     public func handles(_ mime: String) -> Bool {
-        for type in mimeTypes {
+        let mime = MimeApps.canonicalType(mime)
+        for declared in mimeTypes {
+            let type = MimeApps.canonicalType(declared)
             if type == mime { return true }
             if type.hasSuffix("/*"), mime.hasPrefix(type.dropLast(1)) {
                 return true
