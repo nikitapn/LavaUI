@@ -7,3 +7,4 @@ KeePassXC generated these interoperability fixtures. Passwords:
 - kpxc-extras: test (custom fields, TOTP and metadata)
 - kpxc-keyfile: 123 plus kpxc-keyfile.key
 - kpxc-kdbx31-default: test (legacy format)
+- kpxc-kdbx31-attachments: test (legacy compressed and uncompressed attachments)

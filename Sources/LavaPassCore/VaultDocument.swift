@@ -4,6 +4,7 @@ import KDBXKit
 
 public enum VaultError: Error, LocalizedError {
     case cannotOpen, unlockFailed, cannotSave, changedOnDisk, readOnly, missingEntry, invalidEntry, alreadyExists
+    case missingAttachment, duplicateAttachment, cannotReadAttachment, attachmentTooLarge, cannotExportAttachment
     public var errorDescription: String? {
         switch self {
         case .cannotOpen: "Could not read this vault or key file."
@@ -14,6 +15,12 @@ public enum VaultError: Error, LocalizedError {
         case .missingEntry: "This entry or group no longer exists."
         case .invalidEntry: "Enter a title for this entry."
         case .alreadyExists: "A file already exists at that location. Choose a new filename."
+        case .missingAttachment: "This attachment is missing or could not be read."
+        case .duplicateAttachment: "An attachment with this filename already exists. Rename the file or remove the existing attachment first."
+        case .cannotReadAttachment: "Could not read this attachment file."
+        case .attachmentTooLarge: "Attachments can be up to 128 MiB each."
+        case .cannotExportAttachment: "Could not save the attachment at that location."
+
         }
     }
 }
@@ -44,6 +51,19 @@ public struct VaultSnapshot: Sendable {
     public var entries: [VaultEntry]
     public var readOnlyReason: String?
     public var canSaveCopy: Bool
+}
+
+public struct VaultAttachment: Identifiable, Sendable, Equatable {
+    public var id: Int
+    public var name: String
+    public var size: Int
+}
+
+/// Selected-entry content excludes the password; reading notes must not reveal it.
+public struct VaultEntryContent: Sendable {
+    public var entryID: UUID
+    public var notes: String
+    public var attachments: [VaultAttachment]
 }
 
 public struct CredentialDraft: Equatable, Sendable {
@@ -93,7 +113,7 @@ public final class VaultDocument {
         let bytes: Data
         do { bytes = try Self.encode(content, unlock: unlock) }
         catch { throw VaultError.cannotSave }
-        try SecureVaultFile.write(bytes, to: url, replace: false)
+        try PrivateVaultFile.write(bytes, to: url, replace: false)
         return VaultDocument(url: url, content: content, unlock: unlock, original: bytes)
     }
 
@@ -132,6 +152,114 @@ public final class VaultDocument {
         draft.title = field(entry, "Title"); draft.username = field(entry, "UserName")
         draft.password = field(entry, "Password"); draft.url = field(entry, "URL"); draft.notes = field(entry, "Notes")
         return draft
+    }
+
+    public func entryContent(for id: UUID) throws -> VaultEntryContent {
+        guard let entry = find(id, in: content.database.root.group) else { throw VaultError.missingEntry }
+        let attachments = try entry.binaries.enumerated().map { index, binary in
+            VaultAttachment(id: index, name: binary.key, size: try binaryData(binary).count)
+        }
+        return VaultEntryContent(entryID: id, notes: field(entry, "Notes"), attachments: attachments)
+    }
+
+    public func attachmentData(entryID: UUID, attachmentID: Int) throws -> Data {
+        guard let entry = find(entryID, in: content.database.root.group),
+              entry.binaries.indices.contains(attachmentID) else { throw VaultError.missingAttachment }
+        return try binaryData(entry.binaries[attachmentID])
+    }
+
+    public static let maximumAttachmentSize = 128 * 1024 * 1024
+
+    public func importAttachment(entryID: UUID, from file: URL) throws {
+        guard snapshot.readOnlyReason == nil else { throw VaultError.readOnly }
+        let attributes: [FileAttributeKey: Any]
+        do { attributes = try FileManager.default.attributesOfItem(atPath: file.resolvingSymlinksInPath().path) }
+        catch { throw VaultError.cannotReadAttachment }
+        guard attributes[.type] as? FileAttributeType == .typeRegular else { throw VaultError.cannotReadAttachment }
+        guard let size = (attributes[.size] as? NSNumber)?.intValue else { throw VaultError.cannotReadAttachment }
+        guard size <= Self.maximumAttachmentSize else { throw VaultError.attachmentTooLarge }
+        let data: Data
+        do { data = try Data(contentsOf: file) } catch { throw VaultError.cannotReadAttachment }
+        try addAttachment(entryID: entryID, name: file.lastPathComponent, data: data)
+    }
+
+    public func addAttachment(entryID: UUID, name: String, data: Data) throws {
+        guard !name.isEmpty else { throw VaultError.cannotReadAttachment }
+        guard data.count <= Self.maximumAttachmentSize else { throw VaultError.attachmentTooLarge }
+        try commit { next in
+            let slot: Int
+            if let existing = next.innerHeader.binaryContent.firstIndex(where: { $0.data == data }) { slot = existing }
+            else {
+                slot = next.innerHeader.binaryContent.count
+                next.innerHeader.binaryContent.append(.init(shouldBeProtected: true, data: data))
+            }
+            guard let reference = UInt32(exactly: slot) else { throw VaultError.cannotSave }
+            guard try mutateEntry(entryID, in: &next.database.root.group, { entry in
+                guard !entry.binaries.contains(where: { $0.key == name }) else { throw VaultError.duplicateAttachment }
+                Self.recordHistory(&entry)
+                entry.binaries.append(.init(key: name, value: .ref(reference)))
+            }) else { throw VaultError.missingEntry }
+        }
+    }
+
+    public func removeAttachment(entryID: UUID, attachmentID: Int) throws {
+        try commit { next in
+            guard try mutateEntry(entryID, in: &next.database.root.group, { entry in
+                guard entry.binaries.indices.contains(attachmentID) else { throw VaultError.missingAttachment }
+                Self.recordHistory(&entry)
+                entry.binaries.remove(at: attachmentID)
+                // Keep pool slots intact: other entries and history may still reference them.
+            }) else { throw VaultError.missingEntry }
+        }
+    }
+
+    /// Plaintext leaves the vault only at the user's explicit export/open request.
+    /// Never overwrite an existing file, the vault, or its encrypted backup.
+    public func exportAttachment(entryID: UUID, attachmentID: Int, to destination: URL) throws {
+        let destination = destination.standardizedFileURL.resolvingSymlinksInPath()
+        guard destination != url, destination != url.appendingPathExtension("bak") else { throw VaultError.alreadyExists }
+        let bytes = try attachmentData(entryID: entryID, attachmentID: attachmentID)
+        do { try PrivateVaultFile.write(bytes, to: destination, replace: false) }
+        catch VaultError.alreadyExists { throw VaultError.alreadyExists }
+        catch { throw VaultError.cannotExportAttachment }
+    }
+
+    /// Vault filenames are labels, not paths. Use only a bounded basename for external files.
+    public static func attachmentFilename(_ name: String) -> String {
+        let normalized = name.replacingOccurrences(of: "\\", with: "/")
+        let last = String(normalized.split(separator: "/", omittingEmptySubsequences: true).last ?? "")
+        let clean = String(last.unicodeScalars.filter { !CharacterSet.controlCharacters.contains($0) })
+        guard !clean.isEmpty, clean != ".", clean != ".." else { return "attachment" }
+        let ext = String((clean as NSString).pathExtension.prefix(20))
+        let suffix = ext.isEmpty ? "" : "." + ext
+        var stem = ext.isEmpty ? clean : (clean as NSString).deletingPathExtension
+        while (stem + suffix).utf8.count > 200 { stem.removeLast() }
+        return (stem.isEmpty ? "attachment" : stem) + suffix
+    }
+
+    private func binaryData(_ binary: KDBX.ProtectedBinary) throws -> Data {
+        switch binary.value {
+        case .inline(let data, _): return data
+        case .ref(let index):
+            guard Int(index) < content.innerHeader.binaryContent.count else { throw VaultError.missingAttachment }
+            return content.innerHeader.binaryContent[Int(index)].data
+        }
+    }
+
+    private static func recordHistory(_ entry: inout KDBX.Entry) {
+        var previous = entry; previous.history = []
+        entry.history.append(previous)
+        var times = entry.times ?? .init()
+        times.lastModificationTime = Date(); entry.times = times
+    }
+
+    private func mutateEntry(_ id: UUID, in group: inout KDBX.Group,
+                             _ change: (inout KDBX.Entry) throws -> Void) throws -> Bool {
+        if let index = group.entries.firstIndex(where: { $0.uuid == id }) { try change(&group.entries[index]); return true }
+        for index in group.groups.indices {
+            if try mutateEntry(id, in: &group.groups[index], change) { return true }
+        }
+        return false
     }
 
     public func password(for id: UUID) throws -> String {
@@ -201,7 +329,7 @@ public final class VaultDocument {
         let bytes: Data
         do { bytes = try Self.encode(content, unlock: unlock) }
         catch { throw VaultError.cannotSave }
-        try SecureVaultFile.write(bytes, to: target, replace: false)
+        try PrivateVaultFile.write(bytes, to: target, replace: false)
         let parsed: KDBXContent
         do { parsed = try KDBXReader.parse(bytes, unlockData: unlock) }
         catch { throw VaultError.cannotSave }
@@ -217,8 +345,8 @@ public final class VaultDocument {
         do { encoded = try Self.encode(next, unlock: unlock) }
         catch { throw VaultError.cannotSave }
         guard (try? Data(contentsOf: url)) == original else { throw VaultError.changedOnDisk }
-        try SecureVaultFile.write(original, to: url.appendingPathExtension("bak"), replace: true)
-        try SecureVaultFile.write(encoded, to: url, replace: true)
+        try PrivateVaultFile.write(original, to: url.appendingPathExtension("bak"), replace: true)
+        try PrivateVaultFile.write(encoded, to: url, replace: true)
         content = next; original = encoded
     }
 
@@ -255,8 +383,8 @@ public final class VaultDocument {
     }
 }
 
-/// Only encrypted KDBX bytes reach disk, including the backup and sibling temporary file.
-private enum SecureVaultFile {
+/// Owner-only atomic writes for encrypted vaults and explicitly requested attachment exports.
+private enum PrivateVaultFile {
     static func write(_ data: Data, to url: URL, replace: Bool) throws {
         var template = Array((url.deletingLastPathComponent().path + "/.lavapass-XXXXXX").utf8CString)
         let fd = mkstemp(&template)

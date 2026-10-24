@@ -16,7 +16,7 @@ struct LavaPassApp {
         let path = CommandLine.arguments.dropFirst().first { !$0.hasPrefix("-") }
         let session = PassSession(path: path, demo: demo)
         if demo { FrameTasks.after { session.unlock() } }
-        atexit { PassClipboard.clear() }
+        atexit { PassClipboard.clear(); AttachmentFiles.clear() }
         LavaHost.run(editor: editor, menu: {
             MenuBar {
                 Menu("Vault", id: "vault") {

@@ -24,6 +24,8 @@ final class PassSession: @unchecked Sendable {
     var snapshot: VaultSnapshot?
     var selectedGroup: UUID?
     var selectedEntry: UUID?
+    var entryContent: VaultEntryContent?
+    var attachmentPendingRemoval: VaultAttachment?
     var search = ""
     var draft: CredentialDraft?
     var showPassword = false
@@ -154,7 +156,11 @@ final class PassSession: @unchecked Sendable {
                         var entry = CredentialDraft(groupID: document.snapshot.groups[1].id)
                         entry.title = title; entry.username = username; entry.url = address
                         entry.password = "demonstration-only"; entry.notes = "Public demo data — no real credentials"
-                        try document.save(entry)
+                        let entryID = try document.save(entry)
+                        if title == "Example Email" {
+                            try document.addAttachment(entryID: entryID, name: "Recovery instructions.txt",
+                                data: Data("Public demo attachment.\nKeep recovery information with your login.\n".utf8))
+                        }
                     }
                 }
                 var message: String?
@@ -187,9 +193,10 @@ final class PassSession: @unchecked Sendable {
     func lock() {
         generation += 1
         PassClipboard.clear()
+        AttachmentFiles.clear()
         FocusManager.clear()
         masterPassword = ""; confirmation = ""; draft = nil; showPassword = false
-        snapshot = nil; selectedEntry = nil; selectedGroup = nil; search = ""; rememberMaster = false
+        snapshot = nil; entryContent = nil; attachmentPendingRemoval = nil; selectedEntry = nil; selectedGroup = nil; search = ""; rememberMaster = false
         groupName = nil; busy = false; confirmRecycle = false
         let worker = worker
         worker.queue.async { worker.document = nil }
@@ -215,12 +222,76 @@ final class PassSession: @unchecked Sendable {
 
     func selectGroup(_ id: UUID?) {
         guard draft == nil else { notice = "Save or cancel the current entry first"; return }
-        selectedGroup = id; selectedEntry = nil; confirmRecycle = false; activity()
+        selectedGroup = id; selectedEntry = nil; entryContent = nil; attachmentPendingRemoval = nil; confirmRecycle = false; activity()
     }
     func selectEntry(_ id: UUID) {
         guard draft == nil else { notice = "Save or cancel the current entry first"; return }
-        selectedEntry = id; confirmRecycle = false; activity()
+        selectedEntry = id; entryContent = nil; attachmentPendingRemoval = nil
+        confirmRecycle = false; activity(); loadEntryContent()
     }
+    private func loadEntryContent() {
+        guard let id = selectedEntry else { entryContent = nil; return }
+        let token = generation
+        let worker = worker
+        worker.queue.async { [weak self] in
+            do {
+                guard let document = worker.document else { return }
+                let result = try document.entryContent(for: id)
+                MainQueue.async { [weak self] in
+                    guard let self, self.generation == token, self.selectedEntry == id else { return }
+                    self.entryContent = result
+                    ViewInvalidation.markDirty()
+                }
+            } catch {
+                let message = error.localizedDescription
+                MainQueue.async { [weak self] in
+                    guard let self, self.generation == token, self.selectedEntry == id else { return }
+                    self.notice = message; ViewInvalidation.markDirty()
+                }
+            }
+        }
+    }
+
+    func addAttachment() {
+        guard writable, draft == nil, let id = selectedEntry else { return }
+        performDialog({ FileDialog.openFile(title: "Add Entry Attachment") }) { session, url in
+            session.run { document in
+                try document.importAttachment(entryID: id, from: url)
+                return .saved(document.snapshot, id)
+            }
+        }
+    }
+
+    func saveAttachment(_ attachment: VaultAttachment) {
+        guard !busy, let id = selectedEntry else { return }
+        let name = VaultDocument.attachmentFilename(attachment.name)
+        performDialog({ FileDialog.saveFile(title: "Save Attachment As", defaultName: name) }) { session, url in
+            session.run { document in
+                try document.exportAttachment(entryID: id, attachmentID: attachment.id, to: url)
+                return .message("Attachment saved")
+            }
+        }
+    }
+
+    func openAttachment(_ attachment: VaultAttachment) {
+        guard !busy, let id = selectedEntry else { return }
+        let target: URL
+        do { target = try AttachmentFiles.temporaryURL(name: attachment.name) }
+        catch { notice = "Could not create a private attachment copy"; return }
+        run { document in
+            try document.exportAttachment(entryID: id, attachmentID: attachment.id, to: target)
+            return .opened(target)
+        }
+    }
+
+    func removeAttachment() {
+        guard writable, let id = selectedEntry, let attachment = attachmentPendingRemoval else { return }
+        run { document in
+            try document.removeAttachment(entryID: id, attachmentID: attachment.id)
+            return .saved(document.snapshot, id)
+        }
+    }
+
     func newEntry() {
         guard writable, draft == nil, let snapshot else { return }
         let group = snapshot.groups.first { $0.id == selectedGroup && !$0.recycleBin }
@@ -263,7 +334,15 @@ final class PassSession: @unchecked Sendable {
         activity()
     }
 
-    private enum WorkerResult { case snapshot(VaultSnapshot), saved(VaultSnapshot, UUID), draft(CredentialDraft), password(String), copy(VaultDocument) }
+    private enum WorkerResult { case snapshot(VaultSnapshot), saved(VaultSnapshot, UUID), draft(CredentialDraft), password(String), copy(VaultDocument), opened(URL), message(String) }
+    private struct WorkerUpdate: Sendable {
+        var snapshot: VaultSnapshot?
+        var draft: CredentialDraft?
+        var password: String?
+        var savedID: UUID?
+        var opened: URL?
+        var message: String?
+    }
     private func run(submittedDraft: CredentialDraft? = nil, _ work: @escaping @Sendable (VaultDocument) throws -> WorkerResult) {
         guard !busy else { return }
         busy = true; notice = nil; activity()
@@ -274,26 +353,25 @@ final class PassSession: @unchecked Sendable {
                 guard let document = worker.document else { throw PassError.message("The vault is locked") }
                 let result = try work(document)
                 // Keep the document itself confined to this queue, including Save Copy.
-                let update: VaultSnapshot?
-                let editing: CredentialDraft?
-                let copied: String?
-                let savedID: UUID?
+                let resultUpdate: WorkerUpdate
                 switch result {
-                case .copy(let document): worker.document = document; update = document.snapshot; editing = nil; copied = nil; savedID = nil
-                case .snapshot(let value): update = value; editing = nil; copied = nil; savedID = nil
-                case .saved(let value, let id): update = value; editing = nil; copied = nil; savedID = id
-                case .draft(let value): update = nil; editing = value; copied = nil; savedID = nil
-                case .password(let value): update = nil; editing = nil; copied = value; savedID = nil
+                case .copy(let document): worker.document = document; resultUpdate = .init(snapshot: document.snapshot)
+                case .snapshot(let value): resultUpdate = .init(snapshot: value)
+                case .saved(let value, let id): resultUpdate = .init(snapshot: value, savedID: id)
+                case .draft(let value): resultUpdate = .init(draft: value)
+                case .password(let value): resultUpdate = .init(password: value)
+                case .opened(let file): resultUpdate = .init(opened: file)
+                case .message(let text): resultUpdate = .init(message: text)
                 }
                 MainQueue.async { [weak self] in
                     guard let self, self.generation == token else { return }
                     self.busy = false
-                    if let update {
+                    if let update = resultUpdate.snapshot {
                         let newerEdits = submittedDraft != nil && self.draft != nil && self.draft != submittedDraft
                         self.snapshot = update; self.vaultPath = update.path
-                        if newerEdits { self.draft?.id = savedID } else { self.draft = nil }
+                        if newerEdits { self.draft?.id = resultUpdate.savedID } else { self.draft = nil }
                         self.groupName = nil; self.confirmRecycle = false; self.showPassword = false
-                        if let savedID {
+                        if let savedID = resultUpdate.savedID {
                             self.selectedEntry = savedID
                             if self.selectedGroup != nil, let group = update.entries.first(where: { $0.id == savedID })?.groupID {
                                 self.selectedGroup = group
@@ -301,10 +379,17 @@ final class PassSession: @unchecked Sendable {
                         }
                         if !update.entries.contains(where: { $0.id == self.selectedEntry }) { self.selectedEntry = nil }
                         AppSettings.set(update.path, forKey: "lastVault")
+                        self.attachmentPendingRemoval = nil
+                        self.entryContent = nil
+                        self.loadEntryContent()
                         self.notice = newerEdits ? "Saved; additional edits remain unsaved" : "Saved"
                     }
-                    if let editing { self.draft = editing; self.showPassword = false }
-                    if let copied { self.copySecret(copied) }
+                    if let editing = resultUpdate.draft { self.draft = editing; self.showPassword = false }
+                    if let copied = resultUpdate.password { self.copySecret(copied) }
+                    if let message = resultUpdate.message { self.notice = message }
+                    if let file = resultUpdate.opened {
+                        self.notice = AttachmentFiles.open(file) ? "Opened attachment — temporary copy is removed on lock" : "Could not open attachment"
+                    }
                     ViewInvalidation.markDirty()
                 }
             } catch {

@@ -314,6 +314,8 @@ public struct WindowControls: View {
     public var kinds: [WindowControlKind]
     /// Size, colours and glyph behaviour.
     public var style: WindowControlsStyle
+    /// Cleanup performed on an accepted close, before the host destroys the window.
+    public var beforeClose: (() -> Void)?
 
     @DrawState private var hovered = false
     @DrawState private var pressed: WindowControlKind?
@@ -321,10 +323,12 @@ public struct WindowControls: View {
     /// Creates the cluster. List only the controls the window supports.
     public init(
         _ kinds: [WindowControlKind] = [.close, .minimize, .maximize],
-        style: WindowControlsStyle = WindowControlsStyle()
+        style: WindowControlsStyle = WindowControlsStyle(),
+        beforeClose: (() -> Void)? = nil
     ) {
         self.kinds = kinds
         self.style = style
+        self.beforeClose = beforeClose
     }
 
     public var body: some View {
@@ -334,7 +338,8 @@ public struct WindowControls: View {
                     kind, style: style,
                     hovered: { hovered }, pressed: { pressed == kind },
                     setHovered: { hovered = $0 },
-                    setPressed: { pressed = $0 ? kind : nil }
+                    setPressed: { pressed = $0 ? kind : nil },
+                    beforeAction: kind == .close ? beforeClose : nil
                 )
             }
         }
@@ -353,7 +358,8 @@ private func control(
     hovered: @escaping () -> Bool,
     pressed: @escaping () -> Bool,
     setHovered: @escaping (Bool) -> Void,
-    setPressed: @escaping (Bool) -> Void
+    setPressed: @escaping (Bool) -> Void,
+    beforeAction: (() -> Void)? = nil
 ) -> some View {
     Canvas(
         label: "WindowControl",
@@ -370,7 +376,10 @@ private func control(
                 let inside = gesture.localX >= 0 && gesture.localY >= 0
                     && gesture.localX <= gesture.frame.w
                     && gesture.localY <= gesture.frame.h
-                if inside { WindowControlPainter.perform(kind) }
+                if inside {
+                    beforeAction?()
+                    WindowControlPainter.perform(kind)
+                }
             }
         },
         onHover: { setHovered($0) },

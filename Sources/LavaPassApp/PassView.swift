@@ -47,7 +47,7 @@ struct PassView: View {
 
     private var toolbar: some View {
         HStack(height: .pt(48), padding: 8, alignment: .center, spacing: 8) {
-            if WindowBridge.drawsOwnChrome { WindowControls() }
+            if WindowBridge.drawsOwnChrome { WindowControls(beforeClose: { session.lock() }) }
             VaultMark(size: 24, color: Theme.current.accent)
             Text(session.isDemo ? "LavaPass · Demo" : "LavaPass", color: Theme.current.textPrimary)
             if let vault = session.snapshot {
@@ -212,7 +212,8 @@ struct PassView: View {
                         }
                         field("URL", key: \.url, id: "entry-url")
                         Text("Notes", color: Theme.current.textDim)
-                        TextField(text: draftBinding(\.notes), placeholder: "Notes", multiline: true, maxLines: 5, wraps: true)
+                        EditorView(text: draftBinding(\.notes), showLineNumbers: false, wraps: true, visibleLines: 8)
+                            .frame(height: .pt(180))
                             .agentId("entry-notes")
                         Text("Group", color: Theme.current.textDim)
                         ForEach((session.snapshot?.groups ?? []).filter { !$0.recycleBin }) { group in
@@ -235,29 +236,71 @@ struct PassView: View {
                 .background(Theme.current.panel)
             }
         } else if let entry = session.selected {
-            VStack(flexGrow: 1, padding: 20, spacing: 14) {
-                Text(entry.title, color: Theme.current.textPrimary)
-                Text(entry.group, color: Theme.current.textDim, lineLimit: 2)
-                Divider()
-                Text("Username", color: Theme.current.textDim)
-                Text(entry.username.isEmpty ? "—" : entry.username, color: Theme.current.textPrimary, lineLimit: 2)
-                HStack(padding: 0, alignment: .center, spacing: 8) {
-                    Button("Copy Username", isEnabled: !entry.username.isEmpty && !session.busy) { session.copyField(entry.username) }
-                    Button("Copy Password", isEnabled: !session.busy) { session.copyPassword() }
-                        .agentId("copy-password")
-                }
-                Text("Password", color: Theme.current.textDim)
-                Text("••••••••••••", color: Theme.current.textPrimary)
-                if !entry.url.isEmpty {
-                    Text("URL", color: Theme.current.textDim)
-                    Text(entry.url, color: Theme.current.textSecondary, lineLimit: 3)
-                    Button("Copy URL", isEnabled: !session.busy) { session.copyField(entry.url) }
-                }
-                if entry.attachmentCount + entry.customFieldCount > 0 {
-                    Text("\(entry.attachmentCount) attachments · \(entry.customFieldCount) custom fields\nPreserved when editing",
-                         color: Theme.current.textDim, lineLimit: 2)
-                }
+            entryDetails(entry)
+        } else {
+            VStack(flexGrow: 1, padding: 24, alignment: .center, spacing: 14) {
                 Spacer()
+                Text("Select an entry", color: Theme.current.textSecondary)
+                Text("Copy a password, or edit its details", color: Theme.current.textDim)
+                Button("New Entry", isEnabled: session.writable) { session.newEntry() }
+                Spacer()
+            }
+        }
+    }
+
+    private func entryDetails(_ entry: VaultEntry) -> some View {
+        VStack(flexGrow: 1, padding: 0, spacing: 0) {
+            ScrollView(.vertical) {
+                VStack(padding: 20, spacing: 14) {
+                    Text(entry.title, color: Theme.current.textPrimary)
+                    Text(entry.group, color: Theme.current.textDim, lineLimit: 2)
+                    Divider()
+                    Text("Username", color: Theme.current.textDim)
+                    Text(entry.username.isEmpty ? "—" : entry.username, color: Theme.current.textPrimary)
+                    HStack(padding: 0, alignment: .center, spacing: 8) {
+                        Button("Copy Username", isEnabled: !entry.username.isEmpty && !session.busy) { session.copyField(entry.username) }
+                        Button("Copy Password", isEnabled: !session.busy) { session.copyPassword() }
+                            .agentId("copy-password")
+                    }
+                    Text("Password", color: Theme.current.textDim)
+                    Text("••••••••••••", color: Theme.current.textPrimary)
+                    if !entry.url.isEmpty {
+                        Text("URL", color: Theme.current.textDim)
+                        Text(entry.url, color: Theme.current.textSecondary)
+                        Button("Copy URL", isEnabled: !session.busy) { session.copyField(entry.url) }
+                    }
+                    Divider()
+                    Text("Notes", color: Theme.current.textDim)
+                    if let content = session.entryContent, content.entryID == entry.id {
+                        Text(content.notes.isEmpty ? "No notes" : content.notes,
+                             color: content.notes.isEmpty ? Theme.current.textDim : Theme.current.textPrimary)
+                            .agentId("entry-notes-display")
+                        if !content.notes.isEmpty {
+                            Button("Copy Notes", isEnabled: !session.busy) { session.copyField(content.notes) }
+                                .agentId("copy-notes")
+                        }
+                        Divider()
+                        HStack(padding: 0, alignment: .center, spacing: 8) {
+                            Text("Attachments (\(content.attachments.count))", color: Theme.current.textDim)
+                            Spacer()
+                            Button("Add File…", isEnabled: session.writable) { session.addAttachment() }
+                                .agentId("add-attachment")
+                        }
+                        ForEach(content.attachments) { attachment in
+                            attachmentRow(attachment)
+                        }
+                        if content.attachments.isEmpty {
+                            Text("No attachments", color: Theme.current.textDim)
+                        }
+                    } else {
+                        Text("Loading entry…", color: Theme.current.textDim)
+                    }
+                    if entry.customFieldCount > 0 {
+                        Text("\(entry.customFieldCount) custom fields preserved", color: Theme.current.textDim)
+                    }
+                }
+            }
+            VStack(padding: 16, spacing: 8) {
                 if session.confirmRecycle {
                     Text("Move this entry to the Recycle Bin?", color: Theme.current.textSecondary)
                     HStack(padding: 0, spacing: 8) {
@@ -271,18 +314,42 @@ struct PassView: View {
                         if !entry.recycled {
                             Button("Recycle", isEnabled: session.writable) { session.confirmRecycle = true }
                         }
+                        Spacer()
                     }
                 }
             }
-        } else {
-            VStack(flexGrow: 1, padding: 24, alignment: .center, spacing: 14) {
+            .background(Theme.current.panel)
+        }
+    }
+
+    private func attachmentRow(_ attachment: VaultAttachment) -> some View {
+        VStack(padding: 10, spacing: 8) {
+            Text(attachment.name, color: Theme.current.textPrimary)
+                .agentId("attachment-name-\(attachment.id)")
+            Text(ByteCountFormatter.string(fromByteCount: Int64(attachment.size), countStyle: .file),
+                 color: Theme.current.textDim)
+            HStack(padding: 0, alignment: .center, spacing: 6) {
+                Button("Open", isEnabled: !session.busy) { session.openAttachment(attachment) }
+                    .tooltip("Open a private temporary copy; removed when the vault locks")
+                    .agentId("open-attachment-\(attachment.id)")
+                Button("Save As…", isEnabled: !session.busy) { session.saveAttachment(attachment) }
+                    .agentId("save-attachment-\(attachment.id)")
                 Spacer()
-                Text("Select an entry", color: Theme.current.textSecondary)
-                Text("Copy a password, or edit its details", color: Theme.current.textDim)
-                Button("New Entry", isEnabled: session.writable) { session.newEntry() }
-                Spacer()
+                Button("Remove", isEnabled: session.writable) { session.attachmentPendingRemoval = attachment }
+                    .agentId("remove-attachment-\(attachment.id)")
+            }
+            if session.attachmentPendingRemoval?.id == attachment.id {
+                Text("Remove this attachment? The previous copy remains in entry history.", color: Theme.current.textSecondary)
+                HStack(padding: 0, alignment: .center, spacing: 6) {
+                    Button("Cancel") { session.attachmentPendingRemoval = nil }
+                    Spacer()
+                    Button("Remove Attachment", isEnabled: session.writable) { session.removeAttachment() }
+                        .agentId("confirm-remove-attachment")
+                }
             }
         }
+        .background(Theme.current.inset)
+        .cornerRadius(6)
     }
 
     private func draftBinding(_ key: WritableKeyPath<CredentialDraft, String>) -> Binding<String> {

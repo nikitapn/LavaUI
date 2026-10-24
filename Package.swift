@@ -144,7 +144,7 @@ var targets: [Target] = [
     .target(name: "LavaPassCore", dependencies: [.product(name: "KDBXKit", package: "KDBXKit")]),
     .target(name: "CLavaPass", dependencies: ["CSecret"], publicHeadersPath: "include"),
     .executableTarget(
-        name: "LavaPassApp", dependencies: ["LavaUI", "LavaHost", "LavaPassCore", "CLavaPass"],
+        name: "LavaPassApp", dependencies: ["LavaUI", "LavaHost", "LavaPassCore", "CLavaPass", "LavaShell"],
         swiftSettings: interopCxx
     ),
     .testTarget(
